@@ -15,7 +15,7 @@ trap; operator authorized merge in current state.
 
 This runbook supplies only the waiver prerequisites and authorization-status POST/read-back
 for the waiver branch in
-[`.claude/skills/merge-with-local-adoption/SKILL.md`](../.claude/skills/merge-with-local-adoption/SKILL.md).
+[`.claude/skills/merge-with-local-adoption/SKILL.md`](../.cursor/skills/merge-with-local-adoption/SKILL.md).
 After those checks, return to that skill's ordinary Steps 4–10. The waiver branch must not
 execute this runbook's merge or adoption steps, because that would duplicate the skill's
 merge/adoption flow.
@@ -223,7 +223,7 @@ Do not hand-edit review-run JSON on disk.
 
 ## Related docs
 
-- [`.claude/skills/merge-with-local-adoption/SKILL.md`](../.claude/skills/merge-with-local-adoption/SKILL.md) — full merge + pull + 6e/8/9 flow
+- [`.claude/skills/merge-with-local-adoption/SKILL.md`](../.cursor/skills/merge-with-local-adoption/SKILL.md) — full merge + pull + 6e/8/9 flow
 - [`orchestrator-recovery-runbook.md`](orchestrator-recovery-runbook.md) — after manual PR merge
 - [`script-owned-review-pipeline.md`](script-owned-review-pipeline.md) — pack review runner
 - [`architecture.md`](architecture.md#review-paths) — review paths

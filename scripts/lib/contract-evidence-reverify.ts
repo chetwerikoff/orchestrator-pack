@@ -1148,7 +1148,7 @@ export function loadPromptReverifyMarkers(): {
     requiredInAgentRules: [
       'Checkpoint-2 contract-evidence re-verification',
       'candidate evidence only',
-      'launch-contract-evidence-reverify.ps1',
+      'invoke-contract-evidence-reverify.ts',
       'producer-verified',
       'compared-to-record',
       'verification-mode',
@@ -1157,7 +1157,7 @@ export function loadPromptReverifyMarkers(): {
     requiredInCodexPrompt: [
       'Checkpoint-2 contract-evidence re-verification',
       'candidate evidence only',
-      'launch-contract-evidence-reverify.ps1',
+      'invoke-contract-evidence-reverify.ts',
       'producer-verified',
       'independently validate',
     ],

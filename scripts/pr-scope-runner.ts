@@ -26,7 +26,7 @@ export const OPERATOR_ADOPTION_WAIVER = 'No operator adoption required';
 export const OPERATOR_ADOPTION_TRIGGER_PATHS = [
   'scripts/runtime/registry.ts',
   'scripts/orchestrator-side-process-registry.json',
-  'scripts/orchestrator-wake-supervisor.ps1',
+  'scripts/orchestrator-wake-supervisor.ts',
   '.claude/skills/change-orchestrator-runtime/SKILL.md',
   '.cursor/skills/change-orchestrator-runtime/SKILL.md',
 ] as const;

@@ -387,7 +387,7 @@ async function runHeavy(shard: number, env: NodeJS.ProcessEnv): Promise<number> 
   const hygiene = await observeHeavyShardFleet(shard, env);
   const dirty = hygiene.filter((item) => !item.ok);
   if (dirty.length > 0) {
-    for (const item of dirty) process.stdout.write(`[FAIL] TestMode fleet hygiene lease=${item.leaseId} reason=${item.reason ?? 'surviving scoped pwsh'} survivors=${item.survivors.join(',')}\n`);
+    for (const item of dirty) process.stdout.write(`[FAIL] TestMode fleet hygiene lease=${item.leaseId} reason=${item.reason ?? 'surviving scoped legacy shell'} survivors=${item.survivors.join(',')}\n`);
     await cleanupShard(shard, env);
     return 2;
   }

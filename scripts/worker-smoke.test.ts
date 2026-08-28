@@ -34,6 +34,7 @@ import {
   findVerifiedSmokeReceiptWitness,
   parsePaginatedSmokeComments,
   publishPrComment,
+  reviewIndependentRequiredCiContexts,
   resolveLiveSmokeExecutorProfile,
   resolveSmokeTarget,
   runGateCheck,
@@ -156,6 +157,19 @@ function mutateMachineBlock(body: string, mutate: (block: string) => string): st
   if (start < 0 || end < 0) throw new Error('machine report block missing');
   return `${body.slice(0, start)}${mutate(body.slice(start, end))}${body.slice(end)}`;
 }
+
+describe('review-independent required CI facts', () => {
+  it('excludes the pack-review authority while preserving required CI contexts', () => {
+    expect(reviewIndependentRequiredCiContexts([
+      'TypeScript runtime (Node 22)',
+      'orchestrator-pack/pack-review',
+      'TypeScript strict typecheck',
+    ])).toEqual([
+      'TypeScript runtime (Node 22)',
+      'TypeScript strict typecheck',
+    ]);
+  });
+});
 
 describe('smoke executor profiles', () => {
   const env = {
@@ -1170,6 +1184,8 @@ if (endpoint === 'user') {
     head: { sha: '${HEAD_ONE}' },
     base: { ref: 'main' },
   }));
+} else if (endpoint === 'repos/${REPOSITORY}') {
+  process.stdout.write(JSON.stringify({ default_branch: 'main' }));
 } else {
   process.stderr.write('unexpected endpoint: ' + endpoint);
   process.exitCode = 2;

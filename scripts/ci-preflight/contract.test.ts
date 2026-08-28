@@ -13,6 +13,10 @@ describe('ci preflight contract', () => {
     ]);
     expect(TABLE[4].args).toEqual(['--no-install', 'tsc', '--project', 'tsconfig.base.json', '--noEmit']);
     expect(TABLE[5].paths).toContain('scripts/vitest-ci-lanes.config.json');
+    expect(TABLE.slice(0, 4).every(row => row.command === process.execPath)).toBe(true);
+    expect(TABLE[5].command).toBe(process.execPath);
+    expect(TABLE[6].command).toBe('npm');
+    expect(JSON.stringify(TABLE)).not.toContain('.ps1');
   });
 
   it('keeps callable omissions distinct from workflow-only records', () => {

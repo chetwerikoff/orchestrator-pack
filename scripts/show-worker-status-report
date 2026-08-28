@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-exec pwsh -NoProfile -File "$SCRIPT_DIR/show-worker-status-report.ps1" "$@"
+exec node --experimental-strip-types "$SCRIPT_DIR/json-producers/worker-status-report.ts" "$@"

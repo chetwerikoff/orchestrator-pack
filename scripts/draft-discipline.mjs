@@ -593,21 +593,21 @@ export function checkRcaSpecDisciplineSurfaces(repoRoot, configPath) {
     }
   }
 
-  const cursorSkillsRoot = path.join(repoRoot, '.cursor/skills');
+  const claudeSkillsRoot = path.join(repoRoot, '.claude/skills');
   for (const rule of config.rules) {
     for (const surface of rule.surfaces) {
-      if (!surface.startsWith('.claude/skills/')) {
+      if (!surface.startsWith('.cursor/skills/')) {
         continue;
       }
       const skillName = surface.split('/')[2];
-      const pointerPath = path.join(cursorSkillsRoot, skillName, 'SKILL.md');
+      const pointerPath = path.join(claudeSkillsRoot, skillName, 'SKILL.md');
       try {
         const pointer = readFileSync(pointerPath, 'utf8');
-        if (!pointer.includes('.claude/skills/')) {
-          errors.push(`cursor skill pointer missing canonical link: ${pointerPath}`);
+        if (!pointer.includes('.cursor/skills/')) {
+          errors.push(`claude skill pointer missing canonical link: ${pointerPath}`);
         }
       } catch {
-        errors.push(`missing generated cursor skill pointer: ${pointerPath}`);
+        errors.push(`missing generated claude skill pointer: ${pointerPath}`);
       }
     }
   }

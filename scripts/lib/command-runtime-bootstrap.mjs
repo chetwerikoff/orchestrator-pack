@@ -94,8 +94,6 @@ export function classifyEffectivePath(effectivePath, packScriptsDir) {
       classes.push('usr-local-bin');
     } else if (part.includes('/.local/bin')) {
       classes.push('home-local-bin');
-    } else if (part.includes('/opt/microsoft/powershell')) {
-      classes.push('pwsh-opt');
     } else {
       classes.push('other');
     }
@@ -117,12 +115,6 @@ function resolveExecutableOnPath(pathValue, name) {
   return null;
 }
 
-/**
- * @param {string} [pathValue]
- */
-function resolvePwsh(pathValue = '') {
-  return resolveExecutableOnPath(pathValue, 'pwsh');
-}
 
 /**
  * @param {string} [pathValue]
@@ -165,7 +157,7 @@ function resolveNativeGh(effectivePath, packGh) {
  * @param {string} [input.packScriptsDir]
  * @param {string} [input.inheritedPath]
  * @param {string} [input.effectivePath]
- * @param {{ pwsh?: string | null, node?: string | null, packGh?: string | null, firstGh?: string | null, nativeGh?: string | null, nativeGhError?: string | null }} [input.tools]
+ * @param {{ node?: string | null, packGh?: string | null, firstGh?: string | null, nativeGh?: string | null, nativeGhError?: string | null }} [input.tools]
  */
 export function evaluateCommandRuntimePreflight(input = {}) {
   const packRoot = resolve(input.packRoot ?? DEFAULT_PACK_ROOT);
@@ -175,16 +167,12 @@ export function evaluateCommandRuntimePreflight(input = {}) {
   const pathClass = classifyEffectivePath(effectivePath, packScriptsDir);
 
   const tools = input.tools ?? {
-    pwsh: resolvePwsh(effectivePath),
     node: resolveNode(effectivePath),
     ...resolvePackGh(effectivePath, packScriptsDir),
     nativeGh: null,
     nativeGhError: null,
   };
 
-  if (!tools.pwsh) {
-    return failPreflight('missing_pwsh', 'pwsh', pathClass);
-  }
   if (!tools.node) {
     return failPreflight('missing_node', 'node', pathClass);
   }
@@ -227,7 +215,6 @@ export function evaluateCommandRuntimePreflight(input = {}) {
     reason: 'command_runtime_preflight_ok',
     pathClass,
     tools: {
-      pwsh: tools.pwsh,
       node: tools.node,
       packGh: tools.packGh,
       nativeGh: native.nativeGh,

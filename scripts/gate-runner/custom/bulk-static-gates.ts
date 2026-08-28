@@ -201,6 +201,163 @@ export function evaluateVerifyStructureContract(snapshot: SourceSnapshot): GateR
   );
 }
 
+const ACTIVE_INSTRUCTION_PREFIXES = [
+  '.claude/skills/',
+  '.cursor/rules/',
+  '.cursor/skills/',
+  '.github/workflows/',
+  'prompts/',
+] as const;
+
+const ACTIVE_INSTRUCTION_EXACT = new Set([
+  'AGENTS.md',
+  'CLAUDE.md',
+  'README.md',
+  'docs/architecture.md',
+  'docs/browser-gpt-turn-runbook.md',
+  'docs/chat-executor-rules.md',
+  'docs/flow-manager-long-running-child-runbook.md',
+  'docs/migration_notes.md',
+  'docs/orchestrator-recovery-runbook.md',
+  'docs/repository_policy.md',
+  'docs/target_repo_setup.md',
+  'docs/ubuntu-setup-runbook.md',
+  'docs/wake-supervisor-fleet-operator-reference.md',
+  'docs/worker-smoke-testing.md',
+]);
+
+const HISTORICAL_INSTRUCTION_PREFIXES = [
+  'docs/archive/',
+  'docs/declarations/',
+  'docs/incident/',
+  'docs/investigations/',
+  'docs/issues_drafts/',
+  'tests/',
+] as const;
+
+function isActiveInstructionPath(path: string): boolean {
+  if (ACTIVE_INSTRUCTION_EXACT.has(path)) return true;
+  if (HISTORICAL_INSTRUCTION_PREFIXES.some((prefix) => path.startsWith(prefix))) return false;
+  return ACTIVE_INSTRUCTION_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
+function instructionTargets(text: string): readonly string[] {
+  const targets = new Set<string>();
+  const pattern = /(?<![A-Za-z0-9._\/-])((?:scripts|docs|prompts|\.cursor|\.claude)\/[A-Za-z0-9._/-]+\.(?:md|mjs|mts|ts|ps1|sh|json|yml|yaml))(?![A-Za-z0-9._-])/gu;
+  for (const match of text.matchAll(pattern)) {
+    const target = match[1];
+    if (
+      target
+      && !target.includes('*')
+      && !target.includes('<')
+      && !target.endsWith('.test.ts')
+      && !target.endsWith('/local.config.json')
+      && !target.endsWith('/post-port.json')
+      && !/\/(?:NN|[0-9]{2,3})-[^/]+\.md$/u.test(target)
+    ) targets.add(target);
+  }
+  return [...targets].sort();
+}
+
+const COUNT_WORDS: Readonly<Record<string, number>> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+};
+
+function instructionChildCount(line: string): number | undefined {
+  if (!/(?:roster|registry|registered\s+child|child\s+ids?)/iu.test(line)) return undefined;
+  const match = /\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+(?:registered\s+)?children?\b/iu.exec(line);
+  if (!match) return undefined;
+  const value = match[1]!.toLocaleLowerCase();
+  return COUNT_WORDS[value] ?? Number.parseInt(value, 10);
+}
+
+function instructionChildIds(line: string): readonly string[] {
+  if (!/(?:roster|registry|registered\s+child|child\s+ids?)/iu.test(line)) return [];
+  const ids = new Set<string>();
+  for (const match of line.matchAll(/`([a-z][a-z0-9-]+)`/gu)) {
+    const id = match[1];
+    if (id?.includes('-')) ids.add(id);
+  }
+  return [...ids].sort();
+}
+
+export function evaluateInstructionTruth(snapshot: SourceSnapshot): GateResult {
+  const gateId = 'instruction-truth';
+  const failures: string[] = [];
+  const unreachable: string[] = [];
+  const registryPath = 'scripts/orchestrator-side-process-registry.json';
+  const registryText = requireText(snapshot, registryPath, failures, unreachable);
+  let childIds = new Set<string>();
+  let childCount: number | undefined;
+  if (registryText !== undefined) {
+    try {
+      const registry = JSON.parse(registryText) as {
+        children?: unknown;
+        requiredChildIds?: unknown;
+      };
+      const children = Array.isArray(registry.children) ? registry.children : [];
+      childIds = new Set(
+        children
+          .filter((child): child is Record<string, unknown> => Boolean(child) && typeof child === 'object')
+          .map((child) => typeof child.id === 'string' ? child.id : '')
+          .filter(Boolean),
+      );
+      childCount = childIds.size;
+      if (!Array.isArray(registry.requiredChildIds)
+        || registry.requiredChildIds.some((id) => typeof id !== 'string' || !childIds.has(id))) {
+        failures.push(`${registryPath}: requiredChildIds must exactly identify current registry children`);
+      }
+    } catch (error) {
+      failures.push(`${registryPath}: invalid JSON (${error instanceof Error ? error.message : String(error)})`);
+    }
+  }
+
+  for (const path of snapshot.paths) {
+    if (!isActiveInstructionPath(path)) continue;
+    const text = snapshot.files.get(path);
+    if (text === undefined) {
+      if (snapshot.unreadable.has(path)) unreachable.push(`${path}: ${snapshot.unreadable.get(path)}`);
+      continue;
+    }
+    const lines = text.split(/\r?\n/u);
+    for (const [index, line] of lines.entries()) {
+      for (const target of instructionTargets(line)) {
+        if (!snapshot.files.has(target) && !snapshot.paths.includes(target)) {
+          failures.push(`${path}:${index + 1}: missing target ${target}`);
+        }
+      }
+      if (childCount !== undefined) {
+        const count = instructionChildCount(line);
+        if (count !== undefined && count !== childCount) {
+          failures.push(`${path}:${index + 1}: registry child count ${count} does not match current count ${childCount}`);
+        }
+        for (const id of instructionChildIds(line)) {
+          if (!childIds.has(id)) failures.push(`${path}:${index + 1}: unknown registry child ${id}`);
+        }
+      }
+    }
+  }
+
+  return completeStaticGate(
+    gateId,
+    'Active instruction and registry truth',
+    '[PASS] active instruction and registry truth\n',
+    snapshot,
+    failures,
+    unreachable,
+    failures.length > 0 ? `${failures.join('\n')}\n` : undefined,
+  );
+}
+
 function registration(gateId: string, evaluate: (snapshot: SourceSnapshot) => GateResult): GateRegistration {
   return { gateId, evaluate: ({ snapshot }: GateEvaluationContext) => evaluate(snapshot) };
 }
@@ -210,4 +367,5 @@ export const bulkStaticGateRegistrations: readonly GateRegistration[] = [
   registration('review-010-vocabulary', evaluateReview010Vocabulary),
   registration('review-command-not-ao', evaluateReviewCommandNotAo),
   registration('verify-structure-contract', evaluateVerifyStructureContract),
+  registration('instruction-truth', evaluateInstructionTruth),
 ];

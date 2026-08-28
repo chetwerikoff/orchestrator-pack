@@ -41,7 +41,7 @@ snapshot. Workers do not hand-edit declarations or broaden scope to silence a gu
 ## Local prerequisites
 
 ```powershell
-pwsh -NoProfile -File scripts/verify.ps1 -StrictPrereqs
+node --experimental-strip-types scripts/verify.ts --strict-prereqs
 cursor --version
 codex --version
 gh auth status
@@ -126,8 +126,8 @@ npm run lint:foundation
 npm run test:foundation
 npm run gate-runner-selftest
 node --experimental-strip-types scripts/runtime-retirement/retired-surface-selftest.ts
-pwsh -NoProfile -File scripts/verify.ps1
-pwsh -NoProfile -File scripts/check-reusable.ps1
+node --experimental-strip-types scripts/verify.ts
+node --experimental-strip-types scripts/verify.ts --reusable-only
 ```
 
 Also run affected plugin tests and task-specific smoke. Continue through review and

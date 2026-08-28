@@ -37,7 +37,7 @@ export interface AoWebhookBody {
 }
 
 export const DEFAULT_WAKE_DEDUP_WINDOW_MS = 30_000;
-/** Low-frequency heartbeat interval (15 minutes). See docs/orchestrator-wake-runbook.md */
+/** Low-frequency heartbeat interval (15 minutes). See docs/orchestration-runbook.md */
 export const DEFAULT_HEARTBEAT_INTERVAL_MS = 15 * 60 * 1000;
 export const HEARTBEAT_WAKE_KIND = 'heartbeat.reconcile';
 /** Cross-process dedup: any orchestrator wake within the window blocks another. */

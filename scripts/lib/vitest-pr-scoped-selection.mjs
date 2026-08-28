@@ -42,7 +42,7 @@ const SELF_REFERENTIAL_PATHS = new Set([
   'scripts/lib/vitest-heavy-topology.mjs',
   'scripts/lib/vitest-pr-scoped-selection.mjs',
   'scripts/resolve-vitest-heavy-file-run-plan.mjs',
-  'scripts/run-vitest-heavy-shard.ps1',
+  'scripts/vitest-ci-runner.ts',
   'scripts/vitest-ci-lanes.config.json',
 ]);
 

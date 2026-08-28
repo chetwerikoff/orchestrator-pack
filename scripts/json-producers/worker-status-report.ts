@@ -10,6 +10,7 @@ import {
   readWorkerStatusStoreFile,
   resolveWorkerStatusStorePath,
   testSiblingReadiness,
+  type WorkerStatusStore,
 } from '../lib/worker-status-store.mjs';
 import {
   listCurrentWorkerAssignments,
@@ -191,7 +192,7 @@ function unknownRuntimeRows(sessions: readonly AnyRow[], reason: string): AnyRow
 }
 
 export function buildWorkerStatusReport(
-  sessions: readonly AnyRow[], store: Record<string, unknown>, nowMs: number,
+  sessions: readonly AnyRow[], store: WorkerStatusStore | Record<string, unknown>, nowMs: number,
   options: { readonly killSwitchActive: boolean; readonly siblingReady: boolean; readonly repoTickGeneration?: number },
 ): WorkerStatusReportArtifact {
   const runtimeRows = sessions.filter((row) => nonEmpty(row.id));

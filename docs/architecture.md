@@ -22,7 +22,7 @@ accounting fields are never effect authority.
 1. Published GitHub Issue — live task specification, tier, scope, and acceptance.
 2. Current default branch and current PR head — code and policy identity.
 3. GitHub PR review and required current-head checks — delivery verdict.
-4. Pack review runner/store — operational review state.
+4. Pack review runner/store — operational review state for runner-owned attempts.
 5. Tracked active documentation and policy.
 6. Historical drafts, captures, and Git history — non-authoritative audit evidence.
 
@@ -56,11 +56,15 @@ read-only reference material and is excluded from active runtime authority.
 ### Policy and prompt layer
 
 `AGENTS.md` is the universal worker rulebook. `CLAUDE.md` adds architect-specific
-rules without duplicating universal policy. Prompts define reusable bounded
+routing without duplicating universal policy. Prompts define reusable bounded
 instructions; they do not carry hidden runtime state or authorization.
 
-Canonical skills live under `.claude/skills/**`. Cursor skill files are generated
-pointers to the canonical source.
+Canonical procedure bytes live under `.cursor/skills/**/SKILL.md`. The matching
+`.claude/skills/**/SKILL.md` files are generated thin pointers with copied discovery
+frontmatter. Classified non-`SKILL.md` helpers may remain under a pointer skill only
+as implementation support when a current caller requires that exact path; they do
+not become procedure authority and are not duplicated under the Cursor canonical
+root.
 
 ### Plugin layer
 
@@ -97,10 +101,11 @@ restart require identity and lifecycle proof.
 
 ## Task authoring
 
-The canonical `create-issue-draft` skill owns the task-authoring flow. Browser GPT
-is the spec author and terminal architectural reviewer according to the task tier.
-A flow-manager may coordinate pulls, captures, dispositions, and stage progression,
-but it does not become the specification author or acceptance judge.
+The canonical `create-issue-draft` skill under `.cursor/skills/**` owns the
+task-authoring flow. Browser GPT is the spec author and terminal architectural
+reviewer according to the task tier. A flow-manager may coordinate pulls, captures,
+dispositions, and stage progression, but it does not become the specification author
+or acceptance judge.
 
 Task Issues define observable outcomes, constraints, scenario classes, acceptance,
 smoke, denylist, and allowed roots while preserving implementation freedom. Internal
@@ -122,18 +127,42 @@ for a pure control-artifact case.
 
 ### Pack-owned local review
 
-`scripts/pack-review-runner.ts` is the review start/list/status authority. It owns
-exact PR-head binding, start claims, duplicate suppression, cycle caps, run-store
-state, and handoff to the single publication owner.
+`scripts/pack-review-runner.ts` is the review start/list/status authority for
+runner-owned attempts. It owns exact PR-head binding, start claims, duplicate
+suppression, cycle caps, run-store state, and handoff to the existing publication
+path.
 
 The selected reviewer is resolved through `PACK_REVIEWER`. Codex, Claude, or GPT
 wrappers may implement the review computation, but no wrapper becomes an
-independent lifecycle or publication authority.
+independent runner lifecycle authority.
 
-A terminal result must be non-empty, structured, and bound to the exact PR head.
-Clean on the same head is terminal. Findings remain open until addressed or
+A terminal runner result must be non-empty, structured, and bound to the exact PR
+head. Clean on the same head is terminal. Findings remain open until addressed or
 explicitly dispositioned. Failed, cancelled, timed-out, malformed, contradictory,
 or empty output remains non-clean.
+
+### Direct connected-GitHub review
+
+A direct ChatGPT reviewer with connected GitHub may independently inspect the live
+PR and publish an ordinary GitHub PR review `COMMENT` anchored to the exact reviewed
+commit. It is canonical pack-review evidence only when GitHub binds it to that exact
+40-hex commit, the repository owner authored it, and its body contains exactly one
+`opk-pack-review:v1` marker whose `head` equals the review commit. A clean marker
+must declare `blocking=false`.
+
+Direct reviews are independent and have no quorum or cardinality requirement. Their
+count does not consume the automatic runner budget and never creates a pending state
+by itself. Runner-owned reviews and direct reviews share GitHub review state and the
+existing `orchestrator-pack/pack-review` required-status context; no second review
+store or status writer is introduced.
+
+A direct blocking review on an unchanged head remains blocking until an authorized
+adjudication makes it irrelevant or the code changes. On a later descendant head,
+prior direct blockers are coarsely resolved when the accepted exact-current
+WorkerReport is `ready_for_review` or `completed`, required CI is green for that
+head, and exact-head smoke passes. No fresh clean re-review or per-finding mapping is
+required solely to close that completed fix cut. A later canonical blocking review
+reopens the gate.
 
 ### Optional GitHub Actions review
 
@@ -144,8 +173,11 @@ schema, retry policy, or publication authority.
 ### Reconciliation
 
 Pack-owned reconciliation children consume current GitHub and pack state, apply the
-shared eligibility predicate, and start at most one claimed review when required.
-They do not recover through a removed runtime command or infer liveness from silence.
+shared eligibility predicate, and start at most one claimed runner review when
+required. They do not recover through a removed runtime command or infer liveness
+from silence. Direct-review publication uses ordinary pre/post PR-head read-back;
+a review that lands on a stale head remains historical evidence and cannot directly
+flip the newer head's status.
 
 ## Finding contract
 
@@ -165,7 +197,9 @@ A normalized finding contains:
 
 Signatures derive from normalized type, code, and path. Human prose is not parsed
 as authority when a structured channel exists. Temporary unknown outcomes remain
-typed and retryable only by the explicit caller-owned policy.
+typed and retryable only by the explicit caller-owned policy. Direct-review
+per-finding IDs, run IDs, slots, rounds, and mapping metadata are optional and are
+not readiness authority.
 
 ## Publication
 
@@ -173,9 +207,11 @@ typed and retryable only by the explicit caller-owned policy.
 bounded dispatch attempt. `scripts/lib/worker-degraded-ci-handoff.ts` uses exact
 composite identity for degraded-CI handoff.
 
-Publication has one owner. There is no hidden resend, acknowledgement loop, queue,
-fallback transport, or independent success branch. A transport failure remains a
-failure even when an operator URL exists.
+Runner-owned worker delivery remains separate from GitHub review durability. The
+direct-review path publishes only the owner-attested GitHub review artifact and
+reuses the existing required-status context; it does not become a fallback transport
+inside a failed runner. A transport failure remains a failure even when an operator
+URL exists.
 
 ## Worker lifecycle
 
@@ -186,6 +222,10 @@ proved, the report write is skipped without weakening the remaining obligations.
 
 Required CI and smoke must bind to the same current head. A previous-head pass,
 missing check, stale review, or unverifiable receipt does not satisfy acceptance.
+After exact-head smoke PASS, readiness is derived from current facts rather than
+persisted as a second lifecycle state: PR/target/head identity, required CI, review
+obligation and unresolved blockers, at-cap facts, exact-head smoke, and the accepted
+current WorkerReport corroborated by WorkerStatus must all be acceptable.
 
 ## TypeScript and PowerShell policy
 

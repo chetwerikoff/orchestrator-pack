@@ -240,62 +240,42 @@ describe('AO-free PR scope declaration contract', () => {
     ).toMatchObject({ ok: false, kind: 'policy-violation' });
   });
 
-  it('admits only the four Issue 1352 PowerShell test surfaces', () => {
-    expect(REPOSITORY_ALLOWED_ROOTS).toEqual(
-      expect.arrayContaining(issue1352PowerShellPaths),
-    );
-    expect(REPOSITORY_ALLOWED_ROOTS).not.toContain('tests/powershell/**');
-    expect(REPOSITORY_ALLOWED_ROOTS).not.toContain('tests/**');
-
-    const exactDeclaration = {
-      ...declaration(1352),
-      declared_paths: [...issue1352PowerShellPaths],
-      allowed_roots: [...issue1352PowerShellPaths],
-    };
-    expect(validatePrScopeDeclaration(exactDeclaration, 1352)).toMatchObject({
-      ok: true,
-    });
-
-    const unrelatedPaths = [
+  it('rejects the retired Issue 1352 PowerShell test surfaces', () => {
+    for (const retiredPath of [
       ...issue1352PowerShellPaths,
-      'tests/powershell/Unrelated.Tests.ps1',
-    ].sort((left, right) => left.localeCompare(right));
-    expect(
-      validatePrScopeDeclaration(
-        {
-          ...declaration(1352),
-          declared_paths: unrelatedPaths,
-          allowed_roots: unrelatedPaths,
-        },
-        1352,
-      ),
-    ).toMatchObject({ ok: false, kind: 'policy-violation' });
-
-    for (const broadRoot of ['tests/powershell/', 'tests/']) {
+      'tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1',
+    ]) {
+      expect(REPOSITORY_ALLOWED_ROOTS).not.toContain(retiredPath);
       expect(
         validatePrScopeDeclaration(
           {
             ...declaration(1352),
-            declared_paths: [issue1352PowerShellPaths[0]!],
-            allowed_roots: [broadRoot],
+            declared_paths: [retiredPath],
+            allowed_roots: [retiredPath],
           },
           1352,
         ),
       ).toMatchObject({ ok: false, kind: 'policy-violation' });
     }
-  });
-
-  it('admits only the exact Issue 1352 active test surfaces', () => {
-    expect(REPOSITORY_ALLOWED_ROOTS).toEqual(
-      expect.arrayContaining(issue1352ActiveTestPaths),
-    );
     expect(REPOSITORY_ALLOWED_ROOTS).not.toContain('tests/powershell/**');
     expect(REPOSITORY_ALLOWED_ROOTS).not.toContain('tests/**');
+  });
+
+  it('admits only the exact surviving Issue 1352 active test surfaces', () => {
+    const survivingPaths = issue1352ActiveTestPaths.filter(
+      (path) => !path.endsWith('.ps1'),
+    );
+    expect(REPOSITORY_ALLOWED_ROOTS).toEqual(
+      expect.arrayContaining(survivingPaths),
+    );
+    expect(REPOSITORY_ALLOWED_ROOTS).not.toEqual(
+      expect.arrayContaining(issue1352PowerShellPaths),
+    );
 
     const exactDeclaration = {
       ...declaration(1352),
-      declared_paths: [...issue1352ActiveTestPaths],
-      allowed_roots: [...issue1352ActiveTestPaths],
+      declared_paths: [...survivingPaths],
+      allowed_roots: [...survivingPaths],
     };
     expect(validatePrScopeDeclaration(exactDeclaration, 1352)).toMatchObject({
       ok: true,
@@ -305,10 +285,9 @@ describe('AO-free PR scope declaration contract', () => {
       'tests/Unrelated.test.ts',
       'tests/powershell/Unrelated.Tests.ps1',
     ]) {
-      const unrelatedPaths = [
-        ...issue1352ActiveTestPaths,
-        unrelatedPath,
-      ].sort((left, right) => left.localeCompare(right));
+      const unrelatedPaths = [...survivingPaths, unrelatedPath].sort((left, right) =>
+        left.localeCompare(right),
+      );
       expect(
         validatePrScopeDeclaration(
           {
@@ -822,31 +801,15 @@ describe('AO-free PR scope declaration contract', () => {
       'utf8',
     );
 
-    expect(workflow).toContain("$packGh = Join-Path $trustedRoot 'scripts/gh'");
-    expect(workflow).not.toContain(
-      "$packGh = Join-Path $env:GITHUB_WORKSPACE 'scripts/gh'",
+    expect(workflow).toContain('trusted_root="$GITHUB_WORKSPACE/trusted-scope-guard"');
+    expect(workflow).toContain('trusted_runner="$trusted_root/scripts/pr-scope-runner.ts"');
+    expect(workflow).toContain('node --experimental-strip-types "$trusted_runner"');
+    expect(workflow).not.toContain('$GITHUB_WORKSPACE/scripts/gh');
+    expect(workflow).not.toContain('scope guard bootstrap:');
+    const trustedRunnerStep = workflow.slice(
+      workflow.indexOf('trusted_runner="$trusted_root/scripts/pr-scope-runner.ts"'),
     );
-    expect(workflow).toContain(
-      'git -C $env:GITHUB_WORKSPACE diff --name-only --no-renames',
-    );
-    expect(workflow).toContain(
-      'scope guard bootstrap: PR changed paths do not match the authorized implementation set',
-    );
-    expect(workflow).toContain('$bootstrapLabels = [regex]::Matches(');
-    expect(workflow).toContain(
-      'scope guard bootstrap: expected exactly one bootstrap declaration label',
-    );
-    expect(workflow).toContain('$revisionMatches = [regex]::Matches(');
-    expect(workflow).toContain(
-      'scope guard bootstrap: expected exactly one source revision',
-    );
-    expect(workflow).not.toContain('$revisionMatch = [regex]::Match(');
-    expect(workflow).toContain(
-      'scope guard bootstrap: bootstrap fields do not match the closed schema',
-    );
-    expect(workflow).toContain(
-      'scope guard bootstrap: bootstrap field types are invalid',
-    );
+    expect(trustedRunnerStep).not.toContain('$GITHUB_WORKSPACE/scripts/gh');
   });
 
   it('does not let malformed current-Issue candidates use the live-Issue path', () => {

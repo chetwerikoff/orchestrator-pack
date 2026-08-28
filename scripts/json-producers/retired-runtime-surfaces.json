@@ -38,8 +38,8 @@
     },
     {
       "id": "legacy-config-state-root",
-      "sourceCommandPattern": "agent-orchestrator\\.ya?ml|\\.agent-orchestrator(?:/|\\\\|\\b)|(?:^|[\\s'\\\"`])\\.ao(?:/|\\\\|\\b)",
-      "pathPattern": "(^|/)agent-orchestrator\\.ya?ml$",
+      "sourceCommandPattern": "(?:^|[\\s'\\\"`])agent-orchestrator(?:\\.[A-Za-z0-9_-]+)*\\.ya?ml(?=$|[\\s'\\\"`])|\\.agent-orchestrator(?:/|\\\\|\\b)|(?:^|[\\s'\\\"`])\\.ao(?:/|\\\\|\\b)",
+      "pathPattern": "(^|/)agent-orchestrator(?:\\.[A-Za-z0-9_-]+)*\\.ya?ml$",
       "reason": "Retired runtime config and state are neither read nor migrated.",
       "owningReference": "Issue #1352 AO-04/AO-12"
     },

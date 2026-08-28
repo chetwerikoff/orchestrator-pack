@@ -127,7 +127,7 @@ function assertReviewDependencies(repoRoot: string): void {
     [
       'Pack Codex review requires workspace dependencies from npm ci in the pack checkout (or in the reviewed repo for AO workspaces).',
       `Checked: ${roots.join(', ')}`,
-      'Run npm ci --include=dev in the pack checkout, or scripts/run-pack-review.ps1 for AO local review.',
+      'Run npm ci --include=dev in the pack checkout, then invoke the governed TypeScript pack-review entrypoint.',
     ].join('\n'),
   );
   process.exit(1);
