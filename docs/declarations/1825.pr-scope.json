@@ -19,5 +19,5 @@
     "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
     "scripts/worker-smoke-run.ts"
   ],
-  "source_revision": "36d2477fb5ebd1cadde3d2c54c19aa6f6d1b3a23"
+  "source_revision": "4c7bef4e8b3af1d5009ff02e808c66973fe03d9f"
 }
