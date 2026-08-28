@@ -170,14 +170,32 @@ First classify the outcome from authoritative transport evidence:
   absent URL, or generic “pre-send” wording.
 - **page-capable-or-uncertain** is every other non-success outcome.
 
-For page-capable-or-uncertain outcomes, before any next workflow action,
-complete the applicable observations:
+For page-capable-or-uncertain outcomes, first complete the
+[durable observation recovery](#durable-observation-recovery) read and
+classification below, then before any next workflow action complete the
+applicable page and Issue observations:
 
-1. Run `npm run browser-gpt-page-probe -- inspect --cdp "<endpoint>" --url
-   "<chat-url>"`. “Owned prompt present” is true only when exactly one current
-   user node carries the retained transport-owned `OPKTURNV1...` invocation
-   marker. URL presence, prompt text, product ids, message counts, and older
-   turns do not prove ownership.
+1. Apply page observation according to the durable phase and available URL:
+   - With a bound conversation URL, run
+     `npm run browser-gpt-page-probe -- inspect --cdp "<endpoint>" --url
+     "<chat-url>"`. “Owned prompt present” is true only when exactly one
+     current user node carries the retained transport-owned
+     `OPKTURNV1...` invocation marker. URL presence, prompt text, product ids,
+     message counts, and older turns do not prove ownership.
+   - For `dispatching` or `sent_unbound` with no persisted conversation URL,
+     use the same-invocation harvest in [Unbound same-invocation
+     harvest](#unbound-same-invocation-harvest), which resolves ownership only
+     from the persisted exact marker.
+   - For an exact, well-formed producer-terminal `not_sent` with numeric
+     `send_count: 0`, or a `prepared` record whose stronger authoritative
+     zero-send evidence proves the child cannot advance, page observation is
+     not applicable when no conversation URL exists. Do not invent or
+     reconstruct a URL or marker harvest for either proven-zero case; retain
+     the existing retry/correction authority and complete the applicable
+     Issue-side observation below.
+   - Missing, unreadable, malformed, identity-mismatched, or otherwise
+     unresolved page evidence remains observation uncertainty and cannot
+     authorize resend or progression.
 2. For a governed create-Issue/direct-publication turn, check observable
    Issue-side publication evidence using the canonical Issue-root review
    evidence already recorded for the current admitted work. Select only
@@ -219,6 +237,108 @@ Ambiguous ownership or incomplete applicable evidence permits no resend. If a
 required observation surface is unavailable and no other legal manager action
 exists, a blocker must name that exact unavailable observation and its observed
 failure.
+
+### Durable observation recovery
+
+The existing `state-light-turn-observation/v1` record is the first durable
+delivery classifier for every page-capable-or-uncertain non-success. Resolve it
+by the exact pair `{profile_key, invocation_id}` for the caller-retained
+invocation; never scan a profile root, search the recurrence journal, match
+prompt text, or infer an invocation id from a URL, target, process, or result
+field that is not bound to this invocation.
+
+Resolve the configured profile key in this order:
+
+1. When a valid `turn-result/v1` is available, use its
+   `configured_profile_key`.
+2. When that result is absent or unreadable, derive
+   `configuredProfileKey(profile, cdp)` only from the same invocation's
+   caller-retained bound `--profile` and `--cdp` launch inputs.
+3. If either bound input is missing, malformed, or ambiguous, the durable
+   identity is unavailable. Fail closed through the existing non-success
+   observation/routing path; do not try an alternate profile or reconstruct the
+   key from local state.
+
+Read and validate the exact record before any resend, replacement invocation
+identity, stage progression, or blocker exit. Apply the phase-specific
+evidence below:
+
+| Durable phase and evidence | Delivery classification | Required next action |
+| --- | --- | --- |
+| `dispatching` | Possible delivery. The record is committed before click/Enter and may survive before the numeric send count increments. | Do not resend or mint a replacement identity; use the same-invocation harvest/reconciliation path. |
+| `sent_unbound` | Sent / delivery-positive. | Do not resend or mint a replacement identity; harvest using the same invocation id. |
+| `sent_unharvested` | Sent / delivery-positive. | Do not resend or mint a replacement identity; harvest using the same invocation id. |
+| `harvested` | Delivery/publication-positive. | Do not resend or mint a replacement identity; reconcile or harvest only under the same invocation and existing publication binding. |
+| `prepared` | Unknown / possible delivery unless stronger authoritative terminal or process-completion evidence proves the child can no longer advance it and no stronger contradictory send/publication evidence exists. | Without that stronger evidence, remain fail-closed in the existing observation/routing path. If zero-send is proven, this record only clears the possible-delivery prohibition; it creates no generic retry authority. |
+| `not_sent` | Zero-send when the exact record is well-formed, has `send_witness: numeric_send_count`, and has numeric `send_count: 0`, unless stronger contradictory send/publication evidence exists. | This producer-terminal state only clears the possible-delivery prohibition; it creates no generic retry authority. Any correction, retry, or reinvocation still requires its existing owning contract. |
+| Missing, unreadable, malformed, identity-mismatched, or contradicted record | Unknown / possible delivery. | No resend, replacement identity, stage progression, or blocker exit; report the exact unavailable or contradictory observation surface and follow existing routing. |
+
+The producer invariants above are binding: `not_sent` is terminal, is emitted
+only after `runTurn` returns with numeric `send_count: 0` from `prepared`, and
+does not overwrite `dispatching`, because submit may already have delivered.
+Therefore exact producer-terminal `not_sent` does not need a separate managed
+process-stop witness. `prepared` is different and remains fail-closed without
+stronger authoritative terminal/process-completion evidence.
+
+Stronger contradictory evidence wins over a lower-strength phase, including an
+authoritative positive numeric send witness, an exact owned-marker witness, a
+committed primary publication, or governed publication evidence for the same
+invocation. A coarse incident envelope such as
+`delivery: POSSIBLY_DELIVERED` is conservative context, not itself a
+contradiction to valid phase-specific durable evidence and not a managed
+process-stop witness. Launcher PID, shell state, silence, observation
+heartbeats, and the diagnostic recurrence journal are likewise not generic
+stop evidence.
+
+### Unbound same-invocation harvest
+
+For `sent_unbound` or `dispatching` records with no persisted conversation URL,
+run the existing `browser-gpt-page-probe harvest` with all retained
+same-invocation inputs:
+
+```bash
+npm run browser-gpt-page-probe -- harvest \
+  --cdp "${CDP_ENDPOINT}" \
+  --profile "${BROWSER_PROFILE}" \
+  --invocation-id "${INVOCATION_ID}" \
+  --output "${OUTPUT_FILE}"
+```
+
+`${CDP_ENDPOINT}`, `${BROWSER_PROFILE}`, `${INVOCATION_ID}`, and
+`${OUTPUT_FILE}` must be the already-bound CDP endpoint, browser profile,
+caller-retained invocation id, and existing primary output identity for this
+invocation; do not guess or substitute any of them. The probe may locate the
+owned page only through the persisted exact `OPKTURNV1...` marker and must
+settle the record under that original invocation. Exactly one current user node
+with that marker is ownership; zero is not proof of non-delivery, and multiple
+matches are ambiguous. A marker with a stable reply is harvested; a marker
+without a reply receives the existing bounded wait and re-probe. Never
+substitute a prompt-text match, product id, URL alone, or a newly minted
+invocation.
+
+For governed create-Issue/direct-publication turns, also consume the existing
+complete authenticated Issue-comment census and only
+`reviewer-invocation-envelope/v1` records matching the current
+`stageAttemptId`, `stage`, `reviewerSlot`, and `sourceRevision`. An unavailable
+or incomplete envelope correlation or census makes publication absence unknown,
+not proven. For an ordinary tracked turn, the Issue-side check is not
+applicable; preserve its existing invocation/retry contract and do not invent
+publication artifacts.
+
+### Diagnostic recurrence journal
+
+The recurrence journal remains best-effort diagnostic state. Append unexpected
+events when the existing writer permits, and include them in the current
+report, but never use journal presence, absence, ordering, or freshness to
+authorize a resend, classify zero-send, prove child stop, progress a stage, or
+complete a task.
+
+### #1752 boundary
+
+Issue #1752 remains separate, non-prerequisite, and untouched. Its launcher
+liveness, heartbeat, watchdog/EOF, and terminal work does not make an incident
+envelope a generic post-stop witness for this procedure. This task adds no PID
+poll, watcher, liveness loop, stop witness, queue, lease, or retry subsystem.
 
 ## Publication and tab lifecycle
 
