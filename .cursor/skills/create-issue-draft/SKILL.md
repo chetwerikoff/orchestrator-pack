@@ -295,7 +295,6 @@ stage.
   guards directly, then alone writes `create-issue-final-acceptance/v1` and
   synchronizes `spec-review:accepted` after event confirmation. An external PASS
   receipt cannot substitute for these guards.
-  `--cycle-id` is optional audit metadata for final acceptance; absence must remain absent rather than being synthesized. Live cycle/stage start and publication keep their strict cycle binding.
 
 All three hidden journal markers carry a schema and event-key. Remote admission
 uses only complete, unedited owner comments and a fully exhausted bounded REST
@@ -565,12 +564,9 @@ When the Claude capture branch exists, add:
 ```
 
 Final acceptance supplies the canonical directory, immutable intake, all episode
-stage receipts, and the same verified-relay evidence. Claude producer evidence
-remains required for live stage-time credentialing when applicable, but producer,
-run, terminal-result, and receipt-writer identities are audit metadata at final
-acceptance; the required Claude substantive result/capture is still mandatory.
-Legacy unsuffixed directory scanning remains historical read compatibility only;
-source-suffixed captures require receipts.
+stage receipts, Claude producer evidence when applicable, and the same
+verified-relay evidence. Legacy unsuffixed directory scanning remains historical
+read compatibility only; source-suffixed captures require receipts.
 
 ## Shared reviewer contract
 
@@ -602,29 +598,23 @@ FINDING_COUNT: <n>
 
 For Browser-GPT stage acceptance, the authoritative source is the published
 one-top-level target-Issue comment. After settlement, `produce-artifacts`
-performs a complete Issue-comment census for the exact target Issue and considers
-canonical comments for the expected invocation. A credentialable public reviewer
-artifact must be unedited and repository-trusted by GitHub
-`author_association ∈ {OWNER, MEMBER, COLLABORATOR}`; the exact author login is
-retained only as audit metadata. The artifact's own `Read revision` must equal
-that invocation's frozen `sourceRevision`. Byte-identical trusted
-materializations for the same semantic invocation/source slot are duplicate
-observations and collapse deterministically; conflicting trusted bytes fail.
-The producer rereads the selected comment authoritatively and materializes the
-exact reread UTF-8 body into the canonical capture path without overwrite. A
-well-formed canonical artifact for the invocation on another revision remains a
-revision mismatch; a proven complete zero-match census remains absence. Failure
-to resolve the current authenticated GitHub principal is not a completion veto.
+performs a complete authenticated Issue-comment census, resolves the current
+authenticated GitHub principal, and considers canonical comments for the expected
+Issue and invocation. Principal equality is case-insensitive. The producer
+filters to principal-owned candidates before uniqueness, requires exactly one
+unedited canonical artifact for the expected source revision, rereads that exact
+comment authoritatively, and materializes the exact reread UTF-8 body into the
+canonical capture path without overwrite. A well-formed canonical artifact for
+the invocation on another revision is a revision mismatch and reports both the
+expected and observed revisions; a foreign-only candidate is a provenance
+mismatch; a proven complete zero-match census is absence.
 
-At live stage-time, a transport-classified `complete` invocation still requires
-its `turn-result/v1` and existing successful-transport invariants. At final
-acceptance, transport state plus invocation/reviewer-source/tool-call/terminal
-result identities are audit-only when the repository-trusted substantive GitHub
-artifact is present. A non-`complete` invocation with `send_count: 1` may
-credential through that authoritative artifact path while retaining its real
-terminal classification, retry class, and any missing transport identity fields;
-never manufacture `state: ok`, `reviewer_source`, send accounting, or a
-success terminal identity. A proven retryable first
+A transport-classified `complete` invocation still requires its `turn-result/v1`
+and existing successful-transport invariants. A non-`complete` invocation with
+`send_count: 1` may credential only through the authoritative GitHub artifact
+path and retains its real terminal classification, retry class, and any missing
+transport identity fields; never manufacture `state: ok`, `reviewer_source`,
+send accounting, or a success terminal identity. A proven retryable first
 attempt with `send_count: 0` requires no GitHub artifact and may use the one
 existing legal zero-send retry; the final retry is evaluated from its own
 observed facts.
@@ -735,9 +725,8 @@ The `counts` object contains exactly three non-negative integers:
 
 Any unresolved defect or byte/hash/count/mapping mismatch blocks. Terminal body
 acceptance compares exact UTF-8 byte length and SHA-256 on the ordinary path; a
-#1439 bounded post-terminal correction is the only revision-changing exception,
-must advance exactly one marker revision `rN -> rN+1`, and still requires the
-single original terminal receipt plus repaired current bytes. It
+#1439 bounded post-terminal correction is the only revision-changing exception
+and still requires the original terminal receipt plus repaired current bytes. It
 does not normalize Markdown, whitespace, line endings, or Unicode.
 `NO_FINDINGS` from one source never erases another source's occurrence.
 
@@ -784,12 +773,10 @@ Run one separate Claude invocation after pre-lens is green. The flow-manager
 prepares inputs/destination and captures exact output/provenance but does not
 simulate or adjudicate Claude.
 
-Live stage-time credentialing of a counted Claude capture requires a separately
-produced immutable `claude-producer-evidence/v1` artifact matching episode,
-attempt, revision, invocation, producing run, terminal result, exit status, M3
-status, and capture bytes/hash. At final acceptance those producer/run/transport
-bindings are audit-only; the substantive Claude result/capture, stage topology,
-relay union, ledger, and terminal contract remain required.
+A counted Claude capture requires a separately produced immutable
+`claude-producer-evidence/v1` artifact matching episode, attempt, revision,
+invocation, producing run, terminal result, exit status, M3 status, and capture
+bytes/hash. Receipt self-assertion alone is insufficient.
 
 Only observable `quota`, `rate-limit`, `provider-unavailable`, or
 `cli-unavailable` may produce a `claude-unavailable` waiver. The waiver is
@@ -827,18 +814,12 @@ or unresolved protected state fails closed.
 ## Final acceptance
 
 Supply the canonical receipt directory, immutable tier intake, all episode
-receipts, and verified relay evidence to both guards. Acceptance consumes the
-same frozen stage plan used by launch admission; caller-selected
-stage/cardinality topology is not authority. Final completion is decided from
-the stable live Issue body plus required substantive result content, slot
-cardinality, ledger/dispositions, tier/M5 floors, and the one-shot terminal
-contract. Producer/publisher/reviewer-source/run/terminal-result identities,
-historical cycle/receipt/source-revision equality, and journal/projection state
-are audit metadata at this boundary and cannot independently credential or veto
-completion. T3 still requires its frozen conditional stage plan and a substantive
-Claude capture or the existing valid unavailable waiver; independent Claude
-producer evidence remains a live stage-time requirement, not a final provenance
-gate.
+receipts, independent Claude evidence when applicable, and verified relay
+evidence to both guards. Acceptance consumes the same frozen stage plan used by
+launch admission; caller-selected stage/cardinality topology is not authority.
+T1/T2 may accept when their required topology, ledger, body, tier, and M5 checks
+are green. T3 acceptance additionally requires its frozen conditional stage plan,
+Claude evidence/waiver, and one-shot terminal contract.
 
 Before invoking final acceptance, follow [`docs/create-issue-draft-acceptance-artifacts.md`](../../../docs/create-issue-draft-acceptance-artifacts.md). Run its `check-artifacts` command to obtain a precise missing-input report, then run `produce-artifacts` only after all required recorded stage results and author dispositions exist. The producer computes canonical receipt identifiers and capture bytes/hashes; it does not accept caller assertions that a stage or capture exists.
 
@@ -1110,7 +1091,7 @@ node scripts/create-issue-stage-finalize.ts publish-stage \
   --repo <owner/name> --issue-number <N> --receipt "$REVIEW_DIR/<stage-receipt>.json"
 
 node scripts/create-issue-final-acceptance.ts \
-  --repo <owner/name> --issue-number <N> [--cycle-id <cycle-id>] \
+  --repo <owner/name> --issue-number <N> --cycle-id <cycle-id> \
   --issue-body <path> --issue-revision <rNN> --review-dir "$REVIEW_DIR" \
   --stage-receipt "$REVIEW_DIR/<receipt>.json" ...
 ```
