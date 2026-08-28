@@ -395,10 +395,10 @@ async function githubReviewEvidence(
   let transport: GithubReviewTransport;
   try {
     transport = deps.githubReviewTransport(input);
-    const actor = trim(await transport.resolveActorLogin());
-    if (!actor) return { kind: 'inconclusive', reason: 'github_review_actor_resolution_empty', evidence: {} };
+    const owner = input.repoSlug.split('/', 1)[0] ?? '';
+    if (!owner) return { kind: 'inconclusive', reason: 'github_review_owner_resolution_empty', evidence: {} };
     const reviews = await transport.listReviews();
-    const canonical = listCanonicalDirectPackReviews(reviews, actor)
+    const canonical = listCanonicalDirectPackReviews(reviews, owner)
       .filter((review) => review.headSha.toLowerCase() === input.headSha);
     if (canonical.length > 0) {
       return {
@@ -420,9 +420,7 @@ async function githubReviewEvidence(
   }
 }
 
-function defaultDependencies(
-  normalized: NoReviewReconciliationInput & { projectId: string },
-): NoReviewReconciliationDependencies {
+function defaultDependencies(): NoReviewReconciliationDependencies {
   return {
     now: () => new Date(),
     readCurrentHead: resolveHeadSha,
@@ -472,7 +470,7 @@ export async function reconcilePackReviewNoReview(
   overrides: Partial<NoReviewReconciliationDependencies> = {},
 ): Promise<NoReviewReconciliationReceipt> {
   const input = normalizeInput(rawInput);
-  const defaults = defaultDependencies(input);
+  const defaults = defaultDependencies();
   const deps = { ...defaults, ...overrides };
   const operationalFacts: Array<Record<string, unknown>> = [];
   const evidence: Array<Record<string, unknown>> = [];
@@ -529,7 +527,13 @@ export async function reconcilePackReviewNoReview(
     return finish('unavailable/inconclusive', selected.reason);
   }
   const run = selected.run;
-  const transport = deps.sourceCommentTransport(input);
+  let transport: PackGptSourceCommentTransport;
+  try {
+    transport = deps.sourceCommentTransport(input);
+  } catch (error) {
+    evidence.push({ kind: 'source-comment-transport', state: 'unavailable', detail: bounded(error) });
+    return finish('unavailable/inconclusive', 'source_comment_transport_unavailable');
+  }
 
   if (!run) {
     operationalFacts.push({ kind: 'run-selection', state: 'no-matching-local-run-in-inspected-root' });
@@ -545,7 +549,11 @@ export async function reconcilePackReviewNoReview(
       evidence.push({ kind: 'source-comment-census', state: 'unavailable', detail: bounded(error) });
       return finish('unavailable/inconclusive', 'source_comment_census_unavailable');
     }
-    evidence.push({ kind: 'source-comment-census', state: sourceResolution.kind, reason: sourceResolution.reason ?? null });
+    evidence.push({
+      kind: 'source-comment-census',
+      state: sourceResolution.kind,
+      ...('reason' in sourceResolution ? { reason: sourceResolution.reason } : {}),
+    });
     if (sourceResolution.kind === 'credentialed') {
       evidence.push({
         kind: 'source-comment',
@@ -611,7 +619,7 @@ export async function reconcilePackReviewNoReview(
       kind: 'source-comment',
       sourceSlotId: slot.slotId,
       state: sourceResolution.kind,
-      reason: sourceResolution.reason ?? null,
+      ...('reason' in sourceResolution ? { reason: sourceResolution.reason } : {}),
       ...(sourceResolution.kind === 'credentialed' ? { commentId: sourceResolution.receipt.commentId } : {}),
     });
     if (sourceResolution.kind === 'credentialed') {
