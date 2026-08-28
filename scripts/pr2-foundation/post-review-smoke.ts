@@ -150,7 +150,7 @@ async function defaultReadIssueBody(
   return String(parsed.body ?? '');
 }
 
-function reviewStageDisposition(input: {
+export function reviewStageDisposition(input: {
   prNumber: number;
   headSha: string;
   projectId: string;
