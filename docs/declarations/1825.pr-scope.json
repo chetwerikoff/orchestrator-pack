@@ -2,6 +2,7 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1825,
   "declared_paths": [
+    "scripts/executor-profile-policy.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
     "scripts/worker-smoke-run.ts"
@@ -13,9 +14,10 @@
     "vendor/"
   ],
   "allowed_roots": [
+    "scripts/executor-profile-policy.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
     "scripts/worker-smoke-run.ts"
   ],
-  "source_revision": "592de1db235b7965dd96e31046dc31c7bdfa839e"
+  "source_revision": "36d2477fb5ebd1cadde3d2c54c19aa6f6d1b3a23"
 }
