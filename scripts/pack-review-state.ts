@@ -176,10 +176,16 @@ export interface PackReviewAuthorityOptions {
 }
 
 export interface PackReviewStartConsumptionRecord {
+  id?: unknown;
+  runId?: unknown;
   prNumber: number;
+  targetSha?: unknown;
+  headSha?: unknown;
   status?: unknown;
   automaticBudgetDisposition?: unknown;
   stale?: unknown;
+  createdAt?: unknown;
+  failureReason?: unknown;
 }
 
 export class PackReviewAuthorityError extends Error {
@@ -645,7 +651,9 @@ export function observePackReviewHead(input: {
     nextPhase: 'head_observed',
     mutate(current) {
       // Same-head observe rewinds the phase without resetting cycle, triage, or budget.
-      const consumedRunEvidence = reviewRunEvidence(current, input.reviewRuns);
+      const consumedRunEvidence = input.reviewRuns
+        ? reviewRunEvidence(current, input.reviewRuns)
+        : false;
       if (current.currentHeadSha === headSha) {
         if (current.cycle && !current.cycle.reviewStageComplete && consumedRunEvidence) {
           markReviewStageComplete(current, nowIso(input.options));
@@ -931,7 +939,7 @@ export function assertPackReviewSmokeAdmission(input: {
 export function assertIndependentSmokeAdmission(input: {
   authority: PackReviewAuthorityDocument;
   headSha: string;
-  reviewRuns?: readonly PackReviewStartConsumptionRecord[];
+  reviewRuns: readonly PackReviewStartConsumptionRecord[];
   operatorSmokeOnly?: boolean;
 }): void {
   const headSha = normalizeSha(input.headSha, 'headSha');
@@ -955,19 +963,35 @@ export function assertIndependentSmokeAdmission(input: {
         'a started or passed independent smoke cannot continue on a new head',
       );
     }
+    if (independent.headSha === headSha && independent.status === 'started') {
+      throw new PackReviewAuthorityError(
+        'smoke_ordering_independent_in_progress',
+        'independent smoke is already started for the exact head',
+      );
+    }
+    if (independent.headSha === headSha && independent.status === 'passed') {
+      throw new PackReviewAuthorityError(
+        'smoke_ordering_independent_already_passed',
+        'independent smoke already passed for the exact head',
+      );
+    }
     return;
+  }
+  if (['BLOCK', 'PENDING_ARCHITECT', 'PENDING_OPERATOR'].includes(input.authority.triage?.verdict ?? '')) {
+    throw new PackReviewAuthorityError(
+      'smoke_ordering_review_unsettled',
+      'independent smoke is blocked while pack-review triage is unresolved',
+    );
   }
   const workerOwnedPassed = input.operatorSmokeOnly === true
     && ordering?.workerOwned?.status === 'passed'
     && normalizeSha(ordering.workerOwned.headSha, 'smokeOrdering.workerOwned.headSha') === headSha;
   if (ordering?.reviewSettledHeadSha !== headSha
-      && !(input.authority.cycle?.reviewStageComplete === true
-        && (input.authority.cycle.reviewStartConsumed === true
-          || reviewStartConsumedForIndependentSmoke(input.authority, input.reviewRuns))
-        || workerOwnedPassed)) {
+      && !reviewStartConsumedEvidence(input.authority, input.reviewRuns)
+      && !workerOwnedPassed) {
     throw new PackReviewAuthorityError(
       'smoke_ordering_review_unsettled',
-      'independent smoke requires settled pack-review obligations for the exact head',
+      'independent smoke requires settled pack-review obligations or a consumed review start',
     );
   }
 }
@@ -979,6 +1003,7 @@ export function commitSmokeOrderingTransition(input: {
   headSha: string;
   status: SmokeOrderingStatus;
   failureKind?: SmokeOrderingFailureKind;
+  reviewRuns?: readonly PackReviewStartConsumptionRecord[];
   operatorSmokeOnly?: boolean;
   options: PackReviewAuthorityOptions;
 }): PackReviewAuthorityDocument {
@@ -1013,7 +1038,20 @@ export function commitSmokeOrderingTransition(input: {
         };
       } else {
         if (input.status === 'started') {
-          assertIndependentSmokeAdmission({ authority, headSha, operatorSmokeOnly: input.operatorSmokeOnly });
+          const reviewRuns = input.reviewRuns
+            ?? (authority.smokeOrdering?.reviewSettledHeadSha === headSha ? [] : undefined);
+          if (!reviewRuns) {
+            throw new PackReviewAuthorityError(
+              'authority_input_invalid',
+              'reviewRuns are required for independent-smoke admission when exact-head review settlement is absent',
+            );
+          }
+          assertIndependentSmokeAdmission({
+            authority,
+            headSha,
+            reviewRuns,
+            operatorSmokeOnly: input.operatorSmokeOnly,
+          });
         } else if (!authority.smokeOrdering?.independent?.startedEver
             || authority.smokeOrdering.independent.status !== 'started') {
           throw new PackReviewAuthorityError(
@@ -1099,9 +1137,9 @@ function markReviewStageComplete(
   current.cycle.reviewStageCompletedAtUtc = completedAtUtc;
 }
 
-export function reviewStartConsumedForIndependentSmoke(
+function reviewStartConsumedEvidence(
   authority: PackReviewAuthorityDocument,
-  reviewRuns: readonly PackReviewStartConsumptionRecord[] = [],
+  reviewRuns: readonly PackReviewStartConsumptionRecord[],
 ): boolean {
   if (['BLOCK', 'PENDING_ARCHITECT', 'PENDING_OPERATOR'].includes(authority.triage?.verdict ?? '')) {
     return false;
@@ -1119,14 +1157,20 @@ export function reviewStartConsumedForIndependentSmoke(
 
 function reviewRunEvidence(
   authority: PackReviewAuthorityDocument,
-  reviewRuns: readonly PackReviewStartConsumptionRecord[] = [],
+  reviewRuns: readonly PackReviewStartConsumptionRecord[],
 ): boolean {
-  return reviewRuns.some((run) => run.prNumber === authority.prNumber
-    && run.stale !== true
-    && run.automaticBudgetDisposition !== 'non_consuming_explicit'
-    && ['failed', 'error', 'parse_error', 'stale_head'].includes(
-      String(run.status ?? '').toLowerCase(),
-    ));
+  if (!authority.cycle) return false;
+  const cycleOpenedAt = Date.parse(authority.cycle.openedAtUtc);
+  if (!Number.isFinite(cycleOpenedAt)) return false;
+  return reviewRuns.some((run) => {
+    const runCreatedAt = typeof run.createdAt === 'string' ? Date.parse(run.createdAt) : Number.NaN;
+    return run.prNumber === authority.prNumber
+      && run.stale !== true
+      && run.automaticBudgetDisposition === 'consume'
+      && String(run.status ?? '').toLowerCase() === 'failed'
+      && Number.isFinite(runCreatedAt)
+      && runCreatedAt >= cycleOpenedAt;
+  });
 }
 
 function reviewObligationsSettled(authority: PackReviewAuthorityDocument): boolean {
@@ -1134,7 +1178,6 @@ function reviewObligationsSettled(authority: PackReviewAuthorityDocument): boole
   if (authority.cycle?.state === 'closed') return true;
   const reviewStatus = authority.terminal?.reviewStatus;
   if (reviewStatus === 'clean' || reviewStatus === 'up_to_date' || reviewStatus === 'commented') return true;
-  if (reviewStartConsumedForIndependentSmoke(authority)) return true;
   return (authority.cycle?.state === 'at_cap_open_findings'
       || authority.cycle?.state === 'at_cap_continuation_required')
     && authority.triage?.source === 'architect'

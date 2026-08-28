@@ -83,7 +83,6 @@ const record = (value: unknown): value is Record<string, unknown> => typeof valu
 import { markTrackedSmokeWorkerDeliveryConfirmed } from './lib/worker-smoke-bounded-create.ts';
 import { verifySmokeRunReceipt, writeWorkerSmokeReceipt } from './lib/worker-smoke-receipt.ts';
 import {
-  assertIndependentSmokeAdmission,
   commitSmokeOrderingTransition,
   initializePackReviewAuthority,
   observePackReviewHead,
@@ -1707,7 +1706,7 @@ interface SmokeOrderingBinding {
 
 type SmokeOrderingFailureKind = 'finding' | 'retryable';
 
-function beginSmokeOrdering(
+export function beginSmokeOrdering(
   options: CliOptions,
   issueBody: string,
 ): SmokeOrderingBinding | null {
@@ -1738,7 +1737,7 @@ function beginSmokeOrdering(
       : resolveTierAndCap({ issueBody }).tier) as PackReviewTier,
     options: authorityOptions,
   });
-  if (authority.currentHeadSha !== options.headSha.toLowerCase()) {
+  if (actor === 'worker-owned' && authority.currentHeadSha !== options.headSha.toLowerCase()) {
     authority = observePackReviewHead({
       prNumber: options.prNumber,
       expectedTransitionSeq: authority.transitionSeq,
@@ -1747,21 +1746,15 @@ function beginSmokeOrdering(
       reviewRuns,
     });
   }
-  if (actor === 'independent') {
-    assertIndependentSmokeAdmission({
-      authority,
-      headSha: options.headSha,
-      reviewRuns,
-      operatorSmokeOnly: options.operatorSmokeOnly,
-    });
-  }
   const started = commitSmokeOrderingTransition({
     prNumber: options.prNumber,
     expectedTransitionSeq: authority.transitionSeq,
     actor,
     headSha: options.headSha,
     status: 'started',
-    operatorSmokeOnly: options.operatorSmokeOnly,
+    ...(actor === 'independent'
+      ? { reviewRuns, operatorSmokeOnly: options.operatorSmokeOnly }
+      : {}),
     options: authorityOptions,
   });
   void started;

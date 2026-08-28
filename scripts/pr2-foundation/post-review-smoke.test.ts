@@ -253,7 +253,7 @@ describe('Issue #1418 post-review smoke reconciliation', () => {
       runAttempt,
     }));
 
-    expect(result).toEqual({ handled: false, attempted: false, reason: 'review_stage_incomplete' });
+    expect(result).toEqual({ handled: false, attempted: false, reason: 'smoke_ordering_review_unsettled' });
     expect(runAttempt).not.toHaveBeenCalled();
     expect(remoteActuationRecords(options)).toHaveLength(0);
   });

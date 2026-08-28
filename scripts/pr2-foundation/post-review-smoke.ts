@@ -19,8 +19,8 @@ import {
 import { parseComplexityTierFence } from '../lib/tier-gate-core.ts';
 import {
   assertIndependentSmokeAdmission,
+  PackReviewAuthorityError,
   readPackReviewAuthority,
-  reviewStartConsumedForIndependentSmoke,
   stagePackReviewImmutableRecord,
 } from '../pack-review-state.ts';
 import { sameRuntimeWorker, type RuntimeAdapter } from '../runtime/contracts.ts';
@@ -150,7 +150,7 @@ async function defaultReadIssueBody(
   return String(parsed.body ?? '');
 }
 
-function reviewStageDisposition(input: {
+export function reviewStageDisposition(input: {
   prNumber: number;
   headSha: string;
   projectId: string;
@@ -161,39 +161,32 @@ function reviewStageDisposition(input: {
     storeRoot: input.env.PACK_REVIEW_RUN_STORE_ROOT,
   });
   const authority = readPackReviewAuthority(input.prNumber, { storeRoot });
-  if (!authority || authority.currentHeadSha !== input.headSha) {
+  if (!authority) {
     return { kind: 'review_pending', reason: 'review_authority_missing_or_stale' };
   }
   const reviewRuns = listPackReviewRuns({ projectId: input.projectId, storeRoot });
-  const consumedReviewStart = reviewStartConsumedForIndependentSmoke(authority, reviewRuns);
-  if (authority.cycle?.reviewStageComplete !== true && !consumedReviewStart) {
-    return { kind: 'review_pending', reason: 'review_stage_incomplete' };
-  }
-  const independent = authority.smokeOrdering?.independent;
-  if (independent?.headSha === input.headSha) {
-    if (independent.status === 'started') {
-      return { kind: 'smoke_blocked', reason: 'independent_smoke_in_progress' };
-    }
-    if (independent.status === 'passed') {
-      return { kind: 'smoke_blocked', reason: 'independent_smoke_already_passed' };
-    }
-    if (independent.status === 'failed'
-        && independent.failureKind === 'finding'
-        && independent.failureHeadSha === input.headSha) {
-      return { kind: 'smoke_blocked', reason: 'independent_smoke_finding_requires_new_head' };
-    }
-  }
   try {
     assertIndependentSmokeAdmission({ authority, headSha: input.headSha, reviewRuns });
   } catch (error) {
+    if (error instanceof PackReviewAuthorityError) {
+      if (error.code === 'smoke_ordering_independent_in_progress') {
+        return { kind: 'smoke_blocked', reason: 'independent_smoke_in_progress' };
+      }
+      if (error.code === 'smoke_ordering_independent_already_passed') {
+        return { kind: 'smoke_blocked', reason: 'independent_smoke_already_passed' };
+      }
+      if (error.code === 'smoke_ordering_review_unsettled') {
+        return { kind: 'review_pending', reason: error.code };
+      }
+      return { kind: 'smoke_blocked', reason: error.code };
+    }
     return {
       kind: 'smoke_blocked',
-      reason: `independent_smoke_admission_blocked:${error instanceof Error ? error.message : String(error)}`,
+      reason: 'independent_smoke_admission_blocked:' + (error instanceof Error ? error.message : String(error)),
     };
   }
   return { kind: 'smoke_candidate', reason: 'review_stage_complete_smoke_admitted' };
 }
-
 function resolveIssueBinding(input: {
   file: string;
   repository: string;
