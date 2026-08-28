@@ -1270,7 +1270,13 @@ function parseRecord(
       findingCount: raw.findingCount,
       findings: raw.findings,
     };
-    if (hasNonHarvestIncompleteGptSource(reviewRound)) {
+    const completedBlockingFinding = findings.some((finding) => (
+      finding
+      && typeof finding === 'object'
+      && !Array.isArray(finding)
+      && String((finding as Record<string, unknown>).severity ?? '').toLowerCase() === 'blocking'
+    ));
+    if (hasNonHarvestIncompleteGptSource(reviewRound) && !completedBlockingFinding) {
       throw new Error(
         `corrupt pack review run record at ${path || '<record>'}: reviewVerdict does not match terminal source census`,
       );
