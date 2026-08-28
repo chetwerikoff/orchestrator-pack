@@ -12,6 +12,7 @@ import {
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import {
+  abandonLatePageHandle,
   boundedResourceCleanup,
   releaseCdpBrowser,
   RESOURCE_CLEANUP_BOUND_MS,
@@ -85,7 +86,10 @@ import {
   SEND_BUTTON_SELECTOR,
   stripUiCollapseAffixes,
   verifyProfile,
+  BrowserOperationTimeoutError,
+  createTurnOperationBudget,
   type BrowserConfig,
+  type TurnOperationBudget,
 } from './ui-adapter.ts';
 import {
   recoveryMarkerCardinality,
@@ -101,6 +105,13 @@ import {
   stopOwnedGeneration,
   type StopOwnedGenerationOutcome,
 } from './state-light-cancellation.ts';
+import {
+  resolveBrowserTurnLivenessTiming,
+  startTurnScopedHeartbeatScheduler,
+  type BrowserTurnLivenessPhase,
+  type ObservationHeartbeatV1,
+  type TurnScopedHeartbeatScheduler,
+} from './liveness-contract.ts';
 
 export { stopOwnedGeneration };
 export type { StopOwnedGenerationOutcome };
@@ -136,8 +147,6 @@ const MESSAGE_NODE_READ_ATTEMPTS = 2;
 const BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR = '[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]';
 /** Post-send wall probes must not block transcript reads or the confirm loop. */
 const POST_SEND_PRODUCT_WALL_PROBE_MS = 800;
-export const OBSERVATION_HEARTBEAT_MS = 30_000;
-const OBSERVATION_HEARTBEAT_POLL_INTERVAL = 2;
 export const BROWSER_TURN_RECURRENCE_PATH = join(
   homedir(),
   '.local',
@@ -195,15 +204,7 @@ export interface ObservationExhaustedDiagnostics {
   readonly soft_deadline_elapsed: boolean;
 }
 
-export interface ObservationHeartbeat {
-  readonly schema: 'observation-heartbeat/v1';
-  readonly poll_count: number;
-  readonly observation_state: string;
-  readonly stable_reads: number;
-  readonly completion_ready: boolean;
-  readonly last_reply_length: number;
-  readonly last_reply_sha256_head: string;
-}
+export type ObservationHeartbeat = ObservationHeartbeatV1;
 
 export interface PageObservationResult {
   readonly messages: PageMessage[];
@@ -697,9 +698,11 @@ export function buildObservationHeartbeat(
   pollCount: number,
   completionReadySeen: boolean,
   lastReply: string,
+  phase: BrowserTurnLivenessPhase = 'post_send_observation',
 ): ObservationHeartbeat {
   return {
     schema: 'observation-heartbeat/v1',
+    phase,
     poll_count: pollCount,
     observation_state: classifyObservationLoopState(decision, stableReads),
     stable_reads: stableReads,
@@ -707,28 +710,6 @@ export function buildObservationHeartbeat(
     last_reply_length: lastReply.length,
     last_reply_sha256_head: replyContentHashHead(lastReply),
   };
-}
-
-function maybeEmitObservationHeartbeat(
-  lastHeartbeatAt: number,
-  pollCount: number,
-  decision: PageObservationDecision,
-  stableReads: number,
-  completionReadySeen: boolean,
-  lastReply: string,
-): number {
-  const now = Date.now();
-  const dueByPoll = pollCount > 0 && pollCount % OBSERVATION_HEARTBEAT_POLL_INTERVAL === 0;
-  const dueByTime = now - lastHeartbeatAt >= OBSERVATION_HEARTBEAT_MS;
-  if (!dueByPoll && !dueByTime) return lastHeartbeatAt;
-  emit(buildObservationHeartbeat(
-    decision,
-    stableReads,
-    pollCount,
-    completionReadySeen,
-    lastReply,
-  ));
-  return now;
 }
 
 function maybeReturnObservationUncertain(
@@ -1724,10 +1705,31 @@ async function mutateComposerOrCause(
   }
 }
 
-async function createDedicatedTurnPage(browser: any): Promise<any> {
+async function createDedicatedTurnPage(
+  browser: any,
+  operationBudget: TurnOperationBudget,
+): Promise<any> {
   const contexts = browser.contexts();
   if (contexts.length !== 1) throw new Error('ui_contract_mismatch:context_count');
-  return contexts[0].newPage();
+  const waitMs = operationBudget.clampOperationWaitMs();
+  if (waitMs <= 0) throw new BrowserOperationTimeoutError('new_page');
+  const pagePromise = contexts[0].newPage();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      pagePromise,
+      new Promise<any>((_, reject) => {
+        timer = setTimeout(() => reject(new BrowserOperationTimeoutError('new_page')), waitMs);
+      }),
+    ]);
+  } catch (error) {
+    pagePromise
+      .then((latePage: any) => abandonLatePageHandle(latePage, RESOURCE_CLEANUP_BOUND_MS))
+      .catch(() => {});
+    throw error;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function navigateOwnedTurnPage(
@@ -1950,6 +1952,17 @@ async function runTurn(
   let afterSend = false;
   let ownershipForfeited = false;
   let cancellationReceiptEmitted = false;
+  let heartbeatScheduler: TurnScopedHeartbeatScheduler | undefined;
+  let heartbeatPhase: BrowserTurnLivenessPhase = 'admitted_pre_send';
+  let heartbeatDecision: PageObservationDecision = { state: 'waiting' };
+  let heartbeatStableReads = 0;
+  let heartbeatCompletionReady = false;
+  let heartbeatLastReply = '';
+
+  const setHeartbeatPhase = (phase: BrowserTurnLivenessPhase, pulse = true): void => {
+    heartbeatPhase = phase;
+    if (pulse) heartbeatScheduler?.pulse();
+  };
 
   const incident = (eventClass: string, symptom: string, action?: string): void => {
     const ok = recordIncident(
@@ -1993,6 +2006,21 @@ async function runTurn(
     const config = direct ? { ...baseConfig, directPublication: direct } : baseConfig;
     const marker = generateOwnedPromptMarker();
     admitStateLightTurnObservation({ profileKey, invocationId, marker });
+    const invocationStartedAt = Date.now();
+    const invocationDeadlineMs = invocationStartedAt + config.timeoutMs;
+    const invocationBudget = createTurnOperationBudget(config.timeoutMs, invocationStartedAt);
+    const livenessTiming = resolveBrowserTurnLivenessTiming();
+    heartbeatScheduler = startTurnScopedHeartbeatScheduler({
+      timing: livenessTiming,
+      emit: () => emit(buildObservationHeartbeat(
+        heartbeatDecision,
+        heartbeatStableReads,
+        pollCount,
+        heartbeatCompletionReady,
+        heartbeatLastReply,
+        heartbeatPhase,
+      )),
+    });
     if (!config.newChat && config.chatUrl) {
       transitionStateLightTurnObservation({
         profileKey,
@@ -2003,7 +2031,7 @@ async function runTurn(
       });
     }
 
-    const profile = await verifyProfile(config);
+    const profile = await verifyProfile(config, invocationBudget);
     if (profile.state !== 'verified') {
       const state: TurnState = profile.state === 'unavailable' ? 'chrome_not_running' : 'profile_mismatch';
       incident('invocation_blocker', profile.cause, 'return_local_error');
@@ -2022,11 +2050,11 @@ async function runTurn(
       };
     }
 
-    const invocationDeadlineMs = Date.now() + config.timeoutMs;
-
     const chromium = loadChromium();
-    browser = await chromium.connectOverCDP(config.cdp, { timeout: Math.min(30_000, config.timeoutMs) });
-    page = await createDedicatedTurnPage(browser);
+    const connectWaitMs = invocationBudget.clampOperationWaitMs();
+    if (connectWaitMs <= 0) throw new BrowserOperationTimeoutError('connect_over_cdp');
+    browser = await chromium.connectOverCDP(config.cdp, { timeout: Math.min(30_000, connectWaitMs) });
+    page = await createDedicatedTurnPage(browser, invocationBudget);
     await navigateOwnedTurnPage(page, config, navigation);
     const directObservation = createDirectPublicationObservationState();
     if (config.directPublication) installDirectPublicationObserver(page, directObservation);
@@ -2100,6 +2128,7 @@ async function runTurn(
     };
 
     const sendOwnedPrompt = async (): Promise<TurnRunOutcome | null> => {
+      setHeartbeatPhase('composer_dispatch');
       const insertionContext: { insertionDeadlineMs?: number } = {};
       const mutationFailure = await mutateComposerOrCause(
         page,
@@ -2139,6 +2168,7 @@ async function runTurn(
       }
       sendCount += 1;
       afterSend = true;
+      setHeartbeatPhase('post_send_observation');
       if (!config.newChat && config.chatUrl) {
         const conversationUrl = normalizeConversationUrl(config.chatUrl);
         transitionStateLightTurnObservation({
@@ -2653,16 +2683,13 @@ async function runTurn(
     let completionReadySeen = false;
     let deadEvidenceReads = 0;
     let sendObservationDeferredLogged = false;
-    let lastHeartbeatAt = startedAt;
-    const emitHeartbeatForPoll = (decision: PageObservationDecision): void => {
-      lastHeartbeatAt = maybeEmitObservationHeartbeat(
-        lastHeartbeatAt,
-        pollCount,
-        decision,
-        stableReads,
-        completionReadySeen,
-        decision.state === 'ready' && decision.reply ? decision.reply : (bestReadyReply || lastReadyReply),
-      );
+    const updateHeartbeatForPoll = (decision: PageObservationDecision): void => {
+      heartbeatDecision = decision;
+      heartbeatStableReads = stableReads;
+      heartbeatCompletionReady = completionReadySeen;
+      heartbeatLastReply = decision.state === 'ready' && decision.reply
+        ? decision.reply
+        : (bestReadyReply || lastReadyReply);
     };
 
     const recoveryState: PostSendRecoveryState = {
@@ -2757,7 +2784,10 @@ async function runTurn(
             });
           },
           createSuccessor: async (activeBrowser, immutableConversationUrl) => {
-            const successor = await createDedicatedTurnPage(activeBrowser);
+            const recoveryBudget = createTurnOperationBudget(
+              Math.max(0, hardExhaustionDeadline - Date.now()),
+            );
+            const successor = await createDedicatedTurnPage(activeBrowser, recoveryBudget);
             navigation.recordGoto();
             await successor.goto(immutableConversationUrl, {
               waitUntil: 'domcontentloaded',
@@ -2930,7 +2960,7 @@ async function runTurn(
           ownedCarrierKey,
         );
         if (readErrorExhausted) return readErrorExhausted;
-        emitHeartbeatForPoll({ state: 'waiting' });
+        updateHeartbeatForPoll({ state: 'waiting' });
         await sleep(page, INITIAL_POLL_MS);
         continue;
       }
@@ -3018,7 +3048,7 @@ async function runTurn(
           ownedCarrierKey,
         );
         if (incompleteExhausted) return incompleteExhausted;
-        emitHeartbeatForPoll({ state: 'waiting' });
+        updateHeartbeatForPoll({ state: 'waiting' });
         await sleep(page, completionReadySeen ? COMPLETION_CONFIRM_POLL_MS : INITIAL_POLL_MS);
         continue;
       }
@@ -3355,7 +3385,7 @@ async function runTurn(
           ownedCarrierKey,
         );
         if (uncertainWaitingExhausted) return uncertainWaitingExhausted;
-        emitHeartbeatForPoll(decision);
+        updateHeartbeatForPoll(decision);
         await sleep(page, INITIAL_POLL_MS);
         continue;
       }
@@ -3572,7 +3602,7 @@ async function runTurn(
           ownedCarrierKey,
         );
         if (readyExhausted) return readyExhausted;
-        emitHeartbeatForPoll(decision);
+        updateHeartbeatForPoll(decision);
         await sleep(page, STABILITY_READ_DELAY_MS);
         continue;
       }
@@ -3589,7 +3619,7 @@ async function runTurn(
           || freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs))
         && await maybeContinueGeneration(page)
       ) {
-        emitHeartbeatForPoll(decision);
+        updateHeartbeatForPoll(decision);
         await sleep(page, INITIAL_POLL_MS);
         continue;
       }
@@ -3690,7 +3720,7 @@ async function runTurn(
       );
       if (waitingExhausted) return waitingExhausted;
 
-      emitHeartbeatForPoll(decision);
+      updateHeartbeatForPoll(decision);
 
       const elapsed = Date.now() - startedAt;
       const delay = completionReadySeen
@@ -3760,6 +3790,8 @@ async function runTurn(
         ...(retirementCleanupRequired ? { retirement_cleanup_required: true } : {}),
       },
     };
+  } finally {
+    heartbeatScheduler?.dispose();
   }
 }
 
