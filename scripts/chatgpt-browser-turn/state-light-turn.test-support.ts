@@ -362,7 +362,71 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  delete process.env.OPK_BROWSER_TURN_STARTUP_ALLOWANCE_MS;
+  delete process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS;
+  delete process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS;
   vi.restoreAllMocks();
+});
+
+describe('Issue #1752 continuous turn liveness', () => {
+  it('keeps heartbeats flowing during bounded newPage wait, closes a late page, and stops after terminal', async () => {
+    process.env.OPK_BROWSER_TURN_STARTUP_ALLOWANCE_MS = '100';
+    process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS = '10';
+    process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '30';
+
+    let resolveLatePage!: (page: any) => void;
+    const pendingPage = new Promise<any>((resolve) => {
+      resolveLatePage = resolve;
+    });
+    const latePage = { close: vi.fn(async () => undefined) };
+    const context = { newPage: vi.fn(() => pendingPage) };
+    const browser = {
+      contexts: vi.fn(() => [context]),
+      isConnected: vi.fn(() => true),
+      close: vi.fn(async () => undefined),
+    };
+    mocks.browserQueue.push(browser);
+
+    const writes: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      const code = await runStateLightTurn([
+        ...STATE_LIGHT_TURN_BASE_ARGV,
+        '--output', '/tmp/reply.txt',
+        '--chat-url', 'https://chatgpt.com/c/existing',
+        '--timeout-ms', '40',
+        '--poll-ms', '1',
+      ]);
+      expect(code).not.toBe(0);
+
+      const records = writes
+        .flatMap((chunk) => chunk.split('\n'))
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const heartbeats = records.filter((record) => record.schema === 'observation-heartbeat/v1');
+      expect(heartbeats.length).toBeGreaterThan(1);
+      expect(heartbeats.every((record) => record.phase === 'admitted_pre_send')).toBe(true);
+      expect(records.at(-1)).toMatchObject({
+        schema: 'turn-result/v1',
+        state: 'driver_error',
+        cause: 'browser_operation_timeout:new_page',
+        send_count: 0,
+      });
+
+      const writeCountAtTerminal = writes.length;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(writes).toHaveLength(writeCountAtTerminal);
+
+      resolveLatePage(latePage);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(latePage.close).toHaveBeenCalledTimes(1);
+    } finally {
+      stdout.mockRestore();
+    }
+  });
 });
 
 describe('Issue #1120 state-light turn lifecycle', () => {
