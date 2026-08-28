@@ -4,6 +4,15 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { checkFindingLedgerGuard, runCli } from './finding-ledger-guard.mjs';
+import { validateTerminalOneShotBodyBinding } from './lib/create-issue-final-acceptance-contract.ts';
+import { readEvidenceWaiverProducerEvidence } from './lib/create-issue-stage-record-receipt.ts';
+import {
+  buildReviewLaneRouting,
+  classifyReviewLaneDeclaration,
+  normalizeReviewLaneDeclaration,
+  settleReviewLane,
+  type ReviewLaneAuthorDeclaration,
+} from './lib/review-lane-routing.ts';
 
 type Capture = { name: string; timestampMs: number; text: string };
 type Row = Record<string, unknown> & {
@@ -992,20 +1001,50 @@ ${currentLens('S1', { contest: 'none', outcome: 'non-activate' })}`),
   });
 
 describe('Issue #1171 terminal disposition matrix', () => {
-  function terminalLedger(rowValue: Row) {
-    const capture = cap('pass-03-architectural.capture.txt', 1_300, markedFinding('F1'));
+  function terminalLedger(rowValue: Row, options: Record<string, unknown> = {}) {
+    const findingId = rowValue.id;
+    const capture = cap('pass-03-architectural.capture.txt', 1_300, markedFinding(findingId, {
+      type: typeof rowValue.type === 'string' ? rowValue.type : 'quality',
+    }));
     return checkFindingLedgerGuard(capture.text, JSON.stringify({
       version: 2,
       counts: { rawFindingCount: 1, distinctFindingCount: 1, processedDistinctCount: 1 },
-      findings: [{ ...rowValue, occurrences: ['F1@0:1'] }],
+      findings: [{ ...rowValue, occurrences: [`${findingId}@0:1`] }],
     }), {
       reviewEconomics: true,
       phase: 'final-acceptance',
       issueRevision: 'r3',
       stageTerminalConfirmed: true,
       captureMetadata: [{ name: capture.name, timestampMs: capture.timestampMs }],
+      ...options,
     } as never);
   }
+
+  it('accepts an addressed non-protected terminal defect after one certified correction', () => {
+    const findingId = 'no-local-run-store-root-not-exhaustive';
+    const reviewedBody = `<!-- source-revision: r09 -->\n${markedFinding(findingId, { type: 'spec' })}`;
+    const correctedBody = `<!-- source-revision: r10 -->\n${markedFinding(findingId, {
+      type: 'spec',
+      evidence: 'The corrected live Issue bytes close the terminal specification finding.',
+    })}`;
+    const certificationErrors: string[] = [];
+    const certified = validateTerminalOneShotBodyBinding(
+      reviewedBody,
+      correctedBody,
+      'r10',
+      [{ stage: 'architectural', outcome: 'complete', sourceRevision: 'r09' }],
+      certificationErrors,
+    );
+    expect(certificationErrors).toEqual([]);
+    expect(certified).toBe(true);
+
+    const result = terminalLedger(row(findingId, {
+      type: 'spec',
+      defectDisposition: 'addressed',
+      remedyDisposition: 'accepted',
+    }), { terminalCorrectionCertified: certified });
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
 
   it('accepts an exact terminal capture when every defect is validly rejected-as-false', () => {
     const result = terminalLedger(row('F1', {
@@ -1965,3 +2004,367 @@ describe('published author-state M3 bridge', () => {
   });
 
 });
+
+describe('receipt-backed finding ledger operator-stage waiver regression #1778', () => {
+  function waivedArchitecturalReviewFixture(captureText = markedClean()) {
+    const sourceRevision = 'r01';
+    const taskIdentity = 'issue:1778';
+    const reviewEpisodeId = taskIdentity + '@' + sourceRevision;
+    const stageAttemptId = 'attempt-1';
+    const stageReceiptId = reviewEpisodeId + ':stage-receipt:0001';
+    const captureName = 'pass-01-architectural-review-01.capture.txt';
+    const captureSha256 = createHash('sha256').update(captureText).digest('hex');
+    const rawFindingCount = captureText === markedClean() ? 0 : 1;
+    const captureIdentity = 'sha256:' + captureSha256 + ':' + captureName;
+    const capture = {
+      captureIdentity,
+      name: captureName,
+      byteLength: Buffer.byteLength(captureText),
+      sha256: captureSha256,
+      rawFindingCount,
+    };
+
+    const laneDeclaration: ReviewLaneAuthorDeclaration = {
+      schema: 'review-lane-change-set/v1',
+      owner: 'issue-author',
+      entries: [{
+        kind: 'exact',
+        path: 'scripts/chatgpt-browser-turn/driver.ts',
+        behaviors: ['pure-review-lane-selection'],
+      }],
+    };
+    const laneInput = normalizeReviewLaneDeclaration(laneDeclaration);
+    const classification = classifyReviewLaneDeclaration(laneDeclaration);
+    if (laneInput.status !== 'usable') throw new Error('waiver fixture input must be usable');
+    const routing = buildReviewLaneRouting(laneInput, classification, sourceRevision, stageAttemptId);
+    const sourceVerdict = rawFindingCount === 0 ? 'accept' as const : 'material-findings' as const;
+    const settlement = settleReviewLane(routing, {
+      '01': sourceVerdict,
+      '02': sourceVerdict,
+      '03': sourceVerdict,
+    });
+    const reviewLane = {
+      routing,
+      finalRequiredSlots: settlement.finalRequiredSlots,
+      sourceVerdicts: { '01': sourceVerdict },
+      sourceVerdictEvidence: {
+        '01': {
+          producerEvidenceIdentity: 'producer-01',
+          captureIdentity,
+          terminalClassification: 'complete',
+          captureVerified: true,
+          digestMatches: true,
+          verdictText: rawFindingCount === 0 ? 'NO_FINDINGS' : 'FINDINGS',
+          rawFindingCount,
+        },
+      },
+      conflictDecision: settlement.conflictDecision,
+      settlement,
+    };
+    const partialMissingSources = [
+      {
+        reviewerSlot: '02',
+        invocationId: 'invocation-02',
+        evidenceIdentity: 'terminal-02',
+        reason: 'possible-or-actual send with resend forbidden',
+      },
+      {
+        reviewerSlot: '03',
+        invocationId: 'invocation-03',
+        evidenceIdentity: 'terminal-03',
+        reason: 'possible-or-actual send with resend forbidden',
+      },
+    ];
+    const producerEvidence = readEvidenceWaiverProducerEvidence(
+      '/operator-stage-waiver.json',
+      () => ({
+        schema: 'operator-stage-waiver/v1',
+        stage: 'architectural-review',
+        sourceRevision,
+        missingSlots: ['02', '03'],
+      }),
+      {
+        stage: 'architectural-review',
+        sourceRevision,
+        missingSlots: partialMissingSources.map((item) => item.reviewerSlot),
+      },
+    );
+    const invocations = ['01', '02', '03'].map((slot) => ({
+      schema: 'reviewer-invocation-envelope/v1',
+      reviewEpisodeId,
+      stageAttemptId,
+      policyVersion: 'review-lane-routing/v1',
+      reviewerCardinality: 3,
+      cardinalityConfigIdentity: routing.cardinalityConfigIdentity,
+      stage: 'architectural-review',
+      sourceRevision,
+      invocationId: 'invocation-' + slot,
+      terminalResultIdentity: 'terminal-' + slot,
+      reviewerSource: 'source-' + slot,
+      reviewerSlot: slot,
+      reviewerOrdinal: Number(slot),
+      attemptOrdinal: 1,
+      retryAttempt: false,
+      terminal: true,
+      terminalClassification: slot === '01' ? 'complete' : 'incident',
+      sendCount: 1,
+      retryClass: 'retry-forbidden',
+      revisionCheck: 'matched',
+      capacityOutcome: 'admitted',
+      capacityWaitMs: 0,
+      reviewLaneRouting: routing,
+      ...(slot === '01' ? { capture } : {}),
+    }));
+    const stageReceipt = {
+      schema: 'stage-completeness-receipt/v1',
+      tier: 'T3',
+      taskIdentity,
+      episodeFirstRevision: sourceRevision,
+      reviewEpisodeId,
+      stageReceiptId,
+      previousStageReceiptId: null,
+      receiptCensus: [stageReceiptId],
+      stageAttemptId,
+      stageSequence: 1,
+      stage: 'architectural-review',
+      policyVersion: 'review-lane-routing/v1',
+      reviewerCardinality: 3,
+      cardinalityConfigIdentity: routing.cardinalityConfigIdentity,
+      sourceRevision,
+      outcome: 'partial',
+      producerEvidence,
+      partialMissingSources,
+      revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' },
+      settlement: { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true },
+      invocations,
+      credentialingCaptures: [capture],
+      relayEligibleCaptures: [capture],
+      reviewLane,
+    };
+    const verifiedRelayEvidence = [{
+      relayAttemptId: 'relay-01',
+      captureIdentity,
+      sourceLabel: captureName + '|' + captureIdentity,
+      name: captureName,
+      byteLength: capture.byteLength,
+      sha256: capture.sha256,
+      verified: true,
+    }];
+    const episodeAuthority = {
+      tierIntake: {
+        schema: 'tier-intake/v1',
+        producer: 'test',
+        taskIdentity,
+        kind: 'fresh',
+        priorTier: 'T3',
+        firstRevision: sourceRevision,
+        competitiveDecision: 'skipped',
+        competitiveRationale: 'Issue #1778 locks the already-landed exact operator waiver at the ledger consumer.',
+      },
+      receiptInventory: {
+        source: 'canonical-review-directory',
+        taskIdentity,
+        episodeFirstRevision: sourceRevision,
+        reviewEpisodeId,
+        stageReceiptIds: [stageReceiptId],
+      },
+    };
+    const options = {
+      reviewEconomics: true,
+      phase: 'pre-lens',
+      issueRevision: sourceRevision,
+      stageTerminalConfirmed: true,
+      captureMetadata: [{ name: captureName, timestampMs: 1_100, captureIdentity }],
+      stageReceipts: [stageReceipt],
+      verifiedRelayEvidence,
+      episodeAuthority,
+    };
+    const emptyLedger = JSON.stringify({
+      version: 2,
+      counts: { rawFindingCount: 0, distinctFindingCount: 0, processedDistinctCount: 0 },
+      findings: [],
+    });
+    return {
+      captureText,
+      capture,
+      reviewLane,
+      stageReceipt,
+      verifiedRelayEvidence,
+      episodeAuthority,
+      options,
+      emptyLedger,
+    };
+  }
+
+  it('locks current-main receipt-backed waiver acceptance with only the real slot-01 governed capture', () => {
+    const fixture = waivedArchitecturalReviewFixture();
+    expect(fixture.stageReceipt.producerEvidence).toBe('waived');
+
+    const result = checkFindingLedgerGuard(
+      [fixture.captureText],
+      fixture.emptyLedger,
+      fixture.options as never,
+    );
+
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.episodeState?.errors).toEqual([]);
+    expect(result.episodeState?.governedCaptureUnion).toEqual([fixture.capture.captureIdentity]);
+    expect(result.episodeState?.governedCaptures).toEqual([fixture.capture]);
+    expect(result.episodeState?.governedCaptures.map((capture) => capture.name)).toEqual([
+      'pass-01-architectural-review-01.capture.txt',
+    ]);
+  });
+
+  it('keeps missing mandatory results blocking outside the exact waived 02/03 absence', () => {
+    const fixture = waivedArchitecturalReviewFixture();
+
+    const noWaiverOptions = {
+      ...fixture.options,
+      stageReceipts: [{ ...fixture.stageReceipt, producerEvidence: 'not-applicable' }],
+    };
+    const noWaiverResult = checkFindingLedgerGuard(
+      [fixture.captureText],
+      fixture.emptyLedger,
+      noWaiverOptions as never,
+    );
+    expect(noWaiverResult.ok).toBe(false);
+    expect(noWaiverResult.errors.join('\n')).toContain('stage receipt[0] reviewLane must be complete immutable evidence');
+
+    const wrongMissingOptions = {
+      ...fixture.options,
+      stageReceipts: [{
+        ...fixture.stageReceipt,
+        partialMissingSources: [fixture.stageReceipt.partialMissingSources[0]],
+      }],
+    };
+    const wrongMissingResult = checkFindingLedgerGuard(
+      [fixture.captureText],
+      fixture.emptyLedger,
+      wrongMissingOptions as never,
+    );
+    expect(wrongMissingResult.ok).toBe(false);
+    expect(wrongMissingResult.errors.join('\n')).toContain('stage receipt[0] reviewLane must be complete immutable evidence');
+
+    const missingSlotOneReceipt = {
+      ...fixture.stageReceipt,
+      invocations: fixture.stageReceipt.invocations.map((invocation, index) => index === 0
+        ? { ...invocation, capture: undefined, terminalClassification: 'incident' }
+        : invocation),
+      credentialingCaptures: [],
+      relayEligibleCaptures: [],
+      reviewLane: {
+        ...fixture.reviewLane,
+        sourceVerdicts: {},
+        sourceVerdictEvidence: {},
+      },
+    };
+    const missingSlotOneOptions = {
+      ...fixture.options,
+      captureMetadata: [],
+      stageReceipts: [missingSlotOneReceipt],
+      verifiedRelayEvidence: [],
+    };
+    const missingSlotOneResult = checkFindingLedgerGuard([], fixture.emptyLedger, missingSlotOneOptions as never);
+    expect(missingSlotOneResult.ok).toBe(false);
+    expect(missingSlotOneResult.errors.join('\n')).toContain('stage receipt[0] reviewLane must be complete immutable evidence');
+
+    const missingRequiredStageOptions = {
+      ...fixture.options,
+      episodeAuthority: {
+        ...fixture.episodeAuthority,
+        tierIntake: {
+          ...fixture.episodeAuthority.tierIntake,
+          competitiveDecision: 'required',
+          competitiveRationale: 'This fixture deliberately declares the competitive result required.',
+        },
+      },
+    };
+    const missingRequiredStageResult = checkFindingLedgerGuard(
+      [fixture.captureText],
+      fixture.emptyLedger,
+      missingRequiredStageOptions as never,
+    );
+    expect(missingRequiredStageResult.ok).toBe(false);
+    expect(missingRequiredStageResult.errors.join('\n')).toContain('competitive');
+  });
+
+  it('keeps a real unresolved slot-01 finding blocking under the valid operator waiver', () => {
+    const findingText = markedFinding('WAIVER-F1', {
+      type: 'quality',
+      evidence: 'The real slot-01 review found a material defect.',
+    });
+    const fixture = waivedArchitecturalReviewFixture(findingText);
+    const occurrenceId = fixture.capture.captureIdentity + ':1';
+    const ledger = JSON.stringify({
+      version: 2,
+      counts: { rawFindingCount: 1, distinctFindingCount: 1, processedDistinctCount: 0 },
+      findings: [row('WAIVER-F1', {
+        defectDisposition: 'unresolved',
+        remedyDisposition: 'accepted',
+        occurrences: [occurrenceId],
+      })],
+    });
+
+    const result = checkFindingLedgerGuard([findingText], ledger, fixture.options as never);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('row WAIVER-F1 remains unresolved');
+  });
+
+  it('keeps real governed slot-01 immutable capture integrity fail-closed', () => {
+    const fixture = waivedArchitecturalReviewFixture();
+
+    const tamperedBytes = checkFindingLedgerGuard(
+      [fixture.captureText + '\n'],
+      fixture.emptyLedger,
+      fixture.options as never,
+    );
+    expect(tamperedBytes.ok).toBe(false);
+    expect(tamperedBytes.errors.join('\n')).toContain('byteLength mismatch');
+    expect(tamperedBytes.errors.join('\n')).toContain('sha256 mismatch');
+
+    const badShaCapture = { ...fixture.capture, sha256: 'f'.repeat(64) };
+    const badShaReceipt = {
+      ...fixture.stageReceipt,
+      invocations: fixture.stageReceipt.invocations.map((invocation, index) => index === 0
+        ? { ...invocation, capture: badShaCapture }
+        : invocation),
+      credentialingCaptures: [badShaCapture],
+      relayEligibleCaptures: [badShaCapture],
+    };
+    const badShaOptions = {
+      ...fixture.options,
+      stageReceipts: [badShaReceipt],
+      verifiedRelayEvidence: [{ ...fixture.verifiedRelayEvidence[0], sha256: 'f'.repeat(64) }],
+    };
+    const badSha = checkFindingLedgerGuard([fixture.captureText], fixture.emptyLedger, badShaOptions as never);
+    expect(badSha.ok).toBe(false);
+    expect(badSha.errors.join('\n')).toContain('sha256 mismatch');
+
+    const badCountCapture = { ...fixture.capture, rawFindingCount: 1 };
+    const badCountReceipt = {
+      ...fixture.stageReceipt,
+      invocations: fixture.stageReceipt.invocations.map((invocation, index) => index === 0
+        ? { ...invocation, capture: badCountCapture }
+        : invocation),
+      credentialingCaptures: [badCountCapture],
+      relayEligibleCaptures: [badCountCapture],
+    };
+    const badCountOptions = {
+      ...fixture.options,
+      stageReceipts: [badCountReceipt],
+    };
+    const badCount = checkFindingLedgerGuard([fixture.captureText], fixture.emptyLedger, badCountOptions as never);
+    expect(badCount.ok).toBe(false);
+    expect(badCount.errors.join('\n')).toContain('rawFindingCount mismatch');
+
+    const omittedTextOptions = {
+      ...fixture.options,
+      captureMetadata: [],
+    };
+    const omittedText = checkFindingLedgerGuard([], fixture.emptyLedger, omittedTextOptions as never);
+    expect(omittedText.ok).toBe(false);
+    expect(omittedText.errors.join('\n')).toContain('has no supplied immutable text');
+  });
+});
+

@@ -20,13 +20,16 @@ import { fileURLToPath } from 'node:url';
 import { TURN_STATES, type FailureScope, type TurnResultV1, type TurnState } from './chatgpt-browser-turn/contracts.ts';
 import { runProcess, type ProcessResult } from './kernel/subprocess.ts';
 import {
-  authorityAbsent,
   parseBrowserTurnCancellationReceipt,
   type BrowserTurnCancellationAttempt,
   type BrowserTurnCancellationDependencies,
   type BrowserTurnCancellationReceipt,
 } from './chatgpt-browser-turn/state-light-cancellation.ts';
 import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
+import {
+  parseObservationHeartbeatLine,
+  resolveBrowserTurnLivenessTiming,
+} from './chatgpt-browser-turn/liveness-contract.ts';
 import {
   defaultGhTransport,
   fetchIssueComments,
@@ -494,23 +497,6 @@ function parseTurnResult(line: string): ParsedTurnResult | null {
   }
 }
 
-function parseHeartbeat(line: string): Record<string, unknown> | null {
-  const trimmed = line.trim();
-  if (!trimmed) return null;
-  try {
-    const body = JSON.parse(trimmed) as Record<string, unknown>;
-    if (body.schema !== 'observation-heartbeat/v1') return null;
-    return {
-      poll_count: body.poll_count,
-      observation_state: body.observation_state,
-      stable_reads: body.stable_reads,
-      completion_ready: body.completion_ready,
-    };
-  } catch {
-    return null;
-  }
-}
-
 function resolveConversationLocator(
   config: LaunchConfig,
   candidate?: { conversation_id?: string },
@@ -579,42 +565,51 @@ function cancellationReceiptIsBound(
   }
 }
 
-function identityUnprovenCancellation(): BrowserTurnCancellationAttempt {
-  return {
-    state: 'driver_error',
-    cause: 'child_stdout_eof_timeout_cancellation_receipt_identity_unproven',
-    stopOutcome: 'not_attempted_identity_unproven',
-    identityProven: false,
-  };
-}
+type TerminalCancellationAttempt = BrowserTurnCancellationAttempt & {
+  readonly receiptIdentity?: Pick<BrowserTurnCancellationReceipt, 'invocation_id' | 'marker'>;
+};
 
-async function runChildEofCancellation(
+function receiptEvidenceForTerminalIncident(
   config: LaunchConfig,
   capture: CandidateCapture,
-): Promise<BrowserTurnCancellationAttempt> {
+  incident: 'child_startup_timeout' | 'child_liveness_timeout' | 'child_terminal_result_missing',
+): TerminalCancellationAttempt | null {
   const receipt = capture.cancellationReceipt;
-  if (!receipt) {
+  if (!receipt) return null;
+  if (!cancellationReceiptIsBound(config, receipt)) {
     return {
       state: 'driver_error',
-      cause: 'child_stdout_eof_timeout_cancellation_receipt_missing',
-      stopOutcome: 'not_attempted_authority_absent',
+      cause: `${incident}_cancellation_receipt_identity_unproven`,
+      stopOutcome: 'not_attempted_identity_unproven',
       identityProven: false,
     };
-  }
-  if (!cancellationReceiptIsBound(config, receipt)) {
-    return identityUnprovenCancellation();
   }
   if (capture.duplicateCancellationReceipt) {
     return {
       state: 'driver_error',
-      cause: 'child_stdout_eof_timeout_cancellation_receipt_duplicate',
+      cause: `${incident}_cancellation_receipt_duplicate`,
       sendCount: 1,
       stopOutcome: 'not_attempted_authority_absent',
       identityProven: false,
       conversationUrl: receipt.conversation_url,
+      receiptIdentity: {
+        invocation_id: receipt.invocation_id,
+        marker: receipt.marker,
+      },
     };
   }
-  return authorityAbsent(receipt);
+  return {
+    state: 'driver_error',
+    cause: `${incident}_cancellation_authority_absent`,
+    sendCount: 1,
+    stopOutcome: 'not_attempted_authority_absent',
+    identityProven: false,
+    conversationUrl: receipt.conversation_url,
+    receiptIdentity: {
+      invocation_id: receipt.invocation_id,
+      marker: receipt.marker,
+    },
+  };
 }
 
 function cancellationEnvelopeFields(
@@ -630,7 +625,7 @@ function cancellationEnvelopeFields(
 }
 
 function cancellationDiagnostics(
-  attempt: BrowserTurnCancellationAttempt,
+  attempt: TerminalCancellationAttempt,
   heartbeatDiagnostics: Record<string, unknown> | undefined,
 ): Record<string, unknown> {
   return boundedDiagnostics({
@@ -640,8 +635,34 @@ function cancellationDiagnostics(
       cause: attempt.cause,
       stop_outcome: attempt.stopOutcome,
       identity_proven: attempt.identityProven,
+      ...(attempt.receiptIdentity ? { receipt_identity: attempt.receiptIdentity } : {}),
     },
   });
+}
+
+function terminalNoResultEvidence(
+  config: LaunchConfig,
+  capture: CandidateCapture,
+  incident: 'child_startup_timeout' | 'child_liveness_timeout' | 'child_terminal_result_missing',
+  spawnFailed: boolean,
+  heartbeatDiagnostics: Record<string, unknown> | undefined,
+): Partial<TerminalEnvelope> & Pick<TerminalEnvelope, 'delivery' | 'recovery_available'> {
+  const receiptEvidence = receiptEvidenceForTerminalIncident(config, capture, incident);
+  if (!receiptEvidence) {
+    return {
+      delivery: deliveryWithoutTurnResult(spawnFailed),
+      ...conversationLocatorFields(config),
+      ...(heartbeatDiagnostics
+        ? { diagnostics: boundedDiagnostics({ last_heartbeat: heartbeatDiagnostics }) }
+        : {}),
+    };
+  }
+  return {
+    turn_result_state: receiptEvidence.state,
+    turn_result_cause: receiptEvidence.cause,
+    ...cancellationEnvelopeFields(receiptEvidence, spawnFailed),
+    diagnostics: cancellationDiagnostics(receiptEvidence, heartbeatDiagnostics),
+  };
 }
 
 function boundedDiagnostics(input: Record<string, unknown>): Record<string, unknown> {
@@ -828,6 +849,16 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     return 2;
   }
 
+  let livenessTiming: ReturnType<typeof resolveBrowserTurnLivenessTiming>;
+  try {
+    livenessTiming = resolveBrowserTurnLivenessTiming();
+  } catch (error) {
+    refuse('liveness_contract_invalid', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return 2;
+  }
+
   const launcherStartedAt = nowIso();
   const receipt: HandoffReceipt = {
     schema: HANDOFF_SCHEMA,
@@ -858,40 +889,65 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     drainStdoutBuffer: () => {},
   };
   let lastHeartbeatDiagnostics: Record<string, unknown> | undefined;
+  let acceptedHeartbeat = false;
   let childExitCode: number | null = null;
   let childExitedBeforeCandidate = false;
-  const noCandidateDeadlineMs = noCandidateGraceMs() + candidateGraceMs();
-  let deadline = Date.now() + noCandidateDeadlineMs;
+  let watchdogExpiredAt: number | null = null;
+  let lastStdoutObservedAt: number | null = null;
+  let deadline = Date.now() + livenessTiming.startupAllowanceMs;
 
-  const ingestStdoutLine = (line: string): void => {
+  const observeDeadline = (observedAt: number): boolean => {
+    if (observedAt < deadline) return false;
+    if (watchdogExpiredAt === null) watchdogExpiredAt = deadline;
+    return true;
+  };
+
+  const ingestStdoutLine = (line: string, observedAt = Date.now()): void => {
     const cancellationReceipt = parseCancellationReceiptLine(line);
     if (cancellationReceipt) {
       if (!capture.cancellationReceipt) capture.cancellationReceipt = cancellationReceipt;
       else capture.duplicateCancellationReceipt = true;
       return;
     }
-    const heartbeat = parseHeartbeat(line);
+    const heartbeat = parseObservationHeartbeatLine(line);
     if (heartbeat) {
-      lastHeartbeatDiagnostics = boundedDiagnostics(heartbeat);
-      deadline = Date.now() + noCandidateDeadlineMs;
+      if (capture.firstCandidate || observeDeadline(observedAt)) return;
+      acceptedHeartbeat = true;
+      lastHeartbeatDiagnostics = boundedDiagnostics({
+        ...heartbeat,
+        accepted_at: new Date(observedAt).toISOString(),
+      });
+      deadline = observedAt + livenessTiming.liveChildIdleWindowMs;
       return;
     }
     const candidate = parseTurnResult(line);
     if (!candidate) return;
-    if (!capture.firstCandidate) capture.firstCandidate = candidate;
-    else capture.duplicateCandidate = true;
+    if (capture.firstCandidate) {
+      capture.duplicateCandidate = true;
+      return;
+    }
+    if (observeDeadline(observedAt)) return;
+    capture.firstCandidate = candidate;
   };
 
-  const drainStdoutBuffer = (): void => {
+  const drainStdoutBuffer = (observedAt = Date.now()): void => {
     let newlineIndex = capture.stdoutBuffer.indexOf('\n');
     while (newlineIndex >= 0) {
       const line = capture.stdoutBuffer.slice(0, newlineIndex);
       capture.stdoutBuffer = capture.stdoutBuffer.slice(newlineIndex + 1);
       newlineIndex = capture.stdoutBuffer.indexOf('\n');
-      ingestStdoutLine(line);
+      ingestStdoutLine(line, observedAt);
     }
   };
-  capture.drainStdoutBuffer = drainStdoutBuffer;
+  const ingestTrailingCandidate = (): void => {
+    if (!capture.stdoutBuffer.trim() || capture.firstCandidate) return;
+    const candidate = parseTurnResult(capture.stdoutBuffer);
+    if (!candidate) return;
+    const observedAt = lastStdoutObservedAt ?? Date.now();
+    if (observeDeadline(observedAt)) return;
+    capture.firstCandidate = candidate;
+  };
+  capture.drainStdoutBuffer = () => drainStdoutBuffer();
 
   const runPromise = runProcess({
     command: config.childCommand,
@@ -901,19 +957,23 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     allowEmptyStdout: true,
     signal: controller.signal,
     onStdoutChunk: (chunk) => {
+      const observedAt = Date.now();
+      lastStdoutObservedAt = observedAt;
       capture.stdoutBuffer += chunk;
-      capture.drainStdoutBuffer();
+      drainStdoutBuffer(observedAt);
     },
   }).then((result) => {
+    const observedAt = Date.now();
     childExitCode = result.exitCode;
-    capture.drainStdoutBuffer();
-    if (!capture.firstCandidate) childExitedBeforeCandidate = true;
+    drainStdoutBuffer(observedAt);
+    if (!capture.firstCandidate && !observeDeadline(observedAt)) childExitedBeforeCandidate = true;
     return result;
   });
 
+  const spawnProbeWaitMs = Math.max(1, Math.min(100, deadline - Date.now()));
   const spawnProbe = await Promise.race([
     runPromise.then((result) => ({ kind: 'done' as const, result })),
-    delay(100).then(() => ({ kind: 'pending' as const })),
+    delay(spawnProbeWaitMs).then(() => ({ kind: 'pending' as const })),
   ]);
   if (spawnProbe.kind === 'done' && spawnProbe.result.outcome === 'spawn-failure') {
     await publishEnvelope(config, {
@@ -934,14 +994,16 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     return 1;
   }
 
-  while (!capture.firstCandidate && !childExitedBeforeCandidate && Date.now() < deadline) {
-    await delay(20);
+  while (!capture.firstCandidate && !childExitedBeforeCandidate) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      observeDeadline(Date.now());
+      break;
+    }
+    await delay(Math.min(20, remainingMs));
   }
 
-  if (capture.stdoutBuffer.trim() && !capture.firstCandidate) {
-    const trailing = parseTurnResult(capture.stdoutBuffer);
-    if (trailing) capture.firstCandidate = trailing;
-  }
+  ingestTrailingCandidate();
 
   if (capture.firstCandidate) {
     return await finalizeCandidatePath(
@@ -956,14 +1018,41 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     );
   }
 
+  const timeoutIncident = acceptedHeartbeat ? 'child_liveness_timeout' : 'child_startup_timeout';
+  const publishWatchdogTimeout = async (): Promise<number> => {
+    await publishEnvelope(config, {
+      schema: TERMINAL_SCHEMA,
+      run_identity: config.runIdentity,
+      attempt_identity: config.attemptIdentity,
+      completion_mode: COMPLETION_MODE,
+      handoff_receipt_path: config.handoffReceiptPath,
+      launcher_started_at: launcherStartedAt,
+      handoff_committed_at: receipt.handoff_committed_at,
+      terminal_at: nowIso(),
+      lifecycle_outcome: 'incident',
+      incident: timeoutIncident,
+      child_exit_code: null,
+      ...terminalNoResultEvidence(
+        config,
+        capture,
+        timeoutIncident,
+        false,
+        lastHeartbeatDiagnostics,
+      ),
+    });
+    await abortManagedProcess(controller, runPromise);
+    return 1;
+  };
+
+  if (watchdogExpiredAt !== null) {
+    return await publishWatchdogTimeout();
+  }
+
   if (childExitedBeforeCandidate || childExitCode !== null) {
     const grace = noCandidateGraceMs();
     const completion = await waitForProcessCompletion(runPromise, grace);
     capture.drainStdoutBuffer();
-    if (capture.stdoutBuffer.trim() && !capture.firstCandidate) {
-      const trailing = parseTurnResult(capture.stdoutBuffer);
-      if (trailing) capture.firstCandidate = trailing;
-    }
+    ingestTrailingCandidate();
     if (capture.firstCandidate) {
       return await finalizeCandidatePath(
         config,
@@ -977,28 +1066,6 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
       );
     }
     const spawnFailed = completion.result?.outcome === 'spawn-failure';
-    if (!completion.completed || capture.cancellationReceipt) {
-      const cancellation = await runChildEofCancellation(config, capture);
-      await publishEnvelope(config, {
-        schema: TERMINAL_SCHEMA,
-        run_identity: config.runIdentity,
-        attempt_identity: config.attemptIdentity,
-        completion_mode: COMPLETION_MODE,
-        handoff_receipt_path: config.handoffReceiptPath,
-        launcher_started_at: launcherStartedAt,
-        handoff_committed_at: receipt.handoff_committed_at,
-        terminal_at: nowIso(),
-        lifecycle_outcome: 'incident',
-        incident: 'child_stdout_eof_timeout',
-        child_exit_code: childExitCode,
-        turn_result_state: cancellation.state,
-        turn_result_cause: cancellation.cause,
-        ...cancellationEnvelopeFields(cancellation, spawnFailed),
-        diagnostics: cancellationDiagnostics(cancellation, lastHeartbeatDiagnostics),
-      });
-      await abortManagedProcess(controller, runPromise);
-      return 1;
-    }
     const incident = spawnFailed ? 'child_start_failed' : 'child_terminal_result_missing';
     await publishEnvelope(config, {
       schema: TERMINAL_SCHEMA,
@@ -1011,35 +1078,25 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
       terminal_at: nowIso(),
       lifecycle_outcome: 'incident',
       incident,
-      delivery: deliveryWithoutTurnResult(spawnFailed),
       child_exit_code: childExitCode,
-      recovery_available: Boolean(config.conversationLocator),
-      ...(config.conversationLocator ? { conversation_locator: config.conversationLocator } : {}),
+      ...(spawnFailed
+        ? {
+            delivery: deliveryWithoutTurnResult(true),
+            ...conversationLocatorFields(config),
+          }
+        : terminalNoResultEvidence(
+            config,
+            capture,
+            'child_terminal_result_missing',
+            false,
+            lastHeartbeatDiagnostics,
+          )),
     });
     await abortManagedProcess(controller, runPromise);
     return 1;
   }
 
-  const cancellation = await runChildEofCancellation(config, capture);
-  await publishEnvelope(config, {
-    schema: TERMINAL_SCHEMA,
-    run_identity: config.runIdentity,
-    attempt_identity: config.attemptIdentity,
-    completion_mode: COMPLETION_MODE,
-    handoff_receipt_path: config.handoffReceiptPath,
-    launcher_started_at: launcherStartedAt,
-    handoff_committed_at: receipt.handoff_committed_at,
-    terminal_at: nowIso(),
-    lifecycle_outcome: 'incident',
-    incident: 'child_stdout_eof_timeout',
-    child_exit_code: childExitCode,
-    turn_result_state: cancellation.state,
-    turn_result_cause: cancellation.cause,
-    ...cancellationEnvelopeFields(cancellation, false),
-    diagnostics: cancellationDiagnostics(cancellation, lastHeartbeatDiagnostics),
-  });
-  await abortManagedProcess(controller, runPromise);
-  return 1;
+  return await publishWatchdogTimeout();
 }
 
 export function readTerminalEnvelope(

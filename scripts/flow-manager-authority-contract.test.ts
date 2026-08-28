@@ -1,6 +1,7 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { runProcessSync } from './kernel/subprocess.ts';
 import {
@@ -13,6 +14,7 @@ import {
 import { runStateLightEntry } from './chatgpt-browser-turn/state-light-entry.ts';
 import { runCli as runLegacyBrowserTurnCli } from './chatgpt-browser-turn.ts';
 import { runBrowserAdapter } from './flow-manager-browser-gpt-long-run.ts';
+import { readTerminalEnvelope, runLaunch } from './flow-manager-long-running-child.ts';
 
 const contract = readFileSync(new URL('../.cursor/skills/create-issue-draft/SKILL.md', import.meta.url), 'utf8');
 const ghTransport = readFileSync(new URL('./lib/create-issue-stage-record-gh.ts', import.meta.url), 'utf8');
@@ -406,3 +408,156 @@ describe('Issue #1431 manager reviewer canon', () => {
     }
   });
 });
+
+describe('Issue #1752 startup allowance covers canonical admission', () => {
+  const entryUrl = new URL('./chatgpt-browser-turn/state-light-entry.ts', import.meta.url).href;
+  const repoRoot = fileURLToPath(new URL('..', import.meta.url));
+
+  function writeSlowGitWrapper(root: string): string {
+    const bin = join(root, 'bin');
+    mkdirSync(bin, { recursive: true });
+    const wrapper = join(bin, 'git');
+    writeFileSync(wrapper, [
+      '#!/bin/sh',
+      'sleep "${OPK_TEST_GIT_DELAY_SEC:-0}"',
+      'PATH="${PATH#*:}" exec git "$@"',
+      '',
+    ].join('\n'));
+    chmodSync(wrapper, 0o755);
+    return bin;
+  }
+
+  async function runAdmissionCase(input: {
+    startupMs: number;
+    gitDelaySeconds: string;
+    emitNoise?: boolean;
+  }) {
+    const root = mkdtempSync(join(tmpdir(), 'opk-1752-entry-launcher-'));
+    const previous = {
+      path: process.env.PATH,
+      delay: process.env.OPK_TEST_GIT_DELAY_SEC,
+      startup: process.env.OPK_BROWSER_TURN_STARTUP_ALLOWANCE_MS,
+      gap: process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS,
+      idle: process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS,
+    };
+    try {
+      const promptPath = join(root, 'review.txt');
+      writeFileSync(promptPath, renderManagerReviewBrief(readManagerReviewCanon(), reviewContext).text);
+      const bin = writeSlowGitWrapper(root);
+      process.env.PATH = bin + ':' + (previous.path ?? '');
+      process.env.OPK_TEST_GIT_DELAY_SEC = input.gitDelaySeconds;
+      process.env.OPK_BROWSER_TURN_STARTUP_ALLOWANCE_MS = String(input.startupMs);
+      process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS = '50';
+      process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '150';
+
+      const heartbeat = {
+        schema: 'observation-heartbeat/v1',
+        phase: 'admitted_pre_send',
+        poll_count: 0,
+        observation_state: 'waiting',
+        stable_reads: 0,
+        completion_ready: false,
+      };
+      const turnResult = {
+        schema: 'turn-result/v1',
+        state: 'ok',
+        scope: 'none',
+        cause: 'ok',
+        invocation_id: reviewContext.invocationId,
+        configured_profile_key: 'fixture-profile',
+        witness: {
+          user_message_id: 'u1',
+          assistant_message_id: 'a1',
+          relation: 'reply_to',
+          source: 'service',
+        },
+        observation_uncertainty_diagnostics: {
+          cause: 'ok',
+          send_count: 1,
+          owned_prompt_seen: true,
+        },
+      };
+      const source = [
+        '(async () => {',
+        '  const { runStateLightEntry } = await import(' + JSON.stringify(entryUrl) + ');',
+        input.emitNoise ? '  process.stdout.write(JSON.stringify({ schema: "noise/v1" }) + "\\n");' : '',
+        '  const heartbeat = ' + JSON.stringify(heartbeat) + ';',
+        '  const turnResult = ' + JSON.stringify(turnResult) + ';',
+        '  const code = await runStateLightEntry(process.argv.slice(1), {',
+        '    runTurn: async () => {',
+        '      process.stdout.write(JSON.stringify(heartbeat) + "\\n");',
+        '      process.stdout.write(JSON.stringify(turnResult) + "\\n");',
+        '      return 0;',
+        '    },',
+        '  });',
+        '  process.exit(code);',
+        '})().catch((error) => { process.stderr.write(String(error)); process.exit(1); });',
+      ].filter(Boolean).join('\n');
+
+      const attempt = join(root, 'attempt');
+      const envelopePath = join(attempt, 'terminal-envelope.json');
+      const code = await runLaunch({
+        runIdentity: 'run-1752-' + input.startupMs,
+        attemptIdentity: 'attempt-1752-' + input.startupMs,
+        handoffReceiptPath: join(attempt, 'handoff-receipt.json'),
+        terminalEnvelopePath: envelopePath,
+        browserOutputPath: join(attempt, 'browser-output.txt'),
+        cwd: repoRoot,
+        childCommand: process.execPath,
+        childArgs: [
+          '--experimental-strip-types',
+          '-e',
+          source,
+          '--',
+          'turn',
+          '--invocation-id', reviewContext.invocationId,
+          '--input', promptPath,
+          '--reviewer-source-output', join(root, 'source.txt'),
+          '--reviewer-source', 'direct-publication/v1',
+          '--repository', reviewContext.repositoryFullName,
+          '--issue-number', String(reviewContext.issueNumber),
+          '--source-revision', reviewContext.sourceRevision,
+          '--stage', reviewContext.stage,
+          '--source-slot', reviewContext.sourceSlot,
+        ],
+      });
+      return { code, envelope: readTerminalEnvelope(envelopePath) };
+    } finally {
+      if (previous.path === undefined) delete process.env.PATH;
+      else process.env.PATH = previous.path;
+      if (previous.delay === undefined) delete process.env.OPK_TEST_GIT_DELAY_SEC;
+      else process.env.OPK_TEST_GIT_DELAY_SEC = previous.delay;
+      if (previous.startup === undefined) delete process.env.OPK_BROWSER_TURN_STARTUP_ALLOWANCE_MS;
+      else process.env.OPK_BROWSER_TURN_STARTUP_ALLOWANCE_MS = previous.startup;
+      if (previous.gap === undefined) delete process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS;
+      else process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS = previous.gap;
+      if (previous.idle === undefined) delete process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS;
+      else process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = previous.idle;
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it('admits a delayed direct-publication turn inside the shared startup allowance', async () => {
+    const result = await runAdmissionCase({ startupMs: 2_000, gitDelaySeconds: '0.02' });
+    expect(result.code).toBe(0);
+    expect(result.envelope).toMatchObject({
+      lifecycle_outcome: 'success',
+      delivery: 'landed',
+    });
+  });
+
+  it('times out truthfully when canonical admission exceeds startup allowance and noise cannot refresh it', async () => {
+    const result = await runAdmissionCase({
+      startupMs: 50,
+      gitDelaySeconds: '0.2',
+      emitNoise: true,
+    });
+    expect(result.code).toBe(1);
+    expect(result.envelope).toMatchObject({
+      incident: 'child_startup_timeout',
+      child_exit_code: null,
+    });
+    expect(JSON.stringify(result.envelope)).not.toContain('child_stdout_eof_timeout');
+  });
+});
+

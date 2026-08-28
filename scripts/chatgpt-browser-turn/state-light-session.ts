@@ -46,7 +46,6 @@ import {
   compactInputInvalidRefusal,
   compactResult,
   MAX_LOCAL_READ_WAIT_MS,
-  OBSERVATION_HEARTBEAT_MS,
   ownedPromptMatches,
   POST_SEND_OBSERVATION_POLL_MS,
   readPageObservation,
@@ -80,6 +79,7 @@ const MAX_SESSION_PAYLOADS = 32;
 const MAX_SESSION_INPUT_BYTES = 8_388_608;
 const DEFAULT_SESSION_POLL_MS = POST_SEND_OBSERVATION_POLL_MS;
 const HEARTBEAT_POLL_INTERVAL = 2;
+const OBSERVATION_HEARTBEAT_MS = 30_000;
 
 export const STATE_LIGHT_SESSION_HELP = `Usage:
   state-light-entry.ts session --profile <path> --cdp <url> (--chat-url <url> | --new-chat --project-url <url>) --timeout-ms <ms> [--poll-ms <ms>] --input <path> --output <path> [--input <path> --output <path> ...]
