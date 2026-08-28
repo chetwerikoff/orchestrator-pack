@@ -317,7 +317,7 @@ function parseTurnArgs(argv: readonly string[]): ParsedTurnArgs {
     if (!raw?.startsWith('--') || raw === '--') throw new Error('argument_invalid');
     const key = raw.slice(2);
     if (options.has(key)) throw new Error('argument_duplicate');
-    if (key === 'new-chat') {
+    if (key === 'new-chat' || key === 'entry-liveness-heartbeat') {
       options.set(key, true);
       continue;
     }
@@ -1939,6 +1939,7 @@ async function runTurn(
     'repository',
     'issue-number',
     'source-revision',
+    'entry-liveness-heartbeat',
   ]);
   const invocationId = stringOption(args, 'invocation-id') ?? '';
   let profileKey = 'profile-unresolved';
@@ -2009,18 +2010,20 @@ async function runTurn(
     const invocationStartedAt = Date.now();
     const invocationDeadlineMs = invocationStartedAt + config.timeoutMs;
     const invocationBudget = createTurnOperationBudget(config.timeoutMs, invocationStartedAt);
-    const livenessTiming = resolveBrowserTurnLivenessTiming();
-    heartbeatScheduler = startTurnScopedHeartbeatScheduler({
-      timing: livenessTiming,
-      emit: () => emit(buildObservationHeartbeat(
-        heartbeatDecision,
-        heartbeatStableReads,
-        pollCount,
-        heartbeatCompletionReady,
-        heartbeatLastReply,
-        heartbeatPhase,
-      )),
-    });
+    if (hasFlag(args, 'entry-liveness-heartbeat')) {
+      const livenessTiming = resolveBrowserTurnLivenessTiming();
+      heartbeatScheduler = startTurnScopedHeartbeatScheduler({
+        timing: livenessTiming,
+        emit: () => emit(buildObservationHeartbeat(
+          heartbeatDecision,
+          heartbeatStableReads,
+          pollCount,
+          heartbeatCompletionReady,
+          heartbeatLastReply,
+          heartbeatPhase,
+        )),
+      });
+    }
     if (!config.newChat && config.chatUrl) {
       transitionStateLightTurnObservation({
         profileKey,
