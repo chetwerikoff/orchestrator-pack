@@ -1,3 +1,4 @@
+import './toolchain/native-entrypoint-preflight.ts';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
