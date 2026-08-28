@@ -170,8 +170,10 @@ First classify the outcome from authoritative transport evidence:
   absent URL, or generic “pre-send” wording.
 - **page-capable-or-uncertain** is every other non-success outcome.
 
-For page-capable-or-uncertain outcomes, before any next workflow action,
-complete the applicable observations:
+For page-capable-or-uncertain outcomes, first complete the
+[durable observation recovery](#durable-observation-recovery) read and
+classification below, then before any next workflow action complete the
+applicable page and Issue observations:
 
 1. Run `npm run browser-gpt-page-probe -- inspect --cdp "<endpoint>" --url
    "<chat-url>"`. “Owned prompt present” is true only when exactly one current
