@@ -26,6 +26,7 @@ import { writeWorkerSmokeReceipt } from './lib/worker-smoke-receipt.ts';
 import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
 import type { RuntimeDispatchResult, RuntimeWorkerIdentity } from './runtime/contracts.ts';
 import {
+  beginSmokeOrdering,
   bindSmokeReportToPlan,
   establishRuntimeSmokeDelivery,
   emit,
@@ -46,7 +47,15 @@ import {
   type GateCheckDependencies,
   type ResolvedSmokeTarget,
 } from './worker-smoke-run.ts';
-import { readPackReviewAuthority } from './pack-review-state.ts';
+import {
+  commitSmokeOrderingTransition,
+  initializePackReviewAuthority,
+  readPackReviewAuthority,
+} from './pack-review-state.ts';
+import {
+  createPackReviewRun,
+  setPackReviewRunTerminal,
+} from './lib/pack-review-run-store.ts';
 
 const issueBody = `
 \`\`\`behavior-kind
@@ -1447,3 +1456,115 @@ describe('buildSmokeAgentPrompt selected declaration artifact', () => {
     expect(prompt).toContain('Cap any single block_until_ms at 300000; re-check and re-await instead of one long block.');
   });
 });
+
+describe('Issue #1777 worker independent-smoke admission parity', () => {
+  const PR = 1740;
+  const CURRENT_HEAD = 'ce99d1e63aef156f8846483f77c426f7adeadcf0';
+  const EARLIER_HEAD = 'c2cb38bfc7108d3887788bb3b4563fcf90ab3c1f';
+  const OPENED_AT = '2026-08-27T12:00:00.000Z';
+  const RUN_AT = '2026-08-27T12:00:01.000Z';
+  const body = [
+    '```complexity-tier',
+    'tier: T3',
+    'advisory-prior: T3',
+    '```',
+    '',
+    '```smoke-test-plan',
+    'scenarios:',
+    '  - action: hermetic admission check | expected: PASS',
+    '```',
+  ].join('\\n');
+
+  function setup(withConsumingRun: boolean) {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-1777-'));
+    const storeRoot = join(root, 'review-store');
+    const options = { storeRoot, now: new Date(OPENED_AT) };
+    let authority = initializePackReviewAuthority({
+      prNumber: PR,
+      headSha: CURRENT_HEAD,
+      tier: 'T3',
+      retainedOpenCycle: {
+        cycleId: 'cycle-observed-1740',
+        state: 'open',
+        frozenTier: 'T3',
+        frozenCap: 2,
+        openedAtUtc: OPENED_AT,
+        consumedHeadShas: [],
+      },
+      options,
+    });
+    authority = commitSmokeOrderingTransition({
+      prNumber: PR,
+      expectedTransitionSeq: authority.transitionSeq,
+      actor: 'worker-owned',
+      headSha: CURRENT_HEAD,
+      status: 'started',
+      options,
+    });
+    commitSmokeOrderingTransition({
+      prNumber: PR,
+      expectedTransitionSeq: authority.transitionSeq,
+      actor: 'worker-owned',
+      headSha: CURRENT_HEAD,
+      status: 'passed',
+      options,
+    });
+    if (withConsumingRun) {
+      const created = createPackReviewRun({
+        projectId: 'orchestrator-pack',
+        storeRoot,
+        prNumber: PR,
+        headSha: EARLIER_HEAD,
+        trustedPackRoot: root,
+        sourceRepoRoot: root,
+        automaticBudgetDisposition: 'consume',
+        now: new Date(RUN_AT),
+      });
+      setPackReviewRunTerminal(
+        created.run.id,
+        'failed',
+        { failureReason: 'reviewer_output_malformed:invalid_terminal_payload' },
+        { projectId: 'orchestrator-pack', storeRoot, now: new Date(RUN_AT) },
+      );
+    }
+    return { root, storeRoot };
+  }
+
+  it.each([
+    { withConsumingRun: true, expected: 'admit' },
+    { withConsumingRun: false, expected: 'smoke_ordering_review_unsettled' },
+  ])('uses the canonical complete-input decision: $expected', ({ withConsumingRun, expected }) => {
+    const fixture = setup(withConsumingRun);
+    const previousStoreRoot = process.env.PACK_REVIEW_RUN_STORE_ROOT;
+    process.env.PACK_REVIEW_RUN_STORE_ROOT = fixture.storeRoot;
+    try {
+      const action = () => beginSmokeOrdering({
+        command: 'run',
+        issueNumber: 1777,
+        prNumber: PR,
+        headSha: CURRENT_HEAD,
+        issueBodyFile: join(fixture.root, 'issue.md'),
+        smokeComplexity: 'routine',
+        smokeActor: 'independent',
+        repoRoot: fixture.root,
+        cwd: fixture.root,
+        dryRun: true,
+        json: true,
+        reviewId: '',
+        reviewHeadSha: '',
+      }, body);
+      if (expected === 'admit') {
+        expect(action).not.toThrow();
+        expect(readPackReviewAuthority(PR, { storeRoot: fixture.storeRoot })?.smokeOrdering?.independent)
+          .toMatchObject({ headSha: CURRENT_HEAD, status: 'started', startedEver: true });
+      } else {
+        expect(action).toThrow(expected);
+      }
+    } finally {
+      if (previousStoreRoot === undefined) delete process.env.PACK_REVIEW_RUN_STORE_ROOT;
+      else process.env.PACK_REVIEW_RUN_STORE_ROOT = previousStoreRoot;
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+});
+
