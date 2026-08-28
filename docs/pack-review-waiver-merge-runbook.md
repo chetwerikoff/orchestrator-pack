@@ -112,6 +112,102 @@ node --experimental-strip-types scripts/pack-review-runner.ts list \
     });'
 ```
 
+## No-review evidence for a missing pack-review status
+
+A missing `orchestrator-pack/pack-review` status is not evidence that no reviewer
+completed work. Before a missing-status waiver is described as **no completed
+review**, produce the read-only reconciliation receipt for the exact PR head:
+
+```bash
+P=<PR_NUMBER>
+REPO=chetwerikoff/orchestrator-pack
+HEAD_SHA="$(./scripts/gh pr view "$P" --repo "$REPO" --json headRefOid -q .headRefOid)"
+
+node --experimental-strip-types scripts/pack-review-no-review-reconcile.ts \
+  --source-repo-root <path> \
+  --repo-slug "$REPO" \
+  --pr-number "$P" \
+  --head-sha "$HEAD_SHA"
+```
+
+The producer writes exactly one JSON object plus a newline to stdout. Its schema is
+`pack-review-no-review-reconciliation/v1`, it is bound to
+`repository + prNumber + headSha`, and `workflowAuthority` is always `none`.
+It does not post a status, start/retry a reviewer, create a waiver, or write a
+receipt store.
+
+The closed dispositions mean:
+
+- `review-present`: exact-head evidence proves that review work completed. Do not
+  describe the waiver as “no review”.
+- `no-completed-review`: a matching local run exists and every incomplete source
+  was closed with authoritative pre-send/zero-send facts or exact owned-turn
+  browser reconciliation, after exact-head source-comment and GitHub-review
+  censuses were empty.
+- `contradiction`: retained and live evidence disagree. Stop and investigate;
+  it is not a negative review fact.
+- `unavailable/inconclusive`: required identity, census, browser, or provenance
+  evidence could not be proved. It is not a negative review fact.
+
+Evidence is enumerated in this order and remains fail-closed:
+
+1. Read the live PR head and require exact equality with the requested 40-hex
+   `headSha`.
+2. Resolve exactly one run-store root with the existing pack-review store-root
+   authority. Enumerate every row in that root for the same project/PR/head
+   **before** repository filtering. An unresolved or ambiguous legacy repository
+   identity makes the receipt inconclusive.
+3. For a matching GPT run, derive coverage from its existing `sourceSlots`.
+   Any `complete_clean` or `complete_findings` source immediately proves
+   `review-present`.
+4. Before any negative browser conclusion, census credentialed exact-head GPT
+   source comments with the existing source-comment principal, target, edit,
+   uniqueness, and exact-ID reread rules. Any valid source comment proves
+   `review-present`; unavailable, changed, conflicting, or ambiguous comment
+   evidence is inconclusive.
+5. Census canonical owner-authored exact-head direct GitHub review artifacts with
+   the existing GitHub review authority. Any valid exact-head artifact proves
+   `review-present`; an unavailable census is inconclusive.
+6. Only for a matching run with zero completed sources, close each incomplete
+   slot. Persisted planned/pre-send/zero-send facts may close directly. A
+   possible-delivery slot requires the exact retained profile/invocation/CDP
+   binding, the same invocation's state-light observation, exactly one owned
+   marker user carrier, and sanctioned browser `inspect`/`export` evidence.
+   A matching assistant result proves `review-present`; mismatched retained and
+   live bytes are `contradiction`; missing/ambiguous/unstable evidence is
+   inconclusive.
+7. If the inspected root has **no matching local run**, first run the marker-first
+   exact-head source-comment census and the exact-head GitHub-review census. If
+   both are complete and empty, the result is still
+   `unavailable/inconclusive` with
+   `run_store_census_not_exhaustive`. Current authority does not prove one
+   inspected run-store root is exhaustive across all legitimate roots.
+
+Do not scan alternate run-store roots, add a registry, synthesize a reviewer start,
+or use browser absence to strengthen the no-local-run case.
+
+### Receipt use and staleness
+
+The receipt has no age-based TTL. Its freshness condition is the PR head only.
+**Immediately before using the receipt** for waiver reasoning, re-read the live PR
+head and require byte-for-byte equality with the receipt's lowercase 40-hex
+`headSha`:
+
+```bash
+LIVE_HEAD="$(./scripts/gh pr view "$P" --repo "$REPO" --json headRefOid -q .headRefOid)"
+test "$LIVE_HEAD" = "$HEAD_SHA"
+```
+
+If the head differs, the receipt is stale: discard it and regenerate against the
+new head. Do not reuse a prior-head `no-completed-review` result. A
+`review-present`, `contradiction`, or `unavailable/inconclusive` receipt also
+must not be relabeled as `no-completed-review`.
+
+This evidence step is separate from operator authorization. Even a valid
+`no-completed-review` receipt does not publish the waiver status and does not
+authorize merge; the explicit operator-authorization procedure below remains
+unchanged.
+
 ## Waiver procedure (failed review or missing status)
 
 Replace `P`, `HEAD_SHA`, and the description with live values.
