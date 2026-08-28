@@ -2938,6 +2938,7 @@ export async function reconcileStalePackReviewRuns(
           reason: recovery.reason,
           status: failed.status,
           coverage: derivePackReviewGptCoverage(failed.reviewRound),
+          nextAction: recovery.nextAction ?? 'reconcile or retry the missing source work',
         });
         continue;
       }
