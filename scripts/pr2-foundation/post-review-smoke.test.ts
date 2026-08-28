@@ -21,10 +21,15 @@ import {
   type PackReviewAuthorityOptions,
   type PackReviewTier,
 } from '../pack-review-state.ts';
+import {
+  createPackReviewRun,
+  setPackReviewRunTerminal,
+} from '../lib/pack-review-run-store.ts';
 import type { RuntimeAdapter } from '../runtime/contracts.ts';
 import { DeterministicRuntimeAdapter } from '../runtime/test-adapter.ts';
 import {
   reconcilePostReviewSmoke,
+  reviewStageDisposition,
   type PostReviewSmokeDependencies,
 } from './post-review-smoke.ts';
 
@@ -550,3 +555,93 @@ describe('Issue #1418 post-review smoke reconciliation', () => {
     expect(runAttempt).not.toHaveBeenCalled();
   });
 });
+
+describe('Issue #1777 post-review admission parity', () => {
+  const OBSERVED_PR = 1740;
+  const OBSERVED_HEAD = 'ce99d1e63aef156f8846483f77c426f7adeadcf0';
+  const EARLIER_HEAD = 'c2cb38bfc7108d3887788bb3b4563fcf90ab3c1f';
+  const OPENED_AT = '2026-08-27T12:00:00.000Z';
+  const RUN_AT = '2026-08-27T12:00:01.000Z';
+
+  function setup(withConsumingRun: boolean) {
+    const fixture = rootFixture();
+    const options: PackReviewAuthorityOptions = {
+      storeRoot: fixture.reviewStoreRoot,
+      now: new Date(OPENED_AT),
+    };
+    let authority = initializePackReviewAuthority({
+      prNumber: OBSERVED_PR,
+      headSha: OBSERVED_HEAD,
+      tier: 'T3',
+      retainedOpenCycle: {
+        cycleId: 'cycle-observed-1740',
+        state: 'open',
+        frozenTier: 'T3',
+        frozenCap: 2,
+        openedAtUtc: OPENED_AT,
+        consumedHeadShas: [],
+      },
+      options,
+    });
+    authority = commitSmokeOrderingTransition({
+      prNumber: OBSERVED_PR,
+      expectedTransitionSeq: authority.transitionSeq,
+      actor: 'worker-owned',
+      headSha: OBSERVED_HEAD,
+      status: 'started',
+      options,
+    });
+    commitSmokeOrderingTransition({
+      prNumber: OBSERVED_PR,
+      expectedTransitionSeq: authority.transitionSeq,
+      actor: 'worker-owned',
+      headSha: OBSERVED_HEAD,
+      status: 'passed',
+      options,
+    });
+
+    if (withConsumingRun) {
+      const created = createPackReviewRun({
+        projectId: 'orchestrator-pack',
+        storeRoot: fixture.reviewStoreRoot,
+        prNumber: OBSERVED_PR,
+        headSha: EARLIER_HEAD,
+        trustedPackRoot: fixture.root,
+        sourceRepoRoot: fixture.root,
+        automaticBudgetDisposition: 'consume',
+        now: new Date(RUN_AT),
+      });
+      setPackReviewRunTerminal(
+        created.run.id,
+        'failed',
+        { failureReason: 'stale_head_before_terminal' },
+        {
+          projectId: 'orchestrator-pack',
+          storeRoot: fixture.reviewStoreRoot,
+          now: new Date(RUN_AT),
+        },
+      );
+    }
+    return fixture;
+  }
+
+  it.each([
+    {
+      withConsumingRun: true,
+      expected: { kind: 'smoke_candidate', reason: 'review_stage_complete_smoke_admitted' },
+    },
+    {
+      withConsumingRun: false,
+      expected: { kind: 'review_pending', reason: 'review_stage_incomplete' },
+    },
+  ])('uses the canonical complete-input decision: $expected.kind', ({ withConsumingRun, expected }) => {
+    const fixture = setup(withConsumingRun);
+    expect(reviewStageDisposition({
+      prNumber: OBSERVED_PR,
+      headSha: OBSERVED_HEAD,
+      projectId: 'orchestrator-pack',
+      env: { ...process.env, PACK_REVIEW_RUN_STORE_ROOT: fixture.reviewStoreRoot },
+    })).toEqual(expected);
+  });
+});
+
