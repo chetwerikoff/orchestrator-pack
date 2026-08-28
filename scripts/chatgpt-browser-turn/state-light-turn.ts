@@ -1723,7 +1723,7 @@ async function mutateComposerOrCause(
   } catch (error) {
     if (
       isPlaywrightTimeoutError(error)
-      && await hasBlockingPageOverlay(page, Math.min(insertionDeadlineMs, invocationDeadlineMs))
+      && await hasBlockingPageOverlay(page, invocationDeadlineMs)
     ) {
       return 'blocking_page_overlay';
     }
