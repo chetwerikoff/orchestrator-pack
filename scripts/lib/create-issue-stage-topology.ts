@@ -281,6 +281,30 @@ function canonicalStageEntry(
   };
 }
 
+export function stagesForPhase(
+  tier: ReviewTier,
+  canonicalStages: readonly ReviewStage[],
+  phase: 'pre-lens' | 'post-lens' | 'final-acceptance',
+  observedStages: readonly ReviewStage[] = [],
+): ReviewStage[] {
+  if (tier === 'T3' && phase === 'pre-lens') {
+    const competitiveRequired = canonicalStages.includes('competitive');
+    const architecturalReviewObserved = observedStages.includes('architectural-review');
+    return canonicalStages.filter((stage) => (
+      stage === 'competitive'
+      || (stage === 'architectural-review' && (!competitiveRequired || architecturalReviewObserved))
+    ));
+  }
+  if (tier === 'T2' && phase === 'pre-lens') {
+    return canonicalStages.filter((stage) => stage === 'architectural-review');
+  }
+  if (phase === 'post-lens' && tier === 'T3') {
+    return canonicalStages.filter((stage) => stage !== 'architectural');
+  }
+  if (phase === 'post-lens') return [];
+  return [...canonicalStages];
+}
+
 /**
  * Single executable create-issue stage plan authority. Historical/publication
  * topology records below remain codecs for one already-selected stage; they do

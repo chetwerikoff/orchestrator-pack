@@ -33,7 +33,7 @@ import {
   type TierIntakeAuthorityV1,
   type VerifiedRelayEvidenceV1,
 } from './stage-completeness-core.ts';
-import { canonicalStagePlan } from './create-issue-stage-topology.ts';
+import { canonicalStagePlan, stagesForPhase } from './create-issue-stage-topology.ts';
 import { evaluateStageCredentialingSettlement } from './create-issue-stage-lifecycle-acceptance.ts';
 import { readEvidenceWaiverProducerEvidence } from './create-issue-stage-record-receipt.ts';
 import { extractMarker } from './create-issue-stage-record-marker.ts';
@@ -1633,6 +1633,7 @@ export function canonicalAcceptanceStages(
   tier: ReviewTier,
   intakeValue: unknown,
   phase: 'pre-lens' | 'post-lens' | 'final-acceptance',
+  observedStages: readonly ReviewStage[] = [],
 ): ReviewStage[] {
   const intake = isRecord(intakeValue) ? intakeValue : {};
   const competitiveDecision = intake.competitiveDecision === 'required' || intake.competitiveDecision === 'skipped'
@@ -1640,14 +1641,7 @@ export function canonicalAcceptanceStages(
     : undefined;
   const competitiveRationale = optionalString(intake.competitiveRationale);
   const stages = canonicalStagePlan(tier, { competitiveDecision, competitiveRationale }).stages.map((entry) => entry.stage);
-  if (tier === 'T3' && phase === 'pre-lens') {
-    return stages.filter((stage) => stage === 'competitive' || stage === 'architectural-review');
-  }
-  if (phase === 'post-lens' && tier === 'T3') {
-    return stages.filter((stage) => stage !== 'architectural');
-  }
-  if (phase === 'post-lens') return [];
-  return stages;
+  return stagesForPhase(tier, stages, phase, observedStages);
 }
 
 const PRODUCED_ARTIFACT_NAMES = new Set<string>(ACCEPTANCE_ARTIFACT_OUTPUT_NAMES);
@@ -2307,6 +2301,7 @@ export function inspectAcceptanceArtifacts(
     else if (present.includes(artifactPath)) addInvalid(artifact, artifactPath, artifact + ' is malformed JSON');
   }
   const credentialedStages = new Set<ReviewStage>();
+  const observedStages = new Set<ReviewStage>();
   for (const name of stageReceiptNames) {
     const value = outputValues.get(name);
     if (value !== undefined && (!isRecord(value) || value.schema !== 'stage-completeness-receipt/v1')) {
@@ -2317,6 +2312,7 @@ export function inspectAcceptanceArtifacts(
     const stage = reviewStage(value.stage);
     const cardinality = Number(value.reviewerCardinality);
     if (!stage || !Number.isInteger(cardinality) || cardinality < 1) continue;
+    observedStages.add(stage);
     const operatorWaiverEvidence = readOperatorWaiver(options.waiverPath, {
       stage,
       sourceRevision: typeof value.sourceRevision === 'string' ? value.sourceRevision : '',
@@ -2343,7 +2339,7 @@ export function inspectAcceptanceArtifacts(
 
   if (evidenceTier) {
     try {
-      const requiredStages = canonicalAcceptanceStages(evidenceTier, intake, options.phase ?? 'final-acceptance');
+      const requiredStages = canonicalAcceptanceStages(evidenceTier, intake, options.phase ?? 'final-acceptance', [...observedStages]);
       for (const stage of requiredStages) {
         if (!credentialedStages.has(stage)) missing.push({ artifact: 'stage-completeness-receipt', reason: 'missing credentialing complete-or-proven-partial stage evidence for ' + stage + ' at ' + (options.phase ?? 'final-acceptance') });
       }
