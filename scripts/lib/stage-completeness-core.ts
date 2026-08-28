@@ -492,8 +492,8 @@ function parseInvocation(
   const sendCount = value.sendCount;
   if (value.schema !== REVIEWER_INVOCATION_ENVELOPE_SCHEMA) errors.push(`${label} has unknown schema`);
   if (!invocationId) errors.push(`${label} missing invocationId`);
-  if (!artifactAuthority && !terminalResultIdentity) errors.push(`${label} missing terminalResultIdentity`);
-  if (!artifactAuthority && !reviewerSource) errors.push(`${label} missing reviewerSource`);
+  if (purpose === 'stage-time' && !artifactAuthority && !terminalResultIdentity) errors.push(`${label} missing terminalResultIdentity`);
+  if (purpose === 'stage-time' && !artifactAuthority && !reviewerSource) errors.push(`${label} missing reviewerSource`);
   if (value.reviewEpisodeId !== receipt.reviewEpisodeId) errors.push(`${label} reviewEpisodeId mismatch`);
   if (value.stageAttemptId !== receipt.stageAttemptId) errors.push(`${label} stageAttemptId mismatch`);
   if (value.policyVersion !== receipt.policyVersion) errors.push(`${label} policyVersion mismatch`);
