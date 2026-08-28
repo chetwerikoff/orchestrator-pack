@@ -13,7 +13,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   COMPLETION_MODE,
@@ -50,6 +50,7 @@ const skillPath = join(repoRoot, '.claude/skills/create-issue-draft/SKILL.md');
 const rulePath = join(repoRoot, '.cursor/rules/flow-manager-browser-turn-monitoring.mdc');
 const runbookPath = join(repoRoot, 'docs/flow-manager-long-running-child-runbook.md');
 const browserReadmePath = join(repoRoot, 'scripts/chatgpt-browser-turn/README.md');
+const livenessContractUrl = pathToFileURL(join(repoRoot, 'scripts/chatgpt-browser-turn/liveness-contract.ts')).href;
 const packageJsonPath = join(repoRoot, 'package.json');
 
 const cleanupDirs: string[] = [];
@@ -397,27 +398,34 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(readTerminalEnvelope(paths.envelope)?.lifecycle_outcome).toBe('success');
   });
 
-  it('keeps a heartbeating child alive until turn-result arrives', async () => {
+  it('keeps a contract-scheduled heartbeating child alive and the unref timer cannot hold it past result', async () => {
     const root = tempDir();
     const paths = launchPaths(root, 'heartbeat-success');
     const result = makeTurnResult();
-    const heartbeat = {
-      schema: 'observation-heartbeat/v1',
-      phase: 'post_send_observation',
-      poll_count: 1,
-      observation_state: 'busy',
-      stable_reads: 0,
-      completion_ready: false,
+    const fixture = {
+      command: process.execPath,
+      args: ['--experimental-strip-types', '-e', `
+        (async () => {
+          const { resolveBrowserTurnLivenessTiming, startTurnScopedHeartbeatScheduler } =
+            await import(${JSON.stringify(livenessContractUrl)});
+          let pollCount = 0;
+          startTurnScopedHeartbeatScheduler({
+            timing: resolveBrowserTurnLivenessTiming(),
+            emit: () => process.stdout.write(JSON.stringify({
+              schema: 'observation-heartbeat/v1',
+              phase: 'post_send_observation',
+              poll_count: ++pollCount,
+              observation_state: 'busy',
+              stable_reads: 0,
+              completion_ready: false,
+            }) + '\\n'),
+          });
+          setTimeout(() => {
+            process.stdout.write(JSON.stringify(${JSON.stringify(result)}) + '\\n');
+          }, 350);
+        })().catch((error) => { process.stderr.write(String(error)); process.exit(1); });
+      `],
     };
-    const fixture = nodeFixture(`
-      const heartbeat = ${JSON.stringify(heartbeat)};
-      const result = ${JSON.stringify(result)};
-      const heartbeatTimer = setInterval(() => process.stdout.write(JSON.stringify(heartbeat) + '\\n'), 25);
-      setTimeout(() => {
-        clearInterval(heartbeatTimer);
-        process.stdout.write(JSON.stringify(result) + '\\n', () => process.exit(0));
-      }, 350);
-    `);
     process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '100';
     process.env.OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS = '100';
     const code = await runLaunch({
