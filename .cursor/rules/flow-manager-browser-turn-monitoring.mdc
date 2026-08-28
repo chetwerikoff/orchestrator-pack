@@ -42,6 +42,13 @@ existing repository, Issue, source-revision, reviewer-source, and invocation
 identity. The long-running adapter rejects missing direct-publication context
 before child spawn.
 
+After any non-success, admission remains incomplete until the caller follows
+the runbook's [durable observation recovery](../../docs/browser-gpt-turn-runbook.md#durable-observation-recovery)
+procedure. That procedure is the sole owner of exact durable-record identity,
+phase evidence, prepared/not-sent zero-send boundaries, and the
+same-invocation no-resend decision; this carrier does not duplicate its phase
+matrix.
+
 Immediately before any profile verification, CDP connection, tab creation, or
 send, the canonical state-light entry reads the stable input and independently
 regenerates the expected reviewer bytes from the current tracked canon plus the

@@ -445,12 +445,21 @@ interface DeliveryMessageSubmitDeps {
   readonly episodeState?: PersistedReconcileState;
 }
 
+export interface OrchestrationMailDeliveryEvidence {
+  readonly workerGeneration: string;
+  readonly runId: string;
+  readonly messageId: string;
+  readonly delivery: 'delivered-looking';
+  readonly terminalReceipt: 'unproven';
+}
+
 export interface OrchestrationMailReconcileResult {
   readonly ok: boolean;
   readonly attempted: number;
   readonly nudged: number;
   readonly skipped: number;
   readonly reasons: readonly string[];
+  readonly deliveryEvidence: readonly OrchestrationMailDeliveryEvidence[];
 }
 
 export interface UnsentComposerWatchState {
@@ -884,6 +893,9 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   if (!resolved.ok) return deliveryNoEffect(resolved.reason, undefined, false);
   if (resolved.worker === null) return deliveryNoEffect('worker_gone');
   const worker = resolved.worker;
+  if (!worker.identity.runtime || !worker.identity.id.trim() || !worker.identity.generation.trim()) {
+    return deliveryNoEffect('orchestration_worker_identity_incomplete', worker, false);
+  }
   const pointer = buildDeliveryPointer(message);
   const key = episodeKey(message, worker);
   if (deps.pointerWriteLedger?.has(key)) return deliveryNoEffect('orchestration_episode_already_claimed', worker, false);
@@ -925,6 +937,30 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   // The episode claim, rather than the rendered pointer fingerprint, owns Enter.
   return await submitUnsentCursorComposerOnceForWorker(worker, deps.submitDeps, createUnsentComposerWatchState());
 }
+
+function deliveryLookingEvidence(
+  message: DeliveryMessage,
+  worker: RuntimeWorker,
+  result: UnsentComposerSubmitResult,
+): OrchestrationMailDeliveryEvidence | undefined {
+  const messageId = message.id.trim();
+  const runId = message.runId.trim();
+  const workerGeneration = worker.identity.generation.trim();
+  const terminal = result.terminals.length === 1 ? result.terminals[0] : undefined;
+  if (
+    !messageId || !runId || !workerGeneration || !terminal?.enter
+    || terminal.terminal !== worker.identity.id
+    || terminal.generation !== worker.identity.generation
+  ) return undefined;
+  return {
+    workerGeneration,
+    runId,
+    messageId,
+    delivery: 'delivered-looking',
+    terminalReceipt: 'unproven',
+  };
+}
+
 export function createOrcaMessageSubmitDeps(
   adapter: RuntimeAdapter,
   submitDeps = createAdapterSubmitDeps(adapter),
@@ -1015,7 +1051,7 @@ export async function runOrchestrationMailReconcileTick(
   const ledgerPath = options.ledgerPath ?? deps.episodeStatePath ?? ORCHESTRATION_RECONCILE_LEDGER_PATH;
   const lockPath = options.lockPath ?? deps.episodeLockPath ?? ORCHESTRATION_RECONCILE_LOCK_PATH;
   const held = tryAcquireHeldFileLock(lockPath);
-  if (!held.acquired) return { ok: true, attempted: 0, nudged: 0, skipped: 0, reasons: [`reconcile_lock_${held.reason}`] };
+  if (!held.acquired) return { ok: true, attempted: 0, nudged: 0, skipped: 0, reasons: [`reconcile_lock_${held.reason}`], deliveryEvidence: [] };
   replaceLockedFileContents(held.descriptor, `${process.pid}\n`);
   try {
     const now = options.now ?? Date.now;
@@ -1027,7 +1063,7 @@ export async function runOrchestrationMailReconcileTick(
         ['orchestration', 'inbox', '--full', '--limit', String(ORCHESTRATION_INBOX_LIMIT)],
         { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS },
       );
-    if (!response.ok) return { ok: false, attempted: 0, nudged: 0, skipped: 0, reasons: [response.error?.code ?? 'orchestration_inbox_unavailable'] };
+    if (!response.ok) return { ok: false, attempted: 0, nudged: 0, skipped: 0, reasons: [response.error?.code ?? 'orchestration_inbox_unavailable'], deliveryEvidence: [] };
     const unread = (response.result?.messages ?? []).filter((row) => {
       const id = row.id?.trim() ?? '';
       return id && !(row.read === 1 || row.read === true);
@@ -1067,6 +1103,7 @@ export async function runOrchestrationMailReconcileTick(
       reconcileClock: () => current,
     };
     const reasons: string[] = [];
+    const deliveryEvidence: OrchestrationMailDeliveryEvidence[] = [];
     let attempted = 0; let nudged = 0; let skipped = 0;
     for (const row of unread) {
       const id = row.id!.trim();
@@ -1107,6 +1144,8 @@ export async function runOrchestrationMailReconcileTick(
             result = deliveryNoEffect(reason, worker, false);
           } else {
             result = await submitOrcaMessageDeliveryPointerForMessage(found.message, reconcileDeps);
+            const evidence = deliveryLookingEvidence(found.message, worker, result);
+            if (evidence) deliveryEvidence.push(evidence);
           }
         }
       }
@@ -1116,7 +1155,7 @@ export async function runOrchestrationMailReconcileTick(
       if (result.terminals[0]?.reason) reasons.push(`${id}:${result.terminals[0].reason}`);
     }
     saveReconcileState(ledgerPath, state);
-    return { ok: reasons.every((reason) => !/:send_failed$|:dispatch_unknown$/u.test(reason)), attempted, nudged, skipped, reasons };
+    return { ok: reasons.every((reason) => !/:send_failed$|:dispatch_unknown$/u.test(reason)), attempted, nudged, skipped, reasons, deliveryEvidence };
   } finally {
     releaseHeldFileLock(held.descriptor);
   }
