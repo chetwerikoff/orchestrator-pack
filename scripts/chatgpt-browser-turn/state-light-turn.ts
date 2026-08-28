@@ -317,7 +317,7 @@ function parseTurnArgs(argv: readonly string[]): ParsedTurnArgs {
     if (!raw?.startsWith('--') || raw === '--') throw new Error('argument_invalid');
     const key = raw.slice(2);
     if (options.has(key)) throw new Error('argument_duplicate');
-    if (key === 'new-chat' || key === 'entry-liveness-heartbeat') {
+    if (key === 'new-chat') {
       options.set(key, true);
       continue;
     }
@@ -1922,6 +1922,7 @@ function browserOrPageDefinitelyLost(page: any, browser: any): boolean {
 async function runTurn(
   args: ParsedTurnArgs,
   recoveryHooks: StateLightRecoveryHooks = {},
+  entryLivenessHeartbeat = false,
 ): Promise<TurnRunOutcome> {
   rejectUnknownOptions(args, [
     'profile',
@@ -1939,7 +1940,6 @@ async function runTurn(
     'repository',
     'issue-number',
     'source-revision',
-    'entry-liveness-heartbeat',
   ]);
   const invocationId = stringOption(args, 'invocation-id') ?? '';
   let profileKey = 'profile-unresolved';
@@ -2010,7 +2010,7 @@ async function runTurn(
     const invocationStartedAt = Date.now();
     const invocationDeadlineMs = invocationStartedAt + config.timeoutMs;
     const invocationBudget = createTurnOperationBudget(config.timeoutMs, invocationStartedAt);
-    if (hasFlag(args, 'entry-liveness-heartbeat')) {
+    if (entryLivenessHeartbeat) {
       const livenessTiming = resolveBrowserTurnLivenessTiming();
       heartbeatScheduler = startTurnScopedHeartbeatScheduler({
         timing: livenessTiming,
@@ -3924,6 +3924,7 @@ export const __testComposerMutation = {
 export type StateLightTurnDependencies = {
   readonly runTurn?: (args: ParsedTurnArgs) => Promise<TurnRunOutcome>;
   readonly recoveryHooks?: StateLightRecoveryHooks;
+  readonly entryLivenessHeartbeat?: boolean;
 };
 
 export async function runStateLightTurn(
@@ -3954,7 +3955,11 @@ export async function runStateLightTurn(
 
   const outcome = dependencies.runTurn
     ? await dependencies.runTurn(args)
-    : await runTurn(args, dependencies.recoveryHooks);
+    : await runTurn(
+        args,
+        dependencies.recoveryHooks,
+        dependencies.entryLivenessHeartbeat === true,
+      );
   const result = await finalizeTurn(outcome);
   emit(result);
   return turnExitCode(result.state);
