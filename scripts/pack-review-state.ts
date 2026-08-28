@@ -932,6 +932,7 @@ export function assertIndependentSmokeAdmission(input: {
   authority: PackReviewAuthorityDocument;
   headSha: string;
   reviewRuns?: readonly PackReviewStartConsumptionRecord[];
+  operatorSmokeOnly?: boolean;
 }): void {
   const headSha = normalizeSha(input.headSha, 'headSha');
   if (input.authority.currentHeadSha !== headSha) {
@@ -956,10 +957,14 @@ export function assertIndependentSmokeAdmission(input: {
     }
     return;
   }
+  const workerOwnedPassed = input.operatorSmokeOnly === true
+    && ordering?.workerOwned?.status === 'passed'
+    && normalizeSha(ordering.workerOwned.headSha, 'smokeOrdering.workerOwned.headSha') === headSha;
   if (ordering?.reviewSettledHeadSha !== headSha
       && !(input.authority.cycle?.reviewStageComplete === true
         && (input.authority.cycle.reviewStartConsumed === true
-          || reviewStartConsumedForIndependentSmoke(input.authority, input.reviewRuns)))) {
+          || reviewStartConsumedForIndependentSmoke(input.authority, input.reviewRuns))
+        || workerOwnedPassed)) {
     throw new PackReviewAuthorityError(
       'smoke_ordering_review_unsettled',
       'independent smoke requires settled pack-review obligations for the exact head',
@@ -974,6 +979,7 @@ export function commitSmokeOrderingTransition(input: {
   headSha: string;
   status: SmokeOrderingStatus;
   failureKind?: SmokeOrderingFailureKind;
+  operatorSmokeOnly?: boolean;
   options: PackReviewAuthorityOptions;
 }): PackReviewAuthorityDocument {
   const headSha = normalizeSha(input.headSha, 'headSha');
@@ -1007,7 +1013,7 @@ export function commitSmokeOrderingTransition(input: {
         };
       } else {
         if (input.status === 'started') {
-          assertIndependentSmokeAdmission({ authority, headSha });
+          assertIndependentSmokeAdmission({ authority, headSha, operatorSmokeOnly: input.operatorSmokeOnly });
         } else if (!authority.smokeOrdering?.independent?.startedEver
             || authority.smokeOrdering.independent.status !== 'started') {
           throw new PackReviewAuthorityError(

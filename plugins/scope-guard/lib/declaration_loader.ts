@@ -2,6 +2,10 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DeclarationSnapshot } from '@orchestrator-pack/shared/lib/declaration_schema.js';
 import { validateDeclarationSnapshot } from '@orchestrator-pack/shared/lib/declaration_schema.js';
+import {
+  selectDeclarationArtifact,
+  type PrScopeDeclaration,
+} from '../../../scripts/pr-scope-declaration.ts';
 
 const MIRROR_DIR = join('.orchestrator-pack', 'declarations');
 const SNAPSHOT_DIR = join('docs', 'declarations');
@@ -115,7 +119,7 @@ export function loadActiveDeclaration(
   repoRoot: string,
   issueNumber: number,
   iterationId: string,
-): DeclarationSnapshot | null {
+): DeclarationSnapshot | PrScopeDeclaration | null {
   const filename = declarationRelativePath(issueNumber, iterationId);
   const mirrorPath = join(repoRoot, MIRROR_DIR, filename);
   const fromMirror = readDeclarationFile(mirrorPath);
@@ -124,14 +128,37 @@ export function loadActiveDeclaration(
   }
 
   const snapshotPath = join(repoRoot, SNAPSHOT_DIR, filename);
-  return readDeclarationFile(snapshotPath);
+  return (
+    readDeclarationFile(snapshotPath) ??
+    loadSelectedPrScopeDeclaration(repoRoot, issueNumber, iterationId)
+  );
+}
+
+function loadSelectedPrScopeDeclaration(
+  repoRoot: string,
+  issueNumber: number,
+  iterationId?: string,
+): PrScopeDeclaration | null {
+  const selected = selectDeclarationArtifact(repoRoot, issueNumber);
+  if (!selected.ok) {
+    return null;
+  }
+
+  if (
+    iterationId !== undefined &&
+    selected.path !== join(SNAPSHOT_DIR, declarationRelativePath(issueNumber, iterationId))
+  ) {
+    return null;
+  }
+
+  return selected.declaration;
 }
 
 export function loadLatestActiveDeclaration(
   repoRoot: string,
   issueNumber: number,
   explicitIterationId?: string,
-): DeclarationSnapshot | null {
+): DeclarationSnapshot | PrScopeDeclaration | null {
   if (explicitIterationId?.trim()) {
     const iterationId = resolveScopeCheckIterationId(
       repoRoot,
@@ -147,6 +174,7 @@ export function loadLatestActiveDeclaration(
 
   return (
     loadNewestReadableDeclaration(repoRoot, issueNumber, MIRROR_DIR) ??
-    loadNewestReadableDeclaration(repoRoot, issueNumber, SNAPSHOT_DIR)
+    loadNewestReadableDeclaration(repoRoot, issueNumber, SNAPSHOT_DIR) ??
+    loadSelectedPrScopeDeclaration(repoRoot, issueNumber)
   );
 }

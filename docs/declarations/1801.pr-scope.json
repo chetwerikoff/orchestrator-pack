@@ -1,0 +1,39 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1801,
+  "declared_paths": [
+    "docs/orchestration-runbook.md",
+    "scripts/executor-profile-policy.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-worker-start.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/",
+    ".cursor/rules/",
+    ".cursor/skills/",
+    ".github/workflows/",
+    "agent-orchestrator.yaml.example",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/",
+    "docs/declarations/",
+    "package-lock.json",
+    "package.json",
+    "plugins/",
+    "prompts/",
+    "README.md",
+    "scripts/",
+    "tests/external-output-references/",
+    "tests/fixtures/pack-gpt-browser-turn-harness.mjs",
+    "tests/issue854-worker-status-binding-cache.mjs",
+    "tests/README.md",
+    "tests/worker-status-store-live-rca.ts"
+  ],
+  "source_revision": "cb71314778b80bcfeb4d4c6d6924398d890584cc"
+}

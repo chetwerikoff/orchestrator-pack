@@ -1,6 +1,10 @@
 #!/usr/bin/env -S node --experimental-strip-types
 
 import '../toolchain/native-entrypoint-preflight.ts';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
 import { evaluateCommandRuntimePreflight } from '../lib/command-runtime-bootstrap.mjs';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
@@ -12,6 +16,10 @@ import {
   evaluateExecutorRouteAdmission,
   EXECUTOR_FAMILY_DESCRIPTORS,
   executorCatalogContains,
+  OPENCODE_PACK_AGENT,
+  buildOpenCodeAgentOverlay,
+  openCodeAgentSemantics,
+  openCodeConfigPaths,
   openCodeEdgeCapabilities,
   profileNamesForTask,
   resolveSemanticExecutorProfile,
@@ -170,6 +178,7 @@ export interface LaunchDependencies {
   readonly createManagerTask: (runId: string, brief: string) => Promise<EdgeResult<{ readonly taskId: string; readonly status: string }>>;
   readonly observeDispatch: (taskId: string) => Promise<EdgeResult<DispatchObservation>>;
   readonly prepareWorktree: (input: WorktreePreparationRequest) => Promise<EdgeResult<PreparedWorktree>>;
+  readonly finalizeProfile?: (profile: ExecutorProfile, worktreePath: string) => Promise<EdgeResult<ExecutorProfile>>;
   readonly adapter: RuntimeAdapter;
   readonly runSupervisedStart: typeof runSupervisedWorkerStart;
   readonly now: () => number;
@@ -351,7 +360,7 @@ export async function runSupervisedTaskLaunchAssistant(
   const profileEdge = await checkpoint('executor_profile', timings, deps.now, () =>
     deps.resolveProfile(input.workClass, input.env ?? process.env, input.startMode));
   if (profileEdge.status !== 'ok') return continued(input, 'executor_profile', profileEdge, resources, startedAtMs, timings, deps.now);
-  const profile = profileEdge.value;
+  let profile = profileEdge.value;
 
   let taskId = input.taskId?.trim() ?? '';
   if (input.workClass === 'manager') {
@@ -424,6 +433,17 @@ export async function runSupervisedTaskLaunchAssistant(
     worktreeSelector: prepared.value.selector,
     ...(prepared.value.path ? { worktreePath: prepared.value.path } : {}),
   };
+
+  if (profile.family === 'opencode') {
+    if (!prepared.value.path) return continued(input, 'worktree_prepare', contextualRefusalDetails(profile, 'executor_effort_channel_unavailable'), resources, startedAtMs, timings, deps.now);
+    if (!deps.finalizeProfile) {
+      return continued(input, 'worktree_prepare', contextualRefusalDetails(profile, 'executor_effort_channel_unavailable'), resources, startedAtMs, timings, deps.now);
+    }
+    const finalized = await checkpoint('worktree_prepare', timings, deps.now, () => deps.finalizeProfile!(profile, prepared.value.path!));
+    if (finalized.status !== 'ok') return continued(input, 'worktree_prepare', finalized, resources, startedAtMs, timings, deps.now);
+    resources = { ...resources };
+    profile = finalized.value;
+  }
 
   let terminal: RuntimeWorker | undefined;
   if (providerMode) {
@@ -587,19 +607,22 @@ export async function runSupervisedTaskLaunchAssistant(
 }
 
 interface ChildResult { readonly ok: boolean; readonly stdout: string; readonly stderr?: string }
-type ChildExecutor = (args: readonly string[], timeoutMs?: number) => Promise<ChildResult>;
+type ChildExecutor = (args: readonly string[], timeoutMs?: number, env?: Readonly<NodeJS.ProcessEnv>, cwd?: string) => Promise<ChildResult>;
+type OpenCodeNoWriteProof = (worktreePath: string) => Promise<boolean> | boolean;
 
 async function child(
   args: readonly string[],
   cwd: string,
   env: Readonly<NodeJS.ProcessEnv>,
   timeoutMs = 15_000,
+  extraEnv?: Readonly<NodeJS.ProcessEnv>,
+  childCwd = cwd,
 ): Promise<ChildResult> {
   const result = await runProcess({
-    command: args[0]!, args: args.slice(1), cwd, env, inheritParentEnv: true,
+    command: args[0]!, args: args.slice(1), cwd: childCwd, env: extraEnv ? { ...env, ...extraEnv } : env, inheritParentEnv: true,
     allowEmptyStdout: true, timeoutMs,
   });
-  return { ok: result.ok, stdout: result.stdout, stderr: result.stderr || result.error };
+  return { ok: result.ok, stdout: result.stdout, stderr: result.stderr || result.error || '' };
 }
 
 function routeRefusalEdge(
@@ -611,6 +634,78 @@ function routeRefusalEdge(
     evidence: { executorFamily: profile.family, profileVariables: profile.names },
     nextAction: { kind: 'repair_executor_profile', note: 'select an executor route whose model and effort channels are proven' },
   };
+}
+
+
+function hashFile(path: string): string {
+  try { return createHash('sha256').update(readFileSync(path)).digest('hex'); } catch { return 'absent'; }
+}
+
+function configState(cwd: string, env: Readonly<NodeJS.ProcessEnv> = process.env): string {
+  const configHome = env.XDG_CONFIG_HOME?.trim() || join(homedir(), '.config');
+  const roots = openCodeConfigPaths(cwd, configHome, env);
+  const rows: string[] = [];
+  const visit = (path: string): void => {
+    if (!existsSync(path)) { rows.push(`${path}:absent`); return; }
+    const stat = statSync(path);
+    if (stat.isDirectory()) { rows.push(`${path}:directory`); for (const child of readdirSync(path).sort()) visit(join(path, child)); }
+    else rows.push(`${path}:${stat.size}:${hashFile(path)}`);
+  };
+  for (const root of roots) visit(root);
+  return rows.join('\n');
+}
+
+function explicitDefaultAgent(output: string): string {
+  try { const parsed: unknown = JSON.parse(output); return record(parsed) && typeof parsed.default_agent === 'string' ? parsed.default_agent.trim() : ''; } catch { return ''; }
+}
+
+function resolvedAgent(output: string): Record<string, unknown> | null {
+  try { const parsed: unknown = JSON.parse(output); return record(parsed) ? parsed : null; } catch { return null; }
+}
+
+function contextualRefusalDetails(profile: ExecutorProfile, cause: 'executor_effort_channel_unavailable' | 'executor_route_unavailable') {
+  return { cause, actor: 'operator' as const, evidence: { executorFamily: profile.family, route: profile.route }, nextAction: { kind: 'repair_executor_profile' as const, note: 'prove the exact prepared-worktree OpenCode agent-config effort channel' } };
+}
+
+function contextualRefusal(profile: ExecutorProfile, cause: 'executor_effort_channel_unavailable' | 'executor_route_unavailable'): EdgeResult<ExecutorProfile> {
+  return { status: 'continue', ...contextualRefusalDetails(profile, cause) };
+}
+
+export async function finalizeOpenCodeExecutorProfile(
+  profile: ExecutorProfile,
+  worktreePath: string,
+  execute: ChildExecutor,
+  proveNoWrite?: OpenCodeNoWriteProof,
+): Promise<EdgeResult<ExecutorProfile>> {
+  if (profile.family !== 'opencode' || profile.route === 'provider_new_top_level') return { status: 'ok', value: profile };
+  if (!worktreePath.trim()) return contextualRefusal(profile, 'executor_route_unavailable');
+  // Config/Agent probes are not assumed read-only. Production supplies no
+  // proof until an installed-version exact-context mode is established.
+  if (!proveNoWrite || !(await proveNoWrite(worktreePath))) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
+  const before = configState(worktreePath);
+  const config = await execute(['opencode', 'debug', 'config'], 15_000, undefined, worktreePath);
+  if (!config.ok || before !== configState(worktreePath)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
+  const baselineName = explicitDefaultAgent(config.stdout);
+  if (!baselineName) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
+  const baseline = await execute(['opencode', 'debug', 'agent', baselineName], 15_000, undefined, worktreePath);
+  if (!baseline.ok || before !== configState(worktreePath)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
+  const baselineValue = resolvedAgent(baseline.stdout);
+  if (!baselineValue) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
+  const modelMatch = profile.launchCommand.match(/"model":"([^"]+)"/u);
+  const effortMatch = profile.launchCommand.match(/"variant":"([^"]+)"/u);
+  if (!modelMatch?.[1] || !effortMatch?.[1]) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
+  const agentName = `pack-opk-${randomUUID().replaceAll('-', '')}`;
+  const stateRoot = join(tmpdir(), `opk-opencode-state-${randomUUID()}`);
+  const overlay = buildOpenCodeAgentOverlay({ agentName, baseline: baselineValue, model: modelMatch[1], effort: effortMatch[1], stateRoot });
+  const resolved = await execute(['opencode', 'debug', 'agent', agentName], 15_000, { OPENCODE_CONFIG_CONTENT: overlay.inlineConfigJson!, XDG_STATE_HOME: stateRoot }, worktreePath);
+  const resolvedValue = resolvedAgent(resolved.stdout);
+  const model = resolvedValue && record(resolvedValue.model) ? resolvedValue.model : null;
+  if (!resolved.ok || before !== configState(worktreePath) || !resolvedValue || !model
+    || model.modelID !== modelMatch[1].split('/').at(-1) || resolvedValue.variant !== effortMatch[1]
+    || openCodeAgentSemantics(resolvedValue) !== openCodeAgentSemantics(baselineValue)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
+  const paths = await execute(['opencode', 'debug', 'paths'], 15_000, { XDG_STATE_HOME: stateRoot }, worktreePath);
+  if (!paths.ok || !paths.stdout.includes(stateRoot)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
+  return { status: 'ok', value: { ...profile, launchCommand: overlay.command }, evidence: { executorFamily: 'opencode', route: profile.route, exactContext: true } };
 }
 
 export async function resolveLiveExecutorProfile(
@@ -640,12 +735,16 @@ export async function resolveLiveExecutorProfile(
   let capabilities = CURSOR_TASK_ROUTE_CAPABILITIES;
   if (profile.family === 'opencode') {
     const probeOutputs: string[] = [];
-    for (const probe of descriptor.capabilityProbeCommands) {
-      const observation = await execute(probe);
+    const inlineConfig = JSON.stringify({ agent: { [OPENCODE_PACK_AGENT]: { model: profile.model, variant: profile.effort } } });
+    for (const probe of descriptor.capabilityProbeCommands.slice(0, 2)) {
+      const isDebugProbe = probe[0] === 'opencode' && probe[1] === 'debug';
+      const observation = isDebugProbe
+        ? await execute(probe, undefined, { OPENCODE_CONFIG_CONTENT: inlineConfig })
+        : await execute(probe);
       if (!observation.ok) return routeRefusalEdge(profile, 'executor_route_unavailable');
-      probeOutputs.push(observation.stdout);
+      probeOutputs.push(`${observation.stdout}\n${observation.stderr}`);
     }
-    capabilities = openCodeEdgeCapabilities(probeOutputs);
+    capabilities = openCodeEdgeCapabilities(probeOutputs, profile);
   }
 
   const verdict = evaluateExecutorRouteAdmission({
@@ -910,7 +1009,7 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       workClass,
       inheritedEnv,
       startMode,
-      (args, timeoutMs) => child(args, cwd, inheritedEnv, timeoutMs),
+      (args, timeoutMs, envOverride) => child(args, cwd, inheritedEnv, timeoutMs, envOverride),
     ),
     observeManagerRun: async (runId) => {
       const result = resultRecord(envelope(await child(['orca', 'orchestration', 'run-current', '--json'], cwd, env)));
@@ -950,8 +1049,10 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
     ], cwd, env))),
     prepareWorktree: async (request) => prepareWorktreeWithOrca(
       request,
-      (args, timeoutMs) => child(args, cwd, env, timeoutMs),
+      (args, timeoutMs, envOverride, childCwd) => child(args, childCwd ?? cwd, envOverride ?? env, timeoutMs),
     ),
+    finalizeProfile: (profile, worktreePath) => finalizeOpenCodeExecutorProfile(profile, worktreePath,
+      (args, timeoutMs, envOverride, childCwd) => child(args, childCwd ?? cwd, envOverride ?? env, timeoutMs)),
   };
 }
 

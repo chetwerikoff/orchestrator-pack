@@ -400,7 +400,90 @@ function fixture(input: {
     invocations: [invocation],
   };
   writeFileSync(evidencePath, JSON.stringify(evidence));
-  return { dir, intakePath, evidencePath, reviewEvidencePath, authorPath, capturePath, turnResultPath, outputDir, evidence, invocation, body, episode, reviewComments, issueNumber };
+  return { dir, intakePath, evidencePath, reviewEvidencePath, authorPath, capturePath, turnResultPath, outputDir, evidence, invocation, body, episode, reviewComments, issueNumber, phase: input.phase ?? 'final-acceptance', stageEvidencePaths: [reviewEvidencePath, evidencePath] };
+}
+
+function competitivePreLensFixture() {
+  const input = fixture({ phase: 'pre-lens' });
+  const originalCompetitiveEvidence = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+  const architecturalEvidencePath = join(input.dir, 'attempt-002.json');
+  const architecturalEvidence = JSON.parse(JSON.stringify(originalCompetitiveEvidence)) as Record<string, any>;
+  architecturalEvidence.stage = 'architectural-review';
+  architecturalEvidence.stageAttemptId = 'architectural-review-attempt';
+  architecturalEvidence.stageSequence = 2;
+  architecturalEvidence.tier = 'T3';
+  for (const invocation of architecturalEvidence.invocations ?? []) {
+    invocation.stage = 'architectural-review';
+    invocation.stageAttemptId = 'architectural-review-attempt';
+  }
+
+  writeFileSync(input.intakePath, JSON.stringify({
+    schema: 'tier-intake/v1',
+    producer: 'flow-manager',
+    taskIdentity: `issue:${input.issueNumber}`,
+    kind: 'fresh',
+    priorTier: 'T3',
+    firstRevision: REVISION,
+    competitiveDecision: 'required',
+    competitiveRationale: 'fixture freezes the canonical T3 competitive path',
+  }));
+
+  const competitiveEvidence = JSON.parse(JSON.stringify(originalCompetitiveEvidence)) as Record<string, any>;
+  competitiveEvidence.stage = 'competitive';
+  competitiveEvidence.stageAttemptId = 'competitive-attempt';
+  competitiveEvidence.stageSequence = 1;
+  competitiveEvidence.tier = 'T3';
+  for (const [index, invocation] of (competitiveEvidence.invocations ?? []).entries()) {
+    const ordinal = String(index + 1).padStart(2, '0');
+    const originalInvocationId = invocation.invocationId as string;
+    const oldCapturePath = invocation.capturePath as string;
+    const oldCaptureText = readFileSync(oldCapturePath, 'utf8');
+    const competitiveCapturePath = join(input.dir, `pass-01-competitive-${ordinal}.capture.txt`);
+    const architecturalCapturePath = join(input.dir, `pass-02-architectural-review-${ordinal}.capture.txt`);
+    writeFileSync(competitiveCapturePath, oldCaptureText);
+    const architecturalInvocationId = `architectural-review-followup-${ordinal}`;
+    writeFileSync(architecturalCapturePath, oldCaptureText.replace(originalInvocationId, architecturalInvocationId));
+    rmSync(oldCapturePath, { force: true });
+
+    invocation.stage = 'competitive';
+    invocation.stageAttemptId = 'competitive-attempt';
+    delete invocation.terminalResultIdentity;
+    const originalTurnResultPath = invocation.turnResultPath as string;
+    const originalTurnResult = JSON.parse(readFileSync(originalTurnResultPath, 'utf8')) as Record<string, any>;
+    const competitiveTurnResultPath = join(input.dir, `turn-result-competitive-${ordinal}.json`);
+    originalTurnResult.invocation_id = originalInvocationId;
+    originalTurnResult.output = {
+      byte_length: Buffer.byteLength(oldCaptureText),
+      sha256: createHash('sha256').update(oldCaptureText).digest('hex'),
+    };
+    writeFileSync(competitiveTurnResultPath, JSON.stringify(originalTurnResult));
+    invocation.capturePath = competitiveCapturePath;
+    invocation.turnResultPath = competitiveTurnResultPath;
+
+    const architecturalInvocation = architecturalEvidence.invocations[index];
+    architecturalInvocation.invocationId = architecturalInvocationId;
+    architecturalInvocation.stage = 'architectural-review';
+    architecturalInvocation.stageAttemptId = 'architectural-review-attempt';
+    delete architecturalInvocation.terminalResultIdentity;
+    const architecturalTurnResult = JSON.parse(readFileSync(originalTurnResultPath, 'utf8')) as Record<string, any>;
+    const architecturalTurnResultPath = join(input.dir, `turn-result-architectural-review-${ordinal}.json`);
+    const architecturalText = readFileSync(architecturalCapturePath, 'utf8');
+    architecturalTurnResult.invocation_id = architecturalInvocationId;
+    architecturalTurnResult.output = {
+      byte_length: Buffer.byteLength(architecturalText),
+      sha256: createHash('sha256').update(architecturalText).digest('hex'),
+    };
+    writeFileSync(architecturalTurnResultPath, JSON.stringify(architecturalTurnResult));
+    architecturalInvocation.capturePath = architecturalCapturePath;
+    architecturalInvocation.turnResultPath = architecturalTurnResultPath;
+  }
+  input.reviewComments.push(...(architecturalEvidence.invocations ?? []).map((invocation: Record<string, any>, index: number) => (
+    comment(readFileSync(invocation.capturePath, 'utf8'), { id: COMMENT_ID + 200 + index })
+  )));
+  writeFileSync(input.reviewEvidencePath, JSON.stringify(competitiveEvidence));
+  rmSync(input.evidencePath, { force: true });
+  input.stageEvidencePaths = [input.reviewEvidencePath];
+  return { ...input, architecturalEvidence, architecturalEvidencePath };
 }
 
 function produce(
@@ -412,9 +495,9 @@ function produce(
     reviewDir: input.dir,
     outputDir: input.outputDir,
     tierIntakePath: input.intakePath,
-    stageEvidencePaths: [input.reviewEvidencePath, input.evidencePath],
+    stageEvidencePaths: input.stageEvidencePaths,
     authorDispositionsPath: input.authorPath,
-    phase: 'final-acceptance',
+    phase: input.phase,
     artifactSourceTransport: source,
     ...(operatorAdjudication ? { operatorAdjudication: operatorAdjudication as never } : {}),
   });
@@ -492,6 +575,23 @@ function historicalWitnessPartial(receipt: StageCompletenessReceiptV1): {
   partial.relayEligibleCaptures = partial.relayEligibleCaptures.filter((capture) => capture.captureIdentity !== droppedCaptureIdentity);
   return { receipt: partial, droppedCaptureIdentity };
 }
+
+describe('T3 pre-lens stage topology', () => {
+  it('produces competitive-only receipts and requires architectural review once its evidence appears', () => {
+    const input = competitivePreLensFixture();
+    const competitiveOnly = produce(input);
+    expect(competitiveOnly.ok, competitiveOnly.errors.join('\n')).toBe(true);
+    expect(competitiveOnly.files).toContain('stage-completeness-receipt-competitive-attempt.json');
+    expect(competitiveOnly.files).not.toContain('stage-completeness-receipt-architectural-review-attempt.json');
+
+    writeFileSync(input.architecturalEvidencePath, JSON.stringify(input.architecturalEvidence));
+    input.stageEvidencePaths = [input.reviewEvidencePath, input.architecturalEvidencePath];
+    const bothStages = produce(input);
+    expect(bothStages.ok, bothStages.errors.join('\n')).toBe(true);
+    expect(bothStages.files).toContain('stage-completeness-receipt-competitive-attempt.json');
+    expect(bothStages.files).toContain('stage-completeness-receipt-architectural-review-attempt.json');
+  });
+});
 
 describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
   it('accepts an omitted invocations field when the persisted value is empty', () => {

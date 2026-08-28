@@ -19,7 +19,7 @@ export { findLegacyReceiptPaths } from './canonical-review-directory.ts';
 import { isReviewLaneEvidence, isReviewLaneRouting, reviewLaneWaivedMissingSlots, sameReviewLaneRouting } from './review-lane-record.ts';
 import type { PartialMissingSourceWitness, ProducerEvidence, ReviewLaneEvidence } from './create-issue-stage-record-types.ts';
 import { REVIEW_LANE_ROUTING_POLICY_VERSION, normalizeMaterialVerdict, type ReviewLaneRouting } from './review-lane-routing.ts';
-import { canonicalStagePlan } from './create-issue-stage-topology.ts';
+import { canonicalStagePlan, stagesForPhase } from './create-issue-stage-topology.ts';
 import { evaluateStageCredentialingSettlement } from './create-issue-stage-lifecycle-acceptance.ts';
 
 export const GRANDFATHERED_REVIEW_DIR_BASENAMES = new Set([
@@ -1057,18 +1057,11 @@ export function deriveReviewEpisodeState(stageReceiptsInput: readonly unknown[],
   };
 }
 function expectedStagesForPhase(state: ReviewEpisodeStateV1, phase: 'pre-lens' | 'post-lens' | 'final-acceptance'): ReviewStage[] {
-  if (state.tier === 'T3' && phase === 'pre-lens') {
-    return state.canonicalStages.filter((stage) => stage === 'competitive' || stage === 'architectural-review');
-  }
-  if (state.tier === 'T2' && phase === 'pre-lens') {
-    return state.canonicalStages.filter((stage) => stage === 'architectural-review');
-  }
-  if (phase === 'post-lens' && state.tier === 'T3') {
-    return state.canonicalStages.filter((stage) => stage !== 'architectural');
-  }
-  if (phase === 'post-lens') return [];
-  return state.canonicalStages;
+  const observedStages = (Object.keys(state.receiptsByStage) as ReviewStage[])
+    .filter((stage) => state.receiptsByStage[stage].length > 0);
+  return stagesForPhase(state.tier!, state.canonicalStages, phase, observedStages);
 }
+
 export function validateReviewEpisodeTopology(state: ReviewEpisodeStateV1, phase: 'pre-lens' | 'post-lens' | 'final-acceptance'): string[] {
   const errors: string[] = [];
   if (!state.tier) return ['review episode tier is unresolved'];
