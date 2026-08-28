@@ -99,6 +99,7 @@
     "scripts/orchestrator-wake-supervisor.test.ts": "parked",
     "scripts/pack-gpt-browser-path.test.ts": "light",
     "scripts/pack-gpt-reviewer.test.ts": "light",
+    "scripts/pack-review-no-review-reconcile.test.ts": "light",
     "scripts/pack-pr-review-contract.test.ts": "light",
     "scripts/pack-review-carryover.test.ts": "light",
     "scripts/pack-review-ordering.test.ts": "light",
