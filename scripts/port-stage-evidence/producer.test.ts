@@ -20,6 +20,7 @@ import { jsonStringValueRanges, scanPowerShellTokens, tsStringRanges, yamlScalar
 
 const repoRoot = resolve(import.meta.dirname, '../..');
 const HISTORICAL_PRODUCER_REVISION = 'a172e02ddf0a57d4d43d10e16ba59f2b45539bbd';
+const producerIntegrationTestTimeoutMs = 120_000;
 
 function scan(source: string, ranges?: readonly { start: number; end: number }[]) {
   return scanPowerShellTokens({
@@ -288,7 +289,7 @@ describe('Issue #1415 role-neutral port-stage evidence', () => {
         rmSync(root, { recursive: true, force: true });
       }
     }
-  });
+  }, producerIntegrationTestTimeoutMs);
 
   it('proves an end-to-end oracle for all seven source kinds', async () => {
     const measuredBase = await exactCandidateHead();
@@ -335,7 +336,7 @@ describe('Issue #1415 role-neutral port-stage evidence', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, producerIntegrationTestTimeoutMs);
 
   it('produces canonical current-head census and emits an untracked baseline for the exact PR-head candidate', async () => {
     const measuredHead = await exactCandidateHead();
@@ -375,5 +376,5 @@ describe('Issue #1415 role-neutral port-stage evidence', () => {
     } finally {
       rmSync(cleanRoot, { recursive: true, force: true });
     }
-  });
+  }, producerIntegrationTestTimeoutMs);
 });

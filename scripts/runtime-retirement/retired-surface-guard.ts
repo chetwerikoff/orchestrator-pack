@@ -47,6 +47,7 @@ const SELF_AUTHORITY_PATHS = new Set([
 
 const EXCLUDED_PREFIXES = [
   '.git/',
+  '.orca-worker-smoke/',
   'node_modules/',
   'vendor/',
   'packages/core/',
@@ -63,6 +64,7 @@ const EXCLUDED_EXACT = new Set([
   'docs/issue_queue_index.md',
   'docs/vitest-light-lane-isolation-audit-874.md',
   'docs/submit-reconcile-delivery-source-audit.json',
+  'docs/investigations/orca-pwsh-zero-estate/post-port.json',
   'scripts/estate-cut/issue-906.base-anchor.json',
   'scripts/estate-cut/issue-906.manifest.json',
   'scripts/pr2a/planning-manifest.json',

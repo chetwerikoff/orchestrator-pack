@@ -107,6 +107,26 @@ describe('runtime retirement closed-world scanner', () => {
     expect(result.violations.map((entry) => entry.path)).toContain('scripts/fixtures/current.txt');
   });
 
+  it('excludes generated smoke and post-port evidence artifacts', () => {
+    const root = fixture('neutral');
+    const smokeEvidence = join(root, '.orca-worker-smoke/runs/run/completion.pending.body');
+    const postPortEvidence = join(root, 'docs/investigations/orca-pwsh-zero-estate/post-port.json');
+    mkdirSync(dirname(smokeEvidence), { recursive: true });
+    mkdirSync(dirname(postPortEvidence), { recursive: true });
+    writeFileSync(smokeEvidence, 'agent-orchestrator.yaml');
+    writeFileSync(postPortEvidence, 'Invoke-AoCliJson');
+
+    const result = scanRetiredRuntimeSurfaces({ repoRoot: root, paths: [
+      '.orca-worker-smoke/runs/run/completion.pending.body',
+      'docs/investigations/orca-pwsh-zero-estate/post-port.json',
+    ] });
+    expect(result.excludedPaths).toEqual([
+      '.orca-worker-smoke/runs/run/completion.pending.body',
+      'docs/investigations/orca-pwsh-zero-estate/post-port.json',
+    ]);
+    expect(result.violations).toEqual([]);
+  });
+
   it('honors only exact per-file historical dispositions', () => {
     const root = fixture('neutral');
     const manifest = join(root, 'docs/investigations/runtime-hard-cut/historical-dispositions.json');
