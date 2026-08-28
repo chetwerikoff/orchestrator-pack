@@ -1703,7 +1703,7 @@ interface SmokeOrderingBinding {
 
 type SmokeOrderingFailureKind = 'finding' | 'retryable';
 
-function beginSmokeOrdering(
+export function beginSmokeOrdering(
   options: CliOptions,
   issueBody: string,
 ): SmokeOrderingBinding | null {
