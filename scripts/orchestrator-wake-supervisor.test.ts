@@ -11,12 +11,12 @@ import {
   observeGreenfieldFoundationInertProof,
   type CanonicalFoundationPaths,
 } from './lib/cutover/foundation-observation.ts';
+import { childRegistry } from './lib/orchestrator-side-process-observer.ts';
 import { sha256Bytes } from './lib/cutover/stable-stringify.ts';
 import { supervisorChildExitTransition } from './lib/orchestrator-side-process-supervisor.ts';
 import { EMPTY_CRASH_BACKOFF_STATE, type CrashBackoffPolicy } from './runtime/crash-backoff.ts';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
-const observerBridge = path.join(repoRoot, 'scripts/lib/Orchestrator-WakeSupervisor.ps1');
 const supervisorScript = path.join(repoRoot, 'scripts/orchestrator-wake-supervisor.ts');
 
 function runStatus(stateDir: string) {
@@ -40,6 +40,22 @@ function greenfieldPaths(root: string): { repoRoot: string; paths: CanonicalFoun
   const supervisorStateDir = path.join(stateRoot, 'supervisor');
   mkdirSync(path.join(fakeRepo, 'scripts'), { recursive: true });
   mkdirSync(supervisorStateDir, { recursive: true });
+  writeFileSync(
+    path.join(fakeRepo, 'scripts', 'orchestrator-side-process-registry.json'),
+    `${JSON.stringify({
+      schemaVersion: 2,
+      requiredChildIds: ['pr2-scheduler'],
+      children: [{
+        id: 'pr2-scheduler',
+        runtime: 'node',
+        script: 'pr2-foundation/scheduler.ts',
+        sideEffecting: true,
+        cadenceSeconds: 5,
+        stallGraceMultiplier: 14,
+      }],
+    })}\n`,
+    'utf8',
+  );
   return {
     repoRoot: fakeRepo,
     paths: {
@@ -59,24 +75,12 @@ function greenfieldPaths(root: string): { repoRoot: string; paths: CanonicalFoun
 }
 
 describe('Issue #948 wake-supervisor observer bridge', () => {
-  it('returns the canonical three-child registry without loading D928', () => {
-    const command = [
-      `. '${observerBridge.replaceAll("'", "''")}'`,
-      '$rows = @(Get-OrchestratorWakeSupervisorChildRegistry)',
-      '[ordered]@{ count = $rows.Count; ids = @($rows | ForEach-Object { $_.Id }) } | ConvertTo-Json -Compress',
-    ].join('; ');
-    const result = runProcessSync({
-      command: 'pwsh', args: ['-NoProfile', '-Command', command], cwd: repoRoot,
-      inheritParentEnv: true,
+  it('returns the canonical Node scheduler registry without the retired PowerShell route', () => {
+    expect(childRegistry().map((child) => child.Id)).toEqual(['pr2-scheduler']);
+    expect(childRegistry()[0]).toMatchObject({
+      ScriptMarker: 'pr2-foundation/scheduler.ts',
+      SideEffecting: true,
     });
-    expect(result.ok, result.stderr || result.error).toBe(true);
-    const payload = JSON.parse(result.stdout.trim()) as { count: number; ids: string[] };
-    expect(payload.count).toBe(3);
-    expect(payload.ids).toEqual([
-      'review-trigger-reconcile',
-      'review-trigger-reeval',
-      'review-ready-report-state-seed',
-    ]);
   });
 });
 

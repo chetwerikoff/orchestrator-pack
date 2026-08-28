@@ -6,7 +6,7 @@ import { childEntry, childRegistry } from './lib/orchestrator-side-process-obser
 const repoRoot = path.resolve(import.meta.dirname, '..');
 
 describe('Issue #948 pruned side-process registry observer', () => {
-  it('lists exactly the three retained starter children', () => {
+  it('lists exactly the retained Node scheduler child', () => {
     const registryPath = path.join(repoRoot, 'scripts/orchestrator-side-process-registry.json');
     const doc = JSON.parse(fs.readFileSync(registryPath, 'utf8')) as {
       requiredChildIds: string[];
