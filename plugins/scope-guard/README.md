@@ -56,14 +56,14 @@ The implementation lives in wrappers, hooks, CI, and plugin code. It does not pa
 
 Install the managed pre-commit hook in a target repository:
 
-```powershell
-pwsh -NoProfile -File scripts/install-git-hooks.ps1 -InstallScopeGuard
+```bash
+node --experimental-strip-types scripts/install-git-hooks.ts --install-scope-guard
 ```
 
 Remove it with:
 
-```powershell
-pwsh -NoProfile -File scripts/install-git-hooks.ps1 -UninstallScopeGuard
+```bash
+node --experimental-strip-types scripts/install-git-hooks.ts --uninstall-scope-guard
 ```
 
 The installer is idempotent and refuses to overwrite an unmanaged hook.
@@ -71,7 +71,7 @@ The installer is idempotent and refuses to overwrite an unmanaged hook.
 Direct callers pass `--issue` explicitly. Wrappers create an explicit iteration ID
 when one is not supplied.
 
-```powershell
+```bash
 node --experimental-strip-types plugins/scope-guard/bin/scope-check.ts `
   --issue 1352 `
   --mode index
@@ -84,7 +84,7 @@ node --experimental-strip-types plugins/scope-guard/bin/scope-check.ts `
 
 Wrap an agent command:
 
-```powershell
+```bash
 node --experimental-strip-types plugins/scope-guard/bin/agent-wrap.ts `
   --issue 1352 `
   -- cursor agent ...

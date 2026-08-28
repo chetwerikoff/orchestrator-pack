@@ -42,7 +42,7 @@ import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const launcherPath = join(repoRoot, 'scripts/flow-manager-long-running-child.ts');
 const adapterPath = join(repoRoot, 'scripts/flow-manager-browser-gpt-long-run.ts');
-const skillPath = join(repoRoot, '.claude/skills/create-issue-draft/SKILL.md');
+const skillPath = join(repoRoot, '.cursor/skills/create-issue-draft/SKILL.md');
 const rulePath = join(repoRoot, '.cursor/rules/flow-manager-browser-turn-monitoring.mdc');
 const runbookPath = join(repoRoot, 'docs/flow-manager-long-running-child-runbook.md');
 const browserReadmePath = join(repoRoot, 'scripts/chatgpt-browser-turn/README.md');

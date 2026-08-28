@@ -36,19 +36,19 @@ const movedClean = {
     'See [minimum](docs/repository_policy.md#build-the-minimum).',
     'See [verification](docs/repository_policy.md#local-verification).',
     'See [coworker](docs/coworker-delegation.md).',
-    'See [RCA](.claude/skills/investigate-root-cause/SKILL.md).',
-    'See [merge](.claude/skills/merge-with-local-adoption/SKILL.md).',
-    'See [adversary](.claude/skills/adversarial-draft-review/SKILL.md).',
-    'See [GPT](.claude/skills/discuss-with-gpt/SKILL.md).',
-    'See [author](.claude/skills/create-issue-draft/SKILL.md).',
-    'See [external](.claude/skills/study-external-source/SKILL.md).',
-    'See [publish](.claude/skills/publish-issue-draft/SKILL.md).',
-    'See [reviewer](.claude/skills/switch-pack-reviewer/SKILL.md).',
+    'See [RCA](.cursor/skills/investigate-root-cause/SKILL.md).',
+    'See [merge](.cursor/skills/merge-with-local-adoption/SKILL.md).',
+    'See [adversary](.cursor/skills/adversarial-draft-review/SKILL.md).',
+    'See [GPT](.cursor/skills/discuss-with-gpt/SKILL.md).',
+    'See [author](.cursor/skills/create-issue-draft/SKILL.md).',
+    'See [external](.cursor/skills/study-external-source/SKILL.md).',
+    'See [publish](.cursor/skills/publish-issue-draft/SKILL.md).',
+    'See [reviewer](.cursor/skills/switch-pack-reviewer/SKILL.md).',
   ].join('\n'),
   'CLAUDE.md': [
-    'See [architect](.claude/skills/direct-fix-checklist/SKILL.md#architect-role-contract).',
-    'See [author](.claude/skills/discuss-with-gpt/SKILL.md#draft-author-relocation).',
-    'See [RCA](.claude/skills/investigate-root-cause/SKILL.md).',
+    'See [architect](.cursor/skills/direct-fix-checklist/SKILL.md#architect-role-contract).',
+    'See [author](.cursor/skills/discuss-with-gpt/SKILL.md#draft-author-relocation).',
+    'See [RCA](.cursor/skills/investigate-root-cause/SKILL.md).',
   ].join('\n'),
   'docs/browser-gpt-turn-runbook.md': [
     '## Start-of-shift preflight',
@@ -71,16 +71,16 @@ const movedClean = {
     '## Build the minimum',
     '## Local verification',
   ].join('\n'),
-  '.claude/skills/investigate-root-cause/SKILL.md': '# investigate-root-cause\n',
-  '.claude/skills/merge-with-local-adoption/SKILL.md': '# merge-with-local-adoption\n',
-  '.claude/skills/adversarial-draft-review/SKILL.md': '# adversarial-draft-review\n',
-  '.claude/skills/discuss-with-gpt/SKILL.md': '## Draft-author relocation\n',
-  '.claude/skills/create-issue-draft/SKILL.md': '# create-issue-draft\n',
-  '.claude/skills/study-external-source/SKILL.md': '# study-external-source\n',
-  '.claude/skills/publish-issue-draft/SKILL.md': '# publish-issue-draft\n',
-  '.claude/skills/switch-pack-reviewer/SKILL.md': '# switch-pack-reviewer\n',
-  '.claude/skills/direct-fix-checklist/SKILL.md': '## Architect role contract\n',
-  '.cursor/rules/draft-author-relocation.mdc': 'See [author](../../.claude/skills/discuss-with-gpt/SKILL.md#draft-author-relocation).\n',
+  '.cursor/skills/investigate-root-cause/SKILL.md': '# investigate-root-cause\n',
+  '.cursor/skills/merge-with-local-adoption/SKILL.md': '# merge-with-local-adoption\n',
+  '.cursor/skills/adversarial-draft-review/SKILL.md': '# adversarial-draft-review\n',
+  '.cursor/skills/discuss-with-gpt/SKILL.md': '## Draft-author relocation\n',
+  '.cursor/skills/create-issue-draft/SKILL.md': '# create-issue-draft\n',
+  '.cursor/skills/study-external-source/SKILL.md': '# study-external-source\n',
+  '.cursor/skills/publish-issue-draft/SKILL.md': '# publish-issue-draft\n',
+  '.cursor/skills/switch-pack-reviewer/SKILL.md': '# switch-pack-reviewer\n',
+  '.cursor/skills/direct-fix-checklist/SKILL.md': '## Architect role contract\n',
+  '.cursor/rules/draft-author-relocation.mdc': 'See [author](../skills/discuss-with-gpt/SKILL.md#draft-author-relocation).\n',
   '.cursor/rules/flow-manager-browser-turn-monitoring.mdc': [
     'See [preflight](../../docs/browser-gpt-turn-runbook.md#start-of-shift-preflight).',
     'See [prepare](../../docs/browser-gpt-turn-runbook.md#prepare-one-turn).',
@@ -220,13 +220,13 @@ describe('real representative declarative ports', () => {
     const missingSkill = evaluateDeclarativeGate(agentRulesMovedContentGate, memorySnapshot({
       ...movedClean,
       'AGENTS.md': movedClean['AGENTS.md'].replace(
-        'See [merge](.claude/skills/merge-with-local-adoption/SKILL.md).\n',
+        'See [merge](.cursor/skills/merge-with-local-adoption/SKILL.md).\n',
         '',
       ),
     }));
     expect(missingSkill.status).toBe('FAIL');
     expect(missingSkill.details).toContain(
-      'AGENTS.md must contain exactly 1 occurrence(s) of (.claude/skills/merge-with-local-adoption/SKILL.md); found 0',
+      'AGENTS.md must contain exactly 1 occurrence(s) of (.cursor/skills/merge-with-local-adoption/SKILL.md); found 0',
     );
   });
 

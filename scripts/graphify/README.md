@@ -14,7 +14,7 @@ into CI, a required status check, or any worker session/report status transition
 
 - Never runs `graphify install` or any `graphify <platform> install` variant. Those subcommands
   write into `CLAUDE.md`, `AGENTS.md`, or `.cursor/rules/**` -- files this repo's architect owns.
-  `scripts/graphify/lib/Resolve-GraphifyEnv.ps1` is the single point that shells out to the real
+  `scripts/graphify/lib/graphify-env.ts` is the single point that shells out to the real
   `graphify` executable and hard-restricts the allowed subcommand set to `extract` and `update`;
   `scripts/graphify/check-graphify-no-installer.ts` guards this statically.
 - No doc/PDF/image/video extraction, no LLM-backed community-naming (`label`, `cluster-only
@@ -27,7 +27,7 @@ into CI, a required status check, or any worker session/report status transition
 ## One-time setup (per machine)
 
 ```
-pwsh scripts/graphify/bootstrap.ps1
+node --experimental-strip-types scripts/graphify/bootstrap.ts
 ```
 
 Creates an isolated Python virtual environment at `.graphify/venv` (never the machine's global
@@ -46,20 +46,20 @@ venv: `pip install graphifyy && pip freeze > scripts/graphify/requirements.lock.
 ## Build / refresh / query
 
 ```
-pwsh scripts/graphify/build-graph.ps1                        # first build, whole repo
-pwsh scripts/graphify/build-graph.ps1 -Path scripts           # or a subset
-pwsh scripts/graphify/refresh-graph.ps1                       # re-extract changed files only
-pwsh scripts/graphify/query-graph.ps1 hubs --top 10
-pwsh scripts/graphify/query-graph.ps1 cluster --file scripts/pr-scope-check.ts
-pwsh scripts/graphify/query-graph.ps1 cycle --file docs/review-cycle-cap.mjs
+node --experimental-strip-types scripts/graphify/build-graph.ts                        # first build, whole repo
+node --experimental-strip-types scripts/graphify/build-graph.ts --path scripts           # or a subset
+node --experimental-strip-types scripts/graphify/refresh-graph.ts                       # re-extract changed files only
+node scripts/graphify/query-graph.mjs hubs --top 10
+node scripts/graphify/query-graph.mjs cluster --file scripts/pr-scope-check.ts
+node scripts/graphify/query-graph.mjs cycle --file docs/review-cycle-cap.mjs
 ```
 
-`build-graph.ps1` wraps `graphify extract <path> --code-only --out .graphify/graph`.
-`refresh-graph.ps1` wraps `graphify update .graphify/graph` (no LLM, incremental). Both write to
+`build-graph.ts` wraps `graphify extract <path> --code-only --out .graphify/graph`.
+`refresh-graph.ts` wraps `graphify update .graphify/graph` (no LLM, incremental). Both write to
 the untracked `.graphify/` working directory (gitignored) -- the graph is a working artifact, not
 a committed source file.
 
-`query-graph.ps1` / `query-graph.mjs` is a pure reader over the already-built `graphify-out/graph.json`
+`query-graph.mjs` is a pure reader over the already-built `graphify-out/graph.json`
 -- it never re-runs extraction or shells out to `graphify` at all. It answers the three questions
 a worker needs from the graph: which files/symbols have the most edges (`hubs`), which
 cluster/community a file belongs to (`cluster --file <path>`), and whether a file sits on an

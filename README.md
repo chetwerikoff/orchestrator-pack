@@ -50,7 +50,7 @@ The pack is designed to survive runtime upgrades and replacements:
 - [`scripts/pack-worker-report`](scripts/pack-worker-report) is the public worker
   lifecycle report command and executes the native Node 22 TypeScript implementation
   in [`scripts/pack-worker-report.ts`](scripts/pack-worker-report.ts). The retired
-  PowerShell implementation is not a compatibility or fallback path.
+  legacy shell implementation is not a compatibility or fallback path.
 - Required CI, smoke, findings, and handoff must all bind to the current PR head.
 
 ### Repository guards
@@ -70,7 +70,6 @@ The pack is designed to survive runtime upgrades and replacements:
 - Node.js 22.x
 - npm 10.x
 - Git 2.25+
-- PowerShell 7+ for retained PowerShell entrypoints
 - authenticated GitHub transport for repository operations
 - the configured agent and reviewer CLIs required by the selected workflow
 
@@ -91,8 +90,8 @@ npm run lint:foundation
 npm run test:foundation
 npm run gate-runner-selftest
 node --experimental-strip-types scripts/runtime-retirement/retired-surface-selftest.ts
-pwsh -NoProfile -File scripts/verify.ps1
-pwsh -NoProfile -File scripts/check-reusable.ps1
+node --experimental-strip-types scripts/verify.ts
+node --experimental-strip-types scripts/verify.ts --reusable-only
 ```
 
 Run affected plugin suites and task-specific focused tests in addition to these

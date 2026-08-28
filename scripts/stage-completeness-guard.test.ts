@@ -790,7 +790,7 @@ describe('Issue #1150 receipt-backed ledger', () => {
         '--stage-receipt', stageReceiptPaths[1]!,
         '--verified-relay-evidence', join(dir, 'verified-relay-evidence.json'),
       ];
-      const skill = readFileSync(join(process.cwd(), '.claude/skills/create-issue-draft/SKILL.md'), 'utf8');
+      const skill = readFileSync(join(process.cwd(), '.cursor/skills/create-issue-draft/SKILL.md'), 'utf8');
       expect(argv.filter((value) => value.startsWith('--'))).toEqual(documentedFindingLedgerFlags(skill));
       expect(runFindingLedgerCli(argv)).toBe(0);
       const validRemoteAuthorityPath = join(dir, 'remote-authority-valid.json');
@@ -833,7 +833,7 @@ describe('Issue #1150 receipt-backed ledger', () => {
 
 describe('Issue #1287 acceptance inventory parity', () => {
   it('keeps the Skill inventory aligned with acceptance inputs and outputs in both directions', () => {
-    const skill = readFileSync(join(process.cwd(), '.claude/skills/create-issue-draft/SKILL.md'), 'utf8');
+    const skill = readFileSync(join(process.cwd(), '.cursor/skills/create-issue-draft/SKILL.md'), 'utf8');
     const start = skill.indexOf('## Review artifacts');
     const end = skill.indexOf('## GitHub issue journal', start);
     expect(start).toBeGreaterThanOrEqual(0);

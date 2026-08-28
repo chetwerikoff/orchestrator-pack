@@ -452,7 +452,7 @@
       "replacement": {
         "kind": "required-file-rule",
         "gateId": "verify-required-files",
-        "path": "scripts/bootstrap.ps1"
+        "path": "scripts/bootstrap.ts"
       }
     },
     {
@@ -468,7 +468,7 @@
       "replacement": {
         "kind": "required-file-rule",
         "gateId": "verify-required-files",
-        "path": "scripts/check-reusable.ps1"
+        "path": "scripts/verify.ts"
       }
     },
     {
@@ -484,7 +484,7 @@
       "replacement": {
         "kind": "required-file-rule",
         "gateId": "verify-required-files",
-        "path": "scripts/install-git-hooks.ps1"
+        "path": "scripts/install-git-hooks.ts"
       }
     },
     {
@@ -516,7 +516,7 @@
       "replacement": {
         "kind": "required-file-rule",
         "gateId": "verify-required-files",
-        "path": "scripts/lint-self-architect.ps1"
+        "path": "scripts/lint-self-architect.ts"
       }
     },
     {
@@ -532,7 +532,7 @@
       "replacement": {
         "kind": "required-file-rule",
         "gateId": "verify-required-files",
-        "path": "scripts/verify.ps1"
+        "path": "scripts/verify.ts"
       }
     },
     {

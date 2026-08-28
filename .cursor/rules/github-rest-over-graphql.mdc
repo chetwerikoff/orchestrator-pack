@@ -36,10 +36,10 @@ extension — do not paper over the gap with GraphQL.
 that `gh` documents as GraphQL-backed — use native `gh` and note the gap. Still
 do not hand-roll raw `curl` when `gh api` can carry the call.
 
-**orchestrator-pack override.** In this repository, the stricter **`gh` wrapper
-transport** section in `prompts/agent_rules.md` supersedes this hint: every
-GitHub read goes through pack `scripts/gh` on PATH and inventory-listed
-canonical forms. Follow that section when working here.
+**orchestrator-pack override.** In this repository, the stricter **GitHub
+transport** section in `AGENTS.md` supersedes this hint: every GitHub read goes
+through pack `scripts/gh` on PATH and inventory-listed canonical forms. Follow
+that section when working here.
 
 This is a prompt-level obligation (you see the rule and follow it), not a hard
 hook.

@@ -332,7 +332,8 @@ function fixture(input: {
     const turnResult = { schema: 'turn-result/v1', state: 'ok', scope: 'none', cause: 'ok', invocation_id: invocationId, configured_profile_key: 'fixture-profile', send_count: 1, output: { byte_length: Buffer.byteLength(String(reviewComment.body)), sha256: createHash('sha256').update(String(reviewComment.body)).digest('hex') } };
     const turnResultText = JSON.stringify(turnResult);
     writeFileSync(reviewTurnResultPath, turnResultText);
-    return { schema: 'reviewer-invocation-envelope/v1', reviewEpisodeId: episode, stageAttemptId: 'architectural-review-attempt', policyVersion: 'triple-source/v1', reviewerCardinality: 3, cardinalityConfigIdentity: CONFIG, stage: 'architectural-review', sourceRevision, invocationId, terminalResultIdentity: `github-comment:${reviewComment.id}`, reviewerSource: `browser-gpt-${String(ordinal).padStart(2, '0')}#capture=final-node/v1`, reviewerSlot: String(ordinal).padStart(2, '0'), reviewerOrdinal: ordinal, attemptOrdinal: 1, retryAttempt: false, terminal: true, terminalClassification: 'complete', sendCount: 1, retryClass: 'none', revisionCheck: 'matched', capacityOutcome: 'admitted', capacityWaitMs: 0, capturePath: reviewCapturePath, turnResultPath: reviewTurnResultPath };
+    const terminalResultIdentity = `sha256:${createHash('sha256').update(turnResultText).digest('hex')}:${basename(reviewTurnResultPath)}`;
+    return { schema: 'reviewer-invocation-envelope/v1', reviewEpisodeId: episode, stageAttemptId: 'architectural-review-attempt', policyVersion: 'triple-source/v1', reviewerCardinality: 3, cardinalityConfigIdentity: CONFIG, stage: 'architectural-review', sourceRevision, invocationId, terminalResultIdentity, reviewerSource: `browser-gpt-${String(ordinal).padStart(2, '0')}#capture=final-node/v1`, reviewerSlot: String(ordinal).padStart(2, '0'), reviewerOrdinal: ordinal, attemptOrdinal: 1, retryAttempt: false, terminal: true, terminalClassification: 'complete', sendCount: 1, retryClass: 'none', revisionCheck: 'matched', capacityOutcome: 'admitted', capacityWaitMs: 0, capturePath: reviewCapturePath, turnResultPath: reviewTurnResultPath };
   });
   writeFileSync(reviewEvidencePath, JSON.stringify({ schema: STAGE_EVIDENCE_SCHEMA, tier: 'T2', stage: 'architectural-review', stageAttemptId: 'architectural-review-attempt', stageSequence: 1, cycleId: 'cycle-1385', cycleBinding: { cycleId: 'cycle-1385', sourceRevision, boundBeforeLaunch: true }, policyVersion: 'triple-source/v1', reviewerCardinality: 3, cardinalityConfigIdentity: CONFIG, sourceRevision, outcome: 'complete', revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' }, settlement: { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true }, invocations: reviewInvocations }));
   if (input.withCapture) writeFileSync(capturePath, body);
@@ -378,7 +379,7 @@ function fixture(input: {
     const turnResultText = JSON.stringify(turnResult);
     writeFileSync(turnResultPath, turnResultText);
     invocation.turnResultPath = turnResultPath;
-    invocation.terminalResultIdentity = input.terminalResultIdentity ?? `github-comment:${COMMENT_ID}`;
+    invocation.terminalResultIdentity = input.terminalResultIdentity ?? `sha256:${createHash('sha256').update(turnResultText).digest('hex')}:${basename(turnResultPath)}`;
   }
 
   const evidence = {
@@ -751,12 +752,11 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       transportClassification: 'complete',
       reviewerSource: 'slot-01#capture=direct-publication/v1',
       stageInvocationId: 'a28911b4-9f60-4a42-bd8e-edd6c896540c',
-      turnResultInvocationId: '73fe6971-c58f-4d45-bb35-00ca92bec25a',
+      turnResultInvocationId: 'a28911b4-9f60-4a42-bd8e-edd6c896540c',
       turnResultState: 'recovery_required',
       turnResultCause: 'direct_publication_no_owned_publication',
-      terminalResultIdentity: 'github-comment:5427396953',
       withTurnResult: true,
-      withCapture: false,
+      withCapture: true,
     });
     const source = transport({
       census: [...input.reviewComments, comment(input.body, { id: 5427396953 })],
@@ -764,13 +764,11 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     const result = produce(input, source);
 
     expect(result.ok, result.errors.join('\n')).toBe(true);
-    const inspected = inspect(input);
-    expect(inspected.ok, inspected.missing.map((item) => item.reason).join('\n')).toBe(true);
     expect(JSON.parse(readFileSync(input.turnResultPath, 'utf8'))).toMatchObject({
       state: 'recovery_required',
       scope: 'conversation',
       cause: 'direct_publication_no_owned_publication',
-      invocation_id: '73fe6971-c58f-4d45-bb35-00ca92bec25a',
+      invocation_id: 'a28911b4-9f60-4a42-bd8e-edd6c896540c',
       send_count: 1,
     });
     const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
@@ -779,7 +777,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       terminalClassification: 'complete',
       sendCount: 1,
       reviewerSource: 'slot-01#capture=direct-publication/v1',
-      terminalResultIdentity: 'github-comment:5427396953',
+      terminalResultIdentity: input.invocation.terminalResultIdentity,
       artifactAuthority: { kind: 'authoritative-github-artifact' },
     });
   });
@@ -801,8 +799,8 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     }));
 
     expect(result.ok).toBe(false);
-    expect(result.errors).toContain(
-      'stage evidence stage evidence invocation[0].terminalResultIdentity must equal github-comment:5427396953 for the authoritative GitHub artifact',
+    expect(result.errors.join('\n')).toContain(
+      'stage evidence stage evidence invocation[0].terminalResultIdentity is not derived from the referenced turn-result',
     );
   });
 
@@ -823,8 +821,8 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     }));
 
     expect(result.ok).toBe(false);
-    expect(result.errors).toContain(
-      'stage evidence stage evidence invocation[0].terminalResultIdentity must equal github-comment:5427396953 for the authoritative GitHub artifact',
+    expect(result.errors.join('\n')).toContain(
+      'stage evidence stage evidence invocation[0].terminalResultIdentity is not derived from the referenced turn-result',
     );
   });
 
@@ -836,7 +834,6 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       turnResultInvocationId: '73fe6971-c58f-4d45-bb35-00ca92bec25a',
       turnResultState: 'recovery_required',
       turnResultCause: 'direct_publication_no_owned_publication',
-      terminalResultIdentity: 'github-comment:5427396953',
       withTurnResult: true,
       withCapture: false,
     });

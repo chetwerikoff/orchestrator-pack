@@ -1,9 +1,18 @@
 {
-  "canonicalRoot": ".claude/skills",
+  "canonicalRoot": ".cursor/skills",
   "targets": [
     {
-      "root": ".cursor/skills",
-      "canonicalLinkPrefix": "../../../.claude/skills"
+      "root": ".claude/skills",
+      "canonicalLinkPrefix": "../../../.cursor/skills"
     }
+  ],
+  "implementationSupport": [
+    ".claude/skills/discuss-with-gpt/.gitignore",
+    ".claude/skills/discuss-with-gpt/config.mjs",
+    ".claude/skills/discuss-with-gpt/driver.mjs",
+    ".claude/skills/discuss-with-gpt/launch-chrome.sh",
+    ".claude/skills/discuss-with-gpt/local.config.example.json",
+    ".claude/skills/discuss-with-gpt/verify-cdp-owner.mjs",
+    ".claude/skills/publish-issue-draft/opencode-publish.sh"
   ]
 }

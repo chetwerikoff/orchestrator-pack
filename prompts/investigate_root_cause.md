@@ -21,7 +21,7 @@ Do **not** run when:
 
 - The ask is pure implementation with no analysis (build/fix/add X only).
 - The ask is external adoption or fit research — use **`study-external-source`**
-  (`.claude/skills/study-external-source/`, `.cursor/skills/` if present) instead.
+  (`.cursor/skills/study-external-source/`; use `.claude/skills/` only for explicit implementation-support assets) instead.
 - A single tracked GitHub Issue already fully answers the question — work that
   issue instead of duplicating investigation.
 

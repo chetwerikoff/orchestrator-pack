@@ -1,5 +1,5 @@
 # Pack-owned Codex review wrapper: dependency preflight followed by the neutral
-# reviewer plugin entrypoint. Accepts the same CLI-style flags as review.ps1
+# reviewer plugin entrypoint. Accepts the same CLI-style flags as the TypeScript reviewer entrypoint
 # (--repo-root, --base).
 #Requires -Version 5.1
 param()
@@ -24,17 +24,17 @@ Push-Location -LiteralPath $resolvedRoot
 try {
     Install-PackReviewDependencies -WrapperName $Script:WrapperName
 
-    $reviewScript = Join-Path $PSScriptRoot '../plugins/codex-pr-reviewer/bin/review.ps1'
+    $reviewScript = Join-Path $PSScriptRoot '../plugins/codex-pr-reviewer/bin/review.ts'
     if (-not (Test-Path -LiteralPath $reviewScript -PathType Leaf)) {
         Write-Error "Pack review wrapper not found at $reviewScript"
     }
 
     $forward = $forwardArgs.ToArray()
     if ($forward.Count -gt 0) {
-        & $reviewScript --repo-root $resolvedRoot --base $cli.Base @forward
+        & node --experimental-strip-types $reviewScript --repo-root $resolvedRoot --base $cli.Base @forward
     }
     else {
-        & $reviewScript --repo-root $resolvedRoot --base $cli.Base
+        & node --experimental-strip-types $reviewScript --repo-root $resolvedRoot --base $cli.Base
     }
     exit $LASTEXITCODE
 }

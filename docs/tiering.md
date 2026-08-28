@@ -1,7 +1,7 @@
 # Task complexity tiering (architect / draft-author)
 
 Worker **pre-flight** (blocking rubric reassessment before implementation) lives in
-[`AGENTS.md`](../AGENTS.md) (**Review / CI / Handoff worker contract**).
+[`AGENTS.md`](../AGENTS.md) (**Worker pre-flight**).
 This page holds the full tier rubric and per-tier draft-review flow for architects and task-spec authors.
 
 ## Task complexity tier rubric
@@ -98,7 +98,7 @@ For newly authored tasks, the GitHub Issue is the sole live task specification
 and queue entry. The mirrorless flow creates no tracked or in-repository draft or
 queue-index artifact. Its working anchor, immutable pulled revisions, reviewer
 captures, chat references, stage receipts, relay evidence, the finding ledger,
-and related audit state remain outside the repository. `.claude/skills/create-issue-draft/SKILL.md`
+and related audit state remain outside the repository. `.cursor/skills/create-issue-draft/SKILL.md`
 owns the exact procedure and layout.
 
 ### Guard-alignment and activation ordering

@@ -1,5 +1,5 @@
 ---
-description: TS-first script authoring and PowerShell freeze during the migration
+description: TS-first script authoring and legacy shell freeze during the migration
 globs:
   - scripts/**
   - package.json
@@ -10,7 +10,7 @@ alwaysApply: false
 # TS-first script authoring (Issue #837)
 
 - Author every **net-new script file** under `scripts/**` in **TypeScript/Node**.
-- PowerShell is frozen during the migration. Add a net-new `.ps1` only when the
+- legacy shell is frozen during the migration. Add a net-new `.ps1` only when the
   task spec contains an explicit written justification for why TypeScript/Node is
   unsuitable for that specific file.
 - This applies only to new files. Existing `.ps1` files and migration-defined
