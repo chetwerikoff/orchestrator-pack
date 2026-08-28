@@ -184,6 +184,188 @@ export function normalizeGithubReviewSummaries(value: unknown, label: string): G
   });
 }
 
+export type DirectPackReviewVerdict = 'clean' | 'findings';
+
+export interface DirectPackReviewEvidence {
+  readonly reviewId: number | string;
+  readonly headSha: string;
+  readonly verdict: DirectPackReviewVerdict;
+  readonly blocking: boolean;
+  readonly userLogin: string;
+  readonly submittedAt: string;
+  readonly body: string;
+  readonly url: string;
+}
+
+export interface DirectPackReviewProjection {
+  readonly hasLegitimateReview: boolean;
+  readonly legitimateReviewCount: number;
+  readonly unresolvedBlockingReviewIds: readonly (number | string)[];
+  readonly unresolvedCurrentHeadBlockingReviewIds: readonly (number | string)[];
+  readonly unresolvedAncestorBlockingReviewIds: readonly (number | string)[];
+  readonly state: 'missing-review' | 'blocked' | 'clear';
+}
+
+const DIRECT_PACK_REVIEW_MARKER_PATTERN =
+  /<!-- opk-pack-review:v1 head=([0-9a-f]{40}) verdict=(clean|findings) blocking=(true|false) -->/g;
+
+function normalizedDirectReviewSha(value: unknown): string {
+  const candidate = trim(value).toLowerCase();
+  return /^[0-9a-f]{40}$/.test(candidate) ? candidate : '';
+}
+
+/**
+ * Admit the r12/r13 direct-review GitHub artifact. This intentionally proves
+ * only owner-authored, exact-commit GitHub evidence; model/UI provenance and
+ * optional finding metadata are not part of the machine contract.
+ */
+export function parseDirectPackReviewEvidence(
+  review: GithubReviewSummary,
+  repositoryOwnerLogin: string,
+): DirectPackReviewEvidence | null {
+  const owner = trim(repositoryOwnerLogin).toLowerCase();
+  const commitId = normalizedDirectReviewSha(review.commitId);
+  if (!owner || review.userLogin.toLowerCase() !== owner || review.state !== 'COMMENTED' || !commitId) {
+    return null;
+  }
+  DIRECT_PACK_REVIEW_MARKER_PATTERN.lastIndex = 0;
+  const matches = [...review.body.matchAll(DIRECT_PACK_REVIEW_MARKER_PATTERN)];
+  DIRECT_PACK_REVIEW_MARKER_PATTERN.lastIndex = 0;
+  if (matches.length !== 1) return null;
+  const marker = matches[0]!;
+  const headSha = normalizedDirectReviewSha(marker[1]);
+  const verdict = marker[2] as DirectPackReviewVerdict;
+  const blocking = marker[3] === 'true';
+  if (!headSha || headSha !== commitId || (verdict === 'clean' && blocking)) return null;
+  return {
+    reviewId: review.id,
+    headSha,
+    verdict,
+    blocking,
+    userLogin: review.userLogin,
+    submittedAt: review.submittedAt,
+    body: review.body,
+    url: review.url,
+  };
+}
+
+export function listCanonicalDirectPackReviews(
+  reviews: readonly GithubReviewSummary[],
+  repositoryOwnerLogin: string,
+): DirectPackReviewEvidence[] {
+  return reviews
+    .map((review) => parseDirectPackReviewEvidence(review, repositoryOwnerLogin))
+    .filter((review): review is DirectPackReviewEvidence => review !== null);
+}
+
+/**
+ * Project direct-review blocker state for the current head. A blocker on the
+ * unchanged reviewed head cannot self-clear. A blocker on an ancestor head is
+ * coarsely resolved only after the complete r13 descendant-fix cut.
+ */
+export function projectDirectPackReviewState(input: {
+  readonly reviews: readonly GithubReviewSummary[];
+  readonly repositoryOwnerLogin: string;
+  readonly currentHeadSha: string;
+  readonly workerLifecycle: string;
+  readonly requiredCiGreen: boolean;
+  readonly exactHeadSmokePassed: boolean;
+  readonly isAncestor: (ancestorSha: string, descendantSha: string) => boolean;
+}): DirectPackReviewProjection {
+  const currentHeadSha = normalizedDirectReviewSha(input.currentHeadSha);
+  const canonical = listCanonicalDirectPackReviews(input.reviews, input.repositoryOwnerLogin);
+  if (!currentHeadSha || canonical.length === 0) {
+    return {
+      hasLegitimateReview: false,
+      legitimateReviewCount: 0,
+      unresolvedBlockingReviewIds: [],
+      unresolvedCurrentHeadBlockingReviewIds: [],
+      unresolvedAncestorBlockingReviewIds: [],
+      state: 'missing-review',
+    };
+  }
+
+  const lifecycleComplete = input.workerLifecycle === 'ready_for_review'
+    || input.workerLifecycle === 'completed';
+  const descendantFixComplete = lifecycleComplete
+    && input.requiredCiGreen
+    && input.exactHeadSmokePassed;
+  const relevant: DirectPackReviewEvidence[] = [];
+  const unresolved: Array<number | string> = [];
+  const unresolvedCurrentHead: Array<number | string> = [];
+  const unresolvedAncestor: Array<number | string> = [];
+
+  for (const review of canonical) {
+    if (review.headSha === currentHeadSha) {
+      relevant.push(review);
+      if (review.blocking) {
+        unresolved.push(review.reviewId);
+        unresolvedCurrentHead.push(review.reviewId);
+      }
+      continue;
+    }
+    let ancestor = false;
+    try {
+      ancestor = input.isAncestor(review.headSha, currentHeadSha);
+    } catch {
+      // Unknown lineage cannot establish review legitimacy. A blocking review
+      // stays conservatively blocking until ordinary current-fact reconciliation.
+      if (review.blocking) unresolved.push(review.reviewId);
+      continue;
+    }
+    if (!ancestor) continue;
+
+    // Clean evidence is exact-commit only. r13 carry-over applies only to a
+    // known blocking ancestor after the complete descendant-fix cut.
+    if (!review.blocking) continue;
+
+    relevant.push(review);
+    if (!descendantFixComplete) {
+      unresolved.push(review.reviewId);
+      unresolvedAncestor.push(review.reviewId);
+    }
+  }
+
+  if (relevant.length === 0) {
+    return {
+      hasLegitimateReview: false,
+      legitimateReviewCount: 0,
+      unresolvedBlockingReviewIds: unresolved,
+      unresolvedCurrentHeadBlockingReviewIds: unresolvedCurrentHead,
+      unresolvedAncestorBlockingReviewIds: unresolvedAncestor,
+      state: unresolved.length > 0 ? 'blocked' : 'missing-review',
+    };
+  }
+  return {
+    hasLegitimateReview: true,
+    legitimateReviewCount: relevant.length,
+    unresolvedBlockingReviewIds: unresolved,
+    unresolvedCurrentHeadBlockingReviewIds: unresolvedCurrentHead,
+    unresolvedAncestorBlockingReviewIds: unresolvedAncestor,
+    state: unresolved.length > 0 ? 'blocked' : 'clear',
+  };
+}
+
+export function directReviewReconciliationRequiresDescendantFixFacts(
+  projection: DirectPackReviewProjection,
+): boolean {
+  return projection.unresolvedAncestorBlockingReviewIds.length > 0
+    && projection.unresolvedCurrentHeadBlockingReviewIds.length === 0
+    && projection.unresolvedBlockingReviewIds.length === projection.unresolvedAncestorBlockingReviewIds.length;
+}
+
+/** Ordinary r13 publication read-back: stale review evidence never flips a newer head directly. */
+export function directPackReviewPublicationHeadIsStable(input: {
+  readonly reviewHeadSha: string;
+  readonly prePublicationHeadSha: string;
+  readonly postPublicationHeadSha: string;
+}): boolean {
+  const reviewHead = normalizedDirectReviewSha(input.reviewHeadSha);
+  const before = normalizedDirectReviewSha(input.prePublicationHeadSha);
+  const after = normalizedDirectReviewSha(input.postPublicationHeadSha);
+  return Boolean(reviewHead && reviewHead === before && reviewHead === after);
+}
+
 export function selectActiveSameActorBlockingReviewIds(
   reviews: GithubReviewSummary[],
   actorLogin: string,
