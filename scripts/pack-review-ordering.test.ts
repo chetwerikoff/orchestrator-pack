@@ -437,8 +437,12 @@ describe('Issue #1436 smoke/review ordering', () => {
         options,
       });
 
-      expect(nextHead.cycle?.reviewStageComplete).toBe(true);
-      expect(() => assertIndependentSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD, reviewRuns: [] })).not.toThrow();
+      expect(nextHead.cycle?.reviewStageComplete).toBeUndefined();
+      expect(() => assertIndependentSmokeAdmission({
+        authority: nextHead,
+        headSha: NEXT_HEAD,
+        reviewRuns: [],
+      })).not.toThrow();
     },
   );
 
