@@ -46,6 +46,18 @@ export type PackGptSourceCommentResolution =
       reason: string;
     };
 
+export type PackGptSourceHeadCommentResolution =
+  | {
+      kind: 'credentialed';
+      identity: PackGptSourceIdentity;
+      payload: GptMappedReviewPayload;
+      receipt: PackGptSourceCommentReceipt;
+    }
+  | {
+      kind: 'missing' | 'ambiguous' | 'conflict' | 'provenance_unresolved';
+      reason: string;
+    };
+
 function trim(value: unknown): string {
   return String(value ?? '').trim();
 }
@@ -233,5 +245,122 @@ export async function resolvePackGptSourceComment(options: {
     kind: 'credentialed',
     payload: reparsed.payload,
     receipt: receipt(options.identity, reread),
+  };
+}
+
+
+function samePackGptSourceHead(
+  identity: PackGptSourceIdentity,
+  target: { repository: string; prNumber: number; headSha: string },
+): boolean {
+  return identity.repository === target.repository
+    && identity.prNumber === target.prNumber
+    && identity.headSha.toLowerCase() === target.headSha.toLowerCase();
+}
+
+/**
+ * Marker-first exact-head discovery for the no-local-run reconciliation path.
+ * The run/slot/invocation identity is discovered only from the canonical
+ * first-line marker; all credentialing, target/edit checks, payload mapping,
+ * and exact-id reread rules are the same as the identity-first resolver.
+ */
+export async function resolvePackGptSourceCommentForHead(options: {
+  repository: string;
+  prNumber: number;
+  headSha: string;
+  transport: PackGptSourceCommentTransport;
+}): Promise<PackGptSourceHeadCommentResolution> {
+  const repository = trim(options.repository);
+  const headSha = trim(options.headSha).toLowerCase();
+  if (!/^[^/\s]+\/[^/\s]+$/.test(repository)
+      || !Number.isInteger(options.prNumber)
+      || options.prNumber <= 0
+      || !/^[0-9a-f]{40}$/.test(headSha)) {
+    return { kind: 'provenance_unresolved', reason: 'source_comment_head_binding_invalid' };
+  }
+
+  let actorLogin: string;
+  try {
+    actorLogin = trim(await options.transport.resolveActorLogin());
+  } catch {
+    return { kind: 'provenance_unresolved', reason: 'source_comment_actor_resolution_failed' };
+  }
+  if (!actorLogin) {
+    return { kind: 'provenance_unresolved', reason: 'source_comment_actor_resolution_empty' };
+  }
+
+  let census: PackGptSourceGithubComment[];
+  try {
+    census = await options.transport.listComments();
+  } catch {
+    return { kind: 'provenance_unresolved', reason: 'source_comment_census_failed' };
+  }
+
+  const target = { repository, prNumber: options.prNumber, headSha };
+  const valid: Array<{
+    comment: PackGptSourceGithubComment;
+    identity: PackGptSourceIdentity;
+    payload: GptMappedReviewPayload;
+  }> = [];
+  let conflictReason = '';
+  for (const comment of census) {
+    const firstLine = comment.body.replace(/\r\n?/g, '\n').split('\n', 1)[0] ?? '';
+    const identity = parsePackGptSourceMarker(firstLine);
+    if (!identity || !samePackGptSourceHead(identity, target)) continue;
+
+    // Principal filtering precedes uniqueness and conflict classification, just
+    // like the identity-first resolver.
+    if (comment.actorLogin !== actorLogin) continue;
+    const parsed = parseCredentialableComment(comment, identity, actorLogin);
+    if (!parsed) continue;
+    if ('conflict' in parsed) {
+      conflictReason ||= parsed.conflict;
+      continue;
+    }
+    valid.push({ comment, identity, payload: parsed.payload });
+  }
+
+  if (conflictReason) return { kind: 'conflict', reason: conflictReason };
+  if (valid.length === 0) return { kind: 'missing', reason: 'source_comment_missing' };
+  if (valid.length !== 1) {
+    return { kind: 'ambiguous', reason: 'source_comment_duplicate_exact_head' };
+  }
+
+  const selected = valid[0]!;
+  let reread: PackGptSourceGithubComment;
+  try {
+    reread = await options.transport.getComment(selected.comment.id);
+  } catch {
+    return { kind: 'provenance_unresolved', reason: 'source_comment_reread_failed' };
+  }
+  if (!sameCommentSnapshot(selected.comment, reread)) {
+    return { kind: 'conflict', reason: 'source_comment_changed_between_census_and_reread' };
+  }
+  if (reread.createdAt !== reread.updatedAt) {
+    return { kind: 'conflict', reason: 'source_comment_edited_on_reread' };
+  }
+  const rereadMarker = parsePackGptSourceMarker(
+    reread.body.replace(/\r\n?/g, '\n').split('\n', 1)[0] ?? '',
+  );
+  if (!rereadMarker
+      || !samePackGptSourceHead(rereadMarker, target)
+      || !samePackGptSourceIdentity(rereadMarker, selected.identity)) {
+    return { kind: 'conflict', reason: 'source_comment_identity_changed_on_reread' };
+  }
+  const reparsed = parseCredentialableComment(reread, selected.identity, actorLogin);
+  if (!reparsed || 'conflict' in reparsed) {
+    return {
+      kind: 'conflict',
+      reason: reparsed && 'conflict' in reparsed
+        ? reparsed.conflict
+        : 'source_comment_identity_changed_on_reread',
+    };
+  }
+
+  return {
+    kind: 'credentialed',
+    identity: selected.identity,
+    payload: reparsed.payload,
+    receipt: receipt(selected.identity, reread),
   };
 }
