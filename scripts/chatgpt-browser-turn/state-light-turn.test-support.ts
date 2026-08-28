@@ -399,6 +399,7 @@ describe('Issue #1752 continuous turn liveness', () => {
         '--chat-url', 'https://chatgpt.com/c/existing',
         '--timeout-ms', '40',
         '--poll-ms', '1',
+        '--entry-liveness-heartbeat',
       ]);
       expect(code).not.toBe(0);
 
