@@ -389,6 +389,30 @@ describe('Issue #1150 stage authority', () => {
     expect(rejected.errors.join('\n')).toContain('competitive is valid only for T3');
   });
 
+  it('accepts T3 pre-lens competitive-only evidence without requiring architectural review', () => {
+    const competitive = sourceStage('competitive', 1, 3);
+    const state = deriveReviewEpisodeState(
+      [competitive.receipt],
+      relay(competitive.captures),
+      authority([competitive.receipt], [], 'required'),
+    );
+    expect(state.errors, state.errors.join('\n')).toEqual([]);
+    expect(validateReviewEpisodeTopology(state, 'pre-lens')).toEqual([]);
+  });
+
+  it('does not let T3 pre-lens architectural-review evidence skip required competitive', () => {
+    const architectural = sourceStage('architectural-review', 1, 3);
+    const state = deriveReviewEpisodeState(
+      [architectural.receipt],
+      relay(architectural.captures),
+      authority([architectural.receipt], [], 'required'),
+    );
+    expect(state.errors, state.errors.join('\n')).toEqual([]);
+    expect(validateReviewEpisodeTopology(state, 'pre-lens').join('\n')).toContain(
+      'competitive requires exactly one credentialing complete-or-proven-partial stageAttemptId',
+    );
+  });
+
   it('honors a frozen T3 competitive skip in core topology validation', () => {
     const architectural = sourceStage('architectural-review', 1, 3);
     const receipts = [architectural.receipt];
