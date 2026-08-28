@@ -38,6 +38,7 @@ export interface SemanticExecutorProfile {
   readonly surface: ExecutorProfileSurface;
   readonly model: string;
   readonly effort: string;
+  readonly cursorContext?: string;
   readonly names: ExecutorProfileNames;
 }
 
@@ -146,6 +147,8 @@ export const CURSOR_SMOKE_CAPABILITY: RouteCapability = {
 
 const PROFILE_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/+-]*$/u;
 const MODEL_TOKEN_CLASS = 'A-Za-z0-9._:/+-';
+const CURSOR_CONTEXT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/u;
+const CURSOR_SPAWN_MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/+-]*\[context=[A-Za-z0-9][A-Za-z0-9._+-]*,reasoning=[A-Za-z0-9][A-Za-z0-9._:/+-]*,fast=false\]$/u;
 
 function quote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
@@ -188,6 +191,14 @@ export function resolveSemanticExecutorProfile(input: {
   const descriptor = descriptorForToken(input.surface, values[0]);
   if (!descriptor) return { ok: false, code: 'executor_profile_agent_unsupported', variables: [input.names[0]] };
 
+  const rawCursorContext = input.env.PACK_EXECUTOR_CURSOR_CONTEXT;
+  const cursorContext = descriptor.family === 'cursor' && rawCursorContext !== undefined
+    ? rawCursorContext.trim()
+    : undefined;
+  if (cursorContext !== undefined && !CURSOR_CONTEXT_PATTERN.test(cursorContext)) {
+    return { ok: false, code: 'executor_profile_malformed', variables: ['PACK_EXECUTOR_CURSOR_CONTEXT'] };
+  }
+
   return {
     ok: true,
     profile: {
@@ -195,6 +206,7 @@ export function resolveSemanticExecutorProfile(input: {
       surface: input.surface,
       model: values[1],
       effort: values[2],
+      ...(cursorContext !== undefined ? { cursorContext } : {}),
       names: input.names,
     },
   };
@@ -207,6 +219,14 @@ export function cursorOpaqueModelId(profile: Pick<SemanticExecutorProfile, 'fami
 
 export function catalogIdentityForProfile(profile: SemanticExecutorProfile): string {
   return profile.family === 'cursor' ? cursorOpaqueModelId(profile) : profile.model;
+}
+
+function cursorSpawnModelId(profile: SemanticExecutorProfile): string {
+  const opaqueModelId = cursorOpaqueModelId(profile);
+  if (profile.cursorContext === undefined) return opaqueModelId;
+  const modelArgument = `${profile.model}[context=${profile.cursorContext},reasoning=${profile.effort},fast=false]`;
+  if (!CURSOR_SPAWN_MODEL_PATTERN.test(modelArgument)) throw new Error('cursor_spawn_model_invalid');
+  return modelArgument;
 }
 
 export function executorCatalogContains(profile: SemanticExecutorProfile, output: string): boolean {
@@ -398,7 +418,7 @@ export function evaluateExecutorRouteAdmission(input: {
 export function buildExecutorCommand(profile: SemanticExecutorProfile): ExecutorInvocationShape {
   const descriptor = EXECUTOR_FAMILY_DESCRIPTORS[profile.family];
   if (profile.family === 'cursor') {
-    const modelArgument = cursorOpaqueModelId(profile);
+    const modelArgument = cursorSpawnModelId(profile);
     const executable = profile.surface === 'task' ? descriptor.taskExecutable : descriptor.smokeExecutable;
     return {
       executable,
@@ -549,6 +569,6 @@ export function buildProviderInvocation(profile: SemanticExecutorProfile): Provi
   const descriptor = EXECUTOR_FAMILY_DESCRIPTORS.cursor;
   return {
     orcaAgent: descriptor.orcaAgent,
-    argv: ['--agent', descriptor.orcaAgent, '--model', cursorOpaqueModelId(profile)],
+    argv: ['--agent', descriptor.orcaAgent, '--model', cursorSpawnModelId(profile)],
   };
 }

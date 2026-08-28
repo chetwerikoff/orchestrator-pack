@@ -1349,15 +1349,55 @@ describe('orchestration mail reconciliation', () => {
       read: 0,
     }], target, { submitted });
     const suffix = `${process.pid}-${Date.now()}`;
+    const ledgerPath = join(tmpdir(), `opk-reconcile-live-${suffix}.json`);
+    const lockPath = join(tmpdir(), `opk-reconcile-live-${suffix}.lock`);
 
     const result = await runOrchestrationMailReconcileTick(deps, {
-      ledgerPath: join(tmpdir(), `opk-reconcile-live-${suffix}.json`),
-      lockPath: join(tmpdir(), `opk-reconcile-live-${suffix}.lock`),
+      ledgerPath,
+      lockPath,
       now: () => 1_000,
     });
 
     expect(deps.writes).toBe(1);
     expect(result.nudged).toBe(1);
+    expect(result.deliveryEvidence).toEqual([{
+      workerGeneration: target.identity.generation,
+      runId: 'run_live',
+      messageId: 'msg_live',
+      delivery: 'delivered-looking',
+      terminalReceipt: 'unproven',
+    }]);
+
+    const suppressed = await runOrchestrationMailReconcileTick(deps, {
+      ledgerPath,
+      lockPath,
+      now: () => 1_001,
+    });
+    expect(suppressed.skipped).toBe(1);
+    expect(suppressed.deliveryEvidence).toEqual([]);
+    expect(deps.writes).toBe(1);
+  });
+
+  it('fails closed without a complete current worker identity', async () => {
+    const target = worker('term_missing_generation', '');
+    const deps = reconciliationDeps([{
+      id: 'msg_missing_generation',
+      run_id: 'run_missing_generation',
+      to_handle: target.identity.id,
+      read: 0,
+    }], target);
+    const suffix = `${process.pid}-${Date.now()}`;
+
+    const result = await runOrchestrationMailReconcileTick(deps, {
+      ledgerPath: join(tmpdir(), `opk-reconcile-missing-generation-${suffix}.json`),
+      lockPath: join(tmpdir(), `opk-reconcile-missing-generation-${suffix}.lock`),
+      now: () => 1_000,
+    });
+
+    expect(deps.writes).toBe(0);
+    expect(result.nudged).toBe(0);
+    expect(result.deliveryEvidence).toEqual([]);
+    expect(result.reasons).toContain('msg_missing_generation:orchestration_worker_identity_incomplete');
   });
 
   it('claims one exact episode, persists growing backoff, and re-arms at the next deadline', async () => {
