@@ -3,13 +3,12 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const LEAF_RELATIVE_PATHS = [
-  'scripts/graphify/build-graph.ps1',
-  'scripts/graphify/refresh-graph.ps1',
-  'scripts/graphify/query-graph.ps1',
-  'scripts/graphify/query-graph.mjs',
+  'scripts/graphify/build-graph.ts',
+  'scripts/graphify/refresh-graph.ts',
+    'scripts/graphify/query-graph.mjs',
 ] as const;
 
-const ENFORCEMENT_RELATIVE_PATH = 'scripts/graphify/lib/Resolve-GraphifyEnv.ps1';
+const ENFORCEMENT_RELATIVE_PATH = 'scripts/graphify/lib/graphify-env.ts';
 
 function repoRoot(): string {
   return resolve(join(fileURLToPath(new URL('.', import.meta.url)), '..', '..'));
@@ -44,10 +43,8 @@ export function scanGraphifyNoInstaller(root = repoRoot()): string[] {
       continue;
     }
     for (const entry of nonCommentLines(readFileSync(path, 'utf8'))) {
-      if (/&\s*\$exe\b/u.test(entry.text)) {
-        violations.push(
-          `${rel}:${entry.lineNumber}: invokes the graphify executable directly, bypassing Invoke-GraphifyCommand: ${entry.text.trim()}`,
-        );
+      if (/\b(?:spawn|exec|runProcessSync)\b/u.test(entry.text) && /graphifyExecutable/u.test(entry.text)) {
+        violations.push(`${rel}:${entry.lineNumber}: invokes the graphify executable directly, bypassing runGraphify: ${entry.text.trim()}`);
       }
       if (/\binstall\b/iu.test(entry.text)) {
         violations.push(
@@ -62,8 +59,8 @@ export function scanGraphifyNoInstaller(root = repoRoot()): string[] {
     violations.push(`${ENFORCEMENT_RELATIVE_PATH} :: missing enforcement file`);
   } else {
     const enforcementText = readFileSync(enforcementPath, 'utf8');
-    if (!/ValidateSet\('extract',\s*'update'\)/u.test(enforcementText)) {
-      violations.push(`${ENFORCEMENT_RELATIVE_PATH} :: allowed-subcommand ValidateSet must be exactly ('extract', 'update')`);
+    if (!/GraphifySubcommand = 'extract' \| 'update'/u.test(enforcementText)) {
+      violations.push(`${ENFORCEMENT_RELATIVE_PATH} :: GraphifySubcommand must be exactly extract|update`);
     }
     if (!/\binstall\b/u.test(enforcementText)) {
       violations.push(`${ENFORCEMENT_RELATIVE_PATH} :: runtime guard must reject arguments matching an install-family pattern`);

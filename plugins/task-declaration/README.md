@@ -52,7 +52,7 @@ A second scope change requires a new iteration or explicit human escalation.
 `pack-declare` reads constraints from the linked GitHub Issue and writes the
 committed snapshot plus a gitignored runtime mirror:
 
-```powershell
+```bash
 pack-declare --issue 1352 `
   --declared-paths plugins/task-declaration/lib/validate.ts `
   --declared-globs plugins/task-declaration/tests/**

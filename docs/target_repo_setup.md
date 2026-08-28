@@ -11,7 +11,7 @@ The target repository or trusted pack checkout must provide:
 - `plugins/scope-guard/**`;
 - `plugins/token-chain-ledger/**` when accounting is enabled;
 - `plugins/codex-pr-reviewer/**` when local Codex review is enabled;
-- `scripts/pr-scope-check.ps1` and its TypeScript authority;
+- `scripts/pr-scope-runner.ts` and its TypeScript authority;
 - `.github/workflows/scope-guard.yml`;
 - `AGENTS.md` and the relevant prompts;
 - Node 22 workspace configuration.
@@ -24,7 +24,6 @@ compatibility wrapper into the target repository.
 - Node.js 22.x;
 - npm 10.x;
 - Git 2.25+;
-- PowerShell 7+ for retained PowerShell entrypoints;
 - authenticated GitHub transport;
 - the selected agent and reviewer CLIs.
 
@@ -39,8 +38,8 @@ Install from the frozen lockfile and verify the pack:
 
 ```bash
 npm ci --include=dev
-pwsh -NoProfile -File scripts/verify.ps1 -StrictPrereqs
-pwsh -NoProfile -File scripts/check-reusable.ps1
+node --experimental-strip-types scripts/verify.ts --strict-prereqs
+node --experimental-strip-types scripts/verify.ts --reusable-only
 ```
 
 ## Scope authority
@@ -57,14 +56,14 @@ Do not derive authority from a runtime session environment variable.
 
 From the target repository root:
 
-```powershell
-pwsh -NoProfile -File scripts/install-git-hooks.ps1 -InstallScopeGuard
+```bash
+node --experimental-strip-types scripts/install-git-hooks.ts --install-scope-guard
 ```
 
 The managed hook derives the Issue number from the linked branch when possible and
 passes it explicitly. Direct callers must pass `--issue`:
 
-```powershell
+```bash
 node --experimental-strip-types plugins/scope-guard/bin/scope-check.ts `
   --issue 1352 `
   --mode index
@@ -72,7 +71,7 @@ node --experimental-strip-types plugins/scope-guard/bin/scope-check.ts `
 
 Wrap an agent turn when worktree enforcement is required:
 
-```powershell
+```bash
 node --experimental-strip-types plugins/scope-guard/bin/agent-wrap.ts `
   --issue 1352 `
   -- cursor agent ...

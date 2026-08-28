@@ -3,26 +3,4 @@ name: investigate-root-cause
 description: Use when the user asks for causes of a failure or recurrence — e.g. "разобраться с причиной", "в чём причина", "что это", "разберись", "почему упал", "что сломалось", "отладь", "что случилось", "почему не работает", "root cause", "why did", "figure out why", "investigate the cause", "wtf". Delivers a 6-part report (plain-language summary, technical causes, numbered now/prevention steps, repo status; all actions in now or prevention only). §4 Planned requires ship check (issue state, merged PRs, main) so done work is not listed as future. Skip for pure implementation, external adoption (study-external-source), or when one tracked issue already fully answers the ask.
 ---
 
-Read and execute [`prompts/investigate_root_cause.md`](../../../prompts/investigate_root_cause.md) in full. Do not re-derive the workflow inline.
-
-Issue #221 / #237 loaders (canonical text lives in that file):
-
-- **recurrence-diagnostic** — first step when a bug is "already fixed"; `pass + reproduce` ⇒ strong evidence of spec/fixture defect (not exclusive).
-- **fact/hypothesis labels** — every memo claim is **Fact / Факт** with an artifact ref or **Hypothesis / Гипотеза** with confirm/refute evidence; rank multiple possible causes as hypotheses, never assert guesses as facts.
-- **cause not established** — if evidence does not establish root cause, say so plainly in §1/§2, list ranked surviving hypotheses, and turn missing evidence into §5/§6 next steps; do not fabricate a 5-Whys chain.
-- **5-Whys stop condition** — reject "returned/logged X" and imprecise defer records as **terminal root cause**; continue to field-level facts.
-- **parked root** — defer suspected root causes only via the structured `parked-root-cause` block in draft authoring (see `create-issue-draft`).
-- **design-analysis block** — conditional on build-class durable fixes in §6: five elements (critical mechanics, industry practices, architecture sketch, ≥3 cost-rule options, full-class scenario enumeration when element-5-eligible); mandatory element 5 on recurrence when block applies; skips operator/config/one-line fixes; long matrices to OS temp; recommends scenario-matrix handoff to `create-issue-draft` (enforcement is companion, not bound here).
-
-## Failure response
-
-When a review finding, CI failure, or stuck loop exposes a class of defect:
-
-1. reproduce from exact artifacts and current identities;
-2. separate infrastructure failure from product failure;
-3. apply recurrence-oriented causal analysis;
-4. fix the narrowest durable contract, authority, or mechanism that prevents the
-   class;
-5. add scenario and evidence coverage;
-6. verify the current head and record remaining uncertainty.
-
+Read and execute [`.cursor/skills/investigate-root-cause/SKILL.md`](../../../.cursor/skills/investigate-root-cause/SKILL.md) in full. Do not re-derive the workflow inline.

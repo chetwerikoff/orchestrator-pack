@@ -95,20 +95,16 @@ jobs:
           fetch-depth: 0
 
       - name: Run read-only pack verifier
-        shell: pwsh
-        run: ./scripts/verify.ps1
+        run: node --experimental-strip-types scripts/verify.ts --repo-root "$GITHUB_WORKSPACE"
 
       - name: Enforce reusable repository content policy
-        shell: pwsh
-        run: ./scripts/check-reusable.ps1
+        run: node --experimental-strip-types scripts/verify.ts --repo-root "$GITHUB_WORKSPACE" --reusable-only
 
       - name: Enforce CI cheap wins policy
-        shell: pwsh
-        run: ./scripts/check-ci-cheap-wins.ps1
+        run: node --experimental-strip-types scripts/ci-policy-guards.ts ci-cheap-wins
 
       - name: Enforce verify runtime refactor policy
-        shell: pwsh
-        run: ./scripts/check-verify-runtime.ps1
+        run: node --experimental-strip-types scripts/ci-policy-guards.ts verify-runtime
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -125,10 +121,9 @@ jobs:
         run: npm run tiering:calibration
 
       - name: Enforce CI pipeline split policy
-        shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./scripts/check-ci-pipeline-split.ps1
+        run: node --experimental-strip-types scripts/ci-policy-guards.ts pipeline-split
 
   pr-scope-guard:
     name: PR scope guard
@@ -158,8 +153,8 @@ jobs:
           cache: npm
           cache-dependency-path: trusted-scope-guard/package-lock.json
 
-      - name: Run scope guard
-        shell: pwsh
+      - name: Run trusted TypeScript scope guard
+        shell: bash
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -169,173 +164,24 @@ jobs:
           PR_HEAD_REPO_FORK: ${{ github.event.pull_request.head.repo.fork }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_HEAD_REPO_SAME: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
-          SCOPE_GUARD_DEGRADED_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'scope-guard-degraded') }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-            throw 'GitHub CLI (gh) is required for PR scope guard'
-          }
-          if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-            throw 'Node.js is required for PR scope guard'
-          }
-
-          $trustedRoot = Join-Path $env:GITHUB_WORKSPACE 'trusted-scope-guard'
-          $trustedChecker = Join-Path $trustedRoot 'scripts/pr-scope-check.ps1'
-          $trustedDeclarationContract = Join-Path $trustedRoot 'scripts/pr-scope-declaration.ts'
-          $issue1276Bootstrap = $env:PR_NUMBER -eq '1305' `
-            -and $env:PR_HEAD_REF -eq 'chetwerikoff/issue-1276' `
-            -and $env:PR_HEAD_REPO_SAME -eq 'true'
-          $trustedLiveIssueScope = (Test-Path -LiteralPath $trustedDeclarationContract) -and
-            (Select-String -LiteralPath $trustedDeclarationContract -Pattern 'selectLiveIssueScope' -Quiet)
-          if ($issue1276Bootstrap) {
-            Write-Warning 'scope guard bootstrap: PR 1305 uses the PR-head checker for the Issue 1276 producer-ceiling migration'
-            $guardScript = Join-Path $env:GITHUB_WORKSPACE 'scripts/pr-scope-check.ps1'
-          }
-          elseif ((Test-Path -LiteralPath $trustedChecker) -and $trustedLiveIssueScope) {
-            $guardScript = $trustedChecker
-          }
-          else {
-            Write-Warning 'scope guard bootstrap: AO-free declaration contract is not on base ref yet; using PR head scripts for this migration PR'
-            # A PR-head checker is allowed only for the one live, head-bound bootstrap.
-            # The base checkout must not silently trust arbitrary PR workflow code.
-            $expectedPaths = @(
-              'scripts/pr-scope-check.ts',
-              'scripts/pr-scope-check.ps1',
-              'scripts/pr-scope-declaration.ts',
-              'scripts/pr-scope-declaration.test.ts',
-              '.github/workflows/scope-guard.yml'
-            )
-            $changedOutput = & git -C $env:GITHUB_WORKSPACE diff --name-only --no-renames "$env:PR_BASE_SHA...$env:PR_HEAD_SHA"
-            if ($LASTEXITCODE -ne 0) { throw 'scope guard bootstrap: unable to read PR changed paths' }
-            $changedPaths = @(
-              $changedOutput |
-                ForEach-Object { [string]$_ } |
-                Where-Object { $_ -ne '' }
-            )
-            $changedPathDifference = @(
-              Compare-Object -ReferenceObject ($expectedPaths | Sort-Object) -DifferenceObject ($changedPaths | Sort-Object)
-            )
-            if (
-              $changedPaths.Count -ne $expectedPaths.Count -or
-              $changedPathDifference.Count -ne 0
-            ) {
-              throw 'scope guard bootstrap: PR changed paths do not match the authorized implementation set'
-            }
-
-            $packGh = Join-Path $trustedRoot 'scripts/gh'
-            $prPayload = & $packGh pr view $env:PR_NUMBER --repo $env:GITHUB_REPOSITORY --json body 2>$null
-            if ($LASTEXITCODE -ne 0) { throw 'scope guard bootstrap: unable to read PR body' }
-            $prBody = ([string]($prPayload | ConvertFrom-Json).body)
-            $issueMatches = [regex]::Matches($prBody, '(?im)^\s*(?:closes|fixes|resolves)\s+#(?<number>\d+)\s*$')
-            if ($issueMatches.Count -ne 1) { throw 'scope guard bootstrap: expected exactly one linked Issue' }
-            $issueNumber = [int]$issueMatches[0].Groups['number'].Value
-            $issuePayload = & $packGh issue view $issueNumber --repo $env:GITHUB_REPOSITORY --json body 2>$null
-            if ($LASTEXITCODE -ne 0) { throw 'scope guard bootstrap: unable to read linked Issue body' }
-            $issueBody = ([string]($issuePayload | ConvertFrom-Json).body)
-
-            $bootstrapLabels = [regex]::Matches(
-              $issueBody,
-              '(?m)^[ \t]*```scope-guard-bootstrap/v1[ \t]*$'
-            )
-            if ($bootstrapLabels.Count -ne 1) {
-              throw 'scope guard bootstrap: expected exactly one bootstrap declaration label'
-            }
-            $fences = [regex]::Matches(
-              $issueBody,
-              '(?ms)^[ \t]*```scope-guard-bootstrap/v1[ \t]*\r?\n(?<body>.*?)\r?\n[ \t]*```[ \t]*$'
-            )
-            if ($fences.Count -ne 1) {
-              throw 'scope guard bootstrap: expected exactly one complete bootstrap declaration'
-            }
-            try { $bootstrap = $fences[0].Groups['body'].Value | ConvertFrom-Json -ErrorAction Stop }
-            catch { throw 'scope guard bootstrap: malformed bootstrap declaration' }
-
-            $expectedBootstrapFields = @(
-              'schema',
-              'issueNumber',
-              'sourceRevision',
-              'prNumber',
-              'headSha',
-              'workflowPath',
-              'allowedImplementationPaths',
-              'declarationArtifactsAllowed',
-              'expiresOnMismatch'
-            )
-            $actualBootstrapFields = @($bootstrap.PSObject.Properties.Name)
-            $fieldDifference = @(
-              Compare-Object -ReferenceObject ($expectedBootstrapFields | Sort-Object) -DifferenceObject ($actualBootstrapFields | Sort-Object)
-            )
-            if (
-              $actualBootstrapFields.Count -ne $expectedBootstrapFields.Count -or
-              $fieldDifference.Count -ne 0
-            ) {
-              throw 'scope guard bootstrap: bootstrap fields do not match the closed schema'
-            }
-            $issueNumberTypeValid = ($bootstrap.issueNumber -is [int]) -or ($bootstrap.issueNumber -is [long])
-            $prNumberTypeValid = ($bootstrap.prNumber -is [int]) -or ($bootstrap.prNumber -is [long])
-            $pathArrayValid =
-              $bootstrap.allowedImplementationPaths -is [System.Array] -and
-              @($bootstrap.allowedImplementationPaths | Where-Object { $_ -isnot [string] }).Count -eq 0
-            $typesValid =
-              $bootstrap.schema -is [string] -and
-              $issueNumberTypeValid -and
-              $bootstrap.sourceRevision -is [string] -and
-              $prNumberTypeValid -and
-              $bootstrap.headSha -is [string] -and
-              $bootstrap.workflowPath -is [string] -and
-              $pathArrayValid -and
-              $bootstrap.declarationArtifactsAllowed -is [bool] -and
-              $bootstrap.expiresOnMismatch -is [bool]
-            if (-not $typesValid) {
-              throw 'scope guard bootstrap: bootstrap field types are invalid'
-            }
-
-            $revisionMatches = [regex]::Matches(
-              $issueBody,
-              '(?m)^<!--\s*source-revision:\s*(?<revision>r\d+)\s*-->$'
-            )
-            if ($revisionMatches.Count -ne 1) {
-              throw 'scope guard bootstrap: expected exactly one source revision'
-            }
-            $revision = $revisionMatches[0].Groups['revision'].Value
-            $declaredPaths = @($bootstrap.allowedImplementationPaths | ForEach-Object { [string]$_ })
-            $duplicateDeclaredPaths = @(
-              $declaredPaths |
-                Group-Object |
-                Where-Object { $_.Count -ne 1 }
-            )
-            $bindingValid =
-              $bootstrap.schema -eq 'scope-guard-bootstrap/v1' -and
-              $bootstrap.issueNumber -eq $issueNumber -and
-              $bootstrap.sourceRevision -eq $revision -and
-              $bootstrap.prNumber -eq [int]$env:PR_NUMBER -and
-              $bootstrap.headSha -eq $env:PR_HEAD_SHA -and
-              $bootstrap.workflowPath -eq '.github/workflows/scope-guard.yml' -and
-              $bootstrap.declarationArtifactsAllowed -eq $false -and
-              $bootstrap.expiresOnMismatch -eq $true -and
-              $duplicateDeclaredPaths.Count -eq 0 -and
-              $declaredPaths.Count -eq $expectedPaths.Count -and
-              -not (Compare-Object -ReferenceObject ($expectedPaths | Sort-Object) -DifferenceObject ($declaredPaths | Sort-Object))
-            if (-not $bindingValid) { throw 'scope guard bootstrap: live Issue binding does not authorize PR-head checker' }
-            $guardScript = Join-Path $env:GITHUB_WORKSPACE 'scripts/pr-scope-check.ps1'
-          }
-
-          Push-Location $trustedRoot
-          try {
+          set -euo pipefail
+          command -v gh >/dev/null || { echo 'GitHub CLI (gh) is required for PR scope guard' >&2; exit 1; }
+          command -v node >/dev/null || { echo 'Node.js is required for PR scope guard' >&2; exit 1; }
+          trusted_root="$GITHUB_WORKSPACE/trusted-scope-guard"
+          trusted_runner="$trusted_root/scripts/pr-scope-runner.ts"
+          test -f "$trusted_runner" || { echo "Trusted TypeScript scope runner is missing: $trusted_runner" >&2; exit 1; }
+          (
+            cd "$trusted_root"
             npm ci --include=dev
-            # PR-head pr-scope-check.ts imports workspace packages; resolve them from the
-            # trusted base install without running npm (and lifecycle scripts) on PR head.
-            $trustedNodeModules = Join-Path $trustedRoot 'node_modules'
-            $prNodeModules = Join-Path $env:GITHUB_WORKSPACE 'node_modules'
-            if (Test-Path -LiteralPath $prNodeModules) {
-              Remove-Item -LiteralPath $prNodeModules -Recurse -Force -ErrorAction SilentlyContinue
-            }
-            New-Item -ItemType SymbolicLink -Path $prNodeModules -Target $trustedNodeModules -Force | Out-Null
-            & $guardScript
-          }
-          finally {
-            Pop-Location
-          }
+          )
+          rm -rf "$GITHUB_WORKSPACE/node_modules"
+          ln -s "$trusted_root/node_modules" "$GITHUB_WORKSPACE/node_modules"
+          (
+            cd "$trusted_root"
+            node --experimental-strip-types "$trusted_runner"
+          )
 
   test-typecheck:
     name: Type-check pack sources
@@ -365,8 +211,7 @@ jobs:
         run: npx tsc --project tsconfig.base.json --noEmit
 
       - name: Enforce review-start claim drift guard
-        shell: pwsh
-        run: ./scripts/check-review-start-claim-guard.ps1
+        run: node --experimental-strip-types scripts/review-start-claim-guard.ts
 
   test-vitest-light:
     name: Vitest light lane ${{ matrix.shard }}/${{ needs.plan-vitest-ci-topology.outputs.light_shard_count }}
@@ -399,8 +244,7 @@ jobs:
         run: npm ci --include=dev
 
       - name: Run Vitest light lane
-        shell: pwsh
-        run: ./scripts/run-vitest-light-lane.ps1 -Shard ${{ matrix.shard }}
+        run: node --experimental-strip-types scripts/vitest-ci-runner.ts light --shard "${{ matrix.shard }}"
 
   plan-vitest-ci-topology:
     name: Plan Vitest heavy topology
@@ -493,10 +337,10 @@ jobs:
           path: scripts
 
       - name: Run Vitest heavy shard
-        shell: pwsh
+        shell: bash
         env:
           OPK_VITEST_TOPOLOGY_PLAN_PATH: ${{ github.workspace }}/scripts/vitest-heavy-topology.plan.json
-        run: ./scripts/run-vitest-heavy-shard.ps1 -Shard ${{ matrix.shard }}
+        run: node --experimental-strip-types scripts/vitest-ci-runner.ts heavy --shard "${{ matrix.shard }}"
 
   test-vitest-contracts:
     name: Vitest contracts
@@ -543,7 +387,6 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Fail-closed full-regression aggregate
-        shell: pwsh
         env:
           TYPECHECK_RESULT: ${{ needs.test-typecheck.result }}
           VITEST_LIGHT_RESULT: ${{ needs.test-vitest-light.result }}
@@ -552,7 +395,7 @@ jobs:
           VITEST_TOPOLOGY_PLAN_RESULT: ${{ needs.plan-vitest-ci-topology.result }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_RUN_ID: ${{ github.run_id }}
-        run: ./scripts/ci-test-aggregate.ps1
+        run: node --experimental-strip-types scripts/vitest-ci-runner.ts aggregate
 
   self-architect-lint:
     name: Self-architect lint
@@ -572,12 +415,11 @@ jobs:
           fetch-depth: 0
 
       - name: Run self-architect lint (strict)
-        shell: pwsh
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          ./scripts/lint-self-architect.ps1 `
-            -Strict `
-            -BaseRef $env:PR_BASE_SHA `
-            -HeadRef $env:PR_HEAD_SHA
+          node --experimental-strip-types scripts/lint-self-architect.ts \
+            --strict \
+            --base-ref "$PR_BASE_SHA" \
+            --head-ref "$PR_HEAD_SHA"

@@ -114,6 +114,30 @@ An independent reviewer may inspect the task, diff, CI, comments, and review thr
 
 Review work must not mutate implementation state unless the user/task also authorizes implementation changes. This is a role boundary, not a global execution mode or ownership state machine.
 
+### Direct connected-GitHub pack review
+
+For a direct top-level request to review or pack-review an `orchestrator-pack`
+pull request, a connected-GitHub chat reviewer may perform and publish the review
+immediately. Required CI, worker smoke, WorkerReport/WorkerStatus, runner/run-store
+state, source cardinality, and automatic review-cycle cap are not admission gates
+for performing or publishing that direct review.
+
+The reviewer reads the live Issue/spec, current PR head, diff/code, useful
+comments/threads and CI facts, performs the substantive review in the same chat,
+then rereads the PR head immediately before publication. Publish one GitHub PR
+review with event `COMMENT` bound to that exact commit and exactly one marker:
+
+`<!-- opk-pack-review:v1 head=<40hex> verdict=<clean|findings> blocking=<true|false> -->`
+
+The marker head must equal the GitHub review commit id, `verdict=clean` requires
+`blocking=false`, and the review must be authored by the repository owner.
+Immediately reread the PR head after publication. If the head advanced, the
+submitted review remains historical evidence for its reviewed commit but must
+not directly mutate the newer head's pack-review status. No runner invocation,
+second model call, start comment, confirmation step, queue, lease, or provenance
+service is required for this direct path. Worker CI/smoke/readiness obligations
+remain separate and strict.
+
 ### Evidence-feasibility gate
 
 Before introducing or strengthening a blocking review requirement that depends on correlation, causality, identity, provenance, parentage, turn/session context, or another witness, first establish that the required evidence is actually observable on the exact production execution or transport path being constrained.

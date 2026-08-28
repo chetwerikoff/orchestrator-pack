@@ -8,8 +8,8 @@
         "positive-outcome"
       ],
       "surfaces": [
-        ".claude/skills/create-issue-draft/SKILL.md",
-        ".claude/skills/publish-issue-draft/SKILL.md"
+        ".cursor/skills/create-issue-draft/SKILL.md",
+        ".cursor/skills/publish-issue-draft/SKILL.md"
       ]
     },
     {
@@ -20,7 +20,7 @@
       ],
       "surfaces": [
         "prompts/investigate_root_cause.md",
-        ".claude/skills/investigate-root-cause/SKILL.md"
+        ".cursor/skills/investigate-root-cause/SKILL.md"
       ]
     },
     {
@@ -31,7 +31,7 @@
       ],
       "surfaces": [
         "prompts/investigate_root_cause.md",
-        ".claude/skills/investigate-root-cause/SKILL.md"
+        ".cursor/skills/investigate-root-cause/SKILL.md"
       ]
     },
     {
@@ -41,8 +41,8 @@
         "parked root"
       ],
       "surfaces": [
-        ".claude/skills/create-issue-draft/SKILL.md",
-        ".claude/skills/publish-issue-draft/SKILL.md"
+        ".cursor/skills/create-issue-draft/SKILL.md",
+        ".cursor/skills/publish-issue-draft/SKILL.md"
       ]
     },
     {
@@ -52,7 +52,7 @@
         "contract grounding"
       ],
       "surfaces": [
-        ".claude/skills/create-issue-draft/SKILL.md"
+        ".cursor/skills/create-issue-draft/SKILL.md"
       ]
     }
   ],

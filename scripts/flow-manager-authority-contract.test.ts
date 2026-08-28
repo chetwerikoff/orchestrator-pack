@@ -16,7 +16,7 @@ import { runCli as runLegacyBrowserTurnCli } from './chatgpt-browser-turn.ts';
 import { runBrowserAdapter } from './flow-manager-browser-gpt-long-run.ts';
 import { readTerminalEnvelope, runLaunch } from './flow-manager-long-running-child.ts';
 
-const contract = readFileSync(new URL('../.claude/skills/create-issue-draft/SKILL.md', import.meta.url), 'utf8');
+const contract = readFileSync(new URL('../.cursor/skills/create-issue-draft/SKILL.md', import.meta.url), 'utf8');
 const ghTransport = readFileSync(new URL('./lib/create-issue-stage-record-gh.ts', import.meta.url), 'utf8');
 const journalCore = readFileSync(new URL('./lib/create-issue-stage-record-core.ts', import.meta.url), 'utf8');
 const stateLightTurn = readFileSync(new URL('./chatgpt-browser-turn/state-light-turn.ts', import.meta.url), 'utf8');
@@ -50,13 +50,13 @@ function runGit(root: string, args: readonly string[]): void {
 
 function createCanonFixture(): string {
   const root = mkdtempSync(join(tmpdir(), 'opk-manager-review-canon-'));
-  mkdirSync(join(root, '.claude/skills/create-issue-draft'), { recursive: true });
+  mkdirSync(join(root, '.cursor/skills/create-issue-draft'), { recursive: true });
   mkdirSync(join(root, '.cursor/rules'), { recursive: true });
-  writeFileSync(join(root, '.claude/skills/create-issue-draft/SKILL.md'), [
+  writeFileSync(join(root, '.cursor/skills/create-issue-draft/SKILL.md'), [
     '# fixture skill',
     '',
     '```manager-review-brief-canon',
-    '.claude/skills/create-issue-draft/SKILL.md :: ### Frame',
+    '.cursor/skills/create-issue-draft/SKILL.md :: ### Frame',
     '.cursor/rules/flow-manager-browser-turn-monitoring.mdc :: ## Launch and observation',
     '```',
     '',

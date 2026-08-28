@@ -12,7 +12,7 @@ classify-pr-changes (markdown-only skip)
   +--> Type-check pack sources (tsc --noEmit + review-start claim guard)
   +--> Vitest light lane shards 1..2 (bounded workers; classified light files only)
   +--> Vitest heavy shard 1..N (runtime-weighted; serial in-runner)
-  +--> Pester regression (test-all.ps1 -SkipNpm)
+  +--> Pester regression (npm test -SkipNpm)
   |
   +--> Run pack contract tests (aggregate; fail-closed on any lane)
 ```
@@ -38,8 +38,8 @@ Every discovered Vitest file must be explicitly classified in
 
 | Lane | Execution | Criteria |
 | --- | --- | --- |
-| **light** | Runtime-weighted 2-way matrix sharding with bounded in-process parallelism (`lightMaxWorkers`, currently **2**) | Pure unit/static tests without subprocess/git/tmux/PowerShell integration |
-| **heavy** | Serial in-runner on one GitHub Actions shard | Subprocess, git, filesystem, tmux, or PowerShell integration tests |
+| **light** | Runtime-weighted 2-way matrix sharding with bounded in-process parallelism (`lightMaxWorkers`, currently **2**) | Pure unit/static tests without subprocess/git/tmux/legacy-shell integration |
+| **heavy** | Serial in-runner on one GitHub Actions shard | Subprocess, git, filesystem, tmux, or legacy-shell integration tests |
 | **unclassified** | Blocks CI | New, renamed, or missing manifest entries fail `classification-required` |
 
 ### Reclassifying a test
@@ -51,7 +51,7 @@ Every discovered Vitest file must be explicitly classified in
    bounded parallelism.
 4. For **light → heavy**, add/update `scripts/vitest-runtime-history.json` when
    timing history exists.
-5. Re-run `pwsh -NoProfile -File scripts/check-ci-pipeline-split.ps1`.
+5. Re-run `node --experimental-strip-types scripts/ci-policy-guards.ts pipeline-split`.
 
 **False-light classification is the dangerous failure** (can reintroduce
 `onTaskUpdate` flakes). When uncertain, classify **heavy**.
@@ -144,11 +144,11 @@ the successor file set from Issue #692 mega-file splits.
 | `scripts/vitest-wallclock-e2e-split.manifest.json` | Enumerated logical move set, post-merge execution map, red-signal contract |
 | `scripts/vitest-wallclock-e2e-split.pre-move-manifest.json` | Pinned pre-move PR-required union; guard derives the union from `preMoveBaselineSha` via detached git worktree and rejects checkout manifest drift |
 | `postMergeWallclock` lane in `vitest-ci-lanes.config.json` | Classification for relocated files (not PR light/heavy) |
-| `scripts/run-vitest-wallclock-stage.ps1` | Serial post-merge runner |
+| `scripts/vitest-ci-runner.ts` | Serial post-merge runner |
 | `wall-clock-e2e-containment` job output | Machine-readable containment while stage pending/red |
 
 Coverage-delta proof: `scripts/lib/vitest-wallclock-e2e-split.mjs` + guard in
-`scripts/check-ci-pipeline-split.ps1`. Charter linkage: Issue #487 AC#8 requires immutable
+`scripts/ci-policy-guards.ts`. Charter linkage: Issue #487 AC#8 requires immutable
 GitHub approval on Issue #694 before merge (write+ collaborator). Live GitHub resolution runs on every guard invocation including `pull_request` CI. When another write+ collaborator exists, PR-author issue comments and PR reviews are rejected; solo-maintainer repos with no other eligible reviewer accept charter issue comments from the owner. A pinned immutable comment id in `scripts/vitest-wallclock-e2e-split.manifest.json` is validated live on GitHub with the same author rules.
 
 **Latest-main wall-clock evidence (Issue #694 AC#3):** after the workflow exists on `main`,
@@ -156,7 +156,7 @@ GitHub approval on Issue #694 before merge (write+ collaborator). Live GitHub re
 the newest `main` head (via GitHub Actions API). Bootstrap passes when the workflow is not yet
 on `main`, no main runs exist yet, or the head is younger than the bounded age window (48h).
 
-Red-signal on post-merge failure: `scripts/ci-wallclock-e2e-notify.ps1` records an
+Red-signal on post-merge failure: `scripts/ci-wallclock-e2e-notify.ts` records an
 episode-keyed alert (`wallclock-e2e-main:{sha}`) and opens an Issue #694 comment idempotently
 (matching `dedupe:` / `episode:` keys; repeated failures for the same head do not spam);
 delivery miss stays fail-closed (stage red + containment blocks promotion).
@@ -183,7 +183,7 @@ If repeat-run CI shows new timing flake after the sleep-to-poll conversion:
 
 1. Revert positive-wait helper usage in the split supervisor/wake test files
    (`orchestrator-wake-supervisor-*.test.ts`) to the prior fixed `setTimeout` budgets.
-2. Remove or disable `scripts/check-supervisor-test-wait-inventory.ps1` from local/PR
+2. Remove or disable `scripts/lib/supervisor-test-wait-inventory.mjs` from local/PR
    verification until the inventory is regenerated.
 3. Restore prior `scripts/vitest-runtime-history.json` weights for affected files if
    measured p75 regresses.
@@ -204,9 +204,9 @@ Follow up to restore derived topology once weights are trustworthy.
 ### To #536 eight-way serial round-robin
 
 1. Restore `test-vitest` matrix job (`shard: [1..8]`) invoking
-   `scripts/run-vitest-shard.ps1 -ShardTotal 8`.
+   `the pre-#556 eight-way serial shard runner from Git history`.
 2. Remove `test-vitest-light` / `test-vitest-heavy` jobs.
-3. Revert `scripts/ci-test-aggregate.ps1` to single `VITEST_RESULT`.
+3. Revert `scripts/vitest-ci-runner.ts` to single `VITEST_RESULT`.
 4. Revert `vitest.config.ts` to serial-only CI (`fileParallelism: false`,
    `maxWorkers: 1` for all CI).
 5. Set `vitestShardCount: 8` in `scripts/ci-pipeline-split.config.json`.
@@ -218,16 +218,16 @@ unchanged.
 
 1. Set `lightShardCount` back to **1** in `scripts/vitest-ci-lanes.config.json`.
 2. Restore `test-vitest-light` in `.github/workflows/scope-guard.yml` to a non-matrix
-   job invoking `scripts/run-vitest-light-lane.ps1` without `-Shard`.
+   job invoking `scripts/vitest-ci-runner.ts` without `-Shard`.
 3. Remove `light_shard_count` / `light_shard_matrix` workflow output assertions only
-   after `scripts/check-ci-pipeline-split.ps1` has been updated to prove the unsharded
+   after `scripts/ci-policy-guards.ts` has been updated to prove the unsharded
    light lane still covers the full classified light set.
 4. Keep `test-aggregate` consuming `VITEST_LIGHT_RESULT` from `needs.test-vitest-light.result`.
 
 ### To pre-#487 monolithic path
 
 See Issue #487 rollback in git history — restore monolithic `tests` job with
-`test-all.ps1`.
+`npm test`.
 
 ## Required-check migration
 
@@ -249,7 +249,7 @@ The refresh does **not** run on ordinary PR events.
   numeric `files` map consumed by Issue #556 LPT assignment
 - `dataChangedAt` records when a file weight last changed (not validation-only reruns)
 
-Guards and fixtures live in `scripts/check-ci-pipeline-split.ps1` and
+Guards and fixtures live in `scripts/ci-policy-guards.ts` and
 `scripts/lib/vitest-runtime-history-merge.fixture.mjs`.
 
 ## PR-scoped heavy lane (Issue #732)
@@ -310,11 +310,11 @@ Operator adoption for the credential surface and repo settings is documented in
 
 ## Verification
 
-```powershell
+```bash
 npm ci --include=dev
-pwsh -NoProfile -File scripts/check-ci-pipeline-split.ps1
-pwsh -NoProfile -File scripts/verify.ps1
-pwsh -NoProfile -File scripts/check-reusable.ps1
+node --experimental-strip-types scripts/ci-policy-guards.ts pipeline-split
+node --experimental-strip-types scripts/verify.ts
+node --experimental-strip-types scripts/verify.ts --reusable-only
 ```
 
 CI evidence on the implementation PR should record per-lane/per-shard durations,

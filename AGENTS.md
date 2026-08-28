@@ -154,11 +154,18 @@ An uncovered read is an inventory-extension finding, not permission to bypass
 the boundary. Connector-backed sessions use the connected GitHub capability
 directly.
 
+A direct top-level request to review or pack-review an `orchestrator-pack` PR
+uses the connected-GitHub direct-review procedure in
+[`docs/chat-executor-rules.md`](docs/chat-executor-rules.md#direct-connected-github-pack-review).
+That review may be performed and published without runner, CI, smoke, or
+source-cardinality admission; worker readiness remains a separate current-head
+gate.
+
 ## Command-runtime bootstrap
 
 Before an autonomous command turn performs side effects, pass the tracked
-command-runtime preflight. Missing required `pwsh`, Node 22, or GitHub
-transport must fail closed. Do not edit shell dotfiles or create temporary
+command-runtime preflight. Missing required Node 22 or GitHub transport must
+fail closed. Do not edit shell dotfiles or create temporary
 executable wrappers as recovery. Structured wrappers parse stdout JSON only.
 
 ## Operator-only merge and failed runs
@@ -175,6 +182,12 @@ section linked above before the first side effect. That runbook owns pre-flight,
 runtime identity, review/CI/handoff, required CI, `pack-worker-report`,
 PR-created handoff, review-cycle cap, and worker smoke.
 
+### Worker pre-flight
+
+Before implementation, apply the
+[`Worker pre-flight`](docs/orchestration-runbook.md#worker-pre-flight) contract
+and stop/escalate when the assigned tier cannot contain the work.
+
 If `pack-worker-report` cannot prove the current repository, worker, PR, and
 head binding, **skip silently** for the report write only and continue the
 required task.
@@ -187,11 +200,11 @@ invocation detail.
 
 | Skill | Trigger |
 |---|---|
-| [`investigate-root-cause`](.claude/skills/investigate-root-cause/SKILL.md) | investigate, debug, why failed |
-| [`merge-with-local-adoption`](.claude/skills/merge-with-local-adoption/SKILL.md) | direct merge request |
-| [`adversarial-draft-review`](.claude/skills/adversarial-draft-review/SKILL.md) | challenge a draft with Codex |
-| [`discuss-with-gpt`](.claude/skills/discuss-with-gpt/SKILL.md) | discuss or challenge with GPT |
-| [`create-issue-draft`](.claude/skills/create-issue-draft/SKILL.md) | author a new task or handoff |
-| [`study-external-source`](.claude/skills/study-external-source/SKILL.md) | study an external repository or URL |
-| [`publish-issue-draft`](.claude/skills/publish-issue-draft/SKILL.md) | publish an existing tracked draft |
-| [`switch-pack-reviewer`](.claude/skills/switch-pack-reviewer/SKILL.md) | change the configured reviewer |
+| [`investigate-root-cause`](.cursor/skills/investigate-root-cause/SKILL.md) | investigate, debug, why failed |
+| [`merge-with-local-adoption`](.cursor/skills/merge-with-local-adoption/SKILL.md) | direct merge request |
+| [`adversarial-draft-review`](.cursor/skills/adversarial-draft-review/SKILL.md) | challenge a draft with Codex |
+| [`discuss-with-gpt`](.cursor/skills/discuss-with-gpt/SKILL.md) | discuss or challenge with GPT |
+| [`create-issue-draft`](.cursor/skills/create-issue-draft/SKILL.md) | author a new task or handoff |
+| [`study-external-source`](.cursor/skills/study-external-source/SKILL.md) | study an external repository or URL |
+| [`publish-issue-draft`](.cursor/skills/publish-issue-draft/SKILL.md) | publish an existing tracked draft |
+| [`switch-pack-reviewer`](.cursor/skills/switch-pack-reviewer/SKILL.md) | change the configured reviewer |

@@ -269,30 +269,53 @@ export function applyOpkVitestHarnessEnv(rootPath, env = process.env) {
   return { root, home, state, tmp, wake, packState, transport, operatorInbox, healthSpool };
 }
 
+function snapshotEntryDisappeared(error) {
+  return error !== null
+    && typeof error === 'object'
+    && error.code === 'ENOENT';
+}
+
 function hashPath(path) {
   if (!existsSync(path)) return { exists: false };
-  const stat = lstatSync(path);
-  const hash = createHash('sha256');
-  const walk = (candidate, prefix = '') => {
-    const current = lstatSync(candidate);
-    if (current.isDirectory()) {
-      for (const entry of readdirSync(candidate, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-        const child = join(candidate, entry.name);
-        const rel = join(prefix, entry.name).replaceAll('\\', '/');
-        hash.update(`${entry.isDirectory() ? 'd' : 'f'}:${rel}\n`);
-        walk(child, rel);
+
+  const snapshot = () => {
+    const stat = lstatSync(path);
+    const hash = createHash('sha256');
+    const walk = (candidate, prefix = '') => {
+      const current = lstatSync(candidate);
+      if (current.isDirectory()) {
+        for (const entry of readdirSync(candidate, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+          const child = join(candidate, entry.name);
+          const rel = join(prefix, entry.name).replaceAll('\\', '/');
+          hash.update(`${entry.isDirectory() ? 'd' : 'f'}:${rel}\n`);
+          walk(child, rel);
+        }
+      } else if (current.isFile()) {
+        hash.update(readFileSync(candidate));
       }
-    } else if (current.isFile()) {
-      hash.update(readFileSync(candidate));
+    };
+    walk(path);
+    return {
+      exists: true,
+      type: stat.isDirectory() ? 'directory' : stat.isFile() ? 'file' : 'other',
+      hash: hash.digest('hex'),
+      size: stat.isFile() ? stat.size : undefined,
+    };
+  };
+
+  // A live store may atomically remove a lock/temp entry after readdirSync()
+  // but before lstatSync()/readFileSync(). Restart the whole snapshot so a
+  // one-off TOCTOU race cannot crash the guard; sustained churn still fails
+  // closed after the bounded retry budget.
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      return snapshot();
+    } catch (error) {
+      if (!snapshotEntryDisappeared(error)) throw error;
+      if (!existsSync(path)) return { exists: false };
     }
-  };
-  walk(path);
-  return {
-    exists: true,
-    type: stat.isDirectory() ? 'directory' : stat.isFile() ? 'file' : 'other',
-    hash: hash.digest('hex'),
-    size: stat.isFile() ? statSync(path).size : undefined,
-  };
+  }
+  return snapshot();
 }
 
 function snapshotStore(store) {

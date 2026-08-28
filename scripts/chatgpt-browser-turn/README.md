@@ -12,7 +12,7 @@ The portable operator procedure and universal author template are in
 [`../../docs/browser-gpt-turn-runbook.md`](../../docs/browser-gpt-turn-runbook.md).
 Governed create-Issue reviewer prompt bytes are generated from the single canon
 declared in
-[`../../.claude/skills/create-issue-draft/SKILL.md`](../../.claude/skills/create-issue-draft/SKILL.md)
+[`../../.cursor/skills/create-issue-draft/SKILL.md`](../../.cursor/skills/create-issue-draft/SKILL.md)
 by `scripts/lib/manager-review-brief.ts`; the runbook is not a second reviewer
 prompt owner. This README is only the implementation-local CLI, result-schema,
 and component reference.

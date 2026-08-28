@@ -1,11 +1,14 @@
 #!/usr/bin/env sh
 set -eu
 ROOT="$(git rev-parse --show-toplevel)"
-BRANCH="$(git -C "$ROOT" branch --show-current)"
-ISSUE="$(printf '%s' "$BRANCH" | sed -nE 's/.*issue[-/]([0-9]+).*/\1/p')"
+BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+ISSUE="$(printf '%s\n' "$BRANCH" | sed -n 's/.*issue[-/]\([0-9][0-9]*\).*/\1/p' | head -n1)"
 if [ -z "$ISSUE" ]; then
-  echo "scope-guard pre-commit: branch does not identify an issue; run scope-check --issue <n> explicitly" >&2
+  echo "scope-guard pre-commit: cannot derive Issue number from branch '$BRANCH'" >&2
+  exit 1
+fi
+if [ -n "${OPK_SCOPE_GUARD_BYPASS:-}" ]; then
+  echo "scope-guard pre-commit: bypass active — $OPK_SCOPE_GUARD_BYPASS"
   exit 0
 fi
-if command -v pwsh >/dev/null 2>&1; then PS_BIN=pwsh; else PS_BIN=powershell.exe; fi
-"$PS_BIN" -NoProfile -ExecutionPolicy Bypass -File "$ROOT/plugins/scope-guard/hooks/pre-commit.ps1" -IssueNumber "$ISSUE"
+exec node --experimental-strip-types "$ROOT/plugins/scope-guard/bin/scope-check.ts" --issue "$ISSUE" --mode index --repo-root "$ROOT"

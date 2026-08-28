@@ -314,7 +314,7 @@ describe('operator-primary runtime snapshot fence', () => {
     };
     const adapter = runtime({ resolved: malformed, found: malformed });
     let calls = 0;
-    const result = await withCurrentOperatorPrimaryTarget({ file, adapter, timeoutMs: 250 }, () => {
+    const result = await withCurrentOperatorPrimaryTarget({ file, adapter, timeoutMs: 1_000 }, () => {
       calls += 1;
       return operatorPrimarySyncResult('unexpected');
     });

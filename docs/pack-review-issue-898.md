@@ -122,8 +122,8 @@ npx vitest run scripts/pack-review-runner-issue-898.test.ts
 Repository floors remain:
 
 ```text
-pwsh -NoProfile -File scripts/verify.ps1
-pwsh -NoProfile -File scripts/check-reusable.ps1
+node --experimental-strip-types scripts/verify.ts
+node --experimental-strip-types scripts/verify.ts --reusable-only
 ```
 
 The final diff must remain inside the active Issue `allowed-roots` (plus the producer-generated declaration required by repository scope policy) and must not touch denied roots, workflows, kernel timer primitives, core/vendor code, reviewer model/prompt policy, or retired machinery.

@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -418,9 +419,9 @@ describe('trusted PR scope runner', () => {
     expect(fixture.comments).toHaveLength(1);
   });
 
-  it('keeps bootstrap/degraded policy out of the runner and wrapper static surface', () => {
+  it('keeps bootstrap/degraded policy out of the runner and retired wrapper surface', () => {
     const runner = readFileSync(join(SCRIPT_DIR, 'pr-scope-runner.ts'), 'utf8');
-    const wrapper = readFileSync(join(SCRIPT_DIR, 'pr-scope-check.ps1'), 'utf8');
+    const workflow = readFileSync(join(SCRIPT_DIR, '..', '.github', 'workflows', 'scope-guard.yml'), 'utf8');
     expect(runner).not.toContain('1305');
     expect(runner).not.toContain('scope-guard-bootstrap');
     expect(runner).not.toContain('collaborators/');
@@ -428,16 +429,9 @@ describe('trusted PR scope runner', () => {
     expect(runner).toContain('runGhJsonCommand');
     expect(runner).toContain("join(TRUSTED_ROOT, 'scripts', 'gh')");
 
-    expect(wrapper).toContain('pr-scope-runner.ts');
-    for (const forbidden of [
-      'Invoke-GhSignal',
-      'check-operator-adoption',
-      'scope-guard-bootstrap',
-      'SCOPE_GUARD_DEGRADED_LABEL',
-      ' gh ',
-      ' git ',
-    ]) {
-      expect(wrapper).not.toContain(forbidden);
-    }
+    expect(existsSync(join(SCRIPT_DIR, 'pr-scope-check.ps1'))).toBe(false);
+    expect(workflow).toContain('trusted_runner="$trusted_root/scripts/pr-scope-runner.ts"');
+    expect(workflow).toContain('node --experimental-strip-types "$trusted_runner"');
+    expect(workflow).not.toContain('$GITHUB_WORKSPACE/scripts/gh');
   });
 });

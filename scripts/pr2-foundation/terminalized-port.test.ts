@@ -2,6 +2,14 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_NONTERMINAL_MAX_AGE_MS,
+  WORKER_REPORT_STORE_SCHEMA_VERSION,
+  evictWorkerReportRecords,
+  listWorkerReportRecordsForAssignment,
+  normalizeWorkerReportStore,
+} from '../../docs/worker-report-store.mjs';
+import { evaluateReadiness, NOT_READY } from './readiness-evaluator.ts';
+import {
   FOUNDATION_DOC_ROWS,
   FOUNDATION_LINT_SUPPRESSION_CONFIG_PATH,
 } from './contracts.ts';
@@ -140,6 +148,130 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     expect(existsSync(path.resolve(
       'scripts/pr2-foundation/terminalized/worker-report-store.ts',
     ))).toBe(true);
+  });
+
+  it('binds #1419 exact-head post-port proof into the required TypeScript runtime context', () => {
+    const workflow = readFileSync(path.resolve('.github/workflows/typescript-foundation.yml'), 'utf8');
+    const runtimeStart = workflow.indexOf('  runtime:');
+    const typecheckStart = workflow.indexOf('  typecheck:', runtimeStart);
+    expect(runtimeStart).toBeGreaterThanOrEqual(0);
+    expect(typecheckStart).toBeGreaterThan(runtimeStart);
+    const runtimeJob = workflow.slice(runtimeStart, typecheckStart);
+    expect(runtimeJob).toContain('name: TypeScript runtime (Node 22)');
+    expect(runtimeJob).toContain('Produce and admit exact-head post-port evidence');
+    expect(runtimeJob).toContain('Upload exact-head post-port evidence');
+    expect(runtimeJob).toContain('working-directory: post-port-exact-head');
+    expect(runtimeJob).toContain('name: post-port-${{ github.event.pull_request.head.sha }}');
+    expect(runtimeJob).toContain('post-port-exact-head/docs/investigations/orca-pwsh-zero-estate/post-port.json');
+    expect(runtimeJob).toContain('if-no-files-found: error');
+    expect(workflow).not.toContain('\n  post-port-proof:\n');
+  });
+
+  it('wires #1419 direct review reconciliation and readiness after an exact-head smoke PASS', () => {
+    const source = readFileSync(path.resolve('scripts/worker-smoke-run.ts'), 'utf8');
+    expect(source).toContain("case 'reconcile-direct-review': return runDirectReviewReconciliation(options);");
+    expect(source).toContain('projectDirectPackReviewState({');
+    expect(source).toContain('semanticPackReviewRequiredStatusRequest({');
+    expect(source).toContain("reason: 'ancestor_blocker_requires_descendant_fix_facts'");
+    const deliverySource = readFileSync(path.resolve('scripts/lib/pack-review-delivery.ts'), 'utf8');
+    expect(deliverySource).toContain("description === 'pack review completed with no findings.'");
+    expect(deliverySource).toContain('projectRunnerPackReviewStatusFromCombined');
+    expect(source).toContain("['api', '--paginate', '--slurp', endpoint]");
+    expect(source).toContain('/statuses?per_page=100');
+    expect(source).not.toContain('/commits/${headSha}/status`');
+    expect(source).toContain('open: target.prOpen');
+    expect(source).toContain('expectedTarget: target.expectedTarget');
+    expect(source).toContain('evaluateReadiness({');
+    const terminalPass = source.indexOf("if (!lifecycleCleanup.clean && report.result === 'PASS') report.result = 'FAIL';");
+    const postSmokeCall = source.indexOf('evaluatePostSmokeReadiness(options, target, adapter)', terminalPass);
+    expect(terminalPass).toBeGreaterThanOrEqual(0);
+    expect(postSmokeCall).toBeGreaterThan(terminalPass);
+
+    expect(existsSync(path.resolve('scripts/direct-pack-review-status.ts'))).toBe(true);
+    const workflow = readFileSync(path.resolve('.github/workflows/direct-pack-review-status.yml'), 'utf8');
+    expect(workflow).toContain('pull_request_review:');
+    expect(workflow).toContain('types: [submitted]');
+    expect(workflow).toContain('scripts/direct-pack-review-status.ts');
+    expect(workflow).toContain('--repo-slug "${{ github.repository }}"');
+    expect(workflow).not.toContain('worker-smoke-run.ts reconcile-direct-review');
+    expect(workflow).toContain('statuses: write');
+  });
+
+  it('fails readiness for an aged same-head WorkerReport using the WorkerReportStore freshness authority', () => {
+    const repository = 'chetwerikoff/orchestrator-pack';
+    const headSha = 'a'.repeat(40);
+    const prNumber = 1709;
+    const assignment = { assignmentId: 'assignment-1419', generation: 3, taskId: 'task-1419' } as const;
+    const store = normalizeWorkerReportStore({
+      schemaVersion: WORKER_REPORT_STORE_SCHEMA_VERSION,
+      sourceRecords: {
+        stale: {
+          accepted: true,
+          repoSlug: repository,
+          assignment,
+          prNumber,
+          headSha,
+          reportState: 'ready_for_review',
+          reportedAtMs: 1,
+          lastObservedMs: 1,
+        },
+      },
+    });
+    const eviction = evictWorkerReportRecords({
+      store,
+      openPrs: [{ number: prNumber, state: 'open', repoSlug: repository }],
+      currentHeadByPr: { [`${repository}|${prNumber}`]: headSha },
+      nowMs: DEFAULT_NONTERMINAL_MAX_AGE_MS + 2,
+      repoSlug: repository,
+    });
+    expect(eviction.removed).toBe(1);
+
+    const workerReports = listWorkerReportRecordsForAssignment(store, repository, assignment);
+    expect(workerReports).toEqual([]);
+    const result = evaluateReadiness({
+      target: {
+        repository,
+        issueNumber: 1419,
+        taskId: assignment.taskId,
+        assignmentId: assignment.assignmentId,
+        assignmentGeneration: assignment.generation,
+        prNumber,
+        headSha,
+      },
+      pr: { open: true, expectedTarget: true, prNumber, headSha },
+      workerReports,
+      workerStatuses: [{
+        assignmentId: assignment.assignmentId,
+        assignmentGeneration: assignment.generation,
+        taskId: assignment.taskId,
+        issueNumber: 1419,
+        repository,
+        kind: 'local',
+        localCapability: 'available',
+        derivedStatus: 'idle',
+        winningSource: 'runtime',
+        stale: false,
+        degradedReason: '',
+        killSwitchActive: false,
+        siblingReadinessOk: true,
+      }],
+      requiredCi: { headSha, state: 'success' },
+      review: {
+        obligation: 'complete',
+        unresolvedRequiredFinding: false,
+        atCapOpenFindings: false,
+        atCapContinuationRequired: false,
+      },
+      smoke: { headSha, state: 'pass' },
+    });
+    expect(result.state).toBe(NOT_READY);
+    expect(result.failedPredicates).toContain('accepted_worker_lifecycle_missing_or_conflicting');
+
+    const source = readFileSync(path.resolve('scripts/worker-smoke-run.ts'), 'utf8');
+    const evictionCall = source.indexOf('evictWorkerReportRecords({');
+    const reportListing = source.indexOf('listWorkerReportRecordsForAssignment(reportStore');
+    expect(evictionCall).toBeGreaterThanOrEqual(0);
+    expect(reportListing).toBeGreaterThan(evictionCall);
   });
 
   it('rewrites actual imports without rewriting string-based consumer inventories', () => {

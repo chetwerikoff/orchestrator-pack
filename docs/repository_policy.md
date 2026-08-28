@@ -12,8 +12,8 @@ state, credentials, or a concrete orchestration implementation.
 - `.github/workflows/**` — reusable CI checks;
 - `docs/**` — active architecture, runbooks, migration notes, evidence, and
   explicitly historical artifacts in excluded archive/draft locations;
-- `.claude/skills/**` — canonical skill instructions;
-- `.cursor/skills/**` — generated skill pointers;
+- `.cursor/skills/**` — canonical skill instructions;
+- `.claude/skills/**` — generated thin pointers to Cursor-canonical skills;
 - `.cursor/rules/**` — tracked Cursor rules;
 - root policy and tooling files such as `README.md`, `AGENTS.md`, `CLAUDE.md`,
   `.gitignore`, `package.json`, and TypeScript configuration.
@@ -52,18 +52,19 @@ the governed publishing flow for an existing artifact.
 
 ## Agent skills
 
-Each skill is authored once under `.claude/skills/<name>/SKILL.md`. Cursor skill
-files are generated pointers whose frontmatter is derived from the canonical file
-and whose body only directs the agent to read it.
+Each skill is authored once under `.cursor/skills/<name>/SKILL.md`. Claude skill
+files are generated thin pointers whose discovery frontmatter is copied from the
+Cursor-canonical file and whose body only directs the agent to read it.
 
 After adding a skill or changing canonical frontmatter, run:
 
-```powershell
-pwsh -NoProfile -File scripts/generate-skill-pointers.ps1
-pwsh -NoProfile -File scripts/check-skill-pointer-drift.ps1
+```bash
+node --experimental-strip-types scripts/generate-skill-pointers.ts generate
+node --experimental-strip-types scripts/generate-skill-pointers.ts check
 ```
 
-Do not hand-maintain divergent instructions in a pointer.
+Do not hand-maintain divergent instructions in a pointer. Generation is one-way
+from Cursor canonical skills to Claude pointers.
 
 ## Runtime-neutral boundary
 
@@ -79,15 +80,16 @@ runtime-neutral public contract and scope.
 
 ## Local verification
 
-From the repository root with PowerShell 7 and Node 22:
+From the repository root with Node 22:
 
 ```powershell
-pwsh -NoProfile -File scripts/verify.ps1
-pwsh -NoProfile -File scripts/check-reusable.ps1
+node --experimental-strip-types scripts/verify.ts
+node --experimental-strip-types scripts/verify.ts --reusable-only
 npm run typecheck:foundation
 npm run lint:foundation
 npm run gate-runner-selftest
 node --experimental-strip-types scripts/runtime-retirement/retired-surface-selftest.ts
+node --experimental-strip-types scripts/generate-skill-pointers.ts check
 ```
 
 Run affected plugin and focused tests as well. Require the current-head scope guard,

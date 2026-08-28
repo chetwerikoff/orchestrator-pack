@@ -13,12 +13,12 @@ When you are the **codex harness reviewer** for a worker PR, you MUST NOT improv
 
 Before the pack review runner submits the review result, run the pack-owned harness bridge from the **trusted pack root** (never a worker-worktree copy of `scripts/**`):
 
-```powershell
-pwsh -NoProfile -File scripts/harness-review-bridge.ps1 `
-  -RunId <review-run-id> `
-  -RepoRoot . `
-  -Base origin/main `
-  -TrustedBaseRoot <trusted-pack-root>
+```bash
+node --experimental-strip-types scripts/harness-review-bridge.ts \
+  --run-id <review-run-id> \
+  --repo-root . \
+  --base origin/main \
+  --trusted-pack-root <trusted-pack-root>
 ```
 
 `<trusted-pack-root>` is `OPK_TRUSTED_PACK_ROOT`, an origin/main pack worktree, or the operator's live pack checkout — **not** the PR head worktree under review.

@@ -58,6 +58,16 @@ describe('runtime retirement closed-world scanner', () => {
     expect(result.violations.some((entry) => entry.surfaceId === surfaceId)).toBe(true);
   });
 
+  it('rejects exact and suffixed legacy config filenames', () => {
+    for (const path of ['agent-orchestrator.yaml', 'agent-orchestrator.local.yaml']) {
+      const result = scanRetiredRuntimeSurfaces({
+        repoRoot: fixture('neutral', path),
+        paths: [path],
+      });
+      expect(result.violations.some((entry) => entry.surfaceId === 'legacy-config-state-root')).toBe(true);
+    }
+  });
+
   it('scans ordinary tests but excludes immutable external captures', () => {
     const root = fixture('neutral');
     const activeTest = join(root, 'tests/runtime/active.test.ts');
@@ -95,6 +105,26 @@ describe('runtime retirement closed-world scanner', () => {
     expect(result.excludedPaths).toContain('docs/issues_drafts/old.md');
     expect(result.excludedPaths).toContain('scripts/gate-runner/census/pre-change-baseline.json');
     expect(result.violations.map((entry) => entry.path)).toContain('scripts/fixtures/current.txt');
+  });
+
+  it('excludes generated smoke and post-port evidence artifacts', () => {
+    const root = fixture('neutral');
+    const smokeEvidence = join(root, '.orca-worker-smoke/runs/run/completion.pending.body');
+    const postPortEvidence = join(root, 'docs/investigations/orca-pwsh-zero-estate/post-port.json');
+    mkdirSync(dirname(smokeEvidence), { recursive: true });
+    mkdirSync(dirname(postPortEvidence), { recursive: true });
+    writeFileSync(smokeEvidence, 'agent-orchestrator.yaml');
+    writeFileSync(postPortEvidence, 'Invoke-AoCliJson');
+
+    const result = scanRetiredRuntimeSurfaces({ repoRoot: root, paths: [
+      '.orca-worker-smoke/runs/run/completion.pending.body',
+      'docs/investigations/orca-pwsh-zero-estate/post-port.json',
+    ] });
+    expect(result.excludedPaths).toEqual([
+      '.orca-worker-smoke/runs/run/completion.pending.body',
+      'docs/investigations/orca-pwsh-zero-estate/post-port.json',
+    ]);
+    expect(result.violations).toEqual([]);
   });
 
   it('honors only exact per-file historical dispositions', () => {

@@ -71,7 +71,7 @@ it. Choose an existing conversation or a fresh project using local values;
 tracked content must not contain either URL.
 
 For governed create-Issue reviewers, do **not** hand-author `${INPUT_FILE}`.
-`.claude/skills/create-issue-draft/SKILL.md` owns the manager-review canon
+`.cursor/skills/create-issue-draft/SKILL.md` owns the manager-review canon
 section list and `scripts/lib/manager-review-brief.ts` renders the exact
 unmarked reviewer input from that tracked canon plus repository, Issue,
 revision, stage, slot, and invocation context. For one plural `stageAttemptId`,
@@ -329,7 +329,7 @@ transport owns marker insertion.
 
 This runbook no longer owns a normative reviewer template. The ordered owning
 sections and binding frame live only in
-`.claude/skills/create-issue-draft/SKILL.md` under **Manager review brief canon**.
+`.cursor/skills/create-issue-draft/SKILL.md` under **Manager review brief canon**.
 Use `scripts/lib/manager-review-brief.ts` to render exact unmarked reviewer
 bytes from those sections and bound invocation context. For plural stages,
 render all siblings from one canon snapshot before the first launch. Pass
