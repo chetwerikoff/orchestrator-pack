@@ -1,4 +1,6 @@
 import { execFileSync } from 'node:child_process';
+import type { ScopeDeclaration } from './check.ts';
+
 function runGit(repoRoot: string, args: string[]): string {
   return execFileSync('git', args, {
     cwd: repoRoot,
@@ -14,13 +16,13 @@ function runGit(repoRoot: string, args: string[]): string {
 export function resolveWorktreeBaseline(
   repoRoot: string,
   explicitBaseline?: string,
-  declaration?: { baseline?: { commit_sha?: string } } | null,
+  declaration?: ScopeDeclaration | null,
 ): string {
   if (explicitBaseline?.trim()) {
     return explicitBaseline.trim();
   }
 
-  if (declaration?.baseline.commit_sha) {
+  if (declaration?.baseline?.commit_sha) {
     return declaration.baseline.commit_sha;
   }
 
