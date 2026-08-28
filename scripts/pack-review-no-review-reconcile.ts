@@ -302,16 +302,10 @@ async function reconcilePossibleDelivery(
     };
   }
 
-  if (!observation.primary) {
-    return {
-      disposition: 'unavailable/inconclusive',
-      reason: 'owned_turn_assistant_without_primary_binding',
-      evidence: slotFact(slot),
-    };
-  }
   const assistantSummary = assistant.node.innerText;
-  if (assistantSummary.byte_length !== observation.primary.byte_length
-      || assistantSummary.sha256 !== observation.primary.sha256) {
+  if (observation.primary
+      && (assistantSummary.byte_length !== observation.primary.byte_length
+        || assistantSummary.sha256 !== observation.primary.sha256)) {
     return {
       disposition: 'contradiction',
       reason: 'owned_turn_assistant_primary_mismatch',
@@ -357,7 +351,15 @@ async function reconcilePossibleDelivery(
     }
     const bytes = readFileSync(output);
     const sha256 = createHash('sha256').update(bytes).digest('hex');
-    if (bytes.byteLength !== observation.primary.byte_length || sha256 !== observation.primary.sha256) {
+    if (bytes.byteLength !== assistantSummary.byte_length || sha256 !== assistantSummary.sha256) {
+      return {
+        disposition: 'contradiction',
+        reason: 'owned_turn_export_snapshot_mismatch',
+        evidence: { ...slotFact(slot), exportedSha256: sha256, snapshotSha256: assistantSummary.sha256 },
+      };
+    }
+    if (observation.primary
+        && (bytes.byteLength !== observation.primary.byte_length || sha256 !== observation.primary.sha256)) {
       return {
         disposition: 'contradiction',
         reason: 'owned_turn_export_primary_mismatch',
@@ -369,8 +371,9 @@ async function reconcilePossibleDelivery(
       reason: 'owned_turn_assistant_result_present',
       evidence: {
         ...slotFact(slot),
-        conversationUrl: observation.conversation_url,
+        conversationUrl: bounded(observation.conversation_url, 512),
         assistantSha256: sha256,
+        primaryBound: Boolean(observation.primary),
       },
     };
   } catch (error) {
