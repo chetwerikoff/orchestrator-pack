@@ -175,11 +175,27 @@ For page-capable-or-uncertain outcomes, first complete the
 classification below, then before any next workflow action complete the
 applicable page and Issue observations:
 
-1. Run `npm run browser-gpt-page-probe -- inspect --cdp "<endpoint>" --url
-   "<chat-url>"`. “Owned prompt present” is true only when exactly one current
-   user node carries the retained transport-owned `OPKTURNV1...` invocation
-   marker. URL presence, prompt text, product ids, message counts, and older
-   turns do not prove ownership.
+1. Apply page observation according to the durable phase and available URL:
+   - With a bound conversation URL, run
+     `npm run browser-gpt-page-probe -- inspect --cdp "<endpoint>" --url
+     "<chat-url>"`. “Owned prompt present” is true only when exactly one
+     current user node carries the retained transport-owned
+     `OPKTURNV1...` invocation marker. URL presence, prompt text, product ids,
+     message counts, and older turns do not prove ownership.
+   - For `dispatching` or `sent_unbound` with no persisted conversation URL,
+     use the same-invocation harvest in [Unbound same-invocation
+     harvest](#unbound-same-invocation-harvest), which resolves ownership only
+     from the persisted exact marker.
+   - For an exact, well-formed producer-terminal `not_sent` with numeric
+     `send_count: 0`, or a `prepared` record whose stronger authoritative
+     zero-send evidence proves the child cannot advance, page observation is
+     not applicable when no conversation URL exists. Do not invent or
+     reconstruct a URL or marker harvest for either proven-zero case; retain
+     the existing retry/correction authority and complete the applicable
+     Issue-side observation below.
+   - Missing, unreadable, malformed, identity-mismatched, or otherwise
+     unresolved page evidence remains observation uncertainty and cannot
+     authorize resend or progression.
 2. For a governed create-Issue/direct-publication turn, check observable
    Issue-side publication evidence using the canonical Issue-root review
    evidence already recorded for the current admitted work. Select only
@@ -277,14 +293,28 @@ stop evidence.
 ### Unbound same-invocation harvest
 
 For `sent_unbound` or `dispatching` records with no persisted conversation URL,
-run the existing `browser-gpt-page-probe harvest` with the same configured
-profile and caller-retained invocation id. The probe may locate the owned page
-only through the persisted exact `OPKTURNV1...` marker and must settle the
-record under that original invocation. Exactly one current user node with that
-marker is ownership; zero is not proof of non-delivery, and multiple matches
-are ambiguous. A marker with a stable reply is harvested; a marker without a
-reply receives the existing bounded wait and re-probe. Never substitute a
-prompt-text match, product id, URL alone, or a newly minted invocation.
+run the existing `browser-gpt-page-probe harvest` with all retained
+same-invocation inputs:
+
+```bash
+npm run browser-gpt-page-probe -- harvest \
+  --cdp "${CDP_ENDPOINT}" \
+  --profile "${BROWSER_PROFILE}" \
+  --invocation-id "${INVOCATION_ID}" \
+  --output "${OUTPUT_FILE}"
+```
+
+`${CDP_ENDPOINT}`, `${BROWSER_PROFILE}`, `${INVOCATION_ID}`, and
+`${OUTPUT_FILE}` must be the already-bound CDP endpoint, browser profile,
+caller-retained invocation id, and existing primary output identity for this
+invocation; do not guess or substitute any of them. The probe may locate the
+owned page only through the persisted exact `OPKTURNV1...` marker and must
+settle the record under that original invocation. Exactly one current user node
+with that marker is ownership; zero is not proof of non-delivery, and multiple
+matches are ambiguous. A marker with a stable reply is harvested; a marker
+without a reply receives the existing bounded wait and re-probe. Never
+substitute a prompt-text match, product id, URL alone, or a newly minted
+invocation.
 
 For governed create-Issue/direct-publication turns, also consume the existing
 complete authenticated Issue-comment census and only
