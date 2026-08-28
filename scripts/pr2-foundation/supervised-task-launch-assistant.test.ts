@@ -1,3 +1,6 @@
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { runProcess } from '../kernel/subprocess.ts';
@@ -440,6 +443,30 @@ describe('supervised Task launch assistant', () => {
     expect(calls).toContainEqual(['opencode', 'debug', 'paths']);
   });
 
+  it('refuses contextual probes when a probe mutates the worktree config', async () => {
+    const root = join(tmpdir(), `opk-opencode-probe-${Date.now()}`);
+    mkdirSync(root, { recursive: true });
+    let mutated = false;
+    try {
+      const resolved = await resolveLiveExecutorProfile('t2', opencodeProfileEnv('t2'), undefined, async (args) => opencodeProbeResult(args, true));
+      if (resolved.status !== 'ok') throw new Error('fixture profile should resolve');
+      const result = await finalizeOpenCodeExecutorProfile(resolved.value, root, async (args) => {
+        if (args[1] === 'debug' && args[2] === 'config') {
+          if (!mutated) {
+            mkdirSync(join(root, '.opencode'), { recursive: true });
+            writeFileSync(join(root, '.opencode', 'probe-write.json'), '{}');
+            mutated = true;
+          }
+          return { ok: true, stdout: JSON.stringify({ default_agent: 'build' }), stderr: '' };
+        }
+        return { ok: true, stdout: JSON.stringify({ name: 'build', model: { modelID: 'fixture-opencode-model' } }), stderr: '' };
+      }, () => true);
+      expect(result).toMatchObject({ status: 'continue', cause: 'executor_effort_channel_unavailable' });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('probe surface equals spawn surface', async () => {
     const profile = resolveSemanticExecutorProfile({ surface: 'task', names: profileNamesForTask('t2'), env: opencodeProfileEnv('t2') });
     if (!profile.ok) throw new Error('semantic profile should be ok');
@@ -833,7 +860,7 @@ describe('supervised Task launch assistant', () => {
     expect(mutableCalls).toHaveLength(2);
   });
 
-  it('accepts a fresh worktree when skip setup returns no setup receipt', async () => {
+  it('refuses a fresh worktree when skip setup returns no setup receipt', async () => {
     const calls: string[][] = [];
     const result = await prepareWorktreeWithOrca({
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', issueNumber: 1479,
@@ -844,10 +871,7 @@ describe('supervised Task launch assistant', () => {
       }]) };
       return { ok: true, stdout: okEnvelope({ worktree: { id: 'repo::wt', path: '/tmp/wt' } }) };
     });
-    expect(result).toMatchObject({
-      status: 'ok', value: { id: 'repo::wt', setupWitness: 'same_invocation_complete' },
-      evidence: { setupState: 'not_configured' },
-    });
+    expect(result).toMatchObject({ status: 'continue', cause: 'worktree_setup_receipt_unavailable' });
     expect(calls[1]).toEqual([
       'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'wt',
       '--issue', '1479', '--setup', 'skip', '--json',

@@ -306,12 +306,29 @@ function smokeConfigState(cwd: string, env: Readonly<NodeJS.ProcessEnv> = proces
   return rows.join('\n');
 }
 
-function proveOpenCodeNoWrite(cwd: string): boolean {
-  const before = smokeConfigState(cwd);
-  return before === smokeConfigState(cwd);
-}
-
 type OpenCodeNoWriteProof = (cwd: string) => boolean;
+
+function proveOpenCodeNoWrite(cwd: string, execute: SmokeChildExecutor): boolean {
+  const before = smokeConfigState(cwd);
+  const stateRoot = join(tmpdir(), `opk-opencode-proof-state-${randomUUID()}`);
+  const isolatedEnv = {
+    XDG_STATE_HOME: stateRoot,
+    XDG_CONFIG_HOME: join(stateRoot, 'config'),
+    XDG_DATA_HOME: join(stateRoot, 'data'),
+    XDG_CACHE_HOME: join(stateRoot, 'cache'),
+  };
+  const paths = execute(['opencode', 'debug', 'paths'], isolatedEnv);
+  if (!paths.ok || !paths.stdout.includes(stateRoot) || before !== smokeConfigState(cwd)) return false;
+  const config = execute(['opencode', 'debug', 'config'], isolatedEnv);
+  if (!config.ok || before !== smokeConfigState(cwd)) return false;
+  let parsed: Record<string, unknown>;
+  try { const value: unknown = JSON.parse(config.stdout); if (!record(value)) throw new Error(); parsed = value; } catch { return false; }
+  const defaultAgent = typeof parsed.default_agent === 'string' ? parsed.default_agent.trim() : '';
+  if (!defaultAgent) return false;
+  const baseline = execute(['opencode', 'debug', 'agent', defaultAgent], isolatedEnv);
+  if (!baseline.ok || before !== smokeConfigState(cwd)) return false;
+  try { const value: unknown = JSON.parse(baseline.stdout); return record(value) && before === smokeConfigState(cwd); } catch { return false; }
+}
 
 function smokeFinalizeOpenCode(profile: SemanticExecutorProfile, cwd: string, execute: SmokeChildExecutor, proveNoWrite?: OpenCodeNoWriteProof): { profile: SemanticExecutorProfile; command: string } {
   // Config/Agent probes are not assumed read-only. Production supplies no
@@ -319,7 +336,12 @@ function smokeFinalizeOpenCode(profile: SemanticExecutorProfile, cwd: string, ex
   if (!proveNoWrite || !proveNoWrite(cwd)) throw new Error('executor_effort_channel_unavailable');
   const before = smokeConfigState(cwd);
   const stateRoot = join(tmpdir(), `opk-opencode-state-${randomUUID()}`);
-  const isolatedEnv = { XDG_STATE_HOME: stateRoot };
+  const isolatedEnv = {
+    XDG_STATE_HOME: stateRoot,
+    XDG_CONFIG_HOME: join(stateRoot, 'config'),
+    XDG_DATA_HOME: join(stateRoot, 'data'),
+    XDG_CACHE_HOME: join(stateRoot, 'cache'),
+  };
   const config = execute(['opencode', 'debug', 'config'], isolatedEnv);
   if (!config.ok || before !== smokeConfigState(cwd)) throw new Error('executor_effort_channel_unavailable');
   let parsed: Record<string, unknown>;
@@ -1853,7 +1875,7 @@ export async function runSmokeAttempt(
           process.env,
           (args, env) => runSmokeProfileChild(args, options.cwd, process.env, env),
           options.cwd,
-          proveOpenCodeNoWrite,
+          (path) => proveOpenCodeNoWrite(path, (args, env) => runSmokeProfileChild(args, options.cwd, process.env, env)),
         );
   } catch (error) {
     const report = operationalReport('BLOCKED', options, {
