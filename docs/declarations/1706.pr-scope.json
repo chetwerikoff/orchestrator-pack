@@ -2,8 +2,16 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1706,
   "declared_paths": [
+    "docs/orchestration-runbook.md",
+    "docs/worker-smoke-testing.md",
+    "scripts/executor-profile-policy.ts",
     "scripts/orca-runtime/task-adapter.test.ts",
-    "scripts/orca-runtime/task-adapter.ts"
+    "scripts/orca-runtime/task-adapter.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
+    "scripts/worker-smoke-entrypoint-1359.test.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
   ],
   "denylist": [
     ".env",
@@ -30,5 +38,5 @@
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "4544132f0dcb70b80139d12348d91c7206934223"
+  "source_revision": "d771f9372e065008c32c04969a8d3ad242476095"
 }
