@@ -2442,11 +2442,7 @@ async function runTurn(
             sendAuthorized = false;
           }
 
-          const urlWaitStartedAt = Date.now();
-          const urlDeadline = Math.min(
-            urlWaitStartedAt + Math.min(30_000, config.timeoutMs),
-            Math.max(urlWaitStartedAt, invocationDeadlineMs - INITIAL_POLL_MS),
-          );
+          const urlDeadline = Date.now() + Math.min(30_000, config.timeoutMs);
           let conversationUrl: string | undefined;
           try {
             conversationUrl = await waitForConversationUrlAfterSend(
