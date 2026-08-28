@@ -565,11 +565,15 @@ function cancellationReceiptIsBound(
   }
 }
 
+type TerminalCancellationAttempt = BrowserTurnCancellationAttempt & {
+  readonly receiptIdentity?: Pick<BrowserTurnCancellationReceipt, 'invocation_id' | 'marker'>;
+};
+
 function receiptEvidenceForTerminalIncident(
   config: LaunchConfig,
   capture: CandidateCapture,
   incident: 'child_startup_timeout' | 'child_liveness_timeout' | 'child_terminal_result_missing',
-): BrowserTurnCancellationAttempt | null {
+): TerminalCancellationAttempt | null {
   const receipt = capture.cancellationReceipt;
   if (!receipt) return null;
   if (!cancellationReceiptIsBound(config, receipt)) {
@@ -588,6 +592,10 @@ function receiptEvidenceForTerminalIncident(
       stopOutcome: 'not_attempted_authority_absent',
       identityProven: false,
       conversationUrl: receipt.conversation_url,
+      receiptIdentity: {
+        invocation_id: receipt.invocation_id,
+        marker: receipt.marker,
+      },
     };
   }
   return {
@@ -597,6 +605,10 @@ function receiptEvidenceForTerminalIncident(
     stopOutcome: 'not_attempted_authority_absent',
     identityProven: false,
     conversationUrl: receipt.conversation_url,
+    receiptIdentity: {
+      invocation_id: receipt.invocation_id,
+      marker: receipt.marker,
+    },
   };
 }
 
@@ -613,7 +625,7 @@ function cancellationEnvelopeFields(
 }
 
 function cancellationDiagnostics(
-  attempt: BrowserTurnCancellationAttempt,
+  attempt: TerminalCancellationAttempt,
   heartbeatDiagnostics: Record<string, unknown> | undefined,
 ): Record<string, unknown> {
   return boundedDiagnostics({
@@ -623,6 +635,7 @@ function cancellationDiagnostics(
       cause: attempt.cause,
       stop_outcome: attempt.stopOutcome,
       identity_proven: attempt.identityProven,
+      ...(attempt.receiptIdentity ? { receipt_identity: attempt.receiptIdentity } : {}),
     },
   });
 }

@@ -1190,6 +1190,7 @@ describe('Issue #1377 long-running child abandonment proof', () => {
       cancellation: {
         stop_outcome: 'not_attempted_authority_absent',
         identity_proven: false,
+        receipt_identity: { invocation_id: invocation, marker },
       },
     });
   });
@@ -1198,12 +1199,13 @@ describe('Issue #1377 long-running child abandonment proof', () => {
     const cdp = 'http://127.0.0.1:9222';
     const profile = join(tempDir('opk-1377-bound-profile-'), 'profile');
     const invocation = 'invocation-1377-bound';
+    const marker = `OPKTURNV1${'56'.repeat(16)}`;
     const conversationUrl = 'https://chatgpt.com/c/55555555-5555-4555-8555-555555555555';
     const receipt = buildBrowserTurnCancellationReceipt({
       invocationId: invocation,
       profileKey: configuredProfileKey(profile, cdp),
       conversationUrl,
-      marker: `OPKTURNV1${'56'.repeat(16)}`,
+      marker,
       sendCount: 1,
     });
     expect(receipt).not.toBeNull();
@@ -1224,7 +1226,10 @@ describe('Issue #1377 long-running child abandonment proof', () => {
       child_exit_code: 0,
     });
     expect(envelope?.diagnostics).toMatchObject({
-      cancellation: { stop_outcome: 'not_attempted_authority_absent' },
+      cancellation: {
+        stop_outcome: 'not_attempted_authority_absent',
+        receipt_identity: { invocation_id: invocation, marker },
+      },
     });
   });
 
