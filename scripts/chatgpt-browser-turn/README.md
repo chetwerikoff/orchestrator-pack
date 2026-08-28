@@ -387,14 +387,30 @@ is not a resend signal.
 
 ### Observation heartbeats
 
-During post-send observation the helper emits one machine-greppable JSON line per
-heartbeat to stdout (approximately every 30 seconds wall time or every two polls,
-whichever comes first). Heartbeats use `schema: observation-heartbeat/v1` and carry
-`poll_count`, `observation_state`, `stable_reads`, `completion_ready`,
-`last_reply_length`, and a bounded `last_reply_sha256_head` digest. The terminal
-`turn-result/v1` line remains the only completion authority; heartbeats exist so
-stuck invocations become diagnosable from captured stdout within minutes instead of
-waiting for deadline exhaustion.
+The ordinary `state-light-entry.ts turn` path and the long-running launcher share
+one timing contract from `liveness-contract.ts`. Before the first heartbeat or
+terminal result, the launcher permits only the bounded startup allowance for
+process bootstrap plus direct-publication canonical admission. Once the admitted
+turn takes over it emits `observation-heartbeat/v1` immediately, before profile/CDP
+or browser work, and continues on a turn-scoped timer independent of transcript
+polling and `POST_SEND_OBSERVATION_POLL_MS`.
+
+Heartbeats include a bounded `phase` (`admitted_pre_send`, `composer_dispatch`, or
+`post_send_observation`). The phase and heartbeat counters are diagnostics only:
+they prove that the Node event loop can emit, not that CDP navigation, composer
+insertion, dispatch, transcript observation, or model generation made progress.
+Existing operation budgets remain the authority for logical stalls. The shared
+contract fails closed unless the maximum healthy heartbeat gap is strictly smaller
+than the live-child idle window, and the launcher replaces that recurring deadline
+from each accepted heartbeat's own arrival time.
+
+The heartbeat timer is scoped to one turn, is non-keepalive, and is disposed before
+the turn returns. A terminal `turn-result/v1` remains the only completion authority
+and cannot be followed by timer-owned heartbeats that keep the child alive. Startup
+silence is `child_startup_timeout`; silence after an accepted heartbeat is
+`child_liveness_timeout`; real process exit without a terminal result remains
+`child_terminal_result_missing`. Cancellation receipts stay evidence only on these
+branches: they never manufacture Stop-generating or resend authority.
 
 ### Transcript read resilience
 
