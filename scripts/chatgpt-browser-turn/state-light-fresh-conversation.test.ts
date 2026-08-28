@@ -64,7 +64,13 @@ vi.mock('node:fs', async (importOriginal) => {
   };
 });
 
-vi.mock('./browser-session.ts', () => createBrowserSessionModuleMock(mocks));
+vi.mock('./browser-session.ts', () => ({
+  ...createBrowserSessionModuleMock(mocks),
+  abandonLatePageHandle: vi.fn(async (page: { close: () => Promise<void> }) => {
+    if (mocks.cleanupOutcome === 'confirmed') await page.close();
+    return mocks.cleanupOutcome;
+  }),
+}));
 vi.mock('./coordination.ts', () => createCoordinationModuleMock());
 
 vi.mock('./input.ts', () => ({
@@ -1559,6 +1565,323 @@ describe('Issue #1430 mutation-generation crash and restart coverage', () => {
       mocks.failNextObservationMutationRename = null;
       mocks.failNextObservationMutationRmdir = false;
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+
+describe('Issue #1752 production liveness regressions', () => {
+  let livenessStateDir: string;
+
+  beforeEach(() => {
+    livenessStateDir = mkdtempSync(join(tmpdir(), 'slt-liveness-'));
+    process.env.CHATGPT_BROWSER_TURN_STATE_DIR = livenessStateDir;
+    process.env.OPK_BROWSER_TURN_STARTUP_ALLOWANCE_MS = '200';
+    process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS = '10';
+    process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '30';
+    disableSendSlotForTest();
+    mocks.browserQueue.length = 0;
+    mocks.cleanupOutcome = 'confirmed';
+    mocks.verifyProfile.mockReset();
+    mocks.verifyProfile.mockResolvedValue({ state: 'verified' });
+    mocks.releaseBrowser.mockReset();
+    mocks.releaseBrowser.mockResolvedValue(undefined);
+    mocks.nowMs = 10_000;
+    mocks.productStatusText.mockReset();
+    mocks.productStatusText.mockResolvedValue({ text: '', composer: true });
+    mocks.readStableInput.mockReset();
+    vi.spyOn(Date, 'now').mockImplementation(() => mocks.nowMs);
+  });
+
+  afterEach(() => {
+    delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+    delete process.env.OPK_BROWSER_TURN_STARTUP_ALLOWANCE_MS;
+    delete process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS;
+    delete process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS;
+    clearSendSlotDisableEnv();
+    rmSync(livenessStateDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  function livenessArgv(outputPath: string, timeoutMs = '120') {
+    return [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(),
+      '--output', outputPath,
+      '--new-chat',
+      '--project-url', PROJECT_URL,
+      '--timeout-ms', timeoutMs,
+      '--poll-ms', '1',
+    ];
+  }
+
+  function parseRecords(writes: readonly string[]): Array<Record<string, unknown>> {
+    return writes
+      .flatMap((chunk) => chunk.split('\n'))
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+  }
+
+  it('emits healthy heartbeats while profile verification exceeds the recurring idle window', async () => {
+    const prompt = 'PROMPT-LIVENESS-PROFILE';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    mocks.verifyProfile.mockImplementationOnce(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 45));
+      return { state: 'verified' };
+    });
+    const fake = makeLoserPage(prompt, 'PROFILE-FINAL');
+    enqueueBrowserForTurn(mocks, fake.page);
+
+    const writes: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      const code = await runStateLightTurn(
+        livenessArgv(join(livenessStateDir, 'profile.txt')),
+        { entryLivenessHeartbeat: true },
+      );
+      expect(code).toBe(0);
+      const records = parseRecords(writes);
+      const heartbeats = records.filter((record) => record.schema === 'observation-heartbeat/v1');
+      expect(heartbeats.length).toBeGreaterThan(2);
+      expect(heartbeats.filter((record) => record.phase === 'admitted_pre_send').length)
+        .toBeGreaterThan(2);
+      expect(records.at(-1)).toMatchObject({
+        schema: 'turn-result/v1',
+        state: 'ok',
+        send_count: 1,
+      });
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it('keeps heartbeats flowing through delayed finalization and stops them before turn-result publication', async () => {
+    const prompt = 'PROMPT-LIVENESS-FINALIZE';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const fake = makeLoserPage(prompt, 'FINALIZE-FINAL');
+    enqueueBrowserForTurn(mocks, fake.page);
+
+    const writes: string[] = [];
+    let releaseStartedAtWrite = -1;
+    mocks.releaseBrowser.mockImplementationOnce(async () => {
+      releaseStartedAtWrite = writes.length;
+      await new Promise((resolve) => setTimeout(resolve, 45));
+    });
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      const code = await runStateLightTurn(
+        livenessArgv(join(livenessStateDir, 'finalize.txt')),
+        { entryLivenessHeartbeat: true },
+      );
+      expect(code).toBe(0);
+      expect(releaseStartedAtWrite).toBeGreaterThanOrEqual(0);
+
+      const finalizationRecords = parseRecords(writes.slice(releaseStartedAtWrite));
+      expect(finalizationRecords.filter((record) => record.schema === 'observation-heartbeat/v1').length)
+        .toBeGreaterThan(2);
+      const records = parseRecords(writes);
+      expect(records.at(-1)).toMatchObject({
+        schema: 'turn-result/v1',
+        state: 'ok',
+        send_count: 1,
+      });
+
+      const terminalWriteCount = writes.length;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(writes).toHaveLength(terminalWriteCount);
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it('times out initial newPage without liveness loss, abandons a late page, and leaves foreign tabs untouched', async () => {
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-LIVENESS-INITIAL'));
+
+    let resolveLatePage!: (page: any) => void;
+    const pendingPage = new Promise<any>((resolve) => {
+      resolveLatePage = resolve;
+    });
+    const latePage = {
+      close: vi.fn(async () => undefined),
+      goto: vi.fn(async () => undefined),
+    };
+    const foreignPage = {
+      close: vi.fn(async () => undefined),
+      url: vi.fn(() => 'https://chatgpt.com/c/foreign'),
+    };
+    const context = {
+      newPage: vi.fn(() => pendingPage),
+      pages: vi.fn(() => [foreignPage]),
+    };
+    const browser = {
+      contexts: vi.fn(() => [context]),
+      isConnected: vi.fn(() => true),
+      close: vi.fn(async () => undefined),
+    };
+    mocks.browserQueue.push(browser);
+
+    const writes: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      const code = await runStateLightTurn(
+        livenessArgv(join(livenessStateDir, 'initial-page.txt'), '45'),
+        { entryLivenessHeartbeat: true },
+      );
+      expect(code).not.toBe(0);
+      const records = parseRecords(writes);
+      expect(records.filter((record) => record.schema === 'observation-heartbeat/v1').length)
+        .toBeGreaterThan(2);
+      expect(records.at(-1)).toMatchObject({
+        schema: 'turn-result/v1',
+        state: 'driver_error',
+        cause: 'browser_operation_timeout:new_page',
+        send_count: 0,
+      });
+
+      resolveLatePage(latePage);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(latePage.close).toHaveBeenCalledTimes(1);
+      expect(latePage.goto).not.toHaveBeenCalled();
+      expect(foreignPage.close).not.toHaveBeenCalled();
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it('keeps heartbeats flowing during recovery newPage timeout and abandons its late successor without resend', async () => {
+    const prompt = 'PROMPT-LIVENESS-RECOVERY';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+    let sends = 0;
+    let sent = false;
+    let lost = false;
+    let url = PROJECT_URL;
+    let composerText = '';
+    const composer = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => undefined),
+      fill: vi.fn(async (value: string) => { composerText = value; }),
+      innerText: vi.fn(async () => sent ? '' : composerText),
+      textContent: vi.fn(async () => sent ? '' : composerText),
+      press: vi.fn(async () => { sends += 1; sent = true; url = SHARED_CONV; }),
+    });
+    const sendButton = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => { sends += 1; sent = true; url = SHARED_CONV; }),
+    });
+    const workingMessages = (): StateLightTestMessage[] => [
+      { role: 'user', text: composerText },
+      { role: 'assistant', text: 'working', inProgress: true },
+    ];
+    const initialClose = vi.fn(async () => undefined);
+    const initialPage: any = {
+      __fakeBrowserGptPage: true,
+      goto: vi.fn(async (target: string) => { url = target; }),
+      url: vi.fn(() => url),
+      isClosed: vi.fn(() => lost),
+      waitForTimeout: vi.fn(async (ms: number) => { mocks.nowMs += ms; }),
+      close: initialClose,
+      getByText: vi.fn(() => scalarLocator()),
+      getByRole: vi.fn(() => scalarLocator()),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (matchesNewChatControlSelector(selector)) return scalarLocator({ count: vi.fn(async () => 0) });
+        if (selector === MESSAGE_NODE_SELECTOR) {
+          return sent ? collectionLocator(workingMessages(), true) : collectionLocator([]);
+        }
+        if (selector === USER_MESSAGE_SELECTOR) {
+          return sent
+            ? collectionLocator(workingMessages().filter((message) => message.role === 'user'), true)
+            : collectionLocator([]);
+        }
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) {
+          return sent
+            ? collectionLocator(workingMessages().filter((message) => message.role === 'assistant'), true)
+            : collectionLocator([]);
+        }
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+          return sent ? messageLocator(workingMessages().at(-1)!, true) : scalarLocator({ count: vi.fn(async () => 0) });
+        }
+        if (selector.includes(STOP_BUTTON_TESTID)) return scalarLocator();
+        return scalarLocator();
+      }),
+    };
+
+    let resolveLateSuccessor!: (page: any) => void;
+    const pendingSuccessor = new Promise<any>((resolve) => {
+      resolveLateSuccessor = resolve;
+    });
+    const lateSuccessor = {
+      close: vi.fn(async () => undefined),
+      goto: vi.fn(async () => undefined),
+      url: vi.fn(() => 'about:blank#late-recovery-successor'),
+    };
+    const foreignPage = {
+      close: vi.fn(async () => undefined),
+      url: vi.fn(() => LOSER_CONV),
+      isClosed: vi.fn(() => false),
+    };
+    const context = {
+      newPage: vi.fn()
+        .mockResolvedValueOnce(initialPage)
+        .mockImplementationOnce(() => pendingSuccessor),
+      pages: vi.fn(() => lost ? [foreignPage] : [initialPage]),
+    };
+    const browser = {
+      contexts: vi.fn(() => [context]),
+      isConnected: vi.fn(() => true),
+      close: vi.fn(async () => undefined),
+    };
+    mocks.browserQueue.push(browser);
+
+    const writes: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      const code = await runStateLightTurn(
+        livenessArgv(join(livenessStateDir, 'recovery-page.txt'), '50'),
+        {
+          entryLivenessHeartbeat: true,
+          recoveryHooks: {
+            faultActuator: () => { lost = true; },
+          },
+        },
+      );
+      expect(code).not.toBe(0);
+      const records = parseRecords(writes);
+      const heartbeats = records.filter((record) => record.schema === 'observation-heartbeat/v1');
+      expect(heartbeats.length).toBeGreaterThan(3);
+      expect(heartbeats.some((record) => record.phase === 'post_send_observation')).toBe(true);
+      expect(records.at(-1)).toMatchObject({
+        schema: 'turn-result/v1',
+        state: 'driver_error',
+        cause: 'replacement_observation_page_create_failed',
+        send_count: 1,
+      });
+      expect(sends).toBe(1);
+      expect(context.newPage).toHaveBeenCalledTimes(2);
+      expect(initialClose).not.toHaveBeenCalled();
+      expect(foreignPage.close).not.toHaveBeenCalled();
+
+      resolveLateSuccessor(lateSuccessor);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(lateSuccessor.close).toHaveBeenCalledTimes(1);
+      expect(lateSuccessor.goto).not.toHaveBeenCalled();
+      expect(foreignPage.close).not.toHaveBeenCalled();
+    } finally {
+      stdout.mockRestore();
     }
   });
 });

@@ -1923,6 +1923,7 @@ async function runTurn(
   args: ParsedTurnArgs,
   recoveryHooks: StateLightRecoveryHooks = {},
   entryLivenessHeartbeat = false,
+  heartbeatSchedulerReady?: (scheduler: TurnScopedHeartbeatScheduler) => void,
 ): Promise<TurnRunOutcome> {
   rejectUnknownOptions(args, [
     'profile',
@@ -2023,6 +2024,7 @@ async function runTurn(
           heartbeatPhase,
         )),
       });
+      heartbeatSchedulerReady?.(heartbeatScheduler);
     }
     if (!config.newChat && config.chatUrl) {
       transitionStateLightTurnObservation({
@@ -3793,8 +3795,6 @@ async function runTurn(
         ...(retirementCleanupRequired ? { retirement_cleanup_required: true } : {}),
       },
     };
-  } finally {
-    heartbeatScheduler?.dispose();
   }
 }
 
@@ -3953,14 +3953,24 @@ export async function runStateLightTurn(
     return 22;
   }
 
+  let heartbeatScheduler: TurnScopedHeartbeatScheduler | undefined;
   const outcome = dependencies.runTurn
     ? await dependencies.runTurn(args)
     : await runTurn(
         args,
         dependencies.recoveryHooks,
         dependencies.entryLivenessHeartbeat === true,
+        (scheduler) => { heartbeatScheduler = scheduler; },
       );
-  const result = await finalizeTurn(outcome);
-  emit(result);
-  return turnExitCode(result.state);
+  try {
+    const result = await finalizeTurn(outcome);
+    // Keep liveness continuous through every pre-emission cleanup await, then
+    // stop the scheduler at the terminal publication boundary so no heartbeat
+    // can follow turn-result/v1 or keep the subprocess alive.
+    heartbeatScheduler?.dispose();
+    emit(result);
+    return turnExitCode(result.state);
+  } finally {
+    heartbeatScheduler?.dispose();
+  }
 }
