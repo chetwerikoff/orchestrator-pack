@@ -351,6 +351,31 @@ describe('Issue #1150 stage authority', () => {
     }
   });
 
+  it('keeps missing non-artifact transport identities audit-only only at final acceptance', () => {
+    const source = sourceStage('architectural-review', 1, 1);
+    const historical = structuredClone(source.receipt);
+    delete historical.invocations![0]!.terminalResultIdentity;
+    delete historical.invocations![0]!.reviewerSource;
+    expect(historical.invocations![0]!.artifactAuthority).toBeUndefined();
+
+    const relays = relay(source.captures);
+    const finalState = deriveReviewEpisodeState(
+      [historical],
+      relays,
+      { ...authority([historical], [], 'skipped'), validationPurpose: 'final-acceptance' },
+    );
+    expect(finalState.errors, finalState.errors.join('\n')).toEqual([]);
+    expect(finalState.credentialingCapturesByStage['architectural-review']).toEqual(source.captures);
+
+    const stageState = deriveReviewEpisodeState(
+      [historical],
+      relays,
+      { ...authority([historical], [], 'skipped'), validationPurpose: 'stage-time' },
+    );
+    expect(stageState.errors.join('\n')).toContain('missing terminalResultIdentity');
+    expect(stageState.errors.join('\n')).toContain('missing reviewerSource');
+  });
+
   it('accepts T2 architectural-review and rejects T2 competitive', () => {
     const architectural = sourceStage('architectural-review', 1, 3);
     architectural.receipt.tier = 'T2';
