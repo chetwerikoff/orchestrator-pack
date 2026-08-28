@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import type { DeclarationSnapshot } from '@orchestrator-pack/shared/lib/declaration_schema.js';
+import type { ScopeDeclaration } from './check.ts';
 
 function runGit(repoRoot: string, args: string[]): string {
   return execFileSync('git', args, {
@@ -16,13 +16,13 @@ function runGit(repoRoot: string, args: string[]): string {
 export function resolveWorktreeBaseline(
   repoRoot: string,
   explicitBaseline?: string,
-  declaration?: DeclarationSnapshot | null,
+  declaration?: ScopeDeclaration | null,
 ): string {
   if (explicitBaseline?.trim()) {
     return explicitBaseline.trim();
   }
 
-  if (declaration?.baseline.commit_sha) {
+  if (declaration?.baseline?.commit_sha) {
     return declaration.baseline.commit_sha;
   }
 

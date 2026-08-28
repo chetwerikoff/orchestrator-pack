@@ -1,4 +1,3 @@
-import type { DeclarationSnapshot } from '@orchestrator-pack/shared/lib/declaration_schema.js';
 import { normalizePath } from '@orchestrator-pack/shared/lib/normalize.js';
 import { partitionControlArtifacts } from './control_artifacts.ts';
 import { pathMatchesAnyPattern } from './glob_match.ts';
@@ -16,6 +15,15 @@ export interface ScopeViolationReport {
   invalid_paths: Array<{ path: string; reason: string }>;
   skipped_control_artifacts: string[];
   message: string;
+}
+
+export interface ScopeDeclaration {
+  declared_paths: string[];
+  declared_globs?: string[];
+  baseline?: {
+    commit_sha?: string;
+    active_scope_hash?: string;
+  };
 }
 
 export type ScopeCheckResult =
@@ -83,7 +91,7 @@ export function classifyScopedPaths(
  */
 export function checkScope(
   rawPaths: string[],
-  declaration: DeclarationSnapshot | null,
+  declaration: ScopeDeclaration | null,
   denylist: string[],
 ): ScopeCheckResult {
   const { control, scoped } = partitionControlArtifacts(rawPaths);
@@ -114,7 +122,7 @@ export function checkScope(
     {
       denylist,
       declaredPaths: declaration.declared_paths,
-      declaredGlobs: declaration.declared_globs,
+      declaredGlobs: declaration.declared_globs ?? [],
     },
   );
 
@@ -122,8 +130,8 @@ export function checkScope(
     return {
       ok: false,
       reason: 'invalid_path',
-      active_scope_hash: declaration.baseline.active_scope_hash,
-      baseline_commit_sha: declaration.baseline.commit_sha,
+      active_scope_hash: declaration.baseline?.active_scope_hash,
+      baseline_commit_sha: declaration.baseline?.commit_sha,
       out_of_scope: outOfScope,
       denied,
       invalid_paths: invalidPaths,
@@ -136,8 +144,8 @@ export function checkScope(
     return {
       ok: false,
       reason: 'scope_violation',
-      active_scope_hash: declaration.baseline.active_scope_hash,
-      baseline_commit_sha: declaration.baseline.commit_sha,
+      active_scope_hash: declaration.baseline?.active_scope_hash,
+      baseline_commit_sha: declaration.baseline?.commit_sha,
       out_of_scope: outOfScope.sort(),
       denied: denied.sort(),
       invalid_paths: [],
