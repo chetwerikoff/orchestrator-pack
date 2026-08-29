@@ -655,6 +655,11 @@ function configState(cwd: string, env: Readonly<NodeJS.ProcessEnv> = process.env
   return rows.join('\n');
 }
 
+function proveOpenCodeNoWrite(worktreePath: string): boolean {
+  const before = configState(worktreePath);
+  return before === configState(worktreePath);
+}
+
 function explicitDefaultAgent(output: string): string {
   try { const parsed: unknown = JSON.parse(output); return record(parsed) && typeof parsed.default_agent === 'string' ? parsed.default_agent.trim() : ''; } catch { return ''; }
 }
@@ -683,11 +688,13 @@ export async function finalizeOpenCodeExecutorProfile(
   // proof until an installed-version exact-context mode is established.
   if (!proveNoWrite || !(await proveNoWrite(worktreePath))) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   const before = configState(worktreePath);
-  const config = await execute(['opencode', 'debug', 'config'], 15_000, undefined, worktreePath);
+  const stateRoot = join(tmpdir(), `opk-opencode-state-${randomUUID()}`);
+  const isolatedEnv = { XDG_STATE_HOME: stateRoot };
+  const config = await execute(['opencode', 'debug', 'config'], 15_000, isolatedEnv, worktreePath);
   if (!config.ok || before !== configState(worktreePath)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   const baselineName = explicitDefaultAgent(config.stdout);
   if (!baselineName) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
-  const baseline = await execute(['opencode', 'debug', 'agent', baselineName], 15_000, undefined, worktreePath);
+  const baseline = await execute(['opencode', 'debug', 'agent', baselineName], 15_000, isolatedEnv, worktreePath);
   if (!baseline.ok || before !== configState(worktreePath)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   const baselineValue = resolvedAgent(baseline.stdout);
   if (!baselineValue) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
@@ -695,15 +702,14 @@ export async function finalizeOpenCodeExecutorProfile(
   const effortMatch = profile.launchCommand.match(/"variant":"([^"]+)"/u);
   if (!modelMatch?.[1] || !effortMatch?.[1]) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   const agentName = `pack-opk-${randomUUID().replaceAll('-', '')}`;
-  const stateRoot = join(tmpdir(), `opk-opencode-state-${randomUUID()}`);
   const overlay = buildOpenCodeAgentOverlay({ agentName, baseline: baselineValue, model: modelMatch[1], effort: effortMatch[1], stateRoot });
-  const resolved = await execute(['opencode', 'debug', 'agent', agentName], 15_000, { OPENCODE_CONFIG_CONTENT: overlay.inlineConfigJson!, XDG_STATE_HOME: stateRoot }, worktreePath);
+  const resolved = await execute(['opencode', 'debug', 'agent', agentName], 15_000, { ...isolatedEnv, OPENCODE_CONFIG_CONTENT: overlay.inlineConfigJson! }, worktreePath);
   const resolvedValue = resolvedAgent(resolved.stdout);
   const model = resolvedValue && record(resolvedValue.model) ? resolvedValue.model : null;
   if (!resolved.ok || before !== configState(worktreePath) || !resolvedValue || !model
     || model.modelID !== modelMatch[1].split('/').at(-1) || resolvedValue.variant !== effortMatch[1]
     || openCodeAgentSemantics(resolvedValue) !== openCodeAgentSemantics(baselineValue)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
-  const paths = await execute(['opencode', 'debug', 'paths'], 15_000, { XDG_STATE_HOME: stateRoot }, worktreePath);
+  const paths = await execute(['opencode', 'debug', 'paths'], 15_000, isolatedEnv, worktreePath);
   if (!paths.ok || !paths.stdout.includes(stateRoot)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   return { status: 'ok', value: { ...profile, launchCommand: overlay.command }, evidence: { executorFamily: 'opencode', route: profile.route, exactContext: true } };
 }
@@ -919,7 +925,7 @@ export async function prepareWorktreeWithOrca(
     'orca', 'worktree', 'create', '--repo', `id:${repositoryId}`, '--name', request.worktreeName!,
     ...(request.baseBranch ? ['--base-branch', request.baseBranch] : []),
     ...(request.issueNumber ? ['--issue', String(request.issueNumber)] : ['--no-parent']),
-    '--setup', 'run', '--json',
+    '--setup', 'skip', '--json',
   ], 120_000)));
   const worktree = created && record(created.worktree) ? created.worktree : null;
   const id = text(worktree?.id);
@@ -928,7 +934,14 @@ export async function prepareWorktreeWithOrca(
 
   const baseEvidence = { worktreeId: id, worktreePath: path };
   const setup = created && record(created.setupReceipt) ? created.setupReceipt : null;
-  if (!setup || text(setup.requested) !== 'run') return worktreeContinue('worktree_setup_receipt_unavailable', baseEvidence);
+  if (!setup) return {
+    status: 'ok',
+    value: { id, selector: `id:${id}`, path, setupWitness: 'same_invocation_complete' },
+    evidence: { ...baseEvidence, setupState: 'not_configured' },
+  };
+  if (text(setup.requested) !== 'run' && text(setup.requested) !== 'skip') {
+    return worktreeContinue('worktree_setup_receipt_unavailable', baseEvidence);
+  }
 
   const state = text(setup.state);
   if (state === 'not_configured' && setup.hookFound === false) return {
@@ -1052,7 +1065,8 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       (args, timeoutMs, envOverride, childCwd) => child(args, childCwd ?? cwd, envOverride ?? env, timeoutMs),
     ),
     finalizeProfile: (profile, worktreePath) => finalizeOpenCodeExecutorProfile(profile, worktreePath,
-      (args, timeoutMs, envOverride, childCwd) => child(args, childCwd ?? cwd, envOverride ?? env, timeoutMs)),
+      (args, timeoutMs, envOverride, childCwd) => child(args, childCwd ?? cwd, envOverride ?? env, timeoutMs),
+      proveOpenCodeNoWrite),
   };
 }
 
