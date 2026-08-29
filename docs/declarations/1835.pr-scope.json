@@ -21,5 +21,5 @@
     "scripts/lib/worker-smoke-bounded-create.ts",
     "scripts/orca-runtime/"
   ],
-  "source_revision": "6ca2257e197593f441d432a44d610a7790ddb4f8"
+  "source_revision": "167b47a1b79084cbe736425e0897e7e3b5a0044b"
 }
