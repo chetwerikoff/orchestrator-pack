@@ -19,6 +19,7 @@ import {
 import {
   buildExecutorCommand,
   buildOpenCodeAgentOverlay,
+  openCodeAgentConfigFromInfo,
   buildProviderInvocation,
   catalogIdentityForProfile,
   openCodeAgentSemantics,
@@ -487,6 +488,27 @@ describe('supervised Task launch assistant', () => {
     expect(agent).not.toHaveProperty('name');
     expect(openCodeAgentSemantics({ ...agent, name: 'pack-opk-fixture', model: { providerID: 'fixture', modelID: 'provider-model' }, variant: 'high', native: false }))
       .toBe(openCodeAgentSemantics({ name: 'build', native: true, mode: 'primary', topP: 0.8, prompt: 'fixture prompt', options: { temperature: 0.2 }, permission: agent?.permission }));
+  });
+
+  it('encodes duplicate star permission rules as a last-wins string action', () => {
+    const config = openCodeAgentConfigFromInfo({
+      mode: 'primary',
+      permission: [
+        { permission: 'question', pattern: '*', action: 'deny' },
+        { permission: 'question', pattern: '*', action: 'allow' },
+      ],
+    });
+    expect(config.permission).toEqual({ question: 'allow' });
+  });
+
+  it('compares overlay agent semantics without permission-rule order', () => {
+    const first = [
+      { permission: 'edit', pattern: '*', action: 'allow' },
+      { permission: 'bash', pattern: '*', action: 'ask' },
+    ];
+    const reversed = [...first].reverse();
+    expect(openCodeAgentSemantics({ mode: 'primary', permission: first }))
+      .toBe(openCodeAgentSemantics({ mode: 'primary', permission: reversed }));
   });
 
   it('agent config effort channel', async () => {
