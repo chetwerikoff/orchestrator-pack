@@ -234,6 +234,81 @@ describe('pack-review no-review reconciliation', () => {
     ]));
   });
 
+  it('does not ignore possible-delivery evidence in an older same-head matching run', async () => {
+    const invocationId = 'eeeeeeee-1111-4111-8111-111111111111';
+    const older = run(round([
+      slot(1, {
+        lifecycle: 'terminal',
+        invocationId,
+        terminalClass: 'possible_delivery',
+        terminalResult: {
+          state: 'driver_error',
+          cause: 'browser_lost',
+          send_count: 1,
+          configured_profile_key: 'profile-fixture',
+        },
+        launchProfileKey: 'profile-fixture',
+        launchCdpUrl: 'http://127.0.0.1:9222',
+      }),
+      slot(2, {
+        lifecycle: 'terminal',
+        invocationId: 'eeeeeeee-2222-4222-8222-222222222222',
+        terminalClass: 'explicit_refusal:zero_send_collision_exhausted',
+        terminalResult: { state: 'profile_busy', cause: 'profile_busy', send_count: 0 },
+      }),
+      slot(3, {
+        lifecycle: 'terminal',
+        invocationId: 'eeeeeeee-3333-4333-8333-333333333333',
+        terminalClass: 'explicit_refusal:zero_send_collision_exhausted',
+        terminalResult: { state: 'profile_busy', cause: 'profile_busy', send_count: 0 },
+      }),
+    ]));
+    older.id = 'prr-older-possible';
+    older.runId = older.id;
+    older.sameKeyOrder = 1;
+
+    const newer = run(round([1, 2, 3].map((ordinal) => slot(ordinal, {
+      lifecycle: 'terminal',
+      invocationId: `ffffffff-${String(ordinal).padStart(4, '0')}-4111-8111-111111111111`,
+      terminalClass: 'explicit_refusal:zero_send_collision_exhausted',
+      terminalResult: { state: 'profile_busy', cause: 'profile_busy', send_count: 0 },
+    }))));
+    newer.id = 'prr-newer-empty';
+    newer.runId = newer.id;
+    newer.sameKeyOrder = 2;
+
+    const probe = vi.fn(async () => { throw new Error('probe_should_not_run'); });
+    const result = await reconcilePackReviewNoReview(INPUT, deps({
+      listRuns: () => [older, newer],
+      readObservation: () => ({
+        schema: 'state-light-turn-observation/v1',
+        version: 1,
+        invocation_id: invocationId,
+        profile_key: 'profile-fixture',
+        marker: 'OPKTURNV1-older-possible',
+        phase: 'harvested',
+        send_count: 1,
+        send_witness: 'numeric_send_count',
+        conversation_url: 'https://chatgpt.com/c/older-possible',
+        transitioned_at: NOW.toISOString(),
+        transition_reason: 'fixture',
+      } as any),
+      probe,
+    }));
+
+    expect(result.disposition).toBe('contradiction');
+    expect(result.reason).toBe('owned_turn_harvested_contradicts_zero_completed_run');
+    expect(result.evidence).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'slot-closure',
+        runId: older.id,
+        sourceSlotId: 'source-01',
+        state: 'contradiction',
+      }),
+    ]));
+    expect(probe).not.toHaveBeenCalled();
+  });
+
   it('can prove no completed review for a matching run when every slot has immutable zero-send evidence', async () => {
     const started = run(round([1, 2, 3].map((ordinal) => slot(ordinal, {
       lifecycle: 'terminal',
