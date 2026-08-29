@@ -1418,10 +1418,9 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
         }),
       }),
     ]));
-    expect(getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot })).toMatchObject({
-      status: 'reviewing',
-      reviewRound: { settledSourceCount: undefined },
-    });
+    const after = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
+    expect(after?.status).toBe('reviewing');
+    expect(after?.reviewRound?.settledSourceCount).toBeUndefined();
   });
 
   it('keeps a possible-delivery source non-retryable while preserving 2/3 partial evidence', async () => {
