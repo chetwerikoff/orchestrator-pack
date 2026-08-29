@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { repoRoot } from './lib/vitest-live-store-harness.mjs';
+import { isExternalJournalSnapshotOnlyChange } from './lib/vitest-live-store-parent-guard.mjs';
 import { runProcess } from './kernel/subprocess.ts';
 
 const temporaryRoots: string[] = [];
@@ -80,6 +81,14 @@ afterEach(() => {
 });
 
 describe('parent live-store guard', () => {
+  it('settles a journal-only snapshot even when the watcher misses the event', () => {
+    expect(isExternalJournalSnapshotOnlyChange(['worker-message-dispatch-journal.json'])).toBe(true);
+    expect(isExternalJournalSnapshotOnlyChange([
+      'worker-message-dispatch-journal.json',
+      'unrelated-live-store-leak.json',
+    ])).toBe(false);
+  });
+
   it('ignores an observed external wake-store tick around a passing harness child', async () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-regression-'));
     temporaryRoots.push(root);

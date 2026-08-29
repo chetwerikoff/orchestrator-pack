@@ -2,13 +2,10 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1835,
   "declared_paths": [
-    "scripts/lib/worker-smoke-bounded-create.test.ts",
-    "scripts/lib/worker-smoke-bounded-create.ts",
-    "scripts/orca-runtime/adapter.ts",
-    "scripts/orca-runtime/compat.test.ts",
-    "scripts/orca-runtime/compat.ts",
-    "scripts/orca-runtime/native.ts",
-    "scripts/orca-runtime/task-adapter.test.ts"
+    "scripts/lib/vitest-live-store-parent-guard.mjs",
+    "scripts/vitest-live-store-parent-guard.test.ts",
+    "scripts/worker-smoke-entrypoint-1359.test.ts",
+    "scripts/worker-smoke-run.ts"
   ],
   "denylist": [
     "credentials/",
@@ -17,9 +14,13 @@
     "vendor/"
   ],
   "allowed_roots": [
+    "scripts/lib/vitest-live-store-parent-guard.mjs",
     "scripts/lib/worker-smoke-bounded-create.test.ts",
     "scripts/lib/worker-smoke-bounded-create.ts",
-    "scripts/orca-runtime/"
+    "scripts/orca-runtime/",
+    "scripts/vitest-live-store-parent-guard.test.ts",
+    "scripts/worker-smoke-entrypoint-1359.test.ts",
+    "scripts/worker-smoke-run.ts"
   ],
-  "source_revision": "167b47a1b79084cbe736425e0897e7e3b5a0044b"
+  "source_revision": "558d365c78383aecbf42774347e339fd3d9c9ead"
 }
