@@ -813,6 +813,38 @@ describe('Issue #1489 rendered screen observation', () => {
     }
   });
 
+  it('omits --cursor when paging from a synthetic screen-frame observation token', () => {
+    let readCount = 0;
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      if (args[0] === 'terminal' && args[1] === 'show') return {
+        ok: true,
+        result: { terminal: { handle: 'screen-terminal', incarnationId: 'screen-generation', worktreePath: '/tmp/screen', status: 'running' } },
+      };
+      if (args[0] === 'terminal' && args[1] === 'list') return {
+        ok: true,
+        result: { terminals: [{ handle: 'screen-terminal', incarnationId: 'screen-generation', worktreePath: '/tmp/screen', title: 'screen' }], totalCount: 1, truncated: false },
+      };
+      if (args[0] === 'terminal' && args[1] === 'read') {
+        readCount += 1;
+        expect(args).not.toContain('--cursor');
+        return {
+          ok: true,
+          result: { terminal: { handle: 'screen-terminal', status: 'running', tail: [`frame-${readCount}`], nextCursor: null, source: 'screen' } },
+        };
+      }
+      return { ok: false, error: { code: 'unexpected_effect', message: args.join(' ') } };
+    });
+    const adapter = new OrcaRuntimeAdapter({ runJson: runJson as never });
+    const worker = { runtime: 'orca' as const, id: 'screen-terminal', generation: 'screen-generation' };
+    const first = adapter.readBoundedOutput({ worker, limit: 200 });
+    expect(first.status).toBe('ok');
+    if (first.status !== 'ok') return;
+    const second = adapter.readBoundedOutput({ worker, previousToken: first.value.observationToken, limit: 200 });
+    expect(second.status).toBe('ok');
+    expect(readCount).toBe(2);
+  });
+
+
   it('uses the async all-workspace census and concurrent screen seam', async () => {
     const runJsonAsync = vi.fn(async (args: readonly string[]): Promise<OrcaJsonResponse> => {
       if (args[0] === 'terminal' && args[1] === 'list') return {

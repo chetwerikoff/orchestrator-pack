@@ -303,6 +303,12 @@ function normalizeInboxCheck(
   };
 }
 
+
+/** A screen frame has no page cursor; only non-negative integer cursors may page. */
+function isPageCursor(nativeCursor: string): boolean {
+  return /^\d+$/u.test(nativeCursor);
+}
+
 function normalizeTerminalRead(
   result: OrcaTerminalReadResult | undefined,
   requireScreen = false,
@@ -1052,7 +1058,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
 
     const args = ['terminal', 'read', '--terminal', input.worker.id];
     if (input.screen) args.push('--screen');
-    if (previous?.status === 'ok') {
+    if (previous?.status === 'ok' && isPageCursor(previous.value.nativeCursor)) {
       args.push('--cursor', previous.value.nativeCursor);
     }
     if (input.limit !== undefined) args.push('--limit', String(input.limit));
@@ -1130,7 +1136,9 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
     const args = ['terminal', 'read', '--terminal', input.worker.id];
     if (input.screen) args.push('--screen');
-    if (previous?.status === 'ok') args.push('--cursor', previous.value.nativeCursor);
+    if (previous?.status === 'ok' && isPageCursor(previous.value.nativeCursor)) {
+      args.push('--cursor', previous.value.nativeCursor);
+    }
     if (input.limit !== undefined) args.push('--limit', String(input.limit));
     const readOptions = deadline === null ? options : this.#boundedOptions(deadline, options);
     if (!readOptions) return runtimeFailure('read_bounded_output', 'runtime_timeout');
