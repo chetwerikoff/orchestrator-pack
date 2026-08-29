@@ -30,6 +30,9 @@ const ORCHESTRATION_CHECK_COMMAND = /orca orchestration check(?: --run \S+| --te
 const LONE_ARROW = /^→$/u;
 const BOX_TOP = /^\s*▄{8,}\s*$/u;
 const BOX_BOTTOM = /^\s*▀{8,}\s*$/u;
+const OPENCODE_BOX_BOTTOM = /^\s*╹▀{8,}\s*$/u;
+const OPENCODE_LEFT_EDGE = /^\s*┃(?:\s|$)/u;
+const OPENCODE_STATUS_FOOTER = /\bOpenCode\b/iu;
 const DEFAULT_INTERVAL_MS = 2_000;
 const DELIVERY_RENDER_GRACE_MS = 250;
 const DELIVERY_LIVENESS_WINDOW_MS = 25;
@@ -97,6 +100,31 @@ function unboxedComposerLines(preview: string): string[] {
   return [];
 }
 
+function openCodeComposerLines(preview: string): string[] | undefined {
+  const raw = preview.split(/\r?\n/u);
+  let bottom = -1;
+  for (let index = 0; index < raw.length; index += 1) {
+    if (OPENCODE_BOX_BOTTOM.test(raw[index] ?? '')) bottom = index;
+  }
+  if (bottom < 1) return undefined;
+  const width = (raw[bottom] ?? '').length;
+  const leftContent = (line: string): string => line
+    .slice(0, width)
+    .replace(/^\s*┃\s{0,2}/u, '');
+  const status = leftContent(raw[bottom - 1] ?? '').trim();
+  if (!OPENCODE_STATUS_FOOTER.test(status)) return undefined;
+
+  let start = bottom - 1;
+  while (start > 0 && OPENCODE_LEFT_EDGE.test(raw[start - 1] ?? '')) start -= 1;
+  return composerContentLines(raw.slice(start, bottom - 1).map(leftContent));
+}
+
+function observedComposerLines(preview: string): string[] {
+  const interior = composerInterior(preview);
+  if (interior) return composerContentLines(interior);
+  return openCodeComposerLines(preview) ?? unboxedComposerLines(preview);
+}
+
 function classifyContent(
   lines: readonly string[],
   trailingPlaceholderMeansEmpty = false,
@@ -111,6 +139,8 @@ function classifyContent(
 export function classifyCursorComposer(preview: string): CursorComposerKind {
   const interior = composerInterior(preview);
   if (interior) return classifyContent(composerContentLines(interior));
+  const openCode = openCodeComposerLines(preview);
+  if (openCode) return classifyContent(openCode);
   return classifyContent(unboxedComposerLines(preview), true);
 }
 
@@ -119,14 +149,11 @@ export function cursorComposerLooksUnsent(preview: string): boolean {
 }
 
 export function composerPokeFingerprint(preview: string): string {
-  const interior = composerInterior(preview);
-  const source = interior ? composerContentLines(interior) : unboxedComposerLines(preview);
-  return source.join('\n');
+  return observedComposerLines(preview).join('\n');
 }
 
 function exactOrchestrationPointerFingerprint(preview: string): string | undefined {
-  const interior = composerInterior(preview);
-  const source = interior ? composerContentLines(interior) : unboxedComposerLines(preview);
+  const source = observedComposerLines(preview);
   // Cursor may wrap between words or inside the command token. Try both
   // reconstructions, but return only the command so wording/count changes do
   // not invalidate the exact-pointer comparison.

@@ -34,6 +34,15 @@ const CURSOR_FOOTER = [
   'Cursor Grok 4.6 High · 40.6% · 22 files edited                                                                                                    Run Everything',
   '~/projects/orchestrator-pack · main',
 ];
+const OPENCODE_BORDER = `  ╹${'▀'.repeat(190)}`;
+const openCodeScreen = (composer: readonly string[], transcript: readonly string[] = []): string[] => [
+  ...transcript,
+  '  ▣  Pack-Opk-fixture · Muse Spark 1.2 Free',
+  ...composer.map((line) => `  ┃  ${line}`.padEnd(OPENCODE_BORDER.length)),
+  '  ┃  Pack-Opk-fixture · Muse Spark 1.2 Free OpenCode Zen · high'.padEnd(OPENCODE_BORDER.length),
+  OPENCODE_BORDER,
+  '   /tmp/opencode-worktree                              293.4K (28%)  ctrl+p commands    • OpenCode 1.18.25',
+];
 const EMPTY_CLAUDE_SCREEN = [
   'prior transcript line',
   'new task? /clear to save context',
@@ -245,6 +254,16 @@ Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
 ~/projects/orchestrator-pack · main
 `)).toBe('non_empty');
   });
+
+  it('recognizes an exact orchestration pointer in the OpenCode composer', () => {
+    expect(classifyCursorComposer(openCodeScreen(['', POKE]).join('\n'))).toBe('non_empty');
+    expect(cursorComposerLooksUnsent(openCodeScreen(['', POKE]).join('\n'))).toBe(true);
+  });
+
+  it('does not mistake OpenCode transcript history or mixed typing for the composer pointer', () => {
+    expect(classifyCursorComposer(openCodeScreen([''], [`  ┃  ${POKE}`]).join('\n'))).toBe('empty');
+    expect(classifyCursorComposer(openCodeScreen(['', POKE, 'не отправляй это']).join('\n'))).toBe('non_empty');
+  });
 });
 
 describe('submitUnsentCursorComposer', () => {
@@ -348,6 +367,26 @@ describe('submitUnsentCursorComposer', () => {
     );
     expect(result.terminals[0]?.reason).toBe('enter_sent');
     expect(submitted.map((row) => row.id)).toEqual(['term_repeated']);
+  });
+
+  it('submits an exact pointer from an OpenCode composer', () => {
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const result = submitUnsentCursorComposer(
+      { watch: true },
+      depsFor({ term_opencode: openCodeScreen(['', POKE, POKE]) }, { submitted }),
+    );
+    expect(result.terminals[0]?.reason).toBe('enter_sent');
+    expect(submitted.map((row) => row.id)).toEqual(['term_opencode']);
+  });
+
+  it('never submits mixed OpenCode composer text', () => {
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const result = submitUnsentCursorComposer(
+      { watch: true },
+      depsFor({ term_opencode: openCodeScreen(['', POKE, 'не отправляй это']) }, { submitted }),
+    );
+    expect(result.terminals[0]?.reason).toBe('composer_not_orchestration_pointer');
+    expect(submitted).toEqual([]);
   });
 
   it('never enters an idle transcript followed by the composer placeholder', () => {
