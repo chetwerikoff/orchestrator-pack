@@ -2663,18 +2663,24 @@ describe('Issue #1741 failed GPT round source-comment settlement', () => {
 });
 
 
+
 describe('recovered sub-quorum blocking source regression', () => {
-  it('delivers a recovered 1/3 blocker without freezing settledSourceCount to one', async () => {
+  it('delivers a credentialed recovered 1/3 blocker without freezing settledSourceCount to one', async () => {
     const storeRoot = tempRoot('opk-gpt-recovered-one-blocker-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
-    const sourceOneInvocation = '77777777-1111-4111-8111-111111111111';
     const issueBody = '```complexity-tier\ntier: T3\n```';
-    const blocker = {
-      verdict: 'findings' as const,
-      findingCount: 1,
-      findings: [{ title: 'recovered-blocker', body: 'body-recovered-blocker', severity: 'blocking' }],
-    };
+    const sourceOneInvocation = '77777777-1111-4111-8111-111111111111';
+    const sourceTwoInvocation = '77777777-2222-4222-8222-222222222222';
+    const sourceThreeInvocation = '77777777-3333-4333-8333-333333333333';
+
+    initializePackReviewAuthority({
+      prNumber: 1787,
+      headSha: HEAD_A,
+      tier: 'T3',
+      options: { storeRoot },
+    });
+
     const reviewRound: PackReviewGptRoundRecord = {
       schema: 'pack-review-gpt-round/v1',
       reviewer: 'gpt',
@@ -2690,19 +2696,22 @@ describe('recovered sub-quorum blocking source regression', () => {
           lifecycle: 'terminal',
           invocationId: sourceOneInvocation,
           attemptOrdinal: 1,
-          terminalClass: 'complete_findings',
-          terminalResult: storedTerminalTurnResult(sourceOneInvocation),
-          payload: blocker,
+          admissionStartedAtUtc: '2026-08-29T03:00:00.000Z',
+          terminalClass: 'reviewer_output_malformed',
+          terminalResult: {
+            ...storedTerminalTurnResult(sourceOneInvocation),
+            source_comment_reconciliation: 'conflict',
+          },
         },
         {
           slotId: 'source-02',
           ordinal: 2,
           lifecycle: 'terminal',
-          invocationId: '77777777-2222-4222-8222-222222222222',
+          invocationId: sourceTwoInvocation,
           attemptOrdinal: 2,
           terminalClass: 'explicit_refusal:zero_send_collision_exhausted',
           terminalResult: storedTerminalTurnResult(
-            '77777777-2222-4222-8222-222222222222',
+            sourceTwoInvocation,
             { state: 'profile_busy', scope: 'profile', cause: 'profile_busy', send_count: 0 },
           ),
         },
@@ -2710,16 +2719,17 @@ describe('recovered sub-quorum blocking source regression', () => {
           slotId: 'source-03',
           ordinal: 3,
           lifecycle: 'terminal',
-          invocationId: '77777777-3333-4333-8333-333333333333',
+          invocationId: sourceThreeInvocation,
           attemptOrdinal: 2,
           terminalClass: 'explicit_refusal:zero_send_collision_exhausted',
           terminalResult: storedTerminalTurnResult(
-            '77777777-3333-4333-8333-333333333333',
+            sourceThreeInvocation,
             { state: 'profile_busy', scope: 'profile', cause: 'profile_busy', send_count: 0 },
           ),
         },
       ],
     };
+
     const created = createPackReviewRun({
       projectId: 'orchestrator-pack',
       storeRoot,
@@ -2730,10 +2740,46 @@ describe('recovered sub-quorum blocking source regression', () => {
       canonicalRepository: 'chetwerikoff/orchestrator-pack',
       reviewRound,
     }).run;
-    setPackReviewRunTerminal(created.id, 'failed', {
+    const failed = setPackReviewRunTerminal(created.id, 'failed', {
       exitCode: 1,
       failureReason: 'stale_head_before_terminal',
     }, { projectId: 'orchestrator-pack', storeRoot });
+
+    const sourceOneIdentity: PackGptSourceIdentity = {
+      repository: 'chetwerikoff/orchestrator-pack',
+      prNumber: 1787,
+      headSha: HEAD_A,
+      runId: failed.id,
+      slotId: 'source-01',
+      invocationId: sourceOneInvocation,
+    };
+    const sourceOneReply = JSON.stringify({
+      findings: [{
+        type: 'quality',
+        code: 'quality:recovered-blocker',
+        severity: 'blocking',
+        path: 'scripts/pack-review-runner.ts',
+        summary: 'recovered-blocker',
+        source: 'gpt-browser',
+      }],
+    });
+    const sourceComment: PackGptSourceGithubComment = {
+      id: 1787001,
+      body: formatPackGptSourceCommentEnvelope(sourceOneIdentity, sourceOneReply),
+      actorLogin: 'browser-gpt-bot',
+      createdAt: '2026-08-29T03:01:00.000Z',
+      updatedAt: '2026-08-29T03:01:00.000Z',
+      url: 'https://github.com/chetwerikoff/orchestrator-pack/pull/1787#issuecomment-1787001',
+      issueUrl: 'https://api.github.com/repos/chetwerikoff/orchestrator-pack/issues/1787',
+    };
+    const sourceTransport: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => 'browser-gpt-bot',
+      listComments: async () => [sourceComment],
+      getComment: async (id) => {
+        if (id !== sourceComment.id) throw new Error(`unexpected source comment ${String(id)}`);
+        return sourceComment;
+      },
+    };
 
     const reviewBodies: string[] = [];
     const statusStates: string[] = [];
@@ -2756,11 +2802,6 @@ describe('recovered sub-quorum blocking source regression', () => {
         return { id: review.id, url: review.url };
       },
       dismissReview: async () => {},
-    };
-    const sourceTransport: PackGptSourceCommentTransport = {
-      resolveActorLogin: async () => 'browser-gpt-bot',
-      listComments: async () => [],
-      getComment: async () => { throw new Error('unexpected source comment reread'); },
     };
 
     const reconciliation = await reconcileStalePackReviewRuns({
@@ -2785,19 +2826,19 @@ describe('recovered sub-quorum blocking source regression', () => {
 
     expect(reconciliation.results).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        runId: created.id,
+        runId: failed.id,
         recovered: true,
         statusReconciled: true,
         status: 'changes_requested',
       }),
     ]));
-    const settled = getPackReviewRun(created.id, { projectId: 'orchestrator-pack', storeRoot });
+    const settled = getPackReviewRun(failed.id, { projectId: 'orchestrator-pack', storeRoot });
     expect(settled?.status).toBe('changes_requested');
     expect(settled?.reviewRound?.settledSourceCount).toBeUndefined();
     expect(settled?.reviewVerdict).toBe('findings');
     expect(settled?.findingCount).toBe(1);
     expect(settled?.findings).toEqual([
-      expect.objectContaining({ title: 'recovered-blocker', severity: 'blocking', sourceSlotId: 'source-01' }),
+      expect.objectContaining({ title: 'recovered-blocker', severity: 'error', sourceSlotId: 'source-01' }),
     ]);
     expect(statusStates).toContain('failure');
     expect(reviewBodies.join('\n')).toContain('recovered-blocker');
