@@ -27,9 +27,9 @@ import {
 import type { RuntimeWorker, RuntimeWorkerIdentity } from './runtime/contracts.ts';
 
 const POKE = 'You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run `orca orchestration check --run run_d613a86c140a`.';
-const DISPATCH_POKE = 'You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run `orca orchestration check`.';
+const DISPATCH_POKE = 'You have 1 orchestration message. Read and act on your orchestration message. Run `orca orchestration check`.';
 const TERMINAL_HANDLE = 'term_cc95818d-ce98-465a-a806-f1a73d7d33bf';
-const TERMINAL_POKE = `You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run \`orca orchestration check --terminal ${TERMINAL_HANDLE}\`.`;
+const TERMINAL_POKE = `You have 1 orchestration message. Read and act on your orchestration message. Run \`orca orchestration check --terminal ${TERMINAL_HANDLE}\`.`;
 const CURSOR_FOOTER = [
   'Cursor Grok 4.6 High · 40.6% · 22 files edited                                                                                                    Run Everything',
   '~/projects/orchestrator-pack · main',
@@ -699,13 +699,22 @@ describe('buildDeliveryPointer', () => {
     })).toBe(POKE);
   });
 
-  it('emits a terminal-qualified pointer for terminal-handle recipients', () => {
+  it('emits a neutral terminal-qualified pointer for unproven role recipients', () => {
     expect(buildDeliveryPointer({
       id: 'msg_terminal',
       runId: 'run_d613a86c140a',
       recipient: TERMINAL_HANDLE,
       consumed: false,
     })).toBe(TERMINAL_POKE);
+  });
+
+  it('emits neutral wording for recipients without a known prefix', () => {
+    expect(buildDeliveryPointer({
+      id: 'msg_fallback',
+      runId: 'run_d613a86c140a',
+      recipient: 'recipient_without_role',
+      consumed: false,
+    })).toBe('You have 1 orchestration message. Read and act on your orchestration message. Run `orca orchestration check --run run_d613a86c140a`.');
   });
 
   it.each([
@@ -1407,6 +1416,7 @@ describe('orchestration mail reconciliation', () => {
     const lockPath = join(root, 'orchestration-mail-reconcile.lock');
     let writes = 0;
     let pointerVisible = false;
+    let launches = 0;
     const submitted: RuntimeWorkerIdentity[] = [];
     const message = {
       id: 'msg_episode_backoff',
@@ -1433,12 +1443,19 @@ describe('orchestration mail reconciliation', () => {
             source: 'screen' as const,
           }),
           liveness: () => 'idle',
+          submitResult: (identity) => {
+            submitted.push(identity);
+            launches += 1;
+            return launches === 1
+              ? { status: 'send_failed' as const, reason: 'runtime_unavailable' }
+              : { status: 'dispatched' as const };
+          },
         }),
         episodeStatePath: statePath,
         episodeLockPath: lockPath,
       });
       const first = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 1_000 });
-      expect(first.terminals[0]?.reason).toBe('enter_sent');
+      expect(first.terminals[0]?.reason).toBe('runtime_unavailable');
       expect(writes).toBe(1);
       expect(submitted).toHaveLength(1);
       const suppressed = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 1_001 });
@@ -1448,6 +1465,111 @@ describe('orchestration mail reconciliation', () => {
       expect(rearmed.terminals[0]?.reason).toBe('enter_sent');
       expect(writes).toBe(1);
       expect(submitted).toHaveLength(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('seals a delivered unread episode across later reconcile ticks', async () => {
+    const target = worker('term_episode_sealed');
+    const root = mkdtempSync(join(tmpdir(), 'opk-episode-sealed-'));
+    const statePath = join(root, 'orchestration-mail-reconcile.json');
+    const lockPath = join(root, 'orchestration-mail-reconcile.lock');
+    let writes = 0;
+    let pointerVisible = false;
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const message = {
+      id: 'msg_episode_sealed',
+      runId: 'run_episode_sealed',
+      recipient: target.identity.id,
+      consumed: false,
+    };
+    try {
+      const makeDeps = () => ({
+        lookupMessage: () => ({ ok: true as const, message }),
+        resolveWorker: () => ({ ok: true as const, worker: target }),
+        writePointer: () => {
+          writes += 1;
+          pointerVisible = true;
+          return { status: 'dispatched' as const };
+        },
+        submitDeps: depsFor({}, {
+          submitted,
+          read: () => ({
+            ok: true as const,
+            lines: pointerVisible
+              ? [`You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run \`orca orchestration check --terminal ${target.identity.id}\`.`, ...CURSOR_FOOTER]
+              : ['→ Add a follow-up', ...CURSOR_FOOTER],
+            source: 'screen' as const,
+          }),
+          liveness: () => 'idle',
+        }),
+        episodeStatePath: statePath,
+        episodeLockPath: lockPath,
+      });
+
+      const first = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 1_000 });
+      const second = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 61_001 });
+      const third = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 181_001 });
+
+      expect(first.terminals[0]).toMatchObject({ enter: true });
+      expect(second.terminals[0]?.enter).toBe(false);
+      expect(third.terminals[0]?.enter).toBe(false);
+      expect(writes).toBe(1);
+      expect(submitted).toHaveLength(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps an unproven post-write delivery retryable', async () => {
+    const target = worker('term_episode_unproven');
+    const root = mkdtempSync(join(tmpdir(), 'opk-episode-unproven-'));
+    const statePath = join(root, 'orchestration-mail-reconcile.json');
+    const lockPath = join(root, 'orchestration-mail-reconcile.lock');
+    let writes = 0;
+    let pointerVisible = false;
+    let liveness: 'unknown' | 'idle' = 'unknown';
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const message = {
+      id: 'msg_episode_unproven',
+      runId: 'run_episode_unproven',
+      recipient: target.identity.id,
+      consumed: false,
+    };
+    try {
+      const makeDeps = () => ({
+        lookupMessage: () => ({ ok: true as const, message }),
+        resolveWorker: () => ({ ok: true as const, worker: target }),
+        writePointer: () => {
+          writes += 1;
+          pointerVisible = true;
+          return { status: 'dispatched' as const };
+        },
+        submitDeps: depsFor({}, {
+          submitted,
+          read: () => ({
+            ok: true as const,
+            lines: pointerVisible
+              ? [`You have 1 orchestration message. Read and act on your orchestration message. Run \`orca orchestration check --terminal ${target.identity.id}\`.`, ...CURSOR_FOOTER]
+              : ['→ Add a follow-up', ...CURSOR_FOOTER],
+            source: 'screen' as const,
+          }),
+          liveness: () => liveness,
+        }),
+        episodeStatePath: statePath,
+        episodeLockPath: lockPath,
+      });
+
+      const first = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 1_000 });
+      expect(first.terminals[0]).toMatchObject({ enter: false, reason: 'worker_unknown' });
+      expect(submitted).toHaveLength(0);
+
+      liveness = 'idle';
+      const retry = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 61_001 });
+      expect(retry.terminals[0]).toMatchObject({ enter: true, reason: 'enter_sent' });
+      expect(writes).toBe(1);
+      expect(submitted).toHaveLength(1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
