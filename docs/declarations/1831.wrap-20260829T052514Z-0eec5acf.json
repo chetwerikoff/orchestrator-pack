@@ -7,12 +7,30 @@
   "baseline": {
     "commit_sha": "b6e87f74d2ea7f80924d12f96c9f662956cf9cd0",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:3c3d9d03b1daa8173fe43019ac948463496f185d02b6628ef4b74961aea95c91"
+    "active_scope_hash": "sha256:2d65187bce9622bc6817b506747ac5fd07ac75a25e1062dee8679128153cf2c1"
   },
   "declared_paths": [
     "scripts/cursor-unsent-composer-submit.ts",
-    "scripts/cursor-unsent-composer-submit.test.ts"
+    "scripts/cursor-unsent-composer-submit.test.ts",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/task-adapter.test.ts"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:3c3d9d03b1daa8173fe43019ac948463496f185d02b6628ef4b74961aea95c91",
+      "new_active_scope_hash": "sha256:2d65187bce9622bc6817b506747ac5fd07ac75a25e1062dee8679128153cf2c1",
+      "changed": {
+        "added": [
+          "scripts/orca-runtime/adapter.ts",
+          "scripts/orca-runtime/task-adapter.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "worker smoke BLOCKED: fresh OpenCode child pane read is screen-sourced and its synthetic screen-frame cursor is rejected by the orca CLI on page reads; the adapter read path is the named defect fix surface",
+      "actor": "local",
+      "timestamp": "2026-08-29T06:58:01.480Z",
+      "applied": true
+    }
+  ]
 }
