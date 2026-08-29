@@ -707,17 +707,31 @@ export async function reconcilePackReviewNoReview(
   if (github.kind === 'present') return finish('review-present', github.reason);
   if (github.kind === 'inconclusive') return finish('unavailable/inconclusive', github.reason);
 
-  for (const slot of run.reviewRound.sourceSlots) {
-    if (authoritativePreSend(slot)) {
-      evidence.push({ kind: 'slot-closure', state: 'closed-pre-send', ...slotFact(slot) });
-      continue;
+  for (const candidateRun of targetRows) {
+    if (!candidateRun.reviewRound) continue;
+    for (const slot of candidateRun.reviewRound.sourceSlots) {
+      if (authoritativePreSend(slot)) {
+        evidence.push({
+          kind: 'slot-closure',
+          runId: candidateRun.id,
+          state: 'closed-pre-send',
+          ...slotFact(slot),
+        });
+        continue;
+      }
+      const possible = await reconcilePossibleDelivery(slot, deps);
+      evidence.push({
+        kind: 'slot-closure',
+        runId: candidateRun.id,
+        state: possible.disposition,
+        reason: possible.reason,
+        ...possible.evidence,
+      });
+      if (possible.disposition === 'slot-closed') continue;
+      if (possible.disposition === 'review-present') return finish('review-present', possible.reason);
+      if (possible.disposition === 'contradiction') return finish('contradiction', possible.reason);
+      return finish('unavailable/inconclusive', possible.reason);
     }
-    const possible = await reconcilePossibleDelivery(slot, deps);
-    evidence.push({ kind: 'slot-closure', state: possible.disposition, reason: possible.reason, ...possible.evidence });
-    if (possible.disposition === 'slot-closed') continue;
-    if (possible.disposition === 'review-present') return finish('review-present', possible.reason);
-    if (possible.disposition === 'contradiction') return finish('contradiction', possible.reason);
-    return finish('unavailable/inconclusive', possible.reason);
   }
 
   const finalSourceComments = await censusMatchingRunSourceComments('final');
