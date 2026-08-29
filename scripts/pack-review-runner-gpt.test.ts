@@ -2669,6 +2669,7 @@ describe('recovered sub-quorum blocking source regression', () => {
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
     const sourceOneInvocation = '77777777-1111-4111-8111-111111111111';
+    const issueBody = '```complexity-tier\ntier: T3\n```';
     const blocker = {
       verdict: 'findings' as const,
       findingCount: 1,
@@ -2681,7 +2682,7 @@ describe('recovered sub-quorum blocking source regression', () => {
       roundOrdinal: 1,
       cardinality: 3,
       issueNumber: 1787,
-      boundIssueSnapshotDigest: 'fixture-digest',
+      boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(issueBody),
       sourceSlots: [
         {
           slotId: 'source-01',
@@ -2768,10 +2769,10 @@ describe('recovered sub-quorum blocking source regression', () => {
         statusStates.push(request.state);
       },
       fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
-      fixtureIssueBody: '~~~complexity-tier\ntier: T3\n~~~',
+      fixtureIssueBody: issueBody,
       fixtureIssueNumber: 1787,
       fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
-      fixtureBoundIssueSnapshotBytes: '~~~complexity-tier\ntier: T3\n~~~',
+      fixtureBoundIssueSnapshotBytes: issueBody,
     });
 
     expect(reconciliation.results).toEqual(expect.arrayContaining([

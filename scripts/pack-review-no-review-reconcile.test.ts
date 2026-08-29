@@ -512,12 +512,6 @@ describe('pack-review no-review reconciliation', () => {
         invocationId,
         attemptOrdinal: 1,
         admissionStartedAtUtc: NOW.toISOString(),
-        terminalResult: {
-          state: 'profile_busy',
-          cause: 'profile_busy',
-          send_count: 0,
-          configured_profile_key: 'profile-fixture',
-        },
         launchProfileKey: 'profile-fixture',
         launchCdpUrl: 'http://127.0.0.1:9222',
       } as any),
@@ -540,6 +534,19 @@ describe('pack-review no-review reconciliation', () => {
 
     const result = await reconcilePackReviewNoReview(INPUT, deps({
       listRuns: () => [retrying],
+      readObservation: () => ({
+        schema: 'state-light-turn-observation/v1',
+        version: 1,
+        invocation_id: invocationId,
+        profile_key: 'profile-fixture',
+        marker: 'OPKTURNV1-retry-window',
+        phase: 'not_sent',
+        send_count: 0,
+        send_witness: 'numeric_send_count',
+        conversation_url: null,
+        transitioned_at: NOW.toISOString(),
+        transition_reason: 'fixture-first-attempt-not-sent',
+      } as any),
       probe,
     }));
 
