@@ -1379,6 +1379,10 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
 
     const runId = String(result.runId);
     const current = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
+    updatePackReviewRun(runId, { runnerPid: 2147483647 }, {
+      projectId: 'orchestrator-pack',
+      storeRoot,
+    });
     const admissions = current!.reviewRound!.sourceSlots
       .map((slot) => Date.parse(slot.admissionStartedAtUtc ?? ''))
       .filter((value) => Number.isFinite(value));
