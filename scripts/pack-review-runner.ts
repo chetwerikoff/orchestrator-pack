@@ -2217,6 +2217,10 @@ async function recoverStaleGptSourceComments(options: {
     && classifyPackReviewPayload(slot.payload as ReviewPayload).blocking
   ));
   const settlePartialAfterGrace = options.input.settlePartialAfterGrace ?? true;
+  const blockingBelowDegradedQuorum = hasBlockingCompletedSource
+    && round.cardinality >= 3
+    && round.settledSourceCount === undefined
+    && usableSourceCount < 2;
   const requiredSourceCount = round.settledSourceCount
     ?? (hasBlockingCompletedSource
       ? Math.max(1, usableSourceCount)
@@ -2239,7 +2243,9 @@ async function recoverStaleGptSourceComments(options: {
     };
   }
 
-  if (round.cardinality >= 3 && round.settledSourceCount === undefined) {
+  if (round.cardinality >= 3
+      && round.settledSourceCount === undefined
+      && !blockingBelowDegradedQuorum) {
     if (options.input.fixtureBeforeGptRoundFreeze) {
       await options.input.fixtureBeforeGptRoundFreeze({
         runId: options.run.id,

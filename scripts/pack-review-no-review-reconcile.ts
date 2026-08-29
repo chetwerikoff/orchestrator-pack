@@ -25,6 +25,7 @@ import {
 } from './lib/github-review-reconciliation.ts';
 import { resolveHeadSha, resolveRepositorySlug } from './lib/pack-gpt-reviewer.ts';
 import { readStateLightTurnObservation } from './chatgpt-browser-turn/state-light-turn-observation.ts';
+import { countExactMarkerOccurrences } from './chatgpt-browser-turn/state-light-turn-recovery.ts';
 import {
   runProbe,
   type InspectionSnapshot,
@@ -136,6 +137,7 @@ function slotFact(slot: PackReviewSourceSlotRecord): Record<string, unknown> {
 }
 
 function authoritativePreSend(slot: PackReviewSourceSlotRecord): boolean {
+  if (slot.lifecycle !== 'terminal') return false;
   const terminal = terminalRecord(slot);
   if (terminal.send_count === 0) return true;
   if (terminal.state === 'not_sent') return true;
@@ -179,6 +181,72 @@ function exactOwnedUser(snapshot: InspectionSnapshot, marker: string) {
   return { kind: 'found' as const, node: matches[0]! };
 }
 
+async function proveExactOwnedMarkerToken(
+  node: InspectionSnapshot['nodes'][number],
+  marker: string,
+  cdp: string,
+  inspected: Record<string, unknown>,
+  deps: NoReviewReconciliationDependencies,
+): Promise<
+  | { kind: 'proven' }
+  | { kind: 'inconclusive' | 'contradiction'; reason: string; evidence: Record<string, unknown> }
+> {
+  const targetId = trim(inspected.target_id);
+  if (!targetId) {
+    return { kind: 'inconclusive', reason: 'owned_turn_target_id_unavailable', evidence: {} };
+  }
+  const temp = mkdtempSync(join(tmpdir(), 'opk-no-review-owned-marker-'));
+  const output = join(temp, 'user.txt');
+  try {
+    const summary = node.innerText;
+    const exported = await deps.probe({
+      operation: 'export',
+      cdp,
+      targetId,
+      role: 'user',
+      ordinal: node.ordinal,
+      ...(node.message_id && node.message_id_unique ? { messageId: node.message_id } : {}),
+      representation: 'innerText',
+      expectedByteLength: summary.byte_length,
+      expectedSha256: summary.sha256,
+      output,
+    });
+    if (exported.status !== 'ok') {
+      return {
+        kind: 'inconclusive',
+        reason: 'owned_marker_export_inconclusive',
+        evidence: { probeStatus: bounded(exported.status) },
+      };
+    }
+    const bytes = readFileSync(output);
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
+    if (bytes.byteLength !== summary.byte_length || sha256 !== summary.sha256) {
+      return {
+        kind: 'contradiction',
+        reason: 'owned_marker_export_snapshot_mismatch',
+        evidence: { exportedSha256: sha256, snapshotSha256: summary.sha256 },
+      };
+    }
+    const exactMarkerTokenCount = countExactMarkerOccurrences(bytes.toString('utf8'), marker);
+    if (exactMarkerTokenCount !== 1) {
+      return {
+        kind: 'inconclusive',
+        reason: 'owned_marker_token_cardinality_ambiguous',
+        evidence: { exactMarkerTokenCount },
+      };
+    }
+    return { kind: 'proven' };
+  } catch (error) {
+    return {
+      kind: 'inconclusive',
+      reason: 'owned_marker_export_unavailable',
+      evidence: { detail: bounded(error) },
+    };
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+}
+
 function assistantForOwnedUser(snapshot: InspectionSnapshot, userDocumentOrdinal: number) {
   const after = [...snapshot.nodes]
     .filter((node) => node.document_ordinal > userDocumentOrdinal)
@@ -202,6 +270,13 @@ async function reconcilePossibleDelivery(
     return {
       disposition: 'unavailable/inconclusive',
       reason: 'possible_delivery_invocation_unbound',
+      evidence: slotFact(slot),
+    };
+  }
+  if (slot.lifecycle !== 'terminal') {
+    return {
+      disposition: 'unavailable/inconclusive',
+      reason: 'possible_delivery_slot_not_terminal',
       evidence: slotFact(slot),
     };
   }
@@ -295,6 +370,20 @@ async function reconcilePossibleDelivery(
       disposition: 'unavailable/inconclusive',
       reason: owned.reason,
       evidence: { ...slotFact(slot), observationPhase: observation.phase },
+    };
+  }
+  const markerProof = await proveExactOwnedMarkerToken(
+    owned.node,
+    observation.marker,
+    binding.cdp,
+    inspected,
+    deps,
+  );
+  if (markerProof.kind !== 'proven') {
+    return {
+      disposition: markerProof.kind === 'contradiction' ? 'contradiction' : 'unavailable/inconclusive',
+      reason: markerProof.reason,
+      evidence: { ...slotFact(slot), observationPhase: observation.phase, ...markerProof.evidence },
     };
   }
   const assistant = assistantForOwnedUser(snapshot, owned.node.document_ordinal);

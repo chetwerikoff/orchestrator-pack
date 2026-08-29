@@ -504,6 +504,156 @@ describe('pack-review no-review reconciliation', () => {
     expect(listRuns).not.toHaveBeenCalled();
   });
 
+  it('fails closed while a retryable zero-send source slot is still non-terminal', async () => {
+    const invocationId = '44444444-4444-4444-8444-444444444444';
+    const retrying = run(round([
+      slot(1, {
+        lifecycle: 'invocation_started',
+        invocationId,
+        attemptOrdinal: 1,
+        admissionStartedAtUtc: NOW.toISOString(),
+        terminalResult: {
+          state: 'profile_busy',
+          cause: 'profile_busy',
+          send_count: 0,
+          configured_profile_key: 'profile-fixture',
+        },
+        launchProfileKey: 'profile-fixture',
+        launchCdpUrl: 'http://127.0.0.1:9222',
+      } as any),
+      slot(2, {
+        lifecycle: 'terminal',
+        invocationId: '44444444-2222-4222-8222-222222222222',
+        attemptOrdinal: 2,
+        terminalClass: 'explicit_refusal:zero_send_collision_exhausted',
+        terminalResult: { state: 'profile_busy', cause: 'profile_busy', send_count: 0 },
+      }),
+      slot(3, {
+        lifecycle: 'terminal',
+        invocationId: '44444444-3333-4333-8333-333333333333',
+        attemptOrdinal: 2,
+        terminalClass: 'explicit_refusal:zero_send_collision_exhausted',
+        terminalResult: { state: 'profile_busy', cause: 'profile_busy', send_count: 0 },
+      }),
+    ]));
+    const probe = vi.fn(async () => { throw new Error('probe_should_not_run'); });
+
+    const result = await reconcilePackReviewNoReview(INPUT, deps({
+      listRuns: () => [retrying],
+      probe,
+    }));
+
+    expect(result.disposition).toBe('unavailable/inconclusive');
+    expect(result.reason).toBe('possible_delivery_slot_not_terminal');
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('rejects a repeated owned marker token before attributing browser evidence', async () => {
+    const invocationId = '66666666-6666-4666-8666-666666666666';
+    const marker = 'OPKTURNV1-repeated-marker';
+    const userText = marker + '\n' + marker;
+    const userBytes = Buffer.from(userText, 'utf8');
+    const userSha = createHash('sha256').update(userBytes).digest('hex');
+    const possible = run(round([
+      slot(1, {
+        lifecycle: 'terminal',
+        invocationId,
+        terminalClass: 'possible_delivery',
+        terminalResult: {
+          state: 'driver_error',
+          cause: 'browser_lost',
+          send_count: 1,
+          configured_profile_key: 'profile-fixture',
+        },
+        launchProfileKey: 'profile-fixture',
+        launchCdpUrl: 'http://127.0.0.1:9222',
+      }),
+      slot(2, {
+        lifecycle: 'terminal',
+        invocationId: '66666666-2222-4222-8222-222222222222',
+        attemptOrdinal: 2,
+        terminalClass: 'explicit_refusal:zero_send_collision_exhausted',
+        terminalResult: { state: 'profile_busy', cause: 'profile_busy', send_count: 0 },
+      }),
+      slot(3, {
+        lifecycle: 'terminal',
+        invocationId: '66666666-3333-4333-8333-333333333333',
+        attemptOrdinal: 2,
+        terminalClass: 'explicit_refusal:zero_send_collision_exhausted',
+        terminalResult: { state: 'profile_busy', cause: 'profile_busy', send_count: 0 },
+      }),
+    ]));
+    const probe = vi.fn(async (args: any) => {
+      if (args.operation === 'inspect') {
+        return {
+          status: 'ok',
+          target_id: 'target-repeated',
+          snapshot: {
+            generation_in_progress: false,
+            nodes_truncated: false,
+            nodes: [{
+              role: 'user',
+              ordinal: 0,
+              document_ordinal: 0,
+              message_id: 'user-repeated',
+              message_id_unique: true,
+              attributes: {},
+              innerText: {
+                byte_length: userBytes.byteLength,
+                code_point_length: userText.length,
+                sha256: userSha,
+                head: userText,
+                tail: userText,
+              },
+              textContent: {
+                byte_length: userBytes.byteLength,
+                code_point_length: userText.length,
+                sha256: userSha,
+                head: userText,
+                tail: userText,
+              },
+            }],
+          },
+        };
+      }
+      if (args.operation === 'export' && args.role === 'user') {
+        writeFileSync(args.output, userBytes);
+        return { status: 'ok' };
+      }
+      throw new Error('unexpected_probe_operation');
+    });
+
+    const result = await reconcilePackReviewNoReview(INPUT, deps({
+      listRuns: () => [possible],
+      readObservation: () => ({
+        schema: 'state-light-turn-observation/v1',
+        version: 1,
+        invocation_id: invocationId,
+        profile_key: 'profile-fixture',
+        marker,
+        phase: 'sent_unharvested',
+        send_count: 1,
+        send_witness: 'numeric_send_count',
+        conversation_url: 'https://chatgpt.com/c/repeated-marker',
+        primary: null,
+        transitioned_at: NOW.toISOString(),
+        transition_reason: 'fixture',
+      } as any),
+      probe,
+    }));
+
+    expect(result.disposition).toBe('unavailable/inconclusive');
+    expect(result.reason).toBe('owned_marker_token_cardinality_ambiguous');
+    expect(result.evidence).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'slot-closure',
+        sourceSlotId: 'source-01',
+        state: 'unavailable/inconclusive',
+        exactMarkerTokenCount: 2,
+      }),
+    ]));
+  });
+
   it('accepts an exact owned-turn assistant export even before a retained primary exists', async () => {
     const invocationId = '55555555-5555-4555-8555-555555555555';
     const marker = 'OPKTURNV1-owned-unharvested';
@@ -585,7 +735,8 @@ describe('pack-review no-review reconciliation', () => {
         };
       }
       if (args.operation === 'export') {
-        writeFileSync(args.output, assistantBytes);
+        const bytes = args.role === 'user' ? Buffer.from(marker, 'utf8') : assistantBytes;
+        writeFileSync(args.output, bytes);
         return { status: 'ok' };
       }
       throw new Error('unexpected_probe_operation');
@@ -712,15 +863,16 @@ describe('pack-review no-review reconciliation', () => {
         };
       }
       if (args.operation === 'export') {
-        writeFileSync(args.output, assistantBytes);
+        const bytes = args.role === 'user' ? Buffer.from(marker, 'utf8') : assistantBytes;
+        writeFileSync(args.output, bytes);
         return {
           schema: 'browser-gpt-page-probe/v1',
           operation: 'export',
           status: 'ok',
           diagnostic_only: true,
           workflow_authority: 'none',
-          byte_length: assistantBytes.byteLength,
-          sha256: assistantSha,
+          byte_length: bytes.byteLength,
+          sha256: createHash('sha256').update(bytes).digest('hex'),
         };
       }
       throw new Error('unexpected_probe_operation');
