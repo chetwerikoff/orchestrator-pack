@@ -3,7 +3,9 @@
   "issue_number": 1831,
   "declared_paths": [
     "scripts/cursor-unsent-composer-submit.test.ts",
-    "scripts/cursor-unsent-composer-submit.ts"
+    "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/task-adapter.test.ts"
   ],
   "denylist": [
     "credentials/",
@@ -14,7 +16,9 @@
   "allowed_roots": [
     "docs/declarations/",
     "scripts/cursor-unsent-composer-submit.test.ts",
-    "scripts/cursor-unsent-composer-submit.ts"
+    "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/task-adapter.test.ts"
   ],
-  "source_revision": "2fe32b90131d82d1baa06c7c8ec5228eade16367"
+  "source_revision": "11ed7d3982726a587258c215413dee88a707eba3"
 }
