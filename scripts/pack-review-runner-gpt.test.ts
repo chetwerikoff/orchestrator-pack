@@ -2737,15 +2737,23 @@ describe('recovered sub-quorum blocking source regression', () => {
 
     const reviewBodies: string[] = [];
     const statusStates: string[] = [];
+    const reviews: GithubReviewSummary[] = [];
     const finalReviewTransport: GithubReviewTransport = {
       resolveActorLogin: async () => 'pack-review-bot',
-      listReviews: async () => [],
-      postReview: async ({ body }) => {
+      listReviews: async () => [...reviews],
+      postReview: async ({ body, commitId }) => {
         reviewBodies.push(body);
-        return {
+        const review: GithubReviewSummary = {
           id: 178701,
+          body,
+          commitId,
           url: 'https://github.com/chetwerikoff/orchestrator-pack/pull/1787#pullrequestreview-178701',
+          state: 'COMMENTED',
+          userLogin: 'pack-review-bot',
+          submittedAt: '2026-08-29T03:30:00.000Z',
         };
+        reviews.push(review);
+        return { id: review.id, url: review.url };
       },
       dismissReview: async () => {},
     };
