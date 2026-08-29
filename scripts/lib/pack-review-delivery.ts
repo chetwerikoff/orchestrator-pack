@@ -1070,6 +1070,10 @@ export async function recordPackReviewPendingStatus(
 }
 
 function unfinishedRequiredStatusDescription(failureReason: string): string {
+  const belowQuorum = failureReason.match(/^gpt_sources_incomplete_after_grace:(\d+)\/(\d+)$/);
+  if (belowQuorum) {
+    return `Pack review preserved partial source evidence (${belowQuorum[1]}/${belowQuorum[2]}) but remained below quorum.`;
+  }
   if (failureReason.startsWith('reviewer_output_malformed')) {
     return 'Pack review did not produce a valid reviewer judgment.';
   }

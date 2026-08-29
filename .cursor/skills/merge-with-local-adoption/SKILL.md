@@ -146,6 +146,8 @@ procedure's sections 1–2):
    This status records authorization; it is not evidence that pack review ran, was clean, or
    that findings were cleared. Do not start the reviewer merely to manufacture a missing status.
 
+For the complete no-review evidence enumeration and exact-head receipt/staleness procedure, use only [`docs/pack-review-waiver-merge-runbook.md`](../../../docs/pack-review-waiver-merge-runbook.md).
+
 Truth-preservation is mandatory: record the exact head, authorization, status POST/read-back,
 the authorization source (channel/reference only; no private data), and the fact that review
 was not performed or was not cleared. A review waiver never waives another failing required
