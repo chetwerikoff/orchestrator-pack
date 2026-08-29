@@ -790,30 +790,42 @@ describe('Orca assignment resolution', () => {
 });
 
 describe('Issue #1489 rendered screen observation', () => {
-  it('accepts a cursorless screen frame and preserves its source witness', () => {
+  it('accepts cursorless sync screen replay without issuing --cursor', () => {
+    let readCount = 0;
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
       if (args[0] === 'terminal' && args[1] === 'show') return {
         ok: true,
         result: { terminal: { handle: 'screen-terminal', incarnationId: 'screen-generation', worktreePath: '/tmp/screen', status: 'running' } },
       };
+      if (args[0] === 'terminal' && args[1] === 'list') return {
+        ok: true,
+        result: { terminals: [{ handle: 'screen-terminal', incarnationId: 'screen-generation', worktreePath: '/tmp/screen', title: 'screen' }], totalCount: 1, truncated: false },
+      };
+      readCount += 1;
+      expect(args).not.toContain('--cursor');
       return {
         ok: true,
-        result: { terminal: { handle: 'screen-terminal', status: 'running', tail: ['visible'], nextCursor: null, source: 'screen' } },
+        result: { terminal: { handle: 'screen-terminal', status: 'running', tail: [`visible-${readCount}`], nextCursor: null, source: 'screen' } },
       };
     });
     const adapter = new OrcaRuntimeAdapter({ runJson: runJson as never });
-    const result = adapter.readBoundedOutput({
-      worker: { runtime: 'orca', id: 'screen-terminal', generation: 'screen-generation' },
+    const worker = { runtime: 'orca' as const, id: 'screen-terminal', generation: 'screen-generation' };
+    const first = adapter.readBoundedOutput({ worker, screen: true });
+    expect(first.status).toBe('ok');
+    if (first.status !== 'ok') return;
+    expect(first.value.source).toBe('screen');
+    expect(first.value.lines).toEqual(['visible-1']);
+    const second = adapter.readBoundedOutput({
+      worker,
+      previousToken: first.value.observationToken,
       screen: true,
     });
-    expect(result.status).toBe('ok');
-    if (result.status === 'ok') {
-      expect(result.value.source).toBe('screen');
-      expect(result.value.lines).toEqual(['visible']);
-    }
+    expect(second.status).toBe('ok');
+    expect(readCount).toBe(2);
   });
 
-  it('uses the async all-workspace census and concurrent screen seam', async () => {
+  it('uses the async all-workspace census and cursorless screen replay', async () => {
+    let readCount = 0;
     const runJsonAsync = vi.fn(async (args: readonly string[]): Promise<OrcaJsonResponse> => {
       if (args[0] === 'terminal' && args[1] === 'list') return {
         ok: true,
@@ -828,22 +840,32 @@ describe('Issue #1489 rendered screen observation', () => {
         ok: true,
         result: { terminal: { handle: args[3], incarnationId: args[3] === 'async-a' ? 'generation-a' : 'generation-b', worktreePath: args[3] === 'async-a' ? '/tmp/a' : '/tmp/b' } },
       };
+      readCount += 1;
+      expect(args).not.toContain('--cursor');
       return {
         ok: true,
-        result: { terminal: { handle: args[3], status: 'running', tail: ['visible'], nextCursor: null, source: 'screen' } },
+        result: { terminal: { handle: args[3], status: 'running', tail: [`visible-${readCount}`], nextCursor: null, source: 'screen' } },
       };
     });
     const adapter = new OrcaRuntimeAdapter({ runJsonAsync: runJsonAsync as never });
     const listed = await adapter.listWorkersAsync?.();
     expect(listed?.status).toBe('ok');
     expect(runJsonAsync.mock.calls[0]?.[0]).toEqual(['terminal', 'list']);
-    const result = await adapter.readBoundedOutputAsync?.({
-      worker: { runtime: 'orca', id: 'async-a', generation: 'generation-a' },
+    const worker = { runtime: 'orca' as const, id: 'async-a', generation: 'generation-a' };
+    const first = await adapter.readBoundedOutputAsync?.({ worker, screen: true });
+    expect(first?.status).toBe('ok');
+    if (first?.status !== 'ok') return;
+    const second = await adapter.readBoundedOutputAsync?.({
+      worker,
+      previousToken: first.value.observationToken,
       screen: true,
     });
-    expect(result?.status).toBe('ok');
+    expect(second?.status).toBe('ok');
+    expect(readCount).toBe(2);
     expect(runJsonAsync.mock.calls.map(([args]) => args)).toEqual([
       ['terminal', 'list'],
+      ['terminal', 'show', '--terminal', 'async-a'],
+      ['terminal', 'read', '--terminal', 'async-a', '--screen'],
       ['terminal', 'show', '--terminal', 'async-a'],
       ['terminal', 'read', '--terminal', 'async-a', '--screen'],
     ]);

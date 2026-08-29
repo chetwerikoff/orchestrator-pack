@@ -1,0 +1,25 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1835,
+  "declared_paths": [
+    "scripts/lib/worker-smoke-bounded-create.test.ts",
+    "scripts/lib/worker-smoke-bounded-create.ts",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/compat.test.ts",
+    "scripts/orca-runtime/compat.ts",
+    "scripts/orca-runtime/native.ts",
+    "scripts/orca-runtime/task-adapter.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/lib/worker-smoke-bounded-create.test.ts",
+    "scripts/lib/worker-smoke-bounded-create.ts",
+    "scripts/orca-runtime/"
+  ],
+  "source_revision": "6ca2257e197593f441d432a44d610a7790ddb4f8"
+}

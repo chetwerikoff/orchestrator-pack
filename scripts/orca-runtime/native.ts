@@ -85,6 +85,7 @@ export interface OrcaTerminalReadResult {
   lines?: string[];
   nextCursor?: string | number | null;
   oldestCursor?: string | number;
+  source?: 'screen' | 'stream' | 'unknown';
   /** Current upstream Orca shape. */
   terminal?: {
     handle?: string;
@@ -93,6 +94,7 @@ export interface OrcaTerminalReadResult {
     nextCursor?: string | null;
     oldestCursor?: string;
     latestCursor?: string;
+    source?: 'screen' | 'stream' | 'unknown';
   };
 }
 
