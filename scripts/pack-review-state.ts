@@ -1246,7 +1246,7 @@ function reviewRunEvidence(
   authority: PackReviewAuthorityDocument,
   reviewRuns: readonly PackReviewStartConsumptionRecord[],
 ): boolean {
-  if (!authority.cycle) return false;
+  if (!authority.cycle || isLogicalRoundCycle(authority.cycle)) return false;
   const cycleOpenedAt = Date.parse(authority.cycle.openedAtUtc);
   if (!Number.isFinite(cycleOpenedAt)) return false;
   return reviewRuns.some((run) => {
