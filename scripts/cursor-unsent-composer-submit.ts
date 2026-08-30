@@ -954,6 +954,7 @@ async function submitOrcaMessageDeliveryPointerForMessage(
       state.episodes[key] = {
         messageId: message.id,
         runId: message.runId,
+        recipient: message.recipient,
         workerKey: workerKey(worker.identity),
         nextEligibleAt: now + priorBackoff,
         backoffMs: nextBackoff,
