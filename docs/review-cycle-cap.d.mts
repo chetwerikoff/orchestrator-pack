@@ -1,8 +1,11 @@
 import type { OpenPr, ReviewRun } from './review-trigger-reconcile.d.mts';
 
 export declare const REVIEW_CYCLE_CAP_SCHEMA_VERSION: number;
+export declare const REVIEW_CYCLE_ACCOUNTING_VERSION: string;
+export declare const REVIEW_CYCLE_LEGACY_ACCOUNTING_VERSION: string;
 export declare const DEFAULT_REVIEW_CYCLE_TIER: string;
 export declare const TIER_CAP_BY_TIER: Readonly<Record<string, number>>;
+export declare const LEGACY_TIER_CAP_BY_TIER: Readonly<Record<string, number>>;
 export declare const VALID_REVIEW_CYCLE_TIERS: ReadonlySet<string>;
 export declare const TERMINAL_CLEAN_EARLY_STOP: string;
 export declare const TERMINAL_COMMENTED_EARLY_STOP: string;
@@ -24,11 +27,13 @@ export type TerminalRunClassification =
   | { kind: 'open_findings'; openFindings: number };
 
 export interface PrCapCycleState {
+  accountingVersion?: string;
   tier?: string;
   cap?: number;
   tierFrozen?: boolean;
   cycleOpenedAtUtc?: string | null;
   distinctHeadsReviewed?: string[];
+  logicalRoundsReviewed?: number[];
   terminal?: string | null;
   terminalHeadSha?: string | null;
   mergeEligible?: boolean;
@@ -82,6 +87,22 @@ export declare function deriveDistinctHeadBudget(
   prNumber: number,
   currentHeadSha: string,
 ): Array<{
+  targetSha: string;
+  classification: TerminalRunClassification;
+  completedAt: string | null;
+  run: ReviewRun;
+}>;
+
+export declare function deriveLogicalRoundBudget(
+  runs: Array<ReviewRun & {
+    logicalRoundOrdinal?: number;
+    reviewRound?: { roundOrdinal?: number };
+    automaticBudgetDisposition?: string;
+  }>,
+  prNumber: number,
+  currentHeadSha: string,
+): Array<{
+  roundOrdinal: number;
   targetSha: string;
   classification: TerminalRunClassification;
   completedAt: string | null;
