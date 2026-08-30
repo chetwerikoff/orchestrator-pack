@@ -202,6 +202,51 @@ describe('OpenCode HTTP control plane', () => {
     expect(requests[2]?.body).toBe(JSON.stringify({ parts: [{ type: 'text', text: 'delivery pointer' }] }));
   });
 
+  it('retains OpenCode control when task adapter upgrades pty identity', () => {
+    const handle = 'term-opencode-pty';
+    const ptyGeneration = '/tmp/opencode-pty@@pty-generation';
+    const exactGeneration = 'incarnation-opencode-generation';
+    const command = 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture';
+    const terminal = {
+      handle,
+      incarnationId: exactGeneration,
+      worktreePath: process.cwd(),
+      title: 'opencode',
+      status: 'running' as const,
+    };
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'terminal create') {
+        return { ok: true, result: { terminal: { handle, ptyId: ptyGeneration, title: 'opencode' } } };
+      }
+      if (operation === 'terminal show' || operation === 'terminal list') {
+        return operation === 'terminal show'
+          ? { ok: true, result: { terminal } }
+          : { ok: true, result: { totalCount: 1, truncated: false, terminals: [terminal] } };
+      }
+      if (operation === 'worktree current') {
+        return { ok: false, error: { code: 'not_available', message: 'fixture' } };
+      }
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    const adapter = new OrcaTaskRuntimeAdapter({
+      runJson: runJson as never,
+      openCodeHttpRequest: () => ({
+        status: 200,
+        body: JSON.stringify({ healthy: true, version: '1.18.25' }),
+      }),
+    });
+
+    const spawned = adapter.spawnWorker({ title: 'opencode', command });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+    expect(spawned.value.identity.generation).toBe(exactGeneration);
+    expect(adapter.openCodeHealth(spawned.value.identity)).toMatchObject({
+      status: 'ok',
+      value: { healthy: true, version: '1.18.25' },
+    });
+  });
+
   it('recovers OpenCode control from terminal metadata on a fresh adapter', () => {
     const requests: string[] = [];
     const first = makeAdapter((input) => {

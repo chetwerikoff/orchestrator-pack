@@ -566,6 +566,15 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     this.#knownWorkspace.set(identityKey(identity), { workspaceSelector, workspacePath });
   }
 
+  protected rebindOpenCodeUrl(
+    previousIdentity: RuntimeWorkerIdentity,
+    nextIdentity: RuntimeWorkerIdentity,
+  ): void {
+    const record = this.#openCodeUrls.get(previousIdentity.id);
+    if (!record || !sameRuntimeWorker(record.identity, previousIdentity)) return;
+    this.#openCodeUrls.set(nextIdentity.id, { ...record, identity: nextIdentity });
+  }
+
   #rememberOpenCodeUrl(identity: RuntimeWorkerIdentity, url: string): void {
     this.#openCodeUrls.set(identity.id, { identity, url });
     const owned = this.#owned.get(identity.id);
