@@ -504,6 +504,22 @@ describe('Issue #1431 manager reviewer canon', () => {
         liveIssueBody: '<!-- source-revision: r09 -->\nchanged\n',
       })).toThrow('terminal_bundle_live_issue_mismatch');
 
+      const authorPath = join(reviewDir, 'author-dispositions.json');
+      const originalAuthor = readFileSync(authorPath, 'utf8');
+      const staleM4Author = JSON.parse(originalAuthor) as {
+        m4: { sourceRevision: string };
+      };
+      staleM4Author.m4.sourceRevision = 'r07';
+      writeFileSync(authorPath, JSON.stringify(staleM4Author, null, 2));
+      expect(() => buildManagerReviewTerminalBundle({
+        repositoryFullName: reviewContext.repositoryFullName,
+        issueNumber: reviewContext.issueNumber,
+        sourceRevision: 'r08',
+        reviewDir,
+        liveIssueBody: draft,
+      })).toThrow('terminal_bundle_author_m4_stale');
+      writeFileSync(authorPath, originalAuthor);
+
       const terminalContext: ManagerReviewBriefContext = {
         ...reviewContext,
         sourceRevision: 'r08',
