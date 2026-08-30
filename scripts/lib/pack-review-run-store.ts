@@ -578,7 +578,7 @@ function validateGptTerminalEvidence(slot: PackReviewSourceSlotRecord, path: str
       return;
     }
     if (terminalClass === 'explicit_refusal:zero_send_collision_exhausted') {
-      if (slot.attemptOrdinal !== 2 || !isRetryableZeroSendCollisionTuple(state, cause, sendCount)) {
+      if ((slot.attemptOrdinal ?? 0) < 2 || !isRetryableZeroSendCollisionTuple(state, cause, sendCount)) {
         throw new Error(`corrupt pack review run record at ${path}: exhausted collision class is terminalResult-inconsistent`);
       }
       return;
