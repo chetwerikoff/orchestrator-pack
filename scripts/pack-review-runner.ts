@@ -3932,12 +3932,15 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         description: 'Required pack-review stage completed; no additional review round required.',
         idempotencyKey: `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${target.headSha}:stage-complete:${authority.cycle.cycleId}`,
       });
-      await releaseEarlyClaim('review_stage_complete');
+      const stageCompleteReason = authority.terminal?.targetSha === target.headSha
+        ? 'terminal_run_exists'
+        : 'review_stage_complete';
+      await releaseEarlyClaim(stageCompleteReason);
       return {
         ok: true,
         created: false,
         reused: true,
-        reason: 'review_stage_complete',
+        reason: stageCompleteReason,
         prNumber: target.prNumber,
         headSha: target.headSha,
         cycleId: authority.cycle.cycleId,
