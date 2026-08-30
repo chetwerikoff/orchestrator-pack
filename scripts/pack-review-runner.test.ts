@@ -319,7 +319,7 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
 });
 
 describe('Issue #1826 logical-round smoke independence', () => {
-  it('admits T3 round 2 on a fixed new head without requiring a second worker smoke', async () => {
+  it('admits T3 round 2 on the same head without requiring a second worker smoke', async () => {
     const parent = mkdtempSync(join(tmpdir(), 'pack-review-1826-round2-smoke-'));
     roots.push(parent);
     const storeRoot = join(parent, 'store');
@@ -410,6 +410,90 @@ describe('Issue #1826 logical-round smoke independence', () => {
     expect(finalAuthority?.cycle?.reviewStageComplete).toBe(true);
     expect(finalAuthority?.smokeOrdering?.workerOwned?.headSha).toBe(head1);
   });
+  it('blocks T3 round 2 until round-1 findings are resolved or explicitly rejected', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'pack-review-1826-round1-findings-gate-'));
+    roots.push(parent);
+    const storeRoot = join(parent, 'store');
+    setupHarness(storeRoot);
+    const head = '5'.repeat(40);
+    const prNumber = 1829;
+    const issueBody = [
+      '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
+      '```smoke-test-plan\nscenarios:\n  - action: exact head smoke | expected: PASS\n```',
+    ].join('\n\n');
+    const options = { storeRoot };
+    const initial = initializePackReviewAuthority({
+      prNumber,
+      headSha: head,
+      tier: 'T3',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      options,
+    });
+    const smokeStarted = commitSmokeOrderingTransition({
+      prNumber,
+      expectedTransitionSeq: initial.transitionSeq,
+      actor: 'worker-owned',
+      headSha: head,
+      status: 'started',
+      options,
+    });
+    commitSmokeOrderingTransition({
+      prNumber,
+      expectedTransitionSeq: smokeStarted.transitionSeq,
+      actor: 'worker-owned',
+      headSha: head,
+      status: 'passed',
+      options,
+    });
+
+    const common = {
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: process.cwd(),
+      prNumber,
+      headSha: head,
+      claimMode: 'preacquired' as const,
+      fixtureCurrentPrHeadSha: head,
+      fixturePostReviewHeadSha: head,
+      fixturePrState: 'OPEN' as const,
+      fixturePrBody: `Closes #${prNumber}`,
+      fixturePostReviewPrBody: `Closes #${prNumber}`,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureIssueNumber: prNumber,
+      fixtureIssueBody: issueBody,
+      fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
+      fixtureEmulateWin32Selector: true,
+      fixtureRequiredStatusWriter: async () => {},
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    };
+    const round1 = await startPackReview({
+      ...common,
+      fixtureReviewStdout: JSON.stringify({
+        verdict: 'findings',
+        findingCount: 1,
+        findings: [{ severity: 'blocking', title: 'round one finding' }],
+      }),
+      fixtureGithubReviewId: 182901,
+    });
+    expect(round1).toMatchObject({ ok: true, created: true });
+    expect(readPackReviewAuthority(prNumber, options)?.cycle).toMatchObject({
+      state: 'open_findings',
+      consumedRoundOrdinals: [1],
+    });
+
+    const round2 = await startPackReview({
+      ...common,
+      fixtureReviewStdout: cleanPayload(),
+      fixtureGithubReviewId: 182902,
+    });
+    expect(round2).toMatchObject({
+      ok: false,
+      created: false,
+      reason: 'prior_round_findings_unresolved',
+      httpStatus: 409,
+    });
+    expect(readPackReviewAuthority(prNumber, options)?.cycle?.consumedRoundOrdinals).toEqual([1]);
+  });
   it('does not create a native same-round replacement when the prior run lacks a native binding', async () => {
     const parent = mkdtempSync(join(tmpdir(), 'pack-review-1826-native-unbound-'));
     roots.push(parent);
@@ -454,7 +538,7 @@ describe('Issue #1826 logical-round smoke independence', () => {
       fixturePostReviewPrBody: `Closes #${prNumber}`,
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: prNumber,
-      fixtureIssueBody: '\`\`\`complexity-tier\\ntier: T3\\nadvisory-prior: T3\\n\`\`\`',
+      fixtureIssueBody: '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
       fixtureReviewStdout: cleanPayload(),
       fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
       fixtureEmulateWin32Selector: true,
@@ -527,7 +611,7 @@ describe('Issue #1826 logical-round smoke independence', () => {
       fixturePostReviewPrBody: `Closes #${prNumber}`,
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: prNumber,
-      fixtureIssueBody: '\`\`\`complexity-tier\\ntier: T3\\nadvisory-prior: T3\\n\`\`\`',
+      fixtureIssueBody: '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
       fixtureReviewStdout: cleanPayload(),
       fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
       fixtureEmulateWin32Selector: true,
