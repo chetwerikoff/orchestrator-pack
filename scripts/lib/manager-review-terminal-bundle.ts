@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { defaultGhTransport, fetchIssueRevision } from './create-issue-stage-record-gh.ts';
@@ -6,6 +6,7 @@ import type { GhTransport } from './create-issue-stage-record-types.ts';
 import { canonicalStagePlan, type ReviewTier } from './create-issue-stage-topology.ts';
 import {
   deriveReviewEpisodeState,
+  resolveCanonicalReviewDirectory,
   validateReviewEpisodeTopology,
   type ReviewEpisodeDerivationAuthorityV1,
 } from './stage-completeness-core.ts';
@@ -262,6 +263,13 @@ function validateGovernedArtifacts(
   const receipts = stageReceiptValues(reviewDir, files);
   const relay = readJsonValue(join(reviewDir, 'verified-relay-evidence.json'), 'terminal_bundle_relay_invalid');
   if (!Array.isArray(relay)) throw new Error('terminal_bundle_relay_invalid');
+  const claudeEvidencePath = join(reviewDir, 'claude-producer-evidence.json');
+  const claudeProducerEvidence = existsSync(claudeEvidencePath)
+    ? readJsonValue(claudeEvidencePath, 'terminal_bundle_claude_producer_evidence_invalid')
+    : [];
+  if (!Array.isArray(claudeProducerEvidence)) {
+    throw new Error('terminal_bundle_claude_producer_evidence_invalid');
+  }
   const taskIdentity = requireString(intake, 'taskIdentity', 'terminal_bundle_tier_intake_invalid');
   const firstRevision = requireString(intake, 'firstRevision', 'terminal_bundle_tier_intake_invalid');
   const authority: ReviewEpisodeDerivationAuthorityV1 = {
@@ -277,7 +285,8 @@ function validateGovernedArtifacts(
         'terminal_bundle_stage_receipt_invalid',
       )),
     },
-    validationPurpose: 'final-acceptance',
+    claudeProducerEvidence,
+    validationPurpose: 'stage-time',
   };
   const state = deriveReviewEpisodeState(receipts, relay, authority);
   const phase = tier === 'T2' ? 'pre-lens' : 'post-lens';
@@ -330,6 +339,13 @@ export function buildManagerReviewTerminalBundle(options: BuildManagerReviewTerm
     || typeof intake.firstRevision !== 'string'
     || `${intake.taskIdentity}@${intake.firstRevision}` !== reviewEpisodeId) {
     throw new Error('terminal_bundle_tier_intake_stale');
+  }
+  const canonicalReviewDirectory = resolveCanonicalReviewDirectory({
+    taskIdentity: String(intake.taskIdentity),
+  });
+  if (reviewDir !== canonicalReviewDirectory.directory
+    || resolve(join(reviewDir, 'tier-intake.json')) !== canonicalReviewDirectory.intakePath) {
+    throw new Error('terminal_bundle_noncanonical_review_dir');
   }
   const { tier } = resolveTierAndPredecessor(intake, predecessorStage);
   if (tier === 'T1' && predecessorStage === null && authorM4.length > 0) {

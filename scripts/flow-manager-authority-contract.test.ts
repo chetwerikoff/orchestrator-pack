@@ -40,7 +40,7 @@ const reviewContext: ManagerReviewBriefContext = {
 };
 
 function createTerminalBundleFixture(root: string, sourceRevision = 'r08') {
-  const reviewDir = join(root, 'review');
+  const reviewDir = join(root, '.review', '1431');
   mkdirSync(reviewDir, { recursive: true });
   const reviewEpisodeId = 'issue:1431@r01';
   const draft = `<!-- source-revision: ${sourceRevision} -->\n\n# terminal fixture\n`;
@@ -510,11 +510,15 @@ describe('Issue #1431 manager reviewer canon', () => {
 
   it('requires a current governed bundle for terminal architectural review before browser delegation', async () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-manager-review-terminal-bundle-'));
+    const previousStateRoot = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = root;
     try {
       const { reviewDir, draft, bundle } = createTerminalBundleFixture(root);
-      const t1Dir = join(root, 't1');
+      const t1Root = join(root, 't1-root');
+      const t1Dir = join(t1Root, '.review', '1431');
       mkdirSync(t1Dir, { recursive: true });
       const t1Draft = '<!-- source-revision: r01 -->\n\n# T1 fixture\n';
+      process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = t1Root;
       writeFileSync(join(t1Dir, 'tier-intake.json'), JSON.stringify({
         schema: 'tier-intake/v1',
         producer: 'fixture',
@@ -559,6 +563,7 @@ describe('Issue #1431 manager reviewer canon', () => {
         liveIssueBody: t1Draft,
       })).toThrow('terminal_bundle_zero_state_m4_invalid');
       writeFileSync(t1AuthorPath, originalT1Author);
+      process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = root;
       expect(t1Bundle.predecessorStage).toBeNull();
       expect(t1Bundle.reviewEconomics.stageReceipts).toEqual([]);
       expect(t1Bundle.reviewEconomics.counts).toEqual({
@@ -571,7 +576,9 @@ describe('Issue #1431 manager reviewer canon', () => {
         ['T2', {}],
         ['T3', { competitiveDecision: 'required', competitiveRationale: 'fixture rationale' }],
       ] as const) {
-        const invalidDir = join(root, `invalid-${tier.toLowerCase()}`);
+        const invalidRoot = join(root, `invalid-${tier.toLowerCase()}`);
+        const invalidDir = join(invalidRoot, '.review', '1431');
+        process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = invalidRoot;
         mkdirSync(invalidDir, { recursive: true });
         writeFileSync(join(invalidDir, 'tier-intake.json'), JSON.stringify({
           schema: 'tier-intake/v1', producer: 'fixture', taskIdentity: 'issue:1431', kind: 'fresh',
@@ -587,6 +594,7 @@ describe('Issue #1431 manager reviewer canon', () => {
           sourceRevision: 'r01', reviewDir: invalidDir, liveIssueBody: t1Draft,
         })).toThrow('terminal_bundle_predecessor_invalid');
       }
+      process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = root;
 
       const receiptPath = join(reviewDir, 'stage-completeness-receipt-ar.json');
       const originalReceipt = readFileSync(receiptPath, 'utf8');
@@ -738,6 +746,8 @@ describe('Issue #1431 manager reviewer canon', () => {
         missingBundleStdout.restore();
       }
     } finally {
+      if (previousStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previousStateRoot;
       rmSync(root, { recursive: true, force: true });
     }
   });
