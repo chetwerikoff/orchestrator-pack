@@ -96,6 +96,7 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
     markerPresent: boolean;
     generating: boolean | 'unknown';
     replyPresent?: boolean;
+    nodesTruncated?: boolean;
   }) {
     const marker = `OPKTURNV1${'a'.repeat(32)}`;
     const probe = async (args: { operation: string }) => {
@@ -118,6 +119,7 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
         workflow_authority: 'none',
         snapshot: {
           generation_in_progress: input.generating,
+          nodes_truncated: input.nodesTruncated === true,
           nodes: [
             ...(input.markerPresent ? [{
               role: 'user',
@@ -169,6 +171,15 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
     expect(observed).toMatchObject({ state: 'replacement_eligible', replacementEligible: true });
   });
 
+  it('does not authorize replacement from a truncated all-tab message census', async () => {
+    const start = Date.parse('2026-08-30T00:00:00.000Z');
+    const observed = await observeGptPackReviewAttempt(
+      gptRun(new Date(start).toISOString()),
+      start + 20 * 60_000,
+      gptObservationDeps({ markerPresent: false, generating: false, nodesTruncated: true }),
+    );
+    expect(observed).toMatchObject({ state: 'observation_unavailable', replacementEligible: false });
+  });
   it('requires recovery of an attributable finished reply instead of replacement', async () => {
     const start = Date.parse('2026-08-30T00:00:00.000Z');
     const observed = await observeGptPackReviewAttempt(
