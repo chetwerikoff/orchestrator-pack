@@ -382,8 +382,8 @@ describe('Issue #1359 production worker-smoke reachability', () => {
         abortReason: () => undefined,
         now: () => clock,
         sleepMs: (milliseconds) => { clock += milliseconds; },
-        absoluteCeilingMs: 25,
-        progressStallMs: 1_000,
+        absoluteCeilingMs: 1_000,
+        progressStallMs: 25,
       });
       expect(completion.ok).toBe(false);
       expect(completion.reason).toContain('agent_report_timeout');
