@@ -128,6 +128,18 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
     refuse('direct_publication_arguments_required');
     return 2;
   }
+  const directStage = typeof options.get('stage') === 'string' ? options.get('stage') as string : undefined;
+  const terminalInputBundle = typeof options.get('terminal-input-bundle') === 'string'
+    ? options.get('terminal-input-bundle') as string
+    : undefined;
+  if (directRequested && directStage === 'architectural' && !terminalInputBundle) {
+    refuse('direct_publication_terminal_bundle_required');
+    return 2;
+  }
+  if (directRequested && directStage !== 'architectural' && terminalInputBundle) {
+    refuse('direct_publication_terminal_bundle_unexpected');
+    return 2;
+  }
   const profile = requiredOption(options, 'profile');
   const cdp = requiredOption(options, 'cdp');
   const input = requiredOption(options, 'input');
@@ -142,6 +154,7 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
     '--output', browserOutput,
   ];
   if (reviewerSourceOutput) browserArgs.push('--reviewer-source-output', reviewerSourceOutput);
+  if (terminalInputBundle) browserArgs.push('--terminal-input-bundle', terminalInputBundle);
   for (const key of [
     'reviewer-source',
     'repository',
