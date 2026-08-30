@@ -926,6 +926,30 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (health.healthy !== true || typeof health.version !== 'string' || !health.version.trim()) {
       return runtimeUnsupported('readiness', 'opencode_health_schema_mismatch');
     }
+
+    const sessionOptions = this.#boundedOptions(deadline, options);
+    if (!sessionOptions) return runtimeFailure('readiness', 'runtime_timeout');
+    const sessions = this.#openCodeRequest({
+      url: `${urlRecord.url}/session?directory=${encodeURIComponent(current.value.workspacePath)}`,
+      method: 'GET',
+      timeoutMs: sessionOptions.timeoutMs!,
+    });
+    if ('error' in sessions) return runtimeFailure('readiness', sessions.error);
+    if (sessions.status < 200 || sessions.status >= 300) {
+      return runtimeFailure('readiness', `opencode_http_status_${sessions.status}`);
+    }
+    let parsedSessions: unknown;
+    try { parsedSessions = JSON.parse(sessions.body); } catch { return runtimeUnsupported('readiness', 'opencode_session_schema_mismatch'); }
+    if (!Array.isArray(parsedSessions)) {
+      return runtimeUnsupported('readiness', 'opencode_session_schema_mismatch');
+    }
+    const matchingSession = parsedSessions.some((value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+      const row = value as Record<string, unknown>;
+      return typeof row.id === 'string' && /^ses/u.test(row.id)
+        && row.directory === current.value!.workspacePath;
+    });
+    if (!matchingSession) return runtimeUnsupported('readiness', 'opencode_session_directory_mismatch');
     return {
       status: 'ok',
       value: { healthy: true, version: health.version.trim() },

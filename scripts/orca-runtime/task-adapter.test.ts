@@ -187,6 +187,7 @@ describe('OpenCode HTTP control plane', () => {
     const adapter = makeAdapter((input) => {
       requests.push(input);
       if (input.url.endsWith('/global/health')) return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) };
+      if (input.url.includes('/session?directory=')) return { status: 200, body: JSON.stringify([{ id: 'ses-visible', directory: process.cwd() }]) };
       return { status: 200, body: 'true' };
     });
     const spawned = adapter.spawnWorker({
@@ -208,11 +209,12 @@ describe('OpenCode HTTP control plane', () => {
     }).status).toBe('dispatched');
     expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
       { method: 'GET', url: 'http://127.0.0.1:18891/global/health' },
+      { method: 'GET', url: 'http://127.0.0.1:18891/session?directory=' + encodeURIComponent(process.cwd()) },
       { method: 'POST', url: 'http://127.0.0.1:18891/tui/append-prompt' },
       { method: 'POST', url: 'http://127.0.0.1:18891/tui/submit-prompt' },
     ]);
-    expect(requests[1]?.body).toBe(JSON.stringify({ text: 'delivery pointer' }));
-    expect(requests[2]?.body).toBeUndefined();
+    expect(requests[2]?.body).toBe(JSON.stringify({ text: 'delivery pointer' }));
+    expect(requests[3]?.body).toBeUndefined();
   });
 
   it('dispatches through the visible TUI when directory has root and fork sessions', () => {
@@ -293,9 +295,11 @@ describe('OpenCode HTTP control plane', () => {
     });
     const adapter = new OrcaTaskRuntimeAdapter({
       runJson: runJson as never,
-      openCodeHttpRequest: () => ({
+      openCodeHttpRequest: (input) => ({
         status: 200,
-        body: JSON.stringify({ healthy: true, version: '1.18.25' }),
+        body: input.url.includes('/session?directory=')
+          ? JSON.stringify([{ id: 'ses-visible', directory: process.cwd() }])
+          : JSON.stringify({ healthy: true, version: '1.18.25' }),
       }),
     });
 
@@ -397,6 +401,20 @@ describe('OpenCode HTTP control plane', () => {
     const health = slow.openCodeHealth(identity, { timeoutMs: 100 });
     expect(health.status).toBe('ok');
     expect(requests.at(-1)?.timeoutMs).toBe(20);
+  });
+
+  it('requires a session whose directory matches the worker during readiness', () => {
+    const adapter = makeAdapter((input) => input.url.endsWith('/global/health')
+      ? { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) }
+      : { status: 200, body: JSON.stringify([{ id: 'ses-other', directory: '/tmp/other-workspace' }]) });
+    const spawned = adapter.spawnWorker({ title: 'opencode', command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture' });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+
+    expect(adapter.openCodeHealth(spawned.value.identity)).toMatchObject({
+      status: 'unsupported',
+      reason: 'opencode_session_directory_mismatch',
+    });
   });
 
   it('refuses TUI delivery when the screen predicate finds human-authored text', () => {

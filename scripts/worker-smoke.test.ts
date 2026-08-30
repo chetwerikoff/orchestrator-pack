@@ -741,7 +741,7 @@ describe('runtime-neutral worker smoke', () => {
         sleepMs: () => undefined,
       });
 
-      expect(result).toEqual({ ok: false, reason: 'opencode_panel_idle_splash', submitCount: 0 });
+      expect(result).toEqual({ ok: false, reason: 'runtime_timeout', submitCount: 0 });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

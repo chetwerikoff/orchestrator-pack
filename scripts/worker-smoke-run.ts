@@ -1261,19 +1261,23 @@ export function establishRuntimeSmokeDelivery(input: {
   const openCodeHttp = input.adapter.composerControl?.(input.worker)?.kind === 'opencode-http';
   let baselineScreen: readonly string[] | undefined;
   if (openCodeHttp) {
+    const remaining = deadline - now();
+    if (remaining <= 0) return { ok: false, reason: 'runtime_timeout', submitCount: 0 };
     const baseline = input.adapter.readBoundedOutput({
       worker: input.worker,
       limit: 200,
       screen: true,
-    }, { cwd: input.cwd, timeoutMs: input.deadlineMs });
+    }, { cwd: input.cwd, timeoutMs: Math.max(1, remaining) });
     if (baseline.status !== 'ok') {
       return { ok: false, reason: `opencode_panel_observation_failed:${failureReason(baseline)}`, submitCount: 0 };
     }
     baselineScreen = baseline.value.lines;
   }
+  const dispatchRemaining = deadline - now();
+  if (dispatchRemaining <= 0) return { ok: false, reason: 'runtime_timeout', submitCount: 0 };
   const dispatched = input.adapter.dispatchInput(
     { worker: input.worker, text: input.prompt },
-    { cwd: input.cwd, timeoutMs: input.deadlineMs },
+    { cwd: input.cwd, timeoutMs: Math.max(1, dispatchRemaining) },
   );
   if (dispatched.status === 'send_failed') {
     return { ok: false, reason: `send_failed:${dispatched.reason}`, submitCount: 0 };
@@ -1284,11 +1288,13 @@ export function establishRuntimeSmokeDelivery(input: {
   let panelLeftIdleSplash = !openCodeHttp;
   while (now() < deadline) {
     if (dispatched.status === 'dispatched' && openCodeHttp) {
+      const remaining = deadline - now();
+      if (remaining <= 0) break;
       const read = input.adapter.readBoundedOutput({
         worker: input.worker,
         limit: 200,
         screen: true,
-      }, { cwd: input.cwd });
+      }, { cwd: input.cwd, timeoutMs: Math.max(1, remaining) });
       if (read.status !== 'ok') {
         return { ok: false, reason: `opencode_panel_observation_failed:${failureReason(read)}`, submitCount };
       }
