@@ -2259,7 +2259,7 @@ async function runGptSourceBatch(options: {
       }
     } else {
       terminalClass = terminalClassForGptResult(invocation.result, browserTerminal);
-      if (attemptOrdinal === 2
+      if (attemptOrdinal >= 2
         && isRetryablePackReviewZeroSendCollision(invocation.result, invocationId)) {
         terminalClass = 'explicit_refusal:zero_send_collision_exhausted';
       }
