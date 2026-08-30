@@ -1,46 +1,46 @@
 {
   "issue": 556,
   "source": "ci-measured",
-  "dataChangedAt": "2026-08-30T13:49:46.321Z",
+  "dataChangedAt": "2026-08-30T14:56:50.971Z",
   "smoothingRule": "median-of-last-5-samples",
   "files": {
     "plugins/_shared/tests/declaration_schema.test.ts": 45000,
     "plugins/_shared/tests/git_fixture.test.ts": 45000,
     "plugins/_shared/tests/issue_parser.test.ts": 45000,
     "plugins/_shared/tests/normalize.test.ts": 45000,
-    "scripts/ci-green-wake-reconcile.test.ts": 170,
-    "scripts/contract-evidence-legacy-list-guard.test.ts": 172,
+    "scripts/ci-green-wake-reconcile.test.ts": 171,
+    "scripts/contract-evidence-legacy-list-guard.test.ts": 174,
     "scripts/finding-ledger-guard.test.ts": 45000,
-    "scripts/gh-wrapper.test.ts": 5768,
+    "scripts/gh-wrapper.test.ts": 5801,
     "scripts/orchestrator-escalation.test.ts": 45000,
     "scripts/orchestrator-escalation-router.test.ts": 45000,
     "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": 113999,
-    "scripts/review-cycle-cap.test.ts": 48,
+    "scripts/review-cycle-cap.test.ts": 49,
     "scripts/review-delivery.test.ts": 45000,
-    "scripts/review-finding-delivery-submit.test.ts": 34,
+    "scripts/review-finding-delivery-submit.test.ts": 35,
     "scripts/review-head-ready.test.ts": 27,
     "scripts/review-orchestrator-loop.test.ts": 8,
     "scripts/review-ready-stuck-guard.test.ts": 45000,
     "scripts/review-send-reconcile.test.ts": 45000,
     "scripts/review-start-claim-budget-semantics.test.ts": 4,
     "scripts/review-start-claim-lifecycle.test.ts": 45000,
-    "scripts/review-start-claim-run-binding.test.ts": 65,
-    "scripts/review-start-claim.test.ts": 85,
+    "scripts/review-start-claim-run-binding.test.ts": 66,
+    "scripts/review-start-claim.test.ts": 89,
     "scripts/review-trigger-reconcile.test.ts": 3,
-    "scripts/review-trigger-reeval.test.ts": 62,
-    "scripts/review-wake-trigger.test.ts": 54,
+    "scripts/review-trigger-reeval.test.ts": 63,
+    "scripts/review-wake-trigger.test.ts": 55,
     "scripts/session-pr-binding-resolver.test.ts": 120000,
     "scripts/session-runtime-liveness.test.ts": 13,
     "scripts/stage-completeness-guard.test.ts": 45000,
     "scripts/tier-gate-guard.test.ts": 45000,
-    "scripts/worker-message-submit-reconcile.test.ts": 367,
+    "scripts/worker-message-submit-reconcile.test.ts": 371,
     "scripts/pr-session-binding-cache.test.ts": 120000,
-    "scripts/kernel/subprocess.test.ts": 1986,
-    "scripts/pr2-foundation/mutation-external-ci.test.ts": 449,
+    "scripts/kernel/subprocess.test.ts": 1993,
+    "scripts/pr2-foundation/mutation-external-ci.test.ts": 468,
     "scripts/pr2-foundation/foundation.test.ts": 406,
     "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": 15671,
     "scripts/lib/create-issue-stage-record.test.ts": 22,
-    "scripts/lib/create-issue-stage-record-artifacts.test.ts": 2006,
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts": 2033,
     "scripts/toolchain/create-issue-final-acceptance.test.ts": 10,
     "scripts/toolchain/create-issue-authoring-contract.test.ts": 3,
     "scripts/create-issue-parked-migration.test.ts": 120,
@@ -54,11 +54,11 @@
     "scripts/pack-review-carryover.test.ts": 602,
     "scripts/pack-review-runner-issue-898.test.ts": 8,
     "scripts/pack-review-state.test.ts": 14,
-    "plugins/scope-guard/tests/agent_wrap.test.ts": 186,
-    "plugins/scope-guard/tests/integration.test.ts": 588,
+    "plugins/scope-guard/tests/agent_wrap.test.ts": 187,
+    "plugins/scope-guard/tests/integration.test.ts": 578,
     "plugins/token-chain-ledger/tests/integration.test.ts": 13,
-    "scripts/pr2-foundation/scheduler-process-integration.test.ts": 28260,
-    "plugins/codex-pr-reviewer/tests/reviewer-budget.test.ts": 864,
+    "scripts/pr2-foundation/scheduler-process-integration.test.ts": 28944,
+    "plugins/codex-pr-reviewer/tests/reviewer-budget.test.ts": 878,
     "plugins/scope-guard/tests/denylist.test.ts": 3,
     "plugins/task-declaration/tests/declare.test.ts": 243,
     "scripts/pack-reviewer-preference.test.ts": 215,
@@ -87,7 +87,7 @@
     "plugins/token-chain-ledger/tests/finding_signature.test.ts": 45000,
     "plugins/token-chain-ledger/tests/session_cost.test.ts": 45000,
     "plugins/token-chain-ledger/tests/writer.test.ts": 45000,
-    "scripts/pester-retirement.test.ts": 15161,
+    "scripts/pester-retirement.test.ts": 16913,
     "scripts/estate-cut/issue-906-vertical-slice.test.ts": 2,
     "scripts/gate-runner/census-generator.test.ts": 9,
     "scripts/gate-runner/contracts.test.ts": 2,
@@ -354,102 +354,102 @@
   },
   "recentSamples": {
     "scripts/contract-evidence-legacy-list-guard.test.ts": [
-      132,
       168,
       181,
       174,
-      172
+      172,
+      175
     ],
     "scripts/review-finding-delivery-submit.test.ts": [
-      27,
       35,
       37,
       34,
-      33
+      33,
+      36
     ],
     "scripts/review-orchestrator-loop.test.ts": [
-      8,
       6,
       8,
       7,
-      8
+      8,
+      9
     ],
     "scripts/kernel/subprocess.test.ts": [
-      1969,
       1977,
       2067,
       2023,
-      1986
+      1986,
+      1993
     ],
     "scripts/pr2-foundation/mutation-external-ci.test.ts": [
-      399,
       442,
       520,
       468,
-      449
+      449,
+      476
     ],
     "scripts/review-start-claim-run-binding.test.ts": [
-      57,
       65,
       73,
       65,
-      66
+      66,
+      73
     ],
     "scripts/review-start-claim.test.ts": [
-      76,
       84,
       105,
       85,
-      89
+      89,
+      92
     ],
     "scripts/review-trigger-reeval.test.ts": [
-      55,
       62,
       70,
       62,
-      63
+      63,
+      71
     ],
     "scripts/session-runtime-liveness.test.ts": [
-      13,
       12,
       10,
       14,
-      13
+      13,
+      14
     ],
     "scripts/ci-green-wake-reconcile.test.ts": [
-      138,
       172,
       186,
       170,
-      169
+      169,
+      171
     ],
     "scripts/gh-wrapper.test.ts": [
-      4941,
       5460,
       6555,
       6596,
-      5768
+      5768,
+      5801
     ],
     "scripts/review-head-ready.test.ts": [
-      21,
       27,
       28,
       25,
-      27
+      27,
+      28
     ],
     "scripts/pr2-foundation/foundation.test.ts": [
-      349,
       402,
       454,
       430,
-      406
+      406,
+      405
     ],
     "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": [
-      13285,
       14049,
       15671,
       16219,
-      15945
+      15945,
+      14851
     ],
     "scripts/review-start-claim-budget-semantics.test.ts": [
       4,
@@ -466,35 +466,35 @@
       3
     ],
     "scripts/review-wake-trigger.test.ts": [
-      43,
       54,
       60,
       54,
-      55
+      55,
+      57
     ],
     "scripts/worker-message-submit-reconcile.test.ts": [
-      366,
       526,
       362,
       376,
-      367
+      367,
+      371
     ],
     "scripts/review-cycle-cap.test.ts": [
-      39,
       48,
       52,
       47,
-      49
+      49,
+      50
     ],
     "scripts/lib/create-issue-stage-record.test.ts": [
       22
     ],
     "scripts/lib/create-issue-stage-record-artifacts.test.ts": [
-      1742,
       1964,
       2224,
       2033,
-      2006
+      2006,
+      2589
     ],
     "scripts/toolchain/create-issue-final-acceptance.test.ts": [
       9,
@@ -544,18 +544,18 @@
       14
     ],
     "plugins/scope-guard/tests/agent_wrap.test.ts": [
-      138,
       186,
       210,
       187,
-      181
+      181,
+      187
     ],
     "plugins/scope-guard/tests/integration.test.ts": [
-      815,
       569,
       782,
       588,
-      568
+      568,
+      578
     ],
     "plugins/token-chain-ledger/tests/integration.test.ts": [
       12,
@@ -565,18 +565,18 @@
       13
     ],
     "scripts/pr2-foundation/scheduler-process-integration.test.ts": [
-      27151,
       27832,
       32070,
       28944,
-      28260
+      28260,
+      29341
     ],
     "plugins/codex-pr-reviewer/tests/reviewer-budget.test.ts": [
-      785,
       828,
       1198,
       864,
-      878
+      878,
+      948
     ],
     "plugins/scope-guard/tests/denylist.test.ts": [
       2,
@@ -586,11 +586,11 @@
       4
     ],
     "plugins/task-declaration/tests/declare.test.ts": [
-      217,
       223,
       265,
       243,
-      267
+      267,
+      226
     ],
     "scripts/pack-reviewer-preference.test.ts": [
       198,
@@ -632,11 +632,11 @@
       72
     ],
     "scripts/pester-retirement.test.ts": [
-      15161,
       13095,
       12509,
       18969,
-      16913
+      16913,
+      16922
     ],
     "scripts/estate-cut/issue-906-vertical-slice.test.ts": [
       2
@@ -739,27 +739,27 @@
     ]
   },
   "fileChangedAt": {
-    "scripts/contract-evidence-legacy-list-guard.test.ts": "2026-08-30T13:49:46.321Z",
-    "scripts/review-finding-delivery-submit.test.ts": "2026-08-30T07:02:53.744Z",
+    "scripts/contract-evidence-legacy-list-guard.test.ts": "2026-08-30T14:56:50.971Z",
+    "scripts/review-finding-delivery-submit.test.ts": "2026-08-30T14:56:50.971Z",
     "scripts/review-orchestrator-loop.test.ts": "2026-08-30T04:20:25.215Z",
-    "scripts/kernel/subprocess.test.ts": "2026-08-30T13:49:46.321Z",
-    "scripts/pr2-foundation/mutation-external-ci.test.ts": "2026-08-30T13:49:46.321Z",
-    "scripts/review-start-claim-run-binding.test.ts": "2026-08-30T07:02:53.744Z",
-    "scripts/review-start-claim.test.ts": "2026-08-30T07:02:53.744Z",
-    "scripts/review-trigger-reeval.test.ts": "2026-08-30T04:20:25.215Z",
+    "scripts/kernel/subprocess.test.ts": "2026-08-30T14:56:50.971Z",
+    "scripts/pr2-foundation/mutation-external-ci.test.ts": "2026-08-30T14:56:50.971Z",
+    "scripts/review-start-claim-run-binding.test.ts": "2026-08-30T14:56:50.971Z",
+    "scripts/review-start-claim.test.ts": "2026-08-30T14:56:50.971Z",
+    "scripts/review-trigger-reeval.test.ts": "2026-08-30T14:56:50.971Z",
     "scripts/session-runtime-liveness.test.ts": "2026-08-30T07:02:53.745Z",
-    "scripts/ci-green-wake-reconcile.test.ts": "2026-08-30T07:02:53.744Z",
-    "scripts/gh-wrapper.test.ts": "2026-08-30T13:49:46.321Z",
+    "scripts/ci-green-wake-reconcile.test.ts": "2026-08-30T14:56:50.971Z",
+    "scripts/gh-wrapper.test.ts": "2026-08-30T14:56:50.971Z",
     "scripts/review-head-ready.test.ts": "2026-08-30T13:49:46.321Z",
     "scripts/pr2-foundation/foundation.test.ts": "2026-08-30T13:49:46.321Z",
     "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": "2026-08-30T13:49:46.321Z",
     "scripts/review-start-claim-budget-semantics.test.ts": "2026-08-30T06:14:40.612Z",
     "scripts/review-trigger-reconcile.test.ts": "2026-08-30T13:49:46.321Z",
-    "scripts/review-wake-trigger.test.ts": "2026-08-30T06:14:40.613Z",
-    "scripts/worker-message-submit-reconcile.test.ts": "2026-08-30T07:02:53.745Z",
-    "scripts/review-cycle-cap.test.ts": "2026-08-30T13:49:46.321Z",
+    "scripts/review-wake-trigger.test.ts": "2026-08-30T14:56:50.971Z",
+    "scripts/worker-message-submit-reconcile.test.ts": "2026-08-30T14:56:50.971Z",
+    "scripts/review-cycle-cap.test.ts": "2026-08-30T14:56:50.971Z",
     "scripts/lib/create-issue-stage-record.test.ts": "2026-08-01T16:58:55.741Z",
-    "scripts/lib/create-issue-stage-record-artifacts.test.ts": "2026-08-30T13:49:46.321Z",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts": "2026-08-30T14:35:37.449Z",
     "scripts/toolchain/create-issue-final-acceptance.test.ts": "2026-08-30T04:20:25.215Z",
     "scripts/toolchain/create-issue-authoring-contract.test.ts": "2026-08-02T14:14:16.197Z",
     "scripts/create-issue-parked-migration.test.ts": "2026-08-02T14:30:00.000Z",
@@ -773,11 +773,11 @@
     "scripts/pack-review-carryover.test.ts": "2026-08-03T00:17:30.810Z",
     "scripts/pack-review-runner-issue-898.test.ts": "2026-08-03T00:26:20.938Z",
     "scripts/pack-review-state.test.ts": "2026-08-03T03:45:39.625Z",
-    "plugins/scope-guard/tests/agent_wrap.test.ts": "2026-08-30T07:02:53.744Z",
-    "plugins/scope-guard/tests/integration.test.ts": "2026-08-30T07:02:53.744Z",
+    "plugins/scope-guard/tests/agent_wrap.test.ts": "2026-08-30T14:56:50.971Z",
+    "plugins/scope-guard/tests/integration.test.ts": "2026-08-30T14:56:50.971Z",
     "plugins/token-chain-ledger/tests/integration.test.ts": "2026-08-30T06:14:40.612Z",
-    "scripts/pr2-foundation/scheduler-process-integration.test.ts": "2026-08-30T13:49:46.321Z",
-    "plugins/codex-pr-reviewer/tests/reviewer-budget.test.ts": "2026-08-30T13:49:46.320Z",
+    "scripts/pr2-foundation/scheduler-process-integration.test.ts": "2026-08-30T14:56:50.971Z",
+    "plugins/codex-pr-reviewer/tests/reviewer-budget.test.ts": "2026-08-30T14:56:50.971Z",
     "plugins/scope-guard/tests/denylist.test.ts": "2026-08-28T14:27:28.485Z",
     "plugins/task-declaration/tests/declare.test.ts": "2026-08-30T13:49:46.321Z",
     "scripts/pack-reviewer-preference.test.ts": "2026-08-05T18:09:59.245Z",
@@ -792,7 +792,7 @@
     "scripts/json-producers/worker-status-report.test.ts": "2026-08-18T01:29:00.000Z",
     "scripts/lib/worker-assignment-runtime.test.ts": "2026-08-18T06:29:07.033Z",
     "scripts/pr2-foundation/remote-worker-assignment.test.ts": "2026-08-24T15:13:45.402Z",
-    "scripts/pester-retirement.test.ts": "2026-08-30T13:49:46.321Z",
+    "scripts/pester-retirement.test.ts": "2026-08-30T14:56:50.971Z",
     "scripts/estate-cut/issue-906-vertical-slice.test.ts": "2026-08-24T15:13:45.400Z",
     "scripts/gate-runner/census-generator.test.ts": "2026-08-24T15:13:45.401Z",
     "scripts/gate-runner/contracts.test.ts": "2026-08-24T15:13:45.401Z",
