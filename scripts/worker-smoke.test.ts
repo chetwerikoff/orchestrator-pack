@@ -736,12 +736,12 @@ describe('runtime-neutral worker smoke', () => {
         prompt: 'verify invisible pointer',
         binding: { runId: 'run-opencode-idle', artifactDir },
         cwd: root,
-        deadlineMs: 2,
-        now: () => clock++,
-        sleepMs: () => undefined,
+        deadlineMs: 100,
+        now: () => clock,
+        sleepMs: () => { clock = 100; },
       });
 
-      expect(result).toEqual({ ok: false, reason: 'runtime_timeout', submitCount: 0 });
+      expect(result).toEqual({ ok: false, reason: 'opencode_panel_idle_splash', submitCount: 0 });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
