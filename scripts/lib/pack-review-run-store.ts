@@ -870,26 +870,22 @@ function mergeFrozenGptSlot(
 ): PackReviewSourceSlotRecord {
   const existingAttempt = existing.attemptOrdinal;
   const incomingAttempt = incoming.attemptOrdinal;
-  if (existing.lifecycle === 'terminal'
+  const existingComplete = existing.lifecycle === 'terminal'
+    && COMPLETE_GPT_TERMINAL_CLASSES.has(existing.terminalClass ?? '');
+  const legalAttemptIdentityRotation = !existingComplete
     && incomingAttempt !== undefined
-    && incomingAttempt > (existingAttempt ?? 0)) {
-    throw new Error(`corrupt pack review run record at ${path}: terminal source slot attempt cannot advance`);
-  }
-
-  const legalRetryIdentityRotation = existing.lifecycle !== 'terminal'
-    && existingAttempt === 1
-    && incomingAttempt === 2
+    && incomingAttempt > (existingAttempt ?? 0)
     && existing.invocationId !== undefined
     && incoming.invocationId !== undefined
     && existing.invocationId !== incoming.invocationId;
-  let invocationId = legalRetryIdentityRotation
+  let invocationId = legalAttemptIdentityRotation
     ? incoming.invocationId
     : existing.invocationId ?? incoming.invocationId;
   if (existing.invocationId !== undefined
     && incoming.invocationId !== undefined
     && existing.invocationId !== incoming.invocationId
-    && !legalRetryIdentityRotation) {
-    throw new Error(`corrupt pack review run record at ${path}: invocationId cannot change outside the one retry transition`);
+    && !legalAttemptIdentityRotation) {
+    throw new Error(`corrupt pack review run record at ${path}: invocationId cannot change without a newer unresolved-source attempt`);
   }
 
   const attemptOrdinal = existingAttempt === undefined
@@ -923,7 +919,7 @@ function mergeFrozenGptSlot(
       if ((incomingAttempt ?? 0) < (existingAttempt ?? 0)) return existingValue;
       throw new Error(`corrupt pack review run record at ${path}: ${name} changed without a new attempt`);
     }
-    return existingValue ?? incomingValue;
+    return incomingValue ?? existingValue;
   };
   const launchProfileKey = mergeAttemptBoundString(
     'launchProfileKey',
@@ -937,6 +933,7 @@ function mergeFrozenGptSlot(
   );
 
   const mergeEvidence = (name: 'terminalClass' | 'terminalResult' | 'payload'): unknown => {
+    if (legalAttemptIdentityRotation) return incoming[name];
     const existingValue = existing[name];
     const incomingValue = incoming[name];
     if (existingValue !== undefined
@@ -957,10 +954,12 @@ function mergeFrozenGptSlot(
   const payload = credentialedRecovery
     ? incoming.payload
     : mergeEvidence('payload');
-  const lifecycle = PACK_REVIEW_SOURCE_SLOT_LIFECYCLE_RANK[existing.lifecycle]
-    >= PACK_REVIEW_SOURCE_SLOT_LIFECYCLE_RANK[incoming.lifecycle]
-    ? existing.lifecycle
-    : incoming.lifecycle;
+  const lifecycle = legalAttemptIdentityRotation
+    ? incoming.lifecycle
+    : PACK_REVIEW_SOURCE_SLOT_LIFECYCLE_RANK[existing.lifecycle]
+      >= PACK_REVIEW_SOURCE_SLOT_LIFECYCLE_RANK[incoming.lifecycle]
+      ? existing.lifecycle
+      : incoming.lifecycle;
 
   invocationId = invocationId?.trim() || undefined;
   return {
@@ -1811,9 +1810,22 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
     const active = boundRecords.filter((record) => matchesTargetIdentity(record)
       && PACK_REVIEW_ACTIVE_STATUSES.has(record.status)
       && !isPackReviewRunStale(record));
-    if (active.length > 1) throw new Error(`ambiguous pack review run store: multiple active records for ${key}`);
-    if (active.length === 1) {
-      return { created: false, reused: true, reason: 'active_run_exists', run: consumerRow(active[0]!), storeRoot };
+    const replaceableActive = active.filter((record) => input.allowSameRoundReplacement === true
+      && matchesInput(record)
+      && input.resolvedReviewer !== undefined
+      && record.resolvedReviewer === input.resolvedReviewer);
+    const blockingActive = active.filter((record) => !replaceableActive.includes(record));
+    if (replaceableActive.length > 1 || blockingActive.length > 1) {
+      throw new Error(`ambiguous pack review run store: multiple active records for ${key}`);
+    }
+    if (blockingActive.length === 1) {
+      return {
+        created: false,
+        reused: true,
+        reason: 'active_run_exists',
+        run: consumerRow(blockingActive[0]!),
+        storeRoot,
+      };
     }
 
     const completed = boundRecords
