@@ -6,7 +6,6 @@
     "docs/orchestration-runbook.md",
     "scripts/orca-runtime/dispatch-terminal-mail.test.ts",
     "scripts/orca-runtime/dispatch-terminal-mail.ts",
-    "scripts/orca-runtime/dispatch-terminal-mail.ts",
     "scripts/orca-runtime/task-adapter.ts",
     "scripts/pr2-foundation/scheduler-process-integration.test.ts",
     "scripts/pr2-foundation/scheduler.ts",
@@ -27,11 +26,12 @@
     "AGENTS.md",
     "CLAUDE.md",
     "docs/",
+    "docs/declarations/",
     "plugins/",
     "prompts/",
     "README.md",
     "scripts/",
     "tests/external-output-references/"
   ],
-  "source_revision": "1d95f0bfa"
+  "source_revision": "0e4164f6f"
 }
