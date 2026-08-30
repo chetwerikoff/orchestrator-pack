@@ -22,7 +22,7 @@ import {
 } from './lib/worker-smoke-core.ts';
 import {
   buildWorkerSmokeRunFailureReceipt,
-  defaultGenerationProbe,
+  defaultOpenCodeGenerationProbe,
   installStableWorkerSmokeSpawnPatch,
   quarantineUnsupportedHistoricalSmokeRuns,
 } from './lib/worker-smoke-bounded-create.ts';
@@ -846,7 +846,7 @@ describe('Issue #1359 production worker-smoke reachability', () => {
       };
     };
 
-    const observed = defaultGenerationProbe(
+    const observed = defaultOpenCodeGenerationProbe(
       terminal.handle!,
       process.cwd(),
       7_000,

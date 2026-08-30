@@ -75,6 +75,7 @@ export interface HistoricalSmokeQuarantine {
 interface TrackedSmokeWorkerRecord {
   readonly worker: RuntimeWorker;
   readonly originalIdentity: RuntimeWorkerIdentity;
+  readonly probe: SmokeGenerationProbe;
   preserveOwnedPanelOnDeliveryFailure: boolean;
 }
 
@@ -119,6 +120,19 @@ export function defaultGenerationProbe(
   timeoutMs: number,
   run: typeof runOrcaJson = runOrcaJson,
 ): OrcaJsonResponse<{ terminal?: OrcaTerminalSummary }> {
+  return run<{ terminal?: OrcaTerminalSummary }>(
+    ['terminal', 'show', '--terminal', terminalHandle],
+    { cwd, timeoutMs },
+  );
+}
+
+/** OpenCode spawn observation avoids the terminal-show startup race. */
+export function defaultOpenCodeGenerationProbe(
+  terminalHandle: string,
+  cwd: string,
+  timeoutMs: number,
+  run: typeof runOrcaJson = runOrcaJson,
+): OrcaJsonResponse<{ terminal?: OrcaTerminalSummary }> {
   const lookupSlice = Math.max(1, Math.min(timeoutMs, 5_000));
   const listed = run<{ terminals?: OrcaTerminalSummary[] }>(
     ['terminal', 'list'],
@@ -132,13 +146,19 @@ export function defaultGenerationProbe(
   }
 
   const remaining = timeoutMs - lookupSlice;
-  if (remaining <= 0) return listed;
+  if (remaining <= 0) {
+    return {
+      ok: false,
+      operation: 'terminal_show',
+      outcomeCategory: 'supported_operation_failure',
+      error: { code: 'runtime_worker_generation_unresolved', message: 'exact terminal observation unavailable' },
+    };
+  }
   const show = run<{ terminal?: OrcaTerminalSummary }>(
     ['terminal', 'show', '--terminal', terminalHandle],
     { cwd, timeoutMs: remaining },
   );
-  if (show.ok || show.error?.code !== 'orca_operation_timeout') return show;
-  return listed.ok ? show : listed;
+  return show;
 }
 
 function defaultSleep(milliseconds: number): void {
@@ -430,7 +450,7 @@ export function installStableWorkerSmokeSpawnPatch(
         worker: tracked.worker,
         cwd: callOptions.cwd ?? tracked.worker.workspacePath,
         timeoutMs: callOptions.timeoutMs ?? 30_000,
-        probe,
+        probe: tracked.probe,
       });
       if (!refreshed.ok) {
         if (refreshed.reason.startsWith('worker_generation_mismatch;')) {
@@ -454,11 +474,15 @@ export function installStableWorkerSmokeSpawnPatch(
       if (result.status !== 'ok') return result;
       const agentStartupProbe = options.agentStartupProbe
         ?? ((lines: readonly string[]) => hasExecutorStartupBanner(input.command, lines));
+      const workerProbe = options.probe
+        ?? (/(?:^|\s)opencode(?:\s|$)/iu.test(input.command)
+          ? defaultOpenCodeGenerationProbe
+          : defaultGenerationProbe);
       const stabilized = stabilizeSpawnedSmokeWorkerIdentity({
         worker: result.value,
         cwd: callOptions.cwd ?? result.value.workspacePath,
         timeoutMs: callOptions.timeoutMs ?? 30_000,
-        probe,
+        probe: workerProbe,
       });
       if (!stabilized.ok) {
         return { status: 'failed', operation: 'spawn_worker', reason: stabilized.reason };
@@ -466,6 +490,7 @@ export function installStableWorkerSmokeSpawnPatch(
       const tracked: TrackedSmokeWorkerRecord = {
         worker: stabilized.worker,
         originalIdentity: result.value.identity,
+        probe: workerProbe,
         preserveOwnedPanelOnDeliveryFailure: false,
       };
       spawnedSmokeWorkers.set(stabilized.worker.identity, tracked);
@@ -635,7 +660,7 @@ export function installStableWorkerSmokeSpawnPatch(
         identity: input.worker,
         cwd: callOptions.cwd ?? process.cwd(),
         timeoutMs: callOptions.timeoutMs ?? 30_000,
-        probe,
+        probe: tracked?.probe ?? probe,
       });
       if (refreshed.status === 'failed') {
         return { status: 'send_failed', reason: refreshed.reason };
@@ -658,11 +683,12 @@ export function installStableWorkerSmokeSpawnPatch(
       input: Parameters<OrcaTaskRuntimeAdapter['readBoundedOutput']>[0],
       callOptions: RuntimeCallOptions = {},
     ): ReturnType<OrcaTaskRuntimeAdapter['readBoundedOutput']> {
+      const tracked = spawnedSmokeWorkers.get(input.worker);
       const refreshed = refreshTrackedSmokeWorker({
         identity: input.worker,
         cwd: callOptions.cwd ?? process.cwd(),
         timeoutMs: callOptions.timeoutMs ?? 30_000,
-        probe,
+        probe: tracked?.probe ?? probe,
       });
       if (refreshed.status === 'failed') {
         return {
@@ -683,11 +709,12 @@ export function installStableWorkerSmokeSpawnPatch(
       input: Parameters<OrcaTaskRuntimeAdapter['liveness']>[0],
       callOptions: RuntimeCallOptions = {},
     ): ReturnType<OrcaTaskRuntimeAdapter['liveness']> {
+      const tracked = spawnedSmokeWorkers.get(input.worker);
       const refreshed = refreshTrackedSmokeWorker({
         identity: input.worker,
         cwd: callOptions.cwd ?? process.cwd(),
         timeoutMs: callOptions.timeoutMs ?? Math.max(1, input.observationWindowMs),
-        probe,
+        probe: tracked?.probe ?? probe,
       });
       if (refreshed.status === 'failed') {
         return { status: 'unknown', worker: input.worker };
