@@ -134,18 +134,10 @@ function hasCursorAgentStartupBanner(lines: readonly string[]): boolean {
     && lines.some((line) => /^\s*v\d+\.\d+\./u.test(line));
 }
 
-function hasOpenCodeStartupBanner(lines: readonly string[]): boolean {
-  const hasBrand = lines.some((line) => /\bOpenCode\b/iu.test(line));
-  const hasIdentity = lines.some((line) => /(?:v?\d+\.\d+\.\d+|\b(?:Agent|Zen)\b)/iu.test(line));
-  return hasBrand && hasIdentity;
-}
-
-/** Select the startup witness from the executor actually requested by the spawn. */
+/** Select the screen startup witness; OpenCode readiness is HTTP-backed. */
 export function hasExecutorStartupBanner(command: string, lines: readonly string[]): boolean {
   const normalizedCommand = command.trim();
-  if (/(?:^|\s)opencode(?:\s|$)/iu.test(normalizedCommand)) {
-    return hasOpenCodeStartupBanner(lines);
-  }
+  if (/(?:^|\s)opencode(?:\s|$)/iu.test(normalizedCommand)) return false;
   if (/(?:^|\s)(?:cursor-agent|agent)(?:\s|$)/u.test(normalizedCommand)) {
     return hasCursorAgentStartupBanner(lines);
   }
@@ -464,6 +456,34 @@ export function installStableWorkerSmokeSpawnPatch(
       if (options.agentStartupProbe) return { status: 'ok', value: stabilized.worker };
 
       const startupTimeoutMs = Math.max(2, callOptions.timeoutMs ?? 30_000);
+      if (/(?:^|\s)opencode(?:\s|$)/iu.test(input.command)) {
+        const startupDeadline = now() + startupTimeoutMs;
+        let healthReason = 'runtime_opencode_control_unavailable';
+        while (now() < startupDeadline) {
+          const remaining = startupDeadline - now();
+          const health = this.openCodeHealth(stabilized.worker.identity, {
+            ...callOptions,
+            timeoutMs: Math.max(1, Math.min(callOptions.timeoutMs ?? startupTimeoutMs, remaining)),
+          });
+          if (health.status === 'ok') return { status: 'ok', value: stabilized.worker };
+          healthReason = health.reason;
+          if (now() >= startupDeadline) break;
+          sleepMs(Math.min(250, Math.max(1, startupDeadline - now())));
+        }
+        tracked.preserveOwnedPanelOnDeliveryFailure = true;
+        return {
+          status: 'failed',
+          operation: 'spawn_worker',
+          reason: [
+            'worker_agent_not_started',
+            `agent_health=${safeToken(healthReason === 'runtime_timeout' ? 'missing' : healthReason)}`,
+            'command_submit=not_applicable',
+            'pane_observation=not_used',
+            'resolution=inspect_the_preserved_child_panel_then_retry_from_the_exact_pr_head',
+          ].join(';'),
+        };
+      }
+
       const startupDeadline = now() + startupTimeoutMs;
       const startupRead = originalReadBoundedOutput.call(this, {
         worker: stabilized.worker.identity,
@@ -543,6 +563,11 @@ export function installStableWorkerSmokeSpawnPatch(
             ),
           });
           if (observed.status !== 'ok') {
+            // A subprocess can consume the remaining budget after this iteration
+            // starts. The external deadline owns expiry; report a missing banner
+            // after it, rather than masking it as an observation timeout.
+            if (now() >= startupDeadline) break;
+            if (observed.reason === 'runtime_timeout') continue;
             tracked.preserveOwnedPanelOnDeliveryFailure = true;
             return {
               status: 'failed',

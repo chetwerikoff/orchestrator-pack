@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { promisify } from 'node:util';
 import {
   runtimeFailure,
@@ -8,6 +9,8 @@ import {
   type RuntimeAdapter,
   type RuntimeBoundedOutput,
   type RuntimeCallOptions,
+  type RuntimeComposerControl,
+  type RuntimeComposerControlRequest,
   type RuntimeDispatchResult,
   type RuntimeDispatchWitness,
   type RuntimeInboxCheckResult,
@@ -16,6 +19,7 @@ import {
   type RuntimeObservationToken,
   type RuntimeReadiness,
   type RuntimeResult,
+  type RuntimeOpenCodeHealth,
   type RuntimeWorker,
   type RuntimeWorkerIdentity,
   type RuntimeWorkerProvenance,
@@ -39,6 +43,61 @@ import {
 } from './native.ts';
 
 const execFileAsync = promisify(execFile);
+
+const OPEN_CODE_HTTP_SCRIPT = [
+  "const [url, method, body] = process.argv.slice(1);",
+  "try {",
+  "  const response = await fetch(url, { method, headers: body ? { 'content-type': 'application/json' } : undefined, body: body || undefined });",
+  "  process.stdout.write(JSON.stringify({ status: response.status, body: await response.text() }));",
+  "} catch (error) {",
+  "  process.stderr.write(error instanceof Error ? error.message : String(error));",
+  "  process.exitCode = 1;",
+  "}",
+].join('\n');
+
+function openCodeUrlFromCommand(command: string): string | undefined {
+  if (!/(?:^|\s)opencode(?:\s|$)/iu.test(command)) return undefined;
+  const hostname = command.match(/--hostname\s+(?:'([^']+)'|"([^"]+)"|(\S+))/iu);
+  const port = command.match(/--port\s+(?:'([1-9]\d*)'|"([1-9]\d*)"|([1-9]\d*))/iu);
+  const host = hostname?.[1] ?? hostname?.[2] ?? hostname?.[3];
+  const number = port?.[1] ?? port?.[2] ?? port?.[3];
+  if (host !== '127.0.0.1' || !number) return undefined;
+  return `http://${host}:${number}`;
+}
+
+function openCodeAgentFromCommand(command: string): string | undefined {
+  if (!/(?:^|\s)opencode(?:\s|$)/iu.test(command)) return undefined;
+  const match = command.match(/--agent(?:=|\s+)(?:'([^']+)'|"([^"]+)"|(\S+))/iu);
+  const agent = match?.[1] ?? match?.[2] ?? match?.[3];
+  return agent?.trim() || undefined;
+}
+
+function defaultOpenCodeHttpRequest(input: {
+  readonly url: string;
+  readonly method: 'GET' | 'POST';
+  readonly body?: string;
+  readonly timeoutMs: number;
+}): { readonly status: number; readonly body: string } {
+  const result = runProcessSync({
+    command: process.execPath,
+    args: ['--input-type=module', '-e', OPEN_CODE_HTTP_SCRIPT, input.url, input.method, input.body ?? ''],
+    encoding: 'utf8',
+    timeoutMs: input.timeoutMs,
+    inheritParentEnv: true,
+  });
+  if (!result.ok) throw new Error(result.error || result.stderr || 'opencode_http_request_failed');
+  const parsed = JSON.parse(result.stdout) as { status?: unknown; body?: unknown };
+  const status = parsed.status;
+  const body = parsed.body;
+  if (typeof status !== 'number' || !Number.isInteger(status) || typeof body !== 'string') throw new Error('opencode_http_response_shape_unsupported');
+  return { status, body };
+}
+
+function openCodeHttpFailure(error: unknown): string {
+  return error instanceof Error && error.message.trim()
+    ? `opencode_http_request_failed:${error.message.trim()}`
+    : 'opencode_http_request_failed';
+}
 
 type AsyncExecError = Error & {
   readonly code?: string | number;
@@ -100,6 +159,12 @@ export interface OrcaRuntimeAdapterOptions extends OrcaRunOptions {
   readonly runJson?: typeof runOrcaJson;
   readonly runJsonAsync?: typeof runOrcaJsonAsync;
   readonly now?: () => number;
+  readonly openCodeHttpRequest?: (input: {
+    readonly url: string;
+    readonly method: 'GET' | 'POST';
+    readonly body?: string;
+    readonly timeoutMs: number;
+  }) => { readonly status: number; readonly body: string };
 }
 
 interface OwnedWorkerRecord {
@@ -107,6 +172,14 @@ interface OwnedWorkerRecord {
   readonly workspacePath: string;
   readonly workspaceSelector: 'active' | string;
   readonly title: string | null;
+  readonly openCodeUrl?: string;
+}
+
+interface OpenCodeUrlRecord {
+  readonly identity: RuntimeWorkerIdentity;
+  readonly url: string;
+  readonly agent?: string;
+  readonly sessionId?: string;
 }
 
 interface KnownWorkspaceRecord {
@@ -376,6 +449,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
   readonly #options: OrcaRuntimeAdapterOptions;
   readonly #now: () => number;
   readonly #owned = new Map<string, OwnedWorkerRecord>();
+  readonly #openCodeUrls = new Map<string, OpenCodeUrlRecord>();
   readonly #knownWorkspace = new Map<string, KnownWorkspaceRecord>();
   readonly #observations = new Map<string, ObservationBinding>();
 
@@ -413,12 +487,142 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     });
   }
 
+  #openCodeRequest(input: {
+    readonly url: string;
+    readonly method: 'GET' | 'POST';
+    readonly body?: string;
+    readonly timeoutMs: number;
+  }): { readonly status: number; readonly body: string } | { readonly error: string } {
+    try {
+      const request = this.#options.openCodeHttpRequest ?? defaultOpenCodeHttpRequest;
+      return request(input);
+    } catch (error) {
+      return { error: openCodeHttpFailure(error) };
+    }
+  }
+
+  #openCodeDispatch(
+    worker: RuntimeWorkerIdentity,
+    request: RuntimeComposerControlRequest,
+    options: RuntimeCallOptions = {},
+  ): RuntimeDispatchResult {
+    const deadline = this.#now() + Math.max(1, options.timeoutMs ?? 10_000);
+    const currentOptions = this.#boundedOptions(deadline, options);
+    if (!currentOptions) return { status: 'send_failed', reason: 'runtime_timeout' };
+    const current = this.findWorker(worker, currentOptions);
+    if (current.status !== 'ok') {
+      return {
+        status: 'send_failed',
+        reason: this.#remaining(deadline) <= 0 || current.reason === 'deadline_exhausted'
+          ? 'runtime_timeout'
+          : current.reason,
+      };
+    }
+    if (current.value === null) return { status: 'send_failed', reason: 'worker_generation_not_found' };
+    const urlRecord = this.#openCodeUrls.get(worker.id);
+    if (!urlRecord || !sameRuntimeWorker(urlRecord.identity, current.value.identity)) {
+      return { status: 'send_failed', reason: 'runtime_opencode_control_unavailable' };
+    }
+    if (!urlRecord.agent) {
+      return { status: 'send_failed', reason: 'runtime_opencode_agent_unavailable' };
+    }
+    if (request.action !== 'submit-prompt' || typeof request.text !== 'string' || !request.text) {
+      return { status: 'send_failed', reason: 'runtime_opencode_prompt_request_invalid' };
+    }
+
+    const requestWithDeadline = (input: {
+      readonly url: string;
+      readonly method: 'GET' | 'POST';
+      readonly body?: string;
+    }): { readonly status: number; readonly body: string } | { readonly error: string } => {
+      const bounded = this.#boundedOptions(deadline, options);
+      if (!bounded) return { error: 'runtime_timeout' };
+      const response = this.#openCodeRequest({ ...input, timeoutMs: bounded.timeoutMs! });
+      return this.#remaining(deadline) <= 0 ? { error: 'runtime_timeout' } : response;
+    };
+
+    let sessionId = urlRecord.sessionId;
+    if (!sessionId) {
+      const created = requestWithDeadline({
+        url: `${urlRecord.url}/session?directory=${encodeURIComponent(current.value.workspacePath)}`,
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      if ('error' in created) return { status: 'send_failed', reason: created.error };
+      if (created.status < 200 || created.status >= 300) {
+        return { status: 'send_failed', reason: `opencode_http_status_${created.status}` };
+      }
+      let parsedCreated: unknown;
+      try {
+        parsedCreated = JSON.parse(created.body);
+      } catch {
+        return { status: 'send_failed', reason: 'opencode_session_schema_mismatch' };
+      }
+      if (!parsedCreated || typeof parsedCreated !== 'object' || Array.isArray(parsedCreated)) {
+        return { status: 'send_failed', reason: 'opencode_session_schema_mismatch' };
+      }
+      const row = parsedCreated as { id?: unknown; directory?: unknown };
+      if (typeof row.id !== 'string' || !/^ses/u.test(row.id)
+        || row.directory !== current.value.workspacePath) {
+        return { status: 'send_failed', reason: 'opencode_session_schema_mismatch' };
+      }
+      sessionId = row.id;
+      this.#openCodeUrls.set(worker.id, { ...urlRecord, identity: current.value.identity, sessionId });
+    }
+    const response = requestWithDeadline({
+      url: `${urlRecord.url}/session/${encodeURIComponent(sessionId)}/prompt_async?directory=${encodeURIComponent(current.value.workspacePath)}`,
+      method: 'POST',
+      body: JSON.stringify({
+        agent: urlRecord.agent,
+        parts: [{ type: 'text', text: request.text }],
+      }),
+    });
+    if ('error' in response) return { status: 'send_failed', reason: response.error };
+    if (response.status !== 204) {
+      return { status: 'send_failed', reason: `opencode_http_status_${response.status}` };
+    }
+    return {
+      status: 'dispatched',
+      witness: { operation: 'submit', accepted: true, source: 'runtime-response' },
+    };
+  }
+
   #rememberWorkspace(
     identity: RuntimeWorkerIdentity,
     workspaceSelector: 'active' | string,
     workspacePath: string,
   ): void {
     this.#knownWorkspace.set(identityKey(identity), { workspaceSelector, workspacePath });
+  }
+
+  protected rebindOpenCodeUrl(
+    previousIdentity: RuntimeWorkerIdentity,
+    nextIdentity: RuntimeWorkerIdentity,
+  ): void {
+    const record = this.#openCodeUrls.get(previousIdentity.id);
+    if (!record || !sameRuntimeWorker(record.identity, previousIdentity)) return;
+    this.#openCodeUrls.set(nextIdentity.id, { ...record, identity: nextIdentity });
+  }
+
+  #rememberOpenCodeUrl(identity: RuntimeWorkerIdentity, url: string, agent?: string): void {
+    const previous = this.#openCodeUrls.get(identity.id);
+    const sameBinding = previous
+      && sameRuntimeWorker(previous.identity, identity)
+      && previous.url === url;
+    this.#openCodeUrls.set(identity.id, {
+      identity,
+      url,
+      ...(agent ? { agent } : sameBinding && previous?.agent ? { agent: previous.agent } : {}),
+      ...(sameBinding && previous?.sessionId ? { sessionId: previous.sessionId } : {}),
+    });
+    const owned = this.#owned.get(identity.id);
+    if (owned?.openCodeUrl) {
+      this.#owned.set(identity.id, {
+        ...owned,
+        identity,
+        openCodeUrl: url,
+      });
+    }
   }
 
   #remaining(deadline: number): number {
@@ -627,6 +831,13 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
     const currentOwned = this.#owned.get(handle);
     const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: handle, generation };
+    const openCodeUrl = typeof terminal.command === 'string'
+      ? openCodeUrlFromCommand(terminal.command)
+      : undefined;
+    const openCodeAgent = typeof terminal.command === 'string'
+      ? openCodeAgentFromCommand(terminal.command)
+      : undefined;
+    if (openCodeUrl) this.#rememberOpenCodeUrl(identity, openCodeUrl, openCodeAgent);
     const worker: RuntimeWorker = {
       identity,
       workspacePath,
@@ -637,6 +848,63 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     };
     this.#rememberWorkspace(identity, workspaceSelector, workspacePath);
     return { status: 'ok', value: worker };
+  }
+
+  composerControl(
+    worker: RuntimeWorkerIdentity,
+  ): RuntimeComposerControl | undefined {
+    let record = this.#openCodeUrls.get(worker.id);
+    if (!record || !sameRuntimeWorker(record.identity, worker)) {
+      const current = this.findWorker(worker);
+      record = current.status === 'ok' && current.value && sameRuntimeWorker(current.value.identity, worker)
+        ? this.#openCodeUrls.get(worker.id)
+        : undefined;
+    }
+    if (!record || !sameRuntimeWorker(record.identity, worker)) return undefined;
+    return {
+      kind: 'opencode-http',
+      dispatch: (request, options) => this.#openCodeDispatch(worker, request, options),
+    };
+  }
+
+  openCodeHealth(
+    worker: RuntimeWorkerIdentity,
+    options: RuntimeCallOptions = {},
+  ): RuntimeResult<RuntimeOpenCodeHealth> {
+    const deadline = this.#now() + Math.max(1, options.timeoutMs ?? 10_000);
+    const currentOptions = this.#boundedOptions(deadline, options);
+    if (!currentOptions) return runtimeFailure('readiness', 'runtime_timeout');
+    const current = this.findWorker(worker, currentOptions);
+    if (current.status !== 'ok') return current;
+    if (current.value === null) return runtimeFailure('readiness', 'worker_generation_not_found');
+    const urlRecord = this.#openCodeUrls.get(worker.id);
+    if (!urlRecord || !sameRuntimeWorker(urlRecord.identity, current.value.identity)) {
+      return runtimeUnsupported('readiness', 'runtime_opencode_control_unavailable');
+    }
+    const healthOptions = this.#boundedOptions(deadline, options);
+    if (!healthOptions) return runtimeFailure('readiness', 'runtime_timeout');
+    const response = this.#openCodeRequest({
+      url: `${urlRecord.url}/global/health`,
+      method: 'GET',
+      timeoutMs: healthOptions.timeoutMs!,
+    });
+    if ('error' in response) return runtimeFailure('readiness', response.error);
+    if (response.status < 200 || response.status >= 300) {
+      return runtimeFailure('readiness', `opencode_http_status_${response.status}`);
+    }
+    let parsed: unknown;
+    try { parsed = JSON.parse(response.body); } catch { return runtimeUnsupported('readiness', 'opencode_health_schema_mismatch'); }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return runtimeUnsupported('readiness', 'opencode_health_schema_mismatch');
+    }
+    const health = parsed as Record<string, unknown>;
+    if (health.healthy !== true || typeof health.version !== 'string' || !health.version.trim()) {
+      return runtimeUnsupported('readiness', 'opencode_health_schema_mismatch');
+    }
+    return {
+      status: 'ok',
+      value: { healthy: true, version: health.version.trim() },
+    };
   }
 
   readiness(options: RuntimeCallOptions = {}): RuntimeResult<RuntimeReadiness> {
@@ -946,12 +1214,16 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       title: terminal.title ?? input.title,
       provenance: 'internal',
     };
+    const openCodeUrl = openCodeUrlFromCommand(input.command);
+    const openCodeAgent = openCodeAgentFromCommand(input.command);
     this.#owned.set(handle, {
       identity,
       workspacePath: worker.workspacePath,
       workspaceSelector: workspace,
       title: worker.title,
+      ...(openCodeUrl ? { openCodeUrl } : {}),
     });
+    if (openCodeUrl) this.#rememberOpenCodeUrl(identity, openCodeUrl, openCodeAgent);
     this.#rememberWorkspace(identity, workspace, worker.workspacePath);
     return { status: 'ok', value: worker };
   }
@@ -974,6 +1246,14 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
     if (current.value === null) {
       return { status: 'send_failed', reason: 'worker_generation_not_found' };
+    }
+    const control = this.composerControl(input.worker);
+    if (control && (input.writeOnly || input.submitOnly || input.text !== undefined)) {
+      return control.dispatch({
+        worker: input.worker,
+        action: 'submit-prompt',
+        ...(input.text !== undefined ? { text: input.text } : {}),
+      }, options);
     }
     const args = ['terminal', 'send', '--terminal', input.worker.id];
     if (!input.submitOnly) args.push('--text', input.text ?? '');

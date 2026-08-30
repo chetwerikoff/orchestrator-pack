@@ -140,6 +140,24 @@ export type RuntimeDispatchResult =
       readonly witness?: RuntimeDispatchWitness;
     };
 
+export type RuntimeComposerControlKind = 'opencode-http' | 'screen';
+
+export interface RuntimeComposerControlRequest {
+  readonly worker: RuntimeWorkerIdentity;
+  readonly action: 'append-prompt' | 'submit-prompt';
+  readonly text?: string;
+}
+
+export interface RuntimeComposerControl {
+  readonly kind: RuntimeComposerControlKind;
+  readonly dispatch: (request: RuntimeComposerControlRequest, options?: RuntimeCallOptions) => RuntimeDispatchResult;
+}
+
+export interface RuntimeOpenCodeHealth {
+  readonly healthy: true;
+  readonly version: string;
+}
+
 /** Liveness is deliberately total and has no fifth error result. */
 export interface RuntimeLivenessResult {
   readonly status: RuntimeLiveness;
@@ -303,6 +321,18 @@ export interface RuntimeAdapter {
     },
     options?: RuntimeCallOptions,
   ): RuntimeDispatchResult;
+
+  /** Optional provider control plane for runtimes with a non-screen composer. */
+  composerControl?(
+    worker: RuntimeWorkerIdentity,
+    options?: RuntimeCallOptions,
+  ): RuntimeComposerControl | undefined;
+
+  /** Optional provider startup witness for runtimes with a non-screen banner. */
+  openCodeHealth?(
+    worker: RuntimeWorkerIdentity,
+    options?: RuntimeCallOptions,
+  ): RuntimeResult<RuntimeOpenCodeHealth>;
 
   /**
    * Read the bound Run's oldest unacknowledged Delivery. When ackDeliveryId is

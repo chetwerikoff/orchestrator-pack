@@ -274,7 +274,7 @@ describe('smoke executor profiles', () => {
       complexity: 'routine',
       family: 'opencode',
       agent: 'opencode',
-      command: expect.stringMatching(/^OPENCODE_CONFIG_CONTENT=.*opencode --agent 'pack-opk-/u),
+      command: expect.stringMatching(/^OPENCODE_CONFIG_CONTENT=.*opencode --hostname 127\.0\.0\.1 --port [1-9]\d* --agent 'pack-opk-/u),
     });
     expect(calls[0]).toEqual(['opencode', 'models']);
     expect(calls).toContainEqual(['opencode', '--help']);
