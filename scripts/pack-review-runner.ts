@@ -18,7 +18,12 @@ import {
 } from '../plugins/codex-pr-reviewer/lib/reviewer_budget.ts';
 import { observePosixProcessGroup, runProcess, type ProcessResult } from './kernel/subprocess.ts';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
-import { runProbe } from './browser-gpt-page-probe.ts';
+import {
+  INSPECTION_EXPRESSION,
+  defaultDependencies as browserCdpDependencies,
+  toCompatibleTargets,
+  type ProbeDependencies,
+} from './browser-gpt-page-probe.ts';
 import { readStateLightTurnObservation } from './chatgpt-browser-turn/state-light-turn-observation.ts';
 import {
   deriveMergeTriageEvidenceTuple,
@@ -193,6 +198,10 @@ interface StartInput {
     invocationId: string;
     round: PackReviewGptRoundRecord;
   }) => void | Promise<void>;
+  fixtureGptAttemptObserver?: (
+    run: PackReviewRunRecord,
+    nowMs?: number,
+  ) => Promise<PackReviewGptAttemptObservation | null>;
   fixtureBeforeGptSourceCommentCensus?: (event: {
     slotId: string;
     attemptOrdinal: number;
@@ -1381,14 +1390,29 @@ export async function observeGptPackReviewAttempt(
   run: PackReviewRunRecord,
   nowMs = Date.now(),
   deps: {
-    probe?: typeof runProbe;
+    listTargets?: ProbeDependencies['listTargets'];
+    evaluate?: ProbeDependencies['evaluate'];
     readObservation?: typeof readStateLightTurnObservation;
+    resolveSourceComment?: (identity: PackGptSourceIdentity) => Promise<PackGptSourceCommentResolution>;
   } = {},
 ): Promise<PackReviewGptAttemptObservation | null> {
   const round = run.reviewRound;
   if (!round || round.reviewer !== 'gpt') return null;
-  const probe = deps.probe ?? runProbe;
+  const listTargets = deps.listTargets ?? browserCdpDependencies.listTargets;
+  const evaluate = deps.evaluate ?? browserCdpDependencies.evaluate;
   const readObservation = deps.readObservation ?? readStateLightTurnObservation;
+  const repository = trim(run.canonicalRepository);
+  if (!repository) return { state: 'observation_unavailable', replacementEligible: false };
+
+  let sourceTransport: PackGptSourceCommentTransport | undefined;
+  const resolveSourceComment = deps.resolveSourceComment ?? (async (identity: PackGptSourceIdentity) => {
+    sourceTransport ??= createPackGptSourceCommentTransport({
+      repoRoot: run.sourceRepoRoot,
+      repoSlug: repository,
+      prNumber: run.prNumber,
+    });
+    return resolvePackGptSourceComment({ identity, transport: sourceTransport });
+  });
   const unresolved = round.sourceSlots.filter((slot) => !(
     slot.lifecycle === 'terminal'
     && (slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings')
@@ -1406,6 +1430,27 @@ export async function observeGptPackReviewAttempt(
       return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
     }
 
+    const identity = gptSourceIdentity({
+      repoSlug: repository,
+      prNumber: run.prNumber,
+      headSha: run.targetSha,
+      runId: run.id,
+      slotId: slot.slotId,
+      invocationId: slot.invocationId,
+    });
+    let sourceResolution: PackGptSourceCommentResolution;
+    try {
+      sourceResolution = await resolveSourceComment(identity);
+    } catch {
+      return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
+    }
+    if (sourceResolution.kind === 'credentialed') {
+      return { state: 'reply_recovery_required', replacementEligible: false, slotId: slot.slotId };
+    }
+    if (sourceResolution.kind !== 'missing') {
+      return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
+    }
+
     let observation: ReturnType<typeof readStateLightTurnObservation>;
     try {
       observation = readObservation(profileKey, slot.invocationId);
@@ -1417,36 +1462,26 @@ export async function observeGptPackReviewAttempt(
       return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
     }
 
-    let listed: Record<string, unknown>;
+    let targets: ReturnType<typeof toCompatibleTargets>;
     try {
-      listed = await probe({ operation: 'list', cdp }) as unknown as Record<string, unknown>;
+      targets = toCompatibleTargets(await listTargets(cdp));
     } catch {
-      return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
-    }
-    if (listed.status !== 'ok' || !Array.isArray(listed.targets) || listed.targets_truncated === true) {
       return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
     }
 
     const owned: Array<{ snapshot: Record<string, unknown>; userDocumentOrdinal: number }> = [];
-    for (const rawTarget of listed.targets) {
-      if (!rawTarget || typeof rawTarget !== 'object' || Array.isArray(rawTarget)) {
-        return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
-      }
-      const targetId = trim((rawTarget as Record<string, unknown>).target_id);
-      if (!targetId) {
-        return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
-      }
-      let inspected: Record<string, unknown>;
+    for (const target of targets) {
+      let inspected: unknown;
       try {
-        inspected = await probe({ operation: 'inspect', cdp, targetId }) as unknown as Record<string, unknown>;
+        inspected = await evaluate(target, INSPECTION_EXPRESSION);
       } catch {
         return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
       }
-      if (inspected.status !== 'ok' || !inspected.snapshot || typeof inspected.snapshot !== 'object') {
+      if (!inspected || typeof inspected !== 'object' || Array.isArray(inspected)) {
         return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
       }
-      const snapshot = inspected.snapshot as Record<string, unknown>;
-      if (snapshot.nodes_truncated === true) {
+      const snapshot = inspected as Record<string, unknown>;
+      if (snapshot.status !== 'ok' || snapshot.nodes_truncated === true) {
         return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
       }
       const nodes = Array.isArray(snapshot.nodes) ? snapshot.nodes : [];
@@ -1498,7 +1533,7 @@ export async function observeGptPackReviewAttempt(
   return { state: 'replacement_eligible', replacementEligible: true };
 }
 
-export interface PackReviewNativeAttemptObservation {
+export interface PackReviewNativeAttemptObservationexport interface PackReviewNativeAttemptObservation {
   reviewer: 'codex' | 'claude';
   state: 'running' | 'stopped' | 'observation_unavailable';
   replacementEligible: boolean;
@@ -1522,7 +1557,7 @@ export function observeNativePackReviewAttempt(
     return {
       reviewer: attempt.reviewer,
       state: 'observation_unavailable',
-      replacementEligible: false,
+      replacementEligible: elapsedMs >= nativeReplacementCeilingMs,
       elapsedMs,
       nativeReplacementCeilingMs,
     };
@@ -1532,7 +1567,7 @@ export function observeNativePackReviewAttempt(
     return {
       reviewer: attempt.reviewer,
       state,
-      replacementEligible: false,
+      replacementEligible: elapsedMs >= nativeReplacementCeilingMs,
       elapsedMs,
       nativeReplacementCeilingMs,
     };
@@ -1820,10 +1855,14 @@ function updateGptRoundSlot(
   slotId: string,
   patch: Partial<PackReviewSourceSlotRecord>,
   options: { projectId: string; storeRoot: string },
+  expectedInvocationId?: string,
 ): PackReviewGptRoundRecord {
   const persisted = getPackReviewRun(runId, options);
   const base = persisted?.reviewRound ?? round;
   if (base.settledSourceCount !== undefined) return base;
+  const currentSlot = base.sourceSlots.find((slot) => slot.slotId === slotId);
+  if (!currentSlot) throw new Error(`unknown GPT source slot ${slotId}`);
+  if (expectedInvocationId && trim(currentSlot.invocationId) !== trim(expectedInvocationId)) return base;
   const slots = base.sourceSlots.map((slot) => slot.slotId === slotId ? { ...slot, ...patch } : slot);
   if (slots.filter((slot) => slot.slotId === slotId).length !== 1) {
     throw new Error(`unknown GPT source slot ${slotId}`);
@@ -2058,8 +2097,18 @@ async function runGptSourceBatch(options: {
 
   const outcomes = await Promise.all(options.round.sourceSlots.map(async (planned) => {
     const slotId = planned.slotId;
-    let round = options.round;
-    let attemptOrdinal = 1;
+    let round = getPackReviewRun(options.run.id, {
+      projectId: options.projectId,
+      storeRoot: options.storeRoot,
+    })?.reviewRound ?? options.round;
+    const currentSlot = round.sourceSlots.find((slot) => slot.slotId === slotId) ?? planned;
+    const currentComplete = currentSlot.lifecycle === 'terminal'
+      && (currentSlot.terminalClass === 'complete_clean' || currentSlot.terminalClass === 'complete_findings')
+      && currentSlot.payload;
+    if (currentComplete) {
+      return { slot: currentSlot, payload: currentSlot.payload as ReviewPayload };
+    }
+    let attemptOrdinal = (currentSlot.attemptOrdinal ?? 0) + 1;
     let invocationId = randomUUID();
     const markInvocationStarted = async (admissionStartedAt: number): Promise<void> => {
       const launchBinding = resolveLaunchBinding();
@@ -2068,6 +2117,9 @@ async function runGptSourceBatch(options: {
         admissionStartedAtUtc: new Date(admissionStartedAt).toISOString(),
         attemptOrdinal,
         invocationId,
+        terminalClass: undefined,
+        terminalResult: undefined,
+        payload: undefined,
         ...(launchBinding ?? {}),
       }, { projectId: options.projectId, storeRoot: options.storeRoot });
       if (options.input.fixtureAfterGptInvocationBound) {
@@ -2234,7 +2286,7 @@ async function runGptSourceBatch(options: {
       terminalClass,
       terminalResult,
       ...(payload ? { payload } : {}),
-    }, { projectId: options.projectId, storeRoot: options.storeRoot });
+    }, { projectId: options.projectId, storeRoot: options.storeRoot }, invocationId);
     const persistedSlot = round.sourceSlots.find((slot) => slot.slotId === slotId);
     if (!persistedSlot) throw new Error(`unknown GPT source slot ${slotId}`);
     const acceptedPayload = persistedSlot.lifecycle === 'terminal'
@@ -3533,7 +3585,7 @@ async function commitAtCapTriage(input: {
   allowFinalSettlement?: boolean;
 }): Promise<PackReviewAuthorityDocument> {
   const cycle = input.authority.cycle;
-  if (!cycle || !['at_cap_open_findings', 'at_cap_continuation_required'].includes(cycle.state)) {
+  if (!cycle || !['open_findings', 'at_cap_open_findings', 'at_cap_continuation_required'].includes(cycle.state)) {
     return input.authority;
   }
   const findingSnapshotDigest = sha256Bytes(stableJson(input.payload.findings));
@@ -4010,6 +4062,42 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
 
     carryover = await resolveCarryoverReplay({ input, target, projectId, storeRoot, baseRef, priorAuthority });
     const conflictFreeCarryover = carryover?.replay.kind === 'conflict_free_carryover';
+    if (!conflictFreeCarryover && authority.cycle?.state === 'open_findings') {
+      const priorFindingRun = authority.terminal?.runId
+        ? getPackReviewRun(authority.terminal.runId, { projectId, storeRoot })
+        : null;
+      if (priorFindingRun?.reviewVerdict === 'findings' && authority.terminal) {
+        authority = await commitAtCapTriage({
+          start: input,
+          target,
+          projectId,
+          baseRef,
+          trustedPackRoot: trusted.trustedPackRoot,
+          storeRoot,
+          authority,
+          payload: {
+            verdict: 'findings',
+            findingCount: priorFindingRun.findingCount ?? priorFindingRun.findings.length,
+            findings: priorFindingRun.findings as ReviewPayloadFinding[],
+          },
+          allowFinalSettlement: true,
+        });
+      }
+      if (authority.cycle?.state === 'open_findings') {
+        await releaseEarlyClaim('prior_round_findings_unresolved');
+        return {
+          ok: false,
+          created: false,
+          reused: true,
+          reason: 'prior_round_findings_unresolved',
+          nextAction: 'resolve or explicitly reject the prior logical-round findings before starting the next required round',
+          prNumber: target.prNumber,
+          headSha: target.headSha,
+          cycleId: authority.cycle.cycleId,
+          httpStatus: 409,
+        };
+      }
+    }
     if (!conflictFreeCarryover
         && authority.cycle
         && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)) {
@@ -4029,6 +4117,18 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       };
     }
 
+    if (logicalAccounting
+        && authority.cycle?.state === 'open'
+        && consumedLogicalRoundCount > 0
+        && consumedLogicalRoundCount < authority.cycle.frozenCap) {
+      authority = observePackReviewHead({
+        prNumber: target.prNumber,
+        expectedTransitionSeq: authority.transitionSeq,
+        headSha: target.headSha,
+        options: authorityOptions,
+      });
+    }
+
     const roundOrdinal = logicalAccounting
       ? (authority.cycle?.consumedRoundOrdinals?.length ?? 0) + 1
       : (authority.cycle?.consumedHeadShas.length ?? 0) + 1;
@@ -4039,7 +4139,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       roundOrdinal,
       accountingVersion,
     });
-    const gptRound: PackReviewGptRoundRecord | undefined = reviewer === 'gpt'
+    let gptRound: PackReviewGptRoundRecord | undefined = reviewer === 'gpt'
       && !conflictFreeCarryover
       && (authoritative.snapshotDigest !== 'harness-unbound-fixture'
         || input.tier !== undefined
@@ -4067,6 +4167,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     }
 
     let allowSameRoundReplacement = false;
+    let sameRoundGptRun: PackReviewRunRecord | null = null;
     if (logicalAccounting && reviewer === 'gpt' && authority.cycle) {
       const priorSameRound = listPackReviewRunRecordsRaw({ projectId, storeRoot })
         .filter((candidate) => candidate.prNumber === target.prNumber
@@ -4076,7 +4177,8 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           && !hasPersistedPackReviewVerdict(candidate))
         .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
       if (priorSameRound) {
-        const observation = await observeGptPackReviewAttempt(priorSameRound);
+        const observeAttempt = input.fixtureGptAttemptObserver ?? observeGptPackReviewAttempt;
+        const observation = await observeAttempt(priorSameRound);
         if (!observation?.replacementEligible) {
           await releaseEarlyClaim('gpt_replacement_not_eligible');
           return {
@@ -4093,6 +4195,8 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           };
         }
         allowSameRoundReplacement = true;
+        sameRoundGptRun = priorSameRound;
+        gptRound = priorSameRound.reviewRound;
       }
     }
 
@@ -4104,7 +4208,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           && candidate.resolvedReviewer === reviewer
           && !hasPersistedPackReviewVerdict(candidate))
         .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
-      if (priorSameRound?.nativeAttempt) {
+      if (priorSameRound) {
         const observation = observeNativePackReviewAttempt(priorSameRound);
         if (!observation?.replacementEligible) {
           await releaseEarlyClaim('native_replacement_not_eligible');
@@ -4123,6 +4227,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
             httpStatus: 202,
           };
         }
+        allowSameRoundReplacement = true;
       }
     }
 
@@ -4281,7 +4386,22 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       const identity = await resolvePackReviewRunCanonicalRepository(record, resolveSlug);
       if (identity.ok) legacyRepositoryBySourceRoot[resolve(record.sourceRepoRoot)] = identity.slug;
     }
-    const created = createPackReviewRun({
+    let created: ReturnType<typeof createPackReviewRun>;
+    if (sameRoundGptRun) {
+      run = updatePackReviewRun(sameRoundGptRun.id, {
+        status: 'queued',
+        latestRunStatus: 'queued',
+        runnerPid: process.pid,
+      }, { projectId, storeRoot });
+      created = {
+        created: true,
+        reused: false,
+        reason: 'same_round_replacement',
+        run,
+        storeRoot,
+      };
+    } else {
+      created = createPackReviewRun({
       projectId,
       storeRoot,
       prNumber: target.prNumber,
@@ -4304,8 +4424,9 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       ...(reviewer ? { resolvedReviewer: reviewer } : {}),
       ...(gptRound ? { reviewRound: gptRound } : {}),
       ...(allowSameRoundReplacement ? { allowSameRoundReplacement: true } : {}),
-    });
-    run = created.run;
+      });
+      run = created.run;
+    }
     authority = advancePackReviewAuthority(
       authority,
       'review_or_bundle_staged',
@@ -4346,7 +4467,9 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       runnerPid: process.pid,
     }, { projectId, storeRoot });
 
-    if (process.env.OPK_VITEST_HARNESS === '1'
+    if (sameRoundGptRun?.reviewTargetRoot && existsSync(sameRoundGptRun.reviewTargetRoot)) {
+      worktree = sameRoundGptRun.reviewTargetRoot;
+    } else if (process.env.OPK_VITEST_HARNESS === '1'
       && (input.fixtureReviewStdout !== undefined
         || input.fixtureReviewTimedOut === true
         || input.fixtureReviewBySourceSlot !== undefined)) {
