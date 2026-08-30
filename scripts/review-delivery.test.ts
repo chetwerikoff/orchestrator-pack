@@ -218,6 +218,52 @@ describe('runtime-neutral review delivery contract', () => {
     })).toMatchObject({ terminalStatus: 'changes_requested', requiredStatus: 'failure', blocking: true });
   });
 
+  it('keeps T3 round 1 pending and treats worker notification as best-effort', async () => {
+    const repoRoot = process.cwd();
+    const storeRoot = tempRoot('opk-review-logical-round-delivery-');
+    const run = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1826,
+      headSha,
+      linkedSessionId: 'fixture-worker',
+      startReason: 'test',
+      surface: 'review-delivery-test',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      accountingVersion: 'issue-1826-logical-rounds-1-1-2',
+      reviewCycleId: 'cycle-1826',
+      logicalRoundOrdinal: 1,
+      logicalRoundCap: 2,
+      resolvedReviewer: 'codex',
+    }).run;
+    const statuses: Array<{ state: string; description: string }> = [];
+    const result = await deliverPackReviewVerdict({
+      run,
+      payload: { verdict: 'clean', findingCount: 0, findings: [] },
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      postGithubComment: async () => ({
+        id: 182601,
+        url: 'https://example.test/reviews/182601',
+        event: 'COMMENT',
+      }),
+      writeRequiredStatus: async (request) => {
+        statuses.push({ state: request.state, description: request.description });
+      },
+      notifyWorker: async () => ({ state: 'failed' as const, reason: 'best_effort_transport_down' }),
+    });
+
+    expect(result.reason).toBe('completed');
+    expect(statuses).toEqual([{
+      state: 'pending',
+      description: 'Pack review round 1/2 completed; required round 2 remains.',
+    }]);
+    expect(getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot })?.deliveryOutcomes.workerNotification)
+      .toMatchObject({ state: 'failed', reason: 'best_effort_transport_down' });
+  });
+
   it('rejects normal delivery before claim, journal, or dispatch after same-id generation recreation', async () => {
     const repoRoot = process.cwd();
     const storeRoot = tempRoot('opk-review-notification-binding-normal-');
@@ -315,7 +361,7 @@ describe('runtime-neutral review delivery contract', () => {
       notifyWorker,
     });
 
-    expect(result.reason).toBe('completed_with_delivery_failures');
+    expect(result.reason).toBe('completed');
     expect(dispatch).not.toHaveBeenCalled();
     expect(existsSync(journalPath)).toBe(false);
     expect(existsSync(claimNamespace)).toBe(false);
@@ -437,7 +483,7 @@ describe('runtime-neutral review delivery contract', () => {
       notifyWorker,
     });
 
-    expect(result.reason).toBe('completed_with_delivery_failures');
+    expect(result.reason).toBe('completed');
     expect(postGithubComment).not.toHaveBeenCalled();
     expect(writeRequiredStatus).not.toHaveBeenCalled();
     expect(dispatch).not.toHaveBeenCalled();
