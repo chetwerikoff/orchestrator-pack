@@ -307,16 +307,19 @@ describe('submitUnsentCursorComposer', () => {
           },
         };
       },
-      liveness: (input: { worker: RuntimeWorkerIdentity; observationWindowMs: number }) => ({
-        status: 'idle' as const,
-        worker: input.worker,
-      }),
+      liveness: (() => {
+        let calls = 0;
+        return (input: { worker: RuntimeWorkerIdentity; observationWindowMs: number }) => ({
+          status: calls++ === 0 ? 'idle' as const : 'busy' as const,
+          worker: input.worker,
+        });
+      })(),
       dispatchInput: () => ({ status: 'dispatched' as const }),
     } as unknown as Parameters<typeof createAdapterSubmitDeps>[0];
-    const deps = createAdapterSubmitDeps(adapter, () => ({ ok: true, result: {} }));
+    const deps = { ...createAdapterSubmitDeps(adapter, () => ({ ok: true, result: {} })), sentStorePath: undefined };
     const result = submitUnsentCursorComposer({ watch: true }, deps);
     expect(result.terminals[0]?.reason).toBe('enter_sent');
-    expect(reads.map(({ screen }) => screen)).toEqual([true]);
+    expect(reads.map(({ screen }) => screen)).toEqual([true, true]);
   });
 
   it('enters every unsent worker and skips empty ones', () => {
@@ -810,7 +813,7 @@ describe('delivery-triggered composer submission', () => {
     const submitted: RuntimeWorkerIdentity[] = [];
     const result = await submitUnsentCursorComposerOnceForWorker(target, depsFor({}, {
       submitted,
-      liveness: () => 'busy',
+      liveness: (() => { let calls = 0; return () => calls++ === 0 ? 'idle' : 'busy'; })(),
       read: () => ({
         ok: true as const,
         lines: [
@@ -825,7 +828,7 @@ describe('delivery-triggered composer submission', () => {
     }));
 
     expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
-    expect(submitted).toEqual([target.identity, target.identity]);
+    expect(submitted).toEqual([target.identity]);
   });
 
   it('writes one unread Orca pointer and submits Enter', async () => {
@@ -844,7 +847,7 @@ describe('delivery-triggered composer submission', () => {
     });
     const submitDeps = depsFor({}, {
       submitted,
-      liveness: () => 'busy',
+      liveness: (() => { let calls = 0; return () => calls++ < 2 ? 'idle' : 'busy'; })(),
       read: () => {
         reads += 1;
         return {
@@ -916,7 +919,7 @@ describe('delivery-triggered composer submission', () => {
       },
       submitDeps: depsFor({}, {
         submitted,
-        liveness: () => 'idle',
+        liveness: (() => { let calls = 0; return () => calls++ < 2 ? 'idle' : 'busy'; })(),
         read: () => ({
           ok: true as const,
           lines: reads++ === 0 ? ['→ Add a follow-up', ...CURSOR_FOOTER] : [POKE, ...CURSOR_FOOTER],
@@ -952,7 +955,7 @@ describe('delivery-triggered composer submission', () => {
       },
       submitDeps: depsFor({}, {
         submitted,
-        liveness: () => 'idle',
+        liveness: (() => { let calls = 0; return () => calls++ < 2 ? 'idle' : 'busy'; })(),
         read: () => ({
           ok: true as const,
           lines: reads++ === 0 ? ['→ Add a follow-up', ...CURSOR_FOOTER] : [TERMINAL_POKE, ...CURSOR_FOOTER],
@@ -987,7 +990,7 @@ describe('delivery-triggered composer submission', () => {
       },
       submitDeps: depsFor({}, {
         submitted,
-        liveness: () => 'idle',
+        liveness: (() => { let calls = 0; return () => calls++ < 2 ? 'idle' : 'busy'; })(),
         read: () => ({
           ok: true as const,
           lines: wrote ? ['You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run `orca orchestration check --run run_dup`.', ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
@@ -1011,7 +1014,7 @@ describe('delivery-triggered composer submission', () => {
       }),
       resolveWorker: () => ({ ok: true as const, worker: target }),
       writePointer: () => { writes += 1; return { status: 'dispatched' as const }; },
-      submitDeps: depsFor({ [target.identity.id]: [POKE, ...CURSOR_FOOTER] }, { submitted, liveness: () => 'idle' }),
+      submitDeps: depsFor({ [target.identity.id]: [POKE, ...CURSOR_FOOTER] }, { submitted, liveness: (() => { let calls = 0; return () => calls++ === 0 ? 'idle' : 'busy'; })() }),
     });
     expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
     expect(writes).toBe(0);
@@ -1086,13 +1089,13 @@ describe('delivery-triggered composer submission', () => {
     expect(submitted).toHaveLength(0);
     releaseRender?.();
     const first = await pending;
-    expect(first.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
-    expect(reads).toBe(3);
-    expect(submitted).toEqual([target.identity, target.identity]);
+    expect(first.terminals[0]).toMatchObject({ reason: 'worker_busy', enter: false });
+    expect(reads).toBe(2);
+    expect(submitted).toEqual([]);
 
     const duplicate = await submitUnsentCursorComposerDeliveryForTerminal(target.identity.id, resolver, deps);
-    expect(duplicate.terminals[0]?.reason).toBe('composer_empty');
-    expect(submitted).toHaveLength(2);
+    expect(duplicate.terminals[0]?.reason).toBe('worker_busy');
+    expect(submitted).toHaveLength(0);
   });
 
   it('refuses unresolved exact-terminal identity before screen or Enter effects', async () => {
@@ -1158,14 +1161,14 @@ describe('delivery-triggered composer submission', () => {
 
     const pending = submitUnsentCursorComposerOnceForWorker(target, deps, state);
     const idle = await pending;
-    expect(idle.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
-    expect(reads).toBe(2);
-    expect(submitted).toHaveLength(2);
+    expect(idle.terminals[0]).toMatchObject({ reason: 'worker_busy', enter: false });
+    expect(reads).toBe(1);
+    expect(submitted).toHaveLength(0);
 
     const duplicate = await submitUnsentCursorComposerOnceForWorker(target, deps, state);
-    expect(duplicate.terminals[0]?.reason).toBe('already_submitted');
-    expect(reads).toBe(3);
-    expect(submitted).toHaveLength(2);
+    expect(duplicate.terminals[0]?.reason).toBe('worker_busy');
+    expect(reads).toBe(2);
+    expect(submitted).toHaveLength(0);
   });
 
   it('retries once after asynchronous Cursor rendering, then queues while Running', async () => {
@@ -1199,9 +1202,9 @@ describe('delivery-triggered composer submission', () => {
     releaseRender?.();
     const result = await pending;
 
-    expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
-    expect(reads).toBe(3);
-    expect(submitted).toEqual([target.identity, target.identity]);
+    expect(result.terminals[0]).toMatchObject({ reason: 'worker_busy', enter: false });
+    expect(reads).toBe(2);
+    expect(submitted).toEqual([]);
   });
 
   it('applies the same immediate busy-queue contract to Codex', async () => {
@@ -1221,9 +1224,9 @@ describe('delivery-triggered composer submission', () => {
       },
     ));
 
-    expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
-    expect(reads).toBe(2);
-    expect(submitted).toEqual([target.identity, target.identity]);
+    expect(result.terminals[0]).toMatchObject({ reason: 'worker_busy', enter: false });
+    expect(reads).toBe(1);
+    expect(submitted).toEqual([]);
   });
 
   it('uses the immediate idle path for exactly one screen read and Enter', async () => {
@@ -1234,7 +1237,7 @@ describe('delivery-triggered composer submission', () => {
       { [target.identity.id]: [POKE, ...CURSOR_FOOTER] },
       {
         submitted,
-        liveness: () => 'idle',
+        liveness: (() => { let calls = 0; return () => calls++ === 0 ? 'idle' : 'busy'; })(),
         read: () => {
           reads += 1;
           return { ok: true as const, lines: [POKE, ...CURSOR_FOOTER], source: 'screen' as const };
@@ -1242,7 +1245,7 @@ describe('delivery-triggered composer submission', () => {
       },
     ));
     expect(result.terminals[0]?.reason).toBe('enter_sent');
-    expect(reads).toBe(1);
+    expect(reads).toBe(2);
     expect(submitted).toHaveLength(1);
   });
 
@@ -1291,7 +1294,7 @@ describe('delivery-triggered composer submission', () => {
       },
       submitDeps: depsFor({}, {
         submitted,
-        liveness: () => 'idle',
+        liveness: (() => { let calls = 0; return () => calls++ < 2 ? 'idle' : 'busy'; })(),
         read: () => ({
           ok: true as const,
           lines: wrote ? ['You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run `orca orchestration check --run run_dup`.', ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
@@ -1346,9 +1349,9 @@ describe('delivery-triggered composer submission', () => {
         },
       },
     ));
-    expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
-    expect(submitted).toEqual([target.identity]);
-    expect(reads).toBe(2);
+    expect(result.terminals[0]).toMatchObject({ reason: 'worker_busy', enter: false });
+    expect(submitted).toEqual([]);
+    expect(reads).toBe(1);
   });
   it('releases a persisted ambiguous pointer only after an exact idle identity', async () => {
     const target = worker('term_legacy_ambiguous');
@@ -1522,6 +1525,8 @@ describe('orchestration mail reconciliation', () => {
     let writes = 0;
     let pointerVisible = false;
     let launches = 0;
+    let livenessCalls = 0;
+    const liveness = () => livenessCalls++ < 3 ? 'idle' as const : 'busy' as const;
     const submitted: RuntimeWorkerIdentity[] = [];
     const message = {
       id: 'msg_episode_backoff',
@@ -1547,7 +1552,7 @@ describe('orchestration mail reconciliation', () => {
               : ['→ Add a follow-up', ...CURSOR_FOOTER],
             source: 'screen' as const,
           }),
-          liveness: () => 'idle',
+          liveness,
           submitResult: (identity) => {
             submitted.push(identity);
             launches += 1;
@@ -1607,7 +1612,8 @@ describe('orchestration mail reconciliation', () => {
               : ['→ Add a follow-up', ...CURSOR_FOOTER],
             source: 'screen' as const,
           }),
-          liveness: () => 'idle',
+          liveness: (() => { let calls = 0; return () => calls++ < 2 ? 'idle' : 'busy'; })(),
+          submitResult: (identity) => { submitted.push(identity); pointerVisible = false; return { status: 'dispatched' as const }; },
         }),
         episodeStatePath: statePath,
         episodeLockPath: lockPath,
@@ -1672,7 +1678,7 @@ describe('orchestration mail reconciliation', () => {
 
       liveness = 'idle';
       const retry = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 61_001 });
-      expect(retry.terminals[0]).toMatchObject({ enter: true, reason: 'enter_sent' });
+      expect(retry.terminals[0]).toMatchObject({ enter: false, reason: 'submission_unconfirmed' });
       expect(writes).toBe(1);
       expect(submitted).toHaveLength(1);
     } finally {
@@ -1710,7 +1716,7 @@ describe('orchestration mail reconciliation', () => {
             lines: pointerVisible ? [`You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run \`orca orchestration check --terminal ${target.identity.id}\`.`, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
             source: 'screen' as const,
           }),
-          liveness: () => 'idle',
+          liveness: (() => { let calls = 0; return () => calls++ < 2 ? 'idle' : 'busy'; })(),
         }),
         episodeStatePath: statePath,
         episodeLockPath: lockPath,
@@ -1792,6 +1798,213 @@ describe('orchestration mail reconciliation', () => {
     expect(deps.writes).toBe(1);
   });
 });
+
+
+  it('does not mutate or submit a busy pane', async () => {
+    const target = worker('term_busy_delivery');
+    const state = { messages: {}, episodes: {} };
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let writes = 0;
+    const result = await submitOrcaMessageDeliveryPointer('msg_busy_delivery', {
+      lookupMessage: () => ({ ok: true as const, message: {
+        id: 'msg_busy_delivery', runId: 'run_busy_delivery', recipient: target.identity.id, consumed: false,
+      } }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      writePointer: () => { writes += 1; return { status: 'dispatched' as const }; },
+      submitDeps: depsFor({ [target.identity.id]: ['→ Add a follow-up', ...CURSOR_FOOTER] }, {
+        submitted,
+        liveness: () => 'busy',
+      }),
+      episodeState: state,
+    });
+
+    expect(result.terminals[0]).toMatchObject({ reason: 'worker_busy', enter: false });
+    expect(writes).toBe(0);
+    expect(submitted).toEqual([]);
+    expect(state.episodes).toEqual({});
+  });
+
+  it('retries an unconfirmed claim with submit only despite a changed pointer count', async () => {
+    const target = worker('term_unconfirmed_count');
+    const root = mkdtempSync(join(tmpdir(), 'opk-unconfirmed-count-'));
+    const statePath = join(root, 'orchestration-mail-reconcile.json');
+    const lockPath = join(root, 'orchestration-mail-reconcile.lock');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let writes = 0;
+    let pointerVisible = false;
+    let unreadCount = 1;
+    let livenessCalls = 0;
+    const liveness = () => livenessCalls++ >= 4 ? 'busy' as const : 'idle' as const;
+    const message = {
+      id: 'msg_unconfirmed_count', runId: 'run_unconfirmed_count', recipient: target.identity.id, consumed: false,
+    };
+    try {
+      const makeDeps = () => ({
+        lookupMessage: () => ({ ok: true as const, message: { ...message, unreadCount } }),
+        resolveWorker: () => ({ ok: true as const, worker: target }),
+        writePointer: () => { writes += 1; pointerVisible = true; return { status: 'dispatched' as const }; },
+        submitDeps: depsFor({}, {
+          submitted,
+          liveness,
+          read: () => ({
+            ok: true as const,
+            lines: pointerVisible
+              ? [`You have 1 orchestration message. Read and act on your orchestration message. Run \`orca orchestration check --terminal ${target.identity.id}\`.`, ...CURSOR_FOOTER]
+              : ['→ Add a follow-up', ...CURSOR_FOOTER],
+            source: 'screen' as const,
+          }),
+        }),
+        episodeStatePath: statePath,
+        episodeLockPath: lockPath,
+      });
+      const first = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 1_000 });
+      expect(first.terminals[0]).toMatchObject({ reason: 'submission_unconfirmed', enter: false });
+      expect(writes).toBe(1);
+      expect(submitted).toHaveLength(1);
+
+      unreadCount = 3;
+      const retry = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 61_001 });
+      expect(retry.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
+      expect(writes).toBe(1);
+      expect(submitted).toHaveLength(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+
+  it('retries a hidden unconfirmed claim with Enter only', async () => {
+    const target = worker('term_hidden_claim');
+    const root = mkdtempSync(join(tmpdir(), 'opk-hidden-claim-'));
+    const statePath = join(root, 'orchestration-mail-reconcile.json');
+    const lockPath = join(root, 'orchestration-mail-reconcile.lock');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let writes = 0;
+    let pointerVisible = false;
+    let livenessCalls = 0;
+    const liveness = () => livenessCalls++ >= 4 ? 'busy' as const : 'idle' as const;
+    const message = { id: 'msg_hidden_claim', runId: 'run_hidden_claim', recipient: target.identity.id, consumed: false };
+    const makeDeps = () => ({
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      writePointer: () => { writes += 1; pointerVisible = true; return { status: 'dispatched' as const }; },
+      submitDeps: depsFor({}, {
+        submitted,
+        liveness,
+        read: () => ({
+          ok: true as const,
+          lines: pointerVisible ? [POKE, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        }),
+      }),
+      episodeStatePath: statePath,
+      episodeLockPath: lockPath,
+    });
+    try {
+      const first = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 1_000 });
+      expect(first.terminals[0]?.reason).toBe('submission_unconfirmed');
+      pointerVisible = false;
+      const retry = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 61_001 });
+      expect(retry.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
+      expect(writes).toBe(1);
+      expect(submitted).toHaveLength(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns a contradicted confirmed pointer to pending instead of skipping it', async () => {
+    const target = worker('term_contradicted_confirmed');
+    const key = workerKey(target.identity);
+    const state = {
+      messages: {},
+      episodes: {
+        [key]: {
+          messageId: 'msg_contradicted_confirmed', runId: 'run_contradicted_confirmed', recipient: target.identity.id,
+          workerKey: key, nextEligibleAt: 0, backoffMs: 60_000, state: 'confirmed' as const,
+        },
+      },
+    };
+    let calls = 0;
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const result = await submitOrcaMessageDeliveryPointer('msg_contradicted_confirmed', {
+      lookupMessage: () => ({ ok: true as const, message: {
+        id: 'msg_contradicted_confirmed', runId: 'run_contradicted_confirmed', recipient: target.identity.id, consumed: false,
+      } }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      writePointer: () => { throw new Error('contradicted pointer must not be rewritten'); },
+      submitDeps: depsFor({}, {
+        submitted,
+        liveness: () => calls++ < 2 ? 'idle' : 'idle',
+        read: () => ({
+          ok: true as const,
+          lines: [`You have 1 orchestration message. Run \`orca orchestration check --terminal ${target.identity.id}\`.`, ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        }),
+      }),
+      episodeState: state,
+    });
+
+    expect(result.terminals[0]).toMatchObject({ reason: 'submission_unconfirmed', enter: false });
+    expect(submitted).toHaveLength(1);
+    expect(state.episodes[key]?.state).toBe('pointer-visible');
+  });
+
+  it('shares one claim across runs targeting the same pane', async () => {
+    const target = worker('term_pane_wide_claim');
+    let currentRun = 'run_pane_a';
+    let pointerVisible = false;
+    let writes = 0;
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let livenessCalls = 0;
+    const liveness = () => livenessCalls++ < 2 ? 'idle' as const : 'busy' as const;
+    const deps = {
+      lookupMessage: () => ({ ok: true as const, message: {
+        id: currentRun === 'run_pane_a' ? 'msg_pane_a' : 'msg_pane_b', runId: currentRun,
+        recipient: target.identity.id, consumed: false,
+      } }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      writePointer: () => { writes += 1; pointerVisible = true; return { status: 'dispatched' as const }; },
+      submitDeps: depsFor({}, {
+        submitted,
+        liveness,
+        read: () => ({
+          ok: true as const,
+          lines: pointerVisible ? [POKE, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        }),
+      }),
+      episodeState: { messages: {}, episodes: {} },
+    };
+    const first = await submitOrcaMessageDeliveryPointer('msg_pane_a', deps);
+    currentRun = 'run_pane_b';
+    const second = await submitOrcaMessageDeliveryPointer('msg_pane_b', deps);
+
+    expect(first.terminals[0]?.reason).toBe('enter_sent');
+    expect(second.terminals[0]?.reason).toBe('orchestration_episode_already_delivered');
+    expect(writes).toBe(1);
+    expect(submitted).toHaveLength(1);
+  });
+
+  it('reports reconcile lock contention as a retryable failure', async () => {
+    const target = worker('term_lock_contention');
+    const lockPath = join(tmpdir(), `opk-reconcile-lock-${process.pid}-${Date.now()}.lock`);
+    acquireWatchLock(lockPath);
+    try {
+      const result = await runOrchestrationMailReconcileTick({
+        readInbox: () => ({ ok: true as const, result: { messages: [] } }),
+        lookupMessage: () => ({ ok: false as const, reason: 'unused' }),
+        resolveWorker: () => ({ ok: true as const, worker: target }),
+        writePointer: () => ({ status: 'dispatched' as const }),
+        submitDeps: depsFor({}, { liveness: () => 'idle' }),
+      }, { lockPath, ledgerPath: join(tmpdir(), `opk-reconcile-lock-${process.pid}-${Date.now()}.json`) });
+      expect(result.ok).toBe(false);
+      expect(result.reasons).toContain('reconcile_lock_busy');
+    } finally {
+      releaseWatchLock();
+      try { unlinkSync(lockPath); } catch { /* ignore */ }
+    }
+  });
 
 describe('acquireWatchLock', () => {
   it('fails closed when another live process holds the lock', () => {
