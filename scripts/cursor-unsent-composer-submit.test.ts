@@ -2173,7 +2173,10 @@ describe('orchestration mail reconciliation', () => {
     }
   });
 
-  it('returns a contradicted confirmed pointer to pending instead of skipping it', async () => {
+  it.each([
+    ['busy', 'enter_sent', true],
+    ['unknown', 'submission_unconfirmed', false],
+  ] as const)('retries a contradicted confirmed pointer when liveness is %s', async (_label, expectedReason, expectedEnter) => {
     const target = worker('term_contradicted_confirmed');
     const key = workerKey(target.identity);
     const state = {
@@ -2185,7 +2188,6 @@ describe('orchestration mail reconciliation', () => {
         },
       },
     };
-    let calls = 0;
     const submitted: RuntimeWorkerIdentity[] = [];
     const result = await submitOrcaMessageDeliveryPointer('msg_contradicted_confirmed', {
       lookupMessage: () => ({ ok: true as const, message: {
@@ -2195,7 +2197,7 @@ describe('orchestration mail reconciliation', () => {
       writePointer: () => { throw new Error('contradicted pointer must not be rewritten'); },
       submitDeps: depsFor({}, {
         submitted,
-        liveness: () => calls++ < 2 ? 'idle' : 'idle',
+        liveness: () => _label,
         read: () => ({
           ok: true as const,
           lines: [`You have 1 orchestration message. Run \`orca orchestration check --terminal ${target.identity.id}\`.`, ...CURSOR_FOOTER],
@@ -2205,9 +2207,9 @@ describe('orchestration mail reconciliation', () => {
       episodeState: state,
     });
 
-    expect(result.terminals[0]).toMatchObject({ reason: 'submission_unconfirmed', enter: false });
+    expect(result.terminals[0]).toMatchObject({ reason: expectedReason, enter: expectedEnter });
     expect(submitted).toHaveLength(1);
-    expect(state.episodes[key]?.state).toBe('pointer-visible');
+    expect(state.episodes[key]?.state).toBe(expectedEnter ? 'confirmed' : 'pointer-visible');
   });
 
   it('shares one claim across runs targeting the same pane', async () => {

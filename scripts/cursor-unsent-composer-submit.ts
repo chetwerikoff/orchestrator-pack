@@ -1115,7 +1115,7 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   const contradicted = existing?.state === 'confirmed' && alreadyShown && now >= existing.nextEligibleAt;
   if (contradicted) {
     const liveness = currentLiveness(deps.submitDeps, worker.identity);
-    if (liveness !== 'idle') return deliveryNoEffect(`worker_${liveness}`, worker);
+    if (liveness === 'gone') return deliveryNoEffect(`worker_${liveness}`, worker);
   }
   if (contradicted && state) {
     existing = { ...existing!, state: 'pointer-visible', nextEligibleAt: now };
