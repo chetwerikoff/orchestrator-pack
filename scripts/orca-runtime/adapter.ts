@@ -106,7 +106,7 @@ export function isOpenCodeComposerEmpty(lines: readonly string[]): boolean {
 
   let sawLeftEdge = false;
   for (let index = bottomEdge - 1; index >= 0; index -= 1) {
-    const trimmed = lines[index]?.trimStart() ?? '';
+    const trimmed = lines[index]?.trim() ?? '';
     if (!trimmed) {
       if (sawLeftEdge) continue;
       continue;
