@@ -2,6 +2,11 @@ import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runProcessSync } from '../kernel/subprocess.ts';
+import {
+  renderManagerReviewTerminalBundle,
+  validateManagerReviewTerminalBundle,
+  type ManagerReviewTerminalBundle,
+} from './manager-review-terminal-bundle.ts';
 
 const CANON_DECLARATION_PATH = '.cursor/skills/create-issue-draft/SKILL.md';
 const CANON_FENCE = 'manager-review-brief-canon';
@@ -22,6 +27,7 @@ export interface ManagerReviewBriefContext {
   readonly stage: string;
   readonly sourceSlot: string;
   readonly invocationId: string;
+  readonly terminalBundle?: ManagerReviewTerminalBundle;
 }
 
 export interface ManagerReviewCanonDiagnostic {
@@ -90,6 +96,12 @@ function validateContext(context: ManagerReviewBriefContext): void {
   }
   if (!/^[0-9a-fA-F-]{36}$/.test(context.invocationId)) {
     throw new Error('canonical_prompt_context_invalid:invocation_id');
+  }
+  if (context.stage === 'architectural') {
+    if (!context.terminalBundle) throw new Error('canonical_prompt_terminal_bundle_missing');
+    validateManagerReviewTerminalBundle(context.terminalBundle, context);
+  } else if (context.terminalBundle !== undefined) {
+    throw new Error('canonical_prompt_terminal_bundle_unexpected');
   }
 }
 
@@ -206,9 +218,13 @@ export function renderManagerReviewBrief(
   context: ManagerReviewBriefContext,
 ): RenderedManagerReviewBrief {
   validateContext(context);
-  const text = `${snapshot.sections
+  const canonText = snapshot.sections
     .map((section) => substituteBoundContext(section.text, context))
-    .join('\n\n')}\n`;
+    .join('\n\n');
+  const terminalText = context.terminalBundle
+    ? `\n\n## Governed terminal prior-state bundle\n\nThe JSON below is governed prior-state context for this exact terminal invocation. The live Issue remains the source task; if the live Issue disagrees with this current-revision bundle, do not treat the bundle as authority for changed task bytes.\n\n\`\`\`json\n${renderManagerReviewTerminalBundle(context.terminalBundle)}\n\`\`\``
+    : '';
+  const text = `${canonText}${terminalText}\n`;
   for (const placeholder of Object.keys(PLACEHOLDERS)) {
     if (text.includes(placeholder)) throw new Error(`canonical_prompt_context_unresolved:${placeholder}`);
   }
