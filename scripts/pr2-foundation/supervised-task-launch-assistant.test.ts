@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { runProcess } from '../kernel/subprocess.ts';
+import { resolveSmokeExecutorProfile } from '../worker-smoke-run.ts';
 import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
 import type { SupervisedWorkerStartResult } from './supervised-worker-start.ts';
 import {
@@ -1032,7 +1033,9 @@ describe('machine-local executor profile store', () => {
       PACK_EXECUTOR_SMOKE_ROUTINE_MODEL: 'store-smoke-model',
       PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT: 'store-smoke-effort',
     };
-    expect(smokeProfileEnv.PACK_EXECUTOR_SMOKE_ROUTINE_MODEL).toBe('store-smoke-model');
+    expect(resolveSmokeExecutorProfile('routine', smokeProfileEnv)).toMatchObject({
+      command: "agent --model 'store-smoke-model-store-smoke-effort'",
+    });
   });
 
   it('rejects a foreign key before applying any store values and never changes PATH', () => {
