@@ -215,6 +215,7 @@ export interface PackReviewRunRecord {
   accountingVersion?: string;
   reviewCycleId?: string;
   logicalRoundOrdinal?: number;
+  logicalRoundCap?: number;
   resolvedReviewer?: 'gpt' | 'codex' | 'claude';
   nativeAttempt?: PackReviewNativeAttemptBinding;
   reviewTargetRoot?: string;
@@ -319,6 +320,7 @@ export interface CreatePackReviewRunInput extends PackReviewStoreOptions {
   accountingVersion?: string;
   reviewCycleId?: string;
   logicalRoundOrdinal?: number;
+  logicalRoundCap?: number;
   resolvedReviewer?: 'gpt' | 'codex' | 'claude';
   automaticBudgetDisposition?: PackReviewAutomaticBudgetDisposition;
   allowCompletedSameHeadReplay?: boolean;
@@ -1377,6 +1379,12 @@ function parseRecord(
   const logicalRoundOrdinal = raw.logicalRoundOrdinal === undefined
     ? undefined
     : requiredJsonPositiveInteger(raw.logicalRoundOrdinal, 'logicalRoundOrdinal', path);
+  const logicalRoundCap = raw.logicalRoundCap === undefined
+    ? undefined
+    : requiredJsonPositiveInteger(raw.logicalRoundCap, 'logicalRoundCap', path);
+  if (logicalRoundOrdinal !== undefined && logicalRoundCap !== undefined && logicalRoundOrdinal > logicalRoundCap) {
+    throw new Error(`corrupt pack review run record at ${path}: logicalRoundOrdinal exceeds logicalRoundCap`);
+  }
   const resolvedReviewer = raw.resolvedReviewer === undefined
     ? undefined
     : String(raw.resolvedReviewer);
@@ -1445,6 +1453,7 @@ function parseRecord(
     accountingVersion,
     reviewCycleId,
     logicalRoundOrdinal,
+    logicalRoundCap,
     resolvedReviewer: resolvedReviewer as PackReviewRunRecord['resolvedReviewer'],
     nativeAttempt,
     reviewRound,
@@ -1859,6 +1868,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       ...(input.accountingVersion ? { accountingVersion: input.accountingVersion } : {}),
       ...(input.reviewCycleId ? { reviewCycleId: input.reviewCycleId } : {}),
       ...(input.logicalRoundOrdinal ? { logicalRoundOrdinal: input.logicalRoundOrdinal } : {}),
+      ...(input.logicalRoundCap ? { logicalRoundCap: input.logicalRoundCap } : {}),
       ...(input.resolvedReviewer ? { resolvedReviewer: input.resolvedReviewer } : {}),
       ...(input.reviewRound ? { reviewRound: input.reviewRound } : {}),
       runnerPid: process.pid,
@@ -1895,6 +1905,7 @@ function buildUpdatedPackReviewRun(
     accountingVersion: existing.accountingVersion ?? fields.accountingVersion,
     reviewCycleId: existing.reviewCycleId ?? fields.reviewCycleId,
     logicalRoundOrdinal: existing.logicalRoundOrdinal ?? fields.logicalRoundOrdinal,
+    logicalRoundCap: existing.logicalRoundCap ?? fields.logicalRoundCap,
     schemaVersion: 1,
     updatedAt,
     heartbeatAtUtc: PACK_REVIEW_ACTIVE_STATUSES.has(String(fields.status ?? existing.status))
