@@ -15,6 +15,10 @@ import { isDeepStrictEqual } from 'node:util';
 import { TURN_STATES } from '../chatgpt-browser-turn/contracts.ts';
 import {
   PACK_REVIEW_CAPS,
+  PACK_REVIEW_CAP_MAP_VERSION,
+  PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION,
+  PACK_REVIEW_DISTINCT_HEAD_CAPS,
+  PACK_REVIEW_LEGACY_CAP_MAP_VERSION,
   selectPackReviewGptSourceCardinality,
   type PackReviewAutomaticBudgetDisposition,
 } from '../pack-review-state.ts';
@@ -107,6 +111,7 @@ export interface PackReviewGptRoundRecord {
   schema: 'pack-review-gpt-round/v1';
   reviewer: 'gpt';
   tier: 'T1' | 'T2' | 'T3';
+  accountingVersion?: string;
   roundOrdinal: number;
   cardinality: number;
   issueNumber: number;
@@ -177,6 +182,19 @@ export function derivePackReviewGptCoverage(round: PackReviewGptRoundRecord | un
   };
 }
 
+export interface PackReviewNativeAttemptBinding {
+  schema: 'pack-review-native-attempt/v1';
+  reviewer: 'codex' | 'claude';
+  invocationOrdinal: number;
+  startedAtUtc: string;
+  effectiveBudgetMs: number;
+  wrapperPid: number;
+  processGroupId?: number;
+  childPid?: number;
+  childProcessGroupId?: number;
+  childStartedAtUtc?: string;
+}
+
 export interface PackReviewRunRecord {
   schemaVersion: 1;
   id: string;
@@ -194,6 +212,11 @@ export interface PackReviewRunRecord {
   trustedPackRoot: string;
   sourceRepoRoot: string;
   automaticBudgetDisposition: PackReviewAutomaticBudgetDisposition;
+  accountingVersion?: string;
+  reviewCycleId?: string;
+  logicalRoundOrdinal?: number;
+  resolvedReviewer?: 'gpt' | 'codex' | 'claude';
+  nativeAttempt?: PackReviewNativeAttemptBinding;
   reviewTargetRoot?: string;
   runnerPid: number;
   createdAt: string;
@@ -293,6 +316,10 @@ export interface CreatePackReviewRunInput extends PackReviewStoreOptions {
   canonicalRepository?: string;
   legacyRepositoryBySourceRoot?: Record<string, string>;
   reviewRound?: PackReviewGptRoundRecord;
+  accountingVersion?: string;
+  reviewCycleId?: string;
+  logicalRoundOrdinal?: number;
+  resolvedReviewer?: 'gpt' | 'codex' | 'claude';
   automaticBudgetDisposition?: PackReviewAutomaticBudgetDisposition;
   allowCompletedSameHeadReplay?: boolean;
 }
@@ -613,15 +640,27 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
     throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid reviewRound tier`);
   }
   const tier = raw.tier;
+  const accountingVersion = raw.accountingVersion === undefined
+    ? PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION
+    : requiredJsonString(raw.accountingVersion, 'reviewRound accountingVersion', path);
+  if (![PACK_REVIEW_CAP_MAP_VERSION, PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION, PACK_REVIEW_LEGACY_CAP_MAP_VERSION]
+      .includes(accountingVersion)) {
+    throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid reviewRound accountingVersion`);
+  }
   const roundOrdinal = requiredJsonPositiveInteger(raw.roundOrdinal, 'reviewRound roundOrdinal', path);
   const cardinality = requiredJsonPositiveInteger(raw.cardinality, 'reviewRound cardinality', path);
-  if (roundOrdinal > PACK_REVIEW_CAPS[tier]) {
+  const tierCap = accountingVersion === PACK_REVIEW_CAP_MAP_VERSION
+    ? PACK_REVIEW_CAPS[tier]
+    : PACK_REVIEW_DISTINCT_HEAD_CAPS[tier];
+  if (roundOrdinal > tierCap) {
     throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: reviewRound ordinal exceeds tier cap`);
   }
   const expectedCardinality = selectPackReviewGptSourceCardinality({
     reviewer: 'gpt',
     tier,
+    accountingVersion,
     roundOrdinal,
+    accountingVersion,
   });
   if (cardinality !== expectedCardinality) {
     throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: reviewRound cardinality violates tier/round policy`);
@@ -773,11 +812,12 @@ function assertFrozenGptRoundIdentity(
 ): void {
   const immutableFields: Array<keyof Pick<
     PackReviewGptRoundRecord,
-    'schema' | 'reviewer' | 'tier' | 'roundOrdinal' | 'cardinality' | 'issueNumber' | 'boundIssueSnapshotDigest'
+    'schema' | 'reviewer' | 'tier' | 'accountingVersion' | 'roundOrdinal' | 'cardinality' | 'issueNumber' | 'boundIssueSnapshotDigest'
   >> = [
     'schema',
     'reviewer',
     'tier',
+    'accountingVersion',
     'roundOrdinal',
     'cardinality',
     'issueNumber',
@@ -1077,6 +1117,39 @@ export function normalizePackReviewCanonicalRepository(value: string): string {
   return slug;
 }
 
+function normalizePackReviewNativeAttempt(value: unknown, path = ''): PackReviewNativeAttemptBinding | undefined {
+  if (value === undefined || value === null) return undefined;
+  const raw = asObject(value);
+  if (raw.schema !== 'pack-review-native-attempt/v1') {
+    throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid nativeAttempt schema`);
+  }
+  if (raw.reviewer !== 'codex' && raw.reviewer !== 'claude') {
+    throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid nativeAttempt reviewer`);
+  }
+  const invocationOrdinal = requiredJsonPositiveInteger(raw.invocationOrdinal, 'nativeAttempt invocationOrdinal', path);
+  const startedAtUtc = requiredJsonString(raw.startedAtUtc, 'nativeAttempt startedAtUtc', path);
+  const effectiveBudgetMs = requiredJsonPositiveInteger(raw.effectiveBudgetMs, 'nativeAttempt effectiveBudgetMs', path);
+  const wrapperPid = requiredJsonPositiveInteger(raw.wrapperPid, 'nativeAttempt wrapperPid', path);
+  const optionalPid = (name: string): number | undefined => raw[name] === undefined
+    ? undefined
+    : requiredJsonPositiveInteger(raw[name], `nativeAttempt ${name}`, path);
+  const childStartedAtUtc = raw.childStartedAtUtc === undefined
+    ? undefined
+    : requiredJsonString(raw.childStartedAtUtc, 'nativeAttempt childStartedAtUtc', path);
+  return {
+    schema: 'pack-review-native-attempt/v1',
+    reviewer: raw.reviewer,
+    invocationOrdinal,
+    startedAtUtc,
+    effectiveBudgetMs,
+    wrapperPid,
+    ...(optionalPid('processGroupId') === undefined ? {} : { processGroupId: optionalPid('processGroupId') }),
+    ...(optionalPid('childPid') === undefined ? {} : { childPid: optionalPid('childPid') }),
+    ...(optionalPid('childProcessGroupId') === undefined ? {} : { childProcessGroupId: optionalPid('childProcessGroupId') }),
+    ...(childStartedAtUtc === undefined ? {} : { childStartedAtUtc }),
+  };
+}
+
 function packReviewRunKey(
   prNumber: number,
   headSha: string,
@@ -1121,10 +1194,14 @@ function matchesPackReviewRunInput(
   headSha: string,
   canonicalRepository?: string,
   sourceRepoRoot?: string,
+  reviewCycleId?: string,
+  logicalRoundOrdinal?: number,
 ): boolean {
   if (record.projectId !== projectId || record.prNumber !== prNumber || record.targetSha !== headSha) {
     return false;
   }
+  if (reviewCycleId !== undefined && record.reviewCycleId !== reviewCycleId) return false;
+  if (logicalRoundOrdinal !== undefined && record.logicalRoundOrdinal !== logicalRoundOrdinal) return false;
   const recordRepository = record.canonicalRepository
     ?? canonicalRepositoryFromRunKey(record.key, record.prNumber, record.targetSha);
   if (canonicalRepository && recordRepository) return canonicalRepository === recordRepository;
@@ -1286,6 +1363,30 @@ function parseRecord(
   const createdAt = requiredString(raw.createdAt, 'createdAt', path);
   const updatedAt = requiredString(raw.updatedAt, 'updatedAt', path);
   const automaticBudgetDisposition = normalizeAutomaticBudgetDisposition(raw.automaticBudgetDisposition, path);
+  const accountingVersion = raw.accountingVersion === undefined
+    ? undefined
+    : requiredJsonString(raw.accountingVersion, 'accountingVersion', path);
+  if (accountingVersion !== undefined
+      && ![PACK_REVIEW_CAP_MAP_VERSION, PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION, PACK_REVIEW_LEGACY_CAP_MAP_VERSION]
+        .includes(accountingVersion)) {
+    throw new Error(`corrupt pack review run record at ${path}: invalid accountingVersion`);
+  }
+  const reviewCycleId = raw.reviewCycleId === undefined
+    ? undefined
+    : requiredJsonString(raw.reviewCycleId, 'reviewCycleId', path);
+  const logicalRoundOrdinal = raw.logicalRoundOrdinal === undefined
+    ? undefined
+    : requiredJsonPositiveInteger(raw.logicalRoundOrdinal, 'logicalRoundOrdinal', path);
+  const resolvedReviewer = raw.resolvedReviewer === undefined
+    ? undefined
+    : String(raw.resolvedReviewer);
+  if (resolvedReviewer !== undefined && !['gpt', 'codex', 'claude'].includes(resolvedReviewer)) {
+    throw new Error(`corrupt pack review run record at ${path}: invalid resolvedReviewer`);
+  }
+  const nativeAttempt = normalizePackReviewNativeAttempt(raw.nativeAttempt, path);
+  if (nativeAttempt && resolvedReviewer && nativeAttempt.reviewer !== resolvedReviewer) {
+    throw new Error(`corrupt pack review run record at ${path}: nativeAttempt reviewer mismatch`);
+  }
   const reviewRound = raw.reviewRound === undefined || raw.reviewRound === null
     ? undefined
     : normalizePackReviewGptRoundRecord(raw.reviewRound, path);
@@ -1341,6 +1442,11 @@ function parseRecord(
     trustedPackRoot: String(raw.trustedPackRoot ?? ''),
     sourceRepoRoot: String(raw.sourceRepoRoot ?? ''),
     automaticBudgetDisposition,
+    accountingVersion,
+    reviewCycleId,
+    logicalRoundOrdinal,
+    resolvedReviewer: resolvedReviewer as PackReviewRunRecord['resolvedReviewer'],
+    nativeAttempt,
     reviewRound,
     runnerPid: Number(raw.runnerPid ?? 0),
     createdAt,
@@ -1680,6 +1786,8 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       headSha,
       canonicalRepository,
       input.sourceRepoRoot,
+      input.reviewCycleId,
+      input.logicalRoundOrdinal,
     );
     const active = boundRecords.filter((record) => matchesInput(record)
       && PACK_REVIEW_ACTIVE_STATUSES.has(record.status)
@@ -1748,6 +1856,10 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       sourceRepoRoot: resolve(input.sourceRepoRoot),
       automaticBudgetDisposition: normalizeNewAutomaticBudgetDisposition(input.automaticBudgetDisposition),
       canonicalRepository,
+      ...(input.accountingVersion ? { accountingVersion: input.accountingVersion } : {}),
+      ...(input.reviewCycleId ? { reviewCycleId: input.reviewCycleId } : {}),
+      ...(input.logicalRoundOrdinal ? { logicalRoundOrdinal: input.logicalRoundOrdinal } : {}),
+      ...(input.resolvedReviewer ? { resolvedReviewer: input.resolvedReviewer } : {}),
       ...(input.reviewRound ? { reviewRound: input.reviewRound } : {}),
       runnerPid: process.pid,
       createdAt: now,
@@ -1780,6 +1892,9 @@ function buildUpdatedPackReviewRun(
     targetSha: existing.targetSha,
     headSha: existing.headSha,
     canonicalRepository: existing.canonicalRepository ?? fields.canonicalRepository,
+    accountingVersion: existing.accountingVersion ?? fields.accountingVersion,
+    reviewCycleId: existing.reviewCycleId ?? fields.reviewCycleId,
+    logicalRoundOrdinal: existing.logicalRoundOrdinal ?? fields.logicalRoundOrdinal,
     schemaVersion: 1,
     updatedAt,
     heartbeatAtUtc: PACK_REVIEW_ACTIVE_STATUSES.has(String(fields.status ?? existing.status))
