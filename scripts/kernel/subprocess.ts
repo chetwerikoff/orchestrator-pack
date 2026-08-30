@@ -99,14 +99,24 @@ function errnoCode(error: unknown): string | undefined {
     : undefined;
 }
 
-function groupExists(pid: number): boolean {
-  if (process.platform === 'win32') return false;
+export type PosixProcessGroupObservation = 'running' | 'stopped' | 'observation_unavailable';
+
+export function observePosixProcessGroup(processGroupId: number): PosixProcessGroupObservation {
+  if (process.platform === 'win32') return 'observation_unavailable';
+  if (!Number.isInteger(processGroupId) || processGroupId <= 0) return 'observation_unavailable';
   try {
-    process.kill(-pid, 0);
-    return true;
+    process.kill(-processGroupId, 0);
+    return 'running';
   } catch (error) {
-    return errnoCode(error) === 'EPERM';
+    const code = errnoCode(error);
+    if (code === 'EPERM') return 'running';
+    if (code === 'ESRCH') return 'stopped';
+    return 'observation_unavailable';
   }
+}
+
+function groupExists(pid: number): boolean {
+  return observePosixProcessGroup(pid) === 'running';
 }
 
 function signalTree(pid: number, signal: NodeJS.Signals): void {
