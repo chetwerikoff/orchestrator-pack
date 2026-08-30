@@ -1,5 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
+import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -178,6 +179,69 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
     expect(observed).toMatchObject({ state: 'reply_recovery_required', replacementEligible: false });
   });
 
+  it('uses the live fallback Claude child after same-run active-binding rollover until its own ceiling', async () => {
+    if (process.platform === 'win32') return;
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const firstStartedAt = '2026-08-30T00:00:00.000Z';
+    const fallbackStartedAt = '2026-08-30T00:05:00.000Z';
+    const first = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
+    if (!first.pid) throw new Error('first fixture child did not start');
+    await sleep(20);
+
+    const run = gptRun(firstStartedAt);
+    run.reviewRound = undefined;
+    run.resolvedReviewer = 'claude';
+    run.nativeAttempt = {
+      schema: 'pack-review-native-attempt/v1',
+      reviewer: 'claude',
+      invocationOrdinal: 1,
+      startedAtUtc: firstStartedAt,
+      effectiveBudgetMs: 30 * 60_000,
+      wrapperPid: first.pid,
+      processGroupId: first.pid,
+      childPid: first.pid,
+      childProcessGroupId: first.pid,
+      childStartedAtUtc: firstStartedAt,
+    };
+
+    process.kill(-first.pid, 'SIGKILL');
+    await sleep(20);
+
+    const fallback = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
+    if (!fallback.pid) throw new Error('fallback fixture child did not start');
+    try {
+      await sleep(20);
+      run.nativeAttempt = {
+        schema: 'pack-review-native-attempt/v1',
+        reviewer: 'claude',
+        invocationOrdinal: 2,
+        startedAtUtc: fallbackStartedAt,
+        effectiveBudgetMs: 30 * 60_000,
+        wrapperPid: fallback.pid,
+        processGroupId: fallback.pid,
+        childPid: fallback.pid,
+        childProcessGroupId: fallback.pid,
+        childStartedAtUtc: fallbackStartedAt,
+      };
+
+      expect(observeNativePackReviewAttempt(run, Date.parse(fallbackStartedAt) + 14 * 60_000))
+        .toMatchObject({
+          reviewer: 'claude',
+          state: 'running',
+          replacementEligible: false,
+          nativeReplacementCeilingMs: 15 * 60_000,
+        });
+      expect(observeNativePackReviewAttempt(run, Date.parse(fallbackStartedAt) + 15 * 60_000))
+        .toMatchObject({
+          reviewer: 'claude',
+          state: 'running',
+          replacementEligible: true,
+          nativeReplacementCeilingMs: 15 * 60_000,
+        });
+    } finally {
+      try { process.kill(-fallback.pid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+  });
   it('keeps native replacement conservative when no process-group binding is observable', () => {
     const run = gptRun('2026-08-30T00:00:00.000Z');
     run.reviewRound = undefined;
