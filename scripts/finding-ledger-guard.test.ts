@@ -2339,6 +2339,57 @@ describe('receipt-backed finding ledger operator-stage waiver regression #1778',
     expect(result.errors.join('\n')).not.toContain('remote authority');
   });
 
+  it('does not open or parse supplied --remote-authority paths on the final-acceptance CLI path', () => {
+    const fixture = finalAcceptanceWaiverFixture();
+    const stateRoot = mkdtempSync(path.join(tmpdir(), 'finding-ledger-1779-'));
+    const previousStateRoot = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+    const canonical = path.join(stateRoot, '.review', '1779');
+    try {
+      process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = stateRoot;
+      mkdirSync(canonical, { recursive: true });
+      const intakePath = path.join(canonical, 'tier-intake.json');
+      const ledgerPath = path.join(canonical, 'finding-disposition-ledger.json');
+      const relayPath = path.join(canonical, 'verified-relay-evidence.json');
+      writeFileSync(intakePath, JSON.stringify(fixture.episodeAuthority.tierIntake));
+      writeFileSync(ledgerPath, fixture.emptyLedger);
+      writeFileSync(relayPath, JSON.stringify(fixture.verifiedRelayEvidence));
+      fixture.stageReceipts.forEach((receipt, index) => {
+        writeFileSync(path.join(canonical, 'stage-completeness-receipt-' + (index + 1) + '.json'), JSON.stringify(receipt));
+      });
+      fixture.captures.forEach((capture, index) => {
+        writeFileSync(path.join(canonical, capture.name), fixture.texts[index]);
+      });
+
+      const argv = [
+        'node', 'scripts/finding-ledger-guard.mjs',
+        '--ledger', ledgerPath,
+        '--captures-dir', canonical,
+        '--phase', 'final-acceptance',
+        '--adoption-timestamp', '0',
+        '--issue-revision', fixture.stageReceipt.sourceRevision,
+        '--stage-terminal',
+        '--receipt-directory', canonical,
+        '--tier-intake', intakePath,
+        '--verified-relay-evidence', relayPath,
+      ];
+      expect(runCli(argv)).toBe(0);
+
+      const stalePath = path.join(stateRoot, 'stale-remote-authority.json');
+      const malformedPath = path.join(stateRoot, 'malformed-remote-authority.json');
+      const nonexistentPath = path.join(stateRoot, 'nonexistent-remote-authority.json');
+      writeFileSync(stalePath, JSON.stringify({ schema: 'mismatched-remote-authority/v0' }));
+      writeFileSync(malformedPath, '{');
+      expect(runCli([...argv, '--remote-authority', stalePath])).toBe(0);
+      expect(runCli([...argv, '--remote-authority', malformedPath])).toBe(0);
+      expect(runCli([...argv, '--remote-authority', nonexistentPath])).toBe(0);
+      expect(runCli([...argv, '--remote-authority'])).toBe(1);
+    } finally {
+      if (previousStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previousStateRoot;
+      rmSync(stateRoot, { recursive: true, force: true });
+    }
+  });
+
   it('locks current-main receipt-backed waiver acceptance with only the real slot-01 governed capture', () => {
     const fixture = waivedArchitecturalReviewFixture();
     expect(fixture.stageReceipt.producerEvidence).toBe('waived');
