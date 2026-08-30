@@ -121,6 +121,10 @@ export function isOpenCodeComposerEmpty(lines: readonly string[]): boolean {
       sawLeftEdge = true;
       continue;
     }
+    if (/^┃\s+TeamoRouter 钱包余额不足，请前往 https:\/\/teamorouter\.cn\/dashboard\?buy=1 充值后继续使用$/u.test(trimmed)) {
+      sawLeftEdge = true;
+      continue;
+    }
     if (!trimmed.startsWith('┃')) break;
     sawLeftEdge = true;
     if (/^┃\s+Pack-Opk-[0-9a-f]+(?:\s|$)/iu.test(trimmed)) continue;
