@@ -747,6 +747,8 @@ node --experimental-strip-types scripts/pack-review-runner.ts reconcile \
   --pr-number <PR_NUMBER> --immediate
 ```
 
+For operator no-review waiver evidence and exact-head receipt staleness, use only `docs/pack-review-waiver-merge-runbook.md`.
+
 The reconciler first re-reads credentialed GitHub source comments. For a frozen
 three-source round, 3/3 settles normally; 2/3 remains waiting before the existing
 shared stale/grace threshold and may settle once after that threshold as

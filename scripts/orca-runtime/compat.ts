@@ -14,6 +14,7 @@ export interface OrcaTerminalReadResult {
   lines?: string[];
   nextCursor?: number;
   oldestCursor?: number;
+  source?: 'screen' | 'stream' | 'unknown';
 }
 
 export interface OrcaOperationFailure {
@@ -85,7 +86,11 @@ function normalizeLegacyRead(
   if (current) {
     if (!Array.isArray(current.tail)
       || !current.tail.every((line) => typeof line === 'string')
-      || (current.nextCursor !== null && typeof current.nextCursor !== 'string')) {
+      || (current.nextCursor !== null && typeof current.nextCursor !== 'string')
+      || (current.source !== undefined
+        && current.source !== 'screen'
+        && current.source !== 'stream'
+        && current.source !== 'unknown')) {
       return {
         ok: false,
         operation: 'terminal_read',
@@ -96,16 +101,18 @@ function normalizeLegacyRead(
         },
       };
     }
+    const source = current.source ?? 'unknown';
     return {
       ...response,
       result: {
         lines: [...current.tail],
-        ...(current.nextCursor === null
+        source,
+        ...(source === 'screen' || current.nextCursor === null
           ? {}
           : { nextCursor: toCompatibilityCursor(handle, current.nextCursor) }),
-        ...(typeof current.oldestCursor === 'string'
-          ? { oldestCursor: toCompatibilityCursor(handle, current.oldestCursor) }
-          : {}),
+        ...(source === 'screen' || typeof current.oldestCursor !== 'string'
+          ? {}
+          : { oldestCursor: toCompatibilityCursor(handle, current.oldestCursor) }),
       },
     };
   }
@@ -122,7 +129,24 @@ function normalizeLegacyRead(
       },
     };
   }
+  const resultSource = result.source;
+  if (resultSource !== undefined
+    && resultSource !== 'screen'
+    && resultSource !== 'stream'
+    && resultSource !== 'unknown') {
+    return {
+      ok: false,
+      operation: 'terminal_read',
+      outcomeCategory: 'supported_operation_failure',
+      error: {
+        code: 'orca_terminal_read_shape_unsupported',
+        message: 'Orca terminal read response does not match a supported shape',
+      },
+    };
+  }
+  const source = resultSource ?? 'unknown';
   const normalizeCursor = (value: string | number | null | undefined): number | undefined => {
+    if (source === 'screen') return undefined;
     if (typeof value === 'number' && Number.isFinite(value)) return value;
     if (typeof value === 'string') return toCompatibilityCursor(handle, value);
     return undefined;
@@ -133,6 +157,7 @@ function normalizeLegacyRead(
     ...response,
     result: {
       lines: [...result.lines],
+      source,
       ...(nextCursor === undefined ? {} : { nextCursor }),
       ...(oldestCursor === undefined ? {} : { oldestCursor }),
     },

@@ -127,6 +127,12 @@ function changedSnapshotPaths(before, after) {
   return [...paths].filter((path) => before.get(path) !== after.get(path));
 }
 
+export function isExternalJournalSnapshotOnlyChange(changedPaths, observedPaths = new Set()) {
+  const changed = [...changedPaths];
+  const journalOnly = changed.every((path) => path === EXTERNALLY_MUTABLE_JOURNAL_PATH);
+  return journalOnly && (observedPaths.has(EXTERNALLY_MUTABLE_JOURNAL_PATH) || changed.length > 0);
+}
+
 function normalizePowerShellValue(value) {
   const text = String(value ?? '').trim();
   if (text.length >= 2 && text.startsWith("'") && text.endsWith("'")) {
@@ -495,8 +501,8 @@ export function startParentLiveStoreGuard(env = process.env) {
       for (const store of stores) {
         const observed = observedExternalTouches.get(store.id);
         const changed = changedPathsByStore.get(store.id) ?? [];
-        if (observed?.has(EXTERNALLY_MUTABLE_JOURNAL_PATH)
-          && changed.every((path) => path === EXTERNALLY_MUTABLE_JOURNAL_PATH)) {
+        if (store.id === EXTERNALLY_MUTABLE_JOURNAL_STORE_ID
+          && isExternalJournalSnapshotOnlyChange(changed, observed ?? new Set())) {
           externallySettledStores.add(store.id);
         }
       }

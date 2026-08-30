@@ -61,6 +61,7 @@ import {
 import {
   PACK_REVIEW_ACTIVE_STATUSES,
   createPackReviewRun,
+  derivePackReviewGptCoverage,
   getPackReviewRun,
   hasPersistedPackReviewVerdict,
   heartbeatPackReviewRun,
@@ -118,7 +119,7 @@ import {
   type PackReviewer,
   type PackReviewerLayerOverrides,
 } from './lib/resolve-pack-reviewer.ts';
-import { resolveRepositorySlug } from './lib/pack-gpt-reviewer.ts';
+import { resolveGptBrowserConfig, resolveRepositorySlug } from './lib/pack-gpt-reviewer.ts';
 import {
   createPackGptSourceCommentTransport,
   resolvePackGptSourceComment,
@@ -126,6 +127,7 @@ import {
   type PackGptSourceCommentTransport,
 } from './lib/pack-gpt-source-comment.ts';
 import type { PackGptSourceIdentity } from './lib/pack-gpt-source-comment-contract.ts';
+import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
 import {
   captureBoundIssueSnapshot,
   computeBoundIssueSnapshotHash,
@@ -238,6 +240,13 @@ export interface ReconcileStalePackReviewRunsInput {
   storeRoot?: string;
   prNumber?: number;
   immediate?: boolean;
+  /**
+   * Controls whether this reconciliation invocation may create a new degraded
+   * partial settlement after grace. Production entrypoints set this explicitly:
+   * automatic pre-start reconciliation is false; scoped CLI reconcile is true
+   * only with --immediate. Undefined preserves legacy direct-call recovery.
+   */
+  settlePartialAfterGrace?: boolean;
   baseRef?: string;
   fixtureCurrentPrHeadSha?: string;
   fixtureGptSourceCommentTransport?: PackGptSourceCommentTransport;
@@ -979,6 +988,12 @@ function gptUsableSourceCount(round: PackReviewGptRoundRecord | undefined): numb
   )).length ?? 0;
 }
 
+function packReviewRunOutputProjection(run: PackReviewRunRecord | null): (PackReviewRunRecord & { coverage?: NonNullable<ReturnType<typeof derivePackReviewGptCoverage>> }) | null {
+  if (!run) return null;
+  const coverage = derivePackReviewGptCoverage(run.reviewRound);
+  return coverage ? { ...run, coverage } : run;
+}
+
 function freezeGptRoundSourceCount(
   runId: string,
   requiredSourceCount: number,
@@ -1105,8 +1120,24 @@ function formatGithubReviewBody(run: PackReviewRunRecord, payload: ReviewPayload
     `Head: \`${run.targetSha}\``,
     '',
   ];
+  const coverage = derivePackReviewGptCoverage(run.reviewRound);
   if (run.reviewRound?.cardinality === 3 && run.reviewRound.settledSourceCount === 2) {
     lines.push('Sources: 2/3 (degraded after timeout)', '');
+  } else if (coverage?.kind === 'partial') {
+    lines.push(`Sources: ${coverage.completedSourceCount}/${coverage.cardinality} (partial)`, '');
+    if (!hasHarvestIncident && coverage.incompleteSources.length > 0) {
+      lines.push('Incomplete sources:', '');
+      for (const source of coverage.incompleteSources) {
+        const details = [
+          source.terminalClass,
+          source.timedOut ? 'timed_out' : '',
+          source.cancelled ? 'cancelled' : '',
+          source.reason,
+        ].filter(Boolean);
+        lines.push(`- ${source.sourceSlotId}: ${details.join('; ') || source.lifecycle}`);
+      }
+      lines.push('');
+    }
   }
   if (payload.findings.length === 0) {
     lines.push(hasHarvestIncident ? 'No accepted review findings.' : 'No findings.', '');
@@ -1756,17 +1787,32 @@ async function runGptSourceBatch(options: {
           prNumber: options.target.prNumber,
         }));
 
+  const resolveLaunchBinding = (): Pick<PackReviewSourceSlotRecord, 'launchProfileKey' | 'launchCdpUrl'> | null => {
+    try {
+      const config = resolveGptBrowserConfig(process.env);
+      return {
+        launchProfileKey: configuredProfileKey(config.profile, config.cdpUrl),
+        launchCdpUrl: config.cdpUrl,
+      };
+    } catch (error) {
+      if (process.env.OPK_VITEST_HARNESS === '1') return null;
+      throw error;
+    }
+  };
+
   const outcomes = await Promise.all(options.round.sourceSlots.map(async (planned) => {
     const slotId = planned.slotId;
     let round = options.round;
     let attemptOrdinal = 1;
     let invocationId = randomUUID();
     const markInvocationStarted = async (admissionStartedAt: number): Promise<void> => {
+      const launchBinding = resolveLaunchBinding();
       round = updateGptRoundSlot(options.run.id, round, slotId, {
         lifecycle: 'invocation_started',
         admissionStartedAtUtc: new Date(admissionStartedAt).toISOString(),
         attemptOrdinal,
         invocationId,
+        ...(launchBinding ?? {}),
       }, { projectId: options.projectId, storeRoot: options.storeRoot });
       if (options.input.fixtureAfterGptInvocationBound) {
         await options.input.fixtureAfterGptInvocationBound({ slotId, attemptOrdinal, invocationId, round });
@@ -2164,10 +2210,23 @@ async function recoverStaleGptSourceComments(options: {
   round = persisted.reviewRound ?? round;
   let usableSourceCount = gptUsableSourceCount(round);
   const graceExpired = gptRoundGraceExpired(persisted);
+  const hasBlockingCompletedSource = round.sourceSlots.some((slot) => (
+    slot.lifecycle === 'terminal'
+    && (slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings')
+    && slot.payload
+    && classifyPackReviewPayload(slot.payload as ReviewPayload).blocking
+  ));
+  const settlePartialAfterGrace = options.input.settlePartialAfterGrace ?? true;
+  const blockingBelowDegradedQuorum = hasBlockingCompletedSource
+    && round.cardinality >= 3
+    && round.settledSourceCount === undefined
+    && usableSourceCount < 2;
   const requiredSourceCount = round.settledSourceCount
-    ?? (round.cardinality >= 3
-      ? (graceExpired ? 2 : round.cardinality)
-      : round.cardinality);
+    ?? (hasBlockingCompletedSource
+      ? Math.max(1, usableSourceCount)
+      : round.cardinality >= 3
+        ? (graceExpired && settlePartialAfterGrace ? 2 : round.cardinality)
+        : round.cardinality);
   if (usableSourceCount < requiredSourceCount) {
     const reason = round.cardinality >= 3 && !graceExpired
       ? `gpt_sources_waiting_for_grace:${usableSourceCount}/${round.cardinality}`
@@ -2184,7 +2243,9 @@ async function recoverStaleGptSourceComments(options: {
     };
   }
 
-  if (round.cardinality >= 3 && round.settledSourceCount === undefined) {
+  if (round.cardinality >= 3
+      && round.settledSourceCount === undefined
+      && !blockingBelowDegradedQuorum) {
     if (options.input.fixtureBeforeGptRoundFreeze) {
       await options.input.fixtureBeforeGptRoundFreeze({
         runId: options.run.id,
@@ -2820,6 +2881,7 @@ export async function reconcileStalePackReviewRuns(
             : `gpt_journaled_delivery_${resumed.reason}`,
           deliveryReason: resumed.reason,
           status: resumed.status,
+          coverage: derivePackReviewGptCoverage(run.reviewRound),
           ...(resumed.githubReviewId !== undefined ? { githubReviewId: resumed.githubReviewId } : {}),
           ...(resumed.githubReviewUrl ? { githubReviewUrl: resumed.githubReviewUrl } : {}),
         });
@@ -2873,6 +2935,7 @@ export async function reconcileStalePackReviewRuns(
               : `gpt_source_comments_recovered_delivery_${resumed.reason}`,
             deliveryReason: resumed.reason,
             status: resumed.status,
+            coverage: derivePackReviewGptCoverage(recoveredRun.reviewRound),
             ...(resumed.githubReviewId !== undefined ? { githubReviewId: resumed.githubReviewId } : {}),
             ...(resumed.githubReviewUrl ? { githubReviewUrl: resumed.githubReviewUrl } : {}),
           });
@@ -2888,6 +2951,53 @@ export async function reconcileStalePackReviewRuns(
         }
         continue;
       }
+
+      const recoveredSnapshot = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
+      const recoveryCoverage = derivePackReviewGptCoverage(recoveredSnapshot.reviewRound);
+      if (input.settlePartialAfterGrace === false
+          && recoveryCoverage?.kind === 'partial'
+          && recoveredSnapshot.reviewRound?.settledSourceCount === undefined) {
+        results.push({
+          runId: run.id,
+          terminalized: false,
+          statusReconciled: false,
+          hydratedSourceCount: recovery.hydratedSourceCount,
+          usableSourceCount: recovery.usableSourceCount,
+          graceExpired: recovery.graceExpired,
+          reason: 'gpt_partial_requires_explicit_immediate_reconcile',
+          coverage: recoveryCoverage,
+          nextAction: 'run the explicit scoped reconcile --immediate path after grace or when source evidence changes',
+        });
+        continue;
+      }
+      if (immediateActive
+          && recoveryCoverage?.kind === 'partial'
+          && recovery.graceExpired
+          && recovery.reason.startsWith('gpt_sources_incomplete_after_grace:')) {
+        await recordPackReviewUnfinishedTerminalStatus({
+          run: getPackReviewRun(run.id, { projectId, storeRoot }) ?? run,
+          status: 'failed',
+          failureReason: recovery.reason,
+          projectId,
+          storeRoot,
+          writeRequiredStatus: statusWriter,
+        });
+        const failed = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
+        results.push({
+          runId: run.id,
+          terminalized: true,
+          statusReconciled: true,
+          hydratedSourceCount: recovery.hydratedSourceCount,
+          usableSourceCount: recovery.usableSourceCount,
+          graceExpired: recovery.graceExpired,
+          reason: recovery.reason,
+          status: failed.status,
+          coverage: derivePackReviewGptCoverage(failed.reviewRound),
+          nextAction: recovery.nextAction ?? 'reconcile or retry the missing source work',
+        });
+        continue;
+      }
+
       if (needsGptSourceRecovery) {
         results.push({
           runId: run.id,
@@ -2910,6 +3020,7 @@ export async function reconcileStalePackReviewRuns(
           usableSourceCount: recovery.usableSourceCount,
           graceExpired: recovery.graceExpired,
           reason: recovery.reason,
+          coverage: recoveryCoverage,
           nextAction: recovery.nextAction ?? 'let the current review continue and rerun scoped reconcile if needed',
         });
         continue;
@@ -3331,6 +3442,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       fixtureWorkerNotifier: input.fixtureWorkerNotifier,
     } : {}),
     resolveRepositorySlug: resolveSlug,
+    settlePartialAfterGrace: false,
     beforeStaleStatusWrite: input.fixtureBeforeStaleStatusWrite,
   });
   const claimMode = input.claimMode ?? 'acquire';
@@ -3740,6 +3852,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         headSha: target.headSha,
         runId: resumeCandidate.id,
         status: resumed.status,
+        coverage: derivePackReviewGptCoverage(resumeCandidate.reviewRound),
         httpStatus: 200,
         ...(resumed.githubReviewId !== undefined ? { githubReviewId: resumed.githubReviewId } : {}),
         ...(resumed.githubReviewUrl ? { githubReviewUrl: resumed.githubReviewUrl } : {}),
@@ -3787,6 +3900,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         runId: run.id,
         httpStatus: 200,
         status: run.status,
+        coverage: derivePackReviewGptCoverage(run.reviewRound),
       };
     }
 
@@ -4110,6 +4224,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           reason: published ? 'concurrent_reconcile_settled' : 'concurrent_reconcile_owns_delivery',
           runId: run.id,
           status: run.status,
+          coverage: derivePackReviewGptCoverage(run.reviewRound),
           httpStatus: 200,
           ...(run.githubReviewId !== undefined ? { githubReviewId: run.githubReviewId } : {}),
           ...(run.githubReviewUrl ? { githubReviewUrl: run.githubReviewUrl } : {}),
@@ -4121,36 +4236,11 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         headSha: target.headSha,
         request,
       }));
-      if (diagnostics.nonHarvestIncompleteSources.length > 0) {
-        const first = diagnostics.nonHarvestIncompleteSources[0]!;
-        const status: Extract<PackReviewRunStatus, 'failed' | 'timed_out' | 'cancelled'> = diagnostics.nonHarvestIncompleteSources.some((item) => item.cancelled)
-          ? 'cancelled'
-          : diagnostics.nonHarvestIncompleteSources.some((item) => item.timedOut)
-            ? 'timed_out'
-            : 'failed';
-        const failureReason = `gpt_source_non_complete:${first.sourceSlotId}:${first.classification}`;
-        await recordUnfinishedTerminal({
-          run,
-          status,
-          failureReason,
-          projectId,
-          storeRoot,
-          writeRequiredStatus,
-        });
-        terminal = true;
-        const runs = listPackReviewRuns({ projectId, storeRoot });
-        if (claimLease) await claimLease.release('run_started', runs);
-        return {
-          ok: false,
-          created: true,
-          reused: false,
-          reason: failureReason,
-          runId: run.id,
-          status,
-          httpStatus: status === 'timed_out' ? 504 : 422,
-        };
-      }
+      const coverage = derivePackReviewGptCoverage(run.reviewRound);
 
+      // Harvest failures are an immediate terminal overlay. They are deliberately
+      // evaluated before ordinary incompleteness so partial evidence is retained
+      // without waiting for the shared source grace.
       if (diagnostics.harvestIncidents.length > 0 && !classifyPackReviewPayload(payload).blocking) {
         payload = { ...payload, harvestIncidents: diagnostics.harvestIncidents };
         const posted = await postGithubReview({
@@ -4187,6 +4277,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           reason: 'harvest_failed',
           runId: run.id,
           status: 'failed',
+          coverage,
           httpStatus: 422,
           githubReviewId: posted.id,
           githubReviewUrl: posted.url,
@@ -4194,6 +4285,65 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       }
       if (diagnostics.harvestIncidents.length > 0) {
         payload = { ...payload, harvestIncidents: diagnostics.harvestIncidents };
+      }
+
+      if (diagnostics.nonHarvestIncompleteSources.length > 0
+          && !classifyPackReviewPayload(payload).blocking) {
+        if (coverage?.kind === 'partial') {
+          // Ordinary partial evidence is not a terminal failure and does not gain
+          // quorum merely because every slot is already terminal. Keep the run
+          // active until the existing scoped reconcile path is explicitly invoked.
+          run = updatePackReviewRun(run.id, {
+            status: 'reviewing',
+            latestRunStatus: 'reviewing',
+            failureReason: undefined,
+            completedAtUtc: undefined,
+          }, { projectId, storeRoot });
+          const runs = listPackReviewRuns({ projectId, storeRoot });
+          if (claimLease) await claimLease.release('run_started', runs);
+          return {
+            ok: true,
+            created: true,
+            reused: false,
+            reason: `gpt_sources_partial_pending_reconcile:${coverage.completedSourceCount}/${coverage.cardinality}`,
+            runId: run.id,
+            status: 'reviewing',
+            coverage,
+            httpStatus: 202,
+          };
+        }
+
+        // Only an empty completed-source census may fall back to the generic
+        // whole-round no-verdict terminal solely because ordinary source work did
+        // not complete.
+        const first = diagnostics.nonHarvestIncompleteSources[0]!;
+        const status: Extract<PackReviewRunStatus, 'failed' | 'timed_out' | 'cancelled'> = diagnostics.nonHarvestIncompleteSources.some((item) => item.cancelled)
+          ? 'cancelled'
+          : diagnostics.nonHarvestIncompleteSources.some((item) => item.timedOut)
+            ? 'timed_out'
+            : 'failed';
+        const failureReason = `gpt_source_non_complete:${first.sourceSlotId}:${first.classification}`;
+        await recordUnfinishedTerminal({
+          run,
+          status,
+          failureReason,
+          projectId,
+          storeRoot,
+          writeRequiredStatus,
+        });
+        terminal = true;
+        const runs = listPackReviewRuns({ projectId, storeRoot });
+        if (claimLease) await claimLease.release('run_started', runs);
+        return {
+          ok: false,
+          created: true,
+          reused: false,
+          reason: failureReason,
+          runId: run.id,
+          status,
+          coverage,
+          httpStatus: status === 'timed_out' ? 504 : 422,
+        };
       }
     }
 
@@ -4302,6 +4452,9 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     terminal = true;
     const runs = listPackReviewRuns({ projectId, storeRoot });
     if (claimLease) await claimLease.release('run_started', runs);
+    const terminalCoverage = derivePackReviewGptCoverage(
+      (getPackReviewRun(run.id, { projectId, storeRoot }) ?? run).reviewRound,
+    );
     return {
       ok: true,
       created: true,
@@ -4309,6 +4462,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       reason: delivered.reason,
       runId: run.id,
       status: delivered.status,
+      ...(terminalCoverage ? { coverage: terminalCoverage } : {}),
       httpStatus: 201,
       ...(delivered.githubReviewId !== undefined ? { githubReviewId: delivered.githubReviewId } : {}),
       ...(delivered.githubReviewUrl ? { githubReviewUrl: delivered.githubReviewUrl } : {}),
@@ -4495,13 +4649,18 @@ async function main(): Promise<void> {
   const input = { ...stdinPayload, ...cliArgs };
   if (subcommand === 'list') {
     const options = input as ListInput;
-    process.stdout.write(`${JSON.stringify({ runs: listPackReviewRuns({ projectId: options.projectId, storeRoot: options.storeRoot }) })}\n`);
+    process.stdout.write(`${JSON.stringify({
+      runs: listPackReviewRuns({ projectId: options.projectId, storeRoot: options.storeRoot })
+        .map((run) => packReviewRunOutputProjection(run)),
+    })}\n`);
     return;
   }
   if (subcommand === 'status') {
     const runId = trim(input.runId);
     if (!runId) throw new Error('status requires runId in JSON payload');
-    process.stdout.write(`${JSON.stringify({ run: getPackReviewRun(runId, input as ListInput) })}\n`);
+    process.stdout.write(`${JSON.stringify({
+      run: packReviewRunOutputProjection(getPackReviewRun(runId, input as ListInput)),
+    })}\n`);
     return;
   }
   if (subcommand === 'reset') {
@@ -4523,6 +4682,7 @@ async function main(): Promise<void> {
       storeRoot: trim(input.storeRoot) || undefined,
       prNumber: positiveInteger(input.prNumber, 'prNumber'),
       immediate: input.immediate === true,
+      settlePartialAfterGrace: input.immediate === true,
       baseRef: trim(input.baseRef) || DEFAULT_BASE_REF,
       fixtureCurrentPrHeadSha: (input as StartInput).fixtureCurrentPrHeadSha,
       fixtureGptSourceCommentTransport: (input as StartInput).fixtureGptSourceCommentTransport,

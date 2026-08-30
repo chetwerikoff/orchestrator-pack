@@ -8,7 +8,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runProcessSync } from './kernel/subprocess.js';
 import {
   parsePackGptReviewArgs,
@@ -237,6 +237,7 @@ function writeSuccessfulGhFixture(binRoot: string): void {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   process.env = { ...originalEnv };
   for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -1226,7 +1227,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     expect(readFileSync(capture, 'utf8')).toContain('finding-03');
   });
 
-  it('exhausts one zero-send collision retry without publishing a verdict', async () => {
+  it('preserves a 2/3 partial after one zero-send source exhausts its retry', async () => {
     const storeRoot = tempRoot('opk-gpt-zero-send-exhausted-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
@@ -1252,20 +1253,184 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       terminalClass: 'explicit_refusal:zero_send_collision_exhausted',
     });
     expect(result).toMatchObject({
-      ok: false,
-      status: 'failed',
-      reason: 'gpt_source_non_complete:source-02:explicit_refusal:zero_send_collision_exhausted',
+      ok: true,
+      status: 'reviewing',
+      reason: 'gpt_sources_partial_pending_reconcile:2/3',
+      coverage: {
+        kind: 'partial',
+        completedSourceCount: 2,
+        cardinality: 3,
+      },
     });
+    expect(run?.status).toBe('reviewing');
+    expect(run?.failureReason).toBeUndefined();
+    expect(run?.reviewRound?.settledSourceCount).toBeUndefined();
     expect(run?.reviewVerdict).toBeUndefined();
     expect(() => readFileSync(capture, 'utf8')).toThrow();
   });
 
-  it('keeps a possible-delivery source non-retryable and outside normal verdict publication', async () => {
+  it('fails an explicitly reconciled 1/3 partial after grace with the recovery reason', async () => {
+    const storeRoot = tempRoot('opk-gpt-one-of-three-after-grace-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    process.env.PACK_REVIEW_RUN_STALE_MINUTES = '2';
+    const statuses: Array<{ state: string; description?: string }> = [];
+
+    const result = await startPackReview(pluralStart(storeRoot, capture, {
+      fixtureRequiredStatusWriter: async (request) => {
+        statuses.push({ state: request.state, description: request.description });
+      },
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: successfulCleanReviewPayload('inv-source-01') }],
+        'source-02': [
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy', invocationId: 'inv-source-02-a' }), exitCode: 13 },
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy', invocationId: 'inv-source-02-b' }), exitCode: 13 },
+        ],
+        'source-03': [
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy', invocationId: 'inv-source-03-a' }), exitCode: 13 },
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy', invocationId: 'inv-source-03-b' }), exitCode: 13 },
+        ],
+      },
+    }));
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'reviewing',
+      coverage: { kind: 'partial', completedSourceCount: 1, cardinality: 3 },
+    });
+
+    const runId = String(result.runId);
+    const current = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
+    expect(current?.reviewRound).toBeDefined();
+    const admissions = current!.reviewRound!.sourceSlots
+      .map((slot) => Date.parse(slot.admissionStartedAtUtc ?? ''))
+      .filter((value) => Number.isFinite(value));
+    expect(admissions.length).toBeGreaterThan(0);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(Math.min(...admissions) + 3 * 60_000));
+
+    const emptySourceTransport: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => 'browser-gpt-bot',
+      listComments: async () => [],
+      getComment: async () => { throw new Error('unexpected source comment reread'); },
+    };
+    const reconciliation = await reconcileStalePackReviewRuns({
+      repoSlug: 'chetwerikoff/orchestrator-pack',
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1276,
+      immediate: true,
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixtureGptSourceCommentTransport: emptySourceTransport,
+      fixtureRequiredStatusWriter: async (request) => {
+        statuses.push({ state: request.state, description: request.description });
+      },
+    });
+
+    expect(reconciliation.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId,
+        terminalized: true,
+        statusReconciled: true,
+        reason: 'gpt_sources_incomplete_after_grace:1/3',
+        status: 'failed',
+        coverage: expect.objectContaining({
+          kind: 'partial',
+          completedSourceCount: 1,
+          cardinality: 3,
+        }),
+      }),
+    ]));
+    expect(getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot })).toMatchObject({
+      status: 'failed',
+      failureReason: 'gpt_sources_incomplete_after_grace:1/3',
+    });
+    expect(statuses.map((request) => request.state)).toEqual(['pending', 'error']);
+    expect(statuses.at(-1)?.description).toContain('partial source evidence (1/3)');
+  });
+
+  it.each([1, 2])('does not let non-immediate stale reconciliation settle an ordinary %i/3 partial after grace', async (completedCount) => {
+    const storeRoot = tempRoot(`opk-gpt-non-immediate-partial-${completedCount}-`);
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    process.env.PACK_REVIEW_RUN_STALE_MINUTES = '2';
+
+    const result = await startPackReview(pluralStart(storeRoot, capture, {
+      fixtureReviewBySourceSlot: {
+        'source-01': completedCount >= 1
+          ? [{ stdout: successfulCleanReviewPayload('inv-source-01') }]
+          : [{ stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy' }), exitCode: 13 }],
+        'source-02': completedCount >= 2
+          ? [{ stdout: successfulCleanReviewPayload('inv-source-02') }]
+          : [
+              { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy', invocationId: 'inv-source-02-a' }), exitCode: 13 },
+              { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy', invocationId: 'inv-source-02-b' }), exitCode: 13 },
+            ],
+        'source-03': [
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy', invocationId: 'inv-source-03-a' }), exitCode: 13 },
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy', invocationId: 'inv-source-03-b' }), exitCode: 13 },
+        ],
+      },
+    }));
+
+    const runId = String(result.runId);
+    const current = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
+    updatePackReviewRun(runId, { runnerPid: 2147483647 }, {
+      projectId: 'orchestrator-pack',
+      storeRoot,
+    });
+    const admissions = current!.reviewRound!.sourceSlots
+      .map((slot) => Date.parse(slot.admissionStartedAtUtc ?? ''))
+      .filter((value) => Number.isFinite(value));
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(Math.min(...admissions) + 3 * 60_000));
+
+    const reconciliation = await reconcileStalePackReviewRuns({
+      repoSlug: 'chetwerikoff/orchestrator-pack',
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1276,
+      settlePartialAfterGrace: false,
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixtureGptSourceCommentTransport: {
+        resolveActorLogin: async () => 'browser-gpt-bot',
+        listComments: async () => [],
+        getComment: async () => { throw new Error('unexpected source comment reread'); },
+      },
+      fixtureRequiredStatusWriter: async () => {},
+    });
+
+    expect(reconciliation.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId,
+        terminalized: false,
+        statusReconciled: false,
+        reason: 'gpt_partial_requires_explicit_immediate_reconcile',
+        coverage: expect.objectContaining({
+          kind: 'partial',
+          completedSourceCount: completedCount,
+          cardinality: 3,
+        }),
+      }),
+    ]));
+    const after = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
+    expect(after?.status).toBe('reviewing');
+    expect(after?.reviewRound?.settledSourceCount).toBeUndefined();
+  });
+
+  it('keeps a possible-delivery source non-retryable while preserving 2/3 partial evidence', async () => {
     const storeRoot = tempRoot('opk-gpt-possible-delivery-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
     process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
     delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    process.env.PACK_GPT_BROWSER_PROFILE = path.join(storeRoot, 'browser-profile');
+    process.env.PACK_GPT_BROWSER_CDP = 'http://127.0.0.1:9222';
 
     const result = await startPackReview(pluralStart(storeRoot, capture, {
       fixtureReviewBySourceSlot: {
@@ -1279,19 +1444,74 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     const uncertain = run?.reviewRound?.sourceSlots.find((slot) => slot.slotId === 'source-02');
     expect(uncertain?.terminalClass).toBe('possible_delivery');
     expect(uncertain?.attemptOrdinal).toBe(1);
+    expect(uncertain?.launchProfileKey).toMatch(/^profile-[0-9a-f]{32}$/);
+    expect(uncertain?.launchCdpUrl).toBe('http://127.0.0.1:9222');
     expect(result).toMatchObject({
-      ok: false,
-      status: 'failed',
-      reason: 'gpt_source_non_complete:source-02:possible_delivery',
+      ok: true,
+      status: 'reviewing',
+      reason: 'gpt_sources_partial_pending_reconcile:2/3',
+      coverage: {
+        kind: 'partial',
+        completedSourceCount: 2,
+        cardinality: 3,
+      },
     });
+    expect(run?.status).toBe('reviewing');
+    expect(run?.failureReason).toBeUndefined();
+    expect(run?.reviewRound?.settledSourceCount).toBeUndefined();
     expect(run?.reviewVerdict).toBeUndefined();
     expect(() => readFileSync(capture, 'utf8')).toThrow();
   });
 
+  it('keeps an ordinary blocking finding authoritative while exposing partial coverage', async () => {
+    const storeRoot = tempRoot('opk-gpt-blocking-partial-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    const statusRequests: Array<{ state: string; description: string }> = [];
+
+    const result = await startPackReview(pluralStart(storeRoot, capture, {
+      fixtureRequiredStatusWriter: async (request) => {
+        statusRequests.push({ state: request.state, description: request.description });
+      },
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: findingsPayload('real-blocker') }],
+        'source-02': [
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy' }), exitCode: 13 },
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy' }), exitCode: 13 },
+        ],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
+      },
+    }));
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'changes_requested',
+      coverage: {
+        kind: 'partial',
+        completedSourceCount: 2,
+        cardinality: 3,
+      },
+    });
+    const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
+    expect(run?.reviewVerdict).toBe('findings');
+    expect(run?.findingCount).toBe(1);
+    expect(statusRequests.map((request) => request.state)).toEqual(['pending', 'failure']);
+    const posted = readFileSync(capture, 'utf8');
+    expect(posted).toContain('Sources: 2/3 (partial)');
+    expect(posted).toContain('Incomplete sources:');
+    expect(posted).toContain('source-02');
+    expect(posted).toContain('explicit_refusal:zero_send_collision_exhausted');
+    expect(posted).toContain('real-blocker');
+  });
+
   it.each([
-    ['harvest_failed', successfulCleanReviewPayload('inv-source-01')],
-    ['harvest_failed with non-blocking finding', findingsPayload('non-blocking-real', 'non-blocking')],
-  ])('publishes diagnostic COMMENT and terminal error for %s without synthetic code findings', async (_name, sourceOne) => {
+    ['harvest_failed', 'harvest_failed', successfulCleanReviewPayload('inv-source-01')],
+    ['no_reply', 'no_reply', successfulCleanReviewPayload('inv-source-01')],
+    ['forbidden_verdict_envelope', 'forbidden_verdict_envelope', successfulCleanReviewPayload('inv-source-01')],
+    ['harvest_failed with non-blocking finding', 'harvest_failed', findingsPayload('non-blocking-real', 'non-blocking')],
+  ] as const)('publishes diagnostic COMMENT and terminal error for %s without synthetic code findings', async (_name, harvestClass, sourceOne) => {
     const storeRoot = tempRoot('opk-gpt-harvest-incident-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
@@ -1305,7 +1525,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       },
       fixtureReviewBySourceSlot: {
         'source-01': [{ stdout: sourceOne }],
-        'source-02': [{ stdout: harvestTerminalPayload('inv-source-02'), exitCode: 1 }],
+        'source-02': [{ stdout: harvestTerminalPayload('inv-source-02', harvestClass), exitCode: 1 }],
         'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
       },
     }));
@@ -1317,12 +1537,51 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     const posted = readFileSync(capture, 'utf8');
     expect(posted).toContain('Review harvest incidents');
     expect(posted).toContain('source-02');
-    expect(posted).toContain('harvest_failed');
+    expect(run?.reviewRound?.sourceSlots[1]?.terminalClass).toBe(harvestClass);
+    expect(run?.reviewRound?.sourceSlots[1]?.terminalResult).toMatchObject({
+      review_evidence: expect.objectContaining({
+        adapterPromptPath: '/fixture/gpt-evidence/inv-source-02/adapter-prompt.txt',
+      }),
+    });
+    expect(posted).toContain(harvestClass);
     expect(posted).toContain('/fixture/gpt-evidence/inv-source-02/adapter-prompt.txt');
     expect(posted).not.toContain('GPT source source-02 did not complete');
   });
 
-  it('keeps real blocking findings authoritative while reporting harvest incidents separately', async () => {
+  it('accepts ordinary partial blockers under the same severity semantics as delivery classification', async () => {
+    const storeRoot = tempRoot('opk-gpt-critical-blocking-partial-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+
+    const result = await startPackReview(pluralStart(storeRoot, capture, {
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: findingsPayload('critical-blocker', 'critical') }],
+        'source-02': [
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy' }), exitCode: 13 },
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy' }), exitCode: 13 },
+        ],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
+      },
+    }));
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'changes_requested',
+      coverage: { kind: 'partial', completedSourceCount: 2, cardinality: 3 },
+    });
+    expect(getPackReviewRun(String(result.runId), {
+      projectId: 'orchestrator-pack',
+      storeRoot,
+    })?.reviewVerdict).toBe('findings');
+  });
+
+  it.each([
+    'harvest_failed',
+    'no_reply',
+    'forbidden_verdict_envelope',
+  ] as const)('keeps real blocking findings authoritative while reporting %s separately', async (harvestClass) => {
     const storeRoot = tempRoot('opk-gpt-harvest-blocking-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
@@ -1332,7 +1591,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     const result = await startPackReview(pluralStart(storeRoot, capture, {
       fixtureReviewBySourceSlot: {
         'source-01': [{ stdout: findingsPayload('real-blocker') }],
-        'source-02': [{ stdout: harvestTerminalPayload('inv-source-02'), exitCode: 1 }],
+        'source-02': [{ stdout: harvestTerminalPayload('inv-source-02', harvestClass), exitCode: 1 }],
         'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
       },
     }));
@@ -1345,7 +1604,8 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     const posted = readFileSync(capture, 'utf8');
     expect(posted).toContain('real-blocker');
     expect(posted).toContain('Review harvest incidents');
-    expect(posted).toContain('harvest_failed');
+    expect(run?.reviewRound?.sourceSlots[1]?.terminalClass).toBe(harvestClass);
+    expect(posted).toContain(harvestClass);
     expect(posted).not.toContain('GPT source source-02 did not complete');
   });
 
@@ -2399,5 +2659,188 @@ describe('Issue #1741 failed GPT round source-comment settlement', () => {
     });
     expect(reviews).toHaveLength(1);
     expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toHaveLength(1);
+  });
+});
+
+
+
+describe('recovered sub-quorum blocking source regression', () => {
+  it('delivers a credentialed recovered 1/3 blocker without freezing settledSourceCount to one', async () => {
+    const storeRoot = tempRoot('opk-gpt-recovered-one-blocker-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    const issueBody = '```complexity-tier\ntier: T3\n```';
+    const sourceOneInvocation = '77777777-1111-4111-8111-111111111111';
+    const sourceTwoInvocation = '77777777-2222-4222-8222-222222222222';
+    const sourceThreeInvocation = '77777777-3333-4333-8333-333333333333';
+
+    initializePackReviewAuthority({
+      prNumber: 1787,
+      headSha: HEAD_A,
+      tier: 'T3',
+      options: { storeRoot },
+    });
+
+    const reviewRound: PackReviewGptRoundRecord = {
+      schema: 'pack-review-gpt-round/v1',
+      reviewer: 'gpt',
+      tier: 'T3',
+      roundOrdinal: 1,
+      cardinality: 3,
+      issueNumber: 1787,
+      boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(issueBody),
+      sourceSlots: [
+        {
+          slotId: 'source-01',
+          ordinal: 1,
+          lifecycle: 'terminal',
+          invocationId: sourceOneInvocation,
+          attemptOrdinal: 1,
+          admissionStartedAtUtc: '2026-08-29T03:00:00.000Z',
+          terminalClass: 'reviewer_output_malformed',
+          terminalResult: {
+            ...storedTerminalTurnResult(sourceOneInvocation),
+            source_comment_reconciliation: 'conflict',
+          },
+        },
+        {
+          slotId: 'source-02',
+          ordinal: 2,
+          lifecycle: 'terminal',
+          invocationId: sourceTwoInvocation,
+          attemptOrdinal: 2,
+          terminalClass: 'explicit_refusal:zero_send_collision_exhausted',
+          terminalResult: storedTerminalTurnResult(
+            sourceTwoInvocation,
+            { state: 'profile_busy', scope: 'profile', cause: 'profile_busy', send_count: 0 },
+          ),
+        },
+        {
+          slotId: 'source-03',
+          ordinal: 3,
+          lifecycle: 'terminal',
+          invocationId: sourceThreeInvocation,
+          attemptOrdinal: 2,
+          terminalClass: 'explicit_refusal:zero_send_collision_exhausted',
+          terminalResult: storedTerminalTurnResult(
+            sourceThreeInvocation,
+            { state: 'profile_busy', scope: 'profile', cause: 'profile_busy', send_count: 0 },
+          ),
+        },
+      ],
+    };
+
+    const created = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1787,
+      headSha: HEAD_A,
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      reviewRound,
+    }).run;
+    const failed = setPackReviewRunTerminal(created.id, 'failed', {
+      exitCode: 1,
+      failureReason: 'stale_head_before_terminal',
+    }, { projectId: 'orchestrator-pack', storeRoot });
+
+    const sourceOneIdentity: PackGptSourceIdentity = {
+      repository: 'chetwerikoff/orchestrator-pack',
+      prNumber: 1787,
+      headSha: HEAD_A,
+      runId: failed.id,
+      slotId: 'source-01',
+      invocationId: sourceOneInvocation,
+    };
+    const sourceOneReply = JSON.stringify({
+      findings: [{
+        type: 'quality',
+        code: 'quality:recovered-blocker',
+        severity: 'blocking',
+        path: 'scripts/pack-review-runner.ts',
+        summary: 'recovered-blocker',
+        source: 'gpt-browser',
+      }],
+    });
+    const sourceComment: PackGptSourceGithubComment = {
+      id: 1787001,
+      body: formatPackGptSourceCommentEnvelope(sourceOneIdentity, sourceOneReply),
+      actorLogin: 'browser-gpt-bot',
+      createdAt: '2026-08-29T03:01:00.000Z',
+      updatedAt: '2026-08-29T03:01:00.000Z',
+      url: 'https://github.com/chetwerikoff/orchestrator-pack/pull/1787#issuecomment-1787001',
+      issueUrl: 'https://api.github.com/repos/chetwerikoff/orchestrator-pack/issues/1787',
+    };
+    const sourceTransport: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => 'browser-gpt-bot',
+      listComments: async () => [sourceComment],
+      getComment: async (id) => {
+        if (id !== sourceComment.id) throw new Error(`unexpected source comment ${String(id)}`);
+        return sourceComment;
+      },
+    };
+
+    const reviewBodies: string[] = [];
+    const statusStates: string[] = [];
+    const reviews: GithubReviewSummary[] = [];
+    const finalReviewTransport: GithubReviewTransport = {
+      resolveActorLogin: async () => 'pack-review-bot',
+      listReviews: async () => [...reviews],
+      postReview: async ({ body, commitId }) => {
+        reviewBodies.push(body);
+        const review: GithubReviewSummary = {
+          id: 178701,
+          body,
+          commitId,
+          url: 'https://github.com/chetwerikoff/orchestrator-pack/pull/1787#pullrequestreview-178701',
+          state: 'COMMENTED',
+          userLogin: 'pack-review-bot',
+          submittedAt: '2026-08-29T03:30:00.000Z',
+        };
+        reviews.push(review);
+        return { id: review.id, url: review.url };
+      },
+      dismissReview: async () => {},
+    };
+
+    const reconciliation = await reconcileStalePackReviewRuns({
+      repoSlug: 'chetwerikoff/orchestrator-pack',
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1787,
+      immediate: true,
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixtureGptSourceCommentTransport: sourceTransport,
+      fixtureGithubReviewTransport: finalReviewTransport,
+      fixtureRequiredStatusWriter: async (request) => {
+        statusStates.push(request.state);
+      },
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+      fixtureIssueBody: issueBody,
+      fixtureIssueNumber: 1787,
+      fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
+      fixtureBoundIssueSnapshotBytes: issueBody,
+    });
+
+    expect(reconciliation.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: failed.id,
+        recovered: true,
+        statusReconciled: true,
+        status: 'changes_requested',
+      }),
+    ]));
+    const settled = getPackReviewRun(failed.id, { projectId: 'orchestrator-pack', storeRoot });
+    expect(settled?.status).toBe('changes_requested');
+    expect(settled?.reviewRound?.settledSourceCount).toBeUndefined();
+    expect(settled?.reviewVerdict).toBe('findings');
+    expect(settled?.findingCount).toBe(1);
+    expect(settled?.findings).toEqual([
+      expect.objectContaining({ title: 'recovered-blocker', severity: 'error', sourceSlotId: 'source-01' }),
+    ]);
+    expect(statusStates).toContain('failure');
+    expect(reviewBodies.join('\n')).toContain('recovered-blocker');
   });
 });

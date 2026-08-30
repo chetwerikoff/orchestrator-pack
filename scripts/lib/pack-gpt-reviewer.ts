@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import {
@@ -193,7 +193,15 @@ function persistGptEvidence(options: {
   writeFileSync(adapterPromptPath, readFileSync(options.inputPath));
 
   const replyBytes = existsSync(options.outputPath) ? readFileSync(options.outputPath) : null;
-  writeFileSync(terminalReplyPath, replyBytes ?? Buffer.alloc(0));
+  if (resolve(options.outputPath) !== resolve(terminalReplyPath)) {
+    const tempReplyPath = join(evidenceDir, `.terminal-reply.${process.pid}.tmp`);
+    try {
+      writeFileSync(tempReplyPath, replyBytes ?? Buffer.alloc(0));
+      renameSync(tempReplyPath, terminalReplyPath);
+    } finally {
+      rmSync(tempReplyPath, { force: true });
+    }
+  }
   return {
     paths: {
       adapterPromptPath,
@@ -403,7 +411,10 @@ export async function runGptPackReview(
   const browserConfig = merged.resolveBrowserConfig(env);
   const workDir = mkdtempSync(join(tmpdir(), 'opk-gpt-review-'));
   const inputPath = join(workDir, 'prompt.txt');
-  const outputPath = join(workDir, 'reply.txt');
+  const outputPath = sourceIdentity
+    ? join(resolveGptEvidenceDir(request, env), 'terminal-reply.txt')
+    : join(workDir, 'reply.txt');
+  if (sourceIdentity) mkdirSync(dirname(outputPath), { recursive: true });
   writeFileSync(inputPath, prompt, 'utf8');
 
   try {

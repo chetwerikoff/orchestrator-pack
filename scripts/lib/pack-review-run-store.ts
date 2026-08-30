@@ -96,6 +96,8 @@ export interface PackReviewSourceSlotRecord {
   invocationId?: string;
   attemptOrdinal?: number;
   admissionStartedAtUtc?: string;
+  launchProfileKey?: string;
+  launchCdpUrl?: string;
   terminalClass?: string;
   terminalResult?: unknown;
   payload?: unknown;
@@ -111,6 +113,68 @@ export interface PackReviewGptRoundRecord {
   boundIssueSnapshotDigest: string;
   sourceSlots: PackReviewSourceSlotRecord[];
   settledSourceCount?: number;
+}
+
+export type PackReviewGptCoverageKind = 'complete' | 'partial' | 'empty';
+
+export interface PackReviewGptCoverage {
+  kind: PackReviewGptCoverageKind;
+  completedSourceCount: number;
+  cardinality: number;
+  completedSourceSlotIds: string[];
+  incompleteSources: Array<{
+    sourceSlotId: string;
+    lifecycle: PackReviewSourceSlotLifecycle;
+    terminalClass?: string;
+    invocationId?: string;
+    timedOut: boolean;
+    cancelled: boolean;
+    reason?: string;
+  }>;
+}
+
+export function derivePackReviewGptCoverage(round: PackReviewGptRoundRecord | undefined): PackReviewGptCoverage | undefined {
+  if (!round || round.reviewer !== 'gpt') return undefined;
+  const completed = round.sourceSlots.filter((slot) => (
+    slot.lifecycle === 'terminal'
+    && (slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings')
+  ));
+  const completedIds = new Set(completed.map((slot) => slot.slotId));
+  const incompleteSources = round.sourceSlots
+    .filter((slot) => !completedIds.has(slot.slotId))
+    .map((slot) => {
+      const terminal = slot.terminalResult
+        && typeof slot.terminalResult === 'object'
+        && !Array.isArray(slot.terminalResult)
+        ? slot.terminalResult as Record<string, unknown>
+        : {};
+      const reason = String(
+        terminal.cause
+        ?? terminal.source_comment_reason
+        ?? terminal.error
+        ?? '',
+      ).trim();
+      return {
+        sourceSlotId: slot.slotId,
+        lifecycle: slot.lifecycle,
+        ...(slot.terminalClass ? { terminalClass: slot.terminalClass } : {}),
+        ...(slot.invocationId ? { invocationId: slot.invocationId } : {}),
+        timedOut: terminal.process_timed_out === true || terminal.process_exit_code === 124,
+        cancelled: terminal.process_cancelled === true,
+        ...(reason ? { reason: reason.slice(0, 240) } : {}),
+      };
+    });
+  return {
+    kind: completed.length === 0
+      ? 'empty'
+      : completed.length === round.cardinality
+        ? 'complete'
+        : 'partial',
+    completedSourceCount: completed.length,
+    cardinality: round.cardinality,
+    completedSourceSlotIds: completed.map((slot) => slot.slotId),
+    incompleteSources,
+  };
 }
 
 export interface PackReviewRunRecord {
@@ -627,6 +691,16 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
       admissionStartedAtUtc = requiredJsonString(slot.admissionStartedAtUtc, 'admissionStartedAtUtc', slotPath);
     }
 
+    let launchProfileKey: string | undefined;
+    if (slot.launchProfileKey !== undefined) {
+      launchProfileKey = requiredJsonString(slot.launchProfileKey, 'launchProfileKey', slotPath);
+    }
+
+    let launchCdpUrl: string | undefined;
+    if (slot.launchCdpUrl !== undefined) {
+      launchCdpUrl = requiredJsonString(slot.launchCdpUrl, 'launchCdpUrl', slotPath);
+    }
+
     let terminalClass: string | undefined;
     if (slot.terminalClass !== undefined) {
       terminalClass = requiredJsonString(slot.terminalClass, 'terminalClass', slotPath);
@@ -640,6 +714,8 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
       ...(invocationId === undefined ? {} : { invocationId }),
       ...(attemptOrdinal === undefined ? {} : { attemptOrdinal }),
       ...(admissionStartedAtUtc === undefined ? {} : { admissionStartedAtUtc }),
+      ...(launchProfileKey === undefined ? {} : { launchProfileKey }),
+      ...(launchCdpUrl === undefined ? {} : { launchCdpUrl }),
       ...(terminalClass === undefined ? {} : { terminalClass }),
     };
     validateGptTerminalEvidence(normalizedSlot, slotPath);
@@ -791,6 +867,31 @@ function mergeFrozenGptSlot(
     }
   }
 
+  const mergeAttemptBoundString = (
+    name: 'launchProfileKey' | 'launchCdpUrl',
+    existingValue: string | undefined,
+    incomingValue: string | undefined,
+  ): string | undefined => {
+    if (existingValue !== undefined
+        && incomingValue !== undefined
+        && existingValue !== incomingValue) {
+      if ((incomingAttempt ?? 0) > (existingAttempt ?? 0)) return incomingValue;
+      if ((incomingAttempt ?? 0) < (existingAttempt ?? 0)) return existingValue;
+      throw new Error(`corrupt pack review run record at ${path}: ${name} changed without a new attempt`);
+    }
+    return existingValue ?? incomingValue;
+  };
+  const launchProfileKey = mergeAttemptBoundString(
+    'launchProfileKey',
+    existing.launchProfileKey,
+    incoming.launchProfileKey,
+  );
+  const launchCdpUrl = mergeAttemptBoundString(
+    'launchCdpUrl',
+    existing.launchCdpUrl,
+    incoming.launchCdpUrl,
+  );
+
   const mergeEvidence = (name: 'terminalClass' | 'terminalResult' | 'payload'): unknown => {
     const existingValue = existing[name];
     const incomingValue = incoming[name];
@@ -829,6 +930,8 @@ function mergeFrozenGptSlot(
     ...(admissionStartedAtUtc === undefined
       ? { admissionStartedAtUtc: undefined }
       : { admissionStartedAtUtc }),
+    ...(launchProfileKey === undefined ? { launchProfileKey: undefined } : { launchProfileKey }),
+    ...(launchCdpUrl === undefined ? { launchCdpUrl: undefined } : { launchCdpUrl }),
     ...(terminalClass === undefined ? { terminalClass: undefined } : { terminalClass }),
     ...(terminalResult === undefined ? { terminalResult: undefined } : { terminalResult }),
     ...(payload === undefined ? { payload: undefined } : { payload }),
@@ -1208,7 +1311,12 @@ function parseRecord(
       findingCount: raw.findingCount,
       findings: raw.findings,
     };
-    if (hasNonHarvestIncompleteGptSource(reviewRound)) {
+    const completedBlockingFinding = findings.some((finding) => {
+      if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return true;
+      const severity = String((finding as Record<string, unknown>).severity ?? '').trim().toLowerCase();
+      return !new Set(['warning', 'info', 'non-blocking']).has(severity);
+    });
+    if (hasNonHarvestIncompleteGptSource(reviewRound) && !completedBlockingFinding) {
       throw new Error(
         `corrupt pack review run record at ${path || '<record>'}: reviewVerdict does not match terminal source census`,
       );
@@ -1315,6 +1423,13 @@ export function listPackReviewRunRecordsRaw(options: PackReviewStoreOptions = {}
   const storeRoot = resolvePackReviewRunStoreRoot(options);
   return withStoreLock(storeRoot, () => readRecordsUnlocked(storeRoot)
     .filter((record) => !options.projectId || record.projectId === options.projectId));
+}
+
+export function listPackReviewRunRecordsReadonly(options: PackReviewStoreOptions = {}): PackReviewRunRecord[] {
+  const storeRoot = resolvePackReviewRunStoreRoot(options);
+  if (!existsSync(recordsDir(storeRoot))) return [];
+  return readRecordsUnlocked(storeRoot)
+    .filter((record) => !options.projectId || record.projectId === options.projectId);
 }
 
 export function terminalizePackReviewStaleRun(

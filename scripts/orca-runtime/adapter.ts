@@ -116,18 +116,20 @@ interface KnownWorkspaceRecord {
 
 interface NormalizedTerminalRead {
   readonly lines: readonly string[];
-  readonly nativeCursor: string;
+  readonly nativeCursor: string | null;
   readonly terminalState: 'running' | 'exited' | 'unknown';
   readonly source: 'screen' | 'stream' | 'unknown';
 }
 
 interface ObservationBinding {
   readonly workerKey: string;
-  readonly nativeCursor: string;
+  readonly nativeCursor: string | null;
+  readonly source: 'screen' | 'stream' | 'unknown';
 }
 
 interface DecodedObservation {
-  readonly nativeCursor: string;
+  readonly nativeCursor: string | null;
+  readonly source: 'screen' | 'stream' | 'unknown';
 }
 
 interface OrcaInboxDeliveryShape {
@@ -330,9 +332,9 @@ function normalizeTerminalRead(
       return runtimeUnsupported('read_bounded_output', 'runtime_output_source_unobservable');
     }
     const nativeCursor = source === 'screen'
-      ? 'screen-frame'
+      ? null
       : current.nextCursor ?? current.latestCursor ?? null;
-    if (nativeCursor === null) {
+    if (nativeCursor === null && source !== 'screen') {
       return runtimeUnsupported('read_bounded_output', 'runtime_output_progress_unavailable');
     }
     return {
@@ -368,7 +370,7 @@ function normalizeTerminalRead(
     status: 'ok',
     value: {
       lines: result.lines,
-      nativeCursor: source === 'screen' ? 'screen-frame' : String(result.nextCursor),
+      nativeCursor: source === 'screen' ? null : String(result.nextCursor),
       terminalState: 'unknown',
       source,
     },
@@ -579,12 +581,16 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (binding.workerKey !== identityKey(worker)) {
       return runtimeFailure('read_bounded_output', 'observation_token_scope_mismatch');
     }
-    return { status: 'ok', value: { nativeCursor: binding.nativeCursor } };
+    return {
+      status: 'ok',
+      value: { nativeCursor: binding.nativeCursor, source: binding.source },
+    };
   }
 
   #observationToken(
     worker: RuntimeWorkerIdentity,
-    nativeCursor: string,
+    nativeCursor: string | null,
+    source: 'screen' | 'stream' | 'unknown',
     changed: boolean,
     previousToken?: RuntimeObservationToken | null,
   ): RuntimeObservationToken {
@@ -593,6 +599,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     this.#observations.set(token.opaque, {
       workerKey: identityKey(worker),
       nativeCursor,
+      source,
     });
     return token;
   }
@@ -1058,7 +1065,10 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
 
     const args = ['terminal', 'read', '--terminal', input.worker.id];
     if (input.screen) args.push('--screen');
-    if (previous?.status === 'ok' && isPageCursor(previous.value.nativeCursor)) {
+    if (previous?.status === 'ok'
+      && previous.value.source !== 'screen'
+      && previous.value.nativeCursor !== null
+      && isPageCursor(previous.value.nativeCursor)) {
       args.push('--cursor', previous.value.nativeCursor);
     }
     if (input.limit !== undefined) args.push('--limit', String(input.limit));
@@ -1072,10 +1082,12 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (normalized.status !== 'ok') return normalized;
     const changed = previous?.status === 'ok'
       ? previous.value.nativeCursor !== normalized.value.nativeCursor
+        || previous.value.source !== normalized.value.source
       : normalized.value.lines.length > 0;
     const observationToken = this.#observationToken(
       input.worker,
       normalized.value.nativeCursor,
+      normalized.value.source,
       changed,
       input.previousToken,
     );
@@ -1136,7 +1148,10 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
     const args = ['terminal', 'read', '--terminal', input.worker.id];
     if (input.screen) args.push('--screen');
-    if (previous?.status === 'ok' && isPageCursor(previous.value.nativeCursor)) {
+    if (previous?.status === 'ok'
+      && previous.value.source !== 'screen'
+      && previous.value.nativeCursor !== null
+      && isPageCursor(previous.value.nativeCursor)) {
       args.push('--cursor', previous.value.nativeCursor);
     }
     if (input.limit !== undefined) args.push('--limit', String(input.limit));
@@ -1148,10 +1163,12 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (normalized.status !== 'ok') return normalized;
     const changed = previous?.status === 'ok'
       ? previous.value.nativeCursor !== normalized.value.nativeCursor
+        || previous.value.source !== normalized.value.source
       : normalized.value.lines.length > 0;
     const observationToken = this.#observationToken(
       input.worker,
       normalized.value.nativeCursor,
+      normalized.value.source,
       changed,
       input.previousToken,
     );
