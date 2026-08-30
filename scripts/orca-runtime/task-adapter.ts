@@ -21,6 +21,13 @@ import {
   type OrcaWorktreeRemoveResult,
   type OrcaWorktreeShow,
 } from './native.ts';
+import {
+  maybeNotifyRunOnTerminalDispatch,
+  snapshotFromWorkerShow,
+  TERMINAL_DISPATCH_STATES,
+  TERMINAL_WORKER_STATES,
+} from './dispatch-terminal-mail.ts';
+import { resolveDispatchTerminalMailLedgerPath } from '../pr2-foundation/wake-supervisor-state-root.ts';
 
 function usesNativePtyFallback(generation: string): boolean {
   // Orca's terminal-create response currently exposes ptyId while the
@@ -85,9 +92,6 @@ type OrcaAssignmentActivity = 'active' | 'inactive' | 'unresolved';
 const DISPATCH_HEARTBEAT_STALE_AFTER_MS = 10 * 60 * 1_000;
 const SQLITE_UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/u;
 const RFC3339_UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?Z$/u;
-const TERMINAL_WORKER_STATES = new Set(['failed', 'succeeded', 'stopped', 'abandoned']);
-const TERMINAL_DISPATCH_STATES = new Set(['completed', 'failed', 'circuit_broken']);
-
 function failureDetail(failure: RuntimeOperationFailure): string {
   return `${failure.operation}:${failure.status}:${failure.reason}`;
 }
@@ -465,6 +469,14 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
     }
     if (activity === 'inactive') {
+      const terminalSnapshot = snapshotFromWorkerShow(dispatchId, parsed);
+      if (terminalSnapshot) {
+        maybeNotifyRunOnTerminalDispatch(terminalSnapshot, {
+          ledgerPath: resolveDispatchTerminalMailLedgerPath({ env: this.#options.env }),
+          env: this.#options.env,
+          runJson: this.#runJson,
+        });
+      }
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_inactive');
     }
     const terminalHandle = parsed.terminal?.handle?.trim()

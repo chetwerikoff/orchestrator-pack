@@ -103,6 +103,8 @@ switch (operation) {
     out(worker
       ? { ok: true, result: {
           dispatch: {
+            id: dispatch,
+            run_id: worker.runId ?? 'run-fixture',
             status: worker.dispatchStatus ?? 'dispatched',
             last_heartbeat_at: worker.lastHeartbeatAt === undefined
               ? (state.defaultHeartbeatAt ??= new Date().toISOString())
@@ -150,7 +152,17 @@ switch (operation) {
     } } });
     break;
   }
-  case 'terminal send': {
+  case 'orchestration send': {
+    state.runMessages = [...(state.runMessages ?? []), {
+      runId: get('--run'),
+      dispatchId: get('--dispatch-id'),
+      type: get('--type'),
+      payload: get('--payload'),
+    }];
+    out({ ok: true, result: { message_id: 'msg-' + String((state.runMessages ?? []).length) } });
+    break;
+  }
+    case 'terminal send': {
     state.sendCalls = Number(state.sendCalls ?? 0) + 1;
     const worker = state.workers.find((candidate) => candidate.id === get('--terminal') && candidate.liveness !== 'gone');
     if (!worker) {
@@ -423,13 +435,18 @@ describe('scheduler bounded-child production composition', () => {
     expect(handoff(env)).toMatchObject({ reason: 'target_unresolved', decision: 'orchestrator_required', issueNumber: 1420, taskId: 'task-never-started' });
   });
 
-  it('never sends to the captured running + succeeded + settled Dispatch in a separate scheduler process', async () => {
+  it('notifies the bound Run once when a Dispatch is terminal in a separate scheduler process', async () => {
     const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json');
     writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1, maxConcurrency: 2 }));
-    writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'settled-worker', generation: 'generation-settled', bindingKey: 'dispatch-settled', lines: ['done'], liveness: 'idle', state: 'succeeded', stage: 'settled', observationStatus: 'running' }], dispatches: [], sendCalls: 0 }));
+    writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'settled-worker', generation: 'generation-settled', bindingKey: 'dispatch-settled', runId: 'run-settled', lines: ['done'], liveness: 'idle', state: 'succeeded', stage: 'settled', observationStatus: 'running', dispatchStatus: 'failed' }], dispatches: [], sendCalls: 0, runMessages: [] }));
     writeEpoch(epochPath, 'epoch-settled', 'nonce-settled'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-settled', 'nonce-settled'); await publishLocal(env, 'dispatch-settled', 'task-settled');
     const first = await runTick(env); const second = await runTick(env);
     expect(fixture(fixturePath).sendCalls ?? 0).toBe(0); expect(fixture(fixturePath).dispatches).toHaveLength(0);
+    const firstPulse = schedulerResult(first).dispatchTerminalMailPulse as Record<string, number>;
+    expect(firstPulse.examined).toBe(1);
+    expect((firstPulse.sent ?? 0) + (firstPulse.duplicate ?? 0)).toBe(1);
+    expect(schedulerResult(second).dispatchTerminalMailPulse).toMatchObject({ examined: 1, duplicate: 1 });
+    expect(fixture(fixturePath).runMessages).toHaveLength(1);
     expect(schedulerResult(first).orchestratorRequired).toBe(true); expect(schedulerResult(second).orchestratorRequired).toBe(true);
     expect(handoff(env)).toMatchObject({ reason: 'target_unresolved', decision: 'orchestrator_required', issueNumber: 1420, taskId: 'task-settled' });
   });
