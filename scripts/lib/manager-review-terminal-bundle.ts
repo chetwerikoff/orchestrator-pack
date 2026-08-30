@@ -160,6 +160,18 @@ function normalizeFindings(raw: unknown): JsonRecord[] {
   });
 }
 
+function canonicalizeJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalizeJson);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.keys(value).sort().map((key) => [key, canonicalizeJson(value[key])]),
+  );
+}
+
+function sameFindingState(left: JsonRecord, right: JsonRecord): boolean {
+  return JSON.stringify(canonicalizeJson(left)) === JSON.stringify(canonicalizeJson(right));
+}
+
 function manifestFiles(manifest: JsonRecord): string[] {
   if (manifest.schema !== ARTIFACT_MANIFEST_SCHEMA
     || manifest.acceptanceBasis !== AUTHORITATIVE_GITHUB_ARTIFACT_BASIS
@@ -246,7 +258,7 @@ function validateGovernedArtifacts(
   intake: JsonRecord,
   reviewEpisodeId: string,
   tier: ReviewTier,
-): void {
+): ReturnType<typeof deriveReviewEpisodeState> {
   const receipts = stageReceiptValues(reviewDir, files);
   const relay = readJsonValue(join(reviewDir, 'verified-relay-evidence.json'), 'terminal_bundle_relay_invalid');
   if (!Array.isArray(relay)) throw new Error('terminal_bundle_relay_invalid');
@@ -272,6 +284,7 @@ function validateGovernedArtifacts(
   const errors = [...state.errors, ...validateReviewEpisodeTopology(state, phase)];
   if (!state.relayComplete) errors.push('review episode relay is incomplete');
   if (errors.length > 0) throw new Error('terminal_bundle_governed_artifacts_invalid');
+  return state;
 }
 
 function validateRepository(repositoryFullName: string): void {
@@ -365,6 +378,10 @@ export function buildManagerReviewTerminalBundle(options: BuildManagerReviewTerm
     const authorIds = findings.map((row) => row.id);
     const ledgerIds = ledgerFindings.map((row) => row.id);
     if (JSON.stringify(authorIds) !== JSON.stringify(ledgerIds)) throw new Error('terminal_bundle_ledger_disposition_mismatch');
+    if (findings.length !== ledgerFindings.length
+      || findings.some((finding, index) => !sameFindingState(finding, ledgerFindings[index]!))) {
+      throw new Error('terminal_bundle_ledger_disposition_mismatch');
+    }
 
     receipts = stageReceipts(reviewDir, files, reviewEpisodeId);
     const latestReceipt = receipts.at(-1);
@@ -377,7 +394,17 @@ export function buildManagerReviewTerminalBundle(options: BuildManagerReviewTerm
     }
     verifiedRelayCount = relay.length;
     counts = validateCounts(ledger.counts);
-    validateGovernedArtifacts(reviewDir, files, intake, reviewEpisodeId, tier);
+    const episodeState = validateGovernedArtifacts(reviewDir, files, intake, reviewEpisodeId, tier);
+    const expectedCounts = {
+      rawFindingCount: episodeState.rawFindingCount,
+      distinctFindingCount: ledgerFindings.length,
+      processedDistinctCount: ledgerFindings.filter((row) => (
+        row.defectDisposition === 'addressed' || row.defectDisposition === 'rejected-as-false'
+      )).length,
+    };
+    if (JSON.stringify(counts) !== JSON.stringify(expectedCounts)) {
+      throw new Error('terminal_bundle_review_economics_invalid');
+    }
   }
 
   const rejectPartition = ledgerFindings.filter((row) => row.defectDisposition === 'rejected-as-false');

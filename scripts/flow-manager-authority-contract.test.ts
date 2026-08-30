@@ -63,7 +63,7 @@ function createTerminalBundleFixture(root: string, sourceRevision = 'r08') {
       name,
       byteLength: Buffer.byteLength(captureText),
       sha256: createHash('sha256').update(captureText, 'utf8').digest('hex'),
-      rawFindingCount: 0,
+      rawFindingCount: index === 0 ? 1 : 0,
     };
   });
   const invocations = captures.map((capture, index) => ({
@@ -613,6 +613,33 @@ describe('Issue #1431 manager reviewer canon', () => {
         liveIssueBody: draft,
       })).toThrow('terminal_bundle_author_m4_stale');
       writeFileSync(authorPath, originalAuthor);
+
+      const ledgerPath = join(reviewDir, 'finding-disposition-ledger.json');
+      const originalLedger = readFileSync(ledgerPath, 'utf8');
+      const conflictingLedger = JSON.parse(originalLedger) as {
+        findings: Array<Record<string, unknown>>;
+        counts: Record<string, unknown>;
+      };
+      conflictingLedger.findings[0]!.defectDisposition = 'addressed';
+      writeFileSync(ledgerPath, JSON.stringify(conflictingLedger, null, 2));
+      expect(() => buildManagerReviewTerminalBundle({
+        repositoryFullName: reviewContext.repositoryFullName,
+        issueNumber: reviewContext.issueNumber,
+        sourceRevision: 'r08',
+        reviewDir,
+        liveIssueBody: draft,
+      })).toThrow('terminal_bundle_ledger_disposition_mismatch');
+      conflictingLedger.findings[0]!.defectDisposition = 'rejected-as-false';
+      conflictingLedger.counts.rawFindingCount = 0;
+      writeFileSync(ledgerPath, JSON.stringify(conflictingLedger, null, 2));
+      expect(() => buildManagerReviewTerminalBundle({
+        repositoryFullName: reviewContext.repositoryFullName,
+        issueNumber: reviewContext.issueNumber,
+        sourceRevision: 'r08',
+        reviewDir,
+        liveIssueBody: draft,
+      })).toThrow('terminal_bundle_review_economics_invalid');
+      writeFileSync(ledgerPath, originalLedger);
 
       const terminalContext: ManagerReviewBriefContext = {
         ...reviewContext,

@@ -807,9 +807,10 @@ producer evidence refuses launch; the assembler may not make stale data current
 by re-wrapping it.
 
 Materialize that bundle with `scripts/manager-review-terminal-bundle.ts` before
-rendering the terminal prompt. For T2/T3, first run `produce-artifacts --phase
-post-lens` so the producer consumes the canonical stage receipts, verified relay
-evidence, and finding ledger already checked by the existing guards. For T1,
+rendering the terminal prompt. For T2, first run `produce-artifacts --phase
+pre-lens`; for T3, use `produce-artifacts --phase post-lens`. In either case the
+producer consumes the canonical stage receipts, verified relay evidence, and
+finding ledger already checked by the existing guards. For T1,
 there is intentionally no predecessor receipt: the producer accepts the
 current-bound zero-state `tier-intake.json` plus `author-dispositions.json`
 with empty prior findings/M3/M4 instead of inventing predecessor evidence.
@@ -818,9 +819,10 @@ The flow-manager-authored `author-dispositions.json` records the current M4
 inventory under one `m4` object bound to the same `reviewEpisodeId`,
 `predecessorStage`, and `sourceRevision`; each inventory entry is
 `{ mechanism, disposition }` with disposition `keep | simplify | defer | cut`.
-Pass the resulting file as `--terminal-input-bundle` on the terminal
-`architectural` direct-publication launch. Non-terminal stages must not carry
-that option. State-light re-reads the bundle and the unmarked prompt before any
+Pass the resulting file as `--terminal-input-bundle` and the governed review
+location as `--review-dir "$REVIEW_DIR"` on the terminal `architectural`
+direct-publication launch. Non-terminal stages must not carry those options.
+State-light re-reads the bundle and the unmarked prompt before any
 browser effect; missing or mismatched input is `input_invalid` with
 `send_count: 0`.
 
