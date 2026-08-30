@@ -673,6 +673,8 @@ export function installStableWorkerSmokeSpawnPatch(
       if (tracked && result.status === 'dispatch_unknown') {
         const binding = smokeDeliveryBindingFromPrompt(input.text ?? '');
         tracked.preserveOwnedPanelOnDeliveryFailure = !(binding && deliveryProbe(binding));
+      } else if (tracked && result.status === 'send_failed') {
+        tracked.preserveOwnedPanelOnDeliveryFailure = true;
       }
       return result;
     },
