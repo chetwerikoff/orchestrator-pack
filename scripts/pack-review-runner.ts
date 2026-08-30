@@ -1533,7 +1533,7 @@ export async function observeGptPackReviewAttempt(
   return { state: 'replacement_eligible', replacementEligible: true };
 }
 
-export interface PackReviewNativeAttemptObservationexport interface PackReviewNativeAttemptObservation {
+export interface PackReviewNativeAttemptObservation {
   reviewer: 'codex' | 'claude';
   state: 'running' | 'stopped' | 'observation_unavailable';
   replacementEligible: boolean;
