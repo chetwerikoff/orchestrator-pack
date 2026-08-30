@@ -963,6 +963,17 @@ async function submitOrcaMessageDeliveryPointerForMessage(
       if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
     }
     if (deps.pointerWriteLedger) deps.pointerWriteLedger.set(key, now);
+    const before = deps.submitDeps.readAsync
+      ? await deps.submitDeps.readAsync(worker.identity)
+      : deps.submitDeps.read(worker.identity);
+    if (!before.ok) {
+      if (state && !existing) {
+        delete state.episodes[key];
+        if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
+      }
+      deps.pointerWriteLedger?.delete(key);
+      return deliveryNoEffect(before.reason, worker, false);
+    }
     const submitted = control.dispatch({ worker: worker.identity, action: 'submit-prompt', text: pointer });
     if (submitted.status === 'send_failed') {
       if (state && !existing) {
@@ -975,6 +986,12 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     const base = { terminal: worker.identity.id, generation: worker.identity.generation };
     if (submitted.status === 'dispatch_unknown') {
       return { ok: true, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: true, reason: submitted.reason, dispatchStatus: submitted.status }] };
+    }
+    const after = deps.submitDeps.readAsync
+      ? await deps.submitDeps.readAsync(worker.identity)
+      : deps.submitDeps.read(worker.identity);
+    if (!after.ok || after.lines.join('\n') === before.lines.join('\n')) {
+      return { ok: true, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: true, reason: 'opencode_panel_visibility_unconfirmed', dispatchStatus: 'dispatch_unknown' }] };
     }
     if (state) {
       state.episodes[key] = { ...state.episodes[key]!, sealed: true };

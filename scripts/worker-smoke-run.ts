@@ -1259,6 +1259,18 @@ export function establishRuntimeSmokeDelivery(input: {
   const sleepMs = input.sleepMs ?? sleep;
   const deadline = now() + input.deadlineMs;
   const openCodeHttp = input.adapter.composerControl?.(input.worker)?.kind === 'opencode-http';
+  let baselineScreen: readonly string[] | undefined;
+  if (openCodeHttp) {
+    const baseline = input.adapter.readBoundedOutput({
+      worker: input.worker,
+      limit: 200,
+      screen: true,
+    }, { cwd: input.cwd, timeoutMs: input.deadlineMs });
+    if (baseline.status !== 'ok') {
+      return { ok: false, reason: `opencode_panel_observation_failed:${failureReason(baseline)}`, submitCount: 0 };
+    }
+    baselineScreen = baseline.value.lines;
+  }
   const dispatched = input.adapter.dispatchInput(
     { worker: input.worker, text: input.prompt },
     { cwd: input.cwd, timeoutMs: input.deadlineMs },
@@ -1269,8 +1281,21 @@ export function establishRuntimeSmokeDelivery(input: {
 
   let token: RuntimeObservationToken | undefined;
   const submitCount = 0;
+  let panelLeftIdleSplash = !openCodeHttp;
   while (now() < deadline) {
-    if (observeSmokeDeliveryEstablished(input.binding)) {
+    if (dispatched.status === 'dispatched' && openCodeHttp) {
+      const read = input.adapter.readBoundedOutput({
+        worker: input.worker,
+        limit: 200,
+        screen: true,
+      }, { cwd: input.cwd });
+      if (read.status !== 'ok') {
+        return { ok: false, reason: `opencode_panel_observation_failed:${failureReason(read)}`, submitCount };
+      }
+      panelLeftIdleSplash = JSON.stringify(read.value.lines) !== JSON.stringify(baselineScreen);
+    }
+
+    if (observeSmokeDeliveryEstablished(input.binding) && panelLeftIdleSplash) {
       markTrackedSmokeWorkerDeliveryConfirmed(input.worker);
       return { ok: true, observationToken: token, submitCount };
     }
@@ -1293,7 +1318,9 @@ export function establishRuntimeSmokeDelivery(input: {
   }
   const reason = dispatched.status === 'dispatch_unknown'
     ? `dispatch_unknown:${dispatched.reason}`
-    : 'prompt_delivery_unconfirmed';
+    : openCodeHttp && !panelLeftIdleSplash
+      ? 'opencode_panel_idle_splash'
+      : 'prompt_delivery_unconfirmed';
   return {
     ok: false,
     reason,
