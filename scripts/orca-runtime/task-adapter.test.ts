@@ -175,7 +175,6 @@ describe('OpenCode HTTP control plane', () => {
       requests.push(input);
       if (input.url.endsWith('/global/health')) return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) };
       if (input.method === 'GET' && input.url.includes('/session')) return { status: 200, body: JSON.stringify([{ id: 'ses-fixture', directory: process.cwd() }]) };
-      if (input.url.includes('/event')) return { status: 200, body: '' };
       return { status: 204, body: '' };
     });
     const spawned = adapter.spawnWorker({
@@ -197,11 +196,10 @@ describe('OpenCode HTTP control plane', () => {
     }).status).toBe('dispatched');
     expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
       { method: 'GET', url: 'http://127.0.0.1:18891/global/health' },
-      { method: 'GET', url: 'http://127.0.0.1:18891/event?directory=' + encodeURIComponent(process.cwd()) },
       { method: 'GET', url: 'http://127.0.0.1:18891/session?directory=' + encodeURIComponent(process.cwd()) },
       { method: 'POST', url: 'http://127.0.0.1:18891/session/ses-fixture/prompt_async?directory=' + encodeURIComponent(process.cwd()) },
     ]);
-    expect(requests[3]?.body).toBe(JSON.stringify({ parts: [{ type: 'text', text: 'delivery pointer' }] }));
+    expect(requests[2]?.body).toBe(JSON.stringify({ parts: [{ type: 'text', text: 'delivery pointer' }] }));
   });
 
   it('recovers OpenCode control from terminal metadata on a fresh adapter', () => {
@@ -210,7 +208,6 @@ describe('OpenCode HTTP control plane', () => {
       requests.push(input.url);
       if (input.url.endsWith('/global/health')) return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) };
       if (input.method === 'GET' && input.url.includes('/session')) return { status: 200, body: JSON.stringify([{ id: 'ses-fixture', directory: process.cwd() }]) };
-      if (input.url.includes('/event')) return { status: 200, body: '' };
       return { status: 204, body: '' };
     });
     const spawned = first.spawnWorker({

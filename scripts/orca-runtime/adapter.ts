@@ -48,8 +48,7 @@ const OPEN_CODE_HTTP_SCRIPT = [
   "const [url, method, body] = process.argv.slice(1);",
   "try {",
   "  const response = await fetch(url, { method, headers: body ? { 'content-type': 'application/json' } : undefined, body: body || undefined });",
-  "  const bodyText = url.includes('/event') ? '' : await response.text();",
-  "  process.stdout.write(JSON.stringify({ status: response.status, body: bodyText }));",
+  "  process.stdout.write(JSON.stringify({ status: response.status, body: await response.text() }));",
   "} catch (error) {",
   "  process.stderr.write(error instanceof Error ? error.message : String(error));",
   "  process.exitCode = 1;",
@@ -512,15 +511,6 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
     if (request.action !== 'submit-prompt' || typeof request.text !== 'string' || !request.text) {
       return { status: 'send_failed', reason: 'runtime_opencode_prompt_request_invalid' };
-    }
-    const events = this.#openCodeRequest({
-      url: `${urlRecord.url}/event?directory=${encodeURIComponent(current.value.workspacePath)}`,
-      method: 'GET',
-      timeoutMs: Math.max(1, options.timeoutMs ?? 10_000),
-    });
-    if ('error' in events) return { status: 'send_failed', reason: events.error };
-    if (events.status < 200 || events.status >= 300) {
-      return { status: 'send_failed', reason: `opencode_http_status_${events.status}` };
     }
     const sessions = this.#openCodeRequest({
       url: `${urlRecord.url}/session?directory=${encodeURIComponent(current.value.workspacePath)}`,
