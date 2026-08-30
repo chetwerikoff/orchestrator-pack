@@ -946,6 +946,11 @@ export function commitPackReviewTerminal(input: {
       };
       const cycle = current.cycle;
       if (!cycle) return current;
+      if (isLogicalRoundCycle(cycle) && terminal.logicalRoundOrdinal === undefined) {
+        cycle.capMapVersion = PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION;
+        cycle.frozenCap = PACK_REVIEW_DISTINCT_HEAD_CAPS[cycle.frozenTier];
+        cycle.consumedRoundOrdinals = undefined;
+      }
       const consumesAutomaticReviewBudget = terminal.terminalSource !== 'conflict_free_carryover';
       const consumesSlot = consumesAutomaticReviewBudget
         && terminalConsumesCapSlot({ ...input, automaticBudgetDisposition: terminal.automaticBudgetDisposition });
@@ -1269,10 +1274,6 @@ function reviewObligationsSettled(authority: PackReviewAuthorityDocument): boole
   const reviewStatus = authority.terminal?.reviewStatus;
   if (isLogicalRoundCycle(cycle)) {
     const clearTerminal = reviewStatus === 'clean' || reviewStatus === 'up_to_date' || reviewStatus === 'commented';
-    // Compatibility for pre-cutover/internal terminal callers that cannot supply
-    // a logical ordinal. The production #1826 runner always binds an explicit
-    // logicalRoundOrdinal, so required 1/1/2 accounting remains strict there.
-    if (authority.terminal?.logicalRoundOrdinal === undefined && clearTerminal) return true;
     if (cycleConsumedCount(cycle) < cycle.frozenCap) return false;
     if (cycle.state === 'closed' && clearTerminal) {
       return true;
