@@ -1,0 +1,25 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1839,
+  "declared_paths": [
+    "docs/migration_notes.md",
+    "docs/orchestration-runbook.md",
+    "scripts/executor-profile-store.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
+    "scripts/worker-smoke-run.ts"
+  ],
+  "denylist": [
+    ".ao/",
+    "agent-orchestrator.yaml",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/",
+    "scripts/"
+  ],
+  "source_revision": "a1e17e303aa5bff74a7c644ffc6ae969ae89e504"
+}
