@@ -949,13 +949,13 @@ export function commitPackReviewTerminal(input: {
         && terminalConsumesCapSlot({ ...input, automaticBudgetDisposition: terminal.automaticBudgetDisposition });
       if (consumesSlot) {
         if (isLogicalRoundCycle(cycle)) {
-          const ordinal = terminal.logicalRoundOrdinal;
-          if (!Number.isInteger(ordinal) || Number(ordinal) <= 0) {
-            throw new PackReviewAuthorityError('cap_state_invalid', 'logical-round terminal lacks round ordinal');
-          }
           const rounds = cycle.consumedRoundOrdinals!;
+          const expectedOrdinal = rounds.length + 1;
+          const ordinal = terminal.logicalRoundOrdinal ?? expectedOrdinal;
+          if (!Number.isInteger(ordinal) || Number(ordinal) <= 0) {
+            throw new PackReviewAuthorityError('cap_state_invalid', 'logical-round terminal has invalid round ordinal');
+          }
           if (!rounds.includes(Number(ordinal))) {
-            const expectedOrdinal = rounds.length + 1;
             if (Number(ordinal) !== expectedOrdinal) {
               throw new PackReviewAuthorityError(
                 'cap_state_invalid',
