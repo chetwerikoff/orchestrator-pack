@@ -10,7 +10,11 @@ import {
   parseAuthoritativeTier,
   startPackReview,
 } from './pack-review-runner.ts';
-import type { PackReviewRunRecord } from './lib/pack-review-run-store.ts';
+import {
+  createPackReviewRun,
+  updatePackReviewRun,
+  type PackReviewRunRecord,
+} from './lib/pack-review-run-store.ts';
 import { runProcess } from './kernel/subprocess.ts';
 import {
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
@@ -105,42 +109,33 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
     nodesTruncated?: boolean;
   }) {
     const marker = `OPKTURNV1${'a'.repeat(32)}`;
-    const probe = async (args: { operation: string }) => {
-      if (args.operation === 'list') {
-        return {
-          schema: 'browser-gpt-page-probe/v1',
-          operation: 'list',
-          status: 'ok',
-          diagnostic_only: true,
-          workflow_authority: 'none',
-          targets_truncated: false,
-          targets: [{ target_id: 'target-1', normalized_url: 'https://chatgpt.com/c/one', title: 'one' }],
-        };
-      }
-      return {
-        schema: 'browser-gpt-page-probe/v1',
-        operation: 'inspect',
-        status: 'ok',
-        diagnostic_only: true,
-        workflow_authority: 'none',
-        snapshot: {
-          generation_in_progress: input.generating,
-          nodes_truncated: input.nodesTruncated === true,
-          nodes: [
-            ...(input.markerPresent ? [{
-              role: 'user',
-              document_ordinal: 1,
-              innerText: { head: `${marker} prompt`, byte_length: 64 },
-            }] : []),
-            ...(input.replyPresent ? [{
-              role: 'assistant',
-              document_ordinal: 2,
-              innerText: { head: 'done', byte_length: 4 },
-            }] : []),
-          ],
-        },
-      };
-    };
+    const listTargets = async () => [{
+      id: 'target-1',
+      type: 'page',
+      url: 'https://chatgpt.com/c/one',
+      title: 'one',
+      webSocketDebuggerUrl: 'ws://127.0.0.1/target-1',
+    }];
+    const evaluate = async () => ({
+      status: 'ok',
+      page_url: 'https://chatgpt.com/c/one',
+      ready_state: 'complete',
+      title: 'one',
+      generation_in_progress: input.generating,
+      nodes_truncated: input.nodesTruncated === true,
+      nodes: [
+        ...(input.markerPresent ? [{
+          role: 'user',
+          document_ordinal: 1,
+          innerText: { head: `${marker} prompt`, byte_length: 64 },
+        }] : []),
+        ...(input.replyPresent ? [{
+          role: 'assistant',
+          document_ordinal: 2,
+          innerText: { head: 'done', byte_length: 4 },
+        }] : []),
+      ],
+    });
     const readObservation = () => ({
       schema: 'state-light-turn-observation/v1' as const,
       version: 1 as const,
@@ -154,7 +149,16 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
       transitioned_at: '2026-08-30T00:00:00.000Z',
       transition_reason: 'fixture',
     });
-    return { probe: probe as never, readObservation: readObservation as never };
+    const resolveSourceComment = async () => ({
+      kind: 'missing' as const,
+      reason: 'fixture_source_comment_missing',
+    });
+    return {
+      listTargets: listTargets as never,
+      evaluate: evaluate as never,
+      readObservation: readObservation as never,
+      resolveSourceComment: resolveSourceComment as never,
+    };
   }
 
   it('does not replace a Browser GPT turn that is still generating before 15 minutes', async () => {
@@ -175,6 +179,29 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
       gptObservationDeps({ markerPresent: true, generating: true }),
     );
     expect(observed).toMatchObject({ state: 'replacement_eligible', replacementEligible: true });
+  });
+
+  it('checks exact GitHub publication before consulting direct CDP replacement evidence', async () => {
+    const start = Date.parse('2026-08-30T00:00:00.000Z');
+    let cdpReads = 0;
+    const observed = await observeGptPackReviewAttempt(
+      gptRun(new Date(start).toISOString()),
+      start + 20 * 60_000,
+      {
+        ...gptObservationDeps({ markerPresent: true, generating: true }),
+        listTargets: (async () => {
+          cdpReads += 1;
+          return [];
+        }) as never,
+        resolveSourceComment: (async () => ({
+          kind: 'credentialed',
+          payload: {},
+          receipt: {},
+        })) as never,
+      },
+    );
+    expect(observed).toMatchObject({ state: 'reply_recovery_required', replacementEligible: false });
+    expect(cdpReads).toBe(0);
   });
 
   it('does not authorize replacement from a truncated all-tab message census', async () => {
@@ -272,7 +299,7 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
       await fallbackResult;
     }
   });
-  it('keeps native replacement conservative when no process-group binding is observable', () => {
+  it('keeps factual native unavailability but releases replacement at the persisted ceiling', () => {
     const run = gptRun('2026-08-30T00:00:00.000Z');
     run.reviewRound = undefined;
     run.resolvedReviewer = 'claude';
@@ -284,8 +311,10 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
       effectiveBudgetMs: 30 * 60_000,
       wrapperPid: process.pid,
     };
-    expect(observeNativePackReviewAttempt(run, Date.parse('2026-08-30T00:20:00.000Z')))
+    expect(observeNativePackReviewAttempt(run, Date.parse('2026-08-30T00:14:00.000Z')))
       .toMatchObject({ state: 'observation_unavailable', replacementEligible: false });
+    expect(observeNativePackReviewAttempt(run, Date.parse('2026-08-30T00:15:00.000Z')))
+      .toMatchObject({ state: 'observation_unavailable', replacementEligible: true });
   });
 });
 
@@ -296,7 +325,7 @@ describe('Issue #1826 logical-round smoke independence', () => {
     const storeRoot = join(parent, 'store');
     setupHarness(storeRoot);
     const head1 = '1'.repeat(40);
-    const head2 = '2'.repeat(40);
+    const head2 = head1;
     const prNumber = 1826;
     const issueBody = [
       '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
@@ -342,11 +371,7 @@ describe('Issue #1826 logical-round smoke independence', () => {
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: 1826,
       fixtureIssueBody: issueBody,
-      fixtureReviewStdout: JSON.stringify({
-        verdict: 'findings',
-        findingCount: 1,
-        findings: [{ severity: 'blocking', title: 'round one finding' }],
-      }),
+      fixtureReviewStdout: cleanPayload(),
       fixtureGithubReviewId: 182601,
       fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
       fixtureEmulateWin32Selector: true,
@@ -384,6 +409,134 @@ describe('Issue #1826 logical-round smoke independence', () => {
     expect(finalAuthority?.cycle?.consumedRoundOrdinals).toEqual([1, 2]);
     expect(finalAuthority?.cycle?.reviewStageComplete).toBe(true);
     expect(finalAuthority?.smokeOrdering?.workerOwned?.headSha).toBe(head1);
+  });
+  it('does not create a native same-round replacement when the prior run lacks a native binding', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'pack-review-1826-native-unbound-'));
+    roots.push(parent);
+    const storeRoot = join(parent, 'store');
+    setupHarness(storeRoot);
+    const prNumber = 1827;
+    const head = '3'.repeat(40);
+    const options = { storeRoot };
+    const authority = initializePackReviewAuthority({
+      prNumber,
+      headSha: head,
+      tier: 'T3',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      options,
+    });
+    const prior = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber,
+      headSha: head,
+      trustedPackRoot: process.cwd(),
+      sourceRepoRoot: process.cwd(),
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      reviewCycleId: authority.cycle!.cycleId,
+      logicalRoundOrdinal: 1,
+      logicalRoundCap: 2,
+      resolvedReviewer: 'codex',
+    });
+
+    const result = await startPackReview({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: process.cwd(),
+      prNumber,
+      headSha: head,
+      claimMode: 'preacquired',
+      fixtureCurrentPrHeadSha: head,
+      fixturePostReviewHeadSha: head,
+      fixturePrState: 'OPEN',
+      fixturePrBody: `Closes #${prNumber}`,
+      fixturePostReviewPrBody: `Closes #${prNumber}`,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureIssueNumber: prNumber,
+      fixtureIssueBody: '\`\`\`complexity-tier\\ntier: T3\\nadvisory-prior: T3\\n\`\`\`',
+      fixtureReviewStdout: cleanPayload(),
+      fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
+      fixtureEmulateWin32Selector: true,
+      fixtureRequiredStatusWriter: async () => {},
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reused: true,
+      reason: 'native_observation_unavailable',
+      runId: prior.run.id,
+      replacementEligible: false,
+    });
+  });
+
+  it('bypasses the exact active native run only after its persisted replacement ceiling', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'pack-review-1826-native-ceiling-'));
+    roots.push(parent);
+    const storeRoot = join(parent, 'store');
+    setupHarness(storeRoot);
+    const prNumber = 1828;
+    const head = '4'.repeat(40);
+    const options = { storeRoot };
+    const authority = initializePackReviewAuthority({
+      prNumber,
+      headSha: head,
+      tier: 'T3',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      options,
+    });
+    const startedAt = new Date(Date.now() - 20 * 60_000);
+    const prior = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber,
+      headSha: head,
+      trustedPackRoot: process.cwd(),
+      sourceRepoRoot: process.cwd(),
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      reviewCycleId: authority.cycle!.cycleId,
+      logicalRoundOrdinal: 1,
+      logicalRoundCap: 2,
+      resolvedReviewer: 'codex',
+      now: startedAt,
+    });
+    updatePackReviewRun(prior.run.id, {
+      nativeAttempt: {
+        schema: 'pack-review-native-attempt/v1',
+        reviewer: 'codex',
+        invocationOrdinal: 1,
+        startedAtUtc: startedAt.toISOString(),
+        effectiveBudgetMs: 30 * 60_000,
+        wrapperPid: process.pid,
+      },
+    }, { projectId: 'orchestrator-pack', storeRoot, now: startedAt });
+
+    const result = await startPackReview({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: process.cwd(),
+      prNumber,
+      headSha: head,
+      claimMode: 'preacquired',
+      fixtureCurrentPrHeadSha: head,
+      fixturePostReviewHeadSha: head,
+      fixturePrState: 'OPEN',
+      fixturePrBody: `Closes #${prNumber}`,
+      fixturePostReviewPrBody: `Closes #${prNumber}`,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureIssueNumber: prNumber,
+      fixtureIssueBody: '\`\`\`complexity-tier\\ntier: T3\\nadvisory-prior: T3\\n\`\`\`',
+      fixtureReviewStdout: cleanPayload(),
+      fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
+      fixtureEmulateWin32Selector: true,
+      fixtureRequiredStatusWriter: async () => {},
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    });
+
+    expect(result).toMatchObject({ ok: true, created: true, reused: false });
+    expect(result.runId).not.toBe(prior.run.id);
   });
 });
 describe('Issue #1647 authoritative tier resolution', () => {
