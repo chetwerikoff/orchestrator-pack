@@ -439,6 +439,7 @@ describe('OpenCode HTTP control plane', () => {
     expect(isOpenCodeComposerEmpty(['idle splash', '┃', '╹▀▀▀▀▀▀'])).toBe(true);
     expect(isOpenCodeComposerEmpty(['idle splash', '┃   ', '╹▀▀▀▀▀▀'])).toBe(true);
     expect(isOpenCodeComposerEmpty(['idle splash', '\u001b[38;5;250m┃  Ask anything...\u001b[0m', '╹▀▀▀▀▀▀'])).toBe(true);
+    expect(isOpenCodeComposerEmpty(['idle splash', '┃  Pack-Opk-151bd854148541919ddf2dd24aa069f5 · GLM 5.3 Flash TeamoRouter', '╹▀▀▀▀▀▀'])).toBe(true);
     expect(isOpenCodeComposerEmpty(['idle splash', '┃  Ask anything... \"Fix broken tests\"', '╹▀▀▀▀▀▀'])).toBe(true);
     expect(isOpenCodeComposerEmpty(['idle splash', '│ Ask anything…', '╹▀▀▀▀▀▀'])).toBe(true);
     expect(isOpenCodeComposerEmpty(['idle splash', '┃ human text', '╹▀▀▀▀▀▀'])).toBe(false);
