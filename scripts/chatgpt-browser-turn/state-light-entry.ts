@@ -11,6 +11,7 @@ import {
   assertCanonicalManagerReviewBrief,
   type ManagerReviewBriefContext,
 } from '../lib/manager-review-brief.ts';
+import { parseManagerReviewTerminalBundle } from '../lib/manager-review-terminal-bundle.ts';
 
 export type StateLightEntryDependencies = {
   readonly runTurn?: (argv: readonly string[]) => Promise<number>;
@@ -53,7 +54,7 @@ function canonicalContext(argv: readonly string[]): ManagerReviewBriefContext {
   if (!/^[1-9][0-9]*$/.test(issueNumberRaw)) {
     throw new Error('canonical_prompt_context_invalid:issue_number');
   }
-  return {
+  const base = {
     repositoryFullName: requiredCanonicalOption(argv, 'repository'),
     issueNumber: Number(issueNumberRaw),
     sourceRevision: requiredCanonicalOption(argv, 'source-revision'),
@@ -61,13 +62,24 @@ function canonicalContext(argv: readonly string[]): ManagerReviewBriefContext {
     sourceSlot: requiredCanonicalOption(argv, 'source-slot'),
     invocationId: requiredCanonicalOption(argv, 'invocation-id'),
   };
+  const terminalBundlePath = optionValue(argv, 'terminal-input-bundle');
+  if (base.stage === 'architectural') {
+    if (!terminalBundlePath) throw new Error('canonical_prompt_terminal_bundle_missing');
+    const bundleSnapshot = readStableInput(terminalBundlePath);
+    return {
+      ...base,
+      terminalBundle: parseManagerReviewTerminalBundle(bundleSnapshot.text, base),
+    };
+  }
+  if (terminalBundlePath !== undefined) throw new Error('canonical_prompt_terminal_bundle_unexpected');
+  return base;
 }
 
 function stripCanonicalContext(argv: readonly string[]): string[] {
   const stripped: string[] = [];
   for (let index = 0; index < argv.length; index++) {
     const token = argv[index];
-    if (token === '--stage' || token === '--source-slot') {
+    if (token === '--stage' || token === '--source-slot' || token === '--terminal-input-bundle') {
       index++;
       continue;
     }
