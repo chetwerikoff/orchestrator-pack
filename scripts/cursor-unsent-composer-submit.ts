@@ -351,6 +351,7 @@ interface DeliveryMessage {
   readonly runId: string;
   readonly recipient: string;
   readonly consumed: boolean;
+  readonly unreadCount?: number;
 }
 
 interface DeliveryPointerSubmitOptions {
@@ -362,6 +363,7 @@ interface DeliveryPointerSubmitOptions {
 interface EpisodeRecord {
   readonly messageId: string;
   readonly runId: string;
+  readonly recipient: string;
   readonly workerKey: string;
   readonly nextEligibleAt: number;
   readonly backoffMs: number;
@@ -374,7 +376,7 @@ interface PersistedReconcileState {
 }
 
 function episodeKey(message: DeliveryMessage, worker: RuntimeWorker): string {
-  return workerKey(worker.identity) + '\u0000' + message.runId + '\u0000' + message.id;
+  return workerKey(worker.identity) + '\u0000' + message.runId;
 }
 
 function loadReconcileState(path: string): PersistedReconcileState {
@@ -397,12 +399,14 @@ function loadReconcileState(path: string): PersistedReconcileState {
         if (
           typeof row.messageId === 'string' && row.messageId
           && typeof row.runId === 'string' && row.runId
+          && typeof row.recipient === 'string' && row.recipient
           && typeof row.workerKey === 'string' && row.workerKey
           && typeof row.nextEligibleAt === 'number' && Number.isFinite(row.nextEligibleAt)
           && typeof row.backoffMs === 'number' && Number.isFinite(row.backoffMs)
         ) episodes[key] = {
           messageId: row.messageId,
           runId: row.runId,
+          recipient: row.recipient,
           workerKey: row.workerKey,
           nextEligibleAt: row.nextEligibleAt,
           backoffMs: row.backoffMs,
@@ -659,6 +663,10 @@ function isExactOrchestrationPointer(shown: ComposerReadResult): boolean {
 }
 
 export function buildDeliveryPointer(message: DeliveryMessage): string {
+  const unreadCount = Number.isInteger(message.unreadCount) && message.unreadCount! > 0
+    ? message.unreadCount!
+    : 1;
+  const noun = unreadCount === 1 ? 'message' : 'messages';
   const check = message.recipient.startsWith('dispatch:')
     ? 'orca orchestration check'
     : message.recipient.startsWith('run:')
@@ -669,7 +677,7 @@ export function buildDeliveryPointer(message: DeliveryMessage): string {
   const prose = message.recipient.startsWith('run:')
     ? 'Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle.'
     : 'Read and act on your orchestration message.';
-  return `You have 1 orchestration message. ${prose} Run \`${check}\`.`;
+  return `You have ${unreadCount} orchestration ${noun}. ${prose} Run \`${check}\`.`;
 }
 
 function composerShowsDeliveryPointer(shown: ComposerReadResult, pointer: string): boolean {
@@ -809,7 +817,7 @@ function deliveryNoEffect(
   };
 }
 
-function deliveryMessageFromInboxRow(row: OrcaInboxMessageRow):
+function deliveryMessageFromInboxRow(row: OrcaInboxMessageRow, unreadCount = 1):
   | { readonly ok: true; readonly message: DeliveryMessage }
   | { readonly ok: false; readonly reason: string } {
   const id = row.id?.trim() ?? '';
@@ -818,8 +826,32 @@ function deliveryMessageFromInboxRow(row: OrcaInboxMessageRow):
   if (!id || !runId || !recipient) return { ok: false, reason: 'orchestration_message_binding_incomplete' };
   return {
     ok: true,
-    message: { id, runId, recipient, consumed: row.read === 1 || row.read === true },
+    message: {
+      id,
+      runId,
+      recipient,
+      consumed: row.read === 1 || row.read === true,
+      unreadCount,
+    },
   };
+}
+
+function releaseEpisodeWhenMailboxEmpty(
+  state: PersistedReconcileState,
+  deps: DeliveryMessageSubmitDeps,
+  message: DeliveryMessage,
+): void {
+  const response = deps.readInbox?.();
+  if (!response?.ok) return;
+  const hasUnreadSibling = (response.result?.messages ?? []).some((row) =>
+    row.run_id?.trim() === message.runId
+    && row.to_handle?.trim() === message.recipient
+    && !(row.read === 1 || row.read === true),
+  );
+  if (hasUnreadSibling) return;
+  for (const [key, episode] of Object.entries(state.episodes)) {
+    if (episode.runId === message.runId && episode.recipient === message.recipient) delete state.episodes[key];
+  }
 }
 
 /** Bind one Orca message to one exact recipient, write its pointer, then submit it. */
@@ -880,9 +912,7 @@ export async function submitOrcaMessageDeliveryPointer(
     }
     state.messages[id] = current;
     if (found.message.consumed || result.terminals[0]?.reason === 'worker_gone' || result.terminals[0]?.reason?.includes('unretrievable') || result.terminals[0]?.reason === 'orchestration_message_unretrievable') {
-      for (const [key, episode] of Object.entries(state.episodes)) {
-        if (episode.messageId === id) delete state.episodes[key];
-      }
+      releaseEpisodeWhenMailboxEmpty(state, deps, found.message);
     }
     saveReconcileState(statePath, state);
     return result;
@@ -928,6 +958,7 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     state.episodes[key] = {
       messageId: message.id,
       runId: message.runId,
+      recipient: message.recipient,
       workerKey: workerKey(worker.identity),
       nextEligibleAt: now + priorBackoff,
       backoffMs: nextBackoff,
@@ -1004,6 +1035,11 @@ export function createOrcaMessageSubmitDeps(
           runId,
           recipient,
           consumed: row?.read === 1 || row?.read === true,
+          unreadCount: (response.result?.messages ?? []).filter((candidate) =>
+            candidate.run_id?.trim() === runId
+            && candidate.to_handle?.trim() === recipient
+            && !(candidate.read === 1 || candidate.read === true),
+          ).length,
         },
       };
     },
@@ -1087,8 +1123,16 @@ export async function runOrchestrationMailReconcileTick(
     for (const id of Object.keys(state.messages)) {
       if (!unreadIds.has(id) || current - state.messages[id]! >= ORCHESTRATION_RECONCILE_WINDOW_MS) delete state.messages[id];
     }
+    const unreadRecipientRuns = new Set(unread.map((row) =>
+      `${row.to_handle?.trim() ?? ''}\u0000${row.run_id?.trim() ?? ''}`,
+    ));
     for (const [key, episode] of Object.entries(state.episodes)) {
-      if (!unreadIds.has(episode.messageId)) delete state.episodes[key];
+      if (!unreadRecipientRuns.has(`${episode.recipient}\u0000${episode.runId}`)) delete state.episodes[key];
+    }
+    const unreadCounts = new Map<string, number>();
+    for (const row of unread) {
+      const groupKey = `${row.to_handle?.trim() ?? ''}\u0000${row.run_id?.trim() ?? ''}`;
+      unreadCounts.set(groupKey, (unreadCounts.get(groupKey) ?? 0) + 1);
     }
     const rowsById = new Map<string, OrcaInboxMessageRow[]>();
     for (const row of unread) {
@@ -1125,7 +1169,7 @@ export async function runOrchestrationMailReconcileTick(
       attempted += 1;
       const rows = rowsById.get(id) ?? [];
       const found = rows.length === 1
-        ? deliveryMessageFromInboxRow(rows[0]!)
+        ? deliveryMessageFromInboxRow(rows[0]!, unreadCounts.get(`${rows[0]!.to_handle?.trim() ?? ''}\u0000${rows[0]!.run_id?.trim() ?? ''}`) ?? 1)
         : { ok: false as const, reason: 'orchestration_message_ambiguous' };
       let result: UnsentComposerSubmitResult;
       if (!found.ok) {
@@ -1133,10 +1177,8 @@ export async function runOrchestrationMailReconcileTick(
       } else {
         const resolved = resolveWorker(found.message);
         if (!resolved.ok) {
-          for (const [key, episode] of Object.entries(state.episodes)) if (episode.messageId === id) delete state.episodes[key];
           result = deliveryNoEffect(resolved.reason, undefined, false);
         } else if (!resolved.worker) {
-          for (const [key, episode] of Object.entries(state.episodes)) if (episode.messageId === id) delete state.episodes[key];
           result = deliveryNoEffect('worker_gone', undefined, false);
         } else {
           const worker = resolved.worker;
@@ -1154,7 +1196,6 @@ export async function runOrchestrationMailReconcileTick(
             ? observed.ok && observed.messageIds.has(found.message.id)
             : observed.ok;
           if (!qualifies) {
-            for (const [key, episode] of Object.entries(state.episodes)) if (episode.messageId === id) delete state.episodes[key];
             const reason = !observed.ok ? observed.reason : 'orchestration_message_unretrievable';
             result = deliveryNoEffect(reason, worker, false);
           } else {

@@ -1196,7 +1196,7 @@ describe('delivery-triggered composer submission', () => {
   });
 
 
-  it('skips duplicate pointer writes for the same recipient and pointer text in one tick', async () => {
+  it('suppresses duplicate notification delivery for the same recipient and pointer text in one tick', async () => {
     const target = worker('term_dup_write');
     const submitted: RuntimeWorkerIdentity[] = [];
     let writes = 0;
@@ -1246,7 +1246,7 @@ describe('delivery-triggered composer submission', () => {
       }),
     });
     expect(writes).toBe(1);
-    expect(submitted).toHaveLength(2);
+    expect(submitted).toHaveLength(1);
   });
 
   it('sends only one Enter when busy liveness clears after the first keystroke', async () => {
@@ -1299,7 +1299,9 @@ describe('orchestration mail reconciliation', () => {
     let wrote = false;
     const submitted = options.submitted ?? [];
     const targetId = target.identity.id;
-    const pointer = `You have 1 orchestration message. Run \`orca orchestration check --terminal ${targetId}\`.`;
+    const targetRunId = rows.find((row) => row.to_handle === targetId)?.run_id ?? '';
+    const pointerCount = rows.filter((row) => row.to_handle === targetId && row.run_id === targetRunId).length;
+    const pointer = `You have ${pointerCount} orchestration message${pointerCount === 1 ? '' : 's'}. Run \`orca orchestration check --terminal ${targetId}\`.`;
     return {
       readInbox: () => ({ ok: true as const, result: { messages: rows } }),
       lookupMessage: () => ({ ok: false as const, reason: 'unused' }),
@@ -1324,6 +1326,7 @@ describe('orchestration mail reconciliation', () => {
       get writes() {
         return writes;
       },
+      pointer,
     };
   }
 
@@ -1385,6 +1388,30 @@ describe('orchestration mail reconciliation', () => {
     expect(suppressed.skipped).toBe(1);
     expect(suppressed.deliveryEvidence).toEqual([]);
     expect(deps.writes).toBe(1);
+  });
+
+  it('emits one truthful pointer for several unread messages for one recipient', async () => {
+    const target = worker('term_retrievable_batch');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const deps = reconciliationDeps([
+      { id: 'msg_batch_a', run_id: 'run_batch', to_handle: target.identity.id, read: 0 },
+      { id: 'msg_batch_b', run_id: 'run_batch', to_handle: target.identity.id, read: 0 },
+      { id: 'msg_batch_c', run_id: 'run_batch', to_handle: target.identity.id, read: 0 },
+    ], target, { submitted });
+    const suffix = `${process.pid}-${Date.now()}`;
+
+    const result = await runOrchestrationMailReconcileTick(deps, {
+      ledgerPath: join(tmpdir(), `opk-reconcile-batch-${suffix}.json`),
+      lockPath: join(tmpdir(), `opk-reconcile-batch-${suffix}.lock`),
+      now: () => 1_000,
+    });
+
+    expect(deps.writes).toBe(1);
+    expect(deps.pointer).toBe(`You have 3 orchestration messages. Run \`orca orchestration check --terminal ${target.identity.id}\`.`);
+    expect(result.attempted).toBe(3);
+    expect(result.nudged).toBe(1);
+    expect(result.skipped).toBe(2);
+    expect(submitted).toHaveLength(1);
   });
 
   it('fails closed without a complete current worker identity', async () => {
