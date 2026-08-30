@@ -858,6 +858,25 @@ function deliveryMessageFromInboxRow(row: OrcaInboxMessageRow, unreadCount = 1):
   };
 }
 
+function episodeStateRank(state: EpisodeRecord['state']): number {
+  return state === 'confirmed' ? 3 : state === 'pointer-visible' ? 2 : 1;
+}
+
+function migrateLegacyEpisodeKeys(
+  state: PersistedReconcileState,
+  unreadEpisodeKeys: ReadonlySet<string>,
+): void {
+  for (const [candidateKey, candidate] of Object.entries(state.episodes)) {
+    const paneKey = candidate.workerKey;
+    if (candidateKey === paneKey || !unreadEpisodeKeys.has(paneKey)) continue;
+    const current = state.episodes[paneKey];
+    if (!current || episodeStateRank(candidate.state) > episodeStateRank(current.state)) {
+      state.episodes[paneKey] = candidate;
+    }
+    delete state.episodes[candidateKey];
+  }
+}
+
 function releaseEpisodeWhenMailboxEmpty(
   state: PersistedReconcileState,
   deps: DeliveryMessageSubmitDeps,
@@ -865,15 +884,19 @@ function releaseEpisodeWhenMailboxEmpty(
 ): void {
   const response = deps.readInbox?.();
   if (!response?.ok) return;
-  const hasUnreadSibling = (response.result?.messages ?? []).some((row) =>
-    row.run_id?.trim() === message.runId
-    && row.to_handle?.trim() === message.recipient
-    && !(row.read === 1 || row.read === true),
-  );
-  if (hasUnreadSibling) return;
   const resolved = deps.resolveWorker(message);
   if (!resolved.ok || !resolved.worker) return;
-  delete state.episodes[episodeKey(message, resolved.worker)];
+  const mailboxKey = episodeKey(message, resolved.worker);
+  const hasUnreadSibling = (response.result?.messages ?? []).some((row) => {
+    if (row.read === 1 || row.read === true) return false;
+    const parsed = deliveryMessageFromInboxRow(row);
+    if (!parsed.ok) return false;
+    const sibling = deps.resolveWorker(parsed.message);
+    return sibling.ok
+      && sibling.worker !== null
+      && episodeKey(parsed.message, sibling.worker) === mailboxKey;
+  });
+  if (!hasUnreadSibling) delete state.episodes[mailboxKey];
 }
 
 /** Bind one Orca message to one exact recipient, write its pointer, then submit it. */
@@ -995,11 +1018,12 @@ async function submitOrcaMessageDeliveryPointerForMessage(
       if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
     }
     if (deps.pointerWriteLedger) deps.pointerWriteLedger.set(key, now);
+    const createdClaim = !existing;
     const before = deps.submitDeps.readAsync
       ? await deps.submitDeps.readAsync(worker.identity)
       : deps.submitDeps.read(worker.identity);
     if (!before.ok) {
-      if (state && !existing) {
+      if (state && createdClaim) {
         delete state.episodes[key];
         if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
       }
@@ -1008,7 +1032,7 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     }
     const submitted = control.dispatch({ worker: worker.identity, action: 'submit-prompt', text: pointer });
     if (submitted.status === 'send_failed') {
-      if (state && !existing) {
+      if (state && createdClaim) {
         delete state.episodes[key];
         if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
       }
@@ -1016,8 +1040,22 @@ async function submitOrcaMessageDeliveryPointerForMessage(
       return { ok: false, dryRun: false, watch: false, terminals: [{ terminal: worker.identity.id, generation: worker.identity.generation, unsent: true, enter: false, ok: false, reason: submitted.reason, dispatchStatus: submitted.status }] };
     }
     const base = { terminal: worker.identity.id, generation: worker.identity.generation };
+    if (state) state.episodes[key] = { ...state.episodes[key]!, state: 'pointer-visible' };
     if (submitted.status === 'dispatch_unknown') {
-      return { ok: true, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: true, reason: submitted.reason, dispatchStatus: submitted.status }] };
+      if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state!);
+      return { ok: false, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: false, reason: 'submission_unconfirmed', dispatchStatus: submitted.status }] };
+    }
+    // Transport acceptance is not submission evidence. Re-read the pane and
+    // require the observed idle-to-busy transition before recording confirmation.
+    const afterShown = deps.submitDeps.liveness
+      ? deps.submitDeps.read(worker.identity)
+      : { ok: true as const, lines: [], source: 'screen' as const };
+    const afterLiveness = deps.submitDeps.liveness
+      ? currentLiveness(deps.submitDeps, worker.identity)
+      : 'busy';
+    if (!(afterShown.ok && afterLiveness === 'busy')) {
+      if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state!);
+      return { ok: false, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: false, reason: 'submission_unconfirmed', dispatchStatus: submitted.status }] };
     }
     const after = deps.submitDeps.readAsync
       ? await deps.submitDeps.readAsync(worker.identity)
@@ -1302,6 +1340,7 @@ export async function runOrchestrationMailReconcileTick(
       unreadCounts.set(key, (unreadCounts.get(key) ?? 0) + 1);
     }
     if (!unresolvedUnread) {
+      migrateLegacyEpisodeKeys(state, unreadEpisodeKeys);
       for (const key of Object.keys(state.episodes)) {
         if (!unreadEpisodeKeys.has(key)) delete state.episodes[key];
       }

@@ -1,6 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 1
-import { mkdtempSync, readFileSync, rmSync, unlinkSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -770,6 +770,34 @@ describe('delivery-triggered composer submission', () => {
     expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
   });
 
+  it('does not confirm OpenCode transport without observed busy liveness', async () => {
+    const target = worker('term_opencode_unconfirmed');
+    const episodeState = { messages: {}, episodes: {} };
+    let reads = 0;
+    const deps = {
+      lookupMessage: () => ({
+        ok: true as const,
+        message: { id: 'msg_opencode_unconfirmed', runId: 'run_opencode_unconfirmed', recipient: target.identity.id, consumed: false },
+      }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      writePointer: () => { throw new Error('screen pointer write must not run'); },
+      submitDeps: depsFor({}, {
+        liveness: () => 'idle' as const,
+        read: () => { reads += 1; return { ok: true as const, lines: [] }; },
+        composerControl: () => ({
+          kind: 'opencode-http' as const,
+          dispatch: () => ({ status: 'dispatched' as const }),
+        }),
+      }),
+      episodeState,
+    };
+    const result = await submitOrcaMessageDeliveryPointer('msg_opencode_unconfirmed', deps);
+    const key = workerKey(target.identity);
+    expect(result.terminals[0]).toMatchObject({ reason: 'submission_unconfirmed', enter: false, ok: false });
+    expect(reads).toBe(1);
+    expect(episodeState.episodes[key]?.state).toBe('pointer-visible');
+  });
+
   it('seals OpenCode delivery episode and does not replay an unread message', async () => {
     const target = worker('term_opencode_episode');
     const actions: string[] = [];
@@ -1493,6 +1521,79 @@ describe('orchestration mail reconciliation', () => {
     expect(result.nudged).toBe(1);
     expect(result.skipped).toBe(2);
     expect(submitted).toHaveLength(1);
+  });
+
+  it('migrates legacy run-scoped claims before stale-key pruning', async () => {
+    const target = worker('term_legacy_claim_migration');
+    const root = mkdtempSync(join(tmpdir(), 'opk-legacy-claim-migration-'));
+    const statePath = join(root, 'orchestration-mail-reconcile.json');
+    const lockPath = join(root, 'orchestration-mail-reconcile.lock');
+    const paneKey = workerKey(target.identity);
+    const legacyKey = `${paneKey}\u0000run_legacy_claim_migration`;
+    writeFileSync(statePath, JSON.stringify({
+      messages: {},
+      episodes: {
+        [legacyKey]: {
+          messageId: 'msg_legacy_claim_migration',
+          runId: 'run_legacy_claim_migration',
+          recipient: target.identity.id,
+          workerKey: paneKey,
+          nextEligibleAt: 0,
+          backoffMs: 60_000,
+          state: 'confirmed',
+        },
+      },
+    }));
+    const deps = reconciliationDeps([{
+      id: 'msg_legacy_claim_migration',
+      run_id: 'run_legacy_claim_migration',
+      to_handle: target.identity.id,
+      read: 0,
+    }], target);
+    try {
+      const result = await runOrchestrationMailReconcileTick(deps, { ledgerPath: statePath, lockPath, now: () => 1_000 });
+      const persisted = JSON.parse(readFileSync(statePath, 'utf8')) as { episodes: Record<string, { state: string }> };
+      expect(result.reasons).toContain('msg_legacy_claim_migration:orchestration_episode_already_delivered');
+      expect(deps.writes).toBe(0);
+      expect(persisted.episodes[paneKey]?.state).toBe('confirmed');
+      expect(persisted.episodes[legacyKey]).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('retains a pane claim while another run remains unread', async () => {
+    const target = worker('term_release_pane_claim');
+    const key = workerKey(target.identity);
+    const state = {
+      messages: {},
+      episodes: {
+        [key]: {
+          messageId: 'msg_release_first',
+          runId: 'run_release_first',
+          recipient: target.identity.id,
+          workerKey: key,
+          nextEligibleAt: 0,
+          backoffMs: 60_000,
+          state: 'confirmed' as const,
+        },
+      },
+    };
+    const result = await submitOrcaMessageDeliveryPointer('msg_release_first', {
+      readInbox: () => ({ ok: true as const, result: { messages: [
+        { id: 'msg_release_first', run_id: 'run_release_first', to_handle: target.identity.id, read: 1 },
+        { id: 'msg_release_second', run_id: 'run_release_second', to_handle: target.identity.id, read: 0 },
+      ] } }),
+      lookupMessage: () => ({ ok: true as const, message: {
+        id: 'msg_release_first', runId: 'run_release_first', recipient: target.identity.id, consumed: true,
+      } }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      writePointer: () => ({ status: 'dispatched' as const }),
+      submitDeps: depsFor({}, { liveness: () => 'idle' }),
+      episodeState: state,
+    });
+    expect(result.terminals[0]?.reason).toBe('delivery_already_consumed');
+    expect(state.episodes[key]?.state).toBe('confirmed');
   });
 
   it('fails closed without a complete current worker identity', async () => {
