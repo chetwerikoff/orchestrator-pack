@@ -1269,6 +1269,59 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     expect(() => readFileSync(capture, 'utf8')).toThrow();
   });
 
+  it('continues the same durable GPT round and relaunches only unresolved source slots', async () => {
+    const storeRoot = tempRoot('opk-gpt-same-round-continuation-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+
+    const first = await startPackReview(pluralStart(storeRoot, capture, {
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: successfulCleanReviewPayload('inv-source-01') }],
+        'source-02': [
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy' }), exitCode: 13 },
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy' }), exitCode: 13 },
+        ],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
+      },
+    }));
+    expect(first).toMatchObject({
+      ok: true,
+      status: 'reviewing',
+      coverage: { kind: 'partial', completedSourceCount: 2, cardinality: 3 },
+    });
+    const firstRunId = String(first.runId);
+    const before = getPackReviewRun(firstRunId, { projectId: 'orchestrator-pack', storeRoot });
+    expect(before?.reviewRound?.sourceSlots.map((slot) => slot.attemptOrdinal)).toEqual([1, 2, 1]);
+    const completedBefore = before!.reviewRound!.sourceSlots
+      .filter((slot) => slot.slotId !== 'source-02')
+      .map((slot) => ({ slotId: slot.slotId, invocationId: slot.invocationId, payload: slot.payload }));
+
+    const relaunched: string[] = [];
+    const second = await startPackReview(pluralStart(storeRoot, capture, {
+      fixtureGptAttemptObserver: async () => ({
+        state: 'replacement_eligible' as const,
+        replacementEligible: true,
+        slotId: 'source-02',
+      }),
+      fixtureAfterGptInvocationBound: async ({ slotId }) => { relaunched.push(slotId); },
+      fixtureReviewBySourceSlot: {
+        'source-02': [{ stdout: successfulCleanReviewPayload('inv-source-02-replacement') }],
+      },
+    }));
+
+    expect(second.ok).toBe(true);
+    expect(second.runId).toBe(firstRunId);
+    expect(relaunched).toEqual(['source-02']);
+    const after = getPackReviewRun(firstRunId, { projectId: 'orchestrator-pack', storeRoot });
+    expect(after?.reviewRound?.sourceSlots.map((slot) => slot.attemptOrdinal)).toEqual([1, 3, 1]);
+    expect(after?.reviewRound?.sourceSlots.every((slot) => slot.terminalClass === 'complete_clean')).toBe(true);
+    expect(after!.reviewRound!.sourceSlots
+      .filter((slot) => slot.slotId !== 'source-02')
+      .map((slot) => ({ slotId: slot.slotId, invocationId: slot.invocationId, payload: slot.payload })))
+      .toEqual(completedBefore);
+  });
   it('fails an explicitly reconciled 1/3 partial after grace with the recovery reason', async () => {
     const storeRoot = tempRoot('opk-gpt-one-of-three-after-grace-');
     const capture = path.join(storeRoot, 'github-review.json');
