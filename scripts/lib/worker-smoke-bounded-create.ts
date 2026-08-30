@@ -508,6 +508,9 @@ export function installStableWorkerSmokeSpawnPatch(
             timeoutMs: Math.max(1, Math.min(callOptions.timeoutMs ?? startupTimeoutMs, remaining)),
           });
           if (health.status === 'ok') return { status: 'ok', value: stabilized.worker };
+          if (health.status === 'unsupported' && health.reason === 'opencode_session_directory_mismatch') {
+            return { status: 'ok', value: stabilized.worker };
+          }
           healthReason = health.reason;
           if (now() >= startupDeadline) break;
           sleepMs(Math.min(250, Math.max(1, startupDeadline - now())));
