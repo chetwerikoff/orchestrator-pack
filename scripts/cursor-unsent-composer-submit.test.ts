@@ -24,7 +24,7 @@ import {
   workerKey,
   type UnsentComposerSubmitDeps,
 } from './cursor-unsent-composer-submit.ts';
-import type { RuntimeWorker, RuntimeWorkerIdentity } from './runtime/contracts.ts';
+import type { RuntimeComposerControlRequest, RuntimeWorker, RuntimeWorkerIdentity } from './runtime/contracts.ts';
 
 const POKE = 'You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run `orca orchestration check --run run_d613a86c140a`.';
 const DISPATCH_POKE = 'You have 1 orchestration message. Read and act on your orchestration message. Run `orca orchestration check`.';
@@ -728,9 +728,12 @@ describe('buildDeliveryPointer', () => {
 });
 
 describe('delivery-triggered composer submission', () => {
-  it('uses OpenCode HTTP append and submit without classifying screen chrome', async () => {
+  it('delivers through the OpenCode session while preserving human composer text', async () => {
     const target = worker('term_opencode_http');
     const actions: string[] = [];
+    const requests: RuntimeComposerControlRequest[] = [];
+    const humanComposerText = 'human-authored composer draft';
+    let reads = 0;
     const deps = {
       lookupMessage: () => ({
         ok: true as const,
@@ -739,11 +742,15 @@ describe('delivery-triggered composer submission', () => {
       resolveWorker: () => ({ ok: true as const, worker: target }),
       writePointer: () => { throw new Error('screen pointer write must not run'); },
       submitDeps: depsFor({}, {
-        read: () => { throw new Error('screen classification must not run'); },
+        read: () => {
+          reads += 1;
+          return { ok: true as const, lines: [humanComposerText] };
+        },
         composerControl: () => ({
           kind: 'opencode-http' as const,
           dispatch: (request) => {
             actions.push(request.action);
+            requests.push(request);
             return { status: 'dispatched' as const };
           },
         }),
@@ -751,6 +758,12 @@ describe('delivery-triggered composer submission', () => {
     };
     const result = await submitOrcaMessageDeliveryPointer('msg_opencode_http', deps);
     expect(actions).toEqual(['submit-prompt']);
+    expect(requests[0]).toMatchObject({
+      action: 'submit-prompt',
+      text: expect.stringContaining('orca orchestration check'),
+    });
+    expect(requests[0]?.text).not.toContain(humanComposerText);
+    expect(reads).toBe(0);
     expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
   });
 
