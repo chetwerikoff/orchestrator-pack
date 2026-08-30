@@ -3947,9 +3947,12 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     const legacyHarnessFixtureWithoutSmokePlan = process.env.OPK_VITEST_HARNESS === '1'
       && authoritative.issueBody !== undefined
       && !authoritative.issueBody.includes('```smoke-test-plan');
+    const logicalRoundContinuation = logicalAccounting
+      && (authority.cycle?.consumedRoundOrdinals?.length ?? 0) > 0;
     if (authoritative.issueBody !== undefined
         && smokeOrderingRequired(authoritative.issueBody)
-        && !legacyHarnessFixtureWithoutSmokePlan) {
+        && !legacyHarnessFixtureWithoutSmokePlan
+        && !logicalRoundContinuation) {
       try {
         assertPackReviewSmokeAdmission({ authority, headSha: target.headSha });
       } catch (error) {
