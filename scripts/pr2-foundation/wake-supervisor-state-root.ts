@@ -51,3 +51,17 @@ export function resolveWorkerMessageDispatchJournalPath(
     'worker-message-dispatch-journal.json',
   );
 }
+
+export function resolveDispatchTerminalMailLedgerPath(
+  options: WakeSupervisorStateRootOptions = {},
+): string {
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const paths = pathApi(platform);
+  const explicit = trimmed(env.OPK_DISPATCH_TERMINAL_MAIL_LEDGER);
+  if (explicit) return paths.resolve(explicit);
+  return paths.join(
+    resolveWakeSupervisorStateRoot(options),
+    'dispatch-terminal-mail-ledger.json',
+  );
+}
