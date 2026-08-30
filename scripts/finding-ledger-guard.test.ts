@@ -2006,9 +2006,8 @@ describe('published author-state M3 bridge', () => {
 });
 
 describe('receipt-backed finding ledger operator-stage waiver regression #1778', () => {
-  function waivedArchitecturalReviewFixture(captureText = markedClean()) {
+  function waivedArchitecturalReviewFixture(captureText = markedClean(), taskIdentity = 'issue:1778') {
     const sourceRevision = 'r01';
-    const taskIdentity = 'issue:1778';
     const reviewEpisodeId = taskIdentity + '@' + sourceRevision;
     const stageAttemptId = 'attempt-1';
     const stageReceiptId = reviewEpisodeId + ':stage-receipt:0001';
@@ -2197,7 +2196,7 @@ describe('receipt-backed finding ledger operator-stage waiver regression #1778',
   }
 
   function finalAcceptanceWaiverFixture(reviewCaptureText = markedClean()) {
-    const base = waivedArchitecturalReviewFixture(reviewCaptureText);
+    const base = waivedArchitecturalReviewFixture(reviewCaptureText, 'issue:1779');
     const sourceRevision = base.stageReceipt.sourceRevision;
     const reviewEpisodeId = base.stageReceipt.reviewEpisodeId;
     const lensReceiptId = reviewEpisodeId + ':stage-receipt:0002';
@@ -2257,6 +2256,10 @@ describe('receipt-backed finding ledger operator-stage waiver regression #1778',
     }));
     const episodeAuthority = {
       ...base.episodeAuthority,
+      tierIntake: {
+        ...base.episodeAuthority.tierIntake,
+        competitiveRationale: 'Issue #1779 exercises the producer-resolved operator waiver through final acceptance.',
+      },
       receiptInventory: { ...base.episodeAuthority.receiptInventory, stageReceiptIds: stageReceipts.map((receipt) => receipt.stageReceiptId) },
     };
     const options = {
