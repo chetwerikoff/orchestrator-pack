@@ -51,13 +51,13 @@ Use `--phase pre-lens` when only the T3 pre-lens stages are complete. The
 command returns a non-zero status and a named missing input when evidence is
 absent. It writes no acceptance artifact on failure.
 
-Before the terminal `architectural` launch in T2/T3, run the same producer with
-`--phase post-lens` over every canonical pre-terminal stage-evidence input.
-Those outputs are the receipt-backed inputs consumed by
-`scripts/manager-review-terminal-bundle.ts`. T1 has no predecessor stage and
-does not fabricate these files merely to launch its sole terminal reviewer; its
-terminal bundle uses the current `tier-intake.json` and zero-state
-`author-dispositions.json`.
+Before the terminal `architectural` launch, run the same producer over every
+canonical pre-terminal stage-evidence input: T2 uses `--phase pre-lens`, while
+T3 uses `--phase post-lens`. Those outputs are the receipt-backed inputs
+consumed by `scripts/manager-review-terminal-bundle.ts`. T1 has no predecessor
+stage and does not fabricate these files merely to launch its sole terminal
+reviewer; its terminal bundle uses the current `tier-intake.json` and
+zero-state `author-dispositions.json`.
 
 `check-artifacts`, artifact production, launch admission, and final acceptance
 consume the single executable stage-plan authority in

@@ -544,6 +544,21 @@ describe('Issue #1431 manager reviewer canon', () => {
         reviewDir: t1Dir,
         liveIssueBody: t1Draft,
       });
+      const t1AuthorPath = join(t1Dir, 'author-dispositions.json');
+      const originalT1Author = readFileSync(t1AuthorPath, 'utf8');
+      const nonZeroStateT1Author = JSON.parse(originalT1Author) as {
+        m4: { inventory: Array<Record<string, string>> };
+      };
+      nonZeroStateT1Author.m4.inventory = [{ mechanism: 'fabricated prior state', disposition: 'keep' }];
+      writeFileSync(t1AuthorPath, JSON.stringify(nonZeroStateT1Author, null, 2));
+      expect(() => buildManagerReviewTerminalBundle({
+        repositoryFullName: reviewContext.repositoryFullName,
+        issueNumber: reviewContext.issueNumber,
+        sourceRevision: 'r01',
+        reviewDir: t1Dir,
+        liveIssueBody: t1Draft,
+      })).toThrow('terminal_bundle_zero_state_m4_invalid');
+      writeFileSync(t1AuthorPath, originalT1Author);
       expect(t1Bundle.predecessorStage).toBeNull();
       expect(t1Bundle.reviewEconomics.stageReceipts).toEqual([]);
       expect(t1Bundle.reviewEconomics.counts).toEqual({

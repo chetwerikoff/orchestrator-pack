@@ -332,6 +332,9 @@ export function buildManagerReviewTerminalBundle(options: BuildManagerReviewTerm
     throw new Error('terminal_bundle_tier_intake_stale');
   }
   const { tier } = resolveTierAndPredecessor(intake, predecessorStage);
+  if (tier === 'T1' && predecessorStage === null && authorM4.length > 0) {
+    throw new Error('terminal_bundle_zero_state_m4_invalid');
+  }
 
   let ledgerFindings: JsonRecord[] = findings;
   let receipts: ManagerReviewTerminalBundle['reviewEconomics']['stageReceipts'] = [];

@@ -83,9 +83,10 @@ manifests or persisted canon snapshots.
 For the terminal `architectural` reviewer, the create-Issue workflow first
 materializes the current governed prior-state bundle with
 `scripts/manager-review-terminal-bundle.ts` and renders `${INPUT_FILE}` with
-that exact bundle. T1 uses the current-bound zero-state form; T2/T3 use the
-post-lens acceptance artifacts. Keep the bundle as a separate local transport
-input and pass its path through the launch below.
+that exact bundle. T1 uses the current-bound zero-state form; T2 uses
+pre-lens acceptance artifacts, and T3 uses post-lens acceptance artifacts.
+Keep the bundle as a separate local transport input and pass its path through
+the launch below.
 
 ## Launch
 
