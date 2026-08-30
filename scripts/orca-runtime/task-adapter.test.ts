@@ -155,6 +155,7 @@ describe('OpenCode HTTP control plane', () => {
       incarnationId: 'generation-opencode-http',
       worktreePath: workspacePath,
       title: 'opencode',
+      command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture',
       status: 'running' as const,
     };
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
@@ -172,7 +173,7 @@ describe('OpenCode HTTP control plane', () => {
     const requests: Array<{ url: string; method: 'GET' | 'POST'; body?: string; timeoutMs: number }> = [];
     const adapter = makeAdapter((input) => {
       requests.push(input);
-      return { status: 200, body: input.method === 'GET' ? JSON.stringify({ healthy: true, version: '1.18.25' }) : '{}' };
+      return { status: 200, body: input.method === 'GET' ? JSON.stringify({ healthy: true, version: '1.18.25' }) : 'true' };
     });
     const spawned = adapter.spawnWorker({
       title: 'opencode',
@@ -198,6 +199,74 @@ describe('OpenCode HTTP control plane', () => {
       { method: 'POST', url: 'http://127.0.0.1:18891/tui/submit-prompt' },
     ]);
     expect(requests[1]?.body).toBe(JSON.stringify({ text: 'delivery pointer' }));
+  });
+
+  it('recovers OpenCode control from terminal metadata on a fresh adapter', () => {
+    const requests: string[] = [];
+    const first = makeAdapter((input) => {
+      requests.push(input.url);
+      return { status: 200, body: input.method === 'GET' ? JSON.stringify({ healthy: true, version: '1.18.25' }) : 'true' };
+    });
+    const spawned = first.spawnWorker({
+      title: 'opencode',
+      command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture',
+    });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+
+    const second = makeAdapter((input) => {
+      requests.push(input.url);
+      return { status: 200, body: 'true' };
+    });
+    const control = second.composerControl?.(spawned.value.identity);
+    expect(control?.kind).toBe('opencode-http');
+    expect(control?.dispatch({ worker: spawned.value.identity, action: 'append-prompt', text: 'fresh adapter' })).toMatchObject({ status: 'dispatched' });
+    expect(requests.at(-1)).toBe('http://127.0.0.1:18891/tui/append-prompt');
+  });
+
+  it('bounds health HTTP timeout by the remaining health deadline', () => {
+    let clock = 0;
+    const requests: Array<{ url: string; timeoutMs: number }> = [];
+    const terminal = {
+      handle: 'term-opencode-http',
+      incarnationId: 'generation-opencode-http',
+      worktreePath: process.cwd(),
+      title: 'opencode',
+      command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture',
+      status: 'running' as const,
+    };
+    // The fixture's terminal lookup represents the slow first half of one probe.
+    const slow = new OrcaTaskRuntimeAdapter({
+      now: () => clock,
+      runJson: vi.fn((args: readonly string[]): OrcaJsonResponse => {
+        const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+        if (operation === 'terminal show') return { ok: true, result: { terminal } };
+        if (operation === 'terminal list') { clock = 80; return { ok: true, result: { totalCount: 1, truncated: false, terminals: [terminal] } }; }
+        return operation === 'worktree current'
+          ? { ok: false, error: { code: 'not_available', message: 'fixture' } }
+          : operation === 'terminal create'
+            ? { ok: true, result: { terminal } }
+            : { ok: false, error: { code: 'unexpected_operation', message: operation } };
+      }) as never,
+      openCodeHttpRequest: (input) => {
+        requests.push({ url: input.url, timeoutMs: input.timeoutMs });
+        return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) };
+      },
+    });
+    const identity = { runtime: 'orca' as const, id: 'term-opencode-http', generation: 'generation-opencode-http' };
+    expect(slow.spawnWorker({ title: 'opencode', command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture' }).status).toBe('ok');
+    const health = slow.openCodeHealth(identity, { timeoutMs: 100 });
+    expect(health.status).toBe('ok');
+    expect(requests.at(-1)?.timeoutMs).toBe(20);
+  });
+
+  it('rejects non-boolean successful TUI responses', () => {
+    const adapter = makeAdapter((input) => ({ status: 200, body: input.method === 'GET' ? JSON.stringify({ healthy: true, version: '1.18.25' }) : 'false' }));
+    const spawned = adapter.spawnWorker({ title: 'opencode', command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture' });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+    const control = adapter.composerControl?.(spawned.value.identity);
+    expect(control?.dispatch({ worker: spawned.value.identity, action: 'append-prompt', text: 'reject' })).toEqual({ status: 'send_failed', reason: 'opencode_tui_response_schema_mismatch' });
   });
 
   it.each([

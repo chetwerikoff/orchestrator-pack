@@ -915,19 +915,34 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   if (existing && now < existing.nextEligibleAt) {
     return deliveryNoEffect('orchestration_episode_backoff', worker, false);
   }
+
   const control = deps.submitDeps.composerControl?.(worker.identity);
   if (control?.kind === 'opencode-http') {
-    const appended = control.dispatch({ worker: worker.identity, action: 'append-prompt', text: pointer });
-    if (appended.status !== 'dispatched') {
-      return deliveryNoEffect(appended.reason ?? 'opencode_prompt_append_failed', worker, false);
+    let submitted: RuntimeDispatchResult;
+    if (existing) {
+      submitted = control.dispatch({ worker: worker.identity, action: 'submit-prompt' });
+    } else {
+      const appended = control.dispatch({ worker: worker.identity, action: 'append-prompt', text: pointer });
+      if (appended.status !== 'dispatched') {
+        if (state) {
+          delete state.episodes[key];
+          if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
+        }
+        deps.pointerWriteLedger?.delete(key);
+        return deliveryNoEffect(appended.reason ?? 'opencode_prompt_append_failed', worker, false);
+      }
+      submitted = control.dispatch({ worker: worker.identity, action: 'submit-prompt' });
     }
-    const submitted = control.dispatch({ worker: worker.identity, action: 'submit-prompt' });
     const base = { terminal: worker.identity.id, generation: worker.identity.generation };
     if (submitted.status === 'send_failed') {
       return { ok: false, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: false, reason: submitted.reason, dispatchStatus: submitted.status }] };
     }
     if (submitted.status === 'dispatch_unknown') {
       return { ok: true, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: true, reason: submitted.reason, dispatchStatus: submitted.status }] };
+    }
+    if (state) {
+      state.episodes[key] = { ...state.episodes[key]!, sealed: true };
+      if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
     }
     return { ok: true, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: true, ok: true, reason: 'enter_sent', dispatchStatus: submitted.status }] };
   }

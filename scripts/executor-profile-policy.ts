@@ -429,7 +429,7 @@ export function buildExecutorCommand(profile: SemanticExecutorProfile): Executor
 
   const executable = profile.surface === 'task' ? descriptor.taskExecutable : descriptor.smokeExecutable;
   const inlineConfig = JSON.stringify({ agent: { [OPENCODE_PACK_AGENT]: { model: profile.model, variant: profile.effort } } });
-  const command = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfig)} ${executable} --agent ${quote(OPENCODE_PACK_AGENT)}`;
+  const command = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfig)} ${executable} --hostname 127.0.0.1 --port ${openCodeControlPort(OPENCODE_PACK_AGENT)} --agent ${quote(OPENCODE_PACK_AGENT)}`;
   return {
     executable,
     command,

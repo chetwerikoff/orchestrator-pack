@@ -168,6 +168,11 @@ interface OwnedWorkerRecord {
   readonly openCodeUrl?: string;
 }
 
+interface OpenCodeUrlRecord {
+  readonly identity: RuntimeWorkerIdentity;
+  readonly url: string;
+}
+
 interface KnownWorkspaceRecord {
   readonly workspaceSelector: 'active' | string;
   readonly workspacePath: string;
@@ -435,6 +440,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
   readonly #options: OrcaRuntimeAdapterOptions;
   readonly #now: () => number;
   readonly #owned = new Map<string, OwnedWorkerRecord>();
+  readonly #openCodeUrls = new Map<string, OpenCodeUrlRecord>();
   readonly #knownWorkspace = new Map<string, KnownWorkspaceRecord>();
   readonly #observations = new Map<string, ObservationBinding>();
 
@@ -491,16 +497,16 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     request: RuntimeComposerControlRequest,
     options: RuntimeCallOptions = {},
   ): RuntimeDispatchResult {
-    const owned = this.#owned.get(worker.id);
-    if (!owned?.openCodeUrl || !sameRuntimeWorker(owned.identity, worker)) {
-      return { status: 'send_failed', reason: 'runtime_opencode_control_unavailable' };
-    }
-    const current = OrcaRuntimeAdapter.prototype.findWorker.call(this, worker, options);
+    const current = this.findWorker(worker, options);
     if (current.status !== 'ok') return { status: 'send_failed', reason: current.reason };
     if (current.value === null) return { status: 'send_failed', reason: 'worker_generation_not_found' };
+    const urlRecord = this.#openCodeUrls.get(worker.id);
+    if (!urlRecord || !sameRuntimeWorker(urlRecord.identity, current.value.identity)) {
+      return { status: 'send_failed', reason: 'runtime_opencode_control_unavailable' };
+    }
     const path = request.action === 'append-prompt' ? '/tui/append-prompt' : '/tui/submit-prompt';
     const response = this.#openCodeRequest({
-      url: `${owned.openCodeUrl}${path}`,
+      url: `${urlRecord.url}${path}`,
       method: 'POST',
       ...(request.action === 'append-prompt' ? { body: JSON.stringify({ text: request.text ?? '' }) } : {}),
       timeoutMs: Math.max(1, options.timeoutMs ?? 10_000),
@@ -508,6 +514,15 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if ('error' in response) return { status: 'send_failed', reason: response.error };
     if (response.status < 200 || response.status >= 300) {
       return { status: 'send_failed', reason: `opencode_http_status_${response.status}` };
+    }
+    let accepted: unknown;
+    try {
+      accepted = JSON.parse(response.body);
+    } catch {
+      return { status: 'send_failed', reason: 'opencode_tui_response_schema_mismatch' };
+    }
+    if (accepted !== true) {
+      return { status: 'send_failed', reason: 'opencode_tui_response_schema_mismatch' };
     }
     return {
       status: 'dispatched',
@@ -521,6 +536,14 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     workspacePath: string,
   ): void {
     this.#knownWorkspace.set(identityKey(identity), { workspaceSelector, workspacePath });
+  }
+
+  #rememberOpenCodeUrl(identity: RuntimeWorkerIdentity, url: string): void {
+    this.#openCodeUrls.set(identity.id, { identity, url });
+    const owned = this.#owned.get(identity.id);
+    if (owned?.openCodeUrl) {
+      this.#owned.set(identity.id, { ...owned, identity, openCodeUrl: url });
+    }
   }
 
   #remaining(deadline: number): number {
@@ -729,6 +752,10 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
     const currentOwned = this.#owned.get(handle);
     const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: handle, generation };
+    const openCodeUrl = typeof terminal.command === 'string'
+      ? openCodeUrlFromCommand(terminal.command)
+      : undefined;
+    if (openCodeUrl) this.#rememberOpenCodeUrl(identity, openCodeUrl);
     const worker: RuntimeWorker = {
       identity,
       workspacePath,
@@ -744,8 +771,14 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
   composerControl(
     worker: RuntimeWorkerIdentity,
   ): RuntimeComposerControl | undefined {
-    const owned = this.#owned.get(worker.id);
-    if (!owned?.openCodeUrl || !sameRuntimeWorker(owned.identity, worker)) return undefined;
+    let record = this.#openCodeUrls.get(worker.id);
+    if (!record || !sameRuntimeWorker(record.identity, worker)) {
+      const current = this.findWorker(worker);
+      record = current.status === 'ok' && current.value && sameRuntimeWorker(current.value.identity, worker)
+        ? this.#openCodeUrls.get(worker.id)
+        : undefined;
+    }
+    if (!record || !sameRuntimeWorker(record.identity, worker)) return undefined;
     return {
       kind: 'opencode-http',
       dispatch: (request, options) => this.#openCodeDispatch(worker, request, options),
@@ -756,17 +789,22 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     worker: RuntimeWorkerIdentity,
     options: RuntimeCallOptions = {},
   ): RuntimeResult<RuntimeOpenCodeHealth> {
-    const owned = this.#owned.get(worker.id);
-    if (!owned?.openCodeUrl || !sameRuntimeWorker(owned.identity, worker)) {
-      return runtimeUnsupported('readiness', 'runtime_opencode_control_unavailable');
-    }
-    const current = OrcaRuntimeAdapter.prototype.findWorker.call(this, worker, options);
+    const deadline = this.#now() + Math.max(1, options.timeoutMs ?? 10_000);
+    const currentOptions = this.#boundedOptions(deadline, options);
+    if (!currentOptions) return runtimeFailure('readiness', 'runtime_timeout');
+    const current = this.findWorker(worker, currentOptions);
     if (current.status !== 'ok') return current;
     if (current.value === null) return runtimeFailure('readiness', 'worker_generation_not_found');
+    const urlRecord = this.#openCodeUrls.get(worker.id);
+    if (!urlRecord || !sameRuntimeWorker(urlRecord.identity, current.value.identity)) {
+      return runtimeUnsupported('readiness', 'runtime_opencode_control_unavailable');
+    }
+    const healthOptions = this.#boundedOptions(deadline, options);
+    if (!healthOptions) return runtimeFailure('readiness', 'runtime_timeout');
     const response = this.#openCodeRequest({
-      url: `${owned.openCodeUrl}/global/health`,
+      url: `${urlRecord.url}/global/health`,
       method: 'GET',
-      timeoutMs: Math.max(1, options.timeoutMs ?? 10_000),
+      timeoutMs: healthOptions.timeoutMs!,
     });
     if ('error' in response) return runtimeFailure('readiness', response.error);
     if (response.status < 200 || response.status >= 300) {
@@ -1094,13 +1132,15 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       title: terminal.title ?? input.title,
       provenance: 'internal',
     };
+    const openCodeUrl = openCodeUrlFromCommand(input.command);
     this.#owned.set(handle, {
       identity,
       workspacePath: worker.workspacePath,
       workspaceSelector: workspace,
       title: worker.title,
-      ...(openCodeUrlFromCommand(input.command) ? { openCodeUrl: openCodeUrlFromCommand(input.command) } : {}),
+      ...(openCodeUrl ? { openCodeUrl } : {}),
     });
+    if (openCodeUrl) this.#rememberOpenCodeUrl(identity, openCodeUrl);
     this.#rememberWorkspace(identity, workspace, worker.workspacePath);
     return { status: 'ok', value: worker };
   }

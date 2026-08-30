@@ -754,6 +754,38 @@ describe('delivery-triggered composer submission', () => {
     expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
   });
 
+  it('seals OpenCode delivery episode and does not replay an unread message', async () => {
+    const target = worker('term_opencode_episode');
+    const actions: string[] = [];
+    const episodeState = { messages: {}, episodes: {} };
+    const pointerWriteLedger = new Map<string, number>();
+    const deps = {
+      lookupMessage: () => ({
+        ok: true as const,
+        message: { id: 'msg_opencode_episode', runId: 'run_opencode_episode', recipient: target.identity.id, consumed: false },
+      }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      writePointer: () => { throw new Error('screen pointer write must not run'); },
+      submitDeps: depsFor({}, {
+        read: () => { throw new Error('screen classification must not run'); },
+        composerControl: () => ({
+          kind: 'opencode-http' as const,
+          dispatch: (request) => {
+            actions.push(request.action);
+            return { status: 'dispatched' as const };
+          },
+        }),
+      }),
+      episodeState,
+      pointerWriteLedger,
+    };
+    const first = await submitOrcaMessageDeliveryPointer('msg_opencode_episode', deps);
+    const second = await submitOrcaMessageDeliveryPointer('msg_opencode_episode', deps);
+    expect(actions).toEqual(['append-prompt', 'submit-prompt']);
+    expect(first.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
+    expect(second.terminals[0]?.reason).toBe('orchestration_episode_already_delivered');
+  });
+
   it('submits an exact pointer soft-wrapped by a narrow Cursor composer', async () => {
     const target = worker('term_wrapped_pointer');
     const submitted: RuntimeWorkerIdentity[] = [];
