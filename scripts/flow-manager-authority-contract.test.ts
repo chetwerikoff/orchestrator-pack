@@ -54,6 +54,14 @@ function createTerminalBundleFixture(root: string, sourceRevision = 'r08') {
     protectedActivation: null,
     protectedOccurrences: [],
   };
+  writeFileSync(join(reviewDir, 'tier-intake.json'), JSON.stringify({
+    schema: 'tier-intake/v1',
+    producer: 'fixture',
+    taskIdentity: 'issue:1431',
+    kind: 'fresh',
+    priorTier: 'T2',
+    firstRevision: 'r01',
+  }, null, 2));
   writeFileSync(join(reviewDir, 'author-dispositions.json'), JSON.stringify({
     schema: 'create-issue-author-dispositions/v1',
     reviewEpisodeId,
@@ -442,6 +450,46 @@ describe('Issue #1431 manager reviewer canon', () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-manager-review-terminal-bundle-'));
     try {
       const { reviewDir, draft, bundle } = createTerminalBundleFixture(root);
+      const t1Dir = join(root, 't1');
+      mkdirSync(t1Dir, { recursive: true });
+      const t1Draft = '<!-- source-revision: r01 -->\n\n# T1 fixture\n';
+      writeFileSync(join(t1Dir, 'tier-intake.json'), JSON.stringify({
+        schema: 'tier-intake/v1',
+        producer: 'fixture',
+        taskIdentity: 'issue:1431',
+        kind: 'fresh',
+        priorTier: 'T1',
+        firstRevision: 'r01',
+      }, null, 2));
+      writeFileSync(join(t1Dir, 'author-dispositions.json'), JSON.stringify({
+        schema: 'create-issue-author-dispositions/v1',
+        reviewEpisodeId: 'issue:1431@r01',
+        sourceRevision: 'r01',
+        predecessorStage: null,
+        draft: t1Draft,
+        findings: [],
+        m4: {
+          reviewEpisodeId: 'issue:1431@r01',
+          sourceRevision: 'r01',
+          predecessorStage: null,
+          inventory: [],
+        },
+      }, null, 2));
+      const t1Bundle = buildManagerReviewTerminalBundle({
+        repositoryFullName: reviewContext.repositoryFullName,
+        issueNumber: reviewContext.issueNumber,
+        sourceRevision: 'r01',
+        reviewDir: t1Dir,
+        liveIssueBody: t1Draft,
+      });
+      expect(t1Bundle.predecessorStage).toBeNull();
+      expect(t1Bundle.reviewEconomics.stageReceipts).toEqual([]);
+      expect(t1Bundle.reviewEconomics.counts).toEqual({
+        rawFindingCount: 0,
+        distinctFindingCount: 0,
+        processedDistinctCount: 0,
+      });
+
       expect(bundle.draft).toBe(draft);
       expect(bundle.rejectPartition).toHaveLength(1);
       expect(bundle.protectedM3).toHaveLength(1);
