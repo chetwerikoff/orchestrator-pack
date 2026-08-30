@@ -79,13 +79,16 @@ function requireNullableString(record: JsonRecord, key: string, cause: string): 
   return value;
 }
 
-function readJson(path: string, cause: string): JsonRecord {
-  let parsed: unknown;
+function readJsonValue(path: string, cause: string): unknown {
   try {
-    parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    return JSON.parse(readFileSync(path, 'utf8')) as unknown;
   } catch {
     throw new Error(cause);
   }
+}
+
+function readJson(path: string, cause: string): JsonRecord {
+  const parsed = readJsonValue(path, cause);
   if (!isRecord(parsed)) throw new Error(cause);
   return parsed;
 }
@@ -101,11 +104,11 @@ function validateCounts(value: unknown): ManagerReviewTerminalBundle['reviewEcon
   const keys = ['rawFindingCount', 'distinctFindingCount', 'processedDistinctCount'] as const;
   const result = {} as Record<(typeof keys)[number], number>;
   for (const key of keys) {
-    const count = value[key];
-    if (!Number.isSafeInteger(count) || Number(count) < 0) {
+    const count = Number(value[key]);
+    if (!Number.isSafeInteger(count) || count < 0) {
       throw new Error('terminal_bundle_review_economics_invalid');
     }
-    result[key] = Number(count);
+    result[key] = count;
   }
   return result;
 }
@@ -248,10 +251,11 @@ export function buildManagerReviewTerminalBundle(options: BuildManagerReviewTerm
   if (!latestReceipt || latestReceipt.stage === 'architectural') throw new Error('terminal_bundle_predecessor_invalid');
   if (predecessorStage !== latestReceipt.stage) throw new Error('terminal_bundle_predecessor_stale');
 
-  const relay = readJson(join(reviewDir, 'verified-relay-evidence.json'), 'terminal_bundle_relay_invalid');
-  const relayEntries = Array.isArray(relay.items) ? relay.items : Array.isArray(relay.evidence) ? relay.evidence : Array.isArray(relay.relays) ? relay.relays : null;
-  const verifiedRelayCount = relayEntries ? relayEntries.length : Number(relay.count);
-  if (!Number.isSafeInteger(verifiedRelayCount) || verifiedRelayCount < 0) throw new Error('terminal_bundle_relay_invalid');
+  const relay = readJsonValue(join(reviewDir, 'verified-relay-evidence.json'), 'terminal_bundle_relay_invalid');
+  if (!Array.isArray(relay) || relay.some((item) => !isRecord(item) || item.verified !== true)) {
+    throw new Error('terminal_bundle_relay_invalid');
+  }
+  const verifiedRelayCount = relay.length;
 
   const rejectPartition = ledgerFindings.filter((row) => row.defectDisposition === 'rejected-as-false');
   const protectedM3 = ledgerFindings.filter((row) => PROTECTED_TYPES.has(String(row.type ?? '').toLowerCase()));
@@ -310,8 +314,21 @@ export function validateManagerReviewTerminalBundle(
     throw new Error('canonical_prompt_terminal_bundle_invalid');
   }
   validateCounts(value.reviewEconomics.counts);
-  if (!Array.isArray(value.reviewEconomics.stageReceipts) || !Number.isSafeInteger(value.reviewEconomics.verifiedRelayCount)) {
+  if (!Array.isArray(value.reviewEconomics.stageReceipts)) {
     throw new Error('canonical_prompt_terminal_bundle_invalid');
+  }
+  const relayCount = Number(value.reviewEconomics.verifiedRelayCount);
+  if (!Number.isSafeInteger(relayCount) || relayCount < 0) {
+    throw new Error('canonical_prompt_terminal_bundle_invalid');
+  }
+  for (const receipt of value.reviewEconomics.stageReceipts) {
+    if (!isRecord(receipt)
+      || typeof receipt.stageReceiptId !== 'string'
+      || typeof receipt.stage !== 'string'
+      || typeof receipt.sourceRevision !== 'string'
+      || typeof receipt.outcome !== 'string') {
+      throw new Error('canonical_prompt_terminal_bundle_invalid');
+    }
   }
   const normalized = value as unknown as ManagerReviewTerminalBundle;
   for (const entry of normalized.authorM4) {
