@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { runProcessSync } from './kernel/subprocess.ts';
 import {
@@ -11,6 +12,7 @@ import {
   renderManagerReviewBriefBatch,
   type ManagerReviewBriefContext,
 } from './lib/manager-review-brief.ts';
+import { buildManagerReviewTerminalBundle } from './lib/manager-review-terminal-bundle.ts';
 import { runStateLightEntry } from './chatgpt-browser-turn/state-light-entry.ts';
 import { runCli as runLegacyBrowserTurnCli } from './chatgpt-browser-turn.ts';
 import { runBrowserAdapter } from './flow-manager-browser-gpt-long-run.ts';
@@ -36,6 +38,158 @@ const reviewContext: ManagerReviewBriefContext = {
   sourceSlot: '01',
   invocationId: '11111111-2222-4333-8444-555555555555',
 };
+
+function createTerminalBundleFixture(root: string, sourceRevision = 'r08') {
+  const reviewDir = join(root, '.review', '1431');
+  mkdirSync(reviewDir, { recursive: true });
+  const reviewEpisodeId = 'issue:1431@r01';
+  const draft = `<!-- source-revision: ${sourceRevision} -->\n\n# terminal fixture\n`;
+  const finding = {
+    id: 'scope-fixture',
+    type: 'scope-violation',
+    defectDisposition: 'rejected-as-false',
+    remedyDisposition: 'accepted',
+    occurrences: ['sha256:fixture:pass-01-architectural-review-01.capture.txt:1'],
+    architectPending: false,
+    architectRequired: false,
+    protectedActivation: null,
+    protectedOccurrences: [],
+  };
+  const captureTexts = ['reviewer one\n', 'reviewer two\n', 'reviewer three\n'];
+  const captures = captureTexts.map((captureText, index) => {
+    const name = `pass-01-architectural-review-${String(index + 1).padStart(2, '0')}.capture.txt`;
+    return {
+      captureIdentity: `sha256:fixture:${name}`,
+      name,
+      byteLength: Buffer.byteLength(captureText),
+      sha256: createHash('sha256').update(captureText, 'utf8').digest('hex'),
+      rawFindingCount: index === 0 ? 1 : 0,
+    };
+  });
+  const invocations = captures.map((capture, index) => ({
+    schema: 'reviewer-invocation-envelope/v1',
+    reviewEpisodeId,
+    stageAttemptId: 'architectural-review-attempt',
+    policyVersion: 'triple-source/v1',
+    reviewerCardinality: 3,
+    cardinalityConfigIdentity: 'env:OPK_GPT_REVIEWER_CARDINALITY',
+    stage: 'architectural-review',
+    sourceRevision,
+    invocationId: `architectural-review-invocation-${index + 1}`,
+    terminalResultIdentity: `result:architectural-review:${index + 1}`,
+    reviewerSource: `source-architectural-review-${index + 1}`,
+    reviewerSlot: String(index + 1).padStart(2, '0'),
+    reviewerOrdinal: index + 1,
+    attemptOrdinal: 1,
+    retryAttempt: false,
+    terminal: true,
+    terminalClassification: 'complete',
+    sendCount: 1,
+    retryClass: 'none',
+    revisionCheck: 'matched',
+    capacityOutcome: 'admitted',
+    capacityWaitMs: 0,
+    capture,
+  }));
+  writeFileSync(join(reviewDir, 'tier-intake.json'), JSON.stringify({
+    schema: 'tier-intake/v1',
+    producer: 'fixture',
+    taskIdentity: 'issue:1431',
+    kind: 'fresh',
+    priorTier: 'T2',
+    firstRevision: 'r01',
+  }, null, 2));
+  writeFileSync(join(reviewDir, 'author-dispositions.json'), JSON.stringify({
+    schema: 'create-issue-author-dispositions/v1',
+    reviewEpisodeId,
+    sourceRevision,
+    predecessorStage: 'architectural-review',
+    draft,
+    findings: [finding],
+    m4: {
+      reviewEpisodeId,
+      sourceRevision,
+      predecessorStage: 'architectural-review',
+      inventory: [
+        { mechanism: 'terminal prior-state bundle', disposition: 'keep' },
+      ],
+    },
+  }, null, 2));
+  writeFileSync(join(reviewDir, 'finding-disposition-ledger.json'), JSON.stringify({
+    version: 2,
+    reviewEpisodeId,
+    sourceRevision,
+    predecessorStage: 'architectural-review',
+    draft,
+    counts: {
+      rawFindingCount: 1,
+      distinctFindingCount: 1,
+      processedDistinctCount: 1,
+    },
+    findings: [finding],
+  }, null, 2));
+  writeFileSync(join(reviewDir, 'review-episode-inventory.json'), JSON.stringify({
+    source: 'canonical-review-directory',
+    taskIdentity: 'issue:1431',
+    episodeFirstRevision: 'r01',
+    reviewEpisodeId,
+    stageReceiptIds: [`${reviewEpisodeId}:stage-receipt:0001`],
+  }, null, 2));
+  writeFileSync(join(reviewDir, 'verified-relay-evidence.json'), JSON.stringify(captures.map((capture, index) => ({
+    relayAttemptId: `relay-${index + 1}`,
+    captureIdentity: capture.captureIdentity,
+    sourceLabel: `${capture.name}|${capture.captureIdentity}`,
+    name: capture.name,
+    byteLength: capture.byteLength,
+    sha256: capture.sha256,
+    verified: true,
+  })), null, 2));
+  const receiptName = 'stage-completeness-receipt-ar.json';
+  writeFileSync(join(reviewDir, receiptName), JSON.stringify({
+    schema: 'stage-completeness-receipt/v1',
+    tier: 'T2',
+    taskIdentity: 'issue:1431',
+    episodeFirstRevision: 'r01',
+    reviewEpisodeId,
+    stageReceiptId: `${reviewEpisodeId}:stage-receipt:0001`,
+    previousStageReceiptId: null,
+    receiptCensus: [`${reviewEpisodeId}:stage-receipt:0001`],
+    stageAttemptId: 'architectural-review-attempt',
+    stageSequence: 1,
+    stage: 'architectural-review',
+    policyVersion: 'triple-source/v1',
+    reviewerCardinality: 3,
+    cardinalityConfigIdentity: 'env:OPK_GPT_REVIEWER_CARDINALITY',
+    sourceRevision,
+    outcome: 'complete',
+    producerEvidence: 'not-applicable',
+    revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' },
+    settlement: { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true },
+    invocations,
+    credentialingCaptures: captures,
+    relayEligibleCaptures: captures,
+  }, null, 2));
+  writeFileSync(join(reviewDir, 'acceptance-artifacts.json'), JSON.stringify({
+    schema: 'create-issue-acceptance-artifacts/v1',
+    reviewEpisodeId,
+    acceptanceBasis: 'authoritative-github-artifact',
+    files: [
+      receiptName,
+      'verified-relay-evidence.json',
+      'finding-disposition-ledger.json',
+      'review-episode-inventory.json',
+      'acceptance-artifacts.json',
+    ],
+  }, null, 2));
+  const bundle = buildManagerReviewTerminalBundle({
+    repositoryFullName: reviewContext.repositoryFullName,
+    issueNumber: reviewContext.issueNumber,
+    sourceRevision,
+    reviewDir,
+    liveIssueBody: draft,
+  });
+  return { reviewDir, draft, bundle };
+}
 
 function runGit(root: string, args: readonly string[]): void {
   const result = runProcessSync({
@@ -335,6 +489,7 @@ describe('Issue #1431 manager reviewer canon', () => {
             delegated.push([...argv]);
             return 0;
           },
+          buildTerminalBundle: () => bundle,
         })).not.toBe(0);
         expect(delegated).toHaveLength(before);
         const refusal = JSON.parse(stdout.chunks.join('').trim()) as {
@@ -349,6 +504,250 @@ describe('Issue #1431 manager reviewer canon', () => {
         stdout.restore();
       }
     } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('requires a current governed bundle for terminal architectural review before browser delegation', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-manager-review-terminal-bundle-'));
+    const previousStateRoot = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = root;
+    try {
+      const { reviewDir, draft, bundle } = createTerminalBundleFixture(root);
+      const t1Root = join(root, 't1-root');
+      const t1Dir = join(t1Root, '.review', '1431');
+      mkdirSync(t1Dir, { recursive: true });
+      const t1Draft = '<!-- source-revision: r01 -->\n\n# T1 fixture\n';
+      process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = t1Root;
+      writeFileSync(join(t1Dir, 'tier-intake.json'), JSON.stringify({
+        schema: 'tier-intake/v1',
+        producer: 'fixture',
+        taskIdentity: 'issue:1431',
+        kind: 'fresh',
+        priorTier: 'T1',
+        firstRevision: 'r01',
+      }, null, 2));
+      writeFileSync(join(t1Dir, 'author-dispositions.json'), JSON.stringify({
+        schema: 'create-issue-author-dispositions/v1',
+        reviewEpisodeId: 'issue:1431@r01',
+        sourceRevision: 'r01',
+        predecessorStage: null,
+        draft: t1Draft,
+        findings: [],
+        m4: {
+          reviewEpisodeId: 'issue:1431@r01',
+          sourceRevision: 'r01',
+          predecessorStage: null,
+          inventory: [],
+        },
+      }, null, 2));
+      const t1Bundle = buildManagerReviewTerminalBundle({
+        repositoryFullName: reviewContext.repositoryFullName,
+        issueNumber: reviewContext.issueNumber,
+        sourceRevision: 'r01',
+        reviewDir: t1Dir,
+        liveIssueBody: t1Draft,
+      });
+      const t1AuthorPath = join(t1Dir, 'author-dispositions.json');
+      const originalT1Author = readFileSync(t1AuthorPath, 'utf8');
+      const nonZeroStateT1Author = JSON.parse(originalT1Author) as {
+        m4: { inventory: Array<Record<string, string>> };
+      };
+      nonZeroStateT1Author.m4.inventory = [{ mechanism: 'fabricated prior state', disposition: 'keep' }];
+      writeFileSync(t1AuthorPath, JSON.stringify(nonZeroStateT1Author, null, 2));
+      expect(() => buildManagerReviewTerminalBundle({
+        repositoryFullName: reviewContext.repositoryFullName,
+        issueNumber: reviewContext.issueNumber,
+        sourceRevision: 'r01',
+        reviewDir: t1Dir,
+        liveIssueBody: t1Draft,
+      })).toThrow('terminal_bundle_zero_state_m4_invalid');
+      writeFileSync(t1AuthorPath, originalT1Author);
+      process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = root;
+      expect(t1Bundle.predecessorStage).toBeNull();
+      expect(t1Bundle.reviewEconomics.stageReceipts).toEqual([]);
+      expect(t1Bundle.reviewEconomics.counts).toEqual({
+        rawFindingCount: 0,
+        distinctFindingCount: 0,
+        processedDistinctCount: 0,
+      });
+
+      for (const [tier, intakeExtras] of [
+        ['T2', {}],
+        ['T3', { competitiveDecision: 'required', competitiveRationale: 'fixture rationale' }],
+      ] as const) {
+        const invalidRoot = join(root, `invalid-${tier.toLowerCase()}`);
+        const invalidDir = join(invalidRoot, '.review', '1431');
+        process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = invalidRoot;
+        mkdirSync(invalidDir, { recursive: true });
+        writeFileSync(join(invalidDir, 'tier-intake.json'), JSON.stringify({
+          schema: 'tier-intake/v1', producer: 'fixture', taskIdentity: 'issue:1431', kind: 'fresh',
+          priorTier: tier, firstRevision: 'r01', ...intakeExtras,
+        }, null, 2));
+        writeFileSync(join(invalidDir, 'author-dispositions.json'), JSON.stringify({
+          schema: 'create-issue-author-dispositions/v1', reviewEpisodeId: 'issue:1431@r01',
+          sourceRevision: 'r01', predecessorStage: null, draft: t1Draft, findings: [],
+          m4: { reviewEpisodeId: 'issue:1431@r01', sourceRevision: 'r01', predecessorStage: null, inventory: [] },
+        }, null, 2));
+        expect(() => buildManagerReviewTerminalBundle({
+          repositoryFullName: reviewContext.repositoryFullName, issueNumber: reviewContext.issueNumber,
+          sourceRevision: 'r01', reviewDir: invalidDir, liveIssueBody: t1Draft,
+        })).toThrow('terminal_bundle_predecessor_invalid');
+      }
+      process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = root;
+
+      const receiptPath = join(reviewDir, 'stage-completeness-receipt-ar.json');
+      const originalReceipt = readFileSync(receiptPath, 'utf8');
+      const incompleteReceipt = JSON.parse(originalReceipt) as Record<string, unknown>;
+      delete incompleteReceipt.settlement;
+      writeFileSync(receiptPath, JSON.stringify(incompleteReceipt, null, 2));
+      expect(() => buildManagerReviewTerminalBundle({
+        repositoryFullName: reviewContext.repositoryFullName, issueNumber: reviewContext.issueNumber,
+        sourceRevision: 'r08', reviewDir, liveIssueBody: draft,
+      })).toThrow('terminal_bundle_governed_artifacts_invalid');
+      writeFileSync(receiptPath, originalReceipt);
+
+      expect(bundle.draft).toBe(draft);
+      expect(bundle.rejectPartition).toHaveLength(1);
+      expect(bundle.protectedM3).toHaveLength(1);
+      expect(bundle.authorM4).toEqual([
+        { mechanism: 'terminal prior-state bundle', disposition: 'keep' },
+      ]);
+      expect(() => buildManagerReviewTerminalBundle({
+        repositoryFullName: reviewContext.repositoryFullName,
+        issueNumber: reviewContext.issueNumber,
+        sourceRevision: 'r08',
+        reviewDir,
+        liveIssueBody: '<!-- source-revision: r09 -->\nchanged\n',
+      })).toThrow('terminal_bundle_live_issue_mismatch');
+
+      const authorPath = join(reviewDir, 'author-dispositions.json');
+      const originalAuthor = readFileSync(authorPath, 'utf8');
+      const staleM4Author = JSON.parse(originalAuthor) as {
+        m4: { sourceRevision: string };
+      };
+      staleM4Author.m4.sourceRevision = 'r07';
+      writeFileSync(authorPath, JSON.stringify(staleM4Author, null, 2));
+      expect(() => buildManagerReviewTerminalBundle({
+        repositoryFullName: reviewContext.repositoryFullName,
+        issueNumber: reviewContext.issueNumber,
+        sourceRevision: 'r08',
+        reviewDir,
+        liveIssueBody: draft,
+      })).toThrow('terminal_bundle_author_m4_stale');
+      writeFileSync(authorPath, originalAuthor);
+
+      const ledgerPath = join(reviewDir, 'finding-disposition-ledger.json');
+      const originalLedger = readFileSync(ledgerPath, 'utf8');
+      const conflictingLedger = JSON.parse(originalLedger) as {
+        findings: Array<Record<string, unknown>>;
+        counts: Record<string, unknown>;
+      };
+      conflictingLedger.findings[0]!.defectDisposition = 'addressed';
+      writeFileSync(ledgerPath, JSON.stringify(conflictingLedger, null, 2));
+      expect(() => buildManagerReviewTerminalBundle({
+        repositoryFullName: reviewContext.repositoryFullName,
+        issueNumber: reviewContext.issueNumber,
+        sourceRevision: 'r08',
+        reviewDir,
+        liveIssueBody: draft,
+      })).toThrow('terminal_bundle_ledger_disposition_mismatch');
+      conflictingLedger.findings[0]!.defectDisposition = 'rejected-as-false';
+      conflictingLedger.counts.rawFindingCount = 0;
+      writeFileSync(ledgerPath, JSON.stringify(conflictingLedger, null, 2));
+      expect(() => buildManagerReviewTerminalBundle({
+        repositoryFullName: reviewContext.repositoryFullName,
+        issueNumber: reviewContext.issueNumber,
+        sourceRevision: 'r08',
+        reviewDir,
+        liveIssueBody: draft,
+      })).toThrow('terminal_bundle_review_economics_invalid');
+      writeFileSync(ledgerPath, originalLedger);
+
+      const terminalContext: ManagerReviewBriefContext = {
+        ...reviewContext,
+        sourceRevision: 'r08',
+        stage: 'architectural',
+        terminalBundle: bundle,
+      };
+      expect(() => renderManagerReviewBrief(
+        readManagerReviewCanon(),
+        { ...terminalContext, terminalBundle: undefined },
+      )).toThrow('canonical_prompt_terminal_bundle_missing');
+
+      const promptPath = join(root, 'terminal-review.txt');
+      const bundlePath = join(root, 'terminal-bundle.json');
+      const rendered = renderManagerReviewBrief(readManagerReviewCanon(), terminalContext);
+      writeFileSync(promptPath, rendered.text);
+      writeFileSync(bundlePath, `${JSON.stringify(bundle, null, 2)}\n`);
+      expect(rendered.text).toContain('## Governed terminal prior-state bundle');
+      expect(rendered.text).toContain('"reviewEpisodeId": "issue:1431@r01"');
+
+      const delegated: string[][] = [];
+      const args = [
+        'turn',
+        '--invocation-id', terminalContext.invocationId,
+        '--input', promptPath,
+        '--reviewer-source-output', join(root, 'source.txt'),
+        '--reviewer-source', 'direct-publication/v1',
+        '--repository', terminalContext.repositoryFullName,
+        '--issue-number', String(terminalContext.issueNumber),
+        '--source-revision', terminalContext.sourceRevision,
+        '--stage', terminalContext.stage,
+        '--source-slot', terminalContext.sourceSlot,
+        '--terminal-input-bundle', bundlePath,
+        '--review-dir', reviewDir,
+      ];
+      expect(await runStateLightEntry(args, {
+        runTurn: async (argv) => {
+          delegated.push([...argv]);
+          return 0;
+        },
+        buildTerminalBundle: () => bundle,
+      })).toBe(0);
+      expect(delegated).toHaveLength(1);
+      expect(delegated[0]).not.toContain('--terminal-input-bundle');
+
+      writeFileSync(bundlePath, `${JSON.stringify({ ...bundle, sourceRevision: 'r09' }, null, 2)}\n`);
+      const stdout = captureWrite(process.stdout);
+      try {
+        const before = delegated.length;
+        expect(await runStateLightEntry(args, {
+          runTurn: async (argv) => {
+            delegated.push([...argv]);
+            return 0;
+          },
+          buildTerminalBundle: () => bundle,
+        })).not.toBe(0);
+        expect(delegated).toHaveLength(before);
+        const refusal = JSON.parse(stdout.chunks.join('').trim()) as {
+          cause: string;
+          send_count: number;
+        };
+        expect(refusal.cause).toBe('canonical_prompt_terminal_bundle_stale');
+        expect(refusal.send_count).toBe(0);
+      } finally {
+        stdout.restore();
+      }
+
+      const missingBundleStdout = captureWrite(process.stdout);
+      try {
+        const withoutBundle = args.filter((token, index) => token !== '--terminal-input-bundle' && args[index - 1] !== '--terminal-input-bundle');
+        expect(await runStateLightEntry(withoutBundle, {
+          runTurn: async () => 0,
+        })).not.toBe(0);
+        const refusal = JSON.parse(missingBundleStdout.chunks.join('').trim()) as {
+          cause: string;
+          send_count: number;
+        };
+        expect(refusal.cause).toBe('canonical_prompt_terminal_bundle_missing');
+        expect(refusal.send_count).toBe(0);
+      } finally {
+        missingBundleStdout.restore();
+      }
+    } finally {
+      if (previousStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previousStateRoot;
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -383,6 +782,28 @@ describe('Issue #1431 manager reviewer canon', () => {
       expect(combinedRefusal.send_count).toBe(0);
     } finally {
       stdout.restore();
+    }
+
+    const terminalStdout = captureWrite(process.stderr);
+    try {
+      expect(await runBrowserAdapter([
+        '--run-identity', 'run-terminal',
+        '--attempt-identity', 'attempt-terminal',
+        '--handoff-receipt', 'handoff-terminal.json',
+        '--invocation-id', reviewContext.invocationId,
+        '--terminal-envelope', 'terminal-envelope.json',
+        '--output', 'browser-output.json',
+        '--reviewer-source-output', 'source.txt',
+        '--reviewer-source', 'direct-publication/v1',
+        '--repository', reviewContext.repositoryFullName,
+        '--issue-number', String(reviewContext.issueNumber),
+        '--source-revision', 'r08',
+        '--stage', 'architectural',
+        '--source-slot', '01',
+      ])).toBe(2);
+      expect(terminalStdout.chunks.join('')).toContain('direct_publication_terminal_bundle_required');
+    } finally {
+      terminalStdout.restore();
     }
 
     const root = mkdtempSync(join(tmpdir(), 'opk-manager-review-long-run-'));

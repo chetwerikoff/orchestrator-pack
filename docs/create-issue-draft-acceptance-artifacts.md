@@ -15,6 +15,13 @@ Chats, author replies, and tier-gate receipts are audit-only records.
 The flow-manager records the two manual input schemas; this component has no
 writer for them and no writer for `remote-authority.json`.
 
+For terminal review, `author-dispositions.json` also carries the author-owned
+current M4 inventory as a bound `m4` object:
+`reviewEpisodeId`, `predecessorStage`, `sourceRevision`, and an
+`inventory` of `{ mechanism, disposition }` entries where disposition is
+`keep | simplify | defer | cut`. This remains a flow-manager-recorded author
+input; it is not a new acceptance artifact or state store.
+
 ## Pre-acceptance path
 
 Run the missing-input check before acceptance:
@@ -43,6 +50,14 @@ node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scr
 Use `--phase pre-lens` when only the T3 pre-lens stages are complete. The
 command returns a non-zero status and a named missing input when evidence is
 absent. It writes no acceptance artifact on failure.
+
+Before the terminal `architectural` launch, run the same producer over every
+canonical pre-terminal stage-evidence input: T2 uses `--phase pre-lens`, while
+T3 uses `--phase post-lens`. Those outputs are the receipt-backed inputs
+consumed by `scripts/manager-review-terminal-bundle.ts`. T1 has no predecessor
+stage and does not fabricate these files merely to launch its sole terminal
+reviewer; its terminal bundle uses the current `tier-intake.json` and
+zero-state `author-dispositions.json`.
 
 `check-artifacts`, artifact production, launch admission, and final acceptance
 consume the single executable stage-plan authority in

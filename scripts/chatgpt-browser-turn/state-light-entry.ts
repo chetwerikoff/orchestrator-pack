@@ -11,9 +11,18 @@ import {
   assertCanonicalManagerReviewBrief,
   type ManagerReviewBriefContext,
 } from '../lib/manager-review-brief.ts';
+import {
+  buildManagerReviewTerminalBundle,
+  renderManagerReviewTerminalBundle,
+  type BuildManagerReviewTerminalBundleOptions,
+  type ManagerReviewTerminalBundle,
+} from '../lib/manager-review-terminal-bundle.ts';
 
 export type StateLightEntryDependencies = {
   readonly runTurn?: (argv: readonly string[]) => Promise<number>;
+  readonly buildTerminalBundle?: (
+    options: BuildManagerReviewTerminalBundleOptions,
+  ) => ManagerReviewTerminalBundle;
 };
 
 const DIRECT_KEYS = [
@@ -48,12 +57,17 @@ function requiredCanonicalOption(argv: readonly string[], key: string): string {
   return value;
 }
 
-function canonicalContext(argv: readonly string[]): ManagerReviewBriefContext {
+function canonicalContext(
+  argv: readonly string[],
+  buildTerminalBundle: (
+    options: BuildManagerReviewTerminalBundleOptions,
+  ) => ManagerReviewTerminalBundle,
+): ManagerReviewBriefContext {
   const issueNumberRaw = requiredCanonicalOption(argv, 'issue-number');
   if (!/^[1-9][0-9]*$/.test(issueNumberRaw)) {
     throw new Error('canonical_prompt_context_invalid:issue_number');
   }
-  return {
+  const base = {
     repositoryFullName: requiredCanonicalOption(argv, 'repository'),
     issueNumber: Number(issueNumberRaw),
     sourceRevision: requiredCanonicalOption(argv, 'source-revision'),
@@ -61,13 +75,35 @@ function canonicalContext(argv: readonly string[]): ManagerReviewBriefContext {
     sourceSlot: requiredCanonicalOption(argv, 'source-slot'),
     invocationId: requiredCanonicalOption(argv, 'invocation-id'),
   };
+  const terminalBundlePath = optionValue(argv, 'terminal-input-bundle');
+  if (base.stage === 'architectural') {
+    if (!terminalBundlePath) throw new Error('canonical_prompt_terminal_bundle_missing');
+    const reviewDir = requiredCanonicalOption(argv, 'review-dir');
+    const bundleSnapshot = readStableInput(terminalBundlePath);
+    const expectedBundle = buildTerminalBundle({
+      repositoryFullName: base.repositoryFullName,
+      issueNumber: base.issueNumber,
+      sourceRevision: base.sourceRevision,
+      reviewDir,
+    });
+    const expectedBundleText = `${renderManagerReviewTerminalBundle(expectedBundle)}\n`;
+    if (bundleSnapshot.text !== expectedBundleText) {
+      throw new Error('canonical_prompt_terminal_bundle_stale');
+    }
+    return {
+      ...base,
+      terminalBundle: expectedBundle,
+    };
+  }
+  if (terminalBundlePath !== undefined) throw new Error('canonical_prompt_terminal_bundle_unexpected');
+  return base;
 }
 
 function stripCanonicalContext(argv: readonly string[]): string[] {
   const stripped: string[] = [];
   for (let index = 0; index < argv.length; index++) {
     const token = argv[index];
-    if (token === '--stage' || token === '--source-slot') {
+    if (token === '--stage' || token === '--source-slot' || token === '--terminal-input-bundle' || token === '--review-dir') {
       index++;
       continue;
     }
@@ -148,6 +184,9 @@ function pinValidatedSnapshot(snapshot: InputSnapshot): { inputPath: string; cle
 async function runCanonicalTurn(
   argv: readonly string[],
   runTurn: (argv: readonly string[]) => Promise<number>,
+  buildTerminalBundle: (
+    options: BuildManagerReviewTerminalBundleOptions,
+  ) => ManagerReviewTerminalBundle,
 ): Promise<number> {
   if (!directPublicationRequested(argv)) return await runTurn(argv);
 
@@ -156,7 +195,7 @@ async function runCanonicalTurn(
     requiredCanonicalOption(argv, 'reviewer-source-output');
     requiredCanonicalOption(argv, 'reviewer-source');
     const inputPath = requiredCanonicalOption(argv, 'input');
-    const context = canonicalContext(argv);
+    const context = canonicalContext(argv, buildTerminalBundle);
     snapshot = readStableInput(inputPath);
     assertCanonicalManagerReviewBrief(snapshot.text, context);
   } catch (error) {
@@ -184,15 +223,16 @@ export async function runStateLightEntry(
   const [command, ...turnArgs] = argv;
   const runTurn = dependencies.runTurn ?? ((turnArgv: readonly string[]) =>
     runStateLightTurn(turnArgv, { entryLivenessHeartbeat: true }));
+  const buildTerminalBundle = dependencies.buildTerminalBundle ?? buildManagerReviewTerminalBundle;
 
   if (command === 'turn') {
-    return await runCanonicalTurn(turnArgs, runTurn);
+    return await runCanonicalTurn(turnArgs, runTurn, buildTerminalBundle);
   } else if (command === 'session') {
     const { runStateLightSession } = await import('./state-light-session.ts');
     return await runStateLightSession(turnArgs);
   } else if (command?.startsWith('--')) {
     // Accept the simplified direct turn shape for new callers as well.
-    return await runCanonicalTurn(argv, runTurn);
+    return await runCanonicalTurn(argv, runTurn, buildTerminalBundle);
   } else {
     // Legacy control verbs remain available for diagnostics/rollback compatibility,
     // but create/review progression must not use them as admission/completion gates.

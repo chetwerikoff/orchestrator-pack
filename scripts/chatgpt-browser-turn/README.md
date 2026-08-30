@@ -86,6 +86,20 @@ only for pre-browser reviewer-canon admission, then delegates the existing
 transport behavior unchanged. They are not a reviewer-source registry and no
 source-slot equality rule is introduced.
 
+For the terminal `architectural` stage only, first materialize the governed
+prior-state bundle with `scripts/manager-review-terminal-bundle.ts`, render the
+terminal prompt with that exact bundle, and add:
+
+```bash
+  --terminal-input-bundle ${TERMINAL_INPUT_BUNDLE} \
+  --review-dir ${REVIEW_DIR}
+```
+
+Both options are required for terminal `architectural` direct publication and
+forbidden on non-terminal stages. The long-running adapter refuses the wrong
+shape before detached-child spawn; state-light then re-reads and validates the
+bundle before any browser effect.
+
 Immediately before any browser effect, state-light reads the stable **unmarked**
 input and independently regenerates expected bytes from the current selected
 tracked canon plus repository/Issue/revision/stage/slot/invocation context.
@@ -123,6 +137,10 @@ For governed create-Issue direct publication, the long-running adapter requires
 and forwards `--stage` and `--source-slot` with the existing direct argument set;
 a missing value returns its existing `direct_publication_arguments_required`
 refusal before detached child spawn.
+For terminal `architectural`, it also requires and forwards
+`--terminal-input-bundle` and `--review-dir`; absence of either option returns
+the corresponding refusal before spawn. Supplying either option on a
+non-terminal stage returns the corresponding unexpected-option refusal.
 
 ## State-light turn contract
 
