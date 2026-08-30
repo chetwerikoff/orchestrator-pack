@@ -1,0 +1,26 @@
+{
+  "issue_number": 1846,
+  "iteration_id": "dispatch-terminal-mail",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-08-30T07:28:00.000Z",
+  "baseline": {
+    "commit_sha": "6a41cdcf2",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:placeholder"
+  },
+  "declared_paths": [
+    "docs/declarations/1846.dispatch-terminal-mail.json",
+    "docs/declarations/1846.pr-scope.json",
+    "docs/orchestration-runbook.md",
+    "scripts/orca-runtime/dispatch-terminal-mail.test.ts",
+    "scripts/orca-runtime/dispatch-terminal-mail.ts",
+    "scripts/orca-runtime/task-adapter.ts",
+    "scripts/pr2-foundation/scheduler-process-integration.test.ts",
+    "scripts/pr2-foundation/scheduler.ts",
+    "scripts/pr2-foundation/wake-supervisor-state-root.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

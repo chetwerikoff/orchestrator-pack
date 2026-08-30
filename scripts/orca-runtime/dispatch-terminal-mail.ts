@@ -171,7 +171,7 @@ export function maybeNotifyRunOnTerminalDispatch(
     '--dispatch-id', dispatchId,
     '--payload', buildPayload(snapshot),
     '--json',
-  ], { env: deps.env, inheritParentEnv: true, allowEmptyStdout: false });
+  ], { env: deps.env, inheritParentEnv: true });
 
   if (!response.ok) {
     return {
@@ -205,7 +205,6 @@ export function observeWorkerShowTerminalMail(
   const shown = runJson(['orchestration', 'worker-show', '--dispatch', bindingKey], {
     env: deps.env,
     inheritParentEnv: true,
-    allowEmptyStdout: false,
   });
   if (!shown.ok) {
     return {

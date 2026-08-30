@@ -6,10 +6,12 @@
     "docs/orchestration-runbook.md",
     "scripts/orca-runtime/dispatch-terminal-mail.test.ts",
     "scripts/orca-runtime/dispatch-terminal-mail.ts",
+    "scripts/orca-runtime/dispatch-terminal-mail.ts",
     "scripts/orca-runtime/task-adapter.ts",
     "scripts/pr2-foundation/scheduler-process-integration.test.ts",
     "scripts/pr2-foundation/scheduler.ts",
-    "scripts/pr2-foundation/wake-supervisor-state-root.ts"
+    "scripts/pr2-foundation/wake-supervisor-state-root.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
     "credentials/",
