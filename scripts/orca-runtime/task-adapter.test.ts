@@ -247,6 +247,44 @@ describe('OpenCode HTTP control plane', () => {
     });
   });
 
+  it('creates an OpenCode session when an idle worker has none', () => {
+    const requests: Array<{ url: string; method: 'GET' | 'POST'; body?: string }> = [];
+    const adapter = makeAdapter((input) => {
+      requests.push(input);
+      if (input.url.endsWith('/global/health')) {
+        return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) };
+      }
+      if (input.method === 'GET' && input.url.includes('/session')) {
+        return { status: 200, body: '[]' };
+      }
+      if (input.method === 'POST' && input.url.endsWith('/session?directory=' + encodeURIComponent(process.cwd()))) {
+        return {
+          status: 200,
+          body: JSON.stringify({ id: 'ses-created', directory: process.cwd() }),
+        };
+      }
+      return { status: 204, body: '' };
+    });
+    const spawned = adapter.spawnWorker({
+      title: 'opencode',
+      command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture',
+    });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+
+    const control = adapter.composerControl?.(spawned.value.identity);
+    expect(control?.dispatch({
+      worker: spawned.value.identity,
+      action: 'submit-prompt',
+      text: 'first delivery pointer',
+    })).toMatchObject({ status: 'dispatched' });
+    expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
+      { method: 'GET', url: 'http://127.0.0.1:18891/session?directory=' + encodeURIComponent(process.cwd()) },
+      { method: 'POST', url: 'http://127.0.0.1:18891/session?directory=' + encodeURIComponent(process.cwd()) },
+      { method: 'POST', url: 'http://127.0.0.1:18891/session/ses-created/prompt_async?directory=' + encodeURIComponent(process.cwd()) },
+    ]);
+  });
+
   it('recovers OpenCode control from terminal metadata on a fresh adapter', () => {
     const requests: string[] = [];
     const first = makeAdapter((input) => {

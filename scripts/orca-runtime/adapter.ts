@@ -539,6 +539,32 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
         matchingSessions.push({ id: row.id, directory: row.directory });
       }
     }
+    if (matchingSessions.length === 0) {
+      const created = this.#openCodeRequest({
+        url: `${urlRecord.url}/session?directory=${encodeURIComponent(current.value.workspacePath)}`,
+        method: 'POST',
+        body: JSON.stringify({}),
+        timeoutMs: Math.max(1, options.timeoutMs ?? 10_000),
+      });
+      if ('error' in created) return { status: 'send_failed', reason: created.error };
+      if (created.status < 200 || created.status >= 300) {
+        return { status: 'send_failed', reason: `opencode_http_status_${created.status}` };
+      }
+      let parsedCreated: unknown;
+      try {
+        parsedCreated = JSON.parse(created.body);
+      } catch {
+        return { status: 'send_failed', reason: 'opencode_session_schema_mismatch' };
+      }
+      if (!parsedCreated || typeof parsedCreated !== 'object' || Array.isArray(parsedCreated)) {
+        return { status: 'send_failed', reason: 'opencode_session_schema_mismatch' };
+      }
+      const row = parsedCreated as { id?: unknown; directory?: unknown };
+      if (typeof row.id === 'string' && /^ses/u.test(row.id)
+        && row.directory === current.value.workspacePath) {
+        matchingSessions.push({ id: row.id, directory: row.directory });
+      }
+    }
     if (matchingSessions.length !== 1) {
       return { status: 'send_failed', reason: 'runtime_opencode_session_unavailable' };
     }
