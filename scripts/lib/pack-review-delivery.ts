@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
-import { PACK_REVIEW_CAP_MAP_VERSION } from '../pack-review-state.ts';
+import { PACK_REVIEW_LOGICAL_CAP_MAP_VERSION } from '../pack-review-state.ts';
 import {
   describePackReviewError as describeError,
   getPackReviewRun,
@@ -60,7 +60,7 @@ export function packReviewStaleRequiredStatusIdempotencyKey(run: PackReviewRunRe
 }
 
 function packReviewRunNeedsAnotherRequiredRound(run: PackReviewRunRecord): boolean {
-  return run.accountingVersion === PACK_REVIEW_CAP_MAP_VERSION
+  return run.accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
     && Number.isInteger(run.logicalRoundOrdinal)
     && Number.isInteger(run.logicalRoundCap)
     && Number(run.logicalRoundOrdinal) < Number(run.logicalRoundCap);
