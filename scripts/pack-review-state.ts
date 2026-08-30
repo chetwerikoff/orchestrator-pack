@@ -1435,6 +1435,16 @@ export function commitPackReviewTriage(input: {
         }
       } else if (!['BLOCK', 'DEFER'].includes(input.triage.verdict)) {
         throw new PackReviewAuthorityError('triage_invalid', 'architect verdict must be BLOCK or DEFER');
+      } else if (input.triage.verdict === 'DEFER'
+          && current.cycle?.state === 'open_findings'
+          && isLogicalRoundCycle(current.cycle)
+          && cycleConsumedCount(current.cycle) < current.cycle.frozenCap
+          && current.terminal?.reviewVerdict === 'findings') {
+        // Existing architect adjudication is the explicit reject/resolve path.
+        // It settles this round's findings but cannot complete a pre-cap T3 stage.
+        current.cycle.state = 'open';
+        current.cycle.closedAtUtc = undefined;
+        current.cycle.atCapHash = undefined;
       }
       current.triage = { ...input.triage };
       const automaticFinalFixSettlement = input.triage.source === 'automatic'
