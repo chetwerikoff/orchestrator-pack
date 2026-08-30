@@ -127,7 +127,7 @@ export function isOpenCodeComposerEmpty(lines: readonly string[]): boolean {
     }
     if (!trimmed.startsWith('┃')) break;
     sawLeftEdge = true;
-    if (/^┃\s+Pack-Opk-[0-9a-f]+(?:\s|$)/iu.test(trimmed)) continue;
+    if (/^┃\s+(?:Pack-Opk-|[0-9a-f]{16,}(?:\s|$))/iu.test(trimmed)) continue;
     if (trimmed !== '┃') return false;
   }
   return sawLeftEdge;

@@ -440,6 +440,7 @@ describe('OpenCode HTTP control plane', () => {
     expect(isOpenCodeComposerEmpty(['idle splash', '┃   ', '╹▀▀▀▀▀▀'])).toBe(true);
     expect(isOpenCodeComposerEmpty(['idle splash', '\u001b[38;5;250m┃  Ask anything...\u001b[0m', '╹▀▀▀▀▀▀'])).toBe(true);
     expect(isOpenCodeComposerEmpty(['idle splash', '┃  Pack-Opk-151bd854148541919ddf2dd24aa069f5 · GLM 5.3 Flash TeamoRouter', '╹▀▀▀▀▀▀'])).toBe(true);
+    expect(isOpenCodeComposerEmpty(['idle splash', '┃  Pack-Opk-                             ·Muse Spark 1.2 Free OpenCode', '┃  D51fd897bc56456082244bcd2e565320                           Zen', '╹▀▀▀▀▀▀'])).toBe(true);
     expect(isOpenCodeComposerEmpty(['idle splash', '┃  TeamoRouter 钱包余额不足，请前往 https://teamorouter.cn/dashboard?buy=1 充值后继续使用', '╹▀▀▀▀▀▀'])).toBe(true);
     expect(isOpenCodeComposerEmpty(['idle splash', '┃  Ask anything... \"Fix broken tests\"', '╹▀▀▀▀▀▀'])).toBe(true);
     expect(isOpenCodeComposerEmpty(['idle splash', '│ Ask anything…', '╹▀▀▀▀▀▀'])).toBe(true);
