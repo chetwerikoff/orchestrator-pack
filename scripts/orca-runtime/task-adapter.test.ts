@@ -147,7 +147,11 @@ describe('Orca task adapter exact spawn identity', () => {
 });
 
 describe('OpenCode HTTP control plane', () => {
-  function makeAdapter(http: (input: { url: string; method: 'GET' | 'POST'; body?: string; timeoutMs: number }) => { status: number; body: string }) {
+  function makeAdapter(
+    http: (input: { url: string; method: 'GET' | 'POST'; body?: string; timeoutMs: number }) => { status: number; body: string },
+    now?: () => number,
+    onOperation?: (operation: string) => void,
+  ) {
     const handle = 'term-opencode-http';
     const workspacePath = process.cwd();
     const terminal = {
@@ -160,21 +164,28 @@ describe('OpenCode HTTP control plane', () => {
     };
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
       const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      onOperation?.(operation);
       if (operation === 'terminal create') return { ok: true, result: { terminal } };
       if (operation === 'worktree current') return { ok: false, error: { code: 'not_available', message: 'fixture' } };
       if (operation === 'terminal show') return { ok: true, result: { terminal } };
       if (operation === 'terminal list') return { ok: true, result: { totalCount: 1, truncated: false, terminals: [terminal] } };
       return { ok: false, error: { code: 'unexpected_operation', message: operation } };
     });
-    return new OrcaTaskRuntimeAdapter({ runJson: runJson as never, openCodeHttpRequest: http });
+    return new OrcaTaskRuntimeAdapter({
+      runJson: runJson as never,
+      openCodeHttpRequest: http,
+      ...(now ? { now } : {}),
+    });
   }
 
-  it('uses health, append-prompt, and submit-prompt for an exact spawned OpenCode worker', () => {
+  it('uses health and a dedicated agent-bound session for an exact spawned OpenCode worker', () => {
     const requests: Array<{ url: string; method: 'GET' | 'POST'; body?: string; timeoutMs: number }> = [];
     const adapter = makeAdapter((input) => {
       requests.push(input);
       if (input.url.endsWith('/global/health')) return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) };
-      if (input.method === 'GET' && input.url.includes('/session')) return { status: 200, body: JSON.stringify([{ id: 'ses-fixture', directory: process.cwd() }]) };
+      if (input.method === 'POST' && input.url.endsWith('/session?directory=' + encodeURIComponent(process.cwd()))) {
+        return { status: 200, body: JSON.stringify({ id: 'ses-dedicated', directory: process.cwd() }) };
+      }
       return { status: 204, body: '' };
     });
     const spawned = adapter.spawnWorker({
@@ -196,10 +207,66 @@ describe('OpenCode HTTP control plane', () => {
     }).status).toBe('dispatched');
     expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
       { method: 'GET', url: 'http://127.0.0.1:18891/global/health' },
-      { method: 'GET', url: 'http://127.0.0.1:18891/session?directory=' + encodeURIComponent(process.cwd()) },
-      { method: 'POST', url: 'http://127.0.0.1:18891/session/ses-fixture/prompt_async?directory=' + encodeURIComponent(process.cwd()) },
+      { method: 'POST', url: 'http://127.0.0.1:18891/session?directory=' + encodeURIComponent(process.cwd()) },
+      { method: 'POST', url: 'http://127.0.0.1:18891/session/ses-dedicated/prompt_async?directory=' + encodeURIComponent(process.cwd()) },
     ]);
-    expect(requests[2]?.body).toBe(JSON.stringify({ parts: [{ type: 'text', text: 'delivery pointer' }] }));
+    expect(requests[2]?.body).toBe(JSON.stringify({
+      agent: 'pack-opk-fixture',
+      parts: [{ type: 'text', text: 'delivery pointer' }],
+    }));
+  });
+
+  it('dispatches to its dedicated session when directory has root and fork sessions', () => {
+    const requests: Array<{ url: string; method: 'GET' | 'POST'; body?: string; timeoutMs: number }> = [];
+    const adapter = makeAdapter((input) => {
+      requests.push(input);
+      if (input.method === 'POST' && input.url.endsWith('/session?directory=' + encodeURIComponent(process.cwd()))) {
+        return { status: 200, body: JSON.stringify({ id: 'ses-worker-control', directory: process.cwd() }) };
+      }
+      return { status: 204, body: '' };
+    });
+    const spawned = adapter.spawnWorker({
+      title: 'opencode',
+      command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture',
+    });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+
+    expect(adapter.composerControl?.(spawned.value.identity)?.dispatch({
+      worker: spawned.value.identity,
+      action: 'submit-prompt',
+      text: 'root-and-fork-safe',
+    })).toMatchObject({ status: 'dispatched' });
+    expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
+      { method: 'POST', url: 'http://127.0.0.1:18891/session?directory=' + encodeURIComponent(process.cwd()) },
+      { method: 'POST', url: 'http://127.0.0.1:18891/session/ses-worker-control/prompt_async?directory=' + encodeURIComponent(process.cwd()) },
+    ]);
+  });
+
+  it('bounds each OpenCode dispatch subcall by one aggregate deadline', () => {
+    let clock = 0;
+    const requests: Array<{ url: string; timeoutMs: number }> = [];
+    const adapter = makeAdapter((input) => {
+      requests.push({ url: input.url, timeoutMs: input.timeoutMs });
+      if (input.method === 'POST' && input.url.endsWith('/session?directory=' + encodeURIComponent(process.cwd()))) {
+        clock = 101;
+        return { status: 200, body: JSON.stringify({ id: 'ses-deadline', directory: process.cwd() }) };
+      }
+      return { status: 204, body: '' };
+    }, () => clock, (operation) => {
+      if (operation === 'terminal list') clock = 80;
+    });
+    const spawned = adapter.spawnWorker({ title: 'opencode', command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture' });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+
+    const result = adapter.composerControl?.(spawned.value.identity)?.dispatch({
+      worker: spawned.value.identity,
+      action: 'submit-prompt',
+      text: 'deadline',
+    }, { timeoutMs: 100 });
+    expect(result).toEqual({ status: 'send_failed', reason: 'runtime_timeout' });
+    expect(requests.map(({ timeoutMs }) => timeoutMs)).toEqual([20]);
   });
 
   it('retains OpenCode control when task adapter upgrades pty identity', () => {
@@ -254,9 +321,6 @@ describe('OpenCode HTTP control plane', () => {
       if (input.url.endsWith('/global/health')) {
         return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) };
       }
-      if (input.method === 'GET' && input.url.includes('/session')) {
-        return { status: 200, body: '[]' };
-      }
       if (input.method === 'POST' && input.url.endsWith('/session?directory=' + encodeURIComponent(process.cwd()))) {
         return {
           status: 200,
@@ -279,7 +343,6 @@ describe('OpenCode HTTP control plane', () => {
       text: 'first delivery pointer',
     })).toMatchObject({ status: 'dispatched' });
     expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
-      { method: 'GET', url: 'http://127.0.0.1:18891/session?directory=' + encodeURIComponent(process.cwd()) },
       { method: 'POST', url: 'http://127.0.0.1:18891/session?directory=' + encodeURIComponent(process.cwd()) },
       { method: 'POST', url: 'http://127.0.0.1:18891/session/ses-created/prompt_async?directory=' + encodeURIComponent(process.cwd()) },
     ]);
@@ -290,7 +353,7 @@ describe('OpenCode HTTP control plane', () => {
     const first = makeAdapter((input) => {
       requests.push(input.url);
       if (input.url.endsWith('/global/health')) return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) };
-      if (input.method === 'GET' && input.url.includes('/session')) return { status: 200, body: JSON.stringify([{ id: 'ses-fixture', directory: process.cwd() }]) };
+      if (input.method === 'POST' && input.url.includes('/session?directory=')) return { status: 200, body: JSON.stringify({ id: 'ses-fixture', directory: process.cwd() }) };
       return { status: 204, body: '' };
     });
     const spawned = first.spawnWorker({
@@ -302,13 +365,13 @@ describe('OpenCode HTTP control plane', () => {
 
     const second = makeAdapter((input) => {
       requests.push(input.url);
-      if (input.method === 'GET' && input.url.includes('/session')) return { status: 200, body: JSON.stringify([{ id: 'ses-fixture', directory: process.cwd() }]) };
+      if (input.method === 'POST' && input.url.includes('/session?directory=')) return { status: 200, body: JSON.stringify({ id: 'ses-fresh-adapter', directory: process.cwd() }) };
       return { status: 204, body: '' };
     });
     const control = second.composerControl?.(spawned.value.identity);
     expect(control?.kind).toBe('opencode-http');
     expect(control?.dispatch({ worker: spawned.value.identity, action: 'submit-prompt', text: 'fresh adapter' })).toMatchObject({ status: 'dispatched' });
-    expect(requests.at(-1)).toBe('http://127.0.0.1:18891/session/ses-fixture/prompt_async?directory=' + encodeURIComponent(process.cwd()));
+    expect(requests.at(-1)).toBe('http://127.0.0.1:18891/session/ses-fresh-adapter/prompt_async?directory=' + encodeURIComponent(process.cwd()));
   });
 
   it('bounds health HTTP timeout by the remaining health deadline', () => {
@@ -351,7 +414,7 @@ describe('OpenCode HTTP control plane', () => {
 
   it('rejects non-successful prompt API responses', () => {
     const adapter = makeAdapter((input) => {
-      if (input.method === 'GET' && input.url.includes('/session')) return { status: 200, body: JSON.stringify([{ id: 'ses-fixture', directory: process.cwd() }]) };
+      if (input.method === 'POST' && input.url.includes('/session?directory=')) return { status: 200, body: JSON.stringify({ id: 'ses-fixture', directory: process.cwd() }) };
       return { status: 200, body: '' };
     });
     const spawned = adapter.spawnWorker({ title: 'opencode', command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture' });
