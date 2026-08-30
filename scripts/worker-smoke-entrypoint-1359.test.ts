@@ -265,6 +265,12 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(prompt).not.toContain('Before each scenario append one JSON line:');
       expect(prompt).not.toContain('After each scenario append one JSON line:');
       expect(prompt).toContain('Emit each declared progress event exactly once; never repeat a started or terminal event.');
+      expect(prompt).toContain(
+        '- For each scenario N, append and durably flush N started, execute only N, then append and durably flush N terminal before doing any work or writing progress for N+1.',
+      );
+      expect(prompt).toContain(
+        '- Never run scenarios in parallel, start a later ordinal early, or skip an ordinal, and after fail/blocked/skipped terminal stop without starting another scenario.',
+      );
       expect(prompt).toContain('git diff "$(git merge-base HEAD origin/main)" HEAD');
       expect(prompt).not.toContain('git diff main HEAD');
       expect(prompt).toContain(

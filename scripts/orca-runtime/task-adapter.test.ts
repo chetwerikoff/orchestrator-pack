@@ -7,6 +7,8 @@ import { DeterministicRuntimeAdapter } from '../runtime/test-adapter.ts';
 import { executeRuntimeTaskLifecycle } from '../runtime/task-lifecycle.ts';
 import type { OrcaJsonResponse } from './native.ts';
 import { OrcaRuntimeAdapter } from './adapter.ts';
+import { readOrcaTerminal } from './compat.ts';
+import { hasExecutorStartupBanner } from '../lib/worker-smoke-bounded-create.ts';
 import { OrcaTaskRuntimeAdapter } from './task-adapter.ts';
 
 // Producer-backed fixture contract, pinned to stablyai/orca@
@@ -790,30 +792,42 @@ describe('Orca assignment resolution', () => {
 });
 
 describe('Issue #1489 rendered screen observation', () => {
-  it('accepts a cursorless screen frame and preserves its source witness', () => {
+  it('accepts cursorless sync screen replay without issuing --cursor', () => {
+    let readCount = 0;
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
       if (args[0] === 'terminal' && args[1] === 'show') return {
         ok: true,
         result: { terminal: { handle: 'screen-terminal', incarnationId: 'screen-generation', worktreePath: '/tmp/screen', status: 'running' } },
       };
+      if (args[0] === 'terminal' && args[1] === 'list') return {
+        ok: true,
+        result: { terminals: [{ handle: 'screen-terminal', incarnationId: 'screen-generation', worktreePath: '/tmp/screen', title: 'screen' }], totalCount: 1, truncated: false },
+      };
+      readCount += 1;
+      expect(args).not.toContain('--cursor');
       return {
         ok: true,
-        result: { terminal: { handle: 'screen-terminal', status: 'running', tail: ['visible'], nextCursor: null, source: 'screen' } },
+        result: { terminal: { handle: 'screen-terminal', status: 'running', tail: [`visible-${readCount}`], nextCursor: null, source: 'screen' } },
       };
     });
     const adapter = new OrcaRuntimeAdapter({ runJson: runJson as never });
-    const result = adapter.readBoundedOutput({
-      worker: { runtime: 'orca', id: 'screen-terminal', generation: 'screen-generation' },
+    const worker = { runtime: 'orca' as const, id: 'screen-terminal', generation: 'screen-generation' };
+    const first = adapter.readBoundedOutput({ worker, screen: true });
+    expect(first.status).toBe('ok');
+    if (first.status !== 'ok') return;
+    expect(first.value.source).toBe('screen');
+    expect(first.value.lines).toEqual(['visible-1']);
+    const second = adapter.readBoundedOutput({
+      worker,
+      previousToken: first.value.observationToken,
       screen: true,
     });
-    expect(result.status).toBe('ok');
-    if (result.status === 'ok') {
-      expect(result.value.source).toBe('screen');
-      expect(result.value.lines).toEqual(['visible']);
-    }
+    expect(second.status).toBe('ok');
+    expect(readCount).toBe(2);
   });
 
-  it('uses the async all-workspace census and concurrent screen seam', async () => {
+  it('uses the async all-workspace census and cursorless screen replay', async () => {
+    let readCount = 0;
     const runJsonAsync = vi.fn(async (args: readonly string[]): Promise<OrcaJsonResponse> => {
       if (args[0] === 'terminal' && args[1] === 'list') return {
         ok: true,
@@ -828,22 +842,32 @@ describe('Issue #1489 rendered screen observation', () => {
         ok: true,
         result: { terminal: { handle: args[3], incarnationId: args[3] === 'async-a' ? 'generation-a' : 'generation-b', worktreePath: args[3] === 'async-a' ? '/tmp/a' : '/tmp/b' } },
       };
+      readCount += 1;
+      expect(args).not.toContain('--cursor');
       return {
         ok: true,
-        result: { terminal: { handle: args[3], status: 'running', tail: ['visible'], nextCursor: null, source: 'screen' } },
+        result: { terminal: { handle: args[3], status: 'running', tail: [`visible-${readCount}`], nextCursor: null, source: 'screen' } },
       };
     });
     const adapter = new OrcaRuntimeAdapter({ runJsonAsync: runJsonAsync as never });
     const listed = await adapter.listWorkersAsync?.();
     expect(listed?.status).toBe('ok');
     expect(runJsonAsync.mock.calls[0]?.[0]).toEqual(['terminal', 'list']);
-    const result = await adapter.readBoundedOutputAsync?.({
-      worker: { runtime: 'orca', id: 'async-a', generation: 'generation-a' },
+    const worker = { runtime: 'orca' as const, id: 'async-a', generation: 'generation-a' };
+    const first = await adapter.readBoundedOutputAsync?.({ worker, screen: true });
+    expect(first?.status).toBe('ok');
+    if (first?.status !== 'ok') return;
+    const second = await adapter.readBoundedOutputAsync?.({
+      worker,
+      previousToken: first.value.observationToken,
       screen: true,
     });
-    expect(result?.status).toBe('ok');
+    expect(second?.status).toBe('ok');
+    expect(readCount).toBe(2);
     expect(runJsonAsync.mock.calls.map(([args]) => args)).toEqual([
       ['terminal', 'list'],
+      ['terminal', 'show', '--terminal', 'async-a'],
+      ['terminal', 'read', '--terminal', 'async-a', '--screen'],
       ['terminal', 'show', '--terminal', 'async-a'],
       ['terminal', 'read', '--terminal', 'async-a', '--screen'],
     ]);
@@ -870,6 +894,49 @@ describe('Issue #1489 rendered screen observation', () => {
     expect(runJson.mock.calls.find((call) => call[0]?.[1] === 'read')?.[0]).toEqual([
       'terminal', 'read', '--terminal', 'screen-terminal', '--screen',
     ]);
+  });
+});
+
+describe('Issue #1835 executor-aware worker-smoke observation', () => {
+  it('accepts OpenCode identity without accepting a Cursor-only banner', () => {
+    const openCodeLines = ['OpenCode 1.18.25', 'OpenCode Zen · high'];
+    expect(hasExecutorStartupBanner('opencode --agent pack-opk-fixture', openCodeLines)).toBe(true);
+    expect(hasExecutorStartupBanner('cursor-agent', openCodeLines)).toBe(false);
+  });
+
+  it('keeps Cursor startup and ambiguity fail-closed', () => {
+    expect(hasExecutorStartupBanner('cursor-agent', ['Cursor Agent', 'v1.2.3'])).toBe(true);
+    expect(hasExecutorStartupBanner('opencode --agent pack-opk-fixture', ['OpenCode'])).toBe(false);
+    expect(hasExecutorStartupBanner('other-agent', ['OpenCode 1.18.25'])).toBe(false);
+  });
+
+  it('does not expose or replay a synthetic screen cursor through the compatibility facade', () => {
+    const runner = vi.fn((_command: string, args: readonly string[]) => ({
+      ok: true,
+      stdout: JSON.stringify({
+        ok: true,
+        result: {
+          terminal: {
+            handle: args[args.indexOf('--terminal') + 1],
+            status: 'running',
+            tail: ['visible'],
+            nextCursor: 'screen-frame',
+            source: 'screen',
+          },
+        },
+      }),
+      stderr: '',
+      status: 0,
+      signal: null,
+      error: undefined,
+    })) as unknown as NonNullable<Parameters<typeof readOrcaTerminal>[1]>['runner'];
+
+    const first = readOrcaTerminal('screen-terminal', { runner });
+    expect(first.ok).toBe(true);
+    expect(first.result?.source).toBe('screen');
+    expect(first.result?.nextCursor).toBeUndefined();
+    readOrcaTerminal('screen-terminal', { runner, cursor: first.result?.nextCursor });
+    expect((runner as unknown as { mock: { calls: readonly [string, readonly string[]][] } }).mock.calls[1]?.[1]).not.toContain('--cursor');
   });
 });
 

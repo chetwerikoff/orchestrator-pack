@@ -134,6 +134,24 @@ function hasCursorAgentStartupBanner(lines: readonly string[]): boolean {
     && lines.some((line) => /^\s*v\d+\.\d+\./u.test(line));
 }
 
+function hasOpenCodeStartupBanner(lines: readonly string[]): boolean {
+  const hasBrand = lines.some((line) => /\bOpenCode\b/iu.test(line));
+  const hasIdentity = lines.some((line) => /(?:v?\d+\.\d+\.\d+|\b(?:Agent|Zen)\b)/iu.test(line));
+  return hasBrand && hasIdentity;
+}
+
+/** Select the startup witness from the executor actually requested by the spawn. */
+export function hasExecutorStartupBanner(command: string, lines: readonly string[]): boolean {
+  const normalizedCommand = command.trim();
+  if (/(?:^|\s)opencode(?:\s|$)/iu.test(normalizedCommand)) {
+    return hasOpenCodeStartupBanner(lines);
+  }
+  if (/(?:^|\s)(?:cursor-agent|agent)(?:\s|$)/u.test(normalizedCommand)) {
+    return hasCursorAgentStartupBanner(lines);
+  }
+  return false;
+}
+
 function defaultDeliveryProbe(binding: SmokeDeliveryBinding): boolean {
   try {
     if (!existsSync(binding.sealPath)) return false;
@@ -386,7 +404,6 @@ export function installStableWorkerSmokeSpawnPatch(
   const originalStop = prototype.stopWorker;
   const probe = options.probe ?? defaultGenerationProbe;
   const deliveryProbe = options.deliveryProbe ?? defaultDeliveryProbe;
-  const agentStartupProbe = options.agentStartupProbe ?? hasCursorAgentStartupBanner;
   const now = options.now ?? Date.now;
   const sleepMs = options.sleepMs ?? defaultSleep;
 
@@ -426,6 +443,8 @@ export function installStableWorkerSmokeSpawnPatch(
     ): ReturnType<OrcaTaskRuntimeAdapter['spawnWorker']> {
       const result = originalSpawn.call(this, input, callOptions);
       if (result.status !== 'ok') return result;
+      const agentStartupProbe = options.agentStartupProbe
+        ?? ((lines: readonly string[]) => hasExecutorStartupBanner(input.command, lines));
       const stabilized = stabilizeSpawnedSmokeWorkerIdentity({
         worker: result.value,
         cwd: callOptions.cwd ?? result.value.workspacePath,
