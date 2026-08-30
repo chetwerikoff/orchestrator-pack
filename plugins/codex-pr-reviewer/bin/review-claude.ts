@@ -45,6 +45,17 @@ export async function runClaudePackReview(argv: string[]): Promise<number> {
     input: promptResult.reviewStdout,
     allowEmptyStdout: false,
     timeoutMs: budget.effectiveBudgetMs,
+    onSpawn: (pid) => {
+      const runId = String(process.env.PACK_REVIEW_RUN_ID ?? process.env.OPK_REVIEW_RUN_ID ?? '').trim();
+      process.stderr.write(`OPK_NATIVE_CHILD_V1 ${JSON.stringify({
+        schema: 'pack-review-native-child/v1',
+        runId,
+        reviewer: 'claude',
+        pid,
+        ...(process.platform === 'win32' ? {} : { processGroupId: pid }),
+        startedAtUtc: new Date().toISOString(),
+      })}\n`);
+    },
   });
   if (!claude.ok) {
     if (claude.stderr) process.stderr.write(claude.stderr.endsWith('\n') ? claude.stderr : `${claude.stderr}\n`);
