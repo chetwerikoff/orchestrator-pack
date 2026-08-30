@@ -5,13 +5,17 @@ import {
   renameSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { runProcessSync } from '../kernel/subprocess.ts';
+import { releaseHeldFileLock, tryAcquireHeldFileLock } from '../runtime/single-instance-lease.ts';
 import { runOrcaJson, type OrcaJsonResponse } from './native.ts';
 import { resolveDispatchTerminalMailLedgerPath } from '../pr2-foundation/wake-supervisor-state-root.ts';
 
 export const TERMINAL_WORKER_STATES = new Set(['failed', 'succeeded', 'stopped', 'abandoned']);
 export const TERMINAL_DISPATCH_STATES = new Set(['completed', 'failed', 'circuit_broken']);
 export const DISPATCH_TERMINAL_MAIL_TYPE = 'dispatch_terminal' as const;
+const LEDGER_PENDING = 'pending';
 
 export interface DispatchTerminalSnapshot {
   readonly dispatchId: string;
@@ -43,11 +47,18 @@ export interface DispatchTerminalMailPulseResult {
   readonly results: readonly DispatchTerminalMailSendResult[];
 }
 
+export interface DispatchTerminalMailDeliveryResult {
+  readonly ok: boolean;
+  readonly reason?: string;
+}
+
 export interface DispatchTerminalMailDeps {
   readonly ledgerPath?: string;
   readonly env?: NodeJS.ProcessEnv;
   readonly runJson?: typeof runOrcaJson;
   readonly nowMs?: () => number;
+  /** When omitted, production uses the message-bound delivery companion. Pass `null` to skip in tests. */
+  readonly deliverMessage?: ((messageId: string) => DispatchTerminalMailDeliveryResult) | null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -141,6 +152,39 @@ function extractMessageId(response: OrcaJsonResponse): string {
   return text(result.message_id ?? result.messageId ?? result.id);
 }
 
+function ledgerSentValue(messageId: string): string {
+  return `sent:${messageId}`;
+}
+
+function clearPendingClaim(ledgerPath: string, dispatchId: string): void {
+  const ledger = readLedger(ledgerPath);
+  if (ledger.notified[dispatchId] !== LEDGER_PENDING) return;
+  const next = { ...ledger.notified };
+  delete next[dispatchId];
+  writeLedgerAtomic(ledgerPath, { notified: next });
+}
+
+function defaultDeliverMessage(messageId: string, env?: NodeJS.ProcessEnv): DispatchTerminalMailDeliveryResult {
+  const script = join(dirname(fileURLToPath(import.meta.url)), '../cursor-unsent-composer-submit.ts');
+  const result = runProcessSync({
+    command: process.execPath,
+    args: ['--experimental-strip-types', script, '--delivery', '--message-id', messageId],
+    env: env ? { ...process.env, ...env } : process.env,
+  });
+  if (result.ok) return { ok: true };
+  return { ok: false, reason: 'delivery_companion_failed' };
+}
+
+function runDeliveryCompanion(
+  messageId: string,
+  deps: DispatchTerminalMailDeps,
+): DispatchTerminalMailDeliveryResult {
+  if (deps.deliverMessage === null) return { ok: true };
+  const deliver = deps.deliverMessage
+    ?? ((id: string) => defaultDeliverMessage(id, deps.env));
+  return deliver(messageId);
+}
+
 export function maybeNotifyRunOnTerminalDispatch(
   snapshot: DispatchTerminalSnapshot,
   deps: DispatchTerminalMailDeps = {},
@@ -154,45 +198,79 @@ export function maybeNotifyRunOnTerminalDispatch(
   }
 
   const ledgerPath = deps.ledgerPath ?? resolveDispatchTerminalMailLedgerPath({ env: deps.env });
-  const fingerprint = terminalFingerprint(snapshot);
-  const ledger = readLedger(ledgerPath);
-  const prior = ledger.notified[dispatchId];
-  if (prior === fingerprint) {
-    return { dispatchId, outcome: 'duplicate', reason: 'terminal_already_notified' };
+  const lockPath = `${ledgerPath}.lock`;
+  const held = tryAcquireHeldFileLock(lockPath);
+  if (!held.acquired) {
+    return { dispatchId, outcome: 'failed', reason: `ledger_lock_${held.reason}` };
   }
 
-  const runJson = deps.runJson ?? runOrcaJson;
-  const response = runJson<{ message_id?: string; messageId?: string; id?: string }>([
-    'orchestration', 'send',
-    '--run', snapshot.runId,
-    '--type', DISPATCH_TERMINAL_MAIL_TYPE,
-    '--subject', `Worker dispatch terminal: ${snapshot.state || snapshot.dispatchStatus || 'inactive'}`,
-    '--body', 'A supervised worker Dispatch reached a terminal lifecycle state.',
-    '--dispatch-id', dispatchId,
-    '--payload', buildPayload(snapshot),
-    '--json',
-  ], { env: deps.env, inheritParentEnv: true });
+  try {
+    const ledger = readLedger(ledgerPath);
+    if (ledger.notified[dispatchId]) {
+      return { dispatchId, outcome: 'duplicate', reason: 'terminal_already_notified' };
+    }
 
-  if (!response.ok) {
+    writeLedgerAtomic(ledgerPath, {
+      notified: {
+        ...ledger.notified,
+        [dispatchId]: LEDGER_PENDING,
+      },
+    });
+
+    const runJson = deps.runJson ?? runOrcaJson;
+    const response = runJson<{ message_id?: string; messageId?: string; id?: string }>([
+      'orchestration', 'send',
+      '--run', snapshot.runId,
+      '--type', DISPATCH_TERMINAL_MAIL_TYPE,
+      '--subject', `Worker dispatch terminal: ${snapshot.state || snapshot.dispatchStatus || 'inactive'}`,
+      '--body', 'A supervised worker Dispatch reached a terminal lifecycle state.',
+      '--dispatch-id', dispatchId,
+      '--payload', buildPayload(snapshot),
+      '--json',
+    ], { env: deps.env, inheritParentEnv: true });
+
+    if (!response.ok) {
+      clearPendingClaim(ledgerPath, dispatchId);
+      return {
+        dispatchId,
+        outcome: 'failed',
+        reason: text(response.error?.code) || text(response.error?.message) || 'send_failed',
+      };
+    }
+
+    const messageId = extractMessageId(response);
+    if (messageId) {
+      const delivery = runDeliveryCompanion(messageId, deps);
+      if (!delivery.ok) {
+        writeLedgerAtomic(ledgerPath, {
+          notified: {
+            ...readLedger(ledgerPath).notified,
+            [dispatchId]: ledgerSentValue(messageId),
+          },
+        });
+        return {
+          dispatchId,
+          outcome: 'sent',
+          messageId,
+          reason: delivery.reason ?? 'delivery_companion_failed',
+        };
+      }
+    }
+
+    writeLedgerAtomic(ledgerPath, {
+      notified: {
+        ...readLedger(ledgerPath).notified,
+        [dispatchId]: messageId ? ledgerSentValue(messageId) : LEDGER_PENDING,
+      },
+    });
     return {
       dispatchId,
-      outcome: 'failed',
-      reason: text(response.error?.code) || text(response.error?.message) || 'send_failed',
+      outcome: 'sent',
+      ...(messageId ? { messageId } : {}),
     };
+  } finally {
+    releaseHeldFileLock(held.descriptor);
   }
-
-  const messageId = extractMessageId(response);
-  writeLedgerAtomic(ledgerPath, {
-    notified: {
-      ...ledger.notified,
-      [dispatchId]: fingerprint,
-    },
-  });
-  return {
-    dispatchId,
-    outcome: 'sent',
-    ...(messageId ? { messageId } : {}),
-  };
 }
 
 export function observeWorkerShowTerminalMail(

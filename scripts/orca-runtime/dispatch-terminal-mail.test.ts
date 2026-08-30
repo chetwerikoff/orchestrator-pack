@@ -64,8 +64,8 @@ describe('dispatch-terminal-mail', () => {
       };
     });
     const snapshot = terminalSnapshot();
-    const first = maybeNotifyRunOnTerminalDispatch(snapshot, { ledgerPath: file, runJson });
-    const second = maybeNotifyRunOnTerminalDispatch(snapshot, { ledgerPath: file, runJson });
+    const first = maybeNotifyRunOnTerminalDispatch(snapshot, { ledgerPath: file, runJson, deliverMessage: null });
+    const second = maybeNotifyRunOnTerminalDispatch(snapshot, { ledgerPath: file, runJson, deliverMessage: null });
     expect(first).toMatchObject({ outcome: 'sent', messageId: 'msg_terminal_once' });
     expect(second).toMatchObject({ outcome: 'duplicate', reason: 'terminal_already_notified' });
     expect(sends).toHaveLength(1);
@@ -105,9 +105,29 @@ describe('dispatch-terminal-mail', () => {
     });
     const pulse = runDispatchTerminalMailPulse({
       dispatchIds: ['ctx_pulse', 'ctx_pulse'],
-      deps: { ledgerPath: file, runJson },
+      deps: { ledgerPath: file, runJson, deliverMessage: null },
     });
     expect(pulse).toMatchObject({ examined: 2, sent: 1, duplicate: 1, failed: 0 });
     expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'send')).toHaveLength(1);
+  });
+
+  it('suppresses a second send when terminal observation fields evolve for the same dispatch', () => {
+    const file = ledgerPath();
+    const sends: unknown[][] = [];
+    const runJson = vi.fn((args: readonly string[]) => {
+      if (args[0] === 'orchestration' && args[1] === 'send') {
+        sends.push([...args]);
+        return { ok: true, result: { message_id: 'msg_evolve_once' } };
+      }
+      return { ok: true, result: {} };
+    });
+    const firstSnapshot = terminalSnapshot({ observationStatus: 'running' });
+    const evolvedSnapshot = terminalSnapshot({ observationStatus: 'exited', state: 'failed' });
+    expect(maybeNotifyRunOnTerminalDispatch(firstSnapshot, { ledgerPath: file, runJson, deliverMessage: null }).outcome).toBe('sent');
+    expect(maybeNotifyRunOnTerminalDispatch(evolvedSnapshot, { ledgerPath: file, runJson, deliverMessage: null })).toMatchObject({
+      outcome: 'duplicate',
+      reason: 'terminal_already_notified',
+    });
+    expect(sends).toHaveLength(1);
   });
 });

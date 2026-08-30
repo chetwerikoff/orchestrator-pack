@@ -447,6 +447,15 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     const observationStatus = parsed.observation?.status?.trim().toLowerCase() ?? '';
     if (observationStatus === 'exited'
       && parsed.terminalResource?.releaseState === 'released') {
+      const terminalSnapshot = snapshotFromWorkerShow(dispatchId, parsed);
+      if (terminalSnapshot) {
+        maybeNotifyRunOnTerminalDispatch(terminalSnapshot, {
+          ledgerPath: resolveDispatchTerminalMailLedgerPath({ env: this.#options.env }),
+          env: this.#options.env,
+          runJson: this.#runJson,
+          deliverMessage: null,
+        });
+      }
       const resource = parsed.terminalResource;
       const resourceOwner = String(resource?.ownerDispatchId ?? '').trim();
       const workerId = String(
@@ -475,6 +484,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
           ledgerPath: resolveDispatchTerminalMailLedgerPath({ env: this.#options.env }),
           env: this.#options.env,
           runJson: this.#runJson,
+          deliverMessage: null,
         });
       }
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_inactive');

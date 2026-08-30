@@ -681,8 +681,9 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
     selectAdapter: () => selectRuntimeAdapter({ env }),
   });
   const dispatchTerminalMailPulse: NonNullable<SchedulerBoundary['dispatchTerminalMailPulse']> = () => {
+    const currentAssignments = listCurrentWorkerAssignments(assignmentStorePath);
     const dispatchIds = [...new Set(
-      (storedAssignments ?? [])
+      (currentAssignments ?? [])
         .filter((assignment) => assignment.repository === repository && assignment.provider === 'orca')
         .map((assignment) => String(assignment.bindingKey ?? '').trim())
         .filter(Boolean),
