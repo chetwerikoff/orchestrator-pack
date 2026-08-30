@@ -2,7 +2,6 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1849,
   "declared_paths": [
-    "docs/declarations/1849.dispatch-terminal-mail-review.json",
     "docs/declarations/1849.pr-scope.json",
     "docs/orchestration-runbook.md",
     "scripts/orca-runtime/dispatch-terminal-mail.test.ts",
