@@ -48,9 +48,10 @@ this cutover.
 
 1. Adopt the merged #1610 revision through the normal supported PACK
    deployment/recycle path. Do not copy concrete executor values into tracked files.
-2. Export only the selected work-class or smoke-complexity triple into the launching
-   process before the task assistant or smoke launcher runs. The package does not
-   source an operator-local profile file or add a dotenv fallback.
+2. Keep the selected work-class or smoke-complexity triple in the machine-local
+   executor profile store before the task assistant or smoke launcher runs; stored
+   fenced keys override live environment values. The package does not add a dotenv
+   fallback.
 3. For Cursor, confirm the selected opaque catalog identity is present in
    `cursor-agent --list-models`. For OpenCode, confirm the selected model appears in
    `opencode models` and let the launcher inspect the installed non-mutating help
