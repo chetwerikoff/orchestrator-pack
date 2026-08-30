@@ -3918,7 +3918,8 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       });
     }
 
-    if (authority.cycle?.reviewStageComplete === true) {
+    if (authority.cycle?.reviewStageComplete === true
+        && authority.cycle.capMapVersion === PACK_REVIEW_CAP_MAP_VERSION) {
       const writeRequiredStatus = input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
         repoRoot: target.sourceRepoRoot,
         repoSlug: target.repoSlug,
