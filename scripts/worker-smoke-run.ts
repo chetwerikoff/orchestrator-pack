@@ -1845,8 +1845,9 @@ export async function runSmokeAttempt(
   }
 
   let smokeProfile: SmokeExecutorProfile;
+  let profileEnv: Readonly<NodeJS.ProcessEnv> = process.env;
   try {
-    const profileEnv = overlayExecutorProfileEnv(process.env);
+    profileEnv = overlayExecutorProfileEnv(process.env);
     const injectedDryRunHarness = options.dryRun && dependencies.adapter !== undefined;
     smokeProfile = dependencies.resolveProfile
       ? dependencies.resolveProfile(options.smokeComplexity, profileEnv)
@@ -1870,7 +1871,10 @@ export async function runSmokeAttempt(
     return 1;
   }
 
-  const adapter = dependencies.adapter ?? await selectRuntimeAdapter({}, { cwd: options.cwd });
+  const adapter = dependencies.adapter ?? await selectRuntimeAdapter({}, {
+    cwd: options.cwd,
+    transport: { env: { ...profileEnv } },
+  });
   const readiness = adapter.readiness({ cwd: options.cwd });
   if (readiness.status !== 'ok') {
     const report = operationalReport('BLOCKED', options, {

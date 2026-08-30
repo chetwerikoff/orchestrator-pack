@@ -4,6 +4,7 @@
   "declared_paths": [
     "docs/migration_notes.md",
     "docs/orchestration-runbook.md",
+    "docs/worker-smoke-testing.md",
     "scripts/executor-profile-store.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
@@ -21,5 +22,5 @@
     "docs/",
     "scripts/"
   ],
-  "source_revision": "a1e17e303aa5bff74a7c644ffc6ae969ae89e504"
+  "source_revision": "b27c611f9d0dcd8ea5e0f8500855f542824b4c9b"
 }

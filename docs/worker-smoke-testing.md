@@ -23,7 +23,7 @@ New action-producing tasks must declare a plan during authoring:
 node scripts/draft-discipline.mjs smoke-test-plan --draft path/to/issue-body.md
 ```
 
-Routine and complex smoke profiles come from the live process environment for the existing `PACK_EXECUTOR_SMOKE_*` names; `worker-smoke-run` does not load the gitignored local configuration file.
+Routine and complex smoke profiles come from the machine-local executor profile store for the existing `PACK_EXECUTOR_SMOKE_*` names; stored fenced keys override live environment values, and absent keys retain live environment defaults. `worker-smoke-run` does not load `.env` from a worktree or repository root.
 
 ## Multi-agent smoke executor policy
 
@@ -115,16 +115,15 @@ with `orca worktree current --json` and re-read the already-recorded setup-ready
 result; current-worktree binding alone is not setup readiness. A failed,
 incomplete, or unknown setup result blocks smoke before child creation.
 
-After setup and all Issue-declared external prerequisites are ready, export the
-selected routine or complex triple into the same launching process. Do not print
-concrete values, source them inside the smoke launcher, or split export and launch
-across unrelated terminal/tool calls. `worker-smoke-run` itself validates the
-selected triple, executor-specific model catalog, fresh route capability where
-required, and child inheritance before any smoke spawn. A failure reports the first
-profile/capability blocker and creates no smoke child.
+After setup and all Issue-declared external prerequisites are ready, ensure the
+machine-local store contains the selected routine or complex triple. The launcher
+loads that store once, overlays only fenced profile keys over live defaults, and
+validates the selected triple, executor-specific model catalog, fresh route
+capability where required, and child inheritance before any smoke spawn. A failure
+reports the first profile/capability blocker and creates no smoke child.
 
 Only after setup readiness and external-prerequisite readiness, invoke the existing
-smoke command in that same exported environment:
+smoke command; the launcher reads the store in that invocation:
 
 ```bash
 export PATH="$PWD/scripts:$PATH"
@@ -139,9 +138,9 @@ worker-smoke-run run \
   --cwd "$PWD"
 ```
 
-Do not add a profile loader, fallback, retry, second selector, or alternate executor
-when pre-launch admission fails. Fix the selected operator-local profile or the
-external installed capability and make a fresh attempt.
+Do not add a fallback, retry, second selector, or alternate executor when pre-launch
+admission fails. Fix the selected operator-local profile or the external installed
+capability and make a fresh attempt.
 
 The parent worker must:
 
