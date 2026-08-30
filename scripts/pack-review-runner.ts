@@ -3965,6 +3965,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
 
     carryover = await resolveCarryoverReplay({ input, target, projectId, storeRoot, baseRef, priorAuthority });
     const conflictFreeCarryover = carryover?.replay.kind === 'conflict_free_carryover';
+    const logicalAccounting = authority.cycle?.capMapVersion === PACK_REVIEW_CAP_MAP_VERSION;
     if (!conflictFreeCarryover
         && authority.cycle
         && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)) {
@@ -3984,7 +3985,6 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       };
     }
 
-    const logicalAccounting = authority.cycle?.capMapVersion === PACK_REVIEW_CAP_MAP_VERSION;
     const roundOrdinal = logicalAccounting
       ? (authority.cycle?.consumedRoundOrdinals?.length ?? 0) + 1
       : (authority.cycle?.consumedHeadShas.length ?? 0) + 1;
