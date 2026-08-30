@@ -253,7 +253,7 @@ function validateGovernedArtifacts(
   const taskIdentity = requireString(intake, 'taskIdentity', 'terminal_bundle_tier_intake_invalid');
   const firstRevision = requireString(intake, 'firstRevision', 'terminal_bundle_tier_intake_invalid');
   const authority: ReviewEpisodeDerivationAuthorityV1 = {
-    tierIntake: intake as ReviewEpisodeDerivationAuthorityV1['tierIntake'],
+    tierIntake: intake as unknown as ReviewEpisodeDerivationAuthorityV1['tierIntake'],
     receiptInventory: {
       source: 'canonical-review-directory',
       taskIdentity,
