@@ -369,7 +369,7 @@ interface EpisodeRecord {
   readonly workerKey: string;
   readonly nextEligibleAt: number;
   readonly backoffMs: number;
-  readonly sealed: boolean;
+  readonly state: 'claimed' | 'pointer-visible' | 'confirmed';
 }
 
 interface PersistedReconcileState {
@@ -377,8 +377,9 @@ interface PersistedReconcileState {
   readonly episodes: Record<string, EpisodeRecord>;
 }
 
-function episodeKey(message: DeliveryMessage, worker: RuntimeWorker): string {
-  return workerKey(worker.identity) + '\u0000' + message.runId;
+function episodeKey(_message: DeliveryMessage, worker: RuntimeWorker): string {
+  // One exact runtime worker identifies one pane; runs sharing it share one claim.
+  return workerKey(worker.identity);
 }
 
 function loadReconcileState(path: string): PersistedReconcileState {
@@ -397,7 +398,7 @@ function loadReconcileState(path: string): PersistedReconcileState {
     if (record.episodes && typeof record.episodes === 'object') {
       for (const [key, value] of Object.entries(record.episodes as Record<string, unknown>)) {
         if (!value || typeof value !== 'object') continue;
-        const row = value as Partial<EpisodeRecord>;
+        const row = value as Partial<EpisodeRecord> & { readonly sealed?: unknown; readonly state?: unknown };
         if (
           typeof row.messageId === 'string' && row.messageId
           && typeof row.runId === 'string' && row.runId
@@ -412,7 +413,11 @@ function loadReconcileState(path: string): PersistedReconcileState {
           workerKey: row.workerKey,
           nextEligibleAt: row.nextEligibleAt,
           backoffMs: row.backoffMs,
-          sealed: row.sealed === true,
+          state: row.state === 'confirmed' || row.sealed === true
+            ? 'confirmed'
+            : row.state === 'pointer-visible'
+              ? 'pointer-visible'
+              : 'claimed',
         };
       }
     }
@@ -510,6 +515,28 @@ function clearObservation(state: UnsentComposerWatchState, key: string): void {
 
 type ComposerReadResult = ReturnType<UnsentComposerSubmitDeps['read']>;
 
+function currentLiveness(
+  deps: UnsentComposerSubmitDeps,
+  identity: RuntimeWorkerIdentity,
+): RuntimeLiveness {
+  // Older test-only callers have no liveness seam; production adapters always do.
+  return deps.liveness?.(identity, DELIVERY_LIVENESS_WINDOW_MS) ?? 'idle';
+}
+
+function livenessDeferral(
+  identity: RuntimeWorkerIdentity,
+  status: RuntimeLiveness,
+): UnsentComposerTerminalResult {
+  return {
+    terminal: identity.id,
+    generation: identity.generation,
+    ok: true,
+    unsent: true,
+    enter: false,
+    reason: `worker_${status}`,
+  };
+}
+
 function settleComposerObservation(
   worker: RuntimeWorker,
   input: UnsentComposerSubmitInput,
@@ -517,7 +544,7 @@ function settleComposerObservation(
   state: UnsentComposerWatchState,
   shown: ComposerReadResult,
   allowAmbiguousRetry = false,
-  submitCount = 1,
+  _submitCount = 1,
 ): UnsentComposerTerminalResult {
   const identity = worker.identity;
   const key = workerKey(identity);
@@ -553,34 +580,47 @@ function settleComposerObservation(
   if (input.dryRun) {
     return { ...base, ok: true, unsent: true, enter: false, reason: 'dry_run' };
   }
-  state.submittedFingerprint.set(key, fingerprint);
-  const dispatches: RuntimeDispatchResult[] = [deps.submit(identity)];
-  if (submitCount > 1 && dispatches[0]?.status !== 'send_failed') {
-    const reshown = deps.read(identity);
-    const stillBusy = deps.liveness?.(identity, DELIVERY_LIVENESS_WINDOW_MS) === 'busy';
-    if (stillBusy && reshown.ok && isExactOrchestrationPointer(reshown)) {
-      dispatches.push(deps.submit(identity));
-    }
-  }
-  const dispatched = dispatches.find((result) => result.status === 'send_failed')
-    ?? dispatches.find((result) => result.status === 'dispatch_unknown')
-    ?? dispatches.at(-1)!;
-  if (dispatched.status === 'send_failed') {
+  const beforeLiveness = currentLiveness(deps, identity);
+  if (beforeLiveness !== 'idle') return livenessDeferral(identity, beforeLiveness);
+
+  const submitted = deps.submit(identity);
+  if (submitted.status === 'send_failed') {
     state.submittedFingerprint.delete(key);
-    return { ...base, ok: false, unsent: true, enter: false, reason: dispatched.reason, dispatchStatus: dispatched.status };
+    return { ...base, ok: false, unsent: true, enter: false, reason: submitted.reason, dispatchStatus: submitted.status };
   }
-  if (dispatched.status === 'dispatch_unknown') {
+  if (!deps.liveness && submitted.status === 'dispatch_unknown') {
     const fingerprints = state.ambiguousSubmittedFingerprints.get(key) ?? new Set<string>();
     fingerprints.add(fingerprint);
     state.ambiguousSubmittedFingerprints.set(key, fingerprints);
-    return { ...base, ok: true, unsent: true, enter: false, reason: dispatched.reason, dispatchStatus: dispatched.status };
+    state.submittedFingerprint.set(key, fingerprint);
+    return { ...base, ok: true, unsent: true, enter: false, reason: submitted.reason, dispatchStatus: submitted.status };
   }
-  if (dispatched.status === 'dispatched') {
-    const fingerprints = state.ambiguousSubmittedFingerprints.get(key);
-    fingerprints?.delete(fingerprint);
-    if (fingerprints?.size === 0) state.ambiguousSubmittedFingerprints.delete(key);
+
+  // Transport acceptance is not submission evidence. Re-read the pane and then
+  // require the observed idle-to-busy transition before recording confirmation.
+  const afterShown = deps.liveness ? deps.read(identity) : { ok: true as const, lines: [], source: 'screen' as const };
+  const afterLiveness = deps.liveness ? currentLiveness(deps, identity) : 'busy';
+  const started = afterShown.ok && afterLiveness === 'busy';
+  if (!started) {
+    const fingerprints = state.ambiguousSubmittedFingerprints.get(key) ?? new Set<string>();
+    fingerprints.add(fingerprint);
+    state.ambiguousSubmittedFingerprints.set(key, fingerprints);
+    state.submittedFingerprint.set(key, fingerprint);
+    return {
+      ...base,
+      ok: false,
+      unsent: true,
+      enter: false,
+      reason: 'submission_unconfirmed',
+      dispatchStatus: submitted.status,
+    };
   }
-  return { ...base, ok: true, unsent: true, enter: true, reason: 'enter_sent', dispatchStatus: dispatched.status };
+
+  state.submittedFingerprint.set(key, fingerprint);
+  const fingerprints = state.ambiguousSubmittedFingerprints.get(key);
+  fingerprints?.delete(fingerprint);
+  if (fingerprints?.size === 0) state.ambiguousSubmittedFingerprints.delete(key);
+  return { ...base, ok: true, unsent: true, enter: true, reason: 'enter_sent', dispatchStatus: submitted.status };
 }
 
 function submitOne(
@@ -707,25 +747,6 @@ export async function submitUnsentCursorComposerOnceForWorker(
       ? await deps.readAsync(worker.identity)
       : deps.read(worker.identity);
   }
-  const exactPointer = isExactOrchestrationPointer(shown);
-  const liveness = exactPointer
-    ? deps.liveness?.(worker.identity, DELIVERY_LIVENESS_WINDOW_MS) ?? 'unknown'
-    : 'unknown';
-  if (exactPointer && deps.liveness && (liveness === 'gone' || liveness === 'unknown')) {
-    return {
-      ok: true,
-      dryRun: false,
-      watch: false,
-      terminals: [{
-        terminal: worker.identity.id,
-        generation: worker.identity.generation,
-        ok: true,
-        unsent: true,
-        enter: false,
-        reason: `worker_${liveness}`,
-      }],
-    };
-  }
   const terminal = settleComposerObservation(
     worker,
     { watch: true },
@@ -733,7 +754,6 @@ export async function submitUnsentCursorComposerOnceForWorker(
     state,
     shown,
     true,
-    liveness === 'busy' ? 2 : 1,
   );
   return {
     ok: terminal.ok,
@@ -838,6 +858,37 @@ function deliveryMessageFromInboxRow(row: OrcaInboxMessageRow, unreadCount = 1):
   };
 }
 
+function episodeStateRank(state: EpisodeRecord['state']): number {
+  return state === 'confirmed' ? 3 : state === 'pointer-visible' ? 2 : 1;
+}
+
+function migrateLegacyEpisodeKeys(
+  state: PersistedReconcileState,
+  unreadEpisodeKeys: ReadonlySet<string>,
+): void {
+  for (const [candidateKey, candidate] of Object.entries(state.episodes)) {
+    const paneKey = candidate.workerKey;
+    if (candidateKey === paneKey || !unreadEpisodeKeys.has(paneKey)) continue;
+    const current = state.episodes[paneKey];
+    if (!current || episodeStateRank(candidate.state) > episodeStateRank(current.state)) {
+      state.episodes[paneKey] = candidate;
+    }
+    delete state.episodes[candidateKey];
+  }
+}
+
+function releaseClaimsForConsumedMessages(
+  state: PersistedReconcileState,
+  unreadMessageIds: ReadonlySet<string>,
+  unreadEpisodeKeys: ReadonlySet<string>,
+): void {
+  for (const [key, episode] of Object.entries(state.episodes)) {
+    if (unreadEpisodeKeys.has(key) && !unreadMessageIds.has(episode.messageId)) {
+      delete state.episodes[key];
+    }
+  }
+}
+
 function releaseEpisodeWhenMailboxEmpty(
   state: PersistedReconcileState,
   deps: DeliveryMessageSubmitDeps,
@@ -845,15 +896,19 @@ function releaseEpisodeWhenMailboxEmpty(
 ): void {
   const response = deps.readInbox?.();
   if (!response?.ok) return;
-  const hasUnreadSibling = (response.result?.messages ?? []).some((row) =>
-    row.run_id?.trim() === message.runId
-    && row.to_handle?.trim() === message.recipient
-    && !(row.read === 1 || row.read === true),
-  );
-  if (hasUnreadSibling) return;
   const resolved = deps.resolveWorker(message);
   if (!resolved.ok || !resolved.worker) return;
-  delete state.episodes[episodeKey(message, resolved.worker)];
+  const mailboxKey = episodeKey(message, resolved.worker);
+  const hasUnreadSibling = (response.result?.messages ?? []).some((row) => {
+    if (row.read === 1 || row.read === true) return false;
+    const parsed = deliveryMessageFromInboxRow(row);
+    if (!parsed.ok) return false;
+    const sibling = deps.resolveWorker(parsed.message);
+    return sibling.ok
+      && sibling.worker !== null
+      && episodeKey(parsed.message, sibling.worker) === mailboxKey;
+  });
+  if (!hasUnreadSibling) delete state.episodes[mailboxKey];
 }
 
 /** Bind one Orca message to one exact recipient, write its pointer, then submit it. */
@@ -940,16 +995,47 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   const now = deps.reconcileClock?.() ?? Date.now();
   let state = deps.episodeState;
   if (!state && deps.episodeStatePath) state = loadReconcileState(deps.episodeStatePath);
-  const existing = state?.episodes[key];
-  if (existing?.sealed) return deliveryNoEffect('orchestration_episode_already_delivered', worker, false);
-  if (existing && now < existing.nextEligibleAt) {
-    return deliveryNoEffect('orchestration_episode_backoff', worker, false);
+  let existing = state?.episodes[key];
+  // Migrate the pre-pane-wide key without losing a durable claim.
+  if (!existing && state) {
+    const legacy = Object.entries(state.episodes).find(([candidate, row]) =>
+      candidate !== key && row.workerKey === workerKey(worker.identity));
+    if (legacy) {
+      existing = legacy[1];
+      state.episodes[key] = existing;
+      delete state.episodes[legacy[0]];
+    }
   }
 
   const control = deps.submitDeps.composerControl?.(worker.identity);
+
   if (control?.kind === 'opencode-http') {
+    const liveness = currentLiveness(deps.submitDeps, worker.identity);
+    if (liveness !== 'idle') return deliveryNoEffect(`worker_${liveness}`, worker);
+
+    if (existing?.state === 'confirmed') return deliveryNoEffect('orchestration_episode_already_delivered', worker, false);
+    if (existing && now < existing.nextEligibleAt) return deliveryNoEffect('orchestration_episode_backoff', worker, false);
     const priorBackoff = existing?.backoffMs ?? ORCHESTRATION_RECONCILE_WINDOW_MS;
     const nextBackoff = Math.min(priorBackoff * 2, ORCHESTRATION_RECONCILE_MAX_BACKOFF_MS);
+    if (existing) {
+      const observedLiveness = currentLiveness(deps.submitDeps, worker.identity);
+      if (observedLiveness !== 'idle' && observedLiveness !== 'busy') {
+        return deliveryNoEffect(`worker_${observedLiveness}`, worker);
+      }
+      const base = { terminal: worker.identity.id, generation: worker.identity.generation };
+      if (observedLiveness === 'busy') {
+        if (state) {
+          state.episodes[key] = { ...existing, state: 'confirmed' };
+          if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
+        }
+        return { ok: true, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: true, ok: true, reason: 'enter_sent' }] };
+      }
+      if (state) {
+        state.episodes[key] = { ...existing, state: 'pointer-visible', nextEligibleAt: now + nextBackoff, backoffMs: nextBackoff };
+        if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
+      }
+      return { ok: false, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: false, reason: 'submission_unconfirmed' }] };
+    }
     if (state && !existing) {
       state.episodes[key] = {
         messageId: message.id,
@@ -958,16 +1044,17 @@ async function submitOrcaMessageDeliveryPointerForMessage(
         workerKey: workerKey(worker.identity),
         nextEligibleAt: now + priorBackoff,
         backoffMs: nextBackoff,
-        sealed: false,
+        state: 'claimed',
       };
       if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
     }
     if (deps.pointerWriteLedger) deps.pointerWriteLedger.set(key, now);
+    const createdClaim = !existing;
     const before = deps.submitDeps.readAsync
       ? await deps.submitDeps.readAsync(worker.identity)
       : deps.submitDeps.read(worker.identity);
     if (!before.ok) {
-      if (state && !existing) {
+      if (state && createdClaim) {
         delete state.episodes[key];
         if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
       }
@@ -976,7 +1063,7 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     }
     const submitted = control.dispatch({ worker: worker.identity, action: 'submit-prompt', text: pointer });
     if (submitted.status === 'send_failed') {
-      if (state && !existing) {
+      if (state && createdClaim) {
         delete state.episodes[key];
         if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
       }
@@ -984,8 +1071,22 @@ async function submitOrcaMessageDeliveryPointerForMessage(
       return { ok: false, dryRun: false, watch: false, terminals: [{ terminal: worker.identity.id, generation: worker.identity.generation, unsent: true, enter: false, ok: false, reason: submitted.reason, dispatchStatus: submitted.status }] };
     }
     const base = { terminal: worker.identity.id, generation: worker.identity.generation };
+    if (state) state.episodes[key] = { ...state.episodes[key]!, state: 'pointer-visible' };
     if (submitted.status === 'dispatch_unknown') {
-      return { ok: true, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: true, reason: submitted.reason, dispatchStatus: submitted.status }] };
+      if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state!);
+      return { ok: false, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: false, reason: 'submission_unconfirmed', dispatchStatus: submitted.status }] };
+    }
+    // Transport acceptance is not submission evidence. Re-read the pane and
+    // require the observed idle-to-busy transition before recording confirmation.
+    const afterShown = deps.submitDeps.liveness
+      ? deps.submitDeps.read(worker.identity)
+      : { ok: true as const, lines: [], source: 'screen' as const };
+    const afterLiveness = deps.submitDeps.liveness
+      ? currentLiveness(deps.submitDeps, worker.identity)
+      : 'busy';
+    if (!(afterShown.ok && afterLiveness === 'busy')) {
+      if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state!);
+      return { ok: false, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: false, reason: 'submission_unconfirmed', dispatchStatus: submitted.status }] };
     }
     const after = deps.submitDeps.readAsync
       ? await deps.submitDeps.readAsync(worker.identity)
@@ -994,23 +1095,46 @@ async function submitOrcaMessageDeliveryPointerForMessage(
       return { ok: true, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: true, reason: 'opencode_panel_visibility_unconfirmed', dispatchStatus: 'dispatch_unknown' }] };
     }
     if (state) {
-      state.episodes[key] = { ...state.episodes[key]!, sealed: true };
+      state.episodes[key] = { ...state.episodes[key]!, state: 'confirmed' };
       if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
     }
     return { ok: true, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: true, ok: true, reason: 'enter_sent', dispatchStatus: submitted.status }] };
   }
+
   const shown = deps.submitDeps.readAsync
     ? await deps.submitDeps.readAsync(worker.identity)
     : deps.submitDeps.read(worker.identity);
   if (!shown.ok) return deliveryNoEffect(shown.reason, worker, false);
   const composerKind = classifyCursorComposer(shown.lines.join('\n'));
   const alreadyShown = composerKind !== 'empty' && composerShowsDeliveryPointer(shown, pointer);
+  const contradicted = existing?.state === 'confirmed' && alreadyShown && now >= existing.nextEligibleAt;
+  if (contradicted) {
+    const liveness = currentLiveness(deps.submitDeps, worker.identity);
+    if (liveness !== 'idle') return deliveryNoEffect(`worker_${liveness}`, worker);
+  }
+  if (contradicted && state) {
+    existing = { ...existing!, state: 'pointer-visible', nextEligibleAt: now };
+    state.episodes[key] = existing;
+  }
+  if (existing?.state === 'confirmed' && !contradicted) {
+    return deliveryNoEffect('orchestration_episode_already_delivered', worker, false);
+  }
+  if (existing && now < existing.nextEligibleAt) {
+    return deliveryNoEffect('orchestration_episode_backoff', worker, false);
+  }
   if (composerKind !== 'empty' && !alreadyShown) {
     return deliveryNoEffect('composer_not_empty_before_delivery', worker);
   }
+
   const priorBackoff = existing?.backoffMs ?? ORCHESTRATION_RECONCILE_WINDOW_MS;
   const nextBackoff = Math.min(priorBackoff * 2, ORCHESTRATION_RECONCILE_MAX_BACKOFF_MS);
-  if (state) {
+  const claimExists = Boolean(existing);
+  const createdClaim = !claimExists;
+  if (!alreadyShown && !claimExists) {
+    const liveness = currentLiveness(deps.submitDeps, worker.identity);
+    if (liveness !== 'idle') return deliveryNoEffect(`worker_${liveness}`, worker);
+  }
+  if (state && !existing) {
     state.episodes[key] = {
       messageId: message.id,
       runId: message.runId,
@@ -1018,25 +1142,56 @@ async function submitOrcaMessageDeliveryPointerForMessage(
       workerKey: workerKey(worker.identity),
       nextEligibleAt: now + priorBackoff,
       backoffMs: nextBackoff,
-      sealed: false,
+      state: alreadyShown ? 'pointer-visible' : 'claimed',
     };
     if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
   }
   if (deps.pointerWriteLedger) deps.pointerWriteLedger.set(key, now);
-  if (!alreadyShown) {
+  // A claimed/unconfirmed episode may submit again, but it must never write again.
+  if (!alreadyShown && !claimExists) {
     const written = deps.writePointer(worker.identity, pointer);
     const accepted = written.status === 'dispatched'
       || (written.status === 'dispatch_unknown' && written.witness?.operation === 'write' && written.witness.accepted === true);
-    if (!accepted) return deliveryNoEffect(written.reason ?? 'pointer_write_failed', worker, false);
+    if (!accepted) {
+      if (written.status === 'send_failed') {
+        if (state && createdClaim) delete state.episodes[key];
+        deps.pointerWriteLedger?.delete(key);
+        if (state && deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
+      }
+      return deliveryNoEffect(written.reason ?? 'pointer_write_failed', worker, false);
+    }
+    if (state) {
+      state.episodes[key] = { ...state.episodes[key]!, state: 'pointer-visible' };
+    }
   }
-  // The episode claim, rather than the rendered pointer fingerprint, owns Enter.
-  const result = await submitUnsentCursorComposerOnceForWorker(worker, deps.submitDeps, createUnsentComposerWatchState());
+  let result: UnsentComposerSubmitResult;
+  if (claimExists && !alreadyShown && composerKind === 'empty') {
+    // An unconfirmed claim may be hidden by Cursor's follow-up queue. Retry the
+    // Enter without rewriting, even when the visible composer is empty.
+    const liveness = currentLiveness(deps.submitDeps, worker.identity);
+    if (liveness !== 'idle') return deliveryNoEffect(`worker_${liveness}`, worker);
+    const submitted = deps.submitDeps.submit(worker.identity);
+    const base = { terminal: worker.identity.id, generation: worker.identity.generation };
+    if (submitted.status === 'send_failed') {
+      result = { ok: false, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: false, reason: submitted.reason, dispatchStatus: submitted.status }] };
+    } else {
+      const afterShown = deps.submitDeps.liveness ? deps.submitDeps.read(worker.identity) : { ok: true as const, lines: [], source: 'screen' as const };
+      const afterLiveness = deps.submitDeps.liveness ? currentLiveness(deps.submitDeps, worker.identity) : 'busy';
+      const started = afterShown.ok && afterLiveness === 'busy';
+      result = started
+        ? { ok: true, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: true, ok: true, reason: 'enter_sent', dispatchStatus: submitted.status }] }
+        : { ok: false, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: false, reason: 'submission_unconfirmed', dispatchStatus: submitted.status }] };
+    }
+  } else {
+    result = await submitUnsentCursorComposerOnceForWorker(worker, deps.submitDeps, createUnsentComposerWatchState());
+  }
   const terminal = result.terminals[0];
-  const delivered = terminal?.enter === true && terminal.dispatchStatus === 'dispatched';
-  if (state && delivered) {
-    state.episodes[key] = { ...state.episodes[key]!, sealed: true };
-    if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
+  if (state && terminal?.reason === 'enter_sent') {
+    state.episodes[key] = { ...state.episodes[key]!, state: 'confirmed' };
+  } else if (state && terminal?.reason === 'submission_unconfirmed') {
+    state.episodes[key] = { ...state.episodes[key]!, state: 'pointer-visible' };
   }
+  if (state && deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
   return result;
 }
 
@@ -1165,7 +1320,7 @@ export async function runOrchestrationMailReconcileTick(
   const ledgerPath = options.ledgerPath ?? deps.episodeStatePath ?? ORCHESTRATION_RECONCILE_LEDGER_PATH;
   const lockPath = options.lockPath ?? deps.episodeLockPath ?? ORCHESTRATION_RECONCILE_LOCK_PATH;
   const held = tryAcquireHeldFileLock(lockPath);
-  if (!held.acquired) return { ok: true, attempted: 0, nudged: 0, skipped: 0, reasons: [`reconcile_lock_${held.reason}`], deliveryEvidence: [] };
+  if (!held.acquired) return { ok: false, attempted: 0, nudged: 0, skipped: 0, reasons: [`reconcile_lock_${held.reason}`], deliveryEvidence: [] };
   replaceLockedFileContents(held.descriptor, `${process.pid}\n`);
   try {
     const now = options.now ?? Date.now;
@@ -1224,6 +1379,8 @@ export async function runOrchestrationMailReconcileTick(
       unreadCounts.set(key, (unreadCounts.get(key) ?? 0) + 1);
     }
     if (!unresolvedUnread) {
+      migrateLegacyEpisodeKeys(state, unreadEpisodeKeys);
+      releaseClaimsForConsumedMessages(state, unreadIds, unreadEpisodeKeys);
       for (const key of Object.keys(state.episodes)) {
         if (!unreadEpisodeKeys.has(key)) delete state.episodes[key];
       }
@@ -1293,7 +1450,7 @@ export async function runOrchestrationMailReconcileTick(
       if (result.terminals[0]?.reason) reasons.push(`${id}:${result.terminals[0].reason}`);
     }
     saveReconcileState(ledgerPath, state);
-    return { ok: reasons.every((reason) => !/:send_failed$|:dispatch_unknown$/u.test(reason)), attempted, nudged, skipped, reasons, deliveryEvidence };
+    return { ok: reasons.every((reason) => !/:send_failed$|:dispatch_unknown$|:submission_unconfirmed$/u.test(reason)), attempted, nudged, skipped, reasons, deliveryEvidence };
   } finally {
     releaseHeldFileLock(held.descriptor);
   }

@@ -45,7 +45,7 @@ describe('worker message submission through the runtime boundary', () => {
     }
   });
 
-  it('awaits one render-race retry, then queues the exact pointer while Running', async () => {
+  it('defers the exact pointer while the worker is Running', async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), 'opk-worker-event-submit-'));
     const identity = { runtime: 'orca', id: 'event-worker', generation: `generation-${Date.now()}` } as const;
     const worker = {
@@ -115,13 +115,11 @@ describe('worker message submission through the runtime boundary', () => {
 
       expect(result).toMatchObject({ state: 'ambiguous', reason: 'dispatch_unknown' });
       await Promise.resolve();
-      expect(reads).toBe(3);
-      expect(calls).toHaveLength(3);
+      expect(reads).toBe(2);
+      expect(calls).toHaveLength(1);
       expect(calls[0]?.text).toBe('event delivery');
       expect(calls[0]?.submitOnly).toBeUndefined();
       expect(calls[0]?.writeOnly).toBe(true);
-      expect(calls[1]).toMatchObject({ submitOnly: true, worker: identity });
-      expect(calls[2]).toMatchObject({ submitOnly: true, worker: identity });
 
       const duplicate = await sendPackReviewWorkerNotification({
         trustedPackRoot: process.cwd(),
@@ -137,7 +135,7 @@ describe('worker message submission through the runtime boundary', () => {
       });
 
       expect(duplicate).toMatchObject({ state: 'ambiguous', reason: 'journal_duplicate_no_op' });
-      expect(calls).toHaveLength(3);
+      expect(calls).toHaveLength(1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
