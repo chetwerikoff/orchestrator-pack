@@ -1445,6 +1445,9 @@ export async function observeGptPackReviewAttempt(
         return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
       }
       const snapshot = inspected.snapshot as Record<string, unknown>;
+      if (snapshot.nodes_truncated === true) {
+        return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
+      }
       const nodes = Array.isArray(snapshot.nodes) ? snapshot.nodes : [];
       for (const rawNode of nodes) {
         if (!rawNode || typeof rawNode !== 'object' || Array.isArray(rawNode)) continue;
