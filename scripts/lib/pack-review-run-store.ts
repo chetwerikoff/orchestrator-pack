@@ -663,7 +663,6 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
     tier,
     accountingVersion,
     roundOrdinal,
-    accountingVersion,
   });
   if (cardinality !== expectedCardinality) {
     throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: reviewRound cardinality violates tier/round policy`);
