@@ -11,7 +11,6 @@ import {
   resolveCanonicalReviewDirectory,
   validateReviewEpisodeTopology,
 } from './lib/stage-completeness-core.ts';
-import { checkRemoteAuthorities } from './lib/create-issue-stage-topology.ts';
 
 export const PROTECTED_TYPES = new Set(['security', 'scope-violation']);
 const REVIEW_ECONOMICS_MARKER = 'review-economics-contract: v1';
@@ -578,16 +577,6 @@ function legacyCheck(captures, ledger, errors) {
 
 /** @param {unknown} captureOrCaptures @param {string} ledgerText @param {{ phase?: 'pre-lens'|'post-lens'|'final-acceptance', [key: string]: unknown }} options */
 export function checkFindingLedgerGuard(captureOrCaptures, ledgerText, options = {}) {
-  const remoteInputs = options.remoteAuthorities ?? (options.remoteAuthority ? [options.remoteAuthority] : []);
-  if (options.requireRemoteAuthority === true) {
-    if (remoteInputs.length === 0) {
-      return { ok: false, errors: ['finding-ledger: remote authority is required for receipt-backed production validation'], ledger: { version: 1, draft: null, counts: null, findings: [] }, captureFindings: [], protectedSignals: [] };
-    }
-  }
-  if (remoteInputs.length > 0) {
-    const authority = checkRemoteAuthorities(remoteInputs);
-    if (!authority.ok) return { ok: false, errors: authority.errors.map((error) => 'finding-ledger: remote authority ' + error), ledger: { version: 1, draft: null, counts: null, findings: [] }, captureFindings: [], protectedSignals: [] };
-  }
   const captures = Array.isArray(captureOrCaptures) ? captureOrCaptures.map(String) : [String(captureOrCaptures ?? '')];
   let metadata = Array.isArray(options.captureMetadata) ? options.captureMetadata : captures.map((_, index) => ({ name: `pass-${String(index + 1).padStart(2, '0')}-architectural.capture.txt`, timestampMs: index + 1 }));
   const errors = [];
@@ -674,25 +663,14 @@ function canonicalReceiptInputs(args) {
   return { receipts, authority: { tierIntake: intake, receiptInventory: { source: 'canonical-review-directory', taskIdentity: intake.taskIdentity, episodeFirstRevision: intake.firstRevision, reviewEpisodeId: `${intake.taskIdentity}@${intake.firstRevision}`, stageReceiptIds: receipts.map((receipt) => receipt.stageReceiptId) }, claudeProducerEvidence: evidence } };
 }
 function loadRelayEvidence(path) { if (!path) return []; const value = readJson(path); if (Array.isArray(value)) return value; if (isRecord(value) && Array.isArray(value.evidence)) return value.evidence; throw new Error('--verified-relay-evidence must contain an array or {evidence:[...]}'); }
-function loadRemoteAuthorities(args) {
-  const paths = [];
+function validateLegacyRemoteAuthoritySyntax(args) {
   for (let index = 0; index < args.length; index += 1) {
     if (args[index] !== '--remote-authority') continue;
     const path = args[index + 1];
     if (typeof path !== 'string' || path.length === 0 || path.startsWith('--')) {
       throw new Error('--remote-authority requires a path');
     }
-    paths.push(path);
   }
-  return paths.flatMap((path) => {
-    const value = readJson(path);
-    if (Array.isArray(value)) {
-      if (value.length === 0) throw new Error('--remote-authority must contain at least one authority object');
-      return value;
-    }
-    if (isRecord(value)) return [value];
-    throw new Error('--remote-authority must contain an object or non-empty array');
-  });
 }
 function loadCaptures(args) {
   const explicit = repeatedArgs(args, '--capture-file'); const directory = readArg(args, '--captures-dir');
@@ -715,6 +693,7 @@ export function runCli(argv) {
       console.error('finding-ledger: canonical receipt authority is required for --review-economics');
       return 1;
     }
+    validateLegacyRemoteAuthoritySyntax(args);
     const receiptInputs = receiptBacked ? canonicalReceiptInputs(args) : null;
     const result = checkFindingLedgerGuard(loaded.texts, readFileSync(ledgerFile, 'utf8'), {
       reviewEconomics: receiptBacked || reviewEconomicsRequested,
@@ -726,7 +705,6 @@ export function runCli(argv) {
       stageReceipts: receiptInputs?.receipts,
       episodeAuthority: receiptInputs?.authority,
       verifiedRelayEvidence: receiptInputs ? loadRelayEvidence(readArg(args, '--verified-relay-evidence')) : undefined,
-      remoteAuthorities: loadRemoteAuthorities(args),
     });
     if (!result.ok) { for (const error of result.errors) console.error(error); return 1; }
     console.log('finding-ledger guard: PASS'); return 0;
