@@ -851,9 +851,9 @@ function releaseEpisodeWhenMailboxEmpty(
     && !(row.read === 1 || row.read === true),
   );
   if (hasUnreadSibling) return;
-  for (const [key, episode] of Object.entries(state.episodes)) {
-    if (episode.runId === message.runId && episode.recipient === message.recipient) delete state.episodes[key];
-  }
+  const resolved = deps.resolveWorker(message);
+  if (!resolved.ok || !resolved.worker) return;
+  delete state.episodes[episodeKey(message, resolved.worker)];
 }
 
 /** Bind one Orca message to one exact recipient, write its pointer, then submit it. */
@@ -1054,35 +1054,7 @@ export function createOrcaMessageSubmitDeps(
     ['orchestration', 'inbox', '--full', '--limit', String(ORCHESTRATION_INBOX_LIMIT)],
     { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS },
   );
-  return {
-    readInbox,
-    lookupMessage: (messageId) => {
-      const response = readInbox();
-      if (!response.ok) return { ok: false, reason: response.error?.code ?? 'orchestration_inbox_unavailable' };
-      const matches = (response.result?.messages ?? []).filter((message) => message.id?.trim() === messageId);
-      if (matches.length !== 1) {
-        return { ok: false, reason: matches.length === 0 ? 'orchestration_message_missing' : 'orchestration_message_ambiguous' };
-      }
-      const row = matches[0];
-      const runId = row?.run_id?.trim() ?? '';
-      const recipient = row?.to_handle?.trim() ?? '';
-      if (!runId || !recipient) return { ok: false, reason: 'orchestration_message_binding_incomplete' };
-      return {
-        ok: true,
-        message: {
-          id: messageId,
-          runId,
-          recipient,
-          consumed: row?.read === 1 || row?.read === true,
-          unreadCount: (response.result?.messages ?? []).filter((candidate) =>
-            candidate.run_id?.trim() === runId
-            && candidate.to_handle?.trim() === recipient
-            && !(candidate.read === 1 || candidate.read === true),
-          ).length,
-        },
-      };
-    },
-    resolveWorker: (message) => {
+  const resolveWorker: DeliveryMessageSubmitDeps['resolveWorker'] = (message) => {
       if (message.recipient.startsWith('dispatch:')) {
         if (!adapter.resolveAssignmentWorker) return { ok: false, reason: 'runtime_assignment_resolution_unsupported' };
         const bindingKey = message.recipient.slice('dispatch:'.length).trim();
@@ -1105,7 +1077,42 @@ export function createOrcaMessageSubmitDeps(
       const resolved = adapter.findWorkerById(handle);
       if (resolved.status !== 'ok') return { ok: false, reason: resolved.reason };
       return { ok: true, worker: resolved.value };
+  };
+  return {
+    readInbox,
+    lookupMessage: (messageId) => {
+      const response = readInbox();
+      if (!response.ok) return { ok: false, reason: response.error?.code ?? 'orchestration_inbox_unavailable' };
+      const matches = (response.result?.messages ?? []).filter((message) => message.id?.trim() === messageId);
+      if (matches.length !== 1) {
+        return { ok: false, reason: matches.length === 0 ? 'orchestration_message_missing' : 'orchestration_message_ambiguous' };
+      }
+      const row = matches[0];
+      const runId = row?.run_id?.trim() ?? '';
+      const recipient = row?.to_handle?.trim() ?? '';
+      if (!runId || !recipient) return { ok: false, reason: 'orchestration_message_binding_incomplete' };
+      const message: DeliveryMessage = {
+        id: messageId,
+        runId,
+        recipient,
+        consumed: row?.read === 1 || row?.read === true,
+      };
+      const resolved = resolveWorker(message);
+      const mailboxKey = resolved.ok && resolved.worker ? episodeKey(message, resolved.worker) : undefined;
+      const unreadCount = mailboxKey
+        ? (response.result?.messages ?? []).filter((candidate) => {
+          if (candidate.read === 1 || candidate.read === true) return false;
+          const parsed = deliveryMessageFromInboxRow(candidate);
+          if (!parsed.ok) return false;
+          const candidateResolved = resolveWorker(parsed.message);
+          return candidateResolved.ok
+            && candidateResolved.worker !== null
+            && episodeKey(parsed.message, candidateResolved.worker) === mailboxKey;
+        }).length
+        : 1;
+      return { ok: true, message: { ...message, unreadCount } };
     },
+    resolveWorker,
     observeRetrievableMessageIds: (worker) => {
       const response = runOrcaJson<OrcaInboxFullResult>([
         'orchestration', 'check', '--terminal', worker.identity.id, '--peek',
@@ -1162,17 +1169,7 @@ export async function runOrchestrationMailReconcileTick(
     for (const id of Object.keys(state.messages)) {
       if (!unreadIds.has(id) || current - state.messages[id]! >= ORCHESTRATION_RECONCILE_WINDOW_MS) delete state.messages[id];
     }
-    const unreadRecipientRuns = new Set(unread.map((row) =>
-      `${row.to_handle?.trim() ?? ''}\u0000${row.run_id?.trim() ?? ''}`,
-    ));
-    for (const [key, episode] of Object.entries(state.episodes)) {
-      if (!unreadRecipientRuns.has(`${episode.recipient}\u0000${episode.runId}`)) delete state.episodes[key];
-    }
-    const unreadCounts = new Map<string, number>();
-    for (const row of unread) {
-      const groupKey = `${row.to_handle?.trim() ?? ''}\u0000${row.run_id?.trim() ?? ''}`;
-      unreadCounts.set(groupKey, (unreadCounts.get(groupKey) ?? 0) + 1);
-    }
+
     const rowsById = new Map<string, OrcaInboxMessageRow[]>();
     for (const row of unread) {
       const id = row.id!.trim();
@@ -1191,6 +1188,29 @@ export async function runOrchestrationMailReconcileTick(
       resolutions.set(cacheKey, resolved);
       return resolved;
     };
+    const unreadEpisodeKeys = new Set<string>();
+    const unreadCounts = new Map<string, number>();
+    let unresolvedUnread = false;
+    for (const row of unread) {
+      const parsed = deliveryMessageFromInboxRow(row);
+      if (!parsed.ok) {
+        unresolvedUnread = true;
+        continue;
+      }
+      const resolved = resolveWorker(parsed.message);
+      if (!resolved.ok || !resolved.worker) {
+        unresolvedUnread = true;
+        continue;
+      }
+      const key = episodeKey(parsed.message, resolved.worker);
+      unreadEpisodeKeys.add(key);
+      unreadCounts.set(key, (unreadCounts.get(key) ?? 0) + 1);
+    }
+    if (!unresolvedUnread) {
+      for (const key of Object.keys(state.episodes)) {
+        if (!unreadEpisodeKeys.has(key)) delete state.episodes[key];
+      }
+    }
     const reconcileDeps: DeliveryMessageSubmitDeps = {
       ...deps,
       resolveWorker,
@@ -1208,7 +1228,7 @@ export async function runOrchestrationMailReconcileTick(
       attempted += 1;
       const rows = rowsById.get(id) ?? [];
       const found = rows.length === 1
-        ? deliveryMessageFromInboxRow(rows[0]!, unreadCounts.get(`${rows[0]!.to_handle?.trim() ?? ''}\u0000${rows[0]!.run_id?.trim() ?? ''}`) ?? 1)
+        ? deliveryMessageFromInboxRow(rows[0]!)
         : { ok: false as const, reason: 'orchestration_message_ambiguous' };
       let result: UnsentComposerSubmitResult;
       if (!found.ok) {
@@ -1221,7 +1241,11 @@ export async function runOrchestrationMailReconcileTick(
           result = deliveryNoEffect('worker_gone', undefined, false);
         } else {
           const worker = resolved.worker;
-          const cacheKey = workerKey(worker.identity) + '\u0000' + found.message.runId;
+          const message = {
+            ...found.message,
+            unreadCount: unreadCounts.get(episodeKey(found.message, worker)) ?? 1,
+          };
+          const cacheKey = workerKey(worker.identity) + '\u0000' + message.runId;
           let observed = retrievable.get(cacheKey);
           if (!observed) {
             observed = deps.observeRetrievableMessageIds
@@ -1232,14 +1256,14 @@ export async function runOrchestrationMailReconcileTick(
             retrievable.set(cacheKey, observed);
           }
           const qualifies = 'messageIds' in observed
-            ? observed.ok && observed.messageIds.has(found.message.id)
+            ? observed.ok && observed.messageIds.has(message.id)
             : observed.ok;
           if (!qualifies) {
             const reason = !observed.ok ? observed.reason : 'orchestration_message_unretrievable';
             result = deliveryNoEffect(reason, worker, false);
           } else {
-            result = await submitOrcaMessageDeliveryPointerForMessage(found.message, reconcileDeps);
-            const evidence = deliveryLookingEvidence(found.message, worker, result);
+            result = await submitOrcaMessageDeliveryPointerForMessage(message, reconcileDeps);
+            const evidence = deliveryLookingEvidence(message, worker, result);
             if (evidence) deliveryEvidence.push(evidence);
           }
         }
