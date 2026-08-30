@@ -53,6 +53,15 @@ describe('dispatch-terminal-mail', () => {
     expect(snapshot).toEqual(terminalSnapshot());
   });
 
+  it('rejects worker-show snapshots without exact worker binding', () => {
+    const snapshot = snapshotFromWorkerShow('ctx_terminal', {
+      dispatch: { id: 'ctx_terminal', run_id: 'run_coordinator', status: 'failed' },
+      worker: { state: 'failed', stage: 'settled', last_error: 'process_exited' },
+      observation: { exactWorker: false, status: 'exited' },
+    });
+    expect(snapshot).toBeNull();
+  });
+
   it('sends exactly one orchestration message to the bound Run on terminal transition', () => {
     const file = ledgerPath();
     const sends: unknown[][] = [];

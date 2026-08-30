@@ -35,6 +35,7 @@ import {
   resolvePrSessionBindingCachePath,
 } from '../../docs/pr-session-binding-cache.mjs';
 import {
+  listCurrentWorkerAssignmentRecords,
   listCurrentWorkerAssignments,
   resolveWorkerAssignmentStorePath,
   type WorkerAssignment,
@@ -681,7 +682,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
     selectAdapter: () => selectRuntimeAdapter({ env }),
   });
   const dispatchTerminalMailPulse: NonNullable<SchedulerBoundary['dispatchTerminalMailPulse']> = () => {
-    const currentAssignments = listCurrentWorkerAssignments(assignmentStorePath);
+    const currentAssignments = listCurrentWorkerAssignmentRecords(assignmentStorePath);
     const dispatchIds = [...new Set(
       (currentAssignments ?? [])
         .filter((assignment) => assignment.repository === repository && assignment.provider === 'orca')

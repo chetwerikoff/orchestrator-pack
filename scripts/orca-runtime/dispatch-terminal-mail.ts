@@ -101,6 +101,7 @@ export function snapshotFromWorkerShow(
   const dispatch = isRecord(shown.dispatch) ? shown.dispatch : null;
   const worker = isRecord(shown.worker) ? shown.worker : null;
   const observation = isRecord(shown.observation) ? shown.observation : null;
+  if (observation?.exactWorker !== true) return null;
   const runId = text(dispatch?.run_id ?? dispatch?.runId);
   const resolvedDispatchId = text(dispatch?.id) || dispatchId.trim();
   if (!resolvedDispatchId || !runId) return null;
