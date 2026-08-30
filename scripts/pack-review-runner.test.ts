@@ -4,7 +4,13 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { parseAuthoritativeTier, startPackReview } from './pack-review-runner.ts';
+import {
+  observeGptPackReviewAttempt,
+  observeNativePackReviewAttempt,
+  parseAuthoritativeTier,
+  startPackReview,
+} from './pack-review-runner.ts';
+import type { PackReviewRunRecord } from './lib/pack-review-run-store.ts';
 
 const roots: string[] = [];
 const originalEnv = { ...process.env };
@@ -25,6 +31,168 @@ function cleanPayload(): string {
 afterEach(() => {
   process.env = { ...originalEnv };
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe('Issue #1826 reviewer-native replacement observation', () => {
+  function gptRun(admissionStartedAtUtc: string): PackReviewRunRecord {
+    return {
+      schemaVersion: 1,
+      id: 'prr-gpt-observation',
+      runId: 'prr-gpt-observation',
+      projectId: 'orchestrator-pack',
+      key: `pr-1826-${HEAD}`,
+      prNumber: 1826,
+      targetSha: HEAD,
+      headSha: HEAD,
+      status: 'failed',
+      latestRunStatus: 'failed',
+      linkedSessionId: 'worker',
+      startReason: 'automatic',
+      surface: 'test',
+      trustedPackRoot: process.cwd(),
+      sourceRepoRoot: process.cwd(),
+      automaticBudgetDisposition: 'consume',
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      accountingVersion: 'issue-1826-logical-rounds-1-1-2',
+      reviewCycleId: 'cycle-1826',
+      logicalRoundOrdinal: 1,
+      logicalRoundCap: 2,
+      resolvedReviewer: 'gpt',
+      reviewRound: {
+        schema: 'pack-review-gpt-round/v1',
+        reviewer: 'gpt',
+        tier: 'T3',
+        accountingVersion: 'issue-1826-logical-rounds-1-1-2',
+        roundOrdinal: 1,
+        cardinality: 3,
+        issueNumber: 1826,
+        boundIssueSnapshotDigest: 'd'.repeat(64),
+        sourceSlots: [
+          {
+            slotId: 'slot-01',
+            ordinal: 1,
+            lifecycle: 'invocation_started',
+            invocationId: 'invocation-01',
+            attemptOrdinal: 1,
+            admissionStartedAtUtc,
+            launchProfileKey: 'profile-01',
+            launchCdpUrl: 'http://127.0.0.1:9222',
+          },
+          { slotId: 'slot-02', ordinal: 2, lifecycle: 'planned' },
+          { slotId: 'slot-03', ordinal: 3, lifecycle: 'planned' },
+        ],
+      },
+      runnerPid: process.pid,
+      createdAt: admissionStartedAtUtc,
+      updatedAt: admissionStartedAtUtc,
+      heartbeatAtUtc: admissionStartedAtUtc,
+      findings: [],
+      deliveryOutcomes: {},
+    };
+  }
+
+  function gptObservationDeps(input: {
+    markerPresent: boolean;
+    generating: boolean | 'unknown';
+    replyPresent?: boolean;
+  }) {
+    const marker = `OPKTURNV1${'a'.repeat(32)}`;
+    const probe = async (args: { operation: string }) => {
+      if (args.operation === 'list') {
+        return {
+          schema: 'browser-gpt-page-probe/v1',
+          operation: 'list',
+          status: 'ok',
+          diagnostic_only: true,
+          workflow_authority: 'none',
+          targets_truncated: false,
+          targets: [{ target_id: 'target-1', normalized_url: 'https://chatgpt.com/c/one', title: 'one' }],
+        };
+      }
+      return {
+        schema: 'browser-gpt-page-probe/v1',
+        operation: 'inspect',
+        status: 'ok',
+        diagnostic_only: true,
+        workflow_authority: 'none',
+        snapshot: {
+          generation_in_progress: input.generating,
+          nodes: [
+            ...(input.markerPresent ? [{
+              role: 'user',
+              document_ordinal: 1,
+              innerText: { head: `${marker} prompt`, byte_length: 64 },
+            }] : []),
+            ...(input.replyPresent ? [{
+              role: 'assistant',
+              document_ordinal: 2,
+              innerText: { head: 'done', byte_length: 4 },
+            }] : []),
+          ],
+        },
+      };
+    };
+    const readObservation = () => ({
+      schema: 'state-light-turn-observation/v1' as const,
+      version: 1 as const,
+      invocation_id: 'invocation-01',
+      profile_key: 'profile-01',
+      marker,
+      phase: 'sent_unharvested' as const,
+      send_witness: 'owned_marker' as const,
+      send_count: 1,
+      conversation_url: 'https://chatgpt.com/c/one',
+      transitioned_at: '2026-08-30T00:00:00.000Z',
+      transition_reason: 'fixture',
+    });
+    return { probe: probe as never, readObservation: readObservation as never };
+  }
+
+  it('does not replace a Browser GPT turn that is still generating before 15 minutes', async () => {
+    const start = Date.parse('2026-08-30T00:00:00.000Z');
+    const observed = await observeGptPackReviewAttempt(
+      gptRun(new Date(start).toISOString()),
+      start + 14 * 60_000,
+      gptObservationDeps({ markerPresent: true, generating: true }),
+    );
+    expect(observed).toMatchObject({ state: 'generating', replacementEligible: false });
+  });
+
+  it('permits Browser GPT replacement after 15 minutes of confirmed generation and GitHub absence', async () => {
+    const start = Date.parse('2026-08-30T00:00:00.000Z');
+    const observed = await observeGptPackReviewAttempt(
+      gptRun(new Date(start).toISOString()),
+      start + 15 * 60_000,
+      gptObservationDeps({ markerPresent: true, generating: true }),
+    );
+    expect(observed).toMatchObject({ state: 'replacement_eligible', replacementEligible: true });
+  });
+
+  it('requires recovery of an attributable finished reply instead of replacement', async () => {
+    const start = Date.parse('2026-08-30T00:00:00.000Z');
+    const observed = await observeGptPackReviewAttempt(
+      gptRun(new Date(start).toISOString()),
+      start + 60_000,
+      gptObservationDeps({ markerPresent: true, generating: false, replyPresent: true }),
+    );
+    expect(observed).toMatchObject({ state: 'reply_recovery_required', replacementEligible: false });
+  });
+
+  it('keeps native replacement conservative when no process-group binding is observable', () => {
+    const run = gptRun('2026-08-30T00:00:00.000Z');
+    run.reviewRound = undefined;
+    run.resolvedReviewer = 'claude';
+    run.nativeAttempt = {
+      schema: 'pack-review-native-attempt/v1',
+      reviewer: 'claude',
+      invocationOrdinal: 2,
+      startedAtUtc: '2026-08-30T00:00:00.000Z',
+      effectiveBudgetMs: 30 * 60_000,
+      wrapperPid: process.pid,
+    };
+    expect(observeNativePackReviewAttempt(run, Date.parse('2026-08-30T00:20:00.000Z')))
+      .toMatchObject({ state: 'observation_unavailable', replacementEligible: false });
+  });
 });
 
 describe('Issue #1647 authoritative tier resolution', () => {
