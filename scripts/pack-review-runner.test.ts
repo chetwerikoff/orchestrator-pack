@@ -18,8 +18,10 @@ import {
 import { runProcess } from './kernel/subprocess.ts';
 import {
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+  commitPackReviewTriage,
   commitSmokeOrderingTransition,
   initializePackReviewAuthority,
+  observePackReviewHead,
   readPackReviewAuthority,
 } from './pack-review-state.ts';
 
@@ -493,6 +495,36 @@ describe('Issue #1826 logical-round smoke independence', () => {
       httpStatus: 409,
     });
     expect(readPackReviewAuthority(prNumber, options)?.cycle?.consumedRoundOrdinals).toEqual([1]);
+
+    let authority = readPackReviewAuthority(prNumber, options)!;
+    authority = observePackReviewHead({
+      prNumber,
+      expectedTransitionSeq: authority.transitionSeq,
+      headSha: head,
+      options,
+    });
+    authority = commitPackReviewTriage({
+      prNumber,
+      expectedTransitionSeq: authority.transitionSeq,
+      triage: {
+        verdict: 'DEFER',
+        source: 'architect',
+        findingSnapshotDigest: 'f'.repeat(64),
+        actor: 'architect-fixture',
+        committedAtUtc: new Date().toISOString(),
+      },
+      options,
+    });
+    expect(authority.cycle).toMatchObject({ state: 'open', consumedRoundOrdinals: [1] });
+    expect(authority.cycle?.reviewStageComplete).not.toBe(true);
+
+    const adjudicatedRound2 = await startPackReview({
+      ...common,
+      fixtureReviewStdout: cleanPayload(),
+      fixtureGithubReviewId: 182903,
+    });
+    expect(adjudicatedRound2).toMatchObject({ ok: true, created: true });
+    expect(readPackReviewAuthority(prNumber, options)?.cycle?.consumedRoundOrdinals).toEqual([1, 2]);
   });
   it('does not create a native same-round replacement when the prior run lacks a native binding', async () => {
     const parent = mkdtempSync(join(tmpdir(), 'pack-review-1826-native-unbound-'));
