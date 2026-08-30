@@ -119,24 +119,26 @@ export function defaultGenerationProbe(
   timeoutMs: number,
   run: typeof runOrcaJson = runOrcaJson,
 ): OrcaJsonResponse<{ terminal?: OrcaTerminalSummary }> {
-  const show = run<{ terminal?: OrcaTerminalSummary }>(
-    ['terminal', 'show', '--terminal', terminalHandle],
-    { cwd, timeoutMs: Math.max(1, Math.min(timeoutMs, 5_000)) },
-  );
-  if (show.ok || show.error?.code !== 'orca_operation_timeout') return show;
-
-  const elapsed = Math.min(timeoutMs, 5_000);
-  const remaining = timeoutMs - elapsed;
-  if (remaining <= 0) return show;
+  const lookupSlice = Math.max(1, Math.min(timeoutMs, 5_000));
   const listed = run<{ terminals?: OrcaTerminalSummary[] }>(
     ['terminal', 'list'],
-    { cwd, timeoutMs: remaining },
+    { cwd, timeoutMs: lookupSlice },
   );
-  if (!listed.ok) return show;
   const terminal = listed.result?.terminals?.find(
     (candidate) => candidate.handle?.trim() === terminalHandle.trim(),
   );
-  return terminal ? { ok: true, result: { terminal }, operation: 'terminal_list' } : show;
+  if (listed.ok && terminal) {
+    return { ok: true, result: { terminal }, operation: 'terminal_list' };
+  }
+
+  const remaining = timeoutMs - lookupSlice;
+  if (remaining <= 0) return listed;
+  const show = run<{ terminal?: OrcaTerminalSummary }>(
+    ['terminal', 'show', '--terminal', terminalHandle],
+    { cwd, timeoutMs: remaining },
+  );
+  if (show.ok || show.error?.code !== 'orca_operation_timeout') return show;
+  return listed.ok ? show : listed;
 }
 
 function defaultSleep(milliseconds: number): void {
