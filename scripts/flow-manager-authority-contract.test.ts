@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { runProcessSync } from './kernel/subprocess.ts';
 import {
@@ -54,6 +55,42 @@ function createTerminalBundleFixture(root: string, sourceRevision = 'r08') {
     protectedActivation: null,
     protectedOccurrences: [],
   };
+  const captureTexts = ['reviewer one\n', 'reviewer two\n', 'reviewer three\n'];
+  const captures = captureTexts.map((captureText, index) => {
+    const name = `pass-01-architectural-review-${String(index + 1).padStart(2, '0')}.capture.txt`;
+    return {
+      captureIdentity: `sha256:fixture:${name}`,
+      name,
+      byteLength: Buffer.byteLength(captureText),
+      sha256: createHash('sha256').update(captureText, 'utf8').digest('hex'),
+      rawFindingCount: 0,
+    };
+  });
+  const invocations = captures.map((capture, index) => ({
+    schema: 'reviewer-invocation-envelope/v1',
+    reviewEpisodeId,
+    stageAttemptId: 'architectural-review-attempt',
+    policyVersion: 'triple-source/v1',
+    reviewerCardinality: 3,
+    cardinalityConfigIdentity: 'env:OPK_GPT_REVIEWER_CARDINALITY',
+    stage: 'architectural-review',
+    sourceRevision,
+    invocationId: `architectural-review-invocation-${index + 1}`,
+    terminalResultIdentity: `result:architectural-review:${index + 1}`,
+    reviewerSource: `source-architectural-review-${index + 1}`,
+    reviewerSlot: String(index + 1).padStart(2, '0'),
+    reviewerOrdinal: index + 1,
+    attemptOrdinal: 1,
+    retryAttempt: false,
+    terminal: true,
+    terminalClassification: 'complete',
+    sendCount: 1,
+    retryClass: 'none',
+    revisionCheck: 'matched',
+    capacityOutcome: 'admitted',
+    capacityWaitMs: 0,
+    capture,
+  }));
   writeFileSync(join(reviewDir, 'tier-intake.json'), JSON.stringify({
     schema: 'tier-intake/v1',
     producer: 'fixture',
@@ -98,20 +135,44 @@ function createTerminalBundleFixture(root: string, sourceRevision = 'r08') {
     reviewEpisodeId,
     stageReceiptIds: [`${reviewEpisodeId}:stage-receipt:0001`],
   }, null, 2));
-  writeFileSync(join(reviewDir, 'verified-relay-evidence.json'), '[]\n');
+  writeFileSync(join(reviewDir, 'verified-relay-evidence.json'), JSON.stringify(captures.map((capture, index) => ({
+    relayAttemptId: `relay-${index + 1}`,
+    captureIdentity: capture.captureIdentity,
+    sourceLabel: `${capture.name}|${capture.captureIdentity}`,
+    name: capture.name,
+    byteLength: capture.byteLength,
+    sha256: capture.sha256,
+    verified: true,
+  })), null, 2));
   const receiptName = 'stage-completeness-receipt-ar.json';
   writeFileSync(join(reviewDir, receiptName), JSON.stringify({
     schema: 'stage-completeness-receipt/v1',
+    tier: 'T2',
+    taskIdentity: 'issue:1431',
+    episodeFirstRevision: 'r01',
     reviewEpisodeId,
     stageReceiptId: `${reviewEpisodeId}:stage-receipt:0001`,
+    previousStageReceiptId: null,
+    receiptCensus: [`${reviewEpisodeId}:stage-receipt:0001`],
+    stageAttemptId: 'architectural-review-attempt',
     stageSequence: 1,
     stage: 'architectural-review',
-    sourceRevision: 'r07',
+    policyVersion: 'triple-source/v1',
+    reviewerCardinality: 3,
+    cardinalityConfigIdentity: 'env:OPK_GPT_REVIEWER_CARDINALITY',
+    sourceRevision,
     outcome: 'complete',
+    producerEvidence: 'not-applicable',
+    revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' },
+    settlement: { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true },
+    invocations,
+    credentialingCaptures: captures,
+    relayEligibleCaptures: captures,
   }, null, 2));
   writeFileSync(join(reviewDir, 'acceptance-artifacts.json'), JSON.stringify({
     schema: 'create-issue-acceptance-artifacts/v1',
     reviewEpisodeId,
+    acceptanceBasis: 'authoritative-github-artifact',
     files: [
       receiptName,
       'verified-relay-evidence.json',
@@ -428,6 +489,7 @@ describe('Issue #1431 manager reviewer canon', () => {
             delegated.push([...argv]);
             return 0;
           },
+          buildTerminalBundle: () => bundle,
         })).not.toBe(0);
         expect(delegated).toHaveLength(before);
         const refusal = JSON.parse(stdout.chunks.join('').trim()) as {
@@ -489,6 +551,38 @@ describe('Issue #1431 manager reviewer canon', () => {
         distinctFindingCount: 0,
         processedDistinctCount: 0,
       });
+
+      for (const [tier, intakeExtras] of [
+        ['T2', {}],
+        ['T3', { competitiveDecision: 'required', competitiveRationale: 'fixture rationale' }],
+      ] as const) {
+        const invalidDir = join(root, `invalid-${tier.toLowerCase()}`);
+        mkdirSync(invalidDir, { recursive: true });
+        writeFileSync(join(invalidDir, 'tier-intake.json'), JSON.stringify({
+          schema: 'tier-intake/v1', producer: 'fixture', taskIdentity: 'issue:1431', kind: 'fresh',
+          priorTier: tier, firstRevision: 'r01', ...intakeExtras,
+        }, null, 2));
+        writeFileSync(join(invalidDir, 'author-dispositions.json'), JSON.stringify({
+          schema: 'create-issue-author-dispositions/v1', reviewEpisodeId: 'issue:1431@r01',
+          sourceRevision: 'r01', predecessorStage: null, draft: t1Draft, findings: [],
+          m4: { reviewEpisodeId: 'issue:1431@r01', sourceRevision: 'r01', predecessorStage: null, inventory: [] },
+        }, null, 2));
+        expect(() => buildManagerReviewTerminalBundle({
+          repositoryFullName: reviewContext.repositoryFullName, issueNumber: reviewContext.issueNumber,
+          sourceRevision: 'r01', reviewDir: invalidDir, liveIssueBody: t1Draft,
+        })).toThrow('terminal_bundle_predecessor_invalid');
+      }
+
+      const receiptPath = join(reviewDir, 'stage-completeness-receipt-ar.json');
+      const originalReceipt = readFileSync(receiptPath, 'utf8');
+      const incompleteReceipt = JSON.parse(originalReceipt) as Record<string, unknown>;
+      delete incompleteReceipt.settlement;
+      writeFileSync(receiptPath, JSON.stringify(incompleteReceipt, null, 2));
+      expect(() => buildManagerReviewTerminalBundle({
+        repositoryFullName: reviewContext.repositoryFullName, issueNumber: reviewContext.issueNumber,
+        sourceRevision: 'r08', reviewDir, liveIssueBody: draft,
+      })).toThrow('terminal_bundle_governed_artifacts_invalid');
+      writeFileSync(receiptPath, originalReceipt);
 
       expect(bundle.draft).toBe(draft);
       expect(bundle.rejectPartition).toHaveLength(1);
@@ -552,12 +646,14 @@ describe('Issue #1431 manager reviewer canon', () => {
         '--stage', terminalContext.stage,
         '--source-slot', terminalContext.sourceSlot,
         '--terminal-input-bundle', bundlePath,
+        '--review-dir', reviewDir,
       ];
       expect(await runStateLightEntry(args, {
         runTurn: async (argv) => {
           delegated.push([...argv]);
           return 0;
         },
+        buildTerminalBundle: () => bundle,
       })).toBe(0);
       expect(delegated).toHaveLength(1);
       expect(delegated[0]).not.toContain('--terminal-input-bundle');
@@ -571,6 +667,7 @@ describe('Issue #1431 manager reviewer canon', () => {
             delegated.push([...argv]);
             return 0;
           },
+          buildTerminalBundle: () => bundle,
         })).not.toBe(0);
         expect(delegated).toHaveLength(before);
         const refusal = JSON.parse(stdout.chunks.join('').trim()) as {
@@ -585,7 +682,7 @@ describe('Issue #1431 manager reviewer canon', () => {
 
       const missingBundleStdout = captureWrite(process.stdout);
       try {
-        const withoutBundle = args.slice(0, -2);
+        const withoutBundle = args.filter((token, index) => token !== '--terminal-input-bundle' && args[index - 1] !== '--terminal-input-bundle');
         expect(await runStateLightEntry(withoutBundle, {
           runTurn: async () => 0,
         })).not.toBe(0);

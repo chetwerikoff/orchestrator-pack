@@ -3,6 +3,17 @@ import { basename, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { defaultGhTransport, fetchIssueRevision } from './create-issue-stage-record-gh.ts';
 import type { GhTransport } from './create-issue-stage-record-types.ts';
+import { canonicalStagePlan, type ReviewTier } from './create-issue-stage-topology.ts';
+import {
+  deriveReviewEpisodeState,
+  validateReviewEpisodeTopology,
+  type ReviewEpisodeDerivationAuthorityV1,
+} from './stage-completeness-core.ts';
+import {
+  ACCEPTANCE_ARTIFACT_OUTPUT_NAMES,
+  ARTIFACT_MANIFEST_SCHEMA,
+  AUTHORITATIVE_GITHUB_ARTIFACT_BASIS,
+} from './create-issue-stage-record-artifacts.ts';
 
 export const MANAGER_REVIEW_TERMINAL_BUNDLE_SCHEMA = 'manager-review-terminal-input-bundle/v1' as const;
 
@@ -150,7 +161,9 @@ function normalizeFindings(raw: unknown): JsonRecord[] {
 }
 
 function manifestFiles(manifest: JsonRecord): string[] {
-  if (manifest.schema !== 'create-issue-acceptance-artifacts/v1' || !Array.isArray(manifest.files)) {
+  if (manifest.schema !== ARTIFACT_MANIFEST_SCHEMA
+    || manifest.acceptanceBasis !== AUTHORITATIVE_GITHUB_ARTIFACT_BASIS
+    || !Array.isArray(manifest.files)) {
     throw new Error('terminal_bundle_acceptance_manifest_invalid');
   }
   const files = manifest.files.filter((item): item is string => typeof item === 'string' && item.length > 0);
@@ -158,10 +171,7 @@ function manifestFiles(manifest: JsonRecord): string[] {
     throw new Error('terminal_bundle_acceptance_manifest_invalid');
   }
   for (const required of [
-    'finding-disposition-ledger.json',
-    'review-episode-inventory.json',
-    'verified-relay-evidence.json',
-    'acceptance-artifacts.json',
+    ...ACCEPTANCE_ARTIFACT_OUTPUT_NAMES,
   ]) {
     if (!files.includes(required)) throw new Error('terminal_bundle_acceptance_manifest_invalid');
   }
@@ -192,6 +202,76 @@ function stageReceipts(reviewDir: string, files: readonly string[], reviewEpisod
     throw new Error('terminal_bundle_stage_receipt_invalid');
   }
   return rows.map(({ stageSequence: _stageSequence, ...row }) => row);
+}
+
+function stageReceiptValues(reviewDir: string, files: readonly string[]): JsonRecord[] {
+  return files
+    .filter((name) => /^stage-completeness-receipt-.+\.json$/.test(name))
+    .map((name) => readJson(join(reviewDir, name), 'terminal_bundle_stage_receipt_invalid'));
+}
+
+function resolveTierAndPredecessor(
+  intake: JsonRecord,
+  predecessorStage: string | null,
+): { readonly tier: ReviewTier; readonly expectedPredecessorStage: string | null } {
+  const priorTier = intake.priorTier;
+  if (priorTier !== 'T1' && priorTier !== 'T2' && priorTier !== 'T3') {
+    throw new Error('terminal_bundle_tier_intake_invalid');
+  }
+  let plan;
+  try {
+    plan = canonicalStagePlan(priorTier, {
+      competitiveDecision: intake.competitiveDecision === 'required' || intake.competitiveDecision === 'skipped'
+        ? intake.competitiveDecision
+        : undefined,
+      competitiveRationale: typeof intake.competitiveRationale === 'string'
+        ? intake.competitiveRationale
+        : undefined,
+    });
+  } catch {
+    throw new Error('terminal_bundle_tier_intake_invalid');
+  }
+  const expectedPredecessorStage = plan.stages.length > 1
+    ? plan.stages[plan.stages.length - 2]!.stage
+    : null;
+  if (predecessorStage !== expectedPredecessorStage) {
+    throw new Error('terminal_bundle_predecessor_invalid');
+  }
+  return { tier: priorTier, expectedPredecessorStage };
+}
+
+function validateGovernedArtifacts(
+  reviewDir: string,
+  files: readonly string[],
+  intake: JsonRecord,
+  reviewEpisodeId: string,
+  tier: ReviewTier,
+): void {
+  const receipts = stageReceiptValues(reviewDir, files);
+  const relay = readJsonValue(join(reviewDir, 'verified-relay-evidence.json'), 'terminal_bundle_relay_invalid');
+  if (!Array.isArray(relay)) throw new Error('terminal_bundle_relay_invalid');
+  const taskIdentity = requireString(intake, 'taskIdentity', 'terminal_bundle_tier_intake_invalid');
+  const firstRevision = requireString(intake, 'firstRevision', 'terminal_bundle_tier_intake_invalid');
+  const authority: ReviewEpisodeDerivationAuthorityV1 = {
+    tierIntake: intake as ReviewEpisodeDerivationAuthorityV1['tierIntake'],
+    receiptInventory: {
+      source: 'canonical-review-directory',
+      taskIdentity,
+      episodeFirstRevision: firstRevision,
+      reviewEpisodeId,
+      stageReceiptIds: receipts.map((receipt) => requireString(
+        receipt,
+        'stageReceiptId',
+        'terminal_bundle_stage_receipt_invalid',
+      )),
+    },
+    validationPurpose: 'final-acceptance',
+  };
+  const state = deriveReviewEpisodeState(receipts, relay, authority);
+  const phase = tier === 'T2' ? 'pre-lens' : 'post-lens';
+  const errors = [...state.errors, ...validateReviewEpisodeTopology(state, phase)];
+  if (!state.relayComplete) errors.push('review episode relay is incomplete');
+  if (errors.length > 0) throw new Error('terminal_bundle_governed_artifacts_invalid');
 }
 
 function validateRepository(repositoryFullName: string): void {
@@ -238,6 +318,7 @@ export function buildManagerReviewTerminalBundle(options: BuildManagerReviewTerm
     || `${intake.taskIdentity}@${intake.firstRevision}` !== reviewEpisodeId) {
     throw new Error('terminal_bundle_tier_intake_stale');
   }
+  const { tier } = resolveTierAndPredecessor(intake, predecessorStage);
 
   let ledgerFindings: JsonRecord[] = findings;
   let receipts: ManagerReviewTerminalBundle['reviewEconomics']['stageReceipts'] = [];
@@ -254,9 +335,27 @@ export function buildManagerReviewTerminalBundle(options: BuildManagerReviewTerm
     const manifest = readJson(join(reviewDir, 'acceptance-artifacts.json'), 'terminal_bundle_acceptance_manifest_invalid');
     const files = manifestFiles(manifest);
     if (manifest.reviewEpisodeId !== reviewEpisodeId) throw new Error('terminal_bundle_acceptance_manifest_stale');
+    const receiptNames = files.filter((name) => /^stage-completeness-receipt-.+\.json$/.test(name));
+    const expectedFiles = new Set([...receiptNames, ...ACCEPTANCE_ARTIFACT_OUTPUT_NAMES]);
+    if (files.length !== expectedFiles.size || files.some((name) => !expectedFiles.has(name))) {
+      throw new Error('terminal_bundle_acceptance_manifest_invalid');
+    }
 
     const inventory = readJson(join(reviewDir, 'review-episode-inventory.json'), 'terminal_bundle_inventory_invalid');
-    if (inventory.reviewEpisodeId !== reviewEpisodeId) throw new Error('terminal_bundle_inventory_stale');
+    const receiptValues = stageReceiptValues(reviewDir, files);
+    const receiptIds = receiptValues.map((receipt) => requireString(
+      receipt,
+      'stageReceiptId',
+      'terminal_bundle_stage_receipt_invalid',
+    ));
+    if (inventory.source !== 'canonical-review-directory'
+      || inventory.taskIdentity !== intake.taskIdentity
+      || inventory.episodeFirstRevision !== intake.firstRevision
+      || inventory.reviewEpisodeId !== reviewEpisodeId
+      || !Array.isArray(inventory.stageReceiptIds)
+      || JSON.stringify(inventory.stageReceiptIds) !== JSON.stringify(receiptIds)) {
+      throw new Error('terminal_bundle_inventory_stale');
+    }
 
     const ledger = readJson(join(reviewDir, 'finding-disposition-ledger.json'), 'terminal_bundle_ledger_invalid');
     if (ledger.reviewEpisodeId !== reviewEpisodeId || ledger.sourceRevision !== options.sourceRevision || ledger.predecessorStage !== predecessorStage || ledger.draft !== draft) {
@@ -278,6 +377,7 @@ export function buildManagerReviewTerminalBundle(options: BuildManagerReviewTerm
     }
     verifiedRelayCount = relay.length;
     counts = validateCounts(ledger.counts);
+    validateGovernedArtifacts(reviewDir, files, intake, reviewEpisodeId, tier);
   }
 
   const rejectPartition = ledgerFindings.filter((row) => row.defectDisposition === 'rejected-as-false');

@@ -136,6 +136,17 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
     refuse('direct_publication_terminal_bundle_required');
     return 2;
   }
+  const reviewDir = typeof options.get('review-dir') === 'string'
+    ? options.get('review-dir') as string
+    : undefined;
+  if (directRequested && directStage === 'architectural' && !reviewDir) {
+    refuse('direct_publication_terminal_review_dir_required');
+    return 2;
+  }
+  if (directRequested && directStage !== 'architectural' && reviewDir) {
+    refuse('direct_publication_terminal_review_dir_unexpected');
+    return 2;
+  }
   if (directRequested && directStage !== 'architectural' && terminalInputBundle) {
     refuse('direct_publication_terminal_bundle_unexpected');
     return 2;
@@ -162,6 +173,7 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
     'source-revision',
     'stage',
     'source-slot',
+    'review-dir',
     'timeout-ms',
     'poll-ms',
   ]) {
