@@ -113,7 +113,7 @@ export function isOpenCodeComposerEmpty(lines: readonly string[]): boolean {
     }
     if (!trimmed.startsWith('┃')) break;
     sawLeftEdge = true;
-    if (trimmed !== '┃' && !/^┃\s+Ask anything\.\.\.\s+["“].*["”]$/u.test(trimmed)) return false;
+    if (trimmed !== '┃' && !/^┃\s+Ask anything\.\.\./u.test(trimmed)) return false;
   }
   return sawLeftEdge;
 }
