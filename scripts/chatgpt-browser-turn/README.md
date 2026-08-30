@@ -91,10 +91,11 @@ prior-state bundle with `scripts/manager-review-terminal-bundle.ts`, render the
 terminal prompt with that exact bundle, and add:
 
 ```bash
-  --terminal-input-bundle ${TERMINAL_INPUT_BUNDLE}
+  --terminal-input-bundle ${TERMINAL_INPUT_BUNDLE} \
+  --review-dir ${REVIEW_DIR}
 ```
 
-The option is required for terminal `architectural` direct publication and
+Both options are required for terminal `architectural` direct publication and
 forbidden on non-terminal stages. The long-running adapter refuses the wrong
 shape before detached-child spawn; state-light then re-reads and validates the
 bundle before any browser effect.
@@ -137,10 +138,9 @@ and forwards `--stage` and `--source-slot` with the existing direct argument set
 a missing value returns its existing `direct_publication_arguments_required`
 refusal before detached child spawn.
 For terminal `architectural`, it also requires and forwards
-`--terminal-input-bundle`; absence returns
-`direct_publication_terminal_bundle_required` before spawn. Supplying that
-option on a non-terminal stage returns
-`direct_publication_terminal_bundle_unexpected`.
+`--terminal-input-bundle` and `--review-dir`; absence of either option returns
+the corresponding refusal before spawn. Supplying either option on a
+non-terminal stage returns the corresponding unexpected-option refusal.
 
 ## State-light turn contract
 
