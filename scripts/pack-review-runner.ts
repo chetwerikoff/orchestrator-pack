@@ -1351,6 +1351,57 @@ async function findJournaledDeliveryResumeCandidate(options: {
   return repositoryBoundCandidates[0] ?? null;
 }
 
+const NATIVE_REPLACEMENT_MAX_MS = 15 * 60 * 1_000;
+const NATIVE_CHILD_FRAME_PREFIX = 'OPK_NATIVE_CHILD_V1 ';
+
+export interface PackReviewNativeAttemptObservation {
+  reviewer: 'codex' | 'claude';
+  state: 'running' | 'stopped' | 'observation_unavailable';
+  replacementEligible: boolean;
+  elapsedMs: number;
+  nativeReplacementCeilingMs: number;
+}
+
+export function observeNativePackReviewAttempt(
+  run: PackReviewRunRecord,
+  nowMs = Date.now(),
+): PackReviewNativeAttemptObservation | null {
+  const attempt = run.nativeAttempt;
+  if (!attempt) return null;
+  const startedAtMs = Date.parse(attempt.childStartedAtUtc ?? attempt.startedAtUtc);
+  const elapsedMs = Number.isFinite(startedAtMs) ? Math.max(0, nowMs - startedAtMs) : 0;
+  const nativeReplacementCeilingMs = Math.min(attempt.effectiveBudgetMs, NATIVE_REPLACEMENT_MAX_MS);
+  const processGroupId = attempt.reviewer === 'claude'
+    ? attempt.childProcessGroupId
+    : attempt.processGroupId;
+  if (!processGroupId) {
+    return {
+      reviewer: attempt.reviewer,
+      state: 'observation_unavailable',
+      replacementEligible: false,
+      elapsedMs,
+      nativeReplacementCeilingMs,
+    };
+  }
+  const state = observePosixProcessGroup(processGroupId);
+  if (state === 'observation_unavailable') {
+    return {
+      reviewer: attempt.reviewer,
+      state,
+      replacementEligible: false,
+      elapsedMs,
+      nativeReplacementCeilingMs,
+    };
+  }
+  return {
+    reviewer: attempt.reviewer,
+    state,
+    replacementEligible: state === 'stopped' || elapsedMs >= nativeReplacementCeilingMs,
+    elapsedMs,
+    nativeReplacementCeilingMs,
+  };
+}
+
 async function invokeReviewer(options: {
   reviewerPath: string;
   trustedPackRoot: string;
@@ -1374,6 +1425,7 @@ async function invokeReviewer(options: {
   attemptOrdinal?: number;
   invocationId?: string;
   frozenScope?: ResolvedScopeContext;
+  nativeInvocationOrdinal?: number;
 }): Promise<{ result: ProcessResult; resolvedReviewer: PackReviewer | null }> {
   const resolvedReviewer = resolvePackReviewerFromEnv(process.env, {
     layerOverrides: options.fixtureReviewerLayerOverrides,
@@ -1475,6 +1527,49 @@ async function invokeReviewer(options: {
     delete env.PACK_REVIEW_CARRYOVER_BUNDLE_PATH;
   }
 
+  let nativeStderrBuffer = '';
+  let acceptedNativeChildFrame = false;
+  const nativeInvocationOrdinal = options.nativeInvocationOrdinal ?? 1;
+  const consumeNativeChildFrames = (chunk: string): void => {
+    if (resolvedReviewer !== 'claude' || acceptedNativeChildFrame) return;
+    nativeStderrBuffer += chunk;
+    const lines = nativeStderrBuffer.split(/\r?\n/);
+    nativeStderrBuffer = lines.pop() ?? '';
+    for (const line of lines) {
+      if (!line.startsWith(NATIVE_CHILD_FRAME_PREFIX)) continue;
+      let frame: Record<string, unknown>;
+      try {
+        frame = JSON.parse(line.slice(NATIVE_CHILD_FRAME_PREFIX.length)) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      if (frame.schema !== 'pack-review-native-child/v1'
+          || frame.runId !== options.runId
+          || frame.reviewer !== 'claude') continue;
+      const childPid = Number(frame.pid);
+      const childProcessGroupId = Number(frame.processGroupId);
+      const childStartedAtUtc = String(frame.startedAtUtc ?? '');
+      if (!Number.isInteger(childPid) || childPid <= 0 || !childStartedAtUtc) continue;
+      const persisted = getPackReviewRun(options.runId, {
+        projectId: options.projectId,
+        storeRoot: options.storeRoot,
+      });
+      if (!persisted?.nativeAttempt
+          || persisted.nativeAttempt.invocationOrdinal !== nativeInvocationOrdinal
+          || persisted.nativeAttempt.reviewer !== 'claude') continue;
+      updatePackReviewRun(options.runId, {
+        nativeAttempt: {
+          ...persisted.nativeAttempt,
+          childPid,
+          ...(Number.isInteger(childProcessGroupId) && childProcessGroupId > 0 ? { childProcessGroupId } : {}),
+          childStartedAtUtc,
+        },
+      }, { projectId: options.projectId, storeRoot: options.storeRoot });
+      acceptedNativeChildFrame = true;
+      break;
+    }
+  };
+
   const result = await runProcess({
     command: process.execPath,
     args,
@@ -1483,14 +1578,27 @@ async function invokeReviewer(options: {
     env,
     allowEmptyStdout: true,
     timeoutMs: options.budgetLedger.runnerTimeoutMs,
+    onStderrChunk: consumeNativeChildFrames,
     onSpawn: (pid) => {
+      const startedAtUtc = new Date().toISOString();
       updatePackReviewRun(options.runId, {
         runnerPid: process.pid,
         status: 'running',
         latestRunStatus: 'running',
         reviewTargetRoot: options.reviewTargetRoot,
+        resolvedReviewer,
+        ...(resolvedReviewer === 'codex' || resolvedReviewer === 'claude' ? {
+          nativeAttempt: {
+            schema: 'pack-review-native-attempt/v1',
+            reviewer: resolvedReviewer,
+            invocationOrdinal: nativeInvocationOrdinal,
+            startedAtUtc,
+            effectiveBudgetMs: options.budgetLedger.effectiveBudgetMs,
+            wrapperPid: pid,
+            ...(process.platform === 'win32' ? {} : { processGroupId: pid }),
+          },
+        } : {}),
       }, { projectId: options.projectId, storeRoot: options.storeRoot });
-      void pid;
     },
   });
   return { result, resolvedReviewer };
@@ -2911,6 +3019,26 @@ export async function reconcileStalePackReviewRuns(
       && run.reviewRound?.reviewer === 'gpt'
       && !packReviewJournaledPayload(run)
       && packReviewDeliveryNeedsResume(run);
+    if (activeStale && run.reviewRound?.reviewer !== 'gpt' && run.nativeAttempt) {
+      const observation = observeNativePackReviewAttempt(run);
+      if (observation && !observation.replacementEligible) {
+        results.push({
+          runId: run.id,
+          terminalized: false,
+          statusReconciled: false,
+          reason: `native_attempt_${observation.state}`,
+          reviewer: observation.reviewer,
+          replacementEligible: false,
+          elapsedMs: observation.elapsedMs,
+          nativeReplacementCeilingMs: observation.nativeReplacementCeilingMs,
+          nextAction: observation.state === 'running'
+            ? 'let the current native reviewer attempt continue; unrelated work may proceed'
+            : 'native reviewer liveness is unavailable; keep the attempt visible and continue unrelated work',
+        });
+        continue;
+      }
+    }
+
     if (activeStale || immediateActive || needsGptSourceRecovery) {
       const recovery = await recoverStaleGptSourceComments({
         run,
@@ -3754,6 +3882,36 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       throw new Error('plural GPT review requires PACK_GPT_BROWSER_PROJECT_URL and no fixed chat URL');
     }
 
+    if (logicalAccounting && reviewer && reviewer !== 'gpt' && authority.cycle) {
+      const priorSameRound = listPackReviewRunRecordsRaw({ projectId, storeRoot })
+        .filter((candidate) => candidate.prNumber === target.prNumber
+          && candidate.reviewCycleId === authority.cycle!.cycleId
+          && candidate.logicalRoundOrdinal === roundOrdinal
+          && candidate.resolvedReviewer === reviewer
+          && !hasPersistedPackReviewVerdict(candidate))
+        .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
+      if (priorSameRound?.nativeAttempt) {
+        const observation = observeNativePackReviewAttempt(priorSameRound);
+        if (!observation?.replacementEligible) {
+          await releaseEarlyClaim('native_replacement_not_eligible');
+          return {
+            ok: false,
+            created: false,
+            reused: true,
+            reason: observation
+              ? `native_attempt_${observation.state}`
+              : 'native_observation_unavailable',
+            reviewer,
+            replacementEligible: false,
+            prNumber: target.prNumber,
+            headSha: target.headSha,
+            runId: priorSameRound.id,
+            httpStatus: 202,
+          };
+        }
+      }
+    }
+
     authority = advancePackReviewAuthority(
       authority,
       'claim_acquired',
@@ -4065,6 +4223,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           carryoverBundlePath,
           headSha: target.headSha,
           frozenScope: authoritative.frozenScope,
+          nativeInvocationOrdinal: 1,
         });
         result = invocation.result;
         resolvedReviewer = invocation.resolvedReviewer;
@@ -4157,6 +4316,9 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       } catch {
         carryover = null;
         carryoverBundlePath = '';
+        if (resolvedReviewer === 'codex' || resolvedReviewer === 'claude') {
+          updatePackReviewRun(run.id, { nativeAttempt: undefined }, { projectId, storeRoot });
+        }
         const fallback = await invokeReviewer({
           reviewerPath: trusted.reviewerPath,
           trustedPackRoot: trusted.trustedPackRoot,
@@ -4176,6 +4338,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           fixtureEmulateWin32Selector: input.fixtureEmulateWin32Selector,
           headSha: target.headSha,
           frozenScope: authoritative.frozenScope,
+          nativeInvocationOrdinal: 2,
         });
         result = fallback.result;
         resolvedReviewer = fallback.resolvedReviewer;
