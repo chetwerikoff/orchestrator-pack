@@ -21,11 +21,11 @@
     "scripts/review-delivery.test.ts"
   ],
   "denylist": [
-    ".orca/**",
-    "credentials/**",
-    "packages/core/**",
-    "secrets/**",
-    "vendor/**"
+    ".orca/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
     ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
