@@ -74,6 +74,7 @@ function depsFor(
       submitted.push(identity);
       return { status: 'dispatched' as const };
     }),
+    composerControl: extra.composerControl,
     now: extra.now,
     sleep: extra.sleep,
     sleepAsync: extra.sleepAsync,
@@ -727,6 +728,32 @@ describe('buildDeliveryPointer', () => {
 });
 
 describe('delivery-triggered composer submission', () => {
+  it('uses OpenCode HTTP append and submit without classifying screen chrome', async () => {
+    const target = worker('term_opencode_http');
+    const actions: string[] = [];
+    const deps = {
+      lookupMessage: () => ({
+        ok: true as const,
+        message: { id: 'msg_opencode_http', runId: 'run_opencode_http', recipient: 'term_opencode_http', consumed: false },
+      }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      writePointer: () => { throw new Error('screen pointer write must not run'); },
+      submitDeps: depsFor({}, {
+        read: () => { throw new Error('screen classification must not run'); },
+        composerControl: () => ({
+          kind: 'opencode-http' as const,
+          dispatch: (request) => {
+            actions.push(request.action);
+            return { status: 'dispatched' as const };
+          },
+        }),
+      }),
+    };
+    const result = await submitOrcaMessageDeliveryPointer('msg_opencode_http', deps);
+    expect(actions).toEqual(['append-prompt', 'submit-prompt']);
+    expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
+  });
+
   it('submits an exact pointer soft-wrapped by a narrow Cursor composer', async () => {
     const target = worker('term_wrapped_pointer');
     const submitted: RuntimeWorkerIdentity[] = [];

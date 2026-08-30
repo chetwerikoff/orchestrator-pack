@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { runOrcaJson, type OrcaJsonResponse } from './orca-runtime/native.ts';
 import {
   type RuntimeAdapter,
+  type RuntimeComposerControl,
   type RuntimeDispatchResult,
   type RuntimeLiveness,
   type RuntimeWorker,
@@ -307,6 +308,7 @@ export interface UnsentComposerSubmitDeps {
     | { ok: false; reason: string }
   >;
   readonly submit: (worker: RuntimeWorkerIdentity) => RuntimeDispatchResult;
+  readonly composerControl?: (worker: RuntimeWorkerIdentity) => RuntimeComposerControl | undefined;
   readonly liveness?: (worker: RuntimeWorkerIdentity, observationWindowMs: number) =>
     RuntimeLiveness;
   readonly sleepAsync?: (milliseconds: number) => PromiseLike<void>;
@@ -913,6 +915,22 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   if (existing && now < existing.nextEligibleAt) {
     return deliveryNoEffect('orchestration_episode_backoff', worker, false);
   }
+  const control = deps.submitDeps.composerControl?.(worker.identity);
+  if (control?.kind === 'opencode-http') {
+    const appended = control.dispatch({ worker: worker.identity, action: 'append-prompt', text: pointer });
+    if (appended.status !== 'dispatched') {
+      return deliveryNoEffect(appended.reason ?? 'opencode_prompt_append_failed', worker, false);
+    }
+    const submitted = control.dispatch({ worker: worker.identity, action: 'submit-prompt' });
+    const base = { terminal: worker.identity.id, generation: worker.identity.generation };
+    if (submitted.status === 'send_failed') {
+      return { ok: false, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: false, reason: submitted.reason, dispatchStatus: submitted.status }] };
+    }
+    if (submitted.status === 'dispatch_unknown') {
+      return { ok: true, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: true, reason: submitted.reason, dispatchStatus: submitted.status }] };
+    }
+    return { ok: true, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: true, ok: true, reason: 'enter_sent', dispatchStatus: submitted.status }] };
+  }
   const shown = deps.submitDeps.readAsync
     ? await deps.submitDeps.readAsync(worker.identity)
     : deps.submitDeps.read(worker.identity);
@@ -1268,6 +1286,7 @@ export function createAdapterSubmitDeps(
       return { ok: true, lines: output.value.lines, source: 'screen' };
     },
     submit: (worker) => adapter.dispatchInput({ worker, submitOnly: true }),
+    composerControl: (worker) => adapter.composerControl?.(worker),
     liveness: (worker, observationWindowMs) => adapter.liveness({ worker, observationWindowMs }).status,
     sentStorePath: SENT_STORE_PATH,
   };

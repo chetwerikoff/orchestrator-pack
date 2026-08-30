@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { promisify } from 'node:util';
 import {
   runtimeFailure,
@@ -8,6 +9,8 @@ import {
   type RuntimeAdapter,
   type RuntimeBoundedOutput,
   type RuntimeCallOptions,
+  type RuntimeComposerControl,
+  type RuntimeComposerControlRequest,
   type RuntimeDispatchResult,
   type RuntimeDispatchWitness,
   type RuntimeInboxCheckResult,
@@ -16,6 +19,7 @@ import {
   type RuntimeObservationToken,
   type RuntimeReadiness,
   type RuntimeResult,
+  type RuntimeOpenCodeHealth,
   type RuntimeWorker,
   type RuntimeWorkerIdentity,
   type RuntimeWorkerProvenance,
@@ -39,6 +43,55 @@ import {
 } from './native.ts';
 
 const execFileAsync = promisify(execFile);
+
+const OPEN_CODE_HTTP_SCRIPT = [
+  "const [url, method, body] = process.argv.slice(1);",
+  "try {",
+  "  const response = await fetch(url, { method, headers: body ? { 'content-type': 'application/json' } : undefined, body: body || undefined });",
+  "  process.stdout.write(JSON.stringify({ status: response.status, body: await response.text() }));",
+  "} catch (error) {",
+  "  process.stderr.write(error instanceof Error ? error.message : String(error));",
+  "  process.exitCode = 1;",
+  "}",
+].join('\n');
+
+function openCodeUrlFromCommand(command: string): string | undefined {
+  if (!/(?:^|\s)opencode(?:\s|$)/iu.test(command)) return undefined;
+  const hostname = command.match(/--hostname\s+(?:'([^']+)'|"([^"]+)"|(\S+))/iu);
+  const port = command.match(/--port\s+(?:'([1-9]\d*)'|"([1-9]\d*)"|([1-9]\d*))/iu);
+  const host = hostname?.[1] ?? hostname?.[2] ?? hostname?.[3];
+  const number = port?.[1] ?? port?.[2] ?? port?.[3];
+  if (host !== '127.0.0.1' || !number) return undefined;
+  return `http://${host}:${number}`;
+}
+
+function defaultOpenCodeHttpRequest(input: {
+  readonly url: string;
+  readonly method: 'GET' | 'POST';
+  readonly body?: string;
+  readonly timeoutMs: number;
+}): { readonly status: number; readonly body: string } {
+  const result = runProcessSync({
+    command: process.execPath,
+    args: ['--input-type=module', '-e', OPEN_CODE_HTTP_SCRIPT, input.url, input.method, input.body ?? ''],
+    encoding: 'utf8',
+    timeoutMs: input.timeoutMs,
+    inheritParentEnv: true,
+    allowEmptyStdout: true,
+  });
+  if (!result.ok) throw new Error(result.error || result.stderr || 'opencode_http_request_failed');
+  const parsed = JSON.parse(result.stdout) as { status?: unknown; body?: unknown };
+  const status = parsed.status;
+  const body = parsed.body;
+  if (typeof status !== 'number' || !Number.isInteger(status) || typeof body !== 'string') throw new Error('opencode_http_response_shape_unsupported');
+  return { status, body };
+}
+
+function openCodeHttpFailure(error: unknown): string {
+  return error instanceof Error && error.message.trim()
+    ? `opencode_http_request_failed:${error.message.trim()}`
+    : 'opencode_http_request_failed';
+}
 
 type AsyncExecError = Error & {
   readonly code?: string | number;
@@ -100,6 +153,12 @@ export interface OrcaRuntimeAdapterOptions extends OrcaRunOptions {
   readonly runJson?: typeof runOrcaJson;
   readonly runJsonAsync?: typeof runOrcaJsonAsync;
   readonly now?: () => number;
+  readonly openCodeHttpRequest?: (input: {
+    readonly url: string;
+    readonly method: 'GET' | 'POST';
+    readonly body?: string;
+    readonly timeoutMs: number;
+  }) => { readonly status: number; readonly body: string };
 }
 
 interface OwnedWorkerRecord {
@@ -107,6 +166,7 @@ interface OwnedWorkerRecord {
   readonly workspacePath: string;
   readonly workspaceSelector: 'active' | string;
   readonly title: string | null;
+  readonly openCodeUrl?: string;
 }
 
 interface KnownWorkspaceRecord {
@@ -413,6 +473,49 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     });
   }
 
+  #openCodeRequest(input: {
+    readonly url: string;
+    readonly method: 'GET' | 'POST';
+    readonly body?: string;
+    readonly timeoutMs: number;
+  }): { readonly status: number; readonly body: string } | { readonly error: string } {
+    try {
+      const request = this.#options.openCodeHttpRequest ?? defaultOpenCodeHttpRequest;
+      return request(input);
+    } catch (error) {
+      return { error: openCodeHttpFailure(error) };
+    }
+  }
+
+  #openCodeDispatch(
+    worker: RuntimeWorkerIdentity,
+    request: RuntimeComposerControlRequest,
+    options: RuntimeCallOptions = {},
+  ): RuntimeDispatchResult {
+    const owned = this.#owned.get(worker.id);
+    if (!owned?.openCodeUrl || !sameRuntimeWorker(owned.identity, worker)) {
+      return { status: 'send_failed', reason: 'runtime_opencode_control_unavailable' };
+    }
+    const current = OrcaRuntimeAdapter.prototype.findWorker.call(this, worker, options);
+    if (current.status !== 'ok') return { status: 'send_failed', reason: current.reason };
+    if (current.value === null) return { status: 'send_failed', reason: 'worker_generation_not_found' };
+    const path = request.action === 'append-prompt' ? '/tui/append-prompt' : '/tui/submit-prompt';
+    const response = this.#openCodeRequest({
+      url: `${owned.openCodeUrl}${path}`,
+      method: 'POST',
+      ...(request.action === 'append-prompt' ? { body: JSON.stringify({ text: request.text ?? '' }) } : {}),
+      timeoutMs: Math.max(1, options.timeoutMs ?? 10_000),
+    });
+    if ('error' in response) return { status: 'send_failed', reason: response.error };
+    if (response.status < 200 || response.status >= 300) {
+      return { status: 'send_failed', reason: `opencode_http_status_${response.status}` };
+    }
+    return {
+      status: 'dispatched',
+      witness: { operation: request.action === 'append-prompt' ? 'write' : 'submit', accepted: true, source: 'runtime-response' },
+    };
+  }
+
   #rememberWorkspace(
     identity: RuntimeWorkerIdentity,
     workspaceSelector: 'active' | string,
@@ -637,6 +740,52 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     };
     this.#rememberWorkspace(identity, workspaceSelector, workspacePath);
     return { status: 'ok', value: worker };
+  }
+
+  composerControl(
+    worker: RuntimeWorkerIdentity,
+  ): RuntimeComposerControl | undefined {
+    const owned = this.#owned.get(worker.id);
+    if (!owned?.openCodeUrl || !sameRuntimeWorker(owned.identity, worker)) return undefined;
+    return {
+      kind: 'opencode-http',
+      dispatch: (request, options) => this.#openCodeDispatch(worker, request, options),
+    };
+  }
+
+  openCodeHealth(
+    worker: RuntimeWorkerIdentity,
+    options: RuntimeCallOptions = {},
+  ): RuntimeResult<RuntimeOpenCodeHealth> {
+    const owned = this.#owned.get(worker.id);
+    if (!owned?.openCodeUrl || !sameRuntimeWorker(owned.identity, worker)) {
+      return runtimeUnsupported('readiness', 'runtime_opencode_control_unavailable');
+    }
+    const current = OrcaRuntimeAdapter.prototype.findWorker.call(this, worker, options);
+    if (current.status !== 'ok') return current;
+    if (current.value === null) return runtimeFailure('readiness', 'worker_generation_not_found');
+    const response = this.#openCodeRequest({
+      url: `${owned.openCodeUrl}/global/health`,
+      method: 'GET',
+      timeoutMs: Math.max(1, options.timeoutMs ?? 10_000),
+    });
+    if ('error' in response) return runtimeFailure('readiness', response.error);
+    if (response.status < 200 || response.status >= 300) {
+      return runtimeFailure('readiness', `opencode_http_status_${response.status}`);
+    }
+    let parsed: unknown;
+    try { parsed = JSON.parse(response.body); } catch { return runtimeUnsupported('readiness', 'opencode_health_schema_mismatch'); }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return runtimeUnsupported('readiness', 'opencode_health_schema_mismatch');
+    }
+    const health = parsed as Record<string, unknown>;
+    if (health.healthy !== true || typeof health.version !== 'string' || !health.version.trim()) {
+      return runtimeUnsupported('readiness', 'opencode_health_schema_mismatch');
+    }
+    return {
+      status: 'ok',
+      value: { healthy: true, version: health.version.trim() },
+    };
   }
 
   readiness(options: RuntimeCallOptions = {}): RuntimeResult<RuntimeReadiness> {
@@ -951,6 +1100,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       workspacePath: worker.workspacePath,
       workspaceSelector: workspace,
       title: worker.title,
+      ...(openCodeUrlFromCommand(input.command) ? { openCodeUrl: openCodeUrlFromCommand(input.command) } : {}),
     });
     this.#rememberWorkspace(identity, workspace, worker.workspacePath);
     return { status: 'ok', value: worker };
@@ -974,6 +1124,14 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
     if (current.value === null) {
       return { status: 'send_failed', reason: 'worker_generation_not_found' };
+    }
+    const control = this.composerControl(input.worker);
+    if (control && (input.writeOnly || input.submitOnly)) {
+      return control.dispatch({
+        worker: input.worker,
+        action: input.writeOnly ? 'append-prompt' : 'submit-prompt',
+        ...(input.writeOnly ? { text: input.text ?? '' } : {}),
+      }, options);
     }
     const args = ['terminal', 'send', '--terminal', input.worker.id];
     if (!input.submitOnly) args.push('--text', input.text ?? '');

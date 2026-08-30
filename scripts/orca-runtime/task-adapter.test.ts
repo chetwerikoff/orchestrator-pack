@@ -146,6 +146,75 @@ describe('Orca task adapter exact spawn identity', () => {
   });
 });
 
+describe('OpenCode HTTP control plane', () => {
+  function makeAdapter(http: (input: { url: string; method: 'GET' | 'POST'; body?: string; timeoutMs: number }) => { status: number; body: string }) {
+    const handle = 'term-opencode-http';
+    const workspacePath = process.cwd();
+    const terminal = {
+      handle,
+      incarnationId: 'generation-opencode-http',
+      worktreePath: workspacePath,
+      title: 'opencode',
+      status: 'running' as const,
+    };
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'terminal create') return { ok: true, result: { terminal } };
+      if (operation === 'worktree current') return { ok: false, error: { code: 'not_available', message: 'fixture' } };
+      if (operation === 'terminal show') return { ok: true, result: { terminal } };
+      if (operation === 'terminal list') return { ok: true, result: { totalCount: 1, truncated: false, terminals: [terminal] } };
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    return new OrcaTaskRuntimeAdapter({ runJson: runJson as never, openCodeHttpRequest: http });
+  }
+
+  it('uses health, append-prompt, and submit-prompt for an exact spawned OpenCode worker', () => {
+    const requests: Array<{ url: string; method: 'GET' | 'POST'; body?: string; timeoutMs: number }> = [];
+    const adapter = makeAdapter((input) => {
+      requests.push(input);
+      return { status: 200, body: input.method === 'GET' ? JSON.stringify({ healthy: true, version: '1.18.25' }) : '{}' };
+    });
+    const spawned = adapter.spawnWorker({
+      title: 'opencode',
+      command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture',
+    });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+
+    expect(adapter.openCodeHealth(spawned.value.identity)).toEqual({
+      status: 'ok', value: { healthy: true, version: '1.18.25' },
+    });
+    const control = adapter.composerControl?.(spawned.value.identity);
+    expect(control?.kind).toBe('opencode-http');
+    expect(control?.dispatch({
+      worker: spawned.value.identity,
+      action: 'append-prompt',
+      text: 'delivery pointer',
+    }).status).toBe('dispatched');
+    expect(control?.dispatch({ worker: spawned.value.identity, action: 'submit-prompt' }).status).toBe('dispatched');
+    expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
+      { method: 'GET', url: 'http://127.0.0.1:18891/global/health' },
+      { method: 'POST', url: 'http://127.0.0.1:18891/tui/append-prompt' },
+      { method: 'POST', url: 'http://127.0.0.1:18891/tui/submit-prompt' },
+    ]);
+    expect(requests[1]?.body).toBe(JSON.stringify({ text: 'delivery pointer' }));
+  });
+
+  it.each([
+    [404, '{}', 'opencode_http_status_404'],
+    [200, JSON.stringify({ healthy: true }), 'opencode_health_schema_mismatch'],
+  ])('fails loudly on OpenCode health HTTP/schema breakage (%s)', (status, body, reason) => {
+    const adapter = makeAdapter(() => ({ status, body }));
+    const spawned = adapter.spawnWorker({
+      title: 'opencode',
+      command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture',
+    });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+    expect(adapter.openCodeHealth(spawned.value.identity)).toMatchObject({ status: expect.any(String), reason });
+  });
+});
+
 describe('Orca task adapter destructive operations', () => {
   it('prevalidates exact path and head before one remove', () => {
     const runner = workspaceRunner();
@@ -898,15 +967,15 @@ describe('Issue #1489 rendered screen observation', () => {
 });
 
 describe('Issue #1835 executor-aware worker-smoke observation', () => {
-  it('accepts OpenCode identity without accepting a Cursor-only banner', () => {
+  it('does not infer OpenCode startup from screen chrome because readiness is HTTP-backed', () => {
     const openCodeLines = ['OpenCode 1.18.25', 'OpenCode Zen · high'];
-    expect(hasExecutorStartupBanner('opencode --agent pack-opk-fixture', openCodeLines)).toBe(true);
+    expect(hasExecutorStartupBanner('opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture', openCodeLines)).toBe(false);
     expect(hasExecutorStartupBanner('cursor-agent', openCodeLines)).toBe(false);
   });
 
   it('keeps Cursor startup and ambiguity fail-closed', () => {
     expect(hasExecutorStartupBanner('cursor-agent', ['Cursor Agent', 'v1.2.3'])).toBe(true);
-    expect(hasExecutorStartupBanner('opencode --agent pack-opk-fixture', ['OpenCode'])).toBe(false);
+    expect(hasExecutorStartupBanner('opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture', ['OpenCode'])).toBe(false);
     expect(hasExecutorStartupBanner('other-agent', ['OpenCode 1.18.25'])).toBe(false);
   });
 
