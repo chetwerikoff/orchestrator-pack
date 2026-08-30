@@ -254,6 +254,35 @@ required observation surface is unavailable and no other legal manager action
 exists, a blocker must name that exact unavailable observation and its observed
 failure.
 
+### Pack-review same-round replacement observation
+
+For a failed or lost Browser-GPT pack-review source, a replacement of the same
+logical round is not authorized by timeout, missing local output, or a failed
+launcher alone. First run the bounded GitHub source-comment reconciliation for
+the exact run/source identity. If no exact usable publication is recovered, read
+the persisted state-light observation to obtain the exact transport-owned
+`OPKTURNV1...` marker and CDP/profile binding, then perform a direct read-only
+CDP census across every compatible ChatGPT tab.
+
+Replacement is allowed only when that census is unambiguous and one of these is
+true:
+
+- the exact owned marker is absent from the complete tab census;
+- the owned turn is present, has no attributable assistant reply, and is no
+  longer generating; or
+- the exact owned turn is still generating at or beyond 15 minutes from its
+  admitted start.
+
+A generating owned turn below 15 minutes is still active and must not be
+replaced. An owned finished turn with an attributable reply must be recovered
+under the original invocation identity instead of relaunched. Multiple owned
+markers, truncated/incomplete tab census, unknown generation state, unreadable
+state-light identity, or unavailable CDP are
+`observation_unavailable`/ambiguous and never grant replacement authority.
+Those outcomes do not block unrelated worker, CI, smoke, or implementation
+progress. There is no durable `replacementEligible` latch, unlock bit, retry
+queue, or second monitor; eligibility is recomputed from current evidence.
+
 ### Durable observation recovery
 
 The existing `state-light-turn-observation/v1` record is the first durable
