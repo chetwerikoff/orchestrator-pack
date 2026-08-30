@@ -1,7 +1,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { defaultGhTransport, fetchIssueRevision, type GhTransport } from './create-issue-stage-record-gh.ts';
+import { defaultGhTransport, fetchIssueRevision } from './create-issue-stage-record-gh.ts';
+import type { GhTransport } from './create-issue-stage-record-types.ts';
 
 export const MANAGER_REVIEW_TERMINAL_BUNDLE_SCHEMA = 'manager-review-terminal-input-bundle/v1' as const;
 
