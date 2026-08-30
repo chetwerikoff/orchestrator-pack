@@ -18,6 +18,8 @@ import {
 } from '../plugins/codex-pr-reviewer/lib/reviewer_budget.ts';
 import { observePosixProcessGroup, runProcess, type ProcessResult } from './kernel/subprocess.ts';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
+import { runProbe } from './browser-gpt-page-probe.ts';
+import { readStateLightTurnObservation } from './chatgpt-browser-turn/state-light-turn-observation.ts';
 import {
   deriveMergeTriageEvidenceTuple,
   produceMergeTriageEvidence,
@@ -1351,8 +1353,146 @@ async function findJournaledDeliveryResumeCandidate(options: {
   return repositoryBoundCandidates[0] ?? null;
 }
 
+const GPT_REPLACEMENT_GENERATION_MAX_MS = 15 * 60 * 1_000;
 const NATIVE_REPLACEMENT_MAX_MS = 15 * 60 * 1_000;
 const NATIVE_CHILD_FRAME_PREFIX = 'OPK_NATIVE_CHILD_V1 ';
+
+export interface PackReviewGptAttemptObservation {
+  state:
+    | 'replacement_eligible'
+    | 'generating'
+    | 'reply_recovery_required'
+    | 'ownership_ambiguous'
+    | 'observation_unavailable';
+  replacementEligible: boolean;
+  slotId?: string;
+  elapsedMs?: number;
+}
+
+function markerIsFirstVisibleToken(head: string, marker: string): boolean {
+  const trimmed = head.replace(/^[\s\uFEFF\u200B]+/u, '');
+  if (!trimmed.startsWith(marker)) return false;
+  const boundary = trimmed.slice(marker.length, marker.length + 1);
+  return boundary === '' || /[\s\uFEFF\u200B]/u.test(boundary);
+}
+
+export async function observeGptPackReviewAttempt(
+  run: PackReviewRunRecord,
+  nowMs = Date.now(),
+  deps: {
+    probe?: typeof runProbe;
+    readObservation?: typeof readStateLightTurnObservation;
+  } = {},
+): Promise<PackReviewGptAttemptObservation | null> {
+  const round = run.reviewRound;
+  if (!round || round.reviewer !== 'gpt') return null;
+  const probe = deps.probe ?? runProbe;
+  const readObservation = deps.readObservation ?? readStateLightTurnObservation;
+  const unresolved = round.sourceSlots.filter((slot) => !(
+    slot.lifecycle === 'terminal'
+    && (slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings')
+  ));
+  if (unresolved.length === 0) return null;
+
+  for (const slot of unresolved) {
+    if (!slot.invocationId) {
+      if (slot.lifecycle === 'planned') continue;
+      return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
+    }
+    const profileKey = trim(slot.launchProfileKey);
+    const cdp = trim(slot.launchCdpUrl);
+    if (!profileKey || !cdp) {
+      return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
+    }
+
+    let observation: ReturnType<typeof readStateLightTurnObservation>;
+    try {
+      observation = readObservation(profileKey, slot.invocationId);
+    } catch {
+      return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
+    }
+    const marker = trim(observation.marker);
+    if (!marker.startsWith('OPKTURNV1')) {
+      return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
+    }
+
+    let listed: Record<string, unknown>;
+    try {
+      listed = await probe({ operation: 'list', cdp }) as unknown as Record<string, unknown>;
+    } catch {
+      return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
+    }
+    if (listed.status !== 'ok' || !Array.isArray(listed.targets) || listed.targets_truncated === true) {
+      return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
+    }
+
+    const owned: Array<{ snapshot: Record<string, unknown>; userDocumentOrdinal: number }> = [];
+    for (const rawTarget of listed.targets) {
+      if (!rawTarget || typeof rawTarget !== 'object' || Array.isArray(rawTarget)) {
+        return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
+      }
+      const targetId = trim((rawTarget as Record<string, unknown>).target_id);
+      if (!targetId) {
+        return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
+      }
+      let inspected: Record<string, unknown>;
+      try {
+        inspected = await probe({ operation: 'inspect', cdp, targetId }) as unknown as Record<string, unknown>;
+      } catch {
+        return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
+      }
+      if (inspected.status !== 'ok' || !inspected.snapshot || typeof inspected.snapshot !== 'object') {
+        return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
+      }
+      const snapshot = inspected.snapshot as Record<string, unknown>;
+      const nodes = Array.isArray(snapshot.nodes) ? snapshot.nodes : [];
+      for (const rawNode of nodes) {
+        if (!rawNode || typeof rawNode !== 'object' || Array.isArray(rawNode)) continue;
+        const node = rawNode as Record<string, unknown>;
+        if (node.role !== 'user' || !node.innerText || typeof node.innerText !== 'object') continue;
+        const head = trim((node.innerText as Record<string, unknown>).head);
+        if (!markerIsFirstVisibleToken(head, marker)) continue;
+        const ordinal = Number(node.document_ordinal);
+        if (!Number.isInteger(ordinal) || ordinal < 0) {
+          return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId };
+        }
+        owned.push({ snapshot, userDocumentOrdinal: ordinal });
+      }
+    }
+
+    if (owned.length > 1) {
+      return { state: 'ownership_ambiguous', replacementEligible: false, slotId: slot.slotId };
+    }
+    if (owned.length === 0) continue;
+
+    const { snapshot, userDocumentOrdinal } = owned[0]!;
+    const generation = snapshot.generation_in_progress;
+    const startedAtMs = Date.parse(slot.admissionStartedAtUtc ?? observation.transitioned_at);
+    const elapsedMs = Number.isFinite(startedAtMs) ? Math.max(0, nowMs - startedAtMs) : 0;
+    if (generation === true) {
+      return elapsedMs >= GPT_REPLACEMENT_GENERATION_MAX_MS
+        ? { state: 'replacement_eligible', replacementEligible: true, slotId: slot.slotId, elapsedMs }
+        : { state: 'generating', replacementEligible: false, slotId: slot.slotId, elapsedMs };
+    }
+    if (generation !== false) {
+      return { state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId, elapsedMs };
+    }
+
+    const nodes = Array.isArray(snapshot.nodes) ? snapshot.nodes : [];
+    const hasReply = nodes.some((rawNode) => {
+      if (!rawNode || typeof rawNode !== 'object' || Array.isArray(rawNode)) return false;
+      const node = rawNode as Record<string, unknown>;
+      if (node.role !== 'assistant' || Number(node.document_ordinal) <= userDocumentOrdinal) return false;
+      if (!node.innerText || typeof node.innerText !== 'object') return false;
+      return Number((node.innerText as Record<string, unknown>).byte_length ?? 0) > 0;
+    });
+    if (hasReply) {
+      return { state: 'reply_recovery_required', replacementEligible: false, slotId: slot.slotId, elapsedMs };
+    }
+  }
+
+  return { state: 'replacement_eligible', replacementEligible: true };
+}
 
 export interface PackReviewNativeAttemptObservation {
   reviewer: 'codex' | 'claude';
@@ -3882,6 +4022,36 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       throw new Error('plural GPT review requires PACK_GPT_BROWSER_PROJECT_URL and no fixed chat URL');
     }
 
+    let allowSameRoundReplacement = false;
+    if (logicalAccounting && reviewer === 'gpt' && authority.cycle) {
+      const priorSameRound = listPackReviewRunRecordsRaw({ projectId, storeRoot })
+        .filter((candidate) => candidate.prNumber === target.prNumber
+          && candidate.reviewCycleId === authority.cycle!.cycleId
+          && candidate.logicalRoundOrdinal === roundOrdinal
+          && candidate.reviewRound?.reviewer === 'gpt'
+          && !hasPersistedPackReviewVerdict(candidate))
+        .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
+      if (priorSameRound) {
+        const observation = await observeGptPackReviewAttempt(priorSameRound);
+        if (!observation?.replacementEligible) {
+          await releaseEarlyClaim('gpt_replacement_not_eligible');
+          return {
+            ok: false,
+            created: false,
+            reused: true,
+            reason: observation?.state ?? 'gpt_observation_unavailable',
+            reviewer,
+            replacementEligible: false,
+            prNumber: target.prNumber,
+            headSha: target.headSha,
+            runId: priorSameRound.id,
+            httpStatus: 202,
+          };
+        }
+        allowSameRoundReplacement = true;
+      }
+    }
+
     if (logicalAccounting && reviewer && reviewer !== 'gpt' && authority.cycle) {
       const priorSameRound = listPackReviewRunRecordsRaw({ projectId, storeRoot })
         .filter((candidate) => candidate.prNumber === target.prNumber
@@ -4089,6 +4259,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       } : {}),
       ...(reviewer ? { resolvedReviewer: reviewer } : {}),
       ...(gptRound ? { reviewRound: gptRound } : {}),
+      ...(allowSameRoundReplacement ? { allowSameRoundReplacement: true } : {}),
     });
     run = created.run;
     authority = advancePackReviewAuthority(
