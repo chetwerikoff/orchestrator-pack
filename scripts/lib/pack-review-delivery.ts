@@ -536,8 +536,7 @@ export function packReviewDeliveryNeedsResume(run: PackReviewRunRecord): boolean
   const classification = classifyPackReviewPayload(payload);
   if (run.status !== classification.terminalStatus) return true;
   return !completedResumeChannelOutcome(run, 'githubComment', githubCommentIdempotencyKey(run))
-    || !completedResumeChannelOutcome(run, 'requiredStatus', requiredStatusIdempotencyKey(run))
-    || !completedResumeChannelOutcome(run, 'workerNotification', workerNotificationIdempotencyKey(run));
+    || !completedResumeChannelOutcome(run, 'requiredStatus', requiredStatusIdempotencyKey(run));
 }
 
 function outcome(
@@ -874,11 +873,9 @@ export async function deliverPackReviewVerdict(
         reviewRunId: options.run.id,
       });
       if (notified.state === 'delivered' || notified.state === 'failed' || notified.state === 'escalated') {
-        if (notified.state !== 'delivered') deliveryFailed = true;
         recordChannelOutcome('workerNotification', outcome(notified.state, notified.reason, workerKey, options.clock));
       } else {
         const submitted = notified.state === 'submitted';
-        if (!submitted) deliveryFailed = true;
         const durableState: PackReviewDeliveryOutcome['state'] = submitted
           ? 'succeeded'
           : notified.state === 'pre_dispatch_failure'
@@ -892,7 +889,6 @@ export async function deliverPackReviewVerdict(
         );
       }
     } catch (error) {
-      deliveryFailed = true;
       recordChannelOutcome('workerNotification', outcome('failed', describeError(error), workerKey, options.clock));
     }
   }
@@ -913,7 +909,8 @@ export async function deliverPackReviewVerdict(
   }
 
   const finalDeliveryFailed = deliveryFailed
-    || Object.values(deliveryOutcomes).some((value) => value?.state === 'failed' || value?.state === 'escalated');
+    || (deliveryOutcomes.githubComment?.state === 'failed')
+    || (deliveryOutcomes.requiredStatus?.state === 'failed');
 
   return {
     ok: true,
