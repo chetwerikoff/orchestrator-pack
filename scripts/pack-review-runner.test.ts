@@ -12,6 +12,11 @@ import {
 } from './pack-review-runner.ts';
 import type { PackReviewRunRecord } from './lib/pack-review-run-store.ts';
 import { runProcess } from './kernel/subprocess.ts';
+import {
+  commitSmokeOrderingTransition,
+  initializePackReviewAuthority,
+  readPackReviewAuthority,
+} from './pack-review-state.ts';
 
 const roots: string[] = [];
 const originalEnv = { ...process.env };
@@ -283,6 +288,104 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
   });
 });
 
+describe('Issue #1826 logical-round smoke independence', () => {
+  it('admits T3 round 2 on a fixed new head without requiring a second worker smoke', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'pack-review-1826-round2-smoke-'));
+    roots.push(parent);
+    const storeRoot = join(parent, 'store');
+    setupHarness(storeRoot);
+    const head1 = '1'.repeat(40);
+    const head2 = '2'.repeat(40);
+    const prNumber = 1826;
+    const issueBody = [
+      '```complexity-tier',
+      'tier: T3',
+      'advisory-prior: T3',
+      '```',
+      '',
+      '```smoke-test-plan',
+      'scenarios:',
+      '  - action: exact head smoke | expected: PASS',
+      '```',
+    ].join('\n');
+    const options = { storeRoot };
+    const initial = initializePackReviewAuthority({ prNumber, headSha: head1, tier: 'T3', options });
+    const smokeStarted = commitSmokeOrderingTransition({
+      prNumber,
+      expectedTransitionSeq: initial.transitionSeq,
+      actor: 'worker-owned',
+      headSha: head1,
+      status: 'started',
+      options,
+    });
+    commitSmokeOrderingTransition({
+      prNumber,
+      expectedTransitionSeq: smokeStarted.transitionSeq,
+      actor: 'worker-owned',
+      headSha: head1,
+      status: 'passed',
+      options,
+    });
+
+    const round1 = await startPackReview({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: process.cwd(),
+      prNumber,
+      headSha: head1,
+      claimMode: 'preacquired',
+      fixtureCurrentPrHeadSha: head1,
+      fixturePostReviewHeadSha: head1,
+      fixturePrState: 'OPEN',
+      fixturePrBody: 'Closes #1826',
+      fixturePostReviewPrBody: 'Closes #1826',
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureIssueNumber: 1826,
+      fixtureIssueBody: issueBody,
+      fixtureReviewStdout: JSON.stringify({
+        verdict: 'findings',
+        findingCount: 1,
+        findings: [{ severity: 'blocking', title: 'round one finding' }],
+      }),
+      fixtureGithubReviewId: 182601,
+      fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
+      fixtureEmulateWin32Selector: true,
+      fixtureRequiredStatusWriter: async () => {},
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    });
+    expect(round1).toMatchObject({ ok: true, created: true });
+    expect(readPackReviewAuthority(prNumber, options)?.cycle?.consumedRoundOrdinals).toEqual([1]);
+
+    const round2 = await startPackReview({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: process.cwd(),
+      prNumber,
+      headSha: head2,
+      claimMode: 'preacquired',
+      fixtureCurrentPrHeadSha: head2,
+      fixturePostReviewHeadSha: head2,
+      fixturePrState: 'OPEN',
+      fixturePrBody: 'Closes #1826',
+      fixturePostReviewPrBody: 'Closes #1826',
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureIssueNumber: 1826,
+      fixtureIssueBody: issueBody,
+      fixtureReviewStdout: cleanPayload(),
+      fixtureGithubReviewId: 182602,
+      fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
+      fixtureEmulateWin32Selector: true,
+      fixtureRequiredStatusWriter: async () => {},
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    });
+
+    expect(round2).toMatchObject({ ok: true, created: true });
+    const finalAuthority = readPackReviewAuthority(prNumber, options);
+    expect(finalAuthority?.cycle?.consumedRoundOrdinals).toEqual([1, 2]);
+    expect(finalAuthority?.cycle?.reviewStageComplete).toBe(true);
+    expect(finalAuthority?.smokeOrdering?.workerOwned?.headSha).toBe(head1);
+  });
+});
 describe('Issue #1647 authoritative tier resolution', () => {
   it('uses the canonical default for a legal Issue without a complexity-tier fence', () => {
     expect(parseAuthoritativeTier('# Firefighter repair\n\nNo tier is required.')).toBe('T2');
