@@ -443,6 +443,7 @@ describe('OpenCode HTTP control plane', () => {
     expect(isOpenCodeComposerEmpty(['idle splash', '│ Ask anything…', '╹▀▀▀▀▀▀'])).toBe(true);
     expect(isOpenCodeComposerEmpty(['idle splash', '┃ human text', '╹▀▀▀▀▀▀'])).toBe(false);
     expect(isOpenCodeComposerEmpty(['OpenCode', 'no composer'])).toBe(false);
+    expect(isOpenCodeComposerEmpty(['╹▀▀▀▀▀▀', '┃ human text', '╹▀▀▀▀▀▀', '┃   ', '╹▀▀▀▀▀▀'])).toBe(true);
   });
 
   it('rejects malformed TUI prompt API responses', () => {

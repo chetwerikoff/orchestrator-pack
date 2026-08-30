@@ -101,7 +101,13 @@ function openCodeHttpFailure(error: unknown): string {
 
 /** The TUI composer is empty only when its rendered box has no text rows. */
 export function isOpenCodeComposerEmpty(lines: readonly string[]): boolean {
-  const bottomEdge = lines.findIndex((line) => /╹▀▀▀/u.test(line));
+  let bottomEdge = -1;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (/╹▀▀▀/u.test(lines[index] ?? '')) {
+      bottomEdge = index;
+      break;
+    }
+  }
   if (bottomEdge < 0) return false;
 
   let sawLeftEdge = false;
