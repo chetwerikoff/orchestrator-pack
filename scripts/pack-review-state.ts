@@ -398,7 +398,7 @@ function validateCycle(cycle: PackReviewCycle | null): void {
   if (new Set(normalized).size !== normalized.length) {
     throw new PackReviewAuthorityError('cap_state_invalid', 'duplicate consumed head');
   }
-  if (!['open', 'at_cap_open_findings', 'at_cap_continuation_required', 'closed'].includes(cycle.state)) {
+  if (!['open', 'open_findings', 'at_cap_open_findings', 'at_cap_continuation_required', 'closed'].includes(cycle.state)) {
     throw new PackReviewAuthorityError('cap_state_invalid', `unknown cycle state ${cycle.state}`);
   }
   if (![PACK_REVIEW_CAP_MAP_VERSION, PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION, PACK_REVIEW_LEGACY_CAP_MAP_VERSION]
@@ -1246,8 +1246,8 @@ export function selectPackReviewEvidence(input: {
     ...input,
     nextPhase: 'evidence_selected',
     mutate(current) {
-      if (!current.cycle || !['at_cap_open_findings', 'at_cap_continuation_required'].includes(current.cycle.state)) {
-        throw new PackReviewAuthorityError('evidence_selection_invalid', 'cycle is not at cap');
+      if (!current.cycle || !['open_findings', 'at_cap_open_findings', 'at_cap_continuation_required'].includes(current.cycle.state)) {
+        throw new PackReviewAuthorityError('evidence_selection_invalid', 'cycle has no unresolved finding checkpoint');
       }
       const expectedEvidenceKey = nonEmpty(input.expectedEvidenceKey, 'expectedEvidenceKey');
       const selectedEvidenceId = nonEmpty(input.selectedEvidenceId, 'selectedEvidenceId');
