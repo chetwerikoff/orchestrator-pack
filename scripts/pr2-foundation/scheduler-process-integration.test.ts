@@ -283,6 +283,7 @@ function waitForDispatches(file: string, count: number, timeoutMs = 30_000): Pro
 
 function processEnv(root: string, fixturePath: string, epochPath: string, configPath: string, epochId: string, nonce: string): NodeJS.ProcessEnv {
   const runtimeCli = installOrcaFixture(root);
+  const wakeState = path.join(root, 'wake-supervisor');
   return {
     ...process.env,
     PATH: `${root}${path.delimiter}${process.env.PATH ?? ''}`,
@@ -290,8 +291,10 @@ function processEnv(root: string, fixturePath: string, epochPath: string, config
     OPK_PROCESS_FIXTURE_PATH: fixturePath,
     OPK_BASE_DIR: path.join(root, 'opk'),
     OPK_SIDE_PROCESS_STATE_DIR: path.join(root, 'side-state'),
+    OPK_WAKE_SUPERVISOR_STATE_DIR: wakeState,
     OPK_WORKER_NUDGE_CLAIM_DIR: path.join(root, 'claims'),
     OPK_WORKER_MESSAGE_DISPATCH_JOURNAL: path.join(root, 'dispatch-journal.json'),
+    OPK_DISPATCH_TERMINAL_MAIL_LEDGER: path.join(wakeState, 'dispatch-terminal-mail-ledger.json'),
     OPK_REPOSITORY: 'chetwerikoff/orchestrator-pack',
     OPK_FLEET_OBSERVER_CONFIG: configPath,
     ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: epochPath,

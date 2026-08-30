@@ -7,6 +7,7 @@
     "scripts/orca-runtime/dispatch-terminal-mail.test.ts",
     "scripts/orca-runtime/dispatch-terminal-mail.ts",
     "scripts/orca-runtime/task-adapter.ts",
+    "scripts/pr2-foundation/scheduler-post-review-smoke-production.test.ts",
     "scripts/pr2-foundation/scheduler-process-integration.test.ts",
     "scripts/pr2-foundation/scheduler.ts",
     "scripts/pr2-foundation/wake-supervisor-state-root.ts",
@@ -33,5 +34,5 @@
     "scripts/",
     "tests/external-output-references/"
   ],
-  "source_revision": "602950b1f6f4c2fd477705a21ab668b3530e0a6d"
+  "source_revision": "2c4e891340a1da2a0bd724fbaacdd4a2da938679"
 }

@@ -148,9 +148,17 @@ function schedulerEnv(root: string): NodeJS.ProcessEnv {
   const authority = path.join(root, 'epoch-authority.json');
   const epochId = 'production-smoke-epoch';
   const nonce = 'production-smoke-nonce';
+  const wakeState = path.join(root, 'wake-supervisor');
   const record = { epochId, nonce, hostId: 'fixture-host', repoRoot: process.cwd(), installedCommitSha: 'a'.repeat(40), snapshotDigests: {}, importDigests: {}, registryHash: 'registry', preCommitLogDigest: 'log', commitAt: '2026-08-19T00:00:00.000Z' };
   writeFileSync(authority, JSON.stringify({ schemaVersion: 1, currentEpochId: epochId, records: [record] }), 'utf8');
-  return { ...process.env, ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: authority, ORCHESTRATOR_CUTOVER_EPOCH_ID: epochId, ORCHESTRATOR_CUTOVER_NONCE: nonce };
+  return {
+    ...process.env,
+    ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: authority,
+    ORCHESTRATOR_CUTOVER_EPOCH_ID: epochId,
+    ORCHESTRATOR_CUTOVER_NONCE: nonce,
+    OPK_WAKE_SUPERVISOR_STATE_DIR: wakeState,
+    OPK_DISPATCH_TERMINAL_MAIL_LEDGER: path.join(wakeState, 'dispatch-terminal-mail-ledger.json'),
+  };
 }
 
 function smokeRuns(workspace: string): string[] {
