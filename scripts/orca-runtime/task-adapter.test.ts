@@ -438,6 +438,7 @@ describe('OpenCode HTTP control plane', () => {
   it('uses composer geometry to preserve human-authored OpenCode text', () => {
     expect(isOpenCodeComposerEmpty(['idle splash', '┃', '╹▀▀▀▀▀▀'])).toBe(true);
     expect(isOpenCodeComposerEmpty(['idle splash', '┃  Ask anything... \"Fix broken tests\"', '╹▀▀▀▀▀▀'])).toBe(true);
+    expect(isOpenCodeComposerEmpty(['idle splash', '│ Ask anything…', '╹▀▀▀▀▀▀'])).toBe(true);
     expect(isOpenCodeComposerEmpty(['idle splash', '┃ human text', '╹▀▀▀▀▀▀'])).toBe(false);
     expect(isOpenCodeComposerEmpty(['OpenCode', 'no composer'])).toBe(false);
   });

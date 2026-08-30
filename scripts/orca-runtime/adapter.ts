@@ -111,9 +111,13 @@ export function isOpenCodeComposerEmpty(lines: readonly string[]): boolean {
       if (sawLeftEdge) continue;
       continue;
     }
+    if (/Ask anything(?:\.\.\.|…)/u.test(trimmed)) {
+      sawLeftEdge = true;
+      continue;
+    }
     if (!trimmed.startsWith('┃')) break;
     sawLeftEdge = true;
-    if (trimmed !== '┃' && !/^┃\s+Ask anything\.\.\./u.test(trimmed)) return false;
+    if (trimmed !== '┃') return false;
   }
   return sawLeftEdge;
 }
