@@ -3,6 +3,7 @@
 import './toolchain/native-entrypoint-preflight.ts';
 import { classifyRequiredCiLevel } from '../docs/review-ready-stuck-guard.mjs';
 import { runProcessSync } from './kernel/subprocess.ts';
+import { overlayExecutorProfileEnv } from './executor-profile-store.ts';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from './pr-scope-contract.ts';
 import { createHash, randomUUID } from 'node:crypto';
@@ -1845,15 +1846,16 @@ export async function runSmokeAttempt(
 
   let smokeProfile: SmokeExecutorProfile;
   try {
+    const profileEnv = overlayExecutorProfileEnv(process.env);
     const injectedDryRunHarness = options.dryRun && dependencies.adapter !== undefined;
     smokeProfile = dependencies.resolveProfile
-      ? dependencies.resolveProfile(options.smokeComplexity, process.env)
+      ? dependencies.resolveProfile(options.smokeComplexity, profileEnv)
       : injectedDryRunHarness
-        ? resolveSmokeExecutorProfile(options.smokeComplexity, process.env)
+        ? resolveSmokeExecutorProfile(options.smokeComplexity, profileEnv)
         : resolveLiveSmokeExecutorProfile(
           options.smokeComplexity,
-          process.env,
-          (args, env) => runSmokeProfileChild(args, options.cwd, process.env, env),
+          profileEnv,
+          (args, env) => runSmokeProfileChild(args, options.cwd, profileEnv, env),
           options.cwd,
           proveOpenCodeNoWrite,
         );

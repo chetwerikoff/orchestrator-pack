@@ -9,6 +9,7 @@ import { runProcess } from '../kernel/subprocess.ts';
 import { evaluateCommandRuntimePreflight } from '../lib/command-runtime-bootstrap.mjs';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
 import type { RuntimeAdapter, RuntimeWorker, RuntimeWorkerIdentity } from '../runtime/contracts.ts';
+import { overlayExecutorProfileEnv } from '../executor-profile-store.ts';
 import {
   buildExecutorCommand,
   buildProviderInvocation,
@@ -993,7 +994,7 @@ function dispatchEdge(value: Record<string, unknown> | null): EdgeResult<Dispatc
 
 export async function createProductionLaunchDependencies(input: LaunchInput): Promise<LaunchDependencies> {
   const cwd = input.cwd ?? process.cwd();
-  const env = input.env ?? process.env;
+  const env = input.env ?? overlayExecutorProfileEnv(process.env);
   const adapter = await selectRuntimeAdapter({ env: { ...env } }, { cwd, transport: { env: { ...env } } });
   return {
     now: Date.now,
@@ -1018,11 +1019,11 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       };
       return { status: 'ok', value: true };
     },
-    resolveProfile: (workClass, inheritedEnv, startMode) => resolveLiveExecutorProfile(
+    resolveProfile: (workClass, _inheritedEnv, startMode) => resolveLiveExecutorProfile(
       workClass,
-      inheritedEnv,
+      env,
       startMode,
-      (args, timeoutMs, envOverride) => child(args, cwd, inheritedEnv, timeoutMs, envOverride),
+      (args, timeoutMs, envOverride) => child(args, cwd, env, timeoutMs, envOverride),
     ),
     observeManagerRun: async (runId) => {
       const result = resultRecord(envelope(await child(['orca', 'orchestration', 'run-current', '--json'], cwd, env)));
