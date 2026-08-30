@@ -77,7 +77,6 @@ function defaultOpenCodeHttpRequest(input: {
     encoding: 'utf8',
     timeoutMs: input.timeoutMs,
     inheritParentEnv: true,
-    allowEmptyStdout: true,
   });
   if (!result.ok) throw new Error(result.error || result.stderr || 'opencode_http_request_failed');
   const parsed = JSON.parse(result.stdout) as { status?: unknown; body?: unknown };
