@@ -1,6 +1,5 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
-import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,6 +11,7 @@ import {
   startPackReview,
 } from './pack-review-runner.ts';
 import type { PackReviewRunRecord } from './lib/pack-review-run-store.ts';
+import { runProcess } from './kernel/subprocess.ts';
 
 const roots: string[] = [];
 const originalEnv = { ...process.env };
@@ -184,9 +184,15 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
     const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     const firstStartedAt = '2026-08-30T00:00:00.000Z';
     const fallbackStartedAt = '2026-08-30T00:05:00.000Z';
-    const first = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
-    if (!first.pid) throw new Error('first fixture child did not start');
-    await sleep(20);
+    let resolveFirstPid!: (pid: number) => void;
+    const firstPidReady = new Promise<number>((resolve) => { resolveFirstPid = resolve; });
+    const firstResult = runProcess({
+      command: process.execPath,
+      args: ['-e', 'setInterval(() => {}, 1000)'],
+      allowEmptyStdout: true,
+      onSpawn: resolveFirstPid,
+    });
+    const firstPid = await firstPidReady;
 
     const run = gptRun(firstStartedAt);
     run.reviewRound = undefined;
@@ -197,30 +203,36 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
       invocationOrdinal: 1,
       startedAtUtc: firstStartedAt,
       effectiveBudgetMs: 30 * 60_000,
-      wrapperPid: first.pid,
-      processGroupId: first.pid,
-      childPid: first.pid,
-      childProcessGroupId: first.pid,
+      wrapperPid: firstPid,
+      processGroupId: firstPid,
+      childPid: firstPid,
+      childProcessGroupId: firstPid,
       childStartedAtUtc: firstStartedAt,
     };
 
-    process.kill(-first.pid, 'SIGKILL');
-    await sleep(20);
+    process.kill(-firstPid, 'SIGKILL');
+    await firstResult;
 
-    const fallback = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
-    if (!fallback.pid) throw new Error('fallback fixture child did not start');
+    let resolveFallbackPid!: (pid: number) => void;
+    const fallbackPidReady = new Promise<number>((resolve) => { resolveFallbackPid = resolve; });
+    const fallbackResult = runProcess({
+      command: process.execPath,
+      args: ['-e', 'setInterval(() => {}, 1000)'],
+      allowEmptyStdout: true,
+      onSpawn: resolveFallbackPid,
+    });
+    const fallbackPid = await fallbackPidReady;
     try {
-      await sleep(20);
       run.nativeAttempt = {
         schema: 'pack-review-native-attempt/v1',
         reviewer: 'claude',
         invocationOrdinal: 2,
         startedAtUtc: fallbackStartedAt,
         effectiveBudgetMs: 30 * 60_000,
-        wrapperPid: fallback.pid,
-        processGroupId: fallback.pid,
-        childPid: fallback.pid,
-        childProcessGroupId: fallback.pid,
+        wrapperPid: fallbackPid,
+        processGroupId: fallbackPid,
+        childPid: fallbackPid,
+        childProcessGroupId: fallbackPid,
         childStartedAtUtc: fallbackStartedAt,
       };
 
@@ -239,7 +251,8 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
           nativeReplacementCeilingMs: 15 * 60_000,
         });
     } finally {
-      try { process.kill(-fallback.pid, 'SIGKILL'); } catch { /* already gone */ }
+      try { process.kill(-fallbackPid, 'SIGKILL'); } catch { /* already gone */ }
+      await fallbackResult;
     }
   });
   it('keeps native replacement conservative when no process-group binding is observable', () => {
