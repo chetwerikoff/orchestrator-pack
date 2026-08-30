@@ -514,6 +514,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
         if (!exact.value) {
           return runtimeUnsupported('spawn_worker', 'runtime_worker_identity_missing');
         }
+        this.rebindOpenCodeUrl(worker.identity, exact.value.identity);
         worker = { ...exact.value, provenance: 'internal' };
       }
       this.#unprovenOwnedPresence.delete(worker.identity.id);

@@ -24,7 +24,7 @@ import {
   workerKey,
   type UnsentComposerSubmitDeps,
 } from './cursor-unsent-composer-submit.ts';
-import type { RuntimeWorker, RuntimeWorkerIdentity } from './runtime/contracts.ts';
+import type { RuntimeComposerControlRequest, RuntimeWorker, RuntimeWorkerIdentity } from './runtime/contracts.ts';
 
 const POKE = 'You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run `orca orchestration check --run run_d613a86c140a`.';
 const DISPATCH_POKE = 'You have 1 orchestration message. Read and act on your orchestration message. Run `orca orchestration check`.';
@@ -74,6 +74,7 @@ function depsFor(
       submitted.push(identity);
       return { status: 'dispatched' as const };
     }),
+    composerControl: extra.composerControl,
     now: extra.now,
     sleep: extra.sleep,
     sleepAsync: extra.sleepAsync,
@@ -727,6 +728,77 @@ describe('buildDeliveryPointer', () => {
 });
 
 describe('delivery-triggered composer submission', () => {
+  it('delivers through the OpenCode session while preserving human composer text', async () => {
+    const target = worker('term_opencode_http');
+    const actions: string[] = [];
+    const requests: RuntimeComposerControlRequest[] = [];
+    const humanComposerText = 'human-authored composer draft';
+    let reads = 0;
+    const deps = {
+      lookupMessage: () => ({
+        ok: true as const,
+        message: { id: 'msg_opencode_http', runId: 'run_opencode_http', recipient: 'term_opencode_http', consumed: false },
+      }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      writePointer: () => { throw new Error('screen pointer write must not run'); },
+      submitDeps: depsFor({}, {
+        read: () => {
+          reads += 1;
+          return { ok: true as const, lines: [humanComposerText] };
+        },
+        composerControl: () => ({
+          kind: 'opencode-http' as const,
+          dispatch: (request) => {
+            actions.push(request.action);
+            requests.push(request);
+            return { status: 'dispatched' as const };
+          },
+        }),
+      }),
+    };
+    const result = await submitOrcaMessageDeliveryPointer('msg_opencode_http', deps);
+    expect(actions).toEqual(['submit-prompt']);
+    expect(requests[0]).toMatchObject({
+      action: 'submit-prompt',
+      text: expect.stringContaining('orca orchestration check'),
+    });
+    expect(requests[0]?.text).not.toContain(humanComposerText);
+    expect(reads).toBe(0);
+    expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
+  });
+
+  it('seals OpenCode delivery episode and does not replay an unread message', async () => {
+    const target = worker('term_opencode_episode');
+    const actions: string[] = [];
+    const episodeState = { messages: {}, episodes: {} };
+    const pointerWriteLedger = new Map<string, number>();
+    const deps = {
+      lookupMessage: () => ({
+        ok: true as const,
+        message: { id: 'msg_opencode_episode', runId: 'run_opencode_episode', recipient: target.identity.id, consumed: false },
+      }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      writePointer: () => { throw new Error('screen pointer write must not run'); },
+      submitDeps: depsFor({}, {
+        read: () => { throw new Error('screen classification must not run'); },
+        composerControl: () => ({
+          kind: 'opencode-http' as const,
+          dispatch: (request) => {
+            actions.push(request.action);
+            return { status: 'dispatched' as const };
+          },
+        }),
+      }),
+      episodeState,
+      pointerWriteLedger,
+    };
+    const first = await submitOrcaMessageDeliveryPointer('msg_opencode_episode', deps);
+    const second = await submitOrcaMessageDeliveryPointer('msg_opencode_episode', deps);
+    expect(actions).toEqual(['submit-prompt']);
+    expect(first.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
+    expect(second.terminals[0]?.reason).toBe('orchestration_episode_already_claimed');
+  });
+
   it('submits an exact pointer soft-wrapped by a narrow Cursor composer', async () => {
     const target = worker('term_wrapped_pointer');
     const submitted: RuntimeWorkerIdentity[] = [];

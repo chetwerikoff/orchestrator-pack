@@ -381,7 +381,7 @@ describe('supervised Task launch assistant', () => {
       value: {
         family: 'opencode',
         route: 'exact_terminal_worktree',
-        launchCommand: `OPENCODE_CONFIG_CONTENT='{\"agent\":{\"pack\":{\"model\":\"fixture-opencode-model\",\"variant\":\"fixture-opencode-effort\"}}}' opencode --agent 'pack'`,
+        launchCommand: `OPENCODE_CONFIG_CONTENT='{\"agent\":{\"pack\":{\"model\":\"fixture-opencode-model\",\"variant\":\"fixture-opencode-effort\"}}}' opencode --hostname 127.0.0.1 --port 42985 --agent 'pack'`,
       },
     });
     expect(admittedCalls[0]).toEqual(['opencode', 'models']);

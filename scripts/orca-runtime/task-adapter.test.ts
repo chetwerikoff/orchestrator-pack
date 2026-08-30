@@ -146,6 +146,299 @@ describe('Orca task adapter exact spawn identity', () => {
   });
 });
 
+describe('OpenCode HTTP control plane', () => {
+  function makeAdapter(
+    http: (input: { url: string; method: 'GET' | 'POST'; body?: string; timeoutMs: number }) => { status: number; body: string },
+    now?: () => number,
+    onOperation?: (operation: string) => void,
+  ) {
+    const handle = 'term-opencode-http';
+    const workspacePath = process.cwd();
+    const terminal = {
+      handle,
+      incarnationId: 'generation-opencode-http',
+      worktreePath: workspacePath,
+      title: 'opencode',
+      command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture',
+      status: 'running' as const,
+    };
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      onOperation?.(operation);
+      if (operation === 'terminal create') return { ok: true, result: { terminal } };
+      if (operation === 'worktree current') return { ok: false, error: { code: 'not_available', message: 'fixture' } };
+      if (operation === 'terminal show') return { ok: true, result: { terminal } };
+      if (operation === 'terminal list') return { ok: true, result: { totalCount: 1, truncated: false, terminals: [terminal] } };
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    return new OrcaTaskRuntimeAdapter({
+      runJson: runJson as never,
+      openCodeHttpRequest: http,
+      ...(now ? { now } : {}),
+    });
+  }
+
+  it('uses health and a dedicated agent-bound session for an exact spawned OpenCode worker', () => {
+    const requests: Array<{ url: string; method: 'GET' | 'POST'; body?: string; timeoutMs: number }> = [];
+    const adapter = makeAdapter((input) => {
+      requests.push(input);
+      if (input.url.endsWith('/global/health')) return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) };
+      if (input.method === 'POST' && input.url.endsWith('/session?directory=' + encodeURIComponent(process.cwd()))) {
+        return { status: 200, body: JSON.stringify({ id: 'ses-dedicated', directory: process.cwd() }) };
+      }
+      return { status: 204, body: '' };
+    });
+    const spawned = adapter.spawnWorker({
+      title: 'opencode',
+      command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture',
+    });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+
+    expect(adapter.openCodeHealth(spawned.value.identity)).toEqual({
+      status: 'ok', value: { healthy: true, version: '1.18.25' },
+    });
+    const control = adapter.composerControl?.(spawned.value.identity);
+    expect(control?.kind).toBe('opencode-http');
+    expect(control?.dispatch({
+      worker: spawned.value.identity,
+      action: 'submit-prompt',
+      text: 'delivery pointer',
+    }).status).toBe('dispatched');
+    expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
+      { method: 'GET', url: 'http://127.0.0.1:18891/global/health' },
+      { method: 'POST', url: 'http://127.0.0.1:18891/session?directory=' + encodeURIComponent(process.cwd()) },
+      { method: 'POST', url: 'http://127.0.0.1:18891/session/ses-dedicated/prompt_async?directory=' + encodeURIComponent(process.cwd()) },
+    ]);
+    expect(requests[2]?.body).toBe(JSON.stringify({
+      agent: 'pack-opk-fixture',
+      parts: [{ type: 'text', text: 'delivery pointer' }],
+    }));
+  });
+
+  it('dispatches to its dedicated session when directory has root and fork sessions', () => {
+    const requests: Array<{ url: string; method: 'GET' | 'POST'; body?: string; timeoutMs: number }> = [];
+    const adapter = makeAdapter((input) => {
+      requests.push(input);
+      if (input.method === 'POST' && input.url.endsWith('/session?directory=' + encodeURIComponent(process.cwd()))) {
+        return { status: 200, body: JSON.stringify({ id: 'ses-worker-control', directory: process.cwd() }) };
+      }
+      return { status: 204, body: '' };
+    });
+    const spawned = adapter.spawnWorker({
+      title: 'opencode',
+      command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture',
+    });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+
+    expect(adapter.composerControl?.(spawned.value.identity)?.dispatch({
+      worker: spawned.value.identity,
+      action: 'submit-prompt',
+      text: 'root-and-fork-safe',
+    })).toMatchObject({ status: 'dispatched' });
+    expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
+      { method: 'POST', url: 'http://127.0.0.1:18891/session?directory=' + encodeURIComponent(process.cwd()) },
+      { method: 'POST', url: 'http://127.0.0.1:18891/session/ses-worker-control/prompt_async?directory=' + encodeURIComponent(process.cwd()) },
+    ]);
+  });
+
+  it('bounds each OpenCode dispatch subcall by one aggregate deadline', () => {
+    let clock = 0;
+    const requests: Array<{ url: string; timeoutMs: number }> = [];
+    const adapter = makeAdapter((input) => {
+      requests.push({ url: input.url, timeoutMs: input.timeoutMs });
+      if (input.method === 'POST' && input.url.endsWith('/session?directory=' + encodeURIComponent(process.cwd()))) {
+        clock = 101;
+        return { status: 200, body: JSON.stringify({ id: 'ses-deadline', directory: process.cwd() }) };
+      }
+      return { status: 204, body: '' };
+    }, () => clock, (operation) => {
+      if (operation === 'terminal list') clock = 80;
+    });
+    const spawned = adapter.spawnWorker({ title: 'opencode', command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture' });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+
+    const result = adapter.composerControl?.(spawned.value.identity)?.dispatch({
+      worker: spawned.value.identity,
+      action: 'submit-prompt',
+      text: 'deadline',
+    }, { timeoutMs: 100 });
+    expect(result).toEqual({ status: 'send_failed', reason: 'runtime_timeout' });
+    expect(requests.map(({ timeoutMs }) => timeoutMs)).toEqual([20]);
+  });
+
+  it('retains OpenCode control when task adapter upgrades pty identity', () => {
+    const handle = 'term-opencode-pty';
+    const ptyGeneration = '/tmp/opencode-pty@@pty-generation';
+    const exactGeneration = 'incarnation-opencode-generation';
+    const command = 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture';
+    const terminal = {
+      handle,
+      incarnationId: exactGeneration,
+      worktreePath: process.cwd(),
+      title: 'opencode',
+      status: 'running' as const,
+    };
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'terminal create') {
+        return { ok: true, result: { terminal: { handle, ptyId: ptyGeneration, title: 'opencode' } } };
+      }
+      if (operation === 'terminal show' || operation === 'terminal list') {
+        return operation === 'terminal show'
+          ? { ok: true, result: { terminal } }
+          : { ok: true, result: { totalCount: 1, truncated: false, terminals: [terminal] } };
+      }
+      if (operation === 'worktree current') {
+        return { ok: false, error: { code: 'not_available', message: 'fixture' } };
+      }
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    const adapter = new OrcaTaskRuntimeAdapter({
+      runJson: runJson as never,
+      openCodeHttpRequest: () => ({
+        status: 200,
+        body: JSON.stringify({ healthy: true, version: '1.18.25' }),
+      }),
+    });
+
+    const spawned = adapter.spawnWorker({ title: 'opencode', command });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+    expect(spawned.value.identity.generation).toBe(exactGeneration);
+    expect(adapter.openCodeHealth(spawned.value.identity)).toMatchObject({
+      status: 'ok',
+      value: { healthy: true, version: '1.18.25' },
+    });
+  });
+
+  it('creates an OpenCode session when an idle worker has none', () => {
+    const requests: Array<{ url: string; method: 'GET' | 'POST'; body?: string }> = [];
+    const adapter = makeAdapter((input) => {
+      requests.push(input);
+      if (input.url.endsWith('/global/health')) {
+        return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) };
+      }
+      if (input.method === 'POST' && input.url.endsWith('/session?directory=' + encodeURIComponent(process.cwd()))) {
+        return {
+          status: 200,
+          body: JSON.stringify({ id: 'ses-created', directory: process.cwd() }),
+        };
+      }
+      return { status: 204, body: '' };
+    });
+    const spawned = adapter.spawnWorker({
+      title: 'opencode',
+      command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture',
+    });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+
+    const control = adapter.composerControl?.(spawned.value.identity);
+    expect(control?.dispatch({
+      worker: spawned.value.identity,
+      action: 'submit-prompt',
+      text: 'first delivery pointer',
+    })).toMatchObject({ status: 'dispatched' });
+    expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
+      { method: 'POST', url: 'http://127.0.0.1:18891/session?directory=' + encodeURIComponent(process.cwd()) },
+      { method: 'POST', url: 'http://127.0.0.1:18891/session/ses-created/prompt_async?directory=' + encodeURIComponent(process.cwd()) },
+    ]);
+  });
+
+  it('recovers OpenCode control from terminal metadata on a fresh adapter', () => {
+    const requests: string[] = [];
+    const first = makeAdapter((input) => {
+      requests.push(input.url);
+      if (input.url.endsWith('/global/health')) return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) };
+      if (input.method === 'POST' && input.url.includes('/session?directory=')) return { status: 200, body: JSON.stringify({ id: 'ses-fixture', directory: process.cwd() }) };
+      return { status: 204, body: '' };
+    });
+    const spawned = first.spawnWorker({
+      title: 'opencode',
+      command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture',
+    });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+
+    const second = makeAdapter((input) => {
+      requests.push(input.url);
+      if (input.method === 'POST' && input.url.includes('/session?directory=')) return { status: 200, body: JSON.stringify({ id: 'ses-fresh-adapter', directory: process.cwd() }) };
+      return { status: 204, body: '' };
+    });
+    const control = second.composerControl?.(spawned.value.identity);
+    expect(control?.kind).toBe('opencode-http');
+    expect(control?.dispatch({ worker: spawned.value.identity, action: 'submit-prompt', text: 'fresh adapter' })).toMatchObject({ status: 'dispatched' });
+    expect(requests.at(-1)).toBe('http://127.0.0.1:18891/session/ses-fresh-adapter/prompt_async?directory=' + encodeURIComponent(process.cwd()));
+  });
+
+  it('bounds health HTTP timeout by the remaining health deadline', () => {
+    let clock = 0;
+    const requests: Array<{ url: string; timeoutMs: number }> = [];
+    const terminal = {
+      handle: 'term-opencode-http',
+      incarnationId: 'generation-opencode-http',
+      worktreePath: process.cwd(),
+      title: 'opencode',
+      command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture',
+      status: 'running' as const,
+    };
+    // The fixture's terminal lookup represents the slow first half of one probe.
+    const slow = new OrcaTaskRuntimeAdapter({
+      now: () => clock,
+      runJson: vi.fn((args: readonly string[]): OrcaJsonResponse => {
+        const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+        if (operation === 'terminal show') return { ok: true, result: { terminal } };
+        if (operation === 'terminal list') { clock = 80; return { ok: true, result: { totalCount: 1, truncated: false, terminals: [terminal] } }; }
+        return operation === 'worktree current'
+          ? { ok: false, error: { code: 'not_available', message: 'fixture' } }
+          : operation === 'terminal create'
+            ? { ok: true, result: { terminal } }
+            : { ok: false, error: { code: 'unexpected_operation', message: operation } };
+      }) as never,
+      openCodeHttpRequest: (input) => {
+        requests.push({ url: input.url, timeoutMs: input.timeoutMs });
+        if (input.url.includes('/session')) return { status: 200, body: JSON.stringify([{ id: 'ses-fixture', directory: process.cwd() }]) };
+        if (input.url.includes('/event')) return { status: 200, body: '' };
+        return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) };
+      },
+    });
+    const identity = { runtime: 'orca' as const, id: 'term-opencode-http', generation: 'generation-opencode-http' };
+    expect(slow.spawnWorker({ title: 'opencode', command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture' }).status).toBe('ok');
+    const health = slow.openCodeHealth(identity, { timeoutMs: 100 });
+    expect(health.status).toBe('ok');
+    expect(requests.at(-1)?.timeoutMs).toBe(20);
+  });
+
+  it('rejects non-successful prompt API responses', () => {
+    const adapter = makeAdapter((input) => {
+      if (input.method === 'POST' && input.url.includes('/session?directory=')) return { status: 200, body: JSON.stringify({ id: 'ses-fixture', directory: process.cwd() }) };
+      return { status: 200, body: '' };
+    });
+    const spawned = adapter.spawnWorker({ title: 'opencode', command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture' });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+    const control = adapter.composerControl?.(spawned.value.identity);
+    expect(control?.dispatch({ worker: spawned.value.identity, action: 'submit-prompt', text: 'reject' })).toEqual({ status: 'send_failed', reason: 'opencode_http_status_200' });
+  });
+
+  it.each([
+    [404, '{}', 'opencode_http_status_404'],
+    [200, JSON.stringify({ healthy: true }), 'opencode_health_schema_mismatch'],
+  ])('fails loudly on OpenCode health HTTP/schema breakage (%s)', (status, body, reason) => {
+    const adapter = makeAdapter(() => ({ status, body }));
+    const spawned = adapter.spawnWorker({
+      title: 'opencode',
+      command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture',
+    });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+    expect(adapter.openCodeHealth(spawned.value.identity)).toMatchObject({ status: expect.any(String), reason });
+  });
+});
+
 describe('Orca task adapter destructive operations', () => {
   it('prevalidates exact path and head before one remove', () => {
     const runner = workspaceRunner();
@@ -898,15 +1191,15 @@ describe('Issue #1489 rendered screen observation', () => {
 });
 
 describe('Issue #1835 executor-aware worker-smoke observation', () => {
-  it('accepts OpenCode identity without accepting a Cursor-only banner', () => {
+  it('does not infer OpenCode startup from screen chrome because readiness is HTTP-backed', () => {
     const openCodeLines = ['OpenCode 1.18.25', 'OpenCode Zen · high'];
-    expect(hasExecutorStartupBanner('opencode --agent pack-opk-fixture', openCodeLines)).toBe(true);
+    expect(hasExecutorStartupBanner('opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture', openCodeLines)).toBe(false);
     expect(hasExecutorStartupBanner('cursor-agent', openCodeLines)).toBe(false);
   });
 
   it('keeps Cursor startup and ambiguity fail-closed', () => {
     expect(hasExecutorStartupBanner('cursor-agent', ['Cursor Agent', 'v1.2.3'])).toBe(true);
-    expect(hasExecutorStartupBanner('opencode --agent pack-opk-fixture', ['OpenCode'])).toBe(false);
+    expect(hasExecutorStartupBanner('opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture', ['OpenCode'])).toBe(false);
     expect(hasExecutorStartupBanner('other-agent', ['OpenCode 1.18.25'])).toBe(false);
   });
 

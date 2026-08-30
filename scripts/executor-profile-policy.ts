@@ -429,7 +429,7 @@ export function buildExecutorCommand(profile: SemanticExecutorProfile): Executor
 
   const executable = profile.surface === 'task' ? descriptor.taskExecutable : descriptor.smokeExecutable;
   const inlineConfig = JSON.stringify({ agent: { [OPENCODE_PACK_AGENT]: { model: profile.model, variant: profile.effort } } });
-  const command = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfig)} ${executable} --agent ${quote(OPENCODE_PACK_AGENT)}`;
+  const command = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfig)} ${executable} --hostname 127.0.0.1 --port ${openCodeControlPort(OPENCODE_PACK_AGENT)} --agent ${quote(OPENCODE_PACK_AGENT)}`;
   return {
     executable,
     command,
@@ -554,6 +554,12 @@ export function openCodeAgentSemantics(value: Readonly<Record<string, unknown>>)
   return JSON.stringify(stableValue(copy));
 }
 
+export function openCodeControlPort(agentName: string): number {
+  let hash = 0;
+  for (const character of agentName) hash = (hash * 31 + character.codePointAt(0)!) >>> 0;
+  return 10_000 + (hash % 50_000);
+}
+
 export function buildOpenCodeAgentOverlay(input: OpenCodeAgentOverlay): ExecutorInvocationShape {
   const agent = {
     ...openCodeAgentConfigFromInfo(input.baseline),
@@ -562,7 +568,7 @@ export function buildOpenCodeAgentOverlay(input: OpenCodeAgentOverlay): Executor
   };
   const inlineConfig = JSON.stringify({ agent: { [input.agentName]: agent } });
   const state = input.stateRoot ? ` XDG_STATE_HOME=${quote(input.stateRoot)}` : '';
-  const command = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfig)}${state} opencode --agent ${quote(input.agentName)}`;
+  const command = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfig)}${state} opencode --hostname 127.0.0.1 --port ${openCodeControlPort(input.agentName)} --agent ${quote(input.agentName)}`;
   return {
     executable: 'opencode',
     command,
