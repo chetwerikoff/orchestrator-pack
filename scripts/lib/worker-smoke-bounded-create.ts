@@ -113,15 +113,30 @@ function generationFromTerminal(terminal: OrcaTerminalSummary): string {
   return terminal.incarnationId?.trim() || terminal.ptyId?.trim() || '';
 }
 
-function defaultGenerationProbe(
+export function defaultGenerationProbe(
   terminalHandle: string,
   cwd: string,
   timeoutMs: number,
+  run: typeof runOrcaJson = runOrcaJson,
 ): OrcaJsonResponse<{ terminal?: OrcaTerminalSummary }> {
-  return runOrcaJson<{ terminal?: OrcaTerminalSummary }>(
+  const show = run<{ terminal?: OrcaTerminalSummary }>(
     ['terminal', 'show', '--terminal', terminalHandle],
-    { cwd, timeoutMs },
+    { cwd, timeoutMs: Math.max(1, Math.min(timeoutMs, 5_000)) },
   );
+  if (show.ok || show.error?.code !== 'orca_operation_timeout') return show;
+
+  const elapsed = Math.min(timeoutMs, 5_000);
+  const remaining = timeoutMs - elapsed;
+  if (remaining <= 0) return show;
+  const listed = run<{ terminals?: OrcaTerminalSummary[] }>(
+    ['terminal', 'list'],
+    { cwd, timeoutMs: remaining },
+  );
+  if (!listed.ok) return show;
+  const terminal = listed.result?.terminals?.find(
+    (candidate) => candidate.handle?.trim() === terminalHandle.trim(),
+  );
+  return terminal ? { ok: true, result: { terminal }, operation: 'terminal_list' } : show;
 }
 
 function defaultSleep(milliseconds: number): void {
