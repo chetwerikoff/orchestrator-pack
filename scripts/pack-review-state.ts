@@ -63,6 +63,7 @@ export function selectPackReviewGptSourceCardinality(input: {
 }
 export type PackReviewCycleState =
   | 'open'
+  | 'open_findings'
   | 'at_cap_open_findings'
   | 'at_cap_continuation_required'
   | 'closed';
@@ -447,12 +448,21 @@ function validateCycle(cycle: PackReviewCycle | null): void {
     throw new PackReviewAuthorityError('cap_state_invalid', 'incomplete review stage carries completion timestamp');
   }
   const atCap = consumedCount === cycle.frozenCap;
+  const preCapFindings = cycle.state === 'open_findings';
   const atCapState = cycle.state === 'at_cap_open_findings' || cycle.state === 'at_cap_continuation_required';
+  if (preCapFindings && (
+    !isLogicalRoundCycle(cycle)
+    || atCap
+    || !cycle.atCapHash
+    || !/^[0-9a-f]{64}$/.test(cycle.atCapHash)
+  )) {
+    throw new PackReviewAuthorityError('cap_state_invalid', 'open-findings cycle lacks a pre-cap finding checkpoint');
+  }
   if (atCapState && (!atCap || !cycle.atCapHash || !/^[0-9a-f]{64}$/.test(cycle.atCapHash))) {
     throw new PackReviewAuthorityError('cap_state_invalid', 'at-cap cycle lacks full consumption/hash');
   }
-  if (!atCapState && cycle.atCapHash !== undefined) {
-    throw new PackReviewAuthorityError('cap_state_invalid', 'non-at-cap cycle carries atCapHash');
+  if (!preCapFindings && !atCapState && cycle.atCapHash !== undefined) {
+    throw new PackReviewAuthorityError('cap_state_invalid', 'cycle carries finding checkpoint outside a finding state');
   }
 }
 
@@ -725,6 +735,25 @@ export function observePackReviewHead(input: {
         if (current.cycle && !current.cycle.reviewStageComplete && consumedRunEvidence) {
           markReviewStageComplete(current, nowIso(input.options));
           current.cycle.reviewStartConsumed = true;
+        }
+        const cycle = current.cycle;
+        const consumedLogicalRounds = cycle && isLogicalRoundCycle(cycle)
+          ? cycleConsumedCount(cycle)
+          : 0;
+        const priorLogicalRoundSettled = current.terminal?.reviewVerdict === 'clean'
+          || current.triage?.verdict === 'DEFER';
+        if (cycle
+            && isLogicalRoundCycle(cycle)
+            && cycle.state === 'open'
+            && consumedLogicalRounds > 0
+            && consumedLogicalRounds < cycle.frozenCap
+            && priorLogicalRoundSettled) {
+          // Immutable terminal/run records retain prior-round evidence. Rewind only
+          // the live per-round projection before the next required logical round.
+          current.terminal = undefined;
+          current.evidence = undefined;
+          current.triage = undefined;
+          current.publication = undefined;
         }
         return current;
       }
@@ -1022,6 +1051,16 @@ export function commitPackReviewTerminal(input: {
           cycleId: cycle.cycleId,
           frozenCap: cycle.frozenCap,
           consumedHeadShas: cycle.consumedHeadShas,
+        }));
+      } else if (isLogicalRoundCycle(cycle)) {
+        cycle.state = 'open_findings';
+        cycle.closedAtUtc = undefined;
+        cycle.atCapHash = sha256(stableJson({
+          cycleId: cycle.cycleId,
+          frozenCap: cycle.frozenCap,
+          consumedRoundOrdinals: cycle.consumedRoundOrdinals,
+          terminalRunId: terminal.runId,
+          findingsDigest: terminal.findingsDigest,
         }));
       }
       return current;
@@ -1374,20 +1413,33 @@ export function commitPackReviewTriage(input: {
             || (workerOwned?.headSha === current.currentHeadSha && workerOwned.status === 'passed'))
           && automaticEvidencePredicate === 'no_intersection'
           && finalFixResolutionBound;
-        if (input.triage.verdict === 'DEFER' && !finalFixSettlement) {
+        const priorRoundFindingSettlement = input.triage.verdict === 'DEFER'
+          && current.cycle?.state === 'open_findings'
+          && isLogicalRoundCycle(current.cycle)
+          && cycleConsumedCount(current.cycle) < current.cycle.frozenCap
+          && current.terminal?.reviewVerdict === 'findings'
+          && automaticEvidencePredicate === 'no_intersection'
+          && finalFixResolutionBound;
+        if (input.triage.verdict === 'DEFER' && !finalFixSettlement && !priorRoundFindingSettlement) {
           throw new PackReviewAuthorityError(
             'triage_invalid',
             isLogicalRoundCycle(current.cycle!)
-              ? 'automatic DEFER requires final-cap continuation, no-intersection scope evidence, and exact finding-resolution evidence'
+              ? 'automatic DEFER requires a bounded logical-round finding checkpoint or final-cap continuation with no-intersection scope evidence and exact finding-resolution evidence'
               : 'automatic DEFER requires final-cap continuation, exact-head worker smoke PASS, no-intersection scope evidence, and exact finding-resolution evidence',
           );
+        }
+        if (priorRoundFindingSettlement) {
+          current.cycle!.state = 'open';
+          current.cycle!.closedAtUtc = undefined;
+          current.cycle!.atCapHash = undefined;
         }
       } else if (!['BLOCK', 'DEFER'].includes(input.triage.verdict)) {
         throw new PackReviewAuthorityError('triage_invalid', 'architect verdict must be BLOCK or DEFER');
       }
       current.triage = { ...input.triage };
       const automaticFinalFixSettlement = input.triage.source === 'automatic'
-        && input.triage.verdict === 'DEFER';
+        && input.triage.verdict === 'DEFER'
+        && current.cycle?.state !== 'open';
       if (automaticFinalFixSettlement
           || (current.publication?.status === 'succeeded' && reviewObligationsSettled(current))) {
         markReviewStageComplete(current, input.triage.committedAtUtc);
