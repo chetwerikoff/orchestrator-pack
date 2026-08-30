@@ -623,7 +623,10 @@ export function initializePackReviewAuthority(input: {
   return withPackReviewAuthorityLock(input.options, () => {
     const existing = readAuthorityUnlocked(input.prNumber, input.options);
     if (existing) return existing;
-    return writeAuthorityUnlocked(createInitialPackReviewAuthority(input), input.options);
+    return writeAuthorityUnlocked(createInitialPackReviewAuthority({
+      ...input,
+      capMapVersion: input.capMapVersion ?? PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+    }), input.options);
   });
 }
 

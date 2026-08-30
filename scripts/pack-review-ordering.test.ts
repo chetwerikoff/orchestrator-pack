@@ -15,6 +15,7 @@ import { beginSmokeOrdering } from './worker-smoke-run.ts';
 import { reviewStageDisposition } from './pr2-foundation/post-review-smoke.ts';
 import {
   assertIndependentSmokeAdmission,
+  PACK_REVIEW_CAP_MAP_VERSION,
   assertPackReviewSmokeAdmission,
   commitPackReviewTriage,
   commitPackReviewTerminal,
@@ -49,6 +50,7 @@ describe('Issue #1436 smoke/review ordering', () => {
       prNumber: 1436,
       headSha: HEAD,
       tier,
+      capMapVersion: PACK_REVIEW_CAP_MAP_VERSION,
       options,
     });
     return { options, authority };
