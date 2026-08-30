@@ -16,7 +16,7 @@ import {
   createReviewerBudgetLedger,
   type ReviewerBudgetLedger,
 } from '../plugins/codex-pr-reviewer/lib/reviewer_budget.ts';
-import { runProcess, type ProcessResult } from './kernel/subprocess.ts';
+import { observePosixProcessGroup, runProcess, type ProcessResult } from './kernel/subprocess.ts';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import {
   deriveMergeTriageEvidenceTuple,
@@ -31,6 +31,7 @@ import {
 } from './pack-review-carryover.ts';
 import {
   PACK_REVIEW_AUTHORITY_PHASES,
+  PACK_REVIEW_CAP_MAP_VERSION,
   PACK_REVIEW_GPT_SOURCE_ADMISSION_INTERVAL_MS,
   acknowledgePackReviewReset,
   assertPackReviewSmokeAdmission,
@@ -92,6 +93,7 @@ import {
   type GithubReviewTransport,
 } from './lib/github-review-reconciliation.ts';
 import {
+  PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
   classifyPackReviewFailureReason,
   classifyPackReviewPayload,
   deliverPackReviewVerdict,
@@ -513,6 +515,7 @@ function advancePackReviewAuthority(
 function terminalV2FromPayload(input: {
   runId: string;
   targetSha: string;
+  logicalRoundOrdinal?: number;
   verdict: ReviewPayload['verdict'];
   findingCount: number;
   findings: ReviewPayload['findings'];
@@ -531,6 +534,7 @@ function terminalV2FromPayload(input: {
     terminalSource,
     runId: input.runId,
     targetSha: input.targetSha,
+    ...(input.logicalRoundOrdinal ? { logicalRoundOrdinal: input.logicalRoundOrdinal } : {}),
     reviewVerdict: input.verdict === 'clean' && input.findingCount === 0 ? 'clean' : 'findings',
     findingCount: input.findingCount,
     findingsDigest: sha256Bytes(JSON.stringify(input.findings)),
@@ -2476,6 +2480,7 @@ async function commitRecoveredGptAuthority(options: {
     terminal: terminalV2FromPayload({
       runId: options.run.id,
       targetSha: options.run.targetSha,
+      logicalRoundOrdinal: options.run.logicalRoundOrdinal,
       verdict: payload.verdict,
       findingCount: payload.findingCount,
       findings: payload.findings,
@@ -2568,8 +2573,10 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       nextAction: 'observe the current PR head, then rerun scoped reconcile',
     };
   }
+  const logicalAccounting = authority.cycle.capMapVersion === PACK_REVIEW_CAP_MAP_VERSION;
   const workerOwned = authority.smokeOrdering?.workerOwned;
-  if (workerOwned?.headSha !== authority.currentHeadSha || workerOwned.status !== 'passed') {
+  if (!logicalAccounting
+      && (workerOwned?.headSha !== authority.currentHeadSha || workerOwned.status !== 'passed')) {
     return {
       prNumber,
       headSha: authority.currentHeadSha,
@@ -2680,7 +2687,9 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         : 'final_cap_settlement_incomplete',
     ...(settled ? {} : {
       nextAction: authority.triage?.verdict === 'BLOCK'
-        ? 'resolve the blocking current-head evidence, rerun worker-owned smoke, then rerun scoped reconcile'
+        ? (logicalAccounting
+          ? 'resolve the blocking current-head evidence, then rerun scoped reconcile'
+          : 'resolve the blocking current-head evidence, rerun worker-owned smoke, then rerun scoped reconcile')
         : 'complete the current-head finding-resolution evidence, then rerun scoped reconcile',
     }),
   };
@@ -3638,6 +3647,32 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       });
     }
 
+    if (authority.cycle?.reviewStageComplete === true) {
+      const writeRequiredStatus = input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
+        repoRoot: target.sourceRepoRoot,
+        repoSlug: target.repoSlug,
+        headSha: target.headSha,
+        request,
+      }));
+      await writeRequiredStatus({
+        state: 'success',
+        context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+        description: 'Required pack-review stage completed; no additional review round required.',
+        idempotencyKey: `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${target.headSha}:stage-complete:${authority.cycle.cycleId}`,
+      });
+      await releaseEarlyClaim('review_stage_complete');
+      return {
+        ok: true,
+        created: false,
+        reused: true,
+        reason: 'review_stage_complete',
+        prNumber: target.prNumber,
+        headSha: target.headSha,
+        cycleId: authority.cycle.cycleId,
+        httpStatus: 200,
+      };
+    }
+
     const legacyHarnessFixtureWithoutSmokePlan = process.env.OPK_VITEST_HARNESS === '1'
       && authoritative.issueBody !== undefined
       && !authoritative.issueBody.includes('```smoke-test-plan');
@@ -3671,7 +3706,9 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         created: false,
         reused: false,
         reason: 'at_cap_continuation_required',
-        nextAction: 'fix the final findings, run worker-owned smoke on the exact current head, then run scoped reconcile --immediate',
+        nextAction: logicalAccounting
+          ? 'fix or explicitly resolve the final findings, then run scoped reconcile --immediate'
+          : 'fix the final findings, run worker-owned smoke on the exact current head, then run scoped reconcile --immediate',
         prNumber: target.prNumber,
         headSha: target.headSha,
         cycleId: authority.cycle.cycleId,
@@ -3679,11 +3716,16 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       };
     }
 
-    const roundOrdinal = (authority.cycle?.consumedHeadShas.length ?? 0) + 1;
+    const logicalAccounting = authority.cycle?.capMapVersion === PACK_REVIEW_CAP_MAP_VERSION;
+    const roundOrdinal = logicalAccounting
+      ? (authority.cycle?.consumedRoundOrdinals?.length ?? 0) + 1
+      : (authority.cycle?.consumedHeadShas.length ?? 0) + 1;
+    const accountingVersion = authority.cycle?.capMapVersion;
     const cardinality = selectPackReviewGptSourceCardinality({
       reviewer: reviewer ?? 'codex',
       tier: authoritative.tier,
       roundOrdinal,
+      accountingVersion,
     });
     const gptRound: PackReviewGptRoundRecord | undefined = reviewer === 'gpt'
       && !conflictFreeCarryover
@@ -3694,6 +3736,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           schema: 'pack-review-gpt-round/v1',
           reviewer: 'gpt',
           tier: authoritative.tier,
+          accountingVersion,
           roundOrdinal,
           cardinality,
           issueNumber: authoritative.issueNumber,
@@ -3757,6 +3800,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           terminal: terminalV2FromPayload({
             runId: resumeCandidate.id,
             targetSha: target.headSha,
+            logicalRoundOrdinal: resumeCandidate.logicalRoundOrdinal,
             verdict: typedResumePayload.verdict,
             findingCount: typedResumePayload.findingCount,
             findings: typedResumePayload.findings,
@@ -3879,6 +3923,13 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       canonicalRepository: target.repoSlug,
       legacyRepositoryBySourceRoot,
       automaticBudgetDisposition: 'consume',
+      ...(accountingVersion ? { accountingVersion } : {}),
+      ...(authority.cycle?.cycleId ? { reviewCycleId: authority.cycle.cycleId } : {}),
+      ...(logicalAccounting ? {
+        logicalRoundOrdinal: roundOrdinal,
+        logicalRoundCap: authority.cycle!.frozenCap,
+      } : {}),
+      ...(reviewer ? { resolvedReviewer: reviewer } : {}),
       ...(gptRound ? { reviewRound: gptRound } : {}),
     });
     run = created.run;
@@ -4353,6 +4404,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       terminal: terminalV2FromPayload({
         runId: run.id,
         targetSha: target.headSha,
+        logicalRoundOrdinal: run.logicalRoundOrdinal,
         verdict: payload.verdict,
         findingCount: payload.findingCount,
         findings: payload.findings,
