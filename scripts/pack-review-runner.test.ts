@@ -298,16 +298,9 @@ describe('Issue #1826 logical-round smoke independence', () => {
     const head2 = '2'.repeat(40);
     const prNumber = 1826;
     const issueBody = [
-      '```complexity-tier',
-      'tier: T3',
-      'advisory-prior: T3',
-      '```',
-      '',
-      '```smoke-test-plan',
-      'scenarios:',
-      '  - action: exact head smoke | expected: PASS',
-      '```',
-    ].join('\n');
+      '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
+      '```smoke-test-plan\nscenarios:\n  - action: exact head smoke | expected: PASS\n```',
+    ].join('\n\n');
     const options = { storeRoot };
     const initial = initializePackReviewAuthority({ prNumber, headSha: head1, tier: 'T3', options });
     const smokeStarted = commitSmokeOrderingTransition({
