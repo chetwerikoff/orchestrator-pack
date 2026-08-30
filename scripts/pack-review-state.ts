@@ -410,9 +410,6 @@ function validateCycle(cycle: PackReviewCycle | null): void {
     if (cycle.frozenCap !== PACK_REVIEW_CAPS[cycle.frozenTier] || cycle.frozenMapOrigin !== undefined) {
       throw new PackReviewAuthorityError('cap_state_invalid', 'current-map cycle has mismatched discriminator');
     }
-    if (normalized.length !== 0) {
-      throw new PackReviewAuthorityError('cap_state_invalid', 'logical-round cycle cannot carry consumed heads');
-    }
     if (!Array.isArray(cycle.consumedRoundOrdinals)) {
       throw new PackReviewAuthorityError('cap_state_invalid', 'logical-round cycle lacks consumedRoundOrdinals');
     }
@@ -973,6 +970,9 @@ export function commitPackReviewTerminal(input: {
               throw new PackReviewAuthorityError('cap_exhausted', 'terminal cannot consume an extra logical round');
             }
             rounds.push(Number(ordinal));
+          }
+          if (!cycle.consumedHeadShas.includes(terminal.targetSha)) {
+            cycle.consumedHeadShas.push(terminal.targetSha);
           }
         } else if (!cycle.consumedHeadShas.includes(terminal.targetSha)) {
           if (cycle.consumedHeadShas.length >= cycle.frozenCap) {
