@@ -560,6 +560,7 @@ describe('Issue #1826 logical-round smoke independence', () => {
     roots.push(parent);
     const storeRoot = join(parent, 'store');
     setupHarness(storeRoot);
+    process.env.PACK_REVIEW_RUN_STALE_MINUTES = '60';
     const prNumber = 1828;
     const head = '4'.repeat(40);
     const options = { storeRoot };
