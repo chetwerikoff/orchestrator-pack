@@ -1015,8 +1015,7 @@ describe('machine-local executor profile store', () => {
           'PACK_EXECUTOR_SMOKE_ROUTINE_AGENT=cursor',
           'PACK_EXECUTOR_SMOKE_ROUTINE_MODEL=store-smoke-model',
           'PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT=store-smoke-effort',
-        ].join('
-');
+        ].join('\n');
       },
     });
 
@@ -1042,9 +1041,7 @@ describe('machine-local executor profile store', () => {
     const env = { PATH: '/operator/bin', PACK_EXECUTOR_T2_MODEL: 'live-model' };
     expect(() => overlayExecutorProfileEnv(env, {
       storePath: '/operator/executor-profiles.env',
-      readFile: () => 'PACK_EXECUTOR_T2_MODEL=store-model
-PATH=/unsafe/bin
-',
+      readFile: () => 'PACK_EXECUTOR_T2_MODEL=store-model\nPATH=/unsafe/bin\n',
     })).toThrow('executor_profile_store_malformed:line=2:key=PATH');
     expect(env).toEqual({ PATH: '/operator/bin', PACK_EXECUTOR_T2_MODEL: 'live-model' });
   });
