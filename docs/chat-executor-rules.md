@@ -158,8 +158,10 @@ After every new commit or history rewrite:
 
 - earlier-head CI is stale;
 - earlier-head smoke is stale;
-- an earlier-head review result does not directly authorize the new head;
-- the earlier clean result may contribute only through an explicit current-head authority path such as exact conflict-free carry-over; otherwise the current head requires its normal review path.
+- an in-progress required review round remains bound to the head it actually reviewed;
+- for a new pack-review cycle, required rounds are logical PR/task-cycle units with caps T1=1, T2=1, T3=2; T3 round 2 may review the same head as round 1;
+- once the required stage has durably reached `reviewStageComplete=true`, later heads do not reopen or consume another required round. Instead the pack-owned status projection writes `orchestrator-pack/pack-review=success` on the current head with `Required pack-review stage completed; no additional review round required.`;
+- direct connected-GitHub reviews remain exact-commit evidence and do not themselves create or rewrite the runner's durable stage-completion latch.
 
 A persisted clean terminal for the exact same head suppresses a redundant automatic/common reviewer-model invocation. A cycle already at cap also suppresses further automatic/common model calls. Neither case weakens current-head CI or smoke. Smoke admission remains required for a new head before an at-cap refusal, so cap exhaustion cannot hide absent or failed current-head smoke evidence.
 
