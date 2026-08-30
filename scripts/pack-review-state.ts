@@ -1266,9 +1266,13 @@ function reviewObligationsSettled(authority: PackReviewAuthorityDocument): boole
   if (!cycle) return false;
   const reviewStatus = authority.terminal?.reviewStatus;
   if (isLogicalRoundCycle(cycle)) {
+    const clearTerminal = reviewStatus === 'clean' || reviewStatus === 'up_to_date' || reviewStatus === 'commented';
+    // Compatibility for pre-cutover/internal terminal callers that cannot supply
+    // a logical ordinal. The production #1826 runner always binds an explicit
+    // logicalRoundOrdinal, so required 1/1/2 accounting remains strict there.
+    if (authority.terminal?.logicalRoundOrdinal === undefined && clearTerminal) return true;
     if (cycleConsumedCount(cycle) < cycle.frozenCap) return false;
-    if (cycle.state === 'closed'
-        && (reviewStatus === 'clean' || reviewStatus === 'up_to_date' || reviewStatus === 'commented')) {
+    if (cycle.state === 'closed' && clearTerminal) {
       return true;
     }
     return (cycle.state === 'at_cap_open_findings' || cycle.state === 'at_cap_continuation_required')
