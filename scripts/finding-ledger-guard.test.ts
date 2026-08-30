@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -2194,6 +2194,77 @@ describe('receipt-backed finding ledger operator-stage waiver regression #1778',
       options,
       emptyLedger,
     };
+  }
+
+  function finalAcceptanceWaiverFixture(reviewCaptureText = markedClean()) {
+    const base = waivedArchitecturalReviewFixture(reviewCaptureText);
+    const sourceRevision = base.stageReceipt.sourceRevision;
+    const reviewEpisodeId = base.stageReceipt.reviewEpisodeId;
+    const lensReceiptId = reviewEpisodeId + ':stage-receipt:0002';
+    const terminalReceiptId = reviewEpisodeId + ':stage-receipt:0003';
+    const terminalText = markedClean();
+    const terminalSha256 = createHash('sha256').update(terminalText).digest('hex');
+    const terminalCapture = {
+      captureIdentity: 'sha256:' + terminalSha256 + ':pass-03-architectural.capture.txt',
+      name: 'pass-03-architectural.capture.txt',
+      byteLength: Buffer.byteLength(terminalText),
+      sha256: terminalSha256,
+      rawFindingCount: 0,
+    };
+    const lensReceipt = {
+      schema: 'stage-completeness-receipt/v1', tier: 'T3',
+      taskIdentity: base.stageReceipt.taskIdentity, episodeFirstRevision: base.stageReceipt.episodeFirstRevision,
+      reviewEpisodeId, stageReceiptId: lensReceiptId, previousStageReceiptId: base.stageReceipt.stageReceiptId,
+      receiptCensus: [base.stageReceipt.stageReceiptId, lensReceiptId],
+      stageAttemptId: 'attempt-lens', stageSequence: 2, stage: 'architectural-lens',
+      policyVersion: 'single-source/v1', reviewerCardinality: 1,
+      cardinalityConfigIdentity: base.stageReceipt.cardinalityConfigIdentity, sourceRevision, outcome: 'complete',
+      producerEvidence: 'waived', partialMissingSources: [],
+      revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' },
+      settlement: { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true },
+      claude: { kind: 'waiver', waiver: { reason: 'claude-unavailable', unavailability: 'provider-unavailable', evidenceIdentity: 'claude-unavailable-1779' } },
+      credentialingCaptures: [], relayEligibleCaptures: [],
+    };
+    const terminalReceipt = {
+      schema: 'stage-completeness-receipt/v1', tier: 'T3',
+      taskIdentity: base.stageReceipt.taskIdentity, episodeFirstRevision: base.stageReceipt.episodeFirstRevision,
+      reviewEpisodeId, stageReceiptId: terminalReceiptId, previousStageReceiptId: lensReceiptId,
+      receiptCensus: [base.stageReceipt.stageReceiptId, lensReceiptId, terminalReceiptId],
+      stageAttemptId: 'attempt-terminal', stageSequence: 3, stage: 'architectural',
+      policyVersion: 'single-source/v1', reviewerCardinality: 1,
+      cardinalityConfigIdentity: base.stageReceipt.cardinalityConfigIdentity, sourceRevision, outcome: 'complete',
+      producerEvidence: 'not-applicable', partialMissingSources: [],
+      revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' },
+      settlement: { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true },
+      invocations: [{
+        schema: 'reviewer-invocation-envelope/v1', reviewEpisodeId, stageAttemptId: 'attempt-terminal',
+        policyVersion: 'single-source/v1', reviewerCardinality: 1,
+        cardinalityConfigIdentity: base.stageReceipt.cardinalityConfigIdentity, stage: 'architectural', sourceRevision,
+        invocationId: 'terminal-invocation-1779', terminalResultIdentity: 'terminal-result-1779',
+        reviewerSource: 'source-terminal-1779', reviewerSlot: '01', reviewerOrdinal: 1, attemptOrdinal: 1,
+        retryAttempt: false, terminal: true, terminalClassification: 'complete', sendCount: 1, retryClass: 'none',
+        revisionCheck: 'matched', capacityOutcome: 'admitted', capacityWaitMs: 0, capture: terminalCapture,
+      }],
+      credentialingCaptures: [terminalCapture], relayEligibleCaptures: [terminalCapture],
+    };
+    const stageReceipts = [base.stageReceipt, lensReceipt, terminalReceipt];
+    const texts = [base.captureText, terminalText];
+    const captures = [base.capture, terminalCapture];
+    const verifiedRelayEvidence = captures.map((capture, index) => ({
+      relayAttemptId: 'relay-final-' + (index + 1), captureIdentity: capture.captureIdentity,
+      sourceLabel: capture.name + '|' + capture.captureIdentity, name: capture.name,
+      byteLength: capture.byteLength, sha256: capture.sha256, verified: true,
+    }));
+    const episodeAuthority = {
+      ...base.episodeAuthority,
+      receiptInventory: { ...base.episodeAuthority.receiptInventory, stageReceiptIds: stageReceipts.map((receipt) => receipt.stageReceiptId) },
+    };
+    const options = {
+      ...base.options, phase: 'final-acceptance',
+      captureMetadata: captures.map((capture, index) => ({ name: capture.name, timestampMs: 1_100 + index * 200, captureIdentity: capture.captureIdentity })),
+      stageReceipts, verifiedRelayEvidence, episodeAuthority,
+    };
+    return { ...base, terminalCapture, terminalReceipt, lensReceipt, stageReceipts, texts, captures, verifiedRelayEvidence, episodeAuthority, options };
   }
 
   it('locks current-main receipt-backed waiver acceptance with only the real slot-01 governed capture', () => {
