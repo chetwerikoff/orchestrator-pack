@@ -2267,6 +2267,78 @@ describe('receipt-backed finding ledger operator-stage waiver regression #1778',
     return { ...base, terminalCapture, terminalReceipt, lensReceipt, stageReceipts, texts, captures, verifiedRelayEvidence, episodeAuthority, options };
   }
 
+  it('accepts full T3 final acceptance regardless of legacy remote-authority provenance inputs', () => {
+    const fixture = finalAcceptanceWaiverFixture();
+    for (const legacyOptions of [
+      {},
+      { remoteAuthority: { schema: 'stale-remote-authority/v0' } },
+      { remoteAuthorities: [{ schema: 'mismatched-remote-authority/v0', stage: 'competitive' }] },
+      { requireRemoteAuthority: true },
+      { requireRemoteAuthority: true, remoteAuthorities: [{ schema: 'stale-remote-authority/v0' }] },
+    ]) {
+      const result = checkFindingLedgerGuard(
+        fixture.texts,
+        fixture.emptyLedger,
+        { ...fixture.options, ...legacyOptions } as never,
+      );
+      expect(result.ok, result.errors.join('\n')).toBe(true);
+    }
+  });
+
+  it('keeps terminal architectural evidence mandatory after the positive final-acceptance fixture passes', () => {
+    const fixture = finalAcceptanceWaiverFixture();
+    const baseline = checkFindingLedgerGuard(fixture.texts, fixture.emptyLedger, fixture.options as never);
+    expect(baseline.ok, baseline.errors.join('\n')).toBe(true);
+
+    const remainingReceipts = fixture.stageReceipts.slice(0, 2);
+    const missingTerminal = checkFindingLedgerGuard(
+      fixture.texts.slice(0, 1),
+      fixture.emptyLedger,
+      {
+        ...fixture.options,
+        captureMetadata: fixture.options.captureMetadata.slice(0, 1),
+        stageReceipts: remainingReceipts,
+        verifiedRelayEvidence: fixture.verifiedRelayEvidence.slice(0, 1),
+        episodeAuthority: {
+          ...fixture.episodeAuthority,
+          receiptInventory: {
+            ...fixture.episodeAuthority.receiptInventory,
+            stageReceiptIds: remainingReceipts.map((receipt) => receipt.stageReceiptId),
+          },
+        },
+      } as never,
+    );
+    expect(missingTerminal.ok).toBe(false);
+    expect(missingTerminal.errors.join('\n')).toContain(
+      'architectural requires exactly one credentialing complete-or-proven-partial stageAttemptId in the review episode',
+    );
+  });
+
+  it('keeps unresolved governed defects blocking at final acceptance without provenance errors', () => {
+    const findingText = markedFinding('WAIVER-FINAL-F1', {
+      type: 'quality',
+      evidence: 'The real slot-01 review found a material defect.',
+    });
+    const fixture = finalAcceptanceWaiverFixture(findingText);
+    const ledger = JSON.stringify({
+      version: 2,
+      counts: { rawFindingCount: 1, distinctFindingCount: 1, processedDistinctCount: 0 },
+      findings: [row('WAIVER-FINAL-F1', {
+        defectDisposition: 'unresolved',
+        remedyDisposition: 'accepted',
+        occurrences: [fixture.capture.captureIdentity + ':1'],
+      })],
+    });
+    const result = checkFindingLedgerGuard(
+      fixture.texts,
+      ledger,
+      { ...fixture.options, requireRemoteAuthority: true } as never,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('row WAIVER-FINAL-F1 remains unresolved');
+    expect(result.errors.join('\n')).not.toContain('remote authority');
+  });
+
   it('locks current-main receipt-backed waiver acceptance with only the real slot-01 governed capture', () => {
     const fixture = waivedArchitecturalReviewFixture();
     expect(fixture.stageReceipt.producerEvidence).toBe('waived');
