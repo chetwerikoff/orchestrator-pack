@@ -1020,7 +1020,7 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     if (existing) {
       const observedLiveness = currentLiveness(deps.submitDeps, worker.identity);
       if (observedLiveness !== 'idle' && observedLiveness !== 'busy') {
-        return livenessDeferral(worker.identity, observedLiveness);
+        return deliveryNoEffect(`worker_${observedLiveness}`, worker);
       }
       const base = { terminal: worker.identity.id, generation: worker.identity.generation };
       if (observedLiveness === 'busy') {
