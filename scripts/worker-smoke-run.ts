@@ -1257,6 +1257,7 @@ export function establishRuntimeSmokeDelivery(input: {
   const now = input.now ?? (() => Date.now());
   const sleepMs = input.sleepMs ?? sleep;
   const deadline = now() + input.deadlineMs;
+  const openCodeHttp = input.adapter.composerControl?.(input.worker)?.kind === 'opencode-http';
   const dispatched = input.adapter.dispatchInput(
     { worker: input.worker, text: input.prompt },
     { cwd: input.cwd, timeoutMs: input.deadlineMs },
@@ -1273,7 +1274,7 @@ export function establishRuntimeSmokeDelivery(input: {
       return { ok: true, observationToken: token, submitCount };
     }
 
-    if (dispatched.status === 'dispatched') {
+    if (dispatched.status === 'dispatched' && !openCodeHttp) {
       const read = input.adapter.readBoundedOutput({
         worker: input.worker,
         previousToken: token,

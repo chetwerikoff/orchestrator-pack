@@ -48,7 +48,8 @@ const OPEN_CODE_HTTP_SCRIPT = [
   "const [url, method, body] = process.argv.slice(1);",
   "try {",
   "  const response = await fetch(url, { method, headers: body ? { 'content-type': 'application/json' } : undefined, body: body || undefined });",
-  "  process.stdout.write(JSON.stringify({ status: response.status, body: await response.text() }));",
+  "  const bodyText = url.includes('/event') ? '' : await response.text();",
+  "  process.stdout.write(JSON.stringify({ status: response.status, body: bodyText }));",
   "} catch (error) {",
   "  process.stderr.write(error instanceof Error ? error.message : String(error));",
   "  process.exitCode = 1;",
@@ -171,6 +172,11 @@ interface OwnedWorkerRecord {
 interface OpenCodeUrlRecord {
   readonly identity: RuntimeWorkerIdentity;
   readonly url: string;
+}
+
+interface OpenCodeSessionRecord {
+  readonly id: string;
+  readonly directory: string;
 }
 
 interface KnownWorkspaceRecord {
@@ -504,29 +510,61 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (!urlRecord || !sameRuntimeWorker(urlRecord.identity, current.value.identity)) {
       return { status: 'send_failed', reason: 'runtime_opencode_control_unavailable' };
     }
-    const path = request.action === 'append-prompt' ? '/tui/append-prompt' : '/tui/submit-prompt';
+    if (request.action !== 'submit-prompt' || typeof request.text !== 'string' || !request.text) {
+      return { status: 'send_failed', reason: 'runtime_opencode_prompt_request_invalid' };
+    }
+    const events = this.#openCodeRequest({
+      url: `${urlRecord.url}/event?directory=${encodeURIComponent(current.value.workspacePath)}`,
+      method: 'GET',
+      timeoutMs: Math.max(1, options.timeoutMs ?? 10_000),
+    });
+    if ('error' in events) return { status: 'send_failed', reason: events.error };
+    if (events.status < 200 || events.status >= 300) {
+      return { status: 'send_failed', reason: `opencode_http_status_${events.status}` };
+    }
+    const sessions = this.#openCodeRequest({
+      url: `${urlRecord.url}/session?directory=${encodeURIComponent(current.value.workspacePath)}`,
+      method: 'GET',
+      timeoutMs: Math.max(1, options.timeoutMs ?? 10_000),
+    });
+    if ('error' in sessions) return { status: 'send_failed', reason: sessions.error };
+    if (sessions.status < 200 || sessions.status >= 300) {
+      return { status: 'send_failed', reason: `opencode_http_status_${sessions.status}` };
+    }
+    let parsedSessions: unknown;
+    try {
+      parsedSessions = JSON.parse(sessions.body);
+    } catch {
+      return { status: 'send_failed', reason: 'opencode_session_schema_mismatch' };
+    }
+    if (!Array.isArray(parsedSessions)) {
+      return { status: 'send_failed', reason: 'opencode_session_schema_mismatch' };
+    }
+    const matchingSessions: OpenCodeSessionRecord[] = [];
+    for (const value of parsedSessions) {
+      if (!value || typeof value !== 'object') continue;
+      const row = value as { id?: unknown; directory?: unknown };
+      if (typeof row.id === 'string' && /^ses/u.test(row.id)
+        && row.directory === current.value.workspacePath) {
+        matchingSessions.push({ id: row.id, directory: row.directory });
+      }
+    }
+    if (matchingSessions.length !== 1) {
+      return { status: 'send_failed', reason: 'runtime_opencode_session_unavailable' };
+    }
     const response = this.#openCodeRequest({
-      url: `${urlRecord.url}${path}`,
+      url: `${urlRecord.url}/session/${encodeURIComponent(matchingSessions[0]!.id)}/prompt_async?directory=${encodeURIComponent(current.value.workspacePath)}`,
       method: 'POST',
-      ...(request.action === 'append-prompt' ? { body: JSON.stringify({ text: request.text ?? '' }) } : {}),
+      body: JSON.stringify({ parts: [{ type: 'text', text: request.text }] }),
       timeoutMs: Math.max(1, options.timeoutMs ?? 10_000),
     });
     if ('error' in response) return { status: 'send_failed', reason: response.error };
-    if (response.status < 200 || response.status >= 300) {
+    if (response.status !== 204) {
       return { status: 'send_failed', reason: `opencode_http_status_${response.status}` };
-    }
-    let accepted: unknown;
-    try {
-      accepted = JSON.parse(response.body);
-    } catch {
-      return { status: 'send_failed', reason: 'opencode_tui_response_schema_mismatch' };
-    }
-    if (accepted !== true) {
-      return { status: 'send_failed', reason: 'opencode_tui_response_schema_mismatch' };
     }
     return {
       status: 'dispatched',
-      witness: { operation: request.action === 'append-prompt' ? 'write' : 'submit', accepted: true, source: 'runtime-response' },
+      witness: { operation: 'submit', accepted: true, source: 'runtime-response' },
     };
   }
 
@@ -1165,11 +1203,11 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       return { status: 'send_failed', reason: 'worker_generation_not_found' };
     }
     const control = this.composerControl(input.worker);
-    if (control && (input.writeOnly || input.submitOnly)) {
+    if (control && (input.writeOnly || input.submitOnly || input.text !== undefined)) {
       return control.dispatch({
         worker: input.worker,
-        action: input.writeOnly ? 'append-prompt' : 'submit-prompt',
-        ...(input.writeOnly ? { text: input.text ?? '' } : {}),
+        action: 'submit-prompt',
+        ...(input.text !== undefined ? { text: input.text } : {}),
       }, options);
     }
     const args = ['terminal', 'send', '--terminal', input.worker.id];

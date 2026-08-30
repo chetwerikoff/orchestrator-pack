@@ -750,7 +750,7 @@ describe('delivery-triggered composer submission', () => {
       }),
     };
     const result = await submitOrcaMessageDeliveryPointer('msg_opencode_http', deps);
-    expect(actions).toEqual(['append-prompt', 'submit-prompt']);
+    expect(actions).toEqual(['submit-prompt']);
     expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
   });
 
@@ -781,9 +781,9 @@ describe('delivery-triggered composer submission', () => {
     };
     const first = await submitOrcaMessageDeliveryPointer('msg_opencode_episode', deps);
     const second = await submitOrcaMessageDeliveryPointer('msg_opencode_episode', deps);
-    expect(actions).toEqual(['append-prompt', 'submit-prompt']);
+    expect(actions).toEqual(['submit-prompt']);
     expect(first.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
-    expect(second.terminals[0]?.reason).toBe('orchestration_episode_already_delivered');
+    expect(second.terminals[0]?.reason).toBe('orchestration_episode_already_claimed');
   });
 
   it('submits an exact pointer soft-wrapped by a narrow Cursor composer', async () => {

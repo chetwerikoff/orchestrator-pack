@@ -918,25 +918,30 @@ async function submitOrcaMessageDeliveryPointerForMessage(
 
   const control = deps.submitDeps.composerControl?.(worker.identity);
   if (control?.kind === 'opencode-http') {
-    let submitted: RuntimeDispatchResult;
-    if (existing) {
-      submitted = control.dispatch({ worker: worker.identity, action: 'submit-prompt' });
-    } else {
-      const appended = control.dispatch({ worker: worker.identity, action: 'append-prompt', text: pointer });
-      if (appended.status !== 'dispatched') {
-        if (state) {
-          delete state.episodes[key];
-          if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
-        }
-        deps.pointerWriteLedger?.delete(key);
-        return deliveryNoEffect(appended.reason ?? 'opencode_prompt_append_failed', worker, false);
+    const priorBackoff = existing?.backoffMs ?? ORCHESTRATION_RECONCILE_WINDOW_MS;
+    const nextBackoff = Math.min(priorBackoff * 2, ORCHESTRATION_RECONCILE_MAX_BACKOFF_MS);
+    if (state && !existing) {
+      state.episodes[key] = {
+        messageId: message.id,
+        runId: message.runId,
+        workerKey: workerKey(worker.identity),
+        nextEligibleAt: now + priorBackoff,
+        backoffMs: nextBackoff,
+        sealed: false,
+      };
+      if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
+    }
+    if (deps.pointerWriteLedger) deps.pointerWriteLedger.set(key, now);
+    const submitted = control.dispatch({ worker: worker.identity, action: 'submit-prompt', text: pointer });
+    if (submitted.status === 'send_failed') {
+      if (state && !existing) {
+        delete state.episodes[key];
+        if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
       }
-      submitted = control.dispatch({ worker: worker.identity, action: 'submit-prompt' });
+      deps.pointerWriteLedger?.delete(key);
+      return { ok: false, dryRun: false, watch: false, terminals: [{ terminal: worker.identity.id, generation: worker.identity.generation, unsent: true, enter: false, ok: false, reason: submitted.reason, dispatchStatus: submitted.status }] };
     }
     const base = { terminal: worker.identity.id, generation: worker.identity.generation };
-    if (submitted.status === 'send_failed') {
-      return { ok: false, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: false, reason: submitted.reason, dispatchStatus: submitted.status }] };
-    }
     if (submitted.status === 'dispatch_unknown') {
       return { ok: true, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: true, reason: submitted.reason, dispatchStatus: submitted.status }] };
     }

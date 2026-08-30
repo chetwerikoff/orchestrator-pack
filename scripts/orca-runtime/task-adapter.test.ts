@@ -173,7 +173,10 @@ describe('OpenCode HTTP control plane', () => {
     const requests: Array<{ url: string; method: 'GET' | 'POST'; body?: string; timeoutMs: number }> = [];
     const adapter = makeAdapter((input) => {
       requests.push(input);
-      return { status: 200, body: input.method === 'GET' ? JSON.stringify({ healthy: true, version: '1.18.25' }) : 'true' };
+      if (input.url.endsWith('/global/health')) return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) };
+      if (input.method === 'GET' && input.url.includes('/session')) return { status: 200, body: JSON.stringify([{ id: 'ses-fixture', directory: process.cwd() }]) };
+      if (input.url.includes('/event')) return { status: 200, body: '' };
+      return { status: 204, body: '' };
     });
     const spawned = adapter.spawnWorker({
       title: 'opencode',
@@ -189,23 +192,26 @@ describe('OpenCode HTTP control plane', () => {
     expect(control?.kind).toBe('opencode-http');
     expect(control?.dispatch({
       worker: spawned.value.identity,
-      action: 'append-prompt',
+      action: 'submit-prompt',
       text: 'delivery pointer',
     }).status).toBe('dispatched');
-    expect(control?.dispatch({ worker: spawned.value.identity, action: 'submit-prompt' }).status).toBe('dispatched');
     expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
       { method: 'GET', url: 'http://127.0.0.1:18891/global/health' },
-      { method: 'POST', url: 'http://127.0.0.1:18891/tui/append-prompt' },
-      { method: 'POST', url: 'http://127.0.0.1:18891/tui/submit-prompt' },
+      { method: 'GET', url: 'http://127.0.0.1:18891/event?directory=' + encodeURIComponent(process.cwd()) },
+      { method: 'GET', url: 'http://127.0.0.1:18891/session?directory=' + encodeURIComponent(process.cwd()) },
+      { method: 'POST', url: 'http://127.0.0.1:18891/session/ses-fixture/prompt_async?directory=' + encodeURIComponent(process.cwd()) },
     ]);
-    expect(requests[1]?.body).toBe(JSON.stringify({ text: 'delivery pointer' }));
+    expect(requests[3]?.body).toBe(JSON.stringify({ parts: [{ type: 'text', text: 'delivery pointer' }] }));
   });
 
   it('recovers OpenCode control from terminal metadata on a fresh adapter', () => {
     const requests: string[] = [];
     const first = makeAdapter((input) => {
       requests.push(input.url);
-      return { status: 200, body: input.method === 'GET' ? JSON.stringify({ healthy: true, version: '1.18.25' }) : 'true' };
+      if (input.url.endsWith('/global/health')) return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) };
+      if (input.method === 'GET' && input.url.includes('/session')) return { status: 200, body: JSON.stringify([{ id: 'ses-fixture', directory: process.cwd() }]) };
+      if (input.url.includes('/event')) return { status: 200, body: '' };
+      return { status: 204, body: '' };
     });
     const spawned = first.spawnWorker({
       title: 'opencode',
@@ -216,12 +222,13 @@ describe('OpenCode HTTP control plane', () => {
 
     const second = makeAdapter((input) => {
       requests.push(input.url);
-      return { status: 200, body: 'true' };
+      if (input.method === 'GET' && input.url.includes('/session')) return { status: 200, body: JSON.stringify([{ id: 'ses-fixture', directory: process.cwd() }]) };
+      return { status: 204, body: '' };
     });
     const control = second.composerControl?.(spawned.value.identity);
     expect(control?.kind).toBe('opencode-http');
-    expect(control?.dispatch({ worker: spawned.value.identity, action: 'append-prompt', text: 'fresh adapter' })).toMatchObject({ status: 'dispatched' });
-    expect(requests.at(-1)).toBe('http://127.0.0.1:18891/tui/append-prompt');
+    expect(control?.dispatch({ worker: spawned.value.identity, action: 'submit-prompt', text: 'fresh adapter' })).toMatchObject({ status: 'dispatched' });
+    expect(requests.at(-1)).toBe('http://127.0.0.1:18891/session/ses-fixture/prompt_async?directory=' + encodeURIComponent(process.cwd()));
   });
 
   it('bounds health HTTP timeout by the remaining health deadline', () => {
@@ -250,6 +257,8 @@ describe('OpenCode HTTP control plane', () => {
       }) as never,
       openCodeHttpRequest: (input) => {
         requests.push({ url: input.url, timeoutMs: input.timeoutMs });
+        if (input.url.includes('/session')) return { status: 200, body: JSON.stringify([{ id: 'ses-fixture', directory: process.cwd() }]) };
+        if (input.url.includes('/event')) return { status: 200, body: '' };
         return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) };
       },
     });
@@ -260,13 +269,16 @@ describe('OpenCode HTTP control plane', () => {
     expect(requests.at(-1)?.timeoutMs).toBe(20);
   });
 
-  it('rejects non-boolean successful TUI responses', () => {
-    const adapter = makeAdapter((input) => ({ status: 200, body: input.method === 'GET' ? JSON.stringify({ healthy: true, version: '1.18.25' }) : 'false' }));
+  it('rejects non-successful prompt API responses', () => {
+    const adapter = makeAdapter((input) => {
+      if (input.method === 'GET' && input.url.includes('/session')) return { status: 200, body: JSON.stringify([{ id: 'ses-fixture', directory: process.cwd() }]) };
+      return { status: 200, body: '' };
+    });
     const spawned = adapter.spawnWorker({ title: 'opencode', command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture' });
     expect(spawned.status).toBe('ok');
     if (spawned.status !== 'ok') return;
     const control = adapter.composerControl?.(spawned.value.identity);
-    expect(control?.dispatch({ worker: spawned.value.identity, action: 'append-prompt', text: 'reject' })).toEqual({ status: 'send_failed', reason: 'opencode_tui_response_schema_mismatch' });
+    expect(control?.dispatch({ worker: spawned.value.identity, action: 'submit-prompt', text: 'reject' })).toEqual({ status: 'send_failed', reason: 'opencode_http_status_200' });
   });
 
   it.each([
