@@ -4063,6 +4063,14 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     carryover = await resolveCarryoverReplay({ input, target, projectId, storeRoot, baseRef, priorAuthority });
     const conflictFreeCarryover = carryover?.replay.kind === 'conflict_free_carryover';
     if (!conflictFreeCarryover && authority.cycle?.state === 'open_findings') {
+      // Re-open only the phase cursor so fresh finding-resolution evidence can be
+      // evaluated on a subsequent start; retain the prior-round terminal itself.
+      authority = observePackReviewHead({
+        prNumber: target.prNumber,
+        expectedTransitionSeq: authority.transitionSeq,
+        headSha: target.headSha,
+        options: authorityOptions,
+      });
       const priorFindingRun = authority.terminal?.runId
         ? getPackReviewRun(authority.terminal.runId, { projectId, storeRoot })
         : null;
