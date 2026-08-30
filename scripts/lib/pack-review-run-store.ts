@@ -324,6 +324,7 @@ export interface CreatePackReviewRunInput extends PackReviewStoreOptions {
   resolvedReviewer?: 'gpt' | 'codex' | 'claude';
   automaticBudgetDisposition?: PackReviewAutomaticBudgetDisposition;
   allowCompletedSameHeadReplay?: boolean;
+  allowSameRoundReplacement?: boolean;
 }
 
 interface LockHandle {
@@ -1818,7 +1819,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
     const uncertain = boundRecords.filter((record) => matchesInput(record)
       && record.reviewRound?.sourceSlots.some((slot) => slot.terminalClass === 'possible_delivery/missing_result'));
     const latestUncertain = selectLatestSameKeyRun(boundRecords, uncertain);
-    if (latestUncertain) {
+    if (latestUncertain && input.allowSameRoundReplacement !== true) {
       return {
         created: false,
         reused: true,
@@ -1831,7 +1832,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
     const persistedGptRounds = boundRecords.filter((record) => matchesInput(record)
       && hasRecordedGptRoundLifecycleOrEvidence(record));
     const latestPersistedGptRound = selectLatestSameKeyRun(boundRecords, persistedGptRounds);
-    if (latestPersistedGptRound) {
+    if (latestPersistedGptRound && input.allowSameRoundReplacement !== true) {
       return {
         created: false,
         reused: true,
