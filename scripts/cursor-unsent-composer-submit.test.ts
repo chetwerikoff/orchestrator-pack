@@ -797,7 +797,7 @@ describe('delivery-triggered composer submission', () => {
     const result = await submitOrcaMessageDeliveryPointer('msg_opencode_unconfirmed', deps);
     const key = workerKey(target.identity);
     expect(result.terminals[0]).toMatchObject({ reason: 'submission_unconfirmed', enter: false, ok: false });
-    expect(reads).toBe(1);
+    expect(reads).toBe(2);
     expect(actions).toHaveLength(1);
     expect(episodeState.episodes[key]?.state).toBe('pointer-visible');
     now = 61_001;
