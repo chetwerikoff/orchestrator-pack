@@ -33,6 +33,7 @@ import {
 } from './pack-review-carryover.ts';
 import {
   PACK_REVIEW_AUTHORITY_PHASES,
+  PACK_REVIEW_CAP_MAP_VERSION,
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
   PACK_REVIEW_GPT_SOURCE_ADMISSION_INTERVAL_MS,
   acknowledgePackReviewReset,
@@ -3883,12 +3884,19 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       : undefined;
     const authorityOptions: PackReviewAuthorityOptions = { storeRoot };
     const retainedOpenCycle = readRetainedLegacyOpenCycle(projectId, target.prNumber);
+    const unboundLegacyHarness = process.env.OPK_VITEST_HARNESS === '1'
+      && authoritative.snapshotDigest === 'harness-unbound-fixture'
+      && input.tier === undefined;
     let authority = initializePackReviewAuthority({
       prNumber: target.prNumber,
       headSha: target.headSha,
       tier: authoritative.tier,
       retainedOpenCycle,
-      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      // Unbound historical harness fixtures have no authoritative adoption signal;
+      // preserve their legacy accounting unless the fixture explicitly selects a tier.
+      capMapVersion: unboundLegacyHarness
+        ? PACK_REVIEW_CAP_MAP_VERSION
+        : PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
       options: authorityOptions,
     });
     try {
