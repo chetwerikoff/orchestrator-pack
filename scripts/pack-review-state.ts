@@ -168,6 +168,7 @@ export interface PackReviewAuthorityDocument {
     runId: string;
     digest: string;
     targetSha: string;
+    logicalRoundOrdinal?: number;
     reviewVerdict: 'clean' | 'findings';
     terminalSource: PackReviewTerminalSource;
     automaticBudgetDisposition?: PackReviewAutomaticBudgetDisposition;
@@ -937,6 +938,7 @@ export function commitPackReviewTerminal(input: {
         runId: terminal.runId,
         digest: staged.digest,
         targetSha: terminal.targetSha,
+        ...(terminal.logicalRoundOrdinal === undefined ? {} : { logicalRoundOrdinal: terminal.logicalRoundOrdinal }),
         reviewVerdict: terminal.reviewVerdict,
         terminalSource: terminal.terminalSource,
         automaticBudgetDisposition: terminal.automaticBudgetDisposition,
