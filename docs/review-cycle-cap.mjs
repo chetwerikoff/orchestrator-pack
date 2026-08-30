@@ -328,6 +328,14 @@ function resolveReviewStageComplete(input, prState) {
   return toArray(input.reviewRuns).some((run) => run?.reviewStageComplete === true);
 }
 
+function reviewRunsUseLogicalAccounting(reviewRuns, prNumber) {
+  return toArray(reviewRuns).some((run) => {
+    if (Number(run?.prNumber) !== Number(prNumber)) return false;
+    const round = Number(run?.logicalRoundOrdinal ?? run?.reviewRound?.roundOrdinal);
+    return Number.isInteger(round) && round > 0;
+  });
+}
+
 export function syncReviewCycleCapState(input) {
   const prNumber = Number(input.prNumber);
   const currentHeadSha = normalizeSha(
@@ -336,7 +344,21 @@ export function syncReviewCycleCapState(input) {
   const nowMs = Number(input.nowMs ?? Date.now());
   const nowIso = new Date(nowMs).toISOString();
   const capStateRoot = input.capState && typeof input.capState === 'object' ? { ...input.capState } : {};
+  const rawPrState = capStateRoot[String(prNumber)] && typeof capStateRoot[String(prNumber)] === 'object'
+    ? capStateRoot[String(prNumber)]
+    : null;
   let prState = normalizePrCapCycleState(capStateRoot, prNumber);
+  const reviewRuns = toArray(input.reviewRuns).filter((run) => Number(run?.prNumber) === prNumber);
+  const hasExplicitAccountingVersion = typeof rawPrState?.accountingVersion === 'string'
+    && String(rawPrState.accountingVersion).trim().length > 0;
+  const logicalRoundEvidence = reviewRunsUseLogicalAccounting(reviewRuns, prNumber);
+  if (!hasExplicitAccountingVersion
+      && reviewRuns.length > 0
+      && !logicalRoundEvidence
+      && !prState.cycleOpenedAtUtc) {
+    prState.accountingVersion = REVIEW_CYCLE_LEGACY_ACCOUNTING_VERSION;
+    prState.cap = LEGACY_TIER_CAP_BY_TIER[prState.tier] ?? prState.cap;
+  }
   const reviewStageComplete = resolveReviewStageComplete(input, prState);
 
   if (!reviewStageComplete && prState.terminal === TERMINAL_CLEAN_EARLY_STOP
@@ -373,7 +395,9 @@ export function syncReviewCycleCapState(input) {
     if (!prState.tierFrozen) {
       const launchTierCap = resolveTierAndCap({ tier: input.tier, issueBody: input.issueBody });
       prState.tier = launchTierCap.tier;
-      prState.cap = launchTierCap.cap;
+      prState.cap = prState.accountingVersion === REVIEW_CYCLE_LEGACY_ACCOUNTING_VERSION
+        ? LEGACY_TIER_CAP_BY_TIER[launchTierCap.tier]
+        : launchTierCap.cap;
       prState.tierFrozen = true;
     }
     const probeBudget = deriveDistinctHeadBudget(input.reviewRuns ?? [], prNumber, currentHeadSha);

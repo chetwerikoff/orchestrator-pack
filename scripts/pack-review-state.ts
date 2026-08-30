@@ -6,11 +6,13 @@ import { resolveSmokeRequirement } from './draft-discipline.mjs';
 
 export const PACK_REVIEW_AUTHORITY_SCHEMA_VERSION = 1;
 export const PACK_REVIEW_TERMINAL_CONTRACT_VERSION = 2;
-export const PACK_REVIEW_CAP_MAP_VERSION = 'issue-1826-logical-rounds-1-1-2';
-export const PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION = 'issue-1063-1-2-4';
+export const PACK_REVIEW_CAP_MAP_VERSION = 'issue-1063-1-2-4';
+export const PACK_REVIEW_LOGICAL_CAP_MAP_VERSION = 'issue-1826-logical-rounds-1-1-2';
+export const PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION = PACK_REVIEW_CAP_MAP_VERSION;
 export const PACK_REVIEW_LEGACY_CAP_MAP_VERSION = 'legacy-frozen';
-export const PACK_REVIEW_CAPS = Object.freeze({ T1: 1, T2: 1, T3: 2 });
-export const PACK_REVIEW_DISTINCT_HEAD_CAPS = Object.freeze({ T1: 1, T2: 2, T3: 4 });
+export const PACK_REVIEW_CAPS = Object.freeze({ T1: 1, T2: 2, T3: 4 });
+export const PACK_REVIEW_LOGICAL_CAPS = Object.freeze({ T1: 1, T2: 1, T3: 2 });
+export const PACK_REVIEW_DISTINCT_HEAD_CAPS = PACK_REVIEW_CAPS;
 export const PACK_REVIEW_GPT_SOURCE_ADMISSION_INTERVAL_MS = 10_000;
 export const PACK_REVIEW_AUTHORITY_PHASES = Object.freeze([
   'head_observed',
@@ -56,11 +58,8 @@ export function selectPackReviewGptSourceCardinality(input: {
   if (!Number.isInteger(input.roundOrdinal) || input.roundOrdinal <= 0) {
     throw new PackReviewAuthorityError('cap_state_invalid', 'roundOrdinal must be a positive integer');
   }
-  if (input.accountingVersion === PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION
-      || input.accountingVersion === PACK_REVIEW_LEGACY_CAP_MAP_VERSION) {
-    return input.roundOrdinal === 1 || input.tier === 'T3' ? 3 : 1;
-  }
-  return 3;
+  if (input.accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION) return 3;
+  return input.roundOrdinal === 1 || input.tier === 'T3' ? 3 : 1;
 }
 export type PackReviewCycleState =
   | 'open'
@@ -104,6 +103,7 @@ export interface PackReviewCycle {
   frozenCap: number;
   capMapVersion:
     | typeof PACK_REVIEW_CAP_MAP_VERSION
+    | typeof PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
     | typeof PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION
     | typeof PACK_REVIEW_LEGACY_CAP_MAP_VERSION;
   frozenMapOrigin?: 'persisted-open-cycle';
@@ -374,7 +374,7 @@ function validateBudgetDisposition(value: unknown, label: string): PackReviewAut
 }
 
 function isLogicalRoundCycle(cycle: PackReviewCycle): boolean {
-  return cycle.capMapVersion === PACK_REVIEW_CAP_MAP_VERSION;
+  return cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
 }
 
 function cycleConsumedCount(cycle: PackReviewCycle): number {
@@ -400,14 +400,14 @@ function validateCycle(cycle: PackReviewCycle | null): void {
   if (!['open', 'at_cap_open_findings', 'at_cap_continuation_required', 'closed'].includes(cycle.state)) {
     throw new PackReviewAuthorityError('cap_state_invalid', `unknown cycle state ${cycle.state}`);
   }
-  if (![PACK_REVIEW_CAP_MAP_VERSION, PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION, PACK_REVIEW_LEGACY_CAP_MAP_VERSION]
+  if (![PACK_REVIEW_CAP_MAP_VERSION, PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION, PACK_REVIEW_LEGACY_CAP_MAP_VERSION]
       .includes(cycle.capMapVersion)) {
     throw new PackReviewAuthorityError('cap_state_invalid', `unknown cap map ${cycle.capMapVersion}`);
   }
 
   let consumedCount: number;
-  if (cycle.capMapVersion === PACK_REVIEW_CAP_MAP_VERSION) {
-    if (cycle.frozenCap !== PACK_REVIEW_CAPS[cycle.frozenTier] || cycle.frozenMapOrigin !== undefined) {
+  if (cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION) {
+    if (cycle.frozenCap !== PACK_REVIEW_LOGICAL_CAPS[cycle.frozenTier] || cycle.frozenMapOrigin !== undefined) {
       throw new PackReviewAuthorityError('cap_state_invalid', 'current-map cycle has mismatched discriminator');
     }
     if (!Array.isArray(cycle.consumedRoundOrdinals)) {
@@ -526,21 +526,25 @@ export function readPackReviewAuthority(
 
 export function createNewPackReviewCycle(
   tier: PackReviewTier,
-  options: Pick<PackReviewAuthorityOptions, 'now'> = {},
+  options: Pick<PackReviewAuthorityOptions, 'now'> & {
+    capMapVersion?: typeof PACK_REVIEW_CAP_MAP_VERSION | typeof PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
+  } = {},
   resetProvenance?: PackReviewResetProvenance,
 ): PackReviewCycle {
   if (!(tier in PACK_REVIEW_CAPS)) {
     throw new PackReviewAuthorityError('cap_state_invalid', `unknown tier ${tier}`);
   }
+  const capMapVersion = options.capMapVersion ?? PACK_REVIEW_CAP_MAP_VERSION;
+  const logicalAccounting = capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
   return {
     cycleId: `cycle-${randomUUID().replaceAll('-', '')}`,
     state: 'open',
     frozenTier: tier,
-    frozenCap: PACK_REVIEW_CAPS[tier],
-    capMapVersion: PACK_REVIEW_CAP_MAP_VERSION,
+    frozenCap: logicalAccounting ? PACK_REVIEW_LOGICAL_CAPS[tier] : PACK_REVIEW_CAPS[tier],
+    capMapVersion,
     openedAtUtc: (options.now ?? new Date()).toISOString(),
     consumedHeadShas: [],
-    consumedRoundOrdinals: [],
+    ...(logicalAccounting ? { consumedRoundOrdinals: [] } : {}),
     resetProvenance,
   };
 }
@@ -578,12 +582,16 @@ export function createInitialPackReviewAuthority(input: {
   headSha: string;
   tier: PackReviewTier;
   retainedOpenCycle?: unknown;
+  capMapVersion?: typeof PACK_REVIEW_CAP_MAP_VERSION | typeof PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
   options: PackReviewAuthorityOptions;
 }): PackReviewAuthorityDocument {
   const currentHeadSha = normalizeSha(input.headSha);
   const cycle = input.retainedOpenCycle
     ? retainPersistedOpenCycle(input.retainedOpenCycle)
-    : createNewPackReviewCycle(input.tier, input.options);
+    : createNewPackReviewCycle(input.tier, {
+        ...input.options,
+        capMapVersion: input.capMapVersion,
+      });
   return {
     schemaVersion: 1,
     prNumber: positiveInteger(input.prNumber, 'prNumber'),
@@ -609,6 +617,7 @@ export function initializePackReviewAuthority(input: {
   headSha: string;
   tier: PackReviewTier;
   retainedOpenCycle?: unknown;
+  capMapVersion?: typeof PACK_REVIEW_CAP_MAP_VERSION | typeof PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
   options: PackReviewAuthorityOptions;
 }): PackReviewAuthorityDocument {
   return withPackReviewAuthorityLock(input.options, () => {
@@ -646,7 +655,12 @@ export function reconcilePackReviewTier(input: {
     expectedTransitionSeq: current.transitionSeq,
     nextPhase: current.phase,
     mutate(authority) {
-      authority.cycle = createNewPackReviewCycle(input.tier, { now: input.options.now });
+      authority.cycle = createNewPackReviewCycle(input.tier, {
+        now: input.options.now,
+        capMapVersion: isLogicalRoundCycle(cycle)
+          ? PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+          : PACK_REVIEW_CAP_MAP_VERSION,
+      });
       return authority;
     },
     options: input.options,
@@ -731,7 +745,9 @@ export function observePackReviewHead(input: {
         const failedIndependent = independent?.status === 'failed';
         current.smokeOrdering = {
           ...current.smokeOrdering,
-          workerOwned: undefined,
+          workerOwned: current.cycle && isLogicalRoundCycle(current.cycle)
+            ? current.smokeOrdering.workerOwned
+            : undefined,
           ...(independent
             ? { independent: failedIndependent
               ? { ...independent, headSha, status: 'failed' }
@@ -746,6 +762,7 @@ export function observePackReviewHead(input: {
       if (current.cycle?.state === 'closed') {
         current.cycle = createNewPackReviewCycle(current.cycle.frozenTier, {
           now: input.options.now,
+          capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
         });
       } else if (current.cycle?.state === 'at_cap_open_findings'
           || current.cycle?.state === 'at_cap_continuation_required') {
@@ -1417,6 +1434,7 @@ export function acknowledgePackReviewReset(input: {
   headSha: string;
   tier: PackReviewTier;
   provenance: PackReviewResetProvenance;
+  capMapVersion?: typeof PACK_REVIEW_CAP_MAP_VERSION | typeof PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
   options: PackReviewAuthorityOptions;
 }): PackReviewAuthorityDocument {
   const headSha = normalizeSha(input.headSha);
@@ -1440,7 +1458,10 @@ export function acknowledgePackReviewReset(input: {
       nonEmpty(input.provenance.timestampUtc, 'timestampUtc');
       nonEmpty(input.provenance.nonce, 'nonce');
       current.currentHeadSha = headSha;
-      current.cycle = createNewPackReviewCycle(input.tier, input.options, input.provenance);
+      current.cycle = createNewPackReviewCycle(input.tier, {
+        ...input.options,
+        capMapVersion: input.capMapVersion,
+      }, input.provenance);
       current.terminal = undefined;
       current.evidence = undefined;
       current.triage = undefined;

@@ -13,6 +13,7 @@ import {
 import type { PackReviewRunRecord } from './lib/pack-review-run-store.ts';
 import { runProcess } from './kernel/subprocess.ts';
 import {
+  PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
   commitSmokeOrderingTransition,
   initializePackReviewAuthority,
   readPackReviewAuthority,
@@ -302,7 +303,13 @@ describe('Issue #1826 logical-round smoke independence', () => {
       '```smoke-test-plan\nscenarios:\n  - action: exact head smoke | expected: PASS\n```',
     ].join('\n\n');
     const options = { storeRoot };
-    const initial = initializePackReviewAuthority({ prNumber, headSha: head1, tier: 'T3', options });
+    const initial = initializePackReviewAuthority({
+      prNumber,
+      headSha: head1,
+      tier: 'T3',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      options,
+    });
     const smokeStarted = commitSmokeOrderingTransition({
       prNumber,
       expectedTransitionSeq: initial.transitionSeq,

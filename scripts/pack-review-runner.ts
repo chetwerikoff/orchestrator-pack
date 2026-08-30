@@ -33,7 +33,7 @@ import {
 } from './pack-review-carryover.ts';
 import {
   PACK_REVIEW_AUTHORITY_PHASES,
-  PACK_REVIEW_CAP_MAP_VERSION,
+  PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
   PACK_REVIEW_GPT_SOURCE_ADMISSION_INTERVAL_MS,
   acknowledgePackReviewReset,
   assertPackReviewSmokeAdmission,
@@ -2824,7 +2824,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       nextAction: 'observe the current PR head, then rerun scoped reconcile',
     };
   }
-  const logicalAccounting = authority.cycle.capMapVersion === PACK_REVIEW_CAP_MAP_VERSION;
+  const logicalAccounting = authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
   const workerOwned = authority.smokeOrdering?.workerOwned;
   if (!logicalAccounting
       && (workerOwned?.headSha !== authority.currentHeadSha || workerOwned.status !== 'passed')) {
@@ -3888,6 +3888,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       headSha: target.headSha,
       tier: authoritative.tier,
       retainedOpenCycle,
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
       options: authorityOptions,
     });
     try {
@@ -3919,7 +3920,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     }
 
     if (authority.cycle?.reviewStageComplete === true
-        && authority.cycle.capMapVersion === PACK_REVIEW_CAP_MAP_VERSION) {
+        && authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION) {
       const writeRequiredStatus = input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
         repoRoot: target.sourceRepoRoot,
         repoSlug: target.repoSlug,
@@ -3948,7 +3949,32 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       };
     }
 
-    const logicalAccounting = authority.cycle?.capMapVersion === PACK_REVIEW_CAP_MAP_VERSION;
+    const logicalAccounting = authority.cycle?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
+    const consumedLogicalRoundCount = authority.cycle?.consumedRoundOrdinals?.length ?? 0;
+    if (logicalAccounting
+        && authority.cycle
+        && consumedLogicalRoundCount >= authority.cycle.frozenCap
+        && authority.terminal?.targetSha === target.headSha
+        && !resumeCandidate) {
+      const terminalRun = authority.terminal.runId
+        ? getPackReviewRun(authority.terminal.runId, { projectId, storeRoot })
+        : null;
+      if (terminalRun) {
+        await releaseEarlyClaim('terminal_run_exists');
+        return {
+          ok: true,
+          created: false,
+          reused: true,
+          reason: 'terminal_run_exists',
+          prNumber: target.prNumber,
+          headSha: target.headSha,
+          runId: terminalRun.id,
+          status: terminalRun.status,
+          cycleId: authority.cycle.cycleId,
+          httpStatus: 200,
+        };
+      }
+    }
     const legacyHarnessFixtureWithoutSmokePlan = process.env.OPK_VITEST_HARNESS === '1'
       && authoritative.issueBody !== undefined
       && !authoritative.issueBody.includes('```smoke-test-plan');
@@ -4947,6 +4973,7 @@ async function resetPackReview(input: Record<string, unknown>): Promise<Record<s
       timestampUtc: trim(input.timestampUtc) || new Date().toISOString(),
       nonce,
     },
+    capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
     options: { storeRoot },
   });
   return { ok: true, prNumber: target.prNumber, headSha: target.headSha, cycleId: reset.cycle?.cycleId };

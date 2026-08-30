@@ -16,6 +16,8 @@ import { TURN_STATES } from '../chatgpt-browser-turn/contracts.ts';
 import {
   PACK_REVIEW_CAPS,
   PACK_REVIEW_CAP_MAP_VERSION,
+  PACK_REVIEW_LOGICAL_CAPS,
+  PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
   PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION,
   PACK_REVIEW_DISTINCT_HEAD_CAPS,
   PACK_REVIEW_LEGACY_CAP_MAP_VERSION,
@@ -646,14 +648,14 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
   const accountingVersion = raw.accountingVersion === undefined
     ? PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION
     : requiredJsonString(raw.accountingVersion, 'reviewRound accountingVersion', path);
-  if (![PACK_REVIEW_CAP_MAP_VERSION, PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION, PACK_REVIEW_LEGACY_CAP_MAP_VERSION]
+  if (![PACK_REVIEW_CAP_MAP_VERSION, PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION, PACK_REVIEW_LEGACY_CAP_MAP_VERSION]
       .includes(accountingVersion)) {
     throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid reviewRound accountingVersion`);
   }
   const roundOrdinal = requiredJsonPositiveInteger(raw.roundOrdinal, 'reviewRound roundOrdinal', path);
   const cardinality = requiredJsonPositiveInteger(raw.cardinality, 'reviewRound cardinality', path);
-  const tierCap = accountingVersion === PACK_REVIEW_CAP_MAP_VERSION
-    ? PACK_REVIEW_CAPS[tier]
+  const tierCap = accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+    ? PACK_REVIEW_LOGICAL_CAPS[tier]
     : PACK_REVIEW_DISTINCT_HEAD_CAPS[tier];
   if (roundOrdinal > tierCap) {
     throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: reviewRound ordinal exceeds tier cap`);
@@ -1369,7 +1371,7 @@ function parseRecord(
     ? undefined
     : requiredJsonString(raw.accountingVersion, 'accountingVersion', path);
   if (accountingVersion !== undefined
-      && ![PACK_REVIEW_CAP_MAP_VERSION, PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION, PACK_REVIEW_LEGACY_CAP_MAP_VERSION]
+      && ![PACK_REVIEW_CAP_MAP_VERSION, PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION, PACK_REVIEW_LEGACY_CAP_MAP_VERSION]
         .includes(accountingVersion)) {
     throw new Error(`corrupt pack review run record at ${path}: invalid accountingVersion`);
   }
@@ -1788,6 +1790,14 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       ? normalizePackReviewCanonicalRepository(input.canonicalRepository)
       : undefined;
     const key = packReviewRunKey(input.prNumber, headSha, canonicalRepository);
+    const matchesTargetIdentity = (record: PackReviewRunRecord) => matchesPackReviewRunInput(
+      record,
+      projectId,
+      input.prNumber,
+      headSha,
+      canonicalRepository,
+      input.sourceRepoRoot,
+    );
     const matchesInput = (record: PackReviewRunRecord) => matchesPackReviewRunInput(
       record,
       projectId,
@@ -1798,7 +1808,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       input.reviewCycleId,
       input.logicalRoundOrdinal,
     );
-    const active = boundRecords.filter((record) => matchesInput(record)
+    const active = boundRecords.filter((record) => matchesTargetIdentity(record)
       && PACK_REVIEW_ACTIVE_STATUSES.has(record.status)
       && !isPackReviewRunStale(record));
     if (active.length > 1) throw new Error(`ambiguous pack review run store: multiple active records for ${key}`);
