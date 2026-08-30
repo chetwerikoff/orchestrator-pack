@@ -6,9 +6,11 @@ import { resolveSmokeRequirement } from './draft-discipline.mjs';
 
 export const PACK_REVIEW_AUTHORITY_SCHEMA_VERSION = 1;
 export const PACK_REVIEW_TERMINAL_CONTRACT_VERSION = 2;
-export const PACK_REVIEW_CAP_MAP_VERSION = 'issue-1063-1-2-4';
+export const PACK_REVIEW_CAP_MAP_VERSION = 'issue-1826-logical-rounds-1-1-2';
+export const PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION = 'issue-1063-1-2-4';
 export const PACK_REVIEW_LEGACY_CAP_MAP_VERSION = 'legacy-frozen';
-export const PACK_REVIEW_CAPS = Object.freeze({ T1: 1, T2: 2, T3: 4 });
+export const PACK_REVIEW_CAPS = Object.freeze({ T1: 1, T2: 1, T3: 2 });
+export const PACK_REVIEW_DISTINCT_HEAD_CAPS = Object.freeze({ T1: 1, T2: 2, T3: 4 });
 export const PACK_REVIEW_GPT_SOURCE_ADMISSION_INTERVAL_MS = 10_000;
 export const PACK_REVIEW_AUTHORITY_PHASES = Object.freeze([
   'head_observed',
@@ -48,12 +50,17 @@ export function selectPackReviewGptSourceCardinality(input: {
   reviewer: string;
   tier: PackReviewTier;
   roundOrdinal: number;
+  accountingVersion?: string;
 }): number {
   if (input.reviewer.trim().toLowerCase() !== 'gpt') return 1;
   if (!Number.isInteger(input.roundOrdinal) || input.roundOrdinal <= 0) {
     throw new PackReviewAuthorityError('cap_state_invalid', 'roundOrdinal must be a positive integer');
   }
-  return input.roundOrdinal === 1 || input.tier === 'T3' ? 3 : 1;
+  if (input.accountingVersion === PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION
+      || input.accountingVersion === PACK_REVIEW_LEGACY_CAP_MAP_VERSION) {
+    return input.roundOrdinal === 1 || input.tier === 'T3' ? 3 : 1;
+  }
+  return 3;
 }
 export type PackReviewCycleState =
   | 'open'
@@ -73,6 +80,7 @@ export interface PackReviewTerminalV2 {
   automaticBudgetDisposition?: PackReviewAutomaticBudgetDisposition;
   runId: string;
   targetSha: string;
+  logicalRoundOrdinal?: number;
   reviewVerdict: 'clean' | 'findings';
   findingCount: number;
   findingsDigest: string;
@@ -94,11 +102,15 @@ export interface PackReviewCycle {
   state: PackReviewCycleState;
   frozenTier: PackReviewTier;
   frozenCap: number;
-  capMapVersion: typeof PACK_REVIEW_CAP_MAP_VERSION | typeof PACK_REVIEW_LEGACY_CAP_MAP_VERSION;
+  capMapVersion:
+    | typeof PACK_REVIEW_CAP_MAP_VERSION
+    | typeof PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION
+    | typeof PACK_REVIEW_LEGACY_CAP_MAP_VERSION;
   frozenMapOrigin?: 'persisted-open-cycle';
   openedAtUtc: string;
   closedAtUtc?: string;
   consumedHeadShas: string[];
+  consumedRoundOrdinals?: number[];
   atCapHash?: string;
   reviewStageComplete?: boolean;
   reviewStageCompletedAtUtc?: string;
@@ -360,6 +372,16 @@ function validateBudgetDisposition(value: unknown, label: string): PackReviewAut
   return disposition;
 }
 
+function isLogicalRoundCycle(cycle: PackReviewCycle): boolean {
+  return cycle.capMapVersion === PACK_REVIEW_CAP_MAP_VERSION;
+}
+
+function cycleConsumedCount(cycle: PackReviewCycle): number {
+  return isLogicalRoundCycle(cycle)
+    ? (cycle.consumedRoundOrdinals?.length ?? 0)
+    : cycle.consumedHeadShas.length;
+}
+
 function validateCycle(cycle: PackReviewCycle | null): void {
   if (!cycle) return;
   nonEmpty(cycle.cycleId, 'cycleId');
@@ -374,22 +396,51 @@ function validateCycle(cycle: PackReviewCycle | null): void {
   if (new Set(normalized).size !== normalized.length) {
     throw new PackReviewAuthorityError('cap_state_invalid', 'duplicate consumed head');
   }
-  if (normalized.length > cycle.frozenCap) {
-    throw new PackReviewAuthorityError('cap_state_invalid', 'consumed heads exceed frozen cap');
-  }
   if (!['open', 'at_cap_open_findings', 'at_cap_continuation_required', 'closed'].includes(cycle.state)) {
     throw new PackReviewAuthorityError('cap_state_invalid', `unknown cycle state ${cycle.state}`);
   }
-  if (![PACK_REVIEW_CAP_MAP_VERSION, PACK_REVIEW_LEGACY_CAP_MAP_VERSION].includes(cycle.capMapVersion)) {
+  if (![PACK_REVIEW_CAP_MAP_VERSION, PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION, PACK_REVIEW_LEGACY_CAP_MAP_VERSION]
+      .includes(cycle.capMapVersion)) {
     throw new PackReviewAuthorityError('cap_state_invalid', `unknown cap map ${cycle.capMapVersion}`);
   }
-  if (cycle.capMapVersion === PACK_REVIEW_CAP_MAP_VERSION
-      && (cycle.frozenCap !== PACK_REVIEW_CAPS[cycle.frozenTier] || cycle.frozenMapOrigin !== undefined)) {
-    throw new PackReviewAuthorityError('cap_state_invalid', 'current-map cycle has mismatched discriminator');
+
+  let consumedCount: number;
+  if (cycle.capMapVersion === PACK_REVIEW_CAP_MAP_VERSION) {
+    if (cycle.frozenCap !== PACK_REVIEW_CAPS[cycle.frozenTier] || cycle.frozenMapOrigin !== undefined) {
+      throw new PackReviewAuthorityError('cap_state_invalid', 'current-map cycle has mismatched discriminator');
+    }
+    if (normalized.length !== 0) {
+      throw new PackReviewAuthorityError('cap_state_invalid', 'logical-round cycle cannot carry consumed heads');
+    }
+    if (!Array.isArray(cycle.consumedRoundOrdinals)) {
+      throw new PackReviewAuthorityError('cap_state_invalid', 'logical-round cycle lacks consumedRoundOrdinals');
+    }
+    const rounds = cycle.consumedRoundOrdinals.map((value) => positiveInteger(value, 'consumedRoundOrdinal'));
+    if (new Set(rounds).size !== rounds.length) {
+      throw new PackReviewAuthorityError('cap_state_invalid', 'duplicate consumed logical round');
+    }
+    for (let index = 0; index < rounds.length; index += 1) {
+      if (rounds[index] !== index + 1) {
+        throw new PackReviewAuthorityError('cap_state_invalid', 'logical rounds must be contiguous from ordinal 1');
+      }
+    }
+    consumedCount = rounds.length;
+  } else {
+    if (cycle.consumedRoundOrdinals !== undefined) {
+      throw new PackReviewAuthorityError('cap_state_invalid', 'legacy cycle cannot carry logical-round accounting');
+    }
+    if (cycle.capMapVersion === PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION) {
+      if (cycle.frozenCap !== PACK_REVIEW_DISTINCT_HEAD_CAPS[cycle.frozenTier] || cycle.frozenMapOrigin !== undefined) {
+        throw new PackReviewAuthorityError('cap_state_invalid', 'distinct-head cycle has mismatched discriminator');
+      }
+    } else if (cycle.frozenMapOrigin !== 'persisted-open-cycle') {
+      throw new PackReviewAuthorityError('cap_state_invalid', 'legacy cycle lacks persisted origin');
+    }
+    consumedCount = normalized.length;
   }
-  if (cycle.capMapVersion === PACK_REVIEW_LEGACY_CAP_MAP_VERSION
-      && cycle.frozenMapOrigin !== 'persisted-open-cycle') {
-    throw new PackReviewAuthorityError('cap_state_invalid', 'legacy cycle lacks persisted origin');
+
+  if (consumedCount > cycle.frozenCap) {
+    throw new PackReviewAuthorityError('cap_state_invalid', 'consumed review units exceed frozen cap');
   }
   if (cycle.reviewStageComplete === true && !cycle.reviewStageCompletedAtUtc) {
     throw new PackReviewAuthorityError('cap_state_invalid', 'completed review stage lacks timestamp');
@@ -397,7 +448,7 @@ function validateCycle(cycle: PackReviewCycle | null): void {
   if (cycle.reviewStageComplete !== true && cycle.reviewStageCompletedAtUtc !== undefined) {
     throw new PackReviewAuthorityError('cap_state_invalid', 'incomplete review stage carries completion timestamp');
   }
-  const atCap = normalized.length === cycle.frozenCap;
+  const atCap = consumedCount === cycle.frozenCap;
   const atCapState = cycle.state === 'at_cap_open_findings' || cycle.state === 'at_cap_continuation_required';
   if (atCapState && (!atCap || !cycle.atCapHash || !/^[0-9a-f]{64}$/.test(cycle.atCapHash))) {
     throw new PackReviewAuthorityError('cap_state_invalid', 'at-cap cycle lacks full consumption/hash');
@@ -491,6 +542,7 @@ export function createNewPackReviewCycle(
     capMapVersion: PACK_REVIEW_CAP_MAP_VERSION,
     openedAtUtc: (options.now ?? new Date()).toISOString(),
     consumedHeadShas: [],
+    consumedRoundOrdinals: [],
     resetProvenance,
   };
 }
@@ -772,6 +824,9 @@ export function validateTerminalV2(value: unknown): PackReviewTerminalV2 {
       : (() => { throw new PackReviewAuthorityError('terminal_contract_invalid', 'reviewVerdict'); })(),
     findingCount: Number(row.findingCount),
     findingsDigest: nonEmpty(row.findingsDigest, 'findingsDigest'),
+    ...(row.logicalRoundOrdinal === undefined
+      ? {}
+      : { logicalRoundOrdinal: positiveInteger(row.logicalRoundOrdinal, 'logicalRoundOrdinal') }),
   } as PackReviewTerminalV2;
   if (!Number.isInteger(normalized.findingCount) || normalized.findingCount < 0) {
     throw new PackReviewAuthorityError('terminal_contract_invalid', 'findingCount');
@@ -890,21 +945,53 @@ export function commitPackReviewTerminal(input: {
       const cycle = current.cycle;
       if (!cycle) return current;
       const consumesAutomaticReviewBudget = terminal.terminalSource !== 'conflict_free_carryover';
-      if (consumesAutomaticReviewBudget
-          && terminalConsumesCapSlot({ ...input, automaticBudgetDisposition: terminal.automaticBudgetDisposition })
-          && !cycle.consumedHeadShas.includes(terminal.targetSha)) {
-        if (cycle.consumedHeadShas.length >= cycle.frozenCap) {
-          throw new PackReviewAuthorityError('cap_exhausted', 'terminal cannot consume an extra head');
+      const consumesSlot = consumesAutomaticReviewBudget
+        && terminalConsumesCapSlot({ ...input, automaticBudgetDisposition: terminal.automaticBudgetDisposition });
+      if (consumesSlot) {
+        if (isLogicalRoundCycle(cycle)) {
+          const ordinal = terminal.logicalRoundOrdinal;
+          if (!Number.isInteger(ordinal) || Number(ordinal) <= 0) {
+            throw new PackReviewAuthorityError('cap_state_invalid', 'logical-round terminal lacks round ordinal');
+          }
+          const rounds = cycle.consumedRoundOrdinals!;
+          if (!rounds.includes(Number(ordinal))) {
+            const expectedOrdinal = rounds.length + 1;
+            if (Number(ordinal) !== expectedOrdinal) {
+              throw new PackReviewAuthorityError(
+                'cap_state_invalid',
+                `logical round ordinal ${String(ordinal)} does not match expected ${expectedOrdinal}`,
+              );
+            }
+            if (rounds.length >= cycle.frozenCap) {
+              throw new PackReviewAuthorityError('cap_exhausted', 'terminal cannot consume an extra logical round');
+            }
+            rounds.push(Number(ordinal));
+          }
+        } else if (!cycle.consumedHeadShas.includes(terminal.targetSha)) {
+          if (cycle.consumedHeadShas.length >= cycle.frozenCap) {
+            throw new PackReviewAuthorityError('cap_exhausted', 'terminal cannot consume an extra head');
+          }
+          cycle.consumedHeadShas.push(terminal.targetSha);
         }
-        cycle.consumedHeadShas.push(terminal.targetSha);
       }
+      const consumedCount = cycleConsumedCount(cycle);
       if (terminal.reviewVerdict === 'clean' && terminal.findingCount === 0) {
-        cycle.state = 'closed';
-        cycle.closedAtUtc = nowIso(input.options);
-        cycle.atCapHash = undefined;
-      } else if (cycle.consumedHeadShas.length === cycle.frozenCap) {
+        if (!isLogicalRoundCycle(cycle) || consumedCount >= cycle.frozenCap) {
+          cycle.state = 'closed';
+          cycle.closedAtUtc = nowIso(input.options);
+          cycle.atCapHash = undefined;
+        } else {
+          cycle.state = 'open';
+          cycle.closedAtUtc = undefined;
+          cycle.atCapHash = undefined;
+        }
+      } else if (consumedCount === cycle.frozenCap) {
         cycle.state = 'at_cap_open_findings';
-        cycle.atCapHash = sha256(stableJson({
+        cycle.atCapHash = sha256(stableJson(isLogicalRoundCycle(cycle) ? {
+          cycleId: cycle.cycleId,
+          frozenCap: cycle.frozenCap,
+          consumedRoundOrdinals: cycle.consumedRoundOrdinals,
+        } : {
           cycleId: cycle.cycleId,
           frozenCap: cycle.frozenCap,
           consumedHeadShas: cycle.consumedHeadShas,
@@ -1174,12 +1261,22 @@ function reviewRunEvidence(
 }
 
 function reviewObligationsSettled(authority: PackReviewAuthorityDocument): boolean {
-  if (authority.cycle?.reviewStageComplete === true) return true;
-  if (authority.cycle?.state === 'closed') return true;
+  const cycle = authority.cycle;
+  if (cycle?.reviewStageComplete === true) return true;
+  if (!cycle) return false;
   const reviewStatus = authority.terminal?.reviewStatus;
+  if (isLogicalRoundCycle(cycle)) {
+    if (cycleConsumedCount(cycle) < cycle.frozenCap) return false;
+    if (cycle.state === 'closed'
+        && (reviewStatus === 'clean' || reviewStatus === 'up_to_date' || reviewStatus === 'commented')) {
+      return true;
+    }
+    return (cycle.state === 'at_cap_open_findings' || cycle.state === 'at_cap_continuation_required')
+      && authority.triage?.verdict === 'DEFER';
+  }
+  if (cycle.state === 'closed') return true;
   if (reviewStatus === 'clean' || reviewStatus === 'up_to_date' || reviewStatus === 'commented') return true;
-  return (authority.cycle?.state === 'at_cap_open_findings'
-      || authority.cycle?.state === 'at_cap_continuation_required')
+  return (cycle.state === 'at_cap_open_findings' || cycle.state === 'at_cap_continuation_required')
     && authority.triage?.source === 'architect'
     && authority.triage.verdict === 'DEFER';
 }
@@ -1243,17 +1340,19 @@ export function commitPackReviewTriage(input: {
           && unresolvedBlockingFindingCount === 0;
         const finalFixSettlement = input.triage.verdict === 'DEFER'
           && current.cycle?.state === 'at_cap_continuation_required'
-          && current.cycle.consumedHeadShas.length === current.cycle.frozenCap
+          && cycleConsumedCount(current.cycle) === current.cycle.frozenCap
           && current.terminal?.reviewVerdict === 'findings'
           && current.terminal.targetSha !== current.currentHeadSha
-          && workerOwned?.headSha === current.currentHeadSha
-          && workerOwned.status === 'passed'
+          && (isLogicalRoundCycle(current.cycle)
+            || (workerOwned?.headSha === current.currentHeadSha && workerOwned.status === 'passed'))
           && automaticEvidencePredicate === 'no_intersection'
           && finalFixResolutionBound;
         if (input.triage.verdict === 'DEFER' && !finalFixSettlement) {
           throw new PackReviewAuthorityError(
             'triage_invalid',
-            'automatic DEFER requires final-cap continuation, exact-head worker smoke PASS, no-intersection scope evidence, and exact finding-resolution evidence',
+            isLogicalRoundCycle(current.cycle!)
+              ? 'automatic DEFER requires final-cap continuation, no-intersection scope evidence, and exact finding-resolution evidence'
+              : 'automatic DEFER requires final-cap continuation, exact-head worker smoke PASS, no-intersection scope evidence, and exact finding-resolution evidence',
           );
         }
       } else if (!['BLOCK', 'DEFER'].includes(input.triage.verdict)) {
