@@ -22,6 +22,7 @@ import {
 } from './lib/worker-smoke-core.ts';
 import {
   buildWorkerSmokeRunFailureReceipt,
+  defaultOpenCodeGenerationProbe,
   installStableWorkerSmokeSpawnPatch,
   quarantineUnsupportedHistoricalSmokeRuns,
 } from './lib/worker-smoke-bounded-create.ts';
@@ -824,6 +825,39 @@ describe('Issue #1359 production worker-smoke reachability', () => {
       ...common,
       wrapperLaunchFailure: 'permission_denied',
     }).cause.code).toBe('wrapper_not_executable');
+  });
+
+  it('falls back to exact terminal-list observation when terminal-show times out', () => {
+    const terminal: OrcaTerminalSummary = {
+      handle: 'terminal-list-fallback',
+      incarnationId: 'generation-list-fallback',
+      worktreePath: process.cwd(),
+      status: 'running',
+    };
+    const calls: Array<{ args: readonly string[]; timeoutMs?: number }> = [];
+    const run = <T>(args: readonly string[], options: { timeoutMs?: number }): OrcaJsonResponse<T> => {
+      calls.push({ args, timeoutMs: options.timeoutMs });
+      if (args[1] === 'list') return ok({ terminals: [terminal] } as T);
+      return {
+        ok: false,
+        operation: 'terminal_show',
+        outcomeCategory: 'supported_operation_failure',
+        error: { code: 'orca_operation_timeout', message: 'terminal show timed out' },
+      };
+    };
+
+    const observed = defaultOpenCodeGenerationProbe(
+      terminal.handle!,
+      process.cwd(),
+      7_000,
+      run,
+    );
+
+    expect(observed).toMatchObject({ ok: true, result: { terminal } });
+    expect(calls.map(({ args }) => args)).toEqual([
+      ['terminal', 'list'],
+    ]);
+    expect(calls.map(({ timeoutMs }) => timeoutMs)).toEqual([5_000]);
   });
 
   it('keeps the default generation probe on the production Orca transport', () => {

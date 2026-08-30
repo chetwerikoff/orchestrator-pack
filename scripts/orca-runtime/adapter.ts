@@ -99,6 +99,40 @@ function openCodeHttpFailure(error: unknown): string {
     : 'opencode_http_request_failed';
 }
 
+/** The TUI composer is empty only when its rendered box has no text rows. */
+export function isOpenCodeComposerEmpty(lines: readonly string[]): boolean {
+  let bottomEdge = -1;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (/╹▀▀▀/u.test(lines[index] ?? '')) {
+      bottomEdge = index;
+      break;
+    }
+  }
+  if (bottomEdge < 0) return false;
+
+  let sawLeftEdge = false;
+  for (let index = bottomEdge - 1; index >= 0; index -= 1) {
+    const trimmed = (lines[index] ?? '').replace(/\u001B\[[0-?]*[ -/]*[@-~]/gu, '').trim();
+    if (!trimmed) {
+      if (sawLeftEdge) continue;
+      continue;
+    }
+    if (/Ask anything(?:\.\.\.|…)/u.test(trimmed)) {
+      sawLeftEdge = true;
+      continue;
+    }
+    if (/^┃\s+TeamoRouter 钱包余额不足，请前往 https:\/\/teamorouter\.cn\/dashboard\?buy=1 充值后继续使用$/u.test(trimmed)) {
+      sawLeftEdge = true;
+      continue;
+    }
+    if (!trimmed.startsWith('┃')) break;
+    sawLeftEdge = true;
+    if (/^┃\s+(?:Pack-Opk-|[0-9a-f]{16,}(?:\s|$))/iu.test(trimmed)) continue;
+    if (trimmed !== '┃') return false;
+  }
+  return sawLeftEdge;
+}
+
 type AsyncExecError = Error & {
   readonly code?: string | number;
   readonly stdout?: string | Buffer;
@@ -179,7 +213,6 @@ interface OpenCodeUrlRecord {
   readonly identity: RuntimeWorkerIdentity;
   readonly url: string;
   readonly agent?: string;
-  readonly sessionId?: string;
 }
 
 interface KnownWorkspaceRecord {
@@ -523,10 +556,10 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (!urlRecord || !sameRuntimeWorker(urlRecord.identity, current.value.identity)) {
       return { status: 'send_failed', reason: 'runtime_opencode_control_unavailable' };
     }
-    if (!urlRecord.agent) {
-      return { status: 'send_failed', reason: 'runtime_opencode_agent_unavailable' };
+    if (request.action !== 'append-prompt' && request.action !== 'submit-prompt') {
+      return { status: 'send_failed', reason: 'runtime_opencode_prompt_request_invalid' };
     }
-    if (request.action !== 'submit-prompt' || typeof request.text !== 'string' || !request.text) {
+    if (typeof request.text !== 'string' || !request.text) {
       return { status: 'send_failed', reason: 'runtime_opencode_prompt_request_invalid' };
     }
 
@@ -541,49 +574,57 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       return this.#remaining(deadline) <= 0 ? { error: 'runtime_timeout' } : response;
     };
 
-    let sessionId = urlRecord.sessionId;
-    if (!sessionId) {
-      const created = requestWithDeadline({
-        url: `${urlRecord.url}/session?directory=${encodeURIComponent(current.value.workspacePath)}`,
-        method: 'POST',
-        body: JSON.stringify({}),
-      });
-      if ('error' in created) return { status: 'send_failed', reason: created.error };
-      if (created.status < 200 || created.status >= 300) {
-        return { status: 'send_failed', reason: `opencode_http_status_${created.status}` };
-      }
-      let parsedCreated: unknown;
-      try {
-        parsedCreated = JSON.parse(created.body);
-      } catch {
-        return { status: 'send_failed', reason: 'opencode_session_schema_mismatch' };
-      }
-      if (!parsedCreated || typeof parsedCreated !== 'object' || Array.isArray(parsedCreated)) {
-        return { status: 'send_failed', reason: 'opencode_session_schema_mismatch' };
-      }
-      const row = parsedCreated as { id?: unknown; directory?: unknown };
-      if (typeof row.id !== 'string' || !/^ses/u.test(row.id)
-        || row.directory !== current.value.workspacePath) {
-        return { status: 'send_failed', reason: 'opencode_session_schema_mismatch' };
-      }
-      sessionId = row.id;
-      this.#openCodeUrls.set(worker.id, { ...urlRecord, identity: current.value.identity, sessionId });
+    const screenOptions = this.#boundedOptions(deadline, options);
+    if (!screenOptions) return { status: 'send_failed', reason: 'runtime_timeout' };
+    const screen = this.readBoundedOutput({
+      worker: current.value.identity,
+      limit: 200,
+      screen: true,
+    }, screenOptions);
+    if (screen.status !== 'ok') {
+      return { status: 'send_failed', reason: `opencode_composer_screen_unavailable:${screen.reason}` };
     }
-    const response = requestWithDeadline({
-      url: `${urlRecord.url}/session/${encodeURIComponent(sessionId)}/prompt_async?directory=${encodeURIComponent(current.value.workspacePath)}`,
+    if (!isOpenCodeComposerEmpty(screen.value.lines)) {
+      return { status: 'send_failed', reason: 'opencode_composer_not_empty' };
+    }
+
+    const append = requestWithDeadline({
+      url: `${urlRecord.url}/tui/append-prompt`,
       method: 'POST',
-      body: JSON.stringify({
-        agent: urlRecord.agent,
-        parts: [{ type: 'text', text: request.text }],
-      }),
+      body: JSON.stringify({ text: request.text }),
     });
-    if ('error' in response) return { status: 'send_failed', reason: response.error };
-    if (response.status !== 204) {
-      return { status: 'send_failed', reason: `opencode_http_status_${response.status}` };
+    if ('error' in append) return { status: 'send_failed', reason: append.error };
+    if (append.status !== 200) {
+      return { status: 'send_failed', reason: `opencode_http_status_${append.status}` };
+    }
+    try {
+      if (JSON.parse(append.body) !== true) throw new Error();
+    } catch {
+      return { status: 'send_failed', reason: 'opencode_tui_response_schema_mismatch' };
+    }
+
+    if (request.action === 'submit-prompt') {
+      const submit = requestWithDeadline({
+        url: `${urlRecord.url}/tui/submit-prompt`,
+        method: 'POST',
+      });
+      if ('error' in submit) return { status: 'send_failed', reason: submit.error };
+      if (submit.status !== 200) {
+        return { status: 'send_failed', reason: `opencode_http_status_${submit.status}` };
+      }
+      try {
+        if (JSON.parse(submit.body) !== true) throw new Error();
+      } catch {
+        return { status: 'send_failed', reason: 'opencode_tui_response_schema_mismatch' };
+      }
     }
     return {
       status: 'dispatched',
-      witness: { operation: 'submit', accepted: true, source: 'runtime-response' },
+      witness: {
+        operation: request.action === 'append-prompt' ? 'write' : 'submit',
+        accepted: true,
+        source: 'runtime-response',
+      },
     };
   }
 
@@ -613,7 +654,6 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       identity,
       url,
       ...(agent ? { agent } : sameBinding && previous?.agent ? { agent: previous.agent } : {}),
-      ...(sameBinding && previous?.sessionId ? { sessionId: previous.sessionId } : {}),
     });
     const owned = this.#owned.get(identity.id);
     if (owned?.openCodeUrl) {
@@ -901,6 +941,30 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (health.healthy !== true || typeof health.version !== 'string' || !health.version.trim()) {
       return runtimeUnsupported('readiness', 'opencode_health_schema_mismatch');
     }
+
+    const sessionOptions = this.#boundedOptions(deadline, options);
+    if (!sessionOptions) return runtimeFailure('readiness', 'runtime_timeout');
+    const sessions = this.#openCodeRequest({
+      url: `${urlRecord.url}/session?directory=${encodeURIComponent(current.value.workspacePath)}`,
+      method: 'GET',
+      timeoutMs: sessionOptions.timeoutMs!,
+    });
+    if ('error' in sessions) return runtimeFailure('readiness', sessions.error);
+    if (sessions.status < 200 || sessions.status >= 300) {
+      return runtimeFailure('readiness', `opencode_http_status_${sessions.status}`);
+    }
+    let parsedSessions: unknown;
+    try { parsedSessions = JSON.parse(sessions.body); } catch { return runtimeUnsupported('readiness', 'opencode_session_schema_mismatch'); }
+    if (!Array.isArray(parsedSessions)) {
+      return runtimeUnsupported('readiness', 'opencode_session_schema_mismatch');
+    }
+    const matchingSession = parsedSessions.some((value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+      const row = value as Record<string, unknown>;
+      return typeof row.id === 'string' && /^ses/u.test(row.id)
+        && row.directory === current.value!.workspacePath;
+    });
+    if (!matchingSession) return runtimeUnsupported('readiness', 'opencode_session_directory_mismatch');
     return {
       status: 'ok',
       value: { healthy: true, version: health.version.trim() },
@@ -1251,7 +1315,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (control && (input.writeOnly || input.submitOnly || input.text !== undefined)) {
       return control.dispatch({
         worker: input.worker,
-        action: 'submit-prompt',
+        action: input.writeOnly ? 'append-prompt' : 'submit-prompt',
         ...(input.text !== undefined ? { text: input.text } : {}),
       }, options);
     }

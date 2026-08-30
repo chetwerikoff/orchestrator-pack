@@ -728,7 +728,7 @@ describe('buildDeliveryPointer', () => {
 });
 
 describe('delivery-triggered composer submission', () => {
-  it('delivers through the OpenCode session while preserving human composer text', async () => {
+  it('delivers through the visible OpenCode panel and proves the render', async () => {
     const target = worker('term_opencode_http');
     const actions: string[] = [];
     const requests: RuntimeComposerControlRequest[] = [];
@@ -744,7 +744,7 @@ describe('delivery-triggered composer submission', () => {
       submitDeps: depsFor({}, {
         read: () => {
           reads += 1;
-          return { ok: true as const, lines: [humanComposerText] };
+          return { ok: true as const, lines: reads === 1 ? ['idle splash'] : ['rendered pointer'] };
         },
         composerControl: () => ({
           kind: 'opencode-http' as const,
@@ -763,7 +763,7 @@ describe('delivery-triggered composer submission', () => {
       text: expect.stringContaining('orca orchestration check'),
     });
     expect(requests[0]?.text).not.toContain(humanComposerText);
-    expect(reads).toBe(0);
+    expect(reads).toBe(2);
     expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
   });
 
@@ -780,7 +780,13 @@ describe('delivery-triggered composer submission', () => {
       resolveWorker: () => ({ ok: true as const, worker: target }),
       writePointer: () => { throw new Error('screen pointer write must not run'); },
       submitDeps: depsFor({}, {
-        read: () => { throw new Error('screen classification must not run'); },
+        read: (() => {
+          let reads = 0;
+          return () => ({
+            ok: true as const,
+            lines: reads++ === 0 ? ['idle splash'] : ['rendered pointer'],
+          });
+        })(),
         composerControl: () => ({
           kind: 'opencode-http' as const,
           dispatch: (request) => {

@@ -24,7 +24,7 @@ import {
 import { evaluateSmokeLifecycleCleanliness } from './lib/worker-smoke-lifecycle.ts';
 import { writeWorkerSmokeReceipt } from './lib/worker-smoke-receipt.ts';
 import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
-import type { RuntimeDispatchResult, RuntimeWorkerIdentity } from './runtime/contracts.ts';
+import type { RuntimeAdapter, RuntimeDispatchResult, RuntimeWorkerIdentity } from './runtime/contracts.ts';
 import {
   bindSmokeReportToPlan,
   establishRuntimeSmokeDelivery,
@@ -656,6 +656,92 @@ describe('runtime-neutral worker smoke', () => {
 
       expect(result.ok).toBe(true);
       expect(dispatch).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('requires the OpenCode child panel to leave the idle splash after HTTP delivery', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-opencode-smoke-'));
+    try {
+      const artifactDir = join(root, 'run-opencode');
+      ensureSmokeRunArtifactDir(artifactDir);
+      writeFileSync(smokeDeliverySealedPath(artifactDir), JSON.stringify({ runId: 'run-opencode' }), 'utf8');
+      const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: 'opencode-worker', generation: 'generation-opencode' };
+      let reads = 0;
+      const adapter = {
+        composerControl: () => ({ kind: 'opencode-http' as const, dispatch: () => ({ status: 'dispatched' as const }) }),
+        dispatchInput: () => ({ status: 'dispatched' as const }),
+        readBoundedOutput: () => {
+          reads += 1;
+          return {
+            status: 'ok' as const,
+            value: {
+              worker: identity,
+              lines: reads === 1 ? ['real idle splash'] : ['pointer rendered in child panel'],
+              observationToken: { opaque: `screen-${reads}` },
+              changed: reads > 1,
+              terminalState: 'running' as const,
+              source: 'screen' as const,
+            },
+          };
+        },
+      } as unknown as RuntimeAdapter;
+
+      const result = establishRuntimeSmokeDelivery({
+        adapter,
+        worker: identity,
+        prompt: 'verify visible pointer',
+        binding: { runId: 'run-opencode', artifactDir },
+        cwd: root,
+        deadlineMs: 100,
+        now: () => 1,
+        sleepMs: () => undefined,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(reads).toBe(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails OpenCode smoke when the child panel remains on the idle splash', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-opencode-idle-'));
+    try {
+      const artifactDir = join(root, 'run-opencode-idle');
+      ensureSmokeRunArtifactDir(artifactDir);
+      writeFileSync(smokeDeliverySealedPath(artifactDir), JSON.stringify({ runId: 'run-opencode-idle' }), 'utf8');
+      const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: 'opencode-worker', generation: 'generation-opencode' };
+      let clock = 0;
+      const adapter = {
+        composerControl: () => ({ kind: 'opencode-http' as const, dispatch: () => ({ status: 'dispatched' as const }) }),
+        dispatchInput: () => ({ status: 'dispatched' as const }),
+        readBoundedOutput: () => ({
+          status: 'ok' as const,
+          value: {
+            worker: identity,
+            lines: ['real idle splash'],
+            observationToken: { opaque: 'screen-idle' },
+            changed: false,
+            terminalState: 'running' as const,
+            source: 'screen' as const,
+          },
+        }),
+      } as unknown as RuntimeAdapter;
+
+      const result = establishRuntimeSmokeDelivery({
+        adapter,
+        worker: identity,
+        prompt: 'verify invisible pointer',
+        binding: { runId: 'run-opencode-idle', artifactDir },
+        cwd: root,
+        deadlineMs: 100,
+        now: () => clock,
+        sleepMs: () => { clock = 100; },
+      });
+
+      expect(result).toEqual({ ok: false, reason: 'opencode_panel_idle_splash', submitCount: 0 });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
