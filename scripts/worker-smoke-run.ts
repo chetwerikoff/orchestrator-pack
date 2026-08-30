@@ -1311,7 +1311,7 @@ export function establishRuntimeSmokeDelivery(input: {
         worker: input.worker,
         previousToken: token,
         limit: 200,
-      }, { cwd: input.cwd });
+      }, { cwd: input.cwd, timeoutMs: Math.max(1, deadline - now()) });
       if (read.status !== 'ok') {
         return { ok: false, reason: failureReason(read), submitCount };
       }
@@ -1438,7 +1438,7 @@ export function waitForRuntimeSmokeCompletion(input: {
       worker: input.worker,
       previousToken: token,
       limit: 200,
-    }, { cwd: input.cwd });
+    }, { cwd: input.cwd, timeoutMs: Math.max(1, absoluteDeadline - now()) });
     if (read.status !== 'ok') {
       return {
         ok: false,
@@ -1540,7 +1540,7 @@ function waitForCooperativeShutdown(input: {
     const observed = observeSmokeCompletionEvidence(input.binding, completionState);
     completionState = observed.state;
     if (observed.observation.publicationState === 'publish_complete_single') return true;
-    input.adapter.readBoundedOutput({ worker: input.worker, limit: 0 }, { cwd: input.cwd });
+    input.adapter.readBoundedOutput({ worker: input.worker, limit: 0 }, { cwd: input.cwd, timeoutMs: Math.max(1, deadline - Date.now()) });
     sleep(SMOKE_LIFECYCLE_POLL_MS);
   }
   return false;

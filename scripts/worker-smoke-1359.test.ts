@@ -40,6 +40,7 @@ import {
 } from './orca-runtime/native.ts';
 import { OrcaTaskRuntimeAdapter } from './orca-runtime/task-adapter.ts';
 import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
+import type { RuntimeAdapter, RuntimeCallOptions } from './runtime/contracts.ts';
 import { projectRunnerPackReviewStatusFact } from './lib/pack-review-delivery.ts';
 import {
   establishRuntimeSmokeDelivery,
@@ -50,6 +51,36 @@ import {
 } from './worker-smoke-run.ts';
 
 const HEAD = '1'.repeat(40);
+
+class DeadlineBoundReadAdapter extends DeterministicRuntimeAdapter {
+  readonly readCalls: Array<{ previousToken?: string; limit?: number; timeoutMs?: number }> = [];
+
+  override readBoundedOutput(
+    input: Parameters<RuntimeAdapter['readBoundedOutput']>[0],
+    options?: RuntimeCallOptions,
+  ): ReturnType<RuntimeAdapter['readBoundedOutput']> {
+    const timeoutMs = options?.timeoutMs;
+    this.readCalls.push({
+      previousToken: input.previousToken?.opaque,
+      limit: input.limit,
+      timeoutMs,
+    });
+    if (typeof timeoutMs !== 'number' || !Number.isInteger(timeoutMs) || timeoutMs <= 0) {
+      throw new Error('readBoundedOutput requires positive timeoutMs');
+    }
+    return {
+      status: 'ok',
+      value: {
+        worker: input.worker,
+        lines: [],
+        observationToken: input.previousToken ?? { opaque: 'next-token' },
+        changed: false,
+        terminalState: 'running',
+        source: 'stream',
+      },
+    };
+  }
+}
 
 function ok<T>(result: T): OrcaJsonResponse<T> {
   return { ok: true, result };
@@ -321,6 +352,46 @@ describe('Issue #1359 production worker-smoke reachability', () => {
       expect(completion.reason).toContain('missing=completion_body_or_seal_incomplete');
       expect(completion.reason).toContain('publication_state=partial');
       expect(completion.reason).not.toBe('partial');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('bounds completion reads by the remaining deadline after inner smoke PASS', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-bounded-read-timeout-'));
+    const artifactDir = join(root, 'run-bounded-read-timeout');
+    const runId = 'run-bounded-read-timeout';
+    const adapter = new DeadlineBoundReadAdapter();
+    const previousToken = { opaque: 'inner-pass-token' };
+    const spawned = adapter.spawnWorker({ title: 'bounded-read-timeout', command: 'cursor-agent' });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+    ensureSmokeRunArtifactDir(artifactDir);
+    writeFileSync(smokeDeliverySealedPath(artifactDir), JSON.stringify({ runId }), 'utf8');
+    let clock = 100;
+
+    try {
+      const completion = waitForRuntimeSmokeCompletion({
+        adapter,
+        worker: spawned.value.identity,
+        binding: { runId, artifactDir },
+        scenarioCount: 6,
+        cwd: root,
+        startedAtMs: clock,
+        previousToken,
+        abortReason: () => undefined,
+        now: () => clock,
+        sleepMs: (milliseconds) => { clock += milliseconds; },
+        absoluteCeilingMs: 25,
+        progressStallMs: 1_000,
+      });
+      expect(completion.ok).toBe(false);
+      expect(completion.reason).toContain('agent_report_timeout');
+      expect(adapter.readCalls).toEqual([{
+        previousToken: previousToken.opaque,
+        limit: 200,
+        timeoutMs: 25,
+      }]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
