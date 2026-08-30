@@ -230,36 +230,57 @@ export function buildManagerReviewTerminalBundle(options: BuildManagerReviewTerm
   }
   const authorM4 = validateM4(author.m4, reviewEpisodeId, options.sourceRevision, predecessorStage);
 
-  const manifest = readJson(join(reviewDir, 'acceptance-artifacts.json'), 'terminal_bundle_acceptance_manifest_invalid');
-  const files = manifestFiles(manifest);
-  if (manifest.reviewEpisodeId !== reviewEpisodeId) throw new Error('terminal_bundle_acceptance_manifest_stale');
-
-  const inventory = readJson(join(reviewDir, 'review-episode-inventory.json'), 'terminal_bundle_inventory_invalid');
-  if (inventory.reviewEpisodeId !== reviewEpisodeId) throw new Error('terminal_bundle_inventory_stale');
-
-  const ledger = readJson(join(reviewDir, 'finding-disposition-ledger.json'), 'terminal_bundle_ledger_invalid');
-  if (ledger.reviewEpisodeId !== reviewEpisodeId || ledger.sourceRevision !== options.sourceRevision || ledger.predecessorStage !== predecessorStage || ledger.draft !== draft) {
-    throw new Error('terminal_bundle_ledger_stale');
+  const intake = readJson(join(reviewDir, 'tier-intake.json'), 'terminal_bundle_tier_intake_invalid');
+  if (intake.schema !== 'tier-intake/v1'
+    || intake.taskIdentity !== `issue:${options.issueNumber}`
+    || typeof intake.firstRevision !== 'string'
+    || `${intake.taskIdentity}@${intake.firstRevision}` !== reviewEpisodeId) {
+    throw new Error('terminal_bundle_tier_intake_stale');
   }
-  const ledgerFindings = normalizeFindings(ledger.findings);
-  const authorIds = findings.map((row) => row.id);
-  const ledgerIds = ledgerFindings.map((row) => row.id);
-  if (JSON.stringify(authorIds) !== JSON.stringify(ledgerIds)) throw new Error('terminal_bundle_ledger_disposition_mismatch');
 
-  const receipts = stageReceipts(reviewDir, files, reviewEpisodeId);
-  const latestReceipt = receipts.at(-1);
-  if (!latestReceipt || latestReceipt.stage === 'architectural') throw new Error('terminal_bundle_predecessor_invalid');
-  if (predecessorStage !== latestReceipt.stage) throw new Error('terminal_bundle_predecessor_stale');
+  let ledgerFindings: JsonRecord[] = findings;
+  let receipts: ManagerReviewTerminalBundle['reviewEconomics']['stageReceipts'] = [];
+  let verifiedRelayCount = 0;
+  let counts: ManagerReviewTerminalBundle['reviewEconomics']['counts'] = {
+    rawFindingCount: 0,
+    distinctFindingCount: 0,
+    processedDistinctCount: 0,
+  };
 
-  const relay = readJsonValue(join(reviewDir, 'verified-relay-evidence.json'), 'terminal_bundle_relay_invalid');
-  if (!Array.isArray(relay) || relay.some((item) => !isRecord(item) || item.verified !== true)) {
-    throw new Error('terminal_bundle_relay_invalid');
+  if (predecessorStage === null) {
+    if (findings.length > 0) throw new Error('terminal_bundle_zero_state_findings_invalid');
+  } else {
+    const manifest = readJson(join(reviewDir, 'acceptance-artifacts.json'), 'terminal_bundle_acceptance_manifest_invalid');
+    const files = manifestFiles(manifest);
+    if (manifest.reviewEpisodeId !== reviewEpisodeId) throw new Error('terminal_bundle_acceptance_manifest_stale');
+
+    const inventory = readJson(join(reviewDir, 'review-episode-inventory.json'), 'terminal_bundle_inventory_invalid');
+    if (inventory.reviewEpisodeId !== reviewEpisodeId) throw new Error('terminal_bundle_inventory_stale');
+
+    const ledger = readJson(join(reviewDir, 'finding-disposition-ledger.json'), 'terminal_bundle_ledger_invalid');
+    if (ledger.reviewEpisodeId !== reviewEpisodeId || ledger.sourceRevision !== options.sourceRevision || ledger.predecessorStage !== predecessorStage || ledger.draft !== draft) {
+      throw new Error('terminal_bundle_ledger_stale');
+    }
+    ledgerFindings = normalizeFindings(ledger.findings);
+    const authorIds = findings.map((row) => row.id);
+    const ledgerIds = ledgerFindings.map((row) => row.id);
+    if (JSON.stringify(authorIds) !== JSON.stringify(ledgerIds)) throw new Error('terminal_bundle_ledger_disposition_mismatch');
+
+    receipts = stageReceipts(reviewDir, files, reviewEpisodeId);
+    const latestReceipt = receipts.at(-1);
+    if (!latestReceipt || latestReceipt.stage === 'architectural') throw new Error('terminal_bundle_predecessor_invalid');
+    if (predecessorStage !== latestReceipt.stage) throw new Error('terminal_bundle_predecessor_stale');
+
+    const relay = readJsonValue(join(reviewDir, 'verified-relay-evidence.json'), 'terminal_bundle_relay_invalid');
+    if (!Array.isArray(relay) || relay.some((item) => !isRecord(item) || item.verified !== true)) {
+      throw new Error('terminal_bundle_relay_invalid');
+    }
+    verifiedRelayCount = relay.length;
+    counts = validateCounts(ledger.counts);
   }
-  const verifiedRelayCount = relay.length;
 
   const rejectPartition = ledgerFindings.filter((row) => row.defectDisposition === 'rejected-as-false');
   const protectedM3 = ledgerFindings.filter((row) => PROTECTED_TYPES.has(String(row.type ?? '').toLowerCase()));
-  const counts = validateCounts(ledger.counts);
 
   return {
     schema: MANAGER_REVIEW_TERMINAL_BUNDLE_SCHEMA,
@@ -362,7 +383,7 @@ export function renderManagerReviewTerminalBundle(bundle: ManagerReviewTerminalB
 }
 
 export function writeManagerReviewTerminalBundle(path: string, bundle: ManagerReviewTerminalBundle): void {
-  writeFileSync(path, `${renderManagerReviewTerminalBundle(bundle)}\n`, { flag: 'wx', mode: 0o600 });
+  writeFileSync(path, `${renderManagerReviewTerminalBundle(bundle)}\n`, { mode: 0o600 });
 }
 
 export function terminalBundleFileName(issueNumber: number, sourceRevision: string): string {
