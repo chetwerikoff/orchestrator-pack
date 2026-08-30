@@ -165,12 +165,14 @@ smoke agent token  opencode     -> OpenCode
 
 Concrete model and effort values remain machine/operator-local and must stay out of
 tracked documentation, Task metadata, launch output, and PR metadata. The launching
-process exports the selected triple; the task assistant and smoke launcher read the
-live environment and never source a gitignored profile file. The lower-level
+process may provide live defaults; the task assistant and smoke launcher overlay
+the machine-local executor profile store, with stored fenced keys winning over
+live values. The lower-level
 `supervised-worker-start` boundary remains profile-neutral. Missing, empty,
 malformed, unsupported, unavailable, or non-admissible profile state fails closed
-before the first governed effect. Do not add a dotenv loader, second registry,
-compatibility token, fallback family, or heuristic selector.
+before the first governed effect. Do not load `.env` from a worktree or
+repository root, add a second registry, compatibility token, fallback family, or
+heuristic selector.
 
 Model applicability and route admission are separate checks. Cursor catalog
 applicability comes from `cursor-agent --list-models`; Cursor catalog identity and
