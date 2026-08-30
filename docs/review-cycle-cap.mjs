@@ -417,7 +417,7 @@ export function syncReviewCycleCapState(input) {
     prState.terminalHeadSha = nonBlockingEntry.targetSha;
     prState.mergeEligible = true;
     prState.atCapRecord = null;
-    prState.reviewStageComplete = true;
+    if (logicalAccounting) prState.reviewStageComplete = true;
     capStateRoot[String(prNumber)] = prState;
     return { capState: capStateRoot, prState };
   }
