@@ -3,6 +3,13 @@
   "issue_number": 1835,
   "declared_paths": [
     "scripts/lib/vitest-live-store-parent-guard.mjs",
+    "scripts/lib/worker-smoke-bounded-create.test.ts",
+    "scripts/lib/worker-smoke-bounded-create.ts",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/compat.test.ts",
+    "scripts/orca-runtime/compat.ts",
+    "scripts/orca-runtime/native.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/vitest-live-store-parent-guard.test.ts",
     "scripts/worker-smoke-entrypoint-1359.test.ts",
     "scripts/worker-smoke-run.ts"
@@ -22,5 +29,5 @@
     "scripts/worker-smoke-entrypoint-1359.test.ts",
     "scripts/worker-smoke-run.ts"
   ],
-  "source_revision": "558d365c78383aecbf42774347e339fd3d9c9ead"
+  "source_revision": "c7efd8a0f2aa3efc42641ad71f665d7c54198875"
 }
