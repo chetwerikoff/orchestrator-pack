@@ -774,6 +774,8 @@ describe('delivery-triggered composer submission', () => {
     const target = worker('term_opencode_unconfirmed');
     const episodeState = { messages: {}, episodes: {} };
     let reads = 0;
+    let now = 1_000;
+    const actions: string[] = [];
     const deps = {
       lookupMessage: () => ({
         ok: true as const,
@@ -786,16 +788,22 @@ describe('delivery-triggered composer submission', () => {
         read: () => { reads += 1; return { ok: true as const, lines: [] }; },
         composerControl: () => ({
           kind: 'opencode-http' as const,
-          dispatch: () => ({ status: 'dispatched' as const }),
+          dispatch: () => { actions.push('submit-prompt'); return { status: 'dispatched' as const }; },
         }),
       }),
       episodeState,
+      reconcileClock: () => now,
     };
     const result = await submitOrcaMessageDeliveryPointer('msg_opencode_unconfirmed', deps);
     const key = workerKey(target.identity);
     expect(result.terminals[0]).toMatchObject({ reason: 'submission_unconfirmed', enter: false, ok: false });
     expect(reads).toBe(1);
+    expect(actions).toHaveLength(1);
     expect(episodeState.episodes[key]?.state).toBe('pointer-visible');
+    now = 61_001;
+    const retry = await submitOrcaMessageDeliveryPointer('msg_opencode_unconfirmed', deps);
+    expect(retry.terminals[0]?.reason).toBe('submission_unconfirmed');
+    expect(actions).toHaveLength(1);
   });
 
   it('seals OpenCode delivery episode and does not replay an unread message', async () => {
@@ -1594,6 +1602,71 @@ describe('orchestration mail reconciliation', () => {
     });
     expect(result.terminals[0]?.reason).toBe('delivery_already_consumed');
     expect(state.episodes[key]?.state).toBe('confirmed');
+  });
+
+  it('resets a newly-created claim after a definitive pointer write failure', async () => {
+    const target = worker('term_definitive_write_failure');
+    const root = mkdtempSync(join(tmpdir(), 'opk-definitive-write-failure-'));
+    const statePath = join(root, 'orchestration-mail-reconcile.json');
+    const lockPath = join(root, 'orchestration-mail-reconcile.lock');
+    let writes = 0;
+    let pointerVisible = false;
+    const message = { id: 'msg_definitive_write_failure', runId: 'run_definitive_write_failure', recipient: target.identity.id, consumed: false };
+    const makeDeps = () => ({
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      writePointer: () => {
+        writes += 1;
+        if (writes > 1) pointerVisible = true;
+        return writes === 1
+          ? { status: 'send_failed' as const, reason: 'runtime_unavailable' }
+          : { status: 'dispatched' as const };
+      },
+      submitDeps: depsFor({}, { read: () => ({
+        ok: true as const,
+        lines: pointerVisible ? [buildDeliveryPointer(message), ...CURSOR_FOOTER] : [],
+      }) }),
+      episodeStatePath: statePath,
+      episodeLockPath: lockPath,
+    });
+    try {
+      const first = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 1_000 });
+      const second = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 61_001 });
+      const persisted = JSON.parse(readFileSync(statePath, 'utf8')) as { episodes: Record<string, unknown> };
+      expect(first.terminals[0]?.reason).toBe('runtime_unavailable');
+      expect(second.terminals[0]?.reason).toBe('enter_sent');
+      expect(writes).toBe(2);
+      expect(Object.keys(persisted.episodes)).toHaveLength(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('releases a confirmed claim when its originating mail is no longer unread', async () => {
+    const target = worker('term_stale_confirmed_claim');
+    const root = mkdtempSync(join(tmpdir(), 'opk-stale-confirmed-claim-'));
+    const statePath = join(root, 'orchestration-mail-reconcile.json');
+    const lockPath = join(root, 'orchestration-mail-reconcile.lock');
+    const paneKey = workerKey(target.identity);
+    writeFileSync(statePath, JSON.stringify({
+      messages: {},
+      episodes: {
+        [paneKey]: {
+          messageId: 'msg_old_consumed', runId: 'run_old_consumed', recipient: target.identity.id,
+          workerKey: paneKey, nextEligibleAt: 0, backoffMs: 60_000, state: 'confirmed',
+        },
+      },
+    }));
+    const deps = reconciliationDeps([{
+      id: 'msg_new_unread', run_id: 'run_new_unread', to_handle: target.identity.id, read: 0,
+    }], target);
+    try {
+      const result = await runOrchestrationMailReconcileTick(deps, { ledgerPath: statePath, lockPath, now: () => 1_000 });
+      expect(deps.writes).toBe(1);
+      expect(result.reasons).toContain('msg_new_unread:enter_sent');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('fails closed without a complete current worker identity', async () => {
