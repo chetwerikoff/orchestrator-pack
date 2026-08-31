@@ -65,6 +65,7 @@ describe('Issue #1436 smoke/review ordering', () => {
       prNumber: REGRESSION_PR,
       headSha: REGRESSION_HEAD,
       tier: 'T3',
+      capMapVersion: PACK_REVIEW_CAP_MAP_VERSION,
       options,
     });
     const started = commitSmokeOrderingTransition({
@@ -113,6 +114,7 @@ describe('Issue #1436 smoke/review ordering', () => {
       prNumber: REGRESSION_PR,
       headSha: REGRESSION_HEAD,
       tier: 'T3',
+      capMapVersion: PACK_REVIEW_CAP_MAP_VERSION,
       options: separateOptions,
     });
     expect(() => assertIndependentSmokeAdmission({
@@ -121,6 +123,44 @@ describe('Issue #1436 smoke/review ordering', () => {
       reviewRuns: [],
       operatorSmokeOnly: true,
     })).toThrow('smoke_ordering_review_unsettled');
+  });
+
+  it('lets logical-accounting review and independent smoke run without an execution mutex', () => {
+    const root = mkdtempSync(join(tmpdir(), 'pack-review-ordering-logical-independent-'));
+    roots.push(root);
+    const options: PackReviewAuthorityOptions = { storeRoot: root };
+    const authority = initializePackReviewAuthority({
+      prNumber: 1826,
+      headSha: HEAD,
+      tier: 'T3',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      options,
+    });
+
+    expect(() => assertIndependentSmokeAdmission({
+      authority,
+      headSha: HEAD,
+      reviewRuns: [],
+    })).not.toThrow();
+
+    const smokeStarted = commitSmokeOrderingTransition({
+      prNumber: 1826,
+      expectedTransitionSeq: authority.transitionSeq,
+      actor: 'independent',
+      headSha: HEAD,
+      status: 'started',
+      reviewRuns: [],
+      options,
+    });
+    expect(smokeStarted.smokeOrdering?.independent).toMatchObject({
+      startedEver: true,
+      headSha: HEAD,
+      status: 'started',
+    });
+    expect(() => assertPackReviewSmokeAdmission({
+      authority: smokeStarted,
+      headSha: HEAD,
+    })).not.toThrow();
   });
 
   it('runs the real pack-review before any worker-owned smoke and settles independent-smoke admission', async () => {
