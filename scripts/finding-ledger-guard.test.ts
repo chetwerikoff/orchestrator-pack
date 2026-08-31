@@ -1828,7 +1828,8 @@ describe('published author-state M3 bridge', () => {
       findings: [{
         ...row('S1', {
           type: 'scope-violation',
-          defectDisposition: 'addressed',
+          defectDisposition: 'rejected-as-false',
+          rejectReason: 'the current author-state non-activates this protected nomination',
           remedyDisposition: 'accepted',
           occurrences: [occurrenceId],
           protectedOccurrences: [{
