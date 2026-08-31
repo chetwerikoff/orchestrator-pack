@@ -184,9 +184,10 @@ describe('Wave 3.b historical-to-Node parity', () => {
     const row = wave3bInventory.entries.find((entry) => entry.replacement.kind === 'required-file-rule');
     expect(row).toBeDefined();
     if (row!.replacement.kind !== 'required-file-rule') throw new Error('expected required-file replacement');
+    const replacement = row!.replacement;
     const failures = parityCompletenessFailures(
       wave3b.captures,
-      replacementSurface({ requiredFiles: VERIFY_REQUIRED_FILES.filter((path) => path !== row!.replacement.path) }),
+      replacementSurface({ requiredFiles: VERIFY_REQUIRED_FILES.filter((path) => path !== replacement.path) }),
     );
     expect(failures.join('\n')).toContain(`${row!.id}: required-file replacement rule is missing`);
   });
@@ -195,11 +196,12 @@ describe('Wave 3.b historical-to-Node parity', () => {
     const row = wave3bInventory.entries.find((entry) => entry.replacement.kind === 'contract-marker-rule');
     expect(row).toBeDefined();
     if (row!.replacement.kind !== 'contract-marker-rule') throw new Error('expected contract-marker replacement');
-    const marker = row!.replacement.markers[0]!;
+    const replacement = row!.replacement;
+    const marker = replacement.markers[0]!;
     const failures = parityCompletenessFailures(wave3b.captures, replacementSurface({
       contractMarkers: {
         ...VERIFY_CONTRACT_MARKERS,
-        [row!.replacement.path]: (VERIFY_CONTRACT_MARKERS[row!.replacement.path] ?? []).filter((value) => value !== marker),
+        [replacement.path]: (VERIFY_CONTRACT_MARKERS[replacement.path] ?? []).filter((value) => value !== marker),
       },
     }));
     expect(failures.join('\n')).toContain(`${row!.id}: concrete replacement marker is missing: ${marker}`);

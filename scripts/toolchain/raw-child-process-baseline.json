@@ -800,13 +800,6 @@
       "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
     },
     {
-      "path": "scripts/orchestrator-escalation.test.ts",
-      "api": "spawnSync",
-      "fingerprint": "d5cf08a49560530c32f9",
-      "ordinal": 1,
-      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
-    },
-    {
       "path": "scripts/publish-issue-body-sync.ts",
       "api": "spawnSync",
       "fingerprint": "35a6fa80ba22814d83a3",
