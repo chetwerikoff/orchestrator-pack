@@ -315,6 +315,39 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
     });
   });
 
+  it('continues never-sent GPT slots as initial-launch work after a stagger crash', async () => {
+    const run = gptRun('2026-08-30T00:00:00.000Z');
+    run.reviewRound!.sourceSlots = [
+      {
+        slotId: 'slot-01',
+        ordinal: 1,
+        lifecycle: 'terminal',
+        invocationId: 'invocation-01',
+        attemptOrdinal: 1,
+        terminalClass: 'complete_clean',
+      },
+      {
+        slotId: 'slot-02',
+        ordinal: 2,
+        lifecycle: 'terminal',
+        terminalClass: 'pre_launch_interrupted',
+      },
+      {
+        slotId: 'slot-03',
+        ordinal: 3,
+        lifecycle: 'planned',
+      },
+    ];
+
+    const observed = await observeGptPackReviewAttempt(run);
+    expect(observed).toMatchObject({
+      state: 'continuation_eligible',
+      replacementEligible: false,
+      initialLaunchSlotIds: ['slot-02', 'slot-03'],
+      replacementEligibleSlotIds: [],
+    });
+  });
+
   it('checks exact GitHub publication before consulting direct CDP replacement evidence', async () => {
     const start = Date.parse('2026-08-30T00:00:00.000Z');
     let cdpReads = 0;
@@ -449,6 +482,76 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
       .toMatchObject({ state: 'observation_unavailable', replacementEligible: false });
     expect(observeNativePackReviewAttempt(run, Date.parse('2026-08-30T00:15:00.000Z')))
       .toMatchObject({ state: 'observation_unavailable', replacementEligible: true });
+  });
+});
+
+describe('Issue #1826 native initial pre-spawn binding', () => {
+  it('keeps a bounded retry clock if the runner dies after initial arm but before onSpawn', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'pack-review-1826-initial-pre-spawn-'));
+    roots.push(parent);
+    const storeRoot = join(parent, 'store');
+    setupHarness(storeRoot);
+    const prNumber = 1830;
+    const head = '6'.repeat(40);
+    let armedRunId = '';
+
+    const crashed = await startPackReview({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: process.cwd(),
+      prNumber,
+      headSha: head,
+      claimMode: 'preacquired',
+      fixtureCurrentPrHeadSha: head,
+      fixturePostReviewHeadSha: head,
+      fixturePrState: 'OPEN',
+      fixturePrBody: 'Closes #' + prNumber,
+      fixturePostReviewPrBody: 'Closes #' + prNumber,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureIssueNumber: prNumber,
+      fixtureIssueBody: '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
+      fixtureReviewStdout: cleanPayload(),
+      fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
+      fixtureEmulateWin32Selector: true,
+      fixtureRequiredStatusWriter: async () => {},
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+      fixtureAfterNativeInitialArmed: async (run) => {
+        armedRunId = run.id;
+        throw new Error('fixture_crash_after_initial_arm');
+      },
+    });
+
+    expect(crashed).toMatchObject({
+      ok: false,
+      created: true,
+      reason: 'fixture_crash_after_initial_arm',
+      runId: armedRunId,
+    });
+    expect(armedRunId).not.toBe('');
+
+    const persisted = getPackReviewRun(armedRunId, { projectId: 'orchestrator-pack', storeRoot });
+    expect(persisted?.nativeAttempt).toMatchObject({
+      reviewer: 'codex',
+      invocationOrdinal: 1,
+      effectiveBudgetMs: expect.any(Number),
+    });
+    expect(persisted?.nativeAttempt?.wrapperPid).toBeUndefined();
+    expect(persisted?.nativeAttempt?.processGroupId).toBeUndefined();
+
+    const armedAtMs = Date.parse(persisted!.nativeAttempt!.startedAtUtc);
+    const nativeCeilingMs = Math.min(persisted!.nativeAttempt!.effectiveBudgetMs, 15 * 60_000);
+    expect(observeNativePackReviewAttempt(persisted!, armedAtMs + nativeCeilingMs - 1))
+      .toMatchObject({
+        state: 'observation_unavailable',
+        replacementEligible: false,
+        nativeReplacementCeilingMs: nativeCeilingMs,
+      });
+    expect(observeNativePackReviewAttempt(persisted!, armedAtMs + nativeCeilingMs))
+      .toMatchObject({
+        state: 'observation_unavailable',
+        replacementEligible: true,
+        nativeReplacementCeilingMs: nativeCeilingMs,
+      });
   });
 });
 
