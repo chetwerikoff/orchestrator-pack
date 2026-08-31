@@ -377,14 +377,14 @@ function validateTerminalDispositionMatrix(ledger, occurrences, metadata, phase,
   const terminalOccurrences = occurrences.filter((occurrence) => parseCaptureName(metadata[occurrence.captureIndex]?.name).stage === 'architectural');
   if (terminalOccurrences.length === 0) return;
   const terminalIds = new Set(terminalOccurrences.map((occurrence) => occurrence.occurrenceId));
-  const occurrenceById = new Map(occurrences.map((occurrence) => [occurrence.occurrenceId, occurrence]));
   const assigned = new Set();
   for (const row of ledger.findings) {
     const mappedTerminal = row.occurrences.filter((occurrenceId) => terminalIds.has(occurrenceId));
     if (mappedTerminal.length === 0) continue;
     for (const occurrenceId of mappedTerminal) assigned.add(occurrenceId);
-    const protectedTerminal = mappedTerminal.some((occurrenceId) => PROTECTED_TYPES.has(occurrenceById.get(occurrenceId)?.type));
-    if ((row.defectDisposition === 'addressed' && !protectedTerminal && !terminalCorrectionCertified) || row.defectDisposition === 'unresolved') {
+    if (row.defectDisposition === 'addressed' && !terminalCorrectionCertified) {
+      errors.push(`blocked_terminal_findings: terminal defect ${row.id} is addressed without a certified bounded post-terminal correction; perform the existing single rN -> rN+1 author correction and rerun acceptance`);
+    } else if (row.defectDisposition === 'unresolved') {
       errors.push(`blocked_terminal_findings: terminal defect ${row.id} has disposition ${row.defectDisposition}`);
     } else if (row.defectDisposition === 'rejected-as-false' && !row.rejectReason) {
       errors.push(`blocked_terminal_findings: rejected-as-false terminal defect ${row.id} requires defect-side reason/evidence`);
