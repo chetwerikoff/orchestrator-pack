@@ -1064,35 +1064,89 @@ describe('Issue #1171 terminal disposition matrix', () => {
     expect(result.errors.join('\n')).toContain('blocked_terminal_findings');
   });
 
-  it('allows an activated protected terminal defect marked addressed', () => {
-    const capture = cap('pass-03-architectural.capture.txt', 1_300, `${markedFinding('F1', {
+  it('requires certified correction and current M3 for an addressed protected terminal defect', () => {
+    const findingId = 'F1';
+    const protectedEvidence = 'The changed path is out of scope under allowed_roots.';
+    const whyNow = 'The current revision requires this protected defect to be addressed.';
+    const capture = cap('pass-03-architectural.capture.txt', 1_300, `${markedFinding(findingId, {
       type: 'scope-violation',
-      evidence: 'The changed path is out of scope under allowed_roots.',
+      evidence: protectedEvidence,
     })}
-${currentLens('F1', {
+${currentLens(findingId, {
+      revision: 'r09',
       outcome: 'activate',
-      evidence: 'The changed path is out of scope under allowed_roots.',
-      whyNow: 'The current revision requires this protected defect to be addressed.',
+      evidence: protectedEvidence,
+      whyNow,
     })}`);
-    const result = checkFindingLedgerGuard(capture.text, JSON.stringify({
+    const ledger = JSON.stringify({
       version: 2,
       counts: { rawFindingCount: 1, distinctFindingCount: 1, processedDistinctCount: 1 },
       findings: [{
-        ...row('F1', {
+        ...row(findingId, {
           type: 'scope-violation',
           defectDisposition: 'addressed',
           remedyDisposition: 'accepted',
         }),
-        occurrences: ['F1@0:1'],
+        occurrences: [`${findingId}@0:1`],
       }],
-    }), {
+    });
+    const captureMetadata = [{ name: capture.name, timestampMs: capture.timestampMs }];
+
+    const unchanged = checkFindingLedgerGuard(capture.text, ledger, {
       reviewEconomics: true,
       phase: 'final-acceptance',
-      issueRevision: 'r3',
+      issueRevision: 'r09',
       stageTerminalConfirmed: true,
-      captureMetadata: [{ name: capture.name, timestampMs: capture.timestampMs }],
+      captureMetadata,
     } as never);
-    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(unchanged.ok).toBe(false);
+    expect(unchanged.errors.join('\n')).toContain('certified bounded post-terminal correction');
+    expect(unchanged.errors.join('\n')).toContain('single rN -> rN+1 author correction');
+
+    const reviewedBody = '<!-- source-revision: r09 -->\nterminal-reviewed protected finding';
+    const correctedBody = '<!-- source-revision: r10 -->\ncorrected protected finding';
+    const certificationErrors: string[] = [];
+    const certified = validateTerminalOneShotBodyBinding(
+      reviewedBody,
+      correctedBody,
+      'r10',
+      [{ stage: 'architectural', outcome: 'complete', sourceRevision: 'r09' }],
+      certificationErrors,
+    );
+    expect(certificationErrors).toEqual([]);
+    expect(certified).toBe(true);
+
+    const staleM3 = checkFindingLedgerGuard(capture.text, ledger, {
+      reviewEconomics: true,
+      phase: 'final-acceptance',
+      issueRevision: 'r10',
+      stageTerminalConfirmed: true,
+      captureMetadata,
+      terminalCorrectionCertified: certified,
+    } as never);
+    expect(staleM3.ok).toBe(false);
+    expect(staleM3.errors.join('\n')).toContain('unknown/stale architect contest state');
+
+    const currentAuthorState = currentLens(findingId, {
+      revision: 'r10',
+      outcome: 'activate',
+      evidence: protectedEvidence,
+      whyNow,
+    });
+    const corrected = checkFindingLedgerGuard(capture.text, ledger, {
+      reviewEconomics: true,
+      phase: 'final-acceptance',
+      issueRevision: 'r10',
+      stageTerminalConfirmed: true,
+      captureMetadata,
+      terminalCorrectionCertified: certified,
+      publishedAuthorState: {
+        text: currentAuthorState,
+        sha256: createHash('sha256').update(currentAuthorState).digest('hex'),
+        byteLength: Buffer.byteLength(currentAuthorState),
+      },
+    } as never);
+    expect(corrected.ok, corrected.errors.join('\n')).toBe(true);
   });
 
   it('requires defect-side evidence for rejected-as-false terminal disposition', () => {
@@ -1774,7 +1828,8 @@ describe('published author-state M3 bridge', () => {
       findings: [{
         ...row('S1', {
           type: 'scope-violation',
-          defectDisposition: 'addressed',
+          defectDisposition: 'rejected-as-false',
+          rejectReason: 'the current author-state non-activates this protected nomination',
           remedyDisposition: 'accepted',
           occurrences: [occurrenceId],
           protectedOccurrences: [{

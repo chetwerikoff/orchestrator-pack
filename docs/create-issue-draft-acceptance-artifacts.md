@@ -1,8 +1,12 @@
 # create-issue-draft acceptance artifacts
 
-The flow-manager produces acceptance inputs from the evidence it already holds.
-The validators remain the authority; this producer only materializes files that
-the validators already consume.
+The flow-manager authors the three declared acceptance-input classes from
+evidence it already holds. The governing producer and ownership rule is
+`.cursor/skills/create-issue-draft/SKILL.md` §Producer-before-validator and
+§Flow-manager-authored inputs; this document is operator guidance and does not
+define a second policy authority. The validators remain the authority; the
+flow-manager only records inputs or materializes producer outputs from observed
+evidence the validators already consume.
 
 The acceptance inventory has four roles: `tier-intake.json`, each
 `attempt-NNN.json` stage-evidence input (`create-issue-stage-evidence/v1`), and
@@ -12,8 +16,10 @@ reviewer captures, `turn-result/v1` artifacts, and Claude producer
 evidence/waivers are conditional stage-time evidence; at final acceptance
 producer/source/transport identities carried by those artifacts are audit-only.
 Chats, author replies, and tier-gate receipts are audit-only records.
-The flow-manager records the two manual input schemas; this component has no
-writer for them and no writer for `remote-authority.json`.
+The flow-manager records all three declared inputs. Repository writers are absent
+for those inputs by design, which is not a missing-producer condition under the
+governing Skill because the flow-manager is their declared producer. This
+component also has no writer for `remote-authority.json`.
 
 For terminal review, `author-dispositions.json` also carries the author-owned
 current M4 inventory as a bound `m4` object:
