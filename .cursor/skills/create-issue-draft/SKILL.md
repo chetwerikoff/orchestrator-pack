@@ -994,14 +994,15 @@ evidence, or adds a service or store.
 Every new gate must arrive with its producer in the same change, the producer's
 authoritative input and terminal failure, and an error message naming the exact
 fix. Prefer automatic correction where it is within existing manager/worker
-authority. A validator with a genuinely missing producer stays non-success,
-names the missing producer and exact producer addition, and does not treat an
-orchestrator-only workaround as a producer. This missing-producer rule does not
-apply to a required input explicitly declared flow-manager-authored: the
-flow-manager is that input's producer, and absence of a repository writer is by
-design. A validator must not fabricate an artifact or fact it has not observed;
-recording an already-observed fact into a declared flow-manager-authored input
-is authorship, not fabrication.
+authority. A validator with a genuinely missing producer stays non-success, names the
+missing producer and exact producer addition, and does not fabricate an
+artifact or treat an orchestrator-only workaround as a producer. Here "does not
+fabricate an artifact" means it must not invent an artifact or fact it has not
+observed; recording an already-observed fact into a declared
+flow-manager-authored input is authorship, not fabrication. This missing-producer
+rule does not apply to a required input explicitly declared
+flow-manager-authored: the flow-manager is that input's producer, and absence of
+a repository writer is by design.
 
 The GPT author owns substantive Issue edits, defect/remedy dispositions, and
 finding dispositions; reviewer/architect/operator decisions remain with their
