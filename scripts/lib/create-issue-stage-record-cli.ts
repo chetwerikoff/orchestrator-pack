@@ -125,11 +125,18 @@ function requiredAcceptanceArtifactInput(
   const descriptor = ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.find((item) => item.property === property);
   if (!descriptor) throw new Error(`acceptance artifact input descriptor is missing for ${property}`);
   const value = (opts as unknown as Record<string, unknown>)[descriptor.property];
+  const requiredMessage = `${descriptor.flag} is required; ${descriptor.classification}: record/provide the observed ${descriptor.file} via ${descriptor.flag}`;
   if (descriptor.repeatable) {
-    if (!Array.isArray(value) || value.length === 0) throw new Error(`${descriptor.flag} is required`);
-    return value.map((item) => parseRequiredNonEmptyString(typeof item === 'string' ? item : undefined, descriptor.flag));
+    if (!Array.isArray(value) || value.length === 0) throw new Error(requiredMessage);
+    return value.map((item) => {
+      const parsed = typeof item === 'string' ? item.trim() : '';
+      if (!parsed) throw new Error(requiredMessage);
+      return parsed;
+    });
   }
-  return parseRequiredNonEmptyString(typeof value === 'string' ? value : undefined, descriptor.flag);
+  const parsed = typeof value === 'string' ? value.trim() : '';
+  if (!parsed) throw new Error(requiredMessage);
+  return parsed;
 }
 
 function operatorAcceptanceAdjudication(opts: {
