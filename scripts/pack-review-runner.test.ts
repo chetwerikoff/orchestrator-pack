@@ -510,10 +510,20 @@ describe('Issue #1826 native fallback pre-spawn binding', () => {
     expect(persisted?.nativeAttempt?.childProcessGroupId).toBeUndefined();
 
     const armedAtMs = Date.parse(persisted!.nativeAttempt!.startedAtUtc);
-    expect(observeNativePackReviewAttempt(persisted!, armedAtMs + 14 * 60_000))
-      .toMatchObject({ state: 'observation_unavailable', replacementEligible: false });
-    expect(observeNativePackReviewAttempt(persisted!, armedAtMs + 15 * 60_000))
-      .toMatchObject({ state: 'observation_unavailable', replacementEligible: true });
+    const nativeCeilingMs = Math.min(persisted!.nativeAttempt!.effectiveBudgetMs, 15 * 60_000);
+    expect(nativeCeilingMs).toBeGreaterThan(0);
+    expect(observeNativePackReviewAttempt(persisted!, armedAtMs + nativeCeilingMs - 1))
+      .toMatchObject({
+        state: 'observation_unavailable',
+        replacementEligible: false,
+        nativeReplacementCeilingMs: nativeCeilingMs,
+      });
+    expect(observeNativePackReviewAttempt(persisted!, armedAtMs + nativeCeilingMs))
+      .toMatchObject({
+        state: 'observation_unavailable',
+        replacementEligible: true,
+        nativeReplacementCeilingMs: nativeCeilingMs,
+      });
   });
 });
 
