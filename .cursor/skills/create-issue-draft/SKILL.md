@@ -1053,8 +1053,10 @@ already holds. No repository writer exists for either input.
 - `acceptance-artifacts.json`
 
 `produce-artifacts` is the only named producer for these derived acceptance
-files. It does not produce `remote-authority.json`; `--remote-authority` remains
-an optional explicit validation input when supplied.
+files. It does not produce `remote-authority.json`; `--remote-authority` is
+legacy/diagnostic-only syntax and is acceptance-inert. The finding-ledger and
+final-acceptance path does not open or parse its target; any retained diagnostic
+read must be non-blocking and isolated outside acceptance.
 
 ### Conditional evidence/waiver
 

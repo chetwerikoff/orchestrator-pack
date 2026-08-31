@@ -822,9 +822,9 @@ describe('Issue #1150 receipt-backed ledger', () => {
       expect(runFindingLedgerCli([...argv, '--remote-authority', validRemoteAuthorityPath])).toBe(0);
       const emptyRemoteAuthorityPath = join(dir, 'remote-authority-empty.json');
       writeFileSync(emptyRemoteAuthorityPath, '[]');
-      expect(runFindingLedgerCli([...argv, '--remote-authority', emptyRemoteAuthorityPath])).toBe(1);
+      expect(runFindingLedgerCli([...argv, '--remote-authority', emptyRemoteAuthorityPath])).toBe(0);
       expect(runFindingLedgerCli([...argv, '--remote-authority'])).toBe(1);
-      expect(runFindingLedgerCli([...argv, '--remote-authority', validRemoteAuthorityPath, '--remote-authority', emptyRemoteAuthorityPath])).toBe(1);
+      expect(runFindingLedgerCli([...argv, '--remote-authority', validRemoteAuthorityPath, '--remote-authority', emptyRemoteAuthorityPath])).toBe(0);
     } finally {
       if (previousStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
       else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previousStateRoot;

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -2006,9 +2006,8 @@ describe('published author-state M3 bridge', () => {
 });
 
 describe('receipt-backed finding ledger operator-stage waiver regression #1778', () => {
-  function waivedArchitecturalReviewFixture(captureText = markedClean()) {
+  function waivedArchitecturalReviewFixture(captureText = markedClean(), taskIdentity = 'issue:1778') {
     const sourceRevision = 'r01';
-    const taskIdentity = 'issue:1778';
     const reviewEpisodeId = taskIdentity + '@' + sourceRevision;
     const stageAttemptId = 'attempt-1';
     const stageReceiptId = reviewEpisodeId + ':stage-receipt:0001';
@@ -2195,6 +2194,204 @@ describe('receipt-backed finding ledger operator-stage waiver regression #1778',
       emptyLedger,
     };
   }
+
+  function finalAcceptanceWaiverFixture(reviewCaptureText = markedClean()) {
+    const base = waivedArchitecturalReviewFixture(reviewCaptureText, 'issue:1779');
+    const sourceRevision = base.stageReceipt.sourceRevision;
+    const reviewEpisodeId = base.stageReceipt.reviewEpisodeId;
+    const lensReceiptId = reviewEpisodeId + ':stage-receipt:0002';
+    const terminalReceiptId = reviewEpisodeId + ':stage-receipt:0003';
+    const terminalText = markedClean();
+    const terminalSha256 = createHash('sha256').update(terminalText).digest('hex');
+    const terminalCapture = {
+      captureIdentity: 'sha256:' + terminalSha256 + ':pass-03-architectural.capture.txt',
+      name: 'pass-03-architectural.capture.txt',
+      byteLength: Buffer.byteLength(terminalText),
+      sha256: terminalSha256,
+      rawFindingCount: 0,
+    };
+    const lensReceipt = {
+      schema: 'stage-completeness-receipt/v1', tier: 'T3',
+      taskIdentity: base.stageReceipt.taskIdentity, episodeFirstRevision: base.stageReceipt.episodeFirstRevision,
+      reviewEpisodeId, stageReceiptId: lensReceiptId, previousStageReceiptId: base.stageReceipt.stageReceiptId,
+      receiptCensus: [base.stageReceipt.stageReceiptId, lensReceiptId],
+      stageAttemptId: 'attempt-lens', stageSequence: 2, stage: 'architectural-lens',
+      policyVersion: 'single-source/v1', reviewerCardinality: 1,
+      cardinalityConfigIdentity: base.stageReceipt.cardinalityConfigIdentity, sourceRevision, outcome: 'complete',
+      producerEvidence: 'waived', partialMissingSources: [],
+      revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' },
+      settlement: { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true },
+      claude: { kind: 'waiver', waiver: { reason: 'claude-unavailable', unavailability: 'provider-unavailable', evidenceIdentity: 'claude-unavailable-1779' } },
+      credentialingCaptures: [], relayEligibleCaptures: [],
+    };
+    const terminalReceipt = {
+      schema: 'stage-completeness-receipt/v1', tier: 'T3',
+      taskIdentity: base.stageReceipt.taskIdentity, episodeFirstRevision: base.stageReceipt.episodeFirstRevision,
+      reviewEpisodeId, stageReceiptId: terminalReceiptId, previousStageReceiptId: lensReceiptId,
+      receiptCensus: [base.stageReceipt.stageReceiptId, lensReceiptId, terminalReceiptId],
+      stageAttemptId: 'attempt-terminal', stageSequence: 3, stage: 'architectural',
+      policyVersion: 'single-source/v1', reviewerCardinality: 1,
+      cardinalityConfigIdentity: base.stageReceipt.cardinalityConfigIdentity, sourceRevision, outcome: 'complete',
+      producerEvidence: 'not-applicable', partialMissingSources: [],
+      revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' },
+      settlement: { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true },
+      invocations: [{
+        schema: 'reviewer-invocation-envelope/v1', reviewEpisodeId, stageAttemptId: 'attempt-terminal',
+        policyVersion: 'single-source/v1', reviewerCardinality: 1,
+        cardinalityConfigIdentity: base.stageReceipt.cardinalityConfigIdentity, stage: 'architectural', sourceRevision,
+        invocationId: 'terminal-invocation-1779', terminalResultIdentity: 'terminal-result-1779',
+        reviewerSource: 'source-terminal-1779', reviewerSlot: '01', reviewerOrdinal: 1, attemptOrdinal: 1,
+        retryAttempt: false, terminal: true, terminalClassification: 'complete', sendCount: 1, retryClass: 'none',
+        revisionCheck: 'matched', capacityOutcome: 'admitted', capacityWaitMs: 0, capture: terminalCapture,
+      }],
+      credentialingCaptures: [terminalCapture], relayEligibleCaptures: [terminalCapture],
+    };
+    const stageReceipts = [base.stageReceipt, lensReceipt, terminalReceipt];
+    const texts = [base.captureText, terminalText];
+    const captures = [base.capture, terminalCapture];
+    const verifiedRelayEvidence = captures.map((capture, index) => ({
+      relayAttemptId: 'relay-final-' + (index + 1), captureIdentity: capture.captureIdentity,
+      sourceLabel: capture.name + '|' + capture.captureIdentity, name: capture.name,
+      byteLength: capture.byteLength, sha256: capture.sha256, verified: true,
+    }));
+    const episodeAuthority = {
+      ...base.episodeAuthority,
+      tierIntake: {
+        ...base.episodeAuthority.tierIntake,
+        competitiveRationale: 'Issue #1779 exercises the producer-resolved operator waiver through final acceptance.',
+      },
+      receiptInventory: { ...base.episodeAuthority.receiptInventory, stageReceiptIds: stageReceipts.map((receipt) => receipt.stageReceiptId) },
+    };
+    const options = {
+      ...base.options, phase: 'final-acceptance',
+      captureMetadata: captures.map((capture, index) => ({ name: capture.name, timestampMs: 1_100 + index * 200, captureIdentity: capture.captureIdentity })),
+      stageReceipts, verifiedRelayEvidence, episodeAuthority,
+    };
+    return { ...base, terminalCapture, terminalReceipt, lensReceipt, stageReceipts, texts, captures, verifiedRelayEvidence, episodeAuthority, options };
+  }
+
+  it('accepts full T3 final acceptance regardless of legacy remote-authority provenance inputs', () => {
+    const fixture = finalAcceptanceWaiverFixture();
+    for (const legacyOptions of [
+      {},
+      { remoteAuthority: { schema: 'stale-remote-authority/v0' } },
+      { remoteAuthorities: [{ schema: 'mismatched-remote-authority/v0', stage: 'competitive' }] },
+      { requireRemoteAuthority: true },
+      { requireRemoteAuthority: true, remoteAuthorities: [{ schema: 'stale-remote-authority/v0' }] },
+    ]) {
+      const result = checkFindingLedgerGuard(
+        fixture.texts,
+        fixture.emptyLedger,
+        { ...fixture.options, ...legacyOptions } as never,
+      );
+      expect(result.ok, result.errors.join('\n')).toBe(true);
+    }
+  });
+
+  it('keeps terminal architectural evidence mandatory after the positive final-acceptance fixture passes', () => {
+    const fixture = finalAcceptanceWaiverFixture();
+    const baseline = checkFindingLedgerGuard(fixture.texts, fixture.emptyLedger, fixture.options as never);
+    expect(baseline.ok, baseline.errors.join('\n')).toBe(true);
+
+    const remainingReceipts = fixture.stageReceipts.slice(0, 2);
+    const missingTerminal = checkFindingLedgerGuard(
+      fixture.texts.slice(0, 1),
+      fixture.emptyLedger,
+      {
+        ...fixture.options,
+        captureMetadata: fixture.options.captureMetadata.slice(0, 1),
+        stageReceipts: remainingReceipts,
+        verifiedRelayEvidence: fixture.verifiedRelayEvidence.slice(0, 1),
+        episodeAuthority: {
+          ...fixture.episodeAuthority,
+          receiptInventory: {
+            ...fixture.episodeAuthority.receiptInventory,
+            stageReceiptIds: remainingReceipts.map((receipt) => receipt.stageReceiptId),
+          },
+        },
+      } as never,
+    );
+    expect(missingTerminal.ok).toBe(false);
+    expect(missingTerminal.errors.join('\n')).toContain(
+      'architectural requires exactly one credentialing complete-or-proven-partial stageAttemptId in the review episode',
+    );
+  });
+
+  it('keeps unresolved governed defects blocking at final acceptance without provenance errors', () => {
+    const findingText = markedFinding('WAIVER-FINAL-F1', {
+      type: 'quality',
+      evidence: 'The real slot-01 review found a material defect.',
+    });
+    const fixture = finalAcceptanceWaiverFixture(findingText);
+    const ledger = JSON.stringify({
+      version: 2,
+      counts: { rawFindingCount: 1, distinctFindingCount: 1, processedDistinctCount: 0 },
+      findings: [row('WAIVER-FINAL-F1', {
+        defectDisposition: 'unresolved',
+        remedyDisposition: 'accepted',
+        occurrences: [fixture.capture.captureIdentity + ':1'],
+      })],
+    });
+    const result = checkFindingLedgerGuard(
+      fixture.texts,
+      ledger,
+      { ...fixture.options, requireRemoteAuthority: true } as never,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('row WAIVER-FINAL-F1 remains unresolved');
+    expect(result.errors.join('\n')).not.toContain('remote authority');
+  });
+
+  it('does not open or parse supplied --remote-authority paths on the final-acceptance CLI path', () => {
+    const fixture = finalAcceptanceWaiverFixture();
+    const stateRoot = mkdtempSync(path.join(tmpdir(), 'finding-ledger-1779-'));
+    const previousStateRoot = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+    const canonical = path.join(stateRoot, '.review', '1779');
+    try {
+      process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = stateRoot;
+      mkdirSync(canonical, { recursive: true });
+      const intakePath = path.join(canonical, 'tier-intake.json');
+      const ledgerPath = path.join(canonical, 'finding-disposition-ledger.json');
+      const relayPath = path.join(canonical, 'verified-relay-evidence.json');
+      writeFileSync(intakePath, JSON.stringify(fixture.episodeAuthority.tierIntake));
+      writeFileSync(ledgerPath, fixture.emptyLedger);
+      writeFileSync(relayPath, JSON.stringify(fixture.verifiedRelayEvidence));
+      fixture.stageReceipts.forEach((receipt, index) => {
+        writeFileSync(path.join(canonical, 'stage-completeness-receipt-' + (index + 1) + '.json'), JSON.stringify(receipt));
+      });
+      fixture.captures.forEach((capture, index) => {
+        writeFileSync(path.join(canonical, capture.name), fixture.texts[index]);
+      });
+
+      const argv = [
+        'node', 'scripts/finding-ledger-guard.mjs',
+        '--ledger', ledgerPath,
+        '--captures-dir', canonical,
+        '--phase', 'final-acceptance',
+        '--adoption-timestamp', '0',
+        '--issue-revision', fixture.stageReceipt.sourceRevision,
+        '--stage-terminal',
+        '--receipt-directory', canonical,
+        '--tier-intake', intakePath,
+        '--verified-relay-evidence', relayPath,
+      ];
+      expect(runCli(argv)).toBe(0);
+
+      const stalePath = path.join(stateRoot, 'stale-remote-authority.json');
+      const malformedPath = path.join(stateRoot, 'malformed-remote-authority.json');
+      const nonexistentPath = path.join(stateRoot, 'nonexistent-remote-authority.json');
+      writeFileSync(stalePath, JSON.stringify({ schema: 'mismatched-remote-authority/v0' }));
+      writeFileSync(malformedPath, '{');
+      expect(runCli([...argv, '--remote-authority', stalePath])).toBe(0);
+      expect(runCli([...argv, '--remote-authority', malformedPath])).toBe(0);
+      expect(runCli([...argv, '--remote-authority', nonexistentPath])).toBe(0);
+      expect(runCli([...argv, '--remote-authority'])).toBe(1);
+    } finally {
+      if (previousStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previousStateRoot;
+      rmSync(stateRoot, { recursive: true, force: true });
+    }
+  });
 
   it('locks current-main receipt-backed waiver acceptance with only the real slot-01 governed capture', () => {
     const fixture = waivedArchitecturalReviewFixture();
