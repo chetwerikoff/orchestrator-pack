@@ -89,8 +89,9 @@ topology derivation falls back to `fallbackHeavyShardCount` and logs `fixed-fall
 fallback. Cap-hit clamping emits a non-blocking under-provisioned summary.
 
 The `plan-vitest-ci-topology` job emits the canonical topology artifact and exposes
-`heavy_shard_matrix` for the dynamic `test-vitest-heavy` matrix. `check-ci-pipeline-split.ps1`
-enforces matrix/count parity and the oversized-file merge guard on the PR-required path.
+`heavy_shard_matrix` for the dynamic `test-vitest-heavy` matrix. The TypeScript CI
+policy guards enforce matrix/count parity and the oversized-file merge guard on the
+PR-required path.
 
 Guards prove:
 
@@ -152,8 +153,8 @@ Coverage-delta proof: `scripts/lib/vitest-wallclock-e2e-split.mjs` + guard in
 GitHub approval on Issue #694 before merge (write+ collaborator). Live GitHub resolution runs on every guard invocation including `pull_request` CI. When another write+ collaborator exists, PR-author issue comments and PR reviews are rejected; solo-maintainer repos with no other eligible reviewer accept charter issue comments from the owner. A pinned immutable comment id in `scripts/vitest-wallclock-e2e-split.manifest.json` is validated live on GitHub with the same author rules.
 
 **Latest-main wall-clock evidence (Issue #694 AC#3):** after the workflow exists on `main`,
-`check-ci-pipeline-split.ps1` requires a completed successful `vitest-wallclock-e2e` run for
-the newest `main` head (via GitHub Actions API). Bootstrap passes when the workflow is not yet
+The TypeScript CI policy guards require a completed successful `vitest-wallclock-e2e`
+run for the newest `main` head (via GitHub Actions API). Bootstrap passes when the workflow is not yet
 on `main`, no main runs exist yet, or the head is younger than the bounded age window (48h).
 
 Red-signal on post-merge failure: `scripts/ci-wallclock-e2e-notify.ts` records an

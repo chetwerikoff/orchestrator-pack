@@ -227,11 +227,12 @@ persisted as a second lifecycle state: PR/target/head identity, required CI, rev
 obligation and unresolved blockers, at-cap facts, exact-head smoke, and the accepted
 current WorkerReport corroborated by WorkerStatus must all be acceptable.
 
-## TypeScript and PowerShell policy
+## TypeScript and shell policy
 
-Net-new scripts default to TypeScript on Node 22. New PowerShell requires a specific
-written justification. Existing PowerShell wrappers may remain while their owned
-behavior is migrated, but they must not preserve a retired runtime dependency.
+Repository automation is TypeScript on Node 22. The PowerShell estate is retired:
+there is no active `.ps1`/`.psm1`/`.psd1` execution path, compatibility wrapper, or
+availability probe. Reintroducing PowerShell requires a new task that explicitly
+changes this terminal architecture rather than treating it as a fallback.
 
 No Node 20, emitted JavaScript build, `tsx`, `ts-node`, or loader fallback is part of
 the execution contract.
@@ -258,12 +259,9 @@ operator work after merge. It is neither repository acceptance nor rollback.
 - immutable GitHub and audit history;
 - planner freedom inside observable constraints.
 
-## TS-first script authoring freeze
+## TypeScript script authoring
 
-Net-new files under `scripts/**` are authored in TypeScript on the tracked Node
-22 toolchain. PowerShell is frozen during the migration: add a net-new `.ps1`
-only when the task spec contains an explicit written justification for why
-TypeScript/Node is unsuitable for that specific file. Existing `.ps1` files and
-migration-defined wrappers/shims remain owned by Waves A and B (Issues #830 and
-#831). This freeze does not resurrect a second universal TS-first policy body in
-`AGENTS.md`.
+Files under `scripts/**` use the tracked Node 22 TypeScript toolchain. The earlier
+PowerShell migration freeze is complete; removed shell wrappers and shims are not
+available as compatibility surfaces. `AGENTS.md` remains the canonical execution
+policy rather than duplicating a second policy body here.
