@@ -10,10 +10,10 @@
     "scripts/stage-completeness-guard.test.ts"
   ],
   "denylist": [
-    "credentials/**",
-    "packages/core/**",
-    "secrets/**",
-    "vendor/**"
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
     ".cursor/skills/create-issue-draft/SKILL.md",
