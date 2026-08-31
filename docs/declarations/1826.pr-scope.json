@@ -15,6 +15,7 @@
     "scripts/lib/pack-review-delivery.ts",
     "scripts/lib/pack-review-run-store.ts",
     "scripts/pack-review-ordering.test.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner.test.ts",
     "scripts/pack-review-runner.ts",
     "scripts/pack-review-state.ts",
