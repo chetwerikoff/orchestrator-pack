@@ -894,6 +894,22 @@ describe('Issue #1287 acceptance inventory parity', () => {
 });
 
 
+describe('Issue #1875 required-input ownership diagnostics', () => {
+  it('derives the required --stage-evidence failure from the input descriptor', () => {
+    const descriptor = ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.find((input) => input.property === 'stageEvidencePaths');
+    expect(descriptor).toBeDefined();
+    const reviewDir = join(tmpdir(), 'issue-1875-review');
+    expect(() => runStageFinalizeCli([
+      'node', 'scripts/create-issue-stage-finalize.ts', 'check-artifacts',
+      '--review-dir', reviewDir,
+      '--tier-intake', join(reviewDir, 'tier-intake.json'),
+      '--author-dispositions', join(reviewDir, 'author-dispositions.json'),
+    ])).toThrow(
+      `${descriptor!.flag} is required; ${descriptor!.classification}: record/provide the observed ${descriptor!.file} via ${descriptor!.flag}`,
+    );
+  });
+});
+
 describe('Issue #1287 real acceptance chain', () => {
   it('runs check-artifacts, produce-artifacts, check-artifacts, and the Skill ledger command with the real guard', () => {
     const fixture = writeT3AcceptanceFixture();
