@@ -65,6 +65,7 @@ const EXCLUDED_EXACT = new Set([
   'docs/vitest-light-lane-isolation-audit-874.md',
   'docs/submit-reconcile-delivery-source-audit.json',
   'docs/investigations/orca-pwsh-zero-estate/post-port.json',
+  'docs/investigations/orca-pwsh-zero-estate/final.json',
   'scripts/estate-cut/issue-906.base-anchor.json',
   'scripts/estate-cut/issue-906.manifest.json',
   'scripts/pr2a/planning-manifest.json',
