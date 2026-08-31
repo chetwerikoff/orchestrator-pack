@@ -3,19 +3,18 @@
 
 import { describe, expect, it } from 'vitest';
 import { TABLE, INVENTORY, WORKFLOW_BLOB_SHA, WORKFLOW_CONTENT_SHA256, workflowCoverage, workflowHashes, nativeOutput } from './contract.ts';
-import { directDependencyExecutable, pesterProbeEnvironment } from './cli.ts';
+import { directDependencyExecutable } from './cli.ts';
 
 describe('ci preflight contract', () => {
-  it('keeps the exact seven-row fixed table', () => {
+  it('keeps the exact six-row fixed table', () => {
     expect(TABLE.map(row => row.row_id)).toEqual([
       'structure.verify', 'structure.reusable', 'structure.cheap-wins',
-      'structure.verify-runtime', 'typescript.typecheck', 'vitest.light-lane-all', 'pester.track',
+      'structure.verify-runtime', 'typescript.typecheck', 'vitest.light-lane-all',
     ]);
     expect(TABLE[4].args).toEqual(['--no-install', 'tsc', '--project', 'tsconfig.base.json', '--noEmit']);
     expect(TABLE[5].paths).toContain('scripts/vitest-ci-lanes.config.json');
     expect(TABLE.slice(0, 4).every(row => row.command === process.execPath)).toBe(true);
     expect(TABLE[5].command).toBe(process.execPath);
-    expect(TABLE[6].command).toBe('npm');
     expect(JSON.stringify(TABLE)).not.toContain('.ps1');
   });
 
@@ -35,12 +34,8 @@ describe('ci preflight contract', () => {
     expect(nativeOutput('preflight-probe').stdout.sha256).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
   });
 
-  it('probes the real TypeScript executable and preserves Pester discovery variables', () => {
+  it('probes the real TypeScript executables', () => {
     expect(directDependencyExecutable('typescript')).toBe('tsc');
     expect(directDependencyExecutable('vitest')).toBe('vitest');
-    expect(pesterProbeEnvironment({ HOME: '/home/tester', PSModulePath: '/home/tester/modules', CI: 'true' })).toEqual({
-      HOME: '/home/tester',
-      PSModulePath: '/home/tester/modules',
-    });
   });
 });

@@ -32,27 +32,27 @@ jobs:
         run: npm run ts:smoke
       - name: Enforce retired runtime surfaces from Node 22
         run: node --experimental-strip-types scripts/runtime-retirement/retired-surface-selftest.ts
-      - name: Checkout exact-head post-port proof
+      - name: Checkout exact-head final proof
         if: github.event_name == 'pull_request'
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          path: post-port-exact-head
+          path: final-exact-head
           fetch-depth: 0
-      - name: Install exact-head post-port dependencies
+      - name: Install exact-head final dependencies
         if: github.event_name == 'pull_request'
-        working-directory: post-port-exact-head
+        working-directory: final-exact-head
         run: npm ci --include=dev
-      - name: Produce and admit exact-head post-port evidence
+      - name: Produce and admit exact-head terminal evidence
         if: github.event_name == 'pull_request'
-        working-directory: post-port-exact-head
-        run: node --experimental-strip-types scripts/post-port-admission.ts --measured-head "${{ github.event.pull_request.head.sha }}" --producer-revision "${{ github.event.pull_request.head.sha }}"
-      - name: Upload exact-head post-port evidence
+        working-directory: final-exact-head
+        run: node --experimental-strip-types scripts/post-port-admission.ts --role final --measured-head "${{ github.event.pull_request.head.sha }}" --producer-revision "${{ github.event.pull_request.head.sha }}"
+      - name: Upload exact-head terminal evidence
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
-          name: post-port-${{ github.event.pull_request.head.sha }}
-          path: post-port-exact-head/docs/investigations/orca-pwsh-zero-estate/post-port.json
+          name: final-${{ github.event.pull_request.head.sha }}
+          path: final-exact-head/docs/investigations/orca-pwsh-zero-estate/final.json
           if-no-files-found: error
 
   typecheck:
@@ -104,24 +104,6 @@ jobs:
       - name: Run in-process foundation tests
         run: npm run test:foundation
 
-  powershell-child-growth:
-    name: ${{ format('{0}{1} child-test growth guard', 'Power', 'Shell') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - name: Install from frozen lockfile
-        run: npm ci --include=dev
-      - name: Enforce committed legacy-shell child-test baseline
-        run: npm run check:pwsh-test-growth
 
   contract-mutations:
     name: Contract mutation evidence

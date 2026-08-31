@@ -54,3 +54,30 @@ describe('Issue #1419 post-port admission', () => {
     expect(result.missingRetainedDispositions).toEqual(['scripts/dormant.ps1']);
   });
 });
+
+describe('Issue #1817 terminal zero-estate admission', () => {
+  it('accepts a final artifact only when the terminal population is empty', () => {
+    expect(evaluatePostPortEvidence(evidence({ artifactRole: 'final' }), 'final').status).toBe('PASS');
+  });
+
+  it('rejects tracked PowerShell or retained terminal dispositions', () => {
+    const result = evaluatePostPortEvidence(evidence({
+      artifactRole: 'final',
+      entries: [{
+        sourceKind: 'tracked-ps1-file',
+        occurrence: { sourcePath: 'scripts/legacy.ps1', line: 1, column: 1, tokenKind: 'tracked-ps1-file', matchedBytes: 'scripts/legacy.ps1' },
+        resolvedScriptPath: 'scripts/legacy.ps1',
+        targetResolution: 'exact',
+        currentPrescriptive: false,
+      }],
+      retainedDispositions: [{
+        path: 'scripts/legacy.ps1',
+        disposition: 'retained-for-1251-zero-estate',
+        reason: 'fixture',
+        owningReference: '#1251',
+      }],
+    }), 'final');
+    expect(result.status).toBe('FAIL');
+    expect(result.failures).toEqual(['tracked_powershell=1', 'retained_dispositions=1']);
+  });
+});

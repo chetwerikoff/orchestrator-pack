@@ -196,9 +196,9 @@ function buildHarnessEnvironment(repoRoot, runRoot) {
     OPK_VITEST_PRE_TOPOLOGY_MEASUREMENT: '1',
     OPK_TESTMODE_FLEET_WORKSPACE_ROOT: repoRoot,
     OPK_TESTMODE_LEASE_ROOT: leaseDir,
-    AO_ORCHESTRATOR_ESCALATION_STATE: join(runRoot, 'escalation-state.json'),
-    AO_OPERATOR_ESCALATION_INBOX: inboxDir,
-    AO_ESCALATION_HEALTH_SPOOL: healthDir,
+    OPK_ORCHESTRATOR_ESCALATION_STATE: join(runRoot, 'escalation-state.json'),
+    OPK_OPERATOR_ESCALATION_INBOX: inboxDir,
+    OPK_ESCALATION_HEALTH_SPOOL: healthDir,
   };
 }
 
