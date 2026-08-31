@@ -1430,10 +1430,7 @@ export async function observeGptPackReviewAttempt(
   sourceSlotLoop:
   for (const slot of unresolved) {
     if (!slot.invocationId) {
-      if (slot.lifecycle === 'planned') {
-        replacementEligibleSlotIds.push(slot.slotId);
-        continue;
-      }
+      if (slot.lifecycle === 'planned') continue;
       rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
       continue;
     }
