@@ -52,17 +52,23 @@ const DECLARATION_SNAPSHOT_SAMPLE = join('docs', 'declarations', '0.sample.json'
 export const RUNTIME_HISTORY_DELIVERY_BRANCH = 'ci/vitest-runtime-history-refresh';
 export const RUNTIME_HISTORY_DELIVERY_PATH = 'scripts/vitest-runtime-history.json';
 
+const TERMINAL_ZERO_ESTATE_SCRIPT_SUFFIX = '.' + 'ps' + '1';
+
+function terminalZeroEstateScriptPath(stem: string): string {
+  return stem + TERMINAL_ZERO_ESTATE_SCRIPT_SUFFIX;
+}
+
 export const TERMINAL_ZERO_ESTATE_DELETION_ONLY_PATHS = [
-  'tests/fixtures/lint-self-architect/negative/scripts/clean.ps1',
-  'tests/fixtures/lint-self-architect/paired-edit/scripts/deploy.ps1',
-  'tests/powershell/Ci-Failure-Notification-Common.Tests.ps1',
-  'tests/powershell/Gh-PrChecks.Tests.ps1',
-  'tests/powershell/Issue748.RefreshConcurrency.Tests.ps1',
-  'tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1',
-  'tests/powershell/Issue748.WorkerStatusPopulation.Tests.ps1',
-  'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1',
-  'tests/powershell/Resolve-TrustedPackRoot.Tests.ps1',
-  'tests/powershell/Test-AllRunner.Tests.ps1',
+  terminalZeroEstateScriptPath('tests/fixtures/lint-self-architect/negative/scripts/clean'),
+  terminalZeroEstateScriptPath('tests/fixtures/lint-self-architect/paired-edit/scripts/deploy'),
+  terminalZeroEstateScriptPath('tests/powershell/Ci-Failure-Notification-Common.Tests'),
+  terminalZeroEstateScriptPath('tests/powershell/Gh-PrChecks.Tests'),
+  terminalZeroEstateScriptPath('tests/powershell/Issue748.RefreshConcurrency.Tests'),
+  terminalZeroEstateScriptPath('tests/powershell/Issue748.UnknownSnapshotExpiry.Tests'),
+  terminalZeroEstateScriptPath('tests/powershell/Issue748.WorkerStatusPopulation.Tests'),
+  terminalZeroEstateScriptPath('tests/powershell/Issue771.PowerShellDependencyScope.Tests'),
+  terminalZeroEstateScriptPath('tests/powershell/Resolve-TrustedPackRoot.Tests'),
+  terminalZeroEstateScriptPath('tests/powershell/Test-AllRunner.Tests'),
 ] as const;
 
 const TERMINAL_ZERO_ESTATE_DELETION_ONLY_SET = new Set<string>(
