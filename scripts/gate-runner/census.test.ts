@@ -79,7 +79,7 @@ describe('terminal gate population census after Issue #906', () => {
     const files = currentFiles();
     files['scripts/ci-policy-guards.ts'] = (files['scripts/ci-policy-guards.ts'] ?? '').replace(
       'function runCiCheapWins',
-      'function runCiCheapWinsRetired',
+      'function retiredCiCheapWins',
     );
     const result = evaluateCurrentCensus(loadCensus(repoRoot), memorySnapshot(files), registeredGateIds);
     expect(result.details?.join('\n')).toContain(
@@ -114,7 +114,7 @@ describe('terminal gate population census after Issue #906', () => {
       'const reusable = { lines: [], failures: [], warnings: [] };',
     );
     const result = evaluateCurrentCensus(loadCensus(repoRoot), memorySnapshot(files), registeredGateIds);
-    expect(result.details?.join('\n')).toContain('scripts/check-reusable.ps1 behavior surface drifted without a reviewed current-source hash');
+    expect(result.details?.join('\n')).toContain('check-script:scripts/check-reusable.ps1: retained legacy gate was dropped');
   });
 
   it('fails when top-level verification filters the gate runner and would skip gate-census', () => {

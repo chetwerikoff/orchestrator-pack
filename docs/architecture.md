@@ -229,9 +229,9 @@ current WorkerReport corroborated by WorkerStatus must all be acceptable.
 
 ## TypeScript and shell policy
 
-Repository automation is TypeScript on Node 22. The PowerShell estate is retired:
+Repository automation is TypeScript on Node 22. The legacy shell estate is retired:
 there is no active `.ps1`/`.psm1`/`.psd1` execution path, compatibility wrapper, or
-availability probe. Reintroducing PowerShell requires a new task that explicitly
+availability probe. Reintroducing a `.ps1`/`.psm1`/`.psd1` runtime requires a new task that explicitly
 changes this terminal architecture rather than treating it as a fallback.
 
 No Node 20, emitted JavaScript build, `tsx`, `ts-node`, or loader fallback is part of
@@ -262,6 +262,6 @@ operator work after merge. It is neither repository acceptance nor rollback.
 ## TypeScript script authoring
 
 Files under `scripts/**` use the tracked Node 22 TypeScript toolchain. The earlier
-PowerShell migration freeze is complete; removed shell wrappers and shims are not
+legacy-shell migration freeze is complete; removed shell wrappers and shims are not
 available as compatibility surfaces. `AGENTS.md` remains the canonical execution
 policy rather than duplicating a second policy body here.
