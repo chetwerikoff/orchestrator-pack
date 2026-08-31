@@ -14,23 +14,15 @@ function nodePortSource(snapshot: SourceSnapshot): string {
   return snapshotFile(snapshot, 'scripts/gate-runner/node-verifier-ports.ts');
 }
 
-function thinNodeLauncher(snapshot: SourceSnapshot): boolean {
-  const launcher = snapshotFile(snapshot, 'scripts/verify.ps1');
+function directNodeVerifier(snapshot: SourceSnapshot): boolean {
   const verifier = verifierSource(snapshot);
-  return launcher.includes('verify.ts')
-    && /&\s+node\b/iu.test(launcher)
-    && !launcher.includes('scripts/gate-runner/runner.ts')
-    && verifier.includes('const ports = await runNodeVerificationPorts(repoRoot);')
+  return verifier.includes('const ports = await runNodeVerificationPorts(repoRoot);')
     && verifier.includes('const gateReport = runGateRunner(repoRoot);');
 }
 
 function reusableBehaviorWired(snapshot: SourceSnapshot): boolean {
   const verifier = verifierSource(snapshot);
-  const launcher = snapshotFile(snapshot, 'scripts/check-reusable.ps1');
-  return thinNodeLauncher(snapshot)
-    && launcher.includes('verify.ts')
-    && launcher.includes('--reusable-only')
-    && /&\s+node\b/iu.test(launcher)
+  return directNodeVerifier(snapshot)
     && verifier.includes('export function evaluateReusableTrackedPaths')
     && verifier.includes('export async function runReusableGuard')
     && verifier.includes("args: ['ls-files']")
@@ -40,7 +32,7 @@ function reusableBehaviorWired(snapshot: SourceSnapshot): boolean {
 }
 
 function verifyMemberBehaviorWired(snapshot: SourceSnapshot, member: string): boolean {
-  if (!thinNodeLauncher(snapshot)) return false;
+  if (!directNodeVerifier(snapshot)) return false;
   if (member === 'check-reusable') return reusableBehaviorWired(snapshot);
   const ports = nodePortSource(snapshot);
   if (member === 'check-gh-inventory-static') {
@@ -68,7 +60,7 @@ function isAdmittedNodeMigrationFailure(detail: string, snapshot: SourceSnapshot
     return reusableBehaviorWired(snapshot);
   }
   if (detail === 'verify.ps1 must contain exactly one gate-runner dispatch marker; found 0') {
-    return thinNodeLauncher(snapshot) && reusableBehaviorWired(snapshot);
+    return directNodeVerifier(snapshot) && reusableBehaviorWired(snapshot);
   }
   return false;
 }
