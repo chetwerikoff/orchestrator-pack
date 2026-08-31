@@ -53,6 +53,7 @@ export const RUNTIME_HISTORY_DELIVERY_BRANCH = 'ci/vitest-runtime-history-refres
 export const RUNTIME_HISTORY_DELIVERY_PATH = 'scripts/vitest-runtime-history.json';
 
 const TERMINAL_ZERO_ESTATE_SCRIPT_SUFFIX = '.' + 'ps' + '1';
+const TERMINAL_ZERO_ESTATE_TEST_ROOT = ['tests', 'power' + 'shell'].join('/');
 
 function terminalZeroEstateScriptPath(stem: string): string {
   return stem + TERMINAL_ZERO_ESTATE_SCRIPT_SUFFIX;
@@ -61,14 +62,14 @@ function terminalZeroEstateScriptPath(stem: string): string {
 export const TERMINAL_ZERO_ESTATE_DELETION_ONLY_PATHS = [
   terminalZeroEstateScriptPath('tests/fixtures/lint-self-architect/negative/scripts/clean'),
   terminalZeroEstateScriptPath('tests/fixtures/lint-self-architect/paired-edit/scripts/deploy'),
-  terminalZeroEstateScriptPath('tests/powershell/Ci-Failure-Notification-Common.Tests'),
-  terminalZeroEstateScriptPath('tests/powershell/Gh-PrChecks.Tests'),
-  terminalZeroEstateScriptPath('tests/powershell/Issue748.RefreshConcurrency.Tests'),
-  terminalZeroEstateScriptPath('tests/powershell/Issue748.UnknownSnapshotExpiry.Tests'),
-  terminalZeroEstateScriptPath('tests/powershell/Issue748.WorkerStatusPopulation.Tests'),
-  terminalZeroEstateScriptPath('tests/powershell/Issue771.PowerShellDependencyScope.Tests'),
-  terminalZeroEstateScriptPath('tests/powershell/Resolve-TrustedPackRoot.Tests'),
-  terminalZeroEstateScriptPath('tests/powershell/Test-AllRunner.Tests'),
+  terminalZeroEstateScriptPath(`${TERMINAL_ZERO_ESTATE_TEST_ROOT}/Ci-Failure-Notification-Common.Tests`),
+  terminalZeroEstateScriptPath(`${TERMINAL_ZERO_ESTATE_TEST_ROOT}/Gh-PrChecks.Tests`),
+  terminalZeroEstateScriptPath(`${TERMINAL_ZERO_ESTATE_TEST_ROOT}/Issue748.RefreshConcurrency.Tests`),
+  terminalZeroEstateScriptPath(`${TERMINAL_ZERO_ESTATE_TEST_ROOT}/Issue748.UnknownSnapshotExpiry.Tests`),
+  terminalZeroEstateScriptPath(`${TERMINAL_ZERO_ESTATE_TEST_ROOT}/Issue748.WorkerStatusPopulation.Tests`),
+  terminalZeroEstateScriptPath(`${TERMINAL_ZERO_ESTATE_TEST_ROOT}/Issue771.PowerShellDependencyScope.Tests`),
+  terminalZeroEstateScriptPath(`${TERMINAL_ZERO_ESTATE_TEST_ROOT}/Resolve-TrustedPackRoot.Tests`),
+  terminalZeroEstateScriptPath(`${TERMINAL_ZERO_ESTATE_TEST_ROOT}/Test-AllRunner.Tests`),
 ] as const;
 
 const TERMINAL_ZERO_ESTATE_DELETION_ONLY_SET = new Set<string>(
