@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { delimiter, join, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runProcess } from './kernel/subprocess.mjs';
 import {
@@ -10,78 +10,6 @@ import {
   repoRoot,
 } from './lib/vitest-live-store-harness.mjs';
 import { startParentLiveStoreGuard } from './lib/vitest-live-store-parent-guard.mjs';
-
-function findExecutable(name, pathValue = process.env.PATH ?? '') {
-  const suffixes = process.platform === 'win32' ? ['', '.exe', '.cmd', '.bat'] : [''];
-  for (const dir of pathValue.split(delimiter).filter(Boolean)) {
-    for (const suffix of suffixes) {
-      const candidate = join(dir, `${name}${suffix}`);
-      if (existsSync(candidate)) return candidate;
-    }
-  }
-  return '';
-}
-
-function installPwshShim(root, env) {
-  const realPwsh = env.OPK_REAL_PWSH || findExecutable('pwsh', env.PATH ?? '');
-  if (!realPwsh) return;
-
-  const binDir = join(root, 'bin');
-  mkdirSync(binDir, { recursive: true, mode: 0o700 });
-  const shimModule = join(binDir, 'pwsh-shim.mjs');
-  const preflightModule = pathToFileURL(
-    join(repoRoot, 'scripts', 'lib', 'vitest-live-store-parent-guard.mjs'),
-  ).href;
-
-  writeFileSync(shimModule, `#!/usr/bin/env node
-import { spawn } from 'node:child_process';
-import { preflightPowerShellInvocation } from ${JSON.stringify(preflightModule)};
-const real = process.env.OPK_REAL_PWSH;
-if (!real) {
-  console.error('OPK pwsh shim is missing configuration');
-  process.exitCode = 70;
-} else {
-  const argv = process.argv.slice(2);
-  try {
-    preflightPowerShellInvocation(argv, process.env);
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 64;
-  }
-  if (process.exitCode === undefined && process.env.OPK_VITEST_PWSH_PREFLIGHT_ONLY === '1') {
-    process.exitCode = 0;
-  }
-  if (process.exitCode === undefined) {
-    const child = spawn(real, argv, { env: process.env, stdio: 'inherit' });
-    const status = await new Promise((resolveChild) => {
-      child.once('error', (error) => {
-        console.error(error.message);
-        resolveChild(70);
-      });
-      child.once('close', (code, signal) => {
-        resolveChild(code ?? ({ SIGHUP: 129, SIGINT: 130, SIGTERM: 143 }[signal] ?? 1));
-      });
-    });
-    process.exitCode = status;
-  }
-}
-`, 'utf8');
-  chmodSync(shimModule, 0o700);
-
-  if (process.platform === 'win32') {
-    writeFileSync(join(binDir, 'pwsh.cmd'), `@echo off\r\n"${process.execPath}" "${shimModule}" %*\r\n`, 'utf8');
-  } else {
-    const shim = join(binDir, 'pwsh');
-    writeFileSync(
-      shim,
-      `#!/usr/bin/env sh\nOPK_VITEST_PWSH_PREFLIGHT_ONLY=1 "${process.execPath}" "${shimModule}" "$@" || exit $?\nexec "$OPK_REAL_PWSH" "$@"\n`,
-      'utf8',
-    );
-    chmodSync(shim, 0o700);
-  }
-  env.OPK_REAL_PWSH = realPwsh;
-  env.PATH = `${binDir}${delimiter}${env.PATH ?? ''}`;
-}
 
 function appendNodeImport(nodeOptions, modulePath) {
   const flag = `--import=${pathToFileURL(modulePath).href}`;
@@ -119,7 +47,6 @@ let guardFailure = null;
 try {
   applyOpkVitestHarnessEnv(invocationRoot, childEnv);
   childEnv.OPK_TESTMODE_LEASE_ROOT = join(invocationRoot, 'state', 'testmode-fleet-leases');
-  installPwshShim(invocationRoot, childEnv);
   childEnv.NODE_OPTIONS = appendNodeImport(
     childEnv.NODE_OPTIONS,
     join(repoRoot, 'scripts', 'vitest-live-store-preload.mjs'),

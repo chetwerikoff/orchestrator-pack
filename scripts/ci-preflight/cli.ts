@@ -174,7 +174,7 @@ async function execute(rowDef: typeof TABLE[number], root = REPO, env?: NodeJS.P
 }
 function applyBlock(rows: Row[], reason: string, d: Diagnostic): void { for (const row of rows) rowBlock(row, reason, d); }
 function vitestChildEnvironment(): NodeJS.ProcessEnv {
-  const allowed = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'TEMP', 'TMP', 'PSModulePath', 'POWERSHELL_TELEMETRY_OPTOUT', 'SYSTEMROOT', 'COMSPEC', 'PATHEXT'];
+  const allowed = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'TEMP', 'TMP', 'SYSTEMROOT', 'COMSPEC', 'PATHEXT'];
   return Object.fromEntries(allowed.flatMap(key => process.env[key] === undefined ? [] : [[key, process.env[key]!]]));
 }
 export async function runPreflight(repoRoot = REPO): Promise<Record<string, unknown>> {
