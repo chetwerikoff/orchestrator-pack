@@ -1578,9 +1578,10 @@ export async function observeGptPackReviewAttempt(
       initialLaunchSlotIds,
     };
   }
-  if (blockedObservation) {
+  const blockedObservationResult = blockedObservation as PackReviewGptAttemptObservation | null;
+  if (blockedObservationResult) {
     return {
-      ...blockedObservation,
+      ...blockedObservationResult,
       replacementEligibleSlotIds,
       initialLaunchSlotIds,
     };
