@@ -220,6 +220,7 @@ interface StartInput {
   fixtureFallbackReviewStdout?: string;
   fixtureFallbackReviewExitCode?: number;
   fixtureFallbackReviewTimedOut?: boolean;
+  fixtureAfterNativeInitialArmed?: (run: PackReviewRunRecord) => void | Promise<void>;
   fixtureAfterNativeFallbackArmed?: (run: PackReviewRunRecord) => void | Promise<void>;
   fixtureReviewerLayerOverrides?: PackReviewerLayerOverrides;
   fixtureEmulateWin32Selector?: boolean;
@@ -1371,6 +1372,7 @@ const NATIVE_CHILD_FRAME_PREFIX = 'OPK_NATIVE_CHILD_V1 ';
 export interface PackReviewGptAttemptObservation {
   state:
     | 'replacement_eligible'
+    | 'continuation_eligible'
     | 'generating'
     | 'reply_recovery_required'
     | 'ownership_ambiguous'
@@ -1378,6 +1380,7 @@ export interface PackReviewGptAttemptObservation {
   replacementEligible: boolean;
   slotId?: string;
   replacementEligibleSlotIds?: string[];
+  initialLaunchSlotIds?: string[];
   elapsedMs?: number;
 }
 
@@ -1422,6 +1425,7 @@ export async function observeGptPackReviewAttempt(
   if (unresolved.length === 0) return null;
 
   const replacementEligibleSlotIds: string[] = [];
+  const initialLaunchSlotIds: string[] = [];
   let blockedObservation: PackReviewGptAttemptObservation | null = null;
   const rememberBlocked = (observation: PackReviewGptAttemptObservation): void => {
     blockedObservation ??= observation;
@@ -1430,7 +1434,11 @@ export async function observeGptPackReviewAttempt(
   sourceSlotLoop:
   for (const slot of unresolved) {
     if (!slot.invocationId) {
-      if (slot.lifecycle === 'planned') continue;
+      if (slot.lifecycle === 'planned'
+          || (slot.lifecycle === 'terminal' && slot.terminalClass === 'pre_launch_interrupted')) {
+        initialLaunchSlotIds.push(slot.slotId);
+        continue;
+      }
       rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
       continue;
     }
@@ -1561,12 +1569,13 @@ export async function observeGptPackReviewAttempt(
     replacementEligibleSlotIds.push(slot.slotId);
   }
 
-  if (replacementEligibleSlotIds.length > 0) {
+  if (replacementEligibleSlotIds.length > 0 || initialLaunchSlotIds.length > 0) {
     return {
-      state: 'replacement_eligible',
-      replacementEligible: true,
-      slotId: replacementEligibleSlotIds[0],
+      state: replacementEligibleSlotIds.length > 0 ? 'replacement_eligible' : 'continuation_eligible',
+      replacementEligible: replacementEligibleSlotIds.length > 0,
+      slotId: replacementEligibleSlotIds[0] ?? initialLaunchSlotIds[0],
       replacementEligibleSlotIds,
+      initialLaunchSlotIds,
     };
   }
   return blockedObservation ?? { state: 'observation_unavailable', replacementEligible: false };
@@ -1798,7 +1807,16 @@ async function invokeReviewer(options: {
     timeoutMs: options.budgetLedger.runnerTimeoutMs,
     onStderrChunk: consumeNativeChildFrames,
     onSpawn: (pid) => {
-      const startedAtUtc = new Date().toISOString();
+      const persisted = getPackReviewRun(options.runId, {
+        projectId: options.projectId,
+        storeRoot: options.storeRoot,
+      });
+      const armedAttempt = persisted?.nativeAttempt
+        && persisted.nativeAttempt.reviewer === resolvedReviewer
+        && persisted.nativeAttempt.invocationOrdinal === nativeInvocationOrdinal
+        ? persisted.nativeAttempt
+        : undefined;
+      const startedAtUtc = armedAttempt?.startedAtUtc ?? new Date().toISOString();
       updatePackReviewRun(options.runId, {
         runnerPid: process.pid,
         status: 'running',
@@ -1807,11 +1825,12 @@ async function invokeReviewer(options: {
         resolvedReviewer,
         ...(resolvedReviewer === 'codex' || resolvedReviewer === 'claude' ? {
           nativeAttempt: {
+            ...(armedAttempt ?? {}),
             schema: 'pack-review-native-attempt/v1',
             reviewer: resolvedReviewer,
             invocationOrdinal: nativeInvocationOrdinal,
             startedAtUtc,
-            effectiveBudgetMs: options.budgetLedger.effectiveBudgetMs,
+            effectiveBudgetMs: armedAttempt?.effectiveBudgetMs ?? options.budgetLedger.effectiveBudgetMs,
             wrapperPid: pid,
             ...(process.platform === 'win32' ? {} : { processGroupId: pid }),
           },
@@ -2093,7 +2112,7 @@ async function runGptSourceBatch(options: {
   input: StartInput;
   carryoverBundlePath: string;
   frozenScope: ResolvedScopeContext;
-  replacementEligibleSlotIds?: ReadonlySet<string>;
+  sameRoundEligibleSlotIds?: ReadonlySet<string>;
 }): Promise<ReviewPayload> {
   const admissionInterval = process.env.OPK_VITEST_HARNESS === '1'
     ? 0
@@ -2148,7 +2167,7 @@ async function runGptSourceBatch(options: {
     if (currentComplete) {
       return { slot: currentSlot, payload: currentSlot.payload as ReviewPayload };
     }
-    if (options.replacementEligibleSlotIds && !options.replacementEligibleSlotIds.has(slotId)) {
+    if (options.sameRoundEligibleSlotIds && !options.sameRoundEligibleSlotIds.has(slotId)) {
       return { slot: currentSlot, payload: undefined };
     }
     let attemptOrdinal = (currentSlot.attemptOrdinal ?? 0) + 1;
@@ -4231,7 +4250,8 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       if (priorSameRound) {
         const observeAttempt = input.fixtureGptAttemptObserver ?? observeGptPackReviewAttempt;
         const observation = await observeAttempt(priorSameRound);
-        if (!observation?.replacementEligible) {
+        const initialLaunchSlotIds = observation?.initialLaunchSlotIds ?? [];
+        if (!observation || (!observation.replacementEligible && initialLaunchSlotIds.length === 0)) {
           await releaseEarlyClaim('gpt_replacement_not_eligible');
           return {
             ok: false,
@@ -4246,8 +4266,10 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
             httpStatus: 202,
           };
         }
-        const eligibleSlotIds = observation.replacementEligibleSlotIds
-          ?? (observation.slotId ? [observation.slotId] : []);
+        const eligibleSlotIds = [...new Set([
+          ...(observation.replacementEligibleSlotIds ?? []),
+          ...initialLaunchSlotIds,
+        ])];
         if (eligibleSlotIds.length === 0) {
           await releaseEarlyClaim('gpt_replacement_not_eligible');
           return {
@@ -4599,7 +4621,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           input,
           carryoverBundlePath,
           frozenScope: authoritative.frozenScope,
-          replacementEligibleSlotIds: sameRoundGptEligibleSlotIds,
+          sameRoundEligibleSlotIds: sameRoundGptEligibleSlotIds,
         });
         result = {
           outcome: 'exit' as const,
@@ -4612,6 +4634,21 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           cancelled: false,
         };
       } else {
+        if (reviewer === 'codex' || reviewer === 'claude') {
+          const armedInitialRun = updatePackReviewRun(run.id, {
+            nativeAttempt: {
+              schema: 'pack-review-native-attempt/v1',
+              reviewer,
+              invocationOrdinal: 1,
+              startedAtUtc: new Date().toISOString(),
+              effectiveBudgetMs: budgetLedger.effectiveBudgetMs,
+            },
+          }, { projectId, storeRoot });
+          run = armedInitialRun;
+          if (input.fixtureAfterNativeInitialArmed) {
+            await input.fixtureAfterNativeInitialArmed(armedInitialRun);
+          }
+        }
         const invocation = await invokeReviewer({
           reviewerPath: trusted.reviewerPath,
           trustedPackRoot: trusted.trustedPackRoot,
