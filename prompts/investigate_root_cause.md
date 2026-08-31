@@ -318,13 +318,14 @@ build and element 5 applies, state that the resulting `create-issue-draft`
 **should** carry the enumerated scenario matrix as exhaustive acceptance (each
 cell a fixture; closed sibling issues cross-checked for no-regression).
 **Enforcement** that the build-draft actually preserves the matrix is the
-`create-issue-draft` scenario-completeness gate and `check-draft-discipline.ps1`
-companion — this RCA rule **recommends** the handoff; it does not bind or verify
+`create-issue-draft` scenario-completeness gate and
+`node scripts/draft-discipline.mjs surfaces` companion — this RCA rule
+**recommends** the handoff; it does not bind or verify
 that downstream workflow.
 
 **Length and temp files.** The design block may exceed the ≤ 900-word memo cap.
-Long option matrices and comparison tables go to `$env:TEMP` (or OS temp) per the
-existing convention; link the path in the memo. Keep §1–§6 themselves lean.
+Long option matrices and comparison tables go to the OS temporary directory
+(for example `$TMPDIR` on Linux/WSL); link the path in the memo. Keep §1–§6 themselves lean.
 
 ---
 
@@ -346,24 +347,6 @@ node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
   --kind rca-memo
 ```
 
-**Manual equivalent (pwsh string composition — no stdin `<` redirect):**
-
-```powershell
-$memo = Get-Content -Raw $env:TEMP/orchestrator-pack-rca-memo.md
-$prompt = @"
-You are a critical reviewer for a root-cause investigation memo.
-Challenge unsupported claims, missing queue/architecture search, items listed
-under Planned (§4) that are closed, merged, or already on main, and patches
-proposed as durable fixes. Tag valid issues P0/P1/P2.
-If no concrete issues remain, respond with exactly:
-NO_FINDINGS
-(on its own line, no other prose).
-
---- MEMO ---
-$memo
-"@
-codex review -c sandbox_mode=workspace-write -c sandbox_workspace_write.network_access=true $prompt
-```
 
 Trusted architect review selects `workspace-write` and enables outbound network (`-c sandbox_mode=workspace-write -c sandbox_workspace_write.network_access=true`) so Codex can spawn `coworker` during memo review.
 

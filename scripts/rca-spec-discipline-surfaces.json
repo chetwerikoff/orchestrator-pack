@@ -1,5 +1,5 @@
 {
-  "description": "Per-rule loader surface map for RCA spec discipline (Issue #221). Consumed by check-draft-discipline.ps1 surfaces command.",
+  "description": "Per-rule loader surface map for RCA spec discipline (Issue #221). Consumed by `node scripts/draft-discipline.mjs surfaces`.",
   "rules": [
     {
       "id": "positive-outcome",
