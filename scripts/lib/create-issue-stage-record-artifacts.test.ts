@@ -1542,6 +1542,72 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(status.ok, status.missing.map((item) => item.reason).join('\n')).toBe(true);
   });
 
+  it('check-artifacts names flow-manager ownership and the next action for required-input failures', () => {
+    const missingTier = fixture({ transportClassification: 'incident' });
+    rmSync(missingTier.intakePath);
+    const missingTierReason = inspect(missingTier).missing.find((item) => item.artifact === 'tier-intake/v1')?.reason ?? '';
+    expect(missingTierReason).toContain('flow-manager-authored input');
+    expect(missingTierReason).toContain('record/provide the observed tier-intake.json via --tier-intake');
+
+    const malformedTier = fixture({ transportClassification: 'incident' });
+    writeFileSync(malformedTier.intakePath, '{}');
+    const malformedTierReason = inspect(malformedTier).missing.find((item) => item.artifact === 'tier-intake/v1')?.reason ?? '';
+    expect(malformedTierReason).toContain('flow-manager-authored input');
+    expect(malformedTierReason).toContain('record/provide the observed tier-intake.json via --tier-intake');
+
+    const missingDispositions = fixture({ transportClassification: 'incident' });
+    rmSync(missingDispositions.authorPath);
+    const missingDispositionsReason = inspect(missingDispositions).missing.find((item) => item.artifact === 'author dispositions')?.reason ?? '';
+    expect(missingDispositionsReason).toContain('flow-manager-authored input');
+    expect(missingDispositionsReason).toContain('record/provide the observed author-dispositions.json via --author-dispositions');
+
+    const malformedDispositions = fixture({ transportClassification: 'incident' });
+    writeFileSync(malformedDispositions.authorPath, '{}');
+    const dispositionsReason = inspect(malformedDispositions).missing.find((item) => item.artifact === 'author dispositions')?.reason ?? '';
+    expect(dispositionsReason).toContain('flow-manager-authored input');
+    expect(dispositionsReason).toContain('record/provide the observed author-dispositions.json via --author-dispositions');
+
+    const missingStagePaths = fixture({ transportClassification: 'incident' });
+    const noStageStatus = inspectAcceptanceArtifacts({
+      reviewDir: missingStagePaths.dir,
+      outputDir: missingStagePaths.outputDir,
+      tierIntakePath: missingStagePaths.intakePath,
+      stageEvidencePaths: [],
+      authorDispositionsPath: missingStagePaths.authorPath,
+      phase: 'final-acceptance',
+    });
+    const noStageReason = noStageStatus.missing.find((item) => item.reason.includes('no recorded stage evidence paths were supplied'))?.reason ?? '';
+    expect(noStageReason).toContain('flow-manager-authored input');
+    expect(noStageReason).toContain('record/provide the observed attempt-NNN.json via --stage-evidence');
+
+    const omittedStagePath = fixture({ transportClassification: 'incident' });
+    const coverageStatus = inspectAcceptanceArtifacts({
+      reviewDir: omittedStagePath.dir,
+      outputDir: omittedStagePath.outputDir,
+      tierIntakePath: omittedStagePath.intakePath,
+      stageEvidencePaths: [omittedStagePath.reviewEvidencePath],
+      authorDispositionsPath: omittedStagePath.authorPath,
+      phase: 'final-acceptance',
+    });
+    const coverageReason = coverageStatus.missing.find((item) => item.reason.includes('--stage-evidence omitted canonical stage evidence files'))?.reason ?? '';
+    expect(coverageReason).toContain('flow-manager-authored input');
+    expect(coverageReason).toContain('record/provide the observed attempt-NNN.json via --stage-evidence');
+
+    const malformedStage = fixture({ transportClassification: 'incident' });
+    writeFileSync(malformedStage.reviewEvidencePath, '{');
+    const malformedStageReason = inspect(malformedStage).missing.find((item) => item.artifact === 'stage evidence')?.reason ?? '';
+    expect(malformedStageReason).toContain('flow-manager-authored input');
+    expect(malformedStageReason).toContain('record/provide the observed attempt-NNN.json via --stage-evidence');
+
+    const missingCredential = fixture({ transportClassification: 'incident' });
+    const produced = produce(missingCredential);
+    expect(produced.ok, produced.errors.join('\n')).toBe(true);
+    rmSync(join(missingCredential.outputDir, 'stage-completeness-receipt-architectural-review-attempt.json'));
+    const credentialReason = inspect(missingCredential).missing.find((item) => item.reason.includes('missing credentialing complete-or-proven-partial stage evidence'))?.reason ?? '';
+    expect(credentialReason).toContain('flow-manager-authored input');
+    expect(credentialReason).toContain('record/provide the observed attempt-NNN.json via --stage-evidence');
+  });
+
   it('check-artifacts uses final-acceptance semantics for historical partial-witness identity', () => {
     const input = fixture({ transportClassification: 'incident' });
     const produced = produce(input);
