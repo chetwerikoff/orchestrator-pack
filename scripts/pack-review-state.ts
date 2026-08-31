@@ -1450,7 +1450,15 @@ export function commitPackReviewTriage(input: {
       const automaticFinalFixSettlement = input.triage.source === 'automatic'
         && input.triage.verdict === 'DEFER'
         && current.cycle?.state !== 'open';
+      const architectFinalLogicalSettlement = input.triage.source === 'architect'
+        && input.triage.verdict === 'DEFER'
+        && current.cycle !== undefined
+        && isLogicalRoundCycle(current.cycle)
+        && cycleConsumedCount(current.cycle) === current.cycle.frozenCap
+        && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(current.cycle.state)
+        && current.terminal?.reviewVerdict === 'findings';
       if (automaticFinalFixSettlement
+          || architectFinalLogicalSettlement
           || (current.publication?.status === 'succeeded' && reviewObligationsSettled(current))) {
         markReviewStageComplete(current, input.triage.committedAtUtc);
         current.smokeOrdering = {
