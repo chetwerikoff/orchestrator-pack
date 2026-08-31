@@ -9,6 +9,7 @@ import {
   normalizeWorkerReportStore,
 } from '../../docs/worker-report-store.mjs';
 import { evaluateReadiness, NOT_READY } from './readiness-evaluator.ts';
+import { projectPostSmokePackReview } from '../worker-smoke-run.ts';
 import {
   FOUNDATION_DOC_ROWS,
   FOUNDATION_LINT_SUPPRESSION_CONFIG_PATH,
@@ -282,5 +283,164 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     expect(source).toContain("'docs/review-trigger-reconcile.mjs',");
     expect(source).toContain("'docs/review-finding-delivery-confirm.mjs',");
     expect(source).toContain("'docs/review-wake-trigger.mjs',");
+  });
+});
+
+
+describe('Issue #1867 completed pack-review post-smoke projection', () => {
+  const logicalComplete = {
+    cycleId: 'cycle-1867',
+    capMapVersion: 'issue-1826-logical-rounds-1-1-2',
+    reviewStageComplete: true,
+  } as const;
+  const missingRunner = {
+    hasLegitimateReview: false,
+    unresolvedBlockingFinding: false,
+  } as const;
+
+  it('keeps completed-stage status successful for proven ancestor blockers', () => {
+    const result = projectPostSmokePackReview({
+      authorityCycle: logicalComplete,
+      runner: {
+        hasLegitimateReview: true,
+        unresolvedBlockingFinding: true,
+      },
+      direct: {
+        hasLegitimateReview: true,
+        state: 'blocked',
+        unresolvedBlockingReviewIds: [101],
+        unresolvedCurrentHeadBlockingReviewIds: [],
+        unresolvedAncestorBlockingReviewIds: [101],
+      },
+    });
+
+    expect(result).toMatchObject({
+      reviewProjection: {
+        state: 'success',
+        reason: 'clear',
+        description: 'Required pack-review stage completed; no additional review round required.',
+      },
+      unresolvedRequiredFinding: false,
+      completedLogicalCycleId: 'cycle-1867',
+    });
+  });
+
+  it('uses completion authority when the later head has no direct-review artifact', () => {
+    const result = projectPostSmokePackReview({
+      authorityCycle: logicalComplete,
+      runner: missingRunner,
+      direct: {
+        hasLegitimateReview: false,
+        state: 'missing-review',
+        unresolvedBlockingReviewIds: [],
+        unresolvedCurrentHeadBlockingReviewIds: [],
+        unresolvedAncestorBlockingReviewIds: [],
+      },
+    });
+
+    expect(result.reviewProjection.state).toBe('success');
+    expect(result.unresolvedRequiredFinding).toBe(false);
+    expect(result.completedLogicalCycleId).toBe('cycle-1867');
+  });
+
+  it('keeps an exact-current-head blocker material only for readiness', () => {
+    const result = projectPostSmokePackReview({
+      authorityCycle: logicalComplete,
+      runner: missingRunner,
+      direct: {
+        hasLegitimateReview: true,
+        state: 'blocked',
+        unresolvedBlockingReviewIds: [202],
+        unresolvedCurrentHeadBlockingReviewIds: [202],
+        unresolvedAncestorBlockingReviewIds: [],
+      },
+    });
+
+    expect(result.reviewProjection.state).toBe('success');
+    expect(result.unresolvedRequiredFinding).toBe(true);
+  });
+
+  it('keeps an unknown-lineage blocker material for readiness', () => {
+    const result = projectPostSmokePackReview({
+      authorityCycle: logicalComplete,
+      runner: missingRunner,
+      direct: {
+        hasLegitimateReview: true,
+        state: 'blocked',
+        unresolvedBlockingReviewIds: ['unknown-303'],
+        unresolvedCurrentHeadBlockingReviewIds: [],
+        unresolvedAncestorBlockingReviewIds: [],
+      },
+    });
+
+    expect(result.reviewProjection.state).toBe('success');
+    expect(result.unresolvedRequiredFinding).toBe(true);
+  });
+
+  it('does not activate the override for a legacy completed cycle', () => {
+    const result = projectPostSmokePackReview({
+      authorityCycle: {
+        cycleId: 'legacy-cycle',
+        capMapVersion: 'legacy-frozen',
+        reviewStageComplete: true,
+      },
+      runner: missingRunner,
+      direct: {
+        hasLegitimateReview: true,
+        state: 'blocked',
+        unresolvedBlockingReviewIds: [404],
+        unresolvedCurrentHeadBlockingReviewIds: [],
+        unresolvedAncestorBlockingReviewIds: [404],
+      },
+    });
+
+    expect(result.reviewProjection).toMatchObject({
+      state: 'failure',
+      reason: 'unresolved-blocker',
+    });
+    expect(result.unresolvedRequiredFinding).toBe(true);
+    expect(result.completedLogicalCycleId).toBeNull();
+  });
+
+  it('does not activate the override before logical stage completion', () => {
+    const result = projectPostSmokePackReview({
+      authorityCycle: {
+        ...logicalComplete,
+        reviewStageComplete: false,
+      },
+      runner: missingRunner,
+      direct: {
+        hasLegitimateReview: true,
+        state: 'blocked',
+        unresolvedBlockingReviewIds: [505],
+        unresolvedCurrentHeadBlockingReviewIds: [],
+        unresolvedAncestorBlockingReviewIds: [505],
+      },
+    });
+
+    expect(result.reviewProjection.state).toBe('failure');
+    expect(result.unresolvedRequiredFinding).toBe(true);
+    expect(result.completedLogicalCycleId).toBeNull();
+  });
+
+  it('preserves existing fallback behavior when authority is unavailable', () => {
+    const result = projectPostSmokePackReview({
+      authorityCycle: null,
+      runner: missingRunner,
+      direct: {
+        hasLegitimateReview: false,
+        state: 'missing-review',
+        unresolvedBlockingReviewIds: [],
+        unresolvedCurrentHeadBlockingReviewIds: [],
+        unresolvedAncestorBlockingReviewIds: [],
+      },
+    });
+
+    expect(result.reviewProjection).toMatchObject({
+      state: 'failure',
+      reason: 'missing-review',
+    });
+    expect(result.unresolvedRequiredFinding).toBe(false);
+    expect(result.completedLogicalCycleId).toBeNull();
   });
 });
