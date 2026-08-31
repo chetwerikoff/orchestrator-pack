@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -9,6 +10,20 @@ import {
   normalizeWorkerReportStore,
 } from '../../docs/worker-report-store.mjs';
 import { evaluateReadiness, NOT_READY } from './readiness-evaluator.ts';
+import {
+  evaluatePostSmokeReadiness,
+  projectPostSmokePackReview,
+  type CliOptions,
+  type ResolvedSmokeTarget,
+} from '../worker-smoke-run.ts';
+import {
+  commitPackReviewTerminal,
+  initializePackReviewAuthority,
+  observePackReviewHead,
+  recordPackReviewPublication,
+  type PackReviewAuthorityOptions,
+} from '../pack-review-state.ts';
+import type { RuntimeAdapter } from '../runtime/contracts.ts';
 import {
   FOUNDATION_DOC_ROWS,
   FOUNDATION_LINT_SUPPRESSION_CONFIG_PATH,
@@ -282,5 +297,356 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     expect(source).toContain("'docs/review-trigger-reconcile.mjs',");
     expect(source).toContain("'docs/review-finding-delivery-confirm.mjs',");
     expect(source).toContain("'docs/review-wake-trigger.mjs',");
+  });
+});
+
+
+describe('Issue #1867 completed pack-review post-smoke projection', () => {
+  const logicalComplete = {
+    cycleId: 'cycle-1867',
+    capMapVersion: 'issue-1826-logical-rounds-1-1-2',
+    reviewStageComplete: true,
+  } as const;
+  const missingRunner = {
+    hasLegitimateReview: false,
+    unresolvedBlockingFinding: false,
+  } as const;
+
+  it('keeps completed-stage status successful for proven ancestor blockers', () => {
+    const result = projectPostSmokePackReview({
+      authorityCycle: logicalComplete,
+      runner: {
+        hasLegitimateReview: true,
+        unresolvedBlockingFinding: true,
+      },
+      direct: {
+        hasLegitimateReview: true,
+        state: 'blocked',
+        unresolvedBlockingReviewIds: [101],
+        unresolvedCurrentHeadBlockingReviewIds: [],
+        unresolvedAncestorBlockingReviewIds: [101],
+      },
+    });
+
+    expect(result).toMatchObject({
+      reviewProjection: {
+        state: 'success',
+        reason: 'clear',
+        description: 'Required pack-review stage completed; no additional review round required.',
+      },
+      unresolvedRequiredFinding: false,
+      completedLogicalCycleId: 'cycle-1867',
+    });
+  });
+
+  it('uses completion authority when the later head has no direct-review artifact', () => {
+    const result = projectPostSmokePackReview({
+      authorityCycle: logicalComplete,
+      runner: missingRunner,
+      direct: {
+        hasLegitimateReview: false,
+        state: 'missing-review',
+        unresolvedBlockingReviewIds: [],
+        unresolvedCurrentHeadBlockingReviewIds: [],
+        unresolvedAncestorBlockingReviewIds: [],
+      },
+    });
+
+    expect(result.reviewProjection.state).toBe('success');
+    expect(result.unresolvedRequiredFinding).toBe(false);
+    expect(result.completedLogicalCycleId).toBe('cycle-1867');
+  });
+
+  it('keeps an exact-current-head blocker material only for readiness', () => {
+    const result = projectPostSmokePackReview({
+      authorityCycle: logicalComplete,
+      runner: missingRunner,
+      direct: {
+        hasLegitimateReview: true,
+        state: 'blocked',
+        unresolvedBlockingReviewIds: [202],
+        unresolvedCurrentHeadBlockingReviewIds: [202],
+        unresolvedAncestorBlockingReviewIds: [],
+      },
+    });
+
+    expect(result.reviewProjection.state).toBe('success');
+    expect(result.unresolvedRequiredFinding).toBe(true);
+  });
+
+  it('keeps an unknown-lineage blocker material for readiness', () => {
+    const result = projectPostSmokePackReview({
+      authorityCycle: logicalComplete,
+      runner: missingRunner,
+      direct: {
+        hasLegitimateReview: true,
+        state: 'blocked',
+        unresolvedBlockingReviewIds: ['unknown-303'],
+        unresolvedCurrentHeadBlockingReviewIds: [],
+        unresolvedAncestorBlockingReviewIds: [],
+      },
+    });
+
+    expect(result.reviewProjection.state).toBe('success');
+    expect(result.unresolvedRequiredFinding).toBe(true);
+  });
+
+  it('does not activate the override for a legacy completed cycle', () => {
+    const result = projectPostSmokePackReview({
+      authorityCycle: {
+        cycleId: 'legacy-cycle',
+        capMapVersion: 'legacy-frozen',
+        reviewStageComplete: true,
+      },
+      runner: missingRunner,
+      direct: {
+        hasLegitimateReview: true,
+        state: 'blocked',
+        unresolvedBlockingReviewIds: [404],
+        unresolvedCurrentHeadBlockingReviewIds: [],
+        unresolvedAncestorBlockingReviewIds: [404],
+      },
+    });
+
+    expect(result.reviewProjection).toMatchObject({
+      state: 'failure',
+      reason: 'unresolved-blocker',
+    });
+    expect(result.unresolvedRequiredFinding).toBe(true);
+    expect(result.completedLogicalCycleId).toBeNull();
+  });
+
+  it('does not activate the override before logical stage completion', () => {
+    const result = projectPostSmokePackReview({
+      authorityCycle: {
+        ...logicalComplete,
+        reviewStageComplete: false,
+      },
+      runner: missingRunner,
+      direct: {
+        hasLegitimateReview: true,
+        state: 'blocked',
+        unresolvedBlockingReviewIds: [505],
+        unresolvedCurrentHeadBlockingReviewIds: [],
+        unresolvedAncestorBlockingReviewIds: [505],
+      },
+    });
+
+    expect(result.reviewProjection.state).toBe('failure');
+    expect(result.unresolvedRequiredFinding).toBe(true);
+    expect(result.completedLogicalCycleId).toBeNull();
+  });
+
+  it('preserves existing fallback behavior when authority is unavailable', () => {
+    const result = projectPostSmokePackReview({
+      authorityCycle: null,
+      runner: missingRunner,
+      direct: {
+        hasLegitimateReview: false,
+        state: 'missing-review',
+        unresolvedBlockingReviewIds: [],
+        unresolvedCurrentHeadBlockingReviewIds: [],
+        unresolvedAncestorBlockingReviewIds: [],
+      },
+    });
+
+    expect(result.reviewProjection).toMatchObject({
+      state: 'failure',
+      reason: 'missing-review',
+    });
+    expect(result.unresolvedRequiredFinding).toBe(false);
+    expect(result.completedLogicalCycleId).toBeNull();
+  });
+});
+
+
+describe('Issue #1867 post-smoke readiness wiring regression', () => {
+  const repository = 'chetwerikoff/orchestrator-pack';
+  const issueNumber = 1867;
+  const prNumber = 1874;
+  const reviewedHead = 'a'.repeat(40);
+  const currentHead = 'b'.repeat(40);
+
+  function completeLogicalStage(storeRoot: string): void {
+    const options: PackReviewAuthorityOptions = { storeRoot };
+    const authority = initializePackReviewAuthority({
+      prNumber,
+      headSha: reviewedHead,
+      tier: 'T2',
+      options,
+    });
+    const terminal = commitPackReviewTerminal({
+      prNumber,
+      expectedTransitionSeq: authority.transitionSeq,
+      terminal: {
+        schemaVersion: 1,
+        terminalContractVersion: 2,
+        terminalSource: 'normal',
+        runId: 'review-run-1867',
+        targetSha: reviewedHead,
+        logicalRoundOrdinal: 1,
+        reviewVerdict: 'clean',
+        findingCount: 0,
+        findingsDigest: 'clean-findings-digest',
+      },
+      status: 'up_to_date',
+      findingCount: 0,
+      options,
+    });
+    const published = recordPackReviewPublication({
+      prNumber,
+      expectedTransitionSeq: terminal.transitionSeq,
+      publication: {
+        headSha: reviewedHead,
+        terminalRunId: 'review-run-1867',
+        status: 'succeeded',
+        publicationDigest: 'publication-digest',
+        recordedAtUtc: new Date().toISOString(),
+      },
+      options,
+    });
+    expect(published.cycle?.reviewStageComplete).toBe(true);
+    const advanced = observePackReviewHead({
+      prNumber,
+      expectedTransitionSeq: published.transitionSeq,
+      headSha: currentHead,
+      options,
+    });
+    expect(advanced.cycle?.reviewStageComplete).toBe(true);
+  }
+
+  function cliOptions(): CliOptions {
+    return {
+      command: '',
+      issueNumber,
+      prNumber,
+      headSha: currentHead,
+      issueBodyFile: '',
+      smokeComplexity: '',
+      repoRoot: process.cwd(),
+      cwd: process.cwd(),
+      dryRun: false,
+      json: false,
+      reviewId: '',
+      reviewHeadSha: '',
+    };
+  }
+
+  function target(): ResolvedSmokeTarget {
+    return {
+      repositorySlug: repository,
+      issueNumber,
+      prNumber,
+      headSha: currentHead,
+      issueBody: '',
+      issueBodyMatchesTarget: true,
+      trustedPublisherLogin: 'chetwerikoff',
+      prOpen: true,
+      baseRef: 'main',
+      expectedTargetRef: 'main',
+      expectedTarget: true,
+    };
+  }
+
+  function blockingReview(headSha: string, id: number) {
+    return [{
+      id,
+      state: 'COMMENTED',
+      user: { login: 'chetwerikoff' },
+      submitted_at: '2026-08-31T00:00:00.000Z',
+      body: `<!-- opk-pack-review:v1 head=${headSha} verdict=findings blocking=true -->`,
+      commit_id: headSha,
+      html_url: `https://github.com/chetwerikoff/orchestrator-pack/pull/1874#pullrequestreview-${id}`,
+    }];
+  }
+
+  it('covers the real post-smoke status/readiness path for stale and material blockers', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'opk-1867-post-smoke-readiness-'));
+    const previousEnv = {
+      OPK_BASE_DIR: process.env.OPK_BASE_DIR,
+      OPK_VITEST_HARNESS: process.env.OPK_VITEST_HARNESS,
+      OPK_WORKER_REPORT_STORE: process.env.OPK_WORKER_REPORT_STORE,
+      PACK_REVIEW_RUN_STORE_ROOT: process.env.PACK_REVIEW_RUN_STORE_ROOT,
+      PACK_REVIEW_GITHUB_REVIEWS_FIXTURE: process.env.PACK_REVIEW_GITHUB_REVIEWS_FIXTURE,
+      PACK_REVIEW_REQUIRED_STATUS_CAPTURE_FILE: process.env.PACK_REVIEW_REQUIRED_STATUS_CAPTURE_FILE,
+    };
+    try {
+      process.env.OPK_BASE_DIR = root;
+      process.env.OPK_VITEST_HARNESS = '1';
+      process.env.OPK_WORKER_REPORT_STORE = path.join(root, 'worker-report-store.json');
+      process.env.PACK_REVIEW_RUN_STORE_ROOT = path.join(root, 'review-store');
+      completeLogicalStage(process.env.PACK_REVIEW_RUN_STORE_ROOT);
+
+      const scenarios = [
+        {
+          name: 'proven-ancestor',
+          reviewHead: reviewedHead,
+          reviewId: 186701,
+          lineage: 'ancestor',
+          blocked: false,
+        },
+        {
+          name: 'exact-current-head',
+          reviewHead: currentHead,
+          reviewId: 186702,
+          lineage: 'current',
+          blocked: true,
+        },
+        {
+          name: 'unknown-lineage',
+          reviewHead: reviewedHead,
+          reviewId: 186703,
+          lineage: 'unknown',
+          blocked: true,
+        },
+      ] as const;
+
+      for (const scenario of scenarios) {
+        const captureFile = path.join(root, `${scenario.name}-required-status.json`);
+        process.env.PACK_REVIEW_REQUIRED_STATUS_CAPTURE_FILE = captureFile;
+        process.env.PACK_REVIEW_GITHUB_REVIEWS_FIXTURE = JSON.stringify(
+          blockingReview(scenario.reviewHead, scenario.reviewId),
+        );
+
+        const result = await evaluatePostSmokeReadiness(
+          cliOptions(),
+          target(),
+          {} as RuntimeAdapter,
+          {
+            resolveCiGreen: () => true,
+            currentPackReviewStatusFact: () => ({
+              hasLegitimateReview: false,
+              unresolvedBlockingFinding: false,
+            }),
+            isAncestor: (_repositorySlug, ancestorSha, descendantSha) => {
+              if (scenario.lineage === 'unknown') throw new Error('fixture lineage unavailable');
+              return ancestorSha === reviewedHead && descendantSha === currentHead;
+            },
+          },
+        );
+
+        expect(result.reviewProjection).toMatchObject({
+          state: 'success',
+          reason: 'clear',
+          description: 'Required pack-review stage completed; no additional review round required.',
+        });
+        const captured = JSON.parse(readFileSync(captureFile, 'utf8')) as Record<string, unknown>;
+        expect(captured).toMatchObject({
+          repoSlug: repository,
+          headSha: currentHead,
+          state: 'success',
+          context: 'orchestrator-pack/pack-review',
+          description: 'Required pack-review stage completed; no additional review round required.',
+        });
+        expect(result.readiness.failedPredicates.includes('unresolved_required_review_finding'))
+          .toBe(scenario.blocked);
+      }
+    } finally {
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

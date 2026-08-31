@@ -87,6 +87,7 @@ import {
   commitSmokeOrderingTransition,
   initializePackReviewAuthority,
   observePackReviewHead,
+  PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
   readPackReviewAuthority,
   smokeOrderingRequired,
   type PackReviewAuthorityOptions,
@@ -131,6 +132,7 @@ import {
   directReviewReconciliationRequiresDescendantFixFacts,
   parseDirectPackReviewEvidence,
   projectDirectPackReviewState,
+  type DirectPackReviewProjection,
 } from './lib/github-review-reconciliation.ts';
 import {
   PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
@@ -868,15 +870,101 @@ function currentAtCapFacts(
   }
 }
 
+interface PostSmokePackReviewAuthorityCycle {
+  readonly cycleId: string;
+  readonly capMapVersion: string;
+  readonly reviewStageComplete?: boolean;
+}
+
+function currentPackReviewCompletionCycle(
+  prNumber: number,
+): PostSmokePackReviewAuthorityCycle | null {
+  try {
+    const storeRoot = resolvePackReviewRunStoreRoot({
+      projectId: 'orchestrator-pack',
+      storeRoot: process.env.PACK_REVIEW_RUN_STORE_ROOT,
+    });
+    const cycle = readPackReviewAuthority(prNumber, { storeRoot })?.cycle;
+    if (!cycle) return null;
+    return {
+      cycleId: cycle.cycleId,
+      capMapVersion: cycle.capMapVersion,
+      reviewStageComplete: cycle.reviewStageComplete,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export interface PostSmokePackReviewResolution {
+  readonly reviewProjection: PackReviewSemanticProjection;
+  readonly unresolvedRequiredFinding: boolean;
+  readonly completedLogicalCycleId: string | null;
+}
+
+export function projectPostSmokePackReview(input: {
+  readonly runner: PackReviewSemanticSourceState;
+  readonly direct: Pick<
+    DirectPackReviewProjection,
+    | 'hasLegitimateReview'
+    | 'state'
+    | 'unresolvedBlockingReviewIds'
+    | 'unresolvedCurrentHeadBlockingReviewIds'
+    | 'unresolvedAncestorBlockingReviewIds'
+  >;
+  readonly authorityCycle: PostSmokePackReviewAuthorityCycle | null;
+}): PostSmokePackReviewResolution {
+  const completedLogicalStage = input.authorityCycle?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+    && input.authorityCycle.reviewStageComplete === true;
+
+  if (!completedLogicalStage) {
+    const reviewProjection = projectPackReviewSemanticStatus({
+      runner: input.runner,
+      direct: {
+        hasLegitimateReview: input.direct.hasLegitimateReview,
+        unresolvedBlockingFinding: input.direct.state === 'blocked',
+      },
+    });
+    return {
+      reviewProjection,
+      unresolvedRequiredFinding: reviewProjection.reason === 'unresolved-blocker',
+      completedLogicalCycleId: null,
+    };
+  }
+
+  const staleAncestorIds = new Set(
+    input.direct.unresolvedAncestorBlockingReviewIds.map((reviewId) => String(reviewId).trim()),
+  );
+  const unresolvedRequiredFinding = input.direct.unresolvedBlockingReviewIds
+    .some((reviewId) => !staleAncestorIds.has(String(reviewId).trim()));
+
+  return {
+    reviewProjection: {
+      state: 'success',
+      description: 'Required pack-review stage completed; no additional review round required.',
+      reason: 'clear',
+    },
+    unresolvedRequiredFinding,
+    completedLogicalCycleId: input.authorityCycle!.cycleId,
+  };
+}
+
 export interface PostSmokeReadinessResult {
   readonly readiness: ReadinessResult;
   readonly reviewProjection: PackReviewSemanticProjection;
+}
+
+export interface PostSmokeReadinessDependencies {
+  readonly resolveCiGreen?: typeof resolveCiGreen;
+  readonly currentPackReviewStatusFact?: typeof currentPackReviewStatusFact;
+  readonly isAncestor?: typeof githubCommitIsAncestor;
 }
 
 export async function evaluatePostSmokeReadiness(
   options: CliOptions,
   target: ResolvedSmokeTarget,
   adapter: RuntimeAdapter,
+  dependencies: PostSmokeReadinessDependencies = {},
 ): Promise<PostSmokeReadinessResult> {
   const assignmentFile = resolveWorkerAssignmentStorePath('orchestrator-pack', process.env);
   const assignment = currentWorkerAssignment(assignmentFile, target.issueNumber);
@@ -939,7 +1027,7 @@ export async function evaluatePostSmokeReadiness(
     }
   }
 
-  const ciGreen = resolveCiGreen(
+  const ciGreen = (dependencies.resolveCiGreen ?? resolveCiGreen)(
     target.prNumber,
     target.headSha,
     target.repositorySlug,
@@ -960,21 +1048,27 @@ export async function evaluatePostSmokeReadiness(
     requiredCiGreen: ciGreen,
     exactHeadSmokePassed: true,
     isAncestor: (ancestorSha, descendantSha) =>
-      githubCommitIsAncestor(target.repositorySlug, ancestorSha, descendantSha, options.repoRoot),
+      (dependencies.isAncestor ?? githubCommitIsAncestor)(
+        target.repositorySlug,
+        ancestorSha,
+        descendantSha,
+        options.repoRoot,
+      ),
   });
-  const runner = currentPackReviewStatusFact(
+  const runner = (dependencies.currentPackReviewStatusFact ?? currentPackReviewStatusFact)(
     target.repositorySlug,
     target.headSha,
     options.repoRoot,
   );
-  const reviewProjection = projectPackReviewSemanticStatus({
+  const postSmokeReview = projectPostSmokePackReview({
     runner,
-    direct: {
-      hasLegitimateReview: direct.hasLegitimateReview,
-      unresolvedBlockingFinding: direct.state === 'blocked',
-    },
+    direct,
+    authorityCycle: currentPackReviewCompletionCycle(target.prNumber),
   });
-  const directOwnsSemanticProjection = direct.hasLegitimateReview || direct.state === 'blocked';
+  const reviewProjection = postSmokeReview.reviewProjection;
+  const directOwnsSemanticProjection = postSmokeReview.completedLogicalCycleId !== null
+    || direct.hasLegitimateReview
+    || direct.state === 'blocked';
   if (!options.dryRun && (
     directOwnsSemanticProjection
     || (!runner.hasLegitimateReview && runner.activeAttempt !== true)
@@ -983,10 +1077,17 @@ export async function evaluatePostSmokeReadiness(
       repoRoot: options.repoRoot,
       repoSlug: target.repositorySlug,
       headSha: target.headSha,
-      request: semanticPackReviewRequiredStatusRequest({
-        headSha: target.headSha,
-        projection: reviewProjection,
-      }),
+      request: postSmokeReview.completedLogicalCycleId
+        ? {
+            state: 'success',
+            context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+            description: reviewProjection.description,
+            idempotencyKey: `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${target.headSha}:stage-complete:${postSmokeReview.completedLogicalCycleId}`,
+          }
+        : semanticPackReviewRequiredStatusRequest({
+            headSha: target.headSha,
+            projection: reviewProjection,
+          }),
     });
   }
   const atCap = currentAtCapFacts(target.prNumber);
@@ -1010,7 +1111,7 @@ export async function evaluatePostSmokeReadiness(
         : reviewProjection.reason === 'unresolved-blocker'
           ? 'blocked'
           : 'missing',
-      unresolvedRequiredFinding: reviewProjection.reason === 'unresolved-blocker',
+      unresolvedRequiredFinding: postSmokeReview.unresolvedRequiredFinding,
       ...atCap,
     },
     smoke: { headSha: target.headSha, state: 'pass' },
