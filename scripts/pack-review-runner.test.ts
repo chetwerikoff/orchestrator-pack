@@ -462,7 +462,7 @@ describe('Issue #1826 native fallback pre-spawn binding', () => {
     const head = '5'.repeat(40);
     let armedRunId = '';
 
-    await expect(startPackReview({
+    const crashed = await startPackReview({
       projectId: 'orchestrator-pack',
       storeRoot,
       sourceRepoRoot: process.cwd(),
@@ -490,7 +490,13 @@ describe('Issue #1826 native fallback pre-spawn binding', () => {
         armedRunId = run.id;
         throw new Error('fixture_crash_after_fallback_arm');
       },
-    })).rejects.toThrow('fixture_crash_after_fallback_arm');
+    });
+    expect(crashed).toMatchObject({
+      ok: false,
+      created: true,
+      reason: 'fixture_crash_after_fallback_arm',
+      runId: armedRunId,
+    });
 
     expect(armedRunId).not.toBe('');
     const persisted = getPackReviewRun(armedRunId, { projectId: 'orchestrator-pack', storeRoot });
