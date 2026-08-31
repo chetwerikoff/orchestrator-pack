@@ -19,6 +19,7 @@
     "scripts/pack-review-runner.test.ts",
     "scripts/pack-review-runner.ts",
     "scripts/pack-review-state.ts",
+    "scripts/pr2-foundation/post-review-smoke.test.ts",
     "scripts/review-cycle-cap.test.ts",
     "scripts/review-delivery.test.ts"
   ],
@@ -53,5 +54,5 @@
     "scripts/review-delivery.test.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "6a87826c87546acba2ad5f4688005d3a887f8cc2"
+  "source_revision": "b95b2ec6e11141cc10f16365c3afb6e3ece1392d"
 }
