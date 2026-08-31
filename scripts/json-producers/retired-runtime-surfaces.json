@@ -54,7 +54,7 @@
       "id": "powershell-executable-path",
       "sourceCommandPattern": "$a",
       "pathPattern": "\\.(?:ps1|psm1|psd1)$",
-      "reason": "No tracked executable PowerShell file surface remains.",
+      "reason": "No tracked shell-runtime file surface remains.",
       "owningReference": "Issue #1817 AC1/AC7"
     },
     {

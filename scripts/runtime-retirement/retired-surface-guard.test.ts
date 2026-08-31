@@ -26,6 +26,10 @@ function fixture(text: string, path = 'scripts/active.ts'): string {
   return root;
 }
 
+function retiredShellPath(extension: 'ps1' | 'psm1' | 'psd1'): string {
+  return `scripts/reintroduced.${extension}`;
+}
+
 describe('runtime retirement closed-world scanner', () => {
   it('accepts neutral active code', () => {
     expect(scanRetiredRuntimeSurfaces({ repoRoot: fixture('pack review list') }).violations).toEqual([]);
@@ -52,9 +56,9 @@ describe('runtime retirement closed-world scanner', () => {
     ['compatibility alias', 'const alias = "OPK_REAL_RUNTIME";', 'scripts/active.ts', 'compatibility-alias'],
     ['named adapter shim', 'function Install-AoLivenessShim {}', 'scripts/active.ts', 'legacy-adapter-symbol'],
     ['global command shim', 'function global:ao { "retired" }', 'scripts/active.ts', 'legacy-adapter-symbol'],
-    ['PowerShell script path', 'neutral', 'scripts/reintroduced.ps1', 'powershell-executable-path'],
-    ['PowerShell module path', 'neutral', 'scripts/reintroduced.psm1', 'powershell-executable-path'],
-    ['PowerShell data path', 'neutral', 'scripts/reintroduced.psd1', 'powershell-executable-path'],
+    ['shell script path', 'neutral', retiredShellPath('ps1'), 'powershell-executable-path'],
+    ['shell module path', 'neutral', retiredShellPath('psm1'), 'powershell-executable-path'],
+    ['shell data path', 'neutral', retiredShellPath('psd1'), 'powershell-executable-path'],
     ['retired script path', 'neutral', 'scripts/ao-review.ts', 'legacy-runtime-command'],
   ])('rejects injected %s surface', (_name, text, path, surfaceId) => {
     const result = scanRetiredRuntimeSurfaces({ repoRoot: fixture(text, path) });
