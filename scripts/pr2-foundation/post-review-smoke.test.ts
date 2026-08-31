@@ -241,7 +241,7 @@ afterEach(() => {
 });
 
 describe('Issue #1418 post-review smoke reconciliation', () => {
-  it('performs zero smoke work before authoritative review completion', async () => {
+  it('does not use review completion as a logical-cycle smoke execution mutex', async () => {
     const fixture = rootFixture();
     const options: PackReviewAuthorityOptions = { storeRoot: fixture.reviewStoreRoot };
     initializeReview(options);
@@ -253,7 +253,11 @@ describe('Issue #1418 post-review smoke reconciliation', () => {
       runAttempt,
     }));
 
-    expect(result).toEqual({ handled: false, attempted: false, reason: 'smoke_ordering_review_unsettled' });
+    expect(result).toEqual({
+      handled: true,
+      attempted: false,
+      reason: 'post_review_smoke_assignment_missing_or_untrusted',
+    });
     expect(runAttempt).not.toHaveBeenCalled();
     expect(remoteActuationRecords(options)).toHaveLength(0);
   });

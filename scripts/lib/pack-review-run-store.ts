@@ -15,6 +15,12 @@ import { isDeepStrictEqual } from 'node:util';
 import { TURN_STATES } from '../chatgpt-browser-turn/contracts.ts';
 import {
   PACK_REVIEW_CAPS,
+  PACK_REVIEW_CAP_MAP_VERSION,
+  PACK_REVIEW_LOGICAL_CAPS,
+  PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+  PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION,
+  PACK_REVIEW_DISTINCT_HEAD_CAPS,
+  PACK_REVIEW_LEGACY_CAP_MAP_VERSION,
   selectPackReviewGptSourceCardinality,
   type PackReviewAutomaticBudgetDisposition,
 } from '../pack-review-state.ts';
@@ -107,6 +113,7 @@ export interface PackReviewGptRoundRecord {
   schema: 'pack-review-gpt-round/v1';
   reviewer: 'gpt';
   tier: 'T1' | 'T2' | 'T3';
+  accountingVersion?: string;
   roundOrdinal: number;
   cardinality: number;
   issueNumber: number;
@@ -177,6 +184,19 @@ export function derivePackReviewGptCoverage(round: PackReviewGptRoundRecord | un
   };
 }
 
+export interface PackReviewNativeAttemptBinding {
+  schema: 'pack-review-native-attempt/v1';
+  reviewer: 'codex' | 'claude';
+  invocationOrdinal: number;
+  startedAtUtc: string;
+  effectiveBudgetMs: number;
+  wrapperPid?: number;
+  processGroupId?: number;
+  childPid?: number;
+  childProcessGroupId?: number;
+  childStartedAtUtc?: string;
+}
+
 export interface PackReviewRunRecord {
   schemaVersion: 1;
   id: string;
@@ -194,6 +214,12 @@ export interface PackReviewRunRecord {
   trustedPackRoot: string;
   sourceRepoRoot: string;
   automaticBudgetDisposition: PackReviewAutomaticBudgetDisposition;
+  accountingVersion?: string;
+  reviewCycleId?: string;
+  logicalRoundOrdinal?: number;
+  logicalRoundCap?: number;
+  resolvedReviewer?: 'gpt' | 'codex' | 'claude';
+  nativeAttempt?: PackReviewNativeAttemptBinding;
   reviewTargetRoot?: string;
   runnerPid: number;
   createdAt: string;
@@ -293,8 +319,14 @@ export interface CreatePackReviewRunInput extends PackReviewStoreOptions {
   canonicalRepository?: string;
   legacyRepositoryBySourceRoot?: Record<string, string>;
   reviewRound?: PackReviewGptRoundRecord;
+  accountingVersion?: string;
+  reviewCycleId?: string;
+  logicalRoundOrdinal?: number;
+  logicalRoundCap?: number;
+  resolvedReviewer?: 'gpt' | 'codex' | 'claude';
   automaticBudgetDisposition?: PackReviewAutomaticBudgetDisposition;
   allowCompletedSameHeadReplay?: boolean;
+  allowSameRoundReplacement?: boolean;
 }
 
 interface LockHandle {
@@ -546,7 +578,7 @@ function validateGptTerminalEvidence(slot: PackReviewSourceSlotRecord, path: str
       return;
     }
     if (terminalClass === 'explicit_refusal:zero_send_collision_exhausted') {
-      if (slot.attemptOrdinal !== 2 || !isRetryableZeroSendCollisionTuple(state, cause, sendCount)) {
+      if ((slot.attemptOrdinal ?? 0) < 2 || !isRetryableZeroSendCollisionTuple(state, cause, sendCount)) {
         throw new Error(`corrupt pack review run record at ${path}: exhausted collision class is terminalResult-inconsistent`);
       }
       return;
@@ -613,14 +645,25 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
     throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid reviewRound tier`);
   }
   const tier = raw.tier;
+  const accountingVersion = raw.accountingVersion === undefined
+    ? PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION
+    : requiredJsonString(raw.accountingVersion, 'reviewRound accountingVersion', path);
+  if (![PACK_REVIEW_CAP_MAP_VERSION, PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION, PACK_REVIEW_LEGACY_CAP_MAP_VERSION]
+      .includes(accountingVersion)) {
+    throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid reviewRound accountingVersion`);
+  }
   const roundOrdinal = requiredJsonPositiveInteger(raw.roundOrdinal, 'reviewRound roundOrdinal', path);
   const cardinality = requiredJsonPositiveInteger(raw.cardinality, 'reviewRound cardinality', path);
-  if (roundOrdinal > PACK_REVIEW_CAPS[tier]) {
+  const tierCap = accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+    ? PACK_REVIEW_LOGICAL_CAPS[tier]
+    : PACK_REVIEW_DISTINCT_HEAD_CAPS[tier];
+  if (roundOrdinal > tierCap) {
     throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: reviewRound ordinal exceeds tier cap`);
   }
   const expectedCardinality = selectPackReviewGptSourceCardinality({
     reviewer: 'gpt',
     tier,
+    accountingVersion,
     roundOrdinal,
   });
   if (cardinality !== expectedCardinality) {
@@ -773,11 +816,12 @@ function assertFrozenGptRoundIdentity(
 ): void {
   const immutableFields: Array<keyof Pick<
     PackReviewGptRoundRecord,
-    'schema' | 'reviewer' | 'tier' | 'roundOrdinal' | 'cardinality' | 'issueNumber' | 'boundIssueSnapshotDigest'
+    'schema' | 'reviewer' | 'tier' | 'accountingVersion' | 'roundOrdinal' | 'cardinality' | 'issueNumber' | 'boundIssueSnapshotDigest'
   >> = [
     'schema',
     'reviewer',
     'tier',
+    'accountingVersion',
     'roundOrdinal',
     'cardinality',
     'issueNumber',
@@ -826,26 +870,22 @@ function mergeFrozenGptSlot(
 ): PackReviewSourceSlotRecord {
   const existingAttempt = existing.attemptOrdinal;
   const incomingAttempt = incoming.attemptOrdinal;
-  if (existing.lifecycle === 'terminal'
+  const existingComplete = existing.lifecycle === 'terminal'
+    && COMPLETE_GPT_TERMINAL_CLASSES.has(existing.terminalClass ?? '');
+  const legalAttemptIdentityRotation = !existingComplete
     && incomingAttempt !== undefined
-    && incomingAttempt > (existingAttempt ?? 0)) {
-    throw new Error(`corrupt pack review run record at ${path}: terminal source slot attempt cannot advance`);
-  }
-
-  const legalRetryIdentityRotation = existing.lifecycle !== 'terminal'
-    && existingAttempt === 1
-    && incomingAttempt === 2
+    && incomingAttempt > (existingAttempt ?? 0)
     && existing.invocationId !== undefined
     && incoming.invocationId !== undefined
     && existing.invocationId !== incoming.invocationId;
-  let invocationId = legalRetryIdentityRotation
+  let invocationId = legalAttemptIdentityRotation
     ? incoming.invocationId
     : existing.invocationId ?? incoming.invocationId;
   if (existing.invocationId !== undefined
     && incoming.invocationId !== undefined
     && existing.invocationId !== incoming.invocationId
-    && !legalRetryIdentityRotation) {
-    throw new Error(`corrupt pack review run record at ${path}: invocationId cannot change outside the one retry transition`);
+    && !legalAttemptIdentityRotation) {
+    throw new Error(`corrupt pack review run record at ${path}: invocationId cannot change without a newer unresolved-source attempt`);
   }
 
   const attemptOrdinal = existingAttempt === undefined
@@ -879,7 +919,7 @@ function mergeFrozenGptSlot(
       if ((incomingAttempt ?? 0) < (existingAttempt ?? 0)) return existingValue;
       throw new Error(`corrupt pack review run record at ${path}: ${name} changed without a new attempt`);
     }
-    return existingValue ?? incomingValue;
+    return incomingValue ?? existingValue;
   };
   const launchProfileKey = mergeAttemptBoundString(
     'launchProfileKey',
@@ -893,6 +933,7 @@ function mergeFrozenGptSlot(
   );
 
   const mergeEvidence = (name: 'terminalClass' | 'terminalResult' | 'payload'): unknown => {
+    if (legalAttemptIdentityRotation) return incoming[name];
     const existingValue = existing[name];
     const incomingValue = incoming[name];
     if (existingValue !== undefined
@@ -913,10 +954,12 @@ function mergeFrozenGptSlot(
   const payload = credentialedRecovery
     ? incoming.payload
     : mergeEvidence('payload');
-  const lifecycle = PACK_REVIEW_SOURCE_SLOT_LIFECYCLE_RANK[existing.lifecycle]
-    >= PACK_REVIEW_SOURCE_SLOT_LIFECYCLE_RANK[incoming.lifecycle]
-    ? existing.lifecycle
-    : incoming.lifecycle;
+  const lifecycle = legalAttemptIdentityRotation
+    ? incoming.lifecycle
+    : PACK_REVIEW_SOURCE_SLOT_LIFECYCLE_RANK[existing.lifecycle]
+      >= PACK_REVIEW_SOURCE_SLOT_LIFECYCLE_RANK[incoming.lifecycle]
+      ? existing.lifecycle
+      : incoming.lifecycle;
 
   invocationId = invocationId?.trim() || undefined;
   return {
@@ -1077,6 +1120,39 @@ export function normalizePackReviewCanonicalRepository(value: string): string {
   return slug;
 }
 
+function normalizePackReviewNativeAttempt(value: unknown, path = ''): PackReviewNativeAttemptBinding | undefined {
+  if (value === undefined || value === null) return undefined;
+  const raw = asObject(value);
+  if (raw.schema !== 'pack-review-native-attempt/v1') {
+    throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid nativeAttempt schema`);
+  }
+  if (raw.reviewer !== 'codex' && raw.reviewer !== 'claude') {
+    throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid nativeAttempt reviewer`);
+  }
+  const invocationOrdinal = requiredJsonPositiveInteger(raw.invocationOrdinal, 'nativeAttempt invocationOrdinal', path);
+  const startedAtUtc = requiredJsonString(raw.startedAtUtc, 'nativeAttempt startedAtUtc', path);
+  const effectiveBudgetMs = requiredJsonPositiveInteger(raw.effectiveBudgetMs, 'nativeAttempt effectiveBudgetMs', path);
+  const optionalPid = (name: string): number | undefined => raw[name] === undefined
+    ? undefined
+    : requiredJsonPositiveInteger(raw[name], `nativeAttempt ${name}`, path);
+  const wrapperPid = optionalPid('wrapperPid');
+  const childStartedAtUtc = raw.childStartedAtUtc === undefined
+    ? undefined
+    : requiredJsonString(raw.childStartedAtUtc, 'nativeAttempt childStartedAtUtc', path);
+  return {
+    schema: 'pack-review-native-attempt/v1',
+    reviewer: raw.reviewer,
+    invocationOrdinal,
+    startedAtUtc,
+    effectiveBudgetMs,
+    ...(wrapperPid === undefined ? {} : { wrapperPid }),
+    ...(optionalPid('processGroupId') === undefined ? {} : { processGroupId: optionalPid('processGroupId') }),
+    ...(optionalPid('childPid') === undefined ? {} : { childPid: optionalPid('childPid') }),
+    ...(optionalPid('childProcessGroupId') === undefined ? {} : { childProcessGroupId: optionalPid('childProcessGroupId') }),
+    ...(childStartedAtUtc === undefined ? {} : { childStartedAtUtc }),
+  };
+}
+
 function packReviewRunKey(
   prNumber: number,
   headSha: string,
@@ -1121,10 +1197,14 @@ function matchesPackReviewRunInput(
   headSha: string,
   canonicalRepository?: string,
   sourceRepoRoot?: string,
+  reviewCycleId?: string,
+  logicalRoundOrdinal?: number,
 ): boolean {
   if (record.projectId !== projectId || record.prNumber !== prNumber || record.targetSha !== headSha) {
     return false;
   }
+  if (reviewCycleId !== undefined && record.reviewCycleId !== reviewCycleId) return false;
+  if (logicalRoundOrdinal !== undefined && record.logicalRoundOrdinal !== logicalRoundOrdinal) return false;
   const recordRepository = record.canonicalRepository
     ?? canonicalRepositoryFromRunKey(record.key, record.prNumber, record.targetSha);
   if (canonicalRepository && recordRepository) return canonicalRepository === recordRepository;
@@ -1286,6 +1366,36 @@ function parseRecord(
   const createdAt = requiredString(raw.createdAt, 'createdAt', path);
   const updatedAt = requiredString(raw.updatedAt, 'updatedAt', path);
   const automaticBudgetDisposition = normalizeAutomaticBudgetDisposition(raw.automaticBudgetDisposition, path);
+  const accountingVersion = raw.accountingVersion === undefined
+    ? undefined
+    : requiredJsonString(raw.accountingVersion, 'accountingVersion', path);
+  if (accountingVersion !== undefined
+      && ![PACK_REVIEW_CAP_MAP_VERSION, PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION, PACK_REVIEW_LEGACY_CAP_MAP_VERSION]
+        .includes(accountingVersion)) {
+    throw new Error(`corrupt pack review run record at ${path}: invalid accountingVersion`);
+  }
+  const reviewCycleId = raw.reviewCycleId === undefined
+    ? undefined
+    : requiredJsonString(raw.reviewCycleId, 'reviewCycleId', path);
+  const logicalRoundOrdinal = raw.logicalRoundOrdinal === undefined
+    ? undefined
+    : requiredJsonPositiveInteger(raw.logicalRoundOrdinal, 'logicalRoundOrdinal', path);
+  const logicalRoundCap = raw.logicalRoundCap === undefined
+    ? undefined
+    : requiredJsonPositiveInteger(raw.logicalRoundCap, 'logicalRoundCap', path);
+  if (logicalRoundOrdinal !== undefined && logicalRoundCap !== undefined && logicalRoundOrdinal > logicalRoundCap) {
+    throw new Error(`corrupt pack review run record at ${path}: logicalRoundOrdinal exceeds logicalRoundCap`);
+  }
+  const resolvedReviewer = raw.resolvedReviewer === undefined
+    ? undefined
+    : String(raw.resolvedReviewer);
+  if (resolvedReviewer !== undefined && !['gpt', 'codex', 'claude'].includes(resolvedReviewer)) {
+    throw new Error(`corrupt pack review run record at ${path}: invalid resolvedReviewer`);
+  }
+  const nativeAttempt = normalizePackReviewNativeAttempt(raw.nativeAttempt, path);
+  if (nativeAttempt && resolvedReviewer && nativeAttempt.reviewer !== resolvedReviewer) {
+    throw new Error(`corrupt pack review run record at ${path}: nativeAttempt reviewer mismatch`);
+  }
   const reviewRound = raw.reviewRound === undefined || raw.reviewRound === null
     ? undefined
     : normalizePackReviewGptRoundRecord(raw.reviewRound, path);
@@ -1341,6 +1451,12 @@ function parseRecord(
     trustedPackRoot: String(raw.trustedPackRoot ?? ''),
     sourceRepoRoot: String(raw.sourceRepoRoot ?? ''),
     automaticBudgetDisposition,
+    accountingVersion,
+    reviewCycleId,
+    logicalRoundOrdinal,
+    logicalRoundCap,
+    resolvedReviewer: resolvedReviewer as PackReviewRunRecord['resolvedReviewer'],
+    nativeAttempt,
     reviewRound,
     runnerPid: Number(raw.runnerPid ?? 0),
     createdAt,
@@ -1673,7 +1789,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       ? normalizePackReviewCanonicalRepository(input.canonicalRepository)
       : undefined;
     const key = packReviewRunKey(input.prNumber, headSha, canonicalRepository);
-    const matchesInput = (record: PackReviewRunRecord) => matchesPackReviewRunInput(
+    const matchesTargetIdentity = (record: PackReviewRunRecord) => matchesPackReviewRunInput(
       record,
       projectId,
       input.prNumber,
@@ -1681,12 +1797,35 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       canonicalRepository,
       input.sourceRepoRoot,
     );
-    const active = boundRecords.filter((record) => matchesInput(record)
+    const matchesInput = (record: PackReviewRunRecord) => matchesPackReviewRunInput(
+      record,
+      projectId,
+      input.prNumber,
+      headSha,
+      canonicalRepository,
+      input.sourceRepoRoot,
+      input.reviewCycleId,
+      input.logicalRoundOrdinal,
+    );
+    const active = boundRecords.filter((record) => matchesTargetIdentity(record)
       && PACK_REVIEW_ACTIVE_STATUSES.has(record.status)
       && !isPackReviewRunStale(record));
-    if (active.length > 1) throw new Error(`ambiguous pack review run store: multiple active records for ${key}`);
-    if (active.length === 1) {
-      return { created: false, reused: true, reason: 'active_run_exists', run: consumerRow(active[0]!), storeRoot };
+    const replaceableActive = active.filter((record) => input.allowSameRoundReplacement === true
+      && matchesInput(record)
+      && input.resolvedReviewer !== undefined
+      && record.resolvedReviewer === input.resolvedReviewer);
+    const blockingActive = active.filter((record) => !replaceableActive.includes(record));
+    if (replaceableActive.length > 1 || blockingActive.length > 1) {
+      throw new Error(`ambiguous pack review run store: multiple active records for ${key}`);
+    }
+    if (blockingActive.length === 1) {
+      return {
+        created: false,
+        reused: true,
+        reason: 'active_run_exists',
+        run: consumerRow(blockingActive[0]!),
+        storeRoot,
+      };
     }
 
     const completed = boundRecords
@@ -1701,7 +1840,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
     const uncertain = boundRecords.filter((record) => matchesInput(record)
       && record.reviewRound?.sourceSlots.some((slot) => slot.terminalClass === 'possible_delivery/missing_result'));
     const latestUncertain = selectLatestSameKeyRun(boundRecords, uncertain);
-    if (latestUncertain) {
+    if (latestUncertain && input.allowSameRoundReplacement !== true) {
       return {
         created: false,
         reused: true,
@@ -1714,7 +1853,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
     const persistedGptRounds = boundRecords.filter((record) => matchesInput(record)
       && hasRecordedGptRoundLifecycleOrEvidence(record));
     const latestPersistedGptRound = selectLatestSameKeyRun(boundRecords, persistedGptRounds);
-    if (latestPersistedGptRound) {
+    if (latestPersistedGptRound && input.allowSameRoundReplacement !== true) {
       return {
         created: false,
         reused: true,
@@ -1748,6 +1887,11 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       sourceRepoRoot: resolve(input.sourceRepoRoot),
       automaticBudgetDisposition: normalizeNewAutomaticBudgetDisposition(input.automaticBudgetDisposition),
       canonicalRepository,
+      ...(input.accountingVersion ? { accountingVersion: input.accountingVersion } : {}),
+      ...(input.reviewCycleId ? { reviewCycleId: input.reviewCycleId } : {}),
+      ...(input.logicalRoundOrdinal ? { logicalRoundOrdinal: input.logicalRoundOrdinal } : {}),
+      ...(input.logicalRoundCap ? { logicalRoundCap: input.logicalRoundCap } : {}),
+      ...(input.resolvedReviewer ? { resolvedReviewer: input.resolvedReviewer } : {}),
       ...(input.reviewRound ? { reviewRound: input.reviewRound } : {}),
       runnerPid: process.pid,
       createdAt: now,
@@ -1780,6 +1924,10 @@ function buildUpdatedPackReviewRun(
     targetSha: existing.targetSha,
     headSha: existing.headSha,
     canonicalRepository: existing.canonicalRepository ?? fields.canonicalRepository,
+    accountingVersion: existing.accountingVersion ?? fields.accountingVersion,
+    reviewCycleId: existing.reviewCycleId ?? fields.reviewCycleId,
+    logicalRoundOrdinal: existing.logicalRoundOrdinal ?? fields.logicalRoundOrdinal,
+    logicalRoundCap: existing.logicalRoundCap ?? fields.logicalRoundCap,
     schemaVersion: 1,
     updatedAt,
     heartbeatAtUtc: PACK_REVIEW_ACTIVE_STATUSES.has(String(fields.status ?? existing.status))

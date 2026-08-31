@@ -121,3 +121,16 @@ For contract-evidence authoring, `binding-id` uses
 `scripts/contract-evidence-producer-registry.json`; repo-owned examples include
 `orchestrator-pack` and `orchestrator-pack-scripts`. This is authoring
 guidance, not validator documentation.
+
+
+## Pack-review retry observation
+
+For Browser-GPT pack-review work, never relaunch a failed/lost source solely
+because its wrapper exited or local output is missing. Reconcile exact GitHub
+source publication first, then use the persisted exact `OPKTURNV1...` marker
+and direct read-only CDP observation across all compatible tabs. A live owned
+generation below 15 minutes remains active; at 15 minutes it may be replaced.
+A finished owned reply is recovery work under the original invocation, not a
+replacement. Ambiguous or unavailable observation grants no resend authority
+but must not block unrelated productive work. Do not create an unlock flag,
+watcher, retry queue, or durable replacement-eligibility state.

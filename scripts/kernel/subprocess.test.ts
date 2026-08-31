@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { runProcess, runProcessSync } from '#opk-kernel/subprocess';
+import { observePosixProcessGroup, runProcess, runProcessSync } from '#opk-kernel/subprocess';
 
 const cleanupPids = new Set<number>();
 
@@ -61,6 +61,26 @@ describe('sanctioned subprocess kernel', () => {
     expect(result.outcome).toBe('timeout');
     expect(result.timedOut).toBe(true);
     expect(result.ok).toBe(false);
+  });
+
+  it('reports process-group liveness without turning uncertainty into stopped', async () => {
+    expect(observePosixProcessGroup(-1)).toBe('observation_unavailable');
+    if (process.platform === 'win32') {
+      expect(observePosixProcessGroup(process.pid)).toBe('observation_unavailable');
+      return;
+    }
+
+    const child = spawn(process.execPath, nodeArgs('setInterval(() => {}, 1000)'), {
+      detached: true,
+      stdio: 'ignore',
+    });
+    expect(child.pid).toBeDefined();
+    cleanupPids.add(child.pid!);
+    expect(observePosixProcessGroup(child.pid!)).toBe('running');
+    process.kill(-child.pid!, 'SIGKILL');
+    await waitForDead(child.pid!);
+    expect(observePosixProcessGroup(child.pid!)).toBe('stopped');
+    cleanupPids.delete(child.pid!);
   });
 
   it('reports a real exit-code completion distinctly', async () => {

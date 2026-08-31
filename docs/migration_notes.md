@@ -1,3 +1,26 @@
+## Pack-review logical-round migration (Issue #1826)
+
+New cycles use `issue-1826-logical-rounds-1-1-2`: T1=1, T2=1, T3=2
+logical rounds. A GPT round still has three concurrent sources and consumes at
+most one round. T3 round 2 may target the same commit as round 1.
+
+Open cycles that already carry the earlier `issue-1063-1-2-4` accounting
+remain on their persisted distinct-head caps until their existing terminal/reset
+path completes. They are not reinterpreted in place.
+
+After the new mode records `reviewStageComplete=true`, later commits do not
+consume more required review rounds. CI and smoke remain exact-head checks; the
+pack-review status on a later current head is projected as success with the
+completed-stage description. Worker notification remains best-effort.
+
+Retry decisions are recomputed from current reviewer evidence rather than stored
+as an eligibility flag. Browser GPT uses GitHub publication reconciliation plus
+read-only CDP ownership observation. Codex uses its pack-owned process group.
+Claude uses the adapter-emitted exact-run child frame, with the active child
+binding replaced at the fallback invocation boundary. The native running ceiling
+is the smaller of the reviewer budget and 15 minutes. No second lifecycle store
+is introduced.
+
 # Migration notes
 
 ## Multi-agent live executor profiles (Issue #1610)

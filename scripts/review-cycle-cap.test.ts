@@ -18,6 +18,8 @@ import {
   TERMINAL_AT_CAP_OPEN_FINDINGS,
   TERMINAL_CLEAN_EARLY_STOP,
   TERMINAL_COMMENTED_EARLY_STOP,
+  LEGACY_TIER_CAP_BY_TIER,
+  REVIEW_CYCLE_LEGACY_ACCOUNTING_VERSION,
   TIER_CAP_BY_TIER,
   buildAtCapOpenFindingsRecord,
   classifyTerminalRun,
@@ -36,13 +38,38 @@ const capPsHelperSource = readFileSync(
 );
 
 function run(prNumber: number, headSha: string, reviewRuns: Array<Record<string, unknown>>, extra: Record<string, unknown> = {}) {
+  const explicitCapState = Object.prototype.hasOwnProperty.call(extra, 'capState');
+  const legacyShapedRuns = reviewRuns.length > 0 && reviewRuns.every((reviewRun) => (
+    reviewRun.logicalRoundOrdinal === undefined
+    && !(reviewRun.reviewRound && typeof reviewRun.reviewRound === 'object'
+      && (reviewRun.reviewRound as Record<string, unknown>).roundOrdinal !== undefined)
+  ));
+  const issueBody = extra.issueBody as string | undefined;
+  const tierCap = resolveTierAndCap({ issueBody });
+  const legacyCycleOpenedAtUtc = reviewRuns
+    .map((reviewRun) => String(reviewRun.completedAt ?? ''))
+    .filter(Boolean)
+    .sort()[0] ?? new Date(Number(extra.nowMs ?? Date.now())).toISOString();
+  const inferredLegacyCapState = !explicitCapState && legacyShapedRuns
+    ? {
+        [String(prNumber)]: {
+          schemaVersion: 1,
+          accountingVersion: REVIEW_CYCLE_LEGACY_ACCOUNTING_VERSION,
+          tier: tierCap.tier,
+          cap: LEGACY_TIER_CAP_BY_TIER[tierCap.tier],
+          cycleOpenedAtUtc: legacyCycleOpenedAtUtc,
+          distinctHeadsReviewed: [],
+          tierFrozen: true,
+        },
+      }
+    : {};
   return evaluateReviewCycleCapGate({
     prNumber,
     currentHeadSha: headSha,
     openPrs: [{ number: prNumber, headRefOid: headSha }],
     reviewRuns,
-    capState: (extra.capState ?? {}) as Record<string, unknown>,
-    issueBody: extra.issueBody as string | undefined,
+    capState: (explicitCapState ? extra.capState : inferredLegacyCapState) as Record<string, unknown>,
+    issueBody,
     nowMs: extra.nowMs as number | undefined,
     producer: extra.producer as string | undefined,
   });
@@ -121,18 +148,18 @@ describe('cap gate uses review status reader', () => {
   });
 });
 
-describe('tier default T2 cap 2', () => {
-  it('defaults to T2 cap 2 when tier is unresolvable', () => {
+describe('logical-round tier caps', () => {
+  it('defaults to T2 cap 1 when tier is unresolvable', () => {
     const resolved = resolveTierAndCap({});
     expect(resolved.tier).toBe('T2');
-    expect(resolved.cap).toBe(2);
+    expect(resolved.cap).toBe(1);
   });
 
   it('issue fence T3 wins over default T2', () => {
     const body = '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```';
     const resolved = resolveTierAndCap({ issueBody: body });
     expect(resolved.tier).toBe('T3');
-    expect(resolved.cap).toBe(4);
+    expect(resolved.cap).toBe(2);
   });
 
   it('freezes tier at first automated review launch before any completed runs', () => {
@@ -143,11 +170,11 @@ describe('tier default T2 cap 2', () => {
     expect(launch.allowStart).toBe(true);
     expect(launch.prState?.tierFrozen).toBe(true);
     expect(launch.prState?.tier).toBe('T2');
-    expect(launch.prState?.cap).toBe(2);
+    expect(launch.prState?.cap).toBe(1);
 
     const afterRelabel = run(646, head, [], { capState: launch.capState, issueBody: t3Body });
     expect(afterRelabel.prState?.tier).toBe('T2');
-    expect(afterRelabel.prState?.cap).toBe(2);
+    expect(afterRelabel.prState?.cap).toBe(1);
   });
 
   it('freezes tier at cycle open — relabel does not change active cap', () => {
@@ -155,7 +182,7 @@ describe('tier default T2 cap 2', () => {
     const t3Body = '```complexity-tier\ntier: T3\n```';
     const headA = 'a'.repeat(40);
     const runs = [
-      { prNumber: 646, targetSha: headA, status: 'changes_requested', openFindingCount: 1, completedAt: '2026-07-01T00:00:00.000Z' },
+      { prNumber: 646, targetSha: headA, logicalRoundOrdinal: 1, status: 'changes_requested', openFindingCount: 1, completedAt: '2026-07-01T00:00:00.000Z' },
     ];
     const first = syncReviewCycleCapState({
       capState: {},
@@ -166,7 +193,7 @@ describe('tier default T2 cap 2', () => {
       nowMs: Date.parse('2026-07-01T00:00:00.000Z'),
     });
     expect(first.prState.tier).toBe('T2');
-    expect(first.prState.cap).toBe(2);
+    expect(first.prState.cap).toBe(1);
 
     const second = syncReviewCycleCapState({
       capState: first.capState,
@@ -177,7 +204,7 @@ describe('tier default T2 cap 2', () => {
       nowMs: Date.parse('2026-07-02T00:00:00.000Z'),
     });
     expect(second.prState.tier).toBe('T2');
-    expect(second.prState.cap).toBe(2);
+    expect(second.prState.cap).toBe(1);
   });
 });
 
@@ -305,46 +332,41 @@ describe('distinct head counting matrix', () => {
     expect(gate.prState?.terminal).toBe(TERMINAL_AT_CAP_OPEN_FINDINGS);
   });
 
-  it('reconcile plan honors per-PR tier via issueBodiesByPr (not T2 fallback)', () => {
+  it('reconcile plan distinguishes one-round T1/T2 from two-round T3', () => {
     const prior = ['a1'].map((h) => h.padEnd(40, '1'));
     const current = 'a3'.padEnd(40, '1');
-    const runs = [
-      ...prior.map((sha, idx) => ({
-        prNumber: pr,
-        targetSha: sha,
-        status: 'changes_requested',
-        openFindingCount: 1,
-        completedAt: `2026-07-0${idx + 1}T00:00:00Z`,
-      })),
-    ];
+    const runs = prior.map((sha, idx) => ({
+      prNumber: pr,
+      targetSha: sha,
+      logicalRoundOrdinal: 1,
+      status: 'changes_requested',
+      openFindingCount: 1,
+      completedAt: `2026-07-0${idx + 1}T00:00:00Z`,
+    }));
     const base = {
       openPrs: [{ number: pr, headRefOid: current, headCommittedAt: '2026-07-03T00:00:00Z' }],
       reviewRuns: runs,
-      sessions: [
-        {
-          sessionId: 'opk-646',
-          role: 'worker',
-          prNumber: pr,
-          status: 'working',
-          reports: [{ reportState: 'ready_for_review', reportedAt: '2026-07-03T01:00:00Z' }],
-        },
-      ],
-      ciChecksByPr: {
-        [pr]: [
-          { name: 'verify', state: 'SUCCESS' },
-        ],
-      },
+      sessions: [{
+        sessionId: 'opk-646',
+        role: 'worker',
+        prNumber: pr,
+        status: 'working',
+        reports: [{ reportState: 'ready_for_review', reportedAt: '2026-07-03T01:00:00Z' }],
+      }],
+      ciChecksByPr: { [pr]: [{ name: 'verify', state: 'SUCCESS' }] },
       requiredCheckNamesByPr: { [pr]: ['verify'] },
       capCycleState: {},
     };
-    const t2Plan = planReconcileActions({ ...base, issueBodiesByPr: { [String(pr)]: REVIEW_CYCLE_CAP_T2_ISSUE_BODY } });
-    expect(t2Plan.actions.some((a) => a.type === 'start_review')).toBe(true);
+    const t3Plan = planReconcileActions({
+      ...base,
+      issueBodiesByPr: { [String(pr)]: '```complexity-tier\ntier: T3\n```' },
+    });
+    expect(t3Plan.actions.some((a) => a.type === 'start_review')).toBe(true);
 
     const t1Plan = planReconcileActions({ ...base, issueBodiesByPr: { [String(pr)]: REVIEW_CYCLE_CAP_T1_ISSUE_BODY } });
     expect(t1Plan.actions.some((a) => a.type === 'start_review')).toBe(false);
-    expect(t1Plan.actions.some((a) => a.type === 'skip' && a.reason === REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED)).toBe(true);
+    expect(t1Plan.actions.some((a) => a.type === 'skip' && a.reason === TERMINAL_AT_CAP_OPEN_FINDINGS)).toBe(true);
   });
-
   it('(h) four distinct terminal heads on T3 exhausts budget', () => {
     const heads = Array.from({ length: 4 }, (_, i) => `t3-${i}`.padEnd(40, '8'));
     const runs = heads.map((sha, idx) => ({
@@ -360,6 +382,60 @@ describe('distinct head counting matrix', () => {
   });
 });
 
+describe('Issue #1826 logical round completion', () => {
+  const pr = 1826;
+  const head = 'logical-round-head'.padEnd(40, 'a');
+  const t3Body = '```complexity-tier\ntier: T3\n```';
+
+  it.each(['T1', 'T2'] as const)('%s completes after its first settled clean round', (tier) => {
+    const gate = run(pr, head, [{
+      prNumber: pr,
+      targetSha: head,
+      logicalRoundOrdinal: 1,
+      status: 'up_to_date',
+      openFindingCount: 0,
+      completedAt: '2026-08-30T00:00:00Z',
+    }], { issueBody: '```complexity-tier\ntier: ' + tier + '\n```' });
+
+    expect(gate.allowStart).toBe(false);
+    expect(gate.reason).toBe(TERMINAL_CLEAN_EARLY_STOP);
+    expect(gate.prState?.logicalRoundsReviewed).toEqual([1]);
+    expect(gate.prState?.reviewStageComplete).toBe(true);
+  });
+
+  it('keeps T3 clean round 1 nonterminal and admits required same-head round 2', () => {
+    const round1 = [{
+      prNumber: pr,
+      targetSha: head,
+      logicalRoundOrdinal: 1,
+      status: 'up_to_date',
+      openFindingCount: 0,
+      completedAt: '2026-08-30T00:00:00Z',
+    }];
+    const first = run(pr, head, round1, { issueBody: t3Body });
+
+    expect(first.allowStart).toBe(true);
+    expect(first.terminal).toBeNull();
+    expect(first.mergeEligible).toBe(false);
+    expect(first.prState?.logicalRoundsReviewed).toEqual([1]);
+    expect(first.prState?.reviewStageComplete).toBe(false);
+
+    const second = run(pr, head, [...round1, {
+      prNumber: pr,
+      targetSha: head,
+      logicalRoundOrdinal: 2,
+      status: 'up_to_date',
+      openFindingCount: 0,
+      completedAt: '2026-08-30T00:10:00Z',
+    }], { issueBody: t3Body, capState: first.capState });
+
+    expect(second.allowStart).toBe(false);
+    expect(second.reason).toBe(TERMINAL_CLEAN_EARLY_STOP);
+    expect(second.prState?.logicalRoundsReviewed).toEqual([1, 2]);
+    expect(second.prState?.distinctHeadsReviewed).toEqual([head]);
+    expect(second.prState?.reviewStageComplete).toBe(true);
+  });
+});
 describe('clean early stop terminal', () => {
   const pr = 646;
   const head = 'clean'.padEnd(40, 'c');
@@ -450,7 +526,7 @@ describe('at cap open findings terminal', () => {
     const gate = run(pr, current, runs, { issueBody: '```complexity-tier\ntier: T2\n```', producer: 'reconcile' });
     expect(gate.terminal).toBe(TERMINAL_AT_CAP_OPEN_FINDINGS);
     expect(gate.atCapRecord).toMatchObject({
-      schema_version: 1,
+      schema_version: 2,
       terminal: TERMINAL_AT_CAP_OPEN_FINDINGS,
       pr_number: pr,
       head_sha: current,
@@ -500,7 +576,7 @@ describe('at cap open findings terminal', () => {
       terminatedAtUtc: '2026-07-02T00:00:00.000Z',
       producer: 'reconcile',
     });
-    expect(record.schema_version).toBe(1);
+    expect(record.schema_version).toBe(2);
     expect(record.terminal).toBe(TERMINAL_AT_CAP_OPEN_FINDINGS);
     expect(record.pr_number).toBe(646);
     expect(record.distinct_heads_reviewed).toHaveLength(2);
@@ -537,8 +613,8 @@ describe('review cycle cap scenario matrix', () => {
     const head1 = 'pr1-head'.padEnd(40, '1');
     const head2 = 'pr2-head'.padEnd(40, '2');
     const runs = [
-      { prNumber: 101, targetSha: head1, status: 'changes_requested', openFindingCount: 1, completedAt: '2026-07-01T00:00:00Z' },
-      { prNumber: 202, targetSha: head2, status: 'changes_requested', openFindingCount: 1, completedAt: '2026-07-01T00:00:00Z' },
+      { prNumber: 101, targetSha: head1, logicalRoundOrdinal: 1, status: 'changes_requested', openFindingCount: 1, completedAt: '2026-07-01T00:00:00Z' },
+      { prNumber: 202, targetSha: head2, logicalRoundOrdinal: 1, status: 'changes_requested', openFindingCount: 1, completedAt: '2026-07-01T00:00:00Z' },
     ];
     const first = syncReviewCycleCapState({
       capState: {},
@@ -554,8 +630,8 @@ describe('review cycle cap scenario matrix', () => {
     });
     expect(second.capState['101']).toBeTruthy();
     expect(second.capState['202']).toBeTruthy();
-    expect((second.capState['101'] as { distinctHeadsReviewed?: string[] }).distinctHeadsReviewed).toEqual([head1]);
-    expect((second.capState['202'] as { distinctHeadsReviewed?: string[] }).distinctHeadsReviewed).toEqual([head2]);
+    expect((second.capState['101'] as { logicalRoundsReviewed?: number[] }).logicalRoundsReviewed).toEqual([1]);
+    expect((second.capState['202'] as { logicalRoundsReviewed?: number[] }).logicalRoundsReviewed).toEqual([1]);
   });
 
   it('superseded run excluded and same-sha retry after open_findings does not add budget', () => {
@@ -648,9 +724,12 @@ describe('review cycle cap scenario matrix', () => {
     expect(gate.prState?.atCapRecord).toBeNull();
   });
 
-  it('wake honors issue tier via issueBody', () => {
+  it('wake keeps T3 round 2 eligible after one consumed logical round', () => {
     const current = buildReviewCycleCapCurrentHead();
-    const runs = buildReviewCycleCapPriorHeadRuns(pr);
+    const runs = buildReviewCycleCapPriorHeadRuns(pr).map((reviewRun) => ({
+      ...reviewRun,
+      logicalRoundOrdinal: 1,
+    }));
     const session = buildReviewCycleCapWorkerSession(pr, 'opk-646');
     const base = {
       wakeKind: 'ready_for_review' as const,
@@ -665,17 +744,19 @@ describe('review cycle cap scenario matrix', () => {
       sessionId: 'opk-646',
       capCycleState: {},
     };
-    const t2Wake = evaluateWakeReviewTrigger({ ...base, issueBody: REVIEW_CYCLE_CAP_T2_ISSUE_BODY });
-    expect(t2Wake.triggerReviewRun).toBe(true);
+    const t3Wake = evaluateWakeReviewTrigger({ ...base, issueBody: '```complexity-tier\ntier: T3\n```' });
+    expect(t3Wake.triggerReviewRun).toBe(true);
 
     const t1Wake = evaluateWakeReviewTrigger({ ...base, issueBody: REVIEW_CYCLE_CAP_T1_ISSUE_BODY });
     expect(t1Wake.triggerReviewRun).toBe(false);
-    expect(t1Wake.reason).toBe(REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED);
+    expect(t1Wake.reason).toBe(TERMINAL_AT_CAP_OPEN_FINDINGS);
   });
-
-  it('reeval deferred watch honors per-PR tier via issueBodiesByPr', () => {
+  it('reeval deferred watch keeps T3 round 2 eligible after one consumed logical round', () => {
     const current = buildReviewCycleCapCurrentHead();
-    const runs = buildReviewCycleCapPriorHeadRuns(pr);
+    const runs = buildReviewCycleCapPriorHeadRuns(pr).map((reviewRun) => ({
+      ...reviewRun,
+      logicalRoundOrdinal: 1,
+    }));
     const base = {
       watchEntries: {
         [`${pr}:${current}`]: {
@@ -692,12 +773,15 @@ describe('review cycle cap scenario matrix', () => {
       requiredCheckNamesByPr: { [pr]: ['verify'] },
       capCycleState: {},
     };
-    const t2Plan = planDeferredWatchTick({ ...base, issueBodiesByPr: { [String(pr)]: REVIEW_CYCLE_CAP_T2_ISSUE_BODY } });
-    expect(t2Plan.actions.some((a) => a.type === 'start_review')).toBe(true);
+    const t3Plan = planDeferredWatchTick({
+      ...base,
+      issueBodiesByPr: { [String(pr)]: '```complexity-tier\ntier: T3\n```' },
+    });
+    expect(t3Plan.actions.some((a) => a.type === 'start_review')).toBe(true);
 
     const t1Plan = planDeferredWatchTick({ ...base, issueBodiesByPr: { [String(pr)]: REVIEW_CYCLE_CAP_T1_ISSUE_BODY } });
     expect(t1Plan.actions.some((a) => a.type === 'start_review')).toBe(false);
-    expect(t1Plan.actions.some((a) => a.type === 'skip' && a.reason === REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED)).toBe(true);
+    expect(t1Plan.actions.some((a) => a.type === 'skip' && a.reason === TERMINAL_AT_CAP_OPEN_FINDINGS)).toBe(true);
   });
   it('at-cap head advance without clearance keeps terminal and suppresses starts', () => {
     const heads = ['c1', 'c2'].map((h) => h.padEnd(40, 'x'));

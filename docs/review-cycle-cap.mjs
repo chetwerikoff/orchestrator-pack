@@ -15,9 +15,12 @@ import { isPrMergedOnGitHub } from './review-orchestrator-loop.mjs';
 import { resolveCurrentPrHeadSha } from './review-head-ready.mjs';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 
-export const REVIEW_CYCLE_CAP_SCHEMA_VERSION = 1;
+export const REVIEW_CYCLE_CAP_SCHEMA_VERSION = 2;
+export const REVIEW_CYCLE_ACCOUNTING_VERSION = 'issue-1826-logical-rounds-1-1-2';
+export const REVIEW_CYCLE_LEGACY_ACCOUNTING_VERSION = 'issue-1063-distinct-heads-1-2-4';
 export const DEFAULT_REVIEW_CYCLE_TIER = 'T2';
-export const TIER_CAP_BY_TIER = Object.freeze({ T1: 1, T2: 2, T3: 4 });
+export const TIER_CAP_BY_TIER = Object.freeze({ T1: 1, T2: 1, T3: 2 });
+export const LEGACY_TIER_CAP_BY_TIER = Object.freeze({ T1: 1, T2: 2, T3: 4 });
 export const VALID_REVIEW_CYCLE_TIERS = new Set(Object.keys(TIER_CAP_BY_TIER));
 
 export const TERMINAL_CLEAN_EARLY_STOP = 'clean_early_stop';
@@ -204,6 +207,36 @@ export function deriveDistinctHeadBudget(runs, prNumber, currentHeadSha) {
     .sort((a, b) => (Date.parse(String(a.completedAt ?? '')) || 0) - (Date.parse(String(b.completedAt ?? '')) || 0));
 }
 
+
+export function deriveLogicalRoundBudget(runs, prNumber, currentHeadSha) {
+  const forPr = toArray(runs).filter(
+    (run) => Number(run?.prNumber) === prNumber && consumesAutomaticReviewBudget(run),
+  );
+  const latestByRound = new Map();
+  for (const run of forPr) {
+    const roundOrdinal = Number(run?.logicalRoundOrdinal ?? run?.reviewRound?.roundOrdinal);
+    if (!Number.isInteger(roundOrdinal) || roundOrdinal <= 0) continue;
+    const target = normalizeSha(run?.targetSha);
+    if (!target) continue;
+    const classification = classifyTerminalRun(run, currentHeadSha);
+    if (!['clean', 'non_blocking', 'open_findings'].includes(classification.kind)) continue;
+    const runMs = resolveRunCompletionMs(run);
+    const existing = latestByRound.get(roundOrdinal);
+    if (!existing || runMs >= existing.runMs) {
+      latestByRound.set(roundOrdinal, { run, runMs, classification, targetSha: target });
+    }
+  }
+  return [...latestByRound.entries()]
+    .map(([roundOrdinal, value]) => ({
+      roundOrdinal,
+      targetSha: value.targetSha,
+      classification: value.classification,
+      completedAt: String(value.run?.completedAt ?? value.run?.updatedAt ?? value.run?.createdAt ?? '') || null,
+      run: value.run,
+    }))
+    .sort((a, b) => a.roundOrdinal - b.roundOrdinal);
+}
+
 export function resolveCurrentHeadOpenFindingCount(runs, prNumber, currentHeadSha) {
   const head = normalizeSha(currentHeadSha);
   const forHead = toArray(runs).filter(
@@ -249,10 +282,17 @@ export function normalizePrCapCycleState(raw, prNumber) {
   return {
     schemaVersion: Number(state.schemaVersion ?? REVIEW_CYCLE_CAP_SCHEMA_VERSION),
     prNumber,
+    accountingVersion: String(state.accountingVersion
+      ?? (hasOpenCycle ? REVIEW_CYCLE_LEGACY_ACCOUNTING_VERSION : REVIEW_CYCLE_ACCOUNTING_VERSION)),
     tier: String(state.tier ?? tierCap.tier),
-    cap: Number(state.cap ?? tierCap.cap),
+    cap: Number(state.cap ?? (hasOpenCycle && !state.accountingVersion
+      ? LEGACY_TIER_CAP_BY_TIER[String(state.tier ?? tierCap.tier)] ?? tierCap.cap
+      : tierCap.cap)),
     cycleOpenedAtUtc: state.cycleOpenedAtUtc ?? null,
     distinctHeadsReviewed: [...toArray(state.distinctHeadsReviewed)].map((sha) => normalizeSha(sha)),
+    logicalRoundsReviewed: [...toArray(state.logicalRoundsReviewed)]
+      .map((value) => Number(value))
+      .filter((value) => Number.isInteger(value) && value > 0),
     terminal: state.terminal ?? null,
     terminalHeadSha: normalizeSha(state.terminalHeadSha ?? ''),
     mergeEligible: Boolean(state.mergeEligible),
@@ -268,10 +308,12 @@ function openFreshCycle(input) {
   return {
     schemaVersion: REVIEW_CYCLE_CAP_SCHEMA_VERSION,
     prNumber: Number(input.prNumber),
+    accountingVersion: REVIEW_CYCLE_ACCOUNTING_VERSION,
     tier: tierCap.tier,
     cap: tierCap.cap,
     cycleOpenedAtUtc: nowIso,
     distinctHeadsReviewed: [],
+    logicalRoundsReviewed: [],
     terminal: null,
     terminalHeadSha: '',
     mergeEligible: false,
@@ -286,6 +328,14 @@ function resolveReviewStageComplete(input, prState) {
   return toArray(input.reviewRuns).some((run) => run?.reviewStageComplete === true);
 }
 
+function reviewRunsUseLogicalAccounting(reviewRuns, prNumber) {
+  return toArray(reviewRuns).some((run) => {
+    if (Number(run?.prNumber) !== Number(prNumber)) return false;
+    const round = Number(run?.logicalRoundOrdinal ?? run?.reviewRound?.roundOrdinal);
+    return Number.isInteger(round) && round > 0;
+  });
+}
+
 export function syncReviewCycleCapState(input) {
   const prNumber = Number(input.prNumber);
   const currentHeadSha = normalizeSha(
@@ -294,7 +344,21 @@ export function syncReviewCycleCapState(input) {
   const nowMs = Number(input.nowMs ?? Date.now());
   const nowIso = new Date(nowMs).toISOString();
   const capStateRoot = input.capState && typeof input.capState === 'object' ? { ...input.capState } : {};
+  const rawPrState = capStateRoot[String(prNumber)] && typeof capStateRoot[String(prNumber)] === 'object'
+    ? capStateRoot[String(prNumber)]
+    : null;
   let prState = normalizePrCapCycleState(capStateRoot, prNumber);
+  const reviewRuns = toArray(input.reviewRuns).filter((run) => Number(run?.prNumber) === prNumber);
+  const hasExplicitAccountingVersion = typeof rawPrState?.accountingVersion === 'string'
+    && String(rawPrState.accountingVersion).trim().length > 0;
+  const logicalRoundEvidence = reviewRunsUseLogicalAccounting(reviewRuns, prNumber);
+  if (!hasExplicitAccountingVersion
+      && reviewRuns.length > 0
+      && !logicalRoundEvidence
+      && !prState.cycleOpenedAtUtc) {
+    prState.accountingVersion = REVIEW_CYCLE_LEGACY_ACCOUNTING_VERSION;
+    prState.cap = LEGACY_TIER_CAP_BY_TIER[prState.tier] ?? prState.cap;
+  }
   const reviewStageComplete = resolveReviewStageComplete(input, prState);
 
   if (!reviewStageComplete && prState.terminal === TERMINAL_CLEAN_EARLY_STOP
@@ -331,7 +395,9 @@ export function syncReviewCycleCapState(input) {
     if (!prState.tierFrozen) {
       const launchTierCap = resolveTierAndCap({ tier: input.tier, issueBody: input.issueBody });
       prState.tier = launchTierCap.tier;
-      prState.cap = launchTierCap.cap;
+      prState.cap = prState.accountingVersion === REVIEW_CYCLE_LEGACY_ACCOUNTING_VERSION
+        ? LEGACY_TIER_CAP_BY_TIER[launchTierCap.tier]
+        : launchTierCap.cap;
       prState.tierFrozen = true;
     }
     const probeBudget = deriveDistinctHeadBudget(input.reviewRuns ?? [], prNumber, currentHeadSha);
@@ -344,12 +410,21 @@ export function syncReviewCycleCapState(input) {
   }
 
   const cycleRuns = filterRunsWithinCycleBoundary(input.reviewRuns ?? [], prState.cycleOpenedAtUtc);
-  const budget = deriveDistinctHeadBudget(cycleRuns, prNumber, currentHeadSha);
-  const distinctHeads = budget.map((entry) => entry.targetSha);
+  const logicalAccounting = prState.accountingVersion === REVIEW_CYCLE_ACCOUNTING_VERSION;
+  const budget = logicalAccounting
+    ? deriveLogicalRoundBudget(cycleRuns, prNumber, currentHeadSha)
+    : deriveDistinctHeadBudget(cycleRuns, prNumber, currentHeadSha);
+  const distinctHeads = [...new Set(budget.map((entry) => entry.targetSha))];
   prState.distinctHeadsReviewed = distinctHeads;
+  prState.logicalRoundsReviewed = logicalAccounting
+    ? budget.map((entry) => entry.roundOrdinal)
+    : [];
+  const consumedCount = logicalAccounting ? prState.logicalRoundsReviewed.length : distinctHeads.length;
+  const finalEntry = budget.length > 0 ? budget[budget.length - 1] : undefined;
 
   const cleanEntry = [...budget].reverse().find((entry) => entry.classification.kind === 'clean');
-  if (cleanEntry && cleanEntry.targetSha === currentHeadSha) {
+  if (cleanEntry && cleanEntry.targetSha === currentHeadSha
+      && (!logicalAccounting || consumedCount >= prState.cap)) {
     prState.terminal = TERMINAL_CLEAN_EARLY_STOP;
     prState.terminalHeadSha = cleanEntry.targetSha;
     prState.mergeEligible = true;
@@ -360,23 +435,27 @@ export function syncReviewCycleCapState(input) {
   }
 
   const nonBlockingEntry = [...budget].reverse().find((entry) => entry.classification.kind === 'non_blocking');
-  if (nonBlockingEntry && nonBlockingEntry.targetSha === currentHeadSha) {
+  if (nonBlockingEntry && nonBlockingEntry.targetSha === currentHeadSha
+      && (!logicalAccounting || consumedCount >= prState.cap)) {
     prState.terminal = TERMINAL_COMMENTED_EARLY_STOP;
     prState.terminalHeadSha = nonBlockingEntry.targetSha;
     prState.mergeEligible = true;
     prState.atCapRecord = null;
+    if (logicalAccounting) prState.reviewStageComplete = true;
     capStateRoot[String(prNumber)] = prState;
     return { capState: capStateRoot, prState };
   }
 
-  const openFindingCount = resolveCurrentHeadOpenFindingCount(cycleRuns, prNumber, currentHeadSha);
+  const openFindingCount = logicalAccounting && finalEntry?.classification.kind === 'open_findings'
+    ? Number(finalEntry.classification.openFindings ?? 0)
+    : resolveCurrentHeadOpenFindingCount(cycleRuns, prNumber, currentHeadSha);
   const currentHead = normalizeSha(currentHeadSha);
-  const budgetExhausted = distinctHeads.length >= prState.cap;
+  const budgetExhausted = consumedCount >= prState.cap;
   if (budgetExhausted && openFindingCount > 0) {
     prState.terminal = TERMINAL_AT_CAP_OPEN_FINDINGS;
     prState.terminalHeadSha = currentHead;
     prState.mergeEligible = false;
-    prState.reviewStageComplete = true;
+    prState.reviewStageComplete = false;
     prState.atCapRecord = buildAtCapOpenFindingsRecord({
       prNumber,
       headSha: currentHead,
@@ -476,9 +555,15 @@ export function evaluateReviewCycleCapGate(input) {
     };
   }
 
-  const alreadyConsumed = prState.distinctHeadsReviewed.includes(currentHeadSha);
-  const budgetExhausted = prState.distinctHeadsReviewed.length >= prState.cap;
-  if (budgetExhausted && !alreadyConsumed) {
+  const logicalAccounting = prState.accountingVersion === REVIEW_CYCLE_ACCOUNTING_VERSION;
+  const alreadyConsumed = logicalAccounting
+    ? false
+    : prState.distinctHeadsReviewed.includes(currentHeadSha);
+  const consumedCount = logicalAccounting
+    ? prState.logicalRoundsReviewed.length
+    : prState.distinctHeadsReviewed.length;
+  const budgetExhausted = consumedCount >= prState.cap;
+  if (budgetExhausted && (logicalAccounting || !alreadyConsumed)) {
     const openFindingCount = resolveCurrentHeadOpenFindingCount(
       filterRunsWithinCycleBoundary(input.reviewRuns ?? [], prState.cycleOpenedAtUtc),
       prNumber,
@@ -502,7 +587,7 @@ export function evaluateReviewCycleCapGate(input) {
         terminal: TERMINAL_AT_CAP_OPEN_FINDINGS,
         terminalHeadSha: currentHeadSha,
         mergeEligible: false,
-        reviewStageComplete: true,
+        reviewStageComplete: false,
         atCapRecord,
       };
       const blockedCapState = { ...synced.capState, [String(prNumber)]: blockedPrState };

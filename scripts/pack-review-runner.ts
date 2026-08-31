@@ -16,8 +16,15 @@ import {
   createReviewerBudgetLedger,
   type ReviewerBudgetLedger,
 } from '../plugins/codex-pr-reviewer/lib/reviewer_budget.ts';
-import { runProcess, type ProcessResult } from './kernel/subprocess.ts';
+import { observePosixProcessGroup, runProcess, type ProcessResult } from './kernel/subprocess.ts';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
+import {
+  INSPECTION_EXPRESSION,
+  defaultDependencies as browserCdpDependencies,
+  toCompatibleTargets,
+  type ProbeDependencies,
+} from './browser-gpt-page-probe.ts';
+import { readStateLightTurnObservation } from './chatgpt-browser-turn/state-light-turn-observation.ts';
 import {
   deriveMergeTriageEvidenceTuple,
   produceMergeTriageEvidence,
@@ -31,6 +38,8 @@ import {
 } from './pack-review-carryover.ts';
 import {
   PACK_REVIEW_AUTHORITY_PHASES,
+  PACK_REVIEW_CAP_MAP_VERSION,
+  PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
   PACK_REVIEW_GPT_SOURCE_ADMISSION_INTERVAL_MS,
   acknowledgePackReviewReset,
   assertPackReviewSmokeAdmission,
@@ -92,6 +101,7 @@ import {
   type GithubReviewTransport,
 } from './lib/github-review-reconciliation.ts';
 import {
+  PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
   classifyPackReviewFailureReason,
   classifyPackReviewPayload,
   deliverPackReviewVerdict,
@@ -188,6 +198,10 @@ interface StartInput {
     invocationId: string;
     round: PackReviewGptRoundRecord;
   }) => void | Promise<void>;
+  fixtureGptAttemptObserver?: (
+    run: PackReviewRunRecord,
+    nowMs?: number,
+  ) => Promise<PackReviewGptAttemptObservation | null>;
   fixtureBeforeGptSourceCommentCensus?: (event: {
     slotId: string;
     attemptOrdinal: number;
@@ -206,6 +220,8 @@ interface StartInput {
   fixtureFallbackReviewStdout?: string;
   fixtureFallbackReviewExitCode?: number;
   fixtureFallbackReviewTimedOut?: boolean;
+  fixtureAfterNativeInitialArmed?: (run: PackReviewRunRecord) => void | Promise<void>;
+  fixtureAfterNativeFallbackArmed?: (run: PackReviewRunRecord) => void | Promise<void>;
   fixtureReviewerLayerOverrides?: PackReviewerLayerOverrides;
   fixtureEmulateWin32Selector?: boolean;
   fixturePostReviewHeadSha?: string;
@@ -513,6 +529,7 @@ function advancePackReviewAuthority(
 function terminalV2FromPayload(input: {
   runId: string;
   targetSha: string;
+  logicalRoundOrdinal?: number;
   verdict: ReviewPayload['verdict'];
   findingCount: number;
   findings: ReviewPayload['findings'];
@@ -531,6 +548,7 @@ function terminalV2FromPayload(input: {
     terminalSource,
     runId: input.runId,
     targetSha: input.targetSha,
+    ...(input.logicalRoundOrdinal ? { logicalRoundOrdinal: input.logicalRoundOrdinal } : {}),
     reviewVerdict: input.verdict === 'clean' && input.findingCount === 0 ? 'clean' : 'findings',
     findingCount: input.findingCount,
     findingsDigest: sha256Bytes(JSON.stringify(input.findings)),
@@ -1347,6 +1365,287 @@ async function findJournaledDeliveryResumeCandidate(options: {
   return repositoryBoundCandidates[0] ?? null;
 }
 
+const GPT_REPLACEMENT_GENERATION_MAX_MS = 15 * 60 * 1_000;
+const NATIVE_REPLACEMENT_MAX_MS = 15 * 60 * 1_000;
+const NATIVE_CHILD_FRAME_PREFIX = 'OPK_NATIVE_CHILD_V1 ';
+
+export interface PackReviewGptAttemptObservation {
+  state:
+    | 'replacement_eligible'
+    | 'continuation_eligible'
+    | 'generating'
+    | 'reply_recovery_required'
+    | 'ownership_ambiguous'
+    | 'observation_unavailable';
+  replacementEligible: boolean;
+  slotId?: string;
+  replacementEligibleSlotIds?: string[];
+  initialLaunchSlotIds?: string[];
+  elapsedMs?: number;
+}
+
+function markerIsFirstVisibleToken(head: string, marker: string): boolean {
+  const trimmed = head.replace(/^[\s\uFEFF\u200B]+/u, '');
+  if (!trimmed.startsWith(marker)) return false;
+  const boundary = trimmed.slice(marker.length, marker.length + 1);
+  return boundary === '' || /[\s\uFEFF\u200B]/u.test(boundary);
+}
+
+export async function observeGptPackReviewAttempt(
+  run: PackReviewRunRecord,
+  nowMs = Date.now(),
+  deps: {
+    listTargets?: ProbeDependencies['listTargets'];
+    evaluate?: ProbeDependencies['evaluate'];
+    readObservation?: typeof readStateLightTurnObservation;
+    resolveSourceComment?: (identity: PackGptSourceIdentity) => Promise<PackGptSourceCommentResolution>;
+  } = {},
+): Promise<PackReviewGptAttemptObservation | null> {
+  const round = run.reviewRound;
+  if (!round || round.reviewer !== 'gpt') return null;
+  const listTargets = deps.listTargets ?? browserCdpDependencies.listTargets;
+  const evaluate = deps.evaluate ?? browserCdpDependencies.evaluate;
+  const readObservation = deps.readObservation ?? readStateLightTurnObservation;
+  const repository = trim(run.canonicalRepository);
+  if (!repository) return { state: 'observation_unavailable', replacementEligible: false };
+
+  let sourceTransport: PackGptSourceCommentTransport | undefined;
+  const resolveSourceComment = deps.resolveSourceComment ?? (async (identity: PackGptSourceIdentity) => {
+    sourceTransport ??= createPackGptSourceCommentTransport({
+      repoRoot: run.sourceRepoRoot,
+      repoSlug: repository,
+      prNumber: run.prNumber,
+    });
+    return resolvePackGptSourceComment({ identity, transport: sourceTransport });
+  });
+  const unresolved = round.sourceSlots.filter((slot) => !(
+    slot.lifecycle === 'terminal'
+    && (slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings')
+  ));
+  if (unresolved.length === 0) return null;
+
+  const replacementEligibleSlotIds: string[] = [];
+  const initialLaunchSlotIds: string[] = [];
+  let blockedObservation: PackReviewGptAttemptObservation | null = null;
+  const rememberBlocked = (observation: PackReviewGptAttemptObservation): void => {
+    blockedObservation ??= observation;
+  };
+
+  sourceSlotLoop:
+  for (const slot of unresolved) {
+    if (!slot.invocationId) {
+      if (slot.lifecycle === 'planned'
+          || (slot.lifecycle === 'terminal' && slot.terminalClass === 'pre_launch_interrupted')) {
+        initialLaunchSlotIds.push(slot.slotId);
+        continue;
+      }
+      rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
+      continue;
+    }
+    const profileKey = trim(slot.launchProfileKey);
+    const cdp = trim(slot.launchCdpUrl);
+    if (!profileKey || !cdp) {
+      rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
+      continue;
+    }
+
+    const identity = gptSourceIdentity({
+      repoSlug: repository,
+      prNumber: run.prNumber,
+      headSha: run.targetSha,
+      runId: run.id,
+      slotId: slot.slotId,
+      invocationId: slot.invocationId,
+    });
+    let sourceResolution: PackGptSourceCommentResolution;
+    try {
+      sourceResolution = await resolveSourceComment(identity);
+    } catch {
+      rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
+      continue;
+    }
+    if (sourceResolution.kind === 'credentialed') {
+      rememberBlocked({ state: 'reply_recovery_required', replacementEligible: false, slotId: slot.slotId });
+      continue;
+    }
+    if (sourceResolution.kind !== 'missing') {
+      rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
+      continue;
+    }
+
+    let observation: ReturnType<typeof readStateLightTurnObservation>;
+    try {
+      observation = readObservation(profileKey, slot.invocationId);
+    } catch {
+      rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
+      continue;
+    }
+    const marker = trim(observation.marker);
+    if (!marker.startsWith('OPKTURNV1')) {
+      rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
+      continue;
+    }
+
+    let targets: ReturnType<typeof toCompatibleTargets>;
+    try {
+      targets = toCompatibleTargets(await listTargets(cdp));
+    } catch {
+      rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
+      continue;
+    }
+
+    const owned: Array<{ snapshot: Record<string, unknown>; userDocumentOrdinal: number }> = [];
+    for (const target of targets) {
+      let inspected: unknown;
+      try {
+        inspected = await evaluate(target, INSPECTION_EXPRESSION);
+      } catch {
+        rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
+        continue sourceSlotLoop;
+      }
+      if (!inspected || typeof inspected !== 'object' || Array.isArray(inspected)) {
+        rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
+        continue sourceSlotLoop;
+      }
+      const snapshot = inspected as Record<string, unknown>;
+      if (snapshot.status !== 'ok' || snapshot.nodes_truncated === true) {
+        rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
+        continue sourceSlotLoop;
+      }
+      const nodes = Array.isArray(snapshot.nodes) ? snapshot.nodes : [];
+      for (const rawNode of nodes) {
+        if (!rawNode || typeof rawNode !== 'object' || Array.isArray(rawNode)) continue;
+        const node = rawNode as Record<string, unknown>;
+        if (node.role !== 'user' || !node.innerText || typeof node.innerText !== 'object') continue;
+        const head = trim((node.innerText as Record<string, unknown>).head);
+        if (!markerIsFirstVisibleToken(head, marker)) continue;
+        const ordinal = Number(node.document_ordinal);
+        if (!Number.isInteger(ordinal) || ordinal < 0) {
+          rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
+          continue sourceSlotLoop;
+        }
+        owned.push({ snapshot, userDocumentOrdinal: ordinal });
+      }
+    }
+
+    if (owned.length > 1) {
+      rememberBlocked({ state: 'ownership_ambiguous', replacementEligible: false, slotId: slot.slotId });
+      continue;
+    }
+    if (owned.length === 0) {
+      replacementEligibleSlotIds.push(slot.slotId);
+      continue;
+    }
+
+    const { snapshot, userDocumentOrdinal } = owned[0]!;
+    const generation = snapshot.generation_in_progress;
+    const startedAtMs = Date.parse(slot.admissionStartedAtUtc ?? observation.transitioned_at);
+    const elapsedMs = Number.isFinite(startedAtMs) ? Math.max(0, nowMs - startedAtMs) : 0;
+    if (generation === true) {
+      if (elapsedMs >= GPT_REPLACEMENT_GENERATION_MAX_MS) {
+        replacementEligibleSlotIds.push(slot.slotId);
+      } else {
+        rememberBlocked({ state: 'generating', replacementEligible: false, slotId: slot.slotId, elapsedMs });
+      }
+      continue;
+    }
+    if (generation !== false) {
+      rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId, elapsedMs });
+      continue;
+    }
+
+    const nodes = Array.isArray(snapshot.nodes) ? snapshot.nodes : [];
+    const hasReply = nodes.some((rawNode) => {
+      if (!rawNode || typeof rawNode !== 'object' || Array.isArray(rawNode)) return false;
+      const node = rawNode as Record<string, unknown>;
+      if (node.role !== 'assistant' || Number(node.document_ordinal) <= userDocumentOrdinal) return false;
+      if (!node.innerText || typeof node.innerText !== 'object') return false;
+      return Number((node.innerText as Record<string, unknown>).byte_length ?? 0) > 0;
+    });
+    if (hasReply) {
+      rememberBlocked({ state: 'reply_recovery_required', replacementEligible: false, slotId: slot.slotId, elapsedMs });
+      continue;
+    }
+    replacementEligibleSlotIds.push(slot.slotId);
+  }
+
+  if (replacementEligibleSlotIds.length > 0) {
+    return {
+      state: 'replacement_eligible',
+      replacementEligible: true,
+      slotId: replacementEligibleSlotIds[0],
+      replacementEligibleSlotIds,
+      initialLaunchSlotIds,
+    };
+  }
+  const blockedObservationResult = blockedObservation as PackReviewGptAttemptObservation | null;
+  if (blockedObservationResult) {
+    return {
+      ...blockedObservationResult,
+      replacementEligibleSlotIds,
+      initialLaunchSlotIds,
+    };
+  }
+  if (initialLaunchSlotIds.length > 0) {
+    return {
+      state: 'continuation_eligible',
+      replacementEligible: false,
+      slotId: initialLaunchSlotIds[0],
+      replacementEligibleSlotIds,
+      initialLaunchSlotIds,
+    };
+  }
+  return { state: 'observation_unavailable', replacementEligible: false };
+}
+
+export interface PackReviewNativeAttemptObservation {
+  reviewer: 'codex' | 'claude';
+  state: 'running' | 'stopped' | 'observation_unavailable';
+  replacementEligible: boolean;
+  elapsedMs: number;
+  nativeReplacementCeilingMs: number;
+}
+
+export function observeNativePackReviewAttempt(
+  run: PackReviewRunRecord,
+  nowMs = Date.now(),
+): PackReviewNativeAttemptObservation | null {
+  const attempt = run.nativeAttempt;
+  if (!attempt) return null;
+  const startedAtMs = Date.parse(attempt.childStartedAtUtc ?? attempt.startedAtUtc);
+  const elapsedMs = Number.isFinite(startedAtMs) ? Math.max(0, nowMs - startedAtMs) : 0;
+  const nativeReplacementCeilingMs = Math.min(attempt.effectiveBudgetMs, NATIVE_REPLACEMENT_MAX_MS);
+  const processGroupId = attempt.reviewer === 'claude'
+    ? attempt.childProcessGroupId
+    : attempt.processGroupId;
+  if (!processGroupId) {
+    return {
+      reviewer: attempt.reviewer,
+      state: 'observation_unavailable',
+      replacementEligible: elapsedMs >= nativeReplacementCeilingMs,
+      elapsedMs,
+      nativeReplacementCeilingMs,
+    };
+  }
+  const state = observePosixProcessGroup(processGroupId);
+  if (state === 'observation_unavailable') {
+    return {
+      reviewer: attempt.reviewer,
+      state,
+      replacementEligible: elapsedMs >= nativeReplacementCeilingMs,
+      elapsedMs,
+      nativeReplacementCeilingMs,
+    };
+  }
+  return {
+    reviewer: attempt.reviewer,
+    state,
+    replacementEligible: state === 'stopped' || elapsedMs >= nativeReplacementCeilingMs,
+    elapsedMs,
+    nativeReplacementCeilingMs,
+  };
+}
+
 async function invokeReviewer(options: {
   reviewerPath: string;
   trustedPackRoot: string;
@@ -1370,6 +1669,7 @@ async function invokeReviewer(options: {
   attemptOrdinal?: number;
   invocationId?: string;
   frozenScope?: ResolvedScopeContext;
+  nativeInvocationOrdinal?: number;
 }): Promise<{ result: ProcessResult; resolvedReviewer: PackReviewer | null }> {
   const resolvedReviewer = resolvePackReviewerFromEnv(process.env, {
     layerOverrides: options.fixtureReviewerLayerOverrides,
@@ -1471,6 +1771,49 @@ async function invokeReviewer(options: {
     delete env.PACK_REVIEW_CARRYOVER_BUNDLE_PATH;
   }
 
+  let nativeStderrBuffer = '';
+  let acceptedNativeChildFrame = false;
+  const nativeInvocationOrdinal = options.nativeInvocationOrdinal ?? 1;
+  const consumeNativeChildFrames = (chunk: string): void => {
+    if (resolvedReviewer !== 'claude' || acceptedNativeChildFrame) return;
+    nativeStderrBuffer += chunk;
+    const lines = nativeStderrBuffer.split(/\r?\n/);
+    nativeStderrBuffer = lines.pop() ?? '';
+    for (const line of lines) {
+      if (!line.startsWith(NATIVE_CHILD_FRAME_PREFIX)) continue;
+      let frame: Record<string, unknown>;
+      try {
+        frame = JSON.parse(line.slice(NATIVE_CHILD_FRAME_PREFIX.length)) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      if (frame.schema !== 'pack-review-native-child/v1'
+          || frame.runId !== options.runId
+          || frame.reviewer !== 'claude') continue;
+      const childPid = Number(frame.pid);
+      const childProcessGroupId = Number(frame.processGroupId);
+      const childStartedAtUtc = String(frame.startedAtUtc ?? '');
+      if (!Number.isInteger(childPid) || childPid <= 0 || !childStartedAtUtc) continue;
+      const persisted = getPackReviewRun(options.runId, {
+        projectId: options.projectId,
+        storeRoot: options.storeRoot,
+      });
+      if (!persisted?.nativeAttempt
+          || persisted.nativeAttempt.invocationOrdinal !== nativeInvocationOrdinal
+          || persisted.nativeAttempt.reviewer !== 'claude') continue;
+      updatePackReviewRun(options.runId, {
+        nativeAttempt: {
+          ...persisted.nativeAttempt,
+          childPid,
+          ...(Number.isInteger(childProcessGroupId) && childProcessGroupId > 0 ? { childProcessGroupId } : {}),
+          childStartedAtUtc,
+        },
+      }, { projectId: options.projectId, storeRoot: options.storeRoot });
+      acceptedNativeChildFrame = true;
+      break;
+    }
+  };
+
   const result = await runProcess({
     command: process.execPath,
     args,
@@ -1479,14 +1822,37 @@ async function invokeReviewer(options: {
     env,
     allowEmptyStdout: true,
     timeoutMs: options.budgetLedger.runnerTimeoutMs,
+    onStderrChunk: consumeNativeChildFrames,
     onSpawn: (pid) => {
+      const persisted = getPackReviewRun(options.runId, {
+        projectId: options.projectId,
+        storeRoot: options.storeRoot,
+      });
+      const armedAttempt = persisted?.nativeAttempt
+        && persisted.nativeAttempt.reviewer === resolvedReviewer
+        && persisted.nativeAttempt.invocationOrdinal === nativeInvocationOrdinal
+        ? persisted.nativeAttempt
+        : undefined;
+      const startedAtUtc = armedAttempt?.startedAtUtc ?? new Date().toISOString();
       updatePackReviewRun(options.runId, {
         runnerPid: process.pid,
         status: 'running',
         latestRunStatus: 'running',
         reviewTargetRoot: options.reviewTargetRoot,
+        resolvedReviewer,
+        ...(resolvedReviewer === 'codex' || resolvedReviewer === 'claude' ? {
+          nativeAttempt: {
+            ...(armedAttempt ?? {}),
+            schema: 'pack-review-native-attempt/v1',
+            reviewer: resolvedReviewer,
+            invocationOrdinal: nativeInvocationOrdinal,
+            startedAtUtc,
+            effectiveBudgetMs: armedAttempt?.effectiveBudgetMs ?? options.budgetLedger.effectiveBudgetMs,
+            wrapperPid: pid,
+            ...(process.platform === 'win32' ? {} : { processGroupId: pid }),
+          },
+        } : {}),
       }, { projectId: options.projectId, storeRoot: options.storeRoot });
-      void pid;
     },
   });
   return { result, resolvedReviewer };
@@ -1564,10 +1930,14 @@ function updateGptRoundSlot(
   slotId: string,
   patch: Partial<PackReviewSourceSlotRecord>,
   options: { projectId: string; storeRoot: string },
+  expectedInvocationId?: string,
 ): PackReviewGptRoundRecord {
   const persisted = getPackReviewRun(runId, options);
   const base = persisted?.reviewRound ?? round;
   if (base.settledSourceCount !== undefined) return base;
+  const currentSlot = base.sourceSlots.find((slot) => slot.slotId === slotId);
+  if (!currentSlot) throw new Error(`unknown GPT source slot ${slotId}`);
+  if (expectedInvocationId && trim(currentSlot.invocationId) !== trim(expectedInvocationId)) return base;
   const slots = base.sourceSlots.map((slot) => slot.slotId === slotId ? { ...slot, ...patch } : slot);
   if (slots.filter((slot) => slot.slotId === slotId).length !== 1) {
     throw new Error(`unknown GPT source slot ${slotId}`);
@@ -1759,6 +2129,7 @@ async function runGptSourceBatch(options: {
   input: StartInput;
   carryoverBundlePath: string;
   frozenScope: ResolvedScopeContext;
+  sameRoundEligibleSlotIds?: ReadonlySet<string>;
 }): Promise<ReviewPayload> {
   const admissionInterval = process.env.OPK_VITEST_HARNESS === '1'
     ? 0
@@ -1802,8 +2173,21 @@ async function runGptSourceBatch(options: {
 
   const outcomes = await Promise.all(options.round.sourceSlots.map(async (planned) => {
     const slotId = planned.slotId;
-    let round = options.round;
-    let attemptOrdinal = 1;
+    let round = getPackReviewRun(options.run.id, {
+      projectId: options.projectId,
+      storeRoot: options.storeRoot,
+    })?.reviewRound ?? options.round;
+    const currentSlot = round.sourceSlots.find((slot) => slot.slotId === slotId) ?? planned;
+    const currentComplete = currentSlot.lifecycle === 'terminal'
+      && (currentSlot.terminalClass === 'complete_clean' || currentSlot.terminalClass === 'complete_findings')
+      && currentSlot.payload;
+    if (currentComplete) {
+      return { slot: currentSlot, payload: currentSlot.payload as ReviewPayload };
+    }
+    if (options.sameRoundEligibleSlotIds && !options.sameRoundEligibleSlotIds.has(slotId)) {
+      return { slot: currentSlot, payload: undefined };
+    }
+    let attemptOrdinal = (currentSlot.attemptOrdinal ?? 0) + 1;
     let invocationId = randomUUID();
     const markInvocationStarted = async (admissionStartedAt: number): Promise<void> => {
       const launchBinding = resolveLaunchBinding();
@@ -1812,6 +2196,9 @@ async function runGptSourceBatch(options: {
         admissionStartedAtUtc: new Date(admissionStartedAt).toISOString(),
         attemptOrdinal,
         invocationId,
+        terminalClass: undefined,
+        terminalResult: undefined,
+        payload: undefined,
         ...(launchBinding ?? {}),
       }, { projectId: options.projectId, storeRoot: options.storeRoot });
       if (options.input.fixtureAfterGptInvocationBound) {
@@ -1951,7 +2338,7 @@ async function runGptSourceBatch(options: {
       }
     } else {
       terminalClass = terminalClassForGptResult(invocation.result, browserTerminal);
-      if (attemptOrdinal === 2
+      if (attemptOrdinal >= 2
         && isRetryablePackReviewZeroSendCollision(invocation.result, invocationId)) {
         terminalClass = 'explicit_refusal:zero_send_collision_exhausted';
       }
@@ -1978,7 +2365,7 @@ async function runGptSourceBatch(options: {
       terminalClass,
       terminalResult,
       ...(payload ? { payload } : {}),
-    }, { projectId: options.projectId, storeRoot: options.storeRoot });
+    }, { projectId: options.projectId, storeRoot: options.storeRoot }, invocationId);
     const persistedSlot = round.sourceSlots.find((slot) => slot.slotId === slotId);
     if (!persistedSlot) throw new Error(`unknown GPT source slot ${slotId}`);
     const acceptedPayload = persistedSlot.lifecycle === 'terminal'
@@ -2476,6 +2863,7 @@ async function commitRecoveredGptAuthority(options: {
     terminal: terminalV2FromPayload({
       runId: options.run.id,
       targetSha: options.run.targetSha,
+      logicalRoundOrdinal: options.run.logicalRoundOrdinal,
       verdict: payload.verdict,
       findingCount: payload.findingCount,
       findings: payload.findings,
@@ -2568,8 +2956,10 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       nextAction: 'observe the current PR head, then rerun scoped reconcile',
     };
   }
+  const logicalAccounting = authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
   const workerOwned = authority.smokeOrdering?.workerOwned;
-  if (workerOwned?.headSha !== authority.currentHeadSha || workerOwned.status !== 'passed') {
+  if (!logicalAccounting
+      && (workerOwned?.headSha !== authority.currentHeadSha || workerOwned.status !== 'passed')) {
     return {
       prNumber,
       headSha: authority.currentHeadSha,
@@ -2680,7 +3070,9 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         : 'final_cap_settlement_incomplete',
     ...(settled ? {} : {
       nextAction: authority.triage?.verdict === 'BLOCK'
-        ? 'resolve the blocking current-head evidence, rerun worker-owned smoke, then rerun scoped reconcile'
+        ? (logicalAccounting
+          ? 'resolve the blocking current-head evidence, then rerun scoped reconcile'
+          : 'resolve the blocking current-head evidence, rerun worker-owned smoke, then rerun scoped reconcile')
         : 'complete the current-head finding-resolution evidence, then rerun scoped reconcile',
     }),
   };
@@ -2902,6 +3294,26 @@ export async function reconcileStalePackReviewRuns(
       && run.reviewRound?.reviewer === 'gpt'
       && !packReviewJournaledPayload(run)
       && packReviewDeliveryNeedsResume(run);
+    if (activeStale && run.reviewRound?.reviewer !== 'gpt' && run.nativeAttempt) {
+      const observation = observeNativePackReviewAttempt(run);
+      if (observation && !observation.replacementEligible) {
+        results.push({
+          runId: run.id,
+          terminalized: false,
+          statusReconciled: false,
+          reason: `native_attempt_${observation.state}`,
+          reviewer: observation.reviewer,
+          replacementEligible: false,
+          elapsedMs: observation.elapsedMs,
+          nativeReplacementCeilingMs: observation.nativeReplacementCeilingMs,
+          nextAction: observation.state === 'running'
+            ? 'let the current native reviewer attempt continue; unrelated work may proceed'
+            : 'native reviewer liveness is unavailable; keep the attempt visible and continue unrelated work',
+        });
+        continue;
+      }
+    }
+
     if (activeStale || immediateActive || needsGptSourceRecovery) {
       const recovery = await recoverStaleGptSourceComments({
         run,
@@ -3252,7 +3664,7 @@ async function commitAtCapTriage(input: {
   allowFinalSettlement?: boolean;
 }): Promise<PackReviewAuthorityDocument> {
   const cycle = input.authority.cycle;
-  if (!cycle || !['at_cap_open_findings', 'at_cap_continuation_required'].includes(cycle.state)) {
+  if (!cycle || !['open_findings', 'at_cap_open_findings', 'at_cap_continuation_required'].includes(cycle.state)) {
     return input.authority;
   }
   const findingSnapshotDigest = sha256Bytes(stableJson(input.payload.findings));
@@ -3603,11 +4015,19 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       : undefined;
     const authorityOptions: PackReviewAuthorityOptions = { storeRoot };
     const retainedOpenCycle = readRetainedLegacyOpenCycle(projectId, target.prNumber);
+    const unboundLegacyHarness = process.env.OPK_VITEST_HARNESS === '1'
+      && authoritative.snapshotDigest === 'harness-unbound-fixture'
+      && input.tier === undefined;
     let authority = initializePackReviewAuthority({
       prNumber: target.prNumber,
       headSha: target.headSha,
       tier: authoritative.tier,
       retainedOpenCycle,
+      // Unbound historical harness fixtures have no authoritative adoption signal;
+      // preserve their legacy accounting unless the fixture explicitly selects a tier.
+      capMapVersion: unboundLegacyHarness
+        ? PACK_REVIEW_CAP_MAP_VERSION
+        : PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
       options: authorityOptions,
     });
     try {
@@ -3638,12 +4058,71 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       });
     }
 
+    if (authority.cycle?.reviewStageComplete === true
+        && authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION) {
+      const writeRequiredStatus = input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
+        repoRoot: target.sourceRepoRoot,
+        repoSlug: target.repoSlug,
+        headSha: target.headSha,
+        request,
+      }));
+      await writeRequiredStatus({
+        state: 'success',
+        context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+        description: 'Required pack-review stage completed; no additional review round required.',
+        idempotencyKey: `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${target.headSha}:stage-complete:${authority.cycle.cycleId}`,
+      });
+      const stageCompleteReason = authority.terminal?.targetSha === target.headSha
+        ? 'terminal_run_exists'
+        : 'review_stage_complete';
+      await releaseEarlyClaim(stageCompleteReason);
+      return {
+        ok: true,
+        created: false,
+        reused: true,
+        reason: stageCompleteReason,
+        prNumber: target.prNumber,
+        headSha: target.headSha,
+        cycleId: authority.cycle.cycleId,
+        httpStatus: 200,
+      };
+    }
+
+    const logicalAccounting = authority.cycle?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
+    const consumedLogicalRoundCount = authority.cycle?.consumedRoundOrdinals?.length ?? 0;
+    if (logicalAccounting
+        && authority.cycle
+        && consumedLogicalRoundCount >= authority.cycle.frozenCap
+        && authority.terminal?.targetSha === target.headSha
+        && !resumeCandidate) {
+      const terminalRun = authority.terminal.runId
+        ? getPackReviewRun(authority.terminal.runId, { projectId, storeRoot })
+        : null;
+      if (terminalRun) {
+        await releaseEarlyClaim('terminal_run_exists');
+        return {
+          ok: true,
+          created: false,
+          reused: true,
+          reason: 'terminal_run_exists',
+          prNumber: target.prNumber,
+          headSha: target.headSha,
+          runId: terminalRun.id,
+          status: terminalRun.status,
+          cycleId: authority.cycle.cycleId,
+          httpStatus: 200,
+        };
+      }
+    }
     const legacyHarnessFixtureWithoutSmokePlan = process.env.OPK_VITEST_HARNESS === '1'
       && authoritative.issueBody !== undefined
       && !authoritative.issueBody.includes('```smoke-test-plan');
+    const logicalRoundContinuation = logicalAccounting
+      && (authority.cycle?.consumedRoundOrdinals?.length ?? 0) > 0;
     if (authoritative.issueBody !== undefined
         && smokeOrderingRequired(authoritative.issueBody)
-        && !legacyHarnessFixtureWithoutSmokePlan) {
+        && !legacyHarnessFixtureWithoutSmokePlan
+        && !logicalRoundContinuation) {
       try {
         assertPackReviewSmokeAdmission({ authority, headSha: target.headSha });
       } catch (error) {
@@ -3662,6 +4141,50 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
 
     carryover = await resolveCarryoverReplay({ input, target, projectId, storeRoot, baseRef, priorAuthority });
     const conflictFreeCarryover = carryover?.replay.kind === 'conflict_free_carryover';
+    if (!conflictFreeCarryover && authority.cycle?.state === 'open_findings') {
+      // Re-open only the phase cursor so fresh finding-resolution evidence can be
+      // evaluated on a subsequent start; retain the prior-round terminal itself.
+      authority = observePackReviewHead({
+        prNumber: target.prNumber,
+        expectedTransitionSeq: authority.transitionSeq,
+        headSha: target.headSha,
+        options: authorityOptions,
+      });
+      const priorFindingRun = authority.terminal?.runId
+        ? getPackReviewRun(authority.terminal.runId, { projectId, storeRoot })
+        : null;
+      if (priorFindingRun?.reviewVerdict === 'findings' && authority.terminal) {
+        authority = await commitAtCapTriage({
+          start: input,
+          target,
+          projectId,
+          baseRef,
+          trustedPackRoot: trusted.trustedPackRoot,
+          storeRoot,
+          authority,
+          payload: {
+            verdict: 'findings',
+            findingCount: priorFindingRun.findingCount ?? priorFindingRun.findings.length,
+            findings: priorFindingRun.findings as ReviewPayloadFinding[],
+          },
+          allowFinalSettlement: true,
+        });
+      }
+      if (authority.cycle?.state === 'open_findings') {
+        await releaseEarlyClaim('prior_round_findings_unresolved');
+        return {
+          ok: false,
+          created: false,
+          reused: true,
+          reason: 'prior_round_findings_unresolved',
+          nextAction: 'resolve or explicitly reject the prior logical-round findings before starting the next required round',
+          prNumber: target.prNumber,
+          headSha: target.headSha,
+          cycleId: authority.cycle.cycleId,
+          httpStatus: 409,
+        };
+      }
+    }
     if (!conflictFreeCarryover
         && authority.cycle
         && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)) {
@@ -3671,7 +4194,9 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         created: false,
         reused: false,
         reason: 'at_cap_continuation_required',
-        nextAction: 'fix the final findings, run worker-owned smoke on the exact current head, then run scoped reconcile --immediate',
+        nextAction: logicalAccounting
+          ? 'fix or explicitly resolve the final findings, then run scoped reconcile --immediate'
+          : 'fix the final findings, run worker-owned smoke on the exact current head, then run scoped reconcile --immediate',
         prNumber: target.prNumber,
         headSha: target.headSha,
         cycleId: authority.cycle.cycleId,
@@ -3679,13 +4204,29 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       };
     }
 
-    const roundOrdinal = (authority.cycle?.consumedHeadShas.length ?? 0) + 1;
+    if (logicalAccounting
+        && authority.cycle?.state === 'open'
+        && consumedLogicalRoundCount > 0
+        && consumedLogicalRoundCount < authority.cycle.frozenCap) {
+      authority = observePackReviewHead({
+        prNumber: target.prNumber,
+        expectedTransitionSeq: authority.transitionSeq,
+        headSha: target.headSha,
+        options: authorityOptions,
+      });
+    }
+
+    const roundOrdinal = logicalAccounting
+      ? (authority.cycle?.consumedRoundOrdinals?.length ?? 0) + 1
+      : (authority.cycle?.consumedHeadShas.length ?? 0) + 1;
+    const accountingVersion = authority.cycle?.capMapVersion;
     const cardinality = selectPackReviewGptSourceCardinality({
       reviewer: reviewer ?? 'codex',
       tier: authoritative.tier,
       roundOrdinal,
+      accountingVersion,
     });
-    const gptRound: PackReviewGptRoundRecord | undefined = reviewer === 'gpt'
+    let gptRound: PackReviewGptRoundRecord | undefined = reviewer === 'gpt'
       && !conflictFreeCarryover
       && (authoritative.snapshotDigest !== 'harness-unbound-fixture'
         || input.tier !== undefined
@@ -3694,6 +4235,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           schema: 'pack-review-gpt-round/v1',
           reviewer: 'gpt',
           tier: authoritative.tier,
+          accountingVersion,
           roundOrdinal,
           cardinality,
           issueNumber: authoritative.issueNumber,
@@ -3709,6 +4251,95 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         && gptRound.cardinality > 1
         && (trim(process.env.PACK_GPT_BROWSER_CHAT_URL) || !trim(process.env.PACK_GPT_BROWSER_PROJECT_URL))) {
       throw new Error('plural GPT review requires PACK_GPT_BROWSER_PROJECT_URL and no fixed chat URL');
+    }
+
+    let allowSameRoundReplacement = false;
+    let sameRoundGptRun: PackReviewRunRecord | null = null;
+    let sameRoundGptEligibleSlotIds: ReadonlySet<string> | undefined;
+    if (logicalAccounting && reviewer === 'gpt' && authority.cycle) {
+      const priorSameRound = listPackReviewRunRecordsRaw({ projectId, storeRoot })
+        .filter((candidate) => candidate.prNumber === target.prNumber
+          && candidate.reviewCycleId === authority.cycle!.cycleId
+          && candidate.logicalRoundOrdinal === roundOrdinal
+          && candidate.reviewRound?.reviewer === 'gpt'
+          && !hasPersistedPackReviewVerdict(candidate))
+        .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
+      if (priorSameRound) {
+        const observeAttempt = input.fixtureGptAttemptObserver ?? observeGptPackReviewAttempt;
+        const observation = await observeAttempt(priorSameRound);
+        const initialLaunchSlotIds = observation?.initialLaunchSlotIds ?? [];
+        if (!observation || (!observation.replacementEligible && initialLaunchSlotIds.length === 0)) {
+          await releaseEarlyClaim('gpt_replacement_not_eligible');
+          return {
+            ok: false,
+            created: false,
+            reused: true,
+            reason: observation?.state ?? 'gpt_observation_unavailable',
+            reviewer,
+            replacementEligible: false,
+            prNumber: target.prNumber,
+            headSha: target.headSha,
+            runId: priorSameRound.id,
+            httpStatus: 202,
+          };
+        }
+        const replacementSlotIds = observation.replacementEligibleSlotIds
+          ?? (observation.replacementEligible && observation.slotId ? [observation.slotId] : []);
+        const eligibleSlotIds = [...new Set([
+          ...replacementSlotIds,
+          ...initialLaunchSlotIds,
+        ])];
+        if (eligibleSlotIds.length === 0) {
+          await releaseEarlyClaim('gpt_replacement_not_eligible');
+          return {
+            ok: false,
+            created: false,
+            reused: true,
+            reason: 'gpt_observation_unavailable',
+            reviewer,
+            replacementEligible: false,
+            prNumber: target.prNumber,
+            headSha: target.headSha,
+            runId: priorSameRound.id,
+            httpStatus: 202,
+          };
+        }
+        allowSameRoundReplacement = true;
+        sameRoundGptRun = priorSameRound;
+        sameRoundGptEligibleSlotIds = new Set(eligibleSlotIds);
+        gptRound = priorSameRound.reviewRound;
+      }
+    }
+
+    if (logicalAccounting && reviewer && reviewer !== 'gpt' && authority.cycle) {
+      const priorSameRound = listPackReviewRunRecordsRaw({ projectId, storeRoot })
+        .filter((candidate) => candidate.prNumber === target.prNumber
+          && candidate.reviewCycleId === authority.cycle!.cycleId
+          && candidate.logicalRoundOrdinal === roundOrdinal
+          && candidate.resolvedReviewer === reviewer
+          && !hasPersistedPackReviewVerdict(candidate))
+        .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
+      if (priorSameRound) {
+        const observation = observeNativePackReviewAttempt(priorSameRound);
+        if (!observation?.replacementEligible) {
+          await releaseEarlyClaim('native_replacement_not_eligible');
+          return {
+            ok: false,
+            created: false,
+            reused: true,
+            reason: observation
+              ? `native_attempt_${observation.state}`
+              : 'native_observation_unavailable',
+            reviewer,
+            replacementEligible: false,
+            prNumber: target.prNumber,
+            headSha: target.headSha,
+            runId: priorSameRound.id,
+            httpStatus: 202,
+          };
+        }
+        allowSameRoundReplacement = true;
+      }
     }
 
     authority = advancePackReviewAuthority(
@@ -3757,6 +4388,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           terminal: terminalV2FromPayload({
             runId: resumeCandidate.id,
             targetSha: target.headSha,
+            logicalRoundOrdinal: resumeCandidate.logicalRoundOrdinal,
             verdict: typedResumePayload.verdict,
             findingCount: typedResumePayload.findingCount,
             findings: typedResumePayload.findings,
@@ -3865,7 +4497,22 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       const identity = await resolvePackReviewRunCanonicalRepository(record, resolveSlug);
       if (identity.ok) legacyRepositoryBySourceRoot[resolve(record.sourceRepoRoot)] = identity.slug;
     }
-    const created = createPackReviewRun({
+    let created: ReturnType<typeof createPackReviewRun>;
+    if (sameRoundGptRun) {
+      run = updatePackReviewRun(sameRoundGptRun.id, {
+        status: 'queued',
+        latestRunStatus: 'queued',
+        runnerPid: process.pid,
+      }, { projectId, storeRoot });
+      created = {
+        created: true,
+        reused: false,
+        reason: 'same_round_replacement',
+        run,
+        storeRoot,
+      };
+    } else {
+      created = createPackReviewRun({
       projectId,
       storeRoot,
       prNumber: target.prNumber,
@@ -3879,9 +4526,18 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       canonicalRepository: target.repoSlug,
       legacyRepositoryBySourceRoot,
       automaticBudgetDisposition: 'consume',
+      ...(accountingVersion ? { accountingVersion } : {}),
+      ...(authority.cycle?.cycleId ? { reviewCycleId: authority.cycle.cycleId } : {}),
+      ...(logicalAccounting ? {
+        logicalRoundOrdinal: roundOrdinal,
+        logicalRoundCap: authority.cycle!.frozenCap,
+      } : {}),
+      ...(reviewer ? { resolvedReviewer: reviewer } : {}),
       ...(gptRound ? { reviewRound: gptRound } : {}),
-    });
-    run = created.run;
+      ...(allowSameRoundReplacement ? { allowSameRoundReplacement: true } : {}),
+      });
+      run = created.run;
+    }
     authority = advancePackReviewAuthority(
       authority,
       'review_or_bundle_staged',
@@ -3922,7 +4578,9 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       runnerPid: process.pid,
     }, { projectId, storeRoot });
 
-    if (process.env.OPK_VITEST_HARNESS === '1'
+    if (sameRoundGptRun?.reviewTargetRoot && existsSync(sameRoundGptRun.reviewTargetRoot)) {
+      worktree = sameRoundGptRun.reviewTargetRoot;
+    } else if (process.env.OPK_VITEST_HARNESS === '1'
       && (input.fixtureReviewStdout !== undefined
         || input.fixtureReviewTimedOut === true
         || input.fixtureReviewBySourceSlot !== undefined)) {
@@ -3982,6 +4640,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           input,
           carryoverBundlePath,
           frozenScope: authoritative.frozenScope,
+          sameRoundEligibleSlotIds: sameRoundGptEligibleSlotIds,
         });
         result = {
           outcome: 'exit' as const,
@@ -3994,6 +4653,21 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           cancelled: false,
         };
       } else {
+        if (reviewer === 'codex' || reviewer === 'claude') {
+          const armedInitialRun = updatePackReviewRun(run.id, {
+            nativeAttempt: {
+              schema: 'pack-review-native-attempt/v1',
+              reviewer,
+              invocationOrdinal: 1,
+              startedAtUtc: new Date().toISOString(),
+              effectiveBudgetMs: budgetLedger.effectiveBudgetMs,
+            },
+          }, { projectId, storeRoot });
+          run = armedInitialRun;
+          if (input.fixtureAfterNativeInitialArmed) {
+            await input.fixtureAfterNativeInitialArmed(armedInitialRun);
+          }
+        }
         const invocation = await invokeReviewer({
           reviewerPath: trusted.reviewerPath,
           trustedPackRoot: trusted.trustedPackRoot,
@@ -4014,6 +4688,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           carryoverBundlePath,
           headSha: target.headSha,
           frozenScope: authoritative.frozenScope,
+          nativeInvocationOrdinal: 1,
         });
         result = invocation.result;
         resolvedReviewer = invocation.resolvedReviewer;
@@ -4106,6 +4781,20 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       } catch {
         carryover = null;
         carryoverBundlePath = '';
+        if (resolvedReviewer === 'codex' || resolvedReviewer === 'claude') {
+          const armedFallbackRun = updatePackReviewRun(run.id, {
+            nativeAttempt: {
+              schema: 'pack-review-native-attempt/v1',
+              reviewer: resolvedReviewer,
+              invocationOrdinal: 2,
+              startedAtUtc: new Date().toISOString(),
+              effectiveBudgetMs: budgetLedger.effectiveBudgetMs,
+            },
+          }, { projectId, storeRoot });
+          if (input.fixtureAfterNativeFallbackArmed) {
+            await input.fixtureAfterNativeFallbackArmed(armedFallbackRun);
+          }
+        }
         const fallback = await invokeReviewer({
           reviewerPath: trusted.reviewerPath,
           trustedPackRoot: trusted.trustedPackRoot,
@@ -4125,6 +4814,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           fixtureEmulateWin32Selector: input.fixtureEmulateWin32Selector,
           headSha: target.headSha,
           frozenScope: authoritative.frozenScope,
+          nativeInvocationOrdinal: 2,
         });
         result = fallback.result;
         resolvedReviewer = fallback.resolvedReviewer;
@@ -4353,6 +5043,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       terminal: terminalV2FromPayload({
         runId: run.id,
         targetSha: target.headSha,
+        logicalRoundOrdinal: run.logicalRoundOrdinal,
         verdict: payload.verdict,
         findingCount: payload.findingCount,
         findings: payload.findings,
@@ -4551,6 +5242,7 @@ async function resetPackReview(input: Record<string, unknown>): Promise<Record<s
       timestampUtc: trim(input.timestampUtc) || new Date().toISOString(),
       nonce,
     },
+    capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
     options: { storeRoot },
   });
   return { ok: true, prNumber: target.prNumber, headSha: target.headSha, cycleId: reset.cycle?.cycleId };

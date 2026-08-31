@@ -59,20 +59,26 @@ read live Issue/rules
 -> required local verification
 -> create/update PR and exact head
 -> worker-owned smoke (exact head; fix and repeat until PASS)
--> tier/cap-governed pack-review cycle
--> review finding: worker fix + exact-head worker-owned smoke + next review cycle
--> settled review obligations
--> independent smoke
+-> required pack-review stage (logical rounds: T1=1, T2=1, T3=2)
+-> review finding: worker fixes or explicitly resolves/rejects findings
+-> if T3 round 1 settled: required round 2 (same head is allowed)
+-> durable reviewStageComplete
+-> later heads: no new required pack-review round; project pack-review success status only
+-> independent smoke / ordinary exact-head validation as separately required
 -> independent-smoke finding: worker fix + fresh independent smoke
 -> completion
 -> worker_done
 ```
 
 Worker-owned smoke and independent smoke are different actors and different
-gates. Pack-review starts only after the exact current head has a passing
-worker-owned smoke. Independent smoke starts only after the review tier/cap
-obligations settle. Once independent smoke has started, pack-review is
-forbidden for this work, including after a smoke-driven fix.
+gates. Ordinary smoke and CI remain exact-current-head evidence. The required
+pack-review stage is a PR/task-cycle obligation, not a per-commit retry loop:
+new cycles use logical-round caps T1=1, T2=1, T3=2, and every required GPT
+round uses three concurrent sources. A T3 clean first round does not complete
+the stage; round 2 remains required and may review the same head. Once the
+required rounds and any findings are settled, durable `reviewStageComplete`
+prevents later commits, smoke fixes, or CI-only changes from reopening or
+consuming another required review round.
 
 After a current-head smoke returns a gap or fail, the next legal coordinator step is a worker fix that produces a new SHA, then a fresh smoke of that exact SHA:
 
@@ -81,15 +87,19 @@ worker-owned smoke (current SHA)
   |-- PASS --> pack-review eligible
   |-- FAIL/BLOCKED --> fix (new SHA) --> worker-owned smoke that SHA
 
-pack-review (settled)
-  |-- eligible --> independent smoke
-  |-- finding --> fix (new SHA) --> worker-owned smoke that SHA --> next pack-review cycle
+pack-review logical round
+  |-- T1/T2 settled --> reviewStageComplete
+  |-- T3 round 1 settled --> round 2 (same or later SHA)
+  |-- final findings --> fix/resolve findings --> reviewStageComplete (no worker-smoke prerequisite)
 ```
 
-Old-head smoke proofs do not count for a new head. A review finding requires
-worker-owned smoke before the next governed review cycle. An independent-smoke
-finding requires only a worker fix and fresh independent smoke; it never opens a
-later pack-review cycle. Exact folding and SHA-binding stay in
+Old-head smoke and CI proofs do not count for a new head. Review-stage
+completion is different: after `reviewStageComplete=true`, a later head receives
+`orchestrator-pack/pack-review=success` with the description
+`Required pack-review stage completed; no additional review round required.`
+without launching another required reviewer. An independent-smoke finding still
+requires a worker fix and fresh independent smoke; it does not reopen the
+completed pack-review stage. Exact smoke folding and SHA-binding stay in
 `docs/worker-smoke-testing.md`.
 
 ### Reconciler

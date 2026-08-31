@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
+import { PACK_REVIEW_LOGICAL_CAP_MAP_VERSION } from '../pack-review-state.ts';
 import {
   describePackReviewError as describeError,
   getPackReviewRun,
@@ -58,11 +59,26 @@ export function packReviewStaleRequiredStatusIdempotencyKey(run: PackReviewRunRe
   return `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${run.targetSha}:stale-runner-disappeared`;
 }
 
+function packReviewRunNeedsAnotherRequiredRound(run: PackReviewRunRecord): boolean {
+  return run.accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+    && Number.isInteger(run.logicalRoundOrdinal)
+    && Number.isInteger(run.logicalRoundCap)
+    && Number(run.logicalRoundOrdinal) < Number(run.logicalRoundCap);
+}
+
+function packReviewIntermediateRoundDescription(run: PackReviewRunRecord): string {
+  return `Pack review round ${run.logicalRoundOrdinal}/${run.logicalRoundCap} completed; required round ${Number(run.logicalRoundOrdinal) + 1} remains.`;
+}
+
 function packReviewRequiredStatusOutcomeReason(run: PackReviewRunRecord): string | null {
   if (hasPersistedPackReviewVerdict(run) || PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(run.status)) {
     const payload = packReviewJournaledPayload(run);
     if (!payload) return null;
-    return `status_${classifyPackReviewPayload(payload).requiredStatus}_restored`;
+    const classification = classifyPackReviewPayload(payload);
+    if (!classification.blocking && packReviewRunNeedsAnotherRequiredRound(run)) {
+      return 'status_pending_round_restored';
+    }
+    return `status_${classification.requiredStatus}_restored`;
   }
   if (run.status === 'failed' || run.status === 'timed_out' || run.status === 'cancelled') {
     return trim(run.failureReason) === 'runner_disappeared_stale'
@@ -520,8 +536,7 @@ export function packReviewDeliveryNeedsResume(run: PackReviewRunRecord): boolean
   const classification = classifyPackReviewPayload(payload);
   if (run.status !== classification.terminalStatus) return true;
   return !completedResumeChannelOutcome(run, 'githubComment', githubCommentIdempotencyKey(run))
-    || !completedResumeChannelOutcome(run, 'requiredStatus', requiredStatusIdempotencyKey(run))
-    || !completedResumeChannelOutcome(run, 'workerNotification', workerNotificationIdempotencyKey(run));
+    || !completedResumeChannelOutcome(run, 'requiredStatus', requiredStatusIdempotencyKey(run));
 }
 
 function outcome(
@@ -760,6 +775,13 @@ export async function deliverPackReviewVerdict(
   }
   const payload = resumedPayload ?? options.payload;
   const classification = classifyPackReviewPayload(payload);
+  const intermediateRoundPending = !classification.blocking && packReviewRunNeedsAnotherRequiredRound(options.run);
+  const projectedRequiredStatus: PackReviewRequiredStatusState = intermediateRoundPending
+    ? 'pending'
+    : classification.requiredStatus;
+  const projectedRequiredDescription = intermediateRoundPending
+    ? packReviewIntermediateRoundDescription(options.run)
+    : classification.description;
   const journal = options.resumeFromJournal
     ? { ok: true as const, run: options.run, outcome: options.run.journalOutcome! }
     : await journalVerdict(options, classification);
@@ -819,12 +841,15 @@ export async function deliverPackReviewVerdict(
   if (!requiredStatusComplete) {
     try {
       await options.writeRequiredStatus({
-        state: classification.requiredStatus,
+        state: projectedRequiredStatus,
         context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-        description: classification.description,
+        description: projectedRequiredDescription,
         idempotencyKey: statusKey,
       });
-      recordChannelOutcome('requiredStatus', outcome('succeeded', `status_${classification.requiredStatus}`, statusKey, options.clock));
+      recordChannelOutcome(
+        'requiredStatus',
+        outcome('succeeded', intermediateRoundPending ? 'status_pending_round' : `status_${classification.requiredStatus}`, statusKey, options.clock),
+      );
     } catch (error) {
       deliveryFailed = true;
       recordChannelOutcome('requiredStatus', outcome('failed', describeError(error), statusKey, options.clock));
@@ -842,17 +867,15 @@ export async function deliverPackReviewVerdict(
           `Head: ${options.run.targetSha}`,
           `Verdict: ${payload.verdict}`,
           `Findings: ${payload.findingCount}`,
-          `Merge status: ${classification.requiredStatus}`,
+          `Pack-review status: ${projectedRequiredStatus}`,
         ].join('\n'),
         idempotencyKey: workerKey,
         reviewRunId: options.run.id,
       });
       if (notified.state === 'delivered' || notified.state === 'failed' || notified.state === 'escalated') {
-        if (notified.state !== 'delivered') deliveryFailed = true;
         recordChannelOutcome('workerNotification', outcome(notified.state, notified.reason, workerKey, options.clock));
       } else {
         const submitted = notified.state === 'submitted';
-        if (!submitted) deliveryFailed = true;
         const durableState: PackReviewDeliveryOutcome['state'] = submitted
           ? 'succeeded'
           : notified.state === 'pre_dispatch_failure'
@@ -866,7 +889,6 @@ export async function deliverPackReviewVerdict(
         );
       }
     } catch (error) {
-      deliveryFailed = true;
       recordChannelOutcome('workerNotification', outcome('failed', describeError(error), workerKey, options.clock));
     }
   }
@@ -887,7 +909,8 @@ export async function deliverPackReviewVerdict(
   }
 
   const finalDeliveryFailed = deliveryFailed
-    || Object.values(deliveryOutcomes).some((value) => value?.state === 'failed' || value?.state === 'escalated');
+    || (deliveryOutcomes.githubComment?.state === 'failed')
+    || (deliveryOutcomes.requiredStatus?.state === 'failed');
 
   return {
     ok: true,
@@ -920,18 +943,25 @@ async function publishPackReviewTerminalRequiredStatus(
   const payload = packReviewJournaledPayload(run);
   if (!payload) return null;
   const classification = classifyPackReviewPayload(payload);
+  const intermediateRoundPending = !classification.blocking && packReviewRunNeedsAnotherRequiredRound(run);
+  const projectedState: PackReviewRequiredStatusState = intermediateRoundPending
+    ? 'pending'
+    : classification.requiredStatus;
+  const projectedDescription = intermediateRoundPending
+    ? packReviewIntermediateRoundDescription(run)
+    : classification.description;
   const idempotencyKey = requiredStatusIdempotencyKey(run);
   let statusOutcome = outcome(
     'succeeded',
-    `status_${classification.requiredStatus}_restored`,
+    intermediateRoundPending ? 'status_pending_round_restored' : `status_${classification.requiredStatus}_restored`,
     idempotencyKey,
     options.clock,
   );
   try {
     await options.writeRequiredStatus({
-      state: classification.requiredStatus,
+      state: projectedState,
       context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-      description: classification.description,
+      description: projectedDescription,
       idempotencyKey,
     });
   } catch (error) {
