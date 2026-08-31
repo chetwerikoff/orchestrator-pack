@@ -1452,7 +1452,7 @@ export function commitPackReviewTriage(input: {
         && current.cycle?.state !== 'open';
       const architectFinalLogicalSettlement = input.triage.source === 'architect'
         && input.triage.verdict === 'DEFER'
-        && current.cycle !== undefined
+        && current.cycle != null
         && isLogicalRoundCycle(current.cycle)
         && cycleConsumedCount(current.cycle) === current.cycle.frozenCap
         && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(current.cycle.state)
