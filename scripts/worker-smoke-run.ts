@@ -954,10 +954,17 @@ export interface PostSmokeReadinessResult {
   readonly reviewProjection: PackReviewSemanticProjection;
 }
 
+export interface PostSmokeReadinessDependencies {
+  readonly resolveCiGreen?: typeof resolveCiGreen;
+  readonly currentPackReviewStatusFact?: typeof currentPackReviewStatusFact;
+  readonly isAncestor?: typeof githubCommitIsAncestor;
+}
+
 export async function evaluatePostSmokeReadiness(
   options: CliOptions,
   target: ResolvedSmokeTarget,
   adapter: RuntimeAdapter,
+  dependencies: PostSmokeReadinessDependencies = {},
 ): Promise<PostSmokeReadinessResult> {
   const assignmentFile = resolveWorkerAssignmentStorePath('orchestrator-pack', process.env);
   const assignment = currentWorkerAssignment(assignmentFile, target.issueNumber);
@@ -1020,7 +1027,7 @@ export async function evaluatePostSmokeReadiness(
     }
   }
 
-  const ciGreen = resolveCiGreen(
+  const ciGreen = (dependencies.resolveCiGreen ?? resolveCiGreen)(
     target.prNumber,
     target.headSha,
     target.repositorySlug,
@@ -1041,9 +1048,14 @@ export async function evaluatePostSmokeReadiness(
     requiredCiGreen: ciGreen,
     exactHeadSmokePassed: true,
     isAncestor: (ancestorSha, descendantSha) =>
-      githubCommitIsAncestor(target.repositorySlug, ancestorSha, descendantSha, options.repoRoot),
+      (dependencies.isAncestor ?? githubCommitIsAncestor)(
+        target.repositorySlug,
+        ancestorSha,
+        descendantSha,
+        options.repoRoot,
+      ),
   });
-  const runner = currentPackReviewStatusFact(
+  const runner = (dependencies.currentPackReviewStatusFact ?? currentPackReviewStatusFact)(
     target.repositorySlug,
     target.headSha,
     options.repoRoot,

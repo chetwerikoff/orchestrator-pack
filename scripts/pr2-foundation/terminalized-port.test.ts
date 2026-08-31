@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -9,7 +10,20 @@ import {
   normalizeWorkerReportStore,
 } from '../../docs/worker-report-store.mjs';
 import { evaluateReadiness, NOT_READY } from './readiness-evaluator.ts';
-import { projectPostSmokePackReview } from '../worker-smoke-run.ts';
+import {
+  evaluatePostSmokeReadiness,
+  projectPostSmokePackReview,
+  type CliOptions,
+  type ResolvedSmokeTarget,
+} from '../worker-smoke-run.ts';
+import {
+  commitPackReviewTerminal,
+  initializePackReviewAuthority,
+  observePackReviewHead,
+  recordPackReviewPublication,
+  type PackReviewAuthorityOptions,
+} from '../pack-review-state.ts';
+import type { RuntimeAdapter } from '../runtime/contracts.ts';
 import {
   FOUNDATION_DOC_ROWS,
   FOUNDATION_LINT_SUPPRESSION_CONFIG_PATH,
@@ -442,5 +456,196 @@ describe('Issue #1867 completed pack-review post-smoke projection', () => {
     });
     expect(result.unresolvedRequiredFinding).toBe(false);
     expect(result.completedLogicalCycleId).toBeNull();
+  });
+});
+
+
+describe('Issue #1867 post-smoke readiness wiring regression', () => {
+  const repository = 'chetwerikoff/orchestrator-pack';
+  const issueNumber = 1867;
+  const prNumber = 1874;
+  const reviewedHead = 'a'.repeat(40);
+  const currentHead = 'b'.repeat(40);
+
+  function completeLogicalStage(storeRoot: string): void {
+    const options: PackReviewAuthorityOptions = { storeRoot };
+    const authority = initializePackReviewAuthority({
+      prNumber,
+      headSha: reviewedHead,
+      tier: 'T2',
+      options,
+    });
+    const terminal = commitPackReviewTerminal({
+      prNumber,
+      expectedTransitionSeq: authority.transitionSeq,
+      terminal: {
+        schemaVersion: 1,
+        terminalContractVersion: 2,
+        terminalSource: 'normal',
+        runId: 'review-run-1867',
+        targetSha: reviewedHead,
+        reviewVerdict: 'clean',
+        findingCount: 0,
+        findingsDigest: 'clean-findings-digest',
+      },
+      status: 'up_to_date',
+      findingCount: 0,
+      options,
+    });
+    const published = recordPackReviewPublication({
+      prNumber,
+      expectedTransitionSeq: terminal.transitionSeq,
+      publication: {
+        headSha: reviewedHead,
+        terminalRunId: 'review-run-1867',
+        status: 'succeeded',
+        publicationDigest: 'publication-digest',
+        recordedAtUtc: new Date().toISOString(),
+      },
+      options,
+    });
+    expect(published.cycle?.reviewStageComplete).toBe(true);
+    const advanced = observePackReviewHead({
+      prNumber,
+      expectedTransitionSeq: published.transitionSeq,
+      headSha: currentHead,
+      options,
+    });
+    expect(advanced.cycle?.reviewStageComplete).toBe(true);
+  }
+
+  function cliOptions(): CliOptions {
+    return {
+      command: '',
+      issueNumber,
+      prNumber,
+      headSha: currentHead,
+      issueBodyFile: '',
+      smokeComplexity: '',
+      repoRoot: process.cwd(),
+      cwd: process.cwd(),
+      dryRun: false,
+      json: false,
+      reviewId: '',
+      reviewHeadSha: '',
+    };
+  }
+
+  function target(): ResolvedSmokeTarget {
+    return {
+      repositorySlug: repository,
+      issueNumber,
+      prNumber,
+      headSha: currentHead,
+      issueBody: '',
+      issueBodyMatchesTarget: true,
+      trustedPublisherLogin: 'chetwerikoff',
+      prOpen: true,
+      baseRef: 'main',
+      expectedTargetRef: 'main',
+      expectedTarget: true,
+    };
+  }
+
+  function blockingReview(headSha: string, id: number) {
+    return [{
+      id,
+      state: 'COMMENTED',
+      user: { login: 'chetwerikoff' },
+      submitted_at: '2026-08-31T00:00:00.000Z',
+      body: `<!-- opk-pack-review:v1 head=${headSha} verdict=findings blocking=true -->`,
+      commit_id: headSha,
+      html_url: `https://github.com/chetwerikoff/orchestrator-pack/pull/1874#pullrequestreview-${id}`,
+    }];
+  }
+
+  it('covers the real post-smoke status/readiness path for stale and material blockers', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'opk-1867-post-smoke-readiness-'));
+    const previousEnv = {
+      OPK_BASE_DIR: process.env.OPK_BASE_DIR,
+      OPK_VITEST_HARNESS: process.env.OPK_VITEST_HARNESS,
+      OPK_WORKER_REPORT_STORE: process.env.OPK_WORKER_REPORT_STORE,
+      PACK_REVIEW_RUN_STORE_ROOT: process.env.PACK_REVIEW_RUN_STORE_ROOT,
+      PACK_REVIEW_GITHUB_REVIEWS_FIXTURE: process.env.PACK_REVIEW_GITHUB_REVIEWS_FIXTURE,
+      PACK_REVIEW_REQUIRED_STATUS_CAPTURE_FILE: process.env.PACK_REVIEW_REQUIRED_STATUS_CAPTURE_FILE,
+    };
+    try {
+      process.env.OPK_BASE_DIR = root;
+      process.env.OPK_VITEST_HARNESS = '1';
+      process.env.OPK_WORKER_REPORT_STORE = path.join(root, 'worker-report-store.json');
+      process.env.PACK_REVIEW_RUN_STORE_ROOT = path.join(root, 'review-store');
+      completeLogicalStage(process.env.PACK_REVIEW_RUN_STORE_ROOT);
+
+      const scenarios = [
+        {
+          name: 'proven-ancestor',
+          reviewHead: reviewedHead,
+          reviewId: 186701,
+          lineage: 'ancestor',
+          blocked: false,
+        },
+        {
+          name: 'exact-current-head',
+          reviewHead: currentHead,
+          reviewId: 186702,
+          lineage: 'current',
+          blocked: true,
+        },
+        {
+          name: 'unknown-lineage',
+          reviewHead: reviewedHead,
+          reviewId: 186703,
+          lineage: 'unknown',
+          blocked: true,
+        },
+      ] as const;
+
+      for (const scenario of scenarios) {
+        const captureFile = path.join(root, `${scenario.name}-required-status.json`);
+        process.env.PACK_REVIEW_REQUIRED_STATUS_CAPTURE_FILE = captureFile;
+        process.env.PACK_REVIEW_GITHUB_REVIEWS_FIXTURE = JSON.stringify(
+          blockingReview(scenario.reviewHead, scenario.reviewId),
+        );
+
+        const result = await evaluatePostSmokeReadiness(
+          cliOptions(),
+          target(),
+          {} as RuntimeAdapter,
+          {
+            resolveCiGreen: () => true,
+            currentPackReviewStatusFact: () => ({
+              hasLegitimateReview: false,
+              unresolvedBlockingFinding: false,
+            }),
+            isAncestor: (_repositorySlug, ancestorSha, descendantSha) => {
+              if (scenario.lineage === 'unknown') throw new Error('fixture lineage unavailable');
+              return ancestorSha === reviewedHead && descendantSha === currentHead;
+            },
+          },
+        );
+
+        expect(result.reviewProjection).toMatchObject({
+          state: 'success',
+          reason: 'clear',
+          description: 'Required pack-review stage completed; no additional review round required.',
+        });
+        const captured = JSON.parse(readFileSync(captureFile, 'utf8')) as Record<string, unknown>;
+        expect(captured).toMatchObject({
+          repoSlug: repository,
+          headSha: currentHead,
+          state: 'success',
+          context: 'orchestrator-pack/pack-review',
+          description: 'Required pack-review stage completed; no additional review round required.',
+        });
+        expect(result.readiness.failedPredicates.includes('unresolved_required_review_finding'))
+          .toBe(scenario.blocked);
+      }
+    } finally {
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
