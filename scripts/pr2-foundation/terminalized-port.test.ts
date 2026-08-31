@@ -158,7 +158,8 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     expect(runtimeJob).toContain('Upload exact-head terminal evidence');
     expect(runtimeJob).toContain('working-directory: final-exact-head');
     expect(runtimeJob).toContain('name: final-${{ github.event.pull_request.head.sha }}');
-    expect(runtimeJob).toContain('final-exact-head/docs/investigations/orca-pwsh-zero-estate/final.json');\n    expect(runtimeJob).toContain('--role final');
+    expect(runtimeJob).toContain('final-exact-head/docs/investigations/orca-pwsh-zero-estate/final.json');
+    expect(runtimeJob).toContain('--role final');
     expect(runtimeJob).toContain('if-no-files-found: error');
     expect(workflow).not.toContain('\n  post-port-proof:\n');
   });
