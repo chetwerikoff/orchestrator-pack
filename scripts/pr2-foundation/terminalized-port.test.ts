@@ -125,15 +125,11 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     }
   });
 
-  it('keeps the worker-report PowerShell edge byte-compatible and the TypeScript authority dormant', () => {
-    const wrapper = readFileSync(path.resolve('scripts/lib/WorkerReportStore.ps1'), 'utf8');
-    expect(wrapper).toContain("'docs/worker-report-store.mjs'");
-    expect(wrapper).toContain(
-      'Invoke-MechanicalNodeFilterCli -FilterCliPath $Script:WorkerReportStoreCli',
-    );
-    expect(wrapper).not.toContain('scripts/lib/Invoke-TypeScriptCli.ts');
-    expect(wrapper).not.toContain("'--experimental-strip-types'");
-    expect(wrapper).not.toContain('Write-MechanicalTransportPrivateFile');
+  it('keeps worker-report storage on the direct Node authority after the shell cut', () => {
+    expect(existsSync(path.resolve('scripts/lib/WorkerReportStore.ps1'))).toBe(false);
+    const store = readFileSync(path.resolve('docs/worker-report-store.mjs'), 'utf8');
+    expect(store).toContain('WORKER_REPORT_STORE_SCHEMA_VERSION');
+    expect(store).toContain('OPK_WORKER_REPORT_STORE');
     expect(existsSync(path.resolve(
       'scripts/pr2-foundation/terminalized/worker-report-store.ts',
     ))).toBe(true);
@@ -150,7 +146,7 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     ))).toBe(true);
   });
 
-  it('binds #1419 exact-head post-port proof into the required TypeScript runtime context', () => {
+  it('binds the exact-head terminal proof into the required TypeScript runtime context', () => {
     const workflow = readFileSync(path.resolve('.github/workflows/typescript-foundation.yml'), 'utf8');
     const runtimeStart = workflow.indexOf('  runtime:');
     const typecheckStart = workflow.indexOf('  typecheck:', runtimeStart);
@@ -158,11 +154,11 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     expect(typecheckStart).toBeGreaterThan(runtimeStart);
     const runtimeJob = workflow.slice(runtimeStart, typecheckStart);
     expect(runtimeJob).toContain('name: TypeScript runtime (Node 22)');
-    expect(runtimeJob).toContain('Produce and admit exact-head post-port evidence');
-    expect(runtimeJob).toContain('Upload exact-head post-port evidence');
-    expect(runtimeJob).toContain('working-directory: post-port-exact-head');
-    expect(runtimeJob).toContain('name: post-port-${{ github.event.pull_request.head.sha }}');
-    expect(runtimeJob).toContain('post-port-exact-head/docs/investigations/orca-pwsh-zero-estate/post-port.json');
+    expect(runtimeJob).toContain('Produce and admit exact-head terminal evidence');
+    expect(runtimeJob).toContain('Upload exact-head terminal evidence');
+    expect(runtimeJob).toContain('working-directory: final-exact-head');
+    expect(runtimeJob).toContain('name: final-${{ github.event.pull_request.head.sha }}');
+    expect(runtimeJob).toContain('final-exact-head/docs/investigations/orca-pwsh-zero-estate/final.json');\n    expect(runtimeJob).toContain('--role final');
     expect(runtimeJob).toContain('if-no-files-found: error');
     expect(workflow).not.toContain('\n  post-port-proof:\n');
   });

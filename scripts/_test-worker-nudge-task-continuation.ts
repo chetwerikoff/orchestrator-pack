@@ -8,7 +8,7 @@ export {
   syncIssueOwnershipClaimRecord,
 } from '../docs/worker-nudge-gate.mjs';
 
-export { repoRoot } from './_test-pwsh-helpers.js';
+export { repoRoot } from './_test-vitest-harness-env.js';
 
 export const TASK_CONTINUATION_PROJECT_ID = 'orchestrator-pack';
 export const TASK_CONTINUATION_ISSUE_NUMBER = 417;

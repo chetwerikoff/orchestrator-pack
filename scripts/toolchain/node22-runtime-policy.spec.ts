@@ -24,17 +24,6 @@ import { checkTypeScriptRuntimePolicy } from './check-typescript-runtime-policy.
 const repoRoot = resolve(import.meta.dirname, '../..');
 const temporaryRoots: string[] = [];
 
-function commandExists(name: string): boolean {
-  const pathValue = process.env.PATH ?? '';
-  const candidates = process.platform === 'win32'
-    ? [name, `${name}.exe`, `${name}.cmd`]
-    : [name];
-  return pathValue.split(delimiter).some((directory) =>
-    directory.length > 0 && candidates.some((candidate) => existsSync(join(directory, candidate))));
-}
-
-const hasPowerShell = commandExists('pwsh');
-
 function tempRoot(prefix: string): string {
   const root = mkdtempSync(join(tmpdir(), prefix));
   temporaryRoots.push(root);
@@ -597,29 +586,24 @@ describe('representative real entrypoints', () => {
     expect(plugin.stderr).not.toContain('tsx');
   }, 60_000);
 
-  it.skipIf(!hasPowerShell)('executes the Wave B PowerShell bridge through the canonical runtime preflight', async () => {
-    const outputRoot = tempRoot('opk-node22-bridge-');
+  it('executes the sanctioned-worker-kill TypeScript producer through Node 22', async () => {
+    const outputRoot = tempRoot('opk-node22-kill-record-');
     const artifact = join(outputRoot, 'sanctioned-worker-kills.json');
-    const bridge = await runProcess({
-      command: 'pwsh',
-      args: [
-        '-NoProfile',
-        '-File',
-        'scripts/record-sanctioned-worker-kill.ps1',
-        '-SessionId',
-        'issue-900-smoke',
-        '-Path',
-        artifact,
-      ],
-      cwd: repoRoot,
-      inheritParentEnv: true,
-      timeoutMs: 30_000,
-      allowEmptyStdout: false,
-    });
-    expect(bridge.ok, bridge.stderr || bridge.error).toBe(true);
-    expect(JSON.parse(bridge.stdout)).toMatchObject({
+    const result = await runNode([
+      '--experimental-strip-types',
+      'scripts/json-producers/sanctioned-worker-kill-record.ts',
+      'add',
+      '--path', artifact,
+      '--session-id', 'issue-900-smoke',
+      '--issue-number', '900',
+      '--pr-number', '901',
+      '--kill-kind', 'manual',
+      '--timestamp-ms', '123',
+    ]);
+    expect(result.ok, result.stderr || result.error).toBe(true);
+    expect(JSON.parse(result.stdout)).toMatchObject({
       healthy: true,
-      records: [{ sessionId: 'issue-900-smoke' }],
+      records: [{ sessionId: 'issue-900-smoke', issueNumber: 900, prNumber: 901 }],
     });
     expect(existsSync(artifact)).toBe(true);
   }, 30_000);

@@ -1,6 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 1
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -75,14 +75,16 @@ describe('terminal gate population census after Issue #906', () => {
     expect(validateCensusSchema({ ...census, entries }).join('\n')).toContain('migration ownership digest drift');
   });
 
-  it('fails when a retained PowerShell subject disappears', () => {
-    const census = loadCensus(repoRoot);
-    const row = census.entries.find((entry) => entry.classification === 'kept-in-pr1' && entry.sourceKind === 'check-script');
-    expect(row).toBeDefined();
+  it('fails when a removed retained check loses its exact Node owner wiring', () => {
     const files = currentFiles();
-    delete files[row!.sourcePath];
-    const result = evaluateCurrentCensus(census, memorySnapshot(files), registeredGateIds);
-    expect(result.details?.join('\n')).toContain(`${row!.id}: retained legacy gate was dropped`);
+    files['scripts/ci-policy-guards.ts'] = (files['scripts/ci-policy-guards.ts'] ?? '').replace(
+      'function runCiCheapWins',
+      'function runCiCheapWinsRetired',
+    );
+    const result = evaluateCurrentCensus(loadCensus(repoRoot), memorySnapshot(files), registeredGateIds);
+    expect(result.details?.join('\n')).toContain(
+      'check-script:scripts/check-ci-cheap-wins.ps1: retained legacy gate was dropped',
+    );
   });
 
   it('fails when a retired PowerShell subject is restored', () => {
@@ -131,10 +133,11 @@ describe('terminal gate population census after Issue #906', () => {
     expect(evaluateCurrentCensus(loadCensus(repoRoot), memorySnapshot(files), registeredGateIds).details?.join('\n')).toContain('unaccounted check script');
   });
 
-  it('keeps the real Node verify aggregator discoverable through the PowerShell launcher', () => {
-    const verify = readFileSync(resolve(repoRoot, 'scripts/verify.ps1'), 'utf8');
-    expect(verify).toContain('verify.ts');
-    expect(verify).not.toContain('scripts/gate-runner/runner.ts');
+  it('keeps the real Node verify aggregator direct and the retired launcher absent', () => {
+    const verify = readFileSync(resolve(repoRoot, 'scripts/verify.ts'), 'utf8');
+    expect(verify).toContain('runNodeVerificationPorts');
+    expect(verify).toContain('runGateRunner');
+    expect(existsSync(resolve(repoRoot, 'scripts/verify.ps1'))).toBe(false);
   });
 
   it('fails when a ported gate id is not registered', () => {
