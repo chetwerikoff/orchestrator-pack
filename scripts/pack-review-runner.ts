@@ -1569,16 +1569,32 @@ export async function observeGptPackReviewAttempt(
     replacementEligibleSlotIds.push(slot.slotId);
   }
 
-  if (replacementEligibleSlotIds.length > 0 || initialLaunchSlotIds.length > 0) {
+  if (replacementEligibleSlotIds.length > 0) {
     return {
-      state: replacementEligibleSlotIds.length > 0 ? 'replacement_eligible' : 'continuation_eligible',
-      replacementEligible: replacementEligibleSlotIds.length > 0,
-      slotId: replacementEligibleSlotIds[0] ?? initialLaunchSlotIds[0],
+      state: 'replacement_eligible',
+      replacementEligible: true,
+      slotId: replacementEligibleSlotIds[0],
       replacementEligibleSlotIds,
       initialLaunchSlotIds,
     };
   }
-  return blockedObservation ?? { state: 'observation_unavailable', replacementEligible: false };
+  if (blockedObservation) {
+    return {
+      ...blockedObservation,
+      replacementEligibleSlotIds,
+      initialLaunchSlotIds,
+    };
+  }
+  if (initialLaunchSlotIds.length > 0) {
+    return {
+      state: 'continuation_eligible',
+      replacementEligible: false,
+      slotId: initialLaunchSlotIds[0],
+      replacementEligibleSlotIds,
+      initialLaunchSlotIds,
+    };
+  }
+  return { state: 'observation_unavailable', replacementEligible: false };
 }
 
 export interface PackReviewNativeAttemptObservation {
@@ -4266,8 +4282,10 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
             httpStatus: 202,
           };
         }
+        const replacementSlotIds = observation.replacementEligibleSlotIds
+          ?? (observation.replacementEligible && observation.slotId ? [observation.slotId] : []);
         const eligibleSlotIds = [...new Set([
-          ...(observation.replacementEligibleSlotIds ?? []),
+          ...replacementSlotIds,
           ...initialLaunchSlotIds,
         ])];
         if (eligibleSlotIds.length === 0) {
