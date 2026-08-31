@@ -1081,6 +1081,7 @@ export function assertPackReviewSmokeAdmission(input: {
   if (input.authority.currentHeadSha !== headSha) {
     throw new PackReviewAuthorityError('smoke_ordering_head_mismatch', `expected ${input.authority.currentHeadSha}, got ${headSha}`);
   }
+  if (input.authority.cycle?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION) return;
   if (input.authority.smokeOrdering?.independent) {
     throw new PackReviewAuthorityError(
       'smoke_ordering_review_forbidden',
@@ -1130,6 +1131,7 @@ export function assertIndependentSmokeAdmission(input: {
     }
     return;
   }
+  if (input.authority.cycle?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION) return;
   if (['BLOCK', 'PENDING_ARCHITECT', 'PENDING_OPERATOR'].includes(input.authority.triage?.verdict ?? '')) {
     throw new PackReviewAuthorityError(
       'smoke_ordering_review_unsettled',
