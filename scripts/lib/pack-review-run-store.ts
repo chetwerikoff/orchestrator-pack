@@ -190,7 +190,7 @@ export interface PackReviewNativeAttemptBinding {
   invocationOrdinal: number;
   startedAtUtc: string;
   effectiveBudgetMs: number;
-  wrapperPid: number;
+  wrapperPid?: number;
   processGroupId?: number;
   childPid?: number;
   childProcessGroupId?: number;
@@ -1132,10 +1132,10 @@ function normalizePackReviewNativeAttempt(value: unknown, path = ''): PackReview
   const invocationOrdinal = requiredJsonPositiveInteger(raw.invocationOrdinal, 'nativeAttempt invocationOrdinal', path);
   const startedAtUtc = requiredJsonString(raw.startedAtUtc, 'nativeAttempt startedAtUtc', path);
   const effectiveBudgetMs = requiredJsonPositiveInteger(raw.effectiveBudgetMs, 'nativeAttempt effectiveBudgetMs', path);
-  const wrapperPid = requiredJsonPositiveInteger(raw.wrapperPid, 'nativeAttempt wrapperPid', path);
   const optionalPid = (name: string): number | undefined => raw[name] === undefined
     ? undefined
     : requiredJsonPositiveInteger(raw[name], `nativeAttempt ${name}`, path);
+  const wrapperPid = optionalPid('wrapperPid');
   const childStartedAtUtc = raw.childStartedAtUtc === undefined
     ? undefined
     : requiredJsonString(raw.childStartedAtUtc, 'nativeAttempt childStartedAtUtc', path);
@@ -1145,7 +1145,7 @@ function normalizePackReviewNativeAttempt(value: unknown, path = ''): PackReview
     invocationOrdinal,
     startedAtUtc,
     effectiveBudgetMs,
-    wrapperPid,
+    ...(wrapperPid === undefined ? {} : { wrapperPid }),
     ...(optionalPid('processGroupId') === undefined ? {} : { processGroupId: optionalPid('processGroupId') }),
     ...(optionalPid('childPid') === undefined ? {} : { childPid: optionalPid('childPid') }),
     ...(optionalPid('childProcessGroupId') === undefined ? {} : { childProcessGroupId: optionalPid('childProcessGroupId') }),
