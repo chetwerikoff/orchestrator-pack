@@ -22,6 +22,16 @@ function evidence(overrides: Partial<PortStageEvidence> = {}): PortStageEvidence
   };
 }
 
+function trackedPowerShellEntry(path: string): PortStageEvidence['entries'][number] {
+  return {
+    sourceKind: 'tracked-ps1-file',
+    occurrence: { sourcePath: path, line: 1, column: 1, tokenKind: 'tracked-ps1-file', matchedBytes: path },
+    resolvedScriptPath: path,
+    targetResolution: 'exact',
+    currentPrescriptive: false,
+  };
+}
+
 describe('Issue #1419 post-port admission', () => {
   it('passes only the closed unchanged-producer fact set', () => {
     expect(evaluatePostPortEvidence(evidence()).status).toBe('PASS');
@@ -63,13 +73,11 @@ describe('Issue #1817 terminal zero-estate admission', () => {
   it('rejects tracked PowerShell or retained terminal dispositions', () => {
     const result = evaluatePostPortEvidence(evidence({
       artifactRole: 'final',
-      entries: [{
-        sourceKind: 'tracked-ps1-file',
-        occurrence: { sourcePath: 'scripts/legacy.ps1', line: 1, column: 1, tokenKind: 'tracked-ps1-file', matchedBytes: 'scripts/legacy.ps1' },
-        resolvedScriptPath: 'scripts/legacy.ps1',
-        targetResolution: 'exact',
-        currentPrescriptive: false,
-      }],
+      entries: [
+        trackedPowerShellEntry('scripts/legacy.ps1'),
+        trackedPowerShellEntry('scripts/legacy.psm1'),
+        trackedPowerShellEntry('scripts/legacy.psd1'),
+      ],
       retainedDispositions: [{
         path: 'scripts/legacy.ps1',
         disposition: 'retained-for-1251-zero-estate',
@@ -78,6 +86,6 @@ describe('Issue #1817 terminal zero-estate admission', () => {
       }],
     }), 'final');
     expect(result.status).toBe('FAIL');
-    expect(result.failures).toEqual(['tracked_powershell=1', 'retained_dispositions=1']);
+    expect(result.failures).toEqual(['tracked_powershell=3', 'retained_dispositions=1']);
   });
 });

@@ -44,12 +44,7 @@ describe('terminal PowerShell/Pester retirement coverage', () => {
     expect(negative.ok, output(negative)).toBe(true);
   });
 
-  it('proves the tracked shell estate is empty and retirement guard stays live', async () => {
-    const tracked = await run('git', ['ls-files']);
-    expect(tracked.ok, output(tracked)).toBe(true);
-    const shellFiles = tracked.stdout.split(/\r?\n/u).filter((file) => /\.(?:ps1|psm1|psd1)$/iu.test(file));
-    expect(shellFiles).toEqual([]);
-
+  it('keeps the shared retirement guard live after Pester removal', async () => {
     const retirement = await run(process.execPath, [
       '--experimental-strip-types', 'scripts/runtime-retirement/retired-surface-selftest.ts',
     ]);

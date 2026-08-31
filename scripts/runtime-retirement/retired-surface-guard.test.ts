@@ -52,6 +52,9 @@ describe('runtime retirement closed-world scanner', () => {
     ['compatibility alias', 'const alias = "OPK_REAL_RUNTIME";', 'scripts/active.ts', 'compatibility-alias'],
     ['named adapter shim', 'function Install-AoLivenessShim {}', 'scripts/active.ts', 'legacy-adapter-symbol'],
     ['global command shim', 'function global:ao { "retired" }', 'scripts/active.ts', 'legacy-adapter-symbol'],
+    ['PowerShell script path', 'neutral', 'scripts/reintroduced.ps1', 'powershell-executable-path'],
+    ['PowerShell module path', 'neutral', 'scripts/reintroduced.psm1', 'powershell-executable-path'],
+    ['PowerShell data path', 'neutral', 'scripts/reintroduced.psd1', 'powershell-executable-path'],
     ['retired script path', 'neutral', 'scripts/ao-review.ts', 'legacy-runtime-command'],
   ])('rejects injected %s surface', (_name, text, path, surfaceId) => {
     const result = scanRetiredRuntimeSurfaces({ repoRoot: fixture(text, path) });

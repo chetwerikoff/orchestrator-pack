@@ -51,6 +51,13 @@
       "owningReference": "Issue #1352 AO-01..AO-05/AO-13/AO-14"
     },
     {
+      "id": "powershell-executable-path",
+      "sourceCommandPattern": "$a",
+      "pathPattern": "\\.(?:ps1|psm1|psd1)$",
+      "reason": "No tracked executable PowerShell file surface remains.",
+      "owningReference": "Issue #1817 AC1/AC7"
+    },
+    {
       "id": "compatibility-alias",
       "sourceCommandPattern": "\\b(?:OPK_REAL_RUNTIME|runtime-controller\\.ya?ml|legacy runtime|retired runtime compatibility|runtime compatibility alias)\\b",
       "pathPattern": "$a",

@@ -176,14 +176,16 @@ describe('Issue #1415 role-neutral port-stage evidence', () => {
     expect(classifyInstructionOccurrence(line, line.indexOf('scripts/verify.ps1') + 1)).toBe('instruction-directive');
   });
 
-  it('emits an outside-root tracked PowerShell path even when the file has no token bytes', () => {
-    expect(unclassifiedPowerShellPathOccurrence('examples/legacy.PS1')).toEqual({
-      sourcePath: 'examples/legacy.PS1',
-      line: 1,
-      column: 1,
-      tokenKind: 'tracked-ps1-file',
-      matchedBytes: 'examples/legacy.PS1',
-    });
+  it('emits outside-root tracked PowerShell paths for the closed extension class even without token bytes', () => {
+    for (const path of ['examples/legacy.PS1', 'examples/module.PSM1', 'examples/data.PSD1']) {
+      expect(unclassifiedPowerShellPathOccurrence(path)).toEqual({
+        sourcePath: path,
+        line: 1,
+        column: 1,
+        tokenKind: 'tracked-ps1-file',
+        matchedBytes: path,
+      });
+    }
     expect(unclassifiedPowerShellPathOccurrence('examples/readme.md')).toBeUndefined();
   });
 
@@ -333,6 +335,34 @@ describe('Issue #1415 role-neutral port-stage evidence', () => {
         expect.objectContaining({ sourceKind: 'instruction-directive', targetResolution: 'exact' }),
         expect.objectContaining({ sourceKind: 'instruction-reference-only', targetResolution: 'exact' }),
       ]));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, producerIntegrationTestTimeoutMs);
+
+  it('includes .ps1, .psm1, and .psd1 tracked paths in final evidence', async () => {
+    const measuredBase = await exactCandidateHead();
+    const root = await cloneCandidate(measuredBase);
+    try {
+      const paths = [
+        'scripts/fixture-terminal.ps1',
+        'scripts/fixture-terminal.psm1',
+        'scripts/fixture-terminal.psd1',
+      ] as const;
+      for (const path of paths) writeFileSync(resolve(root, path), 'neutral\n');
+      const measuredHead = await commitFixture(root, paths);
+      const evidence = await producePortStageEvidence({
+        repoRoot: root,
+        artifactRole: 'final',
+        measuredHead,
+        producerRevision: measuredHead,
+      });
+      const tracked = new Set(
+        evidence.entries
+          .filter((entry) => entry.sourceKind === 'tracked-ps1-file')
+          .map((entry) => entry.occurrence.sourcePath),
+      );
+      for (const path of paths) expect(tracked.has(path), path).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

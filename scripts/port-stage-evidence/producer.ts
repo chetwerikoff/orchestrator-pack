@@ -81,6 +81,7 @@ export interface PortStageEvidence {
 }
 
 const INSTRUCTION_ROOT_FILES = new Set(['AGENTS.md', 'CLAUDE.md', 'README.md']);
+const TRACKED_POWERSHELL_PATH = /\.(?:ps1|psm1|psd1)$/iu;
 const ACTION_VERBS = ['run', 'execute', 'invoke', 'call', 'launch', 'start', 'use', 'install', 'replace', 'remove', 'delete', 'retire', 'migrate', 'verify', 'check'] as const;
 const NEGATIVE = /\b(?:not|never)\b|\bdo\s+not\b/iu;
 const MODAL = /\b(?:must|should|required\s+to|may\s+only)\b/giu;
@@ -132,7 +133,7 @@ function occurrenceFromToken(token: TokenOccurrence): EvidenceOccurrence {
 }
 
 export function unclassifiedPowerShellPathOccurrence(path: string): EvidenceOccurrence | undefined {
-  if (!/\.ps1$/iu.test(path)) return undefined;
+  if (!TRACKED_POWERSHELL_PATH.test(path)) return undefined;
   return { sourcePath: path, line: 1, column: 1, tokenKind: 'tracked-ps1-file', matchedBytes: path };
 }
 
@@ -310,13 +311,17 @@ export async function producePortStageEvidence(input: {
   const outputPath = ARTIFACT_PATHS[input.artifactRole];
   assertUntrackedStagePath(tree, outputPath);
   const historical = exactHistoricalMap(tree);
-  const trackedPs1 = tree.files.filter((file) => isClassifiedRoot(file.path) && /\.ps1$/iu.test(file.path) && !historical.has(file.path)).map((file) => file.path);
-  const resolver = createScriptTargetResolver(trackedPs1);
+  const trackedPowerShell = tree.files
+    .filter((file) => TRACKED_POWERSHELL_PATH.test(file.path)
+      && (input.artifactRole === 'final' || (isClassifiedRoot(file.path) && !historical.has(file.path))))
+    .map((file) => file.path);
+  const resolver = createScriptTargetResolver(trackedPowerShell);
   const entries: EvidenceEntry[] = [];
   const unclassified: EvidenceOccurrence[] = [];
   const unresolved: EvidenceOccurrence[] = [];
   for (const file of tree.files) {
-    if (historical.has(file.path)) continue;
+    const trackedPowerShellPath = TRACKED_POWERSHELL_PATH.test(file.path);
+    if (historical.has(file.path) && !(input.artifactRole === 'final' && trackedPowerShellPath)) continue;
     const classified = isClassifiedRoot(file.path);
     const resolvesWholePath = (candidate: string): boolean => resolver.resolvesWholePath(file.path, candidate);
     if (!classified) {
@@ -329,7 +334,7 @@ export async function producePortStageEvidence(input: {
       unclassified.push(...tokenBytes.map(occurrenceFromToken));
       continue;
     }
-    if (classified && /\.ps1$/iu.test(file.path)) continue;
+    if (trackedPowerShellPath && (classified || input.artifactRole === 'final')) continue;
     const ranges = classified ? sourceRanges(file) : undefined;
     const tokens = scanPowerShellTokens({ sourcePath: file.path, bytes: file.bytes, ranges, resolvesWholePath });
     if (!classified) {
@@ -353,7 +358,7 @@ export async function producePortStageEvidence(input: {
   }
 
   const prescriptiveTargets = new Set(entries.filter((entry) => entry.currentPrescriptive && entry.occurrence.tokenKind === 'script' && entry.resolvedScriptPath).map((entry) => entry.resolvedScriptPath!));
-  for (const path of trackedPs1) {
+  for (const path of trackedPowerShell) {
     entries.push({
       sourceKind: 'tracked-ps1-file',
       occurrence: { sourcePath: path, line: 1, column: 1, tokenKind: 'tracked-ps1-file', matchedBytes: path },
@@ -364,17 +369,17 @@ export async function producePortStageEvidence(input: {
   }
 
   const retained = parseRetained(tree);
-  const byTrackedPs1 = new Map(entries.filter((entry) => entry.sourceKind === 'tracked-ps1-file').map((entry) => [entry.occurrence.sourcePath, entry]));
+  const byTrackedPowerShell = new Map(entries.filter((entry) => entry.sourceKind === 'tracked-ps1-file').map((entry) => [entry.occurrence.sourcePath, entry]));
   if (unresolved.length > 0 && retained.length > 0) throw new Error('retained dispositions are invalid while a current-prescriptive script target is unresolved');
   for (const row of retained) {
-    const target = byTrackedPs1.get(row.path);
+    const target = byTrackedPowerShell.get(row.path);
     if (!target) throw new Error(`retained disposition target is not a measured tracked PowerShell file: ${row.path}`);
     if (target.currentPrescriptive) throw new Error(`retained disposition target is current-prescriptive: ${row.path}`);
     if (historical.has(row.path)) throw new Error(`retained disposition conflicts with legal historical exclusion: ${row.path}`);
     if (prescriptiveTargets.has(row.path)) throw new Error(`retained disposition target has an incoming current-prescriptive reference: ${row.path}`);
   }
   const retainedPaths = new Set(retained.map((row) => row.path));
-  const dormantPaths = [...byTrackedPs1.values()].filter((entry) => !entry.currentPrescriptive).map((entry) => entry.occurrence.sourcePath);
+  const dormantPaths = [...byTrackedPowerShell.values()].filter((entry) => !entry.currentPrescriptive).map((entry) => entry.occurrence.sourcePath);
   const dormantRetainedCoverageComplete = dormantPaths.every((path) => retainedPaths.has(path)) && retained.every((row) => dormantPaths.includes(row.path));
   const stable = stableEntries(entries);
   const broaderStatusClosed = unclassified.length === 0 && unresolved.length === 0;
