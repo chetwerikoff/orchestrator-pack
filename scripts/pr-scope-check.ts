@@ -52,6 +52,23 @@ const DECLARATION_SNAPSHOT_SAMPLE = join('docs', 'declarations', '0.sample.json'
 export const RUNTIME_HISTORY_DELIVERY_BRANCH = 'ci/vitest-runtime-history-refresh';
 export const RUNTIME_HISTORY_DELIVERY_PATH = 'scripts/vitest-runtime-history.json';
 
+export const TERMINAL_ZERO_ESTATE_DELETION_ONLY_PATHS = [
+  'tests/fixtures/lint-self-architect/negative/scripts/clean.ps1',
+  'tests/fixtures/lint-self-architect/paired-edit/scripts/deploy.ps1',
+  'tests/powershell/Ci-Failure-Notification-Common.Tests.ps1',
+  'tests/powershell/Gh-PrChecks.Tests.ps1',
+  'tests/powershell/Issue748.RefreshConcurrency.Tests.ps1',
+  'tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1',
+  'tests/powershell/Issue748.WorkerStatusPopulation.Tests.ps1',
+  'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1',
+  'tests/powershell/Resolve-TrustedPackRoot.Tests.ps1',
+  'tests/powershell/Test-AllRunner.Tests.ps1',
+] as const;
+
+const TERMINAL_ZERO_ESTATE_DELETION_ONLY_SET = new Set<string>(
+  TERMINAL_ZERO_ESTATE_DELETION_ONLY_PATHS,
+);
+
 function issueBlocksCommittedDeclarationSnapshots(constraints: IssueConstraints): boolean {
   return pathMatchesAnyPattern(DECLARATION_SNAPSHOT_SAMPLE, constraints.denylist);
 }
@@ -997,8 +1014,14 @@ export function acquirePrScopeDiff(input: PrScopeCheckInput): PrScopeDiffResult 
         if (fields.length !== 2 || !fields[1]) {
           return { ok: false, message: `diff-incomplete: malformed status row "${line}"; retry command` };
         }
-        scopePaths.push(fields[1]);
-        operatorAdoptionPaths.push(fields[1]);
+        const path = fields[1];
+        if (
+          status !== 'D' ||
+          !TERMINAL_ZERO_ESTATE_DELETION_ONLY_SET.has(path)
+        ) {
+          scopePaths.push(path);
+        }
+        operatorAdoptionPaths.push(path);
       } else {
         return { ok: false, message: `diff-incomplete: unsupported status row "${line}"; retry command` };
       }
