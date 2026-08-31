@@ -16,6 +16,7 @@ import { reviewStageDisposition } from './pr2-foundation/post-review-smoke.ts';
 import {
   assertIndependentSmokeAdmission,
   PACK_REVIEW_CAP_MAP_VERSION,
+  PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
   assertPackReviewSmokeAdmission,
   commitPackReviewTriage,
   commitPackReviewTerminal,
@@ -576,6 +577,76 @@ describe('Issue #1436 smoke/review ordering', () => {
           .toThrow('smoke_ordering_review_unsettled');
       }
     }
+  });
+
+  it('completes a logical final-finding stage after architect DEFER on a later fix head', () => {
+    const root = mkdtempSync(join(tmpdir(), 'pack-review-logical-architect-final-'));
+    roots.push(root);
+    const options: PackReviewAuthorityOptions = { storeRoot: root };
+    const authority = initializePackReviewAuthority({
+      prNumber: 1826,
+      headSha: HEAD,
+      tier: 'T1',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      options,
+    });
+    const terminal = commitPackReviewTerminal({
+      prNumber: 1826,
+      expectedTransitionSeq: authority.transitionSeq,
+      terminal: {
+        schemaVersion: 1,
+        terminalContractVersion: 2,
+        terminalSource: 'normal',
+        runId: 'logical-final-findings',
+        targetSha: HEAD,
+        logicalRoundOrdinal: 1,
+        reviewVerdict: 'findings',
+        findingCount: 1,
+        findingsDigest: 'logical-final-findings-digest',
+      },
+      status: 'changes_requested',
+      findingCount: 1,
+      options,
+    });
+    const published = recordPackReviewPublication({
+      prNumber: 1826,
+      expectedTransitionSeq: terminal.transitionSeq,
+      publication: {
+        headSha: HEAD,
+        terminalRunId: 'logical-final-findings',
+        status: 'succeeded',
+        publicationDigest: 'logical-final-publication',
+        recordedAtUtc: new Date().toISOString(),
+      },
+      options,
+    });
+    const fixHead = observePackReviewHead({
+      prNumber: 1826,
+      expectedTransitionSeq: published.transitionSeq,
+      headSha: NEXT_HEAD,
+      options,
+    });
+    expect(fixHead.cycle).toMatchObject({
+      state: 'at_cap_continuation_required',
+      consumedRoundOrdinals: [1],
+    });
+    expect(fixHead.publication).toBeUndefined();
+
+    const adjudicated = commitPackReviewTriage({
+      prNumber: 1826,
+      expectedTransitionSeq: fixHead.transitionSeq,
+      triage: {
+        verdict: 'DEFER',
+        source: 'architect',
+        findingSnapshotDigest: 'logical-final-findings-digest',
+        actor: 'architect-fixture',
+        committedAtUtc: new Date().toISOString(),
+      },
+      options,
+    });
+
+    expect(adjudicated.cycle?.reviewStageComplete).toBe(true);
+    expect(adjudicated.smokeOrdering?.reviewSettledHeadSha).toBe(NEXT_HEAD);
   });
 
   it('derives smoke ordering applicability from the canonical smoke requirement', () => {
