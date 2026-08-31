@@ -1555,6 +1555,13 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(malformedTierReason).toContain('flow-manager-authored input');
     expect(malformedTierReason).toContain('record/provide the observed tier-intake.json via --tier-intake');
 
+    const nullTier = fixture({ transportClassification: 'incident' });
+    writeFileSync(nullTier.intakePath, 'null');
+    const nullTierReason = inspect(nullTier).missing.find((item) => item.artifact === 'tier-intake/v1')?.reason ?? '';
+    expect(nullTierReason).toContain('tier intake evidence is malformed');
+    expect(nullTierReason).toContain('flow-manager-authored input');
+    expect(nullTierReason).toContain('record/provide the observed tier-intake.json via --tier-intake');
+
     const missingDispositions = fixture({ transportClassification: 'incident' });
     rmSync(missingDispositions.authorPath);
     const missingDispositionsReason = inspect(missingDispositions).missing.find((item) => item.artifact === 'author dispositions')?.reason ?? '';
@@ -1566,6 +1573,13 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     const dispositionsReason = inspect(malformedDispositions).missing.find((item) => item.artifact === 'author dispositions')?.reason ?? '';
     expect(dispositionsReason).toContain('flow-manager-authored input');
     expect(dispositionsReason).toContain('record/provide the observed author-dispositions.json via --author-dispositions');
+
+    const nullDispositions = fixture({ transportClassification: 'incident' });
+    writeFileSync(nullDispositions.authorPath, 'null');
+    const nullDispositionsReason = inspect(nullDispositions).missing.find((item) => item.artifact === 'author dispositions')?.reason ?? '';
+    expect(nullDispositionsReason).toContain('author disposition evidence is malformed');
+    expect(nullDispositionsReason).toContain('flow-manager-authored input');
+    expect(nullDispositionsReason).toContain('record/provide the observed author-dispositions.json via --author-dispositions');
 
     const missingStagePaths = fixture({ transportClassification: 'incident' });
     const noStageStatus = inspectAcceptanceArtifacts({
@@ -1598,6 +1612,13 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     const malformedStageReason = inspect(malformedStage).missing.find((item) => item.artifact === 'stage evidence')?.reason ?? '';
     expect(malformedStageReason).toContain('flow-manager-authored input');
     expect(malformedStageReason).toContain('record/provide the observed attempt-NNN.json via --stage-evidence');
+
+    const nullStage = fixture({ transportClassification: 'incident' });
+    writeFileSync(nullStage.reviewEvidencePath, 'null');
+    const nullStageReason = inspect(nullStage).missing.find((item) => item.artifact === 'stage evidence')?.reason ?? '';
+    expect(nullStageReason).toContain('recorded stage result is malformed');
+    expect(nullStageReason).toContain('flow-manager-authored input');
+    expect(nullStageReason).toContain('record/provide the observed attempt-NNN.json via --stage-evidence');
 
     const missingCredential = fixture({ transportClassification: 'incident' });
     const produced = produce(missingCredential);

@@ -2248,12 +2248,13 @@ export function inspectAcceptanceArtifacts(
     present.push(path);
     return true;
   };
-  const readArtifactJson = (path: string, artifact: string, reason: string, decorate?: ReasonDecorator): unknown | null => {
-    if (!requireRegularFile(path, artifact, reason, decorate)) return null;
+  const READ_ARTIFACT_JSON_FAILED = Symbol('read-artifact-json-failed');
+  const readArtifactJson = (path: string, artifact: string, reason: string, decorate?: ReasonDecorator): unknown => {
+    if (!requireRegularFile(path, artifact, reason, decorate)) return READ_ARTIFACT_JSON_FAILED;
     try { return JSON.parse(readFileSync(path, 'utf8')) as unknown; } catch {
       const detail = artifact + ' is malformed JSON';
       missing.push({ artifact, reason: (decorate ? decorate(detail) : detail) + ': ' + path });
-      return null;
+      return READ_ARTIFACT_JSON_FAILED;
     }
   };
   const addInvalid = (artifact: string, path: string, detail: string, decorate?: ReasonDecorator): void => {
@@ -2264,11 +2265,11 @@ export function inspectAcceptanceArtifacts(
   const dispositionsInputReason: ReasonDecorator = (detail) => acceptanceArtifactInputReason('authorDispositionsPath', detail);
 
   const intake = readArtifactJson(options.tierIntakePath, 'tier-intake/v1', 'tier intake evidence is missing', tierInputReason);
-  if (intake !== null && (!isRecord(intake) || intake.schema !== 'tier-intake/v1')) {
+  if (intake !== READ_ARTIFACT_JSON_FAILED && (!isRecord(intake) || intake.schema !== 'tier-intake/v1')) {
     addInvalid('tier-intake/v1', options.tierIntakePath, 'tier intake evidence is malformed', tierInputReason);
   }
   const dispositions = readArtifactJson(options.authorDispositionsPath, 'author dispositions', 'author disposition evidence is missing', dispositionsInputReason);
-  if (dispositions !== null && (!isRecord(dispositions) || dispositions.schema !== AUTHOR_DISPOSITIONS_SCHEMA || !Array.isArray(dispositions.findings))) {
+  if (dispositions !== READ_ARTIFACT_JSON_FAILED && (!isRecord(dispositions) || dispositions.schema !== AUTHOR_DISPOSITIONS_SCHEMA || !Array.isArray(dispositions.findings))) {
     addInvalid('author dispositions', options.authorDispositionsPath, 'author disposition evidence is malformed', dispositionsInputReason);
   }
 
@@ -2282,7 +2283,7 @@ export function inspectAcceptanceArtifacts(
   let requiresClaudeProducerEvidence = false;
   for (const path of stageEvidencePaths) {
     const value = readArtifactJson(path, 'stage evidence', 'recorded stage result is missing', stageInputReason);
-    if (value === null) continue;
+    if (value === READ_ARTIFACT_JSON_FAILED) continue;
     if (!isRecord(value) || value.schema !== STAGE_EVIDENCE_SCHEMA) {
       addInvalid('stage evidence', path, 'recorded stage result is malformed', stageInputReason);
       continue;
