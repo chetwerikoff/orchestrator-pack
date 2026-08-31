@@ -220,6 +220,7 @@ interface StartInput {
   fixtureFallbackReviewStdout?: string;
   fixtureFallbackReviewExitCode?: number;
   fixtureFallbackReviewTimedOut?: boolean;
+  fixtureAfterNativeFallbackArmed?: (run: PackReviewRunRecord) => void | Promise<void>;
   fixtureReviewerLayerOverrides?: PackReviewerLayerOverrides;
   fixtureEmulateWin32Selector?: boolean;
   fixturePostReviewHeadSha?: string;
@@ -4728,7 +4729,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         carryover = null;
         carryoverBundlePath = '';
         if (resolvedReviewer === 'codex' || resolvedReviewer === 'claude') {
-          updatePackReviewRun(run.id, {
+          const armedFallbackRun = updatePackReviewRun(run.id, {
             nativeAttempt: {
               schema: 'pack-review-native-attempt/v1',
               reviewer: resolvedReviewer,
@@ -4737,6 +4738,9 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
               effectiveBudgetMs: budgetLedger.effectiveBudgetMs,
             },
           }, { projectId, storeRoot });
+          if (input.fixtureAfterNativeFallbackArmed) {
+            await input.fixtureAfterNativeFallbackArmed(armedFallbackRun);
+          }
         }
         const fallback = await invokeReviewer({
           reviewerPath: trusted.reviewerPath,
