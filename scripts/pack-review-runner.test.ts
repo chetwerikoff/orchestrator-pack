@@ -12,9 +12,11 @@ import {
 } from './pack-review-runner.ts';
 import {
   createPackReviewRun,
+  getPackReviewRun,
   updatePackReviewRun,
   type PackReviewRunRecord,
 } from './lib/pack-review-run-store.ts';
+import type { CarryoverReplayResult } from './pack-review-carryover.ts';
 import { runProcess } from './kernel/subprocess.ts';
 import {
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
@@ -39,6 +41,37 @@ function setupHarness(storeRoot: string): void {
 
 function cleanPayload(): string {
   return JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] });
+}
+
+function mergeCompositeReplay(targetHeadSha: string): CarryoverReplayResult {
+  const sourceHeadSha = '6'.repeat(40);
+  const mainSha = '7'.repeat(40);
+  const mergeBaseSha = '8'.repeat(40);
+  return {
+    kind: 'merge_composite',
+    sourceHeadSha,
+    mainSha,
+    targetHeadSha,
+    mergeBaseSha,
+    replayTreeSha: '9'.repeat(40),
+    replayDigest: 'fixture-replay',
+    bundle: {
+      schema: 'merge-resolution-bundle/v2',
+      helperVersion: 'pack-review-carryover/v2',
+      sourceHeadSha,
+      mainSha,
+      targetHeadSha,
+      mergeBaseSha,
+      orderedParentShas: [sourceHeadSha, mainSha],
+      gitVersion: 'fixture',
+      replayConfigDigest: 'fixture-config',
+      replayDigest: 'fixture-replay',
+      conflictCount: 1,
+      conflicts: [],
+      framedBytesBase64: '',
+      bundleDigest: 'fixture-bundle',
+    },
+  };
 }
 
 afterEach(() => {
@@ -183,6 +216,105 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
     expect(observed).toMatchObject({ state: 'replacement_eligible', replacementEligible: true });
   });
 
+  it('admits only GPT source slots whose own live turn crossed the replacement ceiling', async () => {
+    const now = Date.parse('2026-08-30T00:15:10.000Z');
+    const run = gptRun('2026-08-30T00:00:00.000Z');
+    run.reviewRound!.sourceSlots = [
+      {
+        slotId: 'slot-01',
+        ordinal: 1,
+        lifecycle: 'invocation_started',
+        invocationId: 'invocation-01',
+        attemptOrdinal: 1,
+        admissionStartedAtUtc: '2026-08-30T00:00:00.000Z',
+        launchProfileKey: 'profile-01',
+        launchCdpUrl: 'http://127.0.0.1:9222',
+      },
+      {
+        slotId: 'slot-02',
+        ordinal: 2,
+        lifecycle: 'invocation_started',
+        invocationId: 'invocation-02',
+        attemptOrdinal: 1,
+        admissionStartedAtUtc: '2026-08-30T00:00:30.000Z',
+        launchProfileKey: 'profile-02',
+        launchCdpUrl: 'http://127.0.0.1:9222',
+      },
+      {
+        slotId: 'slot-03',
+        ordinal: 3,
+        lifecycle: 'terminal',
+        invocationId: 'invocation-03',
+        attemptOrdinal: 1,
+        terminalClass: 'complete_clean',
+      },
+    ];
+    const markers: Record<string, string> = {
+      'invocation-01': 'OPKTURNV1' + '1'.repeat(32),
+      'invocation-02': 'OPKTURNV1' + '2'.repeat(32),
+    };
+    const targets = [
+      {
+        id: 'target-1',
+        type: 'page',
+        url: 'https://chatgpt.com/c/one',
+        title: 'one',
+        webSocketDebuggerUrl: 'ws://127.0.0.1/target-1',
+      },
+      {
+        id: 'target-2',
+        type: 'page',
+        url: 'https://chatgpt.com/c/two',
+        title: 'two',
+        webSocketDebuggerUrl: 'ws://127.0.0.1/target-2',
+      },
+    ];
+    const observed = await observeGptPackReviewAttempt(run, now, {
+      listTargets: (async () => targets) as never,
+      evaluate: (async (target: { id?: string }) => {
+        const invocationId = target.id === 'target-1' ? 'invocation-01' : 'invocation-02';
+        return {
+          status: 'ok',
+          generation_in_progress: true,
+          nodes_truncated: false,
+          nodes: [{
+            role: 'user',
+            document_ordinal: 1,
+            innerText: { head: markers[invocationId] + ' prompt', byte_length: 64 },
+          }],
+        };
+      }) as never,
+      readObservation: ((_: string, invocationId: string) => ({
+        schema: 'state-light-turn-observation/v1' as const,
+        version: 1 as const,
+        invocation_id: invocationId,
+        profile_key: invocationId === 'invocation-01' ? 'profile-01' : 'profile-02',
+        marker: markers[invocationId],
+        phase: 'sent_unharvested' as const,
+        send_witness: 'owned_marker' as const,
+        send_count: 1,
+        conversation_url: invocationId === 'invocation-01'
+          ? 'https://chatgpt.com/c/one'
+          : 'https://chatgpt.com/c/two',
+        transitioned_at: invocationId === 'invocation-01'
+          ? '2026-08-30T00:00:00.000Z'
+          : '2026-08-30T00:00:30.000Z',
+        transition_reason: 'fixture',
+      })) as never,
+      resolveSourceComment: (async () => ({
+        kind: 'missing' as const,
+        reason: 'fixture_source_comment_missing',
+      })) as never,
+    });
+
+    expect(observed).toMatchObject({
+      state: 'replacement_eligible',
+      replacementEligible: true,
+      slotId: 'slot-01',
+      replacementEligibleSlotIds: ['slot-01'],
+    });
+  });
+
   it('checks exact GitHub publication before consulting direct CDP replacement evidence', async () => {
     const start = Date.parse('2026-08-30T00:00:00.000Z');
     let cdpReads = 0;
@@ -316,6 +448,65 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
     expect(observeNativePackReviewAttempt(run, Date.parse('2026-08-30T00:14:00.000Z')))
       .toMatchObject({ state: 'observation_unavailable', replacementEligible: false });
     expect(observeNativePackReviewAttempt(run, Date.parse('2026-08-30T00:15:00.000Z')))
+      .toMatchObject({ state: 'observation_unavailable', replacementEligible: true });
+  });
+});
+
+describe('Issue #1826 native fallback pre-spawn binding', () => {
+  it('keeps a bounded retry clock if the runner dies after fallback rollover but before onSpawn', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'pack-review-1826-fallback-pre-spawn-'));
+    roots.push(parent);
+    const storeRoot = join(parent, 'store');
+    setupHarness(storeRoot);
+    const prNumber = 1829;
+    const head = '5'.repeat(40);
+    let armedRunId = '';
+
+    await expect(startPackReview({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: process.cwd(),
+      prNumber,
+      headSha: head,
+      claimMode: 'preacquired',
+      fixtureCurrentPrHeadSha: head,
+      fixturePostReviewHeadSha: head,
+      fixturePrState: 'OPEN',
+      fixturePrBody: 'Closes #' + prNumber,
+      fixturePostReviewPrBody: 'Closes #' + prNumber,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureIssueNumber: prNumber,
+      fixtureIssueBody: '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
+      fixtureCarryoverReplay: mergeCompositeReplay(head),
+      fixtureCarryoverSourceCleanRunId: 'fixture-source-clean',
+      fixtureFocusedResolutionBundleDigest: 'wrong-bundle',
+      fixtureReviewStdout: cleanPayload(),
+      fixtureFallbackReviewStdout: cleanPayload(),
+      fixtureReviewerLayerOverrides: { Process: 'claude', User: 'claude' },
+      fixtureEmulateWin32Selector: true,
+      fixtureRequiredStatusWriter: async () => {},
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+      fixtureAfterNativeFallbackArmed: async (run) => {
+        armedRunId = run.id;
+        throw new Error('fixture_crash_after_fallback_arm');
+      },
+    })).rejects.toThrow('fixture_crash_after_fallback_arm');
+
+    expect(armedRunId).not.toBe('');
+    const persisted = getPackReviewRun(armedRunId, { projectId: 'orchestrator-pack', storeRoot });
+    expect(persisted?.nativeAttempt).toMatchObject({
+      reviewer: 'claude',
+      invocationOrdinal: 2,
+      effectiveBudgetMs: expect.any(Number),
+    });
+    expect(persisted?.nativeAttempt?.wrapperPid).toBeUndefined();
+    expect(persisted?.nativeAttempt?.processGroupId).toBeUndefined();
+    expect(persisted?.nativeAttempt?.childProcessGroupId).toBeUndefined();
+
+    const armedAtMs = Date.parse(persisted!.nativeAttempt!.startedAtUtc);
+    expect(observeNativePackReviewAttempt(persisted!, armedAtMs + 14 * 60_000))
+      .toMatchObject({ state: 'observation_unavailable', replacementEligible: false });
+    expect(observeNativePackReviewAttempt(persisted!, armedAtMs + 15 * 60_000))
       .toMatchObject({ state: 'observation_unavailable', replacementEligible: true });
   });
 });
