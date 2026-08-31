@@ -418,7 +418,7 @@ describe('trusted PR scope runner', () => {
       });
     }
 
-    const unrelatedPath = 'tests/powershell/not-authorized.Tests.ps1';
+    const unrelatedPath = 'tests/not-authorized.txt';
     expect(statusDiff(unrelatedPath, 'D')).toEqual({
       ok: true,
       diff: {
