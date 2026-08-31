@@ -484,6 +484,7 @@ describe('Issue #1867 post-smoke readiness wiring regression', () => {
         terminalSource: 'normal',
         runId: 'review-run-1867',
         targetSha: reviewedHead,
+        logicalRoundOrdinal: 1,
         reviewVerdict: 'clean',
         findingCount: 0,
         findingsDigest: 'clean-findings-digest',
