@@ -1,9 +1,10 @@
 // @vitest-ci-lane parked
 // @vitest-pre-topology-seconds 120
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { runProcessSync } from './kernel/subprocess.ts';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { readProcessIdentity } from './lib/cutover/activation-cordon.ts';
 import { FileEpochAuthority } from './lib/cutover/activation-epoch-authority.ts';
@@ -315,42 +316,129 @@ describe('Issue #1484 truthful supervisor status', () => {
     expect(transition.refusalReason).not.toBe(transition.crashBackoff.terminalReason);
   });
 
-  it('retains the full scheduler identity failure through a 12-exit crash loop', () => {
-    const policy: CrashBackoffPolicy = {
-      rapidExitThresholdMs: 1_000,
-      maxRapidExitsBeforeBackoff: 11,
-      terminalRapidExits: 12,
-      baseBackoffMs: 10,
-      maxBackoffMs: 100,
-    };
-    const identityFailure = 'scheduler_repository_identity_unresolved:outcome=exit,signal=none,timedOut=false,cancelled=false,exitCode=1,stderr=<empty>,error=git config failed';
-    let crashBackoff = EMPTY_CRASH_BACKOFF_STATE;
-    let transition = supervisorChildExitTransition({
-      previous: crashBackoff,
-      startedAtMs: 1_000,
-      exitedAtMs: 1_001,
-      result: { ok: false, outcome: 'exit', error: identityFailure, exitCode: 1 },
-      policy,
-    });
-    crashBackoff = transition.crashBackoff;
-    for (let attempt = 2; attempt <= 12; attempt += 1) {
-      transition = supervisorChildExitTransition({
-        previous: crashBackoff,
-        startedAtMs: attempt * 1_000,
-        exitedAtMs: attempt * 1_000 + 1,
-        result: { ok: false, outcome: 'exit', error: identityFailure, exitCode: 1 },
-        policy,
+  it('binds the 12-exit regression to production scheduler identity resolution', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'opk-1889-supervisor-identity-'));
+    try {
+      const fakeRepo = path.join(root, 'repo');
+      const stateDir = path.join(root, 'state');
+      const schedulerDir = path.join(fakeRepo, 'scripts', 'pr2-foundation');
+      const fakeGitDir = path.join(root, 'bin');
+      const fakeGitPath = path.join(fakeGitDir, 'git');
+      const schedulerMarker = path.join(root, 'resolved-repository.txt');
+      const schedulerPath = path.join(schedulerDir, 'scheduler.ts');
+      const targetRegistryPath = path.join(root, 'target-registry.json');
+      const projectedRegistryPath = path.join(stateDir, 'projected-registry.json');
+      const epochAuthorityPath = path.join(root, 'epoch-authority.json');
+      mkdirSync(schedulerDir, { recursive: true });
+      mkdirSync(fakeGitDir, { recursive: true });
+      mkdirSync(path.join(fakeRepo, '.git'), { recursive: true });
+      mkdirSync(stateDir, { recursive: true });
+      writeFileSync(
+        path.join(fakeRepo, '.git', 'config'),
+        '[remote "origin"]\n\turl = git@github.com:chetwerikoff/orchestrator-pack.git\n',
+        'utf8',
+      );
+      writeFileSync(fakeGitPath, '#!/bin/sh\nexit 1\n', 'utf8');
+      chmodSync(fakeGitPath, 0o755);
+      const schedulerModuleUrl = pathToFileURL(
+        path.join(repoRoot, 'scripts', 'pr2-foundation', 'scheduler.ts'),
+      ).href;
+      writeFileSync(
+        schedulerPath,
+        [
+          "import { writeFileSync } from 'node:fs';",
+          "import path from 'node:path';",
+          `process.env.PATH = ${JSON.stringify(fakeGitDir)} + path.delimiter + (process.env.PATH ?? '');`,
+          `          const { resolveRepositoryFromRepoRoot } = await import(${JSON.stringify(schedulerModuleUrl)});`,
+          '          const repository = await resolveRepositoryFromRepoRoot(process.cwd());',
+          `          writeFileSync(${JSON.stringify(schedulerMarker)}, repository, 'utf8');`,
+          '          const supervisorPid = process.ppid;',
+          '          const watch = setInterval(() => {',
+          '            try { process.kill(supervisorPid, 0); }',
+          '            catch { clearInterval(watch); }',
+          '          }, 25);',
+        ].join('\n') + '\n',
+        'utf8',
+      );
+      const registry = {
+        schemaVersion: 2,
+        requiredChildIds: ['pr2-scheduler'],
+        children: [{
+          id: 'pr2-scheduler',
+          runtime: 'node',
+          script: 'pr2-foundation/scheduler.ts',
+          sideEffecting: true,
+          cadenceSeconds: 1,
+        }],
+      };
+      const registryBytes = `${JSON.stringify(registry)}\n`;
+      writeFileSync(targetRegistryPath, registryBytes, 'utf8');
+      const epochId = 'epoch-1889-supervisor-identity';
+      const nonce = 'nonce-1889-supervisor-identity';
+      new FileEpochAuthority(epochAuthorityPath).commit(null, {
+        epochId,
+        nonce,
+        hostId: 'test-host',
+        repoRoot: fakeRepo,
+        installedCommitSha: 'a'.repeat(40),
+        snapshotDigests: { reconcile: 'snapshot-r', reevaluation: 'snapshot-e', reportStateSeed: 'snapshot-s' },
+        importDigests: { reconcile: 'import-r', reevaluation: 'import-e', reportStateSeed: 'import-s' },
+        registryHash: sha256Bytes(Buffer.from(registryBytes)),
+        preCommitLogDigest: 'identity-regression',
+        commitAt: new Date().toISOString(),
       });
-      crashBackoff = transition.crashBackoff;
+      const result = runProcessSync({
+        command: process.execPath,
+        args: [
+          '--experimental-strip-types',
+          supervisorScript,
+          'run',
+          '--state-dir', stateDir,
+          '--repo-root', fakeRepo,
+          '--epoch-authority', epochAuthorityPath,
+          '--epoch-id', epochId,
+          '--nonce', nonce,
+          '--target-registry', targetRegistryPath,
+          '--projected-registry', projectedRegistryPath,
+        ],
+        cwd: repoRoot,
+        inheritParentEnv: true,
+        env: {
+          OPK_SUPERVISOR_CRASH_RAPID_EXIT_THRESHOLD_MS: '1000',
+          OPK_SUPERVISOR_CRASH_MAX_RAPID_EXITS: '11',
+          OPK_SUPERVISOR_CRASH_TERMINAL_RAPID_EXITS: '12',
+          OPK_SUPERVISOR_CRASH_BASE_BACKOFF_MS: '1',
+          OPK_SUPERVISOR_CRASH_MAX_BACKOFF_MS: '1',
+        },
+        timeoutMs: 5_000,
+      });
+      expect(result.timedOut).toBe(true);
+      expect(existsSync(schedulerMarker)).toBe(true);
+      expect(readFileSync(schedulerMarker, 'utf8')).toBe('chetwerikoff/orchestrator-pack');
+      const status = JSON.parse(readFileSync(
+        path.join(stateDir, 'typescript-supervisor-status.json'),
+        'utf8',
+      )) as {
+        childGeneration: number;
+        childRestarts: number;
+        restartState: string;
+        refusalReason: string | null;
+        crashBackoff: { terminal: boolean; rapidExits: number; terminalReason: string | null };
+      };
+      expect(status).toMatchObject({
+        childGeneration: 1,
+        childRestarts: 0,
+        restartState: 'stopping',
+        refusalReason: null,
+        crashBackoff: {
+          terminal: false,
+          rapidExits: 0,
+          terminalReason: null,
+        },
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
-
-    expect(transition.restartState).toBe('refused');
-    expect(transition.crashBackoff).toMatchObject({
-      terminal: true,
-      rapidExits: 12,
-      terminalReason: 'crash_loop:12_rapid_exits',
-    });
-    expect(transition.refusalReason).toBe(`scheduler_child_exit:${identityFailure}`);
   });
 });
 
