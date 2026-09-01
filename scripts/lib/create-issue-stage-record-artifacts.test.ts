@@ -1230,7 +1230,9 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     input.evidence.outcome = 'incident';
     input.evidence.settlement.retryState = 'exhausted';
     writeFileSync(input.evidencePath, JSON.stringify(input.evidence));
-    const live = canonicalVerdict(REVISION, 'invocation-retry');
+    const live = canonicalFindingsVerdict({ invocationId: 'invocation-retry' })
+      .replace(/^INVOCATION_ID_TO_ECHO: .*$/m, '')
+      .replace(/\n{2,}/g, '\n');
     const source = transport({ census: [...input.reviewComments, comment(live)] });
 
     const result = produce(input, source);

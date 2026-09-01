@@ -1074,11 +1074,15 @@ function resolveAuthoritativeArtifact(
       );
       return null;
     }
-    const unmatchedSlots = stageInvocations.filter((candidate) => {
+    const launchedSlots = new Set<string>();
+    const echoMatchedSlots = new Set<string>();
+    for (const candidate of stageInvocations) {
       const candidateRevision = optionalString(candidate.sourceRevision);
       const candidateSlot = optionalString(candidate.reviewerSlot);
-      if (candidateRevision !== sourceRevision || !candidateSlot) return false;
-      return !context.census.comments.some((comment) => {
+      const candidateInvocationId = optionalString(candidate.invocationId);
+      if (candidateRevision !== sourceRevision || !candidateSlot || !candidateInvocationId) continue;
+      launchedSlots.add(candidateSlot);
+      const hasEchoMatch = context.census.comments.some((comment) => {
         if (!commentTargetsExpectedIssue(comment, context.census.repositoryFullName, context.census.issueNumber)) return false;
         const lines = comment.body.split(/\r?\n/).map((line) => line.trim());
         const invocationEchoes = lines.flatMap((line) => {
@@ -1086,10 +1090,12 @@ function resolveAuthoritativeArtifact(
           return match ? [match[1]!] : [];
         });
         return invocationEchoes.length === 1
-          && canonicalReviewerArtifactRevision(comment.body, stage, context.census.issueNumber, invocationEchoes[0]!) === sourceRevision
-          && optionalString(candidate.invocationId) === invocationEchoes[0];
+          && invocationEchoes[0] === candidateInvocationId
+          && canonicalReviewerArtifactRevision(comment.body, stage, context.census.issueNumber, candidateInvocationId) === sourceRevision;
       });
-    });
+      if (hasEchoMatch) echoMatchedSlots.add(candidateSlot);
+    }
+    const unmatchedSlots = [...launchedSlots].filter((slot) => !echoMatchedSlots.has(slot));
     const unmatchedComments = context.census.comments.filter((comment) => (
       commentTargetsExpectedIssue(comment, context.census.repositoryFullName, context.census.issueNumber)
       && isCanonicalEchoLessFindingArtifact(comment.body, stage, context.census.issueNumber, sourceRevision)
@@ -1099,7 +1105,7 @@ function resolveAuthoritativeArtifact(
         errors.push(`authoritative GitHub artifact census cannot uniquely bind echo-less FINDINGS: stage=${stage} sourceRevision=${sourceRevision} unmatchedComments=${unmatchedComments.length} unmatchedSlots=${unmatchedSlots.length}`);
         return null;
       }
-      const unmatchedSlot = optionalString(unmatchedSlots[0]!.reviewerSlot);
+      const unmatchedSlot = unmatchedSlots[0]!;
       if (unmatchedSlot !== reviewerSlot) return null;
       const leftover = unmatchedComments[0]!;
       if (!leftover.userLogin || !leftover.authorAssociation) {
