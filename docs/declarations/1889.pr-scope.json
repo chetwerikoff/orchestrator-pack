@@ -1,0 +1,25 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1889,
+  "declared_paths": [
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/pr2-foundation/scheduler-repository-identity.test.ts",
+    "scripts/pr2-foundation/scheduler.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/kernel/subprocess.ts",
+    "scripts/lib/orchestrator-side-process-supervisor.ts",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts",
+    "scripts/pr2-foundation/scheduler-repository-identity.test.ts",
+    "scripts/pr2-foundation/scheduler.ts"
+  ],
+  "source_revision": "478b8567dcd60699b016f684c9ca89e1ca43c827"
+}
