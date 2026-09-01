@@ -472,8 +472,18 @@ describe('revision-aware final acceptance', () => {
     ]);
   });
 
-  it('allows exactly one post-terminal source revision step and rejects rN+2 drift', () => {
-    const terminalBody = '<!-- source-revision: r07 -->\nterminal-reviewed bytes';
+  it('allows one protected post-terminal correction with one original receipt and rejects re-arming or rN+2 drift', () => {
+    const terminalBody = [
+      '<!-- source-revision: r07 -->',
+      'review-economics-contract: v1',
+      'id: PROTECTED-F1',
+      'type: scope-violation',
+      'severity: P1',
+      'evidence: The changed path is out of scope under allowed_roots.',
+      'recommendation: Use the existing bounded author correction.',
+      'persistent-machinery: no',
+      'SIMPLIFICATION_CLEAN',
+    ].join('\n');
     const r08Body = '<!-- source-revision: r08 -->\nbounded corrected bytes';
     const r09Body = '<!-- source-revision: r09 -->\nunrelated later bytes';
     const terminalReceipt = {
@@ -482,7 +492,7 @@ describe('revision-aware final acceptance', () => {
       sourceRevision: 'r07',
     };
     const allowedErrors: string[] = [];
-    validateTerminalOneShotBodyBinding(
+    const certified = validateTerminalOneShotBodyBinding(
       terminalBody,
       r08Body,
       'r08',
@@ -490,15 +500,33 @@ describe('revision-aware final acceptance', () => {
       allowedErrors,
     );
     expect(allowedErrors).toEqual([]);
+    expect(certified).toBe(true);
+
+    const rearmedErrors: string[] = [];
+    const rearmed = validateTerminalOneShotBodyBinding(
+      terminalBody,
+      r08Body,
+      'r08',
+      [
+        terminalReceipt,
+        { stage: 'architectural', outcome: 'complete', sourceRevision: 'r08' },
+      ],
+      rearmedErrors,
+    );
+    expect(rearmed).toBe(false);
+    expect(rearmedErrors).toContain(
+      'post-terminal correction requires exactly one original terminal receipt; observed 2',
+    );
 
     const driftErrors: string[] = [];
-    validateTerminalOneShotBodyBinding(
+    const driftCertified = validateTerminalOneShotBodyBinding(
       terminalBody,
       r09Body,
       'r09',
       [terminalReceipt],
       driftErrors,
     );
+    expect(driftCertified).toBe(false);
     expect(driftErrors).toContain(
       'post-terminal correction must advance exactly one source revision: reviewed=r07 current=r09',
     );

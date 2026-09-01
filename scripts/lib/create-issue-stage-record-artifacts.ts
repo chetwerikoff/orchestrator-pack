@@ -56,6 +56,22 @@ export const ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS = [
   { property: 'authorDispositionsPath', flag: '--author-dispositions', file: 'author-dispositions.json', schema: AUTHOR_DISPOSITIONS_SCHEMA, classification: 'flow-manager-authored input', repeatable: false },
 ] as const;
 
+type AcceptanceArtifactInputProperty = typeof ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS[number]['property'];
+
+function acceptanceArtifactInputDescriptor(property: AcceptanceArtifactInputProperty) {
+  const descriptor = ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.find((item) => item.property === property);
+  if (!descriptor) throw new Error(`acceptance artifact input descriptor is missing for ${property}`);
+  return descriptor;
+}
+
+function acceptanceArtifactInputReason(
+  property: AcceptanceArtifactInputProperty,
+  detail: string,
+): string {
+  const descriptor = acceptanceArtifactInputDescriptor(property);
+  return `${detail}; ${descriptor.classification}: record/provide the observed ${descriptor.file} via ${descriptor.flag}`;
+}
+
 export function stageCompletenessReceiptFileName(stageAttemptId: string): string {
   return `stage-completeness-receipt-${stageAttemptId}.json`;
 }
@@ -2217,59 +2233,67 @@ export function inspectAcceptanceArtifacts(
   const purpose: ReviewEpisodeValidationPurpose = (options.phase ?? 'final-acceptance') === 'final-acceptance'
     ? 'final-acceptance'
     : 'stage-time';
-  const requireRegularFile = (path: string, artifact: string, reason: string): boolean => {
+  type ReasonDecorator = (detail: string) => string;
+  const requireRegularFile = (path: string, artifact: string, reason: string, decorate?: ReasonDecorator): boolean => {
     let stat;
     try { stat = lstatSync(path); } catch {
-      missing.push({ artifact, reason: reason + ': ' + path });
+      missing.push({ artifact, reason: (decorate ? decorate(reason) : reason) + ': ' + path });
       return false;
     }
     if (!stat.isFile()) {
-      missing.push({ artifact, reason: artifact + ' is not a regular file: ' + path });
+      const detail = artifact + ' is not a regular file';
+      missing.push({ artifact, reason: (decorate ? decorate(detail) : detail) + ': ' + path });
       return false;
     }
     present.push(path);
     return true;
   };
-  const readArtifactJson = (path: string, artifact: string, reason: string): unknown | null => {
-    if (!requireRegularFile(path, artifact, reason)) return null;
+  const READ_ARTIFACT_JSON_FAILED = Symbol('read-artifact-json-failed');
+  const readArtifactJson = (path: string, artifact: string, reason: string, decorate?: ReasonDecorator): unknown => {
+    if (!requireRegularFile(path, artifact, reason, decorate)) return READ_ARTIFACT_JSON_FAILED;
     try { return JSON.parse(readFileSync(path, 'utf8')) as unknown; } catch {
-      missing.push({ artifact, reason: artifact + ' is malformed JSON: ' + path });
-      return null;
+      const detail = artifact + ' is malformed JSON';
+      missing.push({ artifact, reason: (decorate ? decorate(detail) : detail) + ': ' + path });
+      return READ_ARTIFACT_JSON_FAILED;
     }
   };
-  const addInvalid = (artifact: string, path: string, detail: string): void => {
-    missing.push({ artifact, reason: detail + ': ' + path });
+  const addInvalid = (artifact: string, path: string, detail: string, decorate?: ReasonDecorator): void => {
+    missing.push({ artifact, reason: (decorate ? decorate(detail) : detail) + ': ' + path });
   };
+  const tierInputReason: ReasonDecorator = (detail) => acceptanceArtifactInputReason('tierIntakePath', detail);
+  const stageInputReason: ReasonDecorator = (detail) => acceptanceArtifactInputReason('stageEvidencePaths', detail);
+  const dispositionsInputReason: ReasonDecorator = (detail) => acceptanceArtifactInputReason('authorDispositionsPath', detail);
 
-  const intake = readArtifactJson(options.tierIntakePath, 'tier-intake/v1', 'tier intake evidence is missing');
-  if (!isRecord(intake) || intake.schema !== 'tier-intake/v1') {
-    addInvalid('tier-intake/v1', options.tierIntakePath, 'tier intake evidence is malformed');
+  const intake = readArtifactJson(options.tierIntakePath, 'tier-intake/v1', 'tier intake evidence is missing', tierInputReason);
+  if (intake !== READ_ARTIFACT_JSON_FAILED && (!isRecord(intake) || intake.schema !== 'tier-intake/v1')) {
+    addInvalid('tier-intake/v1', options.tierIntakePath, 'tier intake evidence is malformed', tierInputReason);
   }
-  const dispositions = readArtifactJson(options.authorDispositionsPath, 'author dispositions', 'author disposition evidence is missing');
-  if (!isRecord(dispositions) || dispositions.schema !== AUTHOR_DISPOSITIONS_SCHEMA || !Array.isArray(dispositions.findings)) {
-    addInvalid('author dispositions', options.authorDispositionsPath, 'author disposition evidence is malformed');
+  const dispositions = readArtifactJson(options.authorDispositionsPath, 'author dispositions', 'author disposition evidence is missing', dispositionsInputReason);
+  if (dispositions !== READ_ARTIFACT_JSON_FAILED && (!isRecord(dispositions) || dispositions.schema !== AUTHOR_DISPOSITIONS_SCHEMA || !Array.isArray(dispositions.findings))) {
+    addInvalid('author dispositions', options.authorDispositionsPath, 'author disposition evidence is malformed', dispositionsInputReason);
   }
 
   const coverageErrors: string[] = [];
   const canonicalStageEvidencePaths = resolveCanonicalStageEvidencePaths(options.reviewDir, options.stageEvidencePaths, coverageErrors, options.phase ?? 'final-acceptance');
-  for (const error of coverageErrors) missing.push({ artifact: 'stage-completeness-receipt/v1', reason: error });
-  if (options.stageEvidencePaths.length === 0) missing.push({ artifact: 'stage-completeness-receipt/v1', reason: 'no recorded stage evidence paths were supplied' });
+  for (const error of coverageErrors) missing.push({ artifact: 'stage-completeness-receipt/v1', reason: stageInputReason(error) });
+  if (options.stageEvidencePaths.length === 0) missing.push({ artifact: 'stage-completeness-receipt/v1', reason: stageInputReason('no recorded stage evidence paths were supplied') });
   const stageEvidencePaths = canonicalStageEvidencePaths ?? options.stageEvidencePaths;
   const stageReceiptNames: string[] = [];
   let evidenceTier: ReviewTier | null = null;
   let requiresClaudeProducerEvidence = false;
   for (const path of stageEvidencePaths) {
-    const value = readArtifactJson(path, 'stage evidence', 'recorded stage result is missing');
+    const value = readArtifactJson(path, 'stage evidence', 'recorded stage result is missing', stageInputReason);
+    if (value === READ_ARTIFACT_JSON_FAILED) continue;
     if (!isRecord(value) || value.schema !== STAGE_EVIDENCE_SCHEMA) {
-      addInvalid('stage evidence', path, 'recorded stage result is malformed');
+      addInvalid('stage evidence', path, 'recorded stage result is malformed', stageInputReason);
       continue;
     }
     const stageTier = reviewTier(value.tier);
-    if (stageTier && evidenceTier && stageTier !== evidenceTier) missing.push({ artifact: 'stage-completeness-receipt', reason: 'stage evidence mixes tier values: ' + path });
+    if (stageTier && evidenceTier && stageTier !== evidenceTier) missing.push({ artifact: 'stage-completeness-receipt', reason: stageInputReason('stage evidence mixes tier values: ' + path) });
     else if (stageTier) evidenceTier = stageTier;
     const stageAttemptId = typeof value.stageAttemptId === 'string' ? value.stageAttemptId.trim() : '';
     if (isSafeFileComponent(stageAttemptId)) stageReceiptNames.push(stageCompletenessReceiptFileName(stageAttemptId));
-    else missing.push({ artifact: 'stage-completeness-receipt', reason: 'stage evidence has no safe stageAttemptId: ' + path });
+    else missing.push({ artifact: 'stage-completeness-receipt', reason: stageInputReason('stage evidence has no safe stageAttemptId: ' + path) });
 
     let producedInvocations: unknown[] | undefined;
     if (isSafeFileComponent(stageAttemptId)) {
@@ -2288,7 +2312,7 @@ export function inspectAcceptanceArtifacts(
     if (Array.isArray(value.invocations)) {
       for (const [index, invocation] of value.invocations.entries()) {
         if (!isRecord(invocation)) {
-          missing.push({ artifact: 'stage evidence', reason: 'stage evidence invocation[' + index + '] must be an object: ' + path });
+          missing.push({ artifact: 'stage evidence', reason: stageInputReason('stage evidence invocation[' + index + '] must be an object: ' + path) });
           continue;
         }
         const transportComplete = invocation.terminalClassification === 'complete';
@@ -2311,7 +2335,7 @@ export function inspectAcceptanceArtifacts(
         }
       }
     } else if (value.stage !== 'architectural-lens') {
-      missing.push({ artifact: 'stage evidence', reason: 'stage evidence.invocations is missing: ' + path });
+      missing.push({ artifact: 'stage evidence', reason: stageInputReason('stage evidence.invocations is missing: ' + path) });
     }
     if (purpose === 'stage-time' && value.tier === 'T3' && value.stage === 'architectural-lens' && isRecord(value.claude) && value.claude.kind === 'capture') {
       requiresClaudeProducerEvidence = true;
@@ -2392,10 +2416,10 @@ export function inspectAcceptanceArtifacts(
     try {
       const requiredStages = canonicalAcceptanceStages(evidenceTier, intake, options.phase ?? 'final-acceptance', [...observedStages]);
       for (const stage of requiredStages) {
-        if (!credentialedStages.has(stage)) missing.push({ artifact: 'stage-completeness-receipt', reason: 'missing credentialing complete-or-proven-partial stage evidence for ' + stage + ' at ' + (options.phase ?? 'final-acceptance') });
+        if (!credentialedStages.has(stage)) missing.push({ artifact: 'stage-completeness-receipt', reason: stageInputReason('missing credentialing complete-or-proven-partial stage evidence for ' + stage + ' at ' + (options.phase ?? 'final-acceptance')) });
       }
     } catch (error) {
-      missing.push({ artifact: 'tier-intake/v1', reason: error instanceof Error ? error.message : String(error) });
+      missing.push({ artifact: 'tier-intake/v1', reason: tierInputReason(error instanceof Error ? error.message : String(error)) });
     }
   }
 
