@@ -1300,7 +1300,10 @@ describe('Issue 1422 first-time activation', () => {
     const { request } = createIssue1422FirstTimeFixture();
     const previousStateRoot = process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
     const alternateRoot = mkdtempSync(path.join(os.tmpdir(), 'opk-1422-canonical-'));
-    issue1422FirstTimeRoots.push(alternateRoot);
+    const isolatedHome = mkdtempSync(path.join(os.tmpdir(), 'opk-1422-canonical-home-'));
+    issue1422FirstTimeRoots.push(alternateRoot, isolatedHome);
+    const user = os.userInfo();
+    vi.spyOn(os, 'userInfo').mockReturnValue({ ...user, homedir: isolatedHome });
     process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = alternateRoot;
     try {
       const canonical = canonicalFoundationPaths(request.repoRoot);
@@ -1315,6 +1318,7 @@ describe('Issue 1422 first-time activation', () => {
       expect(canonical.stateRoot).not.toBe(alternateRoot);
       expect(new FileEpochAuthority(canonical.epochAuthorityPath).read().currentEpochId).toBeNull();
     } finally {
+      vi.restoreAllMocks();
       if (previousStateRoot === undefined) delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
       else process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = previousStateRoot;
     }
