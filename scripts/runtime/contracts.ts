@@ -24,6 +24,8 @@ export interface RuntimeWorker {
   readonly workspacePath: string;
   readonly title: string | null;
   readonly provenance: RuntimeWorkerProvenance;
+  /** Provider-stable delivery key, when runtime rebinding can preserve the pane. */
+  readonly stableKey?: string;
 }
 
 /**

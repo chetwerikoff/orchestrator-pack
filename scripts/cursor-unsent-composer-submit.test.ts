@@ -45,12 +45,18 @@ const EMPTY_CLAUDE_SCREEN = [
   '⏵⏵ bypass permissions on (shift+tab to cycle)',
 ];
 
-function worker(id: string, generation = 'g1', runtime: 'orca' | 'codex' = 'orca'): RuntimeWorker {
+function worker(
+  id: string,
+  generation = 'g1',
+  runtime: 'orca' | 'codex' = 'orca',
+  stableKey?: string,
+): RuntimeWorker {
   return {
     identity: { runtime, id, generation },
     workspacePath: '/tmp',
     title: id,
     provenance: 'external',
+    ...(stableKey ? { stableKey } : {}),
   };
 }
 
@@ -529,7 +535,7 @@ describe('submitUnsentCursorComposer', () => {
       const persisted = JSON.parse(readFileSync(sentStorePath, 'utf8')) as {
         submitted: Array<{ fingerprint: string; ambiguous?: boolean }>;
       };
-      expect(persisted.submitted).toContainEqual(expect.objectContaining({ fingerprint: POKE, ambiguous: true }));
+      expect(persisted.submitted).toContainEqual(expect.objectContaining({ fingerprint: 'orca orchestration check --run run_d613a86c140a', ambiguous: true }));
       linesById.term_unsent = [POKE, ...CURSOR_FOOTER];
       const repeated = submitUnsentCursorComposer({ watch: true }, localDeps, createUnsentComposerWatchState());
 
@@ -950,6 +956,43 @@ describe('delivery-triggered composer submission', () => {
     }));
 
     expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
+    expect(submitted).toEqual([target.identity]);
+  });
+
+  it('keeps a reflowed pointer unconfirmed when its command remains visible', async () => {
+    const target = worker('term_reflow_pointer');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let reads = 0;
+    const result = await submitUnsentCursorComposerOnceForWorker(target, depsFor({}, {
+      submitted,
+      liveness: (() => { let calls = 0; return () => calls++ === 0 ? 'idle' : 'busy'; })(),
+      read: () => ({
+        ok: true as const,
+        lines: reads++ === 0
+          ? ['▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄', '→ You have 1 orchestration message. Read and act on your orchestration message. Run `orca orchestration check --run run_re', 'flow`.', '▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀', ...CURSOR_FOOTER]
+          : ['▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄', '→ You have 1 orchestration message. Read and act on your orchestration', 'message. Run `orca orchestration check --run run_reflow`.', '▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀', ...CURSOR_FOOTER],
+        source: 'screen' as const,
+      }),
+    }), undefined, true, true);
+    expect(result.terminals[0]).toMatchObject({ reason: 'submission_unconfirmed', enter: false, ok: false });
+    expect(submitted).toEqual([target.identity]);
+  });
+  it('keeps a wording and count change unconfirmed when the command remains visible', async () => {
+    const target = worker('term_wording_pointer');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let reads = 0;
+    const result = await submitUnsentCursorComposerOnceForWorker(target, depsFor({}, {
+      submitted,
+      liveness: (() => { let calls = 0; return () => calls++ === 0 ? 'idle' : 'busy'; })(),
+      read: () => ({
+        ok: true as const,
+        lines: reads++ === 0
+          ? ['▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄', '→ You have 1 orchestration message. Read and act on your orchestration message. Run `orca orchestration check --run run_wording`.', '▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀', ...CURSOR_FOOTER]
+          : ['▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄', '→ You have 3 orchestration messages. Read orchestration mail and clear blockers. Run `orca orchestration check --run run_wording`.', '▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀', ...CURSOR_FOOTER],
+        source: 'screen' as const,
+      }),
+    }), undefined, true, true);
+    expect(result.terminals[0]).toMatchObject({ reason: 'submission_unconfirmed', enter: false, ok: false });
     expect(submitted).toEqual([target.identity]);
   });
 
@@ -2193,12 +2236,50 @@ describe('orchestration mail reconciliation', () => {
       expect(first.terminals[0]?.reason).toBe('submission_unconfirmed');
       pointerVisible = false;
       const retry = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 61_001 });
-      expect(retry.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
+      expect(retry.terminals[0]).toMatchObject({ reason: 'pointer_consumed', enter: false, ok: true });
       expect(writes).toBe(1);
-      expect(submitted).toHaveLength(2);
+      expect(submitted).toHaveLength(1);
+      const persisted = JSON.parse(readFileSync(statePath, 'utf8')) as { episodes: Record<string, { state: string }> };
+      expect(persisted.episodes[workerKey(target.identity)]?.state).toBe('confirmed');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it('preserves delivery deduplication across a stable pane-key handle rotation', async () => {
+    const oldWorker = worker('term_rotated_old', 'g1', 'orca', 'tab-rotation:leaf-1');
+    const newWorker = worker('term_rotated_new', 'g2', 'orca', 'tab-rotation:leaf-1');
+    const state = { messages: {}, episodes: {} };
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let writes = 0;
+    let pointerVisible = false;
+    let now = 1_000;
+    const message = { id: 'msg_rotated_delivery', runId: 'run_rotated_delivery', recipient: 'run:run_rotated_delivery', consumed: false };
+    const makeDeps = (current: RuntimeWorker) => ({
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: () => ({ ok: true as const, worker: current }),
+      writePointer: () => { writes += 1; pointerVisible = true; return { status: 'dispatched' as const }; },
+      submitDeps: depsFor({}, {
+        submitted,
+        liveness: () => 'idle' as const,
+        submitResult: (identity) => { submitted.push(identity); return { status: 'dispatched' as const }; },
+        read: () => ({
+          ok: true as const,
+          lines: pointerVisible ? [buildDeliveryPointer(message), ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        }),
+      }),
+      episodeState: state,
+      reconcileClock: () => now,
+    });
+    const first = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(oldWorker));
+    expect(first.terminals[0]).toMatchObject({ reason: 'submission_unconfirmed', enter: false });
+    pointerVisible = false;
+    now = 61_001;
+    const second = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(newWorker));
+    expect(second.terminals[0]).toMatchObject({ reason: 'pointer_consumed', enter: false, ok: true });
+    expect(writes).toBe(1);
+    expect(submitted).toEqual([oldWorker.identity]);
   });
 
   it.each([

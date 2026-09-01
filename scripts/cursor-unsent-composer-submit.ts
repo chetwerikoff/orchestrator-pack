@@ -135,7 +135,7 @@ function exactOrchestrationPointerFingerprint(preview: string): string | undefin
   for (const candidate of candidates) {
     if (!/^You have \d+ orchestration messages?\b/iu.test(candidate)) continue;
     const command = candidate.match(new RegExp('^You have \\d+ orchestration messages?\\b.*\\x60(orca orchestration check(?: --run \\S+| --terminal \\S+)?)\\x60\\.$', 'iu'))?.[1];
-    if (command && ORCHESTRATION_CHECK_COMMAND.test(command)) return candidate;
+    if (command && ORCHESTRATION_CHECK_COMMAND.test(command)) return command;
   }
   return undefined;
 }
@@ -368,6 +368,7 @@ interface EpisodeRecord {
   readonly runId: string;
   readonly recipient: string;
   readonly workerKey: string;
+  readonly stableKey?: string;
   readonly nextEligibleAt: number;
   readonly backoffMs?: number;
   readonly state: 'claimed' | 'pointer-visible' | 'confirmed';
@@ -379,8 +380,8 @@ interface PersistedReconcileState {
 }
 
 function episodeKey(_message: DeliveryMessage, worker: RuntimeWorker): string {
-  // One exact runtime worker identifies one pane; runs sharing it share one claim.
-  return workerKey(worker.identity);
+  const stableKey = worker.stableKey?.trim();
+  return stableKey ? `stable\u0000${stableKey}` : workerKey(worker.identity);
 }
 
 function loadReconcileState(path: string): PersistedReconcileState {
@@ -412,6 +413,7 @@ function loadReconcileState(path: string): PersistedReconcileState {
           runId: row.runId,
           recipient: row.recipient,
           workerKey: row.workerKey,
+          ...(typeof row.stableKey === 'string' && row.stableKey.trim() ? { stableKey: row.stableKey.trim() } : {}),
           nextEligibleAt: row.nextEligibleAt,
           ...(typeof row.backoffMs === 'number' ? { backoffMs: row.backoffMs } : {}),
           state: row.state === 'confirmed' || row.sealed === true
@@ -560,7 +562,7 @@ function settleComposerObservation(
   if (kind === 'empty') {
     clearObservation(state, key);
     if (!state.ambiguousSubmittedFingerprints.has(key)) state.submittedFingerprint.delete(key);
-    return { ...base, ok: true, unsent: false, enter: false, reason: 'composer_empty' };
+    return { ...base, ok: true, unsent: false, enter: false, reason: requireConsumption ? 'pointer_consumed' : 'composer_empty' };
   }
   const fingerprint = exactOrchestrationPointerFingerprint(preview);
   if (!fingerprint) {
@@ -740,10 +742,7 @@ function composerShowsDeliveryPointer(shown: ComposerReadResult, pointer: string
   if (!shown.ok || !isExactOrchestrationPointer(shown)) return false;
   const observed = exactOrchestrationPointerFingerprint(shown.lines.join('\n'));
   const expected = exactOrchestrationPointerFingerprint(pointer);
-  const command = (value: string): string | undefined =>
-    value.match(new RegExp('\\x60(orca orchestration check(?: --run \\S+| --terminal \\S+)?)\\x60', 'iu'))?.[1];
-  return observed !== undefined && expected !== undefined
-    && command(observed) !== undefined && command(observed) === command(expected);
+  return observed !== undefined && expected !== undefined && observed === expected;
 }
 
 /** Immediate delivery-scoped observation plus one bounded render-race retry. */
@@ -1009,6 +1008,7 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   }
   const pointer = buildDeliveryPointer(message);
   const key = episodeKey(message, worker);
+  const stableKey = worker.stableKey?.trim();
   if (deps.pointerWriteLedger?.has(key)) return deliveryNoEffect('orchestration_episode_already_claimed', worker, false);
   const now = deps.reconcileClock?.() ?? Date.now();
   let state = deps.episodeState;
@@ -1017,9 +1017,14 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   // Migrate the pre-pane-wide key without losing a durable claim.
   if (!existing && state) {
     const legacy = Object.entries(state.episodes).find(([candidate, row]) =>
-      candidate !== key && row.workerKey === workerKey(worker.identity));
+      candidate !== key
+      && (row.stableKey === stableKey || row.messageId === message.id));
     if (legacy) {
-      existing = legacy[1];
+      existing = {
+        ...legacy[1],
+        workerKey: workerKey(worker.identity),
+        ...(stableKey ? { stableKey } : {}),
+      };
       state.episodes[key] = existing;
       delete state.episodes[legacy[0]];
     }
@@ -1060,6 +1065,7 @@ async function submitOrcaMessageDeliveryPointerForMessage(
         runId: message.runId,
         recipient: message.recipient,
         workerKey: workerKey(worker.identity),
+        ...(stableKey ? { stableKey } : {}),
         nextEligibleAt: now + priorBackoff,
         backoffMs: nextBackoff,
         state: 'claimed',
@@ -1158,6 +1164,7 @@ async function submitOrcaMessageDeliveryPointerForMessage(
       runId: message.runId,
       recipient: message.recipient,
       workerKey: workerKey(worker.identity),
+      ...(stableKey ? { stableKey } : {}),
       nextEligibleAt: now + priorBackoff,
       backoffMs: nextBackoff,
       state: alreadyShown ? 'pointer-visible' : 'claimed',
@@ -1184,28 +1191,19 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   }
   let result: UnsentComposerSubmitResult;
   if (claimExists && !alreadyShown && composerKind === 'empty') {
-    // An unconfirmed claim may be hidden by Cursor's follow-up queue. Retry the
-    // Enter without rewriting, even when the visible composer is empty.
+    // A missing pointer after a prior claim is the consumption witness; do not re-Enter.
     const liveness = currentLiveness(deps.submitDeps, worker.identity);
     if (liveness === 'gone') return deliveryNoEffect(`worker_${liveness}`, worker);
-    const submitted = deps.submitDeps.submit(worker.identity);
-    const base = { terminal: worker.identity.id, generation: worker.identity.generation };
-    if (submitted.status === 'send_failed') {
-      if (state) {
-        const { backoffMs: _backoffMs, ...episodeWithoutBackoff } = state.episodes[key]!;
-        state.episodes[key] = { ...episodeWithoutBackoff, state: 'pointer-visible', nextEligibleAt: now };
-      }
-      result = { ok: false, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: false, reason: submitted.reason, dispatchStatus: submitted.status }] };
-    } else {
-      const afterShown = deps.submitDeps.liveness
-        ? deps.submitDeps.read(worker.identity)
-        : { ok: true as const, lines: [], source: 'screen' as const };
-      const retained = afterShown.ok && composerShowsDeliveryPointer(afterShown, pointer);
-      const confirmed = submitted.status === 'dispatched' && afterShown.ok && !retained;
-      result = confirmed
-        ? { ok: true, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: true, ok: true, reason: 'enter_sent', dispatchStatus: submitted.status }] }
-        : { ok: false, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: false, reason: 'submission_unconfirmed', dispatchStatus: submitted.status }] };
+    if (state) {
+      state.episodes[key] = {
+        ...existing!,
+        state: 'confirmed',
+        nextEligibleAt: now + ORCHESTRATION_RECONCILE_WINDOW_MS,
+      };
+      if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
     }
+    const base = { terminal: worker.identity.id, generation: worker.identity.generation };
+    result = { ok: true, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: true, reason: 'pointer_consumed' }] };
   } else {
     result = await submitUnsentCursorComposerOnceForWorker(
       worker,
@@ -1216,7 +1214,7 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     );
   }
   const terminal = result.terminals[0];
-  if (state && terminal?.reason === 'enter_sent') {
+  if (state && (terminal?.reason === 'enter_sent' || terminal?.reason === 'pointer_consumed')) {
     state.episodes[key] = {
       ...state.episodes[key]!,
       state: 'confirmed',
@@ -1420,6 +1418,8 @@ export async function runOrchestrationMailReconcileTick(
       }
       const key = episodeKey(parsed.message, resolved.worker);
       unreadEpisodeKeys.add(key);
+      const identityKey = workerKey(resolved.worker.identity);
+      if (identityKey !== key) unreadEpisodeKeys.add(identityKey);
       unreadCounts.set(key, (unreadCounts.get(key) ?? 0) + 1);
     }
     if (!unresolvedUnread) {

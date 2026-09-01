@@ -1305,6 +1305,60 @@ describe('Issue #1441 stale/reused runtime identity', () => {
   });
 });
 
+describe('Issue #1884 pane-key visual layout traversal', () => {
+  it('resolves a pane inside a group tab pane tree and preserves its stable key', () => {
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'terminal list') {
+        return {
+          ok: true,
+          result: {
+            visualLayouts: [{
+              root: {
+                type: 'split',
+                first: {
+                  type: 'group',
+                  tabs: [{
+                    type: 'tab',
+                    panes: [{ handle: 'term-1884-current', tabId: 'tab-1884', leafId: 'leaf-1' }],
+                  }],
+                },
+              },
+            }],
+            terminals: [],
+            totalCount: 1,
+            truncated: false,
+          },
+        };
+      }
+      if (operation === 'terminal show') {
+        return {
+          ok: true,
+          result: {
+            terminal: {
+              handle: 'term-1884-current',
+              incarnationId: 'generation-1884-current',
+              worktreePath: '/tmp/worktree-1884',
+              title: 'current worker',
+              status: 'running',
+            },
+          },
+        };
+      }
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    const adapter = new OrcaRuntimeAdapter({ runJson: runJson as never });
+    const resolved = adapter.findWorkerByPaneKey('tab-1884:leaf-1');
+    expect(resolved).toMatchObject({
+      status: 'ok',
+      value: {
+        identity: { id: 'term-1884-current', generation: 'generation-1884-current' },
+        stableKey: 'tab-1884:leaf-1',
+      },
+    });
+  });
+});
+
 describe('Issue #1587 accepted terminal-send evidence', () => {
   it('separates accepted write-only and submit-only witnesses from delivery success', () => {
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {

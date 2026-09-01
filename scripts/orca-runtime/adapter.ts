@@ -305,7 +305,8 @@ interface OrcaVisualPaneNode {
   readonly leafId?: string;
   readonly first?: OrcaVisualPaneNode;
   readonly second?: OrcaVisualPaneNode;
-  readonly panes?: OrcaVisualPaneNode;
+  readonly tabs?: readonly OrcaVisualPaneNode[];
+  readonly panes?: readonly OrcaVisualPaneNode[] | OrcaVisualPaneNode;
 }
 
 interface OrcaBindingTerminalListResult {
@@ -1118,21 +1119,29 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     );
     if (!response.ok) return runtimeFailure('find_worker', neutralFailureReason(response));
     const matches: string[] = [];
-    const visit = (node: OrcaVisualPaneNode | undefined): void => {
+    const visit = (node: OrcaVisualPaneNode | readonly OrcaVisualPaneNode[] | undefined): void => {
       if (!node) return;
-      const handle = node.handle?.trim();
-      if (handle && node.tabId?.trim() && node.leafId?.trim()
-        && `${node.tabId.trim()}:${node.leafId.trim()}` === key) {
+      if (Array.isArray(node)) {
+        for (const child of node) visit(child);
+        return;
+      }
+      const pane = node as OrcaVisualPaneNode;
+      const handle = pane.handle?.trim();
+      if (handle && pane.tabId?.trim() && pane.leafId?.trim()
+        && `${pane.tabId.trim()}:${pane.leafId.trim()}` === key) {
         matches.push(handle);
       }
-      visit(node.first);
-      visit(node.second);
-      visit(node.panes);
+      for (const tab of pane.tabs ?? []) visit(tab);
+      visit(pane.first);
+      visit(pane.second);
+      visit(pane.panes);
     };
     for (const layout of response.result?.visualLayouts ?? []) visit(layout.root);
     if (matches.length === 0) return runtimeFailure('find_worker', 'runtime_pane_key_unresolved');
     if (matches.length !== 1) return runtimeFailure('find_worker', 'runtime_pane_key_ambiguous');
-    return this.findWorkerById(matches[0]!, options);
+    const resolved = this.findWorkerById(matches[0]!, options);
+    if (resolved.status !== 'ok' || !resolved.value) return resolved;
+    return { status: 'ok', value: { ...resolved.value, stableKey: key } };
   }
 
   findWorker(
