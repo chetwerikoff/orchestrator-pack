@@ -256,6 +256,104 @@ function committedEpoch(file: string, epochId = 'epoch-scheduler', nonce = 'nonc
   return core;
 }
 
+describe('Issue #1880 activation epoch current-pointer integrity', () => {
+  function authorityReadError(authority: FileEpochAuthority): string | null {
+    try {
+      authority.read();
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  it('classifies impossible persisted pointers before ordinary epoch checks and preserves valid states', () => {
+    const root = tempRoot();
+    const authorityPath = path.join(root, 'epoch-authority-1880.json');
+    const authority = new FileEpochAuthority(authorityPath);
+
+    expect(authority.read()).toEqual({ schemaVersion: 1, currentEpochId: null, records: [] });
+    writeJson(authorityPath, { schemaVersion: 1, currentEpochId: null, records: [] });
+    expect(authority.read()).toEqual({ schemaVersion: 1, currentEpochId: null, records: [] });
+
+    const retained = coreFixture('epoch-1880-retained', 'nonce-1880-retained');
+    for (const [currentEpochId, expected] of [
+      [null, 'epoch_authority_current_pointer_invalid:null_with_history'],
+      ['epoch-1880-orphan', 'epoch_authority_current_pointer_invalid:unbound_current'],
+      [7, 'epoch_authority_current_pointer_invalid:malformed_current'],
+      ['', 'epoch_authority_current_pointer_invalid:malformed_current'],
+    ] as const) {
+      writeJson(authorityPath, { schemaVersion: 1, currentEpochId, records: [retained] });
+      expect(authorityReadError(authority)).toBe(expected);
+    }
+
+    writeJson(authorityPath, {
+      schemaVersion: 1,
+      currentEpochId: null,
+      records: [retained, { ...retained, nonce: 'nonce-1880-duplicate' }],
+    });
+    expect(authorityReadError(authority)).toBe('epoch_authority_duplicate_epoch');
+
+    const whitespace = coreFixture('   ', 'nonce-1880-whitespace');
+    writeJson(authorityPath, { schemaVersion: 1, currentEpochId: '   ', records: [whitespace] });
+    expect(authority.verify('   ', 'nonce-1880-whitespace')).toEqual(whitespace);
+
+    const bound = coreFixture(' epoch-1880-bound ', 'nonce-1880-bound');
+    writeJson(authorityPath, { schemaVersion: 1, currentEpochId: bound.epochId, records: [bound] });
+    expect(authority.verify(bound.epochId, bound.nonce)).toEqual(bound);
+    expect(() => authority.verify('epoch-1880-stale', bound.nonce)).toThrow('epoch_not_current');
+    expect(() => authority.verify(bound.epochId, 'wrong-nonce')).toThrow('epoch_nonce_mismatch');
+    expect(() => authority.commit(null, coreFixture('epoch-1880-next', 'nonce-1880-next'))).toThrow('epoch_cas_conflict');
+  });
+
+  it('rejects recovery corruption before import, projection, CAS, follow-up, supervisor, or health effects', async () => {
+    const { request, boundary } = activationFixture();
+    const identity = boundary.readLegacySupervisor(request);
+    createCordon({
+      path: request.paths.cordonPath,
+      epochId: request.epochId,
+      hostId: request.hostId,
+      repoRoot: request.repoRoot,
+      installedCommitSha: request.installedCommitSha,
+      oldInstalledRevisionRoot: request.oldInstalledRevisionRoot,
+      legacyStateRoot: request.paths.supervisorStateDir,
+      legacySupervisor: identity,
+      stores: request.stores,
+      paths: request.paths,
+    });
+    markImportBegun(request.paths.cordonPath);
+
+    const invalidAuthority = {
+      schemaVersion: 1,
+      currentEpochId: 'epoch-1880-unbound-current',
+      records: [coreFixture('epoch-1880-retained-history', 'nonce-1880-private')],
+    };
+    const invalidBytes = `${JSON.stringify(invalidAuthority, null, 2)}\n`;
+    writeFileSync(request.paths.epochAuthorityPath, invalidBytes, 'utf8');
+
+    let supervisorEffects = 0;
+    let healthEffects = 0;
+    const recovery = recoveryBoundary();
+    recovery.ensureTypeScriptSupervisor = async () => {
+      supervisorEffects += 1;
+      return { supervisorPid: 43210, childGeneration: 1 };
+    };
+    recovery.observeFinalHealthAndDelivery = async (_request, core, supervisor) => {
+      healthEffects += 1;
+      return fixtureObservation(core, supervisor.supervisorPid, supervisor.childGeneration);
+    };
+
+    await expect(recoverCommittedCutover(request, recovery))
+      .rejects.toThrow('epoch_authority_current_pointer_invalid:unbound_current');
+
+    expect(readFileSync(request.paths.epochAuthorityPath, 'utf8')).toBe(invalidBytes);
+    expect(request.stores.every((store) => !existsSync(store.targetPath))).toBe(true);
+    expect(existsSync(request.paths.projectedRegistryPath)).toBe(false);
+    expect(existsSync(request.paths.followupPath)).toBe(false);
+    expect(supervisorEffects).toBe(0);
+    expect(healthEffects).toBe(0);
+  });
+});
+
 describe('[AC4][AC6] estate successor state', () => {
   it('terminalizes the exact Issue #906 cutover denominator rows', () => {
     const manifest = JSON.parse(

@@ -41,6 +41,20 @@ function readAuthority(pathName: string): EpochAuthorityDocument {
   const value = JSON.parse(readFileSync(pathName, 'utf8')) as EpochAuthorityDocument;
   if (value.schemaVersion !== 1 || !Array.isArray(value.records)) throw new Error('epoch_authority_schema_invalid');
   if (new Set(value.records.map((row) => row.epochId)).size !== value.records.length) throw new Error('epoch_authority_duplicate_epoch');
+
+  const currentEpochId = (value as { currentEpochId?: unknown }).currentEpochId;
+  if (currentEpochId !== null && (typeof currentEpochId !== 'string' || currentEpochId.length === 0)) {
+    throw new Error('epoch_authority_current_pointer_invalid:malformed_current');
+  }
+  if (currentEpochId === null && value.records.length > 0) {
+    throw new Error('epoch_authority_current_pointer_invalid:null_with_history');
+  }
+  if (
+    typeof currentEpochId === 'string'
+    && !value.records.some((row) => row.epochId === currentEpochId)
+  ) {
+    throw new Error('epoch_authority_current_pointer_invalid:unbound_current');
+  }
   return value;
 }
 
