@@ -36,12 +36,13 @@ const PLUGINS = [
   ['codex-pr-reviewer', '@orchestrator-pack/codex-pr-reviewer', 'pack-codex-review'],
 ] as const;
 const SMOKE_FILES = [
-  'scripts/gh-wrapper.test.ts', 'scripts/command-runtime-bootstrap.test.ts', 'scripts/github-fleet-cache-coalesce.test.ts',
-  'scripts/github-fleet-cache-memo.test.ts', 'scripts/github-fleet-cache-bypass-guard.test.ts', 'scripts/github-fleet-cache-bypass.test.ts',
-  'scripts/github-fleet-cache-stale-snapshot.test.ts', 'scripts/contract-evidence.test.ts', 'scripts/autonomous-spawn-policy.test.ts',
-  'scripts/autonomous-spawn-worktree-gate.test.ts', 'scripts/autonomous-spawn-budget.test.ts', 'scripts/review-pipeline-spawn-budget.test.ts',
-  'scripts/review-start-repeat-classifier.test.ts', 'scripts/autonomous-orchestrator-interposer.test.ts',
-] as const;
+  'scripts/gh-wrapper.test.ts', 'scripts/ci-preflight/contract.test.ts', 'scripts/verify.test.ts',
+  'scripts/orca-runtime/task-adapter.test.ts', 'scripts/worker-smoke.test.ts', 'scripts/worker-smoke-1359.test.ts',
+  'scripts/worker-smoke-entrypoint-1359.test.ts', 'scripts/runtime-retirement/retired-surface-guard.test.ts',
+  'scripts/runtime/caller-census.test.ts', 'scripts/runtime/runtime-independence-two-lifecycle-proof.test.ts',
+  'scripts/runtime/side-effect-fence.test.ts', 'scripts/runtime/single-instance-lease.test.ts',
+  'scripts/runtime/task-lifecycle.test.ts', 'scripts/runtime/worker-recovery.test.ts',
+ ] as const;
 
 const retiredRuntimeStem = ['agent', 'orchestrator'].join('-');
 const retiredStateStem = `.${retiredRuntimeStem}`;

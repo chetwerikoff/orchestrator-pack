@@ -2053,16 +2053,6 @@ describe('Issue #1623 ambient gh static recurrence guard', () => {
     expect(violations[0]?.line).toContain('line 2');
   });
 
-  it('keeps every bounded already-safe control in the PowerShell transport root set', () => {
-    const script = readFileSync(join(repoRoot, 'scripts', 'check-gh-inventory-static.ps1'), 'utf8');
-    for (const requiredPath of [
-      'scripts/lib/create-issue-stage-record-gh.ts',
-      'scripts/publish-issue-body-sync.ts',
-      'scripts/pr2-foundation/post-review-smoke.ts',
-    ]) {
-      expect(script).toContain(requiredPath);
-    }
-  });
 });
 
 describe('Issue #1623 focused tracked-wrapper runtime harness', () => {

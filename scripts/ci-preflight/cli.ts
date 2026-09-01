@@ -102,9 +102,6 @@ function checkDependencies(root = REPO): GateFailure | undefined {
   if (!census.ok) return globalFailure('dependency_installation_invalid', 'npm ls --all --include=dev --json', 'complete valid integrity census', { status: census.exitCode, stdout: census.stdout, stderr: census.stderr }, 'Restore dependencies without installing from this command.');
   return undefined;
 }
-export function pesterProbeEnvironment(parent: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return Object.fromEntries(['PSModulePath', 'HOME'].flatMap(key => parent[key] === undefined ? [] : [[key, parent[key]!]]));
-}
 export function directDependencyExecutable(name: 'typescript' | 'vitest'): string {
   return name === 'typescript' ? 'tsc' : name;
 }
@@ -174,7 +171,7 @@ async function execute(rowDef: typeof TABLE[number], root = REPO, env?: NodeJS.P
 }
 function applyBlock(rows: Row[], reason: string, d: Diagnostic): void { for (const row of rows) rowBlock(row, reason, d); }
 function vitestChildEnvironment(): NodeJS.ProcessEnv {
-  const allowed = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'TEMP', 'TMP', 'PSModulePath', 'POWERSHELL_TELEMETRY_OPTOUT', 'SYSTEMROOT', 'COMSPEC', 'PATHEXT'];
+  const allowed = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'TEMP', 'TMP', 'SYSTEMROOT', 'COMSPEC', 'PATHEXT'];
   return Object.fromEntries(allowed.flatMap(key => process.env[key] === undefined ? [] : [[key, process.env[key]!]]));
 }
 export async function runPreflight(repoRoot = REPO): Promise<Record<string, unknown>> {
@@ -196,9 +193,6 @@ export async function runPreflight(repoRoot = REPO): Promise<Record<string, unkn
   const deps = baselineFailure ?? paths ?? checkDependencies(repoRoot);
   probes.push(global || hashFailure || paths || outputs || baselineFailure ? notStartedProbe('probe.lockfile-root', 'lockfile-root', 'global') : deps ? blockedProbe('probe.lockfile-root', 'lockfile-root', 'global', [], deps.diagnostic) : probeRecord('probe.lockfile-root', 'lockfile-root', 'global'));
   probes.push(global || hashFailure || paths || outputs || baselineFailure || deps ? notStartedProbe('probe.npm-census', 'npm-integrity-census', 'global') : probeRecord('probe.npm-census', 'npm-integrity-census', 'global'));
-  probes.push(global || hashFailure || paths || outputs || baselineFailure || deps
-    ? notStartedProbe('probe.pester', 'retained-pester-policy', 'global')
-    : probeRecord('probe.pester', 'retained-pester-policy', 'global'));
   const typescript = deps ? undefined : checkDirectDependency('typescript', '05', repoRoot);
   const vitest = deps ? undefined : checkDirectDependency('vitest', '07', repoRoot);
   const preflightBlocked = Boolean(global || hashFailure || paths || outputs || baselineFailure || deps);

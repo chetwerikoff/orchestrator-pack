@@ -52,30 +52,6 @@ const DECLARATION_SNAPSHOT_SAMPLE = join('docs', 'declarations', '0.sample.json'
 export const RUNTIME_HISTORY_DELIVERY_BRANCH = 'ci/vitest-runtime-history-refresh';
 export const RUNTIME_HISTORY_DELIVERY_PATH = 'scripts/vitest-runtime-history.json';
 
-const TERMINAL_ZERO_ESTATE_SCRIPT_SUFFIX = '.' + 'ps' + '1';
-const TERMINAL_ZERO_ESTATE_TEST_ROOT = ['tests', 'power' + 'shell'].join('/');
-
-function terminalZeroEstateScriptPath(stem: string): string {
-  return stem + TERMINAL_ZERO_ESTATE_SCRIPT_SUFFIX;
-}
-
-export const TERMINAL_ZERO_ESTATE_DELETION_ONLY_PATHS = [
-  terminalZeroEstateScriptPath('tests/fixtures/lint-self-architect/negative/scripts/clean'),
-  terminalZeroEstateScriptPath('tests/fixtures/lint-self-architect/paired-edit/scripts/deploy'),
-  terminalZeroEstateScriptPath(`${TERMINAL_ZERO_ESTATE_TEST_ROOT}/Ci-Failure-Notification-Common.Tests`),
-  terminalZeroEstateScriptPath(`${TERMINAL_ZERO_ESTATE_TEST_ROOT}/Gh-PrChecks.Tests`),
-  terminalZeroEstateScriptPath(`${TERMINAL_ZERO_ESTATE_TEST_ROOT}/Issue748.RefreshConcurrency.Tests`),
-  terminalZeroEstateScriptPath(`${TERMINAL_ZERO_ESTATE_TEST_ROOT}/Issue748.UnknownSnapshotExpiry.Tests`),
-  terminalZeroEstateScriptPath(`${TERMINAL_ZERO_ESTATE_TEST_ROOT}/Issue748.WorkerStatusPopulation.Tests`),
-  terminalZeroEstateScriptPath(`${TERMINAL_ZERO_ESTATE_TEST_ROOT}/Issue771.PowerShellDependencyScope.Tests`),
-  terminalZeroEstateScriptPath(`${TERMINAL_ZERO_ESTATE_TEST_ROOT}/Resolve-TrustedPackRoot.Tests`),
-  terminalZeroEstateScriptPath(`${TERMINAL_ZERO_ESTATE_TEST_ROOT}/Test-AllRunner.Tests`),
-] as const;
-
-const TERMINAL_ZERO_ESTATE_DELETION_ONLY_SET = new Set<string>(
-  TERMINAL_ZERO_ESTATE_DELETION_ONLY_PATHS,
-);
-
 function issueBlocksCommittedDeclarationSnapshots(constraints: IssueConstraints): boolean {
   return pathMatchesAnyPattern(DECLARATION_SNAPSHOT_SAMPLE, constraints.denylist);
 }
@@ -1021,14 +997,8 @@ export function acquirePrScopeDiff(input: PrScopeCheckInput): PrScopeDiffResult 
         if (fields.length !== 2 || !fields[1]) {
           return { ok: false, message: `diff-incomplete: malformed status row "${line}"; retry command` };
         }
-        const path = fields[1];
-        if (
-          status !== 'D' ||
-          !TERMINAL_ZERO_ESTATE_DELETION_ONLY_SET.has(path)
-        ) {
-          scopePaths.push(path);
-        }
-        operatorAdoptionPaths.push(path);
+        scopePaths.push(fields[1]);
+        operatorAdoptionPaths.push(fields[1]);
       } else {
         return { ok: false, message: `diff-incomplete: unsupported status row "${line}"; retry command` };
       }

@@ -4,12 +4,8 @@
   "pathPatterns": [
     "*.test.ts",
     "*.test.mjs",
-    "*.test.ps1",
-    "*.Tests.ps1",
     "**/*.test.ts",
     "**/*.test.mjs",
-    "**/*.test.ps1",
-    "**/*.Tests.ps1",
     "**/tests/**",
     "**/fixtures/**",
     "scripts/_test-*.ts",
@@ -20,7 +16,6 @@
     "plugins/**/tests/**"
   ],
   "dedicatedTestHelperModules": [
-    "scripts/_test-pwsh-helpers.ts",
     "scripts/_test-git-fixture.ts",
     "scripts/_test-spawn-worktree-fixture.ts",
     "scripts/_test-stub-pack-import-closure.ts",

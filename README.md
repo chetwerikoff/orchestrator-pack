@@ -60,10 +60,10 @@ The pack is designed to survive runtime upgrades and replacements:
   identities, configuration roots, aliases, and adapter symbols.
 - [`scripts/gate-runner`](scripts/gate-runner) hosts the TypeScript gate runner and
   preserved parity contracts.
-- [`scripts/check-reusable.ps1`](scripts/check-reusable.ps1) enforces reusable-pack
-  publishing boundaries.
-- [`scripts/verify.ps1`](scripts/verify.ps1) runs the active repository verification
-  suite.
+- [`scripts/verify.ts`](scripts/verify.ts) owns active structural verification and
+  reusable-pack publishing checks (`--reusable-only`).
+- [`scripts/runtime-retirement/retired-surface-selftest.ts`](scripts/runtime-retirement/retired-surface-selftest.ts)
+  keeps retired runtime and shell surfaces from returning.
 
 ## Requirements
 

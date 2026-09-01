@@ -56,7 +56,6 @@ export const TABLE = [
   { row_id: 'structure.verify-runtime', command: process.execPath, args: ['--experimental-strip-types', './scripts/ci-policy-guards.ts', 'verify-runtime'], paths: ['scripts/ci-policy-guards.ts'], timeout: 120_000, grace: 500 },
   { row_id: 'typescript.typecheck', command: 'npx', args: ['--no-install', 'tsc', '--project', 'tsconfig.base.json', '--noEmit'], paths: ['package.json', 'package-lock.json', 'node_modules/.package-lock.json', 'tsconfig.base.json'], timeout: 180_000, grace: 500 },
   { row_id: 'vitest.light-lane-all', command: process.execPath, args: ['--experimental-strip-types', './scripts/vitest-ci-runner.ts', 'light'], paths: ['scripts/vitest-ci-lanes.config.json', 'vitest.config.ts', 'scripts/vitest-ci-runner.ts'], timeout: 1_200_000, grace: 1_000 },
-  { row_id: 'pester.track', command: 'npm', args: ['run', 'check:pwsh-test-growth', '--silent'], paths: ['package.json', 'scripts/toolchain/check-pwsh-test-growth.ts', 'scripts/toolchain/powershell-child-tests.json'], timeout: 120_000, grace: 500 },
 ] as const;
 
 export const INVENTORY = [

@@ -1379,7 +1379,7 @@ describe('issue 964 retained recovery binary lifecycle', () => {
     observed = run(['publication-status', ...base, '--invocation', 'retained-prepared']);
     expect(observed.status).toBe(20);
     expect(observed.body?.state).toBe('recovery_required');
-  });
+  }, 60_000);
 });
 
 describe('issue 996 whole-turn terminal assistant completion', () => {

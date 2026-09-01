@@ -15,7 +15,6 @@ import { PR_SCOPE_DECLARATION_SCHEMA } from './pr-scope-declaration.ts';
 import {
   RUNTIME_HISTORY_DELIVERY_BRANCH,
   RUNTIME_HISTORY_DELIVERY_PATH,
-  TERMINAL_ZERO_ESTATE_DELETION_ONLY_PATHS,
   acquirePrScopeDiff,
   type PrScopeCheckInput,
   type PrScopeDiffResult,
@@ -160,53 +159,6 @@ function renameDiff(fromPath: string, toPath: string): PrScopeDiffResult {
   git(root, ['mv', fromPath, toPath]);
   git(root, ['commit', '--quiet', '-m', 'rename']);
   const headSha = git(root, ['rev-parse', 'HEAD']);
-  const input: PrScopeCheckInput = {
-    repoRoot: root,
-    prBody: '',
-    issueBody: null,
-    prPaths: [],
-    degradedMode: false,
-    forkPr: false,
-    baseSha,
-    headSha,
-  };
-  return acquirePrScopeDiff(input);
-}
-
-function statusDiff(
-  path: string,
-  status: 'A' | 'M' | 'D',
-): PrScopeDiffResult {
-  const root = makeRepo();
-  git(root, ['init', '--quiet']);
-  git(root, ['config', 'user.name', 'opk-test']);
-  git(root, ['config', 'user.email', 'opk-test@example.invalid']);
-
-  if (status === 'A') {
-    writeFileSync(join(root, 'README.md'), 'base\n', 'utf8');
-    git(root, ['add', 'README.md']);
-  } else {
-    mkdirSync(dirname(join(root, path)), { recursive: true });
-    writeFileSync(join(root, path), 'base\n', 'utf8');
-    git(root, ['add', path]);
-  }
-  git(root, ['commit', '--quiet', '-m', 'base']);
-  const baseSha = git(root, ['rev-parse', 'HEAD']);
-
-  if (status === 'D') {
-    rmSync(join(root, path));
-  } else {
-    mkdirSync(dirname(join(root, path)), { recursive: true });
-    writeFileSync(
-      join(root, path),
-      status === 'M' ? 'changed\n' : 'added\n',
-      'utf8',
-    );
-  }
-  git(root, ['add', '-A']);
-  git(root, ['commit', '--quiet', '-m', status]);
-  const headSha = git(root, ['rev-parse', 'HEAD']);
-
   const input: PrScopeCheckInput = {
     repoRoot: root,
     prBody: '',
@@ -394,46 +346,6 @@ describe('trusted PR scope runner', () => {
     expect(checkOperatorAdoption([trigger], '')).toMatchObject({
       ok: false,
       triggeredPaths: [trigger],
-    });
-  });
-
-  it('admits only exact terminal zero-estate deletions', () => {
-    const exactPath = TERMINAL_ZERO_ESTATE_DELETION_ONLY_PATHS[0];
-
-    expect(statusDiff(exactPath, 'D')).toEqual({
-      ok: true,
-      diff: {
-        scopePaths: [],
-        operatorAdoptionPaths: [exactPath],
-      },
-    });
-
-    for (const status of ['A', 'M'] as const) {
-      expect(statusDiff(exactPath, status)).toEqual({
-        ok: true,
-        diff: {
-          scopePaths: [exactPath],
-          operatorAdoptionPaths: [exactPath],
-        },
-      });
-    }
-
-    const unrelatedPath = 'tests/not-authorized.txt';
-    expect(statusDiff(unrelatedPath, 'D')).toEqual({
-      ok: true,
-      diff: {
-        scopePaths: [unrelatedPath],
-        operatorAdoptionPaths: [unrelatedPath],
-      },
-    });
-
-    const renamed = renameDiff(exactPath, 'scripts/terminal-zero-estate-renamed.ts');
-    expect(renamed).toEqual({
-      ok: true,
-      diff: {
-        scopePaths: [exactPath, 'scripts/terminal-zero-estate-renamed.ts'],
-        operatorAdoptionPaths: ['scripts/terminal-zero-estate-renamed.ts'],
-      },
     });
   });
 

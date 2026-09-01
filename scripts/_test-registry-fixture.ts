@@ -1,6 +1,6 @@
 import { copyFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { repoRoot } from './_test-pwsh-helpers.js';
+import { repoRoot } from './_test-vitest-harness-env.js';
 
 export const MINIMAL_REGISTRY_TREE_PATHS = [
   'scripts/orchestrator-message-taxonomy.json',

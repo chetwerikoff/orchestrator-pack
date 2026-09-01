@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -32,10 +32,6 @@ import {
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const capModuleSource = readFileSync(path.join(repoRoot, 'docs/review-cycle-cap.mjs'), 'utf8');
-const capPsHelperSource = readFileSync(
-  path.join(repoRoot, 'scripts/lib/Review-CycleCap.ps1'),
-  'utf8',
-);
 
 function run(prNumber: number, headSha: string, reviewRuns: Array<Record<string, unknown>>, extra: Record<string, unknown> = {}) {
   const explicitCapState = Object.prototype.hasOwnProperty.call(extra, 'capState');
@@ -133,18 +129,9 @@ describe('cap gate uses review status reader', () => {
     expect(capModuleSource).toMatch(/review-reconcile-primitives\.mjs/);
   });
 
-  it('Review-CycleCap.ps1 routes through mechanical node CLI, not a\u006f review list', () => {
-    expect(capPsHelperSource).toMatch(/review-cycle-cap\.mjs/);
-    expect(capPsHelperSource).not.toMatch(/\bao\s+review\s+list\b/i);
-  });
-
-  it('Review-CycleCap.ps1 derives issue authority without retired runtime env', () => {
-    const retiredIssueSelector = ['AO', 'ISSUE', 'NUMBER'].join('_');
-    const retiredPrSelector = ['AO', 'PR', 'NUMBER'].join('_');
-    expect(capPsHelperSource).not.toContain(retiredIssueSelector);
-    expect(capPsHelperSource).not.toContain(retiredPrSelector);
-    expect(capPsHelperSource).toMatch(/Get-IssueNumberFromPrDiff/);
-    expect(capPsHelperSource).toMatch(/Get-GhPrContextFromView/);
+  it('uses the direct Node cap authority with no compatibility wrapper', () => {
+    expect(capModuleSource).toContain("runStdinJsonCli('review-cycle-cap.mjs'");
+    expect(existsSync(path.join(repoRoot, 'scripts/lib/Review-CycleCap.ps1'))).toBe(false);
   });
 });
 

@@ -488,15 +488,12 @@ test('replacement generation re-enters the behavior gate', () => {
   assert.equal(replacement.reason, 'behavior_gate_passed');
 });
 
-test('watchdog transport is journal-first before delivery', () => {
-  const watchdog = readFileSync(path.join(libDir, 'Ci-Red-Watchdog.ps1'), 'utf8');
-  assert.ok(watchdog.includes('Ci-Red-Watchdog-Tick.ps1'));
-
-  const tick = readFileSync(path.join(libDir, 'Ci-Red-Watchdog-Tick.ps1'), 'utf8');
-  const transportIntent = tick.indexOf("-Command 'transport-issued'");
-  const transportSideEffect = tick.indexOf('Invoke-PlannedCiFailureReconcileSend');
-  assert.ok(transportIntent > 0);
-  assert.ok(transportSideEffect > transportIntent);
+test('watchdog shell transport stays retired behind the Node ledger authority', () => {
+  assert.equal(existsSync(path.join(libDir, 'Ci-Red-Watchdog.ps1')), false);
+  assert.equal(existsSync(path.join(libDir, 'Ci-Red-Watchdog-Tick.ps1')), false);
+  const watchdog = readFileSync(path.join(libDir, 'ci-red-watchdog.mjs'), 'utf8');
+  assert.ok(watchdog.includes("export * from './ci-red-watchdog-ledger.mjs';"));
+  assert.equal(typeof markCiRedWatchdogTransportIssued, 'function');
 });
 
 test('atomic claim prevents concurrent duplicate sends', () => withStore((dir) => {

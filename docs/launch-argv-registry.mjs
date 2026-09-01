@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 /** @typedef {'start-process' | 'pwsh-file' | 'pwsh-noprofile' | 'call-pwsh' | 'ps-call-op' | 'spawnSync' | 'execFileSync' | 'spawn' | 'execFile' | 'exec' | 'fork' | 'node-child'} LaunchPatternId */
 
-/** @typedef {'pack-ps1-param-block' | 'captured-external-help' | 'gh-inventory-route' | 'allowlist-only'} CalleeContractSourceClass */
+/** @typedef {'runtime-contract' | 'captured-external-help' | 'gh-inventory-route' | 'allowlist-only'} CalleeContractSourceClass */
 
 /** @typedef {'validator-backed' | 'allowlist-debt'} CoverageKind */
 
@@ -127,15 +127,8 @@ const REQUIRED_SHIPPED_VALIDATORS = [
 
 
 const GH_INVENTORY_SCAN_FILES = [
-  'scripts/lib/Gh-PrChecks.ps1',
-  'scripts/lib/Gh-FleetInventoryCache.ps1',
-  'scripts/lib/Get-AutoReviewPrContext.ps1',
-  'scripts/lib/Autonomous-SpawnWorktreeGate.ps1',
-  'scripts/lib/Ci-Failure-Notification-Common.ps1',
-  'scripts/pr-scope-check.ps1',
   'AGENTS.md',
   'prompts/investigate_root_cause.md',
-  'agent-orchestrator.yaml.example',
 ];
 
 const AUDIT_ROOT_GLOBS = ['scripts/**', 'plugins/**', 'docs/**'];
@@ -595,13 +588,6 @@ export function loadTestExclusions(repoRoot) {
 }
 
 function validatorBackedForHit(hit, repoRoot) {
-  if (hit.file === 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1' && hit.patternId === 'start-process') {
-    return {
-      validatorId: 'side-process-launch-contract',
-      calleeContractSourceClass: 'pack-ps1-param-block',
-      callee: { kind: 'pack-ps1', identity: 'registry child scripts' },
-    };
-  }
   if (hit.file === 'docs/pr-session-binding-cache.mjs' && hit.patternId === 'spawnSync') {
     return {
       validatorId: null,
@@ -626,8 +612,8 @@ export function buildDefaultInventoryRows(repoRoot) {
     {
       rowId: 'validator-ref-side-process-launch-contract',
       caller: { file: 'scripts/orchestrator-side-process-registry.json', anchor: 'children[]' },
-      callee: { kind: 'pack-ps1', identity: 'registry child scripts' },
-      calleeContractSourceClass: 'pack-ps1-param-block',
+      callee: { kind: 'runtime-child', identity: 'registry child commands' },
+      calleeContractSourceClass: 'runtime-contract',
       coverageKind: 'validator-backed',
       validatorId: 'side-process-launch-contract',
     },

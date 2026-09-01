@@ -3,9 +3,11 @@ import './toolchain/native-entrypoint-preflight.ts';
 import { resolve } from 'node:path';
 import { isDirectExecution } from '#opk-toolchain/baseline-io';
 import {
+  ARTIFACT_ROLES,
   producePortStageEvidence,
   verifyEvidenceIntegrity,
   writePortStageEvidence,
+  type ArtifactRole,
   type PortStageEvidence,
 } from './port-stage-evidence/producer.ts';
 
@@ -29,7 +31,7 @@ function argument(argv: readonly string[], name: string): string | undefined {
   return index >= 0 ? argv[index + 1] : undefined;
 }
 
-export function evaluatePostPortEvidence(evidence: PortStageEvidence): PostPortAdmissionResult {
+export function evaluatePostPortEvidence(evidence: PortStageEvidence, expectedRole: ArtifactRole = 'post-port'): PostPortAdmissionResult {
   const currentPrescriptive = evidence.entries
     .filter((entry) => entry.currentPrescriptive)
     .map((entry) => ({
@@ -46,9 +48,14 @@ export function evaluatePostPortEvidence(evidence: PortStageEvidence): PostPortA
     .filter((path) => !retained.has(path));
 
   const failures: string[] = [];
-  if (evidence.artifactRole !== 'post-port') failures.push(`artifact_role=${evidence.artifactRole}`);
+  if (evidence.artifactRole !== expectedRole) failures.push(`artifact_role=${evidence.artifactRole}`);
   if (!evidence.broaderStatusClosed) failures.push('broader_status_open');
   if (currentPrescriptive.length > 0) failures.push(`current_prescriptive=${currentPrescriptive.length}`);
+  if (expectedRole === 'final') {
+    const trackedPowerShellCount = evidence.entries.filter((entry) => entry.sourceKind === 'tracked-ps1-file').length;
+    if (trackedPowerShellCount > 0) failures.push(`tracked_powershell=${trackedPowerShellCount}`);
+    if (evidence.retainedDispositions.length > 0) failures.push(`retained_dispositions=${evidence.retainedDispositions.length}`);
+  }
   if (evidence.unresolvedCurrentPrescriptiveScriptTargets.length > 0) {
     failures.push(`unresolved_current_targets=${evidence.unresolvedCurrentPrescriptiveScriptTargets.length}`);
   }
@@ -73,15 +80,18 @@ export async function main(argv: readonly string[]): Promise<number> {
     const producerRevision = argument(argv, '--producer-revision') ?? measuredHead;
     if (!/^[0-9a-f]{40}$/u.test(producerRevision)) throw new Error('--producer-revision must be a full lowercase 40-hex SHA');
     const repoRoot = resolve(argument(argv, '--repo-root') ?? resolve(import.meta.dirname, '..'));
-    const evidence = await producePortStageEvidence({ repoRoot, artifactRole: 'post-port', measuredHead, producerRevision });
+    const roleValue = argument(argv, '--role') ?? 'post-port';
+    if (!ARTIFACT_ROLES.includes(roleValue as ArtifactRole)) throw new Error(`--role must be one of ${ARTIFACT_ROLES.join(', ')}`);
+    const artifactRole = roleValue as ArtifactRole;
+    const evidence = await producePortStageEvidence({ repoRoot, artifactRole, measuredHead, producerRevision });
     verifyEvidenceIntegrity(evidence);
-    const admission = evaluatePostPortEvidence(evidence);
+    const admission = evaluatePostPortEvidence(evidence, artifactRole);
     if (admission.status !== 'PASS') {
-      process.stderr.write(`[FAIL] post-port admission\n${JSON.stringify(admission, null, 2)}\n`);
+      process.stderr.write(`[FAIL] ${artifactRole} admission\n${JSON.stringify(admission, null, 2)}\n`);
       return 2;
     }
     const path = await writePortStageEvidence(repoRoot, evidence);
-    process.stdout.write(`${JSON.stringify({ status: 'PASS', artifactRole: 'post-port', path, measuredHead, integrityDigest: evidence.integrityDigest })}\n`);
+    process.stdout.write(`${JSON.stringify({ status: 'PASS', artifactRole, path, measuredHead, integrityDigest: evidence.integrityDigest })}\n`);
     return 0;
   } catch (error) {
     process.stderr.write(`[FAIL] post-port admission: ${error instanceof Error ? error.message : String(error)}\n`);

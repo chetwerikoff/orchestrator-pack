@@ -12,12 +12,12 @@
     },
     {
       "id": "gh-inventory-static",
-      "script": "scripts/check-gh-inventory-static.ps1",
+      "script": "scripts/lib/gh-inventory-static-guard.mjs",
       "ownerIssues": [
         431,
         501
       ],
-      "description": "Pack gh wrapper argv inventory static guard."
+      "description": "Node-owned pack gh wrapper argv inventory static guard."
     }
   ]
 }

@@ -1,5 +1,5 @@
 ---
-description: TS-first script authoring and legacy shell freeze during the migration
+description: TypeScript-only script authoring after the terminal shell cut
 globs:
   - scripts/**
   - package.json
@@ -7,13 +7,12 @@ globs:
 alwaysApply: false
 ---
 
-# TS-first script authoring (Issue #837)
+# TypeScript script authoring
 
-- Author every **net-new script file** under `scripts/**` in **TypeScript/Node**.
-- legacy shell is frozen during the migration. Add a net-new `.ps1` only when the
-  task spec contains an explicit written justification for why TypeScript/Node is
-  unsuitable for that specific file.
-- This applies only to new files. Existing `.ps1` files and migration-defined
-  wrappers/shims are owned by Waves A and B (Issues #830 and #831).
+- Author repository automation under `scripts/**` in TypeScript/Node 22.
+- The legacy shell estate is retired. Do not add `.ps1`, `.psm1`, `.psd1`, shell
+  compatibility wrappers, executable probes, or fallback routes for removed behavior.
+- A future task that intentionally changes this terminal architecture must say so
+  explicitly and own the corresponding retirement/evidence changes.
 
-Canonical freeze: [`docs/architecture.md`](../../docs/architecture.md#ts-first-script-authoring-freeze).
+Canonical policy: [`docs/architecture.md`](../../docs/architecture.md#typescript-script-authoring).

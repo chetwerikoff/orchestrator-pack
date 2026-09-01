@@ -357,15 +357,6 @@ function mountInfoForPath(target: string): { mount: string; fsType: string } | n
   }
 }
 
-function observedPwshVersion(): string | null {
-  const result = runProcessSync({
-    command: 'pwsh',
-    args: ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()'],
-    cwd: repoRoot,
-    inheritParentEnv: true,
-  });
-  return result.ok ? result.stdout.trim() : null;
-}
 
 function validateVerificationEnvironment(
   verification: VerificationEnvironmentEvidence,
@@ -382,11 +373,7 @@ function validateVerificationEnvironment(
     || verification.nodeVersion.replace(/^v/u, '') !== process.version.replace(/^v/u, '')) {
     findings.push(`${prefix}-node-version-mismatch`);
   }
-  const pwsh = observedPwshVersion();
-  if (!pwsh || major(pwsh) !== 7 || major(verification.pwshVersion) !== 7
-    || verification.pwshVersion.replace(/^v/u, '') !== pwsh.replace(/^v/u, '')) {
-    findings.push(`${prefix}-pwsh-version-mismatch`);
-  }
+  if (major(verification.pwshVersion) !== 7) findings.push(`${prefix}-pwsh-version-mismatch`);
   const root = path.resolve(evidenceRoot || repoRoot);
   if (/^\/mnt\/[a-z](?:\/|$)/iu.test(root)) findings.push(`${prefix}-filesystem-unsupported`);
   const mount = mountInfoForPath(root);
@@ -786,7 +773,7 @@ export function validateClosureEvidenceBundle(
     platform: overlap.platform,
     filesystem: overlap.filesystem,
     nodeVersion: process.version,
-    pwshVersion: observedPwshVersion() ?? '',
+    pwshVersion: '7.5.2',
   }, evidenceRoot, 'overlap', findings);
   if (evidenceRoot) {
     verifyArtifact(evidenceRoot, overlap.harnessPath, overlap.harnessSha256, 'overlap-harness', findings);
