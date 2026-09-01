@@ -458,6 +458,42 @@ current-head verification for the reverted tree. Do not convert old state, resto
 fallback transport, or reinterpret an old short identifier as runtime authority.
 Existing GitHub review, CI, Issue, PR, and audit history remains immutable evidence.
 
+## Activation epoch current-pointer integrity (Issue #1880)
+
+### What changed
+
+The single schema-v1 `FileEpochAuthority` now rejects persisted states that cannot
+represent the writer's supported contract: `null` with retained history, a non-empty
+current id that is not bound to a retained record, and malformed or empty current
+values. Existing duplicate-id classification remains prior to current-pointer
+classification. Valid empty state, exact non-empty identifiers (including whitespace
+when exactly matched), stale-request, nonce-mismatch, and CAS behavior are unchanged.
+
+Recovery reads this authority before import/projection/CAS/follow-up effects, and
+wake-supervisor admission verifies it before registry projection or scheduler child
+start. The tracked wake-supervisor CLI surfaces the exact secret-safe
+`epoch_authority_current_pointer_invalid:*` diagnostic. A refused supervisor may
+write its existing `refused` status with that classification; it must not produce a
+normal/running child status.
+
+### Operator adoption
+
+After the merged PACK revision is adopted through the normal supported deployment
+path, treat any `epoch_authority_current_pointer_invalid:*` result as a
+stop/escalate condition. Do not use blind `activate`, generic `recover`, or direct
+authority JSON editing as a repair. Issue #1880 deliberately adds no automated repair
+or deactivation transition.
+
+Repository acceptance covers producing and surfacing the classification. Any
+operator-local launcher must adopt the merged behavior separately; repository workers
+do not mutate local launcher files or machine-owned authority state.
+
+### Rollback
+
+Rollback is a source-control revert followed by the normal supported PACK
+adoption/recycle path. It does not authorize rewriting an invalid authority file,
+adding a compatibility reader, or restoring a second authority.
+
 ## First-time supervisor activation (Issue #1422)
 
 ### What changed
@@ -509,9 +545,11 @@ variable bypasses `proveFoundationAdoption`.
 ### Rollback
 
 Before the import boundary, use `prove-rollback` and then
-`rollback-preimport` with the same request. After the import boundary, use
-`recover`; the existing forward-only recovery and epoch CAS remain authoritative.
-Do not delete or hand-edit the evidence, cordon, epoch, or follow-up artifacts.
+`rollback-preimport` with the same request. After the import boundary, `recover`
+remains authoritative only for a structurally valid epoch authority. An
+`epoch_authority_current_pointer_invalid:*` result is a stop/escalate condition,
+not a repair invitation. Do not delete or hand-edit the evidence, cordon, epoch, or
+follow-up artifacts.
 
 ## Bounded-child S1/S2 supervision (Issue #1420)
 
