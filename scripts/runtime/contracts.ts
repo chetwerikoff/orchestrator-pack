@@ -24,6 +24,8 @@ export interface RuntimeWorker {
   readonly workspacePath: string;
   readonly title: string | null;
   readonly provenance: RuntimeWorkerProvenance;
+  /** Provider-stable delivery key, when runtime rebinding can preserve the pane. */
+  readonly stableKey?: string;
 }
 
 /**
@@ -277,6 +279,12 @@ export interface RuntimeAdapter {
     input?: { readonly workspace?: 'active' | string },
     options?: RuntimeCallOptions,
   ): PromiseLike<RuntimeResult<readonly RuntimeWorker[]>>;
+
+  /** Resolve one current composite identity from a provider-stable pane key. */
+  findWorkerByPaneKey?(
+    paneKey: string,
+    options?: RuntimeCallOptions,
+  ): RuntimeResult<RuntimeWorker | null>;
 
   /** Resolve the current composite identity for one opaque runtime id. */
   findWorkerById(

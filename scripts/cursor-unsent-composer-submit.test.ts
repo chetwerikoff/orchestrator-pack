@@ -45,12 +45,18 @@ const EMPTY_CLAUDE_SCREEN = [
   '⏵⏵ bypass permissions on (shift+tab to cycle)',
 ];
 
-function worker(id: string, generation = 'g1', runtime: 'orca' | 'codex' = 'orca'): RuntimeWorker {
+function worker(
+  id: string,
+  generation = 'g1',
+  runtime: 'orca' | 'codex' = 'orca',
+  stableKey?: string,
+): RuntimeWorker {
   return {
     identity: { runtime, id, generation },
     workspacePath: '/tmp',
     title: id,
     provenance: 'external',
+    ...(stableKey ? { stableKey } : {}),
   };
 }
 
@@ -529,7 +535,7 @@ describe('submitUnsentCursorComposer', () => {
       const persisted = JSON.parse(readFileSync(sentStorePath, 'utf8')) as {
         submitted: Array<{ fingerprint: string; ambiguous?: boolean }>;
       };
-      expect(persisted.submitted).toContainEqual(expect.objectContaining({ fingerprint: POKE, ambiguous: true }));
+      expect(persisted.submitted).toContainEqual(expect.objectContaining({ fingerprint: 'orca orchestration check --run run_d613a86c140a', ambiguous: true }));
       linesById.term_unsent = [POKE, ...CURSOR_FOOTER];
       const repeated = submitUnsentCursorComposer({ watch: true }, localDeps, createUnsentComposerWatchState());
 
@@ -749,7 +755,7 @@ describe('buildDeliveryPointer', () => {
 describe('delivery-triggered composer submission', () => {
   it.each([
     ['busy', 'busy', 'enter_sent'],
-    ['unknown', 'unknown', 'submission_unconfirmed'],
+    ['unknown', 'unknown', 'enter_sent'],
   ] as const)('writes and presses Enter when delivery liveness is %s', async (_label, status, expectedReason) => {
     const target = worker(`term_delivery_${status}`);
     const message = {
@@ -772,6 +778,11 @@ describe('delivery-triggered composer submission', () => {
       submitDeps: depsFor({}, {
         submitted,
         liveness: () => status,
+        submitResult: (identity) => {
+          submitted.push(identity);
+          pointerVisible = false;
+          return { status: 'dispatched' as const };
+        },
         read: () => ({
           ok: true as const,
           lines: pointerVisible ? [buildDeliveryPointer(message), ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
@@ -876,11 +887,11 @@ describe('delivery-triggered composer submission', () => {
       reconcileClock: () => now,
     };
     const result = await submitOrcaMessageDeliveryPointer('msg_opencode_unconfirmed', deps);
-    const key = workerKey(target.identity);
+    const episode = Object.values(episodeState.episodes).find((row) => (row as { readonly messageId?: string }).messageId === 'msg_opencode_unconfirmed') as { readonly state?: string } | undefined;
     expect(result.terminals[0]).toMatchObject({ reason: 'submission_unconfirmed', enter: false, ok: false });
     expect(reads).toBe(2);
     expect(actions).toHaveLength(1);
-    expect(episodeState.episodes[key]?.state).toBe('pointer-visible');
+    expect(episode?.state).toBe('pointer-visible');
     now = 61_001;
     const retry = await submitOrcaMessageDeliveryPointer('msg_opencode_unconfirmed', deps);
     expect(retry.terminals[0]?.reason).toBe('submission_unconfirmed');
@@ -948,6 +959,43 @@ describe('delivery-triggered composer submission', () => {
     expect(submitted).toEqual([target.identity]);
   });
 
+  it('keeps a reflowed pointer unconfirmed when its command remains visible', async () => {
+    const target = worker('term_reflow_pointer');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let reads = 0;
+    const result = await submitUnsentCursorComposerOnceForWorker(target, depsFor({}, {
+      submitted,
+      liveness: (() => { let calls = 0; return () => calls++ === 0 ? 'idle' : 'busy'; })(),
+      read: () => ({
+        ok: true as const,
+        lines: reads++ === 0
+          ? ['▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄', '→ You have 1 orchestration message. Read and act on your orchestration message. Run `orca orchestration check --run run_re', 'flow`.', '▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀', ...CURSOR_FOOTER]
+          : ['▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄', '→ You have 1 orchestration message. Read and act on your orchestration', 'message. Run `orca orchestration check --run run_reflow`.', '▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀', ...CURSOR_FOOTER],
+        source: 'screen' as const,
+      }),
+    }), undefined, true, true);
+    expect(result.terminals[0]).toMatchObject({ reason: 'submission_unconfirmed', enter: false, ok: false });
+    expect(submitted).toEqual([target.identity]);
+  });
+  it('keeps a wording and count change unconfirmed when the command remains visible', async () => {
+    const target = worker('term_wording_pointer');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let reads = 0;
+    const result = await submitUnsentCursorComposerOnceForWorker(target, depsFor({}, {
+      submitted,
+      liveness: (() => { let calls = 0; return () => calls++ === 0 ? 'idle' : 'busy'; })(),
+      read: () => ({
+        ok: true as const,
+        lines: reads++ === 0
+          ? ['▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄', '→ You have 1 orchestration message. Read and act on your orchestration message. Run `orca orchestration check --run run_wording`.', '▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀', ...CURSOR_FOOTER]
+          : ['▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄', '→ You have 3 orchestration messages. Read orchestration mail and clear blockers. Run `orca orchestration check --run run_wording`.', '▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀', ...CURSOR_FOOTER],
+        source: 'screen' as const,
+      }),
+    }), undefined, true, true);
+    expect(result.terminals[0]).toMatchObject({ reason: 'submission_unconfirmed', enter: false, ok: false });
+    expect(submitted).toEqual([target.identity]);
+  });
+
   it('writes one unread Orca pointer and submits Enter', async () => {
     const target = worker('term_message_delivery');
     const submitted: RuntimeWorkerIdentity[] = [];
@@ -965,6 +1013,11 @@ describe('delivery-triggered composer submission', () => {
     const submitDeps = depsFor({}, {
       submitted,
       liveness: (() => { let calls = 0; return () => calls++ < 2 ? 'idle' : 'busy'; })(),
+      submitResult: (identity) => {
+        submitted.push(identity);
+        rendered = false;
+        return { status: 'dispatched' as const };
+      },
       read: () => {
         reads += 1;
         return {
@@ -1039,7 +1092,7 @@ describe('delivery-triggered composer submission', () => {
         liveness: (() => { let calls = 0; return () => calls++ < 2 ? 'idle' : 'busy'; })(),
         read: () => ({
           ok: true as const,
-          lines: reads++ === 0 ? ['→ Add a follow-up', ...CURSOR_FOOTER] : [POKE, ...CURSOR_FOOTER],
+          lines: reads++ === 0 || submitted.length > 0 ? ['→ Add a follow-up', ...CURSOR_FOOTER] : [POKE, ...CURSOR_FOOTER],
           source: 'screen' as const,
         }),
       }),
@@ -1075,7 +1128,7 @@ describe('delivery-triggered composer submission', () => {
         liveness: (() => { let calls = 0; return () => calls++ < 2 ? 'idle' : 'busy'; })(),
         read: () => ({
           ok: true as const,
-          lines: reads++ === 0 ? ['→ Add a follow-up', ...CURSOR_FOOTER] : [TERMINAL_POKE, ...CURSOR_FOOTER],
+          lines: reads++ === 0 || submitted.length > 0 ? ['→ Add a follow-up', ...CURSOR_FOOTER] : [TERMINAL_POKE, ...CURSOR_FOOTER],
           source: 'screen' as const,
         }),
       }),
@@ -1110,7 +1163,7 @@ describe('delivery-triggered composer submission', () => {
         liveness: (() => { let calls = 0; return () => calls++ < 2 ? 'idle' : 'busy'; })(),
         read: () => ({
           ok: true as const,
-          lines: wrote ? ['You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run `orca orchestration check --run run_dup`.', ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          lines: wrote && submitted.length === 0 ? ['You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run `orca orchestration check --run run_dup`.', ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
           source: 'screen' as const,
         }),
       }),
@@ -1131,7 +1184,15 @@ describe('delivery-triggered composer submission', () => {
       }),
       resolveWorker: () => ({ ok: true as const, worker: target }),
       writePointer: () => { writes += 1; return { status: 'dispatched' as const }; },
-      submitDeps: depsFor({ [target.identity.id]: [POKE, ...CURSOR_FOOTER] }, { submitted, liveness: (() => { let calls = 0; return () => calls++ === 0 ? 'idle' : 'busy'; })() }),
+      submitDeps: depsFor({ [target.identity.id]: [POKE, ...CURSOR_FOOTER] }, {
+        submitted,
+        liveness: (() => { let calls = 0; return () => calls++ === 0 ? 'idle' : 'busy'; })(),
+        read: () => ({
+          ok: true as const,
+          lines: submitted.length === 0 ? [POKE, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        }),
+      }),
     });
     expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
     expect(writes).toBe(0);
@@ -1518,7 +1579,8 @@ describe('orchestration mail reconciliation', () => {
         submitted,
         read: () => ({
           ok: true as const,
-          lines: wrote ? [pointer, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          lines: wrote && submitted.length === 0 ? [pointer, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          source: 'screen' as const,
         }),
       }),
       get writes() {
@@ -1641,17 +1703,17 @@ describe('orchestration mail reconciliation', () => {
     }], target);
     try {
       const result = await runOrchestrationMailReconcileTick(deps, { ledgerPath: statePath, lockPath, now: () => 1_000 });
-      const persisted = JSON.parse(readFileSync(statePath, 'utf8')) as { episodes: Record<string, { state: string }> };
+      const persisted = JSON.parse(readFileSync(statePath, 'utf8')) as { episodes: Record<string, { messageId: string; state: string }> };
       expect(result.reasons).toContain('msg_legacy_claim_migration:orchestration_episode_already_delivered');
       expect(deps.writes).toBe(0);
-      expect(persisted.episodes[paneKey]?.state).toBe('confirmed');
+      expect(Object.values(persisted.episodes).find((row) => row.messageId === 'msg_legacy_claim_migration')?.state).toBe('confirmed');
       expect(persisted.episodes[legacyKey]).toBeUndefined();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it('retains a pane claim while another run remains unread', async () => {
+  it('releases a consumed message claim while another message remains unread', async () => {
     const target = worker('term_release_pane_claim');
     const key = workerKey(target.identity);
     const state = {
@@ -1682,7 +1744,7 @@ describe('orchestration mail reconciliation', () => {
       episodeState: state,
     });
     expect(result.terminals[0]?.reason).toBe('delivery_already_consumed');
-    expect(state.episodes[key]?.state).toBe('confirmed');
+    expect(state.episodes[key]).toBeUndefined();
   });
 
   it('resets a newly-created claim after a definitive pointer write failure', async () => {
@@ -1693,6 +1755,7 @@ describe('orchestration mail reconciliation', () => {
     let writes = 0;
     let pointerVisible = false;
     const message = { id: 'msg_definitive_write_failure', runId: 'run_definitive_write_failure', recipient: target.identity.id, consumed: false };
+    const submitted: RuntimeWorkerIdentity[] = [];
     const makeDeps = () => ({
       lookupMessage: () => ({ ok: true as const, message }),
       resolveWorker: () => ({ ok: true as const, worker: target }),
@@ -1703,10 +1766,14 @@ describe('orchestration mail reconciliation', () => {
           ? { status: 'send_failed' as const, reason: 'runtime_unavailable' }
           : { status: 'dispatched' as const };
       },
-      submitDeps: depsFor({}, { read: () => ({
-        ok: true as const,
-        lines: pointerVisible ? [buildDeliveryPointer(message), ...CURSOR_FOOTER] : [],
-      }) }),
+      submitDeps: depsFor({}, {
+        submitted,
+        submitResult: (identity) => { submitted.push(identity); return { status: 'dispatched' as const }; },
+        read: () => ({
+          ok: true as const,
+          lines: pointerVisible && submitted.length === 0 ? [buildDeliveryPointer(message), ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+        }),
+      }),
       episodeStatePath: statePath,
       episodeLockPath: lockPath,
     });
@@ -1811,6 +1878,7 @@ describe('orchestration mail reconciliation', () => {
           submitResult: (identity) => {
             submitted.push(identity);
             launches += 1;
+            if (launches > 1) pointerVisible = false;
             return launches === 1
               ? { status: 'send_failed' as const, reason: 'runtime_unavailable' }
               : { status: 'dispatched' as const };
@@ -1827,8 +1895,8 @@ describe('orchestration mail reconciliation', () => {
       expect(suppressed.terminals[0]?.reason).toBe('enter_sent');
       expect(writes).toBe(1);
       expect(submitted).toHaveLength(2);
-      const persisted = JSON.parse(readFileSync(statePath, 'utf8')) as { episodes: Record<string, { backoffMs?: unknown }> };
-      expect(persisted.episodes[workerKey(target.identity)]?.backoffMs).toBeUndefined();
+      const persisted = JSON.parse(readFileSync(statePath, 'utf8')) as { episodes: Record<string, { messageId: string; backoffMs?: unknown }> };
+      expect(Object.values(persisted.episodes).find((row) => row.messageId === message.id)?.backoffMs).toBeUndefined();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1965,6 +2033,7 @@ describe('orchestration mail reconciliation', () => {
         },
         submitDeps: depsFor({}, {
           submitted,
+          submitResult: (identity) => { submitted.push(identity); pointerVisible = false; return { status: 'dispatched' as const }; },
           read: () => ({
             ok: true as const,
             lines: pointerVisible ? [`You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run \`orca orchestration check --terminal ${target.identity.id}\`.`, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
@@ -2068,6 +2137,7 @@ describe('orchestration mail reconciliation', () => {
       writePointer: () => { writes += 1; pointerVisible = true; return { status: 'dispatched' as const }; },
       submitDeps: depsFor({ [target.identity.id]: ['→ Add a follow-up', ...CURSOR_FOOTER] }, {
         submitted,
+        submitResult: (identity) => { submitted.push(identity); pointerVisible = false; return { status: 'dispatched' as const }; },
         liveness: () => 'busy',
         read: () => ({
           ok: true as const,
@@ -2081,7 +2151,8 @@ describe('orchestration mail reconciliation', () => {
     expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
     expect(writes).toBe(1);
     expect(submitted).toEqual([target.identity]);
-    expect(state.episodes[workerKey(target.identity)]?.state).toBe('confirmed');
+    const episode = Object.values(state.episodes).find((candidate) => (candidate as { readonly messageId?: string }).messageId === 'msg_busy_delivery') as { readonly state?: string } | undefined;
+    expect(episode?.state).toBe('confirmed');
   });
 
   it('retries an unconfirmed claim with submit only despite a changed pointer count', async () => {
@@ -2105,10 +2176,11 @@ describe('orchestration mail reconciliation', () => {
         writePointer: () => { writes += 1; pointerVisible = true; return { status: 'dispatched' as const }; },
         submitDeps: depsFor({}, {
           submitted,
+          submitResult: (identity) => { submitted.push(identity); if (submitted.length > 1) pointerVisible = false; return { status: 'dispatched' as const }; },
           liveness,
           read: () => ({
             ok: true as const,
-            lines: pointerVisible
+            lines: pointerVisible && submitted.length < 2
               ? [`You have 1 orchestration message. Read and act on your orchestration message. Run \`orca orchestration check --terminal ${target.identity.id}\`.`, ...CURSOR_FOOTER]
               : ['→ Add a follow-up', ...CURSOR_FOOTER],
             source: 'screen' as const,
@@ -2165,17 +2237,55 @@ describe('orchestration mail reconciliation', () => {
       expect(first.terminals[0]?.reason).toBe('submission_unconfirmed');
       pointerVisible = false;
       const retry = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 61_001 });
-      expect(retry.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
+      expect(retry.terminals[0]).toMatchObject({ reason: 'pointer_consumed', enter: false, ok: true });
       expect(writes).toBe(1);
-      expect(submitted).toHaveLength(2);
+      expect(submitted).toHaveLength(1);
+      const persisted = JSON.parse(readFileSync(statePath, 'utf8')) as { episodes: Record<string, { messageId: string; state: string }> };
+      expect(Object.values(persisted.episodes).find((row) => row.messageId === message.id)?.state).toBe('confirmed');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
+  it('preserves delivery deduplication across a stable pane-key handle rotation', async () => {
+    const oldWorker = worker('term_rotated_old', 'g1', 'orca', 'tab-rotation:leaf-1');
+    const newWorker = worker('term_rotated_new', 'g2', 'orca', 'tab-rotation:leaf-1');
+    const state = { messages: {}, episodes: {} };
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let writes = 0;
+    let pointerVisible = false;
+    let now = 1_000;
+    const message = { id: 'msg_rotated_delivery', runId: 'run_rotated_delivery', recipient: 'run:run_rotated_delivery', consumed: false };
+    const makeDeps = (current: RuntimeWorker) => ({
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: () => ({ ok: true as const, worker: current }),
+      writePointer: () => { writes += 1; pointerVisible = true; return { status: 'dispatched' as const }; },
+      submitDeps: depsFor({}, {
+        submitted,
+        liveness: () => 'idle' as const,
+        submitResult: (identity) => { submitted.push(identity); return { status: 'dispatched' as const }; },
+        read: () => ({
+          ok: true as const,
+          lines: pointerVisible ? [buildDeliveryPointer(message), ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        }),
+      }),
+      episodeState: state,
+      reconcileClock: () => now,
+    });
+    const first = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(oldWorker));
+    expect(first.terminals[0]).toMatchObject({ reason: 'submission_unconfirmed', enter: false });
+    pointerVisible = false;
+    now = 61_001;
+    const second = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(newWorker));
+    expect(second.terminals[0]).toMatchObject({ reason: 'pointer_consumed', enter: false, ok: true });
+    expect(writes).toBe(1);
+    expect(submitted).toEqual([oldWorker.identity]);
+  });
+
   it.each([
     ['busy', 'enter_sent', true],
-    ['unknown', 'submission_unconfirmed', false],
+    ['unknown', 'enter_sent', true],
   ] as const)('retries a contradicted confirmed pointer when liveness is %s', async (_label, expectedReason, expectedEnter) => {
     const target = worker('term_contradicted_confirmed');
     const key = workerKey(target.identity);
@@ -2200,7 +2310,7 @@ describe('orchestration mail reconciliation', () => {
         liveness: () => _label,
         read: () => ({
           ok: true as const,
-          lines: [`You have 1 orchestration message. Run \`orca orchestration check --terminal ${target.identity.id}\`.`, ...CURSOR_FOOTER],
+          lines: submitted.length === 0 ? [`You have 1 orchestration message. Run \`orca orchestration check --terminal ${target.identity.id}\`.`, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
           source: 'screen' as const,
         }),
       }),
@@ -2209,10 +2319,11 @@ describe('orchestration mail reconciliation', () => {
 
     expect(result.terminals[0]).toMatchObject({ reason: expectedReason, enter: expectedEnter });
     expect(submitted).toHaveLength(1);
-    expect(state.episodes[key]?.state).toBe(expectedEnter ? 'confirmed' : 'pointer-visible');
+    const episode = Object.values(state.episodes).find((candidate) => (candidate as { readonly messageId?: string }).messageId === 'msg_contradicted_confirmed') as { readonly state?: string } | undefined;
+    expect(episode?.state).toBe(expectedEnter ? 'confirmed' : 'pointer-visible');
   });
 
-  it('shares one claim across runs targeting the same pane', async () => {
+  it('allows distinct messages through the same stable pane-key handle', async () => {
     const target = worker('term_pane_wide_claim');
     let currentRun = 'run_pane_a';
     let pointerVisible = false;
@@ -2230,9 +2341,14 @@ describe('orchestration mail reconciliation', () => {
       submitDeps: depsFor({}, {
         submitted,
         liveness,
+        submitResult: (identity) => {
+          submitted.push(identity);
+          pointerVisible = false;
+          return { status: 'dispatched' as const };
+        },
         read: () => ({
           ok: true as const,
-          lines: pointerVisible ? [POKE, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          lines: pointerVisible ? [buildDeliveryPointer({ id: currentRun === 'run_pane_a' ? 'msg_pane_a' : 'msg_pane_b', runId: currentRun, recipient: target.identity.id, consumed: false }), ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
           source: 'screen' as const,
         }),
       }),
@@ -2243,9 +2359,9 @@ describe('orchestration mail reconciliation', () => {
     const second = await submitOrcaMessageDeliveryPointer('msg_pane_b', deps);
 
     expect(first.terminals[0]?.reason).toBe('enter_sent');
-    expect(second.terminals[0]?.reason).toBe('orchestration_episode_already_delivered');
-    expect(writes).toBe(1);
-    expect(submitted).toHaveLength(1);
+    expect(second.terminals[0]?.reason).toBe('enter_sent');
+    expect(writes).toBe(2);
+    expect(submitted).toHaveLength(2);
   });
 
   it('reports reconcile lock contention as a retryable failure', async () => {
