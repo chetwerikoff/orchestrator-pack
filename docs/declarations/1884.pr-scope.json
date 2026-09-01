@@ -22,5 +22,5 @@
     "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/runtime/contracts.ts"
   ],
-  "source_revision": "657f0f99ef4532149d2552b94a31560632a756ff"
+  "source_revision": "0bfaec2a8eb953a21bbfe50c52a189d980079bd9"
 }
