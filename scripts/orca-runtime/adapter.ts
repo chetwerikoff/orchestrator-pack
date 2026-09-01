@@ -290,6 +290,24 @@ interface OrcaBindingSnapshot {
   readonly worktrees: ReadonlyMap<string, OrcaBindingWorktreeEvidence>;
 }
 
+interface OrcaTerminalListWithVisualLayouts {
+  readonly visualLayouts?: readonly OrcaVisualLayout[];
+}
+
+interface OrcaVisualLayout {
+  readonly root?: OrcaVisualPaneNode;
+}
+
+interface OrcaVisualPaneNode {
+  readonly type?: string;
+  readonly handle?: string;
+  readonly tabId?: string;
+  readonly leafId?: string;
+  readonly first?: OrcaVisualPaneNode;
+  readonly second?: OrcaVisualPaneNode;
+  readonly panes?: OrcaVisualPaneNode;
+}
+
 interface OrcaBindingTerminalListResult {
   readonly terminals?: OrcaTerminalSummary[];
   readonly totalCount: number;
@@ -1086,6 +1104,35 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       terminal.worktreePath?.trim() || 'active',
       'find_worker_by_id',
     );
+  }
+
+  findWorkerByPaneKey(
+    paneKey: string,
+    options: RuntimeCallOptions = {},
+  ): RuntimeResult<RuntimeWorker | null> {
+    const key = paneKey.trim();
+    if (!key) return runtimeFailure('find_worker', 'runtime_pane_key_missing');
+    const response = this.#run<OrcaTerminalListWithVisualLayouts>(
+      ['terminal', 'list', '--include-visual-layouts', '--limit', '1000'],
+      options,
+    );
+    if (!response.ok) return runtimeFailure('find_worker', neutralFailureReason(response));
+    const matches: string[] = [];
+    const visit = (node: OrcaVisualPaneNode | undefined): void => {
+      if (!node) return;
+      const handle = node.handle?.trim();
+      if (handle && node.tabId?.trim() && node.leafId?.trim()
+        && `${node.tabId.trim()}:${node.leafId.trim()}` === key) {
+        matches.push(handle);
+      }
+      visit(node.first);
+      visit(node.second);
+      visit(node.panes);
+    };
+    for (const layout of response.result?.visualLayouts ?? []) visit(layout.root);
+    if (matches.length === 0) return runtimeFailure('find_worker', 'runtime_pane_key_unresolved');
+    if (matches.length !== 1) return runtimeFailure('find_worker', 'runtime_pane_key_ambiguous');
+    return this.findWorkerById(matches[0]!, options);
   }
 
   findWorker(

@@ -749,7 +749,7 @@ describe('buildDeliveryPointer', () => {
 describe('delivery-triggered composer submission', () => {
   it.each([
     ['busy', 'busy', 'enter_sent'],
-    ['unknown', 'unknown', 'submission_unconfirmed'],
+    ['unknown', 'unknown', 'enter_sent'],
   ] as const)('writes and presses Enter when delivery liveness is %s', async (_label, status, expectedReason) => {
     const target = worker(`term_delivery_${status}`);
     const message = {
@@ -772,6 +772,11 @@ describe('delivery-triggered composer submission', () => {
       submitDeps: depsFor({}, {
         submitted,
         liveness: () => status,
+        submitResult: (identity) => {
+          submitted.push(identity);
+          pointerVisible = false;
+          return { status: 'dispatched' as const };
+        },
         read: () => ({
           ok: true as const,
           lines: pointerVisible ? [buildDeliveryPointer(message), ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
@@ -965,6 +970,11 @@ describe('delivery-triggered composer submission', () => {
     const submitDeps = depsFor({}, {
       submitted,
       liveness: (() => { let calls = 0; return () => calls++ < 2 ? 'idle' : 'busy'; })(),
+      submitResult: (identity) => {
+        submitted.push(identity);
+        rendered = false;
+        return { status: 'dispatched' as const };
+      },
       read: () => {
         reads += 1;
         return {
@@ -1039,7 +1049,7 @@ describe('delivery-triggered composer submission', () => {
         liveness: (() => { let calls = 0; return () => calls++ < 2 ? 'idle' : 'busy'; })(),
         read: () => ({
           ok: true as const,
-          lines: reads++ === 0 ? ['→ Add a follow-up', ...CURSOR_FOOTER] : [POKE, ...CURSOR_FOOTER],
+          lines: reads++ === 0 || submitted.length > 0 ? ['→ Add a follow-up', ...CURSOR_FOOTER] : [POKE, ...CURSOR_FOOTER],
           source: 'screen' as const,
         }),
       }),
@@ -1075,7 +1085,7 @@ describe('delivery-triggered composer submission', () => {
         liveness: (() => { let calls = 0; return () => calls++ < 2 ? 'idle' : 'busy'; })(),
         read: () => ({
           ok: true as const,
-          lines: reads++ === 0 ? ['→ Add a follow-up', ...CURSOR_FOOTER] : [TERMINAL_POKE, ...CURSOR_FOOTER],
+          lines: reads++ === 0 || submitted.length > 0 ? ['→ Add a follow-up', ...CURSOR_FOOTER] : [TERMINAL_POKE, ...CURSOR_FOOTER],
           source: 'screen' as const,
         }),
       }),
@@ -1110,7 +1120,7 @@ describe('delivery-triggered composer submission', () => {
         liveness: (() => { let calls = 0; return () => calls++ < 2 ? 'idle' : 'busy'; })(),
         read: () => ({
           ok: true as const,
-          lines: wrote ? ['You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run `orca orchestration check --run run_dup`.', ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          lines: wrote && submitted.length === 0 ? ['You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run `orca orchestration check --run run_dup`.', ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
           source: 'screen' as const,
         }),
       }),
@@ -1131,7 +1141,15 @@ describe('delivery-triggered composer submission', () => {
       }),
       resolveWorker: () => ({ ok: true as const, worker: target }),
       writePointer: () => { writes += 1; return { status: 'dispatched' as const }; },
-      submitDeps: depsFor({ [target.identity.id]: [POKE, ...CURSOR_FOOTER] }, { submitted, liveness: (() => { let calls = 0; return () => calls++ === 0 ? 'idle' : 'busy'; })() }),
+      submitDeps: depsFor({ [target.identity.id]: [POKE, ...CURSOR_FOOTER] }, {
+        submitted,
+        liveness: (() => { let calls = 0; return () => calls++ === 0 ? 'idle' : 'busy'; })(),
+        read: () => ({
+          ok: true as const,
+          lines: submitted.length === 0 ? [POKE, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        }),
+      }),
     });
     expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
     expect(writes).toBe(0);
@@ -1518,7 +1536,8 @@ describe('orchestration mail reconciliation', () => {
         submitted,
         read: () => ({
           ok: true as const,
-          lines: wrote ? [pointer, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          lines: wrote && submitted.length === 0 ? [pointer, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          source: 'screen' as const,
         }),
       }),
       get writes() {
@@ -1693,6 +1712,7 @@ describe('orchestration mail reconciliation', () => {
     let writes = 0;
     let pointerVisible = false;
     const message = { id: 'msg_definitive_write_failure', runId: 'run_definitive_write_failure', recipient: target.identity.id, consumed: false };
+    const submitted: RuntimeWorkerIdentity[] = [];
     const makeDeps = () => ({
       lookupMessage: () => ({ ok: true as const, message }),
       resolveWorker: () => ({ ok: true as const, worker: target }),
@@ -1703,10 +1723,14 @@ describe('orchestration mail reconciliation', () => {
           ? { status: 'send_failed' as const, reason: 'runtime_unavailable' }
           : { status: 'dispatched' as const };
       },
-      submitDeps: depsFor({}, { read: () => ({
-        ok: true as const,
-        lines: pointerVisible ? [buildDeliveryPointer(message), ...CURSOR_FOOTER] : [],
-      }) }),
+      submitDeps: depsFor({}, {
+        submitted,
+        submitResult: (identity) => { submitted.push(identity); return { status: 'dispatched' as const }; },
+        read: () => ({
+          ok: true as const,
+          lines: pointerVisible && submitted.length === 0 ? [buildDeliveryPointer(message), ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+        }),
+      }),
       episodeStatePath: statePath,
       episodeLockPath: lockPath,
     });
@@ -1811,6 +1835,7 @@ describe('orchestration mail reconciliation', () => {
           submitResult: (identity) => {
             submitted.push(identity);
             launches += 1;
+            if (launches > 1) pointerVisible = false;
             return launches === 1
               ? { status: 'send_failed' as const, reason: 'runtime_unavailable' }
               : { status: 'dispatched' as const };
@@ -1965,6 +1990,7 @@ describe('orchestration mail reconciliation', () => {
         },
         submitDeps: depsFor({}, {
           submitted,
+          submitResult: (identity) => { submitted.push(identity); pointerVisible = false; return { status: 'dispatched' as const }; },
           read: () => ({
             ok: true as const,
             lines: pointerVisible ? [`You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run \`orca orchestration check --terminal ${target.identity.id}\`.`, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
@@ -2068,6 +2094,7 @@ describe('orchestration mail reconciliation', () => {
       writePointer: () => { writes += 1; pointerVisible = true; return { status: 'dispatched' as const }; },
       submitDeps: depsFor({ [target.identity.id]: ['→ Add a follow-up', ...CURSOR_FOOTER] }, {
         submitted,
+        submitResult: (identity) => { submitted.push(identity); pointerVisible = false; return { status: 'dispatched' as const }; },
         liveness: () => 'busy',
         read: () => ({
           ok: true as const,
@@ -2105,10 +2132,11 @@ describe('orchestration mail reconciliation', () => {
         writePointer: () => { writes += 1; pointerVisible = true; return { status: 'dispatched' as const }; },
         submitDeps: depsFor({}, {
           submitted,
+          submitResult: (identity) => { submitted.push(identity); if (submitted.length > 1) pointerVisible = false; return { status: 'dispatched' as const }; },
           liveness,
           read: () => ({
             ok: true as const,
-            lines: pointerVisible
+            lines: pointerVisible && submitted.length < 2
               ? [`You have 1 orchestration message. Read and act on your orchestration message. Run \`orca orchestration check --terminal ${target.identity.id}\`.`, ...CURSOR_FOOTER]
               : ['→ Add a follow-up', ...CURSOR_FOOTER],
             source: 'screen' as const,
@@ -2175,7 +2203,7 @@ describe('orchestration mail reconciliation', () => {
 
   it.each([
     ['busy', 'enter_sent', true],
-    ['unknown', 'submission_unconfirmed', false],
+    ['unknown', 'enter_sent', true],
   ] as const)('retries a contradicted confirmed pointer when liveness is %s', async (_label, expectedReason, expectedEnter) => {
     const target = worker('term_contradicted_confirmed');
     const key = workerKey(target.identity);
@@ -2200,7 +2228,7 @@ describe('orchestration mail reconciliation', () => {
         liveness: () => _label,
         read: () => ({
           ok: true as const,
-          lines: [`You have 1 orchestration message. Run \`orca orchestration check --terminal ${target.identity.id}\`.`, ...CURSOR_FOOTER],
+          lines: submitted.length === 0 ? [`You have 1 orchestration message. Run \`orca orchestration check --terminal ${target.identity.id}\`.`, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
           source: 'screen' as const,
         }),
       }),
@@ -2232,7 +2260,7 @@ describe('orchestration mail reconciliation', () => {
         liveness,
         read: () => ({
           ok: true as const,
-          lines: pointerVisible ? [POKE, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          lines: pointerVisible && submitted.length === 0 ? [buildDeliveryPointer({ id: 'msg_pane_a', runId: currentRun, recipient: target.identity.id, consumed: false }), ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
           source: 'screen' as const,
         }),
       }),
