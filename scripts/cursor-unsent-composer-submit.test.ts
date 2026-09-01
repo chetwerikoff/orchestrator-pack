@@ -887,11 +887,11 @@ describe('delivery-triggered composer submission', () => {
       reconcileClock: () => now,
     };
     const result = await submitOrcaMessageDeliveryPointer('msg_opencode_unconfirmed', deps);
-    const key = workerKey(target.identity);
+    const episode = Object.values(episodeState.episodes).find((row) => (row as { readonly messageId?: string }).messageId === 'msg_opencode_unconfirmed') as { readonly state?: string } | undefined;
     expect(result.terminals[0]).toMatchObject({ reason: 'submission_unconfirmed', enter: false, ok: false });
     expect(reads).toBe(2);
     expect(actions).toHaveLength(1);
-    expect(episodeState.episodes[key]?.state).toBe('pointer-visible');
+    expect(episode?.state).toBe('pointer-visible');
     now = 61_001;
     const retry = await submitOrcaMessageDeliveryPointer('msg_opencode_unconfirmed', deps);
     expect(retry.terminals[0]?.reason).toBe('submission_unconfirmed');
@@ -1703,17 +1703,17 @@ describe('orchestration mail reconciliation', () => {
     }], target);
     try {
       const result = await runOrchestrationMailReconcileTick(deps, { ledgerPath: statePath, lockPath, now: () => 1_000 });
-      const persisted = JSON.parse(readFileSync(statePath, 'utf8')) as { episodes: Record<string, { state: string }> };
+      const persisted = JSON.parse(readFileSync(statePath, 'utf8')) as { episodes: Record<string, { messageId: string; state: string }> };
       expect(result.reasons).toContain('msg_legacy_claim_migration:orchestration_episode_already_delivered');
       expect(deps.writes).toBe(0);
-      expect(persisted.episodes[paneKey]?.state).toBe('confirmed');
+      expect(Object.values(persisted.episodes).find((row) => row.messageId === 'msg_legacy_claim_migration')?.state).toBe('confirmed');
       expect(persisted.episodes[legacyKey]).toBeUndefined();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it('retains a pane claim while another run remains unread', async () => {
+  it('releases a consumed message claim while another message remains unread', async () => {
     const target = worker('term_release_pane_claim');
     const key = workerKey(target.identity);
     const state = {
@@ -1744,7 +1744,7 @@ describe('orchestration mail reconciliation', () => {
       episodeState: state,
     });
     expect(result.terminals[0]?.reason).toBe('delivery_already_consumed');
-    expect(state.episodes[key]?.state).toBe('confirmed');
+    expect(state.episodes[key]).toBeUndefined();
   });
 
   it('resets a newly-created claim after a definitive pointer write failure', async () => {
@@ -1895,8 +1895,8 @@ describe('orchestration mail reconciliation', () => {
       expect(suppressed.terminals[0]?.reason).toBe('enter_sent');
       expect(writes).toBe(1);
       expect(submitted).toHaveLength(2);
-      const persisted = JSON.parse(readFileSync(statePath, 'utf8')) as { episodes: Record<string, { backoffMs?: unknown }> };
-      expect(persisted.episodes[workerKey(target.identity)]?.backoffMs).toBeUndefined();
+      const persisted = JSON.parse(readFileSync(statePath, 'utf8')) as { episodes: Record<string, { messageId: string; backoffMs?: unknown }> };
+      expect(Object.values(persisted.episodes).find((row) => row.messageId === message.id)?.backoffMs).toBeUndefined();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -2151,7 +2151,8 @@ describe('orchestration mail reconciliation', () => {
     expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
     expect(writes).toBe(1);
     expect(submitted).toEqual([target.identity]);
-    expect(state.episodes[workerKey(target.identity)]?.state).toBe('confirmed');
+    const episode = Object.values(state.episodes).find((candidate) => (candidate as { readonly messageId?: string }).messageId === 'msg_busy_delivery') as { readonly state?: string } | undefined;
+    expect(episode?.state).toBe('confirmed');
   });
 
   it('retries an unconfirmed claim with submit only despite a changed pointer count', async () => {
@@ -2239,8 +2240,8 @@ describe('orchestration mail reconciliation', () => {
       expect(retry.terminals[0]).toMatchObject({ reason: 'pointer_consumed', enter: false, ok: true });
       expect(writes).toBe(1);
       expect(submitted).toHaveLength(1);
-      const persisted = JSON.parse(readFileSync(statePath, 'utf8')) as { episodes: Record<string, { state: string }> };
-      expect(persisted.episodes[workerKey(target.identity)]?.state).toBe('confirmed');
+      const persisted = JSON.parse(readFileSync(statePath, 'utf8')) as { episodes: Record<string, { messageId: string; state: string }> };
+      expect(Object.values(persisted.episodes).find((row) => row.messageId === message.id)?.state).toBe('confirmed');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -2318,10 +2319,11 @@ describe('orchestration mail reconciliation', () => {
 
     expect(result.terminals[0]).toMatchObject({ reason: expectedReason, enter: expectedEnter });
     expect(submitted).toHaveLength(1);
-    expect(state.episodes[key]?.state).toBe(expectedEnter ? 'confirmed' : 'pointer-visible');
+    const episode = Object.values(state.episodes).find((candidate) => (candidate as { readonly messageId?: string }).messageId === 'msg_contradicted_confirmed') as { readonly state?: string } | undefined;
+    expect(episode?.state).toBe(expectedEnter ? 'confirmed' : 'pointer-visible');
   });
 
-  it('shares one claim across runs targeting the same pane', async () => {
+  it('allows distinct messages through the same stable pane-key handle', async () => {
     const target = worker('term_pane_wide_claim');
     let currentRun = 'run_pane_a';
     let pointerVisible = false;
@@ -2339,9 +2341,14 @@ describe('orchestration mail reconciliation', () => {
       submitDeps: depsFor({}, {
         submitted,
         liveness,
+        submitResult: (identity) => {
+          submitted.push(identity);
+          pointerVisible = false;
+          return { status: 'dispatched' as const };
+        },
         read: () => ({
           ok: true as const,
-          lines: pointerVisible && submitted.length === 0 ? [buildDeliveryPointer({ id: 'msg_pane_a', runId: currentRun, recipient: target.identity.id, consumed: false }), ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          lines: pointerVisible ? [buildDeliveryPointer({ id: currentRun === 'run_pane_a' ? 'msg_pane_a' : 'msg_pane_b', runId: currentRun, recipient: target.identity.id, consumed: false }), ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
           source: 'screen' as const,
         }),
       }),
@@ -2352,9 +2359,9 @@ describe('orchestration mail reconciliation', () => {
     const second = await submitOrcaMessageDeliveryPointer('msg_pane_b', deps);
 
     expect(first.terminals[0]?.reason).toBe('enter_sent');
-    expect(second.terminals[0]?.reason).toBe('orchestration_episode_already_delivered');
-    expect(writes).toBe(1);
-    expect(submitted).toHaveLength(1);
+    expect(second.terminals[0]?.reason).toBe('enter_sent');
+    expect(writes).toBe(2);
+    expect(submitted).toHaveLength(2);
   });
 
   it('reports reconcile lock contention as a retryable failure', async () => {

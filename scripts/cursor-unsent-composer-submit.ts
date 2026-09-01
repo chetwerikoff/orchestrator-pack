@@ -379,9 +379,20 @@ interface PersistedReconcileState {
   readonly episodes: Record<string, EpisodeRecord>;
 }
 
-function episodeKey(_message: DeliveryMessage, worker: RuntimeWorker): string {
+function recipientEpisodeKey(worker: RuntimeWorker): string {
   const stableKey = worker.stableKey?.trim();
   return stableKey ? `stable\u0000${stableKey}` : workerKey(worker.identity);
+}
+
+function episodeKey(message: DeliveryMessage, worker: RuntimeWorker): string {
+  const suffix = message.unreadCount && message.unreadCount > 1
+    ? `pointer\u0000${buildDeliveryPointer(message)}`
+    : `message\u0000${message.id}`;
+  return `${recipientEpisodeKey(worker)}\u0000${suffix}`;
+}
+
+function pointerLedgerKey(message: DeliveryMessage, worker: RuntimeWorker): string {
+  return `${recipientEpisodeKey(worker)}\u0000pointer\u0000${buildDeliveryPointer(message)}`;
 }
 
 function loadReconcileState(path: string): PersistedReconcileState {
@@ -881,16 +892,17 @@ function episodeStateRank(state: EpisodeRecord['state']): number {
 
 function migrateLegacyEpisodeKeys(
   state: PersistedReconcileState,
-  unreadEpisodeKeys: ReadonlySet<string>,
-): void {
-  for (const [candidateKey, candidate] of Object.entries(state.episodes)) {
-    const paneKey = candidate.workerKey;
-    if (candidateKey === paneKey || !unreadEpisodeKeys.has(paneKey)) continue;
-    const current = state.episodes[paneKey];
-    if (!current || episodeStateRank(candidate.state) > episodeStateRank(current.state)) {
-      state.episodes[paneKey] = candidate;
+  unreadEpisodeKeysByMessage: ReadonlyMap<string, string>,
+ ): void {
+  for (const [messageId, currentKey] of unreadEpisodeKeysByMessage) {
+    const legacy = Object.entries(state.episodes).find(([candidateKey, candidate]) =>
+      candidateKey !== currentKey && candidate.messageId === messageId);
+    if (!legacy) continue;
+    const current = state.episodes[currentKey];
+    if (!current || episodeStateRank(legacy[1].state) > episodeStateRank(current.state)) {
+      state.episodes[currentKey] = legacy[1];
     }
-    delete state.episodes[candidateKey];
+    delete state.episodes[legacy[0]];
   }
 }
 
@@ -925,7 +937,11 @@ function releaseEpisodeWhenMailboxEmpty(
       && sibling.worker !== null
       && episodeKey(parsed.message, sibling.worker) === mailboxKey;
   });
-  if (!hasUnreadSibling) delete state.episodes[mailboxKey];
+  if (!hasUnreadSibling) {
+    for (const [key, episode] of Object.entries(state.episodes)) {
+      if (key === mailboxKey || episode.messageId === message.id) delete state.episodes[key];
+    }
+  }
 }
 
 /** Bind one Orca message to one exact recipient, write its pointer, then submit it. */
@@ -941,7 +957,9 @@ export async function submitOrcaMessageDeliveryPointer(
   if (!statePath) {
     const found = deps.lookupMessage(id);
     if (!found.ok) return deliveryNoEffect(found.reason, undefined, false);
-    return submitOrcaMessageDeliveryPointerForMessage(found.message, deps);
+    const result = await submitOrcaMessageDeliveryPointerForMessage(found.message, deps);
+    if (found.message.consumed && deps.episodeState) releaseEpisodeWhenMailboxEmpty(deps.episodeState, deps, found.message);
+    return result;
   }
   const held = tryAcquireHeldFileLock(lockPath ?? ORCHESTRATION_RECONCILE_LOCK_PATH);
   if (!held.acquired) return deliveryNoEffect(`reconcile_lock_${held.reason}`, undefined, false);
@@ -1009,16 +1027,16 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   const pointer = buildDeliveryPointer(message);
   const key = episodeKey(message, worker);
   const stableKey = worker.stableKey?.trim();
-  if (deps.pointerWriteLedger?.has(key)) return deliveryNoEffect('orchestration_episode_already_claimed', worker, false);
+  const pointerKey = pointerLedgerKey(message, worker);
+  if (deps.pointerWriteLedger?.has(pointerKey)) return deliveryNoEffect('orchestration_episode_already_claimed', worker, false);
   const now = deps.reconcileClock?.() ?? Date.now();
   let state = deps.episodeState;
   if (!state && deps.episodeStatePath) state = loadReconcileState(deps.episodeStatePath);
   let existing = state?.episodes[key];
-  // Migrate the pre-pane-wide key without losing a durable claim.
+  // Migrate any pre-message-key claim for the same message without sharing it with siblings.
   if (!existing && state) {
     const legacy = Object.entries(state.episodes).find(([candidate, row]) =>
-      candidate !== key
-      && (row.stableKey === stableKey || row.messageId === message.id));
+      candidate !== key && row.messageId === message.id);
     if (legacy) {
       existing = {
         ...legacy[1],
@@ -1072,7 +1090,7 @@ async function submitOrcaMessageDeliveryPointerForMessage(
       };
       if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
     }
-    if (deps.pointerWriteLedger) deps.pointerWriteLedger.set(key, now);
+    if (deps.pointerWriteLedger) deps.pointerWriteLedger.set(pointerKey, now);
     const createdClaim = !existing;
     const before = deps.submitDeps.readAsync
       ? await deps.submitDeps.readAsync(worker.identity)
@@ -1082,7 +1100,7 @@ async function submitOrcaMessageDeliveryPointerForMessage(
         delete state.episodes[key];
         if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
       }
-      deps.pointerWriteLedger?.delete(key);
+      deps.pointerWriteLedger?.delete(pointerKey);
       return deliveryNoEffect(before.reason, worker, false);
     }
     const submitted = control.dispatch({ worker: worker.identity, action: 'submit-prompt', text: pointer });
@@ -1091,7 +1109,7 @@ async function submitOrcaMessageDeliveryPointerForMessage(
         delete state.episodes[key];
         if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
       }
-      deps.pointerWriteLedger?.delete(key);
+      deps.pointerWriteLedger?.delete(pointerKey);
       return { ok: false, dryRun: false, watch: false, terminals: [{ terminal: worker.identity.id, generation: worker.identity.generation, unsent: true, enter: false, ok: false, reason: submitted.reason, dispatchStatus: submitted.status }] };
     }
     const base = { terminal: worker.identity.id, generation: worker.identity.generation };
@@ -1171,7 +1189,7 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     };
     if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
   }
-  if (deps.pointerWriteLedger) deps.pointerWriteLedger.set(key, now);
+  if (deps.pointerWriteLedger) deps.pointerWriteLedger.set(pointerKey, now);
   // A claimed/unconfirmed episode may submit again, but it must never write again.
   if (!alreadyShown && !claimExists) {
     const written = deps.writePointer(worker.identity, pointer);
@@ -1180,7 +1198,7 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     if (!accepted) {
       if (written.status === 'send_failed') {
         if (state && createdClaim) delete state.episodes[key];
-        deps.pointerWriteLedger?.delete(key);
+        deps.pointerWriteLedger?.delete(pointerKey);
         if (state && deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
       }
       return deliveryNoEffect(written.reason ?? 'pointer_write_failed', worker, false);
@@ -1403,6 +1421,7 @@ export async function runOrchestrationMailReconcileTick(
       return resolved;
     };
     const unreadEpisodeKeys = new Set<string>();
+    const unreadEpisodeKeysByMessage = new Map<string, string>();
     const unreadCounts = new Map<string, number>();
     let unresolvedUnread = false;
     for (const row of unread) {
@@ -1418,12 +1437,11 @@ export async function runOrchestrationMailReconcileTick(
       }
       const key = episodeKey(parsed.message, resolved.worker);
       unreadEpisodeKeys.add(key);
-      const identityKey = workerKey(resolved.worker.identity);
-      if (identityKey !== key) unreadEpisodeKeys.add(identityKey);
+      unreadEpisodeKeysByMessage.set(parsed.message.id, key);
       unreadCounts.set(key, (unreadCounts.get(key) ?? 0) + 1);
     }
     if (!unresolvedUnread) {
-      migrateLegacyEpisodeKeys(state, unreadEpisodeKeys);
+      migrateLegacyEpisodeKeys(state, unreadEpisodeKeysByMessage);
       releaseClaimsForConsumedMessages(state, unreadIds, unreadEpisodeKeys);
       for (const key of Object.keys(state.episodes)) {
         if (!unreadEpisodeKeys.has(key)) delete state.episodes[key];
