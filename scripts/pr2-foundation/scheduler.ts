@@ -4,7 +4,8 @@ import path from 'node:path';
 import type { FoundationConfig } from './config.ts';
 import { parseFoundationConfig } from './config.ts';
 import { FileEpochAuthority } from '../lib/cutover/activation-epoch-authority.ts';
-import { runProcess } from '../kernel/subprocess.ts';
+import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
+import { originSlugFromGitConfig } from '../lib/git-origin-slug.mjs';
 import { evaluateHeadReadyForReview } from './review-head-ready.ts';
 import { listPackReviewRuns } from '../lib/pack-review-run-store.ts';
 import { startPackReview } from '../pack-review-runner.ts';
@@ -157,19 +158,26 @@ export function liveCandidateRepository(
   return localRepository && rowRepository !== localRepository ? '' : rowRepository;
 }
 
+export function schedulerProcessFailureDiagnostic(result: ProcessResult): string {
+  return [
+    `outcome=${result.outcome}`,
+    `signal=${result.signal ?? 'none'}`,
+    `timedOut=${String(result.timedOut)}`,
+    `cancelled=${String(result.cancelled)}`,
+    `exitCode=${result.exitCode === null ? 'null' : String(result.exitCode)}`,
+    `stderr=${result.stderr.trim() || '<empty>'}`,
+    `error=${result.error?.trim() || '<none>'}`,
+  ].join(',');
+}
+
 export async function resolveRepositoryFromRepoRoot(repoRoot: string): Promise<string> {
-  const result = await runProcess({
-    command: 'git',
-    args: ['-C', repoRoot, 'remote', 'get-url', 'origin'],
-    cwd: repoRoot,
-    inheritParentEnv: true,
-    allowEmptyStdout: false,
-    timeoutMs: 30_000,
-  });
-  if (!result.ok) {
-    throw new Error(`scheduler_repository_identity_unresolved:${result.stderr || result.error || result.exitCode || 'git_remote_failed'}`);
+  try {
+    const repository = originSlugFromGitConfig(repoRoot);
+    if (!repository) throw new Error('git_origin_config_unresolved');
+    return repository.toLowerCase();
+  } catch (error) {
+    throw new Error(`scheduler_repository_identity_unresolved:${error instanceof Error ? error.message : String(error)}`);
   }
-  return repositorySlugFromRemote(result.stdout);
 }
 
 export function assertSchedulerEpoch(env: NodeJS.ProcessEnv = process.env): { epochId: string; nonce: string } {
@@ -232,7 +240,7 @@ function liveCandidates(env: NodeJS.ProcessEnv = process.env, repository?: strin
 
 async function ghJson(repoRoot: string, args: string[]): Promise<unknown> {
   const result = await runProcess({ command: `${repoRoot}/scripts/gh`, args, cwd: repoRoot, inheritParentEnv: true, allowEmptyStdout: false, timeoutMs: 30_000 });
-  if (!result.ok) throw new Error(`scheduler_gh_failed:${args.join('_')}:${result.stderr || result.error || result.exitCode}`);
+  if (!result.ok) throw new Error(`scheduler_gh_failed:${args.join('_')}:${schedulerProcessFailureDiagnostic(result)}`);
   return JSON.parse(result.stdout);
 }
 

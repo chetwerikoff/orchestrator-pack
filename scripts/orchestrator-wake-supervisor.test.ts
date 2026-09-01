@@ -314,6 +314,44 @@ describe('Issue #1484 truthful supervisor status', () => {
     expect(transition.refusalReason).toBe('scheduler_child_exit_nonzero:scheduler exploded');
     expect(transition.refusalReason).not.toBe(transition.crashBackoff.terminalReason);
   });
+
+  it('retains the full scheduler identity failure through a 12-exit crash loop', () => {
+    const policy: CrashBackoffPolicy = {
+      rapidExitThresholdMs: 1_000,
+      maxRapidExitsBeforeBackoff: 11,
+      terminalRapidExits: 12,
+      baseBackoffMs: 10,
+      maxBackoffMs: 100,
+    };
+    const identityFailure = 'scheduler_repository_identity_unresolved:outcome=exit,signal=none,timedOut=false,cancelled=false,exitCode=1,stderr=<empty>,error=git config failed';
+    let crashBackoff = EMPTY_CRASH_BACKOFF_STATE;
+    let transition = supervisorChildExitTransition({
+      previous: crashBackoff,
+      startedAtMs: 1_000,
+      exitedAtMs: 1_001,
+      result: { ok: false, outcome: 'exit', error: identityFailure, exitCode: 1 },
+      policy,
+    });
+    crashBackoff = transition.crashBackoff;
+    for (let attempt = 2; attempt <= 12; attempt += 1) {
+      transition = supervisorChildExitTransition({
+        previous: crashBackoff,
+        startedAtMs: attempt * 1_000,
+        exitedAtMs: attempt * 1_000 + 1,
+        result: { ok: false, outcome: 'exit', error: identityFailure, exitCode: 1 },
+        policy,
+      });
+      crashBackoff = transition.crashBackoff;
+    }
+
+    expect(transition.restartState).toBe('refused');
+    expect(transition.crashBackoff).toMatchObject({
+      terminal: true,
+      rapidExits: 12,
+      terminalReason: 'crash_loop:12_rapid_exits',
+    });
+    expect(transition.refusalReason).toBe(`scheduler_child_exit:${identityFailure}`);
+  });
 });
 
 describe('Issue #1484 cutover supervisor identity consumers', () => {
