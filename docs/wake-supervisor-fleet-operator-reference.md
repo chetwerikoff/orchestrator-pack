@@ -113,6 +113,22 @@ side-effect-lock contracts. That restart is also how a failed unsent-composer
 submit inside the tick is raised again. It must never revive a retired entrypoint
 or add a second composer process.
 
+### F3 — impossible activation-epoch current pointer
+
+The epoch authority reader rejects a persisted schema-v1 document when its current
+pointer is malformed or empty, is `null` while retained history exists, or names no
+retained record. Recovery and supervisor admission surface the corresponding
+`epoch_authority_current_pointer_invalid:*` classification before recovery import,
+registry projection, authority CAS, scheduler child start, or normal/running child
+status. Supervisor admission may persist one `refused` status whose
+`refusalReason` is that secret-safe classification.
+
+Treat this classification as **stop and escalate**, not as authorization to run a
+blind `activate`, a generic `recover`, or direct JSON editing. Issue #1880 adds no
+automated repair transition. Repository code owns producing and surfacing the
+classification; adoption by any operator-local launcher is a separate post-merge
+operator action and is not repository worker scope.
+
 ## Operator adoption
 
 After a registry-changing deployment, use the supported activation/recovery

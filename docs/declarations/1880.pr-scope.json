@@ -1,0 +1,35 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1880,
+  "declared_paths": [
+    "docs/migration_notes.md",
+    "docs/wake-supervisor-fleet-operator-reference.md",
+    "scripts/cutover/issue-928.test.ts",
+    "scripts/lib/cutover/activation-epoch-authority.ts",
+    "scripts/orchestrator-wake-supervisor.test.ts"
+  ],
+  "denylist": [
+    ".config/",
+    ".github/workflows/",
+    ".local/",
+    ".orca/",
+    "credentials/",
+    "opk-wake-supervisor",
+    "packages/core/",
+    "scripts/orchestrator-side-process-registry.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/1880.pr-scope.json",
+    "docs/migration_notes.md",
+    "docs/wake-supervisor-fleet-operator-reference.md",
+    "scripts/cutover/issue-928.test.ts",
+    "scripts/lib/cutover/",
+    "scripts/lib/orchestrator-side-process-supervisor.ts",
+    "scripts/orchestrator-cutover-activate.ts",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/orchestrator-wake-supervisor.ts"
+  ],
+  "source_revision": "c7b3eeeeb8a245fa1108cc6b64e48d69856264d5"
+}

@@ -1,6 +1,6 @@
 // @vitest-ci-lane parked
 // @vitest-pre-topology-seconds 120
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { runProcessSync } from './kernel/subprocess.ts';
 import path from 'node:path';
@@ -428,3 +428,114 @@ describe('Issue #1484 cutover supervisor identity consumers', () => {
     }
   });
 });
+
+describe('Issue #1880 supervisor epoch-authority admission', () => {
+  it('surfaces classified pointer corruption before projection or child start and writes only refused status', () => {
+    for (const [label, currentEpochId, expected] of [
+      ['null-history', null, 'epoch_authority_current_pointer_invalid:null_with_history'],
+      ['unbound-current', 'epoch-1880-orphan', 'epoch_authority_current_pointer_invalid:unbound_current'],
+      ['malformed-current', 7, 'epoch_authority_current_pointer_invalid:malformed_current'],
+      ['empty-current', '', 'epoch_authority_current_pointer_invalid:malformed_current'],
+    ] as const) {
+      const root = mkdtempSync(path.join(tmpdir(), `opk-1880-supervisor-${label}-`));
+      try {
+        const fakeRepo = path.join(root, 'repo');
+        const stateDir = path.join(root, 'state');
+        const schedulerDir = path.join(fakeRepo, 'scripts', 'pr2-foundation');
+        const schedulerMarker = path.join(root, 'scheduler-started.txt');
+        const targetRegistryPath = path.join(root, 'target-registry.json');
+        const projectedRegistryPath = path.join(stateDir, 'projected-registry.json');
+        const epochAuthorityPath = path.join(root, 'epoch-authority.json');
+        mkdirSync(schedulerDir, { recursive: true });
+        mkdirSync(stateDir, { recursive: true });
+        writeFileSync(
+          path.join(schedulerDir, 'scheduler.ts'),
+          `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(schedulerMarker)}, 'started', 'utf8');\n`,
+          'utf8',
+        );
+        const registry = {
+          schemaVersion: 2,
+          requiredChildIds: ['pr2-scheduler'],
+          children: [{
+            id: 'pr2-scheduler',
+            runtime: 'node',
+            script: 'pr2-foundation/scheduler.ts',
+            sideEffecting: true,
+            cadenceSeconds: 5,
+          }],
+        };
+        const registryBytes = `${JSON.stringify(registry)}\n`;
+        writeFileSync(targetRegistryPath, registryBytes, 'utf8');
+
+        const epochId = 'epoch-1880-supervisor';
+        const nonce = 'nonce-1880-private';
+        const record = {
+          epochId,
+          nonce,
+          hostId: 'test-host',
+          repoRoot: fakeRepo,
+          installedCommitSha: 'a'.repeat(40),
+          snapshotDigests: { reconcile: 'snapshot-r', reevaluation: 'snapshot-e', reportStateSeed: 'snapshot-s' },
+          importDigests: { reconcile: 'import-r', reevaluation: 'import-e', reportStateSeed: 'import-s' },
+          registryHash: sha256Bytes(Buffer.from(registryBytes)),
+          preCommitLogDigest: 'phase-one-fixture',
+          commitAt: new Date().toISOString(),
+        };
+        writeFileSync(
+          epochAuthorityPath,
+          `${JSON.stringify({ schemaVersion: 1, currentEpochId, records: [record] }, null, 2)}\n`,
+          'utf8',
+        );
+
+        const result = runProcessSync({
+          command: process.execPath,
+          args: [
+            '--experimental-strip-types',
+            supervisorScript,
+            'run',
+            '--state-dir', stateDir,
+            '--repo-root', fakeRepo,
+            '--epoch-authority', epochAuthorityPath,
+            '--epoch-id', epochId,
+            '--nonce', nonce,
+            '--target-registry', targetRegistryPath,
+            '--projected-registry', projectedRegistryPath,
+          ],
+          cwd: repoRoot,
+          inheritParentEnv: true,
+        });
+
+        expect(result.ok).toBe(false);
+        expect(result.stderr.trim().split(/\r?\n/u)).toContain(expected);
+        expect(result.stderr).not.toContain(nonce);
+        expect(result.stderr).not.toContain(root);
+        expect(existsSync(projectedRegistryPath)).toBe(false);
+        expect(existsSync(schedulerMarker)).toBe(false);
+        expect(readFileSync(targetRegistryPath, 'utf8')).toBe(registryBytes);
+
+        const statusPath = path.join(stateDir, 'typescript-supervisor-status.json');
+        const status = JSON.parse(readFileSync(statusPath, 'utf8')) as {
+          registryHash: string | null;
+          childPid: number | null;
+          childStartTicks: string | null;
+          childGeneration: number;
+          restartState: string;
+          refusalReason: string | null;
+        };
+        expect(status).toMatchObject({
+          registryHash: null,
+          childPid: null,
+          childStartTicks: null,
+          childGeneration: 0,
+          restartState: 'refused',
+          refusalReason: expected,
+        });
+        expect(status.refusalReason).not.toContain(nonce);
+        expect(status.refusalReason).not.toContain(root);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+});
+
