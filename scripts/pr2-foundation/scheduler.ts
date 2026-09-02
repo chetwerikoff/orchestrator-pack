@@ -390,6 +390,7 @@ function startSchedulerMailReconcileLoop(
   };
   invoke();
   const timer = setInterval(invoke, Math.max(1, intervalMs));
+  timer.unref?.();
   return {
     async stop(awaitPending: boolean): Promise<SchedulerMailReconcileResult | undefined> {
       stopped = true;
@@ -643,14 +644,11 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
     const deps = createAdapterSubmitDeps(runtime);
     return await runOrchestrationMailReconcileTick(createOrcaMessageSubmitDeps(runtime, deps));
   };
-  const startupMailReconcileLoop = startSchedulerMailReconcileLoop(executeOrchestrationMailReconcile, cadence);
-  let repository: string;
-  try {
-    repository = await resolveRepositoryFromRepoRoot(repoRoot);
-  } catch (error) {
-    await startupMailReconcileLoop?.stop(false);
+  const preloadedOrchestrationMailReconcileLoop = startSchedulerMailReconcileLoop(executeOrchestrationMailReconcile, cadence);
+  const repository = await resolveRepositoryFromRepoRoot(repoRoot).catch(async (error) => {
+    await preloadedOrchestrationMailReconcileLoop?.stop(false);
     throw error;
-  }
+  });
   const scopedAssignment = storedAssignments?.find((assignment) => assignment.repository === repository);
   let fleetObserver: FleetObserver; let fleetNudgeActuator: SchedulerFleetNudgeActuator = createTargetUnresolvedFleetNudgeActuator();
   let unresolvedReason: FleetReconciliationReason = storedAssignments === null ? 'assignment_untrusted' : 'target_unresolved';
@@ -771,7 +769,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       fleetBindings,
       reconcilePostReviewSmoke: postReviewSmoke,
       orchestrationMailReconcile,
-      orchestrationMailReconcileLoop: startupMailReconcileLoop,
+      orchestrationMailReconcileLoop: preloadedOrchestrationMailReconcileLoop,
       dispatchTerminalMailPulse,
       publishHandoff,
     }),
