@@ -1043,6 +1043,7 @@ export function commitPackReviewTerminal(input: {
           cycle.state = 'closed';
           cycle.closedAtUtc = nowIso(input.options);
           cycle.atCapHash = undefined;
+          if (isLogicalRoundCycle(cycle)) markReviewStageComplete(current, cycle.closedAtUtc);
         } else {
           cycle.state = 'open';
           cycle.closedAtUtc = undefined;

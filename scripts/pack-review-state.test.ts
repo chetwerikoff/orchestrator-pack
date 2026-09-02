@@ -848,6 +848,41 @@ describe('Issue #1887 strict-descendant findings settlement', () => {
     expect(state.smokeOrdering?.reviewSettledHeadSha).toBe(current);
   });
 
+  it('latches a clean T2 terminal without publication evidence', () => {
+    const storeOptions = options();
+    const head = sha('a');
+    let state = initializePackReviewAuthority({
+      prNumber: 1889,
+      headSha: head,
+      tier: 'T2',
+      options: storeOptions,
+    });
+    state = commitPackReviewTerminal({
+      prNumber: 1889,
+      expectedTransitionSeq: state.transitionSeq,
+      terminal: {
+        schemaVersion: 1,
+        terminalContractVersion: 2,
+        terminalSource: 'normal',
+        runId: 'issue-1887-t2-clean',
+        targetSha: head,
+        reviewVerdict: 'clean',
+        findingCount: 0,
+        findingsDigest: 'clean',
+        logicalRoundOrdinal: 1,
+      },
+      status: 'clean',
+      findingCount: 0,
+      options: storeOptions,
+    });
+    expect(state.cycle).toMatchObject({
+      state: 'closed',
+      consumedRoundOrdinals: [1],
+      reviewStageComplete: true,
+    });
+    expect(state.publication).toBeUndefined();
+  });
+
   it('settles T3 round one on a descendant but leaves round two required', () => {
     const storeOptions = options();
     const reviewed = sha('e');
