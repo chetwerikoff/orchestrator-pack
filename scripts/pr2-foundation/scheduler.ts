@@ -381,14 +381,12 @@ function startSchedulerMailReconcileLoop(
   let stopped = false;
   let pending: Promise<void> | undefined;
   let latest: SchedulerMailReconcileResult | undefined;
-  let failure: unknown;
   const deliveryEvidence: SchedulerMailReconcileResult['deliveryEvidence'][number][] = [];
   const invoke = (): void => {
     if (stopped || pending) return;
     pending = Promise.resolve()
       .then(() => reconcile!())
       .then((result) => {
-        failure = undefined;
         for (const evidence of result.deliveryEvidence) {
           if (!deliveryEvidence.some((candidate) => candidate.messageId === evidence.messageId)) {
             deliveryEvidence.push(evidence);
@@ -398,7 +396,7 @@ function startSchedulerMailReconcileLoop(
           ? result
           : { ...result, deliveryEvidence: [...deliveryEvidence] };
       })
-      .catch((error: unknown) => { failure = error; })
+      .catch(() => undefined)
       .finally(() => { pending = undefined; });
   };
   invoke();
@@ -409,7 +407,6 @@ function startSchedulerMailReconcileLoop(
       stopped = true;
       clearInterval(timer);
       if (awaitPending && pending) await pending;
-      if (awaitPending && failure !== undefined) throw failure;
       return latest;
     },
   };
@@ -468,7 +465,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
         observerFailure.handoff,
         observerFailure.identity,
       );
-      await mailReconcileLoop?.stop(false);
+      orchestrationMailReconcile = await mailReconcileLoop?.stop(true);
       if (!fleetEscalation) throw new Error(`scheduler_observer_untrusted:${observerFailureReason}`);
       return {
         attempted: 0,
@@ -477,6 +474,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
         observerFailure: observerFailureReason,
         ...(orchestratorRequired ? { orchestratorRequired: true } : {}),
         fleetEscalation,
+        ...(orchestrationMailReconcile ? { orchestrationMailReconcile } : {}),
       };
     }
     observer = completed.value;
@@ -498,7 +496,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
     orchestratorRequired = handoff.required;
     fleetEscalation = await evaluateFleetEscalation(boundary, handoff, observer);
     if (fleetNudge.status === 'failed') {
-      await mailReconcileLoop?.stop(false);
+      orchestrationMailReconcile = await mailReconcileLoop?.stop(true);
       return {
         attempted: 0,
         started: 0,
@@ -507,6 +505,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
         fleetNudge,
         ...(orchestratorRequired ? { orchestratorRequired: true } : {}),
         ...(fleetEscalation ? { fleetEscalation } : {}),
+        ...(orchestrationMailReconcile ? { orchestrationMailReconcile } : {}),
       };
     }
   }
@@ -539,7 +538,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
     ...(dispatchTerminalMailPulse ? { dispatchTerminalMailPulse } : {}),
   };
   } finally {
-    await mailReconcileLoop?.stop(false);
+    await mailReconcileLoop?.stop(true);
   }
 }
 
@@ -669,7 +668,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
     ? undefined
     : startSchedulerMailReconcileLoop(executeOrchestrationMailReconcile, cadence);
   const repository = await resolveRepositoryFromRepoRoot(repoRoot).catch(async (error) => {
-    await preloadedOrchestrationMailReconcileLoop?.stop(false);
+    await preloadedOrchestrationMailReconcileLoop?.stop(true);
     throw error;
   });
   const scopedAssignment = storedAssignments?.find((assignment) => assignment.repository === repository);

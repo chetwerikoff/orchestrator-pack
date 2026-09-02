@@ -1770,6 +1770,39 @@ describe('orchestration mail reconciliation', () => {
     ]);
   });
 
+  it('falls back to the bound terminal when a successful Run peek omits the message', () => {
+    const target = worker('term_run_empty_peek');
+    const message = {
+      id: 'msg_run_empty_peek',
+      runId: 'run_empty_peek',
+      recipient: 'run:run_empty_peek',
+      consumed: false,
+    };
+    const calls: string[][] = [];
+    const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => {
+      calls.push([...args]);
+      if (args[1] === 'run-show') {
+        return { ok: true, result: { run: { id: message.runId, coordinator_pane_key: 'pane-empty-peek' } } as T };
+      }
+      if (args[1] === 'check' && args.includes('--run')) {
+        return { ok: true, result: { messages: [] } as T };
+      }
+      if (args[1] === 'check' && args.includes('--terminal')) {
+        return { ok: true, result: { messages: [{ id: message.id }] } as T };
+      }
+      return { ok: true, result: {} as T };
+    };
+    const adapter = {
+      findWorkerByPaneKey: () => ({ status: 'ok' as const, value: target }),
+    } as unknown as RuntimeAdapter;
+    const deps = createOrcaMessageSubmitDeps(adapter, undefined, runJson);
+    expect(deps.isMessageRetrievable?.(message, target)).toEqual({ ok: true });
+    expect(calls).toEqual([
+      ['orchestration', 'check', '--run', message.runId, '--peek'],
+      ['orchestration', 'check', '--terminal', target.identity.id, '--peek'],
+    ]);
+  });
+
   it('prioritizes unseen mail within a bounded recipient-group poll', async () => {
     const target = worker('term_bounded_new_mail');
     const submitted: RuntimeWorkerIdentity[] = [];

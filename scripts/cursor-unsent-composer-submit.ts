@@ -1356,11 +1356,14 @@ export function createOrcaMessageSubmitDeps(
     },
     isMessageRetrievable: (message, worker) => {
       const checkOptions = { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS };
-      let observed = message.recipient.startsWith('run:')
+      const runRecipient = message.recipient.startsWith('run:');
+      let observed = runRecipient
         ? runJson<OrcaInboxFullResult>(['orchestration', 'check', '--run', message.runId, '--peek'], checkOptions)
         : runJson<OrcaInboxFullResult>(['orchestration', 'check', '--terminal', worker.identity.id, '--peek'], checkOptions);
-      if (!observed.ok && message.recipient.startsWith('run:') && observed.error?.code === 'consumer_fenced') {
-        // A fenced Run consumer can still expose the exact unread message on its bound terminal.
+      const runPeekMissingMessage = runRecipient && observed.ok
+        && !(observed.result?.messages ?? []).some((row) => row.id?.trim() === message.id);
+      if (runRecipient && ((!observed.ok && observed.error?.code === 'consumer_fenced') || runPeekMissingMessage)) {
+        // A Run peek may be empty even while the bound terminal exposes the unread message.
         observed = runJson<OrcaInboxFullResult>(['orchestration', 'check', '--terminal', worker.identity.id, '--peek'], checkOptions);
       }
       if (!observed.ok) return { ok: false, reason: observed.error?.code ?? 'orchestration_check_unavailable' };

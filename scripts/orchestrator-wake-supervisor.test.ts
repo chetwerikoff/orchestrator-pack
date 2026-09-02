@@ -816,8 +816,9 @@ describe('Issue #1895 scheduler mail cadence', () => {
       }, env);
       await new Promise<void>((resolve) => setTimeout(resolve, 10));
       expect(reconcileStarted).toBe(true);
-      releaseReconcile();
+      const releaseTimer = setTimeout(releaseReconcile, 20);
       const result = await tick;
+      clearTimeout(releaseTimer);
       expect(reconcileFinished).toBe(true);
       expect(result.fleetNudge?.status).toBe('failed');
     } finally {
