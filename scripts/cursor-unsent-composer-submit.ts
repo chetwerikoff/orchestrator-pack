@@ -377,7 +377,8 @@ interface EpisodeRecord {
   readonly stableKey?: string;
   readonly nextEligibleAt: number;
   readonly backoffMs?: number;
-  readonly state: 'claimed' | 'pointer-visible' | 'confirmed';
+  readonly reason?: string;
+  readonly state: 'claimed' | 'pointer-visible' | 'confirmed' | 'refused';
 }
 
 interface PersistedReconcileState {
@@ -427,13 +428,16 @@ function loadReconcileState(path: string): PersistedReconcileState {
           recipient: row.recipient,
           workerKey: row.workerKey,
           ...(typeof row.stableKey === 'string' && row.stableKey.trim() ? { stableKey: row.stableKey.trim() } : {}),
+          ...(typeof row.reason === 'string' && row.reason.trim() ? { reason: row.reason.trim() } : {}),
           nextEligibleAt: row.nextEligibleAt,
           ...(typeof row.backoffMs === 'number' ? { backoffMs: row.backoffMs } : {}),
           state: row.state === 'confirmed' || row.sealed === true
             ? 'confirmed'
             : row.state === 'pointer-visible'
               ? 'pointer-visible'
-              : 'claimed',
+              : row.state === 'refused'
+                ? 'refused'
+                : 'claimed',
         };
       }
     }
@@ -1041,6 +1045,12 @@ async function submitOrcaMessageDeliveryPointerForMessage(
       delete state.episodes[legacy[0]];
     }
   }
+  if (existing?.state === 'refused') {
+    const refusalReason = existing.reason ?? 'pointer_absent_orca_did_not_notify';
+    if (now < existing.nextEligibleAt) return deliveryNoEffect(refusalReason, worker, false);
+    if (state) delete state.episodes[key];
+    existing = undefined;
+  }
 
   const control = deps.submitDeps.composerControl?.(worker.identity);
 
@@ -1165,7 +1175,22 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     return deliveryNoEffect('orchestration_episode_backoff', worker, false);
   }
   if (composerKind === 'empty' && !alreadyShown && !existing) {
-    return deliveryNoEffect('pointer_absent_orca_did_not_notify', worker);
+    const refusalReason = 'pointer_absent_orca_did_not_notify';
+    if (state) {
+      state.episodes[key] = {
+        messageId: message.id,
+        runId: message.runId,
+        recipient: message.recipient,
+        workerKey: workerKey(worker.identity),
+        ...(stableKey ? { stableKey } : {}),
+        reason: refusalReason,
+        nextEligibleAt: now + priorBackoff,
+        backoffMs: nextBackoff,
+        state: 'refused',
+      };
+      if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
+    }
+    return deliveryNoEffect(refusalReason, worker);
   }
   if (!alreadyShown && !(existing && composerKind === 'empty')) {
     return deliveryNoEffect('composer_not_orchestration_pointer', worker);

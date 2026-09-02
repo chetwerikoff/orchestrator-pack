@@ -1945,7 +1945,7 @@ describe('orchestration mail reconciliation', () => {
     expect(state.episodes[key]).toBeUndefined();
   });
 
-  it('does not synthesize a pointer when Orca did not notify the composer', async () => {
+  it('does not synthesize a pointer and records the refusal episode when Orca did not notify the composer', async () => {
     const target = worker('term_definitive_write_failure');
     const root = mkdtempSync(join(tmpdir(), 'opk-definitive-write-failure-'));
     const statePath = join(root, 'orchestration-mail-reconcile.json');
@@ -1978,12 +1978,16 @@ describe('orchestration mail reconciliation', () => {
     try {
       const first = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 1_000 });
       const second = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 61_001 });
-      const persisted = JSON.parse(readFileSync(statePath, 'utf8')) as { episodes: Record<string, unknown> };
+      const persisted = JSON.parse(readFileSync(statePath, 'utf8')) as { episodes: Record<string, { messageId: string; reason?: string; state: string }> };
       expect(first.terminals[0]?.reason).toBe('pointer_absent_orca_did_not_notify');
       expect(second.terminals[0]?.reason).toBe('pointer_absent_orca_did_not_notify');
       expect(writes).toBe(0);
       expect(submitted).toHaveLength(0);
-      expect(Object.keys(persisted.episodes)).toHaveLength(0);
+      expect(Object.values(persisted.episodes)).toEqual([expect.objectContaining({
+        messageId: message.id,
+        reason: 'pointer_absent_orca_did_not_notify',
+        state: 'refused',
+      })]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
