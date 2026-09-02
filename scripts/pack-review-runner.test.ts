@@ -1115,7 +1115,7 @@ describe('Issue #1887 immediate final-cap descendant reconciliation', () => {
       headSha: current,
       finalCapSettlement: true,
       settled: true,
-      reason: 'final_cap_fix_settled',
+      reason: 'final_cap_descendant_settled',
     }));
     const settled = readPackReviewAuthority(prNumber, authorityOptions);
     expect(settled?.currentHeadSha).toBe(current);
