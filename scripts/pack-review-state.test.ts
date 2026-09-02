@@ -13,6 +13,7 @@ import {
   createInitialPackReviewAuthority,
   initializePackReviewAuthority,
   observePackReviewHead,
+  packReviewFindingsSatisfiedByStrictDescendant,
   PackReviewAuthorityError,
   readPackReviewAuthority,
   recordPackReviewPublication,
@@ -20,6 +21,7 @@ import {
   retainPersistedOpenCycle,
   selectPackReviewGptSourceCardinality,
   selectPackReviewEvidence,
+  settleLogicalPackReviewFindingsByStrictDescendant,
   stagePackReviewImmutableRecord,
   terminalConsumesCapSlot,
   validateTerminalV2,
@@ -768,5 +770,129 @@ describe('Issue #1276 GPT aggregate/source census settlement', () => {
     }, { projectId: 'orchestrator-pack', storeRoot })).toThrow(
       /reviewVerdict does not match terminal source census/,
     );
+  });
+});
+
+
+describe('Issue #1887 strict-descendant findings settlement', () => {
+  it('requires different heads and positive ancestry', () => {
+    const head = sha('a');
+    const next = sha('b');
+    expect(packReviewFindingsSatisfiedByStrictDescendant({
+      reviewedHeadSha: head,
+      currentHeadSha: head,
+      reviewedHeadIsAncestor: true,
+    })).toBe(false);
+    expect(packReviewFindingsSatisfiedByStrictDescendant({
+      reviewedHeadSha: head,
+      currentHeadSha: next,
+      reviewedHeadIsAncestor: false,
+    })).toBe(false);
+    expect(packReviewFindingsSatisfiedByStrictDescendant({
+      reviewedHeadSha: head,
+      currentHeadSha: next,
+      reviewedHeadIsAncestor: true,
+    })).toBe(true);
+  });
+
+  it('closes a T2 findings round after one strict descendant without triage evidence', () => {
+    const storeOptions = options();
+    const reviewed = sha('c');
+    const current = sha('d');
+    let state = initializePackReviewAuthority({
+      prNumber: 1887,
+      headSha: reviewed,
+      tier: 'T2',
+      options: storeOptions,
+    });
+    state = commitPackReviewTerminal({
+      prNumber: 1887,
+      expectedTransitionSeq: state.transitionSeq,
+      terminal: {
+        ...findingsTerminal('issue-1887-t2', reviewed),
+        logicalRoundOrdinal: 1,
+      },
+      status: 'changes_requested',
+      findingCount: 1,
+      options: storeOptions,
+    });
+    expect(state.cycle).toMatchObject({
+      state: 'at_cap_open_findings',
+      consumedRoundOrdinals: [1],
+    });
+
+    state = observePackReviewHead({
+      prNumber: 1887,
+      expectedTransitionSeq: state.transitionSeq,
+      headSha: current,
+      options: storeOptions,
+    });
+    expect(state.cycle?.state).toBe('at_cap_continuation_required');
+
+    state = settleLogicalPackReviewFindingsByStrictDescendant({
+      prNumber: 1887,
+      expectedTransitionSeq: state.transitionSeq,
+      reviewedHeadSha: reviewed,
+      currentHeadSha: current,
+      reviewedHeadIsAncestor: true,
+      options: storeOptions,
+    });
+    expect(state.cycle).toMatchObject({
+      state: 'closed',
+      consumedRoundOrdinals: [1],
+      reviewStageComplete: true,
+    });
+    expect(state.triage).toBeUndefined();
+    expect(state.smokeOrdering?.reviewSettledHeadSha).toBe(current);
+  });
+
+  it('settles T3 round one on a descendant but leaves round two required', () => {
+    const storeOptions = options();
+    const reviewed = sha('e');
+    const current = sha('f');
+    let state = initializePackReviewAuthority({
+      prNumber: 1888,
+      headSha: reviewed,
+      tier: 'T3',
+      options: storeOptions,
+    });
+    state = commitPackReviewTerminal({
+      prNumber: 1888,
+      expectedTransitionSeq: state.transitionSeq,
+      terminal: {
+        ...findingsTerminal('issue-1887-t3-round1', reviewed),
+        logicalRoundOrdinal: 1,
+      },
+      status: 'changes_requested',
+      findingCount: 1,
+      options: storeOptions,
+    });
+    state = observePackReviewHead({
+      prNumber: 1888,
+      expectedTransitionSeq: state.transitionSeq,
+      headSha: current,
+      options: storeOptions,
+    });
+    state = settleLogicalPackReviewFindingsByStrictDescendant({
+      prNumber: 1888,
+      expectedTransitionSeq: state.transitionSeq,
+      reviewedHeadSha: reviewed,
+      currentHeadSha: current,
+      reviewedHeadIsAncestor: true,
+      options: storeOptions,
+    });
+    expect(state.cycle).toMatchObject({
+      state: 'open',
+      consumedRoundOrdinals: [1],
+    });
+    expect(state.cycle?.reviewStageComplete).not.toBe(true);
+
+    state = observePackReviewHead({
+      prNumber: 1888,
+      expectedTransitionSeq: state.transitionSeq,
+      headSha: current,
+      options: storeOptions,
+    });
+    expect(state.terminal).toBeUndefined();
   });
 });
