@@ -9,6 +9,7 @@ import {
   classifyCursorComposer,
   composerPokeFingerprint,
   createAdapterSubmitDeps,
+  createOrcaMessageSubmitDeps,
   createUnsentComposerWatchState,
   cursorComposerLooksUnsent,
   loadSubmittedFingerprints,
@@ -26,7 +27,8 @@ import {
   workerKey,
   type UnsentComposerSubmitDeps,
 } from './cursor-unsent-composer-submit.ts';
-import type { RuntimeComposerControlRequest, RuntimeWorker, RuntimeWorkerIdentity } from './runtime/contracts.ts';
+import type { OrcaJsonResponse } from './orca-runtime/native.ts';
+import type { RuntimeAdapter, RuntimeComposerControlRequest, RuntimeWorker, RuntimeWorkerIdentity } from './runtime/contracts.ts';
 
 const POKE = 'You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run `orca orchestration check --run run_d613a86c140a`.';
 const DISPATCH_POKE = 'You have 1 orchestration message. Read and act on your orchestration message. Run `orca orchestration check`.';
@@ -1730,6 +1732,42 @@ describe('orchestration mail reconciliation', () => {
     }]);
     expect(submitted).toHaveLength(1);
     expect(retrievabilityChecks).toBe(1);
+  });
+
+  it('falls back to exact terminal peek when a Run consumer is fenced', () => {
+    const target = worker('term_fenced_run');
+    const message = {
+      id: 'msg_fenced_run',
+      runId: 'run_fenced_run',
+      recipient: 'run:run_fenced_run',
+      consumed: false,
+    };
+    const calls: string[][] = [];
+    const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => {
+      calls.push([...args]);
+      if (args[1] === 'run-show') {
+        return { ok: true, result: { run: { id: message.runId, coordinator_pane_key: 'pane-fenced' } } as T };
+      }
+      if (args[1] === 'check' && args.includes('--run')) {
+        return { ok: false, error: { code: 'consumer_fenced' } };
+      }
+      if (args[1] === 'check' && args.includes('--terminal')) {
+        return { ok: true, result: { messages: [{ id: message.id }] } as T };
+      }
+      return { ok: true, result: {} as T };
+    };
+    const adapter = {
+      findWorkerByPaneKey: () => ({ status: 'ok' as const, value: target }),
+    } as unknown as RuntimeAdapter;
+    const deps = createOrcaMessageSubmitDeps(adapter, undefined, runJson);
+    const resolved = deps.resolveWorker(message);
+    expect(resolved).toMatchObject({ ok: true, worker: target });
+    expect(deps.isMessageRetrievable?.(message, target)).toEqual({ ok: true });
+    expect(calls).toEqual([
+      ['orchestration', 'run-show', '--id', message.runId],
+      ['orchestration', 'check', '--run', message.runId, '--peek'],
+      ['orchestration', 'check', '--terminal', target.identity.id, '--peek'],
+    ]);
   });
 
   it('prioritizes unseen mail within a bounded recipient-group poll', async () => {

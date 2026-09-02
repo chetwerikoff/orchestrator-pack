@@ -1259,8 +1259,9 @@ function deliveryLookingEvidence(
 export function createOrcaMessageSubmitDeps(
   adapter: RuntimeAdapter,
   submitDeps = createAdapterSubmitDeps(adapter),
+  runJson: typeof runOrcaJson = runOrcaJson,
 ): DeliveryMessageSubmitDeps {
-  const readInbox = () => runOrcaJson<OrcaInboxFullResult>(
+  const readInbox = () => runJson<OrcaInboxFullResult>(
     ['orchestration', 'inbox', '--full', '--limit', String(ORCHESTRATION_INBOX_LIMIT)],
     { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS },
   );
@@ -1278,7 +1279,7 @@ export function createOrcaMessageSubmitDeps(
       if (message.recipient.startsWith('run:')) {
         const runId = message.recipient.slice('run:'.length).trim();
         if (runId !== message.runId) return { ok: false, reason: 'orchestration_message_run_mismatch' };
-        const response = runOrcaJson<OrcaRunShowResult>(['orchestration', 'run-show', '--id', runId], { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS });
+        const response = runJson<OrcaRunShowResult>(['orchestration', 'run-show', '--id', runId], { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS });
         if (!response.ok) return { ok: false, reason: response.error?.code ?? 'orchestration_run_unavailable' };
         if (response.result?.run?.id?.trim() !== runId) return { ok: false, reason: 'orchestration_run_binding_mismatch' };
         const paneKey = response.result?.run?.coordinator_pane_key?.trim() ?? '';
@@ -1319,7 +1320,7 @@ export function createOrcaMessageSubmitDeps(
     },
     resolveWorker,
     observeRetrievableMessageIds: (worker) => {
-      const response = runOrcaJson<OrcaInboxFullResult>([
+      const response = runJson<OrcaInboxFullResult>([
         'orchestration', 'check', '--terminal', worker.identity.id, '--peek',
       ], { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS });
       if (!response.ok) return { ok: false, reason: response.error?.code ?? 'orchestration_check_unavailable' };
@@ -1329,10 +1330,14 @@ export function createOrcaMessageSubmitDeps(
       })) };
     },
     isMessageRetrievable: (message, worker) => {
-      const checkArgs = message.recipient.startsWith('run:')
-        ? ['orchestration', 'check', '--run', message.runId, '--peek']
-        : ['orchestration', 'check', '--terminal', worker.identity.id, '--peek'];
-      const observed = runOrcaJson<OrcaInboxFullResult>(checkArgs, { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS });
+      const checkOptions = { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS };
+      let observed = message.recipient.startsWith('run:')
+        ? runJson<OrcaInboxFullResult>(['orchestration', 'check', '--run', message.runId, '--peek'], checkOptions)
+        : runJson<OrcaInboxFullResult>(['orchestration', 'check', '--terminal', worker.identity.id, '--peek'], checkOptions);
+      if (!observed.ok && message.recipient.startsWith('run:') && observed.error?.code === 'consumer_fenced') {
+        // A fenced Run consumer can still expose the exact unread message on its bound terminal.
+        observed = runJson<OrcaInboxFullResult>(['orchestration', 'check', '--terminal', worker.identity.id, '--peek'], checkOptions);
+      }
       if (!observed.ok) return { ok: false, reason: observed.error?.code ?? 'orchestration_check_unavailable' };
       return (observed.result?.messages ?? []).some((row) => row.id?.trim() === message.id)
         ? { ok: true }
