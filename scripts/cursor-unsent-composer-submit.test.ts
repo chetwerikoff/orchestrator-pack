@@ -1732,6 +1732,46 @@ describe('orchestration mail reconciliation', () => {
     expect(retrievabilityChecks).toBe(1);
   });
 
+  it('prioritizes an unseen recipient group in bounded supervisor polls', async () => {
+    const target = worker('term_bounded_new_mail');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const rows = [
+      { id: 'msg_backlog', run_id: 'run_backlog', to_handle: 'term_old_backlog', read: 0 },
+      { id: 'msg_new', run_id: 'run_new', to_handle: 'run:run_new', read: 0 },
+    ];
+    const message = { id: 'msg_new', runId: 'run_new', recipient: 'run:run_new', consumed: false };
+    const resolvedRecipients: string[] = [];
+    const deps = {
+      readInbox: () => ({ ok: true as const, result: { messages: rows } }),
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: (candidate: { readonly recipient: string }) => {
+        resolvedRecipients.push(candidate.recipient);
+        return candidate.recipient === message.recipient
+          ? { ok: true as const, worker: target }
+          : { ok: true as const, worker: null };
+      },
+      isMessageRetrievable: () => ({ ok: true as const }),
+      submitDeps: depsFor({ [target.identity.id]: [buildDeliveryPointer(message), ...CURSOR_FOOTER] }, {
+        submitted,
+        read: () => ({ ok: true as const, lines: submitted.length === 0 ? [buildDeliveryPointer(message), ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER], source: 'screen' as const }),
+      }),
+    };
+    const root = mkdtempSync(join(tmpdir(), 'opk-reconcile-bounded-poll-'));
+    const ledgerPath = join(root, 'orchestration-mail-reconcile.json');
+    const lockPath = join(root, 'orchestration-mail-reconcile.lock');
+    writeFileSync(ledgerPath, JSON.stringify({ messages: { msg_backlog: 900 }, episodes: {} }));
+    try {
+      const result = await runOrchestrationMailReconcileTick(deps, { ledgerPath, lockPath, now: () => 1_000, maxRecipientGroups: 1 });
+      expect(result.attempted).toBe(1);
+      expect(result.nudged).toBe(1);
+      expect(submitted).toHaveLength(1);
+      expect(resolvedRecipients).toEqual([message.recipient]);
+      expect(JSON.parse(readFileSync(ledgerPath, 'utf8')).messages.msg_backlog).toBe(900);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('enters one Orca-notified message when terminal check --peek retrieves it', async () => {
     const target = worker('term_retrievable');
     const submitted: RuntimeWorkerIdentity[] = [];

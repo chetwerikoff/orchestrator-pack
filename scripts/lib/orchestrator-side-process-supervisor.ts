@@ -179,6 +179,7 @@ async function runSupervisorMailReconcileProcess(
       '--experimental-strip-types',
       path.join(options.repoRoot, 'scripts', 'cursor-unsent-composer-submit.ts'),
       '--reconcile',
+      '--max-recipient-groups', '1',
     ],
     cwd: options.repoRoot,
     inheritParentEnv: true,
