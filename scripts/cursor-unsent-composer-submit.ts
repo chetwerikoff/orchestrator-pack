@@ -68,7 +68,10 @@ function trimNonEmpty(lines: readonly string[]): string[] {
   return lines.map((line) => line.trim()).filter(Boolean);
 }
 
-function composerContentLines(lines: readonly string[]): string[] {
+function composerContentLines(
+  lines: readonly string[],
+  includeTrailingNotices = false,
+ ): string[] {
   const content = trimNonEmpty(lines)
     .filter((line) => !LONE_ARROW.test(line) && !UNBOXED_CTRL_C.test(line))
     .map((line) => line.replace(/^→\s*/u, '').trim())
@@ -76,11 +79,13 @@ function composerContentLines(lines: readonly string[]): string[] {
   // A live orchestration notice can be rendered inside the box after the
   // user's text. Preserve a notice in the first line for compatibility with
   // a user-entered poke, but exclude trailing notices from the fingerprint.
-  return content.filter((line, index) => index === 0 || !ORCHESTRATION_NOTICE.test(line));
+  return includeTrailingNotices
+    ? content
+    : content.filter((line, index) => index === 0 || !ORCHESTRATION_NOTICE.test(line));
 }
 
-function unboxedComposerLines(preview: string): string[] {
-  const lines = composerContentLines(preview.split(/\r?\n/));
+function unboxedComposerLines(preview: string, includeTrailingNotices = false): string[] {
+  const lines = composerContentLines(preview.split(/\r?\n/), includeTrailingNotices);
   let end = lines.length;
   while (
     end > 0
@@ -127,10 +132,9 @@ export function composerPokeFingerprint(preview: string): string {
 
 function exactOrchestrationPointerFingerprint(preview: string): string | undefined {
   const interior = composerInterior(preview);
-  const raw = interior ?? preview.split(/\r?\n/u);
-  const rawHeaders = raw.join('\n').match(/You have \d+ orchestration messages?\b/giu);
-  if (rawHeaders?.length !== 1) return undefined;
-  const source = interior ? composerContentLines(interior) : unboxedComposerLines(preview);
+  const source = interior
+    ? composerContentLines(interior, true)
+    : unboxedComposerLines(preview, true);
   // Cursor may wrap between words or inside the command token. Try both
   // reconstructions, but reject stacked notices and return only the command.
   const candidates = [source.join(''), source.join(' '), preview.trim()];
@@ -720,10 +724,6 @@ function sleepAsync(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-function isExactOrchestrationPointer(shown: ComposerReadResult): boolean {
-  if (!shown.ok) return false;
-  return exactOrchestrationPointerFingerprint(shown.lines.join('\n')) !== undefined;
-}
 
 export function buildDeliveryPointer(message: DeliveryMessage): string {
   const check = message.recipient.startsWith('dispatch:')
@@ -739,8 +739,16 @@ export function buildDeliveryPointer(message: DeliveryMessage): string {
   return `You have 1 orchestration message. ${prose} Run \`${check}\`.`;
 }
 
-function composerShowsDeliveryPointer(shown: ComposerReadResult): boolean {
-  return isExactOrchestrationPointer(shown);
+function pointerMatchesDelivery(
+  pointer: string,
+  message: DeliveryMessage,
+  worker: RuntimeWorker,
+ ): boolean {
+  if (pointer === 'orca orchestration check') return message.recipient.startsWith('dispatch:');
+  const runId = pointer.match(/^orca orchestration check --run (\S+)$/u)?.[1];
+  if (runId) return runId === message.runId;
+  const terminal = pointer.match(/^orca orchestration check --terminal (\S+)$/u)?.[1];
+  return terminal === worker.identity.id;
 }
 
 /** Immediate delivery-scoped observation plus one bounded render-race retry. */
@@ -1134,7 +1142,11 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     : deps.submitDeps.read(worker.identity);
   if (!shown.ok) return deliveryNoEffect(shown.reason, worker, false);
   const composerKind = classifyCursorComposer(shown.lines.join('\n'));
-  const alreadyShown = composerKind !== 'empty' && composerShowsDeliveryPointer(shown);
+  const observedPointer = exactOrchestrationPointerFingerprint(shown.lines.join('\n'));
+  const alreadyShown = composerKind !== 'empty' && observedPointer !== undefined;
+  if (alreadyShown && !pointerMatchesDelivery(observedPointer, message, worker)) {
+    return deliveryNoEffect('orchestration_pointer_target_mismatch', worker);
+  }
   const contradicted = existing?.state === 'confirmed' && alreadyShown && now >= existing.nextEligibleAt;
   if (contradicted) {
     const liveness = currentLiveness(deps.submitDeps, worker.identity);

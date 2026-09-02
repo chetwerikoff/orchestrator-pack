@@ -170,6 +170,29 @@ d1ac011935\`.
 `)).toBe(true);
   });
 
+  it('accepts a pointer when the wrapped count is reconstructed', async () => {
+    const target = worker('term_wrapped_count');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let livenessCalls = 0;
+    const result = await submitUnsentCursorComposerOnceForWorker(target, {
+      ...depsFor({}, {
+        submitted,
+        liveness: () => livenessCalls++ === 0 ? 'idle' : 'busy',
+        read: () => ({
+          ok: true as const,
+          lines: [
+            'You have',
+            '3 orchestration messages. Run `orca orchestration check --run run_wrapped_count`.',
+            ...CURSOR_FOOTER,
+          ],
+          source: 'screen' as const,
+        }),
+      }),
+    });
+    expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
+    expect(submitted).toEqual([target.identity]);
+  });
+
   it('does not submit when the composer box has a poke plus typed text', () => {
     expect(classifyCursorComposer(`
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -814,7 +837,7 @@ describe('delivery-triggered composer submission', () => {
         writes += 1;
         return { status: 'dispatched' as const };
       },
-      submitDeps: depsFor({}, { submitted, liveness: () => 'gone', read: () => ({ ok: true as const, lines: [POKE, ...CURSOR_FOOTER], source: 'screen' as const }) }),
+      submitDeps: depsFor({}, { submitted, liveness: () => 'gone', read: () => ({ ok: true as const, lines: [buildDeliveryPointer(message), ...CURSOR_FOOTER], source: 'screen' as const }) }),
       episodeState: { messages: {}, episodes: {} },
     });
 
@@ -1222,11 +1245,15 @@ describe('delivery-triggered composer submission', () => {
     const target = worker('term_concatenated_pointer');
     const submitted: RuntimeWorkerIdentity[] = [];
     let writes = 0;
-    const notice = [POKE, POKE];
-    const result = await submitOrcaMessageDeliveryPointer('msg_concatenated_pointer', {
-      lookupMessage: () => ({ ok: true as const, message: {
-        id: 'msg_concatenated_pointer', runId: 'run_concatenated_pointer', recipient: target.identity.id, consumed: false,
-      } }),
+    const message = {
+      id: 'msg_concatenated_pointer',
+      runId: 'run_concatenated_pointer',
+      recipient: target.identity.id,
+      consumed: false,
+    };
+    const notice = [buildDeliveryPointer(message), buildDeliveryPointer(message)];
+    const result = await submitOrcaMessageDeliveryPointer(message.id, {
+      lookupMessage: () => ({ ok: true as const, message }),
       resolveWorker: () => ({ ok: true as const, worker: target }),
       writePointer: () => { writes += 1; return { status: 'dispatched' as const }; },
       submitDeps: depsFor({}, {
@@ -1237,6 +1264,38 @@ describe('delivery-triggered composer submission', () => {
     expect(result.terminals[0]).toMatchObject({ reason: 'composer_not_orchestration_pointer', enter: false });
     expect(writes).toBe(0);
     expect(submitted).toHaveLength(0);
+  });
+
+  it.each([
+    ['run', 'run_current', 'run_other'],
+    ['terminal', TERMINAL_HANDLE, 'term_other'],
+  ] as const)('does not Enter for a pointer bound to another %s', async (kind, recipient, wrongTarget) => {
+    const target = worker(kind === 'terminal' ? TERMINAL_HANDLE : 'term_binding_run');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const message = {
+      id: `msg_binding_${kind}`,
+      runId: 'run_current',
+      recipient: kind === 'run' ? `run:${recipient}` : recipient,
+      consumed: false,
+    };
+    const result = await submitOrcaMessageDeliveryPointer(message.id, {
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      submitDeps: depsFor({}, {
+        submitted,
+        liveness: () => 'idle',
+        read: () => ({
+          ok: true as const,
+          lines: [`You have 1 orchestration message. Run \`orca orchestration check --${kind} ${wrongTarget}\`.`, ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        }),
+      }),
+    });
+    expect(result.terminals[0]).toMatchObject({
+      reason: 'orchestration_pointer_target_mismatch',
+      enter: false,
+    });
+    expect(submitted).toEqual([]);
   });
 
   it('resolves one exact terminal before asynchronous rendering and duplicate no-effect', async () => {
@@ -2244,7 +2303,7 @@ describe('orchestration mail reconciliation', () => {
         liveness,
         read: () => ({
           ok: true as const,
-          lines: pointerVisible ? [POKE, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          lines: pointerVisible ? [buildDeliveryPointer(message), ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
           source: 'screen' as const,
         }),
       }),
