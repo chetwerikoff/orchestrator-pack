@@ -1419,8 +1419,7 @@ function reviewObligationsSettled(authority: PackReviewAuthorityDocument): boole
     if (cycle.state === 'closed' && clearTerminal) {
       return true;
     }
-    return (cycle.state === 'at_cap_open_findings' || cycle.state === 'at_cap_continuation_required')
-      && authority.triage?.verdict === 'DEFER';
+    return false;
   }
   if (cycle.state === 'closed') return true;
   if (reviewStatus === 'clean' || reviewStatus === 'up_to_date' || reviewStatus === 'commented') return true;
@@ -1510,37 +1509,16 @@ export function commitPackReviewTriage(input: {
               : 'automatic DEFER requires final-cap continuation, exact-head worker smoke PASS, no-intersection scope evidence, and exact finding-resolution evidence',
           );
         }
-        if (priorRoundFindingSettlement) {
-          current.cycle!.state = 'open';
-          current.cycle!.closedAtUtc = undefined;
-          current.cycle!.atCapHash = undefined;
-        }
       } else if (!['BLOCK', 'DEFER'].includes(input.triage.verdict)) {
         throw new PackReviewAuthorityError('triage_invalid', 'architect verdict must be BLOCK or DEFER');
-      } else if (input.triage.verdict === 'DEFER'
-          && current.cycle?.state === 'open_findings'
-          && isLogicalRoundCycle(current.cycle)
-          && cycleConsumedCount(current.cycle) < current.cycle.frozenCap
-          && current.terminal?.reviewVerdict === 'findings') {
-        // Existing architect adjudication is the explicit reject/resolve path.
-        // It settles this round's findings but cannot complete a pre-cap T3 stage.
-        current.cycle.state = 'open';
-        current.cycle.closedAtUtc = undefined;
-        current.cycle.atCapHash = undefined;
       }
       current.triage = { ...input.triage };
       const automaticFinalFixSettlement = input.triage.source === 'automatic'
         && input.triage.verdict === 'DEFER'
-        && current.cycle?.state !== 'open';
-      const architectFinalLogicalSettlement = input.triage.source === 'architect'
-        && input.triage.verdict === 'DEFER'
         && current.cycle != null
-        && isLogicalRoundCycle(current.cycle)
-        && cycleConsumedCount(current.cycle) === current.cycle.frozenCap
-        && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(current.cycle.state)
-        && current.terminal?.reviewVerdict === 'findings';
+        && !isLogicalRoundCycle(current.cycle)
+        && current.cycle.state !== 'open';
       if (automaticFinalFixSettlement
-          || architectFinalLogicalSettlement
           || (current.publication?.status === 'succeeded' && reviewObligationsSettled(current))) {
         markReviewStageComplete(current, input.triage.committedAtUtc);
         current.smokeOrdering = {
