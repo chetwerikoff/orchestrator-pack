@@ -26,6 +26,7 @@ import {
   readPackReviewAuthority,
   recordPackReviewPublication,
   reconcilePackReviewTier,
+  settleLogicalPackReviewFindingsByStrictDescendant,
   smokeOrderingRequired,
   type PackReviewAuthorityDocument,
   type PackReviewAuthorityOptions,
@@ -619,7 +620,7 @@ describe('Issue #1436 smoke/review ordering', () => {
     }
   });
 
-  it('completes a logical final-finding stage after architect DEFER on a later fix head', () => {
+  it('completes a logical final-finding stage on a proven strict descendant', () => {
     const root = mkdtempSync(join(tmpdir(), 'pack-review-logical-architect-final-'));
     roots.push(root);
     const options: PackReviewAuthorityOptions = { storeRoot: root };
@@ -672,21 +673,21 @@ describe('Issue #1436 smoke/review ordering', () => {
     });
     expect(fixHead.publication).toBeUndefined();
 
-    const adjudicated = commitPackReviewTriage({
+    const settled = settleLogicalPackReviewFindingsByStrictDescendant({
       prNumber: 1826,
       expectedTransitionSeq: fixHead.transitionSeq,
-      triage: {
-        verdict: 'DEFER',
-        source: 'architect',
-        findingSnapshotDigest: 'logical-final-findings-digest',
-        actor: 'architect-fixture',
-        committedAtUtc: new Date().toISOString(),
-      },
+      reviewedHeadSha: HEAD,
+      currentHeadSha: NEXT_HEAD,
+      reviewedHeadIsAncestor: true,
       options,
     });
 
-    expect(adjudicated.cycle?.reviewStageComplete).toBe(true);
-    expect(adjudicated.smokeOrdering?.reviewSettledHeadSha).toBe(NEXT_HEAD);
+    expect(settled.cycle).toMatchObject({
+      state: 'closed',
+      reviewStageComplete: true,
+    });
+    expect(settled.triage).toBeUndefined();
+    expect(settled.smokeOrdering?.reviewSettledHeadSha).toBe(NEXT_HEAD);
   });
 
   it('derives smoke ordering applicability from the canonical smoke requirement', () => {
