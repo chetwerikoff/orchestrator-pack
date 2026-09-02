@@ -3003,9 +3003,27 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
   const prNumber = input.prNumber;
   if (!prNumber) return null;
   let authority = readPackReviewAuthority(prNumber, { storeRoot: options.storeRoot });
-  if (!authority?.cycle || authority.cycle.state !== 'at_cap_continuation_required') return null;
+  if (!authority?.cycle) return null;
+  const logicalAccounting = authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
+  const logicalFinalFindings = logicalAccounting
+    && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)
+    && authority.terminal?.reviewVerdict === 'findings';
+  if (!logicalFinalFindings && authority.cycle.state !== 'at_cap_continuation_required') return null;
+
   const currentHead = input.fixtureCurrentPrHeadSha
     ?? await resolveCurrentPrHead(input.sourceRepoRoot, options.repoSlug, prNumber);
+  if (logicalFinalFindings && currentHead.toLowerCase() !== authority.currentHeadSha.toLowerCase()) {
+    try {
+      authority = observePackReviewHead({
+        prNumber,
+        expectedTransitionSeq: authority.transitionSeq,
+        headSha: currentHead,
+        options: { storeRoot: options.storeRoot },
+      });
+    } catch {
+      authority = readPackReviewAuthority(prNumber, { storeRoot: options.storeRoot }) ?? authority;
+    }
+  }
   if (currentHead.toLowerCase() !== authority.currentHeadSha.toLowerCase()) {
     return {
       prNumber,
@@ -3015,7 +3033,6 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       nextAction: 'observe the current PR head, then rerun scoped reconcile',
     };
   }
-  const logicalAccounting = authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
   const workerOwned = authority.smokeOrdering?.workerOwned;
   if (!logicalAccounting
       && (workerOwned?.headSha !== authority.currentHeadSha || workerOwned.status !== 'passed')) {
