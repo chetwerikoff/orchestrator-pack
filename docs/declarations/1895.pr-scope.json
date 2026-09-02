@@ -1,0 +1,22 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1895,
+  "declared_paths": [
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/pr2-foundation/scheduler.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/lib/orchestrator-side-process-supervisor.ts",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/pr2-foundation/scheduler.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "source_revision": "391ed2bcb19cd9815b3cfd6b95041a6dd2c4c365"
+}

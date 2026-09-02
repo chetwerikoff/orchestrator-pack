@@ -362,6 +362,41 @@ function publishObserverFailureHandoff(
   };
 }
 
+// Mail polling must outlive the observer phase, while remaining bounded to the scheduler cadence.
+type SchedulerMailReconcileResult = import('../cursor-unsent-composer-submit.ts').OrchestrationMailReconcileResult;
+interface SchedulerMailReconcileLoop {
+  stop(awaitPending: boolean): Promise<SchedulerMailReconcileResult | undefined>;
+}
+
+function startSchedulerMailReconcileLoop(
+  boundary: SchedulerBoundary,
+  intervalMs: number,
+): SchedulerMailReconcileLoop | undefined {
+  if (!boundary.orchestrationMailReconcile) return undefined;
+  let stopped = false;
+  let pending: Promise<void> | undefined;
+  let latest: SchedulerMailReconcileResult | undefined;
+  let failure: unknown;
+  const invoke = (): void => {
+    if (stopped || pending) return;
+    pending = Promise.resolve()
+      .then(() => boundary.orchestrationMailReconcile!())
+      .then((result) => { latest = result; })
+      .catch((error: unknown) => { failure ??= error; })
+      .finally(() => { pending = undefined; });
+  };
+  invoke();
+  const timer = setInterval(invoke, Math.max(1, intervalMs));
+  return {
+    async stop(awaitPending: boolean): Promise<SchedulerMailReconcileResult | undefined> {
+      stopped = true;
+      clearInterval(timer);
+      if (awaitPending && pending) await pending;
+      if (awaitPending && failure !== undefined) throw failure;
+      return latest;
+    },
+  };
+}
 export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.ProcessEnv = process.env): Promise<{
   attempted: number;
   started: number;
@@ -382,6 +417,8 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
   let dispatchTerminalMailPulse: DispatchTerminalMailPulseResult | undefined;
   let orchestratorRequired = false;
   const schedulerIntervalMs = boundary.schedulerIntervalMs ?? 5_000; const requestedTickSequence = nextSchedulerTickSequence(boundary);
+  const mailReconcileLoop = startSchedulerMailReconcileLoop(boundary, schedulerIntervalMs);
+  try {
   if (boundary.fleetObserver) {
     const observerBoundary = boundary.fleetObserver; const observerStartMs = Date.now();
     const observerBudgetMs = observerBoundary.getEffectiveBudgetMs?.(schedulerIntervalMs) ?? Math.max(1, Math.floor(schedulerIntervalMs / 4));
@@ -410,6 +447,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
         observerFailure.handoff,
         observerFailure.identity,
       );
+      await mailReconcileLoop?.stop(false);
       if (!fleetEscalation) throw new Error(`scheduler_observer_untrusted:${observerFailureReason}`);
       return {
         attempted: 0,
@@ -439,6 +477,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
     orchestratorRequired = handoff.required;
     fleetEscalation = await evaluateFleetEscalation(boundary, handoff, observer);
     if (fleetNudge.status === 'failed') {
+      await mailReconcileLoop?.stop(false);
       return {
         attempted: 0,
         started: 0,
@@ -451,7 +490,6 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
     }
   }
   if (boundary.dispatchTerminalMailPulse) dispatchTerminalMailPulse = boundary.dispatchTerminalMailPulse();
-  if (boundary.orchestrationMailReconcile) orchestrationMailReconcile = await boundary.orchestrationMailReconcile();
   let attempted = 0; let started = 0; let skipped = 0;
   for (const candidate of boundary.listCandidates()) {
     attempted += 1; assertSchedulerEpoch(env); const fresh = await boundary.readCurrentPr(candidate); const freshHead = String(fresh.headRefOid ?? '').trim().toLowerCase();
@@ -467,6 +505,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
     if (!decision.eligible) { skipped += 1; continue; }
     assertSchedulerEpoch(env); const result = await boundary.start(candidate, freshHead); if (result.ok) started += 1; else skipped += 1;
   }
+  if (mailReconcileLoop) orchestrationMailReconcile = await mailReconcileLoop.stop(true);
   return {
     attempted,
     started,
@@ -478,6 +517,9 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
     ...(orchestrationMailReconcile ? { orchestrationMailReconcile } : {}),
     ...(dispatchTerminalMailPulse ? { dispatchTerminalMailPulse } : {}),
   };
+  } finally {
+    await mailReconcileLoop?.stop(false);
+  }
 }
 
 function productionObserverBoundary(observer: FleetObserver): SchedulerFleetObserver {
