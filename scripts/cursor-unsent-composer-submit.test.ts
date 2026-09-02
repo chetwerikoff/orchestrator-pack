@@ -1881,6 +1881,42 @@ describe('orchestration mail reconciliation', () => {
     expect(deps.writes).toBe(0);
   });
 
+  it('retries an Orca notification that appears after an initial refusal', async () => {
+    const target = worker('term_refusal_retry');
+    const runId = 'run_refusal_retry';
+    const message = { id: 'msg_refusal_retry', runId, recipient: `run:${runId}`, consumed: false };
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let pointerVisible = false;
+    const root = mkdtempSync(join(tmpdir(), 'opk-refusal-retry-'));
+    const ledgerPath = join(root, 'orchestration-mail-reconcile.json');
+    const lockPath = join(root, 'orchestration-mail-reconcile.lock');
+    const deps = {
+      readInbox: () => ({ ok: true as const, result: { messages: [{ id: message.id, run_id: message.runId, to_handle: message.recipient, read: 0 }] } }),
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      isMessageRetrievable: () => ({ ok: true as const }),
+      submitDeps: depsFor({}, {
+        submitted,
+        read: () => ({
+          ok: true as const,
+          lines: pointerVisible && submitted.length === 0 ? [buildDeliveryPointer(message), ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        }),
+      }),
+    };
+    try {
+      const first = await runOrchestrationMailReconcileTick(deps, { ledgerPath, lockPath, now: () => 1_000 });
+      pointerVisible = true;
+      const second = await runOrchestrationMailReconcileTick(deps, { ledgerPath, lockPath, now: () => 1_001 });
+      expect(first.reasons).toContain(`${message.id}:pointer_absent_orca_did_not_notify`);
+      expect(second.nudged).toBe(1);
+      expect(second.reasons).toContain(`${message.id}:enter_sent`);
+      expect(submitted).toHaveLength(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('keeps multiple unread messages distinct without pack pointer writes', async () => {
     const target = worker('term_retrievable_batch');
     const submitted: RuntimeWorkerIdentity[] = [];

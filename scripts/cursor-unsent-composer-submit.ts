@@ -1184,7 +1184,8 @@ async function submitOrcaMessageDeliveryPointerForMessage(
         workerKey: workerKey(worker.identity),
         ...(stableKey ? { stableKey } : {}),
         reason: refusalReason,
-        nextEligibleAt: now + priorBackoff,
+        // Refusal is observable, but a later Orca notification must be retried on the next poll.
+        nextEligibleAt: now,
         backoffMs: nextBackoff,
         state: 'refused',
       };
