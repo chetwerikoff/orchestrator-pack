@@ -41,7 +41,6 @@ import {
 } from './lib/pack-review-run-store.ts';
 import {
   directPackReviewPublicationHeadIsStable,
-  directReviewReconciliationRequiresDescendantFixFacts,
   listCanonicalDirectPackReviews,
   projectDirectPackReviewState,
   type GithubReviewSummary,
@@ -597,37 +596,43 @@ describe('Issue #1419 direct GitHub pack-review semantics', () => {
     });
   });
 
-  it('coarsely resolves an ancestor blocker only after the complete descendant-fix cut', () => {
+  it('settles ancestor findings on a strict descendant without lifecycle, CI, or smoke facts', () => {
     const review = directReview({ id: 10, head: h1, verdict: 'findings', blocking: true });
-    const incomplete = projectDirectPackReviewState({
+    const projection = projectDirectPackReviewState({
       reviews: [review],
       repositoryOwnerLogin: owner,
       currentHeadSha: h2,
-      workerLifecycle: 'ready_for_review',
-      requiredCiGreen: true,
+      workerLifecycle: '',
+      requiredCiGreen: false,
       exactHeadSmokePassed: false,
       isAncestor: (ancestor, descendant) => ancestor === h1 && descendant === h2,
     });
-    expect(incomplete.state).toBe('blocked');
-    expect(incomplete.unresolvedAncestorBlockingReviewIds).toEqual([10]);
-    expect(directReviewReconciliationRequiresDescendantFixFacts(incomplete)).toBe(true);
-
-    const complete = projectDirectPackReviewState({
-      reviews: [review],
-      repositoryOwnerLogin: owner,
-      currentHeadSha: h2,
-      workerLifecycle: 'completed',
-      requiredCiGreen: true,
-      exactHeadSmokePassed: true,
-      isAncestor: (ancestor, descendant) => ancestor === h1 && descendant === h2,
-    });
-    expect(complete).toMatchObject({
+    expect(projection).toMatchObject({
       hasLegitimateReview: true,
       state: 'clear',
       unresolvedBlockingReviewIds: [],
       unresolvedAncestorBlockingReviewIds: [],
     });
-    expect(directReviewReconciliationRequiresDescendantFixFacts(complete)).toBe(false);
+  });
+
+  it('keeps findings blocked when compare is unavailable or lineage is divergent', () => {
+    const review = directReview({ id: 12, head: h1, verdict: 'findings', blocking: true });
+    for (const isAncestor of [
+      () => false,
+      () => { throw new Error('compare unavailable'); },
+    ]) {
+      const projection = projectDirectPackReviewState({
+        reviews: [review],
+        repositoryOwnerLogin: owner,
+        currentHeadSha: h2,
+        workerLifecycle: 'completed',
+        requiredCiGreen: true,
+        exactHeadSmokePassed: true,
+        isAncestor,
+      });
+      expect(projection.state).toBe('blocked');
+      expect(projection.unresolvedBlockingReviewIds).toEqual([12]);
+    }
   });
 
   it('never self-clears a blocking direct review on the unchanged head', () => {
