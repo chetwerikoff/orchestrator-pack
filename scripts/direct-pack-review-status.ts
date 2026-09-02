@@ -4,7 +4,6 @@ import './toolchain/native-entrypoint-preflight.ts';
 import { resolve } from 'node:path';
 import {
   createGithubReviewTransport,
-  directReviewReconciliationRequiresDescendantFixFacts,
   parseDirectPackReviewEvidence,
   projectDirectPackReviewState,
   type GithubReviewSummary,
@@ -94,10 +93,6 @@ export async function reconcileDirectPackReviewStatus(
     exactHeadSmokePassed: false,
     isAncestor: deps.isAncestor,
   });
-
-  if (directReviewReconciliationRequiresDescendantFixFacts(direct)) {
-    return { ok: true, skipped: true, reason: 'ancestor_blocker_requires_descendant_fix_facts' };
-  }
 
   const projection = projectPackReviewSemanticStatus({
     runner: deps.runnerStatus(),

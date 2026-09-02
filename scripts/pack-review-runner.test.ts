@@ -8,11 +8,14 @@ import {
   observeGptPackReviewAttempt,
   observeNativePackReviewAttempt,
   parseAuthoritativeTier,
+  reconcileStalePackReviewRuns,
+  resolveGithubCommitIsStrictDescendant,
   startPackReview,
 } from './pack-review-runner.ts';
 import {
   createPackReviewRun,
   getPackReviewRun,
+  setPackReviewRunTerminal,
   updatePackReviewRun,
   type PackReviewRunRecord,
 } from './lib/pack-review-run-store.ts';
@@ -20,7 +23,7 @@ import type { CarryoverReplayResult } from './pack-review-carryover.ts';
 import { runProcess } from './kernel/subprocess.ts';
 import {
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
-  commitPackReviewTriage,
+  commitPackReviewTerminal,
   commitSmokeOrderingTransition,
   initializePackReviewAuthority,
   observePackReviewHead,
@@ -30,6 +33,33 @@ import {
 const roots: string[] = [];
 const originalEnv = { ...process.env };
 const HEAD = 'a'.repeat(40);
+
+describe('Issue #1887 GitHub compare ancestry normalization', () => {
+  it('fails closed when compare transport throws', async () => {
+    const reviewed = '1'.repeat(40);
+    const current = '2'.repeat(40);
+    const result = await resolveGithubCommitIsStrictDescendant(
+      process.cwd(),
+      'chetwerikoff/orchestrator-pack',
+      reviewed,
+      current,
+      async () => { throw new Error('compare unavailable'); },
+    );
+    expect(result).toBe(false);
+  });
+
+  it('rejects equality before querying compare', async () => {
+    const head = '3'.repeat(40);
+    const result = await resolveGithubCommitIsStrictDescendant(
+      process.cwd(),
+      'chetwerikoff/orchestrator-pack',
+      head,
+      head,
+      async () => { throw new Error('must not be called'); },
+    );
+    expect(result).toBe(false);
+  });
+});
 
 function setupHarness(storeRoot: string): void {
   process.env.OPK_VITEST_HARNESS = '1';
@@ -722,7 +752,7 @@ describe('Issue #1826 logical-round smoke independence', () => {
     expect(finalAuthority?.cycle?.reviewStageComplete).toBe(true);
     expect(finalAuthority?.smokeOrdering?.workerOwned?.headSha).toBe(head1);
   });
-  it('blocks T3 round 2 until round-1 findings are resolved or explicitly rejected', async () => {
+  it('blocks same-head T3 round 2 findings but admits round 2 after a strict descendant', async () => {
     const parent = mkdtempSync(join(tmpdir(), 'pack-review-1826-round1-findings-gate-'));
     roots.push(parent);
     const storeRoot = join(parent, 'store');
@@ -806,35 +836,22 @@ describe('Issue #1826 logical-round smoke independence', () => {
     });
     expect(readPackReviewAuthority(prNumber, options)?.cycle?.consumedRoundOrdinals).toEqual([1]);
 
-    let authority = readPackReviewAuthority(prNumber, options)!;
-    authority = observePackReviewHead({
-      prNumber,
-      expectedTransitionSeq: authority.transitionSeq,
-      headSha: head,
-      options,
-    });
-    authority = commitPackReviewTriage({
-      prNumber,
-      expectedTransitionSeq: authority.transitionSeq,
-      triage: {
-        verdict: 'DEFER',
-        source: 'architect',
-        findingSnapshotDigest: 'f'.repeat(64),
-        actor: 'architect-fixture',
-        committedAtUtc: new Date().toISOString(),
-      },
-      options,
-    });
-    expect(authority.cycle).toMatchObject({ state: 'open', consumedRoundOrdinals: [1] });
-    expect(authority.cycle?.reviewStageComplete).not.toBe(true);
-
-    const adjudicatedRound2 = await startPackReview({
+    const descendant = '6'.repeat(40);
+    const descendantRound2 = await startPackReview({
       ...common,
+      headSha: descendant,
+      fixtureCurrentPrHeadSha: descendant,
+      fixturePostReviewHeadSha: descendant,
+      fixtureReviewCompareStatus: 'ahead',
       fixtureReviewStdout: cleanPayload(),
       fixtureGithubReviewId: 182903,
     });
-    expect(adjudicatedRound2).toMatchObject({ ok: true, created: true });
-    expect(readPackReviewAuthority(prNumber, options)?.cycle?.consumedRoundOrdinals).toEqual([1, 2]);
+    expect(descendantRound2).toMatchObject({ ok: true, created: true });
+    expect(readPackReviewAuthority(prNumber, options)?.cycle).toMatchObject({
+      state: 'closed',
+      consumedRoundOrdinals: [1, 2],
+      reviewStageComplete: true,
+    });
   });
   it('does not create a native same-round replacement when the prior run lacks a native binding', async () => {
     const parent = mkdtempSync(join(tmpdir(), 'pack-review-1826-native-unbound-'));
@@ -1011,5 +1028,103 @@ describe('Issue #1647 authoritative tier resolution', () => {
     });
 
     expect(result).toMatchObject({ ok: true, created: true, reused: false });
+  });
+});
+
+
+describe('Issue #1887 immediate final-cap descendant reconciliation', () => {
+  it('observes a live strict descendant and settles without prior smoke or review-start observation', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'pack-review-1887-immediate-settlement-'));
+    roots.push(parent);
+    const storeRoot = join(parent, 'store');
+    setupHarness(storeRoot);
+
+    const prNumber = 18972;
+    const reviewed = 'b'.repeat(40);
+    const current = 'c'.repeat(40);
+    const authorityOptions = { storeRoot };
+    let authority = initializePackReviewAuthority({
+      prNumber,
+      headSha: reviewed,
+      tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      options: authorityOptions,
+    });
+
+    const run = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber,
+      headSha: reviewed,
+      trustedPackRoot: process.cwd(),
+      sourceRepoRoot: process.cwd(),
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      reviewCycleId: authority.cycle!.cycleId,
+      logicalRoundOrdinal: 1,
+      logicalRoundCap: 1,
+      resolvedReviewer: 'codex',
+      automaticBudgetDisposition: 'consume',
+    }).run;
+    setPackReviewRunTerminal(run.id, 'changes_requested', {
+      reviewVerdict: 'findings',
+      findingCount: 1,
+      findings: [{ severity: 'blocking', title: 'fixture finding' }],
+      automaticBudgetDisposition: 'consume',
+    }, { projectId: 'orchestrator-pack', storeRoot });
+
+    authority = commitPackReviewTerminal({
+      prNumber,
+      expectedTransitionSeq: authority.transitionSeq,
+      terminal: {
+        schemaVersion: 1,
+        terminalContractVersion: 2,
+        terminalSource: 'normal',
+        runId: run.id,
+        targetSha: reviewed,
+        reviewVerdict: 'findings',
+        findingCount: 1,
+        findingsDigest: 'issue-1887-immediate-fixture',
+        automaticBudgetDisposition: 'consume',
+        logicalRoundOrdinal: 1,
+      },
+      status: 'changes_requested',
+      findingCount: 1,
+      options: authorityOptions,
+    });
+    expect(authority.cycle).toMatchObject({
+      state: 'at_cap_open_findings',
+      consumedRoundOrdinals: [1],
+    });
+    expect(authority.currentHeadSha).toBe(reviewed);
+
+    const reconciled = await reconcileStalePackReviewRuns({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: process.cwd(),
+      repoSlug: 'chetwerikoff/orchestrator-pack',
+      prNumber,
+      immediate: true,
+      fixtureCurrentPrHeadSha: current,
+      fixtureReviewCompareStatus: 'ahead',
+      fixtureRequiredStatusWriter: async () => {},
+    });
+
+    expect(reconciled.results).toContainEqual(expect.objectContaining({
+      prNumber,
+      headSha: current,
+      finalCapSettlement: true,
+      settled: true,
+      reason: 'final_cap_descendant_settled',
+    }));
+    const settled = readPackReviewAuthority(prNumber, authorityOptions);
+    expect(settled?.currentHeadSha).toBe(current);
+    expect(settled?.cycle).toMatchObject({
+      state: 'closed',
+      consumedRoundOrdinals: [1],
+      reviewStageComplete: true,
+    });
+    expect(settled?.smokeOrdering?.workerOwned).toBeUndefined();
+    expect(settled?.smokeOrdering?.reviewSettledHeadSha).toBe(current);
   });
 });

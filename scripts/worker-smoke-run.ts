@@ -87,8 +87,10 @@ import {
   commitSmokeOrderingTransition,
   initializePackReviewAuthority,
   observePackReviewHead,
+  packReviewFindingsSatisfiedByStrictDescendant,
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
   readPackReviewAuthority,
+  settleLogicalPackReviewFindingsByStrictDescendant,
   smokeOrderingRequired,
   type PackReviewAuthorityOptions,
   type PackReviewTier,
@@ -129,7 +131,6 @@ import {
 } from './pr2-foundation/readiness-evaluator.ts';
 import {
   createGithubReviewTransport,
-  directReviewReconciliationRequiresDescendantFixFacts,
   parseDirectPackReviewEvidence,
   projectDirectPackReviewState,
   type DirectPackReviewProjection,
@@ -878,13 +879,48 @@ interface PostSmokePackReviewAuthorityCycle {
 
 function currentPackReviewCompletionCycle(
   prNumber: number,
+  currentHeadSha: string,
+  isAncestor: (ancestorSha: string, descendantSha: string) => boolean,
 ): PostSmokePackReviewAuthorityCycle | null {
   try {
     const storeRoot = resolvePackReviewRunStoreRoot({
       projectId: 'orchestrator-pack',
       storeRoot: process.env.PACK_REVIEW_RUN_STORE_ROOT,
     });
-    const cycle = readPackReviewAuthority(prNumber, { storeRoot })?.cycle;
+    let authority = readPackReviewAuthority(prNumber, { storeRoot });
+    if (!authority?.cycle) return null;
+
+    const reviewedHeadSha = authority.terminal?.reviewVerdict === 'findings'
+      ? authority.terminal.targetSha
+      : '';
+    if (authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+        && authority.cycle.reviewStageComplete !== true
+        && authority.currentHeadSha === currentHeadSha.toLowerCase()
+        && reviewedHeadSha
+        && ['open_findings', 'at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)) {
+      let reviewedHeadIsAncestor = false;
+      try {
+        reviewedHeadIsAncestor = isAncestor(reviewedHeadSha, currentHeadSha);
+      } catch {
+        reviewedHeadIsAncestor = false;
+      }
+      if (packReviewFindingsSatisfiedByStrictDescendant({
+        reviewedHeadSha,
+        currentHeadSha,
+        reviewedHeadIsAncestor,
+      })) {
+        authority = settleLogicalPackReviewFindingsByStrictDescendant({
+          prNumber,
+          expectedTransitionSeq: authority.transitionSeq,
+          reviewedHeadSha,
+          currentHeadSha,
+          reviewedHeadIsAncestor: true,
+          options: { storeRoot },
+        });
+      }
+    }
+
+    const cycle = authority.cycle;
     if (!cycle) return null;
     return {
       cycleId: cycle.cycleId,
@@ -1063,7 +1099,17 @@ export async function evaluatePostSmokeReadiness(
   const postSmokeReview = projectPostSmokePackReview({
     runner,
     direct,
-    authorityCycle: currentPackReviewCompletionCycle(target.prNumber),
+    authorityCycle: currentPackReviewCompletionCycle(
+      target.prNumber,
+      target.headSha,
+      (ancestorSha, descendantSha) =>
+        (dependencies.isAncestor ?? githubCommitIsAncestor)(
+          target.repositorySlug,
+          ancestorSha,
+          descendantSha,
+          options.repoRoot,
+        ),
+    ),
   });
   const reviewProjection = postSmokeReview.reviewProjection;
   const directOwnsSemanticProjection = postSmokeReview.completedLogicalCycleId !== null
@@ -1177,19 +1223,8 @@ export async function runDirectReviewReconciliation(options: CliOptions): Promis
     },
   });
 
-  // A review-event runner has no WorkerReport/CI/smoke facts. Do not resurrect
-  // an ancestor blocker that the normal post-smoke path may already have
-  // resolved on this descendant head. Same-head and unknown-lineage blockers
-  // still fail immediately; ancestor resolution is left to post-smoke facts.
-  if (directReviewReconciliationRequiresDescendantFixFacts(direct)) {
-    emit({
-      ok: true,
-      skipped: true,
-      reason: 'ancestor_blocker_requires_descendant_fix_facts',
-      direct,
-    }, options.json);
-    return 0;
-  }
+  // Direct-review findings use the same strict-descendant settlement predicate
+  // as runner accounting. CI and smoke remain separate exact-head gates.
 
   if (!options.dryRun) {
     await publishPackReviewRequiredStatus({

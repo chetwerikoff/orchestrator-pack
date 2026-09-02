@@ -768,10 +768,13 @@ shared stale/grace threshold and may settle once after that threshold as
 threshold remains incomplete and reports the missing-source action. A late third
 source does not reopen an already settled 2/3 round or consume another cap unit.
 Every ordinary manual/chat/automatic start uses the same consuming review budget;
-there is no launcher-specific same-head extra-review bypass. At final cap, fix the
-blocking findings, obtain exact-head worker-owned smoke PASS, then rerun the scoped
-`reconcile --immediate`; settlement stays on that exact head and does not invoke a
-cap+1 full review.
+there is no launcher-specific same-head extra-review bypass. Under logical-round
+accounting, a findings-bearing required round is mechanically settled only when
+GitHub ancestry proves that the current PR head is a strict descendant of the
+reviewed head. At final cap, advance the PR with the fix commit and rerun scoped
+`reconcile --immediate`; no semantic finding-resolution evidence or cap+1 full
+review is required. Exact-head CI and declared smoke remain separate merge gates
+and do not participate in this review-settlement predicate.
 
 ### Required CI
 
