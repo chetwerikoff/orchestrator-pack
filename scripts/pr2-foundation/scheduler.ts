@@ -99,6 +99,7 @@ export interface SchedulerBoundary {
   start(candidate: ActivatedSchedulerCandidate, freshHeadSha: string): Promise<{ ok: boolean; reason?: string }>;
   reconcilePostReviewSmoke?: (candidate: ActivatedSchedulerCandidate, fresh: SchedulerCurrentPr) => Promise<PostReviewSmokeOutcome>;
   orchestrationMailReconcile?: () => Promise<import('../cursor-unsent-composer-submit.ts').OrchestrationMailReconcileResult>;
+  orchestrationMailReconcileLoop?: SchedulerMailReconcileLoop;
   dispatchTerminalMailPulse?: () => DispatchTerminalMailPulseResult;
   schedulerIntervalMs?: number;
   fleetObserver?: SchedulerFleetObserver;
@@ -252,6 +253,7 @@ export function productionSchedulerBoundary(input: {
   fleetBindings?: readonly FleetAssignmentBinding[];
   reconcilePostReviewSmoke?: SchedulerBoundary['reconcilePostReviewSmoke'];
   orchestrationMailReconcile?: SchedulerBoundary['orchestrationMailReconcile'];
+  orchestrationMailReconcileLoop?: SchedulerBoundary['orchestrationMailReconcileLoop'];
   dispatchTerminalMailPulse?: SchedulerBoundary['dispatchTerminalMailPulse'];
   publishHandoff?: SchedulerBoundary['publishHandoff'];
 }): SchedulerBoundary {
@@ -273,6 +275,7 @@ export function productionSchedulerBoundary(input: {
     ...(input.fleetBindings ? { fleetBindings: input.fleetBindings } : {}),
     ...(input.reconcilePostReviewSmoke ? { reconcilePostReviewSmoke: input.reconcilePostReviewSmoke } : {}),
     ...(input.orchestrationMailReconcile ? { orchestrationMailReconcile: input.orchestrationMailReconcile } : {}),
+    ...(input.orchestrationMailReconcileLoop ? { orchestrationMailReconcileLoop: input.orchestrationMailReconcileLoop } : {}),
     ...(input.dispatchTerminalMailPulse ? { dispatchTerminalMailPulse: input.dispatchTerminalMailPulse } : {}),
     ...(input.publishHandoff ? { publishHandoff: input.publishHandoff } : {}),
     start: async (candidate, freshHeadSha) => {
@@ -369,10 +372,10 @@ interface SchedulerMailReconcileLoop {
 }
 
 function startSchedulerMailReconcileLoop(
-  boundary: SchedulerBoundary,
+  reconcile: SchedulerBoundary['orchestrationMailReconcile'],
   intervalMs: number,
 ): SchedulerMailReconcileLoop | undefined {
-  if (!boundary.orchestrationMailReconcile) return undefined;
+  if (!reconcile) return undefined;
   let stopped = false;
   let pending: Promise<void> | undefined;
   let latest: SchedulerMailReconcileResult | undefined;
@@ -380,7 +383,7 @@ function startSchedulerMailReconcileLoop(
   const invoke = (): void => {
     if (stopped || pending) return;
     pending = Promise.resolve()
-      .then(() => boundary.orchestrationMailReconcile!())
+      .then(() => reconcile!())
       .then((result) => { latest = result; })
       .catch((error: unknown) => { failure ??= error; })
       .finally(() => { pending = undefined; });
@@ -417,7 +420,9 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
   let dispatchTerminalMailPulse: DispatchTerminalMailPulseResult | undefined;
   let orchestratorRequired = false;
   const schedulerIntervalMs = boundary.schedulerIntervalMs ?? 5_000; const requestedTickSequence = nextSchedulerTickSequence(boundary);
-  const mailReconcileLoop = startSchedulerMailReconcileLoop(boundary, schedulerIntervalMs);
+  const mailReconcileLoop = boundary.orchestrationMailReconcileLoop
+    ?? startSchedulerMailReconcileLoop(boundary.orchestrationMailReconcile, schedulerIntervalMs);
+  boundary.orchestrationMailReconcileLoop = undefined;
   try {
   if (boundary.fleetObserver) {
     const observerBoundary = boundary.fleetObserver; const observerStartMs = Date.now();
@@ -638,12 +643,14 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
     const deps = createAdapterSubmitDeps(runtime);
     return await runOrchestrationMailReconcileTick(createOrcaMessageSubmitDeps(runtime, deps));
   };
-  let preloadedOrchestrationMailReconcile: Promise<import('../cursor-unsent-composer-submit.ts').OrchestrationMailReconcileResult> | undefined =
-    executeOrchestrationMailReconcile();
-  // Let the inbox-gated reconcile begin before the synchronous assignment
-  // binding lookup can consume the scheduler's entire startup window.
-  await Promise.resolve();
-  const repository = await resolveRepositoryFromRepoRoot(repoRoot);
+  const startupMailReconcileLoop = startSchedulerMailReconcileLoop(executeOrchestrationMailReconcile, cadence);
+  let repository: string;
+  try {
+    repository = await resolveRepositoryFromRepoRoot(repoRoot);
+  } catch (error) {
+    await startupMailReconcileLoop?.stop(false);
+    throw error;
+  }
   const scopedAssignment = storedAssignments?.find((assignment) => assignment.repository === repository);
   let fleetObserver: FleetObserver; let fleetNudgeActuator: SchedulerFleetNudgeActuator = createTargetUnresolvedFleetNudgeActuator();
   let unresolvedReason: FleetReconciliationReason = storedAssignments === null ? 'assignment_untrusted' : 'target_unresolved';
@@ -741,11 +748,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
     )];
     return runDispatchTerminalMailPulse({ dispatchIds, deps: { env } });
   };
-    const orchestrationMailReconcile: NonNullable<SchedulerBoundary['orchestrationMailReconcile']> = async () => {
-    const preloaded = preloadedOrchestrationMailReconcile;
-    preloadedOrchestrationMailReconcile = undefined;
-    return await (preloaded ?? executeOrchestrationMailReconcile());
-  };
+  const orchestrationMailReconcile: NonNullable<SchedulerBoundary['orchestrationMailReconcile']> = executeOrchestrationMailReconcile;
   const postReviewSmoke = createProductionPostReviewSmokeReconciler({
     projectId,
     repoRoot,
@@ -768,6 +771,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       fleetBindings,
       reconcilePostReviewSmoke: postReviewSmoke,
       orchestrationMailReconcile,
+      orchestrationMailReconcileLoop: startupMailReconcileLoop,
       dispatchTerminalMailPulse,
       publishHandoff,
     }),
