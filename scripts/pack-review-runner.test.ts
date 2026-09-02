@@ -8,12 +8,14 @@ import {
   observeGptPackReviewAttempt,
   observeNativePackReviewAttempt,
   parseAuthoritativeTier,
+  reconcileStalePackReviewRuns,
   resolveGithubCommitIsStrictDescendant,
   startPackReview,
 } from './pack-review-runner.ts';
 import {
   createPackReviewRun,
   getPackReviewRun,
+  setPackReviewRunTerminal,
   updatePackReviewRun,
   type PackReviewRunRecord,
 } from './lib/pack-review-run-store.ts';
@@ -21,6 +23,7 @@ import type { CarryoverReplayResult } from './pack-review-carryover.ts';
 import { runProcess } from './kernel/subprocess.ts';
 import {
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+  commitPackReviewTerminal,
   commitSmokeOrderingTransition,
   initializePackReviewAuthority,
   observePackReviewHead,
@@ -1025,5 +1028,103 @@ describe('Issue #1647 authoritative tier resolution', () => {
     });
 
     expect(result).toMatchObject({ ok: true, created: true, reused: false });
+  });
+});
+
+
+describe('Issue #1887 immediate final-cap descendant reconciliation', () => {
+  it('observes a live strict descendant and settles without prior smoke or review-start observation', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'pack-review-1887-immediate-settlement-'));
+    roots.push(parent);
+    const storeRoot = join(parent, 'store');
+    setupHarness(storeRoot);
+
+    const prNumber = 18972;
+    const reviewed = 'b'.repeat(40);
+    const current = 'c'.repeat(40);
+    const authorityOptions = { storeRoot };
+    let authority = initializePackReviewAuthority({
+      prNumber,
+      headSha: reviewed,
+      tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      options: authorityOptions,
+    });
+
+    const run = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber,
+      headSha: reviewed,
+      trustedPackRoot: process.cwd(),
+      sourceRepoRoot: process.cwd(),
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      reviewCycleId: authority.cycle!.cycleId,
+      logicalRoundOrdinal: 1,
+      logicalRoundCap: 1,
+      resolvedReviewer: 'codex',
+      automaticBudgetDisposition: 'consume',
+    }).run;
+    setPackReviewRunTerminal(run.id, 'changes_requested', {
+      reviewVerdict: 'findings',
+      findingCount: 1,
+      findings: [{ severity: 'blocking', title: 'fixture finding' }],
+      automaticBudgetDisposition: 'consume',
+    }, { projectId: 'orchestrator-pack', storeRoot });
+
+    authority = commitPackReviewTerminal({
+      prNumber,
+      expectedTransitionSeq: authority.transitionSeq,
+      terminal: {
+        schemaVersion: 1,
+        terminalContractVersion: 2,
+        terminalSource: 'normal',
+        runId: run.id,
+        targetSha: reviewed,
+        reviewVerdict: 'findings',
+        findingCount: 1,
+        findingsDigest: 'issue-1887-immediate-fixture',
+        automaticBudgetDisposition: 'consume',
+        logicalRoundOrdinal: 1,
+      },
+      status: 'changes_requested',
+      findingCount: 1,
+      options: authorityOptions,
+    });
+    expect(authority.cycle).toMatchObject({
+      state: 'at_cap_open_findings',
+      consumedRoundOrdinals: [1],
+    });
+    expect(authority.currentHeadSha).toBe(reviewed);
+
+    const reconciled = await reconcileStalePackReviewRuns({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: process.cwd(),
+      repoSlug: 'chetwerikoff/orchestrator-pack',
+      prNumber,
+      immediate: true,
+      fixtureCurrentPrHeadSha: current,
+      fixtureReviewCompareStatus: 'ahead',
+      fixtureRequiredStatusWriter: async () => {},
+    });
+
+    expect(reconciled.results).toContainEqual(expect.objectContaining({
+      prNumber,
+      headSha: current,
+      finalCapSettlement: true,
+      settled: true,
+      reason: 'final_cap_fix_settled',
+    }));
+    const settled = readPackReviewAuthority(prNumber, authorityOptions);
+    expect(settled?.currentHeadSha).toBe(current);
+    expect(settled?.cycle).toMatchObject({
+      state: 'closed',
+      consumedRoundOrdinals: [1],
+      reviewStageComplete: true,
+    });
+    expect(settled?.smokeOrdering?.workerOwned).toBeUndefined();
+    expect(settled?.smokeOrdering?.reviewSettledHeadSha).toBe(current);
   });
 });
