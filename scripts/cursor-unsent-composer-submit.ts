@@ -1449,8 +1449,9 @@ export async function runOrchestrationMailReconcileTick(
           const worker = resolved.worker;
           const message = found.message;
           const cacheKey = workerKey(worker.identity) + '\u0000' + message.runId;
+          const runRecipient = message.recipient.startsWith('run:');
           let observed = retrievable.get(cacheKey);
-          if (!observed) {
+          if (!runRecipient && !observed) {
             observed = deps.observeRetrievableMessageIds
               ? deps.observeRetrievableMessageIds(worker)
               : deps.isMessageRetrievable
@@ -1458,11 +1459,11 @@ export async function runOrchestrationMailReconcileTick(
                 : { ok: false as const, reason: 'orchestration_retrievability_unavailable' };
             retrievable.set(cacheKey, observed);
           }
-          const qualifies = 'messageIds' in observed
+          const qualifies = runRecipient || (observed !== undefined && ('messageIds' in observed
             ? observed.ok && observed.messageIds.has(message.id)
-            : observed.ok;
+            : observed.ok));
           if (!qualifies) {
-            const reason = !observed.ok ? observed.reason : 'orchestration_message_unretrievable';
+            const reason = observed && !observed.ok ? observed.reason : 'orchestration_message_unretrievable';
             result = deliveryNoEffect(reason, worker, false);
           } else {
             result = await submitOrcaMessageDeliveryPointerForMessage(message, reconcileDeps);

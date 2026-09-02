@@ -1690,6 +1690,46 @@ describe('orchestration mail reconciliation', () => {
     expect(result.reasons).toContain('msg_revoked:orchestration_message_unretrievable');
   });
 
+  it('delivers unread Run mail without requiring coordinator terminal retrieval', async () => {
+    const target = worker('term_run_mail_unread');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const message = {
+      id: 'msg_run_mail_unread',
+      runId: 'run_run_mail_unread',
+      recipient: 'run:run_run_mail_unread',
+      consumed: false,
+    };
+    const deps = {
+      readInbox: () => ({
+        ok: true as const,
+        result: { messages: [{ id: message.id, run_id: message.runId, to_handle: message.recipient, read: 0 }] },
+      }),
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      isMessageRetrievable: () => ({ ok: false as const, reason: 'orchestration_message_unretrievable' }),
+      submitDeps: depsFor({}, {
+        submitted,
+        read: () => ({ ok: true as const, lines: submitted.length === 0 ? [buildDeliveryPointer(message), ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER], source: 'screen' as const }),
+      }),
+    };
+    const suffix = `${process.pid}-${Date.now()}`;
+    const result = await runOrchestrationMailReconcileTick(deps, {
+      ledgerPath: join(tmpdir(), `opk-reconcile-run-unread-${suffix}.json`),
+      lockPath: join(tmpdir(), `opk-reconcile-run-unread-${suffix}.lock`),
+      now: () => 1_000,
+    });
+
+    expect(result.nudged).toBe(1);
+    expect(result.deliveryEvidence).toEqual([{
+      workerGeneration: target.identity.generation,
+      runId: message.runId,
+      messageId: message.id,
+      delivery: 'delivered-looking',
+      terminalReceipt: 'unproven',
+    }]);
+    expect(submitted).toHaveLength(1);
+  });
+
   it('enters one Orca-notified message when terminal check --peek retrieves it', async () => {
     const target = worker('term_retrievable');
     const submitted: RuntimeWorkerIdentity[] = [];
