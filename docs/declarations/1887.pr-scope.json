@@ -11,6 +11,7 @@
     "scripts/pack-review-runner.ts",
     "scripts/pack-review-state.test.ts",
     "scripts/pack-review-state.ts",
+    "scripts/pr2-foundation/terminalized-port.test.ts",
     "scripts/review-delivery.test.ts",
     "scripts/worker-smoke-run.ts"
   ],
@@ -41,5 +42,5 @@
     "scripts/review-delivery.test.ts",
     "scripts/worker-smoke-run.ts"
   ],
-  "source_revision": "7d784aa78b851fda23b53bd10d92254175f1fbbc"
+  "source_revision": "eee684154b8241a7921e9344009f3ec7779d3a92"
 }
