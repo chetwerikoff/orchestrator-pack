@@ -464,7 +464,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
         observerFailure.handoff,
         observerFailure.identity,
       );
-      await mailReconcileLoop?.stop(false);
+      await mailReconcileLoop?.stop(true);
       if (!fleetEscalation) throw new Error(`scheduler_observer_untrusted:${observerFailureReason}`);
       return {
         attempted: 0,
@@ -494,7 +494,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
     orchestratorRequired = handoff.required;
     fleetEscalation = await evaluateFleetEscalation(boundary, handoff, observer);
     if (fleetNudge.status === 'failed') {
-      await mailReconcileLoop?.stop(false);
+      await mailReconcileLoop?.stop(true);
       return {
         attempted: 0,
         started: 0,

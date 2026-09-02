@@ -746,6 +746,81 @@ describe('Issue #1895 scheduler mail cadence', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('drains an in-flight mail reconcile before a failed fleet phase exits the child', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'opk-1895-mail-failure-drain-'));
+    try {
+      const epochPath = path.join(root, 'epoch.json');
+      const epochId = 'epoch-mail-failure-drain';
+      const nonce = 'nonce-mail-failure-drain';
+      new FileEpochAuthority(epochPath).commit(null, {
+        epochId,
+        nonce,
+        hostId: 'test-host',
+        repoRoot,
+        installedCommitSha: 'a'.repeat(40),
+        snapshotDigests: { reconcile: 'snapshot-r', reevaluation: 'snapshot-e', reportStateSeed: 'snapshot-s' },
+        importDigests: { reconcile: 'snapshot-r', reevaluation: 'snapshot-e', reportStateSeed: 'snapshot-s' },
+        registryHash: 'a',
+        preCommitLogDigest: 'b',
+        commitAt: new Date().toISOString(),
+      });
+      const env: NodeJS.ProcessEnv = {
+        ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: epochPath,
+        ORCHESTRATOR_CUTOVER_EPOCH_ID: epochId,
+        ORCHESTRATOR_CUTOVER_NONCE: nonce,
+      };
+      let reconcileStarted = false;
+      let reconcileFinished = false;
+      let releaseReconcile!: () => void;
+      const reconcileGate = new Promise<void>((resolve) => { releaseReconcile = resolve; });
+      const tick = runSchedulerTick({
+        listCandidates: () => [],
+        readCurrentPr: async () => { throw new Error('not called'); },
+        readChecks: async () => [],
+        listReviewRuns: () => [],
+        start: async () => ({ ok: true }),
+        schedulerIntervalMs: 10,
+        orchestrationMailReconcile: async () => {
+          reconcileStarted = true;
+          await reconcileGate;
+          reconcileFinished = true;
+          return { ok: true, attempted: 0, nudged: 0, skipped: 0, reasons: [], deliveryEvidence: [] };
+        },
+        publishHandoff: () => ({ ok: true }),
+        fleetObserver: {
+          schedulerGeneration: 'sg-mail-failure-drain',
+          getEffectiveBudgetMs: () => 100,
+          tick: async () => ({
+            result: 'census-published-observer-only',
+            status: 'complete',
+            snapshotCommitted: false,
+            snapshotPath: '',
+            schedulerGeneration: 'sg-mail-failure-drain',
+            tickSequence: 1,
+            effectiveBudgetMs: 100,
+            schedulerReturnedWithinBudget: true,
+            staleCompletionRejected: false,
+            fleetCapFailClosed: false,
+            goneSemanticsClosed: false,
+            exceptionCollisionRejected: false,
+            zeroActuation: true,
+          } satisfies FleetObserverResult),
+        },
+        fleetNudgeActuator: {
+          tick: async () => { throw new Error('nudge_failed'); },
+        },
+      }, env);
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      expect(reconcileStarted).toBe(true);
+      releaseReconcile();
+      const result = await tick;
+      expect(reconcileFinished).toBe(true);
+      expect(result.fleetNudge?.status).toBe('failed');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('Issue #1895 scheduler reconcile-loop state', () => {
