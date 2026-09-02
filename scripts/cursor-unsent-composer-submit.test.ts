@@ -1732,23 +1732,22 @@ describe('orchestration mail reconciliation', () => {
     expect(retrievabilityChecks).toBe(1);
   });
 
-  it('prioritizes an unseen recipient group in bounded supervisor polls', async () => {
+  it('prioritizes unseen mail within a bounded recipient-group poll', async () => {
     const target = worker('term_bounded_new_mail');
     const submitted: RuntimeWorkerIdentity[] = [];
-    const rows = [
-      { id: 'msg_backlog', run_id: 'run_backlog', to_handle: 'term_old_backlog', read: 0 },
-      { id: 'msg_new', run_id: 'run_new', to_handle: 'run:run_new', read: 0 },
-    ];
+    const backlog = { id: 'msg_backlog', runId: 'run_new', recipient: 'run:run_new', consumed: false };
     const message = { id: 'msg_new', runId: 'run_new', recipient: 'run:run_new', consumed: false };
+    const rows = [
+      { id: backlog.id, run_id: backlog.runId, to_handle: backlog.recipient, read: 0 },
+      { id: message.id, run_id: message.runId, to_handle: message.recipient, read: 0 },
+    ];
     const resolvedRecipients: string[] = [];
     const deps = {
       readInbox: () => ({ ok: true as const, result: { messages: rows } }),
-      lookupMessage: () => ({ ok: true as const, message }),
+      lookupMessage: (id: string) => ({ ok: true as const, message: id === message.id ? message : backlog }),
       resolveWorker: (candidate: { readonly recipient: string }) => {
         resolvedRecipients.push(candidate.recipient);
-        return candidate.recipient === message.recipient
-          ? { ok: true as const, worker: target }
-          : { ok: true as const, worker: null };
+        return { ok: true as const, worker: target };
       },
       isMessageRetrievable: () => ({ ok: true as const }),
       submitDeps: depsFor({ [target.identity.id]: [buildDeliveryPointer(message), ...CURSOR_FOOTER] }, {
@@ -1759,14 +1758,14 @@ describe('orchestration mail reconciliation', () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-reconcile-bounded-poll-'));
     const ledgerPath = join(root, 'orchestration-mail-reconcile.json');
     const lockPath = join(root, 'orchestration-mail-reconcile.lock');
-    writeFileSync(ledgerPath, JSON.stringify({ messages: { msg_backlog: 900 }, episodes: {} }));
+    writeFileSync(ledgerPath, JSON.stringify({ messages: { [backlog.id]: 900 }, episodes: {} }));
     try {
-      const result = await runOrchestrationMailReconcileTick(deps, { ledgerPath, lockPath, now: () => 1_000, maxRecipientGroups: 1 });
+      const result = await runOrchestrationMailReconcileTick(deps, { ledgerPath, lockPath, now: () => 1_000, maxRecipientGroups: 1, maxMessages: 1 });
       expect(result.attempted).toBe(1);
       expect(result.nudged).toBe(1);
       expect(submitted).toHaveLength(1);
       expect(resolvedRecipients).toEqual([message.recipient]);
-      expect(JSON.parse(readFileSync(ledgerPath, 'utf8')).messages.msg_backlog).toBe(900);
+      expect(JSON.parse(readFileSync(ledgerPath, 'utf8')).messages).toEqual({ [backlog.id]: 900, [message.id]: 1_000 });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

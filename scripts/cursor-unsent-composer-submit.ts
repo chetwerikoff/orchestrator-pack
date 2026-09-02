@@ -1348,7 +1348,7 @@ export function createOrcaMessageSubmitDeps(
 /** Reconcile unread Orca mail without inspecting composer screens globally. */
 export async function runOrchestrationMailReconcileTick(
   deps: DeliveryMessageSubmitDeps,
-  options: { readonly ledgerPath?: string; readonly lockPath?: string; readonly now?: () => number; readonly maxRecipientGroups?: number } = {},
+  options: { readonly ledgerPath?: string; readonly lockPath?: string; readonly now?: () => number; readonly maxRecipientGroups?: number; readonly maxMessages?: number } = {},
 ): Promise<OrchestrationMailReconcileResult> {
   const ledgerPath = options.ledgerPath ?? deps.episodeStatePath ?? ORCHESTRATION_RECONCILE_LEDGER_PATH;
   const lockPath = options.lockPath ?? deps.episodeLockPath ?? ORCHESTRATION_RECONCILE_LOCK_PATH;
@@ -1377,6 +1377,9 @@ export async function runOrchestrationMailReconcileTick(
     const maxRecipientGroups = options.maxRecipientGroups === undefined
       ? undefined
       : Math.max(1, Math.floor(options.maxRecipientGroups));
+    const maxMessages = options.maxMessages === undefined
+      ? undefined
+      : Math.max(1, Math.floor(options.maxMessages));
     const groupOrder: string[] = [];
     const groupSeen = new Set<string>();
     const unseenGroups = new Set<string>();
@@ -1395,9 +1398,16 @@ export async function runOrchestrationMailReconcileTick(
     const selectedGroups = maxRecipientGroups === undefined
       ? new Set(prioritizedGroups)
       : new Set(prioritizedGroups.slice(0, maxRecipientGroups));
-    const rowsToProcess = maxRecipientGroups === undefined
+    const candidateRows = maxRecipientGroups === undefined
       ? unread
       : unread.filter((row) => selectedGroups.has(`${row.to_handle?.trim() ?? ''}\u0000${row.run_id?.trim() ?? ''}`));
+    const rowsToProcess = maxMessages === undefined
+      ? candidateRows
+      : [...candidateRows].sort((left, right) => {
+        const leftPriority = state.messages[left.id!.trim()] === undefined ? 0 : 1;
+        const rightPriority = state.messages[right.id!.trim()] === undefined ? 0 : 1;
+        return leftPriority - rightPriority;
+      }).slice(0, maxMessages);
 
     const rowsById = new Map<string, OrcaInboxMessageRow[]>();
     for (const row of unread) {
@@ -1670,6 +1680,7 @@ function parseArgs(argv: readonly string[]): UnsentComposerSubmitInput & {
   readonly reconcile: boolean;
   readonly messageId: string;
   readonly maxRecipientGroups?: number;
+  readonly maxMessages?: number;
 } {
   const terminals: string[] = [];
   let dryRun = false;
@@ -1679,6 +1690,7 @@ function parseArgs(argv: readonly string[]): UnsentComposerSubmitInput & {
   let messageId = '';
   let intervalMs = DEFAULT_INTERVAL_MS;
   let maxRecipientGroups: number | undefined;
+  let maxMessages: number | undefined;
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (token === '--terminal') {
@@ -1706,6 +1718,10 @@ function parseArgs(argv: readonly string[]): UnsentComposerSubmitInput & {
       maxRecipientGroups = parsePositiveInt(argv[++index], 1);
       continue;
     }
+    if (token === '--max-messages') {
+      maxMessages = parsePositiveInt(argv[++index], 1);
+      continue;
+    }
     if (token === '--message-id') {
       messageId = argv[++index]?.trim() ?? '';
       continue;
@@ -1720,7 +1736,7 @@ function parseArgs(argv: readonly string[]): UnsentComposerSubmitInput & {
     }
     throw new Error(`unknown argument: ${token}`);
   }
-  return { terminals, dryRun, once, delivery, reconcile, messageId, intervalMs, maxRecipientGroups };
+  return { terminals, dryRun, once, delivery, reconcile, messageId, intervalMs, maxRecipientGroups, maxMessages };
 }
 
 function shouldLogWatchTick(result: UnsentComposerSubmitResult): boolean {
@@ -1738,7 +1754,7 @@ async function main(): Promise<void> {
   const adapter = await selectRuntimeAdapter();
   const deps = createAdapterSubmitDeps(adapter);
   if (parsed.reconcile) {
-    const result = await runOrchestrationMailReconcileTick(createOrcaMessageSubmitDeps(adapter, deps), { maxRecipientGroups: parsed.maxRecipientGroups });
+    const result = await runOrchestrationMailReconcileTick(createOrcaMessageSubmitDeps(adapter, deps), { maxRecipientGroups: parsed.maxRecipientGroups, maxMessages: parsed.maxMessages });
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if (!result.ok) process.exitCode = 1;
     return;

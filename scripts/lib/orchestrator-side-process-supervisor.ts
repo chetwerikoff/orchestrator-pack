@@ -180,6 +180,7 @@ async function runSupervisorMailReconcileProcess(
       path.join(options.repoRoot, 'scripts', 'cursor-unsent-composer-submit.ts'),
       '--reconcile',
       '--max-recipient-groups', '1',
+      '--max-messages', '1',
     ],
     cwd: options.repoRoot,
     inheritParentEnv: true,
