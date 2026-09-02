@@ -71,6 +71,8 @@ export interface DormantActuatorResult { ok: true; executed: false; reason: 'fou
 export interface ActivatedSchedulerCandidate { sessionId: string; repoSlug: string; prNumber: number; boundHeadSha: string }
 export interface SchedulerCurrentPr { number: number; headRefOid: string; state: string; isDraft: boolean; body?: string }
 
+export const SCHEDULER_MAIL_RECONCILE_OWNER_ENV = 'OPK_SCHEDULER_MAIL_RECONCILE_OWNER';
+
 type SchedulerFleetObserver = Pick<FleetObserver, 'tick'> & Partial<Pick<FleetObserver, 'getEffectiveBudgetMs' | 'cancel' | 'schedulerGeneration' | 'snapshotPath'>>;
 type SchedulerFleetNudgeActuator = { tick(input: FleetNudgeTickInput): Promise<FleetNudgeResult> };
 type SchedulerFleetEscalation = (
@@ -433,7 +435,9 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
   let orchestratorRequired = false;
   const schedulerIntervalMs = boundary.schedulerIntervalMs ?? 5_000; const requestedTickSequence = nextSchedulerTickSequence(boundary);
   const mailReconcileLoop = boundary.orchestrationMailReconcileLoop
-    ?? startSchedulerMailReconcileLoop(boundary.orchestrationMailReconcile, schedulerIntervalMs);
+    ?? (env[SCHEDULER_MAIL_RECONCILE_OWNER_ENV] === 'supervisor'
+      ? undefined
+      : startSchedulerMailReconcileLoop(boundary.orchestrationMailReconcile, schedulerIntervalMs));
   boundary.orchestrationMailReconcileLoop = undefined;
   try {
   if (boundary.fleetObserver) {
@@ -645,17 +649,25 @@ export function createProductionPostReviewSmokeReconciler(input: {
   };
 }
 
+export function createProductionOrchestrationMailReconcile(
+  env: NodeJS.ProcessEnv = process.env,
+): NonNullable<SchedulerBoundary['orchestrationMailReconcile']> {
+  return async () => {
+    const runtime = await selectRuntimeAdapter({ env });
+    const deps = createAdapterSubmitDeps(runtime);
+    return await runOrchestrationMailReconcileTick(createOrcaMessageSubmitDeps(runtime, deps));
+  };
+}
+
 async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; cadence: number }> {
   const parsed = parseFoundationConfig({}); if (!parsed.ok) throw new Error(`${parsed.reason}:${parsed.path}`);
   const repoRoot = process.cwd(); const cadence = parsed.config.scheduler.pollIntervalMs; const env = process.env; const projectId = 'orchestrator-pack';
   const epoch = assertSchedulerEpoch(env); const activationLineage = schedulerActivationLineage(epoch);
   const assignmentStorePath = resolveWorkerAssignmentStorePath(projectId, env); const storedAssignments = listCurrentWorkerAssignments(assignmentStorePath);
-  const executeOrchestrationMailReconcile: NonNullable<SchedulerBoundary['orchestrationMailReconcile']> = async () => {
-    const runtime = await selectRuntimeAdapter({ env });
-    const deps = createAdapterSubmitDeps(runtime);
-    return await runOrchestrationMailReconcileTick(createOrcaMessageSubmitDeps(runtime, deps));
-  };
-  const preloadedOrchestrationMailReconcileLoop = startSchedulerMailReconcileLoop(executeOrchestrationMailReconcile, cadence);
+  const executeOrchestrationMailReconcile = createProductionOrchestrationMailReconcile(env);
+  const preloadedOrchestrationMailReconcileLoop = env[SCHEDULER_MAIL_RECONCILE_OWNER_ENV] === 'supervisor'
+    ? undefined
+    : startSchedulerMailReconcileLoop(executeOrchestrationMailReconcile, cadence);
   const repository = await resolveRepositoryFromRepoRoot(repoRoot).catch(async (error) => {
     await preloadedOrchestrationMailReconcileLoop?.stop(false);
     throw error;

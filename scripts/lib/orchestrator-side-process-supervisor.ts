@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
+import type { OrchestrationMailReconcileResult } from '../cursor-unsent-composer-submit.ts';
+import { SCHEDULER_MAIL_RECONCILE_OWNER_ENV } from '../pr2-foundation/scheduler.ts';
 import { FileEpochAuthority } from './cutover/activation-epoch-authority.ts';
 import { readProcessIdentity } from './cutover/activation-cordon.ts';
 import { writeDurableJson } from './cutover/activation-evidence.ts';
@@ -26,6 +28,7 @@ export interface SupervisorOptions {
   targetRegistryPath: string;
   projectedRegistryPath: string;
   restartDelayMs?: number;
+  orchestrationMailReconcile?: (signal: AbortSignal) => Promise<OrchestrationMailReconcileResult>;
 }
 
 interface SupervisorStatusBase {
@@ -166,6 +169,67 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
 }
 
+async function runSupervisorMailReconcileProcess(
+  options: Pick<SupervisorOptions, 'repoRoot'>,
+  signal: AbortSignal,
+): Promise<OrchestrationMailReconcileResult> {
+  const result = await runProcess({
+    command: process.execPath,
+    args: [
+      '--experimental-strip-types',
+      path.join(options.repoRoot, 'scripts', 'cursor-unsent-composer-submit.ts'),
+      '--reconcile',
+    ],
+    cwd: options.repoRoot,
+    inheritParentEnv: true,
+    signal,
+    allowEmptyStdout: false,
+    timeoutMs: 15_000,
+  });
+  if (!result.ok) throw new Error(`supervisor_mail_reconcile_${result.outcome}`);
+  const line = result.stdout.trim().split(/\r?\n/u).at(-1) ?? '';
+  if (!line) throw new Error("supervisor_mail_reconcile_empty_output");
+  return JSON.parse(line) as OrchestrationMailReconcileResult;
+}
+
+export interface SupervisorMailReconcileLoop {
+  stop(awaitPending: boolean): Promise<void>;
+}
+
+export function startSupervisorMailReconcileLoop(
+  reconcile: (signal: AbortSignal) => Promise<OrchestrationMailReconcileResult>,
+  intervalMs: number,
+): SupervisorMailReconcileLoop {
+  let stopped = false;
+  let pending: Promise<void> | undefined;
+  let pendingAbort: AbortController | undefined;
+  const invoke = (): void => {
+    if (stopped || pending) return;
+    pending = Promise.resolve()
+      .then(async () => {
+        if (stopped) return;
+        pendingAbort = new AbortController();
+        await reconcile(pendingAbort.signal);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        pendingAbort = undefined;
+        pending = undefined;
+      });
+  };
+  invoke();
+  const timer = setInterval(invoke, Math.max(1, intervalMs));
+  timer.unref?.();
+  return {
+    async stop(awaitPending: boolean): Promise<void> {
+      stopped = true;
+      clearInterval(timer);
+      pendingAbort?.abort();
+      if (awaitPending && pending) await pending;
+    },
+  };
+}
+
 /**
  * Runtime-neutral side-process supervisor. The singleton lease binds to the
  * exact supervisor process generation. Child restart backoff is a pure
@@ -213,8 +277,14 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
     }
   };
 
+  let mailReconcileLoop: SupervisorMailReconcileLoop | undefined;
   try {
-    verify();
+    const verified = verify();
+    mailReconcileLoop = startSupervisorMailReconcileLoop(
+      options.orchestrationMailReconcile
+        ?? ((signal) => runSupervisorMailReconcileProcess(options, signal)),
+      verified.cadenceSeconds * 1_000,
+    );
     writeStatus(options, state);
     let stopping = false;
     let currentAbort: AbortController | null = null;
@@ -263,6 +333,7 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
           ORCHESTRATOR_CUTOVER_EPOCH_ID: options.epochId,
           ORCHESTRATOR_CUTOVER_NONCE: options.nonce,
           ORCHESTRATOR_CUTOVER_STATE_DIR: options.stateDir,
+          [SCHEDULER_MAIL_RECONCILE_OWNER_ENV]: 'supervisor',
         },
         signal: currentAbort.signal,
         allowEmptyStdout: true,
@@ -305,6 +376,7 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
     state.restartState = 'stopping';
     writeStatus(options, state);
   } finally {
+    await mailReconcileLoop?.stop(false);
     releaseSingleInstanceLease(lease);
   }
   process.exit(0);

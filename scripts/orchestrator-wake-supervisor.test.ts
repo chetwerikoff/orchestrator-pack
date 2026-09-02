@@ -14,7 +14,10 @@ import {
 } from './lib/cutover/foundation-observation.ts';
 import { childRegistry } from './lib/orchestrator-side-process-observer.ts';
 import { sha256Bytes } from './lib/cutover/stable-stringify.ts';
-import { supervisorChildExitTransition } from './lib/orchestrator-side-process-supervisor.ts';
+import {
+  startSupervisorMailReconcileLoop,
+  supervisorChildExitTransition,
+} from './lib/orchestrator-side-process-supervisor.ts';
 import type { FleetObserverResult } from './pr2-foundation/fleet-observer.ts';
 import { runSchedulerTick } from './pr2-foundation/scheduler.ts';
 import { EMPTY_CRASH_BACKOFF_STATE, type CrashBackoffPolicy } from './runtime/crash-backoff.ts';
@@ -820,6 +823,25 @@ describe('Issue #1895 scheduler mail cadence', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('Issue #1895 supervisor mail ownership', () => {
+  it('keeps polling after child exit while the supervisor waits its cadence', async () => {
+    let childExited = false;
+    let pollsAfterChildExit = 0;
+    const loop = startSupervisorMailReconcileLoop(async () => {
+      if (childExited) pollsAfterChildExit += 1;
+      return { ok: true, attempted: 0, nudged: 0, skipped: 0, reasons: [], deliveryEvidence: [] };
+    }, 10);
+    try {
+      await new Promise<void>((resolve) => setTimeout(resolve, 15));
+      childExited = true;
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    } finally {
+      await loop.stop(true);
+    }
+    expect(pollsAfterChildExit).toBeGreaterThan(0);
   });
 });
 
