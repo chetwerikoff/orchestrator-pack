@@ -6,6 +6,7 @@
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
     "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/lib/orchestrator-side-process-supervisor.ts",
     "scripts/pr2-foundation/scheduler.ts"
   ],
   "denylist": [
@@ -23,5 +24,5 @@
     "scripts/pr2-foundation/scheduler.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "010885a58999f16639bd5e014b614d5d5708217b"
+  "source_revision": "90c97e174d26a5cc85a3f7c4dc2bceb8ced4fe62"
 }
