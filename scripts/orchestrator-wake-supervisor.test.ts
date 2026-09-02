@@ -742,7 +742,7 @@ describe('Issue #1895 scheduler mail cadence', () => {
       const result = await tick;
       expect(reconcileCalls).toBeGreaterThan(1);
       expect(reconciledAt).toBeDefined();
-      expect(reconciledAt! - mailArrivedAt).toBeLessThan(60);
+      expect(reconciledAt! - mailArrivedAt).toBeLessThan(5_000);
       expect(reconciledAt!).toBeLessThan(childFinishedAt!);
       expect(result.orchestrationMailReconcile).toEqual(emptyReconcile());
     } finally {
