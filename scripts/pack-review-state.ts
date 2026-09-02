@@ -1189,7 +1189,11 @@ export function commitSmokeOrderingTransition(input: {
             'worker-owned smoke result requires a started dispatch',
           );
         }
-        if (authority.smokeOrdering?.independent) {
+        const independent = authority.smokeOrdering?.independent;
+        const workerFixOnNewHead = independent?.status === 'failed'
+          && independent.failureKind === 'finding'
+          && independent.failureHeadSha !== headSha;
+        if (independent && !workerFixOnNewHead) {
           throw new PackReviewAuthorityError(
             'smoke_ordering_worker_smoke_forbidden',
             'worker-owned smoke is forbidden after independent smoke has started',
