@@ -129,7 +129,6 @@ import {
 } from './pr2-foundation/readiness-evaluator.ts';
 import {
   createGithubReviewTransport,
-  directReviewReconciliationRequiresDescendantFixFacts,
   parseDirectPackReviewEvidence,
   projectDirectPackReviewState,
   type DirectPackReviewProjection,
@@ -1177,19 +1176,8 @@ export async function runDirectReviewReconciliation(options: CliOptions): Promis
     },
   });
 
-  // A review-event runner has no WorkerReport/CI/smoke facts. Do not resurrect
-  // an ancestor blocker that the normal post-smoke path may already have
-  // resolved on this descendant head. Same-head and unknown-lineage blockers
-  // still fail immediately; ancestor resolution is left to post-smoke facts.
-  if (directReviewReconciliationRequiresDescendantFixFacts(direct)) {
-    emit({
-      ok: true,
-      skipped: true,
-      reason: 'ancestor_blocker_requires_descendant_fix_facts',
-      direct,
-    }, options.json);
-    return 0;
-  }
+  // Direct-review findings use the same strict-descendant settlement predicate
+  // as runner accounting. CI and smoke remain separate exact-head gates.
 
   if (!options.dryRun) {
     await publishPackReviewRequiredStatus({
