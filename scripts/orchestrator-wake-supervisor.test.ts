@@ -747,3 +747,73 @@ describe('Issue #1895 scheduler mail cadence', () => {
     }
   });
 });
+
+describe('Issue #1895 scheduler reconcile-loop state', () => {
+  it('clears stale failures and retains delivery evidence from earlier ticks', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'opk-1895-mail-loop-state-'));
+    try {
+      const epochPath = path.join(root, 'epoch.json');
+      const epochId = 'epoch-mail-loop-state';
+      const nonce = 'nonce-mail-loop-state';
+      new FileEpochAuthority(epochPath).commit(null, {
+        epochId,
+        nonce,
+        hostId: 'test-host',
+        repoRoot,
+        installedCommitSha: 'a'.repeat(40),
+        snapshotDigests: { reconcile: 'snapshot-r', reevaluation: 'snapshot-e', reportStateSeed: 'snapshot-s' },
+        importDigests: { reconcile: 'import-r', reevaluation: 'import-e', reportStateSeed: 'snapshot-s' },
+        registryHash: 'a',
+        preCommitLogDigest: 'b',
+        commitAt: new Date().toISOString(),
+      });
+      const env: NodeJS.ProcessEnv = {
+        ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: epochPath,
+        ORCHESTRATOR_CUTOVER_EPOCH_ID: epochId,
+        ORCHESTRATOR_CUTOVER_NONCE: nonce,
+      };
+      let calls = 0;
+      const evidence = (messageId: string) => ({
+        workerGeneration: 'g1',
+        runId: `run-${messageId}`,
+        messageId,
+        delivery: 'delivered-looking' as const,
+        terminalReceipt: 'unproven' as const,
+      });
+      const tick = runSchedulerTick({
+        listCandidates: () => [],
+        readCurrentPr: async () => { throw new Error('not called'); },
+        readChecks: async () => [],
+        listReviewRuns: () => [],
+        start: async () => ({ ok: true }),
+        schedulerIntervalMs: 10,
+        orchestrationMailReconcile: async () => {
+          calls += 1;
+          if (calls === 1) throw new Error('transient reconcile failure');
+          return { ok: true, attempted: 1, nudged: 1, skipped: 0, reasons: [], deliveryEvidence: [evidence(`msg-${calls}`)] };
+        },
+        fleetObserver: {
+          schedulerGeneration: 'sg-mail-loop-state',
+          getEffectiveBudgetMs: () => 100,
+          tick: async () => {
+            await new Promise<void>((resolve) => setTimeout(resolve, 70));
+            return {
+              result: 'census-published-observer-only', status: 'complete', snapshotCommitted: false, snapshotPath: '',
+              schedulerGeneration: 'sg-mail-loop-state', tickSequence: 1, effectiveBudgetMs: 100,
+              schedulerReturnedWithinBudget: true, staleCompletionRejected: false, fleetCapFailClosed: false,
+              goneSemanticsClosed: false, exceptionCollisionRejected: false, zeroActuation: true,
+            } satisfies FleetObserverResult;
+          },
+        },
+      }, env);
+      const result = await tick;
+      expect(calls).toBeGreaterThanOrEqual(3);
+      expect(result.orchestrationMailReconcile?.deliveryEvidence).toHaveLength(calls - 1);
+      expect(result.orchestrationMailReconcile?.deliveryEvidence.map((row) => row.messageId)).toEqual(
+        Array.from({ length: calls - 1 }, (_, index) => `msg-${index + 2}`),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

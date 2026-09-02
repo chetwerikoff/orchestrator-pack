@@ -380,12 +380,23 @@ function startSchedulerMailReconcileLoop(
   let pending: Promise<void> | undefined;
   let latest: SchedulerMailReconcileResult | undefined;
   let failure: unknown;
+  const deliveryEvidence: SchedulerMailReconcileResult['deliveryEvidence'][number][] = [];
   const invoke = (): void => {
     if (stopped || pending) return;
     pending = Promise.resolve()
       .then(() => reconcile!())
-      .then((result) => { latest = result; })
-      .catch((error: unknown) => { failure ??= error; })
+      .then((result) => {
+        failure = undefined;
+        for (const evidence of result.deliveryEvidence) {
+          if (!deliveryEvidence.some((candidate) => candidate.messageId === evidence.messageId)) {
+            deliveryEvidence.push(evidence);
+          }
+        }
+        latest = deliveryEvidence.length === 0
+          ? result
+          : { ...result, deliveryEvidence: [...deliveryEvidence] };
+      })
+      .catch((error: unknown) => { failure = error; })
       .finally(() => { pending = undefined; });
   };
   invoke();
