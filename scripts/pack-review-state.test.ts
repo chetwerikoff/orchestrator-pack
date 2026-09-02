@@ -8,8 +8,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   PACK_REVIEW_CAP_MAP_VERSION,
   PACK_REVIEW_LEGACY_CAP_MAP_VERSION,
+  PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
   acknowledgePackReviewReset,
   commitPackReviewTerminal,
+  commitPackReviewTriage,
   createInitialPackReviewAuthority,
   initializePackReviewAuthority,
   observePackReviewHead,
@@ -894,5 +896,102 @@ describe('Issue #1887 strict-descendant findings settlement', () => {
       options: storeOptions,
     });
     expect(state.terminal).toBeUndefined();
+  });
+});
+
+
+describe('Issue #1887 logical triage is diagnostic only', () => {
+  it('does not settle final-cap findings on the same head through architect DEFER or publication', () => {
+    const storeOptions = options();
+    const head = sha('7');
+    let state = initializePackReviewAuthority({
+      prNumber: 18970,
+      headSha: head,
+      tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      options: storeOptions,
+    });
+    state = commitPackReviewTerminal({
+      prNumber: 18970,
+      expectedTransitionSeq: state.transitionSeq,
+      terminal: {
+        ...findingsTerminal('issue-1887-triage-final', head),
+        logicalRoundOrdinal: 1,
+      },
+      status: 'changes_requested',
+      findingCount: 1,
+      options: storeOptions,
+    });
+    expect(state.cycle).toMatchObject({
+      state: 'at_cap_open_findings',
+      consumedRoundOrdinals: [1],
+    });
+
+    state = commitPackReviewTriage({
+      prNumber: 18970,
+      expectedTransitionSeq: state.transitionSeq,
+      triage: {
+        verdict: 'DEFER',
+        source: 'architect',
+        findingSnapshotDigest: 'same-head-final',
+        committedAtUtc: '2026-09-02T00:00:00.000Z',
+      },
+      options: storeOptions,
+    });
+    expect(state.cycle?.state).toBe('at_cap_open_findings');
+    expect(state.cycle?.reviewStageComplete).not.toBe(true);
+
+    state = recordPackReviewPublication({
+      prNumber: 18970,
+      expectedTransitionSeq: state.transitionSeq,
+      publication: {
+        headSha: head,
+        terminalRunId: 'issue-1887-triage-final',
+        status: 'succeeded',
+        publicationDigest: 'same-head-publication',
+        recordedAtUtc: '2026-09-02T00:01:00.000Z',
+      },
+      options: storeOptions,
+    });
+    expect(state.cycle?.state).toBe('at_cap_open_findings');
+    expect(state.cycle?.reviewStageComplete).not.toBe(true);
+  });
+
+  it('does not reopen a pre-cap logical round on same-head architect DEFER', () => {
+    const storeOptions = options();
+    const head = sha('8');
+    let state = initializePackReviewAuthority({
+      prNumber: 18971,
+      headSha: head,
+      tier: 'T3',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      options: storeOptions,
+    });
+    state = commitPackReviewTerminal({
+      prNumber: 18971,
+      expectedTransitionSeq: state.transitionSeq,
+      terminal: {
+        ...findingsTerminal('issue-1887-triage-round1', head),
+        logicalRoundOrdinal: 1,
+      },
+      status: 'changes_requested',
+      findingCount: 1,
+      options: storeOptions,
+    });
+    expect(state.cycle?.state).toBe('open_findings');
+
+    state = commitPackReviewTriage({
+      prNumber: 18971,
+      expectedTransitionSeq: state.transitionSeq,
+      triage: {
+        verdict: 'DEFER',
+        source: 'architect',
+        findingSnapshotDigest: 'same-head-round1',
+        committedAtUtc: '2026-09-02T00:02:00.000Z',
+      },
+      options: storeOptions,
+    });
+    expect(state.cycle?.state).toBe('open_findings');
+    expect(state.cycle?.reviewStageComplete).not.toBe(true);
   });
 });
