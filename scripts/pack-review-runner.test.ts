@@ -8,6 +8,7 @@ import {
   observeGptPackReviewAttempt,
   observeNativePackReviewAttempt,
   parseAuthoritativeTier,
+  resolveGithubCommitIsStrictDescendant,
   startPackReview,
 } from './pack-review-runner.ts';
 import {
@@ -20,7 +21,6 @@ import type { CarryoverReplayResult } from './pack-review-carryover.ts';
 import { runProcess } from './kernel/subprocess.ts';
 import {
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
-  commitPackReviewTriage,
   commitSmokeOrderingTransition,
   initializePackReviewAuthority,
   observePackReviewHead,
@@ -30,6 +30,33 @@ import {
 const roots: string[] = [];
 const originalEnv = { ...process.env };
 const HEAD = 'a'.repeat(40);
+
+describe('Issue #1887 GitHub compare ancestry normalization', () => {
+  it('fails closed when compare transport throws', async () => {
+    const reviewed = '1'.repeat(40);
+    const current = '2'.repeat(40);
+    const result = await resolveGithubCommitIsStrictDescendant(
+      process.cwd(),
+      'chetwerikoff/orchestrator-pack',
+      reviewed,
+      current,
+      async () => { throw new Error('compare unavailable'); },
+    );
+    expect(result).toBe(false);
+  });
+
+  it('rejects equality before querying compare', async () => {
+    const head = '3'.repeat(40);
+    const result = await resolveGithubCommitIsStrictDescendant(
+      process.cwd(),
+      'chetwerikoff/orchestrator-pack',
+      head,
+      head,
+      async () => { throw new Error('must not be called'); },
+    );
+    expect(result).toBe(false);
+  });
+});
 
 function setupHarness(storeRoot: string): void {
   process.env.OPK_VITEST_HARNESS = '1';
@@ -722,7 +749,7 @@ describe('Issue #1826 logical-round smoke independence', () => {
     expect(finalAuthority?.cycle?.reviewStageComplete).toBe(true);
     expect(finalAuthority?.smokeOrdering?.workerOwned?.headSha).toBe(head1);
   });
-  it('blocks T3 round 2 until round-1 findings are resolved or explicitly rejected', async () => {
+  it('blocks same-head T3 round 2 findings but admits round 2 after a strict descendant', async () => {
     const parent = mkdtempSync(join(tmpdir(), 'pack-review-1826-round1-findings-gate-'));
     roots.push(parent);
     const storeRoot = join(parent, 'store');
@@ -806,35 +833,22 @@ describe('Issue #1826 logical-round smoke independence', () => {
     });
     expect(readPackReviewAuthority(prNumber, options)?.cycle?.consumedRoundOrdinals).toEqual([1]);
 
-    let authority = readPackReviewAuthority(prNumber, options)!;
-    authority = observePackReviewHead({
-      prNumber,
-      expectedTransitionSeq: authority.transitionSeq,
-      headSha: head,
-      options,
-    });
-    authority = commitPackReviewTriage({
-      prNumber,
-      expectedTransitionSeq: authority.transitionSeq,
-      triage: {
-        verdict: 'DEFER',
-        source: 'architect',
-        findingSnapshotDigest: 'f'.repeat(64),
-        actor: 'architect-fixture',
-        committedAtUtc: new Date().toISOString(),
-      },
-      options,
-    });
-    expect(authority.cycle).toMatchObject({ state: 'open', consumedRoundOrdinals: [1] });
-    expect(authority.cycle?.reviewStageComplete).not.toBe(true);
-
-    const adjudicatedRound2 = await startPackReview({
+    const descendant = '6'.repeat(40);
+    const descendantRound2 = await startPackReview({
       ...common,
+      headSha: descendant,
+      fixtureCurrentPrHeadSha: descendant,
+      fixturePostReviewHeadSha: descendant,
+      fixtureReviewCompareStatus: 'ahead',
       fixtureReviewStdout: cleanPayload(),
       fixtureGithubReviewId: 182903,
     });
-    expect(adjudicatedRound2).toMatchObject({ ok: true, created: true });
-    expect(readPackReviewAuthority(prNumber, options)?.cycle?.consumedRoundOrdinals).toEqual([1, 2]);
+    expect(descendantRound2).toMatchObject({ ok: true, created: true });
+    expect(readPackReviewAuthority(prNumber, options)?.cycle).toMatchObject({
+      state: 'closed',
+      consumedRoundOrdinals: [1, 2],
+      reviewStageComplete: true,
+    });
   });
   it('does not create a native same-round replacement when the prior run lacks a native binding', async () => {
     const parent = mkdtempSync(join(tmpdir(), 'pack-review-1826-native-unbound-'));
