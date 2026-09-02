@@ -1690,9 +1690,10 @@ describe('orchestration mail reconciliation', () => {
     expect(result.reasons).toContain('msg_revoked:orchestration_message_unretrievable');
   });
 
-  it('delivers unread Run mail without requiring coordinator terminal retrieval', async () => {
+  it('delivers unread Run mail after exact Run retrievability succeeds', async () => {
     const target = worker('term_run_mail_unread');
     const submitted: RuntimeWorkerIdentity[] = [];
+    let retrievabilityChecks = 0;
     const message = {
       id: 'msg_run_mail_unread',
       runId: 'run_run_mail_unread',
@@ -1706,7 +1707,7 @@ describe('orchestration mail reconciliation', () => {
       }),
       lookupMessage: () => ({ ok: true as const, message }),
       resolveWorker: () => ({ ok: true as const, worker: target }),
-      isMessageRetrievable: () => ({ ok: false as const, reason: 'orchestration_message_unretrievable' }),
+      isMessageRetrievable: () => { retrievabilityChecks += 1; return { ok: true as const }; },
       submitDeps: depsFor({}, {
         submitted,
         read: () => ({ ok: true as const, lines: submitted.length === 0 ? [buildDeliveryPointer(message), ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER], source: 'screen' as const }),
@@ -1728,6 +1729,7 @@ describe('orchestration mail reconciliation', () => {
       terminalReceipt: 'unproven',
     }]);
     expect(submitted).toHaveLength(1);
+    expect(retrievabilityChecks).toBe(1);
   });
 
   it('enters one Orca-notified message when terminal check --peek retrieves it', async () => {

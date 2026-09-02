@@ -1329,9 +1329,10 @@ export function createOrcaMessageSubmitDeps(
       })) };
     },
     isMessageRetrievable: (message, worker) => {
-      const observed = runOrcaJson<OrcaInboxFullResult>([
-        'orchestration', 'check', '--terminal', worker.identity.id, '--peek',
-      ], { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS });
+      const checkArgs = message.recipient.startsWith('run:')
+        ? ['orchestration', 'check', '--run', message.runId, '--peek']
+        : ['orchestration', 'check', '--terminal', worker.identity.id, '--peek'];
+      const observed = runOrcaJson<OrcaInboxFullResult>(checkArgs, { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS });
       if (!observed.ok) return { ok: false, reason: observed.error?.code ?? 'orchestration_check_unavailable' };
       return (observed.result?.messages ?? []).some((row) => row.id?.trim() === message.id)
         ? { ok: true }
@@ -1451,17 +1452,21 @@ export async function runOrchestrationMailReconcileTick(
           const cacheKey = workerKey(worker.identity) + '\u0000' + message.runId;
           const runRecipient = message.recipient.startsWith('run:');
           let observed = retrievable.get(cacheKey);
-          if (!runRecipient && !observed) {
-            observed = deps.observeRetrievableMessageIds
-              ? deps.observeRetrievableMessageIds(worker)
-              : deps.isMessageRetrievable
+          if (!observed) {
+            observed = runRecipient
+              ? deps.isMessageRetrievable
                 ? deps.isMessageRetrievable(found.message, worker)
-                : { ok: false as const, reason: 'orchestration_retrievability_unavailable' };
+                : { ok: false as const, reason: 'orchestration_retrievability_unavailable' }
+              : deps.observeRetrievableMessageIds
+                ? deps.observeRetrievableMessageIds(worker)
+                : deps.isMessageRetrievable
+                  ? deps.isMessageRetrievable(found.message, worker)
+                  : { ok: false as const, reason: 'orchestration_retrievability_unavailable' };
             retrievable.set(cacheKey, observed);
           }
-          const qualifies = runRecipient || (observed !== undefined && ('messageIds' in observed
+          const qualifies = observed !== undefined && ('messageIds' in observed
             ? observed.ok && observed.messageIds.has(message.id)
-            : observed.ok));
+            : observed.ok);
           if (!qualifies) {
             const reason = observed && !observed.ok ? observed.reason : 'orchestration_message_unretrievable';
             result = deliveryNoEffect(reason, worker, false);
