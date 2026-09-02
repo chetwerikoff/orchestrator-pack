@@ -921,6 +921,7 @@ function currentPackReviewCompletionCycle(
     }
 
     const cycle = authority.cycle;
+    if (!cycle) return null;
     return {
       cycleId: cycle.cycleId,
       capMapVersion: cycle.capMapVersion,
