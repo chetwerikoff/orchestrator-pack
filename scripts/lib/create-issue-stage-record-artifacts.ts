@@ -462,6 +462,7 @@ function parseCanonicalCaptureRevision(text: string): { issueNumber: number; sou
 
 function parseCanonicalTerminalVerdict(
   text: string,
+  requireInvocationEcho = true,
 ): { issueNumber: number; sourceRevision: string; findingCount: number } | null {
   const revision = parseCanonicalCaptureRevision(text);
   if (!revision) return null;
@@ -488,12 +489,15 @@ function parseCanonicalTerminalVerdict(
     && lines.every((line) => !line.startsWith('VERDICT:'))
     && revision.findingCount > 0;
   const invocationIds = lines.filter((line) => INVOCATION_ECHO_RE.test(line));
+  const invocationEchoCountOk = requireInvocationEcho
+    ? invocationIds.length === 1
+    : invocationIds.length === 0;
   const cutCandidates = exactCount('simplification-cut-candidate: yes');
   const simplificationClean = exactCount('SIMPLIFICATION_CLEAN');
   if (
     exactCount('review-economics-contract: v1') !== 1
     || !(omittedFindingCountOk || explicitFindingCountOk)
-    || invocationIds.length !== 1
+    || !invocationEchoCountOk
     || (cutCandidates === 0 ? simplificationClean !== 1 : simplificationClean !== 0)
   ) return null;
   if (revision.findingCount === 0) {
@@ -512,8 +516,8 @@ function isCanonicalReviewerArtifact(
   stage: Exclude<ReviewStage, 'architectural-lens'>,
   issueNumber: number,
   sourceRevision: string,
-  invocationId: string,
-): boolean {
+  invocationId?: string,
+ ): boolean {
   const revision = parseCanonicalCaptureRevision(text);
   if (!revision || revision.issueNumber !== issueNumber || revision.sourceRevision !== sourceRevision) return false;
   const lines = text.split(/\r?\n/).map((line) => line.trim());
@@ -522,8 +526,8 @@ function isCanonicalReviewerArtifact(
     const match = INVOCATION_ECHO_RE.exec(line);
     return match ? [match[1]!] : [];
   });
-  if (invocationEchoes.length !== 1 || invocationEchoes[0] !== invocationId) return false;
-  if (stage === 'architectural') return parseCanonicalTerminalVerdict(text) !== null;
+  if (invocationId === undefined ? invocationEchoes.length !== 0 : (invocationEchoes.length !== 1 || invocationEchoes[0] !== invocationId)) return false;
+  if (stage === 'architectural') return parseCanonicalTerminalVerdict(text, invocationId !== undefined) !== null;
   const noFindings = lines.filter((line) => line === 'NO_FINDINGS').length;
   const cutCandidates = lines.filter((line) => line === 'simplification-cut-candidate: yes').length;
   const simplificationClean = lines.filter((line) => line === 'SIMPLIFICATION_CLEAN').length;
@@ -536,6 +540,20 @@ function isCanonicalReviewerArtifact(
   });
   return declaredFindingCounts.length === 0
     || (declaredFindingCounts.length === 1 && declaredFindingCounts[0] === revision.findingCount);
+}
+
+function isCanonicalEchoLessFindingArtifact(
+  text: string,
+  stage: Exclude<ReviewStage, 'architectural-lens'>,
+  issueNumber: number,
+  sourceRevision: string,
+ ): boolean {
+  const revision = parseCanonicalCaptureRevision(text);
+  return Boolean(revision
+    && revision.issueNumber === issueNumber
+    && revision.sourceRevision === sourceRevision
+    && revision.findingCount > 0
+    && isCanonicalReviewerArtifact(text, stage, issueNumber, sourceRevision, undefined));
 }
 
 function canonicalReviewerArtifactRevision(
@@ -924,7 +942,8 @@ function rereadAuthoritativeIssueComment(
   sourceRevision: string,
   invocationId: string,
   errors: string[],
-): AuthoritativeIssueComment | null {
+  allowEchoLessFinding = false,
+ ): AuthoritativeIssueComment | null {
   const response = context.transport.runGh([
     'gh',
     'api',
@@ -963,13 +982,16 @@ function rereadAuthoritativeIssueComment(
     errors.push(`authoritative GitHub artifact was edited: ${reread.htmlUrl}`);
     return null;
   }
-  if (!isCanonicalReviewerArtifact(
+  const canonicalWithEcho = isCanonicalReviewerArtifact(
     reread.body,
     stage,
     context.census.issueNumber,
     sourceRevision,
     invocationId,
-  )) {
+  );
+  const canonicalEchoLessFinding = allowEchoLessFinding
+    && isCanonicalEchoLessFindingArtifact(reread.body, stage, context.census.issueNumber, sourceRevision);
+  if (!canonicalWithEcho && !canonicalEchoLessFinding) {
     const observedRevision = canonicalReviewerArtifactRevision(
       reread.body,
       stage,
@@ -1005,10 +1027,11 @@ function resolveAuthoritativeArtifact(
   stage: Exclude<ReviewStage, 'architectural-lens'>,
   stageSequence: number,
   invocation: JsonRecord,
+  stageInvocations: readonly JsonRecord[],
   captureTexts: Map<string, string>,
   captureTimestamps: Map<string, number>,
   errors: string[],
-): AuthoritativeArtifactResolution | null {
+ ): AuthoritativeArtifactResolution | null {
   const invocationId = optionalString(invocation.invocationId) ?? '';
   const sourceRevision = optionalString(invocation.sourceRevision) ?? '';
   const reviewerSlot = optionalString(invocation.reviewerSlot) ?? '';
@@ -1024,9 +1047,10 @@ function resolveAuthoritativeArtifact(
     return observedRevision ? [{ comment, observedRevision }] : [];
   });
   const sameRevisionCandidates = invocationCandidates.filter(({ observedRevision }) => observedRevision === sourceRevision);
-  const matches = sameRevisionCandidates.filter(({ comment }) => (
+  let matches = sameRevisionCandidates.filter(({ comment }) => (
     isTrustedReviewArtifactComment(comment) && comment.createdAt === comment.updatedAt
   ));
+  let echoLessFallback = false;
   if (matches.length === 0) {
     if (sameRevisionCandidates.some(({ comment }) => !comment.userLogin || !comment.authorAssociation)) {
       errors.push(temporaryError(
@@ -1050,17 +1074,71 @@ function resolveAuthoritativeArtifact(
       );
       return null;
     }
-    const journalableUnobservableSend = invocation.terminal === true
-      && invocation.sendCount === 1
-      && invocation.retryClass === 'retry-forbidden'
-      && (invocation.terminalClassification === 'post-send-failure'
-        || invocation.terminalClassification === 'output-conflict'
-        || invocation.terminalClassification === 'incident');
-    if (journalableUnobservableSend) return null;
-    errors.push(
-      `authoritative GitHub artifact absent after complete census: repository=${context.census.repositoryFullName} issue=#${context.census.issueNumber} stage=${stage} sourceRevision=${sourceRevision} invocationId=${invocationId} source=GitHub-Issue-comments`,
-    );
-    return null;
+    const launchedSlots = new Set<string>();
+    const echoMatchedSlots = new Set<string>();
+    for (const candidate of stageInvocations) {
+      const candidateRevision = optionalString(candidate.sourceRevision);
+      const candidateSlot = optionalString(candidate.reviewerSlot);
+      const candidateInvocationId = optionalString(candidate.invocationId);
+      if (candidateRevision !== sourceRevision || !candidateSlot || !candidateInvocationId) continue;
+      launchedSlots.add(candidateSlot);
+      const hasEchoMatch = context.census.comments.some((comment) => {
+        if (!commentTargetsExpectedIssue(comment, context.census.repositoryFullName, context.census.issueNumber)) return false;
+        const lines = comment.body.split(/\r?\n/).map((line) => line.trim());
+        const invocationEchoes = lines.flatMap((line) => {
+          const match = INVOCATION_ECHO_RE.exec(line);
+          return match ? [match[1]!] : [];
+        });
+        return invocationEchoes.length === 1
+          && invocationEchoes[0] === candidateInvocationId
+          && canonicalReviewerArtifactRevision(comment.body, stage, context.census.issueNumber, candidateInvocationId) === sourceRevision;
+      });
+      if (hasEchoMatch) echoMatchedSlots.add(candidateSlot);
+    }
+    const unmatchedSlots = [...launchedSlots].filter((slot) => !echoMatchedSlots.has(slot));
+    const unmatchedComments = context.census.comments.filter((comment) => (
+      commentTargetsExpectedIssue(comment, context.census.repositoryFullName, context.census.issueNumber)
+      && isCanonicalEchoLessFindingArtifact(comment.body, stage, context.census.issueNumber, sourceRevision)
+    ));
+    if (unmatchedSlots.length > 0 && unmatchedComments.length > 0) {
+      if (unmatchedSlots.length !== 1 || unmatchedComments.length !== 1) {
+        errors.push(`authoritative GitHub artifact census cannot uniquely bind echo-less FINDINGS: stage=${stage} sourceRevision=${sourceRevision} unmatchedComments=${unmatchedComments.length} unmatchedSlots=${unmatchedSlots.length}`);
+        return null;
+      }
+      const unmatchedSlot = unmatchedSlots[0]!;
+      if (unmatchedSlot !== reviewerSlot) return null;
+      const leftover = unmatchedComments[0]!;
+      if (!leftover.userLogin || !leftover.authorAssociation) {
+        errors.push(temporaryError(
+          'source-unavailable',
+          `echo-less canonical artifact candidate has no repository-trust fields: comment ${leftover.id}`,
+        ));
+        return null;
+      }
+      if (!isTrustedReviewArtifactComment(leftover)) {
+        errors.push(`authoritative GitHub artifact is not repository-trusted: ${leftover.htmlUrl}`);
+        return null;
+      }
+      if (leftover.createdAt !== leftover.updatedAt) {
+        errors.push(`authoritative GitHub artifact was edited: ${leftover.htmlUrl}`);
+        return null;
+      }
+      matches = [{ comment: leftover, observedRevision: sourceRevision }];
+      echoLessFallback = true;
+    }
+    if (matches.length === 0) {
+      const journalableUnobservableSend = invocation.terminal === true
+        && invocation.sendCount === 1
+        && invocation.retryClass === 'retry-forbidden'
+        && (invocation.terminalClassification === 'post-send-failure'
+          || invocation.terminalClassification === 'output-conflict'
+          || invocation.terminalClassification === 'incident');
+      if (journalableUnobservableSend) return null;
+      errors.push(
+        `authoritative GitHub artifact absent after complete census: repository=${context.census.repositoryFullName} issue=#${context.census.issueNumber} stage=${stage} sourceRevision=${sourceRevision} invocationId=${invocationId} source=GitHub-Issue-comments`,
+      );
+      return null;
+    }
   }
   const distinctBodies = new Set(matches.map(({ comment }) => comment.body));
   if (distinctBodies.size > 1) {
@@ -1080,6 +1158,7 @@ function resolveAuthoritativeArtifact(
     sourceRevision,
     invocationId,
     errors,
+    echoLessFallback,
   );
   if (!comment) return null;
   const name = authoritativeCaptureName(reviewDir, stage, stageSequence, reviewerSlot, invocation.capturePath);
@@ -1423,6 +1502,9 @@ function buildReceipt(
   assertDerived(raw.stageReceiptId, deriveStageReceiptId(episodeId, sequence), 'stage evidence stageReceiptId', errors);
 
   const invocationValues = raw.invocations;
+  const stageInvocations = Array.isArray(invocationValues)
+    ? invocationValues.filter((candidate): candidate is JsonRecord => isRecord(candidate))
+    : [];
   const invocations: ReviewerInvocationEnvelopeV1[] = [];
   const receiptPolicyVersion = policyVersion(raw.policyVersion);
   if (receiptPolicyVersion === null) errors.push('stage evidence.policyVersion is invalid');
@@ -1447,6 +1529,7 @@ function buildReceipt(
             browserStage,
             sequence,
             value,
+            stageInvocations,
             captureTexts,
             captureTimestamps,
             errors,

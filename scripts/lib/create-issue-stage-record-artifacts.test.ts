@@ -1230,7 +1230,9 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     input.evidence.outcome = 'incident';
     input.evidence.settlement.retryState = 'exhausted';
     writeFileSync(input.evidencePath, JSON.stringify(input.evidence));
-    const live = canonicalVerdict(REVISION, 'invocation-retry');
+    const live = canonicalFindingsVerdict({ invocationId: 'invocation-retry' })
+      .replace(/^INVOCATION_ID_TO_ECHO: .*$/m, '')
+      .replace(/\n{2,}/g, '\n');
     const source = transport({ census: [...input.reviewComments, comment(live)] });
 
     const result = produce(input, source);
@@ -1327,6 +1329,87 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(result.ok).toBe(false);
     expect(result.temporary).toBe('source-unavailable');
     expect(result.errors.join('\n')).toContain('no repository-trust fields');
+  });
+
+  it('credentials a unique echo-less FINDINGS comment for the unmatched reviewer slot', () => {
+    const input = fixture({ transportClassification: 'incident', withCapture: false, withTurnResult: false });
+    const stageEvidence = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+    const unmatchedInvocation = stageEvidence.invocations[1] as Record<string, unknown>;
+    const findingBody = canonicalFindingsVerdict({ invocationId: 'architectural-review-invocation-02' })
+      .replace(/^INVOCATION_ID_TO_ECHO: .*$/m, '')
+      .replace(/\n{2,}/g, '\n');
+    input.reviewComments[1]!.body = findingBody;
+    rmSync(join(input.dir, 'pass-01-architectural-review-02.capture.txt'));
+    unmatchedInvocation.terminalClassification = 'incident';
+    unmatchedInvocation.retryClass = 'retry-forbidden';
+    delete unmatchedInvocation.capturePath;
+    delete unmatchedInvocation.terminalResultIdentity;
+    writeFileSync(input.reviewEvidencePath, JSON.stringify(stageEvidence));
+    const result = produce(input, transport({
+      census: [...input.reviewComments, comment(input.body, { issueNumber: input.issueNumber })],
+      issueNumber: input.issueNumber,
+    }));
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-architectural-review-attempt.json'), 'utf8'));
+    expect(receipt.invocations[1]).toMatchObject({
+      reviewerSlot: '02',
+      terminalClassification: 'incident',
+      sendCount: 1,
+      artifactAuthority: {
+        kind: 'authoritative-github-artifact',
+        commentId: COMMENT_ID + 101,
+      },
+    });
+    expect(receipt.invocations[1].capture).toMatchObject({
+      name: 'pass-01-architectural-review-02.capture.txt',
+      byteLength: Buffer.byteLength(findingBody),
+    });
+    expect(receipt.invocations[1].terminalClassification).not.toBe('complete');
+    expect(readFileSync(join(input.dir, 'pass-01-architectural-review-02.capture.txt'), 'utf8')).toBe(findingBody);
+  });
+
+  it('fails closed when echo-less FINDINGS leftovers are ambiguous', () => {
+    const input = fixture({ transportClassification: 'incident', withCapture: false, withTurnResult: false });
+    const stageEvidence = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+    const unmatchedInvocation = stageEvidence.invocations[1] as Record<string, unknown>;
+    const findingBody = canonicalFindingsVerdict({ invocationId: 'architectural-review-invocation-02' })
+      .replace(/^INVOCATION_ID_TO_ECHO: .*$/m, '')
+      .replace(/\n{2,}/g, '\n');
+    input.reviewComments[1]!.body = findingBody;
+    rmSync(join(input.dir, 'pass-01-architectural-review-02.capture.txt'));
+    unmatchedInvocation.terminalClassification = 'incident';
+    unmatchedInvocation.retryClass = 'retry-forbidden';
+    delete unmatchedInvocation.capturePath;
+    delete unmatchedInvocation.terminalResultIdentity;
+    writeFileSync(input.reviewEvidencePath, JSON.stringify(stageEvidence));
+    const duplicate = comment(findingBody, {
+      id: COMMENT_ID + 1001,
+      html_url: `https://github.com/${REPOSITORY}/issues/${ISSUE}#issuecomment-${COMMENT_ID + 1001}`,
+    });
+    const result = produce(input, transport({
+      census: [...input.reviewComments, duplicate, comment(input.body, { issueNumber: input.issueNumber })],
+      issueNumber: input.issueNumber,
+    }));
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('cannot uniquely bind echo-less FINDINGS');
+  });
+
+  it('keeps an echoed invocation as the primary bind when an echo-less leftover is present', () => {
+    const input = fixture({ transportClassification: 'incident' });
+    const findingBody = canonicalFindingsVerdict({ invocationId: 'unmatched-extra' })
+      .replace(/^INVOCATION_ID_TO_ECHO: .*$/m, '')
+      .replace(/\n{2,}/g, '\n');
+    const extra = comment(findingBody, {
+      id: COMMENT_ID + 1002,
+      html_url: `https://github.com/${REPOSITORY}/issues/${ISSUE}#issuecomment-${COMMENT_ID + 1002}`,
+    });
+    const result = produce(input, transport({
+      census: [...input.reviewComments, extra, comment(input.body, { issueNumber: input.issueNumber })],
+      issueNumber: input.issueNumber,
+    }));
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-architectural-review-attempt.json'), 'utf8'));
+    expect(receipt.invocations[1].artifactAuthority.commentId).toBe(COMMENT_ID + 101);
   });
 
   it('deduplicates byte-identical trusted result materializations without ranking their publishers', () => {
