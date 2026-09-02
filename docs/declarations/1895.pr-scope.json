@@ -3,7 +3,6 @@
   "issue_number": 1895,
   "declared_paths": [
     "docs/declarations/1895.pr-scope.json",
-    "docs/orchestration-runbook.md",
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
     "scripts/lib/orchestrator-side-process-supervisor.ts",
@@ -18,7 +17,6 @@
   ],
   "allowed_roots": [
     "docs/declarations/",
-    "docs/orchestration-runbook.md",
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
     "scripts/lib/orchestrator-side-process-supervisor.ts",
