@@ -172,6 +172,7 @@ function delay(milliseconds: number): Promise<void> {
 async function runSupervisorMailReconcileProcess(
   options: Pick<SupervisorOptions, 'repoRoot'>,
   signal: AbortSignal,
+  timeoutMs: number,
 ): Promise<OrchestrationMailReconcileResult> {
   const result = await runProcess({
     command: process.execPath,
@@ -186,7 +187,7 @@ async function runSupervisorMailReconcileProcess(
     inheritParentEnv: true,
     signal,
     allowEmptyStdout: false,
-    timeoutMs: 15_000,
+    timeoutMs: Math.max(1, timeoutMs),
   });
   if (!result.ok) throw new Error(`supervisor_mail_reconcile_${result.outcome}`);
   const line = result.stdout.trim().split(/\r?\n/u).at(-1) ?? '';
@@ -282,10 +283,11 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
   let mailReconcileLoop: SupervisorMailReconcileLoop | undefined;
   try {
     const verified = verify();
+    const cadenceMs = verified.cadenceSeconds * 1_000;
     mailReconcileLoop = startSupervisorMailReconcileLoop(
       options.orchestrationMailReconcile
-        ?? ((signal) => runSupervisorMailReconcileProcess(options, signal)),
-      verified.cadenceSeconds * 1_000,
+        ?? ((signal) => runSupervisorMailReconcileProcess(options, signal, Math.max(1_000, cadenceMs - 1_000))),
+      cadenceMs,
     );
     writeStatus(options, state);
     let stopping = false;

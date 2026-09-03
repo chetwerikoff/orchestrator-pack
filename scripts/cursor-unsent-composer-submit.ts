@@ -1061,6 +1061,11 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     if (state) delete state.episodes[key];
     existing = undefined;
   }
+  // A claimed episode is an in-flight lease; if its process died, reclaim it under the ledger lock.
+  if (existing?.state === 'claimed') {
+    if (state) delete state.episodes[key];
+    existing = undefined;
+  }
 
   const control = deps.submitDeps.composerControl?.(worker.identity);
 

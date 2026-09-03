@@ -2172,6 +2172,64 @@ describe('orchestration mail reconciliation', () => {
     }
   });
 
+  it('reclaims an interrupted claimed episode without waiting for its abandoned backoff', async () => {
+    const target = worker('term_claim_recovery');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const now = Date.now();
+    const message = { id: 'msg_claim_recovery', runId: 'run_claim_recovery', recipient: 'run:run_claim_recovery', consumed: false };
+    const pointer = buildDeliveryPointer(message);
+    const rows = [{
+      id: message.id,
+      run_id: message.runId,
+      to_handle: message.recipient,
+      read: 1,
+      created_at: new Date(now - 1_000).toISOString(),
+    }];
+    const root = mkdtempSync(join(tmpdir(), 'opk-reconcile-claim-recovery-'));
+    const ledgerPath = join(root, 'orchestration-mail-reconcile.json');
+    const lockPath = join(root, 'orchestration-mail-reconcile.lock');
+    const key = `${workerKey(target.identity)}\u0000message\u0000${message.id}`;
+    writeFileSync(ledgerPath, JSON.stringify({
+      messages: {},
+      episodes: {
+        [key]: {
+          messageId: message.id,
+          runId: message.runId,
+          recipient: message.recipient,
+          workerKey: workerKey(target.identity),
+          nextEligibleAt: now + 60_000,
+          backoffMs: 120_000,
+          state: 'claimed',
+        },
+      },
+    }));
+    const deps = {
+      readInbox: () => ({ ok: true as const, result: { messages: rows } }),
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      isMessageRetrievable: () => ({ ok: true as const }),
+      submitDeps: depsFor({}, {
+        submitted,
+        read: () => ({
+          ok: true as const,
+          lines: submitted.length === 0 ? [pointer, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        }),
+      }),
+    };
+    try {
+      const result = await runOrchestrationMailReconcileTick(deps, { ledgerPath, lockPath, now: () => now });
+      const persisted = JSON.parse(readFileSync(ledgerPath, 'utf8')) as { episodes: Record<string, { reason?: string; state: string }> };
+      expect(result.reasons).toEqual([`${message.id}:enter_sent`]);
+      expect(submitted).toEqual([target.identity]);
+      expect(Object.values(persisted.episodes)).toEqual([
+        expect.objectContaining({ messageId: message.id, reason: 'enter_sent', state: 'confirmed' }),
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('does not select an expired read message as a fresh arrival', async () => {
     const target = worker('term_expired_recent_read');
     const now = 1_000_000;
