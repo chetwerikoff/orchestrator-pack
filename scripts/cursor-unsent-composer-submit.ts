@@ -1181,8 +1181,10 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   if (existing && now < existing.nextEligibleAt) {
     return deliveryNoEffect('orchestration_episode_backoff', worker, false);
   }
-  if (composerKind === 'empty' && !alreadyShown && existing?.state !== 'pointer-visible') {
-    const refusalReason = 'pointer_absent_orca_did_not_notify';
+  if (!alreadyShown && existing?.state !== 'pointer-visible') {
+    const refusalReason = composerKind === 'empty'
+      ? 'pointer_absent_orca_did_not_notify'
+      : 'composer_not_orchestration_pointer';
     if (state) {
       state.episodes[key] = {
         messageId: message.id,
@@ -1588,9 +1590,15 @@ export async function runOrchestrationMailReconcileTick(
             && !('messageIds' in observed)
             && !observed.ok
             && observed.reason === 'orchestration_message_unretrievable';
-          const qualifies = freshInboxRowAlreadyVisible || (observed !== undefined && ('messageIds' in observed
-            ? observed.ok && observed.messageIds.has(message.id)
-            : observed.ok));
+          const retryableInboxRowAlreadyVisible = retryableEpisodeIds.has(message.id)
+            && observed !== undefined
+            && !('messageIds' in observed)
+            && !observed.ok
+            && observed.reason === 'orchestration_message_unretrievable';
+          const qualifies = freshInboxRowAlreadyVisible || retryableInboxRowAlreadyVisible
+            || (observed !== undefined && ('messageIds' in observed
+              ? observed.ok && observed.messageIds.has(message.id)
+              : observed.ok));
           if (!qualifies) {
             const reason = observed && !observed.ok ? observed.reason : 'orchestration_message_unretrievable';
             result = deliveryNoEffect(reason, worker, false);

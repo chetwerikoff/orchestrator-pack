@@ -2065,6 +2065,67 @@ describe('orchestration mail reconciliation', () => {
     }
   });
 
+  it('retries fresh mail after an unsafe composer clears when the bound peek omits it', async () => {
+    const target = worker('term_fresh_retry_after_mixed');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let now = Date.now();
+    let pointerVisible = false;
+    const message = { id: 'msg_fresh_retry_after_mixed', runId: 'run_fresh_retry_after_mixed', recipient: 'run:run_fresh_retry_after_mixed', consumed: false };
+    const rows = [{
+      id: message.id,
+      run_id: message.runId,
+      to_handle: message.recipient,
+      read: 0,
+      created_at: new Date(now - 1_000).toISOString(),
+    }];
+    const pointer = `You have 1 orchestration message. Run \u0060orca orchestration check --run ${message.runId}\u0060.`;
+    const deps = {
+      readInbox: () => ({ ok: true as const, result: { messages: rows } }),
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      isMessageRetrievable: () => ({ ok: false as const, reason: 'orchestration_message_unretrievable' }),
+      submitDeps: depsFor({}, {
+        submitted,
+        read: () => ({
+          ok: true as const,
+          lines: submitted.length > 0
+            ? ['→ Add a follow-up', ...CURSOR_FOOTER]
+            : pointerVisible
+              ? [pointer, ...CURSOR_FOOTER]
+              : ['→ operator draft', ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        }),
+      }),
+    };
+    const root = mkdtempSync(join(tmpdir(), 'opk-reconcile-fresh-mixed-retry-'));
+    const ledgerPath = join(root, 'orchestration-mail-reconcile.json');
+    const lockPath = join(root, 'orchestration-mail-reconcile.lock');
+    try {
+      const first = await runOrchestrationMailReconcileTick(deps, { ledgerPath, lockPath, now: () => now });
+      const refused = JSON.parse(readFileSync(ledgerPath, 'utf8')) as {
+        episodes: Record<string, { reason?: string; state: string }>;
+      };
+      pointerVisible = true;
+      now += 1;
+      const second = await runOrchestrationMailReconcileTick(deps, { ledgerPath, lockPath, now: () => now });
+      const confirmed = JSON.parse(readFileSync(ledgerPath, 'utf8')) as {
+        episodes: Record<string, { reason?: string; state: string }>;
+      };
+      expect(first.reasons).toEqual([`${message.id}:composer_not_orchestration_pointer`]);
+      expect(Object.values(refused.episodes)).toEqual([
+        expect.objectContaining({ reason: 'composer_not_orchestration_pointer', state: 'refused' }),
+      ]);
+      expect(second.reasons).toEqual([`${message.id}:enter_sent`]);
+      expect(second.nudged).toBe(1);
+      expect(submitted).toEqual([target.identity]);
+      expect(Object.values(confirmed.episodes)).toEqual([
+        expect.objectContaining({ reason: 'enter_sent', state: 'confirmed' }),
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('does not select an expired read message as a fresh arrival', async () => {
     const target = worker('term_expired_recent_read');
     const now = 1_000_000;
