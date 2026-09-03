@@ -374,7 +374,7 @@ describe('submitUnsentCursorComposer', () => {
     expect(result.terminals.map((row) => row.reason)).toEqual(['composer_empty', 'enter_sent']);
   });
 
-  it('rejects repeated exact pointer lines as a concatenated Cursor composer', () => {
+  it('submits repeated identical exact pointer lines as one Cursor composer delivery', () => {
     const submitted: RuntimeWorkerIdentity[] = [];
     const result = submitUnsentCursorComposer(
       { watch: true },
@@ -383,8 +383,8 @@ describe('submitUnsentCursorComposer', () => {
         { submitted },
       ),
     );
-    expect(result.terminals[0]?.reason).toBe('composer_not_orchestration_pointer');
-    expect(submitted).toEqual([]);
+    expect(result.terminals[0]?.reason).toBe('enter_sent');
+    expect(submitted).toEqual([worker('term_repeated').identity]);
   });
 
   it('never enters an idle transcript followed by the composer placeholder', () => {
@@ -1253,7 +1253,8 @@ describe('delivery-triggered composer submission', () => {
       recipient: target.identity.id,
       consumed: false,
     };
-    const notice = [buildDeliveryPointer(message), buildDeliveryPointer(message)];
+    const foreignMessage = { ...message, runId: 'run_foreign_pointer', recipient: 'run:run_foreign_pointer' };
+    const notice = [buildDeliveryPointer(message), buildDeliveryPointer(foreignMessage)];
     const result = await submitOrcaMessageDeliveryPointer(message.id, {
       lookupMessage: () => ({ ok: true as const, message }),
       resolveWorker: () => ({ ok: true as const, worker: target }),
