@@ -1842,7 +1842,7 @@ describe('orchestration mail reconciliation', () => {
     }
   });
 
-  it('prioritizes fresh Run mail and then retries the same refused episode under bounded polling', async () => {
+  it('prioritizes fresh Run mail and uses the pack pointer fallback under bounded polling', async () => {
     const target = worker('term_bounded_retry');
     const submitted: RuntimeWorkerIdentity[] = [];
     const oldRows = Array.from({ length: 13 }, (_, index) => ({
@@ -1889,6 +1889,10 @@ describe('orchestration mail reconciliation', () => {
       },
       resolveWorker: () => ({ ok: true as const, worker: target }),
       isMessageRetrievable: () => ({ ok: true as const }),
+      writePointer: () => {
+        pointerVisible = true;
+        return { status: 'dispatched' as const };
+      },
       submitDeps: depsFor({}, {
         submitted,
         read: () => ({
@@ -1900,23 +1904,18 @@ describe('orchestration mail reconciliation', () => {
     };
     try {
       const first = await runOrchestrationMailReconcileTick(deps, { ledgerPath, lockPath, now: () => 1_000, maxRecipientGroups: 1, maxMessages: 1 });
-      const refusedState = JSON.parse(readFileSync(ledgerPath, 'utf8')) as { episodes: Record<string, { messageId: string; state: string }> };
-      const refusedEntry = Object.entries(refusedState.episodes).find(([, episode]) => episode.messageId === freshRow.id);
-      const refusedEpisode = refusedEntry?.[1];
+      const firstState = JSON.parse(readFileSync(ledgerPath, 'utf8')) as { messages: Record<string, number>; episodes: Record<string, { messageId: string; state: string }> };
+      const freshEntry = Object.entries(firstState.episodes).find(([, episode]) => episode.messageId === freshRow.id);
       expect(first.attempted).toBe(1);
-      expect(first.reasons).toContain(`${freshRow.id}:pointer_absent_orca_did_not_notify`);
-      expect(refusedEpisode?.state).toBe('refused');
-      expect(submitted).toHaveLength(0);
+      expect(first.reasons).toContain(`${freshRow.id}:enter_sent`);
+      expect(freshEntry?.[1].state).toBe('confirmed');
+      expect(submitted).toHaveLength(1);
+      expect(firstState.messages[freshRow.id]).toBe(1_000);
       freshRow.read = 1;
-      pointerVisible = true;
       messages.get(freshRow.id)!.consumed = true;
       const second = await runOrchestrationMailReconcileTick(deps, { ledgerPath, lockPath, now: () => 1_001, maxRecipientGroups: 1, maxMessages: 1 });
-      const confirmedState = JSON.parse(readFileSync(ledgerPath, 'utf8')) as { episodes: Record<string, { messageId: string; state: string }> };
-      const confirmedEpisode = refusedEntry ? confirmedState.episodes[refusedEntry[0]] : undefined;
       expect(second.attempted).toBe(1);
-      expect(second.nudged).toBe(1);
-      expect(second.reasons).toContain(`${freshRow.id}:enter_sent`);
-      expect(confirmedEpisode?.state).toBe('confirmed');
+      expect(second.nudged).toBe(0);
       expect(submitted).toHaveLength(1);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -1962,7 +1961,7 @@ describe('orchestration mail reconciliation', () => {
     expect(deps.writes).toBe(0);
   });
 
-  it('retries an Orca notification that appears after an initial refusal', async () => {
+  it('retries a Run notification after a transient pack pointer write failure', async () => {
     const target = worker('term_refusal_retry');
     const runId = 'run_refusal_retry';
     const message = { id: 'msg_refusal_retry', runId, recipient: `run:${runId}`, consumed: false };
@@ -1977,6 +1976,10 @@ describe('orchestration mail reconciliation', () => {
       lookupMessage: () => ({ ok: true as const, message }),
       resolveWorker: () => ({ ok: true as const, worker: target }),
       isMessageRetrievable: () => ({ ok: true as const }),
+      writePointer: () => {
+        if (pointerVisible) return { status: 'dispatched' as const };
+        return { status: 'dispatch_unknown' as const, reason: 'pointer_write_uncertain' };
+      },
       submitDeps: depsFor({}, {
         submitted,
         read: () => ({
@@ -1990,8 +1993,8 @@ describe('orchestration mail reconciliation', () => {
       const first = await runOrchestrationMailReconcileTick(deps, { ledgerPath, lockPath, now: () => 1_000 });
       pointerVisible = true;
       read = 1;
-      const second = await runOrchestrationMailReconcileTick(deps, { ledgerPath, lockPath, now: () => 1_001 });
-      expect(first.reasons).toContain(`${message.id}:pointer_absent_orca_did_not_notify`);
+      const second = await runOrchestrationMailReconcileTick(deps, { ledgerPath, lockPath, now: () => 61_000 });
+      expect(first.reasons).toContain(`${message.id}:pointer_write_uncertain`);
       expect(second.nudged).toBe(1);
       expect(second.reasons).toContain(`${message.id}:enter_sent`);
       expect(submitted).toHaveLength(1);
@@ -2020,7 +2023,7 @@ describe('orchestration mail reconciliation', () => {
     expect(deps.pointer).toBe(`You have 3 orchestration messages. Run \`orca orchestration check --terminal ${target.identity.id}\`.`);
     expect(result.attempted).toBe(3);
     expect(result.nudged).toBe(1);
-    expect(result.skipped).toBe(0);
+    expect(result.skipped).toBe(2);
     expect(submitted).toHaveLength(1);
   });
 
@@ -2097,48 +2100,44 @@ describe('orchestration mail reconciliation', () => {
     expect(state.episodes[key]).toBeUndefined();
   });
 
-  it('does not synthesize a pointer and records the refusal episode when Orca did not notify the composer', async () => {
-    const target = worker('term_definitive_write_failure');
-    const root = mkdtempSync(join(tmpdir(), 'opk-definitive-write-failure-'));
+  it('writes and submits the pack pointer when the composer is empty', async () => {
+    const target = worker('term_pack_pointer_fallback');
+    const root = mkdtempSync(join(tmpdir(), 'opk-pack-pointer-fallback-'));
     const statePath = join(root, 'orchestration-mail-reconcile.json');
     const lockPath = join(root, 'orchestration-mail-reconcile.lock');
     let writes = 0;
     let pointerVisible = false;
-    const message = { id: 'msg_definitive_write_failure', runId: 'run_definitive_write_failure', recipient: target.identity.id, consumed: false };
+    const message = { id: 'msg_pack_pointer_fallback', runId: 'run_pack_pointer_fallback', recipient: 'run:run_pack_pointer_fallback', consumed: false };
     const submitted: RuntimeWorkerIdentity[] = [];
-    const makeDeps = () => ({
-      lookupMessage: () => ({ ok: true as const, message }),
-      resolveWorker: () => ({ ok: true as const, worker: target }),
-      writePointer: () => {
-        writes += 1;
-        if (writes > 1) pointerVisible = true;
-        return writes === 1
-          ? { status: 'send_failed' as const, reason: 'runtime_unavailable' }
-          : { status: 'dispatched' as const };
-      },
-      submitDeps: depsFor({}, {
-        submitted,
-        submitResult: (identity) => { submitted.push(identity); return { status: 'dispatched' as const }; },
-        read: () => ({
-          ok: true as const,
-          lines: pointerVisible && submitted.length === 0 ? [buildDeliveryPointer(message), ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
-        }),
-      }),
-      episodeStatePath: statePath,
-      episodeLockPath: lockPath,
-    });
     try {
-      const first = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 1_000 });
-      const second = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 61_001 });
-      const persisted = JSON.parse(readFileSync(statePath, 'utf8')) as { episodes: Record<string, { messageId: string; reason?: string; state: string }> };
-      expect(first.terminals[0]?.reason).toBe('pointer_absent_orca_did_not_notify');
-      expect(second.terminals[0]?.reason).toBe('pointer_absent_orca_did_not_notify');
-      expect(writes).toBe(0);
-      expect(submitted).toHaveLength(0);
+      const result = await submitOrcaMessageDeliveryPointer(message.id, {
+        lookupMessage: () => ({ ok: true as const, message }),
+        resolveWorker: () => ({ ok: true as const, worker: target }),
+        writePointer: () => {
+          writes += 1;
+          pointerVisible = true;
+          return { status: 'dispatched' as const };
+        },
+        submitDeps: depsFor({}, {
+          submitted,
+          submitResult: (identity) => { submitted.push(identity); return { status: 'dispatched' as const }; },
+          read: () => ({
+            ok: true as const,
+            lines: pointerVisible && submitted.length === 0 ? [buildDeliveryPointer(message), ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+            source: 'screen' as const,
+          }),
+        }),
+        episodeStatePath: statePath,
+        episodeLockPath: lockPath,
+      });
+      const persisted = JSON.parse(readFileSync(statePath, 'utf8')) as { episodes: Record<string, { messageId: string; state: string }> };
+      expect(result.terminals[0]?.reason).toBe('enter_sent');
+      expect(result.terminals[0]?.enter).toBe(true);
+      expect(writes).toBe(1);
+      expect(submitted).toEqual([target.identity]);
       expect(Object.values(persisted.episodes)).toEqual([expect.objectContaining({
         messageId: message.id,
-        reason: 'pointer_absent_orca_did_not_notify',
-        state: 'refused',
+        state: 'confirmed',
       })]);
     } finally {
       rmSync(root, { recursive: true, force: true });
