@@ -1985,6 +1985,43 @@ describe('orchestration mail reconciliation', () => {
     }
   });
 
+  it('delivers a fresh read message when Orca peek already consumed it', async () => {
+    const target = worker('term_recently_read_pointer');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const now = Date.now();
+    const message = { id: 'msg_recently_read_pointer', runId: 'run_recently_read_pointer', recipient: 'run:run_recently_read_pointer', consumed: true };
+    const rows = [{
+      id: message.id,
+      run_id: message.runId,
+      to_handle: message.recipient,
+      read: 1,
+      created_at: new Date(now - 1_000).toISOString(),
+    }];
+    const pointer = `You have 1 orchestration message. Run \u0060orca orchestration check --run ${message.runId}\u0060.`;
+    const deps = {
+      readInbox: () => ({ ok: true as const, result: { messages: rows } }),
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      isMessageRetrievable: () => ({ ok: false as const, reason: 'orchestration_message_unretrievable' }),
+      submitDeps: depsFor({}, {
+        submitted,
+        read: () => ({ ok: true as const, lines: submitted.length === 0 ? [pointer, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER], source: 'screen' as const }),
+      }),
+    };
+    const root = mkdtempSync(join(tmpdir(), 'opk-reconcile-recently-read-pointer-'));
+    const ledgerPath = join(root, 'orchestration-mail-reconcile.json');
+    const lockPath = join(root, 'orchestration-mail-reconcile.lock');
+    try {
+      const result = await runOrchestrationMailReconcileTick(deps, { ledgerPath, lockPath, now: () => now });
+      expect(result.attempted).toBe(1);
+      expect(result.nudged).toBe(1);
+      expect(result.reasons).toEqual([`${message.id}:enter_sent`]);
+      expect(submitted).toEqual([target.identity]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('does not select an expired read message as a fresh arrival', async () => {
     const target = worker('term_expired_recent_read');
     const now = 1_000_000;

@@ -1568,9 +1568,14 @@ export async function runOrchestrationMailReconcileTick(
                   : { ok: false as const, reason: 'orchestration_retrievability_unavailable' };
             retrievable.set(cacheKey, observed);
           }
-          const qualifies = observed !== undefined && ('messageIds' in observed
+          const freshReadAlreadyConsumed = recentReadIds.has(message.id)
+            && observed !== undefined
+            && !('messageIds' in observed)
+            && !observed.ok
+            && observed.reason === 'orchestration_message_unretrievable';
+          const qualifies = freshReadAlreadyConsumed || (observed !== undefined && ('messageIds' in observed
             ? observed.ok && observed.messageIds.has(message.id)
-            : observed.ok);
+            : observed.ok));
           if (!qualifies) {
             const reason = observed && !observed.ok ? observed.reason : 'orchestration_message_unretrievable';
             result = deliveryNoEffect(reason, worker, false);
