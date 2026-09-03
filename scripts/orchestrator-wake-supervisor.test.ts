@@ -844,6 +844,11 @@ describe('Issue #1895 supervisor mail ownership', () => {
     }
     expect(pollsAfterChildExit).toBeGreaterThan(0);
   });
+  it('keeps the supervisor mail subprocess timeout independent of scheduler cadence', () => {
+    const source = readFileSync(new URL('./lib/orchestrator-side-process-supervisor.ts', import.meta.url), 'utf8');
+    expect(source).toContain('timeoutMs: 15_000,');
+    expect(source).not.toContain('cadenceMs - 1_000');
+  });
 });
 
 describe('Issue #1895 scheduler reconcile-loop state', () => {
