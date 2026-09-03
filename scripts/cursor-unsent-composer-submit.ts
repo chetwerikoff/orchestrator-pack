@@ -1409,6 +1409,18 @@ export async function runOrchestrationMailReconcileTick(
       return id && !(row.read === 1 || row.read === true);
     });
     const unreadIds = new Set(unread.map((row) => row.id!.trim()));
+    const recentArrivalIds = new Set(inboxRows.flatMap((row) => {
+      const id = row.id?.trim() ?? '';
+      const createdAt = typeof row.created_at === 'number'
+        ? (Number.isFinite(row.created_at) && row.created_at > 0 ? row.created_at : 0)
+        : Date.parse(String(row.created_at ?? ''));
+      return id
+        && Number.isFinite(createdAt)
+        && createdAt <= current
+        && current - createdAt <= ORCHESTRATION_RECONCILE_WINDOW_MS
+        ? [id]
+        : [];
+    }));
     // Orca may mark a message read while the child is still waiting for the
     // pack-side delivery pass. Keep recently-created read rows eligible once.
     const retryableEpisodeIds = new Set(Object.values(state.episodes)
@@ -1568,12 +1580,14 @@ export async function runOrchestrationMailReconcileTick(
                   : { ok: false as const, reason: 'orchestration_retrievability_unavailable' };
             retrievable.set(cacheKey, observed);
           }
-          const freshReadAlreadyConsumed = recentReadIds.has(message.id)
+          const freshInboxRowAlreadyVisible = state.messages[message.id] === undefined
+            && (unreadIds.has(message.id) || recentReadIds.has(message.id))
+            && recentArrivalIds.has(message.id)
             && observed !== undefined
             && !('messageIds' in observed)
             && !observed.ok
             && observed.reason === 'orchestration_message_unretrievable';
-          const qualifies = freshReadAlreadyConsumed || (observed !== undefined && ('messageIds' in observed
+          const qualifies = freshInboxRowAlreadyVisible || (observed !== undefined && ('messageIds' in observed
             ? observed.ok && observed.messageIds.has(message.id)
             : observed.ok));
           if (!qualifies) {
