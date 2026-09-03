@@ -1446,13 +1446,14 @@ export async function runOrchestrationMailReconcileTick(
           const parsed = Date.parse(String(row.created_at ?? ''));
           return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
         })();
-      const genuinelyUnseen = unreadIds.has(id) && state.messages[id] === undefined;
+      const firstSeenFreshArrival = state.messages[id] === undefined
+        && (unreadIds.has(id) || recentReadIds.has(id));
       const retryDue = retryableEpisodeIds.has(id);
       return {
         row,
         id,
         groupKey: `${row.to_handle?.trim() ?? ''}\u0000${row.run_id?.trim() ?? ''}`,
-        priority: genuinelyUnseen ? 0 : retryDue ? 1 : 2,
+        priority: firstSeenFreshArrival ? 0 : retryDue ? 1 : 2,
         createdAt,
         lastAttempt: state.messages[id] ?? createdAt,
       };

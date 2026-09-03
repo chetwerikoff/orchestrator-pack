@@ -1842,73 +1842,65 @@ describe('orchestration mail reconciliation', () => {
     }
   });
 
-  it('prioritizes fresh Run mail and refuses when the pack pointer is absent', async () => {
-    const target = worker('term_bounded_retry');
+  it('prioritizes a fresh read message over an observed unread backlog within both caps', async () => {
+    const target = worker('term_bounded_recent_read');
     const submitted: RuntimeWorkerIdentity[] = [];
-    const oldRows = Array.from({ length: 13 }, (_, index) => ({
+    const now = 1_000_000;
+    const oldRows = Array.from({ length: 110 }, (_, index) => ({
       id: `msg_old_${index}`,
-      run_id: 'run_old_backlog',
-      to_handle: target.identity.id,
+      run_id: `run_old_${index % 4}`,
+      to_handle: `run:run_old_${index % 4}`,
       read: 0,
-      created_at: '2026-09-02T00:00:00Z',
-    }));
-    const otherRows = Array.from({ length: 4 }, (_, index) => ({
-      id: `msg_other_${index}`,
-      run_id: `run_other_${index}`,
-      to_handle: target.identity.id,
-      read: 0,
-      created_at: '2026-09-02T00:00:01Z',
+      created_at: new Date(now - 120_000 - index).toISOString(),
     }));
     const freshRow = {
-      id: 'msg_fresh_run',
-      run_id: 'run_fresh_run',
-      to_handle: 'run:run_fresh_run',
-      read: 0,
-      created_at: '2026-09-03T00:00:00Z',
+      id: 'msg_fresh_read',
+      run_id: 'run_fresh_read',
+      to_handle: 'run:run_fresh_read',
+      read: 1,
+      created_at: new Date(now - 1_000).toISOString(),
     };
-    const rows = [...oldRows, ...otherRows, freshRow];
+    const rows = [...oldRows, freshRow];
     const messages = new Map(rows.map((row) => [row.id, {
       id: row.id,
       runId: row.run_id,
       recipient: row.to_handle,
-      consumed: false,
+      consumed: row.read === 1,
     }]));
-    const root = mkdtempSync(join(tmpdir(), 'opk-reconcile-bounded-retry-'));
-    const ledgerPath = join(root, 'orchestration-mail-reconcile.json');
-    const lockPath = join(root, 'orchestration-mail-reconcile.lock');
-    writeFileSync(ledgerPath, JSON.stringify({
-      messages: Object.fromEntries(rows.filter((row) => row.id !== freshRow.id).map((row) => [row.id, 900])),
-      episodes: {},
-    }));
+    const resolvedRecipients: string[] = [];
+    const orcaPointer = `You have 1 orchestration message. Run \u0060orca orchestration check --run ${freshRow.run_id}\u0060.`;
     const deps = {
       readInbox: () => ({ ok: true as const, result: { messages: rows } }),
       lookupMessage: (id: string) => {
         const message = messages.get(id);
         return message ? { ok: true as const, message } : { ok: false as const, reason: 'missing' };
       },
-      resolveWorker: () => ({ ok: true as const, worker: target }),
+      resolveWorker: (message: { readonly recipient: string }) => {
+        resolvedRecipients.push(message.recipient);
+        return { ok: true as const, worker: target };
+      },
       isMessageRetrievable: () => ({ ok: true as const }),
-      writePointer: () => { throw new Error('pack pointer fallback must not run'); },
       submitDeps: depsFor({}, {
         submitted,
-        read: () => ({ ok: true as const, lines: ['→ Add a follow-up', ...CURSOR_FOOTER], source: 'screen' as const }),
+        read: () => ({ ok: true as const, lines: submitted.length === 0 ? [orcaPointer, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER], source: 'screen' as const }),
       }),
     };
+    const root = mkdtempSync(join(tmpdir(), 'opk-reconcile-fresh-read-ranking-'));
+    const ledgerPath = join(root, 'orchestration-mail-reconcile.json');
+    const lockPath = join(root, 'orchestration-mail-reconcile.lock');
+    writeFileSync(ledgerPath, JSON.stringify({
+      messages: Object.fromEntries(oldRows.map((row) => [row.id, now - 1_000])),
+      episodes: {},
+    }));
     try {
-      const first = await runOrchestrationMailReconcileTick(deps, { ledgerPath, lockPath, now: () => 1_000, maxRecipientGroups: 1, maxMessages: 1 });
-      const firstState = JSON.parse(readFileSync(ledgerPath, 'utf8')) as { messages: Record<string, number>; episodes: Record<string, { messageId: string; state: string }> };
-      const freshEntry = Object.entries(firstState.episodes).find(([, episode]) => episode.messageId === freshRow.id);
-      expect(first.attempted).toBe(1);
-      expect(first.reasons).toContain(`${freshRow.id}:pointer_absent_orca_did_not_notify`);
-      expect(freshEntry?.[1].state).toBe('refused');
-      expect(submitted).toHaveLength(0);
-      expect(firstState.messages[freshRow.id]).toBe(1_000);
-      freshRow.read = 1;
-      messages.get(freshRow.id)!.consumed = true;
-      const second = await runOrchestrationMailReconcileTick(deps, { ledgerPath, lockPath, now: () => 1_001, maxRecipientGroups: 1, maxMessages: 1 });
-      expect(second.attempted).toBe(1);
-      expect(second.nudged).toBe(0);
-      expect(submitted).toHaveLength(0);
+      const result = await runOrchestrationMailReconcileTick(deps, { ledgerPath, lockPath, now: () => now, maxRecipientGroups: 1, maxMessages: 1 });
+      const persisted = JSON.parse(readFileSync(ledgerPath, 'utf8')) as { messages: Record<string, number> };
+      expect(result.attempted).toBe(1);
+      expect(result.nudged).toBe(1);
+      expect(result.reasons).toEqual([`${freshRow.id}:enter_sent`]);
+      expect(resolvedRecipients).toEqual([freshRow.to_handle]);
+      expect(submitted).toEqual([target.identity]);
+      expect(persisted.messages[freshRow.id]).toBe(now);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1953,7 +1945,7 @@ describe('orchestration mail reconciliation', () => {
     expect(deps.writes).toBe(0);
   });
 
-  it('processes a recently-read message without writing a pack pointer', async () => {
+  it('refuses a recent read message with an empty composer without writing a pack pointer', async () => {
     const target = worker('term_recently_read');
     const submitted: RuntimeWorkerIdentity[] = [];
     const now = Date.now();
@@ -1988,6 +1980,39 @@ describe('orchestration mail reconciliation', () => {
       expect(Object.values(persisted.episodes)).toEqual([expect.objectContaining({ messageId: message.id, state: 'refused' })]);
       expect(writes).toBe(0);
       expect(submitted).toHaveLength(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not select an expired read message as a fresh arrival', async () => {
+    const target = worker('term_expired_recent_read');
+    const now = 1_000_000;
+    const message = { id: 'msg_expired_recent_read', runId: 'run_expired_recent_read', recipient: 'run:run_expired_recent_read', consumed: true };
+    const rows = [{
+      id: message.id,
+      run_id: message.runId,
+      to_handle: message.recipient,
+      read: 1,
+      created_at: new Date(now - 60_001).toISOString(),
+    }];
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const deps = {
+      readInbox: () => ({ ok: true as const, result: { messages: rows } }),
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      isMessageRetrievable: () => ({ ok: true as const }),
+      submitDeps: depsFor({}, { submitted, read: () => ({ ok: true as const, lines: ['→ Add a follow-up', ...CURSOR_FOOTER], source: 'screen' as const }) }),
+    };
+    const root = mkdtempSync(join(tmpdir(), 'opk-reconcile-expired-read-'));
+    const ledgerPath = join(root, 'orchestration-mail-reconcile.json');
+    const lockPath = join(root, 'orchestration-mail-reconcile.lock');
+    try {
+      const result = await runOrchestrationMailReconcileTick(deps, { ledgerPath, lockPath, now: () => now, maxRecipientGroups: 1, maxMessages: 1 });
+      expect(result.attempted).toBe(0);
+      expect(result.nudged).toBe(0);
+      expect(result.reasons).toEqual([]);
+      expect(submitted).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
