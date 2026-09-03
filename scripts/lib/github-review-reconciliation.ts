@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
 import { resolveTrackedGhWrapper } from './gh-resolve-real-binary.mjs';
+import { packReviewFindingsSatisfiedByStrictDescendant } from '../pack-review-state.ts';
 import {
   describePackReviewError as describeError,
   getPackReviewRun,
@@ -259,9 +260,9 @@ export function listCanonicalDirectPackReviews(
 }
 
 /**
- * Project direct-review blocker state for the current head. A blocker on the
- * unchanged reviewed head cannot self-clear. A blocker on an ancestor head is
- * coarsely resolved only after the complete r13 descendant-fix cut.
+ * Project direct-review blocker state for the current head. A findings blocker
+ * on the unchanged reviewed head cannot self-clear. A findings blocker on a
+ * proven strict ancestor is mechanically handled by that descendant alone.
  */
 export function projectDirectPackReviewState(input: {
   readonly reviews: readonly GithubReviewSummary[];
@@ -285,11 +286,6 @@ export function projectDirectPackReviewState(input: {
     };
   }
 
-  const lifecycleComplete = input.workerLifecycle === 'ready_for_review'
-    || input.workerLifecycle === 'completed';
-  const descendantFixComplete = lifecycleComplete
-    && input.requiredCiGreen
-    && input.exactHeadSmokePassed;
   const relevant: DirectPackReviewEvidence[] = [];
   const unresolved: Array<number | string> = [];
   const unresolvedCurrentHead: Array<number | string> = [];
@@ -308,19 +304,28 @@ export function projectDirectPackReviewState(input: {
     try {
       ancestor = input.isAncestor(review.headSha, currentHeadSha);
     } catch {
-      // Unknown lineage cannot establish review legitimacy. A blocking review
-      // stays conservatively blocking until ordinary current-fact reconciliation.
+      // Unknown lineage cannot satisfy the strict-descendant predicate.
       if (review.blocking) unresolved.push(review.reviewId);
       continue;
     }
-    if (!ancestor) continue;
+    if (!ancestor) {
+      // A canonical findings review remains unresolved when the current head is
+      // divergent or otherwise not descended from the reviewed head.
+      if (review.blocking) unresolved.push(review.reviewId);
+      continue;
+    }
 
-    // Clean evidence is exact-commit only. r13 carry-over applies only to a
-    // known blocking ancestor after the complete descendant-fix cut.
+    // Clean evidence remains exact-head only. Findings on a proven strict
+    // ancestor are mechanically handled without WorkerReport, CI, or smoke
+    // participating in this review-settlement predicate.
     if (!review.blocking) continue;
 
     relevant.push(review);
-    if (!descendantFixComplete) {
+    if (!packReviewFindingsSatisfiedByStrictDescendant({
+      reviewedHeadSha: review.headSha,
+      currentHeadSha,
+      reviewedHeadIsAncestor: true,
+    })) {
       unresolved.push(review.reviewId);
       unresolvedAncestor.push(review.reviewId);
     }
@@ -344,14 +349,6 @@ export function projectDirectPackReviewState(input: {
     unresolvedAncestorBlockingReviewIds: unresolvedAncestor,
     state: unresolved.length > 0 ? 'blocked' : 'clear',
   };
-}
-
-export function directReviewReconciliationRequiresDescendantFixFacts(
-  projection: DirectPackReviewProjection,
-): boolean {
-  return projection.unresolvedAncestorBlockingReviewIds.length > 0
-    && projection.unresolvedCurrentHeadBlockingReviewIds.length === 0
-    && projection.unresolvedBlockingReviewIds.length === projection.unresolvedAncestorBlockingReviewIds.length;
 }
 
 /** Ordinary r13 publication read-back: stale review evidence never flips a newer head directly. */

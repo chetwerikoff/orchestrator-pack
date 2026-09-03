@@ -229,6 +229,16 @@ function normalizeSha(value: unknown, label = 'headSha'): string {
   return sha;
 }
 
+export function packReviewFindingsSatisfiedByStrictDescendant(input: {
+  reviewedHeadSha: string;
+  currentHeadSha: string;
+  reviewedHeadIsAncestor: boolean;
+}): boolean {
+  const reviewedHeadSha = normalizeSha(input.reviewedHeadSha, 'reviewedHeadSha');
+  const currentHeadSha = normalizeSha(input.currentHeadSha, 'currentHeadSha');
+  return reviewedHeadSha !== currentHeadSha && input.reviewedHeadIsAncestor === true;
+}
+
 function positiveInteger(value: unknown, label: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {
@@ -740,14 +750,11 @@ export function observePackReviewHead(input: {
         const consumedLogicalRounds = cycle && isLogicalRoundCycle(cycle)
           ? cycleConsumedCount(cycle)
           : 0;
-        const priorLogicalRoundSettled = current.terminal?.reviewVerdict === 'clean'
-          || current.triage?.verdict === 'DEFER';
         if (cycle
             && isLogicalRoundCycle(cycle)
             && cycle.state === 'open'
             && consumedLogicalRounds > 0
-            && consumedLogicalRounds < cycle.frozenCap
-            && priorLogicalRoundSettled) {
+            && consumedLogicalRounds < cycle.frozenCap) {
           // Immutable terminal/run records retain prior-round evidence. Rewind only
           // the live per-round projection before the next required logical round.
           current.terminal = undefined;
@@ -1036,6 +1043,7 @@ export function commitPackReviewTerminal(input: {
           cycle.state = 'closed';
           cycle.closedAtUtc = nowIso(input.options);
           cycle.atCapHash = undefined;
+          if (isLogicalRoundCycle(cycle)) markReviewStageComplete(current, cycle.closedAtUtc);
         } else {
           cycle.state = 'open';
           cycle.closedAtUtc = undefined;
@@ -1181,7 +1189,11 @@ export function commitSmokeOrderingTransition(input: {
             'worker-owned smoke result requires a started dispatch',
           );
         }
-        if (authority.smokeOrdering?.independent) {
+        const independent = authority.smokeOrdering?.independent;
+        const workerFixOnNewHead = independent?.status === 'failed'
+          && independent.failureKind === 'finding'
+          && independent.failureHeadSha !== headSha;
+        if (independent && !workerFixOnNewHead) {
           throw new PackReviewAuthorityError(
             'smoke_ordering_worker_smoke_forbidden',
             'worker-owned smoke is forbidden after independent smoke has started',
@@ -1292,6 +1304,79 @@ function markReviewStageComplete(
   current.cycle.reviewStageCompletedAtUtc = completedAtUtc;
 }
 
+export function settleLogicalPackReviewFindingsByStrictDescendant(input: {
+  prNumber: number;
+  expectedTransitionSeq: number;
+  reviewedHeadSha: string;
+  currentHeadSha: string;
+  reviewedHeadIsAncestor: boolean;
+  options: PackReviewAuthorityOptions;
+}): PackReviewAuthorityDocument {
+  const reviewedHeadSha = normalizeSha(input.reviewedHeadSha, 'reviewedHeadSha');
+  const currentHeadSha = normalizeSha(input.currentHeadSha, 'currentHeadSha');
+  if (!packReviewFindingsSatisfiedByStrictDescendant({
+    reviewedHeadSha,
+    currentHeadSha,
+    reviewedHeadIsAncestor: input.reviewedHeadIsAncestor,
+  })) {
+    throw new PackReviewAuthorityError(
+      'findings_settlement_invalid',
+      'findings require a strict descendant of the reviewed head',
+    );
+  }
+
+  return commitPackReviewAuthorityTransition({
+    prNumber: input.prNumber,
+    expectedTransitionSeq: input.expectedTransitionSeq,
+    nextPhase: 'head_observed',
+    options: input.options,
+    mutate(current) {
+      if (current.currentHeadSha !== currentHeadSha) {
+        throw new PackReviewAuthorityError('findings_settlement_head_stale', current.currentHeadSha);
+      }
+      const cycle = current.cycle;
+      if (!cycle
+          || !isLogicalRoundCycle(cycle)
+          || current.terminal?.reviewVerdict !== 'findings'
+          || current.terminal.targetSha !== reviewedHeadSha) {
+        throw new PackReviewAuthorityError(
+          'findings_settlement_invalid',
+          'logical findings terminal is not authoritative for the reviewed head',
+        );
+      }
+
+      const consumedCount = cycleConsumedCount(cycle);
+      if (cycle.state === 'open_findings' && consumedCount < cycle.frozenCap) {
+        cycle.state = 'open';
+        cycle.closedAtUtc = undefined;
+        cycle.atCapHash = undefined;
+      } else if (
+        (cycle.state === 'at_cap_open_findings' || cycle.state === 'at_cap_continuation_required')
+        && consumedCount === cycle.frozenCap
+      ) {
+        cycle.state = 'closed';
+        cycle.closedAtUtc = nowIso(input.options);
+        cycle.atCapHash = undefined;
+        markReviewStageComplete(current, cycle.closedAtUtc);
+        current.smokeOrdering = {
+          ...current.smokeOrdering,
+          reviewSettledHeadSha: currentHeadSha,
+        };
+      } else {
+        throw new PackReviewAuthorityError(
+          'findings_settlement_invalid',
+          `cycle state ${cycle.state} cannot settle findings at logical count ${consumedCount}`,
+        );
+      }
+
+      current.evidence = undefined;
+      current.triage = undefined;
+      current.publication = undefined;
+      return current;
+    },
+  });
+}
+
 function reviewStartConsumedEvidence(
   authority: PackReviewAuthorityDocument,
   reviewRuns: readonly PackReviewStartConsumptionRecord[],
@@ -1339,8 +1424,7 @@ function reviewObligationsSettled(authority: PackReviewAuthorityDocument): boole
     if (cycle.state === 'closed' && clearTerminal) {
       return true;
     }
-    return (cycle.state === 'at_cap_open_findings' || cycle.state === 'at_cap_continuation_required')
-      && authority.triage?.verdict === 'DEFER';
+    return false;
   }
   if (cycle.state === 'closed') return true;
   if (reviewStatus === 'clean' || reviewStatus === 'up_to_date' || reviewStatus === 'commented') return true;
@@ -1430,37 +1514,16 @@ export function commitPackReviewTriage(input: {
               : 'automatic DEFER requires final-cap continuation, exact-head worker smoke PASS, no-intersection scope evidence, and exact finding-resolution evidence',
           );
         }
-        if (priorRoundFindingSettlement) {
-          current.cycle!.state = 'open';
-          current.cycle!.closedAtUtc = undefined;
-          current.cycle!.atCapHash = undefined;
-        }
       } else if (!['BLOCK', 'DEFER'].includes(input.triage.verdict)) {
         throw new PackReviewAuthorityError('triage_invalid', 'architect verdict must be BLOCK or DEFER');
-      } else if (input.triage.verdict === 'DEFER'
-          && current.cycle?.state === 'open_findings'
-          && isLogicalRoundCycle(current.cycle)
-          && cycleConsumedCount(current.cycle) < current.cycle.frozenCap
-          && current.terminal?.reviewVerdict === 'findings') {
-        // Existing architect adjudication is the explicit reject/resolve path.
-        // It settles this round's findings but cannot complete a pre-cap T3 stage.
-        current.cycle.state = 'open';
-        current.cycle.closedAtUtc = undefined;
-        current.cycle.atCapHash = undefined;
       }
       current.triage = { ...input.triage };
       const automaticFinalFixSettlement = input.triage.source === 'automatic'
         && input.triage.verdict === 'DEFER'
-        && current.cycle?.state !== 'open';
-      const architectFinalLogicalSettlement = input.triage.source === 'architect'
-        && input.triage.verdict === 'DEFER'
         && current.cycle != null
-        && isLogicalRoundCycle(current.cycle)
-        && cycleConsumedCount(current.cycle) === current.cycle.frozenCap
-        && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(current.cycle.state)
-        && current.terminal?.reviewVerdict === 'findings';
+        && !isLogicalRoundCycle(current.cycle)
+        && current.cycle.state !== 'open';
       if (automaticFinalFixSettlement
-          || architectFinalLogicalSettlement
           || (current.publication?.status === 'succeeded' && reviewObligationsSettled(current))) {
         markReviewStageComplete(current, input.triage.committedAtUtc);
         current.smokeOrdering = {

@@ -342,6 +342,7 @@ interface OrcaInboxMessageRow {
   readonly run_id?: string;
   readonly to_handle?: string;
   readonly read?: number | boolean;
+  readonly created_at?: string | number;
 }
 
 interface OrcaInboxFullResult {
@@ -906,11 +907,11 @@ function migrateLegacyEpisodeKeys(
 
 function releaseClaimsForConsumedMessages(
   state: PersistedReconcileState,
-  unreadMessageIds: ReadonlySet<string>,
-  unreadEpisodeKeys: ReadonlySet<string>,
+  activeMessageIds: ReadonlySet<string>,
+  activeEpisodeKeys: ReadonlySet<string>,
 ): void {
   for (const [key, episode] of Object.entries(state.episodes)) {
-    if (unreadEpisodeKeys.has(key) && !unreadMessageIds.has(episode.messageId)) {
+    if (activeEpisodeKeys.has(key) && !activeMessageIds.has(episode.messageId)) {
       delete state.episodes[key];
     }
   }
@@ -1013,8 +1014,9 @@ export async function submitOrcaMessageDeliveryPointer(
 async function submitOrcaMessageDeliveryPointerForMessage(
   message: DeliveryMessage,
   deps: DeliveryMessageSubmitDeps,
+  allowConsumedRetry = false,
 ): Promise<UnsentComposerSubmitResult> {
-  if (message.consumed) return deliveryNoEffect('delivery_already_consumed');
+  if (message.consumed && !allowConsumedRetry) return deliveryNoEffect('delivery_already_consumed');
   const resolved = deps.resolveWorker(message);
   if (!resolved.ok) return deliveryNoEffect(resolved.reason, undefined, false);
   if (resolved.worker === null) return deliveryNoEffect('worker_gone');
@@ -1400,51 +1402,73 @@ export async function runOrchestrationMailReconcileTick(
         { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS },
       );
     if (!response.ok) return { ok: false, attempted: 0, nudged: 0, skipped: 0, reasons: [response.error?.code ?? 'orchestration_inbox_unavailable'], deliveryEvidence: [] };
-    const unread = (response.result?.messages ?? []).filter((row) => {
+    const inboxRows = response.result?.messages ?? [];
+    const unread = inboxRows.filter((row) => {
       const id = row.id?.trim() ?? '';
       return id && !(row.read === 1 || row.read === true);
     });
     const unreadIds = new Set(unread.map((row) => row.id!.trim()));
+    // Orca can mark a message read before its PTY pointer is rendered. Retry only
+    // exact unconfirmed episodes within the existing bounded reconcile window.
+    const retryableEpisodeIds = new Set(Object.values(state.episodes)
+      .filter((episode) => episode.state !== 'confirmed'
+        && current >= episode.nextEligibleAt
+        && state.messages[episode.messageId] !== undefined
+        && current - state.messages[episode.messageId]! < ORCHESTRATION_RECONCILE_WINDOW_MS)
+      .map((episode) => episode.messageId));
     for (const id of Object.keys(state.messages)) {
-      if (!unreadIds.has(id) || current - state.messages[id]! >= ORCHESTRATION_RECONCILE_WINDOW_MS) delete state.messages[id];
+      if ((!unreadIds.has(id) && !retryableEpisodeIds.has(id))
+        || current - state.messages[id]! >= ORCHESTRATION_RECONCILE_WINDOW_MS) delete state.messages[id];
     }
+    const retryableRows = inboxRows.filter((row) => {
+      const id = row.id?.trim() ?? '';
+      return id && retryableEpisodeIds.has(id) && (row.read === 1 || row.read === true);
+    });
+    const activeRows = [...unread, ...retryableRows];
+    const activeMessageIds = new Set(activeRows.map((row) => row.id!.trim()));
+    const rankedRows = activeRows.map((row) => {
+      const id = row.id!.trim();
+      const createdAt = typeof row.created_at === 'number'
+        ? (Number.isFinite(row.created_at) && row.created_at > 0 ? row.created_at : 0)
+        : (() => {
+          const parsed = Date.parse(String(row.created_at ?? ''));
+          return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+        })();
+      const genuinelyUnseen = unreadIds.has(id) && state.messages[id] === undefined;
+      const retryDue = retryableEpisodeIds.has(id);
+      return {
+        row,
+        id,
+        groupKey: `${row.to_handle?.trim() ?? ''}\u0000${row.run_id?.trim() ?? ''}`,
+        priority: genuinelyUnseen ? 0 : retryDue ? 1 : 2,
+        createdAt,
+        lastAttempt: state.messages[id] ?? createdAt,
+      };
+    }).sort((left, right) => {
+      if (left.priority !== right.priority) return left.priority - right.priority;
+      if (left.priority === 0 && left.createdAt !== right.createdAt) return right.createdAt - left.createdAt;
+      if (left.lastAttempt !== right.lastAttempt) return left.lastAttempt - right.lastAttempt;
+      if (left.createdAt !== right.createdAt) return left.createdAt - right.createdAt;
+      return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+    });
+    const groupOrder = [...new Set(rankedRows.map((candidate) => candidate.groupKey))];
     const maxRecipientGroups = options.maxRecipientGroups === undefined
       ? undefined
       : Math.max(1, Math.floor(options.maxRecipientGroups));
     const maxMessages = options.maxMessages === undefined
       ? undefined
       : Math.max(1, Math.floor(options.maxMessages));
-    const groupOrder: string[] = [];
-    const groupSeen = new Set<string>();
-    const unseenGroups = new Set<string>();
-    for (const row of unread) {
-      const groupKey = `${row.to_handle?.trim() ?? ''}\u0000${row.run_id?.trim() ?? ''}`;
-      if (!groupSeen.has(groupKey)) {
-        groupSeen.add(groupKey);
-        groupOrder.push(groupKey);
-      }
-      if (state.messages[row.id!.trim()] === undefined) unseenGroups.add(groupKey);
-    }
-    const prioritizedGroups = [
-      ...groupOrder.filter((key) => unseenGroups.has(key)),
-      ...groupOrder.filter((key) => !unseenGroups.has(key)),
-    ];
     const selectedGroups = maxRecipientGroups === undefined
-      ? new Set(prioritizedGroups)
-      : new Set(prioritizedGroups.slice(0, maxRecipientGroups));
+      ? new Set(groupOrder)
+      : new Set(groupOrder.slice(0, maxRecipientGroups));
     const candidateRows = maxRecipientGroups === undefined
-      ? unread
-      : unread.filter((row) => selectedGroups.has(`${row.to_handle?.trim() ?? ''}\u0000${row.run_id?.trim() ?? ''}`));
+      ? rankedRows
+      : rankedRows.filter((candidate) => selectedGroups.has(candidate.groupKey));
     const rowsToProcess = maxMessages === undefined
-      ? candidateRows
-      : [...candidateRows].sort((left, right) => {
-        const leftPriority = state.messages[left.id!.trim()] === undefined ? 0 : 1;
-        const rightPriority = state.messages[right.id!.trim()] === undefined ? 0 : 1;
-        return leftPriority - rightPriority;
-      }).slice(0, maxMessages);
-
+      ? candidateRows.map((candidate) => candidate.row)
+      : candidateRows.slice(0, maxMessages).map((candidate) => candidate.row);
     const rowsById = new Map<string, OrcaInboxMessageRow[]>();
-    for (const row of unread) {
+    for (const row of activeRows) {
       const id = row.id!.trim();
       const rows = rowsById.get(id) ?? [];
       rows.push(row);
@@ -1481,7 +1505,7 @@ export async function runOrchestrationMailReconcileTick(
     }
     if (!unresolvedUnread) {
       migrateLegacyEpisodeKeys(state, unreadEpisodeKeysByMessage);
-      releaseClaimsForConsumedMessages(state, unreadIds, unreadEpisodeKeys);
+      releaseClaimsForConsumedMessages(state, activeMessageIds, unreadEpisodeKeys);
       for (const key of Object.keys(state.episodes)) {
         if (!unreadEpisodeKeys.has(key)) delete state.episodes[key];
       }
@@ -1539,7 +1563,7 @@ export async function runOrchestrationMailReconcileTick(
             const reason = observed && !observed.ok ? observed.reason : 'orchestration_message_unretrievable';
             result = deliveryNoEffect(reason, worker, false);
           } else {
-            result = await submitOrcaMessageDeliveryPointerForMessage(message, reconcileDeps);
+            result = await submitOrcaMessageDeliveryPointerForMessage(message, reconcileDeps, retryableEpisodeIds.has(id));
             const evidence = deliveryLookingEvidence(message, worker, result);
             if (evidence) deliveryEvidence.push(evidence);
           }

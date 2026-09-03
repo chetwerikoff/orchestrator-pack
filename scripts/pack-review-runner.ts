@@ -48,8 +48,10 @@ import {
   commitPackReviewTriage,
   initializePackReviewAuthority,
   observePackReviewHead,
+  packReviewFindingsSatisfiedByStrictDescendant,
   readPackReviewAuthority,
   recordPackReviewPublication,
+  settleLogicalPackReviewFindingsByStrictDescendant,
   selectPackReviewEvidence,
   selectPackReviewGptSourceCardinality,
   smokeOrderingRequired,
@@ -240,6 +242,7 @@ interface StartInput {
   fixtureIssueNumber?: number;
   fixtureChangedPaths?: string[];
   fixtureBoundIssueSnapshotBytes?: string;
+  fixtureReviewCompareStatus?: string;
 }
 
 interface DirectCliStartInput extends StartInput {
@@ -283,6 +286,7 @@ export interface ReconcileStalePackReviewRunsInput {
   fixtureIssueNumber?: number;
   fixtureChangedPaths?: string[];
   fixtureBoundIssueSnapshotBytes?: string;
+  fixtureReviewCompareStatus?: string;
   resolveRepositorySlug?: (repoRoot: string) => Promise<string>;
   beforeStaleStatusWrite?: (run: PackReviewRunRecord) => void | Promise<void>;
   fixturePauseBeforeStaleStatusWrite?: () => void | Promise<void>;
@@ -615,6 +619,61 @@ export async function resolveCurrentPrHead(
   if (!/^[0-9a-f]{40}$/i.test(headSha ?? '')) throw new Error(`PR #${prNumber} returned invalid head SHA`);
   if (String(state ?? '').toUpperCase() !== 'OPEN') throw new Error(`PR #${prNumber} is not open`);
   return headSha.toLowerCase();
+}
+
+export async function resolveGithubCommitIsStrictDescendant(
+  repoRoot: string,
+  repoSlug: string,
+  reviewedHeadSha: string,
+  currentHeadSha: string,
+  runner: typeof runProcess = runProcess,
+): Promise<boolean> {
+  const reviewed = trim(reviewedHeadSha).toLowerCase();
+  const current = trim(currentHeadSha).toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(reviewed)
+      || !/^[0-9a-f]{40}$/.test(current)
+      || reviewed === current) {
+    return false;
+  }
+
+  try {
+    const result = await runner({
+      command: resolveTrackedGhWrapper(),
+      args: ['api', `repos/${repoSlug}/compare/${reviewed}...${current}`],
+      cwd: repoRoot,
+      inheritParentEnv: true,
+      allowEmptyStdout: false,
+      timeoutMs: 30_000,
+    });
+    if (!result.ok) return false;
+    const parsed = JSON.parse(result.stdout) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+    return trim((parsed as Record<string, unknown>).status).toLowerCase() === 'ahead';
+  } catch {
+    return false;
+  }
+}
+
+async function resolvePackReviewStrictDescendant(input: {
+  repoRoot: string;
+  repoSlug: string;
+  reviewedHeadSha: string;
+  currentHeadSha: string;
+  fixtureReviewCompareStatus?: string;
+}): Promise<boolean> {
+  const reviewedHeadIsAncestor = input.fixtureReviewCompareStatus === undefined
+    ? await resolveGithubCommitIsStrictDescendant(
+        input.repoRoot,
+        input.repoSlug,
+        input.reviewedHeadSha,
+        input.currentHeadSha,
+      )
+    : trim(input.fixtureReviewCompareStatus).toLowerCase() === 'ahead';
+  return packReviewFindingsSatisfiedByStrictDescendant({
+    reviewedHeadSha: input.reviewedHeadSha,
+    currentHeadSha: input.currentHeadSha,
+    reviewedHeadIsAncestor,
+  });
 }
 
 export async function resolveCurrentPrTarget(
@@ -2944,9 +3003,27 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
   const prNumber = input.prNumber;
   if (!prNumber) return null;
   let authority = readPackReviewAuthority(prNumber, { storeRoot: options.storeRoot });
-  if (!authority?.cycle || authority.cycle.state !== 'at_cap_continuation_required') return null;
+  if (!authority?.cycle) return null;
+  const logicalAccounting = authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
+  const logicalFinalFindings = logicalAccounting
+    && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)
+    && authority.terminal?.reviewVerdict === 'findings';
+  if (!logicalFinalFindings && authority.cycle.state !== 'at_cap_continuation_required') return null;
+
   const currentHead = input.fixtureCurrentPrHeadSha
     ?? await resolveCurrentPrHead(input.sourceRepoRoot, options.repoSlug, prNumber);
+  if (logicalFinalFindings && currentHead.toLowerCase() !== authority.currentHeadSha.toLowerCase()) {
+    try {
+      authority = observePackReviewHead({
+        prNumber,
+        expectedTransitionSeq: authority.transitionSeq,
+        headSha: currentHead,
+        options: { storeRoot: options.storeRoot },
+      });
+    } catch {
+      authority = readPackReviewAuthority(prNumber, { storeRoot: options.storeRoot }) ?? authority;
+    }
+  }
   if (currentHead.toLowerCase() !== authority.currentHeadSha.toLowerCase()) {
     return {
       prNumber,
@@ -2956,7 +3033,6 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       nextAction: 'observe the current PR head, then rerun scoped reconcile',
     };
   }
-  const logicalAccounting = authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
   const workerOwned = authority.smokeOrdering?.workerOwned;
   if (!logicalAccounting
       && (workerOwned?.headSha !== authority.currentHeadSha || workerOwned.status !== 'passed')) {
@@ -2980,6 +3056,58 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       settled: false,
       reason: 'final_cap_settlement_prior_findings_missing',
       nextAction: 'rerun or reconcile the final capped review before settling the fix head',
+    };
+  }
+
+  if (logicalAccounting) {
+    const reviewedHeadSha = authority.terminal.targetSha;
+    const strictDescendant = await resolvePackReviewStrictDescendant({
+      repoRoot: input.sourceRepoRoot,
+      repoSlug: options.repoSlug,
+      reviewedHeadSha,
+      currentHeadSha: authority.currentHeadSha,
+      fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
+    });
+    if (!strictDescendant) {
+      return {
+        prNumber,
+        headSha: authority.currentHeadSha,
+        finalCapSettlement: true,
+        settled: false,
+        reason: 'final_cap_strict_descendant_required',
+        nextAction: 'advance the PR to a proven strict descendant of the reviewed findings head, then rerun scoped reconcile',
+      };
+    }
+    try {
+      authority = settleLogicalPackReviewFindingsByStrictDescendant({
+        prNumber,
+        expectedTransitionSeq: authority.transitionSeq,
+        reviewedHeadSha,
+        currentHeadSha: authority.currentHeadSha,
+        reviewedHeadIsAncestor: true,
+        options: { storeRoot: options.storeRoot },
+      });
+    } catch (error) {
+      return {
+        prNumber,
+        headSha: authority.currentHeadSha,
+        finalCapSettlement: true,
+        settled: false,
+        reason: `final_cap_settlement_incomplete:${describeError(error)}`,
+        nextAction: 'rerun scoped reconcile after confirming the current PR head',
+      };
+    }
+    return {
+      prNumber,
+      headSha: authority.currentHeadSha,
+      finalCapSettlement: true,
+      settled: authority.cycle?.reviewStageComplete === true,
+      reason: authority.cycle?.reviewStageComplete === true
+        ? 'final_cap_descendant_settled'
+        : 'final_cap_settlement_incomplete',
+      ...(authority.cycle?.reviewStageComplete === true
+        ? {}
+        : { nextAction: 'rerun scoped reconcile after confirming the current PR head' }),
     };
   }
 
@@ -4058,6 +4186,30 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       });
     }
 
+    if (authority.cycle?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+        && authority.terminal?.reviewVerdict === 'findings'
+        && authority.terminal.targetSha !== target.headSha
+        && ['open_findings', 'at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)) {
+      const reviewedHeadSha = authority.terminal.targetSha;
+      const strictDescendant = await resolvePackReviewStrictDescendant({
+        repoRoot: target.sourceRepoRoot,
+        repoSlug: target.repoSlug,
+        reviewedHeadSha,
+        currentHeadSha: target.headSha,
+        fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
+      });
+      if (strictDescendant) {
+        authority = settleLogicalPackReviewFindingsByStrictDescendant({
+          prNumber: target.prNumber,
+          expectedTransitionSeq: authority.transitionSeq,
+          reviewedHeadSha,
+          currentHeadSha: target.headSha,
+          reviewedHeadIsAncestor: true,
+          options: authorityOptions,
+        });
+      }
+    }
+
     if (authority.cycle?.reviewStageComplete === true
         && authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION) {
       const writeRequiredStatus = input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
@@ -4142,48 +4294,18 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     carryover = await resolveCarryoverReplay({ input, target, projectId, storeRoot, baseRef, priorAuthority });
     const conflictFreeCarryover = carryover?.replay.kind === 'conflict_free_carryover';
     if (!conflictFreeCarryover && authority.cycle?.state === 'open_findings') {
-      // Re-open only the phase cursor so fresh finding-resolution evidence can be
-      // evaluated on a subsequent start; retain the prior-round terminal itself.
-      authority = observePackReviewHead({
+      await releaseEarlyClaim('prior_round_findings_unresolved');
+      return {
+        ok: false,
+        created: false,
+        reused: true,
+        reason: 'prior_round_findings_unresolved',
+        nextAction: 'advance the PR to a proven strict descendant of the reviewed findings head before starting the next required round',
         prNumber: target.prNumber,
-        expectedTransitionSeq: authority.transitionSeq,
         headSha: target.headSha,
-        options: authorityOptions,
-      });
-      const priorFindingRun = authority.terminal?.runId
-        ? getPackReviewRun(authority.terminal.runId, { projectId, storeRoot })
-        : null;
-      if (priorFindingRun?.reviewVerdict === 'findings' && authority.terminal) {
-        authority = await commitAtCapTriage({
-          start: input,
-          target,
-          projectId,
-          baseRef,
-          trustedPackRoot: trusted.trustedPackRoot,
-          storeRoot,
-          authority,
-          payload: {
-            verdict: 'findings',
-            findingCount: priorFindingRun.findingCount ?? priorFindingRun.findings.length,
-            findings: priorFindingRun.findings as ReviewPayloadFinding[],
-          },
-          allowFinalSettlement: true,
-        });
-      }
-      if (authority.cycle?.state === 'open_findings') {
-        await releaseEarlyClaim('prior_round_findings_unresolved');
-        return {
-          ok: false,
-          created: false,
-          reused: true,
-          reason: 'prior_round_findings_unresolved',
-          nextAction: 'resolve or explicitly reject the prior logical-round findings before starting the next required round',
-          prNumber: target.prNumber,
-          headSha: target.headSha,
-          cycleId: authority.cycle.cycleId,
-          httpStatus: 409,
-        };
-      }
+        cycleId: authority.cycle.cycleId,
+        httpStatus: 409,
+      };
     }
     if (!conflictFreeCarryover
         && authority.cycle
@@ -4195,7 +4317,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         reused: false,
         reason: 'at_cap_continuation_required',
         nextAction: logicalAccounting
-          ? 'fix or explicitly resolve the final findings, then run scoped reconcile --immediate'
+          ? 'advance the PR to a proven strict descendant of the reviewed findings head, then rerun scoped reconcile --immediate'
           : 'fix the final findings, run worker-owned smoke on the exact current head, then run scoped reconcile --immediate',
         prNumber: target.prNumber,
         headSha: target.headSha,

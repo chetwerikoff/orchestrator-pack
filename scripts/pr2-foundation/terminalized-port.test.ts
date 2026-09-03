@@ -184,7 +184,8 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     expect(source).toContain("case 'reconcile-direct-review': return runDirectReviewReconciliation(options);");
     expect(source).toContain('projectDirectPackReviewState({');
     expect(source).toContain('semanticPackReviewRequiredStatusRequest({');
-    expect(source).toContain("reason: 'ancestor_blocker_requires_descendant_fix_facts'");
+    expect(source).not.toContain("reason: 'ancestor_blocker_requires_descendant_fix_facts'");
+    expect(source).toContain('settleLogicalPackReviewFindingsByStrictDescendant');
     const deliverySource = readFileSync(path.resolve('scripts/lib/pack-review-delivery.ts'), 'utf8');
     expect(deliverySource).toContain("description === 'pack review completed with no findings.'");
     expect(deliverySource).toContain('projectRunnerPackReviewStatusFromCombined');

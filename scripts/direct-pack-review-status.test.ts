@@ -113,14 +113,25 @@ describe('Issue #1749 trusted direct pack-review bootstrap', () => {
     expect(fixture.writes).toHaveLength(1);
   });
 
-  it('defers ancestor-only blocker resolution to descendant worker/CI/smoke facts', async () => {
+  it('settles an ancestor findings blocker from strict ancestry alone', async () => {
     const fixture = deps({
       reviews: [review({ id: 1, head: H1, blocking: true }), review({ id: 2 })],
       ancestor: (ancestor, descendant) => ancestor === H1 && descendant === H2,
     });
     const result = await reconcileDirectPackReviewStatus(options(), fixture.deps);
-    expect(result).toMatchObject({ ok: true, skipped: true, reason: 'ancestor_blocker_requires_descendant_fix_facts' });
-    expect(fixture.writes).toHaveLength(0);
+    expect(result).toMatchObject({ ok: true, skipped: false, projection: { state: 'success' } });
+    expect(fixture.writes).toHaveLength(1);
+    expect(fixture.writes[0]?.state).toBe('success');
+  });
+
+  it('keeps ancestor findings blocked when ancestry cannot be established', async () => {
+    const fixture = deps({
+      reviews: [review({ id: 1, head: H1, blocking: true }), review({ id: 2 })],
+      ancestor: () => { throw new Error('compare unavailable'); },
+    });
+    const result = await reconcileDirectPackReviewStatus(options(), fixture.deps);
+    expect(result).toMatchObject({ ok: true, skipped: false, projection: { state: 'failure' } });
+    expect(fixture.writes[0]?.state).toBe('failure');
   });
 
   it('selects the latest runner-owned status while skipping semantic output rows', () => {
