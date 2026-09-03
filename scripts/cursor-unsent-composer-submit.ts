@@ -399,6 +399,7 @@ function episodeKey(message: DeliveryMessage, worker: RuntimeWorker): string {
 function pointerLedgerKey(message: DeliveryMessage, worker: RuntimeWorker): string {
   return `${recipientEpisodeKey(worker)}\u0000pointer\u0000${buildDeliveryPointer(message)}`;
 }
+
 function loadReconcileState(path: string): PersistedReconcileState {
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
@@ -1180,6 +1181,24 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   if (existing && now < existing.nextEligibleAt) {
     return deliveryNoEffect('orchestration_episode_backoff', worker, false);
   }
+  if (composerKind === 'empty' && !alreadyShown && existing?.state !== 'pointer-visible') {
+    const refusalReason = 'pointer_absent_orca_did_not_notify';
+    if (state) {
+      state.episodes[key] = {
+        messageId: message.id,
+        runId: message.runId,
+        recipient: message.recipient,
+        workerKey: workerKey(worker.identity),
+        ...(stableKey ? { stableKey } : {}),
+        reason: refusalReason,
+        nextEligibleAt: now,
+        backoffMs: nextBackoff,
+        state: 'refused',
+      };
+      if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
+    }
+    return deliveryNoEffect(refusalReason, worker);
+  }
   if (composerKind !== 'empty' && !alreadyShown) {
     return deliveryNoEffect('composer_not_orchestration_pointer', worker);
   }
@@ -1201,26 +1220,6 @@ async function submitOrcaMessageDeliveryPointerForMessage(
       state: alreadyShown ? 'pointer-visible' : 'claimed',
     };
     if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
-  }
-  if (deps.pointerWriteLedger) deps.pointerWriteLedger.set(pointerKey, now);
-  const createdClaim = !claimExists;
-  const shouldWritePointer = !alreadyShown && message.recipient.startsWith('run:')
-    && (!claimExists || existing?.state === 'claimed');
-  if (shouldWritePointer) {
-    const written = deps.writePointer?.(worker.identity, pointer);
-    const accepted = written?.status === 'dispatched'
-      || (written?.status === 'dispatch_unknown' && written.witness?.operation === 'write' && written.witness.accepted === true);
-    if (!accepted) {
-      if (state && createdClaim && written?.status === 'send_failed') {
-        delete state.episodes[key];
-        if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
-      }
-      deps.pointerWriteLedger?.delete(pointerKey);
-      return deliveryNoEffect(written?.reason ?? 'pointer_absent_orca_did_not_notify', worker, false);
-    }
-    if (state) {
-      state.episodes[key] = { ...state.episodes[key]!, state: 'pointer-visible' };
-    }
   }
   let result: UnsentComposerSubmitResult;
   if (claimExists && existing?.state === 'pointer-visible' && !alreadyShown && composerKind === 'empty') {
@@ -1376,7 +1375,6 @@ export function createOrcaMessageSubmitDeps(
         ? { ok: true }
         : { ok: false, reason: 'orchestration_message_unretrievable' };
     },
-    writePointer: (worker, pointer) => adapter.dispatchInput({ worker, text: pointer, writeOnly: true }),
     submitDeps,
     episodeStatePath: ORCHESTRATION_RECONCILE_LEDGER_PATH,
     episodeLockPath: ORCHESTRATION_RECONCILE_LOCK_PATH,
@@ -1411,14 +1409,25 @@ export async function runOrchestrationMailReconcileTick(
       return id && !(row.read === 1 || row.read === true);
     });
     const unreadIds = new Set(unread.map((row) => row.id!.trim()));
-    // Orca can mark a message read before its PTY pointer is rendered. Retry only
-    // exact unconfirmed episodes within the existing bounded reconcile window.
+    // Orca may mark a message read while the child is still waiting for the
+    // pack-side delivery pass. Keep recently-created read rows eligible once.
     const retryableEpisodeIds = new Set(Object.values(state.episodes)
       .filter((episode) => episode.state !== 'confirmed'
         && current >= episode.nextEligibleAt
         && state.messages[episode.messageId] !== undefined
         && current - state.messages[episode.messageId]! <= ORCHESTRATION_RECONCILE_WINDOW_MS)
       .map((episode) => episode.messageId));
+    const recentReadRows = inboxRows.filter((row) => {
+      const id = row.id?.trim() ?? '';
+      if (!id || !(row.read === 1 || row.read === true) || retryableEpisodeIds.has(id)) return false;
+      const createdAt = typeof row.created_at === 'number'
+        ? (Number.isFinite(row.created_at) && row.created_at > 0 ? row.created_at : 0)
+        : Date.parse(String(row.created_at ?? ''));
+      return Number.isFinite(createdAt)
+        && createdAt <= current
+        && current - createdAt <= ORCHESTRATION_RECONCILE_WINDOW_MS;
+    });
+    const recentReadIds = new Set(recentReadRows.map((row) => row.id!.trim()));
     for (const id of Object.keys(state.messages)) {
       if ((!unreadIds.has(id) && !retryableEpisodeIds.has(id))
         || current - state.messages[id]! > ORCHESTRATION_RECONCILE_WINDOW_MS) delete state.messages[id];
@@ -1427,7 +1436,7 @@ export async function runOrchestrationMailReconcileTick(
       const id = row.id?.trim() ?? '';
       return id && retryableEpisodeIds.has(id) && (row.read === 1 || row.read === true);
     });
-    const activeRows = [...unread, ...retryableRows];
+    const activeRows = [...unread, ...retryableRows, ...recentReadRows];
     const activeMessageIds = new Set(activeRows.map((row) => row.id!.trim()));
     const rankedRows = activeRows.map((row) => {
       const id = row.id!.trim();
@@ -1490,23 +1499,23 @@ export async function runOrchestrationMailReconcileTick(
     };
     const unreadEpisodeKeys = new Set<string>();
     const unreadEpisodeKeysByMessage = new Map<string, string>();
-    let unresolvedUnread = rowsToProcess.length !== unread.length;
+    let unresolvedActive = rowsToProcess.length !== activeRows.length;
     for (const row of rowsToProcess) {
       const parsed = deliveryMessageFromInboxRow(row);
       if (!parsed.ok) {
-        unresolvedUnread = true;
+        unresolvedActive = true;
         continue;
       }
       const resolved = resolveWorker(parsed.message);
       if (!resolved.ok || !resolved.worker) {
-        unresolvedUnread = true;
+        unresolvedActive = true;
         continue;
       }
       const key = episodeKey(parsed.message, resolved.worker);
       unreadEpisodeKeys.add(key);
       unreadEpisodeKeysByMessage.set(parsed.message.id, key);
     }
-    if (!unresolvedUnread) {
+    if (!unresolvedActive) {
       migrateLegacyEpisodeKeys(state, unreadEpisodeKeysByMessage);
       releaseClaimsForConsumedMessages(state, activeMessageIds, unreadEpisodeKeys);
       for (const key of Object.keys(state.episodes)) {
@@ -1519,7 +1528,6 @@ export async function runOrchestrationMailReconcileTick(
       episodeStatePath: ledgerPath,
       episodeLockPath: lockPath,
       episodeState: state,
-      pointerWriteLedger: new Map<string, number>(),
       reconcileClock: () => current,
     };
     const reasons: string[] = [];
@@ -1566,7 +1574,7 @@ export async function runOrchestrationMailReconcileTick(
             const reason = observed && !observed.ok ? observed.reason : 'orchestration_message_unretrievable';
             result = deliveryNoEffect(reason, worker, false);
           } else {
-            result = await submitOrcaMessageDeliveryPointerForMessage(message, reconcileDeps, retryableEpisodeIds.has(id));
+            result = await submitOrcaMessageDeliveryPointerForMessage(message, reconcileDeps, retryableEpisodeIds.has(id) || recentReadIds.has(id));
             const evidence = deliveryLookingEvidence(message, worker, result);
             if (evidence) deliveryEvidence.push(evidence);
           }
