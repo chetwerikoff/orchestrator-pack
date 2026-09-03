@@ -396,7 +396,16 @@ function startSchedulerMailReconcileLoop(
           ? result
           : { ...result, deliveryEvidence: [...deliveryEvidence] };
       })
-      .catch(() => undefined)
+      .catch((error: unknown) => {
+        latest = {
+          ok: false,
+          attempted: 0,
+          nudged: 0,
+          skipped: 0,
+          reasons: [`reconcile_failed:${error instanceof Error ? error.message : String(error)}`],
+          deliveryEvidence: [...deliveryEvidence],
+        };
+      })
       .finally(() => { pending = undefined; });
   };
   invoke();

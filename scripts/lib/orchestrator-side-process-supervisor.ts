@@ -54,6 +54,8 @@ interface SupervisorStatusBase {
 export interface SupervisorStatus extends SupervisorStatusBase {
   schemaVersion: 2;
   childStartTicks: string | null;
+  mailReconcileConsecutiveFailures: number;
+  mailReconcileLastError: string | null;
 }
 
 /** Persisted pre-#1484 status is readable for diagnosis but never proves current liveness. */
@@ -198,9 +200,15 @@ export interface SupervisorMailReconcileLoop {
   stop(awaitPending: boolean): Promise<void>;
 }
 
+export interface SupervisorMailReconcileLoopOptions {
+  readonly onSuccess?: () => void;
+  readonly onFailure?: (error: unknown) => void;
+}
+
 export function startSupervisorMailReconcileLoop(
   reconcile: (signal: AbortSignal) => Promise<OrchestrationMailReconcileResult>,
   intervalMs: number,
+  options: SupervisorMailReconcileLoopOptions = {},
 ): SupervisorMailReconcileLoop {
   let stopped = false;
   let pending: Promise<void> | undefined;
@@ -212,8 +220,12 @@ export function startSupervisorMailReconcileLoop(
         if (stopped) return;
         pendingAbort = new AbortController();
         await reconcile(pendingAbort.signal);
+        options.onSuccess?.();
       })
-      .catch(() => undefined)
+      .catch((error: unknown) => {
+        options.onFailure?.(error);
+        return undefined;
+      })
       .finally(() => {
         pendingAbort = undefined;
         pending = undefined;
@@ -262,6 +274,8 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
     cordonReason: 'post-cas-epoch-owner',
     refusalReason: null,
     crashBackoff: EMPTY_CRASH_BACKOFF_STATE,
+    mailReconcileConsecutiveFailures: 0,
+    mailReconcileLastError: null,
   };
   const verify = (): { registryHash: string; cadenceSeconds: number } => {
     try {
@@ -287,6 +301,18 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
       options.orchestrationMailReconcile
         ?? ((signal) => runSupervisorMailReconcileProcess(options, signal)),
       cadenceMs,
+      {
+        onSuccess: () => {
+          state.mailReconcileConsecutiveFailures = 0;
+          state.mailReconcileLastError = null;
+          writeStatus(options, state);
+        },
+        onFailure: (error) => {
+          state.mailReconcileConsecutiveFailures += 1;
+          state.mailReconcileLastError = error instanceof Error ? error.message : String(error);
+          writeStatus(options, state);
+        },
+      },
     );
     writeStatus(options, state);
     let stopping = false;

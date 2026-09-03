@@ -775,9 +775,10 @@ describe('Issue #1895 scheduler mail cadence', () => {
       };
       let reconcileStarted = false;
       let reconcileFinished = false;
+      let reconcileCalls = 0;
       let releaseReconcile!: () => void;
       const reconcileGate = new Promise<void>((resolve) => { releaseReconcile = resolve; });
-      const tick = runSchedulerTick({
+      const boundary = {
         listCandidates: () => [],
         readCurrentPr: async () => { throw new Error('not called'); },
         readChecks: async () => [],
@@ -785,10 +786,14 @@ describe('Issue #1895 scheduler mail cadence', () => {
         start: async () => ({ ok: true }),
         schedulerIntervalMs: 10,
         orchestrationMailReconcile: async () => {
+          reconcileCalls += 1;
           reconcileStarted = true;
-          await reconcileGate;
-          reconcileFinished = true;
-          return { ok: true, attempted: 0, nudged: 0, skipped: 0, reasons: [], deliveryEvidence: [] };
+          if (reconcileCalls === 1) {
+            await reconcileGate;
+            reconcileFinished = true;
+            return { ok: true, attempted: 0, nudged: 0, skipped: 0, reasons: [], deliveryEvidence: [] };
+          }
+          throw new Error('mail_failed');
         },
         publishHandoff: () => ({ ok: true }),
         fleetObserver: {
@@ -813,7 +818,8 @@ describe('Issue #1895 scheduler mail cadence', () => {
         fleetNudgeActuator: {
           tick: async () => { throw new Error('nudge_failed'); },
         },
-      }, env);
+      };
+      const tick = runSchedulerTick(boundary, env);
       await new Promise<void>((resolve) => setTimeout(resolve, 10));
       expect(reconcileStarted).toBe(true);
       const releaseTimer = setTimeout(releaseReconcile, 20);
@@ -821,6 +827,13 @@ describe('Issue #1895 scheduler mail cadence', () => {
       clearTimeout(releaseTimer);
       expect(reconcileFinished).toBe(true);
       expect(result.fleetNudge?.status).toBe('failed');
+      expect(result.orchestrationMailReconcile).toMatchObject({ ok: true });
+      const failureResult = await runSchedulerTick(boundary, env);
+      expect(failureResult.fleetNudge?.status).toBe('failed');
+      expect(failureResult.orchestrationMailReconcile).toMatchObject({
+        ok: false,
+        reasons: ['reconcile_failed:mail_failed'],
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -843,6 +856,42 @@ describe('Issue #1895 supervisor mail ownership', () => {
       await loop.stop(true);
     }
     expect(pollsAfterChildExit).toBeGreaterThan(0);
+  });
+  it('reports consecutive reconcile failures and clears them after a successful poll', async () => {
+    const events: string[] = [];
+    let calls = 0;
+    let consecutiveFailures = 0;
+    let lastError: string | null = null;
+    const loop = startSupervisorMailReconcileLoop(
+      async () => {
+        calls += 1;
+        if (calls === 1) throw new Error('first_failure');
+        if (calls === 2) throw new Error('second_failure');
+        return { ok: true, attempted: 0, nudged: 0, skipped: 0, reasons: [], deliveryEvidence: [] };
+      },
+      1,
+      {
+        onFailure: (error) => {
+          consecutiveFailures += 1;
+          lastError = error instanceof Error ? error.message : String(error);
+          events.push(`failure:${lastError}`);
+        },
+        onSuccess: () => {
+          consecutiveFailures = 0;
+          lastError = null;
+          events.push('success');
+        },
+      },
+    );
+    try {
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    } finally {
+      await loop.stop(true);
+    }
+    expect(calls).toBeGreaterThanOrEqual(3);
+    expect(events.slice(0, 3)).toEqual(['failure:first_failure', 'failure:second_failure', 'success']);
+    expect(consecutiveFailures).toBe(0);
+    expect(lastError).toBeNull();
   });
   it('keeps the supervisor mail subprocess timeout independent of scheduler cadence', () => {
     const source = readFileSync(new URL('./lib/orchestrator-side-process-supervisor.ts', import.meta.url), 'utf8');
