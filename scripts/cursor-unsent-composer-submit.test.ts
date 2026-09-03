@@ -374,7 +374,7 @@ describe('submitUnsentCursorComposer', () => {
     expect(result.terminals.map((row) => row.reason)).toEqual(['composer_empty', 'enter_sent']);
   });
 
-  it('submits repeated identical exact pointer lines as one Cursor composer delivery', () => {
+  it('rejects repeated identical exact pointer lines instead of submitting the accumulated composer', () => {
     const submitted: RuntimeWorkerIdentity[] = [];
     const result = submitUnsentCursorComposer(
       { watch: true },
@@ -383,8 +383,8 @@ describe('submitUnsentCursorComposer', () => {
         { submitted },
       ),
     );
-    expect(result.terminals[0]?.reason).toBe('enter_sent');
-    expect(submitted).toEqual([worker('term_repeated').identity]);
+    expect(result.terminals[0]).toMatchObject({ reason: 'composer_not_orchestration_pointer', enter: false });
+    expect(submitted).toHaveLength(0);
   });
 
   it('never enters an idle transcript followed by the composer placeholder', () => {
