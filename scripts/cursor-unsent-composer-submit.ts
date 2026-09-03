@@ -1157,11 +1157,19 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     return { ok: true, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: true, ok: true, reason: 'enter_sent', dispatchStatus: submitted.status }] };
   }
 
-  const shown = deps.submitDeps.readAsync
+  let shown = deps.submitDeps.readAsync
     ? await deps.submitDeps.readAsync(worker.identity)
     : deps.submitDeps.read(worker.identity);
   if (!shown.ok) return deliveryNoEffect(shown.reason, worker, false);
-  const composerKind = classifyCursorComposer(shown.lines.join('\n'));
+  let composerKind = classifyCursorComposer(shown.lines.join('\n'));
+  if (composerKind === 'empty') {
+    await (deps.submitDeps.sleepAsync ?? sleepAsync)(DELIVERY_RENDER_GRACE_MS);
+    shown = deps.submitDeps.readAsync
+      ? await deps.submitDeps.readAsync(worker.identity)
+      : deps.submitDeps.read(worker.identity);
+    if (!shown.ok) return deliveryNoEffect(shown.reason, worker, false);
+    composerKind = classifyCursorComposer(shown.lines.join('\n'));
+  }
   const observedPointer = exactOrchestrationPointerFingerprint(shown.lines.join('\n'));
   const alreadyShown = composerKind !== 'empty' && observedPointer !== undefined;
   if (alreadyShown && !pointerMatchesDelivery(observedPointer, message, worker)) {
@@ -1242,13 +1250,21 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     const base = { terminal: worker.identity.id, generation: worker.identity.generation };
     result = { ok: true, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: true, reason: 'pointer_consumed' }] };
   } else {
-    result = await submitUnsentCursorComposerOnceForWorker(
-      worker,
-      deps.submitDeps,
-      createUnsentComposerWatchState(),
-      true,
-      true,
-    );
+    result = {
+      ok: true,
+      dryRun: false,
+      watch: false,
+      terminals: [settleComposerObservation(
+        worker,
+        { watch: true },
+        deps.submitDeps,
+        createUnsentComposerWatchState(),
+        shown,
+        true,
+        true,
+        true,
+      )],
+    };
   }
   const terminal = result.terminals[0];
   if (state && (terminal?.reason === 'enter_sent' || terminal?.reason === 'pointer_consumed')) {

@@ -1075,7 +1075,7 @@ describe('delivery-triggered composer submission', () => {
 
     const pending = submitOrcaMessageDeliveryPointer('msg_delivery', deps);
     await Promise.resolve();
-    expect(reads).toBe(3);
+    expect(reads).toBe(2);
     expect(writes).toBe(0);
     expect(submitted).toHaveLength(1);
     releaseRender?.();
@@ -1984,6 +1984,51 @@ describe('orchestration mail reconciliation', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it('waits through Orca pointer render grace before refusing an empty composer', async () => {
+    const target = worker('term_pointer_render_race');
+    const message = {
+      id: 'msg_pointer_render_race',
+      runId: 'run_pointer_render_race',
+      recipient: 'run:run_pointer_render_race',
+      consumed: false,
+    };
+    const pointer = buildDeliveryPointer(message);
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let pointerVisible = false;
+    let graceMs = 0;
+    let reads = 0;
+    const result = await submitOrcaMessageDeliveryPointer(message.id, {
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      isMessageRetrievable: () => ({ ok: true as const }),
+      writePointer: () => { throw new Error('pack pointer fallback must not run'); },
+      submitDeps: depsFor({}, {
+        submitted,
+        read: () => {
+          reads += 1;
+          return {
+            ok: true as const,
+            lines: pointerVisible ? [pointer, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+            source: 'screen' as const,
+          };
+        },
+        submitResult: (identity) => {
+          submitted.push(identity);
+          pointerVisible = false;
+          return { status: 'dispatched' as const };
+        },
+        sleepAsync: async (milliseconds) => {
+          graceMs = milliseconds;
+          pointerVisible = true;
+        },
+      }),
+    });
+    expect(graceMs).toBe(250);
+    expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
+    expect(submitted).toEqual([target.identity]);
+    expect(reads).toBe(3);
   });
 
   it('delivers a fresh read message when Orca peek already consumed it', async () => {
