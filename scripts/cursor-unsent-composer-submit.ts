@@ -1249,6 +1249,7 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   if (state && (terminal?.reason === 'enter_sent' || terminal?.reason === 'pointer_consumed')) {
     state.episodes[key] = {
       ...state.episodes[key]!,
+      reason: terminal.reason,
       state: 'confirmed',
       nextEligibleAt: now + ORCHESTRATION_RECONCILE_WINDOW_MS,
     };

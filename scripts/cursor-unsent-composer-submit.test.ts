@@ -2050,10 +2050,16 @@ describe('orchestration mail reconciliation', () => {
     const lockPath = join(root, 'orchestration-mail-reconcile.lock');
     try {
       const result = await runOrchestrationMailReconcileTick(deps, { ledgerPath, lockPath, now: () => now });
+      const persisted = JSON.parse(readFileSync(ledgerPath, 'utf8')) as {
+        episodes: Record<string, { reason?: string; state: string }>;
+      };
       expect(result.attempted).toBe(1);
       expect(result.nudged).toBe(1);
       expect(result.reasons).toEqual([`${message.id}:enter_sent`]);
       expect(submitted).toEqual([target.identity]);
+      expect(Object.values(persisted.episodes)).toEqual([
+        expect.objectContaining({ reason: 'enter_sent', state: 'confirmed' }),
+      ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
