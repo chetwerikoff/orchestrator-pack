@@ -2,7 +2,6 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1895,
   "declared_paths": [
-    "docs/declarations/1895.pr-scope.json",
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
     "scripts/lib/orchestrator-side-process-supervisor.ts",
@@ -24,5 +23,5 @@
     "scripts/pr2-foundation/scheduler.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "fa5d7fcf307bff4b400a6b32f3f78faef7be72ce"
+  "source_revision": "cd0999be1ba87bc982276a3c73992f1731ff4d52"
 }
