@@ -1209,7 +1209,7 @@ async function submitOrcaMessageDeliveryPointerForMessage(
         workerKey: workerKey(worker.identity),
         ...(stableKey ? { stableKey } : {}),
         reason: refusalReason,
-        nextEligibleAt: now,
+        nextEligibleAt: now + nextBackoff,
         backoffMs: nextBackoff,
         state: 'refused',
       };
@@ -1452,13 +1452,17 @@ export async function runOrchestrationMailReconcileTick(
     // pack-side delivery pass. Keep recently-created read rows eligible once.
     const retryableEpisodeIds = new Set(Object.values(state.episodes)
       .filter((episode) => episode.state !== 'confirmed'
-        && current >= episode.nextEligibleAt
-        && state.messages[episode.messageId] !== undefined
-        && current - state.messages[episode.messageId]! <= ORCHESTRATION_RECONCILE_WINDOW_MS)
+        && current >= episode.nextEligibleAt)
       .map((episode) => episode.messageId));
+    const trackedReadIds = new Set([
+      ...Object.keys(state.messages),
+      ...Object.values(state.episodes)
+        .filter((episode) => episode.state !== 'confirmed')
+        .map((episode) => episode.messageId),
+    ]);
     const recentReadRows = inboxRows.filter((row) => {
       const id = row.id?.trim() ?? '';
-      if (!id || !(row.read === 1 || row.read === true) || retryableEpisodeIds.has(id)) return false;
+      if (!id || !(row.read === 1 || row.read === true) || retryableEpisodeIds.has(id) || !trackedReadIds.has(id)) return false;
       const createdAt = typeof row.created_at === 'number'
         ? (Number.isFinite(row.created_at) && row.created_at > 0 ? row.created_at : 0)
         : Date.parse(String(row.created_at ?? ''));
@@ -1487,18 +1491,22 @@ export async function runOrchestrationMailReconcileTick(
         })();
       const firstSeenFreshArrival = state.messages[id] === undefined
         && (unreadIds.has(id) || recentReadIds.has(id));
+      const agePromoted = createdAt > 0
+        && current >= createdAt
+        && current - createdAt >= ORCHESTRATION_RECONCILE_WINDOW_MS * 2;
       const retryDue = retryableEpisodeIds.has(id);
       return {
         row,
         id,
         groupKey: `${row.to_handle?.trim() ?? ''}\u0000${row.run_id?.trim() ?? ''}`,
-        priority: firstSeenFreshArrival ? 0 : retryDue ? 1 : 2,
+        priority: agePromoted ? 0 : firstSeenFreshArrival ? 1 : retryDue ? 2 : 3,
         createdAt,
         lastAttempt: state.messages[id] ?? createdAt,
       };
     }).sort((left, right) => {
       if (left.priority !== right.priority) return left.priority - right.priority;
-      if (left.priority === 0 && left.createdAt !== right.createdAt) return right.createdAt - left.createdAt;
+      if (left.priority === 0 && left.createdAt !== right.createdAt) return left.createdAt - right.createdAt;
+      if (left.priority === 1 && left.createdAt !== right.createdAt) return right.createdAt - left.createdAt;
       if (left.lastAttempt !== right.lastAttempt) return left.lastAttempt - right.lastAttempt;
       if (left.createdAt !== right.createdAt) return left.createdAt - right.createdAt;
       return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
@@ -1537,10 +1545,10 @@ export async function runOrchestrationMailReconcileTick(
       resolutions.set(cacheKey, resolved);
       return resolved;
     };
-    const unreadEpisodeKeys = new Set<string>();
-    const unreadEpisodeKeysByMessage = new Map<string, string>();
-    let unresolvedActive = rowsToProcess.length !== activeRows.length;
-    for (const row of rowsToProcess) {
+    const activeEpisodeKeys = new Set<string>();
+    const activeEpisodeKeysByMessage = new Map<string, string>();
+    let unresolvedActive = false;
+    for (const row of activeRows) {
       const parsed = deliveryMessageFromInboxRow(row);
       if (!parsed.ok) {
         unresolvedActive = true;
@@ -1552,14 +1560,14 @@ export async function runOrchestrationMailReconcileTick(
         continue;
       }
       const key = episodeKey(parsed.message, resolved.worker);
-      unreadEpisodeKeys.add(key);
-      unreadEpisodeKeysByMessage.set(parsed.message.id, key);
+      activeEpisodeKeys.add(key);
+      activeEpisodeKeysByMessage.set(parsed.message.id, key);
     }
     if (!unresolvedActive) {
-      migrateLegacyEpisodeKeys(state, unreadEpisodeKeysByMessage);
-      releaseClaimsForConsumedMessages(state, activeMessageIds, unreadEpisodeKeys);
+      migrateLegacyEpisodeKeys(state, activeEpisodeKeysByMessage);
+      releaseClaimsForConsumedMessages(state, activeMessageIds, activeEpisodeKeys);
       for (const key of Object.keys(state.episodes)) {
-        if (!unreadEpisodeKeys.has(key)) delete state.episodes[key];
+        if (!activeEpisodeKeys.has(key)) delete state.episodes[key];
       }
     }
     const reconcileDeps: DeliveryMessageSubmitDeps = {
