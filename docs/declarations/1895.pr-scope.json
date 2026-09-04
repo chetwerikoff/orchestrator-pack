@@ -1,0 +1,27 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1895,
+  "declared_paths": [
+    "scripts/cursor-unsent-composer-submit.test.ts",
+    "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/lib/orchestrator-side-process-supervisor.ts",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/pr2-foundation/scheduler.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/cursor-unsent-composer-submit.test.ts",
+    "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/lib/orchestrator-side-process-supervisor.ts",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/pr2-foundation/scheduler.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "source_revision": "b6fab4b20b76f9c3e8b5846647172e9bf6a34114"
+}

@@ -14,7 +14,12 @@ import {
 } from './lib/cutover/foundation-observation.ts';
 import { childRegistry } from './lib/orchestrator-side-process-observer.ts';
 import { sha256Bytes } from './lib/cutover/stable-stringify.ts';
-import { supervisorChildExitTransition } from './lib/orchestrator-side-process-supervisor.ts';
+import {
+  startSupervisorMailReconcileLoop,
+  supervisorChildExitTransition,
+} from './lib/orchestrator-side-process-supervisor.ts';
+import type { FleetObserverResult } from './pr2-foundation/fleet-observer.ts';
+import { runSchedulerTick } from './pr2-foundation/scheduler.ts';
 import { EMPTY_CRASH_BACKOFF_STATE, type CrashBackoffPolicy } from './runtime/crash-backoff.ts';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
@@ -665,3 +670,302 @@ describe('Issue #1880 supervisor epoch-authority admission', () => {
   });
 });
 
+
+describe('Issue #1895 scheduler mail cadence', () => {
+  it('reconciles mail arriving after the start snapshot before a long scheduler child exits', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'opk-1895-mail-mid-tick-'));
+    try {
+      const epochPath = path.join(root, 'epoch.json');
+      const epochId = 'epoch-mail-mid-tick';
+      const nonce = 'nonce-mail-mid-tick';
+      new FileEpochAuthority(epochPath).commit(null, {
+        epochId,
+        nonce,
+        hostId: 'test-host',
+        repoRoot,
+        installedCommitSha: 'a'.repeat(40),
+        snapshotDigests: { reconcile: 'snapshot-r', reevaluation: 'snapshot-e', reportStateSeed: 'snapshot-s' },
+        importDigests: { reconcile: 'import-r', reevaluation: 'import-e', reportStateSeed: 'snapshot-s' },
+        registryHash: 'a',
+        preCommitLogDigest: 'b',
+        commitAt: new Date().toISOString(),
+      });
+      const env: NodeJS.ProcessEnv = {
+        ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: epochPath,
+        ORCHESTRATOR_CUTOVER_EPOCH_ID: epochId,
+        ORCHESTRATOR_CUTOVER_NONCE: nonce,
+      };
+      const emptyReconcile = () => ({ ok: true, attempted: 0, nudged: 0, skipped: 0, reasons: [], deliveryEvidence: [] });
+      let reconcileCalls = 0;
+      let mailVisible = false;
+      let reconciledAt: number | undefined;
+      let childFinishedAt: number | undefined;
+      const tick = runSchedulerTick({
+        listCandidates: () => [],
+        readCurrentPr: async () => { throw new Error('not called'); },
+        readChecks: async () => [],
+        listReviewRuns: () => [],
+        start: async () => ({ ok: true }),
+        schedulerIntervalMs: 10,
+        orchestrationMailReconcile: async () => {
+          reconcileCalls += 1;
+          if (reconcileCalls > 1 && mailVisible) reconciledAt = Date.now();
+          return emptyReconcile();
+        },
+        fleetObserver: {
+          schedulerGeneration: 'sg-mail-mid-tick',
+          getEffectiveBudgetMs: () => 100,
+          tick: async () => {
+            await new Promise<void>((resolve) => setTimeout(resolve, 80));
+            childFinishedAt = Date.now();
+            return {
+              result: 'census-published-observer-only',
+              status: 'complete',
+              snapshotCommitted: false,
+              snapshotPath: '',
+              schedulerGeneration: 'sg-mail-mid-tick',
+              tickSequence: 1,
+              effectiveBudgetMs: 100,
+              schedulerReturnedWithinBudget: true,
+              staleCompletionRejected: false,
+              fleetCapFailClosed: false,
+              goneSemanticsClosed: false,
+              exceptionCollisionRejected: false,
+              zeroActuation: true,
+            } satisfies FleetObserverResult;
+          },
+        },
+      }, env);
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      const mailArrivedAt = Date.now();
+      mailVisible = true;
+      const result = await tick;
+      expect(reconcileCalls).toBeGreaterThan(1);
+      expect(reconciledAt).toBeDefined();
+      expect(reconciledAt! - mailArrivedAt).toBeLessThan(5_000);
+      expect(reconciledAt!).toBeLessThan(childFinishedAt!);
+      expect(result.orchestrationMailReconcile).toEqual(emptyReconcile());
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('drains an in-flight mail reconcile before a failed fleet phase exits the child', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'opk-1895-mail-failure-drain-'));
+    try {
+      const epochPath = path.join(root, 'epoch.json');
+      const epochId = 'epoch-mail-failure-drain';
+      const nonce = 'nonce-mail-failure-drain';
+      new FileEpochAuthority(epochPath).commit(null, {
+        epochId,
+        nonce,
+        hostId: 'test-host',
+        repoRoot,
+        installedCommitSha: 'a'.repeat(40),
+        snapshotDigests: { reconcile: 'snapshot-r', reevaluation: 'snapshot-e', reportStateSeed: 'snapshot-s' },
+        importDigests: { reconcile: 'snapshot-r', reevaluation: 'snapshot-e', reportStateSeed: 'snapshot-s' },
+        registryHash: 'a',
+        preCommitLogDigest: 'b',
+        commitAt: new Date().toISOString(),
+      });
+      const env: NodeJS.ProcessEnv = {
+        ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: epochPath,
+        ORCHESTRATOR_CUTOVER_EPOCH_ID: epochId,
+        ORCHESTRATOR_CUTOVER_NONCE: nonce,
+      };
+      let reconcileStarted = false;
+      let reconcileFinished = false;
+      let reconcileCalls = 0;
+      let releaseReconcile!: () => void;
+      const reconcileGate = new Promise<void>((resolve) => { releaseReconcile = resolve; });
+      const boundary = {
+        listCandidates: () => [],
+        readCurrentPr: async () => { throw new Error('not called'); },
+        readChecks: async () => [],
+        listReviewRuns: () => [],
+        start: async () => ({ ok: true }),
+        schedulerIntervalMs: 10,
+        orchestrationMailReconcile: async () => {
+          reconcileCalls += 1;
+          reconcileStarted = true;
+          if (reconcileCalls === 1) {
+            await reconcileGate;
+            reconcileFinished = true;
+            return { ok: true, attempted: 0, nudged: 0, skipped: 0, reasons: [], deliveryEvidence: [] };
+          }
+          throw new Error('mail_failed');
+        },
+        publishHandoff: () => ({ ok: true }),
+        fleetObserver: {
+          schedulerGeneration: 'sg-mail-failure-drain',
+          getEffectiveBudgetMs: () => 100,
+          tick: async () => ({
+            result: 'census-published-observer-only',
+            status: 'complete',
+            snapshotCommitted: false,
+            snapshotPath: '',
+            schedulerGeneration: 'sg-mail-failure-drain',
+            tickSequence: 1,
+            effectiveBudgetMs: 100,
+            schedulerReturnedWithinBudget: true,
+            staleCompletionRejected: false,
+            fleetCapFailClosed: false,
+            goneSemanticsClosed: false,
+            exceptionCollisionRejected: false,
+            zeroActuation: true,
+          } satisfies FleetObserverResult),
+        },
+        fleetNudgeActuator: {
+          tick: async () => { throw new Error('nudge_failed'); },
+        },
+      };
+      const tick = runSchedulerTick(boundary, env);
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      expect(reconcileStarted).toBe(true);
+      const releaseTimer = setTimeout(releaseReconcile, 20);
+      const result = await tick;
+      clearTimeout(releaseTimer);
+      expect(reconcileFinished).toBe(true);
+      expect(result.fleetNudge?.status).toBe('failed');
+      expect(result.orchestrationMailReconcile).toMatchObject({ ok: true });
+      const failureResult = await runSchedulerTick(boundary, env);
+      expect(failureResult.fleetNudge?.status).toBe('failed');
+      expect(failureResult.orchestrationMailReconcile).toMatchObject({
+        ok: false,
+        reasons: ['reconcile_failed:mail_failed'],
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Issue #1895 supervisor mail ownership', () => {
+  it('keeps polling after child exit while the supervisor waits its cadence', async () => {
+    let childExited = false;
+    let pollsAfterChildExit = 0;
+    const loop = startSupervisorMailReconcileLoop(async () => {
+      if (childExited) pollsAfterChildExit += 1;
+      return { ok: true, attempted: 0, nudged: 0, skipped: 0, reasons: [], deliveryEvidence: [] };
+    }, 10);
+    try {
+      await new Promise<void>((resolve) => setTimeout(resolve, 15));
+      childExited = true;
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    } finally {
+      await loop.stop(true);
+    }
+    expect(pollsAfterChildExit).toBeGreaterThan(0);
+  });
+  it('reports consecutive reconcile failures and clears them after a successful poll', async () => {
+    const events: string[] = [];
+    let calls = 0;
+    let consecutiveFailures = 0;
+    let lastError: string | null = null;
+    const loop = startSupervisorMailReconcileLoop(
+      async () => {
+        calls += 1;
+        if (calls === 1) throw new Error('first_failure');
+        if (calls === 2) throw new Error('second_failure');
+        return { ok: true, attempted: 0, nudged: 0, skipped: 0, reasons: [], deliveryEvidence: [] };
+      },
+      1,
+      {
+        onFailure: (error) => {
+          consecutiveFailures += 1;
+          lastError = error instanceof Error ? error.message : String(error);
+          events.push(`failure:${lastError}`);
+        },
+        onSuccess: () => {
+          consecutiveFailures = 0;
+          lastError = null;
+          events.push('success');
+        },
+      },
+    );
+    try {
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    } finally {
+      await loop.stop(true);
+    }
+    expect(calls).toBeGreaterThanOrEqual(3);
+    expect(events.slice(0, 3)).toEqual(['failure:first_failure', 'failure:second_failure', 'success']);
+    expect(consecutiveFailures).toBe(0);
+    expect(lastError).toBeNull();
+  });
+  it('keeps the supervisor mail subprocess timeout independent of scheduler cadence', () => {
+    const source = readFileSync(new URL('./lib/orchestrator-side-process-supervisor.ts', import.meta.url), 'utf8');
+    expect(source).toContain('timeoutMs: 15_000,');
+    expect(source).not.toContain('cadenceMs - 1_000');
+  });
+});
+
+describe('Issue #1895 scheduler reconcile-loop state', () => {
+  it('clears stale failures and retains delivery evidence from earlier ticks', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'opk-1895-mail-loop-state-'));
+    try {
+      const epochPath = path.join(root, 'epoch.json');
+      const epochId = 'epoch-mail-loop-state';
+      const nonce = 'nonce-mail-loop-state';
+      new FileEpochAuthority(epochPath).commit(null, {
+        epochId,
+        nonce,
+        hostId: 'test-host',
+        repoRoot,
+        installedCommitSha: 'a'.repeat(40),
+        snapshotDigests: { reconcile: 'snapshot-r', reevaluation: 'snapshot-e', reportStateSeed: 'snapshot-s' },
+        importDigests: { reconcile: 'import-r', reevaluation: 'import-e', reportStateSeed: 'snapshot-s' },
+        registryHash: 'a',
+        preCommitLogDigest: 'b',
+        commitAt: new Date().toISOString(),
+      });
+      const env: NodeJS.ProcessEnv = {
+        ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: epochPath,
+        ORCHESTRATOR_CUTOVER_EPOCH_ID: epochId,
+        ORCHESTRATOR_CUTOVER_NONCE: nonce,
+      };
+      let calls = 0;
+      const evidence = (messageId: string) => ({
+        workerGeneration: 'g1',
+        runId: `run-${messageId}`,
+        messageId,
+        delivery: 'delivered-looking' as const,
+        terminalReceipt: 'unproven' as const,
+      });
+      const tick = runSchedulerTick({
+        listCandidates: () => [],
+        readCurrentPr: async () => { throw new Error('not called'); },
+        readChecks: async () => [],
+        listReviewRuns: () => [],
+        start: async () => ({ ok: true }),
+        schedulerIntervalMs: 10,
+        orchestrationMailReconcile: async () => {
+          calls += 1;
+          if (calls === 1) throw new Error('transient reconcile failure');
+          return { ok: true, attempted: 1, nudged: 1, skipped: 0, reasons: [], deliveryEvidence: [evidence(`msg-${calls}`)] };
+        },
+        fleetObserver: {
+          schedulerGeneration: 'sg-mail-loop-state',
+          getEffectiveBudgetMs: () => 100,
+          tick: async () => {
+            await new Promise<void>((resolve) => setTimeout(resolve, 70));
+            return {
+              result: 'census-published-observer-only', status: 'complete', snapshotCommitted: false, snapshotPath: '',
+              schedulerGeneration: 'sg-mail-loop-state', tickSequence: 1, effectiveBudgetMs: 100,
+              schedulerReturnedWithinBudget: true, staleCompletionRejected: false, fleetCapFailClosed: false,
+              goneSemanticsClosed: false, exceptionCollisionRejected: false, zeroActuation: true,
+            } satisfies FleetObserverResult;
+          },
+        },
+      }, env);
+      const result = await tick;
+      expect(calls).toBeGreaterThanOrEqual(3);
+      expect(result.orchestrationMailReconcile?.deliveryEvidence).toHaveLength(calls - 1);
+      expect(result.orchestrationMailReconcile?.deliveryEvidence.map((row) => row.messageId)).toEqual(
+        Array.from({ length: calls - 1 }, (_, index) => `msg-${index + 2}`),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
