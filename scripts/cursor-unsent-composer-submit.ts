@@ -136,14 +136,16 @@ function exactOrchestrationPointerFingerprint(preview: string): string | undefin
     ? composerContentLines(interior, true)
     : unboxedComposerLines(preview, true);
   // Cursor may wrap between words or inside the command token. Try both
-  // reconstructions, but never treat repeated notices as one exact pointer.
+  // reconstructions, and accept repeated banners only when their commands match.
   const candidates = [source.join(''), source.join(' '), preview.trim()];
   const pointerPattern = /You have \d+ orchestration messages?\b[^\x60]*\x60(orca orchestration check(?: --run \S+| --terminal \S+)?)\x60\./giu;
   for (const candidate of candidates) {
     const matches = [...candidate.matchAll(pointerPattern)];
-    if (matches.length !== 1) continue;
+    const commands = matches.map((match) => match[1] ?? '');
     const remainder = candidate.replace(pointerPattern, '').replace(/\s+/gu, '');
-    if (!remainder) return matches[0]?.[1] ?? '';
+    if (commands.length > 0 && !remainder && commands.every((command) => command === commands[0])) {
+      return commands[0];
+    }
   }
   return undefined;
 }
