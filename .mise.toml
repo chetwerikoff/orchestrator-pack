@@ -1,0 +1,4 @@
+# Mirrors scripts/toolchain/node-version.json (nodeMajor 22) for mise PATH.
+# Do not pin a different major here.
+[tools]
+node = "22"
