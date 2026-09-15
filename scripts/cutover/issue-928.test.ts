@@ -1,7 +1,7 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { runProcessSync } from '../kernel/subprocess.ts';
@@ -11,7 +11,16 @@ import { activateCutover, assertNoExternalLegacyReferences, recomputeClosure, ty
 import { waitForStartedSupervisor } from '../lib/cutover/activation-transaction.ts';
 import { abandonPreImportCordon } from '../lib/cutover/activation-transaction.ts';
 import { isExecutableLegacyReference } from '../lib/cutover/activation-transaction.ts';
-import { createCordon, findLegacySupervisorIdentities, markImportBegun, readCordonState } from '../lib/cutover/activation-cordon.ts';
+import {
+  createCordon,
+  findLegacySupervisorIdentities,
+  findTypeScriptSupervisorIdentities,
+  isKernelThreadProcessStat,
+  markImportBegun,
+  readCordonState,
+  readProcessStat,
+  type ProcessStat,
+} from '../lib/cutover/activation-cordon.ts';
 import {
   assertCanonicalActivationPaths,
   canonicalFoundationPaths,
@@ -1334,6 +1343,7 @@ describe('Issue 1422 first-time activation', () => {
     };
     expect(() => findLegacySupervisorIdentities(request.oldInstalledRevisionRoot, {
       entries: () => ['4242'],
+      readStat: () => ({ state: 'S', ppid: 1, flags: 0, startTicks: '4242' }),
       readIdentity,
     })).toThrow('greenfield_legacy_supervisor_unknown:4242');
     expect(authority.read().currentEpochId).toBeNull();
@@ -1383,5 +1393,152 @@ describe('Issue 1422 first-time activation', () => {
     abandonPreImportCordon({ ...request, legacySupervisorPid: 0 });
     expect(existsSync(request.paths.cordonPath)).toBe(false);
     expect(new FileEpochAuthority(request.paths.epochAuthorityPath).read().currentEpochId).toBeNull();
+  });
+});
+
+describe('Issue #1901 native Linux supervisor census', () => {
+  type CensusOptions = NonNullable<Parameters<typeof findTypeScriptSupervisorIdentities>[0]>;
+  const legacyRoot = '/fixture/legacy-root';
+  const livePid = process.pid;
+  const stat = (overrides: Partial<ProcessStat> = {}): ProcessStat => ({
+    state: 'S',
+    ppid: 1,
+    flags: 0,
+    startTicks: '1901',
+    ...overrides,
+  });
+  const census = [
+    {
+      name: 'legacy',
+      run: (options: CensusOptions) => findLegacySupervisorIdentities(legacyRoot, options),
+      matchingIdentity: (): ProcessIdentity => ({
+        pid: livePid,
+        startTicks: '1901',
+        cmdline: [path.join(legacyRoot, D928[0])],
+      }),
+    },
+    {
+      name: 'typescript',
+      run: (options: CensusOptions) => findTypeScriptSupervisorIdentities(options),
+      matchingIdentity: (): ProcessIdentity => ({
+        pid: livePid,
+        startTicks: '1901',
+        cmdline: ['/fixture/scripts/orchestrator-wake-supervisor.ts'],
+      }),
+    },
+  ] as const;
+
+  function identityUnreadable(): never {
+    throw new Error('process_identity_unreadable');
+  }
+
+  function codedError(code: string, message = code): never {
+    const error = new Error(message) as NodeJS.ErrnoException;
+    error.code = code;
+    throw error;
+  }
+
+  it('skips PF_KTHREAD before userspace identity for both census functions', () => {
+    for (const row of census) {
+      let identityReads = 0;
+      expect(row.run({
+        entries: () => [String(livePid)],
+        readStat: () => stat({ flags: 0x00200000 }),
+        readIdentity: () => {
+          identityReads += 1;
+          return identityUnreadable();
+        },
+      })).toEqual([]);
+      expect(identityReads, row.name).toBe(0);
+    }
+  });
+
+  it('fails closed for bit-clear I/S empty argv and generic unreadable identities', () => {
+    for (const row of census) {
+      for (const state of ['I', 'S'] as const) {
+        expect(() => row.run({
+          entries: () => [String(livePid)],
+          readStat: () => stat({ state }),
+          readIdentity: identityUnreadable,
+        }), `${row.name}:${state}`).toThrow(/process_identity_unreadable/);
+      }
+      expect(() => row.run({
+        entries: () => [String(livePid)],
+        readStat: () => stat(),
+        readIdentity: () => { throw new Error('opaque_identity_failure'); },
+      }), row.name).toThrow(/opaque_identity_failure/);
+    }
+  });
+
+  it('preserves the valid-stat Z terminated-task escape but not malformed stat identity', () => {
+    for (const row of census) {
+      expect(row.run({
+        entries: () => [String(livePid)],
+        readStat: () => stat({ state: 'Z' }),
+        readIdentity: identityUnreadable,
+      })).toEqual([]);
+      expect(() => row.run({
+        entries: () => [String(livePid)],
+        readStat: () => stat({ state: 'Z', startTicks: '' }),
+        readIdentity: identityUnreadable,
+      }), row.name).toThrow(/process_stat_invalid/);
+      expect(() => row.run({
+        entries: () => [String(livePid)],
+        readStat: () => stat({ flags: Number.NaN }),
+        readIdentity: identityUnreadable,
+      }), row.name).toThrow(/process_stat_invalid/);
+    }
+  });
+
+  it('keeps EACCES fail-closed and returns matching userspace supervisors', () => {
+    for (const row of census) {
+      expect(() => row.run({
+        entries: () => [String(livePid)],
+        readStat: () => stat(),
+        readIdentity: () => codedError('EACCES', 'permission denied'),
+      }), row.name).toThrow(/permission denied/);
+      expect(row.run({
+        entries: () => [String(livePid)],
+        readStat: () => stat(),
+        readIdentity: row.matchingIdentity,
+      })).toEqual([row.matchingIdentity()]);
+    }
+  });
+
+  it('drops only proven-gone ENOENT/ESRCH entries and fails closed on live stat failures', () => {
+    const gonePid = 99_999_999;
+    for (const row of census) {
+      for (const code of ['ENOENT', 'ESRCH'] as const) {
+        expect(row.run({
+          entries: () => [String(gonePid)],
+          readStat: () => codedError(code),
+          readIdentity: identityUnreadable,
+        }), `${row.name}:${code}`).toEqual([]);
+      }
+      expect(() => row.run({
+        entries: () => [String(livePid)],
+        readStat: () => codedError('EACCES', 'stat permission denied'),
+        readIdentity: identityUnreadable,
+      }), row.name).toThrow(/stat permission denied/);
+    }
+  });
+
+  it('observes a current Linux PF_KTHREAD entry with the production parser and classifier', () => {
+    if (process.platform !== 'linux') return;
+    let observed: { pid: number; stat: ProcessStat } | null = null;
+    for (const entry of readdirSync('/proc')) {
+      if (!/^\d+$/u.test(entry) || Number(entry) <= 1) continue;
+      try {
+        const processStat = readProcessStat(Number(entry));
+        if (isKernelThreadProcessStat(processStat)) {
+          observed = { pid: Number(entry), stat: processStat };
+          break;
+        }
+      } catch {
+        // A racing or unreadable /proc row is not evidence either way; keep scanning.
+      }
+    }
+    expect(observed).not.toBeNull();
+    expect(isKernelThreadProcessStat(observed!.stat)).toBe(true);
   });
 });
