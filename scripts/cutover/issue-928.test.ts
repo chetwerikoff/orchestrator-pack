@@ -1432,6 +1432,10 @@ describe('Issue #1901 native Linux supervisor census', () => {
     throw new Error('process_identity_unreadable');
   }
 
+  function startTicksInvalid(): never {
+    throw new Error('process_stat_invalid');
+  }
+
   function codedError(code: string, message = code): never {
     const error = new Error(message) as NodeJS.ErrnoException;
     error.code = code;
@@ -1477,6 +1481,11 @@ describe('Issue #1901 native Linux supervisor census', () => {
         readStat: () => stat({ state: 'Z' }),
         readIdentity: identityUnreadable,
       })).toEqual([]);
+      expect(() => row.run({
+        entries: () => [String(livePid)],
+        readStat: () => stat({ state: 'Z' }),
+        readIdentity: startTicksInvalid,
+      }), `${row.name}:second-stat-startTicks`).toThrow(/process_stat_invalid/);
       expect(() => row.run({
         entries: () => [String(livePid)],
         readStat: () => stat({ state: 'Z', startTicks: '' }),
