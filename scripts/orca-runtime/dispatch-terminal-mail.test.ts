@@ -91,7 +91,6 @@ describe('dispatch-terminal-mail', () => {
         stage: 'settled',
         last_error: 'process_exited',
       }),
-      '--json',
     ]);
     const ledger = JSON.parse(readFileSync(file, 'utf8')) as { notified: Record<string, string> };
     expect(Object.keys(ledger.notified)).toEqual(['ctx_terminal']);
