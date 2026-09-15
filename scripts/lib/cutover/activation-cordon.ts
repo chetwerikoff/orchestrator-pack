@@ -37,7 +37,7 @@ export interface ProcessStat {
 
 const PF_KTHREAD = 0x00200000;
 
-function validateProcessStat(stat: ProcessStat): ProcessStat {
+function validateCensusProcessStat(stat: ProcessStat): ProcessStat {
   if (
     !/^[A-Za-z]$/u.test(stat.state)
     || !Number.isSafeInteger(stat.ppid)
@@ -56,18 +56,16 @@ export function readProcessStat(pid: number): ProcessStat {
   const close = raw.lastIndexOf(')');
   if (close < 0) throw new Error('process_stat_invalid');
   const fields = raw.slice(close + 2).trim().split(/\s+/);
-  const ppid = Number(fields[1]);
-  const flags = Number(fields[6]);
-  return validateProcessStat({
+  return {
     state: fields[0] ?? '',
-    ppid,
-    flags,
+    ppid: Number(fields[1]),
+    flags: Number(fields[6]),
     startTicks: fields[19] ?? '',
-  });
+  };
 }
 
 export function isKernelThreadProcessStat(stat: ProcessStat): boolean {
-  return (validateProcessStat(stat).flags & PF_KTHREAD) !== 0;
+  return (validateCensusProcessStat(stat).flags & PF_KTHREAD) !== 0;
 }
 
 export function processAlive(pid: number): boolean {
@@ -106,7 +104,7 @@ function censusIdentity(
 ): ProcessIdentity | null {
   let stat: ProcessStat;
   try {
-    stat = validateProcessStat(readStat(pid));
+    stat = validateCensusProcessStat(readStat(pid));
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if ((code === 'ENOENT' || code === 'ESRCH') && !processAliveStrict(pid)) return null;
