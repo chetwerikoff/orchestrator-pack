@@ -132,6 +132,9 @@ export async function consumeObservedTerminalAssignment(input: {
   | { readonly status: 'notified_retirement_failed'; readonly reason: string }
 > {
   const { observation } = input;
+  if (!observation.released) {
+    return { status: 'retained_unresolved' };
+  }
   const snapshot = observation.snapshot;
   if (!snapshot || snapshot.dispatchId.trim() !== observation.assignment.bindingKey.trim()) {
     return { status: 'retained_unresolved' };
