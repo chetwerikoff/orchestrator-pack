@@ -747,6 +747,324 @@ describe('runtime-neutral worker smoke', () => {
     }
   });
 
+  it('retries transient OpenCode baseline observations without dispatching until a screen is visible', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-opencode-baseline-retry-'));
+    try {
+      const artifactDir = join(root, 'run-opencode-baseline-retry');
+      ensureSmokeRunArtifactDir(artifactDir);
+      writeFileSync(smokeDeliverySealedPath(artifactDir), JSON.stringify({ runId: 'run-opencode-baseline-retry' }), 'utf8');
+      const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: 'opencode-worker', generation: 'generation-opencode' };
+      let clock = 0;
+      let reads = 0;
+      const sleeps: number[] = [];
+      const dispatchInput = vi.fn(() => ({ status: 'dispatched' as const }));
+      const adapter = {
+        composerControl: () => ({ kind: 'opencode-http' as const, dispatch: () => ({ status: 'dispatched' as const }) }),
+        dispatchInput,
+        readBoundedOutput: () => {
+          reads += 1;
+          if (reads === 1) {
+            return { status: 'unsupported' as const, operation: 'read_bounded_output' as const, reason: 'runtime_output_source_unobservable' };
+          }
+          return {
+            status: 'ok' as const,
+            value: {
+              worker: identity,
+              lines: reads === 2 ? ['real idle splash'] : ['pointer rendered in child panel'],
+              observationToken: { opaque: `screen-${reads}` },
+              changed: reads > 2,
+              terminalState: 'running' as const,
+              source: 'screen' as const,
+            },
+          };
+        },
+      } as unknown as RuntimeAdapter;
+
+      const result = establishRuntimeSmokeDelivery({
+        adapter,
+        worker: identity,
+        prompt: 'verify visible pointer',
+        binding: { runId: 'run-opencode-baseline-retry', artifactDir },
+        cwd: root,
+        deadlineMs: 1_000,
+        now: () => clock,
+        sleepMs: (milliseconds) => { sleeps.push(milliseconds); clock += milliseconds; },
+      });
+
+      expect(result.ok).toBe(true);
+      expect(reads).toBe(3);
+      expect(dispatchInput).toHaveBeenCalledTimes(1);
+      expect(sleeps).toEqual([250]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('times out a persistently unobservable OpenCode baseline without dispatching', () => {
+    const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: 'opencode-worker', generation: 'generation-opencode' };
+    let clock = 0;
+    let reads = 0;
+    const sleeps: number[] = [];
+    const dispatchInput = vi.fn(() => ({ status: 'dispatched' as const }));
+    const adapter = {
+      composerControl: () => ({ kind: 'opencode-http' as const, dispatch: () => ({ status: 'dispatched' as const }) }),
+      dispatchInput,
+      readBoundedOutput: () => {
+        reads += 1;
+        return { status: 'unsupported' as const, operation: 'read_bounded_output' as const, reason: 'runtime_output_source_unobservable' };
+      },
+    } as unknown as RuntimeAdapter;
+
+    expect(establishRuntimeSmokeDelivery({
+      adapter,
+      worker: identity,
+      prompt: 'verify',
+      binding: { runId: 'run-opencode-baseline-timeout', artifactDir: '/missing' },
+      cwd: process.cwd(),
+      deadlineMs: 500,
+      now: () => clock,
+      sleepMs: (milliseconds) => { sleeps.push(milliseconds); clock += milliseconds; },
+    })).toEqual({
+      ok: false,
+      reason: 'opencode_panel_observation_failed:read_bounded_output:unsupported:runtime_output_source_unobservable',
+      submitCount: 0,
+    });
+    expect(reads).toBe(2);
+    expect(dispatchInput).not.toHaveBeenCalled();
+    expect(sleeps).toEqual([250, 250]);
+  });
+
+  it.each(['runtime_output_shape_unsupported', 'runtime_output_progress_unavailable'] as const)(
+    'keeps baseline %s terminal without retry',
+    (reason) => {
+      const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: 'opencode-worker', generation: 'generation-opencode' };
+      const dispatchInput = vi.fn(() => ({ status: 'dispatched' as const }));
+      const sleepMs = vi.fn();
+      const adapter = {
+        composerControl: () => ({ kind: 'opencode-http' as const, dispatch: () => ({ status: 'dispatched' as const }) }),
+        dispatchInput,
+        readBoundedOutput: () => ({ status: 'unsupported' as const, operation: 'read_bounded_output' as const, reason }),
+      } as unknown as RuntimeAdapter;
+
+      expect(establishRuntimeSmokeDelivery({
+        adapter,
+        worker: identity,
+        prompt: 'verify',
+        binding: { runId: 'run-opencode-baseline-terminal', artifactDir: '/missing' },
+        cwd: process.cwd(),
+        deadlineMs: 500,
+        now: () => 0,
+        sleepMs,
+      })).toEqual({
+        ok: false,
+        reason: `opencode_panel_observation_failed:read_bounded_output:unsupported:${reason}`,
+        submitCount: 0,
+      });
+      expect(dispatchInput).not.toHaveBeenCalled();
+      expect(sleepMs).not.toHaveBeenCalled();
+    },
+  );
+
+  it('retries transient post-dispatch observations without redispatch and recovers on progress', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-opencode-post-retry-'));
+    try {
+      const artifactDir = join(root, 'run-opencode-post-retry');
+      ensureSmokeRunArtifactDir(artifactDir);
+      writeFileSync(smokeDeliverySealedPath(artifactDir), JSON.stringify({ runId: 'run-opencode-post-retry' }), 'utf8');
+      const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: 'opencode-worker', generation: 'generation-opencode' };
+      let clock = 0;
+      let reads = 0;
+      const sleeps: number[] = [];
+      const dispatchInput = vi.fn(() => ({ status: 'dispatched' as const }));
+      const adapter = {
+        composerControl: () => ({ kind: 'opencode-http' as const, dispatch: () => ({ status: 'dispatched' as const }) }),
+        dispatchInput,
+        readBoundedOutput: () => {
+          reads += 1;
+          if (reads === 2) {
+            return { status: 'unsupported' as const, operation: 'read_bounded_output' as const, reason: 'runtime_output_source_unobservable' };
+          }
+          return {
+            status: 'ok' as const,
+            value: {
+              worker: identity,
+              lines: reads === 1 ? ['real idle splash'] : ['pointer rendered in child panel'],
+              observationToken: { opaque: `screen-${reads}` },
+              changed: reads > 1,
+              terminalState: 'running' as const,
+              source: 'screen' as const,
+            },
+          };
+        },
+      } as unknown as RuntimeAdapter;
+
+      const result = establishRuntimeSmokeDelivery({
+        adapter,
+        worker: identity,
+        prompt: 'verify visible pointer',
+        binding: { runId: 'run-opencode-post-retry', artifactDir },
+        cwd: root,
+        deadlineMs: 1_000,
+        now: () => clock,
+        sleepMs: (milliseconds) => { sleeps.push(milliseconds); clock += milliseconds; },
+      });
+
+      expect(result.ok).toBe(true);
+      expect(reads).toBe(3);
+      expect(dispatchInput).toHaveBeenCalledTimes(1);
+      expect(sleeps).toEqual([250]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves the latest transient post-dispatch observation failure at deadline without redispatch', () => {
+    const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: 'opencode-worker', generation: 'generation-opencode' };
+    let clock = 0;
+    let reads = 0;
+    const sleeps: number[] = [];
+    const dispatchInput = vi.fn(() => ({ status: 'dispatched' as const }));
+    const adapter = {
+      composerControl: () => ({ kind: 'opencode-http' as const, dispatch: () => ({ status: 'dispatched' as const }) }),
+      dispatchInput,
+      readBoundedOutput: () => {
+        reads += 1;
+        if (reads === 1) {
+          return {
+            status: 'ok' as const,
+            value: {
+              worker: identity,
+              lines: ['real idle splash'],
+              observationToken: { opaque: 'screen-baseline' },
+              changed: false,
+              terminalState: 'running' as const,
+              source: 'screen' as const,
+            },
+          };
+        }
+        return { status: 'unsupported' as const, operation: 'read_bounded_output' as const, reason: 'runtime_output_source_unobservable' };
+      },
+    } as unknown as RuntimeAdapter;
+
+    expect(establishRuntimeSmokeDelivery({
+      adapter,
+      worker: identity,
+      prompt: 'verify',
+      binding: { runId: 'run-opencode-post-timeout', artifactDir: '/missing' },
+      cwd: process.cwd(),
+      deadlineMs: 500,
+      now: () => clock,
+      sleepMs: (milliseconds) => { sleeps.push(milliseconds); clock += milliseconds; },
+    })).toEqual({
+      ok: false,
+      reason: 'opencode_panel_observation_failed:read_bounded_output:unsupported:runtime_output_source_unobservable',
+      submitCount: 0,
+    });
+    expect(reads).toBe(3);
+    expect(dispatchInput).toHaveBeenCalledTimes(1);
+    expect(sleeps).toEqual([250, 250]);
+  });
+
+  it('clears a recovered transient post-dispatch failure before preserving idle-splash timeout behavior', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-opencode-post-idle-'));
+    try {
+      const artifactDir = join(root, 'run-opencode-post-idle');
+      ensureSmokeRunArtifactDir(artifactDir);
+      writeFileSync(smokeDeliverySealedPath(artifactDir), JSON.stringify({ runId: 'run-opencode-post-idle' }), 'utf8');
+      const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: 'opencode-worker', generation: 'generation-opencode' };
+      let clock = 0;
+      let reads = 0;
+      const sleeps: number[] = [];
+      const dispatchInput = vi.fn(() => ({ status: 'dispatched' as const }));
+      const adapter = {
+        composerControl: () => ({ kind: 'opencode-http' as const, dispatch: () => ({ status: 'dispatched' as const }) }),
+        dispatchInput,
+        readBoundedOutput: () => {
+          reads += 1;
+          if (reads === 2) {
+            return { status: 'unsupported' as const, operation: 'read_bounded_output' as const, reason: 'runtime_output_source_unobservable' };
+          }
+          return {
+            status: 'ok' as const,
+            value: {
+              worker: identity,
+              lines: ['real idle splash'],
+              observationToken: { opaque: `screen-${reads}` },
+              changed: false,
+              terminalState: 'running' as const,
+              source: 'screen' as const,
+            },
+          };
+        },
+      } as unknown as RuntimeAdapter;
+
+      expect(establishRuntimeSmokeDelivery({
+        adapter,
+        worker: identity,
+        prompt: 'verify invisible pointer',
+        binding: { runId: 'run-opencode-post-idle', artifactDir },
+        cwd: root,
+        deadlineMs: 500,
+        now: () => clock,
+        sleepMs: (milliseconds) => { sleeps.push(milliseconds); clock += milliseconds; },
+      })).toEqual({ ok: false, reason: 'opencode_panel_idle_splash', submitCount: 0 });
+      expect(reads).toBe(3);
+      expect(dispatchInput).toHaveBeenCalledTimes(1);
+      expect(sleeps).toEqual([250, 250]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['runtime_output_shape_unsupported', 'runtime_output_progress_unavailable'] as const)(
+    'keeps post-dispatch %s terminal on first sight without retry',
+    (reason) => {
+      const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: 'opencode-worker', generation: 'generation-opencode' };
+      let reads = 0;
+      const dispatchInput = vi.fn(() => ({ status: 'dispatched' as const }));
+      const sleepMs = vi.fn();
+      const adapter = {
+        composerControl: () => ({ kind: 'opencode-http' as const, dispatch: () => ({ status: 'dispatched' as const }) }),
+        dispatchInput,
+        readBoundedOutput: () => {
+          reads += 1;
+          if (reads === 1) {
+            return {
+              status: 'ok' as const,
+              value: {
+                worker: identity,
+                lines: ['real idle splash'],
+                observationToken: { opaque: 'screen-baseline' },
+                changed: false,
+                terminalState: 'running' as const,
+                source: 'screen' as const,
+              },
+            };
+          }
+          return { status: 'unsupported' as const, operation: 'read_bounded_output' as const, reason };
+        },
+      } as unknown as RuntimeAdapter;
+
+      expect(establishRuntimeSmokeDelivery({
+        adapter,
+        worker: identity,
+        prompt: 'verify',
+        binding: { runId: 'run-opencode-post-terminal', artifactDir: '/missing' },
+        cwd: process.cwd(),
+        deadlineMs: 500,
+        now: () => 0,
+        sleepMs,
+      })).toEqual({
+        ok: false,
+        reason: `opencode_panel_observation_failed:read_bounded_output:unsupported:${reason}`,
+        submitCount: 0,
+      });
+      expect(reads).toBe(2);
+      expect(dispatchInput).toHaveBeenCalledTimes(1);
+      expect(sleepMs).not.toHaveBeenCalled();
+    },
+  );
+
   it('never resends after dispatch_unknown', () => {
     const adapter = new DeterministicRuntimeAdapter();
     const spawned = adapter.spawnWorker({ title: 'smoke', command: 'cursor-agent' });
@@ -871,7 +1189,7 @@ describe('exact-head cross-run worker-smoke coverage', () => {
     const result = coverage([
       comment(3, report('PASS', [scenario('A', 'A passes')]), { createdAt: sameTime }),
       comment(1, report('PASS', [scenario('A', 'A passes')]), { createdAt: sameTime }),
-      comment(2, report('FAIL', [scenario('A', 'A passes', 'blocked')]), { createdAt: sameTime }),
+      comment(2, report('FAIL', [scenario('A', 'A passes', 'fail')]), { createdAt: sameTime }),
     ], A);
     expect(result.accepting).toBe(true);
     expect(result.diagnostics.covered.items[0]?.commentId).toBe(3);
