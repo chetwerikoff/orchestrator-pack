@@ -124,7 +124,7 @@ export interface SchedulerBoundary {
 
 // Per-assignment worker-show budget. A batch is four calls, keeping a normal
 // serialized mail turn comfortably inside the scheduler's 10-second bound.
-const ASSIGNMENT_RESOLUTION_CALL_TIMEOUT_MS = 250;
+const ASSIGNMENT_RESOLUTION_CALL_TIMEOUT_MS = 2_000;
 const ASSIGNMENT_LIFECYCLE_BATCH_SIZE = 4;
 const schedulerTickSequences = new WeakMap<object, number>();
 function nextSchedulerTickSequence(boundary: SchedulerBoundary): number {
