@@ -1,13 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { parseSmokeTestPlan } from './draft-discipline.mjs';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runProcessSync } from './kernel/subprocess.ts';
 import {
   buildSmokeAgentPrompt,
   checkSmokeTestPlan,
-  computeSmokeCompletionBodyDigest,
   ensureSmokeRunArtifactDir,
   evaluateReadyForReviewCombinations,
   evaluateWorkerSmokeCoverage,
@@ -25,6 +24,8 @@ import {
   type WorkerSmokeCommentRecord,
   type WorkerSmokeTrustedTarget,
 } from './lib/worker-smoke-core.ts';
+import { computeSmokeCompletionBodyDigest } from './lib/worker-smoke-core-base.ts';
+import { inspectSmokeProgress } from './lib/worker-smoke-lifecycle-base.ts';
 import { evaluateSmokeLifecycleCleanliness, SMOKE_LIFECYCLE_POLL_MS } from './lib/worker-smoke-lifecycle.ts';
 import { writeWorkerSmokeReceipt } from './lib/worker-smoke-receipt.ts';
 import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
@@ -1167,6 +1168,9 @@ describe('runtime-neutral worker smoke', () => {
 
 
 describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
+  const POLL_MS = SMOKE_LIFECYCLE_POLL_MS;
+  const STALL_MS = 1_500_000;
+  const CEILING_MS = 14_400_000;
   const passBody = [
     '```worker-smoke-report',
     'result: PASS',
@@ -1176,29 +1180,31 @@ describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
     '```',
   ].join('\n');
 
-  function writeProgress(artifactDir: string, events: readonly object[]): void {
-    writeFileSync(
-      join(artifactDir, 'progress.ndjson'),
-      `${events.map((event) => JSON.stringify(event)).join('\n')}\n`,
-      'utf8',
-    );
+  function buildValidProgressFixture(artifactDir: string, runId: string, scenarioCount: number): void {
+    const progressPath = join(artifactDir, 'progress.ndjson');
+    const lines: string[] = [];
+    for (let i = 1; i <= scenarioCount; i++) {
+      lines.push(JSON.stringify({ runId, scenarioOrdinal: i, phase: 'started' }));
+      lines.push(JSON.stringify({ runId, scenarioOrdinal: i, phase: 'terminal', outcome: 'pass' }));
+    }
+    writeFileSync(progressPath, lines.join('\n') + '\n', 'utf8');
   }
+
+  function assertValidProgressAndComplete(artifactDir: string, runId: string, scenarioCount: number): void {
+    const inspection = inspectSmokeProgress({ artifactDir, runId, scenarioCount });
+    expect(inspection.planComplete).toBe(true);
+    expect(inspection.invalidEvents).toHaveLength(0);
+  }
+
 
   function writeSeal(artifactDir: string, runId: string): void {
-    const bodySha256 = computeSmokeCompletionBodyDigest(passBody);
-    writeFileSync(smokeCompletionBodyPath(artifactDir, bodySha256), passBody, { flag: 'wx' });
+    const digest = computeSmokeCompletionBodyDigest(passBody);
+    writeFileSync(smokeCompletionBodyPath(artifactDir, digest), passBody, 'utf8');
     writeFileSync(
-      smokeCompletionSealPath(artifactDir, bodySha256),
-      JSON.stringify({ runId, bodySha256 }),
-      { flag: 'wx' },
+      smokeCompletionSealPath(artifactDir, digest),
+      JSON.stringify({ runId, bodySha256: digest }),
+      'utf8',
     );
-  }
-
-  function completeProgress(artifactDir: string, runId: string): void {
-    writeProgress(artifactDir, [
-      { runId, scenarioOrdinal: 1, phase: 'started' },
-      { runId, scenarioOrdinal: 1, phase: 'terminal', outcome: 'pass' },
-    ]);
   }
 
   function setup(suffix: string): {
@@ -1219,6 +1225,7 @@ describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
   function runDelayedSeal(partial: boolean): {
     completion: ReturnType<typeof waitForRuntimeSmokeCompletion>;
     sleeps: number[];
+    idlePollsBeforeSeal: number;
     readCalls: number;
     livenessCalls: number;
   } {
@@ -1228,8 +1235,11 @@ describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
     const liveness = vi.spyOn(fixture.adapter, 'liveness');
     fixture.adapter.setLiveness(fixture.worker, 'idle');
     if (partial) writeFileSync(smokeCompletionPendingBodyPath(fixture.artifactDir), 'in progress', 'utf8');
-    completeProgress(fixture.artifactDir, 'completion-run');
+    buildValidProgressFixture(fixture.artifactDir, 'completion-run', 1);
+    assertValidProgressAndComplete(fixture.artifactDir, 'completion-run', 1);
     let clock = 0;
+    let idlePollsBeforeSeal = 0;
+    let sealWritten = false;
     try {
       const completion = waitForRuntimeSmokeCompletion({
         adapter: fixture.adapter,
@@ -1243,17 +1253,20 @@ describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
         sleepMs: (milliseconds) => {
           sleeps.push(milliseconds);
           clock += milliseconds;
-          if (sleeps.length === 3) {
+          if (!sealWritten) idlePollsBeforeSeal += 1;
+          if (idlePollsBeforeSeal === 3) {
+            sealWritten = true;
             if (partial) rmSync(smokeCompletionPendingBodyPath(fixture.artifactDir), { force: true });
             writeSeal(fixture.artifactDir, 'completion-run');
           }
         },
-        absoluteCeilingMs: 10_000,
-        progressStallMs: 9_000,
+        absoluteCeilingMs: CEILING_MS,
+        progressStallMs: STALL_MS,
       });
       return {
         completion,
         sleeps,
+        idlePollsBeforeSeal,
         readCalls: reads.mock.calls.length,
         livenessCalls: liveness.mock.calls.length,
       };
@@ -1262,27 +1275,32 @@ describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
     }
   }
 
-  it('stays pending through several idle none polls before a delayed current-run seal', () => {
+  it('stays pending through multiple idle polls before a delayed completion seal appears', () => {
     const result = runDelayedSeal(false);
-    expect(result.completion).toMatchObject({ ok: true, partial: { result: 'PASS' } });
     expect(result.completion.reason ?? '').not.toContain('agent_idle_without_report');
-    expect(result.sleeps.slice(0, 3)).toEqual([SMOKE_LIFECYCLE_POLL_MS, SMOKE_LIFECYCLE_POLL_MS, SMOKE_LIFECYCLE_POLL_MS * 2]);
+    expect(result.completion).toMatchObject({ ok: true, partial: { result: 'PASS' } });
+    expect(result.idlePollsBeforeSeal).toBe(3);
+    expect(result.sleeps.slice(0, 3)).toEqual([POLL_MS, POLL_MS, POLL_MS * 2]);
     expect(result.readCalls).toBe(3);
     expect(result.livenessCalls).toBe(3);
   });
 
-  it('stays pending through several idle partial polls before a delayed current-run seal', () => {
+  it('stays pending with partial publication through idle polls before a delayed completion seal appears', () => {
     const result = runDelayedSeal(true);
-    expect(result.completion).toMatchObject({ ok: true, partial: { result: 'PASS' } });
     expect(result.completion.reason ?? '').not.toContain('agent_idle_without_report');
-    expect(result.sleeps.slice(0, 3)).toEqual([SMOKE_LIFECYCLE_POLL_MS, SMOKE_LIFECYCLE_POLL_MS, SMOKE_LIFECYCLE_POLL_MS * 2]);
+    expect(result.completion).toMatchObject({ ok: true, partial: { result: 'PASS' } });
+    expect(result.idlePollsBeforeSeal).toBe(3);
+    expect(result.sleeps.slice(0, 3)).toEqual([POLL_MS, POLL_MS, POLL_MS * 2]);
+    expect(result.readCalls).toBe(3);
+    expect(result.livenessCalls).toBe(3);
   });
 
   it('fails fast for wrong-run binding with the existing idle cause', () => {
     const fixture = setup('wrong-run');
     const reads = vi.spyOn(fixture.adapter, 'readBoundedOutput');
     fixture.adapter.setLiveness(fixture.worker, 'idle');
-    completeProgress(fixture.artifactDir, 'expected-run');
+    buildValidProgressFixture(fixture.artifactDir, 'expected-run', 1);
+    assertValidProgressAndComplete(fixture.artifactDir, 'expected-run', 1);
     try {
       writeSeal(fixture.artifactDir, 'other-run');
       const completion = waitForRuntimeSmokeCompletion({
@@ -1295,8 +1313,8 @@ describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
         abortReason: () => undefined,
         now: () => 0,
         sleepMs: () => { throw new Error('wrong-run observation must fail before sleeping'); },
-        absoluteCeilingMs: 10_000,
-        progressStallMs: 9_000,
+        absoluteCeilingMs: CEILING_MS,
+        progressStallMs: STALL_MS,
       });
       expect(completion.ok).toBe(false);
       expect(completion.reason).toContain('agent_idle_without_report');
@@ -1326,7 +1344,8 @@ describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
         },
       });
     }
-    completeProgress(fixture.artifactDir, 'completion-run');
+    buildValidProgressFixture(fixture.artifactDir, 'completion-run', 1);
+    assertValidProgressAndComplete(fixture.artifactDir, 'completion-run', 1);
     try {
       const completion = waitForRuntimeSmokeCompletion({
         adapter: fixture.adapter,
@@ -1355,7 +1374,8 @@ describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
     const reads = vi.spyOn(fixture.adapter, 'readBoundedOutput');
     const liveness = vi.spyOn(fixture.adapter, 'liveness');
     fixture.adapter.setLiveness(fixture.worker, 'idle');
-    completeProgress(fixture.artifactDir, 'completion-run');
+    buildValidProgressFixture(fixture.artifactDir, 'completion-run', 1);
+    assertValidProgressAndComplete(fixture.artifactDir, 'completion-run', 1);
     let clock = 0;
     try {
       const completion = waitForRuntimeSmokeCompletion({
@@ -1368,17 +1388,22 @@ describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
         abortReason: () => undefined,
         now: () => clock,
         sleepMs: (milliseconds) => { sleeps.push(milliseconds); clock += milliseconds; },
-        absoluteCeilingMs: 10_000,
-        progressStallMs: 4_000,
+        absoluteCeilingMs: CEILING_MS,
+        progressStallMs: STALL_MS,
       });
       expect(completion.ok).toBe(false);
       expect(completion.reason).toContain('agent_report_timeout');
       expect(completion.reason).toContain('reason=progress_stall');
       expect(completion.reason).not.toContain('agent_idle_without_report');
-      expect(sleeps).toEqual([SMOKE_LIFECYCLE_POLL_MS, SMOKE_LIFECYCLE_POLL_MS, SMOKE_LIFECYCLE_POLL_MS * 2, SMOKE_LIFECYCLE_POLL_MS * 4, SMOKE_LIFECYCLE_POLL_MS * 8]);
-      expect(reads.mock.calls.length).toBeLessThan(10);
+      expect(sleeps).toEqual([
+        POLL_MS, POLL_MS, POLL_MS * 2, POLL_MS * 4, POLL_MS * 8,
+        POLL_MS * 16, POLL_MS * 32, POLL_MS * 64, POLL_MS * 128, POLL_MS * 256,
+        POLL_MS * 512, POLL_MS * 1_024, POLL_MS * 2_048,
+        STALL_MS - (POLL_MS * 4_096),
+      ]);
+      expect(reads.mock.calls.length).toBeLessThan(40);
       expect(reads).toHaveBeenCalledTimes(liveness.mock.calls.length);
-      expect(liveness).toHaveBeenCalledTimes(5);
+      expect(liveness).toHaveBeenCalledTimes(reads.mock.calls.length);
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }
@@ -1387,12 +1412,21 @@ describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
   it('resets polling to 250ms after fresh accepted progress', () => {
     const fixture = setup('progress-reset');
     const sleeps: number[] = [];
-    const liveness = vi.spyOn(fixture.adapter, 'liveness');
+    const acceptedCounts: number[] = [];
+    const originalLiveness = fixture.adapter.liveness.bind(fixture.adapter);
+    const liveness = vi.spyOn(fixture.adapter, 'liveness').mockImplementation((input) => {
+      acceptedCounts.push(inspectSmokeProgress({
+        artifactDir: fixture.artifactDir,
+        runId: 'completion-run',
+        scenarioCount: 2,
+      }).acceptedCount);
+      return originalLiveness(input);
+    });
     fixture.adapter.setLiveness(fixture.worker, 'busy');
-    writeProgress(fixture.artifactDir, [
-      { runId: 'completion-run', scenarioOrdinal: 1, phase: 'started' },
-    ]);
+    buildValidProgressFixture(fixture.artifactDir, 'completion-run', 1);
+    assertValidProgressAndComplete(fixture.artifactDir, 'completion-run', 1);
     let clock = 0;
+    let newProgressWritten = false;
     try {
       const completion = waitForRuntimeSmokeCompletion({
         adapter: fixture.adapter,
@@ -1406,21 +1440,33 @@ describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
         sleepMs: (milliseconds) => {
           sleeps.push(milliseconds);
           clock += milliseconds;
-          if (sleeps.length === 2) {
-            writeProgress(fixture.artifactDir, [
-              { runId: 'completion-run', scenarioOrdinal: 1, phase: 'started' },
-              { runId: 'completion-run', scenarioOrdinal: 1, phase: 'terminal', outcome: 'pass' },
-            ]);
+          if (sleeps.length === 5 && !newProgressWritten) {
+            newProgressWritten = true;
+            appendFileSync(join(fixture.artifactDir, 'progress.ndjson'), [
+              JSON.stringify({ runId: 'completion-run', scenarioOrdinal: 2, phase: 'started' }),
+              JSON.stringify({ runId: 'completion-run', scenarioOrdinal: 2, phase: 'terminal', outcome: 'pass' }),
+              '',
+            ].join('\n'), 'utf8');
           }
-          if (sleeps.length === 3) fixture.adapter.setLiveness(fixture.worker, 'gone');
+          if (sleeps.length === 6) fixture.adapter.setLiveness(fixture.worker, 'gone');
         },
-        absoluteCeilingMs: 10_000,
-        progressStallMs: 4_000,
+        absoluteCeilingMs: CEILING_MS,
+        progressStallMs: STALL_MS,
       });
       expect(completion.ok).toBe(false);
       expect(completion.reason).toContain('agent_exited_without_report');
-      expect(sleeps).toEqual([SMOKE_LIFECYCLE_POLL_MS, SMOKE_LIFECYCLE_POLL_MS, SMOKE_LIFECYCLE_POLL_MS]);
-      expect(liveness).toHaveBeenCalledTimes(4);
+      expect(acceptedCounts).toEqual([2, 2, 2, 2, 2, 4, 4]);
+      const acceptedIncreaseIndex = acceptedCounts.findIndex((count, index) => index > 0 && count > acceptedCounts[index - 1]!);
+      expect(acceptedIncreaseIndex).toBe(5);
+      expect(newProgressWritten).toBe(true);
+      expect(sleeps[0]).toBe(POLL_MS);
+      expect(sleeps.slice(1, acceptedIncreaseIndex)).toEqual([
+        POLL_MS, POLL_MS * 2, POLL_MS * 4, POLL_MS * 8,
+      ]);
+      for (let index = 2; index < acceptedIncreaseIndex; index++) {
+        expect(sleeps[index]).toBe(sleeps[index - 1]! * 2);
+      }
+      expect(sleeps[acceptedIncreaseIndex]).toBe(POLL_MS);
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }
