@@ -11,6 +11,15 @@ describe('Issue #1415 Node verification authority', () => {
     ]);
   });
 
+  it('admits the tracked root Node pin and no other root version file', () => {
+    expect(evaluateReusableTrackedPaths(['.mise.toml'])).toEqual([]);
+    expect(evaluateReusableTrackedPaths(['mise.toml', '.node-version', '.nvmrc'])).toEqual([
+      'mise.toml :: not in reusable pack allowlist',
+      '.node-version :: not in reusable pack allowlist',
+      '.nvmrc :: not in reusable pack allowlist',
+    ]);
+  });
+
   it('preserves the legacy exception semantics without widening the allowlist', () => {
     expect(evaluateReusableTrackedPaths(['.env.example', 'plugins/demo/.env.example'])).toEqual([
       '.env.example :: not in reusable pack allowlist',

@@ -47,7 +47,7 @@ const SMOKE_FILES = [
 const retiredRuntimeStem = ['agent', 'orchestrator'].join('-');
 const retiredStateStem = `.${retiredRuntimeStem}`;
 const ALLOWED_ROOT_PATTERNS = [
-  'README.md', 'AGENTS.md', 'CLAUDE.md', 'CONTRIBUTING.md', 'CHANGELOG.md', 'LICENSE', 'LICENSE.md', '.gitignore', '.gitattributes', '.editorconfig',
+  'README.md', 'AGENTS.md', 'CLAUDE.md', 'CONTRIBUTING.md', 'CHANGELOG.md', 'LICENSE', 'LICENSE.md', '.gitignore', '.gitattributes', '.editorconfig', '.mise.toml',
   'package.json', 'package-lock.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig.json', 'tsconfig.*.json', '*.config.js', '*.config.cjs', '*.config.mjs', '*.config.ts', '*.config.mts', '*.config.cts',
 ] as const;
 const ALLOWED_PATH_PATTERNS = ['.github/*', '.cursor/skills/*', '.cursor/rules/*', '.claude/skills/*', 'docs/*', 'prompts/*', 'plugins/*', 'scripts/*', 'schemas/*', 'examples/*', 'templates/*', 'tests/*'] as const;
