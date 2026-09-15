@@ -9,6 +9,7 @@ import {
   observeCurrentWorkerAssignmentLifecycle,
   type ResolvedWorkerAssignment,
   type WorkerAssignmentLifecycleObservation,
+  type WorkerAssignmentReconciliation,
 } from './lib/worker-assignment-runtime.ts';
 import {
   maybeNotifyRunOnTerminalDispatch,
@@ -33,11 +34,13 @@ export type WorkerAssignmentLifecycleSweepResult =
   | {
       readonly status: 'ok';
       readonly bindings: readonly ResolvedWorkerAssignment[];
+      readonly reconciliations: readonly WorkerAssignmentReconciliation[];
       readonly counts: WorkerAssignmentReconciliationCounts;
     }
   | {
       readonly status: 'assignment_untrusted';
       readonly bindings: readonly [];
+      readonly reconciliations: readonly [];
       readonly counts: WorkerAssignmentReconciliationCounts;
     };
 
@@ -48,10 +51,7 @@ export interface ReconcileWorkerAssignmentsInput {
   readonly timeoutMs?: number;
   readonly batchSize?: number;
   readonly terminalMailDeps?: DispatchTerminalMailDeps;
-  /**
-   * One serialized latency-sensitive turn between lifecycle batches. Production
-   * uses this for orchestration mail; it must not launch overlapping runtime work.
-   */
+  /** One serialized latency-sensitive turn between lifecycle batches. */
   readonly betweenBatches?: () => void | Promise<void>;
 }
 
@@ -70,33 +70,48 @@ function emptyCounts(): WorkerAssignmentReconciliationCounts {
   };
 }
 
+function isNumberedAssignment(assignment: WorkerAssignmentRecord): assignment is WorkerAssignment {
+  return Number.isInteger(assignment.issueNumber) && Number(assignment.issueNumber) > 0;
+}
+
 function isNumberedWorkerPartition(assignment: WorkerAssignmentRecord): assignment is WorkerAssignment {
-  return Number.isInteger(assignment.issueNumber)
-    && Number(assignment.issueNumber) > 0
-    && assignment.role !== 'orchestrator';
+  return isNumberedAssignment(assignment) && assignment.role !== 'orchestrator';
+}
+
+function addReconciliation(
+  reconciliations: WorkerAssignmentReconciliation[],
+  assignment: WorkerAssignmentRecord,
+  reason: WorkerAssignmentReconciliation['reason'] = 'target_unresolved',
+): void {
+  if (!isNumberedAssignment(assignment)) return;
+  if (reconciliations.some((candidate) => candidate.assignment.assignmentId === assignment.assignmentId
+    && candidate.assignment.generation === assignment.generation)) return;
+  reconciliations.push({ assignment, reason });
 }
 
 function mutableCounts(seed: WorkerAssignmentReconciliationCounts): Record<keyof WorkerAssignmentReconciliationCounts, number> {
   return { ...seed };
 }
 
+type RetirementClass = 'retired' | 'protected' | 'stale' | 'unresolved';
 function classifyRetirement(
   result: Awaited<ReturnType<typeof retireCurrentWorkerAssignment>>,
   counts: Record<keyof WorkerAssignmentReconciliationCounts, number>,
-): void {
+): RetirementClass {
   if (result.ok) {
     counts.retired += 1;
-    return;
+    return 'retired';
   }
   if (result.reason === 'assignment_protected') {
     counts.protected += 1;
-    return;
+    return 'protected';
   }
   if (result.reason === 'assignment_stale') {
     counts.stale += 1;
-    return;
+    return 'stale';
   }
   counts.unresolved += 1;
+  return 'unresolved';
 }
 
 /**
@@ -142,18 +157,22 @@ export async function reconcileWorkerAssignments(
 ): Promise<WorkerAssignmentLifecycleSweepResult> {
   const records = listCurrentWorkerAssignmentRecords(input.file);
   const baseCounts = emptyCounts();
-  if (!records) return { status: 'assignment_untrusted', bindings: [], counts: baseCounts };
+  if (!records) {
+    return { status: 'assignment_untrusted', bindings: [], reconciliations: [], counts: baseCounts };
+  }
 
   const counts = mutableCounts(baseCounts);
   const repository = input.repository.trim().toLowerCase();
   const batchSize = Math.max(1, Math.min(16, Math.floor(input.batchSize ?? 4)));
   const bindings: ResolvedWorkerAssignment[] = [];
   const workers = [] as ResolvedWorkerAssignment['worker'][];
+  const reconciliations: WorkerAssignmentReconciliation[] = [];
 
   for (const assignment of records) {
     if (assignment.repository !== repository) continue;
     if (assignment.kind !== 'local') {
       counts.remoteRetained += 1;
+      addReconciliation(reconciliations, assignment, 'remote_not_applicable');
       continue;
     }
 
@@ -170,6 +189,7 @@ export async function reconcileWorkerAssignments(
       if (isNumberedWorkerPartition(observation.assignment)) {
         if (workers.some((candidate) => sameRuntimeWorker(candidate.identity, observation.worker.identity))) {
           counts.unresolved += 1;
+          addReconciliation(reconciliations, observation.assignment);
         } else {
           workers.push(observation.worker);
           bindings.push({ assignment: observation.assignment, worker: observation.worker });
@@ -183,20 +203,29 @@ export async function reconcileWorkerAssignments(
         terminalMailDeps: input.terminalMailDeps,
       });
       if (consumed.status === 'retired') counts.retired += 1;
-      else if (consumed.status === 'protected') counts.protected += 1;
-      else if (consumed.status === 'stale') counts.stale += 1;
-      else counts.unresolved += 1;
+      else if (consumed.status === 'protected') {
+        counts.protected += 1;
+        addReconciliation(reconciliations, observation.assignment);
+      } else if (consumed.status === 'stale') counts.stale += 1;
+      else {
+        counts.unresolved += 1;
+        addReconciliation(reconciliations, observation.assignment);
+      }
     } else if (observation.status === 'gone') {
       counts.gone += 1;
       const retired = await retireCurrentWorkerAssignment({
         file: input.file,
         expected: observation.assignment,
       });
-      classifyRetirement(retired, counts);
+      const retirementClass = classifyRetirement(retired, counts);
+      if (retirementClass === 'protected' || retirementClass === 'unresolved') {
+        addReconciliation(reconciliations, observation.assignment);
+      }
     } else if (observation.status === 'assignment_stale') {
       counts.stale += 1;
     } else {
       counts.unresolved += 1;
+      addReconciliation(reconciliations, assignment);
     }
 
     if (counts.observed % batchSize === 0 && input.betweenBatches) {
@@ -208,6 +237,7 @@ export async function reconcileWorkerAssignments(
   return {
     status: 'ok',
     bindings,
+    reconciliations,
     counts: counts as unknown as WorkerAssignmentReconciliationCounts,
   };
 }
