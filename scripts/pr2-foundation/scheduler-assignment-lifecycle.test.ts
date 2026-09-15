@@ -63,7 +63,7 @@ function assignment(index: number): WorkerAssignmentRecord {
   return {
     ...base,
     issueNumber: 1900 + index,
-    role: index === 6 || index === 9 ? 'orchestrator' : 'worker',
+    role: index === 6 || index === 9 || index === 10 ? 'orchestrator' : 'worker',
   };
 }
 
@@ -212,6 +212,7 @@ describe('Issue #1899 scheduler assignment lifecycle reconciliation', () => {
       retired: 62,
     });
     expect(first.bindings).toHaveLength(6);
+    expect(first.reconciliations.every((row) => row.assignment.role !== 'orchestrator')).toBe(true);
     expect(adapter.observations).toHaveLength(72);
     expect(new Set(adapter.observations)).toHaveLength(72);
     expect(sentArgs).toHaveLength(2);
@@ -236,6 +237,7 @@ describe('Issue #1899 scheduler assignment lifecycle reconciliation', () => {
     });
     expect(second.status).toBe('ok');
     expect(second.counts).toMatchObject({ observed: 10, active: 8, terminal: 1, gone: 1, retired: 0, protected: 1, unresolved: 1 });
+    expect(second.reconciliations.every((row) => row.assignment.role !== 'orchestrator')).toBe(true);
     expect(adapter.observations).toHaveLength(10);
     expect(sentArgs).toHaveLength(2);
     expect(adapter.peakInFlight).toBe(1);
