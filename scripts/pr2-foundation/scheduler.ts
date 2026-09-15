@@ -122,10 +122,10 @@ export interface SchedulerBoundary {
   }) => { ok: boolean; reason?: string; record?: FleetReconciliationHandoff };
 }
 
-// Per-assignment worker-show budget. A batch is four calls, keeping a normal
-// serialized mail turn comfortably inside the scheduler's 10-second bound.
+// An active Orca lifecycle observation can issue worker-show plus terminal-show.
+// Two assignments at 2 s per call cap serialized time before the mail turn at 8 s.
 const ASSIGNMENT_RESOLUTION_CALL_TIMEOUT_MS = 2_000;
-const ASSIGNMENT_LIFECYCLE_BATCH_SIZE = 4;
+const ASSIGNMENT_LIFECYCLE_BATCH_SIZE = 2;
 const schedulerTickSequences = new WeakMap<object, number>();
 function nextSchedulerTickSequence(boundary: SchedulerBoundary): number {
   const next = (schedulerTickSequences.get(boundary) ?? 0) + 1;
