@@ -1553,6 +1553,8 @@ export function waitForRuntimeSmokeCompletion(input: {
   const progressStallMs = input.progressStallMs ?? SMOKE_PROGRESS_STALL_MS;
   let lastProgressAt = now();
   let acceptedProgress = 0;
+  let postPlanPollMs = SMOKE_LIFECYCLE_POLL_MS;
+  let previousPublicationState: SmokeCompletionObservation['publicationState'] | undefined;
   let token = input.previousToken;
   let completionState = createSmokeCompletionObservationState();
   let lastObservation: SmokeCompletionObservation | undefined;
@@ -1568,7 +1570,8 @@ export function waitForRuntimeSmokeCompletion(input: {
       scenarioCount: input.scenarioCount,
     });
     lastProgress = progress;
-    if (progress.acceptedCount > acceptedProgress) {
+    const progressIncreased = progress.acceptedCount > acceptedProgress;
+    if (progressIncreased) {
       acceptedProgress = progress.acceptedCount;
       lastProgressAt = now();
     }
@@ -1576,6 +1579,9 @@ export function waitForRuntimeSmokeCompletion(input: {
     const observed = observeSmokeCompletionEvidence(input.binding, completionState);
     completionState = observed.state;
     lastObservation = observed.observation;
+    const publicationStateChanged = previousPublicationState !== undefined
+      && previousPublicationState !== observed.observation.publicationState;
+    previousPublicationState = observed.observation.publicationState;
     if (observed.observation.publicationState === 'publish_complete_single'
       && observed.observation.partial) {
       return { ok: true, partial: observed.observation.partial, progress };
@@ -1591,6 +1597,19 @@ export function waitForRuntimeSmokeCompletion(input: {
       return {
         ok: false,
         reason: completionFailureReason('agent_report_unfenced', observed.observation, progress),
+        progress,
+      };
+    }
+    if (observed.observation.wrongRunBinding
+      && (observed.observation.publicationState === 'none'
+        || observed.observation.publicationState === 'partial')) {
+      return {
+        ok: false,
+        reason: completionFailureReason(
+          'agent_idle_without_report',
+          observed.observation,
+          progress,
+        ),
         progress,
       };
     }
@@ -1648,23 +1667,6 @@ export function waitForRuntimeSmokeCompletion(input: {
         progress,
       };
     }
-    if (liveness.status === 'idle' && progress.planComplete) {
-      const finalObservation = observeSmokeCompletionEvidence(input.binding, completionState);
-      completionState = finalObservation.state;
-      if (finalObservation.observation.publicationState === 'publish_complete_single'
-        && finalObservation.observation.partial) {
-        return { ok: true, partial: finalObservation.observation.partial, progress };
-      }
-      return {
-        ok: false,
-        reason: completionFailureReason(
-          'agent_idle_without_report',
-          finalObservation.observation,
-          progress,
-        ),
-        progress,
-      };
-    }
     if (now() - lastProgressAt >= progressStallMs) {
       return {
         ok: false,
@@ -1677,7 +1679,21 @@ export function waitForRuntimeSmokeCompletion(input: {
         progress,
       };
     }
-    sleepMs(Math.min(SMOKE_LIFECYCLE_POLL_MS, Math.max(1, absoluteDeadline - now())));
+
+    const pendingPublication = observed.observation.publicationState === 'none'
+      || observed.observation.publicationState === 'partial';
+    if (progressIncreased || publicationStateChanged || !pendingPublication) {
+      postPlanPollMs = SMOKE_LIFECYCLE_POLL_MS;
+    }
+    sleepMs(Math.min(
+      postPlanPollMs,
+      Math.max(1, readDeadline - now()),
+    ));
+    if (pendingPublication && !progressIncreased && !publicationStateChanged) {
+      postPlanPollMs *= 2;
+    } else {
+      postPlanPollMs = SMOKE_LIFECYCLE_POLL_MS;
+    }
   }
 
   const progress = lastProgress ?? inspectSmokeProgress({

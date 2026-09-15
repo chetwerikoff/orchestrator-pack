@@ -7,6 +7,7 @@ import { runProcessSync } from './kernel/subprocess.ts';
 import {
   buildSmokeAgentPrompt,
   checkSmokeTestPlan,
+  computeSmokeCompletionBodyDigest,
   ensureSmokeRunArtifactDir,
   evaluateReadyForReviewCombinations,
   evaluateWorkerSmokeCoverage,
@@ -14,6 +15,9 @@ import {
   formatSmokeReportComment,
   normalizeSmokeReport,
   resolveSmokeRequirement,
+  smokeCompletionBodyPath,
+  smokeCompletionPendingBodyPath,
+  smokeCompletionSealPath,
   smokeDeliverySealedPath,
   SMOKE_REPORT_PRODUCER,
   type SmokeReport,
@@ -42,6 +46,7 @@ import {
   resolveSmokeExecutorProfile,
   smokeCommentSnapshotDigest,
   stabilizeSmokeCommentCensus,
+  waitForRuntimeSmokeCompletion,
   type CliOptions,
   type GateCheckDependencies,
   type ResolvedSmokeTarget,
@@ -1814,8 +1819,6 @@ if (endpoint === 'user') {
     expect(coverage(comments, body).accepting).toBe(true);
   });
 });
-
-
 describe('buildSmokeAgentPrompt selected declaration artifact', () => {
   it('skips docs/declarations/<issue>.pr-scope.json from product path accounting', () => {
     const prompt = buildSmokeAgentPrompt({
