@@ -62,7 +62,7 @@ describe('event-driven composer submission', () => {
     expect(result.terminals[0]?.reason).toBe('composer_not_orchestration_pointer');
   });
 
-  it('keeps Cursor composer reads out of the periodic scheduler path', () => {
+  it('keeps Cursor composer reads out of the periodic scheduler path and yields serialized mail turns during lifecycle sweep', () => {
     const source = readFileSync(new URL('./scheduler.ts', import.meta.url), 'utf8');
     expect(source).not.toContain('runSupervisorUnsentComposerTick');
     expect(source).not.toContain('runComposerPass');
@@ -73,7 +73,10 @@ describe('event-driven composer submission', () => {
     expect(source.indexOf('const executeOrchestrationMailReconcile')).toBeLessThan(
       source.indexOf('const repository = await resolveRepositoryFromRepoRoot'),
     );
-    expect(source).toContain('preloadedOrchestrationMailReconcile');
+    expect(source).toContain('const runSerializedMailTurn');
+    expect(source).toContain('reconcileWorkerAssignments({');
+    expect(source).toContain('betweenBatches: runSerializedMailTurn');
+    expect(source).not.toContain('preloadedOrchestrationMailReconcile');
     expect(source).toContain('...(orchestrationMailReconcile ? { orchestrationMailReconcile } : {})');
   });
 });
