@@ -1301,6 +1301,45 @@ describe('delivery-triggered composer submission', () => {
     expect(submitted).toEqual([]);
   });
 
+  it.each([
+    [
+      'run delivery with terminal pointer',
+      { id: 'msg_cross_run', runId: 'run_cross_kind', recipient: 'run:run_cross_kind', consumed: false },
+      'orca orchestration check --terminal term_cross_kind',
+    ],
+    [
+      'terminal delivery with run pointer',
+      { id: 'msg_cross_terminal', runId: 'run_cross_kind', recipient: 'term_cross_kind', consumed: false },
+      'orca orchestration check --run run_cross_kind',
+    ],
+    [
+      'dispatch delivery with run pointer',
+      { id: 'msg_cross_dispatch', runId: 'run_cross_kind', recipient: 'dispatch:ctx_cross_kind', consumed: false },
+      'orca orchestration check --run run_cross_kind',
+    ],
+  ] as const)('does not Enter for selector-kind mismatch: %s', async (_label, message, wrongCommand) => {
+    const target = worker('term_cross_kind');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const result = await submitOrcaMessageDeliveryPointer(message.id, {
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      submitDeps: depsFor({}, {
+        submitted,
+        liveness: () => 'idle',
+        read: () => ({
+          ok: true as const,
+          lines: [`You have 1 orchestration message. Run \`${wrongCommand}\`.`, ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        }),
+      }),
+    });
+    expect(result.terminals[0]).toMatchObject({
+      reason: 'orchestration_pointer_target_mismatch',
+      enter: false,
+    });
+    expect(submitted).toEqual([]);
+  });
+
   it('resolves one exact terminal before asynchronous rendering and duplicate no-effect', async () => {
     const target = worker('term_exact_delivery');
     const submitted: RuntimeWorkerIdentity[] = [];
@@ -1536,7 +1575,6 @@ describe('delivery-triggered composer submission', () => {
     expect(submitted).toHaveLength(0);
   });
 
-
   it('suppresses duplicate notification delivery for the same recipient and pointer text in one tick', async () => {
     const target = worker('term_dup_write');
     const submitted: RuntimeWorkerIdentity[] = [];
@@ -1733,6 +1771,67 @@ describe('orchestration mail reconciliation', () => {
     }]);
     expect(submitted).toHaveLength(1);
     expect(retrievabilityChecks).toBe(1);
+  });
+
+  it('checks Run sibling retrievability per message instead of reusing the first result', async () => {
+    const target = worker('term_run_siblings');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const stale = {
+      id: 'msg_run_sibling_a',
+      runId: 'run_run_siblings',
+      recipient: 'run:run_run_siblings',
+      consumed: false,
+    };
+    const live = { ...stale, id: 'msg_run_sibling_b' };
+    const messages = new Map([[stale.id, stale], [live.id, live]]);
+    const retrievabilityChecks: string[] = [];
+    const deps = {
+      readInbox: () => ({
+        ok: true as const,
+        result: { messages: [
+          { id: stale.id, run_id: stale.runId, to_handle: stale.recipient, read: 0 },
+          { id: live.id, run_id: live.runId, to_handle: live.recipient, read: 0 },
+        ] },
+      }),
+      lookupMessage: (id: string) => {
+        const message = messages.get(id);
+        return message ? { ok: true as const, message } : { ok: false as const, reason: 'missing' };
+      },
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      isMessageRetrievable: (message: { readonly id: string }) => {
+        retrievabilityChecks.push(message.id);
+        return message.id === live.id
+          ? { ok: true as const }
+          : { ok: false as const, reason: 'orchestration_message_unretrievable' };
+      },
+      submitDeps: depsFor({}, {
+        submitted,
+        read: () => ({
+          ok: true as const,
+          lines: submitted.length === 0
+            ? [buildDeliveryPointer(live), ...CURSOR_FOOTER]
+            : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        }),
+      }),
+    };
+    const root = mkdtempSync(join(tmpdir(), 'opk-reconcile-run-siblings-'));
+    try {
+      const result = await runOrchestrationMailReconcileTick(deps, {
+        ledgerPath: join(root, 'orchestration-mail-reconcile.json'),
+        lockPath: join(root, 'orchestration-mail-reconcile.lock'),
+        now: () => 1_000,
+      });
+      expect(retrievabilityChecks).toEqual([stale.id, live.id]);
+      expect(result.reasons).toEqual([
+        `${stale.id}:orchestration_message_unretrievable`,
+        `${live.id}:enter_sent`,
+      ]);
+      expect(result.nudged).toBe(1);
+      expect(submitted).toEqual([target.identity]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('falls back to exact terminal peek when a Run consumer is fenced', () => {
@@ -2444,7 +2543,7 @@ describe('orchestration mail reconciliation', () => {
     expect(state.episodes[key]).toBeUndefined();
   });
 
-  it('refuses an empty composer without writing a pack pointer', async () => {
+  it('refuses an empty composer without writing a pack pointer and retries on the next cadence', async () => {
     const target = worker('term_pack_pointer_fallback');
     const root = mkdtempSync(join(tmpdir(), 'opk-pack-pointer-fallback-'));
     const statePath = join(root, 'orchestration-mail-reconcile.json');
@@ -2452,29 +2551,53 @@ describe('orchestration mail reconciliation', () => {
     const now = Date.now();
     const message = { id: 'msg_pack_pointer_fallback', runId: 'run_pack_pointer_fallback', recipient: 'run:run_pack_pointer_fallback', consumed: false };
     let writes = 0;
+    let pointerVisible = false;
     const submitted: RuntimeWorkerIdentity[] = [];
-    try {
-      const result = await submitOrcaMessageDeliveryPointer(message.id, {
-        lookupMessage: () => ({ ok: true as const, message }),
-        resolveWorker: () => ({ ok: true as const, worker: target }),
-        writePointer: () => {
-          writes += 1;
-          throw new Error('pack pointer fallback must not run');
+    const deps = {
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      writePointer: () => {
+        writes += 1;
+        throw new Error('pack pointer fallback must not run');
+      },
+      submitDeps: depsFor({}, {
+        submitted,
+        submitResult: (identity) => {
+          submitted.push(identity);
+          pointerVisible = false;
+          return { status: 'dispatched' as const };
         },
-        submitDeps: depsFor({}, {
-          submitted,
-          submitResult: (identity) => { submitted.push(identity); return { status: 'dispatched' as const }; },
-          read: () => ({ ok: true as const, lines: ['→ Add a follow-up', ...CURSOR_FOOTER], source: 'screen' as const }),
+        read: () => ({
+          ok: true as const,
+          lines: pointerVisible
+            ? [buildDeliveryPointer(message), ...CURSOR_FOOTER]
+            : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          source: 'screen' as const,
         }),
-        episodeStatePath: statePath,
-        episodeLockPath: lockPath,
-      }, { now: () => now });
-      const persisted = JSON.parse(readFileSync(statePath, 'utf8')) as { episodes: Record<string, { messageId: string; state: string }> };
+        sleepAsync: async () => {},
+      }),
+      episodeStatePath: statePath,
+      episodeLockPath: lockPath,
+    };
+    try {
+      const result = await submitOrcaMessageDeliveryPointer(message.id, deps, { now: () => now });
+      const persisted = JSON.parse(readFileSync(statePath, 'utf8')) as {
+        episodes: Record<string, { messageId: string; state: string; nextEligibleAt: number; backoffMs?: number }>;
+      };
       expect(result.terminals[0]?.reason).toBe('pointer_absent_orca_did_not_notify');
       expect(result.terminals[0]?.enter).toBe(false);
       expect(writes).toBe(0);
       expect(submitted).toHaveLength(0);
-      expect(Object.values(persisted.episodes)).toEqual([expect.objectContaining({ messageId: message.id, state: 'refused', nextEligibleAt: now + 120_000, backoffMs: 120_000 })]);
+      expect(Object.values(persisted.episodes)).toEqual([
+        expect.objectContaining({ messageId: message.id, state: 'refused', nextEligibleAt: now }),
+      ]);
+      expect(Object.values(persisted.episodes)[0]?.backoffMs).toBeUndefined();
+
+      pointerVisible = true;
+      const retry = await submitOrcaMessageDeliveryPointer(message.id, deps, { now: () => now + 5_000 });
+      expect(retry.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true, ok: true });
+      expect(submitted).toEqual([target.identity]);
+      expect(writes).toBe(0);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -2578,6 +2701,7 @@ describe('orchestration mail reconciliation', () => {
         episodeLockPath: lockPath,
       });
       const first = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 1_000 });
+      expect(first.ok).toBe(false);
       expect(first.terminals[0]?.reason).toBe('runtime_unavailable');
       expect(writes).toBe(0);
       expect(submitted).toHaveLength(1);
@@ -2685,6 +2809,7 @@ describe('orchestration mail reconciliation', () => {
       });
 
       const first = await submitOrcaMessageDeliveryPointer(message.id, makeDeps(), { now: () => 1_000 });
+      expect(first.ok).toBe(false);
       expect(first.terminals[0]).toMatchObject({ enter: false, reason: 'submission_unconfirmed' });
       expect(submitted).toHaveLength(1);
 
@@ -2812,7 +2937,6 @@ describe('orchestration mail reconciliation', () => {
   });
 });
 
-
   it('submits Enter for an Orca-notified busy pane', async () => {
     const target = worker('term_busy_delivery');
     const state = { messages: {}, episodes: {} };
@@ -2891,7 +3015,6 @@ describe('orchestration mail reconciliation', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
-
 
   it('retries a hidden unconfirmed claim with Enter only', async () => {
     const target = worker('term_hidden_claim');

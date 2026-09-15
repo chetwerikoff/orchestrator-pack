@@ -737,7 +737,6 @@ function sleepAsync(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-
 export function buildDeliveryPointer(message: DeliveryMessage): string {
   const check = message.recipient.startsWith('dispatch:')
     ? 'orca orchestration check'
@@ -757,11 +756,16 @@ function pointerMatchesDelivery(
   message: DeliveryMessage,
   worker: RuntimeWorker,
  ): boolean {
-  if (pointer === 'orca orchestration check') return message.recipient.startsWith('dispatch:');
-  const runId = pointer.match(/^orca orchestration check --run (\S+)$/u)?.[1];
-  if (runId) return runId === message.runId;
-  const terminal = pointer.match(/^orca orchestration check --terminal (\S+)$/u)?.[1];
-  return terminal === worker.identity.id;
+  if (message.recipient.startsWith('dispatch:')) return pointer === 'orca orchestration check';
+  if (message.recipient.startsWith('run:')) {
+    const runId = message.recipient.slice('run:'.length).trim();
+    return runId === message.runId && pointer === `orca orchestration check --run ${runId}`;
+  }
+  if (message.recipient.startsWith('term_')) {
+    return worker.identity.id === message.recipient
+      && pointer === `orca orchestration check --terminal ${message.recipient}`;
+  }
+  return false;
 }
 
 /** Immediate delivery-scoped observation plus one bounded render-race retry. */
@@ -1198,7 +1202,8 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     return deliveryNoEffect('orchestration_episode_backoff', worker, false);
   }
   if (!alreadyShown && existing?.state !== 'pointer-visible') {
-    const refusalReason = composerKind === 'empty'
+    const pointerAbsent = composerKind === 'empty';
+    const refusalReason = pointerAbsent
       ? 'pointer_absent_orca_did_not_notify'
       : 'composer_not_orchestration_pointer';
     if (state) {
@@ -1209,8 +1214,8 @@ async function submitOrcaMessageDeliveryPointerForMessage(
         workerKey: workerKey(worker.identity),
         ...(stableKey ? { stableKey } : {}),
         reason: refusalReason,
-        nextEligibleAt: now + nextBackoff,
-        backoffMs: nextBackoff,
+        nextEligibleAt: pointerAbsent ? now : now + nextBackoff,
+        ...(pointerAbsent ? {} : { backoffMs: nextBackoff }),
         state: 'refused',
       };
       if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
@@ -1255,20 +1260,21 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     const base = { terminal: worker.identity.id, generation: worker.identity.generation };
     result = { ok: true, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: true, reason: 'pointer_consumed' }] };
   } else {
+    const terminal = settleComposerObservation(
+      worker,
+      { watch: true },
+      deps.submitDeps,
+      createUnsentComposerWatchState(),
+      shown,
+      true,
+      true,
+      true,
+    );
     result = {
-      ok: true,
+      ok: terminal.ok,
       dryRun: false,
       watch: false,
-      terminals: [settleComposerObservation(
-        worker,
-        { watch: true },
-        deps.submitDeps,
-        createUnsentComposerWatchState(),
-        shown,
-        true,
-        true,
-        true,
-      )],
+      terminals: [terminal],
     };
   }
   const terminal = result.terminals[0];
@@ -1407,7 +1413,6 @@ export function createOrcaMessageSubmitDeps(
     episodeLockPath: ORCHESTRATION_RECONCILE_LOCK_PATH,
   };
 }
-
 
 /** Reconcile unread Orca mail without inspecting composer screens globally. */
 export async function runOrchestrationMailReconcileTick(
@@ -1600,8 +1605,10 @@ export async function runOrchestrationMailReconcileTick(
         } else {
           const worker = resolved.worker;
           const message = found.message;
-          const cacheKey = workerKey(worker.identity) + '\u0000' + message.runId;
           const runRecipient = message.recipient.startsWith('run:');
+          const cacheKey = runRecipient
+            ? workerKey(worker.identity) + '\u0000' + message.runId + '\u0000' + message.id
+            : workerKey(worker.identity) + '\u0000' + message.runId;
           let observed = retrievable.get(cacheKey);
           if (!observed) {
             observed = runRecipient
