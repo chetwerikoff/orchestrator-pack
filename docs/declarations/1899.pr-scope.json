@@ -38,5 +38,5 @@
     "scripts/runtime/contracts.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "4900dc758776ccb5dda1dab5ea4f26911dcadfbd"
+  "source_revision": "5656f321b5b91b2984820c4a2b856531b1af8eb5"
 }
