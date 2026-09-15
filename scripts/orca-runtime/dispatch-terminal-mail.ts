@@ -227,7 +227,6 @@ export function maybeNotifyRunOnTerminalDispatch(
       '--body', 'A supervised worker Dispatch reached a terminal lifecycle state.',
       '--dispatch-id', dispatchId,
       '--payload', buildPayload(snapshot),
-      '--json',
     ], { env: deps.env, inheritParentEnv: true });
 
     if (!response.ok) {
@@ -280,6 +279,10 @@ export function observeWorkerShowTerminalMail(
 ): DispatchTerminalMailSendResult {
   const bindingKey = dispatchId.trim();
   if (!bindingKey) return { dispatchId: '', outcome: 'skipped', reason: 'dispatch_id_missing' };
+  const ledgerPath = deps.ledgerPath ?? resolveDispatchTerminalMailLedgerPath({ env: deps.env });
+  if (readLedger(ledgerPath).notified[bindingKey]) {
+    return { dispatchId: bindingKey, outcome: 'duplicate', reason: 'terminal_already_notified' };
+  }
   const runJson = deps.runJson ?? runOrcaJson;
   const shown = runJson(['orchestration', 'worker-show', '--dispatch', bindingKey], {
     env: deps.env,
@@ -296,7 +299,7 @@ export function observeWorkerShowTerminalMail(
   if (!snapshot) {
     return { dispatchId: bindingKey, outcome: 'skipped', reason: 'worker_show_binding_incomplete' };
   }
-  return maybeNotifyRunOnTerminalDispatch(snapshot, deps);
+  return maybeNotifyRunOnTerminalDispatch(snapshot, { ...deps, ledgerPath });
 }
 
 export function runDispatchTerminalMailPulse(input: {
