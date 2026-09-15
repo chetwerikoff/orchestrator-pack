@@ -1397,17 +1397,31 @@ export function establishRuntimeSmokeDelivery(input: {
   const openCodeHttp = input.adapter.composerControl?.(input.worker)?.kind === 'opencode-http';
   let baselineScreen: readonly string[] | undefined;
   if (openCodeHttp) {
-    const remaining = deadline - now();
-    if (remaining <= 0) return { ok: false, reason: 'runtime_timeout', submitCount: 0 };
-    const baseline = input.adapter.readBoundedOutput({
-      worker: input.worker,
-      limit: 200,
-      screen: true,
-    }, { cwd: input.cwd, timeoutMs: Math.max(1, remaining) });
-    if (baseline.status !== 'ok') {
-      return { ok: false, reason: `opencode_panel_observation_failed:${failureReason(baseline)}`, submitCount: 0 };
+    let baselineObservationFailure: string | undefined;
+    while (baselineScreen === undefined) {
+      const remaining = deadline - now();
+      if (remaining <= 0) {
+        return { ok: false, reason: baselineObservationFailure ?? 'runtime_timeout', submitCount: 0 };
+      }
+      const baseline = input.adapter.readBoundedOutput({
+        worker: input.worker,
+        limit: 200,
+        screen: true,
+      }, { cwd: input.cwd, timeoutMs: Math.max(1, remaining) });
+      if (baseline.status === 'ok') {
+        baselineScreen = baseline.value.lines;
+        break;
+      }
+      const observationFailure = `opencode_panel_observation_failed:${failureReason(baseline)}`;
+      if (baseline.reason !== 'runtime_output_source_unobservable') {
+        return { ok: false, reason: observationFailure, submitCount: 0 };
+      }
+      baselineObservationFailure = observationFailure;
+      if (deadline - now() <= 0) {
+        return { ok: false, reason: baselineObservationFailure, submitCount: 0 };
+      }
+      sleepMs(SMOKE_LIFECYCLE_POLL_MS);
     }
-    baselineScreen = baseline.value.lines;
   }
   const dispatchRemaining = deadline - now();
   if (dispatchRemaining <= 0) return { ok: false, reason: 'runtime_timeout', submitCount: 0 };
@@ -1422,6 +1436,7 @@ export function establishRuntimeSmokeDelivery(input: {
   let token: RuntimeObservationToken | undefined;
   const submitCount = 0;
   let panelLeftIdleSplash = !openCodeHttp;
+  let openCodeObservationFailure: string | undefined;
   while (now() < deadline) {
     if (dispatched.status === 'dispatched' && openCodeHttp) {
       const remaining = deadline - now();
@@ -1432,8 +1447,16 @@ export function establishRuntimeSmokeDelivery(input: {
         screen: true,
       }, { cwd: input.cwd, timeoutMs: Math.max(1, remaining) });
       if (read.status !== 'ok') {
-        return { ok: false, reason: `opencode_panel_observation_failed:${failureReason(read)}`, submitCount };
+        const observationFailure = `opencode_panel_observation_failed:${failureReason(read)}`;
+        if (read.reason !== 'runtime_output_source_unobservable') {
+          return { ok: false, reason: observationFailure, submitCount };
+        }
+        openCodeObservationFailure = observationFailure;
+        if (deadline - now() <= 0) break;
+        sleepMs(SMOKE_LIFECYCLE_POLL_MS);
+        continue;
       }
+      openCodeObservationFailure = undefined;
       panelLeftIdleSplash = JSON.stringify(read.value.lines) !== JSON.stringify(baselineScreen);
     }
 
@@ -1460,9 +1483,11 @@ export function establishRuntimeSmokeDelivery(input: {
   }
   const reason = dispatched.status === 'dispatch_unknown'
     ? `dispatch_unknown:${dispatched.reason}`
-    : openCodeHttp && !panelLeftIdleSplash
-      ? 'opencode_panel_idle_splash'
-      : 'prompt_delivery_unconfirmed';
+    : openCodeObservationFailure
+      ? openCodeObservationFailure
+      : openCodeHttp && !panelLeftIdleSplash
+        ? 'opencode_panel_idle_splash'
+        : 'prompt_delivery_unconfirmed';
   return {
     ok: false,
     reason,
