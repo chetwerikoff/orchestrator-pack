@@ -30,10 +30,6 @@ import {
 import { resolveDispatchTerminalMailLedgerPath } from '../pr2-foundation/wake-supervisor-state-root.ts';
 
 function usesNativePtyFallback(generation: string): boolean {
-  // Orca's terminal-create response currently exposes ptyId while the
-  // exact incarnationId is available only from terminal-show. The ptyId
-  // shape is deliberately recognized here so a spawned RuntimeWorker never
-  // carries that fallback into later exact-identity reads.
   return generation.includes('@@');
 }
 
@@ -78,17 +74,16 @@ type OrcaTerminalListResult = Readonly<{
 }>;
 
 type OrcaAssignmentActivity = 'active' | 'inactive' | 'unresolved';
+type OrcaAssignmentLifecycleObservation =
+  | { readonly kind: 'active'; readonly worker: RuntimeWorker }
+  | {
+      readonly kind: 'terminal';
+      readonly released: boolean;
+      readonly snapshot?: NonNullable<ReturnType<typeof snapshotFromWorkerShow>>;
+      readonly workerId?: string;
+    }
+  | { readonly kind: 'gone'; readonly evidence: 'producer_exact_absence' };
 
-// Pinned Orca producer contract evidence (stablyai/orca@
-// f5fd7303ab00bcfeff72c92f2bc33ba9364cd622):
-// - orchestration-worker-control.ts emits `live` and documents legacy `running`
-//   as the same compatibility-boundary liveness observation;
-// - lifecycle-reconciliation.ts authorizes heartbeat messages against the exact
-//   assignee before dispatch-completion.ts records last_heartbeat_at, and that
-//   write is guarded by status='dispatched';
-// - coordinator-task-dispatch.ts defines stale Dispatch liveness as 10 minutes
-//   (two documented five-minute heartbeat intervals).
-// PACK reuses those producer semantics instead of inventing a separate TTL.
 const DISPATCH_HEARTBEAT_STALE_AFTER_MS = 10 * 60 * 1_000;
 const SQLITE_UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/u;
 const RFC3339_UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?Z$/u;
@@ -117,12 +112,6 @@ function isRetryableTabNotFound(response: OrcaJsonResponse): boolean {
     && response.error?.message?.trim() === 'tab_not_found';
 }
 
-/**
- * The pinned Orca worker-show producer has no `observation.status="gone"` shape.
- * A missing local Dispatch is instead reported as this exact control-plane error.
- * Match the producer's structured code plus its dispatch-specific message so the
- * distinct federated "has no worker record" error (same code) remains fail-closed.
- */
 function isProducerBackedDispatchAbsent(
   response: OrcaJsonResponse,
   dispatchId: string,
@@ -140,12 +129,6 @@ function hasNullableStringField(record: Record<string, unknown>, field: string):
   return !(field in record) || record[field] === null || typeof record[field] === 'string';
 }
 
-/**
- * Runtime shape boundary for `orca orchestration worker-show --dispatch`.
- * The generic JSON transport is intentionally not trusted to make the payload
- * typed: malformed lifecycle fields must fail closed before any absence or S2
- * authority is derived from them.
- */
 function parseOrcaWorkerShowResult(input: unknown): OrcaWorkerShowResult | null {
   if (!isRecord(input)) return null;
 
@@ -262,9 +245,6 @@ function classifyWorkerLifecycle(result: OrcaWorkerShowResult | undefined): Orca
   if (TERMINAL_WORKER_STATES.has(lifecycle.workerState)) return 'inactive';
   if (TERMINAL_DISPATCH_STATES.has(lifecycle.dispatchStatus)) return 'inactive';
 
-  // `ready/input_accepted` is only prompt-injection acceptance. Positive S2
-  // authority additionally requires the current dispatched row plus a fresh,
-  // producer-authorized heartbeat under the pinned Orca contract above.
   if (
     lifecycle.workerState !== 'ready'
     || lifecycle.workerStage !== 'input_accepted'
@@ -276,16 +256,6 @@ function classifyWorkerLifecycle(result: OrcaWorkerShowResult | undefined): Orca
   return 'active';
 }
 
-/**
- * Production Orca adapter for task lifecycle callers.
- *
- * Orca closes by opaque handle. The adapter permits one close attempt for an
- * identity spawned by this adapter instance and revalidated by exact runtime +
- * id + generation immediately before the destructive call. The sole bounded
- * exception is native runtime_error/tab_not_found with immediate exact presence:
- * one retry of that same consumed authority is allowed. Authority is consumed
- * before transport, so no caller can replay either attempt.
- */
 export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
   readonly #options: OrcaRuntimeAdapterOptions;
   readonly #ownedForStop = new Map<string, RuntimeWorkerIdentity>();
@@ -334,8 +304,6 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       && current.value
       && !sameRuntimeWorker(current.value.identity, worker)
     ) {
-      // The worker-smoke identity stabilizer deliberately returns its
-      // independently probed identity from the patched base lookup.
       return current;
     }
     const workspace = this.#stopWorkspace.get(worker.id) ?? 'active';
@@ -417,6 +385,78 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     return { status: 'ok', value: this.#assignmentProvenance(current.value) };
   }
 
+  /**
+   * Action-free lifecycle observation for the scheduler-owned assignment sweep.
+   * No terminal-mail ledger write or send occurs before this method returns.
+   */
+  observeAssignmentLifecycle(
+    input: { readonly provider: string; readonly bindingKey: string },
+    options: RuntimeCallOptions = {},
+  ): RuntimeResult<OrcaAssignmentLifecycleObservation> {
+    if (input.provider.trim().toLowerCase() !== 'orca') {
+      return runtimeUnsupported('resolve_assignment_worker', 'assignment_provider_unsupported');
+    }
+    const dispatchId = input.bindingKey.trim();
+    if (!dispatchId) return runtimeFailure('resolve_assignment_worker', 'assignment_binding_missing');
+    const shown = this.#run<unknown>(
+      ['orchestration', 'worker-show', '--dispatch', dispatchId],
+      options,
+    );
+    if (!shown.ok) {
+      if (isProducerBackedDispatchAbsent(shown, dispatchId)) {
+        return { status: 'ok', value: { kind: 'gone', evidence: 'producer_exact_absence' } };
+      }
+      return runtimeFailure('resolve_assignment_worker', neutralFailureReason(shown));
+    }
+    const parsed = parseOrcaWorkerShowResult(shown.result);
+    if (!parsed || parsed.observation?.exactWorker !== true) {
+      return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
+    }
+    const activity = classifyWorkerLifecycle(parsed);
+    if (activity === 'unresolved') {
+      return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
+    }
+    if (activity === 'inactive') {
+      const released = parsed.observation?.status?.trim().toLowerCase() === 'exited'
+        && parsed.terminalResource?.releaseState === 'released';
+      const snapshot = snapshotFromWorkerShow(dispatchId, parsed);
+      const resourceOwner = String(parsed.terminalResource?.ownerDispatchId ?? '').trim();
+      const workerId = released && resourceOwner === dispatchId
+        ? String(parsed.terminalResource?.terminalHandle ?? '').trim()
+        : '';
+      return {
+        status: 'ok',
+        value: {
+          kind: 'terminal',
+          released,
+          ...(snapshot ? { snapshot } : {}),
+          ...(workerId ? { workerId } : {}),
+        },
+      };
+    }
+    const terminalHandle = parsed.terminal?.handle?.trim()
+      ?? parsed.worker?.agent_terminal_handle?.trim()
+      ?? '';
+    if (!terminalHandle) {
+      return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
+    }
+    const current = super.findWorkerById(terminalHandle, options);
+    if (current.status !== 'ok') {
+      return runtimeFailure('resolve_assignment_worker', current.reason);
+    }
+    if (current.value === null) {
+      return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
+    }
+    this.#assignmentOwned.set(current.value.identity.id, current.value.identity);
+    return {
+      status: 'ok',
+      value: {
+        kind: 'active',
+        worker: this.#assignmentProvenance(current.value),
+      },
+    };
+  }
+
   resolveAssignmentWorker(
     input: { readonly provider: string; readonly bindingKey: string },
     options: RuntimeCallOptions = {},
@@ -468,11 +508,6 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
         : { kind: 'gone' as const };
       return { status: 'ok', value };
     }
-    // Exact terminal presence is deliberately weaker than active Dispatch
-    // authority. The active predicate additionally requires Orca's current
-    // dispatch row plus a fresh accepted exact-assignee heartbeat; missing,
-    // stale, malformed, unsupported, or contradictory lifecycle facts remain
-    // fail-closed.
     const activity = classifyWorkerLifecycle(parsed);
     if (activity === 'unresolved') {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
@@ -502,11 +537,6 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     if (current.value === null) {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
     }
-    // A current PACK WorkerAssignment plus Orca's exact Dispatch-to-terminal
-    // observation is the durable ownership witness across bounded adapter
-    // processes. Retain only the resolved composite identity in memory so later
-    // same-tick inventory/freshness checks preserve PACK provenance; generic
-    // terminal discovery remains external and no runtime-private identity becomes durable.
     this.#assignmentOwned.set(current.value.identity.id, current.value.identity);
     return {
       status: 'ok',
@@ -569,8 +599,6 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       return { status: 'ok', value: { stopped: true } };
     }
 
-    // Consume authority before the destructive transport. A later caller cannot
-    // infer from a failed or malformed response that the close did not happen.
     this.#ownedForStop.delete(worker.id);
     const response = this.#run(
       ['terminal', 'close', '--terminal', worker.id],

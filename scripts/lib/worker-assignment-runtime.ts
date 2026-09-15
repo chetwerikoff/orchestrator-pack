@@ -1,6 +1,8 @@
 import {
   sameRuntimeWorker,
   type RuntimeAdapter,
+  type RuntimeCallOptions,
+  type RuntimeResult,
   type RuntimeWorker,
 } from '../runtime/contracts.ts';
 import {
@@ -32,6 +34,57 @@ export interface WorkerAssignmentReconciliation {
   readonly assignment: WorkerAssignment;
   readonly reason: 'target_unresolved' | 'remote_not_applicable';
 }
+
+export interface AssignmentTerminalLifecycleSnapshot {
+  readonly dispatchId: string;
+  readonly runId: string;
+  readonly state: string;
+  readonly stage: string;
+  readonly lastError: string | null;
+  readonly dispatchStatus: string;
+  readonly observationStatus: string;
+}
+
+/**
+ * Action-free runtime observation used by the scheduler-owned lifecycle sweep.
+ * `terminal` is deliberately distinct from `gone`: a provider may release the
+ * runtime target while a terminal-mail obligation still has to be settled.
+ */
+export type RuntimeAssignmentLifecycleObservation =
+  | { readonly kind: 'active'; readonly worker: RuntimeWorker }
+  | {
+      readonly kind: 'terminal';
+      readonly released: boolean;
+      readonly snapshot?: AssignmentTerminalLifecycleSnapshot;
+      readonly workerId?: string;
+    }
+  | { readonly kind: 'gone'; readonly evidence: 'producer_exact_absence' };
+
+type AssignmentLifecycleObservingAdapter = RuntimeAdapter & {
+  readonly observeAssignmentLifecycle?: (
+    input: { readonly provider: string; readonly bindingKey: string },
+    options?: RuntimeCallOptions,
+  ) => RuntimeResult<RuntimeAssignmentLifecycleObservation>;
+};
+
+export type WorkerAssignmentLifecycleObservation =
+  | { readonly status: 'active'; readonly assignment: WorkerAssignmentRecord; readonly worker: RuntimeWorker }
+  | {
+      readonly status: 'terminal';
+      readonly assignment: WorkerAssignmentRecord;
+      readonly released: boolean;
+      readonly snapshot?: AssignmentTerminalLifecycleSnapshot;
+      readonly workerId?: string;
+    }
+  | { readonly status: 'gone'; readonly assignment: WorkerAssignmentRecord }
+  | { readonly status: 'remote_not_applicable'; readonly assignment: WorkerAssignmentRecord }
+  | {
+      readonly status:
+        | 'assignment_stale'
+        | 'assignment_untrusted'
+        | 'runtime_unavailable'
+        | 'target_unresolved';
+    };
 
 export type WorkerAssignmentTargetResolution =
   | { readonly status: 'resolved'; readonly assignment: WorkerAssignmentRecord; readonly worker: RuntimeWorker }
@@ -84,7 +137,59 @@ function sameLogicalAssignment(left: WorkerAssignmentRecord | undefined, right: 
     && left.taskId === right.taskId
     && left.kind === right.kind
     && left.provider === right.provider
-    && left.bindingKey === right.bindingKey);
+    && left.bindingKey === right.bindingKey
+    && left.role === right.role);
+}
+
+/**
+ * Observe one exact assignment for the scheduler without producing mail or any
+ * other lifecycle effect. The adapter result is revalidated against the same
+ * logical assignment after the runtime call, so a concurrent replacement or
+ * Issue attachment invalidates the observation before a consumer may act.
+ */
+export function observeCurrentWorkerAssignmentLifecycle(input: {
+  readonly file: string;
+  readonly expected: WorkerAssignmentRecord;
+  readonly adapter: RuntimeAdapter;
+  readonly timeoutMs?: number;
+}): WorkerAssignmentLifecycleObservation {
+  const store = readWorkerAssignmentStore(input.file);
+  if (!store) return { status: 'assignment_untrusted' };
+  const key = workerAssignmentKey(input.expected.taskId, input.expected.bindingKey);
+  const current = key ? store.assignments[key] : undefined;
+  if (!current || !sameLogicalAssignment(current, input.expected)) {
+    return { status: 'assignment_stale' };
+  }
+  if (current.kind !== 'local') {
+    return { status: 'remote_not_applicable', assignment: current };
+  }
+  const observe = (input.adapter as AssignmentLifecycleObservingAdapter).observeAssignmentLifecycle;
+  if (typeof observe !== 'function') return { status: 'runtime_unavailable' };
+  const observed = observe.call(
+    input.adapter,
+    { provider: current.provider, bindingKey: current.bindingKey },
+    { timeoutMs: input.timeoutMs ?? 5_000 },
+  );
+  if (observed.status !== 'ok') return { status: 'target_unresolved' };
+  if (!assignmentStillCurrent(input.file, current)) return { status: 'assignment_stale' };
+  if (observed.value.kind === 'gone') {
+    return observed.value.evidence === 'producer_exact_absence'
+      ? { status: 'gone', assignment: current }
+      : { status: 'target_unresolved' };
+  }
+  if (observed.value.kind === 'terminal') {
+    return {
+      status: 'terminal',
+      assignment: current,
+      released: observed.value.released === true,
+      ...(observed.value.snapshot ? { snapshot: observed.value.snapshot } : {}),
+      ...(observed.value.workerId?.trim() ? { workerId: observed.value.workerId.trim() } : {}),
+    };
+  }
+  if (observed.value.kind !== 'active' || !observed.value.worker) {
+    return { status: 'target_unresolved' };
+  }
+  return { status: 'active', assignment: current, worker: observed.value.worker };
 }
 
 /**
