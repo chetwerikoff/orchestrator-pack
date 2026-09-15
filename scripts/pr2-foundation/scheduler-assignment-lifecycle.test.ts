@@ -92,6 +92,7 @@ function write72RowStore(file: string): WorkerAssignmentRecord[] {
 
 class LifecycleAdapter extends DeterministicRuntimeAdapter {
   readonly observations: string[] = [];
+  lifecycleRuntimeCalls = 0;
   nowMs = 0;
   inFlight = 0;
   peakInFlight = 0;
@@ -115,9 +116,14 @@ class LifecycleAdapter extends DeterministicRuntimeAdapter {
     this.#enter();
     try {
       this.observations.push(input.bindingKey);
+      this.lifecycleRuntimeCalls += 1;
       this.nowMs += 2_000;
       const index = Number(input.bindingKey.split('-').at(-1));
       if (index <= 7) {
+        // Production Orca resolves an active assignment with worker-show and
+        // then terminal-show. Model both independently bounded runtime calls.
+        this.lifecycleRuntimeCalls += 1;
+        this.nowMs += 2_000;
         return {
           status: 'ok',
           value: {
@@ -169,6 +175,12 @@ describe('Issue #1899 scheduler assignment lifecycle reconciliation', () => {
   it('drains a 72-row history in one observation per local row and only re-observes the retained set', async () => {
     const { store, ledger } = fixture();
     write72RowStore(store);
+    writeFileSync(ledger, `${JSON.stringify({
+      notified: Object.fromEntries(Array.from({ length: 60 }, (_, offset) => {
+        const index = 11 + offset;
+        return [`dispatch-${index}`, `sent:history-${index}`];
+      })),
+    }, null, 2)}\n`);
     const adapter = new LifecycleAdapter();
     const mailTurnTimes: number[] = [];
     const runtimeSendArgs: readonly string[][] = [];
@@ -193,6 +205,8 @@ describe('Issue #1899 scheduler assignment lifecycle reconciliation', () => {
       repository: REPOSITORY,
       adapter,
       timeoutMs: 250,
+      // Deliberately request four: reconciliation must cap the effective batch
+      // at two because active Orca observations can consume two runtime calls.
       batchSize: 4,
       terminalMailDeps,
       betweenBatches: () => {
@@ -207,14 +221,15 @@ describe('Issue #1899 scheduler assignment lifecycle reconciliation', () => {
       active: 8,
       terminal: 3,
       gone: 61,
-      unresolved: 1,
+      unresolved: 2,
       protected: 1,
-      retired: 62,
+      retired: 61,
     });
     expect(first.bindings).toHaveLength(6);
     expect(first.reconciliations.every((row) => row.assignment.role !== 'orchestrator')).toBe(true);
     expect(adapter.observations).toHaveLength(72);
     expect(new Set(adapter.observations)).toHaveLength(72);
+    expect(adapter.lifecycleRuntimeCalls).toBe(80);
     expect(sentArgs).toHaveLength(2);
     expect(sentArgs.every((args) => args[0] === 'orchestration' && args[1] === 'send')).toBe(true);
     expect(mailTurnTimes[0]).toBe(8_000);
@@ -236,14 +251,14 @@ describe('Issue #1899 scheduler assignment lifecycle reconciliation', () => {
       },
     });
     expect(second.status).toBe('ok');
-    expect(second.counts).toMatchObject({ observed: 10, active: 8, terminal: 1, gone: 1, retired: 0, protected: 1, unresolved: 1 });
+    expect(second.counts).toMatchObject({ observed: 11, active: 8, terminal: 1, gone: 2, retired: 0, protected: 1, unresolved: 2 });
     expect(second.reconciliations.every((row) => row.assignment.role !== 'orchestrator')).toBe(true);
-    expect(adapter.observations).toHaveLength(10);
+    expect(adapter.observations).toHaveLength(11);
     expect(sentArgs).toHaveLength(2);
     expect(adapter.peakInFlight).toBe(1);
 
     const persisted = JSON.parse(readFileSync(store, 'utf8')) as WorkerAssignmentStore;
-    expect(Object.keys(persisted.assignments)).toHaveLength(10);
+    expect(Object.keys(persisted.assignments)).toHaveLength(11);
     expect(persisted.operatorPrimary?.assignmentId).toBe('wa-11');
   });
 
@@ -341,6 +356,54 @@ describe('Issue #1899 scheduler assignment lifecycle reconciliation', () => {
     expect(consumed).toEqual({ status: 'retained_unresolved' });
     expect(sends).toBe(0);
     expect(currentWorkerAssignmentByDeliverable(store, published.assignment.taskId, published.assignment.bindingKey)).toEqual(published.assignment);
+  });
+
+  it('retains exact gone without terminal-mail proof and retires it after the ledger proves settlement', async () => {
+    const { store, ledger } = fixture();
+    const published = await publishCurrentWorkerAssignment({
+      file: store,
+      repository: REPOSITORY,
+      issueNumber: 1899,
+      taskId: 'gone-gate-task',
+      kind: 'local',
+      provider: 'orca',
+      bindingKey: 'dispatch-gone-gate',
+      role: 'worker',
+    });
+    expect(published.ok).toBe(true);
+    if (!published.ok) throw new Error(published.reason);
+
+    const adapter = new LifecycleAdapter();
+    const withoutProof = await reconcileWorkerAssignments({
+      file: store,
+      repository: REPOSITORY,
+      adapter,
+      terminalMailDeps: { ledgerPath: ledger, deliverMessage: null },
+    });
+    expect(withoutProof.status).toBe('ok');
+    expect(withoutProof.counts).toMatchObject({ observed: 1, gone: 1, unresolved: 1, retired: 0 });
+    expect(currentWorkerAssignmentByDeliverable(
+      store,
+      published.assignment.taskId,
+      published.assignment.bindingKey,
+    )).toEqual(published.assignment);
+
+    writeFileSync(ledger, `${JSON.stringify({
+      notified: { [published.assignment.bindingKey]: 'sent:msg-gone' },
+    }, null, 2)}\n`);
+    const withProof = await reconcileWorkerAssignments({
+      file: store,
+      repository: REPOSITORY,
+      adapter,
+      terminalMailDeps: { ledgerPath: ledger, deliverMessage: null },
+    });
+    expect(withProof.status).toBe('ok');
+    expect(withProof.counts).toMatchObject({ observed: 1, gone: 1, unresolved: 0, retired: 1 });
+    expect(currentWorkerAssignmentByDeliverable(
+      store,
+      published.assignment.taskId,
+      published.assignment.bindingKey,
+    )).toBeNull();
   });
 
   it('exact retirement cannot delete a concurrent replacement', async () => {

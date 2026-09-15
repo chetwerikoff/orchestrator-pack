@@ -131,6 +131,21 @@ function readLedger(file: string): DispatchTerminalMailLedger {
   }
 }
 
+/**
+ * The terminal-mail ledger is the existing at-most-once authority. A recorded
+ * entry is therefore the smallest durable proof that a disappearing Dispatch no
+ * longer needs a fresh terminal notification before its assignment is retired.
+ */
+export function hasRecordedDispatchTerminalMail(
+  dispatchId: string,
+  deps: DispatchTerminalMailDeps = {},
+): boolean {
+  const bindingKey = dispatchId.trim();
+  if (!bindingKey) return false;
+  const ledgerPath = deps.ledgerPath ?? resolveDispatchTerminalMailLedgerPath({ env: deps.env });
+  return Boolean(readLedger(ledgerPath).notified[bindingKey]);
+}
+
 function writeLedgerAtomic(file: string, ledger: DispatchTerminalMailLedger): void {
   mkdirSync(dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;

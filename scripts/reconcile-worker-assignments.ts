@@ -12,6 +12,7 @@ import {
   type WorkerAssignmentReconciliation,
 } from './lib/worker-assignment-runtime.ts';
 import {
+  hasRecordedDispatchTerminalMail,
   maybeNotifyRunOnTerminalDispatch,
   type DispatchTerminalMailDeps,
 } from './orca-runtime/dispatch-terminal-mail.ts';
@@ -170,7 +171,10 @@ export async function reconcileWorkerAssignments(
 
   const counts = mutableCounts(baseCounts);
   const repository = input.repository.trim().toLowerCase();
-  const batchSize = Math.max(1, Math.min(16, Math.floor(input.batchSize ?? 4)));
+  // An active Orca observation can consume worker-show plus terminal-show. With
+  // the scheduler's 2 s per-call timeout, at most two assignments between mail
+  // turns keeps the worst-case serialized lifecycle window at 8 seconds.
+  const batchSize = Math.max(1, Math.min(2, Math.floor(input.batchSize ?? 2)));
   const bindings: ResolvedWorkerAssignment[] = [];
   const workers = [] as ResolvedWorkerAssignment['worker'][];
   const reconciliations: WorkerAssignmentReconciliation[] = [];
@@ -220,13 +224,21 @@ export async function reconcileWorkerAssignments(
       }
     } else if (observation.status === 'gone') {
       counts.gone += 1;
-      const retired = await retireCurrentWorkerAssignment({
-        file: input.file,
-        expected: observation.assignment,
-      });
-      const retirementClass = classifyRetirement(retired, counts);
-      if (retirementClass === 'protected' || retirementClass === 'unresolved') {
+      // Exact runtime absence is not evidence that terminal notification was
+      // settled before the Dispatch disappeared. Retain fail-closed unless the
+      // existing at-most-once ledger already proves that obligation settled.
+      if (!hasRecordedDispatchTerminalMail(observation.assignment.bindingKey, input.terminalMailDeps)) {
+        counts.unresolved += 1;
         addReconciliation(reconciliations, observation.assignment);
+      } else {
+        const retired = await retireCurrentWorkerAssignment({
+          file: input.file,
+          expected: observation.assignment,
+        });
+        const retirementClass = classifyRetirement(retired, counts);
+        if (retirementClass === 'protected' || retirementClass === 'unresolved') {
+          addReconciliation(reconciliations, observation.assignment);
+        }
       }
     } else if (observation.status === 'assignment_stale') {
       counts.stale += 1;
