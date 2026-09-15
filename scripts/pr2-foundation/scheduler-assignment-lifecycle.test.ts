@@ -296,6 +296,53 @@ describe('Issue #1899 scheduler assignment lifecycle reconciliation', () => {
     expect(currentWorkerAssignmentByDeliverable(store, staleExpected.taskId, staleExpected.bindingKey)).toEqual(attached.ok ? attached.assignment : null);
   });
 
+  it('retains terminal evidence until exact release is observed', async () => {
+    const { store, ledger } = fixture();
+    const published = await publishCurrentWorkerAssignment({
+      file: store,
+      repository: REPOSITORY,
+      issueNumber: 1899,
+      taskId: 'unreleased-task',
+      kind: 'local',
+      provider: 'orca',
+      bindingKey: 'dispatch-unreleased',
+      role: 'worker',
+    });
+    expect(published.ok).toBe(true);
+    if (!published.ok) throw new Error(published.reason);
+
+    let sends = 0;
+    const observation: Extract<WorkerAssignmentLifecycleObservation, { readonly status: 'terminal' }> = {
+      status: 'terminal',
+      assignment: published.assignment,
+      released: false,
+      snapshot: {
+        dispatchId: published.assignment.bindingKey,
+        runId: 'run-unreleased',
+        state: 'succeeded',
+        stage: 'terminal',
+        lastError: null,
+        dispatchStatus: 'completed',
+        observationStatus: 'exited',
+      },
+    };
+    const consumed = await consumeObservedTerminalAssignment({
+      file: store,
+      observation,
+      terminalMailDeps: {
+        ledgerPath: ledger,
+        deliverMessage: null,
+        runJson: (() => {
+          sends += 1;
+          return { ok: true, result: { message_id: 'msg-unexpected' } };
+        }) as unknown as typeof runOrcaJson,
+      },
+    });
+    expect(consumed).toEqual({ status: 'retained_unresolved' });
+    expect(sends).toBe(0);
+    expect(currentWorkerAssignmentByDeliverable(store, published.assignment.taskId, published.assignment.bindingKey)).toEqual(published.assignment);
+  });
+
   it('exact retirement cannot delete a concurrent replacement', async () => {
     const { store } = fixture();
     const first = await publishCurrentWorkerAssignment({
