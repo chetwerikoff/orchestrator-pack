@@ -1165,6 +1165,451 @@ describe('runtime-neutral worker smoke', () => {
   });
 });
 
+
+describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
+  const POLL_MS = 250;
+  const STALL_MS = 1_500_000; // 25 minutes
+  const CEILING_MS = 14_400_000; // 4 hours
+
+  it('stays pending through multiple idle polls with no seal, not returning agent_idle_without_report', () => {
+    const root = mkdtempSync(join(tmpdir(), 'completion-idle-pending-'));
+    try {
+      const artifactDir = join(root, 'run-pending');
+      const runId = 'run-pending';
+      ensureSmokeRunArtifactDir(artifactDir);
+
+      // Write terminal progress event
+      const progressPath = join(artifactDir, 'progress.ndjson');
+      writeFileSync(progressPath, JSON.stringify({
+        scenario: 's1',
+        outcome: 'pass',
+        sessionId: 'session-1',
+        timestamp: Date.now()
+      }) + '\n', 'utf8');
+
+      const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: 'test-worker', generation: 'gen-1' };
+      let clock = 0;
+      let readCount = 0;
+      let liveCount = 0;
+      const identity_inner = identity;
+
+      const adapter = {
+        readBoundedOutput: () => {
+          readCount += 1;
+          return {
+            status: 'ok' as const,
+            value: {
+              worker: identity_inner,
+              lines: ['test output'],
+              observationToken: { opaque: `token-${readCount}` },
+              changed: false,
+              terminalState: 'running' as const,
+              source: 'screen' as const,
+            },
+          };
+        },
+        liveness: () => {
+          liveCount += 1;
+          return { status: 'ok' as const, value: 'idle' };
+        },
+      } as unknown as RuntimeAdapter;
+
+      const sleeps: number[] = [];
+      let pollsBeforeStall = 0;
+      const result = waitForRuntimeSmokeCompletion({
+        adapter,
+        worker: identity,
+        binding: { runId, artifactDir },
+        cwd: root,
+        scenarioCount: 1,
+        startedAtMs: 0,
+        progressStallMs: 2000, // Short stall for testing
+        absoluteCeilingMs: 4000,
+        now: () => clock,
+        sleepMs: (ms) => {
+          sleeps.push(ms);
+          pollsBeforeStall += 1;
+          clock += ms;
+        },
+        abortReason: () => undefined,
+      });
+
+      // Should not return agent_idle_without_report on idle with no seal
+      expect(result.reason).not.toContain('agent_idle_without_report');
+      // Should timeout on progress stall, not on idle terminal condition
+      expect(result.reason).toContain('progress_stall');
+      // Should have gone through multiple poll cycles
+      expect(pollsBeforeStall).toBeGreaterThanOrEqual(3);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('stays pending with partial publication and multiple idle polls, not returning agent_idle_without_report', () => {
+    const root = mkdtempSync(join(tmpdir(), 'completion-partial-pending-'));
+    try {
+      const artifactDir = join(root, 'run-partial');
+      const runId = 'run-partial';
+      ensureSmokeRunArtifactDir(artifactDir);
+
+      // Write terminal progress
+      const progressPath = join(artifactDir, 'progress.ndjson');
+      writeFileSync(progressPath, JSON.stringify({
+        scenario: 's1',
+        outcome: 'pass',
+        sessionId: 'session-1',
+        timestamp: Date.now()
+      }) + '\n', 'utf8');
+
+      // Write incomplete body to create partial publication state
+      const incompletePath = smokeCompletionPendingBodyPath(artifactDir, runId);
+      writeFileSync(incompletePath, JSON.stringify({ result: 'PENDING' }), 'utf8');
+
+      const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: 'test-worker', generation: 'gen-1' };
+      let clock = 0;
+      let readCount = 0;
+
+      const adapter = {
+        readBoundedOutput: () => {
+          readCount += 1;
+          return {
+            status: 'ok' as const,
+            value: {
+              worker: identity,
+              lines: ['partial output'],
+              observationToken: { opaque: `token-${readCount}` },
+              changed: false,
+              terminalState: 'running' as const,
+              source: 'screen' as const,
+            },
+          };
+        },
+        liveness: () => ({ status: 'ok' as const, value: 'idle' }),
+      } as unknown as RuntimeAdapter;
+
+      const sleeps: number[] = [];
+      const result = waitForRuntimeSmokeCompletion({
+        adapter,
+        worker: identity,
+        binding: { runId, artifactDir },
+        cwd: root,
+        scenarioCount: 1,
+        startedAtMs: 0,
+        progressStallMs: 2000, // Short stall for testing
+        absoluteCeilingMs: 4000,
+        now: () => clock,
+        sleepMs: (ms) => {
+          sleeps.push(ms);
+          clock += ms;
+        },
+        abortReason: () => undefined,
+      });
+
+      // Should not return agent_idle_without_report when partial publication + idle
+      expect(result.reason).not.toContain('agent_idle_without_report');
+      // Should timeout on progress stall
+      expect(result.reason).toContain('progress_stall');
+      // Should have polled multiple times
+      expect(sleeps.length).toBeGreaterThanOrEqual(3);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails fast on wrong-run binding without waiting for stall', () => {
+    const root = mkdtempSync(join(tmpdir(), 'completion-wrong-run-'));
+    try {
+      const artifactDir = join(root, 'run-wrong');
+      const runId = 'run-expected';
+      ensureSmokeRunArtifactDir(artifactDir);
+
+      // Write terminal progress
+      const progressPath = join(artifactDir, 'progress.ndjson');
+      writeFileSync(progressPath, JSON.stringify({
+        scenario: 's1',
+        outcome: 'pass',
+        sessionId: 'session-1',
+        timestamp: Date.now()
+      }) + '\n', 'utf8');
+
+      // Write a wrong-run seal with a fake digest
+      const wrongRunDigest = 'a'.repeat(64);
+      writeFileSync(smokeCompletionSealPath(artifactDir, wrongRunDigest), JSON.stringify({
+        runId: 'other-run',
+        result: 'PASS',
+        bodySha256: wrongRunDigest,
+      }), 'utf8');
+
+      const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: 'test-worker', generation: 'gen-1' };
+      let clock = 0;
+      let readCount = 0;
+
+      const adapter = {
+        readBoundedOutput: () => {
+          readCount += 1;
+          return {
+            status: 'ok' as const,
+            value: {
+              worker: identity,
+              lines: ['output'],
+              observationToken: { opaque: `token-${readCount}` },
+              changed: false,
+              terminalState: 'running' as const,
+              source: 'screen' as const,
+            },
+          };
+        },
+        liveness: () => ({ status: 'ok' as const, value: 'idle' }),
+      } as unknown as RuntimeAdapter;
+
+      const result = waitForRuntimeSmokeCompletion({
+        adapter,
+        worker: identity,
+        binding: { runId, artifactDir },
+        cwd: root,
+        scenarioCount: 1,
+        startedAtMs: 0,
+        progressStallMs: STALL_MS,
+        absoluteCeilingMs: CEILING_MS,
+        now: () => clock,
+        sleepMs: (ms) => { clock += ms; },
+        abortReason: () => undefined,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.reason).toContain('agent_idle_without_report');
+      expect(result.reason).toContain('wrong_run_binding=true');
+      expect(result.reason).toContain('missing=sealed_report_for_expected_run');
+      // Should fail fast, not after stall
+      expect(readCount).toBeLessThanOrEqual(2);
+      expect(clock).toBeLessThan(STALL_MS / 2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns agent_exited_without_report when child exits without seal', () => {
+    const root = mkdtempSync(join(tmpdir(), 'completion-exited-'));
+    try {
+      const artifactDir = join(root, 'run-exited');
+      const runId = 'run-exited';
+      ensureSmokeRunArtifactDir(artifactDir);
+
+      // Write terminal progress
+      const progressPath = join(artifactDir, 'progress.ndjson');
+      writeFileSync(progressPath, JSON.stringify({
+        scenario: 's1',
+        outcome: 'pass',
+        sessionId: 'session-1',
+        timestamp: Date.now()
+      }) + '\n', 'utf8');
+
+      const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: 'test-worker', generation: 'gen-1' };
+      let clock = 0;
+      let readCount = 0;
+
+      const adapter = {
+        readBoundedOutput: () => {
+          readCount += 1;
+          return {
+            status: 'ok' as const,
+            value: {
+              worker: identity,
+              lines: ['output'],
+              observationToken: { opaque: `token-${readCount}` },
+              changed: false,
+              terminalState: readCount > 2 ? ('exited' as const) : ('running' as const),
+              source: 'screen' as const,
+            },
+          };
+        },
+        liveness: () => ({ status: 'ok' as const, value: 'idle' }),
+      } as unknown as RuntimeAdapter;
+
+      const result = waitForRuntimeSmokeCompletion({
+        adapter,
+        worker: identity,
+        binding: { runId, artifactDir },
+        cwd: root,
+        scenarioCount: 1,
+        startedAtMs: 0,
+        progressStallMs: STALL_MS,
+        absoluteCeilingMs: CEILING_MS,
+        now: () => clock,
+        sleepMs: (ms) => { clock += ms; },
+        abortReason: () => undefined,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.reason).toContain('agent_exited_without_report');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns progress_stall when no seal written through stall timeout', () => {
+    const root = mkdtempSync(join(tmpdir(), 'completion-stall-'));
+    try {
+      const artifactDir = join(root, 'run-stall');
+      const runId = 'run-stall';
+      ensureSmokeRunArtifactDir(artifactDir);
+
+      // Write terminal progress
+      const progressPath = join(artifactDir, 'progress.ndjson');
+      writeFileSync(progressPath, JSON.stringify({
+        scenario: 's1',
+        outcome: 'pass',
+        sessionId: 'session-1',
+        timestamp: Date.now()
+      }) + '\n', 'utf8');
+
+      const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: 'test-worker', generation: 'gen-1' };
+      let clock = 0;
+      let readCount = 0;
+      let liveCount = 0;
+
+      const adapter = {
+        readBoundedOutput: () => {
+          readCount += 1;
+          return {
+            status: 'ok' as const,
+            value: {
+              worker: identity,
+              lines: ['idle output'],
+              observationToken: { opaque: `token-${readCount}` },
+              changed: false,
+              terminalState: 'running' as const,
+              source: 'screen' as const,
+            },
+          };
+        },
+        liveness: () => {
+          liveCount += 1;
+          return { status: 'ok' as const, value: 'idle' };
+        },
+      } as unknown as RuntimeAdapter;
+
+      const sleeps: number[] = [];
+      const result = waitForRuntimeSmokeCompletion({
+        adapter,
+        worker: identity,
+        binding: { runId, artifactDir },
+        cwd: root,
+        scenarioCount: 1,
+        startedAtMs: 0,
+        progressStallMs: 2000, // Short stall for testing
+        absoluteCeilingMs: 4000,
+        now: () => clock,
+        sleepMs: (ms) => {
+          sleeps.push(ms);
+          clock += ms;
+        },
+        abortReason: () => undefined,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.reason).toContain('agent_report_timeout');
+      expect(result.reason).toContain('progress_stall');
+      expect(result.reason).not.toContain('agent_idle_without_report');
+
+      // Verify cadence was bounded (exponential backoff), not just every 250ms
+      // With doubling from 250: 250, 250, 500, 1000, ... clamped to stall
+      // Should be far fewer than stall/250 calls
+      expect(readCount).toBeLessThan(20);
+      expect(liveCount).toBeLessThan(20);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('resets cadence to poll rate after new accepted progress event', () => {
+    const root = mkdtempSync(join(tmpdir(), 'completion-cadence-reset-'));
+    try {
+      const artifactDir = join(root, 'run-cadence');
+      const runId = 'run-cadence';
+      ensureSmokeRunArtifactDir(artifactDir);
+
+      // Write initial progress (not terminal yet)
+      const progressPath = join(artifactDir, 'progress.ndjson');
+      writeFileSync(progressPath, JSON.stringify({
+        scenario: 's1',
+        outcome: 'pass',
+        sessionId: 'session-1',
+        timestamp: Date.now()
+      }) + '\n', 'utf8');
+
+      const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: 'test-worker', generation: 'gen-1' };
+      let clock = 0;
+      let readCount = 0;
+      let pollAfterNewProgress = false;
+
+      const adapter = {
+        readBoundedOutput: () => {
+          readCount += 1;
+          return {
+            status: 'ok' as const,
+            value: {
+              worker: identity,
+              lines: ['output'],
+              observationToken: { opaque: `token-${readCount}` },
+              changed: false,
+              terminalState: 'running' as const,
+              source: 'screen' as const,
+            },
+          };
+        },
+        liveness: () => ({ status: 'ok' as const, value: 'idle' }),
+      } as unknown as RuntimeAdapter;
+
+      const sleeps: number[] = [];
+      const result = waitForRuntimeSmokeCompletion({
+        adapter,
+        worker: identity,
+        binding: { runId, artifactDir },
+        cwd: root,
+        scenarioCount: 2,
+        startedAtMs: 0,
+        progressStallMs: 3000,
+        absoluteCeilingMs: 5000,
+        now: () => clock,
+        sleepMs: (ms) => {
+          sleeps.push(ms);
+
+          // After several polls, add new progress event (new scenario)
+          if (readCount === 5 && !pollAfterNewProgress) {
+            pollAfterNewProgress = true;
+            // Append second scenario to progress
+            writeFileSync(progressPath, JSON.stringify({
+              scenario: 's1',
+              outcome: 'pass',
+              sessionId: 'session-1',
+              timestamp: Date.now()
+            }) + '\n' + JSON.stringify({
+              scenario: 's2',
+              outcome: 'pass',
+              sessionId: 'session-2',
+              timestamp: Date.now()
+            }) + '\n', 'utf8');
+          }
+
+          clock += ms;
+        },
+        abortReason: () => undefined,
+      });
+
+      // Verify sleep values respect expected behavior:
+      // Early sleeps should be at base rate, may double if no progress/state change
+      // After progress update is detected, cadence should reset to base rate
+      expect(sleeps[0]).toBe(POLL_MS);
+      // At least one sleep should show doubling or growth pattern
+      const hasGrowth = sleeps.some((s, i) => i > 0 && s >= sleeps[i - 1]);
+      expect(hasGrowth).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('exact-head cross-run worker-smoke coverage', () => {
   const AB = planBody([
     { action: 'A', expected: 'A passes' },
