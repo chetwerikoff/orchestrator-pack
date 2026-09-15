@@ -43,6 +43,7 @@ export const REPOSITORY_ALLOWED_ROOTS = [
   '.claude/skills/**',
   '.cursor/rules/**',
   '.cursor/skills/**',
+  '.mise.toml',
   'scripts/**',
   'tests/README.md',
   'tests/external-output-references/**',
