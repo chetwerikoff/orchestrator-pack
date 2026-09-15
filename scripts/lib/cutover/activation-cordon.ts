@@ -28,12 +28,44 @@ export interface LegacyWriterRecord {
   sideEffectLockPath: string | null;
 }
 
-function procStat(pid: number): { state: string; ppid: number; startTicks: string } {
+export interface ProcessStat {
+  state: string;
+  ppid: number;
+  flags: number;
+  startTicks: string;
+}
+
+const PF_KTHREAD = 0x00200000;
+
+function validateCensusProcessStat(stat: ProcessStat): ProcessStat {
+  if (
+    !/^[A-Za-z]$/u.test(stat.state)
+    || !Number.isSafeInteger(stat.ppid)
+    || stat.ppid < 0
+    || !Number.isSafeInteger(stat.flags)
+    || stat.flags < 0
+    || !/^\d+$/u.test(stat.startTicks)
+  ) {
+    throw new Error('process_stat_invalid');
+  }
+  return stat;
+}
+
+export function readProcessStat(pid: number): ProcessStat {
   const raw = readFileSync(`/proc/${pid}/stat`, 'utf8');
   const close = raw.lastIndexOf(')');
   if (close < 0) throw new Error('process_stat_invalid');
   const fields = raw.slice(close + 2).trim().split(/\s+/);
-  return { state: fields[0] ?? '', ppid: Number(fields[1]), startTicks: fields[19] ?? '' };
+  return {
+    state: fields[0] ?? '',
+    ppid: Number(fields[1]),
+    flags: Number(fields[6]),
+    startTicks: fields[19] ?? '',
+  };
+}
+
+export function isKernelThreadProcessStat(stat: ProcessStat): boolean {
+  return (validateCensusProcessStat(stat).flags & PF_KTHREAD) !== 0;
 }
 
 export function processAlive(pid: number): boolean {
@@ -53,42 +85,67 @@ export function processAliveStrict(pid: number): boolean {
 
 export function readProcessIdentity(pid: number): ProcessIdentity {
   if (!Number.isInteger(pid) || pid <= 1) throw new Error('process_pid_invalid');
-  const { startTicks } = procStat(pid);
+  const { startTicks } = readProcessStat(pid);
+  if (!/^\d+$/u.test(startTicks)) throw new Error('process_stat_invalid');
   const cmdline = readFileSync(`/proc/${pid}/cmdline`).toString('utf8').split('\0').filter(Boolean);
-  if (!startTicks || cmdline.length === 0) throw new Error('process_identity_unreadable');
+  if (cmdline.length === 0) throw new Error('process_identity_unreadable');
   return { pid, startTicks, cmdline };
+}
+
+type CensusOptions = {
+  entries?: () => string[];
+  readIdentity?: (pid: number) => ProcessIdentity;
+  readStat?: (pid: number) => ProcessStat;
+};
+
+function censusIdentity(
+  pid: number,
+  readStat: (pid: number) => ProcessStat,
+  readIdentity: (pid: number) => ProcessIdentity,
+): ProcessIdentity | null {
+  let stat: ProcessStat;
+  try {
+    stat = validateCensusProcessStat(readStat(pid));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if ((code === 'ENOENT' || code === 'ESRCH') && !processAliveStrict(pid)) return null;
+    throw error;
+  }
+
+  if (isKernelThreadProcessStat(stat)) return null;
+
+  try {
+    return readIdentity(pid);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if ((code === 'ENOENT' || code === 'ESRCH') && !processAliveStrict(pid)) return null;
+    if (error instanceof Error && error.message === 'process_identity_unreadable') {
+      if (stat.state === 'Z') return null;
+      if (!processAliveStrict(pid)) return null;
+    }
+    throw error;
+  }
 }
 
 export function findLegacySupervisorIdentities(
   oldInstalledRevisionRoot: string,
-  options: {
-    entries?: () => string[];
-    readIdentity?: (pid: number) => ProcessIdentity;
-  } = {},
+  options: CensusOptions = {},
 ): ProcessIdentity[] {
   const required = path.join(oldInstalledRevisionRoot, D928[0]!);
   const legacyName = path.basename(D928[0]!);
   const identities: ProcessIdentity[] = [];
   const entries = options.entries ?? (() => readdirSync('/proc'));
   const readIdentity = options.readIdentity ?? readProcessIdentity;
+  const readStat = options.readStat ?? readProcessStat;
   for (const entry of entries()) {
     if (!/^\d+$/u.test(entry)) continue;
     if (Number(entry) <= 1) continue;
     try {
-      const identity = readIdentity(Number(entry));
+      const identity = censusIdentity(Number(entry), readStat, readIdentity);
+      if (identity === null) continue;
       if (identity.cmdline.includes(required)
         || identity.cmdline.some((argument) => argument.endsWith(legacyName))) identities.push(identity);
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if ((code === 'ENOENT' || code === 'ESRCH') && !processAliveStrict(Number(entry))) continue;
-      if (error instanceof Error && error.message === 'process_identity_unreadable') {
-        try {
-          if (['I', 'Z'].includes(procStat(Number(entry)).state)) continue;
-          if (!processAliveStrict(Number(entry))) continue;
-        } catch {
-          // Fall through: an unreadable candidate is ambiguous and must fail closed.
-        }
-      }
       throw new Error(`greenfield_legacy_supervisor_unknown:${entry}:${error instanceof Error ? error.message : 'unknown'}`);
     }
   }
@@ -96,31 +153,23 @@ export function findLegacySupervisorIdentities(
 }
 
 export function findTypeScriptSupervisorIdentities(
-  options: { entries?: () => string[]; readIdentity?: (pid: number) => ProcessIdentity } = {},
+  options: CensusOptions = {},
 ): ProcessIdentity[] {
   const identities: ProcessIdentity[] = [];
   const entries = options.entries ?? (() => readdirSync('/proc'));
   const readIdentity = options.readIdentity ?? readProcessIdentity;
+  const readStat = options.readStat ?? readProcessStat;
   for (const entry of entries()) {
     if (!/^\d+$/u.test(entry) || Number(entry) <= 1) continue;
     try {
-      const identity = readIdentity(Number(entry));
+      const identity = censusIdentity(Number(entry), readStat, readIdentity);
+      if (identity === null) continue;
       if (identity.cmdline.some((argument) =>
         /(?:orchestrator-side-process-supervisor|orchestrator-wake-supervisor)\.(?:ts|mjs)$/u.test(argument)
         || argument.endsWith('supervisor.ts'))) {
         identities.push(identity);
       }
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if ((code === 'ENOENT' || code === 'ESRCH') && !processAliveStrict(Number(entry))) continue;
-      if (error instanceof Error && error.message === 'process_identity_unreadable') {
-        try {
-          if (['I', 'Z'].includes(procStat(Number(entry)).state)) continue;
-          if (!processAliveStrict(Number(entry))) continue;
-        } catch {
-          // Fall through: an unreadable candidate is ambiguous and must fail closed.
-        }
-      }
       throw new Error(`typescript_supervisor_unknown:${entry}:${error instanceof Error ? error.message : 'unknown'}`);
     }
   }
@@ -145,7 +194,7 @@ function descendants(rootPid: number): number[] {
   for (const name of readdirSync('/proc')) {
     if (!/^\d+$/.test(name)) continue;
     const pid = Number(name);
-    try { rows.set(pid, procStat(pid).ppid); } catch { /* raced exit */ }
+    try { rows.set(pid, readProcessStat(pid).ppid); } catch { /* raced exit */ }
   }
   const result: number[] = [];
   let changed = true;
