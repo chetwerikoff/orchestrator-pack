@@ -112,6 +112,25 @@ type PublishWorkerAssignmentResult<T extends WorkerAssignmentRecord = WorkerAssi
 
 export type AttachWorkerAssignmentIssueResult = PublishWorkerAssignmentResult<WorkerAssignment>;
 
+export type RetireWorkerAssignmentResult =
+  | {
+      readonly ok: true;
+      readonly retired: WorkerAssignmentRecord;
+      readonly revision: number;
+    }
+  | {
+      readonly ok: false;
+      readonly reason:
+        | 'assignment_input_invalid'
+        | 'assignment_stale'
+        | 'assignment_protected'
+        | 'assignment_store_untrusted'
+        | 'assignment_store_busy'
+        | 'assignment_retire_write_failed'
+        | 'assignment_retire_readback_failed';
+      readonly cause?: WorkerAssignmentStoreTrustCause;
+    };
+
 export type CurrentWorkerAssignmentFenceResult<T> =
   | { readonly ok: true; readonly value: T }
   | {
@@ -787,12 +806,18 @@ export async function attachWorkerAssignmentIssueNumber(input: {
 
 function sameAssignment(left: WorkerAssignmentRecord | null, right: WorkerAssignmentRecord): boolean {
   return Boolean(left
+    && left.schema === right.schema
+    && left.projectId === right.projectId
+    && left.repository === right.repository
+    && left.issueNumber === right.issueNumber
+    && left.taskId === right.taskId
     && left.assignmentId === right.assignmentId
     && left.generation === right.generation
-    && left.taskId === right.taskId
     && left.kind === right.kind
     && left.provider === right.provider
-    && left.bindingKey === right.bindingKey);
+    && left.bindingKey === right.bindingKey
+    && left.createdAtUtc === right.createdAtUtc
+    && left.role === right.role);
 }
 
 export function assignmentStillCurrent(file: string, expected: WorkerAssignmentRecord): boolean {
@@ -800,6 +825,61 @@ export function assignmentStillCurrent(file: string, expected: WorkerAssignmentR
   if (!key) return false;
   const store = readWorkerAssignmentStore(file);
   return Boolean(store && sameAssignment(store.assignments[key] ?? null, expected));
+}
+
+/**
+ * Retire one exact current assignment under the same crash-recoverable lock as
+ * publication/replacement. The operator-primary target is deliberately
+ * protected: its owner must retire or replace the pointer first.
+ */
+export async function retireCurrentWorkerAssignment(input: {
+  readonly file: string;
+  readonly expected: WorkerAssignmentRecord;
+}): Promise<RetireWorkerAssignmentResult> {
+  const key = workerAssignmentKey(input.expected.taskId, input.expected.bindingKey);
+  if (!key || !validAssignment(input.expected)) {
+    return { ok: false, reason: 'assignment_input_invalid' };
+  }
+  try {
+    return await withCrashRecoverableFileLock(`${input.file}.lock`, 10, () => {
+      const migrated = migrateWorkerAssignmentStoreLocked(input.file);
+      if (!migrated.ok) {
+        return { ok: false, reason: 'assignment_store_untrusted', cause: migrated.cause } as const;
+      }
+      const store = migrated.store;
+      const current = store.assignments[key];
+      if (!current || !sameAssignment(current, input.expected)) {
+        return { ok: false, reason: 'assignment_stale' } as const;
+      }
+      const protectedBinding = bindingForAssignment(current);
+      if (store.operatorPrimary && sameOperatorPrimaryBinding(store.operatorPrimary, protectedBinding)) {
+        return { ok: false, reason: 'assignment_protected' } as const;
+      }
+      const assignments: Record<string, WorkerAssignmentRecord> = { ...store.assignments };
+      delete assignments[key];
+      const next: WorkerAssignmentStore = {
+        schema: WORKER_ASSIGNMENT_STORE_SCHEMA,
+        revision: store.revision + 1,
+        assignments,
+        ...(store.operatorPrimary ? { operatorPrimary: store.operatorPrimary } : {}),
+      };
+      const replaced = atomicReplaceReadBackDetailed(input.file, next);
+      if (replaced === 'write_failed' || replaced === 'too_large') {
+        return { ok: false, reason: 'assignment_retire_write_failed' } as const;
+      }
+      if (replaced === 'readback_failed') {
+        return { ok: false, reason: 'assignment_retire_readback_failed' } as const;
+      }
+      return { ok: true, retired: current, revision: next.revision } as const;
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      reason: error instanceof Error && error.message === 'journal_busy'
+        ? 'assignment_store_busy'
+        : 'assignment_retire_write_failed',
+    };
+  }
 }
 
 /**
