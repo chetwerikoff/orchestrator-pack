@@ -1,0 +1,20 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1906,
+  "declared_paths": [
+    ".mise.toml",
+    "scripts/verify.test.ts",
+    "scripts/verify.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".mise.toml",
+    "scripts/"
+  ],
+  "source_revision": "c00f21c075ea8d450bbed7ca77837c5dbf3864fc"
+}

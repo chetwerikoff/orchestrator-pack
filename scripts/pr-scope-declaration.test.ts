@@ -301,6 +301,34 @@ describe('AO-free PR scope declaration contract', () => {
     }
   });
 
+  it('admits the tracked root Node pin and no other root version file', () => {
+    expect(REPOSITORY_ALLOWED_ROOTS).toContain('.mise.toml');
+    expect(
+      validatePrScopeDeclaration(
+        {
+          ...declaration(1907),
+          declared_paths: ['.mise.toml'],
+          allowed_roots: ['.mise.toml'],
+        },
+        1907,
+      ),
+    ).toMatchObject({ ok: true });
+
+    for (const unadmittedPin of ['.node-version', '.nvmrc', 'mise.toml']) {
+      expect(REPOSITORY_ALLOWED_ROOTS).not.toContain(unadmittedPin);
+      expect(
+        validatePrScopeDeclaration(
+          {
+            ...declaration(1907),
+            declared_paths: [unadmittedPin],
+            allowed_roots: [unadmittedPin],
+          },
+          1907,
+        ),
+      ).toMatchObject({ ok: false, kind: 'policy-violation' });
+    }
+  });
+
   it('produces and verifies skills-fenced first-party declarations', () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-pr-scope-'));
     roots.push(root);
