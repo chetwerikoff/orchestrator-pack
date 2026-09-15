@@ -1682,14 +1682,15 @@ export function waitForRuntimeSmokeCompletion(input: {
 
     const pendingPublication = observed.observation.publicationState === 'none'
       || observed.observation.publicationState === 'partial';
-    if (progressIncreased || publicationStateChanged || !pendingPublication) {
+    const postPlanPending = progress.planComplete && pendingPublication;
+    if (progressIncreased || publicationStateChanged || !postPlanPending) {
       postPlanPollMs = SMOKE_LIFECYCLE_POLL_MS;
     }
     sleepMs(Math.min(
       postPlanPollMs,
       Math.max(1, readDeadline - now()),
     ));
-    if (pendingPublication && !progressIncreased && !publicationStateChanged) {
+    if (postPlanPending && !progressIncreased && !publicationStateChanged) {
       postPlanPollMs *= 2;
     } else {
       postPlanPollMs = SMOKE_LIFECYCLE_POLL_MS;

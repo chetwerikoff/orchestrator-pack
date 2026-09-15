@@ -1409,12 +1409,12 @@ describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
     }
   });
 
-  it('resets polling to 250ms after fresh accepted progress', () => {
+  it('keeps incomplete-plan polling at 250ms before post-plan backoff begins', () => {
     const fixture = setup('progress-reset');
     const sleeps: number[] = [];
     const acceptedCounts: number[] = [];
     const originalLiveness = fixture.adapter.liveness.bind(fixture.adapter);
-    const liveness = vi.spyOn(fixture.adapter, 'liveness').mockImplementation((input) => {
+    vi.spyOn(fixture.adapter, 'liveness').mockImplementation((input) => {
       acceptedCounts.push(inspectSmokeProgress({
         artifactDir: fixture.artifactDir,
         runId: 'completion-run',
@@ -1425,8 +1425,13 @@ describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
     fixture.adapter.setLiveness(fixture.worker, 'busy');
     buildValidProgressFixture(fixture.artifactDir, 'completion-run', 1);
     assertValidProgressAndComplete(fixture.artifactDir, 'completion-run', 1);
+    expect(inspectSmokeProgress({
+      artifactDir: fixture.artifactDir,
+      runId: 'completion-run',
+      scenarioCount: 2,
+    }).planComplete).toBe(false);
     let clock = 0;
-    let newProgressWritten = false;
+    let planCompleted = false;
     try {
       const completion = waitForRuntimeSmokeCompletion({
         adapter: fixture.adapter,
@@ -1440,33 +1445,25 @@ describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
         sleepMs: (milliseconds) => {
           sleeps.push(milliseconds);
           clock += milliseconds;
-          if (sleeps.length === 5 && !newProgressWritten) {
-            newProgressWritten = true;
+          if (sleeps.length === 4 && !planCompleted) {
+            planCompleted = true;
             appendFileSync(join(fixture.artifactDir, 'progress.ndjson'), [
               JSON.stringify({ runId: 'completion-run', scenarioOrdinal: 2, phase: 'started' }),
               JSON.stringify({ runId: 'completion-run', scenarioOrdinal: 2, phase: 'terminal', outcome: 'pass' }),
               '',
             ].join('\n'), 'utf8');
           }
-          if (sleeps.length === 6) fixture.adapter.setLiveness(fixture.worker, 'gone');
+          if (sleeps.length === 7) fixture.adapter.setLiveness(fixture.worker, 'gone');
         },
         absoluteCeilingMs: CEILING_MS,
         progressStallMs: STALL_MS,
       });
       expect(completion.ok).toBe(false);
       expect(completion.reason).toContain('agent_exited_without_report');
-      expect(acceptedCounts).toEqual([2, 2, 2, 2, 2, 4, 4]);
-      const acceptedIncreaseIndex = acceptedCounts.findIndex((count, index) => index > 0 && count > acceptedCounts[index - 1]!);
-      expect(acceptedIncreaseIndex).toBe(5);
-      expect(newProgressWritten).toBe(true);
-      expect(sleeps[0]).toBe(POLL_MS);
-      expect(sleeps.slice(1, acceptedIncreaseIndex)).toEqual([
-        POLL_MS, POLL_MS * 2, POLL_MS * 4, POLL_MS * 8,
-      ]);
-      for (let index = 2; index < acceptedIncreaseIndex; index++) {
-        expect(sleeps[index]).toBe(sleeps[index - 1]! * 2);
-      }
-      expect(sleeps[acceptedIncreaseIndex]).toBe(POLL_MS);
+      expect(acceptedCounts).toEqual([2, 2, 2, 2, 4, 4, 4, 4]);
+      expect(planCompleted).toBe(true);
+      expect(sleeps.slice(0, 4)).toEqual([POLL_MS, POLL_MS, POLL_MS, POLL_MS]);
+      expect(sleeps.slice(4)).toEqual([POLL_MS, POLL_MS, POLL_MS * 2]);
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }
