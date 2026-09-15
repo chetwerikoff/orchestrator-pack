@@ -83,7 +83,11 @@ function addReconciliation(
   assignment: WorkerAssignmentRecord,
   reason: WorkerAssignmentReconciliation['reason'] = 'target_unresolved',
 ): void {
-  if (!isNumberedAssignment(assignment)) return;
+  // Fleet reconciliation is worker-owned. An orchestrator assignment may be
+  // retained or retired by lifecycle reconciliation, but it must not be
+  // relabeled into a worker handoff/nudge partition. Legacy missing-role rows
+  // retain the pre-role worker-compatible treatment.
+  if (!isNumberedAssignment(assignment) || assignment.role === 'orchestrator') return;
   if (reconciliations.some((candidate) => candidate.assignment.assignmentId === assignment.assignmentId
     && candidate.assignment.generation === assignment.generation)) return;
   reconciliations.push({ assignment, reason });
