@@ -1,0 +1,40 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1899,
+  "declared_paths": [
+    "docs/declarations/1899.pr-scope.json",
+    "scripts/lib/worker-assignment-runtime.ts",
+    "scripts/lib/worker-assignment-store.ts",
+    "scripts/orca-runtime/dispatch-terminal-mail.test.ts",
+    "scripts/orca-runtime/dispatch-terminal-mail.ts",
+    "scripts/orca-runtime/task-adapter.ts",
+    "scripts/pr2-foundation/scheduler-assignment-lifecycle.test.ts",
+    "scripts/pr2-foundation/scheduler.ts",
+    "scripts/reconcile-worker-assignments.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/lib/worker-assignment-runtime.test.ts",
+    "scripts/lib/worker-assignment-runtime.ts",
+    "scripts/lib/worker-assignment-store.test.ts",
+    "scripts/lib/worker-assignment-store.ts",
+    "scripts/orca-runtime/dispatch-terminal-mail.test.ts",
+    "scripts/orca-runtime/dispatch-terminal-mail.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/orca-runtime/task-adapter.ts",
+    "scripts/pr2-foundation/scheduler-assignment-lifecycle.test.ts",
+    "scripts/pr2-foundation/scheduler-process-integration.test.ts",
+    "scripts/pr2-foundation/scheduler.ts",
+    "scripts/reconcile-worker-assignments.ts",
+    "scripts/runtime/contracts.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "source_revision": "4c4712d541af9d459a9cd440193b1cb79d0eec8c"
+}
