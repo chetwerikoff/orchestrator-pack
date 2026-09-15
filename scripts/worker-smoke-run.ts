@@ -1397,17 +1397,31 @@ export function establishRuntimeSmokeDelivery(input: {
   const openCodeHttp = input.adapter.composerControl?.(input.worker)?.kind === 'opencode-http';
   let baselineScreen: readonly string[] | undefined;
   if (openCodeHttp) {
-    const remaining = deadline - now();
-    if (remaining <= 0) return { ok: false, reason: 'runtime_timeout', submitCount: 0 };
-    const baseline = input.adapter.readBoundedOutput({
-      worker: input.worker,
-      limit: 200,
-      screen: true,
-    }, { cwd: input.cwd, timeoutMs: Math.max(1, remaining) });
-    if (baseline.status !== 'ok') {
-      return { ok: false, reason: `opencode_panel_observation_failed:${failureReason(baseline)}`, submitCount: 0 };
+    let baselineObservationFailure: string | undefined;
+    while (baselineScreen === undefined) {
+      const remaining = deadline - now();
+      if (remaining <= 0) {
+        return { ok: false, reason: baselineObservationFailure ?? 'runtime_timeout', submitCount: 0 };
+      }
+      const baseline = input.adapter.readBoundedOutput({
+        worker: input.worker,
+        limit: 200,
+        screen: true,
+      }, { cwd: input.cwd, timeoutMs: Math.max(1, remaining) });
+      if (baseline.status === 'ok') {
+        baselineScreen = baseline.value.lines;
+        break;
+      }
+      const observationFailure = `opencode_panel_observation_failed:${failureReason(baseline)}`;
+      if (baseline.reason !== 'runtime_output_source_unobservable') {
+        return { ok: false, reason: observationFailure, submitCount: 0 };
+      }
+      baselineObservationFailure = observationFailure;
+      if (deadline - now() <= 0) {
+        return { ok: false, reason: baselineObservationFailure, submitCount: 0 };
+      }
+      sleepMs(SMOKE_LIFECYCLE_POLL_MS);
     }
-    baselineScreen = baseline.value.lines;
   }
   const dispatchRemaining = deadline - now();
   if (dispatchRemaining <= 0) return { ok: false, reason: 'runtime_timeout', submitCount: 0 };
@@ -1422,6 +1436,7 @@ export function establishRuntimeSmokeDelivery(input: {
   let token: RuntimeObservationToken | undefined;
   const submitCount = 0;
   let panelLeftIdleSplash = !openCodeHttp;
+  let openCodeObservationFailure: string | undefined;
   while (now() < deadline) {
     if (dispatched.status === 'dispatched' && openCodeHttp) {
       const remaining = deadline - now();
@@ -1432,8 +1447,16 @@ export function establishRuntimeSmokeDelivery(input: {
         screen: true,
       }, { cwd: input.cwd, timeoutMs: Math.max(1, remaining) });
       if (read.status !== 'ok') {
-        return { ok: false, reason: `opencode_panel_observation_failed:${failureReason(read)}`, submitCount };
+        const observationFailure = `opencode_panel_observation_failed:${failureReason(read)}`;
+        if (read.reason !== 'runtime_output_source_unobservable') {
+          return { ok: false, reason: observationFailure, submitCount };
+        }
+        openCodeObservationFailure = observationFailure;
+        if (deadline - now() <= 0) break;
+        sleepMs(SMOKE_LIFECYCLE_POLL_MS);
+        continue;
       }
+      openCodeObservationFailure = undefined;
       panelLeftIdleSplash = JSON.stringify(read.value.lines) !== JSON.stringify(baselineScreen);
     }
 
@@ -1460,9 +1483,11 @@ export function establishRuntimeSmokeDelivery(input: {
   }
   const reason = dispatched.status === 'dispatch_unknown'
     ? `dispatch_unknown:${dispatched.reason}`
-    : openCodeHttp && !panelLeftIdleSplash
-      ? 'opencode_panel_idle_splash'
-      : 'prompt_delivery_unconfirmed';
+    : openCodeObservationFailure
+      ? openCodeObservationFailure
+      : openCodeHttp && !panelLeftIdleSplash
+        ? 'opencode_panel_idle_splash'
+        : 'prompt_delivery_unconfirmed';
   return {
     ok: false,
     reason,
@@ -1528,6 +1553,8 @@ export function waitForRuntimeSmokeCompletion(input: {
   const progressStallMs = input.progressStallMs ?? SMOKE_PROGRESS_STALL_MS;
   let lastProgressAt = now();
   let acceptedProgress = 0;
+  let postPlanPollMs = SMOKE_LIFECYCLE_POLL_MS;
+  let previousPublicationState: SmokeCompletionObservation['publicationState'] | undefined;
   let token = input.previousToken;
   let completionState = createSmokeCompletionObservationState();
   let lastObservation: SmokeCompletionObservation | undefined;
@@ -1543,7 +1570,8 @@ export function waitForRuntimeSmokeCompletion(input: {
       scenarioCount: input.scenarioCount,
     });
     lastProgress = progress;
-    if (progress.acceptedCount > acceptedProgress) {
+    const progressIncreased = progress.acceptedCount > acceptedProgress;
+    if (progressIncreased) {
       acceptedProgress = progress.acceptedCount;
       lastProgressAt = now();
     }
@@ -1551,6 +1579,9 @@ export function waitForRuntimeSmokeCompletion(input: {
     const observed = observeSmokeCompletionEvidence(input.binding, completionState);
     completionState = observed.state;
     lastObservation = observed.observation;
+    const publicationStateChanged = previousPublicationState !== undefined
+      && previousPublicationState !== observed.observation.publicationState;
+    previousPublicationState = observed.observation.publicationState;
     if (observed.observation.publicationState === 'publish_complete_single'
       && observed.observation.partial) {
       return { ok: true, partial: observed.observation.partial, progress };
@@ -1566,6 +1597,19 @@ export function waitForRuntimeSmokeCompletion(input: {
       return {
         ok: false,
         reason: completionFailureReason('agent_report_unfenced', observed.observation, progress),
+        progress,
+      };
+    }
+    if (observed.observation.wrongRunBinding
+      && (observed.observation.publicationState === 'none'
+        || observed.observation.publicationState === 'partial')) {
+      return {
+        ok: false,
+        reason: completionFailureReason(
+          'agent_idle_without_report',
+          observed.observation,
+          progress,
+        ),
         progress,
       };
     }
@@ -1623,23 +1667,6 @@ export function waitForRuntimeSmokeCompletion(input: {
         progress,
       };
     }
-    if (liveness.status === 'idle' && progress.planComplete) {
-      const finalObservation = observeSmokeCompletionEvidence(input.binding, completionState);
-      completionState = finalObservation.state;
-      if (finalObservation.observation.publicationState === 'publish_complete_single'
-        && finalObservation.observation.partial) {
-        return { ok: true, partial: finalObservation.observation.partial, progress };
-      }
-      return {
-        ok: false,
-        reason: completionFailureReason(
-          'agent_idle_without_report',
-          finalObservation.observation,
-          progress,
-        ),
-        progress,
-      };
-    }
     if (now() - lastProgressAt >= progressStallMs) {
       return {
         ok: false,
@@ -1652,7 +1679,22 @@ export function waitForRuntimeSmokeCompletion(input: {
         progress,
       };
     }
-    sleepMs(Math.min(SMOKE_LIFECYCLE_POLL_MS, Math.max(1, absoluteDeadline - now())));
+
+    const pendingPublication = observed.observation.publicationState === 'none'
+      || observed.observation.publicationState === 'partial';
+    const postPlanPending = progress.planComplete && pendingPublication;
+    if (progressIncreased || publicationStateChanged || !postPlanPending) {
+      postPlanPollMs = SMOKE_LIFECYCLE_POLL_MS;
+    }
+    sleepMs(Math.min(
+      postPlanPollMs,
+      Math.max(1, readDeadline - now()),
+    ));
+    if (postPlanPending && !progressIncreased && !publicationStateChanged) {
+      postPlanPollMs *= 2;
+    } else {
+      postPlanPollMs = SMOKE_LIFECYCLE_POLL_MS;
+    }
   }
 
   const progress = lastProgress ?? inspectSmokeProgress({
