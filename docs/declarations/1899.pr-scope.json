@@ -10,6 +10,7 @@
     "scripts/orca-runtime/task-adapter.ts",
     "scripts/pr2-foundation/scheduler-assignment-lifecycle.test.ts",
     "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts",
+    "scripts/pr2-foundation/scheduler-process-integration.test.ts",
     "scripts/pr2-foundation/scheduler.ts",
     "scripts/reconcile-worker-assignments.ts",
     "scripts/vitest-ci-lanes.config.json"
@@ -38,5 +39,5 @@
     "scripts/runtime/contracts.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "5656f321b5b91b2984820c4a2b856531b1af8eb5"
+  "source_revision": "5b921d78d2b8397e8e89867bf3de6f5235f3c662"
 }
