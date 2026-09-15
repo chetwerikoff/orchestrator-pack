@@ -1189,7 +1189,7 @@ describe('exact-head cross-run worker-smoke coverage', () => {
     const result = coverage([
       comment(3, report('PASS', [scenario('A', 'A passes')]), { createdAt: sameTime }),
       comment(1, report('PASS', [scenario('A', 'A passes')]), { createdAt: sameTime }),
-      comment(2, report('FAIL', [scenario('A', 'A passes', 'fail')]), { createdAt: sameTime }),
+      comment(2, report('FAIL', [scenario('A', 'A passes', 'blocked')]), { createdAt: sameTime }),
     ], A);
     expect(result.accepting).toBe(true);
     expect(result.diagnostics.covered.items[0]?.commentId).toBe(3);
