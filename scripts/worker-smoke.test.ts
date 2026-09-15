@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { parseSmokeTestPlan } from './draft-discipline.mjs';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runProcessSync } from './kernel/subprocess.ts';
@@ -14,6 +14,9 @@ import {
   formatSmokeReportComment,
   normalizeSmokeReport,
   resolveSmokeRequirement,
+  smokeCompletionBodyPath,
+  smokeCompletionPendingBodyPath,
+  smokeCompletionSealPath,
   smokeDeliverySealedPath,
   SMOKE_REPORT_PRODUCER,
   type SmokeReport,
@@ -21,7 +24,9 @@ import {
   type WorkerSmokeCommentRecord,
   type WorkerSmokeTrustedTarget,
 } from './lib/worker-smoke-core.ts';
-import { evaluateSmokeLifecycleCleanliness } from './lib/worker-smoke-lifecycle.ts';
+import { computeSmokeCompletionBodyDigest } from './lib/worker-smoke-core-base.ts';
+import { inspectSmokeProgress } from './lib/worker-smoke-lifecycle-base.ts';
+import { evaluateSmokeLifecycleCleanliness, SMOKE_LIFECYCLE_POLL_MS } from './lib/worker-smoke-lifecycle.ts';
 import { writeWorkerSmokeReceipt } from './lib/worker-smoke-receipt.ts';
 import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
 import type { RuntimeAdapter, RuntimeDispatchResult, RuntimeWorkerIdentity } from './runtime/contracts.ts';
@@ -42,6 +47,7 @@ import {
   resolveSmokeExecutorProfile,
   smokeCommentSnapshotDigest,
   stabilizeSmokeCommentCensus,
+  waitForRuntimeSmokeCompletion,
   type CliOptions,
   type GateCheckDependencies,
   type ResolvedSmokeTarget,
@@ -747,6 +753,324 @@ describe('runtime-neutral worker smoke', () => {
     }
   });
 
+  it('retries transient OpenCode baseline observations without dispatching until a screen is visible', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-opencode-baseline-retry-'));
+    try {
+      const artifactDir = join(root, 'run-opencode-baseline-retry');
+      ensureSmokeRunArtifactDir(artifactDir);
+      writeFileSync(smokeDeliverySealedPath(artifactDir), JSON.stringify({ runId: 'run-opencode-baseline-retry' }), 'utf8');
+      const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: 'opencode-worker', generation: 'generation-opencode' };
+      let clock = 0;
+      let reads = 0;
+      const sleeps: number[] = [];
+      const dispatchInput = vi.fn(() => ({ status: 'dispatched' as const }));
+      const adapter = {
+        composerControl: () => ({ kind: 'opencode-http' as const, dispatch: () => ({ status: 'dispatched' as const }) }),
+        dispatchInput,
+        readBoundedOutput: () => {
+          reads += 1;
+          if (reads === 1) {
+            return { status: 'unsupported' as const, operation: 'read_bounded_output' as const, reason: 'runtime_output_source_unobservable' };
+          }
+          return {
+            status: 'ok' as const,
+            value: {
+              worker: identity,
+              lines: reads === 2 ? ['real idle splash'] : ['pointer rendered in child panel'],
+              observationToken: { opaque: `screen-${reads}` },
+              changed: reads > 2,
+              terminalState: 'running' as const,
+              source: 'screen' as const,
+            },
+          };
+        },
+      } as unknown as RuntimeAdapter;
+
+      const result = establishRuntimeSmokeDelivery({
+        adapter,
+        worker: identity,
+        prompt: 'verify visible pointer',
+        binding: { runId: 'run-opencode-baseline-retry', artifactDir },
+        cwd: root,
+        deadlineMs: 1_000,
+        now: () => clock,
+        sleepMs: (milliseconds) => { sleeps.push(milliseconds); clock += milliseconds; },
+      });
+
+      expect(result.ok).toBe(true);
+      expect(reads).toBe(3);
+      expect(dispatchInput).toHaveBeenCalledTimes(1);
+      expect(sleeps).toEqual([250]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('times out a persistently unobservable OpenCode baseline without dispatching', () => {
+    const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: 'opencode-worker', generation: 'generation-opencode' };
+    let clock = 0;
+    let reads = 0;
+    const sleeps: number[] = [];
+    const dispatchInput = vi.fn(() => ({ status: 'dispatched' as const }));
+    const adapter = {
+      composerControl: () => ({ kind: 'opencode-http' as const, dispatch: () => ({ status: 'dispatched' as const }) }),
+      dispatchInput,
+      readBoundedOutput: () => {
+        reads += 1;
+        return { status: 'unsupported' as const, operation: 'read_bounded_output' as const, reason: 'runtime_output_source_unobservable' };
+      },
+    } as unknown as RuntimeAdapter;
+
+    expect(establishRuntimeSmokeDelivery({
+      adapter,
+      worker: identity,
+      prompt: 'verify',
+      binding: { runId: 'run-opencode-baseline-timeout', artifactDir: '/missing' },
+      cwd: process.cwd(),
+      deadlineMs: 500,
+      now: () => clock,
+      sleepMs: (milliseconds) => { sleeps.push(milliseconds); clock += milliseconds; },
+    })).toEqual({
+      ok: false,
+      reason: 'opencode_panel_observation_failed:read_bounded_output:unsupported:runtime_output_source_unobservable',
+      submitCount: 0,
+    });
+    expect(reads).toBe(2);
+    expect(dispatchInput).not.toHaveBeenCalled();
+    expect(sleeps).toEqual([250, 250]);
+  });
+
+  it.each(['runtime_output_shape_unsupported', 'runtime_output_progress_unavailable'] as const)(
+    'keeps baseline %s terminal without retry',
+    (reason) => {
+      const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: 'opencode-worker', generation: 'generation-opencode' };
+      const dispatchInput = vi.fn(() => ({ status: 'dispatched' as const }));
+      const sleepMs = vi.fn();
+      const adapter = {
+        composerControl: () => ({ kind: 'opencode-http' as const, dispatch: () => ({ status: 'dispatched' as const }) }),
+        dispatchInput,
+        readBoundedOutput: () => ({ status: 'unsupported' as const, operation: 'read_bounded_output' as const, reason }),
+      } as unknown as RuntimeAdapter;
+
+      expect(establishRuntimeSmokeDelivery({
+        adapter,
+        worker: identity,
+        prompt: 'verify',
+        binding: { runId: 'run-opencode-baseline-terminal', artifactDir: '/missing' },
+        cwd: process.cwd(),
+        deadlineMs: 500,
+        now: () => 0,
+        sleepMs,
+      })).toEqual({
+        ok: false,
+        reason: `opencode_panel_observation_failed:read_bounded_output:unsupported:${reason}`,
+        submitCount: 0,
+      });
+      expect(dispatchInput).not.toHaveBeenCalled();
+      expect(sleepMs).not.toHaveBeenCalled();
+    },
+  );
+
+  it('retries transient post-dispatch observations without redispatch and recovers on progress', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-opencode-post-retry-'));
+    try {
+      const artifactDir = join(root, 'run-opencode-post-retry');
+      ensureSmokeRunArtifactDir(artifactDir);
+      writeFileSync(smokeDeliverySealedPath(artifactDir), JSON.stringify({ runId: 'run-opencode-post-retry' }), 'utf8');
+      const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: 'opencode-worker', generation: 'generation-opencode' };
+      let clock = 0;
+      let reads = 0;
+      const sleeps: number[] = [];
+      const dispatchInput = vi.fn(() => ({ status: 'dispatched' as const }));
+      const adapter = {
+        composerControl: () => ({ kind: 'opencode-http' as const, dispatch: () => ({ status: 'dispatched' as const }) }),
+        dispatchInput,
+        readBoundedOutput: () => {
+          reads += 1;
+          if (reads === 2) {
+            return { status: 'unsupported' as const, operation: 'read_bounded_output' as const, reason: 'runtime_output_source_unobservable' };
+          }
+          return {
+            status: 'ok' as const,
+            value: {
+              worker: identity,
+              lines: reads === 1 ? ['real idle splash'] : ['pointer rendered in child panel'],
+              observationToken: { opaque: `screen-${reads}` },
+              changed: reads > 1,
+              terminalState: 'running' as const,
+              source: 'screen' as const,
+            },
+          };
+        },
+      } as unknown as RuntimeAdapter;
+
+      const result = establishRuntimeSmokeDelivery({
+        adapter,
+        worker: identity,
+        prompt: 'verify visible pointer',
+        binding: { runId: 'run-opencode-post-retry', artifactDir },
+        cwd: root,
+        deadlineMs: 1_000,
+        now: () => clock,
+        sleepMs: (milliseconds) => { sleeps.push(milliseconds); clock += milliseconds; },
+      });
+
+      expect(result.ok).toBe(true);
+      expect(reads).toBe(3);
+      expect(dispatchInput).toHaveBeenCalledTimes(1);
+      expect(sleeps).toEqual([250]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves the latest transient post-dispatch observation failure at deadline without redispatch', () => {
+    const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: 'opencode-worker', generation: 'generation-opencode' };
+    let clock = 0;
+    let reads = 0;
+    const sleeps: number[] = [];
+    const dispatchInput = vi.fn(() => ({ status: 'dispatched' as const }));
+    const adapter = {
+      composerControl: () => ({ kind: 'opencode-http' as const, dispatch: () => ({ status: 'dispatched' as const }) }),
+      dispatchInput,
+      readBoundedOutput: () => {
+        reads += 1;
+        if (reads === 1) {
+          return {
+            status: 'ok' as const,
+            value: {
+              worker: identity,
+              lines: ['real idle splash'],
+              observationToken: { opaque: 'screen-baseline' },
+              changed: false,
+              terminalState: 'running' as const,
+              source: 'screen' as const,
+            },
+          };
+        }
+        return { status: 'unsupported' as const, operation: 'read_bounded_output' as const, reason: 'runtime_output_source_unobservable' };
+      },
+    } as unknown as RuntimeAdapter;
+
+    expect(establishRuntimeSmokeDelivery({
+      adapter,
+      worker: identity,
+      prompt: 'verify',
+      binding: { runId: 'run-opencode-post-timeout', artifactDir: '/missing' },
+      cwd: process.cwd(),
+      deadlineMs: 500,
+      now: () => clock,
+      sleepMs: (milliseconds) => { sleeps.push(milliseconds); clock += milliseconds; },
+    })).toEqual({
+      ok: false,
+      reason: 'opencode_panel_observation_failed:read_bounded_output:unsupported:runtime_output_source_unobservable',
+      submitCount: 0,
+    });
+    expect(reads).toBe(3);
+    expect(dispatchInput).toHaveBeenCalledTimes(1);
+    expect(sleeps).toEqual([250, 250]);
+  });
+
+  it('clears a recovered transient post-dispatch failure before preserving idle-splash timeout behavior', () => {
+    const root = mkdtempSync(join(tmpdir(), 'runtime-opencode-post-idle-'));
+    try {
+      const artifactDir = join(root, 'run-opencode-post-idle');
+      ensureSmokeRunArtifactDir(artifactDir);
+      writeFileSync(smokeDeliverySealedPath(artifactDir), JSON.stringify({ runId: 'run-opencode-post-idle' }), 'utf8');
+      const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: 'opencode-worker', generation: 'generation-opencode' };
+      let clock = 0;
+      let reads = 0;
+      const sleeps: number[] = [];
+      const dispatchInput = vi.fn(() => ({ status: 'dispatched' as const }));
+      const adapter = {
+        composerControl: () => ({ kind: 'opencode-http' as const, dispatch: () => ({ status: 'dispatched' as const }) }),
+        dispatchInput,
+        readBoundedOutput: () => {
+          reads += 1;
+          if (reads === 2) {
+            return { status: 'unsupported' as const, operation: 'read_bounded_output' as const, reason: 'runtime_output_source_unobservable' };
+          }
+          return {
+            status: 'ok' as const,
+            value: {
+              worker: identity,
+              lines: ['real idle splash'],
+              observationToken: { opaque: `screen-${reads}` },
+              changed: false,
+              terminalState: 'running' as const,
+              source: 'screen' as const,
+            },
+          };
+        },
+      } as unknown as RuntimeAdapter;
+
+      expect(establishRuntimeSmokeDelivery({
+        adapter,
+        worker: identity,
+        prompt: 'verify invisible pointer',
+        binding: { runId: 'run-opencode-post-idle', artifactDir },
+        cwd: root,
+        deadlineMs: 500,
+        now: () => clock,
+        sleepMs: (milliseconds) => { sleeps.push(milliseconds); clock += milliseconds; },
+      })).toEqual({ ok: false, reason: 'opencode_panel_idle_splash', submitCount: 0 });
+      expect(reads).toBe(3);
+      expect(dispatchInput).toHaveBeenCalledTimes(1);
+      expect(sleeps).toEqual([250, 250]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['runtime_output_shape_unsupported', 'runtime_output_progress_unavailable'] as const)(
+    'keeps post-dispatch %s terminal on first sight without retry',
+    (reason) => {
+      const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: 'opencode-worker', generation: 'generation-opencode' };
+      let reads = 0;
+      const dispatchInput = vi.fn(() => ({ status: 'dispatched' as const }));
+      const sleepMs = vi.fn();
+      const adapter = {
+        composerControl: () => ({ kind: 'opencode-http' as const, dispatch: () => ({ status: 'dispatched' as const }) }),
+        dispatchInput,
+        readBoundedOutput: () => {
+          reads += 1;
+          if (reads === 1) {
+            return {
+              status: 'ok' as const,
+              value: {
+                worker: identity,
+                lines: ['real idle splash'],
+                observationToken: { opaque: 'screen-baseline' },
+                changed: false,
+                terminalState: 'running' as const,
+                source: 'screen' as const,
+              },
+            };
+          }
+          return { status: 'unsupported' as const, operation: 'read_bounded_output' as const, reason };
+        },
+      } as unknown as RuntimeAdapter;
+
+      expect(establishRuntimeSmokeDelivery({
+        adapter,
+        worker: identity,
+        prompt: 'verify',
+        binding: { runId: 'run-opencode-post-terminal', artifactDir: '/missing' },
+        cwd: process.cwd(),
+        deadlineMs: 500,
+        now: () => 0,
+        sleepMs,
+      })).toEqual({
+        ok: false,
+        reason: `opencode_panel_observation_failed:read_bounded_output:unsupported:${reason}`,
+        submitCount: 0,
+      });
+      expect(reads).toBe(2);
+      expect(dispatchInput).toHaveBeenCalledTimes(1);
+      expect(sleepMs).not.toHaveBeenCalled();
+    },
+  );
+
   it('never resends after dispatch_unknown', () => {
     const adapter = new DeterministicRuntimeAdapter();
     const spawned = adapter.spawnWorker({ title: 'smoke', command: 'cursor-agent' });
@@ -839,6 +1163,310 @@ describe('runtime-neutral worker smoke', () => {
   it('keeps smoke and CI orthogonal for ready handoff', () => {
     expect(evaluateReadyForReviewCombinations({ smokePass: true, ciGreen: true })).toBe(true);
     expect(evaluateReadyForReviewCombinations({ smokePass: true, ciGreen: false })).toBe(false);
+  });
+});
+
+
+describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
+  const POLL_MS = SMOKE_LIFECYCLE_POLL_MS;
+  const STALL_MS = 1_500_000;
+  const CEILING_MS = 14_400_000;
+  const passBody = [
+    '```worker-smoke-report',
+    'result: PASS',
+    'tracked-files-unmodified: true',
+    'scenarios:',
+    '  - action: execute sealed completion | expected: one sealed report | observed: report sealed | outcome: pass',
+    '```',
+  ].join('\n');
+
+  function buildValidProgressFixture(artifactDir: string, runId: string, scenarioCount: number): void {
+    const progressPath = join(artifactDir, 'progress.ndjson');
+    const lines: string[] = [];
+    for (let i = 1; i <= scenarioCount; i++) {
+      lines.push(JSON.stringify({ runId, scenarioOrdinal: i, phase: 'started' }));
+      lines.push(JSON.stringify({ runId, scenarioOrdinal: i, phase: 'terminal', outcome: 'pass' }));
+    }
+    writeFileSync(progressPath, lines.join('\n') + '\n', 'utf8');
+  }
+
+  function assertValidProgressAndComplete(artifactDir: string, runId: string, scenarioCount: number): void {
+    const inspection = inspectSmokeProgress({ artifactDir, runId, scenarioCount });
+    expect(inspection.planComplete).toBe(true);
+    expect(inspection.invalidEvents).toHaveLength(0);
+  }
+
+
+  function writeSeal(artifactDir: string, runId: string): void {
+    const digest = computeSmokeCompletionBodyDigest(passBody);
+    writeFileSync(smokeCompletionBodyPath(artifactDir, digest), passBody, 'utf8');
+    writeFileSync(
+      smokeCompletionSealPath(artifactDir, digest),
+      JSON.stringify({ runId, bodySha256: digest }),
+      'utf8',
+    );
+  }
+
+  function setup(suffix: string): {
+    root: string;
+    artifactDir: string;
+    adapter: DeterministicRuntimeAdapter;
+    worker: RuntimeWorkerIdentity;
+  } {
+    const root = mkdtempSync(join(tmpdir(), `completion-${suffix}-`));
+    const artifactDir = join(root, 'run');
+    const adapter = new DeterministicRuntimeAdapter();
+    const spawned = adapter.spawnWorker({ title: 'completion', command: 'cursor-agent' });
+    if (spawned.status !== 'ok') throw new Error('test worker did not spawn');
+    ensureSmokeRunArtifactDir(artifactDir);
+    return { root, artifactDir, adapter, worker: spawned.value.identity };
+  }
+
+  function runDelayedSeal(partial: boolean): {
+    completion: ReturnType<typeof waitForRuntimeSmokeCompletion>;
+    sleeps: number[];
+    idlePollsBeforeSeal: number;
+    readCalls: number;
+    livenessCalls: number;
+  } {
+    const fixture = setup(partial ? 'partial' : 'none');
+    const sleeps: number[] = [];
+    const reads = vi.spyOn(fixture.adapter, 'readBoundedOutput');
+    const liveness = vi.spyOn(fixture.adapter, 'liveness');
+    fixture.adapter.setLiveness(fixture.worker, 'idle');
+    if (partial) writeFileSync(smokeCompletionPendingBodyPath(fixture.artifactDir), 'in progress', 'utf8');
+    buildValidProgressFixture(fixture.artifactDir, 'completion-run', 1);
+    assertValidProgressAndComplete(fixture.artifactDir, 'completion-run', 1);
+    let clock = 0;
+    let idlePollsBeforeSeal = 0;
+    let sealWritten = false;
+    try {
+      const completion = waitForRuntimeSmokeCompletion({
+        adapter: fixture.adapter,
+        worker: fixture.worker,
+        binding: { runId: 'completion-run', artifactDir: fixture.artifactDir },
+        scenarioCount: 1,
+        cwd: fixture.root,
+        startedAtMs: 0,
+        abortReason: () => undefined,
+        now: () => clock,
+        sleepMs: (milliseconds) => {
+          sleeps.push(milliseconds);
+          clock += milliseconds;
+          if (!sealWritten) idlePollsBeforeSeal += 1;
+          if (idlePollsBeforeSeal === 3) {
+            sealWritten = true;
+            if (partial) rmSync(smokeCompletionPendingBodyPath(fixture.artifactDir), { force: true });
+            writeSeal(fixture.artifactDir, 'completion-run');
+          }
+        },
+        absoluteCeilingMs: CEILING_MS,
+        progressStallMs: STALL_MS,
+      });
+      return {
+        completion,
+        sleeps,
+        idlePollsBeforeSeal,
+        readCalls: reads.mock.calls.length,
+        livenessCalls: liveness.mock.calls.length,
+      };
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }
+
+  it('stays pending through multiple idle polls before a delayed completion seal appears', () => {
+    const result = runDelayedSeal(false);
+    expect(result.completion.reason ?? '').not.toContain('agent_idle_without_report');
+    expect(result.completion).toMatchObject({ ok: true, partial: { result: 'PASS' } });
+    expect(result.idlePollsBeforeSeal).toBe(3);
+    expect(result.sleeps.slice(0, 3)).toEqual([POLL_MS, POLL_MS, POLL_MS * 2]);
+    expect(result.readCalls).toBe(3);
+    expect(result.livenessCalls).toBe(3);
+  });
+
+  it('stays pending with partial publication through idle polls before a delayed completion seal appears', () => {
+    const result = runDelayedSeal(true);
+    expect(result.completion.reason ?? '').not.toContain('agent_idle_without_report');
+    expect(result.completion).toMatchObject({ ok: true, partial: { result: 'PASS' } });
+    expect(result.idlePollsBeforeSeal).toBe(3);
+    expect(result.sleeps.slice(0, 3)).toEqual([POLL_MS, POLL_MS, POLL_MS * 2]);
+    expect(result.readCalls).toBe(3);
+    expect(result.livenessCalls).toBe(3);
+  });
+
+  it('fails fast for wrong-run binding with the existing idle cause', () => {
+    const fixture = setup('wrong-run');
+    const reads = vi.spyOn(fixture.adapter, 'readBoundedOutput');
+    fixture.adapter.setLiveness(fixture.worker, 'idle');
+    buildValidProgressFixture(fixture.artifactDir, 'expected-run', 1);
+    assertValidProgressAndComplete(fixture.artifactDir, 'expected-run', 1);
+    try {
+      writeSeal(fixture.artifactDir, 'other-run');
+      const completion = waitForRuntimeSmokeCompletion({
+        adapter: fixture.adapter,
+        worker: fixture.worker,
+        binding: { runId: 'expected-run', artifactDir: fixture.artifactDir },
+        scenarioCount: 1,
+        cwd: fixture.root,
+        startedAtMs: 0,
+        abortReason: () => undefined,
+        now: () => 0,
+        sleepMs: () => { throw new Error('wrong-run observation must fail before sleeping'); },
+        absoluteCeilingMs: CEILING_MS,
+        progressStallMs: STALL_MS,
+      });
+      expect(completion.ok).toBe(false);
+      expect(completion.reason).toContain('agent_idle_without_report');
+      expect(completion.reason).toContain('missing=sealed_report_for_expected_run');
+      expect(completion.reason).toContain('wrong_run_binding=true');
+      expect(reads).not.toHaveBeenCalled();
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['gone', 'exited'] as const)('keeps child %s failure behavior without a valid seal', (terminalState) => {
+    const fixture = setup(`child-${terminalState}`);
+    const read = vi.spyOn(fixture.adapter, 'readBoundedOutput');
+    if (terminalState === 'gone') {
+      fixture.adapter.setLiveness(fixture.worker, 'gone');
+    } else {
+      read.mockReturnValue({
+        status: 'ok',
+        value: {
+          worker: fixture.worker,
+          lines: [],
+          observationToken: { opaque: 'exited' },
+          changed: false,
+          terminalState: 'exited',
+          source: 'stream',
+        },
+      });
+    }
+    buildValidProgressFixture(fixture.artifactDir, 'completion-run', 1);
+    assertValidProgressAndComplete(fixture.artifactDir, 'completion-run', 1);
+    try {
+      const completion = waitForRuntimeSmokeCompletion({
+        adapter: fixture.adapter,
+        worker: fixture.worker,
+        binding: { runId: 'completion-run', artifactDir: fixture.artifactDir },
+        scenarioCount: 1,
+        cwd: fixture.root,
+        startedAtMs: 0,
+        abortReason: () => undefined,
+        now: () => 0,
+        sleepMs: () => { throw new Error('child exit must not sleep'); },
+        absoluteCeilingMs: 1_000,
+        progressStallMs: 900,
+      });
+      expect(completion.ok).toBe(false);
+      expect(completion.reason).toContain('agent_exited_without_report');
+      expect(completion.reason).not.toContain('agent_idle_without_report');
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('backs off stalled idle polling while still probing completion and liveness', () => {
+    const fixture = setup('stall');
+    const sleeps: number[] = [];
+    const reads = vi.spyOn(fixture.adapter, 'readBoundedOutput');
+    const liveness = vi.spyOn(fixture.adapter, 'liveness');
+    fixture.adapter.setLiveness(fixture.worker, 'idle');
+    buildValidProgressFixture(fixture.artifactDir, 'completion-run', 1);
+    assertValidProgressAndComplete(fixture.artifactDir, 'completion-run', 1);
+    let clock = 0;
+    try {
+      const completion = waitForRuntimeSmokeCompletion({
+        adapter: fixture.adapter,
+        worker: fixture.worker,
+        binding: { runId: 'completion-run', artifactDir: fixture.artifactDir },
+        scenarioCount: 1,
+        cwd: fixture.root,
+        startedAtMs: 0,
+        abortReason: () => undefined,
+        now: () => clock,
+        sleepMs: (milliseconds) => { sleeps.push(milliseconds); clock += milliseconds; },
+        absoluteCeilingMs: CEILING_MS,
+        progressStallMs: STALL_MS,
+      });
+      expect(completion.ok).toBe(false);
+      expect(completion.reason).toContain('agent_report_timeout');
+      expect(completion.reason).toContain('reason=progress_stall');
+      expect(completion.reason).not.toContain('agent_idle_without_report');
+      expect(sleeps).toEqual([
+        POLL_MS, POLL_MS, POLL_MS * 2, POLL_MS * 4, POLL_MS * 8,
+        POLL_MS * 16, POLL_MS * 32, POLL_MS * 64, POLL_MS * 128, POLL_MS * 256,
+        POLL_MS * 512, POLL_MS * 1_024, POLL_MS * 2_048,
+        STALL_MS - (POLL_MS * 4_096),
+      ]);
+      expect(reads.mock.calls.length).toBeLessThan(40);
+      expect(reads).toHaveBeenCalledTimes(liveness.mock.calls.length);
+      expect(liveness).toHaveBeenCalledTimes(reads.mock.calls.length);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps incomplete-plan polling at 250ms before post-plan backoff begins', () => {
+    const fixture = setup('progress-reset');
+    const sleeps: number[] = [];
+    const acceptedCounts: number[] = [];
+    const originalLiveness = fixture.adapter.liveness.bind(fixture.adapter);
+    vi.spyOn(fixture.adapter, 'liveness').mockImplementation((input) => {
+      acceptedCounts.push(inspectSmokeProgress({
+        artifactDir: fixture.artifactDir,
+        runId: 'completion-run',
+        scenarioCount: 2,
+      }).acceptedCount);
+      return originalLiveness(input);
+    });
+    fixture.adapter.setLiveness(fixture.worker, 'busy');
+    buildValidProgressFixture(fixture.artifactDir, 'completion-run', 1);
+    assertValidProgressAndComplete(fixture.artifactDir, 'completion-run', 1);
+    expect(inspectSmokeProgress({
+      artifactDir: fixture.artifactDir,
+      runId: 'completion-run',
+      scenarioCount: 2,
+    }).planComplete).toBe(false);
+    let clock = 0;
+    let planCompleted = false;
+    try {
+      const completion = waitForRuntimeSmokeCompletion({
+        adapter: fixture.adapter,
+        worker: fixture.worker,
+        binding: { runId: 'completion-run', artifactDir: fixture.artifactDir },
+        scenarioCount: 2,
+        cwd: fixture.root,
+        startedAtMs: 0,
+        abortReason: () => undefined,
+        now: () => clock,
+        sleepMs: (milliseconds) => {
+          sleeps.push(milliseconds);
+          clock += milliseconds;
+          if (sleeps.length === 4 && !planCompleted) {
+            planCompleted = true;
+            appendFileSync(join(fixture.artifactDir, 'progress.ndjson'), [
+              JSON.stringify({ runId: 'completion-run', scenarioOrdinal: 2, phase: 'started' }),
+              JSON.stringify({ runId: 'completion-run', scenarioOrdinal: 2, phase: 'terminal', outcome: 'pass' }),
+              '',
+            ].join('\n'), 'utf8');
+          }
+          if (sleeps.length === 7) fixture.adapter.setLiveness(fixture.worker, 'gone');
+        },
+        absoluteCeilingMs: CEILING_MS,
+        progressStallMs: STALL_MS,
+      });
+      expect(completion.ok).toBe(false);
+      expect(completion.reason).toContain('agent_exited_without_report');
+      expect(acceptedCounts).toEqual([2, 2, 2, 2, 4, 4, 4, 4]);
+      expect(planCompleted).toBe(true);
+      expect(sleeps.slice(0, 4)).toEqual([POLL_MS, POLL_MS, POLL_MS, POLL_MS]);
+      expect(sleeps.slice(4)).toEqual([POLL_MS, POLL_MS, POLL_MS * 2]);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -1496,8 +2124,6 @@ if (endpoint === 'user') {
     expect(coverage(comments, body).accepting).toBe(true);
   });
 });
-
-
 describe('buildSmokeAgentPrompt selected declaration artifact', () => {
   it('skips docs/declarations/<issue>.pr-scope.json from product path accounting', () => {
     const prompt = buildSmokeAgentPrompt({
