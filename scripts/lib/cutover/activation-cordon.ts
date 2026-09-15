@@ -86,8 +86,9 @@ export function processAliveStrict(pid: number): boolean {
 export function readProcessIdentity(pid: number): ProcessIdentity {
   if (!Number.isInteger(pid) || pid <= 1) throw new Error('process_pid_invalid');
   const { startTicks } = readProcessStat(pid);
+  if (!/^\d+$/u.test(startTicks)) throw new Error('process_stat_invalid');
   const cmdline = readFileSync(`/proc/${pid}/cmdline`).toString('utf8').split('\0').filter(Boolean);
-  if (!startTicks || cmdline.length === 0) throw new Error('process_identity_unreadable');
+  if (cmdline.length === 0) throw new Error('process_identity_unreadable');
   return { pid, startTicks, cmdline };
 }
 
