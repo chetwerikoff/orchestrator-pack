@@ -2725,6 +2725,58 @@ describe('orchestration mail reconciliation', () => {
     }
   });
 
+  it('preserves firstSeenAt and origin across pointer-absent retries', async () => {
+    const target = worker('term_pointer_absent_retry');
+    const root = mkdtempSync(join(tmpdir(), 'opk-pointer-absent-retry-'));
+    const statePath = join(root, 'orchestration-mail-reconcile.json');
+    const lockPath = join(root, 'orchestration-mail-reconcile.lock');
+    const message = {
+      id: 'msg_pointer_absent_retry',
+      runId: 'run_pointer_absent_retry',
+      recipient: target.identity.id,
+      consumed: false,
+    };
+    const t0 = 10_000;
+    let currentNow = t0;
+    const deps = {
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      submitDeps: depsFor({}, {
+        sleepAsync: async () => {},
+        read: () => ({
+          ok: true as const,
+          lines: ['→ Add a follow-up', ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        }),
+      }),
+      reconcileClock: () => currentNow,
+      episodeStatePath: statePath,
+      episodeLockPath: lockPath,
+    };
+    try {
+      const first = await submitOrcaMessageDeliveryPointer(message.id, deps);
+      const firstPersisted = JSON.parse(readFileSync(statePath, 'utf8')) as {
+        episodes: Record<string, { firstSeenAt?: number; origin?: { pid: number; repoRoot: string } }>
+      };
+      const firstEpisode = Object.values(firstPersisted.episodes)[0]!;
+      expect(first.terminals[0]?.reason).toBe('pointer_absent_orca_did_not_notify');
+      expect(firstEpisode.firstSeenAt).toBe(t0);
+      expect(firstEpisode.origin).toEqual({ pid: process.pid, repoRoot: process.cwd() });
+
+      currentNow = t0 + ORCHESTRATION_POINTER_ABSENT_BACKOFF_MS + 1;
+      const second = await submitOrcaMessageDeliveryPointer(message.id, deps);
+      const secondPersisted = JSON.parse(readFileSync(statePath, 'utf8')) as {
+        episodes: Record<string, { firstSeenAt?: number; origin?: { pid: number; repoRoot: string } }>
+      };
+      const secondEpisode = Object.values(secondPersisted.episodes)[0]!;
+      expect(second.terminals[0]?.reason).toBe('pointer_absent_orca_did_not_notify');
+      expect(secondEpisode.firstSeenAt).toBe(t0);
+      expect(secondEpisode.origin).toEqual(firstEpisode.origin);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('submits a valid footer-less unboxed pointer', async () => {
     const target = worker('term_footerless_pointer');
     const message = {

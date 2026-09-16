@@ -1114,6 +1114,8 @@ async function submitOrcaMessageDeliveryPointerForMessage(
       delete state.episodes[legacy[0]];
     }
   }
+  const firstSeenAt = existing?.firstSeenAt ?? now;
+  const origin = existing?.origin ?? { pid: process.pid, repoRoot: process.cwd() };
   if (existing?.state === 'refused') {
     const refusalReason = existing.reason ?? 'pointer_absent_orca_did_not_notify';
     if (now < existing.nextEligibleAt) return deliveryNoEffect(refusalReason, worker, false);
@@ -1165,8 +1167,8 @@ async function submitOrcaMessageDeliveryPointerForMessage(
         recipient: message.recipient,
         workerKey: workerKey(worker.identity),
         ...(stableKey ? { stableKey } : {}),
-        firstSeenAt: now,
-        origin: { pid: process.pid, repoRoot: process.cwd() },
+        firstSeenAt,
+        origin,
         nextEligibleAt: now + priorBackoff,
         backoffMs: nextBackoff,
         state: 'claimed',
@@ -1277,8 +1279,8 @@ async function submitOrcaMessageDeliveryPointerForMessage(
         recipient: message.recipient,
         workerKey: workerKey(worker.identity),
         ...(stableKey ? { stableKey } : {}),
-        firstSeenAt: now,
-        origin: { pid: process.pid, repoRoot: process.cwd() },
+        firstSeenAt,
+        origin,
         reason: refusalReason,
         nextEligibleAt: pointerAbsent ? now + ORCHESTRATION_POINTER_ABSENT_BACKOFF_MS : now + nextBackoff,
         ...(pointerAbsent ? {} : { backoffMs: nextBackoff }),
@@ -1304,8 +1306,8 @@ async function submitOrcaMessageDeliveryPointerForMessage(
       recipient: message.recipient,
       workerKey: workerKey(worker.identity),
       ...(stableKey ? { stableKey } : {}),
-      firstSeenAt: now,
-      origin: { pid: process.pid, repoRoot: process.cwd() },
+      firstSeenAt,
+      origin,
       nextEligibleAt: now + priorBackoff,
       backoffMs: nextBackoff,
       state: alreadyShown ? 'pointer-visible' : 'claimed',
