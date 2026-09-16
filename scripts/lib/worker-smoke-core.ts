@@ -68,19 +68,23 @@ export function normalizeSmokeReport(
     && partial.producer === base.SMOKE_REPORT_PRODUCER
     && Boolean(partial.terminalHandle?.trim())
     && Boolean(partial.orcaExecutable?.trim());
-  const normalized = base.normalizeSmokeReport(
-    supervisorPendingPass
+  const carryOnlyPass = isCarryOnlySelectivePass(partial, binding.headSha);
+  const normalizationPartial = carryOnlyPass
+    ? { ...partial, terminalCleanup: 'closed_owned_handle', terminalHandle: 'carry-only-no-execution' }
+    : supervisorPendingPass
       ? { ...partial, terminalCleanup: 'closed_owned_handle' }
-      : partial,
-    binding,
-  );
+      : partial;
+  const normalized = base.normalizeSmokeReport(normalizationPartial, binding);
   if (!normalized.ok) {
     return {
       ...normalized,
       report: invalidSmokeReport(partial, binding, normalized.reason),
     };
   }
-  if (supervisorPendingPass) {
+  if (carryOnlyPass) {
+    normalized.report.terminalCleanup = 'not_started_no_execution';
+    normalized.report.terminalHandle = undefined;
+  } else if (supervisorPendingPass) {
     normalized.report.terminalCleanup = 'pending';
   }
   return { ok: true, report: bindControlPlaneVerdict(normalized.report) };
@@ -230,6 +234,8 @@ const DIAGNOSTIC_PAYLOAD_BYTES = 64 * 1024;
 const FULL_SHA = /^[0-9a-f]{40}$/u;
 const REPOSITORY_SLUG = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const REPORT_BLOCK_PATTERN = /```worker-smoke-report\s*\r?\n[\s\S]*?```/giu;
+const AFFECTED_BLOCK_PATTERN = /```worker-smoke-affected\s*\r?\n([\s\S]*?)```/giu;
+const CARRIED_OBSERVED_PATTERN = /^carried PASS from head [0-9a-f]{40} comment \d+; not freshly executed on [0-9a-f]{40}$/u;
 
 function normalizeLogin(value: string | undefined): string {
   return String(value ?? '').trim().toLowerCase();
@@ -310,11 +316,12 @@ function targetBindingReason(
 }
 
 function strictReportReason(report: base.SmokeReport): string | undefined {
+  const carryOnly = isCarryOnlySelectiveReport(report);
   if (report.producer !== base.SMOKE_REPORT_PRODUCER) return 'producer_missing_or_invalid';
-  if (!base.smokeTerminalHandleLooksValid(report.terminalHandle)) return 'terminal_handle_missing_or_invalid';
+  if (!carryOnly && !base.smokeTerminalHandleLooksValid(report.terminalHandle)) return 'terminal_handle_missing_or_invalid';
   if (!report.orcaExecutable?.trim()) return 'orca_executable_missing';
   if (report.trackedFilesUnmodified !== true) return 'tracked_files_modified_or_missing';
-  if (!base.isClosedOwnedSmokeTerminalCleanup(report.terminalCleanup)) return 'terminal_cleanup_missing_or_invalid';
+  if (!carryOnly && !base.isClosedOwnedSmokeTerminalCleanup(report.terminalCleanup)) return 'terminal_cleanup_missing_or_invalid';
   if (!Array.isArray(report.scenarios) || report.scenarios.length === 0) return 'scenario_rows_missing';
 
   const seen = new Set<string>();
@@ -354,7 +361,6 @@ function validateTrustedTarget(
   if (target.commentSnapshotStable !== true) return 'comment_snapshot_unstable';
   return undefined;
 }
-
 function makeCollection<T>(all: readonly T[]): WorkerSmokeBoundedCollection<T> {
   return {
     total: all.length,
@@ -465,7 +471,7 @@ function admitComment(
     if (!partial) {
       candidate.invalidReason = 'canonical_report_parse_failed';
     } else {
-      const normalized = base.normalizeSmokeReport(partial, {
+      const normalized = normalizeSmokeReport(partial, {
         issueNumber: target.issueNumber,
         prNumber: target.prNumber,
         headSha: target.headSha.trim().toLowerCase(),
@@ -647,4 +653,407 @@ export function evaluateWorkerSmokeGate(input: WorkerSmokeGateInput): WorkerSmok
     return { allowed: false, reason: 'smoke_terminal_provenance_unverified', smokeRequired: true, diagnostics: coverage.diagnostics };
   }
   return { allowed: true, reason: 'smoke_pass_and_ci_green', smokeRequired: true, diagnostics: coverage.diagnostics };
+}
+
+export interface WorkerSmokeAffectedDiagnostic {
+  readonly block: number;
+  readonly scenario?: number;
+  readonly reason: string;
+}
+
+export interface WorkerSmokeCarriedScenario {
+  readonly scenario: base.SmokeScenario;
+  readonly sourceHeadSha: string;
+  readonly sourceCommentId: number;
+  readonly sourceReport: base.SmokeReport;
+}
+
+export type WorkerSmokeSelectiveFallbackReason =
+  | 'no_prior_canonical_observation'
+  | 'history_unreadable'
+  | 'history_lineage_unprovable'
+  | 'history_non_descendant'
+  | 'history_binding_untrusted';
+
+export interface WorkerSmokeSelectiveRetryPlan {
+  readonly fullPlan: base.SmokeTestPlan;
+  readonly attemptPlan: base.SmokeTestPlan;
+  readonly carried: readonly WorkerSmokeCarriedScenario[];
+  readonly affectedTupleKeys: readonly string[];
+  readonly affectedDiagnostics: readonly WorkerSmokeAffectedDiagnostic[];
+  readonly tupleDiagnostics: readonly { tuple: string; reason: string }[];
+  readonly fallbackReason?: WorkerSmokeSelectiveFallbackReason;
+}
+
+interface HistoryCandidate extends OrderedCandidate {
+  headSha?: string;
+}
+
+function admitHistoryComment(
+  comment: WorkerSmokeCommentRecord,
+  target: WorkerSmokeTrustedTarget,
+): { kind: 'non_candidate' } | { kind: 'candidate'; candidate: HistoryCandidate } {
+  const body = String(comment.body ?? '');
+  const marker = `<!-- ${base.SMOKE_REPORT_MARKER} -->`;
+  const markerCount = body.split(marker).length - 1;
+  if (markerCount === 0) return { kind: 'non_candidate' };
+
+  const values = targetValues(body);
+  if ((values.issues.length > 0 && values.issues.every((value) => value !== target.issueNumber))
+    || (values.prs.length > 0 && values.prs.every((value) => value !== target.prNumber))) {
+    return { kind: 'non_candidate' };
+  }
+  const actor = commentActorLogin(comment);
+  if (actor && actor !== normalizeLogin(target.trustedPublisherLogin)) return { kind: 'non_candidate' };
+
+  const id = positiveCommentId(comment.id) ?? 0;
+  const createdAt = commentTimestamp(comment, 'created');
+  const updatedAt = commentTimestamp(comment, 'updated');
+  const createdMs = Date.parse(createdAt);
+  const candidate: HistoryCandidate = { id, body, createdAt, createdMs };
+  if (!id || !createdAt || !updatedAt || !Number.isFinite(createdMs)) {
+    candidate.invalidReason = 'candidate_ordering_metadata_invalid';
+    return { kind: 'candidate', candidate };
+  }
+  if (!actor) candidate.invalidReason = 'candidate_actor_missing';
+  else if (markerCount !== 1) candidate.invalidReason = 'canonical_marker_count_invalid';
+  else if (createdAt !== updatedAt) candidate.invalidReason = 'candidate_edited';
+  else if (values.issues.length !== 1 || values.issues[0] !== target.issueNumber) {
+    candidate.invalidReason = 'canonical_issue_binding_invalid';
+  } else if (values.prs.length !== 1 || values.prs[0] !== target.prNumber) {
+    candidate.invalidReason = 'canonical_pr_binding_invalid';
+  } else if (values.heads.length !== 1 || !FULL_SHA.test(values.heads[0] ?? '')) {
+    candidate.invalidReason = 'canonical_head_binding_invalid';
+  } else {
+    candidate.headSha = values.heads[0];
+  }
+
+  const reportBlocks = [...body.matchAll(REPORT_BLOCK_PATTERN)];
+  if (!candidate.invalidReason && reportBlocks.length !== 1) {
+    candidate.invalidReason = 'canonical_report_block_count_invalid';
+  }
+  if (!candidate.invalidReason && candidate.headSha) {
+    const partial = base.parseSmokeAgentReport(reportBlocks[0]?.[0] ?? '');
+    if (!partial) candidate.invalidReason = 'canonical_report_parse_failed';
+    else {
+      const normalized = normalizeSmokeReport(partial, {
+        issueNumber: target.issueNumber,
+        prNumber: target.prNumber,
+        headSha: candidate.headSha,
+      });
+      if (!normalized.ok) candidate.invalidReason = normalized.reason;
+      else {
+        const strictReason = strictReportReason(normalized.report);
+        if (strictReason) candidate.invalidReason = strictReason;
+        else candidate.report = normalized.report;
+      }
+    }
+  }
+  return { kind: 'candidate', candidate };
+}
+
+export function parseWorkerSmokeAffectedCarrier(
+  prBody: string,
+  currentHeadSha: string,
+): { tupleKeys: string[]; diagnostics: WorkerSmokeAffectedDiagnostic[] } {
+  const currentHead = currentHeadSha.trim().toLowerCase();
+  const tupleKeys = new Set<string>();
+  const diagnostics: WorkerSmokeAffectedDiagnostic[] = [];
+  let blockIndex = 0;
+  for (const match of prBody.matchAll(AFFECTED_BLOCK_PATTERN)) {
+    blockIndex += 1;
+    let value: unknown;
+    try {
+      value = JSON.parse(String(match[1] ?? '').trim()) as unknown;
+    } catch {
+      diagnostics.push({ block: blockIndex, reason: 'affected_block_json_invalid' });
+      continue;
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      diagnostics.push({ block: blockIndex, reason: 'affected_block_not_object' });
+      continue;
+    }
+    const record = value as { head?: unknown; scenarios?: unknown };
+    const head = String(record.head ?? '').trim().toLowerCase();
+    if (!FULL_SHA.test(head)) {
+      diagnostics.push({ block: blockIndex, reason: 'affected_head_invalid' });
+      continue;
+    }
+    if (head !== currentHead) continue;
+    if (!Array.isArray(record.scenarios)) {
+      diagnostics.push({ block: blockIndex, reason: 'affected_scenarios_not_array' });
+      continue;
+    }
+    record.scenarios.forEach((entry, index) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        diagnostics.push({ block: blockIndex, scenario: index + 1, reason: 'affected_scenario_not_object' });
+        return;
+      }
+      const scenario = entry as { action?: unknown; expected?: unknown };
+      const action = typeof scenario.action === 'string' ? scenario.action.trim() : '';
+      const expected = typeof scenario.expected === 'string' ? scenario.expected.trim() : '';
+      if (!action || !expected) {
+        diagnostics.push({ block: blockIndex, scenario: index + 1, reason: 'affected_scenario_tuple_invalid' });
+        return;
+      }
+      tupleKeys.add(tupleKey(action, expected));
+    });
+  }
+  return { tupleKeys: [...tupleKeys], diagnostics };
+}
+
+function fullRetry(
+  fullPlan: base.SmokeTestPlan,
+  affectedTupleKeys: readonly string[],
+  affectedDiagnostics: readonly WorkerSmokeAffectedDiagnostic[],
+  fallbackReason: WorkerSmokeSelectiveFallbackReason,
+): WorkerSmokeSelectiveRetryPlan {
+  return {
+    fullPlan,
+    attemptPlan: { ...fullPlan, scenarios: [...fullPlan.scenarios] },
+    carried: [],
+    affectedTupleKeys: [...affectedTupleKeys],
+    affectedDiagnostics: [...affectedDiagnostics],
+    tupleDiagnostics: [],
+    fallbackReason,
+  };
+}
+
+function projectedCarriedObservation(scenario: base.SmokeScenario): boolean {
+  return scenario.outcome === 'pass' && CARRIED_OBSERVED_PATTERN.test(scenario.observed?.trim() ?? '');
+}
+
+function isCarryOnlySelectivePass(
+  report: Partial<base.SmokeReport>,
+  currentHeadSha: string,
+): boolean {
+  const currentHead = currentHeadSha.trim().toLowerCase();
+  return report.result === 'PASS'
+    && report.terminalCleanup === 'not_started_no_execution'
+    && !String(report.terminalHandle ?? '').trim()
+    && Array.isArray(report.scenarios)
+    && report.scenarios.length > 0
+    && report.scenarios.every((scenario) =>
+      projectedCarriedObservation(scenario)
+      && scenario.observed?.trim().endsWith(`; not freshly executed on ${currentHead}`) === true);
+}
+
+function isCarryOnlySelectiveReport(report: base.SmokeReport): boolean {
+  return isCarryOnlySelectivePass(report, report.headSha);
+}
+
+export function planWorkerSmokeSelectiveRetry(input: {
+  issueBody: string;
+  prBody: string;
+  comments: readonly WorkerSmokeCommentRecord[];
+  target: WorkerSmokeTrustedTarget;
+  isAncestor: (ancestorSha: string, descendantSha: string) => boolean;
+  historyReadable?: boolean;
+  historyBindingTrusted?: boolean;
+}): WorkerSmokeSelectiveRetryPlan {
+  const fullPlan = base.resolveSmokeRequirement(input.issueBody);
+  const affected = parseWorkerSmokeAffectedCarrier(input.prBody, input.target.headSha);
+  if (fullPlan.requirement !== 'required' || fullPlan.scenarios.length === 0) {
+    return {
+      fullPlan,
+      attemptPlan: { ...fullPlan, scenarios: [...fullPlan.scenarios] },
+      carried: [],
+      affectedTupleKeys: affected.tupleKeys,
+      affectedDiagnostics: affected.diagnostics,
+      tupleDiagnostics: [],
+    };
+  }
+  if (input.historyReadable === false) {
+    return fullRetry(fullPlan, affected.tupleKeys, affected.diagnostics, 'history_unreadable');
+  }
+  if (input.historyBindingTrusted === false || validateTrustedTarget(input.target, input.issueBody)) {
+    return fullRetry(fullPlan, affected.tupleKeys, affected.diagnostics, 'history_binding_untrusted');
+  }
+
+  const candidates: HistoryCandidate[] = [];
+  for (const comment of input.comments) {
+    const admitted = admitHistoryComment(comment, input.target);
+    if (admitted.kind === 'candidate') candidates.push(admitted.candidate);
+  }
+  candidates.sort((left, right) => left.createdMs - right.createdMs || left.id - right.id);
+  const valid = candidates.filter((candidate): candidate is HistoryCandidate & { report: base.SmokeReport; headSha: string } =>
+    Boolean(candidate.report && candidate.headSha && !candidate.invalidReason));
+  if (valid.length === 0) {
+    const invalidReasons = candidates.map((candidate) => candidate.invalidReason ?? '');
+    if (invalidReasons.some((reason) => reason.includes('binding') || reason === 'candidate_actor_missing')) {
+      return fullRetry(fullPlan, affected.tupleKeys, affected.diagnostics, 'history_binding_untrusted');
+    }
+    if (candidates.length > 0) {
+      return fullRetry(fullPlan, affected.tupleKeys, affected.diagnostics, 'history_unreadable');
+    }
+    return fullRetry(fullPlan, affected.tupleKeys, affected.diagnostics, 'no_prior_canonical_observation');
+  }
+
+  const currentHead = input.target.headSha.trim().toLowerCase();
+  const ancestry = new Map<string, boolean>();
+  const ancestorOfCurrent = (head: string): boolean => {
+    if (head === currentHead) return true;
+    const key = `${head}>${currentHead}`;
+    if (ancestry.has(key)) return ancestry.get(key)!;
+    const result = input.isAncestor(head, currentHead);
+    ancestry.set(key, result);
+    return result;
+  };
+
+  const relevant: typeof valid = [];
+  let lineageUnprovable = false;
+  let nonDescendant = false;
+  for (const candidate of valid) {
+    try {
+      if (ancestorOfCurrent(candidate.headSha)) relevant.push(candidate);
+      else nonDescendant = true;
+    } catch {
+      lineageUnprovable = true;
+    }
+  }
+  if (lineageUnprovable) {
+    return fullRetry(fullPlan, affected.tupleKeys, affected.diagnostics, 'history_lineage_unprovable');
+  }
+  if (nonDescendant) {
+    return fullRetry(fullPlan, affected.tupleKeys, affected.diagnostics, 'history_non_descendant');
+  }
+  if (relevant.length === 0) {
+    return fullRetry(fullPlan, affected.tupleKeys, affected.diagnostics, 'history_non_descendant');
+  }
+
+  const rowsByHead = new Map<string, Map<string, {
+    scenario: base.SmokeScenario;
+    commentId: number;
+    report: base.SmokeReport;
+  }>>();
+  for (const candidate of relevant) {
+    const rows = rowsByHead.get(candidate.headSha) ?? new Map();
+    for (const scenario of candidate.report.scenarios) {
+      rows.set(tupleKey(scenario.action, scenario.expected), {
+        scenario,
+        commentId: candidate.id,
+        report: candidate.report,
+      });
+    }
+    rowsByHead.set(candidate.headSha, rows);
+  }
+
+  const affectedKeys = new Set(affected.tupleKeys);
+  const carried: WorkerSmokeCarriedScenario[] = [];
+  const execution: base.SmokeScenario[] = [];
+  const tupleDiagnostics: { tuple: string; reason: string }[] = [];
+  const pairAncestry = (ancestor: string, descendant: string): boolean => {
+    if (ancestor === descendant) return true;
+    const key = `${ancestor}>${descendant}`;
+    if (ancestry.has(key)) return ancestry.get(key)!;
+    const result = input.isAncestor(ancestor, descendant);
+    ancestry.set(key, result);
+    return result;
+  };
+
+  for (const declared of fullPlan.scenarios) {
+    const key = tupleKey(declared.action, declared.expected);
+    const states = [...rowsByHead.entries()]
+      .map(([headSha, rows]) => ({ headSha, row: rows.get(key) }))
+      .filter((entry): entry is { headSha: string; row: NonNullable<typeof entry.row> } => Boolean(entry.row));
+    if (states.length === 0) {
+      execution.push(declared);
+      tupleDiagnostics.push({ tuple: tuplePreview(declared.action, declared.expected), reason: 'no_prior_observation' });
+      continue;
+    }
+
+    const maximal: typeof states = [];
+    let ambiguous = false;
+    for (const candidate of states) {
+      let dominated = false;
+      for (const other of states) {
+        if (candidate.headSha === other.headSha) continue;
+        try {
+          if (pairAncestry(candidate.headSha, other.headSha)) {
+            dominated = true;
+            break;
+          }
+        } catch {
+          ambiguous = true;
+          break;
+        }
+      }
+      if (ambiguous) break;
+      if (!dominated) maximal.push(candidate);
+    }
+    if (ambiguous || maximal.length !== 1) {
+      execution.push(declared);
+      tupleDiagnostics.push({ tuple: tuplePreview(declared.action, declared.expected), reason: 'ambiguous_maximal_ancestor_observation' });
+      continue;
+    }
+
+    const selected = maximal[0];
+    const selectedIsFreshCurrentHead = selected.headSha === currentHead
+      && !projectedCarriedObservation(selected.row.scenario);
+    if (affectedKeys.has(key) && !selectedIsFreshCurrentHead) {
+      execution.push(declared);
+      tupleDiagnostics.push({ tuple: tuplePreview(declared.action, declared.expected), reason: 'current_head_affected' });
+      continue;
+    }
+    if (selected.row.scenario.outcome !== 'pass') {
+      execution.push(declared);
+      tupleDiagnostics.push({ tuple: tuplePreview(declared.action, declared.expected), reason: `latest_outcome_${selected.row.scenario.outcome ?? 'missing'}` });
+      continue;
+    }
+    carried.push({
+      scenario: {
+        action: declared.action,
+        expected: declared.expected,
+        observed: `carried PASS from head ${selected.headSha} comment ${selected.row.commentId}; not freshly executed on ${currentHead}`,
+        outcome: 'pass',
+      },
+      sourceHeadSha: selected.headSha,
+      sourceCommentId: selected.row.commentId,
+      sourceReport: selected.row.report,
+    });
+  }
+
+  return {
+    fullPlan,
+    attemptPlan: { ...fullPlan, scenarios: execution },
+    carried,
+    affectedTupleKeys: affected.tupleKeys,
+    affectedDiagnostics: affected.diagnostics,
+    tupleDiagnostics,
+  };
+}
+
+export function projectWorkerSmokeSelectiveReport(input: {
+  partial: Partial<base.SmokeReport>;
+  selection: WorkerSmokeSelectiveRetryPlan;
+}): Partial<base.SmokeReport> {
+  if (input.selection.fallbackReason) return input.partial;
+  const fullKeys = new Set(input.selection.fullPlan.scenarios.map((scenario) => tupleKey(scenario.action, scenario.expected)));
+  const carried = new Map(input.selection.carried.map((entry) => [
+    tupleKey(entry.scenario.action, entry.scenario.expected),
+    entry.scenario,
+  ]));
+  const fresh = new Map<string, base.SmokeScenario>();
+  for (const scenario of input.partial.scenarios ?? []) {
+    if (!scenario.observed?.trim() || !scenario.outcome) continue;
+    const key = tupleKey(scenario.action, scenario.expected);
+    if (fullKeys.has(key)) fresh.set(key, scenario);
+  }
+  const scenarios: base.SmokeScenario[] = [];
+  for (const declared of input.selection.fullPlan.scenarios) {
+    const key = tupleKey(declared.action, declared.expected);
+    const row = fresh.get(key) ?? carried.get(key);
+    if (row) scenarios.push(row);
+  }
+  const complete = scenarios.length === input.selection.fullPlan.scenarios.length;
+  return {
+    ...input.partial,
+    result: input.partial.result === 'PASS' && !complete ? 'FAIL' : input.partial.result,
+    scenarios,
+    environmentNotes: [
+      ...(input.partial.environmentNotes ?? []),
+      `smoke-carried=${input.selection.carried.length}`,
+      `smoke-fresh=${fresh.size}`,
+    ],
+  };
 }
