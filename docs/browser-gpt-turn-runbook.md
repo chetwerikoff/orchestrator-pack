@@ -21,7 +21,7 @@ not a new runtime configuration contract.
 
 | Value | Existing local input or shell placeholder |
 | --- | --- |
-| repository, Issue, revision, stage, slot, invocation | `<REPOSITORY>`, `<ISSUE_NUMBER>`, `<EXPECTED_REVISION>`, `<STAGE>`, `<SLOT>`, `<INVOCATION_ID>` |
+| workflow identities and invocation | `<REPOSITORY>`, `<ISSUE_NUMBER>`, `<EXPECTED_REVISION>`, `<STAGE>`, and `<SLOT>` only when the owning workflow defines them; every tracked turn retains `<INVOCATION_ID>` |
 | project URL | `${GPT_PROJECT_URL}` shell placeholder; `DISCUSS_WITH_GPT_PROJECT_URL` environment variable or `projectUrl` in gitignored `local.config.json` |
 | conversation URL | `${CHAT_URL}` shell-only placeholder passed to `--chat-url` |
 | browser profile | `${BROWSER_PROFILE}` shell placeholder; `DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR` or `chromeUserDataDir` |
@@ -38,8 +38,11 @@ path, prompt/output path, receipt, envelope, cookie, token, or credential.
 
 1. Enter a trusted current checkout and read the live `AGENTS.md` and
    `docs/chat-executor-rules.md`.
-2. Verify the repository's Node 22 requirement and the current task's tier,
-   role, stage, and frozen revision.
+2. Verify the repository's Node 22 requirement and the exact task/turn
+   identities supplied by the owning workflow. For governed create-Issue
+   reviewer turns, this includes the current tier, role, stage, source slot,
+   and frozen revision. A workflow that does not define create-review
+   `stage`, `slot`, or frozen revision must not invent values for them.
 3. Before starting flow-manager in a fresh worktree, provision the gitignored
    browser configuration from the operator checkout:
    `cp "<OPERATOR_CHECKOUT>/.claude/skills/discuss-with-gpt/local.config.json" "<WORKTREE_PATH>/.claude/skills/discuss-with-gpt/local.config.json"`.
@@ -458,9 +461,13 @@ loop, or a transcript dump.
 
 ## Shift handoff/close
 
-Record the current `<ISSUE_NUMBER>` and `<EXPECTED_REVISION>`, role, stage,
-slot, `<INVOCATION_ID>`, owned chat locator when available, and the identities
-of `${INPUT_FILE}`, `${OUTPUT_FILE}`, `${HANDOFF_RECEIPT}`, and
+Record the exact task/workflow identities supplied by the owning workflow. For
+governed create-Issue reviewer turns, this includes the current
+`<ISSUE_NUMBER>`, `<EXPECTED_REVISION>`, role, stage, and slot. Other tracked
+turns retain only the identities their owning workflow defines and must not
+invent create-review `stage`, `slot`, or frozen-revision values. In every case,
+record `<INVOCATION_ID>`, the owned chat locator when available, and the
+identities of `${INPUT_FILE}`, `${OUTPUT_FILE}`, `${HANDOFF_RECEIPT}`, and
 `${TERMINAL_ENVELOPE}`. Include the direct publication URL when applicable,
 the terminal result or unresolved incident, and the next legal action. Never
 hand off only “background job running”.
