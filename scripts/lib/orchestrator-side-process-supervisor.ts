@@ -5,6 +5,7 @@ import { FileEpochAuthority } from './cutover/activation-epoch-authority.ts';
 import { readProcessIdentity } from './cutover/activation-cordon.ts';
 import { writeDurableJson } from './cutover/activation-evidence.ts';
 import { projectRegistry, validateSchedulerRegistry } from './cutover/activation-registry-projection.ts';
+import { sha256Bytes } from './cutover/stable-stringify.ts';
 import {
   EMPTY_CRASH_BACKOFF_STATE,
   recordChildExit,
@@ -111,6 +112,7 @@ export function processIdentityMatches(pid: number, startTicks: string | null | 
   }
 }
 
+/** `supervisor-process-alive`: exact schema-v2 supervisor PID/start-ticks identity. */
 export function isLiveSupervisorStatus(status: SupervisorStatusRecord | null): status is SupervisorStatus {
   return Boolean(
     status
@@ -119,10 +121,72 @@ export function isLiveSupervisorStatus(status: SupervisorStatusRecord | null): s
   );
 }
 
+/** Strict instantaneous child occupancy. Do not broaden this predicate to inter-tick health. */
 export function isLiveRunningSupervisorChild(status: SupervisorStatus): boolean {
   return status.restartState === 'running'
     && status.childPid !== null
     && processIdentityMatches(status.childPid, status.childStartTicks);
+}
+
+/**
+ * Reads the exact registry bytes accepted by this supervisor generation and
+ * returns their scheduler cadence only when source, hash, and schema all still
+ * agree. Callers fail closed on configuration drift or unreadable bytes.
+ */
+export function readBoundSchedulerCadenceSeconds(status: SupervisorStatus): number | null {
+  if (typeof status.registryHash !== 'string' || !status.registryHash.trim()) return null;
+  if (typeof status.registrySource !== 'string' || !status.registrySource.trim()) return null;
+  try {
+    const bytes = readFileSync(status.registrySource);
+    if (sha256Bytes(bytes) !== status.registryHash) return null;
+    return validateSchedulerRegistry(bytes).children[0].cadenceSeconds;
+  } catch {
+    return null;
+  }
+}
+
+/** Concrete failed-child evidence. `lastExitMs` alone is progress/recency evidence, not failure. */
+export function hasSchedulerChildFailureEvidence(status: SupervisorStatus): boolean {
+  const crash = status.crashBackoff;
+  if (!crash || typeof crash !== 'object') return true;
+  return status.refusalReason !== null
+    || !Number.isInteger(crash.rapidExits)
+    || crash.rapidExits !== 0
+    || !Number.isFinite(crash.backoffUntilMs)
+    || crash.backoffUntilMs !== 0
+    || crash.terminal !== false
+    || crash.terminalReason !== null;
+}
+
+/**
+ * `scheduler-operational`: a live supervisor has either a strict live scheduler
+ * child or a clean, bounded post-success one-shot transition. Non-running
+ * recency is anchored at the existing successful-exit `lastExitMs` and remains
+ * valid through two exact hash-bound cadence intervals: the normal cadence plus
+ * one fixed wake/resume/status-publication allowance.
+ */
+export function isSchedulerOperational(
+  statusRecord: SupervisorStatusRecord | null,
+  nowMs: number = Date.now(),
+): statusRecord is SupervisorStatus {
+  if (!isLiveSupervisorStatus(statusRecord)) return false;
+  const status = statusRecord;
+
+  if (status.restartState === 'running') {
+    return status.refusalReason == null && isLiveRunningSupervisorChild(status);
+  }
+  if (status.restartState !== 'waiting-restart') return false;
+  if (hasSchedulerChildFailureEvidence(status)) return false;
+  if (status.childPid !== null || status.childStartTicks !== null) return false;
+  if (!Number.isInteger(status.childGeneration) || status.childGeneration < 1) return false;
+  if (!Number.isInteger(status.childRestarts) || status.childRestarts < 1) return false;
+
+  const lastExitMs = status.crashBackoff.lastExitMs;
+  if (!Number.isFinite(nowMs) || !Number.isFinite(lastExitMs) || lastExitMs <= 0) return false;
+  const cadenceSeconds = readBoundSchedulerCadenceSeconds(status);
+  if (cadenceSeconds === null) return false;
+  const ageMs = nowMs - lastExitMs;
+  return ageMs >= 0 && ageMs <= 2 * cadenceSeconds * 1_000;
 }
 
 /**
