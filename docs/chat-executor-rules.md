@@ -150,20 +150,24 @@ A blocking finding that depends on an impossible or unproven witness must be wit
 
 ## 8. CI, smoke, and review authority stay current-head bound
 
-Required CI and smoke conclusions apply only to the exact PR head they evaluated. Review authority is also current-head bound, but reviewer invocation and review authority are not the same event: the pack-owned runner may establish current-head authority through an exact authority-selected conflict-free carry-over from an authorized clean source head without invoking the reviewer model again.
+Required CI conclusions apply only to the exact PR head they evaluated. Final smoke authority is also current-head bound: raw earlier-head reports remain historical and never directly satisfy the current-head gate. The pack-owned selective-retry path may, however, reuse an exact unchanged prior `PASS` tuple from trusted canonical current/ancestor history and project it explicitly into a fresh current-head smoke report. Review authority is current-head bound too, but reviewer invocation and review authority are not the same event: the pack-owned runner may establish current-head authority through an exact authority-selected conflict-free carry-over from an authorized clean source head without invoking the reviewer model again.
 
 For a pack-review start, the PR number is the canonical target. The live PR supplies the current head and its closing reference supplies the Issue. Session-binding cache state is advisory correlation only; missing, corrupt, stale, or disagreeing cache data cannot veto a valid PR-led start or replace the linked Issue. If the exact bound Issue snapshot is missing, the runner freezes it only after acquiring its existing start claim.
 
 After every new commit or history rewrite:
 
 - earlier-head CI is stale;
-- earlier-head smoke is stale;
+- raw earlier-head smoke reports remain historical; selective retry carries only exact unchanged prior `PASS` tuples into a fresh current-head attempt, while prior non-PASS/unexecuted, new or changed, explicitly current-head-affected, or individually unusable tuples execute again;
 - an in-progress required review round remains bound to the head it actually reviewed;
 - for a new pack-review cycle, required rounds are logical PR/task-cycle units with caps T1=1, T2=1, T3=2; T3 round 2 may review the same head as round 1;
 - once the required stage has durably reached `reviewStageComplete=true`, later heads do not reopen or consume another required round. Instead the pack-owned status projection writes `orchestrator-pack/pack-review=success` on the current head with `Required pack-review stage completed; no additional review round required.`;
 - direct connected-GitHub reviews remain exact-commit evidence and do not themselves create or rewrite the runner's durable stage-completion latch.
 
-A persisted clean terminal for the exact same head suppresses a redundant automatic/common reviewer-model invocation. A cycle already at cap also suppresses further automatic/common model calls. Neither case weakens current-head CI or smoke. Smoke admission remains required for a new head before an at-cap refusal, so cap exhaustion cannot hide absent or failed current-head smoke evidence.
+Selective smoke retry uses the existing live PR body as its only affected-scenario handoff. An optional current-head `worker-smoke-affected` block selects exact `(action, expected)` tuples whose older PASS must be rerun; omission, an empty selection, a stale block, malformed individual entries, or general uncertainty does not select a full rerun. A fresh same-head observation supersedes the older-head affected invalidation under the existing same-head last-observation ordering. Descendant observations supersede ancestor observations per tuple, and a descendant non-PASS never resurrects an older PASS.
+
+Ordinary full-plan smoke is reserved for the narrow whole-attempt cases where selective reconstruction is mechanically unavailable: no prior canonical observation exists for the Issue/PR lineage, the required canonical history cannot be read or parsed at all, the current head cannot be established as a descendant continuation of reusable history, or trusted task binding cannot establish that the prior observations belong to the exact lineage. An unusable or ancestry-ambiguous individual tuple reruns only that tuple. This mechanism adds no reviewer, proof/attestation step, test-result admission, materialized coverage ledger, required status/check, or separate workflow before smoke.
+
+A persisted clean terminal for the exact same head suppresses a redundant automatic/common reviewer-model invocation. A cycle already at cap also suppresses further automatic/common model calls. Neither case weakens current-head CI or smoke. Smoke admission remains required for a new head before an at-cap refusal, so cap exhaustion cannot hide absent or failed current-head smoke authority.
 
 Missing, pending, cancelled, failed, or earlier-head required checks are not green for the current head.
 
