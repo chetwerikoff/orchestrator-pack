@@ -49,6 +49,7 @@ export const ORCHESTRATION_RECONCILE_LOCK_PATH = join(
 const ORCHESTRATION_RECONCILE_WINDOW_MS = 60_000;
 const ORCHESTRATION_RECONCILE_MAX_BACKOFF_MS = 30 * 60_000;
 export const ORCHESTRATION_POINTER_ABSENT_BACKOFF_MS = 5_000;
+export const ORCHESTRATION_STALE_POINTER_DRAIN_MS = 10_000;
 const ORCHESTRATION_INBOX_LIMIT = 5_000;
 const RECONCILE_COMMAND_TIMEOUT_MS = 10_000;
 
@@ -445,9 +446,16 @@ interface EpisodeRecord {
   readonly state: 'claimed' | 'pointer-visible' | 'confirmed' | 'refused';
 }
 
+interface StalePointerObservation {
+  readonly fingerprint: string;
+  readonly firstSeenAt: number;
+}
+
 interface PersistedReconcileState {
   readonly messages: Record<string, number>;
   readonly episodes: Record<string, EpisodeRecord>;
+  staleObservations?: Record<string, StalePointerObservation>;
+  submittedFingerprint?: Record<string, string>;
 }
 
 function recipientEpisodeKey(worker: RuntimeWorker): string {
@@ -487,10 +495,12 @@ function hasPendingPointerClaim(
 function loadReconcileState(path: string): PersistedReconcileState {
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
-    if (!parsed || typeof parsed !== 'object') return { messages: {}, episodes: {} };
+    if (!parsed || typeof parsed !== 'object') return { messages: {}, episodes: {}, staleObservations: {}, submittedFingerprint: {} };
     const record = parsed as Record<string, unknown>;
     const messages: Record<string, number> = {};
     const episodes: Record<string, EpisodeRecord> = {};
+    const staleObservations: Record<string, StalePointerObservation> = {};
+    const submittedFingerprint: Record<string, string> = {};
     const messageSource = record.messages && typeof record.messages === 'object'
       ? record.messages as Record<string, unknown>
       : record;
@@ -538,15 +548,34 @@ function loadReconcileState(path: string): PersistedReconcileState {
         };
       }
     }
-    return { messages, episodes };
+    if (record.staleObservations && typeof record.staleObservations === 'object' && !Array.isArray(record.staleObservations)) {
+      for (const [key, value] of Object.entries(record.staleObservations as Record<string, unknown>)) {
+        if (!value || typeof value !== 'object') continue;
+        const row = value as { readonly fingerprint?: unknown; readonly firstSeenAt?: unknown };
+        if (typeof row.fingerprint === 'string' && row.fingerprint.trim() && typeof row.firstSeenAt === 'number' && Number.isFinite(row.firstSeenAt)) {
+          staleObservations[key] = { fingerprint: row.fingerprint, firstSeenAt: row.firstSeenAt };
+        }
+      }
+    }
+    if (record.submittedFingerprint && typeof record.submittedFingerprint === 'object' && !Array.isArray(record.submittedFingerprint)) {
+      for (const [key, value] of Object.entries(record.submittedFingerprint as Record<string, unknown>)) {
+        if (typeof value === 'string' && value.trim()) submittedFingerprint[key] = value;
+      }
+    }
+    return { messages, episodes, staleObservations, submittedFingerprint };
   } catch {
-    return { messages: {}, episodes: {} };
+    return { messages: {}, episodes: {}, staleObservations: {}, submittedFingerprint: {} };
   }
 }
 
 function saveReconcileState(path: string, state: PersistedReconcileState): void {
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify({ messages: state.messages, episodes: state.episodes }) + '\n');
+  writeFileSync(path, JSON.stringify({
+    messages: state.messages,
+    episodes: state.episodes,
+    staleObservations: state.staleObservations ?? {},
+    submittedFingerprint: state.submittedFingerprint ?? {},
+  }) + '\n');
 }
 
 interface DeliveryMessageSubmitDeps {
@@ -1516,6 +1545,118 @@ export function createOrcaMessageSubmitDeps(
     episodeLockPath: ORCHESTRATION_RECONCILE_LOCK_PATH,
   };
 }
+function stalePointerTargetRecipient(
+  pointer: string,
+  worker: RuntimeWorker,
+  resolveWorker: DeliveryMessageSubmitDeps['resolveWorker'],
+ ): string | undefined {
+  const terminalMatch = /^orca orchestration check --terminal (\S+)$/u.exec(pointer);
+  if (terminalMatch) return terminalMatch[1] === worker.identity.id ? worker.identity.id : undefined;
+  const runMatch = /^orca orchestration check --run (\S+)$/u.exec(pointer);
+  if (!runMatch) return undefined;
+  const runId = runMatch[1]!;
+  const resolved = resolveWorker({
+    id: 'stale-pointer-target',
+    runId,
+    recipient: `run:${runId}`,
+    consumed: false,
+  });
+  return resolved.ok && resolved.worker && workerKey(resolved.worker.identity) === workerKey(worker.identity)
+    ? `run:${runId}`
+    : undefined;
+}
+
+function isLiveCursorRecipient(worker: RuntimeWorker): boolean {
+  return worker.identity.runtime === 'orca';
+}
+
+async function drainStalePointers(
+  deps: DeliveryMessageSubmitDeps,
+  state: PersistedReconcileState,
+  inboxRows: readonly OrcaInboxMessageRow[],
+  current: number,
+  resolveWorker: DeliveryMessageSubmitDeps['resolveWorker'],
+  reasons: string[],
+ ): Promise<number> {
+  const staleObservations = state.staleObservations ?? (state.staleObservations = {});
+  const submittedFingerprint = state.submittedFingerprint ?? (state.submittedFingerprint = {});
+  const listed = deps.submitDeps.listWorkersAsync
+    ? await deps.submitDeps.listWorkersAsync()
+    : deps.submitDeps.listWorkers();
+  if (!listed.ok) return 0;
+  const liveKeys = new Set<string>();
+  let nudged = 0;
+  for (const worker of listed.workers) {
+    if (!isLiveCursorRecipient(worker)) continue;
+    const key = workerKey(worker.identity);
+    liveKeys.add(key);
+    const shown = deps.submitDeps.readAsync
+      ? await deps.submitDeps.readAsync(worker.identity)
+      : deps.submitDeps.read(worker.identity);
+    if (!shown.ok) {
+      delete staleObservations[key];
+      continue;
+    }
+    const preview = shown.lines.join('\n');
+    const fingerprint = exactOrchestrationPointerFingerprint(preview);
+    if (!fingerprint) {
+      delete staleObservations[key];
+      if (classifyCursorComposer(preview) === 'non_empty') {
+        reasons.push(`${worker.identity.id}:composer_not_orchestration_pointer`);
+      }
+      continue;
+    }
+    const recipient = stalePointerTargetRecipient(fingerprint, worker, resolveWorker);
+    if (!recipient) {
+      delete staleObservations[key];
+      reasons.push(`${worker.identity.id}:orchestration_pointer_target_mismatch`);
+      continue;
+    }
+    const hasUnread = inboxRows.some((row) => {
+      const id = row.id?.trim() ?? '';
+      return id && row.to_handle?.trim() === recipient && !(row.read === 1 || row.read === true);
+    });
+    if (hasUnread) {
+      delete staleObservations[key];
+      continue;
+    }
+    if (submittedFingerprint[key] === fingerprint) {
+      delete staleObservations[key];
+      continue;
+    }
+    const previous = staleObservations[key];
+    if (!previous || previous.fingerprint !== fingerprint) {
+      staleObservations[key] = { fingerprint, firstSeenAt: current };
+      continue;
+    }
+    if (current - previous.firstSeenAt < ORCHESTRATION_STALE_POINTER_DRAIN_MS) continue;
+    const resultState = createUnsentComposerWatchState();
+    const terminal = settleComposerObservation(
+      worker,
+      { watch: true },
+      deps.submitDeps,
+      resultState,
+      shown,
+      true,
+      false,
+      true,
+    );
+    if (terminal.dispatchStatus !== undefined && terminal.dispatchStatus !== 'send_failed') {
+      submittedFingerprint[key] = fingerprint;
+    }
+    if (terminal.reason === 'enter_sent' && terminal.enter) {
+      delete staleObservations[key];
+      reasons.push(`${worker.identity.id}:stale_pointer_drained`);
+      nudged += 1;
+    } else if (terminal.reason) {
+      reasons.push(`${worker.identity.id}:${terminal.reason}`);
+    }
+  }
+  for (const key of Object.keys(staleObservations)) {
+    if (!liveKeys.has(key)) delete staleObservations[key];
+  }
+  return nudged;
+}
 
 /** Reconcile unread Orca mail without inspecting composer screens globally. */
 export async function runOrchestrationMailReconcileTick(
@@ -1798,6 +1939,7 @@ export async function runOrchestrationMailReconcileTick(
       state.messages[id] = current;
       if (result.terminals[0]?.reason) reasons.push(`${id}:${result.terminals[0].reason}`);
     }
+    nudged += await drainStalePointers(deps, state, inboxRows, current, resolveWorker, reasons);
     saveReconcileState(ledgerPath, state);
     return { ok: reasons.every((reason) => !/:send_failed$|:dispatch_unknown$|:submission_unconfirmed$/u.test(reason)), attempted, nudged, skipped, reasons, deliveryEvidence };
   } finally {

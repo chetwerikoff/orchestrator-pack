@@ -3508,6 +3508,114 @@ describe('orchestration mail reconciliation', () => {
       try { unlinkSync(lockPath); } catch { /* ignore */ }
     }
   });
+  function staleDrainFixture(options: { readonly read?: number; readonly retrievable?: boolean } = {}) {
+    const target = worker('term_stale_pointer');
+    const message = { id: 'msg_stale_pointer', runId: 'run_stale_pointer', recipient: `run:${'run_stale_pointer'}`, consumed: false };
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const root = mkdtempSync(join(tmpdir(), 'opk-stale-pointer-drain-'));
+    let pointer = buildDeliveryPointer(message);
+    let pointerVisible = true;
+    const deps = {
+      readInbox: () => ({
+        ok: true as const,
+        result: { messages: [{ id: message.id, run_id: message.runId, to_handle: message.recipient, read: options.read ?? 1 }] },
+      }),
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: (candidate: { readonly recipient: string }) => candidate.recipient === message.recipient
+        ? { ok: true as const, worker: target }
+        : { ok: true as const, worker: null },
+      isMessageRetrievable: () => options.retrievable === false
+        ? { ok: false as const, reason: 'orchestration_message_unretrievable' }
+        : { ok: true as const },
+      submitDeps: depsFor({}, {
+        submitted,
+        listWorkers: () => ({ ok: true as const, workers: [target] }),
+        liveness: () => 'idle' as const,
+        read: () => ({
+          ok: true as const,
+          lines: pointerVisible ? [pointer, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        }),
+        submitResult: (identity) => {
+          submitted.push(identity);
+          pointerVisible = false;
+          return { status: 'dispatched' as const };
+        },
+      }),
+    };
+    return {
+      deps,
+      message,
+      target,
+      submitted,
+      root,
+      ledgerPath: join(root, 'orchestration-mail-reconcile.json'),
+      lockPath: join(root, 'orchestration-mail-reconcile.lock'),
+      setPointer: (value: string) => { pointer = value; pointerVisible = true; },
+    };
+  }
+
+  it('drains one unchanged read pointer only after the stale interval and pins it', async () => {
+    const fixture = staleDrainFixture();
+    try {
+      const first = await runOrchestrationMailReconcileTick(fixture.deps, { ledgerPath: fixture.ledgerPath, lockPath: fixture.lockPath, now: () => 1_000 });
+      const second = await runOrchestrationMailReconcileTick(fixture.deps, { ledgerPath: fixture.ledgerPath, lockPath: fixture.lockPath, now: () => 11_001 });
+      const third = await runOrchestrationMailReconcileTick(fixture.deps, { ledgerPath: fixture.ledgerPath, lockPath: fixture.lockPath, now: () => 12_001 });
+      const persisted = JSON.parse(readFileSync(fixture.ledgerPath, 'utf8')) as { submittedFingerprint: Record<string, string> };
+      expect(first.reasons).toEqual([]);
+      expect(second.reasons).toEqual([`${fixture.target.identity.id}:stale_pointer_drained`]);
+      expect(second.nudged).toBe(1);
+      expect(third.nudged).toBe(0);
+      expect(fixture.submitted).toEqual([fixture.target.identity]);
+      expect(Object.keys(persisted.submittedFingerprint)).toHaveLength(1);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('resets stale age when the exact pointer fingerprint changes', async () => {
+    const fixture = staleDrainFixture();
+    try {
+      await runOrchestrationMailReconcileTick(fixture.deps, { ledgerPath: fixture.ledgerPath, lockPath: fixture.lockPath, now: () => 1_000 });
+      fixture.setPointer(`You have 1 orchestration message. Run \`orca orchestration check --run run_other_pointer\`.`);
+      const changed = await runOrchestrationMailReconcileTick(fixture.deps, { ledgerPath: fixture.ledgerPath, lockPath: fixture.lockPath, now: () => 9_001 });
+      const notYetStale = await runOrchestrationMailReconcileTick(fixture.deps, { ledgerPath: fixture.ledgerPath, lockPath: fixture.lockPath, now: () => 18_000 });
+      expect(changed.nudged).toBe(0);
+      expect(notYetStale.nudged).toBe(0);
+      expect(fixture.submitted).toEqual([]);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not drain while an unread message remains for the exact recipient', async () => {
+    const fixture = staleDrainFixture({ read: 0, retrievable: false });
+    try {
+      const first = await runOrchestrationMailReconcileTick(fixture.deps, { ledgerPath: fixture.ledgerPath, lockPath: fixture.lockPath, now: () => 1_000 });
+      const second = await runOrchestrationMailReconcileTick(fixture.deps, { ledgerPath: fixture.ledgerPath, lockPath: fixture.lockPath, now: () => 11_001 });
+      expect(first.nudged).toBe(0);
+      expect(second.nudged).toBe(0);
+      expect(fixture.submitted).toEqual([]);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['mixed composer content', 'You have 1 orchestration message. Run `orca orchestration check --run run_stale_pointer`. extra'],
+    ['foreign run target', 'You have 1 orchestration message. Run `orca orchestration check --run run_foreign_pointer`.'],
+  ])('refuses %s instead of draining', async (_label, pointer) => {
+    const fixture = staleDrainFixture();
+    fixture.setPointer(pointer);
+    try {
+      const result = await runOrchestrationMailReconcileTick(fixture.deps, { ledgerPath: fixture.ledgerPath, lockPath: fixture.lockPath, now: () => 12_000 });
+      expect(result.nudged).toBe(0);
+      expect(fixture.submitted).toEqual([]);
+      expect(result.reasons.some((reason) => reason.includes('composer_not_orchestration_pointer') || reason.includes('target_mismatch'))).toBe(true);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
 
 describe('acquireWatchLock', () => {
   it('fails closed when another live process holds the lock', () => {
