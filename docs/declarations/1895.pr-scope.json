@@ -22,5 +22,5 @@
     "scripts/pr2-foundation/scheduler.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "8832dab1b4cd32c17304771bea897abb35ac5a62"
+  "source_revision": "020e7cabfc8e8727191659808853359a31022873"
 }
