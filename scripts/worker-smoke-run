@@ -76,16 +76,15 @@ function installCanonicalProgressProtocol(adapter) {
         const progressPath = input.text.match(/^- Progress file:\s*(.+?)\s*$/mu)?.[1]?.trim() ?? '';
         if (runId && progressPath && !input.text.includes('Canonical progress serialization (mandatory):')) {
           const pathToken = Buffer.from(progressPath, 'utf8').toString('base64');
-          const runToken = Buffer.from(runId, 'utf8').toString('base64');
           const writer = [
             'node -e',
-            "'const fs=require(\"node:fs\");const [p64,r64,ordinal,phase,outcome]=process.argv.slice(1);const event={runId:Buffer.from(r64,\"base64\").toString(\"utf8\"),scenarioOrdinal:Number(ordinal),phase};if(outcome)event.outcome=outcome;fs.appendFileSync(Buffer.from(p64,\"base64\").toString(\"utf8\"),JSON.stringify(event)+\"\\n\",\"utf8\")'",
+            "'const fs=require(\"node:fs\");const path=require(\"node:path\");const [p64,ordinal,phase,outcome]=process.argv.slice(1);const progressPath=Buffer.from(p64,\"base64\").toString(\"utf8\");const runId=path.basename(path.dirname(progressPath));const event={runId,scenarioOrdinal:Number(ordinal),phase};if(outcome)event.outcome=outcome;fs.appendFileSync(progressPath,JSON.stringify(event)+\"\\n\",\"utf8\")'",
           ].join(' ');
           const firstEvent = JSON.stringify({ runId, scenarioOrdinal: 1, phase: 'started' });
           const protocol = [
             '',
             'Canonical progress serialization (mandatory):',
-            `- Before scenario 1, run exactly: ${writer} ${pathToken} ${runToken} 1 started`,
+            `- Before scenario 1, run exactly: ${writer} ${pathToken} 1 started`,
             `- The first non-empty progress line must parse exactly as: ${firstEvent}`,
             '- Never hand-assemble progress JSON; the command above appends JSON.stringify(event) plus one newline.',
             '- For later started events, reuse the command with the declared ordinal and phase started, omitting outcome.',
