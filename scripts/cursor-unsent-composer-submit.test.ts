@@ -3508,13 +3508,14 @@ describe('orchestration mail reconciliation', () => {
       try { unlinkSync(lockPath); } catch { /* ignore */ }
     }
   });
-  function staleDrainFixture(options: { readonly read?: number; readonly retrievable?: boolean } = {}) {
+  function staleDrainFixture(options: { readonly read?: number; readonly retrievable?: boolean; readonly opencodeHttp?: boolean } = {}) {
     const target = worker('term_stale_pointer');
     const message = { id: 'msg_stale_pointer', runId: 'run_stale_pointer', recipient: `run:${'run_stale_pointer'}`, consumed: false };
     const submitted: RuntimeWorkerIdentity[] = [];
     const root = mkdtempSync(join(tmpdir(), 'opk-stale-pointer-drain-'));
     let pointer = buildDeliveryPointer(message);
     let pointerVisible = true;
+    let reads = 0;
     const deps = {
       readInbox: () => ({
         ok: true as const,
@@ -3531,11 +3532,18 @@ describe('orchestration mail reconciliation', () => {
         submitted,
         listWorkers: () => ({ ok: true as const, workers: [target] }),
         liveness: () => 'idle' as const,
-        read: () => ({
-          ok: true as const,
-          lines: pointerVisible ? [pointer, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
-          source: 'screen' as const,
-        }),
+        composerControl: options.opencodeHttp ? () => ({
+          kind: 'opencode-http' as const,
+          dispatch: () => ({ status: 'dispatched' as const }),
+        }) : undefined,
+        read: () => {
+          reads += 1;
+          return {
+            ok: true as const,
+            lines: pointerVisible ? [pointer, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+            source: 'screen' as const,
+          };
+        },
         submitResult: (identity) => {
           submitted.push(identity);
           pointerVisible = false;
@@ -3551,6 +3559,7 @@ describe('orchestration mail reconciliation', () => {
       root,
       ledgerPath: join(root, 'orchestration-mail-reconcile.json'),
       lockPath: join(root, 'orchestration-mail-reconcile.lock'),
+      get reads() { return reads; },
       setPointer: (value: string) => { pointer = value; pointerVisible = true; },
     };
   }
@@ -3602,16 +3611,31 @@ describe('orchestration mail reconciliation', () => {
   });
 
   it.each([
-    ['mixed composer content', 'You have 1 orchestration message. Run `orca orchestration check --run run_stale_pointer`. extra'],
-    ['foreign run target', 'You have 1 orchestration message. Run `orca orchestration check --run run_foreign_pointer`.'],
-  ])('refuses %s instead of draining', async (_label, pointer) => {
+    ['mixed composer content', 'You have 1 orchestration message. Run `orca orchestration check --run run_stale_pointer`. extra', undefined],
+    ['foreign run target', 'You have 1 orchestration message. Run `orca orchestration check --run run_foreign_pointer`.', 'orchestration_pointer_target_mismatch'],
+  ] as const)('refuses %s instead of draining', async (_label, pointer, expectedReason) => {
     const fixture = staleDrainFixture();
     fixture.setPointer(pointer);
     try {
       const result = await runOrchestrationMailReconcileTick(fixture.deps, { ledgerPath: fixture.ledgerPath, lockPath: fixture.lockPath, now: () => 12_000 });
       expect(result.nudged).toBe(0);
       expect(fixture.submitted).toEqual([]);
-      expect(result.reasons.some((reason) => reason.includes('composer_not_orchestration_pointer') || reason.includes('target_mismatch'))).toBe(true);
+      if (expectedReason) expect(result.reasons).toContain(`${fixture.target.identity.id}:${expectedReason}`);
+      else expect(result.reasons).not.toContain(`${fixture.target.identity.id}:composer_not_orchestration_pointer`);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not read or drain an opencode-http worker with a pure pointer', async () => {
+    const fixture = staleDrainFixture({ opencodeHttp: true });
+    try {
+      const first = await runOrchestrationMailReconcileTick(fixture.deps, { ledgerPath: fixture.ledgerPath, lockPath: fixture.lockPath, now: () => 1_000 });
+      const second = await runOrchestrationMailReconcileTick(fixture.deps, { ledgerPath: fixture.ledgerPath, lockPath: fixture.lockPath, now: () => 11_001 });
+      expect(first.nudged).toBe(0);
+      expect(second.nudged).toBe(0);
+      expect(fixture.reads).toBe(0);
+      expect(fixture.submitted).toEqual([]);
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }

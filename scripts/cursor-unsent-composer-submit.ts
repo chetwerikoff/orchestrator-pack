@@ -1585,14 +1585,31 @@ async function drainStalePointers(
     : deps.submitDeps.listWorkers();
   if (!listed.ok) return 0;
   const liveKeys = new Set<string>();
+  const observations = await Promise.all(listed.workers
+    .filter(isLiveCursorRecipient)
+    .map(async (worker) => {
+      const key = workerKey(worker.identity);
+      liveKeys.add(key);
+      if (deps.submitDeps.composerControl?.(worker.identity)?.kind === 'opencode-http') {
+        return { worker, key, skipped: true as const };
+      }
+      const liveness = currentLiveness(deps.submitDeps, worker.identity);
+      if (liveness !== 'idle' && liveness !== 'busy') {
+        return { worker, key, skipped: true as const };
+      }
+      const shown = deps.submitDeps.readAsync
+        ? await deps.submitDeps.readAsync(worker.identity)
+        : deps.submitDeps.read(worker.identity);
+      return { worker, key, skipped: false as const, shown };
+    }));
   let nudged = 0;
-  for (const worker of listed.workers) {
-    if (!isLiveCursorRecipient(worker)) continue;
-    const key = workerKey(worker.identity);
-    liveKeys.add(key);
-    const shown = deps.submitDeps.readAsync
-      ? await deps.submitDeps.readAsync(worker.identity)
-      : deps.submitDeps.read(worker.identity);
+  for (const observation of observations) {
+    const { worker, key } = observation;
+    if (observation.skipped) {
+      delete staleObservations[key];
+      continue;
+    }
+    const { shown } = observation;
     if (!shown.ok) {
       delete staleObservations[key];
       continue;
@@ -1601,9 +1618,6 @@ async function drainStalePointers(
     const fingerprint = exactOrchestrationPointerFingerprint(preview);
     if (!fingerprint) {
       delete staleObservations[key];
-      if (classifyCursorComposer(preview) === 'non_empty') {
-        reasons.push(`${worker.identity.id}:composer_not_orchestration_pointer`);
-      }
       continue;
     }
     const recipient = stalePointerTargetRecipient(fingerprint, worker, resolveWorker);
@@ -1648,7 +1662,7 @@ async function drainStalePointers(
       delete staleObservations[key];
       reasons.push(`${worker.identity.id}:stale_pointer_drained`);
       nudged += 1;
-    } else if (terminal.reason) {
+    } else if (terminal.reason && terminal.reason !== 'composer_not_orchestration_pointer') {
       reasons.push(`${worker.identity.id}:${terminal.reason}`);
     }
   }
@@ -1657,7 +1671,6 @@ async function drainStalePointers(
   }
   return nudged;
 }
-
 /** Reconcile unread Orca mail without inspecting composer screens globally. */
 export async function runOrchestrationMailReconcileTick(
   deps: DeliveryMessageSubmitDeps,
