@@ -3,10 +3,8 @@
   "issue_number": 1924,
   "declared_paths": [
     "docs/chat-executor-rules.md",
-    "docs/orchestration-runbook.md",
     "scripts/lib/worker-smoke-core.ts",
     "scripts/pr2-foundation/post-review-smoke-preaction.test.ts",
-    "scripts/pr2-foundation/post-review-smoke-selective-retry.test.ts",
     "scripts/worker-smoke-run.ts"
   ],
   "denylist": [
@@ -18,10 +16,8 @@
   ],
   "allowed_roots": [
     "docs/chat-executor-rules.md",
-    "docs/orchestration-runbook.md",
     "scripts/lib/worker-smoke-core.ts",
     "scripts/pr2-foundation/post-review-smoke-preaction.test.ts",
-    "scripts/pr2-foundation/post-review-smoke-selective-retry.test.ts",
     "scripts/worker-smoke-run.ts"
   ],
   "source_revision": "9099350a522a93b862620fc68953c92ea255f0c3"
