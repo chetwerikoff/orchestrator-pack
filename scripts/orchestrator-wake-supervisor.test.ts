@@ -210,6 +210,14 @@ describe('Issue #1917 scheduler operational liveness', () => {
       status.refusalReason = 'scheduler_child_exit_nonzero:boom';
       expect(isSchedulerOperational(status, nowMs)).toBe(false);
 
+      const identity = readProcessIdentity(process.pid);
+      status.restartState = 'running';
+      status.childPid = process.pid;
+      status.childStartTicks = identity.startTicks;
+      status.refusalReason = null;
+      expect(isLiveRunningSupervisorChild(status)).toBe(true);
+      expect(isSchedulerOperational(status, nowMs)).toBe(false);
+
       const clean = issue1917Status(root, 5);
       clean.crashBackoff = { ...clean.crashBackoff, lastExitMs: nowMs - 10_001 };
       expect(isSchedulerOperational(clean, nowMs)).toBe(false);
