@@ -61,37 +61,27 @@ or new store for this role boundary.
 
 ## Browser-GPT tracked-turn mechanics
 
-The canonical manager-facing launch, observation, marker attribution,
-publication, tab lifecycle, diagnostic-probe, failure-attribution, retry/no-
-resend, and handoff contract lives in
-[`.cursor/rules/flow-manager-browser-turn-monitoring.mdc`](../../../.cursor/rules/flow-manager-browser-turn-monitoring.mdc).
-The portable startup procedure and universal author template live in
-[`docs/browser-gpt-turn-runbook.md`](../../../docs/browser-gpt-turn-runbook.md).
-Reviewer prompt bytes come only from the manager-review canon declared below and
-are rendered by `scripts/lib/manager-review-brief.ts`; the runbook is not a
-second reviewer-template owner. The transport README remains the
-implementation-local authority for supported CLI forms, argument names, result
-schemas, and component boundaries.
+[`docs/browser-gpt-turn-runbook.md`](../../../docs/browser-gpt-turn-runbook.md)
+is the **sole portable manager-facing procedure** for one tracked Browser-GPT
+turn: launch, observation, invocation/marker attribution, page completion,
+recovery/harvest, retry/no-resend, publication/cleanup, diagnostic probes, tab
+lifecycle, and handoff. The active flow-manager reads that runbook when it needs
+to perform tracked Browser-GPT work; this skill does not restate those mechanics.
 
-For applicable long-running turns, use
-`npm run flow-manager-browser-gpt-long-run -- ...`; its launcher internals are
-owned by [`docs/flow-manager-long-running-child-runbook.md`](../../../docs/flow-manager-long-running-child-runbook.md).
-This skill retains the create-issue workflow, tiering, review-stage, capture,
-direct-publication, receipt, relay, ledger, and acceptance rules below. It does
-not duplicate tracked helper launch, polling, retry, tab-close, probe, or
-observation-loss mechanics. The long-running adapter completion mode remains
-`browser-turn-result-v1`.
+The non-always-loaded
+[flow-manager carrier](../../../.cursor/rules/flow-manager-browser-turn-monitoring.mdc)
+remains only a selected canon source for the create-Issue reviewer prompt
+fragments declared below. It is not a second portable Browser-GPT procedure.
+Launcher internals remain owned by
+[`docs/flow-manager-long-running-child-runbook.md`](../../../docs/flow-manager-long-running-child-runbook.md),
+and the transport README remains the implementation-local CLI/result/component
+authority.
 
-One helper invocation still dispatches the marked payload exactly once from its
-initial tab. Only after definite post-send page/browser loss may that helper
-re-enumerate the same normalized conversation, observe one URL-plus-exact-marker
-eligible page, or create at most one non-sending successor observation page.
-The flow-manager does not select, navigate, harvest, resend, stop, or clean up
-tabs. Every possible/post-send outcome and every `send_count: 1` result remains
-retry-forbidden. When an identity-proven owned turn is abandoned, the helper
-attempts the sanctioned **Stop generating** action before recording the incident;
-exact-target tab close remains the separate Issue #1266 seam and is not granted
-to recovery by this alignment.
+This skill retains only create-Issue workflow bindings at the browser boundary:
+reviewer prompt construction, stage/source identity, direct-publication context,
+batch/stage ordering, captures, receipts, relay, finding accounting, correction,
+and acceptance. Reviewer prompt bytes come only from the manager-review canon
+below and are rendered by `scripts/lib/manager-review-brief.ts`.
 
 ## Manager review brief canon
 
