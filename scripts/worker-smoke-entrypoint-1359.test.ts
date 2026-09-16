@@ -269,6 +269,9 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         '- For live-state invariants backed by persistent history, capture the pre-scenario baseline and judge only entries created during this scenario; never fail on pre-existing smoke residue.',
       );
       expect(prompt).toContain(
+        '- For scenario 11 specifically, snapshot the composer and prompt_history.json immediately before the first send; evaluate only post-snapshot changes from the two sends, and do not count any pre-existing pointer or history entry.',
+      );
+      expect(prompt).toContain(
         '- For each scenario N, append and durably flush N started, execute only N, then append and durably flush N terminal before doing any work or writing progress for N+1.',
       );
       expect(prompt).toContain(
