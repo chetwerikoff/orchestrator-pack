@@ -2,6 +2,7 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1924,
   "declared_paths": [
+    "docs/chat-executor-rules.md",
     "scripts/lib/worker-smoke-core.ts",
     "scripts/pr2-foundation/post-review-smoke.test.ts",
     "scripts/worker-smoke-run.ts"
@@ -14,9 +15,10 @@
     "vendor/"
   ],
   "allowed_roots": [
+    "docs/chat-executor-rules.md",
     "scripts/lib/worker-smoke-core.ts",
     "scripts/pr2-foundation/post-review-smoke.test.ts",
     "scripts/worker-smoke-run.ts"
   ],
-  "source_revision": "864f55d55727885ce77f1ea688e1bf4ea7d5a61f"
+  "source_revision": "ed38597b52693332b9505ed07fdb336a3068bb3a"
 }
