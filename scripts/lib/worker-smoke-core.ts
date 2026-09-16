@@ -231,6 +231,7 @@ const FULL_SHA = /^[0-9a-f]{40}$/u;
 const REPOSITORY_SLUG = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const REPORT_BLOCK_PATTERN = /```worker-smoke-report\s*\r?\n[\s\S]*?```/giu;
 const AFFECTED_BLOCK_PATTERN = /```worker-smoke-affected\s*\r?\n([\s\S]*?)```/giu;
+const CARRIED_OBSERVED_PATTERN = /^carried PASS from head [0-9a-f]{40} comment \d+; not freshly executed on [0-9a-f]{40}$/u;
 
 function normalizeLogin(value: string | undefined): string {
   return String(value ?? '').trim().toLowerCase();
@@ -814,6 +815,10 @@ function fullRetry(
   };
 }
 
+function projectedCarriedObservation(scenario: base.SmokeScenario): boolean {
+  return scenario.outcome === 'pass' && CARRIED_OBSERVED_PATTERN.test(scenario.observed?.trim() ?? '');
+}
+
 export function planWorkerSmokeSelectiveRetry(input: {
   issueBody: string;
   prBody: string;
@@ -838,7 +843,7 @@ export function planWorkerSmokeSelectiveRetry(input: {
   if (input.historyReadable === false) {
     return fullRetry(fullPlan, affected.tupleKeys, affected.diagnostics, 'history_unreadable');
   }
-  if (input.historyBindingTrusted === false) {
+  if (input.historyBindingTrusted === false || validateTrustedTarget(input.target, input.issueBody)) {
     return fullRetry(fullPlan, affected.tupleKeys, affected.diagnostics, 'history_binding_untrusted');
   }
 
@@ -851,6 +856,13 @@ export function planWorkerSmokeSelectiveRetry(input: {
   const valid = candidates.filter((candidate): candidate is HistoryCandidate & { report: base.SmokeReport; headSha: string } =>
     Boolean(candidate.report && candidate.headSha && !candidate.invalidReason));
   if (valid.length === 0) {
+    const invalidReasons = candidates.map((candidate) => candidate.invalidReason ?? '');
+    if (invalidReasons.some((reason) => reason.includes('binding') || reason === 'candidate_actor_missing')) {
+      return fullRetry(fullPlan, affected.tupleKeys, affected.diagnostics, 'history_binding_untrusted');
+    }
+    if (candidates.length > 0) {
+      return fullRetry(fullPlan, affected.tupleKeys, affected.diagnostics, 'history_unreadable');
+    }
     return fullRetry(fullPlan, affected.tupleKeys, affected.diagnostics, 'no_prior_canonical_observation');
   }
 
@@ -878,8 +890,8 @@ export function planWorkerSmokeSelectiveRetry(input: {
     try {
       if (ancestorOfCurrent(candidate.headSha)) relevant.push(candidate);
     } catch {
-      // A single older unusable lineage row is tuple-local; the latest-row
-      // continuation check above is the only whole-attempt ancestry fallback.
+      // Once the attempt-level continuation is established, an older row with
+      // unprovable lineage is ignored locally rather than widening to full-plan.
     }
   }
 
@@ -950,7 +962,9 @@ export function planWorkerSmokeSelectiveRetry(input: {
     }
 
     const selected = maximal[0];
-    if (affectedKeys.has(key) && selected.headSha !== currentHead) {
+    const selectedIsFreshCurrentHead = selected.headSha === currentHead
+      && !projectedCarriedObservation(selected.row.scenario);
+    if (affectedKeys.has(key) && !selectedIsFreshCurrentHead) {
       execution.push(declared);
       tupleDiagnostics.push({ tuple: tuplePreview(declared.action, declared.expected), reason: 'current_head_affected' });
       continue;
@@ -988,6 +1002,7 @@ export function projectWorkerSmokeSelectiveReport(input: {
   selection: WorkerSmokeSelectiveRetryPlan;
 }): Partial<base.SmokeReport> {
   if (input.selection.fallbackReason) return input.partial;
+  const fullKeys = new Set(input.selection.fullPlan.scenarios.map((scenario) => tupleKey(scenario.action, scenario.expected)));
   const carried = new Map(input.selection.carried.map((entry) => [
     tupleKey(entry.scenario.action, entry.scenario.expected),
     entry.scenario,
@@ -995,7 +1010,8 @@ export function projectWorkerSmokeSelectiveReport(input: {
   const fresh = new Map<string, base.SmokeScenario>();
   for (const scenario of input.partial.scenarios ?? []) {
     if (!scenario.observed?.trim() || !scenario.outcome) continue;
-    fresh.set(tupleKey(scenario.action, scenario.expected), scenario);
+    const key = tupleKey(scenario.action, scenario.expected);
+    if (fullKeys.has(key)) fresh.set(key, scenario);
   }
   const scenarios: base.SmokeScenario[] = [];
   for (const declared of input.selection.fullPlan.scenarios) {
