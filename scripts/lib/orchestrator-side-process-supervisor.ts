@@ -172,6 +172,8 @@ export function isSchedulerOperational(
   if (!isLiveSupervisorStatus(statusRecord)) return false;
   const status = statusRecord;
   if (hasSchedulerChildFailureEvidence(status)) return false;
+  const cadenceSeconds = readBoundSchedulerCadenceSeconds(status);
+  if (cadenceSeconds === null) return false;
 
   if (status.restartState === 'running') {
     return isLiveRunningSupervisorChild(status);
@@ -183,8 +185,6 @@ export function isSchedulerOperational(
 
   const lastExitMs = status.crashBackoff.lastExitMs;
   if (!Number.isFinite(nowMs) || !Number.isFinite(lastExitMs) || lastExitMs <= 0) return false;
-  const cadenceSeconds = readBoundSchedulerCadenceSeconds(status);
-  if (cadenceSeconds === null) return false;
   const ageMs = nowMs - lastExitMs;
   return ageMs >= 0 && ageMs <= 2 * cadenceSeconds * 1_000;
 }
