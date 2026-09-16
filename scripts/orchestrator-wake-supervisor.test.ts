@@ -248,14 +248,10 @@ describe('Issue #1484 truthful supervisor status', () => {
     try {
       const identity = readProcessIdentity(process.pid);
       const statusPath = path.join(stateDir, 'typescript-supervisor-status.json');
-      const status = {
-        schemaVersion: 2,
-        supervisorPid: process.pid,
-        supervisorStartTicks: identity.startTicks,
-        childPid: process.pid,
-        childStartTicks: identity.startTicks,
-        restartState: 'running',
-      };
+      const status = issue1917Status(stateDir);
+      status.restartState = 'running';
+      status.childPid = process.pid;
+      status.childStartTicks = identity.startTicks;
       writeFileSync(statusPath, `${JSON.stringify(status)}\n`, 'utf8');
       const before = readFileSync(statusPath, 'utf8');
 
