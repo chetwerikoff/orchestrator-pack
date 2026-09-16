@@ -1130,7 +1130,7 @@ describe('[pack-review-4] regression coverage', () => {
       childGeneration: 6,
       childRestarts: 1,
       restartState: 'waiting-restart' as const,
-      crashBackoff: { ...cleanCrashBackoff, lastExitMs: Date.now() - 100 },
+      crashBackoff: { ...cleanCrashBackoff, lastExitMs: Date.now() - 30_100 },
     };
     writeJson(statusPath, waitingStatus);
     await expect(waitForStartedSupervisor(request, nonce, process.pid, { timeoutMs: 25, pollMs: 5 })).resolves.toEqual({
@@ -1159,7 +1159,15 @@ describe('[pack-review-4] regression coverage', () => {
     await expect(waitForStartedSupervisor(request, nonce, process.pid))
       .rejects.toThrow(/typescript_supervisor_status_v1_unsupported/);
 
-    writeJson(statusPath, { ...runningStatus, childStartTicks: `${identity.startTicks}-reused` });
+    writeJson(statusPath, {
+      ...runningStatus,
+      childPid: null,
+      childStartTicks: null,
+      childGeneration: 0,
+      childRestarts: 0,
+      restartState: 'starting',
+      crashBackoff: { ...cleanCrashBackoff, lastExitMs: 0 },
+    });
     await expect(waitForStartedSupervisor(request, nonce, process.pid, { timeoutMs: 25, pollMs: 5 }))
       .rejects.toThrow(/typescript_supervisor_scheduler_not_ready/);
 
@@ -1171,6 +1179,88 @@ describe('[pack-review-4] regression coverage', () => {
     writeJson(statusPath, runningStatus);
     await expect(waitForStartedSupervisor(request, nonce, process.pid, { timeoutMs: 25, pollMs: 5 }))
       .rejects.toThrow(/typescript_supervisor_scheduler_not_ready/);
+  });
+
+  it('activation readiness accepts clean post-cadence states below and at the former 10s boundary', async () => {
+    const { readProcessIdentity } = await import('../lib/cutover/activation-cordon.ts');
+    const identity = readProcessIdentity(process.pid);
+
+    for (const cadenceSeconds of [5, 10] as const) {
+      const root = tempRoot();
+      const nonce = `nonce-1917-cadence-${cadenceSeconds}`;
+      const request = {
+        epochId: `epoch-1917-cadence-${cadenceSeconds}`,
+        expectedOldEpochId: null,
+        hostId: 'test-host',
+        repoRoot,
+        installedCommitSha: 'd'.repeat(40),
+        oldInstalledRevisionRoot: repoRoot,
+        legacySupervisorPid: process.pid,
+        knownMemberRoster: [{ hostId: 'test-host' }],
+        stores: [],
+        paths: {
+          stateDir: root,
+          cordonPath: path.join(root, 'cordon.json'),
+          phaseOnePath: path.join(root, 'phase-one.json'),
+          followupPath: path.join(root, 'followups.json'),
+          epochAuthorityPath: path.join(root, 'authority.json'),
+          targetRegistryPath: path.join(root, 'target-registry.json'),
+          projectedRegistryPath: path.join(root, 'projected-registry.json'),
+          snapshotDir: path.join(root, 'snapshots'),
+          supervisorStateDir: root,
+          foundationEvidencePath: path.join(root, 'foundation.json'),
+        },
+      } as ActivationRequest;
+      writeJson(request.paths.targetRegistryPath, {
+        schemaVersion: 2,
+        requiredChildIds: ['pr2-scheduler'],
+        children: [{ id: 'pr2-scheduler', runtime: 'node', script: 'pr2-foundation/scheduler.ts', sideEffecting: true, cadenceSeconds }],
+      });
+      const registryHash = sha256Bytes(readFileSync(request.paths.targetRegistryPath));
+      new FileEpochAuthority(request.paths.epochAuthorityPath).commit(null, {
+        epochId: request.epochId,
+        nonce,
+        hostId: request.hostId,
+        repoRoot: request.repoRoot,
+        installedCommitSha: request.installedCommitSha,
+        snapshotDigests: { reconcile: 'r', reevaluation: 'e', reportStateSeed: 's' },
+        importDigests: { reconcile: 'ir', reevaluation: 'ie', reportStateSeed: 'is' },
+        registryHash,
+        preCommitLogDigest: `phase-1917-cadence-${cadenceSeconds}`,
+        commitAt: new Date().toISOString(),
+      });
+      writeJson(path.join(root, 'typescript-supervisor-status.json'), {
+        schemaVersion: 2,
+        epochId: request.epochId,
+        nonce,
+        supervisorPid: process.pid,
+        supervisorStartTicks: identity.startTicks,
+        registryHash,
+        registrySource: request.paths.targetRegistryPath,
+        childId: 'pr2-scheduler',
+        childPid: null,
+        childStartTicks: null,
+        childGeneration: 1,
+        childRestarts: 1,
+        restartState: 'waiting-restart',
+        startedAt: new Date().toISOString(),
+        lastChildStartAt: new Date().toISOString(),
+        cordonReason: 'post-cas-epoch-owner',
+        refusalReason: null,
+        crashBackoff: {
+          rapidExits: 0,
+          backoffUntilMs: 0,
+          lastExitMs: Date.now() - cadenceSeconds * 1_000 - 100,
+          terminal: false,
+          terminalReason: null,
+        },
+      });
+
+      await expect(waitForStartedSupervisor(request, nonce, process.pid, { timeoutMs: 25, pollMs: 5 })).resolves.toEqual({
+        supervisorPid: process.pid,
+        childGeneration: 1,
+      });
+    }
   });
 });
 
