@@ -61,37 +61,30 @@ or new store for this role boundary.
 
 ## Browser-GPT tracked-turn mechanics
 
-The canonical manager-facing launch, observation, marker attribution,
-publication, tab lifecycle, diagnostic-probe, failure-attribution, retry/no-
-resend, and handoff contract lives in
-[`.cursor/rules/flow-manager-browser-turn-monitoring.mdc`](../../../.cursor/rules/flow-manager-browser-turn-monitoring.mdc).
-The portable startup procedure and universal author template live in
-[`docs/browser-gpt-turn-runbook.md`](../../../docs/browser-gpt-turn-runbook.md).
-Reviewer prompt bytes come only from the manager-review canon declared below and
-are rendered by `scripts/lib/manager-review-brief.ts`; the runbook is not a
-second reviewer-template owner. The transport README remains the
-implementation-local authority for supported CLI forms, argument names, result
-schemas, and component boundaries.
+[`docs/browser-gpt-turn-runbook.md`](../../../docs/browser-gpt-turn-runbook.md)
+is the **sole portable manager-facing procedure** for one tracked Browser-GPT
+turn: launch, observation, invocation/marker attribution, page completion,
+recovery/harvest, retry/no-resend, publication/cleanup, diagnostic probes, tab
+lifecycle, and handoff. The active flow-manager reads that runbook when it needs
+to perform tracked Browser-GPT work; this skill does not restate those mechanics.
 
-For applicable long-running turns, use
-`npm run flow-manager-browser-gpt-long-run -- ...`; its launcher internals are
-owned by [`docs/flow-manager-long-running-child-runbook.md`](../../../docs/flow-manager-long-running-child-runbook.md).
-This skill retains the create-issue workflow, tiering, review-stage, capture,
-direct-publication, receipt, relay, ledger, and acceptance rules below. It does
-not duplicate tracked helper launch, polling, retry, tab-close, probe, or
-observation-loss mechanics. The long-running adapter completion mode remains
-`browser-turn-result-v1`.
+The non-always-loaded
+[flow-manager carrier](../../../.cursor/rules/flow-manager-browser-turn-monitoring.mdc)
+remains only a selected canon source for the create-Issue reviewer prompt
+fragments declared below. It is not a second portable Browser-GPT procedure.
+Launcher internals remain owned by
+[`docs/flow-manager-long-running-child-runbook.md`](../../../docs/flow-manager-long-running-child-runbook.md),
+and the transport README remains the implementation-local CLI/result/component
+authority. The existing package entrypoint remains
+`flow-manager-browser-gpt-long-run` and its long-turn completion contract remains
+`browser-turn-result-v1`; exact invocation and lifecycle mechanics stay owned by
+the linked runbooks rather than this skill.
 
-One helper invocation still dispatches the marked payload exactly once from its
-initial tab. Only after definite post-send page/browser loss may that helper
-re-enumerate the same normalized conversation, observe one URL-plus-exact-marker
-eligible page, or create at most one non-sending successor observation page.
-The flow-manager does not select, navigate, harvest, resend, stop, or clean up
-tabs. Every possible/post-send outcome and every `send_count: 1` result remains
-retry-forbidden. When an identity-proven owned turn is abandoned, the helper
-attempts the sanctioned **Stop generating** action before recording the incident;
-exact-target tab close remains the separate Issue #1266 seam and is not granted
-to recovery by this alignment.
+This skill retains only create-Issue workflow bindings at the browser boundary:
+reviewer prompt construction, stage/source identity, direct-publication context,
+batch/stage ordering, captures, receipts, relay, finding accounting, correction,
+and acceptance. Reviewer prompt bytes come only from the manager-review canon
+below and are rendered by `scripts/lib/manager-review-brief.ts`.
 
 ## Manager review brief canon
 
@@ -912,28 +905,45 @@ Whole-task `worker_done`, cancellation, and external termination remain owned
 solely by #1486 §6. This section adds no second completion classifier,
 cancellation rule, or external-termination contract.
 
-### Action-specific retry and no-resend
+### Create-flow consumption of retry/no-resend authority
+
+This skill does not define Browser-GPT retry or delivery classes. The shared
+[`docs/browser-gpt-turn-runbook.md`](../../../docs/browser-gpt-turn-runbook.md)
+is the sole owner of those portable mechanics. This create-Issue section consumes
+that owner's classification and only applies create-flow invocation/stage
+accounting; manager recovery cannot widen an owner-supplied retry class.
 
 Allow-by-default recovery never converts `send_count: 0` into generic retry
-authority. Browser-GPT same-slot retry remains legal only for the existing
-proven pre-send quota/composer/fill failure with `send_count: 0`; a generic
+authority in this flow. The shared owner currently names the
+proven pre-send quota/composer/fill failure with `send_count: 0` class; a generic
 `input_invalid` or canonical-input refusal is not retryable merely because its
-send count is zero.
+send count is zero. These labels are consumed owner vocabulary, not a second
+transport classifier in this skill.
 
 A manager-owned invocation defect rejected before cycle, stage-attempt,
 or reviewer-invocation consumption may be corrected and the legal invocation
 started once because no consumed invocation is being retried. Possible or proven
-delivery remains no-resend. A consumed semantic stage slot is never reopened.
+delivery remains no-resend because this flow may not override the shared owner's
+classification. A consumed semantic stage slot is never reopened.
 
 ### Bounded waiting and anti-silent-idle
 
-Nonterminality does not authorize an indefinite or silent wait. Existing waits
-remain bound to their named producer or observation surface and that surface's
-existing deadline. State-light producer/reviewer waits keep
+Nonterminality does not authorize an indefinite or silent wait. Manager-level
+anti-silent-idle remains owned here, but Browser-GPT wait/probe timing and the
+long-running child wait syntax remain owned by
+[`docs/browser-gpt-turn-runbook.md`](../../../docs/browser-gpt-turn-runbook.md)
+and [`docs/flow-manager-long-running-child-runbook.md`](../../../docs/flow-manager-long-running-child-runbook.md).
+The flow-manager must reread those owners for procedure and must not infer
+Browser-GPT progression or resend authority from the compatibility snapshot below.
+
+The existing #1514 contract tests still assert the exact externally-owned
+bindings below while `scripts/**` remains outside #1923 scope. They are retained
+here only as a **non-authoritative compatibility snapshot**; they do not define,
+override, or freeze Browser-GPT behavior in this skill:
+
+State-light producer/reviewer waits keep
 `DEFAULT_TIMEOUT_MS = 1_800_000 ms`; diagnostic page probes keep
 `CDP_REQUEST_TIMEOUT_MS = 10_000 ms`.
-
-The existing long-running-child waiter remains:
 
 ```bash
 npm run --silent flow-manager-long-running-child -- wait \
@@ -944,7 +954,8 @@ npm run --silent flow-manager-long-running-child -- wait \
   --deadline-ms 5000
 ```
 
-GitHub journal publication keeps `GH_TIMEOUT_MS = 10_000`,
+GitHub journal publication is create-Issue workflow policy and remains owned by
+this skill. It keeps `GH_TIMEOUT_MS = 10_000`,
 `publishJournalEvent -> createIssueComment -> confirmCanonicalEvent`, the
 full comment census, `withGhDeadline`, and
 `const publicationDeadline = Date.now() + GH_TIMEOUT_MS`; ambiguous or timed-out

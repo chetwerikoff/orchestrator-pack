@@ -205,6 +205,7 @@ invocation detail.
 | [`adversarial-draft-review`](.cursor/skills/adversarial-draft-review/SKILL.md) | challenge a draft with Codex |
 | [`discuss-with-gpt`](.cursor/skills/discuss-with-gpt/SKILL.md) | discuss or challenge with GPT |
 | [`create-issue-draft`](.cursor/skills/create-issue-draft/SKILL.md) | author a new task or handoff |
+| [`execute-issue-with-gpt`](.cursor/skills/execute-issue-with-gpt/SKILL.md) | explicitly execute or continue an existing Issue through GPT |
 | [`study-external-source`](.cursor/skills/study-external-source/SKILL.md) | study an external repository or URL |
 | [`publish-issue-draft`](.cursor/skills/publish-issue-draft/SKILL.md) | publish an existing tracked draft |
 | [`switch-pack-reviewer`](.cursor/skills/switch-pack-reviewer/SKILL.md) | change the configured reviewer |
