@@ -1504,9 +1504,24 @@ export async function runOrchestrationMailReconcileTick(
             const submissionDeps = consumerFenced
               ? {
                   ...reconcileDeps,
-                  // Never create a pointer when the Orca observation is fenced;
-                  // only an already-visible exact pointer may be submitted.
+                  // A fenced check is never authority to create prompt text.
+                  // Only an already-visible exact target pointer may reach Enter.
                   writePointer: () => ({ status: 'send_failed' as const, reason: 'orchestration_pointer_not_visible' }),
+                  submitDeps: {
+                    ...reconcileDeps.submitDeps,
+                    // Runtime-specific prompt submission would create the pointer
+                    // and therefore bypass the target-pane evidence requirement.
+                    composerControl: () => undefined,
+                    submit: (identity: RuntimeWorkerIdentity) => {
+                      // Revalidate the same exact target pointer at the final
+                      // synchronous boundary immediately before submit-only Enter.
+                      const currentPointer = reconcileDeps.submitDeps.read(identity);
+                      if (!composerShowsDeliveryPointer(currentPointer, buildDeliveryPointer(message))) {
+                        return { status: 'send_failed' as const, reason: 'orchestration_pointer_not_visible' };
+                      }
+                      return reconcileDeps.submitDeps.submit(identity);
+                    },
+                  },
                 }
               : reconcileDeps;
             result = await submitOrcaMessageDeliveryPointerForMessage(message, submissionDeps);
