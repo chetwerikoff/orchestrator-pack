@@ -14,7 +14,12 @@ import {
 } from './lib/cutover/foundation-observation.ts';
 import { childRegistry } from './lib/orchestrator-side-process-observer.ts';
 import { sha256Bytes } from './lib/cutover/stable-stringify.ts';
-import { supervisorChildExitTransition } from './lib/orchestrator-side-process-supervisor.ts';
+import {
+  isLiveRunningSupervisorChild,
+  isSchedulerOperational,
+  supervisorChildExitTransition,
+  type SupervisorStatus,
+} from './lib/orchestrator-side-process-supervisor.ts';
 import { EMPTY_CRASH_BACKOFF_STATE, type CrashBackoffPolicy } from './runtime/crash-backoff.ts';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
@@ -75,6 +80,50 @@ function greenfieldPaths(root: string): { repoRoot: string; paths: CanonicalFoun
   };
 }
 
+function issue1917Status(root: string, cadenceSeconds = 5): SupervisorStatus {
+  mkdirSync(root, { recursive: true });
+  const identity = readProcessIdentity(process.pid);
+  const registrySource = path.join(root, 'target-registry.json');
+  const registry = {
+    schemaVersion: 2,
+    requiredChildIds: ['pr2-scheduler'],
+    children: [{
+      id: 'pr2-scheduler',
+      runtime: 'node',
+      script: 'pr2-foundation/scheduler.ts',
+      sideEffecting: true,
+      cadenceSeconds,
+    }],
+  };
+  writeFileSync(registrySource, `${JSON.stringify(registry)}\n`, 'utf8');
+  return {
+    schemaVersion: 2,
+    epochId: 'epoch-1917',
+    nonce: 'nonce-1917',
+    supervisorPid: process.pid,
+    supervisorStartTicks: identity.startTicks,
+    registryHash: sha256Bytes(readFileSync(registrySource)),
+    registrySource,
+    childId: 'pr2-scheduler',
+    childPid: null,
+    childStartTicks: null,
+    childGeneration: 1,
+    childRestarts: 1,
+    restartState: 'waiting-restart',
+    startedAt: new Date().toISOString(),
+    lastChildStartAt: new Date().toISOString(),
+    cordonReason: 'post-cas-epoch-owner',
+    refusalReason: null,
+    crashBackoff: {
+      rapidExits: 0,
+      backoffUntilMs: 0,
+      lastExitMs: Date.now(),
+      terminal: false,
+      terminalReason: null,
+    },
+  };
+}
+
 describe('Issue #948 wake-supervisor observer bridge', () => {
   it('returns the canonical Node scheduler registry without the retired PowerShell route', () => {
     expect(childRegistry().map((child) => child.Id)).toEqual(['pr2-scheduler']);
@@ -85,20 +134,124 @@ describe('Issue #948 wake-supervisor observer bridge', () => {
   });
 });
 
+describe('Issue #1917 scheduler operational liveness', () => {
+  it('keeps the strict child predicate instantaneous while a long live child stays operational', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'opk-1917-running-'));
+    try {
+      const nowMs = 1_000_000;
+      const identity = readProcessIdentity(process.pid);
+      const status = issue1917Status(root);
+      status.restartState = 'running';
+      status.childPid = process.pid;
+      status.childStartTicks = identity.startTicks;
+      status.crashBackoff = { ...status.crashBackoff, lastExitMs: nowMs - 143_900 };
+
+      expect(isLiveRunningSupervisorChild(status)).toBe(true);
+      expect(isSchedulerOperational(status, nowMs)).toBe(true);
+
+      status.restartState = 'waiting-restart';
+      status.childPid = null;
+      status.childStartTicks = null;
+      expect(isLiveRunningSupervisorChild(status)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps clean inter-tick progress operational through two exact cadence intervals and then expires', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'opk-1917-intertick-'));
+    try {
+      const nowMs = 1_000_000;
+      const status = issue1917Status(root, 5);
+      status.crashBackoff = { ...status.crashBackoff, lastExitMs: nowMs - 7_500 };
+      expect(isSchedulerOperational(status, nowMs)).toBe(true);
+
+      status.crashBackoff = { ...status.crashBackoff, lastExitMs: nowMs - 10_000 };
+      expect(isSchedulerOperational(status, nowMs)).toBe(true);
+
+      status.crashBackoff = { ...status.crashBackoff, lastExitMs: nowMs - 10_001 };
+      expect(isSchedulerOperational(status, nowMs)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('makes tracked status healthy during a clean inter-tick phase without mutating evidence', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'opk-1917-cli-intertick-'));
+    try {
+      const status = issue1917Status(root, 5);
+      status.crashBackoff = { ...status.crashBackoff, lastExitMs: Date.now() - 7_000 };
+      const statusPath = path.join(root, 'typescript-supervisor-status.json');
+      writeFileSync(statusPath, `${JSON.stringify(status)}\n`, 'utf8');
+      const before = readFileSync(statusPath, 'utf8');
+
+      const result = runStatus(root);
+
+      expect(result.ok, result.stderr || result.error).toBe(true);
+      expect(JSON.parse(result.stdout.trim())).toEqual({ status });
+      expect(readFileSync(statusPath, 'utf8')).toBe(before);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed for crash backoff, stale/dead terminal states, and registry drift', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'opk-1917-negative-'));
+    try {
+      const nowMs = 1_000_000;
+      const status = issue1917Status(root, 5);
+      status.crashBackoff = {
+        rapidExits: 1,
+        backoffUntilMs: nowMs + 1_000,
+        lastExitMs: nowMs - 1,
+        terminal: false,
+        terminalReason: null,
+      };
+      status.refusalReason = 'scheduler_child_exit_nonzero:boom';
+      expect(isSchedulerOperational(status, nowMs)).toBe(false);
+
+      const identity = readProcessIdentity(process.pid);
+      status.restartState = 'running';
+      status.childPid = process.pid;
+      status.childStartTicks = identity.startTicks;
+      status.refusalReason = null;
+      expect(isLiveRunningSupervisorChild(status)).toBe(true);
+      expect(isSchedulerOperational(status, nowMs)).toBe(false);
+
+      const clean = issue1917Status(root, 5);
+      clean.crashBackoff = { ...clean.crashBackoff, lastExitMs: nowMs - 10_001 };
+      expect(isSchedulerOperational(clean, nowMs)).toBe(false);
+
+      clean.crashBackoff = { ...clean.crashBackoff, lastExitMs: nowMs - 1 };
+      clean.restartState = 'refused';
+      expect(isSchedulerOperational(clean, nowMs)).toBe(false);
+      clean.restartState = 'stopping';
+      expect(isSchedulerOperational(clean, nowMs)).toBe(false);
+
+      clean.restartState = 'waiting-restart';
+      clean.supervisorStartTicks = `${clean.supervisorStartTicks}-stale`;
+      expect(isSchedulerOperational(clean, nowMs)).toBe(false);
+
+      const drift = issue1917Status(root, 5);
+      drift.crashBackoff = { ...drift.crashBackoff, lastExitMs: nowMs - 1 };
+      writeFileSync(drift.registrySource, `${JSON.stringify({ changed: true })}\n`, 'utf8');
+      expect(isSchedulerOperational(drift, nowMs)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('Issue #1484 truthful supervisor status', () => {
   it('accepts schema v2 only when supervisor and running child PID/startTicks both match', () => {
     const stateDir = mkdtempSync(path.join(tmpdir(), 'opk-1484-status-'));
     try {
       const identity = readProcessIdentity(process.pid);
       const statusPath = path.join(stateDir, 'typescript-supervisor-status.json');
-      const status = {
-        schemaVersion: 2,
-        supervisorPid: process.pid,
-        supervisorStartTicks: identity.startTicks,
-        childPid: process.pid,
-        childStartTicks: identity.startTicks,
-        restartState: 'running',
-      };
+      const status = issue1917Status(stateDir);
+      status.restartState = 'running';
+      status.childPid = process.pid;
+      status.childStartTicks = identity.startTicks;
       writeFileSync(statusPath, `${JSON.stringify(status)}\n`, 'utf8');
       const before = readFileSync(statusPath, 'utf8');
 
@@ -664,4 +817,3 @@ describe('Issue #1880 supervisor epoch-authority admission', () => {
     }
   });
 });
-
