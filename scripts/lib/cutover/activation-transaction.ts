@@ -49,10 +49,13 @@ import {
   observeRuntimeAdapterPreflight,
 } from './foundation-observation.ts';
 import {
-  isLiveRunningSupervisorChild,
+  hasSchedulerChildFailureEvidence,
   isLiveSupervisorStatus,
+  isSchedulerOperational,
   processIdentityMatches,
+  readBoundSchedulerCadenceSeconds,
   readSupervisorStatus,
+  type SupervisorStatusRecord,
 } from '../orchestrator-side-process-supervisor.ts';
 import { D928 as D928_PATHS, TARGET_LIBRARIES as TARGET_LIBRARY_PATHS } from '../../pr2a/contracts.ts';
 import { validateRuntimePreflight } from '../../pr2-foundation/binding.ts';
@@ -65,6 +68,8 @@ import { sha256Stable, stableStringify } from './stable-stringify.ts';
 const FOUNDATION_LANDING_COMMIT = 'b967dfe156838039e1d6d137e7064dc9d1b10b4d';
 const PR2A_LANDING_COMMIT = '17ac39d725ba9ae7c881816405d5225e541177c7';
 const FOUNDATION_HEARTBEAT_MAX_AGE_MS = 5 * 60_000;
+const SUPERVISOR_STARTUP_STATUS_TIMEOUT_MS = 10_000;
+const SUPERVISOR_STARTUP_STATUS_POLL_MS = 50;
 const D928 = new Set<string>(D928_PATHS);
 const TARGET_LIBRARIES = new Set<string>(TARGET_LIBRARY_PATHS);
 
@@ -511,26 +516,72 @@ async function proveFoundationAdoption(request: ActivationRequest): Promise<Foun
   };
 }
 
-export async function waitForStartedSupervisor(request: ActivationRequest, nonce: string, expectedPid: number): Promise<{ supervisorPid: number; childGeneration: number }> {
-  const deadline = Date.now() + 10_000;
+/**
+ * `activation-ready`: exact post-CAS context plus an observed scheduler generation
+ * that is either executing now or in the clean bounded post-success inter-tick
+ * transition. Registry timing is accepted only from the bytes bound to this
+ * supervisor generation.
+ */
+export function isActivationReadySupervisorStatus(
+  request: ActivationRequest,
+  nonce: string,
+  expectedPid: number,
+  statusRecord: SupervisorStatusRecord | null,
+  nowMs: number = Date.now(),
+): boolean {
+  if (!isLiveSupervisorStatus(statusRecord)) return false;
+  const status = statusRecord;
+  const committed = new FileEpochAuthority(request.paths.epochAuthorityPath).verify(request.epochId, nonce);
+  if (
+    status.epochId !== request.epochId
+    || status.nonce !== nonce
+    || status.supervisorPid !== expectedPid
+    || status.registryHash !== committed.registryHash
+    || path.resolve(status.registrySource) !== path.resolve(request.paths.targetRegistryPath)
+    || status.childGeneration < 1
+    || readBoundSchedulerCadenceSeconds(status) === null
+  ) return false;
+  return isSchedulerOperational(status, nowMs);
+}
+
+export interface SupervisorStartupWaitOptions {
+  timeoutMs?: number;
+  pollMs?: number;
+}
+
+export async function waitForStartedSupervisor(
+  request: ActivationRequest,
+  nonce: string,
+  expectedPid: number,
+  options: SupervisorStartupWaitOptions = {},
+): Promise<{ supervisorPid: number; childGeneration: number }> {
+  const timeoutMs = options.timeoutMs ?? SUPERVISOR_STARTUP_STATUS_TIMEOUT_MS;
+  const pollMs = options.pollMs ?? SUPERVISOR_STARTUP_STATUS_POLL_MS;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || !Number.isFinite(pollMs) || pollMs <= 0) {
+    throw new Error('typescript_supervisor_startup_wait_invalid');
+  }
+  const deadline = Date.now() + timeoutMs;
   do {
     const status = readSupervisorStatus({ stateDir: request.paths.supervisorStateDir });
     if (status?.schemaVersion === 1) throw new Error('typescript_supervisor_status_v1_unsupported');
     if (status?.restartState === 'refused') throw new Error(`typescript_supervisor_refused:${status.refusalReason ?? 'unknown'}`);
+    if (status?.restartState === 'stopping') throw new Error('typescript_supervisor_stopping');
     if (
       status
       && isLiveSupervisorStatus(status)
       && status.epochId === request.epochId
       && status.nonce === nonce
       && status.supervisorPid === expectedPid
-      && status.restartState === 'running'
-      && status.registryHash
-      && isLiveRunningSupervisorChild(status)
-      && status.childGeneration >= 1
+      && hasSchedulerChildFailureEvidence(status)
     ) {
-      return { supervisorPid: expectedPid, childGeneration: status.childGeneration };
+      throw new Error(`typescript_supervisor_scheduler_failed:${status.refusalReason ?? 'crash_backoff'}`);
     }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    if (isActivationReadySupervisorStatus(request, nonce, expectedPid, status)) {
+      return { supervisorPid: expectedPid, childGeneration: status!.childGeneration };
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, remainingMs)));
   } while (Date.now() < deadline);
   throw new Error('typescript_supervisor_scheduler_not_ready');
 }

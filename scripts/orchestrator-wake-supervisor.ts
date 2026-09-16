@@ -3,8 +3,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { runProcess } from './kernel/subprocess.ts';
 import {
-  isLiveRunningSupervisorChild,
-  isLiveSupervisorStatus,
+  isSchedulerOperational,
   readSupervisorStatus,
   runSupervisor,
   type SupervisorOptions,
@@ -73,7 +72,7 @@ async function main(): Promise<void> {
   if (command === 'status') {
     const status = readSupervisorStatus({ stateDir: required(args, 'state-dir') });
     process.stdout.write(`${JSON.stringify({ status })}\n`);
-    process.exitCode = isLiveSupervisorStatus(status) && isLiveRunningSupervisorChild(status) ? 0 : 1;
+    process.exitCode = isSchedulerOperational(status) ? 0 : 1;
     return;
   }
   if (command !== 'run') throw new Error('usage: orchestrator-wake-supervisor.ts run|status ...');

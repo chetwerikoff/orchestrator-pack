@@ -14,8 +14,10 @@ import { projectRegistry } from './activation-registry-projection.ts';
 import { sha256Bytes, sha256Stable } from './stable-stringify.ts';
 import type { CordonRecord, FollowupRecord, ActivationRequest, EpochCommitCore, ImportRecord, PhaseOneEnvelope, SnapshotRecord } from './types.ts';
 import {
-  isLiveRunningSupervisorChild,
+  hasSchedulerChildFailureEvidence,
   isLiveSupervisorStatus,
+  isSchedulerOperational,
+  readBoundSchedulerCadenceSeconds,
   readSupervisorStatus,
   type SupervisorStatus,
 } from '../orchestrator-side-process-supervisor.ts';
@@ -24,6 +26,8 @@ import { packReviewDeliveryNeedsResume } from '../pack-review-delivery.ts';
 
 const DEFAULT_SCHEDULER_DELIVERY_WAIT_MS = 46 * 60_000;
 const DEFAULT_SCHEDULER_DELIVERY_POLL_MS = 250;
+const RECOVERY_SUPERVISOR_STARTUP_TIMEOUT_MS = 10_000;
+const RECOVERY_SUPERVISOR_STARTUP_POLL_MS = 50;
 
 export interface SchedulerHealthDeliveryObservation {
   result: 'scheduler-health-delivery-observed';
@@ -112,23 +116,41 @@ function liveSupervisorStatus(request: ActivationRequest, nonce: string): Superv
   return status;
 }
 
+function hasExactRecoveryRegistryBinding(
+  request: ActivationRequest,
+  expectedRegistryHash: string,
+  status: SupervisorStatus,
+): boolean {
+  return status.registryHash === expectedRegistryHash
+    && typeof status.registrySource === 'string'
+    && path.resolve(status.registrySource) === path.resolve(request.paths.targetRegistryPath)
+    && readBoundSchedulerCadenceSeconds(status) !== null;
+}
+
+function assertNoRecoverySchedulerFailure(status: SupervisorStatus): void {
+  if (hasSchedulerChildFailureEvidence(status)) {
+    throw new Error(`recovery_supervisor_scheduler_failed:${status.refusalReason ?? 'crash_backoff'}`);
+  }
+}
+
 function readySupervisorStatus(request: ActivationRequest, nonce: string): { supervisorPid: number; childGeneration: number } | null {
   const status = liveSupervisorStatus(request, nonce);
-  if (!status || !status.registryHash || status.childGeneration < 1) return null;
-  if (status.restartState === 'running') {
-    if (!isLiveRunningSupervisorChild(status)) return null;
-  } else if (status.restartState !== 'waiting-restart') {
-    return null;
-  }
+  if (!status || status.childGeneration < 1) return null;
+  const committed = new FileEpochAuthority(request.paths.epochAuthorityPath).verify(request.epochId, nonce);
+  if (!hasExactRecoveryRegistryBinding(request, committed.registryHash, status)) return null;
+  assertNoRecoverySchedulerFailure(status);
+  if (!isSchedulerOperational(status)) return null;
   return { supervisorPid: status.supervisorPid, childGeneration: status.childGeneration };
 }
 
 async function waitForSupervisor(request: ActivationRequest, nonce: string): Promise<{ supervisorPid: number; childGeneration: number }> {
-  const deadline = Date.now() + 10_000;
+  const deadline = Date.now() + RECOVERY_SUPERVISOR_STARTUP_TIMEOUT_MS;
   do {
     const ready = readySupervisorStatus(request, nonce);
     if (ready) return ready;
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(RECOVERY_SUPERVISOR_STARTUP_POLL_MS, remainingMs)));
   } while (Date.now() < deadline);
   throw new Error('recovery_supervisor_not_ready');
 }
@@ -162,13 +184,10 @@ function observedSupervisorStatus(
     !status
     || status.supervisorPid !== supervisor.supervisorPid
     || status.childGeneration < supervisor.childGeneration
-    || status.registryHash !== core.registryHash
+    || !hasExactRecoveryRegistryBinding(request, core.registryHash, status)
   ) return null;
-  if (status.restartState === 'running') {
-    if (!isLiveRunningSupervisorChild(status)) return null;
-    return status;
-  }
-  return status.restartState === 'waiting-restart' ? status : null;
+  assertNoRecoverySchedulerFailure(status);
+  return isSchedulerOperational(status) ? status : null;
 }
 
 export async function observeSchedulerHealthAndDelivery(
