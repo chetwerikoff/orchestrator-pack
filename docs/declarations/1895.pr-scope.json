@@ -3,7 +3,9 @@
   "issue_number": 1895,
   "declared_paths": [
     "scripts/cursor-unsent-composer-submit.test.ts",
-    "scripts/cursor-unsent-composer-submit.ts"
+    "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/pr2-foundation/scheduler-process-integration.test.ts",
+    "scripts/pr2-foundation/scheduler.ts"
   ],
   "denylist": [
     "credentials/",
@@ -21,5 +23,5 @@
     "scripts/pr2-foundation/scheduler.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "13dd7636e645cd02160ec77ba79c7617a1064523"
+  "source_revision": "a87b9d463e8f237f8e451b7d18314aecdcca5c64"
 }
