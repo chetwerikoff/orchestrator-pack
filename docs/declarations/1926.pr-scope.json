@@ -1,0 +1,19 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1926,
+  "declared_paths": [
+    "docs/browser-gpt-turn-runbook.md"
+  ],
+  "denylist": [
+    ".orca/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/browser-gpt-turn-runbook.md",
+    "docs/declarations/"
+  ],
+  "source_revision": "eb00cda7832f6dbbfbc748c8abde765cd2dd468b"
+}
