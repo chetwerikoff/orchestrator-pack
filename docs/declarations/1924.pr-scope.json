@@ -3,6 +3,7 @@
   "issue_number": 1924,
   "declared_paths": [
     "scripts/lib/worker-smoke-core.ts",
+    "scripts/pr2-foundation/post-review-smoke.test.ts",
     "scripts/worker-smoke-run.ts"
   ],
   "denylist": [
@@ -15,7 +16,8 @@
   "allowed_roots": [
     "docs/declarations/",
     "scripts/lib/worker-smoke-core.ts",
+    "scripts/pr2-foundation/post-review-smoke.test.ts",
     "scripts/worker-smoke-run.ts"
   ],
-  "source_revision": "c6cb937d5071da7a80187cf1b7b01a38ba810b93"
+  "source_revision": "864f55d55727885ce77f1ea688e1bf4ea7d5a61f"
 }
