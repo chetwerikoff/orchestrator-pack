@@ -1567,7 +1567,7 @@ function stalePointerTargetRecipient(
 }
 
 function isLiveCursorRecipient(worker: RuntimeWorker): boolean {
-  return worker.identity.runtime === 'orca';
+  return worker.identity.runtime === 'orca' && worker.identity.id.startsWith('term_');
 }
 
 async function drainStalePointers(
@@ -1638,7 +1638,7 @@ async function drainStalePointers(
       resultState,
       shown,
       true,
-      false,
+      true,
       true,
     );
     if (terminal.dispatchStatus !== undefined && terminal.dispatchStatus !== 'send_failed') {
