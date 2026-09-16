@@ -14,7 +14,6 @@
     "vendor/"
   ],
   "allowed_roots": [
-    "docs/declarations/",
     "scripts/lib/worker-smoke-core.ts",
     "scripts/pr2-foundation/post-review-smoke.test.ts",
     "scripts/worker-smoke-run.ts"
