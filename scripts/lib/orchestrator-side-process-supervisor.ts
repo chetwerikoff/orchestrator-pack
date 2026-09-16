@@ -171,12 +171,12 @@ export function isSchedulerOperational(
 ): statusRecord is SupervisorStatus {
   if (!isLiveSupervisorStatus(statusRecord)) return false;
   const status = statusRecord;
+  if (hasSchedulerChildFailureEvidence(status)) return false;
 
   if (status.restartState === 'running') {
-    return status.refusalReason == null && isLiveRunningSupervisorChild(status);
+    return isLiveRunningSupervisorChild(status);
   }
   if (status.restartState !== 'waiting-restart') return false;
-  if (hasSchedulerChildFailureEvidence(status)) return false;
   if (status.childPid !== null || status.childStartTicks !== null) return false;
   if (!Number.isInteger(status.childGeneration) || status.childGeneration < 1) return false;
   if (!Number.isInteger(status.childRestarts) || status.childRestarts < 1) return false;
