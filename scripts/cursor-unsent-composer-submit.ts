@@ -140,9 +140,10 @@ function exactOrchestrationPointerFingerprint(preview: string): string | undefin
   const candidates = [source.join(''), source.join(' '), preview.trim()];
   const pointerPattern = /You have \d+ orchestration messages?\b[^\x60]*\x60(orca orchestration check(?: --run \S+| --terminal \S+)?)\x60\./giu;
   for (const candidate of candidates) {
-    const matches = [...candidate.matchAll(pointerPattern)];
+    const normalizedCandidate = candidate.replace(/→\s*(?=You have)/gu, '');
+    const matches = [...normalizedCandidate.matchAll(pointerPattern)];
     const commands = matches.map((match) => match[1] ?? '');
-    const remainder = candidate.replace(pointerPattern, '').replace(/\s+/gu, '');
+    const remainder = normalizedCandidate.replace(pointerPattern, '').replace(/\s+/gu, '');
     if (commands.length > 0 && !remainder && commands.every((command) => command === commands[0])) {
       return commands[0];
     }

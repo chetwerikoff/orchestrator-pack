@@ -4,10 +4,7 @@
   "declared_paths": [
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
-    "scripts/lib/orchestrator-side-process-supervisor.ts",
-    "scripts/orchestrator-wake-supervisor.test.ts",
-    "scripts/pr2-foundation/scheduler-process-integration.test.ts",
-    "scripts/pr2-foundation/scheduler.ts"
+    "scripts/pr2-foundation/scheduler-process-integration.test.ts"
   ],
   "denylist": [
     "credentials/",
@@ -25,5 +22,5 @@
     "scripts/pr2-foundation/scheduler.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "b6fab4b20b76f9c3e8b5846647172e9bf6a34114"
+  "source_revision": "8832dab1b4cd32c17304771bea897abb35ac5a62"
 }

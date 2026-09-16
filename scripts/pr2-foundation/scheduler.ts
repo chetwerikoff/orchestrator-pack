@@ -368,30 +368,6 @@ function publishObserverFailureHandoff(
     identity: { schedulerGeneration, tickSequence },
   };
 }
-function startIndependentMailReconcile(
-  reconcile: NonNullable<SchedulerBoundary['orchestrationMailReconcile']>,
-  intervalMs: number,
- ): {
-  run: NonNullable<SchedulerBoundary['orchestrationMailReconcile']>;
-  stop: () => Promise<void>;
-} {
-  type MailTurn = ReturnType<typeof reconcile>;
-  let active: MailTurn | null = null;
-  const run = (): MailTurn => {
-    if (active) return active;
-    active = reconcile().finally(() => { active = null; });
-    return active;
-  };
-  const timer = setInterval(() => { void run().catch(() => {}); }, Math.max(1, intervalMs));
-  timer.unref();
-  return {
-    run,
-    stop: async () => {
-      clearInterval(timer);
-      await active?.catch(() => undefined);
-    },
-  };
-}
 
 export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.ProcessEnv = process.env): Promise<{
   attempted: number;
@@ -619,7 +595,7 @@ export function createProductionPostReviewSmokeReconciler(input: {
   };
 }
 
-async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; cadence: number; stopMailReconcile: () => Promise<void> }> {
+async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; cadence: number }> {
   const parsed = parseFoundationConfig({}); if (!parsed.ok) throw new Error(`${parsed.reason}:${parsed.path}`);
   const repoRoot = process.cwd(); const cadence = parsed.config.scheduler.pollIntervalMs; const env = process.env; const projectId = 'orchestrator-pack';
   const epoch = assertSchedulerEpoch(env); const activationLineage = schedulerActivationLineage(epoch);
@@ -629,10 +605,9 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
     const deps = createAdapterSubmitDeps(runtime);
     return await runOrchestrationMailReconcileTick(createOrcaMessageSubmitDeps(runtime, deps));
   };
-  const mailCadence = startIndependentMailReconcile(executeOrchestrationMailReconcile, cadence);
   const runSerializedMailTurn = async (): Promise<void> => {
     try {
-      await mailCadence.run();
+      await executeOrchestrationMailReconcile();
     } catch {
       // Lifecycle reconciliation remains fail-closed and bounded. The normal
       // tick mail reconcile below remains the visible failure surface/retry.
@@ -745,7 +720,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
     selectAdapter: () => selectRuntimeAdapter({ env }),
   });
   const orchestrationMailReconcile: NonNullable<SchedulerBoundary['orchestrationMailReconcile']> = async () =>
-    await mailCadence.run();
+    await executeOrchestrationMailReconcile();
   const postReviewSmoke = createProductionPostReviewSmokeReconciler({
     projectId,
     repoRoot,
@@ -772,7 +747,6 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       publishHandoff,
     }),
     cadence,
-    stopMailReconcile: mailCadence.stop,
   };
 }
 
@@ -801,15 +775,11 @@ export function writeSchedulerTickResult(
 }
 
 async function runSingleTick(): Promise<void> {
-  const { boundary, stopMailReconcile } = await loadProductionBoundary();
-  try {
-    const result = await runSchedulerTick(boundary);
-    writeSchedulerTickResult(result);
-    const failure = schedulerFleetPhaseFailure(result);
-    if (failure) throw new Error(failure);
-  } finally {
-    await stopMailReconcile();
-  }
+  const { boundary } = await loadProductionBoundary();
+  const result = await runSchedulerTick(boundary);
+  writeSchedulerTickResult(result);
+  const failure = schedulerFleetPhaseFailure(result);
+  if (failure) throw new Error(failure);
 }
 async function runLoop(): Promise<void> {
   const { boundary, cadence } = await loadProductionBoundary();

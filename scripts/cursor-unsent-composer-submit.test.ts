@@ -388,6 +388,20 @@ describe('submitUnsentCursorComposer', () => {
     expect(submitted).toEqual([worker('term_repeated').identity]);
   });
 
+  it('submits repeated Orca pointers rendered behind one prompt arrow', () => {
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const pointer = 'You have 1 orchestration message. Run `orca orchestration check --run run_orca_stack`.';
+    const result = submitUnsentCursorComposer(
+      { watch: true },
+      depsFor(
+        { term_orca_stack: [`→ ${pointer}→${pointer}`, ...CURSOR_FOOTER] },
+        { submitted },
+      ),
+    );
+    expect(result.terminals[0]?.reason).toBe('enter_sent');
+    expect(submitted).toEqual([worker('term_orca_stack').identity]);
+  });
+
   it('never enters an idle transcript followed by the composer placeholder', () => {
     const submitted: RuntimeWorkerIdentity[] = [];
     const state = createUnsentComposerWatchState();
