@@ -26,5 +26,5 @@
     "scripts/orchestrator-wake-supervisor.test.ts",
     "scripts/orchestrator-wake-supervisor.ts"
   ],
-  "source_revision": "e4b9bb3a6e78c9c3bf26dd7056b382083338c8b3"
+  "source_revision": "f8d8ddd77fded5b5bd01bcf4271a36b8882fbd43"
 }
