@@ -8,6 +8,7 @@ import {
   acquireWatchLock,
   classifyCursorComposer,
   composerPokeFingerprint,
+  exactOrchestrationPointerFingerprint,
   createAdapterSubmitDeps,
   createOrcaMessageSubmitDeps,
   createUnsentComposerWatchState,
@@ -280,6 +281,84 @@ ${POKE}
 Cursor Grok 4.6 High · 40.6% · 22 files edited Run Everything
 ~/projects/orchestrator-pack · main
 `)).toBe('non_empty');
+  });
+});
+
+describe('AC17 unboxed composer prompt marker', () => {
+  const pointer = 'You have 1 orchestration message. Run `orca orchestration check --run run_8ba07bc0c7b6`.';
+  const command = 'orca orchestration check --run run_8ba07bc0c7b6';
+  const footer = [
+    'Cursor Grok 4.6 High · 31.2% · 8 files edited      Run Everything',
+    '~/Projects/orchestrator-pack · main',
+  ];
+  const preview = (withMarker: boolean, mixed = false): string => [
+    'transcript line one',
+    'transcript line two',
+    'transcript line three',
+    ...(withMarker
+      ? [`→ ${pointer}`, ...(mixed ? ['  operator text'] : []), `  ${pointer}`, `  ${pointer}`]
+      : [pointer, ...(mixed ? ['operator text'] : []), pointer, pointer]),
+    '1 task',
+    ...footer,
+  ].join('\n');
+
+  it('resolves an inline-arrow pointer after transcript history and submits Enter', async () => {
+    const target = worker('term_ac17_inline');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let visible = true;
+    let livenessCalls = 0;
+    const result = await submitUnsentCursorComposerOnceForWorker(target, depsFor({}, {
+      submitted,
+      read: () => ({
+        ok: true as const,
+        lines: visible ? preview(true).split('\n') : ['→ Add a follow-up', ...CURSOR_FOOTER],
+        source: 'screen' as const,
+      }),
+      liveness: () => livenessCalls++ === 0 ? 'idle' : 'busy',
+      submit: (identity) => {
+        submitted.push(identity);
+        visible = false;
+        return { status: 'dispatched' as const };
+      },
+    }));
+
+    expect(exactOrchestrationPointerFingerprint(preview(true))).toBe(command);
+    expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
+    expect(submitted).toEqual([target.identity]);
+  });
+
+  it('refuses an inline-arrow pointer mixed with operator text', async () => {
+    const target = worker('term_ac17_mixed');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const result = await submitUnsentCursorComposerOnceForWorker(target, depsFor({}, {
+      submitted,
+      read: () => ({ ok: true as const, lines: preview(true, true).split('\n'), source: 'screen' as const }),
+      submit: (identity) => {
+        submitted.push(identity);
+        return { status: 'dispatched' as const };
+      },
+    }));
+
+    expect(exactOrchestrationPointerFingerprint(preview(true, true))).toBeUndefined();
+    expect(result.terminals[0]).toMatchObject({ reason: 'composer_not_orchestration_pointer', enter: false });
+    expect(submitted).toHaveLength(0);
+  });
+
+  it('keeps the existing refusal when the same unboxed fixture has no prompt marker', async () => {
+    const target = worker('term_ac17_no_marker');
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const result = await submitUnsentCursorComposerOnceForWorker(target, depsFor({}, {
+      submitted,
+      read: () => ({ ok: true as const, lines: preview(false).split('\n'), source: 'screen' as const }),
+      submit: (identity) => {
+        submitted.push(identity);
+        return { status: 'dispatched' as const };
+      },
+    }));
+
+    expect(exactOrchestrationPointerFingerprint(preview(false))).toBeUndefined();
+    expect(result.terminals[0]).toMatchObject({ reason: 'composer_not_orchestration_pointer', enter: false });
+    expect(submitted).toHaveLength(0);
   });
 });
 

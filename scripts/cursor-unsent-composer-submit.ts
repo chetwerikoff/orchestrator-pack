@@ -29,6 +29,8 @@ const EMPTY_COMPOSER = /^(?:→\s*)?Add a follow-up\b/iu;
 export const ORCHESTRATION_NOTICE = /^You have \d+ orchestration messages?\.(?: .*)? Run `orca orchestration check(?: --run \S+| --terminal \S+)?`\.$/iu;
 const ORCHESTRATION_CHECK_COMMAND = /orca orchestration check(?: --run \S+| --terminal \S+)?/iu;
 const LONE_ARROW = /^→$/u;
+const UNBOXED_PROMPT_MARKER = /^→(?:\s|$)/u;
+const UNBOXED_TASK_COUNT = /^\d+ tasks?$/iu;
 const BOX_TOP = /^\s*▄{8,}\s*$/u;
 const BOX_BOTTOM = /^\s*▀{8,}\s*$/u;
 const DEFAULT_INTERVAL_MS = 2_000;
@@ -85,8 +87,21 @@ function composerContentLines(
     : content.filter((line, index) => index === 0 || !ORCHESTRATION_NOTICE.test(line));
 }
 
+function unboxedRegionLines(preview: string): string[] {
+  const lines = trimNonEmpty(preview.split(/\r?\n/));
+  let markerIndex = -1;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (UNBOXED_PROMPT_MARKER.test(lines[index] ?? '')) markerIndex = index;
+  }
+  if (markerIndex < 0) return lines;
+  return lines
+    .slice(markerIndex)
+    .map((line) => line.replace(/^→\s*/u, '').trim())
+    .filter(Boolean);
+}
+
 function unboxedComposerLines(preview: string, includeTrailingNotices = false): string[] {
-  const lines = composerContentLines(preview.split(/\r?\n/), includeTrailingNotices);
+  const lines = composerContentLines(unboxedRegionLines(preview), includeTrailingNotices);
   let end = lines.length;
   while (
     end > 0
@@ -94,19 +109,28 @@ function unboxedComposerLines(preview: string, includeTrailingNotices = false): 
   ) {
     end -= 1;
   }
+  const trimmed = lines.slice(0, end);
   if (
-    end >= 2
-    && UNBOXED_STATUS_FOOTER.test(lines[end - 2] ?? '')
-    && UNBOXED_CWD_FOOTER.test(lines[end - 1] ?? '')
+    trimmed.length >= 3
+    && UNBOXED_STATUS_FOOTER.test(trimmed.at(-2) ?? '')
+    && UNBOXED_CWD_FOOTER.test(trimmed.at(-1) ?? '')
+    && UNBOXED_TASK_COUNT.test(trimmed.at(-3) ?? '')
   ) {
-    return lines.slice(0, end - 2);
+    trimmed.splice(-3, 1);
+  }
+  if (
+    trimmed.length >= 2
+    && UNBOXED_STATUS_FOOTER.test(trimmed.at(-2) ?? '')
+    && UNBOXED_CWD_FOOTER.test(trimmed.at(-1) ?? '')
+  ) {
+    return trimmed.slice(0, -2);
   }
   return [];
 }
 
 function isRecognizedComposerPreview(preview: string): boolean {
   if (composerInterior(preview)) return true;
-  const lines = trimNonEmpty(preview.split(/\r?\n/));
+  const lines = unboxedRegionLines(preview);
   let end = lines.length;
   while (
     end > 0
@@ -114,12 +138,21 @@ function isRecognizedComposerPreview(preview: string): boolean {
   ) {
     end -= 1;
   }
+  const trimmed = lines.slice(0, end);
   if (
-    end >= 2
-    && UNBOXED_STATUS_FOOTER.test(lines[end - 2] ?? '')
-    && UNBOXED_CWD_FOOTER.test(lines[end - 1] ?? '')
+    trimmed.length >= 3
+    && UNBOXED_STATUS_FOOTER.test(trimmed.at(-2) ?? '')
+    && UNBOXED_CWD_FOOTER.test(trimmed.at(-1) ?? '')
+    && UNBOXED_TASK_COUNT.test(trimmed.at(-3) ?? '')
+  ) {
+    trimmed.splice(-3, 1);
+  }
+  if (
+    trimmed.length >= 2
+    && UNBOXED_STATUS_FOOTER.test(trimmed.at(-2) ?? '')
+    && UNBOXED_CWD_FOOTER.test(trimmed.at(-1) ?? '')
   ) return true;
-  return end === 1 && EMPTY_COMPOSER.test(lines[0] ?? '');
+  return trimmed.length === 1 && EMPTY_COMPOSER.test(trimmed[0] ?? '');
 }
 
 function classifyContent(
@@ -149,7 +182,7 @@ export function composerPokeFingerprint(preview: string): string {
   return source.join('\n');
 }
 
-function exactOrchestrationPointerFingerprint(preview: string): string | undefined {
+export function exactOrchestrationPointerFingerprint(preview: string): string | undefined {
   const interior = composerInterior(preview);
   const source = interior
     ? composerContentLines(interior, true)
