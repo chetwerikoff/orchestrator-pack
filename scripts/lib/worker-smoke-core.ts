@@ -312,11 +312,12 @@ function targetBindingReason(
 }
 
 function strictReportReason(report: base.SmokeReport): string | undefined {
+  const carryOnly = isCarryOnlySelectiveReport(report);
   if (report.producer !== base.SMOKE_REPORT_PRODUCER) return 'producer_missing_or_invalid';
-  if (!base.smokeTerminalHandleLooksValid(report.terminalHandle)) return 'terminal_handle_missing_or_invalid';
+  if (!carryOnly && !base.smokeTerminalHandleLooksValid(report.terminalHandle)) return 'terminal_handle_missing_or_invalid';
   if (!report.orcaExecutable?.trim()) return 'orca_executable_missing';
   if (report.trackedFilesUnmodified !== true) return 'tracked_files_modified_or_missing';
-  if (!base.isClosedOwnedSmokeTerminalCleanup(report.terminalCleanup)) return 'terminal_cleanup_missing_or_invalid';
+  if (!carryOnly && !base.isClosedOwnedSmokeTerminalCleanup(report.terminalCleanup)) return 'terminal_cleanup_missing_or_invalid';
   if (!Array.isArray(report.scenarios) || report.scenarios.length === 0) return 'scenario_rows_missing';
 
   const seen = new Set<string>();
@@ -819,6 +820,18 @@ function projectedCarriedObservation(scenario: base.SmokeScenario): boolean {
   return scenario.outcome === 'pass' && CARRIED_OBSERVED_PATTERN.test(scenario.observed?.trim() ?? '');
 }
 
+function isCarryOnlySelectiveReport(report: base.SmokeReport): boolean {
+  const currentHead = report.headSha.trim().toLowerCase();
+  return report.result === 'PASS'
+    && report.terminalCleanup === 'not_started_no_execution'
+    && !String(report.terminalHandle ?? '').trim()
+    && Array.isArray(report.scenarios)
+    && report.scenarios.length > 0
+    && report.scenarios.every((scenario) =>
+      projectedCarriedObservation(scenario)
+      && scenario.observed?.trim().endsWith(`; not freshly executed on ${currentHead}`) === true);
+}
+
 export function planWorkerSmokeSelectiveRetry(input: {
   issueBody: string;
   prBody: string;
@@ -879,20 +892,23 @@ export function planWorkerSmokeSelectiveRetry(input: {
 
   const relevant: typeof valid = [];
   let lineageUnprovable = false;
+  let nonDescendant = false;
   for (const candidate of valid) {
     try {
       if (ancestorOfCurrent(candidate.headSha)) relevant.push(candidate);
+      else nonDescendant = true;
     } catch {
       lineageUnprovable = true;
     }
   }
+  if (lineageUnprovable) {
+    return fullRetry(fullPlan, affected.tupleKeys, affected.diagnostics, 'history_lineage_unprovable');
+  }
+  if (nonDescendant) {
+    return fullRetry(fullPlan, affected.tupleKeys, affected.diagnostics, 'history_non_descendant');
+  }
   if (relevant.length === 0) {
-    return fullRetry(
-      fullPlan,
-      affected.tupleKeys,
-      affected.diagnostics,
-      lineageUnprovable ? 'history_lineage_unprovable' : 'history_non_descendant',
-    );
+    return fullRetry(fullPlan, affected.tupleKeys, affected.diagnostics, 'history_non_descendant');
   }
 
   const rowsByHead = new Map<string, Map<string, {
