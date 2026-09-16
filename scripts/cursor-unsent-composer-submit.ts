@@ -1585,6 +1585,7 @@ export async function runOrchestrationMailReconcileTick(
     };
     const reasons: string[] = [];
     const deliveryEvidence: OrchestrationMailDeliveryEvidence[] = [];
+    const coalescedPointerKeys = new Set<string>();
     let attempted = 0; let nudged = 0; let skipped = 0;
     for (const row of rowsToProcess) {
       const id = row.id!.trim();
@@ -1642,9 +1643,19 @@ export async function runOrchestrationMailReconcileTick(
             const reason = observed && !observed.ok ? observed.reason : 'orchestration_message_unretrievable';
             result = deliveryNoEffect(reason, worker, false);
           } else {
-            result = await submitOrcaMessageDeliveryPointerForMessage(message, reconcileDeps, retryableEpisodeIds.has(id) || recentReadIds.has(id));
-            const evidence = deliveryLookingEvidence(message, worker, result);
-            if (evidence) deliveryEvidence.push(evidence);
+            const pointerKey = pointerLedgerKey(message, worker);
+            if (coalescedPointerKeys.has(pointerKey)) {
+              result = deliveryNoEffect('orchestration_episode_already_claimed', worker, false);
+            } else {
+              result = await submitOrcaMessageDeliveryPointerForMessage(message, reconcileDeps, retryableEpisodeIds.has(id) || recentReadIds.has(id));
+              const terminal = result.terminals[0];
+              const pointerAttempted = terminal?.enter
+                || (terminal?.dispatchStatus !== undefined && terminal.dispatchStatus !== 'send_failed')
+                || terminal?.reason === 'pointer_consumed';
+              if (pointerAttempted) coalescedPointerKeys.add(pointerKey);
+              const evidence = deliveryLookingEvidence(message, worker, result);
+              if (evidence) deliveryEvidence.push(evidence);
+            }
           }
         }
       }

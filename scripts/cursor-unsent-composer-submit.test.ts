@@ -2422,8 +2422,59 @@ describe('orchestration mail reconciliation', () => {
     expect(deps.pointer).toBe(`You have 3 orchestration messages. Run \`orca orchestration check --terminal ${target.identity.id}\`.`);
     expect(result.attempted).toBe(3);
     expect(result.nudged).toBe(1);
-    expect(result.skipped).toBe(0);
+    expect(result.skipped).toBe(2);
     expect(submitted).toHaveLength(1);
+  });
+
+  it('coalesces repeated pointer attempts while the first Enter is still rendering', async () => {
+    const target = worker('term_reconcile_pointer_coalesce');
+    const rows = [
+      { id: 'msg_coalesce_a', run_id: 'run_coalesce', to_handle: target.identity.id, read: 0 },
+      { id: 'msg_coalesce_b', run_id: 'run_coalesce', to_handle: target.identity.id, read: 0 },
+      { id: 'msg_coalesce_c', run_id: 'run_coalesce', to_handle: target.identity.id, read: 0 },
+    ];
+    const messages = new Map(rows.map((row) => [row.id, {
+      id: row.id,
+      runId: row.run_id,
+      recipient: row.to_handle,
+      consumed: false,
+    }]));
+    const pointer = buildDeliveryPointer(messages.get(rows[0]!.id)!);
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const root = mkdtempSync(join(tmpdir(), 'opk-reconcile-pointer-coalesce-'));
+    const deps = {
+      readInbox: () => ({ ok: true as const, result: { messages: rows } }),
+      lookupMessage: (id: string) => ({
+        ok: true as const,
+        message: messages.get(id)!,
+      }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      isMessageRetrievable: () => ({ ok: true as const }),
+      submitDeps: depsFor({}, {
+        submitted,
+        read: () => ({
+          ok: true as const,
+          lines: [pointer, pointer, pointer, ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        }),
+      }),
+    };
+    try {
+      const result = await runOrchestrationMailReconcileTick(deps, {
+        ledgerPath: join(root, 'orchestration-mail-reconcile.json'),
+        lockPath: join(root, 'orchestration-mail-reconcile.lock'),
+        now: () => 1_000,
+      });
+      expect(submitted).toEqual([target.identity]);
+      expect(result.reasons).toEqual([
+        'msg_coalesce_a:submission_unconfirmed',
+        'msg_coalesce_b:orchestration_episode_already_claimed',
+        'msg_coalesce_c:orchestration_episode_already_claimed',
+      ]);
+      expect(result.skipped).toBe(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('migrates legacy run-scoped claims before stale-key pruning', async () => {
