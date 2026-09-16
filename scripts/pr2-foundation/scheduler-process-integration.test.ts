@@ -92,11 +92,20 @@ switch (operation) {
     break;
   }
   case 'orchestration inbox':
-    out({ ok: true, result: { messages: state.mailMessages ?? [] } });
+    state.inboxReads = Number(state.inboxReads ?? 0) + 1;
+    const messages = state.mailMessagesVisibleAfter === undefined || state.inboxReads >= state.mailMessagesVisibleAfter
+      ? state.mailMessages ?? []
+      : [];
+    out({ ok: true, result: { messages } });
     break;
   case 'orchestration check':
     if (state.retrievability === 'consumer_fenced') {
-      out({ ok: false, error: { code: 'consumer_fenced', message: 'terminal is owner-scoped' } });
+      const response = state.consumerFencedResponse ?? {
+        ok: false,
+        error: { code: 'consumer_fenced', message: 'This terminal is attested as <A> and cannot act as <B>' },
+      };
+      state.consumerFencedResponses = [...(state.consumerFencedResponses ?? []), response];
+      out(response);
     } else {
       out({ ok: true, result: { messages: state.mailMessages ?? [] } });
     }
@@ -197,6 +206,12 @@ switch (operation) {
       break;
     }
     const message = get('--text');
+    if (args.includes('--text') && !args.includes('--enter')) {
+      state.pointerWrites = Number(state.pointerWrites ?? 0) + 1;
+    }
+    if (args.includes('--enter')) {
+      state.enterDispatches = Number(state.enterDispatches ?? 0) + 1;
+    }
     state.dispatches = [...(state.dispatches ?? []), { workerId: worker.id, message }];
     worker.lines = state.consumePointerOnSubmit && !message ? [] : [...worker.lines, message];
     if (state.corruptJournalAfterSend) {
@@ -274,8 +289,14 @@ interface FixtureState {
   listWorkerWorktrees?: string[];
   runMessages?: Array<{ runId: string; dispatchId: string; type: string; payload: string }>;
   mailMessages?: Array<{ id: string; run_id: string; to_handle: string; read: number }>;
+  mailMessagesVisibleAfter?: number;
+  inboxReads?: number;
   retrievability?: string;
+  consumerFencedResponse?: { ok: false; error: { code: 'consumer_fenced'; message: string } };
+  consumerFencedResponses?: Array<{ ok: false; error: { code: 'consumer_fenced'; message: string } }>;
   consumePointerOnSubmit?: boolean;
+  pointerWrites?: number;
+  enterDispatches?: number;
   sendCalls?: number;
   resolveCalls?: number;
   dropResolutionAtCall?: number;
@@ -483,6 +504,10 @@ describe('scheduler bounded-child production composition', () => {
       counts: { observed: 0, terminal: 0, retired: 0 },
     });
   });
+  const observedConsumerFencedResponses = [
+    ['terminal-attestation', { ok: false as const, error: { code: 'consumer_fenced' as const, message: 'This terminal is attested as <A> and cannot act as <B>' } }],
+    ['coordinator-unbound', { ok: false as const, error: { code: 'consumer_fenced' as const, message: 'This coordinator terminal is no longer bound to Run <R>' } }],
+  ] as const;
 
   it('delivers terminal-fenced mail through the production scheduler without duplicate Enter', async () => {
     const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json');
@@ -492,6 +517,7 @@ describe('scheduler bounded-child production composition', () => {
     writeFileSync(fixturePath, JSON.stringify({
       workers: [{ id: target, generation: 'generation-mail-fenced', bindingKey: 'dispatch-mail-fenced', lines: [pointer, 'Cursor Grok 4.6 High · 40.6% Run Everything', '~/projects/orchestrator-pack · main'], liveness: 'busy' }],
       mailMessages: [{ id: 'msg-mail-fenced', run_id: 'run-mail-fenced', to_handle: target, read: 0 }],
+      mailMessagesVisibleAfter: 2,
       retrievability: 'consumer_fenced', consumePointerOnSubmit: true, dispatches: [], sendCalls: 0,
     }));
     writeEpoch(epochPath, 'epoch-mail-fenced', 'nonce-mail-fenced');
@@ -499,12 +525,79 @@ describe('scheduler bounded-child production composition', () => {
     await publishLocal(env, 'dispatch-mail-fenced', 'task-mail-fenced');
     const first = await runTick(env);
     expect(fixture(fixturePath).dispatches?.filter(({ message }) => message === '')).toHaveLength(1);
-    expect((schedulerResult(first).orchestrationMailReconcile as Record<string, unknown>).nudged).toBeGreaterThanOrEqual(0);
-    expect(fixture(fixturePath).workers[0]?.lines).toEqual([]);
+    expect((schedulerResult(first).orchestrationMailReconcile as Record<string, unknown>).nudged).toBeGreaterThanOrEqual(1);
+    expect(fixture(fixturePath).workers[0]?.lines).not.toContain(pointer);
     const second = await runTick(env);
     expect(fixture(fixturePath).dispatches?.filter(({ message }) => message === '')).toHaveLength(1);
     expect((schedulerResult(second).orchestrationMailReconcile as Record<string, unknown>).nudged).toBe(0);
   });
+
+  it.each(observedConsumerFencedResponses)(
+    'at the Orca CLI boundary, consumer_fenced %s qualifies only with an exact visible target pointer and disabled pack pointer creation',
+    async (label, response) => {
+      const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json');
+      const target = `term_cli_fenced_${label}`; const messageId = `msg_cli_fenced_${label}`; const pointer = `You have 1 orchestration message. Read and act on your orchestration message. Run \`orca orchestration check --terminal ${target}\`.`;
+      writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
+      writeFileSync(fixturePath, JSON.stringify({
+        workers: [{ id: target, generation: `generation-${label}`, bindingKey: `dispatch-${label}`, lines: [pointer, 'Cursor Grok 4.6 High · 40.6% Run Everything', '~/projects/orchestrator-pack · main'], liveness: 'busy' }],
+        mailMessages: [{ id: messageId, run_id: `run_cli_fenced_${label}`, to_handle: target, read: 0 }],
+        mailMessagesVisibleAfter: 2,
+        retrievability: 'consumer_fenced', consumerFencedResponse: response, consumePointerOnSubmit: true, dispatches: [], sendCalls: 0,
+      }));
+      writeEpoch(epochPath, `epoch-cli-fenced-${label}`, `nonce-cli-fenced-${label}`);
+      const env = processEnv(root, fixturePath, epochPath, configPath, `epoch-cli-fenced-${label}`, `nonce-cli-fenced-${label}`);
+      await publishLocal(env, `dispatch-${label}`, `task-cli-fenced-${label}`);
+      const first = await runTick(env);
+      const firstMail = schedulerResult(first).orchestrationMailReconcile as Record<string, unknown>;
+      const observed = fixture(fixturePath).consumerFencedResponses ?? [];
+      expect(response.ok).toBe(false);
+      expect(response.error.code).toBe('consumer_fenced');
+      expect(observed).toEqual(expect.arrayContaining([response]));
+      expect(firstMail.attempted).toBe(1);
+      expect(firstMail.nudged).toBeGreaterThanOrEqual(1);
+      expect(firstMail.reasons).toContain(`${messageId}:enter_sent`);
+      expect(fixture(fixturePath).pointerWrites ?? 0).toBe(0);
+      expect(fixture(fixturePath).enterDispatches ?? 0).toBe(1);
+      expect(fixture(fixturePath).dispatches?.filter(({ message }) => message === '')).toHaveLength(1);
+      expect(fixture(fixturePath).workers[0]?.lines).not.toContain(pointer);
+      const second = await runTick(env);
+      const secondMail = schedulerResult(second).orchestrationMailReconcile as Record<string, unknown>;
+      expect(secondMail.nudged).toBe(0);
+      expect(fixture(fixturePath).enterDispatches ?? 0).toBe(1);
+      expect(fixture(fixturePath).dispatches?.filter(({ message }) => message === '')).toHaveLength(1);
+    },
+  );
+
+  it.each(observedConsumerFencedResponses)(
+    'at the Orca CLI boundary, consumer_fenced %s stays fail-closed for every non-matching visible pointer',
+    async (label, response) => {
+      const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json');
+      const target = `term_cli_fenced_mismatch_${label}`; const otherTarget = `term_other_fenced_${label}`; const messageId = `msg_cli_fenced_mismatch_${label}`; const pointer = `You have 1 orchestration message. Read and act on your orchestration message. Run \`orca orchestration check --terminal ${otherTarget}\`.`;
+      writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
+      writeFileSync(fixturePath, JSON.stringify({
+        workers: [{ id: target, generation: `generation-mismatch-${label}`, bindingKey: `dispatch-mismatch-${label}`, lines: [pointer, 'Cursor Grok 4.6 High · 40.6% Run Everything', '~/projects/orchestrator-pack · main'], liveness: 'busy' }],
+        mailMessages: [{ id: messageId, run_id: `run_cli_fenced_mismatch_${label}`, to_handle: target, read: 0 }],
+        mailMessagesVisibleAfter: 2,
+        retrievability: 'consumer_fenced', consumerFencedResponse: response, consumePointerOnSubmit: true, dispatches: [], sendCalls: 0,
+      }));
+      writeEpoch(epochPath, `epoch-cli-fenced-mismatch-${label}`, `nonce-cli-fenced-mismatch-${label}`);
+      const env = processEnv(root, fixturePath, epochPath, configPath, `epoch-cli-fenced-mismatch-${label}`, `nonce-cli-fenced-mismatch-${label}`);
+      await publishLocal(env, `dispatch-mismatch-${label}`, `task-cli-fenced-mismatch-${label}`);
+      const first = await runTick(env);
+      const firstMail = schedulerResult(first).orchestrationMailReconcile as Record<string, unknown>;
+      const observed = fixture(fixturePath).consumerFencedResponses ?? [];
+      expect(observed).toEqual(expect.arrayContaining([response]));
+      expect(firstMail.attempted).toBe(1);
+      expect(firstMail.nudged).toBe(0);
+      expect(firstMail.reasons).toContain(`${messageId}:composer_not_empty_before_delivery`);
+      expect(firstMail.deliveryEvidence).toEqual([]);
+      expect(fixture(fixturePath).pointerWrites ?? 0).toBe(0);
+      expect(fixture(fixturePath).enterDispatches ?? 0).toBe(0);
+      expect(fixture(fixturePath).dispatches?.filter(({ message }) => message === '')).toHaveLength(0);
+      expect(fixture(fixturePath).workers[0]?.lines).toContain(pointer);
+    },
+  );
+
 
   it('starts a fresh baseline after an activation epoch change', async () => {
     const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json');
