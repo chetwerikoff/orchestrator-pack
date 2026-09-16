@@ -345,6 +345,11 @@ function selectivePlanBody(specs: readonly { action: string; expected: string }[
   return `\`\`\`behavior-kind\naction-producing\n\`\`\`\n\n\`\`\`smoke-test-plan\nscenarios:\n${rows}\n\`\`\``;
 }
 
+function selectiveTieredPlanBody(specs: readonly { action: string; expected: string }[] = selectiveScenarios): string {
+  const rows = specs.map((entry) => `  - action: ${entry.action} | expected: ${entry.expected}`).join('\n');
+  return `\`\`\`behavior-kind\naction-producing\n\`\`\`\n\n\`\`\`complexity-tier\ntier: T3\nadvisory-prior: T3\n\`\`\`\n\n\`\`\`smoke-test-plan\nscenarios:\n${rows}\n\`\`\``;
+}
+
 function selectiveScenario(index: number, outcome: SmokeScenario['outcome'] = 'pass'): SmokeScenario {
   const spec = selectiveScenarios[index - 1]!;
   return { action: spec.action, expected: spec.expected, observed: `${spec.action} ${outcome ?? 'unknown'}`, outcome };
@@ -506,6 +511,42 @@ describe('Issue #1924 selective smoke retry', () => {
     expect(selection.carried).toHaveLength(0);
   });
 
+  it('falls back to the full plan when any valid history candidate has unprovable current-head ancestry', () => {
+    const selection = planWorkerSmokeSelectiveRetry({
+      issueBody: selectivePlanBody([selectiveScenarios[0], selectiveScenarios[1]]),
+      prBody: '',
+      comments: [
+        selectiveComment(1, selectiveReport(SHA_A, [selectiveScenario(1)])),
+        selectiveComment(2, selectiveReport(SHA_B, [selectiveScenario(2, 'fail')], 'FAIL')),
+      ],
+      target: selectiveTarget(SHA_C),
+      isAncestor: (ancestorSha, descendantSha) => {
+        if (ancestorSha === SHA_A && descendantSha === SHA_C) return true;
+        if (ancestorSha === SHA_B && descendantSha === SHA_C) throw new Error('fixture ancestry unavailable');
+        return ancestorSha === descendantSha;
+      },
+    });
+    expect(selection.fallbackReason).toBe('history_lineage_unprovable');
+    expect(indexesOf(selection.attemptPlan)).toEqual([1, 2]);
+    expect(selection.carried).toHaveLength(0);
+  });
+
+  it('falls back to the full plan on mixed rewritten history instead of keeping an older ancestor PASS', () => {
+    const selection = planWorkerSmokeSelectiveRetry({
+      issueBody: selectivePlanBody([selectiveScenarios[0], selectiveScenarios[1]]),
+      prBody: '',
+      comments: [
+        selectiveComment(1, selectiveReport(SHA_A, [selectiveScenario(1), selectiveScenario(2)])),
+        selectiveComment(2, selectiveReport(SHA_B, [selectiveScenario(2, 'fail')], 'FAIL')),
+      ],
+      target: selectiveTarget(SHA_C),
+      isAncestor: ancestry([[SHA_A, SHA_B], [SHA_A, SHA_C]]),
+    });
+    expect(selection.fallbackReason).toBe('history_non_descendant');
+    expect(indexesOf(selection.attemptPlan)).toEqual([1, 2]);
+    expect(selection.carried).toHaveLength(0);
+  });
+
   it('reruns only the tuple whose maximal ancestor observations are incomparable', () => {
     const selection = planWorkerSmokeSelectiveRetry({
       issueBody: selectivePlanBody([selectiveScenarios[0], selectiveScenarios[1]]),
@@ -563,6 +604,81 @@ describe('Issue #1924 selective smoke retry', () => {
     expect(projected.scenarios?.[0]?.observed).toContain('not freshly executed');
     expect(projected.environmentNotes).toContain('smoke-carried=2');
     expect(projected.environmentNotes).toContain('smoke-fresh=2');
+  });
+
+  it('runs a carry-only zero-execution plan through the production independent path without reserving or spawning', async () => {
+    const input = makeFixture();
+    vi.stubEnv('PACK_REVIEW_RUN_STORE_ROOT', input.reviewRoot);
+    const issueBody = selectiveTieredPlanBody([selectiveScenarios[1]]);
+    const issueBodyFile = path.join(input.root, 'selective-issue.md');
+    writeFileSync(issueBodyFile, issueBody, 'utf8');
+    const prBody = `Closes #${SELECTIVE_ISSUE}\n\n${affected(input.headSha, [2])}`;
+    const history = [selectiveComment(1, selectiveReport(input.headSha, [selectiveScenario(2)]))];
+    const runtime = makeRuntime(input, 'unused-selective-binding');
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      const code = await runSmokeAttempt({
+        command: 'run',
+        issueNumber: SELECTIVE_ISSUE,
+        prNumber: SELECTIVE_PR,
+        headSha: input.headSha,
+        issueBodyFile,
+        smokeComplexity: 'complex',
+        smokeActor: 'independent',
+        operatorSmokeOnly: false,
+        repoRoot: input.workspace,
+        cwd: input.workspace,
+        dryRun: true,
+        json: true,
+        reviewId: '',
+        reviewHeadSha: '',
+      }, {
+        adapter: runtime.adapter,
+        resolveProfile: () => ({
+          complexity: 'complex',
+          family: 'cursor',
+          agent: 'cursor-agent',
+          command: 'cursor-agent',
+          names: [
+            'PACK_EXECUTOR_SMOKE_COMPLEX_AGENT',
+            'PACK_EXECUTOR_SMOKE_COMPLEX_MODEL',
+            'PACK_EXECUTOR_SMOKE_COMPLEX_EFFORT',
+          ],
+        }),
+        resolveTarget: () => ({
+          repositorySlug: REPO,
+          issueNumber: SELECTIVE_ISSUE,
+          prNumber: SELECTIVE_PR,
+          headSha: input.headSha,
+          issueBody,
+          prBody,
+          issueBodyMatchesTarget: true,
+          trustedPublisherLogin: SELECTIVE_ACTOR,
+          prOpen: true,
+          baseRef: 'main',
+          expectedTargetRef: 'main',
+          expectedTarget: true,
+        }),
+        fetchHistoryComments: () => history,
+        isHistoryAncestor: (ancestorSha, descendantSha) => ancestorSha === descendantSha,
+      });
+      const emitted = JSON.parse(String(stdout.mock.calls.at(-1)?.[0] ?? '{}')) as {
+        ok?: boolean;
+        report?: SmokeReport;
+        selection?: { attempted?: number; carried?: number };
+      };
+      expect(code).toBe(0);
+      expect(emitted).toMatchObject({
+        ok: true,
+        report: { result: 'PASS', terminalCleanup: 'not_started_no_execution' },
+        selection: { attempted: 0, carried: 1 },
+      });
+      expect(emitted.report?.terminalHandle).toBeUndefined();
+      expect(runtime.spawnCount()).toBe(0);
+      expect(runs(input)).toHaveLength(0);
+    } finally {
+      stdout.mockRestore();
+    }
   });
 
   it('unions and deduplicates valid exact-current-head affected tuples', () => {
