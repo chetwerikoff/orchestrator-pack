@@ -1,0 +1,21 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1924,
+  "declared_paths": [
+    "scripts/lib/worker-smoke-core.ts",
+    "scripts/worker-smoke-run.ts"
+  ],
+  "denylist": [
+    ".orca/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/lib/worker-smoke-core.ts",
+    "scripts/worker-smoke-run.ts"
+  ],
+  "source_revision": "c6cb937d5071da7a80187cf1b7b01a38ba810b93"
+}
