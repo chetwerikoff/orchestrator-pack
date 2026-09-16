@@ -688,7 +688,7 @@ export function reviewIndependentRequiredCiContexts(contexts: readonly unknown[]
 }
 
 export function resolveCiGreen(prNumber: number, headSha: string, repositorySlug: string, repoRoot: string): boolean {
-  const pr = githubApiObject('pr-view-head-base', `repos/${repositorySlug}/pulls/${prNumber}`, repoRoot);
+  const pr = githubApiObject('pr-view-head-base', `repos/${repositorySlug}/pulls/${prNumber}`, options.repoRoot);
   const head = pr.head && typeof pr.head === 'object' && !Array.isArray(pr.head) ? pr.head as Record<string, unknown> : {};
   const base = pr.base && typeof pr.base === 'object' && !Array.isArray(pr.base) ? pr.base as Record<string, unknown> : {};
   if (positiveInteger(pr.number) !== prNumber || String(pr.state ?? '').toLowerCase() !== 'open'
@@ -1427,6 +1427,72 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     publishSmokeReport(report, options); emit({ ok: false, report }, options.json); return 1;
   }
   const beforeHashes = hashTrackedPaths(options.cwd, trackedPorcelainPaths(beforeStatus));
+
+  if (attemptPlan.scenarios.length === 0 && !selection.fallbackReason) {
+    const lifecycle = evaluateSmokeLifecycleCleanliness(options.cwd);
+    if (!lifecycle.clean) {
+      const report = operationalReport('BLOCKED', options, {
+        action: 'verify carry-only smoke lifecycle cleanliness', expected: 'no unresolved prior smoke lifecycle before carry-only publication',
+        observed: `smoke_lifecycle_unclean:${lifecycle.reasons[0] ?? 'unknown'}`, adapterId: adapter.id,
+      });
+      publishSmokeReport(report, options); emit({ ok: false, report, lifecycle }, options.json); return 1;
+    }
+    try {
+      orderingBinding = beginSmokeOrdering(options, issueBody);
+      const projected = projectWorkerSmokeSelectiveReport({
+        partial: {
+          result: 'PASS', scenarios: [], limitations: [], trackedFilesUnmodified: true,
+          terminalCleanup: 'not_started_no_execution',
+          environmentNotes: [
+            'smoke-execution=carry-only',
+            `smoke-attempt-scenarios=0/${plan.scenarios.length}`,
+          ],
+          producer: SMOKE_REPORT_PRODUCER, orcaExecutable: adapter.id,
+        },
+        selection,
+      });
+      const normalized = normalizeSmokeReport({
+        ...projected,
+        result: projected.result ?? 'FAIL',
+        scenarios: projected.scenarios ?? [],
+        limitations: projected.limitations ?? [],
+        trackedFilesUnmodified: projected.trackedFilesUnmodified ?? true,
+        terminalCleanup: 'not_started_no_execution',
+        environmentNotes: projected.environmentNotes ?? [],
+        producer: SMOKE_REPORT_PRODUCER, orcaExecutable: adapter.id,
+      }, { issueNumber: options.issueNumber, prNumber: options.prNumber, headSha: options.headSha });
+      const report = normalized.report;
+      orderingOutcome = report.result === 'PASS' ? 'passed' : 'failed';
+      orderingFailureKind = report.result === 'FAIL' ? 'finding' : 'retryable';
+      publishSmokeReport(report, options);
+      let postSmoke: PostSmokeReadinessResult | undefined;
+      if (report.result === 'PASS' && !options.dryRun) {
+        try {
+          const target = resolveSmokeTarget(options, issueBody);
+          postSmoke = await evaluatePostSmokeReadiness(options, target, adapter);
+        } catch (error) {
+          postSmoke = {
+            readiness: { state: 'NOT_READY', ready: false, failedPredicates: [`post_smoke_readiness_unavailable:${scrubSmokeOutput(error instanceof Error ? error.message : String(error))}`] },
+            reviewProjection: { state: 'error', description: 'post-smoke review reconciliation unavailable', reason: 'missing-review' },
+          };
+        }
+      }
+      emit({ ok: report.result === 'PASS', report, lifecycle, selection: {
+        attempted: 0, carried: selection.carried.length, fallbackReason: selection.fallbackReason,
+        affectedDiagnostics: selection.affectedDiagnostics.length, tupleDiagnostics: selection.tupleDiagnostics.length,
+      }, ...(postSmoke ? { postSmoke } : {}) }, options.json);
+      return report.result === 'PASS' ? 0 : 1;
+    } catch (error) {
+      const report = operationalReport('BLOCKED', options, {
+        action: 'publish carry-only selective smoke', expected: 'fresh current-head report without runtime lifecycle',
+        observed: scrubSmokeOutput(error instanceof Error ? error.message : String(error)),
+        terminalCleanup: 'not_started_no_execution', adapterId: adapter.id,
+      });
+      publishSmokeReport(report, options); emit({ ok: false, report, lifecycle }, options.json); return 1;
+    } finally {
+      try { finishSmokeOrdering(orderingBinding, orderingOutcome, orderingFailureKind); } catch { /* missing ordering evidence remains fail-closed */ }
+    }
+  }
 
   const runId = createSmokeRunIdentity();
   const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
