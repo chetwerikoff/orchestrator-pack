@@ -946,7 +946,7 @@ describe('[pack-review-4] regression coverage', () => {
           workerNotification: {
             state: 'delivered',
             recordedAtUtc: now,
-            reason: 'fixture_worker_delivered',
+            reason: 'issue_928_fixture_dispatched',
             idempotencyKey: `worker-notification:${created.run.id}:${headSha}`,
           },
         },
@@ -1168,8 +1168,15 @@ describe('[pack-review-4] regression coverage', () => {
       restartState: 'starting',
       crashBackoff: { ...cleanCrashBackoff, lastExitMs: 0 },
     });
-    await expect(waitForStartedSupervisor(request, nonce, process.pid, { timeoutMs: 25, pollMs: 5 }))
-      .rejects.toThrow(/typescript_supervisor_scheduler_not_ready/);
+    vi.useFakeTimers();
+    try {
+      const rejected = expect(waitForStartedSupervisor(request, nonce, process.pid, { timeoutMs: 25, pollMs: 5 }))
+        .rejects.toThrow(/typescript_supervisor_scheduler_not_ready/);
+      await vi.advanceTimersByTimeAsync(25);
+      await rejected;
+    } finally {
+      vi.useRealTimers();
+    }
 
     writeJson(request.paths.targetRegistryPath, {
       schemaVersion: 2,
