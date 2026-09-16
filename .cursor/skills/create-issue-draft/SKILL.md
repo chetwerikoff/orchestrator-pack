@@ -75,7 +75,10 @@ fragments declared below. It is not a second portable Browser-GPT procedure.
 Launcher internals remain owned by
 [`docs/flow-manager-long-running-child-runbook.md`](../../../docs/flow-manager-long-running-child-runbook.md),
 and the transport README remains the implementation-local CLI/result/component
-authority.
+authority. The existing package entrypoint remains
+`flow-manager-browser-gpt-long-run` and its long-turn completion contract remains
+`browser-turn-result-v1`; exact invocation and lifecycle mechanics stay owned by
+the linked runbooks rather than this skill.
 
 This skill retains only create-Issue workflow bindings at the browser boundary:
 reviewer prompt construction, stage/source identity, direct-publication context,
