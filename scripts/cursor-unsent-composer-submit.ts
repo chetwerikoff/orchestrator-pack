@@ -46,6 +46,7 @@ export const ORCHESTRATION_RECONCILE_LOCK_PATH = join(
 );
 const ORCHESTRATION_RECONCILE_WINDOW_MS = 60_000;
 const ORCHESTRATION_RECONCILE_MAX_BACKOFF_MS = 30 * 60_000;
+export const ORCHESTRATION_POINTER_ABSENT_BACKOFF_MS = 5_000;
 const ORCHESTRATION_INBOX_LIMIT = 5_000;
 const RECONCILE_COMMAND_TIMEOUT_MS = 10_000;
 
@@ -101,6 +102,24 @@ function unboxedComposerLines(preview: string, includeTrailingNotices = false): 
     return lines.slice(0, end - 2);
   }
   return [];
+}
+
+function isRecognizedComposerPreview(preview: string): boolean {
+  if (composerInterior(preview)) return true;
+  const lines = trimNonEmpty(preview.split(/\r?\n/));
+  let end = lines.length;
+  while (
+    end > 0
+    && (UNBOXED_BOX_CHROME.test(lines[end - 1] ?? '') || UNBOXED_CTRL_C.test(lines[end - 1] ?? ''))
+  ) {
+    end -= 1;
+  }
+  if (
+    end >= 2
+    && UNBOXED_STATUS_FOOTER.test(lines[end - 2] ?? '')
+    && UNBOXED_CWD_FOOTER.test(lines[end - 1] ?? '')
+  ) return true;
+  return end === 1 && EMPTY_COMPOSER.test(lines[0] ?? '');
 }
 
 function classifyContent(
@@ -374,12 +393,19 @@ interface DeliveryPointerSubmitOptions {
   readonly now?: () => number;
 }
 
+interface EpisodeOrigin {
+  readonly pid: number;
+  readonly repoRoot: string;
+}
+
 interface EpisodeRecord {
   readonly messageId: string;
   readonly runId: string;
   readonly recipient: string;
   readonly workerKey: string;
   readonly stableKey?: string;
+  readonly firstSeenAt?: number;
+  readonly origin?: EpisodeOrigin;
   readonly nextEligibleAt: number;
   readonly backoffMs?: number;
   readonly reason?: string;
@@ -455,6 +481,17 @@ function loadReconcileState(path: string): PersistedReconcileState {
           recipient: row.recipient,
           workerKey: row.workerKey,
           ...(typeof row.stableKey === 'string' && row.stableKey.trim() ? { stableKey: row.stableKey.trim() } : {}),
+          ...(typeof row.firstSeenAt === 'number' && Number.isFinite(row.firstSeenAt) ? { firstSeenAt: row.firstSeenAt } : {}),
+          ...(row.origin && typeof row.origin === 'object'
+            && typeof (row.origin as { readonly pid?: unknown }).pid === 'number'
+            && Number.isFinite((row.origin as { readonly pid: number }).pid)
+            && typeof (row.origin as { readonly repoRoot?: unknown }).repoRoot === 'string'
+            && (row.origin as { readonly repoRoot: string }).repoRoot.trim()
+              ? { origin: {
+                pid: (row.origin as { readonly pid: number }).pid,
+                repoRoot: (row.origin as { readonly repoRoot: string }).repoRoot.trim(),
+              } }
+              : {}),
           ...(typeof row.reason === 'string' && row.reason.trim() ? { reason: row.reason.trim() } : {}),
           nextEligibleAt: row.nextEligibleAt,
           ...(typeof row.backoffMs === 'number' ? { backoffMs: row.backoffMs } : {}),
@@ -493,10 +530,6 @@ interface DeliveryMessageSubmitDeps {
   readonly observeRetrievableMessageIds?: (worker: RuntimeWorker) =>
     | { readonly ok: true; readonly messageIds: ReadonlySet<string> }
     | { readonly ok: false; readonly reason: string };
-  readonly writePointer?: (
-    worker: RuntimeWorkerIdentity,
-    pointer: string,
-  ) => RuntimeDispatchResult;
   readonly submitDeps: UnsentComposerSubmitDeps;
   readonly pointerWriteLedger?: Map<string, number>;
   readonly reconcileClock?: () => number;
@@ -603,12 +636,12 @@ function settleComposerObservation(
   }
   const preview = shown.lines.join('\n');
   const kind = classifyCursorComposer(preview);
-  if (kind === 'empty') {
+  const fingerprint = exactOrchestrationPointerFingerprint(preview);
+  if (kind === 'empty' && !fingerprint) {
     clearObservation(state, key);
     if (!state.ambiguousSubmittedFingerprints.has(key)) state.submittedFingerprint.delete(key);
     return { ...base, ok: true, unsent: false, enter: false, reason: requireConsumption ? 'pointer_consumed' : 'composer_empty' };
   }
-  const fingerprint = exactOrchestrationPointerFingerprint(preview);
   if (!fingerprint) {
     clearObservation(state, key);
     return {
@@ -1132,6 +1165,8 @@ async function submitOrcaMessageDeliveryPointerForMessage(
         recipient: message.recipient,
         workerKey: workerKey(worker.identity),
         ...(stableKey ? { stableKey } : {}),
+        firstSeenAt: now,
+        origin: { pid: process.pid, repoRoot: process.cwd() },
         nextEligibleAt: now + priorBackoff,
         backoffMs: nextBackoff,
         state: 'claimed',
@@ -1204,8 +1239,10 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     if (!shown.ok) return deliveryNoEffect(shown.reason, worker, false);
     composerKind = classifyCursorComposer(shown.lines.join('\n'));
   }
-  const observedPointer = exactOrchestrationPointerFingerprint(shown.lines.join('\n'));
-  const alreadyShown = composerKind !== 'empty' && observedPointer !== undefined;
+  const preview = shown.lines.join('\n');
+  const observedPointer = exactOrchestrationPointerFingerprint(preview);
+  const previewUnrecognized = observedPointer === undefined && !isRecognizedComposerPreview(preview);
+  const alreadyShown = observedPointer !== undefined;
   if (alreadyShown && !pointerMatchesDelivery(observedPointer, message, worker)) {
     return deliveryNoEffect('orchestration_pointer_target_mismatch', worker);
   }
@@ -1227,10 +1264,12 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     return deliveryNoEffect('orchestration_episode_backoff', worker, false);
   }
   if (!alreadyShown && existing?.state !== 'pointer-visible') {
-    const pointerAbsent = composerKind === 'empty';
-    const refusalReason = pointerAbsent
-      ? 'pointer_absent_orca_did_not_notify'
-      : 'composer_not_orchestration_pointer';
+    const pointerAbsent = composerKind === 'empty' && !previewUnrecognized;
+    const refusalReason = previewUnrecognized
+      ? 'composer_preview_unrecognized'
+      : pointerAbsent
+        ? 'pointer_absent_orca_did_not_notify'
+        : 'composer_not_orchestration_pointer';
     if (state) {
       state.episodes[key] = {
         messageId: message.id,
@@ -1238,8 +1277,10 @@ async function submitOrcaMessageDeliveryPointerForMessage(
         recipient: message.recipient,
         workerKey: workerKey(worker.identity),
         ...(stableKey ? { stableKey } : {}),
+        firstSeenAt: now,
+        origin: { pid: process.pid, repoRoot: process.cwd() },
         reason: refusalReason,
-        nextEligibleAt: pointerAbsent ? now : now + nextBackoff,
+        nextEligibleAt: pointerAbsent ? now + ORCHESTRATION_POINTER_ABSENT_BACKOFF_MS : now + nextBackoff,
         ...(pointerAbsent ? {} : { backoffMs: nextBackoff }),
         state: 'refused',
       };
@@ -1263,6 +1304,8 @@ async function submitOrcaMessageDeliveryPointerForMessage(
       recipient: message.recipient,
       workerKey: workerKey(worker.identity),
       ...(stableKey ? { stableKey } : {}),
+      firstSeenAt: now,
+      origin: { pid: process.pid, repoRoot: process.cwd() },
       nextEligibleAt: now + priorBackoff,
       backoffMs: nextBackoff,
       state: alreadyShown ? 'pointer-visible' : 'claimed',
@@ -1679,7 +1722,6 @@ export async function runOrchestrationMailReconcileTick(
               const submissionDeps = consumerFenced
                 ? {
                     ...reconcileDeps,
-                    writePointer: () => ({ status: 'send_failed' as const, reason: 'orchestration_pointer_not_visible' }),
                     // Runtime-specific prompt submission must not create a pointer after a fenced check.
                     submitDeps: {
                       ...reconcileDeps.submitDeps,
