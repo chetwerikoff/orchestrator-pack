@@ -6,6 +6,17 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runProcessSync } from '../kernel/subprocess.ts';
+import {
+  formatSmokeReportComment,
+  parseWorkerSmokeAffectedCarrier,
+  planWorkerSmokeSelectiveRetry,
+  projectWorkerSmokeSelectiveReport,
+  SMOKE_REPORT_PRODUCER,
+  type SmokeReport,
+  type SmokeScenario,
+  type WorkerSmokeCommentRecord,
+  type WorkerSmokeTrustedTarget,
+} from '../lib/worker-smoke-core.ts';
 import { publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath, type WorkerAssignment } from '../lib/worker-assignment-store.ts';
 import { commitPackReviewTerminal, initializePackReviewAuthority, recordPackReviewPublication } from '../pack-review-state.ts';
 import type { RuntimeAdapter } from '../runtime/contracts.ts';
@@ -312,5 +323,255 @@ describe('Issue #1418 r10 production pre-action fence failures', () => {
     const result = await reconcilePostReviewSmoke(candidate(input), unavailable);
     expect(observation).toEqual({ reason: 'assignment_fence_failed', actionEntered: false });
     expectZeroAttempt(result, runtime, input);
+  });
+});
+
+const SELECTIVE_ISSUE = 1924;
+const SELECTIVE_PR = 1930;
+const SELECTIVE_ACTOR = 'pack-publisher';
+const SHA_A = 'a'.repeat(40);
+const SHA_B = 'b'.repeat(40);
+const SHA_C = 'c'.repeat(40);
+const SHA_D = 'd'.repeat(40);
+const selectiveScenarios = [
+  { action: 'S1 action', expected: 'S1 expected' },
+  { action: 'S2 action', expected: 'S2 expected' },
+  { action: 'S3 action', expected: 'S3 expected' },
+  { action: 'S4 action', expected: 'S4 expected' },
+] as const;
+
+function selectivePlanBody(specs: readonly { action: string; expected: string }[] = selectiveScenarios): string {
+  const rows = specs.map((entry) => `  - action: ${entry.action} | expected: ${entry.expected}`).join('\n');
+  return `\`\`\`behavior-kind\naction-producing\n\`\`\`\n\n\`\`\`smoke-test-plan\nscenarios:\n${rows}\n\`\`\``;
+}
+
+function selectiveScenario(index: number, outcome: SmokeScenario['outcome'] = 'pass'): SmokeScenario {
+  const spec = selectiveScenarios[index - 1]!;
+  return { action: spec.action, expected: spec.expected, observed: `${spec.action} ${outcome ?? 'unknown'}`, outcome };
+}
+
+function selectiveReport(
+  headSha: string,
+  scenarios: SmokeScenario[],
+  result: SmokeReport['result'] = scenarios.every((row) => row.outcome === 'pass') ? 'PASS' : 'FAIL',
+): SmokeReport {
+  return {
+    result,
+    issueNumber: SELECTIVE_ISSUE,
+    prNumber: SELECTIVE_PR,
+    headSha,
+    scenarios,
+    limitations: [],
+    trackedFilesUnmodified: true,
+    terminalCleanup: 'closed_owned_handle',
+    environmentNotes: [],
+    producer: SMOKE_REPORT_PRODUCER,
+    orcaExecutable: 'runtime-adapter',
+    terminalHandle: `selective-${headSha[0]}`,
+  };
+}
+
+function selectiveComment(id: number, report: SmokeReport): WorkerSmokeCommentRecord {
+  const createdAt = new Date(Date.UTC(2026, 8, 16, 1, 0, 0, id)).toISOString();
+  return {
+    id,
+    body: formatSmokeReportComment(report),
+    created_at: createdAt,
+    updated_at: createdAt,
+    user: { login: SELECTIVE_ACTOR },
+  };
+}
+
+function selectiveTarget(headSha: string): WorkerSmokeTrustedTarget {
+  return {
+    repositorySlug: REPO,
+    issueNumber: SELECTIVE_ISSUE,
+    prNumber: SELECTIVE_PR,
+    headSha,
+    resolvedIssueNumber: SELECTIVE_ISSUE,
+    resolvedPrNumber: SELECTIVE_PR,
+    liveHeadSha: headSha,
+    issueBodyMatchesTarget: true,
+    trustedPublisherLogin: SELECTIVE_ACTOR,
+    commentCensusComplete: true,
+    commentSnapshotStable: true,
+  };
+}
+
+function ancestry(edges: readonly [string, string][]) {
+  const known = new Set(edges.map(([ancestor, descendant]) => `${ancestor}>${descendant}`));
+  return (ancestor: string, descendant: string): boolean => ancestor === descendant || known.has(`${ancestor}>${descendant}`);
+}
+
+function affected(headSha: string, indexes: readonly number[]): string {
+  return [
+    '```worker-smoke-affected',
+    JSON.stringify({
+      head: headSha,
+      scenarios: indexes.map((index) => ({
+        action: selectiveScenarios[index - 1]!.action,
+        expected: selectiveScenarios[index - 1]!.expected,
+      })),
+    }),
+    '```',
+  ].join('\n');
+}
+
+function indexesOf(plan: ReturnType<typeof planWorkerSmokeSelectiveRetry>['attemptPlan']): number[] {
+  return plan.scenarios.map((row) => selectiveScenarios.findIndex((entry) =>
+    entry.action === row.action && entry.expected === row.expected) + 1);
+}
+
+describe('Issue #1924 selective smoke retry', () => {
+  it('reuses prior exact PASS tuples and retries only non-PASS plus unexecuted tuples', () => {
+    const selection = planWorkerSmokeSelectiveRetry({
+      issueBody: selectivePlanBody(),
+      prBody: '',
+      comments: [selectiveComment(1, selectiveReport(
+        SHA_A,
+        [selectiveScenario(1), selectiveScenario(2), selectiveScenario(3, 'fail')],
+        'FAIL',
+      ))],
+      target: selectiveTarget(SHA_B),
+      isAncestor: ancestry([[SHA_A, SHA_B]]),
+    });
+    expect(selection.fallbackReason).toBeUndefined();
+    expect(indexesOf(selection.attemptPlan)).toEqual([3, 4]);
+    expect(selection.carried.map((entry) => entry.scenario.action)).toEqual(['S1 action', 'S2 action']);
+  });
+
+  it('treats omitted, empty, stale, and malformed affected carriers as local empty input', () => {
+    const comments = [selectiveComment(1, selectiveReport(
+      SHA_A,
+      [selectiveScenario(1), selectiveScenario(2), selectiveScenario(3, 'fail')],
+      'FAIL',
+    ))];
+    const bodies = ['', affected(SHA_B, []), affected(SHA_A, [2]), '```worker-smoke-affected\n{not-json}\n```'];
+    for (const prBody of bodies) {
+      const selection = planWorkerSmokeSelectiveRetry({
+        issueBody: selectivePlanBody(),
+        prBody,
+        comments,
+        target: selectiveTarget(SHA_B),
+        isAncestor: ancestry([[SHA_A, SHA_B]]),
+      });
+      expect(selection.fallbackReason).toBeUndefined();
+      expect(indexesOf(selection.attemptPlan)).toEqual([3, 4]);
+    }
+  });
+
+  it('invalidates only the exact current-head affected prior PASS tuple', () => {
+    const selection = planWorkerSmokeSelectiveRetry({
+      issueBody: selectivePlanBody(),
+      prBody: affected(SHA_B, [2]),
+      comments: [selectiveComment(1, selectiveReport(
+        SHA_A,
+        [selectiveScenario(1), selectiveScenario(2), selectiveScenario(3, 'fail')],
+        'FAIL',
+      ))],
+      target: selectiveTarget(SHA_B),
+      isAncestor: ancestry([[SHA_A, SHA_B]]),
+    });
+    expect(indexesOf(selection.attemptPlan)).toEqual([2, 3, 4]);
+    expect(selection.carried.map((entry) => entry.scenario.action)).toEqual(['S1 action']);
+  });
+
+  it('lets a fresh same-head PASS supersede a still-present affected carrier', () => {
+    const selection = planWorkerSmokeSelectiveRetry({
+      issueBody: selectivePlanBody([selectiveScenarios[1]]),
+      prBody: affected(SHA_B, [2]),
+      comments: [
+        selectiveComment(1, selectiveReport(SHA_A, [selectiveScenario(2)])),
+        selectiveComment(2, selectiveReport(SHA_B, [selectiveScenario(2)])),
+      ],
+      target: selectiveTarget(SHA_B),
+      isAncestor: ancestry([[SHA_A, SHA_B]]),
+    });
+    expect(selection.attemptPlan.scenarios).toHaveLength(0);
+    expect(selection.carried[0]?.sourceHeadSha).toBe(SHA_B);
+  });
+
+  it('uses descendant precedence and never resurrects an older PASS after a newer FAIL', () => {
+    const selection = planWorkerSmokeSelectiveRetry({
+      issueBody: selectivePlanBody([selectiveScenarios[1]]),
+      prBody: '',
+      comments: [
+        selectiveComment(1, selectiveReport(SHA_A, [selectiveScenario(2)])),
+        selectiveComment(2, selectiveReport(SHA_B, [selectiveScenario(2, 'fail')], 'FAIL')),
+      ],
+      target: selectiveTarget(SHA_C),
+      isAncestor: ancestry([[SHA_A, SHA_B], [SHA_A, SHA_C], [SHA_B, SHA_C]]),
+    });
+    expect(indexesOf(selection.attemptPlan)).toEqual([2]);
+    expect(selection.carried).toHaveLength(0);
+  });
+
+  it('reruns only the tuple whose maximal ancestor observations are incomparable', () => {
+    const selection = planWorkerSmokeSelectiveRetry({
+      issueBody: selectivePlanBody([selectiveScenarios[0], selectiveScenarios[1]]),
+      prBody: '',
+      comments: [
+        selectiveComment(1, selectiveReport(SHA_A, [selectiveScenario(1), selectiveScenario(2)])),
+        selectiveComment(2, selectiveReport(SHA_B, [selectiveScenario(2)])),
+      ],
+      target: selectiveTarget(SHA_D),
+      isAncestor: ancestry([[SHA_A, SHA_D], [SHA_B, SHA_D]]),
+    });
+    expect(selection.attemptPlan.scenarios.map((row) => row.action)).toEqual(['S2 action']);
+    expect(selection.carried.map((entry) => entry.scenario.action)).toEqual(['S1 action']);
+  });
+
+  it('uses ordinary full-plan fallback only for whole-attempt history or binding failures', () => {
+    const noHistory = planWorkerSmokeSelectiveRetry({
+      issueBody: selectivePlanBody(), prBody: '', comments: [], target: selectiveTarget(SHA_B), isAncestor: ancestry([]),
+    });
+    expect(noHistory.fallbackReason).toBe('no_prior_canonical_observation');
+    expect(indexesOf(noHistory.attemptPlan)).toEqual([1, 2, 3, 4]);
+    expect(planWorkerSmokeSelectiveRetry({
+      issueBody: selectivePlanBody(), prBody: '', comments: [], target: selectiveTarget(SHA_B),
+      isAncestor: ancestry([]), historyReadable: false,
+    }).fallbackReason).toBe('history_unreadable');
+    expect(planWorkerSmokeSelectiveRetry({
+      issueBody: selectivePlanBody(), prBody: '', comments: [], target: selectiveTarget(SHA_B),
+      isAncestor: ancestry([]), historyBindingTrusted: false,
+    }).fallbackReason).toBe('history_binding_untrusted');
+    expect(planWorkerSmokeSelectiveRetry({
+      issueBody: selectivePlanBody(), prBody: '',
+      comments: [selectiveComment(1, selectiveReport(SHA_A, [selectiveScenario(1)]))],
+      target: selectiveTarget(SHA_B), isAncestor: ancestry([]),
+    }).fallbackReason).toBe('history_non_descendant');
+  });
+
+  it('projects carried and fresh rows into truthful fresh current-head coverage', () => {
+    const selection = planWorkerSmokeSelectiveRetry({
+      issueBody: selectivePlanBody(),
+      prBody: '',
+      comments: [selectiveComment(1, selectiveReport(
+        SHA_A,
+        [selectiveScenario(1), selectiveScenario(2), selectiveScenario(3, 'fail')],
+        'FAIL',
+      ))],
+      target: selectiveTarget(SHA_B),
+      isAncestor: ancestry([[SHA_A, SHA_B]]),
+    });
+    const projected = projectWorkerSmokeSelectiveReport({
+      selection,
+      partial: { result: 'PASS', scenarios: [selectiveScenario(3), selectiveScenario(4)], environmentNotes: [] },
+    });
+    expect(projected.result).toBe('PASS');
+    expect(projected.scenarios).toHaveLength(4);
+    expect(projected.scenarios?.[0]?.observed).toContain('not freshly executed');
+    expect(projected.environmentNotes).toContain('smoke-carried=2');
+    expect(projected.environmentNotes).toContain('smoke-fresh=2');
+  });
+
+  it('unions and deduplicates valid exact-current-head affected tuples', () => {
+    const parsed = parseWorkerSmokeAffectedCarrier([
+      affected(SHA_B, [1, 2]),
+      affected(SHA_A, [3]),
+      affected(SHA_B, [2, 3]),
+    ].join('\n\n'), SHA_B);
+    expect(parsed.tupleKeys).toHaveLength(3);
+    expect(parsed.diagnostics).toEqual([]);
   });
 });
