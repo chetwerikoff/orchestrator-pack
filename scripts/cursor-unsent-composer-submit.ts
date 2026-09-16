@@ -403,6 +403,27 @@ function pointerLedgerKey(message: DeliveryMessage, worker: RuntimeWorker): stri
   return `${recipientEpisodeKey(worker)}\u0000pointer\u0000${buildDeliveryPointer(message)}`;
 }
 
+function hasPendingPointerClaim(
+  state: PersistedReconcileState | undefined,
+  message: DeliveryMessage,
+  worker: RuntimeWorker,
+  now: number,
+  currentKey: string,
+ ): boolean {
+  const targetPointerKey = pointerLedgerKey(message, worker);
+  const targetWorkerKey = workerKey(worker.identity);
+  return state !== undefined && Object.entries(state.episodes).some(([key, episode]) => {
+    if (key === currentKey || episode.state !== 'pointer-visible' || episode.workerKey !== targetWorkerKey) return false;
+    if (now >= episode.nextEligibleAt) return false;
+    return pointerLedgerKey({
+      id: episode.messageId,
+      runId: episode.runId,
+      recipient: episode.recipient,
+      consumed: false,
+    }, worker) === targetPointerKey;
+  });
+}
+
 function loadReconcileState(path: string): PersistedReconcileState {
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
@@ -1069,6 +1090,9 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   if (existing?.state === 'claimed') {
     if (state) delete state.episodes[key];
     existing = undefined;
+  }
+  if (state && hasPendingPointerClaim(state, message, worker, now, key)) {
+    return deliveryNoEffect('orchestration_episode_already_claimed', worker, false);
   }
 
   const control = deps.submitDeps.composerControl?.(worker.identity);

@@ -2477,6 +2477,43 @@ describe('orchestration mail reconciliation', () => {
     }
   });
 
+  it('reuses a pending pointer claim across reconciliation ticks', async () => {
+    const target = worker('term_reconcile_pointer_claim');
+    const messages = [
+      { id: 'msg_claim_a', runId: 'run_claim', recipient: target.identity.id, consumed: false },
+      { id: 'msg_claim_b', runId: 'run_claim', recipient: target.identity.id, consumed: false },
+    ];
+    const pointer = buildDeliveryPointer(messages[0]!);
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const root = mkdtempSync(join(tmpdir(), 'opk-reconcile-pointer-claim-'));
+    const deps = (messageId: string) => ({
+      lookupMessage: () => ({
+        ok: true as const,
+        message: messages.find((message) => message.id === messageId)!,
+      }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      submitDeps: depsFor({}, {
+        submitted,
+        read: () => ({
+          ok: true as const,
+          lines: [pointer, pointer, ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        }),
+      }),
+      episodeStatePath: join(root, 'orchestration-mail-reconcile.json'),
+      episodeLockPath: join(root, 'orchestration-mail-reconcile.lock'),
+    });
+    try {
+      const first = await submitOrcaMessageDeliveryPointer(messages[0]!.id, deps(messages[0]!.id), { now: () => 1_000 });
+      const second = await submitOrcaMessageDeliveryPointer(messages[1]!.id, deps(messages[1]!.id), { now: () => 1_001 });
+      expect(first.terminals[0]?.reason).toBe('submission_unconfirmed');
+      expect(second.terminals[0]?.reason).toBe('orchestration_episode_already_claimed');
+      expect(submitted).toEqual([target.identity]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('migrates legacy run-scoped claims before stale-key pruning', async () => {
     const target = worker('term_legacy_claim_migration');
     const root = mkdtempSync(join(tmpdir(), 'opk-legacy-claim-migration-'));
