@@ -1367,8 +1367,6 @@ function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scen
     `- Declared scenario count: ${scenarioCount}`,
     '- Emit each declared progress event exactly once; never repeat a started or terminal event.',
     '- For PR scope accounting, compare HEAD to the verified PR base merge-base (git diff "$(git merge-base HEAD origin/main)" HEAD), never to a local branch named main.',
-    '- For live-state invariants backed by persistent history, capture the pre-scenario baseline and judge only entries created during this scenario; never fail on pre-existing smoke residue.',
-    '- For scenario 11 specifically, snapshot the composer and prompt_history.json immediately before the first send; evaluate only post-snapshot changes from the two sends, and do not count any pre-existing pointer or history entry.',
     '- Use declared order only and check cancel-request.json before each new scenario.',
     '- For each scenario N, append and durably flush N started, execute only N, then append and durably flush N terminal before doing any work or writing progress for N+1.',
     '- Never run scenarios in parallel, start a later ordinal early, or skip an ordinal, and after fail/blocked/skipped terminal stop without starting another scenario.',
