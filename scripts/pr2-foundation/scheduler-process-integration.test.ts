@@ -758,6 +758,43 @@ describe('scheduler bounded-child production composition', () => {
     const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json'); writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 })); writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }], corruptJournalAfterSend: true, dispatches: [] })); writeEpoch(epochPath, 'epoch-settlement', 'nonce-settlement'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-settlement', 'nonce-settlement'); await publishLocal(env); await runTick(env); const error = await runTickFailure(env); expect(error).toContain('scheduler_fleet_phase_failed:one-budgeted-gated-nudge-per-new-eligible-episode'); expect(fixture(fixturePath).dispatches).toHaveLength(1); expect(handoff(env)).toMatchObject({ reason: 'dispatch_unknown', decision: 'orchestrator_required' });
   });
 
+
+  it('reconciles mail during a long-running scheduler tick', async () => {
+    const root = makeRoot();
+    const epochPath = path.join(root, 'epoch.json');
+    writeEpoch(epochPath, 'epoch-mail-during-tick', 'nonce-mail-during-tick');
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: epochPath,
+      ORCHESTRATOR_CUTOVER_EPOCH_ID: 'epoch-mail-during-tick',
+      ORCHESTRATOR_CUTOVER_NONCE: 'nonce-mail-during-tick',
+    };
+    let reconcileCalls = 0;
+    let reconcilesDuringLongWork = 0;
+    let longWorkActive = false;
+    const boundary: SchedulerBoundary = {
+      listCandidates: () => [{ sessionId: 'mail-during-tick', repoSlug: 'chetwerikoff/orchestrator-pack', prNumber: 1916, boundHeadSha: 'a'.repeat(40) }],
+      readCurrentPr: async () => {
+        longWorkActive = true;
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        longWorkActive = false;
+        return { number: 1916, headRefOid: 'a'.repeat(40), state: 'CLOSED', isDraft: false };
+      },
+      readChecks: async () => [],
+      listReviewRuns: () => [],
+      start: async () => ({ ok: true }),
+      schedulerIntervalMs: 10,
+      orchestrationMailReconcile: async () => {
+        reconcileCalls += 1;
+        if (longWorkActive) reconcilesDuringLongWork += 1;
+        return { ok: true, attempted: 0, nudged: 0, skipped: 0, reasons: [], deliveryEvidence: [] };
+      },
+    };
+    const result = await runSchedulerTick(boundary, env);
+    expect(result.attempted).toBe(1);
+    expect(reconcileCalls).toBeGreaterThanOrEqual(2);
+    expect(reconcilesDuringLongWork).toBeGreaterThanOrEqual(1);
+  });
   it.each([
     ['observer_timeout', () => new Promise<never>(() => {})],
     ['observer_threw', async () => { throw new Error('injected'); }],
