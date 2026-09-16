@@ -1,0 +1,30 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1917,
+  "declared_paths": [
+    "docs/declarations/1917.pr-scope.json",
+    "scripts/cutover/issue-928.test.ts",
+    "scripts/lib/cutover/activation-recovery.ts",
+    "scripts/lib/cutover/activation-transaction.ts",
+    "scripts/lib/orchestrator-side-process-supervisor.ts",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/orchestrator-wake-supervisor.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/cutover/issue-928.test.ts",
+    "scripts/lib/cutover/activation-recovery.ts",
+    "scripts/lib/cutover/activation-registry-projection.ts",
+    "scripts/lib/cutover/activation-transaction.ts",
+    "scripts/lib/orchestrator-side-process-supervisor.ts",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/orchestrator-wake-supervisor.ts"
+  ],
+  "source_revision": "e4b9bb3a6e78c9c3bf26dd7056b382083338c8b3"
+}
