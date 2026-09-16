@@ -16,6 +16,11 @@ import {
 } from './fleet-reconciliation-handoff.ts';
 import type { FleetObserverSource } from './fleet-observer.ts';
 import type { RuntimeCallOptions, RuntimeWorker, RuntimeWorkerIdentity } from '../runtime/contracts.ts';
+import {
+  buildDeliveryPointer,
+  runOrchestrationMailReconcileTick,
+  type UnsentComposerSubmitDeps,
+} from '../cursor-unsent-composer-submit.ts';
 import { productionFleetObserverSource, runSchedulerTick, type SchedulerBoundary } from './scheduler.ts';
 
 const roots: string[] = [];
@@ -598,6 +603,108 @@ describe('scheduler bounded-child production composition', () => {
     },
   );
 
+  it('keeps consumer-fenced OpenCode control from creating a missing pointer', async () => {
+    const root = makeRoot();
+    const target: RuntimeWorker = {
+      identity: { runtime: 'orca', id: 'term_fenced_opencode_missing', generation: 'g1' },
+      workspacePath: '/tmp',
+      title: 'term_fenced_opencode_missing',
+      provenance: 'external',
+    };
+    const message = {
+      id: 'msg_fenced_opencode_missing',
+      runId: 'run_fenced_opencode_missing',
+      recipient: 'run:run_fenced_opencode_missing',
+      consumed: false,
+    };
+    let writes = 0;
+    let controlDispatches = 0;
+    let submits = 0;
+    const submitDeps: UnsentComposerSubmitDeps = {
+      listWorkers: () => ({ ok: true, workers: [target] }),
+      read: () => ({ ok: true, lines: ['→ Add a follow-up'], source: 'screen' }),
+      submit: () => { submits += 1; return { status: 'dispatched' }; },
+      composerControl: () => ({
+        kind: 'opencode-http',
+        dispatch: () => { controlDispatches += 1; return { status: 'dispatched' }; },
+      }),
+    };
+    const result = await runOrchestrationMailReconcileTick({
+      readInbox: () => ({ ok: true, result: { messages: [{ id: message.id, run_id: message.runId, to_handle: message.recipient, read: 0 }] } }),
+      lookupMessage: () => ({ ok: true, message }),
+      resolveWorker: () => ({ ok: true, worker: target }),
+      isMessageRetrievable: () => ({ ok: false, reason: 'consumer_fenced' }),
+      writePointer: () => { writes += 1; return { status: 'dispatched' }; },
+      submitDeps,
+    }, {
+      ledgerPath: path.join(root, 'fenced-opencode-ledger.json'),
+      lockPath: path.join(root, 'fenced-opencode.lock'),
+      now: () => 1_000,
+    });
+
+    expect(result.nudged).toBe(0);
+    expect(result.reasons).toContain(`${message.id}:orchestration_pointer_not_visible`);
+    expect(writes).toBe(0);
+    expect(controlDispatches).toBe(0);
+    expect(submits).toBe(0);
+  });
+
+  it('revalidates the exact consumer-fenced pointer immediately before Enter', async () => {
+    const root = makeRoot();
+    const target: RuntimeWorker = {
+      identity: { runtime: 'orca', id: 'term_fenced_toctou', generation: 'g1' },
+      workspacePath: '/tmp',
+      title: 'term_fenced_toctou',
+      provenance: 'external',
+    };
+    const message = {
+      id: 'msg_fenced_toctou',
+      runId: 'run_fenced_toctou',
+      recipient: 'run:run_fenced_toctou',
+      consumed: false,
+    };
+    const expectedPointer = buildDeliveryPointer(message);
+    const mismatchedPointer = buildDeliveryPointer({
+      id: 'msg_other_toctou',
+      runId: 'run_other_toctou',
+      recipient: 'run:run_other_toctou',
+      consumed: false,
+    });
+    const footer = ['Cursor Grok 4.6 High · 40.6% Run Everything', '~/projects/orchestrator-pack · main'];
+    let reads = 0;
+    let writes = 0;
+    let submits = 0;
+    const submitDeps: UnsentComposerSubmitDeps = {
+      listWorkers: () => ({ ok: true, workers: [target] }),
+      read: () => {
+        reads += 1;
+        return {
+          ok: true,
+          lines: reads === 1 ? [expectedPointer, ...footer] : [mismatchedPointer, ...footer],
+          source: 'screen',
+        };
+      },
+      submit: () => { submits += 1; return { status: 'dispatched' }; },
+    };
+    const result = await runOrchestrationMailReconcileTick({
+      readInbox: () => ({ ok: true, result: { messages: [{ id: message.id, run_id: message.runId, to_handle: message.recipient, read: 0 }] } }),
+      lookupMessage: () => ({ ok: true, message }),
+      resolveWorker: () => ({ ok: true, worker: target }),
+      isMessageRetrievable: () => ({ ok: false, reason: 'consumer_fenced' }),
+      writePointer: () => { writes += 1; return { status: 'dispatched' }; },
+      submitDeps,
+    }, {
+      ledgerPath: path.join(root, 'fenced-toctou-ledger.json'),
+      lockPath: path.join(root, 'fenced-toctou.lock'),
+      now: () => 1_000,
+    });
+
+    expect(reads).toBe(3);
+    expect(result.nudged).toBe(0);
+    expect(result.reasons).toContain(`${message.id}:orchestration_pointer_not_visible`);
+    expect(writes).toBe(0);
+    expect(submits).toBe(0);
+  });
 
   it('starts a fresh baseline after an activation epoch change', async () => {
     const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json');
