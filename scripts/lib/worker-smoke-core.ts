@@ -876,23 +876,23 @@ export function planWorkerSmokeSelectiveRetry(input: {
     ancestry.set(key, result);
     return result;
   };
-  const latest = valid.at(-1)!;
-  try {
-    if (!ancestorOfCurrent(latest.headSha)) {
-      return fullRetry(fullPlan, affected.tupleKeys, affected.diagnostics, 'history_non_descendant');
-    }
-  } catch {
-    return fullRetry(fullPlan, affected.tupleKeys, affected.diagnostics, 'history_lineage_unprovable');
-  }
 
   const relevant: typeof valid = [];
+  let lineageUnprovable = false;
   for (const candidate of valid) {
     try {
       if (ancestorOfCurrent(candidate.headSha)) relevant.push(candidate);
     } catch {
-      // Once the attempt-level continuation is established, an older row with
-      // unprovable lineage is ignored locally rather than widening to full-plan.
+      lineageUnprovable = true;
     }
+  }
+  if (relevant.length === 0) {
+    return fullRetry(
+      fullPlan,
+      affected.tupleKeys,
+      affected.diagnostics,
+      lineageUnprovable ? 'history_lineage_unprovable' : 'history_non_descendant',
+    );
   }
 
   const rowsByHead = new Map<string, Map<string, {
