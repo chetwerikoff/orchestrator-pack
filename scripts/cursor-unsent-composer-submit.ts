@@ -1659,7 +1659,11 @@ export async function runOrchestrationMailReconcileTick(
             && !('messageIds' in observed)
             && !observed.ok
             && observed.reason === 'orchestration_message_unretrievable';
+          // A fenced check is not authorization to create prompt text. The target
+          // pane remains the independent authority for an already-visible pointer.
+          const consumerFenced = !observed.ok && observed.reason === 'consumer_fenced';
           const qualifies = freshInboxRowAlreadyVisible || retryableInboxRowAlreadyVisible
+            || consumerFenced
             || (observed !== undefined && ('messageIds' in observed
               ? observed.ok && observed.messageIds.has(message.id)
               : observed.ok));
@@ -1671,7 +1675,33 @@ export async function runOrchestrationMailReconcileTick(
             if (coalescedPointerKeys.has(pointerKey)) {
               result = deliveryNoEffect('orchestration_episode_already_claimed', worker, false);
             } else {
-              result = await submitOrcaMessageDeliveryPointerForMessage(message, reconcileDeps, retryableEpisodeIds.has(id) || recentReadIds.has(id));
+              const submissionDeps = consumerFenced
+                ? {
+                    ...reconcileDeps,
+                    writePointer: () => ({ status: 'send_failed' as const, reason: 'orchestration_pointer_not_visible' }),
+                    // Runtime-specific prompt submission must not create a pointer after a fenced check.
+                    submitDeps: {
+                      ...reconcileDeps.submitDeps,
+                      composerControl: () => undefined,
+                      submit: (identity: RuntimeWorkerIdentity) => {
+                        const currentPointer = reconcileDeps.submitDeps.read(identity);
+                        if (!currentPointer.ok) {
+                          return { status: 'send_failed' as const, reason: 'orchestration_pointer_not_visible' };
+                        }
+                        const observedPointer = exactOrchestrationPointerFingerprint(currentPointer.lines.join('\n'));
+                        if (observedPointer === undefined || !pointerMatchesDelivery(observedPointer, message, worker)) {
+                          return { status: 'send_failed' as const, reason: 'orchestration_pointer_not_visible' };
+                        }
+                        return reconcileDeps.submitDeps.submit(identity);
+                      },
+                    },
+                  }
+                : reconcileDeps;
+              result = await submitOrcaMessageDeliveryPointerForMessage(
+                message,
+                submissionDeps,
+                retryableEpisodeIds.has(id) || recentReadIds.has(id),
+              );
               const terminal = result.terminals[0];
               const pointerAttempted = terminal?.enter
                 || (terminal?.dispatchStatus !== undefined && terminal.dispatchStatus !== 'send_failed')

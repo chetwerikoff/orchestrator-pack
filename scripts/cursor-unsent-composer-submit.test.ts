@@ -78,6 +78,7 @@ function depsFor(
     read: extra.read ?? ((identity) => ({
       ok: true as const,
       lines: linesById[identity.id] ?? ['→ Add a follow-up'],
+      source: 'screen' as const,
     })),
     liveness: extra.liveness,
     submit: extra.submitResult ?? extra.submit ?? ((identity) => {
@@ -864,7 +865,7 @@ describe('delivery-triggered composer submission', () => {
       submitDeps: depsFor({}, {
         read: () => {
           reads += 1;
-          return { ok: true as const, lines: reads === 1 ? ['idle splash'] : ['rendered pointer'] };
+          return { ok: true as const, lines: reads === 1 ? ['idle splash'] : ['rendered pointer'], source: 'screen' as const };
         },
         composerControl: () => ({
           kind: 'opencode-http' as const,
@@ -902,7 +903,7 @@ describe('delivery-triggered composer submission', () => {
       writePointer: () => { throw new Error('screen pointer write must not run'); },
       submitDeps: depsFor({}, {
         liveness: () => 'idle' as const,
-        read: () => { reads += 1; return { ok: true as const, lines: [] }; },
+        read: () => { reads += 1; return { ok: true as const, lines: [], source: 'screen' as const }; },
         composerControl: () => ({
           kind: 'opencode-http' as const,
           dispatch: () => { actions.push('submit-prompt'); return { status: 'dispatched' as const }; },
@@ -941,6 +942,7 @@ describe('delivery-triggered composer submission', () => {
           return () => ({
             ok: true as const,
             lines: reads++ === 0 ? ['idle splash'] : ['rendered pointer'],
+            source: 'screen' as const,
           });
         })(),
         composerControl: () => ({
@@ -1401,7 +1403,7 @@ describe('delivery-triggered composer submission', () => {
     let reads = 0;
     const submitted: RuntimeWorkerIdentity[] = [];
     const result = await submitUnsentCursorComposerDeliveryForTerminal('term_replaced', {
-      findWorkerById: () => ({ status: 'failed', reason: 'runtime_identity_ambiguous' }),
+      findWorkerById: () => ({ status: 'failed', operation: 'find_worker_by_id', reason: 'runtime_identity_ambiguous' }),
     }, depsFor({}, {
       submitted,
       read: () => {
@@ -2082,6 +2084,76 @@ describe('orchestration mail reconciliation', () => {
     expect(suppressed.skipped).toBe(1);
     expect(suppressed.deliveryEvidence).toEqual([]);
     expect(deps.writes).toBe(0);
+  });
+  it.each([
+    ['run-fenced/terminal-readable', { ok: true as const }],
+    ['run-fenced/terminal-fenced', { ok: false as const, reason: 'consumer_fenced' }],
+  ] as const)('delivers with independent target-pane authority: %s', async (_label, retrievability) => {
+    const target = worker(`term_${_label.replaceAll('/', '_')}`);
+    const message = {
+      id: `msg_${_label.replaceAll('/', '_')}`,
+      runId: `run_${_label.replaceAll('/', '_')}`,
+      recipient: `run:run_${_label.replaceAll('/', '_')}`,
+      consumed: false,
+    };
+    const pointer = buildDeliveryPointer(message);
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let pointerVisible = true;
+    let writes = 0;
+    const result = await runOrchestrationMailReconcileTick({
+      readInbox: () => ({ ok: true as const, result: { messages: [{ id: message.id, run_id: message.runId, to_handle: message.recipient, read: 0 }] } }),
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      isMessageRetrievable: () => retrievability,
+      writePointer: () => { writes += 1; return { status: 'dispatched' as const }; },
+      submitDeps: depsFor({}, {
+        submitted,
+        read: () => ({
+          ok: true as const,
+          lines: pointerVisible ? [pointer, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        }),
+        submitResult: (identity) => { submitted.push(identity); pointerVisible = false; return { status: 'dispatched' as const }; },
+      }),
+    }, {
+      ledgerPath: join(tmpdir(), `opk-reconcile-${_label.replaceAll('/', '-')}-${process.pid}.json`),
+      lockPath: join(tmpdir(), `opk-reconcile-${_label.replaceAll('/', '-')}-${process.pid}.lock`),
+      now: () => 1_000,
+    });
+    expect(result.nudged).toBe(1);
+    expect(result.reasons).toContain(`${message.id}:enter_sent`);
+    expect(writes).toBe(0);
+    expect(submitted).toEqual([target.identity]);
+  });
+
+  it('keeps terminal-fenced reconciliation fail-closed on a mismatched target pointer', async () => {
+    const target = worker('term_fenced_target_mismatch');
+    const message = { id: 'msg_fenced_target_mismatch', runId: 'run_fenced_target_mismatch', recipient: `run:run_fenced_target_mismatch`, consumed: false };
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let writes = 0;
+    const result = await runOrchestrationMailReconcileTick({
+      readInbox: () => ({ ok: true as const, result: { messages: [{ id: message.id, run_id: message.runId, to_handle: message.recipient, read: 0 }] } }),
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      isMessageRetrievable: () => ({ ok: false as const, reason: 'consumer_fenced' }),
+      writePointer: () => { writes += 1; return { status: 'dispatched' as const }; },
+      submitDeps: depsFor({}, {
+        submitted,
+        read: () => ({
+          ok: true as const,
+          lines: ['You have 1 orchestration message. Run `orca orchestration check --terminal term_other`. ', ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        }),
+      }),
+    }, {
+      ledgerPath: join(tmpdir(), `opk-reconcile-mismatch-${process.pid}.json`),
+      lockPath: join(tmpdir(), `opk-reconcile-mismatch-${process.pid}.lock`),
+      now: () => 1_000,
+    });
+    expect(result.nudged).toBe(0);
+    expect(result.reasons).toContain(`${message.id}:orchestration_pointer_target_mismatch`);
+    expect(writes).toBe(0);
+    expect(submitted).toEqual([]);
   });
 
   it('ignores an untracked recent read message without writing a pack pointer', async () => {
@@ -2974,6 +3046,7 @@ describe('orchestration mail reconciliation', () => {
       read: () => ({
         ok: true as const,
         lines: wrote ? [pointer, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+        source: 'screen' as const,
       }),
     });
     const deps = () => ({
