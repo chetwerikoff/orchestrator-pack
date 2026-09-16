@@ -1577,19 +1577,16 @@ async function drainStalePointers(
   current: number,
   resolveWorker: DeliveryMessageSubmitDeps['resolveWorker'],
   reasons: string[],
+  workers: readonly RuntimeWorker[],
+  touchedWorkerKeys: ReadonlySet<string>,
  ): Promise<number> {
   const staleObservations = state.staleObservations ?? (state.staleObservations = {});
   const submittedFingerprint = state.submittedFingerprint ?? (state.submittedFingerprint = {});
-  const listed = deps.submitDeps.listWorkersAsync
-    ? await deps.submitDeps.listWorkersAsync()
-    : deps.submitDeps.listWorkers();
-  if (!listed.ok) return 0;
-  const liveKeys = new Set<string>();
-  const observations = await Promise.all(listed.workers
-    .filter(isLiveCursorRecipient)
+  const liveKeys = new Set(workers.filter(isLiveCursorRecipient).map((worker) => workerKey(worker.identity)));
+  const observations = await Promise.all(workers
+    .filter((worker) => isLiveCursorRecipient(worker) && !touchedWorkerKeys.has(workerKey(worker.identity)))
     .map(async (worker) => {
       const key = workerKey(worker.identity);
-      liveKeys.add(key);
       if (deps.submitDeps.composerControl?.(worker.identity)?.kind === 'opencode-http') {
         return { worker, key, skipped: true as const };
       }
@@ -1674,7 +1671,7 @@ async function drainStalePointers(
 /** Reconcile unread Orca mail without inspecting composer screens globally. */
 export async function runOrchestrationMailReconcileTick(
   deps: DeliveryMessageSubmitDeps,
-  options: { readonly ledgerPath?: string; readonly lockPath?: string; readonly now?: () => number; readonly maxRecipientGroups?: number; readonly maxMessages?: number } = {},
+  options: { readonly ledgerPath?: string; readonly lockPath?: string; readonly now?: () => number; readonly maxRecipientGroups?: number; readonly maxMessages?: number; readonly workerRoster?: readonly RuntimeWorker[] } = {},
 ): Promise<OrchestrationMailReconcileResult> {
   const ledgerPath = options.ledgerPath ?? deps.episodeStatePath ?? ORCHESTRATION_RECONCILE_LEDGER_PATH;
   const lockPath = options.lockPath ?? deps.episodeLockPath ?? ORCHESTRATION_RECONCILE_LOCK_PATH;
@@ -1692,6 +1689,10 @@ export async function runOrchestrationMailReconcileTick(
         { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS },
       );
     if (!response.ok) return { ok: false, attempted: 0, nudged: 0, skipped: 0, reasons: [response.error?.code ?? 'orchestration_inbox_unavailable'], deliveryEvidence: [] };
+    const workerRoster = options.workerRoster ?? (() => {
+      const listed = deps.submitDeps.listWorkers();
+      return listed.ok ? listed.workers : [];
+    })();
     const inboxRows = response.result?.messages ?? [];
     const unread = inboxRows.filter((row) => {
       const id = row.id?.trim() ?? '';
@@ -1843,6 +1844,7 @@ export async function runOrchestrationMailReconcileTick(
     const reasons: string[] = [];
     const deliveryEvidence: OrchestrationMailDeliveryEvidence[] = [];
     const coalescedPointerKeys = new Set<string>();
+    const touchedWorkerKeys = new Set<string>();
     let attempted = 0; let nudged = 0; let skipped = 0;
     for (const row of rowsToProcess) {
       const id = row.id!.trim();
@@ -1862,6 +1864,7 @@ export async function runOrchestrationMailReconcileTick(
           result = deliveryNoEffect('worker_gone', undefined, false);
         } else {
           const worker = resolved.worker;
+          touchedWorkerKeys.add(workerKey(worker.identity));
           const message = found.message;
           const runRecipient = message.recipient.startsWith('run:');
           const cacheKey = runRecipient
@@ -1952,7 +1955,7 @@ export async function runOrchestrationMailReconcileTick(
       state.messages[id] = current;
       if (result.terminals[0]?.reason) reasons.push(`${id}:${result.terminals[0].reason}`);
     }
-    nudged += await drainStalePointers(deps, state, inboxRows, current, resolveWorker, reasons);
+    nudged += await drainStalePointers(deps, state, inboxRows, current, resolveWorker, reasons, workerRoster, touchedWorkerKeys);
     saveReconcileState(ledgerPath, state);
     return { ok: reasons.every((reason) => !/:send_failed$|:dispatch_unknown$|:submission_unconfirmed$/u.test(reason)), attempted, nudged, skipped, reasons, deliveryEvidence };
   } finally {

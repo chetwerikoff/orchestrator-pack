@@ -40,7 +40,7 @@ import {
   resolveWorkerAssignmentStorePath,
   type WorkerAssignment,
 } from '../lib/worker-assignment-store.ts';
-import { runtimeFailure, sameRuntimeWorker, type RuntimeAdapter } from '../runtime/contracts.ts';
+import { runtimeFailure, sameRuntimeWorker, type RuntimeAdapter, type RuntimeWorker } from '../runtime/contracts.ts';
 import {
   reconcileWorkerAssignments,
   type WorkerAssignmentLifecycleSweepResult,
@@ -634,10 +634,11 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   const repoRoot = process.cwd(); const cadence = parsed.config.scheduler.pollIntervalMs; const env = process.env; const projectId = 'orchestrator-pack';
   const epoch = assertSchedulerEpoch(env); const activationLineage = schedulerActivationLineage(epoch);
   const assignmentStorePath = resolveWorkerAssignmentStorePath(projectId, env); const storedAssignments = listCurrentWorkerAssignments(assignmentStorePath);
+  let mailWorkers: readonly RuntimeWorker[] = [];
   const executeOrchestrationMailReconcile: NonNullable<SchedulerBoundary['orchestrationMailReconcile']> = async () => {
     const runtime = await selectRuntimeAdapter({ env });
     const deps = createAdapterSubmitDeps(runtime);
-    return await runOrchestrationMailReconcileTick(createOrcaMessageSubmitDeps(runtime, deps));
+    return await runOrchestrationMailReconcileTick(createOrcaMessageSubmitDeps(runtime, deps), { workerRoster: mailWorkers });
   };
   const runSerializedMailTurn = async (): Promise<void> => {
     try {
@@ -672,6 +673,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       ? buildFleetAssignmentBindings(assignmentLifecycleSweep.bindings)
       : null;
     if (assignmentLifecycleSweep.status === 'ok' && built) {
+      mailWorkers = assignmentLifecycleSweep.bindings.map(({ worker }) => worker);
       fleetBindings = built;
       assignmentReconciliation = assignmentLifecycleSweep.reconciliations[0];
       fleetObserver = new FleetObserver({
@@ -693,6 +695,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       fleetNudgeActuator = { tick: (input) => runFleetNudgeActuator(input, effects) };
       unresolvedReason = 'target_unresolved';
     } else {
+      mailWorkers = [];
       unresolvedReason = 'assignment_untrusted';
       assignmentReconciliation = {
         reason: unresolvedReason,
