@@ -4,21 +4,21 @@
   "declared_paths": [
     "docs/chat-executor-rules.md",
     "scripts/lib/worker-smoke-core.ts",
-    "scripts/pr2-foundation/post-review-smoke.test.ts",
+    "scripts/pr2-foundation/post-review-smoke-preaction.test.ts",
     "scripts/worker-smoke-run.ts"
   ],
   "denylist": [
-    ".orca/",
-    "credentials/",
-    "packages/core/",
-    "secrets/",
-    "vendor/"
+    ".orca/**",
+    "credentials/**",
+    "packages/core/**",
+    "secrets/**",
+    "vendor/**"
   ],
   "allowed_roots": [
     "docs/chat-executor-rules.md",
     "scripts/lib/worker-smoke-core.ts",
-    "scripts/pr2-foundation/post-review-smoke.test.ts",
+    "scripts/pr2-foundation/post-review-smoke-preaction.test.ts",
     "scripts/worker-smoke-run.ts"
   ],
-  "source_revision": "ed38597b52693332b9505ed07fdb336a3068bb3a"
+  "source_revision": "9099350a522a93b862620fc68953c92ea255f0c3"
 }
