@@ -16,6 +16,11 @@ import {
 } from './fleet-reconciliation-handoff.ts';
 import type { FleetObserverSource } from './fleet-observer.ts';
 import type { RuntimeCallOptions, RuntimeWorker, RuntimeWorkerIdentity } from '../runtime/contracts.ts';
+import {
+  buildDeliveryPointer,
+  runOrchestrationMailReconcileTick,
+  type UnsentComposerSubmitDeps,
+} from '../cursor-unsent-composer-submit.ts';
 import { productionFleetObserverSource, runSchedulerTick, type SchedulerBoundary } from './scheduler.ts';
 
 const roots: string[] = [];
@@ -91,6 +96,25 @@ switch (operation) {
       : { ok: false, error: { code: 'terminal_not_found', message: 'terminal not found' } });
     break;
   }
+  case 'orchestration inbox':
+    state.inboxReads = Number(state.inboxReads ?? 0) + 1;
+    const messages = state.mailMessagesVisibleAfter === undefined || state.inboxReads >= state.mailMessagesVisibleAfter
+      ? state.mailMessages ?? []
+      : [];
+    out({ ok: true, result: { messages } });
+    break;
+  case 'orchestration check':
+    if (state.retrievability === 'consumer_fenced') {
+      const response = state.consumerFencedResponse ?? {
+        ok: false,
+        error: { code: 'consumer_fenced', message: 'This terminal is attested as <A> and cannot act as <B>' },
+      };
+      state.consumerFencedResponses = [...(state.consumerFencedResponses ?? []), response];
+      out(response);
+    } else {
+      out({ ok: true, result: { messages: state.mailMessages ?? [] } });
+    }
+    break;
   case 'orchestration worker-show': {
     state.resolveCalls = Number(state.resolveCalls ?? 0) + 1;
     const dispatch = get('--dispatch');
@@ -144,6 +168,7 @@ switch (operation) {
       tail: lines,
       nextCursor: String(worker.lines.length),
       latestCursor: String(worker.lines.length),
+      source: 'screen',
     } } });
     break;
   }
@@ -186,8 +211,14 @@ switch (operation) {
       break;
     }
     const message = get('--text');
+    if (args.includes('--text') && !args.includes('--enter')) {
+      state.pointerWrites = Number(state.pointerWrites ?? 0) + 1;
+    }
+    if (args.includes('--enter')) {
+      state.enterDispatches = Number(state.enterDispatches ?? 0) + 1;
+    }
     state.dispatches = [...(state.dispatches ?? []), { workerId: worker.id, message }];
-    worker.lines = [...worker.lines, message];
+    worker.lines = state.consumePointerOnSubmit && !message ? [] : [...worker.lines, message];
     if (state.corruptJournalAfterSend) {
       fs.writeFileSync(String(process.env.OPK_WORKER_MESSAGE_DISPATCH_JOURNAL ?? ''), '{not-json', 'utf8');
     }
@@ -262,12 +293,20 @@ interface FixtureState {
   dispatches?: Array<{ workerId: string; message: string }>;
   listWorkerWorktrees?: string[];
   runMessages?: Array<{ runId: string; dispatchId: string; type: string; payload: string }>;
+  mailMessages?: Array<{ id: string; run_id: string; to_handle: string; read: number }>;
+  mailMessagesVisibleAfter?: number;
+  inboxReads?: number;
+  retrievability?: string;
+  consumerFencedResponse?: { ok: false; error: { code: 'consumer_fenced'; message: string } };
+  consumerFencedResponses?: Array<{ ok: false; error: { code: 'consumer_fenced'; message: string } }>;
+  consumePointerOnSubmit?: boolean;
+  pointerWrites?: number;
+  enterDispatches?: number;
   sendCalls?: number;
   resolveCalls?: number;
   dropResolutionAtCall?: number;
   corruptJournalAfterSend?: boolean;
 }
-
 function fixture(file: string): FixtureState {
   return JSON.parse(readFileSync(file, 'utf8')) as FixtureState;
 }
@@ -469,6 +508,202 @@ describe('scheduler bounded-child production composition', () => {
       status: 'ok',
       counts: { observed: 0, terminal: 0, retired: 0 },
     });
+  });
+  const observedConsumerFencedResponses = [
+    ['terminal-attestation', { ok: false as const, error: { code: 'consumer_fenced' as const, message: 'This terminal is attested as <A> and cannot act as <B>' } }],
+    ['coordinator-unbound', { ok: false as const, error: { code: 'consumer_fenced' as const, message: 'This coordinator terminal is no longer bound to Run <R>' } }],
+  ] as const;
+
+  it('delivers terminal-fenced mail through the production scheduler without duplicate Enter', async () => {
+    const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json');
+    const target = 'term_mail_fenced';
+    const pointer = `You have 1 orchestration message. Read and act on your orchestration message. Run \`orca orchestration check --terminal ${target}\`.`;
+    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
+    writeFileSync(fixturePath, JSON.stringify({
+      workers: [{ id: target, generation: 'generation-mail-fenced', bindingKey: 'dispatch-mail-fenced', lines: [pointer, 'Cursor Grok 4.6 High · 40.6% Run Everything', '~/projects/orchestrator-pack · main'], liveness: 'busy' }],
+      mailMessages: [{ id: 'msg-mail-fenced', run_id: 'run-mail-fenced', to_handle: target, read: 0 }],
+      mailMessagesVisibleAfter: 2,
+      retrievability: 'consumer_fenced', consumePointerOnSubmit: true, dispatches: [], sendCalls: 0,
+    }));
+    writeEpoch(epochPath, 'epoch-mail-fenced', 'nonce-mail-fenced');
+    const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-mail-fenced', 'nonce-mail-fenced');
+    await publishLocal(env, 'dispatch-mail-fenced', 'task-mail-fenced');
+    const first = await runTick(env);
+    expect(fixture(fixturePath).dispatches?.filter(({ message }) => message === '')).toHaveLength(1);
+    expect((schedulerResult(first).orchestrationMailReconcile as Record<string, unknown>).nudged).toBeGreaterThanOrEqual(1);
+    expect(fixture(fixturePath).workers[0]?.lines).not.toContain(pointer);
+    const second = await runTick(env);
+    expect(fixture(fixturePath).dispatches?.filter(({ message }) => message === '')).toHaveLength(1);
+    expect((schedulerResult(second).orchestrationMailReconcile as Record<string, unknown>).nudged).toBe(0);
+  });
+
+  it.each(observedConsumerFencedResponses)(
+    'at the Orca CLI boundary, consumer_fenced %s qualifies only with an exact visible target pointer and disabled pack pointer creation',
+    async (label, response) => {
+      const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json');
+      const target = `term_cli_fenced_${label}`; const messageId = `msg_cli_fenced_${label}`; const pointer = `You have 1 orchestration message. Read and act on your orchestration message. Run \`orca orchestration check --terminal ${target}\`.`;
+      writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
+      writeFileSync(fixturePath, JSON.stringify({
+        workers: [{ id: target, generation: `generation-${label}`, bindingKey: `dispatch-${label}`, lines: [pointer, 'Cursor Grok 4.6 High · 40.6% Run Everything', '~/projects/orchestrator-pack · main'], liveness: 'busy' }],
+        mailMessages: [{ id: messageId, run_id: `run_cli_fenced_${label}`, to_handle: target, read: 0 }],
+        mailMessagesVisibleAfter: 2,
+        retrievability: 'consumer_fenced', consumerFencedResponse: response, consumePointerOnSubmit: true, dispatches: [], sendCalls: 0,
+      }));
+      writeEpoch(epochPath, `epoch-cli-fenced-${label}`, `nonce-cli-fenced-${label}`);
+      const env = processEnv(root, fixturePath, epochPath, configPath, `epoch-cli-fenced-${label}`, `nonce-cli-fenced-${label}`);
+      await publishLocal(env, `dispatch-${label}`, `task-cli-fenced-${label}`);
+      const first = await runTick(env);
+      const firstMail = schedulerResult(first).orchestrationMailReconcile as Record<string, unknown>;
+      const observed = fixture(fixturePath).consumerFencedResponses ?? [];
+      expect(response.ok).toBe(false);
+      expect(response.error.code).toBe('consumer_fenced');
+      expect(observed).toEqual(expect.arrayContaining([response]));
+      expect(firstMail.attempted).toBe(1);
+      expect(firstMail.nudged).toBeGreaterThanOrEqual(1);
+      expect(firstMail.reasons).toContain(`${messageId}:enter_sent`);
+      expect(fixture(fixturePath).pointerWrites ?? 0).toBe(0);
+      expect(fixture(fixturePath).enterDispatches ?? 0).toBe(1);
+      expect(fixture(fixturePath).dispatches?.filter(({ message }) => message === '')).toHaveLength(1);
+      expect(fixture(fixturePath).workers[0]?.lines).not.toContain(pointer);
+      const second = await runTick(env);
+      const secondMail = schedulerResult(second).orchestrationMailReconcile as Record<string, unknown>;
+      expect(secondMail.nudged).toBe(0);
+      expect(fixture(fixturePath).enterDispatches ?? 0).toBe(1);
+      expect(fixture(fixturePath).dispatches?.filter(({ message }) => message === '')).toHaveLength(1);
+    },
+  );
+
+  it.each(observedConsumerFencedResponses)(
+    'at the Orca CLI boundary, consumer_fenced %s stays fail-closed for every non-matching visible pointer',
+    async (label, response) => {
+      const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json');
+      const target = `term_cli_fenced_mismatch_${label}`; const otherTarget = `term_other_fenced_${label}`; const messageId = `msg_cli_fenced_mismatch_${label}`; const pointer = `You have 1 orchestration message. Read and act on your orchestration message. Run \`orca orchestration check --terminal ${otherTarget}\`.`;
+      writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
+      writeFileSync(fixturePath, JSON.stringify({
+        workers: [{ id: target, generation: `generation-mismatch-${label}`, bindingKey: `dispatch-mismatch-${label}`, lines: [pointer, 'Cursor Grok 4.6 High · 40.6% Run Everything', '~/projects/orchestrator-pack · main'], liveness: 'busy' }],
+        mailMessages: [{ id: messageId, run_id: `run_cli_fenced_mismatch_${label}`, to_handle: target, read: 0 }],
+        mailMessagesVisibleAfter: 2,
+        retrievability: 'consumer_fenced', consumerFencedResponse: response, consumePointerOnSubmit: true, dispatches: [], sendCalls: 0,
+      }));
+      writeEpoch(epochPath, `epoch-cli-fenced-mismatch-${label}`, `nonce-cli-fenced-mismatch-${label}`);
+      const env = processEnv(root, fixturePath, epochPath, configPath, `epoch-cli-fenced-mismatch-${label}`, `nonce-cli-fenced-mismatch-${label}`);
+      await publishLocal(env, `dispatch-mismatch-${label}`, `task-cli-fenced-mismatch-${label}`);
+      const first = await runTick(env);
+      const firstMail = schedulerResult(first).orchestrationMailReconcile as Record<string, unknown>;
+      const observed = fixture(fixturePath).consumerFencedResponses ?? [];
+      expect(observed).toEqual(expect.arrayContaining([response]));
+      expect(firstMail.attempted).toBe(1);
+      expect(firstMail.nudged).toBe(0);
+      expect(firstMail.reasons).toContain(`${messageId}:composer_not_empty_before_delivery`);
+      expect(firstMail.deliveryEvidence).toEqual([]);
+      expect(fixture(fixturePath).pointerWrites ?? 0).toBe(0);
+      expect(fixture(fixturePath).enterDispatches ?? 0).toBe(0);
+      expect(fixture(fixturePath).dispatches?.filter(({ message }) => message === '')).toHaveLength(0);
+      expect(fixture(fixturePath).workers[0]?.lines).toContain(pointer);
+    },
+  );
+
+  it('keeps consumer-fenced OpenCode control from creating a missing pointer', async () => {
+    const root = makeRoot();
+    const target: RuntimeWorker = {
+      identity: { runtime: 'orca', id: 'term_fenced_opencode_missing', generation: 'g1' },
+      workspacePath: '/tmp',
+      title: 'term_fenced_opencode_missing',
+      provenance: 'external',
+    };
+    const message = {
+      id: 'msg_fenced_opencode_missing',
+      runId: 'run_fenced_opencode_missing',
+      recipient: 'run:run_fenced_opencode_missing',
+      consumed: false,
+    };
+    let writes = 0;
+    let controlDispatches = 0;
+    let submits = 0;
+    const submitDeps: UnsentComposerSubmitDeps = {
+      listWorkers: () => ({ ok: true, workers: [target] }),
+      read: () => ({ ok: true, lines: ['→ Add a follow-up'], source: 'screen' }),
+      submit: () => { submits += 1; return { status: 'dispatched' }; },
+      composerControl: () => ({
+        kind: 'opencode-http',
+        dispatch: () => { controlDispatches += 1; return { status: 'dispatched' }; },
+      }),
+    };
+    const result = await runOrchestrationMailReconcileTick({
+      readInbox: () => ({ ok: true, result: { messages: [{ id: message.id, run_id: message.runId, to_handle: message.recipient, read: 0 }] } }),
+      lookupMessage: () => ({ ok: true, message }),
+      resolveWorker: () => ({ ok: true, worker: target }),
+      isMessageRetrievable: () => ({ ok: false, reason: 'consumer_fenced' }),
+      writePointer: () => { writes += 1; return { status: 'dispatched' }; },
+      submitDeps,
+    }, {
+      ledgerPath: path.join(root, 'fenced-opencode-ledger.json'),
+      lockPath: path.join(root, 'fenced-opencode.lock'),
+      now: () => 1_000,
+    });
+
+    expect(result.nudged).toBe(0);
+    expect(result.reasons).toContain(`${message.id}:orchestration_pointer_not_visible`);
+    expect(writes).toBe(0);
+    expect(controlDispatches).toBe(0);
+    expect(submits).toBe(0);
+  });
+
+  it('revalidates the exact consumer-fenced pointer immediately before Enter', async () => {
+    const root = makeRoot();
+    const target: RuntimeWorker = {
+      identity: { runtime: 'orca', id: 'term_fenced_toctou', generation: 'g1' },
+      workspacePath: '/tmp',
+      title: 'term_fenced_toctou',
+      provenance: 'external',
+    };
+    const message = {
+      id: 'msg_fenced_toctou',
+      runId: 'run_fenced_toctou',
+      recipient: 'run:run_fenced_toctou',
+      consumed: false,
+    };
+    const expectedPointer = buildDeliveryPointer(message);
+    const mismatchedPointer = buildDeliveryPointer({
+      id: 'msg_other_toctou',
+      runId: 'run_other_toctou',
+      recipient: 'run:run_other_toctou',
+      consumed: false,
+    });
+    const footer = ['Cursor Grok 4.6 High · 40.6% Run Everything', '~/projects/orchestrator-pack · main'];
+    let reads = 0;
+    let writes = 0;
+    let submits = 0;
+    const submitDeps: UnsentComposerSubmitDeps = {
+      listWorkers: () => ({ ok: true, workers: [target] }),
+      read: () => {
+        reads += 1;
+        return {
+          ok: true,
+          lines: reads === 1 ? [expectedPointer, ...footer] : [mismatchedPointer, ...footer],
+          source: 'screen',
+        };
+      },
+      submit: () => { submits += 1; return { status: 'dispatched' }; },
+    };
+    const result = await runOrchestrationMailReconcileTick({
+      readInbox: () => ({ ok: true, result: { messages: [{ id: message.id, run_id: message.runId, to_handle: message.recipient, read: 0 }] } }),
+      lookupMessage: () => ({ ok: true, message }),
+      resolveWorker: () => ({ ok: true, worker: target }),
+      isMessageRetrievable: () => ({ ok: false, reason: 'consumer_fenced' }),
+      writePointer: () => { writes += 1; return { status: 'dispatched' }; },
+      submitDeps,
+    }, {
+      ledgerPath: path.join(root, 'fenced-toctou-ledger.json'),
+      lockPath: path.join(root, 'fenced-toctou.lock'),
+      now: () => 1_000,
+    });
+
+    expect(reads).toBe(3);
+    expect(result.nudged).toBe(0);
+    expect(result.reasons).toContain(`${message.id}:orchestration_pointer_not_visible`);
+    expect(writes).toBe(0);
+    expect(submits).toBe(0);
   });
 
   it('starts a fresh baseline after an activation epoch change', async () => {

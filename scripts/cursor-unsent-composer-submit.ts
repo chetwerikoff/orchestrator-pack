@@ -1491,14 +1491,40 @@ export async function runOrchestrationMailReconcileTick(
                 : { ok: false as const, reason: 'orchestration_retrievability_unavailable' };
             retrievable.set(cacheKey, observed);
           }
+          // consumer_fenced is not retryable authorization. The target pane
+          // observation below is the independent authority for this one case.
+          const consumerFenced = !observed.ok && observed.reason === 'consumer_fenced';
           const qualifies = 'messageIds' in observed
             ? observed.ok && observed.messageIds.has(message.id)
-            : observed.ok;
+            : observed.ok || consumerFenced;
           if (!qualifies) {
             const reason = !observed.ok ? observed.reason : 'orchestration_message_unretrievable';
             result = deliveryNoEffect(reason, worker, false);
           } else {
-            result = await submitOrcaMessageDeliveryPointerForMessage(message, reconcileDeps);
+            const submissionDeps = consumerFenced
+              ? {
+                  ...reconcileDeps,
+                  // A fenced check is never authority to create prompt text.
+                  // Only an already-visible exact target pointer may reach Enter.
+                  writePointer: () => ({ status: 'send_failed' as const, reason: 'orchestration_pointer_not_visible' }),
+                  submitDeps: {
+                    ...reconcileDeps.submitDeps,
+                    // Runtime-specific prompt submission would create the pointer
+                    // and therefore bypass the target-pane evidence requirement.
+                    composerControl: () => undefined,
+                    submit: (identity: RuntimeWorkerIdentity) => {
+                      // Revalidate the same exact target pointer at the final
+                      // synchronous boundary immediately before submit-only Enter.
+                      const currentPointer = reconcileDeps.submitDeps.read(identity);
+                      if (!composerShowsDeliveryPointer(currentPointer, buildDeliveryPointer(message))) {
+                        return { status: 'send_failed' as const, reason: 'orchestration_pointer_not_visible' };
+                      }
+                      return reconcileDeps.submitDeps.submit(identity);
+                    },
+                  },
+                }
+              : reconcileDeps;
+            result = await submitOrcaMessageDeliveryPointerForMessage(message, submissionDeps);
             const evidence = deliveryLookingEvidence(message, worker, result);
             if (evidence) deliveryEvidence.push(evidence);
           }
