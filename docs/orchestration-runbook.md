@@ -49,6 +49,16 @@ reviewer publication and prompt policy remains in
 prompt. Any genuine-write-failure exception remains limited to the fallback
 already defined by that owning skill.
 
+Under the explicit `execute-issue-with-gpt` workflow, a manager may instead own
+one resumable external GPT Issue-execution session through verified handoff. The
+manager still does **not** supervise pack coding workers: the supervisor remains
+the top-level lifecycle/recovery owner and restores execution continuity when a
+manager cannot continue. Work returns to a manager only when the existing
+authoritative Browser-GPT evidence is sufficient to identify the owned
+session/turn without guessing. The multi-turn execution loop is owned by
+`docs/chatgpt-task-execution-runbook.md`; one-turn browser mechanics remain owned
+by `docs/browser-gpt-turn-runbook.md` and are not duplicated here.
+
 ### Worker
 
 A worker owns the bounded implementation workflow:
