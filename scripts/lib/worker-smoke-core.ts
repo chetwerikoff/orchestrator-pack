@@ -68,19 +68,23 @@ export function normalizeSmokeReport(
     && partial.producer === base.SMOKE_REPORT_PRODUCER
     && Boolean(partial.terminalHandle?.trim())
     && Boolean(partial.orcaExecutable?.trim());
-  const normalized = base.normalizeSmokeReport(
-    supervisorPendingPass
+  const carryOnlyPass = isCarryOnlySelectivePass(partial, binding.headSha);
+  const normalizationPartial = carryOnlyPass
+    ? { ...partial, terminalCleanup: 'closed_owned_handle', terminalHandle: 'carry-only-no-execution' }
+    : supervisorPendingPass
       ? { ...partial, terminalCleanup: 'closed_owned_handle' }
-      : partial,
-    binding,
-  );
+      : partial;
+  const normalized = base.normalizeSmokeReport(normalizationPartial, binding);
   if (!normalized.ok) {
     return {
       ...normalized,
       report: invalidSmokeReport(partial, binding, normalized.reason),
     };
   }
-  if (supervisorPendingPass) {
+  if (carryOnlyPass) {
+    normalized.report.terminalCleanup = 'not_started_no_execution';
+    normalized.report.terminalHandle = undefined;
+  } else if (supervisorPendingPass) {
     normalized.report.terminalCleanup = 'pending';
   }
   return { ok: true, report: bindControlPlaneVerdict(normalized.report) };
@@ -357,7 +361,6 @@ function validateTrustedTarget(
   if (target.commentSnapshotStable !== true) return 'comment_snapshot_unstable';
   return undefined;
 }
-
 function makeCollection<T>(all: readonly T[]): WorkerSmokeBoundedCollection<T> {
   return {
     total: all.length,
@@ -468,7 +471,7 @@ function admitComment(
     if (!partial) {
       candidate.invalidReason = 'canonical_report_parse_failed';
     } else {
-      const normalized = base.normalizeSmokeReport(partial, {
+      const normalized = normalizeSmokeReport(partial, {
         issueNumber: target.issueNumber,
         prNumber: target.prNumber,
         headSha: target.headSha.trim().toLowerCase(),
@@ -733,7 +736,7 @@ function admitHistoryComment(
     const partial = base.parseSmokeAgentReport(reportBlocks[0]?.[0] ?? '');
     if (!partial) candidate.invalidReason = 'canonical_report_parse_failed';
     else {
-      const normalized = base.normalizeSmokeReport(partial, {
+      const normalized = normalizeSmokeReport(partial, {
         issueNumber: target.issueNumber,
         prNumber: target.prNumber,
         headSha: candidate.headSha,
@@ -820,8 +823,11 @@ function projectedCarriedObservation(scenario: base.SmokeScenario): boolean {
   return scenario.outcome === 'pass' && CARRIED_OBSERVED_PATTERN.test(scenario.observed?.trim() ?? '');
 }
 
-function isCarryOnlySelectiveReport(report: base.SmokeReport): boolean {
-  const currentHead = report.headSha.trim().toLowerCase();
+function isCarryOnlySelectivePass(
+  report: Partial<base.SmokeReport>,
+  currentHeadSha: string,
+): boolean {
+  const currentHead = currentHeadSha.trim().toLowerCase();
   return report.result === 'PASS'
     && report.terminalCleanup === 'not_started_no_execution'
     && !String(report.terminalHandle ?? '').trim()
@@ -830,6 +836,10 @@ function isCarryOnlySelectiveReport(report: base.SmokeReport): boolean {
     && report.scenarios.every((scenario) =>
       projectedCarriedObservation(scenario)
       && scenario.observed?.trim().endsWith(`; not freshly executed on ${currentHead}`) === true);
+}
+
+function isCarryOnlySelectiveReport(report: base.SmokeReport): boolean {
+  return isCarryOnlySelectivePass(report, report.headSha);
 }
 
 export function planWorkerSmokeSelectiveRetry(input: {
