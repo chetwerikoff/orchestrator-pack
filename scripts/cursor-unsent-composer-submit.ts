@@ -1491,14 +1491,25 @@ export async function runOrchestrationMailReconcileTick(
                 : { ok: false as const, reason: 'orchestration_retrievability_unavailable' };
             retrievable.set(cacheKey, observed);
           }
+          // consumer_fenced is not retryable authorization. The target pane
+          // observation below is the independent authority for this one case.
+          const consumerFenced = !observed.ok && observed.reason === 'consumer_fenced';
           const qualifies = 'messageIds' in observed
             ? observed.ok && observed.messageIds.has(message.id)
-            : observed.ok;
+            : observed.ok || consumerFenced;
           if (!qualifies) {
             const reason = !observed.ok ? observed.reason : 'orchestration_message_unretrievable';
             result = deliveryNoEffect(reason, worker, false);
           } else {
-            result = await submitOrcaMessageDeliveryPointerForMessage(message, reconcileDeps);
+            const submissionDeps = consumerFenced
+              ? {
+                  ...reconcileDeps,
+                  // Never create a pointer when the Orca observation is fenced;
+                  // only an already-visible exact pointer may be submitted.
+                  writePointer: () => ({ status: 'send_failed' as const, reason: 'orchestration_pointer_not_visible' }),
+                }
+              : reconcileDeps;
+            result = await submitOrcaMessageDeliveryPointerForMessage(message, submissionDeps);
             const evidence = deliveryLookingEvidence(message, worker, result);
             if (evidence) deliveryEvidence.push(evidence);
           }

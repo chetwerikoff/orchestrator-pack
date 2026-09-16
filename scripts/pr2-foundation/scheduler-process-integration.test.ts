@@ -91,6 +91,16 @@ switch (operation) {
       : { ok: false, error: { code: 'terminal_not_found', message: 'terminal not found' } });
     break;
   }
+  case 'orchestration inbox':
+    out({ ok: true, result: { messages: state.mailMessages ?? [] } });
+    break;
+  case 'orchestration check':
+    if (state.retrievability === 'consumer_fenced') {
+      out({ ok: false, error: { code: 'consumer_fenced', message: 'terminal is owner-scoped' } });
+    } else {
+      out({ ok: true, result: { messages: state.mailMessages ?? [] } });
+    }
+    break;
   case 'orchestration worker-show': {
     state.resolveCalls = Number(state.resolveCalls ?? 0) + 1;
     const dispatch = get('--dispatch');
@@ -144,6 +154,7 @@ switch (operation) {
       tail: lines,
       nextCursor: String(worker.lines.length),
       latestCursor: String(worker.lines.length),
+      source: 'screen',
     } } });
     break;
   }
@@ -187,7 +198,7 @@ switch (operation) {
     }
     const message = get('--text');
     state.dispatches = [...(state.dispatches ?? []), { workerId: worker.id, message }];
-    worker.lines = [...worker.lines, message];
+    worker.lines = state.consumePointerOnSubmit && !message ? [] : [...worker.lines, message];
     if (state.corruptJournalAfterSend) {
       fs.writeFileSync(String(process.env.OPK_WORKER_MESSAGE_DISPATCH_JOURNAL ?? ''), '{not-json', 'utf8');
     }
@@ -262,12 +273,14 @@ interface FixtureState {
   dispatches?: Array<{ workerId: string; message: string }>;
   listWorkerWorktrees?: string[];
   runMessages?: Array<{ runId: string; dispatchId: string; type: string; payload: string }>;
+  mailMessages?: Array<{ id: string; run_id: string; to_handle: string; read: number }>;
+  retrievability?: string;
+  consumePointerOnSubmit?: boolean;
   sendCalls?: number;
   resolveCalls?: number;
   dropResolutionAtCall?: number;
   corruptJournalAfterSend?: boolean;
 }
-
 function fixture(file: string): FixtureState {
   return JSON.parse(readFileSync(file, 'utf8')) as FixtureState;
 }
@@ -469,6 +482,28 @@ describe('scheduler bounded-child production composition', () => {
       status: 'ok',
       counts: { observed: 0, terminal: 0, retired: 0 },
     });
+  });
+
+  it('delivers terminal-fenced mail through the production scheduler without duplicate Enter', async () => {
+    const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json');
+    const target = 'term_mail_fenced';
+    const pointer = `You have 1 orchestration message. Read and act on your orchestration message. Run \`orca orchestration check --terminal ${target}\`.`;
+    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
+    writeFileSync(fixturePath, JSON.stringify({
+      workers: [{ id: target, generation: 'generation-mail-fenced', bindingKey: 'dispatch-mail-fenced', lines: [pointer, 'Cursor Grok 4.6 High · 40.6% Run Everything', '~/projects/orchestrator-pack · main'], liveness: 'busy' }],
+      mailMessages: [{ id: 'msg-mail-fenced', run_id: 'run-mail-fenced', to_handle: target, read: 0 }],
+      retrievability: 'consumer_fenced', consumePointerOnSubmit: true, dispatches: [], sendCalls: 0,
+    }));
+    writeEpoch(epochPath, 'epoch-mail-fenced', 'nonce-mail-fenced');
+    const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-mail-fenced', 'nonce-mail-fenced');
+    await publishLocal(env, 'dispatch-mail-fenced', 'task-mail-fenced');
+    const first = await runTick(env);
+    expect(fixture(fixturePath).dispatches?.filter(({ message }) => message === '')).toHaveLength(1);
+    expect((schedulerResult(first).orchestrationMailReconcile as Record<string, unknown>).nudged).toBeGreaterThanOrEqual(0);
+    expect(fixture(fixturePath).workers[0]?.lines).toEqual([]);
+    const second = await runTick(env);
+    expect(fixture(fixturePath).dispatches?.filter(({ message }) => message === '')).toHaveLength(1);
+    expect((schedulerResult(second).orchestrationMailReconcile as Record<string, unknown>).nudged).toBe(0);
   });
 
   it('starts a fresh baseline after an activation epoch change', async () => {

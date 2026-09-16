@@ -1650,6 +1650,77 @@ describe('orchestration mail reconciliation', () => {
     expect(deps.writes).toBe(1);
   });
 
+  it.each([
+    ['run-fenced/terminal-readable', { ok: true as const }],
+    ['run-fenced/terminal-fenced', { ok: false as const, reason: 'consumer_fenced' }],
+  ] as const)('delivers with independent target-pane authority: %s', async (_label, retrievability) => {
+    const target = worker(`term_${_label.replaceAll('/', '_')}`);
+    const message = {
+      id: `msg_${_label.replaceAll('/', '_')}`,
+      runId: `run_${_label.replaceAll('/', '_')}`,
+      recipient: `run:run_${_label.replaceAll('/', '_')}`,
+      consumed: false,
+    };
+    const pointer = buildDeliveryPointer(message);
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let pointerVisible = true;
+    let writes = 0;
+    const result = await runOrchestrationMailReconcileTick({
+      readInbox: () => ({ ok: true as const, result: { messages: [{ id: message.id, run_id: message.runId, to_handle: message.recipient, read: 0 }] } }),
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      isMessageRetrievable: () => retrievability,
+      writePointer: () => { writes += 1; return { status: 'dispatched' as const }; },
+      submitDeps: depsFor({}, {
+        submitted,
+        read: () => ({
+          ok: true as const,
+          lines: pointerVisible ? [pointer, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        }),
+        submitResult: (identity) => { submitted.push(identity); pointerVisible = false; return { status: 'dispatched' as const }; },
+      }),
+    }, {
+      ledgerPath: join(tmpdir(), `opk-reconcile-${_label.replaceAll('/', '-')}-${process.pid}.json`),
+      lockPath: join(tmpdir(), `opk-reconcile-${_label.replaceAll('/', '-')}-${process.pid}.lock`),
+      now: () => 1_000,
+    });
+    expect(result.nudged).toBe(1);
+    expect(result.reasons).toContain(`${message.id}:enter_sent`);
+    expect(writes).toBe(0);
+    expect(submitted).toEqual([target.identity]);
+  });
+
+  it('keeps terminal-fenced reconciliation fail-closed on a mismatched target pointer', async () => {
+    const target = worker('term_fenced_target_mismatch');
+    const message = { id: 'msg_fenced_target_mismatch', runId: 'run_fenced_target_mismatch', recipient: `run:run_fenced_target_mismatch`, consumed: false };
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let writes = 0;
+    const result = await runOrchestrationMailReconcileTick({
+      readInbox: () => ({ ok: true as const, result: { messages: [{ id: message.id, run_id: message.runId, to_handle: message.recipient, read: 0 }] } }),
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      isMessageRetrievable: () => ({ ok: false as const, reason: 'consumer_fenced' }),
+      writePointer: () => { writes += 1; return { status: 'dispatched' as const }; },
+      submitDeps: depsFor({}, {
+        submitted,
+        read: () => ({
+          ok: true as const,
+          lines: ['You have 1 orchestration message. Run `orca orchestration check --terminal term_other`. ', ...CURSOR_FOOTER],
+          source: 'screen' as const,
+        }),
+      }),
+    }, {
+      ledgerPath: join(tmpdir(), `opk-reconcile-mismatch-${process.pid}.json`),
+      lockPath: join(tmpdir(), `opk-reconcile-mismatch-${process.pid}.lock`),
+      now: () => 1_000,
+    });
+    expect(result.nudged).toBe(0);
+    expect(result.reasons).toContain(`${message.id}:composer_not_empty_before_delivery`);
+    expect(writes).toBe(0);
+    expect(submitted).toEqual([]);
+  });
+
   it('emits one truthful pointer for several unread messages for one recipient', async () => {
     const target = worker('term_retrievable_batch');
     const submitted: RuntimeWorkerIdentity[] = [];
