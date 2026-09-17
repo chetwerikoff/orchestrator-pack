@@ -11,6 +11,11 @@ import {
   type CreateIssueActionBinding,
 } from './lib/create-issue-next-action.ts';
 import { resolveCreateIssueBrowserOperatorConfig } from './lib/create-issue-browser-gpt-preflight.ts';
+import {
+  selectPrincipalOwnedCanonicalArtifact,
+  sameGithubPrincipal,
+  type PrincipalOwnedIssueComment,
+} from './lib/create-issue-github-artifact-authority.ts';
 
 const roots: string[] = [];
 function tempRoot(): string {
@@ -68,6 +73,45 @@ describe('create-Issue nextAction contract', () => {
       observed: { sourceRevision: 'r04' },
       nextAction: null,
     });
+  });
+});
+
+describe('principal-owned reviewer artifact authority', () => {
+  const comment = (id: number, userLogin: string | null, body: string): PrincipalOwnedIssueComment => ({
+    id,
+    body,
+    createdAt: '2026-09-17T00:00:00Z',
+    updatedAt: '2026-09-17T00:00:00Z',
+    userLogin,
+    htmlUrl: `https://github.com/chetwerikoff/orchestrator-pack/issues/1935#issuecomment-${id}`,
+  });
+
+  it('matches authenticated login case-insensitively before uniqueness', () => {
+    expect(sameGithubPrincipal('ChetWerikoff', 'chetwerikoff')).toBe(true);
+    const selected = selectPrincipalOwnedCanonicalArtifact(
+      [comment(1, 'other', 'match'), comment(2, 'CHETWERIKOFF', 'match')],
+      'chetwerikoff',
+      (candidate) => candidate.body === 'match',
+    );
+    expect(selected).toMatchObject({ ok: true, principalLogin: 'chetwerikoff', comment: { id: 2 } });
+  });
+
+  it('fails closed on duplicate principal-owned canonical matches even when bytes are identical', () => {
+    const selected = selectPrincipalOwnedCanonicalArtifact(
+      [comment(1, 'chetwerikoff', 'same'), comment(2, 'CHETWERIKOFF', 'same')],
+      'chetwerikoff',
+      (candidate) => candidate.body === 'same',
+    );
+    expect(selected).toMatchObject({ ok: false, cause: 'duplicate_principal_owned_match' });
+  });
+
+  it('reports wrong publisher rather than treating foreign canonical publication as principal authority', () => {
+    const selected = selectPrincipalOwnedCanonicalArtifact(
+      [comment(3, 'foreign-reviewer', 'canonical')],
+      'chetwerikoff',
+      (candidate) => candidate.body === 'canonical',
+    );
+    expect(selected).toMatchObject({ ok: false, cause: 'wrong_publisher' });
   });
 });
 
