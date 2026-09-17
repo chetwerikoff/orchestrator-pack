@@ -11,6 +11,7 @@ import {
 } from './state-light-turn-base.ts';
 import type { ExecutionRecoveryProductCause } from './ui-adapter.ts';
 
+const DEFAULT_TIMEOUT_MS = 1_800_000;
 const EXECUTION_RECOVERY_CAUSES = new Set<ExecutionRecoveryProductCause>([
   'message_delivery_timed_out',
   'product_network_error',
@@ -57,6 +58,12 @@ function projectStdoutChunk(chunk: unknown): unknown {
   return `${projected.join('\n')}${trailingNewline ? '\n' : ''}`;
 }
 
+function withPreservedDefaultTimeout(argv: readonly string[]): readonly string[] {
+  return argv.includes('--timeout-ms')
+    ? argv
+    : [...argv, '--timeout-ms', String(DEFAULT_TIMEOUT_MS)];
+}
+
 /**
  * Preserve the existing state-light engine while projecting the two new causes
  * onto the already-existing conversation-scoped recovery_required result axis.
@@ -74,7 +81,7 @@ export async function runStateLightTurn(
     originalWrite.call(process.stdout, projectStdoutChunk(chunk) as any, ...args as any)
   )) as (...args: any[]) => boolean;
   try {
-    return await runBaseStateLightTurn(argv, dependencies);
+    return await runBaseStateLightTurn(withPreservedDefaultTimeout(argv), dependencies);
   } finally {
     (process.stdout as unknown as { write: typeof process.stdout.write }).write = originalWrite;
   }
