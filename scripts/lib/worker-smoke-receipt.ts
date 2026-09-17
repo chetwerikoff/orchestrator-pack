@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -17,6 +17,7 @@ import {
 } from './worker-smoke-bounded-create.ts';
 
 export const WORKER_SMOKE_RECEIPT_SCHEMA = 'worker-smoke-receipt/v1';
+export const WORKER_SMOKE_RUN_FINAL_SCHEMA = 'worker-smoke-run-final/v1';
 export const SMOKE_CLOSE_SETTLEMENT_REASON = 'owned_terminal_cleanup' as const;
 
 export interface WorkerSmokeFailureCause {
@@ -38,6 +39,22 @@ export interface WorkerSmokeReceipt {
   result: SmokeReport['result'];
   publishedAt: string;
   failureCause?: WorkerSmokeFailureCause;
+}
+
+export type WorkerSmokeRunMode = 'runtime' | 'no_execution';
+
+export interface WorkerSmokeRunFinalEvidence {
+  schema: typeof WORKER_SMOKE_RUN_FINAL_SCHEMA;
+  runId: string;
+  issueNumber: number;
+  prNumber: number;
+  headSha: string;
+  artifactDir: string;
+  mode: WorkerSmokeRunMode;
+  terminalState: 'launcher_terminalized';
+  result: SmokeReport['result'];
+  reportDigest: string;
+  recordedAtMs: number;
 }
 
 export interface SmokeCloseSettlementIdentity {
@@ -108,6 +125,91 @@ export const isCleanCloseOutcome = (outcome: string): boolean =>
 
 export const smokeCloseReceiptPath = (artifactDir: string): string =>
   join(artifactDir, 'close-receipt.json');
+
+export const smokeRunFinalEvidencePath = (artifactDir: string): string =>
+  join(artifactDir, 'final-evidence.json');
+
+function smokeReportDigest(report: SmokeReport): string {
+  return createHash('sha256').update(JSON.stringify(report), 'utf8').digest('hex');
+}
+
+export function writeWorkerSmokeRunFinalEvidence(input: {
+  artifactDir: string;
+  runId: string;
+  mode: WorkerSmokeRunMode;
+  report: SmokeReport;
+  nowMs?: number;
+}): WorkerSmokeRunFinalEvidence {
+  const runId = input.runId.trim();
+  const artifactDir = resolve(input.artifactDir);
+  if (!runId || basename(artifactDir) !== runId) throw new Error('worker_smoke_final_run_binding_invalid');
+  if (!Number.isSafeInteger(input.report.issueNumber) || input.report.issueNumber <= 0
+      || !Number.isSafeInteger(input.report.prNumber) || input.report.prNumber <= 0
+      || !/^[0-9a-f]{40}$/u.test(input.report.headSha.trim().toLowerCase())) {
+    throw new Error('worker_smoke_final_target_binding_invalid');
+  }
+  const evidence: WorkerSmokeRunFinalEvidence = {
+    schema: WORKER_SMOKE_RUN_FINAL_SCHEMA,
+    runId,
+    issueNumber: input.report.issueNumber,
+    prNumber: input.report.prNumber,
+    headSha: input.report.headSha.trim().toLowerCase(),
+    artifactDir,
+    mode: input.mode,
+    terminalState: 'launcher_terminalized',
+    result: input.report.result,
+    reportDigest: smokeReportDigest(input.report),
+    recordedAtMs: input.nowMs ?? Date.now(),
+  };
+  writeAtomicJson(smokeRunFinalEvidencePath(artifactDir), evidence);
+  return evidence;
+}
+
+export function readWorkerSmokeRunFinalEvidence(input: {
+  artifactDir: string;
+  runId: string;
+  issueNumber?: number;
+  prNumber?: number;
+  headSha?: string;
+  mode?: WorkerSmokeRunMode;
+}): WorkerSmokeRunFinalEvidence | null {
+  const runId = input.runId.trim();
+  const artifactDir = resolve(input.artifactDir);
+  if (!runId || basename(artifactDir) !== runId) return null;
+  const raw = readJson(smokeRunFinalEvidencePath(artifactDir));
+  if (!isRecord(raw)) return null;
+  const evidence: WorkerSmokeRunFinalEvidence = {
+    schema: WORKER_SMOKE_RUN_FINAL_SCHEMA,
+    runId: String(raw.runId ?? '').trim(),
+    issueNumber: Number(raw.issueNumber),
+    prNumber: Number(raw.prNumber),
+    headSha: String(raw.headSha ?? '').trim().toLowerCase(),
+    artifactDir: String(raw.artifactDir ?? '').trim(),
+    mode: raw.mode === 'no_execution' ? 'no_execution' : 'runtime',
+    terminalState: 'launcher_terminalized',
+    result: raw.result as SmokeReport['result'],
+    reportDigest: String(raw.reportDigest ?? '').trim().toLowerCase(),
+    recordedAtMs: Number(raw.recordedAtMs),
+  };
+  if (
+    raw.schema !== WORKER_SMOKE_RUN_FINAL_SCHEMA
+    || raw.terminalState !== 'launcher_terminalized'
+    || (raw.mode !== 'runtime' && raw.mode !== 'no_execution')
+    || !['PASS', 'FAIL', 'BLOCKED'].includes(String(raw.result ?? ''))
+    || evidence.runId !== runId
+    || resolve(evidence.artifactDir) !== artifactDir
+    || !Number.isSafeInteger(evidence.issueNumber) || evidence.issueNumber <= 0
+    || !Number.isSafeInteger(evidence.prNumber) || evidence.prNumber <= 0
+    || !/^[0-9a-f]{40}$/u.test(evidence.headSha)
+    || !/^[0-9a-f]{64}$/u.test(evidence.reportDigest)
+    || !Number.isFinite(evidence.recordedAtMs)
+    || (input.issueNumber !== undefined && evidence.issueNumber !== input.issueNumber)
+    || (input.prNumber !== undefined && evidence.prNumber !== input.prNumber)
+    || (input.headSha !== undefined && evidence.headSha !== input.headSha.trim().toLowerCase())
+    || (input.mode !== undefined && evidence.mode !== input.mode)
+  ) return null;
+  return evidence;
+}
 
 export type CloseReceiptRead =
   | { state: 'missing' | 'invalid' }
