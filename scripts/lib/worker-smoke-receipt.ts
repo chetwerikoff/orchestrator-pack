@@ -403,10 +403,12 @@ export function deriveWorkerSmokeFailureCause(
   const causeFamily: WorkerSmokeCauseFamily = terminalRows.length > 1
     ? 'unknown'
     : structuredScenarioFamily ?? reportFamily ?? 'unknown';
-  const scenarioOwned = Boolean(selected && (structuredScenarioFamily || !reportFamily || reportFamily === 'unknown'));
-  const action = selected?.scenario.action?.trim() || 'worker smoke harness';
-  const expected = selected?.scenario.expected?.trim();
-  const observed = selected?.scenario.observed?.trim() || `result:${report.result.toLowerCase()}`;
+  const scenarioOwned = Boolean(selected && structuredScenarioFamily && (!reportFamily || reportFamily === structuredScenarioFamily));
+  const action = scenarioOwned ? selected!.scenario.action.trim() : 'worker smoke harness';
+  const expected = scenarioOwned ? selected!.scenario.expected.trim() : undefined;
+  const observed = scenarioOwned
+    ? selected!.scenario.observed?.trim() || `result:${report.result.toLowerCase()}`
+    : selected?.scenario.observed?.trim() || `result:${report.result.toLowerCase()}`;
   const resolution = explicitResolution(observed);
   return {
     phase: scenarioOwned ? 'scenario' : 'harness',
@@ -468,7 +470,7 @@ function normalizeAttemptObservations(
   });
 }
 
-function boundedOperatorOverrideReason(value: string | undefined): string | undefined {
+export function validateWorkerSmokeOperatorOverrideReason(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
   const normalized = value.trim();
   if (!normalized) throw new Error('worker_smoke_operator_override_blank');
@@ -498,7 +500,11 @@ export function writeWorkerSmokeReceipt(
   if (runId && runId !== attemptId) throw new Error('worker_smoke_receipt_run_attempt_mismatch');
   const executionMode = options.executionMode
     ?? (report.terminalHandle?.trim() ? 'executed' : 'carry-only');
-  const overrideReason = boundedOperatorOverrideReason(options.operatorOverrideReason);
+  if (executionMode === 'executed' && !runId) throw new Error('worker_smoke_receipt_executed_requires_run_id');
+  if (executionMode === 'executed' && report.result === 'PASS' && !report.terminalHandle?.trim()) {
+    throw new Error('worker_smoke_receipt_executed_pass_requires_terminal_handle');
+  }
+  const overrideReason = validateWorkerSmokeOperatorOverrideReason(options.operatorOverrideReason);
   const observations = normalizeAttemptObservations(
     options.attemptObservations ?? freshAttemptObservationsFromReport(report),
   );
@@ -546,6 +552,9 @@ function parseWorkerSmokeReceipt(
     ? raw.executionMode
     : undefined;
   if (attemptId && !executionMode) return null;
+  const terminalHandle = String(raw.terminalHandle ?? '').trim();
+  if (attemptId && executionMode === 'executed' && !runId) return null;
+  if (attemptId && executionMode === 'executed' && raw.result === 'PASS' && !terminalHandle) return null;
   let attemptObservations: WorkerSmokeAttemptObservation[] | undefined;
   if (attemptId) {
     if (!Array.isArray(raw.attemptObservations)) return null;
@@ -560,7 +569,7 @@ function parseWorkerSmokeReceipt(
     issueNumber: Number(raw.issueNumber),
     prNumber,
     headSha: normalizedHead,
-    terminalHandle: String(raw.terminalHandle ?? '').trim(),
+    terminalHandle,
     orcaExecutable: String(raw.orcaExecutable ?? '').trim(),
     producer: String(raw.producer ?? '').trim(),
     result: raw.result as SmokeReport['result'],
@@ -668,7 +677,7 @@ export function evaluateSameHeadBlockedRetryAdmission(input: {
   });
   if (blockedTuples.length === 0) return { allowed: true, blockedTuples };
   if (input.operatorOverrideReason !== undefined) {
-    boundedOperatorOverrideReason(input.operatorOverrideReason);
+    validateWorkerSmokeOperatorOverrideReason(input.operatorOverrideReason);
     return { allowed: true, blockedTuples };
   }
   return { allowed: false, reason: 'smoke_blocked_precondition_unchanged', blockedTuples };
@@ -679,23 +688,7 @@ function legacyReceiptForExactTarget(prNumber: number, headSha: string): WorkerS
   return receipt?.attemptId ? null : receipt;
 }
 
-export function verifySmokeRunReceipt(
-  report: SmokeReport,
-  attemptId?: string,
-  runId?: string,
-): boolean {
-  const normalizedAttemptId = attemptId?.trim();
-  const receipt = normalizedAttemptId
-    ? readWorkerSmokeReceiptForAttempt(report.prNumber, report.headSha, normalizedAttemptId)
-    : legacyReceiptForExactTarget(report.prNumber, report.headSha);
-  if (!receipt) return false;
-  if (normalizedAttemptId && receipt.attemptId !== normalizedAttemptId) return false;
-  if (receipt.runId) {
-    if (receipt.runId !== receipt.attemptId) return false;
-    if (runId !== undefined && receipt.runId !== runId.trim()) return false;
-  } else if (runId !== undefined && runId.trim()) {
-    return false;
-  }
+function receiptMatchesReport(receipt: WorkerSmokeReceipt, report: SmokeReport): boolean {
   const expectedFailureCause = deriveWorkerSmokeFailureCause(report);
   return receipt.producer === SMOKE_REPORT_PRODUCER
     && receipt.issueNumber === report.issueNumber
@@ -705,4 +698,29 @@ export function verifySmokeRunReceipt(
     && receipt.orcaExecutable === String(report.orcaExecutable ?? '').trim()
     && receipt.result === report.result
     && JSON.stringify(receipt.failureCause ?? null) === JSON.stringify(expectedFailureCause ?? null);
+}
+
+export function verifySmokeRunReceipt(
+  report: SmokeReport,
+  attemptId?: string,
+  runId?: string,
+): boolean {
+  const normalizedAttemptId = attemptId?.trim();
+  const receipt = normalizedAttemptId
+    ? readWorkerSmokeReceiptForAttempt(report.prNumber, report.headSha, normalizedAttemptId)
+    : listWorkerSmokeReceipts(report.prNumber, report.headSha)
+        .filter((candidate) => receiptMatchesReport(candidate, report))
+        .at(-1)
+      ?? legacyReceiptForExactTarget(report.prNumber, report.headSha);
+  if (!receipt) return false;
+  if (normalizedAttemptId && receipt.attemptId !== normalizedAttemptId) return false;
+  if (receipt.runId) {
+    if (receipt.runId !== receipt.attemptId) return false;
+    if (runId !== undefined && receipt.runId !== runId.trim()) return false;
+  } else if (runId !== undefined && runId.trim()) {
+    return false;
+  }
+  if (receipt.attemptId && receipt.executionMode === 'executed' && !receipt.runId) return false;
+  if (receipt.attemptId && receipt.executionMode === 'executed' && receipt.result === 'PASS' && !receipt.terminalHandle) return false;
+  return receiptMatchesReport(receipt, report);
 }
