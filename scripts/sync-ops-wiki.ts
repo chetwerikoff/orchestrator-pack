@@ -21,6 +21,7 @@ export const OPS_WIKI_STATUS_NOTE = 'Ops Wiki Status.md';
 export const OPS_WIKI_EPISODE_DIR = 'episodes';
 export const DEFAULT_CONVERGENCE_TIMEOUT_MS = 30_000;
 export const DEFAULT_POLL_INTERVAL_MS = 200;
+export const DEFAULT_MCP_REQUEST_TIMEOUT_MS = 5_000;
 
 export type GitRunner = (cwd: string, args: readonly string[]) => { ok: boolean; stdout: string; stderr: string };
 export type OpsWikiMode = 'plan' | 'apply' | 'check';
@@ -111,6 +112,7 @@ export interface RenderedEpisode {
   readonly sourceSections: readonly string[];
   readonly sourceHash: string;
   readonly extractionHash: string;
+  readonly generationHash: string;
   readonly aliases: readonly string[];
   readonly topic?: string;
   readonly role?: string;
@@ -131,6 +133,7 @@ export interface OpsWikiSuccess {
   readonly removedEpisodeIds: readonly string[];
   readonly detail: string;
 }
+
 export interface OpsWikiDegraded {
   readonly ok: false;
   readonly status: 'degraded';
@@ -141,6 +144,7 @@ export interface OpsWikiDegraded {
   readonly applyInProgress?: string;
   readonly mutationBegan: boolean;
 }
+
 export type OpsWikiResult = OpsWikiSuccess | OpsWikiDegraded;
 
 export interface SyncOptions {
@@ -206,6 +210,17 @@ function assertRepoRelative(relativePath: string): void {
   }
 }
 
+function readControlText(
+  options: SyncOptions,
+  commit: string,
+  relativePath: string,
+  explicitPath: string | undefined,
+  git: GitRunner,
+): string {
+  if (explicitPath) return readFileSync(explicitPath, 'utf8');
+  return readCommitText(options.repoRoot, commit, relativePath, git);
+}
+
 export function loadManifest(raw: string): OpsWikiManifest {
   let parsed: unknown;
   try {
@@ -221,7 +236,7 @@ export function loadManifest(raw: string): OpsWikiManifest {
   if (record.weak_top1_score !== 0.5) throw new Error('ops_wiki_manifest_malformed:weak_top1_score');
   if (record.ambiguity_max_score_delta !== 0.05) throw new Error('ops_wiki_manifest_malformed:ambiguity_max_score_delta');
   if (!Array.isArray(record.episodes) || record.episodes.length === 0) throw new Error('ops_wiki_manifest_malformed:episodes');
-  const exclusions = Array.isArray(record.exclusions) ? record.exclusions.map((item) => String(item)) : [];
+
   const episodes = record.episodes.map((item, index) => parseEpisode(item, index));
   const ids = new Set<string>();
   for (const episode of episodes) {
@@ -233,13 +248,14 @@ export function loadManifest(raw: string): OpsWikiManifest {
       if (!ids.has(edge.target)) throw new Error(`ops_wiki_manifest_malformed:edge_target:${episode.episode_id}:${edge.target}`);
     }
   }
+
   return {
     schema_version: 1,
     source_repo: record.source_repo.trim(),
     max_episode_bytes: 12288,
     weak_top1_score: 0.5,
     ambiguity_max_score_delta: 0.05,
-    exclusions,
+    exclusions: Array.isArray(record.exclusions) ? record.exclusions.map((item) => String(item)) : [],
     episodes,
   };
 }
@@ -256,33 +272,36 @@ function parseEpisode(item: unknown, index: number): ManifestEpisode {
   if (!Array.isArray(record.sections) || record.sections.length === 0) {
     throw new Error(`ops_wiki_manifest_malformed:sections:${episodeId}`);
   }
+
   const sections = record.sections.map((section, sectionIndex) => {
     if (!section || typeof section !== 'object' || Array.isArray(section)) {
       throw new Error(`ops_wiki_manifest_malformed:section:${episodeId}:${sectionIndex}`);
     }
-    const heading = String((section as Record<string, unknown>).heading ?? '').trim();
+    const sectionRecord = section as Record<string, unknown>;
+    const heading = String(sectionRecord.heading ?? '').trim();
     if (!HEADING_PATTERN.test(heading)) throw new Error(`ops_wiki_unresolved_selector:${path}:${heading || '<missing>'}`);
-    return {
-      heading,
-      include_subsections: (section as Record<string, unknown>).include_subsections !== false,
-    };
+    return { heading, include_subsections: sectionRecord.include_subsections !== false };
   });
-  const referenced = Array.isArray(record.referenced_paths)
+
+  const referencedPaths = Array.isArray(record.referenced_paths)
     ? record.referenced_paths.map((value) => {
       const referencedPath = String(value).trim();
       assertRepoRelative(referencedPath);
       return referencedPath;
     })
     : [];
+
   const edges = Array.isArray(record.edges)
     ? record.edges.map((edge) => {
       if (!edge || typeof edge !== 'object' || Array.isArray(edge)) throw new Error(`ops_wiki_manifest_malformed:edge:${episodeId}`);
-      const type = String((edge as Record<string, unknown>).type ?? '').trim();
-      const target = String((edge as Record<string, unknown>).target ?? '').trim();
+      const edgeRecord = edge as Record<string, unknown>;
+      const type = String(edgeRecord.type ?? '').trim();
+      const target = String(edgeRecord.target ?? '').trim();
       if (!type || !target) throw new Error(`ops_wiki_manifest_malformed:edge:${episodeId}`);
       return { type, target };
     })
     : [];
+
   return {
     episode_id: episodeId,
     title,
@@ -292,20 +311,27 @@ function parseEpisode(item: unknown, index: number): ManifestEpisode {
     topic: typeof record.topic === 'string' ? record.topic : undefined,
     role: typeof record.role === 'string' ? record.role : undefined,
     edges,
-    referenced_paths: referenced,
+    referenced_paths: referencedPaths,
   };
 }
 
 export function loadGoldenSuite(raw: string): GoldenSuite {
-  const parsed = JSON.parse(raw) as { queries?: unknown };
-  if (!Array.isArray(parsed.queries) || parsed.queries.length === 0) throw new Error('ops_wiki_golden_malformed');
-  const queries = parsed.queries.map((item, index) => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('ops_wiki_golden_malformed:json');
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('ops_wiki_golden_malformed:object');
+  const queriesRaw = (parsed as { queries?: unknown }).queries;
+  if (!Array.isArray(queriesRaw) || queriesRaw.length === 0) throw new Error('ops_wiki_golden_malformed');
+  const queries = queriesRaw.map((item, index) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error(`ops_wiki_golden_malformed:${index}`);
     const record = item as Record<string, unknown>;
     const id = String(record.id ?? '').trim();
     const query = String(record.query ?? '').trim();
     const expected = Array.isArray(record.expected_episode_ids)
-      ? record.expected_episode_ids.map((value) => String(value))
+      ? record.expected_episode_ids.map((value) => String(value).trim()).filter(Boolean)
       : [];
     if (!id || !query || expected.length === 0) throw new Error(`ops_wiki_golden_malformed:${id || index}`);
     return { id, query, expected_episode_ids: expected };
@@ -322,15 +348,18 @@ interface HeadingHit {
 
 export function collectHeadings(text: string): readonly HeadingHit[] {
   const lines = text.split('\n');
-  let inFence = false;
+  let fence: '`' | '~' | undefined;
   const hits: HeadingHit[] = [];
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]!;
-    if (line.startsWith('```')) {
-      inFence = !inFence;
+    const fenceMatch = /^(?: {0,3})(`{3,}|~{3,})/u.exec(line);
+    if (fenceMatch) {
+      const kind = fenceMatch[1]![0] as '`' | '~';
+      if (!fence) fence = kind;
+      else if (fence === kind) fence = undefined;
       continue;
     }
-    if (inFence) continue;
+    if (fence) continue;
     const match = HEADING_PATTERN.exec(line);
     if (!match) continue;
     hits.push({ level: match[1]!.length, title: match[2]!, token: match[0], line: index });
@@ -411,7 +440,7 @@ export function parseOwnedFrontmatter(markdown: string): Record<string, string> 
     }
     fields[key] = value;
   }
-  return fields['ops_wiki_owned'] === 'true' ? fields : undefined;
+  return fields.ops_wiki_owned === 'true' ? fields : undefined;
 }
 
 export function parseStatusNote(markdown: string): { checkedThrough?: string; applyInProgress?: string } {
@@ -427,22 +456,38 @@ export function parseStatusNote(markdown: string): { checkedThrough?: string; ap
 }
 
 export function renderStatusNote(input: { readonly checkedThrough?: string; readonly applyInProgress?: string }): string {
-  const frontmatter = renderFrontmatter({
+  return `${renderFrontmatter({
     ops_wiki_owned: true,
     ops_wiki_kind: 'status',
     checked_through_commit: input.checkedThrough,
     apply_in_progress: input.applyInProgress,
-  });
-  return `${frontmatter}\n\n# Ops Wiki Status\n`;
+  })}\n\n# Ops Wiki Status\n`;
 }
 
 function renderNavigation(edges: readonly ManifestEdge[]): string {
   if (edges.length === 0) return '';
   const lines = ['', '## Related episodes', ''];
-  for (const edge of edges) {
-    lines.push(`- ${edge.type}: [[${episodeRelativePath(edge.target).replace(/\.md$/u, '')}]]`);
-  }
+  for (const edge of edges) lines.push(`- ${edge.type}: [[${episodeRelativePath(edge.target).replace(/\.md$/u, '')}]]`);
   return `${lines.join('\n')}\n`;
+}
+
+function generationHashFor(
+  manifest: OpsWikiManifest,
+  episode: ManifestEpisode,
+  extractionHash: string,
+): string {
+  return sha256(JSON.stringify({
+    episode_id: episode.episode_id,
+    title: episode.title,
+    source_repo: manifest.source_repo,
+    source_path: episode.path,
+    source_sections: episode.sections.map((section) => section.heading),
+    extraction_hash: extractionHash,
+    aliases: episode.aliases ?? [],
+    topic: episode.topic ?? null,
+    role: episode.role ?? null,
+    edges: episode.edges ?? [],
+  }));
 }
 
 export function renderEpisode(
@@ -451,11 +496,13 @@ export function renderEpisode(
   sourceText: string,
   commit: string,
 ): RenderedEpisode {
+  const sourceSections = episode.sections.map((section) => section.heading);
   const parts = episode.sections.map((section) => extractSection(sourceText, section.heading, section.include_subsections !== false));
   const body = parts.join('\n\n');
   const sourceHash = sha256(sourceText);
   const extractionHash = sha256(body);
-  const frontmatter = renderFrontmatter({
+  const generationHash = generationHashFor(manifest, episode, extractionHash);
+  const markdown = `${renderFrontmatter({
     ops_wiki_owned: true,
     ops_wiki_kind: 'episode',
     episode_id: episode.episode_id,
@@ -463,18 +510,17 @@ export function renderEpisode(
     source_repo: manifest.source_repo,
     source_commit: commit,
     source_path: episode.path,
-    source_sections: episode.sections.map((section) => section.heading),
+    source_sections: sourceSections,
     source_hash: sourceHash,
     extraction_hash: extractionHash,
+    generation_hash: generationHash,
     aliases: episode.aliases ?? [],
     topic: episode.topic,
     role: episode.role,
     edges: episode.edges ?? [],
-  });
-  const markdown = `${frontmatter}\n\n${body}${renderNavigation(episode.edges ?? [])}`;
-  if (Buffer.byteLength(markdown) > manifest.max_episode_bytes) {
-    throw new Error(`ops_wiki_episode_over_byte_ceiling:${episode.episode_id}:${Buffer.byteLength(markdown)}`);
-  }
+  })}\n\n${body}${renderNavigation(episode.edges ?? [])}`;
+  const bytes = Buffer.byteLength(markdown);
+  if (bytes > manifest.max_episode_bytes) throw new Error(`ops_wiki_episode_over_byte_ceiling:${episode.episode_id}:${bytes}`);
   return {
     episode_id: episode.episode_id,
     relativePath: episodeRelativePath(episode.episode_id),
@@ -482,9 +528,10 @@ export function renderEpisode(
     markdown,
     body,
     sourcePath: episode.path,
-    sourceSections: episode.sections.map((section) => section.heading),
+    sourceSections,
     sourceHash,
     extractionHash,
+    generationHash,
     aliases: episode.aliases ?? [],
     topic: episode.topic,
     role: episode.role,
@@ -531,11 +578,8 @@ export function listMarkdownFiles(root: string): readonly string[] {
       if (isDotEntry(entry)) continue;
       const absolute = join(dir, entry);
       const stats = statSync(absolute);
-      if (stats.isDirectory()) {
-        walk(absolute);
-        continue;
-      }
-      if (entry.endsWith('.md')) files.push(absolute);
+      if (stats.isDirectory()) walk(absolute);
+      else if (entry.endsWith('.md')) files.push(absolute);
     }
   };
   walk(root);
@@ -544,11 +588,10 @@ export function listMarkdownFiles(root: string): readonly string[] {
 
 export function assertCorpusLocation(corpusRoot: string, syntoVault?: string): void {
   const resolvedCorpus = resolve(corpusRoot);
-  if (syntoVault) {
-    const resolvedSynto = resolve(syntoVault);
-    if (resolvedCorpus === resolvedSynto || resolvedCorpus.startsWith(`${resolvedSynto}${sep}`)) {
-      throw new Error(`ops_wiki_synto_vault_rejected:${corpusRoot}`);
-    }
+  if (!syntoVault) return;
+  const resolvedSynto = resolve(syntoVault);
+  if (resolvedCorpus === resolvedSynto || resolvedCorpus.startsWith(`${resolvedSynto}${sep}`)) {
+    throw new Error(`ops_wiki_synto_vault_rejected:${corpusRoot}`);
   }
 }
 
@@ -556,9 +599,7 @@ function corpusNotePath(corpusRoot: string, relativePath: string): string {
   assertRepoRelative(relativePath);
   const resolvedRoot = resolve(corpusRoot);
   const target = resolve(corpusRoot, relativePath);
-  if (target !== resolvedRoot && !target.startsWith(`${resolvedRoot}${sep}`)) {
-    throw new Error(`ops_wiki_path_escape:${relativePath}`);
-  }
+  if (target !== resolvedRoot && !target.startsWith(`${resolvedRoot}${sep}`)) throw new Error(`ops_wiki_path_escape:${relativePath}`);
   return target;
 }
 
@@ -568,8 +609,35 @@ function readCorpusStatus(corpusRoot: string): { checkedThrough?: string; applyI
   return parseStatusNote(readFileSync(path, 'utf8'));
 }
 
+function restorePriorStatus(
+  corpusRoot: string,
+  previous: { checkedThrough?: string; applyInProgress?: string } | undefined,
+): void {
+  const statusPath = join(corpusRoot, OPS_WIKI_STATUS_NOTE);
+  if (!previous) {
+    rmSync(statusPath, { force: true });
+    return;
+  }
+  atomicWrite(statusPath, renderStatusNote(previous));
+}
+
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+}
+
+async function probeWithin<T>(probe: () => Promise<T>, timeoutMs: number): Promise<T | undefined> {
+  if (timeoutMs <= 0) return undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      probe(),
+      new Promise<undefined>((resolveTimeout) => {
+        timer = setTimeout(() => resolveTimeout(undefined), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function waitFor<T>(
@@ -578,18 +646,19 @@ async function waitFor<T>(
   pollIntervalMs: number,
   now: () => number,
 ): Promise<T | undefined> {
-  const deadline = now() + timeoutMs;
+  const deadline = now() + Math.max(0, timeoutMs);
   while (now() <= deadline) {
-    const value = await probe();
+    const remaining = Math.max(0, deadline - now());
+    const value = await probeWithin(probe, Math.max(1, remaining));
     if (value !== undefined) return value;
-    if (now() + pollIntervalMs > deadline) break;
+    if (now() >= deadline || now() + pollIntervalMs > deadline) break;
     await sleep(pollIntervalMs);
   }
-  return probe();
+  return undefined;
 }
 
 function statusFromRead(read: WikiOpsReadResult): { checkedThrough?: string; applyInProgress?: string } | WikiOpsReadFail {
-  if (!read.ok) return read;
+  if (read.ok === false) return read;
   try {
     return parseStatusNote(read.content);
   } catch {
@@ -604,9 +673,7 @@ export function evaluateOperationalFreshness(input: {
   if (!input.read.ok) return 'canonical_files';
   try {
     const status = parseStatusNote(input.read.content);
-    if (status.applyInProgress) return 'canonical_files';
-    if (status.checkedThrough !== input.currentCommit) return 'canonical_files';
-    return 'use_wiki_ops';
+    return !status.applyInProgress && status.checkedThrough === input.currentCommit ? 'use_wiki_ops' : 'canonical_files';
   } catch {
     return 'canonical_files';
   }
@@ -620,9 +687,7 @@ export function evaluateSearchEscalation(
   const top1 = hits[0]!.score;
   if (typeof top1 !== 'number' || !Number.isFinite(top1) || top1 < policy.weak_top1_score) return 'expand';
   const top2 = hits[1]?.score;
-  if (typeof top2 === 'number' && top2 >= policy.weak_top1_score && top1 - top2 < policy.ambiguity_max_score_delta) {
-    return 'expand';
-  }
+  if (typeof top2 === 'number' && top2 >= policy.weak_top1_score && top1 - top2 < policy.ambiguity_max_score_delta) return 'expand';
   return 'read_top1';
 }
 
@@ -633,7 +698,8 @@ export function evaluateEpisodeRead(input: {
   if (!input.read.ok || !input.read.content.trim()) return 'expand';
   const fields = parseOwnedFrontmatter(input.read.content);
   if (!fields || fields.episode_id !== input.episode.episode_id) return 'expand';
-  if (fields.source_commit && !COMMIT_PATTERN.test(fields.source_commit)) return 'expand';
+  if (!fields.source_commit || !COMMIT_PATTERN.test(fields.source_commit)) return 'expand';
+  if (fields.generation_hash !== input.episode.generationHash) return 'expand';
   for (const section of input.episode.sourceSections) {
     if (!input.read.content.includes(section)) return 'expand';
   }
@@ -652,21 +718,15 @@ const PROCEDURE_SYNONYMS: ReadonlyArray<readonly [RegExp, string]> = [
 export function buildEscalationQueries(query: string): readonly string[] {
   const trimmed = query.trim();
   const queries = [trimmed];
-  const lower = trimmed.toLowerCase();
   for (const [pattern, phrase] of PROCEDURE_SYNONYMS) {
     if (pattern.test(trimmed) && !queries.includes(phrase)) queries.push(phrase);
   }
-  if (/[А-Яа-яЁё]/u.test(trimmed) && !queries.includes(`${trimmed} orchestrator-pack procedure`)) {
-    queries.push(`${trimmed} orchestrator-pack procedure`);
-  }
-  if (!/[А-Яа-яЁё]/u.test(trimmed) && !queries.includes(`${trimmed} процедура оркестратора`)) {
-    queries.push(`${trimmed} процедура оркестратора`);
-  }
-  const identifier = trimmed.match(/#[0-9]+|scripts\/[\w./-]+|PACK_[A-Z0-9_]+/u);
-  if (identifier && !queries.includes(identifier[0])) queries.push(identifier[0]);
+  if (/[А-Яа-яЁё]/u.test(trimmed)) queries.push(`${trimmed} orchestrator-pack procedure`);
+  else queries.push(`${trimmed} процедура оркестратора`);
+  const identifier = trimmed.match(/#[0-9]+|scripts\/[\w./-]+|PACK_[A-Z0-9_]+/u)?.[0];
+  if (identifier) queries.push(identifier);
   const unique = [...new Set(queries.map((item) => item.trim()).filter(Boolean))];
-  if (unique.length === 1 && !lower.includes('procedure')) unique.push(`${trimmed} procedure`);
-  if (unique.length === 1) unique.push(`${trimmed} runbook`);
+  if (unique.length < 2) unique.push(`${trimmed} procedure`);
   return unique.slice(0, 4);
 }
 
@@ -677,8 +737,7 @@ function existingEpisodeState(corpusRoot: string): Readonly<Record<string, strin
   for (const file of listMarkdownFiles(dir)) {
     const markdown = readFileSync(file, 'utf8');
     const fields = parseOwnedFrontmatter(markdown);
-    if (!fields?.episode_id) continue;
-    state[fields.episode_id] = markdown;
+    if (fields?.episode_id) state[fields.episode_id] = markdown;
   }
   return state;
 }
@@ -686,8 +745,7 @@ function existingEpisodeState(corpusRoot: string): Readonly<Record<string, strin
 function ownedRelativePaths(corpusRoot: string): readonly string[] {
   const owned: string[] = [];
   for (const file of listMarkdownFiles(corpusRoot)) {
-    const markdown = readFileSync(file, 'utf8');
-    if (!parseOwnedFrontmatter(markdown)) continue;
+    if (!parseOwnedFrontmatter(readFileSync(file, 'utf8'))) continue;
     owned.push(relative(corpusRoot, file).split(sep).join('/'));
   }
   return owned;
@@ -708,11 +766,18 @@ async function waitForStatus(
   pollIntervalMs: number,
   now: () => number,
 ): Promise<WikiOpsReadResult> {
+  let lastFailure: WikiOpsReadFail | undefined;
   const matched = await waitFor(async () => {
     const read = await readIndexStatus(client);
-    if (!read.ok) return read.reason === 'timeout' || read.reason === 'unavailable' ? read : undefined;
+    if (read.ok === false) {
+      lastFailure = read;
+      return undefined;
+    }
     const status = statusFromRead(read);
-    if ('ok' in status && status.ok === false) return status;
+    if ('ok' in status && status.ok === false) {
+      lastFailure = status;
+      return undefined;
+    }
     const parsed = status as { checkedThrough?: string; applyInProgress?: string };
     const checkedOk = expected.checkedThrough === undefined || parsed.checkedThrough === expected.checkedThrough;
     const progressOk = expected.applyInProgress === null
@@ -720,7 +785,7 @@ async function waitForStatus(
       : expected.applyInProgress === undefined || parsed.applyInProgress === expected.applyInProgress;
     return checkedOk && progressOk ? read : undefined;
   }, timeoutMs, pollIntervalMs, now);
-  return matched ?? { ok: false, reason: 'timeout' };
+  return matched ?? lastFailure ?? { ok: false, reason: 'timeout' };
 }
 
 async function waitForEpisodeBytes(
@@ -732,8 +797,12 @@ async function waitForEpisodeBytes(
   now: () => number,
 ): Promise<boolean> {
   const matched = await waitFor(async () => {
-    const read = await client.read(relativePath, { related: false });
-    return read.ok && read.content === expected ? true : undefined;
+    try {
+      const read = await client.read(relativePath, { related: false });
+      return read.ok && read.content === expected ? true : undefined;
+    } catch {
+      return undefined;
+    }
   }, timeoutMs, pollIntervalMs, now);
   return matched === true;
 }
@@ -746,18 +815,21 @@ async function waitForEpisodeAbsent(
   now: () => number,
 ): Promise<boolean> {
   const matched = await waitFor(async () => {
-    const read = await client.read(relativePath, { related: false });
-    return !read.ok && read.reason === 'absent' ? true : undefined;
+    try {
+      const read = await client.read(relativePath, { related: false });
+      return read.ok === false && read.reason === 'absent' ? true : undefined;
+    } catch {
+      return undefined;
+    }
   }, timeoutMs, pollIntervalMs, now);
   return matched === true;
 }
 
 function episodeIdFromPath(relativePath: string): string | undefined {
-  const match = /^episodes\/([a-z0-9][a-z0-9-]*)\.md$/u.exec(relativePath);
-  return match?.[1];
+  return /^episodes\/([a-z0-9][a-z0-9-]*)\.md$/u.exec(relativePath)?.[1];
 }
 
-async function runGoldenSuite(
+export async function runGoldenSuite(
   client: WikiOpsClient,
   suite: GoldenSuite,
 ): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }> {
@@ -770,17 +842,14 @@ async function runGoldenSuite(
     }
     if (!Array.isArray(hits)) return { ok: false, reason: `golden_unavailable:${query.id}` };
     const found = new Set(hits.slice(0, 3).map((hit) => episodeIdFromPath(hit.path) ?? hit.path));
-    if (!query.expected_episode_ids.some((episodeId) => found.has(episodeId))) {
+    if (!query.expected_episode_ids.every((episodeId) => found.has(episodeId))) {
       return { ok: false, reason: `golden_miss:${query.id}` };
     }
   }
   return { ok: true };
 }
 
-export function reconcileOwnedNotes(
-  corpusRoot: string,
-  keep: ReadonlySet<string>,
-): readonly string[] {
+export function reconcileOwnedNotes(corpusRoot: string, keep: ReadonlySet<string>): readonly string[] {
   const removed: string[] = [];
   for (const relativePath of ownedRelativePaths(corpusRoot)) {
     if (keep.has(relativePath)) continue;
@@ -790,11 +859,25 @@ export function reconcileOwnedNotes(
   return removed;
 }
 
+function loadTrackedInputs(options: SyncOptions, commit: string, git: GitRunner): {
+  manifest: OpsWikiManifest;
+  golden: GoldenSuite;
+} {
+  const manifest = loadManifest(readControlText(options, commit, OPS_WIKI_MANIFEST_RELATIVE, options.manifestPath, git));
+  const golden = loadGoldenSuite(readControlText(options, commit, OPS_WIKI_GOLDEN_RELATIVE, options.goldenPath, git));
+  const ids = new Set(manifest.episodes.map((episode) => episode.episode_id));
+  for (const query of golden.queries) {
+    for (const episodeId of query.expected_episode_ids) {
+      if (!ids.has(episodeId)) throw new Error(`ops_wiki_golden_unknown_episode:${query.id}:${episodeId}`);
+    }
+  }
+  return { manifest, golden };
+}
+
 export function checkRepositoryMode(options: SyncOptions): OpsWikiResult {
   const git = options.git ?? defaultGitRunner;
   const commit = resolveCommit(options.repoRoot, options.commitRef, git);
-  const manifest = loadManifest(readFileSync(options.manifestPath ?? join(options.repoRoot, OPS_WIKI_MANIFEST_RELATIVE), 'utf8'));
-  loadGoldenSuite(readFileSync(options.goldenPath ?? join(options.repoRoot, OPS_WIKI_GOLDEN_RELATIVE), 'utf8'));
+  const { manifest } = loadTrackedInputs(options, commit, git);
   const rendered = planEpisodes(options.repoRoot, commit, manifest, git);
   return {
     ok: true,
@@ -831,37 +914,42 @@ export async function applyOpsWiki(options: SyncOptions): Promise<OpsWikiResult>
   }
   const client = options.client;
   if (!client) return degraded(commit, 'ops_wiki_client_missing', { mutationBegan: false });
-  const timeoutMs = options.convergenceTimeoutMs ?? Number(process.env.PACK_OPS_WIKI_CONVERGENCE_TIMEOUT_MS ?? DEFAULT_CONVERGENCE_TIMEOUT_MS);
+
+  const timeoutRaw = options.convergenceTimeoutMs ?? Number(process.env.PACK_OPS_WIKI_CONVERGENCE_TIMEOUT_MS ?? DEFAULT_CONVERGENCE_TIMEOUT_MS);
+  const timeoutMs = Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? timeoutRaw : DEFAULT_CONVERGENCE_TIMEOUT_MS;
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const now = options.now ?? Date.now;
-  let rendered: readonly RenderedEpisode[];
+
+  let manifest: OpsWikiManifest;
   let golden: GoldenSuite;
+  let rendered: readonly RenderedEpisode[];
   try {
-    const manifest = loadManifest(readFileSync(options.manifestPath ?? join(options.repoRoot, OPS_WIKI_MANIFEST_RELATIVE), 'utf8'));
-    golden = loadGoldenSuite(readFileSync(options.goldenPath ?? join(options.repoRoot, OPS_WIKI_GOLDEN_RELATIVE), 'utf8'));
+    ({ manifest, golden } = loadTrackedInputs(options, commit, git));
     rendered = planEpisodes(options.repoRoot, commit, manifest, git);
   } catch (error) {
     return degraded(commit, error instanceof Error ? error.message : String(error), { mutationBegan: false });
   }
 
   mkdirSync(corpusRoot, { recursive: true });
-  const previous = readCorpusStatus(corpusRoot);
-  const existing = existingEpisodeState(corpusRoot);
+  let previous: { checkedThrough?: string; applyInProgress?: string } | undefined;
+  let existing: Readonly<Record<string, string>>;
+  try {
+    previous = readCorpusStatus(corpusRoot);
+    existing = existingEpisodeState(corpusRoot);
+  } catch (error) {
+    return degraded(commit, error instanceof Error ? error.message : String(error), { mutationBegan: false });
+  }
+
   const changed = rendered.filter((episode) => {
     const previousMarkdown = existing[episode.episode_id];
     if (!previousMarkdown) return true;
-    return parseOwnedFrontmatter(previousMarkdown)?.extraction_hash !== episode.extractionHash;
+    return parseOwnedFrontmatter(previousMarkdown)?.generation_hash !== episode.generationHash;
   });
   const keep = new Set([OPS_WIKI_STATUS_NOTE, ...rendered.map((episode) => episode.relativePath)]);
   const obsolete = ownedRelativePaths(corpusRoot).filter((path) => !keep.has(path) && path !== OPS_WIKI_STATUS_NOTE);
   const removedIds = obsolete.map((path) => episodeIdFromPath(path)).filter((value): value is string => Boolean(value));
 
-  if (
-    previous?.checkedThrough === commit
-    && !previous.applyInProgress
-    && changed.length === 0
-    && obsolete.length === 0
-  ) {
+  if (previous?.checkedThrough === commit && !previous.applyInProgress && changed.length === 0 && obsolete.length === 0) {
     return {
       ok: true,
       status: 'no_op',
@@ -873,10 +961,7 @@ export async function applyOpsWiki(options: SyncOptions): Promise<OpsWikiResult>
     };
   }
 
-  const inProgressNote = renderStatusNote({
-    checkedThrough: previous?.checkedThrough,
-    applyInProgress: commit,
-  });
+  const inProgressNote = renderStatusNote({ checkedThrough: previous?.checkedThrough, applyInProgress: commit });
   atomicWrite(join(corpusRoot, OPS_WIKI_STATUS_NOTE), inProgressNote);
   const inProgressRead = await waitForStatus(
     client,
@@ -885,15 +970,25 @@ export async function applyOpsWiki(options: SyncOptions): Promise<OpsWikiResult>
     pollIntervalMs,
     now,
   );
-  if (!inProgressRead.ok) {
+  if (inProgressRead.ok === false) {
+    restorePriorStatus(corpusRoot, previous);
     return degraded(commit, `ops_wiki_in_progress_unconfirmed:${inProgressRead.reason}`, {
       checkedThrough: previous?.checkedThrough,
-      applyInProgress: commit,
+      applyInProgress: previous?.applyInProgress,
       mutationBegan: false,
     });
   }
 
   let mutationBegan = false;
+  const failAfterFence = (reason: string): OpsWikiDegraded => {
+    if (!mutationBegan) restorePriorStatus(corpusRoot, previous);
+    return degraded(commit, reason, {
+      checkedThrough: previous?.checkedThrough,
+      applyInProgress: mutationBegan ? commit : previous?.applyInProgress,
+      mutationBegan,
+    });
+  };
+
   try {
     for (const episode of changed) {
       mutationBegan = true;
@@ -904,62 +999,39 @@ export async function applyOpsWiki(options: SyncOptions): Promise<OpsWikiResult>
       reconcileOwnedNotes(corpusRoot, keep);
     }
   } catch (error) {
-    return degraded(commit, error instanceof Error ? error.message : String(error), {
-      checkedThrough: previous?.checkedThrough,
-      applyInProgress: commit,
-      mutationBegan: true,
-    });
+    return failAfterFence(error instanceof Error ? error.message : String(error));
   }
 
   if (options.reindex) {
+    if (!client.reindex) return failAfterFence('ops_wiki_reindex_unavailable');
     try {
-      await client.reindex?.({ force: options.reindex === 'full' });
+      await client.reindex({ force: options.reindex === 'full' });
     } catch {
-      return degraded(commit, 'ops_wiki_reindex_unavailable', {
-        checkedThrough: previous?.checkedThrough,
-        applyInProgress: commit,
-        mutationBegan,
-      });
+      return failAfterFence('ops_wiki_reindex_unavailable');
     }
   }
 
   for (const episode of changed) {
     const ok = await waitForEpisodeBytes(client, episode.relativePath, episode.markdown, timeoutMs, pollIntervalMs, now);
-    if (!ok) {
-      return degraded(commit, `ops_wiki_episode_readback_failed:${episode.episode_id}`, {
-        checkedThrough: previous?.checkedThrough,
-        applyInProgress: commit,
-        mutationBegan: true,
-      });
-    }
+    if (!ok) return failAfterFence(`ops_wiki_episode_readback_failed:${episode.episode_id}`);
   }
   for (const relativePath of obsolete) {
     const ok = await waitForEpisodeAbsent(client, relativePath, timeoutMs, pollIntervalMs, now);
-    if (!ok) {
-      return degraded(commit, `ops_wiki_removal_readback_failed:${relativePath}`, {
-        checkedThrough: previous?.checkedThrough,
-        applyInProgress: commit,
-        mutationBegan: true,
-      });
-    }
+    if (!ok) return failAfterFence(`ops_wiki_removal_readback_failed:${relativePath}`);
   }
 
   const goldenResult = await runGoldenSuite(client, golden);
-  if (!goldenResult.ok) {
-    return degraded(commit, goldenResult.reason, {
-      checkedThrough: previous?.checkedThrough,
-      applyInProgress: commit,
-      mutationBegan,
-    });
-  }
+  if (goldenResult.ok === false) return failAfterFence(goldenResult.reason);
 
   atomicWrite(join(corpusRoot, OPS_WIKI_STATUS_NOTE), renderStatusNote({ checkedThrough: commit }));
   const finalRead = await waitForStatus(client, { checkedThrough: commit, applyInProgress: null }, timeoutMs, pollIntervalMs, now);
-  if (!finalRead.ok) {
+  if (finalRead.ok === false) {
+    if (mutationBegan) atomicWrite(join(corpusRoot, OPS_WIKI_STATUS_NOTE), inProgressNote);
+    else restorePriorStatus(corpusRoot, previous);
     return degraded(commit, `ops_wiki_final_status_unconfirmed:${finalRead.reason}`, {
       checkedThrough: previous?.checkedThrough,
-      applyInProgress: commit,
-      mutationBegan: true,
+      applyInProgress: mutationBegan ? commit : previous?.applyInProgress,
+      mutationBegan,
     });
   }
 
@@ -974,56 +1046,75 @@ export async function applyOpsWiki(options: SyncOptions): Promise<OpsWikiResult>
   };
 }
 
+function parseSseOrJson(body: string): unknown {
+  const trimmed = body.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) return JSON.parse(trimmed);
+  const dataLines = trimmed
+    .split('\n')
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).trim())
+    .filter((line) => line && line !== '[DONE]');
+  if (dataLines.length === 0) throw new Error('ops_wiki_mcp_malformed');
+  return JSON.parse(dataLines[0]!);
+}
+
 function jsonToolResult(payload: unknown): unknown {
   if (!payload || typeof payload !== 'object') return payload;
   const record = payload as Record<string, unknown>;
-  if (Array.isArray(record.content)) {
-    const text = record.content
-      .map((item) => (item && typeof item === 'object' && 'text' in item ? String((item as { text: unknown }).text) : ''))
-      .join('\n');
-    if (text.trim().startsWith('{') || text.trim().startsWith('[')) return JSON.parse(text);
+  if (record.isError === true) {
+    const text = Array.isArray(record.content)
+      ? record.content.map((item) => item && typeof item === 'object' && 'text' in item ? String((item as { text: unknown }).text) : '').join('\n')
+      : '';
+    throw new Error(text || 'ops_wiki_mcp_tool_error');
+  }
+  if (!Array.isArray(record.content)) return payload;
+  for (const item of record.content) {
+    if (!item || typeof item !== 'object' || !('text' in item)) continue;
+    const text = String((item as { text: unknown }).text).trim();
+    if (!text) continue;
+    if (text.startsWith('{') || text.startsWith('[')) return JSON.parse(text);
   }
   return payload;
 }
 
-function parseSseOrJson(body: string): unknown {
-  const trimmed = body.trim();
-  if (trimmed.startsWith('{')) return JSON.parse(trimmed);
-  const data = trimmed
-    .split('\n')
-    .filter((line) => line.startsWith('data:'))
-    .map((line) => line.slice(5).trim())
-    .join('');
-  if (!data) throw new Error('ops_wiki_mcp_malformed');
-  return JSON.parse(data);
+function isTimeoutError(error: unknown): boolean {
+  if (error && typeof error === 'object' && 'name' in error && String((error as { name?: unknown }).name) === 'TimeoutError') return true;
+  return (error instanceof Error ? error.message : String(error)).toLowerCase().includes('timeout');
 }
 
-export function createMcpWikiOpsClient(url: string, fetchImpl: typeof fetch = fetch): WikiOpsClient {
-  let sessionId: string | undefined;
+export function createMcpWikiOpsClient(
+  url: string,
+  fetchImpl: typeof fetch = fetch,
+  requestTimeoutMs = DEFAULT_MCP_REQUEST_TIMEOUT_MS,
+): WikiOpsClient {
+  let nextId = 1;
+  const boundedTimeout = Number.isFinite(requestTimeoutMs) && requestTimeoutMs > 0
+    ? requestTimeoutMs
+    : DEFAULT_MCP_REQUEST_TIMEOUT_MS;
+
   const rpc = async (method: string, params?: Record<string, unknown>): Promise<unknown> => {
     const response = await fetchImpl(url, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         accept: 'application/json, text/event-stream',
-        ...(sessionId ? { 'mcp-session-id': sessionId } : {}),
       },
-      body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }),
+      signal: AbortSignal.timeout(boundedTimeout),
+      body: JSON.stringify({ jsonrpc: '2.0', id: nextId++, method, params }),
     });
-    const nextSession = response.headers.get('mcp-session-id');
-    if (nextSession) sessionId = nextSession;
-    const parsed = parseSseOrJson(await response.text()) as { error?: { message?: string }; result?: unknown };
+    const body = await response.text();
+    if (!response.ok) throw new Error(`ops_wiki_mcp_http_${response.status}:${body.slice(0, 200)}`);
+    const parsed = parseSseOrJson(body) as { error?: { message?: string }; result?: unknown };
     if (parsed.error) throw new Error(parsed.error.message ?? 'ops_wiki_mcp_error');
     return parsed.result;
   };
-  const ready = (async () => {
-    await rpc('initialize', {
-      protocolVersion: '2024-11-05',
-      capabilities: {},
-      clientInfo: { name: 'orchestrator-pack-sync-ops-wiki', version: '1' },
-    });
-    await rpc('notifications/initialized', {});
-  })();
+
+  const ready = rpc('initialize', {
+    protocolVersion: '2025-06-18',
+    capabilities: {},
+    clientInfo: { name: 'orchestrator-pack-sync-ops-wiki', version: '1' },
+  }).then(() => undefined);
+
   return {
     async read(path, options) {
       try {
@@ -1032,18 +1123,23 @@ export function createMcpWikiOpsClient(url: string, fetchImpl: typeof fetch = fe
           name: 'read',
           arguments: { paths: path, related: options?.related === true, snippet_length: 3000 },
         }));
-        const notes = Array.isArray(result) ? result : (result as { notes?: unknown }).notes ?? result;
-        const note = Array.isArray(notes) ? notes[0] : notes;
+        const container = result && typeof result === 'object' ? result as Record<string, unknown> : {};
+        const rows = Array.isArray(result)
+          ? result
+          : Array.isArray(container.results)
+            ? container.results
+            : Array.isArray(container.notes)
+              ? container.notes
+              : [];
+        const note = rows[0];
         if (!note || typeof note !== 'object') return { ok: false, reason: 'absent' };
         const record = note as Record<string, unknown>;
         if (record.found === false) return { ok: false, reason: 'absent' };
         const content = String(record.content ?? record.text ?? '');
         if (!content) return { ok: false, reason: 'absent' };
-        return { ok: true, path, content };
+        return { ok: true, path: typeof record.path === 'string' ? record.path : path, content };
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (message.includes('timeout')) return { ok: false, reason: 'timeout' };
-        return { ok: false, reason: 'unavailable' };
+        return { ok: false, reason: isTimeoutError(error) ? 'timeout' : 'unavailable' };
       }
     },
     async search(input) {
@@ -1058,7 +1154,8 @@ export function createMcpWikiOpsClient(url: string, fetchImpl: typeof fetch = fe
             limit: input.limit ?? 3,
           },
         }));
-        const rows = Array.isArray(result) ? result : (result as { results?: unknown[] }).results ?? [];
+        const container = result && typeof result === 'object' ? result as Record<string, unknown> : {};
+        const rows = Array.isArray(result) ? result : Array.isArray(container.results) ? container.results : [];
         return rows.map((row) => {
           const record = row as Record<string, unknown>;
           return {
@@ -1068,8 +1165,8 @@ export function createMcpWikiOpsClient(url: string, fetchImpl: typeof fetch = fe
             snippet: typeof record.snippet === 'string' ? record.snippet : undefined,
           };
         });
-      } catch {
-        return { ok: false, reason: 'unavailable' };
+      } catch (error) {
+        return { ok: false, reason: isTimeoutError(error) ? 'timeout' : 'unavailable' };
       }
     },
     async reindex(input) {
@@ -1082,7 +1179,11 @@ export function createMcpWikiOpsClient(url: string, fetchImpl: typeof fetch = fe
 export function createProductionWikiOpsClient(env: Readonly<NodeJS.ProcessEnv> = process.env): WikiOpsClient | undefined {
   const url = env.PACK_OPS_WIKI_MCP_URL?.trim();
   if (!url) return undefined;
-  return createMcpWikiOpsClient(url);
+  const convergence = Number(env.PACK_OPS_WIKI_CONVERGENCE_TIMEOUT_MS ?? DEFAULT_CONVERGENCE_TIMEOUT_MS);
+  const requestTimeout = Number.isFinite(convergence) && convergence > 0
+    ? Math.max(1, Math.min(DEFAULT_MCP_REQUEST_TIMEOUT_MS, convergence))
+    : DEFAULT_MCP_REQUEST_TIMEOUT_MS;
+  return createMcpWikiOpsClient(url, fetch, requestTimeout);
 }
 
 function printResult(result: OpsWikiResult, json: boolean): void {
@@ -1090,8 +1191,11 @@ function printResult(result: OpsWikiResult, json: boolean): void {
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return;
   }
-  const prefix = result.ok ? 'PASS' : 'DEGRADED';
-  process.stdout.write(`[${prefix}] ${result.status} commit=${result.commit} ${result.ok ? result.detail : result.reason}\n`);
+  if (result.ok === true) {
+    process.stdout.write(`[PASS] ${result.status} commit=${result.commit} ${result.detail}\n`);
+    return;
+  }
+  process.stdout.write(`[DEGRADED] ${result.status} commit=${result.commit} ${result.reason}\n`);
 }
 
 export async function main(argv: readonly string[]): Promise<number> {
@@ -1104,13 +1208,18 @@ export async function main(argv: readonly string[]): Promise<number> {
     const index = argv.indexOf(name);
     return index >= 0 ? argv[index + 1] : undefined;
   };
+  const reindexValue = value('--reindex');
+  if (reindexValue && reindexValue !== 'incremental' && reindexValue !== 'full') {
+    process.stderr.write('[FAIL] --reindex must be incremental or full\n');
+    return 2;
+  }
   const repoRoot = resolve(value('--repo-root') ?? process.cwd());
   const options: SyncOptions = {
     repoRoot,
     commitRef: value('--commit') ?? '',
     corpusRoot: value('--corpus-root') ?? process.env.PACK_OPS_WIKI_CORPUS_ROOT,
     syntoVault: value('--synto-vault') ?? process.env.PACK_SYNTO_VAULT,
-    reindex: value('--reindex') as ReindexMode | undefined,
+    reindex: reindexValue as ReindexMode | undefined,
     client: createProductionWikiOpsClient(),
   };
   if (!options.commitRef) {

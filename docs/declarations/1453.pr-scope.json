@@ -32,7 +32,6 @@
     "scripts/fixtures/ops-wiki-golden-queries.json",
     "scripts/sync-ops-wiki.test.ts",
     "scripts/sync-ops-wiki.ts",
-    "scripts/verify.ps1",
     "scripts/verify.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],

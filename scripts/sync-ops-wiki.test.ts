@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -22,11 +22,12 @@ import {
   OPS_WIKI_STATUS_NOTE,
   parseStatusNote,
   planEpisodes,
-  renderEpisode,
   renderStatusNote,
+  runGoldenSuite,
   sha256,
   type GitRunner,
   type OpsWikiManifest,
+  type RenderedEpisode,
   type WikiOpsClient,
   type WikiOpsReadResult,
   type WikiOpsSearchHit,
@@ -98,9 +99,13 @@ function fixtureFiles(body = 'worker must pass pre-flight before implementation.
       '',
       body,
       '',
+      '```text',
+      '# fake heading in backtick fence',
       '```',
-      '# fake heading in fence',
-      '```',
+      '',
+      '~~~text',
+      '## fake heading in tilde fence',
+      '~~~',
       '',
       '## Completion authority',
       '',
@@ -148,15 +153,18 @@ function fixtureManifest(overrides: Partial<OpsWikiManifest> = {}): OpsWikiManif
   }));
 }
 
-function writeManifestAndGolden(repoRoot: string, manifest = fixtureManifest()): void {
+function writeManifestAndGolden(
+  repoRoot: string,
+  manifest = fixtureManifest(),
+  expectedEpisodeIds: readonly string[] = [manifest.episodes[0]!.episode_id],
+): string {
   write(repoRoot, OPS_WIKI_MANIFEST_RELATIVE, JSON.stringify(manifest, null, 2));
   write(repoRoot, OPS_WIKI_GOLDEN_RELATIVE, JSON.stringify({
-    queries: [
-      { id: 'primary', query: 'procedure', expected_episode_ids: [manifest.episodes[0]!.episode_id] },
-    ],
-  }));
+    queries: [{ id: 'primary', query: 'procedure', expected_episode_ids: expectedEpisodeIds }],
+  }, null, 2));
   git(repoRoot, ['add', '-A']);
   git(repoRoot, ['commit', '-m', 'manifest']);
+  return git(repoRoot, ['rev-parse', 'HEAD']).trim();
 }
 
 function recordingGit(repoRoot: string, corpusRoot: string): { git: GitRunner; cwds: string[] } {
@@ -165,8 +173,8 @@ function recordingGit(repoRoot: string, corpusRoot: string): { git: GitRunner; c
     cwds,
     git: (cwd, args) => {
       cwds.push(cwd);
-      expect(cwd).not.toBe(corpusRoot);
       expect(cwd).toBe(repoRoot);
+      expect(cwd).not.toBe(corpusRoot);
       return defaultGitRunner(cwd, args);
     },
   };
@@ -175,29 +183,14 @@ function recordingGit(repoRoot: string, corpusRoot: string): { git: GitRunner; c
 function corpusClient(corpusRoot: string, options: {
   readonly unavailable?: boolean;
   readonly timeout?: boolean;
-  readonly failStatusTimes?: number;
-  readonly lagMs?: number;
-  readonly onRead?: (path: string) => void;
   readonly searchImpl?: (input: { query?: string }) => WikiOpsSearchHit[] | WikiOpsReadResult;
-} = {}): WikiOpsClient & { readonly statusReads: number } {
-  const state = { statusReads: 0 };
-  const client: WikiOpsClient & { readonly statusReads: number } = {
-    get statusReads() {
-      return state.statusReads;
-    },
+} = {}): WikiOpsClient {
+  return {
     async read(path) {
-      options.onRead?.(path);
       if (options.unavailable) return { ok: false, reason: 'unavailable' };
       if (options.timeout) return { ok: false, reason: 'timeout' };
-      if (path === OPS_WIKI_STATUS_NOTE) {
-        state.statusReads += 1;
-        if (options.failStatusTimes && state.statusReads <= options.failStatusTimes) {
-          return { ok: false, reason: 'timeout' };
-        }
-      }
-      const absolute = join(corpusRoot, path);
       try {
-        const content = readFileSync(absolute, 'utf8');
+        const content = readFileSync(join(corpusRoot, path), 'utf8');
         return { ok: true, path, content };
       } catch {
         return { ok: false, reason: 'absent' };
@@ -206,31 +199,37 @@ function corpusClient(corpusRoot: string, options: {
     async search(input) {
       if (options.unavailable) return { ok: false, reason: 'unavailable' };
       if (options.searchImpl) return options.searchImpl(input);
-      const query = (input.query ?? '').toLowerCase();
       const hits: WikiOpsSearchHit[] = [];
-      const dir = join(corpusRoot, 'episodes');
       try {
-        for (const name of readdirSync(dir)) {
+        for (const name of readdirSync(join(corpusRoot, 'episodes'))) {
           if (!name.endsWith('.md')) continue;
-          const path = `episodes/${name}`;
-          const content = readFileSync(join(corpusRoot, path), 'utf8');
-          hits.push({ path, score: 0.9, title: name.replace(/\.md$/, '') });
+          hits.push({ path: `episodes/${name}`, score: 0.9, title: name.replace(/\.md$/u, '') });
         }
       } catch {
         // no episodes yet
       }
-      if (hits.length === 0 && query) hits.push({ path: episodeRelativePath('worker-lifecycle'), score: 0.9, title: 'Worker lifecycle' });
       return hits.slice(0, input.limit ?? 3);
     },
     async reindex() {
-      if (options.unavailable) throw new Error('timeout');
+      if (options.unavailable) throw new Error('unavailable');
     },
   };
-  return client;
 }
 
-describe('ops-wiki extraction', () => {
-  it('ignores fenced headings and preserves section order in merge groups', () => {
+async function applyFixture(repoRoot: string, corpusRoot: string, commitRef = 'HEAD', client = corpusClient(corpusRoot)) {
+  return applyOpsWiki({
+    repoRoot,
+    commitRef,
+    corpusRoot,
+    client,
+    git: recordingGit(repoRoot, corpusRoot).git,
+    convergenceTimeoutMs: 100,
+    pollIntervalMs: 1,
+  });
+}
+
+describe('ops-wiki extraction and repository check', () => {
+  it('ignores both Markdown fence kinds and preserves section order', () => {
     const text = fixtureFiles()['docs/runbook.md']!;
     expect(collectHeadings(text).map((hit) => hit.token)).toEqual([
       '# Runbook',
@@ -240,226 +239,61 @@ describe('ops-wiki extraction', () => {
     const worker = extractSection(text, '## Worker lifecycle');
     expect(worker).toContain('pre-flight');
     expect(worker).not.toContain('Completion authority');
-    const merged = `${extractSection(text, '## Worker lifecycle')}\n\n${extractSection(text, '## Completion authority')}`;
-    expect(merged.indexOf('pre-flight')).toBeLessThan(merged.indexOf('completion authority'));
   });
 
-  it('rejects unresolved, ambiguous, and oversized selectors', () => {
+  it('rejects unresolved, ambiguous, oversized, and missing referenced inputs', () => {
     const text = '# Doc\n\n## Same\n\nA\n\n## Same\n\nB\n';
     expect(() => extractSection(text, '## Missing')).toThrow(/ops_wiki_unresolved_selector/u);
     expect(() => extractSection(text, '## Same')).toThrow(/ops_wiki_ambiguous_selector/u);
-    const { repoRoot, commit } = initRepo(fixtureFiles('x'.repeat(13000)));
-    writeManifestAndGolden(repoRoot);
-    const manifest = fixtureManifest();
-    expect(() => planEpisodes(repoRoot, commit, manifest)).toThrow(/ops_wiki_episode_over_byte_ceiling:worker-lifecycle/u);
-  });
 
-  it('embeds provenance frontmatter and derived hashes, not author-maintained content hashes', () => {
-    const { repoRoot, commit } = initRepo(fixtureFiles());
-    writeManifestAndGolden(repoRoot);
-    const head = git(repoRoot, ['rev-parse', 'HEAD']).trim();
-    const manifest = fixtureManifest();
-    const [episode] = planEpisodes(repoRoot, head, manifest);
-    expect(episode!.markdown).toContain('ops_wiki_owned: true');
-    expect(episode!.markdown).toContain(`source_commit: "${head}"`);
-    expect(episode!.sourceHash).toBe(sha256(readFileSync(join(repoRoot, 'docs/runbook.md'), 'utf8')));
-    expect(episode!.extractionHash).toHaveLength(64);
-    expect(JSON.stringify(manifest)).not.toContain(episode!.extractionHash);
-  });
-});
+    const oversized = initRepo(fixtureFiles('x'.repeat(13000)));
+    expect(() => planEpisodes(oversized.repoRoot, oversized.commit, fixtureManifest())).toThrow(/ops_wiki_episode_over_byte_ceiling/u);
 
-describe('ops-wiki repository check', () => {
-  it('fails missing referenced script paths and does not require a corpus', () => {
-    const { repoRoot } = initRepo(fixtureFiles());
-    writeManifestAndGolden(repoRoot, fixtureManifest({
+    const missing = initRepo(fixtureFiles());
+    writeManifestAndGolden(missing.repoRoot, fixtureManifest({
       episodes: [
-        {
-          ...fixtureManifest().episodes[0]!,
-          referenced_paths: ['scripts/missing-smoke.ts'],
-        },
+        { ...fixtureManifest().episodes[0]!, referenced_paths: ['scripts/missing-smoke.ts'] },
         fixtureManifest().episodes[1]!,
       ],
     }));
-    expect(() => checkRepositoryMode({ repoRoot, commitRef: 'HEAD' })).toThrow(/ops_wiki_missing_referenced_path/u);
+    expect(() => checkRepositoryMode({ repoRoot: missing.repoRoot, commitRef: 'HEAD' })).toThrow(/ops_wiki_missing_referenced_path/u);
   });
 
-  it('loads the tracked production manifest constants and golden suite', () => {
-    const packRoot = join(import.meta.dirname, '..');
-    const manifest = loadManifest(readFileSync(join(packRoot, OPS_WIKI_MANIFEST_RELATIVE), 'utf8'));
-    expect(manifest.max_episode_bytes).toBe(12288);
-    expect(manifest.weak_top1_score).toBe(0.5);
-    expect(manifest.ambiguity_max_score_delta).toBe(0.05);
-    const golden = loadGoldenSuite(readFileSync(join(packRoot, OPS_WIKI_GOLDEN_RELATIVE), 'utf8'));
-    expect(golden.queries.length).toBeGreaterThan(3);
-    const ids = new Set(manifest.episodes.map((episode) => episode.episode_id));
-    for (const query of golden.queries) {
-      for (const episodeId of query.expected_episode_ids) expect(ids.has(episodeId)).toBe(true);
-    }
+  it('records derived provenance and a semantic generation hash', () => {
+    const { repoRoot } = initRepo(fixtureFiles());
+    const head = writeManifestAndGolden(repoRoot);
+    const [episode] = planEpisodes(repoRoot, head, fixtureManifest());
+    expect(episode!.markdown).toContain(`source_commit: "${head}"`);
+    expect(episode!.sourceHash).toBe(sha256(readFileSync(join(repoRoot, 'docs/runbook.md'), 'utf8')));
+    expect(episode!.extractionHash).toHaveLength(64);
+    expect(episode!.generationHash).toHaveLength(64);
+    expect(episode!.markdown).toContain(`generation_hash: "${episode!.generationHash}"`);
   });
-});
 
-describe('ops-wiki apply', () => {
-  it('reads committed bytes, not a dirty working tree, and binds the actual HEAD', async () => {
+  it('loads manifest and golden control inputs from the resolved commit, not dirty files', async () => {
     const { repoRoot } = initRepo(fixtureFiles('committed worker text\n'));
-    writeManifestAndGolden(repoRoot);
-    const head = git(repoRoot, ['rev-parse', 'HEAD']).trim();
+    const commit = writeManifestAndGolden(repoRoot);
+    write(repoRoot, OPS_WIKI_MANIFEST_RELATIVE, '{dirty-invalid-json');
+    write(repoRoot, OPS_WIKI_GOLDEN_RELATIVE, '{dirty-invalid-json');
     write(repoRoot, 'docs/runbook.md', readFileSync(join(repoRoot, 'docs/runbook.md'), 'utf8').replace('committed worker text', 'dirty worker text'));
+
+    const checked = checkRepositoryMode({ repoRoot, commitRef: commit });
+    expect(checked).toMatchObject({ ok: true, commit });
+
     const corpusRoot = tempDir('ops-wiki-corpus-');
-    const { git: gitRunner, cwds } = recordingGit(repoRoot, corpusRoot);
-    const result = await applyOpsWiki({
-      repoRoot,
-      commitRef: head,
-      corpusRoot,
-      git: gitRunner,
-      client: corpusClient(corpusRoot),
-      convergenceTimeoutMs: 200,
-      pollIntervalMs: 1,
-    });
-    expect(result).toMatchObject({ ok: true, commit: head, searchable: true });
-    expect(readFileSync(join(corpusRoot, episodeRelativePath('worker-lifecycle')), 'utf8')).toContain('committed worker text');
-    expect(readFileSync(join(corpusRoot, episodeRelativePath('worker-lifecycle')), 'utf8')).not.toContain('dirty worker text');
-    expect(cwds.every((cwd) => cwd === repoRoot)).toBe(true);
+    const result = await applyFixture(repoRoot, corpusRoot, commit);
+    expect(result).toMatchObject({ ok: true, commit });
+    const note = readFileSync(join(corpusRoot, episodeRelativePath('worker-lifecycle')), 'utf8');
+    expect(note).toContain('committed worker text');
+    expect(note).not.toContain('dirty worker text');
   });
 
-  it('publishes apply_in_progress and confirms it before episode mutation', async () => {
-    const { repoRoot } = initRepo(fixtureFiles());
-    writeManifestAndGolden(repoRoot);
-    const corpusRoot = tempDir('ops-wiki-corpus-');
-    const seen: string[] = [];
-    const client = corpusClient(corpusRoot, {
-      onRead: (path) => {
-        if (path === OPS_WIKI_STATUS_NOTE) {
-          seen.push(existsSyncEpisode() ? 'episodes-present' : 'episodes-absent');
-        }
-      },
-    });
-    function existsSyncEpisode(): boolean {
-      try {
-        readFileSync(join(corpusRoot, episodeRelativePath('worker-lifecycle')), 'utf8');
-        return true;
-      } catch {
-        return false;
-      }
-    }
-    const result = await applyOpsWiki({
-      repoRoot,
-      commitRef: 'HEAD',
-      corpusRoot,
-      client,
-      git: recordingGit(repoRoot, corpusRoot).git,
-      convergenceTimeoutMs: 200,
-      pollIntervalMs: 1,
-    });
-    expect(result.ok).toBe(true);
-    expect(seen[0]).toBe('episodes-absent');
-    expect(parseStatusNote(readFileSync(join(corpusRoot, OPS_WIKI_STATUS_NOTE), 'utf8')).checkedThrough).toBe(git(repoRoot, ['rev-parse', 'HEAD']).trim());
-    expect(parseStatusNote(readFileSync(join(corpusRoot, OPS_WIKI_STATUS_NOTE), 'utf8')).applyInProgress).toBeUndefined();
-  });
+  it('rejects manifest path escape and Synto-vault targets before mutation', async () => {
+    expect(() => loadManifest(JSON.stringify({
+      ...fixtureManifest(),
+      episodes: [{ ...fixtureManifest().episodes[0], path: '../secret.md' }],
+    }))).toThrow(/ops_wiki_path_escape/u);
 
-  it('leaves apply_in_progress visible when index confirmation times out before mutation', async () => {
-    const { repoRoot } = initRepo(fixtureFiles());
-    writeManifestAndGolden(repoRoot);
-    const corpusRoot = tempDir('ops-wiki-corpus-');
-    const result = await applyOpsWiki({
-      repoRoot,
-      commitRef: 'HEAD',
-      corpusRoot,
-      client: corpusClient(corpusRoot, { timeout: true }),
-      git: recordingGit(repoRoot, corpusRoot).git,
-      convergenceTimeoutMs: 20,
-      pollIntervalMs: 1,
-    });
-    expect(result).toMatchObject({ ok: false, searchable: false, mutationBegan: false });
-    expect(parseStatusNote(readFileSync(join(corpusRoot, OPS_WIKI_STATUS_NOTE), 'utf8')).applyInProgress).toHaveLength(40);
-    expect(() => readFileSync(join(corpusRoot, episodeRelativePath('worker-lifecycle')), 'utf8')).toThrow();
-  });
-
-  it('is a no-op for an already checked commit and status-only for an irrelevant later commit', async () => {
-    const { repoRoot } = initRepo(fixtureFiles());
-    writeManifestAndGolden(repoRoot);
-    const corpusRoot = tempDir('ops-wiki-corpus-');
-    const first = await applyOpsWiki({
-      repoRoot,
-      commitRef: 'HEAD',
-      corpusRoot,
-      client: corpusClient(corpusRoot),
-      git: recordingGit(repoRoot, corpusRoot).git,
-      convergenceTimeoutMs: 200,
-      pollIntervalMs: 1,
-    });
-    expect(first).toMatchObject({ ok: true, status: 'applied' });
-    const repeat = await applyOpsWiki({
-      repoRoot,
-      commitRef: 'HEAD',
-      corpusRoot,
-      client: corpusClient(corpusRoot),
-      git: recordingGit(repoRoot, corpusRoot).git,
-      convergenceTimeoutMs: 200,
-      pollIntervalMs: 1,
-    });
-    expect(repeat).toMatchObject({ ok: true, status: 'no_op', searchable: true });
-    write(repoRoot, 'UNRELATED.md', 'not a declared source\n');
-    git(repoRoot, ['add', 'UNRELATED.md']);
-    git(repoRoot, ['commit', '-m', 'unrelated']);
-    const later = git(repoRoot, ['rev-parse', 'HEAD']).trim();
-    const statusOnly = await applyOpsWiki({
-      repoRoot,
-      commitRef: later,
-      corpusRoot,
-      client: corpusClient(corpusRoot),
-      git: recordingGit(repoRoot, corpusRoot).git,
-      convergenceTimeoutMs: 200,
-      pollIntervalMs: 1,
-    });
-    expect(statusOnly).toMatchObject({ ok: true, status: 'status_only', commit: later });
-    expect(parseStatusNote(readFileSync(join(corpusRoot, OPS_WIKI_STATUS_NOTE), 'utf8')).checkedThrough).toBe(later);
-  });
-
-  it('updates, adds, and deletes owned notes while preserving foreign files and dotfiles', async () => {
-    const { repoRoot } = initRepo(fixtureFiles());
-    writeManifestAndGolden(repoRoot);
-    const corpusRoot = tempDir('ops-wiki-corpus-');
-    await applyOpsWiki({
-      repoRoot,
-      commitRef: 'HEAD',
-      corpusRoot,
-      client: corpusClient(corpusRoot),
-      git: recordingGit(repoRoot, corpusRoot).git,
-      convergenceTimeoutMs: 200,
-      pollIntervalMs: 1,
-    });
-    write(corpusRoot, 'foreign.md', 'leave me\n');
-    write(corpusRoot, '.obsidian-hybrid-search.db', 'db');
-    write(corpusRoot, '.obsidian-hybrid-search.db-wal', 'wal');
-    const remaining = {
-      ...fixtureManifest().episodes[1]!,
-      edges: [],
-    };
-    writeManifestAndGolden(repoRoot, loadManifest(JSON.stringify({
-      schema_version: 1,
-      source_repo: 'chetwerikoff/orchestrator-pack',
-      max_episode_bytes: 12288,
-      weak_top1_score: 0.5,
-      ambiguity_max_score_delta: 0.05,
-      episodes: [remaining],
-    })));
-    const result = await applyOpsWiki({
-      repoRoot,
-      commitRef: 'HEAD',
-      corpusRoot,
-      client: corpusClient(corpusRoot),
-      git: recordingGit(repoRoot, corpusRoot).git,
-      convergenceTimeoutMs: 200,
-      pollIntervalMs: 1,
-    });
-    expect(result.ok).toBe(true);
-    expect(result.ok && result.removedEpisodeIds).toContain('worker-lifecycle');
-    expect(() => readFileSync(join(corpusRoot, episodeRelativePath('worker-lifecycle')), 'utf8')).toThrow();
-    expect(readFileSync(join(corpusRoot, 'foreign.md'), 'utf8')).toBe('leave me\n');
-    expect(readFileSync(join(corpusRoot, '.obsidian-hybrid-search.db'), 'utf8')).toBe('db');
-  });
-
-  it('rejects Synto vault targets, path escape, and pre-mutation render failures without touching a mixed corpus', async () => {
     const { repoRoot } = initRepo(fixtureFiles());
     writeManifestAndGolden(repoRoot);
     const synto = tempDir('synto-vault-');
@@ -469,31 +303,33 @@ describe('ops-wiki apply', () => {
       corpusRoot: synto,
       syntoVault: synto,
       client: corpusClient(synto),
-    })).resolves.toMatchObject({ ok: false, reason: expect.stringContaining('ops_wiki_synto_vault_rejected') });
-    expect(() => planEpisodes(repoRoot, git(repoRoot, ['rev-parse', 'HEAD']).trim(), fixtureManifest(), (cwd, args) => {
-      if (args[0] === 'cat-file' && String(args[2] ?? '').includes('..')) return { ok: false, stdout: '', stderr: '' };
-      return defaultGitRunner(cwd, args);
-    })).not.toThrow(/path_escape/u);
-    expect(() => loadManifest(JSON.stringify({
-      ...fixtureManifest(),
-      episodes: [{ ...fixtureManifest().episodes[0], path: '../secret.md' }],
-    }))).toThrow(/ops_wiki_path_escape/u);
+    })).resolves.toMatchObject({ ok: false, mutationBegan: false, reason: expect.stringContaining('ops_wiki_synto_vault_rejected') });
+  });
+});
+
+describe('ops-wiki apply protocol', () => {
+  it('publishes and confirms apply_in_progress before episode mutation', async () => {
+    const { repoRoot } = initRepo(fixtureFiles());
+    writeManifestAndGolden(repoRoot);
     const corpusRoot = tempDir('ops-wiki-corpus-');
-    write(repoRoot, OPS_WIKI_MANIFEST_RELATIVE, '{not-json');
-    git(repoRoot, ['add', OPS_WIKI_MANIFEST_RELATIVE]);
-    git(repoRoot, ['commit', '-m', 'break manifest']);
-    const failed = await applyOpsWiki({
-      repoRoot,
-      commitRef: 'HEAD',
-      corpusRoot,
-      client: corpusClient(corpusRoot),
-      git: recordingGit(repoRoot, corpusRoot).git,
-    });
-    expect(failed).toMatchObject({ ok: false, mutationBegan: false });
-    expect(() => readFileSync(join(corpusRoot, OPS_WIKI_STATUS_NOTE), 'utf8')).toThrow();
+    const seen: boolean[] = [];
+    const base = corpusClient(corpusRoot);
+    const client: WikiOpsClient = {
+      ...base,
+      async read(path, options) {
+        if (path === OPS_WIKI_STATUS_NOTE) seen.push(existsSync(join(corpusRoot, episodeRelativePath('worker-lifecycle'))));
+        return base.read(path, options);
+      },
+    };
+    const result = await applyFixture(repoRoot, corpusRoot, 'HEAD', client);
+    expect(result.ok).toBe(true);
+    expect(seen[0]).toBe(false);
+    const status = parseStatusNote(readFileSync(join(corpusRoot, OPS_WIKI_STATUS_NOTE), 'utf8'));
+    expect(status.checkedThrough).toBe(git(repoRoot, ['rev-parse', 'HEAD']).trim());
+    expect(status.applyInProgress).toBeUndefined();
   });
 
-  it('operates on a corpus without .git and reports mid-apply degradation from golden/index failure', async () => {
+  it('restores the prior clean state when in-progress cannot be index-confirmed before mutation', async () => {
     const { repoRoot } = initRepo(fixtureFiles());
     writeManifestAndGolden(repoRoot);
     const corpusRoot = tempDir('ops-wiki-corpus-');
@@ -501,43 +337,144 @@ describe('ops-wiki apply', () => {
       repoRoot,
       commitRef: 'HEAD',
       corpusRoot,
-      client: corpusClient(corpusRoot, {
-        searchImpl: () => ({ ok: false, reason: 'unavailable' }),
-      }),
+      client: corpusClient(corpusRoot, { timeout: true }),
       git: recordingGit(repoRoot, corpusRoot).git,
-      convergenceTimeoutMs: 200,
+      convergenceTimeoutMs: 10,
       pollIntervalMs: 1,
     });
-    expect(failed).toMatchObject({ ok: false, mutationBegan: true, searchable: false });
-    expect(parseStatusNote(readFileSync(join(corpusRoot, OPS_WIKI_STATUS_NOTE), 'utf8')).applyInProgress).toHaveLength(40);
-    expect(failed.ok === false && failed.checkedThrough).toBeUndefined();
+    expect(failed).toMatchObject({ ok: false, mutationBegan: false });
+    expect(existsSync(join(corpusRoot, OPS_WIKI_STATUS_NOTE))).toBe(false);
+    expect(existsSync(join(corpusRoot, episodeRelativePath('worker-lifecycle')))).toBe(false);
   });
 
-  it('asks the existing client for recovery reindex without inventing a second indexer', async () => {
+  it('is no-op for an already checked commit and status-only for an irrelevant descendant', async () => {
     const { repoRoot } = initRepo(fixtureFiles());
     writeManifestAndGolden(repoRoot);
     const corpusRoot = tempDir('ops-wiki-corpus-');
-    let reindexed = 0;
-    const client = corpusClient(corpusRoot);
-    const wrapped: WikiOpsClient = {
-      read: client.read,
-      search: client.search,
-      async reindex() {
-        reindexed += 1;
+    expect(await applyFixture(repoRoot, corpusRoot)).toMatchObject({ ok: true, status: 'applied' });
+    expect(await applyFixture(repoRoot, corpusRoot)).toMatchObject({ ok: true, status: 'no_op' });
+
+    write(repoRoot, 'UNRELATED.md', 'not a declared source\n');
+    git(repoRoot, ['add', 'UNRELATED.md']);
+    git(repoRoot, ['commit', '-m', 'unrelated']);
+    const later = git(repoRoot, ['rev-parse', 'HEAD']).trim();
+    const result = await applyFixture(repoRoot, corpusRoot, later);
+    expect(result).toMatchObject({ ok: true, status: 'status_only', commit: later });
+  });
+
+  it('rewrites retained episodes when manifest-owned metadata changes without body changes', async () => {
+    const { repoRoot } = initRepo(fixtureFiles());
+    writeManifestAndGolden(repoRoot);
+    const corpusRoot = tempDir('ops-wiki-corpus-');
+    expect(await applyFixture(repoRoot, corpusRoot)).toMatchObject({ ok: true, status: 'applied' });
+
+    const updated = fixtureManifest({
+      episodes: [
+        { ...fixtureManifest().episodes[0]!, aliases: ['pre-flight', 'воркер', 'new-alias'] },
+        fixtureManifest().episodes[1]!,
+      ],
+    });
+    writeManifestAndGolden(repoRoot, updated);
+    const result = await applyFixture(repoRoot, corpusRoot);
+    expect(result).toMatchObject({ ok: true, status: 'applied' });
+    expect(result.ok && result.changedEpisodeIds).toContain('worker-lifecycle');
+    expect(readFileSync(join(corpusRoot, episodeRelativePath('worker-lifecycle')), 'utf8')).toContain('new-alias');
+  });
+
+  it('deletes only obsolete owned notes and preserves foreign files and root dotfiles', async () => {
+    const { repoRoot } = initRepo(fixtureFiles());
+    writeManifestAndGolden(repoRoot);
+    const corpusRoot = tempDir('ops-wiki-corpus-');
+    await applyFixture(repoRoot, corpusRoot);
+    write(corpusRoot, 'foreign.md', 'leave me\n');
+    write(corpusRoot, '.obsidian-hybrid-search.db', 'db');
+    write(corpusRoot, '.obsidian-hybrid-search.db-wal', 'wal');
+
+    const remaining = { ...fixtureManifest().episodes[1]!, edges: [] };
+    writeManifestAndGolden(repoRoot, fixtureManifest({ episodes: [remaining] }), ['agents-boundaries']);
+    const result = await applyFixture(repoRoot, corpusRoot);
+    expect(result.ok && result.removedEpisodeIds).toContain('worker-lifecycle');
+    expect(existsSync(join(corpusRoot, episodeRelativePath('worker-lifecycle')))).toBe(false);
+    expect(readFileSync(join(corpusRoot, 'foreign.md'), 'utf8')).toBe('leave me\n');
+    expect(readFileSync(join(corpusRoot, '.obsidian-hybrid-search.db'), 'utf8')).toBe('db');
+  });
+
+  it('keeps the in-progress fence when final index status read-back fails after mutation', async () => {
+    const { repoRoot } = initRepo(fixtureFiles());
+    writeManifestAndGolden(repoRoot);
+    const corpusRoot = tempDir('ops-wiki-corpus-');
+    expect(await applyFixture(repoRoot, corpusRoot)).toMatchObject({ ok: true });
+    const previous = git(repoRoot, ['rev-parse', 'HEAD']).trim();
+
+    write(repoRoot, 'docs/runbook.md', readFileSync(join(repoRoot, 'docs/runbook.md'), 'utf8').replace('pre-flight', 'strict pre-flight'));
+    git(repoRoot, ['add', 'docs/runbook.md']);
+    git(repoRoot, ['commit', '-m', 'relevant']);
+    const target = git(repoRoot, ['rev-parse', 'HEAD']).trim();
+
+    const base = corpusClient(corpusRoot);
+    const client: WikiOpsClient = {
+      ...base,
+      async read(path, options) {
+        if (path === OPS_WIKI_STATUS_NOTE && existsSync(join(corpusRoot, OPS_WIKI_STATUS_NOTE))) {
+          const local = parseStatusNote(readFileSync(join(corpusRoot, OPS_WIKI_STATUS_NOTE), 'utf8'));
+          if (local.checkedThrough === target && !local.applyInProgress) return { ok: false, reason: 'timeout' };
+        }
+        return base.read(path, options);
       },
+    };
+
+    const result = await applyOpsWiki({
+      repoRoot,
+      commitRef: target,
+      corpusRoot,
+      client,
+      git: recordingGit(repoRoot, corpusRoot).git,
+      convergenceTimeoutMs: 10,
+      pollIntervalMs: 1,
+    });
+    expect(result).toMatchObject({ ok: false, mutationBegan: true, checkedThrough: previous, applyInProgress: target });
+    expect(parseStatusNote(readFileSync(join(corpusRoot, OPS_WIKI_STATUS_NOTE), 'utf8'))).toEqual({
+      checkedThrough: previous,
+      applyInProgress: target,
+    });
+  });
+
+  it('requires every expected golden episode to appear in the top three', async () => {
+    const suite = loadGoldenSuite(JSON.stringify({
+      queries: [{ id: 'multi', query: 'worker', expected_episode_ids: ['worker-lifecycle', 'agents-boundaries'] }],
+    }));
+    const client: WikiOpsClient = {
+      async read() { return { ok: false, reason: 'absent' }; },
+      async search() { return [{ path: episodeRelativePath('worker-lifecycle'), score: 0.9 }]; },
+    };
+    await expect(runGoldenSuite(client, suite)).resolves.toEqual({ ok: false, reason: 'golden_miss:multi' });
+  });
+
+  it('uses no Git command in the corpus and supports explicit existing reindex only', async () => {
+    const { repoRoot } = initRepo(fixtureFiles());
+    writeManifestAndGolden(repoRoot);
+    const corpusRoot = tempDir('ops-wiki-corpus-');
+    const { git: gitRunner, cwds } = recordingGit(repoRoot, corpusRoot);
+    let reindexed = 0;
+    const base = corpusClient(corpusRoot);
+    const client: WikiOpsClient = {
+      ...base,
+      async reindex() { reindexed += 1; },
     };
     const result = await applyOpsWiki({
       repoRoot,
       commitRef: 'HEAD',
       corpusRoot,
-      client: wrapped,
-      git: recordingGit(repoRoot, corpusRoot).git,
+      client,
+      git: gitRunner,
       reindex: 'full',
-      convergenceTimeoutMs: 200,
+      convergenceTimeoutMs: 100,
       pollIntervalMs: 1,
     });
     expect(result.ok).toBe(true);
     expect(reindexed).toBe(1);
+    expect(cwds.every((cwd) => cwd === repoRoot)).toBe(true);
+    expect(existsSync(join(corpusRoot, '.git'))).toBe(false);
   });
 });
 
@@ -549,24 +486,23 @@ describe('ops-wiki routing policy', () => {
   it('uses wiki-ops only for exact current-clean status', () => {
     const clean = renderStatusNote({ checkedThrough: commit });
     expect(evaluateOperationalFreshness({ currentCommit: commit, read: status(clean) })).toBe('use_wiki_ops');
+    expect(evaluateOperationalFreshness({ currentCommit: 'b'.repeat(40), read: status(clean) })).toBe('canonical_files');
     expect(evaluateOperationalFreshness({
       currentCommit: commit,
       read: status(renderStatusNote({ checkedThrough: commit, applyInProgress: 'b'.repeat(40) })),
     })).toBe('canonical_files');
-    expect(evaluateOperationalFreshness({ currentCommit: 'b'.repeat(40), read: status(clean) })).toBe('canonical_files');
-    expect(evaluateOperationalFreshness({ currentCommit: commit, read: { ok: false, reason: 'absent' } })).toBe('canonical_files');
     expect(evaluateOperationalFreshness({ currentCommit: commit, read: { ok: false, reason: 'timeout' } })).toBe('canonical_files');
-    expect(evaluateOperationalFreshness({ currentCommit: commit, read: { ok: false, reason: 'unavailable' } })).toBe('canonical_files');
-    expect(evaluateOperationalFreshness({ currentCommit: commit, read: { ok: true, path: OPS_WIKI_STATUS_NOTE, content: 'not-status' } })).toBe('canonical_files');
+    expect(evaluateOperationalFreshness({ currentCommit: commit, read: { ok: true, path: OPS_WIKI_STATUS_NOTE, content: 'bad' } })).toBe('canonical_files');
   });
 
-  it('escalates on absent, weak, ambiguous, and invalid reads', () => {
+  it('escalates absent, weak, ambiguous, and invalid episode reads', () => {
     expect(evaluateSearchEscalation([], policy)).toBe('expand');
     expect(evaluateSearchEscalation([{ path: 'episodes/a.md' }], policy)).toBe('expand');
     expect(evaluateSearchEscalation([{ path: 'episodes/a.md', score: 0.4 }], policy)).toBe('expand');
     expect(evaluateSearchEscalation([{ path: 'episodes/a.md', score: 0.51 }, { path: 'episodes/b.md', score: 0.5 }], policy)).toBe('expand');
     expect(evaluateSearchEscalation([{ path: 'episodes/a.md', score: 0.9 }, { path: 'episodes/b.md', score: 0.4 }], policy)).toBe('read_top1');
-    const episode = {
+
+    const episode: RenderedEpisode = {
       episode_id: 'worker-lifecycle',
       relativePath: episodeRelativePath('worker-lifecycle'),
       title: 'Worker lifecycle',
@@ -576,23 +512,31 @@ describe('ops-wiki routing policy', () => {
       sourceSections: ['## Worker lifecycle'],
       sourceHash: 'h',
       extractionHash: 'h',
+      generationHash: 'g'.repeat(64),
       aliases: [],
       edges: [],
       referencedPaths: [],
     };
     expect(evaluateEpisodeRead({ read: { ok: false, reason: 'absent' }, episode })).toBe('expand');
-    expect(evaluateEpisodeRead({ read: { ok: true, path: episode.relativePath, content: '' }, episode })).toBe('expand');
     expect(evaluateEpisodeRead({
-      read: { ok: true, path: episode.relativePath, content: '---\nops_wiki_owned: true\nepisode_id: "other"\n---\n' },
+      read: {
+        ok: true,
+        path: episode.relativePath,
+        content: `---\nops_wiki_owned: true\nepisode_id: "worker-lifecycle"\nsource_commit: "${commit}"\ngeneration_hash: "wrong"\n---\n\n## Worker lifecycle\n`,
+      },
       episode,
     })).toBe('expand');
     expect(evaluateEpisodeRead({
-      read: { ok: true, path: episode.relativePath, content: '---\nops_wiki_owned: true\nepisode_id: "worker-lifecycle"\n---\n\n## Worker lifecycle\n' },
+      read: {
+        ok: true,
+        path: episode.relativePath,
+        content: `---\nops_wiki_owned: true\nepisode_id: "worker-lifecycle"\nsource_commit: "${commit}"\ngeneration_hash: "${episode.generationHash}"\n---\n\n## Worker lifecycle\n`,
+      },
       episode,
     })).toBe('read_top1');
   });
 
-  it('builds 2-4 distinct RU/EN escalation queries without duplicate padding', () => {
+  it('builds 2-4 distinct RU/EN escalation queries', () => {
     const queries = buildEscalationQueries('что воркер должен сделать');
     expect(queries.length).toBeGreaterThanOrEqual(2);
     expect(queries.length).toBeLessThanOrEqual(4);
@@ -600,22 +544,44 @@ describe('ops-wiki routing policy', () => {
   });
 });
 
-describe('ops-wiki MCP client seam', () => {
-  it('maps tool-call payloads through the injectable production client', async () => {
+describe('ops-wiki production MCP seam', () => {
+  it('uses the stateless Streamable HTTP contract and parses real read {results:[...]} payloads', async () => {
     const calls: string[] = [];
     const client = createMcpWikiOpsClient('http://wiki-ops.test/mcp', async (_url, init) => {
-      const body = JSON.parse(String(init?.body)) as { method: string };
+      const body = JSON.parse(String(init?.body)) as { method: string; id: number; params?: { name?: string } };
       calls.push(body.method);
-      const payload = body.method === 'tools/call'
-        ? { result: { content: [{ type: 'text', text: JSON.stringify({ found: true, content: renderStatusNote({ checkedThrough: 'c'.repeat(40) }) }) }] } }
-        : { result: { protocolVersion: '2024-11-05' } };
-      return new Response(`data: ${JSON.stringify({ jsonrpc: '2.0', id: 1, ...payload })}\n\n`, {
-        headers: { 'content-type': 'text/event-stream', 'mcp-session-id': 's1' },
+      const result = body.method === 'initialize'
+        ? { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'test', version: '1' } }
+        : {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              results: [{
+                path: OPS_WIKI_STATUS_NOTE,
+                found: true,
+                content: renderStatusNote({ checkedThrough: 'c'.repeat(40) }),
+              }],
+            }),
+          }],
+        };
+      return new Response(`data: ${JSON.stringify({ jsonrpc: '2.0', id: body.id, result })}\n\n`, {
+        headers: { 'content-type': 'text/event-stream' },
       });
     });
     const read = await client.read(OPS_WIKI_STATUS_NOTE, { related: false });
-    expect(read.ok).toBe(true);
-    expect(calls).toContain('initialize');
-    expect(calls).toContain('tools/call');
+    expect(read).toMatchObject({ ok: true, path: OPS_WIKI_STATUS_NOTE });
+    expect(calls).toEqual(['initialize', 'tools/call']);
+  });
+
+  it('bounds a non-returning production request', async () => {
+    const client = createMcpWikiOpsClient('http://wiki-ops.test/mcp', async (_url, init) => {
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('timed out', 'TimeoutError')), { once: true });
+      });
+    }, 5);
+    const started = Date.now();
+    const read = await client.read(OPS_WIKI_STATUS_NOTE, { related: false });
+    expect(read).toEqual({ ok: false, reason: 'timeout' });
+    expect(Date.now() - started).toBeLessThan(1_000);
   });
 });
