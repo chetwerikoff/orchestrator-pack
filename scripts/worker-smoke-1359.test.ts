@@ -1168,3 +1168,204 @@ describe('Issue #1933 interrupt and detached wait fences', () => {
     }
   });
 });
+
+describe('Issue #1933 detached bootstrap and no-execution regressions', () => {
+  it('times out after a detached owner exits before reservation without bootstrap-owned lifecycle state', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-detach-timeout-'));
+    const { vi } = await import('vitest');
+    const { main } = await import('./worker-smoke-run.ts');
+    const { smokeAdmissionLockPath } = await import('./lib/worker-smoke-lifecycle.ts');
+    let clock = 0;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => {
+      clock += 70_000;
+      return clock;
+    });
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    try {
+      const code = await main([
+        'run', '--detach',
+        '--issue', '1933',
+        '--pr', '1941',
+        '--head-sha', HEAD,
+        '--issue-body-file', join(root, 'missing-issue.md'),
+        '--smoke-complexity', 'complex',
+        '--repo-root', root,
+        '--cwd', root,
+        '--dry-run',
+        '--json',
+      ]);
+      expect(code).toBe(1);
+      expect(stderr.mock.calls.map(([chunk]) => String(chunk)).join(''))
+        .toContain('worker_smoke_detach_lifecycle_timeout\n');
+      expect(stdout.mock.calls.map(([chunk]) => String(chunk)).join(''))
+        .not.toMatch(/[0-9a-f]{8}-[0-9a-f-]{27,}/iu);
+      expect(existsSync(smokeAdmissionLockPath(root))).toBe(false);
+      expect(existsSync(join(root, '.orca-worker-smoke', 'runs'))).toBe(false);
+    } finally {
+      stderr.mockRestore();
+      stdout.mockRestore();
+      now.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers a detached-owner crash after reservation before terminal binding', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-detached-reservation-crash-'));
+    const crashedRunId = 'detached-crashed-after-reservation';
+    const crashedDir = join(root, '.orca-worker-smoke', 'runs', crashedRunId);
+
+    try {
+      createSmokeLifecycleReservation({
+        runId: crashedRunId,
+        artifactDir: crashedDir,
+        issueNumber: 1933,
+        prNumber: 1941,
+        headSha: HEAD,
+        supervisorPid: 41001,
+        nowMs: 1,
+        createTimeoutMs: 1,
+        scenarioCount: 1,
+      });
+      const next = preflightSmokeLifecycle({
+        repoRoot: root,
+        runId: 'detached-recovery-winner',
+        supervisorPid: 41002,
+        nowMs: 10,
+        isProcessAlive: () => false,
+        shutdownMs: 0,
+        closeBoundHandle: () => 'close_failed:must_not_be_called',
+      });
+      expect(next.admitted).toBe(true);
+      expect(readSmokeLifecycleRegistry(crashedDir)?.spawnState).toBe('abandoned_unbound');
+      expect(releaseSmokeAdmission(root, 'detached-recovery-winner')).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('admits exactly one detached owner and refuses a concurrent second owner before reservation', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-detached-concurrency-'));
+    const firstRun = 'detached-concurrency-a';
+    const secondRun = 'detached-concurrency-b';
+
+    try {
+      const first = preflightSmokeLifecycle({
+        repoRoot: root,
+        runId: firstRun,
+        supervisorPid: 42001,
+        nowMs: 1,
+        isProcessAlive: () => false,
+        shutdownMs: 0,
+        closeBoundHandle: () => 'close_failed:must_not_be_called',
+      });
+      expect(first.admitted).toBe(true);
+
+      const second = preflightSmokeLifecycle({
+        repoRoot: root,
+        runId: secondRun,
+        supervisorPid: 42002,
+        nowMs: 2,
+        isProcessAlive: (pid) => pid === 42001,
+        shutdownMs: 0,
+        closeBoundHandle: () => 'close_failed:must_not_be_called',
+      });
+      expect(second.admitted).toBe(false);
+      if (!second.admitted) expect(second.reason).toBe(`active_smoke_admission:${firstRun}`);
+      expect(readSmokeLifecycleRegistry(join(root, '.orca-worker-smoke', 'runs', secondRun))).toBeUndefined();
+      expect(releaseSmokeAdmission(root, firstRun)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('terminalizes detached carry-only as exact-run no_execution evidence without an admission lock', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-detached-carry-only-'));
+    const runId = 'detached-carry-only';
+    const artifactDir = join(root, '.orca-worker-smoke', 'runs', runId);
+    const {
+      createSmokeNoExecutionLifecycle,
+      evaluateSmokeLifecycleCleanliness,
+      markSmokeLauncherTerminalized,
+      smokeAdmissionLockPath,
+    } = await import('./lib/worker-smoke-lifecycle.ts');
+    const {
+      smokeRunFinalEvidencePath,
+      writeWorkerSmokeRunFinalEvidence,
+    } = await import('./lib/worker-smoke-receipt.ts');
+    const report = {
+      result: 'PASS',
+      issueNumber: 1933,
+      prNumber: 1941,
+      headSha: HEAD,
+      scenarios: [{
+        action: 'carry prior PASS',
+        expected: 'no runtime execution',
+        observed: `carried PASS from head ${HEAD} comment 1; not freshly executed on ${HEAD}`,
+        outcome: 'pass',
+      }],
+      trackedFilesUnmodified: true,
+      limitations: [],
+      environmentNotes: ['smoke-execution=carry-only'],
+      producer: 'worker-smoke-run',
+      terminalCleanup: 'not_started_no_execution',
+      orcaExecutable: 'test',
+    } as never;
+
+    try {
+      createSmokeNoExecutionLifecycle({
+        runId,
+        artifactDir,
+        issueNumber: 1933,
+        prNumber: 1941,
+        headSha: HEAD,
+        nowMs: 1,
+      });
+      expect(readSmokeLifecycleRegistry(artifactDir)).toMatchObject({
+        runId,
+        mode: 'no_execution',
+        spawnState: 'no_execution_pending',
+        scenarioCount: 0,
+      });
+      expect(evaluateSmokeLifecycleCleanliness(root).clean).toBe(false);
+      expect(existsSync(smokeAdmissionLockPath(root))).toBe(false);
+
+      const final = writeWorkerSmokeRunFinalEvidence({
+        artifactDir,
+        runId,
+        mode: 'no_execution',
+        report,
+        nowMs: 2,
+      });
+      markSmokeLauncherTerminalized({
+        artifactDir,
+        runId,
+        finalEvidencePath: smokeRunFinalEvidencePath(artifactDir),
+        nowMs: final.recordedAtMs,
+      });
+      expect(readSmokeLifecycleRegistry(artifactDir)).toMatchObject({
+        runId,
+        mode: 'no_execution',
+        spawnState: 'no_execution_terminal',
+        finalEvidencePath: smokeRunFinalEvidencePath(artifactDir),
+      });
+      expect(evaluateSmokeLifecycleCleanliness(root).clean).toBe(true);
+      expect(existsSync(smokeAdmissionLockPath(root))).toBe(false);
+
+      const wait = run(resolve('scripts/worker-smoke-run'), [
+        'wait', '--run', runId, '--cwd', root, '--json',
+      ], { cwd: root });
+      expect(wait.ok).toBe(true);
+      expect(JSON.parse(wait.stdout)).toMatchObject({
+        ok: true,
+        runId,
+        result: 'PASS',
+        report: { result: 'PASS', issueNumber: 1933, prNumber: 1941, headSha: HEAD },
+      });
+      expect(existsSync(smokeAdmissionLockPath(root))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
