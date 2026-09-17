@@ -157,6 +157,22 @@ function signaledResponse<T>(
   };
 }
 
+function operationTimeoutResponse<T>(
+  operation: OrcaOperationName | undefined,
+  args: readonly string[],
+  timeoutMs: number | undefined,
+): OrcaJsonResponse<T> {
+  return {
+    ok: false,
+    operation,
+    outcomeCategory: 'supported_operation_failure',
+    error: {
+      code: 'orca_operation_timeout',
+      message: `orca ${args.join(' ')} exceeded ${timeoutMs ?? 0}ms`,
+    },
+  };
+}
+
 export function isOrcaSmokeControlPlaneCode(
   value: string | undefined,
 ): value is OrcaSmokeControlPlaneCode {
@@ -260,15 +276,7 @@ export function runOrcaJson<T>(
     };
   }
   if (result.error && errnoCode(result.error) === 'ETIMEDOUT') {
-    return {
-      ok: false,
-      operation,
-      outcomeCategory: 'supported_operation_failure',
-      error: {
-        code: 'orca_operation_timeout',
-        message: `orca ${args.join(' ')} exceeded ${options.timeoutMs ?? 0}ms`,
-      },
-    };
+    return operationTimeoutResponse<T>(operation, args, options.timeoutMs);
   }
   const signal = resultSignal(result);
   if (signal) return signaledResponse<T>(operation, signal);
