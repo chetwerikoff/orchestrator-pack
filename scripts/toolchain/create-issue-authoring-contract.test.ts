@@ -5,10 +5,13 @@ const skill = readFileSync(
   new URL('../../.cursor/skills/create-issue-draft/SKILL.md', import.meta.url),
   'utf8',
 );
+const agents = readFileSync(new URL('../../AGENTS.md', import.meta.url), 'utf8');
 const standaloneSkill = readFileSync(
   new URL('../../.cursor/skills/discuss-with-gpt/SKILL.md', import.meta.url),
   'utf8',
 );
+const normalizedSkill = skill.replace(/\s+/g, ' ').trim();
+const normalizedAgents = agents.replace(/\s+/g, ' ').trim();
 const normalizedStandaloneSkill = standaloneSkill.replace(/\s+/g, ' ');
 const startMarker = '## Downstream test-task authoring floor — Issue #1195';
 const endMarker = '## Mechanical commands';
@@ -16,6 +19,56 @@ const start = skill.indexOf(startMarker);
 const end = skill.indexOf(endMarker, start);
 const authoringFloor = start >= 0 && end > start ? skill.slice(start, end) : '';
 const normalizedFloor = authoringFloor.replace(/\s+/g, ' ').trim();
+
+describe('Issue #1938 existing-Issue manager routing contract', () => {
+  it('routes manager shorthand to create-issue-draft without widening ordinary manager prose', () => {
+    expect(normalizedAgents).toContain(
+      'for an existing Issue, standalone `manager` / `менеджер` or explicit task-authoring/review-continuation wording resumes this lifecycle',
+    );
+    expect(normalizedAgents).toContain(
+      '`<Issue> manager`, `<Issue> менеджер`, `<Issue> continue review`, and `<Issue> продолжи ревью` load `create-issue-draft`',
+    );
+    expect(normalizedAgents).toContain(
+      'without an existing Issue target does not activate the shorthand',
+    );
+  });
+
+  it('keeps explicit implementation wording authoritative over the manager noun', () => {
+    expect(normalizedAgents).toContain(
+      'explicit implementation wording wins over a `manager` / `менеджер` noun in the same request',
+    );
+    expect(normalizedAgents).toContain(
+      '`<Issue> выполни задачу`, `<Issue> выполни Issue`, or `<Issue> доделай Issue` loads `execute-issue-with-gpt`, even when `manager` / `менеджер` also appears',
+    );
+    expect(normalizedSkill).toContain(
+      'Explicit implementation wording has precedence over the manager noun',
+    );
+  });
+
+  it('reuses the existing supervised manager lifecycle and canonical state', () => {
+    for (const contract of [
+      'existing supervised `work-class=manager` path',
+      'existing `--manager-brief` / Task continuation mechanics',
+      'continue only unfinished task-authoring, review, and acceptance stages',
+      'Preserve already consumed semantic stage slots',
+      'terminal or accepted, report that truthful terminal state and perform no implementation fallback',
+    ]) {
+      expect(normalizedSkill).toContain(contract);
+    }
+  });
+
+  it('binds the required positive, precedence, and negative examples', () => {
+    for (const example of [
+      'https://github.com/chetwerikoff/orchestrator-pack/issues/1453 менеджер -> create-issue-draft',
+      'https://github.com/chetwerikoff/orchestrator-pack/issues/1453 manager -> create-issue-draft',
+      'https://github.com/chetwerikoff/orchestrator-pack/issues/1453 выполни -> execute-issue-with-gpt',
+      'https://github.com/chetwerikoff/orchestrator-pack/issues/1453 manager выполни задачу -> execute-issue-with-gpt',
+      'ordinary prose mentioning manager without an Issue target -> no shorthand activation',
+    ]) {
+      expect(skill).toContain(example);
+    }
+  });
+});
 
 describe('Issue #1195 downstream test-task authoring floor', () => {
   it('identifies the static producer and fixed output vocabulary', () => {
