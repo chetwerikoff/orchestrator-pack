@@ -18,7 +18,7 @@ export interface OwnedMessageDeliveryTimeoutEvidence {
 
 export type OwnedMessageDeliveryTimeoutClassification =
   | { readonly state: 'message_delivery_timed_out'; readonly cause: 'message_delivery_timed_out' }
-  | Record<never, never>;
+  | { readonly state?: undefined; readonly cause?: undefined };
 
 /**
  * Canonical ownership predicate for the ChatGPT product-level message-delivery
