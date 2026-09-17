@@ -568,7 +568,7 @@ The existing scheduler tick performs an inbox-gated orchestration-mail reconcile
 
 ## Scheduler phases
 
-`runSchedulerTick` remains two phases.
+The existing `runSchedulerTick` remains two phases.
 
 ### Phase 1 — fleet supervision
 
@@ -837,6 +837,30 @@ must be bound to the exact code, configuration, identity, and lifecycle under
 test. A harness failure is investigated; it is not overwritten with a synthetic
 pass. Review carry-over, same-head clean suppression, and cap exhaustion do not
 carry smoke evidence to another head.
+
+When the smoke launcher is started from a tool whose own timeout or process-group
+lifetime may end before the smoke run, use the tracked detached handoff instead of
+leaving the run owned by that parent process:
+
+```text
+scripts/worker-smoke-run run --detach <ordinary run arguments>
+scripts/worker-smoke-run wait --run <run-id> --cwd <worktree> [--json]
+```
+
+`run --detach` returns the exact run id only after that detached launcher's
+`lifecycle.json` is visible. The detached launcher remains the sole owner of
+admission, runtime execution, cancellation, cleanup, publication, and final
+evidence. An interrupted Orca CLI observation child is reported as
+`runtime_cli_interrupted:<SIGNAME>`; when the launcher itself receives SIGINT or
+SIGTERM, the launcher result is `operator_cancelled:<SIGNAME>`. Neither condition
+is rewritten as `runtime_response_invalid`.
+
+`wait --run` is read-only. It does not acquire admission, reserve or repair
+lifecycle state, create or close terminals, publish GitHub state, or retry child
+observations. It may report PASS only from launcher-terminalized final evidence
+bound to that exact run id after cleanup and final report determination (or the
+terminal no-execution determination for a detached carry-only run). A child sealed
+completion pair by itself is never sufficient for PASS.
 
 ### Operator adoption handoff
 
