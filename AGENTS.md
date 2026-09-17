@@ -142,6 +142,35 @@ when raw shell behavior is genuinely required. Never compact secrets, private
 logs, declaration contents, exact-byte configuration, decision-bearing diffs,
 or CI status evidence.
 
+## Operational wiki consultation
+
+Internal `orchestrator-pack` procedure, lifecycle, review, smoke, runtime, or
+task-governance questions consult `wiki-ops`. General engineering concepts
+consult `wiki`. The ASCII server name `synto` remains an optional
+source/lineage surface. Mixed questions may consult both indexes.
+
+Before relying on operational results, use index-served `wiki-ops.read` on
+`Ops Wiki Status.md` with `related: false`. Require `checked_through_commit` to
+equal the exact current/adopted repository commit and `apply_in_progress` to be
+absent. Mismatch, in-progress state, absence, malformed content, unsupported
+read-back, or timeout routes immediately to current canonical repository files.
+Search results are navigation aids, never runtime-effect or merge authority.
+
+Natural-language operational questions are the normal entry. First run one
+`wiki-ops.search` call in `hybrid` mode with the user's wording and `limit: 3`,
+then read top-1 with `related: false`. Escalate to `queries[]` with 2-4
+materially different RU/EN formulations and top-2/top-3 reads only when the
+first result is absent; has a missing/non-numeric score or top-1 score below
+0.5; has top-2 score at least 0.5 and a top-1/top-2 score delta below 0.05; or
+the full read is missing, empty, ownership/provenance-invalid, or omits a
+source section required by that episode's manifest merge group. Exact paths or
+identifiers already known to the agent use repository/fulltext search, a known
+episode title uses `title`, and freshness uses index-served `wiki-ops.read`.
+After `wiki-ops` identifies the likely authority, re-read the current canonical
+repository file before any decision or effect.
+
+Tracked operator procedure: [`docs/ops-wiki-sync.md`](docs/ops-wiki-sync.md).
+
 ## GitHub transport
 
 On supported hosts with pack `scripts/` on `PATH`, GitHub reads MUST go through
@@ -204,8 +233,16 @@ invocation detail.
 | [`merge-with-local-adoption`](.cursor/skills/merge-with-local-adoption/SKILL.md) | direct merge request |
 | [`adversarial-draft-review`](.cursor/skills/adversarial-draft-review/SKILL.md) | challenge a draft with Codex |
 | [`discuss-with-gpt`](.cursor/skills/discuss-with-gpt/SKILL.md) | discuss or challenge with GPT |
-| [`create-issue-draft`](.cursor/skills/create-issue-draft/SKILL.md) | author a new task or handoff |
-| [`execute-issue-with-gpt`](.cursor/skills/execute-issue-with-gpt/SKILL.md) | explicitly execute or continue an existing Issue through GPT |
+| [`create-issue-draft`](.cursor/skills/create-issue-draft/SKILL.md) | author a new task or handoff; for an existing Issue, standalone `manager` / `менеджер` or explicit task-authoring/review-continuation wording resumes this lifecycle |
+| [`execute-issue-with-gpt`](.cursor/skills/execute-issue-with-gpt/SKILL.md) | explicitly execute or continue implementation of an existing Issue through GPT; explicit implementation wording wins over a `manager` / `менеджер` noun in the same request |
 | [`study-external-source`](.cursor/skills/study-external-source/SKILL.md) | study an external repository or URL |
 | [`publish-issue-draft`](.cursor/skills/publish-issue-draft/SKILL.md) | publish an existing tracked draft |
 | [`switch-pack-reviewer`](.cursor/skills/switch-pack-reviewer/SKILL.md) | change the configured reviewer |
+
+For an existing `orchestrator-pack` Issue, `<Issue> manager`, `<Issue> менеджер`,
+`<Issue> continue review`, and `<Issue> продолжи ревью` load
+`create-issue-draft`. Explicit implementation wording such as `<Issue> execute`,
+`<Issue> выполни задачу`, `<Issue> выполни Issue`, or `<Issue> доделай Issue`
+loads `execute-issue-with-gpt`, even when `manager` / `менеджер` also appears.
+An ordinary discussion that merely mentions `manager` / `менеджер` without an
+existing Issue target does not activate the shorthand.

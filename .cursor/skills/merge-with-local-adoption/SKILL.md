@@ -205,6 +205,24 @@ git log -1 --oneline
 
 Current `main` may move beyond `MERGE_SHA`; equality is not required.
 
+After that adoption read-back, read the actual primary-checkout `HEAD` once as a
+40-hex value and pass that literal value to one bounded operational-wiki sync.
+Do not pass the PR merge SHA or a moving `main` name:
+
+```bash
+COMMIT=$(git rev-parse HEAD)
+node --experimental-strip-types scripts/sync-ops-wiki.ts apply \
+  --commit "$COMMIT" \
+  --corpus-root "$PACK_OPS_WIKI_CORPUS_ROOT"
+```
+
+A degraded or unavailable wiki refresh does not undo adoption and does not block
+unrelated cleanup. Report it truthfully and continue; agents then read canonical
+repository files. Manual bootstrap/repair remains
+`scripts/sync-ops-wiki.ts apply --commit <40-hex> --corpus-root <root>` with
+optional `--reindex incremental|full`. See
+[`docs/ops-wiki-sync.md`](../../../docs/ops-wiki-sync.md).
+
 ## Step 7 — Apply local adoption
 
 Apply the instructions identified in Step 4. Keep edits surgical and report remaining manual
