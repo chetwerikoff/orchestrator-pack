@@ -54,6 +54,8 @@ type OperationWaitSource = number | (() => number);
 const DEFAULT_CONFIRM_BUDGET_MS = 5_000;
 const EXECUTION_RECOVERY_CONFIRM_DELAY_MS = 100;
 const EXECUTION_RECOVERY_EVIDENCE_READ_CAP_MS = 300;
+const MESSAGE_DELIVERY_TIMED_OUT_TEXT = 'message delivery timed out. please try again.';
+const PRODUCT_NETWORK_ERROR_TEXT = 'a network error occurred. please check your connection and try again. if this issue persists please contact us through our help center at help.openai.com.';
 const OWNED_TURN_GENERATION_SELECTOR = [
   STOP_BUTTON_SELECTOR,
   ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
@@ -76,12 +78,8 @@ function normalizeExecutionRecoveryProductText(value: string): string {
 
 function executionRecoveryCauseFromText(value: string): ExecutionRecoveryProductCause | undefined {
   const text = normalizeExecutionRecoveryProductText(value);
-  if (/(?:^|\s)message delivery timed out\.\s*please try again\.?(?:\s|$)/u.test(text)) {
-    return 'message_delivery_timed_out';
-  }
-  if (/(?:^|\s)a network error occurred\.\s*please check your connection and try again\.\s*if this issue persists please contact us through our help center at help\.openai\.com\.?(?:\s|$)/u.test(text)) {
-    return 'product_network_error';
-  }
+  if (text === MESSAGE_DELIVERY_TIMED_OUT_TEXT) return 'message_delivery_timed_out';
+  if (text === PRODUCT_NETWORK_ERROR_TEXT) return 'product_network_error';
   return undefined;
 }
 
