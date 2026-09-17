@@ -6,10 +6,12 @@ import { runProcessSync } from './kernel/subprocess.ts';
 import { overlayExecutorProfileEnv } from './executor-profile-store.ts';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from './pr-scope-contract.ts';
+import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   buildExecutorCommand,
   buildOpenCodeAgentOverlay,
@@ -67,15 +69,19 @@ import {
   bindSmokeTerminalHandle,
   cleanupSmokeLifecycle,
   createSmokeLifecycleReservation,
+  createSmokeNoExecutionLifecycle,
   evaluateSmokeLifecycleCleanliness,
   markSmokeCreateAmbiguous,
   markSmokeCreateInProgress,
+  markSmokeLauncherTerminalized,
   preflightSmokeLifecycle,
+  readSmokeLifecycleRegistry,
   releaseSmokeAdmission,
   SMOKE_ABSOLUTE_CEILING_MS,
   SMOKE_CREATE_TIMEOUT_MS,
   SMOKE_DELIVERY_TIMEOUT_MS,
   SMOKE_LIFECYCLE_POLL_MS,
+  SMOKE_ORCA_OPERATION_TIMEOUT_MS,
   SMOKE_PROGRESS_STALL_MS,
   SMOKE_SHUTDOWN_TIMEOUT_MS,
   smokeCancelAcknowledgementPath,
@@ -85,7 +91,13 @@ import {
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 import { markTrackedSmokeWorkerDeliveryConfirmed } from './lib/worker-smoke-bounded-create.ts';
-import { verifySmokeRunReceipt, writeWorkerSmokeReceipt } from './lib/worker-smoke-receipt.ts';
+import {
+  readWorkerSmokeRunFinalEvidence,
+  smokeRunFinalEvidencePath,
+  verifySmokeRunReceipt,
+  writeWorkerSmokeReceipt,
+  writeWorkerSmokeRunFinalEvidence,
+} from './lib/worker-smoke-receipt.ts';
 import {
   commitSmokeOrderingTransition,
   initializePackReviewAuthority,
@@ -169,6 +181,9 @@ export interface CliOptions {
   json: boolean;
   reviewId: string;
   reviewHeadSha: string;
+  detach: boolean;
+  detachedOwner: boolean;
+  runId: string;
 }
 
 export type SmokeComplexity = 'routine' | 'complex';
@@ -415,7 +430,7 @@ export function projectExpectedPrTarget(
 function parseArgs(argv: readonly string[]): CliOptions {
   const options: CliOptions = {
     command: '', issueNumber: 0, prNumber: 0, headSha: '', issueBodyFile: '', smokeComplexity: '', smokeActor: 'worker-owned', operatorSmokeOnly: false,
-    repoRoot: process.cwd(), cwd: process.cwd(), dryRun: false, json: false, reviewId: '', reviewHeadSha: '',
+    repoRoot: process.cwd(), cwd: process.cwd(), dryRun: false, json: false, reviewId: '', reviewHeadSha: '', detach: false, detachedOwner: false, runId: '',
   };
   const args = [...argv];
   if (args[0] && !args[0].startsWith('-')) options.command = args.shift() ?? '';
@@ -434,6 +449,9 @@ function parseArgs(argv: readonly string[]): CliOptions {
       case '--json': options.json = true; break;
       case '--review-id': options.reviewId = args[++index] ?? ''; break;
       case '--review-head-sha': options.reviewHeadSha = args[++index] ?? ''; break;
+      case '--detach': options.detach = true; break;
+      case '--detached-owner': options.detachedOwner = true; break;
+      case '--run': options.runId = args[++index] ?? ''; break;
       default: throw new Error(`unknown argument: ${args[index]}`);
     }
   }
@@ -453,6 +471,15 @@ function readIssueBody(path: string): string {
 function sleep(milliseconds: number): void {
   if (milliseconds <= 0) return;
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+function sleepAsync(milliseconds: number): Promise<void> {
+  if (milliseconds <= 0) return Promise.resolve();
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds));
+}
+
+function yieldEventLoop(): Promise<void> {
+  return new Promise((resolveYield) => setImmediate(resolveYield));
 }
 
 function requireProcessOutput(label: string, result: ReturnType<typeof runProcessSync>): string {
@@ -700,7 +727,7 @@ export function resolveCiGreen(prNumber: number, headSha: string, repositorySlug
   let requiredCheckNames: string[] = [];
   let requiredCheckLookupFailed = false;
   try {
-    const protection = githubApiObject('required-status-checks', `repos/${repositorySlug}/branches/${baseRef}/protection/required_status_checks`, repoRoot);
+    const protection = githubApiObject('required-status-checks', `repos/${repositorySlug}/branches/${baseRef}/protection/required_status_checks`, options.repoRoot);
     requiredCheckNames = reviewIndependentRequiredCiContexts(Array.isArray(protection.contexts) ? protection.contexts : []);
   } catch { requiredCheckLookupFailed = true; }
   return classifyRequiredCiLevel(checks, { requiredCheckNames, requiredCheckLookupFailed }) === 'green';
@@ -1101,22 +1128,60 @@ function completionFailureReason(cause: string, observation: SmokeCompletionObse
     `plan_complete=${progress.planComplete}`, observation.wrongRunBinding ? 'wrong_run_binding=true' : ''].filter(Boolean).join(';');
 }
 
-export function waitForRuntimeSmokeCompletion(input: {
+export interface RuntimeSmokeCompletionResult {
+  ok: boolean;
+  partial?: Partial<SmokeReport> | null;
+  reason?: string;
+  progress?: SmokeProgress;
+  observationFailures?: readonly string[];
+}
+
+interface RuntimeSmokeCompletionInput {
   adapter: RuntimeAdapter; worker: RuntimeWorkerIdentity; binding: SmokeRunBinding; scenarioCount: number; cwd: string;
   startedAtMs: number; previousToken?: RuntimeObservationToken; abortReason: () => string | undefined;
   now?: () => number; sleepMs?: (milliseconds: number) => void; absoluteCeilingMs?: number; progressStallMs?: number;
-}): { ok: boolean; partial?: Partial<SmokeReport> | null; reason?: string; progress?: SmokeProgress } {
-  const now = input.now ?? (() => Date.now());
-  const sleepMs = input.sleepMs ?? sleep;
+}
+
+type DeterministicRuntimeSmokeCompletionInput = RuntimeSmokeCompletionInput & {
+  now: () => number;
+  sleepMs: (milliseconds: number) => void;
+};
+
+function recoverableCompletionObservation(reason: string): boolean {
+  return reason === 'runtime_timeout' || reason.startsWith('runtime_cli_interrupted:');
+}
+
+function boundedObservationTimeout(remainingMs: number): number {
+  return Math.max(1, Math.min(remainingMs, SMOKE_ORCA_OPERATION_TIMEOUT_MS));
+}
+
+function completionWithFailures(
+  result: Omit<RuntimeSmokeCompletionResult, 'observationFailures'>,
+  failures: readonly string[],
+): RuntimeSmokeCompletionResult {
+  return failures.length > 0 ? { ...result, observationFailures: [...failures] } : result;
+}
+
+function finalFailureDetail(base: string, failures: readonly string[]): string {
+  const last = failures.at(-1);
+  return last ? `${base};last_observation_failure=${last}` : base;
+}
+
+function waitForRuntimeSmokeCompletionDeterministic(
+  input: DeterministicRuntimeSmokeCompletionInput,
+): RuntimeSmokeCompletionResult {
+  const now = input.now;
+  const sleepMs = input.sleepMs;
   const absoluteDeadline = input.startedAtMs + (input.absoluteCeilingMs ?? SMOKE_ABSOLUTE_CEILING_MS);
   const progressStallMs = input.progressStallMs ?? SMOKE_PROGRESS_STALL_MS;
   let lastProgressAt = now(); let acceptedProgress = 0; let postPlanPollMs = SMOKE_LIFECYCLE_POLL_MS;
   let previousPublicationState: SmokeCompletionObservation['publicationState'] | undefined;
   let token = input.previousToken; let completionState = createSmokeCompletionObservationState();
   let lastObservation: SmokeCompletionObservation | undefined; let lastProgress: SmokeProgress | undefined;
+  const observationFailures: string[] = [];
 
   while (now() < absoluteDeadline) {
-    const aborted = input.abortReason(); if (aborted) return { ok: false, reason: `operator_cancelled:${aborted}` };
+    const aborted = input.abortReason(); if (aborted) return completionWithFailures({ ok: false, reason: `operator_cancelled:${aborted}` }, observationFailures);
     const progress = inspectSmokeProgress({ artifactDir: input.binding.artifactDir, runId: input.binding.runId, scenarioCount: input.scenarioCount });
     lastProgress = progress;
     const progressIncreased = progress.acceptedCount > acceptedProgress;
@@ -1125,25 +1190,36 @@ export function waitForRuntimeSmokeCompletion(input: {
     completionState = observed.state; lastObservation = observed.observation;
     const publicationStateChanged = previousPublicationState !== undefined && previousPublicationState !== observed.observation.publicationState;
     previousPublicationState = observed.observation.publicationState;
-    if (observed.observation.publicationState === 'publish_complete_single' && observed.observation.partial) return { ok: true, partial: observed.observation.partial, progress };
-    if (observed.observation.publicationState === 'publish_complete_duplicate') return { ok: false, reason: completionFailureReason('agent_report_duplicate', observed.observation, progress), progress };
-    if (observed.observation.publicationState === 'publish_complete_unfenced') return { ok: false, reason: completionFailureReason('agent_report_unfenced', observed.observation, progress), progress };
+    if (observed.observation.publicationState === 'publish_complete_single' && observed.observation.partial) return completionWithFailures({ ok: true, partial: observed.observation.partial, progress }, observationFailures);
+    if (observed.observation.publicationState === 'publish_complete_duplicate') return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_duplicate', observed.observation, progress), progress }, observationFailures);
+    if (observed.observation.publicationState === 'publish_complete_unfenced') return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_unfenced', observed.observation, progress), progress }, observationFailures);
     if (observed.observation.wrongRunBinding && (observed.observation.publicationState === 'none' || observed.observation.publicationState === 'partial')) {
-      return { ok: false, reason: completionFailureReason('agent_idle_without_report', observed.observation, progress), progress };
+      return completionWithFailures({ ok: false, reason: completionFailureReason('agent_idle_without_report', observed.observation, progress), progress }, observationFailures);
     }
     const readDeadline = Math.min(absoluteDeadline, lastProgressAt + progressStallMs);
     const remainingReadMs = readDeadline - now();
-    if (remainingReadMs <= 0) return { ok: false, reason: completionFailureReason('agent_report_timeout', observed.observation, progress, 'reason=progress_stall'), progress };
-    const read = input.adapter.readBoundedOutput({ worker: input.worker, previousToken: token, limit: 200 }, { cwd: input.cwd, timeoutMs: Math.max(1, remainingReadMs) });
-    if (read.status !== 'ok') return { ok: false, reason: completionFailureReason(failureReason(read), observed.observation, progress), progress };
+    if (remainingReadMs <= 0) return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_timeout', observed.observation, progress, finalFailureDetail('reason=progress_stall', observationFailures)), progress }, observationFailures);
+    const read = input.adapter.readBoundedOutput(
+      { worker: input.worker, previousToken: token, limit: 200 },
+      { cwd: input.cwd, timeoutMs: boundedObservationTimeout(remainingReadMs) },
+    );
+    if (read.status !== 'ok') {
+      if (!recoverableCompletionObservation(read.reason)) return completionWithFailures({ ok: false, reason: completionFailureReason(failureReason(read), observed.observation, progress), progress }, observationFailures);
+      if (observationFailures.length < 16) observationFailures.push(read.reason);
+      const interruptedAbort = read.reason.startsWith('runtime_cli_interrupted:') ? input.abortReason() : undefined;
+      if (interruptedAbort) return completionWithFailures({ ok: false, reason: `operator_cancelled:${interruptedAbort}`, progress }, observationFailures);
+      const remainingAfterRead = readDeadline - now();
+      if (remainingAfterRead > 0) sleepMs(Math.min(SMOKE_LIFECYCLE_POLL_MS, Math.max(1, remainingAfterRead)));
+      continue;
+    }
     token = read.value.observationToken;
     const liveness = input.adapter.liveness({ worker: input.worker, observationWindowMs: SMOKE_LIFECYCLE_POLL_MS }, { cwd: input.cwd });
     if (read.value.terminalState === 'exited' || liveness.status === 'gone') {
       const finalObservation = observeSmokeCompletionEvidence(input.binding, completionState); completionState = finalObservation.state;
-      if (finalObservation.observation.publicationState === 'publish_complete_single' && finalObservation.observation.partial) return { ok: true, partial: finalObservation.observation.partial, progress };
-      return { ok: false, reason: completionFailureReason('agent_exited_without_report', finalObservation.observation, progress), progress };
+      if (finalObservation.observation.publicationState === 'publish_complete_single' && finalObservation.observation.partial) return completionWithFailures({ ok: true, partial: finalObservation.observation.partial, progress }, observationFailures);
+      return completionWithFailures({ ok: false, reason: completionFailureReason('agent_exited_without_report', finalObservation.observation, progress), progress }, observationFailures);
     }
-    if (now() - lastProgressAt >= progressStallMs) return { ok: false, reason: completionFailureReason('agent_report_timeout', observed.observation, progress, 'reason=progress_stall'), progress };
+    if (now() - lastProgressAt >= progressStallMs) return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_timeout', observed.observation, progress, finalFailureDetail('reason=progress_stall', observationFailures)), progress }, observationFailures);
     const pendingPublication = observed.observation.publicationState === 'none' || observed.observation.publicationState === 'partial';
     const postPlanPending = progress.planComplete && pendingPublication;
     if (progressIncreased || publicationStateChanged || !postPlanPending) postPlanPollMs = SMOKE_LIFECYCLE_POLL_MS;
@@ -1152,8 +1228,87 @@ export function waitForRuntimeSmokeCompletion(input: {
   }
   const progress = lastProgress ?? inspectSmokeProgress({ artifactDir: input.binding.artifactDir, runId: input.binding.runId, scenarioCount: input.scenarioCount });
   const finalObservation = observeSmokeCompletionEvidence(input.binding, completionState);
-  if (finalObservation.observation.publicationState === 'publish_complete_single' && finalObservation.observation.partial) return { ok: true, partial: finalObservation.observation.partial, progress };
-  return { ok: false, reason: completionFailureReason('agent_report_timeout', finalObservation.observation ?? lastObservation!, progress, 'reason=absolute_safety_ceiling'), progress };
+  if (finalObservation.observation.publicationState === 'publish_complete_single' && finalObservation.observation.partial) return completionWithFailures({ ok: true, partial: finalObservation.observation.partial, progress }, observationFailures);
+  return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_timeout', finalObservation.observation ?? lastObservation!, progress, finalFailureDetail('reason=absolute_safety_ceiling', observationFailures)), progress }, observationFailures);
+}
+
+async function waitForRuntimeSmokeCompletionInterruptSafe(
+  input: RuntimeSmokeCompletionInput,
+): Promise<RuntimeSmokeCompletionResult> {
+  const now = () => Date.now();
+  const absoluteDeadline = input.startedAtMs + (input.absoluteCeilingMs ?? SMOKE_ABSOLUTE_CEILING_MS);
+  const progressStallMs = input.progressStallMs ?? SMOKE_PROGRESS_STALL_MS;
+  let lastProgressAt = now(); let acceptedProgress = 0; let postPlanPollMs = SMOKE_LIFECYCLE_POLL_MS;
+  let previousPublicationState: SmokeCompletionObservation['publicationState'] | undefined;
+  let token = input.previousToken; let completionState = createSmokeCompletionObservationState();
+  let lastObservation: SmokeCompletionObservation | undefined; let lastProgress: SmokeProgress | undefined;
+  const observationFailures: string[] = [];
+
+  while (now() < absoluteDeadline) {
+    const aborted = input.abortReason(); if (aborted) return completionWithFailures({ ok: false, reason: `operator_cancelled:${aborted}` }, observationFailures);
+    const progress = inspectSmokeProgress({ artifactDir: input.binding.artifactDir, runId: input.binding.runId, scenarioCount: input.scenarioCount });
+    lastProgress = progress;
+    const progressIncreased = progress.acceptedCount > acceptedProgress;
+    if (progressIncreased) { acceptedProgress = progress.acceptedCount; lastProgressAt = now(); }
+    const observed = observeSmokeCompletionEvidence(input.binding, completionState);
+    completionState = observed.state; lastObservation = observed.observation;
+    const publicationStateChanged = previousPublicationState !== undefined && previousPublicationState !== observed.observation.publicationState;
+    previousPublicationState = observed.observation.publicationState;
+    if (observed.observation.publicationState === 'publish_complete_single' && observed.observation.partial) return completionWithFailures({ ok: true, partial: observed.observation.partial, progress }, observationFailures);
+    if (observed.observation.publicationState === 'publish_complete_duplicate') return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_duplicate', observed.observation, progress), progress }, observationFailures);
+    if (observed.observation.publicationState === 'publish_complete_unfenced') return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_unfenced', observed.observation, progress), progress }, observationFailures);
+    if (observed.observation.wrongRunBinding && (observed.observation.publicationState === 'none' || observed.observation.publicationState === 'partial')) {
+      return completionWithFailures({ ok: false, reason: completionFailureReason('agent_idle_without_report', observed.observation, progress), progress }, observationFailures);
+    }
+    const readDeadline = Math.min(absoluteDeadline, lastProgressAt + progressStallMs);
+    const remainingReadMs = readDeadline - now();
+    if (remainingReadMs <= 0) return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_timeout', observed.observation, progress, finalFailureDetail('reason=progress_stall', observationFailures)), progress }, observationFailures);
+    const readInput = { worker: input.worker, previousToken: token, limit: 200 };
+    const read = input.adapter.readBoundedOutputAsync
+      ? await input.adapter.readBoundedOutputAsync(readInput, { cwd: input.cwd, timeoutMs: boundedObservationTimeout(remainingReadMs) })
+      : input.adapter.readBoundedOutput(readInput, { cwd: input.cwd, timeoutMs: boundedObservationTimeout(remainingReadMs) });
+    await yieldEventLoop();
+    const postReadAbort = input.abortReason();
+    if (postReadAbort) return completionWithFailures({ ok: false, reason: `operator_cancelled:${postReadAbort}`, progress }, observationFailures);
+    if (read.status !== 'ok') {
+      if (!recoverableCompletionObservation(read.reason)) return completionWithFailures({ ok: false, reason: completionFailureReason(failureReason(read), observed.observation, progress), progress }, observationFailures);
+      if (observationFailures.length < 16) observationFailures.push(read.reason);
+      const remainingAfterRead = readDeadline - now();
+      if (remainingAfterRead > 0) await sleepAsync(Math.min(SMOKE_LIFECYCLE_POLL_MS, Math.max(1, remainingAfterRead)));
+      continue;
+    }
+    token = read.value.observationToken;
+    const liveness = input.adapter.liveness({ worker: input.worker, observationWindowMs: SMOKE_LIFECYCLE_POLL_MS }, { cwd: input.cwd });
+    await yieldEventLoop();
+    const postLivenessAbort = input.abortReason();
+    if (postLivenessAbort) return completionWithFailures({ ok: false, reason: `operator_cancelled:${postLivenessAbort}`, progress }, observationFailures);
+    if (read.value.terminalState === 'exited' || liveness.status === 'gone') {
+      const finalObservation = observeSmokeCompletionEvidence(input.binding, completionState); completionState = finalObservation.state;
+      if (finalObservation.observation.publicationState === 'publish_complete_single' && finalObservation.observation.partial) return completionWithFailures({ ok: true, partial: finalObservation.observation.partial, progress }, observationFailures);
+      return completionWithFailures({ ok: false, reason: completionFailureReason('agent_exited_without_report', finalObservation.observation, progress), progress }, observationFailures);
+    }
+    if (now() - lastProgressAt >= progressStallMs) return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_timeout', observed.observation, progress, finalFailureDetail('reason=progress_stall', observationFailures)), progress }, observationFailures);
+    const pendingPublication = observed.observation.publicationState === 'none' || observed.observation.publicationState === 'partial';
+    const postPlanPending = progress.planComplete && pendingPublication;
+    if (progressIncreased || publicationStateChanged || !postPlanPending) postPlanPollMs = SMOKE_LIFECYCLE_POLL_MS;
+    const remainingAfterObservation = readDeadline - now();
+    if (remainingAfterObservation > 0) await sleepAsync(Math.min(postPlanPollMs, Math.max(1, remainingAfterObservation)));
+    else await yieldEventLoop();
+    if (postPlanPending && !progressIncreased && !publicationStateChanged) postPlanPollMs *= 2; else postPlanPollMs = SMOKE_LIFECYCLE_POLL_MS;
+  }
+  const progress = lastProgress ?? inspectSmokeProgress({ artifactDir: input.binding.artifactDir, runId: input.binding.runId, scenarioCount: input.scenarioCount });
+  const finalObservation = observeSmokeCompletionEvidence(input.binding, completionState);
+  if (finalObservation.observation.publicationState === 'publish_complete_single' && finalObservation.observation.partial) return completionWithFailures({ ok: true, partial: finalObservation.observation.partial, progress }, observationFailures);
+  return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_timeout', finalObservation.observation ?? lastObservation!, progress, finalFailureDetail('reason=absolute_safety_ceiling', observationFailures)), progress }, observationFailures);
+}
+
+export function waitForRuntimeSmokeCompletion(input: DeterministicRuntimeSmokeCompletionInput): RuntimeSmokeCompletionResult;
+export function waitForRuntimeSmokeCompletion(input: RuntimeSmokeCompletionInput): Promise<RuntimeSmokeCompletionResult>;
+export function waitForRuntimeSmokeCompletion(
+  input: RuntimeSmokeCompletionInput,
+): RuntimeSmokeCompletionResult | Promise<RuntimeSmokeCompletionResult> {
+  if (input.now && input.sleepMs) return waitForRuntimeSmokeCompletionDeterministic(input as DeterministicRuntimeSmokeCompletionInput);
+  return waitForRuntimeSmokeCompletionInterruptSafe(input);
 }
 
 function waitForCooperativeShutdown(input: { adapter: RuntimeAdapter; worker: RuntimeWorkerIdentity; binding: SmokeRunBinding; cwd: string }): boolean {
@@ -1345,6 +1500,21 @@ function finishSmokeOrdering(binding: SmokeOrderingBinding | null, status: 'pass
 
 async function directSmokeStartFence<T>(action: () => T | Promise<T>): Promise<SmokeStartFenceResult<T>> { return { ok: true, value: await action() }; }
 
+function terminalizeDetachedRun(options: CliOptions, runId: string, artifactDir: string, mode: 'runtime' | 'no_execution', report: SmokeReport): void {
+  if (!options.detachedOwner) return;
+  const final = writeWorkerSmokeRunFinalEvidence({ artifactDir, runId, mode, report });
+  markSmokeLauncherTerminalized({
+    artifactDir,
+    runId,
+    finalEvidencePath: smokeRunFinalEvidencePath(artifactDir),
+    nowMs: final.recordedAtMs,
+  });
+}
+
+function completionObservationNotes(completion: RuntimeSmokeCompletionResult): string[] {
+  return (completion.observationFailures ?? []).map((reason) => `smoke-observation=${reason}`);
+}
+
 export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAttemptDependencies = {}): Promise<number> {
   const suppliedIssueBody = readIssueBody(options.issueBodyFile);
   let issueBody = suppliedIssueBody;
@@ -1430,12 +1600,25 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
 
   if (attemptPlan.scenarios.length === 0 && !selection.fallbackReason) {
     const lifecycle = evaluateSmokeLifecycleCleanliness(options.cwd);
+    const detachedRunId = options.detachedOwner ? options.runId.trim() : '';
+    const detachedArtifactDir = detachedRunId ? resolveSmokeRunArtifactDir(options.cwd, detachedRunId) : '';
+    if (detachedRunId) {
+      createSmokeNoExecutionLifecycle({
+        runId: detachedRunId,
+        artifactDir: detachedArtifactDir,
+        issueNumber: options.issueNumber,
+        prNumber: options.prNumber,
+        headSha: options.headSha,
+      });
+    }
     if (!lifecycle.clean) {
       const report = operationalReport('BLOCKED', options, {
         action: 'verify carry-only smoke lifecycle cleanliness', expected: 'no unresolved prior smoke lifecycle before carry-only publication',
-        observed: `smoke_lifecycle_unclean:${lifecycle.reasons[0] ?? 'unknown'}`, adapterId: adapter.id,
+        observed: `smoke_lifecycle_unclean:${lifecycle.reasons[0] ?? 'unknown'}`, terminalCleanup: 'not_started_no_execution', adapterId: adapter.id,
       });
-      publishSmokeReport(report, options); emit({ ok: false, report, lifecycle }, options.json); return 1;
+      publishSmokeReport(report, options);
+      if (detachedRunId) terminalizeDetachedRun(options, detachedRunId, detachedArtifactDir, 'no_execution', report);
+      emit({ ok: false, report, lifecycle }, options.json); return 1;
     }
     try {
       orderingBinding = beginSmokeOrdering(options, issueBody);
@@ -1477,6 +1660,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
           };
         }
       }
+      if (detachedRunId) terminalizeDetachedRun(options, detachedRunId, detachedArtifactDir, 'no_execution', report);
       emit({ ok: report.result === 'PASS', report, lifecycle, selection: {
         attempted: 0, carried: selection.carried.length, fallbackReason: selection.fallbackReason,
         affectedDiagnostics: selection.affectedDiagnostics.length, tupleDiagnostics: selection.tupleDiagnostics.length,
@@ -1488,13 +1672,17 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
         observed: scrubSmokeOutput(error instanceof Error ? error.message : String(error)),
         terminalCleanup: 'not_started_no_execution', adapterId: adapter.id,
       });
-      publishSmokeReport(report, options); emit({ ok: false, report, lifecycle }, options.json); return 1;
+      publishSmokeReport(report, options);
+      if (detachedRunId) {
+        try { terminalizeDetachedRun(options, detachedRunId, detachedArtifactDir, 'no_execution', report); } catch { /* incomplete final evidence remains fail-closed */ }
+      }
+      emit({ ok: false, report, lifecycle }, options.json); return 1;
     } finally {
       try { finishSmokeOrdering(orderingBinding, orderingOutcome, orderingFailureKind); } catch { /* missing ordering evidence remains fail-closed */ }
     }
   }
 
-  const runId = createSmokeRunIdentity();
+  const runId = options.detachedOwner ? options.runId.trim() : createSmokeRunIdentity();
   const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
   let startedAtMs = 0; let worker: RuntimeWorkerIdentity | undefined; let terminalCleanup = 'pending'; let cleanupFinished = false; let signalReason: string | undefined;
   const onSigint = (): void => { signalReason = 'SIGINT'; };
@@ -1560,10 +1748,12 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
         action: 'dispatch smoke prompt once', expected: 'one dispatch attempt plus child-sealed delivery evidence', observed: delivery.reason ?? 'prompt_delivery_unconfirmed',
         terminalCleanup, environmentNotes: [`submit-count=${delivery.submitCount}`, `lifecycle-clean=${lifecycleCleanup.clean}`], worker, adapterId: adapter.id,
       });
-      publishSmokeReport(report, options); emit({ ok: false, report, lifecycleCleanup }, options.json); return 1;
+      publishSmokeReport(report, options);
+      terminalizeDetachedRun(options, runId, artifactDir, 'runtime', report);
+      emit({ ok: false, report, lifecycleCleanup }, options.json); return 1;
     }
 
-    const completion = waitForRuntimeSmokeCompletion({
+    const completion = await waitForRuntimeSmokeCompletion({
       adapter, worker, binding, scenarioCount: attemptPlan.scenarios.length, cwd: options.cwd, startedAtMs,
       previousToken: delivery.observationToken, abortReason: () => signalReason,
     });
@@ -1571,9 +1761,12 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       const lifecycleCleanup = cleanup(completion.reason ?? 'agent_report_timeout', true);
       const report = operationalReport('FAIL', options, {
         action: 'wait for sealed smoke completion', expected: 'legal progress and one sealed report', observed: completion.reason ?? 'agent_report_timeout',
-        terminalCleanup, limitations: completion.progress?.invalidEvents.slice(0, 10), environmentNotes: [`lifecycle-clean=${lifecycleCleanup.clean}`], worker, adapterId: adapter.id,
+        terminalCleanup, limitations: completion.progress?.invalidEvents.slice(0, 10),
+        environmentNotes: [`lifecycle-clean=${lifecycleCleanup.clean}`, ...completionObservationNotes(completion)], worker, adapterId: adapter.id,
       });
-      publishSmokeReport(report, options); emit({ ok: false, report, lifecycleCleanup }, options.json); return 1;
+      publishSmokeReport(report, options);
+      terminalizeDetachedRun(options, runId, artifactDir, 'runtime', report);
+      emit({ ok: false, report, lifecycleCleanup }, options.json); return 1;
     }
 
     const afterStatus = gitPorcelain(options.cwd);
@@ -1585,6 +1778,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     const projected = projectWorkerSmokeSelectiveReport({ partial: attemptBound, selection });
     const selectiveNotes = [
       ...(projected.environmentNotes ?? []),
+      ...completionObservationNotes(completion),
       `smoke-attempt-scenarios=${attemptPlan.scenarios.length}/${plan.scenarios.length}`,
       ...(selection.fallbackReason ? [`smoke-selective-fallback=${selection.fallbackReason}`] : []),
       ...(selection.affectedDiagnostics.length > 0 ? [`smoke-affected-diagnostics=${selection.affectedDiagnostics.length}`] : []),
@@ -1618,6 +1812,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
         };
       }
     }
+    terminalizeDetachedRun(options, runId, artifactDir, 'runtime', report);
     emit({ ok: report.result === 'PASS', report, lifecycleCleanup, selection: {
       attempted: attemptPlan.scenarios.length, carried: selection.carried.length, fallbackReason: selection.fallbackReason,
       affectedDiagnostics: selection.affectedDiagnostics.length, tupleDiagnostics: selection.tupleDiagnostics.length,
@@ -1631,7 +1826,11 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       action: 'run runtime-neutral worker smoke', expected: 'bounded terminal lifecycle', observed,
       terminalCleanup: worker ? terminalCleanup : startedAtMs > 0 ? 'ambiguous_unbound' : 'not_started', worker, adapterId: adapter.id,
     });
-    publishSmokeReport(report, options); emit({ ok: false, report }, options.json); return 1;
+    publishSmokeReport(report, options);
+    if (options.detachedOwner && cleanupFinished) {
+      try { terminalizeDetachedRun(options, runId, artifactDir, 'runtime', report); } catch { /* incomplete final evidence remains fail-closed */ }
+    }
+    emit({ ok: false, report }, options.json); return 1;
   } finally {
     try { finishSmokeOrdering(orderingBinding, orderingOutcome, orderingFailureKind); } catch { /* missing ordering evidence remains fail-closed */ }
     process.off('SIGINT', onSigint); process.off('SIGTERM', onSigterm);
@@ -1640,14 +1839,100 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   }
 }
 
+async function runDetachedBootstrap(argv: readonly string[], options: CliOptions): Promise<number> {
+  if (options.detachedOwner || options.runId) throw new Error('detached bootstrap may not supply --detached-owner or --run');
+  const runId = createSmokeRunIdentity();
+  const childArgs = argv.filter((value) => value !== '--detach');
+  childArgs.push('--detached-owner', '--run', runId);
+  const env = { ...process.env };
+  delete env.WORKER_SMOKE_WRAPPER_STATE_FILE;
+  let spawnFailure = '';
+  const child = spawn(process.execPath, ['--experimental-strip-types', fileURLToPath(import.meta.url), ...childArgs], {
+    cwd: options.cwd,
+    env,
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.once('error', (error) => { spawnFailure = error.message; });
+  child.unref();
+
+  const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
+  const deadline = Date.now() + SMOKE_CREATE_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (spawnFailure) {
+      process.stderr.write('worker_smoke_detach_spawn_failed\n');
+      return 1;
+    }
+    const lifecycle = readSmokeLifecycleRegistry(artifactDir);
+    if (lifecycle?.runId === runId) {
+      process.stdout.write(`${runId}\n`);
+      return 0;
+    }
+    await sleepAsync(SMOKE_LIFECYCLE_POLL_MS);
+  }
+  process.stderr.write('worker_smoke_detach_lifecycle_timeout\n');
+  return 1;
+}
+
+export async function runSmokeWait(options: CliOptions): Promise<number> {
+  const runId = options.runId.trim();
+  if (!runId) throw new Error('wait requires --run <id>');
+  const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
+  const deadline = Date.now() + SMOKE_ABSOLUTE_CEILING_MS + SMOKE_SHUTDOWN_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const lifecycle = readSmokeLifecycleRegistry(artifactDir);
+    if (lifecycle) {
+      if (lifecycle.runId !== runId) {
+        process.stderr.write('worker_smoke_wait_run_mismatch\n');
+        return 1;
+      }
+      if (lifecycle.launcherTerminalizedAtMs !== undefined && lifecycle.finalEvidencePath) {
+        const mode = lifecycle.mode === 'no_execution' ? 'no_execution' : 'runtime';
+        const expectedTerminalState = mode === 'no_execution'
+          ? lifecycle.spawnState === 'no_execution_terminal'
+          : lifecycle.spawnState === 'clean' || lifecycle.spawnState === 'cleanup_failed';
+        if (!expectedTerminalState || resolve(lifecycle.finalEvidencePath) !== resolve(smokeRunFinalEvidencePath(artifactDir))) {
+          process.stderr.write('worker_smoke_wait_terminal_state_invalid\n');
+          return 1;
+        }
+        const evidence = readWorkerSmokeRunFinalEvidence({
+          artifactDir,
+          runId,
+          issueNumber: lifecycle.issueNumber,
+          prNumber: lifecycle.prNumber,
+          headSha: lifecycle.headSha,
+          mode,
+        });
+        if (!evidence || evidence.report.result !== evidence.result) {
+          process.stderr.write('worker_smoke_wait_final_evidence_invalid\n');
+          return 1;
+        }
+        emit({ ok: evidence.result === 'PASS', runId, result: evidence.result, report: evidence.report }, options.json);
+        return evidence.result === 'PASS' ? 0 : 1;
+      }
+    }
+    await sleepAsync(SMOKE_LIFECYCLE_POLL_MS);
+  }
+  process.stderr.write('worker_smoke_wait_timeout\n');
+  return 1;
+}
+
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
   const options = parseArgs(argv);
   switch (options.command) {
     case 'validate-plan': return runValidatePlan(options);
     case 'gate-check': return runGateCheck(options);
-    case 'run': return runSmokeAttempt(options);
+    case 'run':
+      if (options.detach) return runDetachedBootstrap(argv, options);
+      if (options.detachedOwner && !options.runId.trim()) throw new Error('detached owner requires --run <id>');
+      if (!options.detachedOwner && options.runId.trim()) throw new Error('--run is reserved for detached ownership or wait');
+      return runSmokeAttempt(options);
+    case 'wait':
+      if (options.detach || options.detachedOwner) throw new Error('wait is read-only and does not accept detach ownership flags');
+      return runSmokeWait(options);
     case 'reconcile-direct-review': return runDirectReviewReconciliation(options);
-    default: throw new Error('usage: worker-smoke-run.ts <validate-plan|gate-check|run|reconcile-direct-review> [options] (run accepts --smoke-actor worker-owned|independent)');
+    default: throw new Error('usage: worker-smoke-run.ts <validate-plan|gate-check|run|wait|reconcile-direct-review> [options] (run accepts --detach and --smoke-actor worker-owned|independent; wait requires --run <id>)');
   }
 }
 
