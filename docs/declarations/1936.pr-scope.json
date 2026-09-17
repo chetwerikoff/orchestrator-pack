@@ -1,0 +1,49 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1936,
+  "declared_paths": [
+    ".gitignore",
+    "docs/declarations/",
+    "docs/orchestration-runbook.md",
+    "scripts/draft-discipline.d.mts",
+    "scripts/draft-discipline.mjs",
+    "scripts/executor-profile-store.ts",
+    "scripts/lib/worker-smoke-core-base.ts",
+    "scripts/lib/worker-smoke-core.ts",
+    "scripts/lib/worker-smoke-lifecycle-base.ts",
+    "scripts/lib/worker-smoke-lifecycle.ts",
+    "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/pack-review-ordering.test.ts",
+    "scripts/pack-review-state.ts",
+    "scripts/worker-smoke-1359.test.ts",
+    "scripts/worker-smoke-entrypoint-1359.test.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "denylist": [
+    ".orca/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".gitignore",
+    "docs/declarations/",
+    "docs/orchestration-runbook.md",
+    "scripts/draft-discipline.d.mts",
+    "scripts/draft-discipline.mjs",
+    "scripts/executor-profile-store.ts",
+    "scripts/lib/worker-smoke-core-base.ts",
+    "scripts/lib/worker-smoke-core.ts",
+    "scripts/lib/worker-smoke-lifecycle-base.ts",
+    "scripts/lib/worker-smoke-lifecycle.ts",
+    "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/pack-review-ordering.test.ts",
+    "scripts/pack-review-state.ts",
+    "scripts/worker-smoke-1359.test.ts",
+    "scripts/worker-smoke-entrypoint-1359.test.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ]
+}
