@@ -54,8 +54,8 @@ type OperationWaitSource = number | (() => number);
 const DEFAULT_CONFIRM_BUDGET_MS = 5_000;
 const EXECUTION_RECOVERY_CONFIRM_DELAY_MS = 100;
 const EXECUTION_RECOVERY_EVIDENCE_READ_CAP_MS = 300;
-const MESSAGE_DELIVERY_TIMED_OUT_TEXT = 'message delivery timed out. please try again.';
-const PRODUCT_NETWORK_ERROR_TEXT = 'a network error occurred. please check your connection and try again. if this issue persists please contact us through our help center at help.openai.com.';
+const MESSAGE_DELIVERY_TIMED_OUT_TEXT = 'Message delivery timed out. Please try again.';
+const PRODUCT_NETWORK_ERROR_TEXT = 'A network error occurred. Please check your connection and try again. If this issue persists please contact us through our help center at help.openai.com.';
 const OWNED_TURN_GENERATION_SELECTOR = [
   STOP_BUTTON_SELECTOR,
   ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
@@ -89,9 +89,11 @@ interface OwnedTurnSnapshot {
 function normalizeExecutionRecoveryProductText(value: string): string {
   return value
     .replace(/\p{White_Space}+/gu, ' ')
-    .replace(/\s+\./gu, '.')
-    .trim()
-    .toLowerCase();
+    // The network-error copy ends with a rendered help-center link followed by
+    // punctuation. DOM extraction may expose one separator between the anchor
+    // text and that punctuation; normalize only this known link-rendering seam.
+    .replace(/help\.openai\.com \.$/u, 'help.openai.com.')
+    .trim();
 }
 
 function stripExecutionRecoveryCollapseLabels(value: string): string {
