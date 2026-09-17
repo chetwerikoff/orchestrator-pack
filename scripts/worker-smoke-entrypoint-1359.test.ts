@@ -11,7 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { runProcessSync, type ProcessResult } from './kernel/subprocess.ts';
+import { runProcess, runProcessSync, type ProcessResult } from './kernel/subprocess.ts';
 import { installStableWorkerSmokeSpawnPatch } from './lib/worker-smoke-bounded-create.ts';
 import {
   computeSmokeCompletionBodyDigest,
@@ -1019,35 +1019,32 @@ if (mode === 'launcher-sigterm' || mode === 'launcher-sigint') {
     "process.stdout.write(JSON.stringify({ result, readCalls, signalReason }) + '\\n');",
   ].join('\n'), 'utf8');
 
-  const { spawn } = await import('node:child_process');
-  const detached = mode === 'process-group';
-  const child = spawn(process.execPath, ['--experimental-strip-types', harness], {
+  const controller = new AbortController();
+  let childPid = 0;
+  const childRun = runProcess({
+    command: process.execPath,
+    args: ['--experimental-strip-types', harness],
     cwd: process.cwd(),
-    detached,
     env: {
       ...process.env,
       FIXTURE_SIGNAL_MODE: mode,
       FIXTURE_ATTEMPTS_PATH: attemptsPath,
       FIXTURE_PID_PATH: pidPath,
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    inheritParentEnv: true,
+    encoding: 'utf8',
+    timeoutMs: 15_000,
+    killGraceMs: 100,
+    signal: controller.signal,
+    onSpawn: (pid) => { childPid = pid; },
   });
-  let stdout = '';
-  let stderr = '';
-  child.stdout.setEncoding('utf8');
-  child.stderr.setEncoding('utf8');
-  child.stdout.on('data', (chunk) => { stdout += String(chunk); });
-  child.stderr.on('data', (chunk) => { stderr += String(chunk); });
-  const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolvePromise, rejectPromise) => {
-    child.once('error', rejectPromise);
-    child.once('close', (code, signal) => resolvePromise({ code, signal }));
-  });
+  let settled: ProcessResult | undefined;
 
   try {
-    if (!child.pid) throw new Error('signal harness pid missing');
+    if (!childPid) throw new Error('signal harness pid missing');
     if (mode === 'launcher-sigterm' || mode === 'launcher-sigint') {
       await waitForFixtureText(pidPath, (value) => /^1:\d+$/u.test(value));
-      process.kill(child.pid, mode === 'launcher-sigterm' ? 'SIGTERM' : 'SIGINT');
+      process.kill(childPid, mode === 'launcher-sigterm' ? 'SIGTERM' : 'SIGINT');
     } else if (mode === 'child-repeat') {
       for (const attempt of [1, 2]) {
         const observed = await waitForFixtureText(pidPath, (value) => value.startsWith(`${attempt}:`));
@@ -1058,16 +1055,13 @@ if (mode === 'launcher-sigterm' || mode === 'launcher-sigint') {
     } else {
       if (process.platform === 'win32') throw new Error('process-group fixture requires POSIX');
       await waitForFixtureText(pidPath, (value) => /^1:\d+$/u.test(value));
-      process.kill(-child.pid, 'SIGTERM');
+      process.kill(-childPid, 'SIGTERM');
     }
 
-    const settled = await Promise.race([
-      closed,
-      new Promise<never>((_resolvePromise, rejectPromise) => {
-        setTimeout(() => rejectPromise(new Error(`signal harness timeout: ${mode}`)), 15_000);
-      }),
-    ]);
-    expect(settled.code, `${stdout}\n${stderr}`).toBe(0);
+    settled = await childRun;
+    const stdout = settled.stdout;
+    const stderr = settled.stderr;
+    expect(settled.exitCode, `${stdout}\n${stderr}`).toBe(0);
     expect(settled.signal).toBeNull();
     const lines = stdout.split(/\r?\n/u).filter((line) => line.trim());
     expect(lines).toHaveLength(1);
@@ -1082,8 +1076,9 @@ if (mode === 'launcher-sigterm' || mode === 'launcher-sigint') {
     const attempts = existsSync(attemptsPath) ? Number(readFileSync(attemptsPath, 'utf8').trim()) : 0;
     return { output, stdout, stderr, timeouts, attempts };
   } finally {
-    if (child.exitCode === null && child.pid) {
-      try { process.kill(detached ? -child.pid : child.pid, 'SIGKILL'); } catch { /* already gone */ }
+    if (!settled) {
+      controller.abort();
+      await childRun;
     }
     rmSync(root, { recursive: true, force: true });
   }
