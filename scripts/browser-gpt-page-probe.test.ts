@@ -1660,3 +1660,49 @@ test('the probe keeps browser-control and polling authority closed while harvest
   assert.equal(source.includes("diagnostic_only: operation !== 'harvest'"), true);
   assert.equal(source.includes("workflow_authority: 'none'"), true);
 });
+
+test('state-light terminal result propagates execute-Issue product recovery as conversation-scoped', async () => {
+  const { runStateLightTurn } = await import('./chatgpt-browser-turn/state-light-turn.ts');
+
+  for (const cause of ['message_delivery_timed_out', 'product_network_error'] as const) {
+    const writes: string[] = [];
+    const originalWrite = process.stdout.write;
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      const exitCode = await runStateLightTurn(['--profile', 'fixture'], {
+        runTurn: async () => ({
+          result: {
+            schema: 'turn-result/v1',
+            state: 'recovery_required',
+            scope: 'invocation',
+            cause,
+            invocation_id: '19371937-1937-4937-8937-193719371937',
+            configured_profile_key: 'profile-1937-fixture',
+            send_count: 1,
+            poll_count: 0,
+            goto_count: 0,
+            new_chat_click_count: 0,
+            navigation_count: 0,
+            incidents: [],
+          },
+        }),
+      });
+      assert.notEqual(exitCode, 0);
+      const emitted = writes
+        .flatMap((chunk) => chunk.split(/\r?\n/u))
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+        .find((row) => row.schema === 'turn-result/v1');
+      assert.deepEqual(
+        { state: emitted?.state, scope: emitted?.scope, cause: emitted?.cause },
+        { state: 'recovery_required', scope: 'conversation', cause },
+      );
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+  }
+});
