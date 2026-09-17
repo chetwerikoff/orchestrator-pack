@@ -229,7 +229,7 @@ export function loadManifest(raw: string): OpsWikiManifest {
     ids.add(episode.episode_id);
   }
   for (const episode of episodes) {
-    for (const edge of episode.edges) {
+    for (const edge of episode.edges ?? []) {
       if (!ids.has(edge.target)) throw new Error(`ops_wiki_manifest_malformed:edge_target:${episode.episode_id}:${edge.target}`);
     }
   }

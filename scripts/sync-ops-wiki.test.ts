@@ -1,8 +1,8 @@
-import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { runProcessSync } from './kernel/subprocess.ts';
 import {
   applyOpsWiki,
   buildEscalationQueries,
@@ -45,17 +45,20 @@ function tempDir(prefix: string): string {
 }
 
 function git(cwd: string, args: readonly string[]): string {
-  return execFileSync('git', [...args], {
+  const result = runProcessSync({
+    command: 'git',
+    args: [...args],
     cwd,
-    encoding: 'utf8',
+    inheritParentEnv: true,
     env: {
-      ...process.env,
       GIT_AUTHOR_NAME: 'ops-wiki-test',
       GIT_AUTHOR_EMAIL: 'ops-wiki-test@example.test',
       GIT_COMMITTER_NAME: 'ops-wiki-test',
       GIT_COMMITTER_EMAIL: 'ops-wiki-test@example.test',
     },
   });
+  if (!result.ok) throw new Error(result.stderr || result.stdout || result.error || `git ${args.join(' ')} failed`);
+  return result.stdout;
 }
 
 function write(root: string, relativePath: string, content: string): void {
