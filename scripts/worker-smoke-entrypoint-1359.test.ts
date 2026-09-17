@@ -928,6 +928,11 @@ async function waitForFixtureText(
   throw new Error(`fixture timeout waiting for ${path}`);
 }
 
+function executable(path: string, content: string): void {
+  writeFileSync(path, content, 'utf8');
+  chmodSync(path, 0o755);
+}
+
 type RealSignalMode = 'launcher-sigterm' | 'launcher-sigint' | 'child-repeat' | 'process-group';
 
 async function runRealSignalFixture(mode: RealSignalMode): Promise<{
