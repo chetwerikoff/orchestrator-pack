@@ -54,6 +54,7 @@ export interface WorkerSmokeRunFinalEvidence {
   terminalState: 'launcher_terminalized';
   result: SmokeReport['result'];
   reportDigest: string;
+  report: SmokeReport;
   recordedAtMs: number;
 }
 
@@ -138,6 +139,7 @@ export function writeWorkerSmokeRunFinalEvidence(input: {
   runId: string;
   mode: WorkerSmokeRunMode;
   report: SmokeReport;
+  result?: SmokeReport['result'];
   nowMs?: number;
 }): WorkerSmokeRunFinalEvidence {
   const runId = input.runId.trim();
@@ -148,6 +150,8 @@ export function writeWorkerSmokeRunFinalEvidence(input: {
       || !/^[0-9a-f]{40}$/u.test(input.report.headSha.trim().toLowerCase())) {
     throw new Error('worker_smoke_final_target_binding_invalid');
   }
+  const result = input.result ?? input.report.result;
+  if (!['PASS', 'FAIL', 'BLOCKED'].includes(result)) throw new Error('worker_smoke_final_result_invalid');
   const evidence: WorkerSmokeRunFinalEvidence = {
     schema: WORKER_SMOKE_RUN_FINAL_SCHEMA,
     runId,
@@ -157,8 +161,9 @@ export function writeWorkerSmokeRunFinalEvidence(input: {
     artifactDir,
     mode: input.mode,
     terminalState: 'launcher_terminalized',
-    result: input.report.result,
+    result,
     reportDigest: smokeReportDigest(input.report),
+    report: input.report,
     recordedAtMs: input.nowMs ?? Date.now(),
   };
   writeAtomicJson(smokeRunFinalEvidencePath(artifactDir), evidence);
@@ -177,7 +182,8 @@ export function readWorkerSmokeRunFinalEvidence(input: {
   const artifactDir = resolve(input.artifactDir);
   if (!runId || basename(artifactDir) !== runId) return null;
   const raw = readJson(smokeRunFinalEvidencePath(artifactDir));
-  if (!isRecord(raw)) return null;
+  if (!isRecord(raw) || !isRecord(raw.report)) return null;
+  const report = raw.report as unknown as SmokeReport;
   const evidence: WorkerSmokeRunFinalEvidence = {
     schema: WORKER_SMOKE_RUN_FINAL_SCHEMA,
     runId: String(raw.runId ?? '').trim(),
@@ -189,6 +195,7 @@ export function readWorkerSmokeRunFinalEvidence(input: {
     terminalState: 'launcher_terminalized',
     result: raw.result as SmokeReport['result'],
     reportDigest: String(raw.reportDigest ?? '').trim().toLowerCase(),
+    report,
     recordedAtMs: Number(raw.recordedAtMs),
   };
   if (
@@ -203,6 +210,11 @@ export function readWorkerSmokeRunFinalEvidence(input: {
     || !/^[0-9a-f]{40}$/u.test(evidence.headSha)
     || !/^[0-9a-f]{64}$/u.test(evidence.reportDigest)
     || !Number.isFinite(evidence.recordedAtMs)
+    || report.issueNumber !== evidence.issueNumber
+    || report.prNumber !== evidence.prNumber
+    || report.headSha?.trim().toLowerCase() !== evidence.headSha
+    || report.producer !== SMOKE_REPORT_PRODUCER
+    || smokeReportDigest(report) !== evidence.reportDigest
     || (input.issueNumber !== undefined && evidence.issueNumber !== input.issueNumber)
     || (input.prNumber !== undefined && evidence.prNumber !== input.prNumber)
     || (input.headSha !== undefined && evidence.headSha !== input.headSha.trim().toLowerCase())
