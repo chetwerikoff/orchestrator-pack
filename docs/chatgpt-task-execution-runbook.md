@@ -80,10 +80,11 @@ gone.
 
 A fresh execution conversation or a new initial send is legal only when the
 owning Browser-GPT contract positively proves that no prior send/session must be
-preserved and independently authorizes that send. The one narrow post-send
-exception is the exact owned `message_delivery_timed_out` recovery defined below:
-it authorizes GitHub-first reconciliation, and only after that reconciliation may
-the manager replace the failed conversation.
+preserved and independently authorizes that send. The narrow post-send exception
+owned by this runbook is the exact execute-Issue product-error recovery below.
+It starts with GitHub-first reconciliation and is available only for the reserved
+causes `message_delivery_timed_out` and `product_network_error` after exact
+owned-turn proof.
 
 If a possible send occurred but the exact authoritative
 conversation/invocation/profile/CDP identity required by the owning recovery
@@ -119,132 +120,146 @@ Missing or malformed status does not prove success or failure.
 `EXECUTION_STATUS: complete` never bypasses independent current-state
 verification.
 
-An authoritative `turn-result/v1` whose exact owned state is
-`message_delivery_timed_out` is a terminal product-error observation for that
-turn. Do not wait until the 27-minute checkpoint after this state is already
-known; enter **Message-delivery timeout recovery (GitHub-first)** below. This
-state authorizes reconciliation, never blind resend.
+The two execute-Issue product errors stay on the existing `turn-result/v1`
+contract. An authoritative exact-owned result of this form:
+
+```text
+state: recovery_required
+scope: conversation
+cause: message_delivery_timed_out | product_network_error
+```
+
+is terminal evidence for that Browser-GPT turn and enters **Product-error
+recovery (GitHub-first)** immediately. It does not create a new TurnState, retry
+contract, exit-code contract, or record version. A transport-only
+`stream_timeout`, `no_reply`, helper timeout, browser loss, missing envelope, or
+process exit is not equivalent evidence and grants no fresh-chat authority.
 
 ## Mandatory 27-minute live-chat checkpoint
 
 This checkpoint belongs **only** to this execution workflow. It is not a
 universal Browser-GPT timeout and must not be promoted into the shared
-Browser-GPT runbook.
+Browser-GPT runbook. It is the only execution timer/checkpoint; do not add a
+second monitor, watcher, daemon, polling loop, durable timer, or recovery store.
 
 For every submitted execution turn:
 
 1. start normal observation under the shared Browser-GPT turn/long-running
    contract;
 2. when an authoritative completed turn result arrives before 27 minutes,
-   process it normally; an exact owned `message_delivery_timed_out` result enters
-   the recovery section below immediately;
+   process it normally; an exact-owned `recovery_required` result with either
+   reserved product cause enters the GitHub-first recovery section immediately;
 3. when 27 minutes elapse after submission without an authoritative completed
-   turn result, perform a **fresh independent observation of the actual bound
-   ChatGPT conversation page** using the state-light execution checkpoint and
-   the exact authoritative profile/CDP/invocation binding;
-4. invoke the existing state-light entry surface in observation-only mode,
-   equivalent to:
+   turn result, perform one **fresh observation of the actual bound ChatGPT
+   conversation** using `scripts/browser-gpt-page-probe.ts inspect` and the exact
+   authoritative profile/CDP/conversation/target binding already owned by the
+   workflow;
+4. do not use `--open-if-missing`, create a page, close a page, navigate, Retry,
+   resend, or invent a replacement target for this checkpoint; the probe is
+   diagnostic/observation-only and its envelope keeps `workflow_authority:
+   none`;
+5. consume the probe's bounded normalized `execution_recovery_cause` only in
+   combination with exact current-turn evidence: the exact execute-Issue owned
+   prompt is the current prompt, no completed attributable assistant reply is
+   present, and generation is positively not active;
+6. do not decide turn completion or replacement authority from helper/launcher
+   PID, shell state, heartbeat, elapsed time, missing output, log silence,
+   terminal-envelope absence, or the product-cause projection by itself.
 
-   ```text
-   scripts/chatgpt-browser-turn/state-light-entry.ts execution-checkpoint \
-     --profile <authoritative-profile> \
-     --cdp <authoritative-cdp> \
-     --invocation-id <authoritative-invocation-id>
-   ```
+The probe's `execution_recovery_cause` is derived from the same Browser-GPT
+product-state helper used by the immediate state-light path. The manager does not
+own another regex or copy of the two product messages.
 
-   The checkpoint obtains the owned marker and conversation URL from the
-   existing `state-light-turn-observation/v1` record. Do not pass, infer, scan,
-   or reconstruct a replacement marker/conversation identity;
-5. do not decide turn completion from helper/launcher PID, shell state,
-   heartbeat, timeout, missing output, log silence, or terminal-envelope
-   absence;
-6. treat the checkpoint as one-shot observation only. Elapsed time is never
-   completion, failure, retry, resend, replacement-invocation, fresh-chat, or
-   `Доделай` authority.
+Interpret the checkpoint evidence only through this mapping:
 
-The checkpoint reuses the same normalized product-message classifier and the
-same owned-marker cardinality/reply/generation predicates as the immediate
-state-light path. It does not click Retry, create a page, navigate a page, send a
-message, add a watcher, or create a second recovery store.
-
-Interpret the checkpoint observation only through this mapping:
-
-- **`message_delivery_timed_out`:** the exact bound page, exact owned current
-  prompt, stable product timeout banner, no attributable assistant reply, and no
-  active generation were all established. Enter **Message-delivery timeout
-  recovery (GitHub-first)** below.
-- **`owned_reply_generating`:** send zero new user messages and continue
-  observation of the same turn.
-- **`owned_reply_completed`:** recover/consume the original turn through the
-  existing same-invocation harvest/settlement path before any follow-up.
-- **`owned_turn_unsettled`:** continue the existing bounded observation/recovery
-  path; there is no fresh-chat authority.
-- **`ambiguous` or unavailable checkpoint evidence:** remain fail-closed on the
-  existing recovery path; no fresh chat and no resend.
+- **Reserved product cause + exact owned current prompt + no attributable
+  completed reply + no active generation:** enter **Product-error recovery
+  (GitHub-first)** below.
+- **Generation active:** send zero new user messages and continue observation of
+  the same turn.
+- **Completed attributable reply:** recover/consume the original turn through
+  the existing same-invocation harvest/settlement path before any follow-up.
+- **Foreign/sibling prompt, ambiguous ownership, stale earlier-turn product
+  banner when distinguishable, unknown generation, missing proof, or conflicting
+  evidence:** remain fail-closed on the existing observation/recovery path; no
+  fresh chat and no resend.
 - **Proven no-send/pre-send failure:** only the existing owning Browser-GPT
   correction/retry contract may authorize another send.
 
-No second watcher, raw-CDP loop, Playwright monitor, timer service, daemon,
-durable 27-minute state, new cross-process session/invocation registry, or
-manager-owned timeout regex is introduced by this checkpoint.
+Positive same-turn product proof takes precedence over transport-only
+`stream_timeout`/`no_reply` evidence. Without that positive product proof, those
+transport failures remain fail-closed and never authorize a fresh conversation.
 
-## Message-delivery timeout recovery (GitHub-first)
+## Product-error recovery (GitHub-first)
 
-This section is entered only after either:
+Enter this section only after one of these two proofs for the exact owned turn:
 
-1. an authoritative immediate `turn-result/v1` for the exact owned invocation
-   reports `state: message_delivery_timed_out`; or
-2. the mandatory 27-minute checkpoint independently reports exact
-   `message_delivery_timed_out` for that same authoritative invocation.
+1. an authoritative immediate `turn-result/v1` reports `state:
+   recovery_required`, `scope: conversation`, and cause
+   `message_delivery_timed_out` or `product_network_error`; or
+2. the mandatory 27-minute checkpoint independently observes one of those two
+   product causes **and** the manager also has exact current owned-prompt proof,
+   no attributable completed reply, and no active generation.
 
 Generic helper timeout, launcher timeout, `stream_timeout`, `no_reply`, browser
 loss, missing output/envelope, process death, page ambiguity, or elapsed 27
 minutes by itself **never** enters this section.
 
-After one of the two exact timeout proofs, and before any replacement ChatGPT
-send, perform a fresh live GitHub reconciliation for the exact Issue:
+After exact product-error proof, perform a fresh live GitHub reconciliation for
+the exact Issue **before** any replacement ChatGPT send:
 
-1. find an existing PR only through authoritative Issue/PR identity and record
-   its current head;
-2. otherwise find an unambiguous Issue-owned task branch/current commits through
-   authoritative repository identity; a coincidental branch name or recent
-   commit is not enough;
-3. independently check whether current GitHub/repository state already satisfies
-   Definition of Done;
-4. if candidate ownership is ambiguous, fail closed and resolve that ambiguity;
+1. resolve an existing Issue-bound PR first and record its exact current head;
+2. only when no such PR exists, resolve one unambiguous Issue-bound task branch
+   and its current commits/head; a coincidental branch name or recent commit is
+   not enough;
+3. reuse the existing independent Definition-of-Done verification path against
+   that current repository/GitHub state; do not create a second DoD classifier;
+4. if PR/branch ownership is ambiguous, fail closed and resolve that ambiguity;
    do not open a fresh execution chat.
 
-Repository continuation state is advisory input to the replacement executor;
-current GitHub state remains authoritative. Capture that continuation state
-**before** closing the failed conversation.
+If current state already satisfies Definition of Done, do **not** open a
+replacement ChatGPT conversation. Complete the normal verification path and
+return `VERIFIED_COMPLETE`.
 
-Then:
+Otherwise capture one continuation choice:
 
-- **Existing PR and work remains:** close only the exact owned failed
-  conversation under the existing tab lifecycle authority, open one fresh
-  execution conversation, and include the Issue URL + PR URL + exact current
-  head with wording equivalent to `доделай задачу, продолжай существующую
-  реализацию`.
-- **No PR, but one unambiguous Issue-owned task branch/current head and work
-  remains:** close only the exact owned failed conversation, open one fresh
-  execution conversation, and include the Issue URL + branch + exact current
-  head with wording equivalent to `доделай задачу, продолжай с этой ветки`.
-- **No observed task work:** close only the exact owned failed conversation and
-  use the ordinary initial Issue URL + `выполни задачу` prompt in one fresh
-  execution conversation.
-- **Definition of Done already independently satisfied:** do not open another
-  ChatGPT conversation; complete the normal verification path and return
-  `VERIFIED_COMPLETE`.
+- **Existing PR:** Issue URL + PR URL + exact current PR head, with wording
+  equivalent to `доделай задачу, продолжай существующую реализацию`.
+- **No PR, one unambiguous Issue-owned branch:** Issue URL + exact branch + exact
+  current head, with wording equivalent to `доделай задачу, продолжай с этой
+  ветки`.
+- **No observed Issue-bound work:** ordinary initial Issue URL + `выполни
+  задачу` prompt.
 
-Never press the product Retry button. Never resend into the failed conversation.
-Never close a sibling/foreign tab by focus, age, URL similarity, or timeout text.
-Fresh-chat authority exists only for the two exact timeout proofs above and is
-consumed by opening at most one replacement execution conversation after
-GitHub-first reconciliation.
+### Mandatory final revalidation before the replacement send
+
+GitHub-first reconciliation does not itself consume fresh-chat authority.
+Immediately before the replacement prompt is sent, revalidate **both** browser
+and repository state:
+
+1. re-observe the exact same old owned conversation/turn;
+2. require the same supported product cause to remain visible for that owned
+   current turn;
+3. require no completed attributable assistant reply;
+4. require generation to be positively stopped;
+5. perform a final live GitHub read of the selected PR/branch head and current
+   completion state.
+
+If any browser condition fails, ownership is ambiguous, the continuation head
+changed, or the Issue became complete, do not send the prepared replacement
+prompt. Return to ordinary recovery/observation, or to `VERIFIED_COMPLETE` when
+the final live read proves completion. Never use closing the old tab as evidence
+that execution stopped.
+
+Only after this final revalidation may the workflow close **only** the exact
+owned failed conversation under existing tab-lifecycle authority and open
+exactly one fresh execution conversation with the selected continuation prompt.
+Foreign and sibling conversations are untouched. Never press the product Retry
+button and never resend into the failed conversation.
 
 ## Continue in the same conversation
 
-After a finished reply is recovered:
+After a finished reply is recovered normally:
 
 - when the executor reports or clearly leaves remaining work, send one
   continuation in the **same owned conversation**;
@@ -255,20 +270,21 @@ After a finished reply is recovered:
   shared one-turn mechanics plus the same 27-minute execution checkpoint.
 
 Never create a second execution conversation as a convenience for continuation.
-The only post-send fresh-conversation exception is the exact
-`message_delivery_timed_out` GitHub-first recovery defined above.
+The only post-send fresh-conversation exception is the exact product-error
+GitHub-first recovery defined above.
 
 ## Multi-turn completion loop
 
 ```text
 submitted GPT turn
-  -> exact message_delivery_timed_out result
-       OR 27-minute exact checkpoint confirmation
+  -> authoritative recovery_required/conversation product cause
+       OR 27-minute exact checkpoint proof
        -> inspect live GitHub first
        -> DoD already satisfied: VERIFIED_COMPLETE
-       -> PR/branch/no-work continuation state captured
-       -> close exact failed owned chat
-       -> one fresh execution chat
+       -> choose PR / branch / no-work continuation
+       -> final exact old-chat + live-head/completion revalidation
+       -> if still valid: close exact failed owned chat + one fresh execution chat
+       -> if invalidated: no fresh send; ordinary observation/recovery
   -> finished GPT reply
        -> continue / remaining work
             -> same conversation: "Доделай задачу" or concrete gap
@@ -308,8 +324,8 @@ When verification finds a concrete gap, send that exact gap back into the same
 ChatGPT conversation and continue the loop. Examples include a red required CI
 check, missing scoped file, unresolved material review finding, stale head-bound
 smoke, or another live Issue acceptance gap. If the immediately preceding owned
-conversation ended in exact `message_delivery_timed_out`, use the GitHub-first
-fresh-chat recovery above instead of sending into that failed chat.
+conversation ended with one of the two exact product-error proofs, use the
+GitHub-first fresh-chat recovery above instead of sending into that failed chat.
 
 ## Recovery handoff to the supervisor
 
@@ -379,11 +395,11 @@ This workflow does not add or redesign:
 - model/provider selection policy;
 - per-engine copies of this workflow.
 
-The execution-only `execution-checkpoint` command is a bounded one-shot observer
-on the existing state-light entry surface. It reuses the existing observation
-record, exact page identity, transcript reader, marker cardinality, product
-classifier, and profile authority; it is not a second Browser-GPT transport or
-monitor.
+The execution checkpoint reuses the existing 27-minute workflow checkpoint and
+the diagnostic `browser-gpt-page-probe inspect` observation surface. The probe's
+product-cause projection is bounded, normalized, and authority-free; manager
+logic must combine it with exact owned-turn/reply/generation evidence and the
+GitHub-first/final-revalidation gates above.
 
 If real implementation requires a new persistent cross-process ownership or
 recovery guarantee, new generic Browser-GPT resend authority, or another
