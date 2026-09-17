@@ -13,8 +13,10 @@
     "scripts/chatgpt-browser-turn/product-page-selectors.ts",
     "scripts/chatgpt-browser-turn/profile-probe.ts",
     "scripts/chatgpt-browser-turn/state-light-entry.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
     "scripts/chatgpt-browser-turn/ui-adapter-base.ts",
     "scripts/chatgpt-browser-turn/ui-adapter.ts",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
