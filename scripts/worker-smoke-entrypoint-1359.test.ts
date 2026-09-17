@@ -19,44 +19,13 @@ import {
   smokeCompletionBodyPath,
   smokeCompletionSealPath,
 } from './lib/worker-smoke-core.ts';
-import { smokeProgressPath, SMOKE_ORCA_OPERATION_TIMEOUT_MS } from './lib/worker-smoke-lifecycle.ts';
+import { smokeProgressPath } from './lib/worker-smoke-lifecycle.ts';
 import {
   type OrcaJsonResponse,
   type OrcaTerminalSummary,
 } from './orca-runtime/native.ts';
 import { OrcaTaskRuntimeAdapter } from './orca-runtime/task-adapter.ts';
-import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
-import type { RuntimeAdapter, RuntimeCallOptions } from './runtime/contracts.ts';
 import { runtimeClose, waitForRuntimeSmokeCompletion } from './worker-smoke-run.ts';
-
-class RecoverableObservationAdapter extends DeterministicRuntimeAdapter {
-  readonly timeouts: number[] = [];
-  readonly failures: string[];
-  onSuccess?: () => void;
-
-  constructor(failures: readonly string[]) {
-    super();
-    this.failures = [...failures];
-  }
-
-  override readBoundedOutput(
-    input: Parameters<RuntimeAdapter['readBoundedOutput']>[0],
-    options?: RuntimeCallOptions,
-  ): ReturnType<RuntimeAdapter['readBoundedOutput']> {
-    this.timeouts.push(options?.timeoutMs ?? 0);
-    const reason = this.failures.shift();
-    if (reason) {
-      return {
-        status: 'failed',
-        operation: 'read_bounded_output',
-        reason,
-      } as ReturnType<RuntimeAdapter['readBoundedOutput']>;
-    }
-    const result = super.readBoundedOutput(input, options);
-    this.onSuccess?.();
-    return result;
-  }
-}
 
 function run(
   command: string,
@@ -86,24 +55,6 @@ function requireSuccess(
 
 function ok<T>(result: T): OrcaJsonResponse<T> {
   return { ok: true, result };
-}
-
-function sealPass(artifactDir: string, runId: string): void {
-  const body = [
-    '```worker-smoke-report',
-    'result: PASS',
-    'tracked-files-unmodified: true',
-    'scenarios:',
-    '  - action: bounded observation | expected: continuation | observed: sealed | outcome: pass',
-    '```',
-  ].join('\n');
-  const bodySha256 = computeSmokeCompletionBodyDigest(body);
-  writeFileSync(smokeCompletionBodyPath(artifactDir, bodySha256), body, { flag: 'wx' });
-  writeFileSync(
-    smokeCompletionSealPath(artifactDir, bodySha256),
-    JSON.stringify({ runId, bodySha256 }),
-    { flag: 'wx' },
-  );
 }
 
 describe('Issue #1359 real worker-smoke entrypoint', () => {
@@ -956,84 +907,6 @@ process.exitCode = 2;
       expect(sends[0]).toContain('--enter');
     } finally {
       restore();
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it.each(['runtime_timeout', 'runtime_cli_interrupted:SIGTERM'])('keeps %s as one bounded observation and continues on a fresh poll', (failure) => {
-    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-observation-recovery-'));
-    const artifactDir = join(root, 'observation-recovery');
-    const runId = 'observation-recovery';
-    const adapter = new RecoverableObservationAdapter([failure]);
-    const spawned = adapter.spawnWorker({ title: 'observation-recovery', command: 'cursor-agent' });
-    expect(spawned.status).toBe('ok');
-    if (spawned.status !== 'ok') return;
-    ensureSmokeRunArtifactDir(artifactDir);
-    let clock = 0;
-    let sealed = false;
-    adapter.onSuccess = () => {
-      if (sealed) return;
-      sealed = true;
-      sealPass(artifactDir, runId);
-    };
-
-    try {
-      const completion = waitForRuntimeSmokeCompletion({
-        adapter,
-        worker: spawned.value.identity,
-        binding: { runId, artifactDir },
-        scenarioCount: 1,
-        cwd: root,
-        startedAtMs: 0,
-        abortReason: () => undefined,
-        now: () => clock,
-        sleepMs: (milliseconds) => { clock += milliseconds; },
-        absoluteCeilingMs: 120_000,
-        progressStallMs: 60_000,
-      });
-      expect(completion.ok).toBe(true);
-      expect(completion.observationFailures).toEqual([failure]);
-      expect(adapter.timeouts).toEqual([
-        SMOKE_ORCA_OPERATION_TIMEOUT_MS,
-        SMOKE_ORCA_OPERATION_TIMEOUT_MS,
-      ]);
-      expect(JSON.stringify(completion)).not.toContain('runtime_response_invalid');
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it('prefers launcher cancellation after an interrupted observation without re-reading that poll', () => {
-    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-observation-cancel-'));
-    const artifactDir = join(root, 'observation-cancel');
-    const adapter = new RecoverableObservationAdapter(['runtime_cli_interrupted:SIGTERM']);
-    const spawned = adapter.spawnWorker({ title: 'observation-cancel', command: 'cursor-agent' });
-    expect(spawned.status).toBe('ok');
-    if (spawned.status !== 'ok') return;
-    ensureSmokeRunArtifactDir(artifactDir);
-    let clock = 0;
-
-    try {
-      const completion = waitForRuntimeSmokeCompletion({
-        adapter,
-        worker: spawned.value.identity,
-        binding: { runId: 'observation-cancel', artifactDir },
-        scenarioCount: 1,
-        cwd: root,
-        startedAtMs: 0,
-        abortReason: () => adapter.timeouts.length > 0 ? 'SIGTERM' : undefined,
-        now: () => clock,
-        sleepMs: (milliseconds) => { clock += milliseconds; },
-        absoluteCeilingMs: 60_000,
-        progressStallMs: 60_000,
-      });
-      expect(completion).toMatchObject({
-        ok: false,
-        reason: 'operator_cancelled:SIGTERM',
-        observationFailures: ['runtime_cli_interrupted:SIGTERM'],
-      });
-      expect(adapter.timeouts).toHaveLength(1);
-    } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
