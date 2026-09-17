@@ -6,6 +6,8 @@ const MARKER_PATTERN = new RegExp(`^${MARKER_PREFIX}[0-9a-f]{${MARKER_HEX_LENGTH
 
 type RandomSource = (size: number) => Uint8Array;
 
+let latestGeneratedOwnedPromptMarker: string | undefined;
+
 function isConsumablePrefixScalar(scalar: string): boolean {
   return /^\p{White_Space}$/u.test(scalar) || scalar === '\uFEFF' || scalar === '\u200B';
 }
@@ -18,7 +20,17 @@ export function generateOwnedPromptMarker(source: RandomSource = randomBytes): s
   if (bytes.length !== 16) throw new Error('owned_prompt_marker_source_invalid');
   const marker = `${MARKER_PREFIX}${Buffer.from(bytes).toString('hex')}`;
   if (!MARKER_PATTERN.test(marker)) throw new Error('owned_prompt_marker_invalid');
+  latestGeneratedOwnedPromptMarker = marker;
   return marker;
+}
+
+/**
+ * Process-local exact marker for the active state-light dispatch path. Ordinary
+ * state-light entrypoints execute one turn per process; session mode refreshes
+ * this value before each sequential payload.
+ */
+export function currentOwnedPromptMarker(): string | undefined {
+  return latestGeneratedOwnedPromptMarker;
 }
 
 export function wrapOwnedPromptPayload(marker: string, originalPayload: string): string {
