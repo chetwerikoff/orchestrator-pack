@@ -453,7 +453,7 @@ function normalizeAttemptObservations(
   return observations.map((observation) => {
     const action = observation.action.trim();
     const expected = observation.expected.trim();
-    if (!action || !expected || !['pass', 'fail', 'blocked', 'skipped'].includes(observation.outcome)) {
+    if (!action || !expected || !['pass', 'fail', 'blocked'].includes(observation.outcome)) {
       throw new Error('worker_smoke_receipt_attempt_observation_invalid');
     }
     const nonPass = observation.outcome !== 'pass';
@@ -532,6 +532,38 @@ export function writeWorkerSmokeReceipt(
   return receipt;
 }
 
+function parseWorkerSmokeFailureCause(raw: unknown): WorkerSmokeFailureCause | undefined {
+  if (!isRecord(raw)) return undefined;
+  const phase = raw.phase === 'harness' || raw.phase === 'scenario' ? raw.phase : undefined;
+  const causeFamily = isWorkerSmokeCauseFamily(raw.causeFamily) ? raw.causeFamily : undefined;
+  const code = String(raw.code ?? '').trim();
+  const action = String(raw.action ?? '').trim();
+  const observed = String(raw.observed ?? '').trim();
+  const expected = String(raw.expected ?? '').trim() || undefined;
+  const scenarioOrdinal = raw.scenarioOrdinal === undefined ? undefined : Number(raw.scenarioOrdinal);
+  const outcome = typeof raw.outcome === 'string' && ['pass', 'fail', 'blocked'].includes(raw.outcome)
+    ? raw.outcome as WorkerSmokeFailureCause['outcome']
+    : undefined;
+  const resolution = String(raw.resolution ?? '').trim() || undefined;
+  if (!phase || !causeFamily || code !== causeFamily || !action || !observed) return undefined;
+  if (phase === 'scenario') {
+    if (!Number.isSafeInteger(scenarioOrdinal) || Number(scenarioOrdinal) <= 0 || !expected || !outcome) return undefined;
+  } else if (scenarioOrdinal !== undefined || expected !== undefined) {
+    return undefined;
+  }
+  return {
+    phase,
+    causeFamily,
+    code,
+    ...(scenarioOrdinal !== undefined ? { scenarioOrdinal } : {}),
+    ...(outcome ? { outcome } : {}),
+    action,
+    ...(expected ? { expected } : {}),
+    observed,
+    ...(resolution ? { resolution } : {}),
+  };
+}
+
 function parseWorkerSmokeReceipt(
   raw: unknown,
   prNumber: number,
@@ -564,6 +596,20 @@ function parseWorkerSmokeReceipt(
       return null;
     }
   }
+  let operatorOverrideReason: string | undefined;
+  if (raw.operatorOverrideReason !== undefined) {
+    if (typeof raw.operatorOverrideReason !== 'string') return null;
+    try {
+      operatorOverrideReason = validateWorkerSmokeOperatorOverrideReason(raw.operatorOverrideReason);
+    } catch {
+      return null;
+    }
+  }
+  let failureCause: WorkerSmokeFailureCause | undefined;
+  if (raw.failureCause !== undefined) {
+    failureCause = parseWorkerSmokeFailureCause(raw.failureCause);
+    if (!failureCause) return null;
+  }
   const parsed: WorkerSmokeReceipt = {
     schema: WORKER_SMOKE_RECEIPT_SCHEMA,
     issueNumber: Number(raw.issueNumber),
@@ -578,10 +624,8 @@ function parseWorkerSmokeReceipt(
     ...(runId ? { runId } : {}),
     ...(executionMode ? { executionMode } : {}),
     ...(attemptObservations ? { attemptObservations } : {}),
-    ...(typeof raw.operatorOverrideReason === 'string' && raw.operatorOverrideReason.trim()
-      ? { operatorOverrideReason: raw.operatorOverrideReason.trim() }
-      : {}),
-    ...(isRecord(raw.failureCause) ? { failureCause: raw.failureCause as unknown as WorkerSmokeFailureCause } : {}),
+    ...(operatorOverrideReason ? { operatorOverrideReason } : {}),
+    ...(failureCause ? { failureCause } : {}),
   };
   return parsed;
 }
