@@ -2,11 +2,10 @@
 
 import './toolchain/native-entrypoint-preflight.ts';
 import { classifyRequiredCiLevel } from '../docs/review-ready-stuck-guard.mjs';
-import { runProcessSync } from './kernel/subprocess.ts';
+import { runProcess, runProcessSync } from './kernel/subprocess.ts';
 import { overlayExecutorProfileEnv } from './executor-profile-store.ts';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from './pr-scope-contract.ts';
-import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -181,9 +180,9 @@ export interface CliOptions {
   json: boolean;
   reviewId: string;
   reviewHeadSha: string;
-  detach: boolean;
-  detachedOwner: boolean;
-  runId: string;
+  detach?: boolean;
+  detachedOwner?: boolean;
+  runId?: string;
 }
 
 export type SmokeComplexity = 'routine' | 'complex';
@@ -727,7 +726,7 @@ export function resolveCiGreen(prNumber: number, headSha: string, repositorySlug
   let requiredCheckNames: string[] = [];
   let requiredCheckLookupFailed = false;
   try {
-    const protection = githubApiObject('required-status-checks', `repos/${repositorySlug}/branches/${baseRef}/protection/required_status_checks`, options.repoRoot);
+    const protection = githubApiObject('required-status-checks', `repos/${repositorySlug}/branches/${baseRef}/protection/required_status_checks`, repoRoot);
     requiredCheckNames = reviewIndependentRequiredCiContexts(Array.isArray(protection.contexts) ? protection.contexts : []);
   } catch { requiredCheckLookupFailed = true; }
   return classifyRequiredCiLevel(checks, { requiredCheckNames, requiredCheckLookupFailed }) === 'green';
@@ -1600,7 +1599,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
 
   if (attemptPlan.scenarios.length === 0 && !selection.fallbackReason) {
     const lifecycle = evaluateSmokeLifecycleCleanliness(options.cwd);
-    const detachedRunId = options.detachedOwner ? options.runId.trim() : '';
+    const detachedRunId = options.detachedOwner ? (options.runId ?? '').trim() : '';
     const detachedArtifactDir = detachedRunId ? resolveSmokeRunArtifactDir(options.cwd, detachedRunId) : '';
     if (detachedRunId) {
       createSmokeNoExecutionLifecycle({
@@ -1682,7 +1681,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     }
   }
 
-  const runId = options.detachedOwner ? options.runId.trim() : createSmokeRunIdentity();
+  const runId = options.detachedOwner ? (options.runId ?? '').trim() : createSmokeRunIdentity();
   const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
   let startedAtMs = 0; let worker: RuntimeWorkerIdentity | undefined; let terminalCleanup = 'pending'; let cleanupFinished = false; let signalReason: string | undefined;
   const onSigint = (): void => { signalReason = 'SIGINT'; };
@@ -1846,24 +1845,31 @@ async function runDetachedBootstrap(argv: readonly string[], options: CliOptions
   childArgs.push('--detached-owner', '--run', runId);
   const env = { ...process.env };
   delete env.WORKER_SMOKE_WRAPPER_STATE_FILE;
-  let spawnFailure = '';
-  const child = spawn(process.execPath, ['--experimental-strip-types', fileURLToPath(import.meta.url), ...childArgs], {
+  const entrypoint = fileURLToPath(import.meta.url);
+  const detachHelper = [
+    'import { spawn } from "node:child_process";',
+    'const [entrypoint,...args]=process.argv.slice(1);',
+    'const child=spawn(process.execPath,["--experimental-strip-types",entrypoint,...args],{cwd:process.cwd(),env:process.env,detached:true,stdio:"ignore",windowsHide:true});',
+    'child.once("error",()=>process.exit(2));',
+    'child.once("spawn",()=>{if(!Number.isInteger(child.pid)||child.pid<=0)process.exit(3);child.unref();process.stdout.write(String(child.pid));});',
+  ].join('');
+  const detached = await runProcess({
+    command: process.execPath,
+    args: ['--input-type=module', '-e', detachHelper, entrypoint, ...childArgs],
     cwd: options.cwd,
     env,
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
+    inheritParentEnv: false,
+    allowEmptyStdout: false,
+    timeoutMs: 10_000,
   });
-  child.once('error', (error) => { spawnFailure = error.message; });
-  child.unref();
+  if (!detached.ok || !/^\d+$/u.test(detached.stdout.trim())) {
+    process.stderr.write('worker_smoke_detach_spawn_failed\n');
+    return 1;
+  }
 
   const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
   const deadline = Date.now() + SMOKE_CREATE_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    if (spawnFailure) {
-      process.stderr.write('worker_smoke_detach_spawn_failed\n');
-      return 1;
-    }
     const lifecycle = readSmokeLifecycleRegistry(artifactDir);
     if (lifecycle?.runId === runId) {
       process.stdout.write(`${runId}\n`);
@@ -1876,7 +1882,7 @@ async function runDetachedBootstrap(argv: readonly string[], options: CliOptions
 }
 
 export async function runSmokeWait(options: CliOptions): Promise<number> {
-  const runId = options.runId.trim();
+  const runId = (options.runId ?? '').trim();
   if (!runId) throw new Error('wait requires --run <id>');
   const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
   const deadline = Date.now() + SMOKE_ABSOLUTE_CEILING_MS + SMOKE_SHUTDOWN_TIMEOUT_MS;
@@ -1925,8 +1931,8 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     case 'gate-check': return runGateCheck(options);
     case 'run':
       if (options.detach) return runDetachedBootstrap(argv, options);
-      if (options.detachedOwner && !options.runId.trim()) throw new Error('detached owner requires --run <id>');
-      if (!options.detachedOwner && options.runId.trim()) throw new Error('--run is reserved for detached ownership or wait');
+      if (options.detachedOwner && !(options.runId ?? '').trim()) throw new Error('detached owner requires --run <id>');
+      if (!options.detachedOwner && (options.runId ?? '').trim()) throw new Error('--run is reserved for detached ownership or wait');
       return runSmokeAttempt(options);
     case 'wait':
       if (options.detach || options.detachedOwner) throw new Error('wait is read-only and does not accept detach ownership flags');
