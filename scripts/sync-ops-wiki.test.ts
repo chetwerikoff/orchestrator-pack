@@ -347,6 +347,38 @@ describe('ops-wiki apply protocol', () => {
     expect(existsSync(join(corpusRoot, episodeRelativePath('worker-lifecycle')))).toBe(false);
   });
 
+  it('requires the indexed in-progress fence to preserve exact prior checked-through absence', async () => {
+    const { repoRoot } = initRepo(fixtureFiles());
+    const target = writeManifestAndGolden(repoRoot);
+    const corpusRoot = tempDir('ops-wiki-corpus-');
+    const base = corpusClient(corpusRoot);
+    const client: WikiOpsClient = {
+      ...base,
+      async read(path, options) {
+        if (path === OPS_WIKI_STATUS_NOTE) {
+          return {
+            ok: true,
+            path,
+            content: renderStatusNote({ checkedThrough: 'f'.repeat(40), applyInProgress: target }),
+          };
+        }
+        return base.read(path, options);
+      },
+    };
+    const failed = await applyOpsWiki({
+      repoRoot,
+      commitRef: target,
+      corpusRoot,
+      client,
+      git: recordingGit(repoRoot, corpusRoot).git,
+      convergenceTimeoutMs: 10,
+      pollIntervalMs: 1,
+    });
+    expect(failed).toMatchObject({ ok: false, mutationBegan: false });
+    expect(existsSync(join(corpusRoot, OPS_WIKI_STATUS_NOTE))).toBe(false);
+    expect(existsSync(join(corpusRoot, episodeRelativePath('worker-lifecycle')))).toBe(false);
+  });
+
   it('is no-op for an already checked commit and status-only for an irrelevant descendant', async () => {
     const { repoRoot } = initRepo(fixtureFiles());
     writeManifestAndGolden(repoRoot);
@@ -523,6 +555,14 @@ describe('ops-wiki routing policy', () => {
         ok: true,
         path: episode.relativePath,
         content: `---\nops_wiki_owned: true\nepisode_id: "worker-lifecycle"\nsource_commit: "${commit}"\ngeneration_hash: "wrong"\n---\n\n## Worker lifecycle\n`,
+      },
+      episode,
+    })).toBe('expand');
+    expect(evaluateEpisodeRead({
+      read: {
+        ok: true,
+        path: episode.relativePath,
+        content: `---\nops_wiki_owned: true\nepisode_id: "worker-lifecycle"\nsource_commit: "${commit}"\ngeneration_hash: "${episode.generationHash}"\nsource_sections:\n  - "## Worker lifecycle"\n---\n\n\`\`\`text\n## Worker lifecycle\n\`\`\`\n`,
       },
       episode,
     })).toBe('expand');

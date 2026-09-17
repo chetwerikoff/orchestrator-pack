@@ -443,6 +443,11 @@ export function parseOwnedFrontmatter(markdown: string): Record<string, string> 
   return fields.ops_wiki_owned === 'true' ? fields : undefined;
 }
 
+function markdownBodyAfterFrontmatter(markdown: string): string | undefined {
+  const match = /^---\n[\s\S]*?\n---(?:\n|$)/u.exec(markdown);
+  return match ? markdown.slice(match[0].length) : undefined;
+}
+
 export function parseStatusNote(markdown: string): { checkedThrough?: string; applyInProgress?: string } {
   const fields = parseOwnedFrontmatter(markdown);
   if (!fields || fields.ops_wiki_kind !== 'status') throw new Error('ops_wiki_status_malformed');
@@ -700,8 +705,11 @@ export function evaluateEpisodeRead(input: {
   if (!fields || fields.episode_id !== input.episode.episode_id) return 'expand';
   if (!fields.source_commit || !COMMIT_PATTERN.test(fields.source_commit)) return 'expand';
   if (fields.generation_hash !== input.episode.generationHash) return 'expand';
+  const body = markdownBodyAfterFrontmatter(input.read.content);
+  if (body === undefined) return 'expand';
+  const headings = new Set(collectHeadings(body).map((hit) => hit.token));
   for (const section of input.episode.sourceSections) {
-    if (!input.read.content.includes(section)) return 'expand';
+    if (!headings.has(section)) return 'expand';
   }
   return 'read_top1';
 }
@@ -779,10 +787,9 @@ async function waitForStatus(
       return undefined;
     }
     const parsed = status as { checkedThrough?: string; applyInProgress?: string };
-    const checkedOk = expected.checkedThrough === undefined || parsed.checkedThrough === expected.checkedThrough;
-    const progressOk = expected.applyInProgress === null
-      ? !parsed.applyInProgress
-      : expected.applyInProgress === undefined || parsed.applyInProgress === expected.applyInProgress;
+    const checkedOk = parsed.checkedThrough === expected.checkedThrough;
+    const expectedProgress = expected.applyInProgress ?? undefined;
+    const progressOk = parsed.applyInProgress === expectedProgress;
     return checkedOk && progressOk ? read : undefined;
   }, timeoutMs, pollIntervalMs, now);
   return matched ?? lastFailure ?? { ok: false, reason: 'timeout' };
