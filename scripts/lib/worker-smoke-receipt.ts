@@ -400,15 +400,16 @@ export function deriveWorkerSmokeFailureCause(
     ? selected.scenario.causeFamily
     : undefined;
   const reportFamily = isWorkerSmokeCauseFamily(report.causeFamily) ? report.causeFamily : undefined;
+  const explicitHarnessFamily = reportFamily && !isWorkerSmokeScenarioCauseFamily(reportFamily)
+    ? reportFamily
+    : undefined;
+  const scenarioOwned = Boolean(selected && !explicitHarnessFamily);
   const causeFamily: WorkerSmokeCauseFamily = terminalRows.length > 1
     ? 'unknown'
-    : structuredScenarioFamily ?? reportFamily ?? 'unknown';
-  const scenarioOwned = Boolean(selected && structuredScenarioFamily && (!reportFamily || reportFamily === structuredScenarioFamily));
+    : explicitHarnessFamily ?? structuredScenarioFamily ?? (scenarioOwned ? 'unknown' : reportFamily ?? 'unknown');
   const action = scenarioOwned ? selected!.scenario.action.trim() : 'worker smoke harness';
   const expected = scenarioOwned ? selected!.scenario.expected.trim() : undefined;
-  const observed = scenarioOwned
-    ? selected!.scenario.observed?.trim() || `result:${report.result.toLowerCase()}`
-    : selected?.scenario.observed?.trim() || `result:${report.result.toLowerCase()}`;
+  const observed = selected?.scenario.observed?.trim() || `result:${report.result.toLowerCase()}`;
   const resolution = explicitResolution(observed);
   return {
     phase: scenarioOwned ? 'scenario' : 'harness',
@@ -688,7 +689,7 @@ function legacyReceiptForExactTarget(prNumber: number, headSha: string): WorkerS
   return receipt?.attemptId ? null : receipt;
 }
 
-function receiptMatchesReport(receipt: WorkerSmokeReceipt, report: SmokeReport): boolean {
+export function workerSmokeReceiptMatchesReport(receipt: WorkerSmokeReceipt, report: SmokeReport): boolean {
   const expectedFailureCause = deriveWorkerSmokeFailureCause(report);
   return receipt.producer === SMOKE_REPORT_PRODUCER
     && receipt.issueNumber === report.issueNumber
@@ -708,10 +709,7 @@ export function verifySmokeRunReceipt(
   const normalizedAttemptId = attemptId?.trim();
   const receipt = normalizedAttemptId
     ? readWorkerSmokeReceiptForAttempt(report.prNumber, report.headSha, normalizedAttemptId)
-    : listWorkerSmokeReceipts(report.prNumber, report.headSha)
-        .filter((candidate) => receiptMatchesReport(candidate, report))
-        .at(-1)
-      ?? legacyReceiptForExactTarget(report.prNumber, report.headSha);
+    : legacyReceiptForExactTarget(report.prNumber, report.headSha);
   if (!receipt) return false;
   if (normalizedAttemptId && receipt.attemptId !== normalizedAttemptId) return false;
   if (receipt.runId) {
@@ -722,5 +720,15 @@ export function verifySmokeRunReceipt(
   }
   if (receipt.attemptId && receipt.executionMode === 'executed' && !receipt.runId) return false;
   if (receipt.attemptId && receipt.executionMode === 'executed' && receipt.result === 'PASS' && !receipt.terminalHandle) return false;
-  return receiptMatchesReport(receipt, report);
+  return workerSmokeReceiptMatchesReport(receipt, report);
+}
+
+export function verifySmokeReportReceiptProvenance(report: SmokeReport): boolean {
+  const candidates = listWorkerSmokeReceipts(report.prNumber, report.headSha)
+    .filter((receipt) => workerSmokeReceiptMatchesReport(receipt, report));
+  if (candidates.length !== 1) return false;
+  const receipt = candidates[0]!;
+  return receipt.attemptId
+    ? verifySmokeRunReceipt(report, receipt.attemptId, receipt.runId)
+    : verifySmokeRunReceipt(report);
 }
