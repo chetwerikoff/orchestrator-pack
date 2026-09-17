@@ -631,7 +631,7 @@ export function resolveSmokeTarget(options: CliOptions, suppliedIssueBody: strin
 
 export function parsePaginatedSmokeComments(text: string): WorkerSmokeCommentRecord[] {
   const parsed = JSON.parse(text) as unknown;
-  if (!Array.isArray(parsed) || parsed.some((page) => !Array.isArray(page))) {
+  if (!Array.isArray(parsed) || (parsed as unknown[]).some((page) => !Array.isArray(page))) {
     throw new Error('comment_census: paginated output was not one slurped page array');
   }
   const comments = (parsed as unknown[][]).flat();
@@ -714,7 +714,7 @@ export function reviewIndependentRequiredCiContexts(contexts: readonly unknown[]
 }
 
 export function resolveCiGreen(prNumber: number, headSha: string, repositorySlug: string, repoRoot: string): boolean {
-  const pr = githubApiObject('pr-view-head-base', `repos/${repositorySlug}/pulls/${prNumber}`, options.repoRoot);
+  const pr = githubApiObject('pr-view-head-base', `repos/${repositorySlug}/pulls/${prNumber}`, repoRoot);
   const head = pr.head && typeof pr.head === 'object' && !Array.isArray(pr.head) ? pr.head as Record<string, unknown> : {};
   const base = pr.base && typeof pr.base === 'object' && !Array.isArray(pr.base) ? pr.base as Record<string, unknown> : {};
   if (positiveInteger(pr.number) !== prNumber || String(pr.state ?? '').toLowerCase() !== 'open'
