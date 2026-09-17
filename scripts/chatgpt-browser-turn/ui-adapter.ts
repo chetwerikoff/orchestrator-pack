@@ -221,7 +221,7 @@ async function readOwnedTurnSnapshot(
         productSelector: string;
       }) => {
         const rows: Array<{ role: 'user' | 'assistant'; text: string; turnKey?: string }> = [];
-        const productSurfaces: Array<{ text: string; turnKey?: string }[] = [];
+        const productSurfaces: Array<{ text: string; turnKey?: string }> = [];
         let complete = true;
         for (const element of elements) {
           try {
