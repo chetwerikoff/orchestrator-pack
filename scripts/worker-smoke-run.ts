@@ -714,7 +714,7 @@ export function reviewIndependentRequiredCiContexts(contexts: readonly unknown[]
 }
 
 export function resolveCiGreen(prNumber: number, headSha: string, repositorySlug: string, repoRoot: string): boolean {
-  const pr = githubApiObject('pr-view-head-base', `repos/${repositorySlug}/pulls/${prNumber}`, repoRoot);
+  const pr = githubApiObject('pr-view-head-base', `repos/${repositorySlug}/pulls/${prNumber}`, options.repoRoot);
   const head = pr.head && typeof pr.head === 'object' && !Array.isArray(pr.head) ? pr.head as Record<string, unknown> : {};
   const base = pr.base && typeof pr.base === 'object' && !Array.isArray(pr.base) ? pr.base as Record<string, unknown> : {};
   if (positiveInteger(pr.number) !== prNumber || String(pr.state ?? '').toLowerCase() !== 'open'
@@ -1013,7 +1013,7 @@ export function runtimeCloseBoundHandle(adapter: RuntimeAdapter, handle: string,
   if (resolved.value === null) return 'close_failed:worker_not_found;presence=unproven';
   const workspacePath = resolved.value.workspacePath;
   if (resolve(workspacePath) !== resolve(options.cwd)) return 'close_failed:worker_workspace_mismatch;presence=unproven';
-  return runtimeClose(adapter, resolved.value.identity, options);
+  return runtimeClose(adapter, resolved.value, options);
 }
 
 function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scenarioCount: number): string {
@@ -1911,7 +1911,8 @@ export async function runSmokeWait(options: CliOptions): Promise<number> {
           mode,
         });
         if (!evidence || evidence.report.result !== evidence.result) {
-          process.stderr.write('worker_smoke_wait_final_evidence_invalid\n');
+          if (options.json) emit({ ok: false, runId, reason: 'terminal_evidence_invalid' }, true);
+          else process.stderr.write('worker_smoke_wait_final_evidence_invalid\n');
           return 1;
         }
         emit({ ok: evidence.result === 'PASS', runId, result: evidence.result, report: evidence.report }, options.json);
