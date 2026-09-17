@@ -144,26 +144,30 @@ export function writeWorkerSmokeRunFinalEvidence(input: {
 }): WorkerSmokeRunFinalEvidence {
   const runId = input.runId.trim();
   const artifactDir = resolve(input.artifactDir);
+  const report: SmokeReport = {
+    ...input.report,
+    producer: SMOKE_REPORT_PRODUCER,
+  };
   if (!runId || basename(artifactDir) !== runId) throw new Error('worker_smoke_final_run_binding_invalid');
-  if (!Number.isSafeInteger(input.report.issueNumber) || input.report.issueNumber <= 0
-      || !Number.isSafeInteger(input.report.prNumber) || input.report.prNumber <= 0
-      || !/^[0-9a-f]{40}$/u.test(input.report.headSha.trim().toLowerCase())) {
+  if (!Number.isSafeInteger(report.issueNumber) || report.issueNumber <= 0
+      || !Number.isSafeInteger(report.prNumber) || report.prNumber <= 0
+      || !/^[0-9a-f]{40}$/u.test(report.headSha.trim().toLowerCase())) {
     throw new Error('worker_smoke_final_target_binding_invalid');
   }
-  const result = input.result ?? input.report.result;
+  const result = input.result ?? report.result;
   if (!['PASS', 'FAIL', 'BLOCKED'].includes(result)) throw new Error('worker_smoke_final_result_invalid');
   const evidence: WorkerSmokeRunFinalEvidence = {
     schema: WORKER_SMOKE_RUN_FINAL_SCHEMA,
     runId,
-    issueNumber: input.report.issueNumber,
-    prNumber: input.report.prNumber,
-    headSha: input.report.headSha.trim().toLowerCase(),
+    issueNumber: report.issueNumber,
+    prNumber: report.prNumber,
+    headSha: report.headSha.trim().toLowerCase(),
     artifactDir,
     mode: input.mode,
     terminalState: 'launcher_terminalized',
     result,
-    reportDigest: smokeReportDigest(input.report),
-    report: input.report,
+    reportDigest: smokeReportDigest(report),
+    report,
     recordedAtMs: input.nowMs ?? Date.now(),
   };
   writeAtomicJson(smokeRunFinalEvidencePath(artifactDir), evidence);
