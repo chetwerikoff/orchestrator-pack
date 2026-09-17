@@ -10,6 +10,7 @@ import {
   classifyProductMessage,
   MESSAGE_AUTHOR_ROLE_ATTR,
   MESSAGE_NODE_SELECTOR,
+  STOP_BUTTON_SELECTOR,
 } from './product-page-selectors.ts';
 import { currentOwnedPromptMarker } from './owned-prompt-marker.ts';
 import { classifyOwnedMessageDeliveryTimeout } from './message-delivery-timeout.ts';
@@ -28,6 +29,10 @@ type OperationWaitSource = number | (() => number);
 const DEFAULT_CONFIRM_BUDGET_MS = 5_000;
 const DELIVERY_TIMEOUT_CONFIRM_DELAY_MS = 100;
 const DELIVERY_TIMEOUT_EVIDENCE_READ_CAP_MS = 300;
+const OWNED_TURN_GENERATION_SELECTOR = [
+  STOP_BUTTON_SELECTOR,
+  ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
+].join(', ');
 
 interface OwnedTurnSnapshot {
   readonly complete: boolean;
@@ -100,7 +105,7 @@ async function readOwnedTurnSnapshot(
         return { complete, generationInProgress, rows };
       }, {
         roleAttribute: MESSAGE_AUTHOR_ROLE_ATTR,
-        generationSelector: ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
+        generationSelector: OWNED_TURN_GENERATION_SELECTOR,
       })),
       waitMs,
     ) as OwnedTurnSnapshot;
