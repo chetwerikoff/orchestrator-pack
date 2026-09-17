@@ -9,10 +9,16 @@ import {
   parseFlagArgv,
   readHandoffReceipt,
 } from './flow-manager-long-running-child.ts';
+import {
+  runCreateIssueBrowserPreflight,
+  type CreateIssueBrowserPreflightFailure,
+} from './lib/create-issue-browser-gpt-preflight.ts';
+import type { CreateIssueActionBinding, CreateIssueSemanticStage } from './lib/create-issue-next-action.ts';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const launcherPath = join(repoRoot, 'scripts/flow-manager-long-running-child.ts');
 const browserEntry = join(repoRoot, 'scripts/chatgpt-browser-turn/state-light-entry.ts');
+const adapterPath = join(repoRoot, 'scripts/flow-manager-browser-gpt-long-run.ts');
 
 function requiredOption(options: Map<string, string | true>, key: string): string {
   const value = options.get(key);
@@ -20,8 +26,8 @@ function requiredOption(options: Map<string, string | true>, key: string): strin
   return value;
 }
 
-function refuse(reason: string): void {
-  process.stderr.write(`${JSON.stringify({ schema: 'flow-manager-browser-gpt-long-run-refusal/v1', reason })}\n`);
+function refuse(reason: string, details: Record<string, unknown> = {}): void {
+  process.stderr.write(`${JSON.stringify({ schema: 'flow-manager-browser-gpt-long-run-refusal/v1', reason, ...details })}\n`);
   process.exitCode = 2;
 }
 
@@ -61,12 +67,17 @@ async function waitForReceipt(
   return false;
 }
 
-export async function spawnDetachedLauncher(launcherArgs: readonly string[]): Promise<number> {
+export async function spawnDetachedLauncher(
+  launcherArgs: readonly string[],
+  envOverrides: Readonly<Record<string, string>> = {},
+): Promise<number> {
+  const env = { ...process.env, ...envOverrides };
   if (process.env.OPK_FM_LONG_CHILD_DISABLE_DETACH === '1') {
     const result = await runProcess({
       command: process.execPath,
       args: ['--experimental-strip-types', launcherPath, ...launcherArgs],
       cwd: repoRoot,
+      env,
       inheritParentEnv: true,
       allowEmptyStdout: true,
       timeoutMs: 120_000,
@@ -85,6 +96,7 @@ export async function spawnDetachedLauncher(launcherArgs: readonly string[]): Pr
       ...launcherArgs,
     ],
     cwd: repoRoot,
+    env,
     inheritParentEnv: true,
     allowEmptyStdout: false,
     timeoutMs: 10_000,
@@ -93,6 +105,42 @@ export async function spawnDetachedLauncher(launcherArgs: readonly string[]): Pr
   const pid = Number(result.stdout.trim());
   if (!Number.isInteger(pid) || pid <= 1) throw new Error('detach_pid_invalid');
   return pid;
+}
+
+function createIssueBinding(
+  options: Map<string, string | true>,
+): CreateIssueActionBinding | null {
+  const repository = options.get('repository');
+  const issueNumber = Number(options.get('issue-number'));
+  const sourceRevision = options.get('source-revision');
+  const stage = options.get('stage');
+  if (
+    typeof repository !== 'string'
+    || !Number.isSafeInteger(issueNumber)
+    || issueNumber < 1
+    || typeof sourceRevision !== 'string'
+    || (stage !== 'competitive'
+      && stage !== 'architectural-review'
+      && stage !== 'architectural-lens'
+      && stage !== 'architectural')
+  ) return null;
+  const stageAttemptId = options.get('stage-attempt-id');
+  return {
+    repository,
+    issueNumber,
+    sourceRevision,
+    stage: stage as CreateIssueSemanticStage,
+    ...(typeof stageAttemptId === 'string' && stageAttemptId.trim() ? { stageAttemptId } : {}),
+  };
+}
+
+function refusePreflight(result: CreateIssueBrowserPreflightFailure): void {
+  refuse('create_issue_browser_preflight_failed', {
+    cause: result.cause,
+    blocker: result.blocker,
+    remedy: result.remedy,
+    nextAction: result.nextAction,
+  });
 }
 
 export async function runBrowserAdapter(argv: readonly string[]): Promise<number> {
@@ -156,6 +204,34 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
   const input = requiredOption(options, 'input');
   const cwd = typeof options.get('cwd') === 'string' ? options.get('cwd') as string : repoRoot;
 
+  let browserChildEnv: Record<string, string> = {};
+  let resolvedProjectUrl = typeof options.get('project-url') === 'string'
+    ? options.get('project-url') as string
+    : undefined;
+  if (directRequested) {
+    const binding = createIssueBinding(options);
+    if (!binding) {
+      refuse('create_issue_browser_preflight_binding_invalid', { nextAction: null });
+      return 2;
+    }
+    const operatorBrowserConfig = typeof options.get('operator-browser-config') === 'string'
+      ? options.get('operator-browser-config') as string
+      : undefined;
+    const preflight = runCreateIssueBrowserPreflight({
+      repository: binding.repository,
+      cwd,
+      operatorBrowserConfig,
+      binding,
+      retryArgv: [process.execPath, '--experimental-strip-types', adapterPath, ...argv],
+    });
+    if (!preflight.ok) {
+      refusePreflight(preflight);
+      return 2;
+    }
+    browserChildEnv = preflight.childEnv;
+    resolvedProjectUrl = preflight.config.projectUrl;
+  }
+
   const browserArgs = [
     'turn',
     '--invocation-id', invocationId,
@@ -181,7 +257,7 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
   }
   if (typeof options.get('chat-url') === 'string') browserArgs.push('--chat-url', options.get('chat-url') as string);
   if (options.get('new-chat') === true) browserArgs.push('--new-chat');
-  if (typeof options.get('project-url') === 'string') browserArgs.push('--project-url', options.get('project-url') as string);
+  if (resolvedProjectUrl) browserArgs.push('--project-url', resolvedProjectUrl);
 
   const launcherArgs = [
     'launch',
@@ -202,7 +278,7 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
     ...browserArgs,
   ];
 
-  const pid = await spawnDetachedLauncher(launcherArgs);
+  const pid = await spawnDetachedLauncher(launcherArgs, browserChildEnv);
   const receiptReady = await waitForReceipt(handoffReceipt, runIdentity, attemptIdentity, 30_000);
   if (!receiptReady) {
     refuse('handoff_receipt_missing');
