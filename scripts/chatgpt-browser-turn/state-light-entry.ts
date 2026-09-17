@@ -227,6 +227,9 @@ export async function runStateLightEntry(
 
   if (command === 'turn') {
     return await runCanonicalTurn(turnArgs, runTurn, buildTerminalBundle);
+  } else if (command === 'execution-checkpoint') {
+    const { runExecutionTimeoutCheckpoint } = await import('./execution-timeout-checkpoint.ts');
+    return await runExecutionTimeoutCheckpoint(turnArgs);
   } else if (command === 'session') {
     const { runStateLightSession } = await import('./state-light-session.ts');
     return await runStateLightSession(turnArgs);
