@@ -1,6 +1,7 @@
-// Compatibility facade over the existing UI adapter. Issue #1937 needs one
-// bounded, shared product-state confirmation seam without duplicating the
-// adapter's existing transport/runtime implementation.
+// Issue #1937 keeps the existing UI adapter implementation isolated below and
+// adds one narrow product-timeout confirmation seam at the public adapter edge.
+// This is not a retry or alternate transport path: all other exports delegate
+// unchanged to the existing implementation.
 export * from './ui-adapter-base.ts';
 
 import * as base from './ui-adapter-base.ts';
@@ -10,10 +11,8 @@ import {
   MESSAGE_AUTHOR_ROLE_ATTR,
   MESSAGE_NODE_SELECTOR,
 } from './product-page-selectors.ts';
-import {
-  currentOwnedPromptMarker,
-  ownedPromptMarkerMatches,
-} from './owned-prompt-marker.ts';
+import { currentOwnedPromptMarker } from './owned-prompt-marker.ts';
+import { classifyOwnedMessageDeliveryTimeout } from './message-delivery-timeout.ts';
 
 export interface ProductStatusSurface extends base.ProductStatusSurface {
   /** Internal proof bit consumed only by the shared product-wall classifier. */
@@ -33,7 +32,7 @@ const DELIVERY_TIMEOUT_EVIDENCE_READ_CAP_MS = 300;
 interface OwnedTurnSnapshot {
   readonly complete: boolean;
   readonly generationInProgress: boolean | 'unknown';
-  readonly rows: readonly { role: string; text: string }[];
+  readonly rows: readonly { role: 'user' | 'assistant'; text: string }[];
 }
 
 async function boundedRead<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
@@ -80,7 +79,7 @@ async function readOwnedTurnSnapshot(
         roleAttribute: string;
         generationSelector: string;
       }) => {
-        const rows: Array<{ role: string; text: string }> = [];
+        const rows: Array<{ role: 'user' | 'assistant'; text: string }> = [];
         let complete = true;
         for (const element of elements) {
           try {
@@ -110,17 +109,19 @@ async function readOwnedTurnSnapshot(
   }
 }
 
-function exactOwnedDeadTurn(snapshot: OwnedTurnSnapshot | undefined, marker: string): boolean {
-  if (!snapshot?.complete || snapshot.generationInProgress !== false) return false;
-  const ownedIndexes = snapshot.rows
-    .map((row, index) => ({ row, index }))
-    .filter(({ row }) => row.role === 'user' && ownedPromptMarkerMatches(row.text, marker));
-  if (ownedIndexes.length !== 1) return false;
-  const ownedIndex = ownedIndexes[0]!.index;
-  const afterOwned = snapshot.rows.slice(ownedIndex + 1);
-  if (afterOwned.some((row) => row.role === 'user')) return false;
-  if (afterOwned.some((row) => row.role === 'assistant')) return false;
-  return true;
+function exactOwnedTimeout(
+  surface: base.ProductStatusSurface,
+  snapshot: OwnedTurnSnapshot | undefined,
+  marker: string,
+): boolean {
+  if (!snapshot) return false;
+  return classifyOwnedMessageDeliveryTimeout({
+    surface,
+    marker,
+    transcriptComplete: snapshot.complete,
+    generationInProgress: snapshot.generationInProgress,
+    messages: snapshot.rows,
+  }).state === 'message_delivery_timed_out';
 }
 
 /**
@@ -150,7 +151,7 @@ export async function productStatusText(
   const marker = currentOwnedPromptMarker();
   if (!marker) return initial;
   const initialSnapshot = await readOwnedTurnSnapshot(page, remainingMs);
-  if (!exactOwnedDeadTurn(initialSnapshot, marker)) return initial;
+  if (!exactOwnedTimeout(initial, initialSnapshot, marker)) return initial;
 
   const beforeDelay = remainingMs();
   if (beforeDelay <= DELIVERY_TIMEOUT_CONFIRM_DELAY_MS) return initial;
@@ -160,7 +161,7 @@ export async function productStatusText(
   const confirmed = await base.productStatusText(page, remainingSource);
   if (classifyProductMessage(confirmed).state !== 'message_delivery_timed_out') return confirmed;
   const confirmedSnapshot = await readOwnedTurnSnapshot(page, remainingMs);
-  if (!exactOwnedDeadTurn(confirmedSnapshot, marker)) return confirmed;
+  if (!exactOwnedTimeout(confirmed, confirmedSnapshot, marker)) return confirmed;
 
   return { ...confirmed, owned_message_delivery_timeout_stable: true };
 }
