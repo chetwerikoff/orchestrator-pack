@@ -532,11 +532,17 @@ export function writeWorkerSmokeReceipt(
   return receipt;
 }
 
-function parseWorkerSmokeFailureCause(raw: unknown): WorkerSmokeFailureCause | undefined {
+function parseWorkerSmokeFailureCause(
+  raw: unknown,
+  allowLegacyUnknown: boolean,
+): WorkerSmokeFailureCause | undefined {
   if (!isRecord(raw)) return undefined;
   const phase = raw.phase === 'harness' || raw.phase === 'scenario' ? raw.phase : undefined;
-  const causeFamily = isWorkerSmokeCauseFamily(raw.causeFamily) ? raw.causeFamily : undefined;
-  const code = String(raw.code ?? '').trim();
+  const structuredFamily = isWorkerSmokeCauseFamily(raw.causeFamily) ? raw.causeFamily : undefined;
+  const structuredCode = String(raw.code ?? '').trim();
+  const legacy = allowLegacyUnknown && !structuredFamily;
+  const causeFamily: WorkerSmokeCauseFamily | undefined = structuredFamily ?? (legacy ? 'unknown' : undefined);
+  const code = legacy ? 'unknown' : structuredCode;
   const action = String(raw.action ?? '').trim();
   const observed = String(raw.observed ?? '').trim();
   const expected = String(raw.expected ?? '').trim() || undefined;
@@ -545,7 +551,7 @@ function parseWorkerSmokeFailureCause(raw: unknown): WorkerSmokeFailureCause | u
     ? raw.outcome as WorkerSmokeFailureCause['outcome']
     : undefined;
   const resolution = String(raw.resolution ?? '').trim() || undefined;
-  if (!phase || !causeFamily || code !== causeFamily || !action || !observed) return undefined;
+  if (!phase || !causeFamily || (!legacy && code !== causeFamily) || !action || !observed) return undefined;
   if (phase === 'scenario') {
     if (!Number.isSafeInteger(scenarioOrdinal) || Number(scenarioOrdinal) <= 0 || !expected || !outcome) return undefined;
   } else if (scenarioOrdinal !== undefined || expected !== undefined) {
@@ -607,7 +613,7 @@ function parseWorkerSmokeReceipt(
   }
   let failureCause: WorkerSmokeFailureCause | undefined;
   if (raw.failureCause !== undefined) {
-    failureCause = parseWorkerSmokeFailureCause(raw.failureCause);
+    failureCause = parseWorkerSmokeFailureCause(raw.failureCause, !attemptId);
     if (!failureCause) return null;
   }
   const parsed: WorkerSmokeReceipt = {
