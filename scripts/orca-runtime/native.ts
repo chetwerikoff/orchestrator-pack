@@ -135,6 +135,15 @@ function resultSignal(result: ReturnType<typeof spawnSync>): NodeJS.Signals | un
     : undefined;
 }
 
+export function orcaProcessSignaledError(
+  signal: NodeJS.Signals,
+): NonNullable<OrcaJsonResponse['error']> {
+  return {
+    code: 'orca_process_signaled',
+    message: `orca process interrupted by ${signal}`,
+  };
+}
+
 function signaledResponse<T>(
   operation: OrcaOperationName | undefined,
   signal: NodeJS.Signals,
@@ -144,10 +153,7 @@ function signaledResponse<T>(
     operation,
     outcomeCategory: 'process_signaled',
     signal,
-    error: {
-      code: 'orca_process_signaled',
-      message: `orca process interrupted by ${signal}`,
-    },
+    error: orcaProcessSignaledError(signal),
   };
 }
 
