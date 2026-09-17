@@ -746,9 +746,7 @@ export function normalizeSmokeReport(
   const terminalNonPassRows = partial.scenarios
     .map((scenario, index) => ({ scenario, index }))
     .filter(({ scenario }) => scenario.outcome === 'fail' || scenario.outcome === 'blocked');
-  if (terminalNonPassRows.length > 1) {
-    return { ok: false, reason: 'multiple_terminal_non_pass_scenarios' };
-  }
+  const ambiguousTerminalNonPass = terminalNonPassRows.length > 1;
 
   const scenarios = partial.scenarios.map((scenario) => {
     if (scenario.outcome !== 'fail' && scenario.outcome !== 'blocked') {
@@ -819,11 +817,13 @@ export function normalizeSmokeReport(
     : undefined;
   const causeFamily = partial.result === 'PASS'
     ? undefined
-    : controlPlaneDiagnostic
-      ? workerSmokeCauseFamilyForHarnessReason(controlPlaneDiagnostic.cause)
-      : isWorkerSmokeCauseFamily(partial.causeFamily)
-        ? partial.causeFamily
-        : scenarioCauseFamily ?? 'unknown';
+    : ambiguousTerminalNonPass
+      ? 'unknown'
+      : controlPlaneDiagnostic
+        ? workerSmokeCauseFamilyForHarnessReason(controlPlaneDiagnostic.cause)
+        : isWorkerSmokeCauseFamily(partial.causeFamily)
+          ? partial.causeFamily
+          : scenarioCauseFamily ?? 'unknown';
   const result = partial.result === 'PASS'
     ? 'PASS'
     : smokeResultForWorkerSmokeCauseFamily(causeFamily ?? 'unknown');
