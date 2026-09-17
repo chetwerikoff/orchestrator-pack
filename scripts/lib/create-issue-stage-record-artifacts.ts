@@ -43,6 +43,11 @@ import { validateTerminalOneShotBodyBinding } from './create-issue-final-accepta
 import { defaultGhTransport, fetchRepositoryOwnerLogin, parseJournalEvents } from './create-issue-stage-record-gh.ts';
 import type { CanonicalLineage, GhTransport, PartialMissingSourceWitness, ProducerEvidence, TrustedComment } from './create-issue-stage-record-types.ts';
 import { resolvePublishedAuthorState } from './resolve-published-author-state.ts';
+import {
+  resolveAuthenticatedGithubPrincipal,
+  sameGithubPrincipal,
+  selectPrincipalOwnedCanonicalArtifact,
+} from './create-issue-github-artifact-authority.ts';
 
 export const STAGE_EVIDENCE_SCHEMA = 'create-issue-stage-evidence/v1' as const;
 export const AUTHOR_DISPOSITIONS_SCHEMA = 'create-issue-author-dispositions/v1' as const;
@@ -51,9 +56,9 @@ export const TURN_RESULT_SCHEMA = 'turn-result/v1' as const;
 export const AUTHORITATIVE_GITHUB_ARTIFACT_BASIS = 'authoritative-github-artifact' as const;
 
 export const ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS = [
-  { property: 'tierIntakePath', flag: '--tier-intake', file: 'tier-intake.json', schema: 'tier-intake/v1', classification: 'flow-manager-authored input', repeatable: false },
-  { property: 'stageEvidencePaths', flag: '--stage-evidence', file: 'attempt-NNN.json', schema: STAGE_EVIDENCE_SCHEMA, classification: 'flow-manager-authored input', repeatable: true },
-  { property: 'authorDispositionsPath', flag: '--author-dispositions', file: 'author-dispositions.json', schema: AUTHOR_DISPOSITIONS_SCHEMA, classification: 'flow-manager-authored input', repeatable: false },
+  { property: 'tierIntakePath', flag: '--tier-intake', file: 'tier-intake.json', schema: 'tier-intake/v1', classification: 'lifecycle-tool-witnessed', repeatable: false },
+  { property: 'stageEvidencePaths', flag: '--stage-evidence', file: 'attempt-NNN.json', schema: STAGE_EVIDENCE_SCHEMA, classification: 'lifecycle-tool-witnessed/GitHub-witnessed', repeatable: true },
+  { property: 'authorDispositionsPath', flag: '--author-dispositions', file: 'author-dispositions.json', schema: AUTHOR_DISPOSITIONS_SCHEMA, classification: 'GitHub-witnessed/author-owned/lifecycle-tool-witnessed', repeatable: false },
 ] as const;
 
 type AcceptanceArtifactInputProperty = typeof ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS[number]['property'];
@@ -69,7 +74,7 @@ function acceptanceArtifactInputReason(
   detail: string,
 ): string {
   const descriptor = acceptanceArtifactInputDescriptor(property);
-  return `${detail}; ${descriptor.classification}: record/provide the observed ${descriptor.file} via ${descriptor.flag}`;
+  return `${detail}; authority=${descriptor.classification}; producer must obtain ${descriptor.file} from the declared authority`;
 }
 
 export function stageCompletenessReceiptFileName(stageAttemptId: string): string {
@@ -169,6 +174,7 @@ type AuthoritativeIssueCensus = IssueCommentCensus;
 interface ArtifactAuthorityContext {
   transport: GhTransport;
   census: AuthoritativeIssueCensus;
+  principalLogin: string;
   operatorHint?: OperatorNarrowingHint;
   publishedAuthorState?: {
     text: string;
@@ -517,7 +523,7 @@ function isCanonicalReviewerArtifact(
   issueNumber: number,
   sourceRevision: string,
   invocationId?: string,
- ): boolean {
+): boolean {
   const revision = parseCanonicalCaptureRevision(text);
   if (!revision || revision.issueNumber !== issueNumber || revision.sourceRevision !== sourceRevision) return false;
   const lines = text.split(/\r?\n/).map((line) => line.trim());
@@ -542,20 +548,6 @@ function isCanonicalReviewerArtifact(
     || (declaredFindingCounts.length === 1 && declaredFindingCounts[0] === revision.findingCount);
 }
 
-function isCanonicalEchoLessFindingArtifact(
-  text: string,
-  stage: Exclude<ReviewStage, 'architectural-lens'>,
-  issueNumber: number,
-  sourceRevision: string,
- ): boolean {
-  const revision = parseCanonicalCaptureRevision(text);
-  return Boolean(revision
-    && revision.issueNumber === issueNumber
-    && revision.sourceRevision === sourceRevision
-    && revision.findingCount > 0
-    && isCanonicalReviewerArtifact(text, stage, issueNumber, sourceRevision, undefined));
-}
-
 function canonicalReviewerArtifactRevision(
   text: string,
   stage: Exclude<ReviewStage, 'architectural-lens'>,
@@ -567,10 +559,6 @@ function canonicalReviewerArtifactRevision(
   return isCanonicalReviewerArtifact(text, stage, issueNumber, revision.sourceRevision, invocationId)
     ? revision.sourceRevision
     : null;
-}
-
-function sameGithubLogin(left: string, right: string): boolean {
-  return left.toLowerCase() === right.toLowerCase();
 }
 
 function temporaryError(
@@ -719,16 +707,6 @@ function authoritativeIssueCommentCensus(
   return issueCommentCensus(transport, repositoryFullName, issueNumber, errors);
 }
 
-const TRUSTED_REVIEW_ARTIFACT_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
-
-function isTrustedReviewArtifactComment(comment: AuthoritativeIssueComment): boolean {
-  return Boolean(
-    comment.userLogin
-    && comment.authorAssociation
-    && TRUSTED_REVIEW_ARTIFACT_ASSOCIATIONS.has(comment.authorAssociation.toUpperCase()),
-  );
-}
-
 function canonicalIssueCommentLineage(
   transport: GhTransport,
   repositoryFullName: string,
@@ -757,7 +735,7 @@ function canonicalIssueCommentLineage(
       ));
       return null;
     }
-    if (!sameGithubLogin(comment.userLogin, ownerLogin)) continue;
+    if (!sameGithubPrincipal(comment.userLogin, ownerLogin)) continue;
     if (comment.updatedAt !== comment.createdAt) continue;
     trustedJournalComments.push({
       id: comment.id,
@@ -942,8 +920,7 @@ function rereadAuthoritativeIssueComment(
   sourceRevision: string,
   invocationId: string,
   errors: string[],
-  allowEchoLessFinding = false,
- ): AuthoritativeIssueComment | null {
+): AuthoritativeIssueComment | null {
   const response = context.transport.runGh([
     'gh',
     'api',
@@ -966,32 +943,30 @@ function rereadAuthoritativeIssueComment(
     errors.push(`authoritative GitHub artifact target mismatch on reread: comment ${censusComment.id}`);
     return null;
   }
-  if (!reread.userLogin || !reread.authorAssociation) {
-    errors.push(temporaryError('source-unavailable', `authoritative reread comment ${reread.id} has no repository-trust fields`));
+  if (!reread.userLogin) {
+    errors.push(temporaryError('identity-unresolved', `authoritative reread comment ${reread.id} has no publisher login`));
     return null;
   }
-  if (!censusComment.userLogin || !censusComment.authorAssociation) {
-    errors.push(temporaryError('source-unavailable', `authoritative census candidate ${censusComment.id} has no repository-trust fields`));
+  if (!censusComment.userLogin) {
+    errors.push(temporaryError('identity-unresolved', `authoritative census candidate ${censusComment.id} has no publisher login`));
     return null;
   }
-  if (!isTrustedReviewArtifactComment(reread) || !isTrustedReviewArtifactComment(censusComment)) {
-    errors.push(`authoritative GitHub artifact is not repository-trusted: ${reread.htmlUrl}`);
+  if (!sameGithubPrincipal(reread.userLogin, context.principalLogin)
+    || !sameGithubPrincipal(censusComment.userLogin, context.principalLogin)) {
+    errors.push(`authoritative GitHub artifact publisher mismatch: expected=${context.principalLogin} observed=${reread.userLogin}`);
     return null;
   }
   if (reread.createdAt !== reread.updatedAt) {
     errors.push(`authoritative GitHub artifact was edited: ${reread.htmlUrl}`);
     return null;
   }
-  const canonicalWithEcho = isCanonicalReviewerArtifact(
+  if (!isCanonicalReviewerArtifact(
     reread.body,
     stage,
     context.census.issueNumber,
     sourceRevision,
     invocationId,
-  );
-  const canonicalEchoLessFinding = allowEchoLessFinding
-    && isCanonicalEchoLessFindingArtifact(reread.body, stage, context.census.issueNumber, sourceRevision);
-  if (!canonicalWithEcho && !canonicalEchoLessFinding) {
+  )) {
     const observedRevision = canonicalReviewerArtifactRevision(
       reread.body,
       stage,
@@ -1010,7 +985,7 @@ function rereadAuthoritativeIssueComment(
     || reread.body !== censusComment.body
     || reread.createdAt !== censusComment.createdAt
     || reread.updatedAt !== censusComment.updatedAt
-    || !sameGithubLogin(reread.userLogin, censusComment.userLogin)
+    || !sameGithubPrincipal(reread.userLogin, censusComment.userLogin)
     || reread.authorAssociation !== censusComment.authorAssociation
     || reread.htmlUrl !== censusComment.htmlUrl
     || reread.issueUrl !== censusComment.issueUrl
@@ -1027,126 +1002,52 @@ function resolveAuthoritativeArtifact(
   stage: Exclude<ReviewStage, 'architectural-lens'>,
   stageSequence: number,
   invocation: JsonRecord,
-  stageInvocations: readonly JsonRecord[],
   captureTexts: Map<string, string>,
   captureTimestamps: Map<string, number>,
   errors: string[],
- ): AuthoritativeArtifactResolution | null {
+): AuthoritativeArtifactResolution | null {
   const invocationId = optionalString(invocation.invocationId) ?? '';
   const sourceRevision = optionalString(invocation.sourceRevision) ?? '';
   const reviewerSlot = optionalString(invocation.reviewerSlot) ?? '';
   if (!invocationId || !sourceRevision || !reviewerSlot) return null;
-  const invocationCandidates = context.census.comments.flatMap((comment) => {
-    if (!commentTargetsExpectedIssue(comment, context.census.repositoryFullName, context.census.issueNumber)) return [];
-    const observedRevision = canonicalReviewerArtifactRevision(
+
+  const targetedComments = context.census.comments.filter((comment) => (
+    commentTargetsExpectedIssue(comment, context.census.repositoryFullName, context.census.issueNumber)
+  ));
+  const selection = selectPrincipalOwnedCanonicalArtifact(
+    targetedComments,
+    context.principalLogin,
+    (comment) => isCanonicalReviewerArtifact(
       comment.body,
       stage,
       context.census.issueNumber,
+      sourceRevision,
       invocationId,
-    );
-    return observedRevision ? [{ comment, observedRevision }] : [];
-  });
-  const sameRevisionCandidates = invocationCandidates.filter(({ observedRevision }) => observedRevision === sourceRevision);
-  let matches = sameRevisionCandidates.filter(({ comment }) => (
-    isTrustedReviewArtifactComment(comment) && comment.createdAt === comment.updatedAt
-  ));
-  let echoLessFallback = false;
-  if (matches.length === 0) {
-    if (sameRevisionCandidates.some(({ comment }) => !comment.userLogin || !comment.authorAssociation)) {
-      errors.push(temporaryError(
-        'source-unavailable',
-        `invocation ${invocationId} canonical artifact candidate has no repository-trust fields`,
-      ));
-      return null;
-    }
-    if (sameRevisionCandidates.some(({ comment }) => !isTrustedReviewArtifactComment(comment))) {
-      errors.push(`authoritative GitHub artifact is not repository-trusted for invocation ${invocationId}`);
-      return null;
-    }
-    if (sameRevisionCandidates.some(({ comment }) => comment.createdAt !== comment.updatedAt)) {
-      errors.push(`authoritative GitHub artifact was edited for invocation ${invocationId}`);
-      return null;
-    }
-    if (invocationCandidates.length > 0) {
-      const observedRevisions = [...new Set(invocationCandidates.map(({ observedRevision }) => observedRevision))].sort();
-      errors.push(
-        `authoritative GitHub artifact revision mismatch: repository=${context.census.repositoryFullName} issue=#${context.census.issueNumber} stage=${stage} invocationId=${invocationId} expected=${sourceRevision} observed=${observedRevisions.join(',')}`,
-      );
-      return null;
-    }
-    const launchedSlots = new Set<string>();
-    const echoMatchedSlots = new Set<string>();
-    for (const candidate of stageInvocations) {
-      const candidateRevision = optionalString(candidate.sourceRevision);
-      const candidateSlot = optionalString(candidate.reviewerSlot);
-      const candidateInvocationId = optionalString(candidate.invocationId);
-      if (candidateRevision !== sourceRevision || !candidateSlot || !candidateInvocationId) continue;
-      launchedSlots.add(candidateSlot);
-      const hasEchoMatch = context.census.comments.some((comment) => {
-        if (!commentTargetsExpectedIssue(comment, context.census.repositoryFullName, context.census.issueNumber)) return false;
-        const lines = comment.body.split(/\r?\n/).map((line) => line.trim());
-        const invocationEchoes = lines.flatMap((line) => {
-          const match = INVOCATION_ECHO_RE.exec(line);
-          return match ? [match[1]!] : [];
-        });
-        return invocationEchoes.length === 1
-          && invocationEchoes[0] === candidateInvocationId
-          && canonicalReviewerArtifactRevision(comment.body, stage, context.census.issueNumber, candidateInvocationId) === sourceRevision;
+    ),
+  );
+  if (!selection.ok) {
+    if (selection.cause === 'zero_principal_owned_match') {
+      const principalRevisionCandidates = targetedComments.flatMap((comment) => {
+        if (!comment.userLogin || !sameGithubPrincipal(comment.userLogin, context.principalLogin)) return [];
+        const observedRevision = canonicalReviewerArtifactRevision(
+          comment.body,
+          stage,
+          context.census.issueNumber,
+          invocationId,
+        );
+        return observedRevision ? [observedRevision] : [];
       });
-      if (hasEchoMatch) echoMatchedSlots.add(candidateSlot);
+      if (principalRevisionCandidates.length > 0) {
+        errors.push(
+          `authoritative GitHub artifact revision mismatch: repository=${context.census.repositoryFullName} issue=#${context.census.issueNumber} stage=${stage} invocationId=${invocationId} expected=${sourceRevision} observed=${[...new Set(principalRevisionCandidates)].sort().join(',')}`,
+        );
+        return null;
+      }
     }
-    const unmatchedSlots = [...launchedSlots].filter((slot) => !echoMatchedSlots.has(slot));
-    const unmatchedComments = context.census.comments.filter((comment) => (
-      commentTargetsExpectedIssue(comment, context.census.repositoryFullName, context.census.issueNumber)
-      && isCanonicalEchoLessFindingArtifact(comment.body, stage, context.census.issueNumber, sourceRevision)
-    ));
-    if (unmatchedSlots.length > 0 && unmatchedComments.length > 0) {
-      if (unmatchedSlots.length !== 1 || unmatchedComments.length !== 1) {
-        errors.push(`authoritative GitHub artifact census cannot uniquely bind echo-less FINDINGS: stage=${stage} sourceRevision=${sourceRevision} unmatchedComments=${unmatchedComments.length} unmatchedSlots=${unmatchedSlots.length}`);
-        return null;
-      }
-      const unmatchedSlot = unmatchedSlots[0]!;
-      if (unmatchedSlot !== reviewerSlot) return null;
-      const leftover = unmatchedComments[0]!;
-      if (!leftover.userLogin || !leftover.authorAssociation) {
-        errors.push(temporaryError(
-          'source-unavailable',
-          `echo-less canonical artifact candidate has no repository-trust fields: comment ${leftover.id}`,
-        ));
-        return null;
-      }
-      if (!isTrustedReviewArtifactComment(leftover)) {
-        errors.push(`authoritative GitHub artifact is not repository-trusted: ${leftover.htmlUrl}`);
-        return null;
-      }
-      if (leftover.createdAt !== leftover.updatedAt) {
-        errors.push(`authoritative GitHub artifact was edited: ${leftover.htmlUrl}`);
-        return null;
-      }
-      matches = [{ comment: leftover, observedRevision: sourceRevision }];
-      echoLessFallback = true;
-    }
-    if (matches.length === 0) {
-      const journalableUnobservableSend = invocation.terminal === true
-        && invocation.sendCount === 1
-        && invocation.retryClass === 'retry-forbidden'
-        && (invocation.terminalClassification === 'post-send-failure'
-          || invocation.terminalClassification === 'output-conflict'
-          || invocation.terminalClassification === 'incident');
-      if (journalableUnobservableSend) return null;
-      errors.push(
-        `authoritative GitHub artifact absent after complete census: repository=${context.census.repositoryFullName} issue=#${context.census.issueNumber} stage=${stage} sourceRevision=${sourceRevision} invocationId=${invocationId} source=GitHub-Issue-comments`,
-      );
-      return null;
-    }
-  }
-  const distinctBodies = new Set(matches.map(({ comment }) => comment.body));
-  if (distinctBodies.size > 1) {
-    const identities = matches.map(({ comment }) => `${comment.id}:${comment.htmlUrl}`).join(', ');
-    errors.push(`authoritative GitHub artifact content conflict for invocation ${invocationId}: ${identities}`);
+    errors.push(`authoritative GitHub artifact ${selection.cause}: ${selection.detail}`);
     return null;
   }
-  const censusComment = [...matches].sort((left, right) => left.comment.id - right.comment.id)[0]!.comment;
+  const censusComment = selection.comment as AuthoritativeIssueComment;
   if (censusComment.createdAt !== censusComment.updatedAt) {
     errors.push(`authoritative GitHub artifact was edited: ${censusComment.htmlUrl}`);
     return null;
@@ -1158,7 +1059,6 @@ function resolveAuthoritativeArtifact(
     sourceRevision,
     invocationId,
     errors,
-    echoLessFallback,
   );
   if (!comment) return null;
   const name = authoritativeCaptureName(reviewDir, stage, stageSequence, reviewerSlot, invocation.capturePath);
@@ -1502,9 +1402,6 @@ function buildReceipt(
   assertDerived(raw.stageReceiptId, deriveStageReceiptId(episodeId, sequence), 'stage evidence stageReceiptId', errors);
 
   const invocationValues = raw.invocations;
-  const stageInvocations = Array.isArray(invocationValues)
-    ? invocationValues.filter((candidate): candidate is JsonRecord => isRecord(candidate))
-    : [];
   const invocations: ReviewerInvocationEnvelopeV1[] = [];
   const receiptPolicyVersion = policyVersion(raw.policyVersion);
   if (receiptPolicyVersion === null) errors.push('stage evidence.policyVersion is invalid');
@@ -1529,7 +1426,6 @@ function buildReceipt(
             browserStage,
             sequence,
             value,
-            stageInvocations,
             captureTexts,
             captureTimestamps,
             errors,
@@ -2076,10 +1972,21 @@ export function produceAcceptanceArtifacts(
         issueNumber,
         errors,
       );
-      const census = errors.length === 0
+      let principalLogin: string | null = null;
+      if (errors.length === 0) {
+        try {
+          principalLogin = resolveAuthenticatedGithubPrincipal(artifactSourceTransport);
+        } catch (error) {
+          errors.push(temporaryError(
+            'identity-unresolved',
+            `authenticated GitHub principal could not be resolved through tracked GET /user: ${error instanceof Error ? error.message : String(error)}`,
+          ));
+        }
+      }
+      const census = errors.length === 0 && principalLogin
         ? authoritativeIssueCommentCensus(artifactSourceTransport, repositoryFullName, issueNumber, errors)
         : null;
-      if (census) {
+      if (census && principalLogin) {
         const publishedComment = operatorHint
           ? census.comments.find((candidate) => (
               candidate.id === operatorHint.commentId
@@ -2113,6 +2020,7 @@ export function produceAcceptanceArtifacts(
         artifactContext = {
           transport: artifactSourceTransport,
           census,
+          principalLogin,
           ...(operatorHint ? { operatorHint } : {}),
           ...(publishedAuthorState ? { publishedAuthorState } : {}),
         };
