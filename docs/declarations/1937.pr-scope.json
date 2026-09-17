@@ -2,22 +2,17 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1937,
   "declared_paths": [
+    ".cursor/skills/execute-issue-with-gpt/SKILL.md",
     "docs/chatgpt-task-execution-runbook.md",
     "docs/declarations/1937.pr-scope.json",
-    "scripts/chatgpt-browser-turn/cli-options.ts",
-    "scripts/chatgpt-browser-turn/contracts.ts",
-    "scripts/chatgpt-browser-turn/execution-timeout-checkpoint.test.ts",
-    "scripts/chatgpt-browser-turn/execution-timeout-checkpoint.ts",
-    "scripts/chatgpt-browser-turn/message-delivery-timeout.ts",
+    "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/browser-gpt-page-probe.ts",
     "scripts/chatgpt-browser-turn/owned-prompt-marker.ts",
-    "scripts/chatgpt-browser-turn/product-page-selectors.ts",
     "scripts/chatgpt-browser-turn/profile-probe.ts",
-    "scripts/chatgpt-browser-turn/state-light-entry.ts",
-    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.ts",
     "scripts/chatgpt-browser-turn/ui-adapter-base.ts",
-    "scripts/chatgpt-browser-turn/ui-adapter.ts",
-    "scripts/toolchain/chatgpt-browser-turn.test.ts",
-    "scripts/vitest-ci-lanes.config.json"
+    "scripts/chatgpt-browser-turn/ui-adapter.ts"
   ],
   "denylist": [
     "credentials/",
@@ -27,15 +22,11 @@
   ],
   "allowed_roots": [
     ".cursor/skills/execute-issue-with-gpt/",
-    "docs/browser-gpt-turn-runbook.md",
     "docs/chatgpt-task-execution-runbook.md",
     "docs/declarations/",
+    "scripts/browser-gpt-page-probe.test.ts",
     "scripts/browser-gpt-page-probe.ts",
-    "scripts/chatgpt-browser-turn/",
-    "scripts/flow-manager-authority-contract.test.ts",
-    "scripts/flow-manager-browser-gpt-long-run.ts",
-    "scripts/toolchain/",
-    "scripts/vitest-ci-lanes.config.json"
+    "scripts/chatgpt-browser-turn/"
   ],
-  "source_revision": "9d8015d9e0a144455dea6837b754752bdeb7eb27"
+  "source_revision": "80d3461b20c59fcd120e359d34d08b47b9d9c46e"
 }
