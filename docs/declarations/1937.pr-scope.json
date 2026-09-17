@@ -4,6 +4,7 @@
   "declared_paths": [
     "docs/chatgpt-task-execution-runbook.md",
     "docs/declarations/1937.pr-scope.json",
+    "scripts/chatgpt-browser-turn/cli-options.ts",
     "scripts/chatgpt-browser-turn/contracts.ts",
     "scripts/chatgpt-browser-turn/execution-timeout-checkpoint.test.ts",
     "scripts/chatgpt-browser-turn/execution-timeout-checkpoint.ts",
@@ -34,5 +35,5 @@
     "scripts/toolchain/",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "5c1560e5917f364115bb4321690f76b29f5f5405"
+  "source_revision": "9d8015d9e0a144455dea6837b754752bdeb7eb27"
 }
