@@ -131,7 +131,7 @@ async function sampleOwnedTurn(
     true,
     deadlineMs,
   );
-  if (observation.transcriptIncomplete || !observation.snapshot.complete) {
+  if (observation.transcriptIncomplete || !observation.snapshot?.complete) {
     return { classification: 'ambiguous', cause: 'checkpoint_transcript_incomplete' };
   }
 
