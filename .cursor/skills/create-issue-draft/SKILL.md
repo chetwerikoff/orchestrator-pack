@@ -46,6 +46,42 @@ Brief-only `discuss-with-gpt` floors at T2 and does not add T3 stages.
 `adversarial-draft-review` is standalone Codex challenge, not an in-flow reviewer.
 Apply the below-ladder rule from `docs/tiering.md` before starting ceremony.
 
+### Existing-Issue manager shorthand — Issue #1938
+
+For an existing `orchestrator-pack` Issue target, the standalone selector
+`manager` / `менеджер` selects this existing `create-issue-draft` lifecycle.
+Explicit task-authoring or review-continuation wording such as `continue review`
+or `продолжи ревью` selects the same lifecycle. The selector launches or resumes
+the existing supervised `work-class=manager` path and existing
+`--manager-brief` / Task continuation mechanics; it does not create another
+skill, manager class, launcher, transport, state machine, or lifecycle authority.
+
+The manager assignment for this shorthand is: read the live Issue and canonical
+create-Issue review state, reconstruct the current legal stage from that
+authority, and continue only unfinished task-authoring, review, and acceptance
+stages. Preserve already consumed semantic stage slots, existing episode/attempt
+authority, and terminal acceptance. If the create-Issue lifecycle is already
+terminal or accepted, report that truthful terminal state and perform no
+implementation fallback.
+
+Explicit implementation wording has precedence over the manager noun. Requests
+such as `<Issue> execute`, `<Issue> выполни задачу`, `<Issue> выполни Issue`, or
+`<Issue> доделай Issue` select `execute-issue-with-gpt`, including when
+`manager` / `менеджер` also appears in the same direct request. The noun by
+itself is not an implementation verb. Ordinary prose that mentions
+`manager` / `менеджер` without an existing Issue target does not activate this
+shorthand.
+
+Binding examples:
+
+```text
+https://github.com/chetwerikoff/orchestrator-pack/issues/1453 менеджер -> create-issue-draft
+https://github.com/chetwerikoff/orchestrator-pack/issues/1453 manager -> create-issue-draft
+https://github.com/chetwerikoff/orchestrator-pack/issues/1453 выполни -> execute-issue-with-gpt
+https://github.com/chetwerikoff/orchestrator-pack/issues/1453 manager выполни задачу -> execute-issue-with-gpt
+ordinary prose mentioning manager without an Issue target -> no shorthand activation
+```
+
 ## Roles
 
 | Party | Owns | Must not do |
