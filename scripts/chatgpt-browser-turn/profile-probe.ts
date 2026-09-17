@@ -16,9 +16,6 @@ export interface ProfileReadyProbe {
 async function probePage(page: any): Promise<ProfileReadyProbe | { ready: true; state: 'ready'; cause: 'composer_ready_no_wall' } | null> {
   const surface = await productStatusText(page);
   const wall = classifyProductWall(surface);
-  if (wall.state === 'message_delivery_timed_out') {
-    return surface.composer ? { ready: true, state: 'ready', cause: 'composer_ready_no_wall' } : null;
-  }
   if (wall.state) return { ready: false, state: wall.state, cause: wall.cause! };
   return surface.composer ? { ready: true, state: 'ready', cause: 'composer_ready_no_wall' } : null;
 }

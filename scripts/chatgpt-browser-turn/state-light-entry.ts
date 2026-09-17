@@ -3,7 +3,6 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { optionValue } from './cli-options.ts';
 import { readStableInput, type InputSnapshot } from './input.ts';
 import { turnExitCode } from './contracts.ts';
 import { configuredProfileKey } from './storage-common.ts';
@@ -35,6 +34,18 @@ const DIRECT_KEYS = [
   'stage',
   'source-slot',
 ] as const;
+
+function optionValue(argv: readonly string[], key: string): string | undefined {
+  const flag = `--${key}`;
+  let found: string | undefined;
+  for (let index = 0; index < argv.length; index++) {
+    if (argv[index] !== flag) continue;
+    const value = argv[index + 1];
+    if (!value || value.startsWith('--') || found !== undefined) return undefined;
+    found = value;
+  }
+  return found;
+}
 
 function directPublicationRequested(argv: readonly string[]): boolean {
   return DIRECT_KEYS.some((key) => argv.includes(`--${key}`));
@@ -216,9 +227,6 @@ export async function runStateLightEntry(
 
   if (command === 'turn') {
     return await runCanonicalTurn(turnArgs, runTurn, buildTerminalBundle);
-  } else if (command === 'execution-checkpoint') {
-    const { runExecutionTimeoutCheckpoint } = await import('./execution-timeout-checkpoint.ts');
-    return await runExecutionTimeoutCheckpoint(turnArgs);
   } else if (command === 'session') {
     const { runStateLightSession } = await import('./state-light-session.ts');
     return await runStateLightSession(turnArgs);

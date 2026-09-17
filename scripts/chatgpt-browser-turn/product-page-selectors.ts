@@ -44,30 +44,6 @@ export const PRODUCT_STATUS_PROBE_SELECTORS = [
   'a[href*="/auth/signup"]',
 ] as const;
 
-export interface ProductStatusSurfaceLike {
-  readonly text: string;
-  readonly composer: boolean;
-}
-
-export type ProductMessageState = 'message_delivery_timed_out';
-
-const MESSAGE_DELIVERY_TIMED_OUT_RE = /(?:^|\s)message delivery timed out\.\s*please try again\.?(?:\s|$)/iu;
-
-/**
- * Single normalized classifier for product-owned message-delivery timeout copy.
- * Transport and checkpoint consumers must use this predicate instead of owning
- * their own DOM/text regular expression.
- */
-export function classifyProductMessage(
-  surface: ProductStatusSurfaceLike,
-): { state?: ProductMessageState; cause?: 'message_delivery_timed_out' } {
-  const text = surface.text.replace(/\p{White_Space}+/gu, ' ').trim();
-  if (MESSAGE_DELIVERY_TIMED_OUT_RE.test(text)) {
-    return { state: 'message_delivery_timed_out', cause: 'message_delivery_timed_out' };
-  }
-  return {};
-}
-
 export const NEW_CHAT_CONTROL_SELECTORS = [
   '[data-testid="create-new-chat-button"]',
   'a:has-text("New chat")',
