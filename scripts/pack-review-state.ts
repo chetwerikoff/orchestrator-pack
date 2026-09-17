@@ -29,16 +29,31 @@ export type PackReviewAuthorityPhase = (typeof PACK_REVIEW_AUTHORITY_PHASES)[num
 export type PackReviewAutomaticBudgetDisposition = 'consume' | 'non_consuming_explicit';
 export type SmokeOrderingActor = 'worker-owned' | 'independent';
 export type SmokeOrderingStatus = 'started' | 'passed' | 'failed';
-export type SmokeOrderingFailureKind = 'finding' | 'retryable';
+export type SmokeOrderingFailureKind = 'finding' | 'retryable' | 'aborted';
+
+export interface SmokeOrderingOwnerEvidence {
+  attemptId: string;
+  supervisorPid: number;
+  runId?: string;
+  supervisorAlive: boolean;
+  authoritativeResult?: 'PASS' | 'FAIL' | 'BLOCKED';
+}
+
+interface SmokeOrderingOwnerFields {
+  attemptId?: string;
+  supervisorPid?: number;
+  runId?: string;
+}
 
 export interface PackReviewSmokeOrdering {
-  workerOwned?: {
+  workerOwned?: SmokeOrderingOwnerFields & {
     headSha: string;
     status: SmokeOrderingStatus;
     updatedAtUtc: string;
+    failureKind?: SmokeOrderingFailureKind;
   };
   reviewSettledHeadSha?: string;
-  independent?: {
+  independent?: SmokeOrderingOwnerFields & {
     startedEver: boolean;
     headSha: string;
     status: SmokeOrderingStatus;
@@ -251,6 +266,38 @@ function nonEmpty(value: unknown, label: string): string {
   const text = String(value ?? '').trim();
   if (!text) throw new PackReviewAuthorityError('authority_input_invalid', `${label} is required`);
   return text;
+}
+
+function smokeOrderingOwnerFields(input: {
+  attemptId?: string;
+  supervisorPid?: number;
+  runId?: string;
+}): SmokeOrderingOwnerFields {
+  const anyOwnerField = input.attemptId !== undefined
+    || input.supervisorPid !== undefined
+    || input.runId !== undefined;
+  if (!anyOwnerField) return {};
+  const attemptId = nonEmpty(input.attemptId, 'attemptId');
+  const supervisorPid = positiveInteger(input.supervisorPid, 'supervisorPid');
+  const runId = input.runId === undefined ? undefined : nonEmpty(input.runId, 'runId');
+  if (runId && runId !== attemptId) {
+    throw new PackReviewAuthorityError('authority_input_invalid', 'smoke ordering runId must equal attemptId');
+  }
+  return { attemptId, supervisorPid, ...(runId ? { runId } : {}) };
+}
+
+function validateSmokeOrderingOwnerFields(
+  marker: SmokeOrderingOwnerFields,
+  label: string,
+): void {
+  const anyOwnerField = marker.attemptId !== undefined
+    || marker.supervisorPid !== undefined
+    || marker.runId !== undefined;
+  if (!anyOwnerField) return;
+  const owner = smokeOrderingOwnerFields(marker);
+  if (!owner.attemptId || !owner.supervisorPid) {
+    throw new PackReviewAuthorityError('authority_schema_invalid', `${label} owner incomplete`);
+  }
 }
 
 export function stableJson(value: unknown): string {
@@ -501,6 +548,11 @@ function validateAuthority(document: PackReviewAuthorityDocument): void {
         throw new PackReviewAuthorityError('authority_schema_invalid', 'smokeOrdering.workerOwned.status');
       }
       nonEmpty(ordering.workerOwned.updatedAtUtc, 'smokeOrdering.workerOwned.updatedAtUtc');
+      validateSmokeOrderingOwnerFields(ordering.workerOwned, 'smokeOrdering.workerOwned');
+      if (ordering.workerOwned.failureKind !== undefined
+          && !['finding', 'retryable', 'aborted'].includes(ordering.workerOwned.failureKind)) {
+        throw new PackReviewAuthorityError('authority_schema_invalid', 'smokeOrdering.workerOwned.failureKind');
+      }
     }
     if (ordering.reviewSettledHeadSha) {
       normalizeSha(ordering.reviewSettledHeadSha, 'smokeOrdering.reviewSettledHeadSha');
@@ -514,6 +566,11 @@ function validateAuthority(document: PackReviewAuthorityDocument): void {
         throw new PackReviewAuthorityError('authority_schema_invalid', 'smokeOrdering.independent.status');
       }
       nonEmpty(ordering.independent.updatedAtUtc, 'smokeOrdering.independent.updatedAtUtc');
+      validateSmokeOrderingOwnerFields(ordering.independent, 'smokeOrdering.independent');
+      if (ordering.independent.failureKind !== undefined
+          && !['finding', 'retryable', 'aborted'].includes(ordering.independent.failureKind)) {
+        throw new PackReviewAuthorityError('authority_schema_invalid', 'smokeOrdering.independent.failureKind');
+      }
     }
   }
 }
@@ -737,7 +794,6 @@ export function observePackReviewHead(input: {
     ...input,
     nextPhase: 'head_observed',
     mutate(current) {
-      // Same-head observe rewinds the phase without resetting cycle, triage, or budget.
       const consumedRunEvidence = input.reviewRuns
         ? reviewRunEvidence(current, input.reviewRuns)
         : false;
@@ -755,8 +811,6 @@ export function observePackReviewHead(input: {
             && cycle.state === 'open'
             && consumedLogicalRounds > 0
             && consumedLogicalRounds < cycle.frozenCap) {
-          // Immutable terminal/run records retain prior-round evidence. Rewind only
-          // the live per-round projection before the next required logical round.
           current.terminal = undefined;
           current.evidence = undefined;
           current.triage = undefined;
@@ -771,9 +825,7 @@ export function observePackReviewHead(input: {
       if (completed && current.cycle && current.cycle.reviewStageComplete !== true) {
         current.cycle.reviewStageComplete = true;
         current.cycle.reviewStageCompletedAtUtc = current.publication?.recordedAtUtc ?? nowIso(input.options);
-        if (consumedRunEvidence) {
-          current.cycle.reviewStartConsumed = true;
-        }
+        if (consumedRunEvidence) current.cycle.reviewStartConsumed = true;
       }
       current.currentHeadSha = headSha;
       current.evidence = undefined;
@@ -795,9 +847,7 @@ export function observePackReviewHead(input: {
           ...(independent?.startedEver ? {} : { reviewSettledHeadSha: undefined }),
         };
       }
-      if (current.cycle?.reviewStageComplete === true) {
-        return current;
-      }
+      if (current.cycle?.reviewStageComplete === true) return current;
       if (current.cycle?.state === 'closed') {
         current.cycle = createNewPackReviewCycle(current.cycle.frozenTier, {
           now: input.options.now,
@@ -1027,9 +1077,7 @@ export function commitPackReviewTerminal(input: {
             }
             rounds.push(Number(ordinal));
           }
-          if (!cycle.consumedHeadShas.includes(terminal.targetSha)) {
-            cycle.consumedHeadShas.push(terminal.targetSha);
-          }
+          if (!cycle.consumedHeadShas.includes(terminal.targetSha)) cycle.consumedHeadShas.push(terminal.targetSha);
         } else if (!cycle.consumedHeadShas.includes(terminal.targetSha)) {
           if (cycle.consumedHeadShas.length >= cycle.frozenCap) {
             throw new PackReviewAuthorityError('cap_exhausted', 'terminal cannot consume an extra head');
@@ -1159,6 +1207,72 @@ export function assertIndependentSmokeAdmission(input: {
   }
 }
 
+function reconcileStartedSmokeOwner<T extends SmokeOrderingOwnerFields & {
+  headSha: string;
+  status: SmokeOrderingStatus;
+  updatedAtUtc: string;
+  failureKind?: SmokeOrderingFailureKind;
+}>(input: {
+  marker: T;
+  evidence?: SmokeOrderingOwnerEvidence;
+  headSha: string;
+  actor: SmokeOrderingActor;
+  now: string;
+}): T {
+  if (input.marker.headSha !== input.headSha || input.marker.status !== 'started' || !input.evidence) {
+    return input.marker;
+  }
+  const evidenceOwner = smokeOrderingOwnerFields(input.evidence);
+  if (!input.marker.attemptId || !input.marker.supervisorPid) return input.marker;
+  if (input.marker.attemptId !== evidenceOwner.attemptId
+      || input.marker.supervisorPid !== evidenceOwner.supervisorPid
+      || (input.marker.runId ?? '') !== (evidenceOwner.runId ?? '')) {
+    throw new PackReviewAuthorityError(
+      `smoke_ordering_${input.actor === 'worker-owned' ? 'worker_owned' : 'independent'}_owner_evidence_mismatch`,
+      'owner-state evidence does not match the persisted started marker',
+    );
+  }
+  if (input.evidence.authoritativeResult) {
+    const result = input.evidence.authoritativeResult;
+    return {
+      ...input.marker,
+      status: result === 'PASS' ? 'passed' : 'failed',
+      updatedAtUtc: input.now,
+      ...(result === 'PASS'
+        ? { failureKind: undefined }
+        : { failureKind: result === 'FAIL' ? 'finding' as const : 'retryable' as const }),
+    };
+  }
+  if (!input.evidence.supervisorAlive) {
+    return {
+      ...input.marker,
+      status: 'failed',
+      failureKind: 'aborted',
+      updatedAtUtc: input.now,
+    };
+  }
+  return input.marker;
+}
+
+function assertCurrentSmokeOwner(input: {
+  marker: SmokeOrderingOwnerFields;
+  attemptId?: string;
+  supervisorPid?: number;
+  runId?: string;
+  actor: SmokeOrderingActor;
+}): void {
+  if (!input.marker.attemptId) return;
+  const supplied = smokeOrderingOwnerFields(input);
+  if (supplied.attemptId !== input.marker.attemptId
+      || supplied.supervisorPid !== input.marker.supervisorPid
+      || (supplied.runId ?? '') !== (input.marker.runId ?? '')) {
+    throw new PackReviewAuthorityError(
+      `smoke_ordering_${input.actor === 'worker-owned' ? 'worker_owned' : 'independent'}_owner_mismatch`,
+      'terminal smoke transition must be committed by the current attempt owner',
+    );
+  }
+}
+
 export function commitSmokeOrderingTransition(input: {
   prNumber: number;
   expectedTransitionSeq: number;
@@ -1166,11 +1280,17 @@ export function commitSmokeOrderingTransition(input: {
   headSha: string;
   status: SmokeOrderingStatus;
   failureKind?: SmokeOrderingFailureKind;
+  attemptId?: string;
+  supervisorPid?: number;
+  runId?: string;
+  ownerStateEvidence?: SmokeOrderingOwnerEvidence;
   reviewRuns?: readonly PackReviewStartConsumptionRecord[];
   operatorSmokeOnly?: boolean;
   options: PackReviewAuthorityOptions;
 }): PackReviewAuthorityDocument {
   const headSha = normalizeSha(input.headSha, 'headSha');
+  const owner = smokeOrderingOwnerFields(input);
+  if (input.ownerStateEvidence) smokeOrderingOwnerFields(input.ownerStateEvidence);
   const current = readPackReviewAuthority(input.prNumber, input.options);
   if (!current) throw new PackReviewAuthorityError('authority_missing', `PR ${input.prNumber}`);
   return commitPackReviewAuthorityTransition({
@@ -1183,11 +1303,38 @@ export function commitSmokeOrderingTransition(input: {
       }
       const now = nowIso(input.options);
       if (input.actor === 'worker-owned') {
-        if (input.status !== 'started' && authority.smokeOrdering?.workerOwned?.status !== 'started') {
-          throw new PackReviewAuthorityError(
-            'smoke_ordering_worker_smoke_not_started',
-            'worker-owned smoke result requires a started dispatch',
-          );
+        const existing = authority.smokeOrdering?.workerOwned;
+        if (input.status === 'started' && existing) {
+          const reconciled = reconcileStartedSmokeOwner({
+            marker: existing,
+            evidence: input.ownerStateEvidence,
+            headSha,
+            actor: input.actor,
+            now,
+          });
+          authority.smokeOrdering = { ...authority.smokeOrdering, workerOwned: reconciled };
+          if (reconciled.headSha === headSha && reconciled.status === 'started') {
+            throw new PackReviewAuthorityError(
+              'smoke_ordering_worker_owned_in_progress',
+              'worker-owned smoke is already started for the exact head',
+            );
+          }
+          if (reconciled.headSha === headSha && reconciled.status === 'passed') {
+            throw new PackReviewAuthorityError(
+              'smoke_ordering_worker_owned_already_passed',
+              'worker-owned smoke already passed for the exact head',
+            );
+          }
+        }
+        const workerMarker = authority.smokeOrdering?.workerOwned;
+        if (input.status !== 'started') {
+          if (workerMarker?.status !== 'started') {
+            throw new PackReviewAuthorityError(
+              'smoke_ordering_worker_smoke_not_started',
+              'worker-owned smoke result requires a started dispatch',
+            );
+          }
+          assertCurrentSmokeOwner({ marker: workerMarker, ...input });
         }
         const independent = authority.smokeOrdering?.independent;
         const workerFixOnNewHead = independent?.status === 'failed'
@@ -1201,9 +1348,26 @@ export function commitSmokeOrderingTransition(input: {
         }
         authority.smokeOrdering = {
           ...authority.smokeOrdering,
-          workerOwned: { headSha, status: input.status, updatedAtUtc: now },
+          workerOwned: {
+            headSha,
+            status: input.status,
+            updatedAtUtc: now,
+            ...(input.status === 'started' ? owner : workerMarker ?? owner),
+            ...(input.status === 'failed' && input.failureKind ? { failureKind: input.failureKind } : {}),
+          },
         };
       } else {
+        const existing = authority.smokeOrdering?.independent;
+        if (input.status === 'started' && existing) {
+          const reconciled = reconcileStartedSmokeOwner({
+            marker: existing,
+            evidence: input.ownerStateEvidence,
+            headSha,
+            actor: input.actor,
+            now,
+          });
+          authority.smokeOrdering = { ...authority.smokeOrdering, independent: reconciled };
+        }
         if (input.status === 'started') {
           const reviewRuns = input.reviewRuns
             ?? (authority.smokeOrdering?.reviewSettledHeadSha === headSha ? [] : undefined);
@@ -1225,7 +1389,10 @@ export function commitSmokeOrderingTransition(input: {
             'smoke_ordering_independent_not_started',
             'independent smoke result requires a started dispatch',
           );
+        } else {
+          assertCurrentSmokeOwner({ marker: authority.smokeOrdering.independent, ...input });
         }
+        const independentMarker = authority.smokeOrdering?.independent;
         authority.smokeOrdering = {
           ...authority.smokeOrdering,
           independent: {
@@ -1233,6 +1400,7 @@ export function commitSmokeOrderingTransition(input: {
             headSha,
             status: input.status,
             updatedAtUtc: now,
+            ...(input.status === 'started' ? owner : independentMarker ?? owner),
             ...(input.status === 'failed' && input.failureKind
               ? {
                 failureKind: input.failureKind,
@@ -1381,17 +1549,12 @@ function reviewStartConsumedEvidence(
   authority: PackReviewAuthorityDocument,
   reviewRuns: readonly PackReviewStartConsumptionRecord[],
 ): boolean {
-  if (['BLOCK', 'PENDING_ARCHITECT', 'PENDING_OPERATOR'].includes(authority.triage?.verdict ?? '')) {
-    return false;
-  }
+  if (['BLOCK', 'PENDING_ARCHITECT', 'PENDING_OPERATOR'].includes(authority.triage?.verdict ?? '')) return false;
   const reviewStatus = String(authority.terminal?.reviewStatus ?? '').toLowerCase();
   return reviewStatus === 'failed'
     || reviewStatus === 'error'
     || reviewStatus === 'changes_requested'
-    || Boolean(
-      authority.cycle
-      && authority.cycle.consumedHeadShas.length >= authority.cycle.frozenCap,
-    )
+    || Boolean(authority.cycle && authority.cycle.consumedHeadShas.length >= authority.cycle.frozenCap)
     || reviewRunEvidence(authority, reviewRuns);
 }
 
@@ -1421,9 +1584,7 @@ function reviewObligationsSettled(authority: PackReviewAuthorityDocument): boole
   if (isLogicalRoundCycle(cycle)) {
     const clearTerminal = reviewStatus === 'clean' || reviewStatus === 'up_to_date' || reviewStatus === 'commented';
     if (cycleConsumedCount(cycle) < cycle.frozenCap) return false;
-    if (cycle.state === 'closed' && clearTerminal) {
-      return true;
-    }
+    if (cycle.state === 'closed' && clearTerminal) return true;
     return false;
   }
   if (cycle.state === 'closed') return true;
