@@ -499,8 +499,7 @@ export function writeWorkerSmokeReceipt(
   const runId = String(options.runId ?? '').trim() || undefined;
   if (runId && !validAttemptId(runId)) throw new Error('worker_smoke_receipt_run_id_invalid');
   if (runId && runId !== attemptId) throw new Error('worker_smoke_receipt_run_attempt_mismatch');
-  const executionMode = options.executionMode
-    ?? (report.terminalHandle?.trim() ? 'executed' : 'carry-only');
+  const executionMode = options.executionMode ?? (runId ? 'executed' : 'carry-only');
   if (executionMode === 'executed' && !runId) throw new Error('worker_smoke_receipt_executed_requires_run_id');
   if (executionMode === 'executed' && report.result === 'PASS' && !report.terminalHandle?.trim()) {
     throw new Error('worker_smoke_receipt_executed_pass_requires_terminal_handle');
