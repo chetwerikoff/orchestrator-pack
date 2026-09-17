@@ -1,4 +1,5 @@
 import { releaseCdpBrowser } from './browser-session.ts';
+import { optionValue } from './cli-options.ts';
 import { classifyOwnedMessageDeliveryTimeout } from './message-delivery-timeout.ts';
 import { classifyProductMessage } from './product-page-selectors.ts';
 import { configuredProfileKey } from './storage-common.ts';
@@ -62,18 +63,6 @@ export interface ExecutionTimeoutCheckpointDependencies {
 
 const CHECKPOINT_READ_BUDGET_MS = 5_000;
 const CHECKPOINT_STABILITY_DELAY_MS = 100;
-
-function optionValue(argv: readonly string[], key: string): string | undefined {
-  const flag = `--${key}`;
-  let found: string | undefined;
-  for (let index = 0; index < argv.length; index++) {
-    if (argv[index] !== flag) continue;
-    const value = argv[index + 1];
-    if (!value || value.startsWith('--') || found !== undefined) return undefined;
-    found = value;
-  }
-  return found;
-}
 
 function requiredOption(argv: readonly string[], key: string): string {
   const value = optionValue(argv, key);
