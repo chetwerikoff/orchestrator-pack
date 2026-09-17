@@ -526,6 +526,16 @@ function gitPorcelain(cwd: string): string[] {
     .split(/\r?\n/u).filter(Boolean);
 }
 
+function gitTrackedSmokeRuntimePaths(cwd: string): string[] {
+  return requireProcessOutput(
+    'git ls-files .orca-worker-smoke',
+    runProcessSync({ command: 'git', args: ['ls-files', '--cached', '--', '.orca-worker-smoke'], cwd }),
+  )
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line === '.orca-worker-smoke' || line.startsWith('.orca-worker-smoke/'));
+}
+
 function gitHead(cwd: string): string {
   return requireProcessOutput('git rev-parse HEAD', runProcessSync({ command: 'git', args: ['rev-parse', 'HEAD'], cwd })).trim().toLowerCase();
 }
@@ -728,7 +738,7 @@ export function reviewIndependentRequiredCiContexts(contexts: readonly unknown[]
 }
 
 export function resolveCiGreen(prNumber: number, headSha: string, repositorySlug: string, repoRoot: string): boolean {
-  const pr = githubApiObject('pr-view-head-base', `repos/${repositorySlug}/pulls/${prNumber}`, options.repoRoot);
+  const pr = githubApiObject('pr-view-head-base', `repos/${repositorySlug}/pulls/${prNumber}`, repoRoot);
   const head = pr.head && typeof pr.head === 'object' && !Array.isArray(pr.head) ? pr.head as Record<string, unknown> : {};
   const base = pr.base && typeof pr.base === 'object' && !Array.isArray(pr.base) ? pr.base as Record<string, unknown> : {};
   if (positiveInteger(pr.number) !== prNumber || String(pr.state ?? '').toLowerCase() !== 'open'
@@ -1067,7 +1077,7 @@ export function runtimeCloseBoundHandle(adapter: RuntimeAdapter, handle: string,
   if (resolved.value === null) return 'close_failed:worker_not_found;presence=unproven';
   const workspacePath = resolved.value.workspacePath;
   if (resolve(workspacePath) !== resolve(options.cwd)) return 'close_failed:worker_workspace_mismatch;presence=unproven';
-  return runtimeClose(adapter, resolved.value.identity, options);
+  return runtimeClose(adapter, resolved.value, options);
 }
 
 function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scenarioCount: number): string {
@@ -1733,6 +1743,26 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     ? (options.runId ?? '').trim()
     : createSmokeRunIdentity();
   const preAttempt = preAttemptPublication(attemptId, appliedOverrideReason);
+
+  let trackedSmokeRuntimePaths: string[];
+  try {
+    trackedSmokeRuntimePaths = gitTrackedSmokeRuntimePaths(options.cwd);
+  } catch (error) {
+    const report = operationalReport('harness_admission_refused', options, {
+      action: 'verify worker-smoke harness tracking state',
+      expected: 'git index is readable before smoke execution',
+      observed: scrubSmokeOutput(error instanceof Error ? error.message : String(error)),
+    });
+    publishSmokeReport(report, options, preAttempt); emit({ ok: false, report, attemptId }, options.json); return 1;
+  }
+  if (trackedSmokeRuntimePaths.length > 0) {
+    const report = operationalReport('harness_dirty_worktree', options, {
+      action: 'verify worker-smoke harness runtime state is untracked',
+      expected: 'no .orca-worker-smoke/** path is tracked or staged',
+      observed: trackedSmokeRuntimePaths.join(', '),
+    });
+    publishSmokeReport(report, options, preAttempt); emit({ ok: false, report, attemptId }, options.json); return 1;
+  }
 
   let smokeProfile: SmokeExecutorProfile;
   let profileEnv: Readonly<NodeJS.ProcessEnv> = process.env;
