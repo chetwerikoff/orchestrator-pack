@@ -911,3 +911,219 @@ process.exitCode = 2;
     }
   });
 });
+
+async function waitForFixtureText(
+  path: string,
+  predicate: (value: string) => boolean,
+  timeoutMs = 8_000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(path)) {
+      const value = readFileSync(path, 'utf8').trim();
+      if (predicate(value)) return value;
+    }
+    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 20));
+  }
+  throw new Error(`fixture timeout waiting for ${path}`);
+}
+
+type RealSignalMode = 'launcher-sigterm' | 'launcher-sigint' | 'child-repeat' | 'process-group';
+
+async function runRealSignalFixture(mode: RealSignalMode): Promise<{
+  output: {
+    result?: { ok?: boolean; reason?: string; observationFailures?: string[] };
+    readCalls?: number;
+    signalReason?: string;
+  };
+  stdout: string;
+  stderr: string;
+  timeouts: number[];
+  attempts: number;
+}> {
+  const root = mkdtempSync(join(tmpdir(), `worker-smoke-real-signal-${mode}-`));
+  const fakeOrca = join(root, 'fake-orca.cjs');
+  const harness = join(root, 'signal-harness.mjs');
+  const pidPath = join(root, 'orca.pid');
+  const attemptsPath = join(root, 'attempts.txt');
+  const timeoutsPath = join(root, 'timeouts.txt');
+  const artifactDir = join(root, 'artifact');
+  const runId = `real-signal-${mode}`;
+  const workerSmokeRunPath = resolve('scripts/worker-smoke-run.ts');
+  const adapterPath = resolve('scripts/orca-runtime/adapter.ts');
+  const corePath = resolve('scripts/lib/worker-smoke-core.ts');
+
+  executable(fakeOrca, `#!/usr/bin/env node
+const fs = require('node:fs');
+const mode = process.env.FIXTURE_SIGNAL_MODE;
+const attemptsPath = process.env.FIXTURE_ATTEMPTS_PATH;
+const pidPath = process.env.FIXTURE_PID_PATH;
+let attempt = 0;
+try { attempt = Number(fs.readFileSync(attemptsPath, 'utf8').trim()) || 0; } catch {}
+attempt += 1;
+fs.writeFileSync(attemptsPath, String(attempt), 'utf8');
+fs.writeFileSync(pidPath, attempt + ':' + process.pid, 'utf8');
+const success = () => process.stdout.write(JSON.stringify({ ok: true, result: { terminals: [] } }));
+if (mode === 'launcher-sigterm' || mode === 'launcher-sigint') {
+  setTimeout(success, 300);
+} else if (mode === 'child-repeat' && attempt >= 3) {
+  success();
+} else {
+  setInterval(() => {}, 1000);
+}
+`);
+
+  writeFileSync(harness, [
+    "import fs from 'node:fs';",
+    "import path from 'node:path';",
+    "import { pathToFileURL } from 'node:url';",
+    `const { waitForRuntimeSmokeCompletion } = await import(pathToFileURL(${JSON.stringify(workerSmokeRunPath)}).href);`,
+    `const { OrcaRuntimeAdapter } = await import(pathToFileURL(${JSON.stringify(adapterPath)}).href);`,
+    `const core = await import(pathToFileURL(${JSON.stringify(corePath)}).href);`,
+    `const root = ${JSON.stringify(root)};`,
+    `const artifactDir = ${JSON.stringify(artifactDir)};`,
+    `const runId = ${JSON.stringify(runId)};`,
+    `const fakeOrca = ${JSON.stringify(fakeOrca)};`,
+    `const timeoutsPath = ${JSON.stringify(timeoutsPath)};`,
+    "core.ensureSmokeRunArtifactDir(artifactDir);",
+    "let signalReason;",
+    "process.once('SIGINT', () => { signalReason = 'SIGINT'; });",
+    "process.once('SIGTERM', () => { signalReason = 'SIGTERM'; });",
+    "const nativeAdapter = new OrcaRuntimeAdapter({ executable: fakeOrca });",
+    "const worker = { runtime: 'orca', id: 'fixture-worker', generation: 'fixture-generation' };",
+    "let readCalls = 0;",
+    "const publishCompletion = () => {",
+    "  const body = ['```worker-smoke-report', 'result: PASS', 'tracked-files-unmodified: true', 'scenarios:', '  - action: real signal observation | expected: fresh poll recovers | observed: completion recovered | outcome: pass', '```'].join('\\n');",
+    "  const digest = core.computeSmokeCompletionBodyDigest(body);",
+    "  fs.writeFileSync(core.smokeCompletionBodyPath(artifactDir, digest), body, { flag: 'wx' });",
+    "  fs.writeFileSync(core.smokeCompletionSealPath(artifactDir, digest), JSON.stringify({ runId, bodySha256: digest }), { flag: 'wx' });",
+    "};",
+    "const adapter = {",
+    "  readBoundedOutputAsync: async (_input, options = {}) => {",
+    "    readCalls += 1;",
+    "    fs.appendFileSync(timeoutsPath, String(options.timeoutMs ?? 0) + '\\n', 'utf8');",
+    "    const listed = await nativeAdapter.listWorkersAsync({}, { cwd: root, timeoutMs: options.timeoutMs });",
+    "    if (listed.status !== 'ok') return { status: 'failed', operation: 'read_bounded_output', reason: listed.reason };",
+    "    if (process.env.FIXTURE_SIGNAL_MODE === 'child-repeat' && readCalls === 3) publishCompletion();",
+    "    return { status: 'ok', value: { worker, lines: [], observationToken: { opaque: String(readCalls) }, changed: false, terminalState: 'running', source: 'stream' } };",
+    "  },",
+    "  readBoundedOutput: () => { throw new Error('sync observation must not be used'); },",
+    "  liveness: () => ({ status: 'alive' }),",
+    "};",
+    "const result = await waitForRuntimeSmokeCompletion({ adapter, worker, binding: { runId, artifactDir }, scenarioCount: 1, cwd: root, startedAtMs: Date.now(), abortReason: () => signalReason, absoluteCeilingMs: 60_000, progressStallMs: 60_000 });",
+    "process.stdout.write(JSON.stringify({ result, readCalls, signalReason }) + '\\n');",
+  ].join('\n'), 'utf8');
+
+  const { spawn } = await import('node:child_process');
+  const detached = mode === 'process-group';
+  const child = spawn(process.execPath, ['--experimental-strip-types', harness], {
+    cwd: process.cwd(),
+    detached,
+    env: {
+      ...process.env,
+      FIXTURE_SIGNAL_MODE: mode,
+      FIXTURE_ATTEMPTS_PATH: attemptsPath,
+      FIXTURE_PID_PATH: pidPath,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => { stdout += String(chunk); });
+  child.stderr.on('data', (chunk) => { stderr += String(chunk); });
+  const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolvePromise, rejectPromise) => {
+    child.once('error', rejectPromise);
+    child.once('close', (code, signal) => resolvePromise({ code, signal }));
+  });
+
+  try {
+    if (!child.pid) throw new Error('signal harness pid missing');
+    if (mode === 'launcher-sigterm' || mode === 'launcher-sigint') {
+      await waitForFixtureText(pidPath, (value) => /^1:\d+$/u.test(value));
+      process.kill(child.pid, mode === 'launcher-sigterm' ? 'SIGTERM' : 'SIGINT');
+    } else if (mode === 'child-repeat') {
+      for (const attempt of [1, 2]) {
+        const observed = await waitForFixtureText(pidPath, (value) => value.startsWith(`${attempt}:`));
+        const pid = Number(observed.split(':')[1]);
+        expect(Number.isInteger(pid) && pid > 0).toBe(true);
+        process.kill(pid, 'SIGTERM');
+      }
+    } else {
+      if (process.platform === 'win32') throw new Error('process-group fixture requires POSIX');
+      await waitForFixtureText(pidPath, (value) => /^1:\d+$/u.test(value));
+      process.kill(-child.pid, 'SIGTERM');
+    }
+
+    const settled = await Promise.race([
+      closed,
+      new Promise<never>((_resolvePromise, rejectPromise) => {
+        setTimeout(() => rejectPromise(new Error(`signal harness timeout: ${mode}`)), 15_000);
+      }),
+    ]);
+    expect(settled.code, `${stdout}\n${stderr}`).toBe(0);
+    expect(settled.signal).toBeNull();
+    const lines = stdout.split(/\r?\n/u).filter((line) => line.trim());
+    expect(lines).toHaveLength(1);
+    const output = JSON.parse(lines[0]!) as {
+      result?: { ok?: boolean; reason?: string; observationFailures?: string[] };
+      readCalls?: number;
+      signalReason?: string;
+    };
+    const timeouts = existsSync(timeoutsPath)
+      ? readFileSync(timeoutsPath, 'utf8').split(/\r?\n/u).filter(Boolean).map(Number)
+      : [];
+    const attempts = existsSync(attemptsPath) ? Number(readFileSync(attemptsPath, 'utf8').trim()) : 0;
+    return { output, stdout, stderr, timeouts, attempts };
+  } finally {
+    if (child.exitCode === null && child.pid) {
+      try { process.kill(detached ? -child.pid : child.pid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+describe('Issue #1933 real OS signal completion observation', () => {
+  it.each([
+    ['launcher-sigterm', 'SIGTERM'],
+    ['launcher-sigint', 'SIGINT'],
+  ] as const)('surfaces launcher-only %s as operator cancellation after the bounded observation yield', async (mode, signal) => {
+    const observed = await runRealSignalFixture(mode);
+    expect(observed.output.result).toMatchObject({
+      ok: false,
+      reason: `operator_cancelled:${signal}`,
+    });
+    expect(observed.output.signalReason).toBe(signal);
+    expect(observed.output.readCalls).toBe(1);
+    expect(observed.timeouts).toEqual([30_000]);
+    expect(`${observed.stdout}\n${observed.stderr}`).not.toContain('runtime_response_invalid');
+  }, 20_000);
+
+  it('records repeated child-CLI SIGTERM once per poll and continues with fresh observations', async () => {
+    const observed = await runRealSignalFixture('child-repeat');
+    expect(observed.output.result).toMatchObject({ ok: true });
+    expect(observed.output.result?.observationFailures).toEqual([
+      'runtime_cli_interrupted:SIGTERM',
+      'runtime_cli_interrupted:SIGTERM',
+    ]);
+    expect(observed.output.signalReason).toBeUndefined();
+    expect(observed.output.readCalls).toBe(3);
+    expect(observed.attempts).toBe(3);
+    expect(observed.timeouts).toEqual([30_000, 30_000, 30_000]);
+    expect(`${observed.stdout}\n${observed.stderr}`).not.toContain('runtime_response_invalid');
+  }, 20_000);
+
+  it('lets launcher cancellation win when SIGTERM reaches the launcher and in-flight CLI process group', async () => {
+    if (process.platform === 'win32') return;
+    const observed = await runRealSignalFixture('process-group');
+    expect(observed.output.result).toMatchObject({
+      ok: false,
+      reason: 'operator_cancelled:SIGTERM',
+    });
+    expect(observed.output.signalReason).toBe('SIGTERM');
+    expect(observed.output.readCalls).toBe(1);
+    expect(observed.timeouts).toEqual([30_000]);
+    expect(`${observed.stdout}\n${observed.stderr}`).not.toContain('runtime_response_invalid');
+  }, 20_000);
+});
