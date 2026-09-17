@@ -7,6 +7,7 @@ import { runProcess } from '#opk-kernel/subprocess';
 import { runGateRunner } from './gate-runner/runner.ts';
 import { runNodeVerificationPorts } from './gate-runner/node-verifier-ports.ts';
 import { scanRetiredRuntimeSurfaces } from './runtime-retirement/retired-surface-guard.ts';
+import { checkRepositoryMode } from './sync-ops-wiki.ts';
 
 export interface VerifyLine {
   readonly name: string;
@@ -204,6 +205,19 @@ export async function runVerification(repoRoot: string, options: { readonly stri
   lines.push(...reusable.lines);
   failures.push(...reusable.failures);
   warnings.push(...reusable.warnings);
+  try {
+    const opsWiki = checkRepositoryMode({ repoRoot, commitRef: 'HEAD' });
+    if (!opsWiki.ok) {
+      failures.push(opsWiki.reason);
+      lines.push({ name: 'ops-wiki repository check', status: 'FAIL', detail: opsWiki.reason });
+    } else {
+      lines.push({ name: 'ops-wiki repository check', status: 'PASS', detail: opsWiki.detail });
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    failures.push(detail);
+    lines.push({ name: 'ops-wiki repository check', status: 'FAIL', detail });
+  }
   if (options.testBackedSmoke) await appendTestBackedSmoke(repoRoot, lines, failures);
   return { lines, failures, warnings, exitCode: failures.length > 0 ? 1 : 0 };
 }

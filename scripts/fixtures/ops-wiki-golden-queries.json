@@ -1,0 +1,54 @@
+{
+  "queries": [
+    {
+      "id": "worker-lifecycle-ru",
+      "query": "что воркер должен сделать перед стартом",
+      "expected_episode_ids": ["runbook-worker-lifecycle", "agents-worker-skills"]
+    },
+    {
+      "id": "worker-lifecycle-en",
+      "query": "worker pre-flight before implementation",
+      "expected_episode_ids": ["runbook-worker-lifecycle", "agents-worker-skills"]
+    },
+    {
+      "id": "executor-profile-mixed",
+      "query": "какой PACK_EXECUTOR профиль у firefighter smoke",
+      "expected_episode_ids": ["runbook-executor-profiles", "smoke-when-policy"]
+    },
+    {
+      "id": "merge-adoption-ru",
+      "query": "как смержить pr и подтянуть main",
+      "expected_episode_ids": ["merge-adopt-local", "merge-ready-merge", "merge-safety-resolve"]
+    },
+    {
+      "id": "merge-identifier",
+      "query": "scripts/sync-ops-wiki.ts after adoption",
+      "expected_episode_ids": ["ops-wiki-sync", "merge-adopt-local"]
+    },
+    {
+      "id": "review-en",
+      "query": "current-head pack review required CI",
+      "expected_episode_ids": ["chat-current-head", "direct-fix-ci-review"]
+    },
+    {
+      "id": "smoke-misspelling",
+      "query": "smok test plan firefighter",
+      "expected_episode_ids": ["smoke-when-policy"]
+    },
+    {
+      "id": "wiki-ops-status",
+      "query": "checked_through_commit apply_in_progress",
+      "expected_episode_ids": ["ops-wiki-sync", "agents-wiki-ops"]
+    },
+    {
+      "id": "coworker-en",
+      "query": "coworker ask profile code paths",
+      "expected_episode_ids": ["agents-coworker-rtk", "coworker-deep-dive"]
+    },
+    {
+      "id": "direct-fix-ru",
+      "query": "архитектор сам открывает pr",
+      "expected_episode_ids": ["direct-fix-spine", "direct-fix-handoff"]
+    }
+  ]
+}

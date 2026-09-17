@@ -142,6 +142,35 @@ when raw shell behavior is genuinely required. Never compact secrets, private
 logs, declaration contents, exact-byte configuration, decision-bearing diffs,
 or CI status evidence.
 
+## Operational wiki consultation
+
+Internal `orchestrator-pack` procedure, lifecycle, review, smoke, runtime, or
+task-governance questions consult `wiki-ops`. General engineering concepts
+consult `wiki`. The ASCII server name `synto` remains an optional
+source/lineage surface. Mixed questions may consult both indexes.
+
+Before relying on operational results, use index-served `wiki-ops.read` on
+`Ops Wiki Status.md` with `related: false`. Require `checked_through_commit` to
+equal the exact current/adopted repository commit and `apply_in_progress` to be
+absent. Mismatch, in-progress state, absence, malformed content, unsupported
+read-back, or timeout routes immediately to current canonical repository files.
+Search results are navigation aids, never runtime-effect or merge authority.
+
+Natural-language operational questions are the normal entry. First run one
+`wiki-ops.search` call in `hybrid` mode with the user's wording and `limit: 3`,
+then read top-1 with `related: false`. Escalate to `queries[]` with 2-4
+materially different RU/EN formulations and top-2/top-3 reads only when the
+first result is absent; has a missing/non-numeric score or top-1 score below
+0.5; has top-2 score at least 0.5 and a top-1/top-2 score delta below 0.05; or
+the full read is missing, empty, ownership/provenance-invalid, or omits a
+source section required by that episode's manifest merge group. Exact paths or
+identifiers already known to the agent use repository/fulltext search, a known
+episode title uses `title`, and freshness uses index-served `wiki-ops.read`.
+After `wiki-ops` identifies the likely authority, re-read the current canonical
+repository file before any decision or effect.
+
+Tracked operator procedure: [`docs/ops-wiki-sync.md`](docs/ops-wiki-sync.md).
+
 ## GitHub transport
 
 On supported hosts with pack `scripts/` on `PATH`, GitHub reads MUST go through
