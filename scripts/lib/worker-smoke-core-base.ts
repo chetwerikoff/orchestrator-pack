@@ -18,6 +18,86 @@ export { checkSmokeTestPlan, parseSmokeTestPlan, resolveSmokeRequirement };
 
 export type SmokeResult = 'PASS' | 'FAIL' | 'BLOCKED';
 
+export const WORKER_SMOKE_CAUSE_FAMILIES = [
+  'harness_observation_interrupted',
+  'harness_observation_timeout',
+  'harness_admission_refused',
+  'harness_head_mismatch',
+  'harness_dirty_worktree',
+  'scenario_precondition_unavailable',
+  'scenario_assertion_failed',
+  'scenario_evidence_missing',
+  'lifecycle_cleanup_failed',
+  'unknown',
+] as const;
+
+export type WorkerSmokeCauseFamily = (typeof WORKER_SMOKE_CAUSE_FAMILIES)[number];
+
+export const WORKER_SMOKE_SCENARIO_CAUSE_FAMILIES = [
+  'scenario_precondition_unavailable',
+  'scenario_assertion_failed',
+  'scenario_evidence_missing',
+] as const satisfies readonly WorkerSmokeCauseFamily[];
+
+export function isWorkerSmokeCauseFamily(value: unknown): value is WorkerSmokeCauseFamily {
+  return typeof value === 'string'
+    && (WORKER_SMOKE_CAUSE_FAMILIES as readonly string[]).includes(value);
+}
+
+export function isWorkerSmokeScenarioCauseFamily(
+  value: unknown,
+): value is (typeof WORKER_SMOKE_SCENARIO_CAUSE_FAMILIES)[number] {
+  return typeof value === 'string'
+    && (WORKER_SMOKE_SCENARIO_CAUSE_FAMILIES as readonly string[]).includes(value);
+}
+
+export function smokeResultForWorkerSmokeCauseFamily(
+  causeFamily: WorkerSmokeCauseFamily,
+): Exclude<SmokeResult, 'PASS'> {
+  return causeFamily === 'harness_admission_refused'
+    || causeFamily === 'harness_head_mismatch'
+    || causeFamily === 'harness_dirty_worktree'
+    || causeFamily === 'scenario_precondition_unavailable'
+    || causeFamily === 'scenario_evidence_missing'
+    ? 'BLOCKED'
+    : 'FAIL';
+}
+
+const HARNESS_REASON_CAUSE_FAMILIES: Readonly<Record<string, WorkerSmokeCauseFamily>> = {
+  runtime_cli_interrupted: 'harness_observation_interrupted',
+  process_launch_failed: 'harness_observation_interrupted',
+  prompt_delivery_unconfirmed: 'harness_observation_interrupted',
+  agent_exited_without_report: 'harness_observation_interrupted',
+  agent_idle_without_report: 'harness_observation_interrupted',
+  agent_report_unfenced: 'harness_observation_interrupted',
+  agent_report_duplicate: 'harness_observation_interrupted',
+  runtime_timeout: 'harness_observation_timeout',
+  agent_report_timeout: 'harness_observation_timeout',
+  smoke_blocked_precondition_unchanged: 'harness_admission_refused',
+  smoke_ordering_worker_owned_in_progress: 'harness_admission_refused',
+  smoke_ordering_worker_owned_already_passed: 'harness_admission_refused',
+  admission_refused: 'harness_admission_refused',
+  lifecycle_admission_refused: 'harness_admission_refused',
+  agent_wait_self_handle: 'harness_admission_refused',
+  agent_wait_unowned_handle: 'harness_admission_refused',
+  orca_head_mismatch: 'harness_head_mismatch',
+  git_head_mismatch: 'harness_head_mismatch',
+  trusted_target_head_mismatch: 'harness_head_mismatch',
+  live_pr_head_mismatch: 'harness_head_mismatch',
+  preexisting_tracked_dirtiness: 'harness_dirty_worktree',
+  tracked_worktree_dirty: 'harness_dirty_worktree',
+  tracked_smoke_runtime_state: 'harness_dirty_worktree',
+  lifecycle_cleanup_failed: 'lifecycle_cleanup_failed',
+  cleanup_failed: 'lifecycle_cleanup_failed',
+  orca_control_plane_unavailable_preflight: 'harness_admission_refused',
+  orca_control_plane_lost_mid_smoke: 'harness_observation_interrupted',
+};
+
+export function workerSmokeCauseFamilyForHarnessReason(reason: string | undefined): WorkerSmokeCauseFamily {
+  const token = String(reason ?? '').trim().split(':', 1)[0]?.trim() ?? '';
+  return HARNESS_REASON_CAUSE_FAMILIES[token] ?? 'unknown';
+}
+
 export type SmokePhaseControlPlaneCause =
   | 'orca_control_plane_unavailable_preflight'
   | 'orca_control_plane_lost_mid_smoke';
@@ -166,6 +246,7 @@ export interface SmokeScenario {
   observed?: string;
   outcome?: 'pass' | 'fail' | 'skipped' | 'blocked';
   skipReason?: string;
+  causeFamily?: WorkerSmokeCauseFamily;
 }
 
 export type SmokeRequirement = 'required' | 'not-applicable' | 'legacy-exempt' | 'unknown';
@@ -190,6 +271,7 @@ export interface SmokeReport {
   orcaExecutable?: string;
   terminalHandle?: string;
   nonPassCause?: SmokeNonPassCause;
+  causeFamily?: WorkerSmokeCauseFamily;
   controlPlaneDiagnostic?: SmokeControlPlaneDiagnostic;
 }
 
@@ -303,6 +385,7 @@ export function buildSmokeAgentPrompt(input: {
     'Never await a shell that has already ended: read ~/.cursor/projects/<slug>/terminals/<shell_id>.txt first — if its tail carries exit_code:, the job is over and await will burn the whole ceiling instead of returning.',
     'Cap any single block_until_ms at 300000; re-check and re-await instead of one long block.',
     'Invoke pack review only when a listed smoke scenario explicitly requires one live pack-review manager turn; do not start any other review.',
+    'For each non-PASS scenario row, include exactly one cause-family from: scenario_precondition_unavailable, scenario_assertion_failed, scenario_evidence_missing. PASS rows omit cause-family.',
     'When finished, emit exactly one fenced block:',
     '',
     '```worker-smoke-report',
@@ -311,7 +394,7 @@ export function buildSmokeAgentPrompt(input: {
     'environment-notes: <optional>',
     'limitations: <optional comma-separated>',
     'scenarios:',
-    '  - action: <what you ran> | expected: <from plan> | observed: <what happened> | outcome: pass|fail|skipped|blocked',
+    '  - action: <what you ran> | expected: <from plan> | observed: <what happened> | outcome: pass|fail|skipped|blocked | cause-family: <required for non-PASS only>',
     '```',
     ...durableLines,
     '',
@@ -353,6 +436,8 @@ function applyScenarioField(scenario: SmokeScenario, key: string, value: string)
     }
   } else if (normalized === 'skip-reason') {
     scenario.skipReason = trimmed;
+  } else if (normalized === 'cause-family' || normalized === 'causefamily') {
+    scenario.causeFamily = isWorkerSmokeScenarioCauseFamily(trimmed) ? trimmed : undefined;
   }
 }
 
@@ -438,7 +523,7 @@ function normalizeOrcaWrappedSmokeReportBody(body: string): string {
     if (!trimmed) {
       continue;
     }
-    const isTopLevelField = /^(result|tracked-files-unmodified|environment-notes|limitations|scenarios|producer|orca-executable|terminal-handle|terminal-cleanup|non-pass-cause|control-plane-cause|control-plane-evidence|control-plane-remediation):/iu
+    const isTopLevelField = /^(result|tracked-files-unmodified|environment-notes|limitations|scenarios|producer|orca-executable|terminal-handle|terminal-cleanup|non-pass-cause|cause-family|control-plane-cause|control-plane-evidence|control-plane-remediation):/iu
       .test(trimmed);
     const isScenario = /^-\s/.test(trimmed);
     if (out.length === 0 || isTopLevelField || isScenario) {
@@ -538,9 +623,11 @@ function parseSmokeAgentReportBody(body: string): Partial<SmokeReport> | null {
       const expected = trimmed.match(/expected:\s*([^|]+)/i)?.[1]?.trim() ?? '';
       const observed = trimmed.match(/observed:\s*([^|]+)/i)?.[1]?.trim() ?? '';
       const outcome = trimmed.match(/outcome:\s*([a-z]+)/i)?.[1]?.trim().toLowerCase() as SmokeScenario['outcome'];
-      const skipReason = trimmed.match(/skip-reason:\s*(.+)$/i)?.[1]?.trim();
+      const skipReason = trimmed.match(/skip-reason:\s*([^|]+)/i)?.[1]?.trim();
+      const causeFamilyRaw = trimmed.match(/cause-family:\s*([^|]+)/i)?.[1]?.trim();
+      const causeFamily = isWorkerSmokeScenarioCauseFamily(causeFamilyRaw) ? causeFamilyRaw : undefined;
       if (action || expected || observed) {
-        scenarios.push({ action, expected, observed, outcome, skipReason });
+        scenarios.push({ action, expected, observed, outcome, skipReason, causeFamily });
       }
     }
   }
@@ -555,6 +642,7 @@ function parseSmokeAgentReportBody(body: string): Partial<SmokeReport> | null {
     .map((entry) => entry.trim())
     .filter(Boolean);
   const nonPassCauseRaw = String(fields['non-pass-cause'] ?? '').trim();
+  const causeFamilyRaw = String(fields['cause-family'] ?? fields.causeFamily ?? '').trim();
 
   const diagnosticCause = exactDiagnosticFields.values['control-plane-cause'];
   const diagnosticEvidenceRaw = exactDiagnosticFields.values['control-plane-evidence'];
@@ -587,6 +675,7 @@ function parseSmokeAgentReportBody(body: string): Partial<SmokeReport> | null {
     orcaExecutable: String(fields['orca-executable'] ?? fields['orca-cli'] ?? '').trim() || undefined,
     terminalHandle: String(fields['terminal-handle'] ?? '').trim() || undefined,
     nonPassCause: isSmokeNonPassCause(nonPassCauseRaw) ? nonPassCauseRaw : undefined,
+    causeFamily: isWorkerSmokeCauseFamily(causeFamilyRaw) ? causeFamilyRaw : undefined,
     controlPlaneDiagnostic,
   };
 }
@@ -654,6 +743,25 @@ export function normalizeSmokeReport(
     return { ok: false, reason: 'missing_scenarios' };
   }
 
+  const terminalNonPassRows = partial.scenarios
+    .map((scenario, index) => ({ scenario, index }))
+    .filter(({ scenario }) => scenario.outcome === 'fail' || scenario.outcome === 'blocked');
+  if (terminalNonPassRows.length > 1) {
+    return { ok: false, reason: 'multiple_terminal_non_pass_scenarios' };
+  }
+
+  const scenarios = partial.scenarios.map((scenario) => {
+    if (scenario.outcome !== 'fail' && scenario.outcome !== 'blocked') {
+      return { ...scenario, causeFamily: undefined };
+    }
+    return {
+      ...scenario,
+      causeFamily: isWorkerSmokeScenarioCauseFamily(scenario.causeFamily)
+        ? scenario.causeFamily
+        : 'unknown' as const,
+    };
+  });
+
   let controlPlaneDiagnostic: SmokeControlPlaneDiagnostic | undefined;
   if (partial.controlPlaneDiagnostic) {
     const normalizedDiagnostic = normalizeSmokeControlPlaneDiagnostic(partial.controlPlaneDiagnostic);
@@ -681,7 +789,7 @@ export function normalizeSmokeReport(
   }
 
   if (partial.result === 'PASS') {
-    for (const [index, scenario] of partial.scenarios.entries()) {
+    for (const [index, scenario] of scenarios.entries()) {
       if (!scenario.action?.trim() || !scenario.expected?.trim() || !scenario.observed?.trim()) {
         return { ok: false, reason: `pass_scenario_${index + 1}_incomplete` };
       }
@@ -706,14 +814,28 @@ export function normalizeSmokeReport(
     }
   }
 
+  const scenarioCauseFamily = terminalNonPassRows.length === 1
+    ? scenarios[terminalNonPassRows[0]!.index]?.causeFamily
+    : undefined;
+  const causeFamily = partial.result === 'PASS'
+    ? undefined
+    : controlPlaneDiagnostic
+      ? workerSmokeCauseFamilyForHarnessReason(controlPlaneDiagnostic.cause)
+      : isWorkerSmokeCauseFamily(partial.causeFamily)
+        ? partial.causeFamily
+        : scenarioCauseFamily ?? 'unknown';
+  const result = partial.result === 'PASS'
+    ? 'PASS'
+    : smokeResultForWorkerSmokeCauseFamily(causeFamily ?? 'unknown');
+
   return {
     ok: true,
     report: {
-      result: partial.result,
+      result,
       issueNumber: binding.issueNumber,
       prNumber: binding.prNumber,
       headSha: binding.headSha,
-      scenarios: partial.scenarios,
+      scenarios,
       limitations: partial.limitations ?? [],
       trackedFilesUnmodified: partial.trackedFilesUnmodified === true,
       terminalCleanup: partial.terminalCleanup ?? 'not_recorded',
@@ -722,6 +844,7 @@ export function normalizeSmokeReport(
       orcaExecutable: partial.orcaExecutable,
       terminalHandle: partial.terminalHandle,
       nonPassCause: controlPlaneDiagnostic?.cause ?? partial.nonPassCause,
+      causeFamily,
       controlPlaneDiagnostic,
     },
   };
@@ -735,6 +858,9 @@ export function formatSmokeReportComment(report: SmokeReport): string {
       `observed: ${scenario.observed ?? '(not recorded)'}`,
       `outcome: ${scenario.outcome ?? 'unknown'}`,
     ];
+    if (scenario.causeFamily) {
+      parts.push(`cause-family: ${scenario.causeFamily}`);
+    }
     if (scenario.skipReason) {
       parts.push(`skip-reason: ${scenario.skipReason}`);
     }
@@ -748,6 +874,9 @@ export function formatSmokeReportComment(report: SmokeReport): string {
       `observed: ${scenario.observed ?? ''}`,
       `outcome: ${scenario.outcome ?? 'unknown'}`,
     ];
+    if (scenario.causeFamily) {
+      parts.push(`cause-family: ${scenario.causeFamily}`);
+    }
     if (scenario.skipReason) {
       parts.push(`skip-reason: ${scenario.skipReason}`);
     }
@@ -764,6 +893,7 @@ export function formatSmokeReportComment(report: SmokeReport): string {
     `tracked-files-unmodified: ${report.trackedFilesUnmodified ? 'true' : 'false'}`,
     `terminal-cleanup: ${report.terminalCleanup}`,
     report.nonPassCause ? `non-pass-cause: ${String(report.nonPassCause)}` : '',
+    report.causeFamily ? `cause-family: ${report.causeFamily}` : '',
     diagnostic ? `control-plane-cause: ${diagnostic.cause}` : '',
     diagnostic ? `control-plane-evidence: ${diagnostic.evidence.join(';')}` : '',
     diagnostic ? `control-plane-remediation: ${diagnostic.remediation}` : '',
@@ -784,6 +914,7 @@ export function formatSmokeReportComment(report: SmokeReport): string {
     `- head-sha: \`${report.headSha}\``,
     `- tracked-implementation-files-unmodified: ${report.trackedFilesUnmodified ? 'yes' : 'no'}`,
     `- orca-terminal-cleanup: ${report.terminalCleanup}`,
+    report.causeFamily ? `- cause-family: \`${report.causeFamily}\`` : '',
     diagnostic ? `- control-plane-cause: \`${diagnostic.cause}\`` : '',
     diagnostic ? `- control-plane-evidence: ${diagnostic.evidence.map((entry) => `\`${entry}\``).join(', ')}` : '',
     diagnostic ? `- remediation: ${diagnostic.remediation}` : '',
