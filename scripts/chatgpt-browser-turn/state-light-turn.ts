@@ -9,7 +9,10 @@ import {
   runStateLightTurn as runBaseStateLightTurn,
   type StateLightTurnDependencies,
 } from './state-light-turn-base.ts';
-import type { ExecutionRecoveryProductCause } from './ui-adapter.ts';
+import {
+  enterExecutionRecoveryProductWallScope,
+  type ExecutionRecoveryProductCause,
+} from './ui-adapter.ts';
 
 const DEFAULT_TIMEOUT_MS = 1_800_000;
 const EXECUTION_RECOVERY_CAUSES = new Set<ExecutionRecoveryProductCause>([
@@ -73,16 +76,18 @@ export async function runStateLightTurn(
   argv: readonly string[],
   dependencies: StateLightTurnDependencies = {},
 ): Promise<number> {
+  const leaveRecoveryScope = enterExecutionRecoveryProductWallScope();
   const originalWrite = process.stdout.write;
-  (process.stdout as unknown as { write: (...args: any[]) => boolean }).write = ((
-    chunk: unknown,
-    ...args: any[]
-  ): boolean => (
-    originalWrite.call(process.stdout, projectStdoutChunk(chunk) as any, ...args as any)
-  )) as (...args: any[]) => boolean;
   try {
+    (process.stdout as unknown as { write: (...args: any[]) => boolean }).write = ((
+      chunk: unknown,
+      ...args: any[]
+    ): boolean => (
+      originalWrite.call(process.stdout, projectStdoutChunk(chunk) as any, ...args as any)
+    )) as (...args: any[]) => boolean;
     return await runBaseStateLightTurn(withPreservedDefaultTimeout(argv), dependencies);
   } finally {
     (process.stdout as unknown as { write: typeof process.stdout.write }).write = originalWrite;
+    leaveRecoveryScope();
   }
 }
