@@ -354,7 +354,7 @@ describe('execute-Issue GitHub-first timeout recovery contract', () => {
     expect(compactRunbook).toContain('**No observed task work:**');
     expect(compactRunbook).toContain('use the ordinary initial Issue URL + `выполни задачу` prompt');
     expect(compactRunbook).toContain('**Definition of Done already independently satisfied:** do not open another ChatGPT conversation');
-    expect(compactRunbook).toContain('Ambiguous PR/branch candidates do not authorize guessing or a fresh execution send');
+    expect(compactRunbook).toContain('do not open a fresh execution chat.');
   });
 
   it('keeps the recovery observation-only and scoped to the exact failed conversation', () => {
