@@ -13,7 +13,6 @@ import {
   MESSAGE_NODE_SELECTOR,
   PRODUCT_STATUS_PROBE_SELECTORS,
   STOP_BUTTON_SELECTOR,
-  stripUiCollapseAffixes,
 } from './product-page-selectors.ts';
 import {
   currentOwnedPromptMarker,
@@ -70,7 +69,7 @@ interface OwnedTurnSnapshot {
 }
 
 function normalizeExecutionRecoveryProductText(value: string): string {
-  return stripUiCollapseAffixes(value)
+  return value
     .replace(/\p{White_Space}+/gu, ' ')
     .trim()
     .toLowerCase();
