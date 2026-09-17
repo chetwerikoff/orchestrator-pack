@@ -10,6 +10,7 @@
     "scripts/chatgpt-browser-turn/message-delivery-timeout.ts",
     "scripts/chatgpt-browser-turn/owned-prompt-marker.ts",
     "scripts/chatgpt-browser-turn/product-page-selectors.ts",
+    "scripts/chatgpt-browser-turn/profile-probe.ts",
     "scripts/chatgpt-browser-turn/state-light-entry.ts",
     "scripts/chatgpt-browser-turn/ui-adapter-base.ts",
     "scripts/chatgpt-browser-turn/ui-adapter.ts",
@@ -33,5 +34,5 @@
     "scripts/toolchain/",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "3bd44571085cb4c455e4bb1a33500aa0edefa776"
+  "source_revision": "5c1560e5917f364115bb4321690f76b29f5f5405"
 }
