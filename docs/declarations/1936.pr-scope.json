@@ -3,7 +3,7 @@
   "issue_number": 1936,
   "declared_paths": [
     ".gitignore",
-    "docs/declarations/",
+    "docs/declarations/1936.pr-scope.json",
     "docs/orchestration-runbook.md",
     "scripts/draft-discipline.d.mts",
     "scripts/draft-discipline.mjs",
@@ -29,7 +29,7 @@
   ],
   "allowed_roots": [
     ".gitignore",
-    "docs/declarations/",
+    "docs/declarations/1936.pr-scope.json",
     "docs/orchestration-runbook.md",
     "scripts/draft-discipline.d.mts",
     "scripts/draft-discipline.mjs",
