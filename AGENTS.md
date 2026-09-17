@@ -204,8 +204,16 @@ invocation detail.
 | [`merge-with-local-adoption`](.cursor/skills/merge-with-local-adoption/SKILL.md) | direct merge request |
 | [`adversarial-draft-review`](.cursor/skills/adversarial-draft-review/SKILL.md) | challenge a draft with Codex |
 | [`discuss-with-gpt`](.cursor/skills/discuss-with-gpt/SKILL.md) | discuss or challenge with GPT |
-| [`create-issue-draft`](.cursor/skills/create-issue-draft/SKILL.md) | author a new task or handoff |
-| [`execute-issue-with-gpt`](.cursor/skills/execute-issue-with-gpt/SKILL.md) | explicitly execute or continue an existing Issue through GPT |
+| [`create-issue-draft`](.cursor/skills/create-issue-draft/SKILL.md) | author a new task or handoff; for an existing Issue, standalone `manager` / `менеджер` or explicit task-authoring/review-continuation wording resumes this lifecycle |
+| [`execute-issue-with-gpt`](.cursor/skills/execute-issue-with-gpt/SKILL.md) | explicitly execute or continue implementation of an existing Issue through GPT; explicit implementation wording wins over a `manager` / `менеджер` noun in the same request |
 | [`study-external-source`](.cursor/skills/study-external-source/SKILL.md) | study an external repository or URL |
 | [`publish-issue-draft`](.cursor/skills/publish-issue-draft/SKILL.md) | publish an existing tracked draft |
 | [`switch-pack-reviewer`](.cursor/skills/switch-pack-reviewer/SKILL.md) | change the configured reviewer |
+
+For an existing `orchestrator-pack` Issue, `<Issue> manager`, `<Issue> менеджер`,
+`<Issue> continue review`, and `<Issue> продолжи ревью` load
+`create-issue-draft`. Explicit implementation wording such as `<Issue> execute`,
+`<Issue> выполни задачу`, `<Issue> выполни Issue`, or `<Issue> доделай Issue`
+loads `execute-issue-with-gpt`, even when `manager` / `менеджер` also appears.
+An ordinary discussion that merely mentions `manager` / `менеджер` without an
+existing Issue target does not activate the shorthand.
