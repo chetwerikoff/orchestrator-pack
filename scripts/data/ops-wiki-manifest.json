@@ -1,0 +1,606 @@
+{
+  "schema_version": 1,
+  "source_repo": "chetwerikoff/orchestrator-pack",
+  "max_episode_bytes": 12288,
+  "weak_top1_score": 0.5,
+  "ambiguity_max_score_delta": 0.05,
+  "exclusions": [
+    "docs/issues_drafts/**",
+    "docs/declarations/**"
+  ],
+  "episodes": [
+    {
+      "episode_id": "agents-precedence-boundaries",
+      "title": "AGENTS precedence and edit boundaries",
+      "path": "AGENTS.md",
+      "topic": "governance",
+      "role": "all",
+      "aliases": ["precedence", "edit boundaries", "allowed surfaces", "запрещённые поверхности"],
+      "sections": [
+        { "heading": "## Project purpose" },
+        { "heading": "## Precedence" },
+        { "heading": "## Edit boundaries" }
+      ],
+      "edges": [
+        { "type": "related", "target": "policy-publishing" },
+        { "type": "related", "target": "agents-portable-plan" }
+      ]
+    },
+    {
+      "episode_id": "agents-portable-plan",
+      "title": "Portable contracts and plan-first execution",
+      "path": "AGENTS.md",
+      "topic": "governance",
+      "role": "all",
+      "aliases": ["runtime adapter", "node 22", "plan-first", "scope discipline"],
+      "sections": [
+        { "heading": "## Portable contracts" },
+        { "heading": "## Plan, scope, and verification" }
+      ],
+      "edges": [
+        { "type": "prerequisite", "target": "agents-precedence-boundaries" },
+        { "type": "related", "target": "policy-publishing" }
+      ]
+    },
+    {
+      "episode_id": "agents-coworker-rtk",
+      "title": "Coworker delegation and RTK reads",
+      "path": "AGENTS.md",
+      "topic": "delegation",
+      "role": "all",
+      "aliases": ["coworker ask", "delegate I/O", "RTK"],
+      "sections": [
+        { "heading": "## Coworker CLI delegation" },
+        { "heading": "## RTK read-exploration" }
+      ],
+      "referenced_paths": ["docs/coworker-delegation.md"],
+      "edges": [
+        { "type": "related", "target": "coworker-deep-dive" }
+      ]
+    },
+    {
+      "episode_id": "agents-github-runtime",
+      "title": "GitHub transport, command-runtime, and merge stops",
+      "path": "AGENTS.md",
+      "topic": "transport",
+      "role": "all",
+      "aliases": ["scripts/gh", "command-runtime preflight", "must not merge"],
+      "sections": [
+        { "heading": "## GitHub transport" },
+        { "heading": "## Command-runtime bootstrap" },
+        { "heading": "## Operator-only merge and failed runs" }
+      ],
+      "referenced_paths": ["scripts/gh"],
+      "edges": [
+        { "type": "related", "target": "chat-current-head" }
+      ]
+    },
+    {
+      "episode_id": "agents-worker-skills",
+      "title": "Worker lifecycle pointer and auto-invoked skills",
+      "path": "AGENTS.md",
+      "topic": "worker",
+      "role": "worker",
+      "aliases": ["worker pre-flight", "named skills"],
+      "sections": [
+        { "heading": "## Worker lifecycle" },
+        { "heading": "## Auto-invoked skills" }
+      ],
+      "referenced_paths": ["docs/orchestration-runbook.md"],
+      "edges": [
+        { "type": "related", "target": "runbook-worker-lifecycle" },
+        { "type": "related", "target": "direct-fix-handoff" }
+      ]
+    },
+    {
+      "episode_id": "runbook-roles",
+      "title": "Orchestration roles and mandatory read order",
+      "path": "docs/orchestration-runbook.md",
+      "topic": "orchestration",
+      "role": "all",
+      "aliases": ["orchestrator", "manager", "worker role", "architect"],
+      "sections": [
+        { "heading": "## Mandatory read order" },
+        { "heading": "## Roles and completion" }
+      ],
+      "edges": [
+        { "type": "related", "target": "runbook-executor-profiles" }
+      ]
+    },
+    {
+      "episode_id": "runbook-executor-profiles",
+      "title": "Executor profiles by role, tier, and smoke complexity",
+      "path": "docs/orchestration-runbook.md",
+      "topic": "executor",
+      "role": "manager",
+      "aliases": ["PACK_EXECUTOR", "model effort", "firefighter smoke profile"],
+      "sections": [
+        { "heading": "## Executor profiles by role, tier, and smoke complexity", "include_subsections": false }
+      ],
+      "referenced_paths": [
+        "scripts/executor-profile-policy.ts",
+        "scripts/executor-profile-store.ts"
+      ],
+      "edges": [
+        { "type": "related", "target": "runbook-launch-assistant" },
+        { "type": "related", "target": "smoke-when-policy" }
+      ]
+    },
+    {
+      "episode_id": "runbook-launch-assistant",
+      "title": "Supervised Task launch assistant",
+      "path": "docs/orchestration-runbook.md",
+      "topic": "executor",
+      "role": "manager",
+      "aliases": ["work-class", "supervised-task-launch-assistant"],
+      "sections": [
+        { "heading": "### Supervised Task launch assistant" }
+      ],
+      "referenced_paths": ["scripts/pr2-foundation/supervised-task-launch-assistant.ts"],
+      "edges": [
+        { "type": "prerequisite", "target": "runbook-executor-profiles" }
+      ]
+    },
+    {
+      "episode_id": "runbook-assignment-binding",
+      "title": "WorkerAssignment and exact local runtime binding",
+      "path": "docs/orchestration-runbook.md",
+      "topic": "identity",
+      "role": "manager",
+      "aliases": ["WorkerAssignment", "runtime identity"],
+      "sections": [
+        { "heading": "## Supervised initial delivery and WorkerAssignment" },
+        { "heading": "## Exact local runtime binding" }
+      ],
+      "edges": [
+        { "type": "related", "target": "runbook-worker-lifecycle" }
+      ]
+    },
+    {
+      "episode_id": "runbook-s1-s2",
+      "title": "S1 observation and S2 continuation",
+      "path": "docs/orchestration-runbook.md",
+      "topic": "scheduler",
+      "role": "orchestrator",
+      "aliases": ["S1", "S2", "single observation"],
+      "sections": [
+        { "heading": "## S1 — single observation authority" },
+        { "heading": "## S1 continuity across bounded scheduler children" },
+        { "heading": "## S2 — single routine continuation actuator" }
+      ],
+      "edges": [
+        { "type": "related", "target": "runbook-scheduler" }
+      ]
+    },
+    {
+      "episode_id": "runbook-inbox-publication",
+      "title": "Inbox drain and published GitHub completion",
+      "path": "docs/orchestration-runbook.md",
+      "topic": "completion",
+      "role": "orchestrator",
+      "aliases": ["completion authority", "publication", "inbox drain"],
+      "sections": [
+        { "heading": "## Bound-run inbox drain and acknowledgement" },
+        { "heading": "## Published GitHub artifact completion and batch attribution" }
+      ],
+      "edges": [
+        { "type": "related", "target": "chat-done" }
+      ]
+    },
+    {
+      "episode_id": "runbook-scheduler",
+      "title": "Scheduler phases and durable handoff",
+      "path": "docs/orchestration-runbook.md",
+      "topic": "scheduler",
+      "role": "orchestrator",
+      "aliases": ["scheduler phases", "orchestrator_required"],
+      "sections": [
+        { "heading": "## Scheduler inbox reconciliation" },
+        { "heading": "## Scheduler phases" },
+        { "heading": "## Durable `orchestrator_required` handoff" },
+        { "heading": "## Deterministic reconciliation" }
+      ],
+      "edges": [
+        { "type": "related", "target": "runbook-s1-s2" }
+      ]
+    },
+    {
+      "episode_id": "runbook-laws-verification",
+      "title": "Core operating laws and production verification",
+      "path": "docs/orchestration-runbook.md",
+      "topic": "verification",
+      "role": "all",
+      "aliases": ["operating laws", "Browser-GPT", "operator adoption"],
+      "sections": [
+        { "heading": "## Core operating laws" },
+        { "heading": "## Production verification" },
+        { "heading": "## Orca grounding" },
+        { "heading": "## Operator adoption" }
+      ],
+      "edges": [
+        { "type": "related", "target": "runbook-worker-lifecycle" }
+      ]
+    },
+    {
+      "episode_id": "runbook-worker-lifecycle",
+      "title": "Worker lifecycle contract",
+      "path": "docs/orchestration-runbook.md",
+      "topic": "worker",
+      "role": "worker",
+      "aliases": ["worker pre-flight", "required CI", "pack-worker-report", "worker smoke"],
+      "sections": [
+        { "heading": "## Worker lifecycle" }
+      ],
+      "referenced_paths": ["scripts/pack-worker-report.ts", "scripts/worker-smoke-run.ts"],
+      "edges": [
+        { "type": "prerequisite", "target": "agents-worker-skills" },
+        { "type": "related", "target": "smoke-when-policy" }
+      ]
+    },
+    {
+      "episode_id": "policy-publishing",
+      "title": "Repository publishing policy",
+      "path": "docs/repository_policy.md",
+      "topic": "governance",
+      "role": "all",
+      "aliases": ["allowed tracked content", "forbidden tracked content", "scope discipline", "build the minimum"],
+      "sections": [
+        { "heading": "# Repository publishing policy" }
+      ],
+      "edges": [
+        { "type": "related", "target": "agents-precedence-boundaries" }
+      ]
+    },
+    {
+      "episode_id": "smoke-when-policy",
+      "title": "When smoke is required and executor policy",
+      "path": "docs/worker-smoke-testing.md",
+      "topic": "smoke",
+      "role": "worker",
+      "aliases": ["smoke-test-plan", "firefighter", "routine smoke", "complex smoke"],
+      "sections": [
+        { "heading": "## When smoke is required" },
+        { "heading": "## Multi-agent smoke executor policy" },
+        { "heading": "## Actor ordering" }
+      ],
+      "referenced_paths": ["scripts/worker-smoke-run.ts", "scripts/executor-profile-policy.ts"],
+      "edges": [
+        { "type": "related", "target": "runbook-executor-profiles" },
+        { "type": "related", "target": "smoke-pre-path" }
+      ]
+    },
+    {
+      "episode_id": "smoke-pre-path",
+      "title": "Smoke parent bootstrap and supported worker path",
+      "path": "docs/worker-smoke-testing.md",
+      "topic": "smoke",
+      "role": "worker",
+      "aliases": ["smoke parent", "supported worker path"],
+      "sections": [
+        { "heading": "## Pre-smoke prerequisite preparation (parent worker)" },
+        { "heading": "## Supported worker path" }
+      ],
+      "edges": [
+        { "type": "prerequisite", "target": "smoke-when-policy" }
+      ]
+    },
+    {
+      "episode_id": "smoke-admission-coverage",
+      "title": "Smoke report admission and exact-head coverage",
+      "path": "docs/worker-smoke-testing.md",
+      "topic": "smoke",
+      "role": "worker",
+      "aliases": ["report admission", "point-in-time coverage"],
+      "sections": [
+        { "heading": "## Report admission and trust boundary" },
+        { "heading": "## Exact-head point-in-time coverage" }
+      ],
+      "edges": [
+        { "type": "related", "target": "smoke-control-delivery" }
+      ]
+    },
+    {
+      "episode_id": "smoke-control-delivery",
+      "title": "Smoke control-plane, delivery, and deadlines",
+      "path": "docs/worker-smoke-testing.md",
+      "topic": "smoke",
+      "role": "worker",
+      "aliases": ["delivery authority", "scenario deadlines"],
+      "sections": [
+        { "heading": "## Report and control-plane semantics" },
+        { "heading": "## Delivery and completion authority" },
+        { "heading": "## Finite scenario progress and deadlines" }
+      ],
+      "edges": [
+        { "type": "related", "target": "smoke-admission-coverage" }
+      ]
+    },
+    {
+      "episode_id": "smoke-recovery",
+      "title": "Smoke cancellation, spawn state, and recovery",
+      "path": "docs/worker-smoke-testing.md",
+      "topic": "smoke",
+      "role": "worker",
+      "aliases": ["cancellation", "durable spawn", "preflight"],
+      "sections": [
+        { "heading": "## Child-only progress and cancellation protocol" },
+        { "heading": "## Durable spawn state and ambiguity recovery" },
+        { "heading": "## Cancellation, cleanup, and restart recovery" },
+        { "heading": "## Deterministic preflight and concurrent starts" }
+      ],
+      "edges": [
+        { "type": "related", "target": "smoke-readiness-runtime" }
+      ]
+    },
+    {
+      "episode_id": "smoke-readiness-runtime",
+      "title": "Smoke readiness gate and runtime verification",
+      "path": "docs/worker-smoke-testing.md",
+      "topic": "smoke",
+      "role": "worker",
+      "aliases": ["readiness gate", "rollback", "orca executable"],
+      "sections": [
+        { "heading": "## Readiness gate" },
+        { "heading": "## Runtime verification and rollback" },
+        { "heading": "## Orca executable selection" }
+      ],
+      "edges": [
+        { "type": "related", "target": "smoke-when-policy" }
+      ]
+    },
+    {
+      "episode_id": "chat-start",
+      "title": "Chat executor live sources and task contract",
+      "path": "docs/chat-executor-rules.md",
+      "topic": "chat-executor",
+      "role": "all",
+      "aliases": ["live sources", "task contract", "chat executor scope"],
+      "sections": [
+        { "heading": "## 1. Scope" },
+        { "heading": "## 2. Start with live sources" },
+        { "heading": "## 3. Task contract" }
+      ],
+      "edges": [
+        { "type": "related", "target": "chat-publication" }
+      ]
+    },
+    {
+      "episode_id": "chat-publication",
+      "title": "Normal publication path and read-back",
+      "path": "docs/chat-executor-rules.md",
+      "topic": "publication",
+      "role": "all",
+      "aliases": ["publication path", "Contents API", "read-back"],
+      "sections": [
+        { "heading": "## 4. Normal publication path" },
+        { "heading": "## 5. Read-back proportional to the artifact" }
+      ],
+      "edges": [
+        { "type": "related", "target": "runbook-inbox-publication" }
+      ]
+    },
+    {
+      "episode_id": "chat-checkpoints-review",
+      "title": "Checkpoints and independent review",
+      "path": "docs/chat-executor-rules.md",
+      "topic": "review",
+      "role": "reviewer",
+      "aliases": ["checkpoints", "direct connected-GitHub pack review"],
+      "sections": [
+        { "heading": "## 6. Checkpoints and long-running commands" },
+        { "heading": "## 7. Independent review role" }
+      ],
+      "edges": [
+        { "type": "related", "target": "chat-current-head" }
+      ]
+    },
+    {
+      "episode_id": "chat-current-head",
+      "title": "CI, smoke, and review stay current-head bound",
+      "path": "docs/chat-executor-rules.md",
+      "topic": "review",
+      "role": "all",
+      "aliases": ["current-head", "required CI", "pack review"],
+      "sections": [
+        { "heading": "## 8. CI, smoke, and review authority stay current-head bound" }
+      ],
+      "edges": [
+        { "type": "related", "target": "chat-done" }
+      ]
+    },
+    {
+      "episode_id": "chat-done",
+      "title": "Merge, secrets, and Definition of Done",
+      "path": "docs/chat-executor-rules.md",
+      "topic": "completion",
+      "role": "all",
+      "aliases": ["Definition of Done", "merge", "secrets", "operating formula"],
+      "sections": [
+        { "heading": "## 9. Merge" },
+        { "heading": "## 10. Secrets and truthful reporting" },
+        { "heading": "## 11. Definition of Done" },
+        { "heading": "## 12. Operating formula" }
+      ],
+      "edges": [
+        { "type": "related", "target": "merge-ready-merge" }
+      ]
+    },
+    {
+      "episode_id": "coworker-deep-dive",
+      "title": "Coworker CLI delegation deep-dive",
+      "path": "docs/coworker-delegation.md",
+      "topic": "delegation",
+      "role": "all",
+      "aliases": ["coworker profiles", "delegation ladder"],
+      "sections": [
+        { "heading": "# Coworker CLI delegation (deep-dive)" }
+      ],
+      "edges": [
+        { "type": "prerequisite", "target": "agents-coworker-rtk" }
+      ]
+    },
+    {
+      "episode_id": "merge-safety-resolve",
+      "title": "Merge runtime profile, safety, and target resolve",
+      "path": ".cursor/skills/merge-with-local-adoption/SKILL.md",
+      "topic": "merge",
+      "role": "operator",
+      "aliases": ["merge with local adoption", "orca worktree", "safety and truth"],
+      "sections": [
+        { "heading": "## Runtime profile" },
+        { "heading": "## Safety and truth rules" },
+        { "heading": "## Step 1 — Snapshot the operator checkout" },
+        { "heading": "## Step 2 — Resolve the PR and target" }
+      ],
+      "edges": [
+        { "type": "related", "target": "merge-ready-merge" }
+      ]
+    },
+    {
+      "episode_id": "merge-ready-merge",
+      "title": "Inspect readiness and merge",
+      "path": ".cursor/skills/merge-with-local-adoption/SKILL.md",
+      "topic": "merge",
+      "role": "operator",
+      "aliases": ["pack-review waiver", "gh pr merge"],
+      "sections": [
+        { "heading": "## Step 3 — Inspect readiness" },
+        { "heading": "## Step 4 — Collect local adoption instructions" },
+        { "heading": "## Step 5 — Merge" }
+      ],
+      "edges": [
+        { "type": "prerequisite", "target": "merge-safety-resolve" },
+        { "type": "related", "target": "merge-adopt-local" }
+      ]
+    },
+    {
+      "episode_id": "merge-adopt-local",
+      "title": "Adopt merged main and local follow-through",
+      "path": ".cursor/skills/merge-with-local-adoption/SKILL.md",
+      "topic": "merge",
+      "role": "operator",
+      "aliases": ["adopt merged main", "HEAD after adoption", "wiki-ops sync"],
+      "sections": [
+        { "heading": "## Step 6 — Adopt merged main" },
+        { "heading": "## Step 7 — Apply local adoption" },
+        { "heading": "## Step 8 — Sibling advisory" }
+      ],
+      "referenced_paths": ["scripts/sync-ops-wiki.ts"],
+      "edges": [
+        { "type": "related", "target": "ops-wiki-sync" },
+        { "type": "related", "target": "merge-cleanup-report" }
+      ]
+    },
+    {
+      "episode_id": "merge-cleanup-report",
+      "title": "Merged-worktree cleanup and final report",
+      "path": ".cursor/skills/merge-with-local-adoption/SKILL.md",
+      "topic": "merge",
+      "role": "operator",
+      "aliases": ["post-merge cleanup", "worktree rm"],
+      "sections": [
+        { "heading": "## Step 9 — Complete merged-worktree cleanup" },
+        { "heading": "## Step 10 — Report" }
+      ],
+      "edges": [
+        { "type": "prerequisite", "target": "merge-adopt-local" }
+      ]
+    },
+    {
+      "episode_id": "direct-fix-spine",
+      "title": "Direct-fix authorization, spine, and declaration",
+      "path": ".cursor/skills/direct-fix-checklist/SKILL.md",
+      "topic": "direct-fix",
+      "role": "architect",
+      "aliases": ["direct PR", "declaration snapshot", "pr-scope"],
+      "sections": [
+        { "heading": "## When to invoke" },
+        { "heading": "## When to skip" },
+        { "heading": "## The direct-PR spine" },
+        { "heading": "## Declaration snapshot" },
+        { "heading": "## PR body issue reference" }
+      ],
+      "referenced_paths": ["scripts/pr-scope-declaration.ts"],
+      "edges": [
+        { "type": "related", "target": "direct-fix-ci-review" }
+      ]
+    },
+    {
+      "episode_id": "direct-fix-ci-review",
+      "title": "Direct-fix self-check, CI, and review",
+      "path": ".cursor/skills/direct-fix-checklist/SKILL.md",
+      "topic": "direct-fix",
+      "role": "architect",
+      "aliases": ["pre-push", "pack-review-runner"],
+      "sections": [
+        { "heading": "## Pre-push local self-check" },
+        { "heading": "## CI checks the PR must pass" },
+        { "heading": "## PR review (operator-initiated only)" }
+      ],
+      "referenced_paths": ["scripts/pack-review-runner.ts", "scripts/verify.ts"],
+      "edges": [
+        { "type": "prerequisite", "target": "direct-fix-spine" }
+      ]
+    },
+    {
+      "episode_id": "direct-fix-handoff",
+      "title": "Direct-fix worker handoff and architect contract",
+      "path": ".cursor/skills/direct-fix-checklist/SKILL.md",
+      "topic": "direct-fix",
+      "role": "architect",
+      "aliases": ["hand off to a worker", "architect role"],
+      "sections": [
+        { "heading": "## Hand off to a worker" },
+        { "heading": "## Don't" },
+        { "heading": "## Architect role contract" }
+      ],
+      "edges": [
+        { "type": "related", "target": "runbook-worker-lifecycle" }
+      ]
+    },
+    {
+      "episode_id": "rca-failure-response",
+      "title": "Investigate root cause",
+      "path": ".cursor/skills/investigate-root-cause/SKILL.md",
+      "topic": "rca",
+      "role": "architect",
+      "aliases": ["root cause", "разобраться с причиной", "failure response"],
+      "sections": [
+        { "heading": "## Failure response" }
+      ],
+      "edges": [
+        { "type": "related", "target": "agents-portable-plan" }
+      ]
+    },
+    {
+      "episode_id": "ops-wiki-sync",
+      "title": "Operational wiki sync",
+      "path": "docs/ops-wiki-sync.md",
+      "topic": "wiki-ops",
+      "role": "operator",
+      "aliases": ["wiki-ops", "checked_through_commit", "apply_in_progress", "sync-ops-wiki"],
+      "sections": [
+        { "heading": "# Operational wiki sync" }
+      ],
+      "referenced_paths": ["scripts/sync-ops-wiki.ts", "scripts/data/ops-wiki-manifest.json"],
+      "edges": [
+        { "type": "related", "target": "merge-adopt-local" },
+        { "type": "related", "target": "agents-wiki-ops" }
+      ]
+    },
+    {
+      "episode_id": "agents-wiki-ops",
+      "title": "Operational wiki consultation",
+      "path": "AGENTS.md",
+      "topic": "wiki-ops",
+      "role": "all",
+      "aliases": ["wiki-ops.search", "canonical files fallback", "synto"],
+      "sections": [
+        { "heading": "## Operational wiki consultation" }
+      ],
+      "edges": [
+        { "type": "related", "target": "ops-wiki-sync" }
+      ]
+    }
+  ]
+}

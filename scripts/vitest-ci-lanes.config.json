@@ -176,6 +176,7 @@
     "scripts/session-pr-binding-resolver.test.ts": "light",
     "scripts/session-runtime-liveness.test.ts": "heavy",
     "scripts/skill-pointers.test.ts": "light",
+    "scripts/sync-ops-wiki.test.ts": "light",
     "scripts/stage-completeness-guard.test.ts": "light",
     "scripts/stage-slot-consumed.test.ts": "light",
     "scripts/tier-gate-guard.test.ts": "light",
