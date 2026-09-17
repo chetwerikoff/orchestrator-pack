@@ -1352,7 +1352,7 @@ export function commitSmokeOrderingTransition(input: {
             headSha,
             status: input.status,
             updatedAtUtc: now,
-            ...(input.status === 'started' ? owner : workerMarker ?? owner),
+            ...(input.status === 'started' ? owner : smokeOrderingOwnerFields(workerMarker ?? owner)),
             ...(input.status === 'failed' && input.failureKind ? { failureKind: input.failureKind } : {}),
           },
         };
@@ -1400,7 +1400,7 @@ export function commitSmokeOrderingTransition(input: {
             headSha,
             status: input.status,
             updatedAtUtc: now,
-            ...(input.status === 'started' ? owner : independentMarker ?? owner),
+            ...(input.status === 'started' ? owner : smokeOrderingOwnerFields(independentMarker ?? owner)),
             ...(input.status === 'failed' && input.failureKind
               ? {
                 failureKind: input.failureKind,
