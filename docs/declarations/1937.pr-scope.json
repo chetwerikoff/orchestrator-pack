@@ -1,0 +1,37 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1937,
+  "declared_paths": [
+    "docs/chatgpt-task-execution-runbook.md",
+    "docs/declarations/1937.pr-scope.json",
+    "scripts/chatgpt-browser-turn/contracts.ts",
+    "scripts/chatgpt-browser-turn/execution-timeout-checkpoint.test.ts",
+    "scripts/chatgpt-browser-turn/execution-timeout-checkpoint.ts",
+    "scripts/chatgpt-browser-turn/message-delivery-timeout.ts",
+    "scripts/chatgpt-browser-turn/owned-prompt-marker.ts",
+    "scripts/chatgpt-browser-turn/product-page-selectors.ts",
+    "scripts/chatgpt-browser-turn/state-light-entry.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter-base.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/skills/execute-issue-with-gpt/",
+    "docs/browser-gpt-turn-runbook.md",
+    "docs/chatgpt-task-execution-runbook.md",
+    "docs/declarations/",
+    "scripts/browser-gpt-page-probe.ts",
+    "scripts/chatgpt-browser-turn/",
+    "scripts/flow-manager-authority-contract.test.ts",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/toolchain/",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "source_revision": "3bd44571085cb4c455e4bb1a33500aa0edefa776"
+}
