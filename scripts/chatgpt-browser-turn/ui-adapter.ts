@@ -13,7 +13,7 @@ import {
   MESSAGE_NODE_SELECTOR,
   PRODUCT_STATUS_PROBE_SELECTORS,
   STOP_BUTTON_SELECTOR,
-  stripUiCollapseAffixes,
+  UI_COLLAPSE_AFFIX_RE,
 } from './product-page-selectors.ts';
 import {
   currentOwnedPromptMarker,
@@ -70,16 +70,44 @@ interface OwnedTurnSnapshot {
 }
 
 function normalizeExecutionRecoveryProductText(value: string): string {
-  return stripUiCollapseAffixes(value)
+  return value
     .replace(/\p{White_Space}+/gu, ' ')
+    .replace(/\s+\./gu, '.')
     .trim()
     .toLowerCase();
 }
 
+function stripExecutionRecoveryCollapseLabels(value: string): string {
+  let result = value;
+  for (let pass = 0; pass < 3; pass++) {
+    const next = result.replace(UI_COLLAPSE_AFFIX_RE, '').trim();
+    if (next === result) break;
+    result = next;
+  }
+  return result;
+}
+
+function matchesExecutionRecoveryProductText(value: string, exact: string): boolean {
+  const normalized = normalizeExecutionRecoveryProductText(value);
+  if (normalized === exact) return true;
+
+  const withoutCollapseLabel = stripExecutionRecoveryCollapseLabels(normalized);
+  if (withoutCollapseLabel !== normalized && withoutCollapseLabel === exact) return true;
+
+  // Existing collapse rendering can append an ellipsis to an otherwise exact
+  // sentence. Preserve the canonical terminal period as part of the authority:
+  // a near-match missing that punctuation must still fail closed.
+  return withoutCollapseLabel === `${exact}…`
+    || withoutCollapseLabel === `${exact}...`;
+}
+
 function executionRecoveryCauseFromText(value: string): ExecutionRecoveryProductCause | undefined {
-  const text = normalizeExecutionRecoveryProductText(value);
-  if (text === MESSAGE_DELIVERY_TIMED_OUT_TEXT) return 'message_delivery_timed_out';
-  if (text === PRODUCT_NETWORK_ERROR_TEXT) return 'product_network_error';
+  if (matchesExecutionRecoveryProductText(value, MESSAGE_DELIVERY_TIMED_OUT_TEXT)) {
+    return 'message_delivery_timed_out';
+  }
+  if (matchesExecutionRecoveryProductText(value, PRODUCT_NETWORK_ERROR_TEXT)) {
+    return 'product_network_error';
+  }
   return undefined;
 }
 
