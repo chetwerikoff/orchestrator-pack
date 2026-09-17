@@ -68,8 +68,11 @@ const isRecord = (value: unknown): value is JsonRecord =>
 const workerSmokeEntrypoint = basename(process.argv[1] ?? '') === 'worker-smoke-run.ts';
 if (workerSmokeEntrypoint && process.argv[2] === 'run') {
   const argv = process.argv.slice(2);
-  quarantineUnsupportedHistoricalSmokeRuns(smokeRunCwdFromArgv(argv));
-  installStableWorkerSmokeSpawnPatch();
+  const detachedBootstrap = argv.includes('--detach') && !argv.includes('--detached-owner');
+  if (!detachedBootstrap) {
+    quarantineUnsupportedHistoricalSmokeRuns(smokeRunCwdFromArgv(argv));
+    installStableWorkerSmokeSpawnPatch();
+  }
 }
 
 export function buildSmokeCloseSettlementIdentity(runId: string): SmokeCloseSettlementIdentity {
