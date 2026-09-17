@@ -173,6 +173,18 @@ function operationTimeoutResponse<T>(
   };
 }
 
+function processLaunchFailedResponse<T>(
+  operation: OrcaOperationName | undefined,
+  message: string,
+): OrcaJsonResponse<T> {
+  return {
+    ok: false,
+    operation,
+    outcomeCategory: 'process_launch_failed',
+    error: { code: 'orca_process_launch_failed', message },
+  };
+}
+
 export function isOrcaSmokeControlPlaneCode(
   value: string | undefined,
 ): value is OrcaSmokeControlPlaneCode {
@@ -265,15 +277,10 @@ export function runOrcaJson<T>(
       }),
     });
   } catch (error) {
-    return {
-      ok: false,
+    return processLaunchFailedResponse<T>(
       operation,
-      outcomeCategory: 'process_launch_failed',
-      error: {
-        code: 'orca_process_launch_failed',
-        message: error instanceof Error ? error.message : 'orca process launch failed',
-      },
-    };
+      error instanceof Error ? error.message : 'orca process launch failed',
+    );
   }
   if (result.error && errnoCode(result.error) === 'ETIMEDOUT') {
     return operationTimeoutResponse<T>(operation, args, options.timeoutMs);
@@ -281,12 +288,7 @@ export function runOrcaJson<T>(
   const signal = resultSignal(result);
   if (signal) return signaledResponse<T>(operation, signal);
   if (result.error) {
-    return {
-      ok: false,
-      operation,
-      outcomeCategory: 'process_launch_failed',
-      error: { code: 'orca_process_launch_failed', message: result.error.message },
-    };
+    return processLaunchFailedResponse<T>(operation, result.error.message);
   }
   const stdout = String(result.stdout ?? '').trim();
   if (!stdout) {
