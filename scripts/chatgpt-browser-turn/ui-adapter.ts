@@ -221,7 +221,7 @@ async function readOwnedTurnSnapshot(
         productSelector: string;
       }) => {
         const rows: Array<{ role: 'user' | 'assistant'; text: string; turnKey?: string }> = [];
-        const productSurfaces: Array<{ text: string; turnKey?: string }> = [];
+        const productSurfaces: Array<{ text: string; turnKey?: string }[] = [];
         let complete = true;
         for (const element of elements) {
           try {
@@ -311,6 +311,7 @@ export async function productStatusText(
   const remainingSource = (): number => remainingMs();
 
   const initial = await base.productStatusText(page, remainingSource);
+  if (executionRecoveryProductWallScopeDepth <= 0) return initial;
   const marker = currentOwnedPromptMarker();
   if (!marker) return initial;
 
@@ -333,7 +334,7 @@ export async function productStatusText(
 
 /** Shared wall projection consumed by state-light callers. */
 export function classifyProductWall(surface: ProductStatusSurface): ProductWallClassification {
-  if (executionRecoveryProductWallScopeDepth > 0 && surface.execution_recovery_cause_stable) {
+  if (surface.execution_recovery_cause_stable) {
     return {
       state: 'recovery_required',
       cause: surface.execution_recovery_cause_stable,
