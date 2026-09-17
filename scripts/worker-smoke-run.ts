@@ -1697,7 +1697,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   const plan = resolveSmokeRequirement(issueBody);
   if (plan.requirement !== 'required') {
     if (plan.requirement === 'not-applicable' && (options.smokeActor ?? 'worker-owned') === 'worker-owned') {
-      const attemptId = options.detachedOwner && options.runId.trim() ? options.runId.trim() : createSmokeRunIdentity();
+      const attemptId = options.detachedOwner && (options.runId ?? '').trim() ? (options.runId ?? '').trim() : createSmokeRunIdentity();
       const orderingBinding = beginSmokeOrdering(options, issueBody, { attemptId, supervisorPid: process.pid });
       finishSmokeOrdering(orderingBinding, 'passed');
     }
@@ -1727,8 +1727,8 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     return 1;
   }
   const appliedOverrideReason = retryAdmission.blockedTuples.length > 0 ? overrideReason : undefined;
-  const attemptId = options.detachedOwner && options.runId.trim()
-    ? options.runId.trim()
+  const attemptId = options.detachedOwner && (options.runId ?? '').trim()
+    ? (options.runId ?? '').trim()
     : createSmokeRunIdentity();
   const preAttempt = preAttemptPublication(attemptId, appliedOverrideReason);
 
