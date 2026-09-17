@@ -23,6 +23,7 @@ import {
   MAX_TARGETS,
   normalizeConversationUrl,
   parseCliArgs,
+  projectExecutionRecoveryCause,
   publishExactBytes,
   runProbe,
   summarizeText,
@@ -38,6 +39,7 @@ import {
   transitionStateLightTurnObservation,
 } from './chatgpt-browser-turn/state-light-turn-observation.ts';
 import { publishStateLightReply } from './chatgpt-browser-turn/state-light-turn.ts';
+import { classifyProductWall } from './chatgpt-browser-turn/ui-adapter.ts';
 
 class FakeNode {
   readonly innerText: string;
@@ -66,13 +68,20 @@ class FakeNode {
   }
 }
 
-async function evaluateExpression(expression: string, nodes: FakeNode[], generating = false, pageUrl = 'https://chatgpt.com/c/test', readyState: 'loading' | 'interactive' | 'complete' = 'complete'): Promise<any> {
+async function evaluateExpression(
+  expression: string,
+  nodes: FakeNode[],
+  generating = false,
+  pageUrl = 'https://chatgpt.com/c/test',
+  readyState: 'loading' | 'interactive' | 'complete' = 'complete',
+  productSurfaces: FakeNode[] = [],
+): Promise<any> {
   const document = {
     title: 'Fixture title',
     readyState,
     querySelectorAll(selector: string) {
-      assert.equal(selector, '[data-message-author-role]');
-      return nodes;
+      if (selector === '[data-message-author-role]') return nodes;
+      return productSurfaces;
     },
     querySelector(selector: string) {
       assert.match(selector, /stop-button/);
@@ -232,6 +241,139 @@ test('inspection keeps innerText and textContent distinct and emits bounded witn
   assert.equal(raw.nodes[1].attributes['data-message-id'], 'a-1');
   assert.equal(raw.nodes[1].attributes['data-ignored-secret'], undefined);
   assert.equal(raw.last_assistant_sha256, sha256('Visible answer'));
+});
+
+test('inspect projects only exact current-owned execute-Issue product errors without browser mutation', async () => {
+  const marker = `OPKTURNV1${'ab'.repeat(16)}`;
+  const turnKey = 'conversation-turn-9';
+  const timeoutText = 'Message delivery timed out. Please try again.';
+  const networkText = 'A network error occurred. Please check your connection and try again. If this issue persists please contact us through our help center at help.openai.com.';
+
+  for (const [text, expectedCause] of [
+    [timeoutText, 'message_delivery_timed_out'],
+    [networkText, 'product_network_error'],
+  ] as const) {
+    const raw = await evaluateExpression(
+      INSPECTION_EXPRESSION,
+      [new FakeNode('user', `${marker}\n\nTASK`, `${marker}\n\nTASK`, { 'data-message-id': 'u-owned', 'data-testid': turnKey })],
+      false,
+      'https://chatgpt.com/c/test',
+      'complete',
+      [new FakeNode('status', text, text, { 'data-testid': turnKey })],
+    );
+    assert.equal(projectExecutionRecoveryCause(raw), expectedCause);
+
+    let createCalls = 0;
+    let closeCalls = 0;
+    const result = await runProbe(
+      { operation: 'inspect', cdp: 'http://127.0.0.1:9222', targetId: 'target-1' },
+      deps({
+        evaluate: async () => raw,
+        createPage: async () => { createCalls += 1; throw new Error('must_not_create'); },
+        closePage: async () => { closeCalls += 1; return 'closed'; },
+      }),
+    );
+    assert.equal(result.execution_recovery_cause, expectedCause);
+    assert.equal(result.diagnostic_only, true);
+    assert.equal(result.workflow_authority, 'none');
+    assert.deepEqual({ createCalls, closeCalls }, { createCalls: 0, closeCalls: 0 });
+  }
+
+  assert.deepEqual(classifyProductWall({
+    text: 'transport fallback',
+    composer: true,
+    execution_recovery_cause_stable: 'product_network_error',
+  }), { state: 'recovery_required', cause: 'product_network_error' });
+});
+
+test('execute-Issue recovery projection fails closed for near matches, stale turns, replies, generation, and ambiguity', async () => {
+  const marker = `OPKTURNV1${'cd'.repeat(16)}`;
+  const ownedTurn = 'conversation-turn-4';
+  const timeoutText = 'Message delivery timed out. Please try again.';
+  const cases: Array<{
+    name: string;
+    nodes: FakeNode[];
+    surfaceText: string;
+    surfaceTurn: string;
+    generating?: boolean;
+  }> = [
+    {
+      name: 'embedded exact literal',
+      nodes: [new FakeNode('user', `${marker}\n\nTASK`, `${marker}\n\nTASK`, { 'data-testid': ownedTurn })],
+      surfaceText: `prefix ${timeoutText} suffix`,
+      surfaceTurn: ownedTurn,
+    },
+    {
+      name: 'generic network failure',
+      nodes: [new FakeNode('user', `${marker}\n\nTASK`, `${marker}\n\nTASK`, { 'data-testid': ownedTurn })],
+      surfaceText: 'A network error occurred. Please try again.',
+      surfaceTurn: ownedTurn,
+    },
+    {
+      name: 'completed assistant reply',
+      nodes: [
+        new FakeNode('user', `${marker}\n\nTASK`, `${marker}\n\nTASK`, { 'data-testid': ownedTurn }),
+        new FakeNode('assistant', 'DONE', 'DONE', { 'data-testid': ownedTurn }),
+      ],
+      surfaceText: timeoutText,
+      surfaceTurn: ownedTurn,
+    },
+    {
+      name: 'later foreign user turn',
+      nodes: [
+        new FakeNode('user', `${marker}\n\nTASK`, `${marker}\n\nTASK`, { 'data-testid': ownedTurn }),
+        new FakeNode('user', 'later foreign prompt', 'later foreign prompt', { 'data-testid': 'conversation-turn-5' }),
+      ],
+      surfaceText: timeoutText,
+      surfaceTurn: ownedTurn,
+    },
+    {
+      name: 'mismatched product surface turn',
+      nodes: [new FakeNode('user', `${marker}\n\nTASK`, `${marker}\n\nTASK`, { 'data-testid': ownedTurn })],
+      surfaceText: timeoutText,
+      surfaceTurn: 'conversation-turn-3',
+    },
+    {
+      name: 'active generation',
+      nodes: [new FakeNode('user', `${marker}\n\nTASK`, `${marker}\n\nTASK`, { 'data-testid': ownedTurn })],
+      surfaceText: timeoutText,
+      surfaceTurn: ownedTurn,
+      generating: true,
+    },
+  ];
+
+  for (const fixture of cases) {
+    const raw = await evaluateExpression(
+      INSPECTION_EXPRESSION,
+      fixture.nodes,
+      fixture.generating ?? false,
+      'https://chatgpt.com/c/test',
+      'complete',
+      [new FakeNode('status', fixture.surfaceText, fixture.surfaceText, { 'data-testid': fixture.surfaceTurn })],
+    );
+    assert.equal(projectExecutionRecoveryCause(raw), null, fixture.name);
+  }
+
+  const duplicateMarkerRaw = await evaluateExpression(
+    INSPECTION_EXPRESSION,
+    [new FakeNode('user', `${marker}\n\nTASK repeats ${marker}`, `${marker}\n\nTASK repeats ${marker}`, { 'data-testid': ownedTurn })],
+    false,
+    'https://chatgpt.com/c/test',
+    'complete',
+    [new FakeNode('status', timeoutText, timeoutText, { 'data-testid': ownedTurn })],
+  );
+  assert.equal(projectExecutionRecoveryCause(duplicateMarkerRaw), null);
+
+  const incompleteRaw = await evaluateExpression(
+    INSPECTION_EXPRESSION,
+    [new FakeNode('user', `${marker}\n\n${'x'.repeat(8_300)}`, `${marker}\n\n${'x'.repeat(8_300)}`, { 'data-testid': ownedTurn })],
+    false,
+    'https://chatgpt.com/c/test',
+    'complete',
+    [new FakeNode('status', timeoutText, timeoutText, { 'data-testid': ownedTurn })],
+  );
+  assert.equal(incompleteRaw.execution_recovery_evidence.transcript_complete, false);
+  assert.equal(projectExecutionRecoveryCause(incompleteRaw), null);
 });
 
 test('missing message structure stays surface_unknown rather than fabricating zero counts', async () => {
@@ -666,6 +808,7 @@ test('contract proof: owner isolation and deadline-isolated liveness', async () 
   assert.equal(acquired.status, 'ok');
   assert.equal(acquired.acquisition, 'created');
   assert.equal(acquired.owned_target_id, ownedId);
+  assert.equal(acquired.execution_recovery_cause, null);
   assert.deepEqual(closeCalls, [ownedId]);
 
   const reusedCloseCalls: string[] = [];
@@ -686,6 +829,7 @@ test('contract proof: owner isolation and deadline-isolated liveness', async () 
     ], false, 'https://chatgpt.com/c/reused'),
   }));
   assert.equal(reused.acquisition, 'reused');
+  assert.equal(reused.execution_recovery_cause, null);
   assert.deepEqual(reusedCloseCalls, []);
 
   const starts: string[] = [];
@@ -889,6 +1033,7 @@ test('acquired readiness accepts stable user nodes across interactive to complet
   assert.equal(result.status, 'ok');
   assert.equal(evaluateCalls, 2);
   assert.equal((result.snapshot as any).ready_state, 'complete');
+  assert.equal(result.execution_recovery_cause, null);
   assert.deepEqual(closeCalls, [createdTarget.id]);
 });
 
@@ -910,6 +1055,7 @@ test('created ownership survives transient URLs and rejects contradictory target
     ], false, requested),
   }));
   assert.equal(acquired.status, 'ok');
+  assert.equal(acquired.execution_recovery_cause, null);
   assert.deepEqual(closeCalls, ['created-transient']);
 
   const contradictoryCloseCalls: string[] = [];
@@ -990,6 +1136,7 @@ test('acquisition reports already_gone after successful inspection and exact own
   assert.equal(result.status, 'ok');
   assert.equal(result.cleanup, 'already_gone');
   assert.equal(result.owned_target_id, ownedId);
+  assert.equal(result.execution_recovery_cause, null);
   assert.deepEqual(closeCalls, [ownedId]);
 });
 
