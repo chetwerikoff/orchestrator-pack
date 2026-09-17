@@ -1,6 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { turnExitCode } from './contracts.ts';
+import { TURN_STATES, turnExitCode } from './contracts.ts';
 import {
   observeExecutionTimeoutCheckpoint,
   type ExecutionTimeoutCheckpointDependencies,
@@ -24,9 +25,22 @@ const timeoutSurface: ProductStatusSurface = {
   composer: true,
 };
 const conversationUrl = 'https://chatgpt.com/c/11111111-1111-4111-8111-111111111111';
+const siblingConversationUrl = 'https://chatgpt.com/c/22222222-2222-4222-8222-222222222222';
 const profile = 'browser-gpt-reviewer';
 const cdp = 'http://127.0.0.1:9222';
 const invocationId = 'checkpoint-invocation';
+const executionRunbook = readFileSync(
+  new URL('../../docs/chatgpt-task-execution-runbook.md', import.meta.url),
+  'utf8',
+);
+const executeIssueSkill = readFileSync(
+  new URL('../../.cursor/skills/execute-issue-with-gpt/SKILL.md', import.meta.url),
+  'utf8',
+);
+const stateLightSource = readFileSync(new URL('./state-light-turn.ts', import.meta.url), 'utf8');
+const checkpointSource = readFileSync(new URL('./execution-timeout-checkpoint.ts', import.meta.url), 'utf8');
+const uiAdapterSource = readFileSync(new URL('./ui-adapter.ts', import.meta.url), 'utf8');
+const longRunChildSource = readFileSync(new URL('../flow-manager-long-running-child.ts', import.meta.url), 'utf8');
 
 function sentRecord(overrides: Record<string, unknown> = {}) {
   return {
@@ -138,9 +152,15 @@ describe('message-delivery timeout classifier', () => {
       ...base,
       messages: [{ role: 'user', text: `${marker}\n\nTASK mentions ${marker}` }],
     })).toEqual({});
+    const foreignMarker = `OPKTURNV1${'cd'.repeat(16)}`;
+    expect(classifyOwnedMessageDeliveryTimeout({
+      ...base,
+      messages: [{ role: 'user', text: `${foreignMarker}\n\nFOREIGN TASK` }],
+    })).toEqual({});
   });
 
   it('maps the terminal state to the existing no-resend/recovery exit class', () => {
+    expect(TURN_STATES).toContain('message_delivery_timed_out');
     expect(turnExitCode('message_delivery_timed_out')).toBe(11);
   });
 });
@@ -262,7 +282,7 @@ describe('execution-only 27-minute checkpoint observation', () => {
     expect(deps.readProductStatus).not.toHaveBeenCalled();
   });
 
-  it('fails closed on foreign activity, duplicate exact pages, or missing bound conversation state', async () => {
+  it('fails closed on foreign activity, sibling/duplicate pages, or missing bound conversation state', async () => {
     const foreign = checkpointDependencies({
       observations: [pageObservation({
         messages: [
@@ -275,6 +295,15 @@ describe('execution-only 27-minute checkpoint observation', () => {
       classification: 'ambiguous',
       cause: 'checkpoint_foreign_user_after_owned_send',
     });
+
+    const sibling = checkpointDependencies({
+      pages: [{ url: () => siblingConversationUrl }],
+    });
+    await expect(observeExecutionTimeoutCheckpoint(argv, sibling)).resolves.toMatchObject({
+      classification: 'ambiguous',
+      cause: 'checkpoint_exact_page_not_unique',
+    });
+    expect(sibling.readProductStatus).not.toHaveBeenCalled();
 
     const duplicatePage = { url: () => conversationUrl };
     const duplicate = checkpointDependencies({ pages: [duplicatePage, duplicatePage] });
@@ -290,5 +319,56 @@ describe('execution-only 27-minute checkpoint observation', () => {
       classification: 'ambiguous',
       cause: 'checkpoint_sent_turn_binding_unavailable',
     });
+  });
+});
+
+describe('execute-Issue GitHub-first timeout recovery contract', () => {
+  const compactRunbook = executionRunbook.replace(/\s+/g, ' ');
+  const compactSkill = executeIssueSkill.replace(/\s+/g, ' ');
+
+  it('propagates the immediate terminal state through the existing result authority', () => {
+    expect(stateLightSource).toMatch(/if \(wall\.state\)[\s\S]{0,1000}compactResult\(\s*wall\.state,/);
+    expect(longRunChildSource).toContain('TURN_STATES');
+    expect(longRunChildSource).toMatch(/function isTurnState[\s\S]{0,240}TURN_STATES/);
+    expect(compactRunbook).toContain('An authoritative `turn-result/v1` whose exact owned state is `message_delivery_timed_out`');
+  });
+
+  it('requires an exact timeout proof and GitHub reconciliation before any replacement send', () => {
+    expect(compactRunbook).toContain('This section is entered only after either:');
+    expect(compactRunbook).toContain('an authoritative immediate `turn-result/v1` for the exact owned invocation reports `state: message_delivery_timed_out`');
+    expect(compactRunbook).toContain('the mandatory 27-minute checkpoint independently reports exact `message_delivery_timed_out`');
+    expect(compactRunbook).toContain('Generic helper timeout, launcher timeout, `stream_timeout`, `no_reply`, browser loss');
+    expect(compactRunbook).toContain('elapsed 27 minutes by itself **never** enters this section');
+    expect(compactRunbook).toContain('before any replacement ChatGPT send, perform a fresh live GitHub reconciliation for the exact Issue');
+    expect(compactRunbook).toContain('find an existing PR only through authoritative Issue/PR identity and record its current head');
+    expect(compactRunbook).toContain('otherwise find an unambiguous Issue-owned task branch/current commits through authoritative repository identity');
+    expect(compactRunbook).toContain('independently check whether current GitHub/repository state already satisfies Definition of Done');
+    expect(compactRunbook).toContain('if candidate ownership is ambiguous, fail closed');
+  });
+
+  it('defines PR, branch-only, no-work, already-complete, and ambiguous-candidate outcomes', () => {
+    expect(compactRunbook).toContain('**Existing PR and work remains:**');
+    expect(compactRunbook).toContain('include the Issue URL + PR URL + exact current head');
+    expect(compactRunbook).toContain('**No PR, but one unambiguous Issue-owned task branch/current head and work remains:**');
+    expect(compactRunbook).toContain('include the Issue URL + branch + exact current head');
+    expect(compactRunbook).toContain('**No observed task work:**');
+    expect(compactRunbook).toContain('use the ordinary initial Issue URL + `выполни задачу` prompt');
+    expect(compactRunbook).toContain('**Definition of Done already independently satisfied:** do not open another ChatGPT conversation');
+    expect(compactRunbook).toContain('Ambiguous PR/branch candidates do not authorize guessing or a fresh execution send');
+  });
+
+  it('keeps the recovery observation-only and scoped to the exact failed conversation', () => {
+    expect(checkpointSource).not.toMatch(/\.click\s*\(/);
+    expect(checkpointSource).not.toContain('SEND_BUTTON_SELECTOR');
+    expect(uiAdapterSource).not.toMatch(/\.click\s*\(/);
+    expect(compactRunbook).toContain('Never press the product Retry button. Never resend into the failed conversation.');
+    expect(compactRunbook).toContain('Never close a sibling/foreign tab by focus, age, URL similarity, or timeout text.');
+    expect(compactRunbook).toContain('Fresh-chat authority exists only for the two exact timeout proofs above');
+  });
+
+  it('keeps the supervisor skill routed to the execution runbook instead of adding a second manager runtime', () => {
+    expect(compactSkill).toContain('docs/chatgpt-task-execution-runbook.md');
+    expect(compactSkill).toContain('The execution runbook owns first-session initialization, same-conversation continuations, the execution-only 27-minute live-chat checkpoint');
+    expect(compactSkill).toContain('Merge is never implicit.');
   });
 });
