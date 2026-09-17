@@ -194,7 +194,19 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       chmodSync(fakeOrca, 0o755);
 
       const wrapper = resolve('scripts/worker-smoke-run');
-      const result = run(wrapper, [
+      const runtimeEnv = {
+        PATH: `${bin}:${process.env.PATH ?? ''}`,
+        OPK_RUNTIME_CLI_COMMAND: fakeOrca,
+        FAKE_ORCA_CALLS: callsPath,
+        FAKE_ORCA_ROOT: root,
+        FAKE_ORCA_HEAD: head,
+        FAKE_ORCA_PROMPT: promptPath,
+        WORKER_SMOKE_SUBMIT_CONFIRMATION_TIMEOUT_MS: '20',
+        PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'cursor',
+        PACK_EXECUTOR_SMOKE_ROUTINE_MODEL: 'fixture-routine-model',
+        PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT: 'fixture-routine-effort',
+      };
+      const runArgs = [
         'run',
         '--issue', '1359',
         '--pr', '1365',
@@ -205,21 +217,8 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         '--cwd', root,
         '--dry-run',
         '--json',
-      ], {
-        cwd: root,
-        env: {
-          PATH: `${bin}:${process.env.PATH ?? ''}`,
-          OPK_RUNTIME_CLI_COMMAND: fakeOrca,
-          FAKE_ORCA_CALLS: callsPath,
-          FAKE_ORCA_ROOT: root,
-          FAKE_ORCA_HEAD: head,
-          FAKE_ORCA_PROMPT: promptPath,
-          WORKER_SMOKE_SUBMIT_CONFIRMATION_TIMEOUT_MS: '20',
-          PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'cursor',
-          PACK_EXECUTOR_SMOKE_ROUTINE_MODEL: 'fixture-routine-model',
-          PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT: 'fixture-routine-effort',
-        },
-      });
+      ];
+      const result = run(wrapper, runArgs, { cwd: root, env: runtimeEnv });
 
       expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
       expect(result.signal).toBeNull();
@@ -309,6 +308,36 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(operations.filter((value) => value === 'terminal close')).toHaveLength(1);
       expect(operations.filter((value) => value === 'terminal list')).toHaveLength(0);
       expect(createHash('sha256').update(readFileSync(wrapper), 'utf8').digest('hex')).toMatch(/^[0-9a-f]{64}$/u);
+
+      rmSync(promptPath, { force: true });
+      rmSync(join(root, 'agent-started'), { force: true });
+      const detached = run(wrapper, [...runArgs, '--detach'], { cwd: root, env: runtimeEnv });
+      expect(detached.exitCode, `${detached.stdout}\n${detached.stderr}`).toBe(0);
+      const detachedRunId = String(detached.stdout).trim();
+      expect(detachedRunId).toMatch(/^[0-9a-f-]{36}$/u);
+      const detachedArtifactDir = join(root, '.orca-worker-smoke', 'runs', detachedRunId);
+      const lifecyclePath = join(detachedArtifactDir, 'lifecycle.json');
+      const finalEvidencePath = join(detachedArtifactDir, 'final-evidence.json');
+      expect(existsSync(lifecyclePath)).toBe(true);
+
+      const wait = run(wrapper, ['wait', '--run', detachedRunId, '--cwd', root, '--json'], { cwd: root, env: runtimeEnv });
+      expect(wait.exitCode, `${wait.stdout}\n${wait.stderr}`).toBe(0);
+      const waited = JSON.parse(String(wait.stdout).trim()) as { ok?: boolean; runId?: string; result?: string };
+      expect(waited).toMatchObject({ ok: true, runId: detachedRunId, result: 'PASS' });
+      expect(existsSync(finalEvidencePath)).toBe(true);
+      const lifecycleBefore = readFileSync(lifecyclePath, 'utf8');
+      const finalBefore = readFileSync(finalEvidencePath, 'utf8');
+      const lifecycle = JSON.parse(lifecycleBefore) as { runId?: string; launcherTerminalizedAtMs?: number; finalEvidencePath?: string };
+      expect(lifecycle.runId).toBe(detachedRunId);
+      expect(lifecycle.launcherTerminalizedAtMs).toEqual(expect.any(Number));
+      expect(resolve(lifecycle.finalEvidencePath ?? '')).toBe(resolve(finalEvidencePath));
+      expect(existsSync(join(detachedArtifactDir, 'launcher.log'))).toBe(false);
+
+      const repeatedWait = run(wrapper, ['wait', '--run', detachedRunId, '--cwd', root, '--json'], { cwd: root, env: runtimeEnv });
+      expect(repeatedWait.exitCode).toBe(0);
+      expect(readFileSync(lifecyclePath, 'utf8')).toBe(lifecycleBefore);
+      expect(readFileSync(finalEvidencePath, 'utf8')).toBe(finalBefore);
+      expect(existsSync(join(root, '.orca-worker-smoke', 'admission.lock.json'))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
