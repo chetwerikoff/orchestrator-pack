@@ -62,6 +62,23 @@ const OWNED_TURN_GENERATION_SELECTOR = [
 ].join(', ');
 const PRODUCT_STATUS_SELECTOR = PRODUCT_STATUS_PROBE_SELECTORS.join(', ');
 
+// The execute-Issue recovery projection is intentionally narrower than the
+// shared product-status helper. Other state-light consumers (notably session
+// mode used by create/review flows) import this adapter too, but Issue #1937
+// must not grant those workflows new recovery authority. Ordinary turn mode
+// enters this process-local scope for the duration of runStateLightTurn.
+let executionRecoveryProductWallScopeDepth = 0;
+
+export function enterExecutionRecoveryProductWallScope(): () => void {
+  executionRecoveryProductWallScopeDepth += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    executionRecoveryProductWallScopeDepth = Math.max(0, executionRecoveryProductWallScopeDepth - 1);
+  };
+}
+
 interface OwnedTurnSnapshot {
   readonly complete: boolean;
   readonly generationInProgress: boolean | 'unknown';
@@ -316,7 +333,7 @@ export async function productStatusText(
 
 /** Shared wall projection consumed by state-light callers. */
 export function classifyProductWall(surface: ProductStatusSurface): ProductWallClassification {
-  if (surface.execution_recovery_cause_stable) {
+  if (executionRecoveryProductWallScopeDepth > 0 && surface.execution_recovery_cause_stable) {
     return {
       state: 'recovery_required',
       cause: surface.execution_recovery_cause_stable,
