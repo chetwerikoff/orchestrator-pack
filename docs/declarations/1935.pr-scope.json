@@ -23,6 +23,7 @@
     "scripts/lib/graphql-quota-github-read-inventory.json",
     "scripts/lib/manager-review-terminal-bundle.ts",
     "scripts/lib/stage-completeness-core.ts",
+    "scripts/toolchain/create-issue-final-acceptance.test.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
@@ -39,5 +40,5 @@
     "scripts/",
     "tests/external-output-references/"
   ],
-  "source_revision": "7257a3a6a32bd435cb3390a7c5264bd988a73ce8"
+  "source_revision": "0cc0d7ee61382165e3b6278bd9a8478fc7e97164"
 }
