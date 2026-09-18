@@ -69,9 +69,27 @@ handoff. The shared Browser-GPT runbook remains the sole owner of one-turn launc
 observation, attribution, recovery, retry/no-resend, publication, and tab
 mechanics.
 
+For execute-Issue recovery, the two reserved product causes are
+`message_delivery_timed_out` and `product_network_error`. They stay on the
+existing `turn-result/v1` axis as `state: recovery_required` with
+`scope: conversation`; they do not introduce a new turn state. An authoritative
+owned result with either cause enters the execution runbook's GitHub-first
+reconciliation immediately. At the existing 27-minute checkpoint, use
+`browser-gpt-page-probe inspect` only as observation: its normalized
+`execution_recovery_cause` must be combined with exact owned-turn, reply, and
+generation evidence before it can authorize that same recovery branch. Elapsed
+time, missing output, helper silence, `stream_timeout`, or `no_reply` alone never
+authorize a replacement conversation.
+
 A replacement/resumed manager does not create a new conversation merely because
 it is a new process. It first follows the execution runbook's recovery branch and
-the shared Browser-GPT evidence requirements.
+the shared Browser-GPT evidence requirements. Before any replacement send after
+one of the two supported product-error proofs, it must re-observe the exact old
+owned conversation and re-read live GitHub continuation/completion state. If the
+product cause is no longer present, a completed reply appeared, generation is
+active, ownership is ambiguous, or the continuation head/completion state is no
+longer current, the fresh send is blocked and ordinary observation/recovery
+resumes.
 
 ## Terminal outcomes
 
@@ -89,7 +107,9 @@ state unless the direct top-level operator separately orders merge.
 
 ## No new machinery
 
-This workflow adds no Browser-GPT transport/probe/runtime behavior, generic
-browser skill, daemon, scheduler, watcher, queue, lease, retry service, durable
-conversation/completion database, cross-process invocation registry, second
-supervisor recovery subsystem, or second Definition-of-Done authority.
+This workflow adds no second Browser-GPT transport/probe/runtime behavior,
+generic browser skill, daemon, scheduler, watcher, queue, lease, retry service,
+durable conversation/completion database, cross-process invocation registry,
+second supervisor recovery subsystem, or second Definition-of-Done authority.
+The existing page probe remains diagnostic/observation-only for the execution
+checkpoint and never owns Retry, resend, close, open, or navigation authority.
