@@ -55,9 +55,43 @@ manager still does **not** supervise pack coding workers: the supervisor remains
 the top-level lifecycle/recovery owner and restores execution continuity when a
 manager cannot continue. Work returns to a manager only when the existing
 authoritative Browser-GPT evidence is sufficient to identify the owned
-session/turn without guessing. The multi-turn execution loop is owned by
+session/turn without guessing. The multi-turn execution loop and reusable
+manager-owned PR-review convergence phase are owned by
 `docs/chatgpt-task-execution-runbook.md`; one-turn browser mechanics remain owned
 by `docs/browser-gpt-turn-runbook.md` and are not duplicated here.
+
+For a manager-controlled Browser-GPT implementation, manager completion is an
+intermediate whole-role handoff, not overall task completion. The required path
+is:
+
+```text
+manager-controlled Browser-GPT implementation
+-> current Issue-bound PR/head + required CI green
+-> manager runs canonical GPT pack-review convergence
+-> manager whole-role Task/Dispatch handoff
+   (exact Issue/PR/head/CI/review facts; next action = independent smoke)
+-> orchestrator launches/reuses a local supervised worker as independent-smoke parent
+-> local worker runs worker-smoke-run --smoke-actor independent on the exact head
+-> independent finding: local worker fixes to a new head + fresh independent smoke
+-> final exact-head independent-smoke PASS + current completion verification
+-> VERIFIED_COMPLETE
+```
+
+The manager starts pack review directly through
+`npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>` and the existing
+runner authority. It does not manufacture `ready_for_review`, WorkerStatus,
+WorkerReport, PR/session scheduler correlation, or a scheduler candidate, and it
+does not run synthetic worker-owned smoke merely to satisfy ordinary
+coding-worker admission. The scheduler's ordinary `liveCandidates()` path
+remains unchanged.
+
+After the settled-review handoff, the orchestrator does not wait for scheduler
+`ready_for_review`. It uses the existing supervised local-worker mechanism for
+the independent-smoke parent; no new work class or smoke supervisor is created.
+That worker prepares the exact current worktree and prerequisites and uses the
+existing independent-smoke authority. If independent smoke finds a defect, the
+local worker owns the fix and a fresh exact-head independent smoke. The completed
+pack-review stage remains completed and is not reopened.
 
 ### Worker
 
@@ -81,7 +115,15 @@ read live Issue/rules
 ```
 
 Worker-owned smoke and independent smoke are different actors and different
-gates. Ordinary smoke and CI remain exact-current-head evidence. The required
+gates. The workflow above for a manager-controlled Browser-GPT implementation is
+the narrow exception to ordinary coding-worker pre-review smoke ordering: it has
+no synthetic worker-owned smoke before the manager's direct canonical pack
+review, and the supervisor launches the local independent-smoke parent only
+after the manager's settled-review handoff. For ordinary local coding workers,
+the lifecycle shown in this Worker section remains unchanged: worker-owned smoke
+passes before pack-review admission.
+
+Ordinary smoke and CI remain exact-current-head evidence. The required
 pack-review stage is a PR/task-cycle obligation, not a per-commit retry loop:
 new cycles use logical-round caps T1=1, T2=1, T3=2, and every required GPT
 round uses three concurrent sources. A T3 clean first round does not complete
@@ -624,7 +666,7 @@ authoritative Task/role/assignment facts
 - active/new progress -> `noop`;
 - trusted new idle/livelock episode + exact current local assignment/runtime binding + role-owned work remains -> `continue` through existing S2;
 - unresolved/stale/ambiguous target, untrusted observer/assignment state, unsupported local effect, or uncertain dispatch requiring reasoning -> `orchestrator_required` plus durable handoff;
-- manager whole-role completion or worker truthful `ready_for_review` handoff -> `noop`, then that role may complete according to its own contract.
+- manager whole-role completion or worker truthful `ready_for_review` handoff -> `noop`, then that role may complete according to its own contract. For the manager-controlled Browser-GPT execute-Issue path, a settled-review manager handoff makes `independent smoke` the orchestrator's next legal action; it is not overall `VERIFIED_COMPLETE` and does not wait for scheduler `ready_for_review`.
 
 ## Core operating laws
 
