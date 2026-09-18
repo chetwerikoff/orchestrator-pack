@@ -166,6 +166,7 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
     'source-revision',
     'stage',
     'source-slot',
+    'stage-attempt-id',
   ];
   const directRequested = reviewerSourceOutput !== undefined
     || directArgumentKeys.some((key) => options.has(key));
@@ -293,6 +294,7 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
         invocation_id: invocationId,
         stage: options.get('stage') as string,
         source_slot: options.get('source-slot') as string,
+        stage_attempt_id: options.get('stage-attempt-id') as string,
       }
     : undefined;
   process.stdout.write(`${JSON.stringify({
