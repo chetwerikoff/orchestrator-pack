@@ -101,6 +101,7 @@ function createTerminalBundleFixture(root: string, sourceRevision = 'r08') {
   }, null, 2));
   writeFileSync(join(reviewDir, 'author-dispositions.json'), JSON.stringify({
     schema: 'create-issue-author-dispositions/v1',
+    producer: 'governed-author-output/v1',
     reviewEpisodeId,
     sourceRevision,
     predecessorStage: 'architectural-review',
@@ -115,6 +116,13 @@ function createTerminalBundleFixture(root: string, sourceRevision = 'r08') {
       ],
     },
   }, null, 2));
+  writeFileSync(join(reviewDir, `issue-${sourceRevision}-body.json`), JSON.stringify({
+    schema: 'create-issue-live-snapshot/v1',
+    issueNumber: reviewContext.issueNumber,
+    sourceRevision,
+    title: 'fixture issue',
+    body: draft,
+  }, null, 2) + '\n');
   writeFileSync(join(reviewDir, 'finding-disposition-ledger.json'), JSON.stringify({
     version: 2,
     reviewEpisodeId,
