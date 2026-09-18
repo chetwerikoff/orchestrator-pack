@@ -428,7 +428,7 @@ export interface LifecycleStageEvidenceSeedInput {
   stageAttemptId: string;
   sourceRevision: string;
   cycleId: string;
-  reviewLaneRouting?: Record<string, unknown>;
+  reviewLaneRouting?: unknown;
   stateRootOverride?: string;
 }
 
