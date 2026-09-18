@@ -916,6 +916,7 @@ describe('Issue #1287 acceptance inventory parity', () => {
     const actualInventory = new Set([...inventory.matchAll(/^- `([^`]+)`/gm)].map((match) => match[1]!));
     const expectedInventory = new Set([
       ...ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.map((input) => input.file),
+      'issue-rNN-body.json',
       'stage-completeness-receipt-<stageAttemptId>.json',
       ...ACCEPTANCE_ARTIFACT_OUTPUT_NAMES,
       'reviewer-invocation-envelope-<stage>-<slot>-<attempt>.json',
