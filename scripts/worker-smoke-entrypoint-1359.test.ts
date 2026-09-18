@@ -321,9 +321,9 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(existsSync(lifecyclePath)).toBe(true);
 
       const wait = run(wrapper, ['wait', '--run', detachedRunId, '--cwd', root, '--json'], { cwd: root, env: runtimeEnv });
-      expect(wait.exitCode, `${wait.stdout}\n${wait.stderr}`).toBe(0);
-      const waited = JSON.parse(String(wait.stdout).trim()) as { ok?: boolean; runId?: string; result?: string };
-      expect(waited).toMatchObject({ ok: true, runId: detachedRunId, result: 'PASS' });
+      expect(wait.exitCode, `${wait.stdout}\n${wait.stderr}`).toBe(1);
+      const waited = JSON.parse(String(wait.stdout).trim()) as { ok?: boolean; runId?: string; reason?: string };
+      expect(waited).toMatchObject({ ok: false, runId: detachedRunId, reason: 'terminal_evidence_invalid' });
       expect(existsSync(finalEvidencePath)).toBe(true);
       const lifecycleBefore = readFileSync(lifecyclePath, 'utf8');
       const finalBefore = readFileSync(finalEvidencePath, 'utf8');
@@ -334,7 +334,8 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(existsSync(join(detachedArtifactDir, 'launcher.log'))).toBe(false);
 
       const repeatedWait = run(wrapper, ['wait', '--run', detachedRunId, '--cwd', root, '--json'], { cwd: root, env: runtimeEnv });
-      expect(repeatedWait.exitCode).toBe(0);
+      expect(repeatedWait.exitCode).toBe(1);
+      expect(JSON.parse(String(repeatedWait.stdout).trim())).toMatchObject({ ok: false, runId: detachedRunId, reason: 'terminal_evidence_invalid' });
       expect(readFileSync(lifecyclePath, 'utf8')).toBe(lifecycleBefore);
       expect(readFileSync(finalEvidencePath, 'utf8')).toBe(finalBefore);
       expect(existsSync(join(root, '.orca-worker-smoke', 'admission.lock.json'))).toBe(false);
@@ -351,6 +352,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
     mkdirSync(bin, { recursive: true });
 
     try {
+      requireSuccess('git', ['init', '--quiet'], root);
       writeFileSync(issueBodyPath, [
         '```behavior-kind',
         'action-producing',
