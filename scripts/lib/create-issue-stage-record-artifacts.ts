@@ -1977,6 +1977,10 @@ function buildLedger(
     errors.push(`author dispositions must use ${AUTHOR_DISPOSITIONS_SCHEMA}: ${path}`);
     return null;
   }
+  if (raw.producer !== 'governed-author-output/v1' && raw.producer !== 'lifecycle-zero-state/v1') {
+    errors.push('author dispositions lack governed producer provenance; field=findings/m4 authority=author-owned');
+    return null;
+  }
   const invalidFindingIndexes = raw.findings.flatMap((finding, index) => (
     isRecord(finding) ? [] : [index]
   ));
@@ -2546,6 +2550,34 @@ export function produceAcceptanceArtifacts(
   const purpose: ReviewEpisodeValidationPurpose = (options.phase ?? 'final-acceptance') === 'final-acceptance'
     ? 'final-acceptance'
     : 'stage-time';
+
+  let issueSnapshot: AcceptanceIssueSnapshot | null = null;
+  if (!taskIssueMatch) {
+    errors.push('acceptance input authority requires tier-intake taskIdentity issue:<N>');
+  } else {
+    issueSnapshot = stableAcceptanceIssueSnapshot(
+      artifactSourceTransport,
+      repositoryFullName,
+      Number(taskIssueMatch[1]),
+      options.reviewDir,
+      errors,
+    );
+  }
+  if (issueSnapshot) {
+    const predecessorStage = latestLifecycleStage(validStageInputs);
+    const allowZeroState = predecessorStage === null;
+    ensureAuthorDispositionsFromGovernedOutput({
+      reviewDir: options.reviewDir,
+      targetPath: options.authorDispositionsPath,
+      reviewEpisodeId: episodeId,
+      sourceRevision: issueSnapshot.sourceRevision,
+      predecessorStage,
+      draft: issueSnapshot.body,
+      allowZeroState,
+      errors,
+    });
+  }
+
   let canonicalLineage: CanonicalLineage | undefined;
   if (purpose === 'stage-time') {
     if (!taskIssueMatch) {
