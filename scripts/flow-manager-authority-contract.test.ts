@@ -1230,12 +1230,21 @@ describe('Issue #1954 standalone GPT PR-review manager entry contract', () => {
 
   const normalizedAgents = agents.replace(/\s+/g, ' ').trim();
 
-  it('routes exact implementation-review intent without stealing execute-Issue or create-Issue review continuation', () => {
+  it('routes orchestrator implementation-review intent without stealing direct chat or existing Issue flows', () => {
     expect(normalizedAgents).toContain(
       '| [`review-pr-with-gpt`](.cursor/skills/review-pr-with-gpt/SKILL.md)',
     );
     expect(normalizedAgents).toContain(
-      'Exact implementation-review wording such as `PR #N review`, `review PR #N`, `pack review #N`, or `Issue #N review` loads `review-pr-with-gpt`',
+      'when acting as orchestrator/supervisor, route an explicit operator request to review an existing implementation PR',
+    );
+    expect(normalizedAgents).toContain(
+      'When acting as the orchestrator/supervisor, exact implementation-review wording such as `PR #N review`, `review PR #N`, `pack review #N`, or `Issue #N review` loads `review-pr-with-gpt`',
+    );
+    expect(normalizedAgents).toContain(
+      'In a standalone connected-GitHub chat reviewer context, a direct top-level PR review or pack-review request remains owned by the connected-GitHub direct-review procedure above and does not activate `review-pr-with-gpt`',
+    );
+    expect(normalizedAgents).toContain(
+      'A direct top-level request to review or pack-review an `orchestrator-pack` PR uses the connected-GitHub direct-review procedure',
     );
     expect(normalizedAgents).toContain(
       '`<Issue> выполни задачу`, `<Issue> выполни Issue`, or `<Issue> доделай Issue` loads `execute-issue-with-gpt`, even when `manager` / `менеджер` also appears',
@@ -1247,7 +1256,16 @@ describe('Issue #1954 standalone GPT PR-review manager entry contract', () => {
       'Explicit task-spec review continuation remains with `create-issue-draft`',
     );
     expect(reviewSkill).toContain(
-      'Ordinary discussion containing “review” without an\nexact PR/Issue target does not activate this skill',
+      'Use this skill only when the active role is the orchestrator/supervisor and the\noperator request contains both an exact PR or Issue target',
+    );
+    expect(reviewSkill).toContain(
+      'A connected-GitHub chat executor acting as the direct\nreviewer for a top-level PR review or pack-review request follows the direct-review',
+    );
+    expect(reviewSkill).toContain(
+      'do not activate this skill in\nthat standalone direct-review context',
+    );
+    expect(reviewSkill).toContain(
+      'Ordinary discussion containing “review”\nwithout an exact PR/Issue target does not activate this skill',
     );
   });
 
