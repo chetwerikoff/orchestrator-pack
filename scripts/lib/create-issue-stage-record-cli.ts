@@ -1,5 +1,6 @@
-import { readFileSync } from 'node:fs';
-import { defaultGhTransport } from './create-issue-stage-record-gh.ts';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { defaultGhTransport, fetchIssueRevision } from './create-issue-stage-record-gh.ts';
 import {
   publishSettledStageRecord,
   retryPendingEvents,
@@ -10,7 +11,18 @@ import {
   ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS,
   inspectAcceptanceArtifacts,
   produceAcceptanceArtifacts,
+  reconcileCreateIssueStage,
 } from './create-issue-stage-record-artifacts.ts';
+import {
+  createIssueNextAction,
+  createIssueRecoverableResult,
+  createIssueStaleNextAction,
+  createIssueTerminalResult,
+  validateCreateIssueManagerResult,
+  type CreateIssueActionBinding,
+  type CreateIssueNextAction,
+} from './create-issue-next-action.ts';
+import { resolveCanonicalReviewDirectory } from './stage-completeness-core.ts';
 import type { LifecycleReviewStage } from './create-issue-stage-lifecycle.ts';
 import type { PublicActor } from './create-issue-stage-record-types.ts';
 import type { ReviewLaneOverride } from './review-lane-selector.ts';
@@ -29,7 +41,7 @@ interface JournalTailCliOptions {
 }
 
 interface StageFinalizeCliOptions extends JournalTailCliOptions {
-  command: 'start-cycle' | 'publish-stage' | 'retry-pending' | 'produce-artifacts' | 'check-artifacts';
+  command: 'start-cycle' | 'publish-stage' | 'retry-pending' | 'reconcile-stage' | 'produce-artifacts' | 'check-artifacts';
   repo: string;
   issueNumber: number;
   sourceRevision?: string;
@@ -37,6 +49,8 @@ interface StageFinalizeCliOptions extends JournalTailCliOptions {
   stageAttemptId?: string;
   permittedLaneOverride?: ReviewLaneOverride;
   tier?: string;
+  competitiveDecision?: 'required' | 'skipped';
+  competitiveRationale?: string;
   predecessorCycleId?: string;
   receiptPath?: string;
   waiverPath?: string;
@@ -54,6 +68,9 @@ interface StageFinalizeCliOptions extends JournalTailCliOptions {
   operatorVerdictByteLength?: string;
   operatorFindingCount?: string;
   operatorReason?: string;
+  expectedSourceRevision?: string;
+  expectedStage?: LifecycleReviewStage;
+  expectedStageAttemptId?: string;
 }
 
 interface FinalAcceptanceCliOptions extends JournalTailCliOptions {
@@ -202,17 +219,18 @@ function runParsedCli<T>(
 export function stageFinalizeUsage(): string {
   return [
     'Usage:',
-    '  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> --stage <competitive|architectural-review|architectural-lens|architectural> --tier <T1|T2|T3> [--stage-attempt-id <retry-id>] [--permitted-lane-override <normal|disputed>] [--public-actor <actor>] [--predecessor-cycle-id <id>] [--workdir <path>] [--json]',
+    '  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> --stage <competitive|architectural-review|architectural-lens|architectural> --tier <T1|T2|T3> [--competitive-decision <required|skipped> --competitive-rationale <text>] [--stage-attempt-id <retry-id>] [--permitted-lane-override <normal|disputed>] [--public-actor <actor>] [--predecessor-cycle-id <id>] [--workdir <path>] [--expected-source-revision <rNN> --expected-stage <stage> --expected-stage-attempt-id <id>] [--json]',
     '  create-issue-stage-finalize.ts publish-stage --repo <owner/name> --issue-number <n> --receipt <path> [--waiver <path>] [--workdir <path>] [--json]',
-    '  create-issue-stage-finalize.ts retry-pending --repo <owner/name> --issue-number <n> [--workdir <path>] [--json]',
-    `  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> ${ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.map((input) => `${input.flag} <path>${input.repeatable ? '...' : ''}`).join(' ')} [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--phase <pre-lens|post-lens|final-acceptance>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--json]`,
-    `  create-issue-stage-finalize.ts check-artifacts --review-dir <path> ${ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.map((input) => `${input.flag} <path>${input.repeatable ? '...' : ''}`).join(' ')} [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--json]`,
+    '  create-issue-stage-finalize.ts retry-pending --repo <owner/name> --issue-number <n> [--workdir <path>] [--expected-source-revision <rNN> --expected-stage <stage> --expected-stage-attempt-id <id>] [--json]',
+    '  create-issue-stage-finalize.ts reconcile-stage --repo <owner/name> --issue-number <n> --review-dir <path> --stage-evidence <attempt-NNN.json> [--json]',
+    '  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> [--tier-intake <path>] [--stage-evidence <path>...] [--author-dispositions <target-path>] [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--phase <pre-lens|post-lens|final-acceptance>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--json]',
+    '  create-issue-stage-finalize.ts check-artifacts --review-dir <path> [--tier-intake <path>] [--stage-evidence <path>...] [--author-dispositions <derived-path>] [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--json]',
   ].join('\n');
 }
 
 function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
   const command = argv[2];
-  if (command !== 'start-cycle' && command !== 'publish-stage' && command !== 'retry-pending' && command !== 'produce-artifacts' && command !== 'check-artifacts') {
+  if (command !== 'start-cycle' && command !== 'publish-stage' && command !== 'retry-pending' && command !== 'reconcile-stage' && command !== 'produce-artifacts' && command !== 'check-artifacts') {
     throw new Error(`unknown command\n${stageFinalizeUsage()}`);
   }
   const opts: StageFinalizeCliOptions = {
@@ -224,9 +242,13 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
     stageEvidencePaths: [],
     claudeProducerEvidencePaths: [],
   };
-  const artifactCommand = command === 'produce-artifacts' || command === 'check-artifacts';
+  const artifactCommand = command === 'reconcile-stage' || command === 'produce-artifacts' || command === 'check-artifacts';
+  const boundActionCommand = artifactCommand || command === 'start-cycle' || command === 'retry-pending';
   const requireArtifactCommand = (arg: string): void => {
-    if (!artifactCommand) throw new Error(`${arg} is only valid with produce-artifacts or check-artifacts`);
+    if (!artifactCommand) throw new Error(`${arg} is only valid with reconcile-stage, produce-artifacts, or check-artifacts`);
+  };
+  const requireBoundActionCommand = (arg: string): void => {
+    if (!boundActionCommand) throw new Error(`${arg} is only valid with a state-bound create-Issue action command`);
   };
   for (let i = 3; i < argv.length; i += 1) {
     const arg = argv[i]!;
@@ -259,6 +281,15 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
       }
       case '--tier':
         opts.tier = String(argv[++i] ?? '');
+        break;
+      case '--competitive-decision': {
+        const decision = String(argv[++i] ?? '');
+        if (decision !== 'required' && decision !== 'skipped') throw new Error('--competitive-decision must be required or skipped');
+        opts.competitiveDecision = decision;
+        break;
+      }
+      case '--competitive-rationale':
+        opts.competitiveRationale = String(argv[++i] ?? '');
         break;
       case '--predecessor-cycle-id':
         opts.predecessorCycleId = String(argv[++i] ?? '');
@@ -300,6 +331,23 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
         opts.phase = phase;
         break;
       }
+      case '--expected-source-revision':
+        requireBoundActionCommand(arg);
+        opts.expectedSourceRevision = String(argv[++i] ?? '');
+        break;
+      case '--expected-stage': {
+        requireBoundActionCommand(arg);
+        const expectedStage = String(argv[++i] ?? '');
+        if (expectedStage !== 'competitive' && expectedStage !== 'architectural-review' && expectedStage !== 'architectural-lens' && expectedStage !== 'architectural') {
+          throw new Error('--expected-stage is invalid');
+        }
+        opts.expectedStage = expectedStage;
+        break;
+      }
+      case '--expected-stage-attempt-id':
+        requireBoundActionCommand(arg);
+        opts.expectedStageAttemptId = String(argv[++i] ?? '');
+        break;
       case '--operator-issue-number':
         requireArtifactCommand(arg);
         opts.operatorIssueNumber = String(argv[++i] ?? '');
@@ -339,7 +387,7 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
 function finalAcceptanceUsage(): string {
   return [
     'Usage:',
-    '  create-issue-final-acceptance.ts --repo <owner/name> --issue-number <n> [--cycle-id <id>] --issue-body <path> --issue-revision <rNN> --review-dir <path> --stage-receipt <path>... [--capture <path>...] [--ledger <path>] [--relay-evidence <path>...] [--claude-producer-evidence <path>...] [--external-pass-receipt <path>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--public-actor <actor>] [--workdir <path>] [--json]',
+    '  create-issue-final-acceptance.ts --repo <owner/name> --issue-number <n> --review-dir <path> [--cycle-id <assertion>] [--issue-body <assertion-path>] [--issue-revision <assertion-rNN>] [--stage-receipt <assertion-path>...] [--capture <path>...] [--ledger <path>] [--relay-evidence <path>...] [--claude-producer-evidence <path>...] [--external-pass-receipt <path>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--public-actor <actor>] [--workdir <path>] [--json]',
   ].join('\n');
 }
 
@@ -426,13 +474,391 @@ function parseFinalAcceptanceArgs(argv: string[]): FinalAcceptanceCliOptions {
   return opts;
 }
 
+
+function artifactIssueNumber(opts: StageFinalizeCliOptions, reviewDir: string): number {
+  if (Number.isSafeInteger(opts.issueNumber) && opts.issueNumber > 0) return opts.issueNumber;
+  const intakePath = opts.tierIntakePath?.trim() || join(reviewDir, 'tier-intake.json');
+  try {
+    const intake = JSON.parse(readFileSync(intakePath, 'utf8')) as Record<string, unknown>;
+    const match = /^issue:([1-9][0-9]*)$/.exec(String(intake.taskIdentity ?? ''));
+    if (match) return Number(match[1]);
+  } catch {
+    // fall through to the ordinary required-argument diagnostic
+  }
+  return parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number or tier-intake.taskIdentity');
+}
+
+function canonicalAttemptPaths(reviewDir: string, requested: readonly string[]): string[] {
+  if (requested.length > 0) return [...requested];
+  try {
+    return readdirSync(reviewDir)
+      .filter((name) => /^attempt-[0-9]{3}\.json$/.test(name))
+      .sort()
+      .map((name) => join(reviewDir, name));
+  } catch {
+    return [];
+  }
+}
+
+function artifactBindingFromState(
+  opts: StageFinalizeCliOptions,
+  reviewDir: string,
+  issueNumber: number,
+): CreateIssueActionBinding | null {
+  let liveRevision = '';
+  try {
+    const live = fetchIssueRevision(defaultGhTransport(), opts.repo, issueNumber);
+    liveRevision = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i.exec(live.body)?.[1] ?? '';
+  } catch {
+    return null;
+  }
+  const candidates = canonicalAttemptPaths(reviewDir, opts.stageEvidencePaths)
+    .flatMap((path) => {
+      try {
+        const value = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+        const rawStage = value.stage;
+        if (rawStage !== 'competitive' && rawStage !== 'architectural-review' && rawStage !== 'architectural-lens' && rawStage !== 'architectural') return [];
+        const stage: LifecycleReviewStage = rawStage;
+        const sequence = Number(value.stageSequence);
+        const attempt = typeof value.stageAttemptId === 'string' ? value.stageAttemptId : '';
+        const revision = typeof value.sourceRevision === 'string' ? value.sourceRevision : '';
+        return Number.isInteger(sequence) && attempt && revision
+          ? [{ sequence, stage, attempt, revision }]
+          : [];
+      } catch {
+        return [];
+      }
+    })
+    .sort((left, right) => right.sequence - left.sequence);
+  const latest = candidates[0];
+  if (!latest || !liveRevision) return null;
+  return {
+    repository: opts.repo,
+    issueNumber,
+    sourceRevision: liveRevision,
+    stage: latest.stage,
+    stageAttemptId: latest.attempt,
+  };
+}
+
+function artifactCommandArgv(
+  command: 'produce-artifacts' | 'check-artifacts',
+  opts: StageFinalizeCliOptions,
+  reviewDir: string,
+  issueNumber: number,
+  binding: CreateIssueActionBinding,
+): string[] {
+  const argv = [
+    'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+    command,
+    '--repo', opts.repo,
+    '--issue-number', String(issueNumber),
+    '--review-dir', reviewDir,
+    '--phase', opts.phase ?? 'final-acceptance',
+    '--expected-source-revision', binding.sourceRevision,
+    '--expected-stage', binding.stage,
+    '--expected-stage-attempt-id', binding.stageAttemptId ?? '',
+    '--json',
+  ];
+  for (const path of opts.stageEvidencePaths) argv.push('--stage-evidence', path);
+  for (const path of opts.claudeProducerEvidencePaths) argv.push('--claude-producer-evidence', path);
+  if (opts.waiverPath) argv.push('--waiver', opts.waiverPath);
+  if (opts.outputDir) argv.push('--output-dir', opts.outputDir);
+  return argv;
+}
+
+function staleArtifactBinding(
+  opts: StageFinalizeCliOptions,
+  reviewDir: string,
+  issueNumber: number,
+): ReturnType<typeof createIssueStaleNextAction> | null {
+  if (!opts.expectedSourceRevision && !opts.expectedStage && !opts.expectedStageAttemptId) return null;
+  if (!opts.expectedSourceRevision || !opts.expectedStage || !opts.expectedStageAttemptId) {
+    throw new Error('expected action binding requires revision, stage, and stage-attempt-id together');
+  }
+  const expected: CreateIssueActionBinding = {
+    repository: opts.repo,
+    issueNumber,
+    sourceRevision: opts.expectedSourceRevision,
+    stage: opts.expectedStage,
+    stageAttemptId: opts.expectedStageAttemptId,
+  };
+  const observed = artifactBindingFromState(opts, reviewDir, issueNumber);
+  if (observed
+    && observed.repository.toLowerCase() === expected.repository.toLowerCase()
+    && observed.issueNumber === expected.issueNumber
+    && observed.sourceRevision.toLowerCase() === expected.sourceRevision.toLowerCase()
+    && observed.stage === expected.stage
+    && observed.stageAttemptId === expected.stageAttemptId) {
+    return null;
+  }
+  return createIssueStaleNextAction({
+    binding: expected,
+    observed: observed ?? {
+      repository: opts.repo,
+      issueNumber,
+    },
+    nextAction: null,
+  });
+}
+
+
+function validatedManagerSurfaceOutput<T extends { ok: boolean }>(
+  result: T,
+  failureCause: string,
+  nextAction: CreateIssueNextAction | null,
+  blocker?: string,
+): T & { cause?: string; blocker?: string; nextAction: CreateIssueNextAction | null } {
+  const output = {
+    ...result,
+    ...(result.ok ? {} : {
+      cause: failureCause,
+      ...(blocker ? { blocker } : {}),
+    }),
+    nextAction,
+  };
+  const errors = validateCreateIssueManagerResult(output);
+  if (errors.length > 0) throw new Error('invalid create-Issue manager result: ' + errors.join('; '));
+  return output;
+}
+
+function stageDiagnosticBlocker(result: { diagnostics?: Array<{ message?: string }> }): string | undefined {
+  const messages = (result.diagnostics ?? []).map((item) => item.message ?? '').filter(Boolean);
+  return messages.length > 0 ? messages.join('; ') : undefined;
+}
+
+function stageReceiptActionBinding(
+  repo: string,
+  issueNumber: number,
+  receipt: unknown,
+): CreateIssueActionBinding | null {
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return null;
+  const value = receipt as Record<string, unknown>;
+  const stage = value.stage;
+  if (stage !== 'competitive' && stage !== 'architectural-review' && stage !== 'architectural-lens' && stage !== 'architectural') return null;
+  const sourceRevision = typeof value.sourceRevision === 'string' ? value.sourceRevision : '';
+  const stageAttemptId = typeof value.stageAttemptId === 'string' ? value.stageAttemptId : '';
+  if (!/^r[0-9]+$/i.test(sourceRevision) || !stageAttemptId) return null;
+  return { repository: repo, issueNumber, sourceRevision, stage, stageAttemptId };
+}
+
+function retryPendingActionArgv(
+  opts: StageFinalizeCliOptions,
+  issueNumber: number,
+  binding: CreateIssueActionBinding,
+): string[] {
+  const argv = [
+    'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+    'retry-pending',
+    '--repo', opts.repo,
+    '--issue-number', String(issueNumber),
+    '--expected-source-revision', binding.sourceRevision,
+    '--expected-stage', binding.stage,
+    '--expected-stage-attempt-id', binding.stageAttemptId ?? '',
+    '--json',
+  ];
+  if (opts.workdir) argv.push('--workdir', opts.workdir);
+  return argv;
+}
+
+function startCycleRetryArgv(
+  opts: StageFinalizeCliOptions,
+  issueNumber: number,
+  binding: CreateIssueActionBinding,
+): string[] {
+  const argv = [
+    'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+    'start-cycle',
+    '--repo', opts.repo,
+    '--issue-number', String(issueNumber),
+    '--source-revision', binding.sourceRevision,
+    '--stage', binding.stage,
+    '--stage-attempt-id', binding.stageAttemptId ?? '',
+    '--tier', String(opts.tier ?? ''),
+    '--expected-source-revision', binding.sourceRevision,
+    '--expected-stage', binding.stage,
+    '--expected-stage-attempt-id', binding.stageAttemptId ?? '',
+    '--json',
+  ];
+  if (opts.competitiveDecision) argv.push('--competitive-decision', opts.competitiveDecision);
+  if (opts.competitiveRationale) argv.push('--competitive-rationale', opts.competitiveRationale);
+  if (opts.permittedLaneOverride) argv.push('--permitted-lane-override', opts.permittedLaneOverride);
+  if (opts.predecessorCycleId) argv.push('--predecessor-cycle-id', opts.predecessorCycleId);
+  if (opts.publicActor) argv.push('--public-actor', opts.publicActor);
+  if (opts.workdir) argv.push('--workdir', opts.workdir);
+  return argv;
+}
+
+function staleStartCycleBinding(
+  opts: StageFinalizeCliOptions,
+  issueNumber: number,
+): ReturnType<typeof createIssueStaleNextAction> | null {
+  if (!opts.expectedSourceRevision && !opts.expectedStage && !opts.expectedStageAttemptId) return null;
+  if (!opts.expectedSourceRevision || !opts.expectedStage) {
+    throw new Error('expected start-cycle binding requires revision and stage');
+  }
+  const expected: CreateIssueActionBinding = {
+    repository: opts.repo,
+    issueNumber,
+    sourceRevision: opts.expectedSourceRevision,
+    stage: opts.expectedStage,
+    ...(opts.expectedStageAttemptId ? { stageAttemptId: opts.expectedStageAttemptId } : {}),
+  };
+  let liveRevision = '';
+  try {
+    const live = fetchIssueRevision(defaultGhTransport(), opts.repo, issueNumber);
+    liveRevision = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i.exec(live.body)?.[1] ?? '';
+  } catch {
+    return createIssueStaleNextAction({
+      binding: expected,
+      observed: { repository: opts.repo, issueNumber },
+      nextAction: null,
+    });
+  }
+  const observed: CreateIssueActionBinding = {
+    repository: opts.repo,
+    issueNumber,
+    sourceRevision: liveRevision,
+    stage: opts.stage ?? opts.expectedStage,
+    ...(opts.stageAttemptId ? { stageAttemptId: opts.stageAttemptId } : {}),
+  };
+  if (expected.repository.toLowerCase() === observed.repository.toLowerCase()
+    && expected.issueNumber === observed.issueNumber
+    && expected.sourceRevision.toLowerCase() === observed.sourceRevision.toLowerCase()
+    && expected.stage === observed.stage
+    && (expected.stageAttemptId === undefined || expected.stageAttemptId === observed.stageAttemptId)) {
+    return null;
+  }
+  return createIssueStaleNextAction({ binding: expected, observed, nextAction: null });
+}
+
+function staleRetryPendingBinding(
+  opts: StageFinalizeCliOptions,
+  issueNumber: number,
+): ReturnType<typeof createIssueStaleNextAction> | null {
+  if (!opts.expectedSourceRevision && !opts.expectedStage && !opts.expectedStageAttemptId) return null;
+  if (!opts.expectedSourceRevision || !opts.expectedStage || !opts.expectedStageAttemptId) {
+    throw new Error('expected retry-pending binding requires revision, stage, and stage-attempt-id');
+  }
+  const expected: CreateIssueActionBinding = {
+    repository: opts.repo,
+    issueNumber,
+    sourceRevision: opts.expectedSourceRevision,
+    stage: opts.expectedStage,
+    stageAttemptId: opts.expectedStageAttemptId,
+  };
+  const canonical = resolveCanonicalReviewDirectory({ taskIdentity: 'issue:' + issueNumber });
+  const observed = artifactBindingFromState({ ...opts, stageEvidencePaths: [] }, canonical.directory, issueNumber);
+  if (observed
+    && observed.repository.toLowerCase() === expected.repository.toLowerCase()
+    && observed.issueNumber === expected.issueNumber
+    && observed.sourceRevision.toLowerCase() === expected.sourceRevision.toLowerCase()
+    && observed.stage === expected.stage
+    && observed.stageAttemptId === expected.stageAttemptId) {
+    return null;
+  }
+  return createIssueStaleNextAction({
+    binding: expected,
+    observed: observed ?? { repository: opts.repo, issueNumber },
+    nextAction: null,
+  });
+}
+
 export function runStageFinalizeCli(argv: string[]): number {
   return runParsedCli(argv, 'create-issue-stage-finalize', parseStageFinalizeArgs, (opts) => {
+    if (opts.command === 'reconcile-stage') {
+      const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
+      const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
+      if (opts.stageEvidencePaths.length !== 1) {
+        process.stderr.write('create-issue-stage-finalize: reconcile-stage requires exactly one --stage-evidence\n');
+        return 2;
+      }
+      const stageEvidencePath = parseRequiredNonEmptyString(opts.stageEvidencePaths[0], '--stage-evidence');
+      const stale = staleArtifactBinding(opts, reviewDir, issueNumber);
+      if (stale) {
+        if (opts.json) console.log(JSON.stringify(stale));
+        else process.stderr.write('stale_next_action\n');
+        return 1;
+      }
+      const result = reconcileCreateIssueStage({
+        reviewDir,
+        stageEvidencePath,
+        repositoryFullName: opts.repo,
+        issueNumber,
+      });
+      let nextAction = null;
+      if (result.stage && result.stageAttemptId && result.sourceRevision) {
+        const binding: CreateIssueActionBinding = {
+          repository: opts.repo,
+          issueNumber,
+          sourceRevision: result.sourceRevision,
+          stage: result.stage,
+          stageAttemptId: result.stageAttemptId,
+        };
+        const reconcileArgv = [
+          'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+          'reconcile-stage',
+          '--repo', opts.repo,
+          '--issue-number', String(issueNumber),
+          '--review-dir', reviewDir,
+          '--stage-evidence', stageEvidencePath,
+          '--expected-source-revision', result.sourceRevision,
+          '--expected-stage', result.stage,
+          '--expected-stage-attempt-id', result.stageAttemptId,
+          '--json',
+        ];
+        const retryableRead = Boolean(result.temporary)
+          || result.errors.some((error) => error.includes('zero_principal_owned_match')
+            || error.includes('authoritative GitHub artifact absent'));
+        if (result.ok && !result.alreadySettled) {
+          nextAction = createIssueNextAction({
+            kind: 'produce-acceptance-artifacts',
+            binding,
+            argv: [
+              'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+              'produce-artifacts',
+              '--repo', opts.repo,
+              '--issue-number', String(issueNumber),
+              '--review-dir', reviewDir,
+              '--stage-evidence', stageEvidencePath,
+              '--phase', result.stage === 'architectural' ? 'final-acceptance' : 'pre-lens',
+              '--expected-source-revision', result.sourceRevision,
+              '--expected-stage', result.stage,
+              '--expected-stage-attempt-id', result.stageAttemptId,
+              '--json',
+            ],
+          });
+        } else if (!result.ok && retryableRead && !result.errors.some((error) => error.includes('stale_next_action'))) {
+          nextAction = createIssueNextAction({
+            kind: 'reconcile-stage-read-only',
+            binding,
+            argv: reconcileArgv,
+          });
+        }
+      }
+      const output = validatedManagerSurfaceOutput(
+        result,
+        result.temporary ?? 'reconciliation_failed',
+        nextAction,
+        result.ok ? undefined : result.errors.join('; '),
+      );
+      if (opts.json) console.log(JSON.stringify(output));
+      else if (!result.ok) process.stderr.write(result.errors.join('\n') + '\n');
+      return result.ok ? 0 : 1;
+    }
+
     if (opts.command === 'produce-artifacts' || opts.command === 'check-artifacts') {
       const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
-      const tierIntakePath = requiredAcceptanceArtifactInput(opts, 'tierIntakePath') as string;
-      const stageEvidencePaths = requiredAcceptanceArtifactInput(opts, 'stageEvidencePaths') as string[];
-      const authorDispositionsPath = requiredAcceptanceArtifactInput(opts, 'authorDispositionsPath') as string;
+      const issueNumber = artifactIssueNumber(opts, reviewDir);
+      const stale = staleArtifactBinding(opts, reviewDir, issueNumber);
+      if (stale) {
+        if (opts.json) console.log(JSON.stringify(stale));
+        else process.stderr.write('stale_next_action\n');
+        return 1;
+      }
+      const tierIntakePath = opts.tierIntakePath?.trim() || join(reviewDir, 'tier-intake.json');
+      const stageEvidencePaths = opts.stageEvidencePaths;
+      const authorDispositionsPath = opts.authorDispositionsPath?.trim() || join(reviewDir, 'author-dispositions.json');
       const artifactOptions = {
         reviewDir,
         tierIntakePath,
@@ -448,7 +874,29 @@ export function runStageFinalizeCli(argv: string[]): number {
       const result = opts.command === 'produce-artifacts'
         ? produceAcceptanceArtifacts(artifactOptions)
         : inspectAcceptanceArtifacts(artifactOptions);
-      if (opts.json) console.log(JSON.stringify(result));
+      const binding = artifactBindingFromState(opts, reviewDir, issueNumber);
+      let nextAction = null;
+      if (binding && !result.ok) {
+        const errors = 'errors' in result ? result.errors : result.missing.map((item) => item.reason);
+        const external = errors.some((error) => error.includes('authority=author-owned')
+          || error.includes('operator')
+          || error.includes('stage_slot_consumed')
+          || error.includes('stale_next_action'));
+        if (!external) {
+          nextAction = createIssueNextAction({
+            kind: opts.command === 'check-artifacts' ? 'produce-acceptance-artifacts' : 'retry-acceptance-production',
+            binding,
+            argv: artifactCommandArgv('produce-artifacts', opts, reviewDir, issueNumber, binding),
+          });
+        }
+      }
+      const output = validatedManagerSurfaceOutput(
+        result,
+        opts.command === 'check-artifacts' ? 'acceptance_artifact_check_failed' : 'acceptance_artifact_production_failed',
+        nextAction,
+        result.ok ? undefined : ('errors' in result ? result.errors : result.missing.map((item) => item.reason)).join('; '),
+      );
+      if (opts.json) console.log(JSON.stringify(output));
       else if (!result.ok) {
         const messages = 'errors' in result ? result.errors : result.missing.map((item) => item.reason);
         process.stderr.write(`${messages.join('\n')}\n`);
@@ -462,6 +910,12 @@ export function runStageFinalizeCli(argv: string[]): number {
       const sourceRevision = parseRequiredNonEmptyString(opts.sourceRevision, '--source-revision');
       const tier = parseRequiredNonEmptyString(opts.tier, '--tier');
       const stage = parseRequiredNonEmptyString(opts.stage, '--stage') as LifecycleReviewStage;
+      const stale = staleStartCycleBinding(opts, issueNumber);
+      if (stale) {
+        if (opts.json) console.log(JSON.stringify(stale));
+        else process.stderr.write('stale_next_action\n');
+        return 1;
+      }
       const result = startReviewCycle(transport, {
         repo: opts.repo,
         issueNumber,
@@ -470,11 +924,43 @@ export function runStageFinalizeCli(argv: string[]): number {
         stageAttemptId: opts.stageAttemptId ? parseRequiredNonEmptyString(opts.stageAttemptId, '--stage-attempt-id') : undefined,
         permittedLaneOverride: opts.permittedLaneOverride,
         tier,
+        competitiveDecision: opts.competitiveDecision,
+        competitiveRationale: opts.competitiveRationale,
         publicActor: opts.publicActor,
         predecessorCycleId: opts.predecessorCycleId,
         workdir: opts.workdir,
       });
-      if (opts.json) console.log(JSON.stringify(result));
+      const hardFailure = result.diagnostics.some((item) => (
+        item.code === 'stage_authority_invalid'
+        || item.code === 'stage_slot_consumed'
+        || item.code === 'stage_order_violation'
+        || item.code === 'conflicting-remote-event'
+        || item.code === 'orphan-cycle'
+        || item.code === 'malformed-marker'
+      ));
+      const retryBinding = !result.ok && !hardFailure && result.stageAttemptId && result.eventKey
+        ? {
+            repository: opts.repo,
+            issueNumber,
+            sourceRevision,
+            stage,
+            stageAttemptId: result.stageAttemptId,
+          } satisfies CreateIssueActionBinding
+        : null;
+      const nextAction = retryBinding
+        ? createIssueNextAction({
+            kind: 'retry-start-cycle',
+            binding: retryBinding,
+            argv: startCycleRetryArgv(opts, issueNumber, retryBinding),
+          })
+        : null;
+      const output = validatedManagerSurfaceOutput(
+        result,
+        'stage_record_start_failed',
+        nextAction,
+        result.ok ? undefined : stageDiagnosticBlocker(result),
+      );
+      if (opts.json) console.log(JSON.stringify(output));
       else if (!result.ok) process.stderr.write(`${result.diagnostics.map((item) => item.message).join('\n')}\n`);
       return result.ok ? 0 : 1;
     }
@@ -490,54 +976,391 @@ export function runStageFinalizeCli(argv: string[]): number {
         readJson: (path) => JSON.parse(readFileSync(path, 'utf8')) as unknown,
         workdir: opts.workdir,
       });
-      if (opts.json) console.log(JSON.stringify(result));
+      const binding = stageReceiptActionBinding(opts.repo, issueNumber, receipt);
+      const nextAction = !result.ok && result.projectionPendingRepair && result.eventKey && binding
+        ? createIssueNextAction({
+            kind: 'retry-stage-record-publication',
+            binding,
+            argv: retryPendingActionArgv(opts, issueNumber, binding),
+          })
+        : null;
+      const output = validatedManagerSurfaceOutput(
+        result,
+        'stage_record_publication_failed',
+        nextAction,
+        result.ok ? undefined : stageDiagnosticBlocker(result),
+      );
+      if (opts.json) console.log(JSON.stringify(output));
       else if (!result.ok) process.stderr.write(`${result.diagnostics.map((item) => item.message).join('\n')}\n`);
       return result.ok ? 0 : 1;
     }
 
+    const stale = staleRetryPendingBinding(opts, issueNumber);
+    if (stale) {
+      if (opts.json) console.log(JSON.stringify(stale));
+      else process.stderr.write('stale_next_action\n');
+      return 1;
+    }
     const results = retryPendingEvents(transport, opts.repo, issueNumber, opts.workdir);
     const ok = results.every((item) => item.ok);
-    if (opts.json) console.log(JSON.stringify(results));
+    const output = validatedManagerSurfaceOutput(
+      { ok, results },
+      'stage_record_retry_exhausted',
+      null,
+      ok ? undefined : results.flatMap((item) => item.diagnostics.map((diagnostic) => diagnostic.message)).join('; '),
+    );
+    if (opts.json) console.log(JSON.stringify(output));
+    else if (!ok) process.stderr.write((output.blocker ?? 'retry-pending failed') + '\n');
     return ok ? 0 : 1;
   });
+}
+
+
+function appendFinalAcceptanceOperatorArgs(argv: string[], opts: FinalAcceptanceCliOptions): void {
+  const pairs: Array<[string, string | undefined]> = [
+    ['--operator-issue-number', opts.operatorIssueNumber],
+    ['--operator-source-revision', opts.operatorSourceRevision],
+    ['--operator-verdict-url', opts.operatorVerdictUrl],
+    ['--operator-verdict-sha256', opts.operatorVerdictSha256],
+    ['--operator-verdict-byte-length', opts.operatorVerdictByteLength],
+    ['--operator-finding-count', opts.operatorFindingCount],
+    ['--operator-reason', opts.operatorReason],
+  ];
+  for (const [flag, value] of pairs) if (value) argv.push(flag, value);
+}
+
+function finalAcceptanceRetryAction(
+  opts: FinalAcceptanceCliOptions,
+  issueNumber: number,
+  reviewDir: string,
+  sourceRevision: string,
+): CreateIssueNextAction {
+  const binding: CreateIssueActionBinding = {
+    repository: opts.repo,
+    issueNumber,
+    sourceRevision,
+    stage: 'acceptance',
+  };
+  const argv = [
+    'node', '--experimental-strip-types', 'scripts/create-issue-final-acceptance.ts',
+    '--repo', opts.repo,
+    '--issue-number', String(issueNumber),
+    '--review-dir', reviewDir,
+    '--issue-revision', sourceRevision,
+    '--public-actor', opts.publicActor,
+    '--json',
+  ];
+  if (opts.workdir) argv.push('--workdir', opts.workdir);
+  if (opts.externalPassReceiptPath) argv.push('--external-pass-receipt', opts.externalPassReceiptPath);
+  for (const path of opts.claudeProducerEvidencePaths) argv.push('--claude-producer-evidence', path);
+  appendFinalAcceptanceOperatorArgs(argv, opts);
+  return createIssueNextAction({
+    kind: 'retry-final-acceptance',
+    binding,
+    argv,
+  });
+}
+
+function finalAcceptanceArtifactAction(
+  opts: FinalAcceptanceCliOptions,
+  issueNumber: number,
+  reviewDir: string,
+  binding: CreateIssueActionBinding,
+): CreateIssueNextAction {
+  const argv = [
+    'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+    'produce-artifacts',
+    '--repo', opts.repo,
+    '--issue-number', String(issueNumber),
+    '--review-dir', reviewDir,
+    '--phase', 'final-acceptance',
+    '--expected-source-revision', binding.sourceRevision,
+    '--expected-stage', binding.stage,
+    '--expected-stage-attempt-id', binding.stageAttemptId ?? '',
+    '--json',
+  ];
+  for (const path of opts.claudeProducerEvidencePaths) argv.push('--claude-producer-evidence', path);
+  appendFinalAcceptanceOperatorArgs(argv, opts);
+  return createIssueNextAction({
+    kind: 'produce-acceptance-artifacts',
+    binding,
+    argv,
+  });
+}
+
+function finalAcceptanceRecoveryAction(
+  opts: FinalAcceptanceCliOptions,
+  issueNumber: number,
+  reviewDir: string,
+  liveRevision: string,
+  terminalBinding: CreateIssueActionBinding,
+  result: {
+    ok: boolean;
+    guardErrors: string[];
+    diagnostics: Array<{ message: string }>;
+    projectionPendingRepair?: boolean;
+  },
+): CreateIssueNextAction | null {
+  if (result.ok) return null;
+  const messages = [...result.guardErrors, ...result.diagnostics.map((item) => item.message)];
+  const producerRepair = messages.some((message) =>
+    message === 'finding-ledger: ledger path is required for final acceptance'
+    || /^finding-ledger: unable to read /.test(message)
+    || message === 'stage-completeness: review episode relay is incomplete'
+    || /^stage-completeness: unable to read /.test(message)
+  );
+  if (producerRepair) {
+    return finalAcceptanceArtifactAction(opts, issueNumber, reviewDir, terminalBinding);
+  }
+  const transientRead = messages.some((message) =>
+    /^unable to (?:read|re-read|confirm) /.test(message)
+  );
+  if (transientRead || result.projectionPendingRepair === true) {
+    return finalAcceptanceRetryAction(opts, issueNumber, reviewDir, liveRevision);
+  }
+  return null;
 }
 
 export function runFinalAcceptanceCli(argv: string[]): number {
   return runParsedCli(argv, 'create-issue-final-acceptance', parseFinalAcceptanceArgs, (opts) => {
     const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
-    const cycleId = opts.cycleId.trim();
-    const issueBodyPath = parseRequiredNonEmptyString(opts.issueBodyPath, '--issue-body');
-    const issueRevision = parseRequiredNonEmptyString(opts.issueRevision, '--issue-revision');
     const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
-    if (opts.stageReceipts.length === 0) {
-      process.stderr.write('create-issue-final-acceptance: at least one --stage-receipt is required\n');
-      return 2;
+    const transport = defaultGhTransport();
+
+    let liveIssue: ReturnType<typeof fetchIssueRevision>;
+    try {
+      liveIssue = fetchIssueRevision(transport, opts.repo, issueNumber);
+    } catch (error) {
+      const output = createIssueTerminalResult({
+        ok: false,
+        cause: 'source-unavailable',
+        blocker: error instanceof Error ? error.message : String(error),
+      });
+      if (opts.json) console.log(JSON.stringify(output));
+      else process.stderr.write(output.blocker + '\n');
+      return 1;
+    }
+    const liveRevision = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i.exec(liveIssue.body)?.[1];
+    if (!liveRevision) {
+      const output = createIssueTerminalResult({
+        ok: false,
+        cause: 'source-revision-unavailable',
+        blocker: 'live Issue has no canonical source-revision marker',
+      });
+      if (opts.json) console.log(JSON.stringify(output));
+      else process.stderr.write(output.blocker + '\n');
+      return 1;
+    }
+    if (opts.issueRevision && opts.issueRevision !== liveRevision) {
+      const output = createIssueStaleNextAction({
+        binding: { repository: opts.repo, issueNumber, sourceRevision: opts.issueRevision, stage: 'acceptance' },
+        observed: { repository: opts.repo, issueNumber, sourceRevision: liveRevision, stage: 'acceptance' },
+        nextAction: null,
+      });
+      if (opts.json) console.log(JSON.stringify(output));
+      else process.stderr.write('stale_next_action\n');
+      return 1;
     }
 
-    const issueBody = readFileSync(issueBodyPath, 'utf8');
-    const transport = defaultGhTransport();
+    const currentSnapshotPath = join(reviewDir, 'issue-' + liveRevision + '-body.json');
+    let currentSnapshot: Record<string, unknown> | null = null;
+    try {
+      currentSnapshot = JSON.parse(readFileSync(currentSnapshotPath, 'utf8')) as Record<string, unknown>;
+    } catch {
+      currentSnapshot = null;
+    }
+    const snapshotValid = currentSnapshot
+      && currentSnapshot.schema === 'create-issue-live-snapshot/v1'
+      && currentSnapshot.issueNumber === issueNumber
+      && currentSnapshot.sourceRevision === liveRevision
+      && currentSnapshot.title === liveIssue.title
+      && currentSnapshot.body === liveIssue.body;
+    if (!snapshotValid) {
+      const binding = artifactBindingFromState({
+        ...opts,
+        command: 'produce-artifacts',
+        stageEvidencePaths: [],
+        claudeProducerEvidencePaths: opts.claudeProducerEvidencePaths,
+      } as StageFinalizeCliOptions, reviewDir, issueNumber);
+      const nextAction = binding
+        ? createIssueNextAction({
+            kind: 'produce-acceptance-artifacts',
+            binding,
+            argv: [
+              'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+              'produce-artifacts',
+              '--repo', opts.repo,
+              '--issue-number', String(issueNumber),
+              '--review-dir', reviewDir,
+              '--phase', 'final-acceptance',
+              '--expected-source-revision', binding.sourceRevision,
+              '--expected-stage', binding.stage,
+              '--expected-stage-attempt-id', binding.stageAttemptId ?? '',
+              '--json',
+            ],
+          })
+        : null;
+      const output = nextAction
+        ? createIssueRecoverableResult({
+            cause: 'acceptance-input-missing',
+            blocker: 'issue-rNN-body snapshot is missing or disagrees with the stable live Issue; field=issue snapshot authority=GitHub-witnessed',
+            nextAction,
+          })
+        : createIssueTerminalResult({
+            ok: false,
+            cause: 'acceptance-input-missing',
+            blocker: 'issue-rNN-body snapshot is missing or disagrees with the stable live Issue; field=issue snapshot authority=GitHub-witnessed',
+          });
+      if (opts.json) console.log(JSON.stringify(output));
+      else process.stderr.write(output.blocker + '\n');
+      return 1;
+    }
+    if (opts.issueBodyPath) {
+      let asserted = '';
+      try { asserted = readFileSync(opts.issueBodyPath, 'utf8'); } catch {}
+      if (asserted !== liveIssue.body && resolve(opts.issueBodyPath) !== resolve(currentSnapshotPath)) {
+        const output = createIssueTerminalResult({
+          ok: false,
+          cause: 'acceptance-authority-conflict',
+          blocker: '--issue-body is assertion-only and does not match the canonical GitHub-witnessed snapshot',
+        });
+        if (opts.json) console.log(JSON.stringify(output));
+        else process.stderr.write(output.blocker + '\n');
+        return 1;
+      }
+    }
+
+    const canonicalReceiptPaths = readdirSync(reviewDir)
+      .filter((name) => /^stage-completeness-receipt-.+\.json$/.test(name))
+      .sort()
+      .map((name) => join(reviewDir, name));
+    const receiptRows = canonicalReceiptPaths.flatMap((path) => {
+      try {
+        const value = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+        return [{ path, value }];
+      } catch {
+        return [];
+      }
+    }).sort((left, right) => Number(left.value.stageSequence ?? 0) - Number(right.value.stageSequence ?? 0));
+    const terminal = [...receiptRows].reverse().find((row) => row.value.stage === 'architectural');
+    if (
+      !terminal
+      || typeof terminal.value.sourceRevision !== 'string'
+      || typeof terminal.value.cycleId !== 'string'
+      || typeof terminal.value.stageAttemptId !== 'string'
+      || !terminal.value.stageAttemptId.trim()
+    ) {
+      const output = createIssueTerminalResult({
+        ok: false,
+        cause: 'acceptance-input-missing',
+        blocker: 'canonical terminal stage receipt is missing',
+      });
+      if (opts.json) console.log(JSON.stringify(output));
+      else process.stderr.write(output.blocker + '\n');
+      return 1;
+    }
+    const terminalSnapshotPath = join(reviewDir, 'issue-' + terminal.value.sourceRevision + '-body.json');
+    let terminalSnapshot: Record<string, unknown> | null = null;
+    try { terminalSnapshot = JSON.parse(readFileSync(terminalSnapshotPath, 'utf8')) as Record<string, unknown>; } catch { terminalSnapshot = null; }
+    if (!terminalSnapshot || terminalSnapshot.schema !== 'create-issue-live-snapshot/v1' || typeof terminalSnapshot.body !== 'string') {
+      const output = createIssueTerminalResult({
+        ok: false,
+        cause: 'acceptance-input-missing',
+        blocker: 'terminal source Issue snapshot is missing; field=terminalSourceBody authority=GitHub-witnessed',
+      });
+      if (opts.json) console.log(JSON.stringify(output));
+      else process.stderr.write(output.blocker + '\n');
+      return 1;
+    }
+
+    if (opts.stageReceipts.length > 0) {
+      const requested = opts.stageReceipts.map((path) => resolve(path)).sort();
+      const canonical = canonicalReceiptPaths.map((path) => resolve(path)).sort();
+      if (JSON.stringify(requested) !== JSON.stringify(canonical)) {
+        const output = createIssueTerminalResult({
+          ok: false,
+          cause: 'acceptance-authority-conflict',
+          blocker: 'caller stage-receipt list does not equal canonical receipt inventory',
+        });
+        if (opts.json) console.log(JSON.stringify(output));
+        else process.stderr.write(output.blocker + '\n');
+        return 1;
+      }
+    }
+    if (opts.cycleId && opts.cycleId !== terminal.value.cycleId) {
+      const output = createIssueTerminalResult({
+        ok: false,
+        cause: 'acceptance-authority-conflict',
+        blocker: 'caller cycle-id disagrees with lifecycle terminal receipt',
+      });
+      if (opts.json) console.log(JSON.stringify(output));
+      else process.stderr.write(output.blocker + '\n');
+      return 1;
+    }
+
+    const captures = receiptRows.flatMap(({ value }) => (
+      Array.isArray(value.relayEligibleCaptures)
+        ? value.relayEligibleCaptures.flatMap((capture) => (
+            capture && typeof capture === 'object' && typeof (capture as Record<string, unknown>).name === 'string'
+              ? [join(reviewDir, String((capture as Record<string, unknown>).name))]
+              : []
+          ))
+        : []
+    ));
+    const ledgerPath = opts.ledgerPath ?? join(reviewDir, 'finding-disposition-ledger.json');
+    const relayPaths = opts.relayEvidencePaths.length > 0
+      ? opts.relayEvidencePaths
+      : [join(reviewDir, 'verified-relay-evidence.json')];
+    const claudePaths = opts.claudeProducerEvidencePaths.length > 0
+      ? opts.claudeProducerEvidencePaths
+      : (existsSync(join(reviewDir, 'claude-producer-evidence.json')) ? [join(reviewDir, 'claude-producer-evidence.json')] : []);
+
     const result = runFinalAcceptance(transport, {
       repo: opts.repo,
       issueNumber,
-      cycleId,
-      issueBody,
-      issueRevision,
+      cycleId: String(terminal.value.cycleId),
+      issueBody: liveIssue.body,
+      terminalSourceBody: String(terminalSnapshot.body),
+      issueRevision: liveRevision,
       reviewDir,
-      stageReceiptPaths: opts.stageReceipts,
-      capturePaths: opts.capturePaths,
-      ledgerPath: opts.ledgerPath,
-      relayEvidencePaths: opts.relayEvidencePaths,
-      claudeProducerEvidencePaths: opts.claudeProducerEvidencePaths,
+      stageReceiptPaths: canonicalReceiptPaths,
+      capturePaths: captures,
+      ledgerPath,
+      relayEvidencePaths: relayPaths,
+      claudeProducerEvidencePaths: claudePaths,
       externalPassReceiptPath: opts.externalPassReceiptPath,
       operatorAdjudication: operatorAcceptanceAdjudication({ ...opts, phase: 'final-acceptance' }),
       publicActor: opts.publicActor,
       workdir: opts.workdir,
     });
 
-    if (opts.json) console.log(JSON.stringify(result));
+    const terminalBinding: CreateIssueActionBinding = {
+      repository: opts.repo,
+      issueNumber,
+      sourceRevision: liveRevision,
+      stage: 'architectural',
+      stageAttemptId: terminal.value.stageAttemptId,
+    };
+    const recoveryAction = finalAcceptanceRecoveryAction(
+      opts,
+      issueNumber,
+      reviewDir,
+      liveRevision,
+      terminalBinding,
+      result,
+    );
+    const output = validatedManagerSurfaceOutput(
+      result,
+      'final_acceptance_failed',
+      recoveryAction,
+      result.ok
+        ? undefined
+        : [...result.guardErrors, ...result.diagnostics.map((item) => item.message)].join('; '),
+    );
+    if (opts.json) console.log(JSON.stringify(output));
     else if (!result.ok) {
-      for (const error of result.guardErrors) process.stderr.write(`${error}\n`);
-      for (const diagnostic of result.diagnostics) process.stderr.write(`${diagnostic.message}\n`);
+      for (const error of result.guardErrors) process.stderr.write(error + '\n');
+      for (const diagnostic of result.diagnostics) process.stderr.write(diagnostic.message + '\n');
     }
     return result.ok ? 0 : 1;
   });

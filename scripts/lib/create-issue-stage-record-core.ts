@@ -30,8 +30,11 @@ import {
 import {
   admitStageLaunch,
   composeTerminalBundle,
+  ensureLifecycleStageEvidenceSeed,
+  ensureLifecycleTierIntake,
   loadCanonicalLifecycleAuthority,
   TERMINAL_BUNDLE_UNAVAILABLE,
+  type CompetitiveDecision,
   type LifecycleReviewStage,
 } from './create-issue-stage-lifecycle.ts';
 import type {
@@ -61,6 +64,8 @@ export interface StartCycleInput {
   issueNumber: number;
   sourceRevision: string;
   tier: string;
+  competitiveDecision?: CompetitiveDecision;
+  competitiveRationale?: string;
   publicActor: PublicActor;
   predecessorCycleId?: string;
   stage?: LifecycleReviewStage;
@@ -469,9 +474,6 @@ export function startReviewCycle(
 ): OperationResult {
   const workdir = resolveWorkdir(input.issueNumber, input.workdir);
   const diagnostics: LineageDiagnostic[] = [];
-  const bootstrapDiagnostics = ensureProjectionLabels(transport, input.repo);
-  diagnostics.push(...bootstrapDiagnostics);
-  if (bootstrapDiagnostics.length > 0) return { ok: false, diagnostics, projectionPendingRepair: true };
 
   let censusState: ReturnType<typeof loadIssueJournalCensus>;
   try {
@@ -501,11 +503,36 @@ export function startReviewCycle(
     try {
       authority = loadCanonicalLifecycleAuthority(input.issueNumber, input.stateRootOverride);
     } catch (error) {
-      diagnostics.push({
-        code: 'stage_authority_invalid',
-        message: error instanceof Error ? error.message : String(error),
-      });
-      return { ok: false, diagnostics };
+      const detail = error instanceof Error ? error.message : String(error);
+      if (!detail.startsWith('missing canonical tier-intake/v1:')) {
+        diagnostics.push({ code: 'stage_authority_invalid', message: detail });
+        return { ok: false, diagnostics };
+      }
+      const marker = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i.exec(issueBefore.body)?.[1];
+      if (!marker || marker !== input.sourceRevision) {
+        diagnostics.push({
+          code: 'stage_authority_invalid',
+          message: `live Issue source-revision marker ${marker ?? '<missing>'} does not match launch revision ${input.sourceRevision}`,
+        });
+        return { ok: false, diagnostics };
+      }
+      try {
+        ensureLifecycleTierIntake({
+          issueNumber: input.issueNumber,
+          tier: input.tier as 'T1' | 'T2' | 'T3',
+          firstRevision: input.sourceRevision,
+          competitiveDecision: input.competitiveDecision,
+          competitiveRationale: input.competitiveRationale,
+          stateRootOverride: input.stateRootOverride,
+        });
+        authority = loadCanonicalLifecycleAuthority(input.issueNumber, input.stateRootOverride);
+      } catch (intakeError) {
+        diagnostics.push({
+          code: 'stage_authority_invalid',
+          message: intakeError instanceof Error ? intakeError.message : String(intakeError),
+        });
+        return { ok: false, diagnostics };
+      }
     }
     const admissionInput = {
       issueNumber: input.issueNumber,
@@ -560,6 +587,20 @@ export function startReviewCycle(
       return { ok: false, diagnostics, stageAttemptId: canonicalAttemptId };
     }
     stageAttemptId = canonicalAttemptId;
+  }
+
+  // A stale/consumed stage must be rejected before any projection or journal
+  // mutation. Projection bootstrap is therefore downstream of live Issue +
+  // lifecycle admission and deterministic attempt validation.
+  const bootstrapDiagnostics = ensureProjectionLabels(transport, input.repo);
+  diagnostics.push(...bootstrapDiagnostics);
+  if (bootstrapDiagnostics.length > 0) {
+    return {
+      ok: false,
+      diagnostics,
+      ...(stageAttemptId ? { stageAttemptId } : {}),
+      projectionPendingRepair: true,
+    };
   }
 
   const persistedCandidate = readPersistedCycleId(workdir);
@@ -672,6 +713,35 @@ export function startReviewCycle(
       message: 'issue revision drift detected before projection',
     });
     return { ok: false, diagnostics, cycleId: persisted, eventKey: persisted, ...(stageAttemptId ? { stageAttemptId } : {}), projectionPendingRepair: true };
+  }
+
+  if (input.stage && stageAttemptId) {
+    try {
+      ensureLifecycleStageEvidenceSeed({
+        issueNumber: input.issueNumber,
+        tier: input.tier as 'T1' | 'T2' | 'T3',
+        stage: input.stage,
+        stageAttemptId,
+        sourceRevision: input.sourceRevision,
+        cycleId: persisted,
+        reviewLaneRouting,
+        stateRootOverride: input.stateRootOverride,
+      });
+    } catch (error) {
+      diagnostics.push({
+        code: 'stage_authority_invalid',
+        message: error instanceof Error ? error.message : String(error),
+        eventKey: stageAttemptId,
+      });
+      return {
+        ok: false,
+        diagnostics,
+        cycleId: persisted,
+        eventKey: persisted,
+        stageAttemptId,
+        projectionPendingRepair: published.projectionPendingRepair,
+      };
+    }
   }
 
   const projection = syncIssueProjectionLabels(

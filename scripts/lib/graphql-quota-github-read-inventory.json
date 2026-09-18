@@ -184,6 +184,12 @@
       "policy": "pack scripts/gh passthrough fail-fast after primary GraphQL quota exhaustion"
     },
     {
+      "id": "rest-authenticated-principal-login",
+      "ownerClass": "rest_direct",
+      "pattern": "^gh api user --jq \\.login$",
+      "ownerIssue": 1935
+    },
+    {
       "id": "rest-repos-issues-events",
       "ownerClass": "rest_direct",
       "pattern": "^gh api repos/(?:[^/\\s]+/){1,2}issues/[^/\\s]+/events(?:\\s|$)",

@@ -225,8 +225,9 @@ function transport(options: TransportOptions = {}) {
     if (target.startsWith(`repos/${REPOSITORY}/labels/`)) {
       return { exitCode: 0, stdout: '{}', stderr: '' };
     }
-    if (options.issueBodies && target === `repos/${REPOSITORY}/issues/${issueNumber}` && argv.includes('--jq')) {
-      const body = options.issueBodies[Math.min(issueReadCount, options.issueBodies.length - 1)] ?? '';
+    if (target === `repos/${REPOSITORY}/issues/${issueNumber}` && argv.includes('--jq')) {
+      const bodies = options.issueBodies ?? [finalAcceptanceIssueBody(observedRevision)];
+      const body = bodies[Math.min(issueReadCount, bodies.length - 1)] ?? '';
       issueReadCount += 1;
       return { exitCode: 0, stdout: JSON.stringify({ title: 'fixture issue', body, labels: [] }), stderr: '' };
     }
@@ -256,6 +257,31 @@ function transport(options: TransportOptions = {}) {
     throw new Error(`unexpected gh call: ${argv.join(' ')}`);
   });
   return { runGh, createdIssueComments };
+}
+
+function writeGovernedAuthorReply(
+  path: string,
+  input: {
+    sourceRevision: string;
+    predecessorStage: string | null;
+    findings?: unknown[];
+    m4?: unknown[];
+  },
+): void {
+  writeFileSync(path, [
+    'Governed author output:',
+    '',
+    '```create-issue-author-dispositions/v1',
+    JSON.stringify({
+      schema: AUTHOR_DISPOSITIONS_SCHEMA,
+      sourceRevision: input.sourceRevision,
+      predecessorStage: input.predecessorStage,
+      findings: input.findings ?? [],
+      m4: { inventory: input.m4 ?? [] },
+    }),
+    '```',
+    '',
+  ].join('\n'));
 }
 
 function fixture(input: {
@@ -303,6 +329,7 @@ function fixture(input: {
   const intakePath = join(dir, 'tier-intake.json');
   const evidencePath = join(dir, 'attempt-001.json');
   const authorPath = join(dir, 'author-dispositions.json');
+  const authorReplyPath = join(dir, 'round-01-author-reply.md');
   const capturePath = join(dir, 'pass-02-architectural.capture.txt');
   const reviewEvidencePath = join(dir, 'attempt-000.json');
   const turnResultPath = join(dir, 'turn-result-001.json');
@@ -318,7 +345,10 @@ function fixture(input: {
     priorTier: 'T2',
     firstRevision: intakeRevision,
   }));
-  writeFileSync(authorPath, JSON.stringify({ schema: AUTHOR_DISPOSITIONS_SCHEMA, findings: [] }));
+  writeGovernedAuthorReply(authorReplyPath, {
+    sourceRevision,
+    predecessorStage: input.phase === 'pre-lens' ? 'architectural-review' : 'architectural',
+  });
   const reviewComments = Array.from({ length: 3 }, (_, index) => {
     const invocationId = `architectural-review-invocation-${String(index + 1).padStart(2, '0')}`;
     return comment(canonicalVerdict(sourceRevision, invocationId, issueNumber, invocationEchoLabel), { id: COMMENT_ID + 100 + index, issueNumber });
@@ -400,7 +430,7 @@ function fixture(input: {
     invocations: [invocation],
   };
   writeFileSync(evidencePath, JSON.stringify(evidence));
-  return { dir, intakePath, evidencePath, reviewEvidencePath, authorPath, capturePath, turnResultPath, outputDir, evidence, invocation, body, episode, reviewComments, issueNumber, phase: input.phase ?? 'final-acceptance', stageEvidencePaths: [reviewEvidencePath, evidencePath] };
+  return { dir, intakePath, evidencePath, reviewEvidencePath, authorPath, authorReplyPath, capturePath, turnResultPath, outputDir, evidence, invocation, body, episode, reviewComments, issueNumber, phase: input.phase ?? 'final-acceptance', stageEvidencePaths: [reviewEvidencePath, evidencePath] };
 }
 
 function competitivePreLensFixture() {
@@ -483,6 +513,10 @@ function competitivePreLensFixture() {
   writeFileSync(input.reviewEvidencePath, JSON.stringify(competitiveEvidence));
   rmSync(input.evidencePath, { force: true });
   input.stageEvidencePaths = [input.reviewEvidencePath];
+  writeGovernedAuthorReply(input.authorReplyPath, {
+    sourceRevision: String(competitiveEvidence.sourceRevision),
+    predecessorStage: 'competitive',
+  });
   return { ...input, architecturalEvidence, architecturalEvidencePath };
 }
 
@@ -586,6 +620,10 @@ describe('T3 pre-lens stage topology', () => {
 
     writeFileSync(input.architecturalEvidencePath, JSON.stringify(input.architecturalEvidence));
     input.stageEvidencePaths = [input.reviewEvidencePath, input.architecturalEvidencePath];
+    writeGovernedAuthorReply(input.authorReplyPath, {
+      sourceRevision: String(input.architecturalEvidence.sourceRevision),
+      predecessorStage: 'architectural-review',
+    });
     const bothStages = produce(input);
     expect(bothStages.ok, bothStages.errors.join('\n')).toBe(true);
     expect(bothStages.files).toContain('stage-completeness-receipt-competitive-attempt.json');
@@ -625,16 +663,16 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     )).toBe(false);
   });
 
-  it('accepts receipt-ok/artifact-ok after census and reread without principal lookup', () => {
+  it('accepts receipt-ok/artifact-ok after stable Issue read, principal lookup, census, and reread', () => {
     const input = fixture({ transportClassification: 'complete', withTurnResult: true, withCapture: true });
     const source = transport({ census: [...input.reviewComments, comment(input.body)] });
     const result = produce(input, source);
     expect(result.ok, result.errors.join('\n')).toBe(true);
-    expect(source.runGh.mock.calls.map((call) => call[0][2])).toEqual([
-      `repos/${REPOSITORY}/issues/${ISSUE}/comments?per_page=100&page=1`,
-      ...input.reviewComments.map((item) => `repos/${REPOSITORY}/issues/comments/${String(item.id)}`),
-      `repos/${REPOSITORY}/issues/comments/${COMMENT_ID}`,
-    ]);
+    const targets = source.runGh.mock.calls.map((call) => call[0][2]);
+    expect(targets.filter((target) => target === `repos/${REPOSITORY}/issues/${ISSUE}`)).toHaveLength(2);
+    expect(targets).toContain('user');
+    expect(targets).toContain(`repos/${REPOSITORY}/issues/${ISSUE}/comments?per_page=100&page=1`);
+    expect(targets).toContain(`repos/${REPOSITORY}/issues/comments/${COMMENT_ID}`);
     const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
     expect(receipt.invocations[0]).toMatchObject({
       terminalClassification: 'complete',
@@ -813,7 +851,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     });
     const result = produce(input, transport({ census: [] }));
     expect(result.ok).toBe(false);
-    expect(result.errors.join('\n')).toContain('authoritative GitHub artifact absent after complete census');
+    expect(result.errors.join('\n')).toContain('authoritative GitHub artifact zero_principal_owned_match');
     expect(existsSync(join(input.outputDir, 'acceptance-artifacts.json'))).toBe(false);
   });
 
@@ -940,7 +978,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     const result = produce(input, transport({ census: input.reviewComments }));
 
     expect(result.ok).toBe(false);
-    expect(result.errors.join('\n')).toContain('authoritative GitHub artifact absent after complete census');
+    expect(result.errors.join('\n')).toContain('authoritative GitHub artifact zero_principal_owned_match');
   });
 
   it('rejects artifact-backed recovery_required under final-node policy', () => {
@@ -1230,9 +1268,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     input.evidence.outcome = 'incident';
     input.evidence.settlement.retryState = 'exhausted';
     writeFileSync(input.evidencePath, JSON.stringify(input.evidence));
-    const live = canonicalFindingsVerdict({ invocationId: 'invocation-retry' })
-      .replace(/^INVOCATION_ID_TO_ECHO: .*$/m, '')
-      .replace(/\n{2,}/g, '\n');
+    const live = canonicalFindingsVerdict({ invocationId: 'invocation-retry' });
     const source = transport({ census: [...input.reviewComments, comment(live)] });
 
     const result = produce(input, source);
@@ -1263,18 +1299,21 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     const result = produce(input, transport({ census: [] }));
     expect(result.ok).toBe(false);
     expect(result.temporary).toBeUndefined();
-    expect(result.errors.join('\n')).toContain('authoritative GitHub artifact absent after complete census');
+    expect(result.errors.join('\n')).toContain('authoritative GitHub artifact zero_principal_owned_match');
     expect(existsSync(join(input.outputDir, 'acceptance-artifacts.json'))).toBe(false);
   });
 
   it.each([
-    ['foreign target', comment(canonicalVerdict(), { issue_url: `https://api.github.com/repos/${REPOSITORY}/issues/1193` }), /absent after complete census/],
+    ['foreign target', comment(canonicalVerdict(), { issue_url: `https://api.github.com/repos/${REPOSITORY}/issues/1193` }), /zero_principal_owned_match/],
     ['wrong revision', comment(canonicalVerdict('r02')), /revision mismatch:.*expected=r01.*observed=r02/],
-    ['untrusted author association', comment(canonicalVerdict(), { author_association: 'NONE', user: { login: 'someone-else' } }), /not repository-trusted/],
+    ['wrong publisher', comment(canonicalVerdict(), { user: { login: 'someone-else' }, author_association: 'OWNER' }), /wrong_publisher/],
     ['edited artifact', comment(canonicalVerdict(), { updated_at: '2026-08-07T04:01:00Z' }), /was edited/],
   ])('rejects %s', (_name, liveComment, expected) => {
     const input = fixture({ transportClassification: 'incident' });
-    const result = produce(input, transport({ census: [liveComment as Record<string, unknown>] }));
+    const result = produce(input, transport({
+      census: [liveComment as Record<string, unknown>],
+      issueBodies: [finalAcceptanceIssueBody(REVISION)],
+    }));
     expect(result.ok).toBe(false);
     expect(result.errors.join('\n')).toMatch(expected as RegExp);
   });
@@ -1323,15 +1362,15 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(result.errors.join('\n')).toContain('journal-marked comment');
   });
 
-  it('fails closed when the canonical invocation candidate itself lacks repository-trust fields', () => {
+  it('fails closed when the canonical invocation candidate lacks authenticated-principal identity', () => {
     const input = fixture({ transportClassification: 'incident' });
     const result = produce(input, transport({ census: [...input.reviewComments, comment(input.body, { user: null })] }));
     expect(result.ok).toBe(false);
-    expect(result.temporary).toBe('source-unavailable');
-    expect(result.errors.join('\n')).toContain('no repository-trust fields');
+    expect(result.temporary).toBeUndefined();
+    expect(result.errors.join('\n')).toContain('zero_principal_owned_match');
   });
 
-  it('credentials a unique echo-less FINDINGS comment for the unmatched reviewer slot', () => {
+  it('rejects a unique echo-less FINDINGS comment because invocation identity is absent', () => {
     const input = fixture({ transportClassification: 'incident', withCapture: false, withTurnResult: false });
     const stageEvidence = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as Record<string, any>;
     const unmatchedInvocation = stageEvidence.invocations[1] as Record<string, unknown>;
@@ -1349,23 +1388,9 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       census: [...input.reviewComments, comment(input.body, { issueNumber: input.issueNumber })],
       issueNumber: input.issueNumber,
     }));
-    expect(result.ok, result.errors.join('\n')).toBe(true);
-    const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-architectural-review-attempt.json'), 'utf8'));
-    expect(receipt.invocations[1]).toMatchObject({
-      reviewerSlot: '02',
-      terminalClassification: 'incident',
-      sendCount: 1,
-      artifactAuthority: {
-        kind: 'authoritative-github-artifact',
-        commentId: COMMENT_ID + 101,
-      },
-    });
-    expect(receipt.invocations[1].capture).toMatchObject({
-      name: 'pass-01-architectural-review-02.capture.txt',
-      byteLength: Buffer.byteLength(findingBody),
-    });
-    expect(receipt.invocations[1].terminalClassification).not.toBe('complete');
-    expect(readFileSync(join(input.dir, 'pass-01-architectural-review-02.capture.txt'), 'utf8')).toBe(findingBody);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('zero_principal_owned_match');
+    expect(existsSync(join(input.dir, 'pass-01-architectural-review-02.capture.txt'))).toBe(false);
   });
 
   it('fails closed when echo-less FINDINGS leftovers are ambiguous', () => {
@@ -1391,7 +1416,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       issueNumber: input.issueNumber,
     }));
     expect(result.ok).toBe(false);
-    expect(result.errors.join('\n')).toContain('cannot uniquely bind echo-less FINDINGS');
+    expect(result.errors.join('\n')).toContain('zero_principal_owned_match');
   });
 
   it('keeps an echoed invocation as the primary bind when an echo-less leftover is present', () => {
@@ -1412,7 +1437,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(receipt.invocations[1].artifactAuthority.commentId).toBe(COMMENT_ID + 101);
   });
 
-  it('deduplicates byte-identical trusted result materializations without ranking their publishers', () => {
+  it('filters publisher before uniqueness and ignores a foreign byte-identical candidate', () => {
     const input = fixture({ transportClassification: 'incident' });
     const first = comment(input.body);
     const second = comment(input.body, {
@@ -1422,7 +1447,6 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       author_association: 'COLLABORATOR',
     });
     const result = produce(input, transport({
-      principal: null,
       census: [...input.reviewComments, second, first],
     }));
     expect(result.ok, result.errors.join('\n')).toBe(true);
@@ -1431,10 +1455,13 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(receipt.invocations[0].artifactAuthority.publisherLogin).toBe(PUBLISHER);
   });
 
-  it('does not require the current authenticated GitHub principal to accept trusted result content', () => {
+  it('fails closed when the current authenticated GitHub principal cannot be resolved', () => {
     const input = fixture({ transportClassification: 'incident' });
     const result = produce(input, transport({ principal: null, census: [...input.reviewComments, comment(input.body)] }));
-    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.temporary).toBe('identity-unresolved');
+    expect(result.errors.join('\n')).toContain('authenticated GitHub principal');
+    expect(result.errors.join('\n')).toContain('GET /user');
   });
 
   it('classifies an incomplete paginated census as TEMPORARY source-unavailable', () => {
@@ -1456,15 +1483,15 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(result.ok, result.errors.join('\n')).toBe(true);
   });
 
-  it('rejects conflicting trusted result bytes for the same invocation and source revision', () => {
+  it('rejects two principal-owned canonical artifacts for the same invocation', () => {
     const input = fixture({ transportClassification: 'incident' });
     const conflicting = `${input.body}material-conflict\n`;
     const result = produce(input, transport({ census: [
       comment(input.body),
-      comment(conflicting, { id: COMMENT_ID + 1, html_url: `https://github.com/${REPOSITORY}/issues/${ISSUE}#issuecomment-${COMMENT_ID + 1}`, user: { login: 'other-member' }, author_association: 'MEMBER' }),
+      comment(conflicting, { id: COMMENT_ID + 1, html_url: `https://github.com/${REPOSITORY}/issues/${ISSUE}#issuecomment-${COMMENT_ID + 1}`, user: { login: PUBLISHER }, author_association: 'OWNER' }),
     ] }));
     expect(result.ok).toBe(false);
-    expect(result.errors.join('\n')).toContain('authoritative GitHub artifact content conflict');
+    expect(result.errors.join('\n')).toContain('duplicate_principal_owned_match');
   });
 
   it('classifies local observation loss after the authoritative reread but before capture materialization', () => {
@@ -1499,7 +1526,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     const input = fixture({ transportClassification: 'complete', withTurnResult: true, withCapture: true });
     const result = produce(input, transport({ census: [] }));
     expect(result.ok).toBe(false);
-    expect(result.errors.join('\n')).toContain('artifact absent after complete census');
+    expect(result.errors.join('\n')).toContain('zero_principal_owned_match');
   });
 
   it('rejects artifact bytes that change between the complete census and reread', () => {
@@ -1625,91 +1652,46 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(status.ok, status.missing.map((item) => item.reason).join('\n')).toBe(true);
   });
 
-  it('check-artifacts names flow-manager ownership and the next action for required-input failures', () => {
+  it('check-artifacts reports the owning authority instead of manager hand-repair instructions', () => {
     const missingTier = fixture({ transportClassification: 'incident' });
     rmSync(missingTier.intakePath);
     const missingTierReason = inspect(missingTier).missing.find((item) => item.artifact === 'tier-intake/v1')?.reason ?? '';
-    expect(missingTierReason).toContain('flow-manager-authored input');
-    expect(missingTierReason).toContain('record/provide the observed tier-intake.json via --tier-intake');
-
-    const malformedTier = fixture({ transportClassification: 'incident' });
-    writeFileSync(malformedTier.intakePath, '{}');
-    const malformedTierReason = inspect(malformedTier).missing.find((item) => item.artifact === 'tier-intake/v1')?.reason ?? '';
-    expect(malformedTierReason).toContain('flow-manager-authored input');
-    expect(malformedTierReason).toContain('record/provide the observed tier-intake.json via --tier-intake');
-
-    const nullTier = fixture({ transportClassification: 'incident' });
-    writeFileSync(nullTier.intakePath, 'null');
-    const nullTierReason = inspect(nullTier).missing.find((item) => item.artifact === 'tier-intake/v1')?.reason ?? '';
-    expect(nullTierReason).toContain('tier intake evidence is malformed');
-    expect(nullTierReason).toContain('flow-manager-authored input');
-    expect(nullTierReason).toContain('record/provide the observed tier-intake.json via --tier-intake');
-
-    const missingDispositions = fixture({ transportClassification: 'incident' });
-    rmSync(missingDispositions.authorPath);
-    const missingDispositionsReason = inspect(missingDispositions).missing.find((item) => item.artifact === 'author dispositions')?.reason ?? '';
-    expect(missingDispositionsReason).toContain('flow-manager-authored input');
-    expect(missingDispositionsReason).toContain('record/provide the observed author-dispositions.json via --author-dispositions');
-
-    const malformedDispositions = fixture({ transportClassification: 'incident' });
-    writeFileSync(malformedDispositions.authorPath, '{}');
-    const dispositionsReason = inspect(malformedDispositions).missing.find((item) => item.artifact === 'author dispositions')?.reason ?? '';
-    expect(dispositionsReason).toContain('flow-manager-authored input');
-    expect(dispositionsReason).toContain('record/provide the observed author-dispositions.json via --author-dispositions');
-
-    const nullDispositions = fixture({ transportClassification: 'incident' });
-    writeFileSync(nullDispositions.authorPath, 'null');
-    const nullDispositionsReason = inspect(nullDispositions).missing.find((item) => item.artifact === 'author dispositions')?.reason ?? '';
-    expect(nullDispositionsReason).toContain('author disposition evidence is malformed');
-    expect(nullDispositionsReason).toContain('flow-manager-authored input');
-    expect(nullDispositionsReason).toContain('record/provide the observed author-dispositions.json via --author-dispositions');
-
-    const missingStagePaths = fixture({ transportClassification: 'incident' });
-    const noStageStatus = inspectAcceptanceArtifacts({
-      reviewDir: missingStagePaths.dir,
-      outputDir: missingStagePaths.outputDir,
-      tierIntakePath: missingStagePaths.intakePath,
-      stageEvidencePaths: [],
-      authorDispositionsPath: missingStagePaths.authorPath,
-      phase: 'final-acceptance',
-    });
-    const noStageReason = noStageStatus.missing.find((item) => item.reason.includes('no recorded stage evidence paths were supplied'))?.reason ?? '';
-    expect(noStageReason).toContain('flow-manager-authored input');
-    expect(noStageReason).toContain('record/provide the observed attempt-NNN.json via --stage-evidence');
-
-    const omittedStagePath = fixture({ transportClassification: 'incident' });
-    const coverageStatus = inspectAcceptanceArtifacts({
-      reviewDir: omittedStagePath.dir,
-      outputDir: omittedStagePath.outputDir,
-      tierIntakePath: omittedStagePath.intakePath,
-      stageEvidencePaths: [omittedStagePath.reviewEvidencePath],
-      authorDispositionsPath: omittedStagePath.authorPath,
-      phase: 'final-acceptance',
-    });
-    const coverageReason = coverageStatus.missing.find((item) => item.reason.includes('--stage-evidence omitted canonical stage evidence files'))?.reason ?? '';
-    expect(coverageReason).toContain('flow-manager-authored input');
-    expect(coverageReason).toContain('record/provide the observed attempt-NNN.json via --stage-evidence');
+    expect(missingTierReason).toContain('authority=lifecycle-tool-witnessed');
+    expect(missingTierReason).not.toContain('flow-manager-authored input');
+    expect(missingTierReason).not.toContain('record/provide');
 
     const malformedStage = fixture({ transportClassification: 'incident' });
     writeFileSync(malformedStage.reviewEvidencePath, '{');
     const malformedStageReason = inspect(malformedStage).missing.find((item) => item.artifact === 'stage evidence')?.reason ?? '';
-    expect(malformedStageReason).toContain('flow-manager-authored input');
-    expect(malformedStageReason).toContain('record/provide the observed attempt-NNN.json via --stage-evidence');
+    expect(malformedStageReason).toContain('authority=lifecycle-tool-witnessed/GitHub-witnessed');
+    expect(malformedStageReason).not.toContain('flow-manager-authored input');
 
-    const nullStage = fixture({ transportClassification: 'incident' });
-    writeFileSync(nullStage.reviewEvidencePath, 'null');
-    const nullStageReason = inspect(nullStage).missing.find((item) => item.artifact === 'stage evidence')?.reason ?? '';
-    expect(nullStageReason).toContain('recorded stage result is malformed');
-    expect(nullStageReason).toContain('flow-manager-authored input');
-    expect(nullStageReason).toContain('record/provide the observed attempt-NNN.json via --stage-evidence');
+    const missingAuthor = fixture({ transportClassification: 'incident' });
+    rmSync(missingAuthor.authorReplyPath);
+    const authorReason = inspect(missingAuthor).missing.find((item) => item.artifact === 'governed author output')?.reason ?? '';
+    expect(authorReason).toContain('field=findings/m4');
+    expect(authorReason).toContain('authority=author-owned');
+    expect(authorReason).not.toContain('record/provide');
 
-    const missingCredential = fixture({ transportClassification: 'incident' });
-    const produced = produce(missingCredential);
+    const autoDiscovered = fixture({ transportClassification: 'incident' });
+    const autoStatus = inspectAcceptanceArtifacts({
+      reviewDir: autoDiscovered.dir,
+      outputDir: autoDiscovered.outputDir,
+      tierIntakePath: autoDiscovered.intakePath,
+      stageEvidencePaths: [],
+      authorDispositionsPath: autoDiscovered.authorPath,
+      phase: 'final-acceptance',
+    });
+    expect(autoStatus.missing.some((item) => item.reason.includes('no recorded stage evidence paths were supplied'))).toBe(false);
+    expect(autoStatus.missing.some((item) => item.reason.includes('--stage-evidence omitted canonical stage evidence files'))).toBe(false);
+
+    const derivedConflict = fixture({ transportClassification: 'incident' });
+    const produced = produce(derivedConflict);
     expect(produced.ok, produced.errors.join('\n')).toBe(true);
-    rmSync(join(missingCredential.outputDir, 'stage-completeness-receipt-architectural-review-attempt.json'));
-    const credentialReason = inspect(missingCredential).missing.find((item) => item.reason.includes('missing credentialing complete-or-proven-partial stage evidence'))?.reason ?? '';
-    expect(credentialReason).toContain('flow-manager-authored input');
-    expect(credentialReason).toContain('record/provide the observed attempt-NNN.json via --stage-evidence');
+    writeFileSync(derivedConflict.authorPath, '{}');
+    const derivedReason = inspect(derivedConflict).missing.find((item) => item.artifact === 'author dispositions')?.reason ?? '';
+    expect(derivedReason).toContain('governed producer provenance');
+    expect(derivedReason).toContain('authority=author-owned/GitHub-witnessed/lifecycle-tool-witnessed');
   });
 
   it('check-artifacts uses final-acceptance semantics for historical partial-witness identity', () => {
@@ -1809,7 +1791,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(input.body).not.toMatch(/INVOCATION_ID_TO_ECHO:/);
     const result = produce(input);
     expect(result.ok).toBe(false);
-    expect(result.errors.join('\n')).toContain('authoritative GitHub artifact absent after complete census');
+    expect(result.errors.join('\n')).toContain('authoritative GitHub artifact zero_principal_owned_match');
   });
 
   it('check-artifacts makes turn-result transport evidence audit-only only at final acceptance', () => {
@@ -2116,6 +2098,10 @@ describe('Issue #1556 pre-lens architectural-review routing', () => {
     const prepare = (missingSlot?: string) => {
       const input = fixture({ transportClassification: 'complete' });
       rmSync(input.evidencePath);
+      writeGovernedAuthorReply(input.authorReplyPath, {
+        sourceRevision: REVISION,
+        predecessorStage: 'architectural-review',
+      });
 
       writeFileSync(input.intakePath, JSON.stringify({
         schema: 'tier-intake/v1',
@@ -2260,6 +2246,10 @@ describe('Issue #1556 pre-lens architectural-review routing', () => {
 describe('Issue #1744 two-missing AR waiver production', () => {
   const prepare = (withWaiver: boolean) => {
     const input = fixture({ transportClassification: 'complete' });
+    writeGovernedAuthorReply(input.authorReplyPath, {
+      sourceRevision: REVISION,
+      predecessorStage: 'architectural-review',
+    });
     writeFileSync(input.intakePath, JSON.stringify({
       schema: 'tier-intake/v1', producer: 'flow-manager', taskIdentity: TASK, kind: 'fresh', priorTier: 'T3',
       firstRevision: REVISION, competitiveDecision: 'skipped', competitiveRationale: 'competitive review was skipped for pre-lens',
@@ -2408,8 +2398,9 @@ describe('Issue #1484 post-lens ledger production', () => {
     writeFileSync(input.evidencePath, JSON.stringify(lensEvidence));
     const lensDigest = createHash('sha256').update(lensCapture).digest('hex');
     const lensIdentity = 'sha256:' + lensDigest + ':pass-02-architectural-lens.capture.txt';
-    writeFileSync(input.authorPath, JSON.stringify({
-      schema: AUTHOR_DISPOSITIONS_SCHEMA,
+    writeGovernedAuthorReply(input.authorReplyPath, {
+      sourceRevision: REVISION,
+      predecessorStage: 'architectural-lens',
       findings: Array.from({ length: 7 }, (_, index) => ({
         id: 'lens-finding-' + String(index + 1),
         type: 'quality',
@@ -2419,7 +2410,7 @@ describe('Issue #1484 post-lens ledger production', () => {
         'persistent-machinery': 'no',
         simplificationCutCandidate: false,
       })),
-    }));
+    });
     const producerEvidencePath = join(input.dir, 'claude-producer-evidence.json');
     writeFileSync(producerEvidencePath, JSON.stringify([{
       schema: 'claude-producer-evidence/v1',

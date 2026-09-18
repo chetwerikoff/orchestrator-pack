@@ -90,12 +90,49 @@ vi.mock('./lib/create-issue-stage-record-gh.ts', async (importOriginal) => {
         user: { login: publisherLogin },
       };
       const comments = [...invocationComments, cycleComment];
+      const issueBody = [
+        '<!-- source-revision: r01 -->',
+        '# Issue 1287 fixture',
+        '',
+        '## Goal',
+        'Exercise canonical acceptance production.',
+        '',
+        '```behavior-kind',
+        'record-only',
+        '```',
+        '',
+        '```complexity-tier',
+        'tier: T3',
+        '```',
+        '',
+        '```denylist',
+        'vendor/**',
+        '```',
+        '',
+        '```allowed-roots',
+        'scripts/**',
+        '```',
+        '',
+        '## Acceptance criteria',
+        '1. Canonical production succeeds.',
+        '',
+        '## Verification',
+        'Run the focused fixture.',
+        '',
+        '```contract-evidence',
+        'none',
+        '```',
+        '',
+      ].join('\n');
       return {
         runGh: (argv: string[]) => {
           if (argv[2] === 'user') return { exitCode: 0, stdout: `${publisherLogin}\n`, stderr: '' };
           const target = argv[2] ?? '';
           if (target === `repos/${repository}`) {
             return { exitCode: 0, stdout: `${publisherLogin}\n`, stderr: '' };
+          }
+          if (target === `repos/${repository}/issues/${issueNumber}` && argv.includes('--jq')) {
+            return { exitCode: 0, stdout: JSON.stringify({ title: 'Issue 1287 fixture', body: issueBody, labels: [] }), stderr: '' };
           }
           if (target === `repos/${repository}/issues/${issueNumber}/comments?per_page=100&page=1`) {
             return { exitCode: 0, stdout: JSON.stringify(comments), stderr: '' };
@@ -214,7 +251,20 @@ function writeT3AcceptanceFixture() {
       }),
     }));
   }
-  writeFileSync(authorDispositionsPath, JSON.stringify({ schema: 'create-issue-author-dispositions/v1', findings: [] }));
+  writeFileSync(join(dir, 'round-01-author-reply.md'), [
+    'Governed author output:',
+    '',
+    '```create-issue-author-dispositions/v1',
+    JSON.stringify({
+      schema: 'create-issue-author-dispositions/v1',
+      sourceRevision,
+      predecessorStage: 'architectural-review',
+      findings: [],
+      m4: { inventory: [] },
+    }),
+    '```',
+    '',
+  ].join('\n'));
   return { stateRoot, dir, tierIntakePath, authorDispositionsPath, stageEvidencePaths, stageAttemptIds, sourceRevision };
 }
 function capture(id: string, name: string, text = CLEAN): CaptureIdentityV1 {
@@ -866,6 +916,7 @@ describe('Issue #1287 acceptance inventory parity', () => {
     const actualInventory = new Set([...inventory.matchAll(/^- `([^`]+)`/gm)].map((match) => match[1]!));
     const expectedInventory = new Set([
       ...ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.map((input) => input.file),
+      'issue-rNN-body.json',
       'stage-completeness-receipt-<stageAttemptId>.json',
       ...ACCEPTANCE_ARTIFACT_OUTPUT_NAMES,
       'reviewer-invocation-envelope-<stage>-<slot>-<attempt>.json',
@@ -877,7 +928,7 @@ describe('Issue #1287 acceptance inventory parity', () => {
       'claude-producer-evidence.json',
       'claude-unavailable-waiver.json',
       'chats.md',
-      'round-NN-author-reply.md',
+      'round-NN-author-reply.md|txt',
       'rNN/tier-gate-receipt.json',
     ]);
     expect(actualInventory).toEqual(expectedInventory);
@@ -894,19 +945,13 @@ describe('Issue #1287 acceptance inventory parity', () => {
 });
 
 
-describe('Issue #1875 required-input ownership diagnostics', () => {
-  it('derives the required --stage-evidence failure from the input descriptor', () => {
+describe('Issue #1935 canonical producer input ownership', () => {
+  it('keeps stage evidence lifecycle-owned and optional at the CLI boundary', () => {
     const descriptor = ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.find((input) => input.property === 'stageEvidencePaths');
     expect(descriptor).toBeDefined();
-    const reviewDir = join(tmpdir(), 'issue-1875-review');
-    expect(() => runStageFinalizeCli([
-      'node', 'scripts/create-issue-stage-finalize.ts', 'check-artifacts',
-      '--review-dir', reviewDir,
-      '--tier-intake', join(reviewDir, 'tier-intake.json'),
-      '--author-dispositions', join(reviewDir, 'author-dispositions.json'),
-    ])).toThrow(
-      `${descriptor!.flag} is required; ${descriptor!.classification}: record/provide the observed ${descriptor!.file} via ${descriptor!.flag}`,
-    );
+    expect(descriptor!.classification).toContain('lifecycle-tool-witnessed');
+    expect(stageFinalizeUsage()).toContain('[--stage-evidence <path>...]');
+    expect(stageFinalizeUsage()).not.toContain('--stage-evidence <path>... --author-dispositions');
   });
 });
 

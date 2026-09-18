@@ -9,10 +9,28 @@ import {
   parseFlagArgv,
   readHandoffReceipt,
 } from './flow-manager-long-running-child.ts';
+import {
+  runCreateIssueBrowserPreflight,
+  type CreateIssueBrowserPreflightFailure,
+} from './lib/create-issue-browser-gpt-preflight.ts';
+import {
+  createIssueNextAction,
+  createIssueRecoverableResult,
+  createIssueStaleNextAction,
+  type CreateIssueActionBinding,
+  type CreateIssueSemanticStage,
+} from './lib/create-issue-next-action.ts';
+import {
+  inspectLifecycleInvocationBinding,
+  recordLifecycleInvocationAdmission,
+  type LifecycleReviewStage,
+} from './lib/create-issue-stage-lifecycle.ts';
+import { defaultGhTransport, fetchIssueRevision } from './lib/create-issue-stage-record-gh.ts';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const launcherPath = join(repoRoot, 'scripts/flow-manager-long-running-child.ts');
 const browserEntry = join(repoRoot, 'scripts/chatgpt-browser-turn/state-light-entry.ts');
+const adapterPath = join(repoRoot, 'scripts/flow-manager-browser-gpt-long-run.ts');
 
 function requiredOption(options: Map<string, string | true>, key: string): string {
   const value = options.get(key);
@@ -20,9 +38,22 @@ function requiredOption(options: Map<string, string | true>, key: string): strin
   return value;
 }
 
-function refuse(reason: string): void {
-  process.stderr.write(`${JSON.stringify({ schema: 'flow-manager-browser-gpt-long-run-refusal/v1', reason })}\n`);
+function refuse(reason: string, details: Record<string, unknown> = {}): void {
+  process.stderr.write(`${JSON.stringify({ schema: 'flow-manager-browser-gpt-long-run-refusal/v1', reason, ...details })}\n`);
   process.exitCode = 2;
+}
+
+function refuseManagerResult(result: unknown): void {
+  process.stderr.write(`${JSON.stringify(result)}\n`);
+  process.exitCode = 2;
+}
+
+export interface BrowserAdapterDependencies {
+  runPreflight?: typeof runCreateIssueBrowserPreflight;
+  readIssueRevision?: (repository: string, issueNumber: number) => { title: string; body: string; labels: string[] };
+  inspectLifecycleBinding?: typeof inspectLifecycleInvocationBinding;
+  recordAdmission?: typeof recordLifecycleInvocationAdmission;
+  spawnLauncher?: typeof spawnDetachedLauncher;
 }
 
 function refuseStaleHandoffReceipt(
@@ -61,12 +92,17 @@ async function waitForReceipt(
   return false;
 }
 
-export async function spawnDetachedLauncher(launcherArgs: readonly string[]): Promise<number> {
+export async function spawnDetachedLauncher(
+  launcherArgs: readonly string[],
+  envOverrides: Readonly<Record<string, string>> = {},
+): Promise<number> {
+  const env = { ...process.env, ...envOverrides };
   if (process.env.OPK_FM_LONG_CHILD_DISABLE_DETACH === '1') {
     const result = await runProcess({
       command: process.execPath,
       args: ['--experimental-strip-types', launcherPath, ...launcherArgs],
       cwd: repoRoot,
+      env,
       inheritParentEnv: true,
       allowEmptyStdout: true,
       timeoutMs: 120_000,
@@ -85,6 +121,7 @@ export async function spawnDetachedLauncher(launcherArgs: readonly string[]): Pr
       ...launcherArgs,
     ],
     cwd: repoRoot,
+    env,
     inheritParentEnv: true,
     allowEmptyStdout: false,
     timeoutMs: 10_000,
@@ -95,7 +132,46 @@ export async function spawnDetachedLauncher(launcherArgs: readonly string[]): Pr
   return pid;
 }
 
-export async function runBrowserAdapter(argv: readonly string[]): Promise<number> {
+function createIssueBinding(
+  options: Map<string, string | true>,
+): CreateIssueActionBinding | null {
+  const repository = options.get('repository');
+  const issueNumber = Number(options.get('issue-number'));
+  const sourceRevision = options.get('source-revision');
+  const stage = options.get('stage');
+  if (
+    typeof repository !== 'string'
+    || !Number.isSafeInteger(issueNumber)
+    || issueNumber < 1
+    || typeof sourceRevision !== 'string'
+    || (stage !== 'competitive'
+      && stage !== 'architectural-review'
+      && stage !== 'architectural-lens'
+      && stage !== 'architectural')
+  ) return null;
+  const stageAttemptId = options.get('stage-attempt-id');
+  return {
+    repository,
+    issueNumber,
+    sourceRevision,
+    stage: stage as CreateIssueSemanticStage,
+    ...(typeof stageAttemptId === 'string' && stageAttemptId.trim() ? { stageAttemptId } : {}),
+  };
+}
+
+function refusePreflight(result: CreateIssueBrowserPreflightFailure): void {
+  refuse('create_issue_browser_preflight_failed', {
+    cause: result.cause,
+    blocker: result.blocker,
+    remedy: result.remedy,
+    nextAction: result.nextAction,
+  });
+}
+
+export async function runBrowserAdapter(
+  argv: readonly string[],
+  deps: BrowserAdapterDependencies = {},
+): Promise<number> {
   if (argv.some((token) => token === '--completion-mode' || token === '--authority' || token === '--result-protocol')) {
     refuse('forbidden_authority_selector');
     return 2;
@@ -118,6 +194,7 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
     'source-revision',
     'stage',
     'source-slot',
+    'stage-attempt-id',
   ];
   const directRequested = reviewerSourceOutput !== undefined
     || directArgumentKeys.some((key) => options.has(key));
@@ -156,6 +233,135 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
   const input = requiredOption(options, 'input');
   const cwd = typeof options.get('cwd') === 'string' ? options.get('cwd') as string : repoRoot;
 
+  let browserChildEnv: Record<string, string> = {};
+  let resolvedProjectUrl = typeof options.get('project-url') === 'string'
+    ? options.get('project-url') as string
+    : undefined;
+  if (directRequested) {
+    const binding = createIssueBinding(options);
+    if (!binding) {
+      refuse('create_issue_browser_preflight_binding_invalid', { nextAction: null });
+      return 2;
+    }
+    const operatorBrowserConfig = typeof options.get('operator-browser-config') === 'string'
+      ? options.get('operator-browser-config') as string
+      : undefined;
+    const retryArgv = [process.execPath, '--experimental-strip-types', adapterPath, ...argv];
+    const preflightRunner = deps.runPreflight ?? runCreateIssueBrowserPreflight;
+    const preflight = preflightRunner({
+      repository: binding.repository,
+      cwd,
+      operatorBrowserConfig,
+      binding,
+      retryArgv,
+    });
+    if (!preflight.ok) {
+      refusePreflight(preflight);
+      return 2;
+    }
+    browserChildEnv = preflight.childEnv;
+    resolvedProjectUrl = preflight.config.projectUrl;
+
+    let liveRevision = '';
+    try {
+      const live = deps.readIssueRevision
+        ? deps.readIssueRevision(binding.repository, binding.issueNumber)
+        : fetchIssueRevision(defaultGhTransport(), binding.repository, binding.issueNumber);
+      liveRevision = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i.exec(live.body)?.[1] ?? '';
+    } catch (error) {
+      const retryAction = createIssueNextAction({
+        kind: 'retry-create-issue-browser-preflight',
+        binding,
+        argv: retryArgv,
+      });
+      refuseManagerResult(createIssueRecoverableResult({
+        cause: 'source-unavailable',
+        blocker: error instanceof Error ? error.message : String(error),
+        nextAction: retryAction,
+      }));
+      return 2;
+    }
+    if (!liveRevision || liveRevision.toLowerCase() !== binding.sourceRevision.toLowerCase()) {
+      refuseManagerResult(createIssueStaleNextAction({
+        binding,
+        observed: {
+          repository: binding.repository,
+          issueNumber: binding.issueNumber,
+          ...(liveRevision ? { sourceRevision: liveRevision } : {}),
+        },
+        nextAction: null,
+      }));
+      return 2;
+    }
+
+    const inspectBinding = deps.inspectLifecycleBinding ?? inspectLifecycleInvocationBinding;
+    const lifecycleBinding = inspectBinding({
+      issueNumber: binding.issueNumber,
+      stage: binding.stage as LifecycleReviewStage,
+      stageAttemptId: binding.stageAttemptId!,
+      sourceRevision: binding.sourceRevision,
+    });
+    if (!lifecycleBinding.ok) {
+      refuseManagerResult(createIssueStaleNextAction({
+        binding,
+        observed: {
+          repository: binding.repository,
+          issueNumber: binding.issueNumber,
+          sourceRevision: liveRevision,
+          ...lifecycleBinding.observed,
+        },
+        nextAction: null,
+      }));
+      return 2;
+    }
+
+    try {
+      const recordAdmission = deps.recordAdmission ?? recordLifecycleInvocationAdmission;
+      recordAdmission({
+        issueNumber: binding.issueNumber,
+        stage: binding.stage as LifecycleReviewStage,
+        stageAttemptId: binding.stageAttemptId!,
+        sourceRevision: binding.sourceRevision,
+        invocationId,
+        reviewerSlot: options.get('source-slot') as string,
+        terminalEnvelopePath: terminalEnvelope,
+        reviewerSource: options.get('reviewer-source') as string,
+        reviewerSourceOutputPath: reviewerSourceOutput,
+      });
+    } catch (error) {
+      const observed = inspectBinding({
+        issueNumber: binding.issueNumber,
+        stage: binding.stage as LifecycleReviewStage,
+        stageAttemptId: binding.stageAttemptId!,
+        sourceRevision: binding.sourceRevision,
+      });
+      if (!observed.ok) {
+        refuseManagerResult(createIssueStaleNextAction({
+          binding,
+          observed: {
+            repository: binding.repository,
+            issueNumber: binding.issueNumber,
+            sourceRevision: liveRevision,
+            ...observed.observed,
+          },
+          nextAction: null,
+        }));
+        return 2;
+      }
+      const retryAction = createIssueNextAction({
+        kind: 'retry-create-issue-browser-preflight',
+        binding,
+        argv: retryArgv,
+      });
+      refuseManagerResult(createIssueRecoverableResult({
+        cause: 'create_issue_lifecycle_admission_failed',
+        blocker: error instanceof Error ? error.message : String(error),
+        nextAction: retryAction,
+      }));
+      return 2;
+    }
+  }
+
   const browserArgs = [
     'turn',
     '--invocation-id', invocationId,
@@ -181,7 +387,7 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
   }
   if (typeof options.get('chat-url') === 'string') browserArgs.push('--chat-url', options.get('chat-url') as string);
   if (options.get('new-chat') === true) browserArgs.push('--new-chat');
-  if (typeof options.get('project-url') === 'string') browserArgs.push('--project-url', options.get('project-url') as string);
+  if (resolvedProjectUrl) browserArgs.push('--project-url', resolvedProjectUrl);
 
   const launcherArgs = [
     'launch',
@@ -202,7 +408,8 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
     ...browserArgs,
   ];
 
-  const pid = await spawnDetachedLauncher(launcherArgs);
+  const spawnLauncher = deps.spawnLauncher ?? spawnDetachedLauncher;
+  const pid = await spawnLauncher(launcherArgs, browserChildEnv);
   const receiptReady = await waitForReceipt(handoffReceipt, runIdentity, attemptIdentity, 30_000);
   if (!receiptReady) {
     refuse('handoff_receipt_missing');
@@ -217,6 +424,7 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
         invocation_id: invocationId,
         stage: options.get('stage') as string,
         source_slot: options.get('source-slot') as string,
+        stage_attempt_id: options.get('stage-attempt-id') as string,
       }
     : undefined;
   process.stdout.write(`${JSON.stringify({

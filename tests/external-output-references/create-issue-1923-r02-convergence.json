@@ -1,0 +1,48 @@
+{
+  "schema": "create-issue-convergence-replay/v1",
+  "source": {
+    "issueNumber": 1923,
+    "sourceRevision": "r02",
+    "cycleId": "817f68ba-24a4-4d18-80a4-ee88832dd5c8",
+    "stage": "architectural-review",
+    "stageAttemptId": "36ff5f19-2f08-4c74-a4d2-de489d0ec660",
+    "tier": "T2",
+    "measuredWindow": "2026-09-15..2026-09-16",
+    "note": "Sanitized from the measured create-Issue episode cited by Issue #1935; identities and transport classifications are retained while finding prose is shortened."
+  },
+  "recordedTransport": {
+    "state": "recovery_required",
+    "cause": "direct_publication_no_owned_publication",
+    "delivery": "POSSIBLY_DELIVERED",
+    "recovery_available": false,
+    "recurrence_cause": "fresh_conversation_url_not_observed",
+    "child_terminal": "child_post_result_exit_timeout",
+    "lifecycle_outcome": "incident",
+    "send_count": 1
+  },
+  "publisherLogin": "chetwerikoff",
+  "issue": {
+    "title": "Sanitized replay of Issue 1923 r02",
+    "body": "<!-- source-revision: r02 -->\n# Sanitized Issue 1923 replay\n\n## Goal\nProve create-Issue convergence from lost Browser-GPT observation.\n\n```behavior-kind\nrecord-only\n```\n\n```complexity-tier\ntier: T2\n```\n\n```denylist\nvendor/**\n```\n\n```allowed-roots\nscripts/**\n```\n\n## Acceptance criteria\n1. Preserve transport incident truth while reconciling canonical GitHub reviewer artifacts.\n\n## Verification\nRun the deterministic replay without live ChatGPT.\n\n```contract-evidence\nnone\n```\n"
+  },
+  "slots": [
+    {
+      "reviewerSlot": "01",
+      "invocationId": "32b1eed5-f910-468c-949b-97c485e5052b",
+      "commentId": 5694711541,
+      "findingId": "manager-loss-recovery-lacks-retained-invocation-authority"
+    },
+    {
+      "reviewerSlot": "02",
+      "invocationId": "e12d1b70-1217-4e5f-bf3a-d44a4ae6437a",
+      "commentId": 5694722612,
+      "findingId": "replacement-manager-fresh-chat-conflicts-with-session-recovery"
+    },
+    {
+      "reviewerSlot": "03",
+      "invocationId": "8629322d-08c8-4bff-9039-ca62dcdf3368",
+      "commentId": 5694735406,
+      "findingId": "post-send-manager-loss-identity-gap"
+    }
+  ]
+}

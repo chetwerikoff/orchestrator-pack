@@ -345,6 +345,44 @@ function validCardinality(value: unknown): value is number { return Number.isInt
 function slotForOrdinal(ordinal: number): ReviewerSlot { return String(ordinal).padStart(2, '0'); }
 function expectedSlots(cardinality: number): ReviewerSlot[] { return Array.from({ length: cardinality }, (_, index) => slotForOrdinal(index + 1)); }
 
+function reviewLaneCredentialingProjection(value: unknown): unknown {
+  if (!isRecord(value) || !isRecord(value.sourceVerdictEvidence)) return value;
+  let projected = false;
+  const sourceVerdictEvidence: Record<string, unknown> = {};
+  for (const [slot, rawEvidence] of Object.entries(value.sourceVerdictEvidence)) {
+    if (
+      isRecord(rawEvidence)
+      && rawEvidence.credentialingAuthority === 'authoritative-github-artifact'
+      && nonEmpty(rawEvidence.producerEvidenceIdentity)
+      && rawEvidence.producerEvidenceIdentity.startsWith('authoritative-github-artifact:comment-')
+    ) {
+      sourceVerdictEvidence[slot] = { ...rawEvidence, terminalClassification: 'complete' };
+      projected = true;
+    } else {
+      sourceVerdictEvidence[slot] = rawEvidence;
+    }
+  }
+  return projected ? { ...value, sourceVerdictEvidence } : value;
+}
+
+function isCredentialedReviewLaneEvidence(
+  value: unknown,
+  waivedMissingSlots: readonly string[],
+  purpose: ReviewEpisodeValidationPurpose = 'stage-time',
+): value is ReviewLaneEvidence {
+  return isReviewLaneEvidence(reviewLaneCredentialingProjection(value), waivedMissingSlots, purpose);
+}
+
+function credentialedMaterialVerdict(evidence: unknown): ReturnType<typeof normalizeMaterialVerdict> {
+  const projected = isRecord(evidence)
+    && evidence.credentialingAuthority === 'authoritative-github-artifact'
+    && nonEmpty(evidence.producerEvidenceIdentity)
+    && evidence.producerEvidenceIdentity.startsWith('authoritative-github-artifact:comment-')
+      ? { ...evidence, terminalClassification: 'complete' }
+      : evidence;
+  return normalizeMaterialVerdict(projected as Parameters<typeof normalizeMaterialVerdict>[0]);
+}
+
 export function parseReviewerCardinalityControl(raw: string | undefined): Record<ReviewTier, number> {
   const defaults: Record<ReviewTier, number> = { T1: 1, T2: 3, T3: 3 };
   if (!raw?.trim()) return defaults;
@@ -608,13 +646,25 @@ function validateBrowserReceipt(
     if (receipt.reviewLane) {
       const evidence = receipt.reviewLane.sourceVerdictEvidence[slot];
       const finalCapture = attempts.at(-1)?.capture;
-      const evidenceVerdict = evidence ? normalizeMaterialVerdict(evidence) : 'unparseable';
+      const evidenceVerdict = evidence ? credentialedMaterialVerdict(evidence) : 'unparseable';
       if (evidenceVerdict === 'accept' || evidenceVerdict === 'material-findings') {
         if (!finalCapture || evidence?.captureIdentity !== finalCapture.captureIdentity) {
           errors.push(`stage ${receipt.stage} reviewLane producer evidence does not match capture for slot ${slot}`);
         }
         if (evidence?.rawFindingCount !== finalCapture?.rawFindingCount) {
           errors.push(`stage ${receipt.stage} reviewLane producer evidence finding count does not match capture for slot ${slot}`);
+        }
+        if (isRecord(evidence) && evidence.credentialingAuthority === 'authoritative-github-artifact') {
+          const finalInvocation = attempts.at(-1)!;
+          const expectedProducerIdentity = finalInvocation.artifactAuthority
+            ? `authoritative-github-artifact:comment-${finalInvocation.artifactAuthority.commentId}`
+            : null;
+          if (!expectedProducerIdentity || evidence.producerEvidenceIdentity !== expectedProducerIdentity) {
+            errors.push(`stage ${receipt.stage} reviewLane GitHub credentialing authority does not match invocation artifactAuthority for slot ${slot}`);
+          }
+          if (evidence.terminalClassification !== finalInvocation.terminalClassification) {
+            errors.push(`stage ${receipt.stage} reviewLane transport classification disagrees with invocation transport truth for slot ${slot}`);
+          }
         }
       }
     }
@@ -765,9 +815,9 @@ function parseStageReceipt(
     ? value.partialMissingSources as PartialMissingSourceWitness[]
     : [];
   const waivedMissingSlots = reviewLaneWaivedMissingSlots(stage, policyVersion, producerEvidence, partialMissingSources);
-  if (reviewLane !== undefined && !isReviewLaneEvidence(reviewLane, waivedMissingSlots, purpose)) errors.push(`${label} reviewLane must be complete immutable evidence`);
+  if (reviewLane !== undefined && !isCredentialedReviewLaneEvidence(reviewLane, waivedMissingSlots, purpose)) errors.push(`${label} reviewLane must be complete immutable evidence`);
   if (!routedPolicy && reviewLane !== undefined) errors.push(`${label} legacy policy cannot carry routed reviewLane evidence`);
-  if (routedPolicy && !isReviewLaneEvidence(reviewLane, waivedMissingSlots, purpose)) errors.push(`${label} review-lane-routing/v1 requires full reviewLane evidence`);
+  if (routedPolicy && !isCredentialedReviewLaneEvidence(reviewLane, waivedMissingSlots, purpose)) errors.push(`${label} review-lane-routing/v1 requires full reviewLane evidence`);
   if (tier !== 'T1' && tier !== 'T2' && tier !== 'T3') errors.push(`${label} has unknown tier`);
   if (!COUNTED_STAGE_TOKENS.has(stage as ReviewStage)) errors.push(`${label} has unknown stage`);
   if (policyVersion !== TRIPLE_SOURCE_POLICY_VERSION && policyVersion !== SINGLE_SOURCE_POLICY_VERSION && policyVersion !== REVIEW_LANE_ROUTING_POLICY_VERSION) errors.push(`${label} has unknown policyVersion`);
@@ -794,7 +844,7 @@ function parseStageReceipt(
   }
   const credentialingCaptures = validateCaptureArray(value.credentialingCaptures, `${label}.credentialingCaptures`, errors);
   const relayEligibleCaptures = validateCaptureArray(value.relayEligibleCaptures, `${label}.relayEligibleCaptures`, errors);
-  if (isReviewLaneEvidence(reviewLane, waivedMissingSlots)) {
+  if (isCredentialedReviewLaneEvidence(reviewLane, waivedMissingSlots, purpose)) {
     const reviewLaneRouting = reviewLane.routing;
     if (reviewLaneRouting.stageAttemptId !== String(value.stageAttemptId).trim()) errors.push(`${label} reviewLane stageAttemptId mismatch`);
     if (reviewLaneRouting.sourceRevision !== String(value.sourceRevision).trim()) errors.push(`${label} reviewLane sourceRevision mismatch`);
@@ -827,7 +877,7 @@ function parseStageReceipt(
     claude: isRecord(value.claude) ? value.claude as unknown as StageCompletenessReceiptV1['claude'] : undefined,
     credentialingCaptures,
     relayEligibleCaptures,
-    ...(isReviewLaneEvidence(reviewLane, waivedMissingSlots) ? { reviewLane } : {}),
+    ...(isCredentialedReviewLaneEvidence(reviewLane, waivedMissingSlots, purpose) ? { reviewLane } : {}),
   };
   if (receipt.stage === 'competitive') {
     if (receipt.tier !== 'T3') errors.push('competitive is valid only for T3');

@@ -40,9 +40,16 @@ import { extractMarker } from './create-issue-stage-record-marker.ts';
 import { buildCanonicalLineage, deriveCanonicalCycleLineage } from './create-issue-stage-record-lineage.ts';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
 import { validateTerminalOneShotBodyBinding } from './create-issue-final-acceptance-contract.ts';
-import { defaultGhTransport, fetchRepositoryOwnerLogin, parseJournalEvents } from './create-issue-stage-record-gh.ts';
+import { defaultGhTransport, fetchIssueRevision, fetchRepositoryOwnerLogin, parseJournalEvents } from './create-issue-stage-record-gh.ts';
 import type { CanonicalLineage, GhTransport, PartialMissingSourceWitness, ProducerEvidence, TrustedComment } from './create-issue-stage-record-types.ts';
 import { resolvePublishedAuthorState } from './resolve-published-author-state.ts';
+import { isReviewLaneRouting } from './review-lane-record.ts';
+import { settleReviewLane, type ReviewLaneRouting } from './review-lane-routing.ts';
+import {
+  resolveAuthenticatedGithubPrincipal,
+  sameGithubPrincipal,
+  selectPrincipalOwnedCanonicalArtifact,
+} from './create-issue-github-artifact-authority.ts';
 
 export const STAGE_EVIDENCE_SCHEMA = 'create-issue-stage-evidence/v1' as const;
 export const AUTHOR_DISPOSITIONS_SCHEMA = 'create-issue-author-dispositions/v1' as const;
@@ -51,9 +58,9 @@ export const TURN_RESULT_SCHEMA = 'turn-result/v1' as const;
 export const AUTHORITATIVE_GITHUB_ARTIFACT_BASIS = 'authoritative-github-artifact' as const;
 
 export const ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS = [
-  { property: 'tierIntakePath', flag: '--tier-intake', file: 'tier-intake.json', schema: 'tier-intake/v1', classification: 'flow-manager-authored input', repeatable: false },
-  { property: 'stageEvidencePaths', flag: '--stage-evidence', file: 'attempt-NNN.json', schema: STAGE_EVIDENCE_SCHEMA, classification: 'flow-manager-authored input', repeatable: true },
-  { property: 'authorDispositionsPath', flag: '--author-dispositions', file: 'author-dispositions.json', schema: AUTHOR_DISPOSITIONS_SCHEMA, classification: 'flow-manager-authored input', repeatable: false },
+  { property: 'tierIntakePath', flag: '--tier-intake', file: 'tier-intake.json', schema: 'tier-intake/v1', classification: 'lifecycle-tool-witnessed', repeatable: false },
+  { property: 'stageEvidencePaths', flag: '--stage-evidence', file: 'attempt-NNN.json', schema: STAGE_EVIDENCE_SCHEMA, classification: 'lifecycle-tool-witnessed/GitHub-witnessed', repeatable: true },
+  { property: 'authorDispositionsPath', flag: '--author-dispositions', file: 'author-dispositions.json', schema: AUTHOR_DISPOSITIONS_SCHEMA, classification: 'GitHub-witnessed/author-owned/lifecycle-tool-witnessed', repeatable: false },
 ] as const;
 
 type AcceptanceArtifactInputProperty = typeof ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS[number]['property'];
@@ -69,7 +76,7 @@ function acceptanceArtifactInputReason(
   detail: string,
 ): string {
   const descriptor = acceptanceArtifactInputDescriptor(property);
-  return `${detail}; ${descriptor.classification}: record/provide the observed ${descriptor.file} via ${descriptor.flag}`;
+  return `${detail}; authority=${descriptor.classification}; producer must obtain ${descriptor.file} from the declared authority`;
 }
 
 export function stageCompletenessReceiptFileName(stageAttemptId: string): string {
@@ -169,6 +176,7 @@ type AuthoritativeIssueCensus = IssueCommentCensus;
 interface ArtifactAuthorityContext {
   transport: GhTransport;
   census: AuthoritativeIssueCensus;
+  principalLogin: string;
   operatorHint?: OperatorNarrowingHint;
   publishedAuthorState?: {
     text: string;
@@ -181,6 +189,7 @@ interface AuthoritativeArtifactResolution {
   capture: CaptureIdentityV1;
   captureText: string;
   capturePath: string;
+  captureCreated: boolean;
   authority: AuthoritativeGithubArtifactAuthorityV1;
 }
 
@@ -207,6 +216,18 @@ export interface AcceptanceArtifactStatus {
 
 function isRecord(value: unknown): value is JsonRecord {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function canonicalJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJsonValue);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.keys(value).sort().map((key) => [key, canonicalJsonValue(value[key])]),
+  );
+}
+
+function jsonEqual(left: unknown, right: unknown): boolean {
+  return JSON.stringify(canonicalJsonValue(left)) === JSON.stringify(canonicalJsonValue(right));
 }
 
 function requiredString(value: unknown, label: string, errors: string[]): string {
@@ -517,7 +538,7 @@ function isCanonicalReviewerArtifact(
   issueNumber: number,
   sourceRevision: string,
   invocationId?: string,
- ): boolean {
+): boolean {
   const revision = parseCanonicalCaptureRevision(text);
   if (!revision || revision.issueNumber !== issueNumber || revision.sourceRevision !== sourceRevision) return false;
   const lines = text.split(/\r?\n/).map((line) => line.trim());
@@ -542,20 +563,6 @@ function isCanonicalReviewerArtifact(
     || (declaredFindingCounts.length === 1 && declaredFindingCounts[0] === revision.findingCount);
 }
 
-function isCanonicalEchoLessFindingArtifact(
-  text: string,
-  stage: Exclude<ReviewStage, 'architectural-lens'>,
-  issueNumber: number,
-  sourceRevision: string,
- ): boolean {
-  const revision = parseCanonicalCaptureRevision(text);
-  return Boolean(revision
-    && revision.issueNumber === issueNumber
-    && revision.sourceRevision === sourceRevision
-    && revision.findingCount > 0
-    && isCanonicalReviewerArtifact(text, stage, issueNumber, sourceRevision, undefined));
-}
-
 function canonicalReviewerArtifactRevision(
   text: string,
   stage: Exclude<ReviewStage, 'architectural-lens'>,
@@ -567,10 +574,6 @@ function canonicalReviewerArtifactRevision(
   return isCanonicalReviewerArtifact(text, stage, issueNumber, revision.sourceRevision, invocationId)
     ? revision.sourceRevision
     : null;
-}
-
-function sameGithubLogin(left: string, right: string): boolean {
-  return left.toLowerCase() === right.toLowerCase();
 }
 
 function temporaryError(
@@ -719,16 +722,6 @@ function authoritativeIssueCommentCensus(
   return issueCommentCensus(transport, repositoryFullName, issueNumber, errors);
 }
 
-const TRUSTED_REVIEW_ARTIFACT_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
-
-function isTrustedReviewArtifactComment(comment: AuthoritativeIssueComment): boolean {
-  return Boolean(
-    comment.userLogin
-    && comment.authorAssociation
-    && TRUSTED_REVIEW_ARTIFACT_ASSOCIATIONS.has(comment.authorAssociation.toUpperCase()),
-  );
-}
-
 function canonicalIssueCommentLineage(
   transport: GhTransport,
   repositoryFullName: string,
@@ -757,7 +750,7 @@ function canonicalIssueCommentLineage(
       ));
       return null;
     }
-    if (!sameGithubLogin(comment.userLogin, ownerLogin)) continue;
+    if (!sameGithubPrincipal(comment.userLogin, ownerLogin)) continue;
     if (comment.updatedAt !== comment.createdAt) continue;
     trustedJournalComments.push({
       id: comment.id,
@@ -829,8 +822,9 @@ function materializeAuthoritativeCapture(
   captureTexts: Map<string, string>,
   captureTimestamps: Map<string, number>,
   errors: string[],
-): { capture: CaptureIdentityV1; path: string } | null {
+): { capture: CaptureIdentityV1; path: string; created: boolean } | null {
   const target = resolve(reviewDir, name);
+  const existedBefore = existsSync(target);
   if (assertedCapturePath !== undefined) {
     const asserted = resolve(reviewDir, String(assertedCapturePath));
     if (asserted !== target) {
@@ -915,7 +909,7 @@ function materializeAuthoritativeCapture(
     errors.push(temporaryError('observation-lost', `canonical capture could not be statted after materialization: ${target}`));
     return null;
   }
-  return { capture, path: target };
+  return { capture, path: target, created: !existedBefore };
 }
 
 function expectedCommentUrl(repositoryFullName: string, issueNumber: number, commentId: number): string {
@@ -942,8 +936,7 @@ function rereadAuthoritativeIssueComment(
   sourceRevision: string,
   invocationId: string,
   errors: string[],
-  allowEchoLessFinding = false,
- ): AuthoritativeIssueComment | null {
+): AuthoritativeIssueComment | null {
   const response = context.transport.runGh([
     'gh',
     'api',
@@ -966,32 +959,30 @@ function rereadAuthoritativeIssueComment(
     errors.push(`authoritative GitHub artifact target mismatch on reread: comment ${censusComment.id}`);
     return null;
   }
-  if (!reread.userLogin || !reread.authorAssociation) {
-    errors.push(temporaryError('source-unavailable', `authoritative reread comment ${reread.id} has no repository-trust fields`));
+  if (!reread.userLogin) {
+    errors.push(temporaryError('identity-unresolved', `authoritative reread comment ${reread.id} has no publisher login`));
     return null;
   }
-  if (!censusComment.userLogin || !censusComment.authorAssociation) {
-    errors.push(temporaryError('source-unavailable', `authoritative census candidate ${censusComment.id} has no repository-trust fields`));
+  if (!censusComment.userLogin) {
+    errors.push(temporaryError('identity-unresolved', `authoritative census candidate ${censusComment.id} has no publisher login`));
     return null;
   }
-  if (!isTrustedReviewArtifactComment(reread) || !isTrustedReviewArtifactComment(censusComment)) {
-    errors.push(`authoritative GitHub artifact is not repository-trusted: ${reread.htmlUrl}`);
+  if (!sameGithubPrincipal(reread.userLogin, context.principalLogin)
+    || !sameGithubPrincipal(censusComment.userLogin, context.principalLogin)) {
+    errors.push(`authoritative GitHub artifact publisher mismatch: expected=${context.principalLogin} observed=${reread.userLogin}`);
     return null;
   }
   if (reread.createdAt !== reread.updatedAt) {
     errors.push(`authoritative GitHub artifact was edited: ${reread.htmlUrl}`);
     return null;
   }
-  const canonicalWithEcho = isCanonicalReviewerArtifact(
+  if (!isCanonicalReviewerArtifact(
     reread.body,
     stage,
     context.census.issueNumber,
     sourceRevision,
     invocationId,
-  );
-  const canonicalEchoLessFinding = allowEchoLessFinding
-    && isCanonicalEchoLessFindingArtifact(reread.body, stage, context.census.issueNumber, sourceRevision);
-  if (!canonicalWithEcho && !canonicalEchoLessFinding) {
+  )) {
     const observedRevision = canonicalReviewerArtifactRevision(
       reread.body,
       stage,
@@ -1010,7 +1001,7 @@ function rereadAuthoritativeIssueComment(
     || reread.body !== censusComment.body
     || reread.createdAt !== censusComment.createdAt
     || reread.updatedAt !== censusComment.updatedAt
-    || !sameGithubLogin(reread.userLogin, censusComment.userLogin)
+    || !sameGithubPrincipal(reread.userLogin, censusComment.userLogin)
     || reread.authorAssociation !== censusComment.authorAssociation
     || reread.htmlUrl !== censusComment.htmlUrl
     || reread.issueUrl !== censusComment.issueUrl
@@ -1027,126 +1018,52 @@ function resolveAuthoritativeArtifact(
   stage: Exclude<ReviewStage, 'architectural-lens'>,
   stageSequence: number,
   invocation: JsonRecord,
-  stageInvocations: readonly JsonRecord[],
   captureTexts: Map<string, string>,
   captureTimestamps: Map<string, number>,
   errors: string[],
- ): AuthoritativeArtifactResolution | null {
+): AuthoritativeArtifactResolution | null {
   const invocationId = optionalString(invocation.invocationId) ?? '';
   const sourceRevision = optionalString(invocation.sourceRevision) ?? '';
   const reviewerSlot = optionalString(invocation.reviewerSlot) ?? '';
   if (!invocationId || !sourceRevision || !reviewerSlot) return null;
-  const invocationCandidates = context.census.comments.flatMap((comment) => {
-    if (!commentTargetsExpectedIssue(comment, context.census.repositoryFullName, context.census.issueNumber)) return [];
-    const observedRevision = canonicalReviewerArtifactRevision(
+
+  const targetedComments = context.census.comments.filter((comment) => (
+    commentTargetsExpectedIssue(comment, context.census.repositoryFullName, context.census.issueNumber)
+  ));
+  const selection = selectPrincipalOwnedCanonicalArtifact(
+    targetedComments,
+    context.principalLogin,
+    (comment) => isCanonicalReviewerArtifact(
       comment.body,
       stage,
       context.census.issueNumber,
+      sourceRevision,
       invocationId,
-    );
-    return observedRevision ? [{ comment, observedRevision }] : [];
-  });
-  const sameRevisionCandidates = invocationCandidates.filter(({ observedRevision }) => observedRevision === sourceRevision);
-  let matches = sameRevisionCandidates.filter(({ comment }) => (
-    isTrustedReviewArtifactComment(comment) && comment.createdAt === comment.updatedAt
-  ));
-  let echoLessFallback = false;
-  if (matches.length === 0) {
-    if (sameRevisionCandidates.some(({ comment }) => !comment.userLogin || !comment.authorAssociation)) {
-      errors.push(temporaryError(
-        'source-unavailable',
-        `invocation ${invocationId} canonical artifact candidate has no repository-trust fields`,
-      ));
-      return null;
-    }
-    if (sameRevisionCandidates.some(({ comment }) => !isTrustedReviewArtifactComment(comment))) {
-      errors.push(`authoritative GitHub artifact is not repository-trusted for invocation ${invocationId}`);
-      return null;
-    }
-    if (sameRevisionCandidates.some(({ comment }) => comment.createdAt !== comment.updatedAt)) {
-      errors.push(`authoritative GitHub artifact was edited for invocation ${invocationId}`);
-      return null;
-    }
-    if (invocationCandidates.length > 0) {
-      const observedRevisions = [...new Set(invocationCandidates.map(({ observedRevision }) => observedRevision))].sort();
-      errors.push(
-        `authoritative GitHub artifact revision mismatch: repository=${context.census.repositoryFullName} issue=#${context.census.issueNumber} stage=${stage} invocationId=${invocationId} expected=${sourceRevision} observed=${observedRevisions.join(',')}`,
-      );
-      return null;
-    }
-    const launchedSlots = new Set<string>();
-    const echoMatchedSlots = new Set<string>();
-    for (const candidate of stageInvocations) {
-      const candidateRevision = optionalString(candidate.sourceRevision);
-      const candidateSlot = optionalString(candidate.reviewerSlot);
-      const candidateInvocationId = optionalString(candidate.invocationId);
-      if (candidateRevision !== sourceRevision || !candidateSlot || !candidateInvocationId) continue;
-      launchedSlots.add(candidateSlot);
-      const hasEchoMatch = context.census.comments.some((comment) => {
-        if (!commentTargetsExpectedIssue(comment, context.census.repositoryFullName, context.census.issueNumber)) return false;
-        const lines = comment.body.split(/\r?\n/).map((line) => line.trim());
-        const invocationEchoes = lines.flatMap((line) => {
-          const match = INVOCATION_ECHO_RE.exec(line);
-          return match ? [match[1]!] : [];
-        });
-        return invocationEchoes.length === 1
-          && invocationEchoes[0] === candidateInvocationId
-          && canonicalReviewerArtifactRevision(comment.body, stage, context.census.issueNumber, candidateInvocationId) === sourceRevision;
+    ),
+  );
+  if (!selection.ok) {
+    if (selection.cause === 'zero_principal_owned_match') {
+      const principalRevisionCandidates = targetedComments.flatMap((comment) => {
+        if (!comment.userLogin || !sameGithubPrincipal(comment.userLogin, context.principalLogin)) return [];
+        const observedRevision = canonicalReviewerArtifactRevision(
+          comment.body,
+          stage,
+          context.census.issueNumber,
+          invocationId,
+        );
+        return observedRevision ? [observedRevision] : [];
       });
-      if (hasEchoMatch) echoMatchedSlots.add(candidateSlot);
+      if (principalRevisionCandidates.length > 0) {
+        errors.push(
+          `authoritative GitHub artifact revision mismatch: repository=${context.census.repositoryFullName} issue=#${context.census.issueNumber} stage=${stage} invocationId=${invocationId} expected=${sourceRevision} observed=${[...new Set(principalRevisionCandidates)].sort().join(',')}`,
+        );
+        return null;
+      }
     }
-    const unmatchedSlots = [...launchedSlots].filter((slot) => !echoMatchedSlots.has(slot));
-    const unmatchedComments = context.census.comments.filter((comment) => (
-      commentTargetsExpectedIssue(comment, context.census.repositoryFullName, context.census.issueNumber)
-      && isCanonicalEchoLessFindingArtifact(comment.body, stage, context.census.issueNumber, sourceRevision)
-    ));
-    if (unmatchedSlots.length > 0 && unmatchedComments.length > 0) {
-      if (unmatchedSlots.length !== 1 || unmatchedComments.length !== 1) {
-        errors.push(`authoritative GitHub artifact census cannot uniquely bind echo-less FINDINGS: stage=${stage} sourceRevision=${sourceRevision} unmatchedComments=${unmatchedComments.length} unmatchedSlots=${unmatchedSlots.length}`);
-        return null;
-      }
-      const unmatchedSlot = unmatchedSlots[0]!;
-      if (unmatchedSlot !== reviewerSlot) return null;
-      const leftover = unmatchedComments[0]!;
-      if (!leftover.userLogin || !leftover.authorAssociation) {
-        errors.push(temporaryError(
-          'source-unavailable',
-          `echo-less canonical artifact candidate has no repository-trust fields: comment ${leftover.id}`,
-        ));
-        return null;
-      }
-      if (!isTrustedReviewArtifactComment(leftover)) {
-        errors.push(`authoritative GitHub artifact is not repository-trusted: ${leftover.htmlUrl}`);
-        return null;
-      }
-      if (leftover.createdAt !== leftover.updatedAt) {
-        errors.push(`authoritative GitHub artifact was edited: ${leftover.htmlUrl}`);
-        return null;
-      }
-      matches = [{ comment: leftover, observedRevision: sourceRevision }];
-      echoLessFallback = true;
-    }
-    if (matches.length === 0) {
-      const journalableUnobservableSend = invocation.terminal === true
-        && invocation.sendCount === 1
-        && invocation.retryClass === 'retry-forbidden'
-        && (invocation.terminalClassification === 'post-send-failure'
-          || invocation.terminalClassification === 'output-conflict'
-          || invocation.terminalClassification === 'incident');
-      if (journalableUnobservableSend) return null;
-      errors.push(
-        `authoritative GitHub artifact absent after complete census: repository=${context.census.repositoryFullName} issue=#${context.census.issueNumber} stage=${stage} sourceRevision=${sourceRevision} invocationId=${invocationId} source=GitHub-Issue-comments`,
-      );
-      return null;
-    }
-  }
-  const distinctBodies = new Set(matches.map(({ comment }) => comment.body));
-  if (distinctBodies.size > 1) {
-    const identities = matches.map(({ comment }) => `${comment.id}:${comment.htmlUrl}`).join(', ');
-    errors.push(`authoritative GitHub artifact content conflict for invocation ${invocationId}: ${identities}`);
+    errors.push(`authoritative GitHub artifact ${selection.cause}: ${selection.detail}`);
     return null;
   }
-  const censusComment = [...matches].sort((left, right) => left.comment.id - right.comment.id)[0]!.comment;
+  const censusComment = selection.comment as AuthoritativeIssueComment;
   if (censusComment.createdAt !== censusComment.updatedAt) {
     errors.push(`authoritative GitHub artifact was edited: ${censusComment.htmlUrl}`);
     return null;
@@ -1158,9 +1075,22 @@ function resolveAuthoritativeArtifact(
     sourceRevision,
     invocationId,
     errors,
-    echoLessFallback,
   );
   if (!comment) return null;
+  const authority: AuthoritativeGithubArtifactAuthorityV1 = {
+    kind: AUTHORITATIVE_GITHUB_ARTIFACT_BASIS,
+    repositoryFullName: context.census.repositoryFullName,
+    issueNumber: context.census.issueNumber,
+    commentId: comment.id,
+    commentUrl: comment.htmlUrl,
+    publisherLogin: comment.userLogin!,
+    createdAt: comment.createdAt,
+    updatedAt: comment.updatedAt,
+  };
+  if (invocation.artifactAuthority !== undefined && !jsonEqual(invocation.artifactAuthority, authority)) {
+    errors.push('stage evidence artifactAuthority assertion disagrees with authoritative GitHub reread for invocation ' + invocationId);
+    return null;
+  }
   const name = authoritativeCaptureName(reviewDir, stage, stageSequence, reviewerSlot, invocation.capturePath);
   const materialized = materializeAuthoritativeCapture(
     reviewDir,
@@ -1173,21 +1103,444 @@ function resolveAuthoritativeArtifact(
     errors,
   );
   if (!materialized) return null;
+  if (invocation.captureByteLength !== undefined && Number(invocation.captureByteLength) !== materialized.capture.byteLength) {
+    errors.push('stage evidence captureByteLength assertion disagrees with authoritative GitHub bytes for invocation ' + invocationId);
+    return null;
+  }
+  if (invocation.captureSha256 !== undefined && invocation.captureSha256 !== materialized.capture.sha256) {
+    errors.push('stage evidence captureSha256 assertion disagrees with authoritative GitHub bytes for invocation ' + invocationId);
+    return null;
+  }
+  if (invocation.rawFindingCount !== undefined && Number(invocation.rawFindingCount) !== materialized.capture.rawFindingCount) {
+    errors.push('stage evidence rawFindingCount assertion disagrees with authoritative GitHub bytes for invocation ' + invocationId);
+    return null;
+  }
   return {
     capture: materialized.capture,
     captureText: comment.body,
     capturePath: materialized.path,
-    authority: {
-      kind: AUTHORITATIVE_GITHUB_ARTIFACT_BASIS,
-      repositoryFullName: context.census.repositoryFullName,
-      issueNumber: context.census.issueNumber,
-      commentId: comment.id,
-      commentUrl: comment.htmlUrl,
-      publisherLogin: comment.userLogin!,
-      createdAt: comment.createdAt,
-      updatedAt: comment.updatedAt,
-    },
+    captureCreated: materialized.created,
+    authority,
   };
+}
+
+
+
+type ReconciliationTransportClassification = ReviewerInvocationEnvelopeV1['terminalClassification'];
+type ReconciliationRetryClass = ReviewerInvocationEnvelopeV1['retryClass'];
+
+function classifyReconciliationTransport(
+  envelope: JsonRecord,
+  attemptOrdinal: number,
+): {
+  terminalClassification: ReconciliationTransportClassification;
+  sendCount: 0 | 1;
+  retryClass: ReconciliationRetryClass;
+} | null {
+  const sendCount = envelope.send_count;
+  if (sendCount !== 0 && sendCount !== 1) return null;
+  const state = optionalString(envelope.turn_result_state) ?? '';
+  const cause = optionalString(envelope.turn_result_cause) ?? '';
+  let terminalClassification: ReconciliationTransportClassification;
+  if (envelope.lifecycle_outcome === 'success' && state === 'ok' && sendCount === 1) {
+    terminalClassification = 'complete';
+  } else if (state === 'quota' || state === 'rate_limit') {
+    terminalClassification = 'quota';
+  } else if (
+    sendCount === 0
+    && (cause.includes('composer') || cause === 'blocking_page_overlay')
+  ) {
+    terminalClassification = 'composer-refusal';
+  } else if (sendCount === 0 && cause.includes('fill')) {
+    terminalClassification = 'fill-timeout';
+  } else if (sendCount === 1 && state === 'output_conflict') {
+    terminalClassification = 'output-conflict';
+  } else if (sendCount === 1) {
+    terminalClassification = 'post-send-failure';
+  } else {
+    terminalClassification = 'incident';
+  }
+  const retryableZeroSend = attemptOrdinal === 1
+    && sendCount === 0
+    && (terminalClassification === 'quota'
+      || terminalClassification === 'composer-refusal'
+      || terminalClassification === 'fill-timeout');
+  return {
+    terminalClassification,
+    sendCount,
+    retryClass: terminalClassification === 'complete'
+      ? 'none'
+      : retryableZeroSend
+        ? 'eligible-zero-send'
+        : 'retry-forbidden',
+  };
+}
+
+function hydrateReconciliationTransport(
+  evidencePath: string,
+  invocation: JsonRecord,
+  index: number,
+  errors: string[],
+): JsonRecord | null {
+  const completeExisting = invocation.terminal === true
+    && terminalClassification(invocation.terminalClassification) !== null
+    && (invocation.sendCount === 0 || invocation.sendCount === 1)
+    && retryClass(invocation.retryClass) !== null;
+  if (completeExisting) return { ...invocation };
+
+  const terminalEnvelopePath = optionalString(invocation.terminalEnvelopePath);
+  if (!terminalEnvelopePath) {
+    errors.push('stage evidence invocation[' + index + '].terminalEnvelopePath is missing; authority=lifecycle-tool-witnessed');
+    return null;
+  }
+  const resolved = resolve(dirname(evidencePath), terminalEnvelopePath);
+  const observed = readJson(resolved, 'flow-manager terminal envelope', errors);
+  if (!isRecord(observed) || observed.schema !== 'flow-manager-long-running-child-terminal/v1') {
+    errors.push('stage evidence invocation[' + index + '] terminal envelope is malformed: ' + resolved);
+    return null;
+  }
+  const attemptOrdinal = invocation.attemptOrdinal === 2 ? 2 : 1;
+  const transport = classifyReconciliationTransport(observed, attemptOrdinal);
+  if (!transport) {
+    errors.push('stage evidence invocation[' + index + '] terminal envelope has no exact send_count; authority=lifecycle-tool-witnessed');
+    return null;
+  }
+  if (typeof observed.terminal_at !== 'string' || !observed.terminal_at.trim()) {
+    errors.push('stage evidence invocation[' + index + '] terminal envelope is not terminal');
+    return null;
+  }
+  return {
+    ...invocation,
+    terminal: true,
+    terminalClassification: transport.terminalClassification,
+    sendCount: transport.sendCount,
+    retryClass: transport.retryClass,
+  };
+}
+
+function atomicReplaceStageEvidence(
+  path: string,
+  expectedCurrentText: string,
+  value: JsonRecord,
+  errors: string[],
+): boolean {
+  let current: string;
+  try { current = readFileSync(path, 'utf8'); } catch {
+    errors.push('stage evidence became unreadable before reconciliation commit: ' + path);
+    return false;
+  }
+  if (current !== expectedCurrentText) {
+    errors.push('stale_next_action: lifecycle stage evidence changed during reconciliation');
+    return false;
+  }
+  const temporary = path + '.reconcile-' + process.pid + '.tmp';
+  try {
+    writeFileSync(temporary, JSON.stringify(value, null, 2) + '\n', { encoding: 'utf8', flag: 'wx' });
+    renameSync(temporary, path);
+    return true;
+  } catch (error) {
+    errors.push('unable to commit lifecycle stage evidence: ' + (error instanceof Error ? error.message : String(error)));
+    return false;
+  } finally {
+    if (existsSync(temporary)) rmSync(temporary, { force: true });
+  }
+}
+
+export interface ReconcileCreateIssueStageOptions {
+  reviewDir: string;
+  stageEvidencePath: string;
+  repositoryFullName: string;
+  issueNumber: number;
+  artifactSourceTransport?: GhTransport;
+}
+
+export interface ReconcileCreateIssueStageResult {
+  ok: boolean;
+  stageAttemptId?: string;
+  stage?: Exclude<ReviewStage, 'architectural-lens'>;
+  sourceRevision?: string;
+  capturePaths: string[];
+  alreadySettled?: boolean;
+  errors: string[];
+  temporary?: AcceptanceArtifactTemporaryClassification;
+}
+
+function rollbackNewReconciliationCaptures(
+  candidates: readonly string[],
+  preExisting: ReadonlySet<string>,
+): void {
+  for (const path of candidates) {
+    if (preExisting.has(path) || !existsSync(path)) continue;
+    try { unlinkSync(path); } catch {}
+  }
+}
+
+export function reconcileCreateIssueStage(
+  options: ReconcileCreateIssueStageOptions,
+): ReconcileCreateIssueStageResult {
+  const errors: string[] = [];
+  let originalText: string;
+  try { originalText = readFileSync(options.stageEvidencePath, 'utf8'); } catch {
+    return { ok: false, capturePaths: [], errors: ['missing stage evidence: ' + options.stageEvidencePath] };
+  }
+  let rawValue: unknown;
+  try { rawValue = JSON.parse(originalText) as unknown; } catch {
+    return { ok: false, capturePaths: [], errors: ['unable to read stage evidence: ' + options.stageEvidencePath] };
+  }
+  if (!isRecord(rawValue) || rawValue.schema !== STAGE_EVIDENCE_SCHEMA) {
+    return { ok: false, capturePaths: [], errors: ['stage evidence must use ' + STAGE_EVIDENCE_SCHEMA + ': ' + options.stageEvidencePath] };
+  }
+  const raw: JsonRecord = structuredClone(rawValue);
+  const stage = reviewerStage(raw.stage);
+  const stageAttemptId = requiredString(raw.stageAttemptId, 'stage evidence.stageAttemptId', errors);
+  const sourceRevision = requiredString(raw.sourceRevision, 'stage evidence.sourceRevision', errors);
+  const stageSequence = Number(raw.stageSequence);
+  if (!stage) errors.push('stage reconciliation is only valid for Browser-GPT reviewer stages');
+  if (!Number.isInteger(stageSequence) || stageSequence < 1) errors.push('stage evidence.stageSequence must be positive');
+  if (typeof raw.taskIdentity === 'string' && raw.taskIdentity.trim() !== 'issue:' + options.issueNumber) {
+    errors.push('stage evidence taskIdentity ' + raw.taskIdentity + ' does not bind Issue #' + options.issueNumber);
+  }
+  if (!stage || !stageAttemptId || !sourceRevision || errors.length > 0) {
+    return {
+      ok: false,
+      ...(stageAttemptId ? { stageAttemptId } : {}),
+      ...(stage ? { stage } : {}),
+      ...(sourceRevision ? { sourceRevision } : {}),
+      capturePaths: [],
+      errors: [...new Set(errors)],
+    };
+  }
+
+  if (existsSync(options.reviewDir)) {
+    for (const name of readdirSync(options.reviewDir).filter((candidate) => /^stage-completeness-receipt-.+\.json$/.test(candidate))) {
+      const path = join(options.reviewDir, name);
+      let value: unknown;
+      try { value = JSON.parse(readFileSync(path, 'utf8')) as unknown; } catch { continue; }
+      if (!isRecord(value) || value.stage !== stage) continue;
+      const settledAttemptId = optionalString(value.stageAttemptId);
+      if (!settledAttemptId) continue;
+      if (settledAttemptId !== stageAttemptId) {
+        return {
+          ok: false,
+          stageAttemptId,
+          stage,
+          sourceRevision,
+          capturePaths: [],
+          errors: ['stage_slot_consumed: ' + stage + ' is already settled by stageAttemptId ' + settledAttemptId],
+        };
+      }
+      return {
+        ok: true,
+        stageAttemptId,
+        stage,
+        sourceRevision,
+        capturePaths: [],
+        alreadySettled: true,
+        errors: [],
+      };
+    }
+  }
+
+  if (!Array.isArray(raw.invocations)) {
+    return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: ['stage evidence.invocations is missing'] };
+  }
+  const hydrated = raw.invocations.map((value, index) => (
+    isRecord(value) ? hydrateReconciliationTransport(options.stageEvidencePath, value, index, errors) : null
+  ));
+  if (hydrated.some((value) => value === null)) {
+    if (raw.invocations.some((value) => !isRecord(value))) errors.push('stage evidence invocations must all be objects');
+    return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [...new Set(errors)] };
+  }
+  const invocations = hydrated as JsonRecord[];
+  raw.invocations = invocations;
+
+  const routing = isReviewLaneRouting(raw.reviewLaneRouting) ? raw.reviewLaneRouting as ReviewLaneRouting : null;
+  const initialRequiredSlots = routing ? routing.initiallyActivatedSlots : requiredFinalSlots(raw);
+  if (initialRequiredSlots.length === 0) {
+    return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: ['stage evidence has no required reviewer slots'] };
+  }
+
+  const transport = options.artifactSourceTransport ?? defaultGhTransport();
+  let liveIssue: ReturnType<typeof fetchIssueRevision>;
+  try {
+    liveIssue = fetchIssueRevision(transport, options.repositoryFullName, options.issueNumber);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const message = temporaryError('source-unavailable', 'unable to revalidate live Issue before reconciliation: ' + detail);
+    return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [message], temporary: 'source-unavailable' };
+  }
+  const liveRevision = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i.exec(liveIssue.body)?.[1];
+  if (!liveRevision || liveRevision.toLowerCase() !== sourceRevision.toLowerCase()) {
+    return {
+      ok: false,
+      stageAttemptId,
+      stage,
+      sourceRevision,
+      capturePaths: [],
+      errors: ['stale_next_action: live Issue revision is ' + (liveRevision ?? '<missing>') + ', expected ' + sourceRevision],
+    };
+  }
+
+  let principalLogin: string;
+  try {
+    principalLogin = resolveAuthenticatedGithubPrincipal(transport);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const message = temporaryError('identity-unresolved', 'authenticated GitHub principal could not be resolved through tracked GET /user: ' + detail);
+    return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [message], temporary: 'identity-unresolved' };
+  }
+  const census = authoritativeIssueCommentCensus(transport, options.repositoryFullName, options.issueNumber, errors);
+  if (!census) {
+    const temporary = temporaryClassification(errors) ?? 'source-unavailable';
+    return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [...new Set(errors)], temporary };
+  }
+  const context: ArtifactAuthorityContext = { transport, census, principalLogin };
+  const captureTexts = new Map<string, string>();
+  const captureTimestamps = new Map<string, number>();
+  const candidatePaths: string[] = [];
+  const preExisting = new Set<string>();
+  const capturePaths: string[] = [];
+  const resolvedBySlot = new Map<string, AuthoritativeArtifactResolution>();
+
+  const resolveSlot = (reviewerSlot: string): boolean => {
+    const candidates = invocations
+      .filter((value) => optionalString(value.reviewerSlot) === reviewerSlot)
+      .sort((left, right) => Number(left.attemptOrdinal ?? 0) - Number(right.attemptOrdinal ?? 0));
+    const final = candidates.at(-1);
+    if (!final) {
+      errors.push('stage evidence missing final invocation mapping for reviewerSlot ' + reviewerSlot);
+      return false;
+    }
+    if (final.stageAttemptId !== stageAttemptId) errors.push('reviewerSlot ' + reviewerSlot + ' stageAttemptId does not match admitted attempt');
+    if (final.stage !== stage) errors.push('reviewerSlot ' + reviewerSlot + ' stage does not match admitted stage');
+    if (final.sourceRevision !== sourceRevision) errors.push('reviewerSlot ' + reviewerSlot + ' sourceRevision does not match admitted revision');
+    if (!optionalString(final.invocationId)) errors.push('reviewerSlot ' + reviewerSlot + ' invocationId is missing');
+    if (final.sendCount !== 1) {
+      errors.push('reviewerSlot ' + reviewerSlot + ' has no GitHub-reconcilable delivery; observed sendCount=' + String(final.sendCount) + ' retryClass=' + String(final.retryClass));
+      return false;
+    }
+    if (errors.length > 0) return false;
+    const captureTarget = resolve(
+      options.reviewDir,
+      authoritativeCaptureName(options.reviewDir, stage, stageSequence, reviewerSlot, final.capturePath),
+    );
+    candidatePaths.push(captureTarget);
+    if (existsSync(captureTarget)) preExisting.add(captureTarget);
+    const resolvedArtifact = resolveAuthoritativeArtifact(
+      context,
+      options.reviewDir,
+      stage,
+      stageSequence,
+      final,
+      captureTexts,
+      captureTimestamps,
+      errors,
+    );
+    if (!resolvedArtifact) return false;
+    const assertedByteLength = final.captureByteLength;
+    const assertedSha256 = final.captureSha256;
+    const assertedFindingCount = final.rawFindingCount;
+    if (assertedByteLength !== undefined && Number(assertedByteLength) !== resolvedArtifact.capture.byteLength) {
+      errors.push('reviewerSlot ' + reviewerSlot + ' captureByteLength assertion disagrees with authoritative GitHub bytes');
+      return false;
+    }
+    if (assertedSha256 !== undefined && assertedSha256 !== resolvedArtifact.capture.sha256) {
+      errors.push('reviewerSlot ' + reviewerSlot + ' captureSha256 assertion disagrees with authoritative GitHub bytes');
+      return false;
+    }
+    if (assertedFindingCount !== undefined && Number(assertedFindingCount) !== resolvedArtifact.capture.rawFindingCount) {
+      errors.push('reviewerSlot ' + reviewerSlot + ' rawFindingCount assertion disagrees with authoritative GitHub bytes');
+      return false;
+    }
+    resolvedBySlot.set(reviewerSlot, resolvedArtifact);
+    final.capturePath = resolvedArtifact.capturePath;
+    final.captureIdentity = resolvedArtifact.capture.captureIdentity;
+    final.captureByteLength = resolvedArtifact.capture.byteLength;
+    final.captureSha256 = resolvedArtifact.capture.sha256;
+    final.rawFindingCount = resolvedArtifact.capture.rawFindingCount;
+    final.artifactAuthority = resolvedArtifact.authority;
+    capturePaths.push(resolvedArtifact.capturePath);
+    return true;
+  };
+
+  for (const slot of initialRequiredSlots) resolveSlot(slot);
+
+  let reviewLane: JsonRecord | undefined;
+  if (routing && errors.length === 0) {
+    const sourceVerdicts: Record<string, 'accept' | 'material-findings'> = {};
+    const sourceVerdictEvidence: Record<string, JsonRecord> = {};
+    const registerVerdict = (slot: string): void => {
+      const resolvedArtifact = resolvedBySlot.get(slot);
+      const finalInvocation = invocations
+        .filter((value) => optionalString(value.reviewerSlot) === slot)
+        .sort((left, right) => Number(left.attemptOrdinal ?? 0) - Number(right.attemptOrdinal ?? 0))
+        .at(-1);
+      if (!resolvedArtifact || !finalInvocation) return;
+      const verdict = resolvedArtifact.capture.rawFindingCount === 0 ? 'accept' : 'material-findings';
+      sourceVerdicts[slot] = verdict;
+      sourceVerdictEvidence[slot] = {
+        producerEvidenceIdentity: 'authoritative-github-artifact:comment-' + resolvedArtifact.authority.commentId,
+        captureIdentity: resolvedArtifact.capture.captureIdentity,
+        terminalClassification: finalInvocation.terminalClassification,
+        credentialingAuthority: 'authoritative-github-artifact',
+        captureVerified: true,
+        digestMatches: true,
+        verdictText: verdict === 'accept' ? 'NO_FINDINGS' : 'FINDINGS',
+        rawFindingCount: resolvedArtifact.capture.rawFindingCount,
+      };
+    };
+    for (const slot of initialRequiredSlots) registerVerdict(slot);
+    let laneSettlement = settleReviewLane(routing, sourceVerdicts);
+    for (const slot of laneSettlement.finalRequiredSlots) {
+      if (resolvedBySlot.has(slot)) continue;
+      resolveSlot(slot);
+      if (errors.length === 0) registerVerdict(slot);
+    }
+    if (errors.length === 0) laneSettlement = settleReviewLane(routing, sourceVerdicts);
+    if (!laneSettlement.ok) errors.push(...laneSettlement.errors.map((error) => 'reviewLane settlement: ' + error));
+    reviewLane = {
+      routing,
+      finalRequiredSlots: laneSettlement.finalRequiredSlots,
+      sourceVerdicts,
+      sourceVerdictEvidence,
+      conflictDecision: laneSettlement.conflictDecision,
+      settlement: laneSettlement,
+    };
+  }
+
+  if (errors.length > 0) {
+    rollbackNewReconciliationCaptures(candidatePaths, preExisting);
+    const temporary = temporaryClassification(errors);
+    return {
+      ok: false,
+      stageAttemptId,
+      stage,
+      sourceRevision,
+      capturePaths: [],
+      errors: [...new Set(errors)],
+      ...(temporary ? { temporary } : {}),
+    };
+  }
+
+  raw.outcome = 'complete';
+  raw.producerEvidence = 'not-applicable';
+  raw.partialMissingSources = [];
+  raw.tierTransition = 'none';
+  raw.revisionChecks = { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' };
+  raw.settlement = { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true };
+  if (reviewLane) {
+    raw.reviewLane = reviewLane;
+    raw.invocations = invocations.map((invocation) => ({
+      ...invocation,
+      reviewLaneRouting: routing,
+    }));
+  }
+  if (!atomicReplaceStageEvidence(options.stageEvidencePath, originalText, raw, errors)) {
+    rollbackNewReconciliationCaptures(candidatePaths, preExisting);
+    return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [...new Set(errors)] };
+  }
+
+  return { ok: true, stageAttemptId, stage, sourceRevision, capturePaths, errors: [] };
 }
 
 function readClaudeProducerEvidence(
@@ -1228,7 +1581,7 @@ function readTurnResultForInvocation(
 ): string | null {
   const transportClassification = invocation.terminalClassification;
   if (purpose === 'final-acceptance' && artifactBacked) return null;
-  if (transportClassification !== 'complete' && !artifactBacked) return null;
+  if (transportClassification !== 'complete') return null;
   const label = `stage evidence invocation[${index}]`;
   const turnResultPath = optionalString(invocation.turnResultPath);
   if (!turnResultPath) {
@@ -1473,6 +1826,7 @@ function buildReceipt(
   operatorWaiverPath: string | undefined,
   artifactContext?: ArtifactAuthorityContext,
   purpose: ReviewEpisodeValidationPurpose = 'stage-time',
+  createdInputPaths?: Set<string>,
 ): ProducedStageReceipt | null {
   if (raw.schema !== STAGE_EVIDENCE_SCHEMA) {
     errors.push(`stage evidence has unknown schema: ${evidencePath}`);
@@ -1502,9 +1856,6 @@ function buildReceipt(
   assertDerived(raw.stageReceiptId, deriveStageReceiptId(episodeId, sequence), 'stage evidence stageReceiptId', errors);
 
   const invocationValues = raw.invocations;
-  const stageInvocations = Array.isArray(invocationValues)
-    ? invocationValues.filter((candidate): candidate is JsonRecord => isRecord(candidate))
-    : [];
   const invocations: ReviewerInvocationEnvelopeV1[] = [];
   const receiptPolicyVersion = policyVersion(raw.policyVersion);
   if (receiptPolicyVersion === null) errors.push('stage evidence.policyVersion is invalid');
@@ -1529,11 +1880,11 @@ function buildReceipt(
             browserStage,
             sequence,
             value,
-            stageInvocations,
             captureTexts,
             captureTimestamps,
             errors,
           );
+          if (artifactResolution?.captureCreated) createdInputPaths?.add(artifactResolution.capturePath);
         }
       }
       if (!artifactRequired && value.terminalClassification === 'complete' && value.capturePath === undefined) {
@@ -1675,22 +2026,24 @@ function isValidSettlement(
 }
 
 function buildLedger(
-  path: string,
+  rawValue: unknown,
   captures: readonly CaptureIdentityV1[],
   errors: string[],
 ): string | null {
-  const raw = readJson(path, 'author dispositions', errors);
+  const raw = rawValue;
   if (!isRecord(raw) || raw.schema !== AUTHOR_DISPOSITIONS_SCHEMA || !Array.isArray(raw.findings)) {
-    errors.push(`author dispositions must use ${AUTHOR_DISPOSITIONS_SCHEMA}: ${path}`);
+    errors.push('author dispositions must use ' + AUTHOR_DISPOSITIONS_SCHEMA + '; field=author-dispositions authority=author-owned/GitHub-witnessed/lifecycle-tool-witnessed');
+    return null;
+  }
+  if (raw.producer !== 'governed-author-output/v1' && raw.producer !== 'lifecycle-zero-state/v1') {
+    errors.push('author dispositions lack governed producer provenance; field=findings/m4 authority=author-owned');
     return null;
   }
   const invalidFindingIndexes = raw.findings.flatMap((finding, index) => (
     isRecord(finding) ? [] : [index]
   ));
   if (invalidFindingIndexes.length > 0) {
-    for (const index of invalidFindingIndexes) {
-      errors.push(`author dispositions findings[${index}] must be an object`);
-    }
+    for (const index of invalidFindingIndexes) errors.push('author dispositions findings[' + index + '] must be an object; authority=author-owned');
     return null;
   }
   const findings = raw.findings as JsonRecord[];
@@ -1843,9 +2196,11 @@ function resolveCanonicalStageEvidencePaths(
     .map((path) => resolve(path)));
   const canonicalPaths = discoveredPaths.filter((path) => !ignored.has(resolve(path)));
   const canonicalSet = new Set(canonicalPaths.map((path) => resolve(path)));
-  const requestedSet = new Set(requestedPaths
-    .map((path) => resolve(path))
-    .filter((path) => !ignored.has(path)));
+  const requestedSet = requestedPaths.length === 0
+    ? new Set(canonicalPaths.map((path) => resolve(path)))
+    : new Set(requestedPaths
+        .map((path) => resolve(path))
+        .filter((path) => !ignored.has(path)));
   const missing = canonicalPaths.filter((path) => !requestedSet.has(resolve(path)));
   const unexpected = requestedPaths
     .map((path) => resolve(path))
@@ -2023,6 +2378,260 @@ function stageInputsRequireAuthoritativeCensus(values: readonly JsonRecord[]): b
     && stage.invocations.some((invocation) => isRecord(invocation) && invocationRequiresAuthoritativeArtifact(invocation)));
 }
 
+
+interface AcceptanceIssueSnapshot {
+  issueNumber: number;
+  sourceRevision: string;
+  title: string;
+  body: string;
+  path: string;
+  bytes: string;
+}
+
+function stableAcceptanceIssueSnapshot(
+  transport: GhTransport,
+  repositoryFullName: string,
+  issueNumber: number,
+  reviewDir: string,
+  errors: string[],
+): AcceptanceIssueSnapshot | null {
+  let first: ReturnType<typeof fetchIssueRevision>;
+  let second: ReturnType<typeof fetchIssueRevision>;
+  try {
+    first = fetchIssueRevision(transport, repositoryFullName, issueNumber);
+    second = fetchIssueRevision(transport, repositoryFullName, issueNumber);
+  } catch (error) {
+    errors.push(temporaryError(
+      'source-unavailable',
+      'GitHub-witnessed Issue body snapshot is unavailable: ' + (error instanceof Error ? error.message : String(error)),
+    ));
+    return null;
+  }
+  if (first.body !== second.body || first.title !== second.title) {
+    errors.push('Issue title/body moved during acceptance snapshot production; authority=GitHub-witnessed');
+    return null;
+  }
+  const matches = [...first.body.matchAll(/<!--\s*source-revision:\s*(r[0-9]+)\s*-->/gi)];
+  if (matches.length !== 1 || !matches[0]?.[1]) {
+    errors.push('Issue body snapshot has no unique source-revision marker; authority=GitHub-witnessed');
+    return null;
+  }
+  const sourceRevision = matches[0][1];
+  const path = join(reviewDir, 'issue-' + sourceRevision + '-body.json');
+  const snapshot = {
+    schema: 'create-issue-live-snapshot/v1',
+    issueNumber,
+    sourceRevision,
+    title: first.title,
+    body: first.body,
+  };
+  const bytes = JSON.stringify(snapshot, null, 2) + '\n';
+  if (existsSync(path)) {
+    let existing: string;
+    try { existing = readFileSync(path, 'utf8'); } catch {
+      errors.push('existing Issue body snapshot is unreadable: ' + path + '; field=issue snapshot authority=GitHub-witnessed');
+      return null;
+    }
+    if (existing !== bytes) {
+      errors.push('existing Issue body snapshot conflicts with current GitHub title/body bytes: ' + path + '; field=issue snapshot authority=GitHub-witnessed');
+      return null;
+    }
+  }
+  return { issueNumber, sourceRevision, title: first.title, body: first.body, path, bytes };
+}
+
+function latestAuthorReplyPath(reviewDir: string): string | null {
+  if (!existsSync(reviewDir)) return null;
+  const candidates = readdirSync(reviewDir)
+    .map((name) => {
+      const match = /^round-([0-9]+)-author-reply\.(?:md|txt)$/.exec(name);
+      return match ? { name, round: Number(match[1]) } : null;
+    })
+    .filter((value): value is { name: string; round: number } => Boolean(value))
+    .sort((left, right) => right.round - left.round || right.name.localeCompare(left.name));
+  return candidates[0] ? join(reviewDir, candidates[0].name) : null;
+}
+
+function parseGovernedAuthorDispositionOutput(path: string, errors: string[]): JsonRecord | null {
+  let text: string;
+  try { text = readFileSync(path, 'utf8'); } catch {
+    errors.push('governed author output is unreadable: ' + path + '; authority=author-owned');
+    return null;
+  }
+  const pattern = /\`\`\`create-issue-author-dispositions\/v1\s*\r?\n([\s\S]*?)\r?\n\`\`\`/g;
+  const matches = [...text.matchAll(pattern)];
+  if (matches.length !== 1) {
+    errors.push('governed author output must contain exactly one create-issue-author-dispositions/v1 fence: ' + path + '; authority=author-owned');
+    return null;
+  }
+  let parsed: unknown;
+  try { parsed = JSON.parse(matches[0]![1]!) as unknown; } catch {
+    errors.push('governed author disposition fence is malformed JSON: ' + path + '; authority=author-owned');
+    return null;
+  }
+  if (!isRecord(parsed) || parsed.schema !== AUTHOR_DISPOSITIONS_SCHEMA || !Array.isArray(parsed.findings) || !isRecord(parsed.m4) || !Array.isArray(parsed.m4.inventory)) {
+    errors.push('governed author disposition payload is incomplete: ' + path + '; authority=author-owned');
+    return null;
+  }
+  if (parsed.findings.some((finding) => !isRecord(finding)) || parsed.m4.inventory.some((item) => !isRecord(item))) {
+    errors.push('governed author disposition payload contains malformed finding/M4 rows: ' + path + '; authority=author-owned');
+    return null;
+  }
+  return parsed;
+}
+
+interface PreparedAuthorDispositions {
+  path: string;
+  bytes: string;
+  value: JsonRecord;
+  replaceExisting: boolean;
+}
+
+function prepareAuthorDispositionsFromGovernedOutput(input: {
+  reviewDir: string;
+  targetPath: string;
+  reviewEpisodeId: string;
+  sourceRevision: string;
+  predecessorStage: ReviewStage | null;
+  draft: string;
+  allowZeroState: boolean;
+  errors: string[];
+}): PreparedAuthorDispositions | null {
+  const authorReplyPath = latestAuthorReplyPath(input.reviewDir);
+  let payload: JsonRecord;
+  let producer: 'governed-author-output/v1' | 'lifecycle-zero-state/v1';
+  if (!authorReplyPath) {
+    if (!input.allowZeroState) {
+      input.errors.push('missing governed author output round-NN-author-reply.*; field=findings/m4 authority=author-owned');
+      return null;
+    }
+    producer = 'lifecycle-zero-state/v1';
+    payload = {
+      schema: AUTHOR_DISPOSITIONS_SCHEMA,
+      sourceRevision: input.sourceRevision,
+      predecessorStage: input.predecessorStage,
+      findings: [],
+      m4: { inventory: [] },
+    };
+  } else {
+    producer = 'governed-author-output/v1';
+    const parsed = parseGovernedAuthorDispositionOutput(authorReplyPath, input.errors);
+    if (!parsed) return null;
+    payload = parsed;
+  }
+
+  if (payload.sourceRevision !== input.sourceRevision) {
+    input.errors.push('author dispositions sourceRevision disagrees with the stable GitHub snapshot; field=sourceRevision authority=GitHub-witnessed');
+    return null;
+  }
+  if (payload.predecessorStage !== input.predecessorStage) {
+    input.errors.push('author dispositions predecessorStage disagrees with lifecycle stage evidence; field=predecessorStage authority=lifecycle-tool-witnessed');
+    return null;
+  }
+  const m4 = payload.m4 as JsonRecord;
+  const produced: JsonRecord = {
+    schema: AUTHOR_DISPOSITIONS_SCHEMA,
+    producer,
+    reviewEpisodeId: input.reviewEpisodeId,
+    sourceRevision: input.sourceRevision,
+    predecessorStage: input.predecessorStage,
+    draft: input.draft,
+    findings: payload.findings,
+    m4: {
+      reviewEpisodeId: input.reviewEpisodeId,
+      sourceRevision: input.sourceRevision,
+      predecessorStage: input.predecessorStage,
+      inventory: m4.inventory,
+    },
+  };
+  const bytes = JSON.stringify(produced, null, 2) + '\n';
+  let replaceExisting = false;
+  if (existsSync(input.targetPath)) {
+    let existingText = '';
+    try { existingText = readFileSync(input.targetPath, 'utf8'); } catch {
+      input.errors.push('existing author-dispositions.json is unreadable: ' + input.targetPath + '; field=findings/m4 authority=author-owned');
+      return null;
+    }
+    if (existingText !== bytes) {
+      let existing: unknown;
+      try { existing = JSON.parse(existingText) as unknown; } catch { existing = null; }
+      if (!isRecord(existing)
+        || existing.schema !== AUTHOR_DISPOSITIONS_SCHEMA
+        || (existing.producer !== 'governed-author-output/v1' && existing.producer !== 'lifecycle-zero-state/v1')
+        || existing.reviewEpisodeId !== input.reviewEpisodeId) {
+        input.errors.push('existing author-dispositions.json is not a replaceable producer-owned binding; field=findings/m4 authority=author-owned');
+        return null;
+      }
+      replaceExisting = true;
+    }
+  }
+  return { path: input.targetPath, bytes, value: produced, replaceExisting };
+}
+
+interface PreparedInputCommit {
+  created: string[];
+  replaced: Map<string, string>;
+}
+
+function rollbackPreparedInputCommit(commit: PreparedInputCommit): void {
+  for (const [path, previous] of [...commit.replaced.entries()].reverse()) {
+    const temporary = path + '.rollback-' + process.pid + '.tmp';
+    try {
+      writeFileSync(temporary, previous, { encoding: 'utf8', flag: 'wx' });
+      renameSync(temporary, path);
+    } catch {
+      try { if (existsSync(temporary)) unlinkSync(temporary); } catch {}
+    }
+  }
+  for (const path of [...commit.created].reverse()) {
+    try { if (existsSync(path)) unlinkSync(path); } catch {}
+  }
+}
+
+function commitPreparedInputs(
+  inputs: readonly { path: string; bytes: string; allowReplace?: boolean }[],
+): PreparedInputCommit {
+  const commit: PreparedInputCommit = { created: [], replaced: new Map() };
+  try {
+    for (const input of inputs) {
+      mkdirSync(dirname(input.path), { recursive: true });
+      if (existsSync(input.path)) {
+        const previous = readFileSync(input.path, 'utf8');
+        if (previous === input.bytes) continue;
+        if (input.allowReplace !== true) throw new Error('conflicting immutable producer input: ' + input.path);
+        const temporary = input.path + '.replace-' + process.pid + '.tmp';
+        writeFileSync(temporary, input.bytes, { encoding: 'utf8', flag: 'wx' });
+        renameSync(temporary, input.path);
+        commit.replaced.set(input.path, previous);
+        continue;
+      }
+      writeFileSync(input.path, input.bytes, { encoding: 'utf8', flag: 'wx' });
+      commit.created.push(input.path);
+    }
+    return commit;
+  } catch (error) {
+    rollbackPreparedInputCommit(commit);
+    throw error;
+  }
+}
+
+function rollbackCreatedInputs(paths: Iterable<string>): void {
+  for (const path of [...paths].reverse()) {
+    try { if (existsSync(path)) unlinkSync(path); } catch {}
+  }
+}
+
+function latestLifecycleStage(stageInputs: readonly { path: string; value: JsonRecord }[]): ReviewStage | null {
+  const candidates = stageInputs
+    .map((entry) => ({
+      stage: reviewStage(entry.value.stage),
+      sequence: Number(entry.value.stageSequence),
+    }))
+    .filter((entry): entry is { stage: ReviewStage; sequence: number } => Boolean(entry.stage) && Number.isInteger(entry.sequence))
+    .sort((left, right) => right.sequence - left.sequence);
+  return candidates[0]?.stage ?? null;
+}
+
 export function produceAcceptanceArtifacts(
   options: ProduceAcceptanceArtifactsOptions,
 ): AcceptanceArtifactResult {
@@ -2050,6 +2659,36 @@ export function produceAcceptanceArtifacts(
   const purpose: ReviewEpisodeValidationPurpose = (options.phase ?? 'final-acceptance') === 'final-acceptance'
     ? 'final-acceptance'
     : 'stage-time';
+
+  const createdInputPaths = new Set<string>();
+  let issueSnapshot: AcceptanceIssueSnapshot | null = null;
+  let preparedAuthor: PreparedAuthorDispositions | null = null;
+  if (!taskIssueMatch) {
+    errors.push('acceptance input authority requires tier-intake taskIdentity issue:<N>');
+  } else {
+    issueSnapshot = stableAcceptanceIssueSnapshot(
+      artifactSourceTransport,
+      repositoryFullName,
+      Number(taskIssueMatch[1]),
+      options.reviewDir,
+      errors,
+    );
+  }
+  if (issueSnapshot) {
+    const predecessorStage = latestLifecycleStage(validStageInputs);
+    const allowZeroState = predecessorStage === null;
+    preparedAuthor = prepareAuthorDispositionsFromGovernedOutput({
+      reviewDir: options.reviewDir,
+      targetPath: options.authorDispositionsPath,
+      reviewEpisodeId: episodeId,
+      sourceRevision: issueSnapshot.sourceRevision,
+      predecessorStage,
+      draft: issueSnapshot.body,
+      allowZeroState,
+      errors,
+    });
+  }
+
   let canonicalLineage: CanonicalLineage | undefined;
   if (purpose === 'stage-time') {
     if (!taskIssueMatch) {
@@ -2076,10 +2715,21 @@ export function produceAcceptanceArtifacts(
         issueNumber,
         errors,
       );
-      const census = errors.length === 0
+      let principalLogin: string | null = null;
+      if (errors.length === 0) {
+        try {
+          principalLogin = resolveAuthenticatedGithubPrincipal(artifactSourceTransport);
+        } catch (error) {
+          errors.push(temporaryError(
+            'identity-unresolved',
+            `authenticated GitHub principal could not be resolved through tracked GET /user: ${error instanceof Error ? error.message : String(error)}`,
+          ));
+        }
+      }
+      const census = errors.length === 0 && principalLogin
         ? authoritativeIssueCommentCensus(artifactSourceTransport, repositoryFullName, issueNumber, errors)
         : null;
-      if (census) {
+      if (census && principalLogin) {
         const publishedComment = operatorHint
           ? census.comments.find((candidate) => (
               candidate.id === operatorHint.commentId
@@ -2113,6 +2763,7 @@ export function produceAcceptanceArtifacts(
         artifactContext = {
           transport: artifactSourceTransport,
           census,
+          principalLogin,
           ...(operatorHint ? { operatorHint } : {}),
           ...(publishedAuthorState ? { publishedAuthorState } : {}),
         };
@@ -2149,6 +2800,7 @@ export function produceAcceptanceArtifacts(
       options.waiverPath,
       artifactContext,
       purpose,
+      createdInputPaths,
     ))
     .filter((receipt): receipt is ProducedStageReceipt => receipt !== null)
     .sort((left, right) => left.stageSequence - right.stageSequence);
@@ -2162,7 +2814,7 @@ export function produceAcceptanceArtifacts(
   }
   const captures = receipts.flatMap((receipt) => receipt.relayEligibleCaptures);
   const relay = relayEvidence(episodeId, captures);
-  const ledger = buildLedger(options.authorDispositionsPath, captures, errors);
+  const ledger = buildLedger(preparedAuthor?.value, captures, errors);
   const claudeProducerEvidenceAuditErrors: string[] = [];
   const claudeProducerEvidence = (options.claudeProducerEvidencePaths ?? []).flatMap((path) => readClaudeProducerEvidence(
     path,
@@ -2245,7 +2897,8 @@ export function produceAcceptanceArtifacts(
       if (!ledgerResult.ok) errors.push(...ledgerResult.errors);
     }
   }
-  if (errors.length > 0 || !ledger || !tier) {
+  if (errors.length > 0 || !ledger || !tier || !issueSnapshot || !preparedAuthor) {
+    rollbackCreatedInputs(createdInputPaths);
     const temporary = temporaryClassification(errors);
     return {
       ok: false,
@@ -2267,6 +2920,17 @@ export function produceAcceptanceArtifacts(
     reviewEpisodeId: episodeId,
     acceptanceBasis: AUTHORITATIVE_GITHUB_ARTIFACT_BASIS,
     files,
+    ...(issueSnapshot
+      ? {
+        liveIssueSnapshot: {
+          path: resolve(issueSnapshot.path),
+          issueNumber: issueSnapshot.issueNumber,
+          sourceRevision: issueSnapshot.sourceRevision,
+          titleSha256: sha256(issueSnapshot.title),
+          bodySha256: sha256(issueSnapshot.body),
+        },
+      }
+      : {}),
     ...(artifactContext?.publishedAuthorState
       ? {
         publishedAuthorState: {
@@ -2279,6 +2943,7 @@ export function produceAcceptanceArtifacts(
       tierIntake: resolve(options.tierIntakePath),
       stageEvidence: canonicalStageEvidencePaths.map((path) => resolve(path)),
       authorDispositions: resolve(options.authorDispositionsPath),
+      ...(issueSnapshot ? { issueSnapshot: resolve(issueSnapshot.path) } : {}),
       ...(options.waiverPath ? { operatorWaiver: resolve(options.waiverPath) } : {}),
     },
   };
@@ -2291,9 +2956,17 @@ export function produceAcceptanceArtifacts(
   artifactContents.set('finding-disposition-ledger.json', ledger);
   artifactContents.set('review-episode-inventory.json', JSON.stringify(authority!.receiptInventory, null, 2) + '\n');
   artifactContents.set('acceptance-artifacts.json', JSON.stringify(manifest, null, 2) + '\n');
+  let committedInputs: PreparedInputCommit = { created: [], replaced: new Map() };
   try {
+    committedInputs = commitPreparedInputs([
+      { path: issueSnapshot.path, bytes: issueSnapshot.bytes },
+      { path: preparedAuthor.path, bytes: preparedAuthor.bytes, allowReplace: preparedAuthor.replaceExisting },
+    ]);
+    for (const path of committedInputs.created) createdInputPaths.add(path);
     publishArtifactSet(outputDir, files, artifactContents, options.publicationHooks);
   } catch (error) {
+    rollbackPreparedInputCommit(committedInputs);
+    rollbackCreatedInputs(createdInputPaths);
     const message = error instanceof Error ? error.message : String(error);
     return {
       ok: false,
@@ -2351,15 +3024,41 @@ export function inspectAcceptanceArtifacts(
   if (intake !== READ_ARTIFACT_JSON_FAILED && (!isRecord(intake) || intake.schema !== 'tier-intake/v1')) {
     addInvalid('tier-intake/v1', options.tierIntakePath, 'tier intake evidence is malformed', tierInputReason);
   }
-  const dispositions = readArtifactJson(options.authorDispositionsPath, 'author dispositions', 'author disposition evidence is missing', dispositionsInputReason);
-  if (dispositions !== READ_ARTIFACT_JSON_FAILED && (!isRecord(dispositions) || dispositions.schema !== AUTHOR_DISPOSITIONS_SCHEMA || !Array.isArray(dispositions.findings))) {
-    addInvalid('author dispositions', options.authorDispositionsPath, 'author disposition evidence is malformed', dispositionsInputReason);
+  if (existsSync(options.authorDispositionsPath)) {
+    const dispositions = readArtifactJson(options.authorDispositionsPath, 'author dispositions', 'derived author disposition evidence is unreadable', dispositionsInputReason);
+    if (dispositions !== READ_ARTIFACT_JSON_FAILED && (
+      !isRecord(dispositions)
+      || dispositions.schema !== AUTHOR_DISPOSITIONS_SCHEMA
+      || !Array.isArray(dispositions.findings)
+      || (dispositions.producer !== 'governed-author-output/v1' && dispositions.producer !== 'lifecycle-zero-state/v1')
+    )) {
+      addInvalid(
+        'author dispositions',
+        options.authorDispositionsPath,
+        'derived author disposition evidence is malformed or lacks governed producer provenance; authority=author-owned/GitHub-witnessed/lifecycle-tool-witnessed',
+      );
+    }
+  } else {
+    const authorReply = latestAuthorReplyPath(options.reviewDir);
+    if (authorReply) {
+      const authorErrors: string[] = [];
+      parseGovernedAuthorDispositionOutput(authorReply, authorErrors);
+      for (const error of authorErrors) missing.push({ artifact: 'governed author output', reason: error });
+    } else {
+      const hasStageEvidence = stageEvidenceFilesInReviewDir(options.reviewDir).length > 0;
+      if (hasStageEvidence) {
+        missing.push({
+          artifact: 'governed author output',
+          reason: 'missing governed author output round-NN-author-reply.*; field=findings/m4 authority=author-owned',
+        });
+      }
+    }
   }
 
   const coverageErrors: string[] = [];
   const canonicalStageEvidencePaths = resolveCanonicalStageEvidencePaths(options.reviewDir, options.stageEvidencePaths, coverageErrors, options.phase ?? 'final-acceptance');
   for (const error of coverageErrors) missing.push({ artifact: 'stage-completeness-receipt/v1', reason: stageInputReason(error) });
-  if (options.stageEvidencePaths.length === 0) missing.push({ artifact: 'stage-completeness-receipt/v1', reason: stageInputReason('no recorded stage evidence paths were supplied') });
+  if ((canonicalStageEvidencePaths ?? []).length === 0) missing.push({ artifact: 'stage-completeness-receipt/v1', reason: stageInputReason('no lifecycle-tool-witnessed stage evidence exists in the canonical review directory') });
   const stageEvidencePaths = canonicalStageEvidencePaths ?? options.stageEvidencePaths;
   const stageReceiptNames: string[] = [];
   let evidenceTier: ReviewTier | null = null;
@@ -2530,6 +3229,25 @@ export function inspectAcceptanceArtifacts(
     }
     if (manifest.operatorAdjudication !== undefined) {
       addInvalid('acceptance-artifacts', join(outputDir, 'acceptance-artifacts.json'), 'operator adjudication is not an acceptance authority');
+    }
+    if (!isRecord(manifest.liveIssueSnapshot)
+      || typeof manifest.liveIssueSnapshot.path !== 'string'
+      || typeof manifest.liveIssueSnapshot.sourceRevision !== 'string'
+      || typeof manifest.liveIssueSnapshot.titleSha256 !== 'string'
+      || typeof manifest.liveIssueSnapshot.bodySha256 !== 'string') {
+      addInvalid('acceptance-artifacts', join(outputDir, 'acceptance-artifacts.json'), 'manifest lacks the producer-owned GitHub-witnessed Issue snapshot binding');
+    } else {
+      const snapshotPath = String(manifest.liveIssueSnapshot.path);
+      const snapshot = readArtifactJson(snapshotPath, 'Issue body snapshot', 'GitHub-witnessed Issue body snapshot is missing');
+      if (!isRecord(snapshot)
+        || snapshot.schema !== 'create-issue-live-snapshot/v1'
+        || snapshot.sourceRevision !== manifest.liveIssueSnapshot.sourceRevision
+        || typeof snapshot.title !== 'string'
+        || typeof snapshot.body !== 'string'
+        || sha256(snapshot.title) !== manifest.liveIssueSnapshot.titleSha256
+        || sha256(snapshot.body) !== manifest.liveIssueSnapshot.bodySha256) {
+        addInvalid('Issue body snapshot', snapshotPath, 'Issue body snapshot disagrees with the acceptance manifest; authority=GitHub-witnessed');
+      }
     }
     const declared = new Set(manifest.files.filter((value): value is string => typeof value === 'string'));
     const expected = new Set(expectedOutputNames);

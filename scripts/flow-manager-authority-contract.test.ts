@@ -16,6 +16,7 @@ import { buildManagerReviewTerminalBundle } from './lib/manager-review-terminal-
 import { runStateLightEntry } from './chatgpt-browser-turn/state-light-entry.ts';
 import { runCli as runLegacyBrowserTurnCli } from './chatgpt-browser-turn.ts';
 import { runBrowserAdapter } from './flow-manager-browser-gpt-long-run.ts';
+import { createIssueNextAction } from './lib/create-issue-next-action.ts';
 import { readTerminalEnvelope, runLaunch } from './flow-manager-long-running-child.ts';
 
 const contract = readFileSync(new URL('../.cursor/skills/create-issue-draft/SKILL.md', import.meta.url), 'utf8');
@@ -101,6 +102,7 @@ function createTerminalBundleFixture(root: string, sourceRevision = 'r08') {
   }, null, 2));
   writeFileSync(join(reviewDir, 'author-dispositions.json'), JSON.stringify({
     schema: 'create-issue-author-dispositions/v1',
+    producer: 'governed-author-output/v1',
     reviewEpisodeId,
     sourceRevision,
     predecessorStage: 'architectural-review',
@@ -115,6 +117,13 @@ function createTerminalBundleFixture(root: string, sourceRevision = 'r08') {
       ],
     },
   }, null, 2));
+  writeFileSync(join(reviewDir, `issue-${sourceRevision}-body.json`), JSON.stringify({
+    schema: 'create-issue-live-snapshot/v1',
+    issueNumber: reviewContext.issueNumber,
+    sourceRevision,
+    title: 'fixture issue',
+    body: draft,
+  }, null, 2) + '\n');
   writeFileSync(join(reviewDir, 'finding-disposition-ledger.json'), JSON.stringify({
     version: 2,
     reviewEpisodeId,
@@ -375,7 +384,8 @@ describe('Issue #1514 flow-manager recovery ownership contract', () => {
     expect(authority).toContain('required audience');
     expect(authority).toContain('visibility proof');
     expect(authority).toContain('Every new gate must arrive with its producer in the same change');
-    expect(authority).toContain('does not fabricate an\nartifact or treat an orchestrator-only workaround as a producer');
+    expect(authority).toContain('does not fabricate\nan artifact or treat an orchestrator-only workaround as a producer');
+    expect(authority).toContain('the GitHub producer records\nfacts from its authenticated stable reads');
   });
 
   it('keeps substantive decisions with their owners while allowing manager-owned recovery', () => {
@@ -529,6 +539,7 @@ describe('Issue #1431 manager reviewer canon', () => {
       }, null, 2));
       writeFileSync(join(t1Dir, 'author-dispositions.json'), JSON.stringify({
         schema: 'create-issue-author-dispositions/v1',
+        producer: 'lifecycle-zero-state/v1',
         reviewEpisodeId: 'issue:1431@r01',
         sourceRevision: 'r01',
         predecessorStage: null,
@@ -541,6 +552,13 @@ describe('Issue #1431 manager reviewer canon', () => {
           inventory: [],
         },
       }, null, 2));
+      writeFileSync(join(t1Dir, 'issue-r01-body.json'), JSON.stringify({
+        schema: 'create-issue-live-snapshot/v1',
+        issueNumber: 1431,
+        sourceRevision: 'r01',
+        title: 'T1 fixture',
+        body: t1Draft,
+      }, null, 2) + '\n');
       const t1Bundle = buildManagerReviewTerminalBundle({
         repositoryFullName: reviewContext.repositoryFullName,
         issueNumber: reviewContext.issueNumber,
@@ -585,10 +603,17 @@ describe('Issue #1431 manager reviewer canon', () => {
           priorTier: tier, firstRevision: 'r01', ...intakeExtras,
         }, null, 2));
         writeFileSync(join(invalidDir, 'author-dispositions.json'), JSON.stringify({
-          schema: 'create-issue-author-dispositions/v1', reviewEpisodeId: 'issue:1431@r01',
+          schema: 'create-issue-author-dispositions/v1', producer: 'governed-author-output/v1', reviewEpisodeId: 'issue:1431@r01',
           sourceRevision: 'r01', predecessorStage: null, draft: t1Draft, findings: [],
           m4: { reviewEpisodeId: 'issue:1431@r01', sourceRevision: 'r01', predecessorStage: null, inventory: [] },
         }, null, 2));
+        writeFileSync(join(invalidDir, 'issue-r01-body.json'), JSON.stringify({
+          schema: 'create-issue-live-snapshot/v1',
+          issueNumber: 1431,
+          sourceRevision: 'r01',
+          title: 'T1 fixture',
+          body: t1Draft,
+        }, null, 2) + '\n');
         expect(() => buildManagerReviewTerminalBundle({
           repositoryFullName: reviewContext.repositoryFullName, issueNumber: reviewContext.issueNumber,
           sourceRevision: 'r01', reviewDir: invalidDir, liveIssueBody: t1Draft,
@@ -752,6 +777,108 @@ describe('Issue #1431 manager reviewer canon', () => {
     }
   });
 
+  it('keeps direct-publication stage binding and operator config ownership aligned with the adapter', () => {
+    const adapter = readFileSync(new URL('./flow-manager-browser-gpt-long-run.ts', import.meta.url), 'utf8');
+    const monitoringRule = readFileSync(new URL('../.cursor/rules/flow-manager-browser-turn-monitoring.mdc', import.meta.url), 'utf8');
+    expect(browserRunbook).toContain('--stage-attempt-id "${STAGE_ATTEMPT_ID}"');
+    expect(adapter).toContain("'stage-attempt-id'");
+    expect(monitoringRule).toContain('--operator-browser-config <absolute-path>');
+    expect(monitoringRule).toContain('Never copy `local.config.json`');
+    expect(monitoringRule).not.toContain('copy `local.config.json` from the operator checkout');
+  });
+
+  it('revalidates a preflight retry against the live Issue before any lifecycle mutation or Browser-GPT launch', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-create-issue-browser-stale-retry-'));
+    const stderr = captureWrite(process.stderr);
+    try {
+      const argv = [
+        '--run-identity', 'run-stale-retry',
+        '--attempt-identity', 'attempt-stale-retry',
+        '--handoff-receipt', join(root, 'handoff.json'),
+        '--invocation-id', reviewContext.invocationId,
+        '--terminal-envelope', join(root, 'terminal.json'),
+        '--output', join(root, 'output.json'),
+        '--profile', root,
+        '--cdp', 'http://127.0.0.1:9222',
+        '--input', join(root, 'input.txt'),
+        '--reviewer-source-output', join(root, 'source.txt'),
+        '--reviewer-source', 'slot-01#capture=direct-publication/v1',
+        '--repository', reviewContext.repositoryFullName,
+        '--issue-number', String(reviewContext.issueNumber),
+        '--source-revision', reviewContext.sourceRevision,
+        '--stage', reviewContext.stage,
+        '--source-slot', reviewContext.sourceSlot,
+        '--stage-attempt-id', 'stage-attempt-r07',
+      ];
+      const spawnLauncher = vi.fn(async () => 10001);
+      const first = await runBrowserAdapter(argv, {
+        runPreflight: (input) => ({
+          ok: false,
+          schema: 'create-issue-browser-gpt-preflight/v1',
+          cause: 'target_repository_unavailable',
+          blocker: 'fixture transport failure',
+          remedy: 'retry',
+          nextAction: createIssueNextAction({
+            kind: 'retry-create-issue-browser-preflight',
+            binding: input.binding!,
+            argv: input.retryArgv!,
+          }),
+        }),
+        spawnLauncher,
+      });
+      expect(first).toBe(2);
+      const firstResult = JSON.parse(stderr.chunks.at(-1) ?? '{}') as {
+        nextAction?: { argv?: string[] };
+      };
+      const retryCommand = firstResult.nextAction?.argv ?? [];
+      expect(retryCommand.length).toBeGreaterThan(3);
+
+      const inspectLifecycleBinding = vi.fn();
+      const recordAdmission = vi.fn();
+      const retry = await runBrowserAdapter(retryCommand.slice(3), {
+        runPreflight: () => ({
+          ok: true,
+          schema: 'create-issue-browser-gpt-preflight/v1',
+          principalLogin: 'chetwerikoff',
+          repository: reviewContext.repositoryFullName,
+          config: {
+            projectUrl: 'https://chatgpt.com/g/g-test/project',
+            chromeUserDataDir: root,
+            source: 'operator-config',
+            operatorConfigPath: join(root, 'local.config.json'),
+          },
+          childEnv: {
+            DISCUSS_WITH_GPT_PROJECT_URL: 'https://chatgpt.com/g/g-test/project',
+            DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR: root,
+          },
+          nextAction: null,
+        }),
+        readIssueRevision: () => ({
+          title: 'fixture',
+          body: '<!-- source-revision: r08 -->\nfixture',
+          labels: [],
+        }),
+        inspectLifecycleBinding,
+        recordAdmission,
+        spawnLauncher,
+      });
+      expect(retry).toBe(2);
+      const stale = JSON.parse(stderr.chunks.at(-1) ?? '{}') as Record<string, unknown>;
+      expect(stale).toMatchObject({
+        schema: 'create-issue-stale-next-action/v1',
+        cause: 'stale_next_action',
+        nextAction: null,
+        observed: { sourceRevision: 'r08' },
+      });
+      expect(inspectLifecycleBinding).not.toHaveBeenCalled();
+      expect(recordAdmission).not.toHaveBeenCalled();
+      expect(spawnLauncher).not.toHaveBeenCalled();
+    } finally {
+      stderr.restore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('refuses legacy direct publication and requires long-run stage context before spawn', async () => {
     const stdout = captureWrite(process.stdout);
     try {
@@ -800,6 +927,7 @@ describe('Issue #1431 manager reviewer canon', () => {
         '--source-revision', 'r08',
         '--stage', 'architectural',
         '--source-slot', '01',
+        '--stage-attempt-id', 'attempt-terminal',
       ])).toBe(2);
       expect(terminalStdout.chunks.join('')).toContain('direct_publication_terminal_bundle_required');
     } finally {
