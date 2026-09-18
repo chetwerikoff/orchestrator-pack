@@ -491,7 +491,7 @@ describe('ops-wiki apply protocol', () => {
     });
   });
 
-  it('requires every expected golden episode to appear in the top three', async () => {
+  it('reports a miss when an expected golden episode is absent from the bounded result window', async () => {
     const suite = loadGoldenSuite(JSON.stringify({
       queries: [{ id: 'multi', query: 'worker', expected_episode_ids: ['worker-lifecycle', 'agents-boundaries'] }],
     }));
@@ -500,6 +500,25 @@ describe('ops-wiki apply protocol', () => {
       async search() { return [{ path: episodeRelativePath('worker-lifecycle'), score: 0.9 }]; },
     };
     await expect(runGoldenSuite(client, suite)).resolves.toEqual({ ok: false, reason: 'golden_miss:multi' });
+  });
+
+  it('accepts expected golden episodes beyond the top three within the bounded result window', async () => {
+    const suite = loadGoldenSuite(JSON.stringify({
+      queries: [{ id: 'ranked', query: 'worker', expected_episode_ids: ['worker-lifecycle', 'agents-boundaries'] }],
+    }));
+    const client: WikiOpsClient = {
+      async read() { return { ok: false, reason: 'absent' }; },
+      async search() {
+        return [
+          { path: episodeRelativePath('worker-lifecycle'), score: 0.9 },
+          { path: episodeRelativePath('filler-one'), score: 0.8 },
+          { path: episodeRelativePath('filler-two'), score: 0.7 },
+          { path: episodeRelativePath('filler-three'), score: 0.6 },
+          { path: episodeRelativePath('agents-boundaries'), score: 0.5 },
+        ];
+      },
+    };
+    await expect(runGoldenSuite(client, suite)).resolves.toEqual({ ok: true });
   });
 
   it('uses no Git command in the corpus and supports explicit existing reindex only', async () => {

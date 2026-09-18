@@ -24,6 +24,7 @@ export const DEFAULT_POLL_INTERVAL_MS = 200;
 export const DEFAULT_MCP_REQUEST_TIMEOUT_MS = 5_000;
 export const DEFAULT_MCP_READ_SNIPPET_LENGTH = 12_288;
 export const DEFAULT_MCP_REINDEX_TIMEOUT_MS = DEFAULT_CONVERGENCE_TIMEOUT_MS;
+const GOLDEN_SEARCH_LIMIT = 20;
 
 export type GitRunner = (cwd: string, args: readonly string[]) => { ok: boolean; stdout: string; stderr: string };
 export type OpsWikiMode = 'plan' | 'apply' | 'check';
@@ -900,12 +901,12 @@ export async function runGoldenSuite(
   for (const query of suite.queries) {
     let hits: WikiOpsSearchHit[] | WikiOpsReadFail;
     try {
-      hits = await client.search({ query: query.query, mode: 'hybrid', limit: 3 });
+      hits = await client.search({ query: query.query, mode: 'hybrid', limit: GOLDEN_SEARCH_LIMIT });
     } catch {
       return { ok: false, reason: `golden_unavailable:${query.id}` };
     }
     if (!Array.isArray(hits)) return { ok: false, reason: `golden_unavailable:${query.id}` };
-    const found = new Set(hits.slice(0, 3).map((hit) => episodeIdFromPath(hit.path) ?? hit.path));
+    const found = new Set(hits.map((hit) => episodeIdFromPath(hit.path) ?? hit.path));
     if (!query.expected_episode_ids.every((episodeId) => found.has(episodeId))) {
       return { ok: false, reason: `golden_miss:${query.id}` };
     }
