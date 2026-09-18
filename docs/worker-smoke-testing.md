@@ -112,10 +112,14 @@ coding-worker admission shim: it prepares the exact current worktree and externa
 prerequisites, then invokes the existing
 `worker-smoke-run ... --smoke-actor independent` authority.
 
-Independent-smoke admission still refuses unsettled review obligations. Once
-independent smoke has started, pack-review remains forbidden, including after an
-independent-smoke fix. A fresh head after an independent finding therefore gets
-fresh independent smoke, not another review cycle.
+For logical-round accounting, `worker-smoke-run` admission does not mechanically
+prove that review obligations are settled and does not serialize review against
+independent smoke. The required ordering on this manager-controlled path is owned
+by the manager handoff and supervisor sequencing: the manager hands off only
+after review obligations settle, and the supervisor launches independent smoke
+only from that verified handoff. After that handoff, independent-smoke findings
+are fixed by the local worker and followed by fresh independent smoke; the already
+completed review stage is not reopened.
 
 ## Pre-smoke prerequisite preparation (parent worker)
 
@@ -246,10 +250,11 @@ worker-smoke-run run \
   --cwd "$PWD"
 ```
 
-The launcher
-admits that actor only after the existing pack-review authority records settled
-obligations; it records a started independent attempt before child creation and
-binds the final PASS to that attempt's exact head.
+For logical-round accounting, launcher admission itself is not the settled-review
+ordering gate. The supervisor must invoke this actor only after verifying the
+manager's settled-review handoff. The launcher still records a started independent
+attempt before child creation and binds the final PASS to that attempt's exact
+head.
 
 The supported lifecycle is:
 
@@ -502,9 +507,11 @@ Browser-GPT path does not pass through this `ready_for_review` gate before
 review; its manager enters pack review directly, then the supervisor launches
 the independent-smoke parent after the settled-review handoff.
 
-Independent smoke is admitted only by settled review state, and its PASS on the
-final head is the smoke completion evidence. No later pack-review is legal after
-that actor starts.
+For the manager-controlled Browser-GPT path, settled-review ordering is established
+by the manager handoff and supervisor sequencing, not by `worker-smoke-run`
+admission. Its PASS on the final head is the smoke completion evidence. Later
+independent-smoke fixes remain on the smoke path and do not reopen the already
+completed review stage; this workflow does not launch another pack-review round.
 
 Accumulated historical comments supply tuple evidence only; they are not authenticated or ordered
 by the singular receipt. A same-head aggregate PASS cannot bypass unclean lifecycle state. Operator
