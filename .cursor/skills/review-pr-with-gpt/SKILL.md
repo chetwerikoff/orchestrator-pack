@@ -1,12 +1,13 @@
 ---
 name: review-pr-with-gpt
-description: Use for explicit standalone implementation-review requests for an exact existing orchestrator-pack PR, or for an exact Issue whose implementation PR must be resolved before review effects, including “PR #N review”, “review PR #N”, “pack review #N”, and “Issue #N review”. Reuse the existing supervised manager work class and the shared manager-owned PR-review convergence phase; do not create a second review lifecycle.
+description: Use when an orchestrator or supervisor routes an explicit standalone implementation-review request for an exact existing orchestrator-pack PR, or for an exact Issue whose implementation PR must be resolved before review effects, including “PR #N review”, “review PR #N”, “pack review #N”, and “Issue #N review”. Standalone connected-GitHub chat reviewers keep the direct-review path. Reuse the existing supervised manager work class and the shared manager-owned PR-review convergence phase; do not create a second review lifecycle.
 ---
 
 # review-pr-with-gpt
 
-This skill is a thin routing/entry wrapper for an operator who already has an
-implementation PR and explicitly asks for implementation review. It owns no
+This skill is a thin orchestrator/supervisor routing wrapper for an operator who
+already has an implementation PR and explicitly asks the orchestrator to review
+it. It is not the direct connected-GitHub chat review procedure. It owns no
 Browser-GPT review mechanics, source semantics, findings settlement, review caps,
 fixer protocol, smoke implementation, or second completion state.
 
@@ -17,8 +18,9 @@ review convergence and manager handoff.
 
 ## Trigger and intent boundaries
 
-Use this skill only when the request contains both an exact PR or Issue target
-and explicit implementation-review intent, for example:
+Use this skill only when the active role is the orchestrator/supervisor and the
+operator request contains both an exact PR or Issue target and explicit
+implementation-review intent, for example:
 
 - `PR #N review`, `review PR #N`, or `pack review #N`;
 - `Issue #N review`, `Issue #N pack review`, or
@@ -28,8 +30,11 @@ Explicit implementation verbs such as `execute`, `выполни задачу`,
 `выполни Issue`, or `доделай Issue` remain owned by
 `execute-issue-with-gpt`. Existing-Issue `manager` / `менеджер`,
 `continue review`, and task-spec/create-Issue review continuation remain owned
-by `create-issue-draft`. Ordinary discussion containing “review” without an
-exact PR/Issue target does not activate this skill.
+by `create-issue-draft`. A connected-GitHub chat executor acting as the direct
+reviewer for a top-level PR review or pack-review request follows the direct-review
+procedure in `docs/chat-executor-rules.md` instead; do not activate this skill in
+that standalone direct-review context. Ordinary discussion containing “review”
+without an exact PR/Issue target does not activate this skill.
 
 An exact Issue review request selects this skill without a pre-routing PR
 uniqueness query. The manager performs the binding check below before any review
