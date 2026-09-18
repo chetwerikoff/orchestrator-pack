@@ -16,6 +16,12 @@ export interface ProfileReadyProbe {
 async function probePage(page: any): Promise<ProfileReadyProbe | { ready: true; state: 'ready'; cause: 'composer_ready_no_wall' } | null> {
   const surface = await productStatusText(page);
   const wall = classifyProductWall(surface);
+  // Execute-Issue recovery is conversation-local post-send evidence, not a
+  // profile-level readiness blocker. Profile probing therefore ignores that
+  // projection and keeps the existing composer-readiness semantics.
+  if (wall.state === 'recovery_required') {
+    return surface.composer ? { ready: true, state: 'ready', cause: 'composer_ready_no_wall' } : null;
+  }
   if (wall.state) return { ready: false, state: wall.state, cause: wall.cause! };
   return surface.composer ? { ready: true, state: 'ready', cause: 'composer_ready_no_wall' } : null;
 }
