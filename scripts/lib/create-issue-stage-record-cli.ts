@@ -13,7 +13,14 @@ import {
   produceAcceptanceArtifacts,
   reconcileCreateIssueStage,
 } from './create-issue-stage-record-artifacts.ts';
-import { createIssueNextAction, createIssueStaleNextAction, type CreateIssueActionBinding } from './create-issue-next-action.ts';
+import {
+  createIssueNextAction,
+  createIssueStaleNextAction,
+  validateCreateIssueManagerResult,
+  type CreateIssueActionBinding,
+  type CreateIssueNextAction,
+} from './create-issue-next-action.ts';
+import { resolveCanonicalReviewDirectory } from './stage-completeness-core.ts';
 import type { LifecycleReviewStage } from './create-issue-stage-lifecycle.ts';
 import type { PublicActor } from './create-issue-stage-record-types.ts';
 import type { ReviewLaneOverride } from './review-lane-selector.ts';
@@ -210,9 +217,9 @@ function runParsedCli<T>(
 export function stageFinalizeUsage(): string {
   return [
     'Usage:',
-    '  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> --stage <competitive|architectural-review|architectural-lens|architectural> --tier <T1|T2|T3> [--competitive-decision <required|skipped> --competitive-rationale <text>] [--stage-attempt-id <retry-id>] [--permitted-lane-override <normal|disputed>] [--public-actor <actor>] [--predecessor-cycle-id <id>] [--workdir <path>] [--json]',
+    '  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> --stage <competitive|architectural-review|architectural-lens|architectural> --tier <T1|T2|T3> [--competitive-decision <required|skipped> --competitive-rationale <text>] [--stage-attempt-id <retry-id>] [--permitted-lane-override <normal|disputed>] [--public-actor <actor>] [--predecessor-cycle-id <id>] [--workdir <path>] [--expected-source-revision <rNN> --expected-stage <stage> --expected-stage-attempt-id <id>] [--json]',
     '  create-issue-stage-finalize.ts publish-stage --repo <owner/name> --issue-number <n> --receipt <path> [--waiver <path>] [--workdir <path>] [--json]',
-    '  create-issue-stage-finalize.ts retry-pending --repo <owner/name> --issue-number <n> [--workdir <path>] [--json]',
+    '  create-issue-stage-finalize.ts retry-pending --repo <owner/name> --issue-number <n> [--workdir <path>] [--expected-source-revision <rNN> --expected-stage <stage> --expected-stage-attempt-id <id>] [--json]',
     '  create-issue-stage-finalize.ts reconcile-stage --repo <owner/name> --issue-number <n> --review-dir <path> --stage-evidence <attempt-NNN.json> [--json]',
     '  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> [--tier-intake <path>] [--stage-evidence <path>...] [--author-dispositions <target-path>] [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--phase <pre-lens|post-lens|final-acceptance>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--json]',
     '  create-issue-stage-finalize.ts check-artifacts --review-dir <path> [--tier-intake <path>] [--stage-evidence <path>...] [--author-dispositions <derived-path>] [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--json]',
@@ -234,8 +241,12 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
     claudeProducerEvidencePaths: [],
   };
   const artifactCommand = command === 'reconcile-stage' || command === 'produce-artifacts' || command === 'check-artifacts';
+  const boundActionCommand = artifactCommand || command === 'start-cycle' || command === 'retry-pending';
   const requireArtifactCommand = (arg: string): void => {
-    if (!artifactCommand) throw new Error(`${arg} is only valid with produce-artifacts or check-artifacts`);
+    if (!artifactCommand) throw new Error(`${arg} is only valid with reconcile-stage, produce-artifacts, or check-artifacts`);
+  };
+  const requireBoundActionCommand = (arg: string): void => {
+    if (!boundActionCommand) throw new Error(`${arg} is only valid with a state-bound create-Issue action command`);
   };
   for (let i = 3; i < argv.length; i += 1) {
     const arg = argv[i]!;
@@ -319,11 +330,11 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
         break;
       }
       case '--expected-source-revision':
-        requireArtifactCommand(arg);
+        requireBoundActionCommand(arg);
         opts.expectedSourceRevision = String(argv[++i] ?? '');
         break;
       case '--expected-stage': {
-        requireArtifactCommand(arg);
+        requireBoundActionCommand(arg);
         const expectedStage = String(argv[++i] ?? '');
         if (expectedStage !== 'competitive' && expectedStage !== 'architectural-review' && expectedStage !== 'architectural-lens' && expectedStage !== 'architectural') {
           throw new Error('--expected-stage is invalid');
@@ -332,7 +343,7 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
         break;
       }
       case '--expected-stage-attempt-id':
-        requireArtifactCommand(arg);
+        requireBoundActionCommand(arg);
         opts.expectedStageAttemptId = String(argv[++i] ?? '');
         break;
       case '--operator-issue-number':
@@ -589,6 +600,168 @@ function staleArtifactBinding(
   });
 }
 
+
+function validatedManagerSurfaceOutput<T extends { ok: boolean }>(
+  result: T,
+  failureCause: string,
+  nextAction: CreateIssueNextAction | null,
+  blocker?: string,
+): T & { cause?: string; blocker?: string; nextAction: CreateIssueNextAction | null } {
+  const output = {
+    ...result,
+    ...(result.ok ? {} : {
+      cause: failureCause,
+      ...(blocker ? { blocker } : {}),
+    }),
+    nextAction,
+  };
+  const errors = validateCreateIssueManagerResult(output);
+  if (errors.length > 0) throw new Error('invalid create-Issue manager result: ' + errors.join('; '));
+  return output;
+}
+
+function stageDiagnosticBlocker(result: { diagnostics?: Array<{ message?: string }> }): string | undefined {
+  const messages = (result.diagnostics ?? []).map((item) => item.message ?? '').filter(Boolean);
+  return messages.length > 0 ? messages.join('; ') : undefined;
+}
+
+function stageReceiptActionBinding(
+  repo: string,
+  issueNumber: number,
+  receipt: unknown,
+): CreateIssueActionBinding | null {
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return null;
+  const value = receipt as Record<string, unknown>;
+  const stage = value.stage;
+  if (stage !== 'competitive' && stage !== 'architectural-review' && stage !== 'architectural-lens' && stage !== 'architectural') return null;
+  const sourceRevision = typeof value.sourceRevision === 'string' ? value.sourceRevision : '';
+  const stageAttemptId = typeof value.stageAttemptId === 'string' ? value.stageAttemptId : '';
+  if (!/^r[0-9]+$/i.test(sourceRevision) || !stageAttemptId) return null;
+  return { repository: repo, issueNumber, sourceRevision, stage, stageAttemptId };
+}
+
+function retryPendingActionArgv(
+  opts: StageFinalizeCliOptions,
+  issueNumber: number,
+  binding: CreateIssueActionBinding,
+): string[] {
+  const argv = [
+    'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+    'retry-pending',
+    '--repo', opts.repo,
+    '--issue-number', String(issueNumber),
+    '--expected-source-revision', binding.sourceRevision,
+    '--expected-stage', binding.stage,
+    '--expected-stage-attempt-id', binding.stageAttemptId ?? '',
+    '--json',
+  ];
+  if (opts.workdir) argv.push('--workdir', opts.workdir);
+  return argv;
+}
+
+function startCycleRetryArgv(
+  opts: StageFinalizeCliOptions,
+  issueNumber: number,
+  binding: CreateIssueActionBinding,
+): string[] {
+  const argv = [
+    'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+    'start-cycle',
+    '--repo', opts.repo,
+    '--issue-number', String(issueNumber),
+    '--source-revision', binding.sourceRevision,
+    '--stage', binding.stage,
+    '--stage-attempt-id', binding.stageAttemptId ?? '',
+    '--tier', String(opts.tier ?? ''),
+    '--expected-source-revision', binding.sourceRevision,
+    '--expected-stage', binding.stage,
+    '--expected-stage-attempt-id', binding.stageAttemptId ?? '',
+    '--json',
+  ];
+  if (opts.competitiveDecision) argv.push('--competitive-decision', opts.competitiveDecision);
+  if (opts.competitiveRationale) argv.push('--competitive-rationale', opts.competitiveRationale);
+  if (opts.permittedLaneOverride) argv.push('--permitted-lane-override', opts.permittedLaneOverride);
+  if (opts.predecessorCycleId) argv.push('--predecessor-cycle-id', opts.predecessorCycleId);
+  if (opts.publicActor) argv.push('--public-actor', opts.publicActor);
+  if (opts.workdir) argv.push('--workdir', opts.workdir);
+  return argv;
+}
+
+function staleStartCycleBinding(
+  opts: StageFinalizeCliOptions,
+  issueNumber: number,
+): ReturnType<typeof createIssueStaleNextAction> | null {
+  if (!opts.expectedSourceRevision && !opts.expectedStage && !opts.expectedStageAttemptId) return null;
+  if (!opts.expectedSourceRevision || !opts.expectedStage) {
+    throw new Error('expected start-cycle binding requires revision and stage');
+  }
+  const expected: CreateIssueActionBinding = {
+    repository: opts.repo,
+    issueNumber,
+    sourceRevision: opts.expectedSourceRevision,
+    stage: opts.expectedStage,
+    ...(opts.expectedStageAttemptId ? { stageAttemptId: opts.expectedStageAttemptId } : {}),
+  };
+  let liveRevision = '';
+  try {
+    const live = fetchIssueRevision(defaultGhTransport(), opts.repo, issueNumber);
+    liveRevision = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i.exec(live.body)?.[1] ?? '';
+  } catch {
+    return createIssueStaleNextAction({
+      binding: expected,
+      observed: { repository: opts.repo, issueNumber },
+      nextAction: null,
+    });
+  }
+  const observed: CreateIssueActionBinding = {
+    repository: opts.repo,
+    issueNumber,
+    sourceRevision: liveRevision,
+    stage: opts.stage ?? opts.expectedStage,
+    ...(opts.stageAttemptId ? { stageAttemptId: opts.stageAttemptId } : {}),
+  };
+  if (expected.repository.toLowerCase() === observed.repository.toLowerCase()
+    && expected.issueNumber === observed.issueNumber
+    && expected.sourceRevision.toLowerCase() === observed.sourceRevision.toLowerCase()
+    && expected.stage === observed.stage
+    && (expected.stageAttemptId === undefined || expected.stageAttemptId === observed.stageAttemptId)) {
+    return null;
+  }
+  return createIssueStaleNextAction({ binding: expected, observed, nextAction: null });
+}
+
+function staleRetryPendingBinding(
+  opts: StageFinalizeCliOptions,
+  issueNumber: number,
+): ReturnType<typeof createIssueStaleNextAction> | null {
+  if (!opts.expectedSourceRevision && !opts.expectedStage && !opts.expectedStageAttemptId) return null;
+  if (!opts.expectedSourceRevision || !opts.expectedStage || !opts.expectedStageAttemptId) {
+    throw new Error('expected retry-pending binding requires revision, stage, and stage-attempt-id');
+  }
+  const expected: CreateIssueActionBinding = {
+    repository: opts.repo,
+    issueNumber,
+    sourceRevision: opts.expectedSourceRevision,
+    stage: opts.expectedStage,
+    stageAttemptId: opts.expectedStageAttemptId,
+  };
+  const canonical = resolveCanonicalReviewDirectory({ taskIdentity: 'issue:' + issueNumber });
+  const observed = artifactBindingFromState({ ...opts, stageEvidencePaths: [] }, canonical.directory, issueNumber);
+  if (observed
+    && observed.repository.toLowerCase() === expected.repository.toLowerCase()
+    && observed.issueNumber === expected.issueNumber
+    && observed.sourceRevision.toLowerCase() === expected.sourceRevision.toLowerCase()
+    && observed.stage === expected.stage
+    && observed.stageAttemptId === expected.stageAttemptId) {
+    return null;
+  }
+  return createIssueStaleNextAction({
+    binding: expected,
+    observed: observed ?? { repository: opts.repo, issueNumber },
+    nextAction: null,
+  });
+}
+
 export function runStageFinalizeCli(argv: string[]): number {
   return runParsedCli(argv, 'create-issue-stage-finalize', parseStageFinalizeArgs, (opts) => {
     if (opts.command === 'reconcile-stage') {
@@ -599,6 +772,12 @@ export function runStageFinalizeCli(argv: string[]): number {
         return 2;
       }
       const stageEvidencePath = parseRequiredNonEmptyString(opts.stageEvidencePaths[0], '--stage-evidence');
+      const stale = staleArtifactBinding(opts, reviewDir, issueNumber);
+      if (stale) {
+        if (opts.json) console.log(JSON.stringify(stale));
+        else process.stderr.write('stale_next_action\n');
+        return 1;
+      }
       const result = reconcileCreateIssueStage({
         reviewDir,
         stageEvidencePath,
@@ -621,6 +800,9 @@ export function runStageFinalizeCli(argv: string[]): number {
           '--issue-number', String(issueNumber),
           '--review-dir', reviewDir,
           '--stage-evidence', stageEvidencePath,
+          '--expected-source-revision', result.sourceRevision,
+          '--expected-stage', result.stage,
+          '--expected-stage-attempt-id', result.stageAttemptId,
           '--json',
         ];
         const retryableRead = Boolean(result.temporary)
@@ -652,7 +834,12 @@ export function runStageFinalizeCli(argv: string[]): number {
           });
         }
       }
-      const output = { ...result, nextAction };
+      const output = validatedManagerSurfaceOutput(
+        result,
+        result.temporary ?? 'reconciliation_failed',
+        nextAction,
+        result.ok ? undefined : result.errors.join('; '),
+      );
       if (opts.json) console.log(JSON.stringify(output));
       else if (!result.ok) process.stderr.write(result.errors.join('\n') + '\n');
       return result.ok ? 0 : 1;
@@ -701,7 +888,12 @@ export function runStageFinalizeCli(argv: string[]): number {
           });
         }
       }
-      const output = { ...result, nextAction };
+      const output = validatedManagerSurfaceOutput(
+        result,
+        opts.command === 'check-artifacts' ? 'acceptance_artifact_check_failed' : 'acceptance_artifact_production_failed',
+        nextAction,
+        result.ok ? undefined : ('errors' in result ? result.errors : result.missing.map((item) => item.reason)).join('; '),
+      );
       if (opts.json) console.log(JSON.stringify(output));
       else if (!result.ok) {
         const messages = 'errors' in result ? result.errors : result.missing.map((item) => item.reason);
@@ -716,6 +908,12 @@ export function runStageFinalizeCli(argv: string[]): number {
       const sourceRevision = parseRequiredNonEmptyString(opts.sourceRevision, '--source-revision');
       const tier = parseRequiredNonEmptyString(opts.tier, '--tier');
       const stage = parseRequiredNonEmptyString(opts.stage, '--stage') as LifecycleReviewStage;
+      const stale = staleStartCycleBinding(opts, issueNumber);
+      if (stale) {
+        if (opts.json) console.log(JSON.stringify(stale));
+        else process.stderr.write('stale_next_action\n');
+        return 1;
+      }
       const result = startReviewCycle(transport, {
         repo: opts.repo,
         issueNumber,
@@ -730,7 +928,37 @@ export function runStageFinalizeCli(argv: string[]): number {
         predecessorCycleId: opts.predecessorCycleId,
         workdir: opts.workdir,
       });
-      if (opts.json) console.log(JSON.stringify(result));
+      const hardFailure = result.diagnostics.some((item) => (
+        item.code === 'stage_authority_invalid'
+        || item.code === 'stage_slot_consumed'
+        || item.code === 'stage_order_violation'
+        || item.code === 'conflicting-remote-event'
+        || item.code === 'orphan-cycle'
+        || item.code === 'malformed-marker'
+      ));
+      const retryBinding = !result.ok && !hardFailure && result.stageAttemptId && result.eventKey
+        ? {
+            repository: opts.repo,
+            issueNumber,
+            sourceRevision,
+            stage,
+            stageAttemptId: result.stageAttemptId,
+          } satisfies CreateIssueActionBinding
+        : null;
+      const nextAction = retryBinding
+        ? createIssueNextAction({
+            kind: 'retry-start-cycle',
+            binding: retryBinding,
+            argv: startCycleRetryArgv(opts, issueNumber, retryBinding),
+          })
+        : null;
+      const output = validatedManagerSurfaceOutput(
+        result,
+        'stage_record_start_failed',
+        nextAction,
+        result.ok ? undefined : stageDiagnosticBlocker(result),
+      );
+      if (opts.json) console.log(JSON.stringify(output));
       else if (!result.ok) process.stderr.write(`${result.diagnostics.map((item) => item.message).join('\n')}\n`);
       return result.ok ? 0 : 1;
     }
@@ -746,14 +974,41 @@ export function runStageFinalizeCli(argv: string[]): number {
         readJson: (path) => JSON.parse(readFileSync(path, 'utf8')) as unknown,
         workdir: opts.workdir,
       });
-      if (opts.json) console.log(JSON.stringify(result));
+      const binding = stageReceiptActionBinding(opts.repo, issueNumber, receipt);
+      const nextAction = !result.ok && result.projectionPendingRepair && result.eventKey && binding
+        ? createIssueNextAction({
+            kind: 'retry-stage-record-publication',
+            binding,
+            argv: retryPendingActionArgv(opts, issueNumber, binding),
+          })
+        : null;
+      const output = validatedManagerSurfaceOutput(
+        result,
+        'stage_record_publication_failed',
+        nextAction,
+        result.ok ? undefined : stageDiagnosticBlocker(result),
+      );
+      if (opts.json) console.log(JSON.stringify(output));
       else if (!result.ok) process.stderr.write(`${result.diagnostics.map((item) => item.message).join('\n')}\n`);
       return result.ok ? 0 : 1;
     }
 
+    const stale = staleRetryPendingBinding(opts, issueNumber);
+    if (stale) {
+      if (opts.json) console.log(JSON.stringify(stale));
+      else process.stderr.write('stale_next_action\n');
+      return 1;
+    }
     const results = retryPendingEvents(transport, opts.repo, issueNumber, opts.workdir);
     const ok = results.every((item) => item.ok);
-    if (opts.json) console.log(JSON.stringify(results));
+    const output = validatedManagerSurfaceOutput(
+      { ok, results },
+      'stage_record_retry_exhausted',
+      null,
+      ok ? undefined : results.flatMap((item) => item.diagnostics.map((diagnostic) => diagnostic.message)).join('; '),
+    );
+    if (opts.json) console.log(JSON.stringify(output));
+    else if (!ok) process.stderr.write((output.blocker ?? 'retry-pending failed') + '\n');
     return ok ? 0 : 1;
   });
 }
@@ -942,7 +1197,14 @@ export function runFinalAcceptanceCli(argv: string[]): number {
       workdir: opts.workdir,
     });
 
-    const output = { ...result, nextAction: null };
+    const output = validatedManagerSurfaceOutput(
+      result,
+      'final_acceptance_failed',
+      null,
+      result.ok
+        ? undefined
+        : [...result.guardErrors, ...result.diagnostics.map((item) => item.message)].join('; '),
+    );
     if (opts.json) console.log(JSON.stringify(output));
     else if (!result.ok) {
       for (const error of result.guardErrors) process.stderr.write(error + '\n');
