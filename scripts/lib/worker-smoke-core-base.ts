@@ -967,6 +967,18 @@ export function formatSmokeReportComment(report: SmokeReport): string {
 
 const CARRIED_SMOKE_OBSERVATION_PATTERN = /^carried PASS from head [0-9a-f]{40} comment \d+; not freshly executed on [0-9a-f]{40}$/u;
 
+export function isCarriedSmokeScenarioObservation(
+  scenario: Pick<SmokeScenario, 'observed' | 'outcome'>,
+  currentHeadSha?: string,
+): boolean {
+  const observed = scenario.observed?.trim() ?? '';
+  if (scenario.outcome !== 'pass' || !CARRIED_SMOKE_OBSERVATION_PATTERN.test(observed)) return false;
+  if (currentHeadSha === undefined) return true;
+  const currentHead = currentHeadSha.trim().toLowerCase();
+  return /^[0-9a-f]{40}$/u.test(currentHead)
+    && observed.endsWith(\`; not freshly executed on \${currentHead}\`);
+}
+
 export function isProvenCarryOnlySmokeReport(
   report: Partial<SmokeReport>,
   currentHeadSha: string,
@@ -978,10 +990,7 @@ export function isProvenCarryOnlySmokeReport(
     && !String(report.terminalHandle ?? '').trim()
     && Array.isArray(report.scenarios)
     && report.scenarios.length > 0
-    && report.scenarios.every((scenario) =>
-      scenario.outcome === 'pass'
-      && CARRIED_SMOKE_OBSERVATION_PATTERN.test(scenario.observed?.trim() ?? '')
-      && scenario.observed?.trim().endsWith(`; not freshly executed on ${currentHead}`) === true);
+    && report.scenarios.every((scenario) => isCarriedSmokeScenarioObservation(scenario, currentHead));
 }
 
 export function extractSmokeReportsFromComments(comments: readonly { body?: string; createdAt?: string }[]): SmokeReport[] {
