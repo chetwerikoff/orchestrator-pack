@@ -105,7 +105,8 @@
         { "type": "related", "target": "rca-failure-response" },
         { "type": "related", "target": "merge-safety-resolve" },
         { "type": "related", "target": "study-external-source" },
-        { "type": "related", "target": "agents-github-runtime" }
+        { "type": "related", "target": "agents-github-runtime" },
+        { "type": "related", "target": "switch-pack-reviewer" }
       ]
     },
     {
@@ -794,7 +795,8 @@
         { "heading": "## Procedure" }
       ],
       "edges": [
-        { "type": "related", "target": "reviewer-switch-runbook" }
+        { "type": "related", "target": "reviewer-switch-runbook" },
+        { "type": "related", "target": "agents-worker-skills" }
       ]
     },
     {
