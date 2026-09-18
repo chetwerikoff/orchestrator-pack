@@ -2427,30 +2427,15 @@ function ensureAuthorDispositionsFromGovernedOutput(input: {
   allowZeroState: boolean;
   errors: string[];
 }): string | null {
-  if (existsSync(input.targetPath)) {
-    let existing: unknown;
-    try { existing = JSON.parse(readFileSync(input.targetPath, 'utf8')) as unknown; } catch { existing = null; }
-    if (
-      isRecord(existing)
-      && existing.schema === AUTHOR_DISPOSITIONS_SCHEMA
-      && existing.reviewEpisodeId === input.reviewEpisodeId
-      && existing.sourceRevision === input.sourceRevision
-      && existing.predecessorStage === input.predecessorStage
-      && existing.draft === input.draft
-      && Array.isArray(existing.findings)
-      && isRecord(existing.m4)
-    ) {
-      return input.targetPath;
-    }
-  }
-
   const authorReplyPath = latestAuthorReplyPath(input.reviewDir);
   let payload: JsonRecord;
+  let producer: 'governed-author-output/v1' | 'lifecycle-zero-state/v1';
   if (!authorReplyPath) {
     if (!input.allowZeroState) {
-      input.errors.push('missing governed author output round-NN-author-reply.*; authority=author-owned');
+      input.errors.push('missing governed author output round-NN-author-reply.*; field=findings/m4 authority=author-owned');
       return null;
     }
+    producer = 'lifecycle-zero-state/v1';
     payload = {
       schema: AUTHOR_DISPOSITIONS_SCHEMA,
       sourceRevision: input.sourceRevision,
@@ -2459,6 +2444,7 @@ function ensureAuthorDispositionsFromGovernedOutput(input: {
       m4: { inventory: [] },
     };
   } else {
+    producer = 'governed-author-output/v1';
     const parsed = parseGovernedAuthorDispositionOutput(authorReplyPath, input.errors);
     if (!parsed) return null;
     payload = parsed;
@@ -2475,6 +2461,7 @@ function ensureAuthorDispositionsFromGovernedOutput(input: {
   const m4 = payload.m4 as JsonRecord;
   const produced: JsonRecord = {
     schema: AUTHOR_DISPOSITIONS_SCHEMA,
+    producer,
     reviewEpisodeId: input.reviewEpisodeId,
     sourceRevision: input.sourceRevision,
     predecessorStage: input.predecessorStage,
@@ -2489,15 +2476,21 @@ function ensureAuthorDispositionsFromGovernedOutput(input: {
   };
   const nextText = JSON.stringify(produced, null, 2) + '\n';
   if (existsSync(input.targetPath)) {
+    let existingText = '';
+    try { existingText = readFileSync(input.targetPath, 'utf8'); } catch {
+      input.errors.push('existing author-dispositions.json is unreadable: ' + input.targetPath);
+      return null;
+    }
+    if (existingText === nextText) return input.targetPath;
     let existing: unknown;
-    try { existing = JSON.parse(readFileSync(input.targetPath, 'utf8')) as unknown; } catch { existing = null; }
+    try { existing = JSON.parse(existingText) as unknown; } catch { existing = null; }
     if (
       isRecord(existing)
       && existing.reviewEpisodeId === input.reviewEpisodeId
       && existing.sourceRevision === input.sourceRevision
       && existing.predecessorStage === input.predecessorStage
     ) {
-      input.errors.push('existing author-dispositions.json conflicts with governed author output for the same binding; authority=author-owned');
+      input.errors.push('existing author-dispositions.json conflicts with governed author output for the same binding; field=findings/m4 authority=author-owned');
       return null;
     }
   }
