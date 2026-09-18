@@ -189,6 +189,7 @@ interface AuthoritativeArtifactResolution {
   capture: CaptureIdentityV1;
   captureText: string;
   capturePath: string;
+  captureCreated: boolean;
   authority: AuthoritativeGithubArtifactAuthorityV1;
 }
 
@@ -809,8 +810,9 @@ function materializeAuthoritativeCapture(
   captureTexts: Map<string, string>,
   captureTimestamps: Map<string, number>,
   errors: string[],
-): { capture: CaptureIdentityV1; path: string } | null {
+): { capture: CaptureIdentityV1; path: string; created: boolean } | null {
   const target = resolve(reviewDir, name);
+  const existedBefore = existsSync(target);
   if (assertedCapturePath !== undefined) {
     const asserted = resolve(reviewDir, String(assertedCapturePath));
     if (asserted !== target) {
@@ -895,7 +897,7 @@ function materializeAuthoritativeCapture(
     errors.push(temporaryError('observation-lost', `canonical capture could not be statted after materialization: ${target}`));
     return null;
   }
-  return { capture, path: target };
+  return { capture, path: target, created: !existedBefore };
 }
 
 function expectedCommentUrl(repositoryFullName: string, issueNumber: number, commentId: number): string {
@@ -1079,6 +1081,7 @@ function resolveAuthoritativeArtifact(
     capture: materialized.capture,
     captureText: comment.body,
     capturePath: materialized.path,
+    captureCreated: materialized.created,
     authority: {
       kind: AUTHORITATIVE_GITHUB_ARTIFACT_BASIS,
       repositoryFullName: context.census.repositoryFullName,
@@ -1770,6 +1773,7 @@ function buildReceipt(
   operatorWaiverPath: string | undefined,
   artifactContext?: ArtifactAuthorityContext,
   purpose: ReviewEpisodeValidationPurpose = 'stage-time',
+  createdInputPaths?: Set<string>,
 ): ProducedStageReceipt | null {
   if (raw.schema !== STAGE_EVIDENCE_SCHEMA) {
     errors.push(`stage evidence has unknown schema: ${evidencePath}`);
@@ -1827,6 +1831,7 @@ function buildReceipt(
             captureTimestamps,
             errors,
           );
+          if (artifactResolution?.captureCreated) createdInputPaths?.add(artifactResolution.capturePath);
         }
       }
       if (!artifactRequired && value.terminalClassification === 'complete' && value.capturePath === undefined) {
@@ -1968,13 +1973,13 @@ function isValidSettlement(
 }
 
 function buildLedger(
-  path: string,
+  rawValue: unknown,
   captures: readonly CaptureIdentityV1[],
   errors: string[],
 ): string | null {
-  const raw = readJson(path, 'author dispositions', errors);
+  const raw = rawValue;
   if (!isRecord(raw) || raw.schema !== AUTHOR_DISPOSITIONS_SCHEMA || !Array.isArray(raw.findings)) {
-    errors.push(`author dispositions must use ${AUTHOR_DISPOSITIONS_SCHEMA}: ${path}`);
+    errors.push('author dispositions must use ' + AUTHOR_DISPOSITIONS_SCHEMA + '; field=author-dispositions authority=author-owned/GitHub-witnessed/lifecycle-tool-witnessed');
     return null;
   }
   if (raw.producer !== 'governed-author-output/v1' && raw.producer !== 'lifecycle-zero-state/v1') {
@@ -1985,9 +1990,7 @@ function buildLedger(
     isRecord(finding) ? [] : [index]
   ));
   if (invalidFindingIndexes.length > 0) {
-    for (const index of invalidFindingIndexes) {
-      errors.push(`author dispositions findings[${index}] must be an object`);
-    }
+    for (const index of invalidFindingIndexes) errors.push('author dispositions findings[' + index + '] must be an object; authority=author-owned');
     return null;
   }
   const findings = raw.findings as JsonRecord[];
@@ -2329,6 +2332,7 @@ interface AcceptanceIssueSnapshot {
   title: string;
   body: string;
   path: string;
+  bytes: string;
 }
 
 function stableAcceptanceIssueSnapshot(
@@ -2369,26 +2373,18 @@ function stableAcceptanceIssueSnapshot(
     body: first.body,
   };
   const bytes = JSON.stringify(snapshot, null, 2) + '\n';
-  mkdirSync(reviewDir, { recursive: true });
   if (existsSync(path)) {
     let existing: string;
     try { existing = readFileSync(path, 'utf8'); } catch {
-      errors.push('existing Issue body snapshot is unreadable: ' + path);
+      errors.push('existing Issue body snapshot is unreadable: ' + path + '; field=issue snapshot authority=GitHub-witnessed');
       return null;
     }
     if (existing !== bytes) {
-      errors.push('existing Issue body snapshot conflicts with current GitHub title/body bytes: ' + path + '; authority=GitHub-witnessed');
-      return null;
-    }
-  } else {
-    try {
-      writeFileSync(path, bytes, { encoding: 'utf8', flag: 'wx' });
-    } catch (error) {
-      errors.push('unable to materialize GitHub-witnessed Issue body snapshot: ' + (error instanceof Error ? error.message : String(error)));
+      errors.push('existing Issue body snapshot conflicts with current GitHub title/body bytes: ' + path + '; field=issue snapshot authority=GitHub-witnessed');
       return null;
     }
   }
-  return { issueNumber, sourceRevision, title: first.title, body: first.body, path };
+  return { issueNumber, sourceRevision, title: first.title, body: first.body, path, bytes };
 }
 
 function latestAuthorReplyPath(reviewDir: string): string | null {
@@ -2431,7 +2427,13 @@ function parseGovernedAuthorDispositionOutput(path: string, errors: string[]): J
   return parsed;
 }
 
-function ensureAuthorDispositionsFromGovernedOutput(input: {
+interface PreparedAuthorDispositions {
+  path: string;
+  bytes: string;
+  value: JsonRecord;
+}
+
+function prepareAuthorDispositionsFromGovernedOutput(input: {
   reviewDir: string;
   targetPath: string;
   reviewEpisodeId: string;
@@ -2440,7 +2442,7 @@ function ensureAuthorDispositionsFromGovernedOutput(input: {
   draft: string;
   allowZeroState: boolean;
   errors: string[];
-}): string | null {
+}): PreparedAuthorDispositions | null {
   const authorReplyPath = latestAuthorReplyPath(input.reviewDir);
   let payload: JsonRecord;
   let producer: 'governed-author-output/v1' | 'lifecycle-zero-state/v1';
@@ -2488,37 +2490,48 @@ function ensureAuthorDispositionsFromGovernedOutput(input: {
       inventory: m4.inventory,
     },
   };
-  const nextText = JSON.stringify(produced, null, 2) + '\n';
+  const bytes = JSON.stringify(produced, null, 2) + '\n';
   if (existsSync(input.targetPath)) {
     let existingText = '';
     try { existingText = readFileSync(input.targetPath, 'utf8'); } catch {
-      input.errors.push('existing author-dispositions.json is unreadable: ' + input.targetPath);
+      input.errors.push('existing author-dispositions.json is unreadable: ' + input.targetPath + '; field=findings/m4 authority=author-owned');
       return null;
     }
-    if (existingText === nextText) return input.targetPath;
-    let existing: unknown;
-    try { existing = JSON.parse(existingText) as unknown; } catch { existing = null; }
-    if (
-      isRecord(existing)
-      && existing.reviewEpisodeId === input.reviewEpisodeId
-      && existing.sourceRevision === input.sourceRevision
-      && existing.predecessorStage === input.predecessorStage
-    ) {
-      input.errors.push('existing author-dispositions.json conflicts with governed author output for the same binding; field=findings/m4 authority=author-owned');
+    if (existingText !== bytes) {
+      input.errors.push('existing author-dispositions.json conflicts with governed author output; field=findings/m4 authority=author-owned');
       return null;
     }
   }
-  const temporary = input.targetPath + '.author-' + process.pid + '.tmp';
+  return { path: input.targetPath, bytes, value: produced };
+}
+
+function commitPreparedInputs(
+  inputs: readonly { path: string; bytes: string }[],
+): string[] {
+  const created: string[] = [];
   try {
-    writeFileSync(temporary, nextText, { encoding: 'utf8', flag: 'wx' });
-    renameSync(temporary, input.targetPath);
+    for (const input of inputs) {
+      mkdirSync(dirname(input.path), { recursive: true });
+      if (existsSync(input.path)) {
+        if (readFileSync(input.path, 'utf8') !== input.bytes) throw new Error('conflicting immutable producer input: ' + input.path);
+        continue;
+      }
+      writeFileSync(input.path, input.bytes, { encoding: 'utf8', flag: 'wx' });
+      created.push(input.path);
+    }
+    return created;
   } catch (error) {
-    input.errors.push('unable to materialize author-dispositions.json from governed author output: ' + (error instanceof Error ? error.message : String(error)));
-    return null;
-  } finally {
-    if (existsSync(temporary)) rmSync(temporary, { force: true });
+    for (const path of created.reverse()) {
+      try { unlinkSync(path); } catch {}
+    }
+    throw error;
   }
-  return input.targetPath;
+}
+
+function rollbackCreatedInputs(paths: Iterable<string>): void {
+  for (const path of [...paths].reverse()) {
+    try { if (existsSync(path)) unlinkSync(path); } catch {}
+  }
 }
 
 function latestLifecycleStage(stageInputs: readonly { path: string; value: JsonRecord }[]): ReviewStage | null {
@@ -2560,7 +2573,9 @@ export function produceAcceptanceArtifacts(
     ? 'final-acceptance'
     : 'stage-time';
 
+  const createdInputPaths = new Set<string>();
   let issueSnapshot: AcceptanceIssueSnapshot | null = null;
+  let preparedAuthor: PreparedAuthorDispositions | null = null;
   if (!taskIssueMatch) {
     errors.push('acceptance input authority requires tier-intake taskIdentity issue:<N>');
   } else {
@@ -2575,7 +2590,7 @@ export function produceAcceptanceArtifacts(
   if (issueSnapshot) {
     const predecessorStage = latestLifecycleStage(validStageInputs);
     const allowZeroState = predecessorStage === null;
-    ensureAuthorDispositionsFromGovernedOutput({
+    preparedAuthor = prepareAuthorDispositionsFromGovernedOutput({
       reviewDir: options.reviewDir,
       targetPath: options.authorDispositionsPath,
       reviewEpisodeId: episodeId,
@@ -2698,6 +2713,7 @@ export function produceAcceptanceArtifacts(
       options.waiverPath,
       artifactContext,
       purpose,
+      createdInputPaths,
     ))
     .filter((receipt): receipt is ProducedStageReceipt => receipt !== null)
     .sort((left, right) => left.stageSequence - right.stageSequence);
@@ -2711,7 +2727,7 @@ export function produceAcceptanceArtifacts(
   }
   const captures = receipts.flatMap((receipt) => receipt.relayEligibleCaptures);
   const relay = relayEvidence(episodeId, captures);
-  const ledger = buildLedger(options.authorDispositionsPath, captures, errors);
+  const ledger = buildLedger(preparedAuthor?.value, captures, errors);
   const claudeProducerEvidenceAuditErrors: string[] = [];
   const claudeProducerEvidence = (options.claudeProducerEvidencePaths ?? []).flatMap((path) => readClaudeProducerEvidence(
     path,
@@ -2794,7 +2810,8 @@ export function produceAcceptanceArtifacts(
       if (!ledgerResult.ok) errors.push(...ledgerResult.errors);
     }
   }
-  if (errors.length > 0 || !ledger || !tier) {
+  if (errors.length > 0 || !ledger || !tier || !issueSnapshot || !preparedAuthor) {
+    rollbackCreatedInputs(createdInputPaths);
     const temporary = temporaryClassification(errors);
     return {
       ok: false,
@@ -2852,9 +2869,16 @@ export function produceAcceptanceArtifacts(
   artifactContents.set('finding-disposition-ledger.json', ledger);
   artifactContents.set('review-episode-inventory.json', JSON.stringify(authority!.receiptInventory, null, 2) + '\n');
   artifactContents.set('acceptance-artifacts.json', JSON.stringify(manifest, null, 2) + '\n');
+  let committedInputs: string[] = [];
   try {
+    committedInputs = commitPreparedInputs([
+      { path: issueSnapshot.path, bytes: issueSnapshot.bytes },
+      { path: preparedAuthor.path, bytes: preparedAuthor.bytes },
+    ]);
+    for (const path of committedInputs) createdInputPaths.add(path);
     publishArtifactSet(outputDir, files, artifactContents, options.publicationHooks);
   } catch (error) {
+    rollbackCreatedInputs(createdInputPaths);
     const message = error instanceof Error ? error.message : String(error);
     return {
       ok: false,
