@@ -1090,6 +1090,227 @@ function resolveAuthoritativeArtifact(
   };
 }
 
+
+export interface ReconcileCreateIssueStageOptions {
+  reviewDir: string;
+  stageEvidencePath: string;
+  repositoryFullName: string;
+  issueNumber: number;
+  artifactSourceTransport?: GhTransport;
+}
+
+export interface ReconcileCreateIssueStageResult {
+  ok: boolean;
+  stageAttemptId?: string;
+  stage?: Exclude<ReviewStage, 'architectural-lens'>;
+  sourceRevision?: string;
+  capturePaths: string[];
+  alreadySettled?: boolean;
+  errors: string[];
+  temporary?: AcceptanceArtifactTemporaryClassification;
+}
+
+function rollbackNewReconciliationCaptures(
+  candidates: readonly string[],
+  preExisting: ReadonlySet<string>,
+): void {
+  for (const path of candidates) {
+    if (preExisting.has(path) || !existsSync(path)) continue;
+    try { unlinkSync(path); } catch {}
+  }
+}
+
+export function reconcileCreateIssueStage(
+  options: ReconcileCreateIssueStageOptions,
+): ReconcileCreateIssueStageResult {
+  const errors: string[] = [];
+  const rawValue = readJson(options.stageEvidencePath, 'stage evidence', errors);
+  if (!isRecord(rawValue) || rawValue.schema !== STAGE_EVIDENCE_SCHEMA) {
+    errors.push('stage evidence must use ' + STAGE_EVIDENCE_SCHEMA + ': ' + options.stageEvidencePath);
+    return { ok: false, capturePaths: [], errors: [...new Set(errors)] };
+  }
+  const raw = rawValue;
+  const stage = reviewerStage(raw.stage);
+  const stageAttemptId = requiredString(raw.stageAttemptId, 'stage evidence.stageAttemptId', errors);
+  const sourceRevision = requiredString(raw.sourceRevision, 'stage evidence.sourceRevision', errors);
+  const stageSequence = Number(raw.stageSequence);
+  if (!stage) errors.push('stage reconciliation is only valid for Browser-GPT reviewer stages');
+  if (!Number.isInteger(stageSequence) || stageSequence < 1) errors.push('stage evidence.stageSequence must be positive');
+  if (typeof raw.taskIdentity === 'string' && raw.taskIdentity.trim() !== 'issue:' + options.issueNumber) {
+    errors.push('stage evidence taskIdentity ' + raw.taskIdentity + ' does not bind Issue #' + options.issueNumber);
+  }
+  if (!stage || !stageAttemptId || !sourceRevision || errors.length > 0) {
+    return {
+      ok: false,
+      ...(stageAttemptId ? { stageAttemptId } : {}),
+      ...(stage ? { stage } : {}),
+      ...(sourceRevision ? { sourceRevision } : {}),
+      capturePaths: [],
+      errors: [...new Set(errors)],
+    };
+  }
+
+  if (existsSync(options.reviewDir)) {
+    for (const name of readdirSync(options.reviewDir).filter((candidate) => /^stage-completeness-receipt-.+\.json$/.test(candidate))) {
+      const path = join(options.reviewDir, name);
+      let value: unknown;
+      try { value = JSON.parse(readFileSync(path, 'utf8')) as unknown; } catch { continue; }
+      if (!isRecord(value) || value.stage !== stage) continue;
+      const settledAttemptId = optionalString(value.stageAttemptId);
+      if (!settledAttemptId) continue;
+      if (settledAttemptId !== stageAttemptId) {
+        return {
+          ok: false,
+          stageAttemptId,
+          stage,
+          sourceRevision,
+          capturePaths: [],
+          errors: ['stage_slot_consumed: ' + stage + ' is already settled by stageAttemptId ' + settledAttemptId],
+        };
+      }
+      return {
+        ok: true,
+        stageAttemptId,
+        stage,
+        sourceRevision,
+        capturePaths: [],
+        alreadySettled: true,
+        errors: [],
+      };
+    }
+  }
+
+  if (!Array.isArray(raw.invocations)) {
+    return {
+      ok: false,
+      stageAttemptId,
+      stage,
+      sourceRevision,
+      capturePaths: [],
+      errors: ['stage evidence.invocations is missing'],
+    };
+  }
+  const requiredSlots = requiredFinalSlots(raw);
+  if (requiredSlots.length === 0) {
+    return {
+      ok: false,
+      stageAttemptId,
+      stage,
+      sourceRevision,
+      capturePaths: [],
+      errors: ['stage evidence has no required reviewer slots'],
+    };
+  }
+
+  const invocations = raw.invocations.filter((value): value is JsonRecord => isRecord(value));
+  if (invocations.length !== raw.invocations.length) errors.push('stage evidence invocations must all be objects');
+  const finals: JsonRecord[] = [];
+  for (const reviewerSlot of requiredSlots) {
+    const candidates = invocations
+      .filter((value) => optionalString(value.reviewerSlot) === reviewerSlot)
+      .sort((left, right) => Number(left.attemptOrdinal ?? 0) - Number(right.attemptOrdinal ?? 0));
+    const final = candidates.at(-1);
+    if (!final) {
+      errors.push('stage evidence missing final invocation mapping for reviewerSlot ' + reviewerSlot);
+      continue;
+    }
+    if (final.stageAttemptId !== stageAttemptId) errors.push('reviewerSlot ' + reviewerSlot + ' stageAttemptId does not match admitted attempt');
+    if (final.stage !== stage) errors.push('reviewerSlot ' + reviewerSlot + ' stage does not match admitted stage');
+    if (final.sourceRevision !== sourceRevision) errors.push('reviewerSlot ' + reviewerSlot + ' sourceRevision does not match admitted revision');
+    if (!optionalString(final.invocationId)) errors.push('reviewerSlot ' + reviewerSlot + ' invocationId is missing');
+    finals.push(final);
+  }
+  if (errors.length > 0) {
+    return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [...new Set(errors)] };
+  }
+
+  const transport = options.artifactSourceTransport ?? defaultGhTransport();
+  let principalLogin: string;
+  try {
+    principalLogin = resolveAuthenticatedGithubPrincipal(transport);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const message = temporaryError('identity-unresolved', 'authenticated GitHub principal could not be resolved through tracked GET /user: ' + detail);
+    return {
+      ok: false,
+      stageAttemptId,
+      stage,
+      sourceRevision,
+      capturePaths: [],
+      errors: [message],
+      temporary: 'identity-unresolved',
+    };
+  }
+  const census = authoritativeIssueCommentCensus(
+    transport,
+    options.repositoryFullName,
+    options.issueNumber,
+    errors,
+  );
+  if (!census) {
+    const temporary = temporaryClassification(errors) ?? 'source-unavailable';
+    return {
+      ok: false,
+      stageAttemptId,
+      stage,
+      sourceRevision,
+      capturePaths: [],
+      errors: [...new Set(errors)],
+      temporary,
+    };
+  }
+  const context: ArtifactAuthorityContext = { transport, census, principalLogin };
+  const captureTexts = new Map<string, string>();
+  const captureTimestamps = new Map<string, number>();
+  const candidatePaths = finals.map((invocation) => resolve(
+    options.reviewDir,
+    authoritativeCaptureName(
+      options.reviewDir,
+      stage,
+      stageSequence,
+      optionalString(invocation.reviewerSlot) ?? '',
+      invocation.capturePath,
+    ),
+  ));
+  const preExisting = new Set(candidatePaths.filter((path) => existsSync(path)));
+  const capturePaths: string[] = [];
+  for (const invocation of finals) {
+    const resolved = resolveAuthoritativeArtifact(
+      context,
+      options.reviewDir,
+      stage,
+      stageSequence,
+      invocation,
+      captureTexts,
+      captureTimestamps,
+      errors,
+    );
+    if (resolved) capturePaths.push(resolved.capturePath);
+  }
+  if (errors.length > 0 || capturePaths.length !== requiredSlots.length) {
+    rollbackNewReconciliationCaptures(candidatePaths, preExisting);
+    if (errors.length === 0) errors.push('stage reconciliation did not credential every required reviewer slot');
+    const temporary = temporaryClassification(errors);
+    return {
+      ok: false,
+      stageAttemptId,
+      stage,
+      sourceRevision,
+      capturePaths: [],
+      errors: [...new Set(errors)],
+      ...(temporary ? { temporary } : {}),
+    };
+  }
+  return {
+    ok: true,
+    stageAttemptId,
+    stage,
+    sourceRevision,
+    capturePaths,
+    errors: [],
+  };
+}
+
 function readClaudeProducerEvidence(
   path: string,
   errors: string[],
