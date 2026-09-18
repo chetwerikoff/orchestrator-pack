@@ -318,7 +318,13 @@ stage.
   `cycleBinding.boundBeforeLaunch` witness match the admitted cycle.
 - `node --experimental-strip-types scripts/create-issue-stage-finalize.ts retry-pending`
   is the sole retry path for delayed local journal delivery. Pending files are
-  best-effort transport state, never acceptance authority.
+  best-effort transport state, never acceptance authority. Manager-facing
+  journal non-success results use the shared create-Issue result contract:
+  recoverable `start-cycle`/stage-publication states return only a state-bound
+  `nextAction.argv` using the same deterministic attempt or this existing
+  `retry-pending` path; stale, consumed, exhausted, conflicting, or externally
+  blocked states return `nextAction: null`. A bound action is revalidated
+  before projection/journal mutation.
 - `node --experimental-strip-types scripts/create-issue-final-acceptance.ts`
   executes tier-gate, stage-completeness, lifecycle-topology, and finding-ledger
   guards directly, then alone writes `create-issue-final-acceptance/v1` and
