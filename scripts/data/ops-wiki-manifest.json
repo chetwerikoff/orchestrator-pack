@@ -63,7 +63,8 @@
       "edges": [
         { "type": "related", "target": "agents-portable-plan" },
         { "type": "related", "target": "coworker-deep-dive" },
-        { "type": "related", "target": "agents-wiki-ops" }
+        { "type": "related", "target": "agents-wiki-ops" },
+        { "type": "related", "target": "agents-github-runtime" }
       ]
     },
     {
@@ -82,6 +83,7 @@
       "edges": [
         { "type": "related", "target": "agents-wiki-ops" },
         { "type": "related", "target": "agents-worker-skills" },
+        { "type": "related", "target": "agents-coworker-rtk" },
         { "type": "related", "target": "chat-current-head" },
         { "type": "related", "target": "chat-checkpoints-review" }
       ]
