@@ -1,89 +1,76 @@
 # create-issue-draft acceptance artifacts
 
-The flow-manager authors the three declared acceptance-input classes from
-evidence it already holds. The governing producer and ownership rule is
-`.cursor/skills/create-issue-draft/SKILL.md` §Producer-before-validator and
-§Flow-manager-authored inputs; this document is operator guidance and does not
-define a second policy authority. The validators remain the authority; the
-flow-manager only records inputs or materializes producer outputs from observed
-evidence the validators already consume.
+This document describes the single create-Issue acceptance producer path. The
+manager invokes producers; it does not transcribe, repair, pair, or synthesize
+acceptance files. Field authority is closed:
 
-The acceptance inventory has four roles: `tier-intake.json`, each
-`attempt-NNN.json` stage-evidence input (`create-issue-stage-evidence/v1`), and
-`author-dispositions.json` (`create-issue-author-dispositions/v1`) are
-flow-manager-authored inputs; the files in Produced files are producer outputs;
-reviewer captures, `turn-result/v1` artifacts, and Claude producer
-evidence/waivers are conditional stage-time evidence; at final acceptance
-producer/source/transport identities carried by those artifacts are audit-only.
-Chats, author replies, and tier-gate receipts are audit-only records.
-The flow-manager records all three declared inputs. Repository writers are absent
-for those inputs by design, which is not a missing-producer condition under the
-governing Skill because the flow-manager is their declared producer. This
-component also has no writer for `remote-authority.json`.
+| Artifact / field family | Authority | Producer rule |
+| --- | --- | --- |
+| `tier-intake.json`: task/Issue identity, first revision, tier/topology inputs, competitive decision/rationale | lifecycle-tool-witnessed | lifecycle records the values when admitted; callers do not reconstruct the file |
+| `attempt-NNN.json`: episode/attempt/cycle/stage/slot/cardinality/revision, invocation, send/retry/terminal/settlement facts | lifecycle-tool-witnessed | lifecycle/send-boundary tools record only observed facts |
+| `attempt-NNN.json`: comment id/url, capture identity/hash/bytes/finding count, `artifactAuthority` | GitHub-witnessed | reconciliation derives them from one complete Issue census plus targeted reread |
+| `author-dispositions.json`: exact current Issue draft/body and source revision | GitHub-witnessed | producer uses the one stable live Issue snapshot for the production attempt |
+| `author-dispositions.json`: defect/remedy dispositions, reasons/evidence, M3 and M4 | author-owned | consume the structured governed author turn verbatim; the manager does not infer or fill values |
+| `author-dispositions.json`: reviewEpisodeId, predecessor stage, topology binding | lifecycle-tool-witnessed | producer binds the author payload to canonical lifecycle state |
+| `issue-rNN-body.json` | GitHub-witnessed | freeze exact `{issueNumber, sourceRevision, title, body}` from the same stable observation |
+| stage-completeness receipts | lifecycle-tool-witnessed with embedded GitHub facts | derive from canonical topology, lifecycle evidence and reconciled artifacts |
+| terminal input bundle: live Issue bytes/revision | GitHub-witnessed | consume/revalidate the same producer-owned Issue snapshot |
+| terminal input bundle: episode/predecessor/topology/stage | lifecycle-tool-witnessed | consume canonical lifecycle outputs |
+| terminal input bundle: findings/M3/M4 | author-owned | consume governed author output; assembler never re-authors it |
+| finding ledger capture identities/raw counts | GitHub-witnessed | recompute from canonical reconciled capture bytes |
+| finding ledger mapping/dispositions | author-owned | consume governed disposition rows |
+| inventory / relay / acceptance manifest | derived lifecycle producer output | `produce-artifacts` remains the sole producer |
 
-For terminal review, `author-dispositions.json` also carries the author-owned
-current M4 inventory as a bound `m4` object:
-`reviewEpisodeId`, `predecessorStage`, `sourceRevision`, and an
-`inventory` of `{ mechanism, disposition }` entries where disposition is
-`keep | simplify | defer | cut`. This remains a flow-manager-recorded author
-input; it is not a new acceptance artifact or state store.
+One production attempt owns exactly one stable GitHub Issue observation. Every
+GitHub-witnessed body/revision datum produced or validated during that attempt
+must agree with that observation. State movement is a stale/restart condition;
+two independently observed revisions may not be normalized into one output set.
+
+Conflicting immutable snapshot, capture, disposition, receipt, bundle, ledger or
+manifest bytes fail closed. When a required authority is unavailable, the
+producer reports the exact field and authority and commits no partial new
+acceptance input/output. A canonical capture produced while an attempt is later
+rejected is rolled back unless it pre-existed the attempt.
 
 ## Pre-acceptance path
 
-Run the missing-input check before acceptance:
+The canonical review directory is the normal input surface. Lifecycle evidence
+is auto-discovered there; explicit `--tier-intake`, `--stage-evidence` and
+`--author-dispositions` paths are assertion/override seams, not instructions
+for a manager to hand-author those files.
+
+Read-only status:
 
 ```bash
 node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/create-issue-stage-finalize.ts -- check-artifacts \
-  --review-dir "$REVIEW_DIR" \
-  --tier-intake "$REVIEW_DIR/tier-intake.json" \
-  --stage-evidence "$REVIEW_DIR/attempt-001.json" \
-  --author-dispositions "$REVIEW_DIR/author-dispositions.json" \
-  --output-dir "$REVIEW_DIR" --json
+  --review-dir "$REVIEW_DIR" --output-dir "$REVIEW_DIR" --json
 ```
 
-After every required stage has a recorded result, produce the files:
+Produce from owning authorities:
 
 ```bash
 node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/create-issue-stage-finalize.ts -- produce-artifacts \
-  --review-dir "$REVIEW_DIR" \
-  --tier-intake "$REVIEW_DIR/tier-intake.json" \
-  --stage-evidence "$REVIEW_DIR/attempt-001.json" \
-  --stage-evidence "$REVIEW_DIR/attempt-002.json" \
-  --author-dispositions "$REVIEW_DIR/author-dispositions.json" \
-  --output-dir "$REVIEW_DIR" --phase final-acceptance --json
+  --repo <owner/name> --issue-number <N> \
+  --review-dir "$REVIEW_DIR" --output-dir "$REVIEW_DIR" \
+  --phase <pre-lens|post-lens|final-acceptance> --json
 ```
 
-Use `--phase pre-lens` when only the T3 pre-lens stages are complete. The
-command returns a non-zero status and a named missing input when evidence is
-absent. It writes no acceptance artifact on failure.
+For T2 before terminal review use `--phase pre-lens`; for T3 after the Claude
+lens use `--phase post-lens`. Final artifact production uses
+`--phase final-acceptance`. T1 has no predecessor review receipt; its
+zero-state author payload is produced by the same path.
 
-Before the terminal `architectural` launch, run the same producer over every
-canonical pre-terminal stage-evidence input: T2 uses `--phase pre-lens`, while
-T3 uses `--phase post-lens`. Those outputs are the receipt-backed inputs
-consumed by `scripts/manager-review-terminal-bundle.ts`. T1 has no predecessor
-stage and does not fabricate these files merely to launch its sole terminal
-reviewer; its terminal bundle uses the current `tier-intake.json` and
-zero-state `author-dispositions.json`.
+A non-success result names the unavailable authority. When a legal bounded
+continuation exists, the normative continuation is the returned
+`nextAction.argv`; execute that vector rather than interpreting prose or
+repairing JSON by hand. A terminal/external/stale state with no legal
+continuation returns `nextAction: null`.
 
-`check-artifacts`, artifact production, launch admission, and final acceptance
-consume the single executable stage-plan authority in
-`scripts/lib/create-issue-stage-topology.ts`. T1 requires one `architectural`
-stage. T2 requires `architectural-review` followed by `architectural`. T3 reads
-the immutable `tier-intake/v1` decision: `competitiveDecision: required` with a
-non-empty `competitiveRationale` requires `competitive`; `skipped` with a
-non-empty rationale omits it. T3 then requires `architectural-review`,
-`architectural-lens`, and `architectural`. Journal state is audit-only and does
-not choose this topology.
-
-A clean settled stage closes with the governed no-findings disposition only: no
-author fix-round, Issue-body edit, revision increment, or re-run of that stage.
-A stage with findings gets the bounded author correction/disposition defined by
-the lifecycle contract, after which only the next canonical stage can be
-admitted. The terminal GPT stage is Issue-lifetime one-shot; a permitted bounded
-post-terminal correction does not create a second terminal receipt.
-
-Browser starts are staggered by 10–15 seconds. No stage starts on a stale Issue
-revision; reviewers read the latest admitted revision.
+The terminal reviewer bundle and final acceptance consume canonical producer
+outputs. Final acceptance derives cycle, Issue snapshots, receipt inventory,
+captures, ledger and relay evidence from the review directory; old explicit
+body/revision/cycle/receipt flags are assertion-only and cannot become
+acceptance authority.
 
 ## Evidence inputs
 
@@ -98,30 +85,32 @@ contains the stage facts already recorded by the flow-manager:
 - `invocations`, with the recorded invocation envelope fields and, when they
   exist, `capturePath` and `turnResultPath` transport evidence.
 
-For covered Browser-GPT review and terminal-lens stages, stage readiness has one
-authority path: the live GitHub Issue artifact. A `turn-result/v1` receipt is
-transport diagnostics only; its presence or state does not create a second
-acceptance path and is not required to prove that the stage artifact exists.
+For covered Browser-GPT review and terminal stages, GitHub artifact authority
+is joined to the already-admitted lifecycle mapping by the exact invocation id.
+The comment does not need stage/slot fields: lifecycle owns stage/slot, while
+GitHub proves Issue, revision, invocation, publisher and exact body.
 
-The producer exhausts the complete paginated top-level comment census for the
-exact target Issue once for the production attempt. For each expected invocation,
-a credentialable comment must satisfy the canonical reviewer grammar, bind the
-exact Issue and that invocation's own frozen `sourceRevision`, remain unedited,
-and carry GitHub repository trust via
-`author_association ∈ {OWNER, MEMBER, COLLABORATOR}`. Exact comment-author login
-is retained as audit metadata and is not compared with the current authenticated
-principal. The producer never accepts caller-supplied comment bytes, author
-identity, hashes, lengths, finding counts, or a partial census as authority.
+Reconciliation first resolves the current authenticated GitHub principal through
+the tracked transport using `gh api user --jq .login` (`GET /user`). It then
+performs one complete bounded top-level Issue-comment census and filters
+candidate reviewer artifacts by case-insensitive publisher-login equality
+**before uniqueness**. Repository ownership or `author_association` is not a
+substitute selector.
 
-A proven-complete census with zero canonical matches proves absence. An
-incomplete/unavailable census is TEMPORARY `source-unavailable`; missing
-repository-trust fields are source-unavailable and an explicitly untrusted
-association fails closed. Byte-identical trusted matches for the same semantic
-invocation/source slot are duplicate observations and collapse deterministically;
-conflicting trusted bytes fail as a substantive conflict. Local observer loss
-before the authoritative reread finishes is TEMPORARY `observation-lost`.
-Unavailable current-principal resolution and publisher mismatch are not final
-completion vetoes. Unknown is never rewritten into absence.
+A slot credentials only from exactly one principal-owned, unedited canonical
+comment for the exact Issue, frozen revision and admitted invocation, followed
+by an identical targeted reread. Zero principal-owned matches, more than one
+principal-owned match, wrong publisher, edited comment, wrong Issue, wrong
+revision/invocation, incomplete census, unresolved principal, or reread byte
+drift fail closed. Unknown is never converted to absence. A case-only login
+difference is the same principal.
+
+The original transport result remains independent truth. Reconciliation may add
+GitHub artifact authority to an `incident`/possible-delivery invocation but
+does not rewrite it to `complete`, synthesize `state: ok`, invent
+`reviewer_source`, alter send accounting, or grant resend authority. When
+transport itself says `complete`, its real `turn-result/v1` success evidence
+continues to be validated.
 
 The exact decoded GitHub comment body becomes the stage source bytes. The
 producer derives the existing canonical capture name from stage evidence:
@@ -184,6 +173,7 @@ well as occurrence-level dispositions:
 ```json
 {
   "schema": "create-issue-author-dispositions/v1",
+  "producer": "governed-author-output/v1",
   "reviewEpisodeId": "issue:1439@r01",
   "sourceRevision": "r02",
   "predecessorStage": "architectural-review",
@@ -201,8 +191,11 @@ well as occurrence-level dispositions:
 ```
 
 `predecessorStage: null` is an explicit valid value when there is no predecessor.
-An empty `findings` array is an explicit governed no-findings value, not a
-missing producer result. The producer computes ledger counts from the capture
+The substantive `findings` and `m4.inventory` rows come from the latest governed
+`round-NN-author-reply.*` `create-issue-author-dispositions/v1` fenced payload;
+that author reply is an authority source, not audit-only prose. An empty
+`findings` array is an explicit governed no-findings value. The producer computes
+ledger counts from the capture
 bytes and disposition values, copies the producer-owned
 `reviewEpisodeId`/`sourceRevision`/`predecessorStage`/exact-draft binding into
 `finding-disposition-ledger.json`, and runs the finding-ledger guard before
