@@ -1268,9 +1268,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     input.evidence.outcome = 'incident';
     input.evidence.settlement.retryState = 'exhausted';
     writeFileSync(input.evidencePath, JSON.stringify(input.evidence));
-    const live = canonicalFindingsVerdict({ invocationId: 'invocation-retry' })
-      .replace(/^INVOCATION_ID_TO_ECHO: .*$/m, '')
-      .replace(/\n{2,}/g, '\n');
+    const live = canonicalFindingsVerdict({ invocationId: 'invocation-retry' });
     const source = transport({ census: [...input.reviewComments, comment(live)] });
 
     const result = produce(input, source);
@@ -1312,7 +1310,10 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     ['edited artifact', comment(canonicalVerdict(), { updated_at: '2026-08-07T04:01:00Z' }), /was edited/],
   ])('rejects %s', (_name, liveComment, expected) => {
     const input = fixture({ transportClassification: 'incident' });
-    const result = produce(input, transport({ census: [liveComment as Record<string, unknown>] }));
+    const result = produce(input, transport({
+      census: [liveComment as Record<string, unknown>],
+      issueBodies: [finalAcceptanceIssueBody(REVISION)],
+    }));
     expect(result.ok).toBe(false);
     expect(result.errors.join('\n')).toMatch(expected as RegExp);
   });
@@ -1525,7 +1526,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     const input = fixture({ transportClassification: 'complete', withTurnResult: true, withCapture: true });
     const result = produce(input, transport({ census: [] }));
     expect(result.ok).toBe(false);
-    expect(result.errors.join('\n')).toContain('artifact absent after complete census');
+    expect(result.errors.join('\n')).toContain('zero_principal_owned_match');
   });
 
   it('rejects artifact bytes that change between the complete census and reread', () => {
@@ -2097,6 +2098,10 @@ describe('Issue #1556 pre-lens architectural-review routing', () => {
     const prepare = (missingSlot?: string) => {
       const input = fixture({ transportClassification: 'complete' });
       rmSync(input.evidencePath);
+      writeGovernedAuthorReply(input.authorReplyPath, {
+        sourceRevision: REVISION,
+        predecessorStage: 'architectural-review',
+      });
 
       writeFileSync(input.intakePath, JSON.stringify({
         schema: 'tier-intake/v1',
@@ -2241,6 +2246,10 @@ describe('Issue #1556 pre-lens architectural-review routing', () => {
 describe('Issue #1744 two-missing AR waiver production', () => {
   const prepare = (withWaiver: boolean) => {
     const input = fixture({ transportClassification: 'complete' });
+    writeGovernedAuthorReply(input.authorReplyPath, {
+      sourceRevision: REVISION,
+      predecessorStage: 'architectural-review',
+    });
     writeFileSync(input.intakePath, JSON.stringify({
       schema: 'tier-intake/v1', producer: 'flow-manager', taskIdentity: TASK, kind: 'fresh', priorTier: 'T3',
       firstRevision: REVISION, competitiveDecision: 'skipped', competitiveRationale: 'competitive review was skipped for pre-lens',
