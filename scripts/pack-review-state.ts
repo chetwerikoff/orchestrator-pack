@@ -36,6 +36,7 @@ export interface SmokeOrderingOwnerEvidence {
   supervisorPid: number;
   runId?: string;
   supervisorAlive: boolean;
+  cleanupSafe?: boolean;
   authoritativeResult?: 'PASS' | 'FAIL' | 'BLOCKED';
 }
 
@@ -1244,6 +1245,7 @@ function reconcileStartedSmokeOwner<T extends SmokeOrderingOwnerFields & {
     };
   }
   if (!input.evidence.supervisorAlive) {
+    if (input.evidence.runId && input.evidence.cleanupSafe !== true) return input.marker;
     return {
       ...input.marker,
       status: 'failed',
@@ -1293,7 +1295,8 @@ export function commitSmokeOrderingTransition(input: {
   if (input.ownerStateEvidence) smokeOrderingOwnerFields(input.ownerStateEvidence);
   const current = readPackReviewAuthority(input.prNumber, input.options);
   if (!current) throw new PackReviewAuthorityError('authority_missing', `PR ${input.prNumber}`);
-  return commitPackReviewAuthorityTransition({
+  let deferredRefusal: PackReviewAuthorityError | undefined;
+  const committed = commitPackReviewAuthorityTransition({
     prNumber: input.prNumber,
     expectedTransitionSeq: input.expectedTransitionSeq,
     nextPhase: current.phase,
@@ -1320,10 +1323,15 @@ export function commitSmokeOrderingTransition(input: {
             );
           }
           if (reconciled.headSha === headSha && reconciled.status === 'passed') {
-            throw new PackReviewAuthorityError(
+            const refusal = new PackReviewAuthorityError(
               'smoke_ordering_worker_owned_already_passed',
               'worker-owned smoke already passed for the exact head',
             );
+            if (existing.status === 'started') {
+              deferredRefusal = refusal;
+              return authority;
+            }
+            throw refusal;
           }
         }
         const workerMarker = authority.smokeOrdering?.workerOwned;
@@ -1367,6 +1375,13 @@ export function commitSmokeOrderingTransition(input: {
             now,
           });
           authority.smokeOrdering = { ...authority.smokeOrdering, independent: reconciled };
+          if (existing.status === 'started' && reconciled.headSha === headSha && reconciled.status === 'passed') {
+            deferredRefusal = new PackReviewAuthorityError(
+              'smoke_ordering_independent_already_passed',
+              'independent smoke already passed for the exact head',
+            );
+            return authority;
+          }
         }
         if (input.status === 'started') {
           const reviewRuns = input.reviewRuns
@@ -1414,6 +1429,8 @@ export function commitSmokeOrderingTransition(input: {
     },
     options: input.options,
   });
+  if (deferredRefusal) throw deferredRefusal;
+  return committed;
 }
 
 export function selectPackReviewEvidence(input: {

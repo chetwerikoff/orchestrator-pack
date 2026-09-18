@@ -74,6 +74,7 @@ import {
   createSmokeLifecycleReservation,
   createSmokeNoExecutionLifecycle,
   evaluateSmokeLifecycleCleanliness,
+  hasValidSmokeCloseReceipt,
   markSmokeCreateAmbiguous,
   markSmokeCreateInProgress,
   markSmokeLauncherTerminalized,
@@ -526,7 +527,7 @@ function gitPorcelain(cwd: string): string[] {
     .split(/\r?\n/u).filter(Boolean);
 }
 
-function gitTrackedSmokeRuntimePaths(cwd: string): string[] {
+export function gitTrackedSmokeRuntimePaths(cwd: string): string[] {
   return requireProcessOutput(
     'git ls-files .orca-worker-smoke',
     runProcessSync({ command: 'git', args: ['ls-files', '--cached', '--', '.orca-worker-smoke'], cwd }),
@@ -1556,6 +1557,7 @@ function orderingOwnerEvidence(
   if (!attemptId || !Number.isInteger(supervisorPid) || supervisorPid <= 0) return undefined;
   const runId = marker?.runId?.trim() || undefined;
   let authoritativeResult: SmokeReport['result'] | undefined;
+  let cleanupSafe: boolean | undefined;
   if (runId) {
     const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
     const runtime = readWorkerSmokeRunFinalEvidence({
@@ -1565,12 +1567,22 @@ function orderingOwnerEvidence(
       artifactDir, runId, issueNumber: options.issueNumber, prNumber: options.prNumber, headSha: options.headSha, mode: 'no_execution',
     });
     authoritativeResult = runtime?.result ?? noExecution?.result;
+    const registry = readSmokeLifecycleRegistry(artifactDir);
+    cleanupSafe = Boolean(
+      registry
+      && registry.runId === runId
+      && (
+        !registry.terminalHandle
+        || (registry.spawnState === 'clean' && hasValidSmokeCloseReceipt(artifactDir))
+      )
+    );
   }
   return {
     attemptId,
     supervisorPid,
     ...(runId ? { runId } : {}),
     supervisorAlive: processIsAlive(supervisorPid),
+    ...(cleanupSafe !== undefined ? { cleanupSafe } : {}),
     ...(authoritativeResult ? { authoritativeResult } : {}),
   };
 }
@@ -1973,7 +1985,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     if (start.value.kind === 'spawn_failed') {
       const report = operationalReport('harness_observation_interrupted', options, { action: 'spawn runtime smoke worker', expected: 'composite worker identity', observed: start.value.reason, terminalCleanup: 'ambiguous_unbound', adapterId: adapter.id });
       publishSmokeReport(report, options, runPublication);
-      terminalizeDetachedRun(options, runId, artifactDir, 'runtime', report);
+      deferDetachedTerminalization(runId, artifactDir, 'runtime', report);
       emit({ ok: false, report, attemptId }, options.json); return 1;
     }
     if (!worker || startedAtMs <= 0) throw new Error('smoke_start_prefix_incomplete');
