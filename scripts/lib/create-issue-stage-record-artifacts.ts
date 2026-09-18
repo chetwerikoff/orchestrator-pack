@@ -1065,6 +1065,20 @@ function resolveAuthoritativeArtifact(
     errors,
   );
   if (!comment) return null;
+  const authority: AuthoritativeGithubArtifactAuthorityV1 = {
+    kind: AUTHORITATIVE_GITHUB_ARTIFACT_BASIS,
+    repositoryFullName: context.census.repositoryFullName,
+    issueNumber: context.census.issueNumber,
+    commentId: comment.id,
+    commentUrl: comment.htmlUrl,
+    publisherLogin: comment.userLogin!,
+    createdAt: comment.createdAt,
+    updatedAt: comment.updatedAt,
+  };
+  if (invocation.artifactAuthority !== undefined && !jsonEqual(invocation.artifactAuthority, authority)) {
+    errors.push('stage evidence artifactAuthority assertion disagrees with authoritative GitHub reread for invocation ' + invocationId);
+    return null;
+  }
   const name = authoritativeCaptureName(reviewDir, stage, stageSequence, reviewerSlot, invocation.capturePath);
   const materialized = materializeAuthoritativeCapture(
     reviewDir,
@@ -1082,16 +1096,7 @@ function resolveAuthoritativeArtifact(
     captureText: comment.body,
     capturePath: materialized.path,
     captureCreated: materialized.created,
-    authority: {
-      kind: AUTHORITATIVE_GITHUB_ARTIFACT_BASIS,
-      repositoryFullName: context.census.repositoryFullName,
-      issueNumber: context.census.issueNumber,
-      commentId: comment.id,
-      commentUrl: comment.htmlUrl,
-      publisherLogin: comment.userLogin!,
-      createdAt: comment.createdAt,
-      updatedAt: comment.updatedAt,
-    },
+    authority,
   };
 }
 
@@ -1408,9 +1413,28 @@ export function reconcileCreateIssueStage(
       errors,
     );
     if (!resolvedArtifact) return false;
+    const assertedByteLength = final.captureByteLength;
+    const assertedSha256 = final.captureSha256;
+    const assertedFindingCount = final.rawFindingCount;
+    if (assertedByteLength !== undefined && Number(assertedByteLength) !== resolvedArtifact.capture.byteLength) {
+      errors.push('reviewerSlot ' + reviewerSlot + ' captureByteLength assertion disagrees with authoritative GitHub bytes');
+      return false;
+    }
+    if (assertedSha256 !== undefined && assertedSha256 !== resolvedArtifact.capture.sha256) {
+      errors.push('reviewerSlot ' + reviewerSlot + ' captureSha256 assertion disagrees with authoritative GitHub bytes');
+      return false;
+    }
+    if (assertedFindingCount !== undefined && Number(assertedFindingCount) !== resolvedArtifact.capture.rawFindingCount) {
+      errors.push('reviewerSlot ' + reviewerSlot + ' rawFindingCount assertion disagrees with authoritative GitHub bytes');
+      return false;
+    }
     resolvedBySlot.set(reviewerSlot, resolvedArtifact);
     final.capturePath = resolvedArtifact.capturePath;
     final.captureIdentity = resolvedArtifact.capture.captureIdentity;
+    final.captureByteLength = resolvedArtifact.capture.byteLength;
+    final.captureSha256 = resolvedArtifact.capture.sha256;
+    final.rawFindingCount = resolvedArtifact.capture.rawFindingCount;
+    final.artifactAuthority = resolvedArtifact.authority;
     capturePaths.push(resolvedArtifact.capturePath);
     return true;
   };
