@@ -442,6 +442,9 @@ describe('Issue #1935 sanitized measured convergence replay', () => {
 
     const reconciledEvidence = JSON.parse(readFileSync(evidencePath, 'utf8')) as {
       invocations: Array<Record<string, unknown>>;
+      reviewLane?: {
+        sourceVerdictEvidence?: Record<string, Record<string, unknown>>;
+      };
     };
     for (const invocation of reconciledEvidence.invocations) {
       expect(invocation).toMatchObject({
@@ -454,6 +457,13 @@ describe('Issue #1935 sanitized measured convergence replay', () => {
       expect(invocation.terminalResultIdentity).toBeUndefined();
       expect(invocation.captureSha256).toMatch(/^[0-9a-f]{64}$/);
       expect(invocation.rawFindingCount).toBe(1);
+    }
+    for (const slot of replay.slots) {
+      expect(reconciledEvidence.reviewLane?.sourceVerdictEvidence?.[slot.reviewerSlot]).toMatchObject({
+        terminalClassification: 'post-send-failure',
+        credentialingAuthority: 'authoritative-github-artifact',
+        producerEvidenceIdentity: 'authoritative-github-artifact:comment-' + slot.commentId,
+      });
     }
     expect(readFileSync(recurrencePath, 'utf8')).toBe(recurrenceBefore);
 

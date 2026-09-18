@@ -118,7 +118,8 @@ direct-publication identity/output arguments and the required canon context:
   --issue-number "${ISSUE_NUMBER}" \
   --source-revision "${EXPECTED_REVISION}" \
   --stage "${STAGE}" \
-  --source-slot "${SLOT}"
+  --source-slot "${SLOT}" \
+  --stage-attempt-id "${STAGE_ATTEMPT_ID}"
 ```
 
 When `${STAGE}` is `architectural`, also add:

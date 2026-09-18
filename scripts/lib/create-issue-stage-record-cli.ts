@@ -1015,6 +1015,112 @@ export function runStageFinalizeCli(argv: string[]): number {
   });
 }
 
+
+function appendFinalAcceptanceOperatorArgs(argv: string[], opts: FinalAcceptanceCliOptions): void {
+  const pairs: Array<[string, string | undefined]> = [
+    ['--operator-issue-number', opts.operatorIssueNumber],
+    ['--operator-source-revision', opts.operatorSourceRevision],
+    ['--operator-verdict-url', opts.operatorVerdictUrl],
+    ['--operator-verdict-sha256', opts.operatorVerdictSha256],
+    ['--operator-verdict-byte-length', opts.operatorVerdictByteLength],
+    ['--operator-finding-count', opts.operatorFindingCount],
+    ['--operator-reason', opts.operatorReason],
+  ];
+  for (const [flag, value] of pairs) if (value) argv.push(flag, value);
+}
+
+function finalAcceptanceRetryAction(
+  opts: FinalAcceptanceCliOptions,
+  issueNumber: number,
+  reviewDir: string,
+  sourceRevision: string,
+): CreateIssueNextAction {
+  const binding: CreateIssueActionBinding = {
+    repository: opts.repo,
+    issueNumber,
+    sourceRevision,
+    stage: 'acceptance',
+  };
+  const argv = [
+    'node', '--experimental-strip-types', 'scripts/create-issue-final-acceptance.ts',
+    '--repo', opts.repo,
+    '--issue-number', String(issueNumber),
+    '--review-dir', reviewDir,
+    '--issue-revision', sourceRevision,
+    '--public-actor', opts.publicActor,
+    '--json',
+  ];
+  if (opts.workdir) argv.push('--workdir', opts.workdir);
+  if (opts.externalPassReceiptPath) argv.push('--external-pass-receipt', opts.externalPassReceiptPath);
+  for (const path of opts.claudeProducerEvidencePaths) argv.push('--claude-producer-evidence', path);
+  appendFinalAcceptanceOperatorArgs(argv, opts);
+  return createIssueNextAction({
+    kind: 'retry-final-acceptance',
+    binding,
+    argv,
+  });
+}
+
+function finalAcceptanceArtifactAction(
+  opts: FinalAcceptanceCliOptions,
+  issueNumber: number,
+  reviewDir: string,
+  binding: CreateIssueActionBinding,
+): CreateIssueNextAction {
+  const argv = [
+    'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+    'produce-artifacts',
+    '--repo', opts.repo,
+    '--issue-number', String(issueNumber),
+    '--review-dir', reviewDir,
+    '--phase', 'final-acceptance',
+    '--expected-source-revision', binding.sourceRevision,
+    '--expected-stage', binding.stage,
+    '--expected-stage-attempt-id', binding.stageAttemptId ?? '',
+    '--json',
+  ];
+  for (const path of opts.claudeProducerEvidencePaths) argv.push('--claude-producer-evidence', path);
+  appendFinalAcceptanceOperatorArgs(argv, opts);
+  return createIssueNextAction({
+    kind: 'produce-acceptance-artifacts',
+    binding,
+    argv,
+  });
+}
+
+function finalAcceptanceRecoveryAction(
+  opts: FinalAcceptanceCliOptions,
+  issueNumber: number,
+  reviewDir: string,
+  liveRevision: string,
+  terminalBinding: CreateIssueActionBinding,
+  result: {
+    ok: boolean;
+    guardErrors: string[];
+    diagnostics: Array<{ message: string }>;
+    projectionPendingRepair?: boolean;
+  },
+): CreateIssueNextAction | null {
+  if (result.ok) return null;
+  const messages = [...result.guardErrors, ...result.diagnostics.map((item) => item.message)];
+  const producerRepair = messages.some((message) =>
+    message === 'finding-ledger: ledger path is required for final acceptance'
+    || /^finding-ledger: unable to read /.test(message)
+    || message === 'stage-completeness: review episode relay is incomplete'
+    || /^stage-completeness: unable to read /.test(message)
+  );
+  if (producerRepair) {
+    return finalAcceptanceArtifactAction(opts, issueNumber, reviewDir, terminalBinding);
+  }
+  const transientRead = messages.some((message) =>
+    /^unable to (?:read|re-read|confirm) /.test(message)
+  );
+  if (transientRead || result.projectionPendingRepair === true) {
+    return finalAcceptanceRetryAction(opts, issueNumber, reviewDir, liveRevision);
+  }
+  return null;
+}
+
 export function runFinalAcceptanceCli(argv: string[]): number {
   return runParsedCli(argv, 'create-issue-final-acceptance', parseFinalAcceptanceArgs, (opts) => {
     const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
@@ -1137,7 +1243,13 @@ export function runFinalAcceptanceCli(argv: string[]): number {
       }
     }).sort((left, right) => Number(left.value.stageSequence ?? 0) - Number(right.value.stageSequence ?? 0));
     const terminal = [...receiptRows].reverse().find((row) => row.value.stage === 'architectural');
-    if (!terminal || typeof terminal.value.sourceRevision !== 'string' || typeof terminal.value.cycleId !== 'string') {
+    if (
+      !terminal
+      || typeof terminal.value.sourceRevision !== 'string'
+      || typeof terminal.value.cycleId !== 'string'
+      || typeof terminal.value.stageAttemptId !== 'string'
+      || !terminal.value.stageAttemptId.trim()
+    ) {
       const output = createIssueTerminalResult({
         ok: false,
         cause: 'acceptance-input-missing',
@@ -1222,10 +1334,25 @@ export function runFinalAcceptanceCli(argv: string[]): number {
       workdir: opts.workdir,
     });
 
+    const terminalBinding: CreateIssueActionBinding = {
+      repository: opts.repo,
+      issueNumber,
+      sourceRevision: liveRevision,
+      stage: 'architectural',
+      stageAttemptId: terminal.value.stageAttemptId,
+    };
+    const recoveryAction = finalAcceptanceRecoveryAction(
+      opts,
+      issueNumber,
+      reviewDir,
+      liveRevision,
+      terminalBinding,
+      result,
+    );
     const output = validatedManagerSurfaceOutput(
       result,
       'final_acceptance_failed',
-      null,
+      recoveryAction,
       result.ok
         ? undefined
         : [...result.guardErrors, ...result.diagnostics.map((item) => item.message)].join('; '),

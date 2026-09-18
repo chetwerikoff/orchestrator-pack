@@ -16,6 +16,7 @@ import { buildManagerReviewTerminalBundle } from './lib/manager-review-terminal-
 import { runStateLightEntry } from './chatgpt-browser-turn/state-light-entry.ts';
 import { runCli as runLegacyBrowserTurnCli } from './chatgpt-browser-turn.ts';
 import { runBrowserAdapter } from './flow-manager-browser-gpt-long-run.ts';
+import { createIssueNextAction } from './lib/create-issue-next-action.ts';
 import { readTerminalEnvelope, runLaunch } from './flow-manager-long-running-child.ts';
 
 const contract = readFileSync(new URL('../.cursor/skills/create-issue-draft/SKILL.md', import.meta.url), 'utf8');
@@ -772,6 +773,108 @@ describe('Issue #1431 manager reviewer canon', () => {
     } finally {
       if (previousStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
       else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previousStateRoot;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps direct-publication stage binding and operator config ownership aligned with the adapter', () => {
+    const adapter = readFileSync(new URL('./flow-manager-browser-gpt-long-run.ts', import.meta.url), 'utf8');
+    const monitoringRule = readFileSync(new URL('../.cursor/rules/flow-manager-browser-turn-monitoring.mdc', import.meta.url), 'utf8');
+    expect(browserRunbook).toContain('--stage-attempt-id "${STAGE_ATTEMPT_ID}"');
+    expect(adapter).toContain("'stage-attempt-id'");
+    expect(monitoringRule).toContain('--operator-browser-config <absolute-path>');
+    expect(monitoringRule).toContain('Never copy `local.config.json`');
+    expect(monitoringRule).not.toContain('copy `local.config.json` from the operator checkout');
+  });
+
+  it('revalidates a preflight retry against the live Issue before any lifecycle mutation or Browser-GPT launch', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-create-issue-browser-stale-retry-'));
+    const stderr = captureWrite(process.stderr);
+    try {
+      const argv = [
+        '--run-identity', 'run-stale-retry',
+        '--attempt-identity', 'attempt-stale-retry',
+        '--handoff-receipt', join(root, 'handoff.json'),
+        '--invocation-id', reviewContext.invocationId,
+        '--terminal-envelope', join(root, 'terminal.json'),
+        '--output', join(root, 'output.json'),
+        '--profile', root,
+        '--cdp', 'http://127.0.0.1:9222',
+        '--input', join(root, 'input.txt'),
+        '--reviewer-source-output', join(root, 'source.txt'),
+        '--reviewer-source', 'slot-01#capture=direct-publication/v1',
+        '--repository', reviewContext.repositoryFullName,
+        '--issue-number', String(reviewContext.issueNumber),
+        '--source-revision', reviewContext.sourceRevision,
+        '--stage', reviewContext.stage,
+        '--source-slot', reviewContext.sourceSlot,
+        '--stage-attempt-id', 'stage-attempt-r07',
+      ];
+      const spawnLauncher = vi.fn(async () => 10001);
+      const first = await runBrowserAdapter(argv, {
+        runPreflight: (input) => ({
+          ok: false,
+          schema: 'create-issue-browser-gpt-preflight/v1',
+          cause: 'target_repository_unavailable',
+          blocker: 'fixture transport failure',
+          remedy: 'retry',
+          nextAction: createIssueNextAction({
+            kind: 'retry-create-issue-browser-preflight',
+            binding: input.binding!,
+            argv: input.retryArgv!,
+          }),
+        }),
+        spawnLauncher,
+      });
+      expect(first).toBe(2);
+      const firstResult = JSON.parse(stderr.chunks.at(-1) ?? '{}') as {
+        nextAction?: { argv?: string[] };
+      };
+      const retryCommand = firstResult.nextAction?.argv ?? [];
+      expect(retryCommand.length).toBeGreaterThan(3);
+
+      const inspectLifecycleBinding = vi.fn();
+      const recordAdmission = vi.fn();
+      const retry = await runBrowserAdapter(retryCommand.slice(3), {
+        runPreflight: () => ({
+          ok: true,
+          schema: 'create-issue-browser-gpt-preflight/v1',
+          principalLogin: 'chetwerikoff',
+          repository: reviewContext.repositoryFullName,
+          config: {
+            projectUrl: 'https://chatgpt.com/g/g-test/project',
+            chromeUserDataDir: root,
+            source: 'operator-config',
+            operatorConfigPath: join(root, 'local.config.json'),
+          },
+          childEnv: {
+            DISCUSS_WITH_GPT_PROJECT_URL: 'https://chatgpt.com/g/g-test/project',
+            DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR: root,
+          },
+          nextAction: null,
+        }),
+        readIssueRevision: () => ({
+          title: 'fixture',
+          body: '<!-- source-revision: r08 -->\nfixture',
+          labels: [],
+        }),
+        inspectLifecycleBinding,
+        recordAdmission,
+        spawnLauncher,
+      });
+      expect(retry).toBe(2);
+      const stale = JSON.parse(stderr.chunks.at(-1) ?? '{}') as Record<string, unknown>;
+      expect(stale).toMatchObject({
+        schema: 'create-issue-stale-next-action/v1',
+        cause: 'stale_next_action',
+        nextAction: null,
+        observed: { sourceRevision: 'r08' },
+      });
+      expect(inspectLifecycleBinding).not.toHaveBeenCalled();
+      expect(recordAdmission).not.toHaveBeenCalled();
+      expect(spawnLauncher).not.toHaveBeenCalled();
+    } finally {
+      stderr.restore();
       rmSync(root, { recursive: true, force: true });
     }
   });

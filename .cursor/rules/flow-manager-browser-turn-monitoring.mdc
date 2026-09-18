@@ -67,14 +67,17 @@ dedicated owned tab, sends one exact user payload, and observes that same tab.
 Page/DOM completion is sufficient once the final assistant reply is stable and
 no longer generating; PID, shell state, silence, log growth, service-terminal
 witnesses, and heartbeats are not completion authority.
-In a fresh worktree, copy `local.config.json` from the operator checkout into
-the same worktree path, or set both required values before launch:
+Resolve Browser-GPT configuration without moving operator-owned state into the
+worktree. Set both supported environment values before launch:
 `export DISCUSS_WITH_GPT_PROJECT_URL="<PROJECT_URL>"` and
 `export DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR="<CHROME_USER_DATA_DIR>"`.
-The `discuss-with-gpt: operator configuration missing` signature means the
-mandatory configuration is not resolved; it can also occur with a copied but
-incomplete config. Verify both `projectUrl` and `chromeUserDataDir`, or both
-environment-variable equivalents.
+For governed create-Issue sends, the long-running adapter may instead receive
+`--operator-browser-config <absolute-path>` and read that exact operator-local
+file in place. Never copy `local.config.json`, browser profiles, cookies,
+sessions, or credentials into a worker worktree. The
+`discuss-with-gpt: operator configuration missing` signature means the
+mandatory configuration is unresolved; verify both environment values or the
+explicit read-only operator config path.
 
 The canonical prompt comparison covers only the unmarked reviewer input. After
 successful admission, the transport-owned `OPKTURNV1...` marker is inserted per

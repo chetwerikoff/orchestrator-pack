@@ -462,6 +462,89 @@ function stageEvidenceCandidates(reviewDir: string): string[] {
     .map((name) => join(reviewDir, name));
 }
 
+export interface LifecycleInvocationBindingObservation {
+  ok: boolean;
+  code?: typeof STAGE_SLOT_CONSUMED | typeof STAGE_AUTHORITY_INVALID;
+  message?: string;
+  observed: {
+    stage?: LifecycleReviewStage;
+    sourceRevision?: string;
+    stageAttemptId?: string;
+  };
+}
+
+export function inspectLifecycleInvocationBinding(input: {
+  issueNumber: number;
+  stage: LifecycleReviewStage;
+  stageAttemptId: string;
+  sourceRevision: string;
+  stateRootOverride?: string;
+}): LifecycleInvocationBindingObservation {
+  const canonical = resolveCanonicalReviewDirectory(
+    { taskIdentity: 'issue:' + input.issueNumber },
+    input.stateRootOverride,
+  );
+  if (!existsSync(canonical.directory)) {
+    return {
+      ok: false,
+      code: STAGE_AUTHORITY_INVALID,
+      message: 'canonical review directory is missing: ' + canonical.directory,
+      observed: {},
+    };
+  }
+  const candidates = stageEvidenceCandidates(canonical.directory)
+    .map((path) => ({ path, value: readJson(path) }))
+    .filter((item) => isRecord(item.value));
+  const exact = candidates.filter((item) => item.value.stageAttemptId === input.stageAttemptId);
+  if (exact.length !== 1) {
+    const sameStage = candidates
+      .filter((item) => item.value.stage === input.stage)
+      .sort((left, right) => Number(right.value.stageSequence ?? 0) - Number(left.value.stageSequence ?? 0))
+      .at(0)?.value;
+    return {
+      ok: false,
+      code: STAGE_AUTHORITY_INVALID,
+      message: 'expected exactly one lifecycle stage evidence record for ' + input.stageAttemptId + ', observed ' + exact.length,
+      observed: sameStage ? {
+        stage: sameStage.stage as LifecycleReviewStage,
+        sourceRevision: nonEmpty(sameStage.sourceRevision) ? sameStage.sourceRevision.trim() : undefined,
+        stageAttemptId: nonEmpty(sameStage.stageAttemptId) ? sameStage.stageAttemptId.trim() : undefined,
+      } : {},
+    };
+  }
+  const value = exact[0]!.value;
+  const observed = {
+    stage: REVIEW_STAGES.has(value.stage as LifecycleReviewStage) ? value.stage as LifecycleReviewStage : undefined,
+    sourceRevision: nonEmpty(value.sourceRevision) ? value.sourceRevision.trim() : undefined,
+    stageAttemptId: nonEmpty(value.stageAttemptId) ? value.stageAttemptId.trim() : undefined,
+  };
+  if (observed.stage !== input.stage || observed.sourceRevision !== input.sourceRevision) {
+    return {
+      ok: false,
+      code: STAGE_AUTHORITY_INVALID,
+      message: 'lifecycle stage evidence no longer matches the requested stage/revision binding',
+      observed,
+    };
+  }
+  const authority = loadCanonicalLifecycleAuthority(input.issueNumber, input.stateRootOverride);
+  const consumed = authority.receiptValues
+    .map(parseSettledStageConsumption)
+    .find((slot) => slot && slot.stage === input.stage);
+  if (consumed) {
+    return {
+      ok: false,
+      code: STAGE_SLOT_CONSUMED,
+      message: input.stage + ' semantic stage slot was permanently consumed by ' + consumed.stageAttemptId + ' (' + consumed.outcome + ')',
+      observed: {
+        stage: consumed.stage,
+        sourceRevision: observed.sourceRevision,
+        stageAttemptId: consumed.stageAttemptId,
+      },
+    };
+  }
+  return { ok: true, observed };
+}
+
 export function ensureLifecycleStageEvidenceSeed(
   input: LifecycleStageEvidenceSeedInput,
 ): { path: string; evidence: Record<string, unknown> } {
@@ -537,6 +620,8 @@ export function recordLifecycleInvocationAdmission(
   input: LifecycleInvocationAdmissionInput,
 ): { path: string; attemptOrdinal: 1 | 2 } {
   if (!/^[0-9]{2}$/.test(input.reviewerSlot)) throw new Error('reviewerSlot must be NN');
+  const binding = inspectLifecycleInvocationBinding(input);
+  if (!binding.ok) throw new Error((binding.code ?? STAGE_AUTHORITY_INVALID) + ': ' + (binding.message ?? 'lifecycle invocation binding is stale'));
   const canonical = resolveCanonicalReviewDirectory({ taskIdentity: 'issue:' + input.issueNumber }, input.stateRootOverride);
   if (!existsSync(canonical.directory)) throw new Error('canonical review directory is missing: ' + canonical.directory);
   const matches = stageEvidenceCandidates(canonical.directory)

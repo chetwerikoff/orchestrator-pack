@@ -13,8 +13,19 @@ import {
   runCreateIssueBrowserPreflight,
   type CreateIssueBrowserPreflightFailure,
 } from './lib/create-issue-browser-gpt-preflight.ts';
-import type { CreateIssueActionBinding, CreateIssueSemanticStage } from './lib/create-issue-next-action.ts';
-import { recordLifecycleInvocationAdmission, type LifecycleReviewStage } from './lib/create-issue-stage-lifecycle.ts';
+import {
+  createIssueNextAction,
+  createIssueRecoverableResult,
+  createIssueStaleNextAction,
+  type CreateIssueActionBinding,
+  type CreateIssueSemanticStage,
+} from './lib/create-issue-next-action.ts';
+import {
+  inspectLifecycleInvocationBinding,
+  recordLifecycleInvocationAdmission,
+  type LifecycleReviewStage,
+} from './lib/create-issue-stage-lifecycle.ts';
+import { defaultGhTransport, fetchIssueRevision } from './lib/create-issue-stage-record-gh.ts';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const launcherPath = join(repoRoot, 'scripts/flow-manager-long-running-child.ts');
@@ -30,6 +41,19 @@ function requiredOption(options: Map<string, string | true>, key: string): strin
 function refuse(reason: string, details: Record<string, unknown> = {}): void {
   process.stderr.write(`${JSON.stringify({ schema: 'flow-manager-browser-gpt-long-run-refusal/v1', reason, ...details })}\n`);
   process.exitCode = 2;
+}
+
+function refuseManagerResult(result: unknown): void {
+  process.stderr.write(`${JSON.stringify(result)}\n`);
+  process.exitCode = 2;
+}
+
+export interface BrowserAdapterDependencies {
+  runPreflight?: typeof runCreateIssueBrowserPreflight;
+  readIssueRevision?: (repository: string, issueNumber: number) => { title: string; body: string; labels: string[] };
+  inspectLifecycleBinding?: typeof inspectLifecycleInvocationBinding;
+  recordAdmission?: typeof recordLifecycleInvocationAdmission;
+  spawnLauncher?: typeof spawnDetachedLauncher;
 }
 
 function refuseStaleHandoffReceipt(
@@ -144,7 +168,10 @@ function refusePreflight(result: CreateIssueBrowserPreflightFailure): void {
   });
 }
 
-export async function runBrowserAdapter(argv: readonly string[]): Promise<number> {
+export async function runBrowserAdapter(
+  argv: readonly string[],
+  deps: BrowserAdapterDependencies = {},
+): Promise<number> {
   if (argv.some((token) => token === '--completion-mode' || token === '--authority' || token === '--result-protocol')) {
     refuse('forbidden_authority_selector');
     return 2;
@@ -219,12 +246,14 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
     const operatorBrowserConfig = typeof options.get('operator-browser-config') === 'string'
       ? options.get('operator-browser-config') as string
       : undefined;
-    const preflight = runCreateIssueBrowserPreflight({
+    const retryArgv = [process.execPath, '--experimental-strip-types', adapterPath, ...argv];
+    const preflightRunner = deps.runPreflight ?? runCreateIssueBrowserPreflight;
+    const preflight = preflightRunner({
       repository: binding.repository,
       cwd,
       operatorBrowserConfig,
       binding,
-      retryArgv: [process.execPath, '--experimental-strip-types', adapterPath, ...argv],
+      retryArgv,
     });
     if (!preflight.ok) {
       refusePreflight(preflight);
@@ -232,8 +261,63 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
     }
     browserChildEnv = preflight.childEnv;
     resolvedProjectUrl = preflight.config.projectUrl;
+
+    let liveRevision = '';
     try {
-      recordLifecycleInvocationAdmission({
+      const live = deps.readIssueRevision
+        ? deps.readIssueRevision(binding.repository, binding.issueNumber)
+        : fetchIssueRevision(defaultGhTransport(), binding.repository, binding.issueNumber);
+      liveRevision = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i.exec(live.body)?.[1] ?? '';
+    } catch (error) {
+      const retryAction = createIssueNextAction({
+        kind: 'retry-create-issue-browser-preflight',
+        binding,
+        argv: retryArgv,
+      });
+      refuseManagerResult(createIssueRecoverableResult({
+        cause: 'source-unavailable',
+        blocker: error instanceof Error ? error.message : String(error),
+        nextAction: retryAction,
+      }));
+      return 2;
+    }
+    if (!liveRevision || liveRevision.toLowerCase() !== binding.sourceRevision.toLowerCase()) {
+      refuseManagerResult(createIssueStaleNextAction({
+        binding,
+        observed: {
+          repository: binding.repository,
+          issueNumber: binding.issueNumber,
+          ...(liveRevision ? { sourceRevision: liveRevision } : {}),
+        },
+        nextAction: null,
+      }));
+      return 2;
+    }
+
+    const inspectBinding = deps.inspectLifecycleBinding ?? inspectLifecycleInvocationBinding;
+    const lifecycleBinding = inspectBinding({
+      issueNumber: binding.issueNumber,
+      stage: binding.stage as LifecycleReviewStage,
+      stageAttemptId: binding.stageAttemptId!,
+      sourceRevision: binding.sourceRevision,
+    });
+    if (!lifecycleBinding.ok) {
+      refuseManagerResult(createIssueStaleNextAction({
+        binding,
+        observed: {
+          repository: binding.repository,
+          issueNumber: binding.issueNumber,
+          sourceRevision: liveRevision,
+          ...lifecycleBinding.observed,
+        },
+        nextAction: null,
+      }));
+      return 2;
+    }
+
+    try {
+      const recordAdmission = deps.recordAdmission ?? recordLifecycleInvocationAdmission;
+      recordAdmission({
         issueNumber: binding.issueNumber,
         stage: binding.stage as LifecycleReviewStage,
         stageAttemptId: binding.stageAttemptId!,
@@ -245,11 +329,35 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
         reviewerSourceOutputPath: reviewerSourceOutput,
       });
     } catch (error) {
-      refuse('create_issue_lifecycle_admission_failed', {
-        blocker: error instanceof Error ? error.message : String(error),
-        remedy: 'rerun canonical start-cycle/admission for the exact Issue revision and stage before Browser-GPT send',
-        nextAction: null,
+      const observed = inspectBinding({
+        issueNumber: binding.issueNumber,
+        stage: binding.stage as LifecycleReviewStage,
+        stageAttemptId: binding.stageAttemptId!,
+        sourceRevision: binding.sourceRevision,
       });
+      if (!observed.ok) {
+        refuseManagerResult(createIssueStaleNextAction({
+          binding,
+          observed: {
+            repository: binding.repository,
+            issueNumber: binding.issueNumber,
+            sourceRevision: liveRevision,
+            ...observed.observed,
+          },
+          nextAction: null,
+        }));
+        return 2;
+      }
+      const retryAction = createIssueNextAction({
+        kind: 'retry-create-issue-browser-preflight',
+        binding,
+        argv: retryArgv,
+      });
+      refuseManagerResult(createIssueRecoverableResult({
+        cause: 'create_issue_lifecycle_admission_failed',
+        blocker: error instanceof Error ? error.message : String(error),
+        nextAction: retryAction,
+      }));
       return 2;
     }
   }
@@ -300,7 +408,8 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
     ...browserArgs,
   ];
 
-  const pid = await spawnDetachedLauncher(launcherArgs, browserChildEnv);
+  const spawnLauncher = deps.spawnLauncher ?? spawnDetachedLauncher;
+  const pid = await spawnLauncher(launcherArgs, browserChildEnv);
   const receiptReady = await waitForReceipt(handoffReceipt, runIdentity, attemptIdentity, 30_000);
   if (!receiptReady) {
     refuse('handoff_receipt_missing');

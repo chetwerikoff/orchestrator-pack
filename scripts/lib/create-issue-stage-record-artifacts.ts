@@ -1471,13 +1471,18 @@ export function reconcileCreateIssueStage(
     const sourceVerdictEvidence: Record<string, JsonRecord> = {};
     const registerVerdict = (slot: string): void => {
       const resolvedArtifact = resolvedBySlot.get(slot);
-      if (!resolvedArtifact) return;
+      const finalInvocation = invocations
+        .filter((value) => optionalString(value.reviewerSlot) === slot)
+        .sort((left, right) => Number(left.attemptOrdinal ?? 0) - Number(right.attemptOrdinal ?? 0))
+        .at(-1);
+      if (!resolvedArtifact || !finalInvocation) return;
       const verdict = resolvedArtifact.capture.rawFindingCount === 0 ? 'accept' : 'material-findings';
       sourceVerdicts[slot] = verdict;
       sourceVerdictEvidence[slot] = {
         producerEvidenceIdentity: 'authoritative-github-artifact:comment-' + resolvedArtifact.authority.commentId,
         captureIdentity: resolvedArtifact.capture.captureIdentity,
-        terminalClassification: 'complete',
+        terminalClassification: finalInvocation.terminalClassification,
+        credentialingAuthority: 'authoritative-github-artifact',
         captureVerified: true,
         digestMatches: true,
         verdictText: verdict === 'accept' ? 'NO_FINDINGS' : 'FINDINGS',
