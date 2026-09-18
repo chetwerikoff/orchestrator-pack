@@ -1228,14 +1228,27 @@ describe('Issue #1954 standalone GPT PR-review manager entry contract', () => {
     'utf8',
   );
 
+  const normalizedAgents = agents.replace(/\\s+/g, ' ').trim();
+
   it('routes exact implementation-review intent without stealing execute-Issue or create-Issue review continuation', () => {
-    expect(agents).toContain(
+    expect(normalizedAgents).toContain(
       '| [`review-pr-with-gpt`](.cursor/skills/review-pr-with-gpt/SKILL.md)',
     );
-    expect(agents).toContain('`PR #N review`, `review PR #N`, `pack review #N`, or `Issue #N review`');
-    expect(agents).toContain('loads `execute-issue-with-gpt`');
-    expect(agents).toContain('remain with `create-issue-draft`');
-    expect(reviewSkill).toContain('Ordinary discussion containing “review” without an\nexact PR/Issue target does not activate this skill');
+    expect(normalizedAgents).toContain(
+      'Exact implementation-review wording such as `PR #N review`, `review PR #N`, `pack review #N`, or `Issue #N review` loads `review-pr-with-gpt`',
+    );
+    expect(normalizedAgents).toContain(
+      '`<Issue> выполни задачу`, `<Issue> выполни Issue`, or `<Issue> доделай Issue` loads `execute-issue-with-gpt`, even when `manager` / `менеджер` also appears',
+    );
+    expect(normalizedAgents).toContain(
+      '`<Issue> manager`, `<Issue> менеджер`, `<Issue> continue review`, and `<Issue> продолжи ревью` load `create-issue-draft`',
+    );
+    expect(normalizedAgents).toContain(
+      'Explicit task-spec review continuation remains with `create-issue-draft`',
+    );
+    expect(reviewSkill).toContain(
+      'Ordinary discussion containing “review” without an\\nexact PR/Issue target does not activate this skill',
+    );
   });
 
   it('binds a direct PR and requires exact Issue-to-PR uniqueness before review effects', () => {
