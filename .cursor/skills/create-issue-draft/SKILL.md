@@ -720,6 +720,24 @@ defect/remedy dispositions plus one M4 update for the logical stage. Issue edits
 are included only when findings require the one bounded correction; a clean stage
 returns disposition-only closure and preserves exact Issue bytes.
 
+The governed author response must also contain exactly one mechanically consumable
+payload. This is the existing author authority, not a second store:
+
+```create-issue-author-dispositions/v1
+{
+  "schema": "create-issue-author-dispositions/v1",
+  "sourceRevision": "rNN",
+  "predecessorStage": "competitive | architectural-review | architectural-lens | architectural | null",
+  "findings": [],
+  "m4": { "inventory": [] }
+}
+```
+
+The author owns the substantive finding/remedy/M3/M4 values. The producer reads
+that payload verbatim and adds only GitHub-witnessed draft/revision facts and
+lifecycle-witnessed episode/predecessor/topology bindings. The manager must not
+construct or repair `author-dispositions.json` itself.
+
 Concise receipts avoid browser insertion and rendering work that grows with
 manager-facing response size, and remove an avoidable relay step with loss
 risk. This transport optimization does not weaken authoritative invocation
@@ -841,13 +859,15 @@ pre-lens`; for T3, use `produce-artifacts --phase post-lens`. In either case the
 producer consumes the canonical stage receipts, verified relay evidence, and
 finding ledger already checked by the existing guards. For T1,
 there is intentionally no predecessor receipt: the producer accepts the
-current-bound zero-state `tier-intake.json` plus `author-dispositions.json`
-with empty prior findings/M3/M4 instead of inventing predecessor evidence.
+current-bound zero-state `tier-intake.json` plus the producer-generated
+zero-state `author-dispositions.json` with empty prior findings/M3/M4 instead
+of inventing predecessor evidence.
 
-The flow-manager-authored `author-dispositions.json` records the current M4
-inventory under one `m4` object bound to the same `reviewEpisodeId`,
-`predecessorStage`, and `sourceRevision`; each inventory entry is
-`{ mechanism, disposition }` with disposition `keep | simplify | defer | cut`.
+`author-dispositions.json` is a producer output over three authorities: exact
+draft/revision from the stable GitHub Issue snapshot, episode/predecessor binding
+from lifecycle state, and substantive findings/M3/M4 from the governed author
+payload. Each M4 inventory entry is `{ mechanism, disposition }` with
+disposition `keep | simplify | defer | cut`.
 Pass the resulting file as `--terminal-input-bundle` and the governed review
 location as `--review-dir "$REVIEW_DIR"` on the terminal `architectural`
 direct-publication launch. Non-terminal stages must not carry those options.
@@ -870,7 +890,7 @@ T1/T2 may accept when their required topology, ledger, body, tier, and M5 checks
 are green. T3 acceptance additionally requires its frozen conditional stage plan,
 Claude evidence/waiver, and one-shot terminal contract.
 
-Before invoking final acceptance, follow [`docs/create-issue-draft-acceptance-artifacts.md`](../../../docs/create-issue-draft-acceptance-artifacts.md). Run its `check-artifacts` command to obtain a precise missing-input report, then run `produce-artifacts` only after all required recorded stage results and author dispositions exist. The producer computes canonical receipt identifiers and capture bytes/hashes; it does not accept caller assertions that a stage or capture exists.
+Before invoking final acceptance, follow [`docs/create-issue-draft-acceptance-artifacts.md`](../../../docs/create-issue-draft-acceptance-artifacts.md). The canonical review directory is the normal source: lifecycle evidence is auto-discovered, the stable live Issue snapshot is read by the producer, and author-owned disposition rows come from the governed author response. `check-artifacts` is read-only status; `produce-artifacts` obtains and validates the authority-owned inputs. When a legal continuation exists, execute the returned `nextAction.argv`; do not hand-write or repair acceptance JSON.
 
 When activation is available, acceptance requires:
 
@@ -1041,15 +1061,14 @@ evidence, or adds a service or store.
 Every new gate must arrive with its producer in the same change, the producer's
 authoritative input and terminal failure, and an error message naming the exact
 fix. Prefer automatic correction where it is within existing manager/worker
-authority. A validator with a genuinely missing producer stays non-success, names the
-missing producer and exact producer addition, and does not fabricate an
-artifact or treat an orchestrator-only workaround as a producer. Here "does not
-fabricate an artifact" means it must not invent an artifact or fact it has not
-observed; recording an already-observed fact into a declared
-flow-manager-authored input is authorship, not fabrication. This missing-producer
-rule does not apply to a required input explicitly declared
-flow-manager-authored: the flow-manager is that input's producer, and absence of
-a repository writer is by design.
+authority. A validator with a genuinely missing producer stays non-success,
+names the missing producer and exact producer addition, and does not fabricate
+an artifact or treat an orchestrator-only workaround as a producer. "Does not
+fabricate" means no role may invent a fact outside its declared authority:
+lifecycle tools record lifecycle facts they observed, the GitHub producer records
+facts from its authenticated stable reads, and the governed author owns
+substantive dispositions. A manager may invoke those producers but may not
+transcribe one authority into another or hand-repair their outputs.
 
 The GPT author owns substantive Issue edits, defect/remedy dispositions, and
 finding dispositions; reviewer/architect/operator decisions remain with their
@@ -1086,18 +1105,22 @@ Content fixes belong to the GPT author. Use `publish-issue-body-sync.ts edit` an
 Durable review state remains outside the repository. The closed inventory below
 classifies every acceptance input and review artifact by its owner and role.
 
-### Flow-manager-authored inputs
+### Authority-owned acceptance inputs
 
-Each item in this section is a flow-manager-authored input.
+- `tier-intake.json`: lifecycle-tool-witnessed intake/topology authority.
+- `attempt-NNN.json`: lifecycle-tool-witnessed attempt/invocation/transport
+  facts; reconciliation adds only GitHub-witnessed artifact fields.
+- `round-NN-author-reply.md|txt`: governed author-owned structured
+  disposition/M3/M4 source.
+- `issue-rNN-body.json`: producer-owned stable GitHub-witnessed
+  `{issueNumber, sourceRevision, title, body}` snapshot.
+- `author-dispositions.json`: derived binding over the stable GitHub snapshot,
+  lifecycle topology, and governed author payload.
 
-- `tier-intake.json` (`tier-intake/v1`)
-- `attempt-NNN.json` (`create-issue-stage-evidence/v1`) for each recorded stage result
-- `author-dispositions.json` (`create-issue-author-dispositions/v1`)
-
-The flow-manager records all three inputs from authoritative facts or evidence it
-already holds. Repository writers are absent for all three by design; under
-§Producer-before-validator this is not a missing-producer condition because the
-flow-manager is their declared producer.
+The manager invokes lifecycle, reconciliation and acceptance producers; it does
+not create or repair these files by hand. Missing authority is an explicit
+non-success with the field and authority class. State movement between stable
+Issue reads is stale/restart, not a value to normalize.
 
 ### Producer outputs
 
@@ -1107,11 +1130,11 @@ flow-manager is their declared producer.
 - `review-episode-inventory.json`
 - `acceptance-artifacts.json`
 
-`produce-artifacts` is the only named producer for these derived acceptance
-files. It does not produce `remote-authority.json`; `--remote-authority` is
-legacy/diagnostic-only syntax and is acceptance-inert. The finding-ledger and
-final-acceptance path does not open or parse its target; any retained diagnostic
-read must be non-blocking and isolated outside acceptance.
+`produce-artifacts` is the sole acceptance assembler. It derives canonical
+receipt/capture/ledger/manifest values from the authorities above, rejects
+conflicting immutable bytes, and commits no partial new acceptance set on
+failure. `remote-authority.json` remains non-authoritative legacy/diagnostic
+surface.
 
 ### Conditional evidence/waiver
 
@@ -1132,8 +1155,10 @@ turn-result.
 ### Audit-only records
 
 - `chats.md`
-- `round-NN-author-reply.md`
 - `rNN/tier-gate-receipt.json`
+
+The structured `round-NN-author-reply.*` disposition block is governed author
+input and therefore is not audit-only.
 
 Do not persist an episode receipt or consolidated reviewer output.
 
@@ -1168,9 +1193,7 @@ node scripts/create-issue-stage-finalize.ts publish-stage \
   --repo <owner/name> --issue-number <N> --receipt "$REVIEW_DIR/<stage-receipt>.json"
 
 node scripts/create-issue-final-acceptance.ts \
-  --repo <owner/name> --issue-number <N> --cycle-id <cycle-id> \
-  --issue-body <path> --issue-revision <rNN> --review-dir "$REVIEW_DIR" \
-  --stage-receipt "$REVIEW_DIR/<receipt>.json" ...
+  --repo <owner/name> --issue-number <N> --review-dir "$REVIEW_DIR" --json
 ```
 
 ## Don't
