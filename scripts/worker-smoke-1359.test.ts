@@ -941,3 +941,431 @@ describe('Issue #1359 production worker-smoke reachability', () => {
     expect(terminal.incarnationId).toBe('generation-proof');
   });
 });
+
+describe('Issue #1933 interrupt and detached wait fences', () => {
+  it('classifies signals before stderr/empty-output parsing and keeps timeout authoritative', async () => {
+    const { neutralFailureReason } = await import('./orca-runtime/adapter.ts');
+    const secret = 'SECRET_CANARY_1933';
+    for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+      const response = runOrcaJson(['terminal', 'read'], {
+        runner: (() => ({
+          status: null,
+          signal,
+          stdout: '',
+          stderr: secret,
+          error: undefined,
+        })) as never,
+      });
+      expect(response).toMatchObject({
+        ok: false,
+        outcomeCategory: 'process_signaled',
+        signal,
+        error: { code: 'orca_process_signaled' },
+      });
+      expect(neutralFailureReason(response)).toBe(`runtime_cli_interrupted:${signal}`);
+      expect(JSON.stringify(response)).not.toContain(secret);
+    }
+
+    const timeoutError = Object.assign(new Error('fixture timed out'), { code: 'ETIMEDOUT' });
+    const timedOut = runOrcaJson(['terminal', 'read'], {
+      timeoutMs: 17,
+      runner: (() => ({
+        status: null,
+        signal: 'SIGKILL',
+        stdout: '',
+        stderr: secret,
+        error: timeoutError,
+      })) as never,
+    });
+    expect(timedOut).toMatchObject({
+      ok: false,
+      outcomeCategory: 'supported_operation_failure',
+      error: { code: 'orca_operation_timeout' },
+    });
+    expect(neutralFailureReason(timedOut)).toBe('runtime_timeout');
+    expect(JSON.stringify(timedOut)).not.toContain(secret);
+
+    const emptySuccess = runOrcaJson(['terminal', 'read'], {
+      runner: (() => ({
+        status: 0,
+        signal: null,
+        stdout: '',
+        stderr: '',
+        error: undefined,
+      })) as never,
+    });
+    expect(emptySuccess.outcomeCategory).toBe('empty_stdout');
+    expect(neutralFailureReason(emptySuccess)).toBe('runtime_response_invalid');
+
+    const emptyFailure = runOrcaJson(['terminal', 'read'], {
+      runner: (() => ({
+        status: 7,
+        signal: null,
+        stdout: '',
+        stderr: secret,
+        error: undefined,
+      })) as never,
+    });
+    expect(emptyFailure).toMatchObject({
+      ok: false,
+      outcomeCategory: 'supported_operation_failure',
+      error: { code: 'orca_process_exit_without_output' },
+    });
+    expect(neutralFailureReason(emptyFailure)).toBe('runtime_operation_failed');
+  });
+
+  it('retries CLI interruptions on fresh polls and caps every completion read at 30 seconds', () => {
+    class InterruptingReadAdapter extends DeterministicRuntimeAdapter {
+      readonly readCalls: Array<{ previousToken?: string; timeoutMs?: number }> = [];
+
+      override readBoundedOutput(
+        input: Parameters<RuntimeAdapter['readBoundedOutput']>[0],
+        options?: RuntimeCallOptions,
+      ): ReturnType<RuntimeAdapter['readBoundedOutput']> {
+        this.readCalls.push({
+          previousToken: input.previousToken?.opaque,
+          timeoutMs: options?.timeoutMs,
+        });
+        return {
+          status: 'failed',
+          operation: 'read_bounded_output',
+          reason: 'runtime_cli_interrupted:SIGTERM',
+        };
+      }
+    }
+
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-interrupted-polls-'));
+    const artifactDir = join(root, 'run-interrupted-polls');
+    const runId = 'run-interrupted-polls';
+    const adapter = new InterruptingReadAdapter();
+    const spawned = adapter.spawnWorker({ title: 'interrupt-polls', command: 'cursor-agent' });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+    ensureSmokeRunArtifactDir(artifactDir);
+    let clock = 0;
+    let sleeps = 0;
+
+    try {
+      const completion = waitForRuntimeSmokeCompletion({
+        adapter,
+        worker: spawned.value.identity,
+        binding: { runId, artifactDir },
+        scenarioCount: 1,
+        cwd: root,
+        startedAtMs: 0,
+        abortReason: () => undefined,
+        now: () => clock,
+        sleepMs: (milliseconds) => {
+          clock += milliseconds;
+          sleeps += 1;
+          if (sleeps !== 2) return;
+          const body = sealedPassBody();
+          const digest = computeSmokeCompletionBodyDigest(body);
+          writeFileSync(smokeCompletionBodyPath(artifactDir, digest), body, { flag: 'wx' });
+          writeFileSync(
+            smokeCompletionSealPath(artifactDir, digest),
+            JSON.stringify({ runId, bodySha256: digest }),
+            { flag: 'wx' },
+          );
+        },
+        absoluteCeilingMs: 60_000,
+        progressStallMs: 60_000,
+      });
+
+      expect(completion.ok).toBe(true);
+      expect(completion.observationFailures).toEqual([
+        'runtime_cli_interrupted:SIGTERM',
+        'runtime_cli_interrupted:SIGTERM',
+      ]);
+      expect(adapter.readCalls).toHaveLength(2);
+      expect(adapter.readCalls.map(({ timeoutMs }) => timeoutMs)).toEqual([30_000, 30_000]);
+      expect(adapter.readCalls.map(({ previousToken }) => previousToken)).toEqual([undefined, undefined]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('wait refuses same-target evidence from another run and leaves lifecycle files byte-identical', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-wait-exact-run-'));
+    const runA = 'run-a';
+    const runB = 'run-b';
+    const artifactA = join(root, '.orca-worker-smoke', 'runs', runA);
+    const artifactB = join(root, '.orca-worker-smoke', 'runs', runB);
+    const {
+      createSmokeNoExecutionLifecycle,
+      markSmokeLauncherTerminalized,
+      smokeAdmissionLockPath,
+      smokeLifecycleRegistryPath,
+    } = await import('./lib/worker-smoke-lifecycle.ts');
+    const {
+      smokeRunFinalEvidencePath,
+      writeWorkerSmokeRunFinalEvidence,
+    } = await import('./lib/worker-smoke-receipt.ts');
+    const report = {
+      result: 'PASS',
+      issueNumber: 1933,
+      prNumber: 1941,
+      headSha: HEAD,
+      scenarios: [],
+      trackedFilesUnmodified: true,
+      limitations: [],
+      environmentNotes: [],
+      producer: 'worker-smoke-run',
+      terminalCleanup: 'not_started_no_execution',
+      orcaExecutable: 'not_applicable',
+    } as never;
+
+    try {
+      createSmokeNoExecutionLifecycle({
+        runId: runA,
+        artifactDir: artifactA,
+        issueNumber: 1933,
+        prNumber: 1941,
+        headSha: HEAD,
+        nowMs: 1,
+      });
+      createSmokeNoExecutionLifecycle({
+        runId: runB,
+        artifactDir: artifactB,
+        issueNumber: 1933,
+        prNumber: 1941,
+        headSha: HEAD,
+        nowMs: 1,
+      });
+      writeWorkerSmokeRunFinalEvidence({
+        artifactDir: artifactB,
+        runId: runB,
+        mode: 'no_execution',
+        report,
+        nowMs: 2,
+      });
+      writeFileSync(
+        smokeRunFinalEvidencePath(artifactA),
+        readFileSync(smokeRunFinalEvidencePath(artifactB), 'utf8'),
+        'utf8',
+      );
+      markSmokeLauncherTerminalized({
+        artifactDir: artifactA,
+        runId: runA,
+        finalEvidencePath: smokeRunFinalEvidencePath(artifactA),
+        nowMs: 3,
+      });
+
+      const lifecycleBefore = readFileSync(smokeLifecycleRegistryPath(artifactA), 'utf8');
+      const evidenceBefore = readFileSync(smokeRunFinalEvidencePath(artifactA), 'utf8');
+      expect(existsSync(smokeAdmissionLockPath(root))).toBe(false);
+
+      const wait = run(resolve('scripts/worker-smoke-run'), [
+        'wait', '--run', runA, '--cwd', root, '--json',
+      ], { cwd: root });
+      expect(wait.ok).toBe(false);
+      expect(wait.stdout).toContain('terminal_evidence_invalid');
+      expect(readFileSync(smokeLifecycleRegistryPath(artifactA), 'utf8')).toBe(lifecycleBefore);
+      expect(readFileSync(smokeRunFinalEvidencePath(artifactA), 'utf8')).toBe(evidenceBefore);
+      expect(existsSync(smokeAdmissionLockPath(root))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Issue #1933 detached bootstrap and no-execution regressions', () => {
+  it('times out after a detached owner exits before reservation without bootstrap-owned lifecycle state', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-detach-timeout-'));
+    const { vi } = await import('vitest');
+    const { main } = await import('./worker-smoke-run.ts');
+    const { smokeAdmissionLockPath } = await import('./lib/worker-smoke-lifecycle.ts');
+    let clock = 0;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => {
+      clock += 70_000;
+      return clock;
+    });
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    try {
+      const code = await main([
+        'run', '--detach',
+        '--issue', '1933',
+        '--pr', '1941',
+        '--head-sha', HEAD,
+        '--issue-body-file', join(root, 'missing-issue.md'),
+        '--smoke-complexity', 'complex',
+        '--repo-root', root,
+        '--cwd', root,
+        '--dry-run',
+        '--json',
+      ]);
+      expect(code).toBe(1);
+      expect(stderr.mock.calls.map(([chunk]) => String(chunk)).join(''))
+        .toContain('worker_smoke_detach_lifecycle_timeout\n');
+      expect(stdout.mock.calls.map(([chunk]) => String(chunk)).join(''))
+        .not.toMatch(/[0-9a-f]{8}-[0-9a-f-]{27,}/iu);
+      expect(existsSync(smokeAdmissionLockPath(root))).toBe(false);
+      expect(existsSync(join(root, '.orca-worker-smoke', 'runs'))).toBe(false);
+    } finally {
+      stderr.mockRestore();
+      stdout.mockRestore();
+      now.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers a detached-owner crash after reservation before terminal binding', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-detached-reservation-crash-'));
+    const crashedRunId = 'detached-crashed-after-reservation';
+    const crashedDir = join(root, '.orca-worker-smoke', 'runs', crashedRunId);
+
+    try {
+      createSmokeLifecycleReservation({
+        runId: crashedRunId,
+        artifactDir: crashedDir,
+        issueNumber: 1933,
+        prNumber: 1941,
+        headSha: HEAD,
+        supervisorPid: 41001,
+        nowMs: 1,
+        createTimeoutMs: 1,
+        scenarioCount: 1,
+      });
+      const next = preflightSmokeLifecycle({
+        repoRoot: root,
+        runId: 'detached-recovery-winner',
+        supervisorPid: 41002,
+        nowMs: 10,
+        isProcessAlive: () => false,
+        shutdownMs: 0,
+        closeBoundHandle: () => 'close_failed:must_not_be_called',
+      });
+      expect(next.admitted).toBe(true);
+      expect(readSmokeLifecycleRegistry(crashedDir)?.spawnState).toBe('abandoned_unbound');
+      expect(releaseSmokeAdmission(root, 'detached-recovery-winner')).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('admits exactly one detached owner and refuses a concurrent second owner before reservation', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-detached-concurrency-'));
+    const firstRun = 'detached-concurrency-a';
+    const secondRun = 'detached-concurrency-b';
+
+    try {
+      const first = preflightSmokeLifecycle({
+        repoRoot: root,
+        runId: firstRun,
+        supervisorPid: 42001,
+        nowMs: 1,
+        isProcessAlive: () => false,
+        shutdownMs: 0,
+        closeBoundHandle: () => 'close_failed:must_not_be_called',
+      });
+      expect(first.admitted).toBe(true);
+
+      const second = preflightSmokeLifecycle({
+        repoRoot: root,
+        runId: secondRun,
+        supervisorPid: 42002,
+        nowMs: 2,
+        isProcessAlive: (pid) => pid === 42001,
+        shutdownMs: 0,
+        closeBoundHandle: () => 'close_failed:must_not_be_called',
+      });
+      expect(second.admitted).toBe(false);
+      if (!second.admitted) expect(second.reason).toBe(`active_smoke_admission:${firstRun}`);
+      expect(readSmokeLifecycleRegistry(join(root, '.orca-worker-smoke', 'runs', secondRun))).toBeUndefined();
+      expect(releaseSmokeAdmission(root, firstRun)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('terminalizes detached carry-only as exact-run no_execution evidence without an admission lock', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-detached-carry-only-'));
+    const runId = 'detached-carry-only';
+    const artifactDir = join(root, '.orca-worker-smoke', 'runs', runId);
+    const {
+      createSmokeNoExecutionLifecycle,
+      evaluateSmokeLifecycleCleanliness,
+      markSmokeLauncherTerminalized,
+      smokeAdmissionLockPath,
+    } = await import('./lib/worker-smoke-lifecycle.ts');
+    const {
+      smokeRunFinalEvidencePath,
+      writeWorkerSmokeRunFinalEvidence,
+    } = await import('./lib/worker-smoke-receipt.ts');
+    const report = {
+      result: 'PASS',
+      issueNumber: 1933,
+      prNumber: 1941,
+      headSha: HEAD,
+      scenarios: [{
+        action: 'carry prior PASS',
+        expected: 'no runtime execution',
+        observed: `carried PASS from head ${HEAD} comment 1; not freshly executed on ${HEAD}`,
+        outcome: 'pass',
+      }],
+      trackedFilesUnmodified: true,
+      limitations: [],
+      environmentNotes: ['smoke-execution=carry-only'],
+      producer: 'worker-smoke-run',
+      terminalCleanup: 'not_started_no_execution',
+      orcaExecutable: 'test',
+    } as never;
+
+    try {
+      createSmokeNoExecutionLifecycle({
+        runId,
+        artifactDir,
+        issueNumber: 1933,
+        prNumber: 1941,
+        headSha: HEAD,
+        nowMs: 1,
+      });
+      expect(readSmokeLifecycleRegistry(artifactDir)).toMatchObject({
+        runId,
+        mode: 'no_execution',
+        spawnState: 'no_execution_pending',
+        scenarioCount: 0,
+      });
+      expect(evaluateSmokeLifecycleCleanliness(root).clean).toBe(false);
+      expect(existsSync(smokeAdmissionLockPath(root))).toBe(false);
+
+      const final = writeWorkerSmokeRunFinalEvidence({
+        artifactDir,
+        runId,
+        mode: 'no_execution',
+        report,
+        nowMs: 2,
+      });
+      markSmokeLauncherTerminalized({
+        artifactDir,
+        runId,
+        finalEvidencePath: smokeRunFinalEvidencePath(artifactDir),
+        nowMs: final.recordedAtMs,
+      });
+      expect(readSmokeLifecycleRegistry(artifactDir)).toMatchObject({
+        runId,
+        mode: 'no_execution',
+        spawnState: 'no_execution_terminal',
+        finalEvidencePath: smokeRunFinalEvidencePath(artifactDir),
+      });
+      expect(evaluateSmokeLifecycleCleanliness(root).clean).toBe(true);
+      expect(existsSync(smokeAdmissionLockPath(root))).toBe(false);
+
+      const wait = run(resolve('scripts/worker-smoke-run'), [
+        'wait', '--run', runId, '--cwd', root, '--json',
+      ], { cwd: root });
+      expect(wait.ok).toBe(true);
+      expect(JSON.parse(wait.stdout)).toMatchObject({
+        ok: true,
+        runId,
+        result: 'PASS',
+        report: { result: 'PASS', issueNumber: 1933, prNumber: 1941, headSha: HEAD },
+      });
+      expect(existsSync(smokeAdmissionLockPath(root))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

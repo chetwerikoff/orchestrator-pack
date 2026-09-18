@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -17,6 +17,7 @@ import {
 } from './worker-smoke-bounded-create.ts';
 
 export const WORKER_SMOKE_RECEIPT_SCHEMA = 'worker-smoke-receipt/v1';
+export const WORKER_SMOKE_RUN_FINAL_SCHEMA = 'worker-smoke-run-final/v1';
 export const SMOKE_CLOSE_SETTLEMENT_REASON = 'owned_terminal_cleanup' as const;
 
 export interface WorkerSmokeFailureCause {
@@ -38,6 +39,23 @@ export interface WorkerSmokeReceipt {
   result: SmokeReport['result'];
   publishedAt: string;
   failureCause?: WorkerSmokeFailureCause;
+}
+
+export type WorkerSmokeRunMode = 'runtime' | 'no_execution';
+
+export interface WorkerSmokeRunFinalEvidence {
+  schema: typeof WORKER_SMOKE_RUN_FINAL_SCHEMA;
+  runId: string;
+  issueNumber: number;
+  prNumber: number;
+  headSha: string;
+  artifactDir: string;
+  mode: WorkerSmokeRunMode;
+  terminalState: 'launcher_terminalized';
+  result: SmokeReport['result'];
+  reportDigest: string;
+  report: SmokeReport;
+  recordedAtMs: number;
 }
 
 export interface SmokeCloseSettlementIdentity {
@@ -68,8 +86,11 @@ const isRecord = (value: unknown): value is JsonRecord =>
 const workerSmokeEntrypoint = basename(process.argv[1] ?? '') === 'worker-smoke-run.ts';
 if (workerSmokeEntrypoint && process.argv[2] === 'run') {
   const argv = process.argv.slice(2);
-  quarantineUnsupportedHistoricalSmokeRuns(smokeRunCwdFromArgv(argv));
-  installStableWorkerSmokeSpawnPatch();
+  const detachedBootstrap = argv.includes('--detach') && !argv.includes('--detached-owner');
+  if (!detachedBootstrap) {
+    quarantineUnsupportedHistoricalSmokeRuns(smokeRunCwdFromArgv(argv));
+    installStableWorkerSmokeSpawnPatch();
+  }
 }
 
 export function buildSmokeCloseSettlementIdentity(runId: string): SmokeCloseSettlementIdentity {
@@ -105,6 +126,106 @@ export const isCleanCloseOutcome = (outcome: string): boolean =>
 
 export const smokeCloseReceiptPath = (artifactDir: string): string =>
   join(artifactDir, 'close-receipt.json');
+
+export const smokeRunFinalEvidencePath = (artifactDir: string): string =>
+  join(artifactDir, 'final-evidence.json');
+
+function smokeReportDigest(report: SmokeReport): string {
+  return createHash('sha256').update(JSON.stringify(report), 'utf8').digest('hex');
+}
+
+export function writeWorkerSmokeRunFinalEvidence(input: {
+  artifactDir: string;
+  runId: string;
+  mode: WorkerSmokeRunMode;
+  report: SmokeReport;
+  result?: SmokeReport['result'];
+  nowMs?: number;
+}): WorkerSmokeRunFinalEvidence {
+  const runId = input.runId.trim();
+  const artifactDir = resolve(input.artifactDir);
+  const report: SmokeReport = {
+    ...input.report,
+    producer: SMOKE_REPORT_PRODUCER,
+  };
+  if (!runId || basename(artifactDir) !== runId) throw new Error('worker_smoke_final_run_binding_invalid');
+  if (!Number.isSafeInteger(report.issueNumber) || report.issueNumber <= 0
+      || !Number.isSafeInteger(report.prNumber) || report.prNumber <= 0
+      || !/^[0-9a-f]{40}$/u.test(report.headSha.trim().toLowerCase())) {
+    throw new Error('worker_smoke_final_target_binding_invalid');
+  }
+  const result = input.result ?? report.result;
+  if (!['PASS', 'FAIL', 'BLOCKED'].includes(result)) throw new Error('worker_smoke_final_result_invalid');
+  const evidence: WorkerSmokeRunFinalEvidence = {
+    schema: WORKER_SMOKE_RUN_FINAL_SCHEMA,
+    runId,
+    issueNumber: report.issueNumber,
+    prNumber: report.prNumber,
+    headSha: report.headSha.trim().toLowerCase(),
+    artifactDir,
+    mode: input.mode,
+    terminalState: 'launcher_terminalized',
+    result,
+    reportDigest: smokeReportDigest(report),
+    report,
+    recordedAtMs: input.nowMs ?? Date.now(),
+  };
+  writeAtomicJson(smokeRunFinalEvidencePath(artifactDir), evidence);
+  return evidence;
+}
+
+export function readWorkerSmokeRunFinalEvidence(input: {
+  artifactDir: string;
+  runId: string;
+  issueNumber?: number;
+  prNumber?: number;
+  headSha?: string;
+  mode?: WorkerSmokeRunMode;
+}): WorkerSmokeRunFinalEvidence | null {
+  const runId = input.runId.trim();
+  const artifactDir = resolve(input.artifactDir);
+  if (!runId || basename(artifactDir) !== runId) return null;
+  const raw = readJson(smokeRunFinalEvidencePath(artifactDir));
+  if (!isRecord(raw) || !isRecord(raw.report)) return null;
+  const report = raw.report as unknown as SmokeReport;
+  const evidence: WorkerSmokeRunFinalEvidence = {
+    schema: WORKER_SMOKE_RUN_FINAL_SCHEMA,
+    runId: String(raw.runId ?? '').trim(),
+    issueNumber: Number(raw.issueNumber),
+    prNumber: Number(raw.prNumber),
+    headSha: String(raw.headSha ?? '').trim().toLowerCase(),
+    artifactDir: String(raw.artifactDir ?? '').trim(),
+    mode: raw.mode === 'no_execution' ? 'no_execution' : 'runtime',
+    terminalState: 'launcher_terminalized',
+    result: raw.result as SmokeReport['result'],
+    reportDigest: String(raw.reportDigest ?? '').trim().toLowerCase(),
+    report,
+    recordedAtMs: Number(raw.recordedAtMs),
+  };
+  if (
+    raw.schema !== WORKER_SMOKE_RUN_FINAL_SCHEMA
+    || raw.terminalState !== 'launcher_terminalized'
+    || (raw.mode !== 'runtime' && raw.mode !== 'no_execution')
+    || !['PASS', 'FAIL', 'BLOCKED'].includes(String(raw.result ?? ''))
+    || evidence.runId !== runId
+    || resolve(evidence.artifactDir) !== artifactDir
+    || !Number.isSafeInteger(evidence.issueNumber) || evidence.issueNumber <= 0
+    || !Number.isSafeInteger(evidence.prNumber) || evidence.prNumber <= 0
+    || !/^[0-9a-f]{40}$/u.test(evidence.headSha)
+    || !/^[0-9a-f]{64}$/u.test(evidence.reportDigest)
+    || !Number.isFinite(evidence.recordedAtMs)
+    || report.issueNumber !== evidence.issueNumber
+    || report.prNumber !== evidence.prNumber
+    || report.headSha?.trim().toLowerCase() !== evidence.headSha
+    || report.producer !== SMOKE_REPORT_PRODUCER
+    || smokeReportDigest(report) !== evidence.reportDigest
+    || (input.issueNumber !== undefined && evidence.issueNumber !== input.issueNumber)
+    || (input.prNumber !== undefined && evidence.prNumber !== input.prNumber)
+    || (input.headSha !== undefined && evidence.headSha !== input.headSha.trim().toLowerCase())
+    || (input.mode !== undefined && evidence.mode !== input.mode)
+  ) return null;
+  return evidence;
+}
 
 export type CloseReceiptRead =
   | { state: 'missing' | 'invalid' }

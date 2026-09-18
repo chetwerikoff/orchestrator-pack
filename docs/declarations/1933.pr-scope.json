@@ -1,0 +1,47 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1933,
+  "declared_paths": [
+    "docs/orchestration-runbook.md",
+    "scripts/lib/worker-smoke-lifecycle-base.ts",
+    "scripts/lib/worker-smoke-lifecycle.ts",
+    "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/native.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/worker-smoke-1359.test.ts",
+    "scripts/worker-smoke-entrypoint-1359.test.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "denylist": [
+    ".claude/skills/",
+    ".cursor/rules/",
+    ".cursor/skills/",
+    ".github/",
+    "CLAUDE.md",
+    "credentials/",
+    "packages/core/",
+    "scripts/lib/worker-smoke-core-base.ts",
+    "scripts/lib/worker-smoke-core.ts",
+    "scripts/runtime/contracts.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "docs/orchestration-runbook.md",
+    "scripts/lib/worker-smoke-bounded-create.ts",
+    "scripts/lib/worker-smoke-lifecycle-base.ts",
+    "scripts/lib/worker-smoke-lifecycle.ts",
+    "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/native.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/worker-smoke-1359.test.ts",
+    "scripts/worker-smoke-entrypoint-1359.test.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "source_revision": "8d2744f1961c74778bce0beef1c0fa266cbdc24b"
+}
