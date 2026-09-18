@@ -766,8 +766,9 @@ function reviewIndependentRequiredCheckNames(policy: Record<string, unknown>): {
 
 async function manualPackReviewRequiredCiGreen(input: {
   startInput: StartInput;
-  target: { prNumber: number; headSha: string; repoSlug: string; sourceRepoRoot: string; baseRef: string };
+  target: { prNumber: number; headSha: string; repoSlug: string; sourceRepoRoot: string; prBaseRef: string };
 }): Promise<boolean> {
+  if (input.target.prBaseRef !== 'main') return false;
   const harness = process.env.OPK_VITEST_HARNESS === '1';
   let policy: Record<string, unknown>;
   let checks: ManualPackReviewCiCheck[];
@@ -781,7 +782,7 @@ async function manualPackReviewRequiredCiGreen(input: {
   } else {
     const policyResult = await runProcess({
       command: resolveTrackedGhWrapper(),
-      args: ['api', `repos/${input.target.repoSlug}/branches/${input.target.baseRef}/protection/required_status_checks`],
+      args: ['api', `repos/${input.target.repoSlug}/branches/main/protection/required_status_checks`],
       cwd: input.target.sourceRepoRoot,
       inheritParentEnv: true,
       allowEmptyStdout: false,
@@ -874,7 +875,7 @@ async function resolveTarget(
   issueNumber?: number;
   repoSlug: string;
   sourceRepoRoot: string;
-  baseRef: string;
+  prBaseRef: string;
   operatorStart?: OperatorPackReviewStart;
 }> {
   const sessionId = trim(input.sessionId || input.linkedSessionId);
@@ -912,7 +913,7 @@ async function resolveTarget(
     ? {
         headSha: fixtureCurrentHead || requestedHead,
         body: input.fixturePrBody ?? '',
-        baseRef: trim(input.baseRef) || DEFAULT_BASE_REF,
+        baseRef: 'main',
       }
     : await resolveCurrentPrTarget(sourceRepoRoot, repoSlug, prNumber);
   const liveHead = liveTarget.headSha;
@@ -973,7 +974,7 @@ async function resolveTarget(
     issueNumber,
     repoSlug,
     sourceRepoRoot,
-    baseRef: liveTarget.baseRef,
+    prBaseRef: liveTarget.baseRef,
     ...(operatorStart ? { operatorStart } : {}),
   };
 }
@@ -4036,7 +4037,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
   const trusted = resolveTrustedRunnerPaths();
   const projectId = trim(input.projectId) || DEFAULT_PROJECT_ID;
   const target = await resolveTarget(input, trusted.trustedPackRoot, operatorStart);
-  const baseRef = target.baseRef || trim(input.baseRef) || DEFAULT_BASE_REF;
+  const baseRef = trim(input.baseRef) || DEFAULT_BASE_REF;
   if (trim(input.surface) === 'pack-gpt-review') {
     const requiredCiGreen = await manualPackReviewRequiredCiGreen({
       startInput: input,
@@ -4045,7 +4046,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         headSha: target.headSha,
         repoSlug: target.repoSlug,
         sourceRepoRoot: target.sourceRepoRoot,
-        baseRef,
+        prBaseRef: target.prBaseRef,
       },
     });
     if (!requiredCiGreen) {

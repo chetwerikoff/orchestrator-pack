@@ -974,6 +974,18 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
 
+    const unprovable = await runPackGptReviewCommand({ prNumber: 1111 }, {
+      env: process.env,
+      stderr: { write: () => undefined },
+      startReview: canonicalCommandRunner(storeRoot, {
+        fixtureRequiredCiPolicy: null,
+      }),
+    });
+    expect(unprovable.result).toMatchObject({
+      reason: 'review_not_started',
+      runnerReason: 'required_ci_not_green_for_current_head',
+    });
+
     const missing = await runPackGptReviewCommand({ prNumber: 1111 }, {
       env: process.env,
       stderr: { write: () => undefined },

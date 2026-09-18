@@ -472,6 +472,37 @@ describe('Issue #1591 GitHub-first 3/3-or-timed-2/3 recovery', () => {
     expect(capture.body).toContain('blocking-before-grace');
   });
 
+  it('keeps one blocking source waiting before grace and never settles early', async () => {
+    const storeRoot = tempRoot();
+    harness(storeRoot);
+    const { runId, publications } = recoverableRun(storeRoot, new Date());
+    publications.delete('source-02');
+    const first = publications.get('source-01')!;
+    first.payload = JSON.stringify({
+      verdict: 'findings',
+      findingCount: 1,
+      findings: [{ title: 'one-blocker-before-grace', body: 'fixture', severity: 'blocking' }],
+    });
+    const capture = { body: '', posts: 0 };
+
+    const result = await reconcileStalePackReviewRuns({
+      ...reconcileInput(storeRoot, publications, capture),
+      immediate: true,
+    });
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId,
+        usableSourceCount: 1,
+        graceExpired: false,
+        reason: 'gpt_sources_waiting_for_grace:1/3',
+      }),
+    ]));
+    const run = getPackReviewRun(runId, { projectId: PROJECT, storeRoot });
+    expect(run?.reviewRound?.settledSourceCount).toBeUndefined();
+    expect(run?.reviewVerdict).toBeUndefined();
+    expect(capture.posts).toBe(0);
+  });
+
   it('keeps one blocking source incomplete after grace and never freezes below 2/3', async () => {
     const storeRoot = tempRoot();
     harness(storeRoot);
