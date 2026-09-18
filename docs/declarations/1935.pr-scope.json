@@ -24,18 +24,18 @@
     "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
-    "vendor/",
+    "credentials/",
     "packages/core/",
     "secrets/",
-    "credentials/"
+    "vendor/"
   ],
   "allowed_roots": [
     ".cursor/rules/",
     ".cursor/skills/create-issue-draft/",
-    "scripts/",
     "docs/",
     "prompts/",
+    "scripts/",
     "tests/external-output-references/"
   ],
-  "source_revision": "c7fe627be0b9b0a19a0b65b6e3763d2f791da183"
+  "source_revision": "7097e68ba262c898b52b3f12e256112be0e21814"
 }
