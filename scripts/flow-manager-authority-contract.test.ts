@@ -1155,8 +1155,8 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     expect(executionRunbook).toContain(
       'one **fresh GPT fixer conversation for that findings-bearing round**',
     );
-    expect(executionRunbook).toContain(
-      'reviewer-authored runner-bound GitHub source comments plus canonical runner state are the progression authority',
+    expect(executionRunbook).toMatch(
+      /reviewer-authored runner-bound GitHub source comments plus canonical runner\s+state are the progression authority/,
     );
   });
 
