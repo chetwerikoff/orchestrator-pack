@@ -249,6 +249,8 @@ Exact implementation-review wording such as `PR #N review`, `review PR #N`,
 `pack review #N`, or `Issue #N review` loads `review-pr-with-gpt`; for an
 Issue target the manager, not the router, proves that exactly one open
 implementation PR closes that Issue before any review effect. Explicit task-spec
-review continuation remains with `create-issue-draft`. Ordinary discussion that
-merely mentions `review`, `manager`, or `менеджер` without an exact Issue/PR
-target does not activate these shorthands.
+review continuation remains with `create-issue-draft`. An ordinary discussion
+that merely mentions `manager` / `менеджер` without an existing Issue target
+does not activate the shorthand. Ordinary discussion that merely mentions
+`review` without an exact Issue/PR target does not activate
+`review-pr-with-gpt`.
