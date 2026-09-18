@@ -2318,6 +2318,214 @@ function stageInputsRequireAuthoritativeCensus(values: readonly JsonRecord[]): b
     && stage.invocations.some((invocation) => isRecord(invocation) && invocationRequiresAuthoritativeArtifact(invocation)));
 }
 
+
+interface AcceptanceIssueSnapshot {
+  sourceRevision: string;
+  body: string;
+  path: string;
+}
+
+function stableAcceptanceIssueSnapshot(
+  transport: GhTransport,
+  repositoryFullName: string,
+  issueNumber: number,
+  reviewDir: string,
+  errors: string[],
+): AcceptanceIssueSnapshot | null {
+  let first: ReturnType<typeof fetchIssueRevision>;
+  let second: ReturnType<typeof fetchIssueRevision>;
+  try {
+    first = fetchIssueRevision(transport, repositoryFullName, issueNumber);
+    second = fetchIssueRevision(transport, repositoryFullName, issueNumber);
+  } catch (error) {
+    errors.push(temporaryError(
+      'source-unavailable',
+      'GitHub-witnessed Issue body snapshot is unavailable: ' + (error instanceof Error ? error.message : String(error)),
+    ));
+    return null;
+  }
+  if (first.body !== second.body) {
+    errors.push('Issue body moved during acceptance snapshot production; authority=GitHub-witnessed');
+    return null;
+  }
+  const matches = [...first.body.matchAll(/<!--\s*source-revision:\s*(r[0-9]+)\s*-->/gi)];
+  if (matches.length !== 1 || !matches[0]?.[1]) {
+    errors.push('Issue body snapshot has no unique source-revision marker; authority=GitHub-witnessed');
+    return null;
+  }
+  const sourceRevision = matches[0][1];
+  const path = join(reviewDir, 'issue-' + sourceRevision + '-body.md');
+  mkdirSync(reviewDir, { recursive: true });
+  if (existsSync(path)) {
+    let existing: string;
+    try { existing = readFileSync(path, 'utf8'); } catch {
+      errors.push('existing Issue body snapshot is unreadable: ' + path);
+      return null;
+    }
+    if (existing !== first.body) {
+      errors.push('existing Issue body snapshot conflicts with current GitHub bytes: ' + path + '; authority=GitHub-witnessed');
+      return null;
+    }
+  } else {
+    try {
+      writeFileSync(path, first.body, { encoding: 'utf8', flag: 'wx' });
+    } catch (error) {
+      errors.push('unable to materialize GitHub-witnessed Issue body snapshot: ' + (error instanceof Error ? error.message : String(error)));
+      return null;
+    }
+  }
+  return { sourceRevision, body: first.body, path };
+}
+
+function latestAuthorReplyPath(reviewDir: string): string | null {
+  if (!existsSync(reviewDir)) return null;
+  const candidates = readdirSync(reviewDir)
+    .map((name) => {
+      const match = /^round-([0-9]+)-author-reply\.(?:md|txt)$/.exec(name);
+      return match ? { name, round: Number(match[1]) } : null;
+    })
+    .filter((value): value is { name: string; round: number } => Boolean(value))
+    .sort((left, right) => right.round - left.round || right.name.localeCompare(left.name));
+  return candidates[0] ? join(reviewDir, candidates[0].name) : null;
+}
+
+function parseGovernedAuthorDispositionOutput(path: string, errors: string[]): JsonRecord | null {
+  let text: string;
+  try { text = readFileSync(path, 'utf8'); } catch {
+    errors.push('governed author output is unreadable: ' + path + '; authority=author-owned');
+    return null;
+  }
+  const pattern = /\`\`\`create-issue-author-dispositions\/v1\s*\r?\n([\s\S]*?)\r?\n\`\`\`/g;
+  const matches = [...text.matchAll(pattern)];
+  if (matches.length !== 1) {
+    errors.push('governed author output must contain exactly one create-issue-author-dispositions/v1 fence: ' + path + '; authority=author-owned');
+    return null;
+  }
+  let parsed: unknown;
+  try { parsed = JSON.parse(matches[0]![1]!) as unknown; } catch {
+    errors.push('governed author disposition fence is malformed JSON: ' + path + '; authority=author-owned');
+    return null;
+  }
+  if (!isRecord(parsed) || parsed.schema !== AUTHOR_DISPOSITIONS_SCHEMA || !Array.isArray(parsed.findings) || !isRecord(parsed.m4) || !Array.isArray(parsed.m4.inventory)) {
+    errors.push('governed author disposition payload is incomplete: ' + path + '; authority=author-owned');
+    return null;
+  }
+  if (parsed.findings.some((finding) => !isRecord(finding)) || parsed.m4.inventory.some((item) => !isRecord(item))) {
+    errors.push('governed author disposition payload contains malformed finding/M4 rows: ' + path + '; authority=author-owned');
+    return null;
+  }
+  return parsed;
+}
+
+function ensureAuthorDispositionsFromGovernedOutput(input: {
+  reviewDir: string;
+  targetPath: string;
+  reviewEpisodeId: string;
+  sourceRevision: string;
+  predecessorStage: ReviewStage | null;
+  draft: string;
+  allowZeroState: boolean;
+  errors: string[];
+}): string | null {
+  if (existsSync(input.targetPath)) {
+    let existing: unknown;
+    try { existing = JSON.parse(readFileSync(input.targetPath, 'utf8')) as unknown; } catch { existing = null; }
+    if (
+      isRecord(existing)
+      && existing.schema === AUTHOR_DISPOSITIONS_SCHEMA
+      && existing.reviewEpisodeId === input.reviewEpisodeId
+      && existing.sourceRevision === input.sourceRevision
+      && existing.predecessorStage === input.predecessorStage
+      && existing.draft === input.draft
+      && Array.isArray(existing.findings)
+      && isRecord(existing.m4)
+    ) {
+      return input.targetPath;
+    }
+  }
+
+  const authorReplyPath = latestAuthorReplyPath(input.reviewDir);
+  let payload: JsonRecord;
+  if (!authorReplyPath) {
+    if (!input.allowZeroState) {
+      input.errors.push('missing governed author output round-NN-author-reply.*; authority=author-owned');
+      return null;
+    }
+    payload = {
+      schema: AUTHOR_DISPOSITIONS_SCHEMA,
+      sourceRevision: input.sourceRevision,
+      predecessorStage: input.predecessorStage,
+      findings: [],
+      m4: { inventory: [] },
+    };
+  } else {
+    const parsed = parseGovernedAuthorDispositionOutput(authorReplyPath, input.errors);
+    if (!parsed) return null;
+    payload = parsed;
+  }
+
+  if (payload.sourceRevision !== input.sourceRevision) {
+    input.errors.push('author dispositions sourceRevision disagrees with the stable GitHub snapshot; field=sourceRevision authority=GitHub-witnessed');
+    return null;
+  }
+  if (payload.predecessorStage !== input.predecessorStage) {
+    input.errors.push('author dispositions predecessorStage disagrees with lifecycle stage evidence; field=predecessorStage authority=lifecycle-tool-witnessed');
+    return null;
+  }
+  const m4 = payload.m4 as JsonRecord;
+  const produced: JsonRecord = {
+    schema: AUTHOR_DISPOSITIONS_SCHEMA,
+    reviewEpisodeId: input.reviewEpisodeId,
+    sourceRevision: input.sourceRevision,
+    predecessorStage: input.predecessorStage,
+    draft: input.draft,
+    findings: payload.findings,
+    m4: {
+      reviewEpisodeId: input.reviewEpisodeId,
+      sourceRevision: input.sourceRevision,
+      predecessorStage: input.predecessorStage,
+      inventory: m4.inventory,
+    },
+  };
+  const nextText = JSON.stringify(produced, null, 2) + '\n';
+  if (existsSync(input.targetPath)) {
+    let existing: unknown;
+    try { existing = JSON.parse(readFileSync(input.targetPath, 'utf8')) as unknown; } catch { existing = null; }
+    if (
+      isRecord(existing)
+      && existing.reviewEpisodeId === input.reviewEpisodeId
+      && existing.sourceRevision === input.sourceRevision
+      && existing.predecessorStage === input.predecessorStage
+    ) {
+      input.errors.push('existing author-dispositions.json conflicts with governed author output for the same binding; authority=author-owned');
+      return null;
+    }
+  }
+  const temporary = input.targetPath + '.author-' + process.pid + '.tmp';
+  try {
+    writeFileSync(temporary, nextText, { encoding: 'utf8', flag: 'wx' });
+    renameSync(temporary, input.targetPath);
+  } catch (error) {
+    input.errors.push('unable to materialize author-dispositions.json from governed author output: ' + (error instanceof Error ? error.message : String(error)));
+    return null;
+  } finally {
+    if (existsSync(temporary)) rmSync(temporary, { force: true });
+  }
+  return input.targetPath;
+}
+
+function latestLifecycleStage(stageInputs: readonly { path: string; value: JsonRecord }[]): ReviewStage | null {
+  const candidates = stageInputs
+    .filter((entry) => entry.value.outcome === 'complete' || entry.value.outcome === 'partial')
+    .map((entry) => ({
+      stage: reviewStage(entry.value.stage),
+      sequence: Number(entry.value.stageSequence),
+    }))
+    .filter((entry): entry is { stage: ReviewStage; sequence: number } => Boolean(entry.stage) && Number.isInteger(entry.sequence))
+    .sort((left, right) => right.sequence - left.sequence);
+  return candidates[0]?.stage ?? null;
+}
+
 export function produceAcceptanceArtifacts(
   options: ProduceAcceptanceArtifactsOptions,
 ): AcceptanceArtifactResult {
