@@ -621,12 +621,8 @@ export async function resolveCurrentPrHead(
   const head = row.head && typeof row.head === 'object' && !Array.isArray(row.head)
     ? row.head as Record<string, unknown>
     : {};
-  const base = row.base && typeof row.base === 'object' && !Array.isArray(row.base)
-    ? row.base as Record<string, unknown>
-    : {};
   const headSha = trim(head.sha ?? row.headRefOid);
   const state = trim(row.state);
-  const baseRef = trim(base.ref);
   if (!/^[0-9a-f]{40}$/i.test(headSha ?? '')) throw new Error(`PR #${prNumber} returned invalid head SHA`);
   if (String(state ?? '').toUpperCase() !== 'OPEN') throw new Error(`PR #${prNumber} is not open`);
   return headSha.toLowerCase();
@@ -715,8 +711,12 @@ export async function resolveCurrentPrTarget(
   const head = row.head && typeof row.head === 'object' && !Array.isArray(row.head)
     ? row.head as Record<string, unknown>
     : {};
+  const base = row.base && typeof row.base === 'object' && !Array.isArray(row.base)
+    ? row.base as Record<string, unknown>
+    : {};
   const headSha = trim(head.sha ?? row.headRefOid);
   const state = trim(row.state);
+  const baseRef = trim(base.ref);
   if (!/^[0-9a-f]{40}$/i.test(headSha)) throw new Error(`PR #${prNumber} returned invalid head SHA`);
   if (state.toUpperCase() !== 'OPEN') throw new Error(`PR #${prNumber} is not open`);
   if (typeof row.body !== 'string') throw new Error(`PR #${prNumber} returned invalid body`);
