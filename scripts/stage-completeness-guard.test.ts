@@ -928,7 +928,7 @@ describe('Issue #1287 acceptance inventory parity', () => {
       'claude-producer-evidence.json',
       'claude-unavailable-waiver.json',
       'chats.md',
-      'round-NN-author-reply.md',
+      'round-NN-author-reply.md|txt',
       'rNN/tier-gate-receipt.json',
     ]);
     expect(actualInventory).toEqual(expectedInventory);
