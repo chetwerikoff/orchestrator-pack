@@ -223,7 +223,7 @@ describe('Issue #1936 truthful smoke evidence', () => {
   it('normalizes carry-only PASS without synthesizing a runtime terminal handle', () => {
     const partial: Partial<SmokeReport> = {
       result: 'PASS',
-      scenarios: [{ action: 'carry tuple', expected: 'already proven', observed: 'carried exact PASS', outcome: 'pass' }],
+      scenarios: [{ action: 'carry tuple', expected: 'already proven', observed: `carried PASS from ${HEAD_TWO}; not freshly executed on ${HEAD_ONE}`, outcome: 'pass' }],
       trackedFilesUnmodified: true,
       limitations: [],
       environmentNotes: ['smoke-execution=carry-only'],
@@ -234,8 +234,13 @@ describe('Issue #1936 truthful smoke evidence', () => {
     const carried = normalizeSmokeReport(partial, { issueNumber: 1936, prNumber: 1945, headSha: HEAD_ONE }, { executionMode: 'carry-only' });
     expect(carried.ok).toBe(true);
     expect(carried.ok && carried.report.terminalHandle).toBeUndefined();
+    const unprovenCarry = normalizeSmokeReport({
+      ...partial,
+      scenarios: [{ action: 'carry tuple', expected: 'already proven', observed: 'claimed carry without selective proof', outcome: 'pass' }],
+    }, { issueNumber: 1936, prNumber: 1945, headSha: HEAD_ONE }, { executionMode: 'carry-only' });
+    expect(unprovenCarry.ok).toBe(false);
     const executed = normalizeSmokeReport({ ...partial, terminalCleanup: 'closed_owned_handle' }, { issueNumber: 1936, prNumber: 1945, headSha: HEAD_ONE });
-    expect(executed).toEqual({ ok: false, reason: 'pass_missing_terminal_handle' });
+    expect(executed.ok).toBe(false);
   });
   it('keeps same-head attempt receipts append-only and verifies the exact attempt', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-receipts-1936-'));

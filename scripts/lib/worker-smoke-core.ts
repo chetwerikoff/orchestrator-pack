@@ -60,6 +60,7 @@ function invalidSmokeReport(
 export function normalizeSmokeReport(
   partial: Partial<base.SmokeReport>,
   binding: { issueNumber: number; prNumber: number; headSha: string },
+  options: { executionMode?: 'executed' | 'carry-only' } = {},
 ): ({ ok: true; report: base.SmokeReport } | { ok: false; reason: string; report: base.SmokeReport }) {
   const smokeSupervisorProcess = process.argv[1]?.endsWith('/worker-smoke-run.ts') === true;
   const supervisorPendingPass = partial.result === 'PASS'
@@ -69,22 +70,20 @@ export function normalizeSmokeReport(
     && Boolean(partial.terminalHandle?.trim())
     && Boolean(partial.orcaExecutable?.trim());
   const carryOnlyPass = isCarryOnlySelectivePass(partial, binding.headSha);
-  const normalizationPartial = carryOnlyPass
-    ? { ...partial, terminalCleanup: 'closed_owned_handle', terminalHandle: 'carry-only-no-execution' }
-    : supervisorPendingPass
-      ? { ...partial, terminalCleanup: 'closed_owned_handle' }
-      : partial;
-  const normalized = base.normalizeSmokeReport(normalizationPartial, binding);
+  const normalizationPartial = supervisorPendingPass
+    ? { ...partial, terminalCleanup: 'closed_owned_handle' }
+    : partial;
+  const normalizationOptions = carryOnlyPass && options.executionMode === 'carry-only'
+    ? { executionMode: 'carry-only' as const }
+    : {};
+  const normalized = base.normalizeSmokeReport(normalizationPartial, binding, normalizationOptions);
   if (!normalized.ok) {
     return {
       ...normalized,
       report: invalidSmokeReport(partial, binding, normalized.reason),
     };
   }
-  if (carryOnlyPass) {
-    normalized.report.terminalCleanup = 'not_started_no_execution';
-    normalized.report.terminalHandle = undefined;
-  } else if (supervisorPendingPass) {
+  if (supervisorPendingPass) {
     normalized.report.terminalCleanup = 'pending';
   }
   return { ok: true, report: bindControlPlaneVerdict(normalized.report) };
