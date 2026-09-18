@@ -387,7 +387,7 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
 function finalAcceptanceUsage(): string {
   return [
     'Usage:',
-    '  create-issue-final-acceptance.ts --repo <owner/name> --issue-number <n> [--cycle-id <id>] --issue-body <path> --issue-revision <rNN> --review-dir <path> --stage-receipt <path>... [--capture <path>...] [--ledger <path>] [--relay-evidence <path>...] [--claude-producer-evidence <path>...] [--external-pass-receipt <path>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--public-actor <actor>] [--workdir <path>] [--json]',
+    '  create-issue-final-acceptance.ts --repo <owner/name> --issue-number <n> --review-dir <path> [--cycle-id <assertion>] [--issue-body <assertion-path>] [--issue-revision <assertion-rNN>] [--stage-receipt <assertion-path>...] [--capture <path>...] [--ledger <path>] [--relay-evidence <path>...] [--claude-producer-evidence <path>...] [--external-pass-receipt <path>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--public-actor <actor>] [--workdir <path>] [--json]',
   ].join('\n');
 }
 
