@@ -1,5 +1,5 @@
-import { readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { defaultGhTransport, fetchIssueRevision } from './create-issue-stage-record-gh.ts';
 import {
   publishSettledStageRecord,
@@ -760,39 +760,192 @@ export function runStageFinalizeCli(argv: string[]): number {
 export function runFinalAcceptanceCli(argv: string[]): number {
   return runParsedCli(argv, 'create-issue-final-acceptance', parseFinalAcceptanceArgs, (opts) => {
     const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
-    const cycleId = opts.cycleId.trim();
-    const issueBodyPath = parseRequiredNonEmptyString(opts.issueBodyPath, '--issue-body');
-    const issueRevision = parseRequiredNonEmptyString(opts.issueRevision, '--issue-revision');
     const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
-    if (opts.stageReceipts.length === 0) {
-      process.stderr.write('create-issue-final-acceptance: at least one --stage-receipt is required\n');
-      return 2;
+    const transport = defaultGhTransport();
+
+    let liveIssue: ReturnType<typeof fetchIssueRevision>;
+    try {
+      liveIssue = fetchIssueRevision(transport, opts.repo, issueNumber);
+    } catch (error) {
+      const output = {
+        ok: false,
+        cause: 'source-unavailable',
+        blocker: error instanceof Error ? error.message : String(error),
+        nextAction: null,
+      };
+      if (opts.json) console.log(JSON.stringify(output));
+      else process.stderr.write(output.blocker + '\n');
+      return 1;
+    }
+    const liveRevision = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i.exec(liveIssue.body)?.[1];
+    if (!liveRevision) {
+      const output = { ok: false, cause: 'source-revision-unavailable', blocker: 'live Issue has no canonical source-revision marker', nextAction: null };
+      if (opts.json) console.log(JSON.stringify(output));
+      else process.stderr.write(output.blocker + '\n');
+      return 1;
+    }
+    if (opts.issueRevision && opts.issueRevision !== liveRevision) {
+      const output = createIssueStaleNextAction({
+        binding: { repository: opts.repo, issueNumber, sourceRevision: opts.issueRevision, stage: 'acceptance' },
+        observed: { repository: opts.repo, issueNumber, sourceRevision: liveRevision, stage: 'acceptance' },
+        nextAction: null,
+      });
+      if (opts.json) console.log(JSON.stringify(output));
+      else process.stderr.write('stale_next_action\n');
+      return 1;
     }
 
-    const issueBody = readFileSync(issueBodyPath, 'utf8');
-    const transport = defaultGhTransport();
+    const currentSnapshotPath = join(reviewDir, 'issue-' + liveRevision + '-body.json');
+    let currentSnapshot: Record<string, unknown> | null = null;
+    try {
+      currentSnapshot = JSON.parse(readFileSync(currentSnapshotPath, 'utf8')) as Record<string, unknown>;
+    } catch {
+      currentSnapshot = null;
+    }
+    const snapshotValid = currentSnapshot
+      && currentSnapshot.schema === 'create-issue-live-snapshot/v1'
+      && currentSnapshot.issueNumber === issueNumber
+      && currentSnapshot.sourceRevision === liveRevision
+      && currentSnapshot.title === liveIssue.title
+      && currentSnapshot.body === liveIssue.body;
+    if (!snapshotValid) {
+      const binding = artifactBindingFromState({
+        ...opts,
+        command: 'produce-artifacts',
+        stageEvidencePaths: [],
+        claudeProducerEvidencePaths: opts.claudeProducerEvidencePaths,
+      } as StageFinalizeCliOptions, reviewDir, issueNumber);
+      const nextAction = binding
+        ? createIssueNextAction({
+            kind: 'produce-acceptance-artifacts',
+            binding,
+            argv: [
+              'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+              'produce-artifacts',
+              '--repo', opts.repo,
+              '--issue-number', String(issueNumber),
+              '--review-dir', reviewDir,
+              '--phase', 'final-acceptance',
+              '--expected-source-revision', binding.sourceRevision,
+              '--expected-stage', binding.stage,
+              '--expected-stage-attempt-id', binding.stageAttemptId ?? '',
+              '--json',
+            ],
+          })
+        : null;
+      const output = {
+        ok: false,
+        cause: 'acceptance-input-missing',
+        blocker: 'issue-rNN-body snapshot is missing or disagrees with the stable live Issue; field=issue snapshot authority=GitHub-witnessed',
+        nextAction,
+      };
+      if (opts.json) console.log(JSON.stringify(output));
+      else process.stderr.write(output.blocker + '\n');
+      return 1;
+    }
+    if (opts.issueBodyPath) {
+      let asserted = '';
+      try { asserted = readFileSync(opts.issueBodyPath, 'utf8'); } catch {}
+      if (asserted !== liveIssue.body && resolve(opts.issueBodyPath) !== resolve(currentSnapshotPath)) {
+        const output = {
+          ok: false,
+          cause: 'acceptance-authority-conflict',
+          blocker: '--issue-body is assertion-only and does not match the canonical GitHub-witnessed snapshot',
+          nextAction: null,
+        };
+        if (opts.json) console.log(JSON.stringify(output));
+        else process.stderr.write(output.blocker + '\n');
+        return 1;
+      }
+    }
+
+    const canonicalReceiptPaths = readdirSync(reviewDir)
+      .filter((name) => /^stage-completeness-receipt-.+\.json$/.test(name))
+      .sort()
+      .map((name) => join(reviewDir, name));
+    const receiptRows = canonicalReceiptPaths.flatMap((path) => {
+      try {
+        const value = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+        return [{ path, value }];
+      } catch {
+        return [];
+      }
+    }).sort((left, right) => Number(left.value.stageSequence ?? 0) - Number(right.value.stageSequence ?? 0));
+    const terminal = [...receiptRows].reverse().find((row) => row.value.stage === 'architectural');
+    if (!terminal || typeof terminal.value.sourceRevision !== 'string' || typeof terminal.value.cycleId !== 'string') {
+      const output = { ok: false, cause: 'acceptance-input-missing', blocker: 'canonical terminal stage receipt is missing', nextAction: null };
+      if (opts.json) console.log(JSON.stringify(output));
+      else process.stderr.write(output.blocker + '\n');
+      return 1;
+    }
+    const terminalSnapshotPath = join(reviewDir, 'issue-' + terminal.value.sourceRevision + '-body.json');
+    let terminalSnapshot: Record<string, unknown> | null = null;
+    try { terminalSnapshot = JSON.parse(readFileSync(terminalSnapshotPath, 'utf8')) as Record<string, unknown>; } catch { terminalSnapshot = null; }
+    if (!terminalSnapshot || terminalSnapshot.schema !== 'create-issue-live-snapshot/v1' || typeof terminalSnapshot.body !== 'string') {
+      const output = { ok: false, cause: 'acceptance-input-missing', blocker: 'terminal source Issue snapshot is missing; field=terminalSourceBody authority=GitHub-witnessed', nextAction: null };
+      if (opts.json) console.log(JSON.stringify(output));
+      else process.stderr.write(output.blocker + '\n');
+      return 1;
+    }
+
+    if (opts.stageReceipts.length > 0) {
+      const requested = opts.stageReceipts.map((path) => resolve(path)).sort();
+      const canonical = canonicalReceiptPaths.map((path) => resolve(path)).sort();
+      if (JSON.stringify(requested) !== JSON.stringify(canonical)) {
+        const output = { ok: false, cause: 'acceptance-authority-conflict', blocker: 'caller stage-receipt list does not equal canonical receipt inventory', nextAction: null };
+        if (opts.json) console.log(JSON.stringify(output));
+        else process.stderr.write(output.blocker + '\n');
+        return 1;
+      }
+    }
+    if (opts.cycleId && opts.cycleId !== terminal.value.cycleId) {
+      const output = { ok: false, cause: 'acceptance-authority-conflict', blocker: 'caller cycle-id disagrees with lifecycle terminal receipt', nextAction: null };
+      if (opts.json) console.log(JSON.stringify(output));
+      else process.stderr.write(output.blocker + '\n');
+      return 1;
+    }
+
+    const captures = receiptRows.flatMap(({ value }) => (
+      Array.isArray(value.relayEligibleCaptures)
+        ? value.relayEligibleCaptures.flatMap((capture) => (
+            capture && typeof capture === 'object' && typeof (capture as Record<string, unknown>).name === 'string'
+              ? [join(reviewDir, String((capture as Record<string, unknown>).name))]
+              : []
+          ))
+        : []
+    ));
+    const ledgerPath = opts.ledgerPath ?? join(reviewDir, 'finding-disposition-ledger.json');
+    const relayPaths = opts.relayEvidencePaths.length > 0
+      ? opts.relayEvidencePaths
+      : [join(reviewDir, 'verified-relay-evidence.json')];
+    const claudePaths = opts.claudeProducerEvidencePaths.length > 0
+      ? opts.claudeProducerEvidencePaths
+      : (existsSync(join(reviewDir, 'claude-producer-evidence.json')) ? [join(reviewDir, 'claude-producer-evidence.json')] : []);
+
     const result = runFinalAcceptance(transport, {
       repo: opts.repo,
       issueNumber,
-      cycleId,
-      issueBody,
-      issueRevision,
+      cycleId: String(terminal.value.cycleId),
+      issueBody: liveIssue.body,
+      terminalSourceBody: String(terminalSnapshot.body),
+      issueRevision: liveRevision,
       reviewDir,
-      stageReceiptPaths: opts.stageReceipts,
-      capturePaths: opts.capturePaths,
-      ledgerPath: opts.ledgerPath,
-      relayEvidencePaths: opts.relayEvidencePaths,
-      claudeProducerEvidencePaths: opts.claudeProducerEvidencePaths,
+      stageReceiptPaths: canonicalReceiptPaths,
+      capturePaths: captures,
+      ledgerPath,
+      relayEvidencePaths: relayPaths,
+      claudeProducerEvidencePaths: claudePaths,
       externalPassReceiptPath: opts.externalPassReceiptPath,
       operatorAdjudication: operatorAcceptanceAdjudication({ ...opts, phase: 'final-acceptance' }),
       publicActor: opts.publicActor,
       workdir: opts.workdir,
     });
 
-    if (opts.json) console.log(JSON.stringify(result));
+    const output = { ...result, nextAction: null };
+    if (opts.json) console.log(JSON.stringify(output));
     else if (!result.ok) {
-      for (const error of result.guardErrors) process.stderr.write(`${error}\n`);
-      for (const diagnostic of result.diagnostics) process.stderr.write(`${diagnostic.message}\n`);
+      for (const error of result.guardErrors) process.stderr.write(error + '\n');
+      for (const diagnostic of result.diagnostics) process.stderr.write(diagnostic.message + '\n');
     }
     return result.ok ? 0 : 1;
   });
