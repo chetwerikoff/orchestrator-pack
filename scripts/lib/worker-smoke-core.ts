@@ -976,7 +976,7 @@ export function planWorkerSmokeSelectiveRetry(input: {
 
     const selected = maximal[0];
     const selectedIsFreshCurrentHead = selected.headSha === currentHead
-      && !projectedCarriedObservation(selected.row.scenario);
+      && !base.isCarriedSmokeScenarioObservation(selected.row.scenario);
     if (affectedKeys.has(key) && !selectedIsFreshCurrentHead) {
       execution.push(declared);
       tupleDiagnostics.push({ tuple: tuplePreview(declared.action, declared.expected), reason: 'current_head_affected' });
