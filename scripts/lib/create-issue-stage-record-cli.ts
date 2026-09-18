@@ -503,8 +503,9 @@ function artifactBindingFromState(
     .flatMap((path) => {
       try {
         const value = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
-        const stage = value.stage;
-        if (stage !== 'competitive' && stage !== 'architectural-review' && stage !== 'architectural-lens' && stage !== 'architectural') return [];
+        const rawStage = value.stage;
+        if (rawStage !== 'competitive' && rawStage !== 'architectural-review' && rawStage !== 'architectural-lens' && rawStage !== 'architectural') return [];
+        const stage: LifecycleReviewStage = rawStage;
         const sequence = Number(value.stageSequence);
         const attempt = typeof value.stageAttemptId === 'string' ? value.stageAttemptId : '';
         const revision = typeof value.sourceRevision === 'string' ? value.sourceRevision : '';
