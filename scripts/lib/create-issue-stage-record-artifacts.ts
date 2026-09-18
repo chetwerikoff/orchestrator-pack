@@ -2817,6 +2817,17 @@ export function produceAcceptanceArtifacts(
     reviewEpisodeId: episodeId,
     acceptanceBasis: AUTHORITATIVE_GITHUB_ARTIFACT_BASIS,
     files,
+    ...(issueSnapshot
+      ? {
+        liveIssueSnapshot: {
+          path: resolve(issueSnapshot.path),
+          issueNumber: issueSnapshot.issueNumber,
+          sourceRevision: issueSnapshot.sourceRevision,
+          titleSha256: sha256(issueSnapshot.title),
+          bodySha256: sha256(issueSnapshot.body),
+        },
+      }
+      : {}),
     ...(artifactContext?.publishedAuthorState
       ? {
         publishedAuthorState: {
@@ -2829,6 +2840,7 @@ export function produceAcceptanceArtifacts(
       tierIntake: resolve(options.tierIntakePath),
       stageEvidence: canonicalStageEvidencePaths.map((path) => resolve(path)),
       authorDispositions: resolve(options.authorDispositionsPath),
+      ...(issueSnapshot ? { issueSnapshot: resolve(issueSnapshot.path) } : {}),
       ...(options.waiverPath ? { operatorWaiver: resolve(options.waiverPath) } : {}),
     },
   };
