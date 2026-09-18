@@ -51,6 +51,33 @@ export type CreateIssueManagerResult =
   | CreateIssueTerminalResult
   | CreateIssueStaleNextActionResult;
 
+export function validateCreateIssueManagerResult(value: unknown): string[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return ['manager result must be an object'];
+  const result = value as Record<string, unknown>;
+  const errors: string[] = [];
+  if (typeof result.ok !== 'boolean') errors.push('manager result.ok must be boolean');
+  if (!Object.prototype.hasOwnProperty.call(result, 'nextAction')) {
+    errors.push('manager result.nextAction must be present');
+    return errors;
+  }
+  const nextAction = result.nextAction;
+  if (result.ok === false) {
+    if (!nonEmpty(result.cause)) errors.push('manager non-success result.cause must be non-empty');
+    if (result.cause === 'stale_next_action') {
+      if (result.schema !== CREATE_ISSUE_STALE_ACTION_SCHEMA) errors.push('stale manager result.schema is invalid');
+      errors.push(...validateCreateIssueActionBinding(result.binding).map((error) => 'stale manager result.' + error));
+      if (!result.observed || typeof result.observed !== 'object' || Array.isArray(result.observed)) {
+        errors.push('stale manager result.observed must be an object');
+      }
+    }
+  }
+  if (nextAction !== null) {
+    errors.push(...validateCreateIssueNextAction(nextAction));
+    if (result.ok !== false) errors.push('manager result with non-null nextAction must be non-success');
+  }
+  return errors;
+}
+
 function nonEmpty(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
