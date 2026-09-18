@@ -14,11 +14,12 @@
     "scripts/lib/create-issue-final-acceptance.ts",
     "scripts/lib/create-issue-github-artifact-authority.ts",
     "scripts/lib/create-issue-next-action.ts",
-    "scripts/lib/create-issue-stage-lifecycle.ts",
     "scripts/lib/create-issue-stage-lifecycle.test.ts",
-    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/create-issue-stage-lifecycle.ts",
     "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
     "scripts/lib/create-issue-stage-record-cli.ts",
+    "scripts/lib/create-issue-stage-record-core.ts",
     "scripts/lib/graphql-quota-github-read-inventory.json",
     "scripts/vitest-ci-lanes.config.json"
   ],
@@ -36,5 +37,5 @@
     "prompts/",
     "tests/external-output-references/"
   ],
-  "source_revision": "28a8b0afa13238178aecf9bc1e0cfd915175c940"
+  "source_revision": "c7fe627be0b9b0a19a0b65b6e3763d2f791da183"
 }
