@@ -346,7 +346,7 @@ function buildInvocation(
   if (stage === null) errors.push(`${label} has unknown stage`);
   if (purpose === 'stage-time' && !artifactAuthority && !terminalResultIdentity) errors.push(`${label}.terminalResultIdentity is missing`);
   if (purpose === 'stage-time' && !artifactAuthority && !reviewerSource) errors.push(`${label}.reviewerSource is missing`);
-  if (purpose === 'stage-time' && invocationTerminalClassification === 'complete' && !artifactAuthority && !terminalResultIdentity) errors.push(`${label}.terminalResultIdentity is missing for successful transport`);
+  if (purpose === 'stage-time' && invocationTerminalClassification === 'complete' && !terminalResultIdentity) errors.push(`${label}.terminalResultIdentity is missing for successful transport`);
   if (purpose === 'stage-time' && invocationTerminalClassification === 'complete' && !reviewerSource) errors.push(`${label}.reviewerSource is missing for successful transport`);
   if (reviewerOrdinal === null) errors.push(`${label}.reviewerOrdinal must be a positive integer`);
   if (attemptOrdinal === null) errors.push(`${label}.attemptOrdinal must be 1 or 2`);
@@ -1524,8 +1524,8 @@ function readTurnResultForInvocation(
   purpose: ReviewEpisodeValidationPurpose,
 ): string | null {
   const transportClassification = invocation.terminalClassification;
-  if (artifactBacked) return null;
-  if (transportClassification !== 'complete' && !artifactBacked) return null;
+  if (purpose === 'final-acceptance' && artifactBacked) return null;
+  if (transportClassification !== 'complete') return null;
   const label = `stage evidence invocation[${index}]`;
   const turnResultPath = optionalString(invocation.turnResultPath);
   if (!turnResultPath) {
