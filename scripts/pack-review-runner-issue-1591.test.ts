@@ -251,6 +251,19 @@ describe('Issue #1591 launcher-independent consuming semantics', () => {
 
 type PublishedSource = { identity: PackGptSourceIdentity; payload: string };
 
+function blockingSourcePayload(title: string): string {
+  return JSON.stringify({
+    findings: [{
+      type: 'quality',
+      code: `quality:${title}`,
+      severity: 'blocking',
+      path: 'scripts/pack-review-runner.ts',
+      summary: title,
+      source: 'gpt-browser',
+    }],
+  });
+}
+
 function sourceComment(publication: PublishedSource, id: number): PackGptSourceGithubComment {
   const timestamp = '2026-08-24T00:00:00.000Z';
   const body = formatPackGptSourceCommentEnvelope(publication.identity, publication.payload);
@@ -430,11 +443,7 @@ describe('Issue #1591 GitHub-first 3/3-or-timed-2/3 recovery', () => {
     vi.setSystemTime(new Date('2026-08-24T00:00:00.000Z'));
     const { runId, publications } = recoverableRun(storeRoot, new Date());
     const first = publications.get('source-01')!;
-    first.payload = JSON.stringify({
-      verdict: 'findings',
-      findingCount: 1,
-      findings: [{ title: 'blocking-before-grace', body: 'fixture', severity: 'blocking' }],
-    });
+    first.payload = blockingSourcePayload('blocking-before-grace');
     const capture = { body: '', posts: 0 };
 
     const waiting = await reconcileStalePackReviewRuns({
@@ -478,11 +487,7 @@ describe('Issue #1591 GitHub-first 3/3-or-timed-2/3 recovery', () => {
     const { runId, publications } = recoverableRun(storeRoot, new Date());
     publications.delete('source-02');
     const first = publications.get('source-01')!;
-    first.payload = JSON.stringify({
-      verdict: 'findings',
-      findingCount: 1,
-      findings: [{ title: 'one-blocker-before-grace', body: 'fixture', severity: 'blocking' }],
-    });
+    first.payload = blockingSourcePayload('one-blocker-before-grace');
     const capture = { body: '', posts: 0 };
 
     const result = await reconcileStalePackReviewRuns({
@@ -510,11 +515,7 @@ describe('Issue #1591 GitHub-first 3/3-or-timed-2/3 recovery', () => {
     const { runId, publications } = recoverableRun(storeRoot, startedAt);
     publications.delete('source-02');
     const first = publications.get('source-01')!;
-    first.payload = JSON.stringify({
-      verdict: 'findings',
-      findingCount: 1,
-      findings: [{ title: 'one-blocker', body: 'fixture', severity: 'blocking' }],
-    });
+    first.payload = blockingSourcePayload('one-blocker');
     const capture = { body: '', posts: 0 };
 
     const result = await reconcileStalePackReviewRuns({
