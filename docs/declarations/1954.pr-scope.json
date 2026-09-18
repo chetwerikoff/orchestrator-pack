@@ -1,0 +1,25 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1954,
+  "declared_paths": [
+    ".claude/skills/review-pr-with-gpt/SKILL.md",
+    ".cursor/skills/review-pr-with-gpt/SKILL.md",
+    "AGENTS.md",
+    "docs/declarations/1954.pr-scope.json",
+    "scripts/flow-manager-authority-contract.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/review-pr-with-gpt/",
+    ".cursor/skills/review-pr-with-gpt/",
+    "AGENTS.md",
+    "docs/declarations/",
+    "scripts/flow-manager-authority-contract.test.ts"
+  ],
+  "source_revision": "r02"
+}
