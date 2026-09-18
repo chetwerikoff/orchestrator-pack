@@ -1146,8 +1146,8 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
   it('requires three fresh reviewer chats and one fresh fixer per findings round', () => {
     expect(executionRunbook).toContain('`PACK_GPT_BROWSER_PROJECT_URL` is present');
     expect(executionRunbook).toContain('`PACK_GPT_BROWSER_CHAT_URL` is absent');
-    expect(executionRunbook).toContain(
-      'source slots `source-01..03` as independent fresh ChatGPT project chats',
+    expect(executionRunbook).toMatch(
+      /source slots `source-01\.\.03` as independent fresh\s+ChatGPT project chats/,
     );
     expect(executionRunbook).toContain(
       'implementation conversation, fixer conversations, and sibling reviewer conversations are never reused as reviewer sources',
@@ -1168,8 +1168,8 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     expect(executionRunbook).toContain(
       'scripts/pack-review-runner.ts reconcile \\',
     );
-    expect(executionRunbook).toContain(
-      'still generating below 15 minutes remains active and receives no replacement',
+    expect(executionRunbook).toMatch(
+      /still generating below 15 minutes remains\s+active and receives no replacement/,
     );
     expect(executionRunbook).not.toContain('16-minute');
   });
@@ -1177,7 +1177,9 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
   it('ends manager work at an exact settled-review handoff and keeps overall completion supervisor-owned', () => {
     expect(executionRunbook).toContain('### Settled-review manager handoff');
     expect(executionRunbook).toContain('next legal action: **launch local independent-smoke worker**');
-    expect(executionRunbook).toContain('The manager does not run independent smoke itself');
+    expect(executionRunbook).toMatch(
+      /The manager\s+does not run independent smoke itself/,
+    );
     expect(executionRunbook).toContain(
       'Overall `VERIFIED_COMPLETE` is possible only after independent smoke passes on the final exact head',
     );
