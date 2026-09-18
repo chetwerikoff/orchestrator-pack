@@ -2324,7 +2324,9 @@ function stageInputsRequireAuthoritativeCensus(values: readonly JsonRecord[]): b
 
 
 interface AcceptanceIssueSnapshot {
+  issueNumber: number;
   sourceRevision: string;
+  title: string;
   body: string;
   path: string;
 }
@@ -2348,8 +2350,8 @@ function stableAcceptanceIssueSnapshot(
     ));
     return null;
   }
-  if (first.body !== second.body) {
-    errors.push('Issue body moved during acceptance snapshot production; authority=GitHub-witnessed');
+  if (first.body !== second.body || first.title !== second.title) {
+    errors.push('Issue title/body moved during acceptance snapshot production; authority=GitHub-witnessed');
     return null;
   }
   const matches = [...first.body.matchAll(/<!--\s*source-revision:\s*(r[0-9]+)\s*-->/gi)];
@@ -2358,7 +2360,15 @@ function stableAcceptanceIssueSnapshot(
     return null;
   }
   const sourceRevision = matches[0][1];
-  const path = join(reviewDir, 'issue-' + sourceRevision + '-body.md');
+  const path = join(reviewDir, 'issue-' + sourceRevision + '-body.json');
+  const snapshot = {
+    schema: 'create-issue-live-snapshot/v1',
+    issueNumber,
+    sourceRevision,
+    title: first.title,
+    body: first.body,
+  };
+  const bytes = JSON.stringify(snapshot, null, 2) + '\n';
   mkdirSync(reviewDir, { recursive: true });
   if (existsSync(path)) {
     let existing: string;
@@ -2366,19 +2376,19 @@ function stableAcceptanceIssueSnapshot(
       errors.push('existing Issue body snapshot is unreadable: ' + path);
       return null;
     }
-    if (existing !== first.body) {
-      errors.push('existing Issue body snapshot conflicts with current GitHub bytes: ' + path + '; authority=GitHub-witnessed');
+    if (existing !== bytes) {
+      errors.push('existing Issue body snapshot conflicts with current GitHub title/body bytes: ' + path + '; authority=GitHub-witnessed');
       return null;
     }
   } else {
     try {
-      writeFileSync(path, first.body, { encoding: 'utf8', flag: 'wx' });
+      writeFileSync(path, bytes, { encoding: 'utf8', flag: 'wx' });
     } catch (error) {
       errors.push('unable to materialize GitHub-witnessed Issue body snapshot: ' + (error instanceof Error ? error.message : String(error)));
       return null;
     }
   }
-  return { sourceRevision, body: first.body, path };
+  return { issueNumber, sourceRevision, title: first.title, body: first.body, path };
 }
 
 function latestAuthorReplyPath(reviewDir: string): string | null {
