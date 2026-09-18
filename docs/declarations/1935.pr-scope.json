@@ -1,0 +1,40 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1935,
+  "declared_paths": [
+    ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    "docs/browser-gpt-turn-runbook.md",
+    "docs/create-issue-draft-acceptance-artifacts.md",
+    "scripts/create-issue-convergence.test.ts",
+    "scripts/flow-manager-authority-contract.test.ts",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/lib/create-issue-browser-gpt-preflight.ts",
+    "scripts/lib/create-issue-final-acceptance-contract.ts",
+    "scripts/lib/create-issue-final-acceptance.ts",
+    "scripts/lib/create-issue-github-artifact-authority.ts",
+    "scripts/lib/create-issue-next-action.ts",
+    "scripts/lib/create-issue-stage-lifecycle.ts",
+    "scripts/lib/create-issue-stage-lifecycle.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-cli.ts",
+    "scripts/lib/graphql-quota-github-read-inventory.json",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "denylist": [
+    "vendor/",
+    "packages/core/",
+    "secrets/",
+    "credentials/"
+  ],
+  "allowed_roots": [
+    ".cursor/rules/",
+    ".cursor/skills/create-issue-draft/",
+    "scripts/",
+    "docs/",
+    "prompts/",
+    "tests/external-output-references/"
+  ],
+  "source_revision": "28a8b0afa13238178aecf9bc1e0cfd915175c940"
+}
