@@ -240,15 +240,15 @@ invocation detail.
 | [`publish-issue-draft`](.cursor/skills/publish-issue-draft/SKILL.md) | publish an existing tracked draft |
 | [`switch-pack-reviewer`](.cursor/skills/switch-pack-reviewer/SKILL.md) | change the configured reviewer |
 
-For an existing `orchestrator-pack` Issue, explicit implementation wording such
-as `<Issue> execute`, `<Issue> выполни задачу`, `<Issue> выполни Issue`, or
-`<Issue> доделай Issue` loads `execute-issue-with-gpt`, even when `manager` /
-`менеджер` also appears. Exact implementation-review wording such as
-`PR #N review`, `review PR #N`, `pack review #N`, or `Issue #N review`
-loads `review-pr-with-gpt`; for an Issue target the manager, not the router,
-proves that exactly one open implementation PR closes that Issue before any
-review effect. Existing-Issue `<Issue> manager`, `<Issue> менеджер`,
-`<Issue> continue review`, `<Issue> продолжи ревью`, and explicit task-spec
-review continuation remain with `create-issue-draft`. Ordinary discussion that
+For an existing `orchestrator-pack` Issue, `<Issue> manager`, `<Issue> менеджер`,
+`<Issue> continue review`, and `<Issue> продолжи ревью` load
+`create-issue-draft`. Explicit implementation wording such as `<Issue> execute`,
+`<Issue> выполни задачу`, `<Issue> выполни Issue`, or `<Issue> доделай Issue`
+loads `execute-issue-with-gpt`, even when `manager` / `менеджер` also appears.
+Exact implementation-review wording such as `PR #N review`, `review PR #N`,
+`pack review #N`, or `Issue #N review` loads `review-pr-with-gpt`; for an
+Issue target the manager, not the router, proves that exactly one open
+implementation PR closes that Issue before any review effect. Explicit task-spec
+review continuation remains with `create-issue-draft`. Ordinary discussion that
 merely mentions `review`, `manager`, or `менеджер` without an exact Issue/PR
 target does not activate these shorthands.
