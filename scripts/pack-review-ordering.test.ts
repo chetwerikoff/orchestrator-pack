@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { runProcess } from './kernel/subprocess.ts';
 import { startPackReview } from './pack-review-runner.ts';
 import {
   createPackReviewRun,
@@ -12,6 +13,21 @@ import {
   setPackReviewRunTerminal,
 } from './lib/pack-review-run-store.ts';
 import { beginSmokeOrdering } from './worker-smoke-run.ts';
+import {
+  resolveSmokeRunArtifactDir,
+  SMOKE_REPORT_PRODUCER,
+  type SmokeReport,
+} from './lib/worker-smoke-core.ts';
+import {
+  bindSmokeTerminalHandle,
+  createSmokeLifecycleReservation,
+  createSmokeNoExecutionLifecycle,
+  markSmokeLauncherTerminalized,
+} from './lib/worker-smoke-lifecycle.ts';
+import {
+  smokeRunFinalEvidencePath,
+  writeWorkerSmokeRunFinalEvidence,
+} from './lib/worker-smoke-receipt.ts';
 import { reviewStageDisposition } from './pr2-foundation/post-review-smoke.ts';
 import {
   assertIndependentSmokeAdmission,
@@ -58,6 +74,244 @@ describe('Issue #1436 smoke/review ordering', () => {
     return { options, authority };
   }
 
+  const productionOrderingIssueBody = [
+    '```complexity-tier',
+    'tier: T3',
+    'advisory-prior: T3',
+    '```',
+    '',
+    '```smoke-test-plan',
+    'scenarios:',
+    '  - action: hermetic stale-owner check | expected: PASS',
+    '```',
+  ].join('\n');
+
+  async function sigkillNodeSupervisor(): Promise<number> {
+    let pid = 0;
+    const result = await runProcess({
+      command: process.execPath,
+      args: ['-e', 'setInterval(() => {}, 1000)'],
+      onSpawn: (spawnedPid) => {
+        pid = spawnedPid;
+        process.kill(spawnedPid, 'SIGKILL');
+      },
+    });
+    expect(result.outcome).toBe('signal');
+    expect(result.signal).toBe('SIGKILL');
+    if (!Number.isInteger(pid) || pid <= 0) throw new Error('test supervisor pid missing');
+    return pid;
+  }
+
+  function beginWorkerOwnedAt(root: string, prNumber: number, attemptId: string) {
+    return beginSmokeOrdering({
+      command: 'run',
+      issueNumber: 1936,
+      prNumber,
+      headSha: HEAD,
+      issueBodyFile: join(root, 'issue.md'),
+      smokeComplexity: 'routine',
+      smokeActor: 'worker-owned',
+      repoRoot: root,
+      cwd: root,
+      dryRun: true,
+      json: true,
+      reviewId: '',
+      reviewHeadSha: '',
+    }, productionOrderingIssueBody, { attemptId, supervisorPid: process.pid, runId: attemptId });
+  }
+
+  it('persists a terminalized worker-owned PASS before refusing a redundant start', () => {
+    const { options, authority } = authorityFixture();
+    const started = commitSmokeOrderingTransition({
+      prNumber: 1436, expectedTransitionSeq: authority.transitionSeq, actor: 'worker-owned', headSha: HEAD,
+      status: 'started', attemptId: 'attempt-a', supervisorPid: 41001, runId: 'attempt-a', options,
+    });
+    expect(() => commitSmokeOrderingTransition({
+      prNumber: 1436, expectedTransitionSeq: started.transitionSeq, actor: 'worker-owned', headSha: HEAD,
+      status: 'started', attemptId: 'attempt-b', supervisorPid: 41002, runId: 'attempt-b',
+      ownerStateEvidence: {
+        attemptId: 'attempt-a', supervisorPid: 41001, runId: 'attempt-a', supervisorAlive: false,
+        cleanupSafe: false, authoritativeResult: 'PASS',
+      },
+      options,
+    })).toThrow('smoke_ordering_worker_owned_already_passed');
+    const persisted = readPackReviewAuthority(1436, options);
+    expect(persisted?.transitionSeq).toBe(started.transitionSeq + 1);
+    expect(persisted?.smokeOrdering?.workerOwned).toMatchObject({ attemptId: 'attempt-a', runId: 'attempt-a', status: 'passed' });
+  });
+
+  it('keeps a dead run owner in-progress until runtime cleanup is proven safe', () => {
+    const { options, authority } = authorityFixture();
+    const started = commitSmokeOrderingTransition({
+      prNumber: 1436, expectedTransitionSeq: authority.transitionSeq, actor: 'worker-owned', headSha: HEAD,
+      status: 'started', attemptId: 'attempt-a', supervisorPid: 42001, runId: 'attempt-a', options,
+    });
+    expect(() => commitSmokeOrderingTransition({
+      prNumber: 1436, expectedTransitionSeq: started.transitionSeq, actor: 'worker-owned', headSha: HEAD,
+      status: 'started', attemptId: 'attempt-b', supervisorPid: 42002, runId: 'attempt-b',
+      ownerStateEvidence: {
+        attemptId: 'attempt-a', supervisorPid: 42001, runId: 'attempt-a', supervisorAlive: false, cleanupSafe: false,
+      },
+      options,
+    })).toThrow('smoke_ordering_worker_owned_in_progress');
+    expect(readPackReviewAuthority(1436, options)?.smokeOrdering?.workerOwned).toMatchObject({ attemptId: 'attempt-a', status: 'started' });
+  });
+
+  it('reclaims a dead run owner only after cleanup-safe evidence', () => {
+    const { options, authority } = authorityFixture();
+    const started = commitSmokeOrderingTransition({
+      prNumber: 1436, expectedTransitionSeq: authority.transitionSeq, actor: 'worker-owned', headSha: HEAD,
+      status: 'started', attemptId: 'attempt-a', supervisorPid: 43001, runId: 'attempt-a', options,
+    });
+    const replacement = commitSmokeOrderingTransition({
+      prNumber: 1436, expectedTransitionSeq: started.transitionSeq, actor: 'worker-owned', headSha: HEAD,
+      status: 'started', attemptId: 'attempt-b', supervisorPid: 43002, runId: 'attempt-b',
+      ownerStateEvidence: {
+        attemptId: 'attempt-a', supervisorPid: 43001, runId: 'attempt-a', supervisorAlive: false, cleanupSafe: true,
+      },
+      options,
+    });
+    expect(replacement.smokeOrdering?.workerOwned).toMatchObject({ attemptId: 'attempt-b', runId: 'attempt-b', status: 'started' });
+    expect(() => commitSmokeOrderingTransition({
+      prNumber: 1436, expectedTransitionSeq: replacement.transitionSeq, actor: 'worker-owned', headSha: HEAD,
+      status: 'failed', failureKind: 'retryable', attemptId: 'attempt-a', supervisorPid: 43001, runId: 'attempt-a', options,
+    })).toThrow('smoke_ordering_worker_owned_owner_mismatch');
+  });
+
+  it('reconciles a real SIGKILLed supervisor from exact launcher final evidence', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pack-review-ordering-sigkill-final-'));
+    roots.push(root);
+    const storeRoot = join(root, 'review-store');
+    const options: PackReviewAuthorityOptions = { storeRoot };
+    const prNumber = 19360;
+    const runId = 'attempt-sigkill-final';
+    const supervisorPid = await sigkillNodeSupervisor();
+    let authority = initializePackReviewAuthority({
+      prNumber,
+      headSha: HEAD,
+      tier: 'T3',
+      capMapVersion: PACK_REVIEW_CAP_MAP_VERSION,
+      options,
+    });
+    authority = commitSmokeOrderingTransition({
+      prNumber,
+      expectedTransitionSeq: authority.transitionSeq,
+      actor: 'worker-owned',
+      headSha: HEAD,
+      status: 'started',
+      attemptId: runId,
+      supervisorPid,
+      runId,
+      options,
+    });
+    const artifactDir = resolveSmokeRunArtifactDir(root, runId);
+    createSmokeNoExecutionLifecycle({
+      runId,
+      artifactDir,
+      issueNumber: 1936,
+      prNumber,
+      headSha: HEAD,
+      supervisorPid,
+      nowMs: 1,
+    });
+    const finalReport: SmokeReport = {
+      result: 'PASS',
+      issueNumber: 1936,
+      prNumber,
+      headSha: HEAD,
+      scenarios: [{
+        action: 'carry prior tuple',
+        expected: 'already proven',
+        observed: `carried PASS from head ${NEXT_HEAD} comment 42; not freshly executed on ${HEAD}`,
+        outcome: 'pass',
+      }],
+      limitations: [],
+      trackedFilesUnmodified: true,
+      terminalCleanup: 'not_started_no_execution',
+      environmentNotes: ['smoke-execution=carry-only'],
+      producer: SMOKE_REPORT_PRODUCER,
+      orcaExecutable: 'fixture-adapter',
+    };
+    writeWorkerSmokeRunFinalEvidence({ artifactDir, runId, mode: 'no_execution', report: finalReport, nowMs: 2 });
+    markSmokeLauncherTerminalized({
+      artifactDir,
+      runId,
+      finalEvidencePath: smokeRunFinalEvidencePath(artifactDir),
+      nowMs: 3,
+    });
+
+    const previousStoreRoot = process.env.PACK_REVIEW_RUN_STORE_ROOT;
+    process.env.PACK_REVIEW_RUN_STORE_ROOT = storeRoot;
+    try {
+      expect(() => beginWorkerOwnedAt(root, prNumber, 'attempt-replacement'))
+        .toThrow('smoke_ordering_worker_owned_already_passed');
+      expect(readPackReviewAuthority(prNumber, options)?.smokeOrdering?.workerOwned).toMatchObject({
+        attemptId: runId,
+        supervisorPid,
+        runId,
+        status: 'passed',
+      });
+    } finally {
+      if (previousStoreRoot === undefined) delete process.env.PACK_REVIEW_RUN_STORE_ROOT;
+      else process.env.PACK_REVIEW_RUN_STORE_ROOT = previousStoreRoot;
+    }
+  });
+
+  it('keeps a real SIGKILLed owner blocked when its bound terminal is unresolved', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pack-review-ordering-sigkill-bound-'));
+    roots.push(root);
+    const storeRoot = join(root, 'review-store');
+    const options: PackReviewAuthorityOptions = { storeRoot };
+    const prNumber = 19361;
+    const runId = 'attempt-sigkill-bound';
+    const supervisorPid = await sigkillNodeSupervisor();
+    let authority = initializePackReviewAuthority({
+      prNumber,
+      headSha: HEAD,
+      tier: 'T3',
+      capMapVersion: PACK_REVIEW_CAP_MAP_VERSION,
+      options,
+    });
+    authority = commitSmokeOrderingTransition({
+      prNumber,
+      expectedTransitionSeq: authority.transitionSeq,
+      actor: 'worker-owned',
+      headSha: HEAD,
+      status: 'started',
+      attemptId: runId,
+      supervisorPid,
+      runId,
+      options,
+    });
+    const artifactDir = resolveSmokeRunArtifactDir(root, runId);
+    createSmokeLifecycleReservation({
+      runId,
+      artifactDir,
+      issueNumber: 1936,
+      prNumber,
+      headSha: HEAD,
+      supervisorPid,
+      nowMs: 1,
+      scenarioCount: 1,
+    });
+    bindSmokeTerminalHandle(artifactDir, 'terminal-unresolved', 2);
+
+    const previousStoreRoot = process.env.PACK_REVIEW_RUN_STORE_ROOT;
+    process.env.PACK_REVIEW_RUN_STORE_ROOT = storeRoot;
+    try {
+      expect(() => beginWorkerOwnedAt(root, prNumber, 'attempt-replacement'))
+        .toThrow('smoke_ordering_worker_owned_in_progress');
+      expect(readPackReviewAuthority(prNumber, options)?.smokeOrdering?.workerOwned).toMatchObject({
+        attemptId: runId,
+        supervisorPid,
+        runId,
+        status: 'started',
+      });
+    } finally {
+      if (previousStoreRoot === undefined) delete process.env.PACK_REVIEW_RUN_STORE_ROOT;
+      else process.env.PACK_REVIEW_RUN_STORE_ROOT = previousStoreRoot;
+    }
+  });
   it('requires the operator-only signal for independent smoke after worker-owned pass', () => {
     const root = mkdtempSync(join(tmpdir(), 'pack-review-ordering-regression-'));
     roots.push(root);

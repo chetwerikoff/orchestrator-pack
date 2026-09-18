@@ -862,6 +862,22 @@ bound to that exact run id after cleanup and final report determination (or the
 terminal no-execution determination for a detached carry-only run). A child sealed
 completion pair by itself is never sufficient for PASS.
 
+For an unchanged exact `(action, expected)` tuple whose latest fresh same-head
+observation is BLOCKED because a scenario precondition or required evidence is
+unavailable, the launcher refuses another automatic attempt with
+`smoke_blocked_precondition_unchanged`. An operator may authorize exactly one
+otherwise-refused attempt with `--operator-override <reason>`; the bounded reason
+is recorded on that attempt's receipt and is not a standing waiver. A later
+harness failure that never freshly observes the tuple does not clear the older
+BLOCKED observation.
+
+Smoke-ordering ownership is exact-attempt bound. Exact launcher-terminalized
+evidence reconciles a stale `started` owner to its real PASS/FAIL/BLOCKED verdict
+before another start is considered. A dead owner without final evidence becomes
+`failed/aborted` only when runtime cleanup is already proven safe; a bound
+terminal or unresolved cleanup stays fail-closed and continues to refuse a new
+owner until the existing lifecycle/close authority proves cleanup.
+
 ### Operator adoption handoff
 
 When work changes operator-facing configuration, runtime selection, supervised

@@ -185,6 +185,47 @@ function parseSmokeScenarioLine(line, nextLine = '') {
   return null;
 }
 
+function findSmokePlanRuntimeIdentifiers(scenario) {
+  const value = `${scenario.action}\n${scenario.expected}`;
+  return [...new Set(
+    [...value.matchAll(/\b(?:term|run|msg)_[A-Za-z0-9][A-Za-z0-9._:-]*\b/gu)]
+      .map((match) => match[0]),
+  )];
+}
+
+function findSmokePlanMutableEvidenceTokens(scenario) {
+  const value = `${scenario.action}\n${scenario.expected}`;
+  const tokens = [];
+  for (const match of value.matchAll(/\bprompt_history\.json\b/giu)) {
+    tokens.push(match[0]);
+  }
+  for (const match of value.matchAll(/(?:^|[\s`"'(])((?:[^\s`"'|,;)]*[\\/])?\.orca-worker-smoke(?:[\\/][^\s`"'|,;)]*)?)/gimu)) {
+    tokens.push(match[1]);
+  }
+  for (const match of value.matchAll(/(?:^|[\s`"'(])((?:[^\s`"'|,;)]*[\\/])?\.cursor[\\/][^\s`"'|,;)]*(?:terminals?|sessions?)[\\/][^\s`"'|,;)]*)/giu)) {
+    tokens.push(match[1]);
+  }
+  return [...new Set(tokens)];
+}
+
+function findSmokePlanUnsupportedMetadata(raw) {
+  const violations = [];
+  const lines = String(raw ?? '').split(/\r?\n/u);
+  let scenarioOrdinal = 0;
+  for (const [index, line] of lines.entries()) {
+    const parsedScenario = parseSmokeScenarioLine(line, lines[index + 1]);
+    if (parsedScenario?.action && parsedScenario.expected) {
+      scenarioOrdinal += 1;
+      continue;
+    }
+    const match = line.match(/^\s*(fixture)\s*:/iu);
+    if (match) {
+      violations.push({ ordinal: Math.max(1, scenarioOrdinal), key: match[1].toLowerCase() });
+    }
+  }
+  return violations;
+}
+
 export function parseSmokeTestPlan(markdown) {
   const blocks = extractFencedBlocks(markdown);
   const raw = blocks.get('smoke-test-plan')?.[0];
@@ -258,6 +299,11 @@ export function checkSmokeTestPlan(markdown) {
     return { ok: errors.length === 0, errors, warnings, plan: null };
   }
 
+  const rawSmokePlan = blocks.get('smoke-test-plan')?.[0] ?? '';
+  for (const metadata of findSmokePlanUnsupportedMetadata(rawSmokePlan)) {
+    errors.push(`smoke-test-plan scenario ${metadata.ordinal} contains unsupported metadata key: ${metadata.key}`);
+  }
+
   const plan = parseSmokeTestPlan(markdown);
   if (!plan) {
     errors.push('smoke-test-plan fence is present but could not be parsed');
@@ -277,11 +323,22 @@ export function checkSmokeTestPlan(markdown) {
   }
 
   for (const [index, scenario] of plan.scenarios.entries()) {
+    const ordinal = index + 1;
     if (!scenario.action.trim()) {
-      errors.push(`smoke-test-plan scenario ${index + 1} is missing action`);
+      errors.push(`smoke-test-plan scenario ${ordinal} is missing action`);
     }
     if (!scenario.expected.trim()) {
-      errors.push(`smoke-test-plan scenario ${index + 1} is missing expected observable result`);
+      errors.push(`smoke-test-plan scenario ${ordinal} is missing expected observable result`);
+    }
+    for (const token of findSmokePlanRuntimeIdentifiers(scenario)) {
+      errors.push(
+        `smoke-test-plan scenario ${ordinal} contains run-owned runtime identifier literal: ${token}`,
+      );
+    }
+    for (const token of findSmokePlanMutableEvidenceTokens(scenario)) {
+      errors.push(
+        `smoke-test-plan scenario ${ordinal} references mutable runtime/session evidence: ${token}`,
+      );
     }
   }
 

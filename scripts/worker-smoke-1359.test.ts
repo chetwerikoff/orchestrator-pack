@@ -19,6 +19,7 @@ import {
   smokeCompletionPendingBodyPath,
   smokeCompletionSealPath,
   smokeDeliverySealedPath,
+  SMOKE_REPORT_PRODUCER,
 } from './lib/worker-smoke-core.ts';
 import {
   buildWorkerSmokeRunFailureReceipt,
@@ -1292,6 +1293,7 @@ describe('Issue #1933 detached bootstrap and no-execution regressions', () => {
     } = await import('./lib/worker-smoke-lifecycle.ts');
     const {
       smokeRunFinalEvidencePath,
+      writeWorkerSmokeReceipt,
       writeWorkerSmokeRunFinalEvidence,
     } = await import('./lib/worker-smoke-receipt.ts');
     const report = {
@@ -1308,11 +1310,13 @@ describe('Issue #1933 detached bootstrap and no-execution regressions', () => {
       trackedFilesUnmodified: true,
       limitations: [],
       environmentNotes: ['smoke-execution=carry-only'],
-      producer: 'worker-smoke-run',
+      producer: SMOKE_REPORT_PRODUCER,
       terminalCleanup: 'not_started_no_execution',
       orcaExecutable: 'test',
     } as never;
 
+    const previousReceiptRoot = process.env.WORKER_SMOKE_RECEIPT_ROOT;
+    process.env.WORKER_SMOKE_RECEIPT_ROOT = root;
     try {
       createSmokeNoExecutionLifecycle({
         runId,
@@ -1331,6 +1335,12 @@ describe('Issue #1933 detached bootstrap and no-execution regressions', () => {
       expect(evaluateSmokeLifecycleCleanliness(root).clean).toBe(false);
       expect(existsSync(smokeAdmissionLockPath(root))).toBe(false);
 
+      writeWorkerSmokeReceipt(report, {
+        attemptId: runId,
+        runId,
+        executionMode: 'carry-only',
+        publishedAt: '2026-09-18T00:00:00.000Z',
+      });
       const final = writeWorkerSmokeRunFinalEvidence({
         artifactDir,
         runId,
@@ -1365,6 +1375,8 @@ describe('Issue #1933 detached bootstrap and no-execution regressions', () => {
       });
       expect(existsSync(smokeAdmissionLockPath(root))).toBe(false);
     } finally {
+      if (previousReceiptRoot === undefined) delete process.env.WORKER_SMOKE_RECEIPT_ROOT;
+      else process.env.WORKER_SMOKE_RECEIPT_ROOT = previousReceiptRoot;
       rmSync(root, { recursive: true, force: true });
     }
   });
