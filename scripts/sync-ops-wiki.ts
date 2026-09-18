@@ -22,6 +22,7 @@ export const OPS_WIKI_EPISODE_DIR = 'episodes';
 export const DEFAULT_CONVERGENCE_TIMEOUT_MS = 30_000;
 export const DEFAULT_POLL_INTERVAL_MS = 200;
 export const DEFAULT_MCP_REQUEST_TIMEOUT_MS = 5_000;
+export const DEFAULT_MCP_READ_SNIPPET_LENGTH = 12_288;
 
 export type GitRunner = (cwd: string, args: readonly string[]) => { ok: boolean; stdout: string; stderr: string };
 export type OpsWikiMode = 'plan' | 'apply' | 'check';
@@ -1183,7 +1184,7 @@ export function createMcpWikiOpsClient(
         await ready;
         const result = jsonToolResult(await rpc('tools/call', {
           name: 'read',
-          arguments: { paths: path, related: options?.related === true, snippet_length: 3000 },
+          arguments: { paths: path, related: options?.related === true, snippet_length: DEFAULT_MCP_READ_SNIPPET_LENGTH },
         }));
         const container = result && typeof result === 'object' ? result as Record<string, unknown> : {};
         const rows = Array.isArray(result)

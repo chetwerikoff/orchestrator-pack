@@ -8,6 +8,7 @@ import {
   buildEscalationQueries,
   checkRepositoryMode,
   collectHeadings,
+  DEFAULT_MCP_READ_SNIPPET_LENGTH,
   createMcpWikiOpsClient,
   defaultGitRunner,
   episodeRelativePath,
@@ -616,9 +617,11 @@ describe('ops-wiki routing policy', () => {
 describe('ops-wiki production MCP seam', () => {
   it('uses the stateless Streamable HTTP contract and parses real read {results:[...]} payloads', async () => {
     const calls: string[] = [];
+    const snippetLengths: number[] = [];
     const client = createMcpWikiOpsClient('http://wiki-ops.test/mcp', async (_url, init) => {
-      const body = JSON.parse(String(init?.body)) as { method: string; id: number; params?: { name?: string } };
+      const body = JSON.parse(String(init?.body)) as { method: string; id: number; params?: { name?: string; arguments?: { snippet_length?: number } } };
       calls.push(body.method);
+      if (typeof body.params?.arguments?.snippet_length === 'number') snippetLengths.push(body.params.arguments.snippet_length);
       const result = body.method === 'initialize'
         ? { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'test', version: '1' } }
         : {
@@ -640,6 +643,7 @@ describe('ops-wiki production MCP seam', () => {
     const read = await client.read(OPS_WIKI_STATUS_NOTE, { related: false });
     expect(read).toMatchObject({ ok: true, path: OPS_WIKI_STATUS_NOTE });
     expect(calls).toEqual(['initialize', 'tools/call']);
+    expect(snippetLengths).toEqual([DEFAULT_MCP_READ_SNIPPET_LENGTH]);
   });
 
   it('bounds a non-returning production request', async () => {
