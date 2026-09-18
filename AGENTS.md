@@ -235,14 +235,20 @@ invocation detail.
 | [`discuss-with-gpt`](.cursor/skills/discuss-with-gpt/SKILL.md) | discuss or challenge with GPT |
 | [`create-issue-draft`](.cursor/skills/create-issue-draft/SKILL.md) | author a new task or handoff; for an existing Issue, standalone `manager` / `менеджер` or explicit task-authoring/review-continuation wording resumes this lifecycle |
 | [`execute-issue-with-gpt`](.cursor/skills/execute-issue-with-gpt/SKILL.md) | explicitly execute or continue implementation of an existing Issue through GPT; explicit implementation wording wins over a `manager` / `менеджер` noun in the same request |
+| [`review-pr-with-gpt`](.cursor/skills/review-pr-with-gpt/SKILL.md) | explicitly review an existing implementation PR, or review the implementation for an exact Issue whose unique open closing PR must be resolved by the manager before review effects |
 | [`study-external-source`](.cursor/skills/study-external-source/SKILL.md) | study an external repository or URL |
 | [`publish-issue-draft`](.cursor/skills/publish-issue-draft/SKILL.md) | publish an existing tracked draft |
 | [`switch-pack-reviewer`](.cursor/skills/switch-pack-reviewer/SKILL.md) | change the configured reviewer |
 
-For an existing `orchestrator-pack` Issue, `<Issue> manager`, `<Issue> менеджер`,
-`<Issue> continue review`, and `<Issue> продолжи ревью` load
-`create-issue-draft`. Explicit implementation wording such as `<Issue> execute`,
-`<Issue> выполни задачу`, `<Issue> выполни Issue`, or `<Issue> доделай Issue`
-loads `execute-issue-with-gpt`, even when `manager` / `менеджер` also appears.
-An ordinary discussion that merely mentions `manager` / `менеджер` without an
-existing Issue target does not activate the shorthand.
+For an existing `orchestrator-pack` Issue, explicit implementation wording such
+as `<Issue> execute`, `<Issue> выполни задачу`, `<Issue> выполни Issue`, or
+`<Issue> доделай Issue` loads `execute-issue-with-gpt`, even when `manager` /
+`менеджер` also appears. Exact implementation-review wording such as
+`PR #N review`, `review PR #N`, `pack review #N`, or `Issue #N review`
+loads `review-pr-with-gpt`; for an Issue target the manager, not the router,
+proves that exactly one open implementation PR closes that Issue before any
+review effect. Existing-Issue `<Issue> manager`, `<Issue> менеджер`,
+`<Issue> continue review`, `<Issue> продолжи ревью`, and explicit task-spec
+review continuation remain with `create-issue-draft`. Ordinary discussion that
+merely mentions `review`, `manager`, or `менеджер` without an exact Issue/PR
+target does not activate these shorthands.
