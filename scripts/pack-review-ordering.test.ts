@@ -58,6 +58,63 @@ describe('Issue #1436 smoke/review ordering', () => {
     return { options, authority };
   }
 
+  it('persists a terminalized worker-owned PASS before refusing a redundant start', () => {
+    const { options, authority } = authorityFixture();
+    const started = commitSmokeOrderingTransition({
+      prNumber: 1436, expectedTransitionSeq: authority.transitionSeq, actor: 'worker-owned', headSha: HEAD,
+      status: 'started', attemptId: 'attempt-a', supervisorPid: 41001, runId: 'attempt-a', options,
+    });
+    expect(() => commitSmokeOrderingTransition({
+      prNumber: 1436, expectedTransitionSeq: started.transitionSeq, actor: 'worker-owned', headSha: HEAD,
+      status: 'started', attemptId: 'attempt-b', supervisorPid: 41002, runId: 'attempt-b',
+      ownerStateEvidence: {
+        attemptId: 'attempt-a', supervisorPid: 41001, runId: 'attempt-a', supervisorAlive: false,
+        cleanupSafe: false, authoritativeResult: 'PASS',
+      },
+      options,
+    })).toThrow('smoke_ordering_worker_owned_already_passed');
+    const persisted = readPackReviewAuthority(1436, options);
+    expect(persisted?.transitionSeq).toBe(started.transitionSeq + 1);
+    expect(persisted?.smokeOrdering?.workerOwned).toMatchObject({ attemptId: 'attempt-a', runId: 'attempt-a', status: 'passed' });
+  });
+
+  it('keeps a dead run owner in-progress until runtime cleanup is proven safe', () => {
+    const { options, authority } = authorityFixture();
+    const started = commitSmokeOrderingTransition({
+      prNumber: 1436, expectedTransitionSeq: authority.transitionSeq, actor: 'worker-owned', headSha: HEAD,
+      status: 'started', attemptId: 'attempt-a', supervisorPid: 42001, runId: 'attempt-a', options,
+    });
+    expect(() => commitSmokeOrderingTransition({
+      prNumber: 1436, expectedTransitionSeq: started.transitionSeq, actor: 'worker-owned', headSha: HEAD,
+      status: 'started', attemptId: 'attempt-b', supervisorPid: 42002, runId: 'attempt-b',
+      ownerStateEvidence: {
+        attemptId: 'attempt-a', supervisorPid: 42001, runId: 'attempt-a', supervisorAlive: false, cleanupSafe: false,
+      },
+      options,
+    })).toThrow('smoke_ordering_worker_owned_in_progress');
+    expect(readPackReviewAuthority(1436, options)?.smokeOrdering?.workerOwned).toMatchObject({ attemptId: 'attempt-a', status: 'started' });
+  });
+
+  it('reclaims a dead run owner only after cleanup-safe evidence', () => {
+    const { options, authority } = authorityFixture();
+    const started = commitSmokeOrderingTransition({
+      prNumber: 1436, expectedTransitionSeq: authority.transitionSeq, actor: 'worker-owned', headSha: HEAD,
+      status: 'started', attemptId: 'attempt-a', supervisorPid: 43001, runId: 'attempt-a', options,
+    });
+    const replacement = commitSmokeOrderingTransition({
+      prNumber: 1436, expectedTransitionSeq: started.transitionSeq, actor: 'worker-owned', headSha: HEAD,
+      status: 'started', attemptId: 'attempt-b', supervisorPid: 43002, runId: 'attempt-b',
+      ownerStateEvidence: {
+        attemptId: 'attempt-a', supervisorPid: 43001, runId: 'attempt-a', supervisorAlive: false, cleanupSafe: true,
+      },
+      options,
+    });
+    expect(replacement.smokeOrdering?.workerOwned).toMatchObject({ attemptId: 'attempt-b', runId: 'attempt-b', status: 'started' });
+    expect(() => commitSmokeOrderingTransition({
+      prNumber: 1436, expectedTransitionSeq: replacement.transitionSeq, actor: 'worker-owned', headSha: HEAD,
+      status: 'failed', failureKind: 'retryable', attemptId: 'attempt-a', supervisorPid: 43001, runId: 'attempt-a', options,
+    })).toThrow('smoke_ordering_worker_owned_owner_mismatch');
+  });
   it('requires the operator-only signal for independent smoke after worker-owned pass', () => {
     const root = mkdtempSync(join(tmpdir(), 'pack-review-ordering-regression-'));
     roots.push(root);

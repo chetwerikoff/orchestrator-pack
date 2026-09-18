@@ -24,10 +24,21 @@ import {
   type WorkerSmokeCommentRecord,
   type WorkerSmokeTrustedTarget,
 } from './lib/worker-smoke-core.ts';
-import { computeSmokeCompletionBodyDigest } from './lib/worker-smoke-core-base.ts';
+import {
+  computeSmokeCompletionBodyDigest,
+  WORKER_SMOKE_CAUSE_FAMILIES,
+  smokeResultForWorkerSmokeCauseFamily,
+  workerSmokeCauseFamilyForHarnessReason,
+} from './lib/worker-smoke-core-base.ts';
 import { inspectSmokeProgress } from './lib/worker-smoke-lifecycle-base.ts';
 import { evaluateSmokeLifecycleCleanliness, SMOKE_LIFECYCLE_POLL_MS } from './lib/worker-smoke-lifecycle.ts';
-import { writeWorkerSmokeReceipt } from './lib/worker-smoke-receipt.ts';
+import {
+  evaluateSameHeadBlockedRetryAdmission,
+  listWorkerSmokeReceipts,
+  readWorkerSmokeReceipt,
+  verifySmokeRunReceipt,
+  writeWorkerSmokeReceipt,
+} from './lib/worker-smoke-receipt.ts';
 import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
 import type { RuntimeAdapter, RuntimeDispatchResult, RuntimeWorkerIdentity } from './runtime/contracts.ts';
 import {
@@ -37,6 +48,8 @@ import {
   exactClosingIssue,
   finalSmokeCommentSnapshotMatches,
   findVerifiedSmokeReceiptWitness,
+  finishSmokeOrderingBeforeDetachedTerminalization,
+  gitTrackedSmokeRuntimePaths,
   parsePaginatedSmokeComments,
   publishPrComment,
   reviewIndependentRequiredCiContexts,
@@ -164,6 +177,192 @@ function mutateMachineBlock(body: string, mutate: (block: string) => string): st
   return `${body.slice(0, start)}${mutate(body.slice(start, end))}${body.slice(end)}`;
 }
 
+describe('Issue #1936 truthful smoke evidence', () => {
+  it('keeps the cause vocabulary closed and maps harness reasons without prose classification', () => {
+    expect(WORKER_SMOKE_CAUSE_FAMILIES).toEqual([
+      'harness_observation_interrupted',
+      'harness_observation_timeout',
+      'harness_admission_refused',
+      'harness_head_mismatch',
+      'harness_dirty_worktree',
+      'scenario_precondition_unavailable',
+      'scenario_assertion_failed',
+      'scenario_evidence_missing',
+      'lifecycle_cleanup_failed',
+      'unknown',
+    ]);
+    expect(workerSmokeCauseFamilyForHarnessReason('runtime_cli_interrupted:SIGTERM')).toBe('harness_observation_interrupted');
+    expect(workerSmokeCauseFamilyForHarnessReason('runtime_timeout')).toBe('harness_observation_timeout');
+    expect(workerSmokeCauseFamilyForHarnessReason('trusted_target_head_mismatch:abc')).toBe('harness_head_mismatch');
+    expect(workerSmokeCauseFamilyForHarnessReason('tracked_smoke_runtime_state')).toBe('harness_dirty_worktree');
+    expect(workerSmokeCauseFamilyForHarnessReason('future prose-shaped reason')).toBe('unknown');
+    expect(smokeResultForWorkerSmokeCauseFamily('scenario_precondition_unavailable')).toBe('BLOCKED');
+    expect(smokeResultForWorkerSmokeCauseFamily('scenario_assertion_failed')).toBe('FAIL');
+    expect(smokeResultForWorkerSmokeCauseFamily('unknown')).toBe('FAIL');
+  });
+
+  it('fails multiple terminal non-PASS rows closed independent of row order', () => {
+    const rows: SmokeScenario[] = [
+      { action: 'precondition', expected: 'available', observed: 'missing', outcome: 'blocked', causeFamily: 'scenario_precondition_unavailable' },
+      { action: 'assertion', expected: 'match', observed: 'mismatch', outcome: 'fail', causeFamily: 'scenario_assertion_failed' },
+    ];
+    const first = normalizeSmokeReport({
+      result: 'BLOCKED', scenarios: rows, trackedFilesUnmodified: true, limitations: [],
+      environmentNotes: [], terminalCleanup: 'not_started',
+    }, { issueNumber: 1936, prNumber: 1945, headSha: HEAD_ONE });
+    const second = normalizeSmokeReport({
+      result: 'BLOCKED', scenarios: [...rows].reverse(), trackedFilesUnmodified: true, limitations: [],
+      environmentNotes: [], terminalCleanup: 'not_started',
+    }, { issueNumber: 1936, prNumber: 1945, headSha: HEAD_ONE });
+    expect(first.ok && first.report.result).toBe('FAIL');
+    expect(first.ok && first.report.causeFamily).toBe('unknown');
+    expect(second.ok && second.report.result).toBe('FAIL');
+    expect(second.ok && second.report.causeFamily).toBe('unknown');
+  });
+
+  it('keeps same-head attempt receipts append-only and verifies the exact attempt', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-receipts-1936-'));
+    const previous = process.env.WORKER_SMOKE_RECEIPT_ROOT;
+    process.env.WORKER_SMOKE_RECEIPT_ROOT = root;
+    try {
+      const blocked: SmokeReport = {
+        ...report('BLOCKED', [{
+          action: 'check dependency', expected: 'dependency available', observed: 'dependency unavailable',
+          outcome: 'blocked', causeFamily: 'scenario_precondition_unavailable',
+        }]),
+        causeFamily: 'scenario_precondition_unavailable',
+      };
+      const passed = report('PASS', [scenario('check dependency', 'dependency available', 'pass')]);
+      writeWorkerSmokeReceipt(blocked, {
+        attemptId: 'attempt-blocked', executionMode: 'carry-only', publishedAt: '2026-09-18T00:00:00.000Z',
+      });
+      const firstPath = join(root, 'pr-2001|' + HEAD_ONE + '|attempt-blocked.json');
+      const firstBytes = readFileSync(firstPath, 'utf8');
+      writeWorkerSmokeReceipt(passed, {
+        attemptId: 'attempt-pass', executionMode: 'carry-only', publishedAt: '2026-09-18T00:01:00.000Z',
+      });
+      expect(readFileSync(firstPath, 'utf8')).toBe(firstBytes);
+      expect(listWorkerSmokeReceipts(2001, HEAD_ONE).map((entry) => entry.attemptId)).toEqual(['attempt-blocked', 'attempt-pass']);
+      expect(readWorkerSmokeReceipt(2001, HEAD_ONE)?.attemptId).toBe('attempt-pass');
+      expect(verifySmokeRunReceipt(blocked, 'attempt-blocked')).toBe(true);
+      expect(verifySmokeRunReceipt(blocked, 'attempt-pass')).toBe(false);
+      expect(() => writeWorkerSmokeReceipt(
+        { ...passed, terminalHandle: undefined },
+        { attemptId: 'attempt-executed', runId: 'attempt-executed', executionMode: 'executed' },
+      )).toThrow('worker_smoke_receipt_executed_pass_requires_terminal_handle');
+    } finally {
+      if (previous === undefined) delete process.env.WORKER_SMOKE_RECEIPT_ROOT;
+      else process.env.WORKER_SMOKE_RECEIPT_ROOT = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a blocked tuple sticky across unrelated later attempts and makes override one-shot', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-retry-1936-'));
+    const previous = process.env.WORKER_SMOKE_RECEIPT_ROOT;
+    process.env.WORKER_SMOKE_RECEIPT_ROOT = root;
+    try {
+      const tuple = { action: 'probe prerequisite', expected: 'prerequisite exists' };
+      const blocked: SmokeReport = {
+        ...report('BLOCKED', [{ ...tuple, observed: 'not available', outcome: 'blocked', causeFamily: 'scenario_evidence_missing' }]),
+        causeFamily: 'scenario_evidence_missing',
+      };
+      writeWorkerSmokeReceipt(blocked, {
+        attemptId: 'blocked-a', executionMode: 'carry-only', publishedAt: '2026-09-18T00:00:00.000Z',
+      });
+      const harnessFailure: SmokeReport = {
+        ...report('FAIL', [{ action: 'launch harness', expected: 'starts', observed: 'interrupted', outcome: 'fail' }]),
+        causeFamily: 'harness_observation_interrupted',
+      };
+      writeWorkerSmokeReceipt(harnessFailure, {
+        attemptId: 'harness-b', executionMode: 'carry-only', attemptObservations: [], publishedAt: '2026-09-18T00:01:00.000Z',
+      });
+      let receipts = listWorkerSmokeReceipts(2001, HEAD_ONE);
+      expect(evaluateSameHeadBlockedRetryAdmission({ receipts, selectedScenarios: [tuple] }))
+        .toMatchObject({ allowed: false, reason: 'smoke_blocked_precondition_unchanged' });
+      expect(evaluateSameHeadBlockedRetryAdmission({
+        receipts, selectedScenarios: [tuple], operatorOverrideReason: 'operator confirmed one diagnostic retry',
+      })).toMatchObject({ allowed: true });
+      writeWorkerSmokeReceipt(harnessFailure, {
+        attemptId: 'override-harness-c', executionMode: 'carry-only', attemptObservations: [],
+        operatorOverrideReason: 'operator confirmed one diagnostic retry', publishedAt: '2026-09-18T00:02:00.000Z',
+      });
+      receipts = listWorkerSmokeReceipts(2001, HEAD_ONE);
+      expect(evaluateSameHeadBlockedRetryAdmission({ receipts, selectedScenarios: [tuple] }))
+        .toMatchObject({ allowed: false, reason: 'smoke_blocked_precondition_unchanged' });
+      writeWorkerSmokeReceipt(report('PASS', [{ ...tuple, observed: 'available now', outcome: 'pass' }]), {
+        attemptId: 'fresh-pass-d', executionMode: 'carry-only', publishedAt: '2026-09-18T00:03:00.000Z',
+      });
+      receipts = listWorkerSmokeReceipts(2001, HEAD_ONE);
+      expect(evaluateSameHeadBlockedRetryAdmission({ receipts, selectedScenarios: [tuple] })).toMatchObject({ allowed: true });
+    } finally {
+      if (previous === undefined) delete process.env.WORKER_SMOKE_RECEIPT_ROOT;
+      else process.env.WORKER_SMOKE_RECEIPT_ROOT = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects plan-owned runtime/session evidence and unsupported fixture metadata', () => {
+    const runtimeId = checkSmokeTestPlan(planBody([{ action: 'inspect term_fixture123', expected: 'stable result' }]));
+    expect(runtimeId.ok).toBe(false);
+    expect(runtimeId.errors.join('\n')).toContain('term_fixture123');
+    const mutable = checkSmokeTestPlan(planBody([{ action: 'read prompt_history.json', expected: 'stable result' }]));
+    expect(mutable.ok).toBe(false);
+    expect(mutable.errors.join('\n')).toContain('prompt_history.json');
+    const fixture = checkSmokeTestPlan([
+      '```behavior-kind', 'action-producing', '```', '', '```smoke-test-plan', 'scenarios:',
+      '  - action: deterministic check | expected: deterministic result', '    fixture: run-owned', '```',
+    ].join('\n'));
+    expect(fixture.ok).toBe(false);
+    expect(fixture.errors.join('\n')).toContain('unsupported metadata key: fixture');
+    expect(checkSmokeTestPlan(planBody([{ action: 'run deterministic check', expected: 'deterministic result' }])).ok).toBe(true);
+  });
+
+  it('treats only tracked or staged .orca-worker-smoke state as repository dirtiness', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-tracked-state-'));
+    try {
+      expect(runProcessSync({ command: 'git', args: ['init'], cwd: root }).ok).toBe(true);
+      mkdirSync(join(root, '.orca-worker-smoke'), { recursive: true });
+      writeFileSync(join(root, '.orca-worker-smoke', 'lifecycle.json'), '{}\n', 'utf8');
+      expect(gitTrackedSmokeRuntimePaths(root)).toEqual([]);
+      expect(runProcessSync({ command: 'git', args: ['add', '-f', '.orca-worker-smoke/lifecycle.json'], cwd: root }).ok).toBe(true);
+      expect(gitTrackedSmokeRuntimePaths(root)).toEqual(['.orca-worker-smoke/lifecycle.json']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps worktree-local .env non-authoritative for smoke profile resolution', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-profile-env-'));
+    const priorCwd = process.cwd();
+    try {
+      writeFileSync(join(root, '.env'), [
+        'PACK_EXECUTOR_SMOKE_ROUTINE_AGENT=unsupported-agent',
+        'PACK_EXECUTOR_SMOKE_ROUTINE_MODEL=wrong-model',
+        'PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT=wrong-effort',
+      ].join('\n'), 'utf8');
+      process.chdir(root);
+      const profile = resolveSmokeExecutorProfile('routine', {
+        PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'cursor',
+        PACK_EXECUTOR_SMOKE_ROUTINE_MODEL: 'fixture-routine-model',
+        PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT: 'fixture-routine-effort',
+      });
+      expect(profile.command).toBe("agent --model 'fixture-routine-model-fixture-routine-effort'");
+    } finally {
+      process.chdir(priorCwd);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('finishes ordering before detached final evidence is terminalized', () => {
+    const calls: string[] = [];
+    finishSmokeOrderingBeforeDetachedTerminalization(
+      () => calls.push('ordering'),
+      () => calls.push('terminalize'),
+    );
+    expect(calls).toEqual(['ordering', 'terminalize']);
+  });
+});
 describe('review-independent required CI facts', () => {
   it('excludes the pack-review authority while preserving required CI contexts', () => {
     expect(reviewIndependentRequiredCiContexts([
