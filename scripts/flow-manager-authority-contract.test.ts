@@ -1110,3 +1110,103 @@ describe('Issue #1752 startup allowance covers canonical admission', () => {
   });
 });
 
+
+
+describe('Issue #1953 manager-controlled Browser-GPT review convergence contract', () => {
+  const executeSkill = readFileSync(
+    new URL('../.cursor/skills/execute-issue-with-gpt/SKILL.md', import.meta.url),
+    'utf8',
+  );
+  const executionRunbook = readFileSync(
+    new URL('../docs/chatgpt-task-execution-runbook.md', import.meta.url),
+    'utf8',
+  );
+  const orchestrationRunbook = readFileSync(
+    new URL('../docs/orchestration-runbook.md', import.meta.url),
+    'utf8',
+  );
+  const smokeRunbook = readFileSync(
+    new URL('../docs/worker-smoke-testing.md', import.meta.url),
+    'utf8',
+  );
+
+  it('routes candidate-complete Browser-GPT implementation into the canonical manager review phase', () => {
+    expect(executeSkill).toContain('reusable manager-owned PR-review convergence phase');
+    expect(executeSkill).toContain('npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>');
+    expect(executeSkill).toContain('does not report overall `VERIFIED_COMPLETE`');
+    expect(executionRunbook).toContain('## Manager-owned PR-review convergence');
+    expect(executionRunbook).toContain(
+      'npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>',
+    );
+    expect(executionRunbook).toContain(
+      'does not create scheduler `ready_for_review`, WorkerReport/WorkerStatus',
+    );
+  });
+
+  it('requires three fresh reviewer chats and one fresh fixer per findings round', () => {
+    expect(executionRunbook).toContain('`PACK_GPT_BROWSER_PROJECT_URL` is present');
+    expect(executionRunbook).toContain('`PACK_GPT_BROWSER_CHAT_URL` is absent');
+    expect(executionRunbook).toContain(
+      'source slots `source-01..03` as independent fresh ChatGPT project chats',
+    );
+    expect(executionRunbook).toContain(
+      'implementation conversation, fixer conversations, and sibling reviewer conversations are never reused as reviewer sources',
+    );
+    expect(executionRunbook).toContain(
+      'one **fresh GPT fixer conversation for that findings-bearing round**',
+    );
+    expect(executionRunbook).toContain(
+      'reviewer-authored runner-bound GitHub source comments plus canonical runner state are the progression authority',
+    );
+  });
+
+  it('preserves logical-round caps and the existing 15-minute recovery authority', () => {
+    expect(executionRunbook).toContain('T1 -> 1 logical round x 3 GPT sources');
+    expect(executionRunbook).toContain('T2 -> 1 logical round x 3 GPT sources');
+    expect(executionRunbook).toContain('T3 -> 2 logical rounds x 3 GPT sources');
+    expect(executionRunbook).toContain('do not launch a cap+1 round');
+    expect(executionRunbook).toContain(
+      'scripts/pack-review-runner.ts reconcile \\',
+    );
+    expect(executionRunbook).toContain(
+      'still generating below 15 minutes remains active and receives no replacement',
+    );
+    expect(executionRunbook).not.toContain('16-minute');
+  });
+
+  it('ends manager work at an exact settled-review handoff and keeps overall completion supervisor-owned', () => {
+    expect(executionRunbook).toContain('### Settled-review manager handoff');
+    expect(executionRunbook).toContain('next legal action: **launch local independent-smoke worker**');
+    expect(executionRunbook).toContain('The manager does not run independent smoke itself');
+    expect(executionRunbook).toContain(
+      'Overall `VERIFIED_COMPLETE` is possible only after independent smoke passes on the final exact head',
+    );
+    expect(orchestrationRunbook).toContain(
+      'manager whole-role Task/Dispatch handoff',
+    );
+    expect(orchestrationRunbook).toContain(
+      'orchestrator launches/reuses a local supervised worker as independent-smoke parent',
+    );
+    expect(orchestrationRunbook).toContain(
+      'does not wait for scheduler\n`ready_for_review`',
+    );
+  });
+
+  it('keeps ordinary worker smoke-before-review while exempting only the manager-controlled Browser-GPT path', () => {
+    const ordinaryStart = smokeRunbook.indexOf('### Ordinary local coding-worker path');
+    const managerStart = smokeRunbook.indexOf('### Manager-controlled Browser-GPT path');
+    const nextSection = smokeRunbook.indexOf('## Pre-smoke prerequisite preparation', managerStart);
+    expect(ordinaryStart).toBeGreaterThanOrEqual(0);
+    expect(managerStart).toBeGreaterThan(ordinaryStart);
+    expect(nextSection).toBeGreaterThan(managerStart);
+
+    const ordinary = smokeRunbook.slice(ordinaryStart, managerStart);
+    const manager = smokeRunbook.slice(managerStart, nextSection);
+    expect(ordinary).toContain('implementation\n  -> worker-owned smoke PASS\n  -> pack-review cycle');
+    expect(manager).toContain('manager-owned canonical pack-review cycle');
+    expect(manager).toContain('There is no synthetic pre-review worker-owned smoke on this path');
+    expect(manager).toContain('supervisor launches local independent-smoke parent');
+    expect(manager).toContain('independent finding: local worker fix + fresh independent smoke');
+    expect(manager).not.toContain('-> worker-owned smoke PASS');
+  });
+});
