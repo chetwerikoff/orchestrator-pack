@@ -1,6 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { defaultGhTransport } from './create-issue-stage-record-gh.ts';
+import { defaultGhTransport, fetchIssueRevision } from './create-issue-stage-record-gh.ts';
 import {
   publishSettledStageRecord,
   retryPendingEvents,
@@ -13,7 +13,7 @@ import {
   produceAcceptanceArtifacts,
   reconcileCreateIssueStage,
 } from './create-issue-stage-record-artifacts.ts';
-import { createIssueNextAction, type CreateIssueActionBinding } from './create-issue-next-action.ts';
+import { createIssueNextAction, createIssueStaleNextAction, type CreateIssueActionBinding } from './create-issue-next-action.ts';
 import type { LifecycleReviewStage } from './create-issue-stage-lifecycle.ts';
 import type { PublicActor } from './create-issue-stage-record-types.ts';
 import type { ReviewLaneOverride } from './review-lane-selector.ts';
@@ -59,6 +59,9 @@ interface StageFinalizeCliOptions extends JournalTailCliOptions {
   operatorVerdictByteLength?: string;
   operatorFindingCount?: string;
   operatorReason?: string;
+  expectedSourceRevision?: string;
+  expectedStage?: LifecycleReviewStage;
+  expectedStageAttemptId?: string;
 }
 
 interface FinalAcceptanceCliOptions extends JournalTailCliOptions {
@@ -315,6 +318,23 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
         opts.phase = phase;
         break;
       }
+      case '--expected-source-revision':
+        requireArtifactCommand(arg);
+        opts.expectedSourceRevision = String(argv[++i] ?? '');
+        break;
+      case '--expected-stage': {
+        requireArtifactCommand(arg);
+        const expectedStage = String(argv[++i] ?? '');
+        if (expectedStage !== 'competitive' && expectedStage !== 'architectural-review' && expectedStage !== 'architectural-lens' && expectedStage !== 'architectural') {
+          throw new Error('--expected-stage is invalid');
+        }
+        opts.expectedStage = expectedStage;
+        break;
+      }
+      case '--expected-stage-attempt-id':
+        requireArtifactCommand(arg);
+        opts.expectedStageAttemptId = String(argv[++i] ?? '');
+        break;
       case '--operator-issue-number':
         requireArtifactCommand(arg);
         opts.operatorIssueNumber = String(argv[++i] ?? '');
@@ -441,6 +461,120 @@ function parseFinalAcceptanceArgs(argv: string[]): FinalAcceptanceCliOptions {
   return opts;
 }
 
+
+function canonicalAttemptPaths(reviewDir: string, requested: readonly string[]): string[] {
+  if (requested.length > 0) return [...requested];
+  try {
+    return readdirSync(reviewDir)
+      .filter((name) => /^attempt-[0-9]{3}\.json$/.test(name))
+      .sort()
+      .map((name) => join(reviewDir, name));
+  } catch {
+    return [];
+  }
+}
+
+function artifactBindingFromState(
+  opts: StageFinalizeCliOptions,
+  reviewDir: string,
+  issueNumber: number,
+): CreateIssueActionBinding | null {
+  let liveRevision = '';
+  try {
+    const live = fetchIssueRevision(defaultGhTransport(), opts.repo, issueNumber);
+    liveRevision = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i.exec(live.body)?.[1] ?? '';
+  } catch {
+    return null;
+  }
+  const candidates = canonicalAttemptPaths(reviewDir, opts.stageEvidencePaths)
+    .flatMap((path) => {
+      try {
+        const value = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+        const stage = value.stage;
+        if (stage !== 'competitive' && stage !== 'architectural-review' && stage !== 'architectural-lens' && stage !== 'architectural') return [];
+        const sequence = Number(value.stageSequence);
+        const attempt = typeof value.stageAttemptId === 'string' ? value.stageAttemptId : '';
+        const revision = typeof value.sourceRevision === 'string' ? value.sourceRevision : '';
+        return Number.isInteger(sequence) && attempt && revision
+          ? [{ sequence, stage, attempt, revision }]
+          : [];
+      } catch {
+        return [];
+      }
+    })
+    .sort((left, right) => right.sequence - left.sequence);
+  const latest = candidates[0];
+  if (!latest || !liveRevision) return null;
+  return {
+    repository: opts.repo,
+    issueNumber,
+    sourceRevision: liveRevision,
+    stage: latest.stage,
+    stageAttemptId: latest.attempt,
+  };
+}
+
+function artifactCommandArgv(
+  command: 'produce-artifacts' | 'check-artifacts',
+  opts: StageFinalizeCliOptions,
+  reviewDir: string,
+  issueNumber: number,
+  binding: CreateIssueActionBinding,
+): string[] {
+  const argv = [
+    'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+    command,
+    '--repo', opts.repo,
+    '--issue-number', String(issueNumber),
+    '--review-dir', reviewDir,
+    '--phase', opts.phase ?? 'final-acceptance',
+    '--expected-source-revision', binding.sourceRevision,
+    '--expected-stage', binding.stage,
+    '--expected-stage-attempt-id', binding.stageAttemptId ?? '',
+    '--json',
+  ];
+  for (const path of opts.stageEvidencePaths) argv.push('--stage-evidence', path);
+  for (const path of opts.claudeProducerEvidencePaths) argv.push('--claude-producer-evidence', path);
+  if (opts.waiverPath) argv.push('--waiver', opts.waiverPath);
+  if (opts.outputDir) argv.push('--output-dir', opts.outputDir);
+  return argv;
+}
+
+function staleArtifactBinding(
+  opts: StageFinalizeCliOptions,
+  reviewDir: string,
+  issueNumber: number,
+): ReturnType<typeof createIssueStaleNextAction> | null {
+  if (!opts.expectedSourceRevision && !opts.expectedStage && !opts.expectedStageAttemptId) return null;
+  if (!opts.expectedSourceRevision || !opts.expectedStage || !opts.expectedStageAttemptId) {
+    throw new Error('expected action binding requires revision, stage, and stage-attempt-id together');
+  }
+  const expected: CreateIssueActionBinding = {
+    repository: opts.repo,
+    issueNumber,
+    sourceRevision: opts.expectedSourceRevision,
+    stage: opts.expectedStage,
+    stageAttemptId: opts.expectedStageAttemptId,
+  };
+  const observed = artifactBindingFromState(opts, reviewDir, issueNumber);
+  if (observed
+    && observed.repository.toLowerCase() === expected.repository.toLowerCase()
+    && observed.issueNumber === expected.issueNumber
+    && observed.sourceRevision.toLowerCase() === expected.sourceRevision.toLowerCase()
+    && observed.stage === expected.stage
+    && observed.stageAttemptId === expected.stageAttemptId) {
+    return null;
+  }
+  return createIssueStaleNextAction({
+    binding: expected,
+    observed: observed ?? {
+      repository: opts.repo,
+      issueNumber,
+    },
+    nextAction: null,
+  });
+}
+
 export function runStageFinalizeCli(argv: string[]): number {
   return runParsedCli(argv, 'create-issue-stage-finalize', parseStageFinalizeArgs, (opts) => {
     if (opts.command === 'reconcile-stage') {
@@ -488,7 +622,11 @@ export function runStageFinalizeCli(argv: string[]): number {
               '--repo', opts.repo,
               '--issue-number', String(issueNumber),
               '--review-dir', reviewDir,
+              '--stage-evidence', stageEvidencePath,
               '--phase', result.stage === 'architectural' ? 'final-acceptance' : 'pre-lens',
+              '--expected-source-revision', result.sourceRevision,
+              '--expected-stage', result.stage,
+              '--expected-stage-attempt-id', result.stageAttemptId,
               '--json',
             ],
           });
@@ -508,6 +646,13 @@ export function runStageFinalizeCli(argv: string[]): number {
 
     if (opts.command === 'produce-artifacts' || opts.command === 'check-artifacts') {
       const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
+      const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
+      const stale = staleArtifactBinding(opts, reviewDir, issueNumber);
+      if (stale) {
+        if (opts.json) console.log(JSON.stringify(stale));
+        else process.stderr.write('stale_next_action\n');
+        return 1;
+      }
       const tierIntakePath = opts.tierIntakePath?.trim() || join(reviewDir, 'tier-intake.json');
       const stageEvidencePaths = opts.stageEvidencePaths;
       const authorDispositionsPath = opts.authorDispositionsPath?.trim() || join(reviewDir, 'author-dispositions.json');
@@ -526,7 +671,24 @@ export function runStageFinalizeCli(argv: string[]): number {
       const result = opts.command === 'produce-artifacts'
         ? produceAcceptanceArtifacts(artifactOptions)
         : inspectAcceptanceArtifacts(artifactOptions);
-      if (opts.json) console.log(JSON.stringify(result));
+      const binding = artifactBindingFromState(opts, reviewDir, issueNumber);
+      let nextAction = null;
+      if (binding && !result.ok) {
+        const errors = 'errors' in result ? result.errors : result.missing.map((item) => item.reason);
+        const external = errors.some((error) => error.includes('authority=author-owned')
+          || error.includes('operator')
+          || error.includes('stage_slot_consumed')
+          || error.includes('stale_next_action'));
+        if (!external) {
+          nextAction = createIssueNextAction({
+            kind: opts.command === 'check-artifacts' ? 'produce-acceptance-artifacts' : 'retry-acceptance-production',
+            binding,
+            argv: artifactCommandArgv('produce-artifacts', opts, reviewDir, issueNumber, binding),
+          });
+        }
+      }
+      const output = { ...result, nextAction };
+      if (opts.json) console.log(JSON.stringify(output));
       else if (!result.ok) {
         const messages = 'errors' in result ? result.errors : result.missing.map((item) => item.reason);
         process.stderr.write(`${messages.join('\n')}\n`);
