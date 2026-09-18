@@ -218,6 +218,18 @@ function isRecord(value: unknown): value is JsonRecord {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function canonicalJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJsonValue);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.keys(value).sort().map((key) => [key, canonicalJsonValue(value[key])]),
+  );
+}
+
+function jsonEqual(left: unknown, right: unknown): boolean {
+  return JSON.stringify(canonicalJsonValue(left)) === JSON.stringify(canonicalJsonValue(right));
+}
+
 function requiredString(value: unknown, label: string, errors: string[]): string {
   if (typeof value !== 'string' || value.trim() === '') {
     errors.push(`${label} is missing`);
@@ -1091,6 +1103,18 @@ function resolveAuthoritativeArtifact(
     errors,
   );
   if (!materialized) return null;
+  if (invocation.captureByteLength !== undefined && Number(invocation.captureByteLength) !== materialized.capture.byteLength) {
+    errors.push('stage evidence captureByteLength assertion disagrees with authoritative GitHub bytes for invocation ' + invocationId);
+    return null;
+  }
+  if (invocation.captureSha256 !== undefined && invocation.captureSha256 !== materialized.capture.sha256) {
+    errors.push('stage evidence captureSha256 assertion disagrees with authoritative GitHub bytes for invocation ' + invocationId);
+    return null;
+  }
+  if (invocation.rawFindingCount !== undefined && Number(invocation.rawFindingCount) !== materialized.capture.rawFindingCount) {
+    errors.push('stage evidence rawFindingCount assertion disagrees with authoritative GitHub bytes for invocation ' + invocationId);
+    return null;
+  }
   return {
     capture: materialized.capture,
     captureText: comment.body,
