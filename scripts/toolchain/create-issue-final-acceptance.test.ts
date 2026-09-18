@@ -11,7 +11,16 @@ const finalAcceptanceMock = vi.hoisted(() => ({
   })),
 }));
 
+const ghMock = vi.hoisted(() => ({
+  body: '# Issue 1192\n<!-- source-revision: r01 -->\n',
+  title: 'Issue 1192',
+}));
+
 vi.mock('../lib/create-issue-final-acceptance.ts', () => finalAcceptanceMock);
+vi.mock('../lib/create-issue-stage-record-gh.ts', () => ({
+  defaultGhTransport: () => ({ runGh: vi.fn() }),
+  fetchIssueRevision: () => ({ title: ghMock.title, body: ghMock.body, labels: [] }),
+}));
 
 import { runCli } from '../create-issue-final-acceptance.ts';
 
@@ -23,24 +32,34 @@ afterEach(() => {
 });
 
 describe('create-issue-final-acceptance CLI entry point', () => {
-  it('dispatches a complete acceptance invocation through the real CLI parser', () => {
+  it('derives a complete acceptance invocation from canonical producer artifacts', () => {
     const dir = mkdtempSync(join(tmpdir(), 'opk-1192-final-acceptance-'));
     tempDirs.push(dir);
-    const issueBodyPath = join(dir, 'issue.md');
-    const receiptPath = join(dir, 'stage-receipt.json');
-    writeFileSync(issueBodyPath, '# Issue 1192\nr01\n');
-    writeFileSync(receiptPath, '{}\n');
+    const snapshotPath = join(dir, 'issue-r01-body.json');
+    const receiptPath = join(dir, 'stage-completeness-receipt-terminal.json');
+    writeFileSync(snapshotPath, JSON.stringify({
+      schema: 'create-issue-live-snapshot/v1',
+      issueNumber: 1192,
+      sourceRevision: 'r01',
+      title: ghMock.title,
+      body: ghMock.body,
+    }, null, 2) + '\n');
+    writeFileSync(receiptPath, JSON.stringify({
+      schema: 'stage-completeness-receipt/v1',
+      stage: 'architectural',
+      stageSequence: 1,
+      stageAttemptId: 'terminal',
+      sourceRevision: 'r01',
+      cycleId: 'cycle-1192',
+      relayEligibleCaptures: [],
+    }, null, 2) + '\n');
 
     const exitCode = runCli([
       'node',
       'scripts/create-issue-final-acceptance.ts',
       '--repo', 'chetwerikoff/orchestrator-pack',
       '--issue-number', '1192',
-      '--cycle-id', 'cycle-1192',
-      '--issue-body', issueBodyPath,
-      '--issue-revision', 'r01',
       '--review-dir', dir,
-      '--stage-receipt', receiptPath,
       '--public-actor', 'cursor-flow-manager',
     ]);
 
@@ -51,7 +70,8 @@ describe('create-issue-final-acceptance CLI entry point', () => {
         repo: 'chetwerikoff/orchestrator-pack',
         issueNumber: 1192,
         cycleId: 'cycle-1192',
-        issueBody: '# Issue 1192\nr01\n',
+        issueBody: ghMock.body,
+        terminalSourceBody: ghMock.body,
         issueRevision: 'r01',
         reviewDir: dir,
         stageReceiptPaths: [receiptPath],
