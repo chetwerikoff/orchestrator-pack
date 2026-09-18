@@ -1212,3 +1212,64 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     expect(manager).not.toContain('-> worker-owned smoke PASS');
   });
 });
+
+describe('Issue #1954 standalone GPT PR-review manager entry contract', () => {
+  const agents = readFileSync(new URL('../AGENTS.md', import.meta.url), 'utf8');
+  const reviewSkill = readFileSync(
+    new URL('../.cursor/skills/review-pr-with-gpt/SKILL.md', import.meta.url),
+    'utf8',
+  );
+  const reviewPointer = readFileSync(
+    new URL('../.claude/skills/review-pr-with-gpt/SKILL.md', import.meta.url),
+    'utf8',
+  );
+  const executionRunbook = readFileSync(
+    new URL('../docs/chatgpt-task-execution-runbook.md', import.meta.url),
+    'utf8',
+  );
+
+  it('routes exact implementation-review intent without stealing execute-Issue or create-Issue review continuation', () => {
+    expect(agents).toContain(
+      '| [`review-pr-with-gpt`](.cursor/skills/review-pr-with-gpt/SKILL.md)',
+    );
+    expect(agents).toContain('`PR #N review`, `review PR #N`, `pack review #N`, or `Issue #N review`');
+    expect(agents).toContain('loads `execute-issue-with-gpt`');
+    expect(agents).toContain('remain with `create-issue-draft`');
+    expect(reviewSkill).toContain('Ordinary discussion containing “review” without an\nexact PR/Issue target does not activate this skill');
+  });
+
+  it('binds a direct PR and requires exact Issue-to-PR uniqueness before review effects', () => {
+    expect(reviewSkill).toContain('Before any reviewer, fixer, or model effect');
+    expect(reviewSkill).toContain('require the exact PR to be **OPEN**');
+    expect(reviewSkill).toContain('current exact head, and closing Issue\n   reference');
+    expect(reviewSkill).toContain(
+      '**exactly one open implementation PR whose closing reference binds\nthat Issue**',
+    );
+    expect(reviewSkill).toContain('do not guess by branch\nname, recency, author, or first match');
+    expect(reviewSkill).toContain('do not fall back to initial\nimplementation');
+  });
+
+  it('reuses the existing supervised manager and shared #1953 review phase without duplicating mechanics', () => {
+    expect(reviewSkill).toContain('work-class=manager');
+    expect(reviewSkill).toContain(
+      '[Manager-owned PR-review convergence](../../../docs/chatgpt-task-execution-runbook.md#manager-owned-pr-review-convergence)',
+    );
+    expect(executionRunbook).toContain('## Manager-owned PR-review convergence');
+    expect(reviewSkill).toContain('resume/reconcile that existing authority');
+    expect(reviewSkill).toContain('perform no redundant reviewer-model\ncall');
+    expect(reviewSkill).not.toContain('PACK_GPT_BROWSER_PROJECT_URL');
+    expect(reviewSkill).not.toContain('source-01');
+    expect(reviewSkill).not.toContain('pack-review-runner.ts');
+  });
+
+  it('keeps completion supervisor-owned and maintains generated Claude pointer parity', () => {
+    expect(reviewSkill).toContain('local supervised\nindependent-smoke worker');
+    expect(reviewSkill).toContain('Review settlement by\nitself is not overall `VERIFIED_COMPLETE`');
+    expect(reviewPointer).toContain('name: review-pr-with-gpt');
+    expect(reviewPointer).toContain(
+      'Read and execute [`.cursor/skills/review-pr-with-gpt/SKILL.md`]',
+    );
+    expect(reviewPointer).not.toContain('# review-pr-with-gpt');
+  });
+});
+
