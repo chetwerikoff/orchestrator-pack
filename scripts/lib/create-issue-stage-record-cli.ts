@@ -15,7 +15,9 @@ import {
 } from './create-issue-stage-record-artifacts.ts';
 import {
   createIssueNextAction,
+  createIssueRecoverableResult,
   createIssueStaleNextAction,
+  createIssueTerminalResult,
   validateCreateIssueManagerResult,
   type CreateIssueActionBinding,
   type CreateIssueNextAction,
@@ -1023,19 +1025,22 @@ export function runFinalAcceptanceCli(argv: string[]): number {
     try {
       liveIssue = fetchIssueRevision(transport, opts.repo, issueNumber);
     } catch (error) {
-      const output = {
+      const output = createIssueTerminalResult({
         ok: false,
         cause: 'source-unavailable',
         blocker: error instanceof Error ? error.message : String(error),
-        nextAction: null,
-      };
+      });
       if (opts.json) console.log(JSON.stringify(output));
       else process.stderr.write(output.blocker + '\n');
       return 1;
     }
     const liveRevision = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i.exec(liveIssue.body)?.[1];
     if (!liveRevision) {
-      const output = { ok: false, cause: 'source-revision-unavailable', blocker: 'live Issue has no canonical source-revision marker', nextAction: null };
+      const output = createIssueTerminalResult({
+        ok: false,
+        cause: 'source-revision-unavailable',
+        blocker: 'live Issue has no canonical source-revision marker',
+      });
       if (opts.json) console.log(JSON.stringify(output));
       else process.stderr.write(output.blocker + '\n');
       return 1;
@@ -1089,12 +1094,17 @@ export function runFinalAcceptanceCli(argv: string[]): number {
             ],
           })
         : null;
-      const output = {
-        ok: false,
-        cause: 'acceptance-input-missing',
-        blocker: 'issue-rNN-body snapshot is missing or disagrees with the stable live Issue; field=issue snapshot authority=GitHub-witnessed',
-        nextAction,
-      };
+      const output = nextAction
+        ? createIssueRecoverableResult({
+            cause: 'acceptance-input-missing',
+            blocker: 'issue-rNN-body snapshot is missing or disagrees with the stable live Issue; field=issue snapshot authority=GitHub-witnessed',
+            nextAction,
+          })
+        : createIssueTerminalResult({
+            ok: false,
+            cause: 'acceptance-input-missing',
+            blocker: 'issue-rNN-body snapshot is missing or disagrees with the stable live Issue; field=issue snapshot authority=GitHub-witnessed',
+          });
       if (opts.json) console.log(JSON.stringify(output));
       else process.stderr.write(output.blocker + '\n');
       return 1;
@@ -1103,12 +1113,11 @@ export function runFinalAcceptanceCli(argv: string[]): number {
       let asserted = '';
       try { asserted = readFileSync(opts.issueBodyPath, 'utf8'); } catch {}
       if (asserted !== liveIssue.body && resolve(opts.issueBodyPath) !== resolve(currentSnapshotPath)) {
-        const output = {
+        const output = createIssueTerminalResult({
           ok: false,
           cause: 'acceptance-authority-conflict',
           blocker: '--issue-body is assertion-only and does not match the canonical GitHub-witnessed snapshot',
-          nextAction: null,
-        };
+        });
         if (opts.json) console.log(JSON.stringify(output));
         else process.stderr.write(output.blocker + '\n');
         return 1;
@@ -1129,7 +1138,11 @@ export function runFinalAcceptanceCli(argv: string[]): number {
     }).sort((left, right) => Number(left.value.stageSequence ?? 0) - Number(right.value.stageSequence ?? 0));
     const terminal = [...receiptRows].reverse().find((row) => row.value.stage === 'architectural');
     if (!terminal || typeof terminal.value.sourceRevision !== 'string' || typeof terminal.value.cycleId !== 'string') {
-      const output = { ok: false, cause: 'acceptance-input-missing', blocker: 'canonical terminal stage receipt is missing', nextAction: null };
+      const output = createIssueTerminalResult({
+        ok: false,
+        cause: 'acceptance-input-missing',
+        blocker: 'canonical terminal stage receipt is missing',
+      });
       if (opts.json) console.log(JSON.stringify(output));
       else process.stderr.write(output.blocker + '\n');
       return 1;
@@ -1138,7 +1151,11 @@ export function runFinalAcceptanceCli(argv: string[]): number {
     let terminalSnapshot: Record<string, unknown> | null = null;
     try { terminalSnapshot = JSON.parse(readFileSync(terminalSnapshotPath, 'utf8')) as Record<string, unknown>; } catch { terminalSnapshot = null; }
     if (!terminalSnapshot || terminalSnapshot.schema !== 'create-issue-live-snapshot/v1' || typeof terminalSnapshot.body !== 'string') {
-      const output = { ok: false, cause: 'acceptance-input-missing', blocker: 'terminal source Issue snapshot is missing; field=terminalSourceBody authority=GitHub-witnessed', nextAction: null };
+      const output = createIssueTerminalResult({
+        ok: false,
+        cause: 'acceptance-input-missing',
+        blocker: 'terminal source Issue snapshot is missing; field=terminalSourceBody authority=GitHub-witnessed',
+      });
       if (opts.json) console.log(JSON.stringify(output));
       else process.stderr.write(output.blocker + '\n');
       return 1;
@@ -1148,14 +1165,22 @@ export function runFinalAcceptanceCli(argv: string[]): number {
       const requested = opts.stageReceipts.map((path) => resolve(path)).sort();
       const canonical = canonicalReceiptPaths.map((path) => resolve(path)).sort();
       if (JSON.stringify(requested) !== JSON.stringify(canonical)) {
-        const output = { ok: false, cause: 'acceptance-authority-conflict', blocker: 'caller stage-receipt list does not equal canonical receipt inventory', nextAction: null };
+        const output = createIssueTerminalResult({
+          ok: false,
+          cause: 'acceptance-authority-conflict',
+          blocker: 'caller stage-receipt list does not equal canonical receipt inventory',
+        });
         if (opts.json) console.log(JSON.stringify(output));
         else process.stderr.write(output.blocker + '\n');
         return 1;
       }
     }
     if (opts.cycleId && opts.cycleId !== terminal.value.cycleId) {
-      const output = { ok: false, cause: 'acceptance-authority-conflict', blocker: 'caller cycle-id disagrees with lifecycle terminal receipt', nextAction: null };
+      const output = createIssueTerminalResult({
+        ok: false,
+        cause: 'acceptance-authority-conflict',
+        blocker: 'caller cycle-id disagrees with lifecycle terminal receipt',
+      });
       if (opts.json) console.log(JSON.stringify(output));
       else process.stderr.write(output.blocker + '\n');
       return 1;
