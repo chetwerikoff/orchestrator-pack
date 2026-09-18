@@ -2936,9 +2936,35 @@ export function inspectAcceptanceArtifacts(
   if (intake !== READ_ARTIFACT_JSON_FAILED && (!isRecord(intake) || intake.schema !== 'tier-intake/v1')) {
     addInvalid('tier-intake/v1', options.tierIntakePath, 'tier intake evidence is malformed', tierInputReason);
   }
-  const dispositions = readArtifactJson(options.authorDispositionsPath, 'author dispositions', 'author disposition evidence is missing', dispositionsInputReason);
-  if (dispositions !== READ_ARTIFACT_JSON_FAILED && (!isRecord(dispositions) || dispositions.schema !== AUTHOR_DISPOSITIONS_SCHEMA || !Array.isArray(dispositions.findings))) {
-    addInvalid('author dispositions', options.authorDispositionsPath, 'author disposition evidence is malformed', dispositionsInputReason);
+  if (existsSync(options.authorDispositionsPath)) {
+    const dispositions = readArtifactJson(options.authorDispositionsPath, 'author dispositions', 'derived author disposition evidence is unreadable', dispositionsInputReason);
+    if (dispositions !== READ_ARTIFACT_JSON_FAILED && (
+      !isRecord(dispositions)
+      || dispositions.schema !== AUTHOR_DISPOSITIONS_SCHEMA
+      || !Array.isArray(dispositions.findings)
+      || (dispositions.producer !== 'governed-author-output/v1' && dispositions.producer !== 'lifecycle-zero-state/v1')
+    )) {
+      addInvalid(
+        'author dispositions',
+        options.authorDispositionsPath,
+        'derived author disposition evidence is malformed or lacks governed producer provenance; authority=author-owned/GitHub-witnessed/lifecycle-tool-witnessed',
+      );
+    }
+  } else {
+    const authorReply = latestAuthorReplyPath(options.reviewDir);
+    if (authorReply) {
+      const authorErrors: string[] = [];
+      parseGovernedAuthorDispositionOutput(authorReply, authorErrors);
+      for (const error of authorErrors) missing.push({ artifact: 'governed author output', reason: error });
+    } else {
+      const hasStageEvidence = stageEvidenceFilesInReviewDir(options.reviewDir).length > 0;
+      if (hasStageEvidence) {
+        missing.push({
+          artifact: 'governed author output',
+          reason: 'missing governed author output round-NN-author-reply.*; field=findings/m4 authority=author-owned',
+        });
+      }
+    }
   }
 
   const coverageErrors: string[] = [];
@@ -3115,6 +3141,25 @@ export function inspectAcceptanceArtifacts(
     }
     if (manifest.operatorAdjudication !== undefined) {
       addInvalid('acceptance-artifacts', join(outputDir, 'acceptance-artifacts.json'), 'operator adjudication is not an acceptance authority');
+    }
+    if (!isRecord(manifest.liveIssueSnapshot)
+      || typeof manifest.liveIssueSnapshot.path !== 'string'
+      || typeof manifest.liveIssueSnapshot.sourceRevision !== 'string'
+      || typeof manifest.liveIssueSnapshot.titleSha256 !== 'string'
+      || typeof manifest.liveIssueSnapshot.bodySha256 !== 'string') {
+      addInvalid('acceptance-artifacts', join(outputDir, 'acceptance-artifacts.json'), 'manifest lacks the producer-owned GitHub-witnessed Issue snapshot binding');
+    } else {
+      const snapshotPath = String(manifest.liveIssueSnapshot.path);
+      const snapshot = readArtifactJson(snapshotPath, 'Issue body snapshot', 'GitHub-witnessed Issue body snapshot is missing');
+      if (!isRecord(snapshot)
+        || snapshot.schema !== 'create-issue-live-snapshot/v1'
+        || snapshot.sourceRevision !== manifest.liveIssueSnapshot.sourceRevision
+        || typeof snapshot.title !== 'string'
+        || typeof snapshot.body !== 'string'
+        || sha256(snapshot.title) !== manifest.liveIssueSnapshot.titleSha256
+        || sha256(snapshot.body) !== manifest.liveIssueSnapshot.bodySha256) {
+        addInvalid('Issue body snapshot', snapshotPath, 'Issue body snapshot disagrees with the acceptance manifest; authority=GitHub-witnessed');
+      }
     }
     const declared = new Set(manifest.files.filter((value): value is string => typeof value === 'string'));
     const expected = new Set(expectedOutputNames);
