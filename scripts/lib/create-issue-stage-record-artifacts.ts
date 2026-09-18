@@ -40,7 +40,7 @@ import { extractMarker } from './create-issue-stage-record-marker.ts';
 import { buildCanonicalLineage, deriveCanonicalCycleLineage } from './create-issue-stage-record-lineage.ts';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
 import { validateTerminalOneShotBodyBinding } from './create-issue-final-acceptance-contract.ts';
-import { defaultGhTransport, fetchRepositoryOwnerLogin, parseJournalEvents } from './create-issue-stage-record-gh.ts';
+import { defaultGhTransport, fetchIssueRevision, fetchRepositoryOwnerLogin, parseJournalEvents } from './create-issue-stage-record-gh.ts';
 import type { CanonicalLineage, GhTransport, PartialMissingSourceWitness, ProducerEvidence, TrustedComment } from './create-issue-stage-record-types.ts';
 import { resolvePublishedAuthorState } from './resolve-published-author-state.ts';
 import {
@@ -1225,6 +1225,33 @@ export function reconcileCreateIssueStage(
   }
 
   const transport = options.artifactSourceTransport ?? defaultGhTransport();
+  let liveIssue: ReturnType<typeof fetchIssueRevision>;
+  try {
+    liveIssue = fetchIssueRevision(transport, options.repositoryFullName, options.issueNumber);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const message = temporaryError('source-unavailable', 'unable to revalidate live Issue before reconciliation: ' + detail);
+    return {
+      ok: false,
+      stageAttemptId,
+      stage,
+      sourceRevision,
+      capturePaths: [],
+      errors: [message],
+      temporary: 'source-unavailable',
+    };
+  }
+  const liveRevision = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i.exec(liveIssue.body)?.[1];
+  if (!liveRevision || liveRevision.toLowerCase() !== sourceRevision.toLowerCase()) {
+    return {
+      ok: false,
+      stageAttemptId,
+      stage,
+      sourceRevision,
+      capturePaths: [],
+      errors: ['stale_next_action: live Issue revision is ' + (liveRevision ?? '<missing>') + ', expected ' + sourceRevision],
+    };
+  }
   let principalLogin: string;
   try {
     principalLogin = resolveAuthenticatedGithubPrincipal(transport);
@@ -1960,9 +1987,11 @@ function resolveCanonicalStageEvidencePaths(
     .map((path) => resolve(path)));
   const canonicalPaths = discoveredPaths.filter((path) => !ignored.has(resolve(path)));
   const canonicalSet = new Set(canonicalPaths.map((path) => resolve(path)));
-  const requestedSet = new Set(requestedPaths
-    .map((path) => resolve(path))
-    .filter((path) => !ignored.has(path)));
+  const requestedSet = requestedPaths.length === 0
+    ? new Set(canonicalPaths.map((path) => resolve(path)))
+    : new Set(requestedPaths
+        .map((path) => resolve(path))
+        .filter((path) => !ignored.has(path)));
   const missing = canonicalPaths.filter((path) => !requestedSet.has(resolve(path)));
   const unexpected = requestedPaths
     .map((path) => resolve(path))
@@ -2488,7 +2517,7 @@ export function inspectAcceptanceArtifacts(
   const coverageErrors: string[] = [];
   const canonicalStageEvidencePaths = resolveCanonicalStageEvidencePaths(options.reviewDir, options.stageEvidencePaths, coverageErrors, options.phase ?? 'final-acceptance');
   for (const error of coverageErrors) missing.push({ artifact: 'stage-completeness-receipt/v1', reason: stageInputReason(error) });
-  if (options.stageEvidencePaths.length === 0) missing.push({ artifact: 'stage-completeness-receipt/v1', reason: stageInputReason('no recorded stage evidence paths were supplied') });
+  if ((canonicalStageEvidencePaths ?? []).length === 0) missing.push({ artifact: 'stage-completeness-receipt/v1', reason: stageInputReason('no lifecycle-tool-witnessed stage evidence exists in the canonical review directory') });
   const stageEvidencePaths = canonicalStageEvidencePaths ?? options.stageEvidencePaths;
   const stageReceiptNames: string[] = [];
   let evidenceTier: ReviewTier | null = null;
