@@ -523,7 +523,7 @@ function parseInvocation(
   if (!Number.isInteger(value.capacityWaitMs) || Number(value.capacityWaitMs) < 0) errors.push(`${label} capacityWaitMs must be a non-negative integer`);
   if (terminalClassification === 'complete' && value.capacityOutcome !== 'admitted') errors.push(`${label} complete invocation must have been admitted`);
   const capture = value.capture === undefined ? undefined : validateCaptureIdentity(value.capture, `${label}.capture`, errors) ?? undefined;
-  if (purpose === 'stage-time' && terminalClassification === 'complete' && !artifactAuthority && !terminalResultIdentity) errors.push(`${label} complete result requires terminalResultIdentity`);
+  if (purpose === 'stage-time' && terminalClassification === 'complete' && !terminalResultIdentity) errors.push(`${label} complete result requires terminalResultIdentity`);
   if (purpose === 'stage-time' && terminalClassification === 'complete' && !reviewerSource) errors.push(`${label} complete result requires reviewerSource`);
   if (terminalClassification === 'complete' && !capture) errors.push(`${label} complete result requires capture`);
   if (terminalClassification === 'complete' && Number(sendCount) !== 1) errors.push(`${label} complete result requires sendCount 1`);
