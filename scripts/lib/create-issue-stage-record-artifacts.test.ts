@@ -620,6 +620,10 @@ describe('T3 pre-lens stage topology', () => {
 
     writeFileSync(input.architecturalEvidencePath, JSON.stringify(input.architecturalEvidence));
     input.stageEvidencePaths = [input.reviewEvidencePath, input.architecturalEvidencePath];
+    writeGovernedAuthorReply(input.authorReplyPath, {
+      sourceRevision: String(input.architecturalEvidence.sourceRevision),
+      predecessorStage: 'architectural-review',
+    });
     const bothStages = produce(input);
     expect(bothStages.ok, bothStages.errors.join('\n')).toBe(true);
     expect(bothStages.files).toContain('stage-completeness-receipt-competitive-attempt.json');
@@ -659,16 +663,16 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     )).toBe(false);
   });
 
-  it('accepts receipt-ok/artifact-ok after census and reread without principal lookup', () => {
+  it('accepts receipt-ok/artifact-ok after stable Issue read, principal lookup, census, and reread', () => {
     const input = fixture({ transportClassification: 'complete', withTurnResult: true, withCapture: true });
     const source = transport({ census: [...input.reviewComments, comment(input.body)] });
     const result = produce(input, source);
     expect(result.ok, result.errors.join('\n')).toBe(true);
-    expect(source.runGh.mock.calls.map((call) => call[0][2])).toEqual([
-      `repos/${REPOSITORY}/issues/${ISSUE}/comments?per_page=100&page=1`,
-      ...input.reviewComments.map((item) => `repos/${REPOSITORY}/issues/comments/${String(item.id)}`),
-      `repos/${REPOSITORY}/issues/comments/${COMMENT_ID}`,
-    ]);
+    const targets = source.runGh.mock.calls.map((call) => call[0][2]);
+    expect(targets.filter((target) => target === `repos/${REPOSITORY}/issues/${ISSUE}`)).toHaveLength(2);
+    expect(targets).toContain('user');
+    expect(targets).toContain(`repos/${REPOSITORY}/issues/${ISSUE}/comments?per_page=100&page=1`);
+    expect(targets).toContain(`repos/${REPOSITORY}/issues/comments/${COMMENT_ID}`);
     const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-attempt-001.json'), 'utf8'));
     expect(receipt.invocations[0]).toMatchObject({
       terminalClassification: 'complete',
@@ -847,7 +851,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     });
     const result = produce(input, transport({ census: [] }));
     expect(result.ok).toBe(false);
-    expect(result.errors.join('\n')).toContain('authoritative GitHub artifact absent after complete census');
+    expect(result.errors.join('\n')).toContain('authoritative GitHub artifact zero_principal_owned_match');
     expect(existsSync(join(input.outputDir, 'acceptance-artifacts.json'))).toBe(false);
   });
 
@@ -974,7 +978,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     const result = produce(input, transport({ census: input.reviewComments }));
 
     expect(result.ok).toBe(false);
-    expect(result.errors.join('\n')).toContain('authoritative GitHub artifact absent after complete census');
+    expect(result.errors.join('\n')).toContain('authoritative GitHub artifact zero_principal_owned_match');
   });
 
   it('rejects artifact-backed recovery_required under final-node policy', () => {
@@ -1297,14 +1301,14 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     const result = produce(input, transport({ census: [] }));
     expect(result.ok).toBe(false);
     expect(result.temporary).toBeUndefined();
-    expect(result.errors.join('\n')).toContain('authoritative GitHub artifact absent after complete census');
+    expect(result.errors.join('\n')).toContain('authoritative GitHub artifact zero_principal_owned_match');
     expect(existsSync(join(input.outputDir, 'acceptance-artifacts.json'))).toBe(false);
   });
 
   it.each([
-    ['foreign target', comment(canonicalVerdict(), { issue_url: `https://api.github.com/repos/${REPOSITORY}/issues/1193` }), /absent after complete census/],
+    ['foreign target', comment(canonicalVerdict(), { issue_url: `https://api.github.com/repos/${REPOSITORY}/issues/1193` }), /zero_principal_owned_match/],
     ['wrong revision', comment(canonicalVerdict('r02')), /revision mismatch:.*expected=r01.*observed=r02/],
-    ['untrusted author association', comment(canonicalVerdict(), { author_association: 'NONE', user: { login: 'someone-else' } }), /not repository-trusted/],
+    ['wrong publisher', comment(canonicalVerdict(), { user: { login: 'someone-else' }, author_association: 'OWNER' }), /wrong_publisher/],
     ['edited artifact', comment(canonicalVerdict(), { updated_at: '2026-08-07T04:01:00Z' }), /was edited/],
   ])('rejects %s', (_name, liveComment, expected) => {
     const input = fixture({ transportClassification: 'incident' });
@@ -1357,15 +1361,15 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(result.errors.join('\n')).toContain('journal-marked comment');
   });
 
-  it('fails closed when the canonical invocation candidate itself lacks repository-trust fields', () => {
+  it('fails closed when the canonical invocation candidate lacks authenticated-principal identity', () => {
     const input = fixture({ transportClassification: 'incident' });
     const result = produce(input, transport({ census: [...input.reviewComments, comment(input.body, { user: null })] }));
     expect(result.ok).toBe(false);
-    expect(result.temporary).toBe('source-unavailable');
-    expect(result.errors.join('\n')).toContain('no repository-trust fields');
+    expect(result.temporary).toBeUndefined();
+    expect(result.errors.join('\n')).toContain('zero_principal_owned_match');
   });
 
-  it('credentials a unique echo-less FINDINGS comment for the unmatched reviewer slot', () => {
+  it('rejects a unique echo-less FINDINGS comment because invocation identity is absent', () => {
     const input = fixture({ transportClassification: 'incident', withCapture: false, withTurnResult: false });
     const stageEvidence = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as Record<string, any>;
     const unmatchedInvocation = stageEvidence.invocations[1] as Record<string, unknown>;
@@ -1383,23 +1387,9 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       census: [...input.reviewComments, comment(input.body, { issueNumber: input.issueNumber })],
       issueNumber: input.issueNumber,
     }));
-    expect(result.ok, result.errors.join('\n')).toBe(true);
-    const receipt = JSON.parse(readFileSync(join(input.outputDir, 'stage-completeness-receipt-architectural-review-attempt.json'), 'utf8'));
-    expect(receipt.invocations[1]).toMatchObject({
-      reviewerSlot: '02',
-      terminalClassification: 'incident',
-      sendCount: 1,
-      artifactAuthority: {
-        kind: 'authoritative-github-artifact',
-        commentId: COMMENT_ID + 101,
-      },
-    });
-    expect(receipt.invocations[1].capture).toMatchObject({
-      name: 'pass-01-architectural-review-02.capture.txt',
-      byteLength: Buffer.byteLength(findingBody),
-    });
-    expect(receipt.invocations[1].terminalClassification).not.toBe('complete');
-    expect(readFileSync(join(input.dir, 'pass-01-architectural-review-02.capture.txt'), 'utf8')).toBe(findingBody);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('zero_principal_owned_match');
+    expect(existsSync(join(input.dir, 'pass-01-architectural-review-02.capture.txt'))).toBe(false);
   });
 
   it('fails closed when echo-less FINDINGS leftovers are ambiguous', () => {
@@ -1425,7 +1415,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       issueNumber: input.issueNumber,
     }));
     expect(result.ok).toBe(false);
-    expect(result.errors.join('\n')).toContain('cannot uniquely bind echo-less FINDINGS');
+    expect(result.errors.join('\n')).toContain('zero_principal_owned_match');
   });
 
   it('keeps an echoed invocation as the primary bind when an echo-less leftover is present', () => {
@@ -1446,7 +1436,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(receipt.invocations[1].artifactAuthority.commentId).toBe(COMMENT_ID + 101);
   });
 
-  it('deduplicates byte-identical trusted result materializations without ranking their publishers', () => {
+  it('filters publisher before uniqueness and ignores a foreign byte-identical candidate', () => {
     const input = fixture({ transportClassification: 'incident' });
     const first = comment(input.body);
     const second = comment(input.body, {
@@ -1456,7 +1446,6 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       author_association: 'COLLABORATOR',
     });
     const result = produce(input, transport({
-      principal: null,
       census: [...input.reviewComments, second, first],
     }));
     expect(result.ok, result.errors.join('\n')).toBe(true);
@@ -1465,10 +1454,13 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(receipt.invocations[0].artifactAuthority.publisherLogin).toBe(PUBLISHER);
   });
 
-  it('does not require the current authenticated GitHub principal to accept trusted result content', () => {
+  it('fails closed when the current authenticated GitHub principal cannot be resolved', () => {
     const input = fixture({ transportClassification: 'incident' });
     const result = produce(input, transport({ principal: null, census: [...input.reviewComments, comment(input.body)] }));
-    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.temporary).toBe('identity-unresolved');
+    expect(result.errors.join('\n')).toContain('authenticated GitHub principal');
+    expect(result.errors.join('\n')).toContain('GET /user');
   });
 
   it('classifies an incomplete paginated census as TEMPORARY source-unavailable', () => {
@@ -1490,15 +1482,15 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(result.ok, result.errors.join('\n')).toBe(true);
   });
 
-  it('rejects conflicting trusted result bytes for the same invocation and source revision', () => {
+  it('rejects two principal-owned canonical artifacts for the same invocation', () => {
     const input = fixture({ transportClassification: 'incident' });
     const conflicting = `${input.body}material-conflict\n`;
     const result = produce(input, transport({ census: [
       comment(input.body),
-      comment(conflicting, { id: COMMENT_ID + 1, html_url: `https://github.com/${REPOSITORY}/issues/${ISSUE}#issuecomment-${COMMENT_ID + 1}`, user: { login: 'other-member' }, author_association: 'MEMBER' }),
+      comment(conflicting, { id: COMMENT_ID + 1, html_url: `https://github.com/${REPOSITORY}/issues/${ISSUE}#issuecomment-${COMMENT_ID + 1}`, user: { login: PUBLISHER }, author_association: 'OWNER' }),
     ] }));
     expect(result.ok).toBe(false);
-    expect(result.errors.join('\n')).toContain('authoritative GitHub artifact content conflict');
+    expect(result.errors.join('\n')).toContain('duplicate_principal_owned_match');
   });
 
   it('classifies local observation loss after the authoritative reread but before capture materialization', () => {
@@ -1843,7 +1835,7 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(input.body).not.toMatch(/INVOCATION_ID_TO_ECHO:/);
     const result = produce(input);
     expect(result.ok).toBe(false);
-    expect(result.errors.join('\n')).toContain('authoritative GitHub artifact absent after complete census');
+    expect(result.errors.join('\n')).toContain('authoritative GitHub artifact zero_principal_owned_match');
   });
 
   it('check-artifacts makes turn-result transport evidence audit-only only at final acceptance', () => {
