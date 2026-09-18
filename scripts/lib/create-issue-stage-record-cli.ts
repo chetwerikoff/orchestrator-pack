@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { defaultGhTransport } from './create-issue-stage-record-gh.ts';
 import {
   publishSettledStageRecord,
@@ -10,7 +11,9 @@ import {
   ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS,
   inspectAcceptanceArtifacts,
   produceAcceptanceArtifacts,
+  reconcileCreateIssueStage,
 } from './create-issue-stage-record-artifacts.ts';
+import { createIssueNextAction, type CreateIssueActionBinding } from './create-issue-next-action.ts';
 import type { LifecycleReviewStage } from './create-issue-stage-lifecycle.ts';
 import type { PublicActor } from './create-issue-stage-record-types.ts';
 import type { ReviewLaneOverride } from './review-lane-selector.ts';
@@ -29,7 +32,7 @@ interface JournalTailCliOptions {
 }
 
 interface StageFinalizeCliOptions extends JournalTailCliOptions {
-  command: 'start-cycle' | 'publish-stage' | 'retry-pending' | 'produce-artifacts' | 'check-artifacts';
+  command: 'start-cycle' | 'publish-stage' | 'retry-pending' | 'reconcile-stage' | 'produce-artifacts' | 'check-artifacts';
   repo: string;
   issueNumber: number;
   sourceRevision?: string;
@@ -205,6 +208,7 @@ export function stageFinalizeUsage(): string {
     '  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> --stage <competitive|architectural-review|architectural-lens|architectural> --tier <T1|T2|T3> [--stage-attempt-id <retry-id>] [--permitted-lane-override <normal|disputed>] [--public-actor <actor>] [--predecessor-cycle-id <id>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts publish-stage --repo <owner/name> --issue-number <n> --receipt <path> [--waiver <path>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts retry-pending --repo <owner/name> --issue-number <n> [--workdir <path>] [--json]',
+    '  create-issue-stage-finalize.ts reconcile-stage --repo <owner/name> --issue-number <n> --review-dir <path> --stage-evidence <attempt-NNN.json> [--json]',
     `  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> ${ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.map((input) => `${input.flag} <path>${input.repeatable ? '...' : ''}`).join(' ')} [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--phase <pre-lens|post-lens|final-acceptance>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--json]`,
     `  create-issue-stage-finalize.ts check-artifacts --review-dir <path> ${ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.map((input) => `${input.flag} <path>${input.repeatable ? '...' : ''}`).join(' ')} [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--json]`,
   ].join('\n');
@@ -212,7 +216,7 @@ export function stageFinalizeUsage(): string {
 
 function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
   const command = argv[2];
-  if (command !== 'start-cycle' && command !== 'publish-stage' && command !== 'retry-pending' && command !== 'produce-artifacts' && command !== 'check-artifacts') {
+  if (command !== 'start-cycle' && command !== 'publish-stage' && command !== 'retry-pending' && command !== 'reconcile-stage' && command !== 'produce-artifacts' && command !== 'check-artifacts') {
     throw new Error(`unknown command\n${stageFinalizeUsage()}`);
   }
   const opts: StageFinalizeCliOptions = {
@@ -224,7 +228,7 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
     stageEvidencePaths: [],
     claudeProducerEvidencePaths: [],
   };
-  const artifactCommand = command === 'produce-artifacts' || command === 'check-artifacts';
+  const artifactCommand = command === 'reconcile-stage' || command === 'produce-artifacts' || command === 'check-artifacts';
   const requireArtifactCommand = (arg: string): void => {
     if (!artifactCommand) throw new Error(`${arg} is only valid with produce-artifacts or check-artifacts`);
   };
@@ -428,11 +432,74 @@ function parseFinalAcceptanceArgs(argv: string[]): FinalAcceptanceCliOptions {
 
 export function runStageFinalizeCli(argv: string[]): number {
   return runParsedCli(argv, 'create-issue-stage-finalize', parseStageFinalizeArgs, (opts) => {
+    if (opts.command === 'reconcile-stage') {
+      const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
+      const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
+      if (opts.stageEvidencePaths.length !== 1) {
+        process.stderr.write('create-issue-stage-finalize: reconcile-stage requires exactly one --stage-evidence\n');
+        return 2;
+      }
+      const stageEvidencePath = parseRequiredNonEmptyString(opts.stageEvidencePaths[0], '--stage-evidence');
+      const result = reconcileCreateIssueStage({
+        reviewDir,
+        stageEvidencePath,
+        repositoryFullName: opts.repo,
+        issueNumber,
+      });
+      let nextAction = null;
+      if (result.stage && result.stageAttemptId && result.sourceRevision) {
+        const binding: CreateIssueActionBinding = {
+          repository: opts.repo,
+          issueNumber,
+          sourceRevision: result.sourceRevision,
+          stage: result.stage,
+          stageAttemptId: result.stageAttemptId,
+        };
+        const reconcileArgv = [
+          'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+          'reconcile-stage',
+          '--repo', opts.repo,
+          '--issue-number', String(issueNumber),
+          '--review-dir', reviewDir,
+          '--stage-evidence', stageEvidencePath,
+          '--json',
+        ];
+        const retryableRead = Boolean(result.temporary)
+          || result.errors.some((error) => error.includes('zero_principal_owned_match')
+            || error.includes('authoritative GitHub artifact absent'));
+        if (result.ok && !result.alreadySettled) {
+          nextAction = createIssueNextAction({
+            kind: 'produce-acceptance-artifacts',
+            binding,
+            argv: [
+              'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+              'produce-artifacts',
+              '--repo', opts.repo,
+              '--issue-number', String(issueNumber),
+              '--review-dir', reviewDir,
+              '--phase', result.stage === 'architectural' ? 'final-acceptance' : 'pre-lens',
+              '--json',
+            ],
+          });
+        } else if (!result.ok && retryableRead && !result.errors.some((error) => error.includes('stale_next_action'))) {
+          nextAction = createIssueNextAction({
+            kind: 'reconcile-stage-read-only',
+            binding,
+            argv: reconcileArgv,
+          });
+        }
+      }
+      const output = { ...result, nextAction };
+      if (opts.json) console.log(JSON.stringify(output));
+      else if (!result.ok) process.stderr.write(result.errors.join('\n') + '\n');
+      return result.ok ? 0 : 1;
+    }
+
     if (opts.command === 'produce-artifacts' || opts.command === 'check-artifacts') {
       const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
-      const tierIntakePath = requiredAcceptanceArtifactInput(opts, 'tierIntakePath') as string;
-      const stageEvidencePaths = requiredAcceptanceArtifactInput(opts, 'stageEvidencePaths') as string[];
-      const authorDispositionsPath = requiredAcceptanceArtifactInput(opts, 'authorDispositionsPath') as string;
+      const tierIntakePath = opts.tierIntakePath?.trim() || join(reviewDir, 'tier-intake.json');
+      const stageEvidencePaths = opts.stageEvidencePaths;
+      const authorDispositionsPath = opts.authorDispositionsPath?.trim() || join(reviewDir, 'author-dispositions.json');
       const artifactOptions = {
         reviewDir,
         tierIntakePath,
