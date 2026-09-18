@@ -146,12 +146,15 @@ export function createIssueTerminalResult(input: {
   blocker?: string;
 }): CreateIssueTerminalResult {
   if (!nonEmpty(input.cause)) throw new Error('terminal create-Issue result cause must be non-empty');
-  return {
+  const result: CreateIssueTerminalResult = {
     ok: input.ok,
     cause: input.cause,
     ...(input.blocker ? { blocker: input.blocker } : {}),
     nextAction: null,
   };
+  const errors = validateCreateIssueManagerResult(result);
+  if (errors.length > 0) throw new Error('invalid terminal create-Issue result: ' + errors.join('; '));
+  return result;
 }
 
 export function createIssueRecoverableResult(input: {
@@ -160,14 +163,15 @@ export function createIssueRecoverableResult(input: {
   nextAction: CreateIssueNextAction;
 }): CreateIssueRecoverableResult {
   if (!nonEmpty(input.cause)) throw new Error('recoverable create-Issue result cause must be non-empty');
-  const errors = validateCreateIssueNextAction(input.nextAction);
-  if (errors.length > 0) throw new Error(`invalid recoverable create-Issue nextAction: ${errors.join('; ')}`);
-  return {
+  const result: CreateIssueRecoverableResult = {
     ok: false,
     cause: input.cause,
     ...(input.blocker ? { blocker: input.blocker } : {}),
     nextAction: input.nextAction,
   };
+  const errors = validateCreateIssueManagerResult(result);
+  if (errors.length > 0) throw new Error(`invalid recoverable create-Issue result: ${errors.join('; ')}`);
+  return result;
 }
 
 export function sameCreateIssueActionBinding(
@@ -189,7 +193,7 @@ export function createIssueStaleNextAction(input: {
   observed: Partial<CreateIssueActionBinding>;
   nextAction?: CreateIssueNextAction | null;
 }): CreateIssueStaleNextActionResult {
-  return {
+  const result: CreateIssueStaleNextActionResult = {
     ok: false,
     schema: CREATE_ISSUE_STALE_ACTION_SCHEMA,
     cause: 'stale_next_action',
@@ -197,6 +201,9 @@ export function createIssueStaleNextAction(input: {
     observed: { ...input.observed },
     nextAction: input.nextAction ?? null,
   };
+  const errors = validateCreateIssueManagerResult(result);
+  if (errors.length > 0) throw new Error('invalid stale create-Issue result: ' + errors.join('; '));
+  return result;
 }
 
 export function assertCreateIssueActionCurrent(input: {
