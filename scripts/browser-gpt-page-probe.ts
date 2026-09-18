@@ -8,7 +8,12 @@ import {
   ASSISTANT_TURN_ACTION_SELECTOR,
   ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
   CONVERSATION_TURN_SECTION_SELECTOR,
+  PRODUCT_STATUS_PROBE_SELECTORS,
 } from './chatgpt-browser-turn/product-page-selectors.ts';
+import {
+  extractOwnedPromptMarkerToken,
+  isOwnedPromptMarker,
+} from './chatgpt-browser-turn/owned-prompt-marker.ts';
 import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
 import {
   finalizeStateLightPrimaryPublication,
@@ -22,12 +27,19 @@ import {
   publishStateLightReply,
   type StateLightPublicationResult,
 } from './chatgpt-browser-turn/state-light-turn.ts';
+import {
+  classifyExecutionRecoveryProductError,
+  type ExecutionRecoveryProductCause,
+  type ExecutionRecoveryMessage,
+} from './chatgpt-browser-turn/ui-adapter.ts';
 
 export const PROBE_SCHEMA = 'browser-gpt-page-probe/v1';
 export const MAX_TARGETS = 50;
 export const MAX_MESSAGE_SUMMARIES = 100;
 export const MAX_TEXT_CODE_POINTS = 160;
 export const MAX_NORMALIZED_URL_CODE_POINTS = 2_048;
+export const EXECUTION_RECOVERY_MAX_TEXT_CODE_POINTS = 8_192;
+export const EXECUTION_RECOVERY_MAX_PRODUCT_SURFACES = 20;
 export const CDP_REQUEST_TIMEOUT_MS = 10_000;
 export const ACQUISITION_READINESS_TIMEOUT_MS = 10_000;
 export const ACQUISITION_READINESS_INTERVAL_MS = 250;
@@ -116,6 +128,18 @@ export interface InspectionSnapshot {
   readonly last_assistant_sha256: string | null;
 }
 
+interface ExecutionRecoveryProbeSurface {
+  readonly text: string;
+  readonly turn_key?: string;
+}
+
+interface ExecutionRecoveryProbeEvidence {
+  readonly transcript_complete: boolean;
+  readonly generation_in_progress: boolean | 'unknown';
+  readonly messages: readonly ExecutionRecoveryMessage[];
+  readonly product_surfaces: readonly ExecutionRecoveryProbeSurface[];
+}
+
 interface InspectionExpressionResult {
   readonly status: 'ok' | 'surface_unknown';
   readonly reason?: string;
@@ -132,6 +156,7 @@ interface InspectionExpressionResult {
   readonly last_assistant_text_byte_length?: number;
   readonly last_assistant_text_head?: string;
   readonly last_assistant_sha256?: string | null;
+  readonly execution_recovery_evidence?: ExecutionRecoveryProbeEvidence;
 }
 
 interface ExportExpressionResult {
@@ -422,6 +447,81 @@ function validateNodeSummary(value: unknown, snapshot: {
     innerText: validateTextSummary(value.innerText),
     textContent: validateTextSummary(value.textContent),
   };
+}
+
+function validateExecutionRecoveryEvidence(value: unknown): ExecutionRecoveryProbeEvidence | undefined {
+  if (!isRecord(value)
+    || typeof value.transcript_complete !== 'boolean'
+    || (typeof value.generation_in_progress !== 'boolean' && value.generation_in_progress !== 'unknown')
+    || !Array.isArray(value.messages)
+    || value.messages.length > MAX_MESSAGE_SUMMARIES
+    || !Array.isArray(value.product_surfaces)
+    || value.product_surfaces.length > EXECUTION_RECOVERY_MAX_PRODUCT_SURFACES) {
+    return undefined;
+  }
+  const messages: ExecutionRecoveryMessage[] = [];
+  for (const rawMessage of value.messages) {
+    if (!isRecord(rawMessage)
+      || (rawMessage.role !== 'user' && rawMessage.role !== 'assistant')
+      || !isBoundedString(rawMessage.text, EXECUTION_RECOVERY_MAX_TEXT_CODE_POINTS)
+      || (rawMessage.turn_key !== undefined && !isBoundedString(rawMessage.turn_key, MAX_TEXT_CODE_POINTS))) {
+      return undefined;
+    }
+    messages.push({
+      role: rawMessage.role,
+      text: rawMessage.text,
+      ...(typeof rawMessage.turn_key === 'string' && rawMessage.turn_key ? { turnKey: rawMessage.turn_key } : {}),
+    });
+  }
+  const productSurfaces: ExecutionRecoveryProbeSurface[] = [];
+  for (const rawSurface of value.product_surfaces) {
+    if (!isRecord(rawSurface)
+      || !isBoundedString(rawSurface.text, EXECUTION_RECOVERY_MAX_TEXT_CODE_POINTS)
+      || (rawSurface.turn_key !== undefined && !isBoundedString(rawSurface.turn_key, MAX_TEXT_CODE_POINTS))) {
+      return undefined;
+    }
+    productSurfaces.push({
+      text: rawSurface.text,
+      ...(typeof rawSurface.turn_key === 'string' && rawSurface.turn_key ? { turn_key: rawSurface.turn_key } : {}),
+    });
+  }
+  return {
+    transcript_complete: value.transcript_complete,
+    generation_in_progress: value.generation_in_progress,
+    messages,
+    product_surfaces: productSurfaces,
+  };
+}
+
+export function projectExecutionRecoveryCause(value: unknown): ExecutionRecoveryProductCause | null {
+  if (!isRecord(value) || value.status !== 'ok') return null;
+  const evidence = validateExecutionRecoveryEvidence(value.execution_recovery_evidence);
+  if (!evidence || !evidence.transcript_complete) return null;
+
+  const markers = new Set<string>();
+  for (const message of evidence.messages) {
+    if (message.role !== 'user') continue;
+    const marker = extractOwnedPromptMarkerToken(message.text);
+    if (isOwnedPromptMarker(marker)) markers.add(marker);
+  }
+
+  let projected: ExecutionRecoveryProductCause | undefined;
+  for (const marker of markers) {
+    for (const surface of evidence.product_surfaces) {
+      const classified = classifyExecutionRecoveryProductError({
+        surface: { text: surface.text, composer: true },
+        marker,
+        transcriptComplete: evidence.transcript_complete,
+        generationInProgress: evidence.generation_in_progress,
+        messages: evidence.messages,
+        ...(surface.turn_key ? { surfaceTurnKey: surface.turn_key } : {}),
+      }).cause;
+      if (!classified) continue;
+      if (projected && projected !== classified) return null;
+      projected = classified;
+    }
+  }
+  return projected ?? null;
 }
 
 function validateInspectionSnapshot(
@@ -872,10 +972,16 @@ export const defaultDependencies: ProbeDependencies = {
 
 function inspectionExpression(): string {
   const attributes = JSON.stringify(ALLOWLISTED_ATTRIBUTES);
+  const productSelector = JSON.stringify(PRODUCT_STATUS_PROBE_SELECTORS.join(', '));
+  const turnSelector = JSON.stringify(CONVERSATION_TURN_SECTION_SELECTOR);
   return `(async () => {
     const MAX_NODES = ${MAX_MESSAGE_SUMMARIES};
     const MAX_TEXT = ${MAX_TEXT_CODE_POINTS};
+    const MAX_RECOVERY_TEXT = ${EXECUTION_RECOVERY_MAX_TEXT_CODE_POINTS};
+    const MAX_PRODUCT_SURFACES = ${EXECUTION_RECOVERY_MAX_PRODUCT_SURFACES};
     const ATTRS = ${attributes};
+    const PRODUCT_SELECTOR = ${productSelector};
+    const TURN_SELECTOR = ${turnSelector};
     const points = (value) => Array.from(value);
     const head = (value) => points(value).slice(0, MAX_TEXT).join('');
     const tail = (value) => { const p = points(value); return p.slice(Math.max(0, p.length - MAX_TEXT)).join(''); };
@@ -899,6 +1005,8 @@ function inspectionExpression(): string {
     for (const entry of observed) if (entry.rawMessageId) messageIdCounts.set(entry.rawMessageId, (messageIdCounts.get(entry.rawMessageId) || 0) + 1);
     const selected = observed.slice(Math.max(0, observed.length - MAX_NODES));
     const nodes = [];
+    const recoveryMessages = [];
+    let recoveryComplete = observed.length <= MAX_NODES;
     for (const entry of selected) {
       const innerText = typeof entry.node.innerText === 'string' ? entry.node.innerText : null;
       const textContent = typeof entry.node.textContent === 'string' ? entry.node.textContent : null;
@@ -919,6 +1027,13 @@ function inspectionExpression(): string {
         innerText: await digest(innerText),
         textContent: await digest(textContent),
       });
+      if (points(innerText).length > MAX_RECOVERY_TEXT) {
+        recoveryComplete = false;
+      } else {
+        let turnKey;
+        try { turnKey = entry.node.closest(TURN_SELECTOR)?.getAttribute('data-testid') || undefined; } catch { recoveryComplete = false; }
+        recoveryMessages.push({ role: entry.role, text: innerText, ...(turnKey ? { turn_key: turnKey } : {}) });
+      }
     }
     const lastAssistant = [...observed].reverse().find((entry) => entry.role === 'assistant');
     let lastDigest = null;
@@ -935,6 +1050,23 @@ function inspectionExpression(): string {
     } catch {
       generating = 'unknown';
     }
+    const productSurfaces = [];
+    try {
+      const rawProductSurfaces = Array.from(document.querySelectorAll(PRODUCT_SELECTOR));
+      if (rawProductSurfaces.length > MAX_PRODUCT_SURFACES) recoveryComplete = false;
+      for (const surface of rawProductSurfaces.slice(Math.max(0, rawProductSurfaces.length - MAX_PRODUCT_SURFACES))) {
+        const text = typeof surface.innerText === 'string' ? surface.innerText : null;
+        if (text === null || points(text).length > MAX_RECOVERY_TEXT) {
+          recoveryComplete = false;
+          continue;
+        }
+        let turnKey;
+        try { turnKey = surface.closest(TURN_SELECTOR)?.getAttribute('data-testid') || undefined; } catch { recoveryComplete = false; }
+        productSurfaces.push({ text, ...(turnKey ? { turn_key: turnKey } : {}) });
+      }
+    } catch {
+      recoveryComplete = false;
+    }
     return {
       status: 'ok',
       page_url: location.href,
@@ -950,6 +1082,12 @@ function inspectionExpression(): string {
       last_assistant_text_byte_length: lastDigest ? lastDigest.byte_length : 0,
       last_assistant_text_head: lastDigest ? lastDigest.head : '',
       last_assistant_sha256: lastDigest ? lastDigest.sha256 : null,
+      execution_recovery_evidence: {
+        transcript_complete: recoveryComplete,
+        generation_in_progress: generating,
+        messages: recoveryMessages,
+        product_surfaces: productSurfaces,
+      },
     };
   })()`;
 }
@@ -1187,7 +1325,13 @@ async function inspectAcquiredUrl(
       throw new ProbeError('unavailable', 'target_read_unavailable', boundedDetail(error));
     }
     const snapshot = validateInspectionSnapshot(value, target, true);
-    return { ...baseEnvelope('inspect', 'ok'), target_id: target.target_id, acquisition: 'reused', snapshot };
+    return {
+      ...baseEnvelope('inspect', 'ok'),
+      target_id: target.target_id,
+      acquisition: 'reused',
+      execution_recovery_cause: projectExecutionRecoveryCause(value),
+      snapshot,
+    };
   }
   if (!args.openIfMissing) throw new ProbeError('not_found', 'target_not_found');
   if (!deps.createPage) throw new ProbeError('unavailable', 'page_create_unavailable');
@@ -1255,6 +1399,7 @@ async function inspectAcquiredUrl(
     readiness_timeout_ms: ACQUISITION_READINESS_TIMEOUT_MS,
     readiness_interval_ms: ACQUISITION_READINESS_INTERVAL_MS,
     cleanup,
+    execution_recovery_cause: null,
     snapshot,
   };
 }
@@ -1873,7 +2018,12 @@ export async function runProbe(args: ParsedArgs, deps: ProbeDependencies = defau
       throw new ProbeError('unavailable', 'target_read_unavailable', boundedDetail(error));
     }
     const result = validateInspectionSnapshot(value, target, resolvedByUrl);
-    return { ...baseEnvelope('inspect', 'ok'), target_id: target.target_id, snapshot: result };
+    return {
+      ...baseEnvelope('inspect', 'ok'),
+      target_id: target.target_id,
+      execution_recovery_cause: projectExecutionRecoveryCause(value),
+      snapshot: result,
+    };
   }
 
   const witness: ExportWitness = {

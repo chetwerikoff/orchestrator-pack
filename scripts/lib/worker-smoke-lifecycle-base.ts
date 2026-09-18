@@ -25,9 +25,12 @@ export const SMOKE_DELIVERY_TIMEOUT_MS = 10 * 60_000;
 export const SMOKE_PROGRESS_STALL_MS = 25 * 60_000;
 export const SMOKE_ABSOLUTE_CEILING_MS = 4 * 60 * 60_000;
 export const SMOKE_ORCA_OPERATION_TIMEOUT_MS = 30_000;
+export const SMOKE_FINAL_EVIDENCE_FILENAME = 'final-evidence.json';
 const IS_VITEST_RUNTIME = process.env.VITEST === 'true' || Boolean(process.env.VITEST_WORKER_ID);
 export const SMOKE_SHUTDOWN_TIMEOUT_MS = IS_VITEST_RUNTIME ? 50 : 2 * 60_000;
 export const SMOKE_LIFECYCLE_POLL_MS = 250;
+
+export type SmokeRunMode = 'runtime' | 'no_execution';
 
 export type SmokeSpawnState =
   | 'reserved'
@@ -37,7 +40,9 @@ export type SmokeSpawnState =
   | 'abandoned_unbound'
   | 'cleanup_pending'
   | 'clean'
-  | 'cleanup_failed';
+  | 'cleanup_failed'
+  | 'no_execution_pending'
+  | 'no_execution_terminal';
 
 export interface SmokeLifecycleRegistry {
   version: 1;
@@ -52,9 +57,12 @@ export interface SmokeLifecycleRegistry {
   spawnState: SmokeSpawnState;
   createDeadlineMs: number;
   scenarioCount: number;
+  mode?: SmokeRunMode;
   terminalHandle?: string;
   createDiagnostic?: string;
   closeAttemptedAtMs?: number;
+  finalEvidencePath?: string;
+  launcherTerminalizedAtMs?: number;
   cleanup?: {
     reason: string;
     cooperativeAcknowledgementObserved: boolean;
@@ -178,9 +186,31 @@ function closeOutcomeIsClean(outcome: string): boolean {
   return outcome === 'closed_owned_handle' || outcome === 'closed_owned_handle_already_absent';
 }
 
+function registryMode(registry: SmokeLifecycleRegistry): SmokeRunMode {
+  return registry.mode ?? 'runtime';
+}
+
 function registryStateIsConsistent(registry: SmokeLifecycleRegistry): boolean {
   const hasHandle = Boolean(registry.terminalHandle);
   const closeAttempted = Number.isFinite(registry.closeAttemptedAtMs);
+  const hasFinalEvidence = Boolean(registry.finalEvidencePath);
+  const launcherTerminalized = Number.isFinite(registry.launcherTerminalizedAtMs);
+  if (hasFinalEvidence !== launcherTerminalized) return false;
+  if (hasFinalEvidence && !samePath(
+    registry.finalEvidencePath!,
+    join(registry.artifactDir, SMOKE_FINAL_EVIDENCE_FILENAME),
+  )) return false;
+
+  if (registryMode(registry) === 'no_execution') {
+    if (registry.scenarioCount !== 0 || hasHandle || registry.cleanup || closeAttempted) return false;
+    if (registry.spawnState === 'no_execution_pending') return !hasFinalEvidence;
+    if (registry.spawnState === 'no_execution_terminal') return hasFinalEvidence;
+    return false;
+  }
+  if (registry.scenarioCount < 1 || registry.spawnState.startsWith('no_execution_')) return false;
+  if (hasFinalEvidence && registry.spawnState !== 'clean' && registry.spawnState !== 'cleanup_failed') {
+    return false;
+  }
   switch (registry.spawnState) {
     case 'reserved':
     case 'create_in_progress':
@@ -218,11 +248,20 @@ function parseRegistry(
   if (![
     'reserved', 'create_in_progress', 'bound', 'ambiguous_unbound',
     'abandoned_unbound', 'cleanup_pending', 'clean', 'cleanup_failed',
+    'no_execution_pending', 'no_execution_terminal',
   ].includes(spawnState)) return undefined;
   const cleanup = parseCleanup(value.cleanup);
   const closeAttemptedAtMs = value.closeAttemptedAtMs === undefined
     ? undefined
     : Number(value.closeAttemptedAtMs);
+  const launcherTerminalizedAtMs = value.launcherTerminalizedAtMs === undefined
+    ? undefined
+    : Number(value.launcherTerminalizedAtMs);
+  const mode = value.mode === 'no_execution'
+    ? 'no_execution' as const
+    : value.mode === 'runtime'
+      ? 'runtime' as const
+      : undefined;
   const registry: SmokeLifecycleRegistry = {
     version: 1,
     runId: String(value.runId ?? '').trim(),
@@ -236,6 +275,7 @@ function parseRegistry(
     spawnState,
     createDeadlineMs: Number(value.createDeadlineMs),
     scenarioCount: Number(value.scenarioCount),
+    ...(mode ? { mode } : {}),
     ...(typeof value.terminalHandle === 'string' && value.terminalHandle.trim()
       ? { terminalHandle: value.terminalHandle.trim() }
       : {}),
@@ -243,12 +283,17 @@ function parseRegistry(
       ? { createDiagnostic: value.createDiagnostic.slice(0, 512) }
       : {}),
     ...(closeAttemptedAtMs === undefined ? {} : { closeAttemptedAtMs }),
+    ...(typeof value.finalEvidencePath === 'string' && value.finalEvidencePath.trim()
+      ? { finalEvidencePath: value.finalEvidencePath.trim() }
+      : {}),
+    ...(launcherTerminalizedAtMs === undefined ? {} : { launcherTerminalizedAtMs }),
     ...(cleanup ? { cleanup } : {}),
   };
   if (
     Number(value.version) !== 1
     || !registry.runId
     || !registry.artifactDir
+    || (value.mode !== undefined && !mode)
     || (expectedArtifactDir !== undefined && !samePath(registry.artifactDir, expectedArtifactDir))
     || (expectedArtifactDir !== undefined && basename(resolve(expectedArtifactDir)) !== registry.runId)
     || !/^[0-9a-f]{40}$/u.test(registry.headSha)
@@ -262,8 +307,8 @@ function parseRegistry(
     || !Number.isFinite(registry.updatedAtMs)
     || !Number.isFinite(registry.createDeadlineMs)
     || !Number.isInteger(registry.scenarioCount)
-    || registry.scenarioCount < 1
     || (closeAttemptedAtMs !== undefined && !Number.isFinite(closeAttemptedAtMs))
+    || (launcherTerminalizedAtMs !== undefined && !Number.isFinite(launcherTerminalizedAtMs))
     || !registryStateIsConsistent(registry)
   ) return undefined;
   return registry;
@@ -380,6 +425,82 @@ export function createSmokeLifecycleReservation(input: {
   mkdirSync(input.artifactDir, { recursive: true });
   atomicJson(smokeLifecycleRegistryPath(input.artifactDir), registry);
   return registry;
+}
+
+export function createSmokeNoExecutionLifecycle(input: {
+  runId: string;
+  artifactDir: string;
+  issueNumber: number;
+  prNumber: number;
+  headSha: string;
+  supervisorPid?: number;
+  nowMs?: number;
+}): SmokeLifecycleRegistry {
+  const nowMs = input.nowMs ?? Date.now();
+  const registry: SmokeLifecycleRegistry = {
+    version: 1,
+    runId: input.runId,
+    issueNumber: input.issueNumber,
+    prNumber: input.prNumber,
+    headSha: input.headSha.trim().toLowerCase(),
+    artifactDir: input.artifactDir,
+    supervisorPid: input.supervisorPid ?? process.pid,
+    createdAtMs: nowMs,
+    updatedAtMs: nowMs,
+    spawnState: 'no_execution_pending',
+    createDeadlineMs: nowMs + SMOKE_CREATE_TIMEOUT_MS,
+    scenarioCount: 0,
+    mode: 'no_execution',
+  };
+  if (!parseRegistry(registry, input.artifactDir)) {
+    throw new Error('invalid smoke no-execution lifecycle');
+  }
+  mkdirSync(input.artifactDir, { recursive: true });
+  atomicJson(smokeLifecycleRegistryPath(input.artifactDir), registry);
+  return registry;
+}
+
+export function markSmokeLauncherTerminalized(input: {
+  artifactDir: string;
+  runId: string;
+  finalEvidencePath: string;
+  nowMs?: number;
+}): SmokeLifecycleRegistry {
+  const nowMs = input.nowMs ?? Date.now();
+  const finalEvidencePath = resolve(input.finalEvidencePath);
+  const expectedFinalEvidencePath = resolve(
+    input.artifactDir,
+    SMOKE_FINAL_EVIDENCE_FILENAME,
+  );
+  if (!samePath(finalEvidencePath, expectedFinalEvidencePath)) {
+    throw new Error('worker_smoke_final_evidence_path_invalid');
+  }
+  return mutateRegistry(input.artifactDir, (registry) => {
+    if (registry.runId !== input.runId) {
+      throw new Error('worker_smoke_launcher_terminal_run_mismatch');
+    }
+    if (registryMode(registry) === 'no_execution') {
+      if (registry.spawnState !== 'no_execution_pending') {
+        throw new Error('worker_smoke_no_execution_not_pending');
+      }
+      return {
+        ...registry,
+        spawnState: 'no_execution_terminal',
+        finalEvidencePath,
+        launcherTerminalizedAtMs: nowMs,
+        updatedAtMs: nowMs,
+      };
+    }
+    if (registry.spawnState !== 'clean' && registry.spawnState !== 'cleanup_failed') {
+      throw new Error('worker_smoke_runtime_not_finalized');
+    }
+    return {
+      ...registry,
+      finalEvidencePath,
+      launcherTerminalizedAtMs: nowMs,
+      updatedAtMs: nowMs,
+    };
+  });
 }
 
 export function markSmokeCreateInProgress(
@@ -713,7 +834,7 @@ function unregisteredExecutionEvidence(artifactDir: string): string[] {
 }
 
 const blocks = (registry: SmokeLifecycleRegistry): boolean =>
-  registry.spawnState !== 'clean' && registry.spawnState !== 'abandoned_unbound';
+  !['clean', 'abandoned_unbound', 'no_execution_terminal'].includes(registry.spawnState);
 
 function processAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
@@ -1055,6 +1176,15 @@ export function cleanupSmokeLifecycle(input: {
       cooperativeAcknowledgementObserved: input.cooperativeAcknowledgementObserved,
       closeOutcome: 'registry_unreadable',
       operatorFilesCleared: false,
+      reason: input.reason,
+    };
+  }
+  if (registryMode(registry) === 'no_execution') {
+    return {
+      clean: registry.spawnState === 'no_execution_terminal',
+      cooperativeAcknowledgementObserved: false,
+      closeOutcome: 'no_execution',
+      operatorFilesCleared: true,
       reason: input.reason,
     };
   }

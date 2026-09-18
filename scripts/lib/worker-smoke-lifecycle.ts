@@ -721,7 +721,10 @@ function preflightSafetyRefusal(
     if (blockingState(registry) && isAlive(registry.supervisorPid)) {
       return smokeOnlyRefusal(`active_smoke_supervisor:${registry.runId}`);
     }
-    if (registry.spawnState === 'reserved' || registry.spawnState === 'create_in_progress') {
+    if (
+      (registry.spawnState === 'reserved' || registry.spawnState === 'create_in_progress')
+      && input.nowMs! <= registry.createDeadlineMs
+    ) {
       return smokeOnlyRefusal(
         `blocking_create_phase:${registry.runId}:${registry.spawnState}`,
       );
@@ -741,13 +744,13 @@ function preflightSafetyRefusal(
 export function preflightSmokeLifecycle(
   input: Parameters<typeof base.preflightSmokeLifecycle>[0],
 ): SmokeAdmissionDecision {
-  const refusal = preflightSafetyRefusal(input);
-  if (refusal) return refusal;
   const now = input.now ?? (() => Date.now());
   const nowMs = input.nowMs ?? now();
+  const normalizedInput = { ...input, nowMs };
+  const refusal = preflightSafetyRefusal(normalizedInput);
+  if (refusal) return refusal;
   const admission = base.preflightSmokeLifecycle({
-    ...input,
-    nowMs,
+    ...normalizedInput,
     closeBoundHandle: (handle, artifactDir) => {
       const registry = base.readSmokeLifecycleRegistry(artifactDir);
       if (!registry || registry.terminalHandle !== handle) {

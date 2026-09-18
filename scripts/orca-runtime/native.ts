@@ -30,6 +30,7 @@ export type OrcaOperationName =
 
 export type OrcaLocalOutcomeCategory =
   | 'process_launch_failed'
+  | 'process_signaled'
   | 'empty_stdout'
   | 'invalid_json'
   | 'recognized_control_plane_code'
@@ -41,6 +42,7 @@ export interface OrcaJsonResponse<T = unknown> {
   error?: { code?: string; message?: string };
   operation?: OrcaOperationName;
   outcomeCategory?: OrcaLocalOutcomeCategory;
+  signal?: NodeJS.Signals;
 }
 
 export interface OrcaWorktreeSummary {
@@ -125,6 +127,62 @@ function errnoCode(error: unknown): string | undefined {
   return error instanceof Error && 'code' in error
     ? String((error as NodeJS.ErrnoException).code)
     : undefined;
+}
+
+function resultSignal(result: ReturnType<typeof spawnSync>): NodeJS.Signals | undefined {
+  return typeof result.signal === 'string' && result.signal.trim()
+    ? result.signal as NodeJS.Signals
+    : undefined;
+}
+
+export function orcaProcessSignaledError(
+  signal: NodeJS.Signals,
+): NonNullable<OrcaJsonResponse['error']> {
+  return {
+    code: 'orca_process_signaled',
+    message: `orca process interrupted by ${signal}`,
+  };
+}
+
+function signaledResponse<T>(
+  operation: OrcaOperationName | undefined,
+  signal: NodeJS.Signals,
+): OrcaJsonResponse<T> {
+  return {
+    ok: false,
+    operation,
+    outcomeCategory: 'process_signaled',
+    signal,
+    error: orcaProcessSignaledError(signal),
+  };
+}
+
+function operationTimeoutResponse<T>(
+  operation: OrcaOperationName | undefined,
+  args: readonly string[],
+  timeoutMs: number | undefined,
+): OrcaJsonResponse<T> {
+  return {
+    ok: false,
+    operation,
+    outcomeCategory: 'supported_operation_failure',
+    error: {
+      code: 'orca_operation_timeout',
+      message: `orca ${args.join(' ')} exceeded ${timeoutMs ?? 0}ms`,
+    },
+  };
+}
+
+function processLaunchFailedResponse<T>(
+  operation: OrcaOperationName | undefined,
+  message: string,
+): OrcaJsonResponse<T> {
+  return {
+    ok: false,
+    operation,
+    outcomeCategory: 'process_launch_failed',
+    error: { code: 'orca_process_launch_failed', message },
+  };
 }
 
 export function isOrcaSmokeControlPlaneCode(
@@ -219,37 +277,32 @@ export function runOrcaJson<T>(
       }),
     });
   } catch (error) {
-    return {
-      ok: false,
+    return processLaunchFailedResponse<T>(
       operation,
-      outcomeCategory: 'process_launch_failed',
-      error: {
-        code: 'orca_process_launch_failed',
-        message: error instanceof Error ? error.message : 'orca process launch failed',
-      },
-    };
+      error instanceof Error ? error.message : 'orca process launch failed',
+    );
   }
+  if (result.error && errnoCode(result.error) === 'ETIMEDOUT') {
+    return operationTimeoutResponse<T>(operation, args, options.timeoutMs);
+  }
+  const signal = resultSignal(result);
+  if (signal) return signaledResponse<T>(operation, signal);
   if (result.error) {
-    if (errnoCode(result.error) === 'ETIMEDOUT') {
+    return processLaunchFailedResponse<T>(operation, result.error.message);
+  }
+  const stdout = String(result.stdout ?? '').trim();
+  if (!stdout) {
+    if (result.status !== 0) {
       return {
         ok: false,
         operation,
         outcomeCategory: 'supported_operation_failure',
         error: {
-          code: 'orca_operation_timeout',
-          message: `orca ${args.join(' ')} exceeded ${options.timeoutMs ?? 0}ms`,
+          code: 'orca_process_exit_without_output',
+          message: `orca ${args.join(' ')} exited without JSON output`,
         },
       };
     }
-    return {
-      ok: false,
-      operation,
-      outcomeCategory: 'process_launch_failed',
-      error: { code: 'orca_process_launch_failed', message: result.error.message },
-    };
-  }
-  const stdout = String(result.stdout ?? '').trim();
-  if (!stdout) {
     return {
       ok: false,
       operation,

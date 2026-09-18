@@ -135,6 +135,7 @@ export function isOpenCodeComposerEmpty(lines: readonly string[]): boolean {
 
 type AsyncExecError = Error & {
   readonly code?: string | number;
+  readonly signal?: NodeJS.Signals | string;
   readonly stdout?: string | Buffer;
   readonly stderr?: string | Buffer;
 };
@@ -157,16 +158,42 @@ async function runOrcaJsonAsync<T>(
   } catch (error) {
     const failure = error as AsyncExecError;
     const stdout = failure.stdout === undefined ? '' : String(failure.stdout).trim();
+    const signal = typeof failure.signal === 'string' && failure.signal.trim()
+      ? failure.signal.trim() as NodeJS.Signals
+      : undefined;
+    if (failure.code === 'ETIMEDOUT') {
+      return {
+        ok: false,
+        operation,
+        outcomeCategory: 'supported_operation_failure',
+        error: {
+          code: 'orca_operation_timeout',
+          message: `orca ${args.join(' ')} exceeded ${options.timeoutMs ?? 0}ms`,
+        },
+      };
+    }
+    if (signal) {
+      return {
+        ok: false,
+        operation,
+        outcomeCategory: 'process_signaled',
+        signal,
+        error: {
+          code: 'orca_process_signaled',
+          message: `orca process interrupted by ${signal}`,
+        },
+      };
+    }
     const childExited = typeof failure.code === 'number';
-    if (failure.code !== 'ETIMEDOUT' && failure.stdout !== undefined && (stdout || childExited)) {
+    if (failure.stdout !== undefined && (stdout || childExited)) {
       if (!stdout) {
         return {
           ok: false,
           operation,
-          outcomeCategory: 'empty_stdout',
+          outcomeCategory: 'supported_operation_failure',
           error: {
-            code: 'orca_empty_stdout',
-            message: String(failure.stderr ?? '').trim() || `orca ${args.join(' ')} produced no output`,
+            code: 'orca_process_exit_without_output',
+            message: `orca ${args.join(' ')} exited without JSON output`,
           },
         };
       }
@@ -175,12 +202,10 @@ async function runOrcaJsonAsync<T>(
     return {
       ok: false,
       operation,
-      outcomeCategory: failure.code === 'ETIMEDOUT' ? 'supported_operation_failure' : 'process_launch_failed',
+      outcomeCategory: 'process_launch_failed',
       error: {
-        code: failure.code === 'ETIMEDOUT' ? 'orca_operation_timeout' : 'orca_process_launch_failed',
-        message: failure.code === 'ETIMEDOUT'
-          ? `orca ${args.join(' ')} exceeded ${options.timeoutMs ?? 0}ms`
-          : error instanceof Error ? error.message : 'orca process launch failed',
+        code: 'orca_process_launch_failed',
+        message: error instanceof Error ? error.message : 'orca process launch failed',
       },
     };
   }
@@ -324,6 +349,8 @@ export function neutralFailureReason(response: OrcaJsonResponse): string {
   switch (response.outcomeCategory) {
     case 'process_launch_failed':
       return 'runtime_unavailable';
+    case 'process_signaled':
+      return response.signal ? `runtime_cli_interrupted:${response.signal}` : 'runtime_operation_failed';
     case 'empty_stdout':
     case 'invalid_json':
       return 'runtime_response_invalid';

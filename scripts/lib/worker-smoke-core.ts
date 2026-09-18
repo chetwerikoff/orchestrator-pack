@@ -9,22 +9,23 @@ export * from './worker-smoke-core-base.ts';
 
 function bindControlPlaneVerdict(report: base.SmokeReport): base.SmokeReport {
   let diagnostic = report.controlPlaneDiagnostic;
+  const applyDiagnostic = (value: base.SmokeControlPlaneDiagnostic | undefined): void => {
+    if (!value) return;
+    const causeFamily = base.workerSmokeCauseFamilyForHarnessReason(value.cause);
+    report.result = base.smokeResultForWorkerSmokeCauseFamily(causeFamily);
+    report.nonPassCause = value.cause;
+    report.causeFamily = causeFamily;
+  };
   Object.defineProperty(report, 'controlPlaneDiagnostic', {
     enumerable: true,
     configurable: true,
     get: () => diagnostic,
     set: (value: base.SmokeControlPlaneDiagnostic | undefined) => {
       diagnostic = value;
-      if (value) {
-        report.result = 'BLOCKED';
-        report.nonPassCause = value.cause;
-      }
+      applyDiagnostic(value);
     },
   });
-  if (diagnostic) {
-    report.result = 'BLOCKED';
-    report.nonPassCause = diagnostic.cause;
-  }
+  applyDiagnostic(diagnostic);
   return report;
 }
 
@@ -60,6 +61,7 @@ function invalidSmokeReport(
 export function normalizeSmokeReport(
   partial: Partial<base.SmokeReport>,
   binding: { issueNumber: number; prNumber: number; headSha: string },
+  options: { executionMode?: 'executed' | 'carry-only' } = {},
 ): ({ ok: true; report: base.SmokeReport } | { ok: false; reason: string; report: base.SmokeReport }) {
   const smokeSupervisorProcess = process.argv[1]?.endsWith('/worker-smoke-run.ts') === true;
   const supervisorPendingPass = partial.result === 'PASS'
@@ -69,22 +71,20 @@ export function normalizeSmokeReport(
     && Boolean(partial.terminalHandle?.trim())
     && Boolean(partial.orcaExecutable?.trim());
   const carryOnlyPass = isCarryOnlySelectivePass(partial, binding.headSha);
-  const normalizationPartial = carryOnlyPass
-    ? { ...partial, terminalCleanup: 'closed_owned_handle', terminalHandle: 'carry-only-no-execution' }
-    : supervisorPendingPass
-      ? { ...partial, terminalCleanup: 'closed_owned_handle' }
-      : partial;
-  const normalized = base.normalizeSmokeReport(normalizationPartial, binding);
+  const normalizationPartial = supervisorPendingPass
+    ? { ...partial, terminalCleanup: 'closed_owned_handle' }
+    : partial;
+  const normalizationOptions = carryOnlyPass && options.executionMode === 'carry-only'
+    ? { executionMode: 'carry-only' as const }
+    : {};
+  const normalized = base.normalizeSmokeReport(normalizationPartial, binding, normalizationOptions);
   if (!normalized.ok) {
     return {
       ...normalized,
       report: invalidSmokeReport(partial, binding, normalized.reason),
     };
   }
-  if (carryOnlyPass) {
-    normalized.report.terminalCleanup = 'not_started_no_execution';
-    normalized.report.terminalHandle = undefined;
-  } else if (supervisorPendingPass) {
+  if (supervisorPendingPass) {
     normalized.report.terminalCleanup = 'pending';
   }
   return { ok: true, report: bindControlPlaneVerdict(normalized.report) };
@@ -235,7 +235,6 @@ const FULL_SHA = /^[0-9a-f]{40}$/u;
 const REPOSITORY_SLUG = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const REPORT_BLOCK_PATTERN = /```worker-smoke-report\s*\r?\n[\s\S]*?```/giu;
 const AFFECTED_BLOCK_PATTERN = /```worker-smoke-affected\s*\r?\n([\s\S]*?)```/giu;
-const CARRIED_OBSERVED_PATTERN = /^carried PASS from head [0-9a-f]{40} comment \d+; not freshly executed on [0-9a-f]{40}$/u;
 
 function normalizeLogin(value: string | undefined): string {
   return String(value ?? '').trim().toLowerCase();
@@ -819,23 +818,11 @@ function fullRetry(
   };
 }
 
-function projectedCarriedObservation(scenario: base.SmokeScenario): boolean {
-  return scenario.outcome === 'pass' && CARRIED_OBSERVED_PATTERN.test(scenario.observed?.trim() ?? '');
-}
-
 function isCarryOnlySelectivePass(
   report: Partial<base.SmokeReport>,
   currentHeadSha: string,
 ): boolean {
-  const currentHead = currentHeadSha.trim().toLowerCase();
-  return report.result === 'PASS'
-    && report.terminalCleanup === 'not_started_no_execution'
-    && !String(report.terminalHandle ?? '').trim()
-    && Array.isArray(report.scenarios)
-    && report.scenarios.length > 0
-    && report.scenarios.every((scenario) =>
-      projectedCarriedObservation(scenario)
-      && scenario.observed?.trim().endsWith(`; not freshly executed on ${currentHead}`) === true);
+  return base.isProvenCarryOnlySmokeReport(report, currentHeadSha);
 }
 
 function isCarryOnlySelectiveReport(report: base.SmokeReport): boolean {
@@ -989,7 +976,7 @@ export function planWorkerSmokeSelectiveRetry(input: {
 
     const selected = maximal[0];
     const selectedIsFreshCurrentHead = selected.headSha === currentHead
-      && !projectedCarriedObservation(selected.row.scenario);
+      && !base.isCarriedSmokeScenarioObservation(selected.row.scenario);
     if (affectedKeys.has(key) && !selectedIsFreshCurrentHead) {
       execution.push(declared);
       tupleDiagnostics.push({ tuple: tuplePreview(declared.action, declared.expected), reason: 'current_head_affected' });

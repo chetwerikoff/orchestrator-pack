@@ -224,6 +224,16 @@ describe('AO-free PR scope declaration contract', () => {
     ).toMatchObject({ ok: false, kind: 'invalid-normalization' });
   });
 
+  it('admits the exact .gitignore root without widening the root-file family', () => {
+    expect(REPOSITORY_ALLOWED_ROOTS).toContain('.gitignore');
+    expect(
+      validatePrScopeDeclaration({
+        ...declaration(),
+        declared_paths: ['.gitignore'],
+        allowed_roots: ['.gitignore'],
+      }),
+    ).toMatchObject({ ok: true });
+  });
   it('enforces repository denylist precedence and root ceiling', () => {
     expect(
       validatePrScopeDeclaration({
