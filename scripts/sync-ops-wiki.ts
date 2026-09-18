@@ -23,6 +23,7 @@ export const DEFAULT_CONVERGENCE_TIMEOUT_MS = 30_000;
 export const DEFAULT_POLL_INTERVAL_MS = 200;
 export const DEFAULT_MCP_REQUEST_TIMEOUT_MS = 5_000;
 export const DEFAULT_MCP_READ_SNIPPET_LENGTH = 12_288;
+export const DEFAULT_MCP_REINDEX_TIMEOUT_MS = DEFAULT_CONVERGENCE_TIMEOUT_MS;
 
 export type GitRunner = (cwd: string, args: readonly string[]) => { ok: boolean; stdout: string; stderr: string };
 export type OpsWikiMode = 'plan' | 'apply' | 'check';
@@ -1155,14 +1156,14 @@ export function createMcpWikiOpsClient(
     ? requestTimeoutMs
     : DEFAULT_MCP_REQUEST_TIMEOUT_MS;
 
-  const rpc = async (method: string, params?: Record<string, unknown>): Promise<unknown> => {
+  const rpc = async (method: string, params?: Record<string, unknown>, timeoutMs = boundedTimeout): Promise<unknown> => {
     const response = await fetchImpl(url, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         accept: 'application/json, text/event-stream',
       },
-      signal: AbortSignal.timeout(boundedTimeout),
+      signal: AbortSignal.timeout(timeoutMs),
       body: JSON.stringify({ jsonrpc: '2.0', id: nextId++, method, params }),
     });
     const body = await response.text();
@@ -1234,7 +1235,7 @@ export function createMcpWikiOpsClient(
     },
     async reindex(input) {
       await ready;
-      await rpc('tools/call', { name: 'reindex', arguments: { path: input.path, force: input.force === true } });
+      await rpc('tools/call', { name: 'reindex', arguments: { path: input.path, force: input.force === true } }, DEFAULT_MCP_REINDEX_TIMEOUT_MS);
     },
   };
 }

@@ -657,4 +657,18 @@ describe('ops-wiki production MCP seam', () => {
     expect(read).toEqual({ ok: false, reason: 'timeout' });
     expect(Date.now() - started).toBeLessThan(1_000);
   });
+
+  it('allows a slow reindex to use the convergence timeout', async () => {
+    const client = createMcpWikiOpsClient('http://wiki-ops.test/mcp', async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as { method: string; id: number };
+      if (body.method !== 'initialize') await new Promise((resolve) => setTimeout(resolve, 25));
+      const result = body.method === 'initialize'
+        ? { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'test', version: '1' } }
+        : { content: [{ type: 'text', text: JSON.stringify({ ok: true }) }] };
+      return new Response(`data: ${JSON.stringify({ jsonrpc: '2.0', id: body.id, result })}\n\n`, {
+        headers: { 'content-type': 'text/event-stream' },
+      });
+    }, 5);
+    await expect(client.reindex?.({ force: true })).resolves.toBeUndefined();
+  });
 });
