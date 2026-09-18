@@ -602,10 +602,17 @@ describe('Issue #1431 manager reviewer canon', () => {
           priorTier: tier, firstRevision: 'r01', ...intakeExtras,
         }, null, 2));
         writeFileSync(join(invalidDir, 'author-dispositions.json'), JSON.stringify({
-          schema: 'create-issue-author-dispositions/v1', reviewEpisodeId: 'issue:1431@r01',
+          schema: 'create-issue-author-dispositions/v1', producer: 'governed-author-output/v1', reviewEpisodeId: 'issue:1431@r01',
           sourceRevision: 'r01', predecessorStage: null, draft: t1Draft, findings: [],
           m4: { reviewEpisodeId: 'issue:1431@r01', sourceRevision: 'r01', predecessorStage: null, inventory: [] },
         }, null, 2));
+        writeFileSync(join(invalidDir, 'issue-r01-body.json'), JSON.stringify({
+          schema: 'create-issue-live-snapshot/v1',
+          issueNumber: 1431,
+          sourceRevision: 'r01',
+          title: 'T1 fixture',
+          body: t1Draft,
+        }, null, 2) + '\n');
         expect(() => buildManagerReviewTerminalBundle({
           repositoryFullName: reviewContext.repositoryFullName, issueNumber: reviewContext.issueNumber,
           sourceRevision: 'r01', reviewDir: invalidDir, liveIssueBody: t1Draft,
