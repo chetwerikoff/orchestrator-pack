@@ -225,8 +225,9 @@ function transport(options: TransportOptions = {}) {
     if (target.startsWith(`repos/${REPOSITORY}/labels/`)) {
       return { exitCode: 0, stdout: '{}', stderr: '' };
     }
-    if (options.issueBodies && target === `repos/${REPOSITORY}/issues/${issueNumber}` && argv.includes('--jq')) {
-      const body = options.issueBodies[Math.min(issueReadCount, options.issueBodies.length - 1)] ?? '';
+    if (target === `repos/${REPOSITORY}/issues/${issueNumber}` && argv.includes('--jq')) {
+      const bodies = options.issueBodies ?? [finalAcceptanceIssueBody(observedRevision)];
+      const body = bodies[Math.min(issueReadCount, bodies.length - 1)] ?? '';
       issueReadCount += 1;
       return { exitCode: 0, stdout: JSON.stringify({ title: 'fixture issue', body, labels: [] }), stderr: '' };
     }
@@ -303,6 +304,7 @@ function fixture(input: {
   const intakePath = join(dir, 'tier-intake.json');
   const evidencePath = join(dir, 'attempt-001.json');
   const authorPath = join(dir, 'author-dispositions.json');
+  const authorReplyPath = join(dir, 'round-01-author-reply.md');
   const capturePath = join(dir, 'pass-02-architectural.capture.txt');
   const reviewEvidencePath = join(dir, 'attempt-000.json');
   const turnResultPath = join(dir, 'turn-result-001.json');
@@ -318,7 +320,20 @@ function fixture(input: {
     priorTier: 'T2',
     firstRevision: intakeRevision,
   }));
-  writeFileSync(authorPath, JSON.stringify({ schema: AUTHOR_DISPOSITIONS_SCHEMA, findings: [] }));
+  writeFileSync(authorReplyPath, [
+    'Governed author output:',
+    '',
+    '```create-issue-author-dispositions/v1',
+    JSON.stringify({
+      schema: AUTHOR_DISPOSITIONS_SCHEMA,
+      sourceRevision,
+      predecessorStage: 'architectural',
+      findings: [],
+      m4: { inventory: [] },
+    }),
+    '```',
+    '',
+  ].join('\n'));
   const reviewComments = Array.from({ length: 3 }, (_, index) => {
     const invocationId = `architectural-review-invocation-${String(index + 1).padStart(2, '0')}`;
     return comment(canonicalVerdict(sourceRevision, invocationId, issueNumber, invocationEchoLabel), { id: COMMENT_ID + 100 + index, issueNumber });
@@ -400,7 +415,7 @@ function fixture(input: {
     invocations: [invocation],
   };
   writeFileSync(evidencePath, JSON.stringify(evidence));
-  return { dir, intakePath, evidencePath, reviewEvidencePath, authorPath, capturePath, turnResultPath, outputDir, evidence, invocation, body, episode, reviewComments, issueNumber, phase: input.phase ?? 'final-acceptance', stageEvidencePaths: [reviewEvidencePath, evidencePath] };
+  return { dir, intakePath, evidencePath, reviewEvidencePath, authorPath, authorReplyPath, capturePath, turnResultPath, outputDir, evidence, invocation, body, episode, reviewComments, issueNumber, phase: input.phase ?? 'final-acceptance', stageEvidencePaths: [reviewEvidencePath, evidencePath] };
 }
 
 function competitivePreLensFixture() {
