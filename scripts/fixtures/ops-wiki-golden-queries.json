@@ -47,7 +47,7 @@
     },
     {
       "id": "direct-fix-ru",
-      "query": "архитектор direct fix worker handoff architect contract",
+      "query": "как архитектор direct PR declaration snapshot pr-scope",
       "expected_episode_ids": ["direct-fix-spine", "direct-fix-handoff"]
     },
     {
