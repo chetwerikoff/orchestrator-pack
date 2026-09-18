@@ -535,6 +535,7 @@ describe('smoke executor profiles', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-opencode-effort-'));
     const issueBodyFile = join(root, 'issue.md');
     writeFileSync(issueBodyFile, issueBody, 'utf8');
+    expect(runProcessSync({ command: 'git', args: ['init', '--quiet'], cwd: root }).ok).toBe(true);
     const adapter = new DeterministicRuntimeAdapter();
     const spawn = vi.spyOn(adapter, 'spawnWorker');
     const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
@@ -1730,14 +1731,14 @@ describe('exact-head cross-run worker-smoke coverage', () => {
   it('applies zero-current-tuple global blocks and clears them with later PASS', () => {
     const blocked = coverage([
       comment(1, report('PASS', [scenario('A', 'A passes')])),
-      comment(2, report('BLOCKED', [scenario('unknown', 'unknown', 'blocked')])),
+      comment(2, report('BLOCKED', [{ ...scenario('unknown', 'unknown', 'blocked'), causeFamily: 'scenario_precondition_unavailable' }])),
     ], A);
     expect(blocked.accepting).toBe(false);
     expect(blocked.diagnostics.globalBlock.kind).toBe('BLOCKED');
 
     const cleared = coverage([
       comment(1, report('PASS', [scenario('A', 'A passes')])),
-      comment(2, report('BLOCKED', [scenario('unknown', 'unknown', 'blocked')])),
+      comment(2, report('BLOCKED', [{ ...scenario('unknown', 'unknown', 'blocked'), causeFamily: 'scenario_precondition_unavailable' }])),
       comment(3, report('PASS', [scenario('unknown', 'unknown')])),
     ], A);
     expect(cleared.accepting).toBe(true);
@@ -2210,7 +2211,7 @@ if (endpoint === 'user') {
       const issueBodyFile = join(root, 'issue.md');
       writeFileSync(issueBodyFile, body, 'utf8');
       const failReport = {
-        ...report('FAIL', [scenario('A', 'A passes', 'fail')]),
+        ...report('FAIL', [{ ...scenario('A', 'A passes', 'fail'), causeFamily: 'scenario_assertion_failed' }]),
         terminalHandle: 'terminal-fail',
       };
       const passReport = {
@@ -2228,7 +2229,7 @@ if (endpoint === 'user') {
           writeWorkerSmokeReceipt(passReport);
           writeWorkerSmokeReceipt(failReport);
         }
-        const expectedWitness = receiptOrder === 'publication' ? 'terminal-pass' : 'terminal-fail';
+        const expectedWitness = 'terminal-fail';
         const aggregate = coverage(comments, body);
         expect(aggregate.accepting).toBe(true);
         expect(aggregate.latestClearingPass?.terminalHandle).toBe('terminal-pass');
