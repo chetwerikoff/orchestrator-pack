@@ -5188,6 +5188,30 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       }));
       const coverage = derivePackReviewGptCoverage(run.reviewRound);
 
+      if (coverage?.kind === 'partial' && classifyPackReviewPayload(payload).blocking) {
+        // Blocking findings affect the eventual verdict, never the pre-grace
+        // source census. Keep any sub-cardinality blocking evidence pending
+        // until the existing scoped reconcile/grace path owns settlement.
+        run = updatePackReviewRun(run.id, {
+          status: 'reviewing',
+          latestRunStatus: 'reviewing',
+          failureReason: undefined,
+          completedAtUtc: undefined,
+        }, { projectId, storeRoot });
+        const runs = listPackReviewRuns({ projectId, storeRoot });
+        if (claimLease) await claimLease.release('run_started', runs);
+        return {
+          ok: true,
+          created: true,
+          reused: false,
+          reason: `gpt_sources_partial_pending_reconcile:${coverage.completedSourceCount}/${coverage.cardinality}`,
+          runId: run.id,
+          status: 'reviewing',
+          coverage,
+          httpStatus: 202,
+        };
+      }
+
       // Harvest failures are an immediate terminal overlay. They are deliberately
       // evaluated before ordinary incompleteness so partial evidence is retained
       // without waiting for the shared source grace.

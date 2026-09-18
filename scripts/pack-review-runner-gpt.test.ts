@@ -1757,7 +1757,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     expect(result).toMatchObject({
       ok: true,
       status: 'changes_requested',
-      coverage: { kind: 'full', completedSourceCount: 3, cardinality: 3 },
+      coverage: { kind: 'complete', completedSourceCount: 3, cardinality: 3 },
     });
     const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
     expect(run?.reviewRound?.settledSourceCount).toBe(3);
@@ -1810,7 +1810,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     expect(posted).not.toContain('GPT source source-02 did not complete');
   });
 
-  it('accepts ordinary partial blockers under the same severity semantics as delivery classification', async () => {
+  it('keeps ordinary partial blockers pending under the same severity semantics as delivery classification', async () => {
     const storeRoot = tempRoot('opk-gpt-critical-blocking-partial-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
@@ -1830,20 +1830,21 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
 
     expect(result).toMatchObject({
       ok: true,
-      status: 'changes_requested',
+      status: 'reviewing',
+      reason: 'gpt_sources_partial_pending_reconcile:2/3',
       coverage: { kind: 'partial', completedSourceCount: 2, cardinality: 3 },
     });
     expect(getPackReviewRun(String(result.runId), {
       projectId: 'orchestrator-pack',
       storeRoot,
-    })?.reviewVerdict).toBe('findings');
+    })?.reviewVerdict).toBeUndefined();
   });
 
   it.each([
     'harvest_failed',
     'no_reply',
     'forbidden_verdict_envelope',
-  ] as const)('keeps real blocking findings authoritative while reporting %s separately', async (harvestClass) => {
+  ] as const)('keeps real blocking findings pending when %s leaves the census partial', async (harvestClass) => {
     const storeRoot = tempRoot('opk-gpt-harvest-blocking-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
@@ -1859,16 +1860,17 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     }));
 
     const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
-    expect(result).toMatchObject({ ok: true, status: 'changes_requested' });
-    expect(run?.reviewVerdict).toBe('findings');
-    expect(run?.findingCount).toBe(1);
-    expect(run?.findings).toHaveLength(1);
-    const posted = readFileSync(capture, 'utf8');
-    expect(posted).toContain('real-blocker');
-    expect(posted).toContain('Review harvest incidents');
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'reviewing',
+      reason: 'gpt_sources_partial_pending_reconcile:2/3',
+      coverage: { kind: 'partial', completedSourceCount: 2, cardinality: 3 },
+    });
+    expect(run?.reviewVerdict).toBeUndefined();
+    expect(run?.findingCount).toBeUndefined();
+    expect(run?.reviewRound?.settledSourceCount).toBeUndefined();
     expect(run?.reviewRound?.sourceSlots[1]?.terminalClass).toBe(harvestClass);
-    expect(posted).toContain(harvestClass);
-    expect(posted).not.toContain('GPT source source-02 did not complete');
+    expect(() => readFileSync(capture, 'utf8')).toThrow();
   });
 
   it('terminalizes launched slots as possible-delivery evidence on stale recovery', () => {
@@ -2927,7 +2929,7 @@ describe('Issue #1741 failed GPT round source-comment settlement', () => {
 
 
 describe('recovered sub-quorum blocking source regression', () => {
-  it('delivers a credentialed recovered 1/3 blocker without freezing settledSourceCount to one', async () => {
+  it('keeps a credentialed recovered 1/3 blocker incomplete after grace', async () => {
     const storeRoot = tempRoot('opk-gpt-recovered-one-blocker-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
@@ -3089,20 +3091,18 @@ describe('recovered sub-quorum blocking source regression', () => {
     expect(reconciliation.results).toEqual(expect.arrayContaining([
       expect.objectContaining({
         runId: failed.id,
-        recovered: true,
-        statusReconciled: true,
-        status: 'changes_requested',
+        terminalized: false,
+        statusReconciled: false,
+        usableSourceCount: 1,
+        graceExpired: true,
+        reason: 'gpt_sources_incomplete_after_grace:1/3',
       }),
     ]));
-    const settled = getPackReviewRun(failed.id, { projectId: 'orchestrator-pack', storeRoot });
-    expect(settled?.status).toBe('changes_requested');
-    expect(settled?.reviewRound?.settledSourceCount).toBeUndefined();
-    expect(settled?.reviewVerdict).toBe('findings');
-    expect(settled?.findingCount).toBe(1);
-    expect(settled?.findings).toEqual([
-      expect.objectContaining({ title: 'recovered-blocker', severity: 'error', sourceSlotId: 'source-01' }),
-    ]);
-    expect(statusStates).toContain('failure');
-    expect(reviewBodies.join('\n')).toContain('recovered-blocker');
+    const unsettled = getPackReviewRun(failed.id, { projectId: 'orchestrator-pack', storeRoot });
+    expect(unsettled?.reviewRound?.settledSourceCount).toBeUndefined();
+    expect(unsettled?.reviewVerdict).toBeUndefined();
+    expect(unsettled?.findingCount).toBeUndefined();
+    expect(statusStates).toEqual([]);
+    expect(reviewBodies).toEqual([]);
   });
 });
