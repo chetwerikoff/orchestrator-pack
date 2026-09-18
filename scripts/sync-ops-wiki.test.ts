@@ -8,6 +8,7 @@ import {
   buildEscalationQueries,
   checkRepositoryMode,
   collectHeadings,
+  DEFAULT_MCP_READ_SNIPPET_LENGTH,
   createMcpWikiOpsClient,
   defaultGitRunner,
   episodeRelativePath,
@@ -66,6 +67,11 @@ function write(root: string, relativePath: string, content: string): void {
   const path = join(root, relativePath);
   mkdirSync(join(path, '..'), { recursive: true });
   writeFileSync(path, content);
+}
+
+function servedBody(markdown: string): string {
+  const match = /^---\n[\s\S]*?\n---(?:\n|$)/u.exec(markdown);
+  return match ? markdown.slice(match[0].length) : markdown;
 }
 
 function initRepo(files: Record<string, string>): { repoRoot: string; commit: string } {
@@ -191,7 +197,7 @@ function corpusClient(corpusRoot: string, options: {
       if (options.timeout) return { ok: false, reason: 'timeout' };
       try {
         const content = readFileSync(join(corpusRoot, path), 'utf8');
-        return { ok: true, path, content };
+        return { ok: true, path, content: servedBody(content) };
       } catch {
         return { ok: false, reason: 'absent' };
       }
@@ -485,7 +491,7 @@ describe('ops-wiki apply protocol', () => {
     });
   });
 
-  it('requires every expected golden episode to appear in the top three', async () => {
+  it('reports a miss when an expected golden episode is absent from the bounded result window', async () => {
     const suite = loadGoldenSuite(JSON.stringify({
       queries: [{ id: 'multi', query: 'worker', expected_episode_ids: ['worker-lifecycle', 'agents-boundaries'] }],
     }));
@@ -494,6 +500,25 @@ describe('ops-wiki apply protocol', () => {
       async search() { return [{ path: episodeRelativePath('worker-lifecycle'), score: 0.9 }]; },
     };
     await expect(runGoldenSuite(client, suite)).resolves.toEqual({ ok: false, reason: 'golden_miss:multi' });
+  });
+
+  it('accepts expected golden episodes beyond the top three within the bounded result window', async () => {
+    const suite = loadGoldenSuite(JSON.stringify({
+      queries: [{ id: 'ranked', query: 'worker', expected_episode_ids: ['worker-lifecycle', 'agents-boundaries'] }],
+    }));
+    const client: WikiOpsClient = {
+      async read() { return { ok: false, reason: 'absent' }; },
+      async search() {
+        return [
+          { path: episodeRelativePath('worker-lifecycle'), score: 0.9 },
+          { path: episodeRelativePath('filler-one'), score: 0.8 },
+          { path: episodeRelativePath('filler-two'), score: 0.7 },
+          { path: episodeRelativePath('filler-three'), score: 0.6 },
+          { path: episodeRelativePath('agents-boundaries'), score: 0.5 },
+        ];
+      },
+    };
+    await expect(runGoldenSuite(client, suite)).resolves.toEqual({ ok: true });
   });
 
   it('uses no Git command in the corpus and supports explicit existing reindex only', async () => {
@@ -541,6 +566,16 @@ describe('ops-wiki routing policy', () => {
     expect(evaluateOperationalFreshness({ currentCommit: commit, read: { ok: true, path: OPS_WIKI_STATUS_NOTE, content: 'bad' } })).toBe('canonical_files');
   });
 
+  it('parses the body-only MCP read fixture and rejects conflicting status metadata', () => {
+    const fixture = JSON.parse(readFileSync(join(process.cwd(), 'scripts/fixtures/ops-wiki-read-body.json'), 'utf8')) as { results: Array<{ path: string; content: string }> };
+    const statusRead = fixture.results.find((result) => result.path === OPS_WIKI_STATUS_NOTE);
+    expect(statusRead).toBeDefined();
+    expect(parseStatusNote(statusRead!.content)).toEqual({ checkedThrough: 'a'.repeat(40), applyInProgress: undefined });
+    expect(evaluateOperationalFreshness({ currentCommit: 'a'.repeat(40), read: { ok: true, path: statusRead!.path, content: statusRead!.content } })).toBe('use_wiki_ops');
+    const conflicting = renderStatusNote({ checkedThrough: 'a'.repeat(40) }).replace(`{"checked_through_commit":"${'a'.repeat(40)}"}`, `{"checked_through_commit":"${'b'.repeat(40)}"}`);
+    expect(() => parseStatusNote(conflicting)).toThrow('ops_wiki_status_malformed');
+  });
+
   it('escalates absent, weak, ambiguous, and invalid episode reads', () => {
     expect(evaluateSearchEscalation([], policy)).toBe('expand');
     expect(evaluateSearchEscalation([{ path: 'episodes/a.md' }], policy)).toBe('expand');
@@ -568,7 +603,7 @@ describe('ops-wiki routing policy', () => {
       read: {
         ok: true,
         path: episode.relativePath,
-        content: `---\nops_wiki_owned: true\nepisode_id: "worker-lifecycle"\nsource_commit: "${commit}"\ngeneration_hash: "wrong"\n---\n\n## Worker lifecycle\n`,
+        content: `\n# Worker lifecycle\n`,
       },
       episode,
     })).toBe('expand');
@@ -576,7 +611,7 @@ describe('ops-wiki routing policy', () => {
       read: {
         ok: true,
         path: episode.relativePath,
-        content: `---\nops_wiki_owned: true\nepisode_id: "worker-lifecycle"\nsource_commit: "${commit}"\ngeneration_hash: "${episode.generationHash}"\nsource_sections:\n  - "## Worker lifecycle"\n---\n\n\`\`\`text\n## Worker lifecycle\n\`\`\`\n`,
+        content: `\n\`\`\`ops-wiki-episode\n{"episode_id":"worker-lifecycle","source_commit":"bad","generation_hash":"wrong"}\n\`\`\`\n\n## Worker lifecycle\n`,
       },
       episode,
     })).toBe('expand');
@@ -584,7 +619,7 @@ describe('ops-wiki routing policy', () => {
       read: {
         ok: true,
         path: episode.relativePath,
-        content: `---\nops_wiki_owned: true\nepisode_id: "worker-lifecycle"\nsource_commit: "${commit}"\ngeneration_hash: "${episode.generationHash}"\n---\n\n## Worker lifecycle\n`,
+        content: `\n\`\`\`ops-wiki-episode\n{"episode_id":"worker-lifecycle","source_commit":"${commit}","generation_hash":"${episode.generationHash}"}\n\`\`\`\n\n## Worker lifecycle\n`,
       },
       episode,
     })).toBe('read_top1');
@@ -601,9 +636,11 @@ describe('ops-wiki routing policy', () => {
 describe('ops-wiki production MCP seam', () => {
   it('uses the stateless Streamable HTTP contract and parses real read {results:[...]} payloads', async () => {
     const calls: string[] = [];
+    const snippetLengths: number[] = [];
     const client = createMcpWikiOpsClient('http://wiki-ops.test/mcp', async (_url, init) => {
-      const body = JSON.parse(String(init?.body)) as { method: string; id: number; params?: { name?: string } };
+      const body = JSON.parse(String(init?.body)) as { method: string; id: number; params?: { name?: string; arguments?: { snippet_length?: number } } };
       calls.push(body.method);
+      if (typeof body.params?.arguments?.snippet_length === 'number') snippetLengths.push(body.params.arguments.snippet_length);
       const result = body.method === 'initialize'
         ? { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'test', version: '1' } }
         : {
@@ -625,6 +662,7 @@ describe('ops-wiki production MCP seam', () => {
     const read = await client.read(OPS_WIKI_STATUS_NOTE, { related: false });
     expect(read).toMatchObject({ ok: true, path: OPS_WIKI_STATUS_NOTE });
     expect(calls).toEqual(['initialize', 'tools/call']);
+    expect(snippetLengths).toEqual([DEFAULT_MCP_READ_SNIPPET_LENGTH]);
   });
 
   it('bounds a non-returning production request', async () => {
@@ -637,5 +675,19 @@ describe('ops-wiki production MCP seam', () => {
     const read = await client.read(OPS_WIKI_STATUS_NOTE, { related: false });
     expect(read).toEqual({ ok: false, reason: 'timeout' });
     expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('allows a slow reindex to use the convergence timeout', async () => {
+    const client = createMcpWikiOpsClient('http://wiki-ops.test/mcp', async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as { method: string; id: number };
+      if (body.method !== 'initialize') await new Promise((resolve) => setTimeout(resolve, 25));
+      const result = body.method === 'initialize'
+        ? { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'test', version: '1' } }
+        : { content: [{ type: 'text', text: JSON.stringify({ ok: true }) }] };
+      return new Response(`data: ${JSON.stringify({ jsonrpc: '2.0', id: body.id, result })}\n\n`, {
+        headers: { 'content-type': 'text/event-stream' },
+      });
+    }, 5);
+    await expect(client.reindex?.({ force: true })).resolves.toBeUndefined();
   });
 });
