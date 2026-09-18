@@ -14,6 +14,7 @@ import {
   type CreateIssueBrowserPreflightFailure,
 } from './lib/create-issue-browser-gpt-preflight.ts';
 import type { CreateIssueActionBinding, CreateIssueSemanticStage } from './lib/create-issue-next-action.ts';
+import { recordLifecycleInvocationAdmission } from './lib/create-issue-stage-lifecycle.ts';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const launcherPath = join(repoRoot, 'scripts/flow-manager-long-running-child.ts');
@@ -231,6 +232,26 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
     }
     browserChildEnv = preflight.childEnv;
     resolvedProjectUrl = preflight.config.projectUrl;
+    try {
+      recordLifecycleInvocationAdmission({
+        issueNumber: binding.issueNumber,
+        stage: binding.stage,
+        stageAttemptId: binding.stageAttemptId!,
+        sourceRevision: binding.sourceRevision,
+        invocationId,
+        reviewerSlot: options.get('source-slot') as string,
+        terminalEnvelopePath: terminalEnvelope,
+        reviewerSource: options.get('reviewer-source') as string,
+        reviewerSourceOutputPath: reviewerSourceOutput,
+      });
+    } catch (error) {
+      refuse('create_issue_lifecycle_admission_failed', {
+        blocker: error instanceof Error ? error.message : String(error),
+        remedy: 'rerun canonical start-cycle/admission for the exact Issue revision and stage before Browser-GPT send',
+        nextAction: null,
+      });
+      return 2;
+    }
   }
 
   const browserArgs = [
