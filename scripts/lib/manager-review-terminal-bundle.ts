@@ -310,7 +310,10 @@ export function buildManagerReviewTerminalBundle(options: BuildManagerReviewTerm
   const reviewDir = resolve(options.reviewDir);
   const authorDispositionsPath = resolve(options.authorDispositionsPath ?? join(reviewDir, 'author-dispositions.json'));
   const author = readJson(authorDispositionsPath, 'terminal_bundle_author_dispositions_invalid');
-  if (author.schema !== 'create-issue-author-dispositions/v1') throw new Error('terminal_bundle_author_dispositions_invalid');
+  if (author.schema !== 'create-issue-author-dispositions/v1'
+    || (author.producer !== 'governed-author-output/v1' && author.producer !== 'lifecycle-zero-state/v1')) {
+    throw new Error('terminal_bundle_author_dispositions_invalid');
+  }
 
   const reviewEpisodeId = requireString(author, 'reviewEpisodeId', 'terminal_bundle_binding_missing');
   const authorRevision = requireString(author, 'sourceRevision', 'terminal_bundle_binding_missing');
@@ -318,12 +321,24 @@ export function buildManagerReviewTerminalBundle(options: BuildManagerReviewTerm
   const draft = requireString(author, 'draft', 'terminal_bundle_draft_missing');
   if (authorRevision !== options.sourceRevision) throw new Error('terminal_bundle_author_dispositions_stale');
 
-  const liveBody = options.liveIssueBody ?? fetchIssueRevision(
-    options.transport ?? defaultGhTransport(),
-    options.repositoryFullName,
-    options.issueNumber,
-  ).body;
-  if (parseRevisionMarker(liveBody) !== options.sourceRevision || liveBody !== draft) {
+  const issueSnapshot = readJson(
+    join(reviewDir, 'issue-' + options.sourceRevision + '-body.json'),
+    'terminal_bundle_issue_snapshot_missing',
+  );
+  if (issueSnapshot.schema !== 'create-issue-live-snapshot/v1'
+    || issueSnapshot.issueNumber !== options.issueNumber
+    || issueSnapshot.sourceRevision !== options.sourceRevision
+    || typeof issueSnapshot.title !== 'string'
+    || issueSnapshot.body !== draft) {
+    throw new Error('terminal_bundle_issue_snapshot_stale');
+  }
+  const liveIssue = options.liveIssueBody === undefined
+    ? fetchIssueRevision(options.transport ?? defaultGhTransport(), options.repositoryFullName, options.issueNumber)
+    : null;
+  const liveBody = options.liveIssueBody ?? liveIssue!.body;
+  if (parseRevisionMarker(liveBody) !== options.sourceRevision
+    || liveBody !== draft
+    || (liveIssue && liveIssue.title !== issueSnapshot.title)) {
     throw new Error('terminal_bundle_live_issue_mismatch');
   }
 
@@ -530,7 +545,12 @@ export function renderManagerReviewTerminalBundle(bundle: ManagerReviewTerminalB
 }
 
 export function writeManagerReviewTerminalBundle(path: string, bundle: ManagerReviewTerminalBundle): void {
-  writeFileSync(path, `${renderManagerReviewTerminalBundle(bundle)}\n`, { mode: 0o600 });
+  const bytes = `${renderManagerReviewTerminalBundle(bundle)}\n`;
+  if (existsSync(path)) {
+    if (readFileSync(path, 'utf8') !== bytes) throw new Error('terminal_bundle_conflict');
+    return;
+  }
+  writeFileSync(path, bytes, { mode: 0o600, flag: 'wx' });
 }
 
 export function terminalBundleFileName(issueNumber: number, sourceRevision: string): string {
