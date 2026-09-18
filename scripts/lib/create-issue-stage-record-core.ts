@@ -474,9 +474,6 @@ export function startReviewCycle(
 ): OperationResult {
   const workdir = resolveWorkdir(input.issueNumber, input.workdir);
   const diagnostics: LineageDiagnostic[] = [];
-  const bootstrapDiagnostics = ensureProjectionLabels(transport, input.repo);
-  diagnostics.push(...bootstrapDiagnostics);
-  if (bootstrapDiagnostics.length > 0) return { ok: false, diagnostics, projectionPendingRepair: true };
 
   let censusState: ReturnType<typeof loadIssueJournalCensus>;
   try {
@@ -590,6 +587,20 @@ export function startReviewCycle(
       return { ok: false, diagnostics, stageAttemptId: canonicalAttemptId };
     }
     stageAttemptId = canonicalAttemptId;
+  }
+
+  // A stale/consumed stage must be rejected before any projection or journal
+  // mutation. Projection bootstrap is therefore downstream of live Issue +
+  // lifecycle admission and deterministic attempt validation.
+  const bootstrapDiagnostics = ensureProjectionLabels(transport, input.repo);
+  diagnostics.push(...bootstrapDiagnostics);
+  if (bootstrapDiagnostics.length > 0) {
+    return {
+      ok: false,
+      diagnostics,
+      ...(stageAttemptId ? { stageAttemptId } : {}),
+      projectionPendingRepair: true,
+    };
   }
 
   const persistedCandidate = readPersistedCycleId(workdir);
