@@ -1228,7 +1228,7 @@ describe('Issue #1954 standalone GPT PR-review manager entry contract', () => {
     'utf8',
   );
 
-  const normalizedAgents = agents.replace(/\\s+/g, ' ').trim();
+  const normalizedAgents = agents.replace(/\s+/g, ' ').trim();
 
   it('routes exact implementation-review intent without stealing execute-Issue or create-Issue review continuation', () => {
     expect(normalizedAgents).toContain(
@@ -1247,7 +1247,7 @@ describe('Issue #1954 standalone GPT PR-review manager entry contract', () => {
       'Explicit task-spec review continuation remains with `create-issue-draft`',
     );
     expect(reviewSkill).toContain(
-      'Ordinary discussion containing “review” without an\\nexact PR/Issue target does not activate this skill',
+      'Ordinary discussion containing “review” without an\nexact PR/Issue target does not activate this skill',
     );
   });
 
