@@ -223,7 +223,7 @@ describe('Issue #1936 truthful smoke evidence', () => {
   it('normalizes carry-only PASS without synthesizing a runtime terminal handle', () => {
     const partial: Partial<SmokeReport> = {
       result: 'PASS',
-      scenarios: [{ action: 'carry tuple', expected: 'already proven', observed: `carried PASS from ${HEAD_TWO}; not freshly executed on ${HEAD_ONE}`, outcome: 'pass' }],
+      scenarios: [{ action: 'carry tuple', expected: 'already proven', observed: `carried PASS from head ${HEAD_TWO} comment 42; not freshly executed on ${HEAD_ONE}`, outcome: 'pass' }],
       trackedFilesUnmodified: true,
       limitations: [],
       environmentNotes: ['smoke-execution=carry-only'],
