@@ -1,0 +1,14 @@
+{
+  "results": [
+    {
+      "path": "Ops Wiki Status.md",
+      "found": true,
+      "title": "Ops Wiki Status",
+      "aliases": [],
+      "tags": [],
+      "content": "\n# Ops Wiki Status\n\n```ops-wiki-status\n{\"checked_through_commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}\n```\n",
+      "links": [],
+      "backlinks": []
+    }
+  ]
+}

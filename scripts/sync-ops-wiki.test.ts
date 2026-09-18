@@ -68,6 +68,11 @@ function write(root: string, relativePath: string, content: string): void {
   writeFileSync(path, content);
 }
 
+function servedBody(markdown: string): string {
+  const match = /^---\n[\s\S]*?\n---(?:\n|$)/u.exec(markdown);
+  return match ? markdown.slice(match[0].length) : markdown;
+}
+
 function initRepo(files: Record<string, string>): { repoRoot: string; commit: string } {
   const repoRoot = tempDir('ops-wiki-repo-');
   git(repoRoot, ['init']);
@@ -191,7 +196,7 @@ function corpusClient(corpusRoot: string, options: {
       if (options.timeout) return { ok: false, reason: 'timeout' };
       try {
         const content = readFileSync(join(corpusRoot, path), 'utf8');
-        return { ok: true, path, content };
+        return { ok: true, path, content: servedBody(content) };
       } catch {
         return { ok: false, reason: 'absent' };
       }
@@ -541,6 +546,16 @@ describe('ops-wiki routing policy', () => {
     expect(evaluateOperationalFreshness({ currentCommit: commit, read: { ok: true, path: OPS_WIKI_STATUS_NOTE, content: 'bad' } })).toBe('canonical_files');
   });
 
+  it('parses the body-only MCP read fixture and rejects conflicting status metadata', () => {
+    const fixture = JSON.parse(readFileSync(join(process.cwd(), 'scripts/fixtures/ops-wiki-read-body.json'), 'utf8')) as { results: Array<{ path: string; content: string }> };
+    const statusRead = fixture.results.find((result) => result.path === OPS_WIKI_STATUS_NOTE);
+    expect(statusRead).toBeDefined();
+    expect(parseStatusNote(statusRead!.content)).toEqual({ checkedThrough: 'a'.repeat(40), applyInProgress: undefined });
+    expect(evaluateOperationalFreshness({ currentCommit: 'a'.repeat(40), read: { ok: true, path: statusRead!.path, content: statusRead!.content } })).toBe('use_wiki_ops');
+    const conflicting = renderStatusNote({ checkedThrough: 'a'.repeat(40) }).replace(`{"checked_through_commit":"${'a'.repeat(40)}"}`, `{"checked_through_commit":"${'b'.repeat(40)}"}`);
+    expect(() => parseStatusNote(conflicting)).toThrow('ops_wiki_status_malformed');
+  });
+
   it('escalates absent, weak, ambiguous, and invalid episode reads', () => {
     expect(evaluateSearchEscalation([], policy)).toBe('expand');
     expect(evaluateSearchEscalation([{ path: 'episodes/a.md' }], policy)).toBe('expand');
@@ -568,7 +583,7 @@ describe('ops-wiki routing policy', () => {
       read: {
         ok: true,
         path: episode.relativePath,
-        content: `---\nops_wiki_owned: true\nepisode_id: "worker-lifecycle"\nsource_commit: "${commit}"\ngeneration_hash: "wrong"\n---\n\n## Worker lifecycle\n`,
+        content: `\n# Worker lifecycle\n`,
       },
       episode,
     })).toBe('expand');
@@ -576,7 +591,7 @@ describe('ops-wiki routing policy', () => {
       read: {
         ok: true,
         path: episode.relativePath,
-        content: `---\nops_wiki_owned: true\nepisode_id: "worker-lifecycle"\nsource_commit: "${commit}"\ngeneration_hash: "${episode.generationHash}"\nsource_sections:\n  - "## Worker lifecycle"\n---\n\n\`\`\`text\n## Worker lifecycle\n\`\`\`\n`,
+        content: `\n\`\`\`ops-wiki-episode\n{"episode_id":"worker-lifecycle","source_commit":"bad","generation_hash":"wrong"}\n\`\`\`\n\n## Worker lifecycle\n`,
       },
       episode,
     })).toBe('expand');
@@ -584,7 +599,7 @@ describe('ops-wiki routing policy', () => {
       read: {
         ok: true,
         path: episode.relativePath,
-        content: `---\nops_wiki_owned: true\nepisode_id: "worker-lifecycle"\nsource_commit: "${commit}"\ngeneration_hash: "${episode.generationHash}"\n---\n\n## Worker lifecycle\n`,
+        content: `\n\`\`\`ops-wiki-episode\n{"episode_id":"worker-lifecycle","source_commit":"${commit}","generation_hash":"${episode.generationHash}"}\n\`\`\`\n\n## Worker lifecycle\n`,
       },
       episode,
     })).toBe('read_top1');
