@@ -2442,8 +2442,9 @@ describe('Issue #1484 post-lens ledger production', () => {
     writeFileSync(input.evidencePath, JSON.stringify(lensEvidence));
     const lensDigest = createHash('sha256').update(lensCapture).digest('hex');
     const lensIdentity = 'sha256:' + lensDigest + ':pass-02-architectural-lens.capture.txt';
-    writeFileSync(input.authorPath, JSON.stringify({
-      schema: AUTHOR_DISPOSITIONS_SCHEMA,
+    writeGovernedAuthorReply(input.authorReplyPath, {
+      sourceRevision: REVISION,
+      predecessorStage: 'architectural-lens',
       findings: Array.from({ length: 7 }, (_, index) => ({
         id: 'lens-finding-' + String(index + 1),
         type: 'quality',
@@ -2453,7 +2454,7 @@ describe('Issue #1484 post-lens ledger production', () => {
         'persistent-machinery': 'no',
         simplificationCutCandidate: false,
       })),
-    }));
+    });
     const producerEvidencePath = join(input.dir, 'claude-producer-evidence.json');
     writeFileSync(producerEvidencePath, JSON.stringify([{
       schema: 'claude-producer-evidence/v1',
