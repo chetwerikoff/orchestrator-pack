@@ -43,19 +43,18 @@ path, prompt/output path, receipt, envelope, cookie, token, or credential.
    reviewer turns, this includes the current tier, role, stage, source slot,
    and frozen revision. A workflow that does not define create-review
    `stage`, `slot`, or frozen revision must not invent values for them.
-3. Before starting flow-manager in a fresh worktree, provision the gitignored
-   browser configuration from the operator checkout:
-   `cp "<OPERATOR_CHECKOUT>/.claude/skills/discuss-with-gpt/local.config.json" "<WORKTREE_PATH>/.claude/skills/discuss-with-gpt/local.config.json"`.
-   Alternatively, set both required values through the environment:
-   `export DISCUSS_WITH_GPT_PROJECT_URL="<PROJECT_URL>"` and
-   `export DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR="<CHROME_USER_DATA_DIR>"`.
-   If launch reports
-   `discuss-with-gpt: operator configuration missing`, the mandatory
-   configuration is not resolved; this can also occur with a copied but
-   incomplete config. Verify both `projectUrl` and `chromeUserDataDir`, or
-   both environment-variable equivalents.
-4. Load the gitignored local configuration and confirm the configured headed
-   automation Chrome is running and logged in. Never type credentials.
+3. Resolve Browser-GPT configuration without copying operator files into the
+   worktree. Existing supported environment values remain valid. A governed
+   create-Issue send may instead pass
+   `--operator-browser-config <absolute-path>`; the inline send-boundary
+   preflight reads that exact operator-local file in place and never copies it
+   into the repository. Missing/incomplete configuration is a pre-send refusal
+   with a state-bound `nextAction` only when retrying the boundary is legal.
+4. Confirm the configured headed automation Chrome is running and logged in.
+   Never type credentials. Create-Issue callers do not run a separate mandatory
+   preflight command: Node 22, tracked GitHub transport and Browser-GPT
+   configuration are revalidated inline before the first launcher/browser/send
+   side effect.
 5. Start or verify the configured browser through the existing launcher:
    `.claude/skills/discuss-with-gpt/launch-chrome.sh`. Select the applicable
    canonical workflow; stage cardinality and topology belong to that workflow,
