@@ -246,6 +246,12 @@ export function loadManifest(raw: string): OpsWikiManifest {
   for (const episode of episodes) {
     for (const edge of episode.edges ?? []) {
       if (!ids.has(edge.target)) throw new Error(`ops_wiki_manifest_malformed:edge_target:${episode.episode_id}:${edge.target}`);
+      if (edge.type === 'related') {
+        const target = episodes.find((candidate) => candidate.episode_id === edge.target);
+        if (!(target?.edges ?? []).some((candidate) => candidate.type === 'related' && candidate.target === episode.episode_id)) {
+          throw new Error(`ops_wiki_manifest_malformed:asymmetric_related:${episode.episode_id}:${edge.target}`);
+        }
+      }
     }
   }
 

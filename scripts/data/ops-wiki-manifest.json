@@ -23,7 +23,8 @@
       ],
       "edges": [
         { "type": "related", "target": "policy-publishing" },
-        { "type": "related", "target": "agents-portable-plan" }
+        { "type": "related", "target": "agents-portable-plan" },
+        { "type": "related", "target": "direct-fix-handoff" }
       ]
     },
     {
@@ -32,14 +33,19 @@
       "path": "AGENTS.md",
       "topic": "governance",
       "role": "all",
-      "aliases": ["runtime adapter", "node 22", "plan-first", "scope discipline"],
+      "aliases": ["runtime adapter", "node 22", "plan-first"],
       "sections": [
         { "heading": "## Portable contracts" },
         { "heading": "## Plan, scope, and verification" }
       ],
       "edges": [
         { "type": "prerequisite", "target": "agents-precedence-boundaries" },
-        { "type": "related", "target": "policy-publishing" }
+        { "type": "related", "target": "agents-precedence-boundaries" },
+        { "type": "related", "target": "policy-publishing" },
+        { "type": "related", "target": "agents-coworker-rtk" },
+        { "type": "related", "target": "runbook-worker-lifecycle" },
+        { "type": "related", "target": "rca-failure-response" },
+        { "type": "related", "target": "change-orchestrator-runtime" }
       ]
     },
     {
@@ -55,7 +61,9 @@
       ],
       "referenced_paths": ["docs/coworker-delegation.md"],
       "edges": [
-        { "type": "related", "target": "coworker-deep-dive" }
+        { "type": "related", "target": "agents-portable-plan" },
+        { "type": "related", "target": "coworker-deep-dive" },
+        { "type": "related", "target": "agents-wiki-ops" }
       ]
     },
     {
@@ -72,7 +80,10 @@
       ],
       "referenced_paths": ["scripts/gh"],
       "edges": [
-        { "type": "related", "target": "chat-current-head" }
+        { "type": "related", "target": "agents-wiki-ops" },
+        { "type": "related", "target": "agents-worker-skills" },
+        { "type": "related", "target": "chat-current-head" },
+        { "type": "related", "target": "chat-checkpoints-review" }
       ]
     },
     {
@@ -81,7 +92,7 @@
       "path": "AGENTS.md",
       "topic": "worker",
       "role": "worker",
-      "aliases": ["worker pre-flight", "named skills"],
+      "aliases": ["named skills"],
       "sections": [
         { "heading": "## Worker lifecycle" },
         { "heading": "## Auto-invoked skills" }
@@ -89,7 +100,12 @@
       "referenced_paths": ["docs/orchestration-runbook.md"],
       "edges": [
         { "type": "related", "target": "runbook-worker-lifecycle" },
-        { "type": "related", "target": "direct-fix-handoff" }
+        { "type": "related", "target": "direct-fix-handoff" },
+        { "type": "related", "target": "runbook-roles" },
+        { "type": "related", "target": "rca-failure-response" },
+        { "type": "related", "target": "merge-safety-resolve" },
+        { "type": "related", "target": "study-external-source" },
+        { "type": "related", "target": "agents-github-runtime" }
       ]
     },
     {
@@ -104,7 +120,9 @@
         { "heading": "## Roles and completion" }
       ],
       "edges": [
-        { "type": "related", "target": "runbook-executor-profiles" }
+        { "type": "related", "target": "runbook-executor-profiles" },
+        { "type": "related", "target": "agents-worker-skills" },
+        { "type": "related", "target": "chat-start" }
       ]
     },
     {
@@ -122,8 +140,10 @@
         "scripts/executor-profile-store.ts"
       ],
       "edges": [
+        { "type": "related", "target": "runbook-roles" },
         { "type": "related", "target": "runbook-launch-assistant" },
-        { "type": "related", "target": "smoke-when-policy" }
+        { "type": "related", "target": "smoke-when-policy" },
+        { "type": "related", "target": "tiering" }
       ]
     },
     {
@@ -138,7 +158,9 @@
       ],
       "referenced_paths": ["scripts/pr2-foundation/supervised-task-launch-assistant.ts"],
       "edges": [
-        { "type": "prerequisite", "target": "runbook-executor-profiles" }
+        { "type": "prerequisite", "target": "runbook-executor-profiles" },
+        { "type": "related", "target": "runbook-executor-profiles" },
+        { "type": "related", "target": "runbook-assignment-binding" }
       ]
     },
     {
@@ -153,7 +175,9 @@
         { "heading": "## Exact local runtime binding" }
       ],
       "edges": [
-        { "type": "related", "target": "runbook-worker-lifecycle" }
+        { "type": "related", "target": "runbook-launch-assistant" },
+        { "type": "related", "target": "runbook-worker-lifecycle" },
+        { "type": "related", "target": "runbook-s1-s2" }
       ]
     },
     {
@@ -169,7 +193,9 @@
         { "heading": "## S2 — single routine continuation actuator" }
       ],
       "edges": [
-        { "type": "related", "target": "runbook-scheduler" }
+        { "type": "related", "target": "runbook-assignment-binding" },
+        { "type": "related", "target": "runbook-scheduler" },
+        { "type": "related", "target": "runbook-inbox-publication" }
       ]
     },
     {
@@ -184,7 +210,10 @@
         { "heading": "## Published GitHub artifact completion and batch attribution" }
       ],
       "edges": [
-        { "type": "related", "target": "chat-done" }
+        { "type": "related", "target": "runbook-s1-s2" },
+        { "type": "related", "target": "chat-done" },
+        { "type": "related", "target": "runbook-scheduler" },
+        { "type": "related", "target": "chat-publication" }
       ]
     },
     {
@@ -201,7 +230,9 @@
         { "heading": "## Deterministic reconciliation" }
       ],
       "edges": [
-        { "type": "related", "target": "runbook-s1-s2" }
+        { "type": "related", "target": "runbook-s1-s2" },
+        { "type": "related", "target": "runbook-inbox-publication" },
+        { "type": "related", "target": "runbook-laws-verification" }
       ]
     },
     {
@@ -218,6 +249,7 @@
         { "heading": "## Operator adoption" }
       ],
       "edges": [
+        { "type": "related", "target": "runbook-scheduler" },
         { "type": "related", "target": "runbook-worker-lifecycle" }
       ]
     },
@@ -227,14 +259,20 @@
       "path": "docs/orchestration-runbook.md",
       "topic": "worker",
       "role": "worker",
-      "aliases": ["worker pre-flight", "required CI", "pack-worker-report", "worker smoke"],
+      "aliases": ["required CI", "pack-worker-report", "worker smoke"],
       "sections": [
         { "heading": "## Worker lifecycle" }
       ],
       "referenced_paths": ["scripts/pack-worker-report.ts", "scripts/worker-smoke-run.ts"],
       "edges": [
         { "type": "prerequisite", "target": "agents-worker-skills" },
-        { "type": "related", "target": "smoke-when-policy" }
+        { "type": "related", "target": "agents-worker-skills" },
+        { "type": "related", "target": "agents-portable-plan" },
+        { "type": "related", "target": "runbook-assignment-binding" },
+        { "type": "related", "target": "runbook-laws-verification" },
+        { "type": "related", "target": "direct-fix-handoff" },
+        { "type": "related", "target": "smoke-when-policy" },
+        { "type": "related", "target": "orchestrator-recovery-runbook" }
       ]
     },
     {
@@ -248,7 +286,9 @@
         { "heading": "# Repository publishing policy" }
       ],
       "edges": [
-        { "type": "related", "target": "agents-precedence-boundaries" }
+        { "type": "related", "target": "agents-precedence-boundaries" },
+        { "type": "related", "target": "agents-portable-plan" },
+        { "type": "related", "target": "direct-fix-spine" }
       ]
     },
     {
@@ -266,7 +306,9 @@
       "referenced_paths": ["scripts/worker-smoke-run.ts", "scripts/executor-profile-policy.ts"],
       "edges": [
         { "type": "related", "target": "runbook-executor-profiles" },
-        { "type": "related", "target": "smoke-pre-path" }
+        { "type": "related", "target": "smoke-pre-path" },
+        { "type": "related", "target": "smoke-readiness-runtime" },
+        { "type": "related", "target": "runbook-worker-lifecycle" }
       ]
     },
     {
@@ -281,7 +323,9 @@
         { "heading": "## Supported worker path" }
       ],
       "edges": [
-        { "type": "prerequisite", "target": "smoke-when-policy" }
+        { "type": "prerequisite", "target": "smoke-when-policy" },
+        { "type": "related", "target": "smoke-when-policy" },
+        { "type": "related", "target": "smoke-admission-coverage" }
       ]
     },
     {
@@ -296,6 +340,7 @@
         { "heading": "## Exact-head point-in-time coverage" }
       ],
       "edges": [
+        { "type": "related", "target": "smoke-pre-path" },
         { "type": "related", "target": "smoke-control-delivery" }
       ]
     },
@@ -312,7 +357,8 @@
         { "heading": "## Finite scenario progress and deadlines" }
       ],
       "edges": [
-        { "type": "related", "target": "smoke-admission-coverage" }
+        { "type": "related", "target": "smoke-admission-coverage" },
+        { "type": "related", "target": "smoke-recovery" }
       ]
     },
     {
@@ -329,7 +375,9 @@
         { "heading": "## Deterministic preflight and concurrent starts" }
       ],
       "edges": [
-        { "type": "related", "target": "smoke-readiness-runtime" }
+        { "type": "related", "target": "smoke-control-delivery" },
+        { "type": "related", "target": "smoke-readiness-runtime" },
+        { "type": "related", "target": "orchestrator-recovery-runbook" }
       ]
     },
     {
@@ -345,6 +393,7 @@
         { "heading": "## Orca executable selection" }
       ],
       "edges": [
+        { "type": "related", "target": "smoke-recovery" },
         { "type": "related", "target": "smoke-when-policy" }
       ]
     },
@@ -361,7 +410,8 @@
         { "heading": "## 3. Task contract" }
       ],
       "edges": [
-        { "type": "related", "target": "chat-publication" }
+        { "type": "related", "target": "chat-publication" },
+        { "type": "related", "target": "runbook-roles" }
       ]
     },
     {
@@ -376,6 +426,8 @@
         { "heading": "## 5. Read-back proportional to the artifact" }
       ],
       "edges": [
+        { "type": "related", "target": "chat-start" },
+        { "type": "related", "target": "chat-checkpoints-review" },
         { "type": "related", "target": "runbook-inbox-publication" }
       ]
     },
@@ -391,7 +443,9 @@
         { "heading": "## 7. Independent review role" }
       ],
       "edges": [
-        { "type": "related", "target": "chat-current-head" }
+        { "type": "related", "target": "chat-publication" },
+        { "type": "related", "target": "chat-current-head" },
+        { "type": "related", "target": "agents-github-runtime" }
       ]
     },
     {
@@ -400,12 +454,14 @@
       "path": "docs/chat-executor-rules.md",
       "topic": "review",
       "role": "all",
-      "aliases": ["current-head", "required CI", "pack review"],
+      "aliases": ["current-head", "pack review"],
       "sections": [
         { "heading": "## 8. CI, smoke, and review authority stay current-head bound" }
       ],
       "edges": [
-        { "type": "related", "target": "chat-done" }
+        { "type": "related", "target": "chat-checkpoints-review" },
+        { "type": "related", "target": "chat-done" },
+        { "type": "related", "target": "agents-github-runtime" }
       ]
     },
     {
@@ -422,7 +478,9 @@
         { "heading": "## 12. Operating formula" }
       ],
       "edges": [
-        { "type": "related", "target": "merge-ready-merge" }
+        { "type": "related", "target": "chat-current-head" },
+        { "type": "related", "target": "merge-ready-merge" },
+        { "type": "related", "target": "runbook-inbox-publication" }
       ]
     },
     {
@@ -436,7 +494,9 @@
         { "heading": "# Coworker CLI delegation (deep-dive)" }
       ],
       "edges": [
-        { "type": "prerequisite", "target": "agents-coworker-rtk" }
+        { "type": "prerequisite", "target": "agents-coworker-rtk" },
+        { "type": "related", "target": "agents-coworker-rtk" },
+        { "type": "related", "target": "first-principles-framework" }
       ]
     },
     {
@@ -453,7 +513,9 @@
         { "heading": "## Step 2 — Resolve the PR and target" }
       ],
       "edges": [
-        { "type": "related", "target": "merge-ready-merge" }
+        { "type": "related", "target": "merge-ready-merge" },
+        { "type": "related", "target": "agents-worker-skills" },
+        { "type": "related", "target": "rca-failure-response" }
       ]
     },
     {
@@ -470,7 +532,10 @@
       ],
       "edges": [
         { "type": "prerequisite", "target": "merge-safety-resolve" },
-        { "type": "related", "target": "merge-adopt-local" }
+        { "type": "related", "target": "merge-safety-resolve" },
+        { "type": "related", "target": "merge-adopt-local" },
+        { "type": "related", "target": "chat-done" },
+        { "type": "related", "target": "pack-review-waiver-merge-runbook" }
       ]
     },
     {
@@ -487,6 +552,7 @@
       ],
       "referenced_paths": ["scripts/sync-ops-wiki.ts"],
       "edges": [
+        { "type": "related", "target": "merge-ready-merge" },
         { "type": "related", "target": "ops-wiki-sync" },
         { "type": "related", "target": "merge-cleanup-report" }
       ]
@@ -503,7 +569,8 @@
         { "heading": "## Step 10 — Report" }
       ],
       "edges": [
-        { "type": "prerequisite", "target": "merge-adopt-local" }
+        { "type": "prerequisite", "target": "merge-adopt-local" },
+        { "type": "related", "target": "merge-adopt-local" }
       ]
     },
     {
@@ -522,7 +589,10 @@
       ],
       "referenced_paths": ["scripts/pr-scope-declaration.ts"],
       "edges": [
-        { "type": "related", "target": "direct-fix-ci-review" }
+        { "type": "related", "target": "direct-fix-ci-review" },
+        { "type": "related", "target": "policy-publishing" },
+        { "type": "related", "target": "rca-failure-response" },
+        { "type": "related", "target": "pr-scope-declaration" }
       ]
     },
     {
@@ -539,7 +609,9 @@
       ],
       "referenced_paths": ["scripts/pack-review-runner.ts", "scripts/verify.ts"],
       "edges": [
-        { "type": "prerequisite", "target": "direct-fix-spine" }
+        { "type": "prerequisite", "target": "direct-fix-spine" },
+        { "type": "related", "target": "direct-fix-spine" },
+        { "type": "related", "target": "direct-fix-handoff" }
       ]
     },
     {
@@ -555,7 +627,10 @@
         { "heading": "## Architect role contract" }
       ],
       "edges": [
-        { "type": "related", "target": "runbook-worker-lifecycle" }
+        { "type": "related", "target": "runbook-worker-lifecycle" },
+        { "type": "related", "target": "direct-fix-ci-review" },
+        { "type": "related", "target": "agents-precedence-boundaries" },
+        { "type": "related", "target": "agents-worker-skills" }
       ]
     },
     {
@@ -569,7 +644,10 @@
         { "heading": "## Failure response" }
       ],
       "edges": [
-        { "type": "related", "target": "agents-portable-plan" }
+        { "type": "related", "target": "agents-portable-plan" },
+        { "type": "related", "target": "agents-worker-skills" },
+        { "type": "related", "target": "direct-fix-spine" },
+        { "type": "related", "target": "merge-safety-resolve" }
       ]
     },
     {
@@ -599,7 +677,288 @@
         { "heading": "## Operational wiki consultation" }
       ],
       "edges": [
-        { "type": "related", "target": "ops-wiki-sync" }
+        { "type": "related", "target": "ops-wiki-sync" },
+        { "type": "related", "target": "agents-coworker-rtk" },
+        { "type": "related", "target": "agents-github-runtime" }
+      ]
+    },
+    {
+      "episode_id": "create-issue-draft",
+      "title": "Create Issue draft workflow",
+      "path": ".cursor/skills/create-issue-draft/SKILL.md",
+      "topic": "task-authoring",
+      "role": "manager",
+      "aliases": ["issue authoring", "создание задачи", "task specification"],
+      "sections": [
+        { "heading": "## Inputs and routing" },
+        { "heading": "## Roles" },
+        { "heading": "## Final acceptance" }
+      ],
+      "edges": [
+        { "type": "related", "target": "execute-issue-with-gpt" },
+        { "type": "related", "target": "adversarial-draft-review" },
+        { "type": "related", "target": "discuss-with-gpt" },
+        { "type": "related", "target": "publish-issue-draft" },
+        { "type": "related", "target": "tiering" }
+      ]
+    },
+    {
+      "episode_id": "execute-issue-with-gpt",
+      "title": "Execute an existing Issue through GPT",
+      "path": ".cursor/skills/execute-issue-with-gpt/SKILL.md",
+      "topic": "task-execution",
+      "role": "manager",
+      "aliases": ["issue execution", "выполнить Issue", "verified complete"],
+      "sections": [
+        { "heading": "## Trigger and boundaries" },
+        { "heading": "## Supervisor contract" },
+        { "heading": "## Terminal outcomes" }
+      ],
+      "edges": [
+        { "type": "related", "target": "create-issue-draft" },
+        { "type": "related", "target": "chatgpt-task-execution-runbook" }
+      ]
+    },
+    {
+      "episode_id": "adversarial-draft-review",
+      "title": "Adversarial draft review",
+      "path": ".cursor/skills/adversarial-draft-review/SKILL.md",
+      "topic": "review",
+      "role": "reviewer",
+      "aliases": ["adversarial draft", "оспорить драфт", "Codex challenge"],
+      "sections": [
+        { "heading": "## When to invoke" },
+        { "heading": "## Flow" },
+        { "heading": "## Don't" }
+      ],
+      "edges": [
+        { "type": "related", "target": "create-issue-draft" }
+      ]
+    },
+    {
+      "episode_id": "discuss-with-gpt",
+      "title": "Discuss an artifact with GPT",
+      "path": ".cursor/skills/discuss-with-gpt/SKILL.md",
+      "topic": "review",
+      "role": "manager",
+      "aliases": ["GPT consultation", "обсудить с GPT", "browser GPT discussion"],
+      "sections": [
+        { "heading": "## Routing" },
+        { "heading": "## Browser preconditions and tracked-turn pointer" }
+      ],
+      "edges": [
+        { "type": "related", "target": "create-issue-draft" },
+        { "type": "related", "target": "browser-gpt-turn-runbook" }
+      ]
+    },
+    {
+      "episode_id": "publish-issue-draft",
+      "title": "Publish a legacy Issue draft",
+      "path": ".cursor/skills/publish-issue-draft/SKILL.md",
+      "topic": "publishing",
+      "role": "operator",
+      "aliases": ["legacy draft persistence", "публикация драфта", "publish legacy draft"],
+      "sections": [
+        { "heading": "## Mode A — sync-only (DEFAULT)" }
+      ],
+      "edges": [
+        { "type": "related", "target": "create-issue-draft" }
+      ]
+    },
+    {
+      "episode_id": "study-external-source",
+      "title": "Study an external source",
+      "path": ".cursor/skills/study-external-source/SKILL.md",
+      "topic": "research",
+      "role": "architect",
+      "aliases": ["external source", "изучить репозиторий", "adoption triage"],
+      "sections": [
+        { "heading": "## When to invoke" },
+        { "heading": "## Research step — delegate the reading to `coworker` (mandatory)" },
+        { "heading": "## Triage buckets" }
+      ],
+      "edges": [
+        { "type": "related", "target": "agents-worker-skills" }
+      ]
+    },
+    {
+      "episode_id": "switch-pack-reviewer",
+      "title": "Switch the pack reviewer",
+      "path": ".cursor/skills/switch-pack-reviewer/SKILL.md",
+      "topic": "review",
+      "role": "operator",
+      "aliases": ["switch reviewer", "сменить ревьюера", "PACK_REVIEWER selection"],
+      "sections": [
+        { "heading": "## Reviewer authority" },
+        { "heading": "## Triggers" },
+        { "heading": "## Procedure" }
+      ],
+      "edges": [
+        { "type": "related", "target": "reviewer-switch-runbook" }
+      ]
+    },
+    {
+      "episode_id": "change-orchestrator-runtime",
+      "title": "Change the registered runtime adapter",
+      "path": ".cursor/skills/change-orchestrator-runtime/SKILL.md",
+      "topic": "runtime",
+      "role": "architect",
+      "aliases": ["runtime adapter change", "смена runtime", "registered adapter"],
+      "sections": [
+        { "heading": "## Contract" },
+        { "heading": "## Procedure" }
+      ],
+      "edges": [
+        { "type": "related", "target": "agents-portable-plan" }
+      ]
+    },
+    {
+      "episode_id": "chatgpt-task-execution-runbook",
+      "title": "ChatGPT task execution runbook",
+      "path": "docs/chatgpt-task-execution-runbook.md",
+      "topic": "task-execution",
+      "role": "manager",
+      "aliases": ["task execution runbook", "исполнение задачи", "manager execution"],
+      "sections": [
+        { "heading": "## Scope and role split" },
+        { "heading": "## Preconditions" },
+        { "heading": "## Multi-turn completion loop" },
+        { "heading": "## Independent GitHub Definition-of-Done verification" }
+      ],
+      "edges": [
+        { "type": "related", "target": "execute-issue-with-gpt" },
+        { "type": "related", "target": "browser-gpt-turn-runbook" },
+        { "type": "related", "target": "flow-manager-long-running-child-runbook" }
+      ]
+    },
+    {
+      "episode_id": "browser-gpt-turn-runbook",
+      "title": "Browser-GPT turn runbook",
+      "path": "docs/browser-gpt-turn-runbook.md",
+      "topic": "chat-executor",
+      "role": "manager",
+      "aliases": ["browser GPT turn", "браузерный GPT поворот", "tracked browser turn"],
+      "sections": [
+        { "heading": "## Local-only configuration" },
+        { "heading": "## Start-of-shift preflight" },
+        { "heading": "## Prepare one turn" },
+        { "heading": "## Publication and tab lifecycle" }
+      ],
+      "edges": [
+        { "type": "related", "target": "chatgpt-task-execution-runbook" },
+        { "type": "related", "target": "discuss-with-gpt" }
+      ]
+    },
+    {
+      "episode_id": "pack-review-waiver-merge-runbook",
+      "title": "Pack-review waiver merge runbook",
+      "path": "docs/pack-review-waiver-merge-runbook.md",
+      "topic": "merge",
+      "role": "operator",
+      "aliases": ["operator waiver merge", "waiver procedure", "разрешение merge"],
+      "sections": [
+        { "heading": "## When this applies" },
+        { "heading": "## Prerequisites (read-only)" },
+        { "heading": "## Waiver procedure (failed review or missing status)" },
+        { "heading": "## Alternatives (preferred)" }
+      ],
+      "edges": [
+        { "type": "related", "target": "merge-ready-merge" }
+      ]
+    },
+    {
+      "episode_id": "orchestrator-recovery-runbook",
+      "title": "Orchestrator recovery runbook",
+      "path": "docs/orchestrator-recovery-runbook.md",
+      "topic": "recovery",
+      "role": "orchestrator",
+      "aliases": ["orchestrator recovery", "восстановление оркестратора", "CI recovery"],
+      "sections": [
+        { "heading": "## Start with exact evidence" },
+        { "heading": "## Required CI recovery" },
+        { "heading": "## Review recovery" },
+        { "heading": "## Completion evidence" }
+      ],
+      "edges": [
+        { "type": "related", "target": "runbook-worker-lifecycle" },
+        { "type": "related", "target": "smoke-recovery" }
+      ]
+    },
+    {
+      "episode_id": "tiering",
+      "title": "Task complexity tiering",
+      "path": "docs/tiering.md",
+      "topic": "task-authoring",
+      "role": "manager",
+      "aliases": ["task tiering", "уровни задачи", "T1 T2 T3"],
+      "sections": [
+        { "heading": "## Task complexity tier rubric" }
+      ],
+      "edges": [
+        { "type": "related", "target": "runbook-executor-profiles" },
+        { "type": "related", "target": "create-issue-draft" }
+      ]
+    },
+    {
+      "episode_id": "flow-manager-long-running-child-runbook",
+      "title": "Flow-manager long-running child runbook",
+      "path": "docs/flow-manager-long-running-child-runbook.md",
+      "topic": "chat-executor",
+      "role": "manager",
+      "aliases": ["long-running child", "долгий дочерний процесс", "flow-manager child"],
+      "sections": [
+        { "heading": "## Package commands" },
+        { "heading": "## Launcher mechanics" },
+        { "heading": "## Rollback" }
+      ],
+      "edges": [
+        { "type": "related", "target": "chatgpt-task-execution-runbook" }
+      ]
+    },
+    {
+      "episode_id": "reviewer-switch-runbook",
+      "title": "Reviewer switch runbook",
+      "path": "docs/reviewer-switch-runbook.md",
+      "topic": "review",
+      "role": "operator",
+      "aliases": ["reviewer selection", "переключение ревьюера", "reviewer preference"],
+      "sections": [
+        { "heading": "# Switching the pack reviewer (GPT, Codex, or Claude)" },
+        { "heading": "## Authority and precedence" },
+        { "heading": "## Reviewer adapters" },
+        { "heading": "## Inspect the current selection" },
+        { "heading": "## Persist a reviewer" }
+      ],
+      "edges": [
+        { "type": "related", "target": "switch-pack-reviewer" }
+      ]
+    },
+    {
+      "episode_id": "pr-scope-declaration",
+      "title": "PR scope declaration",
+      "path": "docs/pr-scope-declaration.md",
+      "topic": "scope",
+      "role": "worker",
+      "aliases": ["scope declaration", "декларация scope", "AO-free declaration"],
+      "sections": [
+        { "heading": "# AO-free PR scope declarations" }
+      ],
+      "edges": [
+        { "type": "related", "target": "direct-fix-spine" }
+      ]
+    },
+    {
+      "episode_id": "first-principles-framework",
+      "title": "First Principles Framework",
+      "path": "docs/first_principles_5_operational_framework.md",
+      "topic": "reasoning",
+      "role": "all",
+      "aliases": ["first principles", "первые принципы", "problem framing"],
+      "sections": [
+        { "heading": "# First Principles Framework — 5 режимов для регулярной инженерной работы" }
+      ],
+      "edges": [
+        { "type": "related", "target": "coworker-deep-dive" }
       ]
     }
   ]

@@ -49,6 +49,36 @@
       "id": "direct-fix-ru",
       "query": "архитектор сам открывает pr",
       "expected_episode_ids": ["direct-fix-spine", "direct-fix-handoff"]
+    },
+    {
+      "id": "skills-reviewer-ru",
+      "query": "как сменить ревьюера PACK_REVIEWER",
+      "expected_episode_ids": ["switch-pack-reviewer"]
+    },
+    {
+      "id": "chatgpt-task-execution-en",
+      "query": "manager execution VERIFIED_COMPLETE",
+      "expected_episode_ids": ["chatgpt-task-execution-runbook"]
+    },
+    {
+      "id": "browser-gpt-turn-mixed",
+      "query": "tracked Browser-GPT turn подготовка",
+      "expected_episode_ids": ["browser-gpt-turn-runbook"]
+    },
+    {
+      "id": "waiver-merge-en",
+      "query": "operator waiver merge authorization",
+      "expected_episode_ids": ["pack-review-waiver-merge-runbook"]
+    },
+    {
+      "id": "tiering-mixed",
+      "query": "T1 T2 T3 уровни задачи",
+      "expected_episode_ids": ["tiering"]
+    },
+    {
+      "id": "recovery-ru",
+      "query": "восстановление оркестратора required CI",
+      "expected_episode_ids": ["orchestrator-recovery-runbook"]
     }
   ]
 }
