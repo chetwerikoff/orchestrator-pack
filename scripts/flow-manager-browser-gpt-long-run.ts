@@ -14,7 +14,7 @@ import {
   type CreateIssueBrowserPreflightFailure,
 } from './lib/create-issue-browser-gpt-preflight.ts';
 import type { CreateIssueActionBinding, CreateIssueSemanticStage } from './lib/create-issue-next-action.ts';
-import { recordLifecycleInvocationAdmission } from './lib/create-issue-stage-lifecycle.ts';
+import { recordLifecycleInvocationAdmission, type LifecycleReviewStage } from './lib/create-issue-stage-lifecycle.ts';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const launcherPath = join(repoRoot, 'scripts/flow-manager-long-running-child.ts');
@@ -235,7 +235,7 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
     try {
       recordLifecycleInvocationAdmission({
         issueNumber: binding.issueNumber,
-        stage: binding.stage,
+        stage: binding.stage as LifecycleReviewStage,
         stageAttemptId: binding.stageAttemptId!,
         sourceRevision: binding.sourceRevision,
         invocationId,
