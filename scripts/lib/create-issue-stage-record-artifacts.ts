@@ -2455,6 +2455,7 @@ interface PreparedAuthorDispositions {
   path: string;
   bytes: string;
   value: JsonRecord;
+  replaceExisting: boolean;
 }
 
 function prepareAuthorDispositionsFromGovernedOutput(input: {
@@ -2515,6 +2516,7 @@ function prepareAuthorDispositionsFromGovernedOutput(input: {
     },
   };
   const bytes = JSON.stringify(produced, null, 2) + '\n';
+  let replaceExisting = false;
   if (existsSync(input.targetPath)) {
     let existingText = '';
     try { existingText = readFileSync(input.targetPath, 'utf8'); } catch {
@@ -2522,32 +2524,64 @@ function prepareAuthorDispositionsFromGovernedOutput(input: {
       return null;
     }
     if (existingText !== bytes) {
-      input.errors.push('existing author-dispositions.json conflicts with governed author output; field=findings/m4 authority=author-owned');
-      return null;
+      let existing: unknown;
+      try { existing = JSON.parse(existingText) as unknown; } catch { existing = null; }
+      if (!isRecord(existing)
+        || existing.schema !== AUTHOR_DISPOSITIONS_SCHEMA
+        || (existing.producer !== 'governed-author-output/v1' && existing.producer !== 'lifecycle-zero-state/v1')
+        || existing.reviewEpisodeId !== input.reviewEpisodeId) {
+        input.errors.push('existing author-dispositions.json is not a replaceable producer-owned binding; field=findings/m4 authority=author-owned');
+        return null;
+      }
+      replaceExisting = true;
     }
   }
-  return { path: input.targetPath, bytes, value: produced };
+  return { path: input.targetPath, bytes, value: produced, replaceExisting };
+}
+
+interface PreparedInputCommit {
+  created: string[];
+  replaced: Map<string, string>;
+}
+
+function rollbackPreparedInputCommit(commit: PreparedInputCommit): void {
+  for (const [path, previous] of [...commit.replaced.entries()].reverse()) {
+    const temporary = path + '.rollback-' + process.pid + '.tmp';
+    try {
+      writeFileSync(temporary, previous, { encoding: 'utf8', flag: 'wx' });
+      renameSync(temporary, path);
+    } catch {
+      try { if (existsSync(temporary)) unlinkSync(temporary); } catch {}
+    }
+  }
+  for (const path of [...commit.created].reverse()) {
+    try { if (existsSync(path)) unlinkSync(path); } catch {}
+  }
 }
 
 function commitPreparedInputs(
-  inputs: readonly { path: string; bytes: string }[],
-): string[] {
-  const created: string[] = [];
+  inputs: readonly { path: string; bytes: string; allowReplace?: boolean }[],
+): PreparedInputCommit {
+  const commit: PreparedInputCommit = { created: [], replaced: new Map() };
   try {
     for (const input of inputs) {
       mkdirSync(dirname(input.path), { recursive: true });
       if (existsSync(input.path)) {
-        if (readFileSync(input.path, 'utf8') !== input.bytes) throw new Error('conflicting immutable producer input: ' + input.path);
+        const previous = readFileSync(input.path, 'utf8');
+        if (previous === input.bytes) continue;
+        if (input.allowReplace !== true) throw new Error('conflicting immutable producer input: ' + input.path);
+        const temporary = input.path + '.replace-' + process.pid + '.tmp';
+        writeFileSync(temporary, input.bytes, { encoding: 'utf8', flag: 'wx' });
+        renameSync(temporary, input.path);
+        commit.replaced.set(input.path, previous);
         continue;
       }
       writeFileSync(input.path, input.bytes, { encoding: 'utf8', flag: 'wx' });
-      created.push(input.path);
+      commit.created.push(input.path);
     }
-    return created;
+    return commit;
   } catch (error) {
-    for (const path of created.reverse()) {
-      try { unlinkSync(path); } catch {}
-    }
+    rollbackPreparedInputCommit(commit);
     throw error;
   }
 }
@@ -2893,15 +2927,16 @@ export function produceAcceptanceArtifacts(
   artifactContents.set('finding-disposition-ledger.json', ledger);
   artifactContents.set('review-episode-inventory.json', JSON.stringify(authority!.receiptInventory, null, 2) + '\n');
   artifactContents.set('acceptance-artifacts.json', JSON.stringify(manifest, null, 2) + '\n');
-  let committedInputs: string[] = [];
+  let committedInputs: PreparedInputCommit = { created: [], replaced: new Map() };
   try {
     committedInputs = commitPreparedInputs([
       { path: issueSnapshot.path, bytes: issueSnapshot.bytes },
-      { path: preparedAuthor.path, bytes: preparedAuthor.bytes },
+      { path: preparedAuthor.path, bytes: preparedAuthor.bytes, allowReplace: preparedAuthor.replaceExisting },
     ]);
-    for (const path of committedInputs) createdInputPaths.add(path);
+    for (const path of committedInputs.created) createdInputPaths.add(path);
     publishArtifactSet(outputDir, files, artifactContents, options.publicationHooks);
   } catch (error) {
+    rollbackPreparedInputCommit(committedInputs);
     rollbackCreatedInputs(createdInputPaths);
     const message = error instanceof Error ? error.message : String(error);
     return {
