@@ -492,9 +492,10 @@ export function inspectLifecycleInvocationBinding(input: {
       observed: {},
     };
   }
-  const candidates = stageEvidenceCandidates(canonical.directory)
-    .map((path) => ({ path, value: readJson(path) }))
-    .filter((item) => isRecord(item.value));
+  const candidates = stageEvidenceCandidates(canonical.directory).flatMap((path) => {
+    const value = readJson(path);
+    return isRecord(value) ? [{ path, value }] : [];
+  });
   const exact = candidates.filter((item) => item.value.stageAttemptId === input.stageAttemptId);
   if (exact.length !== 1) {
     const sameStage = candidates

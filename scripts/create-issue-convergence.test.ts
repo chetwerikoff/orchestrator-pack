@@ -210,8 +210,8 @@ describe('create-Issue Browser-GPT operator config', () => {
 describe('create-Issue send-boundary adoption', () => {
   it('runs inline preflight before detached Browser-GPT launch', () => {
     const source = readFileSync(join(process.cwd(), 'scripts', 'flow-manager-browser-gpt-long-run.ts'), 'utf8');
-    const preflight = source.indexOf('runCreateIssueBrowserPreflight({');
-    const launch = source.indexOf('spawnDetachedLauncher(launcherArgs, browserChildEnv)');
+    const preflight = source.indexOf('preflightRunner({');
+    const launch = source.indexOf('spawnLauncher(launcherArgs, browserChildEnv)');
     expect(preflight).toBeGreaterThan(-1);
     expect(launch).toBeGreaterThan(preflight);
     expect(source).toContain("options.get('operator-browser-config')");
@@ -426,8 +426,8 @@ describe('Issue #1935 sanitized measured convergence replay', () => {
     // The enforced send boundary is part of the replay contract even though this
     // deterministic replay intentionally performs no live Browser-GPT send.
     const adapterSource = readFileSync(join(process.cwd(), 'scripts', 'flow-manager-browser-gpt-long-run.ts'), 'utf8');
-    expect(adapterSource.indexOf('runCreateIssueBrowserPreflight({')).toBeLessThan(
-      adapterSource.indexOf('spawnDetachedLauncher(launcherArgs, browserChildEnv)'),
+    expect(adapterSource.indexOf('preflightRunner({')).toBeLessThan(
+      adapterSource.indexOf('spawnLauncher(launcherArgs, browserChildEnv)'),
     );
 
     const reconciled = reconcileCreateIssueStage({

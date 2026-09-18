@@ -367,7 +367,7 @@ function reviewLaneCredentialingProjection(value: unknown): unknown {
 
 function isCredentialedReviewLaneEvidence(
   value: unknown,
-  waivedMissingSlots: ReadonlySet<string>,
+  waivedMissingSlots: readonly string[],
   purpose: ReviewEpisodeValidationPurpose = 'stage-time',
 ): value is ReviewLaneEvidence {
   return isReviewLaneEvidence(reviewLaneCredentialingProjection(value), waivedMissingSlots, purpose);
