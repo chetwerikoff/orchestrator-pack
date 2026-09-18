@@ -8,6 +8,7 @@ import {
   createIssueNextAction,
   createIssueRecoverableResult,
   createIssueTerminalResult,
+  validateCreateIssueManagerResult,
   validateCreateIssueNextAction,
   type CreateIssueActionBinding,
 } from './lib/create-issue-next-action.ts';
@@ -54,16 +55,23 @@ describe('create-Issue nextAction contract', () => {
       argv: ['node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage'],
     });
     expect(validateCreateIssueNextAction(action)).toEqual([]);
-    expect(createIssueRecoverableResult({ cause: 'observation_lost', nextAction: action })).toMatchObject({
+    const recoverable = createIssueRecoverableResult({ cause: 'observation_lost', nextAction: action });
+    expect(recoverable).toMatchObject({
       ok: false,
       cause: 'observation_lost',
       nextAction: action,
     });
-    expect(createIssueTerminalResult({ ok: false, cause: 'external_prerequisite' })).toEqual({
+    expect(validateCreateIssueManagerResult(recoverable)).toEqual([]);
+    const terminal = createIssueTerminalResult({ ok: false, cause: 'external_prerequisite' });
+    expect(terminal).toEqual({
       ok: false,
       cause: 'external_prerequisite',
       nextAction: null,
     });
+    expect(validateCreateIssueManagerResult(terminal)).toEqual([]);
+    expect(validateCreateIssueManagerResult({ ok: false, nextAction: null })).toContain(
+      'manager non-success result.cause must be non-empty',
+    );
   });
 
   it('returns canonical stale_next_action when any state binding moves', () => {
@@ -72,10 +80,11 @@ describe('create-Issue nextAction contract', () => {
       binding,
       argv: ['node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage'],
     });
-    expect(assertCreateIssueActionCurrent({
+    const stale = assertCreateIssueActionCurrent({
       action,
       observed: { ...binding, sourceRevision: 'r04' },
-    })).toMatchObject({
+    });
+    expect(stale).toMatchObject({
       ok: false,
       schema: 'create-issue-stale-next-action/v1',
       cause: 'stale_next_action',
@@ -83,6 +92,26 @@ describe('create-Issue nextAction contract', () => {
       observed: { sourceRevision: 'r04' },
       nextAction: null,
     });
+    expect(validateCreateIssueManagerResult(stale)).toEqual([]);
+  });
+
+  it('uses the shared result dialect for journal stage-record continuations and revalidates before mutation', () => {
+    const cliSource = readFileSync(join(process.cwd(), 'scripts', 'lib', 'create-issue-stage-record-cli.ts'), 'utf8');
+    expect(cliSource).toContain("kind: 'retry-start-cycle'");
+    expect(cliSource).toContain("kind: 'retry-stage-record-publication'");
+    expect(cliSource).toContain("'stage_record_retry_exhausted'");
+    expect(cliSource).toContain("'--expected-source-revision'");
+    expect(cliSource).toContain("'--expected-stage'");
+    expect(cliSource).toContain("'--expected-stage-attempt-id'");
+    expect(cliSource).toContain('validateCreateIssueManagerResult(output)');
+
+    const coreSource = readFileSync(join(process.cwd(), 'scripts', 'lib', 'create-issue-stage-record-core.ts'), 'utf8');
+    const functionStart = coreSource.indexOf('export function startReviewCycle(');
+    const admission = coreSource.indexOf('admitStageLaunch(admissionInput)', functionStart);
+    const projection = coreSource.indexOf('ensureProjectionLabels(transport, input.repo)', functionStart);
+    expect(functionStart).toBeGreaterThanOrEqual(0);
+    expect(admission).toBeGreaterThan(functionStart);
+    expect(projection).toBeGreaterThan(admission);
   });
 });
 
