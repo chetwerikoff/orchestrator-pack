@@ -1,12 +1,11 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
 
-import { spawn } from 'node:child_process';
-import { once } from 'node:events';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { runProcess } from './kernel/subprocess.ts';
 import { startPackReview } from './pack-review-runner.ts';
 import {
   createPackReviewRun,
@@ -88,13 +87,19 @@ describe('Issue #1436 smoke/review ordering', () => {
   ].join('\n');
 
   async function sigkillNodeSupervisor(): Promise<number> {
-    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
-    await once(child, 'spawn');
-    const pid = child.pid;
-    if (!Number.isInteger(pid) || (pid ?? 0) <= 0) throw new Error('test supervisor pid missing');
-    process.kill(pid!, 'SIGKILL');
-    await once(child, 'exit');
-    return pid!;
+    let pid = 0;
+    const result = await runProcess({
+      command: process.execPath,
+      args: ['-e', 'setInterval(() => {}, 1000)'],
+      onSpawn: (spawnedPid) => {
+        pid = spawnedPid;
+        process.kill(spawnedPid, 'SIGKILL');
+      },
+    });
+    expect(result.outcome).toBe('signal');
+    expect(result.signal).toBe('SIGKILL');
+    if (!Number.isInteger(pid) || pid <= 0) throw new Error('test supervisor pid missing');
+    return pid;
   }
 
   function beginWorkerOwnedAt(root: string, prNumber: number, attemptId: string) {
