@@ -30,8 +30,10 @@ import {
 import {
   admitStageLaunch,
   composeTerminalBundle,
+  ensureLifecycleTierIntake,
   loadCanonicalLifecycleAuthority,
   TERMINAL_BUNDLE_UNAVAILABLE,
+  type CompetitiveDecision,
   type LifecycleReviewStage,
 } from './create-issue-stage-lifecycle.ts';
 import type {
@@ -61,6 +63,8 @@ export interface StartCycleInput {
   issueNumber: number;
   sourceRevision: string;
   tier: string;
+  competitiveDecision?: CompetitiveDecision;
+  competitiveRationale?: string;
   publicActor: PublicActor;
   predecessorCycleId?: string;
   stage?: LifecycleReviewStage;
@@ -501,11 +505,36 @@ export function startReviewCycle(
     try {
       authority = loadCanonicalLifecycleAuthority(input.issueNumber, input.stateRootOverride);
     } catch (error) {
-      diagnostics.push({
-        code: 'stage_authority_invalid',
-        message: error instanceof Error ? error.message : String(error),
-      });
-      return { ok: false, diagnostics };
+      const detail = error instanceof Error ? error.message : String(error);
+      if (!detail.startsWith('missing canonical tier-intake/v1:')) {
+        diagnostics.push({ code: 'stage_authority_invalid', message: detail });
+        return { ok: false, diagnostics };
+      }
+      const marker = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i.exec(issueBefore.body)?.[1];
+      if (!marker || marker !== input.sourceRevision) {
+        diagnostics.push({
+          code: 'stage_authority_invalid',
+          message: `live Issue source-revision marker ${marker ?? '<missing>'} does not match launch revision ${input.sourceRevision}`,
+        });
+        return { ok: false, diagnostics };
+      }
+      try {
+        ensureLifecycleTierIntake({
+          issueNumber: input.issueNumber,
+          tier: input.tier as 'T1' | 'T2' | 'T3',
+          firstRevision: input.sourceRevision,
+          competitiveDecision: input.competitiveDecision,
+          competitiveRationale: input.competitiveRationale,
+          stateRootOverride: input.stateRootOverride,
+        });
+        authority = loadCanonicalLifecycleAuthority(input.issueNumber, input.stateRootOverride);
+      } catch (intakeError) {
+        diagnostics.push({
+          code: 'stage_authority_invalid',
+          message: intakeError instanceof Error ? intakeError.message : String(intakeError),
+        });
+        return { ok: false, diagnostics };
+      }
     }
     const admissionInput = {
       issueNumber: input.issueNumber,
