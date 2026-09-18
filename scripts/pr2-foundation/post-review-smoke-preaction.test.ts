@@ -198,7 +198,31 @@ function baseDependencies(input: Fixture, runtime: RuntimeFixture): PostReviewSm
     env: { ...process.env, PACK_REVIEW_RUN_STORE_ROOT: input.reviewRoot },
     ciGreen: () => true,
     readIssueBody: async () => ISSUE_BODY,
-    runAttempt: (options, deps) => runSmokeAttempt({ ...options, dryRun: true }, deps),
+    runAttempt: (options, deps) => runSmokeAttempt({ ...options, dryRun: true }, {
+      ...deps,
+      resolveTarget: (smokeOptions, suppliedBody) => {
+        if (smokeOptions.issueNumber !== ISSUE
+            || smokeOptions.prNumber !== PR
+            || smokeOptions.headSha !== input.headSha
+            || suppliedBody !== ISSUE_BODY) {
+          throw new Error('preaction_fixture_target_mismatch');
+        }
+        return {
+          repositorySlug: REPO,
+          issueNumber: ISSUE,
+          prNumber: PR,
+          headSha: input.headSha,
+          issueBody: ISSUE_BODY,
+          prBody: `Closes #${ISSUE}`,
+          issueBodyMatchesTarget: true,
+          trustedPublisherLogin: 'preaction-fixture',
+          prOpen: true,
+          baseRef: 'main',
+          expectedTargetRef: 'main',
+          expectedTarget: true,
+        };
+      },
+    }),
   };
 }
 
@@ -673,6 +697,91 @@ describe('Issue #1924 selective smoke retry', () => {
         report: { result: 'PASS', terminalCleanup: 'not_started_no_execution' },
         selection: { attempted: 0, carried: 1 },
       });
+      expect(emitted.report?.terminalHandle).toBeUndefined();
+      expect(runtime.spawnCount()).toBe(0);
+      expect(runs(input)).toHaveLength(0);
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it('uses the existing selective census for no-tier required worker smoke', async () => {
+    const input = makeFixture();
+    const issueBody = selectivePlanBody([selectiveScenarios[1]]);
+    const issueBodyFile = path.join(input.root, 'selective-no-tier-issue.md');
+    writeFileSync(issueBodyFile, issueBody, 'utf8');
+    const prBody = `Closes #${SELECTIVE_ISSUE}`;
+    const history = [selectiveComment(1, selectiveReport(input.headSha, [selectiveScenario(2)]))];
+    const runtime = makeRuntime(input, 'unused-no-tier-selective-binding');
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    let targetCalls = 0;
+    let historyCalls = 0;
+    try {
+      const code = await runSmokeAttempt({
+        command: 'run',
+        issueNumber: SELECTIVE_ISSUE,
+        prNumber: SELECTIVE_PR,
+        headSha: input.headSha,
+        issueBodyFile,
+        smokeComplexity: 'complex',
+        smokeActor: 'worker-owned',
+        operatorSmokeOnly: false,
+        repoRoot: input.workspace,
+        cwd: input.workspace,
+        dryRun: true,
+        json: true,
+        reviewId: '',
+        reviewHeadSha: '',
+      }, {
+        adapter: runtime.adapter,
+        resolveProfile: () => ({
+          complexity: 'complex',
+          family: 'cursor',
+          agent: 'cursor-agent',
+          command: 'cursor-agent',
+          names: [
+            'PACK_EXECUTOR_SMOKE_COMPLEX_AGENT',
+            'PACK_EXECUTOR_SMOKE_COMPLEX_MODEL',
+            'PACK_EXECUTOR_SMOKE_COMPLEX_EFFORT',
+          ],
+        }),
+        resolveTarget: () => {
+          targetCalls += 1;
+          return {
+            repositorySlug: REPO,
+            issueNumber: SELECTIVE_ISSUE,
+            prNumber: SELECTIVE_PR,
+            headSha: input.headSha,
+            issueBody,
+            prBody,
+            issueBodyMatchesTarget: true,
+            trustedPublisherLogin: SELECTIVE_ACTOR,
+            prOpen: true,
+            baseRef: 'main',
+            expectedTargetRef: 'main',
+            expectedTarget: true,
+          };
+        },
+        fetchHistoryComments: () => {
+          historyCalls += 1;
+          return history;
+        },
+        isHistoryAncestor: (ancestorSha, descendantSha) => ancestorSha === descendantSha,
+      });
+      const emitted = JSON.parse(String(stdout.mock.calls.at(-1)?.[0] ?? '{}')) as {
+        ok?: boolean;
+        report?: SmokeReport;
+        selection?: { attempted?: number; carried?: number; fallbackReason?: string };
+      };
+      expect(code).toBe(0);
+      expect(targetCalls).toBe(1);
+      expect(historyCalls).toBeGreaterThan(0);
+      expect(emitted).toMatchObject({
+        ok: true,
+        report: { result: 'PASS', terminalCleanup: 'not_started_no_execution' },
+        selection: { attempted: 0, carried: 1 },
+      });
+      expect(emitted.selection?.fallbackReason).toBeUndefined();
       expect(emitted.report?.terminalHandle).toBeUndefined();
       expect(runtime.spawnCount()).toBe(0);
       expect(runs(input)).toHaveLength(0);

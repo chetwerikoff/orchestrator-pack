@@ -1406,7 +1406,6 @@ function ordinaryFullAttemptSelection(plan: SmokeTestPlan): WorkerSmokeSelective
     fullPlan: plan,
     attemptPlan: { ...plan, scenarios: [...plan.scenarios] },
     carried: [], affectedTupleKeys: [], affectedDiagnostics: [], tupleDiagnostics: [],
-    fallbackReason: 'no_prior_canonical_observation',
   };
 }
 
@@ -1691,13 +1690,15 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   let issueBody = suppliedIssueBody;
   let resolvedTarget: ResolvedSmokeTarget | undefined;
   let trustedTargetHeadMismatch: string | undefined;
-  const suppliedTier = parseComplexityTierFence(suppliedIssueBody);
   const suppliedPlan = resolveSmokeRequirement(suppliedIssueBody);
+  const requiredPlan = suppliedPlan.requirement === 'required';
   const workerOwnedNotApplicable = (options.smokeActor ?? 'worker-owned') === 'worker-owned' && suppliedPlan.requirement === 'not-applicable';
-  if ((smokeOrderingRequired(suppliedIssueBody) && suppliedTier.kind === 'tier-fence') || workerOwnedNotApplicable) {
+  if (requiredPlan || workerOwnedNotApplicable) {
     try {
-      if (dependencies.resolveTarget) {
-        resolvedTarget = dependencies.resolveTarget(options, suppliedIssueBody);
+      if (requiredPlan || dependencies.resolveTarget) {
+        resolvedTarget = dependencies.resolveTarget
+          ? dependencies.resolveTarget(options, suppliedIssueBody)
+          : resolveSmokeTarget(options, suppliedIssueBody);
         issueBody = resolvedTarget.issueBody;
       } else if (dependencies.resolveIssueBody) {
         issueBody = dependencies.resolveIssueBody(options, suppliedIssueBody);

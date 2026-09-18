@@ -767,6 +767,44 @@ describe('runtime-neutral worker smoke', () => {
     expect(result.plan?.scenarios).toHaveLength(1);
   });
 
+  it('fails no-tier required smoke at trusted-target admission without fabricating an empty-history fallback', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-no-tier-target-failure-'));
+    const issueBodyFile = join(root, 'issue.md');
+    writeFileSync(issueBodyFile, issueBody, 'utf8');
+    const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    let historyCalls = 0;
+    try {
+      const code = await runSmokeAttempt({
+        command: 'run',
+        issueNumber: 1968,
+        prNumber: 2002,
+        headSha: HEAD_ONE,
+        issueBodyFile,
+        smokeComplexity: 'routine',
+        repoRoot: root,
+        cwd: root,
+        dryRun: true,
+        json: true,
+      }, {
+        resolveTarget: () => {
+          throw new Error('trusted_target: fixture unavailable');
+        },
+        fetchHistoryComments: () => {
+          historyCalls += 1;
+          return [];
+        },
+      });
+      const rendered = output.mock.calls.map((entry) => String(entry[0])).join('');
+      expect(code).toBe(1);
+      expect(historyCalls).toBe(0);
+      expect(rendered).toContain('trusted_target');
+      expect(rendered).not.toContain('no_prior_canonical_observation');
+    } finally {
+      output.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('records lawful not-applicable worker smoke as passed ordering evidence', async () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-not-applicable-'));
     const issueBodyFile = join(root, 'issue.md');
