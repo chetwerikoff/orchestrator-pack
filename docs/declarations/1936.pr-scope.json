@@ -5,13 +5,9 @@
     ".gitignore",
     "docs/declarations/1936.pr-scope.json",
     "docs/orchestration-runbook.md",
-    "scripts/draft-discipline.d.mts",
     "scripts/draft-discipline.mjs",
-    "scripts/executor-profile-store.ts",
     "scripts/lib/worker-smoke-core-base.ts",
     "scripts/lib/worker-smoke-core.ts",
-    "scripts/lib/worker-smoke-lifecycle-base.ts",
-    "scripts/lib/worker-smoke-lifecycle.ts",
     "scripts/lib/worker-smoke-receipt.ts",
     "scripts/pack-review-ordering.test.ts",
     "scripts/pack-review-state.ts",
@@ -29,7 +25,7 @@
   ],
   "allowed_roots": [
     ".gitignore",
-    "docs/declarations/1936.pr-scope.json",
+    "docs/declarations/",
     "docs/orchestration-runbook.md",
     "scripts/draft-discipline.d.mts",
     "scripts/draft-discipline.mjs",
@@ -45,5 +41,6 @@
     "scripts/worker-smoke-entrypoint-1359.test.ts",
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
-  ]
+  ],
+  "source_revision": "42e635049a867dce083d054d548c40f75222d3db"
 }
