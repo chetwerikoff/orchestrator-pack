@@ -43,6 +43,8 @@ import { validateTerminalOneShotBodyBinding } from './create-issue-final-accepta
 import { defaultGhTransport, fetchIssueRevision, fetchRepositoryOwnerLogin, parseJournalEvents } from './create-issue-stage-record-gh.ts';
 import type { CanonicalLineage, GhTransport, PartialMissingSourceWitness, ProducerEvidence, TrustedComment } from './create-issue-stage-record-types.ts';
 import { resolvePublishedAuthorState } from './resolve-published-author-state.ts';
+import { isReviewLaneRouting } from './review-lane-record.ts';
+import { settleReviewLane, type ReviewLaneRouting } from './review-lane-routing.ts';
 import {
   resolveAuthenticatedGithubPrincipal,
   sameGithubPrincipal,
@@ -344,7 +346,7 @@ function buildInvocation(
   if (stage === null) errors.push(`${label} has unknown stage`);
   if (purpose === 'stage-time' && !artifactAuthority && !terminalResultIdentity) errors.push(`${label}.terminalResultIdentity is missing`);
   if (purpose === 'stage-time' && !artifactAuthority && !reviewerSource) errors.push(`${label}.reviewerSource is missing`);
-  if (purpose === 'stage-time' && invocationTerminalClassification === 'complete' && !terminalResultIdentity) errors.push(`${label}.terminalResultIdentity is missing for successful transport`);
+  if (purpose === 'stage-time' && invocationTerminalClassification === 'complete' && !artifactAuthority && !terminalResultIdentity) errors.push(`${label}.terminalResultIdentity is missing for successful transport`);
   if (purpose === 'stage-time' && invocationTerminalClassification === 'complete' && !reviewerSource) errors.push(`${label}.reviewerSource is missing for successful transport`);
   if (reviewerOrdinal === null) errors.push(`${label}.reviewerOrdinal must be a positive integer`);
   if (attemptOrdinal === null) errors.push(`${label}.attemptOrdinal must be 1 or 2`);
@@ -1375,7 +1377,7 @@ function readTurnResultForInvocation(
   purpose: ReviewEpisodeValidationPurpose,
 ): string | null {
   const transportClassification = invocation.terminalClassification;
-  if (purpose === 'final-acceptance' && artifactBacked) return null;
+  if (artifactBacked) return null;
   if (transportClassification !== 'complete' && !artifactBacked) return null;
   const label = `stage evidence invocation[${index}]`;
   const turnResultPath = optionalString(invocation.turnResultPath);
