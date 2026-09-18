@@ -1,0 +1,25 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1961,
+  "declared_paths": [
+    "scripts/data/ops-wiki-manifest.json",
+    "scripts/fixtures/ops-wiki-golden-queries.json",
+    "scripts/sync-ops-wiki.test.ts",
+    "scripts/sync-ops-wiki.ts"
+  ],
+  "denylist": [
+    ".github/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/data/ops-wiki-manifest.json",
+    "scripts/fixtures/ops-wiki-golden-queries.json",
+    "scripts/sync-ops-wiki.test.ts",
+    "scripts/sync-ops-wiki.ts"
+  ],
+  "source_revision": "6ece5f18d5ff2e34025912fce969237f6ebb3ca3"
+}

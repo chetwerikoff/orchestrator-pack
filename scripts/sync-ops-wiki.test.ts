@@ -305,6 +305,20 @@ describe('ops-wiki extraction and repository check', () => {
       client: corpusClient(synto),
     })).resolves.toMatchObject({ ok: false, mutationBegan: false, reason: expect.stringContaining('ops_wiki_synto_vault_rejected') });
   });
+
+  it('rejects asymmetric related edges and accepts symmetric ones', () => {
+    const manifest = fixtureManifest();
+    expect(loadManifest(JSON.stringify(manifest)).episodes).toHaveLength(2);
+    const asymmetric = {
+      ...manifest,
+      episodes: manifest.episodes.map((episode) => episode.episode_id === 'agents-boundaries'
+        ? { ...episode, edges: [] }
+        : episode),
+    };
+    expect(() => loadManifest(JSON.stringify(asymmetric))).toThrow(
+      'ops_wiki_manifest_malformed:asymmetric_related:worker-lifecycle:agents-boundaries',
+    );
+  });
 });
 
 describe('ops-wiki apply protocol', () => {
