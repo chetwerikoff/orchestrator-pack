@@ -383,7 +383,8 @@ describe('Issue #1514 flow-manager recovery ownership contract', () => {
     expect(authority).toContain('required audience');
     expect(authority).toContain('visibility proof');
     expect(authority).toContain('Every new gate must arrive with its producer in the same change');
-    expect(authority).toContain('does not fabricate an\nartifact or treat an orchestrator-only workaround as a producer');
+    expect(authority).toContain('does not fabricate\nan artifact or treat an orchestrator-only workaround as a producer');
+    expect(authority).toContain('the GitHub producer records\nfacts from its authenticated stable reads');
   });
 
   it('keeps substantive decisions with their owners while allowing manager-owned recovery', () => {
@@ -537,6 +538,7 @@ describe('Issue #1431 manager reviewer canon', () => {
       }, null, 2));
       writeFileSync(join(t1Dir, 'author-dispositions.json'), JSON.stringify({
         schema: 'create-issue-author-dispositions/v1',
+        producer: 'lifecycle-zero-state/v1',
         reviewEpisodeId: 'issue:1431@r01',
         sourceRevision: 'r01',
         predecessorStage: null,
@@ -549,6 +551,13 @@ describe('Issue #1431 manager reviewer canon', () => {
           inventory: [],
         },
       }, null, 2));
+      writeFileSync(join(t1Dir, 'issue-r01-body.json'), JSON.stringify({
+        schema: 'create-issue-live-snapshot/v1',
+        issueNumber: 1431,
+        sourceRevision: 'r01',
+        title: 'T1 fixture',
+        body: t1Draft,
+      }, null, 2) + '\n');
       const t1Bundle = buildManagerReviewTerminalBundle({
         repositoryFullName: reviewContext.repositoryFullName,
         issueNumber: reviewContext.issueNumber,
