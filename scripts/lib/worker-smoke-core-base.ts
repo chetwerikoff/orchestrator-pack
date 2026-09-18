@@ -976,7 +976,7 @@ export function isCarriedSmokeScenarioObservation(
   if (currentHeadSha === undefined) return true;
   const currentHead = currentHeadSha.trim().toLowerCase();
   return /^[0-9a-f]{40}$/u.test(currentHead)
-    && observed.endsWith(\`; not freshly executed on \${currentHead}\`);
+    && observed.endsWith(`; not freshly executed on ${currentHead}`);
 }
 
 export function isProvenCarryOnlySmokeReport(
