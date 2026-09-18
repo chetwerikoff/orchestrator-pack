@@ -2057,10 +2057,8 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     const lifecycleCleanup = cleanup('completed', false);
     const report = normalized.report;
     report.terminalCleanup = terminalCleanup;
-    if (!lifecycleCleanup.clean) {
-      report.result = 'FAIL';
-      report.causeFamily = 'lifecycle_cleanup_failed';
-    }
+    if (!lifecycleCleanup.clean && report.result === 'PASS') report.result = 'FAIL';
+    if (!lifecycleCleanup.clean) report.causeFamily = 'lifecycle_cleanup_failed';
     orderingOutcome = report.result === 'PASS' ? 'passed' : 'failed';
     orderingFailureKind = report.result === 'FAIL' ? 'finding' : 'retryable';
     publishSmokeReport(report, options, { ...runPublication, attemptObservations: freshAttemptObservations });
