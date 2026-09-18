@@ -1,0 +1,39 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1453,
+  "declared_paths": [
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "AGENTS.md",
+    "docs/ops-wiki-sync.md",
+    "package.json",
+    "scripts/data/ops-wiki-manifest.json",
+    "scripts/fixtures/ops-wiki-golden-queries.json",
+    "scripts/sync-ops-wiki.test.ts",
+    "scripts/sync-ops-wiki.ts",
+    "scripts/verify.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "denylist": [
+    ".orca/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/merge-with-local-adoption/SKILL.md",
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    ".github/workflows/",
+    "AGENTS.md",
+    "docs/declarations/",
+    "docs/ops-wiki-sync.md",
+    "package.json",
+    "scripts/data/ops-wiki-manifest.json",
+    "scripts/fixtures/ops-wiki-golden-queries.json",
+    "scripts/sync-ops-wiki.test.ts",
+    "scripts/sync-ops-wiki.ts",
+    "scripts/verify.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "source_revision": "44c1732b48e6e9824e6e8e138030af3a7d924036"
+}
