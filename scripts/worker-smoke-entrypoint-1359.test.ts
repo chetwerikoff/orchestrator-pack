@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -57,6 +58,70 @@ function ok<T>(result: T): OrcaJsonResponse<T> {
   return { ok: true, result };
 }
 
+
+function installTrustedTargetFixture(
+  root: string,
+  bin: string,
+  issueBodyPath: string,
+  headSha: string,
+): void {
+  requireSuccess(
+    'git',
+    ['remote', 'add', 'origin', 'https://github.com/chetwerikoff/orchestrator-pack.git'],
+    root,
+  );
+  writeFileSync(
+    join(root, '.fake-gh-user.json'),
+    JSON.stringify({ login: 'worker-smoke-fixture' }),
+    'utf8',
+  );
+  writeFileSync(
+    join(root, '.fake-gh-issue.json'),
+    JSON.stringify({
+      number: 1359,
+      state: 'open',
+      html_url: 'https://github.com/chetwerikoff/orchestrator-pack/issues/1359',
+      body: readFileSync(issueBodyPath, 'utf8'),
+    }),
+    'utf8',
+  );
+  writeFileSync(
+    join(root, '.fake-gh-pr.json'),
+    JSON.stringify({
+      number: 1365,
+      state: 'open',
+      html_url: 'https://github.com/chetwerikoff/orchestrator-pack/pull/1365',
+      body: 'Closes #1359',
+      head: { sha: headSha },
+      base: { ref: 'main' },
+    }),
+    'utf8',
+  );
+  writeFileSync(
+    join(root, '.fake-gh-repository.json'),
+    JSON.stringify({ default_branch: 'main' }),
+    'utf8',
+  );
+  writeFileSync(
+    join(root, 'api'),
+    [
+      '#!/bin/sh',
+      'set -eu',
+      'case "$*" in',
+      '  "user") cat .fake-gh-user.json ;;',
+      '  "repos/chetwerikoff/orchestrator-pack/issues/1359") cat .fake-gh-issue.json ;;',
+      '  "repos/chetwerikoff/orchestrator-pack/pulls/1365") cat .fake-gh-pr.json ;;',
+      '  "repos/chetwerikoff/orchestrator-pack") cat .fake-gh-repository.json ;;',
+      '  "repos/chetwerikoff/orchestrator-pack/issues/1365/comments?per_page=100&page=1") printf "%s\\n" "[]" ;;',
+      '  *) printf "unexpected fake gh api call: %s\\n" "$*" >&2; exit 2 ;;',
+      'esac',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+  symlinkSync('/bin/sh', join(bin, 'gh'));
+}
+
 describe('Issue #1359 real worker-smoke entrypoint', () => {
   it('submits one combined prompt actuation, confirms first-ordinal evidence, and closes the frozen owned handle', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-entrypoint-1359-'));
@@ -86,6 +151,7 @@ describe('Issue #1359 real worker-smoke entrypoint', () => {
         '```',
         '',
       ].join('\n'), 'utf8');
+      installTrustedTargetFixture(root, bin, issueBodyPath, head);
 
       const fakeCursorAgent = join(bin, 'cursor-agent');
       writeFileSync(fakeCursorAgent, `#!/usr/bin/env node
@@ -364,6 +430,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         '```',
         '',
       ].join('\n'), 'utf8');
+      installTrustedTargetFixture(root, bin, issueBodyPath, '1'.repeat(40));
 
       const fakeOpenCode = join(bin, 'opencode');
       writeFileSync(fakeOpenCode, `#!/usr/bin/env node

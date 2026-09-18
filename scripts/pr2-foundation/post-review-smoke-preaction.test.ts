@@ -198,31 +198,7 @@ function baseDependencies(input: Fixture, runtime: RuntimeFixture): PostReviewSm
     env: { ...process.env, PACK_REVIEW_RUN_STORE_ROOT: input.reviewRoot },
     ciGreen: () => true,
     readIssueBody: async () => ISSUE_BODY,
-    runAttempt: (options, deps) => runSmokeAttempt({ ...options, dryRun: true }, {
-      ...deps,
-      resolveTarget: (smokeOptions, suppliedBody) => {
-        if (smokeOptions.issueNumber !== ISSUE
-            || smokeOptions.prNumber !== PR
-            || smokeOptions.headSha !== input.headSha
-            || suppliedBody !== ISSUE_BODY) {
-          throw new Error('preaction_fixture_target_mismatch');
-        }
-        return {
-          repositorySlug: REPO,
-          issueNumber: ISSUE,
-          prNumber: PR,
-          headSha: input.headSha,
-          issueBody: ISSUE_BODY,
-          prBody: `Closes #${ISSUE}`,
-          issueBodyMatchesTarget: true,
-          trustedPublisherLogin: 'preaction-fixture',
-          prOpen: true,
-          baseRef: 'main',
-          expectedTargetRef: 'main',
-          expectedTarget: true,
-        };
-      },
-    }),
+    runAttempt: (options, deps) => runSmokeAttempt({ ...options, dryRun: true }, deps),
   };
 }
 

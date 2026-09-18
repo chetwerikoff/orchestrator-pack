@@ -1695,10 +1695,8 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   const workerOwnedNotApplicable = (options.smokeActor ?? 'worker-owned') === 'worker-owned' && suppliedPlan.requirement === 'not-applicable';
   if (requiredPlan || workerOwnedNotApplicable) {
     try {
-      if (requiredPlan || dependencies.resolveTarget) {
-        resolvedTarget = dependencies.resolveTarget
-          ? dependencies.resolveTarget(options, suppliedIssueBody)
-          : resolveSmokeTarget(options, suppliedIssueBody);
+      if (dependencies.resolveTarget) {
+        resolvedTarget = dependencies.resolveTarget(options, suppliedIssueBody);
         issueBody = resolvedTarget.issueBody;
       } else if (dependencies.resolveIssueBody) {
         issueBody = dependencies.resolveIssueBody(options, suppliedIssueBody);
