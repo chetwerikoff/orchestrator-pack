@@ -440,7 +440,7 @@ export interface LifecycleInvocationAdmissionInput {
   invocationId: string;
   reviewerSlot: string;
   terminalEnvelopePath: string;
-  turnResultPath: string;
+  reviewerSource: string;
   reviewerSourceOutputPath?: string;
   stateRootOverride?: string;
 }
@@ -535,7 +535,7 @@ export function ensureLifecycleStageEvidenceSeed(
 
 export function recordLifecycleInvocationAdmission(
   input: LifecycleInvocationAdmissionInput,
-): { path: string; turnResultPath: string; attemptOrdinal: 1 | 2 } {
+): { path: string; attemptOrdinal: 1 | 2 } {
   if (!/^[0-9]{2}$/.test(input.reviewerSlot)) throw new Error('reviewerSlot must be NN');
   const canonical = resolveCanonicalReviewDirectory({ taskIdentity: 'issue:' + input.issueNumber }, input.stateRootOverride);
   if (!existsSync(canonical.directory)) throw new Error('canonical review directory is missing: ' + canonical.directory);
@@ -556,7 +556,7 @@ export function recordLifecycleInvocationAdmission(
   if (sameInvocation) {
     if (sameInvocation.reviewerSlot !== input.reviewerSlot) throw new Error('invocationId is already bound to a different reviewerSlot');
     const attemptOrdinal = sameInvocation.attemptOrdinal === 2 ? 2 : 1;
-    return { path, turnResultPath: String(sameInvocation.turnResultPath ?? input.turnResultPath), attemptOrdinal };
+    return { path, attemptOrdinal };
   }
   const slotInvocations = invocations
     .filter((item) => item.reviewerSlot === input.reviewerSlot)
@@ -591,12 +591,12 @@ export function recordLifecycleInvocationAdmission(
     capacityOutcome: 'admitted',
     capacityWaitMs: 0,
     terminalEnvelopePath: input.terminalEnvelopePath,
-    turnResultPath: input.turnResultPath,
+    reviewerSource: input.reviewerSource,
     ...(input.reviewerSourceOutputPath ? { reviewerSourceOutputPath: input.reviewerSourceOutputPath } : {}),
   };
   value.invocations = [...invocations, invocation];
   atomicReplaceJson(path, value);
-  return { path, turnResultPath: input.turnResultPath, attemptOrdinal };
+  return { path, attemptOrdinal };
 }
 
 export function loadCanonicalLifecycleAuthority(issueNumber: number, stateRootOverride?: string): CanonicalLifecycleAuthority {
