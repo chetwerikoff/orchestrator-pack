@@ -259,6 +259,31 @@ function transport(options: TransportOptions = {}) {
   return { runGh, createdIssueComments };
 }
 
+function writeGovernedAuthorReply(
+  path: string,
+  input: {
+    sourceRevision: string;
+    predecessorStage: string | null;
+    findings?: unknown[];
+    m4?: unknown[];
+  },
+): void {
+  writeFileSync(path, [
+    'Governed author output:',
+    '',
+    '```create-issue-author-dispositions/v1',
+    JSON.stringify({
+      schema: AUTHOR_DISPOSITIONS_SCHEMA,
+      sourceRevision: input.sourceRevision,
+      predecessorStage: input.predecessorStage,
+      findings: input.findings ?? [],
+      m4: { inventory: input.m4 ?? [] },
+    }),
+    '```',
+    '',
+  ].join('\n'));
+}
+
 function fixture(input: {
   intakeRevision?: string;
   sourceRevision?: string;
@@ -320,20 +345,10 @@ function fixture(input: {
     priorTier: 'T2',
     firstRevision: intakeRevision,
   }));
-  writeFileSync(authorReplyPath, [
-    'Governed author output:',
-    '',
-    '```create-issue-author-dispositions/v1',
-    JSON.stringify({
-      schema: AUTHOR_DISPOSITIONS_SCHEMA,
-      sourceRevision,
-      predecessorStage: 'architectural',
-      findings: [],
-      m4: { inventory: [] },
-    }),
-    '```',
-    '',
-  ].join('\n'));
+  writeGovernedAuthorReply(authorReplyPath, {
+    sourceRevision,
+    predecessorStage: input.phase === 'pre-lens' ? 'architectural-review' : 'architectural',
+  });
   const reviewComments = Array.from({ length: 3 }, (_, index) => {
     const invocationId = `architectural-review-invocation-${String(index + 1).padStart(2, '0')}`;
     return comment(canonicalVerdict(sourceRevision, invocationId, issueNumber, invocationEchoLabel), { id: COMMENT_ID + 100 + index, issueNumber });
@@ -498,6 +513,10 @@ function competitivePreLensFixture() {
   writeFileSync(input.reviewEvidencePath, JSON.stringify(competitiveEvidence));
   rmSync(input.evidencePath, { force: true });
   input.stageEvidencePaths = [input.reviewEvidencePath];
+  writeGovernedAuthorReply(input.authorReplyPath, {
+    sourceRevision: String(competitiveEvidence.sourceRevision),
+    predecessorStage: 'competitive',
+  });
   return { ...input, architecturalEvidence, architecturalEvidencePath };
 }
 
