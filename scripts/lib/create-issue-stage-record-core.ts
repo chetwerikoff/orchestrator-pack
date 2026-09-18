@@ -30,6 +30,7 @@ import {
 import {
   admitStageLaunch,
   composeTerminalBundle,
+  ensureLifecycleStageEvidenceSeed,
   ensureLifecycleTierIntake,
   loadCanonicalLifecycleAuthority,
   TERMINAL_BUNDLE_UNAVAILABLE,
@@ -701,6 +702,35 @@ export function startReviewCycle(
       message: 'issue revision drift detected before projection',
     });
     return { ok: false, diagnostics, cycleId: persisted, eventKey: persisted, ...(stageAttemptId ? { stageAttemptId } : {}), projectionPendingRepair: true };
+  }
+
+  if (input.stage && stageAttemptId) {
+    try {
+      ensureLifecycleStageEvidenceSeed({
+        issueNumber: input.issueNumber,
+        tier: input.tier as 'T1' | 'T2' | 'T3',
+        stage: input.stage,
+        stageAttemptId,
+        sourceRevision: input.sourceRevision,
+        cycleId: persisted,
+        reviewLaneRouting,
+        stateRootOverride: input.stateRootOverride,
+      });
+    } catch (error) {
+      diagnostics.push({
+        code: 'stage_authority_invalid',
+        message: error instanceof Error ? error.message : String(error),
+        eventKey: stageAttemptId,
+      });
+      return {
+        ok: false,
+        diagnostics,
+        cycleId: persisted,
+        eventKey: persisted,
+        stageAttemptId,
+        projectionPendingRepair: published.projectionPendingRepair,
+      };
+    }
   }
 
   const projection = syncIssueProjectionLabels(
