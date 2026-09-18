@@ -40,6 +40,8 @@ interface StageFinalizeCliOptions extends JournalTailCliOptions {
   stageAttemptId?: string;
   permittedLaneOverride?: ReviewLaneOverride;
   tier?: string;
+  competitiveDecision?: 'required' | 'skipped';
+  competitiveRationale?: string;
   predecessorCycleId?: string;
   receiptPath?: string;
   waiverPath?: string;
@@ -205,7 +207,7 @@ function runParsedCli<T>(
 export function stageFinalizeUsage(): string {
   return [
     'Usage:',
-    '  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> --stage <competitive|architectural-review|architectural-lens|architectural> --tier <T1|T2|T3> [--stage-attempt-id <retry-id>] [--permitted-lane-override <normal|disputed>] [--public-actor <actor>] [--predecessor-cycle-id <id>] [--workdir <path>] [--json]',
+    '  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> --stage <competitive|architectural-review|architectural-lens|architectural> --tier <T1|T2|T3> [--competitive-decision <required|skipped> --competitive-rationale <text>] [--stage-attempt-id <retry-id>] [--permitted-lane-override <normal|disputed>] [--public-actor <actor>] [--predecessor-cycle-id <id>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts publish-stage --repo <owner/name> --issue-number <n> --receipt <path> [--waiver <path>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts retry-pending --repo <owner/name> --issue-number <n> [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts reconcile-stage --repo <owner/name> --issue-number <n> --review-dir <path> --stage-evidence <attempt-NNN.json> [--json]',
@@ -263,6 +265,15 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
       }
       case '--tier':
         opts.tier = String(argv[++i] ?? '');
+        break;
+      case '--competitive-decision': {
+        const decision = String(argv[++i] ?? '');
+        if (decision !== 'required' && decision !== 'skipped') throw new Error('--competitive-decision must be required or skipped');
+        opts.competitiveDecision = decision;
+        break;
+      }
+      case '--competitive-rationale':
+        opts.competitiveRationale = String(argv[++i] ?? '');
         break;
       case '--predecessor-cycle-id':
         opts.predecessorCycleId = String(argv[++i] ?? '');
@@ -537,6 +548,8 @@ export function runStageFinalizeCli(argv: string[]): number {
         stageAttemptId: opts.stageAttemptId ? parseRequiredNonEmptyString(opts.stageAttemptId, '--stage-attempt-id') : undefined,
         permittedLaneOverride: opts.permittedLaneOverride,
         tier,
+        competitiveDecision: opts.competitiveDecision,
+        competitiveRationale: opts.competitiveRationale,
         publicActor: opts.publicActor,
         predecessorCycleId: opts.predecessorCycleId,
         workdir: opts.workdir,
