@@ -57,15 +57,19 @@ policy.
 
 ## Actor ordering
 
-The two smoke actors are separate:
+The two smoke actors are separate. Ordinary local coding workers and
+manager-controlled Browser-GPT implementation intentionally enter the shared
+review/smoke authorities at different points.
 
-1. **Worker-owned smoke** is the implementing worker's exact-head gate. It runs
-   after implementation and before pack-review, and the worker fixes and repeats
-   it until that exact head passes.
-2. **Independent smoke** is a separate post-review actor. It runs only after
-   every tier/cap-governed pack-review obligation has settled.
+### Ordinary local coding-worker path
 
-The enforced order is:
+**Worker-owned smoke** is the implementing local worker's exact-head gate. It
+runs after implementation and before pack-review, and the worker fixes and
+repeats it until that exact head passes. **Independent smoke** is the separate
+post-review actor and runs only after every tier/cap-governed pack-review
+obligation has settled.
+
+The ordinary local-worker order remains:
 
 ```text
 implementation
@@ -78,11 +82,44 @@ implementation
   -> completion
 ```
 
-Pack-review admission refuses an exact head without a passing worker-owned
-smoke. Independent-smoke dispatch refuses unsettled review obligations. Once
-independent smoke has started, pack-review remains forbidden, including after an
-independent-smoke fix. A fresh head after an independent finding therefore gets
-fresh independent smoke, not another review cycle.
+The ordinary worker `ready_for_review` admission therefore still requires
+passing worker-owned smoke for the exact current head.
+
+### Manager-controlled Browser-GPT path
+
+A Browser-GPT implementation owned by an `execute-issue-with-gpt` manager does
+**not** fabricate a local coding worker, `ready_for_review`, or worker-owned
+smoke before review. After the manager proves the live Issue-bound PR/current
+head and required CI green, it directly runs the canonical logical-cap
+pack-review phase described in `docs/chatgpt-task-execution-runbook.md`.
+
+```text
+manager-controlled Browser-GPT implementation
+  -> current PR/head + required CI green
+  -> manager-owned canonical pack-review cycle
+  -> review finding: fresh GPT fixer + strict-descendant head + required CI green
+  -> review obligations settled
+  -> manager whole-role handoff: next action = independent smoke
+  -> supervisor launches local independent-smoke parent
+  -> independent smoke on the exact handed-off/current head
+  -> independent finding: local worker fix + fresh independent smoke
+  -> completion
+```
+
+There is no synthetic pre-review worker-owned smoke on this path. The
+post-manager local worker is the **independent-smoke parent**, not a retroactive
+coding-worker admission shim: it prepares the exact current worktree and external
+prerequisites, then invokes the existing
+`worker-smoke-run ... --smoke-actor independent` authority.
+
+For logical-round accounting, `worker-smoke-run` admission does not mechanically
+prove that review obligations are settled and does not serialize review against
+independent smoke. The required ordering on this manager-controlled path is owned
+by the manager handoff and supervisor sequencing: the manager hands off only
+after review obligations settle, and the supervisor launches independent smoke
+only from that verified handoff. After that handoff, independent-smoke findings
+are fixed by the local worker and followed by fresh independent smoke; the already
+completed review stage is not reopened.
 
 ## Pre-smoke prerequisite preparation (parent worker)
 
@@ -196,7 +233,10 @@ worker-smoke-run run \
 
 The post-review actor uses the same bounded launcher and exact target binding,
 with `--smoke-complexity` set to exactly `routine` or `complex`, but must opt
-in explicitly with `--smoke-actor independent`:
+in explicitly with `--smoke-actor independent`. On the manager-controlled
+Browser-GPT path, the supervisor-launched local worker is this actor's parent and
+must use the manager handoff's exact PR/head rather than creating a
+`ready_for_review` bridge:
 
 ```bash
 worker-smoke-run run \
@@ -210,10 +250,11 @@ worker-smoke-run run \
   --cwd "$PWD"
 ```
 
-The launcher
-admits that actor only after the existing pack-review authority records settled
-obligations; it records a started independent attempt before child creation and
-binds the final PASS to that attempt's exact head.
+For logical-round accounting, launcher admission itself is not the settled-review
+ordering gate. The supervisor must invoke this actor only after verifying the
+manager's settled-review handoff. The launcher still records a started independent
+attempt before child creation and binds the final PASS to that attempt's exact
+head.
 
 The supported lifecycle is:
 
@@ -460,10 +501,17 @@ allowed only when all independent predicates hold:
 - there is no active admission, live bound worker-smoke child, incomplete teardown, executable
   ambiguous state, corrupt registry, or unsafe smoke operator-routing file.
 
-This handoff is the worker-owned-smoke boundary. It does not authorize
-independent smoke. Independent smoke is admitted only by the settled review
-state, and its PASS on the final head is the completion evidence. No later
-pack-review is legal after that actor starts.
+This handoff is the **ordinary local coding-worker** worker-owned-smoke
+boundary. It does not authorize independent smoke. The manager-controlled
+Browser-GPT path does not pass through this `ready_for_review` gate before
+review; its manager enters pack review directly, then the supervisor launches
+the independent-smoke parent after the settled-review handoff.
+
+For the manager-controlled Browser-GPT path, settled-review ordering is established
+by the manager handoff and supervisor sequencing, not by `worker-smoke-run`
+admission. Its PASS on the final head is the smoke completion evidence. Later
+independent-smoke fixes remain on the smoke path and do not reopen the already
+completed review stage; this workflow does not launch another pack-review round.
 
 Accumulated historical comments supply tuple evidence only; they are not authenticated or ordered
 by the singular receipt. A same-head aggregate PASS cannot bypass unclean lifecycle state. Operator

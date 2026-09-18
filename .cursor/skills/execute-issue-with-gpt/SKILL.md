@@ -49,6 +49,12 @@ The supervisor owns **completion continuity**, not substantive implementation.
    no duplicate prompt, and no guessed identity.
 7. Never take over the substantive Issue implementation merely because manager
    recovery is required.
+8. For a manager-controlled Browser-GPT implementation, consume the manager's
+   settled pack-review handoff instead of treating manager completion as overall
+   completion. Launch or reuse the existing supervised local worker as the
+   independent-smoke parent for the exact handed-off PR/head. The parent execute
+   workflow stays alive until that exact-head independent smoke passes and a
+   fresh final current-state verification succeeds.
 
 Supervisor launch and recovery remain governed by
 [`docs/orchestration-runbook.md`](../../../docs/orchestration-runbook.md) and the
@@ -63,9 +69,22 @@ first Browser-GPT side effect it reads both:
 - [`docs/browser-gpt-turn-runbook.md`](../../../docs/browser-gpt-turn-runbook.md).
 
 The execution runbook owns first-session initialization, same-conversation
-continuations, the execution-only 27-minute live-chat checkpoint, independent
-GitHub Definition-of-Done verification, and manager-to-supervisor recovery
-handoff. The shared Browser-GPT runbook remains the sole owner of one-turn launch,
+continuations, the execution-only 27-minute live-chat checkpoint, candidate-state
+verification, the reusable manager-owned PR-review convergence phase, and
+manager-to-supervisor handoff. After the implementation conversation reaches a
+candidate-complete current PR/head with required CI green, the manager enters that
+shared review phase; it does not report overall `VERIFIED_COMPLETE`.
+
+The shared review phase invokes only the canonical
+`npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>` runner. Required
+reviewer sources are fresh project chats owned by that runner. A findings-bearing
+logical round gets one fresh GPT fixer conversation distinct from the
+implementation conversation and every reviewer conversation; after a
+strict-descendant fix and current CI green, the existing tier/cap review authority
+continues. The manager never manufactures scheduler `ready_for_review` state or
+acts as the independent-smoke actor.
+
+The shared Browser-GPT runbook remains the sole owner of one-turn launch,
 observation, attribution, recovery, retry/no-resend, publication, and tab
 mechanics.
 
@@ -93,9 +112,15 @@ resumes.
 
 ## Terminal outcomes
 
-Normal operator-visible completion is `VERIFIED_COMPLETE`, and only after a fresh
-current-state verification under `docs/chat-executor-rules.md` and the live Issue.
-GPT self-report is advisory rather than completion authority.
+Normal operator-visible completion is `VERIFIED_COMPLETE`. For a
+manager-controlled Browser-GPT implementation, the manager may complete its own
+role only after the canonical pack-review obligations settle and it hands the
+supervisor the exact Issue/PR/head/CI/review facts with `independent smoke` as
+the next legal action. Overall `VERIFIED_COMPLETE` is legal only after the
+supervisor-owned local independent-smoke worker passes on the final exact head and
+a fresh current-state verification under `docs/chat-executor-rules.md` and the
+live Issue succeeds. GPT self-report and manager completion are advisory rather
+than overall completion authority.
 
 `OPERATOR_ACTION_REQUIRED` is exceptional. Use it only after the legal existing
 recovery path is exhausted and the remaining condition is a genuine external

@@ -1,0 +1,28 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1953,
+  "declared_paths": [
+    ".cursor/skills/execute-issue-with-gpt/SKILL.md",
+    "docs/chatgpt-task-execution-runbook.md",
+    "docs/declarations/1953.pr-scope.json",
+    "docs/orchestration-runbook.md",
+    "docs/worker-smoke-testing.md",
+    "scripts/flow-manager-authority-contract.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/execute-issue-with-gpt/",
+    ".cursor/skills/execute-issue-with-gpt/",
+    "docs/chatgpt-task-execution-runbook.md",
+    "docs/declarations/",
+    "docs/orchestration-runbook.md",
+    "docs/worker-smoke-testing.md",
+    "scripts/flow-manager-authority-contract.test.ts"
+  ],
+  "source_revision": "fb6554f92a1ed7904973d5dad7bf3dec5abbb1f8"
+}
