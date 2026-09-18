@@ -25,6 +25,7 @@ import {
 } from './lib/create-issue-github-artifact-authority.ts';
 
 const roots: string[] = [];
+const originalCreateIssueStateRoot = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
 function tempRoot(): string {
   const root = mkdtempSync(join(tmpdir(), 'opk-create-issue-convergence-'));
   roots.push(root);
@@ -33,6 +34,8 @@ function tempRoot(): string {
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  if (originalCreateIssueStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+  else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = originalCreateIssueStateRoot;
 });
 
 const binding: CreateIssueActionBinding = {
@@ -229,6 +232,7 @@ describe('Issue #1935 sanitized measured convergence replay', () => {
       slots: Array<{ reviewerSlot: string; invocationId: string; commentId: number; findingId: string }>;
     };
     const root = tempRoot();
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = root;
     const reviewDir = join(root, '.review', String(replay.source.issueNumber));
     mkdirSync(reviewDir, { recursive: true });
     const evidencePath = join(reviewDir, 'attempt-001.json');
@@ -470,7 +474,11 @@ describe('Issue #1935 sanitized measured convergence replay', () => {
         'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
         'produce-artifacts', '--repo', 'chetwerikoff/orchestrator-pack',
         '--issue-number', String(replay.source.issueNumber), '--review-dir', reviewDir,
-        '--phase', 'pre-lens', '--json',
+        '--phase', 'pre-lens',
+        '--expected-source-revision', replay.source.sourceRevision,
+        '--expected-stage', replay.source.stage,
+        '--expected-stage-attempt-id', replay.source.stageAttemptId,
+        '--json',
       ],
     });
     expect(validateCreateIssueNextAction(action)).toEqual([]);
