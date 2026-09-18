@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveCanonicalReviewDirectory } from './canonical-review-directory.ts';
 import { parseConsumableStageReceipt } from './create-issue-stage-record-receipt.ts';
@@ -363,6 +363,61 @@ export function admitStageLaunch(input: StageAdmissionInput): StageAdmissionResu
     if (input.terminalBundle.predecessorStage !== sequence.predecessorStage) return { ok: false, code: TERMINAL_BUNDLE_UNAVAILABLE, message: 'terminal bundle predecessor binding is stale', topology, intake, slots };
   }
   return { ok: true, expectedStage: sequence.expectedStage, predecessorStage: sequence.predecessorStage, topology, intake, slots };
+}
+
+export function ensureLifecycleTierIntake(input: {
+  issueNumber: number;
+  tier: LifecycleReviewTier;
+  firstRevision: string;
+  competitiveDecision?: CompetitiveDecision;
+  competitiveRationale?: string;
+  stateRootOverride?: string;
+  producer?: string;
+}): { path: string; intake: LifecycleTierIntakeV1 } {
+  if (!SOURCE_REVISION_RE.test(input.firstRevision)) {
+    throw new Error('tier-intake firstRevision must be rNN');
+  }
+  if (input.tier === 'T3') {
+    if ((input.competitiveDecision !== 'required' && input.competitiveDecision !== 'skipped')
+      || !nonEmpty(input.competitiveRationale)) {
+      throw new Error('fresh T3 tier-intake/v1 requires --competitive-decision and --competitive-rationale');
+    }
+  } else if (input.competitiveDecision !== undefined || input.competitiveRationale !== undefined) {
+    throw new Error('competitive decision/rationale are only valid for T3 tier intake');
+  }
+  const canonical = resolveCanonicalReviewDirectory({ taskIdentity: `issue:${input.issueNumber}` }, input.stateRootOverride);
+  const expected: LifecycleTierIntakeV1 = {
+    schema: 'tier-intake/v1',
+    producer: input.producer ?? 'create-issue-stage-finalize/start-cycle',
+    taskIdentity: `issue:${input.issueNumber}`,
+    kind: 'fresh',
+    priorTier: input.tier,
+    firstRevision: input.firstRevision,
+    ...(input.tier === 'T3'
+      ? {
+          competitiveDecision: input.competitiveDecision!,
+          competitiveRationale: input.competitiveRationale!.trim(),
+        }
+      : {}),
+  };
+  mkdirSync(canonical.directory, { recursive: true });
+  if (!existsSync(canonical.intakePath)) {
+    try {
+      writeFileSync(canonical.intakePath, JSON.stringify(expected, null, 2) + '\n', {
+        encoding: 'utf8',
+        flag: 'wx',
+      });
+    } catch {
+      if (!existsSync(canonical.intakePath)) throw new Error(`unable to persist lifecycle tier-intake/v1: ${canonical.intakePath}`);
+    }
+  }
+  const observed = readJson(canonical.intakePath);
+  const parsed = parseLifecycleTierIntake(observed);
+  if (!parsed) throw new Error(`canonical tier-intake/v1 is malformed: ${canonical.intakePath}`);
+  if (!jsonEqual(parsed, expected)) {
+    throw new Error(`canonical tier-intake/v1 conflicts with lifecycle admission: ${canonical.intakePath}`);
+  }
+  return { path: canonical.intakePath, intake: parsed };
 }
 
 export function loadCanonicalLifecycleAuthority(issueNumber: number, stateRootOverride?: string): CanonicalLifecycleAuthority {
