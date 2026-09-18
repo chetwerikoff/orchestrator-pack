@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveCanonicalReviewDirectory } from './canonical-review-directory.ts';
 import { parseConsumableStageReceipt } from './create-issue-stage-record-receipt.ts';
@@ -418,6 +418,185 @@ export function ensureLifecycleTierIntake(input: {
     throw new Error(`canonical tier-intake/v1 conflicts with lifecycle admission: ${canonical.intakePath}`);
   }
   return { path: canonical.intakePath, intake: parsed };
+}
+
+
+export interface LifecycleStageEvidenceSeedInput {
+  issueNumber: number;
+  tier: LifecycleReviewTier;
+  stage: LifecycleReviewStage;
+  stageAttemptId: string;
+  sourceRevision: string;
+  cycleId: string;
+  reviewLaneRouting?: Record<string, unknown>;
+  stateRootOverride?: string;
+}
+
+export interface LifecycleInvocationAdmissionInput {
+  issueNumber: number;
+  stage: LifecycleReviewStage;
+  stageAttemptId: string;
+  sourceRevision: string;
+  invocationId: string;
+  reviewerSlot: string;
+  terminalEnvelopePath: string;
+  turnResultPath: string;
+  reviewerSourceOutputPath?: string;
+  stateRootOverride?: string;
+}
+
+function atomicReplaceJson(path: string, value: unknown): void {
+  const temporary = path + '.tmp-' + process.pid;
+  try {
+    writeFileSync(temporary, JSON.stringify(value, null, 2) + '\n', { encoding: 'utf8', flag: 'wx' });
+    renameSync(temporary, path);
+  } finally {
+    if (existsSync(temporary)) rmSync(temporary, { force: true });
+  }
+}
+
+function stageEvidenceCandidates(reviewDir: string): string[] {
+  return readdirSync(reviewDir)
+    .filter((name) => /^attempt-[0-9]{3}\.json$/.test(name))
+    .sort()
+    .map((name) => join(reviewDir, name));
+}
+
+export function ensureLifecycleStageEvidenceSeed(
+  input: LifecycleStageEvidenceSeedInput,
+): { path: string; evidence: Record<string, unknown> } {
+  const authority = loadCanonicalLifecycleAuthority(input.issueNumber, input.stateRootOverride);
+  const intake = parseLifecycleTierIntake(authority.intake);
+  if (!intake) throw new Error('canonical tier-intake/v1 is malformed: ' + authority.intakePath);
+  if (intake.priorTier !== input.tier) throw new Error('stage evidence tier ' + input.tier + ' conflicts with lifecycle intake ' + intake.priorTier);
+  const plan = canonicalStagePlan(intake.priorTier, intake);
+  const stageIndex = plan.stages.findIndex((entry) => entry.stage === input.stage);
+  if (stageIndex < 0) throw new Error('stage ' + input.stage + ' is not in canonical ' + input.tier + ' topology');
+  const stagePlan = plan.stages[stageIndex]!;
+  const routing = input.reviewLaneRouting;
+  const routingPolicy = isRecord(routing) && routing.policyVersion === 'review-lane-routing/v1';
+  const policyVersion = routingPolicy ? 'review-lane-routing/v1' : stagePlan.policyVersion;
+  const reviewerCardinality = routingPolicy && typeof routing.reviewerCardinality === 'number'
+    ? routing.reviewerCardinality
+    : stagePlan.reviewerCardinality;
+  const cardinalityConfigIdentity = routingPolicy && nonEmpty(routing.cardinalityConfigIdentity)
+    ? routing.cardinalityConfigIdentity.trim()
+    : stagePlan.policyVersion;
+  const stageSequence = stageIndex + 1;
+  const path = join(authority.reviewDir, 'attempt-' + String(stageSequence).padStart(3, '0') + '.json');
+  const expected: Record<string, unknown> = {
+    schema: 'create-issue-stage-evidence/v1',
+    producer: 'create-issue-stage-finalize/start-cycle',
+    taskIdentity: intake.taskIdentity,
+    tier: input.tier,
+    stage: input.stage,
+    stageAttemptId: input.stageAttemptId,
+    stageSequence,
+    cycleId: input.cycleId,
+    cycleBinding: {
+      cycleId: input.cycleId,
+      sourceRevision: input.sourceRevision,
+      boundBeforeLaunch: true,
+    },
+    policyVersion,
+    reviewerCardinality,
+    cardinalityConfigIdentity,
+    sourceRevision: input.sourceRevision,
+    revisionChecks: {
+      attemptCreation: 'matched',
+      beforeLaunch: 'matched',
+      settlement: 'pending',
+    },
+    invocations: [],
+    ...(routingPolicy ? { reviewLaneRouting: routing } : {}),
+  };
+  if (!existsSync(path)) {
+    writeFileSync(path, JSON.stringify(expected, null, 2) + '\n', { encoding: 'utf8', flag: 'wx' });
+    return { path, evidence: expected };
+  }
+  const observed = readJson(path);
+  if (!isRecord(observed)) throw new Error('lifecycle stage evidence is malformed: ' + path);
+  for (const field of [
+    'schema', 'taskIdentity', 'tier', 'stage', 'stageAttemptId', 'stageSequence',
+    'cycleId', 'policyVersion', 'reviewerCardinality', 'cardinalityConfigIdentity', 'sourceRevision',
+  ]) {
+    if (!jsonEqual(observed[field], expected[field])) {
+      throw new Error('lifecycle stage evidence conflicts at ' + field + ': ' + path);
+    }
+  }
+  if (!jsonEqual(observed.cycleBinding, expected.cycleBinding)) {
+    throw new Error('lifecycle stage evidence conflicts at cycleBinding: ' + path);
+  }
+  if (routingPolicy && !jsonEqual(observed.reviewLaneRouting, routing)) {
+    throw new Error('lifecycle stage evidence conflicts at reviewLaneRouting: ' + path);
+  }
+  return { path, evidence: observed };
+}
+
+export function recordLifecycleInvocationAdmission(
+  input: LifecycleInvocationAdmissionInput,
+): { path: string; turnResultPath: string; attemptOrdinal: 1 | 2 } {
+  if (!/^[0-9]{2}$/.test(input.reviewerSlot)) throw new Error('reviewerSlot must be NN');
+  const canonical = resolveCanonicalReviewDirectory({ taskIdentity: 'issue:' + input.issueNumber }, input.stateRootOverride);
+  if (!existsSync(canonical.directory)) throw new Error('canonical review directory is missing: ' + canonical.directory);
+  const matches = stageEvidenceCandidates(canonical.directory)
+    .map((path) => ({ path, value: readJson(path) }))
+    .filter((item) => isRecord(item.value)
+      && item.value.stageAttemptId === input.stageAttemptId
+      && item.value.stage === input.stage
+      && item.value.sourceRevision === input.sourceRevision);
+  if (matches.length !== 1) throw new Error('expected exactly one lifecycle stage evidence record for ' + input.stageAttemptId + ', observed ' + matches.length);
+  const match = matches[0]!;
+  const path = match.path;
+  const value = match.value as Record<string, unknown>;
+  const invocations = Array.isArray(value.invocations)
+    ? value.invocations.filter((item): item is Record<string, unknown> => isRecord(item))
+    : [];
+  const sameInvocation = invocations.find((item) => item.invocationId === input.invocationId);
+  if (sameInvocation) {
+    if (sameInvocation.reviewerSlot !== input.reviewerSlot) throw new Error('invocationId is already bound to a different reviewerSlot');
+    const attemptOrdinal = sameInvocation.attemptOrdinal === 2 ? 2 : 1;
+    return { path, turnResultPath: String(sameInvocation.turnResultPath ?? input.turnResultPath), attemptOrdinal };
+  }
+  const slotInvocations = invocations
+    .filter((item) => item.reviewerSlot === input.reviewerSlot)
+    .sort((left, right) => Number(left.attemptOrdinal ?? 0) - Number(right.attemptOrdinal ?? 0));
+  if (slotInvocations.length >= 2) throw new Error('reviewerSlot ' + input.reviewerSlot + ' retry budget is exhausted');
+  if (slotInvocations.length === 1) {
+    const previous = slotInvocations[0]!;
+    if (previous.retryClass !== 'eligible-zero-send' || previous.sendCount !== 0 || previous.terminal !== true) {
+      throw new Error('reviewerSlot ' + input.reviewerSlot + ' has no recorded retry authority');
+    }
+  }
+  const attemptOrdinal = (slotInvocations.length + 1) as 1 | 2;
+  const authority = loadCanonicalLifecycleAuthority(input.issueNumber, input.stateRootOverride);
+  const intake = parseLifecycleTierIntake(authority.intake);
+  if (!intake) throw new Error('canonical tier-intake/v1 is malformed: ' + authority.intakePath);
+  const reviewEpisodeId = String(value.taskIdentity) + '@' + intake.firstRevision;
+  const invocation = {
+    schema: 'reviewer-invocation-envelope/v1',
+    reviewEpisodeId,
+    stageAttemptId: input.stageAttemptId,
+    policyVersion: value.policyVersion,
+    reviewerCardinality: value.reviewerCardinality,
+    cardinalityConfigIdentity: value.cardinalityConfigIdentity,
+    stage: input.stage,
+    sourceRevision: input.sourceRevision,
+    invocationId: input.invocationId,
+    reviewerSlot: input.reviewerSlot,
+    reviewerOrdinal: Number(input.reviewerSlot),
+    attemptOrdinal,
+    retryAttempt: attemptOrdinal === 2,
+    revisionCheck: 'matched',
+    capacityOutcome: 'admitted',
+    capacityWaitMs: 0,
+    terminalEnvelopePath: input.terminalEnvelopePath,
+    turnResultPath: input.turnResultPath,
+    ...(input.reviewerSourceOutputPath ? { reviewerSourceOutputPath: input.reviewerSourceOutputPath } : {}),
+  };
+  value.invocations = [...invocations, invocation];
+  atomicReplaceJson(path, value);
+  return { path, turnResultPath: input.turnResultPath, attemptOrdinal };
 }
 
 export function loadCanonicalLifecycleAuthority(issueNumber: number, stateRootOverride?: string): CanonicalLifecycleAuthority {
