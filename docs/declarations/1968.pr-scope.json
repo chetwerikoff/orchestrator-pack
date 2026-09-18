@@ -5,6 +5,7 @@
     "docs/chat-executor-rules.md",
     "docs/worker-smoke-testing.md",
     "scripts/pr2-foundation/post-review-smoke-preaction.test.ts",
+    "scripts/worker-smoke-entrypoint-1359.test.ts",
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
   ],
@@ -24,5 +25,5 @@
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "6e98ddd02e8fb502f6b734f0fb26e4d066334b52"
+  "source_revision": "de0d4f4dc22899f96ab93109ca90ef5fc3772a50"
 }
