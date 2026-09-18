@@ -220,6 +220,23 @@ describe('Issue #1936 truthful smoke evidence', () => {
     expect(second.ok && second.report.causeFamily).toBe('unknown');
   });
 
+  it('normalizes carry-only PASS without synthesizing a runtime terminal handle', () => {
+    const partial: Partial<SmokeReport> = {
+      result: 'PASS',
+      scenarios: [{ action: 'carry tuple', expected: 'already proven', observed: 'carried exact PASS', outcome: 'pass' }],
+      trackedFilesUnmodified: true,
+      limitations: [],
+      environmentNotes: ['smoke-execution=carry-only'],
+      terminalCleanup: 'not_started_no_execution',
+      producer: SMOKE_REPORT_PRODUCER,
+      orcaExecutable: 'fixture-adapter',
+    };
+    const carried = normalizeSmokeReport(partial, { issueNumber: 1936, prNumber: 1945, headSha: HEAD_ONE }, { executionMode: 'carry-only' });
+    expect(carried.ok).toBe(true);
+    expect(carried.ok && carried.report.terminalHandle).toBeUndefined();
+    const executed = normalizeSmokeReport({ ...partial, terminalCleanup: 'closed_owned_handle' }, { issueNumber: 1936, prNumber: 1945, headSha: HEAD_ONE });
+    expect(executed).toEqual({ ok: false, reason: 'pass_missing_terminal_handle' });
+  });
   it('keeps same-head attempt receipts append-only and verifies the exact attempt', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-receipts-1936-'));
     const previous = process.env.WORKER_SMOKE_RECEIPT_ROOT;
@@ -319,6 +336,7 @@ describe('Issue #1936 truthful smoke evidence', () => {
   });
 
   it('treats only tracked or staged .orca-worker-smoke state as repository dirtiness', () => {
+    expect(readFileSync('.gitignore', 'utf8')).toContain('.orca-worker-smoke/');
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-tracked-state-'));
     try {
       expect(runProcessSync({ command: 'git', args: ['init'], cwd: root }).ok).toBe(true);

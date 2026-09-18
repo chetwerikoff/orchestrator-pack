@@ -1888,7 +1888,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
         terminalCleanup: 'not_started_no_execution',
         environmentNotes: projected.environmentNotes ?? [],
         producer: SMOKE_REPORT_PRODUCER, orcaExecutable: adapter.id,
-      }, { issueNumber: options.issueNumber, prNumber: options.prNumber, headSha: options.headSha });
+      }, { issueNumber: options.issueNumber, prNumber: options.prNumber, headSha: options.headSha }, { executionMode: 'carry-only' });
       const report = normalized.report;
       orderingOutcome = report.result === 'PASS' ? 'passed' : 'failed';
       orderingFailureKind = report.result === 'FAIL' ? 'finding' : 'retryable';

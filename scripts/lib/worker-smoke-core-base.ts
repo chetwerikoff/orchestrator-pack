@@ -723,6 +723,7 @@ export function parseSmokeAgentReport(text: string): Partial<SmokeReport> | null
 export function normalizeSmokeReport(
   partial: Partial<SmokeReport>,
   binding: { issueNumber: number; prNumber: number; headSha: string },
+  options: { executionMode?: 'executed' | 'carry-only' } = {},
 ): { ok: true; report: SmokeReport } | { ok: false; reason: string } {
   if (!partial.result || !['PASS', 'FAIL', 'BLOCKED'].includes(partial.result)) {
     return { ok: false, reason: 'missing_result' };
@@ -787,6 +788,7 @@ export function normalizeSmokeReport(
   }
 
   if (partial.result === 'PASS') {
+    const carryOnlyPass = options.executionMode === 'carry-only';
     for (const [index, scenario] of scenarios.entries()) {
       if (!scenario.action?.trim() || !scenario.expected?.trim() || !scenario.observed?.trim()) {
         return { ok: false, reason: `pass_scenario_${index + 1}_incomplete` };
@@ -798,13 +800,17 @@ export function normalizeSmokeReport(
         return { ok: false, reason: `pass_scenario_${index + 1}_not_pass` };
       }
     }
-    if (!isClosedOwnedSmokeTerminalCleanup(partial.terminalCleanup)) {
+    if (carryOnlyPass) {
+      if (partial.terminalCleanup !== 'not_started_no_execution') {
+        return { ok: false, reason: 'carry_only_pass_requires_no_execution_cleanup' };
+      }
+    } else if (!isClosedOwnedSmokeTerminalCleanup(partial.terminalCleanup)) {
       return { ok: false, reason: 'pass_requires_terminal_cleanup' };
     }
     if (partial.producer !== SMOKE_REPORT_PRODUCER) {
       return { ok: false, reason: 'pass_missing_producer' };
     }
-    if (!partial.terminalHandle?.trim()) {
+    if (!carryOnlyPass && !partial.terminalHandle?.trim()) {
       return { ok: false, reason: 'pass_missing_terminal_handle' };
     }
     if (!partial.orcaExecutable?.trim()) {
