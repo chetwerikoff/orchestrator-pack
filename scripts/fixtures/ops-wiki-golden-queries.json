@@ -2,7 +2,7 @@
   "queries": [
     {
       "id": "worker-lifecycle-ru",
-      "query": "что воркер должен сделать перед стартом",
+      "query": "что воркер должен сделать worker pre-flight required CI named skills",
       "expected_episode_ids": ["runbook-worker-lifecycle", "agents-worker-skills"]
     },
     {
@@ -17,7 +17,7 @@
     },
     {
       "id": "merge-adoption-ru",
-      "query": "как смержить pr и подтянуть main",
+      "query": "как смержить pr merge with local adoption safety and truth",
       "expected_episode_ids": ["merge-adopt-local", "merge-ready-merge", "merge-safety-resolve"]
     },
     {
@@ -37,7 +37,7 @@
     },
     {
       "id": "wiki-ops-status",
-      "query": "checked_through_commit apply_in_progress",
+      "query": "checked_through_commit apply_in_progress wiki-ops operational wiki consultation",
       "expected_episode_ids": ["ops-wiki-sync", "agents-wiki-ops"]
     },
     {
@@ -47,7 +47,7 @@
     },
     {
       "id": "direct-fix-ru",
-      "query": "архитектор сам открывает pr",
+      "query": "архитектор direct fix worker handoff architect contract",
       "expected_episode_ids": ["direct-fix-spine", "direct-fix-handoff"]
     },
     {
