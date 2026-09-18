@@ -21,6 +21,7 @@
     "scripts/lib/create-issue-stage-record-cli.ts",
     "scripts/lib/create-issue-stage-record-core.ts",
     "scripts/lib/graphql-quota-github-read-inventory.json",
+    "scripts/lib/stage-completeness-core.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
@@ -37,5 +38,5 @@
     "scripts/",
     "tests/external-output-references/"
   ],
-  "source_revision": "7097e68ba262c898b52b3f12e256112be0e21814"
+  "source_revision": "033ffa5ebf154da8d50d3de634d91281d763f72a"
 }
