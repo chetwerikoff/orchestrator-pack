@@ -668,6 +668,21 @@ describe('smoke executor profiles', () => {
         json: true,
       }, {
         adapter,
+        resolveTarget: () => ({
+          repositorySlug: 'chetwerikoff/orchestrator-pack',
+          issueNumber: 1610,
+          prNumber: 1699,
+          headSha: HEAD_ONE,
+          issueBody,
+          prBody: 'Closes #1610',
+          issueBodyMatchesTarget: true,
+          trustedPublisherLogin: 'worker-smoke-fixture',
+          prOpen: true,
+          baseRef: 'main',
+          expectedTargetRef: 'main',
+          expectedTarget: true,
+        }),
+        fetchHistoryComments: () => [],
         resolveProfile: (complexity) => resolveLiveSmokeExecutorProfile(complexity, opencodeEnv, (args) => {
           if (args[0] === 'opencode' && args[1] === 'models' && args.includes('--verbose')) {
             return {
