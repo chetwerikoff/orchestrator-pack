@@ -73,7 +73,6 @@ export function validateCreateIssueManagerResult(value: unknown): string[] {
   }
   if (nextAction !== null) {
     errors.push(...validateCreateIssueNextAction(nextAction));
-    if (result.ok !== false) errors.push('manager result with non-null nextAction must be non-success');
   }
   return errors;
 }
