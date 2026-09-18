@@ -1078,7 +1078,7 @@ export function runtimeCloseBoundHandle(adapter: RuntimeAdapter, handle: string,
   if (resolved.value === null) return 'close_failed:worker_not_found;presence=unproven';
   const workspacePath = resolved.value.workspacePath;
   if (resolve(workspacePath) !== resolve(options.cwd)) return 'close_failed:worker_workspace_mismatch;presence=unproven';
-  return runtimeClose(adapter, resolved.value, options);
+  return runtimeClose(adapter, resolved.value.identity, options);
 }
 
 function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scenarioCount: number): string {
