@@ -1093,6 +1093,127 @@ function resolveAuthoritativeArtifact(
 }
 
 
+
+type ReconciliationTransportClassification = ReviewerInvocationEnvelopeV1['terminalClassification'];
+type ReconciliationRetryClass = ReviewerInvocationEnvelopeV1['retryClass'];
+
+function classifyReconciliationTransport(
+  envelope: JsonRecord,
+  attemptOrdinal: number,
+): {
+  terminalClassification: ReconciliationTransportClassification;
+  sendCount: 0 | 1;
+  retryClass: ReconciliationRetryClass;
+} | null {
+  const sendCount = envelope.send_count;
+  if (sendCount !== 0 && sendCount !== 1) return null;
+  const state = optionalString(envelope.turn_result_state) ?? '';
+  const cause = optionalString(envelope.turn_result_cause) ?? '';
+  let terminalClassification: ReconciliationTransportClassification;
+  if (envelope.lifecycle_outcome === 'success' && state === 'ok' && sendCount === 1) {
+    terminalClassification = 'complete';
+  } else if (state === 'quota' || state === 'rate_limit') {
+    terminalClassification = 'quota';
+  } else if (
+    sendCount === 0
+    && (cause.includes('composer') || cause === 'blocking_page_overlay')
+  ) {
+    terminalClassification = 'composer-refusal';
+  } else if (sendCount === 0 && cause.includes('fill')) {
+    terminalClassification = 'fill-timeout';
+  } else if (sendCount === 1 && state === 'output_conflict') {
+    terminalClassification = 'output-conflict';
+  } else if (sendCount === 1) {
+    terminalClassification = 'post-send-failure';
+  } else {
+    terminalClassification = 'incident';
+  }
+  const retryableZeroSend = attemptOrdinal === 1
+    && sendCount === 0
+    && (terminalClassification === 'quota'
+      || terminalClassification === 'composer-refusal'
+      || terminalClassification === 'fill-timeout');
+  return {
+    terminalClassification,
+    sendCount,
+    retryClass: terminalClassification === 'complete'
+      ? 'none'
+      : retryableZeroSend
+        ? 'eligible-zero-send'
+        : 'retry-forbidden',
+  };
+}
+
+function hydrateReconciliationTransport(
+  evidencePath: string,
+  invocation: JsonRecord,
+  index: number,
+  errors: string[],
+): JsonRecord | null {
+  const completeExisting = invocation.terminal === true
+    && terminalClassification(invocation.terminalClassification) !== null
+    && (invocation.sendCount === 0 || invocation.sendCount === 1)
+    && retryClass(invocation.retryClass) !== null;
+  if (completeExisting) return { ...invocation };
+
+  const terminalEnvelopePath = optionalString(invocation.terminalEnvelopePath);
+  if (!terminalEnvelopePath) {
+    errors.push('stage evidence invocation[' + index + '].terminalEnvelopePath is missing; authority=lifecycle-tool-witnessed');
+    return null;
+  }
+  const resolved = resolve(dirname(evidencePath), terminalEnvelopePath);
+  const observed = readJson(resolved, 'flow-manager terminal envelope', errors);
+  if (!isRecord(observed) || observed.schema !== 'flow-manager-long-running-child-terminal/v1') {
+    errors.push('stage evidence invocation[' + index + '] terminal envelope is malformed: ' + resolved);
+    return null;
+  }
+  const attemptOrdinal = invocation.attemptOrdinal === 2 ? 2 : 1;
+  const transport = classifyReconciliationTransport(observed, attemptOrdinal);
+  if (!transport) {
+    errors.push('stage evidence invocation[' + index + '] terminal envelope has no exact send_count; authority=lifecycle-tool-witnessed');
+    return null;
+  }
+  if (typeof observed.terminal_at !== 'string' || !observed.terminal_at.trim()) {
+    errors.push('stage evidence invocation[' + index + '] terminal envelope is not terminal');
+    return null;
+  }
+  return {
+    ...invocation,
+    terminal: true,
+    terminalClassification: transport.terminalClassification,
+    sendCount: transport.sendCount,
+    retryClass: transport.retryClass,
+  };
+}
+
+function atomicReplaceStageEvidence(
+  path: string,
+  expectedCurrentText: string,
+  value: JsonRecord,
+  errors: string[],
+): boolean {
+  let current: string;
+  try { current = readFileSync(path, 'utf8'); } catch {
+    errors.push('stage evidence became unreadable before reconciliation commit: ' + path);
+    return false;
+  }
+  if (current !== expectedCurrentText) {
+    errors.push('stale_next_action: lifecycle stage evidence changed during reconciliation');
+    return false;
+  }
+  const temporary = path + '.reconcile-' + process.pid + '.tmp';
+  try {
+    writeFileSync(temporary, JSON.stringify(value, null, 2) + '\n', { encoding: 'utf8', flag: 'wx' });
+    renameSync(temporary, path);
+    return true;
+  } catch (error) {
+    errors.push('unable to commit lifecycle stage evidence: ' + (error instanceof Error ? error.message : String(error)));
+    return false;
+  } finally {
+    if (existsSync(temporary)) rmSync(temporary, { force: true });
+  }
+}
+
 export interface ReconcileCreateIssueStageOptions {
   reviewDir: string;
   stageEvidencePath: string;
@@ -1126,12 +1247,18 @@ export function reconcileCreateIssueStage(
   options: ReconcileCreateIssueStageOptions,
 ): ReconcileCreateIssueStageResult {
   const errors: string[] = [];
-  const rawValue = readJson(options.stageEvidencePath, 'stage evidence', errors);
-  if (!isRecord(rawValue) || rawValue.schema !== STAGE_EVIDENCE_SCHEMA) {
-    errors.push('stage evidence must use ' + STAGE_EVIDENCE_SCHEMA + ': ' + options.stageEvidencePath);
-    return { ok: false, capturePaths: [], errors: [...new Set(errors)] };
+  let originalText: string;
+  try { originalText = readFileSync(options.stageEvidencePath, 'utf8'); } catch {
+    return { ok: false, capturePaths: [], errors: ['missing stage evidence: ' + options.stageEvidencePath] };
   }
-  const raw = rawValue;
+  let rawValue: unknown;
+  try { rawValue = JSON.parse(originalText) as unknown; } catch {
+    return { ok: false, capturePaths: [], errors: ['unable to read stage evidence: ' + options.stageEvidencePath] };
+  }
+  if (!isRecord(rawValue) || rawValue.schema !== STAGE_EVIDENCE_SCHEMA) {
+    return { ok: false, capturePaths: [], errors: ['stage evidence must use ' + STAGE_EVIDENCE_SCHEMA + ': ' + options.stageEvidencePath] };
+  }
+  const raw: JsonRecord = structuredClone(rawValue);
   const stage = reviewerStage(raw.stage);
   const stageAttemptId = requiredString(raw.stageAttemptId, 'stage evidence.stageAttemptId', errors);
   const sourceRevision = requiredString(raw.sourceRevision, 'stage evidence.sourceRevision', errors);
@@ -1183,47 +1310,22 @@ export function reconcileCreateIssueStage(
   }
 
   if (!Array.isArray(raw.invocations)) {
-    return {
-      ok: false,
-      stageAttemptId,
-      stage,
-      sourceRevision,
-      capturePaths: [],
-      errors: ['stage evidence.invocations is missing'],
-    };
+    return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: ['stage evidence.invocations is missing'] };
   }
-  const requiredSlots = requiredFinalSlots(raw);
-  if (requiredSlots.length === 0) {
-    return {
-      ok: false,
-      stageAttemptId,
-      stage,
-      sourceRevision,
-      capturePaths: [],
-      errors: ['stage evidence has no required reviewer slots'],
-    };
-  }
-
-  const invocations = raw.invocations.filter((value): value is JsonRecord => isRecord(value));
-  if (invocations.length !== raw.invocations.length) errors.push('stage evidence invocations must all be objects');
-  const finals: JsonRecord[] = [];
-  for (const reviewerSlot of requiredSlots) {
-    const candidates = invocations
-      .filter((value) => optionalString(value.reviewerSlot) === reviewerSlot)
-      .sort((left, right) => Number(left.attemptOrdinal ?? 0) - Number(right.attemptOrdinal ?? 0));
-    const final = candidates.at(-1);
-    if (!final) {
-      errors.push('stage evidence missing final invocation mapping for reviewerSlot ' + reviewerSlot);
-      continue;
-    }
-    if (final.stageAttemptId !== stageAttemptId) errors.push('reviewerSlot ' + reviewerSlot + ' stageAttemptId does not match admitted attempt');
-    if (final.stage !== stage) errors.push('reviewerSlot ' + reviewerSlot + ' stage does not match admitted stage');
-    if (final.sourceRevision !== sourceRevision) errors.push('reviewerSlot ' + reviewerSlot + ' sourceRevision does not match admitted revision');
-    if (!optionalString(final.invocationId)) errors.push('reviewerSlot ' + reviewerSlot + ' invocationId is missing');
-    finals.push(final);
-  }
-  if (errors.length > 0) {
+  const hydrated = raw.invocations.map((value, index) => (
+    isRecord(value) ? hydrateReconciliationTransport(options.stageEvidencePath, value, index, errors) : null
+  ));
+  if (hydrated.some((value) => value === null)) {
+    if (raw.invocations.some((value) => !isRecord(value))) errors.push('stage evidence invocations must all be objects');
     return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [...new Set(errors)] };
+  }
+  const invocations = hydrated as JsonRecord[];
+  raw.invocations = invocations;
+
+  const routing = isReviewLaneRouting(raw.reviewLaneRouting) ? raw.reviewLaneRouting as ReviewLaneRouting : null;
+  const initialRequiredSlots = routing ? routing.initiallyActivatedSlots : requiredFinalSlots(raw);
+  if (initialRequiredSlots.length === 0) {
+    return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: ['stage evidence has no required reviewer slots'] };
   }
 
   const transport = options.artifactSourceTransport ?? defaultGhTransport();
@@ -1233,15 +1335,7 @@ export function reconcileCreateIssueStage(
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     const message = temporaryError('source-unavailable', 'unable to revalidate live Issue before reconciliation: ' + detail);
-    return {
-      ok: false,
-      stageAttemptId,
-      stage,
-      sourceRevision,
-      capturePaths: [],
-      errors: [message],
-      temporary: 'source-unavailable',
-    };
+    return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [message], temporary: 'source-unavailable' };
   }
   const liveRevision = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i.exec(liveIssue.body)?.[1];
   if (!liveRevision || liveRevision.toLowerCase() !== sourceRevision.toLowerCase()) {
@@ -1254,71 +1348,112 @@ export function reconcileCreateIssueStage(
       errors: ['stale_next_action: live Issue revision is ' + (liveRevision ?? '<missing>') + ', expected ' + sourceRevision],
     };
   }
+
   let principalLogin: string;
   try {
     principalLogin = resolveAuthenticatedGithubPrincipal(transport);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     const message = temporaryError('identity-unresolved', 'authenticated GitHub principal could not be resolved through tracked GET /user: ' + detail);
-    return {
-      ok: false,
-      stageAttemptId,
-      stage,
-      sourceRevision,
-      capturePaths: [],
-      errors: [message],
-      temporary: 'identity-unresolved',
-    };
+    return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [message], temporary: 'identity-unresolved' };
   }
-  const census = authoritativeIssueCommentCensus(
-    transport,
-    options.repositoryFullName,
-    options.issueNumber,
-    errors,
-  );
+  const census = authoritativeIssueCommentCensus(transport, options.repositoryFullName, options.issueNumber, errors);
   if (!census) {
     const temporary = temporaryClassification(errors) ?? 'source-unavailable';
-    return {
-      ok: false,
-      stageAttemptId,
-      stage,
-      sourceRevision,
-      capturePaths: [],
-      errors: [...new Set(errors)],
-      temporary,
-    };
+    return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [...new Set(errors)], temporary };
   }
   const context: ArtifactAuthorityContext = { transport, census, principalLogin };
   const captureTexts = new Map<string, string>();
   const captureTimestamps = new Map<string, number>();
-  const candidatePaths = finals.map((invocation) => resolve(
-    options.reviewDir,
-    authoritativeCaptureName(
-      options.reviewDir,
-      stage,
-      stageSequence,
-      optionalString(invocation.reviewerSlot) ?? '',
-      invocation.capturePath,
-    ),
-  ));
-  const preExisting = new Set(candidatePaths.filter((path) => existsSync(path)));
+  const candidatePaths: string[] = [];
+  const preExisting = new Set<string>();
   const capturePaths: string[] = [];
-  for (const invocation of finals) {
-    const resolved = resolveAuthoritativeArtifact(
+  const resolvedBySlot = new Map<string, AuthoritativeArtifactResolution>();
+
+  const resolveSlot = (reviewerSlot: string): boolean => {
+    const candidates = invocations
+      .filter((value) => optionalString(value.reviewerSlot) === reviewerSlot)
+      .sort((left, right) => Number(left.attemptOrdinal ?? 0) - Number(right.attemptOrdinal ?? 0));
+    const final = candidates.at(-1);
+    if (!final) {
+      errors.push('stage evidence missing final invocation mapping for reviewerSlot ' + reviewerSlot);
+      return false;
+    }
+    if (final.stageAttemptId !== stageAttemptId) errors.push('reviewerSlot ' + reviewerSlot + ' stageAttemptId does not match admitted attempt');
+    if (final.stage !== stage) errors.push('reviewerSlot ' + reviewerSlot + ' stage does not match admitted stage');
+    if (final.sourceRevision !== sourceRevision) errors.push('reviewerSlot ' + reviewerSlot + ' sourceRevision does not match admitted revision');
+    if (!optionalString(final.invocationId)) errors.push('reviewerSlot ' + reviewerSlot + ' invocationId is missing');
+    if (final.sendCount !== 1) {
+      errors.push('reviewerSlot ' + reviewerSlot + ' has no GitHub-reconcilable delivery; observed sendCount=' + String(final.sendCount) + ' retryClass=' + String(final.retryClass));
+      return false;
+    }
+    if (errors.length > 0) return false;
+    const captureTarget = resolve(
+      options.reviewDir,
+      authoritativeCaptureName(options.reviewDir, stage, stageSequence, reviewerSlot, final.capturePath),
+    );
+    candidatePaths.push(captureTarget);
+    if (existsSync(captureTarget)) preExisting.add(captureTarget);
+    const resolvedArtifact = resolveAuthoritativeArtifact(
       context,
       options.reviewDir,
       stage,
       stageSequence,
-      invocation,
+      final,
       captureTexts,
       captureTimestamps,
       errors,
     );
-    if (resolved) capturePaths.push(resolved.capturePath);
+    if (!resolvedArtifact) return false;
+    resolvedBySlot.set(reviewerSlot, resolvedArtifact);
+    final.capturePath = resolvedArtifact.capturePath;
+    final.captureIdentity = resolvedArtifact.capture.captureIdentity;
+    capturePaths.push(resolvedArtifact.capturePath);
+    return true;
+  };
+
+  for (const slot of initialRequiredSlots) resolveSlot(slot);
+
+  let reviewLane: JsonRecord | undefined;
+  if (routing && errors.length === 0) {
+    const sourceVerdicts: Record<string, 'accept' | 'material-findings'> = {};
+    const sourceVerdictEvidence: Record<string, JsonRecord> = {};
+    const registerVerdict = (slot: string): void => {
+      const resolvedArtifact = resolvedBySlot.get(slot);
+      if (!resolvedArtifact) return;
+      const verdict = resolvedArtifact.capture.rawFindingCount === 0 ? 'accept' : 'material-findings';
+      sourceVerdicts[slot] = verdict;
+      sourceVerdictEvidence[slot] = {
+        producerEvidenceIdentity: 'authoritative-github-artifact:comment-' + resolvedArtifact.authority.commentId,
+        captureIdentity: resolvedArtifact.capture.captureIdentity,
+        terminalClassification: 'complete',
+        captureVerified: true,
+        digestMatches: true,
+        verdictText: verdict === 'accept' ? 'NO_FINDINGS' : 'FINDINGS',
+        rawFindingCount: resolvedArtifact.capture.rawFindingCount,
+      };
+    };
+    for (const slot of initialRequiredSlots) registerVerdict(slot);
+    let laneSettlement = settleReviewLane(routing, sourceVerdicts);
+    for (const slot of laneSettlement.finalRequiredSlots) {
+      if (resolvedBySlot.has(slot)) continue;
+      resolveSlot(slot);
+      if (errors.length === 0) registerVerdict(slot);
+    }
+    if (errors.length === 0) laneSettlement = settleReviewLane(routing, sourceVerdicts);
+    if (!laneSettlement.ok) errors.push(...laneSettlement.errors.map((error) => 'reviewLane settlement: ' + error));
+    reviewLane = {
+      routing,
+      finalRequiredSlots: laneSettlement.finalRequiredSlots,
+      sourceVerdicts,
+      sourceVerdictEvidence,
+      conflictDecision: laneSettlement.conflictDecision,
+      settlement: laneSettlement,
+    };
   }
-  if (errors.length > 0 || capturePaths.length !== requiredSlots.length) {
+
+  if (errors.length > 0) {
     rollbackNewReconciliationCaptures(candidatePaths, preExisting);
-    if (errors.length === 0) errors.push('stage reconciliation did not credential every required reviewer slot');
     const temporary = temporaryClassification(errors);
     return {
       ok: false,
@@ -1330,14 +1465,26 @@ export function reconcileCreateIssueStage(
       ...(temporary ? { temporary } : {}),
     };
   }
-  return {
-    ok: true,
-    stageAttemptId,
-    stage,
-    sourceRevision,
-    capturePaths,
-    errors: [],
-  };
+
+  raw.outcome = 'complete';
+  raw.producerEvidence = 'not-applicable';
+  raw.partialMissingSources = [];
+  raw.tierTransition = 'none';
+  raw.revisionChecks = { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' };
+  raw.settlement = { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true };
+  if (reviewLane) {
+    raw.reviewLane = reviewLane;
+    raw.invocations = invocations.map((invocation) => ({
+      ...invocation,
+      reviewLaneRouting: routing,
+    }));
+  }
+  if (!atomicReplaceStageEvidence(options.stageEvidencePath, originalText, raw, errors)) {
+    rollbackNewReconciliationCaptures(candidatePaths, preExisting);
+    return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [...new Set(errors)] };
+  }
+
+  return { ok: true, stageAttemptId, stage, sourceRevision, capturePaths, errors: [] };
 }
 
 function readClaudeProducerEvidence(
