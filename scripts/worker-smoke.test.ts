@@ -7,10 +7,12 @@ import { runProcessSync } from './kernel/subprocess.ts';
 import {
   buildSmokeAgentPrompt,
   checkSmokeTestPlan,
+  createSmokeControlPlaneDiagnostic,
   ensureSmokeRunArtifactDir,
   evaluateReadyForReviewCombinations,
   evaluateWorkerSmokeCoverage,
   evaluateWorkerSmokeGate,
+  extractSmokeReportsFromComments,
   formatSmokeReportComment,
   normalizeSmokeReport,
   resolveSmokeRequirement,
@@ -195,10 +197,53 @@ describe('Issue #1936 truthful smoke evidence', () => {
     expect(workerSmokeCauseFamilyForHarnessReason('runtime_timeout')).toBe('harness_observation_timeout');
     expect(workerSmokeCauseFamilyForHarnessReason('trusted_target_head_mismatch:abc')).toBe('harness_head_mismatch');
     expect(workerSmokeCauseFamilyForHarnessReason('tracked_smoke_runtime_state')).toBe('harness_dirty_worktree');
+    const currentHarnessReasons = [
+      ['send_failed:write_channel_closed', 'harness_observation_interrupted'],
+      ['dispatch_unknown:submit_witness_missing', 'harness_observation_interrupted'],
+      ['opencode_panel_observation_failed:read_bounded_output:failed:unobservable', 'harness_observation_interrupted'],
+      ['opencode_panel_idle_splash', 'harness_observation_interrupted'],
+      ['operator_cancelled:SIGTERM', 'harness_observation_interrupted'],
+      ['read_bounded_output:failed:runtime_response_invalid', 'harness_observation_interrupted'],
+      ['smoke_ordering_independent_in_progress', 'harness_admission_refused'],
+      ['smoke_ordering_independent_already_passed', 'harness_admission_refused'],
+      ['smoke_ordering_review_unsettled', 'harness_admission_refused'],
+      ['smoke_ordering_head_mismatch:stale', 'harness_head_mismatch'],
+    ] as const;
+    for (const [reason, family] of currentHarnessReasons) {
+      expect(workerSmokeCauseFamilyForHarnessReason(reason)).toBe(family);
+    }
     expect(workerSmokeCauseFamilyForHarnessReason('future prose-shaped reason')).toBe('unknown');
     expect(smokeResultForWorkerSmokeCauseFamily('scenario_precondition_unavailable')).toBe('BLOCKED');
     expect(smokeResultForWorkerSmokeCauseFamily('scenario_assertion_failed')).toBe('FAIL');
     expect(smokeResultForWorkerSmokeCauseFamily('unknown')).toBe('FAIL');
+  });
+
+  it('keeps control-plane result derivation on the closed family map', () => {
+    const normalized = normalizeSmokeReport({
+      result: 'PASS',
+      scenarios: [{ action: 'run declared smoke', expected: 'pass', observed: 'pass', outcome: 'pass' }],
+      trackedFilesUnmodified: true,
+      limitations: [],
+      environmentNotes: [],
+      terminalCleanup: 'closed_owned_handle',
+      producer: SMOKE_REPORT_PRODUCER,
+      orcaExecutable: 'runtime-adapter',
+      terminalHandle: 'terminal-owned',
+    }, { issueNumber: 1936, prNumber: 1945, headSha: HEAD_ONE });
+    expect(normalized.ok).toBe(true);
+    if (!normalized.ok) return;
+    const diagnostic = createSmokeControlPlaneDiagnostic({
+      terminalAcquired: true,
+      operation: 'terminal_read',
+      outcomeCategory: 'recognized_control_plane_code',
+      controlPlaneCode: 'channel_control_overwritten',
+    });
+    expect(diagnostic).toBeDefined();
+    if (!diagnostic) return;
+    normalized.report.controlPlaneDiagnostic = diagnostic;
+    expect(normalized.report.causeFamily).toBe('harness_observation_interrupted');
+    expect(normalized.report.result).toBe('FAIL');
+    expect(normalized.report.nonPassCause).toBe('orca_control_plane_lost_mid_smoke');
   });
 
   it('fails multiple terminal non-PASS rows closed independent of row order', () => {
@@ -218,6 +263,27 @@ describe('Issue #1936 truthful smoke evidence', () => {
     expect(first.ok && first.report.causeFamily).toBe('unknown');
     expect(second.ok && second.report.result).toBe('FAIL');
     expect(second.ok && second.report.causeFamily).toBe('unknown');
+  });
+
+  it('does not let a top-level family rescue a malformed terminal scenario row', () => {
+    const normalized = normalizeSmokeReport({
+      result: 'BLOCKED',
+      scenarios: [{
+        action: 'check declared precondition',
+        expected: 'precondition available',
+        observed: 'not available',
+        outcome: 'blocked',
+      }],
+      causeFamily: 'harness_admission_refused',
+      trackedFilesUnmodified: true,
+      limitations: [],
+      environmentNotes: [],
+      terminalCleanup: 'not_started',
+    }, { issueNumber: 1936, prNumber: 1945, headSha: HEAD_ONE });
+    expect(normalized.ok).toBe(true);
+    expect(normalized.ok && normalized.report.scenarios[0]?.causeFamily).toBe('unknown');
+    expect(normalized.ok && normalized.report.causeFamily).toBe('unknown');
+    expect(normalized.ok && normalized.report.result).toBe('FAIL');
   });
 
   it('normalizes carry-only PASS without synthesizing a runtime terminal handle', () => {
@@ -241,6 +307,37 @@ describe('Issue #1936 truthful smoke evidence', () => {
     expect(unprovenCarry.ok).toBe(false);
     const executed = normalizeSmokeReport({ ...partial, terminalCleanup: 'closed_owned_handle' }, { issueNumber: 1936, prNumber: 1945, headSha: HEAD_ONE });
     expect(executed.ok).toBe(false);
+  });
+
+  it('round-trips a canonical carry-only PASS through formatted comment history', () => {
+    const carried: SmokeReport = {
+      result: 'PASS',
+      issueNumber: 1936,
+      prNumber: 1945,
+      headSha: HEAD_ONE,
+      scenarios: [{
+        action: 'carry tuple',
+        expected: 'already proven',
+        observed: `carried PASS from head ${HEAD_TWO} comment 42; not freshly executed on ${HEAD_ONE}`,
+        outcome: 'pass',
+      }],
+      trackedFilesUnmodified: true,
+      limitations: [],
+      environmentNotes: ['smoke-execution=carry-only'],
+      terminalCleanup: 'not_started_no_execution',
+      producer: SMOKE_REPORT_PRODUCER,
+      orcaExecutable: 'fixture-adapter',
+    };
+    const extracted = extractSmokeReportsFromComments([{ body: formatSmokeReportComment(carried) }]);
+    expect(extracted).toHaveLength(1);
+    expect(extracted[0]).toMatchObject({
+      result: 'PASS',
+      issueNumber: 1936,
+      prNumber: 1945,
+      headSha: HEAD_ONE,
+      terminalCleanup: 'not_started_no_execution',
+    });
+    expect(extracted[0]?.terminalHandle).toBeUndefined();
   });
   it('keeps same-head attempt receipts append-only and verifies the exact attempt', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-receipts-1936-'));
@@ -331,6 +428,18 @@ describe('Issue #1936 truthful smoke evidence', () => {
     const mutable = checkSmokeTestPlan(planBody([{ action: 'read prompt_history.json', expected: 'stable result' }]));
     expect(mutable.ok).toBe(false);
     expect(mutable.errors.join('\n')).toContain('prompt_history.json');
+    const absoluteSmoke = checkSmokeTestPlan(planBody([{
+      action: 'read /tmp/repo/.orca-worker-smoke/runs/run-123/final-evidence.json',
+      expected: 'stable result',
+    }]));
+    expect(absoluteSmoke.ok).toBe(false);
+    expect(absoluteSmoke.errors.join('\n')).toContain('/tmp/repo/.orca-worker-smoke/runs/run-123/final-evidence.json');
+    const absoluteCursor = checkSmokeTestPlan(planBody([{
+      action: 'read /home/user/.cursor/projects/demo/terminals/term-123/output.txt',
+      expected: 'stable result',
+    }]));
+    expect(absoluteCursor.ok).toBe(false);
+    expect(absoluteCursor.errors.join('\n')).toContain('/home/user/.cursor/projects/demo/terminals/term-123/output.txt');
     const fixture = checkSmokeTestPlan([
       '```behavior-kind', 'action-producing', '```', '', '```smoke-test-plan', 'scenarios:',
       '  - action: deterministic check | expected: deterministic result', '    fixture: run-owned', '```',

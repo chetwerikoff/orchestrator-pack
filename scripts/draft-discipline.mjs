@@ -199,10 +199,10 @@ function findSmokePlanMutableEvidenceTokens(scenario) {
   for (const match of value.matchAll(/\bprompt_history\.json\b/giu)) {
     tokens.push(match[0]);
   }
-  for (const match of value.matchAll(/(?:^|[\s`"'(])((?:\.\/)?\.orca-worker-smoke(?:[\\/][^\s`"'|,;)]*)?)/gimu)) {
+  for (const match of value.matchAll(/(?:^|[\s`"'(])((?:[^\s`"'|,;)]*[\\/])?\.orca-worker-smoke(?:[\\/][^\s`"'|,;)]*)?)/gimu)) {
     tokens.push(match[1]);
   }
-  for (const match of value.matchAll(/(?:^|[\s`"'(])((?:~\/)?\.cursor[\\/][^\s`"'|,;)]*(?:terminals?|sessions?)[\\/][^\s`"'|,;)]*)/giu)) {
+  for (const match of value.matchAll(/(?:^|[\s`"'(])((?:[^\s`"'|,;)]*[\\/])?\.cursor[\\/][^\s`"'|,;)]*(?:terminals?|sessions?)[\\/][^\s`"'|,;)]*)/giu)) {
     tokens.push(match[1]);
   }
   return [...new Set(tokens)];

@@ -1690,6 +1690,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   const suppliedIssueBody = readIssueBody(options.issueBodyFile);
   let issueBody = suppliedIssueBody;
   let resolvedTarget: ResolvedSmokeTarget | undefined;
+  let trustedTargetHeadMismatch: string | undefined;
   const suppliedTier = parseComplexityTierFence(suppliedIssueBody);
   const suppliedPlan = resolveSmokeRequirement(suppliedIssueBody);
   const workerOwnedNotApplicable = (options.smokeActor ?? 'worker-owned') === 'worker-owned' && suppliedPlan.requirement === 'not-applicable';
@@ -1707,15 +1708,15 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       if (typeof issueBody !== 'string') throw new Error('trusted_target: Issue body resolver returned a non-string value');
     } catch (error) {
       const observed = scrubSmokeOutput(error instanceof Error ? error.message : String(error));
-      const report = operationalReport(
-        observed.startsWith('trusted_target_head_mismatch:') ? 'harness_head_mismatch' : 'harness_admission_refused',
-        options,
-        {
+      if (observed.startsWith('trusted_target_head_mismatch:')) {
+        trustedTargetHeadMismatch = observed;
+      } else {
+        const report = operationalReport('harness_admission_refused', options, {
           action: 'bind smoke to trusted live Issue and PR', expected: 'supplied body, open Issue/PR, and exact live PR head match',
           observed,
-        },
-      );
-      publishSmokeReport(report, options); emit({ ok: false, report }, options.json); return 1;
+        });
+        publishSmokeReport(report, options); emit({ ok: false, report }, options.json); return 1;
+      }
     }
   }
   const plan = resolveSmokeRequirement(issueBody);
@@ -1755,6 +1756,17 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     ? (options.runId ?? '').trim()
     : createSmokeRunIdentity();
   const preAttempt = preAttemptPublication(attemptId, appliedOverrideReason);
+
+  if (trustedTargetHeadMismatch) {
+    const report = operationalReport(workerSmokeCauseFamilyForHarnessReason(trustedTargetHeadMismatch), options, {
+      action: 'bind smoke to trusted live Issue and PR',
+      expected: 'supplied body, open Issue/PR, and exact live PR head match',
+      observed: trustedTargetHeadMismatch,
+    });
+    publishSmokeReport(report, options, preAttempt);
+    emit({ ok: false, report, attemptId }, options.json);
+    return 1;
+  }
 
   let trackedSmokeRuntimePaths: string[];
   try {
@@ -1912,9 +1924,10 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       }, ...(postSmoke ? { postSmoke } : {}) }, options.json);
       return report.result === 'PASS' ? 0 : 1;
     } catch (error) {
-      const report = operationalReport('unknown', options, {
+      const observed = scrubSmokeOutput(error instanceof Error ? error.message : String(error));
+      const report = operationalReport(workerSmokeCauseFamilyForHarnessReason(observed), options, {
         action: 'publish carry-only selective smoke', expected: 'fresh current-head report without runtime lifecycle',
-        observed: scrubSmokeOutput(error instanceof Error ? error.message : String(error)),
+        observed,
         terminalCleanup: 'not_started_no_execution', adapterId: adapter.id,
       });
       publishSmokeReport(report, options, carryPublication);

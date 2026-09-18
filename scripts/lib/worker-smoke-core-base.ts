@@ -65,8 +65,18 @@ export function smokeResultForWorkerSmokeCauseFamily(
 
 const HARNESS_REASON_CAUSE_FAMILIES: Readonly<Record<string, WorkerSmokeCauseFamily>> = {
   runtime_cli_interrupted: 'harness_observation_interrupted',
+  runtime_response_invalid: 'harness_observation_interrupted',
+  runtime_operation_failed: 'harness_observation_interrupted',
   process_launch_failed: 'harness_observation_interrupted',
   prompt_delivery_unconfirmed: 'harness_observation_interrupted',
+  send_failed: 'harness_observation_interrupted',
+  dispatch_unknown: 'harness_observation_interrupted',
+  opencode_panel_observation_failed: 'harness_observation_interrupted',
+  opencode_panel_idle_splash: 'harness_observation_interrupted',
+  operator_cancelled: 'harness_observation_interrupted',
+  read_bounded_output: 'harness_observation_interrupted',
+  smoke_start_fence_post_entry: 'harness_observation_interrupted',
+  smoke_start_prefix_incomplete: 'harness_observation_interrupted',
   agent_exited_without_report: 'harness_observation_interrupted',
   agent_idle_without_report: 'harness_observation_interrupted',
   agent_report_unfenced: 'harness_observation_interrupted',
@@ -76,10 +86,27 @@ const HARNESS_REASON_CAUSE_FAMILIES: Readonly<Record<string, WorkerSmokeCauseFam
   smoke_blocked_precondition_unchanged: 'harness_admission_refused',
   smoke_ordering_worker_owned_in_progress: 'harness_admission_refused',
   smoke_ordering_worker_owned_already_passed: 'harness_admission_refused',
+  smoke_ordering_independent_in_progress: 'harness_admission_refused',
+  smoke_ordering_independent_already_passed: 'harness_admission_refused',
+  smoke_ordering_review_forbidden: 'harness_admission_refused',
+  smoke_ordering_independent_same_head_forbidden: 'harness_admission_refused',
+  smoke_ordering_independent_head_forbidden: 'harness_admission_refused',
+  smoke_ordering_review_unsettled: 'harness_admission_refused',
+  smoke_ordering_worker_owned_owner_evidence_mismatch: 'harness_admission_refused',
+  smoke_ordering_independent_owner_evidence_mismatch: 'harness_admission_refused',
+  smoke_ordering_worker_owned_owner_mismatch: 'harness_admission_refused',
+  smoke_ordering_independent_owner_mismatch: 'harness_admission_refused',
+  smoke_ordering_worker_smoke_not_started: 'harness_admission_refused',
+  smoke_ordering_worker_smoke_forbidden: 'harness_admission_refused',
+  smoke_ordering_independent_not_started: 'harness_admission_refused',
+  smoke_ordering_tier_missing: 'harness_admission_refused',
+  smoke_ordering_authority_missing_at_terminal: 'harness_admission_refused',
+  smoke_actor_unsupported: 'harness_admission_refused',
   admission_refused: 'harness_admission_refused',
   lifecycle_admission_refused: 'harness_admission_refused',
   agent_wait_self_handle: 'harness_admission_refused',
   agent_wait_unowned_handle: 'harness_admission_refused',
+  smoke_ordering_head_mismatch: 'harness_head_mismatch',
   orca_head_mismatch: 'harness_head_mismatch',
   git_head_mismatch: 'harness_head_mismatch',
   trusted_target_head_mismatch: 'harness_head_mismatch',
@@ -825,11 +852,13 @@ export function normalizeSmokeReport(
     ? undefined
     : ambiguousTerminalNonPass
       ? 'unknown'
-      : controlPlaneDiagnostic
-        ? workerSmokeCauseFamilyForHarnessReason(controlPlaneDiagnostic.cause)
-        : isWorkerSmokeCauseFamily(partial.causeFamily)
-          ? partial.causeFamily
-          : scenarioCauseFamily ?? 'unknown';
+      : scenarioCauseFamily
+        ? scenarioCauseFamily
+        : controlPlaneDiagnostic
+          ? workerSmokeCauseFamilyForHarnessReason(controlPlaneDiagnostic.cause)
+          : isWorkerSmokeCauseFamily(partial.causeFamily)
+            ? partial.causeFamily
+            : 'unknown';
   const result = partial.result === 'PASS'
     ? 'PASS'
     : smokeResultForWorkerSmokeCauseFamily(causeFamily ?? 'unknown');
@@ -936,6 +965,25 @@ export function formatSmokeReportComment(report: SmokeReport): string {
   ].filter(Boolean).join('\n');
 }
 
+const CARRIED_SMOKE_OBSERVATION_PATTERN = /^carried PASS from head [0-9a-f]{40} comment \d+; not freshly executed on [0-9a-f]{40}$/u;
+
+export function isProvenCarryOnlySmokeReport(
+  report: Partial<SmokeReport>,
+  currentHeadSha: string,
+): boolean {
+  const currentHead = currentHeadSha.trim().toLowerCase();
+  return /^[0-9a-f]{40}$/u.test(currentHead)
+    && report.result === 'PASS'
+    && report.terminalCleanup === 'not_started_no_execution'
+    && !String(report.terminalHandle ?? '').trim()
+    && Array.isArray(report.scenarios)
+    && report.scenarios.length > 0
+    && report.scenarios.every((scenario) =>
+      scenario.outcome === 'pass'
+      && CARRIED_SMOKE_OBSERVATION_PATTERN.test(scenario.observed?.trim() ?? '')
+      && scenario.observed?.trim().endsWith(`; not freshly executed on ${currentHead}`) === true);
+}
+
 export function extractSmokeReportsFromComments(comments: readonly { body?: string; createdAt?: string }[]): SmokeReport[] {
   const reports: SmokeReport[] = [];
   for (const comment of comments) {
@@ -952,7 +1000,10 @@ export function extractSmokeReportsFromComments(comments: readonly { body?: stri
     const headSha = body.match(/head-sha:\s*`?([0-9a-f]{40})`?/i)?.[1]
       ?? body.match(/head sha:\s*([0-9a-f]{40})/i)?.[1]
       ?? '';
-    const normalized = normalizeSmokeReport(partial, { issueNumber, prNumber, headSha });
+    const normalizationOptions = isProvenCarryOnlySmokeReport(partial, headSha)
+      ? { executionMode: 'carry-only' as const }
+      : {};
+    const normalized = normalizeSmokeReport(partial, { issueNumber, prNumber, headSha }, normalizationOptions);
     if (normalized.ok) {
       reports.push(normalized.report);
     }
