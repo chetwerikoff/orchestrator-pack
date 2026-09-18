@@ -1149,8 +1149,8 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     expect(executionRunbook).toMatch(
       /source slots `source-01\.\.03` as independent fresh\s+ChatGPT project chats/,
     );
-    expect(executionRunbook).toContain(
-      'implementation conversation, fixer conversations, and sibling reviewer conversations are never reused as reviewer sources',
+    expect(executionRunbook).toMatch(
+      /implementation conversation, fixer conversations, and sibling\s+reviewer conversations are never reused as reviewer sources/,
     );
     expect(executionRunbook).toContain(
       'one **fresh GPT fixer conversation for that findings-bearing round**',
@@ -1180,8 +1180,8 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     expect(executionRunbook).toMatch(
       /The manager\s+does not run independent smoke itself/,
     );
-    expect(executionRunbook).toContain(
-      'Overall `VERIFIED_COMPLETE` is possible only after independent smoke passes on the final exact head',
+    expect(executionRunbook).toMatch(
+      /Overall `VERIFIED_COMPLETE` is\s+possible only after independent smoke passes on the final exact head/,
     );
     expect(orchestrationRunbook).toContain(
       'manager whole-role Task/Dispatch handoff',
