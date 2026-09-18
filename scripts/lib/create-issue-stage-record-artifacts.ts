@@ -2523,7 +2523,6 @@ function ensureAuthorDispositionsFromGovernedOutput(input: {
 
 function latestLifecycleStage(stageInputs: readonly { path: string; value: JsonRecord }[]): ReviewStage | null {
   const candidates = stageInputs
-    .filter((entry) => entry.value.outcome === 'complete' || entry.value.outcome === 'partial')
     .map((entry) => ({
       stage: reviewStage(entry.value.stage),
       sequence: Number(entry.value.stageSequence),
