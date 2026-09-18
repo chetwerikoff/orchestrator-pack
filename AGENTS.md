@@ -235,7 +235,7 @@ invocation detail.
 | [`discuss-with-gpt`](.cursor/skills/discuss-with-gpt/SKILL.md) | discuss or challenge with GPT |
 | [`create-issue-draft`](.cursor/skills/create-issue-draft/SKILL.md) | author a new task or handoff; for an existing Issue, standalone `manager` / `менеджер` or explicit task-authoring/review-continuation wording resumes this lifecycle |
 | [`execute-issue-with-gpt`](.cursor/skills/execute-issue-with-gpt/SKILL.md) | explicitly execute or continue implementation of an existing Issue through GPT; explicit implementation wording wins over a `manager` / `менеджер` noun in the same request |
-| [`review-pr-with-gpt`](.cursor/skills/review-pr-with-gpt/SKILL.md) | explicitly review an existing implementation PR, or review the implementation for an exact Issue whose unique open closing PR must be resolved by the manager before review effects |
+| [`review-pr-with-gpt`](.cursor/skills/review-pr-with-gpt/SKILL.md) | when acting as orchestrator/supervisor, route an explicit operator request to review an existing implementation PR, or an exact Issue whose unique open closing PR must be resolved by the manager before review effects; standalone connected-GitHub chat review stays on the direct-review procedure above |
 | [`study-external-source`](.cursor/skills/study-external-source/SKILL.md) | study an external repository or URL |
 | [`publish-issue-draft`](.cursor/skills/publish-issue-draft/SKILL.md) | publish an existing tracked draft |
 | [`switch-pack-reviewer`](.cursor/skills/switch-pack-reviewer/SKILL.md) | change the configured reviewer |
@@ -245,11 +245,14 @@ For an existing `orchestrator-pack` Issue, `<Issue> manager`, `<Issue> мене�
 `create-issue-draft`. Explicit implementation wording such as `<Issue> execute`,
 `<Issue> выполни задачу`, `<Issue> выполни Issue`, or `<Issue> доделай Issue`
 loads `execute-issue-with-gpt`, even when `manager` / `менеджер` also appears.
-Exact implementation-review wording such as `PR #N review`, `review PR #N`,
-`pack review #N`, or `Issue #N review` loads `review-pr-with-gpt`; for an
-Issue target the manager, not the router, proves that exactly one open
-implementation PR closes that Issue before any review effect. Explicit task-spec
-review continuation remains with `create-issue-draft`. An ordinary discussion
+When acting as the orchestrator/supervisor, exact implementation-review wording
+such as `PR #N review`, `review PR #N`, `pack review #N`, or `Issue #N review`
+loads `review-pr-with-gpt`; for an Issue target the manager, not the router,
+proves that exactly one open implementation PR closes that Issue before any
+review effect. In a standalone connected-GitHub chat reviewer context, a direct
+top-level PR review or pack-review request remains owned by the connected-GitHub
+direct-review procedure above and does not activate `review-pr-with-gpt`.
+Explicit task-spec review continuation remains with `create-issue-draft`. An ordinary discussion
 that merely mentions `manager` / `менеджер` without an existing Issue target
 does not activate the shorthand. Ordinary discussion that merely mentions
 `review` without an exact Issue/PR target does not activate
