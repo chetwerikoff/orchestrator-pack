@@ -462,6 +462,19 @@ function parseFinalAcceptanceArgs(argv: string[]): FinalAcceptanceCliOptions {
 }
 
 
+function artifactIssueNumber(opts: StageFinalizeCliOptions, reviewDir: string): number {
+  if (Number.isSafeInteger(opts.issueNumber) && opts.issueNumber > 0) return opts.issueNumber;
+  const intakePath = opts.tierIntakePath?.trim() || join(reviewDir, 'tier-intake.json');
+  try {
+    const intake = JSON.parse(readFileSync(intakePath, 'utf8')) as Record<string, unknown>;
+    const match = /^issue:([1-9][0-9]*)$/.exec(String(intake.taskIdentity ?? ''));
+    if (match) return Number(match[1]);
+  } catch {
+    // fall through to the ordinary required-argument diagnostic
+  }
+  return parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number or tier-intake.taskIdentity');
+}
+
 function canonicalAttemptPaths(reviewDir: string, requested: readonly string[]): string[] {
   if (requested.length > 0) return [...requested];
   try {
@@ -646,7 +659,7 @@ export function runStageFinalizeCli(argv: string[]): number {
 
     if (opts.command === 'produce-artifacts' || opts.command === 'check-artifacts') {
       const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
-      const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
+      const issueNumber = artifactIssueNumber(opts, reviewDir);
       const stale = staleArtifactBinding(opts, reviewDir, issueNumber);
       if (stale) {
         if (opts.json) console.log(JSON.stringify(stale));
