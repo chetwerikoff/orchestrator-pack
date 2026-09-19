@@ -177,6 +177,16 @@ function canonicalCommandRunner(storeRoot: string, overrides: Record<string, unk
     storeRoot,
     sourceRepoRoot: repoRoot,
     fixtureCurrentPrHeadSha: HEAD_A,
+    fixtureRequiredCiPolicy: {
+      contexts: ['verify orchestrator-pack structure', 'pr scope guard', 'orchestrator-pack/pack-review'],
+      checks: [],
+    },
+    fixtureRequiredCiChecks: [
+      { name: 'verify orchestrator-pack structure', state: 'SUCCESS' },
+      { name: 'pr scope guard', state: 'SUCCESS' },
+      { name: 'orchestrator-pack/pack-review', state: 'PENDING' },
+    ],
+    fixtureRequiredCiHeadAfterGate: HEAD_A,
     fixturePrState: 'OPEN',
     fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
     fixturePostReviewHeadSha: HEAD_A,
@@ -923,6 +933,132 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
     expect(process.env[PACK_REVIEW_BOUND_REVIEWER_ENV]).toBeUndefined();
   });
 
+  it.each([
+    ['pending', 'PENDING'],
+    ['failed', 'FAILURE'],
+    ['cancelled', 'CANCELLED'],
+  ] as const)('refuses manual start when a required review-independent check is %s', async (_label, state) => {
+    const storeRoot = tempRoot('opk-issue-1958-ci-refusal-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    const engagement = path.join(storeRoot, 'gpt-engagements.jsonl');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_REVIEW_RUNNER_GPT_ENGAGEMENT_FILE = engagement;
+
+    const execution = await runPackGptReviewCommand({ prNumber: 1111 }, {
+      env: process.env,
+      stderr: { write: () => undefined },
+      startReview: canonicalCommandRunner(storeRoot, {
+        fixtureRequiredCiChecks: [
+          { name: 'verify orchestrator-pack structure', state },
+          { name: 'pr scope guard', state: 'SUCCESS' },
+          { name: 'orchestrator-pack/pack-review', state: 'PENDING' },
+        ],
+      }),
+    });
+
+    expect(execution.exitCode).toBe(1);
+    expect(execution.result).toMatchObject({
+      created: false,
+      outcome: 'review_not_started',
+      reason: 'review_not_started',
+      runnerReason: 'required_ci_not_green_for_current_head',
+      prNumber: 1111,
+      headSha: HEAD_A,
+    });
+    expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toHaveLength(0);
+    expect(engagementCount(engagement)).toBe(0);
+  });
+
+  it('refuses missing required CI and exact-head drift before review admission', async () => {
+    const storeRoot = tempRoot('opk-issue-1958-ci-missing-drift-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+
+    const unprovable = await runPackGptReviewCommand({ prNumber: 1111 }, {
+      env: process.env,
+      stderr: { write: () => undefined },
+      startReview: canonicalCommandRunner(storeRoot, {
+        fixtureRequiredCiPolicy: null,
+      }),
+    });
+    expect(unprovable.result).toMatchObject({
+      reason: 'review_not_started',
+      runnerReason: 'required_ci_not_green_for_current_head',
+    });
+
+    const missing = await runPackGptReviewCommand({ prNumber: 1111 }, {
+      env: process.env,
+      stderr: { write: () => undefined },
+      startReview: canonicalCommandRunner(storeRoot, {
+        fixtureRequiredCiChecks: [
+          { name: 'verify orchestrator-pack structure', state: 'SUCCESS' },
+          { name: 'orchestrator-pack/pack-review', state: 'SUCCESS' },
+        ],
+      }),
+    });
+    expect(missing.result).toMatchObject({
+      reason: 'review_not_started',
+      runnerReason: 'required_ci_not_green_for_current_head',
+    });
+
+    const drifted = await runPackGptReviewCommand({ prNumber: 1111 }, {
+      env: process.env,
+      stderr: { write: () => undefined },
+      startReview: canonicalCommandRunner(storeRoot, {
+        fixtureRequiredCiHeadAfterGate: HEAD_B,
+      }),
+    });
+    expect(drifted.result).toMatchObject({
+      reason: 'review_not_started',
+      runnerReason: 'required_ci_not_green_for_current_head',
+    });
+    expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toHaveLength(0);
+  });
+
+  it('refuses non-green CI before mutating an existing stale run', async () => {
+    const storeRoot = tempRoot('opk-issue-1958-ci-stale-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    const old = new Date(Date.now() - 10 * 60_000);
+    const seeded = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      now: old,
+      prNumber: 1111,
+      headSha: HEAD_A,
+      linkedSessionId: 'fixture-stale-run',
+      startReason: 'fixture-stale-run',
+      surface: 'fixture-stale-run',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+    }).run;
+    updatePackReviewRun(seeded.id, { runnerPid: 2147483647 }, {
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      now: old,
+    });
+    const before = readFileSync(path.join(storeRoot, 'runs', `${seeded.id}.json`), 'utf8');
+
+    const execution = await runPackGptReviewCommand({ prNumber: 1111 }, {
+      env: process.env,
+      stderr: { write: () => undefined },
+      startReview: canonicalCommandRunner(storeRoot, {
+        fixtureRequiredCiChecks: [
+          { name: 'verify orchestrator-pack structure', state: 'FAILURE' },
+          { name: 'pr scope guard', state: 'SUCCESS' },
+        ],
+      }),
+    });
+
+    expect(execution.result).toMatchObject({
+      reason: 'review_not_started',
+      runnerReason: 'required_ci_not_green_for_current_head',
+    });
+    expect(readFileSync(path.join(storeRoot, 'runs', `${seeded.id}.json`), 'utf8')).toBe(before);
+    expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toHaveLength(1);
+  });
+
   it('maps same-head active reuse to non-zero review_not_started without GPT engagement', async () => {
     const storeRoot = tempRoot('opk-issue-1111-active-reuse-');
     const capture = path.join(storeRoot, 'github-review.json');
@@ -1567,18 +1703,15 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     expect(() => readFileSync(capture, 'utf8')).toThrow();
   });
 
-  it('keeps an ordinary blocking finding authoritative while exposing partial coverage', async () => {
+  it('does not let an ordinary blocking finding shorten the pre-grace 3/3 census', async () => {
     const storeRoot = tempRoot('opk-gpt-blocking-partial-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
     process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
     delete process.env.PACK_GPT_BROWSER_CHAT_URL;
-    const statusRequests: Array<{ state: string; description: string }> = [];
 
     const result = await startPackReview(pluralStart(storeRoot, capture, {
-      fixtureRequiredStatusWriter: async (request) => {
-        statusRequests.push({ state: request.state, description: request.description });
-      },
+      fixtureRequiredStatusWriter: async () => {},
       fixtureReviewBySourceSlot: {
         'source-01': [{ stdout: findingsPayload('real-blocker') }],
         'source-02': [
@@ -1591,7 +1724,8 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
 
     expect(result).toMatchObject({
       ok: true,
-      status: 'changes_requested',
+      status: 'reviewing',
+      reason: 'gpt_sources_partial_pending_reconcile:2/3',
       coverage: {
         kind: 'partial',
         completedSourceCount: 2,
@@ -1599,15 +1733,39 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       },
     });
     const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
-    expect(run?.reviewVerdict).toBe('findings');
-    expect(run?.findingCount).toBe(1);
-    expect(statusRequests.map((request) => request.state)).toEqual(['pending', 'failure']);
+    expect(run?.reviewVerdict).toBeUndefined();
+    expect(run?.reviewRound?.settledSourceCount).toBeUndefined();
+    expect(() => readFileSync(capture, 'utf8')).toThrow();
+  });
+
+  it('aggregates all findings when 3/3 sources finish before grace', async () => {
+    const storeRoot = tempRoot('opk-gpt-blocking-full-census-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+
+    const result = await startPackReview(pluralStart(storeRoot, capture, {
+      fixtureRequiredStatusWriter: async () => {},
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: findingsPayload('blocker-one') }],
+        'source-02': [{ stdout: findingsPayload('blocker-two') }],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
+      },
+    }));
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'changes_requested',
+      coverage: { kind: 'complete', completedSourceCount: 3, cardinality: 3 },
+    });
+    const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
+    expect(run?.reviewRound?.settledSourceCount).toBe(3);
+    expect(run?.findingCount).toBe(2);
     const posted = readFileSync(capture, 'utf8');
-    expect(posted).toContain('Sources: 2/3 (partial)');
-    expect(posted).toContain('Incomplete sources:');
-    expect(posted).toContain('source-02');
-    expect(posted).toContain('explicit_refusal:zero_send_collision_exhausted');
-    expect(posted).toContain('real-blocker');
+    expect(posted).toContain('blocker-one');
+    expect(posted).toContain('blocker-two');
+    expect(posted).not.toContain('degraded after timeout');
   });
 
   it.each([
@@ -1652,7 +1810,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     expect(posted).not.toContain('GPT source source-02 did not complete');
   });
 
-  it('accepts ordinary partial blockers under the same severity semantics as delivery classification', async () => {
+  it('keeps ordinary partial blockers pending under the same severity semantics as delivery classification', async () => {
     const storeRoot = tempRoot('opk-gpt-critical-blocking-partial-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
@@ -1672,20 +1830,21 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
 
     expect(result).toMatchObject({
       ok: true,
-      status: 'changes_requested',
+      status: 'reviewing',
+      reason: 'gpt_sources_partial_pending_reconcile:2/3',
       coverage: { kind: 'partial', completedSourceCount: 2, cardinality: 3 },
     });
     expect(getPackReviewRun(String(result.runId), {
       projectId: 'orchestrator-pack',
       storeRoot,
-    })?.reviewVerdict).toBe('findings');
+    })?.reviewVerdict).toBeUndefined();
   });
 
   it.each([
     'harvest_failed',
     'no_reply',
     'forbidden_verdict_envelope',
-  ] as const)('keeps real blocking findings authoritative while reporting %s separately', async (harvestClass) => {
+  ] as const)('keeps real blocking findings pending when %s leaves the census partial', async (harvestClass) => {
     const storeRoot = tempRoot('opk-gpt-harvest-blocking-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
@@ -1701,16 +1860,17 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     }));
 
     const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
-    expect(result).toMatchObject({ ok: true, status: 'changes_requested' });
-    expect(run?.reviewVerdict).toBe('findings');
-    expect(run?.findingCount).toBe(1);
-    expect(run?.findings).toHaveLength(1);
-    const posted = readFileSync(capture, 'utf8');
-    expect(posted).toContain('real-blocker');
-    expect(posted).toContain('Review harvest incidents');
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'reviewing',
+      reason: 'gpt_sources_partial_pending_reconcile:2/3',
+      coverage: { kind: 'partial', completedSourceCount: 2, cardinality: 3 },
+    });
+    expect(run?.reviewVerdict).toBeUndefined();
+    expect(run?.findingCount).toBeUndefined();
+    expect(run?.reviewRound?.settledSourceCount).toBeUndefined();
     expect(run?.reviewRound?.sourceSlots[1]?.terminalClass).toBe(harvestClass);
-    expect(posted).toContain(harvestClass);
-    expect(posted).not.toContain('GPT source source-02 did not complete');
+    expect(() => readFileSync(capture, 'utf8')).toThrow();
   });
 
   it('terminalizes launched slots as possible-delivery evidence on stale recovery', () => {
@@ -2769,7 +2929,7 @@ describe('Issue #1741 failed GPT round source-comment settlement', () => {
 
 
 describe('recovered sub-quorum blocking source regression', () => {
-  it('delivers a credentialed recovered 1/3 blocker without freezing settledSourceCount to one', async () => {
+  it('keeps a credentialed recovered 1/3 blocker incomplete after grace', async () => {
     const storeRoot = tempRoot('opk-gpt-recovered-one-blocker-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
@@ -2931,20 +3091,18 @@ describe('recovered sub-quorum blocking source regression', () => {
     expect(reconciliation.results).toEqual(expect.arrayContaining([
       expect.objectContaining({
         runId: failed.id,
-        recovered: true,
-        statusReconciled: true,
-        status: 'changes_requested',
+        terminalized: false,
+        statusReconciled: false,
+        usableSourceCount: 1,
+        graceExpired: true,
+        reason: 'gpt_sources_incomplete_after_grace:1/3',
       }),
     ]));
-    const settled = getPackReviewRun(failed.id, { projectId: 'orchestrator-pack', storeRoot });
-    expect(settled?.status).toBe('changes_requested');
-    expect(settled?.reviewRound?.settledSourceCount).toBeUndefined();
-    expect(settled?.reviewVerdict).toBe('findings');
-    expect(settled?.findingCount).toBe(1);
-    expect(settled?.findings).toEqual([
-      expect.objectContaining({ title: 'recovered-blocker', severity: 'error', sourceSlotId: 'source-01' }),
-    ]);
-    expect(statusStates).toContain('failure');
-    expect(reviewBodies.join('\n')).toContain('recovered-blocker');
+    const unsettled = getPackReviewRun(failed.id, { projectId: 'orchestrator-pack', storeRoot });
+    expect(unsettled?.reviewRound?.settledSourceCount).toBeUndefined();
+    expect(unsettled?.reviewVerdict).toBeUndefined();
+    expect(unsettled?.findingCount).toBeUndefined();
+    expect(statusStates).toEqual([]);
+    expect(reviewBodies).toEqual([]);
   });
 });

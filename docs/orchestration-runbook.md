@@ -783,7 +783,10 @@ review is the authoritative verdict; the pack run store is operational state.
 - a missing exact bound Issue snapshot is captured only after the existing start
   claim is acquired, so concurrent first starts freeze one durable Issue body;
 - manual Browser-GPT review uses
-  `npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>`;
+  `npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>`; a new manual
+  review starts only when review-independent required CI is green for the exact
+  current PR head, with `orchestrator-pack/pack-review` itself excluded from
+  that precondition;
 - review start/list/status use the pack runner, run store, and claim authority;
 - no concrete runtime transport is a fallback review path;
 - terminal review JSON on stdout must be non-empty and valid;
@@ -814,9 +817,10 @@ node --experimental-strip-types scripts/pack-review-runner.ts reconcile \
 For operator no-review waiver evidence and exact-head receipt staleness, use only `docs/pack-review-waiver-merge-runbook.md`.
 
 The reconciler first re-reads credentialed GitHub source comments. For a frozen
-three-source round, 3/3 settles normally; 2/3 remains waiting before the existing
-shared stale/grace threshold and may settle once after that threshold as
-`Sources: 2/3 (degraded after timeout)`. Fewer than two usable sources after the
+three-source round, 3/3 settles normally; blocking findings affect the verdict
+but never shorten the pre-grace 3/3 census. A 2/3 census remains waiting before
+the existing shared stale/grace threshold and may settle once after that threshold
+as `Sources: 2/3 (degraded after timeout)`. Fewer than two usable sources after the
 threshold remains incomplete and reports the missing-source action. A late third
 source does not reopen an already settled 2/3 round or consume another cap unit.
 Every ordinary manual/chat/automatic start uses the same consuming review budget;

@@ -151,6 +151,7 @@ import {
   parseComplexityTierFromIssueBody,
   resolveTierAndCap,
 } from '../docs/review-cycle-cap.mjs';
+import { classifyRequiredCiLevel } from '../docs/review-ready-stuck-guard.mjs';
 import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
 import type { ResolvedScopeContext } from '../plugins/codex-pr-reviewer/lib/scope_context.ts';
 export { resolveRepositorySlug };
@@ -185,6 +186,12 @@ interface StartInput {
     timeoutSeconds: number;
   }) => void | Promise<void>;
   fixtureCurrentPrHeadSha?: string;
+  fixtureRequiredCiChecks?: Array<{ name?: string; state?: string; conclusion?: string; status?: string }> | null;
+  fixtureRequiredCiPolicy?: {
+    contexts?: unknown[];
+    checks?: Array<string | { context?: string }>;
+  } | null;
+  fixtureRequiredCiHeadAfterGate?: string;
   fixturePrState?: string;
   fixturePrBody?: string;
   fixturePrBodyAfterClaim?: string;
@@ -681,7 +688,7 @@ export async function resolveCurrentPrTarget(
   repoSlug: string,
   prNumber: number,
   runner: typeof runProcess = runProcess,
-): Promise<{ headSha: string; body: string }> {
+): Promise<{ headSha: string; body: string; baseRef: string }> {
   const result = await runner({
     command: resolveTrackedGhWrapper(),
     args: ['api', `repos/${repoSlug}/pulls/${prNumber}`],
@@ -704,12 +711,128 @@ export async function resolveCurrentPrTarget(
   const head = row.head && typeof row.head === 'object' && !Array.isArray(row.head)
     ? row.head as Record<string, unknown>
     : {};
+  const base = row.base && typeof row.base === 'object' && !Array.isArray(row.base)
+    ? row.base as Record<string, unknown>
+    : {};
   const headSha = trim(head.sha ?? row.headRefOid);
   const state = trim(row.state);
+  const baseRef = trim(base.ref);
   if (!/^[0-9a-f]{40}$/i.test(headSha)) throw new Error(`PR #${prNumber} returned invalid head SHA`);
   if (state.toUpperCase() !== 'OPEN') throw new Error(`PR #${prNumber} is not open`);
   if (typeof row.body !== 'string') throw new Error(`PR #${prNumber} returned invalid body`);
-  return { headSha: headSha.toLowerCase(), body: row.body };
+  if (!baseRef) throw new Error(`PR #${prNumber} returned invalid base ref`);
+  return { headSha: headSha.toLowerCase(), body: row.body, baseRef };
+}
+
+type ManualPackReviewCiCheck = { name?: string; state?: string; conclusion?: string; status?: string };
+
+function branchRequiredCheckNames(policy: Record<string, unknown>): string[] {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  const add = (value: unknown): void => {
+    const name = trim(value);
+    if (!name) return;
+    const key = name.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    names.push(name);
+  };
+  if (Array.isArray(policy.contexts)) {
+    for (const context of policy.contexts) add(context);
+  }
+  if (Array.isArray(policy.checks)) {
+    for (const check of policy.checks) {
+      if (check && typeof check === 'object' && !Array.isArray(check)) {
+        add((check as Record<string, unknown>).context);
+      } else {
+        add(check);
+      }
+    }
+  }
+  return names;
+}
+
+function reviewIndependentRequiredCheckNames(policy: Record<string, unknown>): {
+  all: string[];
+  reviewIndependent: string[];
+} {
+  const all = branchRequiredCheckNames(policy);
+  const reviewContext = PACK_REVIEW_REQUIRED_STATUS_CONTEXT.toLowerCase();
+  return {
+    all,
+    reviewIndependent: all.filter((name) => name.toLowerCase() !== reviewContext),
+  };
+}
+
+async function manualPackReviewRequiredCiGreen(input: {
+  startInput: StartInput;
+  target: { prNumber: number; headSha: string; repoSlug: string; sourceRepoRoot: string; prBaseRef: string };
+}): Promise<boolean> {
+  if (input.target.prBaseRef !== 'main') return false;
+  const harness = process.env.OPK_VITEST_HARNESS === '1';
+  let policy: Record<string, unknown>;
+  let checks: ManualPackReviewCiCheck[];
+
+  if (harness) {
+    const fixturePolicy = input.startInput.fixtureRequiredCiPolicy;
+    const fixtureChecks = input.startInput.fixtureRequiredCiChecks;
+    if (!fixturePolicy || !Array.isArray(fixtureChecks)) return false;
+    policy = fixturePolicy as Record<string, unknown>;
+    checks = fixtureChecks;
+  } else {
+    const policyResult = await runProcess({
+      command: resolveTrackedGhWrapper(),
+      args: ['api', `repos/${input.target.repoSlug}/branches/main/protection/required_status_checks`],
+      cwd: input.target.sourceRepoRoot,
+      inheritParentEnv: true,
+      allowEmptyStdout: false,
+      timeoutMs: 30_000,
+    });
+    if (!policyResult.ok) return false;
+    try {
+      const parsed = JSON.parse(policyResult.stdout) as unknown;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+      policy = parsed as Record<string, unknown>;
+    } catch {
+      return false;
+    }
+
+    const checksResult = await runProcess({
+      command: resolveTrackedGhWrapper(),
+      args: [
+        'pr', 'checks', String(input.target.prNumber),
+        '--repo', input.target.repoSlug,
+        '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description',
+      ],
+      cwd: input.target.sourceRepoRoot,
+      inheritParentEnv: true,
+      allowEmptyStdout: false,
+      timeoutMs: 30_000,
+    });
+    if (checksResult.outcome !== 'exit' || ![0, 1, 8].includes(checksResult.exitCode ?? -1)) return false;
+    try {
+      const parsed = JSON.parse(checksResult.stdout) as unknown;
+      if (!Array.isArray(parsed)) return false;
+      checks = parsed as ManualPackReviewCiCheck[];
+    } catch {
+      return false;
+    }
+  }
+
+  const required = reviewIndependentRequiredCheckNames(policy);
+  const level = required.all.length > 0 && required.reviewIndependent.length === 0
+    ? 'green'
+    : classifyRequiredCiLevel(checks, { requiredCheckNames: required.reviewIndependent });
+  if (level !== 'green') return false;
+
+  const headAfterGate = harness
+    ? trim(input.startInput.fixtureRequiredCiHeadAfterGate || input.target.headSha).toLowerCase()
+    : await resolveCurrentPrHead(
+        input.target.sourceRepoRoot,
+        input.target.repoSlug,
+        input.target.prNumber,
+      );
+  return headAfterGate === input.target.headSha;
 }
 
 async function resolveCurrentIssueBody(
@@ -752,6 +875,7 @@ async function resolveTarget(
   issueNumber?: number;
   repoSlug: string;
   sourceRepoRoot: string;
+  prBaseRef: string;
   operatorStart?: OperatorPackReviewStart;
 }> {
   const sessionId = trim(input.sessionId || input.linkedSessionId);
@@ -786,7 +910,11 @@ async function resolveTarget(
     throw new Error(`PR #${prNumber} is not open`);
   }
   const liveTarget = harnessExplicit
-    ? { headSha: fixtureCurrentHead || requestedHead, body: input.fixturePrBody ?? '' }
+    ? {
+        headSha: fixtureCurrentHead || requestedHead,
+        body: input.fixturePrBody ?? '',
+        baseRef: 'main',
+      }
     : await resolveCurrentPrTarget(sourceRepoRoot, repoSlug, prNumber);
   const liveHead = liveTarget.headSha;
   if (!/^[0-9a-f]{40}$/.test(liveHead)) throw new Error(`review target head is not a full SHA for PR #${prNumber}`);
@@ -846,6 +974,7 @@ async function resolveTarget(
     issueNumber,
     repoSlug,
     sourceRepoRoot,
+    prBaseRef: liveTarget.baseRef,
     ...(operatorStart ? { operatorStart } : {}),
   };
 }
@@ -2656,23 +2785,11 @@ async function recoverStaleGptSourceComments(options: {
   round = persisted.reviewRound ?? round;
   let usableSourceCount = gptUsableSourceCount(round);
   const graceExpired = gptRoundGraceExpired(persisted);
-  const hasBlockingCompletedSource = round.sourceSlots.some((slot) => (
-    slot.lifecycle === 'terminal'
-    && (slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings')
-    && slot.payload
-    && classifyPackReviewPayload(slot.payload as ReviewPayload).blocking
-  ));
   const settlePartialAfterGrace = options.input.settlePartialAfterGrace ?? true;
-  const blockingBelowDegradedQuorum = hasBlockingCompletedSource
-    && round.cardinality >= 3
-    && round.settledSourceCount === undefined
-    && usableSourceCount < 2;
   const requiredSourceCount = round.settledSourceCount
-    ?? (hasBlockingCompletedSource
-      ? Math.max(1, usableSourceCount)
-      : round.cardinality >= 3
-        ? (graceExpired && settlePartialAfterGrace ? 2 : round.cardinality)
-        : round.cardinality);
+    ?? (round.cardinality >= 3
+      ? (graceExpired && settlePartialAfterGrace ? 2 : round.cardinality)
+      : round.cardinality);
   if (usableSourceCount < requiredSourceCount) {
     const reason = round.cardinality >= 3 && !graceExpired
       ? `gpt_sources_waiting_for_grace:${usableSourceCount}/${round.cardinality}`
@@ -2690,8 +2807,7 @@ async function recoverStaleGptSourceComments(options: {
   }
 
   if (round.cardinality >= 3
-      && round.settledSourceCount === undefined
-      && !blockingBelowDegradedQuorum) {
+      && round.settledSourceCount === undefined) {
     if (options.input.fixtureBeforeGptRoundFreeze) {
       await options.input.fixtureBeforeGptRoundFreeze({
         runId: options.run.id,
@@ -3920,8 +4036,30 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
   const timeoutSeconds = budgetLedger.runnerTimeoutSeconds;
   const trusted = resolveTrustedRunnerPaths();
   const projectId = trim(input.projectId) || DEFAULT_PROJECT_ID;
-  const baseRef = trim(input.baseRef) || DEFAULT_BASE_REF;
   const target = await resolveTarget(input, trusted.trustedPackRoot, operatorStart);
+  const baseRef = trim(input.baseRef) || DEFAULT_BASE_REF;
+  if (trim(input.surface) === 'pack-gpt-review') {
+    const requiredCiGreen = await manualPackReviewRequiredCiGreen({
+      startInput: input,
+      target: {
+        prNumber: target.prNumber,
+        headSha: target.headSha,
+        repoSlug: target.repoSlug,
+        sourceRepoRoot: target.sourceRepoRoot,
+        prBaseRef: target.prBaseRef,
+      },
+    });
+    if (!requiredCiGreen) {
+      return {
+        ok: false,
+        created: false,
+        reused: false,
+        reason: 'required_ci_not_green_for_current_head',
+        prNumber: target.prNumber,
+        headSha: target.headSha,
+      };
+    }
+  }
   const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: input.storeRoot });
   const resolveSlug = input.fixtureResolveRepositorySlug
     ?? (process.env.OPK_VITEST_HARNESS === '1'
@@ -5049,6 +5187,30 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         request,
       }));
       const coverage = derivePackReviewGptCoverage(run.reviewRound);
+
+      if (coverage?.kind === 'partial' && classifyPackReviewPayload(payload).blocking) {
+        // Blocking findings affect the eventual verdict, never the pre-grace
+        // source census. Keep any sub-cardinality blocking evidence pending
+        // until the existing scoped reconcile/grace path owns settlement.
+        run = updatePackReviewRun(run.id, {
+          status: 'reviewing',
+          latestRunStatus: 'reviewing',
+          failureReason: undefined,
+          completedAtUtc: undefined,
+        }, { projectId, storeRoot });
+        const runs = listPackReviewRuns({ projectId, storeRoot });
+        if (claimLease) await claimLease.release('run_started', runs);
+        return {
+          ok: true,
+          created: true,
+          reused: false,
+          reason: `gpt_sources_partial_pending_reconcile:${coverage.completedSourceCount}/${coverage.cardinality}`,
+          runId: run.id,
+          status: 'reviewing',
+          coverage,
+          httpStatus: 202,
+        };
+      }
 
       // Harvest failures are an immediate terminal overlay. They are deliberately
       // evaluated before ordinary incompleteness so partial evidence is retained

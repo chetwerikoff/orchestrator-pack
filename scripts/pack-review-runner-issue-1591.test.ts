@@ -251,6 +251,19 @@ describe('Issue #1591 launcher-independent consuming semantics', () => {
 
 type PublishedSource = { identity: PackGptSourceIdentity; payload: string };
 
+function blockingSourcePayload(title: string): string {
+  return JSON.stringify({
+    findings: [{
+      type: 'quality',
+      code: `quality:${title}`,
+      severity: 'blocking',
+      path: 'scripts/pack-review-runner.ts',
+      summary: title,
+      source: 'gpt-browser',
+    }],
+  });
+}
+
 function sourceComment(publication: PublishedSource, id: number): PackGptSourceGithubComment {
   const timestamp = '2026-08-24T00:00:00.000Z';
   const body = formatPackGptSourceCommentEnvelope(publication.identity, publication.payload);
@@ -420,6 +433,122 @@ describe('Issue #1591 GitHub-first 3/3-or-timed-2/3 recovery', () => {
     const run = getPackReviewRun(runId, { projectId: PROJECT, storeRoot });
     expect(run?.status).toBe('running');
     expect(run?.reviewRound?.settledSourceCount).toBeUndefined();
+    expect(capture.posts).toBe(0);
+  });
+
+  it('keeps blocking 2/3 waiting before grace and settles it only after grace', async () => {
+    const storeRoot = tempRoot();
+    harness(storeRoot);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-24T00:00:00.000Z'));
+    const { runId, publications } = recoverableRun(storeRoot, new Date());
+    const first = publications.get('source-01')!;
+    first.payload = blockingSourcePayload('blocking-before-grace');
+    const capture = { body: '', posts: 0 };
+
+    const waiting = await reconcileStalePackReviewRuns({
+      ...reconcileInput(storeRoot, publications, capture),
+      immediate: true,
+    });
+    expect(waiting.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId,
+        terminalized: false,
+        usableSourceCount: 2,
+        graceExpired: false,
+        reason: 'gpt_sources_waiting_for_grace:2/3',
+      }),
+    ]));
+    expect(getPackReviewRun(runId, { projectId: PROJECT, storeRoot })?.reviewRound?.settledSourceCount)
+      .toBeUndefined();
+    expect(capture.posts).toBe(0);
+
+    vi.setSystemTime(new Date('2026-08-24T00:03:00.000Z'));
+    const settled = await reconcileStalePackReviewRuns({
+      ...reconcileInput(storeRoot, publications, capture),
+      immediate: true,
+    });
+    expect(settled.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId,
+        recovered: true,
+        degraded: true,
+        settledSourceCount: 2,
+      }),
+    ]));
+    expect(getPackReviewRun(runId, { projectId: PROJECT, storeRoot })?.reviewVerdict).toBe('findings');
+    expect(capture.body).toContain('Sources: 2/3 (degraded after timeout)');
+    expect(capture.body).toContain('blocking-before-grace');
+  });
+
+  it('keeps one blocking source waiting before grace and never settles early', async () => {
+    const storeRoot = tempRoot();
+    harness(storeRoot);
+    const { runId, publications } = recoverableRun(storeRoot, new Date());
+    publications.delete('source-02');
+    const first = publications.get('source-01')!;
+    first.payload = blockingSourcePayload('one-blocker-before-grace');
+    const capture = { body: '', posts: 0 };
+
+    const result = await reconcileStalePackReviewRuns({
+      ...reconcileInput(storeRoot, publications, capture),
+      immediate: true,
+    });
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId,
+        usableSourceCount: 1,
+        graceExpired: false,
+        reason: 'gpt_sources_waiting_for_grace:1/3',
+      }),
+    ]));
+    const run = getPackReviewRun(runId, { projectId: PROJECT, storeRoot });
+    expect(run?.reviewRound?.settledSourceCount).toBeUndefined();
+    expect(run?.reviewVerdict).toBeUndefined();
+    expect(capture.posts).toBe(0);
+  });
+
+  it('keeps one blocking source incomplete after grace and never freezes below 2/3', async () => {
+    const storeRoot = tempRoot();
+    harness(storeRoot);
+    const startedAt = new Date(Date.now() - 3 * 60_000);
+    const { runId, publications } = recoverableRun(storeRoot, startedAt);
+    publications.delete('source-02');
+    const first = publications.get('source-01')!;
+    first.payload = blockingSourcePayload('one-blocker');
+    const capture = { body: '', posts: 0 };
+
+    const result = await reconcileStalePackReviewRuns({
+      ...reconcileInput(storeRoot, publications, capture),
+      immediate: true,
+    });
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId,
+        reason: 'gpt_sources_incomplete_after_grace:1/3',
+      }),
+    ]));
+    const run = getPackReviewRun(runId, { projectId: PROJECT, storeRoot });
+    expect(run?.reviewRound?.settledSourceCount).toBeUndefined();
+    expect(run?.reviewVerdict).toBeUndefined();
+    expect(capture.posts).toBe(0);
+  });
+
+  it('keeps expired 2/3 incomplete when partial-after-grace settlement is disabled', async () => {
+    const storeRoot = tempRoot();
+    harness(storeRoot);
+    const startedAt = new Date(Date.now() - 3 * 60_000);
+    const { runId, publications } = recoverableRun(storeRoot, startedAt);
+    const capture = { body: '', posts: 0 };
+
+    await reconcileStalePackReviewRuns({
+      ...reconcileInput(storeRoot, publications, capture),
+      immediate: true,
+      settlePartialAfterGrace: false,
+    });
+    const run = getPackReviewRun(runId, { projectId: PROJECT, storeRoot });
+    expect(run?.reviewRound?.settledSourceCount).toBeUndefined();
+    expect(run?.reviewVerdict).toBeUndefined();
     expect(capture.posts).toBe(0);
   });
 
