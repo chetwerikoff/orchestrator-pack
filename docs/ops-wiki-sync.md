@@ -55,6 +55,10 @@ node --experimental-strip-types scripts/sync-ops-wiki.ts apply \
 `--reindex full` forces a full rebuild through the same existing search tool.
 This is diagnostic recovery only, not the normal post-adoption path.
 
+For a bootstrap smoke, the incremental apply must return `ok:true` and the
+index-served `wiki-ops.read` of `Ops Wiki Status.md` must expose
+`checked_through_commit` in the served body.
+
 ## Status and trust
 
 The owned status note `Ops Wiki Status.md` records:
@@ -63,10 +67,13 @@ The owned status note `Ops Wiki Status.md` records:
   plus golden retrieval passed index-served read-back
 - `apply_in_progress` — the target commit while mutation or read-back is unfinished
 
-Agents may rely on `wiki-ops` only when index-served `wiki-ops.read` of that
-status note returns the exact current/adopted commit and no `apply_in_progress`.
-Any mismatch, in-progress state, absence, malformed content, unsupported
-read-back, or timeout means: read the current canonical repository file.
+The status note keeps these fields in YAML frontmatter and repeats them in a
+deterministic `ops-wiki-status` JSON body block because index-served reads omit
+frontmatter. Agents may rely on `wiki-ops` only when index-served
+`wiki-ops.read` of that status note returns the exact current/adopted commit in
+the body and no `apply_in_progress`. Any mismatch, in-progress state, absence,
+malformed content, unsupported read-back, or timeout means: read the current
+canonical repository file.
 
 ## Failure and rollback
 

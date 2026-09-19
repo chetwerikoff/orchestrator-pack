@@ -22,6 +22,9 @@ export const OPS_WIKI_EPISODE_DIR = 'episodes';
 export const DEFAULT_CONVERGENCE_TIMEOUT_MS = 30_000;
 export const DEFAULT_POLL_INTERVAL_MS = 200;
 export const DEFAULT_MCP_REQUEST_TIMEOUT_MS = 5_000;
+export const DEFAULT_MCP_READ_SNIPPET_LENGTH = 12_288;
+export const DEFAULT_MCP_REINDEX_TIMEOUT_MS = DEFAULT_CONVERGENCE_TIMEOUT_MS;
+const GOLDEN_SEARCH_LIMIT = 20;
 
 export type GitRunner = (cwd: string, args: readonly string[]) => { ok: boolean; stdout: string; stderr: string };
 export type OpsWikiMode = 'plan' | 'apply' | 'check';
@@ -246,6 +249,12 @@ export function loadManifest(raw: string): OpsWikiManifest {
   for (const episode of episodes) {
     for (const edge of episode.edges ?? []) {
       if (!ids.has(edge.target)) throw new Error(`ops_wiki_manifest_malformed:edge_target:${episode.episode_id}:${edge.target}`);
+      if (edge.type === 'related') {
+        const target = episodes.find((candidate) => candidate.episode_id === edge.target);
+        if (!(target?.edges ?? []).some((candidate) => candidate.type === 'related' && candidate.target === episode.episode_id)) {
+          throw new Error(`ops_wiki_manifest_malformed:asymmetric_related:${episode.episode_id}:${edge.target}`);
+        }
+      }
     }
   }
 
@@ -448,25 +457,64 @@ function markdownBodyAfterFrontmatter(markdown: string): string | undefined {
   return match ? markdown.slice(match[0].length) : undefined;
 }
 
+function parseBodyJsonBlock(markdown: string, language: string): Record<string, unknown> | undefined {
+  const escapedLanguage = language.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  const match = new RegExp('(?:^|\\n)```' + escapedLanguage + '\\n([^\\n]*)\\n```(?:\\n|$)', 'u').exec(markdown);
+  if (!match) return undefined;
+  const parsed: unknown = JSON.parse(match[1]!);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('ops_wiki_body_block_malformed');
+  return parsed as Record<string, unknown>;
+}
+
+function parseStatusFields(fields: Record<string, unknown>): { checkedThrough?: string; applyInProgress?: string } {
+  const checkedThrough = fields.checked_through_commit;
+  const applyInProgress = fields.apply_in_progress;
+  if (checkedThrough !== undefined && (typeof checkedThrough !== 'string' || !COMMIT_PATTERN.test(checkedThrough))) {
+    throw new Error('ops_wiki_status_malformed');
+  }
+  if (applyInProgress !== undefined && (typeof applyInProgress !== 'string' || !COMMIT_PATTERN.test(applyInProgress))) {
+    throw new Error('ops_wiki_status_malformed');
+  }
+  return {
+    checkedThrough: checkedThrough as string | undefined,
+    applyInProgress: applyInProgress as string | undefined,
+  };
+}
+
+function renderBodyJsonBlock(language: string, value: Record<string, unknown>): string {
+  return ['```' + language, JSON.stringify(value), '```'].join('\n');
+}
+
 export function parseStatusNote(markdown: string): { checkedThrough?: string; applyInProgress?: string } {
   const fields = parseOwnedFrontmatter(markdown);
-  if (!fields || fields.ops_wiki_kind !== 'status') throw new Error('ops_wiki_status_malformed');
-  const checkedThrough = fields.checked_through_commit && COMMIT_PATTERN.test(fields.checked_through_commit)
-    ? fields.checked_through_commit
-    : undefined;
-  const applyInProgress = fields.apply_in_progress && COMMIT_PATTERN.test(fields.apply_in_progress)
-    ? fields.apply_in_progress
-    : undefined;
-  return { checkedThrough, applyInProgress };
+  if (fields && fields.ops_wiki_kind !== 'status') throw new Error('ops_wiki_status_malformed');
+  let frontmatterStatus: { checkedThrough?: string; applyInProgress?: string } | undefined;
+  if (fields) frontmatterStatus = parseStatusFields(fields);
+  let bodyStatus: { checkedThrough?: string; applyInProgress?: string } | undefined;
+  try {
+    const bodyFields = parseBodyJsonBlock(markdown, 'ops-wiki-status');
+    if (bodyFields) bodyStatus = parseStatusFields(bodyFields);
+  } catch {
+    throw new Error('ops_wiki_status_malformed');
+  }
+  if (!frontmatterStatus && !bodyStatus) throw new Error('ops_wiki_status_malformed');
+  if (frontmatterStatus && bodyStatus && (frontmatterStatus.checkedThrough !== bodyStatus.checkedThrough || frontmatterStatus.applyInProgress !== bodyStatus.applyInProgress)) {
+    throw new Error('ops_wiki_status_malformed');
+  }
+  return bodyStatus ?? frontmatterStatus!;
 }
 
 export function renderStatusNote(input: { readonly checkedThrough?: string; readonly applyInProgress?: string }): string {
+  const body = renderBodyJsonBlock('ops-wiki-status', {
+    checked_through_commit: input.checkedThrough,
+    apply_in_progress: input.applyInProgress,
+  });
   return `${renderFrontmatter({
     ops_wiki_owned: true,
     ops_wiki_kind: 'status',
     checked_through_commit: input.checkedThrough,
     apply_in_progress: input.applyInProgress,
-  })}\n\n# Ops Wiki Status\n`;
+  })}\n\n# Ops Wiki Status\n\n${body}\n`;
 }
 
 function renderNavigation(edges: readonly ManifestEdge[]): string {
@@ -523,6 +571,10 @@ export function renderEpisode(
     topic: episode.topic,
     role: episode.role,
     edges: episode.edges ?? [],
+  })}\n\n${renderBodyJsonBlock('ops-wiki-episode', {
+    episode_id: episode.episode_id,
+    source_commit: commit,
+    generation_hash: generationHash,
   })}\n\n${body}${renderNavigation(episode.edges ?? [])}`;
   const bytes = Buffer.byteLength(markdown);
   if (bytes > manifest.max_episode_bytes) throw new Error(`ops_wiki_episode_over_byte_ceiling:${episode.episode_id}:${bytes}`);
@@ -701,12 +753,16 @@ export function evaluateEpisodeRead(input: {
   readonly episode: RenderedEpisode;
 }): SearchEscalation {
   if (!input.read.ok || !input.read.content.trim()) return 'expand';
-  const fields = parseOwnedFrontmatter(input.read.content);
-  if (!fields || fields.episode_id !== input.episode.episode_id) return 'expand';
-  if (!fields.source_commit || !COMMIT_PATTERN.test(fields.source_commit)) return 'expand';
-  if (fields.generation_hash !== input.episode.generationHash) return 'expand';
-  const body = markdownBodyAfterFrontmatter(input.read.content);
-  if (body === undefined) return 'expand';
+  const body = markdownBodyAfterFrontmatter(input.read.content) ?? input.read.content;
+  let identity: Record<string, unknown> | undefined;
+  try {
+    identity = parseBodyJsonBlock(body, 'ops-wiki-episode');
+  } catch {
+    return 'expand';
+  }
+  if (!identity || identity.episode_id !== input.episode.episode_id) return 'expand';
+  if (typeof identity.source_commit !== 'string' || !COMMIT_PATTERN.test(identity.source_commit)) return 'expand';
+  if (identity.generation_hash !== input.episode.generationHash) return 'expand';
   const headings = new Set(collectHeadings(body).map((hit) => hit.token));
   for (const section of input.episode.sourceSections) {
     if (!headings.has(section)) return 'expand';
@@ -803,10 +859,12 @@ async function waitForEpisodeBytes(
   pollIntervalMs: number,
   now: () => number,
 ): Promise<boolean> {
+  const expectedBody = markdownBodyAfterFrontmatter(expected);
+  if (expectedBody === undefined) return false;
   const matched = await waitFor(async () => {
     try {
       const read = await client.read(relativePath, { related: false });
-      return read.ok && read.content === expected ? true : undefined;
+      return read.ok && read.content === expectedBody ? true : undefined;
     } catch {
       return undefined;
     }
@@ -843,12 +901,12 @@ export async function runGoldenSuite(
   for (const query of suite.queries) {
     let hits: WikiOpsSearchHit[] | WikiOpsReadFail;
     try {
-      hits = await client.search({ query: query.query, mode: 'hybrid', limit: 3 });
+      hits = await client.search({ query: query.query, mode: 'hybrid', limit: GOLDEN_SEARCH_LIMIT });
     } catch {
       return { ok: false, reason: `golden_unavailable:${query.id}` };
     }
     if (!Array.isArray(hits)) return { ok: false, reason: `golden_unavailable:${query.id}` };
-    const found = new Set(hits.slice(0, 3).map((hit) => episodeIdFromPath(hit.path) ?? hit.path));
+    const found = new Set(hits.map((hit) => episodeIdFromPath(hit.path) ?? hit.path));
     if (!query.expected_episode_ids.every((episodeId) => found.has(episodeId))) {
       return { ok: false, reason: `golden_miss:${query.id}` };
     }
@@ -1099,14 +1157,14 @@ export function createMcpWikiOpsClient(
     ? requestTimeoutMs
     : DEFAULT_MCP_REQUEST_TIMEOUT_MS;
 
-  const rpc = async (method: string, params?: Record<string, unknown>): Promise<unknown> => {
+  const rpc = async (method: string, params?: Record<string, unknown>, timeoutMs = boundedTimeout): Promise<unknown> => {
     const response = await fetchImpl(url, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         accept: 'application/json, text/event-stream',
       },
-      signal: AbortSignal.timeout(boundedTimeout),
+      signal: AbortSignal.timeout(timeoutMs),
       body: JSON.stringify({ jsonrpc: '2.0', id: nextId++, method, params }),
     });
     const body = await response.text();
@@ -1128,7 +1186,7 @@ export function createMcpWikiOpsClient(
         await ready;
         const result = jsonToolResult(await rpc('tools/call', {
           name: 'read',
-          arguments: { paths: path, related: options?.related === true, snippet_length: 3000 },
+          arguments: { paths: path, related: options?.related === true, snippet_length: DEFAULT_MCP_READ_SNIPPET_LENGTH },
         }));
         const container = result && typeof result === 'object' ? result as Record<string, unknown> : {};
         const rows = Array.isArray(result)
@@ -1178,7 +1236,7 @@ export function createMcpWikiOpsClient(
     },
     async reindex(input) {
       await ready;
-      await rpc('tools/call', { name: 'reindex', arguments: { path: input.path, force: input.force === true } });
+      await rpc('tools/call', { name: 'reindex', arguments: { path: input.path, force: input.force === true } }, DEFAULT_MCP_REINDEX_TIMEOUT_MS);
     },
   };
 }

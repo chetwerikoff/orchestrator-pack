@@ -1,0 +1,29 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1968,
+  "declared_paths": [
+    "docs/chat-executor-rules.md",
+    "docs/worker-smoke-testing.md",
+    "scripts/pr2-foundation/post-review-smoke-preaction.test.ts",
+    "scripts/worker-smoke-entrypoint-1359.test.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "denylist": [
+    ".github/",
+    ".orca/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/chat-executor-rules.md",
+    "docs/worker-smoke-testing.md",
+    "scripts/pr2-foundation/post-review-smoke-preaction.test.ts",
+    "scripts/worker-smoke-entrypoint-1359.test.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "source_revision": "de0d4f4dc22899f96ab93109ca90ef5fc3772a50"
+}

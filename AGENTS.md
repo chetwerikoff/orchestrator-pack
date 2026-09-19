@@ -150,10 +150,10 @@ consult `wiki`. The ASCII server name `synto` remains an optional
 source/lineage surface. Mixed questions may consult both indexes.
 
 Before relying on operational results, use index-served `wiki-ops.read` on
-`Ops Wiki Status.md` with `related: false`. Require `checked_through_commit` to
-equal the exact current/adopted repository commit and `apply_in_progress` to be
-absent. Mismatch, in-progress state, absence, malformed content, unsupported
-read-back, or timeout routes immediately to current canonical repository files.
+`Ops Wiki Status.md` with `related: false`. Require the served body to expose
+`checked_through_commit` equal to the exact current/adopted repository commit and
+no `apply_in_progress`. Mismatch, in-progress state, absence, malformed content,
+unsupported read-back, or timeout routes immediately to current canonical repository files.
 Search results are navigation aids, never runtime-effect or merge authority.
 
 Natural-language operational questions are the normal entry. First run one
