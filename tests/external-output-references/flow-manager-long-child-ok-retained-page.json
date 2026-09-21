@@ -1,0 +1,25 @@
+{
+  "schema": "external-output-reference/v1",
+  "source": "real flow-manager-long-running-child terminal envelope, create-issue-draft author turn, 2026-09-15; conversation locator and absolute paths scrubbed",
+  "issue": 1979,
+  "observed_before_fix": {
+    "schema": "flow-manager-long-running-child-terminal/v1",
+    "completion_mode": "browser-turn-result-v1",
+    "lifecycle_outcome": "incident",
+    "incident": "child_post_result_exit_timeout",
+    "delivery": "POSSIBLY_DELIVERED",
+    "child_exit_code": null,
+    "turn_result_state": "ok",
+    "turn_result_cause": "completed_page_only",
+    "send_count": 1,
+    "recovery_available": true
+  },
+  "expected_after_fix": {
+    "lifecycle_outcome": "success",
+    "delivery": "POSSIBLY_DELIVERED",
+    "child_exit_diagnostic": "retained_after_result",
+    "child_exit_code": null,
+    "turn_result_state": "ok",
+    "send_count": 1
+  }
+}
