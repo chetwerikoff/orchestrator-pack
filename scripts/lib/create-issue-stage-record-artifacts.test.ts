@@ -1955,6 +1955,38 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
       expect(blocked.guardErrors.join('\n')).toContain('blocking malformed marker');
       expect(blockedSource.createdIssueComments).toHaveLength(0);
       expect(blockedSource.issueLabels).not.toContain('spec-review:accepted');
+
+      for (const [label, poison] of [
+        ['edited', { ...issue1976PoisonJournalComment(), updated_at: '2026-08-06T04:01:00Z' }],
+        ['non-owner', { ...issue1976PoisonJournalComment(), user: { login: 'someone-else' } }],
+      ] as const) {
+        const untrustedSource = transport({
+          census: [],
+          cycleComments: [poison, issue1976RecoverySuccessorComment()],
+          issueBodies: [body],
+          persistCreatedIssueComments: true,
+          issueLabels: ['spec-review:in-progress'],
+        });
+        const untrusted = runFinalAcceptance(untrustedSource, {
+          repo: REPOSITORY,
+          issueNumber: ISSUE,
+          publicActor: 'cursor-flow-manager',
+          workdir: join(input.dir, `journal-${label}`),
+          issueBody: body,
+          issueRevision: REVISION,
+          cycleId: 'cycle-1385',
+          reviewDir: canonicalDir,
+          tierIntakePath: join(canonicalDir, 'tier-intake.json'),
+          stageReceiptPaths: receiptNames.map((name) => join(canonicalDir, name)),
+          capturePaths: [],
+          ledgerPath: join(input.outputDir, 'finding-disposition-ledger.json'),
+          relayEvidencePaths: [join(input.outputDir, 'verified-relay-evidence.json')],
+        });
+        expect(untrusted.ok).toBe(false);
+        expect(untrusted.guardErrors.join('\n')).toContain('blocking malformed marker');
+        expect(untrustedSource.createdIssueComments).toHaveLength(0);
+        expect(untrustedSource.issueLabels).not.toContain('spec-review:accepted');
+      }
     } finally {
       if (previousStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
       else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previousStateRoot;
