@@ -79,7 +79,10 @@ npm run --silent flow-manager-long-running-child -- wait \
 ```
 
 Deadline expiry reports envelope absence only. It carries no success, retry, or
-launcher-loss authority.
+launcher-loss authority. The caller's own tool/shell timeout must exceed
+`--deadline-ms` by a comfortable margin; repeated short deadlines are the
+contract, and deadline expiry printed by the waiter itself is the only legal
+“envelope absent” evidence.
 
 ### Survival boundary (demonstrated)
 

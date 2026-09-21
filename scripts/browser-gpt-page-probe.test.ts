@@ -24,6 +24,7 @@ import {
   normalizeConversationUrl,
   parseCliArgs,
   projectExecutionRecoveryCause,
+  projectExecutionRecoveryInspect,
   publishExactBytes,
   runProbe,
   summarizeText,
@@ -45,27 +46,112 @@ class FakeNode {
   readonly innerText: string;
   readonly textContent: string;
   readonly attrs: Record<string, string>;
+  readonly tagName: string;
+  parent: FakeNode | null = null;
+  readonly childNodes: FakeNode[] = [];
 
-  constructor(role: string, innerText: string, textContent: string, attrs: Record<string, string> = {}) {
+  constructor(
+    role: string,
+    innerText: string,
+    textContent: string,
+    attrs: Record<string, string> = {},
+    tagName = 'DIV',
+  ) {
     this.innerText = innerText;
     this.textContent = textContent;
-    this.attrs = { 'data-message-author-role': role, ...attrs };
+    this.tagName = tagName.toUpperCase();
+    this.attrs = role
+      ? { 'data-message-author-role': role, ...attrs }
+      : { ...attrs };
+  }
+
+  appendChild(child: FakeNode): FakeNode {
+    child.parent = this;
+    this.childNodes.push(child);
+    return child;
+  }
+
+  get children(): FakeNode[] {
+    return this.childNodes;
   }
 
   getAttribute(name: string): string | null {
     return this.attrs[name] ?? null;
   }
 
-  closest(_selector: string): FakeNode {
+  closest(selector: string): FakeNode | null {
+    let current: FakeNode | null = this;
+    while (current) {
+      if (nodeMatchesSelector(current, selector)) return current;
+      current = current.parent;
+    }
     return this;
   }
 
-  querySelector(selector: string): object | null {
+  querySelector(selector: string): FakeNode | object | null {
     if (selector.includes('copy-turn-action-button')
       || selector.includes('good-response-turn-action-button')
       || selector.includes('bad-response-turn-action-button')) return {};
-    return null;
+    return this.querySelectorAll(selector)[0] ?? null;
   }
+
+  querySelectorAll(selector: string): FakeNode[] {
+    const matched: FakeNode[] = [];
+    const visit = (node: FakeNode) => {
+      for (const child of node.childNodes) {
+        if (nodeMatchesSelector(child, selector)) matched.push(child);
+        visit(child);
+      }
+    };
+    visit(this);
+    return matched;
+  }
+}
+
+function nodeMatchesSelector(node: FakeNode, selector: string): boolean {
+  return selector.split(',').map((part) => part.trim()).filter(Boolean).some((part) => nodeMatchesOneSelector(node, part));
+}
+
+function nodeMatchesOneSelector(node: FakeNode, selector: string): boolean {
+  let rest = selector;
+  const tagMatch = rest.match(/^([A-Za-z][\w-]*)/u);
+  if (tagMatch) {
+    if (node.tagName !== tagMatch[1]!.toUpperCase()) return false;
+    rest = rest.slice(tagMatch[1]!.length);
+  }
+  if (!rest) return true;
+  const attrRe = /\[([\w-]+)(?:([*^$]?=)"([^"]*)")?\]/gu;
+  let attrMatch: RegExpExecArray | null;
+  let matchedAttr = false;
+  while ((attrMatch = attrRe.exec(rest))) {
+    matchedAttr = true;
+    const [, name, operator, expected] = attrMatch;
+    const actual = node.getAttribute(name!);
+    if (operator === undefined) {
+      if (actual === null) return false;
+      continue;
+    }
+    if (actual === null) return false;
+    if (operator === '=' && actual !== expected) return false;
+    if (operator === '^=' && !actual.startsWith(expected ?? '')) return false;
+    if (operator === '*=' && !actual.includes(expected ?? '')) return false;
+    if (operator === '$=' && !actual.endsWith(expected ?? '')) return false;
+  }
+  return matchedAttr;
+}
+
+function collectMatching(roots: readonly FakeNode[], selector: string): FakeNode[] {
+  const seen = new Set<FakeNode>();
+  const matched: FakeNode[] = [];
+  const visit = (node: FakeNode) => {
+    if (nodeMatchesSelector(node, selector) && !seen.has(node)) {
+      seen.add(node);
+      matched.push(node);
+    }
+    for (const child of node.childNodes) visit(child);
+  };
+  for (const root of roots) visit(root);
+  return matched;
 }
 
 async function evaluateExpression(
@@ -80,8 +166,17 @@ async function evaluateExpression(
     title: 'Fixture title',
     readyState,
     querySelectorAll(selector: string) {
-      if (selector === '[data-message-author-role]') return nodes;
-      return productSurfaces;
+      const roots = [...nodes, ...productSurfaces];
+      if (selector === '[data-message-author-role]') {
+        const matched = collectMatching(roots, selector);
+        return matched.length > 0 ? matched : nodes;
+      }
+      const matched = collectMatching(roots, selector);
+      if (matched.length > 0) return matched;
+      if (selector.includes('role="alert"') || selector.includes('data-testid*="error"')) {
+        return productSurfaces;
+      }
+      return [];
     },
     querySelector(selector: string) {
       assert.match(selector, /stop-button/);
@@ -243,9 +338,91 @@ test('inspection keeps innerText and textContent distinct and emits bounded witn
   assert.equal(raw.last_assistant_sha256, sha256('Visible answer'));
 });
 
+function productionRecoveryFixture(options: {
+  marker: string;
+  literal: string;
+  ownedTurn?: string;
+  assistantTurn?: string;
+  extraParagraph?: string;
+  extraNonParagraph?: { tag: string; text: string };
+  prefixTurnCount?: number;
+  retryInAssistant?: boolean;
+  secondAssistant?: boolean;
+  laterUser?: boolean;
+  staleEarlierBanner?: boolean;
+  retryOnlyInOtherTurn?: boolean;
+  extraTurnBetween?: boolean;
+}): { nodes: FakeNode[]; productSurfaces: FakeNode[] } {
+  const ownedTurn = options.ownedTurn ?? 'conversation-turn-1';
+  const assistantTurn = options.assistantTurn ?? 'conversation-turn-2';
+  const retryInAssistant = options.retryInAssistant !== false;
+  const userText = `${options.marker}\n\nTASK`;
+  const ownedSection = new FakeNode('', userText, userText, { 'data-testid': ownedTurn }, 'SECTION');
+  const user = new FakeNode('user', userText, userText, { 'data-message-id': 'u-owned' });
+  ownedSection.appendChild(user);
+
+  const extraVisible = options.extraParagraph ?? options.extraNonParagraph?.text;
+  const retryLabel = options.retryInAssistant !== false ? 'Retry' : '';
+  const assistantInner = [options.literal, extraVisible, retryLabel].filter(Boolean).join('\n\n');
+  const assistantSection = new FakeNode('', assistantInner, assistantInner, { 'data-testid': assistantTurn }, 'SECTION');
+  const assistant = new FakeNode('assistant', assistantInner, assistantInner, { 'data-message-id': 'a-banner' });
+  const banner = new FakeNode('', options.literal, options.literal, {}, 'P');
+  banner.appendChild(new FakeNode('', '', '', {}, 'SPAN'));
+  assistant.appendChild(banner);
+  if (options.extraParagraph) {
+    assistant.appendChild(new FakeNode('', options.extraParagraph, options.extraParagraph, {}, 'P'));
+  }
+  if (options.extraNonParagraph) {
+    assistant.appendChild(new FakeNode(
+      '',
+      options.extraNonParagraph.text,
+      options.extraNonParagraph.text,
+      {},
+      options.extraNonParagraph.tag,
+    ));
+  }
+  if (retryInAssistant) {
+    assistant.appendChild(new FakeNode('', 'Retry', 'Retry', { 'data-testid': 'regenerate-thread-error-button' }, 'BUTTON'));
+  }
+  assistantSection.appendChild(assistant);
+
+  const nodes: FakeNode[] = [];
+  if (options.staleEarlierBanner) {
+    nodes.push(assistantSection);
+    nodes.push(ownedSection);
+  } else {
+    for (let index = 0; index < (options.prefixTurnCount ?? 0); index += 1) {
+      nodes.push(new FakeNode('', '', '', { 'data-testid': `conversation-turn-pre-${index + 1}` }, 'SECTION'));
+    }
+    nodes.push(ownedSection);
+    if (options.extraTurnBetween) {
+      nodes.push(new FakeNode('', '', '', { 'data-testid': 'conversation-turn-1b' }, 'SECTION'));
+    }
+    nodes.push(assistantSection);
+    if (options.secondAssistant) {
+      const extra = new FakeNode('', 'later reply', 'later reply', { 'data-testid': 'conversation-turn-3' }, 'SECTION');
+      extra.appendChild(new FakeNode('assistant', 'later reply', 'later reply'));
+      nodes.push(extra);
+    }
+    if (options.laterUser) {
+      const later = new FakeNode('', 'later foreign prompt', 'later foreign prompt', { 'data-testid': 'conversation-turn-3' }, 'SECTION');
+      later.appendChild(new FakeNode('user', 'later foreign prompt', 'later foreign prompt'));
+      nodes.push(later);
+    }
+  }
+  const productSurfaces: FakeNode[] = [
+    new FakeNode('', '', '', { role: 'alert', class: 'sr-only' }),
+  ];
+  if (options.retryOnlyInOtherTurn) {
+    const other = new FakeNode('', 'Retry', 'Retry', { 'data-testid': 'conversation-turn-9' }, 'SECTION');
+    other.appendChild(new FakeNode('', 'Retry', 'Retry', { 'data-testid': 'regenerate-thread-error-button' }, 'BUTTON'));
+    productSurfaces.push(other);
+  }
+  return { nodes, productSurfaces };
+}
+
 test('inspect projects only exact current-owned execute-Issue product errors without browser mutation', async () => {
   const marker = `OPKTURNV1${'ab'.repeat(16)}`;
-  const turnKey = 'conversation-turn-9';
   const timeoutText = 'Message delivery timed out. Please try again.';
   const networkText = 'A network error occurred. Please check your connection and try again. If this issue persists please contact us through our help center at help.openai.com.';
 
@@ -253,15 +430,25 @@ test('inspect projects only exact current-owned execute-Issue product errors wit
     [timeoutText, 'message_delivery_timed_out'],
     [networkText, 'product_network_error'],
   ] as const) {
+    const fixture = productionRecoveryFixture({ marker, literal: text });
     const raw = await evaluateExpression(
       INSPECTION_EXPRESSION,
-      [new FakeNode('user', `${marker}\n\nTASK`, `${marker}\n\nTASK`, { 'data-message-id': 'u-owned', 'data-testid': turnKey })],
+      fixture.nodes,
       false,
       'https://chatgpt.com/c/test',
       'complete',
-      [new FakeNode('status', text, text, { 'data-testid': turnKey })],
+      fixture.productSurfaces,
     );
     assert.equal(projectExecutionRecoveryCause(raw), expectedCause);
+    const inspect = projectExecutionRecoveryInspect(raw);
+    assert.deepEqual(inspect, {
+      cause: expectedCause,
+      owned_user_turn_key: 'conversation-turn-1',
+      candidate_assistant_turn_key: 'conversation-turn-2',
+      retry_control_present: true,
+      generation_in_progress: false,
+    });
+    assert.equal(JSON.stringify(inspect).includes(text), false);
 
     let createCalls = 0;
     let closeCalls = 0;
@@ -274,6 +461,7 @@ test('inspect projects only exact current-owned execute-Issue product errors wit
       }),
     );
     assert.equal(result.execution_recovery_cause, expectedCause);
+    assert.deepEqual(result.execution_recovery_inspect, inspect);
     assert.equal(result.diagnostic_only, true);
     assert.equal(result.workflow_authority, 'none');
     assert.deepEqual({ createCalls, closeCalls }, { createCalls: 0, closeCalls: 0 });
@@ -288,92 +476,153 @@ test('inspect projects only exact current-owned execute-Issue product errors wit
 
 test('execute-Issue recovery projection fails closed for near matches, stale turns, replies, generation, and ambiguity', async () => {
   const marker = `OPKTURNV1${'cd'.repeat(16)}`;
-  const ownedTurn = 'conversation-turn-4';
   const timeoutText = 'Message delivery timed out. Please try again.';
   const cases: Array<{
     name: string;
-    nodes: FakeNode[];
-    surfaceText: string;
-    surfaceTurn: string;
+    reason: string;
+    nodes?: FakeNode[];
+    productSurfaces?: FakeNode[];
     generating?: boolean;
+    fixture?: Parameters<typeof productionRecoveryFixture>[0];
   }> = [
     {
-      name: 'embedded exact literal',
-      nodes: [new FakeNode('user', `${marker}\n\nTASK`, `${marker}\n\nTASK`, { 'data-testid': ownedTurn })],
-      surfaceText: `prefix ${timeoutText} suffix`,
-      surfaceTurn: ownedTurn,
+      name: 'near-miss literal',
+      reason: 'literal_not_found',
+      fixture: { marker, literal: `prefix ${timeoutText} suffix` },
     },
     {
       name: 'generic network failure',
-      nodes: [new FakeNode('user', `${marker}\n\nTASK`, `${marker}\n\nTASK`, { 'data-testid': ownedTurn })],
-      surfaceText: 'A network error occurred. Please try again.',
-      surfaceTurn: ownedTurn,
+      reason: 'literal_not_found',
+      fixture: { marker, literal: 'A network error occurred. Please try again.' },
     },
     {
-      name: 'completed assistant reply',
-      nodes: [
-        new FakeNode('user', `${marker}\n\nTASK`, `${marker}\n\nTASK`, { 'data-testid': ownedTurn }),
-        new FakeNode('assistant', 'DONE', 'DONE', { 'data-testid': ownedTurn }),
-      ],
-      surfaceText: timeoutText,
-      surfaceTurn: ownedTurn,
+      name: 'stale earlier-turn banner',
+      reason: 'literal_not_found',
+      fixture: { marker, literal: timeoutText, ownedTurn: 'conversation-turn-2', assistantTurn: 'conversation-turn-1', staleEarlierBanner: true },
     },
     {
-      name: 'later foreign user turn',
-      nodes: [
-        new FakeNode('user', `${marker}\n\nTASK`, `${marker}\n\nTASK`, { 'data-testid': ownedTurn }),
-        new FakeNode('user', 'later foreign prompt', 'later foreign prompt', { 'data-testid': 'conversation-turn-5' }),
-      ],
-      surfaceText: timeoutText,
-      surfaceTurn: ownedTurn,
-    },
-    {
-      name: 'mismatched product surface turn',
-      nodes: [new FakeNode('user', `${marker}\n\nTASK`, `${marker}\n\nTASK`, { 'data-testid': ownedTurn })],
-      surfaceText: timeoutText,
-      surfaceTurn: 'conversation-turn-3',
+      name: 'later foreign user prompt',
+      reason: 'later_user_turn',
+      fixture: { marker, literal: timeoutText, laterUser: true },
     },
     {
       name: 'active generation',
-      nodes: [new FakeNode('user', `${marker}\n\nTASK`, `${marker}\n\nTASK`, { 'data-testid': ownedTurn })],
-      surfaceText: timeoutText,
-      surfaceTurn: ownedTurn,
+      reason: 'generation_active',
+      fixture: { marker, literal: timeoutText },
       generating: true,
+    },
+    {
+      name: 'Retry control in a different turn only',
+      reason: 'retry_control_missing',
+      fixture: { marker, literal: timeoutText, retryInAssistant: false, retryOnlyInOtherTurn: true },
+    },
+    {
+      name: 'mixed banner carrier with other reply text',
+      reason: 'mixed_carrier',
+      fixture: { marker, literal: timeoutText, extraParagraph: 'DONE' },
+    },
+    {
+      name: 'mixed banner carrier with non-paragraph reply text',
+      reason: 'mixed_carrier',
+      fixture: { marker, literal: timeoutText, extraNonParagraph: { tag: 'PRE', text: 'partial reply block' } },
+    },
+    {
+      name: 'two assistant carriers after the owned prompt',
+      reason: 'extra_assistant_carrier',
+      fixture: { marker, literal: timeoutText, secondAssistant: true },
+    },
+    {
+      name: 'assistant carrier is not the structural successor',
+      reason: 'turn_not_successor',
+      fixture: { marker, literal: timeoutText, extraTurnBetween: true },
     },
   ];
 
   for (const fixture of cases) {
+    const tree = fixture.fixture
+      ? productionRecoveryFixture(fixture.fixture)
+      : { nodes: fixture.nodes ?? [], productSurfaces: fixture.productSurfaces ?? [] };
     const raw = await evaluateExpression(
       INSPECTION_EXPRESSION,
-      fixture.nodes,
+      tree.nodes,
       fixture.generating ?? false,
       'https://chatgpt.com/c/test',
       'complete',
-      [new FakeNode('status', fixture.surfaceText, fixture.surfaceText, { 'data-testid': fixture.surfaceTurn })],
+      tree.productSurfaces,
     );
     assert.equal(projectExecutionRecoveryCause(raw), null, fixture.name);
+    assert.equal(projectExecutionRecoveryInspect(raw)?.reason, fixture.reason, fixture.name);
   }
 
-  const duplicateMarkerRaw = await evaluateExpression(
+  const duplicateOwned = new FakeNode('', `${marker}\n\nTASK repeats ${marker}`, `${marker}\n\nTASK repeats ${marker}`, { 'data-testid': 'conversation-turn-1' }, 'SECTION');
+  duplicateOwned.appendChild(new FakeNode('user', `${marker}\n\nTASK repeats ${marker}`, `${marker}\n\nTASK repeats ${marker}`));
+  const duplicateAssistant = new FakeNode('', `${timeoutText}\n\nRetry`, `${timeoutText}\n\nRetry`, { 'data-testid': 'conversation-turn-2' }, 'SECTION');
+  const duplicateCarrier = new FakeNode('assistant', `${timeoutText}\n\nRetry`, `${timeoutText}\n\nRetry`);
+  duplicateCarrier.appendChild(new FakeNode('', timeoutText, timeoutText, {}, 'P'));
+  duplicateCarrier.appendChild(new FakeNode('', 'Retry', 'Retry', { 'data-testid': 'regenerate-thread-error-button' }, 'BUTTON'));
+  duplicateAssistant.appendChild(duplicateCarrier);
+  const duplicateRaw = await evaluateExpression(
     INSPECTION_EXPRESSION,
-    [new FakeNode('user', `${marker}\n\nTASK repeats ${marker}`, `${marker}\n\nTASK repeats ${marker}`, { 'data-testid': ownedTurn })],
+    [duplicateOwned, duplicateAssistant],
     false,
     'https://chatgpt.com/c/test',
     'complete',
-    [new FakeNode('status', timeoutText, timeoutText, { 'data-testid': ownedTurn })],
+    [new FakeNode('', '', '', { role: 'alert' })],
   );
-  assert.equal(projectExecutionRecoveryCause(duplicateMarkerRaw), null);
+  assert.equal(projectExecutionRecoveryCause(duplicateRaw), null);
+  assert.equal(projectExecutionRecoveryInspect(duplicateRaw)?.reason, 'ambiguous_marker');
 
-  const incompleteRaw = await evaluateExpression(
+  const longUser = `${marker}\n\n${'x'.repeat(8_300)}`;
+  const longOwned = new FakeNode('', longUser, longUser, { 'data-testid': 'conversation-turn-1' }, 'SECTION');
+  longOwned.appendChild(new FakeNode('user', longUser, longUser));
+  const longAssistant = new FakeNode('', `${timeoutText}\n\nRetry`, `${timeoutText}\n\nRetry`, { 'data-testid': 'conversation-turn-2' }, 'SECTION');
+  const longCarrier = new FakeNode('assistant', `${timeoutText}\n\nRetry`, `${timeoutText}\n\nRetry`);
+  longCarrier.appendChild(new FakeNode('', timeoutText, timeoutText, {}, 'P'));
+  longCarrier.appendChild(new FakeNode('', 'Retry', 'Retry', { 'data-testid': 'regenerate-thread-error-button' }, 'BUTTON'));
+  longAssistant.appendChild(longCarrier);
+  const longRaw = await evaluateExpression(
     INSPECTION_EXPRESSION,
-    [new FakeNode('user', `${marker}\n\n${'x'.repeat(8_300)}`, `${marker}\n\n${'x'.repeat(8_300)}`, { 'data-testid': ownedTurn })],
+    [longOwned, longAssistant],
     false,
     'https://chatgpt.com/c/test',
     'complete',
-    [new FakeNode('status', timeoutText, timeoutText, { 'data-testid': ownedTurn })],
+    [new FakeNode('', '', '', { role: 'alert' })],
   );
-  assert.equal(incompleteRaw.execution_recovery_evidence.transcript_complete, false);
-  assert.equal(projectExecutionRecoveryCause(incompleteRaw), null);
+  assert.equal(longRaw.execution_recovery_evidence.transcript_complete, true);
+  assert.equal(projectExecutionRecoveryCause(longRaw), 'message_delivery_timed_out');
+  assert.equal(projectExecutionRecoveryInspect(longRaw)?.cause, 'message_delivery_timed_out');
+
+  const longHistory = productionRecoveryFixture({
+    marker,
+    literal: timeoutText,
+    prefixTurnCount: 21,
+  });
+  const longHistoryRaw = await evaluateExpression(
+    INSPECTION_EXPRESSION,
+    longHistory.nodes,
+    false,
+    'https://chatgpt.com/c/test',
+    'complete',
+    longHistory.productSurfaces,
+  );
+  assert.equal(longHistoryRaw.execution_recovery_evidence.conversation_turn_keys.length > 20, true);
+  assert.equal(projectExecutionRecoveryCause(longHistoryRaw), 'message_delivery_timed_out');
+  assert.equal(projectExecutionRecoveryInspect(longHistoryRaw)?.cause, 'message_delivery_timed_out');
+
+  // Documented negative: the retired invented fixture (literal on a status node
+  // inside the owned user turn, no assistant carrier) must not classify.
+  const inventedUser = new FakeNode('user', `${marker}\n\nTASK`, `${marker}\n\nTASK`, { 'data-testid': 'conversation-turn-1' });
+  const inventedStatus = new FakeNode('status', timeoutText, timeoutText, { 'data-testid': 'conversation-turn-1' });
+  const inventedRaw = await evaluateExpression(
+    INSPECTION_EXPRESSION,
+    [inventedUser],
+    false,
+    'https://chatgpt.com/c/test',
+    'complete',
+    [inventedStatus],
+  );
+  assert.equal(projectExecutionRecoveryCause(inventedRaw), null);
+  assert.equal(projectExecutionRecoveryInspect(inventedRaw)?.reason, 'literal_not_found');
 });
 
 test('missing message structure stays surface_unknown rather than fabricating zero counts', async () => {
