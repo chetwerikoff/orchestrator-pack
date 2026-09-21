@@ -995,3 +995,61 @@ describe('Issue #1287 real acceptance chain', () => {
     }
   });
 });
+
+describe('proven zero-send first attempts are retry-eligible (Issue #1981)', () => {
+  function blockedIncidentSlot(retryClass: 'eligible-zero-send' | 'retry-forbidden', attemptOrdinal: 1 | 2, invocationId: string) {
+    return invocation('competitive', 'competitive-attempt', 1, 3, undefined, {
+      invocationId,
+      terminalResultIdentity: `${invocationId}-result`,
+      attemptOrdinal,
+      retryAttempt: attemptOrdinal === 2,
+      terminalClassification: 'incident',
+      sendCount: 0,
+      retryClass,
+      terminal: true,
+    });
+  }
+
+  function settleBlocked(fixture: ReturnType<typeof sourceStage>, invocations: ReviewerInvocationEnvelopeV1[], retryState: StageCompletenessReceiptV1['settlement']['retryState']) {
+    fixture.receipt.invocations = invocations;
+    fixture.receipt.outcome = 'blocked';
+    fixture.receipt.credentialingCaptures = [];
+    fixture.receipt.settlement.retryState = retryState;
+    fixture.receipt.relayEligibleCaptures = invocations.flatMap((item) => item.capture ? [item.capture] : []);
+    return deriveReviewEpisodeState([fixture.receipt], relay(fixture.receipt.relayEligibleCaptures), authority([fixture.receipt]));
+  }
+
+  it('admits an incident eligible-zero-send first attempt plus a retry-forbidden second attempt', () => {
+    const fixture = sourceStage('competitive', 1, 3);
+    const rest = fixture.receipt.invocations!.slice(1);
+    const state = settleBlocked(fixture, [
+      blockedIncidentSlot('eligible-zero-send', 1, 'incident-zero-send'),
+      blockedIncidentSlot('retry-forbidden', 2, 'incident-retry'),
+      ...rest,
+    ], 'exhausted');
+    expect(state.errors.join('\n')).not.toContain('retry requires a proven retryable zero-send first result');
+    expect(state.errors, state.errors.join('\n')).toEqual([]);
+  });
+
+  it('still rejects a second attempt that remains eligible-zero-send', () => {
+    const fixture = sourceStage('competitive', 1, 3);
+    const rest = fixture.receipt.invocations!.slice(1);
+    const state = settleBlocked(fixture, [
+      blockedIncidentSlot('eligible-zero-send', 1, 'incident-zero-send'),
+      blockedIncidentSlot('eligible-zero-send', 2, 'incident-retry'),
+      ...rest,
+    ], 'exhausted');
+    expect(state.errors.join('\n')).toContain('the one retry cannot create another retry opportunity');
+  });
+
+  it('accepts sealed pre-fix incident / retry-forbidden zero-send first attempts', () => {
+    const fixture = sourceStage('competitive', 1, 3);
+    const rest = fixture.receipt.invocations!.slice(1);
+    const state = settleBlocked(fixture, [
+      blockedIncidentSlot('retry-forbidden', 1, 'incident-sealed'),
+      ...rest,
+    ], 'none');
+    expect(state.errors.join('\n')).not.toContain('must be classified retry-eligible');
+    expect(state.errors, state.errors.join('\n')).toEqual([]);
+  });
+});
