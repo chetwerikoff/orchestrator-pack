@@ -1129,6 +1129,15 @@ function resolveAuthoritativeArtifact(
 type ReconciliationTransportClassification = ReviewerInvocationEnvelopeV1['terminalClassification'];
 type ReconciliationRetryClass = ReviewerInvocationEnvelopeV1['retryClass'];
 
+function sealedPostSendSendCount(envelope: JsonRecord): 1 | null {
+  const diagnostics = isRecord(envelope.diagnostics) ? envelope.diagnostics : null;
+  const lastHeartbeat = diagnostics && isRecord(diagnostics.last_heartbeat) ? diagnostics.last_heartbeat : null;
+  if (envelope.delivery === 'POSSIBLY_DELIVERED' && lastHeartbeat?.phase === 'post_send_observation') {
+    return 1;
+  }
+  return null;
+}
+
 function classifyReconciliationTransport(
   envelope: JsonRecord,
   attemptOrdinal: number,
@@ -1137,7 +1146,9 @@ function classifyReconciliationTransport(
   sendCount: 0 | 1;
   retryClass: ReconciliationRetryClass;
 } | null {
-  const sendCount = envelope.send_count;
+  const sendCount = envelope.send_count === 0 || envelope.send_count === 1
+    ? envelope.send_count
+    : sealedPostSendSendCount(envelope);
   if (sendCount !== 0 && sendCount !== 1) return null;
   const state = optionalString(envelope.turn_result_state) ?? '';
   const cause = optionalString(envelope.turn_result_cause) ?? '';

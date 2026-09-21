@@ -662,6 +662,10 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(envelope?.incident).toBe('child_liveness_timeout');
     expect(envelope?.child_exit_code).toBeNull();
     expect(envelope?.diagnostics).toHaveProperty('last_heartbeat');
+    expect(envelope).toMatchObject({
+      delivery: 'POSSIBLY_DELIVERED',
+      send_count: 1,
+    });
     expect(JSON.stringify(envelope)).not.toContain('child_stdout_eof_timeout');
   });
 
@@ -854,6 +858,45 @@ describe('flow-manager long-running child (#1164)', () => {
     const envelope = readTerminalEnvelope(paths.envelope);
     expect(envelope?.incident).toBe('child_terminal_result_missing');
     expect(envelope?.delivery).toBe('POSSIBLY_DELIVERED');
+    expect(envelope).not.toHaveProperty('send_count');
+  });
+
+  it('persists send_count 1 after post_send_observation when the child exits without a turn-result', async () => {
+    const root = tempDir();
+    const paths = launchPaths(root, 'post-send-missing');
+    const heartbeat = {
+      schema: 'observation-heartbeat/v1',
+      phase: 'post_send_observation',
+      poll_count: 1,
+      observation_state: 'busy',
+      stable_reads: 0,
+      completion_ready: false,
+    };
+    const fixture = nodeFixture(`
+      process.stdout.write(JSON.stringify(${JSON.stringify(heartbeat)}) + '\\n');
+      process.exit(1);
+    `);
+    process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '200';
+    const code = await runLaunch({
+      runIdentity: 'run-post-send-missing',
+      attemptIdentity: 'attempt-post-send-missing',
+      handoffReceiptPath: paths.receipt,
+      terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output,
+      cwd: repoRoot,
+      childCommand: fixture.command,
+      childArgs: fixture.args,
+    });
+    expect(code).toBe(1);
+    const envelope = readTerminalEnvelope(paths.envelope);
+    expect(envelope).toMatchObject({
+      incident: 'child_terminal_result_missing',
+      delivery: 'POSSIBLY_DELIVERED',
+      send_count: 1,
+    });
+    expect(envelope?.diagnostics).toMatchObject({
+      last_heartbeat: { phase: 'post_send_observation' },
+    });
   });
 
   it('re-checks stdout after child exit before publishing missing result (P1)', async () => {

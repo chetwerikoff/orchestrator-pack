@@ -649,9 +649,11 @@ function terminalNoResultEvidence(
 ): Partial<TerminalEnvelope> & Pick<TerminalEnvelope, 'delivery' | 'recovery_available'> {
   const receiptEvidence = receiptEvidenceForTerminalIncident(config, capture, incident);
   if (!receiptEvidence) {
+    const postSendObserved = heartbeatDiagnostics?.phase === 'post_send_observation';
     return {
       delivery: deliveryWithoutTurnResult(spawnFailed),
       ...conversationLocatorFields(config),
+      ...(postSendObserved ? { send_count: 1 as const } : {}),
       ...(heartbeatDiagnostics
         ? { diagnostics: boundedDiagnostics({ last_heartbeat: heartbeatDiagnostics }) }
         : {}),
