@@ -5,10 +5,12 @@ import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isSupportedChatGptConversationUrl } from './chatgpt-browser-turn/state-light-cancellation.ts';
 import {
+  ASSISTANT_MESSAGE_SELECTOR,
   ASSISTANT_TURN_ACTION_SELECTOR,
   ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
   CONVERSATION_TURN_SECTION_SELECTOR,
   PRODUCT_STATUS_PROBE_SELECTORS,
+  REGENERATE_THREAD_ERROR_BUTTON_SELECTOR,
 } from './chatgpt-browser-turn/product-page-selectors.ts';
 import {
   extractOwnedPromptMarkerToken,
@@ -29,8 +31,10 @@ import {
 } from './chatgpt-browser-turn/state-light-turn.ts';
 import {
   classifyExecutionRecoveryProductError,
-  type ExecutionRecoveryProductCause,
+  type ExecutionRecoveryBannerCandidate,
   type ExecutionRecoveryMessage,
+  type ExecutionRecoveryProductCause,
+  type ExecutionRecoveryReasonCode,
 } from './chatgpt-browser-turn/ui-adapter.ts';
 
 export const PROBE_SCHEMA = 'browser-gpt-page-probe/v1';
@@ -133,11 +137,29 @@ interface ExecutionRecoveryProbeSurface {
   readonly turn_key?: string;
 }
 
+interface ExecutionRecoveryProbeBannerCandidate {
+  readonly turn_key?: string;
+  readonly paragraph_texts: readonly string[];
+  readonly retry_control_present: boolean;
+  readonly has_non_banner_content: boolean;
+}
+
 interface ExecutionRecoveryProbeEvidence {
   readonly transcript_complete: boolean;
   readonly generation_in_progress: boolean | 'unknown';
   readonly messages: readonly ExecutionRecoveryMessage[];
   readonly product_surfaces: readonly ExecutionRecoveryProbeSurface[];
+  readonly conversation_turn_keys: readonly string[];
+  readonly banner_candidates: readonly ExecutionRecoveryProbeBannerCandidate[];
+}
+
+export interface ExecutionRecoveryInspectEvidence {
+  readonly cause: ExecutionRecoveryProductCause | null;
+  readonly owned_user_turn_key: string | null;
+  readonly candidate_assistant_turn_key: string | null;
+  readonly retry_control_present: boolean;
+  readonly generation_in_progress: boolean | 'unknown';
+  readonly reason?: ExecutionRecoveryReasonCode;
 }
 
 interface InspectionExpressionResult {
@@ -449,6 +471,28 @@ function validateNodeSummary(value: unknown, snapshot: {
   };
 }
 
+function validateBannerCandidate(value: unknown): ExecutionRecoveryProbeBannerCandidate | undefined {
+  if (!isRecord(value)
+    || !Array.isArray(value.paragraph_texts)
+    || value.paragraph_texts.length > EXECUTION_RECOVERY_MAX_PRODUCT_SURFACES
+    || typeof value.retry_control_present !== 'boolean'
+    || typeof value.has_non_banner_content !== 'boolean'
+    || (value.turn_key !== undefined && !isBoundedString(value.turn_key, MAX_TEXT_CODE_POINTS))) {
+    return undefined;
+  }
+  const paragraphTexts: string[] = [];
+  for (const rawText of value.paragraph_texts) {
+    if (!isBoundedString(rawText, EXECUTION_RECOVERY_MAX_TEXT_CODE_POINTS)) return undefined;
+    paragraphTexts.push(rawText);
+  }
+  return {
+    paragraph_texts: paragraphTexts,
+    retry_control_present: value.retry_control_present,
+    has_non_banner_content: value.has_non_banner_content,
+    ...(typeof value.turn_key === 'string' && value.turn_key ? { turn_key: value.turn_key } : {}),
+  };
+}
+
 function validateExecutionRecoveryEvidence(value: unknown): ExecutionRecoveryProbeEvidence | undefined {
   if (!isRecord(value)
     || typeof value.transcript_complete !== 'boolean'
@@ -456,7 +500,11 @@ function validateExecutionRecoveryEvidence(value: unknown): ExecutionRecoveryPro
     || !Array.isArray(value.messages)
     || value.messages.length > MAX_MESSAGE_SUMMARIES
     || !Array.isArray(value.product_surfaces)
-    || value.product_surfaces.length > EXECUTION_RECOVERY_MAX_PRODUCT_SURFACES) {
+    || value.product_surfaces.length > EXECUTION_RECOVERY_MAX_PRODUCT_SURFACES
+    || !Array.isArray(value.conversation_turn_keys)
+    || value.conversation_turn_keys.length > MAX_MESSAGE_SUMMARIES
+    || !Array.isArray(value.banner_candidates)
+    || value.banner_candidates.length > MAX_MESSAGE_SUMMARIES) {
     return undefined;
   }
   const messages: ExecutionRecoveryMessage[] = [];
@@ -485,18 +533,67 @@ function validateExecutionRecoveryEvidence(value: unknown): ExecutionRecoveryPro
       ...(typeof rawSurface.turn_key === 'string' && rawSurface.turn_key ? { turn_key: rawSurface.turn_key } : {}),
     });
   }
+  const conversationTurnKeys: string[] = [];
+  for (const rawKey of value.conversation_turn_keys) {
+    if (!isBoundedString(rawKey, MAX_TEXT_CODE_POINTS)) return undefined;
+    conversationTurnKeys.push(rawKey);
+  }
+  const bannerCandidates: ExecutionRecoveryProbeBannerCandidate[] = [];
+  for (const rawCandidate of value.banner_candidates) {
+    const candidate = validateBannerCandidate(rawCandidate);
+    if (!candidate) return undefined;
+    bannerCandidates.push(candidate);
+  }
   return {
     transcript_complete: value.transcript_complete,
     generation_in_progress: value.generation_in_progress,
     messages,
     product_surfaces: productSurfaces,
+    conversation_turn_keys: conversationTurnKeys,
+    banner_candidates: bannerCandidates,
   };
 }
 
-export function projectExecutionRecoveryCause(value: unknown): ExecutionRecoveryProductCause | null {
+function toClassifierBannerCandidates(
+  candidates: readonly ExecutionRecoveryProbeBannerCandidate[],
+): ExecutionRecoveryBannerCandidate[] {
+  return candidates.map((candidate) => ({
+    paragraphTexts: candidate.paragraph_texts,
+    retryControlPresent: candidate.retry_control_present,
+    hasNonBannerContent: candidate.has_non_banner_content,
+    ...(candidate.turn_key ? { turnKey: candidate.turn_key } : {}),
+  }));
+}
+
+function inspectEvidenceFromClassification(
+  generationInProgress: boolean | 'unknown',
+  classified: ReturnType<typeof classifyExecutionRecoveryProductError>,
+  fallbackReason?: ExecutionRecoveryReasonCode,
+): ExecutionRecoveryInspectEvidence {
+  const cause = classified.cause ?? null;
+  return {
+    cause,
+    owned_user_turn_key: classified.owned_user_turn_key ?? null,
+    candidate_assistant_turn_key: classified.candidate_assistant_turn_key ?? null,
+    retry_control_present: classified.retry_control_present,
+    generation_in_progress: generationInProgress,
+    ...(cause ? {} : { reason: classified.reason ?? fallbackReason ?? 'literal_not_found' }),
+  };
+}
+
+export function projectExecutionRecoveryInspect(value: unknown): ExecutionRecoveryInspectEvidence | null {
   if (!isRecord(value) || value.status !== 'ok') return null;
   const evidence = validateExecutionRecoveryEvidence(value.execution_recovery_evidence);
-  if (!evidence || !evidence.transcript_complete) return null;
+  if (!evidence) {
+    return {
+      cause: null,
+      owned_user_turn_key: null,
+      candidate_assistant_turn_key: null,
+      retry_control_present: false,
+      generation_in_progress: 'unknown',
+      reason: 'literal_not_found',
+    };
+  }
 
   const markers = new Set<string>();
   for (const message of evidence.messages) {
@@ -505,23 +602,42 @@ export function projectExecutionRecoveryCause(value: unknown): ExecutionRecovery
     if (isOwnedPromptMarker(marker)) markers.add(marker);
   }
 
-  let projected: ExecutionRecoveryProductCause | undefined;
-  for (const marker of markers) {
-    for (const surface of evidence.product_surfaces) {
-      const classified = classifyExecutionRecoveryProductError({
-        surface: { text: surface.text, composer: true },
-        marker,
-        transcriptComplete: evidence.transcript_complete,
-        generationInProgress: evidence.generation_in_progress,
-        messages: evidence.messages,
-        ...(surface.turn_key ? { surfaceTurnKey: surface.turn_key } : {}),
-      }).cause;
-      if (!classified) continue;
-      if (projected && projected !== classified) return null;
-      projected = classified;
-    }
+  const bannerCandidates = toClassifierBannerCandidates(evidence.banner_candidates);
+  if (markers.size > 1) {
+    return {
+      cause: null,
+      owned_user_turn_key: null,
+      candidate_assistant_turn_key: null,
+      retry_control_present: evidence.banner_candidates.some((candidate) => candidate.retry_control_present),
+      generation_in_progress: evidence.generation_in_progress,
+      reason: 'ambiguous_marker',
+    };
   }
-  return projected ?? null;
+
+  const classified = classifyExecutionRecoveryProductError({
+    marker: [...markers][0] ?? '',
+    transcriptComplete: evidence.transcript_complete,
+    generationInProgress: evidence.generation_in_progress,
+    messages: evidence.messages,
+    conversationTurnKeys: evidence.conversation_turn_keys,
+    bannerCandidates,
+  });
+  return inspectEvidenceFromClassification(evidence.generation_in_progress, classified);
+}
+
+export function projectExecutionRecoveryCause(value: unknown): ExecutionRecoveryProductCause | null {
+  return projectExecutionRecoveryInspect(value)?.cause ?? null;
+}
+
+function inspectRecoveryEnvelopeFields(value: unknown): {
+  readonly execution_recovery_cause: ExecutionRecoveryProductCause | null;
+  readonly execution_recovery_inspect: ExecutionRecoveryInspectEvidence | null;
+} {
+  const inspect = projectExecutionRecoveryInspect(value);
+  return {
+    execution_recovery_cause: inspect?.cause ?? null,
+    execution_recovery_inspect: inspect,
+  };
 }
 
 function validateInspectionSnapshot(
@@ -974,6 +1090,8 @@ function inspectionExpression(): string {
   const attributes = JSON.stringify(ALLOWLISTED_ATTRIBUTES);
   const productSelector = JSON.stringify(PRODUCT_STATUS_PROBE_SELECTORS.join(', '));
   const turnSelector = JSON.stringify(CONVERSATION_TURN_SECTION_SELECTOR);
+  const assistantSelector = JSON.stringify(ASSISTANT_MESSAGE_SELECTOR);
+  const retrySelector = JSON.stringify(REGENERATE_THREAD_ERROR_BUTTON_SELECTOR);
   return `(async () => {
     const MAX_NODES = ${MAX_MESSAGE_SUMMARIES};
     const MAX_TEXT = ${MAX_TEXT_CODE_POINTS};
@@ -982,6 +1100,12 @@ function inspectionExpression(): string {
     const ATTRS = ${attributes};
     const PRODUCT_SELECTOR = ${productSelector};
     const TURN_SELECTOR = ${turnSelector};
+    const ASSISTANT_SELECTOR = ${assistantSelector};
+    const RETRY_SELECTOR = ${retrySelector};
+    const CHROME_SELECTOR = ${JSON.stringify(`${ASSISTANT_TURN_ACTION_SELECTOR}, .sr-only, [role="alert"]`)};
+    const TIMEOUT_TEXT = ${JSON.stringify('Message delivery timed out. Please try again.')};
+    const NETWORK_TEXT = ${JSON.stringify('A network error occurred. Please check your connection and try again. If this issue persists please contact us through our help center at help.openai.com.')};
+    const MAX_RECOVERY_TURNS = ${MAX_MESSAGE_SUMMARIES};
     const points = (value) => Array.from(value);
     const head = (value) => points(value).slice(0, MAX_TEXT).join('');
     const tail = (value) => { const p = points(value); return p.slice(Math.max(0, p.length - MAX_TEXT)).join(''); };
@@ -1027,12 +1151,11 @@ function inspectionExpression(): string {
         innerText: await digest(innerText),
         textContent: await digest(textContent),
       });
-      if (points(innerText).length > MAX_RECOVERY_TEXT) {
-        recoveryComplete = false;
-      } else {
+      {
         let turnKey;
         try { turnKey = entry.node.closest(TURN_SELECTOR)?.getAttribute('data-testid') || undefined; } catch { recoveryComplete = false; }
-        recoveryMessages.push({ role: entry.role, text: innerText, ...(turnKey ? { turn_key: turnKey } : {}) });
+        const boundedText = points(innerText).slice(0, MAX_RECOVERY_TEXT).join('');
+        recoveryMessages.push({ role: entry.role, text: boundedText, ...(turnKey ? { turn_key: turnKey } : {}) });
       }
     }
     const lastAssistant = [...observed].reverse().find((entry) => entry.role === 'assistant');
@@ -1053,7 +1176,6 @@ function inspectionExpression(): string {
     const productSurfaces = [];
     try {
       const rawProductSurfaces = Array.from(document.querySelectorAll(PRODUCT_SELECTOR));
-      if (rawProductSurfaces.length > MAX_PRODUCT_SURFACES) recoveryComplete = false;
       for (const surface of rawProductSurfaces.slice(Math.max(0, rawProductSurfaces.length - MAX_PRODUCT_SURFACES))) {
         const text = typeof surface.innerText === 'string' ? surface.innerText : null;
         if (text === null || points(text).length > MAX_RECOVERY_TEXT) {
@@ -1063,6 +1185,76 @@ function inspectionExpression(): string {
         let turnKey;
         try { turnKey = surface.closest(TURN_SELECTOR)?.getAttribute('data-testid') || undefined; } catch { recoveryComplete = false; }
         productSurfaces.push({ text, ...(turnKey ? { turn_key: turnKey } : {}) });
+      }
+    } catch {
+      recoveryComplete = false;
+    }
+    const conversationTurnKeys = [];
+    try {
+      for (const section of Array.from(document.querySelectorAll(TURN_SELECTOR))) {
+        const turnKey = section.getAttribute('data-testid');
+        if (typeof turnKey === 'string' && turnKey) conversationTurnKeys.push(turnKey);
+      }
+      if (conversationTurnKeys.length > MAX_RECOVERY_TURNS) {
+        conversationTurnKeys.splice(0, conversationTurnKeys.length - MAX_RECOVERY_TURNS);
+      }
+    } catch {
+      recoveryComplete = false;
+    }
+    const bannerCandidates = [];
+    try {
+      const assistants = Array.from(document.querySelectorAll(ASSISTANT_SELECTOR));
+      const selectedAssistants = assistants.slice(Math.max(0, assistants.length - MAX_RECOVERY_TURNS));
+      const collapseRe = /(?:\\s*(?:show more|read more|see more|view more|continue reading)\\s*)+$/iu;
+      const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').replace(/help\\.openai\\.com \\.$/u, 'help.openai.com.').trim();
+      const isReservedBanner = (value) => {
+        const normalized = normalize(value);
+        if (normalized === TIMEOUT_TEXT || normalized === NETWORK_TEXT) return true;
+        const stripped = normalized.replace(collapseRe, '').trim();
+        return stripped === TIMEOUT_TEXT || stripped === NETWORK_TEXT
+          || stripped === TIMEOUT_TEXT + '…' || stripped === TIMEOUT_TEXT + '...'
+          || stripped === NETWORK_TEXT + '…' || stripped === NETWORK_TEXT + '...';
+      };
+      const hasNonBannerVisibleText = (assistant) => {
+        let remaining = normalize(assistant.innerText || '');
+        for (const paragraph of Array.from(assistant.querySelectorAll('p'))) {
+          const text = paragraph.innerText || '';
+          if (text && isReservedBanner(text)) remaining = remaining.replace(normalize(text), '');
+        }
+        try {
+          const retry = assistant.querySelector(RETRY_SELECTOR);
+          if (retry) remaining = remaining.replace(normalize(retry.innerText || ''), '');
+        } catch {}
+        try {
+          for (const chrome of Array.from(assistant.querySelectorAll(CHROME_SELECTOR))) {
+            remaining = remaining.replace(normalize(chrome.innerText || ''), '');
+          }
+        } catch {}
+        return remaining.replace(/\\s+/g, ' ').trim().length > 0;
+      };
+      for (const assistant of selectedAssistants) {
+        const paragraphTexts = [];
+        for (const paragraph of Array.from(assistant.querySelectorAll('p'))) {
+          const text = typeof paragraph.innerText === 'string' ? paragraph.innerText : null;
+          if (text === null) {
+            recoveryComplete = false;
+            continue;
+          }
+          const bounded = points(text).slice(0, MAX_RECOVERY_TEXT).join('');
+          if (bounded) paragraphTexts.push(bounded);
+        }
+        let retryControlPresent = false;
+        try { retryControlPresent = Boolean(assistant.querySelector(RETRY_SELECTOR)); } catch { recoveryComplete = false; }
+        let hasNonBannerContent = false;
+        try { hasNonBannerContent = hasNonBannerVisibleText(assistant); } catch { recoveryComplete = false; }
+        let turnKey;
+        try { turnKey = assistant.closest(TURN_SELECTOR)?.getAttribute('data-testid') || undefined; } catch { recoveryComplete = false; }
+        bannerCandidates.push({
+          paragraph_texts: paragraphTexts,
+          retry_control_present: retryControlPresent,
+          has_non_banner_content: hasNonBannerContent,
+          ...(turnKey ? { turn_key: turnKey } : {}),
+        });
       }
     } catch {
       recoveryComplete = false;
@@ -1087,6 +1279,8 @@ function inspectionExpression(): string {
         generation_in_progress: generating,
         messages: recoveryMessages,
         product_surfaces: productSurfaces,
+        conversation_turn_keys: conversationTurnKeys,
+        banner_candidates: bannerCandidates,
       },
     };
   })()`;
@@ -1329,7 +1523,7 @@ async function inspectAcquiredUrl(
       ...baseEnvelope('inspect', 'ok'),
       target_id: target.target_id,
       acquisition: 'reused',
-      execution_recovery_cause: projectExecutionRecoveryCause(value),
+      ...inspectRecoveryEnvelopeFields(value),
       snapshot,
     };
   }
@@ -1400,6 +1594,14 @@ async function inspectAcquiredUrl(
     readiness_interval_ms: ACQUISITION_READINESS_INTERVAL_MS,
     cleanup,
     execution_recovery_cause: null,
+    execution_recovery_inspect: {
+      cause: null,
+      owned_user_turn_key: null,
+      candidate_assistant_turn_key: null,
+      retry_control_present: false,
+      generation_in_progress: 'unknown',
+      reason: 'no_owned_prompt',
+    },
     snapshot,
   };
 }
@@ -2021,7 +2223,7 @@ export async function runProbe(args: ParsedArgs, deps: ProbeDependencies = defau
     return {
       ...baseEnvelope('inspect', 'ok'),
       target_id: target.target_id,
-      execution_recovery_cause: projectExecutionRecoveryCause(value),
+      ...inspectRecoveryEnvelopeFields(value),
       snapshot: result,
     };
   }

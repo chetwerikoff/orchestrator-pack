@@ -112,6 +112,7 @@ import {
   scalarLocator,
   stableTurnInput,
   STATE_LIGHT_TURN_BASE_ARGV,
+  TEST_OWNED_MARKER,
   type StateLightTestMessage,
   type StateLightTestSnapshot,
 } from './state-light-turn.test-fixtures.ts';
@@ -1956,5 +1957,239 @@ describe('Issue #1752 production liveness regressions', () => {
     } finally {
       stdout.mockRestore();
     }
+  });
+});
+
+
+describe('Issue #1990 late-banner execute-Issue recovery', () => {
+  let integrationStateDir: string;
+  const timeoutText = 'Message delivery timed out. Please try again.';
+
+  beforeEach(() => {
+    integrationStateDir = mkdtempSync(join(tmpdir(), 'slt-1990-'));
+    process.env.CHATGPT_BROWSER_TURN_STATE_DIR = integrationStateDir;
+    disableSendSlotForTest();
+    mocks.browserQueue.length = 0;
+    mocks.cleanupOutcome = 'confirmed';
+    mocks.verifyProfile.mockReset();
+    mocks.verifyProfile.mockResolvedValue({ state: 'verified' });
+    mocks.nowMs = 10_000;
+    mocks.readStableInput.mockReset();
+    vi.spyOn(Date, 'now').mockImplementation(() => mocks.nowMs);
+  });
+
+  afterEach(() => {
+    delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+    clearSendSlotDisableEnv();
+    rmSync(integrationStateDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  async function runExistingChat(page: any, outputPath: string, timeoutMs = '5000') {
+    enqueueBrowserForTurn(mocks, page);
+    return runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(),
+      '--output', outputPath,
+      '--chat-url', SHARED_CONV,
+      '--timeout-ms', timeoutMs,
+      '--poll-ms', '1',
+    ]);
+  }
+
+  function recoveryPage(sequence: ReadonlyArray<'generating' | 'banner'>) {
+    let sent = false;
+    let filled = '';
+    let observationIndex = 0;
+    let phase: 'generating' | 'banner' = sequence[0] ?? 'generating';
+    const retryClicks = vi.fn(async () => undefined);
+    const sendClicks = vi.fn(async () => { sent = true; });
+    const close = vi.fn(async () => undefined);
+
+    const composer = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => undefined),
+      fill: vi.fn(async (value: string) => { filled = value; }),
+      innerText: vi.fn(async () => filled),
+      textContent: vi.fn(async () => filled),
+      press: sendClicks,
+    });
+    const sendButton = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: sendClicks,
+    });
+
+    function currentPhase(): 'generating' | 'banner' {
+      if (!sent) return 'generating';
+      return sequence[Math.min(observationIndex, sequence.length - 1)] ?? 'generating';
+    }
+
+    function messageElements() {
+      phase = currentPhase();
+      const user = {
+        getAttribute: (name: string) => (name === 'data-message-author-role' ? 'user' : null),
+        innerText: filled || `${TEST_OWNED_MARKER}\n\nPROMPT`,
+        closest: (selector: string) => (
+          selector.includes('conversation-turn')
+            ? { getAttribute: () => 'conversation-turn-1' }
+            : null
+        ),
+        querySelectorAll: () => [],
+        querySelector: () => null,
+      };
+      const assistantInner = phase === 'banner' ? `${timeoutText}\n\nRetry` : 'working';
+      const assistant = {
+        getAttribute: (name: string) => (name === 'data-message-author-role' ? 'assistant' : null),
+        innerText: assistantInner,
+        closest: (selector: string) => (
+          selector.includes('conversation-turn')
+            ? { getAttribute: () => 'conversation-turn-2' }
+            : null
+        ),
+        querySelectorAll: (selector: string) => (
+          selector === 'p' && phase === 'banner' ? [{ innerText: timeoutText }] : []
+        ),
+        querySelector: (selector: string) => (
+          selector.includes('regenerate-thread-error') && phase === 'banner' ? { innerText: 'Retry' } : null
+        ),
+      };
+      return { user, assistant, phase };
+    }
+
+    const page: any = {
+      __fakeBrowserGptPage: true,
+      goto: vi.fn(async () => undefined),
+      url: vi.fn(() => SHARED_CONV),
+      isClosed: vi.fn(() => false),
+      waitForTimeout: vi.fn(async (ms: number) => { mocks.nowMs += ms; }),
+      close,
+      getByText: vi.fn(() => scalarLocator()),
+      getByRole: vi.fn(() => scalarLocator()),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (matchesNewChatControlSelector(selector)) return scalarLocator({ count: vi.fn(async () => 0) });
+        if (selector.includes('regenerate-thread-error') || selector.includes('data-testid*="error"')) {
+          return scalarLocator({
+            count: vi.fn(async () => (sent && currentPhase() === 'banner' ? 1 : 0)),
+            nth: vi.fn(() => scalarLocator({
+              innerText: vi.fn(async () => 'Retry'),
+              click: retryClicks,
+            })),
+            click: retryClicks,
+          });
+        }
+        if (selector.includes('role="alert"')) {
+          return scalarLocator({
+            count: vi.fn(async () => 1),
+            nth: vi.fn(() => scalarLocator({ innerText: vi.fn(async () => '') })),
+          });
+        }
+        if (selector === MESSAGE_NODE_SELECTOR) {
+          if (!sent) {
+            return Object.assign(collectionLocator([]), {
+              evaluateAll: async (callback: (elements: Element[], args: unknown) => unknown, args: unknown) => (
+                callback([], args)
+              ),
+            });
+          }
+          const snapshot = messageElements();
+          const pollIndex = observationIndex;
+          observationIndex += 1;
+          const messages = [
+            { role: 'user' as const, text: filled },
+            {
+              role: 'assistant' as const,
+              text: snapshot.phase === 'banner' ? `${timeoutText}\n\nRetry` : 'working',
+            },
+          ];
+          const loc = collectionLocator(messages, snapshot.phase === 'generating');
+          loc.evaluateAll = vi.fn(async (
+            callback: (elements: Element[], args: unknown) => unknown,
+            args: unknown,
+          ) => {
+            const prior = (globalThis as { document?: unknown }).document;
+            const generating = snapshot.phase === 'generating';
+            (globalThis as { document?: unknown }).document = {
+              querySelectorAll: (sel: string) => {
+                if (sel.includes('conversation-turn-')) {
+                  return [
+                    { getAttribute: () => 'conversation-turn-1' },
+                    { getAttribute: () => 'conversation-turn-2' },
+                  ];
+                }
+                if (sel.includes('assistant')) return [snapshot.assistant];
+                return [];
+              },
+              querySelector: (sel: string) => {
+                if (sel.includes('stop-button') || sel.includes('aria-busy') || sel.includes('streaming')) {
+                  return generating ? {} : null;
+                }
+                return null;
+              },
+            };
+            try {
+              return callback([snapshot.user, snapshot.assistant] as unknown as Element[], args);
+            } finally {
+              if (prior === undefined) delete (globalThis as { document?: unknown }).document;
+              else (globalThis as { document?: unknown }).document = prior;
+            }
+          });
+          void pollIndex;
+          return loc;
+        }
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) {
+          if (!sent) return collectionLocator([]);
+          const snapshot = messageElements();
+          return collectionLocator([{
+            role: 'assistant',
+            text: snapshot.phase === 'banner' ? `${timeoutText}\n\nRetry` : 'working',
+          }], snapshot.phase === 'generating');
+        }
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+          return scalarLocator({ count: vi.fn(async () => 0) });
+        }
+        if (matchesStopButtonSelector(selector) || selector.includes(STOP_BUTTON_TESTID)) {
+          return scalarLocator({
+            count: vi.fn(async () => (sent && currentPhase() === 'generating' ? 1 : 0)),
+          });
+        }
+        return scalarLocator();
+      }),
+    };
+    return { page, retryClicks, sendClicks, close, getSends: () => (sent ? 1 : 0) };
+  }
+
+  it('emits recovery_required on the first poll where the successor-turn banner is visible', async () => {
+    const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
+    vi.mocked(uiAdapter.productStatusText).mockImplementation(actual.productStatusText);
+    vi.mocked(uiAdapter.classifyProductWall).mockImplementation(actual.classifyProductWall);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-1990'));
+    const fake = recoveryPage(['generating', 'banner']);
+    const outcome = await runExistingChat(fake.page, join(integrationStateDir, 'late-banner.txt'));
+    expect(outcome.result).toMatchObject({
+      schema: 'turn-result/v1',
+      state: 'recovery_required',
+      scope: 'conversation',
+      cause: 'message_delivery_timed_out',
+      send_count: 1,
+    });
+    expect(fake.getSends()).toBe(1);
+    expect(fake.retryClicks).not.toHaveBeenCalled();
+    expect(fake.close).not.toHaveBeenCalled();
+    expect(outcome.result.cleanup).not.toBe('confirmed');
+  });
+
+  it('keeps polling with no wall while generation stays active and the banner is absent', async () => {
+    const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
+    vi.mocked(uiAdapter.productStatusText).mockImplementation(actual.productStatusText);
+    vi.mocked(uiAdapter.classifyProductWall).mockImplementation(actual.classifyProductWall);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-1990-WAIT'));
+    const fake = recoveryPage(['generating', 'generating', 'generating']);
+    const outcome = await runExistingChat(fake.page, join(integrationStateDir, 'still-generating.txt'), '50');
+    expect(outcome.result.state).not.toBe('recovery_required');
+    expect(outcome.result.cause).not.toBe('message_delivery_timed_out');
+    expect(fake.getSends()).toBe(1);
+    expect(fake.retryClicks).not.toHaveBeenCalled();
   });
 });

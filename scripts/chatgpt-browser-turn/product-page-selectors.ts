@@ -11,6 +11,8 @@ export const ASSISTANT_MESSAGE_SELECTOR = `[${MESSAGE_AUTHOR_ROLE_ATTR}="assista
 export const TURN_START_MESSAGE_ATTR = 'data-turn-start-message';
 export const STOP_BUTTON_TESTID = 'stop-button';
 export const STOP_BUTTON_SELECTOR = `[data-testid="${STOP_BUTTON_TESTID}"], button[aria-label*="Stop"]`;
+export const REGENERATE_THREAD_ERROR_BUTTON_TESTID = 'regenerate-thread-error-button';
+export const REGENERATE_THREAD_ERROR_BUTTON_SELECTOR = `[data-testid="${REGENERATE_THREAD_ERROR_BUTTON_TESTID}"]`;
 export const CONTINUE_GENERATING_BUTTON_NAME = /continue generating/i;
 export const CONTINUE_GENERATING_TESTID_SELECTOR = '[data-testid*="continue-generating"], [data-testid*="continue_generating"]';
 export const CONVERSATION_TURN_SECTION_SELECTOR = 'section[data-testid^="conversation-turn-"]';
