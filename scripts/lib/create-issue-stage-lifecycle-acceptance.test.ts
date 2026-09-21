@@ -144,12 +144,31 @@ describe('lifecycle acceptance policy', () => {
     expect(result).toEqual(expect.objectContaining({ ok: true, errors: [] }));
   });
 
-  it('rejects a missing slot that does not prove possible-or-actual send', () => {
+  it('accepts one exact-witness terminal zero-send incident with resend forbidden (#1977)', () => {
     const review = partialReview();
     (review.invocations[2] as { sendCount: number }).sendCount = 0;
     const result = validateLifecycleAcceptanceTopology([review, terminal], intake, 'T2');
+    expect(result).toEqual(expect.objectContaining({ ok: true, errors: [] }));
+  });
+
+  it('rejects a generic zero-send source without the no-resend incident shape', () => {
+    const review = partialReview();
+    Object.assign(review.invocations[2]!, {
+      sendCount: 0,
+      terminalClassification: 'quota',
+      retryClass: 'eligible-zero-send',
+    });
+    const result = validateLifecycleAcceptanceTopology([review, terminal], intake, 'T2');
     expect(result.ok).toBe(false);
     expect(result.errors.join('\n')).toContain('possible-or-actual send with resend forbidden');
+  });
+
+  it('rejects zero-send partial evidence without an observed terminal-result identity', () => {
+    const review = partialReview();
+    Object.assign(review.invocations[2]!, { sendCount: 0, terminalResultIdentity: undefined });
+    const result = validateLifecycleAcceptanceTopology([review, terminal], intake, 'T2');
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('journal witness does not bind terminal evidence <missing>');
   });
 
   it('rejects a journal witness bound to the wrong terminal-result identity', () => {

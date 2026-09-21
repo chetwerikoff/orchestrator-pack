@@ -1193,11 +1193,17 @@ function hydrateReconciliationTransport(
   index: number,
   errors: string[],
 ): JsonRecord | null {
+  const existingTerminalClassification = terminalClassification(invocation.terminalClassification);
+  const existingRetryClass = retryClass(invocation.retryClass);
   const completeExisting = invocation.terminal === true
-    && terminalClassification(invocation.terminalClassification) !== null
+    && existingTerminalClassification !== null
     && (invocation.sendCount === 0 || invocation.sendCount === 1)
-    && retryClass(invocation.retryClass) !== null;
-  if (completeExisting) return { ...invocation };
+    && existingRetryClass !== null;
+  const existingNeedsObservedZeroSendIdentity = completeExisting
+    && invocation.sendCount === 0
+    && existingTerminalClassification === 'incident'
+    && existingRetryClass === 'retry-forbidden';
+  if (completeExisting && !existingNeedsObservedZeroSendIdentity) return { ...invocation };
 
   const terminalEnvelopePath = optionalString(invocation.terminalEnvelopePath);
   if (!terminalEnvelopePath) {
@@ -1220,12 +1226,51 @@ function hydrateReconciliationTransport(
     errors.push('stage evidence invocation[' + index + '] terminal envelope is not terminal');
     return null;
   }
+  if (
+    completeExisting
+    && (
+      existingTerminalClassification !== transport.terminalClassification
+      || invocation.sendCount !== transport.sendCount
+    )
+  ) {
+    errors.push('stage evidence invocation[' + index + '] terminal transport disagrees with its bound terminal envelope');
+    return null;
+  }
+
+  const needsObservedZeroSendIdentity = completeExisting
+    ? existingNeedsObservedZeroSendIdentity
+    : transport.sendCount === 0
+      && transport.terminalClassification === 'incident'
+      && transport.retryClass === 'retry-forbidden';
+  let observedTerminalResultIdentity: string | undefined;
+  if (needsObservedZeroSendIdentity) {
+    const admittedInvocationId = optionalString(invocation.invocationId);
+    const observedInvocationId = optionalString(observed.observed_invocation_id);
+    const observedIdentity = optionalString(observed.observed_turn_result_identity);
+    if (!admittedInvocationId || observedInvocationId !== admittedInvocationId) {
+      errors.push('stage evidence invocation[' + index + '] terminal envelope observed_invocation_id does not match admitted invocationId');
+      return null;
+    }
+    if (!observedIdentity || !/^sha256:[0-9a-f]{64}:turn-result-v1$/.test(observedIdentity)) {
+      errors.push('stage evidence invocation[' + index + '] terminal envelope lacks a valid observed turn-result identity');
+      return null;
+    }
+    const assertedIdentity = optionalString(invocation.terminalResultIdentity);
+    if (assertedIdentity && assertedIdentity !== observedIdentity) {
+      errors.push('stage evidence invocation[' + index + '] terminalResultIdentity disagrees with observed turn-result identity');
+      return null;
+    }
+    observedTerminalResultIdentity = observedIdentity;
+  }
   return {
     ...invocation,
     terminal: true,
-    terminalClassification: transport.terminalClassification,
-    sendCount: transport.sendCount,
-    retryClass: transport.retryClass,
+    ...(completeExisting ? {} : {
+      terminalClassification: transport.terminalClassification,
+      sendCount: transport.sendCount,
+      retryClass: transport.retryClass,
+    }),
+    ...(observedTerminalResultIdentity ? { terminalResultIdentity: observedTerminalResultIdentity } : {}),
   };
 }
 
@@ -1426,6 +1471,18 @@ export function reconcileCreateIssueStage(
     if (final.stage !== stage) errors.push('reviewerSlot ' + reviewerSlot + ' stage does not match admitted stage');
     if (final.sourceRevision !== sourceRevision) errors.push('reviewerSlot ' + reviewerSlot + ' sourceRevision does not match admitted revision');
     if (!optionalString(final.invocationId)) errors.push('reviewerSlot ' + reviewerSlot + ' invocationId is missing');
+    if (final.sendCount === 0) {
+      if (
+        final.terminal !== true
+        || final.terminalClassification !== 'incident'
+        || final.retryClass !== 'retry-forbidden'
+        || !optionalString(final.terminalResultIdentity)
+      ) {
+        errors.push('reviewerSlot ' + reviewerSlot + ' zero-send evidence cannot credential a missing source; retryClass=' + String(final.retryClass));
+        return false;
+      }
+      return true;
+    }
     if (final.sendCount !== 1) {
       errors.push('reviewerSlot ' + reviewerSlot + ' has no GitHub-reconcilable delivery; observed sendCount=' + String(final.sendCount) + ' retryClass=' + String(final.retryClass));
       return false;
@@ -1533,9 +1590,13 @@ export function reconcileCreateIssueStage(
     };
   }
 
-  raw.outcome = 'complete';
+  const finalRequiredSlots = reviewLane && Array.isArray(reviewLane.finalRequiredSlots)
+    ? reviewLane.finalRequiredSlots.filter((slot): slot is string => typeof slot === 'string')
+    : initialRequiredSlots;
+  const unresolvedRequiredSlots = finalRequiredSlots.filter((slot) => !resolvedBySlot.has(slot));
+  raw.outcome = unresolvedRequiredSlots.length === 0 ? 'complete' : 'partial';
   raw.producerEvidence = 'not-applicable';
-  raw.partialMissingSources = [];
+  if (unresolvedRequiredSlots.length === 0) raw.partialMissingSources = [];
   raw.tierTransition = 'none';
   raw.revisionChecks = { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' };
   raw.settlement = { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true };

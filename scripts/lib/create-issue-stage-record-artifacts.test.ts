@@ -2543,6 +2543,167 @@ describe('Issue #1973 post-send envelope send_count hydration', () => {
   });
 });
 
+describe('Issue #1977 evidence-backed zero-send partial reconciliation', () => {
+  const incidentInvocationId = '316369ff-5fad-4621-ae02-7c2894a28b53';
+
+  function prepareZeroSend(overrides: Record<string, unknown> = {}) {
+    const input = fixture({ phase: 'pre-lens' });
+    input.stageEvidencePaths = [input.reviewEvidencePath];
+    rmSync(input.evidencePath, { force: true });
+    const evidence = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+    const invocation = evidence.invocations[0] as Record<string, any>;
+    invocation.invocationId = incidentInvocationId;
+    invocation.terminal = true;
+    invocation.terminalClassification = 'incident';
+    invocation.sendCount = 0;
+    invocation.retryClass = 'retry-forbidden';
+    delete invocation.capturePath;
+    delete invocation.turnResultPath;
+    delete invocation.terminalResultIdentity;
+    const envelopePath = join(input.dir, 'terminal-competitive-01-final.json');
+    invocation.terminalEnvelopePath = envelopePath;
+
+    const candidateText = JSON.stringify({
+      schema: 'turn-result/v1',
+      state: 'output_conflict',
+      scope: 'invocation',
+      cause: 'observation_marker_conflict',
+      invocation_id: incidentInvocationId,
+      configured_profile_key: 'fixture-profile',
+      send_count: 0,
+    });
+    const identity = `sha256:${createHash('sha256').update(candidateText, 'utf8').digest('hex')}:turn-result-v1`;
+    writeFileSync(envelopePath, JSON.stringify({
+      schema: 'flow-manager-long-running-child-terminal/v1',
+      run_identity: 'run-1977',
+      attempt_identity: 'attempt-1977',
+      completion_mode: 'browser-turn-result-v1',
+      handoff_receipt_path: '/tmp/opk-1977-handoff.json',
+      launcher_started_at: '2026-09-21T00:00:00.000Z',
+      handoff_committed_at: '2026-09-21T00:00:01.000Z',
+      terminal_at: '2026-09-21T00:00:02.000Z',
+      lifecycle_outcome: 'incident',
+      incident: 'child_turn_state:output_conflict',
+      delivery: 'not-sent',
+      turn_result_state: 'output_conflict',
+      turn_result_cause: 'observation_marker_conflict',
+      send_count: 0,
+      observed_invocation_id: incidentInvocationId,
+      observed_turn_result_identity: identity,
+      recovery_available: false,
+      ...overrides,
+    }));
+    evidence.outcome = 'partial';
+    evidence.producerEvidence = 'not-applicable';
+    evidence.partialMissingSources = [{
+      reviewerSlot: '01',
+      invocationId: incidentInvocationId,
+      evidenceIdentity: identity,
+      reason: 'terminal zero-send source is unobservable and blind resend is forbidden',
+    }];
+    writeFileSync(input.reviewEvidencePath, JSON.stringify(evidence, null, 2) + '\n');
+    return {
+      input,
+      source: transport({ census: input.reviewComments.slice(1) }),
+      identity,
+    };
+  }
+
+  it('reconciles and credentials two GitHub sources plus one proven zero-send missing source', () => {
+    const prepared = prepareZeroSend();
+    const reconciled = reconcileCreateIssueStage({
+      reviewDir: prepared.input.dir,
+      stageEvidencePath: prepared.input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: prepared.source,
+    });
+    expect(reconciled.ok, reconciled.errors.join('\n')).toBe(true);
+    expect(reconciled.capturePaths).toHaveLength(2);
+
+    const hydrated = JSON.parse(readFileSync(prepared.input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+    expect(hydrated.outcome).toBe('partial');
+    expect(hydrated.invocations[0]).toMatchObject({
+      terminalClassification: 'incident',
+      sendCount: 0,
+      retryClass: 'retry-forbidden',
+      terminalResultIdentity: prepared.identity,
+    });
+    expect(hydrated.invocations[0]).not.toHaveProperty('artifactAuthority');
+
+    const produced = produceAcceptanceArtifacts({
+      reviewDir: prepared.input.dir,
+      outputDir: prepared.input.outputDir,
+      tierIntakePath: prepared.input.intakePath,
+      stageEvidencePaths: [prepared.input.reviewEvidencePath],
+      authorDispositionsPath: prepared.input.authorPath,
+      phase: 'pre-lens',
+      artifactSourceTransport: prepared.source,
+    });
+    expect(produced.ok, produced.errors.join('\n')).toBe(true);
+    const receipt = JSON.parse(readFileSync(
+      join(prepared.input.outputDir, 'stage-completeness-receipt-architectural-review-attempt.json'),
+      'utf8',
+    )) as Record<string, any>;
+    expect(receipt.outcome).toBe('partial');
+    expect(receipt.credentialingCaptures).toHaveLength(2);
+    expect(receipt.partialMissingSources[0]).toMatchObject({
+      reviewerSlot: '01',
+      invocationId: incidentInvocationId,
+      evidenceIdentity: prepared.identity,
+    });
+  });
+
+  it('keeps an unsealed first-attempt zero-send incident retry-eligible under current-main policy', () => {
+    const prepared = prepareZeroSend();
+    const evidence = JSON.parse(readFileSync(prepared.input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+    const invocation = evidence.invocations[0] as Record<string, any>;
+    delete invocation.terminal;
+    delete invocation.terminalClassification;
+    delete invocation.sendCount;
+    delete invocation.retryClass;
+    writeFileSync(prepared.input.reviewEvidencePath, JSON.stringify(evidence, null, 2) + '\n');
+
+    const result = reconcileCreateIssueStage({
+      reviewDir: prepared.input.dir,
+      stageEvidencePath: prepared.input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: prepared.source,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('retryClass=eligible-zero-send');
+  });
+
+  it('fails closed on a foreign observed invocation id', () => {
+    const prepared = prepareZeroSend({ observed_invocation_id: 'foreign-invocation' });
+    const result = reconcileCreateIssueStage({
+      reviewDir: prepared.input.dir,
+      stageEvidencePath: prepared.input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: prepared.source,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('observed_invocation_id does not match admitted invocationId');
+  });
+
+  it('does not accept an envelope hash as observed turn-result identity', () => {
+    const prepared = prepareZeroSend({
+      observed_turn_result_identity: `sha256:${'a'.repeat(64)}:terminal-envelope.json`,
+    });
+    const result = reconcileCreateIssueStage({
+      reviewDir: prepared.input.dir,
+      stageEvidencePath: prepared.input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: prepared.source,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('lacks a valid observed turn-result identity');
+  });
+});
+
 describe('proven zero-send first attempts are retry-eligible (Issue #1981)', () => {
   const zeroSendIncident = {
     lifecycle_outcome: 'incident',
