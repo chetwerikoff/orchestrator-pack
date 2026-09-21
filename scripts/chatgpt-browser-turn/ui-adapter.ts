@@ -7,11 +7,12 @@ export * from './ui-adapter-base.ts';
 
 import * as base from './ui-adapter-base.ts';
 import {
+  ASSISTANT_MESSAGE_SELECTOR,
   ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
   CONVERSATION_TURN_SECTION_SELECTOR,
   MESSAGE_AUTHOR_ROLE_ATTR,
   MESSAGE_NODE_SELECTOR,
-  PRODUCT_STATUS_PROBE_SELECTORS,
+  REGENERATE_THREAD_ERROR_BUTTON_SELECTOR,
   STOP_BUTTON_SELECTOR,
   UI_COLLAPSE_AFFIX_RE,
 } from './product-page-selectors.ts';
@@ -31,13 +32,39 @@ export interface ExecutionRecoveryMessage {
   readonly turnKey?: string;
 }
 
+export type ExecutionRecoveryReasonCode =
+  | 'no_owned_prompt'
+  | 'generation_active'
+  | 'literal_not_found'
+  | 'retry_control_missing'
+  | 'later_user_turn'
+  | 'extra_assistant_carrier'
+  | 'turn_not_successor'
+  | 'mixed_carrier'
+  | 'ambiguous_marker'
+  | 'transcript_incomplete';
+
+export interface ExecutionRecoveryBannerCandidate {
+  readonly turnKey?: string;
+  readonly paragraphTexts: readonly string[];
+  readonly retryControlPresent: boolean;
+}
+
 export interface ExecutionRecoveryProductErrorEvidence {
-  readonly surface: base.ProductStatusSurface;
   readonly marker: string;
   readonly transcriptComplete: boolean;
   readonly generationInProgress: boolean | 'unknown';
   readonly messages: readonly ExecutionRecoveryMessage[];
-  readonly surfaceTurnKey?: string;
+  readonly conversationTurnKeys: readonly string[];
+  readonly bannerCandidates: readonly ExecutionRecoveryBannerCandidate[];
+}
+
+export interface ExecutionRecoveryClassification {
+  readonly cause?: ExecutionRecoveryProductCause;
+  readonly reason?: ExecutionRecoveryReasonCode;
+  readonly owned_user_turn_key?: string;
+  readonly candidate_assistant_turn_key?: string;
+  readonly retry_control_present: boolean;
 }
 
 export interface ProductStatusSurface extends base.ProductStatusSurface {
@@ -60,7 +87,6 @@ const OWNED_TURN_GENERATION_SELECTOR = [
   STOP_BUTTON_SELECTOR,
   ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
 ].join(', ');
-const PRODUCT_STATUS_SELECTOR = PRODUCT_STATUS_PROBE_SELECTORS.join(', ');
 
 // The execute-Issue recovery projection is intentionally narrower than the
 // shared product-status helper. Other state-light consumers (notably session
@@ -83,7 +109,8 @@ interface OwnedTurnSnapshot {
   readonly complete: boolean;
   readonly generationInProgress: boolean | 'unknown';
   readonly rows: readonly ExecutionRecoveryMessage[];
-  readonly productSurfaces: readonly { text: string; turnKey?: string }[];
+  readonly conversationTurnKeys: readonly string[];
+  readonly bannerCandidates: readonly ExecutionRecoveryBannerCandidate[];
 }
 
 function normalizeExecutionRecoveryProductText(value: string): string {
@@ -130,26 +157,79 @@ function executionRecoveryCauseFromText(value: string): ExecutionRecoveryProduct
   return undefined;
 }
 
+function uniqueTurnKeysInOrder(messages: readonly ExecutionRecoveryMessage[]): string[] {
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  for (const message of messages) {
+    if (!message.turnKey || seen.has(message.turnKey)) continue;
+    seen.add(message.turnKey);
+    keys.push(message.turnKey);
+  }
+  return keys;
+}
+
+function successorTurnKey(turnKeys: readonly string[], ownedTurnKey: string): string | undefined {
+  const index = turnKeys.indexOf(ownedTurnKey);
+  if (index < 0 || index + 1 >= turnKeys.length) return undefined;
+  return turnKeys[index + 1];
+}
+
+function paragraphCause(text: string): ExecutionRecoveryProductCause | undefined {
+  return executionRecoveryCauseFromText(text);
+}
+
+function candidateHasNonBannerParagraph(candidate: ExecutionRecoveryBannerCandidate): boolean {
+  return candidate.paragraphTexts.some((text) => !paragraphCause(text) && normalizeExecutionRecoveryProductText(text).length > 0);
+}
+
+function emptyClassification(
+  reason: ExecutionRecoveryReasonCode,
+  extra: Omit<ExecutionRecoveryClassification, 'reason' | 'retry_control_present'> & {
+    readonly retry_control_present?: boolean;
+  } = {},
+): ExecutionRecoveryClassification {
+  return {
+    reason,
+    retry_control_present: extra.retry_control_present === true,
+    ...(extra.owned_user_turn_key ? { owned_user_turn_key: extra.owned_user_turn_key } : {}),
+    ...(extra.candidate_assistant_turn_key
+      ? { candidate_assistant_turn_key: extra.candidate_assistant_turn_key }
+      : {}),
+  };
+}
+
 /**
  * Sole matcher/owned-turn classifier for the two execute-Issue product errors.
  * Product text alone is never recovery authority: the exact owned prompt must
- * be the current turn, the banner must be inside that same conversation-turn
- * container, no assistant carrier may have appeared for the owned turn, and
- * generation must be positively stopped.
+ * be unique, the banner must be a bounded descendant of the assistant carrier
+ * in the structural successor conversation-turn, that same carrier must hold
+ * regenerate-thread-error-button, generation must be positively stopped, and
+ * no later user turn or extra assistant carrier may be present.
  */
 export function classifyExecutionRecoveryProductError(
   evidence: ExecutionRecoveryProductErrorEvidence,
-): { cause?: ExecutionRecoveryProductCause } {
-  const cause = executionRecoveryCauseFromText(evidence.surface.text);
-  if (!cause) return {};
-  if (!evidence.transcriptComplete || evidence.generationInProgress !== false) return {};
+): ExecutionRecoveryClassification {
+  const turnKeys = evidence.conversationTurnKeys.length > 0
+    ? evidence.conversationTurnKeys
+    : uniqueTurnKeysInOrder(evidence.messages);
+  const retryPresentAnywhere = evidence.bannerCandidates.some((candidate) => candidate.retryControlPresent);
+
+  if (!evidence.transcriptComplete) {
+    return emptyClassification('transcript_incomplete', { retry_control_present: retryPresentAnywhere });
+  }
+  if (evidence.generationInProgress !== false) {
+    return emptyClassification('generation_active', { retry_control_present: retryPresentAnywhere });
+  }
 
   const cardinality = recoveryMarkerCardinality(evidence.messages, evidence.marker);
+  if (cardinality.matchingUserCarrierCount === 0 || cardinality.exactMarkerTokenCount === 0) {
+    return emptyClassification('no_owned_prompt', { retry_control_present: retryPresentAnywhere });
+  }
   if (
     cardinality.matchingUserCarrierCount !== 1
     || cardinality.exactMarkerTokenCount !== 1
   ) {
-    return {};
+    return emptyClassification('ambiguous_marker', { retry_control_present: retryPresentAnywhere });
   }
 
   const owned = evidence.messages
@@ -158,22 +238,81 @@ export function classifyExecutionRecoveryProductError(
       message.role === 'user'
       && ownedPromptMarkerMatches(message.text, evidence.marker)
     ));
-  if (owned.length !== 1) return {};
-
-  const ownedMessage = owned[0]!;
-  if (!ownedMessage.message.turnKey
-    || !evidence.surfaceTurnKey
-    || ownedMessage.message.turnKey !== evidence.surfaceTurnKey) {
-    return {};
+  if (owned.length !== 1) {
+    return emptyClassification('no_owned_prompt', { retry_control_present: retryPresentAnywhere });
   }
 
+  const ownedMessage = owned[0]!;
+  const ownedTurnKey = ownedMessage.message.turnKey;
   const suffix = evidence.messages.slice(ownedMessage.index + 1);
-  if (suffix.some((message) => message.role === 'user')) return {};
-  // Any assistant carrier is reply evidence to recover/settle rather than
-  // authority to abandon the conversation, even when completion is uncertain.
-  if (suffix.some((message) => message.role === 'assistant')) return {};
+  if (suffix.some((message) => message.role === 'user')) {
+    return emptyClassification('later_user_turn', {
+      retry_control_present: retryPresentAnywhere,
+      ...(ownedTurnKey ? { owned_user_turn_key: ownedTurnKey } : {}),
+    });
+  }
 
-  return { cause };
+  const assistants = suffix.filter((message) => message.role === 'assistant');
+  if (assistants.length > 1) {
+    return emptyClassification('extra_assistant_carrier', {
+      retry_control_present: retryPresentAnywhere,
+      ...(ownedTurnKey ? { owned_user_turn_key: ownedTurnKey } : {}),
+    });
+  }
+  if (assistants.length !== 1 || !ownedTurnKey) {
+    return emptyClassification('literal_not_found', {
+      retry_control_present: retryPresentAnywhere,
+      ...(ownedTurnKey ? { owned_user_turn_key: ownedTurnKey } : {}),
+    });
+  }
+
+  const assistantTurnKey = assistants[0]!.turnKey;
+  const successor = successorTurnKey(turnKeys, ownedTurnKey);
+  if (!assistantTurnKey || !successor || assistantTurnKey !== successor) {
+    return emptyClassification('turn_not_successor', {
+      retry_control_present: retryPresentAnywhere,
+      owned_user_turn_key: ownedTurnKey,
+      ...(assistantTurnKey ? { candidate_assistant_turn_key: assistantTurnKey } : {}),
+    });
+  }
+
+  const holder = evidence.bannerCandidates.filter((candidate) => candidate.turnKey === assistantTurnKey);
+  const retryInHolder = holder.some((candidate) => candidate.retryControlPresent);
+  const classifiedFromHolder = holder.flatMap((candidate) => (
+    candidate.paragraphTexts
+      .map((text) => paragraphCause(text))
+      .filter((cause): cause is ExecutionRecoveryProductCause => Boolean(cause))
+  ));
+  const uniqueCauses = [...new Set(classifiedFromHolder)];
+
+  if (uniqueCauses.length !== 1) {
+    return emptyClassification('literal_not_found', {
+      retry_control_present: retryInHolder,
+      owned_user_turn_key: ownedTurnKey,
+      candidate_assistant_turn_key: assistantTurnKey,
+    });
+  }
+  if (holder.some(candidateHasNonBannerParagraph)) {
+    return emptyClassification('mixed_carrier', {
+      retry_control_present: retryInHolder,
+      owned_user_turn_key: ownedTurnKey,
+      candidate_assistant_turn_key: assistantTurnKey,
+    });
+  }
+  if (!retryInHolder) {
+    return emptyClassification('retry_control_missing', {
+      retry_control_present: false,
+      owned_user_turn_key: ownedTurnKey,
+      candidate_assistant_turn_key: assistantTurnKey,
+    });
+  }
+
+  return {
+    cause: uniqueCauses[0],
+    owned_user_turn_key: ownedTurnKey,
+    candidate_assistant_turn_key: assistantTurnKey,
+    retry_control_present: true,
+  };
 }
 
 async function boundedRead<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
@@ -220,11 +359,25 @@ async function readOwnedTurnSnapshot(
         roleAttribute: string;
         generationSelector: string;
         turnSelector: string;
-        productSelector: string;
+        assistantSelector: string;
+        retrySelector: string;
       }) => {
         const rows: Array<{ role: 'user' | 'assistant'; text: string; turnKey?: string }> = [];
-        const productSurfaces: Array<{ text: string; turnKey?: string }> = [];
+        const conversationTurnKeys: string[] = [];
+        const bannerCandidates: Array<{
+          turnKey?: string;
+          paragraphTexts: string[];
+          retryControlPresent: boolean;
+        }> = [];
         let complete = true;
+        try {
+          for (const section of Array.from(document.querySelectorAll(args.turnSelector))) {
+            const turnKey = section.getAttribute('data-testid');
+            if (turnKey) conversationTurnKeys.push(turnKey);
+          }
+        } catch {
+          complete = false;
+        }
         for (const element of elements) {
           try {
             const role = element.getAttribute(args.roleAttribute) ?? '';
@@ -240,11 +393,24 @@ async function readOwnedTurnSnapshot(
           }
         }
         try {
-          for (const element of Array.from(document.querySelectorAll(args.productSelector))) {
-            const text = (element as HTMLElement).innerText;
-            if (!text) continue;
-            const turnKey = element.closest(args.turnSelector)?.getAttribute('data-testid') ?? undefined;
-            productSurfaces.push({ text, ...(turnKey ? { turnKey } : {}) });
+          for (const assistant of Array.from(document.querySelectorAll(args.assistantSelector))) {
+            const turnKey = assistant.closest(args.turnSelector)?.getAttribute('data-testid') ?? undefined;
+            const paragraphTexts: string[] = [];
+            for (const paragraph of Array.from(assistant.querySelectorAll('p'))) {
+              const text = (paragraph as HTMLElement).innerText;
+              if (typeof text === 'string' && text) paragraphTexts.push(text);
+            }
+            let retryControlPresent = false;
+            try {
+              retryControlPresent = Boolean(assistant.querySelector(args.retrySelector));
+            } catch {
+              complete = false;
+            }
+            bannerCandidates.push({
+              paragraphTexts,
+              retryControlPresent,
+              ...(turnKey ? { turnKey } : {}),
+            });
           }
         } catch {
           complete = false;
@@ -255,12 +421,13 @@ async function readOwnedTurnSnapshot(
         } catch {
           generationInProgress = 'unknown';
         }
-        return { complete, generationInProgress, rows, productSurfaces };
+        return { complete, generationInProgress, rows, conversationTurnKeys, bannerCandidates };
       }, {
         roleAttribute: MESSAGE_AUTHOR_ROLE_ATTR,
         generationSelector: OWNED_TURN_GENERATION_SELECTOR,
         turnSelector: CONVERSATION_TURN_SECTION_SELECTOR,
-        productSelector: PRODUCT_STATUS_SELECTOR,
+        assistantSelector: ASSISTANT_MESSAGE_SELECTOR,
+        retrySelector: REGENERATE_THREAD_ERROR_BUTTON_SELECTOR,
       })),
       waitMs,
     ) as OwnedTurnSnapshot;
@@ -274,21 +441,14 @@ function recoveryCauseFromSnapshot(
   marker: string,
 ): ExecutionRecoveryProductCause | undefined {
   if (!snapshot) return undefined;
-  let cause: ExecutionRecoveryProductCause | undefined;
-  for (const productSurface of snapshot.productSurfaces) {
-    const classified = classifyExecutionRecoveryProductError({
-      surface: { text: productSurface.text, composer: true },
-      marker,
-      transcriptComplete: snapshot.complete,
-      generationInProgress: snapshot.generationInProgress,
-      messages: snapshot.rows,
-      ...(productSurface.turnKey ? { surfaceTurnKey: productSurface.turnKey } : {}),
-    }).cause;
-    if (!classified) continue;
-    if (cause && cause !== classified) return undefined;
-    cause = classified;
-  }
-  return cause;
+  return classifyExecutionRecoveryProductError({
+    marker,
+    transcriptComplete: snapshot.complete,
+    generationInProgress: snapshot.generationInProgress,
+    messages: snapshot.rows,
+    conversationTurnKeys: snapshot.conversationTurnKeys,
+    bannerCandidates: snapshot.bannerCandidates,
+  }).cause;
 }
 
 /**
