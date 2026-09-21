@@ -36,7 +36,7 @@ import {
 import { canonicalStagePlan, stagesForPhase } from './create-issue-stage-topology.ts';
 import { evaluateStageCredentialingSettlement } from './create-issue-stage-lifecycle-acceptance.ts';
 import { readEvidenceWaiverProducerEvidence } from './create-issue-stage-record-receipt.ts';
-import { extractMarker } from './create-issue-stage-record-marker.ts';
+import { extractMarker, resolveRecoveredInvalidPublicActorPoisonWitness } from './create-issue-stage-record-marker.ts';
 import { buildCanonicalLineage, deriveCanonicalCycleLineage } from './create-issue-stage-record-lineage.ts';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
 import { validateTerminalOneShotBodyBinding } from './create-issue-final-acceptance-contract.ts';
@@ -762,11 +762,20 @@ function canonicalIssueCommentLineage(
     });
   }
   const parsed = parseJournalEvents(trustedJournalComments);
-  if (parsed.diagnostics.length > 0) {
-    errors.push(...parsed.diagnostics.map((diagnostic) => `canonical Issue-comment journal ${diagnostic.code}: ${diagnostic.message}`));
+  const lineage = buildCanonicalLineage(parsed.events);
+  const recoveredPoison = resolveRecoveredInvalidPublicActorPoisonWitness({
+    comments: trustedJournalComments,
+    parsedDiagnostics: parsed.diagnostics,
+    lineage,
+  });
+  const blockingParseDiagnostics = parsed.diagnostics.filter((diagnostic) => (
+    diagnostic.code !== 'malformed-marker'
+    || diagnostic.commentId !== recoveredPoison?.poisonCommentId
+  ));
+  if (blockingParseDiagnostics.length > 0) {
+    errors.push(...blockingParseDiagnostics.map((diagnostic) => `canonical Issue-comment journal ${diagnostic.code}: ${diagnostic.message}`));
     return null;
   }
-  const lineage = buildCanonicalLineage(parsed.events);
   const blockingLineageDiagnostics = lineage.diagnostics.filter((diagnostic) => (
     diagnostic.code !== 'duplicate-remote-event' && diagnostic.code !== 'non-current-cycle-fork'
   ));
