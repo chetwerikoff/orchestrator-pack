@@ -1,0 +1,24 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1973,
+  "declared_paths": [
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts"
+  ],
+  "denylist": [
+    ".orchestrator-pack/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts"
+  ],
+  "source_revision": "1467c6836e86c49884beb64ad9d4569c33b22c51"
+}
