@@ -1001,6 +1001,47 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(envelope?.delivery).toBe('POSSIBLY_DELIVERED');
   });
 
+  it('seals the exact observed zero-send turn-result identity into the terminal envelope (#1977)', async () => {
+    const root = tempDir();
+    const paths = launchPaths(root, 'zero-send-observed-result');
+    const result = makeTurnResult({
+      state: 'output_conflict',
+      scope: 'invocation',
+      cause: 'observation_marker_conflict',
+      witness: undefined,
+      observation_uncertainty_diagnostics: {
+        cause: 'observation_marker_conflict',
+        send_count: 0,
+        owned_prompt_seen: false,
+      },
+    });
+    const serialized = JSON.stringify(result);
+    const expectedIdentity = `sha256:${createHash('sha256').update(serialized, 'utf8').digest('hex')}:turn-result-v1`;
+    const fixture = nodeFixture(`
+      process.stdout.write(JSON.stringify(${JSON.stringify(result)}) + '\\n');
+      process.exit(0);
+    `);
+    const code = await runLaunch({
+      runIdentity: 'run-zero-send-observed-result',
+      attemptIdentity: 'attempt-zero-send-observed-result',
+      handoffReceiptPath: paths.receipt,
+      terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output,
+      cwd: repoRoot,
+      childCommand: fixture.command,
+      childArgs: fixture.args,
+    });
+    expect(code).toBe(1);
+    expect(readTerminalEnvelope(paths.envelope)).toMatchObject({
+      lifecycle_outcome: 'incident',
+      incident: 'child_turn_state:output_conflict',
+      delivery: 'not-sent',
+      send_count: 0,
+      observed_invocation_id: result.invocation_id,
+      observed_turn_result_identity: expectedIdentity,
+    });
+  });
+
   it('rejects stale handoff receipt from a prior attempt (P1)', async () => {
     const root = tempDir();
     const paths = launchPaths(root, 'stale-receipt');

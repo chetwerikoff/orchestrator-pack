@@ -47,7 +47,10 @@ export const CONCURRENT_BATCH_INCIDENT_SCHEMA = 'flow-manager-concurrent-batch-i
 
 export type DeliveryState = 'not-sent' | 'POSSIBLY_DELIVERED' | 'landed';
 
-export type ParsedTurnResult = TurnResultV1 & { readonly resolved_send_count: number };
+export type ParsedTurnResult = TurnResultV1 & {
+  readonly resolved_send_count: number;
+  readonly observed_turn_result_identity?: string;
+};
 
 export interface HandoffReceipt {
   readonly schema: typeof HANDOFF_SCHEMA;
@@ -74,6 +77,8 @@ export interface TerminalEnvelope {
   readonly turn_result_state?: string;
   readonly turn_result_cause?: string;
   readonly send_count?: number;
+  readonly observed_invocation_id?: string;
+  readonly observed_turn_result_identity?: string;
   readonly recovery_available: boolean;
   readonly conversation_locator?: string;
   readonly diagnostics?: Record<string, unknown>;
@@ -363,6 +368,10 @@ function deliveryWithoutTurnResult(spawnFailed: boolean): DeliveryState {
   return spawnFailed ? 'not-sent' : 'POSSIBLY_DELIVERED';
 }
 
+function observedTurnResultIdentity(line: string): string {
+  return `sha256:${createHash('sha256').update(line, 'utf8').digest('hex')}:turn-result-v1`;
+}
+
 function parseTurnResult(line: string): ParsedTurnResult | null {
   const trimmed = line.trim();
   if (!trimmed) return null;
@@ -491,7 +500,11 @@ function parseTurnResult(line: string): ParsedTurnResult | null {
     }
 
     const resolved_send_count = resolveSendCount(body, result);
-    return { ...result, resolved_send_count };
+    return {
+      ...result,
+      resolved_send_count,
+      observed_turn_result_identity: observedTurnResultIdentity(line),
+    };
   } catch {
     return null;
   }
@@ -781,6 +794,10 @@ async function finalizeCandidatePath(
     turn_result_state: candidate.state,
     turn_result_cause: candidate.cause,
     send_count: candidate.resolved_send_count,
+    observed_invocation_id: candidate.invocation_id,
+    ...(candidate.observed_turn_result_identity
+      ? { observed_turn_result_identity: candidate.observed_turn_result_identity }
+      : {}),
     ...conversationLocatorFields(config, candidate),
   });
   if (capture.duplicateCandidate) {
@@ -811,6 +828,10 @@ async function finalizeCandidatePath(
       turn_result_state: candidate.state,
       turn_result_cause: candidate.cause,
       send_count: candidate.resolved_send_count,
+      observed_invocation_id: candidate.invocation_id,
+      ...(candidate.observed_turn_result_identity
+        ? { observed_turn_result_identity: candidate.observed_turn_result_identity }
+        : {}),
       ...conversationLocatorFields(config, candidate),
       ...(heartbeatDiagnostics ? { diagnostics: heartbeatDiagnostics } : {}),
     });

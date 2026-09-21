@@ -74,12 +74,18 @@ const POSSIBLE_OR_ACTUAL_SEND_FAILURES = new Set([
 
 function invocationProvesUnobservable(invocation: Record<string, unknown>): boolean {
   const invocationId = stringValue(invocation.invocationId);
+  const terminalClassification = String(invocation.terminalClassification);
+  const sendCount = invocation.sendCount;
+  const unobservableTransport = (
+    sendCount === 1 && POSSIBLE_OR_ACTUAL_SEND_FAILURES.has(terminalClassification)
+  ) || (
+    sendCount === 0 && terminalClassification === 'incident'
+  );
   return Boolean(
     invocationId
     && invocation.terminal === true
-    && invocation.sendCount === 1
     && invocation.retryClass === 'retry-forbidden'
-    && POSSIBLE_OR_ACTUAL_SEND_FAILURES.has(String(invocation.terminalClassification)),
+    && unobservableTransport
   );
 }
 
