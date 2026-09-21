@@ -32,7 +32,7 @@ function isKnownSchema(value: unknown): value is typeof CYCLE_SCHEMA | typeof ST
   return value === CYCLE_SCHEMA || value === STAGE_SCHEMA || value === FINAL_SCHEMA;
 }
 
-const PUBLIC_ACTORS = new Set<PublicActor>([
+export const PUBLIC_ACTORS = new Set<PublicActor>([
   'opencode-flow-manager',
   'cursor-flow-manager',
   'codex-flow-manager',
@@ -43,7 +43,7 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-function isPublicActor(value: unknown): value is PublicActor {
+export function isPublicActor(value: unknown): value is PublicActor {
   return typeof value === 'string' && PUBLIC_ACTORS.has(value as PublicActor);
 }
 
