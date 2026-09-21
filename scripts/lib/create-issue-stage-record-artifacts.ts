@@ -2789,7 +2789,7 @@ export function produceAcceptanceArtifacts(
   }
 
   let canonicalLineage: CanonicalLineage | undefined;
-  if (purpose === 'stage-time') {
+  if (purpose === 'stage-time' || purpose === 'final-acceptance') {
     if (!taskIssueMatch) {
       errors.push('canonical cycle lineage requires tier-intake taskIdentity issue:<N>');
     } else {
