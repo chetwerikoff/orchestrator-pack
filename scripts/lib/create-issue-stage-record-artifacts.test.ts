@@ -2547,6 +2547,7 @@ describe('Issue #1977 evidence-backed zero-send partial reconciliation', () => {
   function prepareZeroSend(overrides: Record<string, unknown> = {}) {
     const input = fixture({ phase: 'pre-lens' });
     input.stageEvidencePaths = [input.reviewEvidencePath];
+    rmSync(input.evidencePath, { force: true });
     const evidence = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as Record<string, any>;
     const invocation = evidence.invocations[0] as Record<string, any>;
     invocation.invocationId = incidentInvocationId;
