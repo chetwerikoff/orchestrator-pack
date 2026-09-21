@@ -344,6 +344,8 @@ function productionRecoveryFixture(options: {
   ownedTurn?: string;
   assistantTurn?: string;
   extraParagraph?: string;
+  extraNonParagraph?: { tag: string; text: string };
+  prefixTurnCount?: number;
   retryInAssistant?: boolean;
   secondAssistant?: boolean;
   laterUser?: boolean;
@@ -359,9 +361,9 @@ function productionRecoveryFixture(options: {
   const user = new FakeNode('user', userText, userText, { 'data-message-id': 'u-owned' });
   ownedSection.appendChild(user);
 
-  const assistantInner = options.extraParagraph
-    ? `${options.literal}\n\n${options.extraParagraph}\n\nRetry`
-    : `${options.literal}\n\nRetry`;
+  const extraVisible = options.extraParagraph ?? options.extraNonParagraph?.text;
+  const retryLabel = options.retryInAssistant !== false ? 'Retry' : '';
+  const assistantInner = [options.literal, extraVisible, retryLabel].filter(Boolean).join('\n\n');
   const assistantSection = new FakeNode('', assistantInner, assistantInner, { 'data-testid': assistantTurn }, 'SECTION');
   const assistant = new FakeNode('assistant', assistantInner, assistantInner, { 'data-message-id': 'a-banner' });
   const banner = new FakeNode('', options.literal, options.literal, {}, 'P');
@@ -369,6 +371,15 @@ function productionRecoveryFixture(options: {
   assistant.appendChild(banner);
   if (options.extraParagraph) {
     assistant.appendChild(new FakeNode('', options.extraParagraph, options.extraParagraph, {}, 'P'));
+  }
+  if (options.extraNonParagraph) {
+    assistant.appendChild(new FakeNode(
+      '',
+      options.extraNonParagraph.text,
+      options.extraNonParagraph.text,
+      {},
+      options.extraNonParagraph.tag,
+    ));
   }
   if (retryInAssistant) {
     assistant.appendChild(new FakeNode('', 'Retry', 'Retry', { 'data-testid': 'regenerate-thread-error-button' }, 'BUTTON'));
@@ -380,6 +391,9 @@ function productionRecoveryFixture(options: {
     nodes.push(assistantSection);
     nodes.push(ownedSection);
   } else {
+    for (let index = 0; index < (options.prefixTurnCount ?? 0); index += 1) {
+      nodes.push(new FakeNode('', '', '', { 'data-testid': `conversation-turn-pre-${index + 1}` }, 'SECTION'));
+    }
     nodes.push(ownedSection);
     if (options.extraTurnBetween) {
       nodes.push(new FakeNode('', '', '', { 'data-testid': 'conversation-turn-1b' }, 'SECTION'));
@@ -508,6 +522,11 @@ test('execute-Issue recovery projection fails closed for near matches, stale tur
       fixture: { marker, literal: timeoutText, extraParagraph: 'DONE' },
     },
     {
+      name: 'mixed banner carrier with non-paragraph reply text',
+      reason: 'mixed_carrier',
+      fixture: { marker, literal: timeoutText, extraNonParagraph: { tag: 'PRE', text: 'partial reply block' } },
+    },
+    {
       name: 'two assistant carriers after the owned prompt',
       reason: 'extra_assistant_carrier',
       fixture: { marker, literal: timeoutText, secondAssistant: true },
@@ -554,24 +573,41 @@ test('execute-Issue recovery projection fails closed for near matches, stale tur
   assert.equal(projectExecutionRecoveryInspect(duplicateRaw)?.reason, 'ambiguous_marker');
 
   const longUser = `${marker}\n\n${'x'.repeat(8_300)}`;
-  const incompleteOwned = new FakeNode('', longUser, longUser, { 'data-testid': 'conversation-turn-1' }, 'SECTION');
-  incompleteOwned.appendChild(new FakeNode('user', longUser, longUser));
-  const incompleteAssistant = new FakeNode('', `${timeoutText}\n\nRetry`, `${timeoutText}\n\nRetry`, { 'data-testid': 'conversation-turn-2' }, 'SECTION');
-  const incompleteCarrier = new FakeNode('assistant', `${timeoutText}\n\nRetry`, `${timeoutText}\n\nRetry`);
-  incompleteCarrier.appendChild(new FakeNode('', timeoutText, timeoutText, {}, 'P'));
-  incompleteCarrier.appendChild(new FakeNode('', 'Retry', 'Retry', { 'data-testid': 'regenerate-thread-error-button' }, 'BUTTON'));
-  incompleteAssistant.appendChild(incompleteCarrier);
-  const incompleteRaw = await evaluateExpression(
+  const longOwned = new FakeNode('', longUser, longUser, { 'data-testid': 'conversation-turn-1' }, 'SECTION');
+  longOwned.appendChild(new FakeNode('user', longUser, longUser));
+  const longAssistant = new FakeNode('', `${timeoutText}\n\nRetry`, `${timeoutText}\n\nRetry`, { 'data-testid': 'conversation-turn-2' }, 'SECTION');
+  const longCarrier = new FakeNode('assistant', `${timeoutText}\n\nRetry`, `${timeoutText}\n\nRetry`);
+  longCarrier.appendChild(new FakeNode('', timeoutText, timeoutText, {}, 'P'));
+  longCarrier.appendChild(new FakeNode('', 'Retry', 'Retry', { 'data-testid': 'regenerate-thread-error-button' }, 'BUTTON'));
+  longAssistant.appendChild(longCarrier);
+  const longRaw = await evaluateExpression(
     INSPECTION_EXPRESSION,
-    [incompleteOwned, incompleteAssistant],
+    [longOwned, longAssistant],
     false,
     'https://chatgpt.com/c/test',
     'complete',
     [new FakeNode('', '', '', { role: 'alert' })],
   );
-  assert.equal(incompleteRaw.execution_recovery_evidence.transcript_complete, false);
-  assert.equal(projectExecutionRecoveryCause(incompleteRaw), null);
-  assert.equal(projectExecutionRecoveryInspect(incompleteRaw)?.reason, 'transcript_incomplete');
+  assert.equal(longRaw.execution_recovery_evidence.transcript_complete, true);
+  assert.equal(projectExecutionRecoveryCause(longRaw), 'message_delivery_timed_out');
+  assert.equal(projectExecutionRecoveryInspect(longRaw)?.cause, 'message_delivery_timed_out');
+
+  const longHistory = productionRecoveryFixture({
+    marker,
+    literal: timeoutText,
+    prefixTurnCount: 21,
+  });
+  const longHistoryRaw = await evaluateExpression(
+    INSPECTION_EXPRESSION,
+    longHistory.nodes,
+    false,
+    'https://chatgpt.com/c/test',
+    'complete',
+    longHistory.productSurfaces,
+  );
+  assert.equal(longHistoryRaw.execution_recovery_evidence.conversation_turn_keys.length > 20, true);
+  assert.equal(projectExecutionRecoveryCause(longHistoryRaw), 'message_delivery_timed_out');
+  assert.equal(projectExecutionRecoveryInspect(longHistoryRaw)?.cause, 'message_delivery_timed_out');
 
   // Documented negative: the retired invented fixture (literal on a status node
   // inside the owned user turn, no assistant carrier) must not classify.

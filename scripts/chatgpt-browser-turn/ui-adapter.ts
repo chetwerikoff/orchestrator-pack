@@ -8,6 +8,7 @@ export * from './ui-adapter-base.ts';
 import * as base from './ui-adapter-base.ts';
 import {
   ASSISTANT_MESSAGE_SELECTOR,
+  ASSISTANT_TURN_ACTION_SELECTOR,
   ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
   CONVERSATION_TURN_SECTION_SELECTOR,
   MESSAGE_AUTHOR_ROLE_ATTR,
@@ -48,6 +49,7 @@ export interface ExecutionRecoveryBannerCandidate {
   readonly turnKey?: string;
   readonly paragraphTexts: readonly string[];
   readonly retryControlPresent: boolean;
+  readonly hasNonBannerContent?: boolean;
 }
 
 export interface ExecutionRecoveryProductErrorEvidence {
@@ -182,6 +184,10 @@ function candidateHasNonBannerParagraph(candidate: ExecutionRecoveryBannerCandid
   return candidate.paragraphTexts.some((text) => !paragraphCause(text) && normalizeExecutionRecoveryProductText(text).length > 0);
 }
 
+function candidateHasNonBannerContent(candidate: ExecutionRecoveryBannerCandidate): boolean {
+  return candidate.hasNonBannerContent === true || candidateHasNonBannerParagraph(candidate);
+}
+
 function emptyClassification(
   reason: ExecutionRecoveryReasonCode,
   extra: Omit<ExecutionRecoveryClassification, 'reason' | 'retry_control_present'> & {
@@ -292,7 +298,7 @@ export function classifyExecutionRecoveryProductError(
       candidate_assistant_turn_key: assistantTurnKey,
     });
   }
-  if (holder.some(candidateHasNonBannerParagraph)) {
+  if (holder.some(candidateHasNonBannerContent)) {
     return emptyClassification('mixed_carrier', {
       retry_control_present: retryInHolder,
       owned_user_turn_key: ownedTurnKey,
@@ -361,13 +367,51 @@ async function readOwnedTurnSnapshot(
         turnSelector: string;
         assistantSelector: string;
         retrySelector: string;
+        chromeSelector: string;
+        timeoutText: string;
+        networkText: string;
       }) => {
+        const normalize = (value: string): string => value.replace(/\s+/g, ' ').replace(/help\.openai\.com \.$/u, 'help.openai.com.').trim();
+        const collapseRe = /(?:\s*(?:show more|read more|see more|view more|continue reading)\s*)+$/iu;
+        const isReservedBanner = (value: string): boolean => {
+          const normalized = normalize(value);
+          if (normalized === args.timeoutText || normalized === args.networkText) return true;
+          const stripped = normalized.replace(collapseRe, '').trim();
+          return stripped === args.timeoutText
+            || stripped === args.networkText
+            || stripped === `${args.timeoutText}…`
+            || stripped === `${args.timeoutText}...`
+            || stripped === `${args.networkText}…`
+            || stripped === `${args.networkText}...`;
+        };
+        const hasNonBannerVisibleText = (assistant: Element): boolean => {
+          let remaining = normalize((assistant as HTMLElement).innerText || '');
+          for (const paragraph of Array.from(assistant.querySelectorAll('p'))) {
+            const text = (paragraph as HTMLElement).innerText || '';
+            if (text && isReservedBanner(text)) remaining = remaining.replace(normalize(text), '');
+          }
+          try {
+            const retry = assistant.querySelector(args.retrySelector);
+            if (retry) remaining = remaining.replace(normalize((retry as HTMLElement).innerText || ''), '');
+          } catch {
+            /* retry absence is classified separately */
+          }
+          try {
+            for (const chrome of Array.from(assistant.querySelectorAll(`${args.chromeSelector}, .sr-only, [role="alert"]`))) {
+              remaining = remaining.replace(normalize((chrome as HTMLElement).innerText || ''), '');
+            }
+          } catch {
+            /* chrome absence is not mixed-carrier evidence */
+          }
+          return remaining.replace(/\s+/g, ' ').trim().length > 0;
+        };
         const rows: Array<{ role: 'user' | 'assistant'; text: string; turnKey?: string }> = [];
         const conversationTurnKeys: string[] = [];
         const bannerCandidates: Array<{
           turnKey?: string;
           paragraphTexts: string[];
           retryControlPresent: boolean;
+          hasNonBannerContent: boolean;
         }> = [];
         let complete = true;
         try {
@@ -406,9 +450,16 @@ async function readOwnedTurnSnapshot(
             } catch {
               complete = false;
             }
+            let hasNonBannerContent = false;
+            try {
+              hasNonBannerContent = hasNonBannerVisibleText(assistant);
+            } catch {
+              complete = false;
+            }
             bannerCandidates.push({
               paragraphTexts,
               retryControlPresent,
+              hasNonBannerContent,
               ...(turnKey ? { turnKey } : {}),
             });
           }
@@ -428,6 +479,9 @@ async function readOwnedTurnSnapshot(
         turnSelector: CONVERSATION_TURN_SECTION_SELECTOR,
         assistantSelector: ASSISTANT_MESSAGE_SELECTOR,
         retrySelector: REGENERATE_THREAD_ERROR_BUTTON_SELECTOR,
+        chromeSelector: ASSISTANT_TURN_ACTION_SELECTOR,
+        timeoutText: MESSAGE_DELIVERY_TIMED_OUT_TEXT,
+        networkText: PRODUCT_NETWORK_ERROR_TEXT,
       })),
       waitMs,
     ) as OwnedTurnSnapshot;

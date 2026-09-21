@@ -141,6 +141,7 @@ interface ExecutionRecoveryProbeBannerCandidate {
   readonly turn_key?: string;
   readonly paragraph_texts: readonly string[];
   readonly retry_control_present: boolean;
+  readonly has_non_banner_content: boolean;
 }
 
 interface ExecutionRecoveryProbeEvidence {
@@ -475,6 +476,7 @@ function validateBannerCandidate(value: unknown): ExecutionRecoveryProbeBannerCa
     || !Array.isArray(value.paragraph_texts)
     || value.paragraph_texts.length > EXECUTION_RECOVERY_MAX_PRODUCT_SURFACES
     || typeof value.retry_control_present !== 'boolean'
+    || typeof value.has_non_banner_content !== 'boolean'
     || (value.turn_key !== undefined && !isBoundedString(value.turn_key, MAX_TEXT_CODE_POINTS))) {
     return undefined;
   }
@@ -486,6 +488,7 @@ function validateBannerCandidate(value: unknown): ExecutionRecoveryProbeBannerCa
   return {
     paragraph_texts: paragraphTexts,
     retry_control_present: value.retry_control_present,
+    has_non_banner_content: value.has_non_banner_content,
     ...(typeof value.turn_key === 'string' && value.turn_key ? { turn_key: value.turn_key } : {}),
   };
 }
@@ -499,9 +502,9 @@ function validateExecutionRecoveryEvidence(value: unknown): ExecutionRecoveryPro
     || !Array.isArray(value.product_surfaces)
     || value.product_surfaces.length > EXECUTION_RECOVERY_MAX_PRODUCT_SURFACES
     || !Array.isArray(value.conversation_turn_keys)
-    || value.conversation_turn_keys.length > EXECUTION_RECOVERY_MAX_PRODUCT_SURFACES
+    || value.conversation_turn_keys.length > MAX_MESSAGE_SUMMARIES
     || !Array.isArray(value.banner_candidates)
-    || value.banner_candidates.length > EXECUTION_RECOVERY_MAX_PRODUCT_SURFACES) {
+    || value.banner_candidates.length > MAX_MESSAGE_SUMMARIES) {
     return undefined;
   }
   const messages: ExecutionRecoveryMessage[] = [];
@@ -557,6 +560,7 @@ function toClassifierBannerCandidates(
   return candidates.map((candidate) => ({
     paragraphTexts: candidate.paragraph_texts,
     retryControlPresent: candidate.retry_control_present,
+    hasNonBannerContent: candidate.has_non_banner_content,
     ...(candidate.turn_key ? { turnKey: candidate.turn_key } : {}),
   }));
 }
@@ -1098,6 +1102,10 @@ function inspectionExpression(): string {
     const TURN_SELECTOR = ${turnSelector};
     const ASSISTANT_SELECTOR = ${assistantSelector};
     const RETRY_SELECTOR = ${retrySelector};
+    const CHROME_SELECTOR = ${JSON.stringify(`${ASSISTANT_TURN_ACTION_SELECTOR}, .sr-only, [role="alert"]`)};
+    const TIMEOUT_TEXT = ${JSON.stringify('Message delivery timed out. Please try again.')};
+    const NETWORK_TEXT = ${JSON.stringify('A network error occurred. Please check your connection and try again. If this issue persists please contact us through our help center at help.openai.com.')};
+    const MAX_RECOVERY_TURNS = ${MAX_MESSAGE_SUMMARIES};
     const points = (value) => Array.from(value);
     const head = (value) => points(value).slice(0, MAX_TEXT).join('');
     const tail = (value) => { const p = points(value); return p.slice(Math.max(0, p.length - MAX_TEXT)).join(''); };
@@ -1143,12 +1151,11 @@ function inspectionExpression(): string {
         innerText: await digest(innerText),
         textContent: await digest(textContent),
       });
-      if (points(innerText).length > MAX_RECOVERY_TEXT) {
-        recoveryComplete = false;
-      } else {
+      {
         let turnKey;
         try { turnKey = entry.node.closest(TURN_SELECTOR)?.getAttribute('data-testid') || undefined; } catch { recoveryComplete = false; }
-        recoveryMessages.push({ role: entry.role, text: innerText, ...(turnKey ? { turn_key: turnKey } : {}) });
+        const boundedText = points(innerText).slice(0, MAX_RECOVERY_TEXT).join('');
+        recoveryMessages.push({ role: entry.role, text: boundedText, ...(turnKey ? { turn_key: turnKey } : {}) });
       }
     }
     const lastAssistant = [...observed].reverse().find((entry) => entry.role === 'assistant');
@@ -1169,7 +1176,6 @@ function inspectionExpression(): string {
     const productSurfaces = [];
     try {
       const rawProductSurfaces = Array.from(document.querySelectorAll(PRODUCT_SELECTOR));
-      if (rawProductSurfaces.length > MAX_PRODUCT_SURFACES) recoveryComplete = false;
       for (const surface of rawProductSurfaces.slice(Math.max(0, rawProductSurfaces.length - MAX_PRODUCT_SURFACES))) {
         const text = typeof surface.innerText === 'string' ? surface.innerText : null;
         if (text === null || points(text).length > MAX_RECOVERY_TEXT) {
@@ -1189,31 +1195,64 @@ function inspectionExpression(): string {
         const turnKey = section.getAttribute('data-testid');
         if (typeof turnKey === 'string' && turnKey) conversationTurnKeys.push(turnKey);
       }
-      if (conversationTurnKeys.length > MAX_PRODUCT_SURFACES) recoveryComplete = false;
+      if (conversationTurnKeys.length > MAX_RECOVERY_TURNS) {
+        conversationTurnKeys.splice(0, conversationTurnKeys.length - MAX_RECOVERY_TURNS);
+      }
     } catch {
       recoveryComplete = false;
     }
     const bannerCandidates = [];
     try {
       const assistants = Array.from(document.querySelectorAll(ASSISTANT_SELECTOR));
-      if (assistants.length > MAX_PRODUCT_SURFACES) recoveryComplete = false;
-      for (const assistant of assistants.slice(0, MAX_PRODUCT_SURFACES)) {
+      const selectedAssistants = assistants.slice(Math.max(0, assistants.length - MAX_RECOVERY_TURNS));
+      const collapseRe = /(?:\\s*(?:show more|read more|see more|view more|continue reading)\\s*)+$/iu;
+      const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').replace(/help\\.openai\\.com \\.$/u, 'help.openai.com.').trim();
+      const isReservedBanner = (value) => {
+        const normalized = normalize(value);
+        if (normalized === TIMEOUT_TEXT || normalized === NETWORK_TEXT) return true;
+        const stripped = normalized.replace(collapseRe, '').trim();
+        return stripped === TIMEOUT_TEXT || stripped === NETWORK_TEXT
+          || stripped === TIMEOUT_TEXT + '…' || stripped === TIMEOUT_TEXT + '...'
+          || stripped === NETWORK_TEXT + '…' || stripped === NETWORK_TEXT + '...';
+      };
+      const hasNonBannerVisibleText = (assistant) => {
+        let remaining = normalize(assistant.innerText || '');
+        for (const paragraph of Array.from(assistant.querySelectorAll('p'))) {
+          const text = paragraph.innerText || '';
+          if (text && isReservedBanner(text)) remaining = remaining.replace(normalize(text), '');
+        }
+        try {
+          const retry = assistant.querySelector(RETRY_SELECTOR);
+          if (retry) remaining = remaining.replace(normalize(retry.innerText || ''), '');
+        } catch {}
+        try {
+          for (const chrome of Array.from(assistant.querySelectorAll(CHROME_SELECTOR))) {
+            remaining = remaining.replace(normalize(chrome.innerText || ''), '');
+          }
+        } catch {}
+        return remaining.replace(/\\s+/g, ' ').trim().length > 0;
+      };
+      for (const assistant of selectedAssistants) {
         const paragraphTexts = [];
         for (const paragraph of Array.from(assistant.querySelectorAll('p'))) {
           const text = typeof paragraph.innerText === 'string' ? paragraph.innerText : null;
-          if (text === null || points(text).length > MAX_RECOVERY_TEXT) {
+          if (text === null) {
             recoveryComplete = false;
             continue;
           }
-          if (text) paragraphTexts.push(text);
+          const bounded = points(text).slice(0, MAX_RECOVERY_TEXT).join('');
+          if (bounded) paragraphTexts.push(bounded);
         }
         let retryControlPresent = false;
         try { retryControlPresent = Boolean(assistant.querySelector(RETRY_SELECTOR)); } catch { recoveryComplete = false; }
+        let hasNonBannerContent = false;
+        try { hasNonBannerContent = hasNonBannerVisibleText(assistant); } catch { recoveryComplete = false; }
         let turnKey;
         try { turnKey = assistant.closest(TURN_SELECTOR)?.getAttribute('data-testid') || undefined; } catch { recoveryComplete = false; }
         bannerCandidates.push({
           paragraph_texts: paragraphTexts,
           retry_control_present: retryControlPresent,
+          has_non_banner_content: hasNonBannerContent,
           ...(turnKey ? { turn_key: turnKey } : {}),
         });
       }
@@ -1240,7 +1279,7 @@ function inspectionExpression(): string {
         generation_in_progress: generating,
         messages: recoveryMessages,
         product_surfaces: productSurfaces,
-        conversation_turn_keys: conversationTurnKeys.slice(0, MAX_PRODUCT_SURFACES),
+        conversation_turn_keys: conversationTurnKeys,
         banner_candidates: bannerCandidates,
       },
     };
