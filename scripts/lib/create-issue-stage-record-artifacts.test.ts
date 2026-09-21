@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
 import {
@@ -12,6 +13,7 @@ import {
   STAGE_EVIDENCE_SCHEMA,
   classifyReconciliationTransport,
   inspectAcceptanceArtifacts,
+  locateGovernedAuthorDispositionBlock,
   produceAcceptanceArtifacts,
   reconcileCreateIssueStage,
   stageReceiptPayloadsMatchExceptDerivedChain,
@@ -2602,5 +2604,99 @@ describe('proven zero-send first attempts are retry-eligible (Issue #1981)', () 
       turn_result_cause: 'input_invalid:invocation_id_invalid',
       delivery: 'not-sent',
     }, 1)).toBeNull();
+  });
+});
+
+describe('governed author disposition block shapes (Issue #1983)', () => {
+  const fenceless1978R02Path = join(
+    fileURLToPath(new URL('../..', import.meta.url)),
+    'tests/external-output-references/create-issue-author-reply-fenceless-1978-r02.txt',
+  );
+
+  it('AC1: locates and parses the verbatim fenceless 1978-r02 harvest', () => {
+    const fixtureText = readFileSync(fenceless1978R02Path, 'utf8');
+    const located = locateGovernedAuthorDispositionBlock(fixtureText);
+    expect(located).toEqual(expect.objectContaining({ body: expect.any(String) }));
+    if (!('body' in located)) throw new Error('expected a located body');
+    const parsed = JSON.parse(located.body) as {
+      schema: string;
+      sourceRevision: string;
+      findings: unknown[];
+    };
+    expect(parsed.schema).toBe('create-issue-author-dispositions/v1');
+    expect(parsed.sourceRevision).toBe('r02');
+    expect(parsed.findings).toHaveLength(5);
+  });
+
+  it('AC2: the fenced wrap of the same harvest locates to JSON deep-equal with AC1', () => {
+    const fixtureText = readFileSync(fenceless1978R02Path, 'utf8');
+    const fencelessLocated = locateGovernedAuthorDispositionBlock(fixtureText);
+    if (!('body' in fencelessLocated)) throw new Error('expected a located body');
+    const fixtureWithoutFirstLine = fixtureText.slice(fixtureText.indexOf('\n') + 1);
+    const fenced = '```create-issue-author-dispositions/v1\n' + fixtureWithoutFirstLine + '\n```';
+    const fencedLocated = locateGovernedAuthorDispositionBlock(fenced);
+    if (!('body' in fencedLocated)) throw new Error('expected a located fenced body');
+    expect(JSON.parse(fencedLocated.body)).toEqual(JSON.parse(fencelessLocated.body));
+  });
+
+  it('AC3: locates and parses the #1968 prose-then-fenced single-line JSON shape', () => {
+    const json = JSON.stringify({
+      schema: AUTHOR_DISPOSITIONS_SCHEMA,
+      sourceRevision: REVISION,
+      predecessorStage: 'architectural',
+      findings: [],
+      m4: { inventory: [] },
+    });
+    const text = ['Governed author output:', '', '```create-issue-author-dispositions/v1', json, '```', ''].join('\n');
+    const located = locateGovernedAuthorDispositionBlock(text);
+    if (!('body' in located)) throw new Error('expected a located body');
+    expect(JSON.parse(located.body)).toEqual(JSON.parse(json));
+  });
+
+  it('AC4: two block-start lines are rejected as multiple', () => {
+    const json = '{"schema":"create-issue-author-dispositions/v1"}';
+    const twoBare = ['create-issue-author-dispositions/v1', json, 'create-issue-author-dispositions/v1', json].join('\n');
+    expect(locateGovernedAuthorDispositionBlock(twoBare)).toEqual({ error: 'multiple' });
+    const fencedPlusBare = [
+      '```create-issue-author-dispositions/v1',
+      json,
+      '```',
+      'create-issue-author-dispositions/v1',
+      json,
+    ].join('\n');
+    expect(locateGovernedAuthorDispositionBlock(fencedPlusBare)).toEqual({ error: 'multiple' });
+  });
+
+  it('AC5: a bare label followed by non-JSON fails JSON.parse on the located body and inspect path', () => {
+    const located = locateGovernedAuthorDispositionBlock('create-issue-author-dispositions/v1\nnot json\n');
+    expect(located).toEqual(expect.objectContaining({ body: 'not json' }));
+    if (!('body' in located)) throw new Error('expected a located body');
+    expect(() => JSON.parse(located.body)).toThrow();
+    const input = fixture({ transportClassification: 'incident' });
+    writeFileSync(input.authorReplyPath, 'create-issue-author-dispositions/v1\nnot json\n');
+    const authorReason = inspect(input).missing.find((item) => item.artifact === 'governed author output')?.reason ?? '';
+    expect(authorReason).toContain('governed author disposition block is malformed JSON');
+    expect(authorReason).toContain('authority=author-owned');
+  });
+
+  it('AC6: a schema field without a block-start line is none', () => {
+    expect(locateGovernedAuthorDispositionBlock('{"schema":"create-issue-author-dispositions/v1"}')).toEqual({ error: 'none' });
+  });
+
+  it('produce-artifacts accepts a fenceless harvested author reply', () => {
+    const input = fixture({ transportClassification: 'complete', withTurnResult: true, withCapture: true });
+    writeFileSync(input.authorReplyPath, [
+      'create-issue-author-dispositions/v1',
+      JSON.stringify({
+        schema: AUTHOR_DISPOSITIONS_SCHEMA,
+        sourceRevision: REVISION,
+        predecessorStage: 'architectural',
+        findings: [],
+        m4: { inventory: [] },
+      }),
+      '',
+    ].join('\n'));
+    const result = produce(input);
+    expect(result.ok, result.errors.join('\n')).toBe(true);
   });
 });

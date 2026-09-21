@@ -7,7 +7,8 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { checkFindingLedgerGuard, runCli as runFindingLedgerCli } from './finding-ledger-guard.mjs';
 import { loadCanonicalReceiptInventory } from './stage-completeness-guard.ts';
-import { runStageFinalizeCli, stageFinalizeUsage } from './lib/create-issue-stage-record-cli.ts';
+import { parseStageFinalizeArgs, runStageFinalizeCli, stageFinalizeUsage } from './lib/create-issue-stage-record-cli.ts';
+import { PUBLIC_ACTORS } from './lib/create-issue-stage-record-marker.ts';
 import { ACCEPTANCE_ARTIFACT_OUTPUT_NAMES, ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS, TURN_RESULT_SCHEMA, stageCompletenessReceiptFileName } from './lib/create-issue-stage-record-artifacts.ts';
 import {
   deriveReviewEpisodeState,
@@ -1051,5 +1052,70 @@ describe('proven zero-send first attempts are retry-eligible (Issue #1981)', () 
     ], 'none');
     expect(state.errors.join('\n')).not.toContain('must be classified retry-eligible');
     expect(state.errors, state.errors.join('\n')).toEqual([]);
+  });
+});
+
+describe('--public-actor argv validation (Issue #1980)', () => {
+  const startCycleArgv = [
+    'node',
+    'scripts/create-issue-stage-finalize.ts',
+    'start-cycle',
+    '--issue-number',
+    '1',
+    '--source-revision',
+    'r01',
+    '--stage',
+    'competitive',
+  ];
+
+  it('AC1: rejects flow-manager at argv parse with the accepted set in stderr', () => {
+    const chunks: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      chunks.push(typeof chunk === 'string' ? chunk : String(chunk));
+      return true;
+    });
+    try {
+      const code = runStageFinalizeCli([
+        ...startCycleArgv,
+        '--public-actor',
+        'flow-manager',
+        '--json',
+      ]);
+      const stderr = chunks.join('');
+      expect(code).toBe(2);
+      expect(stderr).toContain('flow-manager');
+      expect(stderr).toContain('opencode-flow-manager');
+      expect(stderr).toContain('cursor-flow-manager');
+      expect(stderr).toContain('codex-flow-manager');
+      expect(stderr).toContain('other-flow-manager');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('AC2: rejects --public-actor as the last token with received ""', () => {
+    const chunks: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      chunks.push(typeof chunk === 'string' ? chunk : String(chunk));
+      return true;
+    });
+    try {
+      const code = runStageFinalizeCli([...startCycleArgv, '--public-actor']);
+      const stderr = chunks.join('');
+      expect(code).toBe(2);
+      expect(stderr).toContain('received ""');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('AC3: parsing succeeds for each accepted actor', () => {
+    for (const token of PUBLIC_ACTORS) {
+      expect(parseStageFinalizeArgs([...startCycleArgv, '--public-actor', token]).publicActor).toBe(token);
+    }
+  });
+
+  it('AC5: stageFinalizeUsage lists the accepted public actors', () => {
+    expect(stageFinalizeUsage()).toContain('opencode-flow-manager|cursor-flow-manager|codex-flow-manager|other-flow-manager');
   });
 });
