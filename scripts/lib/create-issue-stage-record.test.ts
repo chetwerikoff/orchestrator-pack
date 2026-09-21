@@ -17,8 +17,11 @@ import {
   fetchIssueComments,
   withGhDeadline,
   parseJournalEvents,
-  syncIssueProjectionLabels,
+  persistCycleId,
   readPendingEvent,
+  readPersistedCycleId,
+  syncIssueProjectionLabels,
+  writePendingEvent,
 } from './create-issue-stage-record-gh.ts';
 import {
   detectAcceptedRevisionDrift,
@@ -29,6 +32,7 @@ import {
   startReviewCycle,
 } from './create-issue-stage-record-core.ts';
 import { parseConsumableStageReceipt } from './create-issue-stage-record-receipt.ts';
+import { runStageFinalizeCli } from './create-issue-stage-record-cli.ts';
 import {
   createMockGhState,
   createMockTransport,
@@ -37,7 +41,7 @@ import {
   makeTempDir,
   sampleStageReceipt,
 } from './create-issue-stage-record-test-helpers.ts';
-import type { CycleEventLogical, StageEventLogical, TrustedComment } from './create-issue-stage-record-types.ts';
+import type { CycleEventLogical, PublicActor, StageEventLogical, TrustedComment } from './create-issue-stage-record-types.ts';
 import { CYCLE_SCHEMA, FINAL_SCHEMA, STAGE_SCHEMA } from './create-issue-stage-record-types.ts';
 
 describe('create-issue-stage-record marker and lineage', () => {
@@ -608,6 +612,229 @@ afterEach(() => {
   cleanupTempDirs();
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+function issue1976PoisonBody(overrides: Record<string, unknown> = {}): string {
+  const cycleId = '2bfd8bce-fa3d-47b7-aa02-e85b13432a4c';
+  const payload = {
+    schema: CYCLE_SCHEMA,
+    'event-key': cycleId,
+    'cycle-id': cycleId,
+    'predecessor-cycle-id': 'none',
+    'source-revision': 'r01',
+    tier: 'T2',
+    'public-actor': 'flow-manager',
+    ...overrides,
+  };
+  return [
+    `<!-- opk-create-issue-journal:${CYCLE_SCHEMA}:${cycleId} -->`,
+    '```json',
+    JSON.stringify(payload, null, 2),
+    '```',
+  ].join('\n');
+}
+
+function issue1976PoisonComment(body = issue1976PoisonBody()): TrustedComment {
+  return {
+    id: 5757262517,
+    body,
+    createdAt: '2026-09-20T00:00:00.000Z',
+    updatedAt: '2026-09-20T00:00:00.000Z',
+    userLogin: 'chetwerikoff',
+    authorAssociation: 'OWNER',
+  };
+}
+
+function t2StageReceipt(cycleId: string, stageAttemptId = 'attempt-1978') {
+  return {
+    tier: 'T2',
+    stage: 'architectural-review',
+    cycleId,
+    stageAttemptId,
+    policyVersion: 'triple-source/v1',
+    sourceRevision: 'r01',
+    outcome: 'complete',
+    reviewerCardinality: 3,
+    completedSourceCount: 3,
+    producerEvidence: 'not-applicable',
+    tierTransition: 'none',
+    cycleBinding: { cycleId, sourceRevision: 'r01', boundBeforeLaunch: true },
+  };
+}
+
+describe('Issue #1978 invalid public-actor recovery', () => {
+  it('rejects flow-manager at the CLI and core boundaries before any GitHub call', () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const exitCode = runStageFinalizeCli([
+      'node',
+      'scripts/create-issue-stage-finalize.ts',
+      'start-cycle',
+      '--repo', repo,
+      '--issue-number', String(issueNumber),
+      '--source-revision', 'r01',
+      '--stage', 'architectural-review',
+      '--tier', 'T2',
+      '--public-actor', 'flow-manager',
+    ]);
+    expect(exitCode).toBe(2);
+    expect(stderr.mock.calls.flat().join('')).toContain('flow-manager');
+
+    let ghCalls = 0;
+    const result = startReviewCycle({
+      runGh() {
+        ghCalls += 1;
+        return { exitCode: 1, stdout: '', stderr: 'must not be called' };
+      },
+    }, {
+      repo,
+      issueNumber,
+      sourceRevision: 'r01',
+      tier: 'T2',
+      publicActor: 'flow-manager' as unknown as PublicActor,
+      workdir: makeCliTempDir(),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics.map((item) => item.message).join('\n')).toContain('flow-manager');
+    expect(ghCalls).toBe(0);
+  });
+
+  it('supersedes the exact #1976 poison without resending it and keeps later publications bounded', () => {
+    vi.useFakeTimers({ now: new Date('2026-09-21T00:00:00.000Z') });
+    const poison = issue1976PoisonComment();
+    const poisonBytes = poison.body;
+    const state = createMockGhState({
+      comments: [poison],
+      issue: { title: 't', body: '<!-- source-revision: r01 -->\nrevision r01', labels: ['spec-review:in-progress'] },
+      nextCommentId: 5757262518,
+    });
+    const transport = createMockTransport(state);
+    const workdir = makeCliTempDir();
+    writePendingEvent(workdir, {
+      schema: CYCLE_SCHEMA,
+      eventKey: '2bfd8bce-fa3d-47b7-aa02-e85b13432a4c',
+      body: poison.body,
+      createdAt: poison.createdAt,
+      delivery: 'delayed',
+      deliveryFailureClass: 'comment-create',
+      firstFailureAt: poison.createdAt,
+    });
+    persistCycleId(workdir, '2bfd8bce-fa3d-47b7-aa02-e85b13432a4c');
+
+    const retry = retryPendingEvents(transport, repo, issueNumber, workdir, { pageSize: 100 });
+    expect(retry).toHaveLength(1);
+    expect(retry[0]?.ok).toBe(false);
+    expect(retry[0]?.recovery).toMatchObject({
+      kind: 'invalid-public-actor-successor',
+      poisonCommentId: 5757262517,
+      poisonedCycleId: '2bfd8bce-fa3d-47b7-aa02-e85b13432a4c',
+      predecessorCycleId: 'none',
+      sourceRevision: 'r01',
+      tier: 'T2',
+      invalidPublicActor: 'flow-manager',
+    });
+    expect(state.commentCreateAttempts).toEqual([]);
+    expect(state.comments[0]?.body).toBe(poisonBytes);
+
+    const successor = startReviewCycle(transport, {
+      repo,
+      issueNumber,
+      sourceRevision: 'r01',
+      tier: 'T2',
+      publicActor: 'cursor-flow-manager',
+      workdir,
+      census: { pageSize: 100 },
+    });
+    expect(successor.ok, successor.diagnostics.map((item) => item.message).join('\n')).toBe(true);
+    expect(successor.cycleId).toBeTruthy();
+    expect(successor.cycleId).not.toBe('2bfd8bce-fa3d-47b7-aa02-e85b13432a4c');
+    expect(state.comments).toHaveLength(2);
+    expect(state.comments[0]?.body).toBe(poisonBytes);
+    expect(parseLogicalFromCommentBody(state.comments[0]!.body)).toBeNull();
+    const successorLogical = parseLogicalFromCommentBody(state.comments[1]!.body);
+    expect(successorLogical).toMatchObject({
+      schema: CYCLE_SCHEMA,
+      'cycle-id': successor.cycleId,
+      'predecessor-cycle-id': 'none',
+      'source-revision': 'r01',
+      tier: 'T2',
+      'public-actor': 'cursor-flow-manager',
+    });
+    expect(readPendingEvent(workdir, '2bfd8bce-fa3d-47b7-aa02-e85b13432a4c')).toBeNull();
+    expect(readPersistedCycleId(workdir)).toBe(successor.cycleId);
+
+    const stage = publishSettledStageRecord(transport, {
+      repo,
+      issueNumber,
+      receipt: t2StageReceipt(successor.cycleId!),
+      workdir,
+      census: { pageSize: 100 },
+    });
+    expect(stage.ok, stage.diagnostics.map((item) => item.message).join('\n')).toBe(true);
+    expect(state.comments).toHaveLength(3);
+    expect(state.comments[0]?.body).toBe(poisonBytes);
+
+    const unrelatedMalformed: TrustedComment = {
+      id: 5757262520,
+      body: '<!-- opk-create-issue-journal:create-issue-review-cycle/v1:unrelated -->\n```json\n{"schema":"create-issue-review-cycle/v1","event-key":"different"}\n```',
+      createdAt: '2026-09-21T00:01:00.000Z',
+      updatedAt: '2026-09-21T00:01:00.000Z',
+      userLogin: 'chetwerikoff',
+      authorAssociation: 'OWNER',
+    };
+    state.comments.push(unrelatedMalformed);
+    const attemptsBefore = state.commentCreateAttempts.length;
+    const blocked = publishSettledStageRecord(transport, {
+      repo,
+      issueNumber,
+      receipt: t2StageReceipt(successor.cycleId!, 'attempt-1978-second'),
+      workdir,
+      census: { pageSize: 100 },
+    });
+    expect(blocked.ok).toBe(false);
+    expect(blocked.diagnostics.map((item) => item.code)).toContain('malformed-marker');
+    expect(state.commentCreateAttempts).toHaveLength(attemptsBefore);
+    expect(state.comments[0]?.body).toBe(poisonBytes);
+  });
+
+  it('keeps the malformed poison blocking when the local recovery identity is absent', () => {
+    const poison = issue1976PoisonComment();
+    const state = createMockGhState({
+      comments: [poison],
+      issue: { title: 't', body: '<!-- source-revision: r01 -->\nrevision r01', labels: [] },
+      nextCommentId: 5757262518,
+    });
+    const result = startReviewCycle(createMockTransport(state), {
+      repo,
+      issueNumber,
+      sourceRevision: 'r01',
+      tier: 'T2',
+      publicActor: 'cursor-flow-manager',
+      workdir: makeCliTempDir(),
+      census: { pageSize: 100 },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics.map((item) => item.code)).toContain('malformed-marker');
+    expect(state.commentCreateAttempts).toEqual([]);
+  });
+
+  it.each(['opencode-flow-manager', 'cursor-flow-manager'] as const)(
+    'continues to publish a valid %s cycle',
+    (publicActor) => {
+      const state = createMockGhState({
+        issue: { title: 't', body: '<!-- source-revision: r01 -->\nrevision r01', labels: [] },
+      });
+      const result = startReviewCycle(createMockTransport(state), {
+        repo,
+        issueNumber,
+        sourceRevision: 'r01',
+        tier: 'T2',
+        publicActor,
+        workdir: makeCliTempDir(),
+      });
+      expect(result.ok, result.diagnostics.map((item) => item.message).join('\n')).toBe(true);
+      expect(state.comments).toHaveLength(1);
+    },
+  );
 });
 
 describe('create-issue-stage-finalize integration', () => {
