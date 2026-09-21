@@ -43,6 +43,13 @@ export const PUBLIC_ACTORS = new Set<PublicActor>([
   'other-flow-manager',
 ]);
 
+export const INVALID_PUBLIC_ACTOR_POISON_COMMENT_ID = 5757262517;
+
+export function isInvalidPublicActorPoisonTrustDiagnostic(diagnostic: LineageDiagnostic): boolean {
+  return diagnostic.commentId === INVALID_PUBLIC_ACTOR_POISON_COMMENT_ID
+    && (diagnostic.code === 'foreign-comment' || diagnostic.code === 'edited-comment');
+}
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }

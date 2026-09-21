@@ -1848,6 +1848,31 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(blocked.errors.join('\n')).toContain('malformed-marker');
   });
 
+  it.each([
+    ['edited', { updated_at: '2026-08-06T04:01:00Z' }],
+    ['non-owner', { user: { login: 'someone-else' } }],
+  ])('fails closed for %s journal-marked #1976 poison during stage-time and final artifact production', (_label, overrides) => {
+    const poison = { ...issue1976PoisonJournalComment(), ...overrides };
+
+    const stageInput = fixture({ transportClassification: 'incident' });
+    const stageResult = produceStageTime(stageInput, transport({
+      census: [...stageInput.reviewComments, comment(stageInput.body, { issueNumber: stageInput.issueNumber })],
+      cycleComments: [poison, issue1976RecoverySuccessorComment()],
+      issueNumber: stageInput.issueNumber,
+    }));
+    expect(stageResult.ok).toBe(false);
+    expect(stageResult.errors.join('\n')).toContain('journal-marked comment');
+
+    const finalInput = fixture({ transportClassification: 'incident' });
+    const finalResult = produce(finalInput, transport({
+      census: [...finalInput.reviewComments, comment(finalInput.body, { issueNumber: finalInput.issueNumber })],
+      cycleComments: [poison, issue1976RecoverySuccessorComment()],
+      issueNumber: finalInput.issueNumber,
+    }));
+    expect(finalResult.ok).toBe(false);
+    expect(finalResult.errors.join('\n')).toContain('journal-marked comment');
+  });
+
   it('publishes and confirms final acceptance through the recovered #1976 witness and blocks a second malformed marker', () => {
     const input = fixture({ transportClassification: 'incident' });
     const artifactSource = transport({

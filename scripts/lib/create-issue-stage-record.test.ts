@@ -817,6 +817,105 @@ describe('Issue #1978 invalid public-actor recovery', () => {
     expect(state.commentCreateAttempts).toEqual([]);
   });
 
+  it.each([
+    ['edited', { updatedAt: '2026-09-20T00:00:01.000Z' }],
+    ['non-owner', { userLogin: 'someone-else' }],
+  ] as const)('keeps %s #1976 poison evidence fail-closed', (_label, overrides) => {
+    const poison = { ...issue1976PoisonComment(), ...overrides };
+    const state = createMockGhState({
+      comments: [poison],
+      issue: { title: 't', body: '<!-- source-revision: r01 -->\nrevision r01', labels: [] },
+    });
+    const workdir = makeCliTempDir();
+    persistCycleId(workdir, '2bfd8bce-fa3d-47b7-aa02-e85b13432a4c');
+
+    const result = startReviewCycle(createMockTransport(state), {
+      repo,
+      issueNumber,
+      sourceRevision: 'r01',
+      tier: 'T2',
+      publicActor: 'cursor-flow-manager',
+      workdir,
+      census: { pageSize: 100 },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics.map((item) => item.code)).toEqual(expect.arrayContaining([
+      _label === 'edited' ? 'edited-comment' : 'foreign-comment',
+    ]));
+    expect(state.commentCreateAttempts).toEqual([]);
+    expect(readPersistedCycleId(workdir)).toBe('2bfd8bce-fa3d-47b7-aa02-e85b13432a4c');
+  });
+
+  it.each([
+    ['source revision', 'r02', 'T2'],
+    ['tier', 'r01', 'T3'],
+  ] as const)('refuses poison recovery with a mismatched %s before mutation', (_label, sourceRevision, tier) => {
+    const poison = issue1976PoisonComment();
+    const state = createMockGhState({
+      comments: [poison],
+      issue: { title: 't', body: '<!-- source-revision: r01 -->\nrevision r01', labels: [] },
+    });
+    const workdir = makeCliTempDir();
+    persistCycleId(workdir, '2bfd8bce-fa3d-47b7-aa02-e85b13432a4c');
+
+    const result = startReviewCycle(createMockTransport(state), {
+      repo,
+      issueNumber,
+      sourceRevision,
+      tier,
+      publicActor: 'cursor-flow-manager',
+      workdir,
+      census: { pageSize: 100 },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics.map((item) => item.message).join('\n')).toContain('poison recovery binding mismatch');
+    expect(state.commentCreateAttempts).toEqual([]);
+    expect(readPersistedCycleId(workdir)).toBe('2bfd8bce-fa3d-47b7-aa02-e85b13432a4c');
+  });
+
+  it('preserves the persisted poison identity through a failed successor publication and lets retry-pending confirm it', () => {
+    const poison = issue1976PoisonComment();
+    const state = createMockGhState({
+      comments: [poison],
+      issue: { title: 't', body: '<!-- source-revision: r01 -->\nrevision r01', labels: ['spec-review:in-progress'] },
+      nextCommentId: 5757262518,
+      failCreate: true,
+    });
+    const transport = createMockTransport(state);
+    const workdir = makeCliTempDir();
+    writePendingEvent(workdir, {
+      schema: CYCLE_SCHEMA,
+      eventKey: '2bfd8bce-fa3d-47b7-aa02-e85b13432a4c',
+      body: poison.body,
+      createdAt: poison.createdAt,
+      delivery: 'delayed',
+      deliveryFailureClass: 'comment-create',
+      firstFailureAt: poison.createdAt,
+    });
+    persistCycleId(workdir, '2bfd8bce-fa3d-47b7-aa02-e85b13432a4c');
+
+    const failed = startReviewCycle(transport, {
+      repo,
+      issueNumber,
+      sourceRevision: 'r01',
+      tier: 'T2',
+      publicActor: 'cursor-flow-manager',
+      workdir,
+      census: { pageSize: 100 },
+    });
+    expect(failed.ok).toBe(false);
+    expect(readPersistedCycleId(workdir)).toBe('2bfd8bce-fa3d-47b7-aa02-e85b13432a4c');
+
+    state.failCreate = false;
+    const retried = retryPendingEvents(transport, repo, issueNumber, workdir, { pageSize: 100 });
+    expect(retried.some((result) => result.ok)).toBe(true);
+    expect(state.comments).toHaveLength(2);
+    expect(readPersistedCycleId(workdir)).not.toBe('2bfd8bce-fa3d-47b7-aa02-e85b13432a4c');
+    expect(readPendingEvent(workdir, '2bfd8bce-fa3d-47b7-aa02-e85b13432a4c')).toBeNull();
+  });
+
   it.each(['opencode-flow-manager', 'cursor-flow-manager'] as const)(
     'continues to publish a valid %s cycle',
     (publicActor) => {

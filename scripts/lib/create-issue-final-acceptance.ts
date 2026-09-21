@@ -1,6 +1,7 @@
 import { realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
+  isInvalidPublicActorPoisonTrustDiagnostic,
   isPublicActor,
   logicalFingerprint,
   resolveRecoveredInvalidPublicActorPoisonWitness,
@@ -64,10 +65,12 @@ function blockingMalformedJournalDiagnostics(censusState: FinalAcceptanceCensusS
     parsedDiagnostics: censusState.parsed.diagnostics,
     lineage: censusState.lineage,
   });
-  return censusState.parsed.diagnostics.filter((diagnostic) => (
+  const poisonTrustFailures = censusState.fetched.diagnostics.filter(isInvalidPublicActorPoisonTrustDiagnostic);
+  const malformed = censusState.parsed.diagnostics.filter((diagnostic) => (
     diagnostic.code === 'malformed-marker'
     && diagnostic.commentId !== recoveredPoison?.poisonCommentId
   ));
+  return [...poisonTrustFailures, ...malformed];
 }
 
 export function validatePublishBodyBinding(reviewedBody: string, currentBody: string): string[] {

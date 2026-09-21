@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { hasBlockingLineageConflict } from './create-issue-stage-record-lineage.ts';
 import {
+  isInvalidPublicActorPoisonTrustDiagnostic,
   isPublicActor,
   logicalFingerprint,
   parseInvalidPublicActorCycleBody,
@@ -124,11 +125,13 @@ function blockingMalformedMarkers(
   locallyAuthorizedPoisonCommentId?: number,
 ): LineageDiagnostic[] {
   const durablePoisonCommentId = recoveredPoisonCommentId(censusState);
-  return censusState.parsed.diagnostics.filter((diagnostic) => (
+  const poisonTrustFailures = censusState.fetched.diagnostics.filter(isInvalidPublicActorPoisonTrustDiagnostic);
+  const malformed = censusState.parsed.diagnostics.filter((diagnostic) => (
     diagnostic.code === 'malformed-marker'
     && diagnostic.commentId !== durablePoisonCommentId
     && diagnostic.commentId !== locallyAuthorizedPoisonCommentId
   ));
+  return [...poisonTrustFailures, ...malformed];
 }
 
 function localInvalidActorPoisonRecovery(
@@ -558,6 +561,24 @@ export function retryPendingEvents(
       continue;
     }
     const fingerprint = logicalFingerprint(logical);
+    let retryPoisonRecovery: OperationResult['recovery'] | null = null;
+    if (item.schema === CYCLE_SCHEMA && logical.schema === CYCLE_SCHEMA) {
+      try {
+        const censusState = loadIssueJournalCensus(transport, repo, issueNumber, census);
+        if (censusState.fetched.commentsComplete) {
+          const candidate = localInvalidActorPoisonRecovery(censusState, resolvedWorkdir);
+          if (candidate
+            && logical['cycle-id'] !== candidate.poisonedCycleId
+            && logical['predecessor-cycle-id'] === candidate.predecessorCycleId
+            && logical['source-revision'] === candidate.sourceRevision
+            && logical.tier === candidate.tier) {
+            retryPoisonRecovery = candidate;
+          }
+        }
+      } catch {
+        retryPoisonRecovery = null;
+      }
+    }
     const published = publishJournalEvent(
       transport,
       repo,
@@ -568,7 +589,13 @@ export function retryPendingEvents(
       item.eventKey,
       fingerprint,
       census,
+      undefined,
+      retryPoisonRecovery?.poisonCommentId,
     );
+    if (published.ok && retryPoisonRecovery && logical.schema === CYCLE_SCHEMA) {
+      persistCycleId(resolvedWorkdir, logical['cycle-id']);
+      clearPendingEvent(resolvedWorkdir, retryPoisonRecovery.poisonedCycleId);
+    }
     if (published.ok && item.schema === CYCLE_SCHEMA) {
       try {
         const issue = fetchIssueRevision(transport, repo, issueNumber);
@@ -616,6 +643,17 @@ export function startReviewCycle(
   const poisonRecovery = localInvalidActorPoisonRecovery(censusState, workdir);
   if (blockingMalformedMarkers(censusState, poisonRecovery?.poisonCommentId).length > 0) {
     return { ok: false, diagnostics };
+  }
+  if (poisonRecovery && (
+    poisonRecovery.sourceRevision !== input.sourceRevision
+    || poisonRecovery.tier !== input.tier
+  )) {
+    diagnostics.push({
+      code: 'conflicting-remote-event',
+      message: `poison recovery binding mismatch: expected source-revision ${poisonRecovery.sourceRevision} tier ${poisonRecovery.tier}, got source-revision ${input.sourceRevision} tier ${input.tier}`,
+      eventKey: poisonRecovery.poisonedCycleId,
+    });
+    return { ok: false, diagnostics, cycleId: poisonRecovery.poisonedCycleId, eventKey: poisonRecovery.poisonedCycleId };
   }
 
   let issueBefore: ReturnType<typeof fetchIssueRevision>;
@@ -740,7 +778,7 @@ export function startReviewCycle(
   const persisted = poisonRecovery || !persistedCandidate || activeCycleIsAccepted || revisionChanged
     ? randomUUID()
     : persistedCandidate;
-  persistCycleId(workdir, persisted);
+  if (!poisonRecovery) persistCycleId(workdir, persisted);
 
   const laneControlledStage = input.stage === 'competitive' || input.stage === 'architectural-review';
   if (!input.stage && input.stageAttemptId && input.tier !== 'T3') {
@@ -830,6 +868,10 @@ export function startReviewCycle(
       projectionPendingRepair: published.projectionPendingRepair,
     };
   }
+  if (poisonRecovery) {
+    persistCycleId(workdir, persisted);
+    clearPendingEvent(workdir, poisonRecovery.poisonedCycleId);
+  }
 
   let issue: ReturnType<typeof fetchIssueRevision>;
   try {
@@ -895,8 +937,6 @@ export function startReviewCycle(
       };
     }
   }
-
-  if (poisonRecovery) clearPendingEvent(workdir, poisonRecovery.poisonedCycleId);
 
   const projection = syncIssueProjectionLabels(
     transport,

@@ -750,8 +750,14 @@ function canonicalIssueCommentLineage(
       ));
       return null;
     }
-    if (!sameGithubPrincipal(comment.userLogin, ownerLogin)) continue;
-    if (comment.updatedAt !== comment.createdAt) continue;
+    if (!sameGithubPrincipal(comment.userLogin, ownerLogin)) {
+      errors.push(`canonical Issue-comment journal foreign-comment: journal-marked comment ${comment.id} is not owned by repository owner`);
+      return null;
+    }
+    if (comment.updatedAt !== comment.createdAt) {
+      errors.push(`canonical Issue-comment journal edited-comment: journal-marked comment ${comment.id} was edited`);
+      return null;
+    }
     trustedJournalComments.push({
       id: comment.id,
       body: comment.body,
