@@ -1,7 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { hasBlockingLineageConflict } from './create-issue-stage-record-lineage.ts';
 import {
+  isPublicActor,
   logicalFingerprint,
+  parseInvalidPublicActorCycleBody,
+  resolveRecoveredInvalidPublicActorPoisonWitness,
   serializeCommentBody,
 } from './create-issue-stage-record-marker.ts';
 import {
@@ -95,6 +98,73 @@ export interface OperationResult {
   projectionPendingRepair?: boolean;
   terminal?: OperationTerminal;
   reviewLaneRouting?: ReviewLaneRouting;
+  recovery?: {
+    kind: 'invalid-public-actor-successor';
+    poisonCommentId: number;
+    poisonedCycleId: string;
+    predecessorCycleId: string;
+    sourceRevision: string;
+    tier: string;
+    invalidPublicActor: string;
+  };
+}
+
+type JournalCensusState = ReturnType<typeof loadIssueJournalCensus>;
+
+function recoveredPoisonCommentId(censusState: JournalCensusState): number | null {
+  return resolveRecoveredInvalidPublicActorPoisonWitness({
+    comments: censusState.fetched.comments,
+    parsedDiagnostics: censusState.parsed.diagnostics,
+    lineage: censusState.lineage,
+  })?.poisonCommentId ?? null;
+}
+
+function blockingMalformedMarkers(
+  censusState: JournalCensusState,
+  locallyAuthorizedPoisonCommentId?: number,
+): LineageDiagnostic[] {
+  const durablePoisonCommentId = recoveredPoisonCommentId(censusState);
+  return censusState.parsed.diagnostics.filter((diagnostic) => (
+    diagnostic.code === 'malformed-marker'
+    && diagnostic.commentId !== durablePoisonCommentId
+    && diagnostic.commentId !== locallyAuthorizedPoisonCommentId
+  ));
+}
+
+function localInvalidActorPoisonRecovery(
+  censusState: JournalCensusState,
+  workdir: string,
+): OperationResult['recovery'] | null {
+  if (recoveredPoisonCommentId(censusState) !== null) return null;
+  const malformed = censusState.parsed.diagnostics.filter((diagnostic) => diagnostic.code === 'malformed-marker');
+  if (malformed.length !== 1 || malformed[0]?.commentId === undefined) return null;
+  const comment = censusState.fetched.comments.find((candidate) => candidate.id === malformed[0]!.commentId);
+  if (!comment) return null;
+  const poison = parseInvalidPublicActorCycleBody(comment.body);
+  if (!poison) return null;
+
+  const pending = readPendingEvent(workdir, poison.eventKey);
+  const pendingMatches = pending?.schema === CYCLE_SCHEMA
+    && pending.eventKey === poison.eventKey
+    && pending.body === comment.body;
+  const persistedMatches = readPersistedCycleId(workdir) === poison.cycleId;
+  if (!pendingMatches && !persistedMatches) return null;
+
+  const head = censusState.lineage.head;
+  const expectedPredecessor = head?.logical.schema === CYCLE_SCHEMA
+    ? head.logical['cycle-id']
+    : 'none';
+  if (poison.predecessorCycleId !== expectedPredecessor) return null;
+
+  return {
+    kind: 'invalid-public-actor-successor',
+    poisonCommentId: comment.id,
+    poisonedCycleId: poison.cycleId,
+    predecessorCycleId: poison.predecessorCycleId,
+    sourceRevision: poison.sourceRevision,
+    tier: poison.tier,
+    invalidPublicActor: poison.invalidPublicActor,
+  };
 }
 
 function resolveWorkdir(issueNumber: number, workdir?: string): string {
@@ -207,8 +277,18 @@ export function appendPublishedLogicalJournalEvent(
   logical: JournalLogical,
   census?: CommentCensusOptions,
   beforeCreate?: () => { ok: boolean; diagnostics?: LineageDiagnostic[] },
+  locallyAuthorizedPoisonCommentId?: number,
 ): OperationResult {
-  const published = publishLogicalJournalEvent(transport, repo, issueNumber, workdir, logical, census, beforeCreate);
+  const published = publishLogicalJournalEvent(
+    transport,
+    repo,
+    issueNumber,
+    workdir,
+    logical,
+    census,
+    beforeCreate,
+    locallyAuthorizedPoisonCommentId,
+  );
   diagnostics.push(...published.diagnostics);
   return published;
 }
@@ -221,6 +301,7 @@ export function publishLogicalJournalEvent(
   logical: JournalLogical,
   census?: CommentCensusOptions,
   beforeCreate?: () => { ok: boolean; diagnostics?: LineageDiagnostic[] },
+  locallyAuthorizedPoisonCommentId?: number,
 ): OperationResult {
   const body = serializeCommentBody(logical);
   const fingerprint = logicalFingerprint(logical);
@@ -235,6 +316,7 @@ export function publishLogicalJournalEvent(
     fingerprint,
     census,
     beforeCreate,
+    locallyAuthorizedPoisonCommentId,
   );
 }
 
@@ -245,6 +327,7 @@ function confirmCanonicalEvent(
   eventKey: string,
   fingerprint: string,
   census?: CommentCensusOptions,
+  locallyAuthorizedPoisonCommentId?: number,
 ): { confirmed: boolean; diagnostics: LineageDiagnostic[]; failure?: GhFailure } {
   const censusState = loadIssueJournalCensus(transport, repo, issueNumber, census);
   if (!censusState.fetched.commentsComplete) {
@@ -256,6 +339,12 @@ function confirmCanonicalEvent(
         eventKey,
       }],
       failure: censusState.fetched.failure,
+    };
+  }
+  if (blockingMalformedMarkers(censusState, locallyAuthorizedPoisonCommentId).length > 0) {
+    return {
+      confirmed: false,
+      diagnostics: censusState.diagnostics,
     };
   }
   const event = censusState.lineage.eventsByKey.get(eventKey);
@@ -289,6 +378,7 @@ export function publishJournalEvent(
   fingerprint: string,
   census?: CommentCensusOptions,
   beforeCreate?: () => { ok: boolean; diagnostics?: LineageDiagnostic[] },
+  locallyAuthorizedPoisonCommentId?: number,
 ): OperationResult {
   const diagnostics: LineageDiagnostic[] = [];
   const publicationDeadline = Date.now() + GH_TIMEOUT_MS;
@@ -316,7 +406,7 @@ export function publishJournalEvent(
       owner: 'exception publisher',
     });
   }
-  if (censusState.parsed.diagnostics.some((item) => item.code === 'malformed-marker')) {
+  if (blockingMalformedMarkers(censusState, locallyAuthorizedPoisonCommentId).length > 0) {
     return { ok: false, diagnostics, eventKey };
   }
   const existing = censusState.lineage.eventsByKey.get(eventKey);
@@ -376,7 +466,15 @@ export function publishJournalEvent(
   }
   let confirmed: ReturnType<typeof confirmCanonicalEvent>;
   try {
-    confirmed = confirmCanonicalEvent(publicationTransport, repo, issueNumber, eventKey, fingerprint, census);
+    confirmed = confirmCanonicalEvent(
+      publicationTransport,
+      repo,
+      issueNumber,
+      eventKey,
+      fingerprint,
+      census,
+      locallyAuthorizedPoisonCommentId,
+    );
   } catch (error) {
     return censusFailureResult(diagnostics, error, 'publication confirmation', {
       eventKey,
@@ -434,10 +532,28 @@ export function retryPendingEvents(
       logical = null;
     }
     if (!logical || logical.schema !== item.schema || logical['event-key'] !== item.eventKey) {
+      let recovery: OperationResult['recovery'] | null = null;
+      if (item.schema === CYCLE_SCHEMA) {
+        try {
+          const censusState = loadIssueJournalCensus(transport, repo, issueNumber, census);
+          if (censusState.fetched.commentsComplete) {
+            recovery = localInvalidActorPoisonRecovery(censusState, resolvedWorkdir);
+          }
+        } catch {
+          recovery = null;
+        }
+      }
       results.push({
         ok: false,
-        diagnostics: [{ code: 'malformed-marker', message: `pending event ${item.eventKey} is malformed`, eventKey: item.eventKey }],
+        diagnostics: [{
+          code: 'malformed-marker',
+          message: recovery
+            ? `pending cycle ${item.eventKey} has invalid public actor ${recovery.invalidPublicActor}; publish a fresh successor cycle`
+            : `pending event ${item.eventKey} is malformed`,
+          eventKey: item.eventKey,
+        }],
         eventKey: item.eventKey,
+        ...(recovery && recovery.poisonedCycleId === item.eventKey ? { recovery } : {}),
       });
       continue;
     }
@@ -474,6 +590,15 @@ export function startReviewCycle(
 ): OperationResult {
   const workdir = resolveWorkdir(input.issueNumber, input.workdir);
   const diagnostics: LineageDiagnostic[] = [];
+  if (!isPublicActor(input.publicActor)) {
+    return {
+      ok: false,
+      diagnostics: [{
+        code: 'malformed-marker',
+        message: `invalid public actor ${String(input.publicActor)}`,
+      }],
+    };
+  }
 
   let censusState: ReturnType<typeof loadIssueJournalCensus>;
   try {
@@ -487,6 +612,10 @@ export function startReviewCycle(
       failure: censusState.fetched.failure,
       owner: 'flow-manager',
     });
+  }
+  const poisonRecovery = localInvalidActorPoisonRecovery(censusState, workdir);
+  if (blockingMalformedMarkers(censusState, poisonRecovery?.poisonCommentId).length > 0) {
+    return { ok: false, diagnostics };
   }
 
   let issueBefore: ReturnType<typeof fetchIssueRevision>;
@@ -608,7 +737,9 @@ export function startReviewCycle(
   const activeCycleIsAccepted = issueBefore.labels.includes('spec-review:accepted');
   const revisionChanged = persistedEvent?.logical.schema === CYCLE_SCHEMA
     && (persistedEvent.logical as CycleEventLogical)['source-revision'] !== input.sourceRevision;
-  const persisted = !persistedCandidate || activeCycleIsAccepted || revisionChanged ? randomUUID() : persistedCandidate;
+  const persisted = poisonRecovery || !persistedCandidate || activeCycleIsAccepted || revisionChanged
+    ? randomUUID()
+    : persistedCandidate;
   persistCycleId(workdir, persisted);
 
   const laneControlledStage = input.stage === 'competitive' || input.stage === 'architectural-review';
@@ -622,6 +753,17 @@ export function startReviewCycle(
   }
 
   let predecessor = input.predecessorCycleId;
+  if (poisonRecovery) {
+    if (predecessor && predecessor !== poisonRecovery.predecessorCycleId) {
+      diagnostics.push({
+        code: 'conflicting-remote-event',
+        message: `poison recovery predecessor must remain ${poisonRecovery.predecessorCycleId}`,
+        eventKey: persisted,
+      });
+      return { ok: false, diagnostics, cycleId: persisted, eventKey: persisted };
+    }
+    predecessor = poisonRecovery.predecessorCycleId;
+  }
   if (!predecessor) {
     const existing = censusState.lineage.eventsByKey.get(persisted);
     if (existing?.logical.schema === CYCLE_SCHEMA) {
@@ -667,7 +809,17 @@ export function startReviewCycle(
     'public-actor': input.publicActor,
     'routed-lane': reviewLaneRouting,
   };
-  const published = appendPublishedLogicalJournalEvent(diagnostics, transport, input.repo, input.issueNumber, workdir, logical, input.census);
+  const published = appendPublishedLogicalJournalEvent(
+    diagnostics,
+    transport,
+    input.repo,
+    input.issueNumber,
+    workdir,
+    logical,
+    input.census,
+    undefined,
+    poisonRecovery?.poisonCommentId,
+  );
   if (!published.ok) {
     return {
       ok: false,
@@ -743,6 +895,8 @@ export function startReviewCycle(
       };
     }
   }
+
+  if (poisonRecovery) clearPendingEvent(workdir, poisonRecovery.poisonedCycleId);
 
   const projection = syncIssueProjectionLabels(
     transport,
