@@ -86,6 +86,14 @@ const ZERO_SEND_RETRYABLE = new Set<TerminalClassification>([
   'quota',
   'composer-refusal',
   'fill-timeout',
+  'incident',
+]);
+// Required-eligible stays the pre-#1981 three classes so sealed
+// incident/retry-forbidden zero-send evidence remains valid.
+const ZERO_SEND_RETRY_REQUIRED = new Set<TerminalClassification>([
+  'quota',
+  'composer-refusal',
+  'fill-timeout',
 ]);
 
 export interface ParsedCapture {
@@ -574,7 +582,7 @@ function parseInvocation(
     else if (artifactAuthority.issueNumber !== Number(taskIssueMatch[1])) errors.push(`${label}.artifactAuthority.issueNumber does not match receipt taskIdentity`);
   }
   if (Number(sendCount) === 1 && terminalClassification !== 'complete' && retryClass !== 'retry-forbidden') errors.push(`${label} possible/post-send failure must forbid blind resend`);
-  if (Number(sendCount) === 0 && ZERO_SEND_RETRYABLE.has(terminalClassification as TerminalClassification) && attemptOrdinal === 1 && retryClass !== 'eligible-zero-send') errors.push(`${label} proven zero-send quota/composer failure must be classified retry-eligible`);
+  if (Number(sendCount) === 0 && ZERO_SEND_RETRY_REQUIRED.has(terminalClassification as TerminalClassification) && attemptOrdinal === 1 && retryClass !== 'eligible-zero-send') errors.push(`${label} proven zero-send quota/composer failure must be classified retry-eligible`);
   if (attemptOrdinal === 2 && retryClass === 'eligible-zero-send') errors.push(`${label} the one retry cannot create another retry opportunity`);
   if (capture && !expectedCaptureName(receipt.stage, capture, slot)) errors.push(`${label} capture filename does not match stage/slot`);
   if (errors.some((error) => error.startsWith(label))) return null;
