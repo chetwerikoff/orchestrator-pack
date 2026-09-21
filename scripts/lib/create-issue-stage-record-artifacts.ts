@@ -1138,7 +1138,7 @@ function sealedPostSendSendCount(envelope: JsonRecord): 1 | null {
   return null;
 }
 
-function classifyReconciliationTransport(
+export function classifyReconciliationTransport(
   envelope: JsonRecord,
   attemptOrdinal: number,
 ): {
@@ -1171,11 +1171,11 @@ function classifyReconciliationTransport(
   } else {
     terminalClassification = 'incident';
   }
+  // A child-witnessed sendCount 0 proves nothing reached the reviewer, whatever the
+  // pre-send cause; the two-attempt budget bounds the single retry.
   const retryableZeroSend = attemptOrdinal === 1
     && sendCount === 0
-    && (terminalClassification === 'quota'
-      || terminalClassification === 'composer-refusal'
-      || terminalClassification === 'fill-timeout');
+    && terminalClassification !== 'complete';
   return {
     terminalClassification,
     sendCount,
@@ -1231,16 +1231,17 @@ function hydrateReconciliationTransport(
     && (
       existingTerminalClassification !== transport.terminalClassification
       || invocation.sendCount !== transport.sendCount
-      || existingRetryClass !== transport.retryClass
     )
   ) {
     errors.push('stage evidence invocation[' + index + '] terminal transport disagrees with its bound terminal envelope');
     return null;
   }
 
-  const needsObservedZeroSendIdentity = transport.sendCount === 0
-    && transport.terminalClassification === 'incident'
-    && transport.retryClass === 'retry-forbidden';
+  const needsObservedZeroSendIdentity = completeExisting
+    ? existingNeedsObservedZeroSendIdentity
+    : transport.sendCount === 0
+      && transport.terminalClassification === 'incident'
+      && transport.retryClass === 'retry-forbidden';
   let observedTerminalResultIdentity: string | undefined;
   if (needsObservedZeroSendIdentity) {
     const admittedInvocationId = optionalString(invocation.invocationId);
@@ -1264,9 +1265,11 @@ function hydrateReconciliationTransport(
   return {
     ...invocation,
     terminal: true,
-    terminalClassification: transport.terminalClassification,
-    sendCount: transport.sendCount,
-    retryClass: transport.retryClass,
+    ...(completeExisting ? {} : {
+      terminalClassification: transport.terminalClassification,
+      sendCount: transport.sendCount,
+      retryClass: transport.retryClass,
+    }),
     ...(observedTerminalResultIdentity ? { terminalResultIdentity: observedTerminalResultIdentity } : {}),
   };
 }
@@ -1475,7 +1478,7 @@ export function reconcileCreateIssueStage(
         || final.retryClass !== 'retry-forbidden'
         || !optionalString(final.terminalResultIdentity)
       ) {
-        errors.push('reviewerSlot ' + reviewerSlot + ' zero-send evidence cannot credential a missing source');
+        errors.push('reviewerSlot ' + reviewerSlot + ' zero-send evidence cannot credential a missing source; retryClass=' + String(final.retryClass));
         return false;
       }
       return true;
@@ -2521,21 +2524,39 @@ function latestAuthorReplyPath(reviewDir: string): string | null {
   return candidates[0] ? join(reviewDir, candidates[0].name) : null;
 }
 
+export function locateGovernedAuthorDispositionBlock(
+  text: string,
+): { body: string } | { error: 'multiple' | 'none' } {
+  // innerText harvest cannot carry the literal fence characters, so a whole-line
+  // schema label with or without a ``` opener both count as a block start.
+  const startPattern = /^(?:```)?create-issue-author-dispositions\/v1\s*$/gm;
+  const starts = [...text.matchAll(startPattern)];
+  if (starts.length !== 1) {
+    return { error: starts.length === 0 ? 'none' : 'multiple' };
+  }
+  const start = starts[0]!;
+  let offset = start.index! + start[0].length;
+  if (text.startsWith('\r\n', offset)) offset += 2;
+  else if (text.startsWith('\n', offset) || text.startsWith('\r', offset)) offset += 1;
+  const rest = text.slice(offset);
+  const close = /^```[ \t]*$/m.exec(rest);
+  return { body: (close ? rest.slice(0, close.index) : rest).trim() };
+}
+
 function parseGovernedAuthorDispositionOutput(path: string, errors: string[]): JsonRecord | null {
   let text: string;
   try { text = readFileSync(path, 'utf8'); } catch {
     errors.push('governed author output is unreadable: ' + path + '; authority=author-owned');
     return null;
   }
-  const pattern = /\`\`\`create-issue-author-dispositions\/v1\s*\r?\n([\s\S]*?)\r?\n\`\`\`/g;
-  const matches = [...text.matchAll(pattern)];
-  if (matches.length !== 1) {
-    errors.push('governed author output must contain exactly one create-issue-author-dispositions/v1 fence: ' + path + '; authority=author-owned');
+  const located = locateGovernedAuthorDispositionBlock(text);
+  if ('error' in located) {
+    errors.push('governed author output must contain exactly one create-issue-author-dispositions/v1 block: ' + path + '; authority=author-owned');
     return null;
   }
   let parsed: unknown;
-  try { parsed = JSON.parse(matches[0]![1]!) as unknown; } catch {
-    errors.push('governed author disposition fence is malformed JSON: ' + path + '; authority=author-owned');
+  try { parsed = JSON.parse(located.body) as unknown; } catch {
+    errors.push('governed author disposition block is malformed JSON: ' + path + '; authority=author-owned');
     return null;
   }
   if (!isRecord(parsed) || parsed.schema !== AUTHOR_DISPOSITIONS_SCHEMA || !Array.isArray(parsed.findings) || !isRecord(parsed.m4) || !Array.isArray(parsed.m4.inventory)) {

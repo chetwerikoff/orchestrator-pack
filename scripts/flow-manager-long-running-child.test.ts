@@ -302,6 +302,8 @@ describe('flow-manager long-running child (#1164)', () => {
     const envelope = readTerminalEnvelope(paths.envelope);
     expect(envelope?.lifecycle_outcome).toBe('success');
     expect(envelope?.delivery).toBe('landed');
+    expect(envelope?.child_exit_diagnostic).toBe('exited_within_grace');
+    expect(envelope?.child_exit_code).toBe(0);
   });
 
   it('treats exit zero without turn-result as missing after stdout EOF', async () => {
@@ -348,7 +350,7 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(readTerminalEnvelope(paths.envelope)?.incident).toBe('child_terminal_result_duplicate');
   });
 
-  it('classifies hang after result as child_post_result_exit_timeout', async () => {
+  it('settles an ok result as success when the child retains its page past grace', async () => {
     const root = tempDir();
     const paths = launchPaths(root, 'hang');
     const result = makeTurnResult();
@@ -368,8 +370,87 @@ describe('flow-manager long-running child (#1164)', () => {
       childCommand: fixture.command,
       childArgs: fixture.args,
     });
+    expect(code).toBe(0);
+    const envelope = readTerminalEnvelope(paths.envelope);
+    expect(envelope?.lifecycle_outcome).toBe('success');
+    expect(envelope?.incident).toBeUndefined();
+    expect(envelope?.child_exit_diagnostic).toBe('retained_after_result');
+    expect(envelope?.child_exit_code).toBeNull();
+    expect(envelope?.turn_result_state).toBe('ok');
+  });
+
+  it('keeps a non-ok result an incident when the child retains its page past grace', async () => {
+    const root = tempDir();
+    const paths = launchPaths(root, 'driver-error-retain');
+    const result = makeTurnResult({
+      state: 'driver_error',
+      cause: 'fixture_driver_error',
+      scope: 'invocation',
+    });
+    const fixture = nodeFixture(`
+      const r = ${JSON.stringify(result)};
+      process.stdout.write(JSON.stringify(r) + '\\n');
+      setInterval(() => {}, 1000);
+    `);
+    process.env.OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS = '300';
+    const code = await runLaunch({
+      runIdentity: 'run-driver-error-retain',
+      attemptIdentity: 'attempt-driver-error-retain',
+      handoffReceiptPath: paths.receipt,
+      terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output,
+      cwd: repoRoot,
+      childCommand: fixture.command,
+      childArgs: fixture.args,
+    });
     expect(code).toBe(1);
-    expect(readTerminalEnvelope(paths.envelope)?.incident).toBe('child_post_result_exit_timeout');
+    const envelope = readTerminalEnvelope(paths.envelope);
+    expect(envelope?.incident).toBe('child_turn_state:driver_error');
+    expect(envelope?.child_exit_diagnostic).toBe('retained_after_result');
+  });
+
+  it('reproduces the real 2026-09-15 ok/retained-page envelope shape as success', async () => {
+    const replay = JSON.parse(
+      readFileSync(join(repoRoot, 'tests/external-output-references/flow-manager-long-child-ok-retained-page.json'), 'utf8'),
+    ) as {
+      expected_after_fix: {
+        lifecycle_outcome: string;
+        delivery: string;
+        child_exit_diagnostic: string;
+        child_exit_code: number | null;
+        turn_result_state: string;
+        send_count: number;
+      };
+    };
+    const root = tempDir();
+    const paths = launchPaths(root, 'ok-retained-page');
+    const result = {
+      ...makeTurnResult({
+        cause: 'completed_page_only',
+        witness: undefined,
+      }),
+      send_count: 1,
+    };
+    const fixture = nodeFixture(`
+      const r = ${JSON.stringify(result)};
+      process.stdout.write(JSON.stringify(r) + '\\n');
+      setInterval(() => {}, 1000);
+    `);
+    process.env.OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS = '300';
+    const code = await runLaunch({
+      runIdentity: 'run-ok-retained-page',
+      attemptIdentity: 'attempt-ok-retained-page',
+      handoffReceiptPath: paths.receipt,
+      terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output,
+      cwd: repoRoot,
+      childCommand: fixture.command,
+      childArgs: fixture.args,
+    });
+    expect(code).toBe(0);
+    const envelope = readTerminalEnvelope(paths.envelope);
+    expect(envelope).toMatchObject(replay.expected_after_fix);
+    expect(envelope?.incident).toBeUndefined();
   });
 
   it('parses delayed turn-result during post-exit drain', async () => {

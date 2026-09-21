@@ -4,13 +4,16 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
 import {
   ACCEPTANCE_ARTIFACT_OUTPUT_NAMES,
   AUTHOR_DISPOSITIONS_SCHEMA,
   STAGE_EVIDENCE_SCHEMA,
+  classifyReconciliationTransport,
   inspectAcceptanceArtifacts,
+  locateGovernedAuthorDispositionBlock,
   produceAcceptanceArtifacts,
   reconcileCreateIssueStage,
   stageReceiptPayloadsMatchExceptDerivedChain,
@@ -2540,7 +2543,6 @@ describe('Issue #1973 post-send envelope send_count hydration', () => {
   });
 });
 
-
 describe('Issue #1977 evidence-backed zero-send partial reconciliation', () => {
   const incidentInvocationId = '316369ff-5fad-4621-ae02-7c2894a28b53';
 
@@ -2551,10 +2553,10 @@ describe('Issue #1977 evidence-backed zero-send partial reconciliation', () => {
     const evidence = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as Record<string, any>;
     const invocation = evidence.invocations[0] as Record<string, any>;
     invocation.invocationId = incidentInvocationId;
-    delete invocation.terminal;
-    delete invocation.terminalClassification;
-    delete invocation.sendCount;
-    delete invocation.retryClass;
+    invocation.terminal = true;
+    invocation.terminalClassification = 'incident';
+    invocation.sendCount = 0;
+    invocation.retryClass = 'retry-forbidden';
     delete invocation.capturePath;
     delete invocation.turnResultPath;
     delete invocation.terminalResultIdentity;
@@ -2652,6 +2654,27 @@ describe('Issue #1977 evidence-backed zero-send partial reconciliation', () => {
     });
   });
 
+  it('keeps an unsealed first-attempt zero-send incident retry-eligible under current-main policy', () => {
+    const prepared = prepareZeroSend();
+    const evidence = JSON.parse(readFileSync(prepared.input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+    const invocation = evidence.invocations[0] as Record<string, any>;
+    delete invocation.terminal;
+    delete invocation.terminalClassification;
+    delete invocation.sendCount;
+    delete invocation.retryClass;
+    writeFileSync(prepared.input.reviewEvidencePath, JSON.stringify(evidence, null, 2) + '\n');
+
+    const result = reconcileCreateIssueStage({
+      reviewDir: prepared.input.dir,
+      stageEvidencePath: prepared.input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: prepared.source,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('retryClass=eligible-zero-send');
+  });
+
   it('fails closed on a foreign observed invocation id', () => {
     const prepared = prepareZeroSend({ observed_invocation_id: 'foreign-invocation' });
     const result = reconcileCreateIssueStage({
@@ -2678,5 +2701,163 @@ describe('Issue #1977 evidence-backed zero-send partial reconciliation', () => {
     });
     expect(result.ok).toBe(false);
     expect(result.errors.join('\n')).toContain('lacks a valid observed turn-result identity');
+  });
+});
+
+describe('proven zero-send first attempts are retry-eligible (Issue #1981)', () => {
+  const zeroSendIncident = {
+    lifecycle_outcome: 'incident',
+    turn_result_state: 'input_invalid',
+    turn_result_cause: 'input_invalid:invocation_id_invalid',
+    send_count: 0,
+    delivery: 'not-sent',
+  };
+
+  it('classifies a first-attempt input_invalid zero-send as incident / eligible-zero-send', () => {
+    expect(classifyReconciliationTransport(zeroSendIncident, 1)).toEqual({
+      terminalClassification: 'incident',
+      sendCount: 0,
+      retryClass: 'eligible-zero-send',
+    });
+  });
+
+  it('forbids retry when the same envelope is attempt 2', () => {
+    expect(classifyReconciliationTransport(zeroSendIncident, 2)).toEqual({
+      terminalClassification: 'incident',
+      sendCount: 0,
+      retryClass: 'retry-forbidden',
+    });
+  });
+
+  it.each([
+    ['canonical_prompt_mismatch:expected_sha256=abc', 'driver_error'],
+    ['observation_marker_conflict', 'driver_error'],
+  ])('classifies %s at sendCount 0 as incident / eligible-zero-send', (cause, state) => {
+    expect(classifyReconciliationTransport({
+      ...zeroSendIncident,
+      turn_result_state: state,
+      turn_result_cause: cause,
+    }, 1)).toEqual({
+      terminalClassification: 'incident',
+      sendCount: 0,
+      retryClass: 'eligible-zero-send',
+    });
+  });
+
+  it('keeps sendCount 1 driver_error as post-send-failure / retry-forbidden', () => {
+    expect(classifyReconciliationTransport({
+      lifecycle_outcome: 'incident',
+      turn_result_state: 'driver_error',
+      turn_result_cause: 'driver_error',
+      send_count: 1,
+      delivery: 'sent',
+    }, 1)).toEqual({
+      terminalClassification: 'post-send-failure',
+      sendCount: 1,
+      retryClass: 'retry-forbidden',
+    });
+  });
+
+  it('returns null when send_count is omitted without a post_send_observation heartbeat', () => {
+    expect(classifyReconciliationTransport({
+      lifecycle_outcome: 'incident',
+      turn_result_state: 'input_invalid',
+      turn_result_cause: 'input_invalid:invocation_id_invalid',
+      delivery: 'not-sent',
+    }, 1)).toBeNull();
+  });
+});
+
+describe('governed author disposition block shapes (Issue #1983)', () => {
+  const fenceless1978R02Path = join(
+    fileURLToPath(new URL('../..', import.meta.url)),
+    'tests/external-output-references/create-issue-author-reply-fenceless-1978-r02.txt',
+  );
+
+  it('AC1: locates and parses the verbatim fenceless 1978-r02 harvest', () => {
+    const fixtureText = readFileSync(fenceless1978R02Path, 'utf8');
+    const located = locateGovernedAuthorDispositionBlock(fixtureText);
+    expect(located).toEqual(expect.objectContaining({ body: expect.any(String) }));
+    if (!('body' in located)) throw new Error('expected a located body');
+    const parsed = JSON.parse(located.body) as {
+      schema: string;
+      sourceRevision: string;
+      findings: unknown[];
+    };
+    expect(parsed.schema).toBe('create-issue-author-dispositions/v1');
+    expect(parsed.sourceRevision).toBe('r02');
+    expect(parsed.findings).toHaveLength(5);
+  });
+
+  it('AC2: the fenced wrap of the same harvest locates to JSON deep-equal with AC1', () => {
+    const fixtureText = readFileSync(fenceless1978R02Path, 'utf8');
+    const fencelessLocated = locateGovernedAuthorDispositionBlock(fixtureText);
+    if (!('body' in fencelessLocated)) throw new Error('expected a located body');
+    const fixtureWithoutFirstLine = fixtureText.slice(fixtureText.indexOf('\n') + 1);
+    const fenced = '```create-issue-author-dispositions/v1\n' + fixtureWithoutFirstLine + '\n```';
+    const fencedLocated = locateGovernedAuthorDispositionBlock(fenced);
+    if (!('body' in fencedLocated)) throw new Error('expected a located fenced body');
+    expect(JSON.parse(fencedLocated.body)).toEqual(JSON.parse(fencelessLocated.body));
+  });
+
+  it('AC3: locates and parses the #1968 prose-then-fenced single-line JSON shape', () => {
+    const json = JSON.stringify({
+      schema: AUTHOR_DISPOSITIONS_SCHEMA,
+      sourceRevision: REVISION,
+      predecessorStage: 'architectural',
+      findings: [],
+      m4: { inventory: [] },
+    });
+    const text = ['Governed author output:', '', '```create-issue-author-dispositions/v1', json, '```', ''].join('\n');
+    const located = locateGovernedAuthorDispositionBlock(text);
+    if (!('body' in located)) throw new Error('expected a located body');
+    expect(JSON.parse(located.body)).toEqual(JSON.parse(json));
+  });
+
+  it('AC4: two block-start lines are rejected as multiple', () => {
+    const json = '{"schema":"create-issue-author-dispositions/v1"}';
+    const twoBare = ['create-issue-author-dispositions/v1', json, 'create-issue-author-dispositions/v1', json].join('\n');
+    expect(locateGovernedAuthorDispositionBlock(twoBare)).toEqual({ error: 'multiple' });
+    const fencedPlusBare = [
+      '```create-issue-author-dispositions/v1',
+      json,
+      '```',
+      'create-issue-author-dispositions/v1',
+      json,
+    ].join('\n');
+    expect(locateGovernedAuthorDispositionBlock(fencedPlusBare)).toEqual({ error: 'multiple' });
+  });
+
+  it('AC5: a bare label followed by non-JSON fails JSON.parse on the located body and inspect path', () => {
+    const located = locateGovernedAuthorDispositionBlock('create-issue-author-dispositions/v1\nnot json\n');
+    expect(located).toEqual(expect.objectContaining({ body: 'not json' }));
+    if (!('body' in located)) throw new Error('expected a located body');
+    expect(() => JSON.parse(located.body)).toThrow();
+    const input = fixture({ transportClassification: 'incident' });
+    writeFileSync(input.authorReplyPath, 'create-issue-author-dispositions/v1\nnot json\n');
+    const authorReason = inspect(input).missing.find((item) => item.artifact === 'governed author output')?.reason ?? '';
+    expect(authorReason).toContain('governed author disposition block is malformed JSON');
+    expect(authorReason).toContain('authority=author-owned');
+  });
+
+  it('AC6: a schema field without a block-start line is none', () => {
+    expect(locateGovernedAuthorDispositionBlock('{"schema":"create-issue-author-dispositions/v1"}')).toEqual({ error: 'none' });
+  });
+
+  it('produce-artifacts accepts a fenceless harvested author reply', () => {
+    const input = fixture({ transportClassification: 'complete', withTurnResult: true, withCapture: true });
+    writeFileSync(input.authorReplyPath, [
+      'create-issue-author-dispositions/v1',
+      JSON.stringify({
+        schema: AUTHOR_DISPOSITIONS_SCHEMA,
+        sourceRevision: REVISION,
+        predecessorStage: 'architectural',
+        findings: [],
+        m4: { inventory: [] },
+      }),
+      '',
+    ].join('\n'));
+    const result = produce(input);
+    expect(result.ok, result.errors.join('\n')).toBe(true);
   });
 });
