@@ -12,6 +12,7 @@ import {
   STAGE_EVIDENCE_SCHEMA,
   inspectAcceptanceArtifacts,
   produceAcceptanceArtifacts,
+  reconcileCreateIssueStage,
   stageReceiptPayloadsMatchExceptDerivedChain,
 } from './create-issue-stage-record-artifacts.ts';
 import { runFinalAcceptance } from './create-issue-final-acceptance.ts';
@@ -2445,5 +2446,96 @@ describe('Issue #1484 post-lens ledger production', () => {
     const inventory = JSON.parse(readFileSync(join(input.outputDir, 'review-episode-inventory.json'), 'utf8'));
     expect(inventory.stageReceiptIds).toHaveLength(2);
     expect(result.files).toContain('stage-completeness-receipt-architectural-lens-attempt.json');
+  });
+});
+
+
+describe('Issue #1973 post-send envelope send_count hydration', () => {
+  function sealedEnvelope(overrides: Record<string, unknown> = {}) {
+    return {
+      schema: 'flow-manager-long-running-child-terminal/v1',
+      run_identity: 'run-1973',
+      attempt_identity: 'attempt-1973',
+      completion_mode: 'browser-turn-result-v1',
+      handoff_receipt_path: '/tmp/opk-1973-handoff.json',
+      launcher_started_at: '2026-09-21T00:00:00.000Z',
+      handoff_committed_at: '2026-09-21T00:00:01.000Z',
+      terminal_at: '2026-09-21T00:00:02.000Z',
+      lifecycle_outcome: 'incident',
+      incident: 'child_terminal_result_missing',
+      delivery: 'POSSIBLY_DELIVERED',
+      recovery_available: false,
+      diagnostics: {
+        last_heartbeat: {
+          schema: 'observation-heartbeat/v1',
+          phase: 'post_send_observation',
+          poll_count: 1,
+          observation_state: 'busy',
+          stable_reads: 0,
+          completion_ready: false,
+        },
+      },
+      ...overrides,
+    };
+  }
+
+  function prepareSealedInvocation(envelope: Record<string, unknown>) {
+    const input = fixture({ transportClassification: 'complete', withTurnResult: true, withCapture: true });
+    const envelopePath = join(input.dir, 'envelope.json');
+    writeFileSync(envelopePath, JSON.stringify(envelope));
+    const evidence = JSON.parse(readFileSync(input.evidencePath, 'utf8')) as Record<string, unknown>;
+    const invocation = { ...(evidence.invocations as Array<Record<string, unknown>>)[0] };
+    delete invocation.terminal;
+    delete invocation.terminalClassification;
+    delete invocation.sendCount;
+    delete invocation.retryClass;
+    delete invocation.turnResultPath;
+    delete invocation.terminalResultIdentity;
+    invocation.terminalEnvelopePath = envelopePath;
+    evidence.invocations = [invocation];
+    evidence.taskIdentity = TASK;
+    writeFileSync(input.evidencePath, JSON.stringify(evidence, null, 2) + '\n');
+    return { input, envelopePath, envelopeBefore: readFileSync(envelopePath) };
+  }
+
+  it('hydrates omitted send_count from post_send_observation as post-send-failure without rewriting the envelope', () => {
+    const prepared = prepareSealedInvocation(sealedEnvelope());
+    const source = transport({ census: [...prepared.input.reviewComments, comment(prepared.input.body)] });
+    const reconciled = reconcileCreateIssueStage({
+      reviewDir: prepared.input.dir,
+      stageEvidencePath: prepared.input.evidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: source,
+    });
+    expect(reconciled.ok, reconciled.errors.join('\n')).toBe(true);
+    const hydrated = JSON.parse(readFileSync(prepared.input.evidencePath, 'utf8')) as {
+      invocations: Array<Record<string, unknown>>;
+    };
+    expect(hydrated.invocations[0]).toMatchObject({
+      terminal: true,
+      terminalClassification: 'post-send-failure',
+      sendCount: 1,
+      retryClass: 'retry-forbidden',
+    });
+    expect(readFileSync(prepared.envelopePath).equals(prepared.envelopeBefore)).toBe(true);
+    expect(JSON.stringify(hydrated)).not.toContain('no exact send_count');
+  });
+
+  it('still fails closed when omitted send_count has no post_send_observation heartbeat', () => {
+    const prepared = prepareSealedInvocation(sealedEnvelope({
+      diagnostics: { last_heartbeat: { phase: 'admitted_pre_send', poll_count: 0 } },
+    }));
+    const source = transport({ census: [...prepared.input.reviewComments, comment(prepared.input.body)] });
+    const reconciled = reconcileCreateIssueStage({
+      reviewDir: prepared.input.dir,
+      stageEvidencePath: prepared.input.evidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: source,
+    });
+    expect(reconciled.ok).toBe(false);
+    expect(reconciled.errors.join('\n')).toContain('no exact send_count');
+    expect(readFileSync(prepared.envelopePath).equals(prepared.envelopeBefore)).toBe(true);
   });
 });
