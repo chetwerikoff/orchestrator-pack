@@ -11,14 +11,14 @@
     "scripts/lib/create-issue-stage-record.test.ts"
   ],
   "denylist": [
-    "credentials/**",
-    "packages/core/**",
+    "credentials/",
+    "packages/core/",
     "scripts/bootstrap.test.ts",
     "scripts/bootstrap.ts",
     "scripts/lib/create-issue-stage-lifecycle-acceptance.test.ts",
     "scripts/lib/create-issue-stage-lifecycle-acceptance.ts",
-    "secrets/**",
-    "vendor/**"
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
     "scripts/lib/create-issue-final-acceptance.ts",
