@@ -47,6 +47,8 @@ export const CONCURRENT_BATCH_INCIDENT_SCHEMA = 'flow-manager-concurrent-batch-i
 
 export type DeliveryState = 'not-sent' | 'POSSIBLY_DELIVERED' | 'landed';
 
+export type ChildExitDiagnostic = 'exited_within_grace' | 'retained_after_result';
+
 export type ParsedTurnResult = TurnResultV1 & { readonly resolved_send_count: number };
 
 export interface HandoffReceipt {
@@ -71,6 +73,7 @@ export interface TerminalEnvelope {
   readonly incident?: string;
   readonly delivery: DeliveryState;
   readonly child_exit_code?: number | null;
+  readonly child_exit_diagnostic?: ChildExitDiagnostic;
   readonly turn_result_state?: string;
   readonly turn_result_cause?: string;
   readonly send_count?: number;
@@ -764,7 +767,11 @@ async function finalizeCandidatePath(
     return 1;
   }
   const exited = completion.completed;
-  const eof = exited;
+  // The turn-result/v1 line is the authoritative outcome. The browser child
+  // legitimately retains its page after an ok result, so exit timing is cleanup
+  // evidence, not a lifecycle outcome.
+  const resolvedExitCode: number | null = exited ? (completion.result?.exitCode ?? childExitCode) : null;
+  const childExitDiagnostic: ChildExitDiagnostic = exited ? 'exited_within_grace' : 'retained_after_result';
   const incidentEnvelope = (incident: string): TerminalEnvelope => ({
     schema: TERMINAL_SCHEMA,
     run_identity: config.runIdentity,
@@ -777,7 +784,8 @@ async function finalizeCandidatePath(
     lifecycle_outcome: 'incident',
     incident,
     delivery: deriveDelivery(candidate, false),
-    child_exit_code: childExitCode,
+    child_exit_code: resolvedExitCode,
+    child_exit_diagnostic: childExitDiagnostic,
     turn_result_state: candidate.state,
     turn_result_cause: candidate.cause,
     send_count: candidate.resolved_send_count,
@@ -785,12 +793,6 @@ async function finalizeCandidatePath(
   });
   if (capture.duplicateCandidate) {
     await publishEnvelope(config, incidentEnvelope('child_terminal_result_duplicate'));
-    await abortManagedProcess(controller, runPromise);
-    await delay(100);
-    return 1;
-  }
-  if (!exited || !eof) {
-    await publishEnvelope(config, incidentEnvelope('child_post_result_exit_timeout'));
     await abortManagedProcess(controller, runPromise);
     await delay(100);
     return 1;
@@ -807,7 +809,8 @@ async function finalizeCandidatePath(
       terminal_at: nowIso(),
       lifecycle_outcome: 'success',
       delivery: deriveDelivery(candidate, false),
-      child_exit_code: childExitCode,
+      child_exit_code: resolvedExitCode,
+      child_exit_diagnostic: childExitDiagnostic,
       turn_result_state: candidate.state,
       turn_result_cause: candidate.cause,
       send_count: candidate.resolved_send_count,
