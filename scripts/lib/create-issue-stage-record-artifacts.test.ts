@@ -11,6 +11,7 @@ import {
   ACCEPTANCE_ARTIFACT_OUTPUT_NAMES,
   AUTHOR_DISPOSITIONS_SCHEMA,
   STAGE_EVIDENCE_SCHEMA,
+  classifyReconciliationTransport,
   inspectAcceptanceArtifacts,
   locateGovernedAuthorDispositionBlock,
   produceAcceptanceArtifacts,
@@ -2539,6 +2540,70 @@ describe('Issue #1973 post-send envelope send_count hydration', () => {
     expect(reconciled.ok).toBe(false);
     expect(reconciled.errors.join('\n')).toContain('no exact send_count');
     expect(readFileSync(prepared.envelopePath).equals(prepared.envelopeBefore)).toBe(true);
+  });
+});
+
+describe('proven zero-send first attempts are retry-eligible (Issue #1981)', () => {
+  const zeroSendIncident = {
+    lifecycle_outcome: 'incident',
+    turn_result_state: 'input_invalid',
+    turn_result_cause: 'input_invalid:invocation_id_invalid',
+    send_count: 0,
+    delivery: 'not-sent',
+  };
+
+  it('classifies a first-attempt input_invalid zero-send as incident / eligible-zero-send', () => {
+    expect(classifyReconciliationTransport(zeroSendIncident, 1)).toEqual({
+      terminalClassification: 'incident',
+      sendCount: 0,
+      retryClass: 'eligible-zero-send',
+    });
+  });
+
+  it('forbids retry when the same envelope is attempt 2', () => {
+    expect(classifyReconciliationTransport(zeroSendIncident, 2)).toEqual({
+      terminalClassification: 'incident',
+      sendCount: 0,
+      retryClass: 'retry-forbidden',
+    });
+  });
+
+  it.each([
+    ['canonical_prompt_mismatch:expected_sha256=abc', 'driver_error'],
+    ['observation_marker_conflict', 'driver_error'],
+  ])('classifies %s at sendCount 0 as incident / eligible-zero-send', (cause, state) => {
+    expect(classifyReconciliationTransport({
+      ...zeroSendIncident,
+      turn_result_state: state,
+      turn_result_cause: cause,
+    }, 1)).toEqual({
+      terminalClassification: 'incident',
+      sendCount: 0,
+      retryClass: 'eligible-zero-send',
+    });
+  });
+
+  it('keeps sendCount 1 driver_error as post-send-failure / retry-forbidden', () => {
+    expect(classifyReconciliationTransport({
+      lifecycle_outcome: 'incident',
+      turn_result_state: 'driver_error',
+      turn_result_cause: 'driver_error',
+      send_count: 1,
+      delivery: 'sent',
+    }, 1)).toEqual({
+      terminalClassification: 'post-send-failure',
+      sendCount: 1,
+      retryClass: 'retry-forbidden',
+    });
+  });
+
+  it('returns null when send_count is omitted without a post_send_observation heartbeat', () => {
+    expect(classifyReconciliationTransport({
+      lifecycle_outcome: 'incident',
+      turn_result_state: 'input_invalid',
+      turn_result_cause: 'input_invalid:invocation_id_invalid',
+      delivery: 'not-sent',
+    }, 1)).toBeNull();
   });
 });
 

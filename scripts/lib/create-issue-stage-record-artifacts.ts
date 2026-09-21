@@ -1138,7 +1138,7 @@ function sealedPostSendSendCount(envelope: JsonRecord): 1 | null {
   return null;
 }
 
-function classifyReconciliationTransport(
+export function classifyReconciliationTransport(
   envelope: JsonRecord,
   attemptOrdinal: number,
 ): {
@@ -1171,11 +1171,11 @@ function classifyReconciliationTransport(
   } else {
     terminalClassification = 'incident';
   }
+  // A child-witnessed sendCount 0 proves nothing reached the reviewer, whatever the
+  // pre-send cause; the two-attempt budget bounds the single retry.
   const retryableZeroSend = attemptOrdinal === 1
     && sendCount === 0
-    && (terminalClassification === 'quota'
-      || terminalClassification === 'composer-refusal'
-      || terminalClassification === 'fill-timeout');
+    && terminalClassification !== 'complete';
   return {
     terminalClassification,
     sendCount,
