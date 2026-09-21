@@ -206,6 +206,8 @@ interface TransportOptions {
   cycleComments?: Array<Record<string, unknown>>;
   issueBodies?: string[];
   issueNumber?: number;
+  persistCreatedIssueComments?: boolean;
+  issueLabels?: string[];
 }
 
 function transport(options: TransportOptions = {}) {
@@ -220,6 +222,7 @@ function transport(options: TransportOptions = {}) {
   const census = [...suppliedCensus, ...journalComments];
   let issueReadCount = 0;
   const createdIssueComments: string[] = [];
+  const issueLabels = [...(options.issueLabels ?? [])];
   const runGh = vi.fn((argv: string[]) => {
     if (argv[2] === 'user') {
       if (principal === null) return { exitCode: 1, stdout: '', stderr: 'principal unavailable' };
@@ -233,12 +236,29 @@ function transport(options: TransportOptions = {}) {
       const bodies = options.issueBodies ?? [finalAcceptanceIssueBody(observedRevision)];
       const body = bodies[Math.min(issueReadCount, bodies.length - 1)] ?? '';
       issueReadCount += 1;
-      return { exitCode: 0, stdout: JSON.stringify({ title: 'fixture issue', body, labels: [] }), stderr: '' };
+      return { exitCode: 0, stdout: JSON.stringify({ title: 'fixture issue', body, labels: issueLabels }), stderr: '' };
+    }
+    if (target === `repos/${REPOSITORY}/issues/${issueNumber}` && argv.includes('-X') && argv.includes('PATCH')) {
+      const labels = argv
+        .filter((value) => value.startsWith('labels[]='))
+        .map((value) => value.slice('labels[]='.length));
+      issueLabels.splice(0, issueLabels.length, ...labels);
+      return { exitCode: 0, stdout: '{}', stderr: '' };
     }
     if (target === `repos/${REPOSITORY}/issues/${issueNumber}/comments` && argv.includes('-f')) {
       const body = argv.find((value) => value.startsWith('body='))?.slice('body='.length) ?? '';
       createdIssueComments.push(body);
-      return { exitCode: 0, stdout: JSON.stringify({ id: COMMENT_ID + 2000 + createdIssueComments.length }), stderr: '' };
+      const id = COMMENT_ID + 2000 + createdIssueComments.length;
+      if (options.persistCreatedIssueComments) {
+        const createdAt = `2026-09-21T00:${String(createdIssueComments.length).padStart(2, '0')}:00Z`;
+        census.push(comment(body, {
+          id,
+          issueNumber,
+          created_at: createdAt,
+          updated_at: createdAt,
+        }));
+      }
+      return { exitCode: 0, stdout: JSON.stringify({ id }), stderr: '' };
     }
     if (target === `repos/${REPOSITORY}`) {
       return { exitCode: 0, stdout: `${PUBLISHER}\n`, stderr: '' };
@@ -260,7 +280,7 @@ function transport(options: TransportOptions = {}) {
     }
     throw new Error(`unexpected gh call: ${argv.join(' ')}`);
   });
-  return { runGh, createdIssueComments };
+  return { runGh, createdIssueComments, issueLabels };
 }
 
 function writeGovernedAuthorReply(
