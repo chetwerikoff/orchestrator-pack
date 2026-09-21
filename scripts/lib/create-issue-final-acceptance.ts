@@ -1,6 +1,10 @@
 import { realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { logicalFingerprint } from './create-issue-stage-record-marker.ts';
+import {
+  isPublicActor,
+  logicalFingerprint,
+  resolveRecoveredInvalidPublicActorPoisonWitness,
+} from './create-issue-stage-record-marker.ts';
 import {
   clearPendingEvent,
   clearPersistedCycleId,
@@ -50,6 +54,20 @@ export interface FinalAcceptanceResult {
   guardErrors: string[];
   eventKey?: string;
   projectionPendingRepair?: boolean;
+}
+
+type FinalAcceptanceCensusState = ReturnType<typeof loadIssueJournalCensus>;
+
+function blockingMalformedJournalDiagnostics(censusState: FinalAcceptanceCensusState): LineageDiagnostic[] {
+  const recoveredPoison = resolveRecoveredInvalidPublicActorPoisonWitness({
+    comments: censusState.fetched.comments,
+    parsedDiagnostics: censusState.parsed.diagnostics,
+    lineage: censusState.lineage,
+  });
+  return censusState.parsed.diagnostics.filter((diagnostic) => (
+    diagnostic.code === 'malformed-marker'
+    && diagnostic.commentId !== recoveredPoison?.poisonCommentId
+  ));
 }
 
 export function validatePublishBodyBinding(reviewedBody: string, currentBody: string): string[] {
@@ -191,6 +209,16 @@ export function runFinalAcceptance(
   input: FinalAcceptanceInput,
 ): FinalAcceptanceResult {
   const diagnostics: LineageDiagnostic[] = [];
+  if (!isPublicActor(input.publicActor)) {
+    return {
+      ok: false,
+      diagnostics: [{
+        code: 'malformed-marker',
+        message: `invalid public actor ${String(input.publicActor)}`,
+      }],
+      guardErrors: [`invalid public actor ${String(input.publicActor)}`],
+    };
+  }
   const workdir = input.workdir ?? defaultWorkdir(input.issueNumber);
   const bootstrapDiagnostics = ensureProjectionLabels(transport, input.repo);
   diagnostics.push(...bootstrapDiagnostics);
@@ -198,8 +226,16 @@ export function runFinalAcceptance(
 
   const censusState = loadIssueJournalCensus(transport, input.repo, input.issueNumber, input.census);
   diagnostics.push(...censusState.diagnostics);
-  const censusUsable = censusState.fetched.commentsComplete
-    && !censusState.diagnostics.some((item) => item.code === 'malformed-marker');
+  const blockingMalformed = blockingMalformedJournalDiagnostics(censusState);
+  if (censusState.fetched.commentsComplete && blockingMalformed.length > 0) {
+    return {
+      ok: false,
+      diagnostics,
+      guardErrors: blockingMalformed.map((item) => `public journal blocking malformed marker: ${item.message}`),
+      projectionPendingRepair: true,
+    };
+  }
+  const censusUsable = censusState.fetched.commentsComplete;
   if (!censusUsable) {
     projectionPendingRepair = true;
     diagnostics.push({
@@ -461,6 +497,16 @@ export function runFinalAcceptance(
   }
 
   const refreshed = loadIssueJournalCensus(transport, input.repo, input.issueNumber, input.census);
+  const refreshedBlockingMalformed = blockingMalformedJournalDiagnostics(refreshed);
+  if (refreshed.fetched.commentsComplete && refreshedBlockingMalformed.length > 0) {
+    return {
+      ok: false,
+      diagnostics: [...diagnostics, ...refreshed.diagnostics],
+      guardErrors: refreshedBlockingMalformed.map((item) => `public journal blocking malformed marker: ${item.message}`),
+      eventKey,
+      projectionPendingRepair: true,
+    };
+  }
   if (!refreshed.fetched.commentsComplete) {
     return {
       ok: true,
