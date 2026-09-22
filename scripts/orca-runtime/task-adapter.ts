@@ -235,6 +235,13 @@ function hasCurrentDispatchHeartbeat(lastHeartbeatAt: string, nowMs = Date.now()
     && nowMs - heartbeatMs <= DISPATCH_HEARTBEAT_STALE_AFTER_MS;
 }
 
+function isTerminallyFailedMissingRetained(parsed: OrcaWorkerShowResult): boolean {
+  return parsed.observation?.exactWorker === false
+    && (parsed.observation?.status?.trim().toLowerCase() ?? '') === 'missing'
+    && (parsed.dispatch?.status?.trim().toLowerCase() ?? '') === 'failed'
+    && parsed.terminalResource?.releaseState === 'retained';
+}
+
 function classifyWorkerLifecycle(result: OrcaWorkerShowResult | undefined): OrcaAssignmentActivity {
   const lifecycle = normalizedWorkerLifecycle(result);
   if (lifecycle.observationStatus === 'exited') return 'inactive';
@@ -409,7 +416,13 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       return runtimeFailure('resolve_assignment_worker', neutralFailureReason(shown));
     }
     const parsed = parseOrcaWorkerShowResult(shown.result);
-    if (!parsed || parsed.observation?.exactWorker !== true) {
+    if (!parsed) {
+      return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
+    }
+    if (isTerminallyFailedMissingRetained(parsed)) {
+      return { status: 'ok', value: { kind: 'gone', evidence: 'producer_exact_absence' } };
+    }
+    if (parsed.observation?.exactWorker !== true) {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
     }
     const activity = classifyWorkerLifecycle(parsed);
@@ -479,6 +492,9 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     const parsed = parseOrcaWorkerShowResult(shown.result);
     if (!parsed) {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
+    }
+    if (isTerminallyFailedMissingRetained(parsed)) {
+      return { status: 'ok', value: { kind: 'gone' } };
     }
     const exact = parsed.observation?.exactWorker === true;
     if (!exact) {

@@ -1,0 +1,21 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2006,
+  "declared_paths": [
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/orca-runtime/task-adapter.ts"
+  ],
+  "denylist": [
+    ".env",
+    "credentials/",
+    "mining/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/orca-runtime/task-adapter.ts"
+  ],
+  "source_revision": "31fd4b9b309d2fc93a502ef507f53aa68673c30d"
+}
