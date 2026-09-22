@@ -223,7 +223,7 @@ describe('supervised worker start exact assignment admission',()=>{
   });
 
   it('starts a new task on the same retained exact live terminal after a failed dispatch',async()=>{
-    const base=root(); const env={...process.env,OPK_BASE_DIR:base}; const file=resolveWorkerAssignmentStorePath('orchestrator-pack',env);
+    const base=root(); const env={...process.env,OPK_BASE_DIR:base,OPK_DISPATCH_TERMINAL_MAIL_LEDGER:path.join(base,'terminal-mail-ledger.json')}; const file=resolveWorkerAssignmentStorePath('orchestrator-pack',env);
     const old=await publishCurrentWorkerAssignment({file,repository:'chetwerikoff/orchestrator-pack',issueNumber:1416,taskId:'task_old',kind:'local',provider:'orca',bindingKey:'dispatch_old',role:'worker'});
     if(!old.ok)throw new Error(old.reason);
     const order: string[]=[];
@@ -247,7 +247,7 @@ describe('supervised worker start exact assignment admission',()=>{
       orcaArgs:args('task_new'),
       adapter:new OrcaTaskRuntimeAdapter({
         runJson:runJson as never,
-        env:{...env,OPK_DISPATCH_TERMINAL_MAIL_LEDGER:path.join(base,'terminal-mail-ledger.json')},
+        env,
       }),
       inspect:inspectPlacement(),
       execute:async()=>{
@@ -261,6 +261,38 @@ describe('supervised worker start exact assignment admission',()=>{
     expect(currentWorkerAssignment(file,1416)).toMatchObject({taskId:'task_new',bindingKey:'dispatch_new'});
     expect(order.indexOf('orchestration send')).toBeGreaterThan(order.indexOf('orchestration worker-show'));
     expect(order.indexOf('worker-start')).toBeGreaterThan(order.indexOf('orchestration send'));
+    expect(runJson.mock.calls.some((call)=>call[0]?.slice(0,2).join(' ')==='terminal close')).toBe(false);
+  });
+
+  it('keeps the old assignment when terminal-mail send fails',async()=>{
+    const base=root(); const env={...process.env,OPK_BASE_DIR:base,OPK_DISPATCH_TERMINAL_MAIL_LEDGER:path.join(base,'failed-mail-ledger.json')}; const file=resolveWorkerAssignmentStorePath('orchestrator-pack',env);
+    const old=await publishCurrentWorkerAssignment({file,repository:'chetwerikoff/orchestrator-pack',issueNumber:1416,taskId:'task_old',kind:'local',provider:'orca',bindingKey:'dispatch_old',role:'worker'});
+    if(!old.ok)throw new Error(old.reason);
+    const shown={
+      dispatch:{id:'dispatch_old',status:'failed',last_heartbeat_at:null,run_id:'run_failed_mail'},
+      worker:{agent_terminal_handle:canonicalTerminal},
+      terminal:{handle:canonicalTerminal},
+      observation:{exactWorker:true,status:'live'},
+      terminalResource:{terminalHandle:canonicalTerminal,worktreeId:'wt-mail-failed',originDispatchId:'dispatch_old',ownerDispatchId:'dispatch_old',releaseState:'retained'},
+    };
+    const runJson=vi.fn((cliArgs: readonly string[]): OrcaJsonResponse => {
+      const operation=`${cliArgs[0] ?? ''} ${cliArgs[1] ?? ''}`;
+      if(operation==='orchestration worker-show') return {ok:true,result:shown};
+      if(operation==='orchestration send') return {ok:false,error:{code:'send_failed',message:'terminal mail unavailable'}};
+      return {ok:false,error:{code:'unexpected_operation',message:operation}};
+    });
+    let starts=0;
+    const result=await runSupervisedWorkerStart({role:'worker',
+      issueNumber:1416,repository:'chetwerikoff/orchestrator-pack',env,
+      orcaArgs:args('task_blocked'),
+      adapter:new OrcaTaskRuntimeAdapter({runJson:runJson as never,env}),
+      inspect:inspectPlacement(),
+      execute:async()=>{starts+=1;return{ok:true,stdout:envelope({taskId:'task_blocked',dispatchId:'dispatch_new',state:'ready',effects:producerEffects()})};},
+    });
+    expect(result).toEqual({ok:false,reason:'target_unresolved'});
+    expect(starts).toBe(0);
+    expect(currentWorkerAssignment(file,1416)).toEqual(old.assignment);
+    expect(runJson.mock.calls.some((call)=>call[0]?.slice(0,2).join(' ')==='orchestration send')).toBe(true);
     expect(runJson.mock.calls.some((call)=>call[0]?.slice(0,2).join(' ')==='terminal close')).toBe(false);
   });
 

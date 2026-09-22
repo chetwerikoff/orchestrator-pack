@@ -15,6 +15,7 @@ import {
   type WorkerAssignment,
   type WorkerAssignmentRecord,
 } from './worker-assignment-store.ts';
+import { hasRecordedDispatchTerminalMail } from '../orca-runtime/dispatch-terminal-mail.ts';
 
 export interface ResolvedWorkerAssignment {
   readonly assignment: WorkerAssignment;
@@ -269,6 +270,7 @@ export async function admitCurrentWorkerAssignmentReplacement(input: {
   readonly timeoutMs?: number;
   readonly observationWindowMs?: number;
   readonly requestedTerminalId?: string;
+  readonly env?: NodeJS.ProcessEnv;
 }): Promise<WorkerAssignmentReplacementAdmission> {
   const fenced = await withCurrentWorkerAssignmentFence(input.file, input.expected, () => {
     if (input.expected.kind !== 'local') {
@@ -317,6 +319,7 @@ export async function admitCurrentWorkerAssignmentReplacement(input: {
         && observed.released !== true
         && observed.workerId
         && sameTerminalHandle(requestedTerminalId, observed.workerId)
+        && hasRecordedDispatchTerminalMail(input.expected.bindingKey, { env: input.env })
       ) {
         return { status: 'replaceable', expected: input.expected } as const;
       }

@@ -506,6 +506,7 @@ export async function runSupervisedWorkerStart(input: {
           expected: expectedCurrent,
           adapter,
           requestedTerminalId: canonicalTerminal,
+          env: input.env ?? process.env,
         });
       }
     }
