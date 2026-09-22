@@ -16,6 +16,11 @@ The target repository or trusted pack checkout must provide:
 - `AGENTS.md` and the relevant prompts;
 - Node 22 workspace configuration.
 
+For target-repository embedding, precedence, project-owned extensions, and
+pack-relative authority pointers, see the canonical [`AGENTS.md`
+target-repository policy](../AGENTS.md#target-repository-embedding-and-coexistence).
+This document is setup guidance only and does not restate that policy.
+
 Do not copy a removed runtime configuration, state directory, daemon launcher, or
 compatibility wrapper into the target repository.
 

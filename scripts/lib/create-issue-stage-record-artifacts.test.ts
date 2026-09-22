@@ -12,13 +12,18 @@ import {
   AUTHOR_DISPOSITIONS_SCHEMA,
   STAGE_EVIDENCE_SCHEMA,
   classifyReconciliationTransport,
+  classifyZeroSendCausePolicy,
   inspectAcceptanceArtifacts,
+  readEvidenceZeroSendTerminal,
+  reconcileStageReadIsRetryable,
   locateGovernedAuthorDispositionBlock,
   parseCanonicalCaptureRevision,
   produceAcceptanceArtifacts,
+  bindPublishedCommentToSlot,
   reconcileCreateIssueStage,
   stageReceiptPayloadsMatchExceptDerivedChain,
 } from './create-issue-stage-record-artifacts.ts';
+import { parseConsumableStageReceipt } from './create-issue-stage-record-receipt.ts';
 import { runFinalAcceptance } from './create-issue-final-acceptance.ts';
 import { validateTerminalOneShotBodyBinding } from './create-issue-final-acceptance-contract.ts';
 import {
@@ -32,6 +37,11 @@ import {
   type VerifiedRelayEvidenceV1,
 } from './stage-completeness-core.ts';
 import { validateReviewLaneRecord } from './review-lane-record.ts';
+import {
+  existingPacedBoundedRetryAction,
+  projectZeroSendManagerResult,
+  type CreateIssueActionBinding,
+} from './create-issue-next-action.ts';
 import {
   buildReviewLaneRouting,
   classifyReviewLaneDeclaration,
@@ -3366,5 +3376,279 @@ describe('Issue #2010 settled receipt sourceVerdicts recovery', () => {
     };
     expect(receipt.reviewLane.sourceVerdictEvidence['03']).toBeUndefined();
     expect(receipt.reviewLane.sourceVerdicts['03']).toBe('accept');
+  });
+});
+
+describe('Issue #2017 routed missing-slot recovery', () => {
+  it('binds an empty routed slot from tier-intake and reconciles a consistent artifact verdict', () => {
+    const input = fixture();
+    const declaration: ReviewLaneAuthorDeclaration = {
+      schema: 'review-lane-change-set/v1',
+      owner: 'issue-author',
+      entries: [{ kind: 'exact', path: 'scripts/lib/create-issue-stage-record-artifacts.ts', behaviors: ['published-comment-bind'] }],
+    };
+    const normalized = normalizeReviewLaneDeclaration(declaration);
+    if (normalized.status !== 'usable') throw new Error(normalized.status);
+    const routing = buildReviewLaneRouting(
+      { ...normalized, identity: `${REVISION}:${normalized.identity}` },
+      classifyReviewLaneDeclaration(declaration),
+      REVISION,
+      'attempt-001',
+      'normal',
+    );
+    const slotIds = ['published-slot-01', 'published-slot-02', 'published-slot-03'] as const;
+    const bodyFor = (id: string) => [
+      `Read revision: #${ISSUE} ${REVISION}`,
+      `INVOCATION_ID_TO_ECHO: ${id}`,
+      'review-economics-contract: v1',
+      'VERDICT: CLEAN',
+      'NO_FINDINGS',
+      'SIMPLIFICATION_CLEAN',
+      'FINDING_COUNT: 0',
+      '',
+    ].join('\n');
+    const comments = slotIds.map((id, index) => comment(bodyFor(id), { id: COMMENT_ID + 11 + index }));
+    const evidence = {
+      schema: STAGE_EVIDENCE_SCHEMA,
+      producer: 'create-issue-stage-finalize/start-cycle',
+      taskIdentity: TASK,
+      tier: 'T3',
+      stage: 'architectural-review',
+      stageAttemptId: 'attempt-001',
+      stageSequence: 1,
+      cycleId: 'cycle-2017',
+      cycleBinding: { cycleId: 'cycle-2017', sourceRevision: REVISION, boundBeforeLaunch: true },
+      policyVersion: 'review-lane-routing/v1',
+      reviewerCardinality: routing.reviewerCardinality,
+      cardinalityConfigIdentity: routing.cardinalityConfigIdentity,
+      sourceRevision: REVISION,
+      reviewLaneRouting: routing,
+      invocations: [],
+    };
+    writeFileSync(input.reviewEvidencePath, JSON.stringify(evidence, null, 2) + '\n');
+    const source = transport({ census: comments });
+    for (const [index, id] of slotIds.entries()) {
+      const slot = String(index + 1).padStart(2, '0');
+      const reviewComment = comments[index]!;
+      const bound = bindPublishedCommentToSlot({
+        reviewDir: input.dir,
+        stageEvidencePath: input.reviewEvidencePath,
+        repositoryFullName: REPOSITORY,
+        issueNumber: ISSUE,
+        reviewerSlot: slot,
+        invocationId: id,
+        commentUrl: String(reviewComment.html_url),
+        artifactSourceTransport: source,
+      });
+      expect(bound.ok, bound.errors.join('\n')).toBe(true);
+    }
+    const boundEvidence = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as {
+      invocations: Array<Record<string, unknown>>;
+    };
+    expect(boundEvidence.invocations.map((row) => row.reviewEpisodeId)).toEqual(slotIds.map(() => `${TASK}@${REVISION}`));
+    for (const name of readdirSync(input.dir)) {
+      if (name.endsWith('.capture.txt')) rmSync(join(input.dir, name));
+    }
+    const reconciled = reconcileCreateIssueStage({
+      reviewDir: input.dir,
+      stageEvidencePath: input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: source,
+    });
+    expect(reconciled.ok, reconciled.errors.join('\n')).toBe(true);
+    const stored = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as {
+      reviewLane: { sourceVerdicts: Record<string, string>; sourceVerdictEvidence: Record<string, { terminalClassification: string }> };
+      completedSourceCount?: number;
+    };
+    expect(stored.reviewLane.sourceVerdicts['01']).toBe('accept');
+    expect(stored.reviewLane.sourceVerdicts['02']).toBe('accept');
+    expect(stored.reviewLane.sourceVerdicts['03']).toBe('accept');
+    expect(stored.reviewLane.sourceVerdictEvidence['01'].terminalClassification).toBe('complete');
+    expect(stored.reviewLane.sourceVerdictEvidence['02'].terminalClassification).toBe('complete');
+    expect(validateReviewLaneRecord(stored.reviewLane).ok).toBe(true);
+    const parsed = parseConsumableStageReceipt({ ...stored, completedSourceCount: 3 });
+    expect(parsed.errors, parsed.errors.join('\n')).toEqual([]);
+    expect(parsed.receipt).not.toBeNull();
+  });
+});
+
+describe('cause-classed zero-send continuation (Issue #1999)', () => {
+  const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
+  const fixtureDir = join(repoRoot, 'tests/external-output-references');
+  const fixtureNames = [
+    'create-issue-926-terminal-competitive-01.json',
+    'create-issue-926-terminal-competitive-01-final.json',
+    'create-issue-witness-conflict-existing-artifact.json',
+    'create-issue-1977-poisoned-canonical-attempt.json',
+  ];
+  const binding: CreateIssueActionBinding = {
+    repository: 'chetwerikoff/orchestrator-pack',
+    issueNumber: 926,
+    sourceRevision: 'r04',
+    stage: 'competitive',
+    stageAttemptId: '926-competitive-attempt',
+  };
+
+  function loadFixture(name: string): Record<string, unknown> {
+    return JSON.parse(readFileSync(join(fixtureDir, name), 'utf8')) as Record<string, unknown>;
+  }
+
+  function project(envelope: Record<string, unknown>, attemptOrdinal: number, freshInvocationId?: string) {
+    const policy = classifyZeroSendCausePolicy(envelope);
+    return projectZeroSendManagerResult({
+      policy,
+      attemptOrdinal,
+      binding,
+      invocationId: 'fixture-invocation',
+      reviewerSlot: '01',
+      owned_prompt_seen: typeof (envelope.observation_uncertainty_diagnostics as { owned_prompt_seen?: boolean } | undefined)?.owned_prompt_seen === 'boolean'
+        ? (envelope.observation_uncertainty_diagnostics as { owned_prompt_seen: boolean }).owned_prompt_seen
+        : undefined,
+      observed_user_heads: Array.isArray((envelope.observation_uncertainty_diagnostics as { observed_user_heads?: unknown } | undefined)?.observed_user_heads)
+        ? (envelope.observation_uncertainty_diagnostics as { observed_user_heads: string[] }).observed_user_heads
+        : undefined,
+      pacedRetryAction: existingPacedBoundedRetryAction(binding, '01'),
+      freshInvocationId,
+    });
+  }
+
+  it('keeps the four scrubbed fixtures free of chat URLs, cookies, tokens, secrets, and local paths', () => {
+    const forbidden = /chatgpt\.com|cookie|token|secret|\/home\/|\/tmp\//i;
+    for (const name of fixtureNames) {
+      const text = readFileSync(join(fixtureDir, name), 'utf8');
+      expect(text, name).not.toMatch(forbidden);
+    }
+  });
+
+  it('classifies the #926 input_invalid envelope as deterministic-input and keeps #1981 retry class', () => {
+    const envelope = loadFixture('create-issue-926-terminal-competitive-01.json');
+    expect(classifyZeroSendCausePolicy(envelope)).toEqual({
+      class: 'deterministic-input',
+      code: 'input_invalid',
+      rawCause: 'input_invalid:invocation_id_invalid',
+    });
+    expect(classifyReconciliationTransport(envelope, 1)).toEqual({
+      terminalClassification: 'incident',
+      sendCount: 0,
+      retryClass: 'eligible-zero-send',
+    });
+    expect(classifyReconciliationTransport(envelope, 2)).toMatchObject({ retryClass: 'retry-forbidden' });
+    const projected = project(envelope, 1, 'fresh-invocation-id');
+    expect(projected).toMatchObject({
+      ok: false,
+      cause: 'input_invalid',
+      blocker: 'input_invalid:invocation_id_invalid',
+      nextAction: null,
+      reason: {
+        class: 'deterministic-input',
+        code: 'input_invalid',
+        rawCause: 'input_invalid:invocation_id_invalid',
+        binding,
+      },
+    });
+    expect(JSON.stringify(projected)).not.toContain('fresh-invocation-id');
+  });
+
+  it('classifies the #926 marker-conflict envelope from observable diagnostics only', () => {
+    const envelope = loadFixture('create-issue-926-terminal-competitive-01-final.json');
+    expect(classifyZeroSendCausePolicy(envelope)).toEqual({
+      class: 'state-conflict',
+      code: 'marker_conflict',
+      rawCause: 'observation_marker_conflict',
+    });
+    const projected = project(envelope, 1);
+    expect(projected).toMatchObject({
+      nextAction: null,
+      reason: {
+        class: 'state-conflict',
+        code: 'marker_conflict',
+        rawCause: 'observation_marker_conflict',
+        owned_prompt_seen: false,
+        observed_user_heads: ['FOREIGN'],
+      },
+    });
+    expect(JSON.stringify(projected)).not.toContain('comment');
+  });
+
+  it.each([
+    ['quota', 'quota'],
+    ['rate_limit', 'rate_limit'],
+    ['composer-refusal', 'composer-refusal'],
+    ['fill-timeout', 'fill-timeout'],
+    ['chrome_not_running', 'chrome_not_running'],
+  ])('uses the existing paced retry once for observable %s', (cause, code) => {
+    const envelope = {
+      schema: 'turn-result/v1',
+      state: cause,
+      cause,
+      send_count: 0,
+    };
+    const policy = classifyZeroSendCausePolicy(envelope);
+    expect(policy).toEqual({ class: 'transient', code, rawCause: cause });
+    const action = existingPacedBoundedRetryAction(binding, '01');
+    expect(action.kind).toBe('retry-create-issue-browser-preflight');
+    expect(action.binding.stageAttemptId).toBe(binding.stageAttemptId);
+    expect(action.argv).toContain('--stage-attempt-id');
+    expect(action.argv).toContain(binding.stageAttemptId!);
+    const projected = projectZeroSendManagerResult({
+      policy,
+      attemptOrdinal: 1,
+      binding,
+      reviewerSlot: '01',
+      pacedRetryAction: action,
+    });
+    expect(projected).toEqual({
+      ok: false,
+      cause: code,
+      blocker: cause,
+      nextAction: action,
+    });
+    const second = projectZeroSendManagerResult({
+      policy,
+      attemptOrdinal: 2,
+      binding,
+      reviewerSlot: '01',
+      pacedRetryAction: action,
+    });
+    expect(second).toMatchObject({ nextAction: null, reason: { class: 'transient', code } });
+  });
+
+  it('does not admit child_start_failed or browser process spawn failure', () => {
+    for (const cause of ['child_start_failed', 'browser process spawn failure']) {
+      const envelope = {
+        schema: 'turn-result/v1',
+        state: 'driver_error',
+        cause,
+        send_count: 0,
+      };
+      expect(classifyZeroSendCausePolicy(envelope)).toBeNull();
+      expect(project(envelope, 1)).toBeNull();
+    }
+  });
+
+  it('keeps an existing-artifact witness conflict off the zero-send retry path', () => {
+    const fixture = loadFixture('create-issue-witness-conflict-existing-artifact.json');
+    expect(classifyZeroSendCausePolicy(fixture)).toBeNull();
+    expect(reconcileStageReadIsRetryable({
+      errors: [`${String(fixture.conflict)}: ${String(fixture.existingCaptureName)}`],
+    })).toBe(false);
+  });
+
+  it('reads the #1977 poisoned canonical attempt without changing its stageAttemptId', () => {
+    const observed = readEvidenceZeroSendTerminal(join(fixtureDir, 'create-issue-1977-poisoned-canonical-attempt.json'));
+    expect(observed).toMatchObject({
+      stageAttemptId: '1977-poisoned-canonical-attempt',
+      sourceRevision: 'r04',
+      stage: 'competitive',
+      attemptOrdinal: 1,
+      policy: {
+        class: 'deterministic-input',
+        code: 'input_invalid',
+        rawCause: 'input_invalid:invocation_id_invalid',
+      },
+      invocationId: '1977-deterministic-invocation',
+      reviewerSlot: '01',
+    });
   });
 });

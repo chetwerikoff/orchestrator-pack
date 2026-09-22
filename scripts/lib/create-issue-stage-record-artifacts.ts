@@ -32,6 +32,7 @@ import {
   type StageCompletenessReceiptV1,
   type TierIntakeAuthorityV1,
   type VerifiedRelayEvidenceV1,
+  resolveCanonicalReviewDirectory,
 } from './stage-completeness-core.ts';
 import { canonicalStagePlan, stagesForPhase } from './create-issue-stage-topology.ts';
 import { evaluateStageCredentialingSettlement } from './create-issue-stage-lifecycle-acceptance.ts';
@@ -1161,6 +1162,209 @@ function resolveAuthoritativeArtifact(
 type ReconciliationTransportClassification = ReviewerInvocationEnvelopeV1['terminalClassification'];
 type ReconciliationRetryClass = ReviewerInvocationEnvelopeV1['retryClass'];
 
+export type ZeroSendCauseClass = 'transient' | 'deterministic-input' | 'state-conflict';
+
+export interface ZeroSendCausePolicy {
+  class: ZeroSendCauseClass;
+  code: string;
+  rawCause: string;
+}
+
+export interface ZeroSendTerminalObservation {
+  stageAttemptId: string;
+  sourceRevision: string;
+  stage: string;
+  attemptOrdinal: 1;
+  policy: ZeroSendCausePolicy;
+  invocationId?: string;
+  reviewerSlot?: string;
+  owned_prompt_seen?: boolean;
+  observed_user_heads?: string[];
+}
+
+const ZERO_SEND_EXCLUDED_CAUSES = [
+  'child_start_failed',
+  'browser process spawn failure',
+] as const;
+
+function envelopeText(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function zeroSendCauseText(envelope: JsonRecord): { state: string; cause: string; incident: string } {
+  return {
+    state: envelopeText(envelope.turn_result_state) || envelopeText(envelope.state),
+    cause: envelopeText(envelope.turn_result_cause) || envelopeText(envelope.cause),
+    incident: envelopeText(envelope.incident),
+  };
+}
+
+function observableTurnResult(envelope: JsonRecord): boolean {
+  return envelope.schema === TURN_RESULT_SCHEMA
+    || typeof envelope.turn_result_state === 'string'
+    || typeof envelope.turn_result_cause === 'string'
+    || (typeof envelope.state === 'string' && typeof envelope.cause === 'string');
+}
+
+function excludedZeroSendCause(text: string): boolean {
+  return ZERO_SEND_EXCLUDED_CAUSES.some((cause) => text.includes(cause));
+}
+
+function deterministicZeroSendCode(state: string, cause: string): string | null {
+  const blob = `${state}\n${cause}`;
+  if (blob.includes('input_invalid')) return 'input_invalid';
+  if (blob.includes('canonical_prompt_mismatch')) return 'canonical_prompt_mismatch';
+  if (blob.includes('argument_required:')) return 'argument_required';
+  if (blob.includes('operator configuration missing')) return 'operator_configuration_missing';
+  if (blob.includes('owned_conversation_identity_mismatch')) return 'owned_conversation_identity_mismatch';
+  return null;
+}
+
+function transientZeroSendCode(state: string, cause: string): string | null {
+  if (state === 'rate_limit' || cause === 'rate_limit') return 'rate_limit';
+  if (state === 'quota' || cause === 'quota') return 'quota';
+  if (state === 'chrome_not_running' || cause === 'chrome_not_running') return 'chrome_not_running';
+  if (state === 'composer-refusal' || cause.includes('composer') || cause === 'blocking_page_overlay') return 'composer-refusal';
+  if (state === 'fill-timeout' || cause.includes('fill')) return 'fill-timeout';
+  return null;
+}
+
+export function zeroSendEnvelopeDiagnostics(envelope: JsonRecord): {
+  owned_prompt_seen?: boolean;
+  observed_user_heads?: string[];
+} {
+  const candidates = [envelope];
+  if (isRecord(envelope.observation_uncertainty_diagnostics)) candidates.push(envelope.observation_uncertainty_diagnostics);
+  if (isRecord(envelope.uncertainty)) candidates.push(envelope.uncertainty);
+  let ownedPromptSeen: boolean | undefined;
+  let observedUserHeads: string[] | undefined;
+  for (const candidate of candidates) {
+    if (ownedPromptSeen === undefined && typeof candidate.owned_prompt_seen === 'boolean') {
+      ownedPromptSeen = candidate.owned_prompt_seen;
+    }
+    if (
+      !observedUserHeads
+      && Array.isArray(candidate.observed_user_heads)
+      && candidate.observed_user_heads.every((item) => typeof item === 'string' && item.trim().length > 0)
+    ) {
+      observedUserHeads = [...candidate.observed_user_heads];
+    }
+  }
+  return {
+    ...(ownedPromptSeen !== undefined ? { owned_prompt_seen: ownedPromptSeen } : {}),
+    ...(observedUserHeads ? { observed_user_heads: observedUserHeads } : {}),
+  };
+}
+
+export function classifyZeroSendCausePolicy(envelope: JsonRecord): ZeroSendCausePolicy | null {
+  if (envelope.send_count !== 0) return null;
+  if (!observableTurnResult(envelope)) return null;
+  const { state, cause, incident } = zeroSendCauseText(envelope);
+  const rawCause = cause || state || incident;
+  if (!rawCause) return null;
+  if (excludedZeroSendCause(`${state}\n${cause}\n${incident}`)) return null;
+  if (state.includes('observation_marker_conflict') || cause.includes('observation_marker_conflict')) {
+    return { class: 'state-conflict', code: 'marker_conflict', rawCause };
+  }
+  const deterministic = deterministicZeroSendCode(state, cause);
+  if (deterministic) return { class: 'deterministic-input', code: deterministic, rawCause };
+  const transient = transientZeroSendCode(state, cause);
+  if (transient) return { class: 'transient', code: transient, rawCause };
+  return null;
+}
+
+export function reconcileStageReadIsRetryable(result: {
+  temporary?: string;
+  errors: readonly string[];
+}): boolean {
+  return Boolean(result.temporary)
+    || result.errors.some((error) => error.includes('zero_principal_owned_match')
+      || error.includes('authoritative GitHub artifact absent'));
+}
+
+function resolveInvocationEnvelope(evidencePath: string, invocation: JsonRecord): JsonRecord | null {
+  if (isRecord(invocation.terminalEnvelope)) return invocation.terminalEnvelope;
+  const terminalEnvelopePath = optionalString(invocation.terminalEnvelopePath);
+  if (!terminalEnvelopePath) return null;
+  const resolved = resolve(dirname(evidencePath), terminalEnvelopePath);
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(resolved, 'utf8'));
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function readEvidenceZeroSendTerminal(evidencePath: string): ZeroSendTerminalObservation | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(evidencePath, 'utf8')) as unknown;
+  } catch {
+    return null;
+  }
+  if (!isRecord(parsed) || !Array.isArray(parsed.invocations)) return null;
+  const stageAttemptId = optionalString(parsed.stageAttemptId);
+  const sourceRevision = optionalString(parsed.sourceRevision);
+  const stage = optionalString(parsed.stage);
+  if (!stageAttemptId || !sourceRevision || !stage) return null;
+  let conflict: ZeroSendTerminalObservation | null = null;
+  for (const invocation of parsed.invocations) {
+    if (!isRecord(invocation)) continue;
+    if (invocation.attemptOrdinal === 2) continue;
+    if (invocation.terminal !== true || invocation.sendCount !== 0) continue;
+    const envelope = resolveInvocationEnvelope(evidencePath, invocation);
+    if (!envelope) continue;
+    const policy = classifyZeroSendCausePolicy(envelope);
+    if (!policy || policy.class === 'transient') continue;
+    const diagnostics = zeroSendEnvelopeDiagnostics(envelope);
+    const observation: ZeroSendTerminalObservation = {
+      stageAttemptId,
+      sourceRevision,
+      stage,
+      attemptOrdinal: 1,
+      policy,
+      ...(optionalString(invocation.invocationId) ? { invocationId: optionalString(invocation.invocationId) } : {}),
+      ...(optionalString(invocation.reviewerSlot) ? { reviewerSlot: optionalString(invocation.reviewerSlot) } : {}),
+      ...diagnostics,
+    };
+    if (policy.class === 'deterministic-input') return observation;
+    if (!conflict) conflict = observation;
+  }
+  return conflict;
+}
+
+export function readCanonicalZeroSendTerminal(input: {
+  issueNumber: number;
+  sourceRevision: string;
+  stage?: string;
+  stateRootOverride?: string;
+}): ZeroSendTerminalObservation | null {
+  let directory: string;
+  try {
+    directory = resolveCanonicalReviewDirectory(
+      { taskIdentity: `issue:${input.issueNumber}` },
+      input.stateRootOverride,
+    ).directory;
+  } catch {
+    return null;
+  }
+  if (!existsSync(directory)) return null;
+  let conflict: ZeroSendTerminalObservation | null = null;
+  const paths = readdirSync(directory)
+    .filter((name) => /^attempt-[0-9]{3}\.json$/.test(name))
+    .sort()
+    .map((name) => join(directory, name));
+  for (const path of paths) {
+    const observed = readEvidenceZeroSendTerminal(path);
+    if (!observed) continue;
+    if (observed.sourceRevision.toLowerCase() !== input.sourceRevision.toLowerCase()) continue;
+    if (input.stage && observed.stage !== input.stage) continue;
+    if (observed.policy.class === 'deterministic-input') return observed;
+    if (!conflict) conflict = observed;
+  }
+  return conflict;
+}
+
 function sealedPostSendSendCount(envelope: JsonRecord): 1 | null {
   const diagnostics = isRecord(envelope.diagnostics) ? envelope.diagnostics : null;
   const lastHeartbeat = diagnostics && isRecord(diagnostics.last_heartbeat) ? diagnostics.last_heartbeat : null;
@@ -1184,17 +1388,25 @@ export function classifyReconciliationTransport(
   if (sendCount !== 0 && sendCount !== 1) return null;
   const state = optionalString(envelope.turn_result_state) ?? '';
   const cause = optionalString(envelope.turn_result_cause) ?? '';
+  const zeroSendPolicy = sendCount === 0 ? classifyZeroSendCausePolicy(envelope) : null;
   let terminalClassification: ReconciliationTransportClassification;
   if (envelope.lifecycle_outcome === 'success' && state === 'ok' && sendCount === 1) {
     terminalClassification = 'complete';
-  } else if (state === 'quota' || state === 'rate_limit') {
+  } else if (
+    zeroSendPolicy?.code === 'quota'
+    || zeroSendPolicy?.code === 'rate_limit'
+    || state === 'quota'
+    || state === 'rate_limit'
+  ) {
     terminalClassification = 'quota';
   } else if (
     sendCount === 0
-    && (cause.includes('composer') || cause === 'blocking_page_overlay')
+    && (zeroSendPolicy?.code === 'composer-refusal'
+      || cause.includes('composer')
+      || cause === 'blocking_page_overlay')
   ) {
     terminalClassification = 'composer-refusal';
-  } else if (sendCount === 0 && cause.includes('fill')) {
+  } else if (sendCount === 0 && (zeroSendPolicy?.code === 'fill-timeout' || cause.includes('fill'))) {
     terminalClassification = 'fill-timeout';
   } else if (sendCount === 1 && state === 'output_conflict') {
     terminalClassification = 'output-conflict';
@@ -1375,6 +1587,78 @@ function publishedCommentHeaderMatches(body: string, issueNumber: number, source
   );
 }
 
+function publishedCommentReviewEpisodeId(
+  raw: JsonRecord,
+  reviewDir: string,
+  errors: string[],
+): string | undefined {
+  const explicit = optionalString(raw.reviewEpisodeId);
+  const intakePath = join(reviewDir, 'tier-intake.json');
+  let derived: string | undefined;
+  if (existsSync(intakePath)) {
+    const intakeErrors: string[] = [];
+    const intake = loadTierIntake(intakePath, intakeErrors);
+    if (!intake) {
+      errors.push(...intakeErrors);
+      return undefined;
+    }
+    const taskIdentity = optionalString(raw.taskIdentity);
+    if (taskIdentity && taskIdentity !== intake.taskIdentity) {
+      errors.push('tier-intake taskIdentity does not match stage evidence');
+      return undefined;
+    }
+    derived = deriveReviewEpisodeId(intake.taskIdentity, intake.firstRevision);
+  }
+  if (explicit && derived && explicit !== derived) {
+    errors.push('stage evidence.reviewEpisodeId is not canonical for tier-intake');
+    return undefined;
+  }
+  if (explicit || derived) return explicit ?? derived;
+  errors.push('stage evidence.reviewEpisodeId is missing and tier-intake/v1 is not in the review directory');
+  return undefined;
+}
+
+function publishedCommentInvocationRow(
+  raw: JsonRecord,
+  reviewerSlot: string,
+  invocationId: string,
+  sourceRevision: string,
+  artifactAuthority: JsonRecord,
+  reviewEpisodeId: string,
+): JsonRecord {
+  const stage = reviewerStage(raw.stage);
+  const version = policyVersion(raw.policyVersion);
+  const stageAttemptId = optionalString(raw.stageAttemptId);
+  const cardinalityConfigIdentity = optionalString(raw.cardinalityConfigIdentity);
+  const routing = isReviewLaneRouting(raw.reviewLaneRouting)
+    ? raw.reviewLaneRouting
+    : (isRecord(raw.reviewLane) && isReviewLaneRouting(raw.reviewLane.routing) ? raw.reviewLane.routing : undefined);
+  return {
+    schema: 'reviewer-invocation-envelope/v1',
+    reviewEpisodeId,
+    ...(stageAttemptId ? { stageAttemptId } : {}),
+    ...(version ? { policyVersion: version } : {}),
+    ...(typeof raw.reviewerCardinality === 'number' ? { reviewerCardinality: raw.reviewerCardinality } : {}),
+    ...(cardinalityConfigIdentity ? { cardinalityConfigIdentity } : {}),
+    ...(stage ? { stage } : {}),
+    sourceRevision,
+    invocationId,
+    reviewerSlot,
+    reviewerOrdinal: Number(reviewerSlot),
+    attemptOrdinal: 1,
+    retryAttempt: false,
+    terminal: true,
+    terminalClassification: 'incident',
+    sendCount: 1,
+    retryClass: 'retry-forbidden',
+    revisionCheck: 'matched',
+    capacityOutcome: 'admitted',
+    capacityWaitMs: 0,
+    artifactAuthority,
+    ...(routing ? { reviewLaneRouting: routing } : {}),
+  };
+}
+
 export function bindPublishedCommentToSlot(
   options: BindPublishedCommentToSlotOptions,
 ): BindPublishedCommentToSlotResult {
@@ -1449,18 +1733,23 @@ export function bindPublishedCommentToSlot(
     .filter((value) => optionalString(value.reviewerSlot) === reviewerSlot)
     .sort((left, right) => Number(left.attemptOrdinal ?? 0) - Number(right.attemptOrdinal ?? 0));
   const final = slotInvocations.at(-1);
-  if (!final) {
-    return { ok: false, errors: ['stage evidence has no invocation mapping for reviewerSlot ' + reviewerSlot] };
-  }
-  if (optionalString(final.invocationId) !== invocationId) {
+  if (final && optionalString(final.invocationId) !== invocationId) {
     return { ok: false, errors: ['named slot final invocationId does not match --invocation-id'] };
+  }
+  if (!final && !/^\d{2}$/.test(reviewerSlot)) {
+    return { ok: false, errors: ['reviewerSlot must be NN'] };
+  }
+  const createdReviewEpisodeId = final
+    ? undefined
+    : publishedCommentReviewEpisodeId(raw, options.reviewDir, errors);
+  if (!final && !createdReviewEpisodeId) {
+    return { ok: false, errors: [...new Set(errors)] };
   }
 
   const otherSlotsBefore = invocations
     .filter((value) => optionalString(value.reviewerSlot) !== reviewerSlot)
     .map((value) => JSON.stringify(value));
-  final.sendCount = 1;
-  final.artifactAuthority = {
+  const artifactAuthority = {
     kind: AUTHORITATIVE_GITHUB_ARTIFACT_BASIS,
     repositoryFullName: options.repositoryFullName,
     issueNumber: options.issueNumber,
@@ -1470,6 +1759,12 @@ export function bindPublishedCommentToSlot(
     createdAt: comment.createdAt,
     updatedAt: comment.updatedAt,
   };
+  if (final) {
+    final.sendCount = 1;
+    final.artifactAuthority = artifactAuthority;
+  } else {
+    invocations.push(publishedCommentInvocationRow(raw, reviewerSlot, invocationId, sourceRevision, artifactAuthority, createdReviewEpisodeId!));
+  }
   const otherSlotsAfter = invocations
     .filter((value) => optionalString(value.reviewerSlot) !== reviewerSlot)
     .map((value) => JSON.stringify(value));
@@ -1818,7 +2113,9 @@ export function reconcileCreateIssueStage(
       sourceVerdictEvidence[slot] = {
         producerEvidenceIdentity: 'authoritative-github-artifact:comment-' + resolvedArtifact.authority.commentId,
         captureIdentity: resolvedArtifact.capture.captureIdentity,
-        terminalClassification: finalInvocation.terminalClassification,
+        terminalClassification: resolvedArtifact.authority.kind === AUTHORITATIVE_GITHUB_ARTIFACT_BASIS
+          ? 'complete'
+          : finalInvocation.terminalClassification,
         credentialingAuthority: 'authoritative-github-artifact',
         captureVerified: true,
         digestMatches: true,

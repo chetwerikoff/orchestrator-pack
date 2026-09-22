@@ -1,0 +1,10 @@
+{
+  "schema": "create-issue-witness-conflict-existing-artifact/v1",
+  "invocationId": "invocation-bound-01",
+  "stageAttemptId": "architectural-review-attempt",
+  "send_count": 1,
+  "turn_result_state": "output_conflict",
+  "turn_result_cause": "witness_conflict_existing_artifact",
+  "conflict": "authoritative GitHub artifact conflicts with existing canonical capture",
+  "existingCaptureName": "pass-01-architectural-review-01.capture.txt"
+}

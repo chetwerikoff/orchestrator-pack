@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { executeFinalAcceptanceGuards, FINAL_ACCEPTANCE_CONTRACT_VERSION } from './create-issue-final-acceptance-contract.ts';
 import { runFinalAcceptance, validatePublishBodyBinding } from './create-issue-final-acceptance.ts';
@@ -1086,7 +1087,16 @@ describe('Issue #2009 bind-published-comment', () => {
     };
   }
 
-  function writeEvidence(dir: string, extra: Record<string, unknown>[] = []) {
+  function headerFor(id: string): string {
+    return [
+      `Read revision: #${issueNumber} r01`,
+      `INVOCATION_ID_TO_ECHO: ${id}`,
+      'review-economics-contract: v1',
+      '',
+    ].join('\n');
+  }
+
+  function writeEvidence(dir: string, extra: Record<string, unknown>[] = [], rows?: Record<string, unknown>[]) {
     const evidencePath = join(dir, 'attempt-001.json');
     writeFileSync(evidencePath, JSON.stringify({
       schema: STAGE_EVIDENCE_SCHEMA,
@@ -1094,9 +1104,13 @@ describe('Issue #2009 bind-published-comment', () => {
       stage: 'competitive',
       stageAttemptId: 'attempt-001',
       stageSequence: 1,
+      reviewEpisodeId: 'episode-2009',
+      policyVersion: 'triple-source/v1',
+      reviewerCardinality: 3,
+      cardinalityConfigIdentity: 'config',
       sourceRevision: 'r01',
       outcome: 'incident',
-      invocations: [invocation('01', invocationId), invocation('02', 'invocation-slot-02'), ...extra],
+      invocations: rows ?? [invocation('01', invocationId), invocation('02', 'invocation-slot-02'), ...extra],
     }, null, 2) + '\n');
     return evidencePath;
   }
@@ -1176,12 +1190,15 @@ describe('Issue #2009 bind-published-comment', () => {
       reviewerSlot: '01',
       invocationId,
       sendCount: 1,
+      terminalClassification: 'incident',
+      retryClass: 'retry-forbidden',
       artifactAuthority: {
         kind: 'authoritative-github-artifact',
         commentId,
         commentUrl,
       },
     });
+    expect(stored.invocations.filter((row) => row.reviewerSlot === '01')).toHaveLength(1);
     expect(stored.invocations[1]).toEqual(slotTwoBefore);
     expect(stored.invocations).toHaveLength(2);
   });
@@ -1211,24 +1228,181 @@ describe('Issue #2009 bind-published-comment', () => {
     expect(readFileSync(evidencePath, 'utf8')).toBe(before);
   });
 
-  it('does not create a mapping for a slot that has no invocation', () => {
+  it('creates one invocation row when the named slot has none and leaves the other slot untouched', () => {
     const dir = makeCliTempDir();
-    const evidencePath = writeEvidence(dir);
-    const before = readFileSync(evidencePath, 'utf8');
-    const { transport } = commentTransport();
+    const createdId = 'invocation-slot-03';
+    const evidencePath = writeEvidence(dir, [], [invocation('02', 'invocation-slot-02')]);
+    const slotTwoBefore = JSON.parse(readFileSync(evidencePath, 'utf8')).invocations[0];
+    const { transport, calls } = commentTransport(headerFor(createdId));
     const result = bindPublishedCommentToSlot({
       reviewDir: dir,
       stageEvidencePath: evidencePath,
       repositoryFullName: repo,
       issueNumber,
       reviewerSlot: '03',
+      invocationId: createdId,
+      commentUrl,
+      artifactSourceTransport: transport,
+    });
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.sendCount).toBe(1);
+    expect(calls.every((argv) => argv[1] === 'api' && !argv.includes('-X') && !argv.includes('-f'))).toBe(true);
+
+    const stored = JSON.parse(readFileSync(evidencePath, 'utf8')) as { invocations: Array<Record<string, unknown>> };
+    const created = stored.invocations.filter((row) => row.reviewerSlot === '03');
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({
+      schema: 'reviewer-invocation-envelope/v1',
+      reviewEpisodeId: 'episode-2009',
+      stageAttemptId: 'attempt-001',
+      policyVersion: 'triple-source/v1',
+      reviewerCardinality: 3,
+      cardinalityConfigIdentity: 'config',
+      stage: 'competitive',
+      sourceRevision: 'r01',
+      reviewerSlot: '03',
+      reviewerOrdinal: 3,
+      invocationId: createdId,
+      attemptOrdinal: 1,
+      retryAttempt: false,
+      sendCount: 1,
+      retryClass: 'retry-forbidden',
+      artifactAuthority: {
+        kind: 'authoritative-github-artifact',
+        commentId,
+        commentUrl,
+        publisherLogin: 'chetwerikoff',
+      },
+    });
+    expect(stored.invocations.find((row) => row.reviewerSlot === '02')).toEqual(slotTwoBefore);
+    expect(stored.invocations).toHaveLength(2);
+  });
+
+  it('creates the only row when invocations is empty', () => {
+    const dir = makeCliTempDir();
+    const evidencePath = writeEvidence(dir, [], []);
+    const { transport, calls } = commentTransport();
+    const result = bindPublishedCommentToSlot({
+      reviewDir: dir,
+      stageEvidencePath: evidencePath,
+      repositoryFullName: repo,
+      issueNumber,
+      reviewerSlot: '01',
       invocationId,
       commentUrl,
       artifactSourceTransport: transport,
     });
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    const stored = JSON.parse(readFileSync(evidencePath, 'utf8')) as { invocations: Array<Record<string, unknown>> };
+    expect(stored.invocations).toHaveLength(1);
+    expect(stored.invocations[0]).toMatchObject({
+      reviewerSlot: '01',
+      invocationId,
+      sendCount: 1,
+    });
+    expect(calls.some((argv) => argv.includes('-X') || argv.includes('-f'))).toBe(false);
+  });
+
+  it('fails closed when the existing final row has a different invocation id and writes nothing', () => {
+    const dir = makeCliTempDir();
+    const evidencePath = writeEvidence(dir);
+    const before = readFileSync(evidencePath, 'utf8');
+    const otherId = 'invocation-other';
+    const { transport } = commentTransport(headerFor(otherId));
+    const result = bindPublishedCommentToSlot({
+      reviewDir: dir,
+      stageEvidencePath: evidencePath,
+      repositoryFullName: repo,
+      issueNumber,
+      reviewerSlot: '01',
+      invocationId: otherId,
+      commentUrl,
+      artifactSourceTransport: transport,
+    });
     expect(result.ok).toBe(false);
-    expect(result.errors.join('\n')).toContain('no invocation mapping for reviewerSlot 03');
+    expect(result.errors.join('\n')).toContain('named slot final invocationId does not match --invocation-id');
     expect(readFileSync(evidencePath, 'utf8')).toBe(before);
+  });
+
+  it('does not reclassify an existing eligible-zero-send row when the invocation id matches', () => {
+    const dir = makeCliTempDir();
+    const row = invocation('01', invocationId);
+    row.retryClass = 'eligible-zero-send';
+    row.sendCount = 0;
+    const evidencePath = writeEvidence(dir, [], [row, invocation('02', 'invocation-slot-02')]);
+    const beforeOther = JSON.parse(readFileSync(evidencePath, 'utf8')).invocations[1];
+    const { transport } = commentTransport();
+    const result = bindPublishedCommentToSlot({
+      reviewDir: dir,
+      stageEvidencePath: evidencePath,
+      repositoryFullName: repo,
+      issueNumber,
+      reviewerSlot: '01',
+      invocationId,
+      commentUrl,
+      artifactSourceTransport: transport,
+    });
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    const stored = JSON.parse(readFileSync(evidencePath, 'utf8')) as { invocations: Array<Record<string, unknown>> };
+    expect(stored.invocations.filter((item) => item.reviewerSlot === '01')).toHaveLength(1);
+    expect(stored.invocations[0]).toMatchObject({
+      invocationId,
+      sendCount: 1,
+      retryClass: 'eligible-zero-send',
+      terminalClassification: 'incident',
+    });
+    expect(stored.invocations[1]).toEqual(beforeOther);
+  });
+
+  it('derives reviewEpisodeId from tier-intake when the lifecycle seed omits it', () => {
+    const dir = makeCliTempDir();
+    const taskIdentity = `issue:${issueNumber}`;
+    writeFileSync(join(dir, 'tier-intake.json'), JSON.stringify({
+      schema: 'tier-intake/v1',
+      producer: 'flow-manager',
+      taskIdentity,
+      kind: 'fresh',
+      priorTier: 'T3',
+      firstRevision: 'r01',
+    }, null, 2) + '\n');
+    const evidencePath = join(dir, 'attempt-001.json');
+    writeFileSync(evidencePath, JSON.stringify({
+      schema: STAGE_EVIDENCE_SCHEMA,
+      producer: 'create-issue-stage-finalize/start-cycle',
+      taskIdentity,
+      tier: 'T3',
+      stage: 'competitive',
+      stageAttemptId: 'attempt-001',
+      stageSequence: 1,
+      cycleId: 'cycle-2017',
+      cycleBinding: { cycleId: 'cycle-2017', sourceRevision: 'r01', boundBeforeLaunch: true },
+      policyVersion: 'triple-source/v1',
+      reviewerCardinality: 3,
+      cardinalityConfigIdentity: 'config',
+      sourceRevision: 'r01',
+      invocations: [],
+    }, null, 2) + '\n');
+    const { transport } = commentTransport();
+    const result = bindPublishedCommentToSlot({
+      reviewDir: dir,
+      stageEvidencePath: evidencePath,
+      repositoryFullName: repo,
+      issueNumber,
+      reviewerSlot: '01',
+      invocationId,
+      commentUrl,
+      artifactSourceTransport: transport,
+    });
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    const stored = JSON.parse(readFileSync(evidencePath, 'utf8')) as { invocations: Array<Record<string, unknown>> };
+    expect(stored.invocations).toHaveLength(1);
+    expect(stored.invocations[0]).toMatchObject({
+      reviewEpisodeId: `${taskIdentity}@r01`,
+      reviewerSlot: '01',
+      invocationId,
+      sendCount: 1,
+      retryClass: 'retry-forbidden',
+    });
   });
 });
 
@@ -1460,3 +1634,103 @@ function makeCliTempDir(): string {
   cliTempDirs.push(dir);
   return dir;
 }
+
+
+describe('poisoned canonical deterministic attempt stays terminal (Issue #1999)', () => {
+  const fixturePath = join(
+    fileURLToPath(new URL('../..', import.meta.url)),
+    'tests/external-output-references/create-issue-1977-poisoned-canonical-attempt.json',
+  );
+  const issueNumber = 91999;
+
+  function writeCanonicalAttempt(stateRoot: string): { reviewDir: string; evidencePath: string; bytes: string } {
+    const reviewDir = join(stateRoot, '.review', String(issueNumber));
+    mkdirSync(reviewDir, { recursive: true });
+    const evidencePath = join(reviewDir, 'attempt-001.json');
+    const bytes = readFileSync(fixturePath, 'utf8');
+    writeFileSync(evidencePath, bytes);
+    return { reviewDir, evidencePath, bytes };
+  }
+
+  it('start-cycle and read-only reconcile-stage return nextAction null and keep the canonical stageAttemptId', () => {
+    const stateRoot = makeCliTempDir();
+    const previous = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = stateRoot;
+    const prepared = writeCanonicalAttempt(stateRoot);
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      logs.push(String(line));
+    });
+    try {
+      const startCode = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'start-cycle',
+        '--repo', 'chetwerikoff/orchestrator-pack',
+        '--issue-number', String(issueNumber),
+        '--source-revision', 'r04',
+        '--stage', 'competitive',
+        '--tier', 'T2',
+        '--public-actor', 'cursor-flow-manager',
+        '--json',
+      ]);
+      expect(startCode).toBe(1);
+      const started = JSON.parse(logs.at(-1) ?? '') as {
+        nextAction: unknown;
+        stageAttemptId: string;
+        reason: { class: string; code: string };
+      };
+      expect(started.nextAction).toBeNull();
+      expect(started.stageAttemptId).toBe('1977-poisoned-canonical-attempt');
+      expect(started.reason).toMatchObject({ class: 'deterministic-input', code: 'input_invalid' });
+
+      const reviewDir = makeCliTempDir();
+      const evidencePath = join(reviewDir, 'attempt-001.json');
+      writeFileSync(evidencePath, prepared.bytes);
+      const reconcileCode = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
+        '--repo', 'chetwerikoff/orchestrator-pack',
+        '--issue-number', String(issueNumber),
+        '--review-dir', reviewDir,
+        '--stage-evidence', evidencePath,
+        '--json',
+      ]);
+      expect(reconcileCode).toBe(1);
+      const reconciled = JSON.parse(logs.at(-1) ?? '') as {
+        nextAction: unknown;
+        stageAttemptId: string;
+      };
+      expect(reconciled.nextAction).toBeNull();
+      expect(reconciled.stageAttemptId).toBe('1977-poisoned-canonical-attempt');
+      expect(readFileSync(evidencePath, 'utf8')).toBe(prepared.bytes);
+      expect(readFileSync(prepared.evidencePath, 'utf8')).toBe(prepared.bytes);
+    } finally {
+      spy.mockRestore();
+      if (previous === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previous;
+    }
+  });
+
+  it('does not call GitHub or replace the canonical attempt from startReviewCycle', () => {
+    const stateRoot = makeCliTempDir();
+    const prepared = writeCanonicalAttempt(stateRoot);
+    let ghCalls = 0;
+    const result = startReviewCycle({
+      runGh() {
+        ghCalls += 1;
+        return { exitCode: 1, stdout: '', stderr: 'must not be called' };
+      },
+    }, {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber,
+      sourceRevision: 'r04',
+      stage: 'competitive',
+      tier: 'T2',
+      publicActor: 'cursor-flow-manager',
+      stateRootOverride: stateRoot,
+      workdir: makeCliTempDir(),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.stageAttemptId).toBe('1977-poisoned-canonical-attempt');
+    expect(ghCalls).toBe(0);
+    expect(readFileSync(prepared.evidencePath, 'utf8')).toBe(prepared.bytes);
+  });
+});

@@ -1,0 +1,15 @@
+{
+  "schema": "flow-manager-long-running-child-terminal/v1",
+  "lifecycle_outcome": "incident",
+  "delivery": "not-sent",
+  "turn_result_state": "output_conflict",
+  "turn_result_cause": "observation_marker_conflict",
+  "send_count": 0,
+  "recovery_available": false,
+  "observation_uncertainty_diagnostics": {
+    "cause": "observation_marker_conflict",
+    "send_count": 0,
+    "owned_prompt_seen": false,
+    "observed_user_heads": ["FOREIGN"]
+  }
+}

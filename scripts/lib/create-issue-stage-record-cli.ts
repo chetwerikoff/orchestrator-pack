@@ -12,16 +12,23 @@ import {
   bindPublishedCommentToSlot,
   inspectAcceptanceArtifacts,
   produceAcceptanceArtifacts,
+  readCanonicalZeroSendTerminal,
+  readEvidenceZeroSendTerminal,
   reconcileCreateIssueStage,
+  reconcileStageReadIsRetryable,
+  type ZeroSendTerminalObservation,
 } from './create-issue-stage-record-artifacts.ts';
 import {
   createIssueNextAction,
   createIssueRecoverableResult,
   createIssueStaleNextAction,
   createIssueTerminalResult,
+  existingPacedBoundedRetryAction,
+  projectZeroSendManagerResult,
   validateCreateIssueManagerResult,
   type CreateIssueActionBinding,
   type CreateIssueNextAction,
+  type CreateIssueZeroSendReason,
 } from './create-issue-next-action.ts';
 import { resolveCanonicalReviewDirectory } from './stage-completeness-core.ts';
 import type { LifecycleReviewStage } from './create-issue-stage-lifecycle.ts';
@@ -627,17 +634,51 @@ function staleArtifactBinding(
 }
 
 
+function zeroSendTerminalProjection(
+  observation: ZeroSendTerminalObservation,
+  repository: string,
+  issueNumber: number,
+): { cause: string; blocker?: string; reason?: CreateIssueZeroSendReason; nextAction: CreateIssueNextAction | null } | null {
+  if (
+    observation.stage !== 'competitive'
+    && observation.stage !== 'architectural-review'
+    && observation.stage !== 'architectural-lens'
+    && observation.stage !== 'architectural'
+  ) return null;
+  const binding: CreateIssueActionBinding = {
+    repository,
+    issueNumber,
+    sourceRevision: observation.sourceRevision,
+    stage: observation.stage,
+    stageAttemptId: observation.stageAttemptId,
+  };
+  const projected = projectZeroSendManagerResult({
+    policy: observation.policy,
+    attemptOrdinal: observation.attemptOrdinal,
+    binding,
+    invocationId: observation.invocationId,
+    reviewerSlot: observation.reviewerSlot,
+    owned_prompt_seen: observation.owned_prompt_seen,
+    observed_user_heads: observation.observed_user_heads,
+    pacedRetryAction: existingPacedBoundedRetryAction(binding, observation.reviewerSlot),
+  });
+  if (!projected || projected.nextAction !== null) return null;
+  return projected;
+}
+
 function validatedManagerSurfaceOutput<T extends { ok: boolean }>(
   result: T,
   failureCause: string,
   nextAction: CreateIssueNextAction | null,
   blocker?: string,
-): T & { cause?: string; blocker?: string; nextAction: CreateIssueNextAction | null } {
+  reason?: CreateIssueZeroSendReason,
+): T & { cause?: string; blocker?: string; reason?: CreateIssueZeroSendReason; nextAction: CreateIssueNextAction | null } {
   const output = {
     ...result,
     ...(result.ok ? {} : {
       cause: failureCause,
       ...(blocker ? { blocker } : {}),
+      ...(reason ? { reason } : {}),
     }),
     nextAction,
   };
@@ -851,6 +892,22 @@ export function runStageFinalizeCli(argv: string[]): number {
         return 2;
       }
       const stageEvidencePath = parseRequiredNonEmptyString(opts.stageEvidencePaths[0], '--stage-evidence');
+      const deterministicTerminal = readEvidenceZeroSendTerminal(stageEvidencePath);
+      if (deterministicTerminal?.policy.class === 'deterministic-input') {
+        const projected = zeroSendTerminalProjection(deterministicTerminal, opts.repo, issueNumber);
+        if (projected) {
+          const output = validatedManagerSurfaceOutput(
+            { ok: false, stageAttemptId: deterministicTerminal.stageAttemptId },
+            projected.cause,
+            null,
+            projected.blocker,
+            projected.reason,
+          );
+          if (opts.json) console.log(JSON.stringify(output));
+          else process.stderr.write((projected.blocker ?? projected.cause) + '\n');
+          return 1;
+        }
+      }
       const stale = staleArtifactBinding(opts, reviewDir, issueNumber);
       if (stale) {
         if (opts.json) console.log(JSON.stringify(stale));
@@ -884,9 +941,7 @@ export function runStageFinalizeCli(argv: string[]): number {
           '--expected-stage-attempt-id', result.stageAttemptId,
           '--json',
         ];
-        const retryableRead = Boolean(result.temporary)
-          || result.errors.some((error) => error.includes('zero_principal_owned_match')
-            || error.includes('authoritative GitHub artifact absent'));
+        const retryableRead = reconcileStageReadIsRetryable(result);
         if (result.ok && !result.alreadySettled) {
           nextAction = createIssueNextAction({
             kind: 'produce-acceptance-artifacts',
@@ -913,11 +968,17 @@ export function runStageFinalizeCli(argv: string[]): number {
           });
         }
       }
+      const zeroSendTerminal = nextAction ? null : readEvidenceZeroSendTerminal(stageEvidencePath);
+      const zeroSendProjection = zeroSendTerminal
+        && (zeroSendTerminal.policy.class === 'deterministic-input' || zeroSendTerminal.policy.class === 'state-conflict')
+        ? zeroSendTerminalProjection(zeroSendTerminal, opts.repo, issueNumber)
+        : null;
       const output = validatedManagerSurfaceOutput(
         result,
-        result.temporary ?? 'reconciliation_failed',
+        zeroSendProjection?.cause ?? result.temporary ?? 'reconciliation_failed',
         nextAction,
-        result.ok ? undefined : result.errors.join('; '),
+        result.ok ? undefined : (zeroSendProjection?.blocker ?? result.errors.join('; ')),
+        zeroSendProjection?.reason,
       );
       if (opts.json) console.log(JSON.stringify(output));
       else if (!result.ok) process.stderr.write(result.errors.join('\n') + '\n');
@@ -987,6 +1048,26 @@ export function runStageFinalizeCli(argv: string[]): number {
       const sourceRevision = parseRequiredNonEmptyString(opts.sourceRevision, '--source-revision');
       const tier = parseRequiredNonEmptyString(opts.tier, '--tier');
       const stage = parseRequiredNonEmptyString(opts.stage, '--stage') as LifecycleReviewStage;
+      const deterministicTerminal = readCanonicalZeroSendTerminal({
+        issueNumber,
+        sourceRevision,
+        stage,
+      });
+      if (deterministicTerminal?.policy.class === 'deterministic-input') {
+        const projected = zeroSendTerminalProjection(deterministicTerminal, opts.repo, issueNumber);
+        if (projected) {
+          const output = validatedManagerSurfaceOutput(
+            { ok: false, stageAttemptId: deterministicTerminal.stageAttemptId },
+            projected.cause,
+            null,
+            projected.blocker,
+            projected.reason,
+          );
+          if (opts.json) console.log(JSON.stringify(output));
+          else process.stderr.write((projected.blocker ?? projected.cause) + '\n');
+          return 1;
+        }
+      }
       const stale = staleStartCycleBinding(opts, issueNumber);
       if (stale) {
         if (opts.json) console.log(JSON.stringify(stale));
