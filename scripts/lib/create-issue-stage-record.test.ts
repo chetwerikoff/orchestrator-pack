@@ -1916,6 +1916,21 @@ describe('Issue #2032 reconcile-stage next action for noncanonical publications'
     expect(result.output.blocker).not.toContain('reconcile-stage');
   });
 
+  it('returns nextAction null for lowercase VERDICT even without a raw finding id', () => {
+    const body = findingsBody(slot01Invocation, 'findings')
+      .split(/\r?\n/)
+      .filter((line) => !/^id:\s*/i.test(line.trim()))
+      .join('\n');
+    const result = reconcile(oneSlot, [ghComment(5772579436, body)]);
+    const errors = result.output.errors?.join('\n') ?? '';
+    expect(body).not.toMatch(/^id:\s*/im);
+    expect(result.code).toBe(1);
+    expect(result.output.nextAction).toBeNull();
+    expect(result.output.cause).toBe('reconciliation_failed');
+    expect(errors).toContain('permanently_noncanonical_publication');
+    expect(errors).not.toContain('zero_principal_owned_match');
+  });
+
   it('does not return the same reconcile argv for the Issue #2024 mixed slot shape', () => {
     const slots = [
       { slot: '01', invocationId: slot01Invocation },
