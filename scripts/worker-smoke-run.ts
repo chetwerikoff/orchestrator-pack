@@ -233,6 +233,7 @@ export interface SmokeAttemptDependencies {
     target: ResolvedSmokeTarget,
     options: CliOptions,
   ) => boolean;
+  readonly publishComment?: (prNumber: number, body: string, repoRoot: string) => void;
 }
 
 interface SmokeChildResult {
@@ -1016,11 +1017,18 @@ interface SmokePublicationBinding {
   operatorOverrideReason?: string;
 }
 
-function publishSmokeReport(report: SmokeReport, options: CliOptions, binding?: SmokePublicationBinding): void {
-  if (options.dryRun) return;
-  publishPrComment(options.prNumber, formatSmokeReportComment(report), options.repoRoot);
-  if (!binding) return;
-  writeWorkerSmokeReceipt(report, binding);
+function publishSmokeReport(
+  report: SmokeReport,
+  options: CliOptions,
+  binding?: SmokePublicationBinding,
+  publishComment: (prNumber: number, body: string, repoRoot: string) => void = publishPrComment,
+  afterComment?: () => void,
+): boolean {
+  if (options.dryRun) return false;
+  publishComment(options.prNumber, formatSmokeReportComment(report), options.repoRoot);
+  afterComment?.();
+  if (binding) writeWorkerSmokeReceipt(report, binding);
+  return true;
 }
 
 function attemptObservationsFromScenarios(
@@ -1700,6 +1708,7 @@ function preAttemptPublication(
 }
 
 export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAttemptDependencies = {}): Promise<number> {
+  const publishComment = dependencies.publishComment ?? publishPrComment;
   const suppliedIssueBody = readIssueBody(options.issueBodyFile);
   let issueBody = suppliedIssueBody;
   let resolvedTarget: ResolvedSmokeTarget | undefined;
@@ -1728,7 +1737,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
           action: 'bind smoke to trusted live Issue and PR', expected: 'supplied body, open Issue/PR, and exact live PR head match',
           observed,
         });
-        publishSmokeReport(report, options); emit({ ok: false, report }, options.json); return 1;
+        publishSmokeReport(report, options, undefined, publishComment); emit({ ok: false, report }, options.json); return 1;
       }
     }
   }
@@ -1743,7 +1752,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   }
   if (plan.scenarios.length === 0) {
     const report = operationalReport('unknown', options, { action: 'parse smoke-test-plan', expected: 'at least one scenario', observed: 'zero_parsed_scenarios' });
-    publishSmokeReport(report, options); emit({ ok: false, report }, options.json); return 1;
+    publishSmokeReport(report, options, undefined, publishComment); emit({ ok: false, report }, options.json); return 1;
   }
 
   const selection = selectSmokeAttempt(options, issueBody, resolvedTarget, dependencies);
@@ -1776,7 +1785,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       expected: 'supplied body, open Issue/PR, and exact live PR head match',
       observed: trustedTargetHeadMismatch,
     });
-    publishSmokeReport(report, options, preAttempt);
+    publishSmokeReport(report, options, preAttempt, publishComment);
     emit({ ok: false, report, attemptId }, options.json);
     return 1;
   }
@@ -1790,7 +1799,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       expected: 'git index is readable before smoke execution',
       observed: scrubSmokeOutput(error instanceof Error ? error.message : String(error)),
     });
-    publishSmokeReport(report, options, preAttempt); emit({ ok: false, report, attemptId }, options.json); return 1;
+    publishSmokeReport(report, options, preAttempt, publishComment); emit({ ok: false, report, attemptId }, options.json); return 1;
   }
   if (trackedSmokeRuntimePaths.length > 0) {
     const report = operationalReport('harness_dirty_worktree', options, {
@@ -1798,7 +1807,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       expected: 'no .orca-worker-smoke/** path is tracked or staged',
       observed: trackedSmokeRuntimePaths.join(', '),
     });
-    publishSmokeReport(report, options, preAttempt); emit({ ok: false, report, attemptId }, options.json); return 1;
+    publishSmokeReport(report, options, preAttempt, publishComment); emit({ ok: false, report, attemptId }, options.json); return 1;
   }
 
   let smokeProfile: SmokeExecutorProfile;
@@ -1815,24 +1824,31 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       action: 'resolve smoke executor profile', expected: 'one supported smoke profile applied before child creation',
       observed: scrubSmokeOutput(error instanceof Error ? error.message : String(error)),
     });
-    publishSmokeReport(report, options, preAttempt); emit({ ok: false, report }, options.json); return 1;
+    publishSmokeReport(report, options, preAttempt, publishComment); emit({ ok: false, report }, options.json); return 1;
   }
 
   const adapter = dependencies.adapter ?? await selectRuntimeAdapter({}, { cwd: options.cwd, transport: { env: { ...profileEnv } } });
   const readiness = adapter.readiness({ cwd: options.cwd });
   if (readiness.status !== 'ok') {
     const report = operationalReport('harness_admission_refused', options, { action: 'resolve runtime worktree', expected: 'current worktree is runtime-managed', observed: failureReason(readiness), adapterId: adapter.id });
-    publishSmokeReport(report, options, preAttempt); emit({ ok: false, report }, options.json); return 1;
+    publishSmokeReport(report, options, preAttempt, publishComment); emit({ ok: false, report }, options.json); return 1;
   }
   const headBinding = verifySmokeHeadBinding({ requestedHeadSha: options.headSha, orcaHeadSha: readiness.value.headSha, gitHeadSha: gitHead(options.cwd) });
   if (!headBinding.ok) {
     const report = operationalReport('harness_head_mismatch', options, { action: 'bind smoke to current head', expected: options.headSha, observed: `${headBinding.reason}:${headBinding.observed}`, adapterId: adapter.id });
-    publishSmokeReport(report, options, preAttempt); emit({ ok: false, report }, options.json); return 1;
+    publishSmokeReport(report, options, preAttempt, publishComment); emit({ ok: false, report }, options.json); return 1;
   }
 
   let orderingBinding: SmokeOrderingBinding | null = null;
   let orderingOutcome: 'passed' | 'failed' = 'failed';
   let orderingFailureKind: SmokeOrderingFailureKind = 'retryable';
+  let publishedPassRecorded = false;
+  const recordPublishedOrdering = (report: SmokeReport, published: boolean): void => {
+    if (!published || publishedPassRecorded) return;
+    orderingOutcome = report.result === 'PASS' ? 'passed' : 'failed';
+    orderingFailureKind = report.result === 'FAIL' ? 'finding' : 'retryable';
+    if (report.result === 'PASS') publishedPassRecorded = true;
+  };
   let pendingDetachedTerminalization: DetachedTerminalizationRequest | undefined;
   const deferDetachedTerminalization = (
     runId: string,
@@ -1856,7 +1872,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     const report = operationalReport('harness_dirty_worktree', options, {
       action: 'verify clean tracked worktree', expected: 'no tracked modifications', observed: trackedPorcelainPaths(beforeStatus).join(', '), adapterId: adapter.id,
     });
-    publishSmokeReport(report, options, preAttempt); emit({ ok: false, report }, options.json); return 1;
+    publishSmokeReport(report, options, preAttempt, publishComment); emit({ ok: false, report }, options.json); return 1;
   }
   const beforeHashes = hashTrackedPaths(options.cwd, trackedPorcelainPaths(beforeStatus));
 
@@ -1882,7 +1898,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
         action: 'verify carry-only smoke lifecycle cleanliness', expected: 'no unresolved prior smoke lifecycle before carry-only publication',
         observed: `smoke_lifecycle_unclean:${lifecycle.reasons[0] ?? 'unknown'}`, terminalCleanup: 'not_started_no_execution', adapterId: adapter.id,
       });
-      publishSmokeReport(report, options, carryPublication);
+      publishSmokeReport(report, options, carryPublication, publishComment);
       if (detachedRunId) terminalizeDetachedRun(options, detachedRunId, detachedArtifactDir, 'no_execution', report);
       emit({ ok: false, report, lifecycle }, options.json); return 1;
     }
@@ -1917,11 +1933,8 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       const report = normalized.report;
       if (report.result === 'PASS' && (options.smokeActor ?? 'worker-owned') === 'worker-owned') {
         orderingBinding = null;
-      } else {
-        orderingOutcome = report.result === 'PASS' ? 'passed' : 'failed';
-        orderingFailureKind = report.result === 'FAIL' ? 'finding' : 'retryable';
       }
-      publishSmokeReport(report, options, carryPublication);
+      publishSmokeReport(report, options, carryPublication, publishComment, () => { recordPublishedOrdering(report, true); });
       let postSmoke: PostSmokeReadinessResult | undefined;
       if (report.result === 'PASS' && !options.dryRun) {
         try {
@@ -1947,7 +1960,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
         observed,
         terminalCleanup: 'not_started_no_execution', adapterId: adapter.id,
       });
-      publishSmokeReport(report, options, carryPublication);
+      publishSmokeReport(report, options, carryPublication, publishComment, () => { recordPublishedOrdering(report, true); });
       if (detachedRunId) deferDetachedTerminalization(detachedRunId, detachedArtifactDir, 'no_execution', report);
       emit({ ok: false, report, lifecycle, attemptId }, options.json); return 1;
     } finally {
@@ -1988,7 +2001,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     const admission = preflightSmokeLifecycle({ repoRoot: options.cwd, runId, closeBoundHandle: (handle) => runtimeCloseBoundHandle(adapter, handle, options) });
     if (!admission.admitted) {
       const report = operationalReport('harness_admission_refused', options, { action: 'acquire smoke spawn admission', expected: 'exclusive admission before spawn', observed: admission.reason ?? 'admission_refused', adapterId: adapter.id });
-      publishSmokeReport(report, options, preAttempt); emit({ ok: false, report, lifecycle: admission, attemptId }, options.json); return 1;
+      publishSmokeReport(report, options, preAttempt, publishComment); emit({ ok: false, report, lifecycle: admission, attemptId }, options.json); return 1;
     }
 
     const startFence = dependencies.startFence ?? directSmokeStartFence;
@@ -2014,7 +2027,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     }
     if (start.value.kind === 'spawn_failed') {
       const report = operationalReport('harness_observation_interrupted', options, { action: 'spawn runtime smoke worker', expected: 'composite worker identity', observed: start.value.reason, terminalCleanup: 'ambiguous_unbound', adapterId: adapter.id });
-      publishSmokeReport(report, options, runPublication);
+      publishSmokeReport(report, options, runPublication, publishComment, () => { recordPublishedOrdering(report, true); });
       deferDetachedTerminalization(runId, artifactDir, 'runtime', report);
       emit({ ok: false, report, attemptId }, options.json); return 1;
     }
@@ -2034,7 +2047,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
         action: 'dispatch smoke prompt once', expected: 'one dispatch attempt plus child-sealed delivery evidence', observed: delivery.reason ?? 'prompt_delivery_unconfirmed',
         terminalCleanup, environmentNotes: [`submit-count=${delivery.submitCount}`, `lifecycle-clean=${lifecycleCleanup.clean}`], worker, adapterId: adapter.id,
       });
-      publishSmokeReport(report, options, runPublication);
+      publishSmokeReport(report, options, runPublication, publishComment, () => { recordPublishedOrdering(report, true); });
       deferDetachedTerminalization(runId, artifactDir, 'runtime', report);
       emit({ ok: false, report, lifecycleCleanup, attemptId }, options.json); return 1;
     }
@@ -2053,7 +2066,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
         terminalCleanup, limitations: completion.progress?.invalidEvents.slice(0, 10),
         environmentNotes: [`lifecycle-clean=${lifecycleCleanup.clean}`, ...completionObservationNotes(completion)], worker, adapterId: adapter.id,
       });
-      publishSmokeReport(report, options, runPublication);
+      publishSmokeReport(report, options, runPublication, publishComment, () => { recordPublishedOrdering(report, true); });
       deferDetachedTerminalization(runId, artifactDir, 'runtime', report);
       emit({ ok: false, report, lifecycleCleanup, attemptId }, options.json); return 1;
     }
@@ -2089,9 +2102,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     report.terminalCleanup = terminalCleanup;
     if (!lifecycleCleanup.clean && report.result === 'PASS') report.result = 'FAIL';
     if (!lifecycleCleanup.clean) report.causeFamily = 'lifecycle_cleanup_failed';
-    orderingOutcome = report.result === 'PASS' ? 'passed' : 'failed';
-    orderingFailureKind = report.result === 'FAIL' ? 'finding' : 'retryable';
-    publishSmokeReport(report, options, { ...runPublication, attemptObservations: freshAttemptObservations });
+    publishSmokeReport(report, options, { ...runPublication, attemptObservations: freshAttemptObservations }, publishComment, () => { recordPublishedOrdering(report, true); });
     let postSmoke: PostSmokeReadinessResult | undefined;
     if (report.result === 'PASS' && !options.dryRun) {
       try {
@@ -2122,7 +2133,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       terminalCleanup: worker ? terminalCleanup : startedAtMs > 0 ? 'ambiguous_unbound' : 'not_started', worker, adapterId: adapter.id,
     });
     const publication = startedAtMs > 0 ? runPublication : preAttempt;
-    publishSmokeReport(report, options, publication);
+    publishSmokeReport(report, options, publication, publishComment, () => { recordPublishedOrdering(report, true); });
     if (options.detachedOwner && cleanupFinished) deferDetachedTerminalization(runId, artifactDir, 'runtime', report);
     emit({ ok: false, report, attemptId }, options.json); return 1;
   } finally {
