@@ -422,8 +422,8 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
     ];
     const observed = await observeGptPackReviewAttempt(run, now, {
       listTargets: (async () => targets) as never,
-      evaluate: (async (target: { id?: string }) => {
-        const invocationId = target.id === 'target-1' ? 'invocation-01' : 'invocation-02';
+      evaluate: (async (target: { normalized_url?: string }) => {
+        const invocationId = target.normalized_url?.endsWith('/one') ? 'invocation-01' : 'invocation-02';
         return {
           status: 'ok',
           generation_in_progress: true,
