@@ -43,8 +43,8 @@ import { validateTerminalOneShotBodyBinding } from './create-issue-final-accepta
 import { defaultGhTransport, fetchIssueRevision, fetchRepositoryOwnerLogin, parseJournalEvents } from './create-issue-stage-record-gh.ts';
 import type { CanonicalLineage, GhTransport, PartialMissingSourceWitness, ProducerEvidence, TrustedComment } from './create-issue-stage-record-types.ts';
 import { resolvePublishedAuthorState } from './resolve-published-author-state.ts';
-import { isReviewLaneRouting } from './review-lane-record.ts';
-import { settleReviewLane, type ReviewLaneRouting } from './review-lane-routing.ts';
+import { isReviewLaneRouting, validateReviewLaneRecord } from './review-lane-record.ts';
+import { normalizeMaterialVerdict, settleReviewLane, type ReviewLaneRouting, type ReviewLaneSourceVerdict } from './review-lane-routing.ts';
 import {
   resolveAuthenticatedGithubPrincipal,
   sameGithubPrincipal,
@@ -1506,6 +1506,64 @@ function rollbackNewReconciliationCaptures(
   }
 }
 
+const ROUTED_SOURCE_VERDICTS_DISAGREE = 'routed review record sourceVerdicts disagree with producer evidence';
+
+function rebuildRoutedReviewLaneFromProducerEvidence(reviewLane: unknown): JsonRecord | null {
+  if (!isRecord(reviewLane) || !isReviewLaneRouting(reviewLane.routing) || !isRecord(reviewLane.sourceVerdictEvidence)) return null;
+  const sourceVerdicts: Record<string, ReviewLaneSourceVerdict> = {};
+  for (const [slot, slotEvidence] of Object.entries(reviewLane.sourceVerdictEvidence)) {
+    if (!isRecord(slotEvidence) || typeof slotEvidence.terminalClassification !== 'string' || slotEvidence.terminalClassification.trim() === '') return null;
+    if (typeof slotEvidence.producerEvidenceIdentity !== 'string' || slotEvidence.producerEvidenceIdentity.trim() === '') return null;
+    sourceVerdicts[slot] = normalizeMaterialVerdict({
+      terminalClassification: slotEvidence.terminalClassification,
+      captureVerified: typeof slotEvidence.captureVerified === 'boolean' ? slotEvidence.captureVerified : undefined,
+      digestMatches: typeof slotEvidence.digestMatches === 'boolean' ? slotEvidence.digestMatches : undefined,
+      verdictText: typeof slotEvidence.verdictText === 'string' ? slotEvidence.verdictText : undefined,
+      rawFindingCount: typeof slotEvidence.rawFindingCount === 'number' ? slotEvidence.rawFindingCount : undefined,
+      materialFindingBlocks: typeof slotEvidence.materialFindingBlocks === 'number' ? slotEvidence.materialFindingBlocks : undefined,
+    });
+  }
+  const routing = reviewLane.routing;
+  const settlement = settleReviewLane(routing, sourceVerdicts);
+  const rebuilt = {
+    routing,
+    finalRequiredSlots: settlement.finalRequiredSlots,
+    sourceVerdicts,
+    sourceVerdictEvidence: reviewLane.sourceVerdictEvidence,
+    conflictDecision: settlement.conflictDecision,
+    settlement,
+  };
+  return validateReviewLaneRecord(rebuilt).ok ? rebuilt : null;
+}
+
+function atomicReplaceStageCompletenessReceipt(
+  path: string,
+  expectedCurrentText: string,
+  value: JsonRecord,
+  errors: string[],
+): boolean {
+  let current: string;
+  try { current = readFileSync(path, 'utf8'); } catch {
+    errors.push('stage-completeness receipt became unreadable before reconciliation commit: ' + path);
+    return false;
+  }
+  if (current !== expectedCurrentText) {
+    errors.push('stale_next_action: stage-completeness receipt changed during reconciliation');
+    return false;
+  }
+  const temporary = path + '.reconcile-' + process.pid + '.tmp';
+  try {
+    writeFileSync(temporary, JSON.stringify(value, null, 2) + '\n', { encoding: 'utf8', flag: 'wx' });
+    renameSync(temporary, path);
+    return true;
+  } catch (error) {
+    errors.push('unable to commit stage-completeness receipt: ' + (error instanceof Error ? error.message : String(error)));
+    return false;
+  } finally {
+    if (existsSync(temporary)) rmSync(temporary, { force: true });
+  }
+}
+
 export function reconcileCreateIssueStage(
   options: ReconcileCreateIssueStageOptions,
 ): ReconcileCreateIssueStageResult {
@@ -1545,8 +1603,10 @@ export function reconcileCreateIssueStage(
   if (existsSync(options.reviewDir)) {
     for (const name of readdirSync(options.reviewDir).filter((candidate) => /^stage-completeness-receipt-.+\.json$/.test(candidate))) {
       const path = join(options.reviewDir, name);
+      let originalReceiptText: string;
+      try { originalReceiptText = readFileSync(path, 'utf8'); } catch { continue; }
       let value: unknown;
-      try { value = JSON.parse(readFileSync(path, 'utf8')) as unknown; } catch { continue; }
+      try { value = JSON.parse(originalReceiptText) as unknown; } catch { continue; }
       if (!isRecord(value) || value.stage !== stage) continue;
       const settledAttemptId = optionalString(value.stageAttemptId);
       if (!settledAttemptId) continue;
@@ -1560,15 +1620,34 @@ export function reconcileCreateIssueStage(
           errors: ['stage_slot_consumed: ' + stage + ' is already settled by stageAttemptId ' + settledAttemptId],
         };
       }
-      return {
-        ok: true,
-        stageAttemptId,
-        stage,
-        sourceRevision,
-        capturePaths: [],
-        alreadySettled: true,
-        errors: [],
-      };
+      const laneValidation = validateReviewLaneRecord(value.reviewLane);
+      if (laneValidation.ok || !laneValidation.errors.includes(ROUTED_SOURCE_VERDICTS_DISAGREE)) {
+        return {
+          ok: true,
+          stageAttemptId,
+          stage,
+          sourceRevision,
+          capturePaths: [],
+          alreadySettled: true,
+          errors: [],
+        };
+      }
+      const rebuilt = rebuildRoutedReviewLaneFromProducerEvidence(value.reviewLane);
+      if (!rebuilt) {
+        return {
+          ok: false,
+          stageAttemptId,
+          stage,
+          sourceRevision,
+          capturePaths: [],
+          errors: [ROUTED_SOURCE_VERDICTS_DISAGREE],
+        };
+      }
+      const commitErrors: string[] = [];
+      if (!atomicReplaceStageCompletenessReceipt(path, originalReceiptText, { ...value, reviewLane: rebuilt }, commitErrors)) {
+        return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [...new Set(commitErrors)] };
+      }
+      return { ok: true, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [] };
     }
   }
 
