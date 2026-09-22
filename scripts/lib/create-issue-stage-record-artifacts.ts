@@ -1587,6 +1587,78 @@ function publishedCommentHeaderMatches(body: string, issueNumber: number, source
   );
 }
 
+function publishedCommentReviewEpisodeId(
+  raw: JsonRecord,
+  reviewDir: string,
+  errors: string[],
+): string | undefined {
+  const explicit = optionalString(raw.reviewEpisodeId);
+  const intakePath = join(reviewDir, 'tier-intake.json');
+  let derived: string | undefined;
+  if (existsSync(intakePath)) {
+    const intakeErrors: string[] = [];
+    const intake = loadTierIntake(intakePath, intakeErrors);
+    if (!intake) {
+      errors.push(...intakeErrors);
+      return undefined;
+    }
+    const taskIdentity = optionalString(raw.taskIdentity);
+    if (taskIdentity && taskIdentity !== intake.taskIdentity) {
+      errors.push('tier-intake taskIdentity does not match stage evidence');
+      return undefined;
+    }
+    derived = deriveReviewEpisodeId(intake.taskIdentity, intake.firstRevision);
+  }
+  if (explicit && derived && explicit !== derived) {
+    errors.push('stage evidence.reviewEpisodeId is not canonical for tier-intake');
+    return undefined;
+  }
+  if (explicit || derived) return explicit ?? derived;
+  errors.push('stage evidence.reviewEpisodeId is missing and tier-intake/v1 is not in the review directory');
+  return undefined;
+}
+
+function publishedCommentInvocationRow(
+  raw: JsonRecord,
+  reviewerSlot: string,
+  invocationId: string,
+  sourceRevision: string,
+  artifactAuthority: JsonRecord,
+  reviewEpisodeId: string,
+): JsonRecord {
+  const stage = reviewerStage(raw.stage);
+  const version = policyVersion(raw.policyVersion);
+  const stageAttemptId = optionalString(raw.stageAttemptId);
+  const cardinalityConfigIdentity = optionalString(raw.cardinalityConfigIdentity);
+  const routing = isReviewLaneRouting(raw.reviewLaneRouting)
+    ? raw.reviewLaneRouting
+    : (isRecord(raw.reviewLane) && isReviewLaneRouting(raw.reviewLane.routing) ? raw.reviewLane.routing : undefined);
+  return {
+    schema: 'reviewer-invocation-envelope/v1',
+    reviewEpisodeId,
+    ...(stageAttemptId ? { stageAttemptId } : {}),
+    ...(version ? { policyVersion: version } : {}),
+    ...(typeof raw.reviewerCardinality === 'number' ? { reviewerCardinality: raw.reviewerCardinality } : {}),
+    ...(cardinalityConfigIdentity ? { cardinalityConfigIdentity } : {}),
+    ...(stage ? { stage } : {}),
+    sourceRevision,
+    invocationId,
+    reviewerSlot,
+    reviewerOrdinal: Number(reviewerSlot),
+    attemptOrdinal: 1,
+    retryAttempt: false,
+    terminal: true,
+    terminalClassification: 'incident',
+    sendCount: 1,
+    retryClass: 'retry-forbidden',
+    revisionCheck: 'matched',
+    capacityOutcome: 'admitted',
+    capacityWaitMs: 0,
+    artifactAuthority,
+    ...(routing ? { reviewLaneRouting: routing } : {}),
+  };
+}
+
 export function bindPublishedCommentToSlot(
   options: BindPublishedCommentToSlotOptions,
 ): BindPublishedCommentToSlotResult {
@@ -1661,18 +1733,23 @@ export function bindPublishedCommentToSlot(
     .filter((value) => optionalString(value.reviewerSlot) === reviewerSlot)
     .sort((left, right) => Number(left.attemptOrdinal ?? 0) - Number(right.attemptOrdinal ?? 0));
   const final = slotInvocations.at(-1);
-  if (!final) {
-    return { ok: false, errors: ['stage evidence has no invocation mapping for reviewerSlot ' + reviewerSlot] };
-  }
-  if (optionalString(final.invocationId) !== invocationId) {
+  if (final && optionalString(final.invocationId) !== invocationId) {
     return { ok: false, errors: ['named slot final invocationId does not match --invocation-id'] };
+  }
+  if (!final && !/^\d{2}$/.test(reviewerSlot)) {
+    return { ok: false, errors: ['reviewerSlot must be NN'] };
+  }
+  const createdReviewEpisodeId = final
+    ? undefined
+    : publishedCommentReviewEpisodeId(raw, options.reviewDir, errors);
+  if (!final && !createdReviewEpisodeId) {
+    return { ok: false, errors: [...new Set(errors)] };
   }
 
   const otherSlotsBefore = invocations
     .filter((value) => optionalString(value.reviewerSlot) !== reviewerSlot)
     .map((value) => JSON.stringify(value));
-  final.sendCount = 1;
-  final.artifactAuthority = {
+  const artifactAuthority = {
     kind: AUTHORITATIVE_GITHUB_ARTIFACT_BASIS,
     repositoryFullName: options.repositoryFullName,
     issueNumber: options.issueNumber,
@@ -1682,6 +1759,12 @@ export function bindPublishedCommentToSlot(
     createdAt: comment.createdAt,
     updatedAt: comment.updatedAt,
   };
+  if (final) {
+    final.sendCount = 1;
+    final.artifactAuthority = artifactAuthority;
+  } else {
+    invocations.push(publishedCommentInvocationRow(raw, reviewerSlot, invocationId, sourceRevision, artifactAuthority, createdReviewEpisodeId!));
+  }
   const otherSlotsAfter = invocations
     .filter((value) => optionalString(value.reviewerSlot) !== reviewerSlot)
     .map((value) => JSON.stringify(value));
@@ -2030,7 +2113,9 @@ export function reconcileCreateIssueStage(
       sourceVerdictEvidence[slot] = {
         producerEvidenceIdentity: 'authoritative-github-artifact:comment-' + resolvedArtifact.authority.commentId,
         captureIdentity: resolvedArtifact.capture.captureIdentity,
-        terminalClassification: finalInvocation.terminalClassification,
+        terminalClassification: resolvedArtifact.authority.kind === AUTHORITATIVE_GITHUB_ARTIFACT_BASIS
+          ? 'complete'
+          : finalInvocation.terminalClassification,
         credentialingAuthority: 'authoritative-github-artifact',
         captureVerified: true,
         digestMatches: true,
