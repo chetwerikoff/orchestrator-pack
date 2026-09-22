@@ -20,11 +20,13 @@ import { observePosixProcessGroup, runProcess, type ProcessResult } from './kern
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import {
   INSPECTION_EXPRESSION,
+  classifyChatGptSurfaceUrl,
   defaultDependencies as browserCdpDependencies,
   toCompatibleTargets,
   type ProbeDependencies,
 } from './browser-gpt-page-probe.ts';
 import { readStateLightTurnObservation } from './chatgpt-browser-turn/state-light-turn-observation.ts';
+import { authoritativePreSend } from './pack-review-no-review-reconcile.ts';
 import {
   deriveMergeTriageEvidenceTuple,
   produceMergeTriageEvidence,
@@ -94,6 +96,7 @@ import {
   type PackReviewRunRecord,
   type PackReviewRunStatus,
   type PackReviewSourceSlotRecord,
+  type PackReviewSourceSlotAttemptHistory,
 } from './lib/pack-review-run-store.ts';
 import {
   createGithubReviewTransport,
@@ -1557,6 +1560,22 @@ const GPT_REPLACEMENT_GENERATION_MAX_MS = 15 * 60 * 1_000;
 const NATIVE_REPLACEMENT_MAX_MS = 15 * 60 * 1_000;
 const NATIVE_CHILD_FRAME_PREFIX = 'OPK_NATIVE_CHILD_V1 ';
 
+export type PackReviewGptSurfaceClass =
+  | 'listing'
+  | 'foreign_chat'
+  | 'non_chat'
+  | 'ownership_unknown'
+  | 'owned_conversation';
+
+export interface PackReviewGptTargetDiagnostic {
+  slotId: string;
+  invocationId?: string;
+  surfaceClass: PackReviewGptSurfaceClass;
+  title: string;
+  cause?: string;
+  foreignOwner?: string;
+}
+
 export interface PackReviewGptAttemptObservation {
   state:
     | 'replacement_eligible'
@@ -1570,13 +1589,25 @@ export interface PackReviewGptAttemptObservation {
   replacementEligibleSlotIds?: string[];
   initialLaunchSlotIds?: string[];
   elapsedMs?: number;
+  diagnostics?: PackReviewGptTargetDiagnostic[];
 }
+
+const MAX_PACK_REVIEW_TARGET_DIAGNOSTICS = 50;
 
 function markerIsFirstVisibleToken(head: string, marker: string): boolean {
   const trimmed = head.replace(/^[\s\uFEFF\u200B]+/u, '');
   if (!trimmed.startsWith(marker)) return false;
   const boundary = trimmed.slice(marker.length, marker.length + 1);
   return boundary === '' || /[\s\uFEFF\u200B]/u.test(boundary);
+}
+
+function visibleMarkerToken(head: string): string | undefined {
+  const trimmed = head.replace(/^[\s\uFEFF\u200B]+/u, '');
+  return /^(OPKTURNV1[^\s\uFEFF\u200B]+)/u.exec(trimmed)?.[1];
+}
+
+function scrubbedForeignOwner(marker: string): string {
+  return `foreign_owner:${sha256Bytes(marker).slice(0, 12)}`;
 }
 
 export async function observeGptPackReviewAttempt(
@@ -1614,41 +1645,29 @@ export async function observeGptPackReviewAttempt(
 
   const replacementEligibleSlotIds: string[] = [];
   const initialLaunchSlotIds: string[] = [];
-  let blockedObservation: PackReviewGptAttemptObservation | null = null;
-  const rememberBlocked = (observation: PackReviewGptAttemptObservation): void => {
-    blockedObservation ??= observation;
+  const diagnostics: PackReviewGptTargetDiagnostic[] = [];
+  const addDiagnostic = (diagnostic: PackReviewGptTargetDiagnostic): void => {
+    if (diagnostics.length < MAX_PACK_REVIEW_TARGET_DIAGNOSTICS) diagnostics.push(diagnostic);
   };
+  const finish = (observation: PackReviewGptAttemptObservation): PackReviewGptAttemptObservation => (
+    diagnostics.length > 0 ? { ...observation, diagnostics: [...diagnostics] } : observation
+  );
+  let blockedObservation: PackReviewGptAttemptObservation | null = null;
+  const rememberBlocked = (observation: PackReviewGptAttemptObservation): void => { blockedObservation ??= observation; };
 
   sourceSlotLoop:
   for (const slot of unresolved) {
     if (!slot.invocationId) {
-      if (slot.lifecycle === 'planned'
-          || (slot.lifecycle === 'terminal' && slot.terminalClass === 'pre_launch_interrupted')) {
+      if (slot.lifecycle === 'planned' || (slot.lifecycle === 'terminal' && slot.terminalClass === 'pre_launch_interrupted')) {
         initialLaunchSlotIds.push(slot.slotId);
         continue;
       }
       rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
       continue;
     }
-    const profileKey = trim(slot.launchProfileKey);
-    const cdp = trim(slot.launchCdpUrl);
-    if (!profileKey || !cdp) {
-      rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
-      continue;
-    }
-
-    const identity = gptSourceIdentity({
-      repoSlug: repository,
-      prNumber: run.prNumber,
-      headSha: run.targetSha,
-      runId: run.id,
-      slotId: slot.slotId,
-      invocationId: slot.invocationId,
-    });
+    const identity = gptSourceIdentity({ repoSlug: repository, prNumber: run.prNumber, headSha: run.targetSha, runId: run.id, slotId: slot.slotId, invocationId: slot.invocationId });
     let sourceResolution: PackGptSourceCommentResolution;
-    try {
-      sourceResolution = await resolveSourceComment(identity);
-    } catch {
+    try { sourceResolution = await resolveSourceComment(identity); } catch {
       rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
       continue;
     }
@@ -1660,11 +1679,19 @@ export async function observeGptPackReviewAttempt(
       rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
       continue;
     }
+    if (authoritativePreSend(slot)) {
+      replacementEligibleSlotIds.push(slot.slotId);
+      continue;
+    }
 
+    const profileKey = trim(slot.launchProfileKey);
+    const cdp = trim(slot.launchCdpUrl);
+    if (!profileKey || !cdp) {
+      rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
+      continue;
+    }
     let observation: ReturnType<typeof readStateLightTurnObservation>;
-    try {
-      observation = readObservation(profileKey, slot.invocationId);
-    } catch {
+    try { observation = readObservation(profileKey, slot.invocationId); } catch {
       rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
       continue;
     }
@@ -1673,55 +1700,61 @@ export async function observeGptPackReviewAttempt(
       rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
       continue;
     }
-
     let targets: ReturnType<typeof toCompatibleTargets>;
-    try {
-      targets = toCompatibleTargets(await listTargets(cdp));
-    } catch {
+    try { targets = toCompatibleTargets(await listTargets(cdp)); } catch {
       rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
       continue;
     }
 
     const owned: Array<{ snapshot: Record<string, unknown>; userDocumentOrdinal: number }> = [];
     for (const target of targets) {
+      const surface = classifyChatGptSurfaceUrl(target.normalized_url);
+      if (surface !== 'conversation') {
+        addDiagnostic({ slotId: slot.slotId, invocationId: slot.invocationId, surfaceClass: surface, title: target.title, cause: 'surface_skipped' });
+        continue;
+      }
       let inspected: unknown;
-      try {
-        inspected = await evaluate(target, INSPECTION_EXPRESSION);
-      } catch {
-        rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
-        continue sourceSlotLoop;
+      try { inspected = await evaluate(target, INSPECTION_EXPRESSION); } catch {
+        addDiagnostic({ slotId: slot.slotId, invocationId: slot.invocationId, surfaceClass: 'ownership_unknown', title: target.title, cause: 'ownership_ambiguous' });
+        continue;
       }
       if (!inspected || typeof inspected !== 'object' || Array.isArray(inspected)) {
-        rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
-        continue sourceSlotLoop;
+        addDiagnostic({ slotId: slot.slotId, invocationId: slot.invocationId, surfaceClass: 'ownership_unknown', title: target.title, cause: 'ownership_ambiguous' });
+        continue;
       }
       const snapshot = inspected as Record<string, unknown>;
       if (snapshot.status !== 'ok' || snapshot.nodes_truncated === true) {
-        rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
-        continue sourceSlotLoop;
+        addDiagnostic({ slotId: slot.slotId, invocationId: slot.invocationId, surfaceClass: 'ownership_unknown', title: target.title, cause: 'ownership_ambiguous' });
+        continue;
       }
       const nodes = Array.isArray(snapshot.nodes) ? snapshot.nodes : [];
+      let ownedMarkerFound = false;
+      let foreignOwner: string | undefined;
       for (const rawNode of nodes) {
         if (!rawNode || typeof rawNode !== 'object' || Array.isArray(rawNode)) continue;
         const node = rawNode as Record<string, unknown>;
         if (node.role !== 'user' || !node.innerText || typeof node.innerText !== 'object') continue;
         const head = trim((node.innerText as Record<string, unknown>).head);
-        if (!markerIsFirstVisibleToken(head, marker)) continue;
-        const ordinal = Number(node.document_ordinal);
-        if (!Number.isInteger(ordinal) || ordinal < 0) {
-          rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
-          continue sourceSlotLoop;
+        if (markerIsFirstVisibleToken(head, marker)) {
+          const ordinal = Number(node.document_ordinal);
+          if (!Number.isInteger(ordinal) || ordinal < 0) {
+            addDiagnostic({ slotId: slot.slotId, invocationId: slot.invocationId, surfaceClass: 'ownership_unknown', title: target.title, cause: 'owned_marker_ordinal_invalid' });
+            rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
+            continue sourceSlotLoop;
+          }
+          ownedMarkerFound = true;
+          owned.push({ snapshot, userDocumentOrdinal: ordinal });
+          continue;
         }
-        owned.push({ snapshot, userDocumentOrdinal: ordinal });
+        const visibleMarker = visibleMarkerToken(head);
+        if (visibleMarker && visibleMarker !== marker && snapshot.generation_in_progress === true) foreignOwner ??= scrubbedForeignOwner(visibleMarker);
       }
+      if (ownedMarkerFound) addDiagnostic({ slotId: slot.slotId, invocationId: slot.invocationId, surfaceClass: 'owned_conversation', title: target.title, cause: 'owned_marker' });
+      else addDiagnostic({ slotId: slot.slotId, invocationId: slot.invocationId, surfaceClass: 'foreign_chat', title: target.title, cause: foreignOwner ? 'foreign_owner' : 'foreign_conversation', ...(foreignOwner ? { foreignOwner } : {}) });
     }
-
-    if (owned.length > 1) {
-      rememberBlocked({ state: 'ownership_ambiguous', replacementEligible: false, slotId: slot.slotId });
-      continue;
-    }
+    if (owned.length > 1) { rememberBlocked({ state: 'ownership_ambiguous', replacementEligible: false, slotId: slot.slotId }); continue; }
     if (owned.length === 0) {
-      replacementEligibleSlotIds.push(slot.slotId);
+      rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
       continue;
     }
 
@@ -1730,18 +1763,11 @@ export async function observeGptPackReviewAttempt(
     const startedAtMs = Date.parse(slot.admissionStartedAtUtc ?? observation.transitioned_at);
     const elapsedMs = Number.isFinite(startedAtMs) ? Math.max(0, nowMs - startedAtMs) : 0;
     if (generation === true) {
-      if (elapsedMs >= GPT_REPLACEMENT_GENERATION_MAX_MS) {
-        replacementEligibleSlotIds.push(slot.slotId);
-      } else {
-        rememberBlocked({ state: 'generating', replacementEligible: false, slotId: slot.slotId, elapsedMs });
-      }
+      if (elapsedMs >= GPT_REPLACEMENT_GENERATION_MAX_MS) replacementEligibleSlotIds.push(slot.slotId);
+      else rememberBlocked({ state: 'generating', replacementEligible: false, slotId: slot.slotId, elapsedMs });
       continue;
     }
-    if (generation !== false) {
-      rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId, elapsedMs });
-      continue;
-    }
-
+    if (generation !== false) { rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId, elapsedMs }); continue; }
     const nodes = Array.isArray(snapshot.nodes) ? snapshot.nodes : [];
     const hasReply = nodes.some((rawNode) => {
       if (!rawNode || typeof rawNode !== 'object' || Array.isArray(rawNode)) return false;
@@ -1750,42 +1776,16 @@ export async function observeGptPackReviewAttempt(
       if (!node.innerText || typeof node.innerText !== 'object') return false;
       return Number((node.innerText as Record<string, unknown>).byte_length ?? 0) > 0;
     });
-    if (hasReply) {
-      rememberBlocked({ state: 'reply_recovery_required', replacementEligible: false, slotId: slot.slotId, elapsedMs });
-      continue;
-    }
+    if (hasReply) { rememberBlocked({ state: 'reply_recovery_required', replacementEligible: false, slotId: slot.slotId, elapsedMs }); continue; }
     replacementEligibleSlotIds.push(slot.slotId);
   }
 
-  if (replacementEligibleSlotIds.length > 0) {
-    return {
-      state: 'replacement_eligible',
-      replacementEligible: true,
-      slotId: replacementEligibleSlotIds[0],
-      replacementEligibleSlotIds,
-      initialLaunchSlotIds,
-    };
-  }
+  if (replacementEligibleSlotIds.length > 0) return finish({ state: 'replacement_eligible', replacementEligible: true, slotId: replacementEligibleSlotIds[0], replacementEligibleSlotIds, initialLaunchSlotIds });
   const blockedObservationResult = blockedObservation as PackReviewGptAttemptObservation | null;
-  if (blockedObservationResult) {
-    return {
-      ...blockedObservationResult,
-      replacementEligibleSlotIds,
-      initialLaunchSlotIds,
-    };
-  }
-  if (initialLaunchSlotIds.length > 0) {
-    return {
-      state: 'continuation_eligible',
-      replacementEligible: false,
-      slotId: initialLaunchSlotIds[0],
-      replacementEligibleSlotIds,
-      initialLaunchSlotIds,
-    };
-  }
-  return { state: 'observation_unavailable', replacementEligible: false };
+  if (blockedObservationResult) return finish({ ...blockedObservationResult, replacementEligibleSlotIds, initialLaunchSlotIds });
+  if (initialLaunchSlotIds.length > 0) return finish({ state: 'continuation_eligible', replacementEligible: false, slotId: initialLaunchSlotIds[0], replacementEligibleSlotIds, initialLaunchSlotIds });
+  return finish({ state: 'observation_unavailable', replacementEligible: false });
 }
-
 export interface PackReviewNativeAttemptObservation {
   reviewer: 'codex' | 'claude';
   state: 'running' | 'stopped' | 'observation_unavailable';
@@ -2379,11 +2379,21 @@ async function runGptSourceBatch(options: {
     let invocationId = randomUUID();
     const markInvocationStarted = async (admissionStartedAt: number): Promise<void> => {
       const launchBinding = resolveLaunchBinding();
+      const priorSlot = round.sourceSlots.find((slot) => slot.slotId === slotId);
+      const priorHistory: PackReviewSourceSlotAttemptHistory[] = priorSlot?.attemptHistory ?? [];
+      const priorAttempt = priorSlot?.invocationId && priorSlot.attemptOrdinal !== undefined && priorSlot.terminalClass
+        ? { invocationId: priorSlot.invocationId, attemptOrdinal: priorSlot.attemptOrdinal, terminalClass: priorSlot.terminalClass }
+        : undefined;
+      const attemptHistory = priorAttempt && attemptOrdinal > priorAttempt.attemptOrdinal
+        && !priorHistory.some((entry) => entry.invocationId === priorAttempt.invocationId)
+        ? [...priorHistory, priorAttempt]
+        : priorHistory;
       round = updateGptRoundSlot(options.run.id, round, slotId, {
         lifecycle: 'invocation_started',
         admissionStartedAtUtc: new Date(admissionStartedAt).toISOString(),
         attemptOrdinal,
         invocationId,
+        ...(attemptHistory.length > 0 ? { attemptHistory } : {}),
         terminalClass: undefined,
         terminalResult: undefined,
         payload: undefined,
@@ -4516,6 +4526,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     let allowSameRoundReplacement = false;
     let sameRoundGptRun: PackReviewRunRecord | null = null;
     let sameRoundGptEligibleSlotIds: ReadonlySet<string> | undefined;
+    let sameRoundGptDiagnostics: PackReviewGptTargetDiagnostic[] | undefined;
     if (logicalAccounting && reviewer === 'gpt' && authority.cycle) {
       const priorSameRound = listPackReviewRunRecordsRaw({ projectId, storeRoot })
         .filter((candidate) => candidate.prNumber === target.prNumber
@@ -4527,6 +4538,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       if (priorSameRound) {
         const observeAttempt = input.fixtureGptAttemptObserver ?? observeGptPackReviewAttempt;
         const observation = await observeAttempt(priorSameRound);
+        sameRoundGptDiagnostics = observation?.diagnostics;
         const initialLaunchSlotIds = observation?.initialLaunchSlotIds ?? [];
         if (!observation || (!observation.replacementEligible && initialLaunchSlotIds.length === 0)) {
           await releaseEarlyClaim('gpt_replacement_not_eligible');
@@ -4540,6 +4552,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
             prNumber: target.prNumber,
             headSha: target.headSha,
             runId: priorSameRound.id,
+            ...(sameRoundGptDiagnostics?.length ? { observationDiagnostics: sameRoundGptDiagnostics } : {}),
             httpStatus: 202,
           };
         }
@@ -4561,6 +4574,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
             prNumber: target.prNumber,
             headSha: target.headSha,
             runId: priorSameRound.id,
+            ...(sameRoundGptDiagnostics?.length ? { observationDiagnostics: sameRoundGptDiagnostics } : {}),
             httpStatus: 202,
           };
         }
@@ -5438,6 +5452,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       runId: run.id,
       status: delivered.status,
       ...(terminalCoverage ? { coverage: terminalCoverage } : {}),
+      ...(sameRoundGptDiagnostics?.length ? { observationDiagnostics: sameRoundGptDiagnostics } : {}),
       httpStatus: 201,
       ...(delivered.githubReviewId !== undefined ? { githubReviewId: delivered.githubReviewId } : {}),
       ...(delivered.githubReviewUrl ? { githubReviewUrl: delivered.githubReviewUrl } : {}),

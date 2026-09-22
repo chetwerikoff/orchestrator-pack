@@ -94,6 +94,11 @@ export interface PackReviewJournalOutcome {
 }
 
 export type PackReviewSourceSlotLifecycle = 'planned' | 'invocation_started' | 'terminal';
+export interface PackReviewSourceSlotAttemptHistory {
+  invocationId: string;
+  attemptOrdinal: number;
+  terminalClass: string;
+}
 
 export interface PackReviewSourceSlotRecord {
   slotId: string;
@@ -105,6 +110,7 @@ export interface PackReviewSourceSlotRecord {
   launchProfileKey?: string;
   launchCdpUrl?: string;
   terminalClass?: string;
+  attemptHistory?: PackReviewSourceSlotAttemptHistory[];
   terminalResult?: unknown;
   payload?: unknown;
 }
