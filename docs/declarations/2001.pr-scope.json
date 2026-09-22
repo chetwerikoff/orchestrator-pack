@@ -8,6 +8,7 @@
     "scripts/browser-gpt-page-probe.test.ts",
     "scripts/browser-gpt-page-probe.ts",
     "scripts/flow-manager-authority-contract.test.ts",
+    "scripts/lib/pack-review-run-store.ts",
     "scripts/pack-review-no-review-reconcile.test.ts",
     "scripts/pack-review-no-review-reconcile.ts",
     "scripts/pack-review-runner-gpt.test.ts",
