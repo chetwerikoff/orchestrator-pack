@@ -1038,7 +1038,7 @@ describe('Issue #1436 smoke/review ordering', () => {
     expect(reconciled.cycle).toMatchObject({ state: 'open', frozenTier: 'T3', frozenCap: 4 });
   });
 
-  it('refuses a passed independent phase after a head change but permits failed continuation', () => {
+  it('drops a previous-head independent pass on head change and keeps a current-head start', () => {
     const settleWorkerAndReview = (options: PackReviewAuthorityOptions, authority: ReturnType<typeof initializePackReviewAuthority>) => {
       const started = commitSmokeOrderingTransition({
         prNumber: 1436,
@@ -1098,22 +1098,51 @@ describe('Issue #1436 smoke/review ordering', () => {
         status: 'started',
         options,
       });
-      const independentPassed = commitSmokeOrderingTransition({
+      const stillCurrent = observePackReviewHead({
         prNumber: 1436,
         expectedTransitionSeq: independentStarted.transitionSeq,
+        headSha: HEAD,
+        options,
+      });
+      expect(stillCurrent.smokeOrdering?.independent).toMatchObject({
+        headSha: HEAD,
+        status: 'started',
+      });
+      const independentPassed = commitSmokeOrderingTransition({
+        prNumber: 1436,
+        expectedTransitionSeq: stillCurrent.transitionSeq,
         actor: 'independent',
         headSha: HEAD,
         status: 'passed',
         options,
       });
+      expect(() => assertIndependentSmokeAdmission({ authority: independentPassed, headSha: HEAD, reviewRuns: [] }))
+        .toThrow('smoke_ordering_independent_already_passed');
+      expect(() => commitSmokeOrderingTransition({
+        prNumber: 1436,
+        expectedTransitionSeq: independentPassed.transitionSeq,
+        actor: 'worker-owned',
+        headSha: HEAD,
+        status: 'started',
+        options,
+      })).toThrow('smoke_ordering_worker_owned_already_passed');
       const nextHead = observePackReviewHead({
         prNumber: 1436,
         expectedTransitionSeq: independentPassed.transitionSeq,
         headSha: NEXT_HEAD,
         options,
       });
+      expect(nextHead.smokeOrdering?.independent).toBeUndefined();
       expect(() => assertIndependentSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD, reviewRuns: [] }))
-        .toThrow('smoke_ordering_independent_head_forbidden');
+        .toThrow('smoke_ordering_review_unsettled');
+      expect(() => commitSmokeOrderingTransition({
+        prNumber: 1436,
+        expectedTransitionSeq: nextHead.transitionSeq,
+        actor: 'worker-owned',
+        headSha: NEXT_HEAD,
+        status: 'started',
+        options,
+      })).not.toThrow();
     }
 
     {
@@ -1144,7 +1173,78 @@ describe('Issue #1436 smoke/review ordering', () => {
         headSha: NEXT_HEAD,
         options,
       });
+      expect(nextHead.smokeOrdering?.independent).toMatchObject({
+        headSha: NEXT_HEAD,
+        status: 'failed',
+        failureKind: 'finding',
+        failureHeadSha: HEAD,
+      });
       expect(() => assertIndependentSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD, reviewRuns: [] })).not.toThrow();
+      expect(() => commitSmokeOrderingTransition({
+        prNumber: 1436,
+        expectedTransitionSeq: nextHead.transitionSeq,
+        actor: 'worker-owned',
+        headSha: NEXT_HEAD,
+        status: 'started',
+        options,
+      })).not.toThrow();
+    }
+
+    {
+      const { options, authority } = authorityFixture();
+      const terminal = commitPackReviewTerminal({
+        prNumber: 1436,
+        expectedTransitionSeq: authority.transitionSeq,
+        terminal: {
+          schemaVersion: 1,
+          terminalContractVersion: 2,
+          terminalSource: 'normal',
+          runId: 'settle-review-only',
+          targetSha: HEAD,
+          reviewVerdict: 'clean',
+          findingCount: 0,
+          findingsDigest: 'findings-digest',
+        },
+        status: 'up_to_date',
+        findingCount: 0,
+        options,
+      });
+      const settled = recordPackReviewPublication({
+        prNumber: 1436,
+        expectedTransitionSeq: terminal.transitionSeq,
+        publication: {
+          headSha: HEAD,
+          terminalRunId: 'settle-review-only',
+          status: 'succeeded',
+          publicationDigest: 'publication-digest',
+          recordedAtUtc: new Date().toISOString(),
+        },
+        options,
+      });
+      const independentStarted = commitSmokeOrderingTransition({
+        prNumber: 1436,
+        expectedTransitionSeq: settled.transitionSeq,
+        actor: 'independent',
+        headSha: HEAD,
+        status: 'started',
+        options,
+      });
+      const independentPassed = commitSmokeOrderingTransition({
+        prNumber: 1436,
+        expectedTransitionSeq: independentStarted.transitionSeq,
+        actor: 'independent',
+        headSha: HEAD,
+        status: 'passed',
+        options,
+      });
+      expect(() => commitSmokeOrderingTransition({
+        prNumber: 1436,
+        expectedTransitionSeq: independentPassed.transitionSeq,
+        actor: 'worker-owned',
+        headSha: HEAD,
+        status: 'started',
+        options,
+      })).toThrow('smoke_ordering_worker_smoke_forbidden');
     }
   });
 
@@ -1545,8 +1645,8 @@ describe('Issue #1436 smoke/review ordering', () => {
         runVariants: [[observedRun()]],
       },
       {
-        id: 'A14 started or passed independent smoke cannot continue on another head',
-        expected: 'smoke_ordering_independent_head_forbidden',
+        id: 'A14 previous-head independent pass does not close the new head',
+        expected: 'admit',
         authority: (derived) => makeAuthority({
           reviewStageComplete: derived,
           reviewStartConsumed: derived,
@@ -1554,6 +1654,21 @@ describe('Issue #1436 smoke/review ordering', () => {
             startedEver: true,
             headSha: EARLIER_REVIEW_HEAD,
             status: 'passed',
+            updatedAtUtc: CURRENT_RUN_AT,
+          },
+        }),
+        runVariants: [[observedRun()]],
+      },
+      {
+        id: 'A14b started independent smoke cannot continue on another head',
+        expected: 'smoke_ordering_independent_head_forbidden',
+        authority: (derived) => makeAuthority({
+          reviewStageComplete: derived,
+          reviewStartConsumed: derived,
+          independent: {
+            startedEver: true,
+            headSha: EARLIER_REVIEW_HEAD,
+            status: 'started',
             updatedAtUtc: CURRENT_RUN_AT,
           },
         }),
