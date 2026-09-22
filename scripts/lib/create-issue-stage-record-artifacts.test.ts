@@ -19,6 +19,7 @@ import {
   locateGovernedAuthorDispositionBlock,
   parseCanonicalCaptureRevision,
   produceAcceptanceArtifacts,
+  authorDispositionAdmission,
   bindPublishedCommentToSlot,
   reconcileCreateIssueStage,
   stageReceiptPayloadsMatchExceptDerivedChain,
@@ -3650,5 +3651,62 @@ describe('cause-classed zero-send continuation (Issue #1999)', () => {
       invocationId: '1977-deterministic-invocation',
       reviewerSlot: '01',
     });
+  });
+});
+
+describe('Issue #2028 reviewer-stage author reply gate', () => {
+  it('produces reviewer-stage artifacts when a predecessor exists and round-NN-author-reply is absent', () => {
+    const input = fixture({ phase: 'pre-lens' });
+    rmSync(input.authorReplyPath);
+    rmSync(input.evidencePath);
+    input.stageEvidencePaths = [input.reviewEvidencePath];
+    const result = produce(input);
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.files).toContain('stage-completeness-receipt-architectural-review-attempt.json');
+    expect(result.files).not.toContain('finding-disposition-ledger.json');
+    expect(existsSync(input.authorPath)).toBe(false);
+    expect(existsSync(join(input.outputDir, 'finding-disposition-ledger.json'))).toBe(false);
+    const receiptText = readFileSync(join(input.outputDir, 'stage-completeness-receipt-architectural-review-attempt.json'), 'utf8');
+    expect(receiptText).not.toContain('"findings"');
+    expect(receiptText).not.toContain('"m4"');
+    const status = inspectAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir: input.outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: input.stageEvidencePaths,
+      authorDispositionsPath: input.authorPath,
+      phase: 'pre-lens',
+    });
+    expect(status.ok, status.missing.map((item) => item.reason).join('\n')).toBe(true);
+    expect(status.missing.some((item) => item.reason.includes('round-NN-author-reply'))).toBe(false);
+  });
+
+  it('accepts producer-owned zero-state when no predecessor stage exists', () => {
+    expect(authorDispositionAdmission({
+      consumesAuthorAdjudication: true,
+      predecessorPresent: false,
+      authorReplyPresent: false,
+    })).toBe('lifecycle-zero-state');
+    const input = fixture({ phase: 'final-acceptance' });
+    rmSync(input.authorReplyPath);
+    rmSync(input.reviewEvidencePath);
+    rmSync(input.evidencePath);
+    const result = produce({ ...input, stageEvidencePaths: [] });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).not.toContain('round-NN-author-reply');
+    expect(existsSync(input.authorPath)).toBe(false);
+  });
+
+  it('fails closed a downstream bundle that includes author dispositions without a governed author reply', () => {
+    const input = fixture({ phase: 'final-acceptance' });
+    rmSync(input.authorReplyPath);
+    const result = produce(input);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('missing governed author output round-NN-author-reply.*');
+    expect(existsSync(input.authorPath)).toBe(false);
+    expect(existsSync(join(input.outputDir, 'finding-disposition-ledger.json'))).toBe(false);
+    const status = inspect(input);
+    expect(status.ok).toBe(false);
+    expect(status.missing.some((item) => item.reason.includes('round-NN-author-reply'))).toBe(true);
   });
 });
