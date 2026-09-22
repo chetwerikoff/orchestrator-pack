@@ -38,6 +38,8 @@ export interface SmokeOrderingOwnerEvidence {
   supervisorAlive: boolean;
   cleanupSafe?: boolean;
   authoritativeResult?: 'PASS' | 'FAIL' | 'BLOCKED';
+  /** Transient admission fact. Not stored on the authority document. */
+  executionMode?: 'executed' | 'carry-only';
 }
 
 interface SmokeOrderingOwnerFields {
@@ -1208,6 +1210,15 @@ export function assertIndependentSmokeAdmission(input: {
   }
 }
 
+function workerOwnedCarryOnlyPass(
+  evidence: SmokeOrderingOwnerEvidence | undefined,
+  actor: SmokeOrderingActor,
+): boolean {
+  return actor === 'worker-owned'
+    && evidence?.authoritativeResult === 'PASS'
+    && evidence.executionMode === 'carry-only';
+}
+
 function reconcileStartedSmokeOwner<T extends SmokeOrderingOwnerFields & {
   headSha: string;
   status: SmokeOrderingStatus;
@@ -1233,7 +1244,7 @@ function reconcileStartedSmokeOwner<T extends SmokeOrderingOwnerFields & {
       'owner-state evidence does not match the persisted started marker',
     );
   }
-  if (input.evidence.authoritativeResult) {
+  if (input.evidence.authoritativeResult && !workerOwnedCarryOnlyPass(input.evidence, input.actor)) {
     const result = input.evidence.authoritativeResult;
     return {
       ...input.marker,
@@ -1322,7 +1333,9 @@ export function commitSmokeOrderingTransition(input: {
               'worker-owned smoke is already started for the exact head',
             );
           }
-          if (reconciled.headSha === headSha && reconciled.status === 'passed') {
+          if (reconciled.headSha === headSha
+              && reconciled.status === 'passed'
+              && !workerOwnedCarryOnlyPass(input.ownerStateEvidence, input.actor)) {
             const refusal = new PackReviewAuthorityError(
               'smoke_ordering_worker_owned_already_passed',
               'worker-owned smoke already passed for the exact head',
