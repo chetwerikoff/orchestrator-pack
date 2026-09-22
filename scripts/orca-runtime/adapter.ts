@@ -986,6 +986,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
 
     const owned = this.#owned.get(handle);
+    const candidateUrl = owned && generation !== owned.identity.generation ? owned.openCodeUrl : undefined;
     if (owned && generation !== owned.identity.generation) {
       this.#owned.delete(handle);
       this.#dropObservations(owned.identity);
@@ -1000,6 +1001,15 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
         ? 'internal'
         : 'external',
     };
+    if (!currentOwned && candidateUrl) {
+      this.#owned.set(handle, {
+        identity,
+        workspacePath,
+        workspaceSelector,
+        title: worker.title,
+        openCodeUrl: candidateUrl,
+      });
+    }
     this.#rememberWorkspace(identity, workspaceSelector, workspacePath);
     return { status: 'ok', value: worker };
   }
@@ -1010,15 +1020,14 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (worker.runtime !== 'orca') return undefined;
     const stored = this.#openCodeUrls.get(worker.id);
     if (stored?.url && sameRuntimeWorker(stored.identity, worker)) return this.#openCodeControl(worker);
+    const candidate = this.#owned.get(worker.id);
+    if (candidate?.openCodeUrl && sameRuntimeWorker(candidate.identity, worker)) {
+      return this.#openCodeControl(worker);
+    }
     const current = this.findWorker(worker);
     if (current.status !== 'ok' || !current.value || !sameRuntimeWorker(current.value.identity, worker)) return undefined;
     const refreshed = this.#openCodeUrls.get(worker.id);
     if (refreshed?.url && sameRuntimeWorker(refreshed.identity, worker)) return this.#openCodeControl(worker);
-    const candidateUrl = this.#owned.get(worker.id)?.openCodeUrl;
-    if (candidateUrl && this.#openCodeServerAnswers(candidateUrl, {})) {
-      this.#rememberOpenCodeUrl(worker, candidateUrl);
-      return this.#openCodeControl(worker);
-    }
     const terminal = this.#shownTerminal(worker.id, {});
     if (terminal?.agentIdentity?.trim() !== 'opencode') return undefined;
     if (this.#recoverOpenCodeFromProcess(terminal, worker, {})) return this.#openCodeControl(worker);

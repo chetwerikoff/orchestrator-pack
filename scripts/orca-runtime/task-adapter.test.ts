@@ -298,7 +298,9 @@ function discoveredOpenCodeAdapter(input: {
       requests.push(input);
       return input.url.endsWith('/global/health')
         ? { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) }
-        : { status: 200, body: 'true' };
+        : input.url.includes('/session?directory=')
+          ? { status: 200, body: JSON.stringify([{ id: 'ses-visible', directory: process.cwd() }]) }
+          : { status: 200, body: 'true' };
     });
     const spawned = adapter.spawnWorker({
       title: 'opencode',
@@ -315,6 +317,7 @@ function discoveredOpenCodeAdapter(input: {
     })).toMatchObject({ status: 'dispatched' });
     expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
       { method: 'GET', url: `${OPENCODE_FIXTURE_ORIGIN}/global/health` },
+      { method: 'GET', url: `${OPENCODE_FIXTURE_ORIGIN}/session?directory=` + encodeURIComponent(process.cwd()) },
       { method: 'POST', url: `${OPENCODE_FIXTURE_ORIGIN}/tui/append-prompt` },
       { method: 'POST', url: `${OPENCODE_FIXTURE_ORIGIN}/tui/submit-prompt` },
     ]);
@@ -328,16 +331,21 @@ function discoveredOpenCodeAdapter(input: {
       if (input.method === 'POST' && input.url.endsWith('/tui/append-prompt')) {
         clock = 101;
       }
+      if (input.url.includes('/session?directory=')) {
+        clock = 80;
+        return { status: 200, body: JSON.stringify([{ id: 'ses-visible', directory: process.cwd() }]) };
+      }
       return input.url.endsWith('/global/health')
         ? { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) }
         : { status: 200, body: 'true' };
     }, () => clock, (operation) => {
-      if (operation === 'terminal list') clock = 80;
+      if (operation === 'terminal list' || operation === 'terminal show' || operation === 'terminal read') clock = 80;
     });
     const spawned = adapter.spawnWorker({ title: 'opencode', command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture' });
     expect(spawned.status).toBe('ok');
     if (spawned.status !== 'ok') return;
     expect(adapter.openCodeHealth(spawned.value.identity)).toMatchObject({ status: 'ok' });
+    clock = 0;
 
     const result = adapter.composerControl?.(spawned.value.identity)?.dispatch({
       worker: spawned.value.identity,
@@ -345,7 +353,7 @@ function discoveredOpenCodeAdapter(input: {
       text: 'deadline',
     }, { timeoutMs: 100 });
     expect(result).toEqual({ status: 'send_failed', reason: 'runtime_timeout' });
-    expect(requests.map(({ timeoutMs }) => timeoutMs)).toEqual([100, 20]);
+    expect(requests.map(({ timeoutMs }) => timeoutMs)).toEqual([9920, 9920, 20]);
   });
 
   it('retains OpenCode control when task adapter upgrades pty identity', () => {
@@ -402,6 +410,7 @@ function discoveredOpenCodeAdapter(input: {
       if (input.url.endsWith('/global/health')) {
         return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) };
       }
+      if (input.url.includes('/session?directory=')) return { status: 200, body: JSON.stringify([{ id: 'ses-visible', directory: process.cwd() }]) };
       return { status: 200, body: 'true' };
     });
     const spawned = adapter.spawnWorker({
@@ -420,6 +429,7 @@ function discoveredOpenCodeAdapter(input: {
     })).toMatchObject({ status: 'dispatched' });
     expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
       { method: 'GET', url: `${OPENCODE_FIXTURE_ORIGIN}/global/health` },
+      { method: 'GET', url: `${OPENCODE_FIXTURE_ORIGIN}/session?directory=` + encodeURIComponent(process.cwd()) },
       { method: 'POST', url: `${OPENCODE_FIXTURE_ORIGIN}/tui/append-prompt` },
       { method: 'POST', url: `${OPENCODE_FIXTURE_ORIGIN}/tui/submit-prompt` },
     ]);
@@ -539,7 +549,9 @@ function discoveredOpenCodeAdapter(input: {
       requests.push(input.url);
       return input.url.endsWith('/global/health')
         ? { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) }
-        : { status: 200, body: 'true' };
+        : input.url.includes('/session?directory=')
+          ? { status: 200, body: JSON.stringify([{ id: 'ses-visible', directory: process.cwd() }]) }
+          : { status: 200, body: 'true' };
     }, undefined, undefined, ['┃ human-authored text', '╹▀▀▀▀▀▀']);
     const spawned = adapter.spawnWorker({ title: 'opencode', command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture' });
     expect(spawned.status).toBe('ok');
@@ -551,7 +563,10 @@ function discoveredOpenCodeAdapter(input: {
       action: 'submit-prompt',
       text: 'delivery pointer',
     })).toEqual({ status: 'send_failed', reason: 'opencode_composer_not_empty' });
-    expect(requests).toEqual([`${OPENCODE_FIXTURE_ORIGIN}/global/health`]);
+    expect(requests).toEqual([
+      `${OPENCODE_FIXTURE_ORIGIN}/global/health`,
+      `${OPENCODE_FIXTURE_ORIGIN}/session?directory=` + encodeURIComponent(process.cwd()),
+    ]);
   });
 
   it('does not report an idle OpenCode pane busy when the placeholder includes a quoted suggestion', () => {
@@ -560,7 +575,9 @@ function discoveredOpenCodeAdapter(input: {
       requests.push(input.url);
       return input.url.endsWith('/global/health')
         ? { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) }
-        : { status: 200, body: 'true' };
+        : input.url.includes('/session?directory=')
+          ? { status: 200, body: JSON.stringify([{ id: 'ses-visible', directory: process.cwd() }]) }
+          : { status: 200, body: 'true' };
     }, undefined, undefined, ['┃  Ask anything… "Fix a TODO in the codebase"', '╹▀▀▀▀▀▀']);
     const spawned = adapter.spawnWorker({ title: 'opencode', command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture' });
     expect(spawned.status).toBe('ok');
@@ -598,7 +615,9 @@ function discoveredOpenCodeAdapter(input: {
     const adapter = makeAdapter((input) => {
       return input.url.endsWith('/global/health')
         ? { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) }
-        : { status: 200, body: '' };
+        : input.url.includes('/session?directory=')
+          ? { status: 200, body: JSON.stringify([{ id: 'ses-visible', directory: process.cwd() }]) }
+          : { status: 200, body: '' };
     });
     const spawned = adapter.spawnWorker({ title: 'opencode', command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture' });
     expect(spawned.status).toBe('ok');
