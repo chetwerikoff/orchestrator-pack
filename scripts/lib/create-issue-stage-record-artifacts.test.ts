@@ -3474,6 +3474,137 @@ describe('Issue #2017 routed missing-slot recovery', () => {
   });
 });
 
+describe('Issue #2040 canonical invocation echo position', () => {
+  const otherSlot = { reviewerSlot: '02', invocationId: 'published-slot-02', marker: 'untouched' };
+
+  function canonicalBody(options: {
+    issueNumber?: number;
+    revision?: string;
+    invocationId?: string;
+    echoPlacement?: 'third-non-empty' | 'later' | 'missing' | 'duplicate' | 'different';
+    canonical?: boolean;
+  } = {}): string {
+    const issueNumber = options.issueNumber ?? ISSUE;
+    const revision = options.revision ?? REVISION;
+    const invocationId = options.invocationId ?? 'published-slot-01';
+    const echo = `INVOCATION_ID_TO_ECHO: ${invocationId}`;
+    const contract = 'review-economics-contract: v1';
+    const tail = options.canonical === false ? [] : ['NO_FINDINGS', 'SIMPLIFICATION_CLEAN', 'FINDING_COUNT: 0'];
+    const placement = options.echoPlacement ?? 'third-non-empty';
+    const lines = [`Read revision: #${issueNumber} ${revision}`, contract];
+    if (placement === 'third-non-empty' || placement === 'duplicate') lines.push(echo);
+    if (placement === 'duplicate') lines.push(echo);
+    if (placement === 'different') lines.push('INVOCATION_ID_TO_ECHO: other-invocation');
+    if (placement === 'later') lines.push(...tail, echo);
+    else lines.push(...tail);
+    lines.push('');
+    return lines.join('\n');
+  }
+
+  function bindSlot(body: string, commentOverrides: Record<string, unknown> = {}, principal?: string) {
+    const input = fixture();
+    const evidence = {
+      schema: STAGE_EVIDENCE_SCHEMA,
+      producer: 'create-issue-stage-finalize/start-cycle',
+      taskIdentity: TASK,
+      tier: 'T3',
+      stage: 'architectural-review',
+      stageAttemptId: 'attempt-001',
+      stageSequence: 1,
+      cycleId: 'cycle-2040',
+      cycleBinding: { cycleId: 'cycle-2040', sourceRevision: REVISION, boundBeforeLaunch: true },
+      policyVersion: 'review-lane-routing/v1',
+      reviewerCardinality: 1,
+      cardinalityConfigIdentity: CONFIG,
+      sourceRevision: REVISION,
+      invocations: [otherSlot],
+    };
+    writeFileSync(input.reviewEvidencePath, JSON.stringify(evidence, null, 2) + '\n');
+    const before = readFileSync(input.reviewEvidencePath, 'utf8');
+    const reviewComment = comment(body, { id: COMMENT_ID + 40, ...commentOverrides });
+    const source = transport({ census: [reviewComment], ...(principal === undefined ? {} : { principal }) });
+    const bound = bindPublishedCommentToSlot({
+      reviewDir: input.dir,
+      stageEvidencePath: input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      reviewerSlot: '01',
+      invocationId: 'published-slot-01',
+      commentUrl: String(reviewComment.html_url),
+      artifactSourceTransport: source,
+    });
+    const after = readFileSync(input.reviewEvidencePath, 'utf8');
+    return { bound, before, after };
+  }
+
+  it('binds when the invocation echo is the third non-empty line and leaves the other slot unchanged', () => {
+    const { bound, after } = bindSlot(canonicalBody({ echoPlacement: 'third-non-empty' }));
+    expect(bound.ok, bound.errors.join('\n')).toBe(true);
+    const stored = JSON.parse(after) as { invocations: Array<Record<string, unknown>> };
+    const named = stored.invocations.find((row) => row.reviewerSlot === '01');
+    expect(named).toMatchObject({ invocationId: 'published-slot-01', sendCount: 1 });
+    expect(stored.invocations.find((row) => row.reviewerSlot === '02')).toEqual(otherSlot);
+  });
+
+  it('binds when the invocation echo appears later in an otherwise canonical body', () => {
+    const { bound, after } = bindSlot(canonicalBody({ echoPlacement: 'later' }));
+    expect(bound.ok, bound.errors.join('\n')).toBe(true);
+    const stored = JSON.parse(after) as { invocations: Array<Record<string, unknown>> };
+    expect(stored.invocations.find((row) => row.reviewerSlot === '01')?.invocationId).toBe('published-slot-01');
+    expect(stored.invocations.find((row) => row.reviewerSlot === '02')).toEqual(otherSlot);
+  });
+
+  it.each([
+    ['wrong issue', { issueNumber: ISSUE + 1 }],
+    ['wrong revision', { revision: 'r99' }],
+    ['missing invocation echo', { echoPlacement: 'missing' as const }],
+    ['duplicate invocation echo', { echoPlacement: 'duplicate' as const }],
+    ['different invocation echo', { echoPlacement: 'different' as const }],
+  ])('fails and writes nothing for a %s', (_label, overrides) => {
+    const { bound, before, after } = bindSlot(canonicalBody({ echoPlacement: 'third-non-empty', ...overrides }));
+    expect(bound.ok).toBe(false);
+    expect(after).toBe(before);
+  });
+
+  it.each([
+    ['foreign publisher', { user: { login: 'foreign-publisher' } }, {}],
+    ['edited comment', { updated_at: '2026-08-07T05:00:00Z' }, {}],
+    ['noncanonical payload', {}, { canonical: false }],
+  ])('fails and writes nothing for a %s', (_label, commentOverrides, bodyOverrides) => {
+    const { bound, before, after } = bindSlot(
+      canonicalBody({ echoPlacement: 'third-non-empty', ...bodyOverrides }),
+      commentOverrides,
+    );
+    expect(bound.ok).toBe(false);
+    expect(after).toBe(before);
+  });
+
+  it('fails and writes nothing when a noncanonical payload still has the invocation echo on the second line', () => {
+    const body = [
+      `Read revision: #${ISSUE} ${REVISION}`,
+      'INVOCATION_ID_TO_ECHO: published-slot-01',
+      'review-economics-contract: v1',
+      '',
+    ].join('\n');
+    const { bound, before, after } = bindSlot(body);
+    expect(bound.ok).toBe(false);
+    expect(after).toBe(before);
+  });
+
+  it('binds a canonical comment published by the authenticated principal when that principal is not the repository owner', () => {
+    const { bound, after } = bindSlot(
+      canonicalBody({ echoPlacement: 'third-non-empty' }),
+      { user: { login: 'binding-principal' } },
+      'binding-principal',
+    );
+    expect(bound.ok, bound.errors.join('\n')).toBe(true);
+    const stored = JSON.parse(after) as { invocations: Array<Record<string, unknown>> };
+    expect(stored.invocations.find((row) => row.reviewerSlot === '01')?.invocationId).toBe('published-slot-01');
+    expect(stored.invocations.find((row) => row.reviewerSlot === '02')).toEqual(otherSlot);
+  });
+
+});
+
 describe('cause-classed zero-send continuation (Issue #1999)', () => {
   const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
   const fixtureDir = join(repoRoot, 'tests/external-output-references');

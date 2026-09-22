@@ -1059,6 +1059,9 @@ describe('Issue #2009 bind-published-comment', () => {
     `Read revision: #${issueNumber} r01`,
     `INVOCATION_ID_TO_ECHO: ${invocationId}`,
     'review-economics-contract: v1',
+    'NO_FINDINGS',
+    'SIMPLIFICATION_CLEAN',
+    'FINDING_COUNT: 0',
     '',
   ].join('\n');
 
@@ -1092,6 +1095,9 @@ describe('Issue #2009 bind-published-comment', () => {
       `Read revision: #${issueNumber} r01`,
       `INVOCATION_ID_TO_ECHO: ${id}`,
       'review-economics-contract: v1',
+      'NO_FINDINGS',
+      'SIMPLIFICATION_CLEAN',
+      'FINDING_COUNT: 0',
       '',
     ].join('\n');
   }
@@ -1121,6 +1127,7 @@ describe('Issue #2009 bind-published-comment', () => {
       transport: {
         runGh(argv: string[]) {
           calls.push(argv);
+          if (argv[2] === 'user') return { exitCode: 0, stdout: 'chetwerikoff\n', stderr: '' };
           const path = argv[2] ?? '';
           const match = /\/issues\/comments\/(\d+)$/.exec(path);
           if (argv[0] === 'gh' && argv[1] === 'api' && match && !argv.includes('-X') && !argv.includes('-f')) {
