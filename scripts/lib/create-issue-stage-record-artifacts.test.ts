@@ -19,6 +19,7 @@ import {
   locateGovernedAuthorDispositionBlock,
   parseCanonicalCaptureRevision,
   produceAcceptanceArtifacts,
+  authorDispositionAdmission,
   bindPublishedCommentToSlot,
   reconcileCreateIssueStage,
   stageReceiptPayloadsMatchExceptDerivedChain,
@@ -3653,6 +3654,99 @@ describe('cause-classed zero-send continuation (Issue #1999)', () => {
   });
 });
 
+describe('Issue #2028 reviewer-stage author reply gate', () => {
+  it('produces reviewer-stage artifacts when a predecessor exists and round-NN-author-reply is absent', () => {
+    const input = fixture({ phase: 'pre-lens' });
+    rmSync(input.authorReplyPath);
+    rmSync(input.evidencePath);
+    input.stageEvidencePaths = [input.reviewEvidencePath];
+    const result = produce(input);
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.files).toContain('stage-completeness-receipt-architectural-review-attempt.json');
+    expect(result.files).not.toContain('finding-disposition-ledger.json');
+    expect(existsSync(input.authorPath)).toBe(false);
+    expect(existsSync(join(input.outputDir, 'finding-disposition-ledger.json'))).toBe(false);
+    const receiptText = readFileSync(join(input.outputDir, 'stage-completeness-receipt-architectural-review-attempt.json'), 'utf8');
+    expect(receiptText).not.toContain('"findings"');
+    expect(receiptText).not.toContain('"m4"');
+    const status = inspectAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir: input.outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: input.stageEvidencePaths,
+      authorDispositionsPath: input.authorPath,
+      phase: 'pre-lens',
+    });
+    expect(status.ok, status.missing.map((item) => item.reason).join('\n')).toBe(true);
+    expect(status.missing.some((item) => item.reason.includes('round-NN-author-reply'))).toBe(false);
+  });
+
+  it('accepts producer-owned zero-state when no predecessor stage exists', () => {
+    expect(authorDispositionAdmission({
+      consumesAuthorAdjudication: true,
+      predecessorPresent: false,
+      authorReplyDisposition: 'absent',
+    })).toBe('lifecycle-zero-state');
+    const input = fixture({ phase: 'final-acceptance' });
+    rmSync(input.authorReplyPath);
+    rmSync(input.reviewEvidencePath);
+    rmSync(input.evidencePath);
+    const result = produce({ ...input, stageEvidencePaths: [] });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).not.toContain('round-NN-author-reply');
+    expect(existsSync(input.authorPath)).toBe(false);
+  });
+
+  it('fails closed a downstream bundle that includes author dispositions without a governed author reply', () => {
+    const input = fixture({ phase: 'final-acceptance' });
+    rmSync(input.authorReplyPath);
+    const result = produce(input);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('missing governed author output round-NN-author-reply.*');
+    expect(existsSync(input.authorPath)).toBe(false);
+    expect(existsSync(join(input.outputDir, 'finding-disposition-ledger.json'))).toBe(false);
+    const status = inspect(input);
+    expect(status.ok).toBe(false);
+    expect(status.missing.some((item) => item.reason.includes('round-NN-author-reply'))).toBe(true);
+  });
+
+  it('defers pre-lens materialization when only a prior-stage author reply and dispositions exist', () => {
+    const input = fixture({ phase: 'pre-lens' });
+    rmSync(input.evidencePath);
+    input.stageEvidencePaths = [input.reviewEvidencePath];
+    writeGovernedAuthorReply(input.authorReplyPath, {
+      sourceRevision: REVISION,
+      predecessorStage: 'competitive',
+    });
+    const historicalDispositions = JSON.stringify({
+      schema: AUTHOR_DISPOSITIONS_SCHEMA,
+      producer: 'governed-author-output/v1',
+      reviewEpisodeId: input.episode,
+      sourceRevision: REVISION,
+      predecessorStage: 'competitive',
+      draft: 'prior stage draft',
+      findings: [],
+      m4: { inventory: [] },
+    }, null, 2) + '\n';
+    writeFileSync(input.authorPath, historicalDispositions);
+    const result = produce(input);
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.files).toContain('stage-completeness-receipt-architectural-review-attempt.json');
+    expect(result.files).not.toContain('finding-disposition-ledger.json');
+    expect(readFileSync(input.authorPath, 'utf8')).toBe(historicalDispositions);
+    const status = inspectAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir: input.outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: input.stageEvidencePaths,
+      authorDispositionsPath: input.authorPath,
+      phase: 'pre-lens',
+    });
+    expect(status.ok, status.missing.map((item) => item.reason).join('\n')).toBe(true);
+    expect(status.missing.some((item) => item.reason.includes('round-NN-author-reply'))).toBe(false);
+  });
+});
+
 describe('Issue #2032 permanently noncanonical owner publications', () => {
   const slot01Invocation = '85ab4287-059b-42cd-a182-a905d58d8f0c';
   const slot02Invocation = '1068e8ee-878f-402d-8f0a-e2be130263cc';
@@ -3689,6 +3783,24 @@ describe('Issue #2032 permanently noncanonical owner publications', () => {
     expect(errors).toContain('invocationId=invocation-001');
     expect(errors).not.toContain('zero_principal_owned_match');
     expect(errors).not.toContain('authoritative GitHub artifact absent');
+    expect(reconcileStageReadIsRetryable(result)).toBe(false);
+  });
+
+  it('classifies a lowercase VERDICT as terminal even when no raw finding id is present', () => {
+    const input = fixture({ transportClassification: 'incident' });
+    const body = findingsBody('invocation-001', 'findings')
+      .split(/\r?\n/)
+      .filter((line) => !/^id:\s*/i.test(line.trim()))
+      .join('\n');
+    const result = produce(input, transport({
+      census: [...input.reviewComments, comment(body, { issueNumber: input.issueNumber })],
+    }));
+    const errors = result.errors.join('\n');
+    expect(body).not.toMatch(/^id:\s*/im);
+    expect(result.ok).toBe(false);
+    expect(result.temporary).toBeUndefined();
+    expect(errors).toContain('permanently_noncanonical_publication');
+    expect(errors).not.toContain('zero_principal_owned_match');
     expect(reconcileStageReadIsRetryable(result)).toBe(false);
   });
 
