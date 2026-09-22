@@ -756,6 +756,10 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     previousIdentity: RuntimeWorkerIdentity,
     nextIdentity: RuntimeWorkerIdentity,
   ): void {
+    const owned = this.#owned.get(previousIdentity.id);
+    if (owned && sameRuntimeWorker(owned.identity, previousIdentity)) {
+      this.#owned.set(nextIdentity.id, { ...owned, identity: nextIdentity });
+    }
     const record = this.#openCodeUrls.get(previousIdentity.id);
     if (!record || !sameRuntimeWorker(record.identity, previousIdentity)) return;
     this.#openCodeUrls.set(nextIdentity.id, { ...record, identity: nextIdentity });
@@ -1010,6 +1014,11 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (current.status !== 'ok' || !current.value || !sameRuntimeWorker(current.value.identity, worker)) return undefined;
     const refreshed = this.#openCodeUrls.get(worker.id);
     if (refreshed?.url && sameRuntimeWorker(refreshed.identity, worker)) return this.#openCodeControl(worker);
+    const candidateUrl = this.#owned.get(worker.id)?.openCodeUrl;
+    if (candidateUrl && this.#openCodeServerAnswers(candidateUrl, {})) {
+      this.#rememberOpenCodeUrl(worker, candidateUrl);
+      return this.#openCodeControl(worker);
+    }
     const terminal = this.#shownTerminal(worker.id, {});
     if (terminal?.agentIdentity?.trim() !== 'opencode') return undefined;
     if (this.#recoverOpenCodeFromProcess(terminal, worker, {})) return this.#openCodeControl(worker);
@@ -1022,7 +1031,17 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
   #openCodeControl(worker: RuntimeWorkerIdentity): RuntimeComposerControl {
     return {
       kind: 'opencode-http',
-      dispatch: (request, options) => this.#openCodeDispatch(worker, request, options),
+      dispatch: (request, options) => {
+        const candidate = this.#owned.get(worker.id);
+        if (candidate?.openCodeUrl && sameRuntimeWorker(candidate.identity, worker)
+          && !this.#openCodeUrls.has(worker.id)) {
+          if (!this.#openCodeServerAnswers(candidate.openCodeUrl, options ?? {})) {
+            return { status: 'send_failed', reason: 'runtime_opencode_control_unavailable' };
+          }
+          this.#rememberOpenCodeUrl(worker, candidate.openCodeUrl);
+        }
+        return this.#openCodeDispatch(worker, request, options);
+      },
     };
   }
 
