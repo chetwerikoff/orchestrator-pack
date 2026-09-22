@@ -1,0 +1,23 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2024,
+  "declared_paths": [
+    "docs/browser-gpt-turn-runbook.md",
+    "docs/orchestration-runbook.md",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/browser-gpt-turn-runbook.md",
+    "docs/orchestration-runbook.md",
+    "scripts/pr2-foundation/",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "source_revision": "47e396846eecbb2e903e932b91f4dbac698637bf"
+}
