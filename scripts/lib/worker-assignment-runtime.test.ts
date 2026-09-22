@@ -73,33 +73,21 @@ function currentOrcaHeartbeat(ageMs = 60_000): string {
 
 function terminallyFailedExactLiveRetainedShow(handle = 'term-retained') {
   return {
-    dispatch: { status: 'failed', last_heartbeat_at: null },
-    worker: { agent_terminal_handle: handle },
-    terminal: { handle },
     observation: { exactWorker: true, status: 'live' },
-    terminalResource: {
-      terminalHandle: handle,
-      worktreeId: 'repo::retained',
-      originDispatchId: 'dispatch-1',
-      ownerDispatchId: 'dispatch-1',
-      releaseState: 'retained',
-    },
+    dispatch: { status: 'failed', last_heartbeat_at: null },
+    terminal: { handle },
+    worker: { agent_terminal_handle: handle },
+    terminalResource: { releaseState: 'retained', terminalHandle: handle, worktreeId: 'repo::assignment-retained', originDispatchId: 'dispatch-1', ownerDispatchId: 'dispatch-1' },
   } as const;
 }
 
-function terminallyFailedMissingRetainedShow() {
+function missingRetainedWorkerShow() {
   return {
-    dispatch: { status: 'failed', last_heartbeat_at: null },
-    worker: { agent_terminal_handle: 'term-missing' },
-    terminal: null,
     observation: { exactWorker: false, status: 'missing' },
-    terminalResource: {
-      terminalHandle: 'term-missing',
-      worktreeId: 'repo::missing',
-      originDispatchId: 'dispatch-1',
-      ownerDispatchId: 'dispatch-1',
-      releaseState: 'retained',
-    },
+    dispatch: { status: 'failed', last_heartbeat_at: null },
+    terminal: null,
+    worker: { agent_terminal_handle: 'term-missing' },
+    terminalResource: { releaseState: 'retained', terminalHandle: 'term-missing', worktreeId: 'repo::assignment-missing', originDispatchId: 'dispatch-1', ownerDispatchId: 'dispatch-1' },
   } as const;
 }
 
@@ -326,7 +314,7 @@ describe('real Orca assignment target resolution', () => {
     const assignment = await publish(file, { bindingKey: 'dispatch-1' });
     const runJson = vi.fn((): OrcaJsonResponse => ({
       ok: true,
-      result: terminallyFailedMissingRetainedShow(),
+      result: missingRetainedWorkerShow(),
     }));
     const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
     expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))
