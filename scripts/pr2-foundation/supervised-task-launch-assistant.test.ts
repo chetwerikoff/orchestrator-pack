@@ -188,6 +188,7 @@ function managerReuseFixture(input: {
   remoteUrl?: string;
   status?: string;
   fetchOk?: boolean;
+  originResolved?: boolean;
   ancestor?: boolean;
   mergeOk?: boolean;
   sharedBranch?: boolean;
@@ -240,16 +241,19 @@ function managerReuseFixture(input: {
       return { ok: input.fetchOk !== false, stdout: '', stderr: input.fetchOk === false ? 'fetch failed' : '' };
     }
     if (command === 'git rev-parse --verify refs/remotes/origin/main^{commit}') {
-      return { ok: true, stdout: `${originMain}\n`, stderr: '' };
+      return input.originResolved === false
+        ? { ok: false, stdout: '', stderr: 'origin/main unresolved' }
+        : { ok: true, stdout: `${originMain}\n`, stderr: '' };
     }
     if (command === 'git status --porcelain=v1 --untracked-files=all') {
       return { ok: true, stdout: input.status ?? '', stderr: '' };
     }
     if (command === 'git rev-parse --verify HEAD^{commit}') return { ok: true, stdout: `${head}\n`, stderr: '' };
-    if (command === `git merge-base --is-ancestor ${head} ${originMain}`) {
+    if (args[0] === 'git' && args[1] === 'merge-base' && args[2] === '--is-ancestor'
+      && args[4] === originMain) {
       return { ok: input.ancestor !== false, stdout: '', stderr: input.ancestor === false ? 'not ancestor' : '' };
     }
-    if (command === `git merge --ff-only ${originMain}`) {
+    if (args[0] === 'git' && args[1] === 'merge' && args[2] === '--ff-only' && args[3] === originMain) {
       if (input.mergeOk === false) return { ok: false, stdout: '', stderr: 'merge failed' };
       if (head !== originMain) {
         head = originMain;
@@ -1078,7 +1082,35 @@ describe('supervised Task launch assistant', () => {
     ]);
   });
 
-  it('fetches but leaves dirty manager worktree bytes untouched', async () => {
+  it('refuses a failed manager origin/main fetch before status or mutation', async () => {
+    const fixture = managerReuseFixture({ fetchOk: false });
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack',
+      taskId: 'task-1',
+      worktreeSelector: 'id:repo::existing',
+      managerRefresh: true,
+    }, fixture.execute);
+    expect(result).toMatchObject({ status: 'continue', cause: 'manager_worktree_fetch_failed' });
+    expect(fixture.calls.some((args) => args[0] === 'git' && args[1] === 'status')).toBe(false);
+    expect(fixture.calls.some((args) => args[0] === 'git' && args[1] === 'merge')).toBe(false);
+    expect(fixture.head()).toBe('1'.repeat(40));
+  });
+
+  it('refuses an unresolved fetched origin/main before status or mutation', async () => {
+    const fixture = managerReuseFixture({ originResolved: false });
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack',
+      taskId: 'task-1',
+      worktreeSelector: 'id:repo::existing',
+      managerRefresh: true,
+    }, fixture.execute);
+    expect(result).toMatchObject({ status: 'continue', cause: 'manager_worktree_origin_main_unresolved' });
+    expect(fixture.calls.some((args) => args[0] === 'git' && args[1] === 'status')).toBe(false);
+    expect(fixture.calls.some((args) => args[0] === 'git' && args[1] === 'merge')).toBe(false);
+    expect(fixture.head()).toBe('1'.repeat(40));
+  });
+
+  it('fetches but leaves dirty manager worktree bytes untouched',
     const fixture = managerReuseFixture({ status: '?? local.txt\n' });
     const result = await prepareWorktreeWithOrca({
       repository: 'chetwerikoff/orchestrator-pack',
@@ -1167,6 +1199,62 @@ describe('supervised Task launch assistant', () => {
     });
     expect(result).toMatchObject({ status: 'continue', cause: 'manager_worktree_origin_main_base_required' });
     expect(calls).toEqual([]);
+  });
+
+  it('creates a fresh manager worktree from origin/main and proves its distinct local branch', async () => {
+    const calls: string[][] = [];
+    const path = '/tmp/manager-2024';
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 2024,
+      taskId: 'task-1',
+      worktreeName: 'manager-2024',
+      baseBranch: 'origin/main',
+      managerRefresh: true,
+    }, async (args, _timeoutMs, _env, cwd) => {
+      calls.push([...args]);
+      if (args[0] === 'orca' && args[1] === 'repo') {
+        return { ok: true, stdout: repoListEnvelope([{
+          id: 'orca-repo-1',
+          gitRemoteIdentity: { canonicalKey: 'github.com/chetwerikoff/orchestrator-pack' },
+        }]), stderr: '' };
+      }
+      if (args[0] === 'orca' && args[1] === 'worktree') {
+        return { ok: true, stdout: okEnvelope({ worktree: { id: 'repo::manager-2024', path } }), stderr: '' };
+      }
+      if (cwd !== path) return { ok: false, stdout: '', stderr: 'wrong cwd' };
+      const command = args.join(' ');
+      if (command === 'git rev-parse --show-toplevel') return { ok: true, stdout: `${path}\n`, stderr: '' };
+      if (command === 'git remote get-url origin') {
+        return { ok: true, stdout: 'git@github.com:chetwerikoff/orchestrator-pack.git\n', stderr: '' };
+      }
+      if (command === 'git worktree list --porcelain') {
+        return {
+          ok: true,
+          stdout: [
+            'worktree /tmp/primary',
+            `HEAD ${'2'.repeat(40)}`,
+            'branch refs/heads/main',
+            '',
+            `worktree ${path}`,
+            `HEAD ${'2'.repeat(40)}`,
+            'branch refs/heads/manager-2024',
+            '',
+          ].join('\n'),
+          stderr: '',
+        };
+      }
+      return { ok: false, stdout: '', stderr: `unexpected: ${command}` };
+    });
+    expect(result).toMatchObject({
+      status: 'ok',
+      value: { id: 'repo::manager-2024', setupWitness: 'same_invocation_complete' },
+      evidence: { branch: 'manager-2024' },
+    });
+    expect(calls[1]).toEqual([
+      'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'manager-2024',
+      '--base-branch', 'origin/main', '--issue', '2024', '--setup', 'skip', '--json',
+    ]);
   });
 
   it('records deterministic assistant-entry and per-stage timings only', async () => {

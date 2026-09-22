@@ -1014,7 +1014,7 @@ async function refreshManagerWorktree(
       'require a successful clean-status observation after fetch and before any local worktree update',
     );
   }
-  if (status.stdout.length !== 0) {
+  if (status.stdout.trim().length !== 0) {
     return worktreeContinue(
       'manager_worktree_dirty',
       { worktreeId: id, branch: identity.value.branch, originMain },
