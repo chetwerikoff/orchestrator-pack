@@ -1,0 +1,25 @@
+{
+  "schema": "create-issue-stage-evidence/v1",
+  "stage": "competitive",
+  "sourceRevision": "r04",
+  "stageAttemptId": "1977-poisoned-canonical-attempt",
+  "invocations": [
+    {
+      "invocationId": "1977-deterministic-invocation",
+      "reviewerSlot": "01",
+      "attemptOrdinal": 1,
+      "retryAttempt": false,
+      "terminal": true,
+      "sendCount": 0,
+      "terminalEnvelope": {
+        "schema": "flow-manager-long-running-child-terminal/v1",
+        "lifecycle_outcome": "incident",
+        "delivery": "not-sent",
+        "turn_result_state": "input_invalid",
+        "turn_result_cause": "input_invalid:invocation_id_invalid",
+        "send_count": 0,
+        "recovery_available": false
+      }
+    }
+  ]
+}

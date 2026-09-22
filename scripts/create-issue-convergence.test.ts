@@ -8,6 +8,8 @@ import {
   createIssueNextAction,
   createIssueRecoverableResult,
   createIssueTerminalResult,
+  existingPacedBoundedRetryAction,
+  projectZeroSendManagerResult,
   validateCreateIssueManagerResult,
   validateCreateIssueNextAction,
   type CreateIssueActionBinding,
@@ -16,6 +18,7 @@ import { resolveCreateIssueBrowserOperatorConfig } from './lib/create-issue-brow
 import {
   reconcileCreateIssueStage,
   produceAcceptanceArtifacts,
+  classifyZeroSendCausePolicy,
 } from './lib/create-issue-stage-record-artifacts.ts';
 import { buildManagerReviewTerminalBundle } from './lib/manager-review-terminal-bundle.ts';
 import { canonicalStagePlan } from './lib/create-issue-stage-topology.ts';
@@ -551,5 +554,55 @@ describe('Issue #1935 sanitized measured convergence replay', () => {
     });
     expect(replayed).toMatchObject({ ok: true, alreadySettled: true, stageAttemptId: replay.source.stageAttemptId });
     expect(readFileSync(recurrencePath, 'utf8')).toBe(recurrenceBefore);
+  });
+});
+
+
+describe('zero-send manager result is action or structured reason (Issue #1999)', () => {
+  const binding: CreateIssueActionBinding = {
+    repository: 'chetwerikoff/orchestrator-pack',
+    issueNumber: 1999,
+    sourceRevision: 'r04',
+    stage: 'competitive',
+    stageAttemptId: '1977-poisoned-canonical-attempt',
+  };
+  const fixtureDir = join(process.cwd(), 'tests/external-output-references');
+
+  function envelope(name: string): Record<string, unknown> {
+    return JSON.parse(readFileSync(join(fixtureDir, name), 'utf8')) as Record<string, unknown>;
+  }
+
+  it('returns nextAction null with a structured reason when a fresh invocation id is offered', () => {
+    for (const name of [
+      'create-issue-926-terminal-competitive-01.json',
+      'create-issue-926-terminal-competitive-01-final.json',
+    ]) {
+      const body = envelope(name);
+      const policy = classifyZeroSendCausePolicy(body);
+      const projected = projectZeroSendManagerResult({
+        policy,
+        attemptOrdinal: 1,
+        binding,
+        invocationId: 'original-invocation',
+        reviewerSlot: '01',
+        pacedRetryAction: existingPacedBoundedRetryAction(binding, '01'),
+        freshInvocationId: 'fresh-invocation-id',
+      });
+      expect(projected?.nextAction).toBeNull();
+      expect(projected).toEqual(expect.objectContaining({
+        ok: false,
+        cause: policy?.code,
+        blocker: policy?.rawCause,
+        reason: expect.objectContaining({
+          class: policy?.class,
+          code: policy?.code,
+          rawCause: policy?.rawCause,
+          binding,
+        }),
+      }));
+      expect(JSON.stringify(projected)).not.toContain('fresh-invocation-id');
+      expect(typeof projected?.blocker).toBe('string');
+      expect(projected && 'reason' in projected).toBe(true);
+    }
   });
 });
