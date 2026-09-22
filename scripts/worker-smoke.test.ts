@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { spawn } from 'node:child_process';
 import { parseSmokeTestPlan } from './draft-discipline.mjs';
 import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -44,6 +45,7 @@ import {
 import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
 import type { RuntimeAdapter, RuntimeDispatchResult, RuntimeWorkerIdentity } from './runtime/contracts.ts';
 import {
+  beginSmokeOrdering,
   bindSmokeReportToPlan,
   establishRuntimeSmokeDelivery,
   emit,
@@ -67,7 +69,11 @@ import {
   type GateCheckDependencies,
   type ResolvedSmokeTarget,
 } from './worker-smoke-run.ts';
-import { readPackReviewAuthority } from './pack-review-state.ts';
+import {
+  commitSmokeOrderingTransition,
+  observePackReviewHead,
+  readPackReviewAuthority,
+} from './pack-review-state.ts';
 
 const issueBody = `
 \`\`\`behavior-kind
@@ -2542,5 +2548,380 @@ describe('buildSmokeAgentPrompt selected declaration artifact', () => {
 
     expect(prompt).toContain('Never await a shell that has already ended: read ~/.cursor/projects/<slug>/terminals/<shell_id>.txt first — if its tail carries exit_code:, the job is over and await will burn the whole ceiling instead of returning.');
     expect(prompt).toContain('Cap any single block_until_ms at 300000; re-check and re-await instead of one long block.');
+  });
+});
+
+describe('independent pass is stored only after publication', () => {
+  const action = 'publish the independent report';
+  const expected = 'store passed only after the canonical comment exists';
+
+  function tieredBody(): string {
+    return [
+      '```behavior-kind',
+      'action-producing',
+      '```',
+      '',
+      '```complexity-tier',
+      'tier: T2',
+      '```',
+      '',
+      '```smoke-test-plan',
+      'scenarios:',
+      `  - action: ${action} | expected: ${expected}`,
+      '```',
+    ].join('\n');
+  }
+
+  function gitFixture(prefix: string): { root: string; headSha: string } {
+    const root = mkdtempSync(join(tmpdir(), prefix));
+    const git = (...args: string[]): string => {
+      const result = runProcessSync({ command: 'git', args, cwd: root });
+      if (!result.ok) throw new Error(result.stderr || result.stdout || args.join(' '));
+      return result.stdout.trim();
+    };
+    git('init', '--quiet');
+    git('config', 'user.name', 'Ordering Fixture');
+    git('config', 'user.email', 'ordering@example.invalid');
+    git('config', 'commit.gpgsign', 'false');
+    writeFileSync(join(root, 'fixture.txt'), 'fixture\n', 'utf8');
+    git('add', 'fixture.txt');
+    git('commit', '-m', 'fixture');
+    return { root, headSha: git('rev-parse', 'HEAD').toLowerCase() };
+  }
+
+  async function runOrdering(input: {
+    prefix: string;
+    prNumber: number;
+    actor: 'independent' | 'worker-owned';
+    history: boolean;
+    publishComment: (prNumber: number, body: string, repoRoot: string) => void;
+    spawnFails?: boolean;
+  }): Promise<{ code?: number; error?: unknown; headSha: string; storeRoot: string; root: string }> {
+    const fixture = gitFixture(input.prefix);
+    const body = tieredBody();
+    const issueBodyFile = join(fixture.root, 'issue.md');
+    writeFileSync(issueBodyFile, body, 'utf8');
+    const adapter = new DeterministicRuntimeAdapter();
+    Object.defineProperty(adapter, 'readiness', {
+      configurable: true,
+      value: () => ({ status: 'ok', value: { ready: true, workspacePath: fixture.root, headSha: fixture.headSha } }),
+    });
+    Object.defineProperty(adapter, 'spawnWorker', {
+      configurable: true,
+      value: () => {
+        if (input.spawnFails) return { status: 'failed', operation: 'spawn_worker', reason: 'fixture-spawn-failed' };
+        throw new Error('fixture-must-not-spawn');
+      },
+    });
+    const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const previousStore = process.env.PACK_REVIEW_RUN_STORE_ROOT;
+    const previousReceipts = process.env.WORKER_SMOKE_RECEIPT_ROOT;
+    const storeRoot = join(fixture.root, 'review-store');
+    process.env.PACK_REVIEW_RUN_STORE_ROOT = storeRoot;
+    process.env.WORKER_SMOKE_RECEIPT_ROOT = join(fixture.root, 'receipts');
+    try {
+      const code = await runSmokeAttempt({
+        command: 'run',
+        issueNumber: 2068,
+        prNumber: input.prNumber,
+        headSha: fixture.headSha,
+        issueBodyFile,
+        smokeComplexity: 'routine',
+        smokeActor: input.actor,
+        repoRoot: fixture.root,
+        cwd: fixture.root,
+        dryRun: false,
+        json: true,
+        reviewId: '',
+        reviewHeadSha: '',
+      }, {
+        adapter,
+        resolveProfile: () => ({
+          complexity: 'routine',
+          family: 'cursor',
+          agent: 'cursor-agent',
+          command: 'cursor-agent',
+          names: [
+            'PACK_EXECUTOR_SMOKE_ROUTINE_AGENT',
+            'PACK_EXECUTOR_SMOKE_ROUTINE_MODEL',
+            'PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT',
+          ],
+        }),
+        resolveTarget: () => ({
+          repositorySlug: REPOSITORY,
+          issueNumber: 2068,
+          prNumber: input.prNumber,
+          headSha: fixture.headSha,
+          issueBody: body,
+          prBody: 'Closes #2068',
+          issueBodyMatchesTarget: true,
+          trustedPublisherLogin: TRUSTED_ACTOR,
+          prOpen: true,
+          baseRef: 'main',
+          expectedTargetRef: 'main',
+          expectedTarget: true,
+        }),
+        fetchHistoryComments: () => input.history ? [comment(1, {
+          ...report('PASS', [scenario(action, expected)]),
+          issueNumber: 2068,
+          prNumber: input.prNumber,
+          headSha: fixture.headSha,
+        })] : [],
+        isHistoryAncestor: (ancestorSha, descendantSha) => ancestorSha === descendantSha,
+        publishComment: input.publishComment,
+      });
+      return { code, headSha: fixture.headSha, storeRoot, root: fixture.root };
+    } catch (error) {
+      return { error, headSha: fixture.headSha, storeRoot, root: fixture.root };
+    } finally {
+      output.mockRestore();
+      if (previousStore === undefined) delete process.env.PACK_REVIEW_RUN_STORE_ROOT;
+      else process.env.PACK_REVIEW_RUN_STORE_ROOT = previousStore;
+      if (previousReceipts === undefined) delete process.env.WORKER_SMOKE_RECEIPT_ROOT;
+      else process.env.WORKER_SMOKE_RECEIPT_ROOT = previousReceipts;
+    }
+  }
+
+  function independentStatus(prNumber: number, storeRoot: string): string | undefined {
+    return readPackReviewAuthority(prNumber, { storeRoot })?.smokeOrdering?.independent?.status;
+  }
+
+  it('stores independent passed only after the exact-head PASS comment is published', async () => {
+    const bodies: string[] = [];
+    const result = await runOrdering({
+      prefix: 'ordering-pass-published-',
+      prNumber: 206801,
+      actor: 'independent',
+      history: true,
+      publishComment: (_prNumber, body) => { bodies.push(body); },
+    });
+    try {
+      expect(result.error).toBeUndefined();
+      expect(result.code).toBe(0);
+      expect(bodies).toHaveLength(1);
+      expect(bodies[0]).toContain('result: PASS');
+      expect(bodies[0]).toContain(result.headSha);
+      expect(independentStatus(206801, result.storeRoot)).toBe('passed');
+    } finally {
+      rmSync(result.root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not store independent passed when publication of the local PASS throws', async () => {
+    const result = await runOrdering({
+      prefix: 'ordering-pass-unpublished-',
+      prNumber: 206802,
+      actor: 'independent',
+      history: true,
+      publishComment: () => { throw new Error('scenario_precondition_unavailable: publication failed'); },
+    });
+    try {
+      expect(result.error).toBeInstanceOf(Error);
+      expect(independentStatus(206802, result.storeRoot)).not.toBe('passed');
+    } finally {
+      rmSync(result.root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not store a published BLOCKED independent report as passed', async () => {
+    const bodies: string[] = [];
+    let calls = 0;
+    const result = await runOrdering({
+      prefix: 'ordering-blocked-published-',
+      prNumber: 206803,
+      actor: 'independent',
+      history: true,
+      publishComment: (_prNumber, body) => {
+        calls += 1;
+        bodies.push(body);
+        if (calls === 1) throw new Error('admission_refused: publication failed');
+      },
+    });
+    try {
+      expect(result.error).toBeUndefined();
+      expect(bodies.some((body) => body.includes('result: BLOCKED'))).toBe(true);
+      expect(independentStatus(206803, result.storeRoot)).toBe('failed');
+    } finally {
+      rmSync(result.root, { recursive: true, force: true });
+    }
+  });
+
+  it('stores a published independent FAIL as failed', async () => {
+    const bodies: string[] = [];
+    const result = await runOrdering({
+      prefix: 'ordering-fail-published-',
+      prNumber: 206804,
+      actor: 'independent',
+      history: false,
+      spawnFails: true,
+      publishComment: (_prNumber, body) => { bodies.push(body); },
+    });
+    try {
+      expect(result.error).toBeUndefined();
+      expect(result.code).toBe(1);
+      expect(bodies.some((body) => body.includes('result: FAIL'))).toBe(true);
+      expect(bodies.some((body) => body.includes('result: PASS'))).toBe(false);
+      expect(independentStatus(206804, result.storeRoot)).toBe('failed');
+    } finally {
+      rmSync(result.root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not store a carry-only worker PASS as an independent pass', async () => {
+    const bodies: string[] = [];
+    const result = await runOrdering({
+      prefix: 'ordering-worker-carry-',
+      prNumber: 206805,
+      actor: 'worker-owned',
+      history: true,
+      publishComment: (_prNumber, body) => { bodies.push(body); },
+    });
+    try {
+      expect(result.error).toBeUndefined();
+      expect(result.code).toBe(0);
+      expect(bodies.some((body) => body.includes('result: PASS'))).toBe(true);
+      const ordering = readPackReviewAuthority(206805, { storeRoot: result.storeRoot })?.smokeOrdering;
+      expect(ordering?.independent?.status).not.toBe('passed');
+      expect(ordering?.workerOwned?.status).not.toBe('passed');
+    } finally {
+      rmSync(result.root, { recursive: true, force: true });
+    }
+  });
+
+  async function deadPid(): Promise<number> {
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 20)']);
+    const pid = child.pid;
+    if (!pid) throw new Error('missing child pid');
+    await new Promise<void>((resolve, reject) => {
+      child.once('exit', () => resolve());
+      child.once('error', reject);
+    });
+    return pid;
+  }
+
+  it('keeps a dead independent owner without a canonical result unpassed', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'ordering-dead-owner-'));
+    const storeRoot = join(root, 'review-store');
+    const previousStore = process.env.PACK_REVIEW_RUN_STORE_ROOT;
+    process.env.PACK_REVIEW_RUN_STORE_ROOT = storeRoot;
+    const body = tieredBody();
+    writeFileSync(join(root, 'issue.md'), body, 'utf8');
+    const headSha = 'a'.repeat(40);
+    const options = {
+      command: 'run',
+      issueNumber: 2068,
+      prNumber: 206806,
+      headSha,
+      issueBodyFile: join(root, 'issue.md'),
+      smokeComplexity: 'routine' as const,
+      smokeActor: 'independent' as const,
+      repoRoot: root,
+      cwd: root,
+      dryRun: true,
+      json: true,
+      reviewId: '',
+      reviewHeadSha: '',
+    };
+    try {
+      const pid = await deadPid();
+      beginSmokeOrdering(options, body, { attemptId: 'dead-owner-run', supervisorPid: pid, runId: 'dead-owner-run' });
+      expect(() => beginSmokeOrdering(options, body, {
+        attemptId: 'dead-owner-next',
+        supervisorPid: process.pid,
+        runId: 'dead-owner-next',
+      })).toThrow(/smoke_ordering_independent_in_progress/);
+      expect(readPackReviewAuthority(206806, { storeRoot })?.smokeOrdering?.independent?.status).not.toBe('passed');
+    } finally {
+      if (previousStore === undefined) delete process.env.PACK_REVIEW_RUN_STORE_ROOT;
+      else process.env.PACK_REVIEW_RUN_STORE_ROOT = previousStore;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a live independent owner without a terminal result started', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ordering-live-owner-'));
+    const storeRoot = join(root, 'review-store');
+    const previousStore = process.env.PACK_REVIEW_RUN_STORE_ROOT;
+    process.env.PACK_REVIEW_RUN_STORE_ROOT = storeRoot;
+    const body = tieredBody();
+    writeFileSync(join(root, 'issue.md'), body, 'utf8');
+    const headSha = 'b'.repeat(40);
+    const options = {
+      command: 'run' as const,
+      issueNumber: 2068,
+      prNumber: 206808,
+      headSha,
+      issueBodyFile: join(root, 'issue.md'),
+      smokeComplexity: 'routine' as const,
+      smokeActor: 'independent' as const,
+      repoRoot: root,
+      cwd: root,
+      dryRun: true,
+      json: true,
+      reviewId: '',
+      reviewHeadSha: '',
+    };
+    try {
+      beginSmokeOrdering(options, body, { attemptId: 'live-owner', supervisorPid: process.pid });
+      expect(() => beginSmokeOrdering(options, body, {
+        attemptId: 'live-owner-next',
+        supervisorPid: process.pid,
+      })).toThrow(/smoke_ordering_independent_in_progress/);
+      expect(readPackReviewAuthority(206808, { storeRoot })?.smokeOrdering?.independent?.status).toBe('started');
+    } finally {
+      if (previousStore === undefined) delete process.env.PACK_REVIEW_RUN_STORE_ROOT;
+      else process.env.PACK_REVIEW_RUN_STORE_ROOT = previousStore;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('drops a previous-head independent pass when the head changes', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ordering-previous-head-'));
+    const storeRoot = join(root, 'review-store');
+    const previousStore = process.env.PACK_REVIEW_RUN_STORE_ROOT;
+    process.env.PACK_REVIEW_RUN_STORE_ROOT = storeRoot;
+    const body = tieredBody();
+    writeFileSync(join(root, 'issue.md'), body, 'utf8');
+    const options = {
+      command: 'run' as const,
+      issueNumber: 2068,
+      prNumber: 206807,
+      headSha: HEAD_ONE,
+      issueBodyFile: join(root, 'issue.md'),
+      smokeComplexity: 'routine' as const,
+      smokeActor: 'independent' as const,
+      repoRoot: root,
+      cwd: root,
+      dryRun: true,
+      json: true,
+      reviewId: '',
+      reviewHeadSha: '',
+    };
+    const authorityOptions = { storeRoot };
+    try {
+      beginSmokeOrdering(options, body, { attemptId: 'previous-head-attempt', supervisorPid: process.pid });
+      const started = readPackReviewAuthority(206807, authorityOptions);
+      const passed = commitSmokeOrderingTransition({
+        prNumber: 206807,
+        expectedTransitionSeq: started?.transitionSeq ?? 0,
+        actor: 'independent',
+        headSha: HEAD_ONE,
+        status: 'passed',
+        attemptId: 'previous-head-attempt',
+        supervisorPid: process.pid,
+        options: authorityOptions,
+      });
+      const nextHead = observePackReviewHead({
+        prNumber: 206807,
+        expectedTransitionSeq: passed.transitionSeq,
+        headSha: HEAD_TWO,
+        options: authorityOptions,
+      });
+      expect(nextHead.smokeOrdering?.independent).toBeUndefined();
+    } finally {
+      if (previousStore === undefined) delete process.env.PACK_REVIEW_RUN_STORE_ROOT;
+      else process.env.PACK_REVIEW_RUN_STORE_ROOT = previousStore;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
