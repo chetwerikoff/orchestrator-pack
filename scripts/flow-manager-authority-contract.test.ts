@@ -1225,12 +1225,12 @@ describe('Issue #2004 derived external-dependency parking contract', () => {
   const issueBlockedOn = {
     issue: 1977,
     condition: 'issue_closed',
-    evidence: 'slot 01 is blocked on Issue #1977',
+    evidence: 'coordinator parking replay waits for Issue #1977 to close',
   } as const;
   const prBlockedOn = {
     pr: 1885,
     condition: 'pr_merged',
-    evidence: 'implementation is blocked on PR #1885 merging',
+    evidence: 'already-satisfied wake observes PR #1885 merged',
   } as const;
 
   function wakeProjection(
