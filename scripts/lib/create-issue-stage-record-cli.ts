@@ -685,6 +685,34 @@ function retryPendingActionArgv(
   return argv;
 }
 
+function poisonSuccessorStartCycleArgv(
+  opts: StageFinalizeCliOptions,
+  issueNumber: number,
+  binding: CreateIssueActionBinding,
+  tier: string,
+): string[] {
+  const argv = [
+    'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+    'start-cycle',
+    '--repo', opts.repo,
+    '--issue-number', String(issueNumber),
+    '--source-revision', binding.sourceRevision,
+    '--stage', binding.stage,
+    '--stage-attempt-id', binding.stageAttemptId ?? '',
+    '--tier', tier,
+    '--expected-source-revision', binding.sourceRevision,
+    '--expected-stage', binding.stage,
+    '--expected-stage-attempt-id', binding.stageAttemptId ?? '',
+    '--public-actor', opts.publicActor,
+    '--json',
+  ];
+  if (opts.competitiveDecision) argv.push('--competitive-decision', opts.competitiveDecision);
+  if (opts.competitiveRationale) argv.push('--competitive-rationale', opts.competitiveRationale);
+  if (opts.permittedLaneOverride) argv.push('--permitted-lane-override', opts.permittedLaneOverride);
+  if (opts.workdir) argv.push('--workdir', opts.workdir);
+  return argv;
+}
+
 function startCycleRetryArgv(
   opts: StageFinalizeCliOptions,
   issueNumber: number,
@@ -1052,10 +1080,31 @@ export function runStageFinalizeCli(argv: string[]): number {
     }
     const results = retryPendingEvents(transport, opts.repo, issueNumber, opts.workdir);
     const ok = results.every((item) => item.ok);
+    const recovery = results.length === 1 ? results[0]?.recovery : undefined;
+    const recoveryBinding = recovery
+      && opts.expectedSourceRevision
+      && opts.expectedStage
+      && opts.expectedStageAttemptId
+      && recovery.sourceRevision.toLowerCase() === opts.expectedSourceRevision.toLowerCase()
+      ? {
+          repository: opts.repo,
+          issueNumber,
+          sourceRevision: opts.expectedSourceRevision,
+          stage: opts.expectedStage,
+          stageAttemptId: opts.expectedStageAttemptId,
+        } satisfies CreateIssueActionBinding
+      : null;
+    const nextAction = recoveryBinding && recovery
+      ? createIssueNextAction({
+          kind: 'retry-start-cycle',
+          binding: recoveryBinding,
+          argv: poisonSuccessorStartCycleArgv(opts, issueNumber, recoveryBinding, recovery.tier),
+        })
+      : null;
     const output = validatedManagerSurfaceOutput(
       { ok, results },
       'stage_record_retry_exhausted',
-      null,
+      nextAction,
       ok ? undefined : results.flatMap((item) => item.diagnostics.map((diagnostic) => diagnostic.message)).join('; '),
     );
     if (opts.json) console.log(JSON.stringify(output));

@@ -159,6 +159,73 @@ function cycleComment(
   ].join('\n'), { id });
 }
 
+function issue1976PoisonJournalComment(): Record<string, unknown> {
+  const cycleId = '2bfd8bce-fa3d-47b7-aa02-e85b13432a4c';
+  const payload = {
+    schema: 'create-issue-review-cycle/v1',
+    'event-key': cycleId,
+    'cycle-id': cycleId,
+    'predecessor-cycle-id': 'none',
+    'source-revision': 'r01',
+    tier: 'T2',
+    'public-actor': 'flow-manager',
+  };
+  return comment([
+    `<!-- opk-create-issue-journal:create-issue-review-cycle/v1:${cycleId} -->`,
+    '```json',
+    JSON.stringify(payload, null, 2),
+    '```',
+  ].join('\n'), {
+    id: 5757262517,
+    created_at: '2026-08-06T04:00:00Z',
+    updated_at: '2026-08-06T04:00:00Z',
+  });
+}
+
+function issue1976RecoverySuccessorComment(): Record<string, unknown> {
+  const cycleId = 'cycle-1385';
+  const payload = {
+    schema: 'create-issue-review-cycle/v1',
+    'event-key': cycleId,
+    'cycle-id': cycleId,
+    'predecessor-cycle-id': 'none',
+    'source-revision': 'r01',
+    tier: 'T2',
+    'public-actor': 'cursor-flow-manager',
+  };
+  return comment([
+    `<!-- opk-create-issue-journal:create-issue-review-cycle/v1:${cycleId} -->`,
+    '```json',
+    JSON.stringify(payload, null, 2),
+    '```',
+  ].join('\n'), {
+    id: 5757262518,
+    created_at: '2026-08-07T04:00:00Z',
+    updated_at: '2026-08-07T04:00:00Z',
+  });
+}
+
+function unrelatedMalformedJournalComment(): Record<string, unknown> {
+  return comment([
+    '<!-- opk-create-issue-journal:create-issue-review-cycle/v1:unrelated-malformed -->',
+    '```json',
+    JSON.stringify({
+      schema: 'create-issue-review-cycle/v1',
+      'event-key': 'different-event-key',
+      'cycle-id': 'unrelated-malformed',
+      'predecessor-cycle-id': 'none',
+      'source-revision': 'r01',
+      tier: 'T2',
+      'public-actor': 'cursor-flow-manager',
+    }, null, 2),
+    '```',
+  ].join('\n'), {
+    id: 5757262519,
+    created_at: '2026-08-08T04:00:00Z',
+    updated_at: '2026-08-08T04:00:00Z',
+  });
+}
+
 function finalAcceptanceIssueBody(revision = REVISION): string {
   return [
     `<!-- source-revision: ${revision} -->`,
@@ -208,6 +275,8 @@ interface TransportOptions {
   cycleComments?: Array<Record<string, unknown>>;
   issueBodies?: string[];
   issueNumber?: number;
+  persistCreatedIssueComments?: boolean;
+  issueLabels?: string[];
 }
 
 function transport(options: TransportOptions = {}) {
@@ -222,6 +291,7 @@ function transport(options: TransportOptions = {}) {
   const census = [...suppliedCensus, ...journalComments];
   let issueReadCount = 0;
   const createdIssueComments: string[] = [];
+  const issueLabels = [...(options.issueLabels ?? [])];
   const runGh = vi.fn((argv: string[]) => {
     if (argv[2] === 'user') {
       if (principal === null) return { exitCode: 1, stdout: '', stderr: 'principal unavailable' };
@@ -235,12 +305,29 @@ function transport(options: TransportOptions = {}) {
       const bodies = options.issueBodies ?? [finalAcceptanceIssueBody(observedRevision)];
       const body = bodies[Math.min(issueReadCount, bodies.length - 1)] ?? '';
       issueReadCount += 1;
-      return { exitCode: 0, stdout: JSON.stringify({ title: 'fixture issue', body, labels: [] }), stderr: '' };
+      return { exitCode: 0, stdout: JSON.stringify({ title: 'fixture issue', body, labels: issueLabels }), stderr: '' };
+    }
+    if (target === `repos/${REPOSITORY}/issues/${issueNumber}` && argv.includes('-X') && argv.includes('PATCH')) {
+      const labels = argv
+        .filter((value) => value.startsWith('labels[]='))
+        .map((value) => value.slice('labels[]='.length));
+      issueLabels.splice(0, issueLabels.length, ...labels);
+      return { exitCode: 0, stdout: '{}', stderr: '' };
     }
     if (target === `repos/${REPOSITORY}/issues/${issueNumber}/comments` && argv.includes('-f')) {
       const body = argv.find((value) => value.startsWith('body='))?.slice('body='.length) ?? '';
       createdIssueComments.push(body);
-      return { exitCode: 0, stdout: JSON.stringify({ id: COMMENT_ID + 2000 + createdIssueComments.length }), stderr: '' };
+      const id = COMMENT_ID + 2000 + createdIssueComments.length;
+      if (options.persistCreatedIssueComments) {
+        const createdAt = `2026-09-21T00:${String(createdIssueComments.length).padStart(2, '0')}:00Z`;
+        census.push(comment(body, {
+          id,
+          issueNumber,
+          created_at: createdAt,
+          updated_at: createdAt,
+        }));
+      }
+      return { exitCode: 0, stdout: JSON.stringify({ id }), stderr: '' };
     }
     if (target === `repos/${REPOSITORY}`) {
       return { exitCode: 0, stdout: `${PUBLISHER}\n`, stderr: '' };
@@ -262,7 +349,7 @@ function transport(options: TransportOptions = {}) {
     }
     throw new Error(`unexpected gh call: ${argv.join(' ')}`);
   });
-  return { runGh, createdIssueComments };
+  return { runGh, createdIssueComments, issueLabels };
 }
 
 function writeGovernedAuthorReply(
@@ -1727,6 +1814,185 @@ describe('Issue #1385 authoritative GitHub artifact acceptance', () => {
     expect(stageStatus.ok).toBe(false);
     expect(stageStatus.missing.map((item) => item.reason).join('\n'))
       .toContain(`lacks a journal witness naming invocation ${String(partial.invocations?.[2]?.invocationId)}`);
+  });
+
+  it('uses the durable #1976 poison/successor witness for stage-time and final artifact production only', () => {
+    const stageInput = fixture({ transportClassification: 'incident' });
+    const recoveredStageSource = transport({
+      census: [...stageInput.reviewComments, comment(stageInput.body, { issueNumber: stageInput.issueNumber })],
+      cycleComments: [issue1976PoisonJournalComment(), issue1976RecoverySuccessorComment()],
+      issueNumber: stageInput.issueNumber,
+    });
+    const stageResult = produceStageTime(stageInput, recoveredStageSource);
+    expect(stageResult.ok, stageResult.errors.join('\n')).toBe(true);
+
+    const finalInput = fixture({ transportClassification: 'incident' });
+    const recoveredFinalSource = transport({
+      census: [...finalInput.reviewComments, comment(finalInput.body, { issueNumber: finalInput.issueNumber })],
+      cycleComments: [issue1976PoisonJournalComment(), issue1976RecoverySuccessorComment()],
+      issueNumber: finalInput.issueNumber,
+    });
+    const finalResult = produce(finalInput, recoveredFinalSource);
+    expect(finalResult.ok, finalResult.errors.join('\n')).toBe(true);
+
+    const blockedInput = fixture({ transportClassification: 'incident' });
+    const blockedSource = transport({
+      census: [...blockedInput.reviewComments, comment(blockedInput.body, { issueNumber: blockedInput.issueNumber })],
+      cycleComments: [
+        issue1976PoisonJournalComment(),
+        issue1976RecoverySuccessorComment(),
+        unrelatedMalformedJournalComment(),
+      ],
+      issueNumber: blockedInput.issueNumber,
+    });
+    const blocked = produce(blockedInput, blockedSource);
+    expect(blocked.ok).toBe(false);
+    expect(blocked.errors.join('\n')).toContain('malformed-marker');
+  });
+
+  it.each([
+    ['edited', { updated_at: '2026-08-06T04:01:00Z' }],
+    ['non-owner', { user: { login: 'someone-else' } }],
+  ])('fails closed for %s journal-marked #1976 poison during stage-time and final artifact production', (_label, overrides) => {
+    const poison = { ...issue1976PoisonJournalComment(), ...overrides };
+
+    const stageInput = fixture({ transportClassification: 'incident' });
+    const stageResult = produceStageTime(stageInput, transport({
+      census: [...stageInput.reviewComments, comment(stageInput.body, { issueNumber: stageInput.issueNumber })],
+      cycleComments: [poison, issue1976RecoverySuccessorComment()],
+      issueNumber: stageInput.issueNumber,
+    }));
+    expect(stageResult.ok).toBe(false);
+    expect(stageResult.errors.join('\n')).toContain('journal-marked comment');
+
+    const finalInput = fixture({ transportClassification: 'incident' });
+    const finalResult = produce(finalInput, transport({
+      census: [...finalInput.reviewComments, comment(finalInput.body, { issueNumber: finalInput.issueNumber })],
+      cycleComments: [poison, issue1976RecoverySuccessorComment()],
+      issueNumber: finalInput.issueNumber,
+    }));
+    expect(finalResult.ok).toBe(false);
+    expect(finalResult.errors.join('\n')).toContain('journal-marked comment');
+  });
+
+  it('publishes and confirms final acceptance through the recovered #1976 witness and blocks a second malformed marker', () => {
+    const input = fixture({ transportClassification: 'incident' });
+    const artifactSource = transport({
+      census: [...input.reviewComments, comment(input.body, { issueNumber: input.issueNumber })],
+      cycleComments: [issue1976PoisonJournalComment(), issue1976RecoverySuccessorComment()],
+      issueNumber: input.issueNumber,
+    });
+    const produced = produce(input, artifactSource);
+    expect(produced.ok, produced.errors.join('\n')).toBe(true);
+
+    const stateRoot = join(input.dir, 'issue-1978-canonical-state');
+    const canonicalDir = join(stateRoot, '.review', String(ISSUE));
+    mkdirSync(canonicalDir, { recursive: true });
+    writeFileSync(join(canonicalDir, 'tier-intake.json'), readFileSync(input.intakePath));
+    const receiptNames = produced.files.filter((name) => name.startsWith('stage-completeness-receipt-'));
+    for (const name of receiptNames) {
+      writeFileSync(join(canonicalDir, name), readFileSync(join(input.outputDir, name)));
+    }
+
+    const previousStateRoot = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = stateRoot;
+    try {
+      const body = finalAcceptanceIssueBody();
+      const source = transport({
+        census: [],
+        cycleComments: [issue1976PoisonJournalComment(), issue1976RecoverySuccessorComment()],
+        issueBodies: [body, body, body, body, body],
+        persistCreatedIssueComments: true,
+        issueLabels: ['spec-review:in-progress'],
+      });
+      const result = runFinalAcceptance(source, {
+        repo: REPOSITORY,
+        issueNumber: ISSUE,
+        publicActor: 'cursor-flow-manager',
+        workdir: join(input.dir, 'journal-success'),
+        issueBody: body,
+        issueRevision: REVISION,
+        cycleId: 'cycle-1385',
+        reviewDir: canonicalDir,
+        tierIntakePath: join(canonicalDir, 'tier-intake.json'),
+        stageReceiptPaths: receiptNames.map((name) => join(canonicalDir, name)),
+        capturePaths: [],
+        ledgerPath: join(input.outputDir, 'finding-disposition-ledger.json'),
+        relayEvidencePaths: [join(input.outputDir, 'verified-relay-evidence.json')],
+      });
+      expect(result.ok, [...result.guardErrors, ...result.diagnostics.map((item) => item.message)].join('\n')).toBe(true);
+      expect(result.projectionPendingRepair).toBe(false);
+      expect(source.createdIssueComments).toHaveLength(1);
+      expect(source.createdIssueComments[0]).toContain('create-issue-final-acceptance/v1');
+      expect(source.issueLabels).toContain('spec-review:accepted');
+      expect(source.issueLabels).not.toContain('spec-review:in-progress');
+
+      const blockedSource = transport({
+        census: [],
+        cycleComments: [
+          issue1976PoisonJournalComment(),
+          issue1976RecoverySuccessorComment(),
+          unrelatedMalformedJournalComment(),
+        ],
+        issueBodies: [body],
+        persistCreatedIssueComments: true,
+        issueLabels: ['spec-review:in-progress'],
+      });
+      const blocked = runFinalAcceptance(blockedSource, {
+        repo: REPOSITORY,
+        issueNumber: ISSUE,
+        publicActor: 'cursor-flow-manager',
+        workdir: join(input.dir, 'journal-blocked'),
+        issueBody: body,
+        issueRevision: REVISION,
+        cycleId: 'cycle-1385',
+        reviewDir: canonicalDir,
+        tierIntakePath: join(canonicalDir, 'tier-intake.json'),
+        stageReceiptPaths: receiptNames.map((name) => join(canonicalDir, name)),
+        capturePaths: [],
+        ledgerPath: join(input.outputDir, 'finding-disposition-ledger.json'),
+        relayEvidencePaths: [join(input.outputDir, 'verified-relay-evidence.json')],
+      });
+      expect(blocked.ok).toBe(false);
+      expect(blocked.guardErrors.join('\n')).toContain('blocking malformed marker');
+      expect(blockedSource.createdIssueComments).toHaveLength(0);
+      expect(blockedSource.issueLabels).not.toContain('spec-review:accepted');
+
+      for (const [label, poison] of [
+        ['edited', { ...issue1976PoisonJournalComment(), updated_at: '2026-08-06T04:01:00Z' }],
+        ['non-owner', { ...issue1976PoisonJournalComment(), user: { login: 'someone-else' } }],
+      ] as const) {
+        const untrustedSource = transport({
+          census: [],
+          cycleComments: [poison, issue1976RecoverySuccessorComment()],
+          issueBodies: [body],
+          persistCreatedIssueComments: true,
+          issueLabels: ['spec-review:in-progress'],
+        });
+        const untrusted = runFinalAcceptance(untrustedSource, {
+          repo: REPOSITORY,
+          issueNumber: ISSUE,
+          publicActor: 'cursor-flow-manager',
+          workdir: join(input.dir, `journal-${label}`),
+          issueBody: body,
+          issueRevision: REVISION,
+          cycleId: 'cycle-1385',
+          reviewDir: canonicalDir,
+          tierIntakePath: join(canonicalDir, 'tier-intake.json'),
+          stageReceiptPaths: receiptNames.map((name) => join(canonicalDir, name)),
+          capturePaths: [],
+          ledgerPath: join(input.outputDir, 'finding-disposition-ledger.json'),
+          relayEvidencePaths: [join(input.outputDir, 'verified-relay-evidence.json')],
+        });
+        expect(untrusted.ok).toBe(false);
+        expect(untrusted.guardErrors.join('\n')).toContain('blocking malformed marker');
+        expect(untrustedSource.createdIssueComments).toHaveLength(0);
+        expect(untrustedSource.issueLabels).not.toContain('spec-review:accepted');
+      }
+    } finally {
+      if (previousStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previousStateRoot;
+    }
   });
 
   it('blocks final acceptance when the live Issue body drifts at the journal write boundary', () => {
