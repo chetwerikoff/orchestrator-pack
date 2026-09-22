@@ -1026,6 +1026,57 @@ describe('Issue #2009 bind-published-comment', () => {
     });
     expect(stored.invocations[1]).toEqual(beforeOther);
   });
+
+  it('derives reviewEpisodeId from tier-intake when the lifecycle seed omits it', () => {
+    const dir = makeCliTempDir();
+    const taskIdentity = `issue:${issueNumber}`;
+    writeFileSync(join(dir, 'tier-intake.json'), JSON.stringify({
+      schema: 'tier-intake/v1',
+      producer: 'flow-manager',
+      taskIdentity,
+      kind: 'fresh',
+      priorTier: 'T3',
+      firstRevision: 'r01',
+    }, null, 2) + '\n');
+    const evidencePath = join(dir, 'attempt-001.json');
+    writeFileSync(evidencePath, JSON.stringify({
+      schema: STAGE_EVIDENCE_SCHEMA,
+      producer: 'create-issue-stage-finalize/start-cycle',
+      taskIdentity,
+      tier: 'T3',
+      stage: 'competitive',
+      stageAttemptId: 'attempt-001',
+      stageSequence: 1,
+      cycleId: 'cycle-2017',
+      cycleBinding: { cycleId: 'cycle-2017', sourceRevision: 'r01', boundBeforeLaunch: true },
+      policyVersion: 'triple-source/v1',
+      reviewerCardinality: 3,
+      cardinalityConfigIdentity: 'config',
+      sourceRevision: 'r01',
+      invocations: [],
+    }, null, 2) + '\n');
+    const { transport } = commentTransport();
+    const result = bindPublishedCommentToSlot({
+      reviewDir: dir,
+      stageEvidencePath: evidencePath,
+      repositoryFullName: repo,
+      issueNumber,
+      reviewerSlot: '01',
+      invocationId,
+      commentUrl,
+      artifactSourceTransport: transport,
+    });
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    const stored = JSON.parse(readFileSync(evidencePath, 'utf8')) as { invocations: Array<Record<string, unknown>> };
+    expect(stored.invocations).toHaveLength(1);
+    expect(stored.invocations[0]).toMatchObject({
+      reviewEpisodeId: `${taskIdentity}@r01`,
+      reviewerSlot: '01',
+      invocationId,
+      sendCount: 1,
+      retryClass: 'retry-forbidden',
+    });
+  });
 });
 
 describe('create-issue-final-acceptance contract parity', () => {

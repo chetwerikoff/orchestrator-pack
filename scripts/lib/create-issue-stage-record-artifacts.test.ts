@@ -16,9 +16,11 @@ import {
   locateGovernedAuthorDispositionBlock,
   parseCanonicalCaptureRevision,
   produceAcceptanceArtifacts,
+  bindPublishedCommentToSlot,
   reconcileCreateIssueStage,
   stageReceiptPayloadsMatchExceptDerivedChain,
 } from './create-issue-stage-record-artifacts.ts';
+import { parseConsumableStageReceipt } from './create-issue-stage-record-receipt.ts';
 import { runFinalAcceptance } from './create-issue-final-acceptance.ts';
 import { validateTerminalOneShotBodyBinding } from './create-issue-final-acceptance-contract.ts';
 import {
@@ -3102,3 +3104,98 @@ describe('Issue #2010 settled receipt sourceVerdicts recovery', () => {
     expect(receipt.reviewLane.sourceVerdicts['03']).toBe('accept');
   });
 });
+
+describe('Issue #2017 routed missing-slot recovery', () => {
+  it('binds an empty routed slot from tier-intake and reconciles a consistent artifact verdict', () => {
+    const input = fixture();
+    const declaration: ReviewLaneAuthorDeclaration = {
+      schema: 'review-lane-change-set/v1',
+      owner: 'issue-author',
+      entries: [{ kind: 'exact', path: 'scripts/lib/create-issue-stage-record-artifacts.ts', behaviors: ['published-comment-bind'] }],
+    };
+    const normalized = normalizeReviewLaneDeclaration(declaration);
+    if (normalized.status !== 'usable') throw new Error(normalized.status);
+    const routing = buildReviewLaneRouting(
+      { ...normalized, identity: `${REVISION}:${normalized.identity}` },
+      classifyReviewLaneDeclaration(declaration),
+      REVISION,
+      'attempt-001',
+      'normal',
+    );
+    const slotIds = ['published-slot-01', 'published-slot-02', 'published-slot-03'] as const;
+    const bodyFor = (id: string) => [
+      `Read revision: #${ISSUE} ${REVISION}`,
+      `INVOCATION_ID_TO_ECHO: ${id}`,
+      'review-economics-contract: v1',
+      'VERDICT: CLEAN',
+      'NO_FINDINGS',
+      'SIMPLIFICATION_CLEAN',
+      'FINDING_COUNT: 0',
+      '',
+    ].join('\n');
+    const comments = slotIds.map((id, index) => comment(bodyFor(id), { id: COMMENT_ID + 11 + index }));
+    const evidence = {
+      schema: STAGE_EVIDENCE_SCHEMA,
+      producer: 'create-issue-stage-finalize/start-cycle',
+      taskIdentity: TASK,
+      tier: 'T3',
+      stage: 'architectural-review',
+      stageAttemptId: 'attempt-001',
+      stageSequence: 1,
+      cycleId: 'cycle-2017',
+      cycleBinding: { cycleId: 'cycle-2017', sourceRevision: REVISION, boundBeforeLaunch: true },
+      policyVersion: 'review-lane-routing/v1',
+      reviewerCardinality: routing.reviewerCardinality,
+      cardinalityConfigIdentity: routing.cardinalityConfigIdentity,
+      sourceRevision: REVISION,
+      reviewLaneRouting: routing,
+      invocations: [],
+    };
+    writeFileSync(input.reviewEvidencePath, JSON.stringify(evidence, null, 2) + '\n');
+    const source = transport({ census: comments });
+    for (const [index, id] of slotIds.entries()) {
+      const slot = String(index + 1).padStart(2, '0');
+      const reviewComment = comments[index]!;
+      const bound = bindPublishedCommentToSlot({
+        reviewDir: input.dir,
+        stageEvidencePath: input.reviewEvidencePath,
+        repositoryFullName: REPOSITORY,
+        issueNumber: ISSUE,
+        reviewerSlot: slot,
+        invocationId: id,
+        commentUrl: String(reviewComment.html_url),
+        artifactSourceTransport: source,
+      });
+      expect(bound.ok, bound.errors.join('\n')).toBe(true);
+    }
+    const boundEvidence = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as {
+      invocations: Array<Record<string, unknown>>;
+    };
+    expect(boundEvidence.invocations.map((row) => row.reviewEpisodeId)).toEqual(slotIds.map(() => `${TASK}@${REVISION}`));
+    for (const name of readdirSync(input.dir)) {
+      if (name.endsWith('.capture.txt')) rmSync(join(input.dir, name));
+    }
+    const reconciled = reconcileCreateIssueStage({
+      reviewDir: input.dir,
+      stageEvidencePath: input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: source,
+    });
+    expect(reconciled.ok, reconciled.errors.join('\n')).toBe(true);
+    const stored = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as {
+      reviewLane: { sourceVerdicts: Record<string, string>; sourceVerdictEvidence: Record<string, { terminalClassification: string }> };
+      completedSourceCount?: number;
+    };
+    expect(stored.reviewLane.sourceVerdicts['01']).toBe('accept');
+    expect(stored.reviewLane.sourceVerdicts['02']).toBe('accept');
+    expect(stored.reviewLane.sourceVerdicts['03']).toBe('accept');
+    expect(stored.reviewLane.sourceVerdictEvidence['01'].terminalClassification).toBe('complete');
+    expect(stored.reviewLane.sourceVerdictEvidence['02'].terminalClassification).toBe('complete');
+    expect(validateReviewLaneRecord(stored.reviewLane).ok).toBe(true);
+    const parsed = parseConsumableStageReceipt({ ...stored, completedSourceCount: 3 });
+    expect(parsed.errors, parsed.errors.join('\n')).toEqual([]);
+    expect(parsed.receipt).not.toBeNull();
+  });
+});
+
