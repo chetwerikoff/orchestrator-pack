@@ -1,0 +1,23 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1972,
+  "declared_paths": [
+    "docs/target_repo_setup.md",
+    "scripts/bootstrap.test.ts",
+    "scripts/bootstrap.ts"
+  ],
+  "denylist": [
+    ".orchestrator-pack/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/target_repo_setup.md",
+    "README.md",
+    "scripts/bootstrap.test.ts",
+    "scripts/bootstrap.ts"
+  ],
+  "source_revision": "ec8157d95a4b1e3f9cab23c88c714e42d3136689"
+}

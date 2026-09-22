@@ -21,6 +21,35 @@ pack-relative authority pointers, see the canonical [`AGENTS.md`
 target-repository policy](../AGENTS.md#target-repository-embedding-and-coexistence).
 This document is setup guidance only and does not restate that policy.
 
+## Managed AGENTS.md block
+
+Target-project rules live outside one marker pair. Pack rules live inside that
+pair as the complete current pack `AGENTS.md` and are replaced when the pack
+checkout is updated. Bytes outside the markers stay untouched.
+
+```text
+<!-- orchestrator-pack:start -->
+...complete current orchestrator-pack AGENTS.md...
+<!-- orchestrator-pack:end -->
+```
+
+Adopt or update the block with the existing bootstrap target path. The source
+is the pack checkout that runs the command.
+
+```bash
+node --experimental-strip-types scripts/bootstrap.ts --target-repo /path/to/target
+```
+
+A missing target `AGENTS.md` is created with one managed block. An existing
+file with no markers keeps its bytes and gains one appended block. One valid
+pair is replaced only between the markers. Running again with the same pack
+`AGENTS.md` does not change the file.
+
+The command fails before writing when the target root is the pack checkout,
+the target `AGENTS.md` is a symlink or any other non-regular file, that file
+is the source pack `AGENTS.md`, the source pack `AGENTS.md` contains either
+managed marker, or the target markers do not form one valid pair.
+
 Do not copy a removed runtime configuration, state directory, daemon launcher, or
 compatibility wrapper into the target repository.
 
