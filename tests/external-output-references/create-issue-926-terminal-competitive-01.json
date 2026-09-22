@@ -1,0 +1,9 @@
+{
+  "schema": "flow-manager-long-running-child-terminal/v1",
+  "lifecycle_outcome": "incident",
+  "delivery": "not-sent",
+  "turn_result_state": "input_invalid",
+  "turn_result_cause": "input_invalid:invocation_id_invalid",
+  "send_count": 0,
+  "recovery_available": false
+}

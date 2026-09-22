@@ -30,10 +30,24 @@ export interface CreateIssueRecoverableResult {
   nextAction: CreateIssueNextAction;
 }
 
+export type ZeroSendCauseClass = 'transient' | 'deterministic-input' | 'state-conflict';
+
+export interface CreateIssueZeroSendReason {
+  class: ZeroSendCauseClass;
+  code: string;
+  rawCause: string;
+  binding: CreateIssueActionBinding;
+  invocationId?: string;
+  reviewerSlot?: string;
+  owned_prompt_seen?: boolean;
+  observed_user_heads?: readonly string[];
+}
+
 export interface CreateIssueTerminalResult {
   ok: boolean;
   cause: string;
   blocker?: string;
+  reason?: CreateIssueZeroSendReason;
   nextAction: null;
 }
 
@@ -73,6 +87,39 @@ export function validateCreateIssueManagerResult(value: unknown): string[] {
   }
   if (nextAction !== null) {
     errors.push(...validateCreateIssueNextAction(nextAction));
+  }
+  if (Object.prototype.hasOwnProperty.call(result, 'reason')) {
+    errors.push(...validateZeroSendReason(result.reason));
+  }
+  return errors;
+}
+
+function validateZeroSendReason(reason: unknown): string[] {
+  if (!reason || typeof reason !== 'object' || Array.isArray(reason)) return ['manager result.reason must be an object'];
+  const value = reason as Record<string, unknown>;
+  const errors: string[] = [];
+  if (value.class !== 'transient' && value.class !== 'deterministic-input' && value.class !== 'state-conflict') {
+    errors.push('manager result.reason.class is invalid');
+  }
+  if (value.class === 'state-conflict' && value.code !== 'marker_conflict') {
+    errors.push('manager result.reason.code must be marker_conflict');
+  }
+  if (!nonEmpty(value.code)) errors.push('manager result.reason.code must be non-empty');
+  if (!nonEmpty(value.rawCause)) errors.push('manager result.reason.rawCause must be non-empty');
+  errors.push(...validateCreateIssueActionBinding(value.binding).map((error) => `manager result.reason.${error}`));
+  if (value.invocationId !== undefined && !nonEmpty(value.invocationId)) {
+    errors.push('manager result.reason.invocationId must be non-empty when present');
+  }
+  if (value.reviewerSlot !== undefined && !nonEmpty(value.reviewerSlot)) {
+    errors.push('manager result.reason.reviewerSlot must be non-empty when present');
+  }
+  if (value.owned_prompt_seen !== undefined && typeof value.owned_prompt_seen !== 'boolean') {
+    errors.push('manager result.reason.owned_prompt_seen must be boolean when present');
+  }
+  if (value.observed_user_heads !== undefined) {
+    if (!Array.isArray(value.observed_user_heads) || value.observed_user_heads.some((item) => !nonEmpty(item))) {
+      errors.push('manager result.reason.observed_user_heads must be a string array when present');
+    }
   }
   return errors;
 }
@@ -144,12 +191,14 @@ export function createIssueTerminalResult(input: {
   ok: boolean;
   cause: string;
   blocker?: string;
+  reason?: CreateIssueZeroSendReason;
 }): CreateIssueTerminalResult {
   if (!nonEmpty(input.cause)) throw new Error('terminal create-Issue result cause must be non-empty');
   const result: CreateIssueTerminalResult = {
     ok: input.ok,
     cause: input.cause,
     ...(input.blocker ? { blocker: input.blocker } : {}),
+    ...(input.reason ? { reason: cloneZeroSendReason(input.reason) } : {}),
     nextAction: null,
   };
   const errors = validateCreateIssueManagerResult(result);
@@ -204,6 +253,87 @@ export function createIssueStaleNextAction(input: {
   const errors = validateCreateIssueManagerResult(result);
   if (errors.length > 0) throw new Error('invalid stale create-Issue result: ' + errors.join('; '));
   return result;
+}
+
+const EXISTING_PACED_RETRY_KIND = 'retry-create-issue-browser-preflight';
+
+function cloneZeroSendReason(reason: CreateIssueZeroSendReason): CreateIssueZeroSendReason {
+  return {
+    class: reason.class,
+    code: reason.code,
+    rawCause: reason.rawCause,
+    binding: { ...reason.binding },
+    ...(reason.invocationId ? { invocationId: reason.invocationId } : {}),
+    ...(reason.reviewerSlot ? { reviewerSlot: reason.reviewerSlot } : {}),
+    ...(reason.owned_prompt_seen !== undefined ? { owned_prompt_seen: reason.owned_prompt_seen } : {}),
+    ...(reason.observed_user_heads ? { observed_user_heads: [...reason.observed_user_heads] } : {}),
+  };
+}
+
+export function existingPacedBoundedRetryAction(
+  binding: CreateIssueActionBinding,
+  reviewerSlot?: string,
+): CreateIssueNextAction {
+  const argv = [
+    'node', '--experimental-strip-types', 'scripts/flow-manager-browser-gpt-long-run.ts',
+    '--repository', binding.repository,
+    '--issue-number', String(binding.issueNumber),
+    '--source-revision', binding.sourceRevision,
+    '--stage', binding.stage,
+  ];
+  if (binding.stageAttemptId) argv.push('--stage-attempt-id', binding.stageAttemptId);
+  if (reviewerSlot) argv.push('--source-slot', reviewerSlot);
+  return createIssueNextAction({
+    kind: EXISTING_PACED_RETRY_KIND,
+    binding,
+    argv,
+  });
+}
+
+export function projectZeroSendManagerResult(input: {
+  policy: { class: ZeroSendCauseClass; code: string; rawCause: string } | null;
+  attemptOrdinal: number;
+  binding: CreateIssueActionBinding;
+  invocationId?: string;
+  reviewerSlot?: string;
+  owned_prompt_seen?: boolean;
+  observed_user_heads?: readonly string[];
+  pacedRetryAction: CreateIssueNextAction;
+  freshInvocationId?: string;
+}): CreateIssueRecoverableResult | CreateIssueTerminalResult | null {
+  if (!input.policy) return null;
+  // A newly minted invocation id is not evidence that a deterministic cause was corrected.
+  void input.freshInvocationId;
+  const reason: CreateIssueZeroSendReason = {
+    class: input.policy.class,
+    code: input.policy.code,
+    rawCause: input.policy.rawCause,
+    binding: { ...input.binding },
+    ...(input.invocationId ? { invocationId: input.invocationId } : {}),
+    ...(input.reviewerSlot ? { reviewerSlot: input.reviewerSlot } : {}),
+    ...(input.owned_prompt_seen !== undefined ? { owned_prompt_seen: input.owned_prompt_seen } : {}),
+    ...(input.observed_user_heads ? { observed_user_heads: [...input.observed_user_heads] } : {}),
+  };
+  const firstAttemptTransient = input.policy.class === 'transient' && input.attemptOrdinal === 1;
+  if (!firstAttemptTransient) {
+    return createIssueTerminalResult({
+      ok: false,
+      cause: input.policy.code,
+      blocker: input.policy.rawCause,
+      reason,
+    });
+  }
+  if (input.pacedRetryAction.kind !== EXISTING_PACED_RETRY_KIND) {
+    throw new Error('zero-send transient continuation must reuse the existing paced retry action');
+  }
+  if (input.pacedRetryAction.binding.stageAttemptId !== input.binding.stageAttemptId) {
+    throw new Error('zero-send transient continuation must keep the canonical stageAttemptId');
+  }
+  return createIssueRecoverableResult({
+    cause: input.policy.code,
+    blocker: input.policy.rawCause,
+    nextAction: input.pacedRetryAction,
+  });
 }
 
 export function assertCreateIssueActionCurrent(input: {
