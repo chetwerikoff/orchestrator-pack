@@ -43,6 +43,17 @@ path, prompt/output path, receipt, envelope, cookie, token, or credential.
    reviewer turns, this includes the current tier, role, stage, source slot,
    and frozen revision. A workflow that does not define create-review
    `stage`, `slot`, or frozen revision must not invent values for them.
+   When this shift is the next turn of an already-admitted manager workflow,
+   the owning workflow must also supply that exact Run/Task context and the
+   exact caller-held manager worktree selector. Before Browser-GPT reads new
+   tracked turn inputs, apply the same manager refresh boundary owned by the
+   supervised Task launch assistant: resolve the selector through Orca, prove
+   repository/path identity with only bounded read-only git queries, fetch
+   `origin/main`, then require already-equal or a clean ancestor-only
+   fast-forward on the distinct manager-local branch. Any refusal prevents the
+   new shift from starting. A generic Browser-GPT shift without this manager
+   binding emits no manager-refresh git command, and an already-running turn or
+   frozen create-Issue stage attempt is never refreshed mid-turn.
 3. Resolve Browser-GPT configuration without copying operator files into the
    worktree. Existing supported environment values remain valid. A governed
    create-Issue send may instead pass

@@ -594,6 +594,37 @@ function canonicalReviewerArtifactRevision(
     : null;
 }
 
+function publicationBindingAnchors(
+  text: string,
+  issueNumber: number,
+  sourceRevision: string,
+  invocationId: string,
+): boolean {
+  const lines = text.split(/\n/).map((line) => line.replace(/\r$/, ''));
+  const firstNonEmpty = lines.find((line) => line.trim().length > 0);
+  const match = firstNonEmpty ? CANONICAL_REVISION_LINE_RE.exec(firstNonEmpty) : null;
+  const declarations = lines.filter((line) => CANONICAL_REVISION_LINE_RE.test(line)).length;
+  if (!match || declarations !== 1) return false;
+  if (Number(match[1]) !== issueNumber || match[2] !== sourceRevision) return false;
+  const echoes = lines.map((line) => line.trim()).flatMap((line) => {
+    const echo = INVOCATION_ECHO_RE.exec(line);
+    return echo ? [echo[1]!] : [];
+  });
+  return echoes.length === 1 && echoes[0] === invocationId;
+}
+
+function verdictGrammarIsPermanentlyNoncanonical(text: string): boolean {
+  const findingCount = rawFindingCount(text);
+  if (findingCount > 0) return !pluralCaptureVerdictIsCanonical(text, findingCount);
+  const lines = text.split(/\r?\n/).map((line) => line.trim());
+  const verdictLines = lines.filter((line) => line.startsWith('VERDICT:'));
+  if (verdictLines.length === 0) return false;
+  const canonicalVerdicts = verdictLines.filter((line) => (
+    /^VERDICT: (CLEAN|FINDINGS|NO_FINDINGS|NEEDS_ATTENTION)$/.test(line)
+  ));
+  return verdictLines.length !== 1 || canonicalVerdicts.length !== 1;
+}
+
 function temporaryError(
   classification: AcceptanceArtifactTemporaryClassification,
   detail: string,
@@ -1086,6 +1117,20 @@ function resolveAuthoritativeArtifact(
         );
         return observedRevision ? [observedRevision] : [];
       });
+      const permanentNoncanonical = targetedComments.filter((comment) => (
+        comment.userLogin !== null
+        && sameGithubPrincipal(comment.userLogin, context.principalLogin)
+        && comment.createdAt === comment.updatedAt
+        && publicationBindingAnchors(comment.body, context.census.issueNumber, sourceRevision, invocationId)
+        && verdictGrammarIsPermanentlyNoncanonical(comment.body)
+      ));
+      if (permanentNoncanonical.length === 1 && principalRevisionCandidates.length === 0) {
+        const comment = permanentNoncanonical[0]!;
+        errors.push(
+          `authoritative GitHub artifact permanently_noncanonical_publication: repository=${context.census.repositoryFullName} issue=#${context.census.issueNumber} stage=${stage} invocationId=${invocationId} comment=${comment.id}`,
+        );
+        return null;
+      }
       if (principalRevisionCandidates.length > 0) {
         errors.push(
           `authoritative GitHub artifact revision mismatch: repository=${context.census.repositoryFullName} issue=#${context.census.issueNumber} stage=${stage} invocationId=${invocationId} expected=${sourceRevision} observed=${[...new Set(principalRevisionCandidates)].sort().join(',')}`,
@@ -1865,6 +1910,45 @@ function rebuildRoutedReviewLaneFromProducerEvidence(reviewLane: unknown): JsonR
   return validateReviewLaneRecord(rebuilt).ok ? rebuilt : null;
 }
 
+function projectReconciledStageReceipt(
+  reviewDir: string,
+  evidencePath: string,
+  issueNumber: number,
+  raw: JsonRecord,
+  captureTexts: Map<string, string>,
+  captureTimestamps: Map<string, number>,
+  context: ArtifactAuthorityContext,
+  errors: string[],
+): JsonRecord | null {
+  const intakeErrors: string[] = [];
+  const intakePath = join(reviewDir, 'tier-intake.json');
+  const intake = existsSync(intakePath) ? loadTierIntake(intakePath, intakeErrors) : null;
+  const taskIdentity = intake?.taskIdentity
+    ?? (typeof raw.taskIdentity === 'string' ? raw.taskIdentity : `issue:${issueNumber}`);
+  const episodeFirstRevision = intake?.firstRevision
+    ?? (typeof raw.sourceRevision === 'string' ? raw.sourceRevision : '');
+  if (!taskIdentity || !episodeFirstRevision) {
+    errors.push(...intakeErrors, 'same-attempt receipt rebuild cannot observe the episode identity');
+    return null;
+  }
+  const episodeId = deriveReviewEpisodeId(taskIdentity, episodeFirstRevision);
+  const before = errors.length;
+  const receipt = buildReceipt(
+    evidencePath,
+    raw,
+    taskIdentity,
+    episodeFirstRevision,
+    episodeId,
+    captureTexts,
+    captureTimestamps,
+    errors,
+    undefined,
+    context,
+  );
+  if (!receipt || errors.length > before) return null;
+  return receipt as unknown as JsonRecord;
+}
+
 function atomicReplaceStageCompletenessReceipt(
   path: string,
   expectedCurrentText: string,
@@ -1929,6 +2013,7 @@ export function reconcileCreateIssueStage(
     };
   }
 
+  let sameAttemptReceipt: { path: string; originalReceiptText: string; value: JsonRecord } | null = null;
   if (existsSync(options.reviewDir)) {
     for (const name of readdirSync(options.reviewDir).filter((candidate) => /^stage-completeness-receipt-.+\.json$/.test(candidate))) {
       const path = join(options.reviewDir, name);
@@ -1950,33 +2035,20 @@ export function reconcileCreateIssueStage(
         };
       }
       const laneValidation = validateReviewLaneRecord(value.reviewLane);
-      if (laneValidation.ok || !laneValidation.errors.includes(ROUTED_SOURCE_VERDICTS_DISAGREE)) {
-        return {
-          ok: true,
-          stageAttemptId,
-          stage,
-          sourceRevision,
-          capturePaths: [],
-          alreadySettled: true,
-          errors: [],
-        };
+      if (!laneValidation.ok && laneValidation.errors.includes(ROUTED_SOURCE_VERDICTS_DISAGREE)) {
+        if (!rebuildRoutedReviewLaneFromProducerEvidence(value.reviewLane)) {
+          return {
+            ok: false,
+            stageAttemptId,
+            stage,
+            sourceRevision,
+            capturePaths: [],
+            errors: [ROUTED_SOURCE_VERDICTS_DISAGREE],
+          };
+        }
       }
-      const rebuilt = rebuildRoutedReviewLaneFromProducerEvidence(value.reviewLane);
-      if (!rebuilt) {
-        return {
-          ok: false,
-          stageAttemptId,
-          stage,
-          sourceRevision,
-          capturePaths: [],
-          errors: [ROUTED_SOURCE_VERDICTS_DISAGREE],
-        };
-      }
-      const commitErrors: string[] = [];
-      if (!atomicReplaceStageCompletenessReceipt(path, originalReceiptText, { ...value, reviewLane: rebuilt }, commitErrors)) {
-        return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [...new Set(commitErrors)] };
-      }
-      return { ok: true, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [] };
+      sameAttemptReceipt = { path, originalReceiptText, value };
+      break;
     }
   }
 
@@ -2192,9 +2264,56 @@ export function reconcileCreateIssueStage(
       reviewLaneRouting: routing,
     }));
   }
+  let projectedReceipt: JsonRecord | null = null;
+  if (sameAttemptReceipt) {
+    const projectionErrors: string[] = [];
+    projectedReceipt = projectReconciledStageReceipt(
+      options.reviewDir,
+      options.stageEvidencePath,
+      options.issueNumber,
+      raw,
+      captureTexts,
+      captureTimestamps,
+      context,
+      projectionErrors,
+    );
+    if (!projectedReceipt) {
+      rollbackNewReconciliationCaptures(candidatePaths, preExisting);
+      return {
+        ok: false,
+        stageAttemptId,
+        stage,
+        sourceRevision,
+        capturePaths: [],
+        errors: [...new Set(projectionErrors.length > 0 ? projectionErrors : ['same-attempt receipt cannot be rebuilt from observable evidence'])],
+      };
+    }
+    const candidateBytes = Buffer.from(JSON.stringify(projectedReceipt, null, 2) + '\n');
+    if (stageReceiptPayloadsMatchExceptDerivedChain(Buffer.from(sameAttemptReceipt.originalReceiptText), candidateBytes)) {
+      rollbackNewReconciliationCaptures(candidatePaths, preExisting);
+      return {
+        ok: true,
+        stageAttemptId,
+        stage,
+        sourceRevision,
+        capturePaths: [],
+        alreadySettled: true,
+        errors: [],
+      };
+    }
+  }
+
   if (!atomicReplaceStageEvidence(options.stageEvidencePath, originalText, raw, errors)) {
     rollbackNewReconciliationCaptures(candidatePaths, preExisting);
     return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [...new Set(errors)] };
+  }
+
+  if (sameAttemptReceipt && projectedReceipt) {
+    const commitErrors: string[] = [];
+    if (!atomicReplaceStageCompletenessReceipt(sameAttemptReceipt.path, sameAttemptReceipt.originalReceiptText, projectedReceipt, commitErrors)) {
+      rollbackNewReconciliationCaptures(candidatePaths, preExisting);
+      return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [...new Set(commitErrors)] };
+    }
   }
 
   return { ok: true, stageAttemptId, stage, sourceRevision, capturePaths, errors: [] };
