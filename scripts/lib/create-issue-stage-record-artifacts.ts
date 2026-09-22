@@ -1573,18 +1573,24 @@ export interface BindPublishedCommentToSlotResult {
   commentUrl?: string;
 }
 
-function publishedCommentHeaderMatches(body: string, issueNumber: number, sourceRevision: string, invocationId: string): boolean {
-  const lines = body.split(/\n/).map((line) => line.replace(/\r$/, '')).filter((line) => line.trim().length > 0);
+function publishedCommentHeaderMatches(
+  body: string,
+  issueNumber: number,
+  sourceRevision: string,
+  invocationId: string,
+  stage: Exclude<ReviewStage, 'architectural-lens'> | null,
+): boolean {
+  const lines = body.split(/\n/).map((line) => line.replace(/\r$/, '').trim()).filter((line) => line.length > 0);
   if (lines.length < 2) return false;
   const revision = CANONICAL_REVISION_LINE_RE.exec(lines[0]!);
-  const echo = INVOCATION_ECHO_RE.exec(lines[1]!);
-  return Boolean(
-    revision
-    && echo
-    && Number(revision[1]) === issueNumber
-    && revision[2] === sourceRevision
-    && echo[1] === invocationId
-  );
+  if (!revision || Number(revision[1]) !== issueNumber || revision[2] !== sourceRevision) return false;
+  const echoes = lines.flatMap((line) => {
+    const match = INVOCATION_ECHO_RE.exec(line);
+    return match ? [match[1]!] : [];
+  });
+  if (echoes.length !== 1 || echoes[0] !== invocationId) return false;
+  if (stage && isCanonicalReviewerArtifact(body, stage, issueNumber, sourceRevision, invocationId)) return true;
+  return INVOCATION_ECHO_RE.exec(lines[1]!)?.[1] === invocationId;
 }
 
 function publishedCommentReviewEpisodeId(
@@ -1722,7 +1728,14 @@ export function bindPublishedCommentToSlot(
   if (!comment.userLogin) {
     return { ok: false, errors: [temporaryError('identity-unresolved', 'published comment has no publisher login')] };
   }
-  if (!publishedCommentHeaderMatches(comment.body, options.issueNumber, sourceRevision, invocationId)) {
+  if (comment.createdAt !== comment.updatedAt) {
+    return { ok: false, errors: [`authoritative GitHub artifact was edited: ${comment.htmlUrl}`] };
+  }
+  const repositoryOwner = options.repositoryFullName.split('/')[0] ?? '';
+  if (!repositoryOwner || !sameGithubPrincipal(comment.userLogin, repositoryOwner)) {
+    return { ok: false, errors: [`published comment publisher is not the repository owner: ${comment.userLogin}`] };
+  }
+  if (!publishedCommentHeaderMatches(comment.body, options.issueNumber, sourceRevision, invocationId, reviewerStage(raw.stage))) {
     return {
       ok: false,
       errors: ['published comment first two non-empty lines must be the revision line and INVOCATION_ID_TO_ECHO for that invocation'],
