@@ -169,6 +169,12 @@ describe('structured blocked_on manager contract (Issue #2004)', () => {
         argv: ['node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage'],
       }),
     })).toContain('manager result.blocked_on requires nextAction=null');
+
+    expect(validateCreateIssueManagerResult({
+      ok: true,
+      blocked_on: issueBlockedOn,
+      nextAction: null,
+    })).toEqual([]);
   });
 
   it.each([
@@ -594,6 +600,40 @@ describe('Issue #1935 sanitized measured convergence replay', () => {
     expect(reconciled.ok, reconciled.errors.join('\n')).toBe(true);
     expect(reconciled.capturePaths).toHaveLength(3);
 
+    const blockedOn = {
+      issue: 1977,
+      condition: 'issue_closed',
+      evidence: 'slot 01 is blocked on Issue #1977',
+    } as const;
+    const continuationLogs: string[] = [];
+    const continuationLogSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      continuationLogs.push(String(line));
+    });
+    let continuationBlockedOnJson = '';
+    try {
+      const code = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
+        '--repo', 'chetwerikoff/orchestrator-pack',
+        '--issue-number', String(replay.source.issueNumber),
+        '--review-dir', reviewDir,
+        '--stage-evidence', evidencePath,
+        '--blocked-on-json', JSON.stringify(blockedOn),
+        '--json',
+      ], transport);
+      expect(code).toBe(0);
+      const output = JSON.parse(continuationLogs.at(-1) ?? '{}') as {
+        nextAction?: { kind?: string; argv?: string[] } | null;
+      };
+      expect(output.nextAction?.kind).toBe('produce-acceptance-artifacts');
+      const argv = output.nextAction?.argv ?? [];
+      const blockedOnIndex = argv.indexOf('--blocked-on-json');
+      expect(blockedOnIndex).toBeGreaterThanOrEqual(0);
+      continuationBlockedOnJson = argv[blockedOnIndex + 1] ?? '';
+      expect(JSON.parse(continuationBlockedOnJson)).toEqual(blockedOn);
+    } finally {
+      continuationLogSpy.mockRestore();
+    }
+
     const reconciledEvidence = JSON.parse(readFileSync(evidencePath, 'utf8')) as {
       invocations: Array<Record<string, unknown>>;
     };
@@ -705,6 +745,32 @@ describe('Issue #1935 sanitized measured convergence replay', () => {
     });
     expect(replayed).toMatchObject({ ok: true, alreadySettled: true, stageAttemptId: replay.source.stageAttemptId });
     expect(readFileSync(recurrencePath, 'utf8')).toBe(recurrenceBefore);
+
+    const terminalLogs: string[] = [];
+    const terminalLogSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      terminalLogs.push(String(line));
+    });
+    try {
+      const code = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
+        '--repo', 'chetwerikoff/orchestrator-pack',
+        '--issue-number', String(replay.source.issueNumber),
+        '--review-dir', reviewDir,
+        '--stage-evidence', evidencePath,
+        '--blocked-on-json', continuationBlockedOnJson,
+        '--json',
+      ], transport);
+      expect(code).toBe(0);
+      const output = JSON.parse(terminalLogs.at(-1) ?? '{}') as Record<string, unknown>;
+      expect(output).toMatchObject({
+        ok: true,
+        alreadySettled: true,
+        blocked_on: blockedOn,
+        nextAction: null,
+      });
+    } finally {
+      terminalLogSpy.mockRestore();
+    }
   });
 });
 
