@@ -289,6 +289,22 @@ export const orcaWorkerTaskBindingMaxWorktrees = 6 as const;
 export const orcaWorkerTaskBindingNativeSliceMs = 250 as const;
 export const orcaWorkerTaskBindingMarginMs = 500 as const;
 export const orcaLivenessTransportMarginMs = 2_500 as const;
+/** One OpenCode HTTP subprocess stops at this cap and still leaves outer-deadline headroom. */
+export const openCodeHttpSubprocessCapMs = 5_000 as const;
+
+/**
+ * Budget for one OpenCode HTTP subprocess. The result is always strictly below
+ * `remainingMs`, so a spawnSync ETIMEDOUT cannot consume the caller's deadline.
+ */
+export function openCodeHttpSubprocessTimeoutMs(remainingMs: number): number | null {
+  if (!Number.isFinite(remainingMs)) return null;
+  const remaining = Math.floor(remainingMs);
+  if (remaining <= 1) return null;
+  const headroom = Math.max(1, Math.floor(remaining / 2));
+  const budget = remaining - headroom;
+  if (budget < 1) return null;
+  return Math.min(openCodeHttpSubprocessCapMs, budget);
+}
 export const orcaWorkerTaskBindingRequiredBudgetMs =
   (2 + (2 * orcaWorkerTaskBindingMaxWorktrees))
   * orcaWorkerTaskBindingNativeSliceMs
@@ -614,9 +630,9 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       readonly method: 'GET' | 'POST';
       readonly body?: string;
     }): { readonly status: number; readonly body: string } | { readonly error: string } => {
-      const bounded = this.#boundedOptions(deadline, options);
-      if (!bounded) return { error: 'runtime_timeout' };
-      const response = this.#openCodeRequest({ ...input, timeoutMs: bounded.timeoutMs! });
+      const timeoutMs = openCodeHttpSubprocessTimeoutMs(this.#remaining(deadline));
+      if (timeoutMs === null) return { error: 'runtime_timeout' };
+      const response = this.#openCodeRequest({ ...input, timeoutMs });
       return this.#remaining(deadline) <= 0 ? { error: 'runtime_timeout' } : response;
     };
 
@@ -967,12 +983,12 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (!urlRecord || !sameRuntimeWorker(urlRecord.identity, current.value.identity)) {
       return runtimeUnsupported('readiness', 'runtime_opencode_control_unavailable');
     }
-    const healthOptions = this.#boundedOptions(deadline, options);
-    if (!healthOptions) return runtimeFailure('readiness', 'runtime_timeout');
+    const healthTimeoutMs = openCodeHttpSubprocessTimeoutMs(this.#remaining(deadline));
+    if (healthTimeoutMs === null) return runtimeFailure('readiness', 'runtime_timeout');
     const response = this.#openCodeRequest({
       url: `${urlRecord.url}/global/health`,
       method: 'GET',
-      timeoutMs: healthOptions.timeoutMs!,
+      timeoutMs: healthTimeoutMs,
     });
     if ('error' in response) return runtimeFailure('readiness', response.error);
     if (response.status < 200 || response.status >= 300) {
@@ -988,12 +1004,12 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       return runtimeUnsupported('readiness', 'opencode_health_schema_mismatch');
     }
 
-    const sessionOptions = this.#boundedOptions(deadline, options);
-    if (!sessionOptions) return runtimeFailure('readiness', 'runtime_timeout');
+    const sessionTimeoutMs = openCodeHttpSubprocessTimeoutMs(this.#remaining(deadline));
+    if (sessionTimeoutMs === null) return runtimeFailure('readiness', 'runtime_timeout');
     const sessions = this.#openCodeRequest({
       url: `${urlRecord.url}/session?directory=${encodeURIComponent(current.value.workspacePath)}`,
       method: 'GET',
-      timeoutMs: sessionOptions.timeoutMs!,
+      timeoutMs: sessionTimeoutMs,
     });
     if ('error' in sessions) return runtimeFailure('readiness', sessions.error);
     if (sessions.status < 200 || sessions.status >= 300) {

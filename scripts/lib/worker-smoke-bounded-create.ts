@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import { OrcaRuntimeAdapter } from '../orca-runtime/adapter.ts';
+import { OrcaRuntimeAdapter, openCodeHttpSubprocessTimeoutMs } from '../orca-runtime/adapter.ts';
 import {
   runOrcaJson,
   type OrcaJsonResponse,
@@ -503,9 +503,11 @@ export function installStableWorkerSmokeSpawnPatch(
         let healthReason = 'runtime_opencode_control_unavailable';
         while (now() < startupDeadline) {
           const remaining = startupDeadline - now();
+          const probeTimeoutMs = openCodeHttpSubprocessTimeoutMs(remaining);
+          if (probeTimeoutMs === null) break;
           const health = this.openCodeHealth(stabilized.worker.identity, {
             ...callOptions,
-            timeoutMs: Math.max(1, Math.min(callOptions.timeoutMs ?? startupTimeoutMs, remaining)),
+            timeoutMs: probeTimeoutMs,
           });
           if (health.status === 'ok') return { status: 'ok', value: stabilized.worker };
           if (health.status === 'unsupported' && health.reason === 'opencode_session_directory_mismatch') {
