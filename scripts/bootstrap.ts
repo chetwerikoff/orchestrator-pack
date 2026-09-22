@@ -78,7 +78,12 @@ function writeBytes(path: string, data: Buffer, create: boolean): void {
     : constants.O_WRONLY | constants.O_TRUNC | constants.O_NOFOLLOW;
   const fd = openSync(path, flags, 0o666);
   try {
-    writeSync(fd, data);
+    let offset = 0;
+    while (offset < data.length) {
+      const written = writeSync(fd, data, offset);
+      if (written === 0) throw new Error(`failed to make progress writing ${path}`);
+      offset += written;
+    }
   } finally {
     closeSync(fd);
   }
