@@ -296,7 +296,9 @@ function discoveredOpenCodeAdapter(input: {
     const requests: Array<{ url: string; method: 'GET' | 'POST'; body?: string; timeoutMs: number }> = [];
     const adapter = makeAdapter((input) => {
       requests.push(input);
-      return { status: 200, body: 'true' };
+      return input.url.endsWith('/global/health')
+        ? { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) }
+        : { status: 200, body: 'true' };
     });
     const spawned = adapter.spawnWorker({
       title: 'opencode',
@@ -304,6 +306,7 @@ function discoveredOpenCodeAdapter(input: {
     });
     expect(spawned.status).toBe('ok');
     if (spawned.status !== 'ok') return;
+    expect(adapter.openCodeHealth(spawned.value.identity)).toMatchObject({ status: 'ok' });
 
     expect(adapter.composerControl?.(spawned.value.identity)?.dispatch({
       worker: spawned.value.identity,
@@ -311,6 +314,7 @@ function discoveredOpenCodeAdapter(input: {
       text: 'root-and-fork-safe',
     })).toMatchObject({ status: 'dispatched' });
     expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
+      { method: 'GET', url: `${OPENCODE_FIXTURE_ORIGIN}/global/health` },
       { method: 'POST', url: `${OPENCODE_FIXTURE_ORIGIN}/tui/append-prompt` },
       { method: 'POST', url: `${OPENCODE_FIXTURE_ORIGIN}/tui/submit-prompt` },
     ]);
@@ -324,13 +328,16 @@ function discoveredOpenCodeAdapter(input: {
       if (input.method === 'POST' && input.url.endsWith('/tui/append-prompt')) {
         clock = 101;
       }
-      return { status: 200, body: 'true' };
+      return input.url.endsWith('/global/health')
+        ? { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) }
+        : { status: 200, body: 'true' };
     }, () => clock, (operation) => {
       if (operation === 'terminal list') clock = 80;
     });
     const spawned = adapter.spawnWorker({ title: 'opencode', command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture' });
     expect(spawned.status).toBe('ok');
     if (spawned.status !== 'ok') return;
+    expect(adapter.openCodeHealth(spawned.value.identity)).toMatchObject({ status: 'ok' });
 
     const result = adapter.composerControl?.(spawned.value.identity)?.dispatch({
       worker: spawned.value.identity,
@@ -338,7 +345,7 @@ function discoveredOpenCodeAdapter(input: {
       text: 'deadline',
     }, { timeoutMs: 100 });
     expect(result).toEqual({ status: 'send_failed', reason: 'runtime_timeout' });
-    expect(requests.map(({ timeoutMs }) => timeoutMs)).toEqual([20]);
+    expect(requests.map(({ timeoutMs }) => timeoutMs)).toEqual([100, 20]);
   });
 
   it('retains OpenCode control when task adapter upgrades pty identity', () => {
@@ -403,6 +410,7 @@ function discoveredOpenCodeAdapter(input: {
     });
     expect(spawned.status).toBe('ok');
     if (spawned.status !== 'ok') return;
+    expect(adapter.openCodeHealth(spawned.value.identity)).toMatchObject({ status: 'ok' });
 
     const control = adapter.composerControl?.(spawned.value.identity);
     expect(control?.dispatch({
@@ -411,6 +419,7 @@ function discoveredOpenCodeAdapter(input: {
       text: 'first delivery pointer',
     })).toMatchObject({ status: 'dispatched' });
     expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
+      { method: 'GET', url: `${OPENCODE_FIXTURE_ORIGIN}/global/health` },
       { method: 'POST', url: `${OPENCODE_FIXTURE_ORIGIN}/tui/append-prompt` },
       { method: 'POST', url: `${OPENCODE_FIXTURE_ORIGIN}/tui/submit-prompt` },
     ]);
@@ -528,29 +537,35 @@ function discoveredOpenCodeAdapter(input: {
     const requests: string[] = [];
     const adapter = makeAdapter((input) => {
       requests.push(input.url);
-      return { status: 200, body: 'true' };
+      return input.url.endsWith('/global/health')
+        ? { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) }
+        : { status: 200, body: 'true' };
     }, undefined, undefined, ['┃ human-authored text', '╹▀▀▀▀▀▀']);
     const spawned = adapter.spawnWorker({ title: 'opencode', command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture' });
     expect(spawned.status).toBe('ok');
     if (spawned.status !== 'ok') return;
+    expect(adapter.openCodeHealth(spawned.value.identity)).toMatchObject({ status: 'ok' });
 
     expect(adapter.composerControl?.(spawned.value.identity)?.dispatch({
       worker: spawned.value.identity,
       action: 'submit-prompt',
       text: 'delivery pointer',
     })).toEqual({ status: 'send_failed', reason: 'opencode_composer_not_empty' });
-    expect(requests).toEqual([]);
+    expect(requests).toEqual([`${OPENCODE_FIXTURE_ORIGIN}/global/health`]);
   });
 
   it('does not report an idle OpenCode pane busy when the placeholder includes a quoted suggestion', () => {
     const requests: string[] = [];
     const adapter = makeAdapter((input) => {
       requests.push(input.url);
-      return { status: 200, body: 'true' };
+      return input.url.endsWith('/global/health')
+        ? { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) }
+        : { status: 200, body: 'true' };
     }, undefined, undefined, ['┃  Ask anything… "Fix a TODO in the codebase"', '╹▀▀▀▀▀▀']);
     const spawned = adapter.spawnWorker({ title: 'opencode', command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture' });
     expect(spawned.status).toBe('ok');
     if (spawned.status !== 'ok') return;
+    expect(adapter.openCodeHealth(spawned.value.identity)).toMatchObject({ status: 'ok' });
 
     const result = adapter.composerControl?.(spawned.value.identity)?.dispatch({
       worker: spawned.value.identity,
@@ -581,11 +596,14 @@ function discoveredOpenCodeAdapter(input: {
 
   it('rejects malformed TUI prompt API responses', () => {
     const adapter = makeAdapter((input) => {
-      return { status: 200, body: '' };
+      return input.url.endsWith('/global/health')
+        ? { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) }
+        : { status: 200, body: '' };
     });
     const spawned = adapter.spawnWorker({ title: 'opencode', command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture' });
     expect(spawned.status).toBe('ok');
     if (spawned.status !== 'ok') return;
+    expect(adapter.openCodeHealth(spawned.value.identity)).toMatchObject({ status: 'ok' });
     const control = adapter.composerControl?.(spawned.value.identity);
     expect(control?.dispatch({ worker: spawned.value.identity, action: 'submit-prompt', text: 'reject' })).toEqual({ status: 'send_failed', reason: 'opencode_tui_response_schema_mismatch' });
   });
