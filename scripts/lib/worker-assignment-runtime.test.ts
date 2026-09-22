@@ -401,11 +401,23 @@ describe('real Orca assignment target resolution', () => {
       }));
       const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
       expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))
-        .toEqual({ status: 'gone', assignment });
+        .toEqual({ status: 'gone', assignment, reuseBlockedTerminalId: 'term-owned' });
       expect(await admitCurrentWorkerAssignmentReplacement({
         file,
         expected: assignment,
         adapter,
+      })).toEqual({ status: 'replaceable', expected: assignment });
+      expect(await admitCurrentWorkerAssignmentReplacement({
+        file,
+        expected: assignment,
+        adapter,
+        requestedTerminalId: 'term-owned',
+      })).toEqual({ status: 'target_unresolved', reason: 'terminal_reuse_unauthorized' });
+      expect(await admitCurrentWorkerAssignmentReplacement({
+        file,
+        expected: assignment,
+        adapter,
+        requestedTerminalId: 'term-other',
       })).toEqual({ status: 'replaceable', expected: assignment });
       expect(runJson.mock.calls.some((call) => {
         const operation = `${call[0]?.[0] ?? ''} ${call[0]?.[1] ?? ''}`;

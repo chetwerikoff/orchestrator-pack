@@ -537,13 +537,19 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       const resource = parsed.terminalResource;
       const resourceOwner = String(resource?.ownerDispatchId ?? '').trim();
       // Only an exact released terminal may carry the historical handle used
-      // for cleanup binding. retained and unknown stay themselves.
+      // for cleanup binding. retained and unknown stay themselves and name the
+      // old terminal only as a reuse denial, never as workerId.
       const workerId = releaseState === 'released' && resourceOwner === dispatchId
         ? String(resource?.terminalHandle ?? '').trim()
         : '';
-      const value = workerId
-        ? { kind: 'gone' as const, workerId }
-        : { kind: 'gone' as const };
+      const reuseBlockedTerminalId = (releaseState === 'retained' || releaseState === 'unknown')
+        ? String(resource?.terminalHandle ?? '').trim()
+        : '';
+      const value = {
+        kind: 'gone' as const,
+        ...(workerId ? { workerId } : {}),
+        ...(reuseBlockedTerminalId ? { reuseBlockedTerminalId } : {}),
+      };
       return { status: 'ok', value };
     }
     const activity = classifyWorkerLifecycle(parsed);

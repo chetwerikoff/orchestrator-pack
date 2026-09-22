@@ -1103,7 +1103,7 @@ describe('Orca assignment resolution', () => {
       const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
       expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1' })).toEqual({
         status: 'ok',
-        value: { kind: 'gone' },
+        value: { kind: 'gone', reuseBlockedTerminalId: 'term-owned' },
       });
       expect(adapter.observeAssignmentLifecycle({ provider: 'orca', bindingKey: 'dispatch-1' })).toEqual({
         status: 'ok',
