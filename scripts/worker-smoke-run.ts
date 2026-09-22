@@ -41,6 +41,7 @@ import {
   formatSmokeReportComment,
   hasPreexistingTrackedDirtiness,
   inspectSmokeProgress,
+  isProvenCarryOnlySmokeReport,
   isWorkerSmokeScenarioCauseFamily,
   normalizeSmokeReport,
   observeSmokeCancellationAcknowledgement,
@@ -1547,6 +1548,11 @@ function processIsAlive(pid: number): boolean {
   return true;
 }
 
+function zeroExecutionCarryOnlyPass(report: SmokeReport, headSha: string): boolean {
+  return (report.environmentNotes ?? []).includes('smoke-execution=carry-only')
+    || isProvenCarryOnlySmokeReport(report, headSha);
+}
+
 function orderingOwnerEvidence(
   marker: { attemptId?: string; supervisorPid?: number; runId?: string } | undefined,
   options: CliOptions,
@@ -1556,6 +1562,7 @@ function orderingOwnerEvidence(
   if (!attemptId || !Number.isInteger(supervisorPid) || supervisorPid <= 0) return undefined;
   const runId = marker?.runId?.trim() || undefined;
   let authoritativeResult: SmokeReport['result'] | undefined;
+  let executionMode: 'executed' | 'carry-only' | undefined;
   let cleanupSafe: boolean | undefined;
   if (runId) {
     const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
@@ -1565,7 +1572,13 @@ function orderingOwnerEvidence(
     const noExecution = runtime ? null : readWorkerSmokeRunFinalEvidence({
       artifactDir, runId, issueNumber: options.issueNumber, prNumber: options.prNumber, headSha: options.headSha, mode: 'no_execution',
     });
-    authoritativeResult = runtime?.result ?? noExecution?.result;
+    const selected = runtime ?? noExecution;
+    authoritativeResult = selected?.result;
+    if (selected?.result === 'PASS' && selected.mode === 'no_execution' && zeroExecutionCarryOnlyPass(selected.report, options.headSha)) {
+      executionMode = 'carry-only';
+    } else if (runtime?.result === 'PASS') {
+      executionMode = 'executed';
+    }
     const registry = readSmokeLifecycleRegistry(artifactDir);
     cleanupSafe = Boolean(
       registry
@@ -1583,6 +1596,7 @@ function orderingOwnerEvidence(
     supervisorAlive: processIsAlive(supervisorPid),
     ...(cleanupSafe !== undefined ? { cleanupSafe } : {}),
     ...(authoritativeResult ? { authoritativeResult } : {}),
+    ...(executionMode ? { executionMode } : {}),
   };
 }
 
@@ -1901,8 +1915,12 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
         producer: SMOKE_REPORT_PRODUCER, orcaExecutable: adapter.id,
       }, { issueNumber: options.issueNumber, prNumber: options.prNumber, headSha: options.headSha }, { executionMode: 'carry-only' });
       const report = normalized.report;
-      orderingOutcome = report.result === 'PASS' ? 'passed' : 'failed';
-      orderingFailureKind = report.result === 'FAIL' ? 'finding' : 'retryable';
+      if (report.result === 'PASS' && (options.smokeActor ?? 'worker-owned') === 'worker-owned') {
+        orderingBinding = null;
+      } else {
+        orderingOutcome = report.result === 'PASS' ? 'passed' : 'failed';
+        orderingFailureKind = report.result === 'FAIL' ? 'finding' : 'retryable';
+      }
       publishSmokeReport(report, options, carryPublication);
       let postSmoke: PostSmokeReadinessResult | undefined;
       if (report.result === 'PASS' && !options.dryRun) {
