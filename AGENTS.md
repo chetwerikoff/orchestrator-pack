@@ -38,6 +38,34 @@ When adding literals, prompts, paths, policies, commands, schemas, or state
 transitions, choose one owning authority and point to it rather than copying the
 same rule into multiple runtime surfaces.
 
+## Target-Repository Embedding and Coexistence
+
+The complete current `orchestrator-pack` `AGENTS.md` is the canonical
+pack-managed policy payload and may be placed unchanged in a target repository.
+It must not be extracted, shortened, generated into a derivative, or replaced by
+another canonical policy source.
+
+In a target repository, project-owned rules outside the pack-managed payload are
+a lower-layer extension. They may add target-local facts, paths, commands,
+verification requirements, or stricter/narrower constraints, but they must not
+weaken, replace, contradict, or redefine universal pack policy. A conflict is
+resolved in favor of the universal pack policy unless a higher authority named by
+this precedence explicitly changes the applicable boundary. Coexistence is layered;
+it does not require merging or rewriting the pack policy.
+
+Pack-repository-specific paths, edit boundaries, and allowed surfaces remain
+scoped to the trusted `orchestrator-pack` checkout/version that supplied this
+payload. Pack-owned scripts, skills, runbooks, transports, and other explicitly
+pack-internal procedures remain pack-owned authorities. They do not become
+target-project path authority merely because this file is embedded. Target-project
+path authority comes from the target task contract and project-owned extension
+rules, subject to universal pack policy.
+
+A relative pointer to a pack-owned authority denotes that authority in the trusted
+pack checkout/version that supplied this payload. A same-named path in the target
+repository does not replace or become the owner of that authority. Pack-owned
+referenced artifacts are not duplicated or redefined by embedding this file.
+
 ## Edit boundaries
 
 Do not patch or vendor-modify an upstream orchestration core.
