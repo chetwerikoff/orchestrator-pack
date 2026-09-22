@@ -1,0 +1,25 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1976,
+  "declared_paths": [
+    "AGENTS.md",
+    "docs/target_repo_setup.md"
+  ],
+  "denylist": [
+    ".github/",
+    "credentials/",
+    "packages/core/",
+    "plugins/",
+    "scripts/",
+    "scripts/bootstrap.test.ts",
+    "scripts/bootstrap.ts",
+    "secrets/",
+    "tests/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "AGENTS.md",
+    "docs/target_repo_setup.md"
+  ],
+  "source_revision": "00e8891d9b2f7b135f37531b45c4ca74f5ba2a40"
+}
