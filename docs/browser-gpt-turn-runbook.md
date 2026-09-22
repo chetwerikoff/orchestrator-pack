@@ -43,6 +43,17 @@ path, prompt/output path, receipt, envelope, cookie, token, or credential.
    reviewer turns, this includes the current tier, role, stage, source slot,
    and frozen revision. A workflow that does not define create-review
    `stage`, `slot`, or frozen revision must not invent values for them.
+   When this shift is the next turn of an already-admitted manager workflow,
+   the owning workflow must also supply that exact Run/Task context and the
+   exact caller-held manager worktree selector. Before Browser-GPT reads new
+   tracked turn inputs, apply the same manager refresh boundary owned by the
+   supervised Task launch assistant: resolve the selector through Orca, prove
+   repository/path identity with only bounded read-only git queries, fetch
+   `origin/main`, then require already-equal or a clean ancestor-only
+   fast-forward on the distinct manager-local branch. Any refusal prevents the
+   new shift from starting. A generic Browser-GPT shift without this manager
+   binding emits no manager-refresh git command, and an already-running turn or
+   frozen create-Issue stage attempt is never refreshed mid-turn.
 3. Resolve Browser-GPT configuration without copying operator files into the
    worktree. Existing supported environment values remain valid. A governed
    create-Issue send may instead pass
@@ -259,33 +270,51 @@ failure.
 
 ### Pack-review same-round replacement observation
 
-For a failed or lost Browser-GPT pack-review source, a replacement of the same
-logical round is not authorized by timeout, missing local output, or a failed
-launcher alone. First run the bounded GitHub source-comment reconciliation for
-the exact run/source identity. If no exact usable publication is recovered, read
-the persisted state-light observation to obtain the exact transport-owned
-`OPKTURNV1...` marker and CDP/profile binding, then perform a direct read-only
-CDP census across every compatible ChatGPT tab.
+For a failed or lost Browser-GPT pack-review source, timeout, missing local output,
+or a failed launcher alone never authorizes replacement. First reconcile the
+exact GitHub source comment for that run/source identity.
 
-Replacement is allowed only when that census is unambiguous and one of these is
-true:
+When that reconciliation proves there is no exact usable publication, a terminal
+source slot that satisfies the single `authoritativePreSend(...)` predicate owned
+by `scripts/pack-review-no-review-reconcile.ts` and has no stronger contradictory
+send/publication evidence is eligible for pack-review same-logical-round
+replacement immediately. This pack-review-specific authority does not require a
+direct CDP census and remains usable when CDP observation is unavailable. It does
+not create generic Browser-GPT retry/resend authority: the generic non-success
+gate and durable phase table remain unchanged.
 
-- the exact owned marker is absent from the complete tab census;
+When authoritative pre-send proof is absent, read the persisted state-light
+observation to obtain the exact transport-owned marker and CDP/profile binding,
+then perform the existing direct read-only CDP census across compatible ChatGPT
+conversation tabs. Replacement on this fallback path is allowed only when that
+census is unambiguous and one of these is true:
+
+- the exact owned marker is absent from the complete conversation-tab census;
 - the owned turn is present, has no attributable assistant reply, and is no
   longer generating; or
 - the exact owned turn is still generating at or beyond 15 minutes from its
   admitted start.
 
+Non-conversation ChatGPT surfaces never participate in owned-turn DOM inspection.
+A readable foreign conversation is skipped. A retained owned conversation locator
+may classify another conversation as foreign when that foreign target cannot be
+inspected; without a retained locator, an unreadable conversation has unknown
+ownership and fails closed. A positive duplicate exact owned marker remains
+ambiguous even when one copy is at the retained locator.
+
 A generating owned turn below 15 minutes is still active and must not be
 replaced. An owned finished turn with an attributable reply must be recovered
 under the original invocation identity instead of relaunched. Multiple owned
-markers, truncated/incomplete tab census, unknown generation state, unreadable
-state-light identity, or unavailable CDP are
+markers, an ownership-unknown conversation, truncated/incomplete owned
+observation, unknown owned generation state, unreadable state-light identity, or
+unavailable CDP on the non-zero-send fallback path remain
 `observation_unavailable`/ambiguous and never grant replacement authority.
-Those outcomes do not block unrelated worker, CI, smoke, or implementation
-progress. There is no durable `replacementEligible` latch, unlock bit, retry
-queue, or second monitor; eligibility is recomputed from current evidence.
 
+Another exact owner generating in a foreign conversation is diagnostic only; it
+does not occupy this source slot, create a retry state, or prevent the runner from
+using its own fresh project chat. There is no durable `replacementEligible`
+latch, unlock bit, retry queue, lease, ownership registry, or second monitor;
+eligibility is recomputed from current evidence.
 ### Durable observation recovery
 
 The existing `state-light-turn-observation/v1` record is the first durable

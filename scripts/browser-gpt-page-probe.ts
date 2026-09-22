@@ -353,6 +353,22 @@ export function isConversationUrl(value: string): boolean {
   }
 }
 
+export type ChatGptSurfaceClass = 'conversation' | 'listing' | 'non_chat';
+
+export function classifyChatGptSurfaceUrl(value: string): ChatGptSurfaceClass {
+  if (!isCompatibleChatGptUrl(value)) return 'non_chat';
+  if (isConversationUrl(value)) return 'conversation';
+  try {
+    const pathname = new URL(value).pathname.replace(/\/+$/u, '') || '/';
+    if (pathname === '/' || /^\/g\/[^/]+$/u.test(pathname) || /^\/gpts(?:\/|$)/u.test(pathname)) {
+      return 'listing';
+    }
+  } catch {
+    return 'non_chat';
+  }
+  return 'non_chat';
+}
+
 function safeTitle(value: unknown): string {
   return boundedCodePoints(typeof value === 'string' ? value : '');
 }
