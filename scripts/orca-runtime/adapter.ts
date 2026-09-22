@@ -1567,7 +1567,8 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     const args = ['terminal', 'send', '--terminal', input.worker.id];
     if (!input.submitOnly) args.push('--text', input.text ?? '');
     if (!input.writeOnly) {
-      args.push('--enter', '--wait-submit', this.#submitObservationSeconds(options));
+      args.push('--enter');
+      if (input.submitOnly) args.push('--wait-submit', this.#submitObservationSeconds(options));
     }
     const response = this.#run<OrcaTerminalSendResult>(args, options);
     const send = response.ok ? response.result?.send : undefined;
