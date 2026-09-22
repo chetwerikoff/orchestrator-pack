@@ -1589,8 +1589,8 @@ function publishedCommentHeaderMatches(
     return match ? [match[1]!] : [];
   });
   if (echoes.length !== 1 || echoes[0] !== invocationId) return false;
-  if (stage && isCanonicalReviewerArtifact(body, stage, issueNumber, sourceRevision, invocationId)) return true;
-  return INVOCATION_ECHO_RE.exec(lines[1]!)?.[1] === invocationId;
+  if (!stage) return false;
+  return isCanonicalReviewerArtifact(body, stage, issueNumber, sourceRevision, invocationId);
 }
 
 function publishedCommentReviewEpisodeId(
@@ -1731,9 +1731,15 @@ export function bindPublishedCommentToSlot(
   if (comment.createdAt !== comment.updatedAt) {
     return { ok: false, errors: [`authoritative GitHub artifact was edited: ${comment.htmlUrl}`] };
   }
-  const repositoryOwner = options.repositoryFullName.split('/')[0] ?? '';
-  if (!repositoryOwner || !sameGithubPrincipal(comment.userLogin, repositoryOwner)) {
-    return { ok: false, errors: [`published comment publisher is not the repository owner: ${comment.userLogin}`] };
+  let principalLogin: string;
+  try {
+    principalLogin = resolveAuthenticatedGithubPrincipal(transport);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { ok: false, errors: [temporaryError('identity-unresolved', 'authenticated GitHub principal could not be resolved through tracked GET /user: ' + detail)] };
+  }
+  if (!sameGithubPrincipal(comment.userLogin, principalLogin)) {
+    return { ok: false, errors: [`published comment publisher is not the authenticated principal: ${comment.userLogin}`] };
   }
   if (!publishedCommentHeaderMatches(comment.body, options.issueNumber, sourceRevision, invocationId, reviewerStage(raw.stage))) {
     return {

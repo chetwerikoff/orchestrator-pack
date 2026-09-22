@@ -3501,7 +3501,7 @@ describe('Issue #2040 canonical invocation echo position', () => {
     return lines.join('\n');
   }
 
-  function bindSlot(body: string, commentOverrides: Record<string, unknown> = {}) {
+  function bindSlot(body: string, commentOverrides: Record<string, unknown> = {}, principal?: string) {
     const input = fixture();
     const evidence = {
       schema: STAGE_EVIDENCE_SCHEMA,
@@ -3522,7 +3522,7 @@ describe('Issue #2040 canonical invocation echo position', () => {
     writeFileSync(input.reviewEvidencePath, JSON.stringify(evidence, null, 2) + '\n');
     const before = readFileSync(input.reviewEvidencePath, 'utf8');
     const reviewComment = comment(body, { id: COMMENT_ID + 40, ...commentOverrides });
-    const source = transport({ census: [reviewComment] });
+    const source = transport({ census: [reviewComment], ...(principal === undefined ? {} : { principal }) });
     const bound = bindPublishedCommentToSlot({
       reviewDir: input.dir,
       stageEvidencePath: input.reviewEvidencePath,
@@ -3578,6 +3578,31 @@ describe('Issue #2040 canonical invocation echo position', () => {
     expect(bound.ok).toBe(false);
     expect(after).toBe(before);
   });
+
+  it('fails and writes nothing when a noncanonical payload still has the invocation echo on the second line', () => {
+    const body = [
+      `Read revision: #${ISSUE} ${REVISION}`,
+      'INVOCATION_ID_TO_ECHO: published-slot-01',
+      'review-economics-contract: v1',
+      '',
+    ].join('\n');
+    const { bound, before, after } = bindSlot(body);
+    expect(bound.ok).toBe(false);
+    expect(after).toBe(before);
+  });
+
+  it('binds a canonical comment published by the authenticated principal when that principal is not the repository owner', () => {
+    const { bound, after } = bindSlot(
+      canonicalBody({ echoPlacement: 'third-non-empty' }),
+      { user: { login: 'binding-principal' } },
+      'binding-principal',
+    );
+    expect(bound.ok, bound.errors.join('\n')).toBe(true);
+    const stored = JSON.parse(after) as { invocations: Array<Record<string, unknown>> };
+    expect(stored.invocations.find((row) => row.reviewerSlot === '01')?.invocationId).toBe('published-slot-01');
+    expect(stored.invocations.find((row) => row.reviewerSlot === '02')).toEqual(otherSlot);
+  });
+
 });
 
 describe('cause-classed zero-send continuation (Issue #1999)', () => {
