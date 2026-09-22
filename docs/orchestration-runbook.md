@@ -365,7 +365,7 @@ node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
   --script scripts/pr2-foundation/supervised-task-launch-assistant.ts -- \
   --repository <owner/repo> --work-class manager --run <run-id> \
   [--issue-number <N>] --manager-brief "$manager_brief" \
-  --worktree-name <worktree-name> --base-branch <base-ref>
+  --worktree-name <worktree-name> --base-branch origin/main
 ```
 
 Every manager invocation supplies the exact current `--run`. Before effects, the
@@ -392,6 +392,35 @@ Worktree path/head existence is not setup readiness. A fresh worktree proceeds
 only from the supported same-invocation setup-complete witness; reuse proceeds
 only from a supported proven-reuse witness. Missing or unknown setup evidence is
 `outcome=continue`.
+
+For manager work, the next-turn boundary is stricter. A fresh manager worktree
+uses a distinct manager-local branch initialized from `origin/main`; the
+manager `--worktree-name` path therefore supplies `--base-branch origin/main`.
+For an existing manager Task, the already-admitted exact Run/Task plus the exact
+caller-supplied `--worktree` selector form the workflow binding. The assistant
+first resolves that selector through `orca worktree show`; missing or
+mismatched id/path performs zero git commands. After that observation, only
+read-only repository/path identity queries may run before fetch: the exact
+worktree root, `origin` repository identity, and linked-worktree/branch
+registry must identify one non-`main`, non-shared local branch at that exact
+path.
+
+Only after those checks does the manager boundary fetch `origin/main`, resolve
+one exact fetched commit, check clean status and ancestry, and fast-forward that
+local branch with an ff-only update. Already-equal is success with no local
+branch/index/worktree update after fetch. Dirty, divergent/local-commit,
+identity, fetch/ref-resolution, or fast-forward failure returns
+`outcome=continue` before terminal/manager start; no reset, rebase, merge
+commit, force repair, replacement worktree, or shared-primary mutation is
+attempted. Near-simultaneous resumes need no new coordinator: ordinary git
+serialization allows one required fast-forward while the peer observes equality
+or fails closed safely. The primary checkout and implementation PR worktree are
+never refresh targets.
+
+This refresh is a next-turn operation only. A manager turn that has already
+started, including a Browser-GPT execution turn or a frozen create-Issue stage
+attempt, keeps its loaded files until its next admitted boundary and is never
+refreshed mid-turn.
 
 The exact-terminal boundary remains machine-enforced through structured contracts:
 one RuntimeAdapter-created worker with provenance `internal`, exact

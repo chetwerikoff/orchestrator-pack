@@ -4,7 +4,7 @@ import '../toolchain/native-entrypoint-preflight.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
 import { evaluateCommandRuntimePreflight } from '../lib/command-runtime-bootstrap.mjs';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
@@ -146,6 +146,7 @@ export interface WorktreePreparationRequest {
   readonly worktreeName?: string;
   readonly baseBranch?: string;
   readonly providerTopLevel?: boolean;
+  readonly managerRefresh?: boolean;
 }
 
 export type DispatchObservation = { readonly kind: 'absent' }
@@ -426,6 +427,7 @@ export async function runSupervisedTaskLaunchAssistant(
     ...(input.worktreeName ? { worktreeName: input.worktreeName } : {}),
     ...(input.baseBranch ? { baseBranch: input.baseBranch } : {}),
     ...(providerMode ? { providerTopLevel: true } : {}),
+    ...(input.workClass === 'manager' ? { managerRefresh: true } : {}),
   }));
   if (prepared.status !== 'ok') return continued(input, 'worktree_prepare', prepared, resources, startedAtMs, timings, deps.now);
   resources = {
@@ -855,16 +857,230 @@ function resultRecord(value: Record<string, unknown> | null): Record<string, unk
   return value?.ok === true && record(value.result) ? value.result : null;
 }
 
-function worktreeContinue(
+function worktreeContinue<T = PreparedWorktree>(
   cause: string,
   evidence: Readonly<Record<string, unknown>> = {},
   note = 'obtain a supported setup-complete/proven-reuse witness; never infer readiness from path/head',
-): EdgeResult<PreparedWorktree> {
+): EdgeResult<T> {
   return {
     status: 'continue', cause, actor: 'provider', evidence,
     nextAction: {
       kind: 'reconcile_worktree_setup',
       note,
+    },
+  };
+}
+
+interface ManagerWorktreeIdentity {
+  readonly branch: string;
+}
+
+function gitWorktreeEntries(output: string): readonly { readonly path: string; readonly branch: string }[] {
+  const entries: Array<{ path: string; branch: string }> = [];
+  let path = '';
+  let branch = '';
+  const push = (): void => {
+    if (path) entries.push({ path, branch });
+    path = '';
+    branch = '';
+  };
+  for (const line of output.split(/\r?\n/u)) {
+    if (!line) {
+      push();
+      continue;
+    }
+    if (line.startsWith('worktree ')) path = line.slice('worktree '.length).trim();
+    else if (line.startsWith('branch ')) branch = line.slice('branch '.length).trim();
+  }
+  push();
+  return entries;
+}
+
+function selectorMatchesObservedWorktree(selector: string, id: string, path: string): boolean {
+  const value = selector.trim();
+  if (value.startsWith('id:')) return value === `id:${id}`;
+  if (value.startsWith('path:')) return resolve(value.slice('path:'.length)) === resolve(path);
+  return true;
+}
+
+async function observeManagerWorktreeIdentity(
+  request: WorktreePreparationRequest,
+  id: string,
+  path: string,
+  execute: ChildExecutor,
+): Promise<EdgeResult<ManagerWorktreeIdentity>> {
+  if (request.worktreeSelector && !selectorMatchesObservedWorktree(request.worktreeSelector, id, path)) {
+    return worktreeContinue<ManagerWorktreeIdentity>(
+      'manager_worktree_selector_mismatch',
+      { worktreeId: id },
+      'reconcile the exact caller-supplied manager worktree selector with the Orca id/path observation before any git command',
+    );
+  }
+
+  const topLevel = await execute(['git', 'rev-parse', '--show-toplevel'], undefined, undefined, path);
+  if (!topLevel.ok || !text(topLevel.stdout) || resolve(text(topLevel.stdout)) !== resolve(path)) {
+    return worktreeContinue<ManagerWorktreeIdentity>(
+      'manager_worktree_path_identity_mismatch',
+      { worktreeId: id },
+      'reconcile the Orca-resolved manager path; repository identity must be read-only-proven before fetch',
+    );
+  }
+
+  const remote = await execute(['git', 'remote', 'get-url', 'origin'], undefined, undefined, path);
+  if (!remote.ok || repoSlug(remote.stdout) !== request.repository.trim().toLowerCase()) {
+    return worktreeContinue<ManagerWorktreeIdentity>(
+      'manager_worktree_repository_identity_mismatch',
+      { worktreeId: id, repository: request.repository.trim().toLowerCase() },
+      'reconcile the Orca-resolved manager worktree with the requested repository before fetch',
+    );
+  }
+
+  const listed = await execute(['git', 'worktree', 'list', '--porcelain'], undefined, undefined, path);
+  if (!listed.ok) {
+    return worktreeContinue<ManagerWorktreeIdentity>(
+      'manager_worktree_registry_unavailable',
+      { worktreeId: id },
+      'read the linked-worktree registry before fetch; do not infer branch ownership from path/head alone',
+    );
+  }
+  const entries = gitWorktreeEntries(listed.stdout);
+  const targetEntries = entries.filter((entry) => resolve(entry.path) === resolve(path));
+  if (targetEntries.length !== 1) {
+    return worktreeContinue<ManagerWorktreeIdentity>(
+      'manager_worktree_registry_mismatch',
+      { worktreeId: id, matchCount: targetEntries.length },
+      'require exactly one linked-worktree registry entry for the Orca-resolved manager path before fetch',
+    );
+  }
+  const branchRef = targetEntries[0]!.branch;
+  if (!branchRef.startsWith('refs/heads/')) {
+    return worktreeContinue<ManagerWorktreeIdentity>(
+      'manager_worktree_branch_unusable',
+      { worktreeId: id },
+      'manager worktrees must stay on one distinct local branch; detached or non-local refs are not repaired automatically',
+    );
+  }
+  const branch = branchRef.slice('refs/heads/'.length);
+  const owners = entries.filter((entry) => entry.branch === branchRef);
+  if (!branch || branch === 'main' || owners.length !== 1) {
+    return worktreeContinue<ManagerWorktreeIdentity>(
+      'manager_worktree_branch_not_distinct',
+      { worktreeId: id, branch: branch || 'unknown', ownerCount: owners.length },
+      'manager worktrees require one non-main local branch owned by exactly one linked worktree',
+    );
+  }
+  return { status: 'ok', value: { branch }, evidence: { worktreeId: id, branch } };
+}
+
+async function refreshManagerWorktree(
+  request: WorktreePreparationRequest,
+  id: string,
+  path: string,
+  execute: ChildExecutor,
+): Promise<EdgeResult<PreparedWorktree>> {
+  const identity = await observeManagerWorktreeIdentity(request, id, path, execute);
+  if (identity.status !== 'ok') return identity;
+
+  const fetched = await execute([
+    'git', 'fetch', '--no-tags', 'origin', 'main:refs/remotes/origin/main',
+  ], 120_000, undefined, path);
+  if (!fetched.ok) {
+    return worktreeContinue(
+      'manager_worktree_fetch_failed',
+      { worktreeId: id, branch: identity.value.branch },
+      'fetch origin/main successfully before status, ancestry, fast-forward, or manager start',
+    );
+  }
+
+  const resolvedOrigin = await execute([
+    'git', 'rev-parse', '--verify', 'refs/remotes/origin/main^{commit}',
+  ], undefined, undefined, path);
+  const originMain = text(resolvedOrigin.stdout);
+  if (!resolvedOrigin.ok || !/^[0-9a-f]{40}$/iu.test(originMain)) {
+    return worktreeContinue(
+      'manager_worktree_origin_main_unresolved',
+      { worktreeId: id, branch: identity.value.branch },
+      'require one exact fetched origin/main commit before examining or moving the manager worktree',
+    );
+  }
+
+  const status = await execute([
+    'git', 'status', '--porcelain=v1', '--untracked-files=all',
+  ], undefined, undefined, path);
+  if (!status.ok) {
+    return worktreeContinue(
+      'manager_worktree_status_unavailable',
+      { worktreeId: id, branch: identity.value.branch, originMain },
+      'require a successful clean-status observation after fetch and before any local worktree update',
+    );
+  }
+  if (status.stdout.length !== 0) {
+    return worktreeContinue(
+      'manager_worktree_dirty',
+      { worktreeId: id, branch: identity.value.branch, originMain },
+      'leave dirty manager worktree bytes unchanged and refuse this turn boundary',
+    );
+  }
+
+  const headResult = await execute(['git', 'rev-parse', '--verify', 'HEAD^{commit}'], undefined, undefined, path);
+  const head = text(headResult.stdout);
+  if (!headResult.ok || !/^[0-9a-f]{40}$/iu.test(head)) {
+    return worktreeContinue(
+      'manager_worktree_head_unresolved',
+      { worktreeId: id, branch: identity.value.branch, originMain },
+      'require one exact current manager HEAD before ancestry or fast-forward',
+    );
+  }
+  if (head === originMain) {
+    return {
+      status: 'ok',
+      value: { id, selector: request.worktreeSelector!, path, setupWitness: 'proven_reuse' },
+      evidence: { worktreeId: id, worktreePath: path, branch: identity.value.branch, head, originMain, refresh: 'already_equal' },
+    };
+  }
+
+  const ancestor = await execute([
+    'git', 'merge-base', '--is-ancestor', head, originMain,
+  ], undefined, undefined, path);
+  if (!ancestor.ok) {
+    return worktreeContinue(
+      'manager_worktree_non_ancestor',
+      { worktreeId: id, branch: identity.value.branch, head, originMain },
+      'leave divergent/local manager commits unchanged; do not reset, rebase, merge-commit, or force repair',
+    );
+  }
+
+  const fastForward = await execute(['git', 'merge', '--ff-only', originMain], undefined, undefined, path);
+  if (!fastForward.ok) {
+    return worktreeContinue(
+      'manager_worktree_fast_forward_failed',
+      { worktreeId: id, branch: identity.value.branch, head, originMain },
+      'refuse safely when the exact manager branch cannot fast-forward; do not attempt a repair path',
+    );
+  }
+  const refreshedHeadResult = await execute([
+    'git', 'rev-parse', '--verify', 'HEAD^{commit}',
+  ], undefined, undefined, path);
+  const refreshedHead = text(refreshedHeadResult.stdout);
+  if (!refreshedHeadResult.ok || refreshedHead !== originMain) {
+    return worktreeContinue(
+      'manager_worktree_post_refresh_mismatch',
+      { worktreeId: id, branch: identity.value.branch, originMain },
+      'require exact post-fast-forward HEAD equality before terminal or manager start',
+    );
+  }
+
+  return {
+    status: 'ok',
+    value: { id, selector: request.worktreeSelector!, path, setupWitness: 'proven_reuse' },
+    evidence: {
+      worktreeId: id,
+      worktreePath: path,
+      branch: identity.value.branch,
+      previousHead: head,
+      head: refreshedHead,
+      originMain,
+      refresh: 'fast_forwarded',
     },
   };
 }
@@ -886,7 +1102,18 @@ export async function prepareWorktreeWithOrca(
     const id = text(worktree?.id);
     const path = text(worktree?.path);
     if (!id || !path) return worktreeContinue('worktree_prepare_failed_or_unknown');
-    return worktreeContinue('worktree_reuse_readiness_unproven', { worktreeId: id, worktreePath: path });
+    if (!request.managerRefresh) {
+      return worktreeContinue('worktree_reuse_readiness_unproven', { worktreeId: id, worktreePath: path });
+    }
+    return refreshManagerWorktree(request, id, path, execute);
+  }
+
+  if (request.managerRefresh && request.baseBranch !== 'origin/main') {
+    return worktreeContinue(
+      'manager_worktree_origin_main_base_required',
+      { requestedBaseBranch: request.baseBranch ?? 'missing' },
+      'fresh manager worktrees must use a distinct manager-local branch initialized from origin/main',
+    );
   }
 
   const repository = request.repository.trim().toLowerCase();
@@ -934,22 +1161,34 @@ export async function prepareWorktreeWithOrca(
   if (!id || !path) return worktreeContinue('worktree_prepare_failed_or_unknown');
 
   const baseEvidence = { worktreeId: id, worktreePath: path };
-  const setup = created && record(created.setupReceipt) ? created.setupReceipt : null;
-  if (!setup) return {
-    status: 'ok',
-    value: { id, selector: `id:${id}`, path, setupWitness: 'same_invocation_complete' },
-    evidence: { ...baseEvidence, setupState: 'not_configured' },
+  const freshReady = async (
+    setupEvidence: Readonly<Record<string, unknown>>,
+  ): Promise<EdgeResult<PreparedWorktree>> => {
+    if (request.managerRefresh) {
+      const identity = await observeManagerWorktreeIdentity(request, id, path, execute);
+      if (identity.status !== 'ok') return identity;
+      return {
+        status: 'ok',
+        value: { id, selector: `id:${id}`, path, setupWitness: 'same_invocation_complete' },
+        evidence: { ...baseEvidence, ...setupEvidence, branch: identity.value.branch },
+      };
+    }
+    return {
+      status: 'ok',
+      value: { id, selector: `id:${id}`, path, setupWitness: 'same_invocation_complete' },
+      evidence: { ...baseEvidence, ...setupEvidence },
+    };
   };
+  const setup = created && record(created.setupReceipt) ? created.setupReceipt : null;
+  if (!setup) return freshReady({ setupState: 'not_configured' });
   if (text(setup.requested) !== 'run' && text(setup.requested) !== 'skip') {
     return worktreeContinue('worktree_setup_receipt_unavailable', baseEvidence);
   }
 
   const state = text(setup.state);
-  if (state === 'not_configured' && setup.hookFound === false) return {
-    status: 'ok',
-    value: { id, selector: `id:${id}`, path, setupWitness: 'same_invocation_complete' },
-    evidence: { ...baseEvidence, setupState: state },
-  };
+  if (state === 'not_configured' && setup.hookFound === false) {
+    return freshReady({ setupState: state });
+  }
   if (state !== 'running' || setup.hookFound !== true) {
     return worktreeContinue(`worktree_setup_${state || 'unknown'}`, { ...baseEvidence, setupState: state || 'unknown' });
   }
@@ -970,11 +1209,7 @@ export async function prepareWorktreeWithOrca(
       exitCode,
     });
   }
-  return {
-    status: 'ok',
-    value: { id, selector: `id:${id}`, path, setupWitness: 'same_invocation_complete' },
-    evidence: { ...baseEvidence, setupState: 'completed', setupTerminalHandle: terminalHandle },
-  };
+  return freshReady({ setupState: 'completed', setupTerminalHandle: terminalHandle });
 }
 
 function dispatchEdge(value: Record<string, unknown> | null): EdgeResult<DispatchObservation> {
