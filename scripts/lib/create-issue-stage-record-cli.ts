@@ -33,7 +33,7 @@ import {
 import { resolveCanonicalReviewDirectory } from './stage-completeness-core.ts';
 import type { LifecycleReviewStage } from './create-issue-stage-lifecycle.ts';
 import { isPublicActor, PUBLIC_ACTORS } from './create-issue-stage-record-marker.ts';
-import type { PublicActor } from './create-issue-stage-record-types.ts';
+import type { GhTransport, PublicActor } from './create-issue-stage-record-types.ts';
 import type { ReviewLaneOverride } from './review-lane-selector.ts';
 import {
   dispatchDefaultCliArg,
@@ -857,7 +857,7 @@ function staleRetryPendingBinding(
   });
 }
 
-export function runStageFinalizeCli(argv: string[]): number {
+export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: GhTransport): number {
   return runParsedCli(argv, 'create-issue-stage-finalize', parseStageFinalizeArgs, (opts) => {
     if (opts.command === 'bind-published-comment') {
       const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
@@ -919,6 +919,7 @@ export function runStageFinalizeCli(argv: string[]): number {
         stageEvidencePath,
         repositoryFullName: opts.repo,
         issueNumber,
+        ...(artifactSourceTransport ? { artifactSourceTransport } : {}),
       });
       let nextAction = null;
       if (result.stage && result.stageAttemptId && result.sourceRevision) {
