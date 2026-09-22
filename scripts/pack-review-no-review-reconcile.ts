@@ -136,7 +136,7 @@ function slotFact(slot: PackReviewSourceSlotRecord): Record<string, unknown> {
   };
 }
 
-function authoritativePreSend(slot: PackReviewSourceSlotRecord): boolean {
+export function authoritativePreSend(slot: PackReviewSourceSlotRecord): boolean {
   if (slot.lifecycle !== 'terminal') return false;
   const terminal = terminalRecord(slot);
   if (terminal.send_count === 0) return true;

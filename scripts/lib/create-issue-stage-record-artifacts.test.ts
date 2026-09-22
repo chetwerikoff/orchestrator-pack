@@ -3325,7 +3325,7 @@ describe('Issue #2010 settled receipt sourceVerdicts recovery', () => {
     return { input, receiptPath, originalBytes };
   }
 
-  it('rebuilds a same-stageAttemptId receipt whose sourceVerdicts disagree with complete producer evidence', () => {
+  it('does not accept a verdict-only rewrite when settlement, invocations, and captures are not observable', () => {
     const prepared = prepareRoutedReceipt((reviewLane) => {
       reviewLane.sourceVerdicts = { '01': 'material-findings', '02': 'accept', '03': 'accept' };
     });
@@ -3336,14 +3336,22 @@ describe('Issue #2010 settled receipt sourceVerdicts recovery', () => {
       issueNumber: ISSUE,
       artifactSourceTransport: transport(),
     });
-    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.ok).toBe(false);
     expect(result.alreadySettled).not.toBe(true);
-    const receipt = JSON.parse(readFileSync(prepared.receiptPath, 'utf8')) as { reviewLane: { sourceVerdicts: Record<string, string> } };
-    expect(validateReviewLaneRecord(receipt.reviewLane)).toEqual({ ok: true, errors: [] });
-    expect(receipt.reviewLane.sourceVerdicts).toEqual({ '01': 'accept', '02': 'accept', '03': 'accept' });
+    expect(readFileSync(prepared.receiptPath).equals(prepared.originalBytes)).toBe(true);
+    const receipt = JSON.parse(readFileSync(prepared.receiptPath, 'utf8')) as {
+      settlement?: unknown;
+      invocations?: unknown;
+      relayEligibleCaptures?: unknown;
+      reviewLane: { sourceVerdicts: Record<string, string> };
+    };
+    expect(receipt.settlement).toBeUndefined();
+    expect(receipt.invocations).toBeUndefined();
+    expect(receipt.relayEligibleCaptures).toBeUndefined();
+    expect(receipt.reviewLane.sourceVerdicts['01']).toBe('material-findings');
   });
 
-  it('leaves an already-matching settled receipt untouched', () => {
+  it('does not treat a lane-matched incomplete receipt as settled when bound comments omit the missing facts', () => {
     const prepared = prepareRoutedReceipt(() => {});
     const result = reconcileCreateIssueStage({
       reviewDir: prepared.input.dir,
@@ -3352,9 +3360,12 @@ describe('Issue #2010 settled receipt sourceVerdicts recovery', () => {
       issueNumber: ISSUE,
       artifactSourceTransport: transport(),
     });
-    expect(result.ok, result.errors.join('\n')).toBe(true);
-    expect(result.alreadySettled).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.alreadySettled).not.toBe(true);
     expect(readFileSync(prepared.receiptPath).equals(prepared.originalBytes)).toBe(true);
+    const receipt = JSON.parse(readFileSync(prepared.receiptPath, 'utf8')) as { settlement?: unknown; relayEligibleCaptures?: unknown };
+    expect(receipt.settlement).toBeUndefined();
+    expect(receipt.relayEligibleCaptures).toBeUndefined();
   });
 
   it('fails closed when producer evidence cannot rebuild the routed record', () => {
@@ -3377,6 +3388,220 @@ describe('Issue #2010 settled receipt sourceVerdicts recovery', () => {
     };
     expect(receipt.reviewLane.sourceVerdictEvidence['03']).toBeUndefined();
     expect(receipt.reviewLane.sourceVerdicts['03']).toBe('accept');
+  });
+});
+
+describe('Issue #2044 same-attempt receipt settlement', () => {
+  function routedEvidence() {
+    const input = fixture({ transportClassification: 'complete' });
+    const declaration: ReviewLaneAuthorDeclaration = {
+      schema: 'review-lane-change-set/v1',
+      owner: 'issue-author',
+      entries: [{
+        kind: 'exact',
+        path: 'scripts/lib/create-issue-stage-record-artifacts.ts',
+        behaviors: ['same-attempt-receipt'],
+      }],
+    };
+    const normalized = normalizeReviewLaneDeclaration(declaration);
+    if (normalized.status !== 'usable') throw new Error(normalized.status);
+    const routing = buildReviewLaneRouting(
+      { ...normalized, identity: `${REVISION}:${normalized.identity}` },
+      classifyReviewLaneDeclaration(declaration),
+      REVISION,
+      'architectural-review-attempt',
+      'normal',
+    );
+    const evidence = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as Record<string, unknown>;
+    evidence.reviewLaneRouting = routing;
+    evidence.taskIdentity = TASK;
+    writeFileSync(input.reviewEvidencePath, JSON.stringify(evidence));
+    return input;
+  }
+
+  function writeSameAttemptReceipt(dir: string, receipt: Record<string, unknown>) {
+    const receiptPath = join(dir, 'stage-completeness-receipt-architectural-review-attempt.json');
+    const originalBytes = Buffer.from(`${JSON.stringify(receipt)}\n`);
+    writeFileSync(receiptPath, originalBytes);
+    return { receiptPath, originalBytes };
+  }
+
+  function thinReceipt() {
+    return {
+      schema: 'stage-completeness-receipt/v1',
+      stage: 'architectural-review',
+      stageAttemptId: 'architectural-review-attempt',
+    };
+  }
+
+  function reconcile(input: ReturnType<typeof fixture>, source = transport({ census: input.reviewComments })) {
+    return {
+      source,
+      result: reconcileCreateIssueStage({
+        reviewDir: input.dir,
+        stageEvidencePath: input.reviewEvidencePath,
+        repositoryFullName: REPOSITORY,
+        issueNumber: ISSUE,
+        artifactSourceTransport: source,
+      }),
+    };
+  }
+
+  it('keeps a complete valid same-attempt receipt settled and does not rebuild it', () => {
+    const input = routedEvidence();
+    const prepared = writeSameAttemptReceipt(input.dir, thinReceipt());
+    const first = reconcile(input);
+    expect(first.result.ok, first.result.errors.join('\n')).toBe(true);
+    expect(first.result.alreadySettled).not.toBe(true);
+    expect(first.source.createdIssueComments).toHaveLength(0);
+    const rebuiltBytes = readFileSync(prepared.receiptPath);
+    const second = reconcile(input, first.source);
+    expect(second.result.ok, second.result.errors.join('\n')).toBe(true);
+    expect(second.result.alreadySettled).toBe(true);
+    expect(readFileSync(prepared.receiptPath).equals(rebuiltBytes)).toBe(true);
+    expect(second.source.createdIssueComments).toHaveLength(0);
+  });
+
+  it('rebuilds an incomplete same-attempt receipt when terminal facts, settlement, and the review lane are reconstructible', () => {
+    const input = routedEvidence();
+    const prepared = writeSameAttemptReceipt(input.dir, thinReceipt());
+    const { source, result } = reconcile(input);
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.alreadySettled).not.toBe(true);
+    expect(source.createdIssueComments).toHaveLength(0);
+    const receipt = JSON.parse(readFileSync(prepared.receiptPath, 'utf8')) as {
+      settlement: { allLaunchedTerminal: boolean; retryState: string; finalRevisionMatched: boolean };
+      reviewLane: unknown;
+      invocations: Array<{ terminal: boolean; terminalClassification: string }>;
+      relayEligibleCaptures: unknown[];
+      credentialingCaptures: unknown[];
+    };
+    expect(receipt.settlement).toEqual({ allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true });
+    expect(validateReviewLaneRecord(receipt.reviewLane)).toEqual({ ok: true, errors: [] });
+    expect(receipt.invocations.every((invocation) => invocation.terminal === true && invocation.terminalClassification === 'complete')).toBe(true);
+    expect(receipt.relayEligibleCaptures.length).toBeGreaterThan(0);
+    expect(receipt.credentialingCaptures.length).toBe(receipt.relayEligibleCaptures.length);
+    expect(readFileSync(prepared.receiptPath).equals(prepared.originalBytes)).toBe(false);
+  });
+
+  it('rebuilds a same-attempt receipt whose capture union is stale versus already-bound comments', () => {
+    const input = routedEvidence();
+    writeSameAttemptReceipt(input.dir, thinReceipt());
+    const first = reconcile(input);
+    expect(first.result.ok, first.result.errors.join('\n')).toBe(true);
+    const receiptPath = join(input.dir, 'stage-completeness-receipt-architectural-review-attempt.json');
+    const receipt = JSON.parse(readFileSync(receiptPath, 'utf8')) as {
+      relayEligibleCaptures: Array<{ captureIdentity: string; sha256: string }>;
+      credentialingCaptures: Array<{ captureIdentity: string; sha256: string }>;
+    };
+    const canonicalIdentity = receipt.relayEligibleCaptures[0]?.captureIdentity;
+    expect(canonicalIdentity).toBeTruthy();
+    receipt.relayEligibleCaptures[0]!.captureIdentity = 'sha256:' + 'a'.repeat(64) + ':stale-capture.txt';
+    receipt.relayEligibleCaptures[0]!.sha256 = 'a'.repeat(64);
+    receipt.credentialingCaptures[0]!.captureIdentity = receipt.relayEligibleCaptures[0]!.captureIdentity;
+    receipt.credentialingCaptures[0]!.sha256 = receipt.relayEligibleCaptures[0]!.sha256;
+    const staleBytes = Buffer.from(`${JSON.stringify(receipt)}\n`);
+    writeFileSync(receiptPath, staleBytes);
+    const second = reconcile(input, first.source);
+    expect(second.result.ok, second.result.errors.join('\n')).toBe(true);
+    expect(second.result.alreadySettled).not.toBe(true);
+    expect(second.source.createdIssueComments).toHaveLength(0);
+    const rebuilt = JSON.parse(readFileSync(receiptPath, 'utf8')) as {
+      relayEligibleCaptures: Array<{ captureIdentity: string }>;
+    };
+    expect(rebuilt.relayEligibleCaptures[0]?.captureIdentity).toBe(canonicalIdentity);
+    expect(readFileSync(receiptPath).equals(staleBytes)).toBe(false);
+  });
+
+  it('returns stage_slot_consumed for a different stageAttemptId and does not rebuild', () => {
+    const input = routedEvidence();
+    const prepared = writeSameAttemptReceipt(input.dir, {
+      ...thinReceipt(),
+      stageAttemptId: 'other-attempt',
+    });
+    const { source, result } = reconcile(input);
+    expect(result.ok).toBe(false);
+    expect(result.alreadySettled).not.toBe(true);
+    expect(result.errors.some((error) => error.includes('stage_slot_consumed'))).toBe(true);
+    expect(readFileSync(prepared.receiptPath).equals(prepared.originalBytes)).toBe(true);
+    expect(source.createdIssueComments).toHaveLength(0);
+  });
+
+  it('fails closed when an incomplete same-attempt receipt has an unobservable required fact', () => {
+    const input = routedEvidence();
+    const prepared = writeSameAttemptReceipt(input.dir, thinReceipt());
+    const source = transport();
+    const result = reconcileCreateIssueStage({
+      reviewDir: input.dir,
+      stageEvidencePath: input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: source,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.alreadySettled).not.toBe(true);
+    expect(readFileSync(prepared.receiptPath).equals(prepared.originalBytes)).toBe(true);
+    const receipt = JSON.parse(readFileSync(prepared.receiptPath, 'utf8')) as { settlement?: unknown; reviewLane?: unknown; relayEligibleCaptures?: unknown };
+    expect(receipt.settlement).toBeUndefined();
+    expect(receipt.reviewLane).toBeUndefined();
+    expect(receipt.relayEligibleCaptures).toBeUndefined();
+    expect(source.createdIssueComments).toHaveLength(0);
+  });
+
+  it('rebuilds a thin mismatched receipt through comment reconciliation instead of stopping after the lane', () => {
+    const input = routedEvidence();
+    const evidence = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as {
+      reviewLaneRouting: Parameters<typeof settleReviewLane>[0];
+    };
+    const routing = evidence.reviewLaneRouting;
+    const slots = routing.initiallyActivatedSlots;
+    const mismatched = Object.fromEntries(slots.map((slot) => [slot, 'accept' as const])) as Record<string, 'accept' | 'material-findings'>;
+    mismatched[slots[0]!] = 'material-findings';
+    const laneSettlement = settleReviewLane(routing, mismatched);
+    const sourceVerdictEvidence = Object.fromEntries(slots.map((slot, index) => {
+      const reviewComment = input.reviewComments[index]!;
+      const name = `pass-01-architectural-review-${slot}.capture.txt`;
+      const body = String(reviewComment.body);
+      const digest = createHash('sha256').update(body).digest('hex');
+      return [slot, {
+        producerEvidenceIdentity: `architectural-review-producer-${slot}`,
+        captureIdentity: `sha256:${digest}:${name}`,
+        terminalClassification: 'complete',
+        captureVerified: true,
+        digestMatches: true,
+        verdictText: 'NO_FINDINGS',
+        rawFindingCount: 0,
+      }];
+    }));
+    const prepared = writeSameAttemptReceipt(input.dir, {
+      ...thinReceipt(),
+      reviewLane: {
+        routing,
+        finalRequiredSlots: laneSettlement.finalRequiredSlots,
+        sourceVerdicts: mismatched,
+        sourceVerdictEvidence,
+        conflictDecision: laneSettlement.conflictDecision,
+        settlement: laneSettlement,
+      },
+    });
+    const { source, result } = reconcile(input);
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.alreadySettled).not.toBe(true);
+    expect(source.createdIssueComments).toHaveLength(0);
+    const receipt = JSON.parse(readFileSync(prepared.receiptPath, 'utf8')) as {
+      settlement?: { allLaunchedTerminal: boolean };
+      invocations?: unknown[];
+      relayEligibleCaptures?: unknown[];
+      credentialingCaptures?: unknown[];
+      reviewLane: { sourceVerdicts: Record<string, string> };
+    };
+    expect(receipt.settlement?.allLaunchedTerminal).toBe(true);
+    expect(receipt.invocations?.length).toBeGreaterThan(0);
+    expect(receipt.relayEligibleCaptures?.length).toBeGreaterThan(0);
+    expect(receipt.credentialingCaptures?.length).toBeGreaterThan(0);
+    expect(receipt.reviewLane.sourceVerdicts[slots[0]!]).toBe('accept');
+    expect(validateReviewLaneRecord(receipt.reviewLane)).toEqual({ ok: true, errors: [] });
+    expect(readFileSync(prepared.receiptPath).equals(prepared.originalBytes)).toBe(false);
   });
 });
 

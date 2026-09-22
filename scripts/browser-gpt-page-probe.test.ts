@@ -13,6 +13,7 @@ import {
   ACQUISITION_READINESS_INTERVAL_MS,
   ACQUISITION_READINESS_TIMEOUT_MS,
   CDP_REQUEST_TIMEOUT_MS,
+  classifyChatGptSurfaceUrl,
   HARVEST_EXPRESSION,
   INSPECTION_EXPRESSION,
   LIVENESS_EXPRESSION,
@@ -225,6 +226,16 @@ test('normalizes only the address and preserves exact conversation identity', ()
     normalizeConversationUrl('https://CHATGPT.com/c/abc/?temporary-chat=true#bottom'),
     'https://chatgpt.com/c/abc',
   );
+});
+
+test('classifies conversation, listing, and non-chat ChatGPT surfaces without inspection', () => {
+  assert.equal(classifyChatGptSurfaceUrl('https://chatgpt.com/c/abc'), 'conversation');
+  assert.equal(classifyChatGptSurfaceUrl('https://chatgpt.com/g/project/c/abc'), 'conversation');
+  assert.equal(classifyChatGptSurfaceUrl('https://chatgpt.com/'), 'listing');
+  assert.equal(classifyChatGptSurfaceUrl('https://chatgpt.com/g/project'), 'listing');
+  assert.equal(classifyChatGptSurfaceUrl('https://chatgpt.com/gpts'), 'listing');
+  assert.equal(classifyChatGptSurfaceUrl('https://chatgpt.com/settings'), 'non_chat');
+  assert.equal(classifyChatGptSurfaceUrl('https://example.com/c/abc'), 'non_chat');
 });
 
 test('closed CLI rejects arbitrary selectors, JavaScript, watch mode, and ambiguous page selection', () => {

@@ -1433,6 +1433,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     const completedBefore = before!.reviewRound!.sourceSlots
       .filter((slot) => slot.slotId !== 'source-02')
       .map((slot) => ({ slotId: slot.slotId, invocationId: slot.invocationId, payload: slot.payload }));
+    const replacedBefore = before!.reviewRound!.sourceSlots.find((slot) => slot.slotId === 'source-02')!;
 
     const relaunched: string[] = [];
     const second = await startPackReview(pluralStart(storeRoot, capture, {
@@ -1452,6 +1453,13 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     expect(relaunched).toEqual(['source-02']);
     const after = getPackReviewRun(firstRunId, { projectId: 'orchestrator-pack', storeRoot });
     expect(after?.reviewRound?.sourceSlots.map((slot) => slot.attemptOrdinal)).toEqual([1, 3, 1]);
+    const replacedAfter = after!.reviewRound!.sourceSlots.find((slot) => slot.slotId === 'source-02')!;
+    expect(replacedAfter.invocationId).not.toBe(replacedBefore.invocationId);
+    expect(replacedAfter.attemptHistory).toEqual([{
+      invocationId: replacedBefore.invocationId,
+      attemptOrdinal: replacedBefore.attemptOrdinal,
+      terminalClass: replacedBefore.terminalClass,
+    }]);
     expect(after?.reviewRound?.sourceSlots.every((slot) => slot.terminalClass === 'complete_clean')).toBe(true);
     expect(after!.reviewRound!.sourceSlots
       .filter((slot) => slot.slotId !== 'source-02')
