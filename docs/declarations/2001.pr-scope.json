@@ -6,14 +6,16 @@
     "docs/chatgpt-task-execution-runbook.md",
     "docs/declarations/2001.pr-scope.json",
     "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/browser-gpt-page-probe.ts",
     "scripts/flow-manager-authority-contract.test.ts",
     "scripts/pack-review-no-review-reconcile.test.ts",
+    "scripts/pack-review-no-review-reconcile.ts",
     "scripts/pack-review-runner-gpt.test.ts",
-    "scripts/pack-review-runner.test.ts"
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts"
   ],
   "denylist": [
     ".cursor/skills/create-issue-draft/",
-    ".env",
     "credentials/",
     "packages/core/",
     "scripts/chatgpt-browser-turn/",
@@ -61,10 +63,17 @@
     "docs/chatgpt-task-execution-runbook.md",
     "docs/declarations/",
     "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/browser-gpt-page-probe.ts",
     "scripts/flow-manager-authority-contract.test.ts",
+    "scripts/lib/pack-review-run-store.ts",
     "scripts/pack-review-no-review-reconcile.test.ts",
+    "scripts/pack-review-no-review-reconcile.ts",
     "scripts/pack-review-runner-gpt.test.ts",
-    "scripts/pack-review-runner.test.ts"
+    "scripts/pack-review-runner-issue-1591.test.ts",
+    "scripts/pack-review-runner-issue-898.test.ts",
+    "scripts/pack-review-runner-severity.test.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts"
   ],
-  "source_revision": "3e5e2bddbe12c7afef6898f748ec33bc320eb9bc"
+  "source_revision": "50c812d6f577976df3c6cdbd59803f7727510a46"
 }
