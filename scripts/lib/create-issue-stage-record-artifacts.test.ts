@@ -14,6 +14,7 @@ import {
   classifyReconciliationTransport,
   inspectAcceptanceArtifacts,
   locateGovernedAuthorDispositionBlock,
+  parseCanonicalCaptureRevision,
   produceAcceptanceArtifacts,
   reconcileCreateIssueStage,
   stageReceiptPayloadsMatchExceptDerivedChain,
@@ -2654,6 +2655,74 @@ describe('Issue #1977 evidence-backed zero-send partial reconciliation', () => {
     });
   });
 
+  it('rewrites a stored eligible-zero-send second attempt to retry-forbidden and credentials it', () => {
+    const prepared = prepareZeroSend();
+    const evidence = JSON.parse(readFileSync(prepared.input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+    const invocation = evidence.invocations[0] as Record<string, any>;
+    invocation.attemptOrdinal = 2;
+    invocation.retryAttempt = true;
+    invocation.retryClass = 'eligible-zero-send';
+    writeFileSync(prepared.input.reviewEvidencePath, JSON.stringify(evidence, null, 2) + '\n');
+
+    const reconciled = reconcileCreateIssueStage({
+      reviewDir: prepared.input.dir,
+      stageEvidencePath: prepared.input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: prepared.source,
+    });
+    expect(reconciled.ok, reconciled.errors.join('\n')).toBe(true);
+    const hydrated = JSON.parse(readFileSync(prepared.input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+    expect(hydrated.invocations[0]).toMatchObject({
+      attemptOrdinal: 2,
+      sendCount: 0,
+      retryClass: 'retry-forbidden',
+      terminalClassification: 'incident',
+      terminalResultIdentity: prepared.identity,
+    });
+  });
+
+  it('keeps a stored first-attempt eligible-zero-send class', () => {
+    const prepared = prepareZeroSend();
+    const evidence = JSON.parse(readFileSync(prepared.input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+    const invocation = evidence.invocations[0] as Record<string, any>;
+    invocation.attemptOrdinal = 1;
+    invocation.retryClass = 'eligible-zero-send';
+    writeFileSync(prepared.input.reviewEvidencePath, JSON.stringify(evidence, null, 2) + '\n');
+
+    const result = reconcileCreateIssueStage({
+      reviewDir: prepared.input.dir,
+      stageEvidencePath: prepared.input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: prepared.source,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('retryClass=eligible-zero-send');
+    const stored = JSON.parse(readFileSync(prepared.input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+    expect(stored.invocations[0].retryClass).toBe('eligible-zero-send');
+  });
+
+  it('rejects a stored eligible-zero-send second attempt that lacks terminal result identity', () => {
+    const prepared = prepareZeroSend({ observed_turn_result_identity: '' });
+    const evidence = JSON.parse(readFileSync(prepared.input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+    const invocation = evidence.invocations[0] as Record<string, any>;
+    invocation.attemptOrdinal = 2;
+    invocation.retryAttempt = true;
+    invocation.retryClass = 'eligible-zero-send';
+    writeFileSync(prepared.input.reviewEvidencePath, JSON.stringify(evidence, null, 2) + '\n');
+
+    const result = reconcileCreateIssueStage({
+      reviewDir: prepared.input.dir,
+      stageEvidencePath: prepared.input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: prepared.source,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('lacks a valid observed turn-result identity');
+  });
+
   it('keeps an unsealed first-attempt zero-send incident retry-eligible under current-main policy', () => {
     const prepared = prepareZeroSend();
     const evidence = JSON.parse(readFileSync(prepared.input.reviewEvidencePath, 'utf8')) as Record<string, any>;
@@ -2859,5 +2928,57 @@ describe('governed author disposition block shapes (Issue #1983)', () => {
     ].join('\n'));
     const result = produce(input);
     expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+});
+
+describe('Issue #2009 canonical plural capture verdicts', () => {
+  function pluralBody(verdict: string): string {
+    return canonicalFindingsVerdict().replace('VERDICT: FINDINGS', `VERDICT: ${verdict}`);
+  }
+
+  it('accepts a plural-finding capture whose sole verdict is FINDINGS or NEEDS_ATTENTION', () => {
+    expect(parseCanonicalCaptureRevision(pluralBody('FINDINGS'))).toEqual({
+      issueNumber: ISSUE,
+      sourceRevision: REVISION,
+      findingCount: 2,
+    });
+    expect(parseCanonicalCaptureRevision(pluralBody('NEEDS_ATTENTION'))).toEqual({
+      issueNumber: ISSUE,
+      sourceRevision: REVISION,
+      findingCount: 2,
+    });
+  });
+
+  it('rejects a plural-finding capture whose sole verdict is any other token', () => {
+    expect(parseCanonicalCaptureRevision(pluralBody('BLOCKED'))).toBeNull();
+    expect(parseCanonicalCaptureRevision(pluralBody('CLEAN'))).toBeNull();
+  });
+
+  it('still accepts a plural-finding capture with no verdict line', () => {
+    expect(parseCanonicalCaptureRevision(PUBLISHED_FINDINGS_WITHOUT_VERDICT)).toMatchObject({
+      issueNumber: 1777,
+      sourceRevision: 'r03',
+      findingCount: 1,
+    });
+  });
+
+  it('credentials VERDICT: NEEDS_ATTENTION the same way as VERDICT: FINDINGS', () => {
+    const body = pluralBody('NEEDS_ATTENTION');
+    const input = fixture({ transportClassification: 'incident', withCapture: true, captureText: body });
+    const result = produce(input, transport({
+      census: [...input.reviewComments, comment(body, { issueNumber: input.issueNumber })],
+      issueNumber: input.issueNumber,
+    }));
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+
+  it('does not credential a plural capture with another verdict token', () => {
+    const body = pluralBody('BLOCKED');
+    const input = fixture({ transportClassification: 'incident', withCapture: true, captureText: body });
+    const result = produce(input, transport({
+      census: [...input.reviewComments, comment(body, { issueNumber: input.issueNumber })],
+      issueNumber: input.issueNumber,
+    }));
+    expect(result.ok).toBe(false);
   });
 });

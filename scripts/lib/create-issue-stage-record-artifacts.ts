@@ -468,16 +468,33 @@ function rawFindingCount(text: string, captureName = ''): number {
 const CANONICAL_REVISION_LINE_RE = /^Read revision: #([1-9][0-9]*) (r[0-9]+)$/;
 const INVOCATION_ECHO_RE = /^INVOCATION_ID_TO_ECHO: (\S+)$/;
 
-function parseCanonicalCaptureRevision(text: string): { issueNumber: number; sourceRevision: string; findingCount: number } | null {
+function isPluralFindingsVerdict(token: string | undefined): boolean {
+  return token === 'FINDINGS' || token === 'NEEDS_ATTENTION';
+}
+
+function pluralCaptureVerdictIsCanonical(text: string, findingCount: number): boolean {
+  if (findingCount <= 0) return true;
+  const lines = text.split(/\r?\n/).map((line) => line.trim());
+  const verdicts = lines.flatMap((line) => {
+    const match = /^VERDICT: (\S+)$/.exec(line);
+    return match ? [match[1]!] : [];
+  });
+  if (verdicts.length === 0) return true;
+  return verdicts.length === 1 && isPluralFindingsVerdict(verdicts[0]);
+}
+
+export function parseCanonicalCaptureRevision(text: string): { issueNumber: number; sourceRevision: string; findingCount: number } | null {
   const lines = text.split(/\n/).map((line) => line.replace(/\r$/, ''));
   const firstNonEmpty = lines.find((line) => line.trim().length > 0);
   const match = firstNonEmpty ? CANONICAL_REVISION_LINE_RE.exec(firstNonEmpty) : null;
   const declarations = lines.filter((line) => CANONICAL_REVISION_LINE_RE.test(line)).length;
   if (!match || declarations !== 1) return null;
+  const findingCount = rawFindingCount(text);
+  if (!pluralCaptureVerdictIsCanonical(text, findingCount)) return null;
   return {
     issueNumber: Number(match[1]),
     sourceRevision: match[2]!,
-    findingCount: rawFindingCount(text),
+    findingCount,
   };
 }
 
@@ -490,7 +507,7 @@ function parseCanonicalTerminalVerdict(
   const lines = text.split(/\r?\n/).map((line) => line.trim());
   const exactCount = (token: string): number => lines.filter((line) => line === token).length;
   const verdicts = lines.flatMap((line) => {
-    const match = /^VERDICT: (CLEAN|FINDINGS|NO_FINDINGS)$/.exec(line);
+    const match = /^VERDICT: (CLEAN|FINDINGS|NO_FINDINGS|NEEDS_ATTENTION)$/.exec(line);
     return match ? [match[1]!] : [];
   });
   const findingCountLines = lines.filter((line) => line.startsWith('FINDING_COUNT:'));
@@ -500,7 +517,7 @@ function parseCanonicalTerminalVerdict(
   });
   const omittedFindingCountOk = findingCountLines.length === 0
     && verdicts.length === 1
-    && verdicts[0] === 'FINDINGS'
+    && isPluralFindingsVerdict(verdicts[0])
     && revision.findingCount > 0;
   const explicitFindingCountOk = findingCountLines.length === 1
     && declaredFindingCounts.length === 1
@@ -526,7 +543,7 @@ function parseCanonicalTerminalVerdict(
     const noFindingsVerdict = verdicts[0] === 'NO_FINDINGS' && exactCount('NO_FINDINGS') <= 1;
     if (!cleanVerdict && !noFindingsVerdict) return null;
   } else if (!findingsWithoutVerdictOk
-    && (verdicts.length !== 1 || verdicts[0] !== 'FINDINGS' || exactCount('NO_FINDINGS') !== 0)) {
+    && (verdicts.length !== 1 || !isPluralFindingsVerdict(verdicts[0]) || exactCount('NO_FINDINGS') !== 0)) {
     return null;
   }
   return revision;
@@ -1203,7 +1220,13 @@ function hydrateReconciliationTransport(
     && invocation.sendCount === 0
     && existingTerminalClassification === 'incident'
     && existingRetryClass === 'retry-forbidden';
-  if (completeExisting && !existingNeedsObservedZeroSendIdentity) return { ...invocation };
+  const attemptOrdinal = invocation.attemptOrdinal === 2 ? 2 : 1;
+  const storedEligibleZeroSendOnSecondAttempt = completeExisting
+    && attemptOrdinal === 2
+    && invocation.sendCount === 0
+    && existingRetryClass === 'eligible-zero-send';
+  const reuseStoredTransport = completeExisting && !storedEligibleZeroSendOnSecondAttempt;
+  if (reuseStoredTransport && !existingNeedsObservedZeroSendIdentity) return { ...invocation };
 
   const terminalEnvelopePath = optionalString(invocation.terminalEnvelopePath);
   if (!terminalEnvelopePath) {
@@ -1216,7 +1239,6 @@ function hydrateReconciliationTransport(
     errors.push('stage evidence invocation[' + index + '] terminal envelope is malformed: ' + resolved);
     return null;
   }
-  const attemptOrdinal = invocation.attemptOrdinal === 2 ? 2 : 1;
   const transport = classifyReconciliationTransport(observed, attemptOrdinal);
   if (!transport) {
     errors.push('stage evidence invocation[' + index + '] terminal envelope has no exact send_count; authority=lifecycle-tool-witnessed');
@@ -1237,7 +1259,7 @@ function hydrateReconciliationTransport(
     return null;
   }
 
-  const needsObservedZeroSendIdentity = completeExisting
+  const needsObservedZeroSendIdentity = reuseStoredTransport
     ? existingNeedsObservedZeroSendIdentity
     : transport.sendCount === 0
       && transport.terminalClassification === 'incident'
@@ -1265,7 +1287,7 @@ function hydrateReconciliationTransport(
   return {
     ...invocation,
     terminal: true,
-    ...(completeExisting ? {} : {
+    ...(reuseStoredTransport ? {} : {
       terminalClassification: transport.terminalClassification,
       sendCount: transport.sendCount,
       retryClass: transport.retryClass,
@@ -1300,6 +1322,159 @@ function atomicReplaceStageEvidence(
   } finally {
     if (existsSync(temporary)) rmSync(temporary, { force: true });
   }
+}
+
+const PUBLISHED_COMMENT_URL_RE = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/([1-9][0-9]*)#issuecomment-([1-9][0-9]*)$/;
+
+export interface BindPublishedCommentToSlotOptions {
+  reviewDir: string;
+  stageEvidencePath: string;
+  repositoryFullName: string;
+  issueNumber: number;
+  reviewerSlot: string;
+  invocationId: string;
+  commentUrl: string;
+  artifactSourceTransport?: GhTransport;
+}
+
+export interface BindPublishedCommentToSlotResult {
+  ok: boolean;
+  errors: string[];
+  sendCount?: 1;
+  reviewerSlot?: string;
+  invocationId?: string;
+  commentUrl?: string;
+}
+
+function publishedCommentHeaderMatches(body: string, issueNumber: number, sourceRevision: string, invocationId: string): boolean {
+  const lines = body.split(/\n/).map((line) => line.replace(/\r$/, '')).filter((line) => line.trim().length > 0);
+  if (lines.length < 2) return false;
+  const revision = CANONICAL_REVISION_LINE_RE.exec(lines[0]!);
+  const echo = INVOCATION_ECHO_RE.exec(lines[1]!);
+  return Boolean(
+    revision
+    && echo
+    && Number(revision[1]) === issueNumber
+    && revision[2] === sourceRevision
+    && echo[1] === invocationId
+  );
+}
+
+export function bindPublishedCommentToSlot(
+  options: BindPublishedCommentToSlotOptions,
+): BindPublishedCommentToSlotResult {
+  const errors: string[] = [];
+  const reviewerSlot = options.reviewerSlot.trim();
+  const invocationId = options.invocationId.trim();
+  const commentUrl = options.commentUrl.trim();
+  if (!reviewerSlot) errors.push('reviewerSlot is missing');
+  if (!invocationId) errors.push('invocationId is missing');
+  const urlMatch = PUBLISHED_COMMENT_URL_RE.exec(commentUrl);
+  if (!urlMatch) errors.push('comment URL must be a canonical published Issue comment URL');
+  if (urlMatch && urlMatch[1]!.toLowerCase() !== options.repositoryFullName.toLowerCase()) {
+    errors.push('comment URL repository does not match --repo');
+  }
+  if (urlMatch && Number(urlMatch[2]) !== options.issueNumber) {
+    errors.push('comment URL Issue does not match --issue-number');
+  }
+  let originalText: string;
+  try { originalText = readFileSync(options.stageEvidencePath, 'utf8'); } catch {
+    return { ok: false, errors: ['missing stage evidence: ' + options.stageEvidencePath] };
+  }
+  let rawValue: unknown;
+  try { rawValue = JSON.parse(originalText) as unknown; } catch {
+    return { ok: false, errors: ['unable to read stage evidence: ' + options.stageEvidencePath] };
+  }
+  if (!isRecord(rawValue) || rawValue.schema !== STAGE_EVIDENCE_SCHEMA) {
+    return { ok: false, errors: ['stage evidence must use ' + STAGE_EVIDENCE_SCHEMA + ': ' + options.stageEvidencePath] };
+  }
+  const raw: JsonRecord = structuredClone(rawValue);
+  const sourceRevision = requiredString(raw.sourceRevision, 'stage evidence.sourceRevision', errors);
+  const invocations = Array.isArray(raw.invocations)
+    ? raw.invocations.filter((value): value is JsonRecord => isRecord(value))
+    : [];
+  if (!Array.isArray(raw.invocations)) errors.push('stage evidence.invocations must be an array');
+  if (errors.length > 0 || !urlMatch || !sourceRevision) {
+    return { ok: false, errors: [...new Set(errors)] };
+  }
+
+  const transport = options.artifactSourceTransport ?? defaultGhTransport();
+  const commentId = Number(urlMatch[3]);
+  const response = transport.runGh([
+    'gh',
+    'api',
+    `repos/${options.repositoryFullName}/issues/comments/${commentId}`,
+  ]);
+  if (response.exitCode !== 0) {
+    return { ok: false, errors: [temporaryError('source-unavailable', 'published comment GET failed for ' + commentUrl)] };
+  }
+  let parsedRaw: unknown;
+  try { parsedRaw = JSON.parse(response.stdout) as unknown; } catch {
+    return { ok: false, errors: [temporaryError('source-unavailable', 'published comment GET is malformed JSON for ' + commentUrl)] };
+  }
+  const comment = parseAuthoritativeIssueComment(parsedRaw, 'published comment ' + commentId, errors);
+  if (!comment) return { ok: false, errors: [...new Set(errors)] };
+  if (comment.htmlUrl !== commentUrl) {
+    return { ok: false, errors: ['published comment html_url does not match the requested comment URL'] };
+  }
+  if (!commentTargetsExpectedIssue(comment, options.repositoryFullName, options.issueNumber)) {
+    return { ok: false, errors: ['published comment does not target the requested repository Issue'] };
+  }
+  if (!comment.userLogin) {
+    return { ok: false, errors: [temporaryError('identity-unresolved', 'published comment has no publisher login')] };
+  }
+  if (!publishedCommentHeaderMatches(comment.body, options.issueNumber, sourceRevision, invocationId)) {
+    return {
+      ok: false,
+      errors: ['published comment first two non-empty lines must be the revision line and INVOCATION_ID_TO_ECHO for that invocation'],
+    };
+  }
+
+  const slotInvocations = invocations
+    .filter((value) => optionalString(value.reviewerSlot) === reviewerSlot)
+    .sort((left, right) => Number(left.attemptOrdinal ?? 0) - Number(right.attemptOrdinal ?? 0));
+  const final = slotInvocations.at(-1);
+  if (!final) {
+    return { ok: false, errors: ['stage evidence has no invocation mapping for reviewerSlot ' + reviewerSlot] };
+  }
+  if (optionalString(final.invocationId) !== invocationId) {
+    return { ok: false, errors: ['named slot final invocationId does not match --invocation-id'] };
+  }
+
+  const otherSlotsBefore = invocations
+    .filter((value) => optionalString(value.reviewerSlot) !== reviewerSlot)
+    .map((value) => JSON.stringify(value));
+  final.sendCount = 1;
+  final.artifactAuthority = {
+    kind: AUTHORITATIVE_GITHUB_ARTIFACT_BASIS,
+    repositoryFullName: options.repositoryFullName,
+    issueNumber: options.issueNumber,
+    commentId: comment.id,
+    commentUrl: comment.htmlUrl,
+    publisherLogin: comment.userLogin,
+    createdAt: comment.createdAt,
+    updatedAt: comment.updatedAt,
+  };
+  const otherSlotsAfter = invocations
+    .filter((value) => optionalString(value.reviewerSlot) !== reviewerSlot)
+    .map((value) => JSON.stringify(value));
+  if (otherSlotsBefore.length !== otherSlotsAfter.length
+    || otherSlotsBefore.some((value, index) => value !== otherSlotsAfter[index])) {
+    return { ok: false, errors: ['bind-published-comment must not create or mutate mappings for other slots'] };
+  }
+
+  raw.invocations = invocations;
+  if (!atomicReplaceStageEvidence(options.stageEvidencePath, originalText, raw, errors)) {
+    return { ok: false, errors: [...new Set(errors)] };
+  }
+  return {
+    ok: true,
+    errors: [],
+    sendCount: 1,
+    reviewerSlot,
+    invocationId,
+    commentUrl,
+  };
 }
 
 export interface ReconcileCreateIssueStageOptions {
