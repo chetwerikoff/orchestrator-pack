@@ -1110,7 +1110,7 @@ describe('supervised Task launch assistant', () => {
     expect(fixture.head()).toBe('1'.repeat(40));
   });
 
-  it('fetches but leaves dirty manager worktree bytes untouched',
+  it('fetches but leaves dirty manager worktree bytes untouched', async () => {
     const fixture = managerReuseFixture({ status: '?? local.txt\n' });
     const result = await prepareWorktreeWithOrca({
       repository: 'chetwerikoff/orchestrator-pack',
