@@ -84,7 +84,7 @@ describe('Orca message truth', () => {
     const sends = runJson.mock.calls.filter((call) => call[0]?.[0] === 'terminal' && call[0]?.[1] === 'send');
     expect(sends).toHaveLength(1);
     expect(sends[0]?.[0]).toEqual([
-      'terminal', 'send', '--terminal', worker.id, '--text', 'exact payload', '--enter', '--wait-submit', '10',
+      'terminal', 'send', '--terminal', worker.id, '--text', 'exact payload', '--enter',
     ]);
   });
 

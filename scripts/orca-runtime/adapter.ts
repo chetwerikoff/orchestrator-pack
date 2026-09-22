@@ -1029,8 +1029,9 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     const refreshed = this.#openCodeUrls.get(worker.id);
     if (refreshed?.url && sameRuntimeWorker(refreshed.identity, worker)) return this.#openCodeControl(worker);
     const terminal = this.#shownTerminal(worker.id, {});
-    if (terminal?.agentIdentity?.trim() !== 'opencode') return undefined;
-    if (this.#recoverOpenCodeFromProcess(terminal, worker, {})) return this.#openCodeControl(worker);
+    if (terminal && this.#recoverOpenCodeFromProcess(terminal, worker, {})) return this.#openCodeControl(worker);
+    if (terminal?.title?.trim().toLowerCase() !== 'opencode'
+      && (!terminal?.command || !/(?:^|\s)opencode(?:\s|$)/iu.test(terminal.command))) return undefined;
     return {
       kind: 'opencode-http',
       dispatch: () => ({ status: 'send_failed', reason: 'runtime_opencode_control_unavailable' }),
