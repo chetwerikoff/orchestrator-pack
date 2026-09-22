@@ -1991,8 +1991,7 @@ export function reconcileCreateIssueStage(
       }
       const laneValidation = validateReviewLaneRecord(value.reviewLane);
       if (!laneValidation.ok && laneValidation.errors.includes(ROUTED_SOURCE_VERDICTS_DISAGREE)) {
-        const rebuilt = rebuildRoutedReviewLaneFromProducerEvidence(value.reviewLane);
-        if (!rebuilt) {
+        if (!rebuildRoutedReviewLaneFromProducerEvidence(value.reviewLane)) {
           return {
             ok: false,
             stageAttemptId,
@@ -2002,11 +2001,6 @@ export function reconcileCreateIssueStage(
             errors: [ROUTED_SOURCE_VERDICTS_DISAGREE],
           };
         }
-        const commitErrors: string[] = [];
-        if (!atomicReplaceStageCompletenessReceipt(path, originalReceiptText, { ...value, reviewLane: rebuilt }, commitErrors)) {
-          return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [...new Set(commitErrors)] };
-        }
-        return { ok: true, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [] };
       }
       sameAttemptReceipt = { path, originalReceiptText, value };
       break;

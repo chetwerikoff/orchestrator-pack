@@ -3325,7 +3325,7 @@ describe('Issue #2010 settled receipt sourceVerdicts recovery', () => {
     return { input, receiptPath, originalBytes };
   }
 
-  it('rebuilds a same-stageAttemptId receipt whose sourceVerdicts disagree with complete producer evidence', () => {
+  it('does not accept a verdict-only rewrite when settlement, invocations, and captures are not observable', () => {
     const prepared = prepareRoutedReceipt((reviewLane) => {
       reviewLane.sourceVerdicts = { '01': 'material-findings', '02': 'accept', '03': 'accept' };
     });
@@ -3336,11 +3336,19 @@ describe('Issue #2010 settled receipt sourceVerdicts recovery', () => {
       issueNumber: ISSUE,
       artifactSourceTransport: transport(),
     });
-    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.ok).toBe(false);
     expect(result.alreadySettled).not.toBe(true);
-    const receipt = JSON.parse(readFileSync(prepared.receiptPath, 'utf8')) as { reviewLane: { sourceVerdicts: Record<string, string> } };
-    expect(validateReviewLaneRecord(receipt.reviewLane)).toEqual({ ok: true, errors: [] });
-    expect(receipt.reviewLane.sourceVerdicts).toEqual({ '01': 'accept', '02': 'accept', '03': 'accept' });
+    expect(readFileSync(prepared.receiptPath).equals(prepared.originalBytes)).toBe(true);
+    const receipt = JSON.parse(readFileSync(prepared.receiptPath, 'utf8')) as {
+      settlement?: unknown;
+      invocations?: unknown;
+      relayEligibleCaptures?: unknown;
+      reviewLane: { sourceVerdicts: Record<string, string> };
+    };
+    expect(receipt.settlement).toBeUndefined();
+    expect(receipt.invocations).toBeUndefined();
+    expect(receipt.relayEligibleCaptures).toBeUndefined();
+    expect(receipt.reviewLane.sourceVerdicts['01']).toBe('material-findings');
   });
 
   it('does not treat a lane-matched incomplete receipt as settled when bound comments omit the missing facts', () => {
@@ -3538,6 +3546,62 @@ describe('Issue #2044 same-attempt receipt settlement', () => {
     expect(receipt.reviewLane).toBeUndefined();
     expect(receipt.relayEligibleCaptures).toBeUndefined();
     expect(source.createdIssueComments).toHaveLength(0);
+  });
+
+  it('rebuilds a thin mismatched receipt through comment reconciliation instead of stopping after the lane', () => {
+    const input = routedEvidence();
+    const evidence = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as {
+      reviewLaneRouting: Parameters<typeof settleReviewLane>[0];
+    };
+    const routing = evidence.reviewLaneRouting;
+    const slots = routing.initiallyActivatedSlots;
+    const mismatched = Object.fromEntries(slots.map((slot) => [slot, 'accept' as const])) as Record<string, 'accept' | 'material-findings'>;
+    mismatched[slots[0]!] = 'material-findings';
+    const laneSettlement = settleReviewLane(routing, mismatched);
+    const sourceVerdictEvidence = Object.fromEntries(slots.map((slot, index) => {
+      const reviewComment = input.reviewComments[index]!;
+      const name = `pass-01-architectural-review-${slot}.capture.txt`;
+      const body = String(reviewComment.body);
+      const digest = createHash('sha256').update(body).digest('hex');
+      return [slot, {
+        producerEvidenceIdentity: `architectural-review-producer-${slot}`,
+        captureIdentity: `sha256:${digest}:${name}`,
+        terminalClassification: 'complete',
+        captureVerified: true,
+        digestMatches: true,
+        verdictText: 'NO_FINDINGS',
+        rawFindingCount: 0,
+      }];
+    }));
+    const prepared = writeSameAttemptReceipt(input.dir, {
+      ...thinReceipt(),
+      reviewLane: {
+        routing,
+        finalRequiredSlots: laneSettlement.finalRequiredSlots,
+        sourceVerdicts: mismatched,
+        sourceVerdictEvidence,
+        conflictDecision: laneSettlement.conflictDecision,
+        settlement: laneSettlement,
+      },
+    });
+    const { source, result } = reconcile(input);
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.alreadySettled).not.toBe(true);
+    expect(source.createdIssueComments).toHaveLength(0);
+    const receipt = JSON.parse(readFileSync(prepared.receiptPath, 'utf8')) as {
+      settlement?: { allLaunchedTerminal: boolean };
+      invocations?: unknown[];
+      relayEligibleCaptures?: unknown[];
+      credentialingCaptures?: unknown[];
+      reviewLane: { sourceVerdicts: Record<string, string> };
+    };
+    expect(receipt.settlement?.allLaunchedTerminal).toBe(true);
+    expect(receipt.invocations?.length).toBeGreaterThan(0);
+    expect(receipt.relayEligibleCaptures?.length).toBeGreaterThan(0);
+    expect(receipt.credentialingCaptures?.length).toBeGreaterThan(0);
+    expect(receipt.reviewLane.sourceVerdicts[slots[0]!]).toBe('accept');
+    expect(validateReviewLaneRecord(receipt.reviewLane)).toEqual({ ok: true, errors: [] });
+    expect(readFileSync(prepared.receiptPath).equals(prepared.originalBytes)).toBe(false);
   });
 });
 
