@@ -226,6 +226,118 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
     };
   }
 
+  it('authorizes all-zero-send same-round replacement after exact GitHub absence without CDP observation', async () => {
+    const run = gptRun('2026-08-30T00:00:00.000Z');
+    run.reviewRound!.sourceSlots = [1, 2, 3].map((ordinal) => ({
+      slotId: `slot-0${ordinal}`,
+      ordinal,
+      lifecycle: 'terminal' as const,
+      invocationId: `invocation-0${ordinal}`,
+      attemptOrdinal: 2,
+      terminalClass: 'explicit_refusal:zero_send_collision_exhausted',
+      terminalResult: { state: 'profile_busy', cause: 'profile_busy', send_count: 0 },
+    }));
+    let observationReads = 0;
+    let cdpReads = 0;
+    const observed = await observeGptPackReviewAttempt(run, Date.parse('2026-08-30T00:20:00.000Z'), {
+      resolveSourceComment: (async () => ({ kind: 'missing' as const, reason: 'fixture_source_comment_missing' })) as never,
+      readObservation: (() => { observationReads += 1; throw new Error('state_light_should_not_run_for_authoritative_pre_send'); }) as never,
+      listTargets: (async () => { cdpReads += 1; throw new Error('cdp_should_not_run_for_authoritative_pre_send'); }) as never,
+    });
+    expect(observed).toMatchObject({ state: 'replacement_eligible', replacementEligible: true, replacementEligibleSlotIds: ['slot-01', 'slot-02', 'slot-03'] });
+    expect(observationReads).toBe(0);
+    expect(cdpReads).toBe(0);
+  });
+
+  it('lets exact GitHub publication override authoritative zero-send replacement', async () => {
+    const run = gptRun('2026-08-30T00:00:00.000Z');
+    const slot = run.reviewRound!.sourceSlots[0]!;
+    slot.lifecycle = 'terminal';
+    slot.terminalClass = 'explicit_refusal:zero_send_collision_exhausted';
+    slot.terminalResult = { state: 'profile_busy', cause: 'profile_busy', send_count: 0 };
+    delete slot.launchProfileKey;
+    delete slot.launchCdpUrl;
+    let cdpReads = 0;
+    const observed = await observeGptPackReviewAttempt(run, Date.parse('2026-08-30T00:20:00.000Z'), {
+      resolveSourceComment: (async () => ({ kind: 'credentialed' as const, payload: {}, receipt: {} })) as never,
+      listTargets: (async () => { cdpReads += 1; return []; }) as never,
+    });
+    expect(observed).toMatchObject({ state: 'reply_recovery_required', replacementEligible: false });
+    expect(cdpReads).toBe(0);
+  });
+
+  it('skips non-conversation and locator-proven foreign failures while retaining foreign-owner diagnostics', async () => {
+    const marker = `OPKTURNV1${'a'.repeat(32)}`;
+    const foreignMarker = `OPKTURNV1${'b'.repeat(32)}`;
+    const evaluated: string[] = [];
+    const observed = await observeGptPackReviewAttempt(gptRun('2026-08-30T00:00:00.000Z'), Date.parse('2026-08-30T00:01:00.000Z'), {
+      resolveSourceComment: (async () => ({ kind: 'missing' as const, reason: 'fixture_source_comment_missing' })) as never,
+      readObservation: (() => ({
+        schema: 'state-light-turn-observation/v1' as const, version: 1 as const, invocation_id: 'invocation-01',
+        profile_key: 'profile-01', marker, phase: 'sent_unharvested' as const, send_witness: 'owned_marker' as const,
+        send_count: 1, conversation_url: 'https://chatgpt.com/c/one', transitioned_at: '2026-08-30T00:00:00.000Z', transition_reason: 'fixture',
+      })) as never,
+      listTargets: (async () => [
+        { id: 'root', type: 'page', url: 'https://chatgpt.com/', title: 'ChatGPT', webSocketDebuggerUrl: 'ws://root' },
+        { id: 'settings', type: 'page', url: 'https://chatgpt.com/settings', title: 'Settings', webSocketDebuggerUrl: 'ws://settings' },
+        { id: 'broken', type: 'page', url: 'https://chatgpt.com/c/broken', title: 'Broken foreign', webSocketDebuggerUrl: 'ws://broken' },
+        { id: 'foreign', type: 'page', url: 'https://chatgpt.com/c/foreign', title: 'Foreign owner', webSocketDebuggerUrl: 'ws://foreign' },
+        { id: 'owned', type: 'page', url: 'https://chatgpt.com/c/one', title: 'Owned', webSocketDebuggerUrl: 'ws://owned' },
+      ]) as never,
+      evaluate: (async (target: { normalized_url?: string }) => {
+        evaluated.push(String(target.normalized_url));
+        if (target.normalized_url?.endsWith('/c/broken')) throw new Error('foreign_read_failed');
+        const isOwned = target.normalized_url?.endsWith('/c/one');
+        return { status: 'ok', generation_in_progress: !isOwned, nodes_truncated: false, nodes: [
+          { role: 'user', document_ordinal: 1, innerText: { head: `${isOwned ? marker : foreignMarker} prompt`, byte_length: 64 } },
+        ] };
+      }) as never,
+    });
+    expect(observed).toMatchObject({ state: 'replacement_eligible', replacementEligible: true });
+    expect(evaluated).not.toContain('https://chatgpt.com');
+    expect(observed?.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ surfaceClass: 'listing', cause: 'surface_skipped' }),
+      expect.objectContaining({ surfaceClass: 'non_chat', cause: 'surface_skipped' }),
+      expect.objectContaining({ surfaceClass: 'foreign_chat', title: 'Broken foreign', cause: 'foreign_inspection_unavailable' }),
+      expect.objectContaining({ surfaceClass: 'foreign_chat', title: 'Foreign owner', cause: 'foreign_owner' }),
+      expect.objectContaining({ surfaceClass: 'owned_conversation', title: 'Owned', cause: 'owned_marker' }),
+    ]));
+    const foreignOwner = observed?.diagnostics?.find((item) => item.cause === 'foreign_owner')?.foreignOwner;
+    expect(foreignOwner).toMatch(/^foreign_owner:[0-9a-f]{12}$/u);
+    expect(foreignOwner).not.toContain(foreignMarker);
+  });
+
+  it('fails closed with ownership_unknown when a legacy no-locator conversation cannot be inspected', async () => {
+    const deps = gptObservationDeps({ markerPresent: false, generating: false });
+    const observed = await observeGptPackReviewAttempt(gptRun('2026-08-30T00:00:00.000Z'), Date.parse('2026-08-30T00:01:00.000Z'), {
+      ...deps,
+      readObservation: (() => ({ ...deps.readObservation(), conversation_url: undefined })) as never,
+      evaluate: (async () => { throw new Error('legacy_conversation_unreadable'); }) as never,
+    });
+    expect(observed).toMatchObject({ state: 'observation_unavailable', replacementEligible: false });
+    expect(observed?.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ surfaceClass: 'ownership_unknown', cause: 'ownership_ambiguous' })]));
+  });
+
+  it('keeps duplicate exact markers ambiguous even when one conversation is the retained locator', async () => {
+    const marker = `OPKTURNV1${'a'.repeat(32)}`;
+    const observed = await observeGptPackReviewAttempt(gptRun('2026-08-30T00:00:00.000Z'), Date.parse('2026-08-30T00:01:00.000Z'), {
+      resolveSourceComment: (async () => ({ kind: 'missing' as const, reason: 'fixture_source_comment_missing' })) as never,
+      readObservation: (() => ({
+        schema: 'state-light-turn-observation/v1' as const, version: 1 as const, invocation_id: 'invocation-01',
+        profile_key: 'profile-01', marker, phase: 'sent_unharvested' as const, send_witness: 'owned_marker' as const,
+        send_count: 1, conversation_url: 'https://chatgpt.com/c/one', transitioned_at: '2026-08-30T00:00:00.000Z', transition_reason: 'fixture',
+      })) as never,
+      listTargets: (async () => [
+        { id: 'one', type: 'page', url: 'https://chatgpt.com/c/one', title: 'One', webSocketDebuggerUrl: 'ws://one' },
+        { id: 'two', type: 'page', url: 'https://chatgpt.com/c/two', title: 'Two', webSocketDebuggerUrl: 'ws://two' },
+      ]) as never,
+      evaluate: (async () => ({ status: 'ok', generation_in_progress: false, nodes_truncated: false, nodes: [
+        { role: 'user', document_ordinal: 1, innerText: { head: `${marker} prompt`, byte_length: 64 } },
+      ] })) as never,
+    });
+    expect(observed).toMatchObject({ state: 'ownership_ambiguous', replacementEligible: false });
+  });
+
   it('does not replace a Browser GPT turn that is still generating before 15 minutes', async () => {
     const start = Date.parse('2026-08-30T00:00:00.000Z');
     const observed = await observeGptPackReviewAttempt(

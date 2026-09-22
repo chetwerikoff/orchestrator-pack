@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  authoritativePreSend,
   reconcilePackReviewNoReview,
   type NoReviewReconciliationDependencies,
   type NoReviewReconciliationInput,
@@ -127,6 +128,15 @@ function deps(overrides: Partial<NoReviewReconciliationDependencies> = {}): Part
 }
 
 describe('pack-review no-review reconciliation', () => {
+  it('keeps authoritative pre-send classification in one exported predicate', () => {
+    expect(authoritativePreSend(slot(1, { lifecycle: 'terminal', terminalResult: { send_count: 0 } }))).toBe(true);
+    expect(authoritativePreSend(slot(1, { lifecycle: 'terminal', terminalResult: { state: 'not_sent' } }))).toBe(true);
+    expect(authoritativePreSend(slot(1, { lifecycle: 'terminal', terminalClass: 'pre_launch_interrupted' }))).toBe(true);
+    expect(authoritativePreSend(slot(1, { lifecycle: 'terminal', terminalClass: 'explicit_refusal:zero_send_collision_exhausted' }))).toBe(true);
+    expect(authoritativePreSend(slot(1, { lifecycle: 'terminal', terminalResult: { send_count: 1 } }))).toBe(false);
+    expect(authoritativePreSend(slot(1, { lifecycle: 'planned', terminalResult: { send_count: 0 } }))).toBe(false);
+  });
+
   it('does not create a missing run-store root while proving the no-local-run path inconclusive', async () => {
     const storeRoot = join(tmpdir(), `opk-no-review-missing-${process.pid}-${Date.now()}`);
     expect(existsSync(storeRoot)).toBe(false);
