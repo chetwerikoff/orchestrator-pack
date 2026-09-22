@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -28,6 +28,8 @@ import {
   retryPendingEvents,
   startReviewCycle,
 } from './create-issue-stage-record-core.ts';
+import { parseStageFinalizeArgs } from './create-issue-stage-record-cli.ts';
+import { bindPublishedCommentToSlot, STAGE_EVIDENCE_SCHEMA } from './create-issue-stage-record-artifacts.ts';
 import { parseConsumableStageReceipt } from './create-issue-stage-record-receipt.ts';
 import {
   createMockGhState,
@@ -718,6 +720,189 @@ describe('create-issue-stage-finalize integration', () => {
       workdir,
     });
     expect(cross.ok).toBe(false);
+  });
+});
+
+
+describe('Issue #2009 bind-published-comment', () => {
+  const invocationId = 'invocation-slot-01';
+  const commentId = 4242;
+  const commentUrl = `https://github.com/${repo}/issues/${issueNumber}#issuecomment-${commentId}`;
+  const matchingBody = [
+    `Read revision: #${issueNumber} r01`,
+    `INVOCATION_ID_TO_ECHO: ${invocationId}`,
+    'review-economics-contract: v1',
+    '',
+  ].join('\n');
+
+  function invocation(slot: string, id: string): Record<string, unknown> {
+    return {
+      schema: 'reviewer-invocation-envelope/v1',
+      reviewEpisodeId: 'episode-2009',
+      stageAttemptId: 'attempt-001',
+      policyVersion: 'triple-source/v1',
+      reviewerCardinality: 3,
+      cardinalityConfigIdentity: 'config',
+      stage: 'competitive',
+      sourceRevision: 'r01',
+      invocationId: id,
+      reviewerSlot: slot,
+      reviewerOrdinal: Number(slot),
+      attemptOrdinal: 1,
+      retryAttempt: false,
+      terminal: true,
+      terminalClassification: 'incident',
+      sendCount: 0,
+      retryClass: 'retry-forbidden',
+      revisionCheck: 'matched',
+      capacityOutcome: 'admitted',
+      capacityWaitMs: 0,
+    };
+  }
+
+  function writeEvidence(dir: string, extra: Record<string, unknown>[] = []) {
+    const evidencePath = join(dir, 'attempt-001.json');
+    writeFileSync(evidencePath, JSON.stringify({
+      schema: STAGE_EVIDENCE_SCHEMA,
+      tier: 'T3',
+      stage: 'competitive',
+      stageAttemptId: 'attempt-001',
+      stageSequence: 1,
+      sourceRevision: 'r01',
+      outcome: 'incident',
+      invocations: [invocation('01', invocationId), invocation('02', 'invocation-slot-02'), ...extra],
+    }, null, 2) + '\n');
+    return evidencePath;
+  }
+
+  function commentTransport(body = matchingBody, calls: string[][] = []) {
+    return {
+      calls,
+      transport: {
+        runGh(argv: string[]) {
+          calls.push(argv);
+          const path = argv[2] ?? '';
+          const match = /\/issues\/comments\/(\d+)$/.exec(path);
+          if (argv[0] === 'gh' && argv[1] === 'api' && match && !argv.includes('-X') && !argv.includes('-f')) {
+            if (Number(match[1]) !== commentId) return { exitCode: 1, stdout: '', stderr: 'missing' };
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify({
+                id: commentId,
+                body,
+                created_at: '2026-09-22T00:00:00.000Z',
+                updated_at: '2026-09-22T00:00:00.000Z',
+                html_url: commentUrl,
+                issue_url: `https://api.github.com/repos/${repo}/issues/${issueNumber}`,
+                user: { login: 'chetwerikoff' },
+                author_association: 'OWNER',
+              }),
+              stderr: '',
+            };
+          }
+          return { exitCode: 1, stdout: '', stderr: `unexpected ${argv.join(' ')}` };
+        },
+      },
+    };
+  }
+
+  it('parses the bind-published-comment command', () => {
+    const opts = parseStageFinalizeArgs([
+      'node', 'scripts/create-issue-stage-finalize.ts', 'bind-published-comment',
+      '--repo', repo,
+      '--issue-number', String(issueNumber),
+      '--review-dir', '/tmp/review',
+      '--stage-evidence', '/tmp/review/attempt-001.json',
+      '--reviewer-slot', '01',
+      '--invocation-id', invocationId,
+      '--comment-url', commentUrl,
+      '--json',
+    ]);
+    expect(opts.command).toBe('bind-published-comment');
+    expect(opts.reviewerSlot).toBe('01');
+    expect(opts.invocationId).toBe(invocationId);
+    expect(opts.commentUrl).toBe(commentUrl);
+    expect(opts.stageEvidencePaths).toEqual(['/tmp/review/attempt-001.json']);
+  });
+
+  it('binds a matching published comment into the named slot with sendCount 1 and does not send', () => {
+    const dir = makeCliTempDir();
+    const evidencePath = writeEvidence(dir);
+    const { transport, calls } = commentTransport();
+    const slotTwoBefore = JSON.parse(readFileSync(evidencePath, 'utf8')).invocations[1];
+
+    const result = bindPublishedCommentToSlot({
+      reviewDir: dir,
+      stageEvidencePath: evidencePath,
+      repositoryFullName: repo,
+      issueNumber,
+      reviewerSlot: '01',
+      invocationId,
+      commentUrl,
+      artifactSourceTransport: transport,
+    });
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.sendCount).toBe(1);
+    expect(calls.every((argv) => argv[1] === 'api' && !argv.includes('-X') && !argv.includes('-f'))).toBe(true);
+
+    const stored = JSON.parse(readFileSync(evidencePath, 'utf8')) as { invocations: Array<Record<string, unknown>> };
+    expect(stored.invocations[0]).toMatchObject({
+      reviewerSlot: '01',
+      invocationId,
+      sendCount: 1,
+      artifactAuthority: {
+        kind: 'authoritative-github-artifact',
+        commentId,
+        commentUrl,
+      },
+    });
+    expect(stored.invocations[1]).toEqual(slotTwoBefore);
+    expect(stored.invocations).toHaveLength(2);
+  });
+
+  it('refuses a comment whose first two non-empty lines are not the revision line and invocation echo', () => {
+    const dir = makeCliTempDir();
+    const evidencePath = writeEvidence(dir);
+    const { transport } = commentTransport([
+      'review-economics-contract: v1',
+      `Read revision: #${issueNumber} r01`,
+      `INVOCATION_ID_TO_ECHO: ${invocationId}`,
+      '',
+    ].join('\n'));
+    const before = readFileSync(evidencePath, 'utf8');
+    const result = bindPublishedCommentToSlot({
+      reviewDir: dir,
+      stageEvidencePath: evidencePath,
+      repositoryFullName: repo,
+      issueNumber,
+      reviewerSlot: '01',
+      invocationId,
+      commentUrl,
+      artifactSourceTransport: transport,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('first two non-empty lines');
+    expect(readFileSync(evidencePath, 'utf8')).toBe(before);
+  });
+
+  it('does not create a mapping for a slot that has no invocation', () => {
+    const dir = makeCliTempDir();
+    const evidencePath = writeEvidence(dir);
+    const before = readFileSync(evidencePath, 'utf8');
+    const { transport } = commentTransport();
+    const result = bindPublishedCommentToSlot({
+      reviewDir: dir,
+      stageEvidencePath: evidencePath,
+      repositoryFullName: repo,
+      issueNumber,
+      reviewerSlot: '03',
+      invocationId,
+      commentUrl,
+      artifactSourceTransport: transport,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('no invocation mapping for reviewerSlot 03');
+    expect(readFileSync(evidencePath, 'utf8')).toBe(before);
   });
 });
 
