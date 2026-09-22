@@ -213,6 +213,18 @@ describe('real Orca assignment target resolution', () => {
           },
         };
       }
+      if (operation === 'terminal list') {
+        return {
+          ok: true,
+          result: { terminals: [activeTerminal] },
+        };
+      }
+      if (operation === 'terminal wait') {
+        return {
+          ok: true,
+          result: { wait: { status: 'running', satisfied: true } },
+        };
+      }
       return { ok: false, error: { code: 'unexpected_operation', message: operation } };
     });
     const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
@@ -226,6 +238,18 @@ describe('real Orca assignment target resolution', () => {
         generation: 'generation-active',
       });
     }
+    expect(await admitCurrentWorkerAssignmentReplacement({
+      file,
+      expected: assignment,
+      adapter,
+    })).toMatchObject({
+      status: 'skipped_live',
+      reason: 'runtime_idle',
+    });
+    expect(runJson.mock.calls.some((call) => {
+      const operation = `${call[0]?.[0] ?? ''} ${call[0]?.[1] ?? ''}`;
+      return operation === 'terminal close' || operation === 'terminal release';
+    })).toBe(false);
   });
 
   it('keeps ready + input_accepted without heartbeat unresolved and non-replaceable', async () => {
@@ -354,6 +378,41 @@ describe('real Orca assignment target resolution', () => {
       adapter,
     })).toEqual({ status: 'replaceable', expected: assignment });
   });
+
+  it.each(['retained', 'unknown'] as const)(
+    'admits replacement for an exact exited worker when releaseState is %s without a cleanup handle',
+    async (releaseState) => {
+      const file = assignmentFile();
+      const assignment = await publish(file, { bindingKey: `dispatch-${releaseState}` });
+      const runJson = vi.fn((): OrcaJsonResponse => ({
+        ok: true,
+        result: {
+          worker: { agent_terminal_handle: 'term-owned' },
+          terminal: { handle: 'term-owned' },
+          observation: { exactWorker: true, status: 'exited' },
+          terminalResource: {
+            terminalHandle: 'term-owned',
+            worktreeId: 'repo::worktree',
+            originDispatchId: `dispatch-${releaseState}`,
+            ownerDispatchId: `dispatch-${releaseState}`,
+            releaseState,
+          },
+        },
+      }));
+      const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+      expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))
+        .toEqual({ status: 'gone', assignment });
+      expect(await admitCurrentWorkerAssignmentReplacement({
+        file,
+        expected: assignment,
+        adapter,
+      })).toEqual({ status: 'replaceable', expected: assignment });
+      expect(runJson.mock.calls.some((call) => {
+        const operation = `${call[0]?.[0] ?? ''} ${call[0]?.[1] ?? ''}`;
+        return operation === 'terminal close' || operation === 'terminal release';
+      })).toBe(false);
+    },
+  );
 
   it('admits replacement only for the pinned local dispatch_not_found producer envelope', async () => {
     const file = assignmentFile();
