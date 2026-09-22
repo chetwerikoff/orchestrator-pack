@@ -3653,3 +3653,102 @@ describe('acquireWatchLock', () => {
     }
   });
 });
+
+describe('model-family footer matrix', () => {
+  const command = 'orca orchestration check --run run_d613a86c140a';
+  const cwd = '~/projects/orchestrator-pack';
+  const families = [
+    'Grok 4.7 256K High',
+    'Grok 4.7 256K Low',
+    'Grok 4.6 High',
+    'Claude Fable 5.1 300K High',
+    'Cursor Grok 4.5',
+    'GPT-5.6 Luna 1M High',
+    'Composer 2.5',
+  ];
+
+  function statusLine(family: string, withFiles: boolean): string {
+    return `${family} · 43.6%${withFiles ? ' · 1 file edited' : ''}   Run Everything`;
+  }
+
+  function preview(input: {
+    readonly family: string;
+    readonly withFiles: boolean;
+    readonly tasks?: string;
+    readonly ctrlC: boolean;
+    readonly followUps: boolean;
+    readonly body?: readonly string[];
+  }): string {
+    const lines = [
+      ...(input.followUps
+        ? ['┌ follow-ups ┐', '+12 more lines · enter steer · ↑ select/edit · esc cancel']
+        : []),
+      ...(input.body ?? [`→ ${POKE}`]),
+      ...(input.tasks ? [input.tasks] : []),
+      statusLine(input.family, input.withFiles),
+      cwd,
+      ...(input.ctrlC ? ['ctrl+c to stop'] : []),
+    ];
+    return lines.join('\n');
+  }
+
+  it('accepts every measured family across file count, task count, ctrl+c, and follow-ups', () => {
+    for (const family of families) {
+      for (const withFiles of [false, true]) {
+        for (const tasks of [undefined, '1 task', '3 tasks'] as const) {
+          for (const ctrlC of [false, true]) {
+            for (const followUps of [false, true]) {
+              const screen = preview({ family, withFiles, ...(tasks ? { tasks } : {}), ctrlC, followUps });
+              expect(classifyCursorComposer(screen), screen).toBe('non_empty');
+              expect(exactOrchestrationPointerFingerprint(screen), screen).toBe(command);
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it('accepts the operator-acknowledged family-word risk line as chrome', () => {
+    const screen = [POKE, 'Grok the problem - 100% Run Everything', cwd].join('\n');
+    expect(classifyCursorComposer(screen)).toBe('non_empty');
+    expect(exactOrchestrationPointerFingerprint(screen)).toBe(command);
+  });
+
+  it('refuses the Ship the draft counterexample, mixed text, a missing cwd, and a cwd that is not last', () => {
+    const forged = [POKE, 'Ship the draft - 100% - Run Everything', cwd].join('\n');
+    expect(classifyCursorComposer(forged)).toBe('empty');
+    expect(exactOrchestrationPointerFingerprint(forged)).toBeUndefined();
+
+    const mixed = preview({
+      family: 'Grok 4.7 256K High',
+      withFiles: false,
+      ctrlC: false,
+      followUps: false,
+      body: [POKE, 'please also rewrite the tests'],
+    });
+    expect(classifyCursorComposer(mixed)).toBe('non_empty');
+    expect(exactOrchestrationPointerFingerprint(mixed)).toBeUndefined();
+
+    const noCwd = [POKE, statusLine('Grok 4.7 256K High', false)].join('\n');
+    expect(exactOrchestrationPointerFingerprint(noCwd)).toBeUndefined();
+
+    const cwdNotLast = [POKE, statusLine('Claude Fable 5.1 300K High', true), cwd, 'trailing note'].join('\n');
+    expect(exactOrchestrationPointerFingerprint(cwdNotLast)).toBeUndefined();
+  });
+
+
+  it('refuses an unavailable read and a non-screen read', () => {
+    const identity = { runtime: 'orca' as const, id: 'term_source', generation: 'g1' };
+    const unavailable = createAdapterSubmitDeps({
+      readBoundedOutput: () => ({ status: 'failed', operation: 'read_bounded_output', reason: 'runtime_timeout' }),
+    } as never, () => ({ ok: true, result: {} }));
+    expect(unavailable.read(identity)).toEqual({ ok: false, reason: 'runtime_timeout' });
+    const stream = createAdapterSubmitDeps({
+      readBoundedOutput: () => ({
+        status: 'ok',
+        value: { lines: ['hello'], source: 'stream', nativeCursor: null, observationToken: { opaque: 't' } },
+      }),
+    } as never, () => ({ ok: true, result: {} }));
+    expect(stream.read(identity)).toEqual({ ok: false, reason: 'runtime_output_source_unobservable' });
+  });
+});

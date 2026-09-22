@@ -117,7 +117,9 @@ export function isOpenCodeComposerEmpty(lines: readonly string[]): boolean {
       if (sawLeftEdge) continue;
       continue;
     }
-    if (/Ask anything(?:\.\.\.|…)/u.test(trimmed)) {
+    const askBody = trimmed.replace(/^[┃│]\s*/u, '');
+    // A quoted suggestion after the placeholder is product chrome. Unquoted text is human input.
+    if (/^Ask anything(?:\.\.\.|…)(?:\s+"[^"]*")?$/u.test(askBody)) {
       sawLeftEdge = true;
       continue;
     }
@@ -127,7 +129,9 @@ export function isOpenCodeComposerEmpty(lines: readonly string[]): boolean {
     }
     if (!trimmed.startsWith('┃')) break;
     sawLeftEdge = true;
-    if (/^┃\s+(?:Pack-Opk-|[0-9a-f]{16,}(?:\s|$))/iu.test(trimmed)) continue;
+    // The pack launches OpenCode either with a per-run `Pack-Opk-<hash>` agent or with the
+    // plain `pack` agent from buildExecutorCommand, which renders `Pack · <model> · <effort>`.
+    if (/^┃\s+(?:Pack-Opk-|Pack\s+·\s|[0-9a-f]{16,}(?:\s|$))/iu.test(trimmed)) continue;
     if (trimmed !== '┃') return false;
   }
   return sawLeftEdge;
