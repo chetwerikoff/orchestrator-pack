@@ -6,12 +6,16 @@ import {
   STAGE_SCHEMA,
 } from './create-issue-stage-record-types.ts';
 import type {
+  CanonicalLineage,
   CycleEventLogical,
   FinalEventLogical,
   JournalLogical,
+  LineageDiagnostic,
+  ParsedJournalEvent,
   PartialMissingSourceWitness,
   PublicActor,
   StageEventLogical,
+  TrustedComment,
 } from './create-issue-stage-record-types.ts';
 import {
   isReviewLaneEvidence,
@@ -38,6 +42,13 @@ export const PUBLIC_ACTORS = new Set<PublicActor>([
   'codex-flow-manager',
   'other-flow-manager',
 ]);
+
+export const INVALID_PUBLIC_ACTOR_POISON_COMMENT_ID = 5757262517;
+
+export function isInvalidPublicActorPoisonTrustDiagnostic(diagnostic: LineageDiagnostic): boolean {
+  return diagnostic.commentId === INVALID_PUBLIC_ACTOR_POISON_COMMENT_ID
+    && (diagnostic.code === 'foreign-comment' || diagnostic.code === 'edited-comment');
+}
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
@@ -232,6 +243,152 @@ export function serializeCommentBody(
   if (delivery?.deliveryFailureClass) payload['delivery-failure-class'] = delivery.deliveryFailureClass;
   if (delivery?.firstFailureAt) payload['first-failure-at'] = delivery.firstFailureAt;
   return `${marker}\n\`\`\`json\n${JSON.stringify(payload, null, 2)}\n\`\`\``;
+}
+
+export interface InvalidPublicActorCycleObservation {
+  eventKey: string;
+  cycleId: string;
+  predecessorCycleId: string;
+  sourceRevision: string;
+  tier: string;
+  invalidPublicActor: string;
+}
+
+export interface RecoveredInvalidPublicActorPoisonWitness {
+  poisonCommentId: number;
+  poisonCycleId: string;
+  predecessorCycleId: string;
+  sourceRevision: string;
+  tier: string;
+  invalidPublicActor: string;
+  successorCommentId: number;
+  successorCycleId: string;
+}
+
+export function parseInvalidPublicActorCycleBody(body: string): InvalidPublicActorCycleObservation | null {
+  const marker = extractMarker(body);
+  if (!marker || marker.schema !== CYCLE_SCHEMA) return null;
+  const fence = body.match(/```json\s*([\s\S]*?)\s*```/i);
+  if (!fence) return null;
+  try {
+    const parsed = JSON.parse(fence[1] ?? '');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const record = parsed as Record<string, unknown>;
+    const eventKey = record['event-key'];
+    const cycleId = record['cycle-id'];
+    const predecessorCycleId = record['predecessor-cycle-id'];
+    const sourceRevision = record['source-revision'];
+    const tier = record.tier;
+    const publicActor = record['public-actor'];
+    const routedLane = record['routed-lane'];
+    if (record.schema !== CYCLE_SCHEMA
+      || marker.eventKey !== eventKey
+      || !isNonEmptyString(eventKey)
+      || !isNonEmptyString(cycleId)
+      || eventKey !== cycleId
+      || !isNonEmptyString(predecessorCycleId)
+      || !isNonEmptyString(sourceRevision)
+      || !isNonEmptyString(tier)
+      || !isNonEmptyString(publicActor)
+      || isPublicActor(publicActor)
+      || (routedLane !== undefined && !isReviewLaneRouting(routedLane))) {
+      return null;
+    }
+    return {
+      eventKey,
+      cycleId,
+      predecessorCycleId,
+      sourceRevision,
+      tier,
+      invalidPublicActor: publicActor,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function compareJournalOrder(
+  left: { createdAt: string; id: number },
+  right: { createdAt: string; id: number },
+): number {
+  const leftAt = Date.parse(left.createdAt);
+  const rightAt = Date.parse(right.createdAt);
+  if (leftAt !== rightAt) return leftAt - rightAt;
+  return left.id - right.id;
+}
+
+function canonicalCycleChain(lineage: CanonicalLineage): ParsedJournalEvent[] | null {
+  const head = lineage.head;
+  if (!head || head.logical.schema !== CYCLE_SCHEMA) return [];
+  const byCycleId = new Map<string, ParsedJournalEvent>();
+  for (const event of lineage.eventsByKey.values()) {
+    if (event.logical.schema !== CYCLE_SCHEMA) continue;
+    const cycleId = event.logical['cycle-id'];
+    const existing = byCycleId.get(cycleId);
+    if (existing && existing.eventKey !== event.eventKey) return null;
+    byCycleId.set(cycleId, event);
+  }
+  const reversed: ParsedJournalEvent[] = [];
+  const visited = new Set<string>();
+  let current = head.logical['cycle-id'];
+  while (current !== 'none') {
+    if (visited.has(current)) return null;
+    visited.add(current);
+    const event = byCycleId.get(current);
+    if (!event || event.logical.schema !== CYCLE_SCHEMA) return null;
+    reversed.push(event);
+    current = event.logical['predecessor-cycle-id'];
+  }
+  return reversed.reverse();
+}
+
+export function resolveRecoveredInvalidPublicActorPoisonWitness(input: {
+  comments: TrustedComment[];
+  parsedDiagnostics: LineageDiagnostic[];
+  lineage: CanonicalLineage;
+}): RecoveredInvalidPublicActorPoisonWitness | null {
+  const malformed = input.parsedDiagnostics.filter((diagnostic) => diagnostic.code === 'malformed-marker');
+  if (malformed.length !== 1 || malformed[0]?.commentId === undefined) return null;
+  const poisonComment = input.comments.find((comment) => comment.id === malformed[0]!.commentId);
+  if (!poisonComment) return null;
+  const poison = parseInvalidPublicActorCycleBody(poisonComment.body);
+  if (!poison) return null;
+
+  const chain = canonicalCycleChain(input.lineage);
+  if (!chain) return null;
+  const beforePoison = chain.filter((event) => compareJournalOrder(
+    { createdAt: event.createdAt, id: event.commentId },
+    { createdAt: poisonComment.createdAt, id: poisonComment.id },
+  ) < 0);
+  const predecessorEvent = beforePoison.at(-1);
+  const expectedPredecessor = predecessorEvent?.logical.schema === CYCLE_SCHEMA
+    ? predecessorEvent.logical['cycle-id']
+    : 'none';
+  if (poison.predecessorCycleId !== expectedPredecessor) return null;
+
+  const successor = chain.find((event) => compareJournalOrder(
+    { createdAt: event.createdAt, id: event.commentId },
+    { createdAt: poisonComment.createdAt, id: poisonComment.id },
+  ) > 0);
+  if (!successor || successor.logical.schema !== CYCLE_SCHEMA) return null;
+  if (successor.logical['cycle-id'] === poison.cycleId
+    || successor.logical['predecessor-cycle-id'] !== expectedPredecessor
+    || successor.logical['source-revision'] !== poison.sourceRevision
+    || successor.logical.tier !== poison.tier
+    || !isPublicActor(successor.logical['public-actor'])) {
+    return null;
+  }
+
+  return {
+    poisonCommentId: poisonComment.id,
+    poisonCycleId: poison.cycleId,
+    predecessorCycleId: poison.predecessorCycleId,
+    sourceRevision: poison.sourceRevision,
+    tier: poison.tier,
+    invalidPublicActor: poison.invalidPublicActor,
+    successorCommentId: successor.commentId,
+    successorCycleId: successor.logical['cycle-id'],
+  };
 }
 
 export function parseLogicalFromCommentBody(body: string): JournalLogical | null {
