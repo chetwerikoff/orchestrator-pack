@@ -542,6 +542,26 @@ function discoveredOpenCodeAdapter(input: {
     expect(requests).toEqual([]);
   });
 
+  it('does not report an idle OpenCode pane busy when the placeholder includes a quoted suggestion', () => {
+    const requests: string[] = [];
+    const adapter = makeAdapter((input) => {
+      requests.push(input.url);
+      return { status: 200, body: 'true' };
+    }, undefined, undefined, ['┃  Ask anything… "Fix a TODO in the codebase"', '╹▀▀▀▀▀▀']);
+    const spawned = adapter.spawnWorker({ title: 'opencode', command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture' });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+
+    const result = adapter.composerControl?.(spawned.value.identity)?.dispatch({
+      worker: spawned.value.identity,
+      action: 'submit-prompt',
+      text: 'delivery pointer',
+    });
+    expect(result?.status).toBe('dispatched');
+    expect(result).not.toMatchObject({ reason: 'opencode_composer_not_empty' });
+    expect(requests.some((url) => url.endsWith('/tui/append-prompt'))).toBe(true);
+  });
+
   it('uses composer geometry to preserve human-authored OpenCode text', () => {
     expect(isOpenCodeComposerEmpty(['idle splash', '┃', '╹▀▀▀▀▀▀'])).toBe(true);
     expect(isOpenCodeComposerEmpty(['idle splash', '┃   ', '╹▀▀▀▀▀▀'])).toBe(true);
@@ -549,8 +569,11 @@ function discoveredOpenCodeAdapter(input: {
     expect(isOpenCodeComposerEmpty(['idle splash', '┃  Pack-Opk-151bd854148541919ddf2dd24aa069f5 · GLM 5.3 Flash TeamoRouter', '╹▀▀▀▀▀▀'])).toBe(true);
     expect(isOpenCodeComposerEmpty(['idle splash', '┃  Pack-Opk-                             ·Muse Spark 1.2 Free OpenCode', '┃  D51fd897bc56456082244bcd2e565320                           Zen', '╹▀▀▀▀▀▀'])).toBe(true);
     expect(isOpenCodeComposerEmpty(['idle splash', '┃  TeamoRouter 钱包余额不足，请前往 https://teamorouter.cn/dashboard?buy=1 充值后继续使用', '╹▀▀▀▀▀▀'])).toBe(true);
-    expect(isOpenCodeComposerEmpty(['idle splash', '┃  Ask anything... \"Fix broken tests\"', '╹▀▀▀▀▀▀'])).toBe(false);
     expect(isOpenCodeComposerEmpty(['idle splash', '│ Ask anything…', '╹▀▀▀▀▀▀'])).toBe(true);
+    expect(isOpenCodeComposerEmpty(['idle splash', '┃  Ask anything… "Fix a TODO in the codebase"', '╹▀▀▀▀▀▀'])).toBe(true);
+    expect(isOpenCodeComposerEmpty(['idle splash', '┃  Ask anything… "What is the tech stack of this project?"', '╹▀▀▀▀▀▀'])).toBe(true);
+    expect(isOpenCodeComposerEmpty(['idle splash', '┃  Ask anything… fix the auth bug', '╹▀▀▀▀▀▀'])).toBe(false);
+    expect(isOpenCodeComposerEmpty(['idle splash', '┃  fix the auth bug', '╹▀▀▀▀▀▀'])).toBe(false);
     expect(isOpenCodeComposerEmpty(['idle splash', '┃ human text', '╹▀▀▀▀▀▀'])).toBe(false);
     expect(isOpenCodeComposerEmpty(['OpenCode', 'no composer'])).toBe(false);
     expect(isOpenCodeComposerEmpty(['╹▀▀▀▀▀▀', '┃ human text', '╹▀▀▀▀▀▀', '┃   ', '╹▀▀▀▀▀▀'])).toBe(true);

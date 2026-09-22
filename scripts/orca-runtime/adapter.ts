@@ -184,7 +184,8 @@ export function isOpenCodeComposerEmpty(lines: readonly string[]): boolean {
       continue;
     }
     const askBody = trimmed.replace(/^[┃│]\s*/u, '');
-    if (/^Ask anything(?:\.\.\.|…)$/u.test(askBody)) {
+    // A quoted suggestion after the placeholder is product chrome. Unquoted text is human input.
+    if (/^Ask anything(?:\.\.\.|…)(?:\s+"[^"]*")?$/u.test(askBody)) {
       sawLeftEdge = true;
       continue;
     }
