@@ -3143,6 +3143,69 @@ interface PreparedAuthorDispositions {
   replaceExisting: boolean;
 }
 
+export type AuthorDispositionAdmission = 'lifecycle-zero-state' | 'defer-stage-materialization' | 'require-governed-reply';
+
+/** Reviewer-stage materialization does not consume author adjudication. Post-lens and final-acceptance bundles do. */
+export function producerConsumesAuthorAdjudication(phase: 'pre-lens' | 'post-lens' | 'final-acceptance'): boolean {
+  return phase !== 'pre-lens';
+}
+
+/**
+ * Missing `round-NN-author-reply.*` is decided by whether this operation consumes
+ * author adjudication. `predecessorStage === null` only selects lifecycle zero-state.
+ */
+export type AuthorReplyDisposition = 'absent' | 'current' | 'historical' | 'malformed';
+
+export function authorDispositionAdmission(input: {
+  consumesAuthorAdjudication: boolean;
+  predecessorPresent: boolean;
+  authorReplyDisposition: AuthorReplyDisposition;
+}): AuthorDispositionAdmission {
+  if (input.authorReplyDisposition === 'malformed') return 'require-governed-reply';
+  if (!input.consumesAuthorAdjudication && input.predecessorPresent && input.authorReplyDisposition !== 'current') {
+    return 'defer-stage-materialization';
+  }
+  if (!input.predecessorPresent && input.authorReplyDisposition !== 'current') return 'lifecycle-zero-state';
+  return 'require-governed-reply';
+}
+
+function stageAuthorBinding(reviewDir: string): { sourceRevision: string | null; predecessorStage: ReviewStage | null } {
+  const stageInputs = stageEvidenceFilesInReviewDir(reviewDir).flatMap((path) => {
+    try {
+      const value: unknown = JSON.parse(readFileSync(path, 'utf8'));
+      return isRecord(value) ? [{ path, value }] : [];
+    } catch {
+      return [];
+    }
+  });
+  const predecessorStage = latestLifecycleStage(stageInputs);
+  const latest = stageInputs
+    .map((entry) => ({
+      stage: reviewStage(entry.value.stage),
+      sequence: Number(entry.value.stageSequence),
+      sourceRevision: typeof entry.value.sourceRevision === 'string' ? entry.value.sourceRevision : null,
+    }))
+    .filter((entry): entry is { stage: ReviewStage; sequence: number; sourceRevision: string | null } => (
+      Boolean(entry.stage) && Number.isInteger(entry.sequence)
+    ))
+    .sort((left, right) => right.sequence - left.sequence)[0];
+  return { sourceRevision: latest?.sourceRevision ?? null, predecessorStage };
+}
+
+function authorReplyDispositionForStage(
+  reviewDir: string,
+  sourceRevision: string | null,
+  predecessorStage: ReviewStage | null,
+): AuthorReplyDisposition {
+  const authorReplyPath = latestAuthorReplyPath(reviewDir);
+  if (!authorReplyPath) return 'absent';
+  const errors: string[] = [];
+  const parsed = parseGovernedAuthorDispositionOutput(authorReplyPath, errors);
+  if (!parsed) return 'malformed';
+  if (sourceRevision === null || parsed.sourceRevision !== sourceRevision || parsed.predecessorStage !== predecessorStage) return 'historical';
+  return 'current';
+}
+
 function prepareAuthorDispositionsFromGovernedOutput(input: {
   reviewDir: string;
   targetPath: string;
@@ -3319,6 +3382,7 @@ export function produceAcceptanceArtifacts(
   const createdInputPaths = new Set<string>();
   let issueSnapshot: AcceptanceIssueSnapshot | null = null;
   let preparedAuthor: PreparedAuthorDispositions | null = null;
+  let authorAdjudicationDeferred = false;
   if (!taskIssueMatch) {
     errors.push('acceptance input authority requires tier-intake taskIdentity issue:<N>');
   } else {
@@ -3332,17 +3396,26 @@ export function produceAcceptanceArtifacts(
   }
   if (issueSnapshot) {
     const predecessorStage = latestLifecycleStage(validStageInputs);
-    const allowZeroState = predecessorStage === null;
-    preparedAuthor = prepareAuthorDispositionsFromGovernedOutput({
-      reviewDir: options.reviewDir,
-      targetPath: options.authorDispositionsPath,
-      reviewEpisodeId: episodeId,
-      sourceRevision: issueSnapshot.sourceRevision,
-      predecessorStage,
-      draft: issueSnapshot.body,
-      allowZeroState,
-      errors,
+    const artifactPhase = options.phase ?? 'final-acceptance';
+    const admission = authorDispositionAdmission({
+      consumesAuthorAdjudication: producerConsumesAuthorAdjudication(artifactPhase),
+      predecessorPresent: predecessorStage !== null,
+      authorReplyDisposition: authorReplyDispositionForStage(options.reviewDir, issueSnapshot.sourceRevision, predecessorStage),
     });
+    if (admission === 'defer-stage-materialization') {
+      authorAdjudicationDeferred = true;
+    } else {
+      preparedAuthor = prepareAuthorDispositionsFromGovernedOutput({
+        reviewDir: options.reviewDir,
+        targetPath: options.authorDispositionsPath,
+        reviewEpisodeId: episodeId,
+        sourceRevision: issueSnapshot.sourceRevision,
+        predecessorStage,
+        draft: issueSnapshot.body,
+        allowZeroState: admission === 'lifecycle-zero-state',
+        errors,
+      });
+    }
   }
 
   let canonicalLineage: CanonicalLineage | undefined;
@@ -3470,7 +3543,7 @@ export function produceAcceptanceArtifacts(
   }
   const captures = receipts.flatMap((receipt) => receipt.relayEligibleCaptures);
   const relay = relayEvidence(episodeId, captures);
-  const ledger = buildLedger(preparedAuthor?.value, captures, errors);
+  const ledger = authorAdjudicationDeferred ? null : buildLedger(preparedAuthor?.value, captures, errors);
   const claudeProducerEvidenceAuditErrors: string[] = [];
   const claudeProducerEvidence = (options.claudeProducerEvidencePaths ?? []).flatMap((path) => readClaudeProducerEvidence(
     path,
@@ -3498,7 +3571,7 @@ export function produceAcceptanceArtifacts(
         validationPurpose: purpose,
       }
     : undefined;
-  if (ledger && tier) {
+  if (tier && (ledger || authorAdjudicationDeferred)) {
     const state = deriveReviewEpisodeState(receipts, relay, authority);
     errors.push(...state.errors);
     errors.push(...validateReviewEpisodeTopology(state, options.phase ?? 'final-acceptance'));
@@ -3514,7 +3587,7 @@ export function produceAcceptanceArtifacts(
       && (receipt.invocations ?? []).every((invocation) => invocation.terminal === true)
     ));
     if (!stageTerminalConfirmed) errors.push('stage evidence does not prove terminal settlement for every launched invocation');
-    if (settlementsValid) {
+    if (ledger && settlementsValid) {
       let issueRevision = receipts.at(-1)?.sourceRevision ?? episodeFirstRevision;
       try {
         const parsedLedger = JSON.parse(ledger) as unknown;
@@ -3553,7 +3626,7 @@ export function produceAcceptanceArtifacts(
       if (!ledgerResult.ok) errors.push(...ledgerResult.errors);
     }
   }
-  if (errors.length > 0 || !ledger || !tier || !issueSnapshot || !preparedAuthor) {
+  if (errors.length > 0 || !tier || !issueSnapshot || (!authorAdjudicationDeferred && (!ledger || !preparedAuthor))) {
     rollbackCreatedInputs(createdInputPaths);
     const temporary = temporaryClassification(errors);
     return {
@@ -3567,9 +3640,12 @@ export function produceAcceptanceArtifacts(
     };
   }
 
+  const acceptanceOutputNames = authorAdjudicationDeferred
+    ? ACCEPTANCE_ARTIFACT_OUTPUT_NAMES.filter((name) => name !== 'finding-disposition-ledger.json')
+    : [...ACCEPTANCE_ARTIFACT_OUTPUT_NAMES];
   const files = [
     ...receipts.map((receipt) => stageCompletenessReceiptFileName(receipt.stageAttemptId)),
-    ...ACCEPTANCE_ARTIFACT_OUTPUT_NAMES,
+    ...acceptanceOutputNames,
   ];
   const manifest = {
     schema: ARTIFACT_MANIFEST_SCHEMA,
@@ -3598,7 +3674,7 @@ export function produceAcceptanceArtifacts(
     derivedFrom: {
       tierIntake: resolve(options.tierIntakePath),
       stageEvidence: canonicalStageEvidencePaths.map((path) => resolve(path)),
-      authorDispositions: resolve(options.authorDispositionsPath),
+      ...(preparedAuthor ? { authorDispositions: resolve(options.authorDispositionsPath) } : {}),
       ...(issueSnapshot ? { issueSnapshot: resolve(issueSnapshot.path) } : {}),
       ...(options.waiverPath ? { operatorWaiver: resolve(options.waiverPath) } : {}),
     },
@@ -3609,14 +3685,16 @@ export function produceAcceptanceArtifacts(
     JSON.stringify(receipt, null, 2) + '\n',
   ));
   artifactContents.set('verified-relay-evidence.json', JSON.stringify(relay, null, 2) + '\n');
-  artifactContents.set('finding-disposition-ledger.json', ledger);
+  if (ledger) artifactContents.set('finding-disposition-ledger.json', ledger);
   artifactContents.set('review-episode-inventory.json', JSON.stringify(authority!.receiptInventory, null, 2) + '\n');
   artifactContents.set('acceptance-artifacts.json', JSON.stringify(manifest, null, 2) + '\n');
   let committedInputs: PreparedInputCommit = { created: [], replaced: new Map() };
   try {
     committedInputs = commitPreparedInputs([
       { path: issueSnapshot.path, bytes: issueSnapshot.bytes },
-      { path: preparedAuthor.path, bytes: preparedAuthor.bytes, allowReplace: preparedAuthor.replaceExisting },
+      ...(preparedAuthor
+        ? [{ path: preparedAuthor.path, bytes: preparedAuthor.bytes, allowReplace: preparedAuthor.replaceExisting }]
+        : []),
     ]);
     for (const path of committedInputs.created) createdInputPaths.add(path);
     publishArtifactSet(outputDir, files, artifactContents, options.publicationHooks);
@@ -3695,19 +3773,23 @@ export function inspectAcceptanceArtifacts(
       );
     }
   } else {
-    const authorReply = latestAuthorReplyPath(options.reviewDir);
-    if (authorReply) {
+    const authorBinding = stageAuthorBinding(options.reviewDir);
+    const authorReplyDisposition = authorReplyDispositionForStage(options.reviewDir, authorBinding.sourceRevision, authorBinding.predecessorStage);
+    const admission = authorDispositionAdmission({
+      consumesAuthorAdjudication: producerConsumesAuthorAdjudication(options.phase ?? 'final-acceptance'),
+      predecessorPresent: authorBinding.predecessorStage !== null,
+      authorReplyDisposition,
+    });
+    if (authorReplyDisposition === 'malformed') {
+      const authorReply = latestAuthorReplyPath(options.reviewDir);
       const authorErrors: string[] = [];
-      parseGovernedAuthorDispositionOutput(authorReply, authorErrors);
+      if (authorReply) parseGovernedAuthorDispositionOutput(authorReply, authorErrors);
       for (const error of authorErrors) missing.push({ artifact: 'governed author output', reason: error });
-    } else {
-      const hasStageEvidence = stageEvidenceFilesInReviewDir(options.reviewDir).length > 0;
-      if (hasStageEvidence) {
-        missing.push({
-          artifact: 'governed author output',
-          reason: 'missing governed author output round-NN-author-reply.*; field=findings/m4 authority=author-owned',
-        });
-      }
+    } else if (admission === 'require-governed-reply' && authorReplyDisposition !== 'current') {
+      missing.push({
+        artifact: 'governed author output',
+        reason: 'missing governed author output round-NN-author-reply.*; field=findings/m4 authority=author-owned',
+      });
     }
   }
 
@@ -3796,7 +3878,16 @@ export function inspectAcceptanceArtifacts(
     missing.push({ artifact: CLAUDE_PRODUCER_EVIDENCE_SCHEMA, reason: 'T3 architectural-lens capture requires --claude-producer-evidence <path>' });
   }
 
-  const expectedOutputNames = [...new Set([...stageReceiptNames, ...ACCEPTANCE_ARTIFACT_OUTPUT_NAMES])];
+  const deferredOutputBinding = stageAuthorBinding(options.reviewDir);
+  const deferFindingLedger = authorDispositionAdmission({
+    consumesAuthorAdjudication: producerConsumesAuthorAdjudication(options.phase ?? 'final-acceptance'),
+    predecessorPresent: deferredOutputBinding.predecessorStage !== null,
+    authorReplyDisposition: authorReplyDispositionForStage(options.reviewDir, deferredOutputBinding.sourceRevision, deferredOutputBinding.predecessorStage),
+  }) === 'defer-stage-materialization';
+  const acceptanceOutputNames = deferFindingLedger
+    ? ACCEPTANCE_ARTIFACT_OUTPUT_NAMES.filter((name) => name !== 'finding-disposition-ledger.json')
+    : [...ACCEPTANCE_ARTIFACT_OUTPUT_NAMES];
+  const expectedOutputNames = [...new Set([...stageReceiptNames, ...acceptanceOutputNames])];
   const outputValues = new Map<string, unknown>();
   for (const name of expectedOutputNames) {
     const artifact = name.startsWith('stage-completeness-receipt-')
