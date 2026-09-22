@@ -8,11 +8,11 @@
   ],
   "denylist": [
     ".env",
-    "credentials/",
-    "mining/",
-    "packages/core/",
-    "secrets/",
-    "vendor/"
+    "credentials/**",
+    "mining/**",
+    "packages/core/**",
+    "secrets/**",
+    "vendor/**"
   ],
   "allowed_roots": [
     "scripts/lib/create-issue-stage-record-artifacts.test.ts",
