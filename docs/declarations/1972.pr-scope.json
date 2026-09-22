@@ -4,7 +4,8 @@
   "declared_paths": [
     "docs/target_repo_setup.md",
     "scripts/bootstrap.test.ts",
-    "scripts/bootstrap.ts"
+    "scripts/bootstrap.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
     ".orchestrator-pack/",
@@ -17,7 +18,8 @@
     "docs/target_repo_setup.md",
     "README.md",
     "scripts/bootstrap.test.ts",
-    "scripts/bootstrap.ts"
+    "scripts/bootstrap.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "ec8157d95a4b1e3f9cab23c88c714e42d3136689"
+  "source_revision": "ac7b967ae77aecf69dcfd6f9061c0f3672919d87"
 }
