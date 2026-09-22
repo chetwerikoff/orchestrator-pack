@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { executeFinalAcceptanceGuards, FINAL_ACCEPTANCE_CONTRACT_VERSION } from './create-issue-final-acceptance-contract.ts';
 import { runFinalAcceptance, validatePublishBodyBinding } from './create-issue-final-acceptance.ts';
@@ -1460,3 +1461,103 @@ function makeCliTempDir(): string {
   cliTempDirs.push(dir);
   return dir;
 }
+
+
+describe('poisoned canonical deterministic attempt stays terminal (Issue #1999)', () => {
+  const fixturePath = join(
+    fileURLToPath(new URL('../..', import.meta.url)),
+    'tests/external-output-references/create-issue-1977-poisoned-canonical-attempt.json',
+  );
+  const issueNumber = 91999;
+
+  function writeCanonicalAttempt(stateRoot: string): { reviewDir: string; evidencePath: string; bytes: string } {
+    const reviewDir = join(stateRoot, '.review', String(issueNumber));
+    mkdirSync(reviewDir, { recursive: true });
+    const evidencePath = join(reviewDir, 'attempt-001.json');
+    const bytes = readFileSync(fixturePath, 'utf8');
+    writeFileSync(evidencePath, bytes);
+    return { reviewDir, evidencePath, bytes };
+  }
+
+  it('start-cycle and read-only reconcile-stage return nextAction null and keep the canonical stageAttemptId', () => {
+    const stateRoot = makeCliTempDir();
+    const previous = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = stateRoot;
+    const prepared = writeCanonicalAttempt(stateRoot);
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      logs.push(String(line));
+    });
+    try {
+      const startCode = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'start-cycle',
+        '--repo', 'chetwerikoff/orchestrator-pack',
+        '--issue-number', String(issueNumber),
+        '--source-revision', 'r04',
+        '--stage', 'competitive',
+        '--tier', 'T2',
+        '--public-actor', 'cursor-flow-manager',
+        '--json',
+      ]);
+      expect(startCode).toBe(1);
+      const started = JSON.parse(logs.at(-1) ?? '') as {
+        nextAction: unknown;
+        stageAttemptId: string;
+        reason: { class: string; code: string };
+      };
+      expect(started.nextAction).toBeNull();
+      expect(started.stageAttemptId).toBe('1977-poisoned-canonical-attempt');
+      expect(started.reason).toMatchObject({ class: 'deterministic-input', code: 'input_invalid' });
+
+      const reviewDir = makeCliTempDir();
+      const evidencePath = join(reviewDir, 'attempt-001.json');
+      writeFileSync(evidencePath, prepared.bytes);
+      const reconcileCode = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
+        '--repo', 'chetwerikoff/orchestrator-pack',
+        '--issue-number', String(issueNumber),
+        '--review-dir', reviewDir,
+        '--stage-evidence', evidencePath,
+        '--json',
+      ]);
+      expect(reconcileCode).toBe(1);
+      const reconciled = JSON.parse(logs.at(-1) ?? '') as {
+        nextAction: unknown;
+        stageAttemptId: string;
+      };
+      expect(reconciled.nextAction).toBeNull();
+      expect(reconciled.stageAttemptId).toBe('1977-poisoned-canonical-attempt');
+      expect(readFileSync(evidencePath, 'utf8')).toBe(prepared.bytes);
+      expect(readFileSync(prepared.evidencePath, 'utf8')).toBe(prepared.bytes);
+    } finally {
+      spy.mockRestore();
+      if (previous === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previous;
+    }
+  });
+
+  it('does not call GitHub or replace the canonical attempt from startReviewCycle', () => {
+    const stateRoot = makeCliTempDir();
+    const prepared = writeCanonicalAttempt(stateRoot);
+    let ghCalls = 0;
+    const result = startReviewCycle({
+      runGh() {
+        ghCalls += 1;
+        return { exitCode: 1, stdout: '', stderr: 'must not be called' };
+      },
+    }, {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber,
+      sourceRevision: 'r04',
+      stage: 'competitive',
+      tier: 'T2',
+      publicActor: 'cursor-flow-manager',
+      stateRootOverride: stateRoot,
+      workdir: makeCliTempDir(),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.stageAttemptId).toBe('1977-poisoned-canonical-attempt');
+    expect(ghCalls).toBe(0);
+    expect(readFileSync(prepared.evidencePath, 'utf8')).toBe(prepared.bytes);
+  });
+});
