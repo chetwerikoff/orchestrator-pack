@@ -493,6 +493,16 @@ describe('OpenCode HTTP control plane', () => {
       ['idle splash', '┃  Ask anything… "What is the tech stack of this project?"', '┃  Pack-Opk-74ee63e8dbab4aeea656692dd8b573fb · GPT-5.6 Luna OpenAI', '╹▀▀▀▀▀▀'],
     ];
     for (const pane of idlePanes) expect(isOpenCodeComposerEmpty(pane)).toBe(true);
+    // Captured live from a pane launched by buildExecutorCommand, whose agent is the plain
+    // `pack` agent rather than a per-run Pack-Opk-<hash> one. Both status-line shapes exist in
+    // production and both must read as chrome, or no pointer can be written to that pane.
+    expect(isOpenCodeComposerEmpty([
+      '                       ┃',
+      '                       ┃  Ask anything… "Fix broken tests"',
+      '                       ┃',
+      '                       ┃  Pack · GPT-5.6 Luna OpenAI · high',
+      '                       ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀',
+    ])).toBe(true);
     // The hole closed by the original change stays closed: unquoted text after the placeholder,
     // and human text on its own, are composer content.
     expect(isOpenCodeComposerEmpty(['idle splash', '┃  Ask anything… fix the auth bug', '╹▀▀▀▀▀▀'])).toBe(false);

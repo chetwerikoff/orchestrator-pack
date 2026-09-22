@@ -129,7 +129,9 @@ export function isOpenCodeComposerEmpty(lines: readonly string[]): boolean {
     }
     if (!trimmed.startsWith('┃')) break;
     sawLeftEdge = true;
-    if (/^┃\s+(?:Pack-Opk-|[0-9a-f]{16,}(?:\s|$))/iu.test(trimmed)) continue;
+    // The pack launches OpenCode either with a per-run `Pack-Opk-<hash>` agent or with the
+    // plain `pack` agent from buildExecutorCommand, which renders `Pack · <model> · <effort>`.
+    if (/^┃\s+(?:Pack-Opk-|Pack\s+·\s|[0-9a-f]{16,}(?:\s|$))/iu.test(trimmed)) continue;
     if (trimmed !== '┃') return false;
   }
   return sawLeftEdge;
