@@ -33,6 +33,7 @@
     "plugins/token-chain-ledger/tests/integration.test.ts": "heavy",
     "plugins/token-chain-ledger/tests/session_cost.test.ts": "light",
     "plugins/token-chain-ledger/tests/writer.test.ts": "light",
+    "scripts/bootstrap.test.ts": "light",
     "scripts/browser-gpt-page-probe.test.ts": "light",
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts": "light",
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts": "light",
