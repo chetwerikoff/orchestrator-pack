@@ -1,0 +1,23 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2017,
+  "declared_paths": [
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/create-issue-stage-record.test.ts"
+  ],
+  "denylist": [
+    ".env",
+    "credentials/",
+    "mining/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/create-issue-stage-record-cli.ts",
+    "scripts/lib/create-issue-stage-record.test.ts"
+  ],
+  "source_revision": "76201e2947472a5cb32510dbcb409f162d1ddb5a"
+}
