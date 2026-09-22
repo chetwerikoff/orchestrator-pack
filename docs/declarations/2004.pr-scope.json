@@ -11,16 +11,16 @@
     "scripts/pr2-foundation/mutation-catalog.test.ts"
   ],
   "denylist": [
-    ".cursor/skills/**",
-    "credentials/**",
-    "packages/core/**",
+    ".cursor/skills/",
+    "credentials/",
+    "packages/core/",
     "scripts/flow-manager-long-running-child.test.ts",
     "scripts/flow-manager-long-running-child.ts",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
-    "scripts/orca-runtime/**",
+    "scripts/orca-runtime/",
     "scripts/vitest-ci-lanes.config.json",
-    "secrets/**",
-    "vendor/**"
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
     "docs/chat-executor-rules.md",
@@ -31,5 +31,5 @@
     "scripts/lib/create-issue-stage-record-cli.ts",
     "scripts/pr2-foundation/mutation-catalog.test.ts"
   ],
-  "source_revision": "89c78de3d43d084ce1607001d2c0ad968c0477a3"
+  "source_revision": "ec986c175ecbf7d44ccc946ae4b9fc66d422c181"
 }
