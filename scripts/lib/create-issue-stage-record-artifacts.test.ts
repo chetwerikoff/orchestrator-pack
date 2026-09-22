@@ -31,6 +31,7 @@ import {
   type StageCompletenessReceiptV1,
   type VerifiedRelayEvidenceV1,
 } from './stage-completeness-core.ts';
+import { validateReviewLaneRecord } from './review-lane-record.ts';
 import {
   buildReviewLaneRouting,
   classifyReviewLaneDeclaration,
@@ -2980,5 +2981,124 @@ describe('Issue #2009 canonical plural capture verdicts', () => {
       issueNumber: input.issueNumber,
     }));
     expect(result.ok).toBe(false);
+  });
+});
+
+describe('Issue #2010 settled receipt sourceVerdicts recovery', () => {
+  const DISAGREE = 'routed review record sourceVerdicts disagree with producer evidence';
+
+  function prepareRoutedReceipt(mutate: (reviewLane: {
+    sourceVerdicts: Record<string, 'accept' | 'material-findings'>;
+    sourceVerdictEvidence: Record<string, Record<string, unknown>>;
+  }) => void) {
+    const input = fixture({ transportClassification: 'complete' });
+    const declaration: ReviewLaneAuthorDeclaration = {
+      schema: 'review-lane-change-set/v1',
+      owner: 'issue-author',
+      entries: [{
+        kind: 'exact',
+        path: 'scripts/chatgpt-browser-turn/driver.ts',
+        behaviors: ['pure-review-lane-selection'],
+      }],
+    };
+    const normalized = normalizeReviewLaneDeclaration(declaration);
+    if (normalized.status !== 'usable') throw new Error('routing fixture input must be usable');
+    const routing = buildReviewLaneRouting(
+      { ...normalized, identity: `${REVISION}:${normalized.identity}` },
+      classifyReviewLaneDeclaration(declaration),
+      REVISION,
+      'architectural-review-attempt',
+      'disputed',
+    );
+    const sourceVerdicts = { '01': 'accept' as const, '02': 'accept' as const, '03': 'accept' as const };
+    const sourceVerdictEvidence = Object.fromEntries(input.reviewComments.map((reviewComment, index) => {
+      const slot = String(index + 1).padStart(2, '0');
+      const name = `pass-01-architectural-review-${slot}.capture.txt`;
+      const body = String(reviewComment.body);
+      const digest = createHash('sha256').update(body).digest('hex');
+      return [slot, {
+        producerEvidenceIdentity: `architectural-review-producer-${slot}`,
+        captureIdentity: `sha256:${digest}:${name}`,
+        terminalClassification: 'complete',
+        captureVerified: true,
+        digestMatches: true,
+        verdictText: 'NO_FINDINGS',
+        rawFindingCount: 0,
+      }];
+    }));
+    const settlement = settleReviewLane(routing, sourceVerdicts);
+    const reviewLane = {
+      routing,
+      finalRequiredSlots: settlement.finalRequiredSlots,
+      sourceVerdicts,
+      sourceVerdictEvidence,
+      conflictDecision: settlement.conflictDecision,
+      settlement,
+    };
+    mutate(reviewLane);
+    const receipt = {
+      schema: 'stage-completeness-receipt/v1',
+      stage: 'architectural-review',
+      stageAttemptId: 'architectural-review-attempt',
+      reviewLane,
+    };
+    const receiptPath = join(input.dir, 'stage-completeness-receipt-architectural-review-attempt.json');
+    const originalBytes = Buffer.from(`${JSON.stringify(receipt)}\n`);
+    writeFileSync(receiptPath, originalBytes);
+    return { input, receiptPath, originalBytes };
+  }
+
+  it('rebuilds a same-stageAttemptId receipt whose sourceVerdicts disagree with complete producer evidence', () => {
+    const prepared = prepareRoutedReceipt((reviewLane) => {
+      reviewLane.sourceVerdicts = { '01': 'material-findings', '02': 'accept', '03': 'accept' };
+    });
+    const result = reconcileCreateIssueStage({
+      reviewDir: prepared.input.dir,
+      stageEvidencePath: prepared.input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: transport(),
+    });
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.alreadySettled).not.toBe(true);
+    const receipt = JSON.parse(readFileSync(prepared.receiptPath, 'utf8')) as { reviewLane: { sourceVerdicts: Record<string, string> } };
+    expect(validateReviewLaneRecord(receipt.reviewLane)).toEqual({ ok: true, errors: [] });
+    expect(receipt.reviewLane.sourceVerdicts).toEqual({ '01': 'accept', '02': 'accept', '03': 'accept' });
+  });
+
+  it('leaves an already-matching settled receipt untouched', () => {
+    const prepared = prepareRoutedReceipt(() => {});
+    const result = reconcileCreateIssueStage({
+      reviewDir: prepared.input.dir,
+      stageEvidencePath: prepared.input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: transport(),
+    });
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.alreadySettled).toBe(true);
+    expect(readFileSync(prepared.receiptPath).equals(prepared.originalBytes)).toBe(true);
+  });
+
+  it('fails closed when producer evidence cannot rebuild the routed record', () => {
+    const prepared = prepareRoutedReceipt((reviewLane) => {
+      delete reviewLane.sourceVerdictEvidence['03'];
+    });
+    const result = reconcileCreateIssueStage({
+      reviewDir: prepared.input.dir,
+      stageEvidencePath: prepared.input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: transport(),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.alreadySettled).not.toBe(true);
+    expect(result.errors).toContain(DISAGREE);
+    expect(readFileSync(prepared.receiptPath).equals(prepared.originalBytes)).toBe(true);
+    const receipt = JSON.parse(readFileSync(prepared.receiptPath, 'utf8')) as {
+      reviewLane: { sourceVerdicts: Record<string, string>; sourceVerdictEvidence: Record<string, unknown> };
+    };
+    expect(receipt.reviewLane.sourceVerdictEvidence['03']).toBeUndefined();
+    expect(receipt.reviewLane.sourceVerdicts['03']).toBe('accept');
   });
 });
