@@ -23,7 +23,7 @@ import { resolveWakeSupervisorStateRoot } from './pr2-foundation/wake-supervisor
 
 const UNBOXED_BOX_CHROME = /^[▀▄]+$/u;
 const UNBOXED_CTRL_C = /^ctrl\+c to stop\b/iu;
-const UNBOXED_STATUS_FOOTER = /^(?:Cursor|GPT-\S+|Composer|Grok|Claude|Gemini|Llama|Mistral|DeepSeek|Qwen|Kimi)\s.+(?:\d+(?:\.\d+)?%|Run Everything)/iu;
+const UNBOXED_STATUS_FOOTER = /^(?:Cursor|GPT-\S+|Composer|Grok|Claude)\s.+(?:\d+(?:\.\d+)?%|Run Everything)/iu;
 const UNBOXED_CWD_FOOTER = /^(?:~[/\\]|[A-Za-z]:[\\/]|\/)/u;
 const EMPTY_COMPOSER = /^(?:→\s*)?Add a follow-up\b/iu;
 export const ORCHESTRATION_NOTICE = /^You have \d+ orchestration messages?\.(?: .*)? Run `orca orchestration check(?: --run \S+| --terminal \S+)?`\.$/iu;
@@ -700,18 +700,9 @@ function settleComposerObservation(
   const kind = classifyCursorComposer(preview);
   const fingerprint = exactOrchestrationPointerFingerprint(preview);
   if (kind === 'empty' && !fingerprint) {
-    const ownEnter = state.submittedFingerprint.get(key);
     clearObservation(state, key);
     if (!state.ambiguousSubmittedFingerprints.has(key)) state.submittedFingerprint.delete(key);
-    // Absence of a fingerprint is not consumption. pointer_consumed requires the
-    // fingerprint of an Enter this pack already submitted for this worker.
-    if (requireConsumption && ownEnter) {
-      return { ...base, ok: true, unsent: false, enter: false, reason: 'pointer_consumed' };
-    }
-    if (requireConsumption) {
-      return { ...base, ok: false, unsent: true, enter: false, reason: 'submission_unconfirmed' };
-    }
-    return { ...base, ok: true, unsent: false, enter: false, reason: 'composer_empty' };
+    return { ...base, ok: true, unsent: false, enter: false, reason: requireConsumption ? 'pointer_consumed' : 'composer_empty' };
   }
   if (!fingerprint) {
     clearObservation(state, key);
@@ -1336,7 +1327,7 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   if (existing && now < existing.nextEligibleAt) {
     return deliveryNoEffect('orchestration_episode_backoff', worker, false);
   }
-  if (!alreadyShown && (previewUnrecognized || existing?.state !== 'pointer-visible')) {
+  if (!alreadyShown && existing?.state !== 'pointer-visible') {
     const pointerAbsent = composerKind === 'empty' && !previewUnrecognized;
     const refusalReason = previewUnrecognized
       ? 'composer_preview_unrecognized'
@@ -1385,42 +1376,40 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     };
     if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
   }
-  const watch = createUnsentComposerWatchState();
-  const recordedEnter = state?.submittedFingerprint?.[key];
-  if (
-    !observedPointer
-    && recordedEnter
-    && pointerMatchesDelivery(recordedEnter, message, worker)
-  ) {
-    watch.submittedFingerprint.set(workerKey(worker.identity), recordedEnter);
+  let result: UnsentComposerSubmitResult;
+  if (claimExists && existing?.state === 'pointer-visible' && !alreadyShown && composerKind === 'empty') {
+    // A missing pointer after a prior claim is the consumption witness; do not re-Enter.
+    const liveness = currentLiveness(deps.submitDeps, worker.identity);
+    if (liveness === 'gone') return deliveryNoEffect(`worker_${liveness}`, worker);
+    if (state) {
+      state.episodes[key] = {
+        ...existing!,
+        state: 'confirmed',
+        nextEligibleAt: now + ORCHESTRATION_RECONCILE_WINDOW_MS,
+      };
+      if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
+    }
+    const base = { terminal: worker.identity.id, generation: worker.identity.generation };
+    result = { ok: true, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: true, reason: 'pointer_consumed' }] };
+  } else {
+    const terminal = settleComposerObservation(
+      worker,
+      { watch: true },
+      deps.submitDeps,
+      createUnsentComposerWatchState(),
+      shown,
+      true,
+      true,
+      true,
+    );
+    result = {
+      ok: terminal.ok,
+      dryRun: false,
+      watch: false,
+      terminals: [terminal],
+    };
   }
-  const settled = settleComposerObservation(
-    worker,
-    { watch: true },
-    deps.submitDeps,
-    watch,
-    shown,
-    true,
-    true,
-    true,
-  );
-  const result: UnsentComposerSubmitResult = {
-    ok: settled.ok,
-    dryRun: false,
-    watch: false,
-    terminals: [settled],
-  };
   const terminal = result.terminals[0];
-  if (
-    state
-    && observedPointer
-    && terminal?.dispatchStatus === 'dispatched'
-    && (terminal.reason === 'submission_unconfirmed' || terminal.reason === 'enter_sent')
-  ) {
-    const fingerprints = state.submittedFingerprint ?? {};
-    fingerprints[key] = observedPointer;
-    state.submittedFingerprint = fingerprints;
-  }
   if (state && (terminal?.reason === 'enter_sent' || terminal?.reason === 'pointer_consumed')) {
     state.episodes[key] = {
       ...state.episodes[key]!,
