@@ -3,7 +3,8 @@
   "issue_number": 2040,
   "declared_paths": [
     "scripts/lib/create-issue-stage-record-artifacts.test.ts",
-    "scripts/lib/create-issue-stage-record-artifacts.ts"
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/create-issue-stage-record.test.ts"
   ],
   "denylist": [
     ".env",
@@ -15,7 +16,8 @@
   ],
   "allowed_roots": [
     "scripts/lib/create-issue-stage-record-artifacts.test.ts",
-    "scripts/lib/create-issue-stage-record-artifacts.ts"
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/create-issue-stage-record.test.ts"
   ],
   "source_revision": "e8f24678e82bded8c81cc02f392ec325d79a9030"
 }
