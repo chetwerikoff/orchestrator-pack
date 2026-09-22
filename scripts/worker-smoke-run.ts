@@ -1931,10 +1931,19 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
         producer: SMOKE_REPORT_PRODUCER, orcaExecutable: adapter.id,
       }, { issueNumber: options.issueNumber, prNumber: options.prNumber, headSha: options.headSha }, { executionMode: 'carry-only' });
       const report = normalized.report;
-      if (report.result === 'PASS' && (options.smokeActor ?? 'worker-owned') === 'worker-owned') {
-        orderingBinding = null;
+      const workerOwnedCarryOnlyPass = report.result === 'PASS'
+        && (options.smokeActor ?? 'worker-owned') === 'worker-owned';
+      if (workerOwnedCarryOnlyPass) {
+        orderingOutcome = 'failed';
+        orderingFailureKind = 'retryable';
       }
-      publishSmokeReport(report, options, carryPublication, publishComment, () => { recordPublishedOrdering(report, true); });
+      publishSmokeReport(
+        report,
+        options,
+        carryPublication,
+        publishComment,
+        workerOwnedCarryOnlyPass ? undefined : () => { recordPublishedOrdering(report, true); },
+      );
       let postSmoke: PostSmokeReadinessResult | undefined;
       if (report.result === 'PASS' && !options.dryRun) {
         try {
