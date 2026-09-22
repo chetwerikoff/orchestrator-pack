@@ -468,6 +468,7 @@ export async function runSupervisedWorkerStart(input: {
       file,
       expected: expectedCurrent,
       adapter,
+      ...(terminal ? { requestedTerminalId: terminal } : {}),
     });
     if (admission.status !== 'replaceable') {
       return { ok: false, reason: admission.status };

@@ -60,6 +60,22 @@ function terminallyFailedMissingRetainedWorkerShow() {
   } as const;
 }
 
+function terminallyFailedExactLiveRetainedWorkerShow(handle = 'term-retained') {
+  return {
+    dispatch: { status: 'failed', last_heartbeat_at: null },
+    worker: { agent_terminal_handle: handle },
+    terminal: { handle },
+    observation: { exactWorker: true, status: 'live' },
+    terminalResource: {
+      terminalHandle: handle,
+      worktreeId: 'repo::retained',
+      originDispatchId: 'dispatch-1',
+      ownerDispatchId: 'dispatch-1',
+      releaseState: 'retained',
+    },
+  } as const;
+}
+
 describe('Orca async transport envelope classification', () => {
   it('classifies a non-zero child exit with an error envelope as a runtime response', async () => {
     const directory = mkdtempSync(join(process.cwd(), '.tmp-orca-async-envelope-'));
@@ -1132,6 +1148,32 @@ describe('Orca assignment resolution', () => {
       ['orchestration', 'worker-show', '--dispatch', 'dispatch-1'],
       ['orchestration', 'worker-show', '--dispatch', 'dispatch-1'],
     ]);
+  });
+
+  it('does not classify a terminally failed exact live retained worker-show as gone', () => {
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      expect(args).toEqual(['orchestration', 'worker-show', '--dispatch', 'dispatch-1']);
+      return { ok: true, result: terminallyFailedExactLiveRetainedWorkerShow() };
+    });
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+    expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1' })).toEqual({
+      status: 'failed',
+      operation: 'resolve_assignment_worker',
+      reason: 'assignment_target_inactive',
+    });
+    expect(adapter.observeAssignmentLifecycle({ provider: 'orca', bindingKey: 'dispatch-1' })).toEqual({
+      status: 'ok',
+      value: {
+        kind: 'terminal',
+        released: false,
+        workerId: 'term-retained',
+      },
+    });
+    expect(runJson.mock.calls.map((call) => call[0])).toEqual([
+      ['orchestration', 'worker-show', '--dispatch', 'dispatch-1'],
+      ['orchestration', 'worker-show', '--dispatch', 'dispatch-1'],
+    ]);
+    expect(runJson.mock.calls.some((call) => `${call[0]?.[0] ?? ''} ${call[0]?.[1] ?? ''}` === 'terminal close')).toBe(false);
   });
 
   it('keeps exactWorker false unresolved while the dispatch is still dispatched', () => {
