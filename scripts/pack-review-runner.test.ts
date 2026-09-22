@@ -298,13 +298,22 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
     expect(observed?.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ surfaceClass: 'listing', cause: 'surface_skipped' }),
       expect.objectContaining({ surfaceClass: 'non_chat', cause: 'surface_skipped' }),
-      expect.objectContaining({ surfaceClass: 'foreign_chat', title: 'Broken foreign', cause: 'foreign_inspection_unavailable' }),
+      expect.objectContaining({ surfaceClass: 'ownership_unknown', title: 'Broken foreign', cause: 'ownership_ambiguous' }),
       expect.objectContaining({ surfaceClass: 'foreign_chat', title: 'Foreign owner', cause: 'foreign_owner' }),
       expect.objectContaining({ surfaceClass: 'owned_conversation', title: 'Owned', cause: 'owned_marker' }),
     ]));
     const foreignOwner = observed?.diagnostics?.find((item) => item.cause === 'foreign_owner')?.foreignOwner;
     expect(foreignOwner).toMatch(/^foreign_owner:[0-9a-f]{12}$/u);
     expect(foreignOwner).not.toContain(foreignMarker);
+  });
+
+  it('keeps a successful census without the exact owned marker observation-unavailable', async () => {
+    const observed = await observeGptPackReviewAttempt(gptRun('2026-08-30T00:00:00.000Z'), Date.parse('2026-08-30T00:01:00.000Z'),
+      gptObservationDeps({ markerPresent: false, generating: false }));
+    expect(observed).toMatchObject({ state: 'observation_unavailable', replacementEligible: false });
+    expect(observed?.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ surfaceClass: 'foreign_chat', cause: 'foreign_conversation' }),
+    ]));
   });
 
   it('fails closed with ownership_unknown when a legacy no-locator conversation cannot be inspected', async () => {

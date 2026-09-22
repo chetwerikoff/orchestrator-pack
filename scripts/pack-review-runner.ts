@@ -22,8 +22,6 @@ import {
   INSPECTION_EXPRESSION,
   classifyChatGptSurfaceUrl,
   defaultDependencies as browserCdpDependencies,
-  isConversationUrl,
-  normalizeConversationUrl,
   toCompatibleTargets,
   type ProbeDependencies,
 } from './browser-gpt-page-probe.ts';
@@ -98,6 +96,7 @@ import {
   type PackReviewRunRecord,
   type PackReviewRunStatus,
   type PackReviewSourceSlotRecord,
+  type PackReviewSourceSlotAttemptHistory,
 } from './lib/pack-review-run-store.ts';
 import {
   createGithubReviewTransport,
@@ -1701,11 +1700,6 @@ export async function observeGptPackReviewAttempt(
       rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
       continue;
     }
-    const retainedConversationRaw = trim((observation as unknown as { conversation_url?: unknown }).conversation_url);
-    let retainedConversation: string | undefined;
-    if (retainedConversationRaw && isConversationUrl(retainedConversationRaw)) {
-      try { retainedConversation = normalizeConversationUrl(retainedConversationRaw); } catch { retainedConversation = undefined; }
-    }
     let targets: ReturnType<typeof toCompatibleTargets>;
     try { targets = toCompatibleTargets(await listTargets(cdp)); } catch {
       rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
@@ -1719,35 +1713,19 @@ export async function observeGptPackReviewAttempt(
         addDiagnostic({ slotId: slot.slotId, invocationId: slot.invocationId, surfaceClass: surface, title: target.title, cause: 'surface_skipped' });
         continue;
       }
-      const retainedLocatorMatch = retainedConversation !== undefined && target.normalized_url === retainedConversation;
       let inspected: unknown;
       try { inspected = await evaluate(target, INSPECTION_EXPRESSION); } catch {
-        if (retainedConversation && !retainedLocatorMatch) {
-          addDiagnostic({ slotId: slot.slotId, invocationId: slot.invocationId, surfaceClass: 'foreign_chat', title: target.title, cause: 'foreign_inspection_unavailable' });
-          continue;
-        }
         addDiagnostic({ slotId: slot.slotId, invocationId: slot.invocationId, surfaceClass: 'ownership_unknown', title: target.title, cause: 'ownership_ambiguous' });
-        rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
-        continue sourceSlotLoop;
+        continue;
       }
       if (!inspected || typeof inspected !== 'object' || Array.isArray(inspected)) {
-        if (retainedConversation && !retainedLocatorMatch) {
-          addDiagnostic({ slotId: slot.slotId, invocationId: slot.invocationId, surfaceClass: 'foreign_chat', title: target.title, cause: 'foreign_surface_unknown' });
-          continue;
-        }
         addDiagnostic({ slotId: slot.slotId, invocationId: slot.invocationId, surfaceClass: 'ownership_unknown', title: target.title, cause: 'ownership_ambiguous' });
-        rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
-        continue sourceSlotLoop;
+        continue;
       }
       const snapshot = inspected as Record<string, unknown>;
       if (snapshot.status !== 'ok' || snapshot.nodes_truncated === true) {
-        if (retainedConversation && !retainedLocatorMatch) {
-          addDiagnostic({ slotId: slot.slotId, invocationId: slot.invocationId, surfaceClass: 'foreign_chat', title: target.title, cause: snapshot.nodes_truncated === true ? 'foreign_nodes_truncated' : 'foreign_surface_unknown' });
-          continue;
-        }
         addDiagnostic({ slotId: slot.slotId, invocationId: slot.invocationId, surfaceClass: 'ownership_unknown', title: target.title, cause: 'ownership_ambiguous' });
-        rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
-        continue sourceSlotLoop;
+        continue;
       }
       const nodes = Array.isArray(snapshot.nodes) ? snapshot.nodes : [];
       let ownedMarkerFound = false;
@@ -1775,7 +1753,10 @@ export async function observeGptPackReviewAttempt(
       else addDiagnostic({ slotId: slot.slotId, invocationId: slot.invocationId, surfaceClass: 'foreign_chat', title: target.title, cause: foreignOwner ? 'foreign_owner' : 'foreign_conversation', ...(foreignOwner ? { foreignOwner } : {}) });
     }
     if (owned.length > 1) { rememberBlocked({ state: 'ownership_ambiguous', replacementEligible: false, slotId: slot.slotId }); continue; }
-    if (owned.length === 0) { replacementEligibleSlotIds.push(slot.slotId); continue; }
+    if (owned.length === 0) {
+      rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
+      continue;
+    }
 
     const { snapshot, userDocumentOrdinal } = owned[0]!;
     const generation = snapshot.generation_in_progress;
@@ -2398,11 +2379,21 @@ async function runGptSourceBatch(options: {
     let invocationId = randomUUID();
     const markInvocationStarted = async (admissionStartedAt: number): Promise<void> => {
       const launchBinding = resolveLaunchBinding();
+      const priorSlot = round.sourceSlots.find((slot) => slot.slotId === slotId);
+      const priorHistory: PackReviewSourceSlotAttemptHistory[] = priorSlot?.attemptHistory ?? [];
+      const priorAttempt = priorSlot?.invocationId && priorSlot.attemptOrdinal !== undefined && priorSlot.terminalClass
+        ? { invocationId: priorSlot.invocationId, attemptOrdinal: priorSlot.attemptOrdinal, terminalClass: priorSlot.terminalClass }
+        : undefined;
+      const attemptHistory = priorAttempt && attemptOrdinal > priorAttempt.attemptOrdinal
+        && !priorHistory.some((entry) => entry.invocationId === priorAttempt.invocationId)
+        ? [...priorHistory, priorAttempt]
+        : priorHistory;
       round = updateGptRoundSlot(options.run.id, round, slotId, {
         lifecycle: 'invocation_started',
         admissionStartedAtUtc: new Date(admissionStartedAt).toISOString(),
         attemptOrdinal,
         invocationId,
+        ...(attemptHistory.length > 0 ? { attemptHistory } : {}),
         terminalClass: undefined,
         terminalResult: undefined,
         payload: undefined,

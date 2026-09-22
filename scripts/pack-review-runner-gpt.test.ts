@@ -1455,6 +1455,11 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     expect(after?.reviewRound?.sourceSlots.map((slot) => slot.attemptOrdinal)).toEqual([1, 3, 1]);
     const replacedAfter = after!.reviewRound!.sourceSlots.find((slot) => slot.slotId === 'source-02')!;
     expect(replacedAfter.invocationId).not.toBe(replacedBefore.invocationId);
+    expect(replacedAfter.attemptHistory).toEqual([{
+      invocationId: replacedBefore.invocationId,
+      attemptOrdinal: replacedBefore.attemptOrdinal,
+      terminalClass: replacedBefore.terminalClass,
+    }]);
     expect(after?.reviewRound?.sourceSlots.every((slot) => slot.terminalClass === 'complete_clean')).toBe(true);
     expect(after!.reviewRound!.sourceSlots
       .filter((slot) => slot.slotId !== 'source-02')
