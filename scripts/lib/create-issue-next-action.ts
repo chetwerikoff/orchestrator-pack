@@ -97,7 +97,6 @@ export function validateCreateIssueManagerResult(value: unknown): string[] {
     errors.push(...validateZeroSendReason(result.reason));
   }
   if (Object.prototype.hasOwnProperty.call(result, 'blocked_on')) {
-    if (result.ok !== false) errors.push('manager result.blocked_on requires ok=false');
     if (nextAction !== null) errors.push('manager result.blocked_on requires nextAction=null');
     if (result.cause === 'stale_next_action') errors.push('stale manager result must not carry blocked_on');
     errors.push(...validateCreateIssueBlockedOn(result.blocked_on));
