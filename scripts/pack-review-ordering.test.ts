@@ -178,7 +178,7 @@ describe('Issue #1436 smoke/review ordering', () => {
     })).toThrow('smoke_ordering_worker_owned_owner_mismatch');
   });
 
-  it('reconciles a real SIGKILLed supervisor from exact launcher final evidence', async () => {
+  it('does not close worker-owned admission on a carry-only PASS after the supervisor is gone', async () => {
     const root = mkdtempSync(join(tmpdir(), 'pack-review-ordering-sigkill-final-'));
     roots.push(root);
     const storeRoot = join(root, 'review-store');
@@ -243,13 +243,12 @@ describe('Issue #1436 smoke/review ordering', () => {
     const previousStoreRoot = process.env.PACK_REVIEW_RUN_STORE_ROOT;
     process.env.PACK_REVIEW_RUN_STORE_ROOT = storeRoot;
     try {
-      expect(() => beginWorkerOwnedAt(root, prNumber, 'attempt-replacement'))
-        .toThrow('smoke_ordering_worker_owned_already_passed');
+      const replacement = beginWorkerOwnedAt(root, prNumber, 'attempt-replacement');
+      expect(replacement?.attemptId).toBe('attempt-replacement');
       expect(readPackReviewAuthority(prNumber, options)?.smokeOrdering?.workerOwned).toMatchObject({
-        attemptId: runId,
-        supervisorPid,
-        runId,
-        status: 'passed',
+        attemptId: 'attempt-replacement',
+        runId: 'attempt-replacement',
+        status: 'started',
       });
     } finally {
       if (previousStoreRoot === undefined) delete process.env.PACK_REVIEW_RUN_STORE_ROOT;
