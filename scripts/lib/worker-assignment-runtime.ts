@@ -15,6 +15,7 @@ import {
   type WorkerAssignment,
   type WorkerAssignmentRecord,
 } from './worker-assignment-store.ts';
+import { hasRecordedDispatchTerminalMail } from '../orca-runtime/dispatch-terminal-mail.ts';
 
 export interface ResolvedWorkerAssignment {
   readonly assignment: WorkerAssignment;
@@ -127,6 +128,19 @@ export type WorkerAssignmentResolution =
 
 function isNumberedAssignment(assignment: WorkerAssignmentRecord): assignment is WorkerAssignment {
   return Number.isInteger(assignment.issueNumber) && Number(assignment.issueNumber) > 0;
+}
+
+function canonicalTerminalHandle(value: string): string {
+  const trimmed = value.trim();
+  return trimmed.toLowerCase().startsWith('terminal:')
+    ? trimmed.slice('terminal:'.length).trim()
+    : trimmed;
+}
+
+function sameTerminalHandle(left: string, right: string): boolean {
+  const canonicalLeft = canonicalTerminalHandle(left);
+  const canonicalRight = canonicalTerminalHandle(right);
+  return canonicalLeft.length > 0 && canonicalLeft === canonicalRight;
 }
 
 function sameLogicalAssignment(left: WorkerAssignmentRecord | undefined, right: WorkerAssignmentRecord): boolean {
@@ -243,9 +257,11 @@ export function resolveCurrentWorkerAssignmentTarget(input: {
 /**
  * Admit a logical replacement while the exact expected assignment is fenced.
  * Remote current ownership needs only exact-current serialization. Current local
- * ownership additionally requires affirmative assignment-resolution `gone`.
- * A resolved busy/idle worker is live; unknown or contradictory liveness is not
- * absence evidence and fails closed.
+ * ownership additionally requires affirmative assignment-resolution `gone`, or a
+ * failed exact live retained worker on the same requested terminal. A still-
+ * dispatched resolved busy/idle worker is live and not replaceable. Unknown or
+ * contradictory liveness is not absence evidence and fails closed. This path
+ * does not stop or close a runtime target.
  */
 export async function admitCurrentWorkerAssignmentReplacement(input: {
   readonly file: string;
@@ -253,6 +269,8 @@ export async function admitCurrentWorkerAssignmentReplacement(input: {
   readonly adapter: RuntimeAdapter;
   readonly timeoutMs?: number;
   readonly observationWindowMs?: number;
+  readonly requestedTerminalId?: string;
+  readonly env?: NodeJS.ProcessEnv;
 }): Promise<WorkerAssignmentReplacementAdmission> {
   const fenced = await withCurrentWorkerAssignmentFence(input.file, input.expected, () => {
     if (input.expected.kind !== 'local') {
@@ -287,6 +305,24 @@ export async function admitCurrentWorkerAssignmentReplacement(input: {
     }
     if (target.status === 'remote_not_applicable') {
       return { status: 'assignment_stale' } as const;
+    }
+    const requestedTerminalId = input.requestedTerminalId?.trim() ?? '';
+    if (target.status === 'target_unresolved' && requestedTerminalId) {
+      const observed = observeCurrentWorkerAssignmentLifecycle({
+        file: input.file,
+        expected: input.expected,
+        adapter: input.adapter,
+        timeoutMs: input.timeoutMs,
+      });
+      if (
+        observed.status === 'terminal'
+        && observed.released !== true
+        && observed.workerId
+        && sameTerminalHandle(requestedTerminalId, observed.workerId)
+        && hasRecordedDispatchTerminalMail(input.expected.bindingKey, { env: input.env })
+      ) {
+        return { status: 'replaceable', expected: input.expected } as const;
+      }
     }
     return { status: target.status } as const;
   });

@@ -71,6 +71,26 @@ function currentOrcaHeartbeat(ageMs = 60_000): string {
   return new Date(Date.now() - ageMs).toISOString().replace('T', ' ').replace(/\.\d{3}Z$/u, '');
 }
 
+function terminallyFailedExactLiveRetainedShow(handle = 'term-retained') {
+  return {
+    observation: { exactWorker: true, status: 'live' },
+    dispatch: { status: 'failed', last_heartbeat_at: null },
+    terminal: { handle },
+    worker: { agent_terminal_handle: handle },
+    terminalResource: { releaseState: 'retained', terminalHandle: handle, worktreeId: 'repo::assignment-retained', originDispatchId: 'dispatch-1', ownerDispatchId: 'dispatch-1' },
+  } as const;
+}
+
+function missingRetainedWorkerShow() {
+  return {
+    observation: { exactWorker: false, status: 'missing' },
+    dispatch: { status: 'failed', last_heartbeat_at: null },
+    terminal: null,
+    worker: { agent_terminal_handle: 'term-missing' },
+    terminalResource: { releaseState: 'retained', terminalHandle: 'term-missing', worktreeId: 'repo::assignment-missing', originDispatchId: 'dispatch-1', ownerDispatchId: 'dispatch-1' },
+  } as const;
+}
+
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -289,6 +309,52 @@ describe('real Orca assignment target resolution', () => {
     })).toEqual({ status: 'target_unresolved' });
   });
 
+  it('keeps the missing-terminal gone path replaceable after a failed dispatch', async () => {
+    const file = assignmentFile();
+    const assignment = await publish(file, { bindingKey: 'dispatch-1' });
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: true,
+      result: missingRetainedWorkerShow(),
+    }));
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+    expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))
+      .toEqual({ status: 'gone', assignment });
+    expect(await admitCurrentWorkerAssignmentReplacement({
+      file,
+      expected: assignment,
+      adapter,
+      requestedTerminalId: 'term-missing',
+    })).toEqual({ status: 'replaceable', expected: assignment });
+  });
+
+  it('keeps exited plus released as gone and replaceable', async () => {
+    const file = assignmentFile();
+    const assignment = await publish(file, { bindingKey: 'dispatch-1' });
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: true,
+      result: {
+        worker: { agent_terminal_handle: 'term-owned' },
+        terminal: null,
+        observation: { exactWorker: true, status: 'exited' },
+        terminalResource: {
+          terminalHandle: 'term-owned',
+          worktreeId: 'repo::worktree',
+          originDispatchId: 'dispatch-1',
+          ownerDispatchId: 'dispatch-1',
+          releaseState: 'released',
+        },
+      },
+    }));
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+    expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))
+      .toEqual({ status: 'gone', assignment, workerId: 'term-owned' });
+    expect(await admitCurrentWorkerAssignmentReplacement({
+      file,
+      expected: assignment,
+      adapter,
+    })).toEqual({ status: 'replaceable', expected: assignment });
+  });
+
   it('admits replacement only for the pinned local dispatch_not_found producer envelope', async () => {
     const file = assignmentFile();
     const assignment = await publish(file, { bindingKey: 'dispatch-exact-gone' });
@@ -393,6 +459,76 @@ describe('real Orca assignment target resolution', () => {
     const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
     expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))
       .toEqual({ status: 'target_unresolved' });
+  });
+
+  it('admits same-terminal continuation for a failed exact live retained worker', async () => {
+    const file = assignmentFile();
+    const assignment = await publish(file, { bindingKey: 'dispatch-1' });
+    const ledger = path.join(path.dirname(file), 'terminal-mail-ledger.json');
+    const mailEnv = { ...process.env, OPK_DISPATCH_TERMINAL_MAIL_LEDGER: ledger };
+    const shown = {
+      ...terminallyFailedExactLiveRetainedShow(),
+      dispatch: { id: 'dispatch-1', status: 'failed', last_heartbeat_at: null, run_id: 'run-retained' },
+    };
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'orchestration worker-show') return { ok: true, result: shown };
+      if (operation === 'orchestration send') return { ok: true, result: { message_id: 'msg-terminal' } };
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env: mailEnv });
+    expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))
+      .toEqual({ status: 'target_unresolved' });
+    expect(await admitCurrentWorkerAssignmentReplacement({
+      file,
+      expected: assignment,
+      adapter,
+      requestedTerminalId: 'term-retained',
+      env: mailEnv,
+    })).toEqual({ status: 'replaceable', expected: assignment });
+    expect(runJson.mock.calls.some((call) => call[0]?.slice(0, 2).join(' ') === 'orchestration send')).toBe(true);
+    expect(runJson.mock.calls.some((call) => call[0]?.slice(0, 2).join(' ') === 'terminal close')).toBe(false);
+  });
+
+  it('does not admit same-terminal continuation when terminal-mail send fails', async () => {
+    const file = assignmentFile();
+    const assignment = await publish(file, { bindingKey: 'dispatch-1' });
+    const ledger = path.join(path.dirname(file), 'terminal-mail-ledger.json');
+    const mailEnv = { ...process.env, OPK_DISPATCH_TERMINAL_MAIL_LEDGER: ledger };
+    const shown = {
+      ...terminallyFailedExactLiveRetainedShow(),
+      dispatch: { id: 'dispatch-1', status: 'failed', last_heartbeat_at: null, run_id: 'run-retained' },
+    };
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'orchestration worker-show') return { ok: true, result: shown };
+      if (operation === 'orchestration send') return { ok: false, error: { code: 'send_failed', message: 'send failed' } };
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env: mailEnv });
+    expect(await admitCurrentWorkerAssignmentReplacement({
+      file,
+      expected: assignment,
+      adapter,
+      requestedTerminalId: 'term-retained',
+      env: mailEnv,
+    })).toEqual({ status: 'target_unresolved' });
+  });
+
+  it('refuses a different terminal while a failed exact live retained worker is still present', async () => {
+    const file = assignmentFile();
+    const assignment = await publish(file, { bindingKey: 'dispatch-1' });
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: true,
+      result: terminallyFailedExactLiveRetainedShow(),
+    }));
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+    expect(await admitCurrentWorkerAssignmentReplacement({
+      file,
+      expected: assignment,
+      adapter,
+      requestedTerminalId: 'term-other',
+    })).toEqual({ status: 'target_unresolved' });
   });
 
   it('keeps worker-show transport failure unresolved rather than treating it as gone', async () => {
