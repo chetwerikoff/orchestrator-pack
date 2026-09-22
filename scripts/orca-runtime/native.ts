@@ -72,6 +72,8 @@ export interface OrcaTerminalHandle {
   worktreeId?: string;
   title?: string | null;
   command?: string | null;
+  /** Host-reported pane program. Absent on shells. Not a launch command. */
+  agentIdentity?: string | null;
   ptyId?: string | null;
   incarnationId?: string | null;
 }

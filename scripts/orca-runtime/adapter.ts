@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
+import { readdirSync, readFileSync } from 'node:fs';
 import { runProcessSync } from '../kernel/subprocess.ts';
 import { promisify } from 'node:util';
 import {
@@ -27,6 +28,7 @@ import {
   type RuntimeWorkerTaskBindingObservation,
   type RuntimeWorkerTaskBindingOutcome,
 } from '../runtime/contracts.ts';
+import { openCodeControlPort } from '../executor-profile-policy.ts';
 import {
   parseOrcaJsonOutput,
   runOrcaJson,
@@ -55,14 +57,35 @@ const OPEN_CODE_HTTP_SCRIPT = [
   "}",
 ].join('\n');
 
-function openCodeUrlFromCommand(command: string): string | undefined {
+
+// Cursor panes answer provider/observation "unsupported" as soon as the
+// receipt exists, so they do not pay this wait. The cost lands only on a
+// host that actually observes submission. The seconds are that call's
+// bounded budget: floor 1 because the CLI accepts only a positive integer,
+// ceiling 3600 because that is the CLI's own maximum.
+const CLI_WAIT_SUBMIT_FLOOR_SECONDS = 1;
+const CLI_WAIT_SUBMIT_CEILING_SECONDS = 3600;
+const DEFAULT_CALL_BUDGET_MS = 10_000;
+
+function classifyObservedSubmission(prompt: unknown): 'observed' | 'timeout' | 'malformed' | 'acceptance-only' {
+  if (prompt === undefined) return 'acceptance-only';
+  if (!prompt || typeof prompt !== 'object' || Array.isArray(prompt)) return 'malformed';
+  const receipt = prompt as { readonly provider?: unknown; readonly observation?: unknown; readonly stages?: unknown };
+  if (typeof receipt.provider !== 'string' || typeof receipt.observation !== 'string' || !Array.isArray(receipt.stages)) {
+    return 'malformed';
+  }
+  if (!receipt.stages.every((stage) => typeof stage === 'string')) return 'malformed';
+  if (receipt.provider === 'unsupported' || receipt.provider === 'old-host' || receipt.observation === 'unsupported') {
+    return 'acceptance-only';
+  }
+  return receipt.stages.includes('turn_started') ? 'observed' : 'timeout';
+}
+
+function openCodeLaunchControl(command: string): { readonly url?: string; readonly agent?: string } | undefined {
   if (!/(?:^|\s)opencode(?:\s|$)/iu.test(command)) return undefined;
-  const hostname = command.match(/--hostname\s+(?:'([^']+)'|"([^"]+)"|(\S+))/iu);
-  const port = command.match(/--port\s+(?:'([1-9]\d*)'|"([1-9]\d*)"|([1-9]\d*))/iu);
-  const host = hostname?.[1] ?? hostname?.[2] ?? hostname?.[3];
-  const number = port?.[1] ?? port?.[2] ?? port?.[3];
-  if (host !== '127.0.0.1' || !number) return undefined;
-  return `http://${host}:${number}`;
+  const agent = openCodeAgentFromCommand(command);
+  if (!agent) return {};
+  return { url: `http://127.0.0.1:${openCodeControlPort(agent)}`, agent };
 }
 
 function openCodeAgentFromCommand(command: string): string | undefined {
@@ -71,6 +94,49 @@ function openCodeAgentFromCommand(command: string): string | undefined {
   const agent = match?.[1] ?? match?.[2] ?? match?.[3];
   return agent?.trim() || undefined;
 }
+
+
+function openCodeHealthFromBody(body: string): { readonly healthy: true; readonly version: string } | undefined {
+  let parsed: unknown;
+  try { parsed = JSON.parse(body); } catch { return undefined; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+  const health = parsed as Record<string, unknown>;
+  if (health.healthy !== true || typeof health.version !== 'string' || !health.version.trim()) return undefined;
+  return { healthy: true, version: health.version };
+}
+
+function readLocalPaneCommandLine(input: { readonly ptyId: string; readonly handle: string }): string | undefined {
+  const ptyId = input.ptyId.trim();
+  const handle = input.handle.trim();
+  if (!ptyId || !handle) return undefined;
+  let entries: string[];
+  try { entries = readdirSync('/proc'); } catch { return undefined; }
+  let fallback: string | undefined;
+  for (const entry of entries) {
+    if (!/^\d+$/u.test(entry)) continue;
+    let rows: string[];
+    try { rows = readFileSync(`/proc/${entry}/environ`).toString('utf8').split('\0'); } catch { continue; }
+    const linked = rows.some((row) => {
+      const separator = row.indexOf('=');
+      const value = separator >= 0 ? row.slice(separator + 1) : row;
+      return value === handle || value === ptyId;
+    });
+    if (!linked) continue;
+    let cmdline = '';
+    try {
+      cmdline = readFileSync(`/proc/${entry}/cmdline`).toString('utf8').split('\0').filter(Boolean).join(' ');
+    } catch { continue; }
+    if (!cmdline) continue;
+    if (/(?:^|\s)opencode(?:\s|$)/iu.test(cmdline)) {
+      if (openCodeAgentFromCommand(cmdline)) return cmdline;
+      fallback = cmdline;
+      continue;
+    }
+    fallback ??= cmdline;
+  }
+  return fallback;
+}
+
 
 function defaultOpenCodeHttpRequest(input: {
   readonly url: string;
@@ -117,7 +183,8 @@ export function isOpenCodeComposerEmpty(lines: readonly string[]): boolean {
       if (sawLeftEdge) continue;
       continue;
     }
-    if (/Ask anything(?:\.\.\.|…)/u.test(trimmed)) {
+    const askBody = trimmed.replace(/^[┃│]\s*/u, '');
+    if (/^Ask anything(?:\.\.\.|…)$/u.test(askBody)) {
       sawLeftEdge = true;
       continue;
     }
@@ -224,6 +291,7 @@ export interface OrcaRuntimeAdapterOptions extends OrcaRunOptions {
     readonly body?: string;
     readonly timeoutMs: number;
   }) => { readonly status: number; readonly body: string };
+  readonly readPaneCommandLine?: (input: { readonly ptyId: string; readonly handle: string }) => string | undefined;
 }
 
 interface OwnedWorkerRecord {
@@ -236,7 +304,7 @@ interface OwnedWorkerRecord {
 
 interface OpenCodeUrlRecord {
   readonly identity: RuntimeWorkerIdentity;
-  readonly url: string;
+  readonly url?: string;
   readonly agent?: string;
 }
 
@@ -279,6 +347,7 @@ interface OrcaInboxCheckShape extends OrcaInboxDeliveryShape {
 interface OrcaTerminalSendResult {
   readonly send?: {
     readonly accepted?: unknown;
+    readonly prompt?: unknown;
   };
 }
 
@@ -599,7 +668,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
     if (current.value === null) return { status: 'send_failed', reason: 'worker_generation_not_found' };
     const urlRecord = this.#openCodeUrls.get(worker.id);
-    if (!urlRecord || !sameRuntimeWorker(urlRecord.identity, current.value.identity)) {
+    if (!urlRecord?.url || !sameRuntimeWorker(urlRecord.identity, current.value.identity)) {
       return { status: 'send_failed', reason: 'runtime_opencode_control_unavailable' };
     }
     if (request.action !== 'append-prompt' && request.action !== 'submit-prompt') {
@@ -690,6 +759,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (!record || !sameRuntimeWorker(record.identity, previousIdentity)) return;
     this.#openCodeUrls.set(nextIdentity.id, { ...record, identity: nextIdentity });
   }
+
 
   #rememberOpenCodeUrl(identity: RuntimeWorkerIdentity, url: string, agent?: string): void {
     const previous = this.#openCodeUrls.get(identity.id);
@@ -917,13 +987,6 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
     const currentOwned = this.#owned.get(handle);
     const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: handle, generation };
-    const openCodeUrl = typeof terminal.command === 'string'
-      ? openCodeUrlFromCommand(terminal.command)
-      : undefined;
-    const openCodeAgent = typeof terminal.command === 'string'
-      ? openCodeAgentFromCommand(terminal.command)
-      : undefined;
-    if (openCodeUrl) this.#rememberOpenCodeUrl(identity, openCodeUrl, openCodeAgent);
     const worker: RuntimeWorker = {
       identity,
       workspacePath,
@@ -939,18 +1002,84 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
   composerControl(
     worker: RuntimeWorkerIdentity,
   ): RuntimeComposerControl | undefined {
-    let record = this.#openCodeUrls.get(worker.id);
-    if (!record || !sameRuntimeWorker(record.identity, worker)) {
-      const current = this.findWorker(worker);
-      record = current.status === 'ok' && current.value && sameRuntimeWorker(current.value.identity, worker)
-        ? this.#openCodeUrls.get(worker.id)
-        : undefined;
-    }
-    if (!record || !sameRuntimeWorker(record.identity, worker)) return undefined;
+    if (worker.runtime !== 'orca') return undefined;
+    const stored = this.#openCodeUrls.get(worker.id);
+    if (stored?.url && sameRuntimeWorker(stored.identity, worker)) return this.#openCodeControl(worker);
+    const current = this.findWorker(worker);
+    if (current.status !== 'ok' || !current.value || !sameRuntimeWorker(current.value.identity, worker)) return undefined;
+    const refreshed = this.#openCodeUrls.get(worker.id);
+    if (refreshed?.url && sameRuntimeWorker(refreshed.identity, worker)) return this.#openCodeControl(worker);
+    const terminal = this.#shownTerminal(worker.id, {});
+    if (terminal?.agentIdentity?.trim() !== 'opencode') return undefined;
+    if (this.#recoverOpenCodeFromProcess(terminal, worker, {})) return this.#openCodeControl(worker);
+    return {
+      kind: 'opencode-http',
+      dispatch: () => ({ status: 'send_failed', reason: 'runtime_opencode_control_unavailable' }),
+    };
+  }
+
+  #openCodeControl(worker: RuntimeWorkerIdentity): RuntimeComposerControl {
     return {
       kind: 'opencode-http',
       dispatch: (request, options) => this.#openCodeDispatch(worker, request, options),
     };
+  }
+
+  #shownTerminal(id: string, options: RuntimeCallOptions): OrcaTerminalSummary | undefined {
+    const response = this.#run<{ terminal?: OrcaTerminalSummary }>(
+      ['terminal', 'show', '--terminal', id],
+      options,
+    );
+    if (!response.ok) return undefined;
+    return response.result?.terminal;
+  }
+
+  #openCodeServerAnswers(url: string, options: RuntimeCallOptions): boolean {
+    const deadline = this.#now() + Math.max(1, options.timeoutMs ?? DEFAULT_CALL_BUDGET_MS);
+    const bounded = this.#boundedOptions(deadline, options);
+    if (!bounded?.timeoutMs) return false;
+    const response = this.#openCodeRequest({
+      url: `${url}/global/health`,
+      method: 'GET',
+      timeoutMs: bounded.timeoutMs,
+    });
+    if ('error' in response || response.status < 200 || response.status >= 300) return false;
+    return openCodeHealthFromBody(response.body) !== undefined;
+  }
+
+  #recoverOpenCodeFromProcess(
+    terminal: OrcaTerminalSummary,
+    identity: RuntimeWorkerIdentity,
+    options: RuntimeCallOptions,
+  ): boolean {
+    const existing = this.#openCodeUrls.get(identity.id);
+    if (existing?.url && sameRuntimeWorker(existing.identity, identity)) return true;
+    const ptyId = terminal.ptyId?.trim();
+    const handle = terminal.handle?.trim();
+    if (!ptyId || !handle) return false;
+    const command = (this.#options.readPaneCommandLine ?? readLocalPaneCommandLine)({ ptyId, handle });
+    const agent = command ? openCodeAgentFromCommand(command) : undefined;
+    if (!agent) return false;
+    const url = `http://127.0.0.1:${openCodeControlPort(agent)}`;
+    if (!this.#openCodeServerAnswers(url, options)) return false;
+    this.#rememberOpenCodeUrl(identity, url, agent);
+    return true;
+  }
+
+  #submitObservationSeconds(options: RuntimeCallOptions): string {
+    const budgetMs = options.timeoutMs !== undefined
+      && Number.isFinite(options.timeoutMs)
+      && options.timeoutMs > 0
+      ? Math.floor(options.timeoutMs)
+      : DEFAULT_CALL_BUDGET_MS;
+    const deadline = this.#now() + budgetMs;
+    const bounded = this.#boundedOptions(deadline, options);
+    const timeoutMs = bounded?.timeoutMs ?? CLI_WAIT_SUBMIT_FLOOR_SECONDS * 1000;
+    const seconds = Math.min(
+      CLI_WAIT_SUBMIT_CEILING_SECONDS,
+      Math.max(CLI_WAIT_SUBMIT_FLOOR_SECONDS, Math.floor(timeoutMs / 1000)),
+    );
+    return String(seconds);
   }
 
   openCodeHealth(
@@ -964,7 +1093,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (current.status !== 'ok') return current;
     if (current.value === null) return runtimeFailure('readiness', 'worker_generation_not_found');
     const urlRecord = this.#openCodeUrls.get(worker.id);
-    if (!urlRecord || !sameRuntimeWorker(urlRecord.identity, current.value.identity)) {
+    if (!urlRecord?.url || !sameRuntimeWorker(urlRecord.identity, current.value.identity)) {
       return runtimeUnsupported('readiness', 'runtime_opencode_control_unavailable');
     }
     const healthOptions = this.#boundedOptions(deadline, options);
@@ -978,15 +1107,8 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (response.status < 200 || response.status >= 300) {
       return runtimeFailure('readiness', `opencode_http_status_${response.status}`);
     }
-    let parsed: unknown;
-    try { parsed = JSON.parse(response.body); } catch { return runtimeUnsupported('readiness', 'opencode_health_schema_mismatch'); }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return runtimeUnsupported('readiness', 'opencode_health_schema_mismatch');
-    }
-    const health = parsed as Record<string, unknown>;
-    if (health.healthy !== true || typeof health.version !== 'string' || !health.version.trim()) {
-      return runtimeUnsupported('readiness', 'opencode_health_schema_mismatch');
-    }
+    const health = openCodeHealthFromBody(response.body);
+    if (!health) return runtimeUnsupported('readiness', 'opencode_health_schema_mismatch');
 
     const sessionOptions = this.#boundedOptions(deadline, options);
     if (!sessionOptions) return runtimeFailure('readiness', 'runtime_timeout');
@@ -1361,16 +1483,15 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       title: terminal.title ?? input.title,
       provenance: 'internal',
     };
-    const openCodeUrl = openCodeUrlFromCommand(input.command);
-    const openCodeAgent = openCodeAgentFromCommand(input.command);
+    const launch = openCodeLaunchControl(input.command);
     this.#owned.set(handle, {
       identity,
       workspacePath: worker.workspacePath,
       workspaceSelector: workspace,
       title: worker.title,
-      ...(openCodeUrl ? { openCodeUrl } : {}),
+      ...(launch?.url ? { openCodeUrl: launch.url } : {}),
     });
-    if (openCodeUrl) this.#rememberOpenCodeUrl(identity, openCodeUrl, openCodeAgent);
+    if (launch?.url) this.#rememberOpenCodeUrl(identity, launch.url, launch.agent);
     this.#rememberWorkspace(identity, workspace, worker.workspacePath);
     return { status: 'ok', value: worker };
   }
@@ -1404,17 +1525,27 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
     const args = ['terminal', 'send', '--terminal', input.worker.id];
     if (!input.submitOnly) args.push('--text', input.text ?? '');
-    if (!input.writeOnly) args.push('--enter');
+    if (!input.writeOnly) {
+      args.push('--enter', '--wait-submit', this.#submitObservationSeconds(options));
+    }
     const response = this.#run<OrcaTerminalSendResult>(args, options);
-    if (response.ok && response.result?.send?.accepted === true) {
+    const send = response.ok ? response.result?.send : undefined;
+    if (response.ok && send?.accepted === true) {
       const witness: RuntimeDispatchWitness = {
         operation: input.writeOnly ? 'write' : 'submit',
         accepted: true,
         source: 'runtime-response',
       };
-      if (input.submitOnly) return { status: 'dispatched', witness };
       if (input.writeOnly) return { status: 'dispatch_unknown', reason: 'submit_witness_unavailable', witness };
-      return { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };
+      const observed = classifyObservedSubmission(send.prompt);
+      if (observed === 'observed') return { status: 'dispatched', witness };
+      if (observed === 'timeout') return { status: 'dispatch_unknown', reason: 'submit_observation_timeout', witness };
+      if (observed === 'malformed') return { status: 'dispatch_unknown', reason: 'submit_witness_malformed' };
+      return {
+        status: 'dispatch_unknown',
+        reason: 'submit_witness_unavailable',
+        ...(input.submitOnly ? { witness } : {}),
+      };
     }
     if (response.ok) return { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };
     const reason = neutralFailureReason(response);

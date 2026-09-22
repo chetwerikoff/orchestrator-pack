@@ -10,6 +10,9 @@ import { isOpenCodeComposerEmpty, OrcaRuntimeAdapter } from './adapter.ts';
 import { readOrcaTerminal } from './compat.ts';
 import { hasExecutorStartupBanner } from '../lib/worker-smoke-bounded-create.ts';
 import { OrcaTaskRuntimeAdapter } from './task-adapter.ts';
+import { openCodeControlPort } from '../executor-profile-policy.ts';
+
+const OPENCODE_FIXTURE_ORIGIN = `http://127.0.0.1:${openCodeControlPort('pack-opk-fixture')}`;
 
 // Producer-backed fixture contract, pinned to stablyai/orca@
 // f5fd7303ab00bcfeff72c92f2bc33ba9364cd622:
@@ -179,6 +182,46 @@ describe('Orca task adapter exact spawn identity', () => {
 });
 
 describe('OpenCode HTTP control plane', () => {
+
+function discoveredOpenCodeAdapter(input: {
+  readonly command: string;
+  readonly onRead?: (value: { ptyId: string; handle: string }) => void;
+  readonly onHttp: (url: string, method: 'GET' | 'POST') => { status: number; body: string };
+}) {
+  const handle = 'term-opencode-discovered';
+  const generation = 'generation-opencode-discovered';
+  const sends: string[][] = [];
+  const terminal = {
+    handle,
+    incarnationId: generation,
+    worktreePath: process.cwd(),
+    title: 'opencode',
+    agentIdentity: 'opencode',
+    ptyId: 'pty-discovered',
+    status: 'running' as const,
+  };
+  const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+    sends.push([...args]);
+    const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+    if (operation === 'terminal show') return { ok: true, result: { terminal } };
+    if (operation === 'terminal list') return { ok: true, result: { totalCount: 1, truncated: false, terminals: [terminal] } };
+    if (operation === 'terminal read') {
+      return { ok: true, result: { terminal: { ...terminal, tail: ['┃', '╹▀▀▀▀▀▀'], nextCursor: null, source: 'screen' } } };
+    }
+    return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+  });
+  const adapter = new OrcaRuntimeAdapter({
+    runJson: runJson as never,
+    readPaneCommandLine: (value) => {
+      input.onRead?.(value);
+      return input.command;
+    },
+    openCodeHttpRequest: (request) => input.onHttp(request.url, request.method),
+  });
+  const identity = { runtime: 'orca' as const, id: handle, generation };
+  return { adapter, identity, sends };
+}
+
   function makeAdapter(
     http: (input: { url: string; method: 'GET' | 'POST'; body?: string; timeoutMs: number }) => { status: number; body: string },
     now?: () => number,
@@ -240,10 +283,10 @@ describe('OpenCode HTTP control plane', () => {
       text: 'delivery pointer',
     }).status).toBe('dispatched');
     expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
-      { method: 'GET', url: 'http://127.0.0.1:18891/global/health' },
-      { method: 'GET', url: 'http://127.0.0.1:18891/session?directory=' + encodeURIComponent(process.cwd()) },
-      { method: 'POST', url: 'http://127.0.0.1:18891/tui/append-prompt' },
-      { method: 'POST', url: 'http://127.0.0.1:18891/tui/submit-prompt' },
+      { method: 'GET', url: `${OPENCODE_FIXTURE_ORIGIN}/global/health` },
+      { method: 'GET', url: `${OPENCODE_FIXTURE_ORIGIN}/session?directory=` + encodeURIComponent(process.cwd()) },
+      { method: 'POST', url: `${OPENCODE_FIXTURE_ORIGIN}/tui/append-prompt` },
+      { method: 'POST', url: `${OPENCODE_FIXTURE_ORIGIN}/tui/submit-prompt` },
     ]);
     expect(requests[2]?.body).toBe(JSON.stringify({ text: 'delivery pointer' }));
     expect(requests[3]?.body).toBeUndefined();
@@ -268,8 +311,8 @@ describe('OpenCode HTTP control plane', () => {
       text: 'root-and-fork-safe',
     })).toMatchObject({ status: 'dispatched' });
     expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
-      { method: 'POST', url: 'http://127.0.0.1:18891/tui/append-prompt' },
-      { method: 'POST', url: 'http://127.0.0.1:18891/tui/submit-prompt' },
+      { method: 'POST', url: `${OPENCODE_FIXTURE_ORIGIN}/tui/append-prompt` },
+      { method: 'POST', url: `${OPENCODE_FIXTURE_ORIGIN}/tui/submit-prompt` },
     ]);
   });
 
@@ -368,33 +411,65 @@ describe('OpenCode HTTP control plane', () => {
       text: 'first delivery pointer',
     })).toMatchObject({ status: 'dispatched' });
     expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
-      { method: 'POST', url: 'http://127.0.0.1:18891/tui/append-prompt' },
-      { method: 'POST', url: 'http://127.0.0.1:18891/tui/submit-prompt' },
+      { method: 'POST', url: `${OPENCODE_FIXTURE_ORIGIN}/tui/append-prompt` },
+      { method: 'POST', url: `${OPENCODE_FIXTURE_ORIGIN}/tui/submit-prompt` },
     ]);
   });
 
-  it('recovers OpenCode TUI control from terminal metadata on a fresh adapter', () => {
+  it('refuses an OpenCode pane whose process has no --agent instead of arming or sending Enter', () => {
+    const observed: Array<{ ptyId: string; handle: string }> = [];
     const requests: string[] = [];
-    const first = makeAdapter((input) => {
-      requests.push(input.url);
-      if (input.url.endsWith('/global/health')) return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) };
-      return { status: 200, body: 'true' };
+    const { adapter, identity, sends } = discoveredOpenCodeAdapter({
+      command: 'opencode --session ses_example',
+      onRead: (input) => { observed.push(input); },
+      onHttp: (url) => { requests.push(url); return { status: 200, body: 'true' }; },
     });
-    const spawned = first.spawnWorker({
-      title: 'opencode',
-      command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture',
+    expect(adapter.composerControl(identity)?.kind).toBe('opencode-http');
+    expect(adapter.dispatchInput({ worker: identity, text: 'delivery pointer' })).toEqual({
+      status: 'send_failed',
+      reason: 'runtime_opencode_control_unavailable',
     });
-    expect(spawned.status).toBe('ok');
-    if (spawned.status !== 'ok') return;
+    expect(observed).toEqual([{ ptyId: 'pty-discovered', handle: identity.id }, { ptyId: 'pty-discovered', handle: identity.id }]);
+    expect(requests).toEqual([]);
+    expect(sends.filter((args) => args[1] === 'send')).toEqual([]);
+  });
 
-    const second = makeAdapter((input) => {
-      requests.push(input.url);
-      return { status: 200, body: 'true' };
+  it('arms HTTP only after the process --agent port answers health', () => {
+    const requests: Array<{ url: string; method: string }> = [];
+    const { adapter, identity, sends } = discoveredOpenCodeAdapter({
+      command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture',
+      onHttp: (url, method) => {
+        requests.push({ url, method });
+        if (url.endsWith('/global/health')) return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) };
+        return { status: 200, body: 'true' };
+      },
     });
-    const control = second.composerControl?.(spawned.value.identity);
-    expect(control?.kind).toBe('opencode-http');
-    expect(control?.dispatch({ worker: spawned.value.identity, action: 'submit-prompt', text: 'fresh adapter' })).toMatchObject({ status: 'dispatched' });
-    expect(requests.slice(-2)).toEqual(['http://127.0.0.1:18891/tui/append-prompt', 'http://127.0.0.1:18891/tui/submit-prompt']);
+    expect(adapter.dispatchInput({ worker: identity, text: 'delivery pointer' })).toMatchObject({ status: 'dispatched' });
+    expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
+      { method: 'GET', url: `${OPENCODE_FIXTURE_ORIGIN}/global/health` },
+      { method: 'POST', url: `${OPENCODE_FIXTURE_ORIGIN}/tui/append-prompt` },
+      { method: 'POST', url: `${OPENCODE_FIXTURE_ORIGIN}/tui/submit-prompt` },
+    ]);
+    expect(sends.filter((args) => args[1] === 'send')).toEqual([]);
+  });
+
+  it('does not store a derived OpenCode URL when health does not answer', () => {
+    const requests: string[] = [];
+    const { adapter, identity, sends } = discoveredOpenCodeAdapter({
+      command: 'opencode --agent pack-opk-fixture',
+      onHttp: (url) => { requests.push(url); return { status: 500, body: '' }; },
+    });
+    expect(adapter.dispatchInput({ worker: identity, submitOnly: true })).toEqual({
+      status: 'send_failed',
+      reason: 'runtime_opencode_control_unavailable',
+    });
+    expect(adapter.dispatchInput({ worker: identity, text: 'delivery pointer' })).toEqual({
+      status: 'send_failed',
+      reason: 'runtime_opencode_control_unavailable',
+    });
+    expect(requests.every((url) => url.endsWith('/global/health'))).toBe(true);
+    expect(requests.length).toBeGreaterThan(0);
+    expect(sends.filter((args) => args[1] === 'send')).toEqual([]);
   });
 
   it('bounds health HTTP timeout by the remaining health deadline', () => {
@@ -474,7 +549,7 @@ describe('OpenCode HTTP control plane', () => {
     expect(isOpenCodeComposerEmpty(['idle splash', '┃  Pack-Opk-151bd854148541919ddf2dd24aa069f5 · GLM 5.3 Flash TeamoRouter', '╹▀▀▀▀▀▀'])).toBe(true);
     expect(isOpenCodeComposerEmpty(['idle splash', '┃  Pack-Opk-                             ·Muse Spark 1.2 Free OpenCode', '┃  D51fd897bc56456082244bcd2e565320                           Zen', '╹▀▀▀▀▀▀'])).toBe(true);
     expect(isOpenCodeComposerEmpty(['idle splash', '┃  TeamoRouter 钱包余额不足，请前往 https://teamorouter.cn/dashboard?buy=1 充值后继续使用', '╹▀▀▀▀▀▀'])).toBe(true);
-    expect(isOpenCodeComposerEmpty(['idle splash', '┃  Ask anything... \"Fix broken tests\"', '╹▀▀▀▀▀▀'])).toBe(true);
+    expect(isOpenCodeComposerEmpty(['idle splash', '┃  Ask anything... \"Fix broken tests\"', '╹▀▀▀▀▀▀'])).toBe(false);
     expect(isOpenCodeComposerEmpty(['idle splash', '│ Ask anything…', '╹▀▀▀▀▀▀'])).toBe(true);
     expect(isOpenCodeComposerEmpty(['idle splash', '┃ human text', '╹▀▀▀▀▀▀'])).toBe(false);
     expect(isOpenCodeComposerEmpty(['OpenCode', 'no composer'])).toBe(false);
@@ -1608,12 +1683,106 @@ describe('Issue #1587 accepted terminal-send evidence', () => {
       witness: { operation: 'write', accepted: true, source: 'runtime-response' },
     });
     expect(adapter.dispatchInput({ worker, submitOnly: true })).toEqual({
-      status: 'dispatched',
+      status: 'dispatch_unknown',
+      reason: 'submit_witness_unavailable',
       witness: { operation: 'submit', accepted: true, source: 'runtime-response' },
     });
     expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'send').map((call) => call[0])).toEqual([
       ['terminal', 'send', '--terminal', 'busy-agent', '--text', 'exact pointer'],
-      ['terminal', 'send', '--terminal', 'busy-agent', '--enter'],
+      ['terminal', 'send', '--terminal', 'busy-agent', '--enter', '--wait-submit', '10'],
+    ]);
+  });
+});
+
+describe('observed submission witness', () => {
+  function sendAdapter(send: unknown) {
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'terminal show' || operation === 'terminal list') {
+        const terminal = {
+          handle: 'busy-agent',
+          incarnationId: 'generation-1587',
+          worktreePath: '/tmp/worktree-1587',
+          title: 'busy-agent',
+          status: 'running' as const,
+        };
+        return operation === 'terminal show'
+          ? { ok: true, result: { terminal } }
+          : { ok: true, result: { terminals: [terminal], totalCount: 1, truncated: false } };
+      }
+      if (operation === 'terminal send') return { ok: true, result: { send } };
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    return { adapter: new OrcaRuntimeAdapter({ runJson: runJson as never }), runJson };
+  }
+
+  const worker = { runtime: 'orca' as const, id: 'busy-agent', generation: 'generation-1587' };
+  const witness = { operation: 'submit' as const, accepted: true as const, source: 'runtime-response' as const };
+
+  it('maps a positive wait-submit observation to dispatched', () => {
+    const { adapter, runJson } = sendAdapter({
+      accepted: true,
+      prompt: { provider: 'opencode', observation: 'supported', stages: ['input_accepted', 'turn_started'] },
+    });
+    expect(adapter.dispatchInput({ worker, text: 'pointer', submitOnly: false })).toEqual({
+      status: 'dispatched',
+      witness,
+    });
+    expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'send')).toHaveLength(1);
+  });
+
+  it('maps a wait-submit timeout to its own outcome and does not send again', () => {
+    const { adapter, runJson } = sendAdapter({
+      accepted: true,
+      prompt: { provider: 'opencode', observation: 'supported', stages: ['input_accepted'] },
+    });
+    expect(adapter.dispatchInput({ worker, submitOnly: true })).toEqual({
+      status: 'dispatch_unknown',
+      reason: 'submit_observation_timeout',
+      witness,
+    });
+    expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'send').map((call) => call[0])).toEqual([
+      ['terminal', 'send', '--terminal', 'busy-agent', '--enter', '--wait-submit', '10'],
+    ]);
+  });
+
+  it('derives --wait-submit from the caller budget without turning a timeout into a second Enter', () => {
+    const { adapter, runJson } = sendAdapter({
+      accepted: true,
+      prompt: { provider: 'opencode', observation: 'supported', stages: ['input_accepted'] },
+    });
+    expect(adapter.dispatchInput({ worker, submitOnly: true }, { timeoutMs: 2_500 })).toEqual({
+      status: 'dispatch_unknown',
+      reason: 'submit_observation_timeout',
+      witness,
+    });
+    expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'send').map((call) => call[0])).toEqual([
+      ['terminal', 'send', '--terminal', 'busy-agent', '--enter', '--wait-submit', '2'],
+    ]);
+  });
+
+  it('maps a malformed submission receipt to its own outcome', () => {
+    const { adapter, runJson } = sendAdapter({ accepted: true, prompt: { provider: 'opencode' } });
+    expect(adapter.dispatchInput({ worker, submitOnly: true })).toEqual({
+      status: 'dispatch_unknown',
+      reason: 'submit_witness_malformed',
+    });
+    expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'send')).toHaveLength(1);
+  });
+
+  it('keeps a cursor unsupported receipt ambiguous and does not send a second Enter', () => {
+    const { adapter, runJson } = sendAdapter({
+      accepted: true,
+      prompt: { provider: 'unsupported', observation: 'unsupported', stages: ['input_accepted'] },
+    });
+    expect(adapter.dispatchInput({ worker, submitOnly: true })).toEqual({
+      status: 'dispatch_unknown',
+      reason: 'submit_witness_unavailable',
+      witness,
+    });
+    const sends = runJson.mock.calls.filter((call) => call[0]?.[1] === 'send').map((call) => call[0]);
+    expect(sends).toEqual([
+      ['terminal', 'send', '--terminal', 'busy-agent', '--enter', '--wait-submit', '10'],
     ]);
   });
 });
