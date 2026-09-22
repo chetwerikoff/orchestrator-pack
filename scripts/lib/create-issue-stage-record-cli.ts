@@ -234,6 +234,11 @@ function parseBlockedOnJson(raw: string): CreateIssueBlockedOn {
   return value as CreateIssueBlockedOn;
 }
 
+function appendBlockedOnArgv(argv: string[], blockedOn?: CreateIssueBlockedOn): string[] {
+  if (blockedOn) argv.push('--blocked-on-json', JSON.stringify(blockedOn));
+  return argv;
+}
+
 function runParsedCli<T>(
   argv: string[],
   toolName: string,
@@ -618,7 +623,7 @@ function artifactCommandArgv(
   for (const path of opts.claudeProducerEvidencePaths) argv.push('--claude-producer-evidence', path);
   if (opts.waiverPath) argv.push('--waiver', opts.waiverPath);
   if (opts.outputDir) argv.push('--output-dir', opts.outputDir);
-  return argv;
+  return appendBlockedOnArgv(argv, opts.blockedOn);
 }
 
 function staleArtifactBinding(
@@ -710,7 +715,7 @@ function validatedManagerSurfaceOutput<T extends { ok: boolean }>(
       ...(blocker ? { blocker } : {}),
       ...(reason ? { reason } : {}),
     }),
-    ...(!result.ok && nextAction === null && blockedOn ? { blocked_on: { ...blockedOn } } : {}),
+    ...(nextAction === null && blockedOn ? { blocked_on: { ...blockedOn } } : {}),
     nextAction,
   };
   const errors = validateCreateIssueManagerResult(output);
@@ -754,7 +759,7 @@ function retryPendingActionArgv(
     '--json',
   ];
   if (opts.workdir) argv.push('--workdir', opts.workdir);
-  return argv;
+  return appendBlockedOnArgv(argv, opts.blockedOn);
 }
 
 function poisonSuccessorStartCycleArgv(
@@ -782,7 +787,7 @@ function poisonSuccessorStartCycleArgv(
   if (opts.competitiveRationale) argv.push('--competitive-rationale', opts.competitiveRationale);
   if (opts.permittedLaneOverride) argv.push('--permitted-lane-override', opts.permittedLaneOverride);
   if (opts.workdir) argv.push('--workdir', opts.workdir);
-  return argv;
+  return appendBlockedOnArgv(argv, opts.blockedOn);
 }
 
 function startCycleRetryArgv(
@@ -810,7 +815,7 @@ function startCycleRetryArgv(
   if (opts.predecessorCycleId) argv.push('--predecessor-cycle-id', opts.predecessorCycleId);
   if (opts.publicActor) argv.push('--public-actor', opts.publicActor);
   if (opts.workdir) argv.push('--workdir', opts.workdir);
-  return argv;
+  return appendBlockedOnArgv(argv, opts.blockedOn);
 }
 
 function staleStartCycleBinding(
@@ -974,12 +979,13 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
           '--expected-stage-attempt-id', result.stageAttemptId,
           '--json',
         ];
+        appendBlockedOnArgv(reconcileArgv, opts.blockedOn);
         const retryableRead = reconcileStageReadIsRetryable(result);
         if (result.ok && !result.alreadySettled) {
           nextAction = createIssueNextAction({
             kind: 'produce-acceptance-artifacts',
             binding,
-            argv: [
+            argv: appendBlockedOnArgv([
               'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
               'produce-artifacts',
               '--repo', opts.repo,
@@ -991,7 +997,7 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
               '--expected-stage', result.stage,
               '--expected-stage-attempt-id', result.stageAttemptId,
               '--json',
-            ],
+            ], opts.blockedOn),
           });
         } else if (!result.ok && retryableRead && !result.errors.some((error) => error.includes('stale_next_action'))) {
           nextAction = createIssueNextAction({
