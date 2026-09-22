@@ -518,9 +518,6 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     if (!exact) {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
     }
-    if (isTerminallyFailedExactLiveRetained(parsed)) {
-      return runtimeFailure('resolve_assignment_worker', 'assignment_target_inactive');
-    }
     const observationStatus = parsed.observation?.status?.trim().toLowerCase() ?? '';
     if (observationStatus === 'exited'
       && parsed.terminalResource?.releaseState === 'released') {

@@ -226,22 +226,41 @@ describe('supervised worker start exact assignment admission',()=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base}; const file=resolveWorkerAssignmentStorePath('orchestrator-pack',env);
     const old=await publishCurrentWorkerAssignment({file,repository:'chetwerikoff/orchestrator-pack',issueNumber:1416,taskId:'task_old',kind:'local',provider:'orca',bindingKey:'dispatch_old',role:'worker'});
     if(!old.ok)throw new Error(old.reason);
+    const order: string[]=[];
+    const shown={
+      ...terminallyFailedExactLiveRetainedShow(),
+      dispatch:{id:'dispatch_old',status:'failed',last_heartbeat_at:null,run_id:'run_old'},
+    };
     const runJson=vi.fn((cliArgs: readonly string[]): OrcaJsonResponse => {
-      expect(cliArgs).toEqual(['orchestration','worker-show','--dispatch','dispatch_old']);
-      return {ok:true,result:terminallyFailedExactLiveRetainedShow()};
+      const operation=`${cliArgs[0] ?? ''} ${cliArgs[1] ?? ''}`;
+      order.push(operation);
+      if(operation==='orchestration worker-show') return {ok:true,result:shown};
+      if(operation==='orchestration send'){
+        expect(cliArgs).toEqual(expect.arrayContaining(['--run','run_old','--dispatch-id','dispatch_old']));
+        return {ok:true,result:{message_id:'msg-terminal'}};
+      }
+      return {ok:false,error:{code:'unexpected_operation',message:operation}};
     });
     let calls=0;
     const result=await runSupervisedWorkerStart({role:'worker',
       issueNumber:1416,repository:'chetwerikoff/orchestrator-pack',env,
-      orcaArgs:argsForTerminal(canonicalTerminal,'task_new'),
-      adapter:new OrcaTaskRuntimeAdapter({runJson:runJson as never}),
+      orcaArgs:args('task_new'),
+      adapter:new OrcaTaskRuntimeAdapter({
+        runJson:runJson as never,
+        env:{...env,OPK_DISPATCH_TERMINAL_MAIL_LEDGER:path.join(base,'terminal-mail-ledger.json')},
+      }),
       inspect:inspectPlacement(),
-      execute:async()=>{calls+=1;return{ok:true,stdout:envelope({taskId:'task_new',dispatchId:'dispatch_new',state:'ready',effects:producerEffects()})}},
+      execute:async()=>{
+        order.push('worker-start');
+        calls+=1;
+        return{ok:true,stdout:envelope({taskId:'task_new',dispatchId:'dispatch_new',state:'ready',effects:producerEffects()})};
+      },
     });
     expect(result).toMatchObject({ok:true,reason:'ready_and_assignment_bound',assignment:{taskId:'task_new',bindingKey:'dispatch_new'}});
     expect(calls).toBe(1);
     expect(currentWorkerAssignment(file,1416)).toMatchObject({taskId:'task_new',bindingKey:'dispatch_new'});
-    expect(runJson.mock.calls.every((call)=>call[0]?.slice(0,2).join(' ')==='orchestration worker-show')).toBe(true);
+    expect(order.indexOf('orchestration send')).toBeGreaterThan(order.indexOf('orchestration worker-show'));
+    expect(order.indexOf('worker-start')).toBeGreaterThan(order.indexOf('orchestration send'));
     expect(runJson.mock.calls.some((call)=>call[0]?.slice(0,2).join(' ')==='terminal close')).toBe(false);
   });
 
@@ -253,8 +272,9 @@ describe('supervised worker start exact assignment admission',()=>{
     let calls=0;
     const result=await runSupervisedWorkerStart({role:'worker',
       issueNumber:1416,repository:'chetwerikoff/orchestrator-pack',env,
-      orcaArgs:argsForTerminal('foreign-terminal','task_new'),
+      orcaArgs:argsForTerminal('terminal:foreign-owned','task_new'),
       adapter:new OrcaTaskRuntimeAdapter({runJson:runJson as never}),
+      inspect:inspectPlacement({terminal:'foreign-terminal'}),
       execute:async()=>{calls+=1;return{ok:true,stdout:envelope({taskId:'task_new',dispatchId:'dispatch_new',state:'ready',effects:producerEffects({terminal:'foreign-terminal'})})}},
     });
     expect(result).toEqual({ok:false,reason:'target_unresolved'});

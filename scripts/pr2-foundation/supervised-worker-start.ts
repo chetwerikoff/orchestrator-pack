@@ -313,6 +313,18 @@ function parsePlacementEnvelope(execution: ChildResult): Record<string, unknown>
   }
 }
 
+
+async function resolveCanonicalTerminalHandle(
+  selector: string,
+  inspect: (args: readonly string[]) => Promise<ChildResult>,
+): Promise<string | null> {
+  const execution = await inspect(['terminal', 'show', '--terminal', selector, '--json']);
+  const parsed = parsePlacementEnvelope(execution);
+  const terminal = parsed && isRecord(parsed.terminal) ? parsed.terminal : null;
+  const handle = nonEmpty(terminal?.handle);
+  return handle || null;
+}
+
 async function resolvePlacementWitness(input: {
   readonly terminalSelector: string;
   readonly worktreeSelector: string;
@@ -451,6 +463,19 @@ export async function runSupervisedWorkerStart(input: {
   if (expectedCurrent && expectedCurrent.taskId !== requestedTaskId && expectedCurrent.kind !== 'local') {
     return { ok: false, reason: 'assignment_stale' };
   }
+  const inspect = input.inspect ?? (async (inspectArgs) => {
+    const result = await runProcess({
+      command: 'orca',
+      args: [...inspectArgs],
+      cwd: input.cwd ?? process.cwd(),
+      env: input.env,
+      inheritParentEnv: true,
+      allowEmptyStdout: false,
+      timeoutMs: 15_000,
+    });
+    return { ok: result.ok, stdout: result.stdout, stderr: result.stderr || result.error };
+  });
+
   if (expectedCurrent?.kind === 'local') {
     let adapter = input.adapter;
     if (!adapter) {
@@ -464,29 +489,31 @@ export async function runSupervisedWorkerStart(input: {
         return { ok: false, reason: 'runtime_unavailable' };
       }
     }
-    const admission = await admitCurrentWorkerAssignmentReplacement({
+    let admission = await admitCurrentWorkerAssignmentReplacement({
       file,
       expected: expectedCurrent,
       adapter,
-      ...(terminal ? { requestedTerminalId: terminal } : {}),
     });
+    if (
+      admission.status === 'target_unresolved'
+      && terminal
+      && mode === 'exact_terminal_worktree'
+    ) {
+      const canonicalTerminal = await resolveCanonicalTerminalHandle(terminal, inspect);
+      if (canonicalTerminal) {
+        admission = await admitCurrentWorkerAssignmentReplacement({
+          file,
+          expected: expectedCurrent,
+          adapter,
+          requestedTerminalId: canonicalTerminal,
+        });
+      }
+    }
     if (admission.status !== 'replaceable') {
       return { ok: false, reason: admission.status };
     }
   }
 
-  const inspect = input.inspect ?? (async (inspectArgs) => {
-    const result = await runProcess({
-      command: 'orca',
-      args: [...inspectArgs],
-      cwd: input.cwd ?? process.cwd(),
-      env: input.env,
-      inheritParentEnv: true,
-      allowEmptyStdout: false,
-      timeoutMs: 15_000,
-    });
-    return { ok: result.ok, stdout: result.stdout, stderr: result.stderr || result.error };
-  });
   const placement = mode === 'exact_terminal_worktree'
     ? await resolvePlacementWitness({
       terminalSelector: terminal!,

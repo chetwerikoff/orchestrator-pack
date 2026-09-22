@@ -1176,6 +1176,55 @@ describe('Orca assignment resolution', () => {
     expect(runJson.mock.calls.some((call) => `${call[0]?.[0] ?? ''} ${call[0]?.[1] ?? ''}` === 'terminal close')).toBe(false);
   });
 
+  it('notifies terminal mail for a failed exact live retained dispatch before reporting inactive', () => {
+    const ledgerDirectory = mkdtempSync(join(process.cwd(), '.tmp-terminal-mail-'));
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'orchestration worker-show') {
+        return {
+          ok: true,
+          result: {
+            ...terminallyFailedExactLiveRetainedWorkerShow(),
+            dispatch: {
+              id: 'dispatch-1',
+              status: 'failed',
+              last_heartbeat_at: null,
+              run_id: 'run-retained',
+            },
+          },
+        };
+      }
+      if (operation === 'orchestration send') {
+        expect(args).toContain('--run');
+        expect(args).toContain('run-retained');
+        expect(args).toContain('--dispatch-id');
+        expect(args).toContain('dispatch-1');
+        return { ok: true, result: { message_id: 'msg-terminal' } };
+      }
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    const adapter = new OrcaTaskRuntimeAdapter({
+      runJson: runJson as never,
+      env: {
+        ...process.env,
+        OPK_DISPATCH_TERMINAL_MAIL_LEDGER: join(ledgerDirectory, 'ledger.json'),
+      },
+    });
+    try {
+      expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1' })).toEqual({
+        status: 'failed',
+        operation: 'resolve_assignment_worker',
+        reason: 'assignment_target_inactive',
+      });
+      expect(runJson.mock.calls.map((call) => `${call[0]?.[0] ?? ''} ${call[0]?.[1] ?? ''}`)).toEqual([
+        'orchestration worker-show',
+        'orchestration send',
+      ]);
+    } finally {
+      rmSync(ledgerDirectory, { recursive: true, force: true });
+    }
+  });
+
   it('keeps exactWorker false unresolved while the dispatch is still dispatched', () => {
     const runJson = vi.fn((): OrcaJsonResponse => ({
       ok: true,
