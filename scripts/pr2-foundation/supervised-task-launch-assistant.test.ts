@@ -12,6 +12,7 @@ import {
   resolveLiveExecutorProfile,
   finalizeOpenCodeExecutorProfile,
   runSupervisedTaskLaunchAssistant,
+  repoCanonicalKey,
   type DispatchObservation,
   type EdgeResult,
   type LaunchDependencies,
@@ -166,8 +167,8 @@ function deps(input: {
 function launchInput(workClass: LaunchInput['workClass'] = 't2'): LaunchInput {
   return {
     repository: 'chetwerikoff/orchestrator-pack', workClass, issueNumber: 1479,
-    taskId: 'task-1', worktreeName: 'issue-1479', env: profileEnv(), startMode: 'exact_terminal_worktree',
-    ...(workClass === 'manager' ? { runId: 'run-1' } : {}),
+    taskId: 'task-1', env: profileEnv(), startMode: 'exact_terminal_worktree',
+    ...(workClass === 'manager' ? { runId: 'run-1', worktreeSelector: 'id:manager-worktree' } : { worktreeName: 'issue-1479' }),
   };
 }
 
@@ -932,6 +933,18 @@ describe('supervised Task launch assistant', () => {
     expect(calls).toEqual([['orca', 'repo', 'list', '--json']]);
   });
 
+  it('rejects a manager refresh worktree whose origin uses a non-GitHub host', async () => {
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeSelector: 'id:orca-repo::manager', managerRefresh: true,
+    }, async (args) => {
+      if (args[1] === 'worktree') return { ok: true, stdout: okEnvelope({ worktree: { id: 'orca-repo::manager', path: '/tmp/manager' } }) };
+      if (args[0] === 'git' && args[1] === 'rev-parse' && args[2] === '--show-toplevel') return { ok: true, stdout: '/tmp/manager\n' };
+      if (args[0] === 'git' && args[1] === 'remote') return { ok: true, stdout: 'git@git.example.com:chetwerikoff/orchestrator-pack.git\n' };
+      return { ok: true, stdout: '' };
+    });
+    expect(result).toMatchObject({ status: 'continue', cause: 'manager_worktree_repository_identity_mismatch' });
+  });
+
   it('accepts fresh Orca worktree creation when setup is explicitly not configured', async () => {
     const calls: readonly string[][] = [];
     const mutableCalls = calls as string[][];
@@ -1288,6 +1301,8 @@ describe('supervised Task launch assistant', () => {
     ['manager missing run', ['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 'manager', '--task', 'task-1', '--worktree', 'id:w']],
     ['manager both task and brief', ['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 'manager', '--run', 'run-1', '--task', 'task-1', '--manager-brief', 'brief', '--worktree', 'id:w']],
     ['manager neither task nor brief', ['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 'manager', '--run', 'run-1', '--worktree', 'id:w']],
+    ['existing manager Task with name', ['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 'manager', '--run', 'run-1', '--task', 'task-1', '--worktree-name', 'wt']],
+    ['fresh manager brief with selector', ['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 'manager', '--run', 'run-1', '--manager-brief', 'brief', '--worktree', 'id:w']],
     ['worker missing task', ['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 't2', '--worktree', 'id:w']],
     ['both worktree selectors', ['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 't2', '--task', 'task-1', '--worktree', 'id:w', '--worktree-name', 'wt']],
     ['neither worktree selector', ['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 't2', '--task', 'task-1']],

@@ -385,6 +385,12 @@ export async function runSupervisedTaskLaunchAssistant(
       cause: 'manager_task_input_invalid', actor: 'manager', evidence: { requiresExactlyOneOf: ['--task', '--manager-brief'] },
       nextAction: { kind: 'reconcile_manager_task', note: 'provide exactly one existing Task or caller-serialized brief' },
     }, resources, startedAtMs, timings, deps.now);
+    const existingManagerTask = Boolean(taskId);
+    const freshManagerBrief = Boolean(brief);
+    if ((existingManagerTask && !input.worktreeSelector) || (freshManagerBrief && !input.worktreeName)) return continued(input, 'manager_task', {
+      cause: 'manager_worktree_input_invalid', actor: 'manager', evidence: { existingTaskRequires: '--worktree', managerBriefRequires: '--worktree-name' },
+      nextAction: { kind: 'reconcile_manager_task', note: 'existing manager Tasks require --worktree; fresh manager briefs require --worktree-name' },
+    }, resources, startedAtMs, timings, deps.now);
 
     if (taskId) {
       const member = await checkpoint('manager_task', timings, deps.now, () => deps.proveManagerTaskMembership(runId, taskId));
@@ -507,9 +513,11 @@ export async function runSupervisedTaskLaunchAssistant(
     mode: profile.route,
     role: input.workClass === 'manager' ? 'orchestrator' : 'worker',
     orcaArgs: providerMode
-      ? ['--task', taskId, '--worktree', 'new-top-level', '--repo', prepared.value.repositorySelector ?? '',
-        '--name', input.worktreeName ?? '', ...(input.baseBranch ? ['--base-branch', input.baseBranch] : []),
-        ...(profile.providerArgs ?? []), '--setup', 'run', '--json']
+      ? input.worktreeSelector
+        ? ['--task', taskId, '--worktree', prepared.value.selector, ...(profile.providerArgs ?? []), '--setup', 'run', '--json']
+        : ['--task', taskId, '--worktree', 'new-top-level', '--repo', prepared.value.repositorySelector ?? '',
+          '--name', input.worktreeName ?? '', ...(input.baseBranch ? ['--base-branch', input.baseBranch] : []),
+          ...(profile.providerArgs ?? []), '--setup', 'run', '--json']
       : ['--task', taskId, '--terminal', terminal!.identity.id, '--worktree', prepared.value.selector],
   });
   const startDone = deps.now();
@@ -531,9 +539,10 @@ export async function runSupervisedTaskLaunchAssistant(
       '--repository', quote(resources.repository), '--role', input.workClass === 'manager' ? 'orchestrator' : 'worker',
       ...(providerMode ? ['--mode', 'provider_new_top_level'] : []), '--', '--task', quote(taskId),
       ...(providerMode
-        ? ['--worktree', 'new-top-level', '--repo', quote(prepared.value.repositorySelector ?? ''), '--name', quote(input.worktreeName ?? ''),
-          ...(input.baseBranch ? ['--base-branch', quote(input.baseBranch)] : []),
-          ...retryProviderArgs(profile), '--setup', 'run']
+        ? (input.worktreeSelector
+          ? ['--worktree', quote(prepared.value.selector), ...retryProviderArgs(profile), '--setup', 'run']
+          : ['--worktree', 'new-top-level', '--repo', quote(prepared.value.repositorySelector ?? ''), '--name', quote(input.worktreeName ?? ''),
+            ...(input.baseBranch ? ['--base-branch', quote(input.baseBranch)] : []), ...retryProviderArgs(profile), '--setup', 'run'])
         : ['--terminal', quote(terminal!.identity.id), '--worktree', quote(prepared.value.selector)]),
       '--retry-request', quote(requestId),
     ].join(' ') : undefined;
@@ -845,12 +854,14 @@ export async function createManagerTaskWithOrca(
   };
 }
 
-function repoSlug(remote: string): string {
+export function repoCanonicalKey(remote: string): string {
   const raw = remote.trim().replace(/\.git$/u, '');
-  const ssh = raw.match(/^[^@]+@[^:]+:(.+)$/u)?.[1];
-  const path = ssh ?? raw.match(/^https?:\/\/[^/]+\/(.+)$/u)?.[1] ?? '';
+  const ssh = raw.match(/^[^@]+@([^:]+):(.+)$/u);
+  const url = raw.match(/^https?:\/\/([^/]+)\/(.+)$/u);
+  const host = (ssh?.[1] ?? url?.[1] ?? '').toLowerCase();
+  const path = ssh?.[2] ?? url?.[2] ?? '';
   const parts = path.split('/').filter(Boolean);
-  return parts.length >= 2 ? `${parts.at(-2)}/${parts.at(-1)}`.toLowerCase() : '';
+  return host && parts.length >= 2 ? `${host}/${parts.at(-2)}/${parts.at(-1)}`.toLowerCase() : '';
 }
 
 function resultRecord(value: Record<string, unknown> | null): Record<string, unknown> | null {
@@ -927,11 +938,11 @@ async function observeManagerWorktreeIdentity(
   }
 
   const remote = await execute(['git', 'remote', 'get-url', 'origin'], undefined, undefined, path);
-  if (!remote.ok || repoSlug(remote.stdout) !== request.repository.trim().toLowerCase()) {
+  if (!remote.ok || repoCanonicalKey(remote.stdout) !== `github.com/${request.repository.trim().toLowerCase()}`) {
     return worktreeContinue<ManagerWorktreeIdentity>(
       'manager_worktree_repository_identity_mismatch',
       { worktreeId: id, repository: request.repository.trim().toLowerCase() },
-      'reconcile the Orca-resolved manager worktree with the requested repository before fetch',
+      'reconcile the Orca-resolved manager worktree with github.com and the requested repository before fetch',
     );
   }
 
@@ -1248,9 +1259,9 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
     },
     repositoryPreflight: async (repository) => {
       const remote = await child(['git', 'remote', 'get-url', 'origin'], cwd, env);
-      if (!remote.ok || repoSlug(remote.stdout) !== repository) return {
+      if (!remote.ok || repoCanonicalKey(remote.stdout) !== `github.com/${repository}`) return {
         status: 'continue', cause: 'repository_preflight_mismatch', actor: 'operator', evidence: { repository },
-        nextAction: { kind: 'repair_preflight', note: 'run from the checkout whose origin exactly matches --repository' },
+        nextAction: { kind: 'repair_preflight', note: 'run from the checkout whose origin is github.com and exactly matches --repository' },
       };
       return { status: 'ok', value: true };
     },
@@ -1359,6 +1370,8 @@ export function parseLaunchAssistantCli(argv: readonly string[]): LaunchInput {
   if (workClass === 'manager') {
     if (!runId) throw new Error('manager requires --run');
     if (hasTask === hasManagerBrief) throw new Error('manager requires exactly one --task or --manager-brief');
+    if (hasTask && !hasWorktreeSelector) throw new Error('existing manager Task requires --worktree');
+    if (hasManagerBrief && !hasWorktreeName) throw new Error('fresh manager brief requires --worktree-name');
   } else {
     if (!taskId) throw new Error(`${workClass} requires --task`);
     if (runId || hasManagerBrief) throw new Error('--run and --manager-brief are manager-only');
