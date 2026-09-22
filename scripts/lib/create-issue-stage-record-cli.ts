@@ -9,6 +9,7 @@ import {
 import { runFinalAcceptance } from './create-issue-final-acceptance.ts';
 import {
   ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS,
+  bindPublishedCommentToSlot,
   inspectAcceptanceArtifacts,
   produceAcceptanceArtifacts,
   reconcileCreateIssueStage,
@@ -42,7 +43,7 @@ interface JournalTailCliOptions {
 }
 
 interface StageFinalizeCliOptions extends JournalTailCliOptions {
-  command: 'start-cycle' | 'publish-stage' | 'retry-pending' | 'reconcile-stage' | 'produce-artifacts' | 'check-artifacts';
+  command: 'start-cycle' | 'publish-stage' | 'retry-pending' | 'reconcile-stage' | 'bind-published-comment' | 'produce-artifacts' | 'check-artifacts';
   repo: string;
   issueNumber: number;
   sourceRevision?: string;
@@ -69,6 +70,9 @@ interface StageFinalizeCliOptions extends JournalTailCliOptions {
   operatorVerdictByteLength?: string;
   operatorFindingCount?: string;
   operatorReason?: string;
+  commentUrl?: string;
+  invocationId?: string;
+  reviewerSlot?: string;
   expectedSourceRevision?: string;
   expectedStage?: LifecycleReviewStage;
   expectedStageAttemptId?: string;
@@ -230,6 +234,7 @@ export function stageFinalizeUsage(): string {
     '  create-issue-stage-finalize.ts publish-stage --repo <owner/name> --issue-number <n> --receipt <path> [--waiver <path>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts retry-pending --repo <owner/name> --issue-number <n> [--workdir <path>] [--expected-source-revision <rNN> --expected-stage <stage> --expected-stage-attempt-id <id>] [--json]',
     '  create-issue-stage-finalize.ts reconcile-stage --repo <owner/name> --issue-number <n> --review-dir <path> --stage-evidence <attempt-NNN.json> [--json]',
+    '  create-issue-stage-finalize.ts bind-published-comment --repo <owner/name> --issue-number <n> --review-dir <path> --stage-evidence <attempt-NNN.json> --reviewer-slot <slot> --invocation-id <id> --comment-url <url> [--json]',
     '  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> [--tier-intake <path>] [--stage-evidence <path>...] [--author-dispositions <target-path>] [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--phase <pre-lens|post-lens|final-acceptance>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--json]',
     '  create-issue-stage-finalize.ts check-artifacts --review-dir <path> [--tier-intake <path>] [--stage-evidence <path>...] [--author-dispositions <derived-path>] [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--json]',
   ].join('\n');
@@ -237,7 +242,7 @@ export function stageFinalizeUsage(): string {
 
 export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
   const command = argv[2];
-  if (command !== 'start-cycle' && command !== 'publish-stage' && command !== 'retry-pending' && command !== 'reconcile-stage' && command !== 'produce-artifacts' && command !== 'check-artifacts') {
+  if (command !== 'start-cycle' && command !== 'publish-stage' && command !== 'retry-pending' && command !== 'reconcile-stage' && command !== 'bind-published-comment' && command !== 'produce-artifacts' && command !== 'check-artifacts') {
     throw new Error(`unknown command\n${stageFinalizeUsage()}`);
   }
   const opts: StageFinalizeCliOptions = {
@@ -249,7 +254,7 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
     stageEvidencePaths: [],
     claudeProducerEvidencePaths: [],
   };
-  const artifactCommand = command === 'reconcile-stage' || command === 'produce-artifacts' || command === 'check-artifacts';
+  const artifactCommand = command === 'reconcile-stage' || command === 'bind-published-comment' || command === 'produce-artifacts' || command === 'check-artifacts';
   const boundActionCommand = artifactCommand || command === 'start-cycle' || command === 'retry-pending';
   const requireArtifactCommand = (arg: string): void => {
     if (!artifactCommand) throw new Error(`${arg} is only valid with reconcile-stage, produce-artifacts, or check-artifacts`);
@@ -306,6 +311,18 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
         break;
       case '--waiver':
         opts.waiverPath = String(argv[++i] ?? '');
+        break;
+      case '--comment-url':
+        if (command !== 'bind-published-comment') throw new Error(`${arg} is only valid with bind-published-comment`);
+        opts.commentUrl = String(argv[++i] ?? '');
+        break;
+      case '--invocation-id':
+        if (command !== 'bind-published-comment') throw new Error(`${arg} is only valid with bind-published-comment`);
+        opts.invocationId = String(argv[++i] ?? '');
+        break;
+      case '--reviewer-slot':
+        if (command !== 'bind-published-comment') throw new Error(`${arg} is only valid with bind-published-comment`);
+        opts.reviewerSlot = String(argv[++i] ?? '');
         break;
       case '--review-dir':
         requireArtifactCommand(arg);
@@ -801,6 +818,31 @@ function staleRetryPendingBinding(
 
 export function runStageFinalizeCli(argv: string[]): number {
   return runParsedCli(argv, 'create-issue-stage-finalize', parseStageFinalizeArgs, (opts) => {
+    if (opts.command === 'bind-published-comment') {
+      const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
+      const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
+      if (opts.stageEvidencePaths.length !== 1) {
+        process.stderr.write('create-issue-stage-finalize: bind-published-comment requires exactly one --stage-evidence\n');
+        return 2;
+      }
+      const stageEvidencePath = parseRequiredNonEmptyString(opts.stageEvidencePaths[0], '--stage-evidence');
+      const reviewerSlot = parseRequiredNonEmptyString(opts.reviewerSlot, '--reviewer-slot');
+      const invocationId = parseRequiredNonEmptyString(opts.invocationId, '--invocation-id');
+      const commentUrl = parseRequiredNonEmptyString(opts.commentUrl, '--comment-url');
+      const result = bindPublishedCommentToSlot({
+        reviewDir,
+        stageEvidencePath,
+        repositoryFullName: opts.repo,
+        issueNumber,
+        reviewerSlot,
+        invocationId,
+        commentUrl,
+      });
+      if (opts.json) console.log(JSON.stringify(result));
+      else if (!result.ok) process.stderr.write(result.errors.join('\n') + '\n');
+      return result.ok ? 0 : 1;
+    }
+
     if (opts.command === 'reconcile-stage') {
       const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
       const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');

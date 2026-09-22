@@ -14,6 +14,7 @@ import {
   classifyReconciliationTransport,
   inspectAcceptanceArtifacts,
   locateGovernedAuthorDispositionBlock,
+  parseCanonicalCaptureRevision,
   produceAcceptanceArtifacts,
   reconcileCreateIssueStage,
   stageReceiptPayloadsMatchExceptDerivedChain,
@@ -30,6 +31,7 @@ import {
   type StageCompletenessReceiptV1,
   type VerifiedRelayEvidenceV1,
 } from './stage-completeness-core.ts';
+import { validateReviewLaneRecord } from './review-lane-record.ts';
 import {
   buildReviewLaneRouting,
   classifyReviewLaneDeclaration,
@@ -2920,6 +2922,74 @@ describe('Issue #1977 evidence-backed zero-send partial reconciliation', () => {
     });
   });
 
+  it('rewrites a stored eligible-zero-send second attempt to retry-forbidden and credentials it', () => {
+    const prepared = prepareZeroSend();
+    const evidence = JSON.parse(readFileSync(prepared.input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+    const invocation = evidence.invocations[0] as Record<string, any>;
+    invocation.attemptOrdinal = 2;
+    invocation.retryAttempt = true;
+    invocation.retryClass = 'eligible-zero-send';
+    writeFileSync(prepared.input.reviewEvidencePath, JSON.stringify(evidence, null, 2) + '\n');
+
+    const reconciled = reconcileCreateIssueStage({
+      reviewDir: prepared.input.dir,
+      stageEvidencePath: prepared.input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: prepared.source,
+    });
+    expect(reconciled.ok, reconciled.errors.join('\n')).toBe(true);
+    const hydrated = JSON.parse(readFileSync(prepared.input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+    expect(hydrated.invocations[0]).toMatchObject({
+      attemptOrdinal: 2,
+      sendCount: 0,
+      retryClass: 'retry-forbidden',
+      terminalClassification: 'incident',
+      terminalResultIdentity: prepared.identity,
+    });
+  });
+
+  it('keeps a stored first-attempt eligible-zero-send class', () => {
+    const prepared = prepareZeroSend();
+    const evidence = JSON.parse(readFileSync(prepared.input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+    const invocation = evidence.invocations[0] as Record<string, any>;
+    invocation.attemptOrdinal = 1;
+    invocation.retryClass = 'eligible-zero-send';
+    writeFileSync(prepared.input.reviewEvidencePath, JSON.stringify(evidence, null, 2) + '\n');
+
+    const result = reconcileCreateIssueStage({
+      reviewDir: prepared.input.dir,
+      stageEvidencePath: prepared.input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: prepared.source,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('retryClass=eligible-zero-send');
+    const stored = JSON.parse(readFileSync(prepared.input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+    expect(stored.invocations[0].retryClass).toBe('eligible-zero-send');
+  });
+
+  it('rejects a stored eligible-zero-send second attempt that lacks terminal result identity', () => {
+    const prepared = prepareZeroSend({ observed_turn_result_identity: '' });
+    const evidence = JSON.parse(readFileSync(prepared.input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+    const invocation = evidence.invocations[0] as Record<string, any>;
+    invocation.attemptOrdinal = 2;
+    invocation.retryAttempt = true;
+    invocation.retryClass = 'eligible-zero-send';
+    writeFileSync(prepared.input.reviewEvidencePath, JSON.stringify(evidence, null, 2) + '\n');
+
+    const result = reconcileCreateIssueStage({
+      reviewDir: prepared.input.dir,
+      stageEvidencePath: prepared.input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: prepared.source,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('lacks a valid observed turn-result identity');
+  });
+
   it('keeps an unsealed first-attempt zero-send incident retry-eligible under current-main policy', () => {
     const prepared = prepareZeroSend();
     const evidence = JSON.parse(readFileSync(prepared.input.reviewEvidencePath, 'utf8')) as Record<string, any>;
@@ -3125,5 +3195,176 @@ describe('governed author disposition block shapes (Issue #1983)', () => {
     ].join('\n'));
     const result = produce(input);
     expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+});
+
+describe('Issue #2009 canonical plural capture verdicts', () => {
+  function pluralBody(verdict: string): string {
+    return canonicalFindingsVerdict().replace('VERDICT: FINDINGS', `VERDICT: ${verdict}`);
+  }
+
+  it('accepts a plural-finding capture whose sole verdict is FINDINGS or NEEDS_ATTENTION', () => {
+    expect(parseCanonicalCaptureRevision(pluralBody('FINDINGS'))).toEqual({
+      issueNumber: ISSUE,
+      sourceRevision: REVISION,
+      findingCount: 2,
+    });
+    expect(parseCanonicalCaptureRevision(pluralBody('NEEDS_ATTENTION'))).toEqual({
+      issueNumber: ISSUE,
+      sourceRevision: REVISION,
+      findingCount: 2,
+    });
+  });
+
+  it('rejects a plural-finding capture whose sole verdict is any other token', () => {
+    expect(parseCanonicalCaptureRevision(pluralBody('BLOCKED'))).toBeNull();
+    expect(parseCanonicalCaptureRevision(pluralBody('CLEAN'))).toBeNull();
+  });
+
+  it('still accepts a plural-finding capture with no verdict line', () => {
+    expect(parseCanonicalCaptureRevision(PUBLISHED_FINDINGS_WITHOUT_VERDICT)).toMatchObject({
+      issueNumber: 1777,
+      sourceRevision: 'r03',
+      findingCount: 1,
+    });
+  });
+
+  it('credentials VERDICT: NEEDS_ATTENTION the same way as VERDICT: FINDINGS', () => {
+    const body = pluralBody('NEEDS_ATTENTION');
+    const input = fixture({ transportClassification: 'incident', withCapture: true, captureText: body });
+    const result = produce(input, transport({
+      census: [...input.reviewComments, comment(body, { issueNumber: input.issueNumber })],
+      issueNumber: input.issueNumber,
+    }));
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+
+  it('does not credential a plural capture with another verdict token', () => {
+    const body = pluralBody('BLOCKED');
+    const input = fixture({ transportClassification: 'incident', withCapture: true, captureText: body });
+    const result = produce(input, transport({
+      census: [...input.reviewComments, comment(body, { issueNumber: input.issueNumber })],
+      issueNumber: input.issueNumber,
+    }));
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe('Issue #2010 settled receipt sourceVerdicts recovery', () => {
+  const DISAGREE = 'routed review record sourceVerdicts disagree with producer evidence';
+
+  function prepareRoutedReceipt(mutate: (reviewLane: {
+    sourceVerdicts: Record<string, 'accept' | 'material-findings'>;
+    sourceVerdictEvidence: Record<string, Record<string, unknown>>;
+  }) => void) {
+    const input = fixture({ transportClassification: 'complete' });
+    const declaration: ReviewLaneAuthorDeclaration = {
+      schema: 'review-lane-change-set/v1',
+      owner: 'issue-author',
+      entries: [{
+        kind: 'exact',
+        path: 'scripts/chatgpt-browser-turn/driver.ts',
+        behaviors: ['pure-review-lane-selection'],
+      }],
+    };
+    const normalized = normalizeReviewLaneDeclaration(declaration);
+    if (normalized.status !== 'usable') throw new Error('routing fixture input must be usable');
+    const routing = buildReviewLaneRouting(
+      { ...normalized, identity: `${REVISION}:${normalized.identity}` },
+      classifyReviewLaneDeclaration(declaration),
+      REVISION,
+      'architectural-review-attempt',
+      'disputed',
+    );
+    const sourceVerdicts = { '01': 'accept' as const, '02': 'accept' as const, '03': 'accept' as const };
+    const sourceVerdictEvidence = Object.fromEntries(input.reviewComments.map((reviewComment, index) => {
+      const slot = String(index + 1).padStart(2, '0');
+      const name = `pass-01-architectural-review-${slot}.capture.txt`;
+      const body = String(reviewComment.body);
+      const digest = createHash('sha256').update(body).digest('hex');
+      return [slot, {
+        producerEvidenceIdentity: `architectural-review-producer-${slot}`,
+        captureIdentity: `sha256:${digest}:${name}`,
+        terminalClassification: 'complete',
+        captureVerified: true,
+        digestMatches: true,
+        verdictText: 'NO_FINDINGS',
+        rawFindingCount: 0,
+      }];
+    }));
+    const settlement = settleReviewLane(routing, sourceVerdicts);
+    const reviewLane = {
+      routing,
+      finalRequiredSlots: settlement.finalRequiredSlots,
+      sourceVerdicts,
+      sourceVerdictEvidence,
+      conflictDecision: settlement.conflictDecision,
+      settlement,
+    };
+    mutate(reviewLane);
+    const receipt = {
+      schema: 'stage-completeness-receipt/v1',
+      stage: 'architectural-review',
+      stageAttemptId: 'architectural-review-attempt',
+      reviewLane,
+    };
+    const receiptPath = join(input.dir, 'stage-completeness-receipt-architectural-review-attempt.json');
+    const originalBytes = Buffer.from(`${JSON.stringify(receipt)}\n`);
+    writeFileSync(receiptPath, originalBytes);
+    return { input, receiptPath, originalBytes };
+  }
+
+  it('rebuilds a same-stageAttemptId receipt whose sourceVerdicts disagree with complete producer evidence', () => {
+    const prepared = prepareRoutedReceipt((reviewLane) => {
+      reviewLane.sourceVerdicts = { '01': 'material-findings', '02': 'accept', '03': 'accept' };
+    });
+    const result = reconcileCreateIssueStage({
+      reviewDir: prepared.input.dir,
+      stageEvidencePath: prepared.input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: transport(),
+    });
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.alreadySettled).not.toBe(true);
+    const receipt = JSON.parse(readFileSync(prepared.receiptPath, 'utf8')) as { reviewLane: { sourceVerdicts: Record<string, string> } };
+    expect(validateReviewLaneRecord(receipt.reviewLane)).toEqual({ ok: true, errors: [] });
+    expect(receipt.reviewLane.sourceVerdicts).toEqual({ '01': 'accept', '02': 'accept', '03': 'accept' });
+  });
+
+  it('leaves an already-matching settled receipt untouched', () => {
+    const prepared = prepareRoutedReceipt(() => {});
+    const result = reconcileCreateIssueStage({
+      reviewDir: prepared.input.dir,
+      stageEvidencePath: prepared.input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: transport(),
+    });
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.alreadySettled).toBe(true);
+    expect(readFileSync(prepared.receiptPath).equals(prepared.originalBytes)).toBe(true);
+  });
+
+  it('fails closed when producer evidence cannot rebuild the routed record', () => {
+    const prepared = prepareRoutedReceipt((reviewLane) => {
+      delete reviewLane.sourceVerdictEvidence['03'];
+    });
+    const result = reconcileCreateIssueStage({
+      reviewDir: prepared.input.dir,
+      stageEvidencePath: prepared.input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: transport(),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.alreadySettled).not.toBe(true);
+    expect(result.errors).toContain(DISAGREE);
+    expect(readFileSync(prepared.receiptPath).equals(prepared.originalBytes)).toBe(true);
+    const receipt = JSON.parse(readFileSync(prepared.receiptPath, 'utf8')) as {
+      reviewLane: { sourceVerdicts: Record<string, string>; sourceVerdictEvidence: Record<string, unknown> };
+    };
+    expect(receipt.reviewLane.sourceVerdictEvidence['03']).toBeUndefined();
+    expect(receipt.reviewLane.sourceVerdicts['03']).toBe('accept');
   });
 });

@@ -44,6 +44,22 @@ function producerBackedActiveWorkerShow(observationStatus: 'live' | 'running' = 
   } as const;
 }
 
+function terminallyFailedMissingRetainedWorkerShow() {
+  return {
+    dispatch: { status: 'failed', last_heartbeat_at: null },
+    worker: { agent_terminal_handle: 'term-missing' },
+    terminal: null,
+    observation: { exactWorker: false, status: 'missing' },
+    terminalResource: {
+      terminalHandle: 'term-missing',
+      worktreeId: 'repo::missing',
+      originDispatchId: 'dispatch-1',
+      ownerDispatchId: 'dispatch-1',
+      releaseState: 'retained',
+    },
+  } as const;
+}
+
 describe('Orca async transport envelope classification', () => {
   it('classifies a non-zero child exit with an error envelope as a runtime response', async () => {
     const directory = mkdtempSync(join(process.cwd(), '.tmp-orca-async-envelope-'));
@@ -1091,6 +1107,100 @@ describe('Orca assignment resolution', () => {
     expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1' })).toMatchObject({
       status: 'failed',
       operation: 'resolve_assignment_worker',
+    });
+    expect(adapter.observeAssignmentLifecycle({ provider: 'orca', bindingKey: 'dispatch-1' })).toMatchObject({
+      status: 'failed',
+      operation: 'resolve_assignment_worker',
+    });
+  });
+
+  it('classifies a terminally failed missing retained worker-show as gone', () => {
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      expect(args).toEqual(['orchestration', 'worker-show', '--dispatch', 'dispatch-1']);
+      return { ok: true, result: terminallyFailedMissingRetainedWorkerShow() };
+    });
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+    expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1' })).toEqual({
+      status: 'ok',
+      value: { kind: 'gone' },
+    });
+    expect(adapter.observeAssignmentLifecycle({ provider: 'orca', bindingKey: 'dispatch-1' })).toEqual({
+      status: 'ok',
+      value: { kind: 'gone', evidence: 'producer_exact_absence' },
+    });
+    expect(runJson.mock.calls.map((call) => call[0])).toEqual([
+      ['orchestration', 'worker-show', '--dispatch', 'dispatch-1'],
+      ['orchestration', 'worker-show', '--dispatch', 'dispatch-1'],
+    ]);
+  });
+
+  it('keeps exactWorker false unresolved while the dispatch is still dispatched', () => {
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: true,
+      result: {
+        ...terminallyFailedMissingRetainedWorkerShow(),
+        dispatch: { status: 'dispatched', last_heartbeat_at: currentOrcaHeartbeat() },
+      },
+    }));
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+    expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1' })).toEqual({
+      status: 'failed',
+      operation: 'resolve_assignment_worker',
+      reason: 'assignment_target_unresolved',
+    });
+    expect(adapter.observeAssignmentLifecycle({ provider: 'orca', bindingKey: 'dispatch-1' })).toEqual({
+      status: 'failed',
+      operation: 'resolve_assignment_worker',
+      reason: 'assignment_target_unresolved',
+    });
+  });
+
+  it('does not classify an exact live idle worker as gone', () => {
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'orchestration worker-show') {
+        return { ok: true, result: producerBackedActiveWorkerShow('live') };
+      }
+      if (operation === 'terminal show') {
+        return {
+          ok: true,
+          result: {
+            terminal: {
+              handle: 'term-active',
+              incarnationId: 'generation-active',
+              worktreePath: '/tmp/worktree-active',
+              title: 'active worker',
+              status: 'running',
+            },
+          },
+        };
+      }
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+    expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-active' })).toEqual({
+      status: 'ok',
+      value: {
+        kind: 'resolved',
+        worker: {
+          identity: { runtime: 'orca', id: 'term-active', generation: 'generation-active' },
+          workspacePath: '/tmp/worktree-active',
+          title: 'active worker',
+          provenance: 'internal',
+        },
+      },
+    });
+    expect(adapter.observeAssignmentLifecycle({ provider: 'orca', bindingKey: 'dispatch-active' })).toEqual({
+      status: 'ok',
+      value: {
+        kind: 'active',
+        worker: {
+          identity: { runtime: 'orca', id: 'term-active', generation: 'generation-active' },
+          workspacePath: '/tmp/worktree-active',
+          title: 'active worker',
+          provenance: 'internal',
+        },
+      },
     });
   });
 
