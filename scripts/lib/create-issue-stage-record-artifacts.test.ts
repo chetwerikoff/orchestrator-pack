@@ -3685,7 +3685,7 @@ describe('Issue #2028 reviewer-stage author reply gate', () => {
     expect(authorDispositionAdmission({
       consumesAuthorAdjudication: true,
       predecessorPresent: false,
-      authorReplyPresent: false,
+      authorReplyDisposition: 'absent',
     })).toBe('lifecycle-zero-state');
     const input = fixture({ phase: 'final-acceptance' });
     rmSync(input.authorReplyPath);
@@ -3708,5 +3708,41 @@ describe('Issue #2028 reviewer-stage author reply gate', () => {
     const status = inspect(input);
     expect(status.ok).toBe(false);
     expect(status.missing.some((item) => item.reason.includes('round-NN-author-reply'))).toBe(true);
+  });
+
+  it('defers pre-lens materialization when only a prior-stage author reply and dispositions exist', () => {
+    const input = fixture({ phase: 'pre-lens' });
+    rmSync(input.evidencePath);
+    input.stageEvidencePaths = [input.reviewEvidencePath];
+    writeGovernedAuthorReply(input.authorReplyPath, {
+      sourceRevision: REVISION,
+      predecessorStage: 'competitive',
+    });
+    const historicalDispositions = JSON.stringify({
+      schema: AUTHOR_DISPOSITIONS_SCHEMA,
+      producer: 'governed-author-output/v1',
+      reviewEpisodeId: input.episode,
+      sourceRevision: REVISION,
+      predecessorStage: 'competitive',
+      draft: 'prior stage draft',
+      findings: [],
+      m4: { inventory: [] },
+    }, null, 2) + '\n';
+    writeFileSync(input.authorPath, historicalDispositions);
+    const result = produce(input);
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.files).toContain('stage-completeness-receipt-architectural-review-attempt.json');
+    expect(result.files).not.toContain('finding-disposition-ledger.json');
+    expect(readFileSync(input.authorPath, 'utf8')).toBe(historicalDispositions);
+    const status = inspectAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir: input.outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: input.stageEvidencePaths,
+      authorDispositionsPath: input.authorPath,
+      phase: 'pre-lens',
+    });
+    expect(status.ok, status.missing.map((item) => item.reason).join('\n')).toBe(true);
+    expect(status.missing.some((item) => item.reason.includes('round-NN-author-reply'))).toBe(false);
   });
 });

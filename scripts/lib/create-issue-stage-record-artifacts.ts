@@ -3154,15 +3154,56 @@ export function producerConsumesAuthorAdjudication(phase: 'pre-lens' | 'post-len
  * Missing `round-NN-author-reply.*` is decided by whether this operation consumes
  * author adjudication. `predecessorStage === null` only selects lifecycle zero-state.
  */
+export type AuthorReplyDisposition = 'absent' | 'current' | 'historical' | 'malformed';
+
 export function authorDispositionAdmission(input: {
   consumesAuthorAdjudication: boolean;
   predecessorPresent: boolean;
-  authorReplyPresent: boolean;
+  authorReplyDisposition: AuthorReplyDisposition;
 }): AuthorDispositionAdmission {
-  if (input.authorReplyPresent) return 'require-governed-reply';
-  if (!input.predecessorPresent) return 'lifecycle-zero-state';
-  if (!input.consumesAuthorAdjudication) return 'defer-stage-materialization';
+  if (input.authorReplyDisposition === 'malformed') return 'require-governed-reply';
+  if (!input.consumesAuthorAdjudication && input.predecessorPresent && input.authorReplyDisposition !== 'current') {
+    return 'defer-stage-materialization';
+  }
+  if (!input.predecessorPresent && input.authorReplyDisposition !== 'current') return 'lifecycle-zero-state';
   return 'require-governed-reply';
+}
+
+function stageAuthorBinding(reviewDir: string): { sourceRevision: string | null; predecessorStage: ReviewStage | null } {
+  const stageInputs = stageEvidenceFilesInReviewDir(reviewDir).flatMap((path) => {
+    try {
+      const value: unknown = JSON.parse(readFileSync(path, 'utf8'));
+      return isRecord(value) ? [{ path, value }] : [];
+    } catch {
+      return [];
+    }
+  });
+  const predecessorStage = latestLifecycleStage(stageInputs);
+  const latest = stageInputs
+    .map((entry) => ({
+      stage: reviewStage(entry.value.stage),
+      sequence: Number(entry.value.stageSequence),
+      sourceRevision: typeof entry.value.sourceRevision === 'string' ? entry.value.sourceRevision : null,
+    }))
+    .filter((entry): entry is { stage: ReviewStage; sequence: number; sourceRevision: string | null } => (
+      Boolean(entry.stage) && Number.isInteger(entry.sequence)
+    ))
+    .sort((left, right) => right.sequence - left.sequence)[0];
+  return { sourceRevision: latest?.sourceRevision ?? null, predecessorStage };
+}
+
+function authorReplyDispositionForStage(
+  reviewDir: string,
+  sourceRevision: string | null,
+  predecessorStage: ReviewStage | null,
+): AuthorReplyDisposition {
+  const authorReplyPath = latestAuthorReplyPath(reviewDir);
+  if (!authorReplyPath) return 'absent';
+  const errors: string[] = [];
+  const parsed = parseGovernedAuthorDispositionOutput(authorReplyPath, errors);
+  if (!parsed) return 'malformed';
+  if (sourceRevision === null || parsed.sourceRevision !== sourceRevision || parsed.predecessorStage !== predecessorStage) return 'historical';
+  return 'current';
 }
 
 function prepareAuthorDispositionsFromGovernedOutput(input: {
@@ -3359,7 +3400,7 @@ export function produceAcceptanceArtifacts(
     const admission = authorDispositionAdmission({
       consumesAuthorAdjudication: producerConsumesAuthorAdjudication(artifactPhase),
       predecessorPresent: predecessorStage !== null,
-      authorReplyPresent: latestAuthorReplyPath(options.reviewDir) !== null,
+      authorReplyDisposition: authorReplyDispositionForStage(options.reviewDir, issueSnapshot.sourceRevision, predecessorStage),
     });
     if (admission === 'defer-stage-materialization') {
       authorAdjudicationDeferred = true;
@@ -3732,18 +3773,19 @@ export function inspectAcceptanceArtifacts(
       );
     }
   } else {
-    const authorReply = latestAuthorReplyPath(options.reviewDir);
-    const hasStageEvidence = stageEvidenceFilesInReviewDir(options.reviewDir).length > 0;
+    const authorBinding = stageAuthorBinding(options.reviewDir);
+    const authorReplyDisposition = authorReplyDispositionForStage(options.reviewDir, authorBinding.sourceRevision, authorBinding.predecessorStage);
     const admission = authorDispositionAdmission({
       consumesAuthorAdjudication: producerConsumesAuthorAdjudication(options.phase ?? 'final-acceptance'),
-      predecessorPresent: hasStageEvidence,
-      authorReplyPresent: authorReply !== null,
+      predecessorPresent: authorBinding.predecessorStage !== null,
+      authorReplyDisposition,
     });
-    if (authorReply) {
+    if (authorReplyDisposition === 'malformed') {
+      const authorReply = latestAuthorReplyPath(options.reviewDir);
       const authorErrors: string[] = [];
-      parseGovernedAuthorDispositionOutput(authorReply, authorErrors);
+      if (authorReply) parseGovernedAuthorDispositionOutput(authorReply, authorErrors);
       for (const error of authorErrors) missing.push({ artifact: 'governed author output', reason: error });
-    } else if (admission === 'require-governed-reply') {
+    } else if (admission === 'require-governed-reply' && authorReplyDisposition !== 'current') {
       missing.push({
         artifact: 'governed author output',
         reason: 'missing governed author output round-NN-author-reply.*; field=findings/m4 authority=author-owned',
@@ -3836,11 +3878,12 @@ export function inspectAcceptanceArtifacts(
     missing.push({ artifact: CLAUDE_PRODUCER_EVIDENCE_SCHEMA, reason: 'T3 architectural-lens capture requires --claude-producer-evidence <path>' });
   }
 
+  const deferredOutputBinding = stageAuthorBinding(options.reviewDir);
   const deferFindingLedger = authorDispositionAdmission({
     consumesAuthorAdjudication: producerConsumesAuthorAdjudication(options.phase ?? 'final-acceptance'),
-    predecessorPresent: stageEvidenceFilesInReviewDir(options.reviewDir).length > 0,
-    authorReplyPresent: latestAuthorReplyPath(options.reviewDir) !== null,
-  }) === 'defer-stage-materialization' && !existsSync(options.authorDispositionsPath);
+    predecessorPresent: deferredOutputBinding.predecessorStage !== null,
+    authorReplyDisposition: authorReplyDispositionForStage(options.reviewDir, deferredOutputBinding.sourceRevision, deferredOutputBinding.predecessorStage),
+  }) === 'defer-stage-materialization';
   const acceptanceOutputNames = deferFindingLedger
     ? ACCEPTANCE_ARTIFACT_OUTPUT_NAMES.filter((name) => name !== 'finding-disposition-ledger.json')
     : [...ACCEPTANCE_ARTIFACT_OUTPUT_NAMES];
