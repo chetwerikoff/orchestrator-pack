@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { spawn } from 'node:child_process';
 import { parseSmokeTestPlan } from './draft-discipline.mjs';
 import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { runProcessSync } from './kernel/subprocess.ts';
+import { basename, dirname, join } from 'node:path';
+import { runProcess, runProcessSync } from './kernel/subprocess.ts';
 import {
   buildSmokeAgentPrompt,
   checkSmokeTestPlan,
@@ -2596,6 +2595,7 @@ describe('independent pass is stored only after publication', () => {
     history: boolean;
     publishComment: (prNumber: number, body: string, repoRoot: string) => void;
     spawnFails?: boolean;
+    receiptWriteFails?: boolean;
   }): Promise<{ code?: number; error?: unknown; headSha: string; storeRoot: string; root: string }> {
     const fixture = gitFixture(input.prefix);
     const body = tieredBody();
@@ -2617,8 +2617,15 @@ describe('independent pass is stored only after publication', () => {
     const previousStore = process.env.PACK_REVIEW_RUN_STORE_ROOT;
     const previousReceipts = process.env.WORKER_SMOKE_RECEIPT_ROOT;
     const storeRoot = join(fixture.root, 'review-store');
+    const receiptRoot = input.receiptWriteFails
+      ? join(dirname(fixture.root), `${basename(fixture.root)}-receipt-blocker`)
+      : join(fixture.root, 'receipts');
     process.env.PACK_REVIEW_RUN_STORE_ROOT = storeRoot;
-    process.env.WORKER_SMOKE_RECEIPT_ROOT = join(fixture.root, 'receipts');
+    if (input.receiptWriteFails) {
+      mkdirSync(receiptRoot);
+      chmodSync(receiptRoot, 0o555);
+    }
+    process.env.WORKER_SMOKE_RECEIPT_ROOT = receiptRoot;
     try {
       const code = await runSmokeAttempt({
         command: 'run',
@@ -2679,6 +2686,10 @@ describe('independent pass is stored only after publication', () => {
       else process.env.PACK_REVIEW_RUN_STORE_ROOT = previousStore;
       if (previousReceipts === undefined) delete process.env.WORKER_SMOKE_RECEIPT_ROOT;
       else process.env.WORKER_SMOKE_RECEIPT_ROOT = previousReceipts;
+      if (input.receiptWriteFails) {
+        chmodSync(receiptRoot, 0o755);
+        rmSync(receiptRoot, { recursive: true, force: true });
+      }
     }
   }
 
@@ -2702,6 +2713,25 @@ describe('independent pass is stored only after publication', () => {
       expect(bodies[0]).toContain('result: PASS');
       expect(bodies[0]).toContain(result.headSha);
       expect(independentStatus(206801, result.storeRoot)).toBe('passed');
+    } finally {
+      rmSync(result.root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a published independent PASS when the later receipt write throws', async () => {
+    const bodies: string[] = [];
+    const result = await runOrdering({
+      prefix: 'ordering-pass-receipt-throws-',
+      prNumber: 206809,
+      actor: 'independent',
+      history: true,
+      receiptWriteFails: true,
+      publishComment: (_prNumber, body) => { bodies.push(body); },
+    });
+    try {
+      expect(result.code === 0 && result.error === undefined).toBe(false);
+      expect(bodies.some((body) => body.includes('result: PASS') && body.includes(result.headSha))).toBe(true);
+      expect(independentStatus(206809, result.storeRoot)).toBe('passed');
     } finally {
       rmSync(result.root, { recursive: true, force: true });
     }
@@ -2789,13 +2819,18 @@ describe('independent pass is stored only after publication', () => {
   });
 
   async function deadPid(): Promise<number> {
-    const child = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 20)']);
-    const pid = child.pid;
-    if (!pid) throw new Error('missing child pid');
-    await new Promise<void>((resolve, reject) => {
-      child.once('exit', () => resolve());
-      child.once('error', reject);
+    let pid = 0;
+    const result = await runProcess({
+      command: process.execPath,
+      args: ['-e', 'process.exit(0)'],
+      allowEmptyStdout: true,
+      onSpawn: (spawned) => {
+        pid = spawned;
+      },
     });
+    if (!result.ok || pid <= 0) {
+      throw new Error(`dead pid fixture failed: ${result.error ?? result.outcome}`);
+    }
     return pid;
   }
 
