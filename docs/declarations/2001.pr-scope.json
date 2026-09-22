@@ -4,6 +4,7 @@
   "declared_paths": [
     "docs/browser-gpt-turn-runbook.md",
     "docs/chatgpt-task-execution-runbook.md",
+    "docs/declarations/2001.pr-scope.json",
     "scripts/browser-gpt-page-probe.test.ts",
     "scripts/flow-manager-authority-contract.test.ts",
     "scripts/pack-review-no-review-reconcile.test.ts",
@@ -58,6 +59,7 @@
   "allowed_roots": [
     "docs/browser-gpt-turn-runbook.md",
     "docs/chatgpt-task-execution-runbook.md",
+    "docs/declarations/",
     "scripts/browser-gpt-page-probe.test.ts",
     "scripts/flow-manager-authority-contract.test.ts",
     "scripts/pack-review-no-review-reconcile.test.ts",
