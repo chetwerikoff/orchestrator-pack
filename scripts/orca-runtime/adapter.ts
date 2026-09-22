@@ -1093,7 +1093,12 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     const current = this.findWorker(worker, currentOptions);
     if (current.status !== 'ok') return current;
     if (current.value === null) return runtimeFailure('readiness', 'worker_generation_not_found');
-    const urlRecord = this.#openCodeUrls.get(worker.id);
+    const armed = this.#openCodeUrls.get(worker.id);
+    const candidateUrl = this.#owned.get(worker.id)?.openCodeUrl;
+    const urlRecord = armed ?? (candidateUrl ? {
+      identity: current.value.identity,
+      url: candidateUrl,
+    } : undefined);
     if (!urlRecord?.url || !sameRuntimeWorker(urlRecord.identity, current.value.identity)) {
       return runtimeUnsupported('readiness', 'runtime_opencode_control_unavailable');
     }
@@ -1134,6 +1139,9 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
         && row.directory === current.value!.workspacePath;
     });
     if (!matchingSession) return runtimeUnsupported('readiness', 'opencode_session_directory_mismatch');
+    if (!this.#openCodeUrls.has(worker.id)) {
+      this.#rememberOpenCodeUrl(current.value.identity, urlRecord.url, urlRecord.agent);
+    }
     return {
       status: 'ok',
       value: { healthy: true, version: health.version.trim() },
@@ -1492,7 +1500,6 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       title: worker.title,
       ...(launch?.url ? { openCodeUrl: launch.url } : {}),
     });
-    if (launch?.url) this.#rememberOpenCodeUrl(identity, launch.url, launch.agent);
     this.#rememberWorkspace(identity, workspace, worker.workspacePath);
     return { status: 'ok', value: worker };
   }
@@ -1523,6 +1530,10 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
         action: input.writeOnly ? 'append-prompt' : 'submit-prompt',
         ...(input.text !== undefined ? { text: input.text } : {}),
       }, options);
+    }
+    const openCodeCandidate = this.#owned.get(input.worker.id)?.openCodeUrl;
+    if (openCodeCandidate) {
+      return { status: 'send_failed', reason: 'runtime_opencode_control_unavailable' };
     }
     const args = ['terminal', 'send', '--terminal', input.worker.id];
     if (!input.submitOnly) args.push('--text', input.text ?? '');
