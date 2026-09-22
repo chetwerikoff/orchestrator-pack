@@ -242,6 +242,22 @@ function isTerminallyFailedMissingRetained(parsed: OrcaWorkerShowResult): boolea
     && parsed.terminalResource?.releaseState === 'retained';
 }
 
+function retainedExactTerminalHandle(parsed: OrcaWorkerShowResult): string {
+  return String(
+    parsed.terminal?.handle
+      ?? parsed.worker?.agent_terminal_handle
+      ?? parsed.terminalResource?.terminalHandle
+      ?? '',
+  ).trim();
+}
+
+function isTerminallyFailedExactLiveRetained(parsed: OrcaWorkerShowResult): boolean {
+  return parsed.observation?.exactWorker === true
+    && (parsed.observation?.status?.trim().toLowerCase() ?? '') === 'live'
+    && (parsed.dispatch?.status?.trim().toLowerCase() ?? '') === 'failed'
+    && parsed.terminalResource?.releaseState === 'retained';
+}
+
 function classifyWorkerLifecycle(result: OrcaWorkerShowResult | undefined): OrcaAssignmentActivity {
   const lifecycle = normalizedWorkerLifecycle(result);
   if (lifecycle.observationStatus === 'exited') return 'inactive';
@@ -436,7 +452,9 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       const resourceOwner = String(parsed.terminalResource?.ownerDispatchId ?? '').trim();
       const workerId = released && resourceOwner === dispatchId
         ? String(parsed.terminalResource?.terminalHandle ?? '').trim()
-        : '';
+        : isTerminallyFailedExactLiveRetained(parsed)
+          ? retainedExactTerminalHandle(parsed)
+          : '';
       return {
         status: 'ok',
         value: {
