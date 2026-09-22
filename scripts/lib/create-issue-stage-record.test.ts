@@ -44,7 +44,7 @@ import {
   makeTempDir,
   sampleStageReceipt,
 } from './create-issue-stage-record-test-helpers.ts';
-import type { CycleEventLogical, PublicActor, StageEventLogical, TrustedComment } from './create-issue-stage-record-types.ts';
+import type { CycleEventLogical, GhTransport, PublicActor, StageEventLogical, TrustedComment } from './create-issue-stage-record-types.ts';
 import { CYCLE_SCHEMA, FINAL_SCHEMA, STAGE_SCHEMA } from './create-issue-stage-record-types.ts';
 
 describe('create-issue-stage-record marker and lineage', () => {
@@ -1732,5 +1732,206 @@ describe('poisoned canonical deterministic attempt stays terminal (Issue #1999)'
     expect(result.stageAttemptId).toBe('1977-poisoned-canonical-attempt');
     expect(ghCalls).toBe(0);
     expect(readFileSync(prepared.evidencePath, 'utf8')).toBe(prepared.bytes);
+  });
+});
+
+describe('Issue #2032 reconcile-stage next action for noncanonical publications', () => {
+  const repo = 'chetwerikoff/orchestrator-pack';
+  const issueNumber = 2024;
+  const revision = 'r01';
+  const stageAttemptId = 'architectural-review-attempt';
+  const slot01Invocation = '85ab4287-059b-42cd-a182-a905d58d8f0c';
+  const slot02Invocation = '1068e8ee-878f-402d-8f0a-e2be130263cc';
+  const slot03Invocation = '1a3acb31-b9f8-4f8d-8350-22ca4c3e5372';
+
+  function findingsBody(invocationId: string, verdict: 'FINDINGS' | 'findings'): string {
+    return [
+      `Read revision: #${issueNumber} ${revision}`,
+      'review-economics-contract: v1',
+      `VERDICT: ${verdict}`,
+      'simplification-cut-candidate: yes',
+      'FINDING_COUNT: 1',
+      `INVOCATION_ID_TO_ECHO: ${invocationId}`,
+      'id: finding-one',
+      '',
+    ].join('\n');
+  }
+
+  function ghComment(id: number, body: string, login = 'chetwerikoff'): Record<string, unknown> {
+    const createdAt = '2026-09-21T00:00:00Z';
+    return {
+      id,
+      html_url: `https://github.com/${repo}/issues/${issueNumber}#issuecomment-${id}`,
+      issue_url: `https://api.github.com/repos/${repo}/issues/${issueNumber}`,
+      body,
+      created_at: createdAt,
+      updated_at: createdAt,
+      author_association: 'OWNER',
+      user: { login },
+    };
+  }
+
+  function censusTransport(
+    comments: Record<string, unknown>[],
+    mode: 'complete' | 'census-down' | 'identity-down' = 'complete',
+  ): GhTransport {
+    return {
+      runGh(argv: string[]) {
+        const target = argv[2] ?? '';
+        if (target === 'user') {
+          if (mode === 'identity-down') return { exitCode: 1, stdout: '', stderr: 'principal unavailable' };
+          return { exitCode: 0, stdout: 'chetwerikoff\n', stderr: '' };
+        }
+        if (target === `repos/${repo}/issues/${issueNumber}` && argv.includes('--jq')) {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              title: 'Issue 2032 fixture',
+              body: `<!-- source-revision: ${revision} -->\n`,
+              labels: [],
+            }),
+            stderr: '',
+          };
+        }
+        if (target.startsWith(`repos/${repo}/issues/${issueNumber}/comments?`)) {
+          if (mode === 'census-down') return { exitCode: 1, stdout: '', stderr: 'census unavailable' };
+          const page = Number(new URLSearchParams(target.split('?')[1] ?? '').get('page') ?? '1');
+          return { exitCode: 0, stdout: JSON.stringify(page === 1 ? comments : []), stderr: '' };
+        }
+        if (target.includes('/issues/comments/')) {
+          const id = Number(target.split('/').at(-1));
+          const comment = comments.find((item) => Number(item.id) === id);
+          if (!comment) return { exitCode: 1, stdout: '', stderr: `missing comment ${id}` };
+          return { exitCode: 0, stdout: JSON.stringify(comment), stderr: '' };
+        }
+        return { exitCode: 1, stdout: '', stderr: `unexpected gh call: ${argv.join(' ')}` };
+      },
+    };
+  }
+
+  function evidenceFor(slots: Array<{ slot: string; invocationId: string }>): Record<string, unknown> {
+    return {
+      schema: STAGE_EVIDENCE_SCHEMA,
+      tier: 'T2',
+      stage: 'architectural-review',
+      stageAttemptId,
+      stageSequence: 1,
+      sourceRevision: revision,
+      reviewerCardinality: slots.length,
+      invocations: slots.map((slot, index) => ({
+        schema: 'reviewer-invocation-envelope/v1',
+        stage: 'architectural-review',
+        stageAttemptId,
+        sourceRevision: revision,
+        invocationId: slot.invocationId,
+        reviewerSlot: slot.slot,
+        reviewerOrdinal: index + 1,
+        attemptOrdinal: 1,
+        retryAttempt: false,
+        terminal: true,
+        terminalClassification: 'incident',
+        sendCount: 1,
+        retryClass: 'retry-forbidden',
+      })),
+    };
+  }
+
+  function reconcile(
+    slots: Array<{ slot: string; invocationId: string }>,
+    comments: Record<string, unknown>[],
+    mode: 'complete' | 'census-down' | 'identity-down' = 'complete',
+  ) {
+    const reviewDir = makeCliTempDir();
+    const evidencePath = join(reviewDir, 'attempt-001.json');
+    writeFileSync(evidencePath, JSON.stringify(evidenceFor(slots)));
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      logs.push(String(line));
+    });
+    try {
+      const code = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
+        '--repo', repo,
+        '--issue-number', String(issueNumber),
+        '--review-dir', reviewDir,
+        '--stage-evidence', evidencePath,
+        '--json',
+      ], censusTransport(comments, mode));
+      return {
+        code,
+        output: JSON.parse(logs.at(-1) ?? '{}') as {
+          ok: boolean;
+          cause?: string;
+          temporary?: string;
+          blocker?: string;
+          errors?: string[];
+          nextAction: { kind?: string; argv?: string[] } | null;
+        },
+      };
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  const oneSlot = [{ slot: '01', invocationId: slot01Invocation }];
+
+  it('keeps a complete census with no bound publication on the read-only reconcile continuation', () => {
+    const result = reconcile(oneSlot, []);
+    expect(result.code).toBe(1);
+    expect(result.output.ok).toBe(false);
+    expect(result.output.nextAction?.kind).toBe('reconcile-stage-read-only');
+    expect(result.output.nextAction?.argv).toContain('reconcile-stage');
+    expect(result.output.nextAction?.argv).toContain(stageAttemptId);
+    expect(result.output.errors?.join('\n')).toContain('zero_principal_owned_match');
+  });
+
+  it('keeps a temporary census failure on the read-only reconcile continuation', () => {
+    const result = reconcile(oneSlot, [], 'census-down');
+    expect(result.code).toBe(1);
+    expect(result.output.temporary).toBe('source-unavailable');
+    expect(result.output.nextAction?.kind).toBe('reconcile-stage-read-only');
+  });
+
+  it('keeps an unresolved principal on the read-only reconcile continuation', () => {
+    const result = reconcile(oneSlot, [], 'identity-down');
+    expect(result.code).toBe(1);
+    expect(result.output.temporary).toBe('identity-unresolved');
+    expect(result.output.nextAction?.kind).toBe('reconcile-stage-read-only');
+  });
+
+  it.each([
+    [5772579436, slot01Invocation],
+    [5772564705, slot03Invocation],
+  ])('returns nextAction null for permanently noncanonical publication %s', (commentId, invocationId) => {
+    const result = reconcile([{ slot: '01', invocationId }], [
+      ghComment(commentId, findingsBody(invocationId, 'findings')),
+    ]);
+    const errors = result.output.errors?.join('\n') ?? '';
+    expect(result.code).toBe(1);
+    expect(result.output.nextAction).toBeNull();
+    expect(result.output.cause).toBe('reconciliation_failed');
+    expect(errors).toContain('permanently_noncanonical_publication');
+    expect(errors).not.toContain('zero_principal_owned_match');
+    expect(errors).not.toContain('authoritative GitHub artifact absent');
+    expect(result.output.blocker).not.toContain('reconcile-stage');
+  });
+
+  it('does not return the same reconcile argv for the Issue #2024 mixed slot shape', () => {
+    const slots = [
+      { slot: '01', invocationId: slot01Invocation },
+      { slot: '02', invocationId: slot02Invocation },
+      { slot: '03', invocationId: slot03Invocation },
+    ];
+    const result = reconcile(slots, [
+      ghComment(5772579436, findingsBody(slot01Invocation, 'findings')),
+      ghComment(5772585168, findingsBody(slot02Invocation, 'FINDINGS')),
+      ghComment(5772564705, findingsBody(slot03Invocation, 'findings')),
+    ]);
+    const errors = result.output.errors?.join('\n') ?? '';
+    expect(result.code).toBe(1);
+    expect(result.output.nextAction).toBeNull();
+    expect(errors).toContain(`invocationId=${slot01Invocation}`);
+    expect(errors).not.toContain(`invocationId=${slot02Invocation}`);
+    expect(errors).not.toContain('zero_principal_owned_match');
   });
 });

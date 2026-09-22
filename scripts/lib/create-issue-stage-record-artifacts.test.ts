@@ -3652,3 +3652,149 @@ describe('cause-classed zero-send continuation (Issue #1999)', () => {
     });
   });
 });
+
+describe('Issue #2032 permanently noncanonical owner publications', () => {
+  const slot01Invocation = '85ab4287-059b-42cd-a182-a905d58d8f0c';
+  const slot02Invocation = '1068e8ee-878f-402d-8f0a-e2be130263cc';
+  const slot03Invocation = '1a3acb31-b9f8-4f8d-8350-22ca4c3e5372';
+
+  function findingsBody(invocationId: string, verdict: 'FINDINGS' | 'findings'): string {
+    return canonicalFindingsVerdict({
+      invocationId,
+      findingCountLine: 'FINDING_COUNT: 2',
+    }).replace('VERDICT: FINDINGS', `VERDICT: ${verdict}`);
+  }
+
+  it('rejects VERDICT: findings and does not normalize it into the canonical grammar', () => {
+    const lowercase = findingsBody('invocation-001', 'findings');
+    expect(lowercase).toContain('VERDICT: findings');
+    expect(parseCanonicalCaptureRevision(lowercase)).toBeNull();
+    expect(parseCanonicalCaptureRevision(findingsBody('invocation-001', 'FINDINGS'))).toMatchObject({
+      issueNumber: ISSUE,
+      sourceRevision: REVISION,
+      findingCount: 2,
+    });
+  });
+
+  it('classifies one unedited owner publication with a noncanonical VERDICT as terminal', () => {
+    const input = fixture({ transportClassification: 'incident' });
+    const body = findingsBody('invocation-001', 'findings');
+    const result = produce(input, transport({
+      census: [...input.reviewComments, comment(body, { issueNumber: input.issueNumber })],
+    }));
+    const errors = result.errors.join('\n');
+    expect(result.ok).toBe(false);
+    expect(result.temporary).toBeUndefined();
+    expect(errors).toContain('permanently_noncanonical_publication');
+    expect(errors).toContain('invocationId=invocation-001');
+    expect(errors).not.toContain('zero_principal_owned_match');
+    expect(errors).not.toContain('authoritative GitHub artifact absent');
+    expect(reconcileStageReadIsRetryable(result)).toBe(false);
+  });
+
+  it('keeps a canonical VERDICT: FINDINGS publication on the existing success path', () => {
+    const input = fixture({ transportClassification: 'incident' });
+    const body = findingsBody('invocation-001', 'FINDINGS');
+    const result = produce(input, transport({
+      census: [...input.reviewComments, comment(body, { issueNumber: input.issueNumber })],
+    }));
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+
+  it('keeps an edited noncanonical publication on the retryable zero-match path', () => {
+    const input = fixture({ transportClassification: 'incident' });
+    const body = findingsBody('invocation-001', 'findings');
+    const result = produce(input, transport({
+      census: [...input.reviewComments, comment(body, {
+        issueNumber: input.issueNumber,
+        updated_at: '2026-08-08T04:00:00Z',
+      })],
+    }));
+    const errors = result.errors.join('\n');
+    expect(errors).toContain('zero_principal_owned_match');
+    expect(errors).not.toContain('permanently_noncanonical_publication');
+    expect(reconcileStageReadIsRetryable(result)).toBe(true);
+  });
+
+  it('keeps two bound noncanonical publications on the retryable zero-match path', () => {
+    const input = fixture({ transportClassification: 'incident' });
+    const body = findingsBody('invocation-001', 'findings');
+    const result = produce(input, transport({
+      census: [
+        ...input.reviewComments,
+        comment(body, { id: COMMENT_ID, issueNumber: input.issueNumber }),
+        comment(body, { id: COMMENT_ID + 9, issueNumber: input.issueNumber }),
+      ],
+    }));
+    const errors = result.errors.join('\n');
+    expect(errors).toContain('zero_principal_owned_match');
+    expect(errors).not.toContain('permanently_noncanonical_publication');
+    expect(reconcileStageReadIsRetryable(result)).toBe(true);
+  });
+
+  it('keeps a wrong-revision noncanonical publication on the retryable zero-match path', () => {
+    const input = fixture({ transportClassification: 'incident' });
+    const body = findingsBody('invocation-001', 'findings').replace(`#${ISSUE} ${REVISION}`, `#${ISSUE} r09`);
+    const result = produce(input, transport({
+      census: [...input.reviewComments, comment(body, { issueNumber: input.issueNumber })],
+    }));
+    const errors = result.errors.join('\n');
+    expect(errors).toContain('zero_principal_owned_match');
+    expect(errors).not.toContain('permanently_noncanonical_publication');
+    expect(reconcileStageReadIsRetryable(result)).toBe(true);
+  });
+
+  it('keeps authoritative-artifact-absent and temporary reads retryable', () => {
+    expect(reconcileStageReadIsRetryable({
+      errors: ['authoritative GitHub artifact absent: invocation-001'],
+    })).toBe(true);
+    for (const classification of ['source-unavailable', 'identity-unresolved', 'provenance-unresolved', 'observation-lost'] as const) {
+      expect(reconcileStageReadIsRetryable({
+        temporary: classification,
+        errors: [`TEMPORARY ${classification}: fixture`],
+      })).toBe(true);
+    }
+    expect(reconcileStageReadIsRetryable({
+      errors: ['authoritative GitHub artifact permanently_noncanonical_publication: comment=1'],
+    })).toBe(false);
+  });
+
+  it('does not retry the Issue #2024 shape of lowercase slots beside one canonical slot', () => {
+    const input = fixture({ transportClassification: 'incident' });
+    const evidence = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as {
+      invocations: Array<Record<string, unknown>>;
+    };
+    const shapes = [
+      { index: 0, commentId: 5772579436, invocationId: slot01Invocation, verdict: 'findings' as const },
+      { index: 1, commentId: 5772585168, invocationId: slot02Invocation, verdict: 'FINDINGS' as const },
+      { index: 2, commentId: 5772564705, invocationId: slot03Invocation, verdict: 'findings' as const },
+    ];
+    const comments = shapes.map((shape) => {
+      const body = findingsBody(shape.invocationId, shape.verdict);
+      evidence.invocations[shape.index]!.invocationId = shape.invocationId;
+      if (shape.verdict === 'FINDINGS') {
+        writeFileSync(join(input.dir, 'pass-01-architectural-review-02.capture.txt'), body);
+      }
+      return comment(body, { id: shape.commentId, issueNumber: input.issueNumber });
+    });
+    writeFileSync(input.reviewEvidencePath, JSON.stringify(evidence));
+    const result = reconcileCreateIssueStage({
+      reviewDir: input.dir,
+      stageEvidencePath: input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: transport({ census: comments, issueNumber: ISSUE }),
+    });
+    const errors = result.errors.join('\n');
+    expect(result.ok, errors).toBe(false);
+    expect(result.temporary).toBeUndefined();
+    expect(errors).toContain(`invocationId=${slot01Invocation}`);
+    expect(errors).not.toContain(`invocationId=${slot02Invocation}`);
+    expect(errors).not.toContain('zero_principal_owned_match');
+    expect(errors).not.toContain('authoritative GitHub artifact absent');
+    expect(reconcileStageReadIsRetryable(result)).toBe(false);
+    expect(parseCanonicalCaptureRevision(String(comments[0]!.body))).toBeNull();
+    expect(parseCanonicalCaptureRevision(String(comments[1]!.body))).toMatchObject({ findingCount: 2 });
+    expect(parseCanonicalCaptureRevision(String(comments[2]!.body))).toBeNull();
+  });
+});

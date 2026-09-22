@@ -594,6 +594,29 @@ function canonicalReviewerArtifactRevision(
     : null;
 }
 
+function publicationBindingAnchors(
+  text: string,
+  issueNumber: number,
+  sourceRevision: string,
+  invocationId: string,
+): boolean {
+  const lines = text.split(/\n/).map((line) => line.replace(/\r$/, ''));
+  const firstNonEmpty = lines.find((line) => line.trim().length > 0);
+  const match = firstNonEmpty ? CANONICAL_REVISION_LINE_RE.exec(firstNonEmpty) : null;
+  const declarations = lines.filter((line) => CANONICAL_REVISION_LINE_RE.test(line)).length;
+  if (!match || declarations !== 1) return false;
+  if (Number(match[1]) !== issueNumber || match[2] !== sourceRevision) return false;
+  const echoes = lines.map((line) => line.trim()).flatMap((line) => {
+    const echo = INVOCATION_ECHO_RE.exec(line);
+    return echo ? [echo[1]!] : [];
+  });
+  return echoes.length === 1 && echoes[0] === invocationId;
+}
+
+function verdictGrammarIsPermanentlyNoncanonical(text: string): boolean {
+  return !pluralCaptureVerdictIsCanonical(text, rawFindingCount(text));
+}
+
 function temporaryError(
   classification: AcceptanceArtifactTemporaryClassification,
   detail: string,
@@ -1086,6 +1109,20 @@ function resolveAuthoritativeArtifact(
         );
         return observedRevision ? [observedRevision] : [];
       });
+      const permanentNoncanonical = targetedComments.filter((comment) => (
+        comment.userLogin !== null
+        && sameGithubPrincipal(comment.userLogin, context.principalLogin)
+        && comment.createdAt === comment.updatedAt
+        && publicationBindingAnchors(comment.body, context.census.issueNumber, sourceRevision, invocationId)
+        && verdictGrammarIsPermanentlyNoncanonical(comment.body)
+      ));
+      if (permanentNoncanonical.length === 1 && principalRevisionCandidates.length === 0) {
+        const comment = permanentNoncanonical[0]!;
+        errors.push(
+          `authoritative GitHub artifact permanently_noncanonical_publication: repository=${context.census.repositoryFullName} issue=#${context.census.issueNumber} stage=${stage} invocationId=${invocationId} comment=${comment.id}`,
+        );
+        return null;
+      }
       if (principalRevisionCandidates.length > 0) {
         errors.push(
           `authoritative GitHub artifact revision mismatch: repository=${context.census.repositoryFullName} issue=#${context.census.issueNumber} stage=${stage} invocationId=${invocationId} expected=${sourceRevision} observed=${[...new Set(principalRevisionCandidates)].sort().join(',')}`,
