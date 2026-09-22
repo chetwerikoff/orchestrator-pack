@@ -4,9 +4,7 @@
   "declared_paths": [
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
-    "scripts/lib/operator-publication.test.ts",
     "scripts/orca-runtime/adapter.ts",
-    "scripts/orca-runtime/native.ts",
     "scripts/orca-runtime/task-adapter.test.ts"
   ],
   "denylist": [
@@ -18,9 +16,7 @@
   "allowed_roots": [
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
-    "scripts/lib/operator-publication.test.ts",
     "scripts/orca-runtime/adapter.ts",
-    "scripts/orca-runtime/native.ts",
     "scripts/orca-runtime/task-adapter.test.ts"
   ],
   "source_revision": "04cd61c022f60cb2c4e3a6092608e631ca076207"
