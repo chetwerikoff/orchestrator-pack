@@ -837,18 +837,20 @@ export function observePackReviewHead(input: {
       if (current.smokeOrdering) {
         const independent = current.smokeOrdering.independent;
         const failedIndependent = independent?.status === 'failed';
+        const stalePassedIndependent = independentPassedOnPreviousHead(independent, headSha);
         current.smokeOrdering = {
           ...current.smokeOrdering,
           workerOwned: current.cycle && isLogicalRoundCycle(current.cycle)
             ? current.smokeOrdering.workerOwned
             : undefined,
-          ...(independent
+          ...(independent && !stalePassedIndependent
             ? { independent: failedIndependent
               ? { ...independent, headSha, status: 'failed' }
               : { ...independent } }
             : {}),
           ...(independent?.startedEver ? {} : { reviewSettledHeadSha: undefined }),
         };
+        if (stalePassedIndependent) delete current.smokeOrdering.independent;
       }
       if (current.cycle?.reviewStageComplete === true) return current;
       if (current.cycle?.state === 'closed') {
@@ -1149,6 +1151,13 @@ export function assertPackReviewSmokeAdmission(input: {
   }
 }
 
+function independentPassedOnPreviousHead(
+  independent: { headSha: string; status: SmokeOrderingStatus } | undefined,
+  headSha: string,
+): boolean {
+  return independent?.status === 'passed' && independent.headSha !== headSha;
+}
+
 export function assertIndependentSmokeAdmission(input: {
   authority: PackReviewAuthorityDocument;
   headSha: string;
@@ -1161,7 +1170,7 @@ export function assertIndependentSmokeAdmission(input: {
   }
   const ordering = input.authority.smokeOrdering;
   const independent = ordering?.independent;
-  if (independent?.startedEver) {
+  if (independent?.startedEver && !independentPassedOnPreviousHead(independent, headSha)) {
     if (independent.status === 'failed'
         && independent.failureKind === 'finding'
         && independent.failureHeadSha === headSha) {
@@ -1173,7 +1182,7 @@ export function assertIndependentSmokeAdmission(input: {
     if (independent.headSha !== headSha && independent.status !== 'failed') {
       throw new PackReviewAuthorityError(
         'smoke_ordering_independent_head_forbidden',
-        'a started or passed independent smoke cannot continue on a new head',
+        'a started independent smoke cannot continue on a new head',
       );
     }
     if (independent.headSha === headSha && independent.status === 'started') {
@@ -1361,7 +1370,7 @@ export function commitSmokeOrderingTransition(input: {
         const workerFixOnNewHead = independent?.status === 'failed'
           && independent.failureKind === 'finding'
           && independent.failureHeadSha !== headSha;
-        if (independent && !workerFixOnNewHead) {
+        if (independent && !workerFixOnNewHead && !independentPassedOnPreviousHead(independent, headSha)) {
           throw new PackReviewAuthorityError(
             'smoke_ordering_worker_smoke_forbidden',
             'worker-owned smoke is forbidden after independent smoke has started',
