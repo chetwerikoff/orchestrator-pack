@@ -474,11 +474,39 @@ describe('OpenCode HTTP control plane', () => {
     expect(isOpenCodeComposerEmpty(['idle splash', '┃  Pack-Opk-151bd854148541919ddf2dd24aa069f5 · GLM 5.3 Flash TeamoRouter', '╹▀▀▀▀▀▀'])).toBe(true);
     expect(isOpenCodeComposerEmpty(['idle splash', '┃  Pack-Opk-                             ·Muse Spark 1.2 Free OpenCode', '┃  D51fd897bc56456082244bcd2e565320                           Zen', '╹▀▀▀▀▀▀'])).toBe(true);
     expect(isOpenCodeComposerEmpty(['idle splash', '┃  TeamoRouter 钱包余额不足，请前往 https://teamorouter.cn/dashboard?buy=1 充值后继续使用', '╹▀▀▀▀▀▀'])).toBe(true);
-    expect(isOpenCodeComposerEmpty(['idle splash', '┃  Ask anything... \"Fix broken tests\"', '╹▀▀▀▀▀▀'])).toBe(true);
+    expect(isOpenCodeComposerEmpty(['idle splash', '┃  Ask anything... "Fix broken tests"', '╹▀▀▀▀▀▀'])).toBe(true);
     expect(isOpenCodeComposerEmpty(['idle splash', '│ Ask anything…', '╹▀▀▀▀▀▀'])).toBe(true);
+    expect(isOpenCodeComposerEmpty(['idle splash', '┃  Ask anything… "Fix a TODO in the codebase"', '╹▀▀▀▀▀▀'])).toBe(true);
+    expect(isOpenCodeComposerEmpty(['idle splash', '┃  Ask anything… fix the auth bug', '╹▀▀▀▀▀▀'])).toBe(false);
     expect(isOpenCodeComposerEmpty(['idle splash', '┃ human text', '╹▀▀▀▀▀▀'])).toBe(false);
     expect(isOpenCodeComposerEmpty(['OpenCode', 'no composer'])).toBe(false);
     expect(isOpenCodeComposerEmpty(['╹▀▀▀▀▀▀', '┃ human text', '╹▀▀▀▀▀▀', '┃   ', '╹▀▀▀▀▀▀'])).toBe(true);
+  });
+
+  it('treats a measured idle OpenCode pane as empty so a pointer can still be written', () => {
+    // Issue #2026 AC5. These two lines were read from live smoke child panes: the quoted
+    // suggestion rotates and belongs to the placeholder, not to composer content. Requiring the
+    // placeholder to stand alone makes every idle pane look busy, so submit-prompt answers
+    // opencode_composer_not_empty and no orchestration pointer is ever written.
+    const idlePanes = [
+      ['idle splash', '┃', '┃  Ask anything… "Fix a TODO in the codebase"', '┃', '┃  Pack-Opk-Fc8e7b3661df4fcf9dd87c3e1389b93a · GPT-5.6 Luna OpenAI', '╹▀▀▀▀▀▀'],
+      ['idle splash', '┃  Ask anything… "What is the tech stack of this project?"', '┃  Pack-Opk-74ee63e8dbab4aeea656692dd8b573fb · GPT-5.6 Luna OpenAI', '╹▀▀▀▀▀▀'],
+    ];
+    for (const pane of idlePanes) expect(isOpenCodeComposerEmpty(pane)).toBe(true);
+    // Captured live from a pane launched by buildExecutorCommand, whose agent is the plain
+    // `pack` agent rather than a per-run Pack-Opk-<hash> one. Both status-line shapes exist in
+    // production and both must read as chrome, or no pointer can be written to that pane.
+    expect(isOpenCodeComposerEmpty([
+      '                       ┃',
+      '                       ┃  Ask anything… "Fix broken tests"',
+      '                       ┃',
+      '                       ┃  Pack · GPT-5.6 Luna OpenAI · high',
+      '                       ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀',
+    ])).toBe(true);
+    // The hole closed by the original change stays closed: unquoted text after the placeholder,
+    // and human text on its own, are composer content.
+    expect(isOpenCodeComposerEmpty(['idle splash', '┃  Ask anything… fix the auth bug', '╹▀▀▀▀▀▀'])).toBe(false);
+    expect(isOpenCodeComposerEmpty(['idle splash', '┃  fix the auth bug', '╹▀▀▀▀▀▀'])).toBe(false);
   });
 
   it('rejects malformed TUI prompt API responses', () => {
