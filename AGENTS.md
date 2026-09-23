@@ -230,7 +230,7 @@ executable wrappers as recovery. Structured wrappers parse stdout JSON only.
 **MUST NOT merge** unless either (a) the direct top-level user orders it, or
 (b) the caller is the exact current supervised local integration assignment
 described by Issue #926 and the delegated branch of
-[`merge-with-local-adoption`](.cursor/skills/merge-with-local-adoption/SKILL.md).
+`.cursor/skills/merge-with-local-adoption/SKILL.md`.
 The delegated branch is narrower than direct-user authority: its closed
 WorkerAssignment marker must match the exact PR/head and predecessor assignment,
 live dependency sequencing must be `merge_now`, and the existing production
