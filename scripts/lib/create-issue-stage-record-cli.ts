@@ -1166,8 +1166,7 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
           '--json',
         ];
         appendBlockedOnArgv(reconcileArgv, opts.blockedOn);
-        const retryableRead = reconcileStageReadIsRetryable(result)
-          || result.errors.some((error) => error.includes('permanently_noncanonical_publication'));
+        const retryableRead = reconcileStageReadIsRetryable(result);
         if (result.ok && !result.alreadySettled) {
           nextAction = createIssueNextAction({
             kind: 'produce-acceptance-artifacts',
@@ -1215,7 +1214,7 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
           )
         : null;
       const authorityConflict = !result.ok && result.errors.some((error) =>
-        /authoritative GitHub artifact (?:was )?edited|foreign[- ]comment|publisher mismatch|principal mismatch|edited publication/i.test(error)
+        /permanently_noncanonical_publication|authoritative GitHub artifact (?:was )?edited|foreign[- ]comment|publisher mismatch|principal mismatch|edited publication/i.test(error)
       );
       const output = zeroSendProjection
         ?? (authorityConflict && !opts.blockedOn
