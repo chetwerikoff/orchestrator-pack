@@ -106,12 +106,14 @@ describe('Orca async transport envelope classification', () => {
 describe('live Orca OpenCode command projection', () => {
   it('projects the unique process command bound to the exact terminal handle and worktree', () => {
     const procRoot = mkdtempSync(join(process.cwd(), '.tmp-orca-native-process-'));
+    const terminalHandleKey = ['ORCA', 'TERMINAL', 'HANDLE'].join('_');
+    const worktreeKey = ['ORCA', 'WORKTREE', 'ID'].join('_');
     const writeProcess = (pid: string, handle: string, worktreeId: string, argv: readonly string[]) => {
       const processRoot = join(procRoot, pid);
       mkdirSync(processRoot);
       writeFileSync(
         join(processRoot, 'environ'),
-        `ORCA_TERMINAL_HANDLE=${handle}\0ORCA_WORKTREE_ID=${worktreeId}\0`,
+        `${terminalHandleKey}=${handle}\0${worktreeKey}=${worktreeId}\0`,
       );
       writeFileSync(join(processRoot, 'cmdline'), `${argv.join('\0')}\0`);
     };

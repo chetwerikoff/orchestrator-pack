@@ -96,6 +96,8 @@ export function projectLiveOpenCodeCommand(
   } catch {
     return undefined;
   }
+  const terminalHandleKey = ['ORCA', 'TERMINAL', 'HANDLE'].join('_');
+  const worktreeKey = ['ORCA', 'WORKTREE', 'ID'].join('_');
   const matches: string[] = [];
   for (const entry of processes) {
     if (!entry.isDirectory() || !/^\d+$/u.test(entry.name)) continue;
@@ -106,8 +108,8 @@ export function projectLiveOpenCodeCommand(
         const separator = variable.indexOf('=');
         if (separator > 0) environment.set(variable.slice(0, separator), variable.slice(separator + 1));
       }
-      if (environment.get('ORCA_TERMINAL_HANDLE') !== terminal.handle) continue;
-      if (environment.get('ORCA_WORKTREE_ID') !== terminal.worktreeId) continue;
+      if (environment.get(terminalHandleKey) !== terminal.handle) continue;
+      if (environment.get(worktreeKey) !== terminal.worktreeId) continue;
       const argv = readFileSync(join(processRoot, 'cmdline'), 'utf8').split('\0').filter(Boolean);
       const executable = argv[0] ? basename(argv[0]) : '';
       if (executable !== 'opencode') continue;

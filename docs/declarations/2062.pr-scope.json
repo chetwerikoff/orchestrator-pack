@@ -10,6 +10,7 @@
     "scripts/lib/cutover/types.ts",
     "scripts/lib/orchestrator-side-process-supervisor.ts",
     "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/native.ts",
     "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/orchestrator-wake-supervisor.test.ts",
     "scripts/pr2-foundation/post-review-smoke.test.ts",
@@ -17,7 +18,10 @@
     "scripts/pr2-foundation/scheduler-post-review-smoke-production.test.ts",
     "scripts/pr2-foundation/scheduler.ts",
     "scripts/runtime/contracts.ts",
-    "scripts/worker-smoke-run.ts"
+    "scripts/worker-smoke-run.ts",
+    "tests/external-output-references/capture-manifest.json",
+    "tests/external-output-references/captures/orca-runtime/terminal-show-opencode.provenance.json",
+    "tests/external-output-references/captures/orca-runtime/terminal-show-opencode.raw.json"
   ],
   "denylist": [
     "credentials/",
@@ -48,5 +52,5 @@
     "tests/external-output-references/capture-manifest.json",
     "tests/external-output-references/captures/orca-runtime/"
   ],
-  "source_revision": "aedba9ee2e322b7dc99ac98451c9fbac0915862f"
+  "source_revision": "cbd630509b69f5acb645b0cf10d5dbb20e48b5e3"
 }
