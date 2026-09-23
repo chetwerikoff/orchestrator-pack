@@ -21,7 +21,7 @@ import {
   projectBlockedOnToExternalPause,
   validateCreateIssueBlockedOn,
 } from './lib/create-issue-next-action.ts';
-import { readTerminalEnvelope, runLaunch } from './flow-manager-long-running-child.ts';
+import { HANDOFF_SCHEMA, readTerminalEnvelope, runLaunch } from './flow-manager-long-running-child.ts';
 
 const contract = readFileSync(new URL('../.cursor/skills/create-issue-draft/SKILL.md', import.meta.url), 'utf8');
 const ghTransport = readFileSync(new URL('./lib/create-issue-stage-record-gh.ts', import.meta.url), 'utf8');
@@ -792,6 +792,59 @@ describe('Issue #1431 manager reviewer canon', () => {
     expect(monitoringRule).toContain('--operator-browser-config <absolute-path>');
     expect(monitoringRule).toContain('Never copy `local.config.json`');
     expect(monitoringRule).not.toContain('copy `local.config.json` from the operator checkout');
+  });
+
+  it('routes a stale direct-publication handoff receipt to readonly reconciliation', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-create-issue-stale-handoff-'));
+    const stdout = captureWrite(process.stdout);
+    const stderr = captureWrite(process.stderr);
+    try {
+      const handoff = join(root, 'handoff.json');
+      writeFileSync(handoff, JSON.stringify({
+        schema: HANDOFF_SCHEMA,
+        run_identity: 'older-run',
+        attempt_identity: 'older-attempt',
+      }));
+      const code = await runBrowserAdapter([
+        '--run-identity', 'current-run',
+        '--attempt-identity', 'current-attempt',
+        '--handoff-receipt', handoff,
+        '--invocation-id', reviewContext.invocationId,
+        '--terminal-envelope', join(root, 'terminal.json'),
+        '--output', join(root, 'output.json'),
+        '--profile', root,
+        '--cdp', 'http://127.0.0.1:9222',
+        '--input', join(root, 'input.txt'),
+        '--reviewer-source-output', join(root, 'source.txt'),
+        '--reviewer-source', 'slot-01#capture=direct-publication/v1',
+        '--repository', reviewContext.repositoryFullName,
+        '--issue-number', String(reviewContext.issueNumber),
+        '--source-revision', reviewContext.sourceRevision,
+        '--stage', reviewContext.stage,
+        '--source-slot', reviewContext.sourceSlot,
+        '--stage-attempt-id', 'stage-attempt-r07',
+      ]);
+      expect(code).toBe(3);
+      const output = JSON.parse(stdout.chunks.at(-1) ?? '{}') as Record<string, unknown>;
+      expect(output).toMatchObject({
+        ok: false,
+        cause: 'stale_handoff_receipt',
+        nextAction: {
+          kind: 'reconcile-stage-read-only',
+          binding: {
+            repository: reviewContext.repositoryFullName,
+            issueNumber: reviewContext.issueNumber,
+            sourceRevision: reviewContext.sourceRevision,
+            stage: reviewContext.stage,
+            stageAttemptId: 'stage-attempt-r07',
+          },
+        },
+      });
+    } finally {
+      stdout.restore();
+      stderr.restore();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('revalidates a preflight retry against the live Issue before any lifecycle mutation or Browser-GPT launch', async () => {
