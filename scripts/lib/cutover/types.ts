@@ -250,6 +250,7 @@ export interface SchedulerRegistryChild {
   script: 'pr2-foundation/scheduler.ts';
   sideEffecting: true;
   cadenceSeconds: number;
+  stallGraceMultiplier: number;
 }
 
 export interface SchedulerRegistry {
