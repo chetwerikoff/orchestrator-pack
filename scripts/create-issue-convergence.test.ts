@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
+  CREATE_ISSUE_NEXT_ACTION_KINDS,
   assertCreateIssueActionCurrent,
   createIssueNextAction,
   createIssueRecoverableResult,
@@ -38,6 +39,17 @@ function tempRoot(): string {
   return root;
 }
 
+function productionTsFiles(root: string): string[] {
+  const out: string[] = [];
+  for (const name of readdirSync(root)) {
+    const path = join(root, name);
+    const stat = statSync(path);
+    if (stat.isDirectory()) out.push(...productionTsFiles(path));
+    else if (name.endsWith('.ts') && !name.endsWith('.test.ts')) out.push(path);
+  }
+  return out;
+}
+
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   if (originalCreateIssueStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
@@ -55,7 +67,7 @@ const binding: CreateIssueActionBinding = {
 describe('create-Issue nextAction contract', () => {
   it('uses one validated argv-bearing action shape and terminal null shape', () => {
     const action = createIssueNextAction({
-      kind: 'reconcile-stage',
+      kind: 'reconcile-stage-read-only',
       binding,
       argv: ['node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage'],
     });
@@ -79,9 +91,29 @@ describe('create-Issue nextAction contract', () => {
     );
   });
 
+  it('keeps the one shared closed kind registry equal to production createIssueNextAction literals', () => {
+    const produced = new Set<string>();
+    for (const file of productionTsFiles(join(process.cwd(), 'scripts'))) {
+      const source = readFileSync(file, 'utf8');
+      let cursor = 0;
+      while ((cursor = source.indexOf('createIssueNextAction({', cursor)) >= 0) {
+        const fragment = source.slice(cursor, cursor + 800);
+        const literal = /\bkind:\s*'([^']+)'/.exec(fragment)?.[1];
+        if (literal) produced.add(literal);
+        cursor += 'createIssueNextAction({'.length;
+      }
+    }
+    expect([...produced].sort()).toEqual([...CREATE_ISSUE_NEXT_ACTION_KINDS].sort());
+    expect(CREATE_ISSUE_NEXT_ACTION_KINDS.filter((kind) => kind.startsWith('execute-'))).toEqual([
+      'execute-observe-owned-turn',
+      'execute-github-first-read-only',
+      'execute-review-runner-read-only',
+    ]);
+  });
+
   it('returns canonical stale_next_action when any state binding moves', () => {
     const action = createIssueNextAction({
-      kind: 'reconcile-stage',
+      kind: 'reconcile-stage-read-only',
       binding,
       argv: ['node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage'],
     });
@@ -164,7 +196,7 @@ describe('structured blocked_on manager contract (Issue #2004)', () => {
       cause: 'external_prerequisite',
       blocked_on: issueBlockedOn,
       nextAction: createIssueNextAction({
-        kind: 'reconcile-stage',
+        kind: 'reconcile-stage-read-only',
         binding,
         argv: ['node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage'],
       }),

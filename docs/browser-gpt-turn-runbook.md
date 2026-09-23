@@ -263,10 +263,13 @@ resend/relaunch only when complete known-invocation publication absence is
 proven and the existing invocation/retry contract independently authorizes it.
 For an ordinary tracked turn, page evidence is reconciled under its existing
 invocation/retry contract without inventing Issue publication artifacts.
-Ambiguous ownership or incomplete applicable evidence permits no resend. If a
-required observation surface is unavailable and no other legal manager action
-exists, a blocker must name that exact unavailable observation and its observed
-failure.
+Ambiguous ownership or incomplete applicable evidence permits no resend. A
+manager-facing observation result is projected through the shared #2078/#2081
+boundary: repository-owned observation with a safe read path becomes the
+read-only `execute-observe-owned-turn` prerequisite, while a proven external
+surface or unresolved content-authority conflict becomes typed
+`external_pause`. Neither projection authorizes resend, a fresh conversation,
+or manager `worker_done --outcome failed`.
 
 ### Pack-review same-round replacement observation
 

@@ -110,6 +110,21 @@ If an operation fails, do not repeat the same action blindly. Inspect current st
 
 ### Structured external-dependency parking
 
+The shared #2078/#2081 manager boundary returns exactly one of four outcomes:
+`completed`, `recoverable`, `external_pause`, or boundary-only
+`contract_defect`. A `recoverable` result carries a validated executable
+`nextAction.argv`; execute that distinct argv once. A byte-identical consecutive
+recommendation is not executed again and is escalated as a producer defect.
+
+Create-Issue kinds keep their existing reconciliation/continuation ownership.
+Execute-Issue adds only `execute-observe-owned-turn`,
+`execute-github-first-read-only`, and `execute-review-runner-read-only`; all
+three are reconciliation kinds and every argv they introduce is read-only.
+Paced retry, `--new-chat`, fresh-conversation recovery, reviewer resend, and
+every other ChatGPT send remain owned by the existing execute-Issue runbooks and
+their send/no-resend/final-revalidation gates. A boundary classification never
+grants send authority.
+
 For a manager stage-record invocation, the coordinator/task dispatch supplies
 `--blocked-on-json <json>` only when it authoritatively knows that the named
 external Issue/PR predicate is the active unsatisfied blocker for that exact
@@ -127,6 +142,11 @@ immediately when that re-read is already satisfied; an event is not required.
 Do not add a watcher, polling daemon, queue, lease, parking store,
 acknowledgement protocol, prose parser, reverse dependency lookup, or another
 persistent coordination mechanism.
+
+For execute-Issue, render the already-owned manager phase into the existing
+stage component as `execute:<phase>`, where `phase` is exactly
+`implementation`, `review`, or `fixer`. This is a string projection for the
+existing escalation key, not a new lifecycle state.
 
 Dispatch/re-dispatch payloads contain role plus task invariants only. Procedure
 comes from the current CLI `--help` and returned `nextAction`; do not re-paste

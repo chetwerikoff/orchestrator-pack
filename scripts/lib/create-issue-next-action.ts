@@ -1,12 +1,30 @@
 export const CREATE_ISSUE_NEXT_ACTION_SCHEMA = 'create-issue-next-action/v1' as const;
 export const CREATE_ISSUE_STALE_ACTION_SCHEMA = 'create-issue-stale-next-action/v1' as const;
 
+export const CREATE_ISSUE_NEXT_ACTION_KINDS = [
+  'reconcile-stage-read-only',
+  'produce-acceptance-artifacts',
+  'retry-start-cycle',
+  'retry-stage-record-publication',
+  'retry-final-acceptance',
+  'retry-create-issue-browser-preflight',
+  'execute-observe-owned-turn',
+  'execute-github-first-read-only',
+  'execute-review-runner-read-only',
+] as const;
+
+export type CreateIssueNextActionKind = typeof CREATE_ISSUE_NEXT_ACTION_KINDS[number];
+
+export type ExecuteIssueManagerPhase = 'implementation' | 'review' | 'fixer';
+export type ExecuteIssueManagerStage = `execute:${ExecuteIssueManagerPhase}`;
+
 export type CreateIssueSemanticStage =
   | 'competitive'
   | 'architectural-review'
   | 'architectural-lens'
   | 'architectural'
-  | 'acceptance';
+  | 'acceptance'
+  | ExecuteIssueManagerStage;
 
 export interface CreateIssueActionBinding {
   repository: string;
@@ -55,6 +73,39 @@ export interface CreateIssueTerminalResult {
   blocked_on?: CreateIssueBlockedOn;
   nextAction: null;
 }
+export type CreateIssueExternalPauseCause =
+  | 'external:chrome_not_running'
+  | 'external:login_required'
+  | 'external:quota_exhausted'
+  | 'external:content_authority_conflict'
+  | 'external:github_unavailable'
+  | 'external:permission_denied';
+
+export type CreateIssueResumePredicate =
+  | { operator: true }
+  | { issue: number; condition: 'issue_closed' }
+  | { pr: number; condition: 'pr_merged' };
+
+export interface CreateIssueExternalPauseResult {
+  ok: false;
+  cause: CreateIssueExternalPauseCause;
+  pause: {
+    remedy: string;
+    resume_when: CreateIssueResumePredicate;
+    evidence: string;
+  };
+  nextAction: null;
+}
+
+export interface CreateIssueManagerContractDefectResult {
+  ok: false;
+  cause: 'producer_contract_defect' | 'self_recommendation';
+  defect: {
+    producer: string;
+    detail: string[];
+  };
+  nextAction: null;
+}
 
 export interface CreateIssueStaleNextActionResult {
   ok: false;
@@ -68,7 +119,9 @@ export interface CreateIssueStaleNextActionResult {
 export type CreateIssueManagerResult =
   | CreateIssueRecoverableResult
   | CreateIssueTerminalResult
-  | CreateIssueStaleNextActionResult;
+  | CreateIssueStaleNextActionResult
+  | CreateIssueExternalPauseResult
+  | CreateIssueManagerContractDefectResult;
 
 export function validateCreateIssueManagerResult(value: unknown): string[] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return ['manager result must be an object'];
@@ -88,6 +141,12 @@ export function validateCreateIssueManagerResult(value: unknown): string[] {
       if (!result.observed || typeof result.observed !== 'object' || Array.isArray(result.observed)) {
         errors.push('stale manager result.observed must be an object');
       }
+    }
+    if (isCreateIssueExternalPauseCause(result.cause)) {
+      errors.push(...validateCreateIssueExternalPause(result.pause));
+    }
+    if (result.cause === 'producer_contract_defect' || result.cause === 'self_recommendation') {
+      errors.push(...validateCreateIssueContractDefect(result.defect));
     }
   }
   if (nextAction !== null) {
@@ -140,6 +199,69 @@ export function validateCreateIssueBlockedOn(value: unknown): string[] {
   }
   return errors;
 }
+function isCreateIssueExternalPauseCause(value: unknown): value is CreateIssueExternalPauseCause {
+  return value === 'external:chrome_not_running'
+    || value === 'external:login_required'
+    || value === 'external:quota_exhausted'
+    || value === 'external:content_authority_conflict'
+    || value === 'external:github_unavailable'
+    || value === 'external:permission_denied';
+}
+
+function validateCreateIssueExternalPause(value: unknown): string[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return ['manager result.pause must be an object'];
+  }
+  const pause = value as Record<string, unknown>;
+  const errors: string[] = [];
+  if (!nonEmpty(pause.remedy)) errors.push('manager result.pause.remedy must be non-empty');
+  if (!nonEmpty(pause.evidence)) errors.push('manager result.pause.evidence must be non-empty');
+  const resumeWhen = pause.resume_when;
+  if (!resumeWhen || typeof resumeWhen !== 'object' || Array.isArray(resumeWhen)) {
+    errors.push('manager result.pause.resume_when must be an object');
+  } else {
+    const predicate = resumeWhen as Record<string, unknown>;
+    const hasOperator = Object.prototype.hasOwnProperty.call(predicate, 'operator');
+    const hasIssue = Object.prototype.hasOwnProperty.call(predicate, 'issue');
+    const hasPr = Object.prototype.hasOwnProperty.call(predicate, 'pr');
+    const keys = Object.keys(predicate);
+    if (hasOperator) {
+      if (predicate.operator !== true || hasIssue || hasPr || keys.length !== 1) {
+        errors.push('manager result.pause.resume_when.operator must be the only true field');
+      }
+    } else if (hasIssue && !hasPr && predicate.condition === 'issue_closed' && keys.length === 2) {
+      if (!Number.isSafeInteger(predicate.issue) || Number(predicate.issue) < 1) {
+        errors.push('manager result.pause.resume_when.issue must be a positive integer');
+      }
+    } else if (hasPr && !hasIssue && predicate.condition === 'pr_merged' && keys.length === 2) {
+      if (!Number.isSafeInteger(predicate.pr) || Number(predicate.pr) < 1) {
+        errors.push('manager result.pause.resume_when.pr must be a positive integer');
+      }
+    } else {
+      errors.push('manager result.pause.resume_when is invalid');
+    }
+  }
+  const allowed = new Set(['remedy', 'resume_when', 'evidence']);
+  const unexpected = Object.keys(pause).filter((key) => !allowed.has(key));
+  if (unexpected.length > 0) errors.push('manager result.pause has unexpected fields: ' + unexpected.sort().join(', '));
+  return errors;
+}
+
+function validateCreateIssueContractDefect(value: unknown): string[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return ['manager result.defect must be an object'];
+  }
+  const defect = value as Record<string, unknown>;
+  const errors: string[] = [];
+  if (!nonEmpty(defect.producer)) errors.push('manager result.defect.producer must be non-empty');
+  if (!Array.isArray(defect.detail) || defect.detail.length === 0 || defect.detail.some((item) => !nonEmpty(item))) {
+    errors.push('manager result.defect.detail must be a non-empty string array');
+  }
+  const allowed = new Set(['producer', 'detail']);
+  const unexpected = Object.keys(defect).filter((key) => !allowed.has(key));
+  if (unexpected.length > 0) errors.push('manager result.defect has unexpected fields: ' + unexpected.sort().join(', '));
+  return errors;
+}
 
 function validateZeroSendReason(reason: unknown): string[] {
   if (!reason || typeof reason !== 'object' || Array.isArray(reason)) return ['manager result.reason must be an object'];
@@ -180,7 +302,10 @@ export function isCreateIssueSemanticStage(value: unknown): value is CreateIssue
     || value === 'architectural-review'
     || value === 'architectural-lens'
     || value === 'architectural'
-    || value === 'acceptance';
+    || value === 'acceptance'
+    || value === 'execute:implementation'
+    || value === 'execute:review'
+    || value === 'execute:fixer';
 }
 
 export function validateCreateIssueActionBinding(value: unknown): string[] {
@@ -211,6 +336,9 @@ export function validateCreateIssueNextAction(value: unknown): string[] {
   const errors: string[] = [];
   if (action.schema !== CREATE_ISSUE_NEXT_ACTION_SCHEMA) errors.push(`nextAction.schema must be ${CREATE_ISSUE_NEXT_ACTION_SCHEMA}`);
   if (!nonEmpty(action.kind)) errors.push('nextAction.kind must be non-empty');
+  if (!CREATE_ISSUE_NEXT_ACTION_KINDS.includes(action.kind as CreateIssueNextActionKind)) {
+    errors.push('nextAction.kind is outside the closed manager kind set');
+  }
   errors.push(...validateCreateIssueActionBinding(action.binding).map((error) => `nextAction.${error}`));
   if (!Array.isArray(action.argv) || action.argv.length === 0 || action.argv.some((item) => !nonEmpty(item))) {
     errors.push('nextAction.argv must be a non-empty string vector');
@@ -272,6 +400,27 @@ export function createIssueRecoverableResult(input: {
   return result;
 }
 
+export function createIssueExternalPauseResult(input: {
+  cause: CreateIssueExternalPauseCause;
+  remedy: string;
+  resumeWhen: CreateIssueResumePredicate;
+  evidence: string;
+}): CreateIssueExternalPauseResult {
+  const result: CreateIssueExternalPauseResult = {
+    ok: false,
+    cause: input.cause,
+    pause: {
+      remedy: input.remedy,
+      resume_when: { ...input.resumeWhen },
+      evidence: input.evidence,
+    },
+    nextAction: null,
+  };
+  const errors = validateCreateIssueManagerResult(result);
+  if (errors.length > 0) throw new Error('invalid external pause create-Issue result: ' + errors.join('; '));
+  return result;
+}
+
 export function sameCreateIssueActionBinding(
   expected: CreateIssueActionBinding,
   observed: Partial<CreateIssueActionBinding>,
@@ -304,7 +453,7 @@ export function createIssueStaleNextAction(input: {
   return result;
 }
 
-const EXISTING_PACED_RETRY_KIND = 'retry-create-issue-browser-preflight';
+const EXISTING_PACED_RETRY_KIND: CreateIssueNextActionKind = 'retry-create-issue-browser-preflight';
 
 function cloneZeroSendReason(reason: CreateIssueZeroSendReason): CreateIssueZeroSendReason {
   return {
@@ -399,4 +548,57 @@ export function assertCreateIssueActionCurrent(input: {
         observed: input.observed,
         nextAction: input.nextAction ?? null,
       });
+}
+
+export interface CreateIssueManagerBoundaryEvaluation {
+  result: CreateIssueManagerResult;
+  exitCode: 0 | 3 | 4 | 5;
+}
+
+function createIssueManagerContractDefect(producer: string, detail: string[]): CreateIssueManagerContractDefectResult {
+  return {
+    ok: false,
+    cause: 'producer_contract_defect',
+    defect: { producer, detail },
+    nextAction: null,
+  };
+}
+
+function sameArgv(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+export function evaluateCreateIssueManagerBoundary(input: {
+  producer: string;
+  currentArgv: readonly string[];
+  produce: () => unknown;
+}): CreateIssueManagerBoundaryEvaluation {
+  let candidate: unknown;
+  try {
+    candidate = input.produce();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const result = createIssueManagerContractDefect(input.producer, [detail]);
+    return { result, exitCode: 5 };
+  }
+  const errors = validateCreateIssueManagerResult(candidate);
+  if (errors.length > 0) {
+    const result = createIssueManagerContractDefect(input.producer, errors);
+    return { result, exitCode: 5 };
+  }
+  const result = candidate as CreateIssueManagerResult;
+  if (!result.ok && result.nextAction !== null && sameArgv(result.nextAction.argv, input.currentArgv)) {
+    const defect = createIssueManagerContractDefect(input.producer, [
+      'recoverable nextAction.argv must not be byte-identical to currentArgv',
+    ]);
+    const result: CreateIssueManagerContractDefectResult = {
+      ...defect,
+      cause: 'self_recommendation',
+    };
+    return { result, exitCode: 5 };
+  }
+  if (result.ok) return { result, exitCode: 0 };
+  if (isCreateIssueExternalPauseCause(result.cause)) return { result, exitCode: 4 };
+  if (result.cause === 'producer_contract_defect') return { result, exitCode: 5 };
+  return { result, exitCode: 3 };
 }
