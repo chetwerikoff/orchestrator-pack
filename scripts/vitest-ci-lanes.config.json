@@ -3,7 +3,7 @@
   "lightMaxWorkers": 2,
   "lightShardCount": 2,
   "heavyDefaultRuntimeMs": 120000,
-  "heavyForkPoolMinRuntimeMs": 120000,
+  "heavyForkPoolMinRuntimeMs": 6826,
   "heavyPerTestIsolate": ["scripts/pr2a/final-conformance.test.ts"],
   "heavyFileBatchIsolate": [
     "scripts/pr2-foundation/mutation-external-ci.test.ts"
@@ -213,7 +213,6 @@
     "fallbackHeavyShardCount": 7
   },
   "heavyVitestPerFilePool": "threads",
-  "heavyVitestPoolByFile": {},
   "parkedWallclockE2e": {
     "trackingIssue": 694,
     "trackingNote": "docs/issues_drafts/239-ci-vitest-wallclock-e2e-separate-stage.md (#694 wall-clock CI stage)",
