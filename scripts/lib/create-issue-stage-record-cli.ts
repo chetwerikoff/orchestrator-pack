@@ -928,6 +928,222 @@ function staleRetryPendingBinding(
   });
 }
 
+
+function issueSourceRevision(body: string): string {
+  const matches = [...body.matchAll(/<!--\s*source-revision:\s*(r[0-9]+)\s*-->/gi)];
+  return matches.length === 1 && matches[0]?.[1] ? matches[0][1] : '';
+}
+
+function bodyFloorDiagnostics(body: string, tier: string): string[] {
+  const errors: string[] = [];
+  const tierResult = checkTierGateGuard(body, { tier, repoRoot: process.cwd() });
+  if (!tierResult.ok) {
+    errors.push(...tierResult.errors.map((item) => 'tier-gate: ' + item));
+  }
+  const contractResult = checkContractEvidence(body, { repoRoot: process.cwd() }) as {
+    ok: boolean;
+    errors: string[];
+    skipped?: boolean;
+  };
+  if (!contractResult.ok && !contractResult.skipped) {
+    errors.push(...contractResult.errors.map((item) => 'contract-evidence: ' + item));
+  }
+  return [...new Set(errors)];
+}
+
+function canonicalAuthorRoundDirectory(issueNumber: number): string {
+  return resolveCanonicalReviewDirectory({ taskIdentity: 'issue:' + issueNumber }).directory;
+}
+
+function authorRoundAction(
+  binding: CreateIssueActionBinding,
+  reviewDir: string,
+): CreateIssueNextAction {
+  const argv = [
+    'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+    'author-round',
+    '--repo', binding.repository,
+    '--issue-number', String(binding.issueNumber),
+    '--review-dir', reviewDir,
+    '--expected-source-revision', binding.sourceRevision,
+    '--expected-stage', binding.stage,
+  ];
+  if (binding.stageAttemptId) {
+    argv.push('--expected-stage-attempt-id', binding.stageAttemptId);
+  }
+  argv.push('--json');
+  return createIssueNextAction({ kind: 'author-round', binding, argv });
+}
+
+function existingAttemptForStage(
+  reviewDir: string,
+  stage: LifecycleReviewStage,
+): { stageAttemptId: string; sourceRevision: string } | null {
+  const candidates = canonicalAttemptPaths(reviewDir, []).flatMap((path) => {
+    try {
+      const value = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+      if (value.stage !== stage) return [];
+      const stageAttemptId = typeof value.stageAttemptId === 'string' ? value.stageAttemptId : '';
+      const sourceRevision = typeof value.sourceRevision === 'string' ? value.sourceRevision : '';
+      return stageAttemptId && sourceRevision ? [{ stageAttemptId, sourceRevision }] : [];
+    } catch {
+      return [];
+    }
+  });
+  return candidates.at(-1) ?? null;
+}
+
+function nextAuthorReplyPaths(reviewDir: string): {
+  round: number;
+  promptPath: string;
+  outputPath: string;
+} {
+  let maximum = 0;
+  if (existsSync(reviewDir)) {
+    for (const name of readdirSync(reviewDir)) {
+      const match = /^round-([0-9]+)-author-reply\.(?:md|txt)$/.exec(name);
+      if (match?.[1]) maximum = Math.max(maximum, Number(match[1]));
+    }
+  }
+  const round = maximum + 1;
+  const token = String(round).padStart(2, '0');
+  return {
+    round,
+    promptPath: join(reviewDir, `round-${token}-author-prompt.txt`),
+    outputPath: join(reviewDir, `round-${token}-author-reply.txt`),
+  };
+}
+
+function authorRoundPrompt(input: {
+  repository: string;
+  issueNumber: number;
+  sourceRevision: string;
+  stage: LifecycleReviewStage;
+  stageAttemptId?: string;
+  repairClass: 'body-floor' | 'author-schema';
+  diagnostics: readonly string[];
+  schemaFragment: string;
+}): string {
+  const issueUrl = `https://github.com/${input.repository}/issues/${input.issueNumber}`;
+  const repairInstruction = input.repairClass === 'body-floor'
+    ? [
+        'This is a pre-mint Issue-body repair. Edit only the target Issue title/body as needed to satisfy every diagnostic below.',
+        'If Issue bytes change, advance the source-revision marker exactly once. Do not create a review cycle, stage attempt, PR, label, milestone, or unrelated mutation.',
+        'After authoritative Issue read-back, return one governed author payload for the resulting revision with findings: [] and m4.inventory: [].',
+      ]
+    : [
+        'This is a pure governed author-output/schema repair for an already-settled stage.',
+        'Do not edit the Issue title/body and do not change its source revision.',
+        'Return a corrected governed author payload for the same revision and the same settled stage evidence. Do not create/reopen a reviewer stage or stage attempt.',
+      ];
+  return [
+    `Role: author for ${input.repository}.`,
+    'Mode: revise-existing-issue.',
+    `Authoritative input: live Issue ${issueUrl}; expected revision: ${input.sourceRevision}.`,
+    '',
+    'Read the live target through GitHub. Follow the canonical create-issue-draft role boundary.',
+    ...repairInstruction,
+    '',
+    `Bound semantic stage: ${input.stage}${input.stageAttemptId ? `; settled stageAttemptId: ${input.stageAttemptId}` : '; no stageAttemptId exists yet'}.`,
+    '',
+    'Current validation diagnostics (all must be addressed; do not invent replacements):',
+    ...input.diagnostics.map((item) => '- ' + item),
+    '',
+    input.schemaFragment,
+    '',
+    'Output only the whole-line schema label followed by the JSON payload. The Markdown fence is optional.',
+    'Never include or fabricate an OPKTURNV1 transport marker.',
+  ].join('\n');
+}
+
+function defaultAuthorRoundRunner(input: AuthorRoundRunnerInput): AuthorRoundRunnerResult {
+  const profile = process.env.DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR?.trim() ?? '';
+  const projectUrl = process.env.DISCUSS_WITH_GPT_PROJECT_URL?.trim() ?? '';
+  const cdp = process.env.CDP_ENDPOINT?.trim() ?? '';
+  if (!profile || !projectUrl || !cdp) {
+    return {
+      ok: false,
+      blocker: 'Browser-GPT author-round requires DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR, DISCUSS_WITH_GPT_PROJECT_URL, and the existing CDP_ENDPOINT shell binding',
+    };
+  }
+  mkdirSync(input.reviewDir, { recursive: true });
+  writeFileSync(input.promptPath, input.prompt, { encoding: 'utf8', flag: 'wx' });
+  const invocationId = randomUUID();
+  const runIdentity = 'author-round-' + randomUUID();
+  const attemptIdentity = 'author-round-attempt-' + randomUUID();
+  const handoffReceipt = join(input.reviewDir, `.author-round-${invocationId}.handoff.json`);
+  const terminalEnvelope = join(input.reviewDir, `.author-round-${invocationId}.terminal.json`);
+  const child = spawnSync(
+    process.execPath,
+    [
+      '--experimental-strip-types',
+      'scripts/flow-manager-browser-gpt-long-run.ts',
+      '--run-identity', runIdentity,
+      '--attempt-identity', attemptIdentity,
+      '--invocation-id', invocationId,
+      '--handoff-receipt', handoffReceipt,
+      '--terminal-envelope', terminalEnvelope,
+      '--output', input.outputPath,
+      '--profile', profile,
+      '--cdp', cdp,
+      '--input', input.promptPath,
+      '--new-chat',
+      '--project-url', projectUrl,
+    ],
+    {
+      cwd: process.cwd(),
+      env: { ...process.env, OPK_FM_LONG_CHILD_DISABLE_DETACH: '1' },
+      encoding: 'utf8',
+      maxBuffer: 4 * 1024 * 1024,
+      timeout: 20 * 60 * 1000,
+    },
+  );
+  if (child.error) {
+    return { ok: false, blocker: child.error.message };
+  }
+  if (child.status !== 0 || !existsSync(input.outputPath)) {
+    return {
+      ok: false,
+      blocker: (child.stderr || child.stdout || `Browser-GPT author round exited ${String(child.status)}`).trim(),
+    };
+  }
+  return { ok: true };
+}
+
+function authorSchemaDiagnostics(
+  reviewDir: string,
+): { diagnostics: AuthorDispositionDiagnostic[]; schemaFragment: string } {
+  const inspection = inspectLatestGovernedAuthorDisposition(reviewDir);
+  if (!inspection) {
+    return {
+      diagnostics: [{
+        reason: 'missing_schema_label',
+        ownership: 'author-owned',
+        field: 'schema-label',
+        message: 'no governed round-NN-author-reply.* exists for the current author correction',
+      }],
+      schemaFragment: renderAuthorDispositionPromptFragment(),
+    };
+  }
+  return {
+    diagnostics: inspection.diagnostics,
+    schemaFragment: inspection.schemaFragment,
+  };
+}
+
+function authorRoundPhase(stage: LifecycleReviewStage): 'pre-lens' | 'post-lens' | 'final-acceptance' {
+  if (stage === 'architectural') return 'final-acceptance';
+  if (stage === 'architectural-lens') return 'post-lens';
+  return 'pre-lens';
+}
+
+function nextRevision(revision: string): string | null {
+  const match = /^r([0-9]+)$/i.exec(revision);
+  if (!match?.[1]) return null;
+  const width = match[1].length;
+  return 'r' + String(Number(match[1]) + 1).padStart(width, '0');
+}
+
 export function runStageFinalizeCli(
   argv: string[],
   artifactSourceTransport?: GhTransport,
