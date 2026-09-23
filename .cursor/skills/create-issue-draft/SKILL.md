@@ -1206,13 +1206,13 @@ contract above.
 ```bash
 node scripts/create-issue-stage-finalize.ts start-cycle \
   --repo <owner/name> --issue-number <N> --source-revision <rNN> \
-  [--stage-attempt-id <stageAttemptId>] --tier <T1|T2|T3> [--permitted-lane-override <normal|disputed>]
+  [--stage-attempt-id <stageAttemptId>] --tier <T1|T2|T3> --public-actor <actor> [--permitted-lane-override <normal|disputed>]
 
 node scripts/create-issue-stage-finalize.ts publish-stage \
   --repo <owner/name> --issue-number <N> --receipt "$REVIEW_DIR/<stage-receipt>.json"
 
 node scripts/create-issue-final-acceptance.ts \
-  --repo <owner/name> --issue-number <N> --review-dir "$REVIEW_DIR" --json
+  --repo <owner/name> --issue-number <N> --review-dir "$REVIEW_DIR" --public-actor <actor> --json
 ```
 
 ## Don't
