@@ -118,6 +118,7 @@ describe('create-issue-final-acceptance CLI entry point', () => {
         '--repo', 'chetwerikoff/orchestrator-pack',
         '--issue-number', '1192',
         '--review-dir', dir,
+        '--public-actor', 'cursor-flow-manager',
         '--json',
       ])).toBe(1);
       const output = JSON.parse(String(stdout.mock.calls.at(-1)?.[0] ?? '{}')) as {
@@ -144,6 +145,7 @@ describe('create-issue-final-acceptance CLI entry point', () => {
       });
       expect(output.nextAction?.argv).toContain('--issue-revision');
       expect(output.nextAction?.argv).toContain('r01');
+      expect(output.nextAction?.argv).toEqual(expect.arrayContaining(['--public-actor', 'cursor-flow-manager']));
     } finally {
       stdout.mockRestore();
     }
@@ -207,6 +209,22 @@ describe('create-issue-final-acceptance CLI entry point', () => {
       expect(output.nextAction?.argv).toContain('--expected-stage-attempt-id');
     } finally {
       stdout.mockRestore();
+    }
+  });
+
+  it('requires an explicit public actor before final-acceptance side effects', () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      expect(runCli([
+        'node',
+        'scripts/create-issue-final-acceptance.ts',
+        '--issue-number', '1192',
+        '--review-dir', '/unused',
+      ])).toBe(2);
+      expect(stderr.mock.calls.flat().join('')).toContain('--public-actor is required');
+      expect(finalAcceptanceMock.runFinalAcceptance).not.toHaveBeenCalled();
+    } finally {
+      stderr.mockRestore();
     }
   });
 
