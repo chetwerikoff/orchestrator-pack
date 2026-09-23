@@ -1288,6 +1288,11 @@ async function sleep(page: any, ms: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
+export function isPostSendTargetCrash(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('Target crashed');
+}
+
 async function locatorCount(
   locator: any,
   deadlineMs = Date.now() + MAX_LOCAL_READ_WAIT_MS,
@@ -1302,6 +1307,7 @@ async function locatorCount(
       timeoutCause,
     ));
   } catch (error) {
+    if (isPostSendTargetCrash(error)) throw error;
     if (error instanceof Error && error.message === timeoutCause) throw error;
     return 0;
   }
@@ -1312,7 +1318,8 @@ async function locatorText(locator: any, timeoutMs = MAX_LOCAL_READ_WAIT_MS): Pr
   // ownership input because it can include screen-reader-only prefixes.
   try {
     return String(await locator.innerText({ timeout: timeoutMs }) ?? '');
-  } catch {
+  } catch (error) {
+    if (isPostSendTargetCrash(error)) throw error;
     return '';
   }
 }
@@ -1325,7 +1332,8 @@ async function readLocatorAttribute(
   for (const timeoutMs of timeouts) {
     try {
       return String(await locator.getAttribute(attribute, { timeout: timeoutMs }) ?? '');
-    } catch {
+    } catch (error) {
+      if (isPostSendTargetCrash(error)) throw error;
       // Retry with the next shorter budget.
     }
   }
@@ -1452,7 +1460,8 @@ export async function readPageObservation(
         });
       }
       if (observed.rows.length !== carriers.length) transcriptIncomplete = true;
-    } catch {
+    } catch (error) {
+      if (isPostSendTargetCrash(error)) throw error;
       if (strictTranscriptCount) return incomplete();
       transcriptIncomplete = true;
     }
@@ -1471,7 +1480,8 @@ export async function readPageObservation(
         'legacy_transcript_count_timeout',
       ));
       if (!Number.isSafeInteger(count) || count < 0) return incomplete();
-    } catch {
+    } catch (error) {
+      if (isPostSendTargetCrash(error)) throw error;
       return incomplete();
     }
     const roleTimeouts = [MESSAGE_NODE_READ_TIMEOUT_MS, MESSAGE_NODE_READ_RETRY_TIMEOUT_MS]
@@ -1595,7 +1605,8 @@ async function readPostSendObservation(
     if (wallProbeMs > 0) {
       wall = classifyProductWall(await productStatusText(page, wallProbeMs));
     }
-  } catch {
+  } catch (error) {
+    if (isPostSendTargetCrash(error)) throw error;
     // Product-status probes must not block or invalidate transcript reads.
   }
   return {
@@ -1616,7 +1627,8 @@ async function maybeContinueGeneration(page: any, deadlineMs: number): Promise<b
     if (remainingMs <= 0) return false;
     await continuation.first().click({ timeout: Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs) });
     return true;
-  } catch {
+  } catch (error) {
+    if (isPostSendTargetCrash(error)) throw error;
     return false;
   }
 }
@@ -1663,7 +1675,8 @@ async function readComposerReadiness(page: any, deadline: number): Promise<boole
       && observed.contentEditable
       && Date.now() < deadline,
     );
-  } catch {
+  } catch (error) {
+    if (isPostSendTargetCrash(error)) throw error;
     return false;
   }
 }
@@ -3014,6 +3027,27 @@ async function runTurn(
           hardExhaustionDeadline,
         );
       } catch (error) {
+        if (isPostSendTargetCrash(error)) {
+          incident('post_send_target_loss', 'post_send_target_crashed', 'retain_owned_page_no_resend');
+          return {
+            page,
+            browser,
+            cleanupAction: 'preserve',
+            result: compactResult(
+              'driver_error',
+              'invocation',
+              'post_send_target_crashed',
+              invocationId,
+              profileKey,
+              sendCount,
+              pollCount,
+              navigation,
+              incidents,
+              { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+              journalWriteFailed,
+            ),
+          };
+        }
         if (browserOrPageDefinitelyLost(page, browser)) {
           const terminal = await recoverCurrentObservation();
           if (terminal) return terminal;
