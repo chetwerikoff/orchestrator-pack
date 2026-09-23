@@ -999,7 +999,7 @@ describe('Issue #1431 manager reviewer canon', () => {
         '--stage', 'architectural',
         '--source-slot', '01',
         '--stage-attempt-id', 'attempt-terminal',
-      ])).toBe(5);
+      ])).toBe(3);
       expect(terminalStdout.chunks.join('')).toContain('direct_publication_terminal_bundle_required');
     } finally {
       terminalStdout.restore();
