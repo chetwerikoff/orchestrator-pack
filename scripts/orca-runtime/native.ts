@@ -1,4 +1,4 @@
-import { accessSync, constants, readdirSync, readFileSync } from 'node:fs';
+import { accessSync, constants, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { basename, delimiter, join } from 'node:path';
 
@@ -83,39 +83,33 @@ export interface OrcaTerminalSummary extends OrcaTerminalHandle {
   status?: 'running' | 'exited' | 'unknown';
 }
 
-/** Project an OpenCode command only from the process bound to this exact Orca terminal identity. */
+/** Project an OpenCode command only when its worktree has one matching live process. */
 export function projectLiveOpenCodeCommand(
-  terminal: Pick<OrcaTerminalSummary, 'handle' | 'worktreeId'>,
+  terminal: Pick<OrcaTerminalSummary, 'handle' | 'worktreeId' | 'worktreePath'>,
   procRoot = '/proc',
   platform = process.platform,
 ): string | undefined {
-  if (platform !== 'linux' || !terminal.handle.trim() || !terminal.worktreeId?.trim()) return undefined;
+  if (platform !== 'linux' || !terminal.handle.trim() || !terminal.worktreeId?.trim() || !terminal.worktreePath?.trim()) return undefined;
+  let expectedWorktree: string;
   let processes;
   try {
+    expectedWorktree = realpathSync(terminal.worktreePath);
     processes = readdirSync(procRoot, { withFileTypes: true });
   } catch {
     return undefined;
   }
-  const terminalHandleKey = ['ORCA', 'TERMINAL', 'HANDLE'].join('_');
-  const worktreeKey = ['ORCA', 'WORKTREE', 'ID'].join('_');
   const matches: string[] = [];
   for (const entry of processes) {
     if (!entry.isDirectory() || !/^\d+$/u.test(entry.name)) continue;
     const processRoot = join(procRoot, entry.name);
     try {
-      const environment = new Map<string, string>();
-      for (const variable of readFileSync(join(processRoot, 'environ'), 'utf8').split('\0')) {
-        const separator = variable.indexOf('=');
-        if (separator > 0) environment.set(variable.slice(0, separator), variable.slice(separator + 1));
-      }
-      if (environment.get(terminalHandleKey) !== terminal.handle) continue;
-      if (environment.get(worktreeKey) !== terminal.worktreeId) continue;
+      if (realpathSync(join(processRoot, 'cwd')) !== expectedWorktree) continue;
       const argv = readFileSync(join(processRoot, 'cmdline'), 'utf8').split('\0').filter(Boolean);
       const executable = argv[0] ? basename(argv[0]) : '';
       if (executable !== 'opencode') continue;
       matches.push([executable, ...argv.slice(1)].join(' '));
     } catch {
-      // Process exit or access denial makes this candidate unavailable, not authoritative.
+      // Process exit, inaccessible cwd, or missing argv makes this candidate unavailable.
     }
   }
   return matches.length === 1 ? matches[0] : undefined;

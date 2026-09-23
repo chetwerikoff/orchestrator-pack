@@ -3,5 +3,5 @@
   "captureKind": "live-producer-contract-evidence",
   "issue": 2062,
   "observedAt": "2026-09-23",
-  "projection": "scripts/orca-runtime/native.ts matched the unique live /proc process whose ORCA_TERMINAL_HANDLE and ORCA_WORKTREE_ID exactly matched the returned Orca terminal handle/worktree; argv supplied terminal.command, with no title, path, agentIdentity, or fabricated command used as the command source."
+  "projection": "The exact Orca terminal-show result omitted terminal.command. For that requested handle, scripts/orca-runtime/native.ts examined /proc cmdline only after requiring exactly one process with canonical cwd equal to terminal.worktreePath and argv0 basename opencode. It reads no process environments and does not use a PID, title, agentIdentity, or path alone as a selector; if zero or multiple candidates match, command remains unbound. Volatile preview and tab/layout metadata are omitted from the capture."
 }
