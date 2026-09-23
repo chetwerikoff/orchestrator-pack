@@ -12,6 +12,7 @@
     "scripts/lib/command-runtime-bootstrap.d.mts",
     "scripts/lib/command-runtime-bootstrap.mjs",
     "scripts/lib/create-issue-browser-gpt-preflight.ts",
+    "scripts/lib/create-issue-stage-record-cli.ts",
     "scripts/lib/manager-cli-contract.ts",
     "scripts/manager-review-terminal-bundle.ts",
     "scripts/toolchain/chatgpt-browser-turn.test.ts",
@@ -49,5 +50,5 @@
     "scripts/vitest-ci-lanes.config.json",
     "tests/external-output-references/browser-turn-target-crashed-2026-09-21.txt"
   ],
-  "source_revision": "273d28299ecbf195bd0e13f5abd289286817049a"
+  "source_revision": "496c99d474da9e58b5461fb36aedff78d6218527"
 }
