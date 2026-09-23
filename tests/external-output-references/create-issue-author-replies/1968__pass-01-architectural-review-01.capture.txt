@@ -1,0 +1,15 @@
+Read revision: #1968 r01
+INVOCATION_ID_TO_ECHO: 11111111-1111-4111-8111-111111111111
+review-economics-contract: v1
+VERDICT: FINDINGS
+
+id: equivalent-rebase-path-disjointness-does-not-prove-smoke-equivalence
+type: spec
+severity: P1
+title: The rebase bridge can carry PASS without proving the smoke tuple is unaffected
+evidence: The bridge admits a non-descendant carry when the forward main-side changed paths are disjoint from the active declaration's declared_paths, allowed_roots, and the branch delta. The same spec explicitly says allowed_roots is not a dependency graph and path disjointness does not prove semantic independence. No bridge condition binds an individual smoke tuple's actual runtime dependencies to those three path sets. Therefore a main-side change outside all three sets can still change behavior exercised by a carried tuple while every stated bridge predicate remains true, allowing the fresh current-head report to project an earlier PASS without current-head execution of an actually affected scenario.
+recommendation: Keep the no-tier target-resolution and truthful-history fixes, but cut the non-descendant equivalent-rebase carry from this task unless an existing production-observable signal can conservatively prove tuple impact. Otherwise retain history_non_descendant/full-plan execution for rebases; do not add a dependency graph or new proof store just to preserve the carry optimization.
+persistent-machinery: no
+simplification-cut-candidate: yes
+
+FINDING_COUNT: 1

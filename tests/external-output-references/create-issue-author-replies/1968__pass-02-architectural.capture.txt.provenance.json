@@ -1,0 +1,11 @@
+{
+  "source_kind": "review-capture",
+  "issue": 1968,
+  "stage": "architectural",
+  "slot": "01",
+  "captured_at": "2026-09-21",
+  "source_sha256": "879177f2d8654f03faf07c0ef877ce8de2ef25607f243b3284d7d2f8529cfb66",
+  "scrubbed_sha256": "879177f2d8654f03faf07c0ef877ce8de2ef25607f243b3284d7d2f8529cfb66",
+  "scrub_rules": [],
+  "synthetic": false
+}

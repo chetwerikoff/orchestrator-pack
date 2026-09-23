@@ -3431,10 +3431,16 @@ describe('governed author disposition block shapes (Issue #1983)', () => {
       ['1978__round-03-author-reply.txt', 'pass'],
       ['1978__round-04-author-reply.txt', 'pass'],
       ['1978__round-05-author-reply.txt', 'pass'],
+      ['1968__round-01-author-reply.txt', 'pass'],
+      ['1968__pass-01-architectural-review-01.capture.txt', 'missing_schema_label'],
+      ['1968__pass-01-architectural-review-02.capture.txt', 'missing_schema_label'],
+      ['1968__pass-01-architectural-review-03.capture.txt', 'missing_schema_label'],
+      ['1968__pass-02-architectural.capture.txt', 'missing_schema_label'],
     ] as const;
     expect(readdirSync(fixtureDir).filter((name) => name.endsWith('.txt')).sort())
       .toEqual(replayOracle.map(([name]) => name).sort());
 
+    const observedOutcomes: Array<readonly [string, string | undefined]> = [];
     for (const [name, expected] of replayOracle) {
       const rawReply = readFileSync(join(fixtureDir, name), 'utf8');
       const issueNumber = Number(name.split('__', 1)[0]);
@@ -3461,8 +3467,9 @@ describe('governed author disposition block shapes (Issue #1983)', () => {
             : lifecycleDiagnostic
               ? 'lifecycle-injected'
               : undefined;
-      expect(actual, `${name}: ${result.errors.join('\n')}`).toBe(expected);
+      observedOutcomes.push([name, actual]);
     }
+    expect(observedOutcomes).toEqual(replayOracle);
   });
 
   it('AC4: two block-start lines are rejected as multiple', () => {
