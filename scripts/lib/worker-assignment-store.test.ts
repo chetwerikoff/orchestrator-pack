@@ -263,7 +263,7 @@ describe('WorkerAssignment compare-and-publish', () => {
   });
 });
 
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import {
   inspectWorkerAssignmentStore,
   migrateWorkerAssignmentStoreIfNeeded,

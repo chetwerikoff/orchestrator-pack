@@ -102,8 +102,7 @@ use the smallest supported real CLI/API/status read-back for every runtime
 behavior changed by the PR. Cleanup remains the existing exact-target worktree
 lifecycle and does not broaden to the primary checkout or sibling work.
 
-The final handoff reports the PR, merge SHA, adopted local HEAD, source
-paths/config/runbooks and live observations that drove adoption, applied
+The final handoff reports the PR, merge SHA, adopted local HEAD, source paths/config/runbooks and live observations that drove adoption, applied
 adoption actions, live verification result, exact residual state/blocker, and
 next action. The outcome vocabulary is only
 `operationally_complete` or `operationally_incomplete`; neither value is

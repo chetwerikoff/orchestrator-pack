@@ -242,7 +242,7 @@ export function parseDelegatedIntegrationMarker(value: unknown): DelegatedIntegr
   };
 }
 
-function sameDelegatedIntegrationMarker(
+export function sameDelegatedIntegrationMarker(
   left: DelegatedIntegrationMarker | undefined,
   right: DelegatedIntegrationMarker | undefined,
 ): boolean {

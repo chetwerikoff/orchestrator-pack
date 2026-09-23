@@ -5,6 +5,7 @@ import {
   currentWorkerAssignmentByDeliverable,
   inspectWorkerAssignmentStore,
   parseDelegatedIntegrationMarker,
+  sameDelegatedIntegrationMarker,
   parseWorkerAssignmentRole,
   publishCurrentWorkerAssignment,
   resolveWorkerAssignmentStorePath,
@@ -113,18 +114,6 @@ function nonEmpty(value: unknown): string {
 function providerText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
-
-function sameDelegatedIntegrationMarker(
-  left: DelegatedIntegrationMarker | undefined,
-  right: DelegatedIntegrationMarker | undefined,
-): boolean {
-  if (!left || !right) return left === right;
-  return left.prNumber === right.prNumber
-    && left.expectedHeadSha === right.expectedHeadSha
-    && left.predecessorAssignmentId === right.predecessorAssignmentId
-    && left.predecessorGeneration === right.predecessorGeneration;
-}
-
 
 function providerErrorMessage(error: unknown): string | undefined {
   const message = isRecord(error) ? providerText(error.message) : '';

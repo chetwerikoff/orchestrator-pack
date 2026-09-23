@@ -27,7 +27,7 @@ that direct instruction.
 
 Delegated-integration mode exists only for one exact current supervised local WorkerAssignment
 carrying the closed `delegatedIntegration` marker defined by the orchestration runbook. It is
-strictly narrower than direct-user mode and never inherits direct-user overrides. Preserve
+strictly narrower than direct-user mode. It never inherits direct-user overrides. Preserve
 every failed/mismatched fact and never claim an effect succeeded without read-back. Any later
 direct-user override wording in this skill applies only to direct-user mode.
 
@@ -55,7 +55,7 @@ primary-checkout adoption mutation, or task-owned recovery mutation:
    head, and base rather than preserving a lock/store decision.
 5. Consume the existing production `evaluatePostSmokeReadiness()` result from
    `scripts/worker-smoke-run.ts` for the exact repo/Issue/current-assignment/PR/head. Proceed
-   only when `readiness.state === READY_TO_MERGE`; do not reconstruct readiness from commit
+   only when `readiness.state === READY_TO_MERGE`. Do not reconstruct readiness from commit
    status, review-cap state, `reviewStageComplete`, strict-descendant settlement, comments,
    or prose.
 6. Independently require the PR to remain OPEN, non-draft, non-conflicting/mergeable, on the
@@ -71,7 +71,7 @@ If canonical production readiness is already `READY_TO_MERGE` and the exact-head
 repair section of
 [`docs/pack-review-waiver-merge-runbook.md`](../../../docs/pack-review-waiver-merge-runbook.md).
 That repair is not the operator waiver path. Re-read all delegated facts before its status
-write and again before merge. SUCCESS needs no repair; NOT_READY, unknown/inconsistent
+write and again before merge. SUCCESS needs no repair; NOT_READY or unknown
 authority, non-review CI/smoke failure, unresolved finding, dependency wait, draft/conflict,
 head/base drift, or assignment/marker drift remains blocked.
 
@@ -198,6 +198,8 @@ refuses the merge because of branch protection, permissions, or another service-
 report that exact external refusal; do not relabel it as a pack decision.
 
 ### Step 3-waiver — operator-authorized pack-review waiver
+
+Delegated-integration mode must not enter this subsection.
 
 When the merge command includes either **«мерж N без ревью»**, **«merge N without review»**,
 or the equivalent **«мерж без ревью и смоука»**, consult
