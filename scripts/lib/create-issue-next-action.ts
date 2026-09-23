@@ -43,11 +43,16 @@ export interface CreateIssueZeroSendReason {
   observed_user_heads?: readonly string[];
 }
 
+export type CreateIssueBlockedOn =
+  | { issue: number; condition: 'issue_closed'; evidence: string }
+  | { pr: number; condition: 'pr_merged'; evidence: string };
+
 export interface CreateIssueTerminalResult {
   ok: boolean;
   cause: string;
   blocker?: string;
   reason?: CreateIssueZeroSendReason;
+  blocked_on?: CreateIssueBlockedOn;
   nextAction: null;
 }
 
@@ -90,6 +95,48 @@ export function validateCreateIssueManagerResult(value: unknown): string[] {
   }
   if (Object.prototype.hasOwnProperty.call(result, 'reason')) {
     errors.push(...validateZeroSendReason(result.reason));
+  }
+  if (Object.prototype.hasOwnProperty.call(result, 'blocked_on')) {
+    if (nextAction !== null) errors.push('manager result.blocked_on requires nextAction=null');
+    if (result.cause === 'stale_next_action') errors.push('stale manager result must not carry blocked_on');
+    errors.push(...validateCreateIssueBlockedOn(result.blocked_on));
+  }
+  return errors;
+}
+
+export function validateCreateIssueBlockedOn(value: unknown): string[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return ['manager result.blocked_on must be an object'];
+  }
+  const blockedOn = value as Record<string, unknown>;
+  const errors: string[] = [];
+  const hasIssue = Object.prototype.hasOwnProperty.call(blockedOn, 'issue');
+  const hasPr = Object.prototype.hasOwnProperty.call(blockedOn, 'pr');
+  if (hasIssue === hasPr) {
+    errors.push('manager result.blocked_on must contain exactly one selector: issue or pr');
+  }
+  if (!nonEmpty(blockedOn.evidence)) {
+    errors.push('manager result.blocked_on.evidence must be non-empty');
+  }
+  if (hasIssue && (!Number.isSafeInteger(blockedOn.issue) || Number(blockedOn.issue) < 1)) {
+    errors.push('manager result.blocked_on.issue must be a positive integer');
+  }
+  if (hasPr && (!Number.isSafeInteger(blockedOn.pr) || Number(blockedOn.pr) < 1)) {
+    errors.push('manager result.blocked_on.pr must be a positive integer');
+  }
+  if (hasIssue && !hasPr && blockedOn.condition !== 'issue_closed') {
+    errors.push('manager result.blocked_on.condition must be issue_closed for an issue selector');
+  }
+  if (hasPr && !hasIssue && blockedOn.condition !== 'pr_merged') {
+    errors.push('manager result.blocked_on.condition must be pr_merged for a pr selector');
+  }
+  if (hasIssue === hasPr && blockedOn.condition !== 'issue_closed' && blockedOn.condition !== 'pr_merged') {
+    errors.push('manager result.blocked_on.condition is invalid');
+  }
+  const allowed = new Set(['issue', 'pr', 'condition', 'evidence']);
+  const unexpected = Object.keys(blockedOn).filter((key) => !allowed.has(key));
+  if (unexpected.length > 0) {
+    errors.push('manager result.blocked_on has unexpected fields: ' + unexpected.sort().join(', '));
   }
   return errors;
 }
@@ -192,6 +239,7 @@ export function createIssueTerminalResult(input: {
   cause: string;
   blocker?: string;
   reason?: CreateIssueZeroSendReason;
+  blockedOn?: CreateIssueBlockedOn;
 }): CreateIssueTerminalResult {
   if (!nonEmpty(input.cause)) throw new Error('terminal create-Issue result cause must be non-empty');
   const result: CreateIssueTerminalResult = {
@@ -199,6 +247,7 @@ export function createIssueTerminalResult(input: {
     cause: input.cause,
     ...(input.blocker ? { blocker: input.blocker } : {}),
     ...(input.reason ? { reason: cloneZeroSendReason(input.reason) } : {}),
+    ...(input.blockedOn ? { blocked_on: { ...input.blockedOn } } : {}),
     nextAction: null,
   };
   const errors = validateCreateIssueManagerResult(result);

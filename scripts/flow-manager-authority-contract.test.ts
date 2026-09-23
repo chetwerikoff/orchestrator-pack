@@ -16,7 +16,7 @@ import { buildManagerReviewTerminalBundle } from './lib/manager-review-terminal-
 import { runStateLightEntry } from './chatgpt-browser-turn/state-light-entry.ts';
 import { runCli as runLegacyBrowserTurnCli } from './chatgpt-browser-turn.ts';
 import { runBrowserAdapter } from './flow-manager-browser-gpt-long-run.ts';
-import { createIssueNextAction } from './lib/create-issue-next-action.ts';
+import { createIssueNextAction, validateCreateIssueBlockedOn } from './lib/create-issue-next-action.ts';
 import { readTerminalEnvelope, runLaunch } from './flow-manager-long-running-child.ts';
 
 const contract = readFileSync(new URL('../.cursor/skills/create-issue-draft/SKILL.md', import.meta.url), 'utf8');
@@ -1210,6 +1210,96 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     expect(manager).toContain('supervisor launches local independent-smoke parent');
     expect(manager).toContain('independent finding: local worker fix + fresh independent smoke');
     expect(manager).not.toContain('-> worker-owned smoke PASS');
+  });
+});
+
+describe('Issue #2004 derived external-dependency parking contract', () => {
+  const orchestrationRunbook = readFileSync(
+    new URL('../docs/orchestration-runbook.md', import.meta.url),
+    'utf8',
+  );
+  const chatExecutorRules = readFileSync(
+    new URL('../docs/chat-executor-rules.md', import.meta.url),
+    'utf8',
+  );
+  const issueBlockedOn = {
+    issue: 1977,
+    condition: 'issue_closed',
+    evidence: 'coordinator parking replay waits for Issue #1977 to close',
+  } as const;
+  const prBlockedOn = {
+    pr: 1885,
+    condition: 'pr_merged',
+    evidence: 'already-satisfied wake observes PR #1885 merged',
+  } as const;
+
+  function wakeProjection(
+    blockedOn: typeof issueBlockedOn | typeof prBlockedOn,
+    observed: { issueState?: 'open' | 'closed'; prMerged?: boolean },
+  ) {
+    expect(validateCreateIssueBlockedOn(blockedOn)).toEqual([]);
+    if ('issue' in blockedOn) {
+      return {
+        read: { selector: 'issue', number: blockedOn.issue, field: 'state' },
+        state: observed.issueState === 'closed' ? 'resume' : 'parked',
+        unchangedRedispatches: 0,
+      } as const;
+    }
+    return {
+      read: { selector: 'pr', number: blockedOn.pr, field: 'merged' },
+      state: observed.prMerged === true ? 'resume' : 'parked',
+      unchangedRedispatches: 0,
+    } as const;
+  }
+
+  it('replays #926-b with one blocked_on and zero unchanged reconcile redispatch until #1977 closes', () => {
+    const emittedManagerResults = [{ nextAction: null, blocked_on: issueBlockedOn }];
+    const firstWake = wakeProjection(issueBlockedOn, { issueState: 'open' });
+    const secondWake = wakeProjection(issueBlockedOn, { issueState: 'open' });
+    const closedWake = wakeProjection(issueBlockedOn, { issueState: 'closed' });
+
+    expect(emittedManagerResults).toHaveLength(1);
+    expect(firstWake).toEqual({
+      read: { selector: 'issue', number: 1977, field: 'state' },
+      state: 'parked',
+      unchangedRedispatches: 0,
+    });
+    expect(secondWake.state).toBe('parked');
+    expect(secondWake.unchangedRedispatches).toBe(0);
+    expect(closedWake.state).toBe('resume');
+  });
+
+  it('resumes immediately when the typed predicate is already satisfied at wake start', () => {
+    expect(wakeProjection(issueBlockedOn, { issueState: 'closed' })).toMatchObject({
+      read: { selector: 'issue', number: 1977, field: 'state' },
+      state: 'resume',
+    });
+    expect(wakeProjection(prBlockedOn, { prMerged: true })).toMatchObject({
+      read: { selector: 'pr', number: 1885, field: 'merged' },
+      state: 'resume',
+    });
+  });
+
+  it('guards the canonical authority boundary, derived parking, and compact dispatch payload', () => {
+    for (const required of [
+      '## Structured external-dependency parking',
+      'authoritatively asserts that the named external dependency predicate is the active',
+      'records the existing\ntask as `parked`',
+      'stops unchanged periodic\nre-dispatch',
+      'On every\nexisting coordinator wake or restart',
+      '`issue_closed` reads the named Issue\n`state`',
+      '`pr_merged` reads the named PR\n`merged` field',
+      'leave the task parked with zero unchanged re-dispatch',
+      'resume immediately from that read without\nwaiting for an event',
+      'Dispatch and re-dispatch payloads contain only role plus task invariants',
+      'current CLI `--help` and returned `nextAction`',
+      'adds no watcher, polling daemon,\nqueue, lease, parking store',
+    ]) {
+      expect(orchestrationRunbook).toContain(required);
+    }
+    expect(chatExecutorRules).toContain('### Structured external-dependency parking');
+    expect(chatExecutorRules).toContain('Never manufacture `blocked_on` from `cause`, `blocker`, prose,');
+    expect(chatExecutorRules).toContain('Browser-GPT\n`TerminalEnvelope` remains a separate transport');
   });
 });
 

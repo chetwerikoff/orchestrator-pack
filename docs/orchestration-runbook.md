@@ -599,7 +599,7 @@ Role obligations are mandatory:
 
 Every message returned by the drain is surfaced and processed in the same role turn before the guarded action. An unreachable/unsupported/ambiguous drain is reported as degraded/blocking evidence and is never silently skipped.
 
-Supervised agents do not emit `type: heartbeat` / `subject: alive` control chatter merely to assert liveness. A supervised agent with no actionable report sends nothing. S1 remains the sole liveness observer; existing observer heartbeat/process-liveness artifacts remain observation evidence, not agent assertions.
+Supervised agents do not emit `type: heartbeat` / `subject: alive` control chatter merely to assert liveness. A supervised agent with no actionable report sends nothing. A supervised agent emits `worker_done` exactly once, and only after its role's existing whole-task completion contract is satisfied. `blocked_on` is not `worker_done` and never completes the parent task. S1 remains the sole liveness observer; existing observer heartbeat/process-liveness artifacts remain observation evidence, not agent assertions.
 
 ## Published GitHub artifact completion and batch attribution
 
@@ -697,10 +697,45 @@ authoritative Task/role/assignment facts
 - unresolved/stale/ambiguous target, untrusted observer/assignment state, unsupported local effect, or uncertain dispatch requiring reasoning -> `orchestrator_required` plus durable handoff;
 - manager whole-role completion or worker truthful `ready_for_review` handoff -> `noop`, then that role may complete according to its own contract. For the manager-controlled Browser-GPT execute-Issue path, a settled-review manager handoff makes `independent smoke` the orchestrator's next legal action; it is not overall `VERIFIED_COMPLETE` and does not wait for scheduler `ready_for_review`.
 
+## Structured external-dependency parking
+
+The coordinator/task dispatch may supply `--blocked-on-json <json>` only when it
+authoritatively asserts that the named external dependency predicate is the active
+unsatisfied blocker for that exact manager invocation. The supplied object is a
+task invariant, not manager-discovered state. It is exactly one of
+`{ issue: <positive integer>, condition: "issue_closed", evidence: <non-empty> }`
+or `{ pr: <positive integer>, condition: "pr_merged", evidence: <non-empty> }`.
+Manager code validates and propagates that object only on a terminal
+`nextAction: null` result; it never infers dependency identity, predicate,
+evidence, or causality from `cause`, `blocker`, free-form prose, the managed
+Issue number, reverse search, guessed PR linkage, or `nextAction: null` itself.
+For any invocation whose null action has another cause, the dispatch omits the
+flag and the result omits `blocked_on`.
+
+When a manager result carries `blocked_on`, the coordinator records the existing
+task as `parked` with that exact predicate and stops unchanged periodic
+re-dispatch, including repeated identical manager commands and dispatch preambles.
+Parking is derived rather than event-driven or separately persisted. On every
+existing coordinator wake or restart, re-read only the GitHub state named by the
+predicate through tracked `scripts/gh`: `issue_closed` reads the named Issue
+`state` and is satisfied only by `closed`; `pr_merged` reads the named PR
+`merged` field and is satisfied only by `true`. If the predicate is still
+unsatisfied, leave the task parked with zero unchanged re-dispatch. If it is
+already satisfied when the wake begins, resume immediately from that read without
+waiting for an event.
+
+Dispatch and re-dispatch payloads contain only role plus task invariants. A known
+authoritative `blocked_on` binding is one such invariant and is passed through
+`--blocked-on-json`; otherwise that flag is absent. Procedure comes from the
+current CLI `--help` and returned `nextAction`, not by re-pasting the
+create-Issue skill or runbooks. This contract adds no watcher, polling daemon,
+queue, lease, parking store, acknowledgement protocol, prose parser, reverse
+dependency lookup, or second persistent coordinator mechanism.
+
 ## Core operating laws
 
 1. Watch objective state: live Issue/Task, assignment generation, S1, S2, PR/head, CI/review/smoke and accepted reports. Worker prose is context only.
-2. `worker_done` is whole Task/Dispatch completion, never end-of-turn, substep, wait, helper failure, question, escalation or timer expiry.
+2. Completion follows the canonical heartbeat/`worker_done` rule above; end-of-turn, substep, wait, helper failure, question, escalation, timer expiry, and `blocked_on` never satisfy it.
 3. Keep one Dispatch across recoverable substeps. Create a fresh Dispatch only for a real Task/subtask/reviewer/correction/reassignment/retry boundary.
 4. Re-read authoritative state before retry. Timeout or helper loss does not prove the operation failed.
 5. Helper failure is recovery first. Escalate only for missing capability/permission, ownership/spec conflict, destructive choice, or exhausted legitimate recovery.
@@ -757,6 +792,17 @@ Also run current-head repository verification, Node 22 typecheck/lint, affected 
 ## Orca grounding
 
 At #1420 r14 implementation time, the Orca orchestration guide already defines `worker_done` as completion of the active Dispatch/Task rather than completion of one conversational turn, and the supported initial supervised startup path is `worker-start` / `dispatch --inject`. Therefore PACK does not patch Orca core or hardcode PACK role stages upstream.
+
+For named Orca conditions, keep recovery on existing pack-side paths without
+changing Orca runtime behavior:
+
+- `nested_worker_depth_exceeded` -> use the existing pane-launch path instead of nesting another worker;
+- `dispatch_capability_invalid` -> use the existing orchestration mailbox fallback/path instead of re-dispatching the revoked capability;
+- `consumer_fenced` -> re-read the exact current runtime/terminal handle before any effect;
+- `stable_pane_required` -> re-read the exact current runtime/terminal handle before any effect.
+
+For `consumer_fenced` and `stable_pane_required`, exact composite identity
+remains mandatory: never act on a stale, reused, or guessed handle.
 
 Repository evidence used during implementation: Orca orchestration guide blob `d43a59d7b33e50126efb268184c1a1af38dd4f8a`. The operator must still use/read the installed version-matched guide on the target machine; this repository evidence is not a claim about the installed machine version.
 
