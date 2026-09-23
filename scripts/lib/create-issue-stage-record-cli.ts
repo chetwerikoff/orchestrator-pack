@@ -934,9 +934,12 @@ function issueSourceRevision(body: string): string {
   return matches.length === 1 && matches[0]?.[1] ? matches[0][1] : '';
 }
 
-function bodyFloorDiagnostics(body: string, tier: string): string[] {
+function bodyFloorDiagnostics(body: string, tier?: string): string[] {
   const errors: string[] = [];
-  const tierResult = checkTierGateGuard(body, { tier, repoRoot: process.cwd() });
+  const tierResult = checkTierGateGuard(body, {
+    ...(tier ? { tier } : {}),
+    repoRoot: process.cwd(),
+  });
   if (!tierResult.ok) {
     errors.push(...tierResult.errors.map((item) => 'tier-gate: ' + item));
   }
