@@ -4,7 +4,7 @@
  */
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { classifyArgv } from './gh-inventory-match.mjs';
@@ -238,7 +238,7 @@ function validateManagerProjectUrl(value) {
 }
 
 function validateManagerProfileDirectory(value) {
-  if (!resolve(value).startsWith(sep) && !/^[A-Za-z]:[\\/]/.test(value)) return 'chromeUserDataDir must be an absolute path';
+  if (!isAbsolute(value) && !/^[A-Za-z]:[\\/]/.test(value)) return 'chromeUserDataDir must be an absolute path';
   try {
     if (!statSync(value).isDirectory()) return 'chromeUserDataDir is not a directory';
   } catch {
@@ -271,7 +271,7 @@ export function resolveManagerBrowserOperatorConfig(input = {}) {
         remedy: 'set DISCUSS_WITH_GPT_PROJECT_URL and DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR together or pass --operator-browser-config with the exact operator-owned local.config.json path',
       };
     }
-    if (!resolve(locator).startsWith(sep) && !/^[A-Za-z]:[\\/]/.test(locator)) {
+    if (!isAbsolute(locator) && !/^[A-Za-z]:[\\/]/.test(locator)) {
       return {
         ok: false,
         probe: 'operator_browser_config',
