@@ -93,6 +93,7 @@ function issue1917Status(root: string, cadenceSeconds = 5): SupervisorStatus {
       script: 'pr2-foundation/scheduler.ts',
       sideEffecting: true,
       cadenceSeconds,
+      stallGraceMultiplier: 14,
     }],
   };
   writeFileSync(registrySource, `${JSON.stringify(registry)}\n`, 'utf8');
@@ -114,6 +115,8 @@ function issue1917Status(root: string, cadenceSeconds = 5): SupervisorStatus {
     lastChildStartAt: new Date().toISOString(),
     cordonReason: 'post-cas-epoch-owner',
     refusalReason: null,
+    consecutiveStallTerminations: 0,
+    lastTerminationReason: null,
     crashBackoff: {
       rapidExits: 0,
       backoffUntilMs: 0,
@@ -341,6 +344,7 @@ describe('Issue #1484 truthful supervisor status', () => {
           script: 'pr2-foundation/scheduler.ts',
           sideEffecting: true,
           cadenceSeconds: 1,
+          stallGraceMultiplier: 14,
         }],
       };
       writeFileSync(targetRegistryPath, `${JSON.stringify(registry)}\n`, 'utf8');
@@ -522,6 +526,7 @@ describe('Issue #1484 truthful supervisor status', () => {
           script: 'pr2-foundation/scheduler.ts',
           sideEffecting: true,
           cadenceSeconds: 1,
+          stallGraceMultiplier: 14,
         }],
       };
       const registryBytes = `${JSON.stringify(registry)}\n`;
@@ -741,6 +746,7 @@ describe('Issue #1880 supervisor epoch-authority admission', () => {
             script: 'pr2-foundation/scheduler.ts',
             sideEffecting: true,
             cadenceSeconds: 5,
+            stallGraceMultiplier: 14,
           }],
         };
         const registryBytes = `${JSON.stringify(registry)}\n`;
