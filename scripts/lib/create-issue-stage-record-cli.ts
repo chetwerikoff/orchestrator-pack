@@ -280,9 +280,21 @@ function runParsedCli<T>(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`${toolName}: ${message}\n`);
-    // Argv syntax errors happen before a manager action is established and
-    // retain the CLI's historical usage-error status.
-    return 2;
+    const command = argv[2] ?? '';
+    const managerShaped = argv.includes('--blocked-on-json')
+      || argv.includes('--expected-source-revision')
+      || argv.includes('--expected-stage')
+      || argv.includes('--expected-stage-attempt-id')
+      || (command === 'start-cycle' && argv.includes('--tier'));
+    // Bare/incomplete library CLI syntax keeps the historical usage error.
+    // Once manager intent is explicit, malformed producer input is a boundary
+    // contract defect and therefore exits 5.
+    if (!managerShaped) return 2;
+    return emitCreateIssueManagerResult({
+      producer: toolName,
+      currentArgv: argv,
+      produce: () => { throw error; },
+    }).exitCode;
   }
   try {
     return run(opts);

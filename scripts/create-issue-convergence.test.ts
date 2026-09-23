@@ -814,6 +814,22 @@ describe('zero-send manager result is action or structured reason (Issue #1999)'
   };
   const fixtureDir = join(process.cwd(), 'tests/external-output-references');
 
+  function managerReconcileAction() {
+    return createIssueNextAction({
+      kind: 'reconcile-stage-read-only',
+      binding,
+      argv: [
+        'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
+        '--repo', binding.repository,
+        '--issue-number', String(binding.issueNumber),
+        '--expected-source-revision', binding.sourceRevision,
+        '--expected-stage', binding.stage,
+        '--expected-stage-attempt-id', binding.stageAttemptId!,
+        '--json',
+      ],
+    });
+  }
+
   function envelope(name: string): Record<string, unknown> {
     return JSON.parse(readFileSync(join(fixtureDir, name), 'utf8')) as Record<string, unknown>;
   }
@@ -832,6 +848,7 @@ describe('zero-send manager result is action or structured reason (Issue #1999)'
         invocationId: 'original-invocation',
         reviewerSlot: '01',
         pacedRetryAction: existingPacedBoundedRetryAction(binding, '01'),
+        reconcileAction: managerReconcileAction(),
         freshInvocationId: 'fresh-invocation-id',
       });
       expect(projected?.nextAction).toMatchObject({ kind: 'reconcile-stage-read-only' });
@@ -862,6 +879,7 @@ describe('zero-send manager result is action or structured reason (Issue #1999)'
       attemptOrdinal: 1,
       binding,
       pacedRetryAction: existingPacedBoundedRetryAction(binding, '01'),
+      reconcileAction: managerReconcileAction(),
     });
     expect(reconcile).toMatchObject({
       ok: false,
@@ -879,6 +897,7 @@ describe('zero-send manager result is action or structured reason (Issue #1999)'
       binding,
       reviewerSlot: '01',
       pacedRetryAction: existingPacedBoundedRetryAction(binding, '01'),
+      reconcileAction: managerReconcileAction(),
     });
     expect(paused).toMatchObject({
       ok: false,

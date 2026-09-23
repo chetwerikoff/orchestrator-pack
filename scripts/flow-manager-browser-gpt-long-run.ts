@@ -51,10 +51,11 @@ function emitBrowserManagerResult(argv: readonly string[], result: unknown): num
 function refuse(argv: readonly string[], reason: string, details: Record<string, unknown> = {}): number {
   process.stderr.write(`flow-manager-browser-gpt-long-run: ${reason}\n`);
   const binding = createIssueBinding(parseFlagArgv(argv));
-  // Ungoverned adapter/library callers keep the historical refusal contract.
-  // A create-Issue manager invocation is identifiable only once its action
-  // binding is present; those bound calls continue through the manager boundary.
-  if (!binding) return 2;
+  // Preserve the two legacy unbound adapter-only refusals that predate the
+  // manager result surface. Other direct-publication refusals are manager-facing
+  // contract defects even when the malformed argv is too incomplete to build a
+  // full create-Issue binding.
+  if (!binding && (reason === 'forbidden_authority_selector' || reason === 'stale_handoff_receipt')) return 2;
   const detail = [
     reason,
     typeof details.blocker === 'string' ? details.blocker : '',
