@@ -191,7 +191,9 @@ export function emitCreateIssueManagerResult(
   },
 ): CreateIssueManagerBoundaryEvaluation {
   const evaluation = evaluateCreateIssueManagerBoundary(input);
-  (input.stdout ?? ((text) => process.stdout.write(text)))(JSON.stringify(evaluation.result) + '\n');
+  const serialized = JSON.stringify(evaluation.result);
+  if (input.stdout) input.stdout(serialized + '\n');
+  else console.log(serialized);
   return evaluation;
 }
 
