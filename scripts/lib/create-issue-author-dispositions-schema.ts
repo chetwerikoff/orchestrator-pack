@@ -139,6 +139,22 @@ export function authorDispositionFieldOwnership(field: string): AuthorDispositio
 
 export function classifyAuthorDispositionFailure(message: string): AuthorDispositionOwnership {
   const normalized = message.toLowerCase();
+  if (
+    normalized.includes('omitted required occurrence')
+    || normalized.includes('duplicate occurrence')
+    || normalized.includes('occurrence identities')
+    || normalized.includes('proposalreason')
+    || normalized.includes('proposal reason')
+    || normalized.includes('rejectreason')
+    || normalized.includes('reject reason')
+    || normalized.includes('remedydisposition')
+    || normalized.includes('remedy disposition')
+    || normalized.includes('defectdisposition')
+    || normalized.includes('defect disposition')
+    || normalized.includes('m4.inventory')
+  ) {
+    return 'author-owned';
+  }
   for (const field of AUTHOR_DISPOSITION_FIELD_OWNERSHIP.lifecycleInjected) {
     const token = fieldToken(field).toLowerCase();
     if (token && normalized.includes(token)) return 'lifecycle-injected';
