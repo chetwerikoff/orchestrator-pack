@@ -225,7 +225,7 @@ command-runtime preflight. Missing required Node 22 or GitHub transport must
 fail closed. Do not edit shell dotfiles or create temporary
 executable wrappers as recovery. Structured wrappers parse stdout JSON only.
 
-## Merge authority and failed runs
+## Operator-only merge and failed runs
 
 **MUST NOT merge** unless either (a) the direct top-level user orders it, or
 (b) the caller is the exact current supervised local integration assignment
