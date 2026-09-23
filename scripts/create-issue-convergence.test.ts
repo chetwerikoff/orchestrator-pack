@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -10,10 +10,12 @@ import {
   createIssueTerminalResult,
   existingPacedBoundedRetryAction,
   projectZeroSendManagerResult,
+  validateCreateIssueBlockedOn,
   validateCreateIssueManagerResult,
   validateCreateIssueNextAction,
   type CreateIssueActionBinding,
 } from './lib/create-issue-next-action.ts';
+import { runStageFinalizeCli } from './lib/create-issue-stage-record-cli.ts';
 import { resolveCreateIssueBrowserOperatorConfig } from './lib/create-issue-browser-gpt-preflight.ts';
 import {
   reconcileCreateIssueStage,
@@ -115,6 +117,161 @@ describe('create-Issue nextAction contract', () => {
     expect(functionStart).toBeGreaterThanOrEqual(0);
     expect(admission).toBeGreaterThan(functionStart);
     expect(projection).toBeGreaterThan(admission);
+  });
+});
+
+describe('structured blocked_on manager contract (Issue #2004)', () => {
+  const issueBlockedOn = {
+    issue: 1977,
+    condition: 'issue_closed',
+    evidence: 'slot 01 is blocked on Issue #1977',
+  } as const;
+  const prBlockedOn = {
+    pr: 1885,
+    condition: 'pr_merged',
+    evidence: 'implementation is blocked on PR #1885 merging',
+  } as const;
+
+  it('accepts only the two selector-compatible closed predicate variants', () => {
+    expect(validateCreateIssueBlockedOn(issueBlockedOn)).toEqual([]);
+    expect(validateCreateIssueBlockedOn(prBlockedOn)).toEqual([]);
+    expect(createIssueTerminalResult({
+      ok: false,
+      cause: 'external_prerequisite',
+      blockedOn: issueBlockedOn,
+    })).toEqual({
+      ok: false,
+      cause: 'external_prerequisite',
+      blocked_on: issueBlockedOn,
+      nextAction: null,
+    });
+
+    for (const invalid of [
+      { condition: 'issue_closed', evidence: 'missing selector' },
+      { issue: 1977, pr: 1885, condition: 'issue_closed', evidence: 'dual selector' },
+      { issue: 1977, condition: 'pr_merged', evidence: 'selector mismatch' },
+      { pr: 1885, condition: 'issue_closed', evidence: 'selector mismatch' },
+      { issue: 0, condition: 'issue_closed', evidence: 'bad selector' },
+      { pr: 1885, condition: 'unknown', evidence: 'unknown predicate' },
+      { issue: 1977, condition: 'issue_closed', evidence: '' },
+      { issue: 1977, condition: 'issue_closed', evidence: 'x', alias: 'not allowed' },
+    ]) {
+      expect(validateCreateIssueBlockedOn(invalid).length).toBeGreaterThan(0);
+    }
+
+    expect(validateCreateIssueManagerResult({
+      ok: false,
+      cause: 'external_prerequisite',
+      blocked_on: issueBlockedOn,
+      nextAction: createIssueNextAction({
+        kind: 'reconcile-stage',
+        binding,
+        argv: ['node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage'],
+      }),
+    })).toContain('manager result.blocked_on requires nextAction=null');
+
+    expect(validateCreateIssueManagerResult({
+      ok: true,
+      blocked_on: issueBlockedOn,
+      nextAction: null,
+    })).toEqual([]);
+  });
+
+  it.each([
+    ['issue predicate', issueBlockedOn],
+    ['PR predicate', prBlockedOn],
+  ])('propagates an authoritative %s through the stage-record CLI only on terminal null', (_label, blockedOn) => {
+    const root = tempRoot();
+    const evidencePath = join(root, 'attempt-001.json');
+    writeFileSync(
+      evidencePath,
+      readFileSync(
+        join(process.cwd(), 'tests', 'external-output-references', 'create-issue-926-terminal-competitive-01.json'),
+        'utf8',
+      ),
+    );
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      logs.push(String(line));
+    });
+    try {
+      const code = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
+        '--repo', 'chetwerikoff/orchestrator-pack',
+        '--issue-number', '2004',
+        '--review-dir', root,
+        '--stage-evidence', evidencePath,
+        '--blocked-on-json', JSON.stringify(blockedOn),
+        '--json',
+      ]);
+      expect(code).toBe(1);
+      const output = JSON.parse(logs.at(-1) ?? '{}') as Record<string, unknown>;
+      expect(output.nextAction).toBeNull();
+      expect(output.blocked_on).toEqual(blockedOn);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('omits blocked_on from an unrelated terminal null invocation when the dispatch omits the flag', () => {
+    const root = tempRoot();
+    const evidencePath = join(root, 'attempt-001.json');
+    writeFileSync(
+      evidencePath,
+      readFileSync(
+        join(process.cwd(), 'tests', 'external-output-references', 'create-issue-926-terminal-competitive-01.json'),
+        'utf8',
+      ),
+    );
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      logs.push(String(line));
+    });
+    try {
+      const code = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
+        '--repo', 'chetwerikoff/orchestrator-pack',
+        '--issue-number', '2004',
+        '--review-dir', root,
+        '--stage-evidence', evidencePath,
+        '--json',
+      ]);
+      expect(code).toBe(1);
+      const output = JSON.parse(logs.at(-1) ?? '{}') as Record<string, unknown>;
+      expect(output.nextAction).toBeNull();
+      expect(output).not.toHaveProperty('blocked_on');
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('rejects malformed --blocked-on-json before stage work and leaves TerminalEnvelope unchanged', () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const code = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
+        '--repo', 'chetwerikoff/orchestrator-pack',
+        '--issue-number', '2004',
+        '--review-dir', '/unused',
+        '--stage-evidence', '/unused/attempt.json',
+        '--blocked-on-json', JSON.stringify({
+          issue: 1977,
+          condition: 'pr_merged',
+          evidence: 'selector mismatch',
+        }),
+        '--json',
+      ]);
+      expect(code).toBe(2);
+      expect(stderr.mock.calls.flat().join('')).toContain('--blocked-on-json is invalid');
+    } finally {
+      stderr.mockRestore();
+    }
+
+    const terminalEnvelopeSource = readFileSync(
+      join(process.cwd(), 'scripts', 'flow-manager-long-running-child.ts'),
+      'utf8',
+    );
+    expect(terminalEnvelopeSource).not.toContain('blocked_on');
   });
 });
 
@@ -443,6 +600,40 @@ describe('Issue #1935 sanitized measured convergence replay', () => {
     expect(reconciled.ok, reconciled.errors.join('\n')).toBe(true);
     expect(reconciled.capturePaths).toHaveLength(3);
 
+    const blockedOn = {
+      issue: 1977,
+      condition: 'issue_closed',
+      evidence: 'slot 01 is blocked on Issue #1977',
+    } as const;
+    const continuationLogs: string[] = [];
+    const continuationLogSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      continuationLogs.push(String(line));
+    });
+    let continuationBlockedOnJson = '';
+    try {
+      const code = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
+        '--repo', 'chetwerikoff/orchestrator-pack',
+        '--issue-number', String(replay.source.issueNumber),
+        '--review-dir', reviewDir,
+        '--stage-evidence', evidencePath,
+        '--blocked-on-json', JSON.stringify(blockedOn),
+        '--json',
+      ], transport);
+      expect(code).toBe(0);
+      const output = JSON.parse(continuationLogs.at(-1) ?? '{}') as {
+        nextAction?: { kind?: string; argv?: string[] } | null;
+      };
+      expect(output.nextAction?.kind).toBe('produce-acceptance-artifacts');
+      const argv = output.nextAction?.argv ?? [];
+      const blockedOnIndex = argv.indexOf('--blocked-on-json');
+      expect(blockedOnIndex).toBeGreaterThanOrEqual(0);
+      continuationBlockedOnJson = argv[blockedOnIndex + 1] ?? '';
+      expect(JSON.parse(continuationBlockedOnJson)).toEqual(blockedOn);
+    } finally {
+      continuationLogSpy.mockRestore();
+    }
+
     const reconciledEvidence = JSON.parse(readFileSync(evidencePath, 'utf8')) as {
       invocations: Array<Record<string, unknown>>;
     };
@@ -554,6 +745,32 @@ describe('Issue #1935 sanitized measured convergence replay', () => {
     });
     expect(replayed).toMatchObject({ ok: true, alreadySettled: true, stageAttemptId: replay.source.stageAttemptId });
     expect(readFileSync(recurrencePath, 'utf8')).toBe(recurrenceBefore);
+
+    const terminalLogs: string[] = [];
+    const terminalLogSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      terminalLogs.push(String(line));
+    });
+    try {
+      const code = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
+        '--repo', 'chetwerikoff/orchestrator-pack',
+        '--issue-number', String(replay.source.issueNumber),
+        '--review-dir', reviewDir,
+        '--stage-evidence', evidencePath,
+        '--blocked-on-json', continuationBlockedOnJson,
+        '--json',
+      ], transport);
+      expect(code).toBe(0);
+      const output = JSON.parse(terminalLogs.at(-1) ?? '{}') as Record<string, unknown>;
+      expect(output).toMatchObject({
+        ok: true,
+        alreadySettled: true,
+        blocked_on: blockedOn,
+        nextAction: null,
+      });
+    } finally {
+      terminalLogSpy.mockRestore();
+    }
   });
 });
 

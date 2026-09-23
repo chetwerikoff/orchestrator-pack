@@ -57,7 +57,14 @@ describe('[Issue 1440] orchestration escalation guarantees', () => {
       'Exactly one acknowledgement is issued per Delivery, never per message.',
       'Supervised agents do not emit `type: heartbeat` / `subject: alive` control chatter merely to assert liveness.',
       'A supervised agent with no actionable report sends nothing.',
+      'A supervised agent emits `worker_done` exactly once, and only after its role\'s existing whole-task completion contract is satisfied.',
+      '`blocked_on` is not `worker_done` and never completes the parent task.',
       'S1 remains the sole liveness observer',
+      '`nested_worker_depth_exceeded` -> use the existing pane-launch path instead of nesting another worker;',
+      '`dispatch_capability_invalid` -> use the existing orchestration mailbox fallback/path instead of re-dispatching the revoked capability;',
+      '`consumer_fenced` -> re-read the exact current runtime/terminal handle before any effect;',
+      '`stable_pane_required` -> re-read the exact current runtime/terminal handle before any effect.',
+      'never act on a stale, reused, or guessed handle.',
     ]) expect(runbook).toContain(required);
   });
 });

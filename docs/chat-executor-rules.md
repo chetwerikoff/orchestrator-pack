@@ -108,6 +108,32 @@ Do not require universal nonce, command-digest, PID/start-time/process-group, or
 
 If an operation fails, do not repeat the same action blindly. Inspect current state and change the approach when needed. If a required action remains impossible, report exactly which action could not be completed and what remote state was verified.
 
+### Structured external-dependency parking
+
+For a manager stage-record invocation, the coordinator/task dispatch supplies
+`--blocked-on-json <json>` only when it authoritatively knows that the named
+external Issue/PR predicate is the active unsatisfied blocker for that exact
+invocation. Pass that exact task invariant through unchanged; otherwise omit the
+flag. Never manufacture `blocked_on` from `cause`, `blocker`, prose,
+`nextAction: null`, the managed Issue number, a repository search, or guessed PR
+linkage.
+
+A terminal manager result carrying `blocked_on` parks the existing task and
+suppresses unchanged periodic re-dispatch. On every existing coordinator wake or
+restart, re-read only the named predicate through tracked `scripts/gh`:
+`issue_closed` is satisfied only when the named Issue reports `state=closed`;
+`pr_merged` is satisfied only when the named PR reports `merged=true`. Resume
+immediately when that re-read is already satisfied; an event is not required.
+Do not add a watcher, polling daemon, queue, lease, parking store,
+acknowledgement protocol, prose parser, reverse dependency lookup, or another
+persistent coordination mechanism.
+
+Dispatch/re-dispatch payloads contain role plus task invariants only. Procedure
+comes from the current CLI `--help` and returned `nextAction`; do not re-paste
+the create-Issue skill or runbooks into repeated dispatches. Browser-GPT
+`TerminalEnvelope` remains a separate transport and does not carry
+`blocked_on`.
+
 ## 7. Independent review role
 
 An independent reviewer may inspect the task, diff, CI, comments, and review threads and may publish a head-bound review.

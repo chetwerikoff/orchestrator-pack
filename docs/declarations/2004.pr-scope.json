@@ -1,0 +1,35 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2004,
+  "declared_paths": [
+    "docs/chat-executor-rules.md",
+    "docs/orchestration-runbook.md",
+    "scripts/create-issue-convergence.test.ts",
+    "scripts/flow-manager-authority-contract.test.ts",
+    "scripts/lib/create-issue-next-action.ts",
+    "scripts/lib/create-issue-stage-record-cli.ts",
+    "scripts/pr2-foundation/mutation-catalog.test.ts"
+  ],
+  "denylist": [
+    ".cursor/skills/",
+    "credentials/",
+    "packages/core/",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/orca-runtime/",
+    "scripts/vitest-ci-lanes.config.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/chat-executor-rules.md",
+    "docs/orchestration-runbook.md",
+    "scripts/create-issue-convergence.test.ts",
+    "scripts/flow-manager-authority-contract.test.ts",
+    "scripts/lib/create-issue-next-action.ts",
+    "scripts/lib/create-issue-stage-record-cli.ts",
+    "scripts/pr2-foundation/mutation-catalog.test.ts"
+  ],
+  "source_revision": "ec986c175ecbf7d44ccc946ae4b9fc66d422c181"
+}

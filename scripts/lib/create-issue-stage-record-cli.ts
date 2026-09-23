@@ -25,8 +25,10 @@ import {
   createIssueTerminalResult,
   existingPacedBoundedRetryAction,
   projectZeroSendManagerResult,
+  validateCreateIssueBlockedOn,
   validateCreateIssueManagerResult,
   type CreateIssueActionBinding,
+  type CreateIssueBlockedOn,
   type CreateIssueNextAction,
   type CreateIssueZeroSendReason,
 } from './create-issue-next-action.ts';
@@ -83,6 +85,7 @@ interface StageFinalizeCliOptions extends JournalTailCliOptions {
   expectedSourceRevision?: string;
   expectedStage?: LifecycleReviewStage;
   expectedStageAttemptId?: string;
+  blockedOn?: CreateIssueBlockedOn;
 }
 
 interface FinalAcceptanceCliOptions extends JournalTailCliOptions {
@@ -217,6 +220,25 @@ function operatorAcceptanceAdjudication(opts: {
   };
 }
 
+function parseBlockedOnJson(raw: string): CreateIssueBlockedOn {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new Error('--blocked-on-json must be valid JSON');
+  }
+  const errors = validateCreateIssueBlockedOn(value);
+  if (errors.length > 0) {
+    throw new Error('--blocked-on-json is invalid: ' + errors.join('; '));
+  }
+  return value as CreateIssueBlockedOn;
+}
+
+function appendBlockedOnArgv(argv: string[], blockedOn?: CreateIssueBlockedOn): string[] {
+  if (blockedOn) argv.push('--blocked-on-json', JSON.stringify(blockedOn));
+  return argv;
+}
+
 function runParsedCli<T>(
   argv: string[],
   toolName: string,
@@ -244,6 +266,7 @@ export function stageFinalizeUsage(): string {
     '  create-issue-stage-finalize.ts bind-published-comment --repo <owner/name> --issue-number <n> --review-dir <path> --stage-evidence <attempt-NNN.json> --reviewer-slot <slot> --invocation-id <id> --comment-url <url> [--json]',
     '  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> [--tier-intake <path>] [--stage-evidence <path>...] [--author-dispositions <target-path>] [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--phase <pre-lens|post-lens|final-acceptance>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--json]',
     '  create-issue-stage-finalize.ts check-artifacts --review-dir <path> [--tier-intake <path>] [--stage-evidence <path>...] [--author-dispositions <derived-path>] [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--json]',
+    '  manager-result commands additionally accept --blocked-on-json <json> only for a coordinator/task-dispatch authoritative active-unsatisfied-blocker assertion',
   ].join('\n');
 }
 
@@ -362,6 +385,11 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
         opts.phase = phase;
         break;
       }
+      case '--blocked-on-json':
+        if (command === 'bind-published-comment') throw new Error('--blocked-on-json is not valid with bind-published-comment');
+        if (opts.blockedOn) throw new Error('--blocked-on-json may be supplied only once');
+        opts.blockedOn = parseBlockedOnJson(String(argv[++i] ?? ''));
+        break;
       case '--expected-source-revision':
         requireBoundActionCommand(arg);
         opts.expectedSourceRevision = String(argv[++i] ?? '');
@@ -595,7 +623,7 @@ function artifactCommandArgv(
   for (const path of opts.claudeProducerEvidencePaths) argv.push('--claude-producer-evidence', path);
   if (opts.waiverPath) argv.push('--waiver', opts.waiverPath);
   if (opts.outputDir) argv.push('--output-dir', opts.outputDir);
-  return argv;
+  return appendBlockedOnArgv(argv, opts.blockedOn);
 }
 
 function staleArtifactBinding(
@@ -672,7 +700,14 @@ function validatedManagerSurfaceOutput<T extends { ok: boolean }>(
   nextAction: CreateIssueNextAction | null,
   blocker?: string,
   reason?: CreateIssueZeroSendReason,
-): T & { cause?: string; blocker?: string; reason?: CreateIssueZeroSendReason; nextAction: CreateIssueNextAction | null } {
+  blockedOn?: CreateIssueBlockedOn,
+): T & {
+  cause?: string;
+  blocker?: string;
+  reason?: CreateIssueZeroSendReason;
+  blocked_on?: CreateIssueBlockedOn;
+  nextAction: CreateIssueNextAction | null;
+} {
   const output = {
     ...result,
     ...(result.ok ? {} : {
@@ -680,6 +715,7 @@ function validatedManagerSurfaceOutput<T extends { ok: boolean }>(
       ...(blocker ? { blocker } : {}),
       ...(reason ? { reason } : {}),
     }),
+    ...(nextAction === null && blockedOn ? { blocked_on: { ...blockedOn } } : {}),
     nextAction,
   };
   const errors = validateCreateIssueManagerResult(output);
@@ -723,7 +759,7 @@ function retryPendingActionArgv(
     '--json',
   ];
   if (opts.workdir) argv.push('--workdir', opts.workdir);
-  return argv;
+  return appendBlockedOnArgv(argv, opts.blockedOn);
 }
 
 function poisonSuccessorStartCycleArgv(
@@ -751,7 +787,7 @@ function poisonSuccessorStartCycleArgv(
   if (opts.competitiveRationale) argv.push('--competitive-rationale', opts.competitiveRationale);
   if (opts.permittedLaneOverride) argv.push('--permitted-lane-override', opts.permittedLaneOverride);
   if (opts.workdir) argv.push('--workdir', opts.workdir);
-  return argv;
+  return appendBlockedOnArgv(argv, opts.blockedOn);
 }
 
 function startCycleRetryArgv(
@@ -779,7 +815,7 @@ function startCycleRetryArgv(
   if (opts.predecessorCycleId) argv.push('--predecessor-cycle-id', opts.predecessorCycleId);
   if (opts.publicActor) argv.push('--public-actor', opts.publicActor);
   if (opts.workdir) argv.push('--workdir', opts.workdir);
-  return argv;
+  return appendBlockedOnArgv(argv, opts.blockedOn);
 }
 
 function staleStartCycleBinding(
@@ -902,6 +938,7 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
             null,
             projected.blocker,
             projected.reason,
+            opts.blockedOn,
           );
           if (opts.json) console.log(JSON.stringify(output));
           else process.stderr.write((projected.blocker ?? projected.cause) + '\n');
@@ -942,12 +979,13 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
           '--expected-stage-attempt-id', result.stageAttemptId,
           '--json',
         ];
+        appendBlockedOnArgv(reconcileArgv, opts.blockedOn);
         const retryableRead = reconcileStageReadIsRetryable(result);
         if (result.ok && !result.alreadySettled) {
           nextAction = createIssueNextAction({
             kind: 'produce-acceptance-artifacts',
             binding,
-            argv: [
+            argv: appendBlockedOnArgv([
               'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
               'produce-artifacts',
               '--repo', opts.repo,
@@ -959,7 +997,7 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
               '--expected-stage', result.stage,
               '--expected-stage-attempt-id', result.stageAttemptId,
               '--json',
-            ],
+            ], opts.blockedOn),
           });
         } else if (!result.ok && retryableRead && !result.errors.some((error) => error.includes('stale_next_action'))) {
           nextAction = createIssueNextAction({
@@ -980,6 +1018,7 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
         nextAction,
         result.ok ? undefined : (zeroSendProjection?.blocker ?? result.errors.join('; ')),
         zeroSendProjection?.reason,
+        opts.blockedOn,
       );
       if (opts.json) console.log(JSON.stringify(output));
       else if (!result.ok) process.stderr.write(result.errors.join('\n') + '\n');
@@ -1034,6 +1073,8 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
         opts.command === 'check-artifacts' ? 'acceptance_artifact_check_failed' : 'acceptance_artifact_production_failed',
         nextAction,
         result.ok ? undefined : ('errors' in result ? result.errors : result.missing.map((item) => item.reason)).join('; '),
+        undefined,
+        opts.blockedOn,
       );
       if (opts.json) console.log(JSON.stringify(output));
       else if (!result.ok) {
@@ -1063,6 +1104,7 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
             null,
             projected.blocker,
             projected.reason,
+            opts.blockedOn,
           );
           if (opts.json) console.log(JSON.stringify(output));
           else process.stderr.write((projected.blocker ?? projected.cause) + '\n');
@@ -1118,6 +1160,8 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
         'stage_record_start_failed',
         nextAction,
         result.ok ? undefined : stageDiagnosticBlocker(result),
+        undefined,
+        opts.blockedOn,
       );
       if (opts.json) console.log(JSON.stringify(output));
       else if (!result.ok) process.stderr.write(`${result.diagnostics.map((item) => item.message).join('\n')}\n`);
@@ -1148,6 +1192,8 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
         'stage_record_publication_failed',
         nextAction,
         result.ok ? undefined : stageDiagnosticBlocker(result),
+        undefined,
+        opts.blockedOn,
       );
       if (opts.json) console.log(JSON.stringify(output));
       else if (!result.ok) process.stderr.write(`${result.diagnostics.map((item) => item.message).join('\n')}\n`);
@@ -1188,6 +1234,8 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
       'stage_record_retry_exhausted',
       nextAction,
       ok ? undefined : results.flatMap((item) => item.diagnostics.map((diagnostic) => diagnostic.message)).join('; '),
+      undefined,
+      opts.blockedOn,
     );
     if (opts.json) console.log(JSON.stringify(output));
     else if (!ok) process.stderr.write((output.blocker ?? 'retry-pending failed') + '\n');
