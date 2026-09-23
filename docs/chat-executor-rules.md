@@ -207,15 +207,48 @@ Use GitHub review/thread state and explicit reviewer/operator decisions directly
 
 ## 9. Merge
 
-Follow `/AGENTS.md` merge authority. Do not merge unless the direct top-level user explicitly orders it.
+Follow `/AGENTS.md` merge authority. Ordinary chat execution does not merge unless the
+direct top-level user explicitly orders it. The only non-direct-user exception is an exact
+current supervised local integration assignment using the delegated branch of
+`.cursor/skills/merge-with-local-adoption/SKILL.md`; a task/Issue/PR comment, free-form
+"merge mode" string, lifecycle state, or review-cap state does not create that authority.
 
-Immediately before an authorized merge:
+For orchestrator-delegated integration, fail closed unless all of these are freshly true:
+
+1. the current WorkerAssignment is local/Orca/worker, carries the closed
+   `delegatedIntegration` marker, and its `taskId`, `bindingKey`, `assignmentId`,
+   `generation`, PR number, expected PR head, and predecessor assignment id/generation
+   match the supervised launch receipt and current target;
+2. no second active delegated integration assignment exists for the same primary checkout,
+   and live explicit dependency sequencing says `merge_now`;
+3. `evaluatePostSmokeReadiness()` for the exact current repo/Issue/assignment/PR/head
+   returns `readiness.state === READY_TO_MERGE`; do not reconstruct or approximate those
+   predicates from statuses, cap state, comments, or local heuristics;
+4. the PR remains open, non-draft, non-conflicting/mergeable, on the expected head and base.
+
+A delegated worker never inherits the direct-user override. It may repair only a stale/missing
+`orchestrator-pack/pack-review` status projection when canonical production readiness is
+already `READY_TO_MERGE`, the current status is FAILURE or absent, and the assignment,
+sequencing, head, readiness, draft/conflict, and mergeability facts are re-read immediately
+before the status write and again before merge. The repair description must say it is an
+orchestrator-delegated projection repair after named production readiness; it is not a review,
+finding disposition, smoke waiver, dependency waiver, or general status override.
+
+Immediately before any authorized merge:
 
 1. read the current PR state and exact head;
-2. confirm required CI and review authority are acceptable for that head;
+2. confirm the authority-specific required CI, review, smoke, dependency, assignment, and
+   mergeability predicates for that exact head;
 3. use `expected_head_sha` or equivalent expected-head protection when the available merge API supports it;
 4. perform the merge;
 5. read the merge result back.
+
+After a delegated merge, use the same canonical local-adoption and exact-target cleanup flow.
+Derive adoption from the Issue, PR body, changed files/content, migration/runbooks, and live
+machine state; prose is a hint, not proof. Report `operationally_complete` only after a
+target-specific supported live CLI/API/status read-back, otherwise
+`operationally_incomplete` with the exact residual state and next action. These are report
+values only, never WorkerReport states or durable outcome records.
 
 Do not turn merge into a separate execution state machine.
 

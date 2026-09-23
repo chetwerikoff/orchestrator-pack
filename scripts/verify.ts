@@ -8,6 +8,7 @@ import { runGateRunner } from './gate-runner/runner.ts';
 import { runNodeVerificationPorts } from './gate-runner/node-verifier-ports.ts';
 import { scanRetiredRuntimeSurfaces } from './runtime-retirement/retired-surface-guard.ts';
 import { checkRepositoryMode } from './sync-ops-wiki.ts';
+import { runReplayFixturePolicyCheck } from './replay-fixture-import.ts';
 
 export interface VerifyLine {
   readonly name: string;
@@ -184,6 +185,15 @@ export async function runVerification(repoRoot: string, options: { readonly stri
   } else lines.push({ name: 'node', status: 'PASS', detail: process.version });
   appendPathChecks(repoRoot, lines, failures);
   appendPluginChecks(repoRoot, lines, failures);
+  const replayFixtures = runReplayFixturePolicyCheck(repoRoot);
+  if (replayFixtures.ok) {
+    lines.push({ name: 'replay fixture provenance', status: 'PASS', detail: `covered=${replayFixtures.inventory.length}` });
+  } else {
+    failures.push(...replayFixtures.failures);
+    lines.push(...replayFixtures.failures.map((detail) => (
+      { name: 'replay fixture provenance', status: 'FAIL' as const, detail }
+    )));
+  }
 
   const ports = await runNodeVerificationPorts(repoRoot);
   lines.push(...ports.lines);

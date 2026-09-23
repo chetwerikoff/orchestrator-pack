@@ -13,7 +13,6 @@ import {
   inspectAcceptanceArtifacts,
   produceAcceptanceArtifacts,
   produceAuthorDispositions,
-  readCanonicalZeroSendTerminal,
   readEvidenceZeroSendTerminal,
   reconcileCreateIssueStage,
   reconcileStageReadIsRetryable,
@@ -693,7 +692,6 @@ function zeroSendTerminalProjection(
     observed_user_heads: observation.observed_user_heads,
     pacedRetryAction: existingPacedBoundedRetryAction(binding, observation.reviewerSlot),
   });
-  if (!projected || projected.nextAction !== null) return null;
   return projected;
 }
 
@@ -1026,11 +1024,28 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
           });
         }
       }
-      const zeroSendTerminal = nextAction ? null : readEvidenceZeroSendTerminal(stageEvidencePath);
+      const staleIssueBinding = result.errors.some((error) => error.includes('stale_next_action'));
+      if (staleIssueBinding && result.stage && result.stageAttemptId && result.sourceRevision) {
+        const output = createIssueStaleNextAction({
+          binding: {
+            repository: opts.repo,
+            issueNumber,
+            sourceRevision: result.sourceRevision,
+            stage: result.stage,
+            stageAttemptId: result.stageAttemptId,
+          },
+          observed: { repository: opts.repo, issueNumber },
+          nextAction: null,
+        });
+        if (opts.json) console.log(JSON.stringify(output));
+        else process.stderr.write('stale_next_action\n');
+        return 1;
+      }
+      const zeroSendTerminal = readEvidenceZeroSendTerminal(stageEvidencePath);
       const zeroSendProjection = zeroSendTerminal
-        && (zeroSendTerminal.policy.class === 'deterministic-input' || zeroSendTerminal.policy.class === 'state-conflict')
         ? zeroSendTerminalProjection(zeroSendTerminal, opts.repo, issueNumber)
         : null;
+      if (zeroSendProjection?.nextAction) nextAction = zeroSendProjection.nextAction;
       const output = validatedManagerSurfaceOutput(
         result,
         zeroSendProjection?.cause ?? result.temporary ?? 'reconciliation_failed',
@@ -1109,27 +1124,6 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
       const sourceRevision = parseRequiredNonEmptyString(opts.sourceRevision, '--source-revision');
       const tier = parseRequiredNonEmptyString(opts.tier, '--tier');
       const stage = parseRequiredNonEmptyString(opts.stage, '--stage') as LifecycleReviewStage;
-      const deterministicTerminal = readCanonicalZeroSendTerminal({
-        issueNumber,
-        sourceRevision,
-        stage,
-      });
-      if (deterministicTerminal?.policy.class === 'deterministic-input') {
-        const projected = zeroSendTerminalProjection(deterministicTerminal, opts.repo, issueNumber);
-        if (projected) {
-          const output = validatedManagerSurfaceOutput(
-            { ok: false, stageAttemptId: deterministicTerminal.stageAttemptId },
-            projected.cause,
-            null,
-            projected.blocker,
-            projected.reason,
-            opts.blockedOn,
-          );
-          if (opts.json) console.log(JSON.stringify(output));
-          else process.stderr.write((projected.blocker ?? projected.cause) + '\n');
-          return 1;
-        }
-      }
       const stale = staleStartCycleBinding(opts, issueNumber);
       if (stale) {
         if (opts.json) console.log(JSON.stringify(stale));

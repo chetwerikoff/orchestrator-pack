@@ -23,9 +23,15 @@ import {
   reconcileCreateIssueStage,
   produceAcceptanceArtifacts,
   classifyZeroSendCausePolicy,
+  readCanonicalZeroSendTerminal,
 } from './lib/create-issue-stage-record-artifacts.ts';
 import { buildManagerReviewTerminalBundle } from './lib/manager-review-terminal-bundle.ts';
 import { canonicalStagePlan } from './lib/create-issue-stage-topology.ts';
+import { startReviewCycle } from './lib/create-issue-stage-record-core.ts';
+import { admitStageLaunch, ensureLifecycleTierIntake, loadCanonicalLifecycleAuthority } from './lib/create-issue-stage-lifecycle.ts';
+import { serializeCommentBody } from './lib/create-issue-stage-record-marker.ts';
+import { CYCLE_SCHEMA, type CycleEventLogical } from './lib/create-issue-stage-record-types.ts';
+import { createMockGhState, createMockTransport } from './lib/create-issue-stage-record-test-helpers.ts';
 import {
   selectPrincipalOwnedCanonicalArtifact,
   sameGithubPrincipal,
@@ -223,6 +229,398 @@ describe('create-Issue nextAction contract', () => {
     expect(functionStart).toBeGreaterThanOrEqual(0);
     expect(admission).toBeGreaterThan(functionStart);
     expect(projection).toBeGreaterThan(admission);
+  });
+});
+
+describe('Issue #2037 zero-send retry convergence', () => {
+  it('commits attempt-1 authority, returns the existing retry action, then settles attempt 2 without a third retry', () => {
+    const root = tempRoot();
+    const reviewDir = join(root, '.review', '2037');
+    mkdirSync(reviewDir, { recursive: true });
+    const evidencePath = join(reviewDir, 'attempt-001.json');
+    writeFileSync(join(reviewDir, 'terminal-01-quota.json'), JSON.stringify({
+      schema: 'flow-manager-long-running-child-terminal/v1',
+      terminal_at: '2026-09-23T00:00:00Z',
+      lifecycle_outcome: 'incident',
+      delivery: 'not-sent',
+      turn_result_state: 'quota',
+      turn_result_cause: 'quota',
+      send_count: 0,
+      recovery_available: false,
+      observed_invocation_id: 'invocation-01',
+    }, null, 2) + '\n');
+
+    const common = {
+      schema: 'reviewer-invocation-envelope/v1',
+      reviewEpisodeId: 'issue:2037@r04',
+      stageAttemptId: 'attempt-2037',
+      policyVersion: 'triple-source/v1',
+      reviewerCardinality: 3,
+      cardinalityConfigIdentity: 'triple-source/v1',
+      stage: 'architectural-review',
+      sourceRevision: 'r04',
+      revisionCheck: 'matched',
+      capacityOutcome: 'admitted',
+      capacityWaitMs: 0,
+    };
+    const delivered = (slot: '02' | '03') => ({
+      ...common,
+      invocationId: 'invocation-' + slot,
+      reviewerSlot: slot,
+      reviewerOrdinal: Number(slot),
+      attemptOrdinal: 1,
+      retryAttempt: false,
+      reviewerSource: 'slot-' + slot + '#capture=direct-publication/v1',
+      terminal: true,
+      terminalClassification: 'post-send-failure',
+      sendCount: 1,
+      retryClass: 'retry-forbidden',
+    });
+    writeFileSync(evidencePath, JSON.stringify({
+      schema: 'create-issue-stage-evidence/v1',
+      producer: 'create-issue-stage-finalize/start-cycle',
+      taskIdentity: 'issue:2037',
+      tier: 'T2',
+      stage: 'architectural-review',
+      stageAttemptId: 'attempt-2037',
+      stageSequence: 1,
+      cycleId: 'cycle-2037',
+      cycleBinding: { cycleId: 'cycle-2037', sourceRevision: 'r04', boundBeforeLaunch: true },
+      policyVersion: 'triple-source/v1',
+      reviewerCardinality: 3,
+      cardinalityConfigIdentity: 'triple-source/v1',
+      sourceRevision: 'r04',
+      revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'pending' },
+      invocations: [{
+        ...common,
+        invocationId: 'invocation-01',
+        reviewerSlot: '01',
+        reviewerOrdinal: 1,
+        attemptOrdinal: 1,
+        retryAttempt: false,
+        reviewerSource: 'slot-01#capture=direct-publication/v1',
+        terminalEnvelopePath: 'terminal-01-quota.json',
+      }, delivered('02'), delivered('03')],
+    }, null, 2) + '\n');
+
+    const reviewerBody = (slot: string, invocationId: string) => [
+      'Read revision: #2037 r04',
+      'INVOCATION_ID_TO_ECHO: ' + invocationId,
+      'review-economics-contract: v1',
+      'VERDICT: FINDINGS',
+      'FINDING_COUNT: 1',
+      '',
+      'id: issue-2037-' + slot,
+      'type: spec',
+      'severity: P1',
+      'title: Convergence fixture finding',
+      'evidence: Exact attempt publication is observable.',
+      'recommendation: Preserve exact-attempt retry authority.',
+      'persistent-machinery: no',
+      '',
+      'SIMPLIFICATION_CLEAN',
+      '',
+    ].join('\n');
+    const comment = (id: number, slot: string, invocationId: string) => ({
+      id,
+      html_url: 'https://github.com/chetwerikoff/orchestrator-pack/issues/2037#issuecomment-' + id,
+      issue_url: 'https://api.github.com/repos/chetwerikoff/orchestrator-pack/issues/2037',
+      body: reviewerBody(slot, invocationId),
+      created_at: '2026-09-23T00:05:00Z',
+      updated_at: '2026-09-23T00:05:00Z',
+      author_association: 'OWNER',
+      user: { login: 'chetwerikoff' },
+    });
+    let census = [
+      comment(203702, '02', 'invocation-02'),
+      comment(203703, '03', 'invocation-03'),
+    ];
+    const transport = {
+      runGh(argv: string[]) {
+        if (argv[2] === 'user') return { exitCode: 0, stdout: 'chetwerikoff\n', stderr: '' };
+        const target = argv[2] ?? '';
+        if (target === 'repos/chetwerikoff/orchestrator-pack') {
+          return { exitCode: 0, stdout: 'chetwerikoff\n', stderr: '' };
+        }
+        if (target === 'repos/chetwerikoff/orchestrator-pack/issues/2037' && argv.includes('--jq')) {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({ title: 'Issue 2037', body: '<!-- source-revision: r04 -->', labels: [] }),
+            stderr: '',
+          };
+        }
+        if (target === 'repos/chetwerikoff/orchestrator-pack/issues/2037/comments?per_page=100&page=1') {
+          return { exitCode: 0, stdout: JSON.stringify(census), stderr: '' };
+        }
+        if (target === 'repos/chetwerikoff/orchestrator-pack/issues/2037/comments?per_page=100&page=2') {
+          return { exitCode: 0, stdout: '[]', stderr: '' };
+        }
+        if (target.startsWith('repos/chetwerikoff/orchestrator-pack/issues/comments/')) {
+          const id = Number(target.split('/').at(-1));
+          const found = census.find((candidate) => candidate.id === id);
+          return found
+            ? { exitCode: 0, stdout: JSON.stringify(found), stderr: '' }
+            : { exitCode: 1, stdout: '', stderr: 'not found' };
+        }
+        throw new Error('unexpected Issue #2037 test gh call: ' + argv.join(' '));
+      },
+    };
+
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      logs.push(String(line));
+    });
+    try {
+      const argv = [
+        'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
+        '--repo', 'chetwerikoff/orchestrator-pack',
+        '--issue-number', '2037',
+        '--review-dir', reviewDir,
+        '--stage-evidence', evidencePath,
+        '--json',
+      ];
+      expect(runStageFinalizeCli(argv, transport)).toBe(1);
+      const first = JSON.parse(logs.at(-1) ?? '{}') as Record<string, any>;
+      expect(first).toMatchObject({
+        ok: false,
+        cause: 'quota',
+        nextAction: {
+          kind: 'retry-create-issue-browser-preflight',
+          binding: {
+            issueNumber: 2037,
+            sourceRevision: 'r04',
+            stage: 'architectural-review',
+            stageAttemptId: 'attempt-2037',
+          },
+        },
+      });
+      expect(validateCreateIssueManagerResult(first)).toEqual([]);
+      const committed = JSON.parse(readFileSync(evidencePath, 'utf8')) as Record<string, any>;
+      expect(committed.invocations[0]).toMatchObject({
+        terminal: true,
+        terminalClassification: 'quota',
+        sendCount: 0,
+        retryClass: 'eligible-zero-send',
+      });
+      const retryCauseFamily = committed.invocations[0].retryClass;
+      expect(retryCauseFamily).toBe('eligible-zero-send');
+      expect(retryCauseFamily).not.toBe('unknown');
+
+      const committedBytes = readFileSync(evidencePath, 'utf8');
+      logs.length = 0;
+      expect(runStageFinalizeCli(argv, transport)).toBe(1);
+      expect(readFileSync(evidencePath, 'utf8')).toBe(committedBytes);
+      expect(JSON.parse(logs.at(-1) ?? '{}').nextAction?.kind).toBe('retry-create-issue-browser-preflight');
+
+      writeFileSync(join(reviewDir, 'terminal-01-retry.json'), JSON.stringify({
+        schema: 'flow-manager-long-running-child-terminal/v1',
+        terminal_at: '2026-09-23T00:10:00Z',
+        lifecycle_outcome: 'incident',
+        delivery: 'sent',
+        turn_result_state: 'driver_error',
+        turn_result_cause: 'driver_error',
+        send_count: 1,
+        recovery_available: false,
+      }, null, 2) + '\n');
+      const retryEvidence = JSON.parse(readFileSync(evidencePath, 'utf8')) as Record<string, any>;
+      retryEvidence.invocations.push({
+        ...common,
+        invocationId: 'invocation-01-retry',
+        reviewerSlot: '01',
+        reviewerOrdinal: 1,
+        attemptOrdinal: 2,
+        retryAttempt: true,
+        reviewerSource: 'slot-01#capture=direct-publication/v1',
+        terminalEnvelopePath: 'terminal-01-retry.json',
+      });
+      writeFileSync(evidencePath, JSON.stringify(retryEvidence, null, 2) + '\n');
+      census = [
+        comment(203701, '01', 'invocation-01-retry'),
+        ...census,
+      ];
+
+      logs.length = 0;
+      expect(runStageFinalizeCli(argv, transport)).toBe(0);
+      const second = JSON.parse(logs.at(-1) ?? '{}') as Record<string, any>;
+      expect(second.nextAction?.kind).toBe('produce-acceptance-artifacts');
+      expect(second.nextAction?.kind).not.toBe('retry-create-issue-browser-preflight');
+      const settledEvidence = JSON.parse(readFileSync(evidencePath, 'utf8')) as Record<string, any>;
+      expect(settledEvidence.invocations.at(-1)).toMatchObject({
+        attemptOrdinal: 2,
+        retryAttempt: true,
+        sendCount: 1,
+        retryClass: 'retry-forbidden',
+        artifactAuthority: { kind: 'authoritative-github-artifact' },
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('rejects the #926 foreign historical zero-send fixture before canonical stage admission', () => {
+    const root = tempRoot();
+    const stateRoot = join(root, 'state');
+    const reviewDir = join(stateRoot, '.review', '2037');
+    const workdir = join(root, 'work');
+    mkdirSync(reviewDir, { recursive: true });
+    const sourceRevision = 'r04';
+    const stage = 'architectural-review' as const;
+    const historicalCycleId = '6523468e-e4fe-42bb-9c31-acf827d78cc1';
+    const noncanonicalStageAttemptId = '8b9849f9-4e0e-44d0-a0d5-8590a6d1b3d2';
+    const invocationId = 'historical-invocation-8b9849f9';
+    const repo = 'chetwerikoff/orchestrator-pack';
+    const issueNumber = 2037;
+    ensureLifecycleTierIntake({ issueNumber, tier: 'T2', firstRevision: sourceRevision, stateRootOverride: stateRoot });
+    const attemptHex = createHash('sha256')
+      .update(`create-issue-stage-attempt/v1\n${repo}\n${issueNumber}\n${stage}`, 'utf8')
+      .digest('hex')
+      .slice(0, 32);
+    const canonicalStageAttemptId = `${attemptHex.slice(0, 8)}-${attemptHex.slice(8, 12)}-4${attemptHex.slice(13, 16)}-a${attemptHex.slice(17, 20)}-${attemptHex.slice(20, 32)}`;
+    const terminalEnvelopePath = join(reviewDir, 'terminal-01.json');
+    writeFileSync(terminalEnvelopePath, JSON.stringify({
+      schema: 'flow-manager-long-running-child-terminal/v1',
+      terminal_at: '2026-09-23T00:00:00Z',
+      lifecycle_outcome: 'incident',
+      delivery: 'not-sent',
+      turn_result_state: 'quota',
+      turn_result_cause: 'quota',
+      send_count: 0,
+      recovery_available: false,
+      observed_invocation_id: invocationId,
+    }, null, 2) + '\n');
+    const historicalEvidence = {
+      schema: 'create-issue-stage-evidence/v1',
+      producer: 'create-issue-stage-finalize/start-cycle',
+      taskIdentity: 'issue:2037',
+      tier: 'T2',
+      stage,
+      stageAttemptId: noncanonicalStageAttemptId,
+      stageSequence: 2,
+      cycleId: historicalCycleId,
+      cycleBinding: { cycleId: historicalCycleId, sourceRevision, boundBeforeLaunch: true },
+      policyVersion: 'triple-source/v1',
+      reviewerCardinality: 3,
+      cardinalityConfigIdentity: 'triple-source/v1',
+      sourceRevision,
+      outcome: 'incident',
+      revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'pending' },
+      invocations: [{
+        schema: 'reviewer-invocation-envelope/v1',
+        reviewEpisodeId: 'issue:2037@r04',
+        stageAttemptId: noncanonicalStageAttemptId,
+        policyVersion: 'triple-source/v1',
+        reviewerCardinality: 3,
+        cardinalityConfigIdentity: 'triple-source/v1',
+        stage,
+        sourceRevision,
+        invocationId,
+        reviewerSlot: '01',
+        reviewerOrdinal: 1,
+        attemptOrdinal: 1,
+        retryAttempt: false,
+        terminal: true,
+        terminalClassification: 'quota',
+        sendCount: 0,
+        retryClass: 'eligible-zero-send',
+        terminalEnvelopePath: 'terminal-01.json',
+        reviewerSource: 'historical-noncanonical',
+      }],
+    };
+    expect(JSON.stringify(historicalEvidence)).not.toContain('capturePath');
+    writeFileSync(join(reviewDir, 'attempt-002.json'), JSON.stringify(historicalEvidence, null, 2) + '\n');
+    const coarseHistoricalTerminal = readCanonicalZeroSendTerminal({
+      issueNumber, sourceRevision, stage, stateRootOverride: stateRoot,
+    });
+    expect(coarseHistoricalTerminal).toMatchObject({
+      stageAttemptId: noncanonicalStageAttemptId,
+      sourceRevision,
+      stage,
+      invocationId,
+      reviewerSlot: '01',
+      retryClass: 'eligible-zero-send',
+    });
+    const canonicalAuthority = loadCanonicalLifecycleAuthority(issueNumber, stateRoot);
+    expect(admitStageLaunch({
+      issueNumber, tier: 'T2', stage, sourceRevision,
+      issueBody: '<!-- source-revision: r04 -->\nIssue #2037 r04 fixture',
+      intake: canonicalAuthority.intake,
+      receiptValues: canonicalAuthority.receiptValues,
+    }).ok).toBe(true);
+
+    const historicalCycle: CycleEventLogical = {
+      schema: CYCLE_SCHEMA,
+      'event-key': historicalCycleId,
+      'cycle-id': historicalCycleId,
+      'predecessor-cycle-id': 'none',
+      'source-revision': sourceRevision,
+      tier: 'T2',
+      'public-actor': 'cursor-flow-manager',
+    };
+    const state = createMockGhState({
+      comments: [{
+        id: 92600001,
+        body: serializeCommentBody(historicalCycle),
+        createdAt: '2026-09-23T00:00:00Z',
+        updatedAt: '2026-09-23T00:00:00Z',
+        userLogin: 'chetwerikoff',
+        authorAssociation: 'OWNER',
+      }],
+      issue: {
+        title: 'Issue #2037',
+        body: '<!-- source-revision: r04 -->\nIssue #2037 r04 fixture',
+        labels: ['spec-review:in-progress'],
+      },
+      nextCommentId: 92600002,
+    });
+    const transport = createMockTransport(state);
+    const input = {
+      repo,
+      issueNumber,
+      sourceRevision,
+      tier: 'T2',
+      stage,
+      publicActor: 'cursor-flow-manager' as const,
+      workdir,
+      stateRootOverride: stateRoot,
+    };
+
+    const rejected = startReviewCycle(transport, { ...input, stageAttemptId: noncanonicalStageAttemptId });
+    expect(rejected.ok).toBe(false);
+    expect(rejected.stageAttemptId).toBe(canonicalStageAttemptId);
+    expect(rejected.diagnostics.some((item) => item.code === 'stage_authority_invalid'
+      && item.message.includes('does not match the canonical active attempt'))).toBe(true);
+    expect(state.comments).toHaveLength(1);
+
+    const started = startReviewCycle(transport, input);
+    expect(started.ok, started.diagnostics.map((item) => item.message).join('\n')).toBe(true);
+    expect(started.stageAttemptId).toBe(canonicalStageAttemptId);
+    expect(started.cycleId).not.toBe(historicalCycleId);
+    expect(state.comments).toHaveLength(2);
+    expect(state.comments[1]?.body).toContain(historicalCycleId);
+
+    writeFileSync(join(reviewDir, 'stage-completeness-receipt-canonical.json'), JSON.stringify({
+      schema: 'stage-completeness-receipt/v1',
+      taskIdentity: 'issue:2037',
+      reviewEpisodeId: 'issue:2037@r04',
+      episodeFirstRevision: 'r04',
+      stageSequence: 1,
+      tier: 'T2',
+      stage,
+      cycleId: started.cycleId,
+      stageAttemptId: canonicalStageAttemptId,
+      policyVersion: 'triple-source/v1',
+      sourceRevision,
+      outcome: 'complete',
+      reviewerCardinality: 3,
+      completedSourceCount: 3,
+      cycleBinding: { cycleId: started.cycleId, sourceRevision, boundBeforeLaunch: true },
+      producerEvidence: 'not-applicable',
+      tierTransition: 'none',
+    }, null, 2) + '\n');
+    const consumed = startReviewCycle(transport, input);
+    expect(consumed.ok).toBe(false);
+    expect(consumed.diagnostics.some((item) => item.code === 'stage_slot_consumed')).toBe(true);
+    expect(state.comments).toHaveLength(2);
   });
 });
 
