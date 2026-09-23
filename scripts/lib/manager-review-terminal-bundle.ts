@@ -5,6 +5,7 @@ import { defaultGhTransport, fetchIssueRevision } from './create-issue-stage-rec
 import type { GhTransport } from './create-issue-stage-record-types.ts';
 import { canonicalPredecessorStage, type ReviewTier } from './create-issue-stage-topology.ts';
 import {
+  AUTHOR_DISPOSITIONS_SCHEMA,
   DEFECT_DISPOSITION_VALUES,
   M4_DISPOSITION_VALUES,
   REMEDY_DISPOSITION_VALUES,
@@ -312,7 +313,7 @@ export function buildManagerReviewTerminalBundle(options: BuildManagerReviewTerm
   const reviewDir = resolve(options.reviewDir);
   const authorDispositionsPath = resolve(options.authorDispositionsPath ?? join(reviewDir, 'author-dispositions.json'));
   const author = readJson(authorDispositionsPath, 'terminal_bundle_author_dispositions_invalid');
-  if (author.schema !== 'create-issue-author-dispositions/v1'
+  if (author.schema !== AUTHOR_DISPOSITIONS_SCHEMA
     || (author.producer !== 'governed-author-output/v1' && author.producer !== 'lifecycle-zero-state/v1')) {
     throw new Error('terminal_bundle_author_dispositions_invalid');
   }
