@@ -32,6 +32,60 @@ direct-user override wording in this skill applies only to direct-user mode.
 A delegated worker resolves its PR from the exact structured marker; free-form task/prompt text
 is not merge authority.
 
+## Delegated-integration admission
+
+Before the first delegated mutation, and again immediately before a status write, merge,
+primary-checkout adoption mutation, or task-owned recovery mutation:
+
+1. Re-read the canonical current WorkerAssignment. Require local/Orca/worker ownership and the
+   exact current `taskId`, `bindingKey`, `assignmentId`, and `generation`.
+2. Require exactly one closed marker containing only `prNumber`, `expectedHeadSha`,
+   `predecessorAssignmentId`, and `predecessorGeneration`. Missing, malformed, extra-key,
+   or changed marker state performs no delegated effect. The integration assignment identity
+   must differ from its predecessor and match the supervised launch/read-back.
+3. Re-read the live Issue, PR/head/base, `main`, and every concrete explicit dependency.
+   Sequence only explicit task relationships into `merge_now` or `wait_for_dependency`.
+   Issue closure is not proof that a dependency landed; broad overlap is not a dependency.
+4. Require no second active delegated integration assignment for the primary checkout. After a
+   terminal or proven-inactive predecessor, recompute sequencing, readiness, mergeability,
+   head, and base rather than preserving a lock/store decision.
+5. Consume the existing production `evaluatePostSmokeReadiness()` result from
+   `scripts/worker-smoke-run.ts` for the exact repo/Issue/current-assignment/PR/head. Proceed
+   only when `readiness.state === READY_TO_MERGE`; do not reconstruct readiness from commit
+   status, review-cap state, `reviewStageComplete`, strict-descendant settlement, comments,
+   or prose.
+6. Independently require the PR to remain OPEN, non-draft, non-conflicting/mergeable, on the
+   marker's exact head and expected base.
+
+The existing WorkerAssignment exact-current fence includes the marker. A stale assignment or
+marker performs no delegated effect. This is policy enforcement, not a cryptographic
+capability; do not add a second token, role, assignment store, integration registry, lease,
+queue, watcher, heartbeat, merge state machine, or durable outcome store.
+
+If canonical production readiness is already `READY_TO_MERGE` and the exact-head
+`orchestrator-pack/pack-review` status is FAILURE or absent, use the delegated projection
+repair section of
+[`docs/pack-review-waiver-merge-runbook.md`](../../../docs/pack-review-waiver-merge-runbook.md).
+That repair is not the operator waiver path. Re-read all delegated facts before its status
+write and again before merge. SUCCESS needs no repair; NOT_READY, unknown/inconsistent
+authority, non-review CI/smoke failure, unresolved finding, dependency wait, draft/conflict,
+head/base drift, or assignment/marker drift remains blocked.
+
+After merge, use the ordinary adoption and exact-target cleanup path, but delegated mode never
+uses the direct-user cleanup override. Independently derive local adoption from the live Issue,
+PR body including `## Operator adoption`, changed paths/content, current migration/runbooks,
+and live machine state. Prose is a hint, not proof. Verify changed runtime behavior through the
+smallest supported real CLI/API/status read-back.
+
+The delegated final report includes the marker PR/head/predecessor identity, sequencing result,
+production readiness source/result, any projection-repair receipt, merge SHA, adopted local
+HEAD, source paths/config/runbooks and live observations that drove adoption, adoption actions,
+live verification, residual state/blocker, and next action. Its only outcome vocabulary is
+`operationally_complete` or `operationally_incomplete`; these are report values, not
+WorkerReport states or durable records. On post-merge failure, stop further mutation by
+default; reverse a task-owned local change only through an already-supported component
+runbook/CLI/API reverse or restore operation with read-back.
+
 ## Runtime profile
 
 The active runtime is Orca. Runtime-specific commands stay at the edge.
