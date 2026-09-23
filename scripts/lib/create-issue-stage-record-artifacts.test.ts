@@ -4459,3 +4459,112 @@ describe('Issue #1997 producer continuation routing', () => {
     expect(output.nextAction).toBeNull();
   });
 });
+
+
+describe('Issue #1997 settled author-round execution', () => {
+  it('writes the next numeric governed reply on the same settled attempt, keeps the Issue revision, and then becomes a no-op', () => {
+    const oldRoot = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+    const stateRoot = mkdtempSync(join(tmpdir(), 'opk-1997-author-round-'));
+    tempDirs.push(stateRoot);
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = stateRoot;
+    try {
+      const input = fixture({
+        transportClassification: 'complete',
+        withTurnResult: true,
+        withCapture: true,
+      });
+      const canonical = resolveCanonicalReviewDirectory({ taskIdentity: `issue:${ISSUE}` }).directory;
+      mkdirSync(canonical, { recursive: true });
+      for (const source of [input.intakePath, input.reviewEvidencePath, input.evidencePath]) {
+        writeFileSync(join(canonical, basename(source)), readFileSync(source));
+      }
+      writeFileSync(join(canonical, 'round-01-author-reply.md'), JSON.stringify({
+        schema: AUTHOR_DISPOSITIONS_SCHEMA,
+        sourceRevision: REVISION,
+        findings: [],
+        m4: { inventory: [] },
+      }));
+
+      const source = transport({
+        census: [...input.reviewComments, comment(input.body)],
+        issueBodies: [finalAcceptanceIssueBody(REVISION)],
+      });
+      let launches = 0;
+      const runner = (request: {
+        outputPath: string;
+        prompt: string;
+        stageAttemptId?: string;
+      }) => {
+        launches += 1;
+        expect(request.stageAttemptId).toBe('attempt-001');
+        expect(request.prompt).toContain('missing_schema_label');
+        expect(request.prompt).toContain(renderAuthorDispositionPromptFragment());
+        writeGovernedAuthorReply(request.outputPath, {
+          sourceRevision: REVISION,
+          predecessorStage: 'architectural-review',
+        });
+        return { ok: true };
+      };
+      const argv = [
+        'node', 'scripts/create-issue-stage-finalize.ts', 'author-round',
+        '--repo', REPOSITORY,
+        '--issue-number', String(ISSUE),
+        '--review-dir', canonical,
+        '--expected-source-revision', REVISION,
+        '--expected-stage', 'architectural',
+        '--expected-stage-attempt-id', 'attempt-001',
+        '--json',
+      ];
+      const logs: string[] = [];
+      const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => logs.push(String(line)));
+      try {
+        expect(runStageFinalizeCli(argv, source, runner as never)).toBe(0);
+        expect(JSON.parse(logs.at(-1) ?? '{}')).toMatchObject({
+          ok: true,
+          cause: 'author_round_completed',
+          nextAction: null,
+          authorRound: {
+            repairClass: 'author-schema',
+            round: 2,
+            sourceRevision: REVISION,
+            stage: 'architectural',
+            stageAttemptId: 'attempt-001',
+          },
+        });
+      } finally {
+        spy.mockRestore();
+      }
+      expect(launches).toBe(1);
+      expect(existsSync(join(canonical, 'round-02-author-reply.txt'))).toBe(true);
+      expect(readdirSync(canonical).filter((name) => /^attempt-[0-9]{3}\.json$/.test(name)).sort())
+        .toEqual(['attempt-000.json', 'attempt-001.json']);
+      const produced = JSON.parse(readFileSync(join(canonical, 'author-dispositions.json'), 'utf8'));
+      expect(produced).toMatchObject({
+        producer: 'governed-author-output/v1',
+        sourceRevision: REVISION,
+        predecessorStage: 'architectural-review',
+        findings: [],
+      });
+
+      const rerunLogs: string[] = [];
+      const rerunSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => rerunLogs.push(String(line)));
+      try {
+        expect(runStageFinalizeCli(argv, source, () => {
+          launches += 1;
+          return { ok: true };
+        })).toBe(0);
+        expect(JSON.parse(rerunLogs.at(-1) ?? '{}')).toMatchObject({
+          ok: true,
+          cause: 'author_round_not_required',
+          nextAction: null,
+        });
+      } finally {
+        rerunSpy.mockRestore();
+      }
+      expect(launches).toBe(1);
+    } finally {
+      if (oldRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = oldRoot;
+    }
+  });
+});
