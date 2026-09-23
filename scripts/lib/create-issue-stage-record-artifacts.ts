@@ -3286,6 +3286,74 @@ interface PreparedAuthorDispositions {
   replaceExisting: boolean;
 }
 
+export interface SerializedAuthorDispositionBinding {
+  bytes: string;
+  value: Record<string, unknown>;
+}
+
+export function serializeAuthorDispositionBinding(input: {
+  payload: unknown;
+  producer: 'governed-author-output/v1' | 'lifecycle-zero-state/v1';
+  reviewEpisodeId: string;
+  sourceRevision: string;
+  predecessorStage: ReviewStage | null;
+  draft: string;
+}): SerializedAuthorDispositionBinding {
+  if (!isRecord(input.payload)
+    || input.payload.schema !== AUTHOR_DISPOSITIONS_SCHEMA
+    || !Array.isArray(input.payload.findings)
+    || !isRecord(input.payload.m4)
+    || !Array.isArray(input.payload.m4.inventory)) {
+    throw new Error('author disposition binding input is malformed');
+  }
+  const produced: JsonRecord = {
+    schema: AUTHOR_DISPOSITIONS_SCHEMA,
+    producer: input.producer,
+    reviewEpisodeId: input.reviewEpisodeId,
+    sourceRevision: input.sourceRevision,
+    predecessorStage: input.predecessorStage,
+    draft: input.draft,
+    findings: input.payload.findings,
+    m4: {
+      reviewEpisodeId: input.reviewEpisodeId,
+      sourceRevision: input.sourceRevision,
+      predecessorStage: input.predecessorStage,
+      inventory: input.payload.m4.inventory,
+    },
+  };
+  return {
+    value: produced,
+    bytes: JSON.stringify(produced, null, 2) + '\n',
+  };
+}
+
+export type ProduceAuthorDispositionsCause =
+  | 'source-unavailable'
+  | 'observation-lost'
+  | 'requested-revision-not-yet-visible'
+  | 'authority-conflict'
+  | 'write-failed';
+
+export interface ProduceAuthorDispositionsResult {
+  ok: boolean;
+  retryable: boolean;
+  cause?: ProduceAuthorDispositionsCause;
+  errors: string[];
+  files: string[];
+  reviewEpisodeId?: string;
+  sourceRevision?: string;
+}
+
+export interface ProduceAuthorDispositionsOptions {
+  reviewDir: string;
+  repositoryFullName: string;
+  issueNumber: number;
+  sourceRevision: string;
+  artifactSourceTransport?: GhTransport;
+  /** Deterministic test-only seam. Production callers leave this unset. */
+  afterIssueSnapshotCommit?: (path: string) => void;
+}
+
 export type AuthorDispositionAdmission = 'lifecycle-zero-state' | 'defer-stage-materialization' | 'require-governed-reply';
 
 /** Reviewer-stage materialization does not consume author adjudication. Post-lens and final-acceptance bundles do. */
@@ -3390,23 +3458,22 @@ function prepareAuthorDispositionsFromGovernedOutput(input: {
     input.errors.push('author dispositions predecessorStage disagrees with lifecycle stage evidence; field=predecessorStage authority=lifecycle-tool-witnessed');
     return null;
   }
-  const m4 = payload.m4 as JsonRecord;
-  const produced: JsonRecord = {
-    schema: AUTHOR_DISPOSITIONS_SCHEMA,
-    producer,
-    reviewEpisodeId: input.reviewEpisodeId,
-    sourceRevision: input.sourceRevision,
-    predecessorStage: input.predecessorStage,
-    draft: input.draft,
-    findings: payload.findings,
-    m4: {
+  let serialized: SerializedAuthorDispositionBinding;
+  try {
+    serialized = serializeAuthorDispositionBinding({
+      payload,
+      producer,
       reviewEpisodeId: input.reviewEpisodeId,
       sourceRevision: input.sourceRevision,
       predecessorStage: input.predecessorStage,
-      inventory: m4.inventory,
-    },
-  };
-  const bytes = JSON.stringify(produced, null, 2) + '\n';
+      draft: input.draft,
+    });
+  } catch (error) {
+    input.errors.push(error instanceof Error ? error.message : String(error));
+    return null;
+  }
+  const produced = serialized.value as JsonRecord;
+  const bytes = serialized.bytes;
   let replaceExisting = false;
   if (existsSync(input.targetPath)) {
     let existingText = '';
@@ -3481,6 +3548,220 @@ function rollbackCreatedInputs(paths: Iterable<string>): void {
   for (const path of [...paths].reverse()) {
     try { if (existsSync(path)) unlinkSync(path); } catch {}
   }
+}
+
+function revisionOrdinal(value: string): number | null {
+  const match = /^r([0-9]+)$/.exec(value);
+  if (!match) return null;
+  const ordinal = Number(match[1]);
+  return Number.isSafeInteger(ordinal) ? ordinal : null;
+}
+
+function atomicInstallProducerInput(path: string, bytes: string, allowReplace: boolean): 'written' | 'reused' {
+  mkdirSync(dirname(path), { recursive: true });
+  if (existsSync(path)) {
+    const current = readFileSync(path, 'utf8');
+    if (current === bytes) return 'reused';
+    if (!allowReplace) throw new Error('conflicting immutable producer input: ' + path);
+  }
+  const temporary = path + '.produce-author-dispositions-' + process.pid + '.tmp';
+  try {
+    writeFileSync(temporary, bytes, { encoding: 'utf8', flag: 'wx' });
+    renameSync(temporary, path);
+    return 'written';
+  } finally {
+    if (existsSync(temporary)) rmSync(temporary, { force: true });
+  }
+}
+
+function produceAuthorFailure(
+  cause: ProduceAuthorDispositionsCause,
+  retryable: boolean,
+  errors: string[],
+  reviewEpisodeId?: string,
+  sourceRevision?: string,
+): ProduceAuthorDispositionsResult {
+  return {
+    ok: false,
+    retryable,
+    cause,
+    errors: [...new Set(errors)],
+    files: [],
+    ...(reviewEpisodeId ? { reviewEpisodeId } : {}),
+    ...(sourceRevision ? { sourceRevision } : {}),
+  };
+}
+
+export function produceAuthorDispositions(
+  options: ProduceAuthorDispositionsOptions,
+): ProduceAuthorDispositionsResult {
+  const reviewDir = resolve(options.reviewDir);
+  const errors: string[] = [];
+  const requestedRevision = options.sourceRevision.trim();
+  const requestedOrdinal = revisionOrdinal(requestedRevision);
+  if (!Number.isSafeInteger(options.issueNumber) || options.issueNumber < 1) {
+    return produceAuthorFailure('authority-conflict', false, ['issueNumber must be positive']);
+  }
+  if (requestedOrdinal === null) {
+    return produceAuthorFailure('authority-conflict', false, ['sourceRevision must use rNN syntax']);
+  }
+
+  const tierIntakePath = join(reviewDir, 'tier-intake.json');
+  const intake = loadTierIntake(tierIntakePath, errors);
+  if (!intake) return produceAuthorFailure('authority-conflict', false, errors);
+  const expectedTaskIdentity = 'issue:' + options.issueNumber;
+  if (intake.taskIdentity !== expectedTaskIdentity) {
+    errors.push('tier-intake taskIdentity does not bind the requested Issue');
+  }
+  if (intake.priorTier !== 'T1') {
+    errors.push('produce-author-dispositions is admitted only for T1 intake');
+  }
+  const canonical = resolveCanonicalReviewDirectory({ taskIdentity: intake.taskIdentity });
+  if (reviewDir !== resolve(canonical.directory) || resolve(tierIntakePath) !== resolve(canonical.intakePath)) {
+    errors.push('produce-author-dispositions requires the canonical Issue-bound review directory');
+  }
+  let entries: string[] = [];
+  try { entries = readdirSync(reviewDir); } catch {
+    errors.push('canonical review directory is unreadable: ' + reviewDir);
+  }
+  if (stageEvidenceFilesInReviewDir(reviewDir).length > 0
+    || entries.some((name) => /^stage-completeness-receipt-.+\.json$/.test(name))) {
+    errors.push('T1 architectural semantic slot is no longer pre-stage/unconsumed');
+  }
+  if (errors.length > 0) return produceAuthorFailure('authority-conflict', false, errors);
+
+  const reviewEpisodeId = deriveReviewEpisodeId(intake.taskIdentity, intake.firstRevision);
+  const transport = options.artifactSourceTransport ?? defaultGhTransport();
+  let first: ReturnType<typeof fetchIssueRevision>;
+  let second: ReturnType<typeof fetchIssueRevision>;
+  try {
+    first = fetchIssueRevision(transport, options.repositoryFullName, options.issueNumber);
+    second = fetchIssueRevision(transport, options.repositoryFullName, options.issueNumber);
+  } catch (error) {
+    return produceAuthorFailure(
+      'source-unavailable',
+      true,
+      ['authenticated Issue read is temporarily unavailable: ' + (error instanceof Error ? error.message : String(error))],
+      reviewEpisodeId,
+      requestedRevision,
+    );
+  }
+  if (first.title !== second.title || first.body !== second.body) {
+    return produceAuthorFailure(
+      'observation-lost',
+      true,
+      ['Issue title/body moved between the two stability observations'],
+      reviewEpisodeId,
+      requestedRevision,
+    );
+  }
+  const markers = [...first.body.matchAll(/<!--\s*source-revision:\s*(r[0-9]+)\s*-->/gi)];
+  if (markers.length !== 1 || !markers[0]?.[1]) {
+    return produceAuthorFailure(
+      'authority-conflict',
+      false,
+      ['stable live Issue has no unique source-revision marker'],
+      reviewEpisodeId,
+      requestedRevision,
+    );
+  }
+  const observedRevision = markers[0][1];
+  if (observedRevision !== requestedRevision) {
+    const observedOrdinal = revisionOrdinal(observedRevision);
+    if (observedOrdinal !== null && observedOrdinal + 1 === requestedOrdinal) {
+      return produceAuthorFailure(
+        'requested-revision-not-yet-visible',
+        true,
+        ['requested source revision is not visible yet; live Issue is still at the immediately prior revision'],
+        reviewEpisodeId,
+        requestedRevision,
+      );
+    }
+    return produceAuthorFailure(
+      'authority-conflict',
+      false,
+      ['stable live Issue revision ' + observedRevision + ' does not match requested ' + requestedRevision],
+      reviewEpisodeId,
+      requestedRevision,
+    );
+  }
+
+  const snapshotPath = join(reviewDir, 'issue-' + requestedRevision + '-body.json');
+  const snapshotBytes = JSON.stringify({
+    schema: 'create-issue-live-snapshot/v1',
+    issueNumber: options.issueNumber,
+    sourceRevision: requestedRevision,
+    title: first.title,
+    body: first.body,
+  }, null, 2) + '\n';
+  if (existsSync(snapshotPath)) {
+    let existingSnapshot = '';
+    try { existingSnapshot = readFileSync(snapshotPath, 'utf8'); } catch {
+      return produceAuthorFailure('authority-conflict', false, ['existing Issue body snapshot is unreadable: ' + snapshotPath], reviewEpisodeId, requestedRevision);
+    }
+    if (existingSnapshot !== snapshotBytes) {
+      return produceAuthorFailure('authority-conflict', false, ['existing same-revision Issue snapshot conflicts with stable live Issue bytes'], reviewEpisodeId, requestedRevision);
+    }
+  }
+
+  const authorPath = join(reviewDir, 'author-dispositions.json');
+  const prepared = prepareAuthorDispositionsFromGovernedOutput({
+    reviewDir,
+    targetPath: authorPath,
+    reviewEpisodeId,
+    sourceRevision: requestedRevision,
+    predecessorStage: null,
+    draft: first.body,
+    allowZeroState: false,
+    errors,
+  });
+  if (!prepared) return produceAuthorFailure('authority-conflict', false, errors, reviewEpisodeId, requestedRevision);
+
+  let allowAuthorReplace = false;
+  if (prepared.replaceExisting) {
+    let existing: unknown;
+    try { existing = JSON.parse(readFileSync(authorPath, 'utf8')) as unknown; } catch { existing = null; }
+    const existingRevision = isRecord(existing) && typeof existing.sourceRevision === 'string'
+      ? revisionOrdinal(existing.sourceRevision)
+      : null;
+    if (!isRecord(existing)
+      || existing.reviewEpisodeId !== reviewEpisodeId
+      || existing.predecessorStage !== null
+      || existingRevision === null
+      || existingRevision >= requestedOrdinal) {
+      return produceAuthorFailure(
+        'authority-conflict',
+        false,
+        ['existing author-dispositions.json conflicts with the requested pre-stage binding'],
+        reviewEpisodeId,
+        requestedRevision,
+      );
+    }
+    allowAuthorReplace = true;
+  }
+
+  try {
+    atomicInstallProducerInput(snapshotPath, snapshotBytes, false);
+    options.afterIssueSnapshotCommit?.(snapshotPath);
+    atomicInstallProducerInput(authorPath, prepared.bytes, allowAuthorReplace);
+  } catch (error) {
+    return produceAuthorFailure(
+      'write-failed',
+      false,
+      ['unable to commit producer handoff: ' + (error instanceof Error ? error.message : String(error))],
+      reviewEpisodeId,
+      requestedRevision,
+    );
+  }
+
+  return {
+    ok: true,
+    retryable: false,
+    errors: [],
+    files: [snapshotPath, authorPath],
+    reviewEpisodeId,
+    sourceRevision: requestedRevision,
+  };
 }
 
 function latestLifecycleStage(stageInputs: readonly { path: string; value: JsonRecord }[]): ReviewStage | null {
