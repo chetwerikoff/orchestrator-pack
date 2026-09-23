@@ -3306,6 +3306,8 @@ export function serializeAuthorDispositionBinding(input: {
     || !Array.isArray(input.payload.m4.inventory)) {
     throw new Error('author disposition binding input is malformed');
   }
+  const payload = input.payload as JsonRecord;
+  const m4 = payload.m4 as JsonRecord;
   const produced: JsonRecord = {
     schema: AUTHOR_DISPOSITIONS_SCHEMA,
     producer: input.producer,
@@ -3313,12 +3315,12 @@ export function serializeAuthorDispositionBinding(input: {
     sourceRevision: input.sourceRevision,
     predecessorStage: input.predecessorStage,
     draft: input.draft,
-    findings: input.payload.findings,
+    findings: payload.findings,
     m4: {
       reviewEpisodeId: input.reviewEpisodeId,
       sourceRevision: input.sourceRevision,
       predecessorStage: input.predecessorStage,
-      inventory: input.payload.m4.inventory,
+      inventory: m4.inventory,
     },
   };
   return {
