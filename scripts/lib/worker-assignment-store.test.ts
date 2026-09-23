@@ -71,6 +71,75 @@ describe('WorkerAssignment compare-and-publish', () => {
     expect(assignmentStillCurrent(file, replacement.assignment)).toBe(true);
   });
 
+  it('round-trips and fences the closed delegated-integration marker', async () => {
+    const { file } = fixture();
+    const implementation = await publishCurrentWorkerAssignment(publishInput(file, 'dispatch-implementation'));
+    if (!implementation.ok) throw new Error(implementation.reason);
+    const delegatedIntegration = {
+      prNumber: 926,
+      expectedHeadSha: 'a'.repeat(40),
+      predecessorAssignmentId: implementation.assignment.assignmentId,
+      predecessorGeneration: implementation.assignment.generation,
+    };
+    const integration = await publishCurrentWorkerAssignment({
+      ...publishInput(file, 'dispatch-integration'),
+      expectedCurrent: {
+        assignmentId: implementation.assignment.assignmentId,
+        generation: implementation.assignment.generation,
+      },
+      delegatedIntegration,
+    });
+    expect(integration.ok).toBe(true);
+    if (!integration.ok) throw new Error(integration.reason);
+    expect(integration.assignment).toMatchObject({
+      assignmentId: expect.stringMatching(/^wa-/u),
+      generation: implementation.assignment.generation + 1,
+      delegatedIntegration,
+    });
+    expect(integration.assignment.assignmentId).not.toBe(implementation.assignment.assignmentId);
+    expect(currentWorkerAssignment(file, 1416)).toEqual(integration.assignment);
+    expect(assignmentStillCurrent(file, integration.assignment)).toBe(true);
+
+    const drifted = {
+      ...integration.assignment,
+      delegatedIntegration: { ...delegatedIntegration, expectedHeadSha: 'b'.repeat(40) },
+    };
+    expect(assignmentStillCurrent(file, drifted)).toBe(false);
+    const fenced = await withCurrentWorkerAssignmentFence(file, drifted, () => 'must-not-run');
+    expect(fenced).toEqual({ ok: false, reason: 'assignment_stale', actionEntered: false });
+  });
+
+  it('fails closed on incomplete or non-closed delegated-integration markers', async () => {
+    const { file } = fixture();
+    const implementation = await publishCurrentWorkerAssignment(publishInput(file, 'dispatch-implementation'));
+    if (!implementation.ok) throw new Error(implementation.reason);
+    const expectedCurrent = {
+      assignmentId: implementation.assignment.assignmentId,
+      generation: implementation.assignment.generation,
+    };
+    const baseMarker = {
+      prNumber: 926,
+      expectedHeadSha: 'a'.repeat(40),
+      predecessorAssignmentId: implementation.assignment.assignmentId,
+      predecessorGeneration: implementation.assignment.generation,
+    };
+
+    const extra = await publishCurrentWorkerAssignment({
+      ...publishInput(file, 'dispatch-extra'),
+      expectedCurrent,
+      delegatedIntegration: { ...baseMarker, authorizationMode: 'waiver' },
+    });
+    expect(extra).toEqual({ ok: false, reason: 'assignment_input_invalid' });
+
+    const stale = await publishCurrentWorkerAssignment({
+      ...publishInput(file, 'dispatch-stale-marker'),
+      expectedCurrent,
+      delegatedIntegration: { ...baseMarker, predecessorAssignmentId: 'wa-other' },
+    });
+    expect(stale).toEqual({ ok: false, reason: 'assignment_stale' });
+    expect(currentWorkerAssignment(file, 1416)).toEqual(implementation.assignment);
+  });
+
   it('treats a missing expectation as expect-none and rejects overwrite of an existing row', async () => {
     const { file } = fixture();
     const first = await publishCurrentWorkerAssignment(publishInput(file, 'dispatch-1'));
