@@ -1127,8 +1127,7 @@ classifies every acceptance input and review artifact by its owner and role.
 - `author-dispositions.json`: derived binding over the stable GitHub snapshot,
   lifecycle topology, and governed author payload.
 
-For a completed tracked T1 author turn, the single next producer step before the
-first `architectural` `start-cycle` is:
+For a completed tracked T1 author turn, the single next producer step before the first `architectural` `start-cycle` is:
 
 ```bash
 node --experimental-strip-types scripts/create-issue-stage-finalize.ts produce-author-dispositions \
