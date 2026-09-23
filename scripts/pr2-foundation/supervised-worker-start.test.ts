@@ -12,8 +12,10 @@ import {
   publishCurrentWorkerAssignment,
   readWorkerAssignmentStore,
   resolveWorkerAssignmentStorePath,
+  retireCurrentWorkerAssignment,
   workerAssignmentKey,
 } from '../lib/worker-assignment-store.ts';
+import { evaluateReadiness } from './readiness-evaluator.ts';
 import { withCrashRecoverableFileLock } from './journal-lock.ts';
 import { runSupervisedWorkerStart } from './supervised-worker-start.ts';
 
@@ -261,6 +263,146 @@ describe('supervised worker start exact assignment admission',()=>{
     });
     expect(calls).toBe(0);
     expect(currentWorkerAssignment(file,1416)).toEqual(integration.assignment);
+  });
+
+  it('suppresses a second delegated launch while active and rechecks live main/readiness before its successor', async () => {
+    const base = root();
+    const env = { ...process.env, OPK_BASE_DIR: base };
+    const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
+    const repository = 'chetwerikoff/orchestrator-pack';
+    const issueNumber = 926;
+    const prNumber = 2084;
+    const currentPrHead = 'a'.repeat(40);
+    const mainBefore = 'b'.repeat(40);
+    const mainAfter = 'c'.repeat(40);
+    let liveMainSha = mainBefore;
+    let livePrHeadSha = currentPrHead;
+    const readCurrentMain = vi.fn(() => liveMainSha);
+    const readLivePr = vi.fn(() => ({ headSha: livePrHeadSha, baseRef: 'main' }));
+    const revalidationEvents: string[] = [];
+    const revalidate = (assignment: NonNullable<ReturnType<typeof currentWorkerAssignment>>) => {
+      const observedMainSha = readCurrentMain();
+      const pr = readLivePr();
+      const target = {
+        repository, issueNumber, taskId: assignment.taskId, assignmentId: assignment.assignmentId,
+        assignmentGeneration: assignment.generation, prNumber, headSha: pr.headSha,
+      };
+      const readiness = evaluateReadiness({
+        target,
+        pr: { open: true, expectedTarget: pr.baseRef === 'main', prNumber, headSha: pr.headSha },
+        workerReports: [{
+          accepted: true, repoSlug: repository,
+          assignment: { assignmentId: assignment.assignmentId, generation: assignment.generation, taskId: assignment.taskId },
+          prNumber, headSha: pr.headSha, reportState: 'ready_for_review', reportedAtMs: 1,
+        }],
+        workerStatuses: [{
+          assignmentId: assignment.assignmentId, assignmentGeneration: assignment.generation, taskId: assignment.taskId,
+          issueNumber, repository, kind: 'local', localCapability: 'available', derivedStatus: 'ready_for_review',
+          winningSource: 'pack-worker-report', stale: false, siblingReadinessOk: true,
+        }],
+        requiredCi: { headSha: pr.headSha, state: 'success' },
+        review: { obligation: 'complete', unresolvedRequiredFinding: false, atCapOpenFindings: false, atCapContinuationRequired: false },
+        smoke: { headSha: pr.headSha, state: 'pass' },
+      });
+      revalidationEvents.push(`revalidated:${observedMainSha}:${readiness.state}`);
+      return { observedMainSha, readiness };
+    };
+
+    const firstImplementation = await publishCurrentWorkerAssignment({
+      file, repository, issueNumber, taskId: 'task_926_first', kind: 'local', provider: 'orca',
+      bindingKey: 'dispatch_926_first_implementation', role: 'worker',
+    });
+    if (!firstImplementation.ok) throw new Error(firstImplementation.reason);
+    const firstAdmission = revalidate(firstImplementation.assignment);
+    expect(firstAdmission.readiness.state).toBe('READY_TO_MERGE');
+    const firstMarker = {
+      prNumber, expectedHeadSha: currentPrHead,
+      predecessorAssignmentId: firstImplementation.assignment.assignmentId,
+      predecessorGeneration: firstImplementation.assignment.generation,
+    };
+    let launchCount = 0;
+    const providerArgs = (taskId: string, name: string) => [
+      '--task', taskId, '--worktree', 'new-top-level', '--repo', 'id:repo-1', '--name', name,
+      '--agent', 'cursor', '--model', 'model-medium', '--setup', 'run',
+    ];
+    const executeStart = (taskId: string, dispatchId: string, name: string) => async () => {
+      launchCount += 1;
+      revalidationEvents.push(`started:${dispatchId}`);
+      return { ok: true, stdout: envelope({
+        taskId, dispatchId, state: 'ready',
+        worktree: { id: `repo-1::/tmp/${name}`, path: `/tmp/${name}` },
+        terminal: { handle: `term-${name}`, runtime: 'orca', generation: `generation-${launchCount}` },
+        setup: { requested: 'run', effective: 'run', state: 'running' },
+        launch: { requested: { agent: 'cursor', model: 'model-medium' }, effective: { agent: 'cursor', model: 'model-medium' } },
+        effects: [
+          { kind: 'worktree', action: 'created_top_level', id: `repo-1::/tmp/${name}` },
+          { kind: 'terminal', role: 'agent', action: 'reused_agent_terminal', id: `term-${name}` },
+          { kind: 'dispatch_input', role: 'agent', action: 'accepted', state: 'accepted', id: `term-${name}` },
+        ],
+      }) };
+    };
+
+    const firstStart = await runSupervisedWorkerStart({
+      mode: 'provider_new_top_level', role: 'worker', issueNumber, repository, env,
+      adapter: adapter({ kind: 'gone' }), delegatedIntegration: firstMarker,
+      orcaArgs: providerArgs('task_926_first', 'integration-first'),
+      execute: executeStart('task_926_first', 'dispatch_926_integration_first', 'integration-first'),
+    });
+    expect(firstStart).toMatchObject({ ok: true, reason: 'ready_and_assignment_bound', assignment: { delegatedIntegration: firstMarker } });
+    if (!firstStart.ok || !firstStart.assignment) throw new Error('first integration assignment was not published');
+    expect(revalidationEvents.indexOf(`revalidated:${mainBefore}:READY_TO_MERGE`))
+      .toBeLessThan(revalidationEvents.indexOf('started:dispatch_926_integration_first'));
+
+    const activeAdapter = adapter({ kind: 'resolved', worker }, 'idle');
+    let duplicateStarts = 0;
+    const sameActiveAttempt = await runSupervisedWorkerStart({
+      mode: 'provider_new_top_level', role: 'worker', issueNumber, repository, env,
+      adapter: activeAdapter, delegatedIntegration: firstMarker,
+      orcaArgs: providerArgs('task_926_first', 'integration-first'),
+      execute: async () => { duplicateStarts += 1; return { ok: false, stdout: '' }; },
+    });
+    expect(sameActiveAttempt).toMatchObject({ ok: true, reason: 'delegated_integration_assignment_reused' });
+    expect(duplicateStarts).toBe(0);
+    const competingMarker = { ...firstMarker, expectedHeadSha: 'd'.repeat(40) };
+    const competingStart = await runSupervisedWorkerStart({
+      mode: 'provider_new_top_level', role: 'worker', issueNumber, repository, env,
+      adapter: activeAdapter, delegatedIntegration: competingMarker,
+      orcaArgs: providerArgs('task_926_first', 'integration-competing'),
+      execute: async () => { duplicateStarts += 1; return { ok: false, stdout: '' }; },
+    });
+    expect(competingStart).toEqual({ ok: false, reason: 'delegated_integration_predecessor_mismatch' });
+    expect(duplicateStarts).toBe(0);
+    expect(launchCount).toBe(1);
+
+    const retired = await retireCurrentWorkerAssignment({ file, expected: firstStart.assignment });
+    expect(retired.ok).toBe(true);
+    const nextImplementation = await publishCurrentWorkerAssignment({
+      file, repository, issueNumber, taskId: 'task_926_next', kind: 'local', provider: 'orca',
+      bindingKey: 'dispatch_926_next_implementation', role: 'worker',
+    });
+    if (!nextImplementation.ok) throw new Error(nextImplementation.reason);
+
+    liveMainSha = mainAfter;
+    const nextAdmission = revalidate(nextImplementation.assignment);
+    expect(nextAdmission.observedMainSha).toBe(mainAfter);
+    expect(nextAdmission.readiness.state).toBe('READY_TO_MERGE');
+    const nextMarker = {
+      prNumber, expectedHeadSha: currentPrHead,
+      predecessorAssignmentId: nextImplementation.assignment.assignmentId,
+      predecessorGeneration: nextImplementation.assignment.generation,
+    };
+    const nextStart = await runSupervisedWorkerStart({
+      mode: 'provider_new_top_level', role: 'worker', issueNumber, repository, env,
+      adapter: adapter({ kind: 'gone' }), delegatedIntegration: nextMarker,
+      orcaArgs: providerArgs('task_926_next', 'integration-next'),
+      execute: executeStart('task_926_next', 'dispatch_926_integration_next', 'integration-next'),
+    });
+    expect(nextStart).toMatchObject({ ok: true, reason: 'ready_and_assignment_bound', assignment: { delegatedIntegration: nextMarker } });
+    expect(readCurrentMain).toHaveBeenCalledTimes(2);
+    expect(readLivePr).toHaveBeenCalledTimes(2);
+    expect(launchCount).toBe(2);
+    expect(revalidationEvents.indexOf(`revalidated:${mainAfter}:READY_TO_MERGE`))
+      .toBeLessThan(revalidationEvents.indexOf('started:dispatch_926_integration_next'));
   });
 
   it('rejects delegated-integration predecessor drift before any Orca start effect', async()=>{
