@@ -7,6 +7,7 @@
     "docs/chat-executor-rules.md",
     "docs/declarations/926.pr-scope.json",
     "docs/orchestration-runbook.md",
+    "docs/orchestrator-delegated-integration.md",
     "docs/pack-review-waiver-merge-runbook.md",
     "scripts/lib/worker-assignment-store.test.ts",
     "scripts/lib/worker-assignment-store.ts",
