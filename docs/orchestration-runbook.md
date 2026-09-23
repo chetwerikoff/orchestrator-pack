@@ -1001,89 +1001,12 @@ owner until the existing lifecycle/close authority proves cleanup.
 
 ### Orchestrator-delegated integration
 
-After implementation, required review, CI, and current-head smoke are complete, the
-orchestrator may hand merge/adoption/cleanup to one separate supervised local integration
-assignment. This is a post-readiness phase, not another review or merge scheduler.
-
-Before launch, the orchestrator re-reads the live Issue, PR/head/base, main, and every concrete
-explicit dependency named by the current task. Resolve only explicit relationships into
-`merge_now` or `wait_for_dependency`; an Issue being closed is not proof that its PR landed.
-Do not infer dependencies from broad file overlap. Serialize the primary checkout by live
-reasoning: if another delegated integration assignment for that checkout is still active,
-wait. After a terminal/proven-inactive predecessor, re-read dependency, readiness,
-mergeability, head, and base facts rather than preserving a lock/store/queue.
-
-The integration worker is launched through
-`scripts/pr2-foundation/supervised-worker-start.ts` as a normal local Orca worker with
-`--role worker`. Its current WorkerAssignment may carry exactly one optional
-`delegatedIntegration` marker with only:
-
-- `prNumber`;
-- `expectedHeadSha` (40-hex current PR head);
-- `predecessorAssignmentId`;
-- `predecessorGeneration`.
-
-The marker is structured data, not a free-form mode string or cryptographic capability.
-Publication requires a numbered Issue, local Orca worker role, an exact current predecessor,
-and a matching predecessor id/generation; a replacement gets its normal new assignment id and
-generation. The existing WorkerAssignment store remains the only persistent carrier. A
-malformed/extra-key marker, absent marker, changed PR/head/predecessor, stale assignment, or
-different current `taskId` performs no delegated integration effect. Reuse is allowed only
-when the already-current integration assignment has the same exact marker. The existing
-`withCurrentWorkerAssignmentFence` compares the marker as part of exact-current identity;
-do not create a second role, assignment store, integration registry, lease, lock, queue,
-heartbeat, or outcome ledger.
-
-Example supervised launch input uses the structured marker before the Orca separator:
-
-```text
-node --experimental-strip-types scripts/pr2-foundation/supervised-worker-start.ts \
-  --issue-number <ISSUE> --repository <owner/repo> --role worker \
-  --delegated-integration '{"prNumber":<PR>,"expectedHeadSha":"<40-hex>","predecessorAssignmentId":"<wa-id>","predecessorGeneration":<N>}' \
-  -- --task <task-id> <ordinary supervised Orca worker-start args>
-```
-
-Immediately before every delegated status write, merge, primary-checkout adoption mutation,
-or task-owned recovery mutation, re-read the exact current assignment/Dispatch identity and
-marker and fail closed on drift. Long-lived free-form prompt text is never authority.
-
-Canonical readiness remains
-`evaluatePostSmokeReadiness()` in `scripts/worker-smoke-run.ts`, which binds the live
-current WorkerAssignment into the existing `evaluateReadiness()` target and supplies current
-PR identity/head, review-independent required CI, required review/finding/cap facts, exact-head
-smoke, and one accepted corroborated worker lifecycle. Delegated integration proceeds only
-when that production result is exactly `READY_TO_MERGE`. Do not reconstruct readiness from
-individual GitHub statuses, `reviewStageComplete`, tier-cap state, strict-descendant
-settlement, or prose. Draft/conflict/mergeability and live dependency sequencing remain
-separate fresh merge gates.
-
-If canonical production readiness is already `READY_TO_MERGE` but the exact-head
-`orchestrator-pack/pack-review` commit status is FAILURE or absent, the delegated worker may
-repair only that stale/missing projection. Re-read assignment+marker, sequencing, PR
-head/base, readiness, draft/conflict, and mergeability immediately before the status POST and
-again before merge. The status description must identify an
-`orchestrator-delegated projection repair after READY_TO_MERGE`; the write does not prove a
-review ran, resolve a finding, waive smoke/CI/dependency order, or synthesize readiness. A
-SUCCESS status needs no repair; any NOT_READY/unknown/inconsistent authority remains blocked.
-
-The worker then runs the delegated branch of the canonical
-`merge-with-local-adoption` skill. Local-adoption prose is only a hint: independently inspect
-the Issue, PR body including `## Operator adoption`, changed paths/content, active
-migration/runbooks, and live operator-machine state. Apply only source-derived task-owned
-changes, then use the smallest supported real CLI/API/status read-back for every runtime
-behavior changed by the PR. Cleanup is the existing exact-target worktree lifecycle; do not
-broaden it to the primary checkout or siblings.
-
-The final integration handoff reports PR, merge SHA, adopted local HEAD, the source
-paths/config/runbooks and live observations that drove adoption, applied adoption actions,
-live verification result, exact residual state/blocker, and next action. The outcome vocabulary
-is only `operationally_complete` or `operationally_incomplete`; neither value is persisted
-as a WorkerReport state or in a new durable outcome store.
-
-For a post-merge failure, stop further mutation and report exact residual machine state by
-default. Restore a task-owned local mutation only when the component's current supported
-runbook/CLI/API already defines a compatible reverse/restore operation with read-back. Do not
-invent a generic rollback/snapshot service.
+After current-head implementation/review/CI/smoke readiness, delegated
+merge/adoption/cleanup uses one separate supervised local integration assignment.
+The bounded carrier, sequencing, exact-current fencing, production-readiness
+reuse, projection-repair, adoption, verification, and report contract lives in
+[the orchestrator-delegated integration runbook](orchestrator-delegated-integration.md).
+Do not replace it with another role, store, queue, lock, evaluator, or outcome ledger.
 
 ### Operator adoption handoff
 
