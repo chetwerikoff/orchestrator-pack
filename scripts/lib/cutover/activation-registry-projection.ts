@@ -1,9 +1,17 @@
 import { readFileSync } from 'node:fs';
 import { sha256Bytes } from './stable-stringify.ts';
 import { writeDurableFile } from './activation-evidence.ts';
-import type { SchedulerRegistry } from './types.ts';
+import type { DeadlineBoundSchedulerRegistry, SchedulerRegistry } from './types.ts';
 
-export function validateSchedulerRegistry(bytes: Buffer | string): SchedulerRegistry {
+export function validateSchedulerRegistry(bytes: Buffer | string): SchedulerRegistry;
+export function validateSchedulerRegistry(
+  bytes: Buffer | string,
+  options: { requireStallGraceMultiplier: true },
+): DeadlineBoundSchedulerRegistry;
+export function validateSchedulerRegistry(
+  bytes: Buffer | string,
+  options: { requireStallGraceMultiplier?: boolean } = {},
+): SchedulerRegistry | DeadlineBoundSchedulerRegistry {
   const registry = JSON.parse(Buffer.isBuffer(bytes) ? bytes.toString('utf8') : bytes) as SchedulerRegistry;
   if (registry.schemaVersion !== 2 || registry.requiredChildIds?.length !== 1 || registry.requiredChildIds[0] !== 'pr2-scheduler') {
     throw new Error('staged_registry_required_child_invalid');
@@ -14,7 +22,13 @@ export function validateSchedulerRegistry(bytes: Buffer | string): SchedulerRegi
     throw new Error('staged_registry_scheduler_invalid');
   }
   if (!Number.isInteger(child.cadenceSeconds) || child.cadenceSeconds <= 0) throw new Error('staged_registry_cadence_invalid');
-  if (!Number.isInteger(child.stallGraceMultiplier) || child.stallGraceMultiplier <= 0) throw new Error('staged_registry_stall_grace_invalid');
+  if (child.stallGraceMultiplier !== undefined
+      && (!Number.isInteger(child.stallGraceMultiplier) || child.stallGraceMultiplier <= 0)) {
+    throw new Error('staged_registry_stall_grace_invalid');
+  }
+  if (options.requireStallGraceMultiplier && child.stallGraceMultiplier === undefined) {
+    throw new Error('staged_registry_stall_grace_invalid');
+  }
   return registry;
 }
 
