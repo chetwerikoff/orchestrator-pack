@@ -25,6 +25,7 @@ import {
   stageReceiptPayloadsMatchExceptDerivedChain,
 } from './create-issue-stage-record-artifacts.ts';
 import { parseConsumableStageReceipt } from './create-issue-stage-record-receipt.ts';
+import { runStageFinalizeCli } from './create-issue-stage-record-cli.ts';
 import { runFinalAcceptance } from './create-issue-final-acceptance.ts';
 import { validateTerminalOneShotBodyBinding } from './create-issue-final-acceptance-contract.ts';
 import {
@@ -4371,5 +4372,90 @@ describe('Issue #1997 single author-disposition schema owner', () => {
     expect(classifyAuthorDispositionFailure('predecessorStage disagrees with lifecycle stage evidence')).toBe('lifecycle-injected');
     expect(classifyAuthorDispositionFailure('terminalResultIdentity is missing')).toBe('lifecycle-injected');
     expect(classifyAuthorDispositionFailure('missing_schema_label:schema-label')).toBe('author-owned');
+  });
+});
+
+
+describe('Issue #1997 producer continuation routing', () => {
+  function runArtifactCli(input: ReturnType<typeof fixture>, source: ReturnType<typeof transport>) {
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => logs.push(String(line)));
+    try {
+      const code = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'produce-artifacts',
+        '--repo', REPOSITORY,
+        '--issue-number', String(input.issueNumber),
+        '--review-dir', input.dir,
+        '--tier-intake', input.intakePath,
+        '--stage-evidence', input.reviewEvidencePath,
+        '--stage-evidence', input.evidencePath,
+        '--author-dispositions', input.authorPath,
+        '--output-dir', input.outputDir,
+        '--phase', 'final-acceptance',
+        '--json',
+      ], source);
+      return { code, output: JSON.parse(logs.at(-1) ?? '{}') as Record<string, any> };
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it('routes a missing whole-line schema label to one settled author-round with exact stageAttemptId', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      withTurnResult: true,
+      withCapture: true,
+    });
+    writeFileSync(input.authorReplyPath, JSON.stringify({
+      schema: AUTHOR_DISPOSITIONS_SCHEMA,
+      sourceRevision: REVISION,
+      findings: [],
+      m4: { inventory: [] },
+    }));
+    const source = transport({
+      census: [...input.reviewComments, comment(input.body)],
+    });
+    const { code, output } = runArtifactCli(input, source);
+    expect(code).toBe(1);
+    expect(output.blocker).toContain('missing_schema_label');
+    expect(output.authorDiagnostics).toMatchObject([{
+      reason: 'missing_schema_label',
+      ownership: 'author-owned',
+      field: 'schema-label',
+    }]);
+    expect(output.authorSchemaFragment).toBe(renderAuthorDispositionPromptFragment());
+    expect(output.nextAction).toMatchObject({
+      kind: 'author-round',
+      binding: {
+        repository: REPOSITORY,
+        issueNumber: ISSUE,
+        sourceRevision: REVISION,
+        stage: 'architectural',
+        stageAttemptId: 'attempt-001',
+      },
+    });
+    const argv = output.nextAction.argv as string[];
+    expect(argv.filter((item) => item === '--expected-source-revision')).toHaveLength(1);
+    expect(argv.filter((item) => item === '--expected-stage')).toHaveLength(1);
+    expect(argv.filter((item) => item === '--expected-stage-attempt-id')).toHaveLength(1);
+    expect(argv).not.toContain('--reason');
+  });
+
+  it('fails closed with no author-round when the rejection is lifecycle-injected', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      withTurnResult: true,
+      withCapture: true,
+    });
+    const evidence = JSON.parse(readFileSync(input.evidencePath, 'utf8')) as Record<string, any>;
+    delete evidence.invocations[0].terminalResultIdentity;
+    writeFileSync(input.evidencePath, JSON.stringify(evidence));
+    const source = transport({
+      census: [...input.reviewComments, comment(input.body)],
+    });
+    const { code, output } = runArtifactCli(input, source);
+    expect(code).toBe(1);
+    expect(String(output.blocker)).toMatch(/terminalResultIdentity|terminal result identity/i);
+    expect(output.nextAction).toBeNull();
   });
 });
