@@ -3050,6 +3050,110 @@ describe('Issue #1977 evidence-backed zero-send partial reconciliation', () => {
   });
 });
 
+describe('Issue #2037 durable legal zero-send retry authority', () => {
+  function prepareRetryableZeroSend(cause: 'quota' | 'composer-refusal' | 'fill-timeout') {
+    const input = fixture({ phase: 'pre-lens' });
+    const evidence = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+    const invocation = evidence.invocations[0] as Record<string, any>;
+    const invocationId = 'issue-2037-' + cause;
+    invocation.invocationId = invocationId;
+    invocation.attemptOrdinal = 1;
+    invocation.retryAttempt = false;
+    delete invocation.terminal;
+    delete invocation.terminalClassification;
+    delete invocation.sendCount;
+    delete invocation.retryClass;
+    delete invocation.capturePath;
+    delete invocation.turnResultPath;
+    delete invocation.terminalResultIdentity;
+    delete invocation.artifactAuthority;
+    const envelopePath = join(input.dir, 'terminal-2037-' + cause + '.json');
+    invocation.terminalEnvelopePath = envelopePath;
+    writeFileSync(envelopePath, JSON.stringify({
+      schema: 'flow-manager-long-running-child-terminal/v1',
+      terminal_at: '2026-09-23T00:00:00Z',
+      lifecycle_outcome: 'incident',
+      delivery: 'not-sent',
+      turn_result_state: cause,
+      turn_result_cause: cause,
+      send_count: 0,
+      recovery_available: false,
+    }, null, 2) + '\n');
+    writeFileSync(input.reviewEvidencePath, JSON.stringify(evidence, null, 2) + '\n');
+    return {
+      input,
+      source: transport({ census: input.reviewComments.slice(1) }),
+      invocationId,
+    };
+  }
+
+  it.each(['quota', 'composer-refusal', 'fill-timeout'] as const)(
+    'commits %s retry authority before capture settlement and is idempotent',
+    (cause) => {
+      const prepared = prepareRetryableZeroSend(cause);
+      const first = reconcileCreateIssueStage({
+        reviewDir: prepared.input.dir,
+        stageEvidencePath: prepared.input.reviewEvidencePath,
+        repositoryFullName: REPOSITORY,
+        issueNumber: ISSUE,
+        artifactSourceTransport: prepared.source,
+      });
+      expect(first.ok).toBe(false);
+      const stored = JSON.parse(readFileSync(prepared.input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+      expect(stored.invocations[0]).toMatchObject({
+        invocationId: prepared.invocationId,
+        attemptOrdinal: 1,
+        terminal: true,
+        sendCount: 0,
+        retryClass: 'eligible-zero-send',
+      });
+      expect(['quota', 'composer-refusal', 'fill-timeout']).toContain(stored.invocations[0].terminalClassification);
+      expect(readEvidenceZeroSendTerminal(prepared.input.reviewEvidencePath)).toMatchObject({
+        stageAttemptId: stored.stageAttemptId,
+        attemptOrdinal: 1,
+        retryClass: 'eligible-zero-send',
+        policy: { class: 'transient', code: cause },
+      });
+
+      const committedBytes = readFileSync(prepared.input.reviewEvidencePath, 'utf8');
+      const replay = reconcileCreateIssueStage({
+        reviewDir: prepared.input.dir,
+        stageEvidencePath: prepared.input.reviewEvidencePath,
+        repositoryFullName: REPOSITORY,
+        issueNumber: ISSUE,
+        artifactSourceTransport: prepared.source,
+      });
+      expect(replay.ok).toBe(false);
+      expect(readFileSync(prepared.input.reviewEvidencePath, 'utf8')).toBe(committedBytes);
+    },
+  );
+
+  it('fails closed instead of rewriting a contradictory persisted retryClass', () => {
+    const prepared = prepareRetryableZeroSend('quota');
+    reconcileCreateIssueStage({
+      reviewDir: prepared.input.dir,
+      stageEvidencePath: prepared.input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: prepared.source,
+    });
+    const evidence = JSON.parse(readFileSync(prepared.input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+    evidence.invocations[0].retryClass = 'retry-forbidden';
+    writeFileSync(prepared.input.reviewEvidencePath, JSON.stringify(evidence, null, 2) + '\n');
+    const before = readFileSync(prepared.input.reviewEvidencePath, 'utf8');
+    const result = reconcileCreateIssueStage({
+      reviewDir: prepared.input.dir,
+      stageEvidencePath: prepared.input.reviewEvidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: prepared.source,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('terminal transport disagrees with its bound terminal envelope');
+    expect(readFileSync(prepared.input.reviewEvidencePath, 'utf8')).toBe(before);
+  });
+});
+
 describe('owner-authorized zero-send retry classification (Issue #2037)', () => {
   const zeroSendIncident = {
     lifecycle_outcome: 'incident',
