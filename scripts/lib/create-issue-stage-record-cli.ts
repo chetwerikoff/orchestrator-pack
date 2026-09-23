@@ -19,11 +19,12 @@ import {
   type ZeroSendTerminalObservation,
 } from './create-issue-stage-record-artifacts.ts';
 import {
+  createIssueExternalPauseResult,
   createIssueNextAction,
   createIssueRecoverableResult,
   createIssueStaleNextAction,
-  createIssueTerminalResult,
   existingPacedBoundedRetryAction,
+  projectBlockedOnToExternalPause,
   projectZeroSendManagerResult,
   validateCreateIssueBlockedOn,
   validateCreateIssueManagerResult,
@@ -32,6 +33,10 @@ import {
   type CreateIssueNextAction,
   type CreateIssueZeroSendReason,
 } from './create-issue-next-action.ts';
+import {
+  emitCreateIssueManagerResult,
+  type CreateIssueManagerBoundaryProducer,
+} from './create-issue-manager-boundary.ts';
 import { resolveCanonicalReviewDirectory } from './stage-completeness-core.ts';
 import type { LifecycleReviewStage } from './create-issue-stage-lifecycle.ts';
 import { isPublicActor, PUBLIC_ACTORS } from './create-issue-stage-record-marker.ts';
@@ -239,6 +244,18 @@ function appendBlockedOnArgv(argv: string[], blockedOn?: CreateIssueBlockedOn): 
   return argv;
 }
 
+function emitManagerBoundary(
+  producer: CreateIssueManagerBoundaryProducer,
+  argv: readonly string[],
+  result: unknown,
+): number {
+  return emitCreateIssueManagerResult({
+    producer,
+    currentArgv: argv,
+    produce: () => result,
+  }).exitCode;
+}
+
 function runParsedCli<T>(
   argv: string[],
   toolName: string,
@@ -249,11 +266,23 @@ function runParsedCli<T>(
   try {
     opts = parseArgs(argv);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`${toolName}: ${message}\n`);
-    return 2;
+    const evaluation = emitCreateIssueManagerResult({
+      producer: toolName,
+      currentArgv: argv,
+      produce: () => { throw error; },
+    });
+    return evaluation.exitCode;
   }
-  return run(opts);
+  try {
+    return run(opts);
+  } catch (error) {
+    const evaluation = emitCreateIssueManagerResult({
+      producer: toolName,
+      currentArgv: argv,
+      produce: () => { throw error; },
+    });
+    return evaluation.exitCode;
+  }
 }
 
 export function stageFinalizeUsage(): string {
@@ -626,6 +655,55 @@ function artifactCommandArgv(
   return appendBlockedOnArgv(argv, opts.blockedOn);
 }
 
+function evidencePathForBinding(
+  reviewDir: string,
+  binding: CreateIssueActionBinding,
+): string | undefined {
+  if (!existsSync(reviewDir)) return undefined;
+  for (const name of readdirSync(reviewDir).sort()) {
+    if (!name.endsWith('.json')) continue;
+    const path = join(reviewDir, name);
+    try {
+      const value = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+      if (
+        value.sourceRevision === binding.sourceRevision
+        && value.stage === binding.stage
+        && (binding.stageAttemptId === undefined || value.stageAttemptId === binding.stageAttemptId)
+      ) return path;
+    } catch {
+      // Read-only reconciliation ignores unrelated or malformed JSON here; the owning
+      // evidence producer will classify it when that file is authoritative.
+    }
+  }
+  return undefined;
+}
+
+function reconcileStageReadOnlyAction(
+  opts: Pick<StageFinalizeCliOptions, 'repo' | 'blockedOn'>,
+  issueNumber: number,
+  binding: CreateIssueActionBinding,
+  reviewDir?: string,
+  stageEvidencePath?: string,
+): CreateIssueNextAction {
+  const argv = [
+    'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+    'reconcile-stage',
+    '--repo', opts.repo,
+    '--issue-number', String(issueNumber),
+    '--expected-source-revision', binding.sourceRevision,
+    '--expected-stage', binding.stage,
+    ...(binding.stageAttemptId ? ['--expected-stage-attempt-id', binding.stageAttemptId] : []),
+    '--json',
+  ];
+  if (reviewDir) argv.push('--review-dir', reviewDir);
+  if (stageEvidencePath) argv.push('--stage-evidence', stageEvidencePath);
+  return createIssueNextAction({
+    kind: 'reconcile-stage-read-only',
+    binding,
+    argv: appendBlockedOnArgv(argv, opts.blockedOn),
+  });
+}
+
 function staleArtifactBinding(
   opts: StageFinalizeCliOptions,
   reviewDir: string,
@@ -651,13 +729,14 @@ function staleArtifactBinding(
     && observed.stageAttemptId === expected.stageAttemptId) {
     return null;
   }
+  const stageEvidencePath = opts.stageEvidencePaths[0] ?? evidencePathForBinding(reviewDir, expected);
   return createIssueStaleNextAction({
     binding: expected,
     observed: observed ?? {
       repository: opts.repo,
       issueNumber,
     },
-    nextAction: null,
+    nextAction: reconcileStageReadOnlyAction(opts, issueNumber, expected, reviewDir, stageEvidencePath),
   });
 }
 
@@ -666,7 +745,8 @@ function zeroSendTerminalProjection(
   observation: ZeroSendTerminalObservation,
   repository: string,
   issueNumber: number,
-): { cause: string; blocker?: string; reason?: CreateIssueZeroSendReason; nextAction: CreateIssueNextAction | null } | null {
+  reconcileAction: CreateIssueNextAction,
+): { cause: string; blocker?: string; reason?: CreateIssueZeroSendReason; nextAction: CreateIssueNextAction | null; pause?: unknown } | null {
   if (
     observation.stage !== 'competitive'
     && observation.stage !== 'architectural-review'
@@ -689,8 +769,8 @@ function zeroSendTerminalProjection(
     owned_prompt_seen: observation.owned_prompt_seen,
     observed_user_heads: observation.observed_user_heads,
     pacedRetryAction: existingPacedBoundedRetryAction(binding, observation.reviewerSlot),
+    reconcileAction,
   });
-  if (!projected || projected.nextAction !== null) return null;
   return projected;
 }
 
@@ -701,26 +781,27 @@ function validatedManagerSurfaceOutput<T extends { ok: boolean }>(
   blocker?: string,
   reason?: CreateIssueZeroSendReason,
   blockedOn?: CreateIssueBlockedOn,
-): T & {
-  cause?: string;
-  blocker?: string;
-  reason?: CreateIssueZeroSendReason;
-  blocked_on?: CreateIssueBlockedOn;
-  nextAction: CreateIssueNextAction | null;
-} {
-  const output = {
-    ...result,
-    ...(result.ok ? {} : {
-      cause: failureCause,
-      ...(blocker ? { blocker } : {}),
-      ...(reason ? { reason } : {}),
-    }),
-    ...(nextAction === null && blockedOn ? { blocked_on: { ...blockedOn } } : {}),
-    nextAction,
-  };
+): T & Record<string, unknown> {
+  if (!result.ok && blockedOn) {
+    return projectBlockedOnToExternalPause(blockedOn) as T & Record<string, unknown>;
+  }
+  const output = result.ok
+    ? { ...result, cause: 'completed', nextAction: null }
+    : nextAction
+      ? {
+          ...result,
+          cause: failureCause,
+          ...(blocker ? { blocker } : {}),
+          ...(reason ? { reason } : {}),
+          nextAction,
+        }
+      : null;
+  if (!output) {
+    throw new Error(`manager_result_without_recovery:${failureCause}:${blocker ?? ''}`);
+  }
   const errors = validateCreateIssueManagerResult(output);
   if (errors.length > 0) throw new Error('invalid create-Issue manager result: ' + errors.join('; '));
-  return output;
+  return output as T & Record<string, unknown>;
 }
 
 function stageDiagnosticBlocker(result: { diagnostics?: Array<{ message?: string }> }): string | undefined {
@@ -838,10 +919,17 @@ function staleStartCycleBinding(
     const live = fetchIssueRevision(defaultGhTransport(), opts.repo, issueNumber);
     liveRevision = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i.exec(live.body)?.[1] ?? '';
   } catch {
+    const canonical = resolveCanonicalReviewDirectory({ taskIdentity: 'issue:' + issueNumber });
     return createIssueStaleNextAction({
       binding: expected,
       observed: { repository: opts.repo, issueNumber },
-      nextAction: null,
+      nextAction: reconcileStageReadOnlyAction(
+        opts,
+        issueNumber,
+        expected,
+        canonical.directory,
+        evidencePathForBinding(canonical.directory, expected),
+      ),
     });
   }
   const observed: CreateIssueActionBinding = {
@@ -858,7 +946,18 @@ function staleStartCycleBinding(
     && (expected.stageAttemptId === undefined || expected.stageAttemptId === observed.stageAttemptId)) {
     return null;
   }
-  return createIssueStaleNextAction({ binding: expected, observed, nextAction: null });
+  const canonical = resolveCanonicalReviewDirectory({ taskIdentity: 'issue:' + issueNumber });
+  return createIssueStaleNextAction({
+    binding: expected,
+    observed,
+    nextAction: reconcileStageReadOnlyAction(
+      opts,
+      issueNumber,
+      expected,
+      canonical.directory,
+      evidencePathForBinding(canonical.directory, expected),
+    ),
+  });
 }
 
 function staleRetryPendingBinding(
@@ -889,7 +988,13 @@ function staleRetryPendingBinding(
   return createIssueStaleNextAction({
     binding: expected,
     observed: observed ?? { repository: opts.repo, issueNumber },
-    nextAction: null,
+    nextAction: reconcileStageReadOnlyAction(
+      opts,
+      issueNumber,
+      expected,
+      canonical.directory,
+      evidencePathForBinding(canonical.directory, expected),
+    ),
   });
 }
 
@@ -1062,7 +1167,7 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
           || error.includes('stale_next_action'));
         if (!external) {
           nextAction = createIssueNextAction({
-            kind: opts.command === 'check-artifacts' ? 'produce-acceptance-artifacts' : 'retry-acceptance-production',
+            kind: 'produce-acceptance-artifacts',
             binding,
             argv: artifactCommandArgv('produce-artifacts', opts, reviewDir, issueNumber, binding),
           });
