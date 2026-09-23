@@ -2302,13 +2302,15 @@ async function startDetachedSmokeOwner(
   const deadline = Date.now() + SMOKE_CREATE_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const lifecycle = readSmokeLifecycleRegistry(artifactDir);
-    if (lifecycle?.runId === runId) {
-      if (!exactDetachedSmokeTask(lifecycle, options)) {
-        return { ok: false, runId, reason: 'detached_smoke_lifecycle_task_mismatch' };
-      }
-      return { ok: true, runId };
+    // Directory existence alone is not a live attempt; require its exact readable lifecycle.
+    if (!lifecycle || lifecycle.runId !== runId) {
+      await sleepAsync(SMOKE_LIFECYCLE_POLL_MS);
+      continue;
     }
-    await sleepAsync(SMOKE_LIFECYCLE_POLL_MS);
+    if (!exactDetachedSmokeTask(lifecycle, options)) {
+      return { ok: false, runId, reason: 'detached_smoke_lifecycle_task_mismatch' };
+    }
+    return { ok: true, runId };
   }
   return { ok: false, runId, reason: 'worker_smoke_detach_lifecycle_timeout' };
 }

@@ -1,7 +1,7 @@
 {
-  "sourceCommand": "node --experimental-strip-types --input-type=module invoking scripts/orca-runtime/native.ts runOrcaJson([\"terminal\", \"show\", \"--terminal\", \"term_47af341f-f7eb-457d-a5cb-5952026b6cad\"]), which runs orca terminal show --terminal term_47af341f-f7eb-457d-a5cb-5952026b6cad --json",
-  "captureKind": "live-producer-contract-evidence",
+  "sourceCommand": "orca terminal show --terminal term_47af341f-f7eb-457d-a5cb-5952026b6cad --json",
+  "captureKind": "live-terminal-show-observation",
   "issue": 2062,
   "observedAt": "2026-09-23",
-  "projection": "The exact Orca terminal-show result omitted terminal.command. For that requested handle, scripts/orca-runtime/native.ts examined /proc cmdline only after requiring exactly one process with canonical cwd equal to terminal.worktreePath and argv0 basename opencode. It reads no process environments and does not use a PID, title, agentIdentity, or path alone as a selector; if zero or multiple candidates match, command remains unbound. Volatile preview and tab/layout metadata are omitted from the capture."
+  "projection": "No projection was applied. This is the exact Orca terminal-show response; agentIdentity is opencode, but terminal.command is absent and is not inferred from agentIdentity, title, preview, process data, or launch metadata. The response therefore does not satisfy the Issue's standalone-command evidence requirement."
 }

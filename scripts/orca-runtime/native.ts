@@ -1,6 +1,6 @@
-import { accessSync, constants, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { accessSync, constants } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { basename, delimiter, join } from 'node:path';
+import { delimiter, join } from 'node:path';
 
 export const orcaWorkerSmokeContractEvidenceDir =
   'tests/external-output-references/captures/orca-worker-smoke';
@@ -83,37 +83,6 @@ export interface OrcaTerminalSummary extends OrcaTerminalHandle {
   status?: 'running' | 'exited' | 'unknown';
 }
 
-/** Project an OpenCode command only when its worktree has one matching live process. */
-export function projectLiveOpenCodeCommand(
-  terminal: Pick<OrcaTerminalSummary, 'handle' | 'worktreeId' | 'worktreePath'>,
-  procRoot = '/proc',
-  platform = process.platform,
-): string | undefined {
-  if (platform !== 'linux' || !terminal.handle.trim() || !terminal.worktreeId?.trim() || !terminal.worktreePath?.trim()) return undefined;
-  let expectedWorktree: string;
-  let processes;
-  try {
-    expectedWorktree = realpathSync(terminal.worktreePath);
-    processes = readdirSync(procRoot, { withFileTypes: true });
-  } catch {
-    return undefined;
-  }
-  const matches: string[] = [];
-  for (const entry of processes) {
-    if (!entry.isDirectory() || !/^\d+$/u.test(entry.name)) continue;
-    const processRoot = join(procRoot, entry.name);
-    try {
-      if (realpathSync(join(processRoot, 'cwd')) !== expectedWorktree) continue;
-      const argv = readFileSync(join(processRoot, 'cmdline'), 'utf8').split('\0').filter(Boolean);
-      const executable = argv[0] ? basename(argv[0]) : '';
-      if (executable !== 'opencode') continue;
-      matches.push([executable, ...argv.slice(1)].join(' '));
-    } catch {
-      // Process exit, inaccessible cwd, or missing argv makes this candidate unavailable.
-    }
-  }
-  return matches.length === 1 ? matches[0] : undefined;
-}
 
 export interface OrcaTerminalReadResult {
   /** Legacy pack capture shape. */
@@ -270,16 +239,6 @@ export function parseOrcaJsonOutput<T>(
   try {
     const parsed = JSON.parse(normalized) as OrcaJsonResponse<T>;
     if (parsed.ok) {
-      if (operation === 'terminal_show' && parsed.result && typeof parsed.result === 'object') {
-        const result = parsed.result as { terminal?: OrcaTerminalSummary; [key: string]: unknown };
-        const terminal = result.terminal;
-        if (terminal && typeof terminal === 'object' && !terminal.command?.trim()) {
-          const command = projectLiveOpenCodeCommand(terminal);
-          if (command) {
-            return { ...parsed, operation, result: { ...result, terminal: { ...terminal, command } } as T };
-          }
-        }
-      }
       return { ...parsed, operation };
     }
     return {

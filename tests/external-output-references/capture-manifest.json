@@ -593,10 +593,10 @@
     "orca-runtime/terminal-show-opencode": {
       "id": "orca-runtime/terminal-show-opencode",
       "producer": "orca-runtime",
-      "sourceCommand": "node --experimental-strip-types --input-type=module invoking scripts/orca-runtime/native.ts runOrcaJson([\"terminal\", \"show\", \"--terminal\", \"term_47af341f-f7eb-457d-a5cb-5952026b6cad\"]), which runs orca terminal show --terminal term_47af341f-f7eb-457d-a5cb-5952026b6cad --json",
+      "sourceCommand": "orca terminal show --terminal term_47af341f-f7eb-457d-a5cb-5952026b6cad --json",
       "kind": "structured",
       "path": "captures/orca-runtime/terminal-show-opencode.raw.json",
-      "contentHash": "sha256:c8c66811fc169872fe519ad88c06b8cef34859e28ffc70afc7f9ae51cdb90a30"
+      "contentHash": "sha256:b6e7af70e4f9baa68d481720a28ab4512c10bffd593e459e43d14fa305eb97b5"
     },
     "orca-worker-smoke/terminal-create": {
       "id": "orca-worker-smoke/terminal-create",

@@ -938,13 +938,6 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
     const currentOwned = this.#owned.get(handle);
     const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: handle, generation };
-    const openCodeUrl = typeof terminal.command === 'string'
-      ? openCodeUrlFromCommand(terminal.command)
-      : undefined;
-    const openCodeAgent = typeof terminal.command === 'string'
-      ? openCodeAgentFromCommand(terminal.command)
-      : undefined;
-    if (openCodeUrl) this.#rememberOpenCodeUrl(identity, openCodeUrl, openCodeAgent);
     const worker: RuntimeWorker = {
       identity,
       workspacePath,
@@ -989,11 +982,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
     const command = typeof terminal.command === 'string' ? terminal.command.trim() : '';
     if (!command) {
-      const openCodeControl = this.#openCodeUrls.get(worker.id);
-      if (openCodeControl && sameRuntimeWorker(openCodeControl.identity, worker)) {
-        return { status: 'unbound', reason: 'runtime_composer_command_unbound', provenance };
-      }
-      return { status: 'known', family: 'non-opencode', command: 'cursor-agent', provenance };
+      return { status: 'unbound', reason: 'runtime_composer_command_unbound', provenance };
     }
     if (/(?:^|\s)opencode(?:\s|$)/iu.test(command)) {
       return { status: 'known', family: 'opencode', command, provenance };

@@ -1,16 +1,30 @@
 {
-  "id": "dbde941a-e852-4439-a89b-bd1f5b36abdd",
+  "id": "bbb93373-6e72-46b1-9dc1-0eb2adae74a7",
   "ok": true,
   "result": {
     "terminal": {
       "handle": "term_47af341f-f7eb-457d-a5cb-5952026b6cad",
+      "ptyId": "af20ccc6-f7eb-457d-a5cb-5952026b6cad::/home/che/orca/workspaces/orchestrator-pack/lens-2062@@810e18d2",
       "incarnationId": "c57a653b-c0c9-4626-987a-a18aa1f82612",
+      "orphaned": false,
       "worktreeId": "af20ccc6-2bc2-4dda-8c78-f9c1266fe99f::/home/che/orca/workspaces/orchestrator-pack/lens-2062",
       "worktreePath": "/home/che/orca/workspaces/orchestrator-pack/lens-2062",
       "branch": "refs/heads/issue-2062-detached-smoke-opencode-routing",
+      "tabId": "23c796d8-d9cb-4f2f-838b-a31395a84714",
+      "leafId": "afb28cd9-6e92-4004-b803-17b2f67c2ebd",
+      "title": "OC | Issue #2062 Architectural Lens Findin…",
+      "connected": true,
+      "writable": true,
+      "lastOutputAt": 1790187085519,
+      "preview": "85c9e4503b2c30802b7c2aa0a · GPT-6 Luna OpenAI · medium                       opencode-routing\n╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n⬝⬝⬝⬝⬝⬝⬝⬝  esc interrupt                                       468.4K (45%)  ctrl+p commands    • OpenCode 1.18.32",
+      "executionHostId": "local",
       "agentIdentity": "opencode",
-      "command": "opencode --hostname 127.0.0.1 --port 41685 --agent pack-opk-4b4026585c9e4503b2c30802b7c2aa0a"
+      "paneRuntimeId": 1,
+      "rendererGraphEpoch": 0,
+      "agentWait": null
     }
   },
-  "operation": "terminal_show"
+  "_meta": {
+    "runtimeId": "acac50d1-5428-4b60-a7ad-3abeaa474020"
+  }
 }
