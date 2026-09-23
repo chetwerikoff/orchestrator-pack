@@ -128,6 +128,8 @@ Do not add a watcher, polling daemon, queue, lease, parking store,
 acknowledgement protocol, prose parser, reverse dependency lookup, or another
 persistent coordination mechanism.
 
+On each fleet-sweep coordinator wake, already-paused live units re-read their typed `resume_when` predicate before deciding whether to resume.
+
 Dispatch/re-dispatch payloads contain role plus task invariants only. Procedure
 comes from the current CLI `--help` and returned `nextAction`; do not re-paste
 the create-Issue skill or runbooks into repeated dispatches. Browser-GPT
