@@ -16,7 +16,10 @@ import {
   validateCreateIssueNextAction,
   type CreateIssueActionBinding,
 } from './lib/create-issue-next-action.ts';
-import { runStageFinalizeCli } from './lib/create-issue-stage-record-cli.ts';
+import { runFinalAcceptanceCli, runStageFinalizeCli } from './lib/create-issue-stage-record-cli.ts';
+import { runBrowserAdapter, FLOW_MANAGER_BROWSER_GPT_CLI_DECLARATION } from './flow-manager-browser-gpt-long-run.ts';
+import { runManagerReviewTerminalBundleCli } from './manager-review-terminal-bundle.ts';
+import { inspectManagerCliInvocation } from './lib/manager-cli-contract.ts';
 import { resolveCreateIssueBrowserOperatorConfig } from './lib/create-issue-browser-gpt-preflight.ts';
 import {
   reconcileCreateIssueStage,
@@ -119,6 +122,79 @@ describe('create-Issue nextAction contract', () => {
     expect(functionStart).toBeGreaterThanOrEqual(0);
     expect(admission).toBeGreaterThan(functionStart);
     expect(projection).toBeGreaterThan(admission);
+  });
+});
+
+describe('Issue #1998 declaration-owned manager CLI contracts', () => {
+  it('renders top-level and subcommand help before required arguments or side effects', async () => {
+    const writes: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      expect(runStageFinalizeCli(['node', 'scripts/create-issue-stage-finalize.ts', '--help'])).toBe(0);
+      expect(runStageFinalizeCli(['node', 'scripts/create-issue-stage-finalize.ts', 'start-cycle', '-h'])).toBe(0);
+      expect(runFinalAcceptanceCli(['node', 'scripts/create-issue-final-acceptance.ts', '--help'])).toBe(0);
+      expect(runManagerReviewTerminalBundleCli(['--help'])).toBe(0);
+      expect(await runBrowserAdapter(['--help'])).toBe(0);
+      expect(writes.join('\n')).toContain('Usage:');
+      expect(writes.join('\n')).toContain('start-cycle');
+      expect(writes.join('\n')).toContain('--public-actor');
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it('rejects one-digit reviewer slots before lifecycle admission or Browser-GPT spawn', async () => {
+    const recordAdmission = vi.fn();
+    const argv = [
+      '--run-identity', 'run',
+      '--attempt-identity', 'attempt',
+      '--handoff-receipt', '/tmp/handoff.json',
+      '--invocation-id', 'invocation',
+      '--terminal-envelope', '/tmp/envelope.json',
+      '--output', '/tmp/output.txt',
+      '--profile', '/tmp/profile',
+      '--cdp', 'http://127.0.0.1:9222',
+      '--input', '/tmp/input.txt',
+      '--reviewer-source-output', '/tmp/source.txt',
+      '--reviewer-source', 'gpt',
+      '--repository', 'chetwerikoff/orchestrator-pack',
+      '--issue-number', '1998',
+      '--source-revision', 'r04',
+      '--stage', 'architectural-review',
+      '--source-slot', '1',
+      '--stage-attempt-id', 'attempt-1998',
+    ];
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      expect(await runBrowserAdapter(argv, { recordAdmission })).toBe(2);
+      expect(stderr.mock.calls.flat().join('')).toContain('--source-slot');
+      expect(stderr.mock.calls.flat().join('')).toContain('01, 02, 03');
+      expect(recordAdmission).not.toHaveBeenCalled();
+    } finally {
+      stderr.mockRestore();
+    }
+
+    const canonical = inspectManagerCliInvocation(
+      FLOW_MANAGER_BROWSER_GPT_CLI_DECLARATION,
+      argv.map((token) => token === '1' ? '01' : token),
+    );
+    expect(canonical.error).toBeNull();
+  });
+
+  it('rejects unknown flags with declaration-derived usage before command work', () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      expect(runManagerReviewTerminalBundleCli(['--unknown-flag'])).toBe(2);
+      const output = stderr.mock.calls.flat().join('');
+      expect(output).toContain('--unknown-flag');
+      expect(output).toContain('Usage:');
+      expect(output).toContain('--issue-number');
+    } finally {
+      stderr.mockRestore();
+    }
   });
 });
 
