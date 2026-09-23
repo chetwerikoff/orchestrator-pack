@@ -1852,6 +1852,7 @@ describe('Issue #2038 canonical fork loser recovery', () => {
     expect(state.comments).toEqual(comments);
     expect(state.commentCreateAttempts).toEqual([]);
     expect(readPersistedCycleId(workdir)).toBe(loserCycleId);
+    expect(result.cycleId).toBe(loserCycleId);
   });
 
   it('requires an explicit current-head predecessor for a known persisted loser', () => {
