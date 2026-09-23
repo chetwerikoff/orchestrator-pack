@@ -409,7 +409,7 @@ function classifyProbe(
       ) {
         return recoverable(context, producer, 'execute_github_first_reconciliation', githubFirstAction(context));
       }
-      if (inspect && inspect.generation_in_progress !== false) {
+      if (inspect) {
         return recoverObservation(context, producer, value, 'execute_owned_turn_reobserve');
       }
       return completed(context, producer, 'execute_probe_observation_completed');
