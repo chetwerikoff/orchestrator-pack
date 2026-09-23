@@ -4011,6 +4011,40 @@ describe('cause-classed zero-send continuation (Issue #1999)', () => {
 });
 
 describe('Issue #2028 reviewer-stage author reply gate', () => {
+  it('reconciles one post-attempt Issue revision when the governed author reply remains bound to the attempt', () => {
+    const input = fixture();
+    const originalEvidence = readFileSync(input.evidencePath, 'utf8');
+    const originalAuthorReply = readFileSync(input.authorReplyPath, 'utf8');
+    const source = transport({ issueBodies: [finalAcceptanceIssueBody('r02')] });
+    const result = reconcileCreateIssueStage({
+      reviewDir: input.dir,
+      stageEvidencePath: input.evidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: source,
+    });
+    expect(result.ok, result.errors.join('\\n')).toBe(true);
+    expect(readFileSync(input.evidencePath, 'utf8')).not.toBe(originalEvidence);
+    expect(readFileSync(input.authorReplyPath, 'utf8')).toBe(originalAuthorReply);
+    expect(JSON.parse(readFileSync(input.evidencePath, 'utf8')).sourceRevision).toBe(REVISION);
+  });
+  it('rejects a post-attempt Issue revision more than one step ahead', () => {
+    const input = fixture();
+    const originalEvidence = readFileSync(input.evidencePath, 'utf8');
+    const originalAuthorReply = readFileSync(input.authorReplyPath, 'utf8');
+    const source = transport({ issueBodies: [finalAcceptanceIssueBody('r03')] });
+    const result = reconcileCreateIssueStage({
+      reviewDir: input.dir,
+      stageEvidencePath: input.evidencePath,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      artifactSourceTransport: source,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\\n')).toContain('stale_next_action');
+    expect(readFileSync(input.evidencePath, 'utf8')).toBe(originalEvidence);
+    expect(readFileSync(input.authorReplyPath, 'utf8')).toBe(originalAuthorReply);
+  });
   it('produces reviewer-stage artifacts when a predecessor exists and round-NN-author-reply is absent', () => {
     const input = fixture({ phase: 'pre-lens' });
     rmSync(input.authorReplyPath);

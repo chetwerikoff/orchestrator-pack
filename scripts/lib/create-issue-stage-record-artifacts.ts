@@ -2081,7 +2081,12 @@ export function reconcileCreateIssueStage(
     return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [message], temporary: 'source-unavailable' };
   }
   const liveRevision = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i.exec(liveIssue.body)?.[1];
-  if (!liveRevision || liveRevision.toLowerCase() !== sourceRevision.toLowerCase()) {
+  const sourceRevisionOrdinal = /^r([0-9]+)$/i.exec(sourceRevision)?.[1];
+  const liveRevisionOrdinal = liveRevision ? /^r([0-9]+)$/i.exec(liveRevision)?.[1] : undefined;
+  const acceptsNextLiveRevision = Boolean(sourceRevisionOrdinal && liveRevisionOrdinal)
+    && BigInt(liveRevisionOrdinal!) === BigInt(sourceRevisionOrdinal!) + 1n
+    && authorReplyDispositionForStage(options.reviewDir, sourceRevision, stage) === 'current';
+  if (!liveRevision || (liveRevision.toLowerCase() !== sourceRevision.toLowerCase() && !acceptsNextLiveRevision)) {
     return {
       ok: false,
       stageAttemptId,
