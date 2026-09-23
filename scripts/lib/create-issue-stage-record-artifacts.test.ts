@@ -3233,14 +3233,21 @@ describe('Issue #2037 durable legal zero-send retry authority', () => {
         '--json',
       ], transport({ issueBodies: [finalAcceptanceIssueBody('r999')] }));
 
-      expect(result).toBe(1);
+      expect(result).toBe(3);
       const output = JSON.parse(logs.at(-1) ?? '{}') as Record<string, any>;
       expect(output).toMatchObject({
         ok: false,
-        cause: 'stale_next_action',
-        nextAction: null,
-        binding: { sourceRevision: initialEvidence.sourceRevision, stageAttemptId: initialEvidence.stageAttemptId },
-        observed: { repository: REPOSITORY, issueNumber: ISSUE },
+        cause: 'quota',
+        nextAction: {
+          kind: 'retry-create-issue-browser-preflight',
+          binding: {
+            repository: REPOSITORY,
+            issueNumber: ISSUE,
+            sourceRevision: initialEvidence.sourceRevision,
+            stage: initialEvidence.stage,
+            stageAttemptId: initialEvidence.stageAttemptId,
+          },
+        },
       });
       expect(output).not.toHaveProperty('blocked_on');
       expect(output).not.toHaveProperty('reason');
