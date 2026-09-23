@@ -670,9 +670,6 @@ function validateBrowserReceipt(
           if (!expectedProducerIdentity || evidence.producerEvidenceIdentity !== expectedProducerIdentity) {
             errors.push(`stage ${receipt.stage} reviewLane GitHub credentialing authority does not match invocation artifactAuthority for slot ${slot}`);
           }
-          if (evidence.terminalClassification !== finalInvocation.terminalClassification) {
-            errors.push(`stage ${receipt.stage} reviewLane transport classification disagrees with invocation transport truth for slot ${slot}`);
-          }
         }
       }
     }

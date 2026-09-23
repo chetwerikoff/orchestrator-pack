@@ -2081,7 +2081,15 @@ export function reconcileCreateIssueStage(
     return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [message], temporary: 'source-unavailable' };
   }
   const liveRevision = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i.exec(liveIssue.body)?.[1];
-  if (!liveRevision || liveRevision.toLowerCase() !== sourceRevision.toLowerCase()) {
+  const sourceOrdinal = /^r([0-9]+)$/i.exec(sourceRevision)?.[1];
+  const liveOrdinal = liveRevision ? /^r([0-9]+)$/i.exec(liveRevision)?.[1] : undefined;
+  const isBoundPostRevisionAuthorReply = Boolean(
+    sourceOrdinal
+    && liveOrdinal
+    && Number(liveOrdinal) === Number(sourceOrdinal) + 1
+    && authorReplyDispositionForStage(options.reviewDir, sourceRevision, stage) === 'current',
+  );
+  if (!liveRevision || (liveRevision.toLowerCase() !== sourceRevision.toLowerCase() && !isBoundPostRevisionAuthorReply)) {
     return {
       ok: false,
       stageAttemptId,
@@ -2204,9 +2212,7 @@ export function reconcileCreateIssueStage(
       sourceVerdictEvidence[slot] = {
         producerEvidenceIdentity: 'authoritative-github-artifact:comment-' + resolvedArtifact.authority.commentId,
         captureIdentity: resolvedArtifact.capture.captureIdentity,
-        terminalClassification: resolvedArtifact.authority.kind === AUTHORITATIVE_GITHUB_ARTIFACT_BASIS
-          ? 'complete'
-          : finalInvocation.terminalClassification,
+        terminalClassification: finalInvocation.terminalClassification,
         credentialingAuthority: 'authoritative-github-artifact',
         captureVerified: true,
         digestMatches: true,
