@@ -2,7 +2,7 @@
 import './toolchain/native-entrypoint-preflight.ts';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { runProcess } from './kernel/subprocess.ts';
 import {
   HANDOFF_SCHEMA,
@@ -28,6 +28,7 @@ import {
   type LifecycleReviewStage,
 } from './lib/create-issue-stage-lifecycle.ts';
 import { defaultGhTransport, fetchIssueRevision } from './lib/create-issue-stage-record-gh.ts';
+import { resolveCanonicalReviewDirectory } from './lib/canonical-review-directory.ts';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const launcherPath = join(repoRoot, 'scripts/flow-manager-long-running-child.ts');
@@ -40,10 +41,17 @@ function requiredOption(options: Map<string, string | true>, key: string): strin
   return value;
 }
 
-function emitBrowserManagerResult(argv: readonly string[], result: unknown): number {
+function emitBrowserManagerResult(
+  argv: readonly string[],
+  result: unknown,
+  boundary: {
+    retryBudgetEvidence?: { reviewerSlot: string; externalCauses: readonly string[] };
+  } = {},
+): number {
   return emitCreateIssueManagerResult({
     producer: 'flow-manager-browser-gpt-long-run.ts:main',
     currentArgv: argv,
+    ...boundary,
     produce: () => result,
   }).exitCode;
 }
@@ -226,6 +234,55 @@ function createIssueBinding(
   };
 }
 
+
+function readRetryBudgetEvidence(
+  binding: CreateIssueActionBinding,
+  reviewerSlot: string,
+): { reviewerSlot: string; externalCauses: string[] } {
+  const evidence = { reviewerSlot, externalCauses: [] as string[] };
+  try {
+    const canonical = resolveCanonicalReviewDirectory({ taskIdentity: `issue:${binding.issueNumber}` });
+    const evidencePaths = readdirSync(canonical.directory)
+      .filter((name: string) => /^attempt-[0-9]{3}\.json$/.test(name))
+      .sort()
+      .map((name: string) => join(canonical.directory, name));
+    const evidencePath = evidencePaths.find((path: string) => {
+      try {
+        const value = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+        return value.stage === binding.stage
+          && value.sourceRevision === binding.sourceRevision
+          && value.stageAttemptId === binding.stageAttemptId;
+      } catch {
+        return false;
+      }
+    });
+    if (!evidencePath) return evidence;
+    const value = JSON.parse(readFileSync(evidencePath, 'utf8')) as Record<string, unknown>;
+    const invocations = (Array.isArray(value.invocations) ? value.invocations : [])
+      .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+      .filter((item) => item.reviewerSlot === reviewerSlot)
+      .sort((left, right) => Number(left.attemptOrdinal ?? 0) - Number(right.attemptOrdinal ?? 0));
+    for (const invocation of invocations.slice(0, 2)) {
+      const envelopePath = typeof invocation.terminalEnvelopePath === 'string'
+        ? resolve(dirname(evidencePath), invocation.terminalEnvelopePath)
+        : '';
+      try {
+        const envelope = JSON.parse(readFileSync(envelopePath, 'utf8')) as Record<string, unknown>;
+        const cause = typeof envelope.turn_result_cause === 'string'
+          ? envelope.turn_result_cause
+          : typeof envelope.cause === 'string'
+            ? envelope.cause
+            : typeof envelope.incident === 'string' ? envelope.incident : '';
+        evidence.externalCauses.push(cause);
+      } catch {
+        evidence.externalCauses.push('');
+      }
+    }
+  } catch {
+    // Missing or malformed evidence remains a boundary contract defect.
+  }
+  return evidence;
+}
 export async function runBrowserAdapter(
   argv: readonly string[],
   deps: BrowserAdapterDependencies = {},
@@ -377,6 +434,16 @@ export async function runBrowserAdapter(
         reviewerSourceOutputPath: reviewerSourceOutput,
       });
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const exhausted = /reviewerSlot\s+(\S+)\s+retry budget is exhausted/i.exec(message);
+      if (exhausted?.[1]) {
+        return emitCreateIssueManagerResult({
+          producer: 'flow-manager-browser-gpt-long-run.ts:main',
+          currentArgv: argv,
+          retryBudgetEvidence: readRetryBudgetEvidence(binding, exhausted[1]),
+          produce: () => { throw error; },
+        }).exitCode;
+      }
       const observed = inspectBinding({
         issueNumber: binding.issueNumber,
         stage: binding.stage as LifecycleReviewStage,
@@ -402,7 +469,7 @@ export async function runBrowserAdapter(
       });
       return emitBrowserManagerResult(argv, createIssueRecoverableResult({
         cause: 'create_issue_lifecycle_admission_failed',
-        blocker: error instanceof Error ? error.message : String(error),
+        blocker: message,
         nextAction: retryAction,
       }));
     }

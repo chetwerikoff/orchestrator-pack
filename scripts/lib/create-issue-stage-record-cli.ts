@@ -265,7 +265,7 @@ function emitFinalAcceptanceBoundary(
     currentArgv: argv,
     produce: () => result,
   });
-  return evaluation.exitCode === 0 ? 0 : 1;
+  return evaluation.exitCode;
 }
 
 function runParsedCli<T>(
@@ -653,6 +653,7 @@ function artifactBindingFromState(
     stageAttemptId: latest.attempt,
   };
 }
+
 
 function artifactCommandArgv(
   command: 'produce-artifacts' | 'check-artifacts',
@@ -1059,9 +1060,9 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
       if (!result.ok) process.stderr.write(result.errors.join('\n') + '\n');
       return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
     }
-
     if (opts.command === 'reconcile-stage') {
       const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
+
       if (opts.stageEvidencePaths.length === 0) {
         if (!opts.expectedSourceRevision || !opts.expectedStage) {
           throw new Error('binding-only reconcile-stage requires --expected-source-revision and --expected-stage');
@@ -1691,11 +1692,11 @@ function acceptanceAuthorityPause(evidence: string) {
   });
 }
 
-export function runFinalAcceptanceCli(argv: string[]): number {
+export function runFinalAcceptanceCli(argv: string[], acceptanceTransport?: GhTransport): number {
   return runParsedCli(argv, 'create-issue-final-acceptance', parseFinalAcceptanceArgs, (opts) => {
     const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
     const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
-    const transport = defaultGhTransport();
+    const transport = acceptanceTransport ?? defaultGhTransport();
 
     let liveIssue: ReturnType<typeof fetchIssueRevision>;
     try {
@@ -1799,18 +1800,6 @@ export function runFinalAcceptanceCli(argv: string[]): number {
       return emitFinalAcceptanceBoundary(argv, output);
     }
 
-    if (opts.issueBodyPath) {
-      let asserted = '';
-      try { asserted = readFileSync(opts.issueBodyPath, 'utf8'); } catch {}
-      if (asserted !== liveIssue.body && resolve(opts.issueBodyPath) !== resolve(currentSnapshotPath)) {
-        const evidence = '--issue-body is assertion-only and does not match the canonical GitHub-witnessed snapshot';
-        process.stderr.write(evidence + '\n');
-        return emitFinalAcceptanceBoundary(
-          argv,
-          acceptanceAuthorityPause(evidence),
-        );
-      }
-    }
 
     const canonicalReceiptPaths = readdirSync(reviewDir)
       .filter((name) => /^stage-completeness-receipt-.+\.json$/.test(name))
@@ -1869,24 +1858,68 @@ export function runFinalAcceptanceCli(argv: string[]): number {
       return emitFinalAcceptanceBoundary(argv, output);
     }
 
+    if (opts.issueBodyPath) {
+      let asserted = '';
+      try { asserted = readFileSync(opts.issueBodyPath, 'utf8'); } catch {}
+      const canonicalBody = typeof currentSnapshot?.body === 'string' ? currentSnapshot.body : liveIssue.body;
+      if (asserted !== canonicalBody) {
+        const blocker = '--issue-body is assertion-only and does not match the canonical Issue snapshot';
+        process.stderr.write(blocker + '\n');
+        return emitFinalAcceptanceBoundary(
+          argv,
+          createIssueRecoverableResult({
+            cause: 'final_acceptance_caller_bookkeeping_mismatch',
+            blocker,
+            nextAction: reconcileStageReadOnlyAction(
+              { repo: opts.repo },
+              issueNumber,
+              terminalBinding,
+              reviewDir,
+              terminal.path,
+            ),
+          }),
+        );
+      }
+    }
+
     if (opts.stageReceipts.length > 0) {
       const requested = opts.stageReceipts.map((path) => resolve(path)).sort();
       const canonical = canonicalReceiptPaths.map((path) => resolve(path)).sort();
       if (JSON.stringify(requested) !== JSON.stringify(canonical)) {
-        const evidence = 'caller stage-receipt list does not equal canonical receipt inventory';
-        process.stderr.write(evidence + '\n');
+        const blocker = 'caller stage-receipt list does not equal canonical receipt inventory';
+        process.stderr.write(blocker + '\n');
         return emitFinalAcceptanceBoundary(
           argv,
-          acceptanceAuthorityPause(evidence),
+          createIssueRecoverableResult({
+            cause: 'final_acceptance_caller_bookkeeping_mismatch',
+            blocker,
+            nextAction: reconcileStageReadOnlyAction(
+              { repo: opts.repo },
+              issueNumber,
+              terminalBinding,
+              reviewDir,
+              terminal.path,
+            ),
+          }),
         );
       }
     }
     if (opts.cycleId && opts.cycleId !== terminal.value.cycleId) {
-      const evidence = 'caller cycle-id disagrees with lifecycle terminal receipt';
-      process.stderr.write(evidence + '\n');
+      const blocker = 'caller cycle-id disagrees with lifecycle terminal receipt';
+      process.stderr.write(blocker + '\n');
       return emitFinalAcceptanceBoundary(
         argv,
-        acceptanceAuthorityPause(evidence),
+        createIssueRecoverableResult({
+          cause: 'final_acceptance_caller_bookkeeping_mismatch',
+          blocker,
+          nextAction: reconcileStageReadOnlyAction(
+            { repo: opts.repo },
+            issueNumber,
+            terminalBinding,
+            reviewDir,
+            terminal.path,
+          ),
+        }),
       );
     }
 

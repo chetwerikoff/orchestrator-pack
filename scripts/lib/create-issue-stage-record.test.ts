@@ -32,7 +32,7 @@ import {
   retryPendingEvents,
   startReviewCycle,
 } from './create-issue-stage-record-core.ts';
-import { parseStageFinalizeArgs } from './create-issue-stage-record-cli.ts';
+import { parseStageFinalizeArgs, runFinalAcceptanceCli } from './create-issue-stage-record-cli.ts';
 import { bindPublishedCommentToSlot, STAGE_EVIDENCE_SCHEMA } from './create-issue-stage-record-artifacts.ts';
 import { parseConsumableStageReceipt } from './create-issue-stage-record-receipt.ts';
 import { runStageFinalizeCli } from './create-issue-stage-record-cli.ts';
@@ -1576,6 +1576,128 @@ describe('Issue #1171 exact terminal body binding', () => {
       capturePaths: [],
     });
     expect(result.errors.join('\n')).toContain('terminal source body byteLength mismatch');
+  });
+});
+
+describe('final acceptance CLI manager boundary', () => {
+  const canonicalBody = '<!-- source-revision: r01 -->\ncanonical Issue body\n';
+  const finalAcceptanceArgs = (reviewDir: string, extra: string[] = []): string[] => [
+    'node', 'scripts/create-issue-final-acceptance.ts',
+    '--repo', repo,
+    '--issue-number', String(issueNumber),
+    '--review-dir', reviewDir,
+    '--json',
+    ...extra,
+  ];
+  const transportFor = (body: string): GhTransport => ({
+    runGh: () => ({
+      exitCode: 0,
+      stdout: JSON.stringify({ title: 'fixture', body, labels: [] }),
+      stderr: '',
+    }),
+  });
+  function writeFixture(root: string): { reviewDir: string; receiptPath: string; cycleId: string } {
+    const reviewDir = join(root, 'review');
+    mkdirSync(reviewDir, { recursive: true });
+    const cycleId = 'cycle-terminal';
+    const receiptPath = join(reviewDir, 'stage-completeness-receipt-terminal.json');
+    writeFileSync(join(reviewDir, 'issue-r01-body.json'), JSON.stringify({
+      schema: 'create-issue-live-snapshot/v1',
+      issueNumber,
+      sourceRevision: 'r01',
+      title: 'fixture',
+      body: canonicalBody,
+    }) + '\n');
+    writeFileSync(receiptPath, JSON.stringify({
+      stage: 'architectural',
+      sourceRevision: 'r01',
+      cycleId,
+      stageAttemptId: 'terminal-attempt',
+    }) + '\n');
+    return { reviewDir, receiptPath, cycleId };
+  }
+  function runMismatch(
+    extra: string[],
+    fixture: { reviewDir: string },
+  ): { code: number; output: Record<string, unknown> } {
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      logs.push(String(line));
+    });
+    try {
+      const code = runFinalAcceptanceCli(
+        finalAcceptanceArgs(fixture.reviewDir, extra),
+        transportFor(canonicalBody),
+      );
+      return { code, output: JSON.parse(logs.at(-1) ?? '{}') as Record<string, unknown> };
+    } finally {
+      logSpy.mockRestore();
+    }
+  }
+  it.each([
+    ['caller Issue body', (root: string) => ['--issue-body', join(root, 'caller-body.md')]],
+    ['caller stage receipt inventory', (root: string) => ['--stage-receipt', join(root, 'caller-receipt.json')]],
+    ['caller cycle id', () => ['--cycle-id', 'caller-cycle']],
+  ] as const)('returns reconcile-stage-read-only for a %s mismatch', (_label, extra) => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-final-acceptance-boundary-'));
+    try {
+      const fixture = writeFixture(root);
+      if (_label === 'caller Issue body') writeFileSync(join(root, 'caller-body.md'), 'stale caller body\n');
+      const result = runMismatch(extra(root), fixture);
+      expect(result.code).toBe(3);
+      expect(result.output).toMatchObject({
+        ok: false,
+        cause: 'final_acceptance_caller_bookkeeping_mismatch',
+        nextAction: {
+          kind: 'reconcile-stage-read-only',
+          binding: { stage: 'architectural', stageAttemptId: 'terminal-attempt' },
+        },
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it('keeps observed missing GitHub authority as external_pause', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-final-acceptance-authority-'));
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      logs.push(String(line));
+    });
+    try {
+      const code = runFinalAcceptanceCli(
+        finalAcceptanceArgs(root),
+        transportFor('Issue body without the canonical marker'),
+      );
+      expect(code).toBe(4);
+      expect(JSON.parse(logs.at(-1) ?? '{}')).toMatchObject({
+        ok: false,
+        cause: 'external:content_authority_conflict',
+        nextAction: null,
+      });
+    } finally {
+      logSpy.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it('returns the exact contract_defect exit code for malformed manager-shaped CLI input', () => {
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      logs.push(String(line));
+    });
+    try {
+      const code = runFinalAcceptanceCli([
+        'node', 'scripts/create-issue-final-acceptance.ts',
+        '--blocked-on-json', 'not-json',
+      ]);
+      expect(code).toBe(5);
+      expect(JSON.parse(logs.at(-1) ?? '{}')).toMatchObject({
+        ok: false,
+        cause: 'producer_contract_defect',
+        nextAction: null,
+      });
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 });
 

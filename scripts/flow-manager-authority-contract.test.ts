@@ -950,6 +950,114 @@ describe('Issue #1431 manager reviewer canon', () => {
     }
   });
 
+  it.each([
+    {
+      label: 'external reviewer transport causes',
+      causes: ['HTTP 503 from GitHub', 'HTTP 503 from GitHub'],
+      expectedCode: 4,
+      expectedCause: 'external:github_unavailable',
+    },
+    {
+      label: 'non-external reviewer causes',
+      causes: ['canonical_input_invalid', 'canonical_input_invalid'],
+      expectedCode: 5,
+      expectedCause: 'producer_contract_defect',
+    },
+  ] as const)('classifies exhausted retry budget from recorded $label without a third launch', async ({ causes, expectedCode, expectedCause }) => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-create-issue-retry-budget-'));
+    const previousStateRoot = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = root;
+    const reviewDir = join(root, '.review', String(reviewContext.issueNumber));
+    mkdirSync(reviewDir, { recursive: true });
+    for (const [index, cause] of causes.entries()) {
+      writeFileSync(join(reviewDir, `terminal-01-${index + 1}.json`), JSON.stringify({
+        turn_result_cause: cause,
+      }));
+    }
+    writeFileSync(join(reviewDir, 'attempt-001.json'), JSON.stringify({
+      stage: reviewContext.stage,
+      sourceRevision: reviewContext.sourceRevision,
+      stageAttemptId: 'stage-attempt-r07',
+      invocations: causes.map((_, index) => ({
+        reviewerSlot: reviewContext.sourceSlot,
+        attemptOrdinal: index + 1,
+        terminalEnvelopePath: `terminal-01-${index + 1}.json`,
+      })),
+    }));
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      logs.push(String(line));
+    });
+    const spawnLauncher = vi.fn(async () => 10001);
+    const recordAdmission = vi.fn(() => {
+      throw new Error(`reviewerSlot ${reviewContext.sourceSlot} retry budget is exhausted`);
+    });
+    try {
+      const code = await runBrowserAdapter([
+        '--run-identity', 'run-retry-budget',
+        '--attempt-identity', 'attempt-retry-budget',
+        '--handoff-receipt', join(root, 'handoff.json'),
+        '--invocation-id', reviewContext.invocationId,
+        '--terminal-envelope', join(root, 'terminal.json'),
+        '--output', join(root, 'output.json'),
+        '--profile', root,
+        '--cdp', 'http://127.0.0.1:9222',
+        '--input', join(root, 'input.txt'),
+        '--reviewer-source-output', join(root, 'source.txt'),
+        '--reviewer-source', 'slot-01#capture=direct-publication/v1',
+        '--repository', reviewContext.repositoryFullName,
+        '--issue-number', String(reviewContext.issueNumber),
+        '--source-revision', reviewContext.sourceRevision,
+        '--stage', reviewContext.stage,
+        '--source-slot', reviewContext.sourceSlot,
+        '--stage-attempt-id', 'stage-attempt-r07',
+      ], {
+        runPreflight: (input) => ({
+          ok: true,
+          schema: 'create-issue-browser-gpt-preflight/v1',
+          principalLogin: 'chetwerikoff',
+          repository: reviewContext.repositoryFullName,
+          config: {
+            projectUrl: 'https://chatgpt.com/g/g-test/project',
+            chromeUserDataDir: root,
+            source: 'operator-config',
+            operatorConfigPath: join(root, 'local.config.json'),
+          },
+          childEnv: {
+            DISCUSS_WITH_GPT_PROJECT_URL: 'https://chatgpt.com/g/g-test/project',
+            DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR: root,
+          },
+          nextAction: null,
+        }),
+        readIssueRevision: () => ({
+          title: 'fixture',
+          body: `<!-- source-revision: ${reviewContext.sourceRevision} -->\nfixture`,
+          labels: [],
+        }),
+        inspectLifecycleBinding: () => ({
+          ok: true,
+          observed: {},
+        }),
+        recordAdmission,
+        spawnLauncher,
+      });
+      expect(code).toBe(expectedCode);
+      const output = JSON.parse(logs.at(-1) ?? '{}') as Record<string, unknown>;
+      expect(output).toMatchObject({
+        ok: false,
+        cause: expectedCause,
+        nextAction: null,
+      });
+      expect(recordAdmission).toHaveBeenCalledTimes(1);
+      expect(spawnLauncher).not.toHaveBeenCalled();
+    } finally {
+      logSpy.mockRestore();
+      if (previousStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previousStateRoot;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('refuses legacy direct publication and requires long-run stage context before spawn', async () => {
     const stdout = captureWrite(process.stdout);
     try {
