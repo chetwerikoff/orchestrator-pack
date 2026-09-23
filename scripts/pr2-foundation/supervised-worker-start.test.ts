@@ -152,6 +152,59 @@ describe('supervised worker start exact assignment admission',()=>{
     expect(currentWorkerAssignment(file,1416)?.taskId).toBe('task_new');
   });
 
+  it('publishes the delegated-integration marker only from the exact predecessor assignment', async()=>{
+    const base=root(); const env={...process.env,OPK_BASE_DIR:base};
+    const file=resolveWorkerAssignmentStorePath('orchestrator-pack',env);
+    const implementation=await publishCurrentWorkerAssignment({file,repository:'chetwerikoff/orchestrator-pack',issueNumber:1416,
+      taskId:'task_1',kind:'local',provider:'orca',bindingKey:'dispatch_old',role:'worker'});
+    if(!implementation.ok)throw new Error(implementation.reason);
+    const delegatedIntegration={
+      prNumber:926,
+      expectedHeadSha:'a'.repeat(40),
+      predecessorAssignmentId:implementation.assignment.assignmentId,
+      predecessorGeneration:implementation.assignment.generation,
+    };
+    let calls=0;
+    const result=await runSupervisedWorkerStart({mode:'provider_new_top_level',role:'worker',issueNumber:1416,
+      repository:'chetwerikoff/orchestrator-pack',env,adapter:adapter({kind:'gone'}),delegatedIntegration,
+      orcaArgs:['--task','task_1','--worktree','new-top-level','--repo','id:repo-1','--name','integration-worktree',
+        '--agent','cursor','--model','model-medium','--setup','run'],
+      execute:async()=>{calls+=1;return{ok:true,stdout:envelope({taskId:'task_1',dispatchId:'dispatch_integration',state:'ready',
+        worktree:{id:'repo-1::/tmp/new-worktree',path:'/tmp/new-worktree'},terminal:{handle:'term-provider',runtime:'orca',generation:'generation-1'},
+        setup:{requested:'run',effective:'run',state:'running'},launch:{requested:{agent:'cursor',model:'model-medium'},effective:{agent:'cursor',model:'model-medium'}},
+        effects:[{kind:'worktree',action:'created_top_level',id:'repo-1::/tmp/new-worktree'},
+          {kind:'terminal',role:'agent',action:'reused_agent_terminal',id:'term-provider'},
+          {kind:'dispatch_input',role:'agent',id:'term-provider',state:'accepted'}]})}},
+    });
+    expect(result).toMatchObject({ok:true,reason:'ready_and_assignment_bound',assignment:{
+      taskId:'task_1',bindingKey:'dispatch_integration',generation:2,delegatedIntegration,
+    }});
+    expect(result.assignment?.assignmentId).not.toBe(implementation.assignment.assignmentId);
+    expect(calls).toBe(1);
+    expect(currentWorkerAssignment(file,1416)?.delegatedIntegration).toEqual(delegatedIntegration);
+  });
+
+  it('rejects delegated-integration predecessor drift before any Orca start effect', async()=>{
+    const base=root(); const env={...process.env,OPK_BASE_DIR:base};
+    const file=resolveWorkerAssignmentStorePath('orchestrator-pack',env);
+    const implementation=await publishCurrentWorkerAssignment({file,repository:'chetwerikoff/orchestrator-pack',issueNumber:1416,
+      taskId:'task_1',kind:'local',provider:'orca',bindingKey:'dispatch_old',role:'worker'});
+    if(!implementation.ok)throw new Error(implementation.reason);
+    let calls=0;
+    const result=await runSupervisedWorkerStart({role:'worker',issueNumber:1416,
+      repository:'chetwerikoff/orchestrator-pack',env,
+      delegatedIntegration:{
+        prNumber:926,expectedHeadSha:'a'.repeat(40),predecessorAssignmentId:'wa-stale',predecessorGeneration:1,
+      },
+      orcaArgs:args(),
+      inspect:async()=>{calls+=1;return{ok:true,stdout:''}},
+      execute:async()=>{calls+=1;return{ok:true,stdout:''}},
+    });
+    expect(result).toEqual({ok:false,reason:'delegated_integration_predecessor_mismatch'});
+    expect(calls).toBe(0);
+    expect(currentWorkerAssignment(file,1416)).toEqual(implementation.assignment);
+  });
+
   it('rejects exact-terminal reuse when an exited exact worker releaseState is unknown', async () => {
     const base = root();
     const env = { ...process.env, OPK_BASE_DIR: base };
