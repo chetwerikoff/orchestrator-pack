@@ -127,7 +127,7 @@ describe('WorkerAssignment compare-and-publish', () => {
     const extra = await publishCurrentWorkerAssignment({
       ...publishInput(file, 'dispatch-extra'),
       expectedCurrent,
-      delegatedIntegration: { ...baseMarker, authorizationMode: 'waiver' },
+      delegatedIntegration: { ...baseMarker, authorizationMode: 'waiver' } as never,
     });
     expect(extra).toEqual({ ok: false, reason: 'assignment_input_invalid' });
 
