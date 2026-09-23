@@ -31,6 +31,7 @@ import { validateTerminalOneShotBodyBinding } from './create-issue-final-accepta
 import {
   deriveReviewEpisodeId,
   deriveReviewEpisodeState,
+  resolveCanonicalReviewDirectory,
   validateReviewEpisodeTopology,
   type CaptureIdentityV1,
   type ReviewEpisodeDerivationAuthorityV1,
