@@ -626,7 +626,6 @@ export function projectZeroSendManagerResult(input: {
     return createIssueRecoverableResult({
       cause: input.policy.code,
       blocker: input.policy.rawCause,
-      reason,
       nextAction: input.pacedRetryAction,
     });
   }
