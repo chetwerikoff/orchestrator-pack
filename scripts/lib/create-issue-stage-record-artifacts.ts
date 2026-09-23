@@ -3405,6 +3405,21 @@ function stageAuthorBinding(reviewDir: string): { sourceRevision: string | null;
   return { sourceRevision: latest?.sourceRevision ?? null, predecessorStage };
 }
 
+function authorBindingStageSequence(reviewDir: string, stage: ReviewStage | null): number | null {
+  if (stage === null) return 0;
+  let latestSequence: number | null = null;
+  for (const path of stageEvidenceFilesInReviewDir(reviewDir)) {
+    try {
+      const value: unknown = JSON.parse(readFileSync(path, 'utf8'));
+      if (!isRecord(value) || reviewStage(value.stage) !== stage) continue;
+      const sequence = Number(value.stageSequence);
+      if (!Number.isSafeInteger(sequence) || sequence < 1) continue;
+      latestSequence = latestSequence === null ? sequence : Math.max(latestSequence, sequence);
+    } catch {}
+  }
+  return latestSequence;
+}
+
 function authorReplyDispositionForStage(
   reviewDir: string,
   sourceRevision: string | null,
@@ -3486,11 +3501,48 @@ function prepareAuthorDispositionsFromGovernedOutput(input: {
     if (existingText !== bytes) {
       let existing: unknown;
       try { existing = JSON.parse(existingText) as unknown; } catch { existing = null; }
-      if (!isRecord(existing)
-        || existing.schema !== AUTHOR_DISPOSITIONS_SCHEMA
-        || (existing.producer !== 'governed-author-output/v1' && existing.producer !== 'lifecycle-zero-state/v1')
-        || existing.reviewEpisodeId !== input.reviewEpisodeId) {
-        input.errors.push('existing author-dispositions.json is not a replaceable producer-owned binding; field=findings/m4 authority=author-owned');
+      const existingRevision = isRecord(existing) && typeof existing.sourceRevision === 'string'
+        ? revisionOrdinal(existing.sourceRevision)
+        : null;
+      const requestedRevision = revisionOrdinal(input.sourceRevision);
+      const existingM4 = isRecord(existing) && isRecord(existing.m4) ? existing.m4 : null;
+      const existingPredecessorStage = isRecord(existing)
+        ? (existing.predecessorStage === null ? null : reviewStage(existing.predecessorStage))
+        : null;
+      const existingPredecessorValid = isRecord(existing)
+        && (existing.predecessorStage === null || existingPredecessorStage !== null);
+      const existingStageSequence = existingPredecessorValid
+        ? authorBindingStageSequence(input.reviewDir, existingPredecessorStage)
+        : null;
+      const requestedStageSequence = authorBindingStageSequence(input.reviewDir, input.predecessorStage);
+      const lifecycleAdvance = existingStageSequence !== null
+        && requestedStageSequence !== null
+        && requestedStageSequence > existingStageSequence;
+      const revisionAdvance = existingRevision !== null
+        && requestedRevision !== null
+        && requestedRevision > existingRevision
+        && existingStageSequence !== null
+        && requestedStageSequence !== null
+        && requestedStageSequence >= existingStageSequence;
+      const legalAdvance = revisionAdvance
+        || (existingRevision !== null && existingRevision === requestedRevision && lifecycleAdvance);
+      const canReplaceForExplicitLifecycleOrRevisionAdvance = isRecord(existing)
+        && existing.schema === AUTHOR_DISPOSITIONS_SCHEMA
+        && existing.producer === 'governed-author-output/v1'
+        && producer === 'governed-author-output/v1'
+        && existing.reviewEpisodeId === input.reviewEpisodeId
+        && existingPredecessorValid
+        && Array.isArray(existing.findings)
+        && existing.findings.every(isRecord)
+        && existingM4 !== null
+        && existingM4.reviewEpisodeId === input.reviewEpisodeId
+        && existingM4.sourceRevision === existing.sourceRevision
+        && existingM4.predecessorStage === existing.predecessorStage
+        && Array.isArray(existingM4.inventory)
+        && existingM4.inventory.every(isRecord)
+        && legalAdvance;
+      if (!canReplaceForExplicitLifecycleOrRevisionAdvance) {
+        input.errors.push('existing author-dispositions.json conflicts with the same binding or is not an explicitly legal lifecycle/revision advance; field=findings/m4 authority=author-owned');
         return null;
       }
       replaceExisting = true;

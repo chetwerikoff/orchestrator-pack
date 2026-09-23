@@ -3212,6 +3212,29 @@ describe('governed author disposition block shapes (Issue #1983)', () => {
     const result = produce(input);
     expect(result.ok, result.errors.join('\n')).toBe(true);
   });
+
+  it('fails closed on same-episode same-revision author binding divergence without overwriting the producer-owned file', () => {
+    const input = fixture({ transportClassification: 'complete', withTurnResult: true, withCapture: true });
+    const first = produce(input);
+    expect(first.ok, first.errors.join('\n')).toBe(true);
+
+    const originalBytes = readFileSync(input.authorPath, 'utf8');
+    writeGovernedAuthorReply(input.authorReplyPath, {
+      sourceRevision: REVISION,
+      predecessorStage: 'architectural',
+      findings: [{
+        id: 'divergent-author-finding',
+        defectDisposition: 'addressed',
+        remedyDisposition: 'accepted',
+      }],
+      m4: [{ mechanism: 'divergent-author-mechanism', disposition: 'keep' }],
+    });
+
+    const retry = produce(input);
+    expect(retry.ok).toBe(false);
+    expect(retry.errors.join('\n')).toContain('conflicts with the same binding');
+    expect(readFileSync(input.authorPath, 'utf8')).toBe(originalBytes);
+  });
 });
 
 describe('Issue #2039 pre-stage T1 author disposition producer', () => {
