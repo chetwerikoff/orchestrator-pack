@@ -48,5 +48,5 @@
     "tests/external-output-references/capture-manifest.json",
     "tests/external-output-references/captures/orca-runtime/"
   ],
-  "source_revision": "30141512bd743934ce41fbb12f735e5836c42360"
+  "source_revision": "aedba9ee2e322b7dc99ac98451c9fbac0915862f"
 }
