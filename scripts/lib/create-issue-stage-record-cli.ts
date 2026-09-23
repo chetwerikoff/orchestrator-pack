@@ -1005,6 +1005,23 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
           });
         }
       }
+      const staleIssueBinding = result.errors.some((error) => error.includes('stale_next_action'));
+      if (staleIssueBinding && result.stage && result.stageAttemptId && result.sourceRevision) {
+        const output = createIssueStaleNextAction({
+          binding: {
+            repository: opts.repo,
+            issueNumber,
+            sourceRevision: result.sourceRevision,
+            stage: result.stage,
+            stageAttemptId: result.stageAttemptId,
+          },
+          observed: { repository: opts.repo, issueNumber },
+          nextAction: null,
+        });
+        if (opts.json) console.log(JSON.stringify(output));
+        else process.stderr.write('stale_next_action\n');
+        return 1;
+      }
       const zeroSendTerminal = readEvidenceZeroSendTerminal(stageEvidencePath);
       const zeroSendProjection = zeroSendTerminal
         ? zeroSendTerminalProjection(zeroSendTerminal, opts.repo, issueNumber)

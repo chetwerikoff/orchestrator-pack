@@ -1267,7 +1267,7 @@ function deterministicZeroSendCode(state: string, cause: string): string | null 
 }
 
 function transientZeroSendCode(state: string, cause: string): string | null {
-  if (state === 'rate_limit' || cause === 'rate_limit') return 'rate_limit';
+  if (state === 'rate_limit' || cause === 'rate_limit') return null;
   if (state === 'quota' || cause === 'quota') return 'quota';
   if (state === 'composer-refusal' || cause.includes('composer') || cause === 'blocking_page_overlay') return 'composer-refusal';
   if (state === 'fill-timeout' || cause.includes('fill')) return 'fill-timeout';
@@ -1362,16 +1362,29 @@ export function readEvidenceZeroSendTerminal(evidencePath: string): ZeroSendTerm
     if (!envelope) continue;
     const policy = classifyZeroSendCausePolicy(envelope);
     if (!policy) continue;
+    const transport = classifyReconciliationTransport(envelope, 1);
+    if (!transport) continue;
     const observedRetryClass = retryClass(invocation.retryClass);
     const reviewerSlot = optionalString(invocation.reviewerSlot);
-    const retryConsumed = policy.class === 'transient'
-      && reviewerSlot !== undefined
+    const retryConsumed = reviewerSlot !== undefined
       && parsed.invocations.some((candidate) => isRecord(candidate)
         && optionalString(candidate.reviewerSlot) === reviewerSlot
         && candidate.attemptOrdinal === 2);
-    if (policy.class === 'transient' && (observedRetryClass !== 'eligible-zero-send' || retryConsumed)) continue;
-    const effectiveRetryClass = observedRetryClass
-      ?? classifyReconciliationTransport(envelope, 1)?.retryClass;
+    if (policy.class === 'transient'
+      && (observedRetryClass !== 'eligible-zero-send'
+        || transport.retryClass !== 'eligible-zero-send'
+        || retryConsumed
+        || !optionalString(invocation.invocationId)
+        || optionalString(envelope.observed_invocation_id) !== optionalString(invocation.invocationId)
+        || optionalString(invocation.stageAttemptId) !== stageAttemptId
+        || optionalString(invocation.sourceRevision)?.toLowerCase() !== sourceRevision.toLowerCase()
+        || optionalString(invocation.stage) !== stage
+        || invocation.attemptOrdinal !== 1
+        || invocation.retryAttempt !== false
+        || !reviewerSlot
+        || !/^\d{2}$/.test(reviewerSlot)
+        || Number(invocation.reviewerOrdinal) !== Number(reviewerSlot))) continue;
+    const effectiveRetryClass = observedRetryClass ?? transport.retryClass;
     if (!effectiveRetryClass) continue;
     const diagnostics = zeroSendEnvelopeDiagnostics(envelope);
     const observation: ZeroSendTerminalObservation = {
@@ -1480,7 +1493,6 @@ export function classifyReconciliationTransport(
   const ownerAuthorizedRetryableZeroSend = zeroSendPolicy?.class === 'transient'
     && (
       zeroSendPolicy.code === 'quota'
-      || zeroSendPolicy.code === 'rate_limit'
       || zeroSendPolicy.code === 'composer-refusal'
       || zeroSendPolicy.code === 'fill-timeout'
     );
@@ -1502,6 +1514,7 @@ function hydrateReconciliationTransport(
   evidencePath: string,
   invocation: JsonRecord,
   index: number,
+  expectedBinding: { stageAttemptId: string; sourceRevision: string; stage: string },
   errors: string[],
 ): JsonRecord | null {
   const existingTerminalClassification = terminalClassification(invocation.terminalClassification);
@@ -1546,18 +1559,32 @@ function hydrateReconciliationTransport(
     return null;
   }
 
+  const admittedInvocationId = optionalString(invocation.invocationId);
+  const observedInvocationId = optionalString(observed.observed_invocation_id);
+  if (transport.sendCount === 0 && (!admittedInvocationId || observedInvocationId !== admittedInvocationId)) {
+    errors.push('stage evidence invocation[' + index + '] terminal envelope observed_invocation_id does not match admitted invocationId');
+    return null;
+  }
+  if (transport.retryClass === 'eligible-zero-send') {
+    const reviewerSlot = optionalString(invocation.reviewerSlot);
+    if (optionalString(invocation.stageAttemptId) !== expectedBinding.stageAttemptId
+      || optionalString(invocation.sourceRevision)?.toLowerCase() !== expectedBinding.sourceRevision.toLowerCase()
+      || optionalString(invocation.stage) !== expectedBinding.stage
+      || invocation.attemptOrdinal !== 1
+      || invocation.retryAttempt !== false
+      || !reviewerSlot
+      || !/^\d{2}$/.test(reviewerSlot)
+      || Number(invocation.reviewerOrdinal) !== Number(reviewerSlot)) {
+      errors.push('stage evidence invocation[' + index + '] retryable zero-send authority does not match stage evidence binding');
+      return null;
+    }
+  }
   const needsObservedZeroSendIdentity = transport.sendCount === 0
     && transport.terminalClassification === 'incident'
     && transport.retryClass === 'retry-forbidden';
   let observedTerminalResultIdentity: string | undefined;
   if (needsObservedZeroSendIdentity) {
-    const admittedInvocationId = optionalString(invocation.invocationId);
-    const observedInvocationId = optionalString(observed.observed_invocation_id);
     const observedIdentity = optionalString(observed.observed_turn_result_identity);
-    if (!admittedInvocationId || observedInvocationId !== admittedInvocationId) {
-      errors.push('stage evidence invocation[' + index + '] terminal envelope observed_invocation_id does not match admitted invocationId');
-      return null;
-    }
     if (!observedIdentity || !/^sha256:[0-9a-f]{64}:turn-result-v1$/.test(observedIdentity)) {
       errors.push('stage evidence invocation[' + index + '] terminal envelope lacks a valid observed turn-result identity');
       return null;
@@ -2067,7 +2094,7 @@ export function reconcileCreateIssueStage(
     return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: ['stage evidence.invocations is missing'] };
   }
   const hydrated = raw.invocations.map((value, index) => (
-    isRecord(value) ? hydrateReconciliationTransport(options.stageEvidencePath, value, index, errors) : null
+    isRecord(value) ? hydrateReconciliationTransport(options.stageEvidencePath, value, index, { stageAttemptId, sourceRevision, stage }, errors) : null
   ));
   if (hydrated.some((value) => value === null)) {
     if (raw.invocations.some((value) => !isRecord(value))) errors.push('stage evidence invocations must all be objects');
@@ -2082,13 +2109,31 @@ export function reconcileCreateIssueStage(
     return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: ['stage evidence has no required reviewer slots'] };
   }
 
-  const hydratedEvidenceChanged = JSON.stringify(rawValue) !== JSON.stringify(raw);
-  if (hydratedEvidenceChanged) {
-    const hydratedText = JSON.stringify(raw, null, 2) + '\n';
-    if (!atomicReplaceStageEvidence(options.stageEvidencePath, originalText, raw, errors)) {
+  const retryAuthorityEvidence = structuredClone(rawValue) as JsonRecord;
+  const retryAuthorityInvocations = retryAuthorityEvidence.invocations as JsonRecord[];
+  let retryAuthorityChanged = false;
+  for (const [index, invocation] of invocations.entries()) {
+    if (invocation.terminal !== true || invocation.sendCount !== 0 || invocation.retryClass !== 'eligible-zero-send') continue;
+    const original = retryAuthorityInvocations[index]!;
+    if (original.terminal === true
+      && original.terminalClassification === invocation.terminalClassification
+      && original.sendCount === 0
+      && original.retryClass === 'eligible-zero-send') continue;
+    retryAuthorityInvocations[index] = {
+      ...original,
+      terminal: true,
+      terminalClassification: invocation.terminalClassification,
+      sendCount: 0,
+      retryClass: 'eligible-zero-send',
+    };
+    retryAuthorityChanged = true;
+  }
+  if (retryAuthorityChanged) {
+    const retryAuthorityText = JSON.stringify(retryAuthorityEvidence, null, 2) + '\n';
+    if (!atomicReplaceStageEvidence(options.stageEvidencePath, originalText, retryAuthorityEvidence, errors)) {
       return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [...new Set(errors)] };
     }
-    originalText = hydratedText;
+    originalText = retryAuthorityText;
   }
 
   const transport = options.artifactSourceTransport ?? defaultGhTransport();

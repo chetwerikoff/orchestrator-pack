@@ -135,6 +135,7 @@ describe('Issue #2037 zero-send retry convergence', () => {
       turn_result_cause: 'quota',
       send_count: 0,
       recovery_available: false,
+      observed_invocation_id: 'invocation-01',
     }, null, 2) + '\n');
 
     const common = {
