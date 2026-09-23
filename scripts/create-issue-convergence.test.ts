@@ -290,6 +290,9 @@ describe('Issue #2037 zero-send retry convergence', () => {
         sendCount: 0,
         retryClass: 'eligible-zero-send',
       });
+      const retryCauseFamily = committed.invocations[0].retryClass;
+      expect(retryCauseFamily).toBe('eligible-zero-send');
+      expect(retryCauseFamily).not.toBe('unknown');
 
       const committedBytes = readFileSync(evidencePath, 'utf8');
       logs.length = 0;
