@@ -23,6 +23,13 @@ export const MAX_WORKER_ASSIGNMENT_STORE_BYTES = 262_144 as const;
 export type WorkerAssignmentKind = 'local' | 'remote';
 export type WorkerAssignmentRole = 'worker' | 'orchestrator';
 
+export interface DelegatedIntegrationMarker {
+  readonly prNumber: number;
+  readonly expectedHeadSha: string;
+  readonly predecessorAssignmentId: string;
+  readonly predecessorGeneration: number;
+}
+
 export type WorkerAssignmentStoreTrustCause =
   | 'store_too_large'
   | 'json_invalid'
@@ -67,6 +74,8 @@ interface WorkerAssignmentBase {
   readonly createdAtUtc: string;
   /** Present only on post-cutover publications. Pre-role rows remain readable with the field absent. */
   readonly role?: WorkerAssignmentRole;
+  /** Optional, closed orchestrator-delegated integration witness; absent on ordinary assignments. */
+  readonly delegatedIntegration?: DelegatedIntegrationMarker;
 }
 
 /** Existing Issue-scoped assignment shape retained for all numbered consumers. */
@@ -202,6 +211,48 @@ function bounded(value: unknown, max: number): string {
   return text.length > 0 && text.length <= max ? text : '';
 }
 
+export function parseDelegatedIntegrationMarker(value: unknown): DelegatedIntegrationMarker | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const keys = Object.keys(raw).sort();
+  const expectedKeys = [
+    'expectedHeadSha',
+    'prNumber',
+    'predecessorAssignmentId',
+    'predecessorGeneration',
+  ];
+  if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index])) {
+    return null;
+  }
+  const prNumber = raw.prNumber;
+  const expectedHeadSha = bounded(raw.expectedHeadSha, 40).toLowerCase();
+  const predecessorAssignmentId = bounded(raw.predecessorAssignmentId, 160);
+  const predecessorGeneration = raw.predecessorGeneration;
+  if (!Number.isInteger(prNumber) || Number(prNumber) <= 0
+    || !/^[0-9a-f]{40}$/u.test(expectedHeadSha)
+    || !predecessorAssignmentId
+    || !Number.isInteger(predecessorGeneration) || Number(predecessorGeneration) <= 0) {
+    return null;
+  }
+  return {
+    prNumber: Number(prNumber),
+    expectedHeadSha,
+    predecessorAssignmentId,
+    predecessorGeneration: Number(predecessorGeneration),
+  };
+}
+
+function sameDelegatedIntegrationMarker(
+  left: DelegatedIntegrationMarker | undefined,
+  right: DelegatedIntegrationMarker | undefined,
+): boolean {
+  if (!left || !right) return left === right;
+  return left.prNumber === right.prNumber
+    && left.expectedHeadSha === right.expectedHeadSha
+    && left.predecessorAssignmentId === right.predecessorAssignmentId
+    && left.predecessorGeneration === right.predecessorGeneration;
+}
+
 function optionalIssueNumber(value: unknown): number | undefined {
   if (value === undefined) return undefined;
   return Number.isInteger(value) && Number(value) > 0 ? Number(value) : Number.NaN;
@@ -228,9 +279,22 @@ export function parseWorkerAssignmentRole(value: unknown): WorkerAssignmentRole 
 
 function validAssignment(value: unknown): value is WorkerAssignmentRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const row = value as Partial<WorkerAssignmentRecord> & { readonly role?: unknown };
+  const row = value as Partial<WorkerAssignmentRecord> & {
+    readonly role?: unknown;
+    readonly delegatedIntegration?: unknown;
+  };
   const issueNumber = optionalIssueNumber(row.issueNumber);
-  const roleValid = !('role' in row) || parseWorkerAssignmentRole(row.role) !== null;
+  const role = parseWorkerAssignmentRole(row.role);
+  const roleValid = !('role' in row) || role !== null;
+  const delegatedIntegration = !('delegatedIntegration' in row)
+    ? undefined
+    : parseDelegatedIntegrationMarker(row.delegatedIntegration);
+  const delegatedIntegrationValid = !('delegatedIntegration' in row)
+    || Boolean(delegatedIntegration
+      && Number.isFinite(issueNumber)
+      && row.kind === 'local'
+      && bounded(row.provider, 80).toLowerCase() === 'orca'
+      && role === 'worker');
   return row.schema === WORKER_ASSIGNMENT_SCHEMA
     && Boolean(bounded(row.projectId, 80))
     && Boolean(bounded(row.repository, 240))
@@ -243,7 +307,8 @@ function validAssignment(value: unknown): value is WorkerAssignmentRecord {
     && Boolean(bounded(row.bindingKey, 240))
     && typeof row.createdAtUtc === 'string'
     && Number.isFinite(Date.parse(row.createdAtUtc))
-    && roleValid;
+    && roleValid
+    && delegatedIntegrationValid;
 }
 
 function normalizeOperatorPrimaryBinding(value: unknown): OperatorPrimaryBindingV1 | null {
@@ -643,6 +708,7 @@ interface PublishWorkerAssignmentInputBase {
   readonly expectedCurrent?: WorkerAssignmentExpectation;
   readonly now?: () => Date;
   readonly role: WorkerAssignmentRole;
+  readonly delegatedIntegration?: DelegatedIntegrationMarker;
 }
 
 export function publishCurrentWorkerAssignment(
@@ -675,10 +741,21 @@ export async function publishCurrentWorkerAssignment(
   const issueNumber = optionalIssueNumber(input.issueNumber);
   const expectedCurrent = input.expectedCurrent;
   const role = parseWorkerAssignmentRole(input.role);
+  const delegatedIntegration = input.delegatedIntegration === undefined
+    ? undefined
+    : parseDelegatedIntegrationMarker(input.delegatedIntegration);
   if (!projectId || !repository || !taskId || !provider || !bindingKey || !key
     || (input.issueNumber !== undefined && !Number.isFinite(issueNumber))
     || !validExpectation(expectedCurrent)
-    || role === null) {
+    || role === null
+    || (input.delegatedIntegration !== undefined && !delegatedIntegration)
+    || (delegatedIntegration && (
+      input.issueNumber === undefined
+      || input.kind !== 'local'
+      || provider !== 'orca'
+      || role !== 'worker'
+      || !expectedCurrent
+    ))) {
     return { ok: false, reason: 'assignment_input_invalid' };
   }
 
@@ -690,6 +767,13 @@ export async function publishCurrentWorkerAssignment(
 
       const replacement = expectedCurrent ? expectedEntry(store, expectedCurrent) : null;
       if (expectedCurrent && !replacement) {
+        return { ok: false, reason: 'assignment_stale' } as const;
+      }
+      if (delegatedIntegration && (
+        !replacement
+        || replacement.assignment.assignmentId !== delegatedIntegration.predecessorAssignmentId
+        || replacement.assignment.generation !== delegatedIntegration.predecessorGeneration
+      )) {
         return { ok: false, reason: 'assignment_stale' } as const;
       }
       const previousAtKey = store.assignments[key];
@@ -716,6 +800,7 @@ export async function publishCurrentWorkerAssignment(
             bindingKey,
             createdAtUtc: (input.now?.() ?? new Date()).toISOString(),
             role,
+            ...(delegatedIntegration ? { delegatedIntegration } : {}),
           }
         : {
             schema: WORKER_ASSIGNMENT_SCHEMA,
@@ -730,6 +815,7 @@ export async function publishCurrentWorkerAssignment(
             bindingKey,
             createdAtUtc: (input.now?.() ?? new Date()).toISOString(),
             role,
+            ...(delegatedIntegration ? { delegatedIntegration } : {}),
           };
       const assignments: Record<string, WorkerAssignmentRecord> = { ...store.assignments };
       if (replacement && replacement.key !== key) delete assignments[replacement.key];
@@ -817,7 +903,8 @@ function sameAssignment(left: WorkerAssignmentRecord | null, right: WorkerAssign
     && left.provider === right.provider
     && left.bindingKey === right.bindingKey
     && left.createdAtUtc === right.createdAtUtc
-    && left.role === right.role);
+    && left.role === right.role
+    && sameDelegatedIntegrationMarker(left.delegatedIntegration, right.delegatedIntegration));
 }
 
 export function assignmentStillCurrent(file: string, expected: WorkerAssignmentRecord): boolean {
