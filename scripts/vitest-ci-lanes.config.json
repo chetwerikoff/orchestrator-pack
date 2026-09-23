@@ -143,6 +143,7 @@
     "scripts/pr2-foundation/review-head-ready.test.ts": "light",
     "scripts/pr2-foundation/scheduler-assignment-lifecycle.test.ts": "light",
     "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts": "light",
+    "scripts/pr2-foundation/scheduler-fleet-alarm.test.ts": "light",
     "scripts/pr2-foundation/scheduler-post-review-smoke-production.test.ts": "light",
     "scripts/pr2-foundation/scheduler-post-review-smoke.test.ts": "light",
     "scripts/pr2-foundation/scheduler-process-integration.test.ts": "heavy",
