@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1491,7 +1491,12 @@ describe('Issue #2039 produce-author-dispositions CLI', () => {
         predecessorStage: null,
         draft: body,
       });
-      expect(readFileSync(join(reviewDir, 'issue-r02-body.json'), 'utf8')).toContain(body.trim());
+      expect(JSON.parse(readFileSync(join(reviewDir, 'issue-r02-body.json'), 'utf8'))).toMatchObject({
+        schema: 'create-issue-live-snapshot/v1',
+        issueNumber: producerIssue,
+        sourceRevision: 'r02',
+        body,
+      });
       expect(existsSync(join(reviewDir, 'attempt-001.json'))).toBe(false);
       expect(existsSync(join(reviewDir, 'finding-disposition-ledger.json'))).toBe(false);
     } finally {
