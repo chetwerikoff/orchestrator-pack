@@ -142,6 +142,23 @@ function observeAction(
   });
 }
 
+function censusAction(context: ExecuteIssueManagerBoundaryContext): CreateIssueNextAction | null {
+  const cdp = text(context.cdp);
+  if (!cdp) return null;
+  return createIssueNextAction({
+    kind: 'execute-observe-owned-turn',
+    binding: actionBinding(context),
+    argv: [
+      'node',
+      '--experimental-strip-types',
+      'scripts/browser-gpt-page-probe.ts',
+      'list',
+      '--cdp',
+      cdp,
+    ],
+  });
+}
+
 function githubFirstAction(context: ExecuteIssueManagerBoundaryContext): CreateIssueNextAction {
   return createIssueNextAction({
     kind: 'execute-github-first-read-only',
@@ -192,10 +209,11 @@ export function isExecuteIssueReadOnlyArgv(argv: readonly string[]): boolean {
     'node',
     '--experimental-strip-types',
     'scripts/browser-gpt-page-probe.ts',
-    'inspect',
   ];
   if (probePrefix.every((part, index) => normalized[index] === part)) {
-    return !normalized.includes('--open-if-missing');
+    const operation = normalized[probePrefix.length];
+    return (operation === 'inspect' || operation === 'list')
+      && !normalized.includes('--open-if-missing');
   }
 
   if (normalized[0] === 'scripts/gh') {
@@ -320,8 +338,19 @@ function classifyTurn(
     case 'profile_busy':
     case 'send_failed':
     case 'rate_limit':
-    case 'orphaned_fresh_turn':
       return recoverObservation(context, producer, value, 'execute_owned_turn_reobserve');
+    case 'orphaned_fresh_turn': {
+      const action = observeAction(context, value) ?? censusAction(context);
+      return action
+        ? recoverable(context, producer, 'execute_owned_conversation_reconcile', action)
+        : pause(
+          context,
+          producer,
+          'external:chrome_not_running',
+          value,
+          'restore the retained Chrome/CDP surface so the orphaned fresh turn can be reconciled read-only',
+        );
+    }
     case 'profile_mismatch':
     case 'incompatible_record': {
       const action = observeAction(context, value);
