@@ -1750,7 +1750,7 @@ function finalAcceptanceRetryAction(
     '--issue-number', String(issueNumber),
     '--review-dir', reviewDir,
     '--issue-revision', sourceRevision,
-    '--public-actor', opts.publicActor,
+    '--public-actor', requirePublicActor(opts),
     '--json',
   ];
   if (opts.workdir) actionArgv.push('--workdir', opts.workdir);
@@ -2101,7 +2101,7 @@ export function runFinalAcceptanceCli(argv: string[]): number {
       claudeProducerEvidencePaths: claudePaths,
       externalPassReceiptPath: opts.externalPassReceiptPath,
       operatorAdjudication: operatorAcceptanceAdjudication({ ...opts, phase: 'final-acceptance' }),
-      publicActor: opts.publicActor,
+      publicActor: requirePublicActor(opts),
       workdir: opts.workdir,
     });
 
