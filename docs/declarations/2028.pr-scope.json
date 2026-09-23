@@ -3,7 +3,9 @@
   "issue_number": 2028,
   "declared_paths": [
     "scripts/lib/create-issue-stage-record-artifacts.test.ts",
-    "scripts/lib/create-issue-stage-record-artifacts.ts"
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/review-lane-record.ts",
+    "scripts/lib/stage-completeness-core.ts"
   ],
   "denylist": [
     ".env",
@@ -15,7 +17,9 @@
   ],
   "allowed_roots": [
     "scripts/lib/create-issue-stage-record-artifacts.test.ts",
-    "scripts/lib/create-issue-stage-record-artifacts.ts"
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/review-lane-record.ts",
+    "scripts/lib/stage-completeness-core.ts"
   ],
-  "source_revision": "177655681ed70c94ff4090c772cb10e693c4bc6b"
+  "source_revision": "9f4244e1824db5746253e72dcd7fa61868ba02d5"
 }
