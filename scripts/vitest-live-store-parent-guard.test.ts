@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -46,6 +46,16 @@ function productionEnvironment(root: string): NodeJS.ProcessEnv {
     OPK_BASE_DIR: packBase,
   });
   return env;
+}
+
+async function waitForFile(filePath: string, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!existsSync(filePath)) {
+    if (Date.now() >= deadline) {
+      throw new Error(`timed out waiting for child readiness file: ${filePath}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 function runHarnessedVitest(testPath: string, env: NodeJS.ProcessEnv): Promise<{
@@ -113,14 +123,24 @@ describe('parent live-store guard', () => {
     temporaryRoots.push(root);
     const fixture = join(repoRoot, 'scripts', '.opk-parent-guard-atomic-journal-child.test.ts');
     temporaryFiles.push(fixture);
+    const readyFile = join(root, 'child-live-store-guard-ready');
     writeFileSync(
       fixture,
-      "import { expect, it } from 'vitest'; it('passes', async () => { await new Promise((resolve) => setTimeout(resolve, 400)); expect(true).toBe(true); });\n",
+      [
+        "import { expect, it } from 'vitest';",
+        "import { writeFileSync } from 'node:fs';",
+        "it('passes', async () => {",
+        `  writeFileSync(${JSON.stringify(readyFile)}, 'ready\\n');`,
+        '  await new Promise((resolve) => setTimeout(resolve, 400));',
+        '  expect(true).toBe(true);',
+        '});',
+        '',
+      ].join('\n'),
       'utf8',
     );
     const childEnvironment = productionEnvironment(join(root, 'child-production'));
     const childPromise = runHarnessedVitest(fixture, childEnvironment);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await waitForFile(readyFile);
     writeAtomicJournal(childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!);
     const child = await childPromise;
 
