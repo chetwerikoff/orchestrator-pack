@@ -21,9 +21,15 @@ import {
   reconcileCreateIssueStage,
   produceAcceptanceArtifacts,
   classifyZeroSendCausePolicy,
+  readCanonicalZeroSendTerminal,
 } from './lib/create-issue-stage-record-artifacts.ts';
 import { buildManagerReviewTerminalBundle } from './lib/manager-review-terminal-bundle.ts';
 import { canonicalStagePlan } from './lib/create-issue-stage-topology.ts';
+import { startReviewCycle } from './lib/create-issue-stage-record-core.ts';
+import { admitStageLaunch, ensureLifecycleTierIntake, loadCanonicalLifecycleAuthority } from './lib/create-issue-stage-lifecycle.ts';
+import { serializeCommentBody } from './lib/create-issue-stage-record-marker.ts';
+import { CYCLE_SCHEMA, type CycleEventLogical } from './lib/create-issue-stage-record-types.ts';
+import { createMockGhState, createMockTransport } from './lib/create-issue-stage-record-test-helpers.ts';
 import {
   selectPrincipalOwnedCanonicalArtifact,
   sameGithubPrincipal,
@@ -343,6 +349,172 @@ describe('Issue #2037 zero-send retry convergence', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it('rejects the #926 foreign historical zero-send fixture before canonical stage admission', () => {
+    const root = tempRoot();
+    const stateRoot = join(root, 'state');
+    const reviewDir = join(stateRoot, '.review', '2037');
+    const workdir = join(root, 'work');
+    mkdirSync(reviewDir, { recursive: true });
+    const sourceRevision = 'r04';
+    const stage = 'architectural-review' as const;
+    const historicalCycleId = '6523468e-e4fe-42bb-9c31-acf827d78cc1';
+    const noncanonicalStageAttemptId = '8b9849f9-4e0e-44d0-a0d5-8590a6d1b3d2';
+    const invocationId = 'historical-invocation-8b9849f9';
+    const repo = 'chetwerikoff/orchestrator-pack';
+    const issueNumber = 2037;
+    ensureLifecycleTierIntake({ issueNumber, tier: 'T2', firstRevision: sourceRevision, stateRootOverride: stateRoot });
+    const attemptHex = createHash('sha256')
+      .update(`create-issue-stage-attempt/v1\n${repo}\n${issueNumber}\n${stage}`, 'utf8')
+      .digest('hex')
+      .slice(0, 32);
+    const canonicalStageAttemptId = `${attemptHex.slice(0, 8)}-${attemptHex.slice(8, 12)}-4${attemptHex.slice(13, 16)}-a${attemptHex.slice(17, 20)}-${attemptHex.slice(20, 32)}`;
+    const terminalEnvelopePath = join(reviewDir, 'terminal-01.json');
+    writeFileSync(terminalEnvelopePath, JSON.stringify({
+      schema: 'flow-manager-long-running-child-terminal/v1',
+      terminal_at: '2026-09-23T00:00:00Z',
+      lifecycle_outcome: 'incident',
+      delivery: 'not-sent',
+      turn_result_state: 'quota',
+      turn_result_cause: 'quota',
+      send_count: 0,
+      recovery_available: false,
+      observed_invocation_id: invocationId,
+    }, null, 2) + '\n');
+    const historicalEvidence = {
+      schema: 'create-issue-stage-evidence/v1',
+      producer: 'create-issue-stage-finalize/start-cycle',
+      taskIdentity: 'issue:2037',
+      tier: 'T2',
+      stage,
+      stageAttemptId: noncanonicalStageAttemptId,
+      stageSequence: 2,
+      cycleId: historicalCycleId,
+      cycleBinding: { cycleId: historicalCycleId, sourceRevision, boundBeforeLaunch: true },
+      policyVersion: 'triple-source/v1',
+      reviewerCardinality: 3,
+      cardinalityConfigIdentity: 'triple-source/v1',
+      sourceRevision,
+      outcome: 'incident',
+      revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'pending' },
+      invocations: [{
+        schema: 'reviewer-invocation-envelope/v1',
+        reviewEpisodeId: 'issue:2037@r04',
+        stageAttemptId: noncanonicalStageAttemptId,
+        policyVersion: 'triple-source/v1',
+        reviewerCardinality: 3,
+        cardinalityConfigIdentity: 'triple-source/v1',
+        stage,
+        sourceRevision,
+        invocationId,
+        reviewerSlot: '01',
+        reviewerOrdinal: 1,
+        attemptOrdinal: 1,
+        retryAttempt: false,
+        terminal: true,
+        terminalClassification: 'quota',
+        sendCount: 0,
+        retryClass: 'eligible-zero-send',
+        terminalEnvelopePath: 'terminal-01.json',
+        reviewerSource: 'historical-noncanonical',
+      }],
+    };
+    expect(JSON.stringify(historicalEvidence)).not.toContain('capturePath');
+    writeFileSync(join(reviewDir, 'attempt-002.json'), JSON.stringify(historicalEvidence, null, 2) + '\n');
+    const coarseHistoricalTerminal = readCanonicalZeroSendTerminal({
+      issueNumber, sourceRevision, stage, stateRootOverride: stateRoot,
+    });
+    expect(coarseHistoricalTerminal).toMatchObject({
+      stageAttemptId: noncanonicalStageAttemptId,
+      sourceRevision,
+      stage,
+      invocationId,
+      reviewerSlot: '01',
+      retryClass: 'eligible-zero-send',
+    });
+    const canonicalAuthority = loadCanonicalLifecycleAuthority(issueNumber, stateRoot);
+    expect(admitStageLaunch({
+      issueNumber, tier: 'T2', stage, sourceRevision,
+      issueBody: '<!-- source-revision: r04 -->\nIssue #2037 r04 fixture',
+      intake: canonicalAuthority.intake,
+      receiptValues: canonicalAuthority.receiptValues,
+    }).ok).toBe(true);
+
+    const historicalCycle: CycleEventLogical = {
+      schema: CYCLE_SCHEMA,
+      'event-key': historicalCycleId,
+      'cycle-id': historicalCycleId,
+      'predecessor-cycle-id': 'none',
+      'source-revision': sourceRevision,
+      tier: 'T2',
+      'public-actor': 'cursor-flow-manager',
+    };
+    const state = createMockGhState({
+      comments: [{
+        id: 92600001,
+        body: serializeCommentBody(historicalCycle),
+        createdAt: '2026-09-23T00:00:00Z',
+        updatedAt: '2026-09-23T00:00:00Z',
+        userLogin: 'chetwerikoff',
+        authorAssociation: 'OWNER',
+      }],
+      issue: {
+        title: 'Issue #2037',
+        body: '<!-- source-revision: r04 -->\nIssue #2037 r04 fixture',
+        labels: ['spec-review:in-progress'],
+      },
+      nextCommentId: 92600002,
+    });
+    const transport = createMockTransport(state);
+    const input = {
+      repo,
+      issueNumber,
+      sourceRevision,
+      tier: 'T2',
+      stage,
+      publicActor: 'cursor-flow-manager' as const,
+      workdir,
+      stateRootOverride: stateRoot,
+    };
+
+    const rejected = startReviewCycle(transport, { ...input, stageAttemptId: noncanonicalStageAttemptId });
+    expect(rejected.ok).toBe(false);
+    expect(rejected.stageAttemptId).toBe(canonicalStageAttemptId);
+    expect(rejected.diagnostics.some((item) => item.code === 'stage_authority_invalid'
+      && item.message.includes('does not match the canonical active attempt'))).toBe(true);
+    expect(state.comments).toHaveLength(1);
+
+    const started = startReviewCycle(transport, input);
+    expect(started.ok, started.diagnostics.map((item) => item.message).join('\n')).toBe(true);
+    expect(started.stageAttemptId).toBe(canonicalStageAttemptId);
+    expect(started.cycleId).not.toBe(historicalCycleId);
+    expect(state.comments).toHaveLength(2);
+    expect(state.comments[1]?.body).toContain(historicalCycleId);
+
+    writeFileSync(join(reviewDir, 'stage-completeness-receipt-canonical.json'), JSON.stringify({
+      schema: 'stage-completeness-receipt/v1',
+      taskIdentity: 'issue:2037',
+      reviewEpisodeId: 'issue:2037@r04',
+      episodeFirstRevision: 'r04',
+      stageSequence: 1,
+      tier: 'T2',
+      stage,
+      cycleId: started.cycleId,
+      stageAttemptId: canonicalStageAttemptId,
+      policyVersion: 'triple-source/v1',
+      sourceRevision,
+      outcome: 'complete',
+      reviewerCardinality: 3,
+      completedSourceCount: 3,
+      cycleBinding: { cycleId: started.cycleId, sourceRevision, boundBeforeLaunch: true },
+      producerEvidence: 'not-applicable',
+      tierTransition: 'none',
+    }, null, 2) + '\n');
+    const consumed = startReviewCycle(transport, input);
+    expect(consumed.ok).toBe(false);
+    expect(consumed.diagnostics.some((item) => item.code === 'stage_slot_consumed')).toBe(true);
+    expect(state.comments).toHaveLength(2);
   });
 });
 
