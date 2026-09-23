@@ -279,7 +279,7 @@ describe('Issue #2037 zero-send retry convergence', () => {
         '--stage-evidence', evidencePath,
         '--json',
       ];
-      expect(runStageFinalizeCli(argv, transport)).toBe(1);
+      expect(runStageFinalizeCli(argv, transport)).toBe(3);
       const first = JSON.parse(logs.at(-1) ?? '{}') as Record<string, any>;
       expect(first).toMatchObject({
         ok: false,
@@ -308,7 +308,7 @@ describe('Issue #2037 zero-send retry convergence', () => {
 
       const committedBytes = readFileSync(evidencePath, 'utf8');
       logs.length = 0;
-      expect(runStageFinalizeCli(argv, transport)).toBe(1);
+      expect(runStageFinalizeCli(argv, transport)).toBe(3);
       expect(readFileSync(evidencePath, 'utf8')).toBe(committedBytes);
       expect(JSON.parse(logs.at(-1) ?? '{}').nextAction?.kind).toBe('retry-create-issue-browser-preflight');
 
@@ -340,7 +340,7 @@ describe('Issue #2037 zero-send retry convergence', () => {
       ];
 
       logs.length = 0;
-      expect(runStageFinalizeCli(argv, transport)).toBe(0);
+      expect(runStageFinalizeCli(argv, transport)).toBe(3);
       const second = JSON.parse(logs.at(-1) ?? '{}') as Record<string, any>;
       expect(second.nextAction?.kind).toBe('produce-acceptance-artifacts');
       expect(second.nextAction?.kind).not.toBe('retry-create-issue-browser-preflight');

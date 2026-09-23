@@ -1281,7 +1281,6 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
         : null;
       const zeroSendProjection = zeroSendTerminal
         && reconciliationBinding
-        && (zeroSendTerminal.policy.class === 'deterministic-input' || zeroSendTerminal.policy.class === 'state-conflict')
         ? zeroSendTerminalProjection(
             zeroSendTerminal,
             opts.repo,
