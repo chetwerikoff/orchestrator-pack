@@ -4,9 +4,11 @@ import {
   currentWorkerAssignment,
   currentWorkerAssignmentByDeliverable,
   inspectWorkerAssignmentStore,
+  parseDelegatedIntegrationMarker,
   parseWorkerAssignmentRole,
   publishCurrentWorkerAssignment,
   resolveWorkerAssignmentStorePath,
+  type DelegatedIntegrationMarker,
   type WorkerAssignment,
   type WorkerAssignmentExpectation,
   type WorkerAssignmentRecord,
@@ -400,6 +402,7 @@ export async function runSupervisedWorkerStart(input: {
   readonly repository: string;
   readonly projectId?: string;
   readonly role?: WorkerAssignmentRole | string;
+  readonly delegatedIntegration?: DelegatedIntegrationMarker;
   readonly orcaArgs: readonly string[];
   readonly env?: NodeJS.ProcessEnv;
   readonly cwd?: string;
@@ -409,13 +412,18 @@ export async function runSupervisedWorkerStart(input: {
 }): Promise<SupervisedWorkerStartResult> {
   const repository = input.repository.trim().toLowerCase();
   const role = parseWorkerAssignmentRole(input.role);
+  const delegatedIntegration = input.delegatedIntegration === undefined
+    ? undefined
+    : parseDelegatedIntegrationMarker(input.delegatedIntegration);
   const mode = input.mode ?? 'exact_terminal_worktree';
   if (mode !== 'exact_terminal_worktree' && mode !== 'provider_new_top_level') {
     return { ok: false, reason: 'supervised_start_mode_invalid' };
   }
   if (!repository
     || (input.issueNumber !== undefined
-      && (!Number.isInteger(input.issueNumber) || input.issueNumber <= 0))) {
+      && (!Number.isInteger(input.issueNumber) || input.issueNumber <= 0))
+    || (input.delegatedIntegration !== undefined && !delegatedIntegration)
+    || (delegatedIntegration && (input.issueNumber === undefined || role !== 'worker'))) {
     return { ok: false, reason: 'supervised_start_input_invalid' };
   }
   if (!role) {
@@ -459,6 +467,14 @@ export async function runSupervisedWorkerStart(input: {
     : currentWorkerAssignment(file, input.issueNumber);
   if (expectedCurrent?.repository !== undefined && expectedCurrent.repository !== repository) {
     return { ok: false, reason: 'assignment_stale' };
+  }
+  if (delegatedIntegration && (
+    !expectedCurrent
+    || expectedCurrent.taskId !== requestedTaskId
+    || expectedCurrent.assignmentId !== delegatedIntegration.predecessorAssignmentId
+    || expectedCurrent.generation !== delegatedIntegration.predecessorGeneration
+  )) {
+    return { ok: false, reason: 'delegated_integration_predecessor_mismatch' };
   }
   if (expectedCurrent && expectedCurrent.taskId !== requestedTaskId && expectedCurrent.kind !== 'local') {
     return { ok: false, reason: 'assignment_stale' };
@@ -600,6 +616,7 @@ export async function runSupervisedWorkerStart(input: {
     bindingKey: dispatchId,
     expectedCurrent: expectedCurrentForPublish(expectedCurrent),
     role,
+    ...(delegatedIntegration ? { delegatedIntegration } : {}),
   };
   const published = input.issueNumber === undefined
     ? await publishCurrentWorkerAssignment(publishBase)
@@ -677,27 +694,43 @@ function parseStartCli(argv: readonly string[]): {
   repository: string;
   projectId?: string;
   role?: string;
+  delegatedIntegration?: DelegatedIntegrationMarker;
   orcaArgs: string[];
 } {
   const separator = argv.indexOf('--');
-  if (separator < 0) throw new Error('usage: supervised-worker-start [--issue-number N] --repository owner/repo [--project-id id] --role worker|orchestrator -- --task task_id --terminal handle --worktree selector ...');
+  if (separator < 0) throw new Error('usage: supervised-worker-start [--issue-number N] --repository owner/repo [--project-id id] --role worker|orchestrator [--delegated-integration JSON] -- --task task_id --terminal handle --worktree selector ...');
   const own = argv.slice(0, separator);
   const orcaArgs = argv.slice(separator + 1);
   if (countFlag(own, '--role') !== 1) {
     throw new Error('exactly one --role worker|orchestrator is required');
   }
   if (countFlag(own, '--mode') > 1) throw new Error('at most one --mode is allowed');
+  if (countFlag(own, '--delegated-integration') > 1) {
+    throw new Error('at most one --delegated-integration is allowed');
+  }
   const modeRaw = optionValue(own, '--mode');
   if (modeRaw && modeRaw !== 'exact_terminal_worktree' && modeRaw !== 'provider_new_top_level') {
     throw new Error('--mode must be exact_terminal_worktree|provider_new_top_level');
   }
   const issueNumberRaw = optionValue(own, '--issue-number');
+  const delegatedIntegrationRaw = optionValue(own, '--delegated-integration');
+  let delegatedIntegration: DelegatedIntegrationMarker | undefined;
+  if (delegatedIntegrationRaw) {
+    let parsed: unknown;
+    try { parsed = JSON.parse(delegatedIntegrationRaw); }
+    catch { throw new Error('--delegated-integration must be valid JSON'); }
+    delegatedIntegration = parseDelegatedIntegrationMarker(parsed) ?? undefined;
+    if (!delegatedIntegration) {
+      throw new Error('--delegated-integration must contain exactly prNumber, expectedHeadSha, predecessorAssignmentId, and predecessorGeneration');
+    }
+  }
   return {
     ...(optionValue(own, '--mode') ? { mode: optionValue(own, '--mode') as WorkerStartMode } : {}),
     ...(issueNumberRaw ? { issueNumber: Number(issueNumberRaw) } : {}),
     repository: optionValue(own, '--repository'),
     ...(optionValue(own, '--project-id') ? { projectId: optionValue(own, '--project-id') } : {}),
     role: optionValue(own, '--role'),
+    ...(delegatedIntegration ? { delegatedIntegration } : {}),
     orcaArgs,
   };
 }
