@@ -19,7 +19,7 @@ import { runExecuteIssueManagerBoundaryCli } from '../execute-issue-manager-boun
 
 function trackedProbeStatuses(): ProbeStatus[] {
   const source = readFileSync(join(process.cwd(), 'scripts', 'browser-gpt-page-probe.ts'), 'utf8');
-  const declaration = /export type ProbeStatus =([\\s\\S]*?);/u.exec(source)?.[1];
+  const declaration = /export type ProbeStatus =([\s\S]*?);/u.exec(source)?.[1];
   if (!declaration) throw new Error('ProbeStatus declaration not found');
   return [...declaration.matchAll(/'([^']+)'/gu)].map((match) => match[1] as ProbeStatus);
 }
