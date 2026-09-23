@@ -1079,6 +1079,43 @@ describe('Orca assignment resolution', () => {
     });
   });
 
+  it.each(['retained', 'unknown'] as const)(
+    'admits logical replacement for an exact exited worker when releaseState is %s without treating it as released',
+    (releaseState) => {
+      const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+        expect(args).toEqual(['orchestration', 'worker-show', '--dispatch', 'dispatch-1']);
+        return {
+          ok: true,
+          result: {
+            worker: { agent_terminal_handle: 'term-owned' },
+            terminal: { handle: 'term-owned' },
+            observation: { exactWorker: true, status: 'exited' },
+            terminalResource: {
+              terminalHandle: 'term-owned',
+              worktreeId: 'repo::worktree',
+              originDispatchId: 'dispatch-1',
+              ownerDispatchId: 'dispatch-1',
+              releaseState,
+            },
+          },
+        };
+      });
+      const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+      expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1' })).toEqual({
+        status: 'ok',
+        value: { kind: 'gone', reuseBlockedTerminalId: 'term-owned' },
+      });
+      expect(adapter.observeAssignmentLifecycle({ provider: 'orca', bindingKey: 'dispatch-1' })).toEqual({
+        status: 'ok',
+        value: { kind: 'terminal', released: false },
+      });
+      expect(runJson.mock.calls.some((call) => {
+        const operation = `${call[0]?.[0] ?? ''} ${call[0]?.[1] ?? ''}`;
+        return operation === 'terminal close' || operation === 'terminal release';
+      })).toBe(false);
+    },
+  );
+
   it('classifies an exact exited target as inactive while its terminal remains owned', () => {
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
       if (args[0] === 'terminal' && args[1] === 'show') {

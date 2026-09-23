@@ -152,6 +152,55 @@ describe('supervised worker start exact assignment admission',()=>{
     expect(currentWorkerAssignment(file,1416)?.taskId).toBe('task_new');
   });
 
+  it('rejects exact-terminal reuse when an exited exact worker releaseState is unknown', async () => {
+    const base = root();
+    const env = { ...process.env, OPK_BASE_DIR: base };
+    const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
+    const old = await publishCurrentWorkerAssignment({
+      file,
+      repository: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1416,
+      taskId: 'task_old',
+      kind: 'local',
+      provider: 'orca',
+      bindingKey: 'dispatch_old',
+      role: 'worker',
+    });
+    if (!old.ok) throw new Error(old.reason);
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: true,
+      result: {
+        worker: { agent_terminal_handle: canonicalTerminal },
+        observation: { exactWorker: true, status: 'exited' },
+        terminalResource: {
+          terminalHandle: canonicalTerminal,
+          worktreeId: canonicalWorktree,
+          originDispatchId: 'dispatch_old',
+          ownerDispatchId: 'dispatch_old',
+          releaseState: 'unknown',
+        },
+      },
+    }));
+    let starts = 0;
+    const result = await runSupervisedWorkerStart({
+      role: 'worker',
+      issueNumber: 1416,
+      repository: 'chetwerikoff/orchestrator-pack',
+      env,
+      orcaArgs: args('task_new'),
+      adapter: new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env }),
+      inspect: inspectPlacement(),
+      execute: async () => {
+        starts += 1;
+        return { ok: true, stdout: envelope({ taskId: 'task_new', dispatchId: 'dispatch_new', state: 'ready', effects: producerEffects() }) };
+      },
+    });
+    expect(result).toEqual({ ok: false, reason: 'target_unresolved' });
+    expect(starts).toBe(0);
+    expect(currentWorkerAssignment(file, 1416)).toEqual(old.assignment);
+    expect(runJson.mock.calls.some((call) => call[0]?.slice(0, 2).join(' ') === 'terminal close')).toBe(false);
+  });
+
   it('canonicalizes the requested producer placement and publishes only after a matching real-shape ready receipt',async()=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base};
     const result=await runSupervisedWorkerStart({role:'worker',
@@ -217,6 +266,7 @@ describe('supervised worker start exact assignment admission',()=>{
     if(!old.ok)throw new Error(old.reason); let calls=0;
     const result=await runSupervisedWorkerStart({role:'worker',
       issueNumber:1416,repository:'chetwerikoff/orchestrator-pack',env,orcaArgs:args(),adapter:adapter({kind:'resolved',worker},liveness),
+      inspect:inspectPlacement(),
       execute:async()=>{calls+=1;return{ok:true,stdout:envelope({taskId:'task_1',dispatchId:'dispatch_new',state:'ready',effects:producerEffects()})}},
     });
     expect(result).toEqual({ok:false,reason:'skipped_live'}); expect(calls).toBe(0); expect(currentWorkerAssignment(file,1416)).toEqual(old.assignment);

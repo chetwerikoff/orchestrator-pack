@@ -519,8 +519,12 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
     }
     const observationStatus = parsed.observation?.status?.trim().toLowerCase() ?? '';
-    if (observationStatus === 'exited'
-      && parsed.terminalResource?.releaseState === 'released') {
+    const releaseState = parsed.terminalResource?.releaseState;
+    if (observationStatus === 'exited' && (
+      releaseState === 'released'
+      || releaseState === 'retained'
+      || releaseState === 'unknown'
+    )) {
       const terminalSnapshot = snapshotFromWorkerShow(dispatchId, parsed);
       if (terminalSnapshot) {
         maybeNotifyRunOnTerminalDispatch(terminalSnapshot, {
@@ -532,14 +536,20 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       }
       const resource = parsed.terminalResource;
       const resourceOwner = String(resource?.ownerDispatchId ?? '').trim();
-      const workerId = String(
-        resourceOwner === dispatchId
-          ? resource?.terminalHandle
-          : '',
-      ).trim();
-      const value = workerId
-        ? { kind: 'gone' as const, workerId }
-        : { kind: 'gone' as const };
+      // Only an exact released terminal may carry the historical handle used
+      // for cleanup binding. retained and unknown stay themselves and name the
+      // old terminal only as a reuse denial, never as workerId.
+      const workerId = releaseState === 'released' && resourceOwner === dispatchId
+        ? String(resource?.terminalHandle ?? '').trim()
+        : '';
+      const reuseBlockedTerminalId = (releaseState === 'retained' || releaseState === 'unknown')
+        ? String(resource?.terminalHandle ?? '').trim()
+        : '';
+      const value = {
+        kind: 'gone' as const,
+        ...(workerId ? { workerId } : {}),
+        ...(reuseBlockedTerminalId ? { reuseBlockedTerminalId } : {}),
+      };
       return { status: 'ok', value };
     }
     const activity = classifyWorkerLifecycle(parsed);

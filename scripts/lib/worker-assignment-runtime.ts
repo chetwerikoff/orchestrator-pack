@@ -89,7 +89,13 @@ export type WorkerAssignmentLifecycleObservation =
 
 export type WorkerAssignmentTargetResolution =
   | { readonly status: 'resolved'; readonly assignment: WorkerAssignmentRecord; readonly worker: RuntimeWorker }
-  | { readonly status: 'gone'; readonly assignment: WorkerAssignmentRecord; readonly workerId?: string }
+  | {
+      readonly status: 'gone';
+      readonly assignment: WorkerAssignmentRecord;
+      readonly workerId?: string;
+      /** Old terminal that logical replacement must not reuse. Not cleanup authority. */
+      readonly reuseBlockedTerminalId?: string;
+    }
   | { readonly status: 'remote_not_applicable'; readonly assignment: WorkerAssignmentRecord }
   | { readonly status: 'assignment_stale' | 'assignment_untrusted' | 'runtime_unavailable' | 'target_unresolved' };
 
@@ -245,10 +251,14 @@ export function resolveCurrentWorkerAssignmentTarget(input: {
     const workerId = String(
       (resolved.value as { readonly workerId?: unknown }).workerId ?? '',
     ).trim();
+    const reuseBlockedTerminalId = String(
+      (resolved.value as { readonly reuseBlockedTerminalId?: unknown }).reuseBlockedTerminalId ?? '',
+    ).trim();
     return {
       status: 'gone',
       assignment: current,
       ...(workerId ? { workerId } : {}),
+      ...(reuseBlockedTerminalId ? { reuseBlockedTerminalId } : {}),
     };
   }
   return { status: 'resolved', assignment: current, worker: resolved.value.worker };
@@ -283,6 +293,18 @@ export async function admitCurrentWorkerAssignmentReplacement(input: {
       timeoutMs: input.timeoutMs,
     });
     if (target.status === 'gone') {
+      const blockedTerminalId = target.reuseBlockedTerminalId?.trim() ?? '';
+      const requestedTerminalId = input.requestedTerminalId?.trim() ?? '';
+      if (
+        blockedTerminalId
+        && requestedTerminalId
+        && sameTerminalHandle(requestedTerminalId, blockedTerminalId)
+      ) {
+        return {
+          status: 'target_unresolved',
+          reason: 'terminal_reuse_unauthorized',
+        } as const;
+      }
       return { status: 'replaceable', expected: input.expected } as const;
     }
     if (target.status === 'resolved') {
