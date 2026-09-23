@@ -87,6 +87,9 @@ function depsFor(
       submitted.push(identity);
       return { status: 'dispatched' as const };
     }),
+    composerFamily: extra.composerFamily ?? (() => extra.composerControl
+      ? { status: 'known' as const, family: 'opencode' as const, command: 'opencode --fixture', provenance: 'orca-terminal-show' as const }
+      : { status: 'known' as const, family: 'non-opencode' as const, command: 'cursor-agent --fixture', provenance: 'orca-terminal-show' as const }),
     composerControl: extra.composerControl,
     now: extra.now,
     sleep: extra.sleep,
@@ -932,6 +935,80 @@ describe('delivery-triggered composer submission', () => {
     expect(writes).toBe(0);
     expect(submitted).toHaveLength(0);
     expect(result.terminals[0]).toMatchObject({ reason: 'worker_gone', enter: false });
+  });
+
+  it('fails positive OpenCode evidence closed when HTTP control is unbound', async () => {
+    const target = worker('term_opencode_control_unbound');
+    let reads = 0;
+    let submits = 0;
+    const message = {
+      id: 'msg_opencode_control_unbound',
+      runId: 'run_opencode_control_unbound',
+      recipient: target.identity.id,
+      consumed: false,
+    };
+    const result = await submitOrcaMessageDeliveryPointer(message.id, {
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      submitDeps: depsFor({}, {
+        composerFamily: () => ({
+          status: 'known' as const,
+          family: 'opencode' as const,
+          command: 'opencode --agent pack-opk-fixture',
+          provenance: 'orca-terminal-show' as const,
+        }),
+        read: () => {
+          reads += 1;
+          return { ok: true as const, lines: ['cursor-shaped fallback must stay unread'], source: 'screen' as const };
+        },
+        submitResult: () => {
+          submits += 1;
+          return { status: 'dispatched' as const };
+        },
+      }),
+      episodeState: { messages: {}, episodes: {} },
+    });
+
+    expect(result.terminals[0]).toMatchObject({ reason: 'opencode_control_unbound', enter: false, ok: false });
+    expect(reads).toBe(0);
+    expect(submits).toBe(0);
+  });
+
+  it('fails ambiguous composer-family evidence before Cursor parsing or Enter', async () => {
+    const target = worker('term_composer_family_ambiguous');
+    let reads = 0;
+    let submits = 0;
+    const message = {
+      id: 'msg_composer_family_ambiguous',
+      runId: 'run_composer_family_ambiguous',
+      recipient: target.identity.id,
+      consumed: false,
+    };
+    const result = await submitOrcaMessageDeliveryPointer(message.id, {
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      submitDeps: depsFor({}, {
+        composerFamily: () => ({
+          status: 'unbound' as const,
+          reason: 'runtime_composer_family_ambiguous',
+          command: 'wrapper-opencode',
+          provenance: 'orca-terminal-show' as const,
+        }),
+        read: () => {
+          reads += 1;
+          return { ok: true as const, lines: ['→ Add a follow-up'], source: 'screen' as const };
+        },
+        submitResult: () => {
+          submits += 1;
+          return { status: 'dispatched' as const };
+        },
+      }),
+      episodeState: { messages: {}, episodes: {} },
+    });
+
+    expect(result.terminals[0]).toMatchObject({ reason: 'runtime_composer_family_ambiguous', enter: false, ok: false });
+    expect(reads).toBe(0);
+    expect(submits).toBe(0);
   });
 
   it('delivers through the visible OpenCode panel and proves the render', async () => {
