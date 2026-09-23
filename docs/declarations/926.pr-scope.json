@@ -1,0 +1,36 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 926,
+  "declared_paths": [
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "AGENTS.md",
+    "docs/chat-executor-rules.md",
+    "docs/declarations/926.pr-scope.json",
+    "docs/orchestration-runbook.md",
+    "docs/pack-review-waiver-merge-runbook.md",
+    "scripts/lib/worker-assignment-store.test.ts",
+    "scripts/lib/worker-assignment-store.ts",
+    "scripts/pr2-foundation/supervised-worker-start.test.ts",
+    "scripts/pr2-foundation/supervised-worker-start.ts"
+  ],
+  "denylist": [
+    ".github/workflows/",
+    "credentials/",
+    "docs/merge-triage-gate.mjs",
+    "packages/core/",
+    "scripts/gh",
+    "scripts/lib/pack-review-delivery.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/merge-with-local-adoption/",
+    ".cursor/skills/merge-with-local-adoption/",
+    "AGENTS.md",
+    "docs/",
+    "scripts/"
+  ],
+  "source_revision": "f7ba993596d7d6a575dec0acc5551b4e7190ff69"
+}
