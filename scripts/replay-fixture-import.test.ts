@@ -1,6 +1,6 @@
 // @vitest-ci-lane light
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -227,6 +227,45 @@ describe('committed transport-shape regression', () => {
     expect(scrubbed.scrubRules).toEqual([]);
     const envelope = JSON.parse(scrubbed.bytes.toString('utf8')) as Record<string, unknown>;
     expect(classifyReconciliationTransport(envelope, 1)).toMatchObject({
+      terminalClassification: 'incident',
+      sendCount: 0,
+      retryClass: 'eligible-zero-send',
+    });
+  });
+});
+
+describe('operator-local AC2 evidence', () => {
+  const source = process.env.OPK_ISSUE_2005_AC2_SOURCE ?? resolve(process.env.HOME ?? '', '.local/state/create-issue-draft/.review/926/terminal-competitive-01-final.json');
+
+  it.skipIf(!existsSync(source))('imports the exact Issue #926 source and preserves its classified transport shape', () => {
+    const output = join(tempDir(), 'terminal-competitive-01-final.json');
+    const result = importReplayFixture({
+      inputPath: source,
+      outputPath: output,
+      sourceKind: 'browser-turn-recurrence',
+      issue: 2005,
+      stage: 'ac2-operator-local-evidence',
+      slot: 'source-artifact',
+      capturedAt: '2026-09-23T00:00:00.000Z',
+    });
+    const fixture = readFileSync(output);
+    const sidecar = JSON.parse(readFileSync(result.sidecarPath, 'utf8')) as Record<string, unknown>;
+
+    expect(result.sourceSha256).toBe('a318c3c17cd876ba4316984498f627e8de0af7b25a8293995ee963d362141124');
+    expect(result.scrubbedSha256).toBe('b245faac177a09a0328703e91c9f31e1ca110d23471d27521cced9e684433095');
+    expect(result.scrubRules).toEqual(['home-root']);
+    expect(scanReplayFixtureSensitivePatterns(fixture)).toEqual([]);
+    expect(sidecar).toMatchObject({
+      source_kind: 'browser-turn-recurrence',
+      issue: 2005,
+      stage: 'ac2-operator-local-evidence',
+      slot: 'source-artifact',
+      source_sha256: result.sourceSha256,
+      scrubbed_sha256: sha256ReplayFixtureBytes(fixture),
+      scrub_rules: ['home-root'],
+      synthetic: false,
+    });
+    expect(classifyReconciliationTransport(JSON.parse(fixture.toString('utf8')) as Record<string, unknown>, 1)).toMatchObject({
       terminalClassification: 'incident',
       sendCount: 0,
       retryClass: 'eligible-zero-send',
