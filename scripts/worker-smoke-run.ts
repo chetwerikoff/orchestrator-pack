@@ -2153,10 +2153,125 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   }
 }
 
-async function runDetachedBootstrap(argv: readonly string[], options: CliOptions): Promise<number> {
-  if (options.detachedOwner || options.runId) throw new Error('detached bootstrap may not supply --detached-owner or --run');
+export type DetachedSmokeAttemptObservation =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'active'; readonly runId: string; readonly artifactDir: string }
+  | { readonly kind: 'terminal'; readonly runId: string; readonly artifactDir: string; readonly result: SmokeReport['result'] }
+  | { readonly kind: 'untrusted'; readonly reason: string };
+
+export interface DetachedSmokeStartResult {
+  readonly ok: boolean;
+  readonly runId?: string;
+  readonly reason?: string;
+}
+
+function detachedSmokeRunRoot(repoRoot: string): string {
+  return join(repoRoot, '.orca-worker-smoke', 'runs');
+}
+
+function exactDetachedSmokeTask(
+  lifecycle: NonNullable<ReturnType<typeof readSmokeLifecycleRegistry>>,
+  input: { readonly issueNumber: number; readonly prNumber: number; readonly headSha: string },
+): boolean {
+  return lifecycle.issueNumber === input.issueNumber
+    && lifecycle.prNumber === input.prNumber
+    && lifecycle.headSha === input.headSha.trim().toLowerCase();
+}
+
+export function observeDetachedSmokeAttempt(input: {
+  readonly cwd: string;
+  readonly issueNumber: number;
+  readonly prNumber: number;
+  readonly headSha: string;
+}): DetachedSmokeAttemptObservation {
+  const root = detachedSmokeRunRoot(input.cwd);
+  if (!existsSync(root)) return { kind: 'absent' };
+  let entries: ReturnType<typeof readdirSync>;
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return { kind: 'untrusted', reason: 'detached_smoke_lifecycle_root_unreadable' };
+  }
+  const matching: Array<{
+    lifecycle: NonNullable<ReturnType<typeof readSmokeLifecycleRegistry>>;
+    artifactDir: string;
+  }> = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const artifactDir = join(root, entry.name);
+    const lifecycle = readSmokeLifecycleRegistry(artifactDir);
+    if (!lifecycle) return { kind: 'untrusted', reason: `detached_smoke_lifecycle_unreadable:${entry.name}` };
+    if (lifecycle.runId !== entry.name) return { kind: 'untrusted', reason: `detached_smoke_run_binding_mismatch:${entry.name}` };
+    if (exactDetachedSmokeTask(lifecycle, input)) matching.push({ lifecycle, artifactDir });
+  }
+  if (matching.length === 0) return { kind: 'absent' };
+
+  const active = matching.filter(({ lifecycle }) =>
+    lifecycle.launcherTerminalizedAtMs === undefined || !lifecycle.finalEvidencePath);
+  if (active.length > 1) return { kind: 'untrusted', reason: 'detached_smoke_duplicate_active_attempts' };
+  if (active.length === 1) {
+    return { kind: 'active', runId: active[0]!.lifecycle.runId, artifactDir: active[0]!.artifactDir };
+  }
+
+  const terminal = [...matching].sort((left, right) =>
+    right.lifecycle.createdAtMs - left.lifecycle.createdAtMs)[0]!;
+  const { lifecycle, artifactDir } = terminal;
+  const mode = lifecycle.mode === 'no_execution' ? 'no_execution' : 'runtime';
+  const expectedTerminalState = mode === 'no_execution'
+    ? lifecycle.spawnState === 'no_execution_terminal'
+    : lifecycle.spawnState === 'clean' || lifecycle.spawnState === 'cleanup_failed';
+  if (!expectedTerminalState
+      || !lifecycle.finalEvidencePath
+      || resolve(lifecycle.finalEvidencePath) !== resolve(smokeRunFinalEvidencePath(artifactDir))) {
+    return { kind: 'untrusted', reason: 'detached_smoke_terminal_state_invalid' };
+  }
+  const evidence = readWorkerSmokeRunFinalEvidence({
+    artifactDir,
+    runId: lifecycle.runId,
+    issueNumber: input.issueNumber,
+    prNumber: input.prNumber,
+    headSha: input.headSha,
+    mode,
+  });
+  if (!evidence
+      || evidence.runId !== lifecycle.runId
+      || evidence.report.result !== evidence.result
+      || !verifySmokeRunReceipt(evidence.report, lifecycle.runId, lifecycle.runId)) {
+    return { kind: 'untrusted', reason: 'detached_smoke_final_evidence_invalid' };
+  }
+  return { kind: 'terminal', runId: lifecycle.runId, artifactDir, result: evidence.result };
+}
+
+function replaceCliArgument(argv: readonly string[], name: string, value: string): string[] {
+  const result = [...argv];
+  const index = result.indexOf(name);
+  if (index < 0 || index + 1 >= result.length) throw new Error(`detached bootstrap missing ${name}`);
+  result[index + 1] = value;
+  return result;
+}
+
+async function startDetachedSmokeOwner(
+  argv: readonly string[],
+  options: CliOptions,
+): Promise<DetachedSmokeStartResult> {
+  if (options.detachedOwner || options.runId) {
+    return { ok: false, reason: 'detached_bootstrap_ownership_flags_invalid' };
+  }
   const runId = createSmokeRunIdentity();
-  const childArgs = argv.filter((value) => value !== '--detach');
+  const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
+  ensureSmokeRunArtifactDir(artifactDir);
+  const durableIssueBodyFile = join(artifactDir, 'issue-body.input.md');
+  try {
+    writeFileSync(durableIssueBodyFile, readFileSync(options.issueBodyFile, 'utf8'), 'utf8');
+  } catch {
+    return { ok: false, runId, reason: 'detached_smoke_issue_body_copy_failed' };
+  }
+  let childArgs = argv.filter((value) => value !== '--detach');
+  try {
+    childArgs = replaceCliArgument(childArgs, '--issue-body-file', durableIssueBodyFile);
+  } catch {
+    return { ok: false, runId, reason: 'detached_smoke_issue_body_binding_missing' };
+  }
   childArgs.push('--detached-owner', '--run', runId);
   const env = { ...process.env };
   delete env.WORKER_SMOKE_WRAPPER_STATE_FILE;
@@ -2178,22 +2293,57 @@ async function runDetachedBootstrap(argv: readonly string[], options: CliOptions
     timeoutMs: 10_000,
   });
   if (!detached.ok || !/^\d+$/u.test(detached.stdout.trim())) {
-    process.stderr.write('worker_smoke_detach_spawn_failed\n');
-    return 1;
+    return { ok: false, runId, reason: 'worker_smoke_detach_spawn_failed' };
   }
 
-  const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
   const deadline = Date.now() + SMOKE_CREATE_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const lifecycle = readSmokeLifecycleRegistry(artifactDir);
     if (lifecycle?.runId === runId) {
-      process.stdout.write(`${runId}\n`);
-      return 0;
+      if (!exactDetachedSmokeTask(lifecycle, options)) {
+        return { ok: false, runId, reason: 'detached_smoke_lifecycle_task_mismatch' };
+      }
+      return { ok: true, runId };
     }
     await sleepAsync(SMOKE_LIFECYCLE_POLL_MS);
   }
-  process.stderr.write('worker_smoke_detach_lifecycle_timeout\n');
-  return 1;
+  return { ok: false, runId, reason: 'worker_smoke_detach_lifecycle_timeout' };
+}
+
+function detachedRunArgv(options: CliOptions): string[] {
+  const args = [
+    'run',
+    '--issue', String(options.issueNumber),
+    '--pr', String(options.prNumber),
+    '--head-sha', options.headSha,
+    '--issue-body-file', options.issueBodyFile,
+    '--smoke-complexity', options.smokeComplexity,
+    '--smoke-actor', options.smokeActor ?? 'worker-owned',
+    '--repo-root', options.repoRoot,
+    '--cwd', options.cwd,
+  ];
+  if (options.operatorSmokeOnly) args.push('--operator-smoke-only');
+  if (options.operatorOverrideReason) args.push('--operator-override', options.operatorOverrideReason);
+  if (options.dryRun) args.push('--dry-run');
+  if (options.json) args.push('--json');
+  if (options.reviewId) args.push('--review-id', options.reviewId);
+  if (options.reviewHeadSha) args.push('--review-head-sha', options.reviewHeadSha);
+  args.push('--detach');
+  return args;
+}
+
+export async function startDetachedSmokeAttempt(options: CliOptions): Promise<DetachedSmokeStartResult> {
+  return startDetachedSmokeOwner(detachedRunArgv(options), options);
+}
+
+async function runDetachedBootstrap(argv: readonly string[], options: CliOptions): Promise<number> {
+  const result = await startDetachedSmokeOwner(argv, options);
+  if (!result.ok || !result.runId) {
+    process.stderr.write(`${result.reason ?? 'worker_smoke_detach_start_failed'}\n`);
+    return 1;
+  }
+  process.stdout.write(`${result.runId}\n`);
+  return 0;
 }
 
 export async function runSmokeWait(options: CliOptions): Promise<number> {
