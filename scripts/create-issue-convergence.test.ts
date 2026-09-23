@@ -254,10 +254,14 @@ describe('structured blocked_on manager contract (Issue #2004)', () => {
         '--stage-evidence', evidencePath,
         '--json',
       ]);
-      expect(code).toBe(3);
+      expect(code).toBe(5);
       const output = JSON.parse(logs.at(-1) ?? '{}') as Record<string, unknown>;
-      expect(output.nextAction).toMatchObject({ kind: 'reconcile-stage-read-only' });
+      expect(output).toMatchObject({
+        cause: 'producer_contract_defect',
+        nextAction: null,
+      });
       expect(output).not.toHaveProperty('blocked_on');
+      expect(output).not.toHaveProperty('pause');
     } finally {
       logSpy.mockRestore();
     }
@@ -627,7 +631,6 @@ describe('Issue #1935 sanitized measured convergence replay', () => {
     const continuationLogSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
       continuationLogs.push(String(line));
     });
-    let continuationBlockedOnJson = '';
     try {
       const code = runStageFinalizeCli([
         'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
@@ -638,16 +641,20 @@ describe('Issue #1935 sanitized measured convergence replay', () => {
         '--blocked-on-json', JSON.stringify(blockedOn),
         '--json',
       ], transport);
-      expect(code).toBe(0);
+      expect(code).toBe(4);
       const output = JSON.parse(continuationLogs.at(-1) ?? '{}') as {
-        nextAction?: { kind?: string; argv?: string[] } | null;
+        cause?: string;
+        nextAction?: unknown;
+        pause?: { resume_when?: unknown; evidence?: string };
       };
-      expect(output.nextAction?.kind).toBe('produce-acceptance-artifacts');
-      const argv = output.nextAction?.argv ?? [];
-      const blockedOnIndex = argv.indexOf('--blocked-on-json');
-      expect(blockedOnIndex).toBeGreaterThanOrEqual(0);
-      continuationBlockedOnJson = argv[blockedOnIndex + 1] ?? '';
-      expect(JSON.parse(continuationBlockedOnJson)).toEqual(blockedOn);
+      expect(output).toMatchObject({
+        cause: 'external:waiting_on_issue',
+        nextAction: null,
+        pause: {
+          resume_when: { issue: 1977, condition: 'issue_closed' },
+          evidence: blockedOn.evidence,
+        },
+      });
     } finally {
       continuationLogSpy.mockRestore();
     }
@@ -775,18 +782,21 @@ describe('Issue #1935 sanitized measured convergence replay', () => {
         '--issue-number', String(replay.source.issueNumber),
         '--review-dir', reviewDir,
         '--stage-evidence', evidencePath,
-        '--blocked-on-json', continuationBlockedOnJson,
         '--json',
       ], transport);
-      expect(code).toBe(0);
-      const output = JSON.parse(terminalLogs.at(-1) ?? '{}') as Record<string, unknown>;
+      expect(code).toBe(3);
+      const output = JSON.parse(terminalLogs.at(-1) ?? '{}') as {
+        ok?: boolean;
+        cause?: string;
+        nextAction?: { kind?: string } | null;
+      };
       expect(output).toMatchObject({
-        ok: true,
-        alreadySettled: true,
-        cause: 'completed',
-        nextAction: null,
+        ok: false,
+        cause: 'reconciliation_ready',
+        nextAction: { kind: 'produce-acceptance-artifacts' },
       });
       expect(output).not.toHaveProperty('blocked_on');
+      expect(output).not.toHaveProperty('pause');
     } finally {
       terminalLogSpy.mockRestore();
     }
