@@ -130,6 +130,14 @@ function staleHandoffReceiptResult(
   } catch {
     return null;
   }
+  const binding = createIssueBinding(parseFlagArgv(argv));
+  if (binding) {
+    return emitBrowserManagerResult(argv, createIssueRecoverableResult({
+      cause: 'stale_handoff_receipt',
+      blocker: 'handoff receipt belongs to a different run/attempt identity',
+      nextAction: browserReconcileAction(binding),
+    }));
+  }
   return refuse(argv, 'stale_handoff_receipt');
 }
 
