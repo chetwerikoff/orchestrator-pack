@@ -1,4 +1,6 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { defaultGhTransport, fetchIssueRevision } from './create-issue-stage-record-gh.ts';
 import {
@@ -11,6 +13,7 @@ import {
   ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS,
   bindPublishedCommentToSlot,
   inspectAcceptanceArtifacts,
+  inspectLatestGovernedAuthorDisposition,
   produceAcceptanceArtifacts,
   readCanonicalZeroSendTerminal,
   readEvidenceZeroSendTerminal,
@@ -33,6 +36,13 @@ import {
   type CreateIssueZeroSendReason,
 } from './create-issue-next-action.ts';
 import { resolveCanonicalReviewDirectory } from './stage-completeness-core.ts';
+import { checkTierGateGuard } from './tier-gate-core.ts';
+import { checkContractEvidence } from '../contract-evidence-validator.mjs';
+import {
+  classifyAuthorDispositionFailure,
+  renderAuthorDispositionPromptFragment,
+  type AuthorDispositionDiagnostic,
+} from './create-issue-author-dispositions-schema.ts';
 import type { LifecycleReviewStage } from './create-issue-stage-lifecycle.ts';
 import { isPublicActor, PUBLIC_ACTORS } from './create-issue-stage-record-marker.ts';
 import type { GhTransport, PublicActor } from './create-issue-stage-record-types.ts';
@@ -52,7 +62,7 @@ interface JournalTailCliOptions {
 }
 
 interface StageFinalizeCliOptions extends JournalTailCliOptions {
-  command: 'start-cycle' | 'publish-stage' | 'retry-pending' | 'reconcile-stage' | 'bind-published-comment' | 'produce-artifacts' | 'check-artifacts';
+  command: 'start-cycle' | 'author-round' | 'publish-stage' | 'retry-pending' | 'reconcile-stage' | 'bind-published-comment' | 'produce-artifacts' | 'check-artifacts';
   repo: string;
   issueNumber: number;
   sourceRevision?: string;
@@ -260,6 +270,7 @@ export function stageFinalizeUsage(): string {
   return [
     'Usage:',
     `  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> --stage <competitive|architectural-review|architectural-lens|architectural> --tier <T1|T2|T3> [--competitive-decision <required|skipped> --competitive-rationale <text>] [--stage-attempt-id <retry-id>] [--permitted-lane-override <normal|disputed>] [--public-actor <${[...PUBLIC_ACTORS].join('|')}>] [--predecessor-cycle-id <id>] [--workdir <path>] [--expected-source-revision <rNN> --expected-stage <stage> --expected-stage-attempt-id <id>] [--json]`,
+    '  create-issue-stage-finalize.ts author-round --repo <owner/name> --issue-number <n> --review-dir <canonical-review-dir> --expected-source-revision <rNN> --expected-stage <stage> [--expected-stage-attempt-id <settled-id>] [--json]',
     '  create-issue-stage-finalize.ts publish-stage --repo <owner/name> --issue-number <n> --receipt <path> [--waiver <path>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts retry-pending --repo <owner/name> --issue-number <n> [--workdir <path>] [--expected-source-revision <rNN> --expected-stage <stage> --expected-stage-attempt-id <id>] [--json]',
     '  create-issue-stage-finalize.ts reconcile-stage --repo <owner/name> --issue-number <n> --review-dir <path> --stage-evidence <attempt-NNN.json> [--json]',
@@ -272,7 +283,7 @@ export function stageFinalizeUsage(): string {
 
 export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
   const command = argv[2];
-  if (command !== 'start-cycle' && command !== 'publish-stage' && command !== 'retry-pending' && command !== 'reconcile-stage' && command !== 'bind-published-comment' && command !== 'produce-artifacts' && command !== 'check-artifacts') {
+  if (command !== 'start-cycle' && command !== 'author-round' && command !== 'publish-stage' && command !== 'retry-pending' && command !== 'reconcile-stage' && command !== 'bind-published-comment' && command !== 'produce-artifacts' && command !== 'check-artifacts') {
     throw new Error(`unknown command\n${stageFinalizeUsage()}`);
   }
   const opts: StageFinalizeCliOptions = {
@@ -285,7 +296,8 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
     claudeProducerEvidencePaths: [],
   };
   const artifactCommand = command === 'reconcile-stage' || command === 'bind-published-comment' || command === 'produce-artifacts' || command === 'check-artifacts';
-  const boundActionCommand = artifactCommand || command === 'start-cycle' || command === 'retry-pending';
+  const reviewDirCommand = artifactCommand || command === 'author-round';
+  const boundActionCommand = artifactCommand || command === 'start-cycle' || command === 'author-round' || command === 'retry-pending';
   const requireArtifactCommand = (arg: string): void => {
     if (!artifactCommand) throw new Error(`${arg} is only valid with reconcile-stage, produce-artifacts, or check-artifacts`);
   };
@@ -355,7 +367,7 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
         opts.reviewerSlot = String(argv[++i] ?? '');
         break;
       case '--review-dir':
-        requireArtifactCommand(arg);
+        if (!reviewDirCommand) throw new Error(`${arg} is only valid with an artifact or author-round command`);
         opts.reviewDir = String(argv[++i] ?? '');
         break;
       case '--output-dir':
