@@ -1,0 +1,12 @@
+{
+  "source_kind": "flow-manager-terminal-envelope",
+  "issue": 1979,
+  "stage": "author",
+  "slot": "author",
+  "captured_at": "2026-09-15",
+  "source_sha256": null,
+  "source_unavailable": "historical-backfill",
+  "scrubbed_sha256": "8c2ef055b224485066642849804895f10e346716a85d7de0b048267856623b43",
+  "scrub_rules": [],
+  "synthetic": false
+}

@@ -1,0 +1,12 @@
+{
+  "source_kind": "create-issue-author-reply",
+  "issue": 1978,
+  "stage": "author-disposition",
+  "slot": "author",
+  "captured_at": "2026-09-21",
+  "source_sha256": null,
+  "source_unavailable": "historical-backfill",
+  "scrubbed_sha256": "6967aa2259aa614f9257f73727e264e1682a9e5f8128c216eb3fce9e62a5f49c",
+  "scrub_rules": [],
+  "synthetic": false
+}
