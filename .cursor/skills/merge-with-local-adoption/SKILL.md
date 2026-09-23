@@ -47,7 +47,8 @@ primary-checkout adoption mutation, or task-owned recovery mutation:
    or changed marker state performs no delegated effect. The integration assignment identity
    must differ from its predecessor and match the supervised launch/read-back.
 3. Re-read the live Issue, PR/head/base, `main`, and every concrete explicit dependency.
-   Sequence only explicit task relationships into `merge_now` or `wait_for_dependency`.
+   Sequence only explicit task relationships into `merge_now` or `wait_for_dependency`; when
+   sequencing returns `wait_for_dependency`, launch no integration worker and perform no delegated effect.
    Issue closure is not proof that a dependency landed; broad overlap is not a dependency.
 4. Require no second active delegated integration assignment for the primary checkout. After a
    terminal or proven-inactive predecessor, recompute sequencing, readiness, mergeability,
