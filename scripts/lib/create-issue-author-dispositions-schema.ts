@@ -139,6 +139,12 @@ export function authorDispositionFieldOwnership(field: string): AuthorDispositio
 
 export function classifyAuthorDispositionFailure(message: string): AuthorDispositionOwnership {
   const normalized = message.toLowerCase();
+  const occurrenceLedgerFailure = /(?:references unknown occurrence|occurrence .+ maps more than once|occurrence .+ is not mapped exactly once|ledger row .+ has no mapped occurrence)/i.test(normalized);
+  if (occurrenceLedgerFailure) return 'author-owned';
+
+  const governedCaptureIntegrityFailure = /^review-economics:\s*(?:supplied capture text count must equal governedcaptureunion|supplied capture .+ is not governed|governed capture .+ supplied more than once|capture .+ (?:name|bytelength|sha256|rawfindingcount) mismatch|governed capture .+ has no supplied immutable text)/i.test(normalized);
+  if (governedCaptureIntegrityFailure) return 'lifecycle-injected';
+
   if (
     normalized.includes('omitted required occurrence')
     || normalized.includes('duplicate occurrence')

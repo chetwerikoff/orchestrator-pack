@@ -45,6 +45,7 @@ import {
   AUTHOR_FINDING_TYPES,
   DEFECT_DISPOSITION_VALUES as AUTHOR_DEFECT_DISPOSITIONS,
   REMEDY_DISPOSITION_VALUES as AUTHOR_REMEDY_DISPOSITIONS,
+  authorDispositionDiagnosticFromFailure,
   classifyAuthorDispositionFailure,
   parseGovernedAuthorDispositionText,
   renderAuthorDispositionPromptFragment,
@@ -4374,6 +4375,39 @@ describe('Issue #1997 single author-disposition schema owner', () => {
     expect(classifyAuthorDispositionFailure('terminalResultIdentity is missing')).toBe('lifecycle-injected');
     expect(classifyAuthorDispositionFailure('missing_schema_label:schema-label')).toBe('author-owned');
   });
+
+  it('classifies production occurrence-ledger errors as author-owned field diagnostics', () => {
+    const failures = [
+      'review-economics: occurrence sha256:abc is not mapped exactly once',
+      'review-economics: occurrence sha256:abc maps more than once',
+      'review-economics: ledger row F1 references unknown occurrence sha256:abc',
+      'review-economics: receipt-backed ledger row F1 has no mapped occurrence',
+    ];
+    for (const failure of failures) {
+      expect(classifyAuthorDispositionFailure(failure)).toBe('author-owned');
+      expect(authorDispositionDiagnosticFromFailure(failure)).toMatchObject({
+        ownership: 'author-owned',
+        field: 'findings[].occurrences',
+      });
+    }
+  });
+
+  it('classifies governed capture-integrity errors as lifecycle-injected failures', () => {
+    const failures = [
+      'review-economics: supplied capture text count must equal governedCaptureUnion',
+      'review-economics: supplied capture pass-02-architectural.capture.txt is not governed',
+      'review-economics: governed capture sha256:abc supplied more than once',
+      'review-economics: capture sha256:abc name mismatch',
+      'review-economics: capture sha256:abc byteLength mismatch',
+      'review-economics: capture sha256:abc sha256 mismatch',
+      'review-economics: capture sha256:abc rawFindingCount mismatch',
+      'review-economics: governed capture sha256:abc has no supplied immutable text',
+    ];
+    for (const failure of failures) {
+      expect(classifyAuthorDispositionFailure(failure)).toBe('lifecycle-injected');
+      expect(authorDispositionDiagnosticFromFailure(failure)).toBeNull();
+    }
+  });
 });
 
 
@@ -4457,6 +4491,59 @@ describe('Issue #1997 producer continuation routing', () => {
     const { code, output } = runArtifactCli(input, source);
     expect(code).toBe(1);
     expect(String(output.blocker)).toMatch(/terminal must be boolean|invocation\[0\]\.terminal/i);
+    expect(output.nextAction).toBeNull();
+  });
+
+  it.each([
+    'review-economics: occurrence sha256:abc is not mapped exactly once',
+    'review-economics: occurrence sha256:abc maps more than once',
+    'review-economics: ledger row F1 references unknown occurrence sha256:abc',
+  ])('routes occurrence-ledger error to author-round: %s', (ledgerError) => {
+    const input = fixture({
+      transportClassification: 'complete',
+      withTurnResult: true,
+      withCapture: true,
+    });
+    vi.mocked(checkFindingLedgerGuard).mockReturnValueOnce({
+      ok: false,
+      errors: [ledgerError],
+      ledger: { version: 1, draft: null, counts: null, findings: [] },
+      captureFindings: [],
+      protectedSignals: [],
+    });
+    const { code, output } = runArtifactCli(input, transport({
+      census: [...input.reviewComments, comment(input.body)],
+    }));
+    expect(code).toBe(1);
+    expect(output.authorDiagnostics).toMatchObject([{
+      reason: 'invalid_author_field',
+      ownership: 'author-owned',
+      field: 'findings[].occurrences',
+    }]);
+    expect(output.authorSchemaFragment).toBe(renderAuthorDispositionPromptFragment());
+    expect(output.nextAction.kind).toBe('author-round');
+  });
+
+  it('does not retry or author-round on governed capture-integrity failure', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      withTurnResult: true,
+      withCapture: true,
+    });
+    const failure = 'review-economics: supplied capture pass-02-architectural.capture.txt is not governed';
+    vi.mocked(checkFindingLedgerGuard).mockReturnValueOnce({
+      ok: false,
+      errors: [failure],
+      ledger: { version: 1, draft: null, counts: null, findings: [] },
+      captureFindings: [],
+      protectedSignals: [],
+    });
+    const { code, output } = runArtifactCli(input, transport({
+      census: [...input.reviewComments, comment(input.body)],
+    }));
+    expect(code).toBe(1);
+    expect(output.blocker).toContain(failure);
+    expect(output.authorDiagnostics).toBeUndefined();
     expect(output.nextAction).toBeNull();
   });
 });
