@@ -9,6 +9,7 @@ import {
   createIssueRecoverableResult,
   createIssueTerminalResult,
   existingPacedBoundedRetryAction,
+  projectBlockedOnToExternalPause,
   projectZeroSendManagerResult,
   validateCreateIssueBlockedOn,
   validateCreateIssueManagerResult,
@@ -55,7 +56,7 @@ const binding: CreateIssueActionBinding = {
 describe('create-Issue nextAction contract', () => {
   it('uses one validated argv-bearing action shape and terminal null shape', () => {
     const action = createIssueNextAction({
-      kind: 'reconcile-stage',
+      kind: 'reconcile-stage-read-only',
       binding,
       argv: ['node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage'],
     });
@@ -67,27 +68,28 @@ describe('create-Issue nextAction contract', () => {
       nextAction: action,
     });
     expect(validateCreateIssueManagerResult(recoverable)).toEqual([]);
-    const terminal = createIssueTerminalResult({ ok: false, cause: 'external_prerequisite' });
+    const terminal = createIssueTerminalResult({ ok: true, cause: 'completed' });
     expect(terminal).toEqual({
-      ok: false,
-      cause: 'external_prerequisite',
+      ok: true,
+      cause: 'completed',
       nextAction: null,
     });
     expect(validateCreateIssueManagerResult(terminal)).toEqual([]);
-    expect(validateCreateIssueManagerResult({ ok: false, nextAction: null })).toContain(
-      'manager non-success result.cause must be non-empty',
+    expect(validateCreateIssueManagerResult({ ok: false, cause: 'stuck', nextAction: null })).toContain(
+      'recoverable manager result.nextAction must be non-null',
     );
   });
 
   it('returns canonical stale_next_action when any state binding moves', () => {
     const action = createIssueNextAction({
-      kind: 'reconcile-stage',
+      kind: 'reconcile-stage-read-only',
       binding,
       argv: ['node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage'],
     });
     const stale = assertCreateIssueActionCurrent({
       action,
       observed: { ...binding, sourceRevision: 'r04' },
+      nextAction: action,
     });
     expect(stale).toMatchObject({
       ok: false,
@@ -95,7 +97,7 @@ describe('create-Issue nextAction contract', () => {
       cause: 'stale_next_action',
       binding,
       observed: { sourceRevision: 'r04' },
-      nextAction: null,
+      nextAction: action,
     });
     expect(validateCreateIssueManagerResult(stale)).toEqual([]);
   });
@@ -135,14 +137,22 @@ describe('structured blocked_on manager contract (Issue #2004)', () => {
   it('accepts only the two selector-compatible closed predicate variants', () => {
     expect(validateCreateIssueBlockedOn(issueBlockedOn)).toEqual([]);
     expect(validateCreateIssueBlockedOn(prBlockedOn)).toEqual([]);
-    expect(createIssueTerminalResult({
+    expect(projectBlockedOnToExternalPause(issueBlockedOn)).toMatchObject({
       ok: false,
-      cause: 'external_prerequisite',
-      blockedOn: issueBlockedOn,
-    })).toEqual({
+      cause: 'external:waiting_on_issue',
+      pause: {
+        resume_when: { issue: 1977, condition: 'issue_closed' },
+        evidence: issueBlockedOn.evidence,
+      },
+      nextAction: null,
+    });
+    expect(projectBlockedOnToExternalPause(prBlockedOn)).toMatchObject({
       ok: false,
-      cause: 'external_prerequisite',
-      blocked_on: issueBlockedOn,
+      cause: 'external:waiting_on_pr',
+      pause: {
+        resume_when: { pr: 1885, condition: 'pr_merged' },
+        evidence: prBlockedOn.evidence,
+      },
       nextAction: null,
     });
 
@@ -164,17 +174,18 @@ describe('structured blocked_on manager contract (Issue #2004)', () => {
       cause: 'external_prerequisite',
       blocked_on: issueBlockedOn,
       nextAction: createIssueNextAction({
-        kind: 'reconcile-stage',
+        kind: 'reconcile-stage-read-only',
         binding,
         argv: ['node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage'],
       }),
-    })).toContain('manager result.blocked_on requires nextAction=null');
+    })).toContain('manager result.blocked_on is retired; project the coordinator-supplied predicate to external_pause');
 
     expect(validateCreateIssueManagerResult({
       ok: true,
+      cause: 'completed',
       blocked_on: issueBlockedOn,
       nextAction: null,
-    })).toEqual([]);
+    })).toContain('manager result.blocked_on is retired; project the coordinator-supplied predicate to external_pause');
   });
 
   it.each([
@@ -204,10 +215,17 @@ describe('structured blocked_on manager contract (Issue #2004)', () => {
         '--blocked-on-json', JSON.stringify(blockedOn),
         '--json',
       ]);
-      expect(code).toBe(1);
+      expect(code).toBe(4);
       const output = JSON.parse(logs.at(-1) ?? '{}') as Record<string, unknown>;
       expect(output.nextAction).toBeNull();
-      expect(output.blocked_on).toEqual(blockedOn);
+      expect(output).not.toHaveProperty('blocked_on');
+      expect(output.cause).toBe('issue' in blockedOn ? 'external:waiting_on_issue' : 'external:waiting_on_pr');
+      expect(output.pause).toMatchObject({
+        resume_when: 'issue' in blockedOn
+          ? { issue: blockedOn.issue, condition: 'issue_closed' }
+          : { pr: blockedOn.pr, condition: 'pr_merged' },
+        evidence: blockedOn.evidence,
+      });
     } finally {
       logSpy.mockRestore();
     }
@@ -236,9 +254,9 @@ describe('structured blocked_on manager contract (Issue #2004)', () => {
         '--stage-evidence', evidencePath,
         '--json',
       ]);
-      expect(code).toBe(1);
+      expect(code).toBe(3);
       const output = JSON.parse(logs.at(-1) ?? '{}') as Record<string, unknown>;
-      expect(output.nextAction).toBeNull();
+      expect(output.nextAction).toMatchObject({ kind: 'reconcile-stage-read-only' });
       expect(output).not.toHaveProperty('blocked_on');
     } finally {
       logSpy.mockRestore();
@@ -261,7 +279,7 @@ describe('structured blocked_on manager contract (Issue #2004)', () => {
         }),
         '--json',
       ]);
-      expect(code).toBe(2);
+      expect(code).toBe(5);
       expect(stderr.mock.calls.flat().join('')).toContain('--blocked-on-json is invalid');
     } finally {
       stderr.mockRestore();
