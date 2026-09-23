@@ -309,7 +309,7 @@ may remain a transport/evidence wrapper for routed browser stages, but it may no
 change the canonical create-issue stage plan or reduce a fixed three-source
 stage.
 
-- `node --experimental-strip-types scripts/create-issue-stage-finalize.ts start-cycle`
+- `node --experimental-strip-types scripts/create-issue-stage-finalize.ts start-cycle --public-actor <actor>`
   performs launch admission from the live Issue, `tier-intake/v1`, and the full
   canonical receipt chain before it mints the new cycle/stage attempt and
   bootstraps the `spec-review:in-progress` projection.
@@ -325,7 +325,7 @@ stage.
   `retry-pending` path; stale, consumed, exhausted, conflicting, or externally
   blocked states return `nextAction: null`. A bound action is revalidated
   before projection/journal mutation.
-- `node --experimental-strip-types scripts/create-issue-final-acceptance.ts`
+- `node --experimental-strip-types scripts/create-issue-final-acceptance.ts --public-actor <actor>`
   executes tier-gate, stage-completeness, lifecycle-topology, and finding-ledger
   guards directly, then alone writes `create-issue-final-acceptance/v1` and
   synchronizes `spec-review:accepted` after event confirmation. An external PASS
@@ -1193,13 +1193,13 @@ contract above.
 ```bash
 node scripts/create-issue-stage-finalize.ts start-cycle \
   --repo <owner/name> --issue-number <N> --source-revision <rNN> \
-  [--stage-attempt-id <stageAttemptId>] --tier <T1|T2|T3> [--permitted-lane-override <normal|disputed>]
+  [--stage-attempt-id <stageAttemptId>] --tier <T1|T2|T3> --public-actor <actor> [--permitted-lane-override <normal|disputed>]
 
 node scripts/create-issue-stage-finalize.ts publish-stage \
   --repo <owner/name> --issue-number <N> --receipt "$REVIEW_DIR/<stage-receipt>.json"
 
 node scripts/create-issue-final-acceptance.ts \
-  --repo <owner/name> --issue-number <N> --review-dir "$REVIEW_DIR" --json
+  --repo <owner/name> --issue-number <N> --review-dir "$REVIEW_DIR" --public-actor <actor> --json
 ```
 
 ## Don't

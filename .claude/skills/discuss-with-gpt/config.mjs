@@ -1,6 +1,6 @@
 // Operator configuration for discuss-with-gpt (env + optional local file).
-// Required: projectUrl, chromeUserDataDir
-// Optional: chromePath (WSL default: standard Chrome install under /mnt/c)
+// Manager/CDP required: projectUrl, chromeUserDataDir
+// Launcher-only required: chromePath (operator supplied; no synthetic default)
 
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -32,21 +32,28 @@ function pick(key, local) {
   return undefined;
 }
 
-export function resolveDiscussWithGptConfig({ requireProjectUrl = true, requireProfile = true } = {}) {
+export function resolveDiscussWithGptConfig({ requireProjectUrl = true, requireProfile = true, requireChromePath = false } = {}) {
   const local = loadLocalConfig();
   const projectUrl = pick('projectUrl', local);
   const chromeUserDataDir = pick('chromeUserDataDir', local);
-  const chromePath =
-    pick('chromePath', local) || '/mnt/c/Program Files/Google/Chrome/Application/chrome.exe';
+  const chromePath = pick('chromePath', local);
 
   const missing = [];
   if (requireProjectUrl && !projectUrl) missing.push(ENV.projectUrl);
   if (requireProfile && !chromeUserDataDir) missing.push(ENV.chromeUserDataDir);
 
+  if (requireChromePath && !chromePath) {
+    const err = new Error(
+      `discuss-with-gpt: chromePath is required to launch Chrome. Set ${ENV.chromePath} or chromePath in ${LOCAL_CONFIG}.`,
+    );
+    err.code = 'CONFIG_MISSING';
+    throw err;
+  }
+
   if (missing.length) {
     const hint =
       `Set ${missing.join(' and ')}` +
-      `, or copy local.config.example.json → local.config.json in this skill dir.`;
+      `, or set the corresponding field in ${LOCAL_CONFIG}.`;
     const err = new Error(`discuss-with-gpt: operator configuration missing. ${hint}`);
     err.code = 'CONFIG_MISSING';
     throw err;
@@ -59,7 +66,7 @@ export function resolveDiscussWithGptConfig({ requireProjectUrl = true, requireP
 if (process.argv.includes('--shell')) {
   let cfg;
   try {
-    cfg = resolveDiscussWithGptConfig();
+    cfg = resolveDiscussWithGptConfig({ requireChromePath: true });
   } catch (e) {
     console.error((e && e.message) || e);
     process.exit(1);

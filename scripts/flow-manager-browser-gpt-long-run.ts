@@ -17,9 +17,15 @@ import {
   createIssueNextAction,
   createIssueRecoverableResult,
   createIssueStaleNextAction,
+  createIssueTerminalResult,
+  validateCreateIssueManagerResult,
   type CreateIssueActionBinding,
   type CreateIssueSemanticStage,
 } from './lib/create-issue-next-action.ts';
+import {
+  inspectManagerCliInvocation,
+  type ManagerCliDeclaration,
+} from './lib/manager-cli-contract.ts';
 import {
   inspectLifecycleInvocationBinding,
   recordLifecycleInvocationAdmission,
@@ -32,20 +38,97 @@ const launcherPath = join(repoRoot, 'scripts/flow-manager-long-running-child.ts'
 const browserEntry = join(repoRoot, 'scripts/chatgpt-browser-turn/state-light-entry.ts');
 const adapterPath = join(repoRoot, 'scripts/flow-manager-browser-gpt-long-run.ts');
 
+const FLOW_MANAGER_BROWSER_GPT_CLI = {
+  program: 'flow-manager-browser-gpt-long-run.ts',
+  options: [
+    { flag: '--run-identity', value: 'id', required: true },
+    { flag: '--attempt-identity', value: 'id', required: true },
+    { flag: '--handoff-receipt', value: 'path', required: true },
+    { flag: '--invocation-id', value: 'id', required: true },
+    { flag: '--terminal-envelope', value: 'path', required: true },
+    { flag: '--output', value: 'path', required: true },
+    { flag: '--profile', value: 'key', required: true },
+    { flag: '--cdp', value: 'url', required: true },
+    { flag: '--input', value: 'path', required: true },
+    { flag: '--cwd', value: 'path' },
+    { flag: '--reviewer-source-output', value: 'path' },
+    { flag: '--reviewer-source', value: 'source' },
+    { flag: '--repository', value: 'owner/name' },
+    { flag: '--issue-number', value: 'n' },
+    { flag: '--source-revision', value: 'rNN' },
+    { flag: '--stage', value: 'stage', values: ['competitive', 'architectural-review', 'architectural-lens', 'architectural'] },
+    { flag: '--source-slot', value: 'slot', values: ['01', '02', '03'] },
+    { flag: '--stage-attempt-id', value: 'id' },
+    { flag: '--terminal-input-bundle', value: 'path' },
+    { flag: '--review-dir', value: 'path' },
+    { flag: '--project-url', value: 'url' },
+    { flag: '--operator-browser-config', value: 'absolute-path' },
+    { flag: '--timeout-ms', value: 'ms' },
+    { flag: '--poll-ms', value: 'ms' },
+    { flag: '--chat-url', value: 'url' },
+    { flag: '--new-chat' },
+  ],
+} as const satisfies ManagerCliDeclaration;
+
+export const FLOW_MANAGER_BROWSER_GPT_CLI_DECLARATION = FLOW_MANAGER_BROWSER_GPT_CLI;
+
 function requiredOption(options: Map<string, string | true>, key: string): string {
   const value = options.get(key);
   if (typeof value !== 'string' || !value.trim()) throw new Error(`argument_required:${key}`);
   return value;
 }
 
-function refuse(reason: string, details: Record<string, unknown> = {}): void {
-  process.stderr.write(`${JSON.stringify({ schema: 'flow-manager-browser-gpt-long-run-refusal/v1', reason, ...details })}\n`);
-  process.exitCode = 2;
+function emitBrowserManagerResult(_argv: readonly string[], result: unknown): number {
+  const errors = validateCreateIssueManagerResult(result);
+  if (errors.length > 0) {
+    process.stderr.write('flow-manager-browser-gpt-long-run: invalid manager result: ' + errors.join('; ') + '\n');
+    return 2;
+  }
+  const serialized = JSON.stringify(result) + '\n';
+  const managerResult = result as { ok: boolean };
+  if (managerResult.ok) process.stdout.write(serialized);
+  else process.stderr.write(serialized);
+  return managerResult.ok ? 0 : 2;
 }
 
-function refuseManagerResult(result: unknown): void {
-  process.stderr.write(`${JSON.stringify(result)}\n`);
-  process.exitCode = 2;
+function refuse(_argv: readonly string[], reason: string, details: Record<string, unknown> = {}): number {
+  process.stderr.write(JSON.stringify({
+    schema: 'flow-manager-browser-gpt-long-run-refusal/v1',
+    reason,
+    ...details,
+  }) + '\n');
+  return 2;
+}
+
+function browserReconcileAction(binding: CreateIssueActionBinding) {
+  const actionArgv = [
+    'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+    'reconcile-stage',
+    '--repo', binding.repository,
+    '--issue-number', String(binding.issueNumber),
+    '--expected-source-revision', binding.sourceRevision,
+    '--expected-stage', binding.stage,
+  ];
+  if (binding.stageAttemptId) actionArgv.push('--expected-stage-attempt-id', binding.stageAttemptId);
+  actionArgv.push('--json');
+  return createIssueNextAction({
+    kind: 'reconcile-stage-read-only',
+    binding,
+    argv: actionArgv,
+  });
+}
+
+function projectPreflightFailure(
+  argv: readonly string[],
+  result: CreateIssueBrowserPreflightFailure,
+): number {
+  return refuse(argv, 'create_issue_browser_preflight_failed', {
+    cause: result.cause,
+    blocker: result.blocker,
+    remedy: result.remedy,
+    evidence: result.evidence,
+    nextAction: result.nextAction,
+  });
 }
 
 export interface BrowserAdapterDependencies {
@@ -56,25 +139,33 @@ export interface BrowserAdapterDependencies {
   spawnLauncher?: typeof spawnDetachedLauncher;
 }
 
-function refuseStaleHandoffReceipt(
+function staleHandoffReceiptResult(
+  argv: readonly string[],
   handoffReceipt: string,
   runIdentity: string,
   attemptIdentity: string,
-): boolean {
-  if (!existsSync(handoffReceipt) || statSync(handoffReceipt).size === 0) return false;
+): number | null {
+  if (!existsSync(handoffReceipt) || statSync(handoffReceipt).size === 0) return null;
   try {
     const body = JSON.parse(readFileSync(handoffReceipt, 'utf8')) as {
       schema?: string;
       run_identity?: string;
       attempt_identity?: string;
     };
-    if (body.schema !== HANDOFF_SCHEMA) return false;
-    if (body.run_identity === runIdentity && body.attempt_identity === attemptIdentity) return false;
+    if (body.schema !== HANDOFF_SCHEMA) return null;
+    if (body.run_identity === runIdentity && body.attempt_identity === attemptIdentity) return null;
   } catch {
-    return false;
+    return null;
   }
-  refuse('stale_handoff_receipt');
-  return true;
+  const binding = createIssueBinding(parseFlagArgv(argv));
+  if (binding) {
+    return emitBrowserManagerResult(argv, createIssueRecoverableResult({
+      cause: 'stale_handoff_receipt',
+      blocker: 'handoff receipt belongs to a different run/attempt identity',
+      nextAction: browserReconcileAction(binding),
+    }));
+  }
+  return refuse(argv, 'stale_handoff_receipt');
 }
 
 async function waitForReceipt(
@@ -159,31 +250,23 @@ function createIssueBinding(
   };
 }
 
-function refusePreflight(result: CreateIssueBrowserPreflightFailure): void {
-  refuse('create_issue_browser_preflight_failed', {
-    cause: result.cause,
-    blocker: result.blocker,
-    remedy: result.remedy,
-    nextAction: result.nextAction,
-  });
-}
-
 export async function runBrowserAdapter(
   argv: readonly string[],
   deps: BrowserAdapterDependencies = {},
 ): Promise<number> {
+  const inspected = inspectManagerCliInvocation(FLOW_MANAGER_BROWSER_GPT_CLI, argv, { validateRequired: false });
+  if (inspected.help) {
+    process.stdout.write(inspected.help + '\n');
+    return 0;
+  }
   if (argv.some((token) => token === '--completion-mode' || token === '--authority' || token === '--result-protocol')) {
-    refuse('forbidden_authority_selector');
+    return refuse(argv, 'forbidden_authority_selector');
+  }
+  if (inspected.error) {
+    process.stderr.write('flow-manager-browser-gpt-long-run: ' + inspected.error + '\n');
     return 2;
   }
   const options = parseFlagArgv(argv);
-  const runIdentity = requiredOption(options, 'run-identity');
-  const attemptIdentity = requiredOption(options, 'attempt-identity');
-  const handoffReceipt = requiredOption(options, 'handoff-receipt');
-  if (refuseStaleHandoffReceipt(handoffReceipt, runIdentity, attemptIdentity)) return 2;
-  const invocationId = requiredOption(options, 'invocation-id');
-  const terminalEnvelope = requiredOption(options, 'terminal-envelope');
-  const browserOutput = requiredOption(options, 'output');
   const reviewerSourceOutput = typeof options.get('reviewer-source-output') === 'string'
     ? options.get('reviewer-source-output') as string
     : undefined;
@@ -198,36 +281,57 @@ export async function runBrowserAdapter(
   ];
   const directRequested = reviewerSourceOutput !== undefined
     || directArgumentKeys.some((key) => options.has(key));
+  const coreIdentityIncomplete = ['run-identity', 'attempt-identity', 'handoff-receipt']
+    .some((key) => !options.has(key));
+  let requiredOptionsValidated = !directRequested || coreIdentityIncomplete;
+  if (requiredOptionsValidated) {
+    const requiredInspection = inspectManagerCliInvocation(FLOW_MANAGER_BROWSER_GPT_CLI, argv);
+    if (requiredInspection.error) {
+      process.stderr.write('flow-manager-browser-gpt-long-run: ' + requiredInspection.error + '\n');
+      return 2;
+    }
+  }
+  const runIdentity = requiredOption(options, 'run-identity');
+  const attemptIdentity = requiredOption(options, 'attempt-identity');
+  const handoffReceipt = requiredOption(options, 'handoff-receipt');
+  const staleReceiptCode = staleHandoffReceiptResult(argv, handoffReceipt, runIdentity, attemptIdentity);
+  if (staleReceiptCode !== null) return staleReceiptCode;
   if (directRequested && (
     reviewerSourceOutput === undefined
     || directArgumentKeys.some((key) => typeof options.get(key) !== 'string')
   )) {
-    refuse('direct_publication_arguments_required');
-    return 2;
+    return refuse(argv, 'direct_publication_arguments_required');
   }
   const directStage = typeof options.get('stage') === 'string' ? options.get('stage') as string : undefined;
   const terminalInputBundle = typeof options.get('terminal-input-bundle') === 'string'
     ? options.get('terminal-input-bundle') as string
     : undefined;
   if (directRequested && directStage === 'architectural' && !terminalInputBundle) {
-    refuse('direct_publication_terminal_bundle_required');
-    return 2;
+    return refuse(argv, 'direct_publication_terminal_bundle_required');
   }
   const reviewDir = typeof options.get('review-dir') === 'string'
     ? options.get('review-dir') as string
     : undefined;
   if (directRequested && directStage === 'architectural' && !reviewDir) {
-    refuse('direct_publication_terminal_review_dir_required');
-    return 2;
+    return refuse(argv, 'direct_publication_terminal_review_dir_required');
   }
   if (directRequested && directStage !== 'architectural' && reviewDir) {
-    refuse('direct_publication_terminal_review_dir_unexpected');
-    return 2;
+    return refuse(argv, 'direct_publication_terminal_review_dir_unexpected');
   }
   if (directRequested && directStage !== 'architectural' && terminalInputBundle) {
-    refuse('direct_publication_terminal_bundle_unexpected');
-    return 2;
+    return refuse(argv, 'direct_publication_terminal_bundle_unexpected');
   }
+  if (!requiredOptionsValidated) {
+    const requiredInspection = inspectManagerCliInvocation(FLOW_MANAGER_BROWSER_GPT_CLI, argv);
+    if (requiredInspection.error) {
+      process.stderr.write('flow-manager-browser-gpt-long-run: ' + requiredInspection.error + '\n');
+      return 2;
+    }
+    requiredOptionsValidated = true;
+  }
+  const invocationId = requiredOption(options, 'invocation-id');
+  const terminalEnvelope = requiredOption(options, 'terminal-envelope');
+  const browserOutput = requiredOption(options, 'output');
   const profile = requiredOption(options, 'profile');
   const cdp = requiredOption(options, 'cdp');
   const input = requiredOption(options, 'input');
@@ -240,8 +344,7 @@ export async function runBrowserAdapter(
   if (directRequested) {
     const binding = createIssueBinding(options);
     if (!binding) {
-      refuse('create_issue_browser_preflight_binding_invalid', { nextAction: null });
-      return 2;
+      return refuse(argv, 'create_issue_browser_preflight_binding_invalid');
     }
     const operatorBrowserConfig = typeof options.get('operator-browser-config') === 'string'
       ? options.get('operator-browser-config') as string
@@ -256,8 +359,7 @@ export async function runBrowserAdapter(
       retryArgv,
     });
     if (!preflight.ok) {
-      refusePreflight(preflight);
-      return 2;
+      return projectPreflightFailure(argv, preflight);
     }
     browserChildEnv = preflight.childEnv;
     resolvedProjectUrl = preflight.config.projectUrl;
@@ -274,15 +376,14 @@ export async function runBrowserAdapter(
         binding,
         argv: retryArgv,
       });
-      refuseManagerResult(createIssueRecoverableResult({
+      return emitBrowserManagerResult(argv, createIssueRecoverableResult({
         cause: 'source-unavailable',
         blocker: error instanceof Error ? error.message : String(error),
         nextAction: retryAction,
       }));
-      return 2;
     }
     if (!liveRevision || liveRevision.toLowerCase() !== binding.sourceRevision.toLowerCase()) {
-      refuseManagerResult(createIssueStaleNextAction({
+      return emitBrowserManagerResult(argv, createIssueStaleNextAction({
         binding,
         observed: {
           repository: binding.repository,
@@ -291,7 +392,6 @@ export async function runBrowserAdapter(
         },
         nextAction: null,
       }));
-      return 2;
     }
 
     const inspectBinding = deps.inspectLifecycleBinding ?? inspectLifecycleInvocationBinding;
@@ -302,7 +402,7 @@ export async function runBrowserAdapter(
       sourceRevision: binding.sourceRevision,
     });
     if (!lifecycleBinding.ok) {
-      refuseManagerResult(createIssueStaleNextAction({
+      return emitBrowserManagerResult(argv, createIssueStaleNextAction({
         binding,
         observed: {
           repository: binding.repository,
@@ -312,7 +412,6 @@ export async function runBrowserAdapter(
         },
         nextAction: null,
       }));
-      return 2;
     }
 
     try {
@@ -336,7 +435,7 @@ export async function runBrowserAdapter(
         sourceRevision: binding.sourceRevision,
       });
       if (!observed.ok) {
-        refuseManagerResult(createIssueStaleNextAction({
+        return emitBrowserManagerResult(argv, createIssueStaleNextAction({
           binding,
           observed: {
             repository: binding.repository,
@@ -344,21 +443,19 @@ export async function runBrowserAdapter(
             sourceRevision: liveRevision,
             ...observed.observed,
           },
-          nextAction: null,
+          nextAction: browserReconcileAction(binding),
         }));
-        return 2;
       }
       const retryAction = createIssueNextAction({
         kind: 'retry-create-issue-browser-preflight',
         binding,
         argv: retryArgv,
       });
-      refuseManagerResult(createIssueRecoverableResult({
+      return emitBrowserManagerResult(argv, createIssueRecoverableResult({
         cause: 'create_issue_lifecycle_admission_failed',
         blocker: error instanceof Error ? error.message : String(error),
         nextAction: retryAction,
       }));
-      return 2;
     }
   }
 
@@ -412,8 +509,7 @@ export async function runBrowserAdapter(
   const pid = await spawnLauncher(launcherArgs, browserChildEnv);
   const receiptReady = await waitForReceipt(handoffReceipt, runIdentity, attemptIdentity, 30_000);
   if (!receiptReady) {
-    refuse('handoff_receipt_missing');
-    return 2;
+    return refuse(argv, 'handoff_receipt_missing');
   }
   const publicationExpectation = directRequested
     ? {
@@ -427,7 +523,8 @@ export async function runBrowserAdapter(
         stage_attempt_id: options.get('stage-attempt-id') as string,
       }
     : undefined;
-  process.stdout.write(`${JSON.stringify({
+  const completed = {
+    ...createIssueTerminalResult({ ok: true, cause: 'completed' }),
     schema: 'flow-manager-browser-gpt-long-run-accepted/v1',
     run_identity: runIdentity,
     attempt_identity: attemptIdentity,
@@ -437,8 +534,8 @@ export async function runBrowserAdapter(
     browser_output: browserOutput,
     completion_mode: 'browser-turn-result-v1',
     ...(publicationExpectation ? { publication_expectation: publicationExpectation } : {}),
-  })}\n`);
-  return 0;
+  };
+  return emitBrowserManagerResult(argv, completed);
 }
 
 async function main(): Promise<void> {
@@ -448,8 +545,13 @@ async function main(): Promise<void> {
 const entryPath = fileURLToPath(import.meta.url);
 if (process.argv[1] && resolve(process.argv[1]) === entryPath) {
   main().catch((error) => {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exitCode = 1;
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(message + '\n');
+    process.exitCode = refuse(
+      process.argv.slice(2),
+      'browser_adapter_uncaught',
+      { blocker: message },
+    );
   });
 }
 

@@ -15,6 +15,7 @@ import {
   validateCreateIssueNextAction,
   type CreateIssueActionBinding,
 } from './lib/create-issue-next-action.ts';
+import { runBrowserAdapter } from './flow-manager-browser-gpt-long-run.ts';
 import { runStageFinalizeCli } from './lib/create-issue-stage-record-cli.ts';
 import { resolveCreateIssueBrowserOperatorConfig } from './lib/create-issue-browser-gpt-preflight.ts';
 import {
@@ -820,6 +821,20 @@ describe('zero-send manager result is action or structured reason (Issue #1999)'
       expect(JSON.stringify(projected)).not.toContain('fresh-invocation-id');
       expect(typeof projected?.blocker).toBe('string');
       expect(projected && 'reason' in projected).toBe(true);
+    }
+  });
+});
+
+describe('Issue #1998 declaration-owned manager CLI contracts', () => {
+  it('reports missing required manager options through the declaration before command value reads', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      expect(await runBrowserAdapter(['--run-identity', 'run'])).toBe(2);
+      const output = stderr.mock.calls.flat().join('');
+      expect(output).toContain('--attempt-identity is required');
+      expect(output).toContain('Usage:');
+    } finally {
+      stderr.mockRestore();
     }
   });
 });
