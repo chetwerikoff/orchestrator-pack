@@ -1499,7 +1499,7 @@ function finalAcceptanceRetryAction(
     sourceRevision,
     stage: 'acceptance',
   };
-  const argv = [
+  const actionArgv = [
     'node', '--experimental-strip-types', 'scripts/create-issue-final-acceptance.ts',
     '--repo', opts.repo,
     '--issue-number', String(issueNumber),
@@ -1508,14 +1508,14 @@ function finalAcceptanceRetryAction(
     '--public-actor', opts.publicActor,
     '--json',
   ];
-  if (opts.workdir) argv.push('--workdir', opts.workdir);
-  if (opts.externalPassReceiptPath) argv.push('--external-pass-receipt', opts.externalPassReceiptPath);
-  for (const path of opts.claudeProducerEvidencePaths) argv.push('--claude-producer-evidence', path);
-  appendFinalAcceptanceOperatorArgs(argv, opts);
+  if (opts.workdir) actionArgv.push('--workdir', opts.workdir);
+  if (opts.externalPassReceiptPath) actionArgv.push('--external-pass-receipt', opts.externalPassReceiptPath);
+  for (const path of opts.claudeProducerEvidencePaths) actionArgv.push('--claude-producer-evidence', path);
+  appendFinalAcceptanceOperatorArgs(actionArgv, opts);
   return createIssueNextAction({
     kind: 'retry-final-acceptance',
     binding,
-    argv,
+    argv: actionArgv,
   });
 }
 
@@ -1525,7 +1525,7 @@ function finalAcceptanceArtifactAction(
   reviewDir: string,
   binding: CreateIssueActionBinding,
 ): CreateIssueNextAction {
-  const argv = [
+  const actionArgv = [
     'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
     'produce-artifacts',
     '--repo', opts.repo,
@@ -1537,12 +1537,42 @@ function finalAcceptanceArtifactAction(
     '--expected-stage-attempt-id', binding.stageAttemptId ?? '',
     '--json',
   ];
-  for (const path of opts.claudeProducerEvidencePaths) argv.push('--claude-producer-evidence', path);
-  appendFinalAcceptanceOperatorArgs(argv, opts);
+  for (const path of opts.claudeProducerEvidencePaths) actionArgv.push('--claude-producer-evidence', path);
+  appendFinalAcceptanceOperatorArgs(actionArgv, opts);
   return createIssueNextAction({
     kind: 'produce-acceptance-artifacts',
     binding,
-    argv,
+    argv: actionArgv,
+  });
+}
+
+function finalAcceptanceBootstrapArtifactAction(
+  opts: FinalAcceptanceCliOptions,
+  issueNumber: number,
+  reviewDir: string,
+  sourceRevision: string,
+): CreateIssueNextAction {
+  const binding: CreateIssueActionBinding = {
+    repository: opts.repo,
+    issueNumber,
+    sourceRevision,
+    stage: 'architectural',
+  };
+  const actionArgv = [
+    'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+    'produce-artifacts',
+    '--repo', opts.repo,
+    '--issue-number', String(issueNumber),
+    '--review-dir', reviewDir,
+    '--phase', 'final-acceptance',
+    '--json',
+  ];
+  for (const path of opts.claudeProducerEvidencePaths) actionArgv.push('--claude-producer-evidence', path);
+  appendFinalAcceptanceOperatorArgs(actionArgv, opts);
+  return createIssueNextAction({
+    kind: 'produce-acceptance-artifacts',
+    binding,
+    argv: actionArgv,
   });
 }
 
@@ -1576,7 +1606,23 @@ function finalAcceptanceRecoveryAction(
   if (transientRead || result.projectionPendingRepair === true) {
     return finalAcceptanceRetryAction(opts, issueNumber, reviewDir, liveRevision);
   }
-  return null;
+  return reconcileStageReadOnlyAction(
+    { repo: opts.repo },
+    issueNumber,
+    terminalBinding,
+    reviewDir,
+    evidencePathForBinding(reviewDir, terminalBinding),
+  );
+}
+
+function acceptanceAuthorityPause(evidence: string) {
+  return createIssueExternalPauseResult({
+    cause: 'external:content_authority_conflict',
+    remedy: 'resolve the canonical acceptance authority conflict, then resume this same Dispatch',
+    resumeWhen: { operator: true },
+    evidence,
+    blocker: evidence,
+  });
 }
 
 export function runFinalAcceptanceCli(argv: string[]): number {
@@ -1589,35 +1635,55 @@ export function runFinalAcceptanceCli(argv: string[]): number {
     try {
       liveIssue = fetchIssueRevision(transport, opts.repo, issueNumber);
     } catch (error) {
-      const output = createIssueTerminalResult({
-        ok: false,
-        cause: 'source-unavailable',
-        blocker: error instanceof Error ? error.message : String(error),
-      });
-      if (opts.json) console.log(JSON.stringify(output));
-      else process.stderr.write(output.blocker + '\n');
-      return 1;
+      const evidence = error instanceof Error ? error.message : String(error);
+      const output = opts.issueRevision && /^r[0-9]+$/i.test(opts.issueRevision)
+        ? createIssueRecoverableResult({
+            cause: 'source-unavailable',
+            blocker: evidence,
+            nextAction: finalAcceptanceRetryAction(opts, issueNumber, reviewDir, opts.issueRevision),
+          })
+        : createIssueExternalPauseResult({
+            cause: 'external:github_unavailable',
+            remedy: 'restore GitHub Issue reads, then resume this same Dispatch',
+            resumeWhen: { operator: true },
+            evidence,
+            blocker: evidence,
+          });
+      process.stderr.write(evidence + '\n');
+      return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
     }
+
     const liveRevision = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i.exec(liveIssue.body)?.[1];
     if (!liveRevision) {
-      const output = createIssueTerminalResult({
-        ok: false,
-        cause: 'source-revision-unavailable',
-        blocker: 'live Issue has no canonical source-revision marker',
-      });
-      if (opts.json) console.log(JSON.stringify(output));
-      else process.stderr.write(output.blocker + '\n');
-      return 1;
+      const evidence = 'live Issue has no canonical source-revision marker';
+      process.stderr.write(evidence + '\n');
+      return emitManagerBoundary(
+        'create-issue-stage-record-cli.ts:main',
+        argv,
+        acceptanceAuthorityPause(evidence),
+      );
     }
+
     if (opts.issueRevision && opts.issueRevision !== liveRevision) {
-      const output = createIssueStaleNextAction({
-        binding: { repository: opts.repo, issueNumber, sourceRevision: opts.issueRevision, stage: 'acceptance' },
-        observed: { repository: opts.repo, issueNumber, sourceRevision: liveRevision, stage: 'acceptance' },
-        nextAction: null,
+      const expectedBinding: CreateIssueActionBinding = {
+        repository: opts.repo,
+        issueNumber,
+        sourceRevision: opts.issueRevision,
+        stage: 'architectural',
+      };
+      const output = createIssueRecoverableResult({
+        cause: 'stale_next_action',
+        blocker: `final acceptance was bound to ${opts.issueRevision}; live Issue is ${liveRevision}`,
+        nextAction: reconcileStageReadOnlyAction(
+          { repo: opts.repo },
+          issueNumber,
+          expectedBinding,
+          reviewDir,
+          evidencePathForBinding(reviewDir, expectedBinding),
+        ),
       });
-      if (opts.json) console.log(JSON.stringify(output));
-      else process.stderr.write('stale_next_action\n');
-      return 1;
+      process.stderr.write('stale_next_action\n');
+      return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
     }
 
     const currentSnapshotPath = join(reviewDir, 'issue-' + liveRevision + '-body.json');
@@ -1657,34 +1723,28 @@ export function runFinalAcceptanceCli(argv: string[]): number {
               '--json',
             ],
           })
-        : null;
-      const output = nextAction
-        ? createIssueRecoverableResult({
-            cause: 'acceptance-input-missing',
-            blocker: 'issue-rNN-body snapshot is missing or disagrees with the stable live Issue; field=issue snapshot authority=GitHub-witnessed',
-            nextAction,
-          })
-        : createIssueTerminalResult({
-            ok: false,
-            cause: 'acceptance-input-missing',
-            blocker: 'issue-rNN-body snapshot is missing or disagrees with the stable live Issue; field=issue snapshot authority=GitHub-witnessed',
-          });
-      if (opts.json) console.log(JSON.stringify(output));
-      else process.stderr.write(output.blocker + '\n');
-      return 1;
+        : finalAcceptanceBootstrapArtifactAction(opts, issueNumber, reviewDir, liveRevision);
+      const blocker = 'issue-rNN-body snapshot is missing or disagrees with the stable live Issue; field=issue snapshot authority=GitHub-witnessed';
+      const output = createIssueRecoverableResult({
+        cause: 'acceptance-input-missing',
+        blocker,
+        nextAction,
+      });
+      process.stderr.write(blocker + '\n');
+      return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
     }
+
     if (opts.issueBodyPath) {
       let asserted = '';
       try { asserted = readFileSync(opts.issueBodyPath, 'utf8'); } catch {}
       if (asserted !== liveIssue.body && resolve(opts.issueBodyPath) !== resolve(currentSnapshotPath)) {
-        const output = createIssueTerminalResult({
-          ok: false,
-          cause: 'acceptance-authority-conflict',
-          blocker: '--issue-body is assertion-only and does not match the canonical GitHub-witnessed snapshot',
-        });
-        if (opts.json) console.log(JSON.stringify(output));
-        else process.stderr.write(output.blocker + '\n');
-        return 1;
+        const evidence = '--issue-body is assertion-only and does not match the canonical GitHub-witnessed snapshot';
+        process.stderr.write(evidence + '\n');
+        return emitManagerBoundary(
+          'create-issue-stage-record-cli.ts:main',
+          argv,
+          acceptanceAuthorityPause(evidence),
+        );
       }
     }
 
@@ -1700,6 +1760,7 @@ export function runFinalAcceptanceCli(argv: string[]): number {
         return [];
       }
     }).sort((left, right) => Number(left.value.stageSequence ?? 0) - Number(right.value.stageSequence ?? 0));
+
     const terminal = [...receiptRows].reverse().find((row) => row.value.stage === 'architectural');
     if (
       !terminal
@@ -1708,52 +1769,63 @@ export function runFinalAcceptanceCli(argv: string[]): number {
       || typeof terminal.value.stageAttemptId !== 'string'
       || !terminal.value.stageAttemptId.trim()
     ) {
-      const output = createIssueTerminalResult({
-        ok: false,
+      const blocker = 'canonical terminal stage receipt is missing';
+      const output = createIssueRecoverableResult({
         cause: 'acceptance-input-missing',
-        blocker: 'canonical terminal stage receipt is missing',
+        blocker,
+        nextAction: finalAcceptanceBootstrapArtifactAction(opts, issueNumber, reviewDir, liveRevision),
       });
-      if (opts.json) console.log(JSON.stringify(output));
-      else process.stderr.write(output.blocker + '\n');
-      return 1;
+      process.stderr.write(blocker + '\n');
+      return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
     }
+
+    const terminalBinding: CreateIssueActionBinding = {
+      repository: opts.repo,
+      issueNumber,
+      sourceRevision: String(terminal.value.sourceRevision),
+      stage: 'architectural',
+      stageAttemptId: String(terminal.value.stageAttemptId),
+    };
+
     const terminalSnapshotPath = join(reviewDir, 'issue-' + terminal.value.sourceRevision + '-body.json');
     let terminalSnapshot: Record<string, unknown> | null = null;
-    try { terminalSnapshot = JSON.parse(readFileSync(terminalSnapshotPath, 'utf8')) as Record<string, unknown>; } catch { terminalSnapshot = null; }
+    try {
+      terminalSnapshot = JSON.parse(readFileSync(terminalSnapshotPath, 'utf8')) as Record<string, unknown>;
+    } catch {
+      terminalSnapshot = null;
+    }
     if (!terminalSnapshot || terminalSnapshot.schema !== 'create-issue-live-snapshot/v1' || typeof terminalSnapshot.body !== 'string') {
-      const output = createIssueTerminalResult({
-        ok: false,
+      const blocker = 'terminal source Issue snapshot is missing; field=terminalSourceBody authority=GitHub-witnessed';
+      const output = createIssueRecoverableResult({
         cause: 'acceptance-input-missing',
-        blocker: 'terminal source Issue snapshot is missing; field=terminalSourceBody authority=GitHub-witnessed',
+        blocker,
+        nextAction: finalAcceptanceArtifactAction(opts, issueNumber, reviewDir, terminalBinding),
       });
-      if (opts.json) console.log(JSON.stringify(output));
-      else process.stderr.write(output.blocker + '\n');
-      return 1;
+      process.stderr.write(blocker + '\n');
+      return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
     }
 
     if (opts.stageReceipts.length > 0) {
       const requested = opts.stageReceipts.map((path) => resolve(path)).sort();
       const canonical = canonicalReceiptPaths.map((path) => resolve(path)).sort();
       if (JSON.stringify(requested) !== JSON.stringify(canonical)) {
-        const output = createIssueTerminalResult({
-          ok: false,
-          cause: 'acceptance-authority-conflict',
-          blocker: 'caller stage-receipt list does not equal canonical receipt inventory',
-        });
-        if (opts.json) console.log(JSON.stringify(output));
-        else process.stderr.write(output.blocker + '\n');
-        return 1;
+        const evidence = 'caller stage-receipt list does not equal canonical receipt inventory';
+        process.stderr.write(evidence + '\n');
+        return emitManagerBoundary(
+          'create-issue-stage-record-cli.ts:main',
+          argv,
+          acceptanceAuthorityPause(evidence),
+        );
       }
     }
     if (opts.cycleId && opts.cycleId !== terminal.value.cycleId) {
-      const output = createIssueTerminalResult({
-        ok: false,
-        cause: 'acceptance-authority-conflict',
-        blocker: 'caller cycle-id disagrees with lifecycle terminal receipt',
-      });
-      if (opts.json) console.log(JSON.stringify(output));
-      else process.stderr.write(output.blocker + '\n');
-      return 1;
+      const evidence = 'caller cycle-id disagrees with lifecycle terminal receipt';
+      process.stderr.write(evidence + '\n');
+      return emitManagerBoundary(
+        'create-issue-stage-record-cli.ts:main',
+        argv,
+        acceptanceAuthorityPause(evidence),
+      );
     }
 
     const captures = receiptRows.flatMap(({ value }) => (
@@ -1792,19 +1864,16 @@ export function runFinalAcceptanceCli(argv: string[]): number {
       workdir: opts.workdir,
     });
 
-    const terminalBinding: CreateIssueActionBinding = {
-      repository: opts.repo,
-      issueNumber,
+    const currentTerminalBinding: CreateIssueActionBinding = {
+      ...terminalBinding,
       sourceRevision: liveRevision,
-      stage: 'architectural',
-      stageAttemptId: terminal.value.stageAttemptId,
     };
     const recoveryAction = finalAcceptanceRecoveryAction(
       opts,
       issueNumber,
       reviewDir,
       liveRevision,
-      terminalBinding,
+      currentTerminalBinding,
       result,
     );
     const output = validatedManagerSurfaceOutput(
@@ -1815,12 +1884,11 @@ export function runFinalAcceptanceCli(argv: string[]): number {
         ? undefined
         : [...result.guardErrors, ...result.diagnostics.map((item) => item.message)].join('; '),
     );
-    if (opts.json) console.log(JSON.stringify(output));
-    else if (!result.ok) {
+    if (!result.ok) {
       for (const error of result.guardErrors) process.stderr.write(error + '\n');
       for (const diagnostic of result.diagnostics) process.stderr.write(diagnostic.message + '\n');
     }
-    return result.ok ? 0 : 1;
+    return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
   });
 }
 
