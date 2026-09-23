@@ -279,13 +279,10 @@ function runParsedCli<T>(
     opts = parseArgs(argv);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(message + '\n');
-    const evaluation = emitCreateIssueManagerResult({
-      producer: toolName,
-      currentArgv: argv,
-      produce: () => { throw error; },
-    });
-    return evaluation.exitCode;
+    process.stderr.write(`${toolName}: ${message}\n`);
+    // Argv syntax errors happen before a manager action is established and
+    // retain the CLI's historical usage-error status.
+    return 2;
   }
   try {
     return run(opts);
@@ -1270,6 +1267,21 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
       const result = opts.command === 'produce-artifacts'
         ? produceAcceptanceArtifacts(artifactOptions)
         : inspectAcceptanceArtifacts(artifactOptions);
+      const messages = result.ok
+        ? []
+        : ('errors' in result ? result.errors : result.missing.map((item) => item.reason));
+      const managerSurface = opts.json
+        || opts.blockedOn !== undefined
+        || opts.expectedSourceRevision !== undefined
+        || opts.expectedStage !== undefined
+        || opts.expectedStageAttemptId !== undefined;
+      // Acceptance-artifact helpers are also imported as library checks by
+      // nongoverned callers. Preserve their 0/1 contract unless the invocation
+      // explicitly opts into the manager surface.
+      if (!managerSurface) {
+        if (!result.ok) process.stderr.write(`${messages.join('\n')}\n`);
+        return result.ok ? 0 : 1;
+      }
       const binding = artifactBindingFromState(opts, reviewDir, issueNumber);
       let nextAction = null;
       if (binding && !result.ok) {
@@ -1286,9 +1298,6 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
           });
         }
       }
-      const messages = result.ok
-        ? []
-        : ('errors' in result ? result.errors : result.missing.map((item) => item.reason));
       const authorityConflict = !result.ok && messages.some((error) =>
         error.includes('authority=author-owned')
         || error.includes('operator')

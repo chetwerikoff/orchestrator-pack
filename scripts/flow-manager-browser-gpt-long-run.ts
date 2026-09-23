@@ -51,6 +51,10 @@ function emitBrowserManagerResult(argv: readonly string[], result: unknown): num
 function refuse(argv: readonly string[], reason: string, details: Record<string, unknown> = {}): number {
   process.stderr.write(`flow-manager-browser-gpt-long-run: ${reason}\n`);
   const binding = createIssueBinding(parseFlagArgv(argv));
+  // Ungoverned adapter/library callers keep the historical refusal contract.
+  // A create-Issue manager invocation is identifiable only once its action
+  // binding is present; those bound calls continue through the manager boundary.
+  if (!binding) return 2;
   const detail = [
     reason,
     typeof details.blocker === 'string' ? details.blocker : '',

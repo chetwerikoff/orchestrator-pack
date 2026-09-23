@@ -547,13 +547,13 @@ function externalCauseFromRecordedEvidence(rawCause: string): CreateIssueExterna
   if (/\b(?:github|http\s*5\d\d|503|502|504|api unavailable)\b/u.test(normalized)) {
     return 'external:github_unavailable';
   }
-  if (/\b(?:chrome|cdp|connection refused|browser not running)\b/u.test(normalized)) {
+  if (/\b(?:chrome(?:[_ -]?not[_ -]?running)?|cdp|connection refused|browser[_ -]?not[_ -]?running)\b/u.test(normalized)) {
     return 'external:chrome_not_running';
   }
   if (/\b(?:login|required sign[- ]?in|authentication required)\b/u.test(normalized)) {
     return 'external:login_required';
   }
-  if (/\b(?:quota|rate limit|429)\b/u.test(normalized)) {
+  if (/\b(?:quota|rate[_ -]?limit|429)\b/u.test(normalized)) {
     return 'external:quota_exhausted';
   }
   if (/\b(?:permission denied|forbidden|403)\b/u.test(normalized)) {
@@ -591,7 +591,13 @@ export function projectZeroSendManagerResult(input: {
   pacedRetryAction: CreateIssueNextAction;
   reconcileAction?: CreateIssueNextAction;
   freshInvocationId?: string;
-}): CreateIssueRecoverableResult | CreateIssueExternalPauseResult | null {
+}): CreateIssueRecoverableResult | CreateIssueExternalPauseResult | {
+  ok: false;
+  cause: string;
+  blocker: string;
+  reason: CreateIssueZeroSendReason;
+  nextAction: null;
+} | null {
   if (!input.policy) return null;
   void input.freshInvocationId;
   const reason: CreateIssueZeroSendReason = {
@@ -605,7 +611,16 @@ export function projectZeroSendManagerResult(input: {
     ...(input.observed_user_heads ? { observed_user_heads: [...input.observed_user_heads] } : {}),
   };
   if (input.policy.class === 'deterministic-input' || input.policy.class === 'state-conflict') {
-    const reconcileAction = input.reconcileAction ?? defaultReadOnlyReconciliationAction(input.binding);
+    if (!input.reconcileAction) {
+      return {
+        ok: false,
+        cause: input.policy.code,
+        blocker: input.policy.rawCause,
+        reason,
+        nextAction: null,
+      };
+    }
+    const reconcileAction = input.reconcileAction;
     if (reconcileAction.kind !== 'reconcile-stage-read-only') {
       throw new Error('zero-send deterministic/state-conflict continuation must reconcile read-only');
     }
@@ -628,6 +643,15 @@ export function projectZeroSendManagerResult(input: {
       blocker: input.policy.rawCause,
       nextAction: input.pacedRetryAction,
     });
+  }
+  if (!input.reconcileAction) {
+    return {
+      ok: false,
+      cause: input.policy.code,
+      blocker: input.policy.rawCause,
+      reason,
+      nextAction: null,
+    };
   }
   const externalCause = externalCauseFromRecordedEvidence(input.policy.rawCause);
   if (!externalCause) {
