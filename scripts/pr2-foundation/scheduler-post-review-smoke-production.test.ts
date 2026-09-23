@@ -13,7 +13,7 @@ import type { RuntimeAdapter, RuntimeWorker, RuntimeWorkerIdentity } from '../ru
 import { DeterministicRuntimeAdapter } from '../runtime/test-adapter.ts';
 import { runSmokeAttempt } from '../worker-smoke-run.ts';
 import { reconcilePostReviewSmoke, type PostReviewSmokeDependencies } from './post-review-smoke.ts';
-import { createProductionPostReviewSmokeReconciler, runSchedulerTick, type SchedulerBoundary, type SchedulerCurrentPr } from './scheduler.ts';
+import { SCHEDULER_RUN_TICK_PHASE_INVENTORY, createProductionPostReviewSmokeReconciler, runSchedulerTick, type SchedulerBoundary, type SchedulerCurrentPr } from './scheduler.ts';
 
 const REPO = 'chetwerikoff/orchestrator-pack';
 const TASK_ISSUE = 1418;
@@ -184,6 +184,22 @@ afterEach(() => {
 });
 
 describe('scheduler production smoke uses the existing lifecycle surface', () => {
+  it('keeps every explicit tick timeout below the supervisor generation deadline and inventories unbounded phases', () => {
+    expect(SCHEDULER_RUN_TICK_PHASE_INVENTORY.map((row) => row.phase)).toEqual([
+      'fleet-observer-escalation',
+      'fleet-nudge',
+      'orchestration-mail-reconcile-loop-drain',
+      'read-current-pr',
+      'detached-post-review-smoke-start-or-observe',
+      'read-checks',
+      'start-pack-review',
+    ]);
+    for (const row of SCHEDULER_RUN_TICK_PHASE_INVENTORY) {
+      if (row.scopedTimeoutMs !== null) expect(row.scopedTimeoutMs).toBeLessThan(70_000);
+      expect(row.supervisorGenerationCapped).toBe(true);
+    }
+  });
+
   it('records the real reservation/spawn/bind prefix through runSchedulerTick', async () => {
     const f = makeFixture(); setSmokeEnv(f); completeReview(f); liveGh.body = smokeIssueBody(); liveGh.head = f.head;
     const assignment = await assignLocal(f, 'production-prefix');
