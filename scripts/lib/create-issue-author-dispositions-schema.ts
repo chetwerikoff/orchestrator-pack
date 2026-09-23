@@ -373,7 +373,7 @@ export function renderAuthorDispositionPromptFragment(): string {
     '- proposalReason is required when remedyDisposition is not accepted',
     '- optional M3 fields architectPending, architectRequired, protectedActivation, protectedOccurrences, and simplificationCutCandidate remain author-owned when applicable',
     '- m4.inventory: array; every row requires mechanism and disposition=keep|simplify|defer|cut',
-    'Do not author lifecycle fields such as predecessorStage, reviewEpisodeId, tier, stage-attempt, invocation/terminal, review-lane, capture/relay/credentialing, or stable Issue facts; the lifecycle producer injects them.',
+    'Do not add producer/lifecycle-injected fields; the lifecycle producer supplies them separately.',
   ].join('\n');
 }
 
