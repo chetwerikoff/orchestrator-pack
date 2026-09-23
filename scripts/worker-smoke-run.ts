@@ -923,11 +923,15 @@ export async function evaluatePostSmokeReadiness(
     initialSmokeComments = stabilizeSmokeCommentCensus(() =>
       fetchSmokeComments(target.prNumber, target.repositorySlug, options.repoRoot));
     if (initialSmokeHead === target.headSha) {
-      smokeWitness = findVerifiedSmokeReceiptWitness({
+      const initialSmokeCoverage = evaluateWorkerSmokeCoverage({
         issueBody: target.issueBody,
         comments: initialSmokeComments,
         target: coverageTarget(target, initialSmokeHead),
       });
+      const clearingPass = initialSmokeCoverage.latestClearingPass;
+      if (initialSmokeCoverage.accepting && clearingPass?.result === 'PASS' && verifyPublishedSmokeProvenance(clearingPass)) {
+        smokeWitness = clearingPass;
+      }
     }
   } catch {
     smokeObservationAvailable = false;
