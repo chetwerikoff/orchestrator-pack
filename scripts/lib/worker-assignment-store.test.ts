@@ -1,6 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -533,5 +533,26 @@ describe('WorkerAssignment legacy key migration and role compatibility', () => {
     expect(inspected.needsMigration).toBe(true);
     expect(inspected.store.assignments[workerAssignmentKey('task-7', 'dispatch-7')]).toEqual(legacyRow(7));
     expect(Object.prototype.hasOwnProperty.call(inspected.store.assignments[workerAssignmentKey('task-7', 'dispatch-7')], 'role')).toBe(false);
+  });
+
+  it('keeps delegated integration on canonical readiness with report-only operational outcomes', () => {
+    const skill = readFileSync(path.resolve('.cursor/skills/merge-with-local-adoption/SKILL.md'), 'utf8');
+    const runbook = readFileSync(path.resolve('docs/orchestration-runbook.md'), 'utf8');
+    const executorRules = readFileSync(path.resolve('docs/chat-executor-rules.md'), 'utf8');
+    const repairRunbook = readFileSync(path.resolve('docs/pack-review-waiver-merge-runbook.md'), 'utf8');
+
+    expect(skill).toContain('evaluatePostSmokeReadiness()');
+    expect(skill).toContain('readiness.state === READY_TO_MERGE');
+    expect(skill).toContain('merge_now');
+    expect(skill).toContain('wait_for_dependency');
+    expect(skill).toContain('delegated mode never\nuses the direct-user cleanup override');
+    expect(skill).toContain('operationally_complete');
+    expect(skill).toContain('operationally_incomplete');
+
+    expect(runbook).toContain('The existing WorkerAssignment store remains the only persistent carrier.');
+    expect(runbook).toContain('do not create a second role, assignment store, integration registry, lease, lock, queue,');
+    expect(executorRules).toContain('A delegated worker never inherits the direct-user override.');
+    expect(repairRunbook).toContain('Orchestrator-delegated projection repair (not a waiver)');
+    expect(repairRunbook).toContain('evaluatePostSmokeReadiness=READY_TO_MERGE');
   });
 });
