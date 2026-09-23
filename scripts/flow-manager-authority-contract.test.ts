@@ -17,13 +17,46 @@ import { runStateLightEntry } from './chatgpt-browser-turn/state-light-entry.ts'
 import { runCli as runLegacyBrowserTurnCli } from './chatgpt-browser-turn.ts';
 import { runBrowserAdapter } from './flow-manager-browser-gpt-long-run.ts';
 import {
+  HANDOFF_SCHEMA,
+  TERMINAL_SCHEMA,
+  readTerminalEnvelope,
+  runLaunch,
+} from './flow-manager-long-running-child.ts';
+import { runStageFinalizeCli } from './lib/create-issue-stage-record-cli.ts';
+import type { GhTransport } from './lib/create-issue-stage-record-types.ts';
+import {
+  publishSettledStageRecord,
+  semanticStageAttemptId,
+} from './lib/create-issue-stage-record-core.ts';
+import { createMockGhState, createMockTransport } from './lib/create-issue-stage-record-test-helpers.ts';
+import {
+  ensureLifecycleStageEvidenceSeed,
+  ensureLifecycleTierIntake,
+  inspectLifecycleInvocationBinding,
+  loadCanonicalLifecycleAuthority,
+  recordLifecycleInvocationAdmission,
+} from './lib/create-issue-stage-lifecycle.ts';
+import { evaluateStageCredentialingSettlement } from './lib/create-issue-stage-lifecycle-acceptance.ts';
+import {
   createIssueNextAction,
   projectBlockedOnToExternalPause,
   validateCreateIssueBlockedOn,
 } from './lib/create-issue-next-action.ts';
-import { HANDOFF_SCHEMA, readTerminalEnvelope, runLaunch } from './flow-manager-long-running-child.ts';
 
 const contract = readFileSync(new URL('../.cursor/skills/create-issue-draft/SKILL.md', import.meta.url), 'utf8');
+const defaultGhTransportSlot = vi.hoisted(() => ({
+  current: undefined as GhTransport | undefined,
+}));
+vi.mock('./lib/create-issue-stage-record-gh.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/create-issue-stage-record-gh.ts')>();
+  return {
+    ...actual,
+    defaultGhTransport: () => {
+      if (!defaultGhTransportSlot.current) throw new Error('scenario-1 fixture defaultGhTransport is not configured');
+      return defaultGhTransportSlot.current;
+    },
+  };
+});
 const ghTransport = readFileSync(new URL('./lib/create-issue-stage-record-gh.ts', import.meta.url), 'utf8');
 const journalCore = readFileSync(new URL('./lib/create-issue-stage-record-core.ts', import.meta.url), 'utf8');
 const stateLightTurn = readFileSync(new URL('./chatgpt-browser-turn/state-light-turn.ts', import.meta.url), 'utf8');
@@ -1132,6 +1165,359 @@ describe('Issue #1431 manager reviewer canon', () => {
       expect(stderr.chunks.join('')).toContain('direct_publication_arguments_required');
     } finally {
       stderr.restore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Issue #2078 complete scenario-1 smoke replay fixture', () => {
+  it('replays stale revision reconciliation through terminal stage acceptance', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2078-scenario-1-replay-'));
+    const stateRoot = join(root, 'state');
+    const repo = 'chetwerikoff/orchestrator-pack';
+    const issueNumber = 2078;
+    const stage = 'architectural-review' as const;
+    const liveIssueBody = '<!-- source-revision: r02 -->\nscenario-1 live Issue fixture\n';
+    const canonicalAttemptId = semanticStageAttemptId(repo, issueNumber, stage);
+    const previousStateRoot = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+    const previousHome = process.env.HOME;
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = stateRoot;
+    process.env.HOME = root;
+    mkdirSync(stateRoot, { recursive: true });
+    const state = createMockGhState({
+      issue: { title: 'Issue #2078 scenario-1 fixture', body: liveIssueBody, labels: [] },
+      nextCommentId: 207800,
+    });
+    const baseTransport = createMockTransport(state);
+    const ghCalls: string[][] = [];
+    const fixtureTransport = {
+      runGh(argv: string[], timeoutMs?: number) {
+        ghCalls.push([...argv]);
+        return baseTransport.runGh(argv, timeoutMs);
+      },
+    };
+    const reviewDir = join(stateRoot, '.review', String(issueNumber));
+    const reviewEpisodeId = `issue:${issueNumber}@r01`;
+    const inputPath = join(root, 'review-input.txt');
+    const sourcePath = join(root, 'review-source.txt');
+    writeFileSync(inputPath, 'scenario-1 prompt\n');
+    writeFileSync(sourcePath, 'scenario-1 source\n');
+    ensureLifecycleTierIntake({
+      issueNumber,
+      tier: 'T2',
+      firstRevision: 'r01',
+      stateRootOverride: stateRoot,
+    });
+    mkdirSync(reviewDir, { recursive: true });
+    writeFileSync(join(reviewDir, 'author-dispositions.json'), JSON.stringify({
+      schema: 'create-issue-author-dispositions/v1',
+      producer: 'scenario-1-fixture',
+      reviewEpisodeId,
+      sourceRevision: 'r02',
+      predecessorStage: null,
+      draft: liveIssueBody,
+      findings: [],
+      m4: { reviewEpisodeId, sourceRevision: 'r02', predecessorStage: null, inventory: [] },
+    }, null, 2));
+    writeFileSync(join(reviewDir, 'finding-disposition-ledger.json'), JSON.stringify({
+      version: 2,
+      reviewEpisodeId,
+      sourceRevision: 'r02',
+      predecessorStage: null,
+      draft: liveIssueBody,
+      counts: { rawFindingCount: 0, distinctFindingCount: 0, processedDistinctCount: 0 },
+      findings: [],
+    }, null, 2));
+    writeFileSync(join(reviewDir, 'issue-r02-body.json'), JSON.stringify({
+      schema: 'create-issue-live-snapshot/v1',
+      issueNumber,
+      sourceRevision: 'r02',
+      title: state.issue.title,
+      body: liveIssueBody,
+    }, null, 2) + '\n');
+    writeFileSync(join(reviewDir, 'review-episode-inventory.json'), JSON.stringify({
+      source: 'canonical-review-directory',
+      taskIdentity: `issue:${issueNumber}`,
+      episodeFirstRevision: 'r01',
+      reviewEpisodeId,
+      stageReceiptIds: [],
+    }, null, 2));
+
+    const handoffReceipt = join(root, 'handoff.json');
+    const terminalEnvelope = join(root, 'terminal.json');
+    const browserOutput = join(root, 'browser-output.txt');
+    const adapterArgv = (sourceRevision: string, stageAttemptId: string, runIdentity: string, attemptIdentity: string) => [
+      '--run-identity', runIdentity,
+      '--attempt-identity', attemptIdentity,
+      '--handoff-receipt', handoffReceipt,
+      '--invocation-id', '2078-scenario-1-invocation',
+      '--terminal-envelope', terminalEnvelope,
+      '--output', browserOutput,
+      '--profile', root,
+      '--cdp', 'http://127.0.0.1:9222',
+      '--input', inputPath,
+      '--reviewer-source-output', sourcePath,
+      '--reviewer-source', 'slot-01#capture=direct-publication/v1',
+      '--repository', repo,
+      '--issue-number', String(issueNumber),
+      '--source-revision', sourceRevision,
+      '--stage', stage,
+      '--source-slot', '01',
+      '--stage-attempt-id', stageAttemptId,
+    ];
+    const preflight = () => ({
+      ok: true as const,
+      schema: 'create-issue-browser-gpt-preflight/v1' as const,
+      principalLogin: 'chetwerikoff',
+      repository: repo,
+      config: {
+        projectUrl: 'https://chatgpt.com/g/g-test/project',
+        chromeUserDataDir: root,
+        source: 'operator-config' as const,
+        operatorConfigPath: join(root, 'local.config.json'),
+      },
+      childEnv: {
+        DISCUSS_WITH_GPT_PROJECT_URL: 'https://chatgpt.com/g/g-test/project',
+        DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR: root,
+      },
+      nextAction: null,
+    });
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      logs.push(String(line));
+    });
+    const stderr = captureWrite(process.stderr);
+    const spawnLauncher = vi.fn(async (launcherArgs: readonly string[]) => {
+      const valueAfter = (flag: string): string => {
+        const index = launcherArgs.indexOf(flag);
+        const value = index >= 0 ? launcherArgs[index + 1] : undefined;
+        if (typeof value !== 'string') throw new Error(`fixture launcher missing ${flag}`);
+        return value;
+      };
+      writeFileSync(valueAfter('--handoff-receipt'), JSON.stringify({
+        schema: HANDOFF_SCHEMA,
+        run_identity: valueAfter('--run-identity'),
+        attempt_identity: valueAfter('--attempt-identity'),
+        launcher_started_at: '2026-09-23T00:00:00.000Z',
+        handoff_committed_at: '2026-09-23T00:00:00.001Z',
+        completion_mode: 'browser-turn-result-v1',
+      }));
+      return 2078001;
+    });
+
+    try {
+      const first = await runBrowserAdapter(adapterArgv('r01', 'scenario-1-r01-attempt', 'scenario-1-run-r01', 'scenario-1-attempt-r01'), {
+        runPreflight: preflight,
+        readIssueRevision: () => ({ title: state.issue.title, body: liveIssueBody, labels: [] }),
+        inspectLifecycleBinding: vi.fn(),
+        recordAdmission: vi.fn(),
+        spawnLauncher,
+      });
+      expect(first).toBe(3);
+      expect(logs).toHaveLength(1);
+      const stale = JSON.parse(logs[0]!) as {
+        ok: boolean;
+        cause: string;
+        nextAction: { kind: string; binding: Record<string, unknown>; argv: string[] };
+      };
+      expect(stale).toMatchObject({
+        ok: false,
+        cause: 'stale_next_action',
+        nextAction: {
+          kind: 'reconcile-stage-read-only',
+          binding: { sourceRevision: 'r01', stageAttemptId: 'scenario-1-r01-attempt' },
+        },
+      });
+      expect(spawnLauncher).not.toHaveBeenCalled();
+      logs.length = 0;
+
+      defaultGhTransportSlot.current = fixtureTransport;
+      const cliArgv = (argv: string[]) => argv.filter((token) => token !== '--experimental-strip-types');
+      const reconciledCode = runStageFinalizeCli(cliArgv(stale.nextAction.argv));
+      expect(reconciledCode).toBe(3);
+      expect(logs).toHaveLength(1);
+      const reconciled = JSON.parse(logs[0]!) as {
+        ok: boolean;
+        cause: string;
+        nextAction: { kind: string; binding: Record<string, unknown>; argv: string[] };
+      };
+      expect(reconciled.cause, logs[0]).toBe('reconciliation_failed');
+      expect(reconciled.nextAction.binding.stageAttemptId).not.toBe('scenario-1-r01-attempt');
+      expect(reconciled.nextAction.argv).toContain('r02');
+      expect(reconciled.nextAction.argv).toContain(canonicalAttemptId);
+      expect(ghCalls.some((argv) => argv.includes('--jq') && argv.some((value) => value.includes(`/issues/${issueNumber}`)))).toBe(true);
+      logs.length = 0;
+      const startedCode = runStageFinalizeCli(cliArgv(reconciled.nextAction.argv));
+      expect(startedCode).toBe(0);
+      expect(logs).toHaveLength(1);
+      const started = JSON.parse(logs[0]!) as {
+        ok: boolean;
+        cause: string;
+        nextAction: null;
+        stageAttemptId?: string;
+        cycleId?: string;
+      };
+      expect(started).toMatchObject({
+        ok: true,
+        cause: 'completed',
+        nextAction: null,
+        stageAttemptId: canonicalAttemptId,
+      });
+      expect(started.cycleId).toEqual(expect.any(String));
+      const evidencePath = join(reviewDir, 'attempt-001.json');
+      const evidenceBeforeBrowser = JSON.parse(readFileSync(evidencePath, 'utf8')) as Record<string, any>;
+      const fixtureInvocations = ['02', '03'].map((reviewerSlot) => ({
+        schema: 'reviewer-invocation-envelope/v1',
+        reviewEpisodeId,
+        stageAttemptId: canonicalAttemptId,
+        policyVersion: 'triple-source/v1',
+        reviewerCardinality: 3,
+        cardinalityConfigIdentity: 'triple-source/v1',
+        stage,
+        sourceRevision: 'r02',
+        invocationId: `scenario-1-fixture-${reviewerSlot}`,
+        reviewerSlot,
+        reviewerOrdinal: Number(reviewerSlot),
+        attemptOrdinal: 1,
+        retryAttempt: false,
+        terminal: true,
+        terminalClassification: 'complete',
+        sendCount: 1,
+        retryClass: 'none',
+        revisionCheck: 'matched',
+        capacityOutcome: 'admitted',
+        capacityWaitMs: 0,
+        terminalResultIdentity: `result:scenario-1:fixture-${reviewerSlot}`,
+        capture: {
+          captureIdentity: `sha256:fixture:scenario-1-${reviewerSlot}`,
+          name: `scenario-1-${reviewerSlot}.capture.txt`,
+          byteLength: 1,
+          sha256: `fixture-${reviewerSlot}`,
+          rawFindingCount: 0,
+        },
+      }));
+      evidenceBeforeBrowser.invocations = fixtureInvocations;
+      writeFileSync(evidencePath, JSON.stringify(evidenceBeforeBrowser, null, 2) + '\n');
+      const seeded = ensureLifecycleStageEvidenceSeed({
+        issueNumber, tier: 'T2', stage, stageAttemptId: canonicalAttemptId,
+        sourceRevision: 'r02', cycleId: started.cycleId!, stateRootOverride: stateRoot,
+      });
+      expect(seeded.evidence.stageAttemptId).toBe(canonicalAttemptId);
+      logs.length = 0;
+
+      const admissionCalls: unknown[] = [];
+      const browserRetry = await runBrowserAdapter(adapterArgv('r02', canonicalAttemptId, 'scenario-1-run-r02', 'scenario-1-attempt-r02'), {
+        runPreflight: preflight,
+        readIssueRevision: () => ({ title: state.issue.title, body: liveIssueBody, labels: state.issue.labels }),
+        inspectLifecycleBinding: (input) => inspectLifecycleInvocationBinding({ ...input, stateRootOverride: stateRoot }),
+        recordAdmission: (input) => {
+          admissionCalls.push(input);
+          return recordLifecycleInvocationAdmission({ ...input, stateRootOverride: stateRoot });
+        },
+        spawnLauncher,
+      });
+      expect(browserRetry).toBe(0);
+      expect(logs).toHaveLength(1);
+      expect(JSON.parse(logs[0]!)).toMatchObject({
+        ok: true,
+        cause: 'completed',
+        nextAction: null,
+        completion_mode: 'browser-turn-result-v1',
+      });
+      expect(spawnLauncher).toHaveBeenCalledTimes(1);
+      expect(admissionCalls).toHaveLength(1);
+      const evidence = JSON.parse(readFileSync(evidencePath, 'utf8')) as Record<string, any>;
+      expect(evidence.invocations).toHaveLength(3);
+      const admittedInvocation = evidence.invocations.find((item: Record<string, unknown>) => item.invocationId === '2078-scenario-1-invocation');
+      expect(admittedInvocation).toMatchObject({ reviewerSlot: '01', sourceRevision: 'r02' });
+
+      const browserText = 'scenario-1 completed browser evidence\n';
+      writeFileSync(browserOutput, browserText);
+      writeFileSync(sourcePath, 'scenario-1 reviewer source\n');
+      writeFileSync(terminalEnvelope, JSON.stringify({
+        schema: TERMINAL_SCHEMA,
+        run_identity: 'scenario-1-run-r02',
+        attempt_identity: 'scenario-1-attempt-r02',
+        completion_mode: 'browser-turn-result-v1',
+        handoff_receipt_path: handoffReceipt,
+        launcher_started_at: '2026-09-23T00:00:00.000Z',
+        handoff_committed_at: '2026-09-23T00:00:00.001Z',
+        terminal_at: '2026-09-23T00:00:00.002Z',
+        lifecycle_outcome: 'success',
+        delivery: 'landed',
+        recovery_available: false,
+      }));
+      const capture = {
+        captureIdentity: 'sha256:fixture:scenario-1-browser-output',
+        name: 'scenario-1-browser-output.txt',
+        byteLength: Buffer.byteLength(browserText),
+        sha256: createHash('sha256').update(browserText, 'utf8').digest('hex'),
+        rawFindingCount: 0,
+      };
+      evidence.invocations = evidence.invocations.map((invocation: Record<string, unknown>) => invocation.invocationId === '2078-scenario-1-invocation'
+        ? {
+            ...invocation,
+            terminal: true,
+            terminalClassification: 'complete',
+            sendCount: 1,
+            retryClass: 'none',
+            terminalResultIdentity: 'result:scenario-1:complete',
+            capture,
+          }
+        : invocation);
+      evidence.revisionChecks = { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' };
+      writeFileSync(evidencePath, JSON.stringify(evidence, null, 2) + '\n');
+      const receipt = {
+        schema: 'stage-completeness-receipt/v1',
+        tier: 'T2',
+        taskIdentity: `issue:${issueNumber}`,
+        episodeFirstRevision: 'r01',
+        reviewEpisodeId,
+        stage,
+        stageAttemptId: canonicalAttemptId,
+        stageSequence: 1,
+        cycleId: started.cycleId,
+        policyVersion: 'triple-source/v1',
+        reviewerCardinality: 3,
+        completedSourceCount: 3,
+        sourceRevision: 'r02',
+        outcome: 'complete',
+        producerEvidence: 'not-applicable',
+        tierTransition: 'none',
+        cycleBinding: { cycleId: started.cycleId, sourceRevision: 'r02', boundBeforeLaunch: true },
+        invocations: evidence.invocations,
+        credentialingCaptures: evidence.invocations.map((invocation: Record<string, any>) => invocation.capture),
+        settlement: { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true },
+      };
+      const published = publishSettledStageRecord(fixtureTransport, {
+        repo, issueNumber, receipt, workdir: join(root, 'journal'),
+      });
+      expect(published.ok).toBe(true);
+      const receiptPath = join(reviewDir, 'stage-completeness-receipt-architectural-review.json');
+      writeFileSync(receiptPath, JSON.stringify(receipt, null, 2) + '\n');
+      const authorityAfter = loadCanonicalLifecycleAuthority(issueNumber, stateRoot);
+      expect(authorityAfter.receiptValues).toHaveLength(1);
+      expect(authorityAfter.receiptValues[0]).toMatchObject({ outcome: 'complete', stageAttemptId: canonicalAttemptId, sourceRevision: 'r02' });
+      const acceptance = evaluateStageCredentialingSettlement(authorityAfter.receiptValues[0], 3, stage, 'final-acceptance');
+      expect(acceptance).toMatchObject({ credentialed: true, errors: [], missingSlots: [] });
+
+      const terminalWorkerEvents: Array<{ type: 'worker_done'; outcome: 'succeeded' | 'failed' }> = [];
+      const managerHarness = (accepted: boolean) => {
+        if (!accepted) throw new Error('whole-task acceptance was not proven');
+        terminalWorkerEvents.push({ type: 'worker_done', outcome: 'succeeded' });
+      };
+      managerHarness(acceptance.credentialed && (authorityAfter.receiptValues[0] as Record<string, unknown>)?.outcome === 'complete');
+      expect(terminalWorkerEvents).toHaveLength(1);
+      expect(terminalWorkerEvents).toEqual([{ type: 'worker_done', outcome: 'succeeded' }]);
+      expect(terminalWorkerEvents.filter((event) => event.outcome === 'failed')).toHaveLength(0);
+    } finally {
+      logSpy.mockRestore();
+      stderr.restore();
+      defaultGhTransportSlot.current = undefined;
+      if (previousStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previousStateRoot;
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
       rmSync(root, { recursive: true, force: true });
     }
   });

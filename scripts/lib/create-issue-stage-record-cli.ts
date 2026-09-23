@@ -1175,7 +1175,7 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
         }
         const retryOpts = { ...opts, tier: intake.priorTier };
         const output = createIssueRecoverableResult({
-          cause: 'stale_next_action',
+          cause: 'reconciliation_failed',
           blocker: `readonly reconciliation admitted live source revision ${liveRevision}`,
           nextAction: createIssueNextAction({
             kind: 'retry-start-cycle',
