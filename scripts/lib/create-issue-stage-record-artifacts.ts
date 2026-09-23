@@ -1220,6 +1220,7 @@ export interface ZeroSendTerminalObservation {
   sourceRevision: string;
   stage: string;
   attemptOrdinal: 1;
+  retryClass: ReconciliationRetryClass;
   policy: ZeroSendCausePolicy;
   invocationId?: string;
   reviewerSlot?: string;
@@ -1268,7 +1269,6 @@ function deterministicZeroSendCode(state: string, cause: string): string | null 
 function transientZeroSendCode(state: string, cause: string): string | null {
   if (state === 'rate_limit' || cause === 'rate_limit') return 'rate_limit';
   if (state === 'quota' || cause === 'quota') return 'quota';
-  if (state === 'chrome_not_running' || cause === 'chrome_not_running') return 'chrome_not_running';
   if (state === 'composer-refusal' || cause.includes('composer') || cause === 'blocking_page_overlay') return 'composer-refusal';
   if (state === 'fill-timeout' || cause.includes('fill')) return 'fill-timeout';
   return null;
@@ -1353,6 +1353,7 @@ export function readEvidenceZeroSendTerminal(evidencePath: string): ZeroSendTerm
   const stage = optionalString(parsed.stage);
   if (!stageAttemptId || !sourceRevision || !stage) return null;
   let conflict: ZeroSendTerminalObservation | null = null;
+  let retryable: ZeroSendTerminalObservation | null = null;
   for (const invocation of parsed.invocations) {
     if (!isRecord(invocation)) continue;
     if (invocation.attemptOrdinal === 2) continue;
@@ -1360,22 +1361,35 @@ export function readEvidenceZeroSendTerminal(evidencePath: string): ZeroSendTerm
     const envelope = resolveInvocationEnvelope(evidencePath, invocation);
     if (!envelope) continue;
     const policy = classifyZeroSendCausePolicy(envelope);
-    if (!policy || policy.class === 'transient') continue;
+    const observedRetryClass = retryClass(invocation.retryClass);
+    if (!policy || !observedRetryClass) continue;
+    const reviewerSlot = optionalString(invocation.reviewerSlot);
+    const retryConsumed = policy.class === 'transient'
+      && reviewerSlot !== undefined
+      && parsed.invocations.some((candidate) => isRecord(candidate)
+        && optionalString(candidate.reviewerSlot) === reviewerSlot
+        && candidate.attemptOrdinal === 2);
+    if (policy.class === 'transient' && (observedRetryClass !== 'eligible-zero-send' || retryConsumed)) continue;
     const diagnostics = zeroSendEnvelopeDiagnostics(envelope);
     const observation: ZeroSendTerminalObservation = {
       stageAttemptId,
       sourceRevision,
       stage,
       attemptOrdinal: 1,
+      retryClass: observedRetryClass,
       policy,
       ...(optionalString(invocation.invocationId) ? { invocationId: optionalString(invocation.invocationId) } : {}),
-      ...(optionalString(invocation.reviewerSlot) ? { reviewerSlot: optionalString(invocation.reviewerSlot) } : {}),
+      ...(reviewerSlot ? { reviewerSlot } : {}),
       ...diagnostics,
     };
     if (policy.class === 'deterministic-input') return observation;
-    if (!conflict) conflict = observation;
+    if (policy.class === 'state-conflict') {
+      if (!conflict) conflict = observation;
+      continue;
+    }
+    if (!retryable) retryable = observation;
   }
-  return conflict;
+  return conflict ?? retryable;
 }
 
 export function readCanonicalZeroSendTerminal(input: {
@@ -1460,11 +1474,16 @@ export function classifyReconciliationTransport(
   } else {
     terminalClassification = 'incident';
   }
-  // A child-witnessed sendCount 0 proves nothing reached the reviewer, whatever the
-  // pre-send cause; the two-attempt budget bounds the single retry.
+  const ownerAuthorizedRetryableZeroSend = zeroSendPolicy?.class === 'transient'
+    && (
+      zeroSendPolicy.code === 'quota'
+      || zeroSendPolicy.code === 'rate_limit'
+      || zeroSendPolicy.code === 'composer-refusal'
+      || zeroSendPolicy.code === 'fill-timeout'
+    );
   const retryableZeroSend = attemptOrdinal === 1
     && sendCount === 0
-    && terminalClassification !== 'complete';
+    && ownerAuthorizedRetryableZeroSend;
   return {
     terminalClassification,
     sendCount,
@@ -1488,17 +1507,9 @@ function hydrateReconciliationTransport(
     && existingTerminalClassification !== null
     && (invocation.sendCount === 0 || invocation.sendCount === 1)
     && existingRetryClass !== null;
-  const existingNeedsObservedZeroSendIdentity = completeExisting
-    && invocation.sendCount === 0
-    && existingTerminalClassification === 'incident'
-    && existingRetryClass === 'retry-forbidden';
   const attemptOrdinal = invocation.attemptOrdinal === 2 ? 2 : 1;
-  const storedEligibleZeroSendOnSecondAttempt = completeExisting
-    && attemptOrdinal === 2
-    && invocation.sendCount === 0
-    && existingRetryClass === 'eligible-zero-send';
-  const reuseStoredTransport = completeExisting && !storedEligibleZeroSendOnSecondAttempt;
-  if (reuseStoredTransport && !existingNeedsObservedZeroSendIdentity) return { ...invocation };
+  const reuseStoredTransport = completeExisting && invocation.sendCount === 1;
+  if (reuseStoredTransport) return { ...invocation };
 
   const terminalEnvelopePath = optionalString(invocation.terminalEnvelopePath);
   if (!terminalEnvelopePath) {
@@ -1525,17 +1536,16 @@ function hydrateReconciliationTransport(
     && (
       existingTerminalClassification !== transport.terminalClassification
       || invocation.sendCount !== transport.sendCount
+      || existingRetryClass !== transport.retryClass
     )
   ) {
     errors.push('stage evidence invocation[' + index + '] terminal transport disagrees with its bound terminal envelope');
     return null;
   }
 
-  const needsObservedZeroSendIdentity = reuseStoredTransport
-    ? existingNeedsObservedZeroSendIdentity
-    : transport.sendCount === 0
-      && transport.terminalClassification === 'incident'
-      && transport.retryClass === 'retry-forbidden';
+  const needsObservedZeroSendIdentity = transport.sendCount === 0
+    && transport.terminalClassification === 'incident'
+    && transport.retryClass === 'retry-forbidden';
   let observedTerminalResultIdentity: string | undefined;
   if (needsObservedZeroSendIdentity) {
     const admittedInvocationId = optionalString(invocation.invocationId);
@@ -1559,11 +1569,9 @@ function hydrateReconciliationTransport(
   return {
     ...invocation,
     terminal: true,
-    ...(reuseStoredTransport ? {} : {
-      terminalClassification: transport.terminalClassification,
-      sendCount: transport.sendCount,
-      retryClass: transport.retryClass,
-    }),
+    terminalClassification: transport.terminalClassification,
+    sendCount: transport.sendCount,
+    retryClass: transport.retryClass,
     ...(observedTerminalResultIdentity ? { terminalResultIdentity: observedTerminalResultIdentity } : {}),
   };
 }
@@ -2069,6 +2077,15 @@ export function reconcileCreateIssueStage(
   const initialRequiredSlots = routing ? routing.initiallyActivatedSlots : requiredFinalSlots(raw);
   if (initialRequiredSlots.length === 0) {
     return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: ['stage evidence has no required reviewer slots'] };
+  }
+
+  const hydratedEvidenceChanged = JSON.stringify(rawValue) !== JSON.stringify(raw);
+  if (hydratedEvidenceChanged) {
+    const hydratedText = JSON.stringify(raw, null, 2) + '\n';
+    if (!atomicReplaceStageEvidence(options.stageEvidencePath, originalText, raw, errors)) {
+      return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [...new Set(errors)] };
+    }
+    originalText = hydratedText;
   }
 
   const transport = options.artifactSourceTransport ?? defaultGhTransport();
