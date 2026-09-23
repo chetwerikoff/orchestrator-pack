@@ -281,6 +281,20 @@ function canonicalTerminalPredecessor(
   }
 }
 
+function authorBindingPredecessor(
+  intake: JsonRecord,
+  stageInputs: readonly { path: string; value: JsonRecord }[],
+  phase: 'pre-lens' | 'post-lens' | 'final-acceptance',
+  errors: string[],
+): ReviewStage | null {
+  // Before a terminal author-adjudication consumer exists, the binding is the
+  // actually settled lifecycle predecessor. With no stage evidence there is no
+  // predecessor at all and lifecycle zero-state remains valid.
+  if (stageInputs.length === 0) return null;
+  if (!producerConsumesAuthorAdjudication(phase)) return latestLifecycleStage(stageInputs);
+  return canonicalTerminalPredecessor(intake, errors);
+}
+
 function reviewStage(value: unknown): ReviewStage | null {
   return value === 'competitive'
     || value === 'architectural-review'
@@ -3394,7 +3408,7 @@ function stageAuthorBinding(reviewDir: string): { sourceRevision: string | null;
 function authorReplyDispositionForStage(
   reviewDir: string,
   sourceRevision: string | null,
-  _predecessorStage: ReviewStage | null,
+  predecessorStage: ReviewStage | null,
 ): AuthorReplyDisposition {
   const authorReplyPath = latestAuthorReplyPath(reviewDir);
   if (!authorReplyPath) return 'absent';
@@ -3402,6 +3416,12 @@ function authorReplyDispositionForStage(
   const parsed = parseGovernedAuthorDispositionOutput(authorReplyPath, errors);
   if (!parsed) return 'malformed';
   if (sourceRevision === null || parsed.sourceRevision !== sourceRevision) return 'historical';
+  // predecessorStage is lifecycle-owned now. Legacy replies may still carry it;
+  // when present it remains useful only to recognize that the reply belongs to
+  // an earlier settled stage, never as current authority.
+  if (parsed.predecessorStage !== undefined && parsed.predecessorStage !== predecessorStage) {
+    return 'historical';
+  }
   return 'current';
 }
 
@@ -3596,8 +3616,13 @@ export function produceAcceptanceArtifacts(
     );
   }
   if (issueSnapshot) {
-    const predecessorStage = canonicalTerminalPredecessor(intake, errors);
     const artifactPhase = options.phase ?? 'final-acceptance';
+    const predecessorStage = authorBindingPredecessor(
+      intake,
+      validStageInputs,
+      artifactPhase,
+      errors,
+    );
     const admission = authorDispositionAdmission({
       consumesAuthorAdjudication: producerConsumesAuthorAdjudication(artifactPhase),
       predecessorPresent: predecessorStage !== null,
