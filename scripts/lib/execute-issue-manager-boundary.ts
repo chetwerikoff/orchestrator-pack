@@ -187,15 +187,20 @@ export function isExecuteIssueReadOnlyArgv(argv: readonly string[]): boolean {
     return false;
   }
   const normalized = argv.map(normalizeCommandToken);
-  const probeIndex = normalized.findIndex((part) => part === 'scripts/browser-gpt-page-probe.ts');
-  if (probeIndex >= 0) {
-    return normalized[probeIndex + 1] === 'inspect'
-      && !normalized.includes('--open-if-missing');
+
+  const probePrefix = [
+    'node',
+    '--experimental-strip-types',
+    'scripts/browser-gpt-page-probe.ts',
+    'inspect',
+  ];
+  if (probePrefix.every((part, index) => normalized[index] === part)) {
+    return !normalized.includes('--open-if-missing');
   }
-  const ghIndex = normalized.findIndex((part) => part === 'scripts/gh');
-  if (ghIndex >= 0) {
-    return (normalized[ghIndex + 1] === 'issue' || normalized[ghIndex + 1] === 'pr')
-      && normalized[ghIndex + 2] === 'view';
+
+  if (normalized[0] === 'scripts/gh') {
+    return (normalized[1] === 'issue' || normalized[1] === 'pr')
+      && normalized[2] === 'view';
   }
   return false;
 }
