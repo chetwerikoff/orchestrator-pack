@@ -112,6 +112,9 @@ describe('create-Issue nextAction contract', () => {
     expect(cliSource).toContain("'--expected-stage-attempt-id'");
     expect(cliSource).toContain('validateCreateIssueManagerResult(output)');
 
+    expect(cliSource).toContain('semanticStageAttemptId(opts.repo, issueNumber, stage)');
+    expect(cliSource).toContain('stageAttemptId: canonicalAttemptId');
+    expect(cliSource).toContain('argv: startCycleRetryArgv(retryOpts, issueNumber, binding)');
     const coreSource = readFileSync(join(process.cwd(), 'scripts', 'lib', 'create-issue-stage-record-core.ts'), 'utf8');
     const functionStart = coreSource.indexOf('export function startReviewCycle(');
     const admission = coreSource.indexOf('admitStageLaunch(admissionInput)', functionStart);
@@ -119,6 +122,7 @@ describe('create-Issue nextAction contract', () => {
     expect(functionStart).toBeGreaterThanOrEqual(0);
     expect(admission).toBeGreaterThan(functionStart);
     expect(projection).toBeGreaterThan(admission);
+    expect(coreSource).toContain('export function semanticStageAttemptId(');
   });
 });
 

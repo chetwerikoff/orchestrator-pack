@@ -15,8 +15,10 @@
     "scripts/lib/create-issue-next-action.ts",
     "scripts/lib/create-issue-stage-lifecycle.test.ts",
     "scripts/lib/create-issue-stage-record-cli.ts",
+    "scripts/lib/create-issue-stage-record-core.ts",
     "scripts/lib/create-issue-stage-record.test.ts",
     "scripts/pr2-foundation/mutation-catalog.test.ts",
+    "scripts/toolchain/create-issue-final-acceptance.test.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
@@ -51,9 +53,11 @@
     "scripts/lib/create-issue-stage-lifecycle.test.ts",
     "scripts/lib/create-issue-stage-lifecycle.ts",
     "scripts/lib/create-issue-stage-record-cli.ts",
+    "scripts/lib/create-issue-stage-record-core.ts",
     "scripts/lib/create-issue-stage-record.test.ts",
     "scripts/pr2-foundation/mutation-catalog.test.ts",
+    "scripts/toolchain/create-issue-final-acceptance.test.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "b48522475a5824abfbb2f9ef6344785f6efde589"
+  "source_revision": "58adf70d4b82f302d6ffb12df9b8b1433d53eca8"
 }

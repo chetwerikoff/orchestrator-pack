@@ -4,6 +4,7 @@ import { defaultGhTransport, fetchIssueRevision } from './create-issue-stage-rec
 import {
   publishSettledStageRecord,
   retryPendingEvents,
+  semanticStageAttemptId,
   startReviewCycle,
 } from './create-issue-stage-record-core.ts';
 import { runFinalAcceptance } from './create-issue-final-acceptance.ts';
@@ -38,7 +39,14 @@ import {
   type CreateIssueManagerBoundaryProducer,
 } from './create-issue-manager-boundary.ts';
 import { resolveCanonicalReviewDirectory } from './stage-completeness-core.ts';
-import type { LifecycleReviewStage } from './create-issue-stage-lifecycle.ts';
+import {
+  admitStageLaunch,
+  composeTerminalBundle,
+  inspectLifecycleInvocationBinding,
+  loadCanonicalLifecycleAuthority,
+  parseLifecycleTierIntake,
+  type LifecycleReviewStage,
+} from './create-issue-stage-lifecycle.ts';
 import { isPublicActor, PUBLIC_ACTORS } from './create-issue-stage-record-marker.ts';
 import type { GhTransport, PublicActor } from './create-issue-stage-record-types.ts';
 import type { ReviewLaneOverride } from './review-lane-selector.ts';
@@ -1079,42 +1087,100 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
           return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, paused);
         }
         const canonical = resolveCanonicalReviewDirectory({ taskIdentity: 'issue:' + issueNumber });
-        const intakePath = join(canonical.directory, 'tier-intake.json');
-        let tier = '';
-        try {
-          const intake = JSON.parse(readFileSync(intakePath, 'utf8')) as Record<string, unknown>;
-          tier = typeof intake.tier === 'string' ? intake.tier : '';
-        } catch {
-          tier = '';
-        }
-        if (!/^T[123]$/.test(tier)) {
-          throw new Error('binding-only reconciliation cannot recover canonical tier-intake');
-        }
+        const stage = opts.expectedStage;
+        const canonicalAttemptId = semanticStageAttemptId(opts.repo, issueNumber, stage);
         const binding: CreateIssueActionBinding = {
           repository: opts.repo,
           issueNumber,
           sourceRevision: liveRevision,
-          stage: opts.expectedStage,
+          stage,
+          stageAttemptId: canonicalAttemptId,
         };
-        const retryArgv = [
-          'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
-          'start-cycle',
-          '--repo', opts.repo,
-          '--issue-number', String(issueNumber),
-          '--source-revision', liveRevision,
-          '--stage', opts.expectedStage,
-          '--tier', tier,
-          '--expected-source-revision', liveRevision,
-          '--expected-stage', opts.expectedStage,
-          '--json',
-        ];
+        const reconcileAction = (): CreateIssueNextAction => {
+          const evidencePath = evidencePathForBinding(canonical.directory, binding);
+          return reconcileStageReadOnlyAction(
+            opts,
+            issueNumber,
+            binding,
+            canonical.directory,
+            evidencePath,
+          );
+        };
+        const reconcile = (blocker: string): number => {
+          process.stderr.write(blocker + '\n');
+          return emitManagerBoundary(
+            'create-issue-stage-record-cli.ts:main',
+            argv,
+            createIssueRecoverableResult({
+              cause: 'repository_invariant_requires_reconciliation',
+              blocker,
+              nextAction: reconcileAction(),
+            }),
+          );
+        };
+        let authority: ReturnType<typeof loadCanonicalLifecycleAuthority>;
+        try {
+          authority = loadCanonicalLifecycleAuthority(issueNumber);
+        } catch (error) {
+          return reconcile(error instanceof Error ? error.message : String(error));
+        }
+        const intake = parseLifecycleTierIntake(authority.intake);
+        if (!intake) {
+          return reconcile('canonical tier-intake/v1 is missing or malformed');
+        }
+        const admissionInput = {
+          issueNumber,
+          tier: intake.priorTier,
+          stage,
+          sourceRevision: liveRevision,
+          issueBody: live.body,
+          intake,
+          receiptValues: authority.receiptValues,
+        };
+        let admission = admitStageLaunch(admissionInput);
+        if (admission.code === 'terminal_bundle_unavailable' && admission.intake) {
+          try {
+            const terminalBundle = composeTerminalBundle({
+              reviewDir: authority.reviewDir,
+              reviewEpisodeId: `${admission.intake.taskIdentity}@${admission.intake.firstRevision}`,
+              sourceRevision: liveRevision,
+              predecessorStage: admission.predecessorStage ?? null,
+              issueBody: live.body,
+            });
+            admission = admitStageLaunch({ ...admissionInput, terminalBundle });
+          } catch (error) {
+            return reconcile(error instanceof Error ? error.message : String(error));
+          }
+        }
+        if (!admission.ok) {
+          return reconcile(admission.message ?? 'stage lifecycle admission refused retry');
+        }
+        let lifecycleBinding;
+        try {
+          lifecycleBinding = inspectLifecycleInvocationBinding({
+            issueNumber,
+            stage,
+            stageAttemptId: canonicalAttemptId,
+            sourceRevision: liveRevision,
+          });
+        } catch (error) {
+          return reconcile(error instanceof Error ? error.message : String(error));
+        }
+        const observedAttemptId = lifecycleBinding.observed.stageAttemptId;
+        const noRecordedAttempt = !lifecycleBinding.ok
+          && observedAttemptId === undefined
+          && /observed 0$/.test(lifecycleBinding.message ?? '');
+        if (!lifecycleBinding.ok && !noRecordedAttempt) {
+          return reconcile(lifecycleBinding.message ?? 'lifecycle stage binding is not admissible');
+        }
+        const retryOpts = { ...opts, tier: intake.priorTier };
         const output = createIssueRecoverableResult({
           cause: 'stale_next_action',
-          blocker: `readonly reconciliation observed live source revision ${liveRevision}`,
+          blocker: `readonly reconciliation admitted live source revision ${liveRevision}`,
           nextAction: createIssueNextAction({
             kind: 'retry-start-cycle',
             binding,
-            argv: appendBlockedOnArgv(retryArgv, opts.blockedOn),
+            argv: startCycleRetryArgv(retryOpts, issueNumber, binding),
           }),
         });
         return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
