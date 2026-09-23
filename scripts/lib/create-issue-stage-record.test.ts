@@ -1606,6 +1606,267 @@ describe('create-issue-stage-record receipt binding', () => {
   });
 });
 
+describe('Issue #2038 canonical fork loser recovery', () => {
+  const fixtureIssueNumber = 92038;
+  const sourceRevision = 'r05';
+  const rootCycleId = 'cycle-2038-root';
+  const winnerCycleId = 'cycle-2038-winner';
+  const loserCycleId = 'cycle-2038-loser';
+
+  function cycleComment(
+    id: number,
+    cycleId: string,
+    predecessorCycleId: string,
+    createdAt: string,
+  ): TrustedComment {
+    const logical: CycleEventLogical = {
+      schema: CYCLE_SCHEMA,
+      'event-key': cycleId,
+      'cycle-id': cycleId,
+      'predecessor-cycle-id': predecessorCycleId,
+      'source-revision': sourceRevision,
+      tier: 'T2',
+      'public-actor': 'cursor-flow-manager',
+    };
+    return trusted(id, serializeCommentBody(logical), 'chetwerikoff', createdAt);
+  }
+
+  function loserStageComment(id: number): TrustedComment {
+    const logical: StageEventLogical = {
+      schema: STAGE_SCHEMA,
+      'event-key': `${loserCycleId}:architectural-review:attempt-2038-loser`,
+      'cycle-id': loserCycleId,
+      stage: 'architectural-review',
+      tier: 'T2',
+      'source-revision': sourceRevision,
+      'stage-attempt-id': 'attempt-2038-loser',
+      'policy-version': 'triple-source/v1',
+      'settled-outcome': 'complete',
+      'source-count': 3,
+      'required-source-count': 3,
+      'producer-evidence': 'not-applicable',
+      'tier-transition': 'none',
+    };
+    return trusted(id, serializeCommentBody(logical), 'chetwerikoff', '2026-09-22T10:27:00.000Z');
+  }
+
+  function writeLifecycleAuthority(stateRoot: string, issueBody: string): void {
+    const reviewDir = join(stateRoot, '.review', String(fixtureIssueNumber));
+    const taskIdentity = `issue:${fixtureIssueNumber}`;
+    const reviewEpisodeId = `${taskIdentity}@${sourceRevision}`;
+    mkdirSync(reviewDir, { recursive: true });
+    writeFileSync(join(reviewDir, 'tier-intake.json'), JSON.stringify({
+      schema: 'tier-intake/v1',
+      producer: 'flow-manager',
+      taskIdentity,
+      kind: 'fresh',
+      priorTier: 'T2',
+      firstRevision: sourceRevision,
+    }, null, 2));
+    writeFileSync(
+      join(reviewDir, 'stage-completeness-receipt-attempt-2038-loser.json'),
+      JSON.stringify({
+        schema: 'stage-completeness-receipt/v1',
+        tier: 'T2',
+        taskIdentity,
+        episodeFirstRevision: sourceRevision,
+        reviewEpisodeId,
+        stage: 'architectural-review',
+        stageAttemptId: 'attempt-2038-loser',
+        stageSequence: 1,
+        cycleId: loserCycleId,
+        policyVersion: 'triple-source/v1',
+        reviewerCardinality: 3,
+        completedSourceCount: 3,
+        sourceRevision,
+        outcome: 'complete',
+        producerEvidence: 'not-applicable',
+        tierTransition: 'none',
+        cycleBinding: { cycleId: loserCycleId, sourceRevision, boundBeforeLaunch: true },
+      }, null, 2),
+    );
+    writeFileSync(join(reviewDir, 'author-dispositions.json'), JSON.stringify({
+      schema: 'create-issue-author-dispositions/v1',
+      reviewEpisodeId,
+      sourceRevision,
+      predecessorStage: 'architectural-review',
+      draft: issueBody,
+      findings: [],
+    }, null, 2));
+    writeFileSync(join(reviewDir, 'finding-disposition-ledger.json'), JSON.stringify({
+      schema: 'finding-disposition-ledger/v1',
+      reviewEpisodeId,
+      sourceRevision,
+      predecessorStage: 'architectural-review',
+      draft: issueBody,
+      findings: [],
+      counts: { rawFindingCount: 0 },
+    }, null, 2));
+  }
+
+  function forkComments(includeDescendant = false): TrustedComment[] {
+    const comments = [
+      cycleComment(5770000001, rootCycleId, 'none', '2026-09-22T04:00:00.000Z'),
+      cycleComment(5771298382, winnerCycleId, rootCycleId, '2026-09-22T04:40:18.000Z'),
+      cycleComment(5774888271, loserCycleId, rootCycleId, '2026-09-22T10:26:24.000Z'),
+      loserStageComment(5774888272),
+    ];
+    if (includeDescendant) {
+      comments.push(cycleComment(
+        5774888273,
+        'cycle-2038-descendant',
+        winnerCycleId,
+        '2026-09-22T10:28:00.000Z',
+      ));
+    }
+    return comments;
+  }
+
+  it('admits the next lifecycle-legal stage from the canonical winner while preserving loser evidence', () => {
+    const issueBody = '<!-- source-revision: r05 -->\nrevision r05';
+    const stateRoot = makeCliTempDir();
+    const workdir = makeCliTempDir();
+    writeLifecycleAuthority(stateRoot, issueBody);
+    const originalComments = forkComments();
+    const state = createMockGhState({
+      comments: [...originalComments],
+      issue: { title: 'Issue #2038 fixture', body: issueBody, labels: ['spec-review:in-progress'] },
+      nextCommentId: 5774888274,
+    });
+    persistCycleId(workdir, loserCycleId);
+
+    const result = startReviewCycle(createMockTransport(state), {
+      repo,
+      issueNumber: fixtureIssueNumber,
+      sourceRevision,
+      stage: 'architectural',
+      tier: 'T2',
+      publicActor: 'cursor-flow-manager',
+      predecessorCycleId: winnerCycleId,
+      workdir,
+      stateRootOverride: stateRoot,
+      census: { pageSize: 100 },
+    });
+
+    expect(result.ok, result.diagnostics.map((item) => item.message).join('\n')).toBe(true);
+    expect(result.cycleId).toBeTruthy();
+    expect(result.cycleId).not.toBe(loserCycleId);
+    expect(result.cycleId).not.toBe(winnerCycleId);
+    expect(state.comments).toHaveLength(originalComments.length + 1);
+    expect(state.comments.slice(0, originalComments.length)).toEqual(originalComments);
+    const successor = parseLogicalFromCommentBody(state.comments.at(-1)!.body);
+    expect(successor).toMatchObject({
+      schema: CYCLE_SCHEMA,
+      'cycle-id': result.cycleId,
+      'event-key': result.cycleId,
+      'predecessor-cycle-id': winnerCycleId,
+      'source-revision': sourceRevision,
+      tier: 'T2',
+      'public-actor': 'cursor-flow-manager',
+    });
+    expect(readPersistedCycleId(workdir)).toBe(result.cycleId);
+  });
+
+  it('refuses a stale canonical ancestor before publishing a successor', () => {
+    const comments = forkComments(true);
+    const state = createMockGhState({
+      comments: [...comments],
+      issue: { title: 'Issue #2038 fixture', body: '<!-- source-revision: r05 -->\nrevision r05', labels: [] },
+      nextCommentId: 5774888274,
+    });
+    const workdir = makeCliTempDir();
+    persistCycleId(workdir, loserCycleId);
+
+    const result = startReviewCycle(createMockTransport(state), {
+      repo,
+      issueNumber: fixtureIssueNumber,
+      sourceRevision,
+      tier: 'T2',
+      publicActor: 'cursor-flow-manager',
+      predecessorCycleId: winnerCycleId,
+      workdir,
+      census: { pageSize: 100 },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'orphan-cycle',
+        eventKey: loserCycleId,
+        message: expect.stringContaining('cycle-2038-descendant'),
+      }),
+    ]));
+    expect(result.diagnostics.map((item) => item.code)).not.toContain('conflicting-cycle-id');
+    expect(state.comments).toEqual(comments);
+    expect(state.commentCreateAttempts).toEqual([]);
+    expect(readPersistedCycleId(workdir)).toBe(loserCycleId);
+  });
+
+  it('requires an explicit current-head predecessor for a known persisted loser', () => {
+    const comments = forkComments();
+    const state = createMockGhState({
+      comments: [...comments],
+      issue: { title: 'Issue #2038 fixture', body: '<!-- source-revision: r05 -->\nrevision r05', labels: [] },
+      nextCommentId: 5774888274,
+    });
+    const workdir = makeCliTempDir();
+    persistCycleId(workdir, loserCycleId);
+
+    const result = startReviewCycle(createMockTransport(state), {
+      repo,
+      issueNumber: fixtureIssueNumber,
+      sourceRevision,
+      tier: 'T2',
+      publicActor: 'cursor-flow-manager',
+      workdir,
+      census: { pageSize: 100 },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'conflicting-remote-event',
+        eventKey: loserCycleId,
+        message: expect.stringContaining('requires an explicit predecessor'),
+      }),
+    ]));
+    expect(result.diagnostics.map((item) => item.message)).not.toContain('cycle head drift after publication');
+    expect(state.comments).toEqual(comments);
+    expect(state.commentCreateAttempts).toEqual([]);
+    expect(readPersistedCycleId(workdir)).toBe(loserCycleId);
+  });
+
+  it('preserves the exact attempted-cycle conflict path outside loser recovery', () => {
+    const cycleId = 'cycle-2038-conflict';
+    const comments = [cycleComment(5775000001, cycleId, 'none', '2026-09-22T11:00:00.000Z')];
+    const state = createMockGhState({
+      comments: [...comments],
+      issue: { title: 'Issue #2038 fixture', body: '<!-- source-revision: r05 -->\nrevision r05', labels: [] },
+      nextCommentId: 5775000002,
+    });
+    const workdir = makeCliTempDir();
+    persistCycleId(workdir, cycleId);
+
+    const result = startReviewCycle(createMockTransport(state), {
+      repo,
+      issueNumber: fixtureIssueNumber,
+      sourceRevision,
+      tier: 'T2',
+      publicActor: 'opencode-flow-manager',
+      predecessorCycleId: 'none',
+      workdir,
+      census: { pageSize: 100 },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'conflicting-cycle-id', eventKey: cycleId }),
+    ]));
+    expect(state.comments).toEqual(comments);
+    expect(state.commentCreateAttempts).toEqual([]);
+  });
+});
+
 function trusted(
   id: number,
   body: string,
