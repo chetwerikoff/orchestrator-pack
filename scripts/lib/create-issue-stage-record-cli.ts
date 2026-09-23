@@ -1242,12 +1242,17 @@ export function runStageFinalizeCli(
           return 1;
         }
         repairClass = 'author-schema';
-        const inspected = authorSchemaDiagnostics(reviewDir);
-        schemaFragment = inspected.schemaFragment;
-        diagnostics = inspected.diagnostics.map(
-          (item) => `${item.reason}:${item.field}: ${item.message}`,
-        );
-        if (diagnostics.length === 0) {
+        const validation = produceAcceptanceArtifacts({
+          reviewDir,
+          tierIntakePath: join(reviewDir, 'tier-intake.json'),
+          stageEvidencePaths: [],
+          authorDispositionsPath: join(reviewDir, 'author-dispositions.json'),
+          outputDir: reviewDir,
+          phase: authorRoundPhase(expectedStage),
+          repositoryFullName: opts.repo,
+          artifactSourceTransport: transport,
+        });
+        if (validation.ok) {
           const output = createIssueTerminalResult({
             ok: true,
             cause: 'author_round_not_required',
@@ -1255,6 +1260,26 @@ export function runStageFinalizeCli(
           if (opts.json) console.log(JSON.stringify(output));
           return 0;
         }
+        const lifecycleOwned = validation.errors.some(
+          (error) => classifyAuthorDispositionFailure(error) === 'lifecycle-injected',
+        );
+        const authorDiagnostics = validation.authorDiagnostics ?? [];
+        if (lifecycleOwned || authorDiagnostics.length === 0) {
+          const output = createIssueTerminalResult({
+            ok: false,
+            cause: lifecycleOwned
+              ? 'author_round_lifecycle_validation_failed'
+              : 'author_round_non_author_failure',
+            blocker: validation.errors.join('; '),
+          });
+          if (opts.json) console.log(JSON.stringify(output));
+          else process.stderr.write((output.blocker ?? output.cause) + '\n');
+          return 1;
+        }
+        schemaFragment = validation.authorSchemaFragment ?? renderAuthorDispositionPromptFragment();
+        diagnostics = authorDiagnostics.map(
+          (item) => `${item.reason}:${item.field}: ${item.message}`,
+        );
       } else {
         const existing = existingAttemptForStage(reviewDir, expectedStage);
         if (existing) {
