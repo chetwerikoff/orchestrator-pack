@@ -3,7 +3,7 @@ import { basename, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { defaultGhTransport, fetchIssueRevision } from './create-issue-stage-record-gh.ts';
 import type { GhTransport } from './create-issue-stage-record-types.ts';
-import { canonicalStagePlan, type ReviewTier } from './create-issue-stage-topology.ts';
+import { canonicalPredecessorStage, type ReviewTier } from './create-issue-stage-topology.ts';
 import {
   deriveReviewEpisodeState,
   resolveCanonicalReviewDirectory,
@@ -231,9 +231,9 @@ function resolveTierAndPredecessor(
   if (priorTier !== 'T1' && priorTier !== 'T2' && priorTier !== 'T3') {
     throw new Error('terminal_bundle_tier_intake_invalid');
   }
-  let plan;
+  let expectedPredecessorStage: string | null;
   try {
-    plan = canonicalStagePlan(priorTier, {
+    expectedPredecessorStage = canonicalPredecessorStage(priorTier, 'architectural', {
       competitiveDecision: intake.competitiveDecision === 'required' || intake.competitiveDecision === 'skipped'
         ? intake.competitiveDecision
         : undefined,
@@ -244,9 +244,6 @@ function resolveTierAndPredecessor(
   } catch {
     throw new Error('terminal_bundle_tier_intake_invalid');
   }
-  const expectedPredecessorStage = plan.stages.length > 1
-    ? plan.stages[plan.stages.length - 2]!.stage
-    : null;
   if (predecessorStage !== expectedPredecessorStage) {
     throw new Error('terminal_bundle_predecessor_invalid');
   }
