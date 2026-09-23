@@ -26,7 +26,9 @@ export interface ManagerCliInspection {
 const HELP_FLAGS = new Set(['--help', '-h']);
 
 function renderOption(option: ManagerCliOptionDeclaration): string {
-  const value = option.value ? ` <${option.value}>` : '';
+  const value = option.values && option.values.length > 0
+    ? ` <${option.values.join('|')}>`
+    : option.value ? ` <${option.value}>` : '';
   const rendered = `${option.flag}${value}`;
   return option.required ? rendered : `[${rendered}]`;
 }
@@ -125,7 +127,10 @@ export function inspectManagerCliInvocation(
 
     const value = tokens[index + 1];
     if (value === undefined || value === '' || value.startsWith('--')) {
-      return invalid(declaration, command, `${option.flag} requires <${option.value}>`);
+      const message = option.values && option.values.length > 0
+        ? `${option.flag} must be one of ${option.values.join(', ')}; received ""`
+        : `${option.flag} requires <${option.value}>`;
+      return invalid(declaration, command, message);
     }
     if (option.values && !option.values.includes(value)) {
       return invalid(
