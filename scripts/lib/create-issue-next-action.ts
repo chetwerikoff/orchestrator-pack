@@ -562,6 +562,24 @@ function externalCauseFromRecordedEvidence(rawCause: string): CreateIssueExterna
   return null;
 }
 
+function defaultReadOnlyReconciliationAction(binding: CreateIssueActionBinding): CreateIssueNextAction {
+  const argv = [
+    'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+    'reconcile-stage',
+    '--repo', binding.repository,
+    '--issue-number', String(binding.issueNumber),
+    '--expected-source-revision', binding.sourceRevision,
+    '--expected-stage', binding.stage,
+  ];
+  if (binding.stageAttemptId) argv.push('--expected-stage-attempt-id', binding.stageAttemptId);
+  argv.push('--json');
+  return createIssueNextAction({
+    kind: 'reconcile-stage-read-only',
+    binding,
+    argv,
+  });
+}
+
 export function projectZeroSendManagerResult(input: {
   policy: { class: ZeroSendCauseClass; code: string; rawCause: string } | null;
   attemptOrdinal: number;
@@ -587,14 +605,15 @@ export function projectZeroSendManagerResult(input: {
     ...(input.observed_user_heads ? { observed_user_heads: [...input.observed_user_heads] } : {}),
   };
   if (input.policy.class === 'deterministic-input' || input.policy.class === 'state-conflict') {
-    if (!input.reconcileAction || input.reconcileAction.kind !== 'reconcile-stage-read-only') {
+    const reconcileAction = input.reconcileAction ?? defaultReadOnlyReconciliationAction(input.binding);
+    if (reconcileAction.kind !== 'reconcile-stage-read-only') {
       throw new Error('zero-send deterministic/state-conflict continuation must reconcile read-only');
     }
     return createIssueRecoverableResult({
       cause: input.policy.code,
       blocker: input.policy.rawCause,
       reason,
-      nextAction: input.reconcileAction,
+      nextAction: reconcileAction,
     });
   }
   if (input.attemptOrdinal === 1) {
