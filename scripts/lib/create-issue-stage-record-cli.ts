@@ -156,7 +156,7 @@ const MANAGER_CLI_OPTIONS = {
   operatorVerdictByteLength: { flag: '--operator-verdict-byte-length', value: 'n' },
   operatorFindingCount: { flag: '--operator-finding-count', value: 'n' },
   operatorReason: { flag: '--operator-reason', value: 'text' },
-  publicActor: { flag: '--public-actor', value: 'actor', values: PUBLIC_ACTORS },
+  publicActor: { flag: '--public-actor', value: 'actor', values: [...PUBLIC_ACTORS] },
   workdir: { flag: '--workdir', value: 'path' },
   json: { flag: '--json' },
   cycleId: { flag: '--cycle-id', value: 'assertion' },
