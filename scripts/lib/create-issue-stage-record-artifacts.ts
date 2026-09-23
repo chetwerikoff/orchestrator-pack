@@ -1361,8 +1361,8 @@ export function readEvidenceZeroSendTerminal(evidencePath: string): ZeroSendTerm
     const envelope = resolveInvocationEnvelope(evidencePath, invocation);
     if (!envelope) continue;
     const policy = classifyZeroSendCausePolicy(envelope);
+    if (!policy) continue;
     const observedRetryClass = retryClass(invocation.retryClass);
-    if (!policy || !observedRetryClass) continue;
     const reviewerSlot = optionalString(invocation.reviewerSlot);
     const retryConsumed = policy.class === 'transient'
       && reviewerSlot !== undefined
@@ -1370,13 +1370,16 @@ export function readEvidenceZeroSendTerminal(evidencePath: string): ZeroSendTerm
         && optionalString(candidate.reviewerSlot) === reviewerSlot
         && candidate.attemptOrdinal === 2);
     if (policy.class === 'transient' && (observedRetryClass !== 'eligible-zero-send' || retryConsumed)) continue;
+    const effectiveRetryClass = observedRetryClass
+      ?? classifyReconciliationTransport(envelope, 1)?.retryClass;
+    if (!effectiveRetryClass) continue;
     const diagnostics = zeroSendEnvelopeDiagnostics(envelope);
     const observation: ZeroSendTerminalObservation = {
       stageAttemptId,
       sourceRevision,
       stage,
       attemptOrdinal: 1,
-      retryClass: observedRetryClass,
+      retryClass: effectiveRetryClass,
       policy,
       ...(optionalString(invocation.invocationId) ? { invocationId: optionalString(invocation.invocationId) } : {}),
       ...(reviewerSlot ? { reviewerSlot } : {}),
