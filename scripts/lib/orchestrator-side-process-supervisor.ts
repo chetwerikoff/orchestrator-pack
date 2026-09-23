@@ -8,6 +8,7 @@ import { projectRegistry, validateSchedulerRegistry } from './cutover/activation
 import { sha256Bytes } from './cutover/stable-stringify.ts';
 import {
   EMPTY_CRASH_BACKOFF_STATE,
+  crashBackoffPolicyFromEnv,
   recordChildExit,
   restartDecisionAt,
   type CrashBackoffPolicy,
@@ -46,6 +47,8 @@ interface SupervisorStatusBase {
   cordonReason: 'post-cas-epoch-owner';
   refusalReason: string | null;
   crashBackoff: CrashBackoffState;
+  consecutiveStallTerminations: number;
+  lastTerminationReason: string | null;
 }
 
 /** Current truthful-liveness status. A running child is live only with matching startTicks. */
@@ -85,12 +88,16 @@ function supervisorLockPath(options: Pick<SupervisorOptions, 'stateDir'>): strin
   return path.join(options.stateDir, 'typescript-supervisor.lock');
 }
 
-function verifyEpochAndProjection(options: SupervisorOptions): { registryHash: string; cadenceSeconds: number } {
+function verifyEpochAndProjection(options: SupervisorOptions): { registryHash: string; cadenceSeconds: number; stallGraceMultiplier: number } {
   const core = new FileEpochAuthority(options.epochAuthorityPath).verify(options.epochId, options.nonce);
   const projected = projectRegistry(options.targetRegistryPath, options.projectedRegistryPath);
   if (projected.registryHash !== core.registryHash) throw new Error('supervisor_registry_hash_mismatch');
   const registry = validateSchedulerRegistry(readFileSync(options.projectedRegistryPath));
-  return { registryHash: projected.registryHash, cadenceSeconds: registry.children[0].cadenceSeconds };
+  return {
+    registryHash: projected.registryHash,
+    cadenceSeconds: registry.children[0].cadenceSeconds,
+    stallGraceMultiplier: registry.children[0].stallGraceMultiplier,
+  };
 }
 
 function writeStatus(options: SupervisorOptions, value: SupervisorStatus): void {
@@ -260,8 +267,11 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
     cordonReason: 'post-cas-epoch-owner',
     refusalReason: null,
     crashBackoff: EMPTY_CRASH_BACKOFF_STATE,
+    consecutiveStallTerminations: 0,
+    lastTerminationReason: null,
   };
-  const verify = (): { registryHash: string; cadenceSeconds: number } => {
+  const stallTerminalLimit = crashBackoffPolicyFromEnv().terminalRapidExits;
+  const verify = (): { registryHash: string; cadenceSeconds: number; stallGraceMultiplier: number } => {
     try {
       const verified = verifyEpochAndProjection(options);
       state.registryHash = verified.registryHash;
@@ -317,6 +327,9 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
       state.restartState = 'starting';
       writeStatus(options, state);
       let childStartedAtMs = 0;
+      let stallTerminationRequested = false;
+      let stallDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
+      const stallDeadlineMs = verified.cadenceSeconds * verified.stallGraceMultiplier * 1_000;
       const result = await runProcess({
         command: process.execPath,
         args: ['--experimental-strip-types', schedulerPath, 'tick'],
@@ -332,6 +345,12 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
         allowEmptyStdout: true,
         onSpawn: (pid) => {
           childStartedAtMs = Date.now();
+          stallDeadlineTimer = setTimeout(() => {
+            if (stopping || currentAbort === null) return;
+            stallTerminationRequested = true;
+            currentAbort.abort();
+          }, stallDeadlineMs);
+          stallDeadlineTimer.unref();
           state.childPid = pid;
           try {
             state.childStartTicks = readProcessIdentity(pid).startTicks;
@@ -343,11 +362,30 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
           writeStatus(options, state);
         },
       });
+      if (stallDeadlineTimer !== undefined) clearTimeout(stallDeadlineTimer);
       currentAbort = null;
       state.childPid = null;
       state.childStartTicks = null;
       if (stopping) break;
       state.childRestarts += 1;
+      if (stallTerminationRequested && result.cancelled) {
+        state.consecutiveStallTerminations += 1;
+        state.lastTerminationReason = 'stall_terminated';
+        state.restartState = 'waiting-restart';
+        state.refusalReason = null;
+        writeStatus(options, state);
+        if (state.consecutiveStallTerminations >= stallTerminalLimit) {
+          state.restartState = 'refused';
+          state.refusalReason = 'scheduler_child_stall_loop';
+          writeStatus(options, state);
+          throw new Error(state.refusalReason);
+        }
+        const cadenceDelay = options.restartDelayMs ?? verified.cadenceSeconds * 1_000;
+        await delay(cadenceDelay);
+        continue;
+      }
+      state.consecutiveStallTerminations = 0;
+      state.lastTerminationReason = result.ok ? 'completed' : `scheduler_child_${result.outcome}`;
       const transition = supervisorChildExitTransition({
         previous: state.crashBackoff,
         startedAtMs: childStartedAtMs,
