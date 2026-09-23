@@ -184,6 +184,52 @@ describe('supervised worker start exact assignment admission',()=>{
     expect(currentWorkerAssignment(file,1416)?.delegatedIntegration).toEqual(delegatedIntegration);
   });
 
+  it('stops and reads back an exact live-idle implementation predecessor before delegated integration launch', async () => {
+    const base=root(); const env={...process.env,OPK_BASE_DIR:base};
+    const file=resolveWorkerAssignmentStorePath('orchestrator-pack',env);
+    const implementation=await publishCurrentWorkerAssignment({file,repository:'chetwerikoff/orchestrator-pack',issueNumber:1416,
+      taskId:'task_1',kind:'local',provider:'orca',bindingKey:'dispatch_old',role:'worker'});
+    if(!implementation.ok)throw new Error(implementation.reason);
+    const delegatedIntegration={
+      prNumber:926,
+      expectedHeadSha:'a'.repeat(40),
+      predecessorAssignmentId:implementation.assignment.assignmentId,
+      predecessorGeneration:implementation.assignment.generation,
+    };
+    const liveAdapter=adapter({kind:'resolved',worker},'idle');
+    let predecessorPresent:RuntimeWorker|null=worker;
+    const stopWorker=vi.fn((identity:RuntimeWorker['identity'])=>{
+      expect(identity).toEqual(worker.identity);
+      predecessorPresent=null;
+      return {status:'ok' as const,value:{stopped:true as const}};
+    });
+    const liveAdapterWithReadback:RuntimeAdapter={
+      ...liveAdapter,
+      stopWorker,
+      findWorker:()=>({status:'ok',value:predecessorPresent}),
+    };
+    let launches=0;
+    const result=await runSupervisedWorkerStart({mode:'provider_new_top_level',role:'worker',issueNumber:1416,
+      repository:'chetwerikoff/orchestrator-pack',env,adapter:liveAdapterWithReadback,delegatedIntegration,
+      orcaArgs:['--task','task_1','--worktree','new-top-level','--repo','id:repo-1','--name','integration-worktree',
+        '--agent','cursor','--model','model-medium','--setup','run'],
+      execute:async()=>{
+        launches+=1;
+        expect(predecessorPresent).toBeNull();
+        return {ok:true,stdout:envelope({taskId:'task_1',dispatchId:'dispatch_integration',state:'ready',
+          worktree:{id:'repo-1::/tmp/new-worktree',path:'/tmp/new-worktree'},terminal:{handle:'term-provider',runtime:'orca',generation:'generation-1'},
+          setup:{requested:'run',effective:'run',state:'running'},launch:{requested:{agent:'cursor',model:'model-medium'},effective:{agent:'cursor',model:'model-medium'}},
+          effects:[{kind:'worktree',action:'created_top_level',id:'repo-1::/tmp/new-worktree'},
+            {kind:'terminal',role:'agent',action:'reused_agent_terminal',id:'term-provider'},
+            {kind:'dispatch_input',role:'agent',state:'accepted',id:'term-provider'}]})};
+      },
+    });
+    expect(result).toMatchObject({ok:true,reason:'ready_and_assignment_bound',assignment:{delegatedIntegration}});
+    expect(stopWorker).toHaveBeenCalledTimes(1);
+    expect(launches).toBe(1);
+    expect(currentWorkerAssignment(file,1416)?.delegatedIntegration).toEqual(delegatedIntegration);
+  });
+
   it('reuses an exact live current integration assignment with the same marker without Orca restart', async()=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base};
     const file=resolveWorkerAssignmentStorePath('orchestrator-pack',env);

@@ -75,6 +75,16 @@ worker lifecycle and consumes that production result for its own exact
 assignment/PR/head. Delegated integration proceeds only when the result is
 exactly `READY_TO_MERGE`.
 
+The existing `worker-smoke-run.ts delegated-readiness` command is the supported
+current-assignment invocation for this revalidation. It binds the supplied Issue,
+PR and head to the current WorkerAssignment and its delegated marker, calls
+`evaluatePostSmokeReadiness()` with publication disabled, verifies the PASS smoke
+report against a stable exact-head PR-comment census, then re-reads the same
+assignment/marker and PR head before returning. Missing, changed, or unavailable
+smoke evidence is `NOT_READY`; the command does not execute or carry smoke itself.
+Invoke it through the canonical TypeScript CLI wrapper with `--issue`, `--pr`,
+`--head-sha`, `--issue-body-file`, `--repo-root`, `--cwd`, and `--json`.
+
 Do not reconstruct readiness from individual GitHub statuses,
 `reviewStageComplete`, tier-cap state, strict-descendant settlement, or prose.
 Draft/conflict/mergeability and live dependency sequencing remain separate fresh

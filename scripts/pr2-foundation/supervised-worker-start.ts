@@ -17,7 +17,11 @@ import {
   type WorkerAssignmentStoreTrustCause,
 } from '../lib/worker-assignment-store.ts';
 import { existsSync, readFileSync } from 'node:fs';
-import { admitCurrentWorkerAssignmentReplacement } from '../lib/worker-assignment-runtime.ts';
+import {
+  admitCurrentWorkerAssignmentReplacement,
+  resolveCurrentWorkerAssignmentTarget,
+} from '../lib/worker-assignment-runtime.ts';
+import { withCurrentWorkerAssignmentFence } from '../lib/worker-assignment-store.ts';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
 import type { RuntimeAdapter } from '../runtime/contracts.ts';
 
@@ -278,6 +282,32 @@ function expectedCurrentForPublish(
   return current
     ? { assignmentId: current.assignmentId, generation: current.generation }
     : undefined;
+}
+
+async function stopDelegatedImplementationPredecessor(input: {
+  readonly file: string;
+  readonly expected: WorkerAssignment;
+  readonly adapter: RuntimeAdapter;
+  readonly cwd?: string;
+}): Promise<string | null> {
+  const fenced = await withCurrentWorkerAssignmentFence(input.file, input.expected, async () => {
+    const target = resolveCurrentWorkerAssignmentTarget({
+      file: input.file,
+      expected: input.expected,
+      adapter: input.adapter,
+    });
+    if (target.status === 'gone') return null;
+    if (target.status !== 'resolved') return `predecessor_${target.status}`;
+
+    const callOptions = input.cwd ? { cwd: input.cwd } : undefined;
+    const stopped = input.adapter.stopWorker(target.worker.identity, callOptions);
+    if (stopped.status !== 'ok') return `predecessor_stop_${stopped.reason}`;
+    const readback = input.adapter.findWorker(target.worker.identity, callOptions);
+    if (readback.status !== 'ok') return `predecessor_stop_readback_${readback.reason}`;
+    return readback.value === null ? null : 'predecessor_stop_readback_still_live';
+  });
+  if (!fenced.ok) return fenced.reason;
+  return fenced.value;
 }
 
 function residualDiagnostic(input: {
@@ -557,7 +587,26 @@ export async function runSupervisedWorkerStart(input: {
           assignment: expectedCurrent,
         };
       }
-      return { ok: false, reason: admission.status };
+      if (delegatedIntegration
+        && exactImplementationPredecessor
+        && expectedCurrent
+        && admission.status === 'skipped_live') {
+        const stopFailure = await stopDelegatedImplementationPredecessor({
+          file,
+          expected: expectedCurrent,
+          adapter,
+          cwd: input.cwd,
+        });
+        if (stopFailure) {
+          return {
+            ok: false,
+            reason: 'delegated_integration_predecessor_shutdown_failed',
+            errorMessage: stopFailure,
+          };
+        }
+      } else {
+        return { ok: false, reason: admission.status };
+      }
     }
   }
 

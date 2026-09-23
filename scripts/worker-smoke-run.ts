@@ -133,6 +133,7 @@ import { selectRuntimeAdapter } from './runtime/registry.ts';
 import {
   currentWorkerAssignment,
   resolveWorkerAssignmentStorePath,
+  sameDelegatedIntegrationMarker,
 } from './lib/worker-assignment-store.ts';
 import { resolveCurrentWorkerAssignmentBindings } from './lib/worker-assignment-runtime.ts';
 import {
@@ -161,6 +162,7 @@ import {
   parseDirectPackReviewEvidence,
   projectDirectPackReviewState,
   type DirectPackReviewProjection,
+  type GithubReviewSummary,
 } from './lib/github-review-reconciliation.ts';
 import {
   PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
@@ -851,11 +853,18 @@ export function projectPostSmokePackReview(input: {
   };
 }
 
-export interface PostSmokeReadinessResult { readonly readiness: ReadinessResult; readonly reviewProjection: PackReviewSemanticProjection; }
+export interface PostSmokeReadinessResult {
+  readonly readiness: ReadinessResult;
+  readonly reviewProjection: PackReviewSemanticProjection;
+  readonly smokeEvidence: { readonly state: 'verified' | 'missing' | 'unavailable' | 'changed'; readonly headSha: string };
+}
 export interface PostSmokeReadinessDependencies {
   readonly resolveCiGreen?: typeof resolveCiGreen;
   readonly currentPackReviewStatusFact?: typeof currentPackReviewStatusFact;
   readonly isAncestor?: typeof githubCommitIsAncestor;
+  readonly fetchSmokeComments?: typeof fetchPrComments;
+  readonly fetchCurrentHead?: typeof fetchLivePrHead;
+  readonly listDirectReviews?: (repoRoot: string, repositorySlug: string, prNumber: number) => Promise<GithubReviewSummary[]>;
 }
 
 export async function evaluatePostSmokeReadiness(
@@ -903,13 +912,38 @@ export async function evaluatePostSmokeReadiness(
     }
   }
 
+  const fetchSmokeComments = dependencies.fetchSmokeComments ?? fetchPrComments;
+  const fetchCurrentHead = dependencies.fetchCurrentHead ?? fetchLivePrHead;
+  let initialSmokeHead = '';
+  let initialSmokeComments: WorkerSmokeCommentRecord[] = [];
+  let smokeWitness: SmokeReport | undefined;
+  let smokeObservationAvailable = true;
+  try {
+    initialSmokeHead = fetchCurrentHead(target.prNumber, target.repositorySlug, options.repoRoot);
+    initialSmokeComments = stabilizeSmokeCommentCensus(() =>
+      fetchSmokeComments(target.prNumber, target.repositorySlug, options.repoRoot));
+    if (initialSmokeHead === target.headSha) {
+      smokeWitness = findVerifiedSmokeReceiptWitness({
+        issueBody: target.issueBody,
+        comments: initialSmokeComments,
+        target: coverageTarget(target, initialSmokeHead),
+      });
+    }
+  } catch {
+    smokeObservationAvailable = false;
+  }
+
   const ciGreen = (dependencies.resolveCiGreen ?? resolveCiGreen)(target.prNumber, target.headSha, target.repositorySlug, options.repoRoot);
   const acceptedReport = selectAcceptedCurrentWorkerReport(workerReports, readinessTarget);
   const lifecycle = String(acceptedReport?.reportState ?? '').trim().toLowerCase();
   const transport = createGithubReviewTransport({ repoRoot: options.repoRoot, repoSlug: target.repositorySlug, prNumber: target.prNumber });
+  const reviews = dependencies.listDirectReviews
+    ? await dependencies.listDirectReviews(options.repoRoot, target.repositorySlug, target.prNumber)
+    : await transport.listReviews();
+  const initialSmokePassed = initialSmokeHead === target.headSha && Boolean(smokeWitness);
   const direct = projectDirectPackReviewState({
-    reviews: await transport.listReviews(), repositoryOwnerLogin: target.repositorySlug.split('/')[0] ?? '',
-    currentHeadSha: target.headSha, workerLifecycle: lifecycle, requiredCiGreen: ciGreen, exactHeadSmokePassed: true,
+    reviews, repositoryOwnerLogin: target.repositorySlug.split('/')[0] ?? '',
+    currentHeadSha: target.headSha, workerLifecycle: lifecycle, requiredCiGreen: ciGreen, exactHeadSmokePassed: initialSmokePassed,
     isAncestor: (ancestorSha, descendantSha) => (dependencies.isAncestor ?? githubCommitIsAncestor)(
       target.repositorySlug, ancestorSha, descendantSha, options.repoRoot,
     ),
@@ -932,6 +966,20 @@ export async function evaluatePostSmokeReadiness(
     });
   }
   const atCap = currentAtCapFacts(target.prNumber);
+  let smokeEvidenceState: PostSmokeReadinessResult['smokeEvidence']['state'] = smokeObservationAvailable ? 'missing' : 'unavailable';
+  if (smokeObservationAvailable && smokeWitness) {
+    try {
+      const finalHead = fetchCurrentHead(target.prNumber, target.repositorySlug, options.repoRoot);
+      const finalComments = stabilizeSmokeCommentCensus(() =>
+        fetchSmokeComments(target.prNumber, target.repositorySlug, options.repoRoot));
+      smokeEvidenceState = finalHead === target.headSha
+        && finalSmokeCommentSnapshotMatches(initialSmokeComments, finalComments)
+        ? 'verified'
+        : 'changed';
+    } catch {
+      smokeEvidenceState = 'unavailable';
+    }
+  }
   const readiness = evaluateReadiness({
     target: readinessTarget,
     pr: { open: target.prOpen, expectedTarget: target.expectedTarget, prNumber: target.prNumber, headSha: target.headSha },
@@ -941,9 +989,86 @@ export async function evaluatePostSmokeReadiness(
       obligation: reviewProjection.state === 'success' ? 'complete' : reviewProjection.reason === 'unresolved-blocker' ? 'blocked' : 'missing',
       unresolvedRequiredFinding: postSmokeReview.unresolvedRequiredFinding, ...atCap,
     },
-    smoke: { headSha: target.headSha, state: 'pass' },
+    smoke: {
+      headSha: target.headSha,
+      state: smokeEvidenceState === 'verified' ? 'pass' : smokeEvidenceState === 'unavailable' ? 'unknown' : 'missing',
+    },
   });
-  return { readiness, reviewProjection };
+  return { readiness, reviewProjection, smokeEvidence: { state: smokeEvidenceState, headSha: target.headSha } };
+}
+
+export interface DelegatedReadinessDependencies {
+  readonly resolveTarget?: typeof resolveSmokeTarget;
+  readonly fetchCurrentHead?: typeof fetchLivePrHead;
+  readonly readAssignment?: typeof currentWorkerAssignment;
+  readonly selectAdapter?: (cwd: string) => Promise<RuntimeAdapter>;
+  readonly evaluatePostSmokeReadiness?: typeof evaluatePostSmokeReadiness;
+  readonly readiness?: PostSmokeReadinessDependencies;
+}
+
+export async function runDelegatedReadiness(
+  options: CliOptions,
+  dependencies: DelegatedReadinessDependencies = {},
+): Promise<number> {
+  const report = (reason: string, readiness?: PostSmokeReadinessResult) => {
+    emit({ ok: false, reason, ...(readiness ? { readiness: readiness.readiness, smokeEvidence: readiness.smokeEvidence } : {}) }, options.json);
+    return 1;
+  };
+  if (!Number.isInteger(options.issueNumber) || options.issueNumber <= 0
+    || !Number.isInteger(options.prNumber) || options.prNumber <= 0
+    || !/^[0-9a-f]{40}$/u.test(options.headSha.trim().toLowerCase())
+    || !options.issueBodyFile) return report('delegated_readiness_binding_invalid');
+
+  let target: ResolvedSmokeTarget;
+  try {
+    target = (dependencies.resolveTarget ?? resolveSmokeTarget)(options, readIssueBody(options.issueBodyFile));
+  } catch (error) {
+    return report(`delegated_readiness_target_unavailable:${scrubSmokeOutput(error instanceof Error ? error.message : String(error))}`);
+  }
+  const expectedHead = options.headSha.trim().toLowerCase();
+  if (target.issueNumber !== options.issueNumber || target.prNumber !== options.prNumber
+    || target.headSha !== expectedHead || !target.prOpen || !target.expectedTarget) {
+    return report('delegated_readiness_target_mismatch');
+  }
+
+  const assignmentFile = resolveWorkerAssignmentStorePath('orchestrator-pack', process.env);
+  const readAssignment = dependencies.readAssignment ?? currentWorkerAssignment;
+  const assignment = readAssignment(assignmentFile, target.issueNumber);
+  const marker = assignment?.delegatedIntegration;
+  if (!assignment || assignment.repository !== target.repositorySlug.toLowerCase()
+    || assignment.role !== 'worker' || !marker
+    || marker.prNumber !== target.prNumber || marker.expectedHeadSha !== target.headSha) {
+    return report('delegated_readiness_current_assignment_marker_mismatch');
+  }
+
+  let adapter: RuntimeAdapter;
+  try {
+    adapter = await (dependencies.selectAdapter ?? (async (cwd) => selectRuntimeAdapter({}, { cwd })))(options.cwd);
+  } catch (error) {
+    return report(`delegated_readiness_runtime_unavailable:${scrubSmokeOutput(error instanceof Error ? error.message : String(error))}`);
+  }
+  const evaluate = dependencies.evaluatePostSmokeReadiness ?? evaluatePostSmokeReadiness;
+  const readiness = await evaluate({ ...options, dryRun: true }, target, adapter, dependencies.readiness);
+  const current = readAssignment(assignmentFile, target.issueNumber);
+  let finalHead = '';
+  try {
+    finalHead = (dependencies.fetchCurrentHead ?? fetchLivePrHead)(target.prNumber, target.repositorySlug, options.repoRoot);
+  } catch {
+    return report('delegated_readiness_final_binding_unavailable', readiness);
+  }
+  if (!current || current.assignmentId !== assignment.assignmentId || current.generation !== assignment.generation
+    || current.taskId !== assignment.taskId || current.repository !== assignment.repository
+    || !sameDelegatedIntegrationMarker(current.delegatedIntegration, marker) || finalHead !== target.headSha) {
+    return report('delegated_readiness_binding_changed', readiness);
+  }
+  emit({
+    ok: readiness.readiness.state === 'READY_TO_MERGE' && readiness.smokeEvidence.state === 'verified',
+    readiness: readiness.readiness,
+    reviewProjection: readiness.reviewProjection,
+    smokeEvidence: readiness.smokeEvidence,
+    assignment: { assignmentId: assignment.assignmentId, generation: assignment.generation, taskId: assignment.taskId },
+  }, options.json);
+  return readiness.readiness.state === 'READY_TO_MERGE' && readiness.smokeEvidence.state === 'verified' ? 0 : 1;
 }
 
 export async function runDirectReviewReconciliation(options: CliOptions): Promise<number> {
@@ -1953,6 +2078,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
           postSmoke = {
             readiness: { state: 'NOT_READY', ready: false, failedPredicates: [`post_smoke_readiness_unavailable:${scrubSmokeOutput(error instanceof Error ? error.message : String(error))}`] },
             reviewProjection: { state: 'error', description: 'post-smoke review reconciliation unavailable', reason: 'missing-review' },
+            smokeEvidence: { state: 'unavailable', headSha: options.headSha },
           };
         }
       }
@@ -2121,6 +2247,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
         postSmoke = {
           readiness: { state: 'NOT_READY', ready: false, failedPredicates: [`post_smoke_readiness_unavailable:${scrubSmokeOutput(error instanceof Error ? error.message : String(error))}`] },
           reviewProjection: { state: 'error', description: 'post-smoke review reconciliation unavailable', reason: 'missing-review' },
+          smokeEvidence: { state: 'unavailable', headSha: options.headSha },
         };
       }
     }
@@ -2254,7 +2381,8 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       if (options.detach || options.detachedOwner) throw new Error('wait is read-only and does not accept detach ownership flags');
       return runSmokeWait(options);
     case 'reconcile-direct-review': return runDirectReviewReconciliation(options);
-    default: throw new Error('usage: worker-smoke-run.ts <validate-plan|gate-check|run|wait|reconcile-direct-review> [options] (run accepts --detach, --operator-override <reason>, and --smoke-actor worker-owned|independent; wait requires --run <id>)');
+    case 'delegated-readiness': return runDelegatedReadiness(options);
+    default: throw new Error('usage: worker-smoke-run.ts <validate-plan|gate-check|run|wait|reconcile-direct-review|delegated-readiness> [options] (run accepts --detach, --operator-override <reason>, and --smoke-actor worker-owned|independent; wait requires --run <id>)');
   }
 }
 

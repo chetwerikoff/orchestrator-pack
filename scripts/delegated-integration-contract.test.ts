@@ -140,7 +140,10 @@ describe('Issue #926 delegated integration tracked procedure', () => {
     expect(smokeSource).toContain('const assignment = currentWorkerAssignment');
     expect(smokeSource).toContain('const readiness = evaluateReadiness({');
     expect(smokeSource).toContain('unresolvedRequiredFinding: postSmokeReview.unresolvedRequiredFinding');
-    expect(smokeSource).toContain("smoke: { headSha: target.headSha, state: 'pass' }");
+    expect(smokeSource).toContain("state: smokeEvidenceState === 'verified' ? 'pass'");
+    expect(smokeSource).toContain('export async function runDelegatedReadiness');
+    expect(smokeSource).toContain("sameDelegatedIntegrationMarker(current.delegatedIntegration, marker)");
+    expect(runbook).toContain('worker-smoke-run.ts delegated-readiness');
 
     expect(skill).toContain('evaluatePostSmokeReadiness()');
     expect(skill).toContain('readiness.state === READY_TO_MERGE');
