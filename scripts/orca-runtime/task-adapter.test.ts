@@ -1,11 +1,11 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { DeterministicRuntimeAdapter } from '../runtime/test-adapter.ts';
 import { executeRuntimeTaskLifecycle } from '../runtime/task-lifecycle.ts';
-import type { OrcaJsonResponse } from './native.ts';
+import { projectLiveOpenCodeCommand, type OrcaJsonResponse } from './native.ts';
 import { isOpenCodeComposerEmpty, OrcaRuntimeAdapter } from './adapter.ts';
 import { readOrcaTerminal } from './compat.ts';
 import { hasExecutorStartupBanner } from '../lib/worker-smoke-bounded-create.ts';
@@ -99,6 +99,41 @@ describe('Orca async transport envelope classification', () => {
       });
     } finally {
       rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('live Orca OpenCode command projection', () => {
+  it('projects the unique process command bound to the exact terminal handle and worktree', () => {
+    const procRoot = mkdtempSync(join(process.cwd(), '.tmp-orca-native-process-'));
+    const writeProcess = (pid: string, handle: string, worktreeId: string, argv: readonly string[]) => {
+      const processRoot = join(procRoot, pid);
+      mkdirSync(processRoot);
+      writeFileSync(
+        join(processRoot, 'environ'),
+        `ORCA_TERMINAL_HANDLE=${handle}\0ORCA_WORKTREE_ID=${worktreeId}\0`,
+      );
+      writeFileSync(join(processRoot, 'cmdline'), `${argv.join('\0')}\0`);
+    };
+
+    try {
+      writeProcess('101', 'term-exact', 'worktree-exact', ['opencode', '--agent', 'pack-worker']);
+      writeProcess('102', 'term-other', 'worktree-exact', ['opencode', '--agent', 'other-worker']);
+      writeProcess('103', 'term-exact', 'worktree-other', ['opencode', '--agent', 'wrong-worktree']);
+      expect(projectLiveOpenCodeCommand(
+        { handle: 'term-exact', worktreeId: 'worktree-exact' },
+        procRoot,
+        'linux',
+      )).toBe('opencode --agent pack-worker');
+
+      writeProcess('104', 'term-exact', 'worktree-exact', ['opencode', '--agent', 'duplicate']);
+      expect(projectLiveOpenCodeCommand(
+        { handle: 'term-exact', worktreeId: 'worktree-exact' },
+        procRoot,
+        'linux',
+      )).toBeUndefined();
+    } finally {
+      rmSync(procRoot, { recursive: true, force: true });
     }
   });
 });

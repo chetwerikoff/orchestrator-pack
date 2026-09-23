@@ -1,0 +1,7 @@
+{
+  "sourceCommand": "node --experimental-strip-types --input-type=module invoking scripts/orca-runtime/native.ts runOrcaJson([\"terminal\", \"show\", \"--terminal\", \"term_47af341f-f7eb-457d-a5cb-5952026b6cad\"]), which runs orca terminal show --terminal term_47af341f-f7eb-457d-a5cb-5952026b6cad --json",
+  "captureKind": "live-producer-contract-evidence",
+  "issue": 2062,
+  "observedAt": "2026-09-23",
+  "projection": "scripts/orca-runtime/native.ts matched the unique live /proc process whose ORCA_TERMINAL_HANDLE and ORCA_WORKTREE_ID exactly matched the returned Orca terminal handle/worktree; argv supplied terminal.command, with no title, path, agentIdentity, or fabricated command used as the command source."
+}
