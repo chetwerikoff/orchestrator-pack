@@ -29,7 +29,7 @@ function renderOption(option: ManagerCliOptionDeclaration): string {
   const value = option.values && option.values.length > 0
     ? ` <${option.values.join('|')}>`
     : option.value ? ` <${option.value}>` : '';
-  const rendered = `${option.flag}${value}`;
+  const rendered = `${option.flag}${value}${option.repeatable ? '...' : ''}`;
   return option.required ? rendered : `[${rendered}]`;
 }
 
