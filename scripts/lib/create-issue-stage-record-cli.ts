@@ -49,10 +49,16 @@ import {
   parseRequiredPositiveInt,
   runReviewerTsCli,
 } from './reviewer-ts-cli.ts';
+import {
+  inspectManagerCliInvocation,
+  renderManagerCliUsage,
+  type ManagerCliDeclaration,
+  type ManagerCliOptionDeclaration,
+} from './manager-cli-contract.ts';
 
 interface JournalTailCliOptions {
   json: boolean;
-  publicActor: PublicActor;
+  publicActor?: PublicActor;
   workdir?: string;
 }
 
@@ -113,6 +119,181 @@ interface FinalAcceptanceCliOptions extends JournalTailCliOptions {
   operatorVerdictByteLength?: string;
   operatorFindingCount?: string;
   operatorReason?: string;
+}
+
+
+const MANAGER_CLI_OPTIONS = {
+  repo: { flag: '--repo', value: 'owner/name' },
+  issueNumber: { flag: '--issue-number', value: 'n' },
+  sourceRevision: { flag: '--source-revision', value: 'rNN' },
+  stage: { flag: '--stage', value: 'stage', values: ['competitive', 'architectural-review', 'architectural-lens', 'architectural'] },
+  stageAttemptId: { flag: '--stage-attempt-id', value: 'id' },
+  permittedLaneOverride: { flag: '--permitted-lane-override', value: 'lane', values: ['normal', 'disputed'] },
+  tier: { flag: '--tier', value: 'tier', values: ['T1', 'T2', 'T3'] },
+  competitiveDecision: { flag: '--competitive-decision', value: 'decision', values: ['required', 'skipped'] },
+  competitiveRationale: { flag: '--competitive-rationale', value: 'text' },
+  predecessorCycleId: { flag: '--predecessor-cycle-id', value: 'id' },
+  receipt: { flag: '--receipt', value: 'path' },
+  waiver: { flag: '--waiver', value: 'path' },
+  commentUrl: { flag: '--comment-url', value: 'url' },
+  invocationId: { flag: '--invocation-id', value: 'id' },
+  reviewerSlot: { flag: '--reviewer-slot', value: 'slot' },
+  reviewDir: { flag: '--review-dir', value: 'path' },
+  outputDir: { flag: '--output-dir', value: 'path' },
+  tierIntake: { flag: '--tier-intake', value: 'path' },
+  stageEvidence: { flag: '--stage-evidence', value: 'path', repeatable: true },
+  authorDispositions: { flag: '--author-dispositions', value: 'path' },
+  claudeProducerEvidence: { flag: '--claude-producer-evidence', value: 'path', repeatable: true },
+  phase: { flag: '--phase', value: 'phase', values: ['pre-lens', 'post-lens', 'final-acceptance'] },
+  blockedOnJson: { flag: '--blocked-on-json', value: 'json' },
+  expectedSourceRevision: { flag: '--expected-source-revision', value: 'rNN' },
+  expectedStage: { flag: '--expected-stage', value: 'stage', values: ['competitive', 'architectural-review', 'architectural-lens', 'architectural'] },
+  expectedStageAttemptId: { flag: '--expected-stage-attempt-id', value: 'id' },
+  operatorIssueNumber: { flag: '--operator-issue-number', value: 'n' },
+  operatorSourceRevision: { flag: '--operator-source-revision', value: 'rNN' },
+  operatorVerdictUrl: { flag: '--operator-verdict-url', value: 'url' },
+  operatorVerdictSha256: { flag: '--operator-verdict-sha256', value: 'hex' },
+  operatorVerdictByteLength: { flag: '--operator-verdict-byte-length', value: 'n' },
+  operatorFindingCount: { flag: '--operator-finding-count', value: 'n' },
+  operatorReason: { flag: '--operator-reason', value: 'text' },
+  publicActor: { flag: '--public-actor', value: 'actor', values: PUBLIC_ACTORS },
+  workdir: { flag: '--workdir', value: 'path' },
+  json: { flag: '--json' },
+  cycleId: { flag: '--cycle-id', value: 'assertion' },
+  issueBody: { flag: '--issue-body', value: 'assertion-path' },
+  issueRevision: { flag: '--issue-revision', value: 'assertion-rNN' },
+  stageReceipt: { flag: '--stage-receipt', value: 'assertion-path', repeatable: true },
+  capture: { flag: '--capture', value: 'path', repeatable: true },
+  ledger: { flag: '--ledger', value: 'path' },
+  relayEvidence: { flag: '--relay-evidence', value: 'path', repeatable: true },
+  externalPassReceipt: { flag: '--external-pass-receipt', value: 'path' },
+} as const satisfies Record<string, ManagerCliOptionDeclaration>;
+
+const artifactOptions = [
+  MANAGER_CLI_OPTIONS.repo,
+  MANAGER_CLI_OPTIONS.issueNumber,
+  MANAGER_CLI_OPTIONS.reviewDir,
+  MANAGER_CLI_OPTIONS.outputDir,
+  MANAGER_CLI_OPTIONS.tierIntake,
+  MANAGER_CLI_OPTIONS.stageEvidence,
+  MANAGER_CLI_OPTIONS.authorDispositions,
+  MANAGER_CLI_OPTIONS.claudeProducerEvidence,
+  MANAGER_CLI_OPTIONS.waiver,
+  MANAGER_CLI_OPTIONS.phase,
+  MANAGER_CLI_OPTIONS.expectedSourceRevision,
+  MANAGER_CLI_OPTIONS.expectedStage,
+  MANAGER_CLI_OPTIONS.expectedStageAttemptId,
+  MANAGER_CLI_OPTIONS.operatorIssueNumber,
+  MANAGER_CLI_OPTIONS.operatorSourceRevision,
+  MANAGER_CLI_OPTIONS.operatorVerdictUrl,
+  MANAGER_CLI_OPTIONS.operatorVerdictSha256,
+  MANAGER_CLI_OPTIONS.operatorVerdictByteLength,
+  MANAGER_CLI_OPTIONS.operatorFindingCount,
+  MANAGER_CLI_OPTIONS.operatorReason,
+  MANAGER_CLI_OPTIONS.publicActor,
+  MANAGER_CLI_OPTIONS.workdir,
+  MANAGER_CLI_OPTIONS.blockedOnJson,
+  MANAGER_CLI_OPTIONS.json,
+] as const;
+
+export const STAGE_FINALIZE_CLI_DECLARATION = {
+  program: 'create-issue-stage-finalize.ts',
+  commands: [
+    {
+      name: 'start-cycle',
+      options: [
+        MANAGER_CLI_OPTIONS.repo,
+        { ...MANAGER_CLI_OPTIONS.issueNumber, required: true },
+        { ...MANAGER_CLI_OPTIONS.sourceRevision, required: true },
+        { ...MANAGER_CLI_OPTIONS.stage, required: true },
+        MANAGER_CLI_OPTIONS.stageAttemptId,
+        MANAGER_CLI_OPTIONS.permittedLaneOverride,
+        { ...MANAGER_CLI_OPTIONS.tier, required: true },
+        MANAGER_CLI_OPTIONS.competitiveDecision,
+        MANAGER_CLI_OPTIONS.competitiveRationale,
+        MANAGER_CLI_OPTIONS.predecessorCycleId,
+        MANAGER_CLI_OPTIONS.expectedSourceRevision,
+        MANAGER_CLI_OPTIONS.expectedStage,
+        MANAGER_CLI_OPTIONS.expectedStageAttemptId,
+        MANAGER_CLI_OPTIONS.blockedOnJson,
+        { ...MANAGER_CLI_OPTIONS.publicActor, required: true },
+        MANAGER_CLI_OPTIONS.workdir,
+        MANAGER_CLI_OPTIONS.json,
+      ],
+    },
+    {
+      name: 'publish-stage',
+      options: [
+        MANAGER_CLI_OPTIONS.repo,
+        { ...MANAGER_CLI_OPTIONS.issueNumber, required: true },
+        { ...MANAGER_CLI_OPTIONS.receipt, required: true },
+        MANAGER_CLI_OPTIONS.waiver,
+        MANAGER_CLI_OPTIONS.blockedOnJson,
+        MANAGER_CLI_OPTIONS.publicActor,
+        MANAGER_CLI_OPTIONS.workdir,
+        MANAGER_CLI_OPTIONS.json,
+      ],
+    },
+    {
+      name: 'retry-pending',
+      options: [
+        MANAGER_CLI_OPTIONS.repo,
+        { ...MANAGER_CLI_OPTIONS.issueNumber, required: true },
+        MANAGER_CLI_OPTIONS.expectedSourceRevision,
+        MANAGER_CLI_OPTIONS.expectedStage,
+        MANAGER_CLI_OPTIONS.expectedStageAttemptId,
+        MANAGER_CLI_OPTIONS.blockedOnJson,
+        MANAGER_CLI_OPTIONS.publicActor,
+        MANAGER_CLI_OPTIONS.workdir,
+        MANAGER_CLI_OPTIONS.json,
+      ],
+    },
+    { name: 'reconcile-stage', options: artifactOptions },
+    {
+      name: 'bind-published-comment',
+      options: [
+        ...artifactOptions.filter((option) => option.flag !== '--blocked-on-json'),
+        { ...MANAGER_CLI_OPTIONS.commentUrl, required: true },
+        { ...MANAGER_CLI_OPTIONS.invocationId, required: true },
+        { ...MANAGER_CLI_OPTIONS.reviewerSlot, required: true },
+      ],
+    },
+    { name: 'produce-artifacts', options: artifactOptions },
+    { name: 'check-artifacts', options: artifactOptions },
+  ],
+} as const satisfies ManagerCliDeclaration;
+
+export const FINAL_ACCEPTANCE_CLI_DECLARATION = {
+  program: 'create-issue-final-acceptance.ts',
+  options: [
+    MANAGER_CLI_OPTIONS.repo,
+    { ...MANAGER_CLI_OPTIONS.issueNumber, required: true },
+    MANAGER_CLI_OPTIONS.cycleId,
+    MANAGER_CLI_OPTIONS.issueBody,
+    MANAGER_CLI_OPTIONS.issueRevision,
+    { ...MANAGER_CLI_OPTIONS.reviewDir, required: true },
+    MANAGER_CLI_OPTIONS.stageReceipt,
+    MANAGER_CLI_OPTIONS.capture,
+    MANAGER_CLI_OPTIONS.ledger,
+    MANAGER_CLI_OPTIONS.relayEvidence,
+    MANAGER_CLI_OPTIONS.claudeProducerEvidence,
+    MANAGER_CLI_OPTIONS.externalPassReceipt,
+    MANAGER_CLI_OPTIONS.operatorIssueNumber,
+    MANAGER_CLI_OPTIONS.operatorSourceRevision,
+    MANAGER_CLI_OPTIONS.operatorVerdictUrl,
+    MANAGER_CLI_OPTIONS.operatorVerdictSha256,
+    MANAGER_CLI_OPTIONS.operatorVerdictByteLength,
+    MANAGER_CLI_OPTIONS.operatorFindingCount,
+    MANAGER_CLI_OPTIONS.operatorReason,
+    { ...MANAGER_CLI_OPTIONS.publicActor, required: true },
+    MANAGER_CLI_OPTIONS.workdir,
+    MANAGER_CLI_OPTIONS.json,
+  ],
+} as const satisfies ManagerCliDeclaration;
+
+function requirePublicActor(opts: JournalTailCliOptions): PublicActor {
+  if (!opts.publicActor) throw new Error('--public-actor is required');
+  return opts.publicActor;
 }
 
 function finishJournalArgvParse<T extends { json: boolean }>(
