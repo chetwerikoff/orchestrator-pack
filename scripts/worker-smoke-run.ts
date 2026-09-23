@@ -2253,24 +2253,27 @@ function replaceCliArgument(argv: readonly string[], name: string, value: string
 async function startDetachedSmokeOwner(
   argv: readonly string[],
   options: CliOptions,
+  durableIssueBody: boolean,
 ): Promise<DetachedSmokeStartResult> {
   if (options.detachedOwner || options.runId) {
     return { ok: false, reason: 'detached_bootstrap_ownership_flags_invalid' };
   }
   const runId = createSmokeRunIdentity();
   const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
-  ensureSmokeRunArtifactDir(artifactDir);
-  const durableIssueBodyFile = join(artifactDir, 'issue-body.input.md');
-  try {
-    writeFileSync(durableIssueBodyFile, readFileSync(options.issueBodyFile, 'utf8'), 'utf8');
-  } catch {
-    return { ok: false, runId, reason: 'detached_smoke_issue_body_copy_failed' };
-  }
   let childArgs = argv.filter((value) => value !== '--detach');
-  try {
-    childArgs = replaceCliArgument(childArgs, '--issue-body-file', durableIssueBodyFile);
-  } catch {
-    return { ok: false, runId, reason: 'detached_smoke_issue_body_binding_missing' };
+  if (durableIssueBody) {
+    ensureSmokeRunArtifactDir(artifactDir);
+    const durableIssueBodyFile = join(artifactDir, 'issue-body.input.md');
+    try {
+      writeFileSync(durableIssueBodyFile, readFileSync(options.issueBodyFile, 'utf8'), 'utf8');
+    } catch {
+      return { ok: false, runId, reason: 'detached_smoke_issue_body_copy_failed' };
+    }
+    try {
+      childArgs = replaceCliArgument(childArgs, '--issue-body-file', durableIssueBodyFile);
+    } catch {
+      return { ok: false, runId, reason: 'detached_smoke_issue_body_binding_missing' };
+    }
   }
   childArgs.push('--detached-owner', '--run', runId);
   const env = { ...process.env };
@@ -2333,11 +2336,11 @@ function detachedRunArgv(options: CliOptions): string[] {
 }
 
 export async function startDetachedSmokeAttempt(options: CliOptions): Promise<DetachedSmokeStartResult> {
-  return startDetachedSmokeOwner(detachedRunArgv(options), options);
+  return startDetachedSmokeOwner(detachedRunArgv(options), options, true);
 }
 
 async function runDetachedBootstrap(argv: readonly string[], options: CliOptions): Promise<number> {
-  const result = await startDetachedSmokeOwner(argv, options);
+  const result = await startDetachedSmokeOwner(argv, options, false);
   if (!result.ok || !result.runId) {
     process.stderr.write(`${result.reason ?? 'worker_smoke_detach_start_failed'}\n`);
     return 1;
