@@ -181,6 +181,15 @@ describe('execute-Issue manager boundary', () => {
     expect(resultAction(stopped)?.kind).toBe('execute-github-first-read-only');
   });
 
+  it('completes a successful probe when no execution-recovery refinement is present', () => {
+    const evaluated = classifyExecuteIssueManagerRecord(probe('ok'), context);
+    expect(evaluated.exitCode).toBe(0);
+    expect(evaluated.result).toMatchObject({
+      ok: true,
+      nextAction: null,
+    });
+  });
+
   it('projects ambiguous_marker to content-authority pause with the envelope preserved as evidence', () => {
     const envelope = probe('ok', {
       execution_recovery_inspect: {
