@@ -133,6 +133,22 @@ describe('create-Issue manager boundary', () => {
     expect(defect.result).toMatchObject({ cause: 'producer_contract_defect' });
   });
 
+  it('keeps stale producer throws inside the boundary as readonly recovery', () => {
+    const reconciliation = action(['node', 'reconcile-read-only']);
+    const evaluated = evaluateCreateIssueManagerBoundary({
+      producer: 'stale-producer',
+      currentArgv: ['current'],
+      reconcileAction: reconciliation,
+      produce: () => { throw new Error('stale_next_action: source revision moved'); },
+    });
+    expect(evaluated.exitCode).toBe(3);
+    expect(evaluated.result).toMatchObject({
+      ok: false,
+      cause: 'stale_next_action_reconciliation',
+      nextAction: reconciliation,
+    });
+  });
+
   it('classifies exhausted reviewer transport by recorded external causes only', () => {
     const paused = evaluateCreateIssueManagerBoundary({
       producer: 'reviewer-slot-01',
