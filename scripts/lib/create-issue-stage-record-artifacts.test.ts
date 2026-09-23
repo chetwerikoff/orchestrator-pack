@@ -39,6 +39,15 @@ import {
 } from './stage-completeness-core.ts';
 import { validateReviewLaneRecord } from './review-lane-record.ts';
 import {
+  AUTHOR_DISPOSITION_FIELD_OWNERSHIP,
+  AUTHOR_FINDING_TYPES,
+  DEFECT_DISPOSITION_VALUES as AUTHOR_DEFECT_DISPOSITIONS,
+  REMEDY_DISPOSITION_VALUES as AUTHOR_REMEDY_DISPOSITIONS,
+  classifyAuthorDispositionFailure,
+  parseGovernedAuthorDispositionText,
+  renderAuthorDispositionPromptFragment,
+} from './create-issue-author-dispositions-schema.ts';
+import {
   existingPacedBoundedRetryAction,
   projectZeroSendManagerResult,
   type CreateIssueActionBinding,
@@ -4298,5 +4307,69 @@ describe('Issue #2032 permanently noncanonical owner publications', () => {
     expect(parseCanonicalCaptureRevision(String(comments[0]!.body))).toBeNull();
     expect(parseCanonicalCaptureRevision(String(comments[1]!.body))).toMatchObject({ findingCount: 2 });
     expect(parseCanonicalCaptureRevision(String(comments[2]!.body))).toBeNull();
+  });
+});
+
+
+describe('Issue #1997 single author-disposition schema owner', () => {
+  it('renders every author-owned requirement without turning lifecycle fields into author requirements', () => {
+    const fragment = renderAuthorDispositionPromptFragment();
+    for (const field of AUTHOR_DISPOSITION_FIELD_OWNERSHIP.authorOwnedRequired) {
+      const token = field.replace(/\[\]/g, '');
+      expect(fragment).toContain(token.split('.')[0]!);
+    }
+    for (const value of AUTHOR_FINDING_TYPES) expect(fragment).toContain(value);
+    for (const value of AUTHOR_DEFECT_DISPOSITIONS) expect(fragment).toContain(value);
+    for (const value of AUTHOR_REMEDY_DISPOSITIONS) expect(fragment).toContain(value);
+    for (const field of AUTHOR_DISPOSITION_FIELD_OWNERSHIP.lifecycleInjected) {
+      expect(fragment).not.toContain(field);
+    }
+  });
+
+  it('accepts a harvested label-line payload and rejects unlabeled bare JSON as missing_schema_label', () => {
+    const labelled = readFileSync(
+      fileURLToPath(new URL('../../tests/external-output-references/create-issue-author-reply-fenceless-1978-r02.txt', import.meta.url)),
+      'utf8',
+    );
+    expect(parseGovernedAuthorDispositionText(labelled).diagnostics).toEqual([]);
+
+    const bare = JSON.stringify({
+      schema: AUTHOR_DISPOSITIONS_SCHEMA,
+      sourceRevision: 'r02',
+      findings: [],
+      m4: { inventory: [] },
+    });
+    const rejected = parseGovernedAuthorDispositionText(bare);
+    expect(rejected.diagnostics).toMatchObject([{
+      reason: 'missing_schema_label',
+      ownership: 'author-owned',
+      field: 'schema-label',
+    }]);
+    expect(rejected.schemaFragment).toContain('whole-line schema label');
+  });
+
+  it('returns field-level author diagnostics and classifies lifecycle-only failures separately', () => {
+    const invalid = [
+      'create-issue-author-dispositions/v1',
+      JSON.stringify({
+        schema: AUTHOR_DISPOSITIONS_SCHEMA,
+        sourceRevision: 'r02',
+        findings: [{
+          id: 'F1',
+          type: 'spec',
+          occurrences: ['sha256:' + 'a'.repeat(64) + ':pass-01-architectural-review-01.capture.txt:1'],
+          defectDisposition: 'addressed',
+          remedyDisposition: 'replaced-by-cheaper-sufficient',
+        }],
+        m4: { inventory: [] },
+      }),
+    ].join('\n');
+    const parsed = parseGovernedAuthorDispositionText(invalid);
+    expect(parsed.diagnostics.map((item) => item.field)).toContain('findings[0].proposalReason');
+    expect(parsed.schemaFragment).toContain('proposalReason');
+
+    expect(classifyAuthorDispositionFailure('predecessorStage disagrees with lifecycle stage evidence')).toBe('lifecycle-injected');
+    expect(classifyAuthorDispositionFailure('terminalResultIdentity is missing')).toBe('lifecycle-injected');
+    expect(classifyAuthorDispositionFailure('missing_schema_label:schema-label')).toBe('author-owned');
   });
 });
