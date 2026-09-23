@@ -33,6 +33,7 @@ import {
   startReviewCycle,
 } from './create-issue-stage-record-core.ts';
 import { parseStageFinalizeArgs, runFinalAcceptanceCli } from './create-issue-stage-record-cli.ts';
+import { createIssueEscalationThreadId } from './create-issue-manager-boundary.ts';
 import { bindPublishedCommentToSlot, STAGE_EVIDENCE_SCHEMA } from './create-issue-stage-record-artifacts.ts';
 import { parseConsumableStageReceipt } from './create-issue-stage-record-receipt.ts';
 import { runStageFinalizeCli } from './create-issue-stage-record-cli.ts';
@@ -1677,6 +1678,145 @@ describe('final acceptance CLI manager boundary', () => {
     } finally {
       logSpy.mockRestore();
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it('replays Issue #2078 scenario-2 pauses into one escalation and resumes acceptance artifacts', () => {
+    const scenarioRepo = 'chetwerikoff/orchestrator-pack';
+    const scenarioIssueNumber = 2078;
+    const canonicalBody = '<!-- source-revision: r01 -->\n';
+    const root = makeTempDir();
+    const home = join(root, 'home');
+    const reviewDir = join(root, 'review');
+    const stateRoot = join(root, 'state');
+    const xdgStateHome = join(root, 'xdg-state');
+    const issueReadPath = `repos/${scenarioRepo}/issues/${scenarioIssueNumber}`;
+    mkdirSync(home, { recursive: true });
+    mkdirSync(reviewDir, { recursive: true });
+    writeFileSync(join(reviewDir, 'issue-r01-body.json'), JSON.stringify({
+      schema: 'create-issue-live-snapshot/v1',
+      issueNumber: scenarioIssueNumber,
+      sourceRevision: 'r01',
+      title: 'fixture',
+      body: canonicalBody,
+    }) + '\n');
+    const previousHome = process.env.HOME;
+    const previousStateRoot = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+    const previousXdgStateHome = process.env.XDG_STATE_HOME;
+    process.env.HOME = home;
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = stateRoot;
+    process.env.XDG_STATE_HOME = xdgStateHome;
+    const issueReads: string[][] = [];
+    let invocation = 0;
+    const transport: GhTransport = {
+      runGh(argv: string[]) {
+        if (argv[2] !== issueReadPath || !argv.includes('--jq')) {
+          throw new Error(`unexpected transport call: ${argv.join(' ')}`);
+        }
+        issueReads.push([...argv]);
+        invocation += 1;
+        if (invocation <= 3) {
+          return { exitCode: 1, stdout: '', stderr: 'HTTP 503 Service Unavailable' };
+        }
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({ title: 'fixture', body: canonicalBody, labels: [] }),
+          stderr: '',
+        };
+      },
+    };
+    const escalationInput = {
+      issueNumber: scenarioIssueNumber,
+      stage: 'architectural' as const,
+      cause: 'external:github_unavailable',
+      resumeWhen: { operator: true } as const,
+    };
+    const escalationThreadIds: string[] = [];
+    const recordedEscalationIds = new Set<string>();
+    const recordedPauses = new Map<string, Record<string, unknown>>();
+    const escalationArgv: string[][] = [];
+    const recordEscalation = (result: Record<string, unknown>) => {
+      const threadId = createIssueEscalationThreadId(escalationInput);
+      escalationThreadIds.push(threadId);
+      if (recordedEscalationIds.has(threadId)) return;
+      recordedEscalationIds.add(threadId);
+      recordedPauses.set(threadId, result);
+      escalationArgv.push(['orca', 'orchestration', 'send', '--type', 'escalation', '--thread-id', threadId]);
+    };
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      logs.push(String(line));
+    });
+    const finalAcceptanceArgs2078 = [
+      'node', 'scripts/create-issue-final-acceptance.ts',
+      '--repo', scenarioRepo,
+      '--issue-number', String(scenarioIssueNumber),
+      '--review-dir', reviewDir,
+      '--json',
+    ];
+    try {
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        const readsBefore = issueReads.length;
+        const logsBefore = logs.length;
+        const code = runFinalAcceptanceCli(finalAcceptanceArgs2078, transport);
+        expect(code).toBe(4);
+        expect(issueReads).toHaveLength(readsBefore + 1);
+        expect(issueReads.at(-1)).toEqual([
+          'gh', 'api', issueReadPath, '--jq', '{title, body, labels: [.labels[].name]}',
+        ]);
+        expect(logs).toHaveLength(logsBefore + 1);
+        const output = JSON.parse(logs.at(-1) ?? '{}') as Record<string, unknown>;
+        expect(output).toMatchObject({
+          ok: false,
+          cause: 'external:github_unavailable',
+          pause: {
+            evidence: expect.stringContaining('HTTP 503'),
+            remedy: expect.any(String),
+            resume_when: { operator: true },
+          },
+          nextAction: null,
+        });
+        recordEscalation(output);
+      }
+      const expectedThreadId = createIssueEscalationThreadId(escalationInput);
+      expect(escalationThreadIds).toEqual([expectedThreadId, expectedThreadId, expectedThreadId]);
+      expect(escalationArgv).toEqual([[
+        'orca', 'orchestration', 'send', '--type', 'escalation', '--thread-id', expectedThreadId,
+      ]]);
+      expect(recordedEscalationIds).toHaveLength(1);
+      expect(recordedPauses).toHaveLength(1);
+      expect([...recordedPauses.values()][0]).toMatchObject({
+        ok: false,
+        cause: 'external:github_unavailable',
+        pause: { evidence: expect.stringContaining('HTTP 503') },
+        nextAction: null,
+      });
+      const readsBeforeRecovery = issueReads.length;
+      const logsBeforeRecovery = logs.length;
+      const recoveryCode = runFinalAcceptanceCli(finalAcceptanceArgs2078, transport);
+      expect(recoveryCode).toBe(3);
+      expect(issueReads).toHaveLength(readsBeforeRecovery + 1);
+      expect(issueReads.at(-1)).toEqual([
+        'gh', 'api', issueReadPath, '--jq', '{title, body, labels: [.labels[].name]}',
+      ]);
+      expect(logs).toHaveLength(logsBeforeRecovery + 1);
+      const recovery = JSON.parse(logs.at(-1) ?? '{}') as Record<string, unknown>;
+      expect(recovery).toMatchObject({
+        ok: false,
+        cause: 'acceptance-input-missing',
+        nextAction: {
+          kind: 'produce-acceptance-artifacts',
+          binding: { issueNumber: scenarioIssueNumber, sourceRevision: 'r01', stage: 'architectural' },
+        },
+      });
+      expect(recovery.nextAction).not.toBeNull();
+    } finally {
+      logSpy.mockRestore();
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previousStateRoot;
+      if (previousXdgStateHome === undefined) delete process.env.XDG_STATE_HOME;
+      else process.env.XDG_STATE_HOME = previousXdgStateHome;
     }
   });
   it('returns the exact contract_defect exit code for malformed manager-shaped CLI input', () => {
