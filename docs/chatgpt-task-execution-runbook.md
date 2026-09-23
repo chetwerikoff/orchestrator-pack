@@ -387,16 +387,18 @@ uses the existing Browser-GPT pack-review recovery order, not the execute-Issue
 2. read persisted state-light observation for that exact invocation;
 3. when required, perform the shared runbook's read-only CDP census.
 
-Pass every manager-facing review-runner result through the shared #2078/#2081
-manager result boundary before acting on it. A runner-owned `nextAction` may
-pass through only when its argv is already read-only and its kind belongs to the
-shared closed set. A send-capable or opaque runner action is never copied into a
-boundary argv: first run only `execute-review-runner-read-only`, then return to
-this runbook, which alone may reach the runner-owned send-capable action after
-its existing gates. `review_target_unavailable` or another proven external wall
-becomes `external_pause`; non-success with no legal read-only action and no
-external evidence becomes boundary-only `contract_defect`. Neither outcome
-authorizes manager `worker_done --outcome failed`.
+When the canonical runner returns a runner-owned `nextAction`, execute that
+action promptly within the runner's own bound only after projecting the
+manager-facing runner result through the shared #2078/#2081 manager result
+boundary. A runner-owned `nextAction` may pass through only when its argv is
+already read-only and its kind belongs to the shared closed set. A send-capable
+or opaque runner action is never copied into a boundary argv: first run only
+`execute-review-runner-read-only`, then return to this runbook, which alone may
+reach the runner-owned send-capable action after its existing gates.
+`review_target_unavailable` or another proven external wall becomes
+`external_pause`; non-success with no legal read-only action and no external
+evidence becomes boundary-only `contract_defect`. Neither outcome authorizes
+manager `worker_done --outcome failed`.
 
 Do not insert `sleep`, `ps` polling, or switch to a neighboring Issue as a
 substitute for acting on the current pack-review result. A scrubbed foreign-owner
