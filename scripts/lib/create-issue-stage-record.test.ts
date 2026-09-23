@@ -679,7 +679,7 @@ describe('Issue #1978 invalid public-actor recovery', () => {
       '--tier', 'T2',
       '--public-actor', 'flow-manager',
     ]);
-    expect(exitCode).toBe(2);
+    expect(exitCode).toBe(5);
     expect(stderr.mock.calls.flat().join('')).toContain('flow-manager');
 
     let ghCalls = 0;
@@ -1659,7 +1659,7 @@ describe('poisoned canonical deterministic attempt stays terminal (Issue #1999)'
     return { reviewDir, evidencePath, bytes };
   }
 
-  it('start-cycle and read-only reconcile-stage return nextAction null and keep the canonical stageAttemptId', () => {
+  it('start-cycle and read-only reconcile-stage return readonly recovery and keep the canonical stageAttemptId', () => {
     const stateRoot = makeCliTempDir();
     const previous = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
     process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = stateRoot;
@@ -1679,13 +1679,13 @@ describe('poisoned canonical deterministic attempt stays terminal (Issue #1999)'
         '--public-actor', 'cursor-flow-manager',
         '--json',
       ]);
-      expect(startCode).toBe(1);
+      expect(startCode).toBe(3);
       const started = JSON.parse(logs.at(-1) ?? '') as {
         nextAction: unknown;
         stageAttemptId: string;
         reason: { class: string; code: string };
       };
-      expect(started.nextAction).toBeNull();
+      expect(started.nextAction).toMatchObject({ kind: 'reconcile-stage-read-only' });
       expect(started.stageAttemptId).toBe('1977-poisoned-canonical-attempt');
       expect(started.reason).toMatchObject({ class: 'deterministic-input', code: 'input_invalid' });
 
@@ -1700,12 +1700,12 @@ describe('poisoned canonical deterministic attempt stays terminal (Issue #1999)'
         '--stage-evidence', evidencePath,
         '--json',
       ]);
-      expect(reconcileCode).toBe(1);
+      expect(reconcileCode).toBe(3);
       const reconciled = JSON.parse(logs.at(-1) ?? '') as {
         nextAction: unknown;
         stageAttemptId: string;
       };
-      expect(reconciled.nextAction).toBeNull();
+      expect(reconciled.nextAction).toMatchObject({ kind: 'reconcile-stage-read-only' });
       expect(reconciled.stageAttemptId).toBe('1977-poisoned-canonical-attempt');
       expect(readFileSync(evidencePath, 'utf8')).toBe(prepared.bytes);
       expect(readFileSync(prepared.evidencePath, 'utf8')).toBe(prepared.bytes);
@@ -1884,7 +1884,7 @@ describe('Issue #2032 reconcile-stage next action for noncanonical publications'
 
   it('keeps a complete census with no bound publication on the read-only reconcile continuation', () => {
     const result = reconcile(oneSlot, []);
-    expect(result.code).toBe(1);
+    expect(result.code).toBe(3);
     expect(result.output.ok).toBe(false);
     expect(result.output.nextAction?.kind).toBe('reconcile-stage-read-only');
     expect(result.output.nextAction?.argv).toContain('reconcile-stage');
@@ -1894,14 +1894,14 @@ describe('Issue #2032 reconcile-stage next action for noncanonical publications'
 
   it('keeps a temporary census failure on the read-only reconcile continuation', () => {
     const result = reconcile(oneSlot, [], 'census-down');
-    expect(result.code).toBe(1);
+    expect(result.code).toBe(3);
     expect(result.output.temporary).toBe('source-unavailable');
     expect(result.output.nextAction?.kind).toBe('reconcile-stage-read-only');
   });
 
   it('keeps an unresolved principal on the read-only reconcile continuation', () => {
     const result = reconcile(oneSlot, [], 'identity-down');
-    expect(result.code).toBe(1);
+    expect(result.code).toBe(3);
     expect(result.output.temporary).toBe('identity-unresolved');
     expect(result.output.nextAction?.kind).toBe('reconcile-stage-read-only');
   });
@@ -1909,33 +1909,33 @@ describe('Issue #2032 reconcile-stage next action for noncanonical publications'
   it.each([
     [5772579436, slot01Invocation],
     [5772564705, slot03Invocation],
-  ])('returns nextAction null for permanently noncanonical publication %s', (commentId, invocationId) => {
+  ])('returns an external authority pause for permanently noncanonical publication %s', (commentId, invocationId) => {
     const result = reconcile([{ slot: '01', invocationId }], [
       ghComment(commentId, findingsBody(invocationId, 'findings')),
     ]);
-    const errors = result.output.errors?.join('\n') ?? '';
-    expect(result.code).toBe(1);
+    const blocker = result.output.blocker ?? '';
+    expect(result.code).toBe(4);
     expect(result.output.nextAction).toBeNull();
-    expect(result.output.cause).toBe('reconciliation_failed');
-    expect(errors).toContain('permanently_noncanonical_publication');
-    expect(errors).not.toContain('zero_principal_owned_match');
-    expect(errors).not.toContain('authoritative GitHub artifact absent');
-    expect(result.output.blocker).not.toContain('reconcile-stage');
+    expect(result.output.cause).toBe('external:content_authority_conflict');
+    expect(blocker).toContain('permanently_noncanonical_publication');
+    expect(blocker).not.toContain('zero_principal_owned_match');
+    expect(blocker).not.toContain('authoritative GitHub artifact absent');
+    expect(blocker).not.toContain('reconcile-stage');
   });
 
-  it('returns nextAction null for lowercase VERDICT even without a raw finding id', () => {
+  it('returns an external authority pause for lowercase VERDICT even without a raw finding id', () => {
     const body = findingsBody(slot01Invocation, 'findings')
       .split(/\r?\n/)
       .filter((line) => !/^id:\s*/i.test(line.trim()))
       .join('\n');
     const result = reconcile(oneSlot, [ghComment(5772579436, body)]);
-    const errors = result.output.errors?.join('\n') ?? '';
+    const blocker = result.output.blocker ?? '';
     expect(body).not.toMatch(/^id:\s*/im);
-    expect(result.code).toBe(1);
+    expect(result.code).toBe(4);
     expect(result.output.nextAction).toBeNull();
-    expect(result.output.cause).toBe('reconciliation_failed');
-    expect(errors).toContain('permanently_noncanonical_publication');
-    expect(errors).not.toContain('zero_principal_owned_match');
+    expect(result.output.cause).toBe('external:content_authority_conflict');
+    expect(blocker).toContain('permanently_noncanonical_publication');
+    expect(blocker).not.toContain('zero_principal_owned_match');
   });
 
   it('does not return the same reconcile argv for the Issue #2024 mixed slot shape', () => {
@@ -1949,11 +1949,12 @@ describe('Issue #2032 reconcile-stage next action for noncanonical publications'
       ghComment(5772585168, findingsBody(slot02Invocation, 'FINDINGS')),
       ghComment(5772564705, findingsBody(slot03Invocation, 'findings')),
     ]);
-    const errors = result.output.errors?.join('\n') ?? '';
-    expect(result.code).toBe(1);
+    const blocker = result.output.blocker ?? '';
+    expect(result.code).toBe(4);
     expect(result.output.nextAction).toBeNull();
-    expect(errors).toContain(`invocationId=${slot01Invocation}`);
-    expect(errors).not.toContain(`invocationId=${slot02Invocation}`);
-    expect(errors).not.toContain('zero_principal_owned_match');
+    expect(result.output.cause).toBe('external:content_authority_conflict');
+    expect(blocker).toContain(`invocationId=${slot01Invocation}`);
+    expect(blocker).not.toContain(`invocationId=${slot02Invocation}`);
+    expect(blocker).not.toContain('zero_principal_owned_match');
   });
 });

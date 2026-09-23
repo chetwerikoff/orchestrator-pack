@@ -16,8 +16,12 @@ import { buildManagerReviewTerminalBundle } from './lib/manager-review-terminal-
 import { runStateLightEntry } from './chatgpt-browser-turn/state-light-entry.ts';
 import { runCli as runLegacyBrowserTurnCli } from './chatgpt-browser-turn.ts';
 import { runBrowserAdapter } from './flow-manager-browser-gpt-long-run.ts';
-import { createIssueNextAction, validateCreateIssueBlockedOn } from './lib/create-issue-next-action.ts';
-import { readTerminalEnvelope, runLaunch } from './flow-manager-long-running-child.ts';
+import {
+  createIssueNextAction,
+  projectBlockedOnToExternalPause,
+  validateCreateIssueBlockedOn,
+} from './lib/create-issue-next-action.ts';
+import { HANDOFF_SCHEMA, readTerminalEnvelope, runLaunch } from './flow-manager-long-running-child.ts';
 
 const contract = readFileSync(new URL('../.cursor/skills/create-issue-draft/SKILL.md', import.meta.url), 'utf8');
 const ghTransport = readFileSync(new URL('./lib/create-issue-stage-record-gh.ts', import.meta.url), 'utf8');
@@ -321,8 +325,9 @@ describe('Issue #1514 flow-manager recovery ownership contract', () => {
     expect(authority).toContain('Existing `blocked` and `refused` values may remain');
     expect(authority).toContain('They describe the current operation or stage only');
     expect(authority).toContain('they do not complete the parent manager Task');
-    expect(authority).toContain('Whole-task `worker_done`, cancellation, and external termination remain owned\nsolely by #1486 §6');
-    expect(authority.match(/`worker_done`/g)).toHaveLength(1);
+    expect(authority).toContain('For this manager, the only self-initiated terminal message is\n`worker_done --outcome succeeded` after whole-task acceptance');
+    expect(authority).toContain('`worker_done --outcome failed` is legal only after a direct\ncoordinator/operator cancellation message');
+    expect(authority).toContain('`recoverable`, `external_pause`,\nand `contract_defect` never complete or settle the parent manager Task');
     expect(authority).not.toContain('`done` means the awaited condition was proven');
     expect(authority).not.toContain('Every other path settles locally');
   });
@@ -376,9 +381,13 @@ describe('Issue #1514 flow-manager recovery ownership contract', () => {
 
   it('keeps anti-silent-idle, existing escalation/publication authority, and producer-before-validator', () => {
     expect(authority).toContain('Nonterminality does not authorize an indefinite or silent wait');
-    expect(authority).toContain('leave visible bounded-wait or\nrouting evidence');
+    expect(authority.replace(/\s+/g, ' ')).toContain(
+      'If no legal repository-owned continuation is currently available, classify the result at the shared boundary: external reality becomes `external_pause` with remedy/evidence/resumption, and a missing or malformed producer becomes `contract_defect`.',
+    );
     expect(authority).toContain('fleet-reconciliation-handoff/v1');
-    expect(authority).toContain('operator-only-escalation-classes: business-contract-change, material-reviewer-conflict, terminal-infrastructure-refusal');
+    expect(authority).toContain('operator-only-escalation-classes: business-contract-change, material-reviewer-conflict');
+    expect(authority).not.toContain('terminal-infrastructure-refusal');
+    expect(authority).toContain('Repository-owned infrastructure/bookkeeping failures are not an operator-only\nterminal class');
     expect(authority).toContain('The existing published-exception authority remains limited');
     expect(authority).toContain('independently proven infeasible');
     expect(authority).toContain('required audience');
@@ -787,9 +796,69 @@ describe('Issue #1431 manager reviewer canon', () => {
     expect(monitoringRule).not.toContain('copy `local.config.json` from the operator checkout');
   });
 
+  it('routes a stale direct-publication handoff receipt to readonly reconciliation', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-create-issue-stale-handoff-'));
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      logs.push(String(line));
+    });
+    const stderr = captureWrite(process.stderr);
+    try {
+      const handoff = join(root, 'handoff.json');
+      writeFileSync(handoff, JSON.stringify({
+        schema: HANDOFF_SCHEMA,
+        run_identity: 'older-run',
+        attempt_identity: 'older-attempt',
+      }));
+      const code = await runBrowserAdapter([
+        '--run-identity', 'current-run',
+        '--attempt-identity', 'current-attempt',
+        '--handoff-receipt', handoff,
+        '--invocation-id', reviewContext.invocationId,
+        '--terminal-envelope', join(root, 'terminal.json'),
+        '--output', join(root, 'output.json'),
+        '--profile', root,
+        '--cdp', 'http://127.0.0.1:9222',
+        '--input', join(root, 'input.txt'),
+        '--reviewer-source-output', join(root, 'source.txt'),
+        '--reviewer-source', 'slot-01#capture=direct-publication/v1',
+        '--repository', reviewContext.repositoryFullName,
+        '--issue-number', String(reviewContext.issueNumber),
+        '--source-revision', reviewContext.sourceRevision,
+        '--stage', reviewContext.stage,
+        '--source-slot', reviewContext.sourceSlot,
+        '--stage-attempt-id', 'stage-attempt-r07',
+      ]);
+      expect(code).toBe(3);
+      const output = JSON.parse(logs.at(-1) ?? '{}') as Record<string, unknown>;
+      expect(output).toMatchObject({
+        ok: false,
+        cause: 'stale_handoff_receipt',
+        nextAction: {
+          kind: 'reconcile-stage-read-only',
+          binding: {
+            repository: reviewContext.repositoryFullName,
+            issueNumber: reviewContext.issueNumber,
+            sourceRevision: reviewContext.sourceRevision,
+            stage: reviewContext.stage,
+            stageAttemptId: 'stage-attempt-r07',
+          },
+        },
+      });
+    } finally {
+      logSpy.mockRestore();
+      stderr.restore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('revalidates a preflight retry against the live Issue before any lifecycle mutation or Browser-GPT launch', async () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-create-issue-browser-stale-retry-'));
     const stderr = captureWrite(process.stderr);
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      logs.push(String(line));
+    });
     try {
       const argv = [
         '--run-identity', 'run-stale-retry',
@@ -826,12 +895,13 @@ describe('Issue #1431 manager reviewer canon', () => {
         }),
         spawnLauncher,
       });
-      expect(first).toBe(2);
-      const firstResult = JSON.parse(stderr.chunks.at(-1) ?? '{}') as {
+      expect(first).toBe(3);
+      const firstResult = JSON.parse(logs.at(-1) ?? '{}') as {
         nextAction?: { argv?: string[] };
       };
       const retryCommand = firstResult.nextAction?.argv ?? [];
       expect(retryCommand.length).toBeGreaterThan(3);
+      logs.length = 0;
 
       const inspectLifecycleBinding = vi.fn();
       const recordAdmission = vi.fn();
@@ -862,18 +932,19 @@ describe('Issue #1431 manager reviewer canon', () => {
         recordAdmission,
         spawnLauncher,
       });
-      expect(retry).toBe(2);
-      const stale = JSON.parse(stderr.chunks.at(-1) ?? '{}') as Record<string, unknown>;
+      expect(retry).toBe(3);
+      const stale = JSON.parse(logs.at(-1) ?? '{}') as Record<string, unknown>;
       expect(stale).toMatchObject({
         schema: 'create-issue-stale-next-action/v1',
         cause: 'stale_next_action',
-        nextAction: null,
+        nextAction: { kind: 'reconcile-stage-read-only' },
         observed: { sourceRevision: 'r08' },
       });
       expect(inspectLifecycleBinding).not.toHaveBeenCalled();
       expect(recordAdmission).not.toHaveBeenCalled();
       expect(spawnLauncher).not.toHaveBeenCalled();
     } finally {
+      logSpy.mockRestore();
       stderr.restore();
       rmSync(root, { recursive: true, force: true });
     }
@@ -928,7 +999,7 @@ describe('Issue #1431 manager reviewer canon', () => {
         '--stage', 'architectural',
         '--source-slot', '01',
         '--stage-attempt-id', 'attempt-terminal',
-      ])).toBe(2);
+      ])).toBe(3);
       expect(terminalStdout.chunks.join('')).toContain('direct_publication_terminal_bundle_required');
     } finally {
       terminalStdout.restore();
@@ -949,7 +1020,7 @@ describe('Issue #1431 manager reviewer canon', () => {
         '--repository', reviewContext.repositoryFullName,
         '--issue-number', String(reviewContext.issueNumber),
         '--source-revision', reviewContext.sourceRevision,
-      ])).toBe(2);
+      ])).toBe(5);
       expect(stderr.chunks.join('')).toContain('direct_publication_arguments_required');
     } finally {
       stderr.restore();
@@ -1252,13 +1323,21 @@ describe('Issue #2004 derived external-dependency parking contract', () => {
     } as const;
   }
 
-  it('replays #926-b with one blocked_on and zero unchanged reconcile redispatch until #1977 closes', () => {
-    const emittedManagerResults = [{ nextAction: null, blocked_on: issueBlockedOn }];
+  it('replays #926-b with one waiting-on-issue external_pause and zero unchanged reconcile redispatch until #1977 closes', () => {
+    const emittedManagerResults = [projectBlockedOnToExternalPause(issueBlockedOn)];
     const firstWake = wakeProjection(issueBlockedOn, { issueState: 'open' });
     const secondWake = wakeProjection(issueBlockedOn, { issueState: 'open' });
     const closedWake = wakeProjection(issueBlockedOn, { issueState: 'closed' });
 
     expect(emittedManagerResults).toHaveLength(1);
+    expect(emittedManagerResults[0]).toMatchObject({
+      cause: 'external:waiting_on_issue',
+      nextAction: null,
+      pause: {
+        resume_when: { issue: 1977, condition: 'issue_closed' },
+        evidence: issueBlockedOn.evidence,
+      },
+    });
     expect(firstWake).toEqual({
       read: { selector: 'issue', number: 1977, field: 'state' },
       state: 'parked',
@@ -1283,23 +1362,24 @@ describe('Issue #2004 derived external-dependency parking contract', () => {
   it('guards the canonical authority boundary, derived parking, and compact dispatch payload', () => {
     for (const required of [
       '## Structured external-dependency parking',
-      'authoritatively asserts that the named external dependency predicate is the active',
-      'records the existing\ntask as `parked`',
-      'stops unchanged periodic\nre-dispatch',
-      'On every\nexisting coordinator wake or restart',
-      '`issue_closed` reads the named Issue\n`state`',
-      '`pr_merged` reads the named PR\n`merged` field',
-      'leave the task parked with zero unchanged re-dispatch',
-      'resume immediately from that read without\nwaiting for an event',
-      'Dispatch and re-dispatch payloads contain only role plus task invariants',
-      'current CLI `--help` and returned `nextAction`',
-      'adds no watcher, polling daemon,\nqueue, lease, parking store',
+      'projects it to\n`external_pause(external:waiting_on_issue|external:waiting_on_pr)`',
+      'On `recoverable` execute the returned `nextAction.argv` once',
+      'If the next\nresult recommends a byte-identical argv, do not execute it again',
+      'Before ending a turn without\n`worker_done`, drain the inbox',
+      'Never send `worker_done --outcome failed` for\nany of these',
+      'Derive `escalation-id` deterministically from\n`(issue, stage, cause, resume_when)`',
+      'If the escalation send\nitself fails, retry it exactly once',
+      'A live Dispatch whose most recent manager message is that escalation is a\n**paused unit**',
+      'must not re-dispatch the same argv into it',
+      'Until a separate coordinator sweep/wake\nchange lands',
+      'Browser-GPT\n`TerminalEnvelope` remains a separate transport and is unchanged',
     ]) {
       expect(orchestrationRunbook).toContain(required);
     }
     expect(chatExecutorRules).toContain('### Structured external-dependency parking');
-    expect(chatExecutorRules).toContain('Never manufacture `blocked_on` from `cause`, `blocker`, prose,');
-    expect(chatExecutorRules).toContain('Browser-GPT\n`TerminalEnvelope` remains a separate transport');
+    expect(chatExecutorRules).toContain('is a **paused unit** when');
+    expect(chatExecutorRules).toContain('do not re-dispatch the same argv into it');
+    expect(chatExecutorRules).toContain('Browser-GPT `TerminalEnvelope` remains a separate unchanged\ntransport');
   });
 });
 

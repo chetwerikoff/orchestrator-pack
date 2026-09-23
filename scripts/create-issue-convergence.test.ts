@@ -9,6 +9,7 @@ import {
   createIssueRecoverableResult,
   createIssueTerminalResult,
   existingPacedBoundedRetryAction,
+  projectBlockedOnToExternalPause,
   projectZeroSendManagerResult,
   validateCreateIssueBlockedOn,
   validateCreateIssueManagerResult,
@@ -55,7 +56,7 @@ const binding: CreateIssueActionBinding = {
 describe('create-Issue nextAction contract', () => {
   it('uses one validated argv-bearing action shape and terminal null shape', () => {
     const action = createIssueNextAction({
-      kind: 'reconcile-stage',
+      kind: 'reconcile-stage-read-only',
       binding,
       argv: ['node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage'],
     });
@@ -67,27 +68,28 @@ describe('create-Issue nextAction contract', () => {
       nextAction: action,
     });
     expect(validateCreateIssueManagerResult(recoverable)).toEqual([]);
-    const terminal = createIssueTerminalResult({ ok: false, cause: 'external_prerequisite' });
+    const terminal = createIssueTerminalResult({ ok: true, cause: 'completed' });
     expect(terminal).toEqual({
-      ok: false,
-      cause: 'external_prerequisite',
+      ok: true,
+      cause: 'completed',
       nextAction: null,
     });
     expect(validateCreateIssueManagerResult(terminal)).toEqual([]);
-    expect(validateCreateIssueManagerResult({ ok: false, nextAction: null })).toContain(
-      'manager non-success result.cause must be non-empty',
+    expect(validateCreateIssueManagerResult({ ok: false, cause: 'stuck', nextAction: null })).toContain(
+      'recoverable manager result.nextAction must be non-null',
     );
   });
 
   it('returns canonical stale_next_action when any state binding moves', () => {
     const action = createIssueNextAction({
-      kind: 'reconcile-stage',
+      kind: 'reconcile-stage-read-only',
       binding,
       argv: ['node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage'],
     });
     const stale = assertCreateIssueActionCurrent({
       action,
       observed: { ...binding, sourceRevision: 'r04' },
+      nextAction: action,
     });
     expect(stale).toMatchObject({
       ok: false,
@@ -95,7 +97,7 @@ describe('create-Issue nextAction contract', () => {
       cause: 'stale_next_action',
       binding,
       observed: { sourceRevision: 'r04' },
-      nextAction: null,
+      nextAction: action,
     });
     expect(validateCreateIssueManagerResult(stale)).toEqual([]);
   });
@@ -135,14 +137,22 @@ describe('structured blocked_on manager contract (Issue #2004)', () => {
   it('accepts only the two selector-compatible closed predicate variants', () => {
     expect(validateCreateIssueBlockedOn(issueBlockedOn)).toEqual([]);
     expect(validateCreateIssueBlockedOn(prBlockedOn)).toEqual([]);
-    expect(createIssueTerminalResult({
+    expect(projectBlockedOnToExternalPause(issueBlockedOn)).toMatchObject({
       ok: false,
-      cause: 'external_prerequisite',
-      blockedOn: issueBlockedOn,
-    })).toEqual({
+      cause: 'external:waiting_on_issue',
+      pause: {
+        resume_when: { issue: 1977, condition: 'issue_closed' },
+        evidence: issueBlockedOn.evidence,
+      },
+      nextAction: null,
+    });
+    expect(projectBlockedOnToExternalPause(prBlockedOn)).toMatchObject({
       ok: false,
-      cause: 'external_prerequisite',
-      blocked_on: issueBlockedOn,
+      cause: 'external:waiting_on_pr',
+      pause: {
+        resume_when: { pr: 1885, condition: 'pr_merged' },
+        evidence: prBlockedOn.evidence,
+      },
       nextAction: null,
     });
 
@@ -164,17 +174,18 @@ describe('structured blocked_on manager contract (Issue #2004)', () => {
       cause: 'external_prerequisite',
       blocked_on: issueBlockedOn,
       nextAction: createIssueNextAction({
-        kind: 'reconcile-stage',
+        kind: 'reconcile-stage-read-only',
         binding,
         argv: ['node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage'],
       }),
-    })).toContain('manager result.blocked_on requires nextAction=null');
+    })).toContain('manager result.blocked_on is retired; project the coordinator-supplied predicate to external_pause');
 
     expect(validateCreateIssueManagerResult({
       ok: true,
+      cause: 'completed',
       blocked_on: issueBlockedOn,
       nextAction: null,
-    })).toEqual([]);
+    })).toContain('manager result.blocked_on is retired; project the coordinator-supplied predicate to external_pause');
   });
 
   it.each([
@@ -204,10 +215,17 @@ describe('structured blocked_on manager contract (Issue #2004)', () => {
         '--blocked-on-json', JSON.stringify(blockedOn),
         '--json',
       ]);
-      expect(code).toBe(1);
+      expect(code).toBe(4);
       const output = JSON.parse(logs.at(-1) ?? '{}') as Record<string, unknown>;
       expect(output.nextAction).toBeNull();
-      expect(output.blocked_on).toEqual(blockedOn);
+      expect(output).not.toHaveProperty('blocked_on');
+      expect(output.cause).toBe('issue' in blockedOn ? 'external:waiting_on_issue' : 'external:waiting_on_pr');
+      expect(output.pause).toMatchObject({
+        resume_when: 'issue' in blockedOn
+          ? { issue: blockedOn.issue, condition: 'issue_closed' }
+          : { pr: blockedOn.pr, condition: 'pr_merged' },
+        evidence: blockedOn.evidence,
+      });
     } finally {
       logSpy.mockRestore();
     }
@@ -236,10 +254,14 @@ describe('structured blocked_on manager contract (Issue #2004)', () => {
         '--stage-evidence', evidencePath,
         '--json',
       ]);
-      expect(code).toBe(1);
+      expect(code).toBe(5);
       const output = JSON.parse(logs.at(-1) ?? '{}') as Record<string, unknown>;
-      expect(output.nextAction).toBeNull();
+      expect(output).toMatchObject({
+        cause: 'producer_contract_defect',
+        nextAction: null,
+      });
       expect(output).not.toHaveProperty('blocked_on');
+      expect(output).not.toHaveProperty('pause');
     } finally {
       logSpy.mockRestore();
     }
@@ -261,7 +283,7 @@ describe('structured blocked_on manager contract (Issue #2004)', () => {
         }),
         '--json',
       ]);
-      expect(code).toBe(2);
+      expect(code).toBe(5);
       expect(stderr.mock.calls.flat().join('')).toContain('--blocked-on-json is invalid');
     } finally {
       stderr.mockRestore();
@@ -609,7 +631,6 @@ describe('Issue #1935 sanitized measured convergence replay', () => {
     const continuationLogSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
       continuationLogs.push(String(line));
     });
-    let continuationBlockedOnJson = '';
     try {
       const code = runStageFinalizeCli([
         'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
@@ -620,16 +641,20 @@ describe('Issue #1935 sanitized measured convergence replay', () => {
         '--blocked-on-json', JSON.stringify(blockedOn),
         '--json',
       ], transport);
-      expect(code).toBe(0);
+      expect(code).toBe(4);
       const output = JSON.parse(continuationLogs.at(-1) ?? '{}') as {
-        nextAction?: { kind?: string; argv?: string[] } | null;
+        cause?: string;
+        nextAction?: unknown;
+        pause?: { resume_when?: unknown; evidence?: string };
       };
-      expect(output.nextAction?.kind).toBe('produce-acceptance-artifacts');
-      const argv = output.nextAction?.argv ?? [];
-      const blockedOnIndex = argv.indexOf('--blocked-on-json');
-      expect(blockedOnIndex).toBeGreaterThanOrEqual(0);
-      continuationBlockedOnJson = argv[blockedOnIndex + 1] ?? '';
-      expect(JSON.parse(continuationBlockedOnJson)).toEqual(blockedOn);
+      expect(output).toMatchObject({
+        cause: 'external:waiting_on_issue',
+        nextAction: null,
+        pause: {
+          resume_when: { issue: 1977, condition: 'issue_closed' },
+          evidence: blockedOn.evidence,
+        },
+      });
     } finally {
       continuationLogSpy.mockRestore();
     }
@@ -757,17 +782,21 @@ describe('Issue #1935 sanitized measured convergence replay', () => {
         '--issue-number', String(replay.source.issueNumber),
         '--review-dir', reviewDir,
         '--stage-evidence', evidencePath,
-        '--blocked-on-json', continuationBlockedOnJson,
         '--json',
       ], transport);
-      expect(code).toBe(0);
-      const output = JSON.parse(terminalLogs.at(-1) ?? '{}') as Record<string, unknown>;
+      expect(code).toBe(3);
+      const output = JSON.parse(terminalLogs.at(-1) ?? '{}') as {
+        ok?: boolean;
+        cause?: string;
+        nextAction?: { kind?: string } | null;
+      };
       expect(output).toMatchObject({
-        ok: true,
-        alreadySettled: true,
-        blocked_on: blockedOn,
-        nextAction: null,
+        ok: false,
+        cause: 'reconciliation_ready',
+        nextAction: { kind: 'produce-acceptance-artifacts' },
       });
+      expect(output).not.toHaveProperty('blocked_on');
+      expect(output).not.toHaveProperty('pause');
     } finally {
       terminalLogSpy.mockRestore();
     }
@@ -789,7 +818,7 @@ describe('zero-send manager result is action or structured reason (Issue #1999)'
     return JSON.parse(readFileSync(join(fixtureDir, name), 'utf8')) as Record<string, unknown>;
   }
 
-  it('returns nextAction null with a structured reason when a fresh invocation id is offered', () => {
+  it('returns readonly reconciliation with a structured reason for deterministic zero-send input', () => {
     for (const name of [
       'create-issue-926-terminal-competitive-01.json',
       'create-issue-926-terminal-competitive-01-final.json',
@@ -805,7 +834,7 @@ describe('zero-send manager result is action or structured reason (Issue #1999)'
         pacedRetryAction: existingPacedBoundedRetryAction(binding, '01'),
         freshInvocationId: 'fresh-invocation-id',
       });
-      expect(projected?.nextAction).toBeNull();
+      expect(projected?.nextAction).toMatchObject({ kind: 'reconcile-stage-read-only' });
       expect(projected).toEqual(expect.objectContaining({
         ok: false,
         cause: policy?.code,
@@ -821,5 +850,44 @@ describe('zero-send manager result is action or structured reason (Issue #1999)'
       expect(typeof projected?.blocker).toBe('string');
       expect(projected && 'reason' in projected).toBe(true);
     }
+  });
+
+  it('projects marker conflict to readonly reconciliation and exhausted external transient to a typed pause', () => {
+    const reconcile = projectZeroSendManagerResult({
+      policy: {
+        class: 'state-conflict',
+        code: 'marker_conflict',
+        rawCause: 'marker_conflict: canonical lineage disagrees',
+      },
+      attemptOrdinal: 1,
+      binding,
+      pacedRetryAction: existingPacedBoundedRetryAction(binding, '01'),
+    });
+    expect(reconcile).toMatchObject({
+      ok: false,
+      cause: 'marker_conflict',
+      nextAction: { kind: 'reconcile-stage-read-only' },
+    });
+
+    const paused = projectZeroSendManagerResult({
+      policy: {
+        class: 'transient',
+        code: 'transport_unavailable',
+        rawCause: 'GitHub HTTP 503 unavailable',
+      },
+      attemptOrdinal: 2,
+      binding,
+      reviewerSlot: '01',
+      pacedRetryAction: existingPacedBoundedRetryAction(binding, '01'),
+    });
+    expect(paused).toMatchObject({
+      ok: false,
+      cause: 'external:github_unavailable',
+      pause: {
+        resume_when: { operator: true },
+        evidence: 'GitHub HTTP 503 unavailable',
+      },
+      nextAction: null,
+    });
   });
 });
