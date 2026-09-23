@@ -325,6 +325,58 @@ describe('execute-Issue manager boundary', () => {
     }
   });
 
+  it('accepts only exact read-only command prefixes', () => {
+    expect(isExecuteIssueReadOnlyArgv([
+      'node',
+      '--experimental-strip-types',
+      'scripts/browser-gpt-page-probe.ts',
+      'inspect',
+      '--cdp',
+      context.cdp!,
+      '--url',
+      context.conversationUrl!,
+    ])).toBe(true);
+    expect(isExecuteIssueReadOnlyArgv([
+      'scripts/gh',
+      'pr',
+      'view',
+      '2083',
+      '--json',
+      'state',
+    ])).toBe(true);
+
+    expect(isExecuteIssueReadOnlyArgv([
+      'node',
+      'scripts/chatgpt-browser-turn.ts',
+      'scripts/browser-gpt-page-probe.ts',
+      'inspect',
+      '--cdp',
+      context.cdp!,
+      '--url',
+      context.conversationUrl!,
+    ])).toBe(false);
+    expect(isExecuteIssueReadOnlyArgv([
+      'node',
+      'scripts/wrapper.ts',
+      'scripts/gh',
+      'pr',
+      'view',
+      '2083',
+    ])).toBe(false);
+    expect(isExecuteIssueReadOnlyArgv([
+      'node',
+      '--experimental-strip-types',
+      'scripts/browser-gpt-page-probe.ts',
+      'inspect',
+      '--cdp',
+      context.cdp!,
+      '--url',
+      context.conversationUrl!,
+      '--open-if-missing',
+      'true',
+    ])).toBe(false);
+  });
+
   it('emits one JSON object and the shared 0/3/4/5 discriminator from the CLI', () => {
     const outputs: string[] = [];
     const errors: string[] = [];
