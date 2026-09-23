@@ -785,6 +785,11 @@ export function startReviewCycle(
       diagnostic.code === 'non-current-cycle-fork'
       && diagnostic.eventKey === persistedEvent.eventKey
       && diagnostic.commentId === persistedEvent.commentId
+    ))
+    && !censusState.lineage.diagnostics.some((diagnostic) => (
+      diagnostic.eventKey === persistedCandidate
+      && diagnostic.code !== 'non-current-cycle-fork'
+      && diagnostic.code !== 'duplicate-remote-event'
     )),
   );
   if (persistedForkLoser) {
