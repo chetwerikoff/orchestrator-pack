@@ -34,7 +34,7 @@ import {
   type VerifiedRelayEvidenceV1,
   resolveCanonicalReviewDirectory,
 } from './stage-completeness-core.ts';
-import { canonicalStagePlan, stagesForPhase } from './create-issue-stage-topology.ts';
+import { canonicalPredecessorStage, canonicalStagePlan, stagesForPhase } from './create-issue-stage-topology.ts';
 import { evaluateStageCredentialingSettlement } from './create-issue-stage-lifecycle-acceptance.ts';
 import { readEvidenceWaiverProducerEvidence } from './create-issue-stage-record-receipt.ts';
 import { extractMarker, resolveRecoveredInvalidPublicActorPoisonWitness } from './create-issue-stage-record-marker.ts';
@@ -251,6 +251,33 @@ function optionalString(value: unknown): string | undefined {
 
 function reviewTier(value: unknown): ReviewTier | null {
   return value === 'T1' || value === 'T2' || value === 'T3' ? value : null;
+}
+
+function canonicalTerminalPredecessor(
+  intake: JsonRecord,
+  errors?: string[],
+): ReviewStage | null {
+  const tier = reviewTier(intake.priorTier);
+  if (!tier) {
+    errors?.push('tier-intake priorTier is invalid for canonical predecessor derivation');
+    return null;
+  }
+  try {
+    return canonicalPredecessorStage(tier, 'architectural', {
+      competitiveDecision: intake.competitiveDecision === 'required' || intake.competitiveDecision === 'skipped'
+        ? intake.competitiveDecision
+        : undefined,
+      competitiveRationale: typeof intake.competitiveRationale === 'string'
+        ? intake.competitiveRationale
+        : undefined,
+    });
+  } catch (error) {
+    errors?.push(
+      'canonical predecessor derivation failed: '
+      + (error instanceof Error ? error.message : String(error)),
+    );
+    return null;
+  }
 }
 
 function reviewStage(value: unknown): ReviewStage | null {
@@ -3561,7 +3588,7 @@ export function produceAcceptanceArtifacts(
     );
   }
   if (issueSnapshot) {
-    const predecessorStage = latestLifecycleStage(validStageInputs);
+    const predecessorStage = canonicalTerminalPredecessor(intake, errors);
     const artifactPhase = options.phase ?? 'final-acceptance';
     const admission = authorDispositionAdmission({
       consumesAuthorAdjudication: producerConsumesAuthorAdjudication(artifactPhase),
