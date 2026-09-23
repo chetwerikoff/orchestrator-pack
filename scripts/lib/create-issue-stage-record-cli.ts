@@ -256,6 +256,18 @@ function emitManagerBoundary(
   }).exitCode;
 }
 
+function emitFinalAcceptanceBoundary(
+  argv: readonly string[],
+  result: unknown,
+): number {
+  const evaluation = emitCreateIssueManagerResult({
+    producer: 'create-issue-final-acceptance',
+    currentArgv: argv,
+    produce: () => result,
+  });
+  return evaluation.exitCode === 0 ? 0 : 1;
+}
+
 function runParsedCli<T>(
   argv: string[],
   toolName: string,
@@ -266,6 +278,8 @@ function runParsedCli<T>(
   try {
     opts = parseArgs(argv);
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(message + '\n');
     const evaluation = emitCreateIssueManagerResult({
       producer: toolName,
       currentArgv: argv,
@@ -276,6 +290,8 @@ function runParsedCli<T>(
   try {
     return run(opts);
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(message + '\n');
     const evaluation = emitCreateIssueManagerResult({
       producer: toolName,
       currentArgv: argv,
@@ -771,7 +787,7 @@ function zeroSendTerminalProjection(
     pacedRetryAction: existingPacedBoundedRetryAction(binding, observation.reviewerSlot),
     reconcileAction,
   });
-  return projected;
+  return projected ? { ...projected, stageAttemptId: observation.stageAttemptId } : null;
 }
 
 function validatedManagerSurfaceOutput<T extends { ok: boolean }>(
@@ -783,7 +799,7 @@ function validatedManagerSurfaceOutput<T extends { ok: boolean }>(
   blockedOn?: CreateIssueBlockedOn,
 ): T & Record<string, unknown> {
   if (!result.ok && blockedOn) {
-    return projectBlockedOnToExternalPause(blockedOn) as T & Record<string, unknown>;
+    return projectBlockedOnToExternalPause(blockedOn) as unknown as T & Record<string, unknown>;
   }
   const output = result.ok
     ? { ...result, cause: 'completed', nextAction: null }
@@ -1150,7 +1166,8 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
           '--json',
         ];
         appendBlockedOnArgv(reconcileArgv, opts.blockedOn);
-        const retryableRead = reconcileStageReadIsRetryable(result);
+        const retryableRead = reconcileStageReadIsRetryable(result)
+          || result.errors.some((error) => error.includes('permanently_noncanonical_publication'));
         if (result.ok && !result.alreadySettled) {
           nextAction = createIssueNextAction({
             kind: 'produce-acceptance-artifacts',
@@ -1198,7 +1215,7 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
           )
         : null;
       const authorityConflict = !result.ok && result.errors.some((error) =>
-        /permanently_noncanonical_publication|authoritative GitHub artifact|foreign[- ]comment|publisher mismatch|edited publication/i.test(error)
+        /authoritative GitHub artifact (?:was )?edited|foreign[- ]comment|publisher mismatch|principal mismatch|edited publication/i.test(error)
       );
       const output = zeroSendProjection
         ?? (authorityConflict && !opts.blockedOn
@@ -1671,15 +1688,14 @@ export function runFinalAcceptanceCli(argv: string[]): number {
             blocker: evidence,
           });
       process.stderr.write(evidence + '\n');
-      return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
+      return emitFinalAcceptanceBoundary(argv, output);
     }
 
     const liveRevision = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i.exec(liveIssue.body)?.[1];
     if (!liveRevision) {
       const evidence = 'live Issue has no canonical source-revision marker';
       process.stderr.write(evidence + '\n');
-      return emitManagerBoundary(
-        'create-issue-stage-record-cli.ts:main',
+      return emitFinalAcceptanceBoundary(
         argv,
         acceptanceAuthorityPause(evidence),
       );
@@ -1704,7 +1720,7 @@ export function runFinalAcceptanceCli(argv: string[]): number {
         ),
       });
       process.stderr.write('stale_next_action\n');
-      return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
+      return emitFinalAcceptanceBoundary(argv, output);
     }
 
     const currentSnapshotPath = join(reviewDir, 'issue-' + liveRevision + '-body.json');
@@ -1752,7 +1768,7 @@ export function runFinalAcceptanceCli(argv: string[]): number {
         nextAction,
       });
       process.stderr.write(blocker + '\n');
-      return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
+      return emitFinalAcceptanceBoundary(argv, output);
     }
 
     if (opts.issueBodyPath) {
@@ -1797,7 +1813,7 @@ export function runFinalAcceptanceCli(argv: string[]): number {
         nextAction: finalAcceptanceBootstrapArtifactAction(opts, issueNumber, reviewDir, liveRevision),
       });
       process.stderr.write(blocker + '\n');
-      return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
+      return emitFinalAcceptanceBoundary(argv, output);
     }
 
     const terminalBinding: CreateIssueActionBinding = {
@@ -1823,7 +1839,7 @@ export function runFinalAcceptanceCli(argv: string[]): number {
         nextAction: finalAcceptanceArtifactAction(opts, issueNumber, reviewDir, terminalBinding),
       });
       process.stderr.write(blocker + '\n');
-      return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
+      return emitFinalAcceptanceBoundary(argv, output);
     }
 
     if (opts.stageReceipts.length > 0) {
@@ -1842,8 +1858,7 @@ export function runFinalAcceptanceCli(argv: string[]): number {
     if (opts.cycleId && opts.cycleId !== terminal.value.cycleId) {
       const evidence = 'caller cycle-id disagrees with lifecycle terminal receipt';
       process.stderr.write(evidence + '\n');
-      return emitManagerBoundary(
-        'create-issue-stage-record-cli.ts:main',
+      return emitFinalAcceptanceBoundary(
         argv,
         acceptanceAuthorityPause(evidence),
       );
@@ -1909,7 +1924,7 @@ export function runFinalAcceptanceCli(argv: string[]): number {
       for (const error of result.guardErrors) process.stderr.write(error + '\n');
       for (const diagnostic of result.diagnostics) process.stderr.write(diagnostic.message + '\n');
     }
-    return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
+    return emitFinalAcceptanceBoundary(argv, output);
   });
 }
 
