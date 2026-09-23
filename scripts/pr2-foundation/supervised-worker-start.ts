@@ -489,15 +489,23 @@ export async function runSupervisedWorkerStart(input: {
         return { ok: false, reason: 'runtime_unavailable' };
       }
     }
+    let requestedTerminalId = '';
+    if (terminal && mode === 'exact_terminal_worktree') {
+      requestedTerminalId = (await resolveCanonicalTerminalHandle(terminal, inspect)) ?? '';
+    }
     let admission = await admitCurrentWorkerAssignmentReplacement({
       file,
       expected: expectedCurrent,
       adapter,
+      ...(requestedTerminalId
+        ? { requestedTerminalId, env: input.env ?? process.env }
+        : {}),
     });
     if (
       admission.status === 'target_unresolved'
       && terminal
       && mode === 'exact_terminal_worktree'
+      && !requestedTerminalId
     ) {
       const canonicalTerminal = await resolveCanonicalTerminalHandle(terminal, inspect);
       if (canonicalTerminal) {

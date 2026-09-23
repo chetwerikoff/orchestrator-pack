@@ -1313,6 +1313,10 @@ describe('Issue #1954 standalone GPT PR-review manager entry contract', () => {
     new URL('../.claude/skills/review-pr-with-gpt/SKILL.md', import.meta.url),
     'utf8',
   );
+  const executeSkill = readFileSync(
+    new URL('../.cursor/skills/execute-issue-with-gpt/SKILL.md', import.meta.url),
+    'utf8',
+  );
   const executionRunbook = readFileSync(
     new URL('../docs/chatgpt-task-execution-runbook.md', import.meta.url),
     'utf8',
@@ -1381,6 +1385,22 @@ describe('Issue #1954 standalone GPT PR-review manager entry contract', () => {
     expect(reviewSkill).not.toContain('PACK_GPT_BROWSER_PROJECT_URL');
     expect(reviewSkill).not.toContain('source-01');
     expect(reviewSkill).not.toContain('pack-review-runner.ts');
+  });
+
+  it('keeps pack-review recovery single-owned by the execution runbook with thin skill pointers', () => {
+    const ownerRule = 'When the canonical runner returns a runner-owned `nextAction`, execute that';
+    expect(executionRunbook).toContain(ownerRule);
+    expect(executionRunbook).toContain('A scrubbed foreign-owner diagnostic from another');
+    expect(reviewSkill).toContain(
+      '[Manager-owned PR-review convergence](../../../docs/chatgpt-task-execution-runbook.md#manager-owned-pr-review-convergence)',
+    );
+    expect(executeSkill).toContain(
+      '[`docs/chatgpt-task-execution-runbook.md`](../../../docs/chatgpt-task-execution-runbook.md)',
+    );
+    expect(reviewSkill).not.toContain(ownerRule);
+    expect(executeSkill).not.toContain(ownerRule);
+    expect(reviewSkill).not.toContain('shared_cdp_busy');
+    expect(executeSkill).not.toContain('shared_cdp_busy');
   });
 
   it('keeps completion supervisor-owned and maintains generated Claude pointer parity', () => {

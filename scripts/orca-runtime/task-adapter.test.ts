@@ -295,7 +295,41 @@ describe('OpenCode HTTP control plane', () => {
       text: 'deadline',
     }, { timeoutMs: 100 });
     expect(result).toEqual({ status: 'send_failed', reason: 'runtime_timeout' });
-    expect(requests.map(({ timeoutMs }) => timeoutMs)).toEqual([20]);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.timeoutMs).toBeGreaterThan(0);
+    expect(requests[0]?.timeoutMs).toBeLessThan(20);
+  });
+
+  it('leaves headroom on readiness, append, and submit HTTP subprocesses', () => {
+    const outerTimeoutMs = 4_000;
+    const requests: number[] = [];
+    const adapter = makeAdapter((input) => {
+      requests.push(input.timeoutMs);
+      if (input.url.endsWith('/global/health')) {
+        return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) };
+      }
+      if (input.url.includes('/session?directory=')) {
+        return { status: 200, body: JSON.stringify([{ id: 'ses-visible', directory: process.cwd() }]) };
+      }
+      return { status: 200, body: 'true' };
+    });
+    const spawned = adapter.spawnWorker({
+      title: 'opencode',
+      command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture',
+    });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+    expect(adapter.openCodeHealth(spawned.value.identity, { timeoutMs: outerTimeoutMs }).status).toBe('ok');
+    expect(adapter.composerControl?.(spawned.value.identity)?.dispatch({
+      worker: spawned.value.identity,
+      action: 'submit-prompt',
+      text: 'bounded delivery',
+    }, { timeoutMs: outerTimeoutMs })).toMatchObject({ status: 'dispatched' });
+    expect(requests.length).toBeGreaterThanOrEqual(4);
+    for (const timeoutMs of requests) {
+      expect(timeoutMs).toBeGreaterThan(0);
+      expect(timeoutMs).toBeLessThan(outerTimeoutMs);
+    }
   });
 
   it('retains OpenCode control when task adapter upgrades pty identity', () => {
@@ -432,7 +466,11 @@ describe('OpenCode HTTP control plane', () => {
     expect(slow.spawnWorker({ title: 'opencode', command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture' }).status).toBe('ok');
     const health = slow.openCodeHealth(identity, { timeoutMs: 100 });
     expect(health.status).toBe('ok');
-    expect(requests.at(-1)?.timeoutMs).toBe(20);
+    expect(requests.length).toBeGreaterThan(0);
+    for (const request of requests) {
+      expect(request.timeoutMs).toBeGreaterThan(0);
+      expect(request.timeoutMs).toBeLessThan(20);
+    }
   });
 
   it('requires a session whose directory matches the worker during readiness', () => {
@@ -1040,6 +1078,43 @@ describe('Orca assignment resolution', () => {
       value: { kind: 'gone', workerId: 'term-owned' },
     });
   });
+
+  it.each(['retained', 'unknown'] as const)(
+    'admits logical replacement for an exact exited worker when releaseState is %s without treating it as released',
+    (releaseState) => {
+      const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+        expect(args).toEqual(['orchestration', 'worker-show', '--dispatch', 'dispatch-1']);
+        return {
+          ok: true,
+          result: {
+            worker: { agent_terminal_handle: 'term-owned' },
+            terminal: { handle: 'term-owned' },
+            observation: { exactWorker: true, status: 'exited' },
+            terminalResource: {
+              terminalHandle: 'term-owned',
+              worktreeId: 'repo::worktree',
+              originDispatchId: 'dispatch-1',
+              ownerDispatchId: 'dispatch-1',
+              releaseState,
+            },
+          },
+        };
+      });
+      const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+      expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1' })).toEqual({
+        status: 'ok',
+        value: { kind: 'gone', reuseBlockedTerminalId: 'term-owned' },
+      });
+      expect(adapter.observeAssignmentLifecycle({ provider: 'orca', bindingKey: 'dispatch-1' })).toEqual({
+        status: 'ok',
+        value: { kind: 'terminal', released: false },
+      });
+      expect(runJson.mock.calls.some((call) => {
+        const operation = `${call[0]?.[0] ?? ''} ${call[0]?.[1] ?? ''}`;
+        return operation === 'terminal close' || operation === 'terminal release';
+      })).toBe(false);
+    },
+  );
 
   it('classifies an exact exited target as inactive while its terminal remains owned', () => {
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {

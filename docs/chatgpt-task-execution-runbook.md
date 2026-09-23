@@ -387,6 +387,14 @@ uses the existing Browser-GPT pack-review recovery order, not the execute-Issue
 2. read persisted state-light observation for that exact invocation;
 3. when required, perform the shared runbook's read-only CDP census.
 
+When the canonical runner returns a runner-owned `nextAction`, execute that
+action promptly within the runner's own bound. Do not insert `sleep`, `ps`
+polling, or switch to a neighboring Issue as a substitute for acting on the
+current pack-review result. A scrubbed foreign-owner diagnostic from another
+conversation creates no manager retry authority by itself. When the runner
+returns no legal `nextAction`, preserve its existing terminal/no-resend result
+instead of inventing one.
+
 An exact owned reviewer turn that is still generating below 15 minutes remains
 active and receives no replacement. At or beyond 15 minutes it is only eligible
 for the shared bounded recovery/replacement decision; elapsed time alone is
