@@ -769,13 +769,25 @@ export async function publishCurrentWorkerAssignment(
       if (expectedCurrent && !replacement) {
         return { ok: false, reason: 'assignment_stale' } as const;
       }
-      if (delegatedIntegration && (
-        !replacement
-        || replacement.assignment.role !== 'worker'
-        || replacement.assignment.assignmentId !== delegatedIntegration.predecessorAssignmentId
-        || replacement.assignment.generation !== delegatedIntegration.predecessorGeneration
-      )) {
-        return { ok: false, reason: 'assignment_stale' } as const;
+      if (delegatedIntegration) {
+        const initialPredecessorMatches = Boolean(
+          replacement
+          && replacement.assignment.role === 'worker'
+          && !replacement.assignment.delegatedIntegration
+          && replacement.assignment.assignmentId === delegatedIntegration.predecessorAssignmentId
+          && replacement.assignment.generation === delegatedIntegration.predecessorGeneration
+        );
+        const sameIntegrationAttemptMatches = Boolean(
+          replacement
+          && replacement.assignment.role === 'worker'
+          && sameDelegatedIntegrationMarker(
+            replacement.assignment.delegatedIntegration,
+            delegatedIntegration,
+          )
+        );
+        if (!initialPredecessorMatches && !sameIntegrationAttemptMatches) {
+          return { ok: false, reason: 'assignment_stale' } as const;
+        }
       }
       const previousAtKey = store.assignments[key];
       if (!expectedCurrent && previousAtKey) {
