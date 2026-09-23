@@ -2186,7 +2186,7 @@ export function observeDetachedSmokeAttempt(input: {
 }): DetachedSmokeAttemptObservation {
   const root = detachedSmokeRunRoot(input.cwd);
   if (!existsSync(root)) return { kind: 'absent' };
-  let entries: ReturnType<typeof readdirSync>;
+  let entries: import('node:fs').Dirent[];
   try {
     entries = readdirSync(root, { withFileTypes: true });
   } catch {
