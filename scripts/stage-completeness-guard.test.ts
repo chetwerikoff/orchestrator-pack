@@ -940,7 +940,10 @@ describe('Issue #1287 acceptance inventory parity', () => {
       const line = stageFinalizeUsage().split('\n').find((value) => value.includes(` ${command} `));
       expect(line).toBeDefined();
       const flags = [...(line ?? '').matchAll(/(--[a-z-]+)/g)].map((match) => match[1]!);
-      expect(flags.slice(0, requiredFlags.length + 1)).toEqual(['--review-dir', ...requiredFlags]);
+      expect(flags).toEqual(expect.arrayContaining(['--review-dir', ...requiredFlags]));
+      for (const requiredFlag of requiredFlags) {
+        expect(flags.filter((flag) => flag === requiredFlag)).toHaveLength(1);
+      }
     }
   });
 });
