@@ -3366,14 +3366,14 @@ function stageAuthorBinding(reviewDir: string): { sourceRevision: string | null;
 function authorReplyDispositionForStage(
   reviewDir: string,
   sourceRevision: string | null,
-  predecessorStage: ReviewStage | null,
+  _predecessorStage: ReviewStage | null,
 ): AuthorReplyDisposition {
   const authorReplyPath = latestAuthorReplyPath(reviewDir);
   if (!authorReplyPath) return 'absent';
   const errors: string[] = [];
   const parsed = parseGovernedAuthorDispositionOutput(authorReplyPath, errors);
   if (!parsed) return 'malformed';
-  if (sourceRevision === null || parsed.sourceRevision !== sourceRevision || parsed.predecessorStage !== predecessorStage) return 'historical';
+  if (sourceRevision === null || parsed.sourceRevision !== sourceRevision) return 'historical';
   return 'current';
 }
 
@@ -3399,7 +3399,6 @@ function prepareAuthorDispositionsFromGovernedOutput(input: {
     payload = {
       schema: AUTHOR_DISPOSITIONS_SCHEMA,
       sourceRevision: input.sourceRevision,
-      predecessorStage: input.predecessorStage,
       findings: [],
       m4: { inventory: [] },
     };
@@ -3412,10 +3411,6 @@ function prepareAuthorDispositionsFromGovernedOutput(input: {
 
   if (payload.sourceRevision !== input.sourceRevision) {
     input.errors.push('author dispositions sourceRevision disagrees with the stable GitHub snapshot; field=sourceRevision authority=GitHub-witnessed');
-    return null;
-  }
-  if (payload.predecessorStage !== input.predecessorStage) {
-    input.errors.push('author dispositions predecessorStage disagrees with lifecycle stage evidence; field=predecessorStage authority=lifecycle-tool-witnessed');
     return null;
   }
   const m4 = payload.m4 as JsonRecord;
