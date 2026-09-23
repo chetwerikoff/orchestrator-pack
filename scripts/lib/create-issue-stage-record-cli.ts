@@ -238,13 +238,13 @@ export const STAGE_FINALIZE_CLI_DECLARATION = {
     {
       name: 'produce-artifacts',
       options: [
-        ...STAGE_FINALIZE_CLI_COMMON_OPTIONS,
-        { flag: '--issue-number', value: 'n' },
         { flag: '--review-dir', value: 'path', required: true },
-        { flag: '--output-dir', value: 'path' },
         { flag: '--tier-intake', value: 'path' },
         { flag: '--stage-evidence', value: 'path', repeatable: true },
         { flag: '--author-dispositions', value: 'path' },
+        ...STAGE_FINALIZE_CLI_COMMON_OPTIONS,
+        { flag: '--issue-number', value: 'n' },
+        { flag: '--output-dir', value: 'path' },
         { flag: '--claude-producer-evidence', value: 'path', repeatable: true },
         { flag: '--phase', value: 'phase', values: ['pre-lens', 'post-lens', 'final-acceptance'] },
         { flag: '--public-actor', value: 'actor', values: [...PUBLIC_ACTORS] },
@@ -261,13 +261,13 @@ export const STAGE_FINALIZE_CLI_DECLARATION = {
     {
       name: 'check-artifacts',
       options: [
-        ...STAGE_FINALIZE_CLI_COMMON_OPTIONS,
-        { flag: '--issue-number', value: 'n' },
         { flag: '--review-dir', value: 'path', required: true },
-        { flag: '--output-dir', value: 'path' },
         { flag: '--tier-intake', value: 'path' },
         { flag: '--stage-evidence', value: 'path', repeatable: true },
         { flag: '--author-dispositions', value: 'path' },
+        ...STAGE_FINALIZE_CLI_COMMON_OPTIONS,
+        { flag: '--issue-number', value: 'n' },
+        { flag: '--output-dir', value: 'path' },
         { flag: '--claude-producer-evidence', value: 'path', repeatable: true },
         { flag: '--phase', value: 'phase', values: ['pre-lens', 'post-lens', 'final-acceptance'] },
         { flag: '--public-actor', value: 'actor', values: [...PUBLIC_ACTORS] },
