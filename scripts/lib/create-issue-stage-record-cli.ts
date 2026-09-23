@@ -1004,8 +1004,7 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
       const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
       const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
       if (opts.stageEvidencePaths.length !== 1) {
-        process.stderr.write('create-issue-stage-finalize: bind-published-comment requires exactly one --stage-evidence\n');
-        return 2;
+        throw new Error('bind-published-comment requires exactly one --stage-evidence');
       }
       const stageEvidencePath = parseRequiredNonEmptyString(opts.stageEvidencePaths[0], '--stage-evidence');
       const reviewerSlot = parseRequiredNonEmptyString(opts.reviewerSlot, '--reviewer-slot');
@@ -1020,9 +1019,20 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
         invocationId,
         commentUrl,
       });
-      if (opts.json) console.log(JSON.stringify(result));
-      else if (!result.ok) process.stderr.write(result.errors.join('\n') + '\n');
-      return result.ok ? 0 : 1;
+      const binding = artifactBindingFromState(opts, reviewDir, issueNumber);
+      const nextAction = !result.ok && binding
+        ? reconcileStageReadOnlyAction(opts, issueNumber, binding, reviewDir, stageEvidencePath)
+        : null;
+      const output = validatedManagerSurfaceOutput(
+        result,
+        'published_comment_binding_failed',
+        nextAction,
+        result.ok ? undefined : result.errors.join('; '),
+        undefined,
+        opts.blockedOn,
+      );
+      if (!result.ok) process.stderr.write(result.errors.join('\n') + '\n');
+      return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
     }
 
     if (opts.command === 'reconcile-stage') {
@@ -1085,8 +1095,7 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
       }
       const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
       if (opts.stageEvidencePaths.length !== 1) {
-        process.stderr.write('create-issue-stage-finalize: reconcile-stage requires exactly one --stage-evidence\n');
-        return 2;
+        throw new Error('reconcile-stage requires exactly one --stage-evidence');
       }
       const stageEvidencePath = parseRequiredNonEmptyString(opts.stageEvidencePaths[0], '--stage-evidence');
       const deterministicTerminal = readEvidenceZeroSendTerminal(stageEvidencePath);
