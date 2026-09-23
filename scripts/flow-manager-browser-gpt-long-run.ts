@@ -282,7 +282,7 @@ export async function runBrowserAdapter(
   argv: readonly string[],
   deps: BrowserAdapterDependencies = {},
 ): Promise<number> {
-  const inspected = inspectManagerCliInvocation(FLOW_MANAGER_BROWSER_GPT_CLI, argv);
+  const inspected = inspectManagerCliInvocation(FLOW_MANAGER_BROWSER_GPT_CLI, argv, { validateRequired: false });
   if (inspected.help) {
     process.stdout.write(inspected.help + '\n');
     return 0;
@@ -341,6 +341,11 @@ export async function runBrowserAdapter(
   }
   if (directRequested && directStage !== 'architectural' && terminalInputBundle) {
     return refuse(argv, 'direct_publication_terminal_bundle_unexpected');
+  }
+  const requiredInspection = inspectManagerCliInvocation(FLOW_MANAGER_BROWSER_GPT_CLI, argv);
+  if (requiredInspection.error) {
+    process.stderr.write('flow-manager-browser-gpt-long-run: ' + requiredInspection.error + '\n');
+    return 2;
   }
   const profile = requiredOption(options, 'profile');
   const cdp = requiredOption(options, 'cdp');
