@@ -114,6 +114,18 @@ function providerText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function sameDelegatedIntegrationMarker(
+  left: DelegatedIntegrationMarker | undefined,
+  right: DelegatedIntegrationMarker | undefined,
+): boolean {
+  if (!left || !right) return left === right;
+  return left.prNumber === right.prNumber
+    && left.expectedHeadSha === right.expectedHeadSha
+    && left.predecessorAssignmentId === right.predecessorAssignmentId
+    && left.predecessorGeneration === right.predecessorGeneration;
+}
+
+
 function providerErrorMessage(error: unknown): string | undefined {
   const message = isRecord(error) ? providerText(error.message) : '';
   return message.length >= 1 && message.length <= 2048 ? message : undefined;
@@ -468,13 +480,26 @@ export async function runSupervisedWorkerStart(input: {
   if (expectedCurrent?.repository !== undefined && expectedCurrent.repository !== repository) {
     return { ok: false, reason: 'assignment_stale' };
   }
-  if (delegatedIntegration && (
-    !expectedCurrent
-    || expectedCurrent.role !== 'worker'
-    || expectedCurrent.taskId !== requestedTaskId
-    || expectedCurrent.assignmentId !== delegatedIntegration.predecessorAssignmentId
-    || expectedCurrent.generation !== delegatedIntegration.predecessorGeneration
-  )) {
+  const sameCurrentDelegatedIntegration = Boolean(
+    delegatedIntegration
+    && expectedCurrent?.role === 'worker'
+    && expectedCurrent.taskId === requestedTaskId
+    && sameDelegatedIntegrationMarker(
+      expectedCurrent.delegatedIntegration,
+      delegatedIntegration,
+    )
+  );
+  const exactImplementationPredecessor = Boolean(
+    delegatedIntegration
+    && expectedCurrent?.role === 'worker'
+    && expectedCurrent.taskId === requestedTaskId
+    && !expectedCurrent.delegatedIntegration
+    && expectedCurrent.assignmentId === delegatedIntegration.predecessorAssignmentId
+    && expectedCurrent.generation === delegatedIntegration.predecessorGeneration
+  );
+  if (delegatedIntegration
+    && !sameCurrentDelegatedIntegration
+    && !exactImplementationPredecessor) {
     return { ok: false, reason: 'delegated_integration_predecessor_mismatch' };
   }
   if (expectedCurrent && expectedCurrent.taskId !== requestedTaskId && expectedCurrent.kind !== 'local') {
@@ -536,6 +561,13 @@ export async function runSupervisedWorkerStart(input: {
       }
     }
     if (admission.status !== 'replaceable') {
+      if (sameCurrentDelegatedIntegration && admission.status === 'skipped_live') {
+        return {
+          ok: true,
+          reason: 'delegated_integration_assignment_reused',
+          assignment: expectedCurrent,
+        };
+      }
       return { ok: false, reason: admission.status };
     }
   }
