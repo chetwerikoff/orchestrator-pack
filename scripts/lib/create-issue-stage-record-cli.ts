@@ -333,9 +333,11 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
         opts.issueNumber = Number(argv[++i]);
         break;
       case '--source-revision':
+        if (command === 'author-round') throw new Error('--source-revision is not valid with author-round; use --expected-source-revision');
         opts.sourceRevision = String(argv[++i] ?? '');
         break;
       case '--stage': {
+        if (command === 'author-round') throw new Error('--stage is not valid with author-round; use --expected-stage');
         const stage = String(argv[++i] ?? '');
         if (stage !== 'competitive' && stage !== 'architectural-review' && stage !== 'architectural-lens' && stage !== 'architectural') {
           throw new Error('--stage must be competitive, architectural-review, architectural-lens, or architectural');
@@ -344,6 +346,7 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
         break;
       }
       case '--stage-attempt-id':
+        if (command === 'author-round') throw new Error('--stage-attempt-id is not valid with author-round; use --expected-stage-attempt-id');
         opts.stageAttemptId = String(argv[++i] ?? '');
         break;
       case '--permitted-lane-override': {
