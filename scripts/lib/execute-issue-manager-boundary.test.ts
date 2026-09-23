@@ -156,6 +156,16 @@ describe('execute-Issue manager boundary', () => {
           candidate_assistant_turn_key: null,
           retry_control_present: false,
           generation_in_progress: true,
+          reason: 'generation_active',
+        },
+      }),
+      probe('ok', {
+        execution_recovery_inspect: {
+          cause: null,
+          owned_user_turn_key: 'turn-1',
+          candidate_assistant_turn_key: null,
+          retry_control_present: false,
+          generation_in_progress: false,
           reason: 'literal_not_found',
         },
       }),
