@@ -5,6 +5,11 @@ import { defaultGhTransport, fetchIssueRevision } from './create-issue-stage-rec
 import type { GhTransport } from './create-issue-stage-record-types.ts';
 import { canonicalPredecessorStage, type ReviewTier } from './create-issue-stage-topology.ts';
 import {
+  DEFECT_DISPOSITION_VALUES,
+  M4_DISPOSITION_VALUES,
+  REMEDY_DISPOSITION_VALUES,
+} from './create-issue-author-dispositions-schema.ts';
+import {
   deriveReviewEpisodeState,
   resolveCanonicalReviewDirectory,
   validateReviewEpisodeTopology,
@@ -18,9 +23,9 @@ import {
 
 export const MANAGER_REVIEW_TERMINAL_BUNDLE_SCHEMA = 'manager-review-terminal-input-bundle/v1' as const;
 
-const DEFECT_DISPOSITIONS = new Set(['addressed', 'rejected-as-false', 'unresolved']);
-const REMEDY_DISPOSITIONS = new Set(['accepted', 'replaced-by-cheaper-sufficient', 'rejected-as-overengineering']);
-const M4_DISPOSITIONS = new Set(['keep', 'simplify', 'defer', 'cut']);
+const DEFECT_DISPOSITIONS = new Set<string>(DEFECT_DISPOSITION_VALUES);
+const REMEDY_DISPOSITIONS = new Set<string>(REMEDY_DISPOSITION_VALUES);
+const M4_DISPOSITIONS = new Set<string>(M4_DISPOSITION_VALUES);
 const PROTECTED_TYPES = new Set(['security', 'scope-violation']);
 const REVISION_RE = /^r[0-9]{2,}$/;
 const SOURCE_REVISION_MARKER_RE = /<!--\s*source-revision:\s*(r[0-9]{2,})\s*-->/i;
