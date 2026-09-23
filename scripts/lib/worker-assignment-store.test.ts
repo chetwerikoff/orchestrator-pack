@@ -109,6 +109,43 @@ describe('WorkerAssignment compare-and-publish', () => {
     expect(fenced).toEqual({ ok: false, reason: 'assignment_stale', actionEntered: false });
   });
 
+  it('allows a same-marker delegated retry after the prior integration assignment becomes replaceable', async () => {
+    const { file } = fixture();
+    const implementation = await publishCurrentWorkerAssignment(publishInput(file, 'dispatch-implementation'));
+    if (!implementation.ok) throw new Error(implementation.reason);
+    const delegatedIntegration = {
+      prNumber: 926,
+      expectedHeadSha: 'a'.repeat(40),
+      predecessorAssignmentId: implementation.assignment.assignmentId,
+      predecessorGeneration: implementation.assignment.generation,
+    };
+    const first = await publishCurrentWorkerAssignment({
+      ...publishInput(file, 'dispatch-integration-1'),
+      expectedCurrent: {
+        assignmentId: implementation.assignment.assignmentId,
+        generation: implementation.assignment.generation,
+      },
+      delegatedIntegration,
+    });
+    if (!first.ok) throw new Error(first.reason);
+    const second = await publishCurrentWorkerAssignment({
+      ...publishInput(file, 'dispatch-integration-2'),
+      expectedCurrent: {
+        assignmentId: first.assignment.assignmentId,
+        generation: first.assignment.generation,
+      },
+      delegatedIntegration,
+    });
+    expect(second.ok).toBe(true);
+    if (!second.ok) throw new Error(second.reason);
+    expect(second.assignment).toMatchObject({
+      generation: first.assignment.generation + 1,
+      delegatedIntegration,
+    });
+    expect(second.assignment.assignmentId).not.toBe(first.assignment.assignmentId);
+    expect(second.assignment.assignmentId).not.toBe(implementation.assignment.assignmentId);
+  });
+
   it('fails closed on incomplete or non-closed delegated-integration markers', async () => {
     const { file } = fixture();
     const implementation = await publishCurrentWorkerAssignment(publishInput(file, 'dispatch-implementation'));
