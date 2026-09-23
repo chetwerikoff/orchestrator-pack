@@ -2933,7 +2933,7 @@ describe('Issue #1977 evidence-backed zero-send partial reconciliation', () => {
     });
   });
 
-  it('rewrites a stored eligible-zero-send second attempt to retry-forbidden and credentials it', () => {
+  it('fails closed on a stored eligible-zero-send second attempt that contradicts its terminal envelope', () => {
     const prepared = prepareZeroSend();
     const evidence = JSON.parse(readFileSync(prepared.input.reviewEvidencePath, 'utf8')) as Record<string, any>;
     const invocation = evidence.invocations[0] as Record<string, any>;
@@ -2949,18 +2949,11 @@ describe('Issue #1977 evidence-backed zero-send partial reconciliation', () => {
       issueNumber: ISSUE,
       artifactSourceTransport: prepared.source,
     });
-    expect(reconciled.ok, reconciled.errors.join('\n')).toBe(true);
-    const hydrated = JSON.parse(readFileSync(prepared.input.reviewEvidencePath, 'utf8')) as Record<string, any>;
-    expect(hydrated.invocations[0]).toMatchObject({
-      attemptOrdinal: 2,
-      sendCount: 0,
-      retryClass: 'retry-forbidden',
-      terminalClassification: 'incident',
-      terminalResultIdentity: prepared.identity,
-    });
+    expect(reconciled.ok).toBe(false);
+    expect(reconciled.errors.join('\n')).toContain('terminal transport disagrees with its bound terminal envelope');
   });
 
-  it('keeps a stored first-attempt eligible-zero-send class', () => {
+  it('fails closed on a stored first-attempt eligible-zero-send class that contradicts its envelope', () => {
     const prepared = prepareZeroSend();
     const evidence = JSON.parse(readFileSync(prepared.input.reviewEvidencePath, 'utf8')) as Record<string, any>;
     const invocation = evidence.invocations[0] as Record<string, any>;
@@ -2976,7 +2969,7 @@ describe('Issue #1977 evidence-backed zero-send partial reconciliation', () => {
       artifactSourceTransport: prepared.source,
     });
     expect(result.ok).toBe(false);
-    expect(result.errors.join('\n')).toContain('retryClass=eligible-zero-send');
+    expect(result.errors.join('\n')).toContain('terminal transport disagrees with its bound terminal envelope');
     const stored = JSON.parse(readFileSync(prepared.input.reviewEvidencePath, 'utf8')) as Record<string, any>;
     expect(stored.invocations[0].retryClass).toBe('eligible-zero-send');
   });
@@ -2998,10 +2991,10 @@ describe('Issue #1977 evidence-backed zero-send partial reconciliation', () => {
       artifactSourceTransport: prepared.source,
     });
     expect(result.ok).toBe(false);
-    expect(result.errors.join('\n')).toContain('lacks a valid observed turn-result identity');
+    expect(result.errors.join('\n')).toContain('terminal transport disagrees with its bound terminal envelope');
   });
 
-  it('keeps an unsealed first-attempt zero-send incident retry-eligible under current-main policy', () => {
+  it('hydrates an unsealed non-owner zero-send incident as retry-forbidden', () => {
     const prepared = prepareZeroSend();
     const evidence = JSON.parse(readFileSync(prepared.input.reviewEvidencePath, 'utf8')) as Record<string, any>;
     const invocation = evidence.invocations[0] as Record<string, any>;
@@ -3018,8 +3011,14 @@ describe('Issue #1977 evidence-backed zero-send partial reconciliation', () => {
       issueNumber: ISSUE,
       artifactSourceTransport: prepared.source,
     });
-    expect(result.ok).toBe(false);
-    expect(result.errors.join('\n')).toContain('retryClass=eligible-zero-send');
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    const stored = JSON.parse(readFileSync(prepared.input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+    expect(stored.invocations[0]).toMatchObject({
+      terminalClassification: 'incident',
+      sendCount: 0,
+      retryClass: 'retry-forbidden',
+      terminalResultIdentity: prepared.identity,
+    });
   });
 
   it('fails closed on a foreign observed invocation id', () => {
@@ -3051,7 +3050,7 @@ describe('Issue #1977 evidence-backed zero-send partial reconciliation', () => {
   });
 });
 
-describe('proven zero-send first attempts are retry-eligible (Issue #1981)', () => {
+describe('owner-authorized zero-send retry classification (Issue #2037)', () => {
   const zeroSendIncident = {
     lifecycle_outcome: 'incident',
     turn_result_state: 'input_invalid',
@@ -3060,35 +3059,39 @@ describe('proven zero-send first attempts are retry-eligible (Issue #1981)', () 
     delivery: 'not-sent',
   };
 
-  it('classifies a first-attempt input_invalid zero-send as incident / eligible-zero-send', () => {
-    expect(classifyReconciliationTransport(zeroSendIncident, 1)).toEqual({
-      terminalClassification: 'incident',
-      sendCount: 0,
-      retryClass: 'eligible-zero-send',
-    });
-  });
-
-  it('forbids retry when the same envelope is attempt 2', () => {
-    expect(classifyReconciliationTransport(zeroSendIncident, 2)).toEqual({
-      terminalClassification: 'incident',
-      sendCount: 0,
-      retryClass: 'retry-forbidden',
-    });
+  it.each([
+    ['input_invalid:invocation_id_invalid', 'input_invalid'],
+    ['canonical_prompt_mismatch:expected_sha256=abc', 'driver_error'],
+    ['observation_marker_conflict', 'driver_error'],
+    ['chrome_not_running', 'chrome_not_running'],
+  ])('keeps non-owner-authorized zero-send %s retry-forbidden', (cause, state) => {
+    expect(classifyReconciliationTransport({
+      ...zeroSendIncident,
+      turn_result_state: state,
+      turn_result_cause: cause,
+    }, 1)).toMatchObject({ sendCount: 0, retryClass: 'retry-forbidden' });
   });
 
   it.each([
-    ['canonical_prompt_mismatch:expected_sha256=abc', 'driver_error'],
-    ['observation_marker_conflict', 'driver_error'],
-  ])('classifies %s at sendCount 0 as incident / eligible-zero-send', (cause, state) => {
+    ['quota', 'quota', 'quota'],
+    ['rate_limit', 'rate_limit', 'quota'],
+    ['composer-refusal', 'composer-refusal', 'composer-refusal'],
+    ['fill-timeout', 'fill-timeout', 'fill-timeout'],
+  ])('admits one first-attempt %s zero-send retry', (state, cause, terminalClassification) => {
     expect(classifyReconciliationTransport({
       ...zeroSendIncident,
       turn_result_state: state,
       turn_result_cause: cause,
     }, 1)).toEqual({
-      terminalClassification: 'incident',
+      terminalClassification,
       sendCount: 0,
       retryClass: 'eligible-zero-send',
     });
+    expect(classifyReconciliationTransport({
+      ...zeroSendIncident,
+      turn_result_state: state,
+      turn_result_cause: cause,
+    }, 2)).toMatchObject({ sendCount: 0, retryClass: 'retry-forbidden' });
   });
 
   it('keeps sendCount 1 driver_error as post-send-failure / retry-forbidden', () => {
@@ -3878,7 +3881,7 @@ describe('cause-classed zero-send continuation (Issue #1999)', () => {
     }
   });
 
-  it('classifies the #926 input_invalid envelope as deterministic-input and keeps #1981 retry class', () => {
+  it('keeps the #926 input_invalid envelope as the deterministic non-retry negative control', () => {
     const envelope = loadFixture('create-issue-926-terminal-competitive-01.json');
     expect(classifyZeroSendCausePolicy(envelope)).toEqual({
       class: 'deterministic-input',
@@ -3888,7 +3891,7 @@ describe('cause-classed zero-send continuation (Issue #1999)', () => {
     expect(classifyReconciliationTransport(envelope, 1)).toEqual({
       terminalClassification: 'incident',
       sendCount: 0,
-      retryClass: 'eligible-zero-send',
+      retryClass: 'retry-forbidden',
     });
     expect(classifyReconciliationTransport(envelope, 2)).toMatchObject({ retryClass: 'retry-forbidden' });
     const projected = project(envelope, 1, 'fresh-invocation-id');
@@ -3933,7 +3936,6 @@ describe('cause-classed zero-send continuation (Issue #1999)', () => {
     ['rate_limit', 'rate_limit'],
     ['composer-refusal', 'composer-refusal'],
     ['fill-timeout', 'fill-timeout'],
-    ['chrome_not_running', 'chrome_not_running'],
   ])('uses the existing paced retry once for observable %s', (cause, code) => {
     const envelope = {
       schema: 'turn-result/v1',
@@ -3971,8 +3973,8 @@ describe('cause-classed zero-send continuation (Issue #1999)', () => {
     expect(second).toMatchObject({ nextAction: null, reason: { class: 'transient', code } });
   });
 
-  it('does not admit child_start_failed or browser process spawn failure', () => {
-    for (const cause of ['child_start_failed', 'browser process spawn failure']) {
+  it('does not admit non-owner retry causes', () => {
+    for (const cause of ['chrome_not_running', 'child_start_failed', 'browser process spawn failure']) {
       const envelope = {
         schema: 'turn-result/v1',
         state: 'driver_error',
