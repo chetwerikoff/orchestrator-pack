@@ -54,15 +54,32 @@ const binding: CreateIssueActionBinding = {
   stageAttemptId: 'attempt-1935',
 };
 
+const freshR01AuthorTurnReplay = {
+  issue: {
+    title: 'T1 convergence fixture',
+    body: '<!-- source-revision: r01 -->\n# T1 convergence fixture\n',
+  },
+  governedReply: [
+    'create-issue-author-dispositions/v1',
+    JSON.stringify({
+      schema: 'create-issue-author-dispositions/v1',
+      sourceRevision: 'r01',
+      predecessorStage: null,
+      findings: [],
+      m4: { inventory: [] },
+    }),
+  ].join('\n'),
+} as const;
+
 describe('Issue #2039 T1 author-turn producer convergence', () => {
-  it('harvest -> produce-author-dispositions -> ordinary architectural start-cycle clears the missing-author handoff', () => {
+  it('replays a fresh r01 author turn against an isolated fixture without publishing an Issue revision', () => {
     const root = tempRoot();
     process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = root;
     const issueNumber = 2039;
     const repo = 'chetwerikoff/orchestrator-pack';
     const reviewDir = join(root, '.review', String(issueNumber));
     mkdirSync(reviewDir, { recursive: true });
-    const body = '<!-- source-revision: r01 -->\n# T1 convergence fixture\n';
+    const { body } = freshR01AuthorTurnReplay.issue;
     writeFileSync(join(reviewDir, 'tier-intake.json'), JSON.stringify({
       schema: 'tier-intake/v1',
       producer: 'fixture',
@@ -71,21 +88,11 @@ describe('Issue #2039 T1 author-turn producer convergence', () => {
       priorTier: 'T1',
       firstRevision: 'r01',
     }, null, 2) + '\n');
-    writeFileSync(join(reviewDir, 'round-01-author-reply.md'), [
-      'create-issue-author-dispositions/v1',
-      JSON.stringify({
-        schema: 'create-issue-author-dispositions/v1',
-        sourceRevision: 'r01',
-        predecessorStage: null,
-        findings: [],
-        m4: { inventory: [] },
-      }),
-    ].join('\n'));
+    writeFileSync(join(reviewDir, 'round-01-author-reply.md'), freshR01AuthorTurnReplay.governedReply);
 
-    const state = createMockGhState({
-      issue: { title: 'T1 convergence fixture', body, labels: [] },
-    });
+    const state = createMockGhState({ issue: { ...freshR01AuthorTurnReplay.issue, labels: [] } });
     const transport = createMockTransport(state);
+
     const logs: string[] = [];
     const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => logs.push(String(line)));
     try {
@@ -102,6 +109,12 @@ describe('Issue #2039 T1 author-turn producer convergence', () => {
     } finally {
       spy.mockRestore();
     }
+
+    // The fresh r01 turn is replayed against the local authenticated-Issue fixture;
+    // the live Issue at r02 is never read or mutated by this test fixture.
+    expect(state.issue.body).toBe(body);
+    expect(state.commentCreateAttempts).toEqual([]);
+    expect([...state.labels]).toEqual([]);
 
     expect(JSON.parse(readFileSync(join(reviewDir, 'issue-r01-body.json'), 'utf8'))).toMatchObject({
       schema: 'create-issue-live-snapshot/v1',
