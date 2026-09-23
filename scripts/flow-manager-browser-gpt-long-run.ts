@@ -14,7 +14,6 @@ import {
   type CreateIssueBrowserPreflightFailure,
 } from './lib/create-issue-browser-gpt-preflight.ts';
 import {
-  createIssueExternalPauseResult,
   createIssueNextAction,
   createIssueRecoverableResult,
   createIssueStaleNextAction,
@@ -51,12 +50,20 @@ function emitBrowserManagerResult(argv: readonly string[], result: unknown): num
 
 function refuse(argv: readonly string[], reason: string, details: Record<string, unknown> = {}): number {
   process.stderr.write(`flow-manager-browser-gpt-long-run: ${reason}\n`);
-  return emitBrowserManagerResult(argv, {
-    ok: false,
-    cause: reason,
-    ...details,
-    nextAction: null,
-  });
+  const binding = createIssueBinding(parseFlagArgv(argv));
+  const detail = [
+    reason,
+    typeof details.blocker === 'string' ? details.blocker : '',
+    typeof details.remedy === 'string' ? details.remedy : '',
+  ].filter(Boolean).join(': ');
+  return emitCreateIssueManagerResult({
+    producer: 'flow-manager-browser-gpt-long-run.ts:main',
+    currentArgv: argv,
+    ...(binding ? { reconcileAction: browserReconcileAction(binding) } : {}),
+    produce: () => {
+      throw new Error(detail);
+    },
+  }).exitCode;
 }
 
 function browserReconcileAction(binding: CreateIssueActionBinding) {
@@ -87,15 +94,6 @@ function projectPreflightFailure(
       cause: result.cause,
       blocker: result.blocker,
       nextAction: result.nextAction,
-    }));
-  }
-  if (result.cause === 'operator_browser_config_required' || result.cause === 'operator_browser_config_invalid') {
-    return emitBrowserManagerResult(argv, createIssueExternalPauseResult({
-      cause: 'external:content_authority_conflict',
-      remedy: result.remedy,
-      resumeWhen: { operator: true },
-      evidence: result.blocker,
-      blocker: result.blocker,
     }));
   }
   return refuse(argv, result.cause, {
@@ -493,12 +491,11 @@ if (process.argv[1] && resolve(process.argv[1]) === entryPath) {
   main().catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(message + '\n');
-    process.exitCode = emitBrowserManagerResult(process.argv.slice(2), {
-      ok: false,
-      cause: 'browser_adapter_uncaught',
-      blocker: message,
-      nextAction: null,
-    });
+    process.exitCode = refuse(
+      process.argv.slice(2),
+      'browser_adapter_uncaught',
+      { blocker: message },
+    );
   });
 }
 
