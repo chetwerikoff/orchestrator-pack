@@ -229,7 +229,7 @@ describe('committed transport-shape regression', () => {
     expect(classifyReconciliationTransport(envelope, 1)).toMatchObject({
       terminalClassification: 'incident',
       sendCount: 0,
-      retryClass: 'eligible-zero-send',
+      retryClass: 'retry-forbidden',
     });
   });
 });

@@ -7,7 +7,8 @@
     "scripts/lib/create-issue-stage-record-artifacts.ts",
     "scripts/lib/create-issue-stage-record-cli.ts",
     "scripts/lib/create-issue-stage-record-core.ts",
-    "scripts/lib/create-issue-stage-record.test.ts"
+    "scripts/lib/create-issue-stage-record.test.ts",
+    "scripts/replay-fixture-import.test.ts"
   ],
   "denylist": [
     ".cursor/skills/create-issue-draft/",
@@ -33,7 +34,8 @@
     "scripts/lib/create-issue-stage-record-artifacts.ts",
     "scripts/lib/create-issue-stage-record-cli.ts",
     "scripts/lib/create-issue-stage-record-core.ts",
-    "scripts/lib/create-issue-stage-record.test.ts"
+    "scripts/lib/create-issue-stage-record.test.ts",
+    "scripts/replay-fixture-import.test.ts"
   ],
-  "source_revision": "40288d2ac8be94f63102fb4517c8a2b597de77c5"
+  "source_revision": "bb6b8cf420340adeafbbf78e3c3923e1c3d33874"
 }
