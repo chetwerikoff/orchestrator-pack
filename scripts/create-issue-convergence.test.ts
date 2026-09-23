@@ -796,7 +796,7 @@ describe('Issue #1935 sanitized measured convergence replay', () => {
       };
       expect(output).toMatchObject({
         ok: false,
-        cause: 'reconciliation_ready',
+        cause: 'reconciliation_failed',
         nextAction: { kind: 'produce-acceptance-artifacts' },
       });
       expect(output).not.toHaveProperty('blocked_on');
