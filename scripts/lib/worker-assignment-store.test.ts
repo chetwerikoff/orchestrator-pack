@@ -538,6 +538,7 @@ describe('WorkerAssignment legacy key migration and role compatibility', () => {
   it('keeps delegated integration on canonical readiness with report-only operational outcomes', () => {
     const skill = readFileSync(path.resolve('.cursor/skills/merge-with-local-adoption/SKILL.md'), 'utf8');
     const runbook = readFileSync(path.resolve('docs/orchestration-runbook.md'), 'utf8');
+    const delegatedRunbook = readFileSync(path.resolve('docs/orchestrator-delegated-integration.md'), 'utf8');
     const executorRules = readFileSync(path.resolve('docs/chat-executor-rules.md'), 'utf8');
     const repairRunbook = readFileSync(path.resolve('docs/pack-review-waiver-merge-runbook.md'), 'utf8');
 
@@ -549,8 +550,10 @@ describe('WorkerAssignment legacy key migration and role compatibility', () => {
     expect(skill).toContain('operationally_complete');
     expect(skill).toContain('operationally_incomplete');
 
-    expect(runbook).toContain('The existing WorkerAssignment store remains the only persistent carrier.');
-    expect(runbook).toContain('do not create a second role, assignment store, integration registry, lease, lock, queue,');
+    expect(runbook).toContain('orchestrator-delegated integration runbook');
+    expect(delegatedRunbook).toContain('The existing WorkerAssignment store remains the only persistent carrier.');
+    expect(delegatedRunbook).toContain('Do not create a second role, assignment store, integration registry,');
+    expect(delegatedRunbook).toContain('establishes its ordinary corroborated current');
     expect(executorRules).toContain('A delegated worker never inherits the direct-user override.');
     expect(repairRunbook).toContain('Orchestrator-delegated projection repair (not a waiver)');
     expect(repairRunbook).toContain('evaluatePostSmokeReadiness=READY_TO_MERGE');
