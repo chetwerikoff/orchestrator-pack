@@ -762,7 +762,7 @@ function zeroSendTerminalProjection(
   repository: string,
   issueNumber: number,
   reconcileAction: CreateIssueNextAction,
-): { cause: string; blocker?: string; reason?: CreateIssueZeroSendReason; nextAction: CreateIssueNextAction | null; pause?: unknown } | null {
+): { cause: string; blocker?: string; reason?: CreateIssueZeroSendReason; nextAction: CreateIssueNextAction | null; pause?: unknown; stageAttemptId?: string } | null {
   if (
     observation.stage !== 'competitive'
     && observation.stage !== 'architectural-review'
@@ -1777,8 +1777,7 @@ export function runFinalAcceptanceCli(argv: string[]): number {
       if (asserted !== liveIssue.body && resolve(opts.issueBodyPath) !== resolve(currentSnapshotPath)) {
         const evidence = '--issue-body is assertion-only and does not match the canonical GitHub-witnessed snapshot';
         process.stderr.write(evidence + '\n');
-        return emitManagerBoundary(
-          'create-issue-stage-record-cli.ts:main',
+        return emitFinalAcceptanceBoundary(
           argv,
           acceptanceAuthorityPause(evidence),
         );
@@ -1848,8 +1847,7 @@ export function runFinalAcceptanceCli(argv: string[]): number {
       if (JSON.stringify(requested) !== JSON.stringify(canonical)) {
         const evidence = 'caller stage-receipt list does not equal canonical receipt inventory';
         process.stderr.write(evidence + '\n');
-        return emitManagerBoundary(
-          'create-issue-stage-record-cli.ts:main',
+        return emitFinalAcceptanceBoundary(
           argv,
           acceptanceAuthorityPause(evidence),
         );
