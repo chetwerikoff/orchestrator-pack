@@ -1,0 +1,13 @@
+Работу по Issue #1935 начал, но полностью задача ещё не выполнена, поэтому выдавать её за завершённую не буду.
+
+AGENTS.md прочитан: bf6e310f9003fc3d7797f50247e559cc5207c20f
+Chat executor rules прочитаны: 4fe1d8b7db66cccd78ecd1ed933ce966e6682ca8
+Default branch HEAD на старте: e4ab0f3c7d9cfaa114307b609f0e07f078806607
+
+Создана рабочая ветка issue-1935-create-issue-convergence и draft PR #1946. Реализована существенная часть r03: общий create-issue-next-action/v1, канонический stale_next_action, inline Browser-GPT preflight до detached launch, Node 22 / tracked GitHub / target-repo / GET /user проверки, безопасное разрешение Browser-GPT config без копирования local.config.json, inventory для gh api user --jq .login, а также principal-first отбор GitHub reviewer artifacts с case-insensitive publisher matching, duplicate/wrong-publisher fail-closed и targeted reread. Legacy echo-less matching удалён из изменённого artifact producer. Добавлены тесты соответствующих invariants.
+
+Последний внесённый commit: eaaf1807bea277a2b7975f3e8778726f295ef219. Последний readback изменённого artifact producer подтвердил запись изменений.
+
+Остаются обязательные части Issue #1935: закончить lifecycle-owned production tier-intake.json/attempt-*.json/author-dispositions.json и единого Issue snapshot; оформить отдельную reconciliation operation на существующем stage-finalize surface; распространить единый nextAction contract на все пять требуемых manager-facing surfaces; обновить skill/runbook/rule, убрав hand-authored artifacts и config copying; закончить regression/replay coverage; прогнать и исправить весь обязательный CI. PR поэтому намеренно оставлен draft и не слит.
+
+PR: https://github.com/chetwerikoff/orchestrator-pack/pull/1946

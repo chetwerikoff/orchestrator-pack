@@ -3159,18 +3159,70 @@ describe('governed author disposition block shapes (Issue #1983)', () => {
     expect(JSON.parse(fencedLocated.body)).toEqual(JSON.parse(fencelessLocated.body));
   });
 
-  it('AC3: locates and parses the #1968 prose-then-fenced single-line JSON shape', () => {
-    const json = JSON.stringify({
-      schema: AUTHOR_DISPOSITIONS_SCHEMA,
-      sourceRevision: REVISION,
-      predecessorStage: 'architectural',
-      findings: [],
-      m4: { inventory: [] },
-    });
-    const text = ['Governed author output:', '', '```create-issue-author-dispositions/v1', json, '```', ''].join('\n');
-    const located = locateGovernedAuthorDispositionBlock(text);
-    if (!('body' in located)) throw new Error('expected a located body');
-    expect(JSON.parse(located.body)).toEqual(JSON.parse(json));
+  it('AC3: replays each scrubbed raw author reply against its inline expected outcome', () => {
+    const fixtureDir = join(
+      fileURLToPath(new URL('../..', import.meta.url)),
+      'tests/external-output-references/create-issue-author-replies',
+    );
+    const replayOracle = [
+      ['1935__author-recovery-8-output.txt', 'missing_schema_label'],
+      ['1935__author-recovery-12-output.txt', 'missing_schema_label'],
+      ['1935__author-recovery-13-output.txt', 'missing_schema_label'],
+      ['1935__author-recovery-21-output.txt', 'missing_schema_label'],
+      ['1935__author-recovery-25-output.txt', 'missing_schema_label'],
+      ['1935__author-recovery-26-output.txt', 'missing_schema_label'],
+      ['1935__author-recovery-28-output.txt', 'missing_schema_label'],
+      ['1935__author-recovery-29-output.txt', 'missing_schema_label'],
+      ['1935__author-recovery-30-output.txt', 'missing_schema_label'],
+      ['1935__author-recovery-31-output.txt', 'missing_schema_label'],
+      ['1935__author-recovery-32-output.txt', 'missing_schema_label'],
+      ['1953__round-01-author-reply.txt', 'pass'],
+      ['1953__round-02-author-reply.txt', 'pass'],
+      ['1953__round-03-author-reply.txt', 'pass'],
+      ['1958__round-01-author-reply.txt', 'pass'],
+      ['1958__round-02-author-reply.txt', 'pass'],
+      ['1958__round-03-author-reply.txt', 'pass'],
+      ['1977__round-01-author-reply.txt', 'pass'],
+      ['1977__round-02-author-reply.txt', 'pass'],
+      ['1977__round-03-author-reply.txt', 'pass'],
+      ['1977__round-04-author-reply.txt', 'pass'],
+      ['1978__round-01-author-reply.txt', 'pass'],
+      ['1978__round-02-author-reply.txt', 'pass'],
+      ['1978__round-03-author-reply.txt', 'pass'],
+      ['1978__round-04-author-reply.txt', 'pass'],
+      ['1978__round-05-author-reply.txt', 'pass'],
+    ] as const;
+    expect(readdirSync(fixtureDir).filter((name) => name.endsWith('.txt')).sort())
+      .toEqual(replayOracle.map(([name]) => name).sort());
+
+    for (const [name, expected] of replayOracle) {
+      const rawReply = readFileSync(join(fixtureDir, name), 'utf8');
+      const issueNumber = Number(name.split('__', 1)[0]);
+      const sourceRevision = rawReply.match(/"sourceRevision"\s*:\s*"(r[0-9]+)"/i)?.[1]
+        ?? (issueNumber === 1935 ? 'r03' : REVISION);
+      const input = fixture({
+        issueNumber,
+        intakeRevision: sourceRevision,
+        sourceRevision,
+        transportClassification: 'complete',
+        withTurnResult: true,
+        withCapture: true,
+      });
+      writeFileSync(input.authorReplyPath, rawReply);
+      const result = produce(input);
+      const authorDiagnostic = result.authorDiagnostics?.find((item) => item.ownership === 'author-owned');
+      const lifecycleDiagnostic = result.authorDiagnostics?.find((item) => item.ownership === 'lifecycle-injected');
+      const actual = result.ok
+        ? 'pass'
+        : authorDiagnostic?.reason === 'missing_schema_label'
+          ? 'missing_schema_label'
+          : authorDiagnostic
+            ? `author-actionable:${authorDiagnostic.field}`
+            : lifecycleDiagnostic
+              ? 'lifecycle-injected'
+              : undefined;
+      expect(actual, `${name}: ${result.errors.join('\n')}`).toBe(expected);
+    }
   });
 
   it('AC4: two block-start lines are rejected as multiple', () => {
