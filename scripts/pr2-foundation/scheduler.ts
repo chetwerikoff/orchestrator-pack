@@ -23,7 +23,13 @@ import {
   type FleetNudgeTickInput,
 } from './fleet-nudge-actuator.ts';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
-import { createAdapterSubmitDeps, createOrcaMessageSubmitDeps, runOrchestrationMailReconcileTick } from '../cursor-unsent-composer-submit.ts';
+import {
+  createAdapterSubmitDeps,
+  createOrcaMessageSubmitDeps,
+  runOrcaFleetAlarmTick,
+  runOrchestrationMailReconcileTick,
+  type FleetAlarmResult,
+} from '../cursor-unsent-composer-submit.ts';
 import type { DispatchTerminalMailPulseResult } from '../orca-runtime/dispatch-terminal-mail.ts';
 import {
   isRowStale,
@@ -101,6 +107,7 @@ export interface SchedulerBoundary {
   start(candidate: ActivatedSchedulerCandidate, freshHeadSha: string): Promise<{ ok: boolean; reason?: string }>;
   reconcilePostReviewSmoke?: (candidate: ActivatedSchedulerCandidate, fresh: SchedulerCurrentPr) => Promise<PostReviewSmokeOutcome>;
   orchestrationMailReconcile?: () => Promise<import('../cursor-unsent-composer-submit.ts').OrchestrationMailReconcileResult>;
+  fleetAlarm?: FleetAlarmResult;
   /** Independent/test callers may still use the direct fallback pulse. Production scheduler lifecycle does not. */
   dispatchTerminalMailPulse?: () => DispatchTerminalMailPulseResult;
   assignmentLifecycleSweep?: WorkerAssignmentLifecycleSweepResult;
@@ -258,6 +265,7 @@ export function productionSchedulerBoundary(input: {
   assignmentLifecycleSweep?: WorkerAssignmentLifecycleSweepResult;
   reconcilePostReviewSmoke?: SchedulerBoundary['reconcilePostReviewSmoke'];
   orchestrationMailReconcile?: SchedulerBoundary['orchestrationMailReconcile'];
+  fleetAlarm?: FleetAlarmResult;
   dispatchTerminalMailPulse?: SchedulerBoundary['dispatchTerminalMailPulse'];
   publishHandoff?: SchedulerBoundary['publishHandoff'];
 }): SchedulerBoundary {
@@ -280,6 +288,7 @@ export function productionSchedulerBoundary(input: {
     ...(input.assignmentLifecycleSweep ? { assignmentLifecycleSweep: input.assignmentLifecycleSweep } : {}),
     ...(input.reconcilePostReviewSmoke ? { reconcilePostReviewSmoke: input.reconcilePostReviewSmoke } : {}),
     ...(input.orchestrationMailReconcile ? { orchestrationMailReconcile: input.orchestrationMailReconcile } : {}),
+    ...(input.fleetAlarm ? { fleetAlarm: input.fleetAlarm } : {}),
     ...(input.dispatchTerminalMailPulse ? { dispatchTerminalMailPulse: input.dispatchTerminalMailPulse } : {}),
     ...(input.publishHandoff ? { publishHandoff: input.publishHandoff } : {}),
     start: async (candidate, freshHeadSha) => {
@@ -400,6 +409,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
   attempted: number;
   started: number;
   skipped: number;
+  fleetAlarm: FleetAlarmResult;
   observer?: FleetObserverResult;
   observerFailure?: SchedulerObserverFailure;
   fleetNudge?: FleetNudgeResult;
@@ -410,6 +420,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
   assignmentLifecycleSweep?: WorkerAssignmentLifecycleSweepResult;
 }> {
   assertSchedulerEpoch(env);
+  const fleetAlarm = boundary.fleetAlarm ?? { records: [] };
   let observer: FleetObserverResult | undefined;
   let fleetNudge: FleetNudgeResult | undefined;
   let fleetEscalation: FleetEscalationInvocationResultV1 | undefined;
@@ -451,6 +462,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
         attempted: 0,
         started: 0,
         skipped: 0,
+        fleetAlarm,
         observerFailure: observerFailureReason,
         ...(orchestratorRequired ? { orchestratorRequired: true } : {}),
         fleetEscalation,
@@ -480,6 +492,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
         attempted: 0,
         started: 0,
         skipped: 0,
+        fleetAlarm,
         observer,
         fleetNudge,
         ...(orchestratorRequired ? { orchestratorRequired: true } : {}),
@@ -513,6 +526,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
       attempted,
       started,
       skipped,
+      fleetAlarm,
       ...(observer ? { observer } : {}),
       ...(fleetNudge ? { fleetNudge } : {}),
       ...(orchestratorRequired ? { orchestratorRequired: true } : {}),
@@ -635,6 +649,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   const epoch = assertSchedulerEpoch(env); const activationLineage = schedulerActivationLineage(epoch);
   const assignmentStorePath = resolveWorkerAssignmentStorePath(projectId, env); const storedAssignments = listCurrentWorkerAssignments(assignmentStorePath);
   let mailWorkers: readonly RuntimeWorker[] = [];
+  let fleetAlarm: FleetAlarmResult = { records: [] };
   const executeOrchestrationMailReconcile: NonNullable<SchedulerBoundary['orchestrationMailReconcile']> = async () => {
     const runtime = await selectRuntimeAdapter({ env });
     const deps = createAdapterSubmitDeps(runtime);
@@ -658,6 +673,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   let mailReconcileLoop: { stop: () => Promise<void> } | undefined;
   try {
     const runtime = await selectRuntimeAdapter({ env });
+    fleetAlarm = await runOrcaFleetAlarmTick(runtime);
     await runSerializedMailTurn();
     mailReconcileLoop = startOrchestrationMailReconcileLoop(executeOrchestrationMailReconcile, cadence);
     assignmentLifecycleSweep = await reconcileWorkerAssignments({
@@ -710,6 +726,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       });
     }
   } catch {
+    if (fleetAlarm.records.length === 0 && !fleetAlarm.failureCode) fleetAlarm = { records: [], failureCode: 'runtime_unavailable' };
     unresolvedReason = 'runtime_unavailable';
     assignmentReconciliation = {
       reason: 'runtime_unavailable',
@@ -786,6 +803,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       fleetBindings,
       reconcilePostReviewSmoke: postReviewSmoke,
       orchestrationMailReconcile,
+      fleetAlarm,
       publishHandoff,
     }),
     cadence,
