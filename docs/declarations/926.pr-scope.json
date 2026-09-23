@@ -14,7 +14,8 @@
     "scripts/lib/worker-assignment-store.test.ts",
     "scripts/lib/worker-assignment-store.ts",
     "scripts/pr2-foundation/supervised-worker-start.test.ts",
-    "scripts/pr2-foundation/supervised-worker-start.ts"
+    "scripts/pr2-foundation/supervised-worker-start.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
     ".github/workflows/",
