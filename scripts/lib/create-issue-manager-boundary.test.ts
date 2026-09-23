@@ -96,6 +96,34 @@ describe('create-Issue manager boundary', () => {
     );
   });
 
+  it('rejects a producer-constructed contract_defect and reconstructs it at the boundary', () => {
+    const evaluated = evaluateCreateIssueManagerBoundary({
+      producer: 'producer-that-tried-to-forge-defect',
+      currentArgv: ['current'],
+      produce: () => ({
+        ok: false,
+        cause: 'producer_contract_defect',
+        defect: {
+          producer: 'forged-producer',
+          detail: ['forged'],
+        },
+        nextAction: null,
+      }),
+    });
+    expect(evaluated.exitCode).toBe(5);
+    expect(evaluated.result).toMatchObject({
+      cause: 'producer_contract_defect',
+      defect: {
+        producer: 'producer-that-tried-to-forge-defect',
+      },
+    });
+    expect(
+      evaluated.result.ok === false && 'defect' in evaluated.result
+        ? evaluated.result.defect.detail.join('\n')
+        : '',
+    ).toContain('contract_defect may only be constructed by the manager boundary');
+  });
+
   it('turns a byte-identical recommendation into self_recommendation without executing it', () => {
     const argv = ['node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage', '--expected-stage-attempt-id', '316369ff'];
     const evaluated = evaluateCreateIssueManagerBoundary({
