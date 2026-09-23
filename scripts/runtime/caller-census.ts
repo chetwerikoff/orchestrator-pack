@@ -134,10 +134,10 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
   },
   {
     surface: 'scripts/pr2-foundation/supervised-worker-start.ts',
-    operations: ['runtime-composition'],
+    operations: ['runtime-composition', 'find', 'stop'],
     kind: 'runtime-port',
     disposition: 'use-runtime-interface',
-    note: 'Governed Orca local start composes RuntimeAdapter for current-local replacement admission before ready-receipt assignment publication.',
+    note: 'Governed Orca local start composes RuntimeAdapter for exact-current replacement admission and, for delegated integration, fences predecessor stop/find read-back before ready-receipt assignment publication.',
   },
   {
     surface: 'scripts/pr2-foundation/supervised-task-launch-assistant.ts',
