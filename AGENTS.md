@@ -225,12 +225,24 @@ command-runtime preflight. Missing required Node 22 or GitHub transport must
 fail closed. Do not edit shell dotfiles or create temporary
 executable wrappers as recovery. Structured wrappers parse stdout JSON only.
 
-## Operator-only merge and failed runs
+## Merge authority and failed runs
 
-**MUST NOT merge** unless the direct top-level user orders it. After clean
-review and green required CI, report `ready_for_review` and stop. A direct
-merge instruction authorizes the merge action but never authorizes a false
-claim about review, CI, smoke, branch identity, or local adoption.
+**MUST NOT merge** unless either (a) the direct top-level user orders it, or
+(b) the caller is the exact current supervised local integration assignment
+described by Issue #926 and the delegated branch of
+[`merge-with-local-adoption`](.cursor/skills/merge-with-local-adoption/SKILL.md).
+The delegated branch is narrower than direct-user authority: its closed
+WorkerAssignment marker must match the exact PR/head and predecessor assignment,
+live dependency sequencing must be `merge_now`, and the existing production
+post-smoke readiness authority must return `READY_TO_MERGE`. It never inherits
+the direct-user override for CI, smoke, findings, dependency order, draft/conflict,
+head/base drift, or cleanup refusal.
+
+Outside those two authorities, after clean review and green required CI, report
+`ready_for_review` and stop. A direct merge instruction authorizes the merge
+action but never authorizes a false claim about review, CI, smoke, branch
+identity, or local adoption. The delegated path likewise never turns lifecycle
+completion, review-cap exhaustion, or a status write into merge readiness.
 
 ## Worker lifecycle
 
