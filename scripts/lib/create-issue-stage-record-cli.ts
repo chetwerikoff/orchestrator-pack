@@ -1414,9 +1414,8 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
 
     const stale = staleRetryPendingBinding(opts, issueNumber);
     if (stale) {
-      if (opts.json) console.log(JSON.stringify(stale));
-      else process.stderr.write('stale_next_action\n');
-      return 1;
+      process.stderr.write('stale_next_action\n');
+      return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, stale);
     }
     const results = retryPendingEvents(transport, opts.repo, issueNumber, opts.workdir);
     const ok = results.every((item) => item.ok);
