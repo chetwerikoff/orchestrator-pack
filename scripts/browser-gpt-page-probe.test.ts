@@ -737,6 +737,8 @@ test('identity-bound inspect ignores foreign historical markers and redacts prom
         'complete',
         fixture.productSurfaces,
       );
+      const titleContent = `${marker}\n${foreignMarker}\nPRIVATE PROMPT WITNESS`;
+      (raw as any).title = titleContent;
 
       assert.equal(projectExecutionRecoveryInspect(raw)?.reason, 'ambiguous_marker');
       assert.equal(projectExecutionRecoveryInspect(raw, marker)?.cause, 'message_delivery_timed_out');
@@ -756,6 +758,8 @@ test('identity-bound inspect ignores foreign historical markers and redacts prom
       assert.equal(result.diagnostic_only, true);
       assert.equal(result.workflow_authority, 'none');
       assert.equal((result.snapshot as any).text_witnesses_redacted, true);
+      assert.equal(JSON.stringify(result).includes(titleContent), false);
+      assert.equal(JSON.stringify(result).includes('PRIVATE PROMPT WITNESS'), false);
       assert.equal(JSON.stringify(result).includes(marker), false);
       assert.equal(JSON.stringify(result).includes(foreignMarker), false);
     },

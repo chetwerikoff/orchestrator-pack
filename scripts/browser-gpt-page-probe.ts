@@ -756,7 +756,6 @@ function identityBoundSnapshot(snapshot: InspectionSnapshot): Readonly<Record<st
   return {
     page_url: snapshot.page_url,
     ready_state: snapshot.ready_state,
-    title: snapshot.title,
     generation_in_progress: snapshot.generation_in_progress,
     observed_user_nodes: snapshot.observed_user_nodes,
     observed_assistant_nodes: snapshot.observed_assistant_nodes,
