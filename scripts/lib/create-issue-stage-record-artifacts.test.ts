@@ -4525,7 +4525,8 @@ describe('Issue #1997 settled author-round execution', () => {
       const logs: string[] = [];
       const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => logs.push(String(line)));
       try {
-        expect(runStageFinalizeCli(argv, source, runner as never)).toBe(0);
+        const code = runStageFinalizeCli(argv, source, runner as never);
+        expect(code, logs.at(-1) ?? 'missing manager result').toBe(0);
         expect(JSON.parse(logs.at(-1) ?? '{}')).toMatchObject({
           ok: true,
           cause: 'author_round_completed',
