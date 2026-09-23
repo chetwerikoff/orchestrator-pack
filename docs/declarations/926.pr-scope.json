@@ -10,6 +10,7 @@
     "docs/orchestration-runbook.md",
     "docs/orchestrator-delegated-integration.md",
     "docs/pack-review-waiver-merge-runbook.md",
+    "scripts/delegated-integration-contract.test.ts",
     "scripts/lib/worker-assignment-store.test.ts",
     "scripts/lib/worker-assignment-store.ts",
     "scripts/pr2-foundation/supervised-worker-start.test.ts",
