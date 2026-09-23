@@ -202,6 +202,7 @@ export function authorDispositionDiagnosticFromFailure(
     field = 'findings';
   }
   return diagnostic(reason, field, message);
+}
 
 function diagnostic(
   reason: AuthorDispositionDiagnosticReason,
