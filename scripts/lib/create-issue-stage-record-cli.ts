@@ -120,6 +120,25 @@ interface FinalAcceptanceCliOptions extends JournalTailCliOptions {
   operatorReason?: string;
 }
 
+export interface AuthorRoundRunnerInput {
+  repository: string;
+  issueNumber: number;
+  sourceRevision: string;
+  stage: LifecycleReviewStage;
+  stageAttemptId?: string;
+  reviewDir: string;
+  prompt: string;
+  promptPath: string;
+  outputPath: string;
+}
+
+export interface AuthorRoundRunnerResult {
+  ok: boolean;
+  blocker?: string;
+}
+
+export type AuthorRoundRunner = (input: AuthorRoundRunnerInput) => AuthorRoundRunnerResult;
+
 function finishJournalArgvParse<T extends { json: boolean }>(
   arg: string,
   usage: string,
