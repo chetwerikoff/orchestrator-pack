@@ -968,12 +968,17 @@ describe('Issue #1997 author-round convergence', () => {
       firstSpy.mockRestore();
     }
 
+    const executionArgv = [
+      action!.argv[0]!,
+      action!.argv[2]!,
+      ...action!.argv.slice(3),
+    ];
     let launches = 0;
     state.body = issue1997Body({ revision: 'r02', includeVerification: false });
     const staleLogs: string[] = [];
     const staleSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => staleLogs.push(String(line)));
     try {
-      expect(runStageFinalizeCli(action!.argv, transport, () => {
+      expect(runStageFinalizeCli(executionArgv, transport, () => {
         launches += 1;
         return { ok: true };
       })).toBe(1);
@@ -990,7 +995,7 @@ describe('Issue #1997 author-round convergence', () => {
     const cleanLogs: string[] = [];
     const cleanSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => cleanLogs.push(String(line)));
     try {
-      expect(runStageFinalizeCli(action!.argv, transport, () => {
+      expect(runStageFinalizeCli(executionArgv, transport, () => {
         launches += 1;
         return { ok: true };
       })).toBe(0);
