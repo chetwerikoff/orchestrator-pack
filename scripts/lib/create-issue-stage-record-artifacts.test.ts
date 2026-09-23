@@ -4476,14 +4476,19 @@ describe('Issue #1997 settled author-round execution', () => {
       });
       const canonical = resolveCanonicalReviewDirectory({ taskIdentity: `issue:${ISSUE}` }).directory;
       mkdirSync(canonical, { recursive: true });
-      for (const source of [
-        input.intakePath,
-        input.reviewEvidencePath,
-        input.evidencePath,
-        input.capturePath,
-        input.turnResultPath,
-      ]) {
-        writeFileSync(join(canonical, basename(source)), readFileSync(source));
+      writeFileSync(join(canonical, basename(input.intakePath)), readFileSync(input.intakePath));
+      for (const evidencePath of [input.reviewEvidencePath, input.evidencePath]) {
+        const evidence = JSON.parse(readFileSync(evidencePath, 'utf8')) as Record<string, any>;
+        for (const invocation of evidence.invocations ?? []) {
+          for (const field of ['capturePath', 'turnResultPath'] as const) {
+            const sourcePath = typeof invocation[field] === 'string' ? invocation[field] : '';
+            if (!sourcePath) continue;
+            const canonicalPath = join(canonical, basename(sourcePath));
+            writeFileSync(canonicalPath, readFileSync(sourcePath));
+            invocation[field] = canonicalPath;
+          }
+        }
+        writeFileSync(join(canonical, basename(evidencePath)), JSON.stringify(evidence));
       }
       writeFileSync(join(canonical, 'round-01-author-reply.md'), JSON.stringify({
         schema: AUTHOR_DISPOSITIONS_SCHEMA,
