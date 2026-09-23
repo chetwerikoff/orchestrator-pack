@@ -10,7 +10,8 @@ credential boundary.
 After implementation, required review, CI, and current-head smoke are complete,
 the orchestrator re-reads the live Issue, PR/head/base, `main`, and each concrete
 explicit dependency named by the task. Resolve only explicit relationships into
-`merge_now` or `wait_for_dependency`. Issue closure is not proof that a
+`merge_now` or `wait_for_dependency`. A `wait_for_dependency` decision launches no
+integration worker and authorizes no delegated effect. Issue closure is not proof that a
 dependency PR landed, and broad file overlap is not a dependency.
 
 Serialize the primary checkout by live reasoning. If another delegated
