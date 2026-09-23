@@ -280,7 +280,7 @@ export function appendPublishedLogicalJournalEvent(
   workdir: string,
   logical: JournalLogical,
   census?: CommentCensusOptions,
-  beforeCreate?: () => { ok: boolean; diagnostics?: LineageDiagnostic[] },
+  beforeCreate?: (censusState: JournalCensusState) => { ok: boolean; diagnostics?: LineageDiagnostic[] },
   locallyAuthorizedPoisonCommentId?: number,
 ): OperationResult {
   const published = publishLogicalJournalEvent(
@@ -304,7 +304,7 @@ export function publishLogicalJournalEvent(
   workdir: string,
   logical: JournalLogical,
   census?: CommentCensusOptions,
-  beforeCreate?: () => { ok: boolean; diagnostics?: LineageDiagnostic[] },
+  beforeCreate?: (censusState: JournalCensusState) => { ok: boolean; diagnostics?: LineageDiagnostic[] },
   locallyAuthorizedPoisonCommentId?: number,
 ): OperationResult {
   const body = serializeCommentBody(logical);
@@ -381,7 +381,7 @@ export function publishJournalEvent(
   eventKey: string,
   fingerprint: string,
   census?: CommentCensusOptions,
-  beforeCreate?: () => { ok: boolean; diagnostics?: LineageDiagnostic[] },
+  beforeCreate?: (censusState: JournalCensusState) => { ok: boolean; diagnostics?: LineageDiagnostic[] },
   locallyAuthorizedPoisonCommentId?: number,
 ): OperationResult {
   const diagnostics: LineageDiagnostic[] = [];
@@ -428,7 +428,7 @@ export function publishJournalEvent(
   }
 
   if (beforeCreate) {
-    const check = beforeCreate();
+    const check = beforeCreate(censusState);
     diagnostics.push(...(check.diagnostics ?? []));
     if (!check.ok) return { ok: false, diagnostics, eventKey, projectionPendingRepair: true };
   }
@@ -776,9 +776,49 @@ export function startReviewCycle(
     stageAttemptId = canonicalAttemptId;
   }
 
+  const persistedCandidate = readPersistedCycleId(workdir);
+  const persistedEvent = persistedCandidate ? censusState.lineage.eventsByKey.get(persistedCandidate) : undefined;
+  const persistedForkLoser = Boolean(
+    persistedCandidate
+    && persistedEvent?.logical.schema === CYCLE_SCHEMA
+    && censusState.lineage.diagnostics.some((diagnostic) => (
+      diagnostic.code === 'non-current-cycle-fork'
+      && diagnostic.eventKey === persistedEvent.eventKey
+      && diagnostic.commentId === persistedEvent.commentId
+    ))
+    && !censusState.lineage.diagnostics.some((diagnostic) => (
+      diagnostic.eventKey === persistedCandidate
+      && diagnostic.code !== 'non-current-cycle-fork'
+      && diagnostic.code !== 'duplicate-remote-event'
+    )),
+  );
+  if (persistedForkLoser) {
+    const canonicalHead = censusState.lineage.head;
+    const canonicalHeadCycleId = canonicalHead?.logical.schema === CYCLE_SCHEMA
+      ? (canonicalHead.logical as CycleEventLogical)['cycle-id']
+      : null;
+    if (!input.predecessorCycleId) {
+      diagnostics.push({
+        code: 'conflicting-remote-event',
+        message: `persisted non-current-cycle-fork ${persistedCandidate} requires an explicit predecessor equal to the current canonical cycle head`,
+        eventKey: persistedCandidate!,
+      });
+      return { ok: false, diagnostics, cycleId: persistedCandidate!, eventKey: persistedCandidate!, ...(stageAttemptId ? { stageAttemptId } : {}) };
+    }
+    if (!canonicalHeadCycleId || input.predecessorCycleId !== canonicalHeadCycleId) {
+      diagnostics.push({
+        code: 'orphan-cycle',
+        message: `persisted non-current-cycle-fork ${persistedCandidate} can recover only from current canonical cycle head ${canonicalHeadCycleId ?? '<none>'}; requested predecessor ${input.predecessorCycleId}`,
+        eventKey: persistedCandidate!,
+      });
+      return { ok: false, diagnostics, cycleId: persistedCandidate!, eventKey: persistedCandidate!, ...(stageAttemptId ? { stageAttemptId } : {}) };
+    }
+  }
+
   // A stale/consumed stage must be rejected before any projection or journal
   // mutation. Projection bootstrap is therefore downstream of live Issue +
-  // lifecycle admission and deterministic attempt validation.
+  // lifecycle admission and deterministic attempt validation. Persisted fork
+  // recovery legality is also proven before this mutation boundary.
   const bootstrapDiagnostics = ensureProjectionLabels(transport, input.repo);
   diagnostics.push(...bootstrapDiagnostics);
   if (bootstrapDiagnostics.length > 0) {
@@ -790,15 +830,13 @@ export function startReviewCycle(
     };
   }
 
-  const persistedCandidate = readPersistedCycleId(workdir);
-  const persistedEvent = persistedCandidate ? censusState.lineage.eventsByKey.get(persistedCandidate) : undefined;
   const activeCycleIsAccepted = issueBefore.labels.includes('spec-review:accepted');
   const revisionChanged = persistedEvent?.logical.schema === CYCLE_SCHEMA
     && (persistedEvent.logical as CycleEventLogical)['source-revision'] !== input.sourceRevision;
-  const persisted = poisonRecovery || !persistedCandidate || activeCycleIsAccepted || revisionChanged
+  const persisted = poisonRecovery || persistedForkLoser || !persistedCandidate || activeCycleIsAccepted || revisionChanged
     ? randomUUID()
     : persistedCandidate;
-  if (!poisonRecovery) persistCycleId(workdir, persisted);
+  if (!poisonRecovery && !persistedForkLoser) persistCycleId(workdir, persisted);
 
   const laneControlledStage = input.stage === 'competitive' || input.stage === 'architectural-review';
   if (!input.stage && input.stageAttemptId && input.tier !== 'T3') {
@@ -867,6 +905,21 @@ export function startReviewCycle(
     'public-actor': input.publicActor,
     'routed-lane': reviewLaneRouting,
   };
+  const beforeCreate = persistedForkLoser ? (publicationCensus: JournalCensusState) => {
+    const publicationHead = publicationCensus.lineage.head;
+    const publicationHeadCycleId = publicationHead?.logical.schema === CYCLE_SCHEMA
+      ? (publicationHead.logical as CycleEventLogical)['cycle-id']
+      : null;
+    if (publicationHeadCycleId === input.predecessorCycleId) return { ok: true };
+    return {
+      ok: false,
+      diagnostics: [{
+        code: 'orphan-cycle' as const,
+        message: `persisted non-current-cycle-fork ${persistedCandidate} became stale before publication; current canonical cycle head ${publicationHeadCycleId ?? '<none>'} does not match requested predecessor ${input.predecessorCycleId}`,
+        eventKey: persisted,
+      }],
+    };
+  } : undefined;
   const published = appendPublishedLogicalJournalEvent(
     diagnostics,
     transport,
@@ -875,7 +928,7 @@ export function startReviewCycle(
     workdir,
     logical,
     input.census,
-    undefined,
+    beforeCreate,
     poisonRecovery?.poisonCommentId,
   );
   if (!published.ok) {
@@ -888,6 +941,7 @@ export function startReviewCycle(
       projectionPendingRepair: published.projectionPendingRepair,
     };
   }
+  if (persistedForkLoser) persistCycleId(workdir, persisted);
   if (poisonRecovery) {
     persistCycleId(workdir, persisted);
     clearPendingEvent(workdir, poisonRecovery.poisonedCycleId);
