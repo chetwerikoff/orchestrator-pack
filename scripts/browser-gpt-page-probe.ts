@@ -21,6 +21,7 @@ import {
   finalizeStateLightPrimaryPublication,
   readStateLightTurnObservation,
   transitionStateLightTurnObservation,
+  type StateLightTurnObservationPhase,
 } from './chatgpt-browser-turn/state-light-turn-observation.ts';
 import { recoveryMarkerCardinality } from './chatgpt-browser-turn/state-light-turn-recovery.ts';
 import {
@@ -241,6 +242,8 @@ export interface ParsedInspectArgs {
   readonly targetId?: string;
   readonly conversationUrl?: string;
   readonly openIfMissing?: true;
+  readonly profile?: string;
+  readonly invocationId?: string;
 }
 
 export interface ParsedExportArgs {
@@ -597,7 +600,10 @@ function inspectEvidenceFromClassification(
   };
 }
 
-export function projectExecutionRecoveryInspect(value: unknown): ExecutionRecoveryInspectEvidence | null {
+export function projectExecutionRecoveryInspect(
+  value: unknown,
+  expectedMarker?: string,
+): ExecutionRecoveryInspectEvidence | null {
   if (!isRecord(value) || value.status !== 'ok') return null;
   const evidence = validateExecutionRecoveryEvidence(value.execution_recovery_evidence);
   if (!evidence) {
@@ -611,6 +617,30 @@ export function projectExecutionRecoveryInspect(value: unknown): ExecutionRecove
     };
   }
 
+  const bannerCandidates = toClassifierBannerCandidates(evidence.banner_candidates);
+  if (expectedMarker !== undefined) {
+    const cardinality = recoveryMarkerCardinality(evidence.messages, expectedMarker);
+    if (cardinality.matchingUserCarrierCount !== 1 || cardinality.exactMarkerTokenCount !== 1) {
+      return {
+        cause: null,
+        owned_user_turn_key: null,
+        candidate_assistant_turn_key: null,
+        retry_control_present: evidence.banner_candidates.some((candidate) => candidate.retry_control_present),
+        generation_in_progress: evidence.generation_in_progress,
+        reason: cardinality.exactMarkerTokenCount === 0 ? 'no_owned_prompt' : 'ambiguous_marker',
+      };
+    }
+    const classified = classifyExecutionRecoveryProductError({
+      marker: expectedMarker,
+      transcriptComplete: evidence.transcript_complete,
+      generationInProgress: evidence.generation_in_progress,
+      messages: evidence.messages,
+      conversationTurnKeys: evidence.conversation_turn_keys,
+      bannerCandidates,
+    });
+    return inspectEvidenceFromClassification(evidence.generation_in_progress, classified);
+  }
+
   const markers = new Set<string>();
   for (const message of evidence.messages) {
     if (message.role !== 'user') continue;
@@ -618,7 +648,6 @@ export function projectExecutionRecoveryInspect(value: unknown): ExecutionRecove
     if (isOwnedPromptMarker(marker)) markers.add(marker);
   }
 
-  const bannerCandidates = toClassifierBannerCandidates(evidence.banner_candidates);
   if (markers.size > 1) {
     return {
       cause: null,
@@ -641,18 +670,102 @@ export function projectExecutionRecoveryInspect(value: unknown): ExecutionRecove
   return inspectEvidenceFromClassification(evidence.generation_in_progress, classified);
 }
 
+interface IdentityBoundInspectObservation {
+  readonly phase: StateLightTurnObservationPhase;
+  readonly expectedMarker: string | null;
+  readonly conversationUrl: string | null;
+}
+
+function readIdentityBoundInspectObservation(args: ParsedInspectArgs): IdentityBoundInspectObservation | null {
+  const hasProfile = args.profile !== undefined;
+  const hasInvocationId = args.invocationId !== undefined;
+  if (hasProfile !== hasInvocationId) {
+    throw new ProbeError('input_invalid', 'identity_pair_required');
+  }
+  if (!hasProfile || !hasInvocationId) return null;
+  if (!args.profile || !args.invocationId) {
+    throw new ProbeError('input_invalid', 'identity_pair_required');
+  }
+
+  const profileKey = configuredProfileKey(args.profile, args.cdp);
+  let record;
+  try {
+    record = readStateLightTurnObservation(profileKey, args.invocationId);
+  } catch (error) {
+    throw new ProbeError('not_found', 'observation_not_found', boundedDetail(error));
+  }
+  if (!isOwnedPromptMarker(record.marker)) {
+    throw new ProbeError('surface_unknown', 'observation_marker_invalid');
+  }
+  const observationEligible = record.phase === 'dispatching'
+    || record.phase === 'sent_unbound'
+    || record.phase === 'sent_unharvested'
+    || record.phase === 'harvested';
+  return {
+    phase: record.phase,
+    expectedMarker: observationEligible ? record.marker : null,
+    conversationUrl: record.conversation_url,
+  };
+}
+
+function requireIdentityBoundConversation(
+  observation: IdentityBoundInspectObservation | null,
+  actualUrl: string,
+): void {
+  if (!observation?.conversationUrl) return;
+  let expected: string;
+  let actual: string;
+  try {
+    expected = normalizeConversationUrl(observation.conversationUrl);
+    actual = normalizeConversationUrl(actualUrl);
+  } catch {
+    throw new ProbeError('surface_unknown', 'conversation_identity_mismatch');
+  }
+  if (expected !== actual) {
+    throw new ProbeError('surface_unknown', 'conversation_identity_mismatch');
+  }
+}
+
 export function projectExecutionRecoveryCause(value: unknown): ExecutionRecoveryProductCause | null {
   return projectExecutionRecoveryInspect(value)?.cause ?? null;
 }
 
-function inspectRecoveryEnvelopeFields(value: unknown): {
+function inspectRecoveryEnvelopeFields(
+  value: unknown,
+  identityObservation: IdentityBoundInspectObservation | null = null,
+): {
   readonly execution_recovery_cause: ExecutionRecoveryProductCause | null;
   readonly execution_recovery_inspect: ExecutionRecoveryInspectEvidence | null;
+  readonly identity_bound?: true;
+  readonly observation_phase?: StateLightTurnObservationPhase;
 } {
-  const inspect = projectExecutionRecoveryInspect(value);
+  const inspect = identityObservation?.expectedMarker === null
+    ? null
+    : projectExecutionRecoveryInspect(value, identityObservation?.expectedMarker);
   return {
     execution_recovery_cause: inspect?.cause ?? null,
     execution_recovery_inspect: inspect,
+    ...(identityObservation ? {
+      identity_bound: true as const,
+      observation_phase: identityObservation.phase,
+    } : {}),
+  };
+}
+
+function identityBoundSnapshot(snapshot: InspectionSnapshot): Readonly<Record<string, unknown>> {
+  return {
+    page_url: snapshot.page_url,
+    ready_state: snapshot.ready_state,
+    title: snapshot.title,
+    generation_in_progress: snapshot.generation_in_progress,
+    observed_user_nodes: snapshot.observed_user_nodes,
+    observed_assistant_nodes: snapshot.observed_assistant_nodes,
+    observed_message_nodes: snapshot.observed_message_nodes,
+    nodes_truncated: snapshot.nodes_truncated,
+    last_assistant_text_length: snapshot.last_assistant_text_length,
+    last_assistant_text_byte_length: snapshot.last_assistant_text_byte_length,
+    last_assistant_sha256: snapshot.last_assistant_sha256,
+    text_witnesses_redacted: true,
   };
 }
 
@@ -853,10 +966,17 @@ export function parseCliArgs(argv: readonly string[]): ParsedArgs {
   }
 
   if (operation === 'inspect') {
-    requireOnly(values, ['--cdp', '--target-id', '--url', '--open-if-missing']);
+    requireOnly(values, ['--cdp', '--target-id', '--url', '--open-if-missing', '--profile', '--invocation-id']);
     const targetId = values.get('--target-id');
     const conversationUrl = values.get('--url');
     const openIfMissingValue = values.get('--open-if-missing');
+    const hasProfile = values.has('--profile');
+    const hasInvocationId = values.has('--invocation-id');
+    if (hasProfile !== hasInvocationId) {
+      throw new ProbeError('input_invalid', 'identity_pair_required');
+    }
+    const profile = hasProfile ? required(values, '--profile') : undefined;
+    const invocationId = hasInvocationId ? required(values, '--invocation-id') : undefined;
     if ((targetId ? 1 : 0) + (conversationUrl ? 1 : 0) !== 1) {
       throw new ProbeError('input_invalid', 'exactly_one_page_selector_required');
     }
@@ -870,12 +990,17 @@ export function parseCliArgs(argv: readonly string[]): ParsedArgs {
     if (openIfMissingValue === 'true' && targetId) {
       throw new ProbeError('input_invalid', 'open_if_missing_requires_url');
     }
+    if (openIfMissingValue === 'true' && profile) {
+      throw new ProbeError('input_invalid', 'identity_bound_open_if_missing_forbidden');
+    }
     return {
       operation,
       cdp,
       ...(targetId ? { targetId } : {}),
       ...(conversationUrl ? { conversationUrl } : {}),
       ...(openIfMissingValue === 'true' ? { openIfMissing: true as const } : {}),
+      ...(profile ? { profile } : {}),
+      ...(invocationId ? { invocationId } : {}),
     };
   }
 
@@ -2217,6 +2342,18 @@ export async function runProbe(args: ParsedArgs, deps: ProbeDependencies = defau
 
   if (args.operation === 'liveness') return runLiveness(args, deps);
   if (args.operation === 'harvest') return runHarvest(args, deps);
+
+  const identityObservation = args.operation === 'inspect'
+    ? readIdentityBoundInspectObservation(args)
+    : null;
+  if (args.operation === 'inspect' && identityObservation && args.openIfMissing) {
+    throw new ProbeError('input_invalid', 'identity_bound_open_if_missing_forbidden');
+  }
+  if (args.operation === 'inspect'
+    && identityObservation?.conversationUrl
+    && args.conversationUrl) {
+    requireIdentityBoundConversation(identityObservation, args.conversationUrl);
+  }
   if (args.operation === 'inspect' && args.conversationUrl && args.openIfMissing) {
     return inspectAcquiredUrl(args, deps);
   }
@@ -2236,11 +2373,12 @@ export async function runProbe(args: ParsedArgs, deps: ProbeDependencies = defau
       throw new ProbeError('unavailable', 'target_read_unavailable', boundedDetail(error));
     }
     const result = validateInspectionSnapshot(value, target, resolvedByUrl);
+    requireIdentityBoundConversation(identityObservation, result.page_url);
     return {
       ...baseEnvelope('inspect', 'ok'),
       target_id: target.target_id,
-      ...inspectRecoveryEnvelopeFields(value),
-      snapshot: result,
+      ...inspectRecoveryEnvelopeFields(value, identityObservation),
+      snapshot: identityObservation ? identityBoundSnapshot(result) : result,
     };
   }
 
