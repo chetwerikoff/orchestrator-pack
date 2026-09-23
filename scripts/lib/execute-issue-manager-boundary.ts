@@ -420,6 +420,9 @@ function classifyTurn(
 function executionRecoveryInspect(value: JsonRecord): ExecutionRecoveryInspectEvidence | null {
   const embedded = record(value.execution_recovery_inspect);
   if (embedded) {
+    if (embedded.reason === 'ambiguous_marker') {
+      return embedded as unknown as ExecutionRecoveryInspectEvidence;
+    }
     const generation = embedded.generation_in_progress;
     if (generation === true || generation === false || generation === 'unknown') {
       return embedded as unknown as ExecutionRecoveryInspectEvidence;

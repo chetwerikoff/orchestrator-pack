@@ -92,6 +92,7 @@ describe('execute-Issue manager boundary', () => {
     expect(expectReadOnly(classifyExecuteIssueManagerRecord(probe('not_found'), context)).kind).toBe('execute-observe-owned-turn');
     expect(expectReadOnly(classifyExecuteIssueManagerRecord(probe('ok', { execution_recovery_inspect: { cause: null, generation_in_progress: true } }), context)).kind).toBe('execute-observe-owned-turn');
     expect(expectReadOnly(classifyExecuteIssueManagerRecord(probe('ok', { execution_recovery_inspect: { cause: 'product_network_error', generation_in_progress: false } }), context)).kind).toBe('execute-github-first-read-only');
+    expect(classifyExecuteIssueManagerRecord(probe('ok', { execution_recovery_inspect: { reason: 'ambiguous_marker' } }), context)).toMatchObject({ exitCode: 4, result: { cause: 'external:content_authority_conflict' } });
     const unsafe = classifyExecuteIssueManagerRecord(probe('unsafe_output', { reason: 'unsafe-evidence-2081' }), context);
     expect(unsafe.exitCode).toBe(5);
     expect(JSON.stringify(unsafe.result)).toContain('unsafe-evidence-2081');
