@@ -4011,7 +4011,7 @@ describe('cause-classed zero-send continuation (Issue #1999)', () => {
 });
 
 describe('Issue #2028 reviewer-stage author reply gate', () => {
-  it('reconciles one post-attempt Issue revision when the governed author reply remains bound to the attempt', () => {
+  it('rejects stale stage evidence after the Issue advances despite a governed author reply', () => {
     const input = fixture();
     const originalEvidence = readFileSync(input.evidencePath, 'utf8');
     const originalAuthorReply = readFileSync(input.authorReplyPath, 'utf8');
@@ -4023,10 +4023,10 @@ describe('Issue #2028 reviewer-stage author reply gate', () => {
       issueNumber: ISSUE,
       artifactSourceTransport: source,
     });
-    expect(result.ok, result.errors.join('\n')).toBe(true);
-    expect(readFileSync(input.evidencePath, 'utf8')).not.toBe(originalEvidence);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\\n')).toContain('stale_next_action');
+    expect(readFileSync(input.evidencePath, 'utf8')).toBe(originalEvidence);
     expect(readFileSync(input.authorReplyPath, 'utf8')).toBe(originalAuthorReply);
-    expect(JSON.parse(readFileSync(input.evidencePath, 'utf8')).sourceRevision).toBe(REVISION);
   });
   it('produces reviewer-stage artifacts when a predecessor exists and round-NN-author-reply is absent', () => {
     const input = fixture({ phase: 'pre-lens' });
