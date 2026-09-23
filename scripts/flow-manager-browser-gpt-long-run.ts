@@ -294,6 +294,11 @@ export async function runBrowserAdapter(
     process.stderr.write('flow-manager-browser-gpt-long-run: ' + inspected.error + '\n');
     return 2;
   }
+  const requiredInspection = inspectManagerCliInvocation(FLOW_MANAGER_BROWSER_GPT_CLI, argv);
+  if (requiredInspection.error) {
+    process.stderr.write('flow-manager-browser-gpt-long-run: ' + requiredInspection.error + '\n');
+    return 2;
+  }
   const options = parseFlagArgv(argv);
   const runIdentity = requiredOption(options, 'run-identity');
   const attemptIdentity = requiredOption(options, 'attempt-identity');
@@ -341,11 +346,6 @@ export async function runBrowserAdapter(
   }
   if (directRequested && directStage !== 'architectural' && terminalInputBundle) {
     return refuse(argv, 'direct_publication_terminal_bundle_unexpected');
-  }
-  const requiredInspection = inspectManagerCliInvocation(FLOW_MANAGER_BROWSER_GPT_CLI, argv);
-  if (requiredInspection.error) {
-    process.stderr.write('flow-manager-browser-gpt-long-run: ' + requiredInspection.error + '\n');
-    return 2;
   }
   const profile = requiredOption(options, 'profile');
   const cdp = requiredOption(options, 'cdp');

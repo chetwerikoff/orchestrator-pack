@@ -3744,16 +3744,41 @@ async function runTurn(
         lastReadyReply = '';
         bestReadyReply = '';
       }
-      if (
-        !ownershipForfeited
+      const mayContinueGeneration = !ownershipForfeited
         && (!config.newChat
           || !ownedConversationUrl
-          || freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs))
-        && await maybeContinueGeneration(page, hardExhaustionDeadline)
-      ) {
-        updateHeartbeatForPoll(decision);
-        await sleep(page, INITIAL_POLL_MS);
-        continue;
+          || freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs));
+      if (mayContinueGeneration) {
+        let continued = false;
+        try {
+          continued = await maybeContinueGeneration(page, hardExhaustionDeadline);
+        } catch (error) {
+          if (!isPostSendTargetCrash(error)) throw error;
+          incident('post_send_target_loss', 'post_send_target_crashed', 'retain_owned_page_no_resend');
+          return {
+            page,
+            browser,
+            cleanupAction: 'preserve',
+            result: compactResult(
+              'driver_error',
+              'invocation',
+              'post_send_target_crashed',
+              invocationId,
+              profileKey,
+              sendCount,
+              pollCount,
+              navigation,
+              incidents,
+              { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+              journalWriteFailed,
+            ),
+          };
+        }
+        if (continued) {
+          updateHeartbeatForPoll(decision);
+          await sleep(page, INITIAL_POLL_MS);
+          continue;
+        }
       }
       if (
         config.newChat

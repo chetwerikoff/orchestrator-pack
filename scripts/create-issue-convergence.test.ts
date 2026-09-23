@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import { runProcessSync } from './kernel/subprocess.ts';
 import {
   assertCreateIssueActionCurrent,
   createIssueNextAction,
@@ -195,6 +196,102 @@ describe('Issue #1998 declaration-owned manager CLI contracts', () => {
     } finally {
       stderr.mockRestore();
     }
+  });
+
+  it('reports missing required manager arguments through the declaration before reading command values', async () => {
+    const recordAdmission = vi.fn();
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      expect(await runBrowserAdapter(['--run-identity', 'run'], { recordAdmission })).toBe(2);
+      const output = stderr.mock.calls.flat().join('');
+      expect(output).toContain('--attempt-identity is required');
+      expect(output).toContain('Usage:');
+      expect(recordAdmission).not.toHaveBeenCalled();
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it('reaches manager environment preflight in a real subprocess without active-worktree node_modules', () => {
+    const worktree = tempRoot();
+    const scriptsDir = join(worktree, 'scripts');
+    mkdirSync(scriptsDir, { recursive: true });
+    mkdirSync(join(worktree, 'plugins', '_shared'), { recursive: true });
+    const trackedGh = join(scriptsDir, 'gh');
+    symlinkSync(join(resolve(process.cwd()), 'scripts', 'gh'), trackedGh);
+    writeFileSync(join(worktree, 'package.json'), '{}\n');
+    const profile = join(worktree, 'profile');
+    const dependencyLoader = join(worktree, 'block-workspace-shared-loader.mjs');
+    writeFileSync(dependencyLoader, [
+      'export async function resolve(specifier, context, nextResolve) {',
+      '  if (specifier.startsWith("@orchestrator-pack/shared/")) {',
+      '    const error = new Error("workspace dependency unavailable: " + specifier);',
+      '    error.code = "ERR_MODULE_NOT_FOUND";',
+      '    throw error;',
+      '  }',
+      '  return nextResolve(specifier, context);',
+      '}',
+      '',
+    ].join('\n'));
+    mkdirSync(profile);
+    const output = join(worktree, 'reply.txt');
+    const handoff = join(worktree, 'handoff.json');
+    const lifecycleState = join(worktree, 'lifecycle-state');
+    const manager = join(resolve(process.cwd()), 'scripts', 'flow-manager-browser-gpt-long-run.ts');
+    const result = runProcessSync({
+      command: process.execPath,
+      args: [
+        '--experimental-strip-types', '--experimental-loader', dependencyLoader, manager,
+        '--run-identity', 'run-1998-subprocess',
+        '--attempt-identity', 'attempt-1998-subprocess',
+        '--handoff-receipt', handoff,
+        '--invocation-id', 'invocation-1998-subprocess',
+        '--terminal-envelope', join(worktree, 'terminal.json'),
+        '--output', output,
+        '--profile', profile,
+        '--cdp', 'http://127.0.0.1:9222',
+        '--input', join(worktree, 'input.txt'),
+        '--cwd', worktree,
+        '--reviewer-source-output', join(worktree, 'source.txt'),
+        '--reviewer-source', 'gpt',
+        '--repository', 'chetwerikoff/orchestrator-pack',
+        '--issue-number', '1998',
+        '--source-revision', 'r04',
+        '--stage', 'architectural-review',
+        '--source-slot', '01',
+        '--stage-attempt-id', 'attempt-1998-subprocess',
+      ],
+      cwd: process.cwd(),
+      env: {
+        PATH: [scriptsDir, process.env.PATH ?? ''].filter(Boolean).join(':'),
+        DISCUSS_WITH_GPT_PROJECT_URL: 'https://chatgpt.com/g/project',
+        DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR: profile,
+        OPK_CREATE_ISSUE_DRAFT_STATE_ROOT: lifecycleState,
+      },
+      inheritParentEnv: true,
+      encoding: 'utf8',
+      timeoutMs: 20_000,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.exitCode, `${result.stderr}\n${result.stdout}`).toBe(4);
+    const managerResult = JSON.parse(result.stdout) as {
+      ok?: boolean;
+      cause?: string;
+      pause?: { evidence?: string; remedy?: string };
+      nextAction?: unknown;
+    };
+    expect(managerResult).toMatchObject({
+      ok: false,
+      cause: 'external:permission_denied',
+      nextAction: null,
+    });
+    expect(managerResult.pause?.evidence).toContain('workspace_shared_module');
+    expect(managerResult.pause?.remedy).toContain('npm ci --include=dev');
+    expect(result.stderr).not.toContain('ERR_MODULE_NOT_FOUND');
+    expect(existsSync(output)).toBe(false);
+    expect(existsSync(handoff)).toBe(false);
+    expect(existsSync(lifecycleState)).toBe(false);
   });
 });
 

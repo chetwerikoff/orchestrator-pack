@@ -100,8 +100,18 @@ import {
   collectionLocator,
   readyTurnObservationFrames,
   scalarLocator,
+  TEST_OWNED_MARKER,
+  browserFor,
 } from '../chatgpt-browser-turn/state-light-turn.test-fixtures.ts';
-import { COMPOSER_SELECTOR, MESSAGE_NODE_SELECTOR, SEND_BUTTON_SELECTOR } from '../chatgpt-browser-turn/product-page-selectors.ts';
+import {
+  ASSISTANT_MESSAGE_SELECTOR,
+  ASSISTANT_TURN_ANCESTOR_XPATH,
+  COMPOSER_SELECTOR,
+  CONTINUE_GENERATING_TESTID_SELECTOR,
+  MESSAGE_NODE_SELECTOR,
+  SEND_BUTTON_SELECTOR,
+  USER_MESSAGE_SELECTOR,
+} from '../chatgpt-browser-turn/product-page-selectors.ts';
 
 
 let root = '';
@@ -144,6 +154,118 @@ describe('Issue #1998 Target crash classification', () => {
     expect(isPostSendTargetCrash(new Error('locator.count: Target crashed'))).toBe(true);
     expect(isPostSendTargetCrash(new Error('Target closed'))).toBe(false);
     expect(isPostSendTargetCrash(new Error('locator.count: Timeout 5000ms exceeded'))).toBe(false);
+  });
+
+  it('routes Target crashed from the Continue generating probe through the terminal classifier', async () => {
+    const input = join(root, 'target-crash-input.txt');
+    const output = join(root, 'target-crash-output.txt');
+    const profile = join(root, 'target-crash-profile');
+    mkdirSync(profile);
+    writeFileSync(input, 'target crash payload');
+    let sent = false;
+    let composed = '';
+    let sends = 0;
+    const assistant = { role: 'assistant' as const, text: 'working', inProgress: true };
+    const composer = scalarLocator({
+      count: vi.fn(async () => 1),
+      fill: vi.fn(async (value: string) => { composed = value; }),
+      innerText: vi.fn(async () => sent ? '' : composed),
+      textContent: vi.fn(async () => sent ? '' : composed),
+      press: vi.fn(async (key: string) => {
+        expect(key).toBe('Enter');
+        sent = true;
+        sends += 1;
+      }),
+    });
+    const page: any = {
+      __fakeBrowserGptPage: true,
+      goto: vi.fn(async () => undefined),
+      url: vi.fn(() => 'https://chatgpt.com/c/target-crash-continuation'),
+      isClosed: vi.fn(() => false),
+      waitForTimeout: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      getByRole: vi.fn((role: string, options?: { name?: RegExp | string }) => {
+        if (role === 'button' && options?.name instanceof RegExp && /continue generating/iu.test(String(options.name))) {
+          return scalarLocator({
+            count: vi.fn(async () => {
+              if (sent) throw new Error('locator.count: Target crashed');
+              return 0;
+            }),
+          });
+        }
+        return scalarLocator();
+      }),
+      getByText: vi.fn(() => scalarLocator()),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: vi.fn(async () => 0) });
+        if (selector === MESSAGE_NODE_SELECTOR) {
+          return sent
+            ? collectionLocator([
+              { role: 'user', text: composed },
+              assistant,
+            ], true)
+            : collectionLocator([]);
+        }
+        if (selector === USER_MESSAGE_SELECTOR) {
+          return sent
+            ? collectionLocator([{ role: 'user', text: composed }])
+            : collectionLocator([]);
+        }
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) {
+          return sent ? collectionLocator([assistant], true) : collectionLocator([]);
+        }
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+          return sent ? collectionLocator([assistant], true).nth(0) : scalarLocator({ count: vi.fn(async () => 0) });
+        }
+        if (selector === CONTINUE_GENERATING_TESTID_SELECTOR) return scalarLocator({ count: vi.fn(async () => 0) });
+        return scalarLocator({ count: vi.fn(async () => 0) });
+      }),
+    };
+    const harness = browserFor(page);
+    vi.resetModules();
+    vi.doMock('../chatgpt-browser-turn/ui-adapter.ts', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../chatgpt-browser-turn/ui-adapter.ts')>();
+      return {
+        ...actual,
+        verifyProfile: vi.fn(async () => ({ state: 'verified' as const, cause: 'ok' as const })),
+        productStatusText: vi.fn(async () => ({ text: '', composer: true })),
+        loadChromium: vi.fn(() => ({ connectOverCDP: vi.fn(async () => harness.browser) })),
+      };
+    });
+    const writes: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+      return true;
+    });
+    try {
+      const { runStateLightTurn } = await import('../chatgpt-browser-turn/state-light-turn.ts');
+      await runStateLightTurn([
+        '--profile', profile,
+        '--cdp', cdp,
+        '--invocation-id', randomUUID(),
+        '--input', input,
+        '--output', output,
+        '--chat-url', 'https://chatgpt.com/c/target-crash-continuation',
+        '--timeout-ms', '10000',
+      ]);
+      const result = JSON.parse(writes.join('')) as { state: string; cause: string; send_count: number; incidents: string[] };
+      expect(result).toMatchObject({
+        state: 'driver_error',
+        cause: 'post_send_target_crashed',
+        send_count: 1,
+      });
+      expect(result.incidents.filter((incident) => incident === 'post_send_target_loss')).toHaveLength(1);
+      expect(composed).toContain(TEST_OWNED_MARKER);
+      expect(sends).toBe(1);
+      expect(harness.context.newPage).toHaveBeenCalledTimes(1);
+      expect(existsSync(output)).toBe(false);
+    } finally {
+      stdout.mockRestore();
+      vi.doUnmock('../chatgpt-browser-turn/ui-adapter.ts');
+      vi.resetModules();
+      vi.restoreAllMocks();
+    }
   });
 });
 
