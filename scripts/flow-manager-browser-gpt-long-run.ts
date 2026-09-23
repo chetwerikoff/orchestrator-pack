@@ -294,20 +294,7 @@ export async function runBrowserAdapter(
     process.stderr.write('flow-manager-browser-gpt-long-run: ' + inspected.error + '\n');
     return 2;
   }
-  const requiredInspection = inspectManagerCliInvocation(FLOW_MANAGER_BROWSER_GPT_CLI, argv);
-  if (requiredInspection.error) {
-    process.stderr.write('flow-manager-browser-gpt-long-run: ' + requiredInspection.error + '\n');
-    return 2;
-  }
   const options = parseFlagArgv(argv);
-  const runIdentity = requiredOption(options, 'run-identity');
-  const attemptIdentity = requiredOption(options, 'attempt-identity');
-  const handoffReceipt = requiredOption(options, 'handoff-receipt');
-  const staleReceiptCode = staleHandoffReceiptResult(argv, handoffReceipt, runIdentity, attemptIdentity);
-  if (staleReceiptCode !== null) return staleReceiptCode;
-  const invocationId = requiredOption(options, 'invocation-id');
-  const terminalEnvelope = requiredOption(options, 'terminal-envelope');
-  const browserOutput = requiredOption(options, 'output');
   const reviewerSourceOutput = typeof options.get('reviewer-source-output') === 'string'
     ? options.get('reviewer-source-output') as string
     : undefined;
@@ -322,6 +309,21 @@ export async function runBrowserAdapter(
   ];
   const directRequested = reviewerSourceOutput !== undefined
     || directArgumentKeys.some((key) => options.has(key));
+  const coreIdentityIncomplete = ['run-identity', 'attempt-identity', 'handoff-receipt']
+    .some((key) => !options.has(key));
+  let requiredOptionsValidated = !directRequested || coreIdentityIncomplete;
+  if (requiredOptionsValidated) {
+    const requiredInspection = inspectManagerCliInvocation(FLOW_MANAGER_BROWSER_GPT_CLI, argv);
+    if (requiredInspection.error) {
+      process.stderr.write('flow-manager-browser-gpt-long-run: ' + requiredInspection.error + '\n');
+      return 2;
+    }
+  }
+  const runIdentity = requiredOption(options, 'run-identity');
+  const attemptIdentity = requiredOption(options, 'attempt-identity');
+  const handoffReceipt = requiredOption(options, 'handoff-receipt');
+  const staleReceiptCode = staleHandoffReceiptResult(argv, handoffReceipt, runIdentity, attemptIdentity);
+  if (staleReceiptCode !== null) return staleReceiptCode;
   if (directRequested && (
     reviewerSourceOutput === undefined
     || directArgumentKeys.some((key) => typeof options.get(key) !== 'string')
@@ -347,6 +349,17 @@ export async function runBrowserAdapter(
   if (directRequested && directStage !== 'architectural' && terminalInputBundle) {
     return refuse(argv, 'direct_publication_terminal_bundle_unexpected');
   }
+  if (!requiredOptionsValidated) {
+    const requiredInspection = inspectManagerCliInvocation(FLOW_MANAGER_BROWSER_GPT_CLI, argv);
+    if (requiredInspection.error) {
+      process.stderr.write('flow-manager-browser-gpt-long-run: ' + requiredInspection.error + '\n');
+      return 2;
+    }
+    requiredOptionsValidated = true;
+  }
+  const invocationId = requiredOption(options, 'invocation-id');
+  const terminalEnvelope = requiredOption(options, 'terminal-envelope');
+  const browserOutput = requiredOption(options, 'output');
   const profile = requiredOption(options, 'profile');
   const cdp = requiredOption(options, 'cdp');
   const input = requiredOption(options, 'input');
