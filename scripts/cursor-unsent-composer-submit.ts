@@ -1196,12 +1196,25 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   }
 
   const family = deps.submitDeps.composerFamily?.(worker.identity);
-  if (!family || family.status === 'unbound') {
-    return deliveryNoEffect(family?.reason ?? 'composer_family_unbound', worker, false);
-  }
   const control = deps.submitDeps.composerControl?.(worker.identity);
-
-  if (family.family === 'opencode') {
+  if (!family) {
+    if (control?.kind === 'opencode-http') {
+      return deliveryNoEffect('pointer_absent_orca_did_not_notify', worker, false);
+    }
+    // No family projection and no OpenCode control: use the Cursor screen path.
+  } else if (family.status === 'unbound') {
+    if (control?.kind === 'opencode-http' && family.reason === 'runtime_composer_command_unbound') {
+      return deliveryNoEffect('pointer_absent_orca_did_not_notify', worker, false);
+    }
+    return deliveryNoEffect(family.reason, worker, false);
+  }
+  if (control?.kind === 'opencode-http'
+    && family?.status === 'known'
+    && family.family === 'non-opencode'
+    && family.command === 'cursor-agent') {
+    return deliveryNoEffect('pointer_absent_orca_did_not_notify', worker, false);
+  }
+  if (family?.status === 'known' && family.family === 'opencode') {
     if (control?.kind !== 'opencode-http') {
       return deliveryNoEffect('opencode_control_unbound', worker, false);
     }
@@ -1597,11 +1610,15 @@ async function drainStalePointers(
     .map(async (worker) => {
       const key = workerKey(worker.identity);
       const family = deps.submitDeps.composerFamily?.(worker.identity);
-      if (!family || family.status === 'unbound') {
-        return { worker, key, skipped: true as const, reason: family?.reason ?? 'composer_family_unbound' };
+      const control = deps.submitDeps.composerControl?.(worker.identity);
+      if (family?.status === 'unbound') {
+        return { worker, key, skipped: true as const, reason: family.reason };
       }
-      if (family.family === 'opencode') {
-        const control = deps.submitDeps.composerControl?.(worker.identity);
+      if (control?.kind === 'opencode-http'
+        && (!family || (family.status === 'known' && family.family === 'non-opencode' && family.command === 'cursor-agent'))) {
+        return { worker, key, skipped: true as const };
+      }
+      if (family?.status === 'known' && family.family === 'opencode') {
         return {
           worker,
           key,

@@ -989,6 +989,10 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
     const command = typeof terminal.command === 'string' ? terminal.command.trim() : '';
     if (!command) {
+      const openCodeControl = this.#openCodeUrls.get(worker.id);
+      if (openCodeControl && sameRuntimeWorker(openCodeControl.identity, worker)) {
+        return { status: 'unbound', reason: 'runtime_composer_command_unbound', provenance };
+      }
       return { status: 'known', family: 'non-opencode', command: 'cursor-agent', provenance };
     }
     if (/(?:^|\s)opencode(?:\s|$)/iu.test(command)) {
