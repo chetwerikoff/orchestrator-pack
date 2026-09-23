@@ -151,10 +151,8 @@ function githubFirstAction(context: ExecuteIssueManagerBoundaryContext): CreateI
       'issue',
       'view',
       String(context.issueNumber),
-      '--repo',
-      context.repository,
       '--json',
-      'state,url',
+      'state,title,body,closedAt',
     ],
   });
 }
@@ -173,10 +171,8 @@ function runnerReadOnlyAction(
       'pr',
       'view',
       String(raw),
-      '--repo',
-      context.repository,
       '--json',
-      'number,state,headRefOid,url',
+      'number,headRefOid,baseRefName,state',
     ],
   });
 }

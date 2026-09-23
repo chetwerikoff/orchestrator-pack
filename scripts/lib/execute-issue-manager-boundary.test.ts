@@ -238,7 +238,7 @@ describe('execute-Issue manager boundary', () => {
         sourceRevision: context.sourceRevision,
         stage: 'execute:review',
       },
-      argv: ['scripts/gh', 'pr', 'view', '2083', '--repo', context.repository, '--json', 'state'],
+      argv: ['scripts/gh', 'pr', 'view', '2083', '--json', 'state'],
     });
     const passThrough = classifyExecuteIssueManagerRecord({
       ok: false,
@@ -287,7 +287,7 @@ describe('execute-Issue manager boundary', () => {
   });
 
   it('rejects exact self-recommendation through the shared boundary', () => {
-    const argv = ['scripts/gh', 'pr', 'view', '2083', '--repo', context.repository, '--json', 'state'];
+    const argv = ['scripts/gh', 'pr', 'view', '2083', '--json', 'state'];
     const action = createIssueNextAction({
       kind: 'execute-review-runner-read-only',
       binding: {
