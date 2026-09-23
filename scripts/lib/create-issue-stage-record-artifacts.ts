@@ -282,7 +282,7 @@ function canonicalTerminalPredecessor(
 }
 
 function authorBindingPredecessor(
-  intake: JsonRecord,
+  intake: TierIntakeAuthorityV1,
   stageInputs: readonly { path: string; value: JsonRecord }[],
   phase: 'pre-lens' | 'post-lens' | 'final-acceptance',
   errors: string[],
