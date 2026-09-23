@@ -145,6 +145,33 @@ describe('execute-Issue manager boundary', () => {
     expect(action!.argv.join(' ')).not.toMatch(/--new-chat|chatgpt-browser-turn\.ts/u);
   });
 
+  it('reconciles an orphaned fresh turn with a read-only CDP census when canonical identity is absent', () => {
+    const evaluated = classifyExecuteIssueManagerRecord(turn('orphaned_fresh_turn', {
+      scope: 'profile',
+      cause: 'canonical_fresh_conversation_unproven',
+      conversation_id: undefined,
+      provisional_id: 'provisional-2081',
+      incident_id: 'incident-2081',
+    }), {
+      ...context,
+      conversationUrl: undefined,
+      targetId: undefined,
+    });
+    expect(evaluated.exitCode).toBe(3);
+    const action = resultAction(evaluated);
+    expect(action).not.toBeNull();
+    expect(action).toMatchObject({ kind: 'execute-observe-owned-turn' });
+    expect(action!.argv).toEqual([
+      'node',
+      '--experimental-strip-types',
+      'scripts/browser-gpt-page-probe.ts',
+      'list',
+      '--cdp',
+      context.cdp,
+    ]);
+    expect(isExecuteIssueReadOnlyArgv(action!.argv)).toBe(true);
+  });
+
   it('keeps bounded observer expiry and active observation read-only before stopped recovery', () => {
     for (const record of [
       turn('observation_uncertain', { cause: 'observer_expired' }),
