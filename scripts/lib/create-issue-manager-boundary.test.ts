@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   CREATE_ISSUE_MANAGER_ENTRYPOINTS,
@@ -6,6 +9,7 @@ import {
   evaluateCreateIssueManagerBoundary,
 } from './create-issue-manager-boundary.ts';
 import {
+  CREATE_ISSUE_NEXT_ACTION_KINDS,
   createIssueExternalPauseResult,
   createIssueNextAction,
   createIssueRecoverableResult,
@@ -13,6 +17,22 @@ import {
   validateCreateIssueManagerResult,
   type CreateIssueActionBinding,
 } from './create-issue-next-action.ts';
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+function productionTsFiles(root: string): string[] {
+  const out: string[] = [];
+  for (const name of readdirSync(root)) {
+    const path = join(root, name);
+    const stat = statSync(path);
+    if (stat.isDirectory()) {
+      out.push(...productionTsFiles(path));
+    } else if (name.endsWith('.ts') && !name.endsWith('.test.ts')) {
+      out.push(path);
+    }
+  }
+  return out;
+}
 
 const binding: CreateIssueActionBinding = {
   repository: 'chetwerikoff/orchestrator-pack',
@@ -159,5 +179,58 @@ describe('create-Issue manager boundary', () => {
       'flow-manager-browser-gpt-long-run.ts:main',
       'create-issue-browser-gpt-preflight.ts:caller',
     ]);
+
+    const stageCli = readFileSync(join(repoRoot, 'scripts/lib/create-issue-stage-record-cli.ts'), 'utf8');
+    const browserCarrier = readFileSync(join(repoRoot, 'scripts/flow-manager-browser-gpt-long-run.ts'), 'utf8');
+    expect(stageCli).toContain('emitCreateIssueManagerResult');
+    expect(browserCarrier).toContain('emitCreateIssueManagerResult');
+    expect(stageCli).not.toContain('console.log(JSON.stringify(output))');
+    expect(browserCarrier).not.toContain('process.stdout.write(`${JSON.stringify(');
+  });
+
+  it('keeps the closed kind registry equal to production createIssueNextAction literals', () => {
+    const produced = new Set<string>();
+    for (const file of productionTsFiles(join(repoRoot, 'scripts'))) {
+      const source = readFileSync(file, 'utf8');
+      let cursor = 0;
+      while ((cursor = source.indexOf('createIssueNextAction({', cursor)) >= 0) {
+        const fragment = source.slice(cursor, cursor + 800);
+        const literal = /\bkind:\s*'([^']+)'/.exec(fragment)?.[1];
+        if (literal) produced.add(literal);
+        cursor += 'createIssueNextAction({'.length;
+      }
+    }
+    expect([...produced].sort()).toEqual([...CREATE_ISSUE_NEXT_ACTION_KINDS].sort());
+  });
+
+  it('frames all four outcomes once for every registered manager entrypoint', () => {
+    for (const producer of CREATE_ISSUE_MANAGER_ENTRYPOINTS) {
+      const cases = [
+        { exitCode: 0, produce: () => createIssueTerminalResult({ ok: true, cause: 'completed' }) },
+        { exitCode: 3, produce: () => createIssueRecoverableResult({ cause: 'retry', nextAction: action(['retry']) }) },
+        {
+          exitCode: 4,
+          produce: () => createIssueExternalPauseResult({
+            cause: 'external:github_unavailable',
+            remedy: 'restore GitHub',
+            resumeWhen: { operator: true },
+            evidence: 'HTTP 503',
+          }),
+        },
+        { exitCode: 5, produce: () => ({ ok: false, cause: 'broken', nextAction: null }) },
+      ] as const;
+      for (const fixture of cases) {
+        const writes: string[] = [];
+        const result = emitCreateIssueManagerResult({
+          producer,
+          currentArgv: ['current-entrypoint'],
+          produce: fixture.produce,
+          stdout: (value) => writes.push(value),
+        });
+        expect(result.exitCode).toBe(fixture.exitCode);
+        expect(writes).toHaveLength(1);
+        expect(() => JSON.parse(writes[0]!)).not.toThrow();
+      }
+    }
   });
 });
