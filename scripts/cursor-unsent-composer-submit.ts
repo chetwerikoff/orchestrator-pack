@@ -725,21 +725,21 @@ function settleComposerObservation(
     return { ...base, ok: true, unsent: true, enter: false, reason: 'dry_run' };
   }
   const beforeLiveness = currentLiveness(deps, identity);
-  if (beforeLiveness !== 'idle' && !(allowNonIdle && beforeLiveness !== 'gone')) {
+  if (beforeLiveness !== 'idle' && !(allowNonIdle && beforeLiveness === 'busy')) {
     return livenessDeferral(identity, beforeLiveness);
   }
 
-  const submitted = deps.submit(identity);
-  if (submitted.status === 'send_failed') {
+  const first = deps.submit(identity);
+  if (first.status === 'send_failed') {
     state.submittedFingerprint.delete(key);
-    return { ...base, ok: false, unsent: true, enter: false, reason: submitted.reason, dispatchStatus: submitted.status };
+    return { ...base, ok: false, unsent: true, enter: false, reason: first.reason, dispatchStatus: first.status };
   }
-  if (!deps.liveness && submitted.status === 'dispatch_unknown') {
+  if (!deps.liveness && first.status === 'dispatch_unknown') {
     const fingerprints = state.ambiguousSubmittedFingerprints.get(key) ?? new Set<string>();
     fingerprints.add(fingerprint);
     state.ambiguousSubmittedFingerprints.set(key, fingerprints);
     state.submittedFingerprint.set(key, fingerprint);
-    return { ...base, ok: true, unsent: true, enter: false, reason: submitted.reason, dispatchStatus: submitted.status };
+    return { ...base, ok: true, unsent: true, enter: false, reason: first.reason, dispatchStatus: first.status };
   }
 
   // Transport acceptance is not submission evidence. For delivery, the exact
@@ -752,9 +752,35 @@ function settleComposerObservation(
   const afterFingerprint = afterShown.ok
     ? exactOrchestrationPointerFingerprint(afterShown.lines.join('\n'))
     : undefined;
+  const afterComposerKind = afterShown.ok
+    ? classifyCursorComposer(afterShown.lines.join('\n'))
+    : undefined;
   const consumed = afterShown.ok && afterFingerprint !== fingerprint;
+  const readyForSecond = beforeLiveness === 'busy'
+    && first.status === 'dispatched'
+    && consumed
+    && afterComposerKind === 'empty'
+    && afterLiveness === 'busy';
+  let submitted = first;
+  if (readyForSecond) {
+    const second = deps.submit(identity);
+    if (second.status === 'send_failed') {
+      state.submittedFingerprint.delete(key);
+      return { ...base, ok: false, unsent: true, enter: false, reason: second.reason, dispatchStatus: second.status };
+    }
+    if (second.status !== 'dispatched') {
+      const fingerprints = state.ambiguousSubmittedFingerprints.get(key) ?? new Set<string>();
+      fingerprints.add(fingerprint);
+      state.ambiguousSubmittedFingerprints.set(key, fingerprints);
+      state.submittedFingerprint.set(key, fingerprint);
+      return { ...base, ok: false, unsent: true, enter: false, reason: 'submission_unconfirmed', dispatchStatus: second.status };
+    }
+    submitted = second;
+  }
   const started = requireConsumption
-    ? consumed
+    ? beforeLiveness === 'busy'
+      ? consumed && afterComposerKind === 'empty' && afterLiveness === 'busy'
+      : consumed
     : afterShown.ok && afterLiveness === 'busy';
   if (!started) {
     const fingerprints = state.ambiguousSubmittedFingerprints.get(key) ?? new Set<string>();
