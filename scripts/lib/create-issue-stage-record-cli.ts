@@ -575,10 +575,11 @@ function artifactBindingFromState(
   opts: StageFinalizeCliOptions,
   reviewDir: string,
   issueNumber: number,
+  transport: GhTransport = defaultGhTransport(),
 ): CreateIssueActionBinding | null {
   let liveRevision = '';
   try {
-    const live = fetchIssueRevision(defaultGhTransport(), opts.repo, issueNumber);
+    const live = fetchIssueRevision(transport, opts.repo, issueNumber);
     liveRevision = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i.exec(live.body)?.[1] ?? '';
   } catch {
     return null;
@@ -642,6 +643,7 @@ function staleArtifactBinding(
   opts: StageFinalizeCliOptions,
   reviewDir: string,
   issueNumber: number,
+  transport: GhTransport = defaultGhTransport(),
 ): ReturnType<typeof createIssueStaleNextAction> | null {
   if (!opts.expectedSourceRevision && !opts.expectedStage && !opts.expectedStageAttemptId) return null;
   if (!opts.expectedSourceRevision || !opts.expectedStage || !opts.expectedStageAttemptId) {
@@ -654,7 +656,7 @@ function staleArtifactBinding(
     stage: opts.expectedStage,
     stageAttemptId: opts.expectedStageAttemptId,
   };
-  const observed = artifactBindingFromState(opts, reviewDir, issueNumber);
+  const observed = artifactBindingFromState(opts, reviewDir, issueNumber, transport);
   if (observed
     && observed.repository.toLowerCase() === expected.repository.toLowerCase()
     && observed.issueNumber === expected.issueNumber
@@ -833,6 +835,7 @@ function startCycleRetryArgv(
 function staleStartCycleBinding(
   opts: StageFinalizeCliOptions,
   issueNumber: number,
+  transport: GhTransport = defaultGhTransport(),
 ): ReturnType<typeof createIssueStaleNextAction> | null {
   if (!opts.expectedSourceRevision && !opts.expectedStage && !opts.expectedStageAttemptId) return null;
   if (!opts.expectedSourceRevision || !opts.expectedStage) {
@@ -847,7 +850,7 @@ function staleStartCycleBinding(
   };
   let liveRevision = '';
   try {
-    const live = fetchIssueRevision(defaultGhTransport(), opts.repo, issueNumber);
+    const live = fetchIssueRevision(transport, opts.repo, issueNumber);
     liveRevision = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i.exec(live.body)?.[1] ?? '';
   } catch {
     return createIssueStaleNextAction({
@@ -876,6 +879,7 @@ function staleStartCycleBinding(
 function staleRetryPendingBinding(
   opts: StageFinalizeCliOptions,
   issueNumber: number,
+  transport: GhTransport = defaultGhTransport(),
 ): ReturnType<typeof createIssueStaleNextAction> | null {
   if (!opts.expectedSourceRevision && !opts.expectedStage && !opts.expectedStageAttemptId) return null;
   if (!opts.expectedSourceRevision || !opts.expectedStage || !opts.expectedStageAttemptId) {
@@ -889,7 +893,7 @@ function staleRetryPendingBinding(
     stageAttemptId: opts.expectedStageAttemptId,
   };
   const canonical = resolveCanonicalReviewDirectory({ taskIdentity: 'issue:' + issueNumber });
-  const observed = artifactBindingFromState({ ...opts, stageEvidencePaths: [] }, canonical.directory, issueNumber);
+  const observed = artifactBindingFromState({ ...opts, stageEvidencePaths: [] }, canonical.directory, issueNumber, transport);
   if (observed
     && observed.repository.toLowerCase() === expected.repository.toLowerCase()
     && observed.issueNumber === expected.issueNumber
@@ -905,8 +909,13 @@ function staleRetryPendingBinding(
   });
 }
 
-export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: GhTransport): number {
+export function runStageFinalizeCli(
+  argv: string[],
+  artifactSourceTransport?: GhTransport,
+  authorRoundRunner?: AuthorRoundRunner,
+): number {
   return runParsedCli(argv, 'create-issue-stage-finalize', parseStageFinalizeArgs, (opts) => {
+    const transport = artifactSourceTransport ?? defaultGhTransport();
     if (opts.command === 'bind-published-comment') {
       const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
       const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
@@ -957,7 +966,7 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
           return 1;
         }
       }
-      const stale = staleArtifactBinding(opts, reviewDir, issueNumber);
+      const stale = staleArtifactBinding(opts, reviewDir, issueNumber, transport);
       if (stale) {
         if (opts.json) console.log(JSON.stringify(stale));
         else process.stderr.write('stale_next_action\n');
@@ -1064,7 +1073,7 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
       const result = opts.command === 'produce-artifacts'
         ? produceAcceptanceArtifacts(artifactOptions)
         : inspectAcceptanceArtifacts(artifactOptions);
-      const binding = artifactBindingFromState(opts, reviewDir, issueNumber);
+      const binding = artifactBindingFromState(opts, reviewDir, issueNumber, transport);
       let nextAction = null;
       if (binding && !result.ok) {
         const errors = 'errors' in result ? result.errors : result.missing.map((item) => item.reason);
@@ -1096,7 +1105,6 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
       return result.ok ? 0 : 1;
     }
     const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
-    const transport = defaultGhTransport();
 
     if (opts.command === 'start-cycle') {
       const sourceRevision = parseRequiredNonEmptyString(opts.sourceRevision, '--source-revision');
@@ -1123,7 +1131,7 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
           return 1;
         }
       }
-      const stale = staleStartCycleBinding(opts, issueNumber);
+      const stale = staleStartCycleBinding(opts, issueNumber, transport);
       if (stale) {
         if (opts.json) console.log(JSON.stringify(stale));
         else process.stderr.write('stale_next_action\n');
@@ -1212,7 +1220,7 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
       return result.ok ? 0 : 1;
     }
 
-    const stale = staleRetryPendingBinding(opts, issueNumber);
+    const stale = staleRetryPendingBinding(opts, issueNumber, transport);
     if (stale) {
       if (opts.json) console.log(JSON.stringify(stale));
       else process.stderr.write('stale_next_action\n');
