@@ -37,6 +37,7 @@ import {
 import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
 import {
   admitStateLightTurnObservation,
+  observationRecordPath,
   readStateLightTurnObservation,
   transitionStateLightTurnObservation,
 } from './chatgpt-browser-turn/state-light-turn-observation.ts';
@@ -250,6 +251,22 @@ test('closed CLI rejects arbitrary selectors, JavaScript, watch mode, and ambigu
   );
   assert.throws(() => parseCliArgs(['inspect', '--cdp', 'http://127.0.0.1:9222', '--url', 'https://chatgpt.com/c/x', '--open-if-missing', 'false']), /open_if_missing_must_be_true/);
   assert.throws(() => parseCliArgs(['inspect', '--cdp', 'http://127.0.0.1:9222', '--target-id', 'x', '--open-if-missing', 'true']), /open_if_missing_requires_url/);
+  assert.deepEqual(
+    parseCliArgs(['inspect', '--cdp', 'http://127.0.0.1:9222', '--target-id', 'x', '--profile', '/tmp/profile', '--invocation-id', 'inv-1']),
+    { operation: 'inspect', cdp: 'http://127.0.0.1:9222', targetId: 'x', profile: '/tmp/profile', invocationId: 'inv-1' },
+  );
+  assert.throws(
+    () => parseCliArgs(['inspect', '--cdp', 'http://127.0.0.1:9222', '--target-id', 'x', '--profile', '/tmp/profile']),
+    /identity_pair_required/,
+  );
+  assert.throws(
+    () => parseCliArgs(['inspect', '--cdp', 'http://127.0.0.1:9222', '--target-id', 'x', '--invocation-id', 'inv-1']),
+    /identity_pair_required/,
+  );
+  assert.throws(
+    () => parseCliArgs(['inspect', '--cdp', 'http://127.0.0.1:9222', '--url', 'https://chatgpt.com/c/x', '--profile', '/tmp/profile', '--invocation-id', 'inv-1', '--open-if-missing', 'true']),
+    /identity_bound_open_if_missing_forbidden/,
+  );
   assert.deepEqual(parseCliArgs(['liveness', '--cdp', 'http://127.0.0.1:9222']), { operation: 'liveness', cdp: 'http://127.0.0.1:9222' });
   assert.deepEqual(
     parseCliArgs(['harvest', '--cdp', 'http://127.0.0.1:9222', '--profile', '/tmp/profile', '--invocation-id', 'inv-1', '--output', '/tmp/out']),
@@ -634,6 +651,345 @@ test('execute-Issue recovery projection fails closed for near matches, stale tur
   );
   assert.equal(projectExecutionRecoveryCause(inventedRaw), null);
   assert.equal(projectExecutionRecoveryInspect(inventedRaw)?.reason, 'literal_not_found');
+});
+
+async function withIdentityBoundInspectObservation<T>(
+  phase: 'prepared' | 'dispatching' | 'not_sent' | 'sent_unharvested',
+  conversationUrl: string | null,
+  callback: (input: {
+    profile: string;
+    cdp: string;
+    invocationId: string;
+    marker: string;
+    profileKey: string;
+  }) => Promise<T>,
+): Promise<T> {
+  const previous = process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+  const stateDir = await mkdtemp(join(tmpdir(), 'probe-inspect-state-'));
+  process.env.CHATGPT_BROWSER_TURN_STATE_DIR = stateDir;
+  const cdp = 'http://127.0.0.1:9222';
+  const profile = join(stateDir, 'profile');
+  const invocationId = '20500000-0000-4050-8050-000000000001';
+  const marker = `OPKTURNV1${'50'.repeat(16)}`;
+  const profileKey = configuredProfileKey(profile, cdp);
+  try {
+    admitStateLightTurnObservation({ profileKey, invocationId, marker });
+    if (phase === 'dispatching' || phase === 'sent_unharvested') {
+      transitionStateLightTurnObservation({
+        profileKey,
+        invocationId,
+        phase: 'dispatching',
+        reason: 'test_dispatch_boundary',
+      });
+    }
+    if (phase === 'not_sent') {
+      transitionStateLightTurnObservation({
+        profileKey,
+        invocationId,
+        phase: 'not_sent',
+        reason: 'test_zero_send',
+        sendCount: 0,
+        sendWitness: 'numeric_send_count',
+      });
+    }
+    if (phase === 'sent_unharvested') {
+      transitionStateLightTurnObservation({
+        profileKey,
+        invocationId,
+        phase: 'sent_unharvested',
+        reason: 'test_sent',
+        sendCount: 1,
+        sendWitness: 'numeric_send_count',
+        ...(conversationUrl ? { conversationUrl } : {}),
+      });
+    }
+    return await callback({ profile, cdp, invocationId, marker, profileKey });
+  } finally {
+    if (previous === undefined) delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+    else process.env.CHATGPT_BROWSER_TURN_STATE_DIR = previous;
+    await rm(stateDir, { recursive: true, force: true });
+  }
+}
+
+test('identity-bound inspect ignores foreign historical markers and redacts prompt witnesses', async () => {
+  await withIdentityBoundInspectObservation(
+    'sent_unharvested',
+    'https://chatgpt.com/c/test',
+    async ({ profile, cdp, invocationId, marker }) => {
+      const foreignMarker = `OPKTURNV1${'51'.repeat(16)}`;
+      const timeoutText = 'Message delivery timed out. Please try again.';
+      const fixture = productionRecoveryFixture({ marker, literal: timeoutText });
+      const foreignText = `${foreignMarker}\n\nOLD TASK`;
+      const foreignSection = new FakeNode(
+        '',
+        foreignText,
+        foreignText,
+        { 'data-testid': 'conversation-turn-0' },
+        'SECTION',
+      );
+      foreignSection.appendChild(new FakeNode('user', foreignText, foreignText, { 'data-message-id': 'u-foreign' }));
+      fixture.nodes.unshift(foreignSection);
+      const raw = await evaluateExpression(
+        INSPECTION_EXPRESSION,
+        fixture.nodes,
+        false,
+        'https://chatgpt.com/c/test',
+        'complete',
+        fixture.productSurfaces,
+      );
+
+      assert.equal(projectExecutionRecoveryInspect(raw)?.reason, 'ambiguous_marker');
+      assert.equal(projectExecutionRecoveryInspect(raw, marker)?.cause, 'message_delivery_timed_out');
+
+      const result = await runProbe({
+        operation: 'inspect',
+        cdp,
+        targetId: 'target-1',
+        profile,
+        invocationId,
+      }, deps({ evaluate: async () => raw }));
+
+      assert.equal(result.execution_recovery_cause, 'message_delivery_timed_out');
+      assert.equal((result.execution_recovery_inspect as any)?.cause, 'message_delivery_timed_out');
+      assert.equal(result.identity_bound, true);
+      assert.equal(result.observation_phase, 'sent_unharvested');
+      assert.equal(result.diagnostic_only, true);
+      assert.equal(result.workflow_authority, 'none');
+      assert.equal((result.snapshot as any).text_witnesses_redacted, true);
+      assert.equal(JSON.stringify(result).includes(marker), false);
+      assert.equal(JSON.stringify(result).includes(foreignMarker), false);
+    },
+  );
+});
+
+test('identity-bound inspect applies durable phase eligibility before marker projection', async () => {
+  const timeoutText = 'Message delivery timed out. Please try again.';
+  for (const phase of ['prepared', 'not_sent', 'dispatching'] as const) {
+    await withIdentityBoundInspectObservation(phase, null, async ({ profile, cdp, invocationId, marker }) => {
+      const fixture = productionRecoveryFixture({ marker, literal: timeoutText });
+      const raw = await evaluateExpression(
+        INSPECTION_EXPRESSION,
+        fixture.nodes,
+        false,
+        'https://chatgpt.com/c/test',
+        'complete',
+        fixture.productSurfaces,
+      );
+      const result = await runProbe({
+        operation: 'inspect',
+        cdp,
+        targetId: 'target-1',
+        profile,
+        invocationId,
+      }, deps({ evaluate: async () => raw }));
+
+      assert.equal(result.observation_phase, phase);
+      assert.equal(result.identity_bound, true);
+      if (phase === 'dispatching') {
+        assert.equal(result.execution_recovery_cause, 'message_delivery_timed_out');
+        assert.equal((result.execution_recovery_inspect as any)?.cause, 'message_delivery_timed_out');
+      } else {
+        assert.equal(result.execution_recovery_cause, null);
+        assert.equal(result.execution_recovery_inspect, null);
+      }
+      assert.equal(result.diagnostic_only, true);
+      assert.equal(result.workflow_authority, 'none');
+    });
+  }
+});
+
+test('identity-bound inspect fails closed on stale identity, malformed record, and durable URL mismatch', async () => {
+  await withIdentityBoundInspectObservation(
+    'sent_unharvested',
+    'https://chatgpt.com/c/test',
+    async ({ profile, cdp, invocationId, marker, profileKey }) => {
+      let listCalls = 0;
+      const noFallbackDeps = deps({
+        listTargets: async () => { listCalls += 1; return []; },
+      });
+      await assert.rejects(
+        runProbe({
+          operation: 'inspect',
+          cdp,
+          targetId: 'target-1',
+          profile: `${profile}-wrong`,
+          invocationId,
+        }, noFallbackDeps),
+        (error: any) => error.status === 'not_found' && error.reason === 'observation_not_found',
+      );
+      await assert.rejects(
+        runProbe({
+          operation: 'inspect',
+          cdp,
+          targetId: 'target-1',
+          profile,
+          invocationId: `${invocationId}-stale`,
+        }, noFallbackDeps),
+        (error: any) => error.status === 'not_found' && error.reason === 'observation_not_found',
+      );
+      assert.equal(listCalls, 0);
+
+      const fixture = productionRecoveryFixture({
+        marker,
+        literal: 'Message delivery timed out. Please try again.',
+      });
+      const mismatchedRaw = await evaluateExpression(
+        INSPECTION_EXPRESSION,
+        fixture.nodes,
+        false,
+        'https://chatgpt.com/c/foreign',
+        'complete',
+        fixture.productSurfaces,
+      );
+      await assert.rejects(
+        runProbe({
+          operation: 'inspect',
+          cdp,
+          targetId: 'target-1',
+          profile,
+          invocationId,
+        }, deps({ evaluate: async () => mismatchedRaw })),
+        (error: any) => error.status === 'surface_unknown' && error.reason === 'conversation_identity_mismatch',
+      );
+
+      await writeFile(observationRecordPath(profileKey, invocationId), '{malformed\n', 'utf8');
+      let malformedFallbackCalls = 0;
+      await assert.rejects(
+        runProbe({
+          operation: 'inspect',
+          cdp,
+          targetId: 'target-1',
+          profile,
+          invocationId,
+        }, deps({
+          listTargets: async () => { malformedFallbackCalls += 1; return []; },
+        })),
+        (error: any) => error.status === 'not_found' && error.reason === 'observation_not_found',
+      );
+      assert.equal(malformedFallbackCalls, 0);
+    },
+  );
+});
+
+test('identity-bound inspect enforces expected-marker cardinality without substituting foreign markers', async () => {
+  await withIdentityBoundInspectObservation('dispatching', null, async ({ profile, cdp, invocationId, marker }) => {
+    const timeoutText = 'Message delivery timed out. Please try again.';
+    const fixture = productionRecoveryFixture({ marker, literal: timeoutText });
+    const assistantSection = fixture.nodes[1]!;
+
+    const duplicateText = `${marker}\n\nTASK repeats ${marker}`;
+    const duplicateOwned = new FakeNode(
+      '',
+      duplicateText,
+      duplicateText,
+      { 'data-testid': 'conversation-turn-1' },
+      'SECTION',
+    );
+    duplicateOwned.appendChild(new FakeNode('user', duplicateText, duplicateText, { 'data-message-id': 'u-duplicate' }));
+    const duplicateRaw = await evaluateExpression(
+      INSPECTION_EXPRESSION,
+      [duplicateOwned, assistantSection],
+      false,
+      'https://chatgpt.com/c/test',
+      'complete',
+      fixture.productSurfaces,
+    );
+    const duplicateResult = await runProbe({
+      operation: 'inspect',
+      cdp,
+      targetId: 'target-1',
+      profile,
+      invocationId,
+    }, deps({ evaluate: async () => duplicateRaw }));
+    assert.equal(duplicateResult.execution_recovery_cause, null);
+    assert.equal((duplicateResult.execution_recovery_inspect as any)?.reason, 'ambiguous_marker');
+
+    const foreignMarker = `OPKTURNV1${'52'.repeat(16)}`;
+    const foreignText = `${foreignMarker}\n\nFOREIGN`;
+    const foreignOwned = new FakeNode(
+      '',
+      foreignText,
+      foreignText,
+      { 'data-testid': 'conversation-turn-1' },
+      'SECTION',
+    );
+    foreignOwned.appendChild(new FakeNode('user', foreignText, foreignText, { 'data-message-id': 'u-foreign-only' }));
+    const absentRaw = await evaluateExpression(
+      INSPECTION_EXPRESSION,
+      [foreignOwned, assistantSection],
+      false,
+      'https://chatgpt.com/c/test',
+      'complete',
+      fixture.productSurfaces,
+    );
+    const absentResult = await runProbe({
+      operation: 'inspect',
+      cdp,
+      targetId: 'target-1',
+      profile,
+      invocationId,
+    }, deps({ evaluate: async () => absentRaw }));
+    assert.equal(absentResult.execution_recovery_cause, null);
+    assert.equal((absentResult.execution_recovery_inspect as any)?.reason, 'no_owned_prompt');
+  });
+});
+
+test('ordered 5m -> 27m active -> 44m timeout observations retain one invocation and zero duplicate sends', async () => {
+  await withIdentityBoundInspectObservation(
+    'sent_unharvested',
+    'https://chatgpt.com/c/test',
+    async ({ profile, cdp, invocationId, marker, profileKey }) => {
+      const timeoutText = 'Message delivery timed out. Please try again.';
+      const fixture = productionRecoveryFixture({ marker, literal: timeoutText });
+      const activeRaw = await evaluateExpression(
+        INSPECTION_EXPRESSION,
+        fixture.nodes,
+        true,
+        'https://chatgpt.com/c/test',
+        'complete',
+        fixture.productSurfaces,
+      );
+      const timeoutRaw = await evaluateExpression(
+        INSPECTION_EXPRESSION,
+        fixture.nodes,
+        false,
+        'https://chatgpt.com/c/test',
+        'complete',
+        fixture.productSurfaces,
+      );
+      let observation = activeRaw;
+      const probeArgs = {
+        operation: 'inspect' as const,
+        cdp,
+        targetId: 'target-1',
+        profile,
+        invocationId,
+      };
+      const probeDeps = deps({ evaluate: async () => observation });
+
+      const at27 = await runProbe(probeArgs, probeDeps);
+      assert.equal(at27.execution_recovery_cause, null);
+      assert.equal((at27.execution_recovery_inspect as any)?.reason, 'generation_active');
+
+      observation = timeoutRaw;
+      const at44 = await runProbe(probeArgs, probeDeps);
+      assert.equal(at44.execution_recovery_cause, 'message_delivery_timed_out');
+
+      const timeline = [
+        { elapsed_ms: 300_000, event: 'observer_slice_expired', invocationId },
+        { elapsed_ms: 1_620_000, event: 'identity_bound_generation_active', invocationId },
+        { elapsed_ms: 2_640_000, event: 'identity_bound_timeout_observed', invocationId },
+      ];
+      assert.deepEqual(timeline.map((row) => row.invocationId), [invocationId, invocationId, invocationId]);
+      const record = readStateLightTurnObservation(profileKey, invocationId);
+      assert.equal(record.send_count, 1);
+      assert.equal(record.phase, 'sent_unharvested');
+      assert.equal(at27.diagnostic_only, true);
+      assert.equal(at44.diagnostic_only, true);
+      assert.equal(at27.workflow_authority, 'none');
+      assert.equal(at44.workflow_authority, 'none');
+    },
+  );
 });
 
 test('missing message structure stays surface_unknown rather than fabricating zero counts', async () => {
