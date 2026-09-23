@@ -327,6 +327,9 @@ disagreeing fields, processes, terminals, and error.
 
 ### 9b — Direct-user exact-target override
 
+Delegated-integration mode must not enter this subsection. A delegated cleanup refusal is
+reported as `operationally_incomplete`; it is not authority for the direct-user override.
+
 Use this path only when the current top-level user directly ordered completion and `WT` is one
 resolved absolute non-primary worktree in the intended repository. Do not require saved branch,
 saved head, PR linkage, closed-head-set, scope, review, CI, or lifecycle-gate agreement.
@@ -393,7 +396,12 @@ Report in the user's language:
 - every lifecycle disagreement/blocked condition that was overridden;
 - terminal/process quiescence and residual counts;
 - removal operation and branch compare-and-delete result;
-- final Git+Orca read-back and any external/technical refusal.
+- final Git+Orca read-back and any external/technical refusal;
+- in delegated-integration mode, the marker PR/head/predecessor identity, sequencing result,
+  production `READY_TO_MERGE` source/result, any projection-repair POST/read-back, adoption
+  source paths and live observations, adoption actions, target-specific live verification,
+  exact residual state/blocker and next action, and exactly one
+  `operationally_complete|operationally_incomplete` outcome.
 
 Never claim merge, adoption, quiescence, removal, branch deletion, or read-back succeeded without
 corresponding remote/runtime evidence.
