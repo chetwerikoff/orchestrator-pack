@@ -561,7 +561,7 @@ export async function runSupervisedWorkerStart(input: {
       }
     }
     if (admission.status !== 'replaceable') {
-      if (sameCurrentDelegatedIntegration && admission.status === 'skipped_live') {
+      if (sameCurrentDelegatedIntegration && expectedCurrent && admission.status === 'skipped_live') {
         return {
           ok: true,
           reason: 'delegated_integration_assignment_reused',
