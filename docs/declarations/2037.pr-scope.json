@@ -1,0 +1,39 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2037,
+  "declared_paths": [
+    "scripts/create-issue-convergence.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/create-issue-stage-record-cli.ts",
+    "scripts/lib/create-issue-stage-record-core.ts",
+    "scripts/lib/create-issue-stage-record.test.ts"
+  ],
+  "denylist": [
+    ".cursor/skills/create-issue-draft/",
+    ".github/workflows/",
+    "credentials/",
+    "docs/browser-gpt-turn-runbook.md",
+    "docs/tiering.md",
+    "packages/core/",
+    "plugins/",
+    "scripts/chatgpt-browser-turn/",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/create-issue-stage-lifecycle-acceptance.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/create-issue-convergence.test.ts",
+    "scripts/create-issue-stage-finalize.ts",
+    "scripts/lib/create-issue-next-action.ts",
+    "scripts/lib/create-issue-stage-lifecycle-acceptance.test.ts",
+    "scripts/lib/create-issue-stage-lifecycle.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/create-issue-stage-record-cli.ts",
+    "scripts/lib/create-issue-stage-record-core.ts",
+    "scripts/lib/create-issue-stage-record.test.ts"
+  ],
+  "source_revision": "40288d2ac8be94f63102fb4517c8a2b597de77c5"
+}
