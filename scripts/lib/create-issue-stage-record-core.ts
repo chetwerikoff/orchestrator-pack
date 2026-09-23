@@ -41,7 +41,6 @@ import {
   type CompetitiveDecision,
   type LifecycleReviewStage,
 } from './create-issue-stage-lifecycle.ts';
-import { readCanonicalZeroSendTerminal } from './create-issue-stage-record-artifacts.ts';
 import type {
   CommentCensusOptions,
   ConsumableStageReceipt,
@@ -627,26 +626,6 @@ export function startReviewCycle(
       }],
     };
   }
-  if (input.stage) {
-    const zeroSendTerminal = readCanonicalZeroSendTerminal({
-      issueNumber: input.issueNumber,
-      sourceRevision: input.sourceRevision,
-      stage: input.stage,
-      stateRootOverride: input.stateRootOverride,
-    });
-    if (zeroSendTerminal?.policy.class === 'deterministic-input') {
-      return {
-        ok: false,
-        diagnostics: [{
-          code: 'stage_authority_invalid',
-          message: 'zero-send deterministic-input is terminal-to-manager',
-          eventKey: zeroSendTerminal.stageAttemptId,
-        }],
-        stageAttemptId: zeroSendTerminal.stageAttemptId,
-      };
-    }
-  }
-
   let censusState: ReturnType<typeof loadIssueJournalCensus>;
   try {
     censusState = loadIssueJournalCensus(transport, input.repo, input.issueNumber, input.census);
