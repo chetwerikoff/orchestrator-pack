@@ -103,7 +103,12 @@ describe('Issue #2039 T1 author-turn producer convergence', () => {
       spy.mockRestore();
     }
 
-    expect(readFileSync(join(reviewDir, 'issue-r01-body.json'), 'utf8')).toContain(body.trim());
+    expect(JSON.parse(readFileSync(join(reviewDir, 'issue-r01-body.json'), 'utf8'))).toMatchObject({
+      schema: 'create-issue-live-snapshot/v1',
+      issueNumber,
+      sourceRevision: 'r01',
+      body,
+    });
     expect(JSON.parse(readFileSync(join(reviewDir, 'author-dispositions.json'), 'utf8'))).toMatchObject({
       producer: 'governed-author-output/v1',
       reviewEpisodeId: 'issue:2039@r01',
