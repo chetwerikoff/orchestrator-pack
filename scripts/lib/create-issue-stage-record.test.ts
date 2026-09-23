@@ -1836,6 +1836,51 @@ describe('Issue #2038 canonical fork loser recovery', () => {
     expect(readPersistedCycleId(workdir)).toBe(loserCycleId);
   });
 
+  it('does not let loser recovery bypass a conflicting exact remote event', () => {
+    const comments = forkComments();
+    const conflictingLoser: CycleEventLogical = {
+      schema: CYCLE_SCHEMA,
+      'event-key': loserCycleId,
+      'cycle-id': loserCycleId,
+      'predecessor-cycle-id': rootCycleId,
+      'source-revision': sourceRevision,
+      tier: 'T2',
+      'public-actor': 'opencode-flow-manager',
+    };
+    comments.push(trusted(
+      5774888273,
+      serializeCommentBody(conflictingLoser),
+      'chetwerikoff',
+      '2026-09-22T10:27:30.000Z',
+    ));
+    const state = createMockGhState({
+      comments: [...comments],
+      issue: { title: 'Issue #2038 fixture', body: '<!-- source-revision: r05 -->\nrevision r05', labels: [] },
+      nextCommentId: 5774888274,
+    });
+    const workdir = makeCliTempDir();
+    persistCycleId(workdir, loserCycleId);
+
+    const result = startReviewCycle(createMockTransport(state), {
+      repo,
+      issueNumber: fixtureIssueNumber,
+      sourceRevision,
+      tier: 'T2',
+      publicActor: 'cursor-flow-manager',
+      predecessorCycleId: winnerCycleId,
+      workdir,
+      census: { pageSize: 100 },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'conflicting-cycle-id', eventKey: loserCycleId }),
+    ]));
+    expect(state.comments).toEqual(comments);
+    expect(state.commentCreateAttempts).toEqual([]);
+    expect(readPersistedCycleId(workdir)).toBe(loserCycleId);
+  });
+
   it('preserves the exact attempted-cycle conflict path outside loser recovery', () => {
     const cycleId = 'cycle-2038-conflict';
     const comments = [cycleComment(5775000001, cycleId, 'none', '2026-09-22T11:00:00.000Z')];
