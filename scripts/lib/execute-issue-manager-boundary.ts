@@ -89,7 +89,7 @@ function text(value: unknown): string {
 function evidence(value: unknown): string {
   try {
     const serialized = JSON.stringify(value);
-    return serialized && serialized !== '{}' ? serialized.slice(0, 4_000) : 'execute-Issue producer result';
+    return serialized && serialized !== '{}' ? serialized : 'execute-Issue producer result';
   } catch {
     return 'execute-Issue producer result';
   }
