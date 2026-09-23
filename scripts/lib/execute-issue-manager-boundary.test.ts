@@ -145,6 +145,33 @@ describe('execute-Issue manager boundary', () => {
     expect(action!.argv.join(' ')).not.toMatch(/--new-chat|chatgpt-browser-turn\.ts/u);
   });
 
+  it('keeps a profile-scoped busy result recoverable before canonical conversation identity exists', () => {
+    const evaluated = classifyExecuteIssueManagerRecord(turn('profile_busy', {
+      scope: 'profile',
+      cause: 'profile_wall_active',
+      conversation_id: undefined,
+      incident_id: 'profile-wall-2081',
+      generation: 1,
+    }), {
+      ...context,
+      conversationUrl: undefined,
+      targetId: undefined,
+    });
+    expect(evaluated.exitCode).toBe(3);
+    const action = resultAction(evaluated);
+    expect(action).not.toBeNull();
+    expect(action).toMatchObject({ kind: 'execute-observe-owned-turn' });
+    expect(action!.argv).toEqual([
+      'node',
+      '--experimental-strip-types',
+      'scripts/browser-gpt-page-probe.ts',
+      'list',
+      '--cdp',
+      context.cdp,
+    ]);
+    expect(isExecuteIssueReadOnlyArgv(action!.argv)).toBe(true);
+  });
+
   it('reconciles an orphaned fresh turn with a read-only CDP census when canonical identity is absent', () => {
     const evaluated = classifyExecuteIssueManagerRecord(turn('orphaned_fresh_turn', {
       scope: 'profile',
