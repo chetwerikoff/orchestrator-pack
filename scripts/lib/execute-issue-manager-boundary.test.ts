@@ -202,6 +202,7 @@ describe('execute-Issue manager boundary', () => {
 
   it('projects ambiguous_marker to content-authority pause with the envelope preserved as evidence', () => {
     const envelope = probe('ok', {
+      diagnostic_payload: 'x'.repeat(5_000),
       execution_recovery_inspect: {
         cause: null,
         owned_user_turn_key: null,
@@ -219,6 +220,10 @@ describe('execute-Issue manager boundary', () => {
       nextAction: null,
     });
     expect(JSON.stringify(evaluated.result)).toContain('ambiguous_marker');
+    if (evaluated.result.ok !== false || !('pause' in evaluated.result)) {
+      throw new Error('expected ambiguous_marker to project to external_pause');
+    }
+    expect(JSON.parse(evaluated.result.pause.evidence)).toEqual(envelope);
   });
 
   it('classifies every probe status without turning zero-send evidence into send authority', () => {
