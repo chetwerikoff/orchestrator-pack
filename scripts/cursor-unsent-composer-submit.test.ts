@@ -2327,6 +2327,55 @@ describe('orchestration mail reconciliation', () => {
     expect(submitted).toEqual([target.identity]);
   });
 
+  it('accepts consumption-confirmed exact pointers when the Run peek is consumer-fenced', async () => {
+    const target = worker('term_consumer_fenced_consumed');
+    const message = {
+      id: 'msg_consumer_fenced_consumed',
+      runId: 'run_consumer_fenced_consumed',
+      recipient: 'run:run_consumer_fenced_consumed',
+      consumed: false,
+    };
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let pointerVisible = true;
+    const root = mkdtempSync(join(tmpdir(), 'opk-consumer-fenced-consumed-'));
+    const pointer = buildDeliveryPointer(message);
+    try {
+      const result = await runOrchestrationMailReconcileTick({
+        readInbox: () => ({ ok: true as const, result: { messages: [{ id: message.id, run_id: message.runId, to_handle: message.recipient, read: 0 }] } }),
+        lookupMessage: () => ({ ok: true as const, message }),
+        resolveWorker: () => ({ ok: true as const, worker: target }),
+        isMessageRetrievable: () => ({ ok: false as const, reason: 'consumer_fenced' }),
+        submitDeps: depsFor({}, {
+          submitted,
+          liveness: () => 'unknown',
+          submitResult: (identity) => { submitted.push(identity); pointerVisible = false; return { status: 'dispatched' as const }; },
+          read: () => ({
+            ok: true as const,
+            lines: pointerVisible ? [pointer, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+            source: 'screen' as const,
+          }),
+        }),
+      }, {
+        ledgerPath: join(root, 'ledger.json'),
+        lockPath: join(root, 'lock'),
+        now: () => 1_000,
+      });
+
+      expect(result.nudged).toBe(1);
+      expect(result.reasons).toContain(`${message.id}:enter_sent`);
+      expect(result.deliveryEvidence).toEqual([{
+        workerGeneration: target.identity.generation,
+        runId: message.runId,
+        messageId: message.id,
+        delivery: 'delivered-looking',
+        terminalReceipt: 'unproven',
+      }]);
+      expect(submitted).toEqual([target.identity]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('keeps terminal-fenced reconciliation fail-closed on a mismatched target pointer', async () => {
     const target = worker('term_fenced_target_mismatch');
     const message = { id: 'msg_fenced_target_mismatch', runId: 'run_fenced_target_mismatch', recipient: `run:run_fenced_target_mismatch`, consumed: false };
@@ -3482,7 +3531,7 @@ describe('orchestration mail reconciliation', () => {
     });
 
     expect(submitted).toHaveLength(1);
-    expect(result.terminals[0]).toMatchObject({ reason: 'submission_unconfirmed', enter: false, ok: false });
+    expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true, ok: true });
   });
 
   it('reconciles one fleet-alarm Run pointer with exactly two busy submits', async () => {

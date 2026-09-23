@@ -593,6 +593,7 @@ interface DeliveryMessageSubmitDeps {
     | { readonly ok: true; readonly messageIds: ReadonlySet<string> }
     | { readonly ok: false; readonly reason: string };
   readonly submitDeps: UnsentComposerSubmitDeps;
+  readonly consumerFencedVisiblePointer?: boolean;
   readonly pointerWriteLedger?: Map<string, number>;
   readonly reconcileClock?: () => number;
   readonly episodeStatePath?: string;
@@ -688,7 +689,7 @@ function settleComposerObservation(
   allowAmbiguousRetry = false,
   allowNonIdle = false,
   requireConsumption = false,
-  _submitCount = 1,
+  allowUnknownLiveness = false,
  ): UnsentComposerTerminalResult {
   const identity = worker.identity;
   const key = workerKey(identity);
@@ -725,7 +726,7 @@ function settleComposerObservation(
     return { ...base, ok: true, unsent: true, enter: false, reason: 'dry_run' };
   }
   const beforeLiveness = currentLiveness(deps, identity);
-  if (beforeLiveness !== 'idle' && !(allowNonIdle && beforeLiveness === 'busy')) {
+  if (beforeLiveness !== 'idle' && !(allowNonIdle && (beforeLiveness === 'busy' || (allowUnknownLiveness && beforeLiveness === 'unknown')))) {
     return livenessDeferral(identity, beforeLiveness);
   }
 
@@ -760,7 +761,8 @@ function settleComposerObservation(
     && first.status === 'dispatched'
     && consumed
     && afterComposerKind === 'empty'
-    && afterLiveness === 'busy';
+    && afterLiveness === 'busy'
+    && !allowUnknownLiveness;
   let submitted = first;
   if (readyForSecond) {
     const second = deps.submit(identity);
@@ -777,11 +779,7 @@ function settleComposerObservation(
     }
     submitted = second;
   }
-  const started = requireConsumption
-    ? beforeLiveness === 'busy'
-      ? consumed && afterComposerKind === 'empty' && afterLiveness === 'busy'
-      : consumed
-    : afterShown.ok && afterLiveness === 'busy';
+  const started = requireConsumption ? consumed : afterShown.ok && afterLiveness === 'busy';
   if (!started) {
     const fingerprints = state.ambiguousSubmittedFingerprints.get(key) ?? new Set<string>();
     fingerprints.add(fingerprint);
@@ -1950,6 +1948,7 @@ async function submitOrcaMessageDeliveryPointerForMessage(
       true,
       true,
       true,
+      deps.consumerFencedVisiblePointer === true,
     );
     result = {
       ok: terminal.ok,
@@ -2463,7 +2462,7 @@ export async function runOrchestrationMailReconcileTick(
               const submissionDeps = consumerFenced
                 ? {
                     ...reconcileDeps,
-                    // Runtime-specific prompt submission must not create a pointer after a fenced check.
+                    consumerFencedVisiblePointer: true,
                     submitDeps: {
                       ...reconcileDeps.submitDeps,
                       composerControl: () => undefined,
