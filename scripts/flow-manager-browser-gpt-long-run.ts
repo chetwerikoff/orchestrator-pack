@@ -23,6 +23,10 @@ import {
 } from './lib/create-issue-next-action.ts';
 import { emitCreateIssueManagerResult } from './lib/create-issue-manager-boundary.ts';
 import {
+  inspectManagerCliInvocation,
+  type ManagerCliDeclaration,
+} from './lib/manager-cli-contract.ts';
+import {
   inspectLifecycleInvocationBinding,
   recordLifecycleInvocationAdmission,
   type LifecycleReviewStage,
@@ -33,6 +37,40 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const launcherPath = join(repoRoot, 'scripts/flow-manager-long-running-child.ts');
 const browserEntry = join(repoRoot, 'scripts/chatgpt-browser-turn/state-light-entry.ts');
 const adapterPath = join(repoRoot, 'scripts/flow-manager-browser-gpt-long-run.ts');
+
+const FLOW_MANAGER_BROWSER_GPT_CLI = {
+  program: 'flow-manager-browser-gpt-long-run.ts',
+  options: [
+    { flag: '--run-identity', value: 'id', required: true },
+    { flag: '--attempt-identity', value: 'id', required: true },
+    { flag: '--handoff-receipt', value: 'path', required: true },
+    { flag: '--invocation-id', value: 'id', required: true },
+    { flag: '--terminal-envelope', value: 'path', required: true },
+    { flag: '--output', value: 'path', required: true },
+    { flag: '--profile', value: 'key', required: true },
+    { flag: '--cdp', value: 'url', required: true },
+    { flag: '--input', value: 'path', required: true },
+    { flag: '--cwd', value: 'path' },
+    { flag: '--reviewer-source-output', value: 'path' },
+    { flag: '--reviewer-source', value: 'source' },
+    { flag: '--repository', value: 'owner/name' },
+    { flag: '--issue-number', value: 'n' },
+    { flag: '--source-revision', value: 'rNN' },
+    { flag: '--stage', value: 'stage', values: ['competitive', 'architectural-review', 'architectural-lens', 'architectural'] },
+    { flag: '--source-slot', value: 'slot', values: ['01', '02', '03'] },
+    { flag: '--stage-attempt-id', value: 'id' },
+    { flag: '--terminal-input-bundle', value: 'path' },
+    { flag: '--review-dir', value: 'path' },
+    { flag: '--project-url', value: 'url' },
+    { flag: '--operator-browser-config', value: 'absolute-path' },
+    { flag: '--timeout-ms', value: 'ms' },
+    { flag: '--poll-ms', value: 'ms' },
+    { flag: '--chat-url', value: 'url' },
+    { flag: '--new-chat' },
+  ],
+} as const satisfies ManagerCliDeclaration;
+
+export const FLOW_MANAGER_BROWSER_GPT_CLI_DECLARATION = FLOW_MANAGER_BROWSER_GPT_CLI;
 
 function requiredOption(options: Map<string, string | true>, key: string): string {
   const value = options.get(key);
@@ -94,6 +132,20 @@ function projectPreflightFailure(
   result: CreateIssueBrowserPreflightFailure,
 ): number {
   process.stderr.write(`flow-manager-browser-gpt-long-run: ${result.blocker}\n`);
+  if (result.externalPauseCause) {
+    return emitCreateIssueManagerResult({
+      producer: 'flow-manager-browser-gpt-long-run.ts:main',
+      currentArgv: argv,
+      externalEvidence: {
+        cause: result.externalPauseCause,
+        evidence: result.evidence,
+        remedy: result.remedy,
+      },
+      produce: () => {
+        throw new Error(result.blocker);
+      },
+    }).exitCode;
+  }
   if (result.nextAction) {
     return emitBrowserManagerResult(argv, createIssueRecoverableResult({
       cause: result.cause,
@@ -230,8 +282,17 @@ export async function runBrowserAdapter(
   argv: readonly string[],
   deps: BrowserAdapterDependencies = {},
 ): Promise<number> {
+  const inspected = inspectManagerCliInvocation(FLOW_MANAGER_BROWSER_GPT_CLI, argv);
+  if (inspected.help) {
+    process.stdout.write(inspected.help + '\n');
+    return 0;
+  }
   if (argv.some((token) => token === '--completion-mode' || token === '--authority' || token === '--result-protocol')) {
     return refuse(argv, 'forbidden_authority_selector');
+  }
+  if (inspected.error) {
+    process.stderr.write('flow-manager-browser-gpt-long-run: ' + inspected.error + '\n');
+    return 2;
   }
   const options = parseFlagArgv(argv);
   const runIdentity = requiredOption(options, 'run-identity');
