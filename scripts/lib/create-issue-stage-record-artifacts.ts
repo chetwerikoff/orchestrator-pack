@@ -254,7 +254,7 @@ function reviewTier(value: unknown): ReviewTier | null {
 }
 
 function canonicalTerminalPredecessor(
-  intake: JsonRecord,
+  intake: TierIntakeAuthorityV1,
   errors?: string[],
 ): ReviewStage | null {
   const tier = reviewTier(intake.priorTier);
