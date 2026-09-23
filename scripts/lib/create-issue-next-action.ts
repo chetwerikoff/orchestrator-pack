@@ -571,7 +571,7 @@ export function projectZeroSendManagerResult(input: {
   owned_prompt_seen?: boolean;
   observed_user_heads?: readonly string[];
   pacedRetryAction: CreateIssueNextAction;
-  reconcileAction: CreateIssueNextAction;
+  reconcileAction?: CreateIssueNextAction;
   freshInvocationId?: string;
 }): CreateIssueRecoverableResult | CreateIssueExternalPauseResult | null {
   if (!input.policy) return null;
@@ -587,7 +587,7 @@ export function projectZeroSendManagerResult(input: {
     ...(input.observed_user_heads ? { observed_user_heads: [...input.observed_user_heads] } : {}),
   };
   if (input.policy.class === 'deterministic-input' || input.policy.class === 'state-conflict') {
-    if (input.reconcileAction.kind !== 'reconcile-stage-read-only') {
+    if (!input.reconcileAction || input.reconcileAction.kind !== 'reconcile-stage-read-only') {
       throw new Error('zero-send deterministic/state-conflict continuation must reconcile read-only');
     }
     return createIssueRecoverableResult({
