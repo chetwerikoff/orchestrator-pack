@@ -6,7 +6,9 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   FLEET_ALARM_INTERVAL_MS,
+  buildDeliveryPointer,
   runOrcaFleetAlarmTick,
+  runOrchestrationMailReconcileTick,
   type OrcaFleetAlarmOptions,
 } from '../cursor-unsent-composer-submit.ts';
 import type { OrcaJsonResponse } from '../orca-runtime/native.ts';
@@ -31,7 +33,14 @@ function adapter(): RuntimeAdapter {
 
 function fixture() {
   let current = 1_800_000_000_000;
-  const messages: Array<{ id: string; run_id: string; to_handle: string; created_at: number; read?: boolean }> = [];
+  type FixtureInboxMessage = {
+    readonly id: string;
+    readonly run_id: string;
+    readonly to_handle: string;
+    readonly created_at: number;
+    readonly read: boolean;
+  };
+  const messages: FixtureInboxMessage[] = [];
   let workers = [{ dispatchStatus: 'dispatched' }];
   let tasks: unknown[] = [];
   let failOperation = '';
@@ -62,7 +71,7 @@ function fixture() {
     if (operation === 'orchestration send') {
       sent += 1;
       const id = 'msg_alarm_' + String(sent);
-      messages.unshift({ id, run_id: 'run_alarm', to_handle: 'run:run_alarm', created_at: current });
+      messages.unshift({ id, run_id: 'run_alarm', to_handle: 'run:run_alarm', created_at: current, read: false });
       return { ok: true, result: { message_id: id } } as OrcaJsonResponse<T>;
     }
     return { ok: false, error: { code: 'unexpected:' + operation } } as OrcaJsonResponse<T>;
@@ -83,6 +92,7 @@ function fixture() {
         run_id: 'run_alarm',
         to_handle: 'run:run_alarm',
         created_at: current,
+        read: false,
       });
     },
     settleWorkers() { workers = [{ dispatchStatus: 'completed' }]; },
@@ -90,6 +100,9 @@ function fixture() {
     fail(operation: string) { failOperation = operation; },
     get sent() { return sent; },
     get delivered() { return delivered; },
+    get inbox(): readonly FixtureInboxMessage[] {
+      return messages.map((message) => ({ ...message }));
+    },
   };
 }
 
@@ -150,6 +163,86 @@ describe('scheduler fleet alarm', () => {
       const failed = await runOrcaFleetAlarmTick(adapter(), state.options(join(root, 'mail.lock')));
       expect(failed.records[0]).toMatchObject({ skippedReason: 'units_unavailable' });
       expect(state.sent).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('joins the exact alarm inbox row to one busy coordinator reconcile episode', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-fleet-alarm-reconcile-'));
+    try {
+      const state = fixture();
+      const alarm = await runOrcaFleetAlarmTick(adapter(), state.options(join(root, 'alarm.lock')));
+      const sentMessageId = alarm.records[0]?.sentMessageId;
+      expect(sentMessageId).toBe('msg_alarm_1');
+      const inboxRow = state.inbox.find((message) => message.id === sentMessageId);
+      expect(inboxRow).toMatchObject({
+        id: sentMessageId,
+        run_id: 'run_alarm',
+        to_handle: 'run:run_alarm',
+        read: false,
+      });
+      expect(inboxRow).toBeDefined();
+      const lookedUpMessage = {
+        id: inboxRow!.id,
+        runId: inboxRow!.run_id,
+        recipient: inboxRow!.to_handle,
+        consumed: inboxRow!.read,
+      };
+      const coordinator = coordinatorWorker();
+      const pointer = buildDeliveryPointer(lookedUpMessage);
+      let pointerVisible = true;
+      let submitOnlyEnters = 0;
+      const submitDeps = {
+        listWorkers: () => ({ ok: true as const, workers: [coordinator] }),
+        read: () => ({
+          ok: true as const,
+          lines: pointerVisible ? [pointer] : ['→ Add a follow-up'],
+          source: 'screen' as const,
+        }),
+        liveness: () => 'busy' as const,
+        submit: () => {
+          submitOnlyEnters += 1;
+          pointerVisible = false;
+          return { status: 'dispatched' as const };
+        },
+      };
+      const reconcileDeps = {
+        readInbox: () => ({ ok: true as const, result: { messages: state.inbox } }),
+        lookupMessage: (messageId: string) => {
+          expect(messageId).toBe(sentMessageId);
+          return { ok: true as const, message: lookedUpMessage };
+        },
+        resolveWorker: (message: typeof lookedUpMessage) => {
+          expect(message).toEqual(lookedUpMessage);
+          return { ok: true as const, worker: coordinator };
+        },
+        isMessageRetrievable: (message: typeof lookedUpMessage) => {
+          expect(message).toEqual(lookedUpMessage);
+          return { ok: true as const };
+        },
+        submitDeps,
+      };
+      const options = {
+        ledgerPath: join(root, 'reconcile-ledger.json'),
+        lockPath: join(root, 'reconcile.lock'),
+        now: () => 1_800_000_000_000,
+      };
+      const first = await runOrchestrationMailReconcileTick(reconcileDeps, options);
+      expect(submitOnlyEnters).toBe(2);
+      expect(first.deliveryEvidence).toEqual([{
+        workerGeneration: coordinator.identity.generation,
+        runId: 'run_alarm',
+        messageId: sentMessageId,
+        delivery: 'delivered-looking',
+        terminalReceipt: 'unproven',
+      }]);
+      expect(first.reasons).toEqual([`${sentMessageId}:enter_sent`]);
+      expect(pointerVisible).toBe(false);
+      const second = await runOrchestrationMailReconcileTick(reconcileDeps, options);
+      expect(second.deliveryEvidence).toEqual([]);
+      expect(second.reasons).toEqual([`${sentMessageId}:orchestration_episode_already_delivered`]);
+      expect(submitOnlyEnters).toBe(2);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
