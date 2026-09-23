@@ -16,6 +16,8 @@ import {
   type CreateIssueActionBinding,
 } from './lib/create-issue-next-action.ts';
 import { runStageFinalizeCli } from './lib/create-issue-stage-record-cli.ts';
+import { startReviewCycle } from './lib/create-issue-stage-record-core.ts';
+import { createMockGhState, createMockTransport } from './lib/create-issue-stage-record-test-helpers.ts';
 import { resolveCreateIssueBrowserOperatorConfig } from './lib/create-issue-browser-gpt-preflight.ts';
 import {
   reconcileCreateIssueStage,
@@ -51,6 +53,92 @@ const binding: CreateIssueActionBinding = {
   stage: 'architectural-review',
   stageAttemptId: 'attempt-1935',
 };
+
+describe('Issue #2039 T1 author-turn producer convergence', () => {
+  it('harvest -> produce-author-dispositions -> ordinary architectural start-cycle clears the missing-author handoff', () => {
+    const root = tempRoot();
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = root;
+    const issueNumber = 2039;
+    const repo = 'chetwerikoff/orchestrator-pack';
+    const reviewDir = join(root, '.review', String(issueNumber));
+    mkdirSync(reviewDir, { recursive: true });
+    const body = '<!-- source-revision: r01 -->\n# T1 convergence fixture\n';
+    writeFileSync(join(reviewDir, 'tier-intake.json'), JSON.stringify({
+      schema: 'tier-intake/v1',
+      producer: 'fixture',
+      taskIdentity: 'issue:' + issueNumber,
+      kind: 'fresh',
+      priorTier: 'T1',
+      firstRevision: 'r01',
+    }, null, 2) + '\n');
+    writeFileSync(join(reviewDir, 'round-01-author-reply.md'), [
+      'create-issue-author-dispositions/v1',
+      JSON.stringify({
+        schema: 'create-issue-author-dispositions/v1',
+        sourceRevision: 'r01',
+        predecessorStage: null,
+        findings: [],
+        m4: { inventory: [] },
+      }),
+    ].join('\n'));
+
+    const state = createMockGhState({
+      issue: { title: 'T1 convergence fixture', body, labels: [] },
+    });
+    const transport = createMockTransport(state);
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => logs.push(String(line)));
+    try {
+      const code = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'produce-author-dispositions',
+        '--repo', repo,
+        '--issue-number', String(issueNumber),
+        '--review-dir', reviewDir,
+        '--source-revision', 'r01',
+        '--json',
+      ], transport);
+      expect(code).toBe(0);
+      expect(JSON.parse(logs.at(-1) ?? '{}')).toMatchObject({ ok: true, retryable: false });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(readFileSync(join(reviewDir, 'issue-r01-body.json'), 'utf8')).toContain(body.trim());
+    expect(JSON.parse(readFileSync(join(reviewDir, 'author-dispositions.json'), 'utf8'))).toMatchObject({
+      producer: 'governed-author-output/v1',
+      reviewEpisodeId: 'issue:2039@r01',
+      sourceRevision: 'r01',
+      predecessorStage: null,
+      draft: body,
+    });
+    expect(() => readFileSync(join(reviewDir, 'finding-disposition-ledger.json'), 'utf8')).toThrow();
+
+    // The zero-state ledger is existing terminal-bundle authority, not an output
+    // of produce-author-dispositions. Supplying it proves the new producer closes
+    // only the missing-author/snapshot gap before ordinary lifecycle admission.
+    writeFileSync(join(reviewDir, 'finding-disposition-ledger.json'), JSON.stringify({
+      version: 2,
+      reviewEpisodeId: 'issue:2039@r01',
+      sourceRevision: 'r01',
+      predecessorStage: null,
+      draft: body,
+      counts: { rawFindingCount: 0, distinctFindingCount: 0, processedDistinctCount: 0 },
+      findings: [],
+    }, null, 2) + '\n');
+
+    const started = startReviewCycle(transport, {
+      repo,
+      issueNumber,
+      sourceRevision: 'r01',
+      stage: 'architectural',
+      tier: 'T1',
+      publicActor: 'cursor-flow-manager',
+      workdir: root,
+    });
+    expect(started.ok, started.diagnostics.map((item) => item.message).join('\n')).toBe(true);
+    expect(started.stageAttemptId).toBeTruthy();
+  });
+});
 
 describe('create-Issue nextAction contract', () => {
   it('uses one validated argv-bearing action shape and terminal null shape', () => {
