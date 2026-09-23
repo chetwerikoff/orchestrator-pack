@@ -14,6 +14,7 @@ export function validateSchedulerRegistry(bytes: Buffer | string): SchedulerRegi
     throw new Error('staged_registry_scheduler_invalid');
   }
   if (!Number.isInteger(child.cadenceSeconds) || child.cadenceSeconds <= 0) throw new Error('staged_registry_cadence_invalid');
+  if (!Number.isInteger(child.stallGraceMultiplier) || child.stallGraceMultiplier <= 0) throw new Error('staged_registry_stall_grace_invalid');
   return registry;
 }
 
