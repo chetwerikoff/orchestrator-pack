@@ -480,7 +480,7 @@ function classifyProbe(
 function structuredNextAction(value: unknown): CreateIssueNextAction | null {
   if (validateCreateIssueNextAction(value).length > 0) return null;
   const action = value as CreateIssueNextAction;
-  return CREATE_ISSUE_NEXT_ACTION_KINDS.includes(action.kind) ? action : null;
+  return (CREATE_ISSUE_NEXT_ACTION_KINDS as readonly string[]).includes(action.kind) ? action : null;
 }
 
 function classifyReviewRunner(
