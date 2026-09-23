@@ -258,9 +258,15 @@ describe('execute-Issue manager boundary', () => {
     expect(notSent.exitCode).toBe(3);
     expect(resultAction(notSent)?.kind).toBe('execute-observe-owned-turn');
 
-    const unsafe = classifyExecuteIssueManagerRecord(probe('unsafe_output', { reason: 'primary_binding_target_conflict' }), context);
+    const unsafeEnvelope = probe('unsafe_output', {
+      reason: 'primary_binding_target_conflict',
+      diagnostic_payload: 'unsafe-evidence-2081',
+    });
+    const unsafe = classifyExecuteIssueManagerRecord(unsafeEnvelope, context);
     expect(unsafe.exitCode).toBe(5);
     expect(unsafe.result).toMatchObject({ cause: 'producer_contract_defect', nextAction: null });
+    expect(JSON.stringify(unsafe.result)).toContain('primary_binding_target_conflict');
+    expect(JSON.stringify(unsafe.result)).toContain('unsafe-evidence-2081');
 
     const unavailable = classifyExecuteIssueManagerRecord(probe('unavailable', { reason: 'cdp_unavailable' }), context);
     expect(unavailable.exitCode).toBe(4);
