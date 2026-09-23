@@ -26,8 +26,10 @@ import {
 import { sameRuntimeWorker, type RuntimeAdapter } from '../runtime/contracts.ts';
 import {
   exactClosingIssue,
+  observeDetachedSmokeAttempt,
   resolveCiGreen,
   runSmokeAttempt,
+  startDetachedSmokeAttempt,
   type CliOptions,
   type SmokeStartFenceResult,
 } from '../worker-smoke-run.ts';
@@ -55,7 +57,10 @@ export interface PostReviewSmokeDependencies {
   readonly adapter: RuntimeAdapter;
   readonly env?: NodeJS.ProcessEnv;
   readonly ciGreen?: typeof resolveCiGreen;
+  /** Legacy unit-test seam only. Production post-review smoke never awaits the smoke owner. */
   readonly runAttempt?: typeof runSmokeAttempt;
+  readonly observeDetachedAttempt?: typeof observeDetachedSmokeAttempt;
+  readonly startDetachedAttempt?: typeof startDetachedSmokeAttempt;
   readonly readIssueBody?: (issueNumber: number, repository: string) => Promise<string>;
 }
 
@@ -285,6 +290,32 @@ export async function reconcilePostReviewSmoke(
     return { handled: true, attempted: false, reason: 'post_review_smoke_assignment_binding_ambiguous' };
   }
 
+  const observeDetached = dependencies.observeDetachedAttempt ?? observeDetachedSmokeAttempt;
+  const detachedObservation = observeDetached({
+    cwd: initial.binding.worker.workspacePath,
+    issueNumber,
+    prNumber: candidate.prNumber,
+    headSha,
+  });
+  if (detachedObservation.kind === 'untrusted') {
+    return {
+      handled: true,
+      attempted: false,
+      reason: `post_review_smoke_lifecycle_untrusted:${detachedObservation.reason}`,
+    };
+  }
+  if (detachedObservation.kind === 'active') {
+    return { handled: true, attempted: false, reason: 'post_review_smoke_detached_active' };
+  }
+  if (detachedObservation.kind === 'terminal') {
+    return {
+      handled: true,
+      attempted: false,
+      reason: `post_review_smoke_detached_terminal_${detachedObservation.result.toLowerCase()}`,
+      exitCode: detachedObservation.result === 'PASS' ? 0 : 1,
+    };
+  }
+
   let issueBody: string;
   try {
     issueBody = dependencies.readIssueBody
@@ -403,29 +434,54 @@ export async function reconcilePostReviewSmoke(
   };
 
   try {
-    const runAttempt = dependencies.runAttempt ?? runSmokeAttempt;
-    const exitCode = await runAttempt(options, {
-      adapter: dependencies.adapter,
-      startFence,
-      ...(injectedIssueBodyResolver ? { resolveIssueBody: injectedIssueBodyResolver } : {}),
-    });
-    if (!smokeActionEntered) {
+    if (dependencies.runAttempt) {
+      const exitCode = await dependencies.runAttempt(options, {
+        adapter: dependencies.adapter,
+        startFence,
+        ...(injectedIssueBodyResolver ? { resolveIssueBody: injectedIssueBodyResolver } : {}),
+      });
+      if (!smokeActionEntered) {
+        return {
+          handled: true,
+          attempted: false,
+          reason: remoteAssignmentObserved
+            ? 'post_review_smoke_remote_assignment_requires_local_reassignment'
+            : exitCode === 0
+              ? 'post_review_smoke_not_attempted'
+              : 'post_review_smoke_preaction_failed',
+          exitCode,
+        };
+      }
+      return {
+        handled: true,
+        attempted: true,
+        reason: exitCode === 0 ? 'post_review_smoke_completed' : 'post_review_smoke_failed',
+        exitCode,
+      };
+    }
+
+    const startDetached = dependencies.startDetachedAttempt ?? startDetachedSmokeAttempt;
+    const started = await startFence(() => startDetached(options));
+    if (!started.ok) {
       return {
         handled: true,
         attempted: false,
         reason: remoteAssignmentObserved
           ? 'post_review_smoke_remote_assignment_requires_local_reassignment'
-          : exitCode === 0
-            ? 'post_review_smoke_not_attempted'
-            : 'post_review_smoke_preaction_failed',
-        exitCode,
+          : `post_review_smoke_preaction_failed:${started.reason}`,
+      };
+    }
+    if (!started.value.ok || !started.value.runId) {
+      return {
+        handled: true,
+        attempted: true,
+        reason: `post_review_smoke_detached_start_failed:${started.value.reason ?? 'unknown'}`,
       };
     }
     return {
       handled: true,
       attempted: true,
-      reason: exitCode === 0 ? 'post_review_smoke_completed' : 'post_review_smoke_failed',
-      exitCode,
+      reason: 'post_review_smoke_detached_started',
     };
   } catch (error) {
     return {
