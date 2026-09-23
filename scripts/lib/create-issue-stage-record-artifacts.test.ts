@@ -4449,14 +4449,14 @@ describe('Issue #1997 producer continuation routing', () => {
       withCapture: true,
     });
     const evidence = JSON.parse(readFileSync(input.evidencePath, 'utf8')) as Record<string, any>;
-    delete evidence.invocations[0].terminalResultIdentity;
+    delete evidence.invocations[0].terminal;
     writeFileSync(input.evidencePath, JSON.stringify(evidence));
     const source = transport({
       census: [...input.reviewComments, comment(input.body)],
     });
     const { code, output } = runArtifactCli(input, source);
     expect(code).toBe(1);
-    expect(String(output.blocker)).toMatch(/terminalResultIdentity|terminal result identity/i);
+    expect(String(output.blocker)).toMatch(/terminal must be boolean|invocation\[0\]\.terminal/i);
     expect(output.nextAction).toBeNull();
   });
 });
@@ -4476,7 +4476,13 @@ describe('Issue #1997 settled author-round execution', () => {
       });
       const canonical = resolveCanonicalReviewDirectory({ taskIdentity: `issue:${ISSUE}` }).directory;
       mkdirSync(canonical, { recursive: true });
-      for (const source of [input.intakePath, input.reviewEvidencePath, input.evidencePath]) {
+      for (const source of [
+        input.intakePath,
+        input.reviewEvidencePath,
+        input.evidencePath,
+        input.capturePath,
+        input.turnResultPath,
+      ]) {
         writeFileSync(join(canonical, basename(source)), readFileSync(source));
       }
       writeFileSync(join(canonical, 'round-01-author-reply.md'), JSON.stringify({
