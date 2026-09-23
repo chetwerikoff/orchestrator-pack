@@ -184,9 +184,12 @@ gh pr view P --repo chetwerikoff/orchestrator-pack \
   --json state,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,headRefOid
 ```
 
-Without a direct merge instruction, apply ordinary repository readiness rules. With a direct
-user merge instruction, red/pending/missing repository-owned CI or review is recorded but does
-not stop the merge attempt. Normalize draft/behind state when practical. If GitHub itself
+In delegated-integration mode, apply the stricter admission section above: no repository-owned
+failure is overridable and production post-smoke readiness must remain `READY_TO_MERGE`.
+Without a direct merge instruction or delegated marker authority, apply ordinary repository
+readiness rules and do not merge. With a direct user merge instruction, red/pending/missing
+repository-owned CI or review is recorded but does not stop the merge attempt. Normalize
+draft/behind state when practical. If GitHub itself
 refuses the merge because of branch protection, permissions, or another service-side rule,
 report that exact external refusal; do not relabel it as a pack decision.
 
