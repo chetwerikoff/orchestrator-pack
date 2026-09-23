@@ -307,6 +307,35 @@ missing/conflicting result, or any other post-send uncertainty into success and
 never grants resend authority. `turn-result/v1`, send-count accounting, page
 attribution, and publication semantics are otherwise unchanged.
 
+## Identity-bound diagnostic inspect
+
+The existing page probe supports an additive identity-bound `inspect` form for
+callers that already retain one state-light invocation:
+
+```bash
+npm run browser-gpt-page-probe -- inspect \
+  --cdp "${CDP_ENDPOINT}" \
+  --profile "${BROWSER_PROFILE}" \
+  --invocation-id "${INVOCATION_ID}" \
+  (--url "${CHAT_URL}" | --target-id "${TARGET_ID}")
+```
+
+`--profile` and `--invocation-id` must be supplied together. The probe derives
+the existing configured profile key and reads exactly the corresponding
+`state-light-turn-observation/v1` record; it does not scan profile state or
+choose a different marker from the page. A bound durable conversation URL must
+match the inspected page.
+
+The persisted phase is evaluated before recovery classification. `not_sent` and
+`prepared` skip marker projection. `dispatching`, `sent_unbound`,
+`sent_unharvested`, and `harvested` may classify only the exact persisted
+marker, requiring one carrier and one occurrence; unrelated historical markers
+do not make that expected marker ambiguous. The mode is read-only,
+`diagnostic_only: true`, and `workflow_authority: none`; it cannot open,
+navigate, close, Retry, Stop, resend, publish, or authorize a replacement. Its
+snapshot omits prompt/marker text witnesses. `--open-if-missing` is therefore
+invalid in identity-bound mode.
+
 ## Tab lifetime and cleanup
 
 Every canonical turn creates a dedicated owned tab. This removes the old shared-
