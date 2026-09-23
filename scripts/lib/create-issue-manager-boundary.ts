@@ -155,7 +155,7 @@ export function evaluateCreateIssueManagerBoundary(
   let candidate: CreateIssueManagerResult;
   try {
     const value = input.produce();
-    const errors = validateCreateIssueManagerResult(value, { boundary: true });
+    const errors = validateCreateIssueManagerResult(value);
     if (errors.length > 0) {
       candidate = defect(input.producer, 'producer_contract_defect', errors);
     } else {
