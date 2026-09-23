@@ -288,10 +288,10 @@ function recoverObservation(
   producerRecord: JsonRecord,
   cause: string,
 ): CreateIssueManagerBoundaryEvaluation {
-  const nextAction = observeAction(context, producerRecord);
+  const nextAction = observeAction(context, producerRecord) ?? censusAction(context);
   return nextAction
     ? recoverable(context, producer, cause, nextAction)
-    : defect(context, producer, 'read-only observation requires retained CDP plus target or conversation identity');
+    : defect(context, producer, 'read-only observation requires a retained CDP surface');
 }
 
 function externalCauseFromText(value: string): CreateIssueExternalPauseCause | null {
