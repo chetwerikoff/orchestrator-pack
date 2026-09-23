@@ -25,6 +25,7 @@ import {
   ORCHESTRATION_NOTICE,
   ORCHESTRATION_POINTER_ABSENT_BACKOFF_MS,
   runOrchestrationMailReconcileTick,
+  runOrcaFleetAlarmTick,
   runSupervisorUnsentComposerTick,
   workerKey,
   type UnsentComposerSubmitDeps,
@@ -808,6 +809,163 @@ describe('submitUnsentCursorComposer', () => {
       expect(loadSubmittedFingerprints(sentStorePath).get(workerKey(identity))).toBe(POKE);
     } finally {
       try { unlinkSync(sentStorePath); } catch { /* ignore */ }
+    }
+  });
+});
+
+describe('fleet alarm review regressions', () => {
+  const alarmTarget = worker('term_fleet_alarm');
+  const alarmAdapter = (): RuntimeAdapter => ({
+    findWorkerById: (id: string) => ({ status: 'ok' as const, value: id === alarmTarget.identity.id ? alarmTarget : null }),
+    findWorkerByPaneKey: () => ({ status: 'ok' as const, value: alarmTarget }),
+  } as unknown as RuntimeAdapter);
+
+  function fixture(
+    options: {
+      readonly workers?: () => readonly { readonly dispatchStatus: string }[];
+      readonly tasks?: () => readonly unknown[];
+      readonly onInbox?: (read: number) => void;
+      readonly paginateWorkers?: boolean;
+    } = {},
+  ) {
+    const messages: Array<{ id: string; run_id: string; to_handle: string; created_at: number; read?: boolean }> = [];
+    let inboxReads = 0;
+    let workerReads = 0;
+    let sent = 0;
+    const runJson = (<T>(args: readonly string[]): OrcaJsonResponse<T> => {
+      const operation = args.slice(0, 2).join(' ');
+      if (operation === 'orchestration run-list') {
+        return { ok: true, result: { runs: [{ id: 'run_fleet_alarm', coordinator_handle: alarmTarget.identity.id }] } } as OrcaJsonResponse<T>;
+      }
+      if (operation === 'orchestration inbox') {
+        inboxReads += 1;
+        options.onInbox?.(inboxReads);
+        return { ok: true, result: { messages } } as OrcaJsonResponse<T>;
+      }
+      if (operation === 'orchestration run-show') {
+        return { ok: true, result: { run: { id: 'run_fleet_alarm', coordinator_pane_key: 'pane_fleet_alarm' } } } as OrcaJsonResponse<T>;
+      }
+      if (operation === 'orchestration worker-list') {
+        workerReads += 1;
+        return { ok: true, result: { workers: options.workers?.() ?? [{ dispatchStatus: 'dispatched' }], page: { nextCursor: options.paginateWorkers ? String(workerReads) : null } } } as OrcaJsonResponse<T>;
+      }
+      if (operation === 'orchestration task-list') {
+        return { ok: true, result: { tasks: options.tasks?.() ?? [], page: { nextCursor: null } } } as OrcaJsonResponse<T>;
+      }
+      if (operation === 'orchestration send') {
+        sent += 1;
+        const id = `msg_alarm_${sent}`;
+        messages.unshift({ id, run_id: 'run_fleet_alarm', to_handle: `run:${'run_fleet_alarm'}`, created_at: 1_000 });
+        return { ok: true, result: { message_id: id } } as OrcaJsonResponse<T>;
+      }
+      return { ok: false, error: { code: `unexpected:${operation}` } } as OrcaJsonResponse<T>;
+    }) as typeof import('./orca-runtime/native.ts').runOrcaJson;
+    return { runJson, messages, get inboxReads() { return inboxReads; }, get workerReads() { return workerReads; }, get sent() { return sent; } };
+  }
+
+  it('bounds paginated pre-mail work and never sends after the finite page limit', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-fleet-alarm-bounded-'));
+    try {
+      const state = fixture({ paginateWorkers: true });
+      const result = await runOrcaFleetAlarmTick(alarmAdapter(), {
+        now: () => 1_000,
+        preMailBudgetMs: 60_000,
+        lockPath: join(root, 'mail.lock'),
+        runJson: state.runJson,
+      });
+      expect(state.workerReads).toBe(16);
+      expect(state.sent).toBe(0);
+      expect(result.records[0]).toMatchObject({ skippedReason: 'units_unavailable' });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed for remaining runs when the single pre-mail budget expires', async () => {
+    const state = fixture();
+    let clock = 0;
+    const result = await runOrcaFleetAlarmTick(alarmAdapter(), {
+      now: () => clock,
+      preMailBudgetMs: 1,
+      runJson: ((args, options) => {
+        clock = 2;
+        return state.runJson(args, options);
+      }) as typeof state.runJson,
+    });
+    expect(result.failureCode).toBe('pre_mail_budget_exhausted');
+    expect(state.sent).toBe(0);
+  });
+
+  it('revalidates workers and ready Tasks under the reconcile lock before send', async () => {
+    let workersLive = true;
+    const state = fixture({
+      workers: () => [{ dispatchStatus: workersLive ? 'dispatched' : 'completed' }],
+      onInbox: (read) => { if (read === 2) workersLive = false; },
+    });
+    const root = mkdtempSync(join(tmpdir(), 'opk-fleet-alarm-revalidate-'));
+    try {
+      const result = await runOrcaFleetAlarmTick(alarmAdapter(), {
+        now: () => 1_000,
+        lockPath: join(root, 'mail.lock'),
+        runJson: state.runJson,
+      });
+      expect(state.inboxReads).toBe(2);
+      expect(state.sent).toBe(0);
+      expect(result.records[0]).toMatchObject({ skippedReason: 'no_live_units' });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('uses only read or confirmed-ledger messages for lastWakeAt', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-fleet-alarm-witness-'));
+    const ledgerPath = join(root, 'orchestration-mail-reconcile.json');
+    try {
+      const state = fixture();
+      state.messages.push({ id: 'msg_confirmed', run_id: 'run_fleet_alarm', to_handle: 'run:run_fleet_alarm', created_at: 900_000, read: false });
+      writeFileSync(ledgerPath, JSON.stringify({ messages: {}, episodes: { confirmed: { messageId: 'msg_confirmed', runId: 'run_fleet_alarm', recipient: 'run:run_fleet_alarm', workerKey: workerKey(alarmTarget.identity), nextEligibleAt: 0, state: 'confirmed' } } }));
+      const confirmed = await runOrcaFleetAlarmTick(alarmAdapter(), { now: () => 1_000_000, lockPath: join(root, 'mail.lock'), reconcileLedgerPath: ledgerPath, runJson: state.runJson });
+      expect(confirmed.records[0]).toMatchObject({ skippedReason: 'interval_not_elapsed', lastWakeAt: 900_000 });
+      expect(state.sent).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not use a confirmed episode with a different inbox recipient as lastWakeAt', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-fleet-alarm-witness-mismatch-'));
+    const ledgerPath = join(root, 'orchestration-mail-reconcile.json');
+    try {
+      const state = fixture();
+      state.messages.push({ id: 'msg_mismatched', run_id: 'run_fleet_alarm', to_handle: 'run:run_fleet_alarm', created_at: 900_000, read: false });
+      writeFileSync(ledgerPath, JSON.stringify({ messages: {}, episodes: { mismatched: { messageId: 'msg_mismatched', runId: 'run_fleet_alarm', recipient: alarmTarget.identity.id, workerKey: workerKey(alarmTarget.identity), nextEligibleAt: 0, state: 'confirmed' } } }));
+      const due = await runOrcaFleetAlarmTick(alarmAdapter(), { now: () => 1_000_000, lockPath: join(root, 'mail.lock'), reconcileLedgerPath: ledgerPath, runJson: state.runJson });
+      expect(due.records[0]).toMatchObject({ sentMessageId: 'msg_alarm_1', lastWakeAt: null });
+      expect(due.records[0]).not.toHaveProperty('skippedReason', 'interval_not_elapsed');
+      expect(state.sent).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('bounds injected delivery and accepts only its confirmed ledger witness', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-fleet-alarm-delivery-'));
+    const ledgerPath = join(root, 'orchestration-mail-reconcile.json');
+    try {
+      const state = fixture();
+      const result = await runOrcaFleetAlarmTick(alarmAdapter(), {
+        now: () => 1_000,
+        lockPath: join(root, 'mail.lock'),
+        reconcileLedgerPath: ledgerPath,
+        runJson: state.runJson,
+        deliverMessage: async (messageId) => {
+          writeFileSync(ledgerPath, JSON.stringify({ messages: {}, episodes: { delivered: { messageId, runId: 'run_fleet_alarm', recipient: 'run:run_fleet_alarm', workerKey: workerKey(alarmTarget.identity), nextEligibleAt: 0, state: 'confirmed' } } }));
+        },
+      });
+      expect(result.records[0]).toMatchObject({ sentMessageId: 'msg_alarm_1' });
+      expect(result.records[0]).not.toHaveProperty('failureCode');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });
