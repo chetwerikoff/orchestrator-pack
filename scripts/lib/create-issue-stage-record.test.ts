@@ -1413,6 +1413,145 @@ describe('Issue #2009 bind-published-comment', () => {
   });
 });
 
+describe('Issue #2039 produce-author-dispositions CLI', () => {
+  const producerIssue = 2039;
+  const producerRepo = 'chetwerikoff/orchestrator-pack';
+
+  function producerTransport(body: string) {
+    return {
+      runGh(argv: string[]) {
+        const target = argv[2] ?? '';
+        if (target === 'repos/' + producerRepo + '/issues/' + producerIssue && argv.includes('--jq')) {
+          return { exitCode: 0, stdout: JSON.stringify({ title: 'Issue 2039 fixture', body, labels: [] }), stderr: '' };
+        }
+        return { exitCode: 1, stdout: '', stderr: 'unexpected ' + argv.join(' ') };
+      },
+    };
+  }
+
+  it('parses and runs the pre-stage T1 producer without creating lifecycle stage effects', () => {
+    const opts = parseStageFinalizeArgs([
+      'node', 'scripts/create-issue-stage-finalize.ts', 'produce-author-dispositions',
+      '--repo', producerRepo,
+      '--issue-number', String(producerIssue),
+      '--review-dir', '/tmp/review',
+      '--source-revision', 'r02',
+      '--json',
+    ]);
+    expect(opts.command).toBe('produce-author-dispositions');
+    expect(opts.sourceRevision).toBe('r02');
+    expect(opts.reviewDir).toBe('/tmp/review');
+
+    const stateRoot = makeCliTempDir();
+    const previous = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = stateRoot;
+    const reviewDir = join(stateRoot, '.review', String(producerIssue));
+    mkdirSync(reviewDir, { recursive: true });
+    writeFileSync(join(reviewDir, 'tier-intake.json'), JSON.stringify({
+      schema: 'tier-intake/v1',
+      producer: 'fixture',
+      taskIdentity: 'issue:' + producerIssue,
+      kind: 'fresh',
+      priorTier: 'T1',
+      firstRevision: 'r01',
+    }, null, 2) + '\n');
+    writeFileSync(join(reviewDir, 'round-02-author-reply.md'), [
+      'create-issue-author-dispositions/v1',
+      JSON.stringify({
+        schema: 'create-issue-author-dispositions/v1',
+        sourceRevision: 'r02',
+        predecessorStage: null,
+        findings: [],
+        m4: { inventory: [] },
+      }),
+      '',
+    ].join('\n'));
+    const body = '<!-- source-revision: r02 -->\n# Issue 2039 fixture\n';
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => logs.push(String(line)));
+    try {
+      const code = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'produce-author-dispositions',
+        '--repo', producerRepo,
+        '--issue-number', String(producerIssue),
+        '--review-dir', reviewDir,
+        '--source-revision', 'r02',
+        '--json',
+      ], producerTransport(body));
+      expect(code).toBe(0);
+      expect(JSON.parse(logs.at(-1) ?? '{}')).toMatchObject({
+        ok: true,
+        retryable: false,
+        reviewEpisodeId: 'issue:' + producerIssue + '@r01',
+        sourceRevision: 'r02',
+      });
+      expect(JSON.parse(readFileSync(join(reviewDir, 'author-dispositions.json'), 'utf8'))).toMatchObject({
+        producer: 'governed-author-output/v1',
+        sourceRevision: 'r02',
+        predecessorStage: null,
+        draft: body,
+      });
+      expect(readFileSync(join(reviewDir, 'issue-r02-body.json'), 'utf8')).toContain(body.trim());
+      expect(existsSync(join(reviewDir, 'attempt-001.json'))).toBe(false);
+      expect(existsSync(join(reviewDir, 'finding-disposition-ledger.json'))).toBe(false);
+    } finally {
+      spy.mockRestore();
+      if (previous === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previous;
+    }
+  });
+
+  it('returns the bounded requested-next-revision retry classification without writing the handoff', () => {
+    const stateRoot = makeCliTempDir();
+    const previous = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = stateRoot;
+    const reviewDir = join(stateRoot, '.review', String(producerIssue));
+    mkdirSync(reviewDir, { recursive: true });
+    writeFileSync(join(reviewDir, 'tier-intake.json'), JSON.stringify({
+      schema: 'tier-intake/v1',
+      producer: 'fixture',
+      taskIdentity: 'issue:' + producerIssue,
+      kind: 'fresh',
+      priorTier: 'T1',
+      firstRevision: 'r01',
+    }, null, 2) + '\n');
+    writeFileSync(join(reviewDir, 'round-02-author-reply.txt'), [
+      'create-issue-author-dispositions/v1',
+      JSON.stringify({
+        schema: 'create-issue-author-dispositions/v1',
+        sourceRevision: 'r02',
+        predecessorStage: null,
+        findings: [],
+        m4: { inventory: [] },
+      }),
+    ].join('\n'));
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => logs.push(String(line)));
+    try {
+      const code = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'produce-author-dispositions',
+        '--repo', producerRepo,
+        '--issue-number', String(producerIssue),
+        '--review-dir', reviewDir,
+        '--source-revision', 'r02',
+        '--json',
+      ], producerTransport('<!-- source-revision: r01 -->\n# prior\n'));
+      expect(code).toBe(1);
+      expect(JSON.parse(logs.at(-1) ?? '{}')).toMatchObject({
+        ok: false,
+        retryable: true,
+        cause: 'requested-revision-not-yet-visible',
+      });
+      expect(existsSync(join(reviewDir, 'issue-r02-body.json'))).toBe(false);
+      expect(existsSync(join(reviewDir, 'author-dispositions.json'))).toBe(false);
+    } finally {
+      spy.mockRestore();
+      if (previous === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previous;
+    }
+  });
+});
+
 describe('create-issue-final-acceptance contract parity', () => {
   it('exports the shared contract version', () => {
     expect(FINAL_ACCEPTANCE_CONTRACT_VERSION).toBe('create-issue-final-acceptance-contract/v1');
