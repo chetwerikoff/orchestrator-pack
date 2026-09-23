@@ -55,6 +55,7 @@ import {
   AUTHOR_DISPOSITIONS_SCHEMA,
   DEFECT_DISPOSITION_VALUES,
   REMEDY_DISPOSITION_VALUES,
+  authorDispositionDiagnosticFromFailure,
   authorDispositionDiagnosticsText,
   locateGovernedAuthorDispositionBlock as locateAuthorDispositionBlock,
   parseGovernedAuthorDispositionText,
@@ -3829,6 +3830,16 @@ export function produceAcceptanceArtifacts(
     }
   }
   if (errors.length > 0 || !tier || !issueSnapshot || (!authorAdjudicationDeferred && (!ledger || !preparedAuthor))) {
+    for (const error of errors) {
+      const derived = authorDispositionDiagnosticFromFailure(error);
+      if (derived && !authorDiagnostics.some((item) => (
+        item.reason === derived.reason
+        && item.field === derived.field
+        && item.message === derived.message
+      ))) {
+        authorDiagnostics.push(derived);
+      }
+    }
     rollbackCreatedInputs(createdInputPaths);
     const temporary = temporaryClassification(errors);
     return {
