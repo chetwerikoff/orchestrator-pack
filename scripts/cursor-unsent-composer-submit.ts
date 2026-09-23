@@ -863,7 +863,7 @@ export function buildDeliveryPointer(message: DeliveryMessage): string {
         ? `orca orchestration check --terminal ${message.recipient}`
         : `orca orchestration check --run ${message.runId}`;
   const prose = message.recipient.startsWith('run:')
-    ? 'Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle.'
+    ? 'Read orchestration mail, check every terminal in the fleet, and clear blockers so the fleet does not idle.'
     : 'Read and act on your orchestration message.';
   return `You have 1 orchestration message. ${prose} Run \`${check}\`.`;
 }
@@ -1140,6 +1140,333 @@ export async function submitOrcaMessageDeliveryPointer(
     releaseHeldFileLock(held.descriptor);
   }
 }
+
+export const FLEET_ALARM_INTERVAL_MS = 300_000;
+const FLEET_ALARM_SUBJECT = 'Fleet sweep alarm';
+const FLEET_ALARM_BODY = 'Run a full fleet sweep now: check every terminal in the fleet and clear blockers so the fleet does not idle.';
+const FLEET_ALARM_TERMINAL_DISPATCH_STATUSES = new Set(['completed', 'failed', 'circuit_broken']);
+
+export type FleetAlarmSkipReason =
+  | 'no_live_units'
+  | 'coordinator_unresolved'
+  | 'interval_not_elapsed'
+  | 'inbox_unavailable'
+  | 'units_unavailable'
+  | 'reconcile_lock_busy';
+
+export interface FleetAlarmRecord {
+  readonly runId: string;
+  readonly coordinator: string;
+  readonly lastWakeAt: number | null;
+  readonly sentMessageId?: string;
+  readonly skippedReason?: FleetAlarmSkipReason;
+  readonly failureCode?: string;
+}
+
+export interface FleetAlarmResult {
+  readonly records: readonly FleetAlarmRecord[];
+  readonly failureCode?: string;
+}
+
+interface OrcaFleetRunRow {
+  readonly id?: string;
+  readonly coordinator_handle?: string;
+}
+
+interface OrcaFleetRunListResult {
+  readonly runs?: readonly OrcaFleetRunRow[];
+  readonly page?: { readonly nextCursor?: string | number | null };
+  readonly nextCursor?: string | number | null;
+  readonly truncated?: boolean;
+}
+
+interface OrcaFleetWorkerRow {
+  readonly dispatchStatus?: string;
+  readonly dispatch_status?: string;
+  readonly status?: string;
+}
+
+interface OrcaFleetWorkerListResult {
+  readonly workers?: readonly OrcaFleetWorkerRow[];
+  readonly page?: { readonly nextCursor?: string | number | null };
+  readonly nextCursor?: string | number | null;
+  readonly truncated?: boolean;
+}
+
+interface OrcaFleetTaskListResult {
+  readonly tasks?: readonly unknown[];
+  readonly page?: { readonly nextCursor?: string | number | null };
+  readonly nextCursor?: string | number | null;
+  readonly truncated?: boolean;
+}
+
+export interface OrcaFleetAlarmOptions {
+  readonly now?: () => number;
+  readonly intervalMs?: number;
+  readonly lockPath?: string;
+  readonly runJson?: typeof runOrcaJson;
+  readonly deliverMessage?: (messageId: string) => PromiseLike<unknown>;
+}
+
+function fleetAlarmNextCursor(value: unknown): { readonly ok: true; readonly cursor: string | null } | { readonly ok: false } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { ok: false };
+  const record = value as Record<string, unknown>;
+  if (record.truncated === true) return { ok: false };
+  let raw: unknown;
+  if (record.page && typeof record.page === 'object' && !Array.isArray(record.page)) {
+    raw = (record.page as Record<string, unknown>).nextCursor;
+  } else {
+    raw = record.nextCursor;
+  }
+  if (raw === undefined || raw === null || raw === '') return { ok: true, cursor: null };
+  if (typeof raw === 'string' && raw.trim()) return { ok: true, cursor: raw.trim() };
+  if (typeof raw === 'number' && Number.isFinite(raw)) return { ok: true, cursor: String(raw) };
+  return { ok: false };
+}
+
+function fleetAlarmTimestamp(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? value : null;
+  const parsed = Date.parse(String(value ?? ''));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function fleetAlarmLastWakeAt(
+  rows: readonly OrcaInboxMessageRow[],
+  runId: string,
+  coordinator: string,
+  now: number,
+): { readonly ok: true; readonly value: number | null } | { readonly ok: false } {
+  let latest: number | null = null;
+  for (const row of rows) {
+    const recipient = row.to_handle?.trim() ?? '';
+    if (recipient !== 'run:' + runId && (!coordinator || recipient !== coordinator)) continue;
+    const createdAt = fleetAlarmTimestamp(row.created_at);
+    if (createdAt === null || createdAt > now) return { ok: false };
+    latest = latest === null ? createdAt : Math.max(latest, createdAt);
+  }
+  return { ok: true, value: latest };
+}
+
+function fleetAlarmMessageId(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+  const record = value as Record<string, unknown>;
+  return String(record.message_id ?? record.messageId ?? record.id ?? '').trim();
+}
+
+function fleetAlarmWorkers(
+  runJson: typeof runOrcaJson,
+  runId: string,
+): { readonly ok: true; readonly rows: readonly OrcaFleetWorkerRow[] } | { readonly ok: false } {
+  const rows: OrcaFleetWorkerRow[] = [];
+  const seen = new Set<string>();
+  let cursor: string | null = null;
+  for (;;) {
+    const response = runJson<OrcaFleetWorkerListResult>([
+      'orchestration', 'worker-list', '--run', runId,
+      ...(cursor ? ['--cursor', cursor] : []),
+    ], { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS });
+    if (!response.ok || !response.result || !Array.isArray(response.result.workers)) return { ok: false };
+    rows.push(...response.result.workers);
+    const next = fleetAlarmNextCursor(response.result);
+    if (!next.ok) return { ok: false };
+    if (!next.cursor) return { ok: true, rows };
+    if (seen.has(next.cursor)) return { ok: false };
+    seen.add(next.cursor);
+    cursor = next.cursor;
+  }
+}
+
+function fleetAlarmReadyTasks(
+  runJson: typeof runOrcaJson,
+  runId: string,
+): { readonly ok: true; readonly rows: readonly unknown[] } | { readonly ok: false } {
+  const rows: unknown[] = [];
+  const seen = new Set<string>();
+  let cursor: string | null = null;
+  for (;;) {
+    const response = runJson<OrcaFleetTaskListResult>([
+      'orchestration', 'task-list', '--run', runId, '--ready',
+      ...(cursor ? ['--cursor', cursor] : []),
+    ], { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS });
+    if (!response.ok || !response.result || !Array.isArray(response.result.tasks)) return { ok: false };
+    rows.push(...response.result.tasks);
+    const next = fleetAlarmNextCursor(response.result);
+    if (!next.ok) return { ok: false };
+    if (!next.cursor) return { ok: true, rows };
+    if (seen.has(next.cursor)) return { ok: false };
+    seen.add(next.cursor);
+    cursor = next.cursor;
+  }
+}
+
+/**
+ * Stateless fleet-sweep alarm phase for one bounded scheduler child.
+ * Durable inbox creation is the request-cadence witness; exact-message delivery
+ * remains owned by the existing companion + generic reconcile paths.
+ */
+export async function runOrcaFleetAlarmTick(
+  adapter: RuntimeAdapter,
+  options: OrcaFleetAlarmOptions = {},
+): Promise<FleetAlarmResult> {
+  const now = options.now ?? Date.now;
+  const current = now();
+  const intervalMs = options.intervalMs ?? FLEET_ALARM_INTERVAL_MS;
+  const runJson = options.runJson ?? runOrcaJson;
+  const records: FleetAlarmRecord[] = [];
+  if (!Number.isFinite(current) || !Number.isFinite(intervalMs) || intervalMs <= 0) {
+    return { records, failureCode: 'fleet_alarm_clock_invalid' };
+  }
+
+  try {
+    const listed = runJson<OrcaFleetRunListResult>(
+      ['orchestration', 'run-list'],
+      { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS },
+    );
+    if (!listed.ok || !listed.result || !Array.isArray(listed.result.runs)) {
+      return { records, failureCode: 'runs_unavailable' };
+    }
+    const runPage = fleetAlarmNextCursor(listed.result);
+    if (!runPage.ok || runPage.cursor !== null || listed.result.runs.some((row) => !row.id?.trim())) {
+      return { records, failureCode: 'runs_unavailable' };
+    }
+
+    const messageDeps = createOrcaMessageSubmitDeps(adapter, createAdapterSubmitDeps(adapter), runJson);
+    const inbox = messageDeps.readInbox?.();
+    if (!inbox?.ok || !inbox.result || !Array.isArray(inbox.result.messages)) {
+      return {
+        records: listed.result.runs.map((row) => ({
+          runId: row.id!.trim(),
+          coordinator: row.coordinator_handle?.trim() ?? '',
+          lastWakeAt: null,
+          skippedReason: 'inbox_unavailable' as const,
+        })),
+      };
+    }
+    const inboxPage = fleetAlarmNextCursor(inbox.result);
+    if (!inboxPage.ok || inboxPage.cursor !== null) {
+      return {
+        records: listed.result.runs.map((row) => ({
+          runId: row.id!.trim(),
+          coordinator: row.coordinator_handle?.trim() ?? '',
+          lastWakeAt: null,
+          skippedReason: 'inbox_unavailable' as const,
+        })),
+      };
+    }
+    const inboxRows = inbox.result.messages;
+
+    for (const run of listed.result.runs) {
+      const runId = run.id!.trim();
+      const listedCoordinator = run.coordinator_handle?.trim() ?? '';
+      const initialWake = fleetAlarmLastWakeAt(inboxRows, runId, listedCoordinator, current);
+      if (!initialWake.ok) {
+        records.push({ runId, coordinator: listedCoordinator, lastWakeAt: null, skippedReason: 'inbox_unavailable' });
+        continue;
+      }
+      if (initialWake.value !== null && current - initialWake.value < intervalMs) {
+        records.push({ runId, coordinator: listedCoordinator, lastWakeAt: initialWake.value, skippedReason: 'interval_not_elapsed' });
+        continue;
+      }
+
+      const resolved = messageDeps.resolveWorker({
+        id: 'fleet-alarm-coordinator-resolution',
+        runId,
+        recipient: 'run:' + runId,
+        consumed: false,
+      });
+      if (!resolved.ok || !resolved.worker) {
+        records.push({ runId, coordinator: listedCoordinator, lastWakeAt: initialWake.value, skippedReason: 'coordinator_unresolved' });
+        continue;
+      }
+      const coordinator = resolved.worker.identity.id;
+
+      const workers = fleetAlarmWorkers(runJson, runId);
+      const tasks = fleetAlarmReadyTasks(runJson, runId);
+      if (!workers.ok || !tasks.ok) {
+        records.push({ runId, coordinator, lastWakeAt: initialWake.value, skippedReason: 'units_unavailable' });
+        continue;
+      }
+      const statuses = workers.rows.map((row) =>
+        String(row.dispatchStatus ?? row.dispatch_status ?? row.status ?? '').trim().toLowerCase());
+      if (statuses.some((status) => !status)) {
+        records.push({ runId, coordinator, lastWakeAt: initialWake.value, skippedReason: 'units_unavailable' });
+        continue;
+      }
+      const liveDispatch = statuses.some((status) => !FLEET_ALARM_TERMINAL_DISPATCH_STATUSES.has(status));
+      if (!liveDispatch && tasks.rows.length === 0) {
+        records.push({ runId, coordinator, lastWakeAt: initialWake.value, skippedReason: 'no_live_units' });
+        continue;
+      }
+
+      const held = tryAcquireHeldFileLock(options.lockPath ?? ORCHESTRATION_RECONCILE_LOCK_PATH);
+      if (!held.acquired) {
+        records.push({ runId, coordinator, lastWakeAt: initialWake.value, skippedReason: 'reconcile_lock_busy' });
+        continue;
+      }
+      replaceLockedFileContents(held.descriptor, String(process.pid) + '\n');
+      let lockedRecord: FleetAlarmRecord | undefined;
+      let sentMessageId = '';
+      try {
+        const freshInbox = messageDeps.readInbox?.();
+        if (!freshInbox?.ok || !freshInbox.result || !Array.isArray(freshInbox.result.messages)) {
+          lockedRecord = { runId, coordinator, lastWakeAt: initialWake.value, skippedReason: 'inbox_unavailable' };
+        } else {
+          const freshPage = fleetAlarmNextCursor(freshInbox.result);
+          const freshWake = fleetAlarmLastWakeAt(freshInbox.result.messages, runId, coordinator, current);
+          if (!freshPage.ok || freshPage.cursor !== null || !freshWake.ok) {
+            lockedRecord = { runId, coordinator, lastWakeAt: initialWake.value, skippedReason: 'inbox_unavailable' };
+          } else if (freshWake.value !== null && current - freshWake.value < intervalMs) {
+            lockedRecord = { runId, coordinator, lastWakeAt: freshWake.value, skippedReason: 'interval_not_elapsed' };
+          } else {
+            const sent = runJson<{ readonly message_id?: string; readonly messageId?: string; readonly id?: string }>([
+              'orchestration', 'send',
+              '--run', runId,
+              '--type', 'status',
+              '--subject', FLEET_ALARM_SUBJECT,
+              '--body', FLEET_ALARM_BODY,
+            ], { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS, inheritParentEnv: true });
+            if (!sent.ok) {
+              lockedRecord = {
+                runId,
+                coordinator,
+                lastWakeAt: freshWake.value,
+                failureCode: sent.error?.code?.trim() || 'send_failed',
+              };
+            } else {
+              sentMessageId = fleetAlarmMessageId(sent.result);
+              lockedRecord = sentMessageId
+                ? { runId, coordinator, lastWakeAt: freshWake.value, sentMessageId }
+                : { runId, coordinator, lastWakeAt: freshWake.value, failureCode: 'send_message_id_missing' };
+            }
+          }
+        }
+      } finally {
+        releaseHeldFileLock(held.descriptor);
+      }
+
+      if (!lockedRecord) {
+        records.push({ runId, coordinator, lastWakeAt: initialWake.value, failureCode: 'fleet_alarm_failed' });
+        continue;
+      }
+      if (sentMessageId) {
+        try {
+          const deliver = options.deliverMessage
+            ?? ((messageId: string) => submitOrcaMessageDeliveryPointer(messageId, messageDeps));
+          await deliver(sentMessageId);
+        } catch {
+          // The durable send is already committed. Generic reconcile remains the
+          // existing maintenance path when the immediate companion cannot act.
+        }
+      }
+      records.push(lockedRecord);
+    }
+
+    return { records };
+  } catch {
+    return { records, failureCode: 'fleet_alarm_failed' };
+  }
+}
+
 async function submitOrcaMessageDeliveryPointerForMessage(
   message: DeliveryMessage,
   deps: DeliveryMessageSubmitDeps,
