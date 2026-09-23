@@ -65,11 +65,13 @@ export interface ExecuteIssueManagerBoundaryContext {
   issueNumber: number;
   sourceRevision: string;
   phase: ExecuteIssuePhase;
+  productionArgv: readonly string[];
   cdp?: string;
   targetId?: string;
   conversationUrl?: string;
+  profile?: string;
+  invocationId?: string;
   prNumber?: number;
-  currentArgv?: readonly string[];
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -112,12 +114,20 @@ function nestedPageUrl(value: JsonRecord): string {
   return snapshot ? text(snapshot.page_url) : '';
 }
 
+function hasIdentity(context: ExecuteIssueManagerBoundaryContext): boolean {
+  return context.profile !== undefined || context.invocationId !== undefined;
+}
+
 function observeAction(
   context: ExecuteIssueManagerBoundaryContext,
   producerRecord: JsonRecord,
  ): CreateIssueNextAction | null {
   const cdp = text(context.cdp);
   if (!cdp) return null;
+  const profile = text(context.profile);
+  const invocationId = text(context.invocationId);
+  const identityPresent = hasIdentity(context);
+  if (identityPresent && (!profile || !invocationId)) return null;
   const targetId = text(context.targetId) || text(producerRecord.target_id);
   const conversationUrl = text(context.conversationUrl)
     || nestedPageUrl(producerRecord)
@@ -132,6 +142,7 @@ function observeAction(
     '--cdp',
     cdp,
     ...(targetId ? ['--target-id', targetId] : ['--url', conversationUrl]),
+    ...(identityPresent ? ['--profile', profile, '--invocation-id', invocationId] : []),
   ];
   return createIssueNextAction({
     kind: 'execute-observe-owned-turn',
@@ -228,7 +239,7 @@ function boundary(
  ): CreateIssueManagerBoundaryEvaluation {
   return evaluateCreateIssueManagerBoundary({
     producer,
-    currentArgv: context.currentArgv ?? [],
+    currentArgv: context.productionArgv,
     produce,
   });
 }
@@ -286,9 +297,14 @@ function recoverObservation(
   producerRecord: JsonRecord,
   cause: string,
  ): CreateIssueManagerBoundaryEvaluation {
-  const nextAction = observeAction(context, producerRecord) ?? censusAction(context);
-  return nextAction
-    ? recoverable(context, producer, cause, nextAction)
+  const nextAction = observeAction(context, producerRecord);
+  if (nextAction) return recoverable(context, producer, cause, nextAction);
+  if (hasIdentity(context)) {
+    return defect(context, producer, 'identity-bound observation requires an exact inspect target');
+  }
+  const census = censusAction(context);
+  return census
+    ? recoverable(context, producer, cause, census)
     : defect(context, producer, 'read-only observation requires a retained CDP surface');
 }
 
@@ -338,9 +354,14 @@ function classifyTurn(
     case 'rate_limit':
       return recoverObservation(context, producer, value, 'execute_owned_turn_reobserve');
     case 'orphaned_fresh_turn': {
-      const action = observeAction(context, value) ?? censusAction(context);
-      return action
-        ? recoverable(context, producer, 'execute_owned_conversation_reconcile', action)
+      const action = observeAction(context, value);
+      if (action) return recoverable(context, producer, 'execute_owned_conversation_reconcile', action);
+      if (hasIdentity(context)) {
+        return defect(context, producer, 'identity-bound observation requires an exact inspect target');
+      }
+      const census = censusAction(context);
+      return census
+        ? recoverable(context, producer, 'execute_owned_conversation_reconcile', census)
         : pause(
           context,
           producer,

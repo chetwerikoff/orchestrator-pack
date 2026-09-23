@@ -599,6 +599,13 @@ export function evaluateCreateIssueManagerBoundary(input: {
   }
   if (result.ok) return { result, exitCode: 0 };
   if (isCreateIssueExternalPauseCause(result.cause)) return { result, exitCode: 4 };
-  if (result.cause === 'producer_contract_defect') return { result, exitCode: 5 };
+  if (result.cause === 'producer_contract_defect' || result.cause === 'self_recommendation') return { result, exitCode: 5 };
+  if (result.cause === 'stale_next_action') return { result, exitCode: 3 };
+  if (result.nextAction === null) {
+    const defect = createIssueManagerContractDefect(input.producer, [
+      'non-success terminal result must be an external pause, contract defect, or stale next action',
+    ]);
+    return { result: defect, exitCode: 5 };
+  }
   return { result, exitCode: 3 };
 }

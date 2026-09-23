@@ -17,8 +17,8 @@ import { runExecuteIssueManagerBoundaryCli } from '../execute-issue-manager-boun
 
 const context: ExecuteIssueManagerBoundaryContext = {
   repository: 'chetwerikoff/orchestrator-pack', issueNumber: 2081, sourceRevision: 'r03', phase: 'implementation',
+  productionArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'],
   cdp: 'http://127.0.0.1:9222', conversationUrl: 'https://chatgpt.com/c/owned-2081', prNumber: 2083,
-  currentArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'],
 };
 function turn(state: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return { schema: 'turn-result/v1', state, scope: 'invocation', cause: state, invocation_id: 'invocation-2081', configured_profile_key: 'profile-2081', conversation_id: 'owned-2081', ...overrides };
@@ -114,11 +114,29 @@ describe('execute-Issue manager boundary', () => {
     expect(isExecuteIssueReadOnlyArgv(['node', 'scripts/chatgpt-browser-turn.ts', '--new-chat'])).toBe(false);
   });
 
+  it('binds a complete identity pair to inspect and refuses census fallback without a target', () => {
+    const identityContext = { ...context, profile: '/operator/profile', invocationId: 'invocation-2081' };
+    const evaluated = classifyExecuteIssueManagerRecord(turn('observation_uncertain'), identityContext);
+    expect(evaluated.exitCode).toBe(3);
+    expect(expectReadOnly(evaluated).argv).toEqual([
+      'node', '--experimental-strip-types', 'scripts/browser-gpt-page-probe.ts', 'inspect',
+      '--cdp', context.cdp, '--url', context.conversationUrl,
+      '--profile', '/operator/profile', '--invocation-id', 'invocation-2081',
+    ]);
+
+    const withoutTarget = classifyExecuteIssueManagerRecord(
+      turn('observation_uncertain', { conversation_id: undefined }),
+      { ...identityContext, targetId: undefined, conversationUrl: undefined },
+    );
+    expect(withoutTarget.exitCode).toBe(5);
+    expect(withoutTarget.result).toMatchObject({ cause: 'producer_contract_defect', nextAction: null });
+  });
+
   it('emits one JSON result and the shared exit discriminator through the CLI', () => {
     const output: string[] = [];
     const errors: string[] = [];
     const code = runExecuteIssueManagerBoundaryCli([
-      'classify', '--record', '/fixture/turn.json', '--repo', context.repository, '--issue-number', '2081', '--source-revision', 'r03', '--phase', 'implementation', '--cdp', context.cdp!, '--conversation-url', context.conversationUrl!,
+      'classify', '--record', '/fixture/turn.json', '--repo', context.repository, '--issue-number', '2081', '--source-revision', 'r03', '--phase', 'implementation', '--production-argv-json', JSON.stringify(context.productionArgv), '--cdp', context.cdp!, '--conversation-url', context.conversationUrl!,
     ], {
       readFile: () => JSON.stringify(turn('chrome_not_running', { scope: 'machine' })),
       stdout: { write: (value) => output.push(value) }, stderr: { write: (value) => errors.push(value) },
@@ -128,5 +146,48 @@ describe('execute-Issue manager boundary', () => {
     expect(output).toHaveLength(1);
     expect(errors).toEqual([]);
     expect(JSON.parse(output[0]!)).toMatchObject({ cause: 'external:chrome_not_running', nextAction: null });
+  });
+
+  it('rejects an incomplete identity pair at the CLI boundary', () => {
+    const output: string[] = [];
+    const errors: string[] = [];
+    const code = runExecuteIssueManagerBoundaryCli([
+      'classify', '--record', '/fixture/turn.json', '--repo', context.repository, '--issue-number', '2081', '--source-revision', 'r03', '--phase', 'implementation',
+      '--production-argv-json', JSON.stringify(['node', 'producer.ts']), '--profile', '/operator/profile',
+    ], {
+      readFile: () => JSON.stringify(turn('observation_uncertain')),
+      stdout: { write: (value) => output.push(value) }, stderr: { write: (value) => errors.push(value) },
+      currentArgv: ['classifier', 'argv'],
+    });
+    expect(code).toBe(5);
+    expect(JSON.parse(output[0]!)).toMatchObject({ cause: 'producer_contract_defect', nextAction: null });
+    expect(errors.join('')).toContain('--profile and --invocation-id must be supplied together');
+  });
+
+  it('uses production argv for self-recommendation rather than classifier argv', () => {
+    const productionArgv = [
+      'node', '--experimental-strip-types', 'scripts/browser-gpt-page-probe.ts', 'inspect',
+      '--cdp', context.cdp!, '--url', context.conversationUrl!,
+    ];
+    const run = (argv: readonly string[], classifierArgv: readonly string[]) => {
+      const output: string[] = [];
+      const code = runExecuteIssueManagerBoundaryCli([
+        'classify', '--record', '/fixture/turn.json', '--repo', context.repository, '--issue-number', '2081',
+        '--source-revision', 'r03', '--phase', 'implementation', '--production-argv-json', JSON.stringify(argv),
+        '--cdp', context.cdp!, '--conversation-url', context.conversationUrl!,
+      ], {
+        readFile: () => JSON.stringify(turn('observation_uncertain')),
+        stdout: { write: (value) => output.push(value) }, stderr: { write: () => undefined },
+        currentArgv: classifierArgv,
+      });
+      return { code, result: JSON.parse(output[0]!) as Record<string, unknown> };
+    };
+
+    expect(run(productionArgv, ['classifier', 'different']).code).toBe(5);
+    expect(run(productionArgv, ['classifier', 'different']).result).toMatchObject({ cause: 'self_recommendation' });
+    expect(run([...productionArgv, 'different'], productionArgv)).toMatchObject({
+      code: 3,
+      result: { cause: 'execute_owned_turn_reobserve' },
+    });
   });
 });

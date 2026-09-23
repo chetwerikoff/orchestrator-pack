@@ -9,6 +9,7 @@ import {
   createIssueNextAction,
   createIssueRecoverableResult,
   createIssueTerminalResult,
+  evaluateCreateIssueManagerBoundary,
   existingPacedBoundedRetryAction,
   projectZeroSendManagerResult,
   validateCreateIssueBlockedOn,
@@ -89,6 +90,21 @@ describe('create-Issue nextAction contract', () => {
     expect(validateCreateIssueManagerResult({ ok: false, nextAction: null })).toContain(
       'manager non-success result.cause must be non-empty',
     );
+  });
+
+  it('classifies an ordinary non-success terminal result as a producer contract defect', () => {
+    const terminal = createIssueTerminalResult({ ok: false, cause: 'ordinary_terminal_result' });
+    const evaluated = evaluateCreateIssueManagerBoundary({
+      producer: 'fixture-producer',
+      currentArgv: ['node', 'fixture.ts'],
+      produce: () => terminal,
+    });
+    expect(evaluated.exitCode).toBe(5);
+    expect(evaluated.result).toMatchObject({
+      ok: false,
+      cause: 'producer_contract_defect',
+      nextAction: null,
+    });
   });
 
   it('keeps the one shared closed kind registry equal to production createIssueNextAction literals', () => {

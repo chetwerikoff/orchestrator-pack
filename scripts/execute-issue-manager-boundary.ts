@@ -26,8 +26,8 @@ function usage(): string {
     'Execute-Issue manager result boundary', '', 'Usage:',
     '  node --experimental-strip-types scripts/execute-issue-manager-boundary.ts classify',
     '    --record <path> --repo <owner/repo> --issue-number <n> --source-revision <rNN>',
-    '    --phase <implementation|review|fixer> [--cdp <url>]',
-    '    [--target-id <id> | --conversation-url <url>] [--pr-number <n>]', '',
+    '    --phase <implementation|review|fixer> --production-argv-json <json> [--cdp <url>]',
+    '    [--target-id <id> | --conversation-url <url>] [--profile <key> --invocation-id <id>] [--pr-number <n>]',
     'This classifier emits only the shared four-outcome manager result contract.',
     'Every nextAction.argv introduced here is read-only observation/reconciliation.',
   ].join('\n');
@@ -42,6 +42,19 @@ function parsePhase(value: string | undefined): ExecuteIssuePhase {
   if (!value || !EXECUTE_ISSUE_PHASES.includes(value as ExecuteIssuePhase)) throw new Error('--phase must be one of ' + EXECUTE_ISSUE_PHASES.join(', '));
   return value as ExecuteIssuePhase;
 }
+function parseProductionArgv(value: string | undefined): readonly string[] {
+  if (!value) throw new Error('--production-argv-json is required');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error('--production-argv-json must be a non-empty JSON array of non-empty strings');
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.some((item) => typeof item !== 'string' || item.trim().length === 0)) {
+    throw new Error('--production-argv-json must be a non-empty JSON array of non-empty strings');
+  }
+  return parsed;
+}
 function parseCli(argv: readonly string[]): ParsedCli {
   if (argv[0] !== 'classify') throw new Error('expected classify subcommand\n' + usage());
   const values = new Map<string, string>();
@@ -52,7 +65,7 @@ function parseCli(argv: readonly string[]): ParsedCli {
     if (values.has(key)) throw new Error('duplicate option ' + key);
     values.set(key, value);
   }
-  const allowed = new Set(['--record', '--repo', '--issue-number', '--source-revision', '--phase', '--cdp', '--target-id', '--conversation-url', '--pr-number']);
+  const allowed = new Set(['--record', '--repo', '--issue-number', '--source-revision', '--phase', '--production-argv-json', '--cdp', '--target-id', '--conversation-url', '--profile', '--invocation-id', '--pr-number']);
   for (const key of values.keys()) if (!allowed.has(key)) throw new Error('unknown option ' + key);
   const recordPath = values.get('--record');
   const repository = values.get('--repo');
@@ -63,6 +76,12 @@ function parseCli(argv: readonly string[]): ParsedCli {
   const targetId = values.get('--target-id');
   const conversationUrl = values.get('--conversation-url');
   if (targetId && conversationUrl) throw new Error('provide at most one of --target-id or --conversation-url');
+  const profile = values.get('--profile');
+  const invocationId = values.get('--invocation-id');
+  const hasProfile = values.has('--profile');
+  const hasInvocationId = values.has('--invocation-id');
+  if (hasProfile !== hasInvocationId) throw new Error('--profile and --invocation-id must be supplied together');
+  if (hasProfile && (!profile || !invocationId)) throw new Error('--profile and --invocation-id must be non-empty when supplied');
   const prRaw = values.get('--pr-number');
   return {
     recordPath,
@@ -71,9 +90,12 @@ function parseCli(argv: readonly string[]): ParsedCli {
       issueNumber: positiveInteger(values.get('--issue-number'), '--issue-number'),
       sourceRevision,
       phase: parsePhase(values.get('--phase')),
+      productionArgv: parseProductionArgv(values.get('--production-argv-json')),
       ...(values.get('--cdp') ? { cdp: values.get('--cdp') } : {}),
       ...(targetId ? { targetId } : {}),
       ...(conversationUrl ? { conversationUrl } : {}),
+      ...(profile !== undefined ? { profile } : {}),
+      ...(invocationId !== undefined ? { invocationId } : {}),
       ...(prRaw ? { prNumber: positiveInteger(prRaw, '--pr-number') } : {}),
     },
   };
@@ -93,7 +115,7 @@ export function runExecuteIssueManagerBoundaryCli(argv: readonly string[], depen
     const parsed = parseCli(argv);
     const readFile = dependencies.readFile ?? ((path: string) => readFileSync(path, 'utf8'));
     const input = JSON.parse(readFile(parsed.recordPath)) as unknown;
-    const evaluated = classifyExecuteIssueManagerRecord(input, { ...parsed.context, currentArgv });
+    const evaluated = classifyExecuteIssueManagerRecord(input, parsed.context);
     stdout.write(JSON.stringify(evaluated.result) + '\n');
     return evaluated.exitCode;
   } catch (error) {
