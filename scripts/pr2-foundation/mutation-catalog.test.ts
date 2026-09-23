@@ -51,14 +51,15 @@ describe('[Issue 1440] orchestration escalation guarantees', () => {
     );
     for (const required of [
       '## Bound-run inbox drain and acknowledgement',
-      '**Manager:** drain before starting or claiming the next authoring/review stage and immediately before manager `worker_done`.',
+      '**Manager:** drain before starting or claiming the next authoring/review stage, immediately before manager `worker_done`, and immediately before ending a turn without `worker_done`.',
       '**Worker:** drain immediately before worker `worker_done` and before emitting a blocker/escalation that hands control upward.',
       '**Coordinator / flow-manager / orchestrator acting on the bound Run:** drain before issuing a reply, ruling, escalation decision, or dispatch, and again before reporting its own turn complete.',
       'Exactly one acknowledgement is issued per Delivery, never per message.',
       'Supervised agents do not emit `type: heartbeat` / `subject: alive` control chatter merely to assert liveness.',
       'A supervised agent with no actionable report sends nothing.',
-      'A supervised agent emits `worker_done` exactly once, and only after its role\'s existing whole-task completion contract is satisfied.',
-      '`blocked_on` is not `worker_done` and never completes the parent task.',
+      'A supervised manager emits `worker_done --outcome succeeded` exactly once, and only after acceptance satisfies its existing whole-task completion contract.',
+      '`recoverable`, `external_pause`, and `contract_defect` never complete or settle the parent task.',
+      'A manager sends `worker_done --outcome failed` only after a direct coordinator/operator cancellation message',
       'S1 remains the sole liveness observer',
       '`nested_worker_depth_exceeded` -> use the existing pane-launch path instead of nesting another worker;',
       '`dispatch_capability_invalid` -> use the existing orchestration mailbox fallback/path instead of re-dispatching the revoked capability;',
