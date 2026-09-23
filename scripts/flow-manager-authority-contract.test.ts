@@ -381,7 +381,9 @@ describe('Issue #1514 flow-manager recovery ownership contract', () => {
 
   it('keeps anti-silent-idle, existing escalation/publication authority, and producer-before-validator', () => {
     expect(authority).toContain('Nonterminality does not authorize an indefinite or silent wait');
-    expect(authority).toContain('leave visible bounded-wait or\nrouting evidence');
+    expect(authority.replace(/\s+/g, ' ')).toContain(
+      'If no legal repository-owned continuation is currently available, classify the result at the shared boundary: external reality becomes `external_pause` with remedy/evidence/resumption, and a missing or malformed producer becomes `contract_defect`.',
+    );
     expect(authority).toContain('fleet-reconciliation-handoff/v1');
     expect(authority).toContain('operator-only-escalation-classes: business-contract-change, material-reviewer-conflict');
     expect(authority).not.toContain('terminal-infrastructure-refusal');
@@ -796,7 +798,10 @@ describe('Issue #1431 manager reviewer canon', () => {
 
   it('routes a stale direct-publication handoff receipt to readonly reconciliation', async () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-create-issue-stale-handoff-'));
-    const stdout = captureWrite(process.stdout);
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      logs.push(String(line));
+    });
     const stderr = captureWrite(process.stderr);
     try {
       const handoff = join(root, 'handoff.json');
@@ -825,7 +830,7 @@ describe('Issue #1431 manager reviewer canon', () => {
         '--stage-attempt-id', 'stage-attempt-r07',
       ]);
       expect(code).toBe(3);
-      const output = JSON.parse(stdout.chunks.at(-1) ?? '{}') as Record<string, unknown>;
+      const output = JSON.parse(logs.at(-1) ?? '{}') as Record<string, unknown>;
       expect(output).toMatchObject({
         ok: false,
         cause: 'stale_handoff_receipt',
@@ -841,7 +846,7 @@ describe('Issue #1431 manager reviewer canon', () => {
         },
       });
     } finally {
-      stdout.restore();
+      logSpy.mockRestore();
       stderr.restore();
       rmSync(root, { recursive: true, force: true });
     }
@@ -850,7 +855,10 @@ describe('Issue #1431 manager reviewer canon', () => {
   it('revalidates a preflight retry against the live Issue before any lifecycle mutation or Browser-GPT launch', async () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-create-issue-browser-stale-retry-'));
     const stderr = captureWrite(process.stderr);
-    const stdout = captureWrite(process.stdout);
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      logs.push(String(line));
+    });
     try {
       const argv = [
         '--run-identity', 'run-stale-retry',
@@ -888,12 +896,12 @@ describe('Issue #1431 manager reviewer canon', () => {
         spawnLauncher,
       });
       expect(first).toBe(3);
-      const firstResult = JSON.parse(stdout.chunks.at(-1) ?? '{}') as {
+      const firstResult = JSON.parse(logs.at(-1) ?? '{}') as {
         nextAction?: { argv?: string[] };
       };
       const retryCommand = firstResult.nextAction?.argv ?? [];
       expect(retryCommand.length).toBeGreaterThan(3);
-      stdout.chunks.length = 0;
+      logs.length = 0;
 
       const inspectLifecycleBinding = vi.fn();
       const recordAdmission = vi.fn();
@@ -925,7 +933,7 @@ describe('Issue #1431 manager reviewer canon', () => {
         spawnLauncher,
       });
       expect(retry).toBe(3);
-      const stale = JSON.parse(stdout.chunks.at(-1) ?? '{}') as Record<string, unknown>;
+      const stale = JSON.parse(logs.at(-1) ?? '{}') as Record<string, unknown>;
       expect(stale).toMatchObject({
         schema: 'create-issue-stale-next-action/v1',
         cause: 'stale_next_action',
@@ -936,7 +944,7 @@ describe('Issue #1431 manager reviewer canon', () => {
       expect(recordAdmission).not.toHaveBeenCalled();
       expect(spawnLauncher).not.toHaveBeenCalled();
     } finally {
-      stdout.restore();
+      logSpy.mockRestore();
       stderr.restore();
       rmSync(root, { recursive: true, force: true });
     }
