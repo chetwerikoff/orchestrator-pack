@@ -24,6 +24,7 @@ import {
   classifyZeroSendCausePolicy,
 } from './lib/create-issue-stage-record-artifacts.ts';
 import { buildManagerReviewTerminalBundle } from './lib/manager-review-terminal-bundle.ts';
+import { runManagerReviewTerminalBundleCli } from './manager-review-terminal-bundle.ts';
 import { canonicalStagePlan } from './lib/create-issue-stage-topology.ts';
 import {
   selectPrincipalOwnedCanonicalArtifact,
@@ -835,6 +836,67 @@ describe('Issue #1998 declaration-owned manager CLI contracts', () => {
       expect(output).toContain('Usage:');
     } finally {
       stderr.mockRestore();
+    }
+  });
+});
+
+describe('Issue #1998 CLI actor and declaration-owned help contracts', () => {
+  it('refuses start-cycle without explicit public actor before lifecycle mutation', () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const code = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'start-cycle',
+        '--repo', 'chetwerikoff/orchestrator-pack',
+        '--issue-number', '1998',
+        '--source-revision', 'r01',
+        '--stage', 'architectural-review',
+        '--tier', 'T2',
+        '--json',
+      ]);
+      expect(code).toBe(2);
+      expect(stderr.mock.calls.flat().join('')).toContain('--public-actor is required');
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it('renders flow-manager top-level help from its declaration before required option checks', async () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      expect(await runBrowserAdapter(['--help'])).toBe(0);
+      const output = stdout.mock.calls.flat().join('');
+      expect(output).toContain('Usage:');
+      expect(output).toContain('--run-identity');
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it('renders manager review terminal bundle top-level help from its declaration', () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      expect(runManagerReviewTerminalBundleCli(['--help'])).toBe(0);
+      const output = stdout.mock.calls.flat().join('');
+      expect(output).toContain('Usage:');
+      expect(output).toContain('--issue-number');
+      expect(output).toContain('--source-revision');
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it('renders create-issue-stage-finalize top-level and subcommand help from its declaration', () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      expect(runStageFinalizeCli(['node', 'scripts/create-issue-stage-finalize.ts', '--help'])).toBe(0);
+      expect(stdout.mock.calls.flat().join('')).toContain('create-issue-stage-finalize.ts start-cycle');
+      stdout.mockClear();
+      expect(runStageFinalizeCli(['node', 'scripts/create-issue-stage-finalize.ts', 'start-cycle', '--help'])).toBe(0);
+      const output = stdout.mock.calls.flat().join('');
+      expect(output).toContain('start-cycle');
+      expect(output).toContain('--public-actor <opencode-flow-manager|cursor-flow-manager|codex-flow-manager|other-flow-manager>');
+    } finally {
+      stdout.mockRestore();
     }
   });
 });

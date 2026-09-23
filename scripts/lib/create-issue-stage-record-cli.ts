@@ -44,10 +44,15 @@ import {
   parseRequiredPositiveInt,
   runReviewerTsCli,
 } from './reviewer-ts-cli.ts';
+import {
+  inspectManagerCliInvocation,
+  renderManagerCliUsage,
+  type ManagerCliDeclaration,
+} from './manager-cli-contract.ts';
 
 interface JournalTailCliOptions {
   json: boolean;
-  publicActor: PublicActor;
+  publicActor?: PublicActor;
   workdir?: string;
 }
 
@@ -109,6 +114,175 @@ interface FinalAcceptanceCliOptions extends JournalTailCliOptions {
   operatorFindingCount?: string;
   operatorReason?: string;
 }
+
+export const CREATE_ISSUE_FINAL_ACCEPTANCE_CLI_DECLARATION = {
+  program: 'create-issue-final-acceptance.ts',
+  options: [
+    { flag: '--repo', value: 'owner/name' },
+    { flag: '--issue-number', value: 'n', required: true },
+    { flag: '--cycle-id', value: 'assertion' },
+    { flag: '--issue-body', value: 'assertion-path' },
+    { flag: '--issue-revision', value: 'assertion-rNN' },
+    { flag: '--review-dir', value: 'path', required: true },
+    { flag: '--stage-receipt', value: 'path', repeatable: true },
+    { flag: '--capture', value: 'path', repeatable: true },
+    { flag: '--ledger', value: 'path' },
+    { flag: '--relay-evidence', value: 'path', repeatable: true },
+    { flag: '--claude-producer-evidence', value: 'path', repeatable: true },
+    { flag: '--external-pass-receipt', value: 'path' },
+    { flag: '--operator-issue-number', value: 'n' },
+    { flag: '--operator-source-revision', value: 'rNN' },
+    { flag: '--operator-verdict-url', value: 'url' },
+    { flag: '--operator-verdict-sha256', value: 'hex' },
+    { flag: '--operator-verdict-byte-length', value: 'n' },
+    { flag: '--operator-finding-count', value: 'n' },
+    { flag: '--operator-reason', value: 'text' },
+    { flag: '--public-actor', value: 'actor', values: [...PUBLIC_ACTORS], required: true },
+    { flag: '--workdir', value: 'path' },
+    { flag: '--json' },
+  ],
+} as const satisfies ManagerCliDeclaration;
+
+const STAGE_FINALIZE_CLI_COMMON_OPTIONS = [
+  { flag: '--repo', value: 'owner/name' },
+  { flag: '--workdir', value: 'path' },
+  { flag: '--json' },
+  { flag: '--waiver', value: 'path' },
+] as const;
+
+export const STAGE_FINALIZE_CLI_DECLARATION = {
+  program: 'create-issue-stage-finalize.ts',
+  commands: [
+    {
+      name: 'start-cycle',
+      options: [
+        ...STAGE_FINALIZE_CLI_COMMON_OPTIONS,
+        { flag: '--issue-number', value: 'n', required: true },
+        { flag: '--source-revision', value: 'rNN', required: true },
+        { flag: '--stage', value: 'stage', values: ['competitive', 'architectural-review', 'architectural-lens', 'architectural'], required: true },
+        { flag: '--tier', value: 'tier', values: ['T1', 'T2', 'T3'], required: true },
+        { flag: '--public-actor', value: 'actor', values: [...PUBLIC_ACTORS], required: true },
+        { flag: '--stage-attempt-id', value: 'id' },
+        { flag: '--permitted-lane-override', value: 'override', values: ['normal', 'disputed'] },
+        { flag: '--competitive-decision', value: 'decision', values: ['required', 'skipped'] },
+        { flag: '--competitive-rationale', value: 'text' },
+        { flag: '--predecessor-cycle-id', value: 'id' },
+        { flag: '--expected-source-revision', value: 'rNN' },
+        { flag: '--expected-stage', value: 'stage', values: ['competitive', 'architectural-review', 'architectural-lens', 'architectural'] },
+        { flag: '--expected-stage-attempt-id', value: 'id' },
+        { flag: '--blocked-on-json', value: 'json' },
+      ],
+    },
+    {
+      name: 'publish-stage',
+      options: [
+        ...STAGE_FINALIZE_CLI_COMMON_OPTIONS,
+        { flag: '--issue-number', value: 'n', required: true },
+        { flag: '--receipt', value: 'path', required: true },
+        { flag: '--public-actor', value: 'actor', values: [...PUBLIC_ACTORS] },
+        { flag: '--blocked-on-json', value: 'json' },
+      ],
+    },
+    {
+      name: 'retry-pending',
+      options: [
+        ...STAGE_FINALIZE_CLI_COMMON_OPTIONS,
+        { flag: '--issue-number', value: 'n', required: true },
+        { flag: '--expected-source-revision', value: 'rNN' },
+        { flag: '--expected-stage', value: 'stage', values: ['competitive', 'architectural-review', 'architectural-lens', 'architectural'] },
+        { flag: '--expected-stage-attempt-id', value: 'id' },
+        { flag: '--public-actor', value: 'actor', values: [...PUBLIC_ACTORS] },
+        { flag: '--blocked-on-json', value: 'json' },
+      ],
+    },
+    {
+      name: 'reconcile-stage',
+      options: [
+        ...STAGE_FINALIZE_CLI_COMMON_OPTIONS,
+        { flag: '--issue-number', value: 'n', required: true },
+        { flag: '--review-dir', value: 'path', required: true },
+        { flag: '--stage-evidence', value: 'path', required: true },
+        { flag: '--expected-source-revision', value: 'rNN' },
+        { flag: '--expected-stage', value: 'stage', values: ['competitive', 'architectural-review', 'architectural-lens', 'architectural'] },
+        { flag: '--expected-stage-attempt-id', value: 'id' },
+        { flag: '--public-actor', value: 'actor', values: [...PUBLIC_ACTORS] },
+        { flag: '--blocked-on-json', value: 'json' },
+        { flag: '--operator-issue-number', value: 'n' },
+        { flag: '--operator-source-revision', value: 'rNN' },
+        { flag: '--operator-verdict-url', value: 'url' },
+        { flag: '--operator-verdict-sha256', value: 'hex' },
+        { flag: '--operator-verdict-byte-length', value: 'n' },
+        { flag: '--operator-finding-count', value: 'n' },
+        { flag: '--operator-reason', value: 'text' },
+      ],
+    },
+    {
+      name: 'bind-published-comment',
+      options: [
+        { flag: '--repo', value: 'owner/name' },
+        { flag: '--issue-number', value: 'n', required: true },
+        { flag: '--review-dir', value: 'path', required: true },
+        { flag: '--stage-evidence', value: 'path', required: true },
+        { flag: '--reviewer-slot', value: 'slot', required: true },
+        { flag: '--invocation-id', value: 'id', required: true },
+        { flag: '--comment-url', value: 'url', required: true },
+        { flag: '--waiver', value: 'path' },
+        { flag: '--workdir', value: 'path' },
+        { flag: '--public-actor', value: 'actor', values: [...PUBLIC_ACTORS] },
+        { flag: '--expected-source-revision', value: 'rNN' },
+        { flag: '--expected-stage', value: 'stage', values: ['competitive', 'architectural-review', 'architectural-lens', 'architectural'] },
+        { flag: '--expected-stage-attempt-id', value: 'id' },
+        { flag: '--json' },
+      ],
+    },
+    {
+      name: 'produce-artifacts',
+      options: [
+        ...STAGE_FINALIZE_CLI_COMMON_OPTIONS,
+        { flag: '--issue-number', value: 'n' },
+        { flag: '--review-dir', value: 'path', required: true },
+        { flag: '--output-dir', value: 'path' },
+        { flag: '--tier-intake', value: 'path' },
+        { flag: '--stage-evidence', value: 'path', repeatable: true },
+        { flag: '--author-dispositions', value: 'path' },
+        { flag: '--claude-producer-evidence', value: 'path', repeatable: true },
+        { flag: '--phase', value: 'phase', values: ['pre-lens', 'post-lens', 'final-acceptance'] },
+        { flag: '--public-actor', value: 'actor', values: [...PUBLIC_ACTORS] },
+        { flag: '--blocked-on-json', value: 'json' },
+        { flag: '--operator-issue-number', value: 'n' },
+        { flag: '--operator-source-revision', value: 'rNN' },
+        { flag: '--operator-verdict-url', value: 'url' },
+        { flag: '--operator-verdict-sha256', value: 'hex' },
+        { flag: '--operator-verdict-byte-length', value: 'n' },
+        { flag: '--operator-finding-count', value: 'n' },
+        { flag: '--operator-reason', value: 'text' },
+      ],
+    },
+    {
+      name: 'check-artifacts',
+      options: [
+        ...STAGE_FINALIZE_CLI_COMMON_OPTIONS,
+        { flag: '--issue-number', value: 'n' },
+        { flag: '--review-dir', value: 'path', required: true },
+        { flag: '--output-dir', value: 'path' },
+        { flag: '--tier-intake', value: 'path' },
+        { flag: '--stage-evidence', value: 'path', repeatable: true },
+        { flag: '--author-dispositions', value: 'path' },
+        { flag: '--claude-producer-evidence', value: 'path', repeatable: true },
+        { flag: '--phase', value: 'phase', values: ['pre-lens', 'post-lens', 'final-acceptance'] },
+        { flag: '--public-actor', value: 'actor', values: [...PUBLIC_ACTORS] },
+        { flag: '--blocked-on-json', value: 'json' },
+        { flag: '--operator-issue-number', value: 'n' },
+        { flag: '--operator-source-revision', value: 'rNN' },
+        { flag: '--operator-verdict-url', value: 'url' },
+        { flag: '--operator-verdict-sha256', value: 'hex' },
+        { flag: '--operator-verdict-byte-length', value: 'n' },
+        { flag: '--operator-finding-count', value: 'n' },
+        { flag: '--operator-reason', value: 'text' },
+      ],
+    },
+  ],
+} as const satisfies ManagerCliDeclaration;
 
 function finishJournalArgvParse<T extends { json: boolean }>(
   arg: string,
@@ -257,17 +431,7 @@ function runParsedCli<T>(
 }
 
 export function stageFinalizeUsage(): string {
-  return [
-    'Usage:',
-    `  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> --stage <competitive|architectural-review|architectural-lens|architectural> --tier <T1|T2|T3> [--competitive-decision <required|skipped> --competitive-rationale <text>] [--stage-attempt-id <retry-id>] [--permitted-lane-override <normal|disputed>] [--public-actor <${[...PUBLIC_ACTORS].join('|')}>] [--predecessor-cycle-id <id>] [--workdir <path>] [--expected-source-revision <rNN> --expected-stage <stage> --expected-stage-attempt-id <id>] [--json]`,
-    '  create-issue-stage-finalize.ts publish-stage --repo <owner/name> --issue-number <n> --receipt <path> [--waiver <path>] [--workdir <path>] [--json]',
-    '  create-issue-stage-finalize.ts retry-pending --repo <owner/name> --issue-number <n> [--workdir <path>] [--expected-source-revision <rNN> --expected-stage <stage> --expected-stage-attempt-id <id>] [--json]',
-    '  create-issue-stage-finalize.ts reconcile-stage --repo <owner/name> --issue-number <n> --review-dir <path> --stage-evidence <attempt-NNN.json> [--json]',
-    '  create-issue-stage-finalize.ts bind-published-comment --repo <owner/name> --issue-number <n> --review-dir <path> --stage-evidence <attempt-NNN.json> --reviewer-slot <slot> --invocation-id <id> --comment-url <url> [--json]',
-    '  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> [--tier-intake <path>] [--stage-evidence <path>...] [--author-dispositions <target-path>] [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--phase <pre-lens|post-lens|final-acceptance>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--json]',
-    '  create-issue-stage-finalize.ts check-artifacts --review-dir <path> [--tier-intake <path>] [--stage-evidence <path>...] [--author-dispositions <derived-path>] [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--json]',
-    '  manager-result commands additionally accept --blocked-on-json <json> only for a coordinator/task-dispatch authoritative active-unsatisfied-blocker assertion',
-  ].join('\n');
+  return renderManagerCliUsage(STAGE_FINALIZE_CLI_DECLARATION);
 }
 
 export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
@@ -279,7 +443,6 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
     command,
     repo: 'chetwerikoff/orchestrator-pack',
     issueNumber: 0,
-    publicActor: 'cursor-flow-manager',
     json: false,
     stageEvidencePaths: [],
     claudeProducerEvidencePaths: [],
@@ -444,10 +607,7 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
 }
 
 function finalAcceptanceUsage(): string {
-  return [
-    'Usage:',
-    `  create-issue-final-acceptance.ts --repo <owner/name> --issue-number <n> --review-dir <path> [--cycle-id <assertion>] [--issue-body <assertion-path>] [--issue-revision <assertion-rNN>] [--stage-receipt <assertion-path>...] [--capture <path>...] [--ledger <path>] [--relay-evidence <path>...] [--claude-producer-evidence <path>...] [--external-pass-receipt <path>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--public-actor <${[...PUBLIC_ACTORS].join('|')}>] [--workdir <path>] [--json]`,
-  ].join('\n');
+  return renderManagerCliUsage(CREATE_ISSUE_FINAL_ACCEPTANCE_CLI_DECLARATION);
 }
 
 function parseFinalAcceptanceArgs(argv: string[]): FinalAcceptanceCliOptions {
@@ -462,7 +622,6 @@ function parseFinalAcceptanceArgs(argv: string[]): FinalAcceptanceCliOptions {
     capturePaths: [],
     relayEvidencePaths: [],
     claudeProducerEvidencePaths: [],
-    publicActor: 'cursor-flow-manager',
     json: false,
   };
   for (let i = 2; i < argv.length; i += 1) {
@@ -780,9 +939,9 @@ function poisonSuccessorStartCycleArgv(
     '--expected-source-revision', binding.sourceRevision,
     '--expected-stage', binding.stage,
     '--expected-stage-attempt-id', binding.stageAttemptId ?? '',
-    '--public-actor', opts.publicActor,
     '--json',
   ];
+  if (opts.publicActor) argv.push('--public-actor', opts.publicActor);
   if (opts.competitiveDecision) argv.push('--competitive-decision', opts.competitiveDecision);
   if (opts.competitiveRationale) argv.push('--competitive-rationale', opts.competitiveRationale);
   if (opts.permittedLaneOverride) argv.push('--permitted-lane-override', opts.permittedLaneOverride);
@@ -894,7 +1053,20 @@ function staleRetryPendingBinding(
 }
 
 export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: GhTransport): number {
+  const inspected = inspectManagerCliInvocation(STAGE_FINALIZE_CLI_DECLARATION, argv.slice(2));
+  if (inspected.help) {
+    process.stdout.write(inspected.help + '\n');
+    return 0;
+  }
+  if (inspected.error) {
+    process.stderr.write('create-issue-stage-finalize: ' + inspected.error + '\n');
+    return 2;
+  }
   return runParsedCli(argv, 'create-issue-stage-finalize', parseStageFinalizeArgs, (opts) => {
+    if (opts.command === 'start-cycle' && !opts.publicActor) {
+      process.stderr.write('create-issue-stage-finalize: --public-actor is required for start-cycle before lifecycle mutation\n');
+      return 2;
+    }
     if (opts.command === 'bind-published-comment') {
       const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
       const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
@@ -1127,7 +1299,7 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
         tier,
         competitiveDecision: opts.competitiveDecision,
         competitiveRationale: opts.competitiveRationale,
-        publicActor: opts.publicActor,
+        publicActor: opts.publicActor!,
         predecessorCycleId: opts.predecessorCycleId,
         workdir: opts.workdir,
       });
@@ -1222,7 +1394,7 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
           stageAttemptId: opts.expectedStageAttemptId,
         } satisfies CreateIssueActionBinding
       : null;
-    const nextAction = recoveryBinding && recovery
+    const nextAction = recoveryBinding && recovery && opts.publicActor
       ? createIssueNextAction({
           kind: 'retry-start-cycle',
           binding: recoveryBinding,
@@ -1275,9 +1447,9 @@ function finalAcceptanceRetryAction(
     '--issue-number', String(issueNumber),
     '--review-dir', reviewDir,
     '--issue-revision', sourceRevision,
-    '--public-actor', opts.publicActor,
     '--json',
   ];
+  if (opts.publicActor) argv.push('--public-actor', opts.publicActor);
   if (opts.workdir) argv.push('--workdir', opts.workdir);
   if (opts.externalPassReceiptPath) argv.push('--external-pass-receipt', opts.externalPassReceiptPath);
   for (const path of opts.claudeProducerEvidencePaths) argv.push('--claude-producer-evidence', path);
@@ -1350,6 +1522,15 @@ function finalAcceptanceRecoveryAction(
 }
 
 export function runFinalAcceptanceCli(argv: string[]): number {
+  const inspected = inspectManagerCliInvocation(CREATE_ISSUE_FINAL_ACCEPTANCE_CLI_DECLARATION, argv.slice(2));
+  if (inspected.help) {
+    process.stdout.write(inspected.help + '\n');
+    return 0;
+  }
+  if (inspected.error) {
+    process.stderr.write('create-issue-final-acceptance: ' + inspected.error + '\n');
+    return 2;
+  }
   return runParsedCli(argv, 'create-issue-final-acceptance', parseFinalAcceptanceArgs, (opts) => {
     const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
     const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
@@ -1558,7 +1739,7 @@ export function runFinalAcceptanceCli(argv: string[]): number {
       claudeProducerEvidencePaths: claudePaths,
       externalPassReceiptPath: opts.externalPassReceiptPath,
       operatorAdjudication: operatorAcceptanceAdjudication({ ...opts, phase: 'final-acceptance' }),
-      publicActor: opts.publicActor,
+      publicActor: opts.publicActor!,
       workdir: opts.workdir,
     });
 
