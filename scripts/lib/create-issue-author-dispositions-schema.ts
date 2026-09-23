@@ -80,6 +80,8 @@ export type AuthorDispositionDiagnosticReason =
   | 'malformed_json'
   | 'invalid_author_field';
 
+export type AuthorDispositionOwnership = 'author-owned' | 'lifecycle-injected' | 'unclassified';
+
 export interface AuthorDispositionDiagnostic {
   reason: AuthorDispositionDiagnosticReason;
   ownership: 'author-owned';
@@ -101,11 +103,73 @@ function nonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+const OCCURRENCE_ID_RE = /^sha256:[a-f0-9]{64}:[^:\n]+:[1-9][0-9]*$/i;
+
 function stringArray(value: unknown): value is string[] {
   return Array.isArray(value)
     && value.length > 0
     && value.every((entry) => nonEmptyString(entry))
     && new Set(value).size === value.length;
+}
+
+function fieldToken(field: string): string {
+  return field
+    .replace(/\[\]/g, '')
+    .replace(/\[[0-9]+\]/g, '')
+    .split(/[ .]/)[0]!
+    .trim();
+}
+
+export function authorDispositionFieldOwnership(field: string): AuthorDispositionOwnership {
+  const token = fieldToken(field);
+  const authorFields = [
+    ...AUTHOR_DISPOSITION_FIELD_OWNERSHIP.authorOwnedRequired,
+    ...AUTHOR_DISPOSITION_FIELD_OWNERSHIP.authorOwnedConditional,
+    ...AUTHOR_DISPOSITION_FIELD_OWNERSHIP.authorOwnedOptional,
+  ].map(fieldToken);
+  if (authorFields.some((candidate) => token === candidate || token.startsWith(candidate + '.'))) {
+    return 'author-owned';
+  }
+  const lifecycleFields = AUTHOR_DISPOSITION_FIELD_OWNERSHIP.lifecycleInjected.map(fieldToken);
+  if (lifecycleFields.some((candidate) => token === candidate || token.startsWith(candidate + '.'))) {
+    return 'lifecycle-injected';
+  }
+  return 'unclassified';
+}
+
+export function classifyAuthorDispositionFailure(message: string): AuthorDispositionOwnership {
+  const normalized = message.toLowerCase();
+  for (const field of AUTHOR_DISPOSITION_FIELD_OWNERSHIP.lifecycleInjected) {
+    const token = fieldToken(field).toLowerCase();
+    if (token && normalized.includes(token)) return 'lifecycle-injected';
+  }
+  if (normalized.includes('terminalresultidentity')
+    || normalized.includes('stageattemptid')
+    || normalized.includes('reviewer source')
+    || normalized.includes('reviewer slot')
+    || normalized.includes('review lane')
+    || normalized.includes('capture identity')
+    || normalized.includes('relayeligiblecaptures')
+    || normalized.includes('credentialing')
+    || normalized.includes('review episode tier')
+    || normalized.includes('predecessorstage')) {
+    return 'lifecycle-injected';
+  }
+  if (normalized.includes('authority=author-owned')
+    || normalized.includes('governed author')
+    || normalized.includes('missing_schema_label')
+    || normalized.includes('malformed_json')) {
+    return 'author-owned';
+  }
+  for (const field of [
+    ...AUTHOR_DISPOSITION_FIELD_OWNERSHIP.authorOwnedRequired,
+    ...AUTHOR_DISPOSITION_FIELD_OWNERSHIP.authorOwnedConditional,
+    ...AUTHOR_DISPOSITION_FIELD_OWNERSHIP.authorOwnedOptional,
+  ]) {
+    const token = fieldToken(field).toLowerCase();
+    if (token && normalized.includes(token)) return 'author-owned';
+  }
+  return 'unclassified';
 }
 
 function diagnostic(
@@ -155,6 +219,12 @@ function validateFinding(
       `${base}.occurrences`,
       `${base}.occurrences must be a non-empty unique string array`,
     ));
+  } else if (finding.occurrences.some((entry) => !OCCURRENCE_ID_RE.test(entry))) {
+    diagnostics.push(diagnostic(
+      'invalid_author_field',
+      `${base}.occurrences`,
+      `${base}.occurrences must use sha256:<digest>:<capture-filename>:<ordinal> identities`,
+    ));
   }
   if (!DEFECT_DISPOSITION_VALUES.includes(
     finding.defectDisposition as typeof DEFECT_DISPOSITION_VALUES[number],
@@ -188,6 +258,29 @@ function validateFinding(
       'invalid_author_field',
       `${base}.proposalReason`,
       `${base}.proposalReason is required when remedyDisposition is not accepted`,
+    ));
+  }
+  for (const booleanField of ['architectPending', 'architectRequired', 'simplificationCutCandidate'] as const) {
+    if (finding[booleanField] !== undefined && typeof finding[booleanField] !== 'boolean') {
+      diagnostics.push(diagnostic(
+        'invalid_author_field',
+        `${base}.${booleanField}`,
+        `${base}.${booleanField} must be boolean when present`,
+      ));
+    }
+  }
+  if (finding.protectedActivation !== undefined && !isRecord(finding.protectedActivation)) {
+    diagnostics.push(diagnostic(
+      'invalid_author_field',
+      `${base}.protectedActivation`,
+      `${base}.protectedActivation must be an object when present`,
+    ));
+  }
+  if (finding.protectedOccurrences !== undefined && !Array.isArray(finding.protectedOccurrences)) {
+    diagnostics.push(diagnostic(
+      'invalid_author_field',
+      `${base}.protectedOccurrences`,
+      `${base}.protectedOccurrences must be an array when present`,
     ));
   }
 }
@@ -244,8 +337,14 @@ export function validateGovernedAuthorDispositionValue(
         ));
         return;
       }
-      if (item.disposition !== undefined
-        && !M4_DISPOSITION_VALUES.includes(item.disposition as typeof M4_DISPOSITION_VALUES[number])) {
+      if (!nonEmptyString(item.mechanism)) {
+        diagnostics.push(diagnostic(
+          'invalid_author_field',
+          `m4.inventory[${index}].mechanism`,
+          `m4.inventory[${index}].mechanism must be a non-empty string`,
+        ));
+      }
+      if (!M4_DISPOSITION_VALUES.includes(item.disposition as typeof M4_DISPOSITION_VALUES[number])) {
         diagnostics.push(diagnostic(
           'invalid_author_field',
           `m4.inventory[${index}].disposition`,
@@ -266,12 +365,14 @@ export function renderAuthorDispositionPromptFragment(): string {
     '- schema: create-issue-author-dispositions/v1',
     '- sourceRevision: rNN',
     '- findings: array; each row requires id, type, occurrences, defectDisposition, remedyDisposition',
+    '- occurrences must enumerate the governed canonical capture occurrences exactly as sha256:<digest>:<capture-filename>:<ordinal>; do not omit, duplicate, or invent occurrence identities',
     `- finding type: ${AUTHOR_FINDING_TYPES.join('|')}`,
     `- defectDisposition: ${DEFECT_DISPOSITION_VALUES.join('|')}`,
     `- remedyDisposition: ${REMEDY_DISPOSITION_VALUES.join('|')}`,
     '- rejectReason is required for defectDisposition=rejected-as-false',
     '- proposalReason is required when remedyDisposition is not accepted',
-    '- m4.inventory: array; inventory disposition when present is keep|simplify|defer|cut',
+    '- optional M3 fields architectPending, architectRequired, protectedActivation, protectedOccurrences, and simplificationCutCandidate remain author-owned when applicable',
+    '- m4.inventory: array; every row requires mechanism and disposition=keep|simplify|defer|cut',
     'Do not author lifecycle fields such as predecessorStage, reviewEpisodeId, tier, stage-attempt, invocation/terminal, review-lane, capture/relay/credentialing, or stable Issue facts; the lifecycle producer injects them.',
   ].join('\n');
 }
