@@ -202,6 +202,8 @@ function dependencies(input: {
   assignmentStorePath: string;
   adapter: RuntimeAdapter;
   runAttempt?: NonNullable<PostReviewSmokeDependencies['runAttempt']>;
+  observeDetachedAttempt?: NonNullable<PostReviewSmokeDependencies['observeDetachedAttempt']>;
+  startDetachedAttempt?: NonNullable<PostReviewSmokeDependencies['startDetachedAttempt']>;
 }): PostReviewSmokeDependencies {
   return {
     projectId: 'orchestrator-pack',
@@ -217,6 +219,8 @@ function dependencies(input: {
       '```',
     ].join('\n'),
     ...(input.runAttempt ? { runAttempt: input.runAttempt } : {}),
+    ...(input.observeDetachedAttempt ? { observeDetachedAttempt: input.observeDetachedAttempt } : {}),
+    ...(input.startDetachedAttempt ? { startDetachedAttempt: input.startDetachedAttempt } : {}),
   };
 }
 function remoteActuationRecords(options: PackReviewAuthorityOptions) {
@@ -288,6 +292,118 @@ describe('Issue #1418 post-review smoke reconciliation', () => {
 
     expect(result).toEqual({ handled: true, attempted: true, reason: 'post_review_smoke_completed', exitCode: 0 });
     expect(effects).toBe(1);
+  });
+
+  it('starts one detached owner for an absent exact-head lifecycle and returns without waiting for smoke completion', async () => {
+    const fixture = rootFixture();
+    const options: PackReviewAuthorityOptions = { storeRoot: fixture.reviewStoreRoot };
+    settleReview(options);
+    const assignment = await publishLocal(fixture.assignmentStorePath, 'dispatch-detached-start');
+    const workspacePath = path.join(fixture.root, 'worker-detached-start');
+    const adapter = runtimeFor(assignment.bindingKey, workspacePath);
+    const startDetachedAttempt = vi.fn(async (smokeOptions) => {
+      expect(smokeOptions).toMatchObject({
+        issueNumber: ISSUE,
+        prNumber: PR,
+        headSha: HEAD,
+        cwd: workspacePath,
+        repoRoot: workspacePath,
+        smokeActor: 'independent',
+      });
+      return { ok: true as const, runId: 'run-detached-start' };
+    });
+
+    const result = await reconcilePostReviewSmoke(candidate, dependencies({
+      ...fixture,
+      adapter,
+      observeDetachedAttempt: () => ({ kind: 'absent' as const }),
+      startDetachedAttempt,
+    }));
+
+    expect(result).toEqual({
+      handled: true,
+      attempted: true,
+      reason: 'post_review_smoke_detached_started',
+    });
+    expect(startDetachedAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it('observes one active exact-head detached owner without starting a duplicate', async () => {
+    const fixture = rootFixture();
+    const options: PackReviewAuthorityOptions = { storeRoot: fixture.reviewStoreRoot };
+    settleReview(options);
+    const assignment = await publishLocal(fixture.assignmentStorePath, 'dispatch-detached-active');
+    const adapter = runtimeFor(assignment.bindingKey, path.join(fixture.root, 'worker-detached-active'));
+    const startDetachedAttempt = vi.fn(async () => ({ ok: true as const, runId: 'unexpected' }));
+
+    const result = await reconcilePostReviewSmoke(candidate, dependencies({
+      ...fixture,
+      adapter,
+      observeDetachedAttempt: () => ({
+        kind: 'active' as const,
+        runId: 'run-detached-active',
+        artifactDir: '/tmp/run-detached-active',
+      }),
+      startDetachedAttempt,
+    }));
+
+    expect(result).toEqual({
+      handled: true,
+      attempted: false,
+      reason: 'post_review_smoke_detached_active',
+    });
+    expect(startDetachedAttempt).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['PASS', 0, 'post_review_smoke_detached_terminal_pass'],
+    ['FAIL', 1, 'post_review_smoke_detached_terminal_fail'],
+    ['BLOCKED', 1, 'post_review_smoke_detached_terminal_blocked'],
+  ] as const)('consumes terminal detached %s evidence without rerunning the same head', async (resultName, exitCode, reason) => {
+    const fixture = rootFixture();
+    const options: PackReviewAuthorityOptions = { storeRoot: fixture.reviewStoreRoot };
+    settleReview(options);
+    const assignment = await publishLocal(fixture.assignmentStorePath, `dispatch-detached-terminal-${resultName.toLowerCase()}`);
+    const adapter = runtimeFor(assignment.bindingKey, path.join(fixture.root, `worker-detached-terminal-${resultName.toLowerCase()}`));
+    const startDetachedAttempt = vi.fn(async () => ({ ok: true as const, runId: 'unexpected' }));
+
+    const result = await reconcilePostReviewSmoke(candidate, dependencies({
+      ...fixture,
+      adapter,
+      observeDetachedAttempt: () => ({
+        kind: 'terminal' as const,
+        runId: `run-detached-${resultName.toLowerCase()}`,
+        artifactDir: `/tmp/run-detached-${resultName.toLowerCase()}`,
+        result: resultName,
+      }),
+      startDetachedAttempt,
+    }));
+
+    expect(result).toEqual({ handled: true, attempted: false, reason, exitCode });
+    expect(startDetachedAttempt).not.toHaveBeenCalled();
+  });
+
+  it('fails untrusted detached lifecycle census closed instead of creating a second owner', async () => {
+    const fixture = rootFixture();
+    const options: PackReviewAuthorityOptions = { storeRoot: fixture.reviewStoreRoot };
+    settleReview(options);
+    const assignment = await publishLocal(fixture.assignmentStorePath, 'dispatch-detached-untrusted');
+    const adapter = runtimeFor(assignment.bindingKey, path.join(fixture.root, 'worker-detached-untrusted'));
+    const startDetachedAttempt = vi.fn(async () => ({ ok: true as const, runId: 'unexpected' }));
+
+    const result = await reconcilePostReviewSmoke(candidate, dependencies({
+      ...fixture,
+      adapter,
+      observeDetachedAttempt: () => ({ kind: 'untrusted' as const, reason: 'detached_smoke_duplicate_active_attempts' }),
+      startDetachedAttempt,
+    }));
+
+    expect(result).toEqual({
+      handled: true,
+      attempted: false,
+      reason: 'post_review_smoke_lifecycle_untrusted:detached_smoke_duplicate_active_attempts',
+    });
+    expect(startDetachedAttempt).not.toHaveBeenCalled();
   });
 
   it('admits smoke after authoritative at-cap architect DEFER', async () => {
