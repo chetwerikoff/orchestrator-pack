@@ -183,6 +183,7 @@ describe('create-issue-final-acceptance CLI entry point', () => {
         '--repo', 'chetwerikoff/orchestrator-pack',
         '--issue-number', '1192',
         '--review-dir', dir,
+        '--public-actor', 'cursor-flow-manager',
         '--json',
       ])).toBe(1);
       const output = JSON.parse(String(stdout.mock.calls.at(-1)?.[0] ?? '{}')) as {
