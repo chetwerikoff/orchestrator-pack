@@ -51,9 +51,24 @@ import {
   sameGithubPrincipal,
   selectPrincipalOwnedCanonicalArtifact,
 } from './create-issue-github-artifact-authority.ts';
+import {
+  AUTHOR_DISPOSITIONS_SCHEMA,
+  DEFECT_DISPOSITION_VALUES,
+  REMEDY_DISPOSITION_VALUES,
+  authorDispositionDiagnosticsText,
+  locateGovernedAuthorDispositionBlock as locateAuthorDispositionBlock,
+  parseGovernedAuthorDispositionText,
+  renderAuthorDispositionPromptFragment,
+  type AuthorDispositionDiagnostic,
+} from './create-issue-author-dispositions-schema.ts';
+
+export {
+  AUTHOR_DISPOSITIONS_SCHEMA,
+  DEFECT_DISPOSITION_VALUES,
+  REMEDY_DISPOSITION_VALUES,
+} from './create-issue-author-dispositions-schema.ts';
 
 export const STAGE_EVIDENCE_SCHEMA = 'create-issue-stage-evidence/v1' as const;
-export const AUTHOR_DISPOSITIONS_SCHEMA = 'create-issue-author-dispositions/v1' as const;
 export const ARTIFACT_MANIFEST_SCHEMA = 'create-issue-acceptance-artifacts/v1' as const;
 export const TURN_RESULT_SCHEMA = 'turn-result/v1' as const;
 export const AUTHORITATIVE_GITHUB_ARTIFACT_BASIS = 'authoritative-github-artifact' as const;
@@ -89,17 +104,6 @@ export const ACCEPTANCE_ARTIFACT_OUTPUT_NAMES = [
   'finding-disposition-ledger.json',
   'review-episode-inventory.json',
   'acceptance-artifacts.json',
-] as const;
-
-export const DEFECT_DISPOSITION_VALUES = [
-  'addressed',
-  'rejected-as-false',
-  'unresolved',
-] as const;
-export const REMEDY_DISPOSITION_VALUES = [
-  'accepted',
-  'replaced-by-cheaper-sufficient',
-  'rejected-as-overengineering',
 ] as const;
 
 export type AcceptanceArtifactTemporaryClassification =
@@ -207,6 +211,8 @@ export interface AcceptanceArtifactResult {
   errors: string[];
   reviewEpisodeId?: string;
   temporary?: AcceptanceArtifactTemporaryClassification;
+  authorDiagnostics?: AuthorDispositionDiagnostic[];
+  authorSchemaFragment?: string;
 }
 
 export interface AcceptanceArtifactStatus {
@@ -3236,47 +3242,69 @@ function latestAuthorReplyPath(reviewDir: string): string | null {
 export function locateGovernedAuthorDispositionBlock(
   text: string,
 ): { body: string } | { error: 'multiple' | 'none' } {
-  // innerText harvest cannot carry the literal fence characters, so a whole-line
-  // schema label with or without a ``` opener both count as a block start.
-  const startPattern = /^(?:```)?create-issue-author-dispositions\/v1\s*$/gm;
-  const starts = [...text.matchAll(startPattern)];
-  if (starts.length !== 1) {
-    return { error: starts.length === 0 ? 'none' : 'multiple' };
-  }
-  const start = starts[0]!;
-  let offset = start.index! + start[0].length;
-  if (text.startsWith('\r\n', offset)) offset += 2;
-  else if (text.startsWith('\n', offset) || text.startsWith('\r', offset)) offset += 1;
-  const rest = text.slice(offset);
-  const close = /^```[ \t]*$/m.exec(rest);
-  return { body: (close ? rest.slice(0, close.index) : rest).trim() };
+  return locateAuthorDispositionBlock(text);
 }
 
-function parseGovernedAuthorDispositionOutput(path: string, errors: string[]): JsonRecord | null {
+export interface GovernedAuthorDispositionInspection {
+  path: string;
+  value: JsonRecord | null;
+  diagnostics: AuthorDispositionDiagnostic[];
+  schemaFragment: string;
+}
+
+export function inspectGovernedAuthorDispositionReply(path: string): GovernedAuthorDispositionInspection {
   let text: string;
-  try { text = readFileSync(path, 'utf8'); } catch {
-    errors.push('governed author output is unreadable: ' + path + '; authority=author-owned');
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    return {
+      path,
+      value: null,
+      diagnostics: [{
+        reason: 'invalid_author_field',
+        ownership: 'author-owned',
+        field: '$',
+        message: 'governed author output is unreadable: ' + path,
+      }],
+      schemaFragment: renderAuthorDispositionPromptFragment(),
+    };
+  }
+  const parsed = parseGovernedAuthorDispositionText(text);
+  return {
+    path,
+    value: parsed.diagnostics.length === 0 && isRecord(parsed.value) ? parsed.value : null,
+    diagnostics: parsed.diagnostics,
+    schemaFragment: parsed.schemaFragment,
+  };
+}
+
+export function latestGovernedAuthorReplyPath(reviewDir: string): string | null {
+  return latestAuthorReplyPath(reviewDir);
+}
+
+export function inspectLatestGovernedAuthorDisposition(
+  reviewDir: string,
+): GovernedAuthorDispositionInspection | null {
+  const path = latestAuthorReplyPath(reviewDir);
+  return path ? inspectGovernedAuthorDispositionReply(path) : null;
+}
+
+function parseGovernedAuthorDispositionOutput(
+  path: string,
+  errors: string[],
+  authorDiagnostics?: AuthorDispositionDiagnostic[],
+): JsonRecord | null {
+  const inspection = inspectGovernedAuthorDispositionReply(path);
+  if (inspection.diagnostics.length > 0) {
+    authorDiagnostics?.push(...inspection.diagnostics);
+    errors.push(
+      'governed author disposition rejected: '
+      + authorDispositionDiagnosticsText(inspection.diagnostics)
+      + '; authority=author-owned',
+    );
     return null;
   }
-  const located = locateGovernedAuthorDispositionBlock(text);
-  if ('error' in located) {
-    errors.push('governed author output must contain exactly one create-issue-author-dispositions/v1 block: ' + path + '; authority=author-owned');
-    return null;
-  }
-  let parsed: unknown;
-  try { parsed = JSON.parse(located.body) as unknown; } catch {
-    errors.push('governed author disposition block is malformed JSON: ' + path + '; authority=author-owned');
-    return null;
-  }
-  if (!isRecord(parsed) || parsed.schema !== AUTHOR_DISPOSITIONS_SCHEMA || !Array.isArray(parsed.findings) || !isRecord(parsed.m4) || !Array.isArray(parsed.m4.inventory)) {
-    errors.push('governed author disposition payload is incomplete: ' + path + '; authority=author-owned');
-    return null;
-  }
-  if (parsed.findings.some((finding) => !isRecord(finding)) || parsed.m4.inventory.some((item) => !isRecord(item))) {
-    errors.push('governed author disposition payload contains malformed finding/M4 rows: ' + path + '; authority=author-owned');
-    return null;
-  }
-  return parsed;
+  return inspection.value;
 }
 
 interface PreparedAuthorDispositions {
