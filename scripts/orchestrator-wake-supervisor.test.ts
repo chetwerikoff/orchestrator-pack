@@ -425,6 +425,124 @@ describe('Issue #1484 truthful supervisor status', () => {
     }
   });
 
+  it('terminates a stalled generation, waits for close plus full cadence, and never charges rapid exits', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'opk-2062-supervisor-stall-'));
+    try {
+      const fakeRepo = path.join(root, 'repo');
+      const stateDir = path.join(root, 'state');
+      const schedulerDir = path.join(fakeRepo, 'scripts', 'pr2-foundation');
+      const schedulerPath = path.join(schedulerDir, 'scheduler.ts');
+      const markerPath = path.join(root, 'scheduler-events.jsonl');
+      const targetRegistryPath = path.join(root, 'target-registry.json');
+      const projectedRegistryPath = path.join(stateDir, 'projected-registry.json');
+      const epochAuthorityPath = path.join(root, 'epoch-authority.json');
+      mkdirSync(schedulerDir, { recursive: true });
+      writeFileSync(
+        schedulerPath,
+        [
+          "import { appendFileSync } from 'node:fs';",
+          `const marker = ${JSON.stringify(markerPath)};`,
+          "const write = (event) => appendFileSync(marker, JSON.stringify({ event, at: Date.now(), pid: process.pid }) + '\\n', 'utf8');",
+          "write('start');",
+          "process.on('SIGTERM', () => {",
+          "  write('sigterm');",
+          "  setTimeout(() => { write('close'); process.exit(0); }, 120);",
+          "});",
+          "setInterval(() => {}, 1000);",
+        ].join('\n') + '\n',
+        'utf8',
+      );
+      const registry = {
+        schemaVersion: 2,
+        requiredChildIds: ['pr2-scheduler'],
+        children: [{
+          id: 'pr2-scheduler',
+          runtime: 'node',
+          script: 'pr2-foundation/scheduler.ts',
+          sideEffecting: true,
+          cadenceSeconds: 1,
+          stallGraceMultiplier: 1,
+        }],
+      };
+      const registryBytes = `${JSON.stringify(registry)}\n`;
+      writeFileSync(targetRegistryPath, registryBytes, 'utf8');
+      const epochId = 'epoch-2062-supervisor-stall';
+      const nonce = 'nonce-2062-supervisor-stall';
+      new FileEpochAuthority(epochAuthorityPath).commit(null, {
+        epochId,
+        nonce,
+        hostId: 'test-host',
+        repoRoot: fakeRepo,
+        installedCommitSha: 'a'.repeat(40),
+        snapshotDigests: { reconcile: 'snapshot-r', reevaluation: 'snapshot-e', reportStateSeed: 'snapshot-s' },
+        importDigests: { reconcile: 'import-r', reevaluation: 'import-e', reportStateSeed: 'import-s' },
+        registryHash: sha256Bytes(Buffer.from(registryBytes)),
+        preCommitLogDigest: 'issue-2062-stall',
+        commitAt: new Date().toISOString(),
+      });
+
+      const result = runProcessSync({
+        command: process.execPath,
+        args: [
+          '--experimental-strip-types',
+          supervisorScript,
+          'run',
+          '--state-dir', stateDir,
+          '--repo-root', fakeRepo,
+          '--epoch-authority', epochAuthorityPath,
+          '--epoch-id', epochId,
+          '--nonce', nonce,
+          '--target-registry', targetRegistryPath,
+          '--projected-registry', projectedRegistryPath,
+        ],
+        cwd: repoRoot,
+        inheritParentEnv: true,
+        env: {
+          OPK_SUPERVISOR_CRASH_TERMINAL_RAPID_EXITS: '2',
+          OPK_SUPERVISOR_CRASH_MAX_RAPID_EXITS: '1',
+          OPK_SUPERVISOR_CRASH_BASE_BACKOFF_MS: '1',
+          OPK_SUPERVISOR_CRASH_MAX_BACKOFF_MS: '1',
+        },
+        timeoutMs: 8_000,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.timedOut).toBe(false);
+      const status = JSON.parse(readFileSync(
+        path.join(stateDir, 'typescript-supervisor-status.json'),
+        'utf8',
+      )) as {
+        consecutiveStallTerminations: number;
+        lastTerminationReason: string | null;
+        restartState: string;
+        refusalReason: string | null;
+        crashBackoff: { rapidExits: number; terminal: boolean };
+      };
+      expect(status).toMatchObject({
+        consecutiveStallTerminations: 2,
+        lastTerminationReason: 'stall_terminated',
+        restartState: 'refused',
+        refusalReason: 'scheduler_child_stall_loop',
+        crashBackoff: { rapidExits: 0, terminal: false },
+      });
+
+      const events = readFileSync(markerPath, 'utf8').trim().split(/\r?\n/u)
+        .map((line) => JSON.parse(line) as { event: string; at: number; pid: number });
+      const starts = events.filter((row) => row.event === 'start');
+      const closes = events.filter((row) => row.event === 'close');
+      const signals = events.filter((row) => row.event === 'sigterm');
+      expect(starts).toHaveLength(2);
+      expect(signals).toHaveLength(2);
+      expect(closes).toHaveLength(2);
+      expect(signals[0]!.at - starts[0]!.at).toBeGreaterThanOrEqual(900);
+      expect(closes[0]!.at - signals[0]!.at).toBeGreaterThanOrEqual(80);
+      expect(starts[1]!.at - closes[0]!.at).toBeGreaterThanOrEqual(900);
+      expect(starts[0]!.pid).not.toBe(starts[1]!.pid);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('accumulates repeated child failures to the existing fuse while retaining the concrete cause', () => {
     const policy: CrashBackoffPolicy = {
       rapidExitThresholdMs: 1_000,
