@@ -771,6 +771,7 @@ export async function publishCurrentWorkerAssignment(
       }
       if (delegatedIntegration && (
         !replacement
+        || replacement.assignment.role !== 'worker'
         || replacement.assignment.assignmentId !== delegatedIntegration.predecessorAssignmentId
         || replacement.assignment.generation !== delegatedIntegration.predecessorGeneration
       )) {
