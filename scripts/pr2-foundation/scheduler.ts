@@ -409,7 +409,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
   attempted: number;
   started: number;
   skipped: number;
-  fleetAlarm: FleetAlarmResult;
+  fleetAlarm?: FleetAlarmResult;
   observer?: FleetObserverResult;
   observerFailure?: SchedulerObserverFailure;
   fleetNudge?: FleetNudgeResult;
@@ -420,7 +420,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
   assignmentLifecycleSweep?: WorkerAssignmentLifecycleSweepResult;
 }> {
   assertSchedulerEpoch(env);
-  const fleetAlarm = boundary.fleetAlarm ?? { records: [] };
+  const fleetAlarm = boundary.fleetAlarm;
   let observer: FleetObserverResult | undefined;
   let fleetNudge: FleetNudgeResult | undefined;
   let fleetEscalation: FleetEscalationInvocationResultV1 | undefined;
@@ -462,7 +462,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
         attempted: 0,
         started: 0,
         skipped: 0,
-        fleetAlarm,
+        ...(fleetAlarm ? { fleetAlarm } : {}),
         observerFailure: observerFailureReason,
         ...(orchestratorRequired ? { orchestratorRequired: true } : {}),
         fleetEscalation,
@@ -492,7 +492,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
         attempted: 0,
         started: 0,
         skipped: 0,
-        fleetAlarm,
+        ...(fleetAlarm ? { fleetAlarm } : {}),
         observer,
         fleetNudge,
         ...(orchestratorRequired ? { orchestratorRequired: true } : {}),
@@ -526,7 +526,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
       attempted,
       started,
       skipped,
-      fleetAlarm,
+      ...(fleetAlarm ? { fleetAlarm } : {}),
       ...(observer ? { observer } : {}),
       ...(fleetNudge ? { fleetNudge } : {}),
       ...(orchestratorRequired ? { orchestratorRequired: true } : {}),
