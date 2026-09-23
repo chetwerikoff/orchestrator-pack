@@ -458,7 +458,11 @@ function classifyProbe(
         'resolve the ambiguous probe ownership before any replacement send',
       );
     case 'unsafe_output':
-      return defect(context, producer, 'unsafe_output probe envelope cannot authorize manager continuation');
+      return defect(
+        context,
+        producer,
+        'unsafe_output probe envelope cannot authorize manager continuation: ' + evidence(value),
+      );
     case 'unavailable': {
       const external = externalCauseFromText(reason);
       if (external === 'external:chrome_not_running' || external === 'external:login_required') {
