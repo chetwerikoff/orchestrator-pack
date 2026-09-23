@@ -41,7 +41,14 @@ export function resolveDiscussWithGptConfig({ requireProjectUrl = true, requireP
   const missing = [];
   if (requireProjectUrl && !projectUrl) missing.push(ENV.projectUrl);
   if (requireProfile && !chromeUserDataDir) missing.push(ENV.chromeUserDataDir);
-  if (requireChromePath && !chromePath) missing.push(ENV.chromePath);
+
+  if (requireChromePath && !chromePath) {
+    const err = new Error(
+      `discuss-with-gpt: chromePath is required to launch Chrome. Set ${ENV.chromePath} or chromePath in ${LOCAL_CONFIG}.`,
+    );
+    err.code = 'CONFIG_MISSING';
+    throw err;
+  }
 
   if (missing.length) {
     const hint =
