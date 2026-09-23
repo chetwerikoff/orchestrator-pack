@@ -32,7 +32,7 @@ import {
 import type { OrcaJsonResponse } from './orca-runtime/native.ts';
 import type { RuntimeAdapter, RuntimeComposerControlRequest, RuntimeWorker, RuntimeWorkerIdentity } from './runtime/contracts.ts';
 
-const POKE = 'You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run `orca orchestration check --run run_d613a86c140a`.';
+const POKE = 'You have 1 orchestration message. Read orchestration mail, check every terminal in the fleet, and clear blockers so the fleet does not idle. Run `orca orchestration check --run run_d613a86c140a`.';
 const DISPATCH_POKE = 'You have 1 orchestration message. Read and act on your orchestration message. Run `orca orchestration check`.';
 const TERMINAL_HANDLE = 'term_cc95818d-ce98-465a-a806-f1a73d7d33bf';
 const TERMINAL_POKE = `You have 1 orchestration message. Read and act on your orchestration message. Run \`orca orchestration check --terminal ${TERMINAL_HANDLE}\`.`;
@@ -3022,7 +3022,7 @@ describe('orchestration mail reconciliation', () => {
           read: () => ({
             ok: true as const,
             lines: pointerVisible
-              ? [`You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run \`orca orchestration check --terminal ${target.identity.id}\`.`, ...CURSOR_FOOTER]
+              ? [`You have 1 orchestration message. Read orchestration mail, check every terminal in the fleet, and clear blockers so the fleet does not idle. Run \`orca orchestration check --terminal ${target.identity.id}\`.`, ...CURSOR_FOOTER]
               : ['→ Add a follow-up', ...CURSOR_FOOTER],
             source: 'screen' as const,
           }),
@@ -3078,7 +3078,7 @@ describe('orchestration mail reconciliation', () => {
           read: () => ({
             ok: true as const,
             lines: pointerVisible
-              ? [`You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run \`orca orchestration check --terminal ${target.identity.id}\`.`, ...CURSOR_FOOTER]
+              ? [`You have 1 orchestration message. Read orchestration mail, check every terminal in the fleet, and clear blockers so the fleet does not idle. Run \`orca orchestration check --terminal ${target.identity.id}\`.`, ...CURSOR_FOOTER]
               : ['→ Add a follow-up', ...CURSOR_FOOTER],
             source: 'screen' as const,
           }),
@@ -3175,7 +3175,7 @@ describe('orchestration mail reconciliation', () => {
           submitResult: (identity) => { submitted.push(identity); pointerVisible = false; return { status: 'dispatched' as const }; },
           read: () => ({
             ok: true as const,
-            lines: pointerVisible ? [`You have 1 orchestration message. Read orchestration mail, check the fleet, and clear blockers so the fleet does not idle. Run \`orca orchestration check --terminal ${target.identity.id}\`.`, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
+            lines: pointerVisible ? [`You have 1 orchestration message. Read orchestration mail, check every terminal in the fleet, and clear blockers so the fleet does not idle. Run \`orca orchestration check --terminal ${target.identity.id}\`.`, ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER],
             source: 'screen' as const,
           }),
           liveness: (() => { let calls = 0; return () => calls++ < 2 ? 'idle' : 'busy'; })(),
