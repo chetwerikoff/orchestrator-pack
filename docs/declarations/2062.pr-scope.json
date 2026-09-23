@@ -20,13 +20,13 @@
     "scripts/worker-smoke-run.ts"
   ],
   "denylist": [
-    "credentials/**",
-    "packages/core/**",
-    "secrets/**",
-    "vendor/**"
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
-    "docs/declarations/**",
+    "docs/declarations/",
     "docs/orchestration-runbook.md",
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
@@ -46,7 +46,7 @@
     "scripts/runtime/contracts.ts",
     "scripts/worker-smoke-run.ts",
     "tests/external-output-references/capture-manifest.json",
-    "tests/external-output-references/captures/orca-runtime/**"
+    "tests/external-output-references/captures/orca-runtime/"
   ],
   "source_revision": "30141512bd743934ce41fbb12f735e5836c42360"
 }
