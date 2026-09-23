@@ -464,7 +464,18 @@ function runParsedCli<T>(
   }
   if (inspected.error) {
     process.stderr.write(`${toolName}: ${inspected.error}\n`);
-    return 2;
+    const command = argv[2] ?? '';
+    const managerShaped = argv.includes('--blocked-on-json')
+      || argv.includes('--expected-source-revision')
+      || argv.includes('--expected-stage')
+      || argv.includes('--expected-stage-attempt-id')
+      || (command === 'start-cycle' && argv.includes('--tier'));
+    if (!managerShaped) return 2;
+    return emitCreateIssueManagerResult({
+      producer: toolName,
+      currentArgv: argv,
+      produce: () => { throw new Error(inspected.error!); },
+    }).exitCode;
   }
   let opts: T;
   try {
