@@ -1305,9 +1305,9 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
               })
             : result.ok
               ? (() => {
-                  if (!nextAction) throw new Error('manager_result_without_recovery:reconciliation_ready');
+                  if (!nextAction) throw new Error('manager_result_without_recovery:reconciliation_failed');
                   return createIssueRecoverableResult({
-                    cause: 'reconciliation_ready',
+                    cause: result.temporary ?? 'reconciliation_failed',
                     nextAction,
                   });
                 })()
