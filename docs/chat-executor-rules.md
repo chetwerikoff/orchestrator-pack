@@ -110,29 +110,51 @@ If an operation fails, do not repeat the same action blindly. Inspect current st
 
 ### Structured external-dependency parking
 
+A manager-facing create-Issue check returns exactly one of four outcomes:
+`completed`, `recoverable`, `external_pause`, or boundary-only
+`contract_defect`. A `recoverable` result carries a validated executable
+`nextAction.argv`; execute that distinct argv once. A byte-identical consecutive
+recommendation is not executed again and is escalated as a producer defect.
+
 For a manager stage-record invocation, the coordinator/task dispatch supplies
 `--blocked-on-json <json>` only when it authoritatively knows that the named
 external Issue/PR predicate is the active unsatisfied blocker for that exact
 invocation. Pass that exact task invariant through unchanged; otherwise omit the
-flag. Never manufacture `blocked_on` from `cause`, `blocker`, prose,
-`nextAction: null`, the managed Issue number, a repository search, or guessed PR
-linkage.
+flag. The manager boundary projects it to
+`external_pause(external:waiting_on_issue|external:waiting_on_pr)` with the
+same typed `resume_when` predicate and supplied evidence. Never manufacture
+the dependency from `cause`, `blocker`, prose, the managed Issue number,
+repository search, reverse lookup, or guessed PR linkage.
 
-A terminal manager result carrying `blocked_on` parks the existing task and
-suppresses unchanged periodic re-dispatch. On every existing coordinator wake or
-restart, re-read only the named predicate through tracked `scripts/gh`:
-`issue_closed` is satisfied only when the named Issue reports `state=closed`;
-`pr_merged` is satisfied only when the named PR reports `merged=true`. Resume
-immediately when that re-read is already satisfied; an event is not required.
+A live Dispatch whose most recent manager message is an `escalation` carrying
+an `external_pause` or `contract_defect` payload is a **paused unit** when
+`worker-show` still reports it non-terminal. Identify that state from the Run
+inbox plus `worker-show` alone; do not re-dispatch the same argv into it. On
+every existing coordinator wake or restart, re-read only its `resume_when`
+predicate through tracked `scripts/gh`: `issue_closed` requires the named
+Issue `state=closed`, `pr_merged` requires the named PR `merged=true`, and
+`{ operator: true }` waits for an operator message. When satisfied, send the
+continuation to that same Dispatch. No event is required for an already-satisfied
+GitHub predicate.
+
+The manager sends one escalation with a deterministic thread id derived from
+`(issue, stage, cause, resume_when)`; the receiver treats repeated use of that
+id as the same escalation. If the send fails, retry it exactly once. Then execute
+independent plan items and perform a non-blocking inbox drain before ending the
+turn without `worker_done`. A manager self-initiates
+`worker_done --outcome succeeded` only after whole-task acceptance;
+`worker_done --outcome failed` is legal only after a direct
+coordinator/operator cancellation message, never for `recoverable`,
+`external_pause`, or `contract_defect`.
+
+Until a separate coordinator sweep timer/durable wake lands, paused-unit
+resumption occurs only on existing coordinator wakes and operator messages.
 Do not add a watcher, polling daemon, queue, lease, parking store,
 acknowledgement protocol, prose parser, reverse dependency lookup, or another
-persistent coordination mechanism.
-
-Dispatch/re-dispatch payloads contain role plus task invariants only. Procedure
-comes from the current CLI `--help` and returned `nextAction`; do not re-paste
-the create-Issue skill or runbooks into repeated dispatches. Browser-GPT
-`TerminalEnvelope` remains a separate transport and does not carry
-`blocked_on`.
+persistent coordination mechanism. Dispatch/re-dispatch payloads remain role
+plus task invariants; procedure comes from current CLI `--help` and returned
+`nextAction`. Browser-GPT `TerminalEnvelope` remains a separate unchanged
+transport.
 
 ## 7. Independent review role
 
