@@ -7,6 +7,7 @@
     "AGENTS.md",
     "docs/chat-executor-rules.md",
     "docs/declarations/926.pr-scope.json",
+    "docs/orca-runtime-caller-census.md",
     "docs/orchestration-runbook.md",
     "docs/orchestrator-delegated-integration.md",
     "docs/pack-review-waiver-merge-runbook.md",
@@ -15,6 +16,8 @@
     "scripts/lib/worker-assignment-store.ts",
     "scripts/pr2-foundation/supervised-worker-start.test.ts",
     "scripts/pr2-foundation/supervised-worker-start.ts",
+    "scripts/runtime/caller-census.test.ts",
+    "scripts/runtime/caller-census.ts",
     "scripts/vitest-ci-lanes.config.json",
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
@@ -38,5 +41,5 @@
     "docs/",
     "scripts/"
   ],
-  "source_revision": "69eb6b4c781eae3e8115de1c2d11fc52af3c4508"
+  "source_revision": "50d0530960f317f4e1232d26d88293d96ee32f0b"
 }
