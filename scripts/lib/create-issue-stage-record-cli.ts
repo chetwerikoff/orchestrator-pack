@@ -452,9 +452,20 @@ function emitFinalAcceptanceBoundary(
 function runParsedCli<T>(
   argv: string[],
   toolName: string,
+  declaration: ManagerCliDeclaration,
+  tokens: readonly string[],
   parseArgs: (argv: string[]) => T,
   run: (opts: T) => number,
 ): number {
+  const inspected = inspectManagerCliInvocation(declaration, tokens);
+  if (inspected.help) {
+    process.stdout.write(inspected.help + '\n');
+    return 0;
+  }
+  if (inspected.error) {
+    process.stderr.write(`${toolName}: ${inspected.error}\n`);
+    return 2;
+  }
   let opts: T;
   try {
     opts = parseArgs(argv);
@@ -491,18 +502,8 @@ function runParsedCli<T>(
   }
 }
 
-export function stageFinalizeUsage(): string {
-  return [
-    'Usage:',
-    `  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> --stage <competitive|architectural-review|architectural-lens|architectural> --tier <T1|T2|T3> [--competitive-decision <required|skipped> --competitive-rationale <text>] [--stage-attempt-id <retry-id>] [--permitted-lane-override <normal|disputed>] [--public-actor <${[...PUBLIC_ACTORS].join('|')}>] [--predecessor-cycle-id <id>] [--workdir <path>] [--expected-source-revision <rNN> --expected-stage <stage> --expected-stage-attempt-id <id>] [--json]`,
-    '  create-issue-stage-finalize.ts publish-stage --repo <owner/name> --issue-number <n> --receipt <path> [--waiver <path>] [--workdir <path>] [--json]',
-    '  create-issue-stage-finalize.ts retry-pending --repo <owner/name> --issue-number <n> [--workdir <path>] [--expected-source-revision <rNN> --expected-stage <stage> --expected-stage-attempt-id <id>] [--json]',
-    '  create-issue-stage-finalize.ts reconcile-stage --repo <owner/name> --issue-number <n> --review-dir <path> --stage-evidence <attempt-NNN.json> [--json]',
-    '  create-issue-stage-finalize.ts bind-published-comment --repo <owner/name> --issue-number <n> --review-dir <path> --stage-evidence <attempt-NNN.json> --reviewer-slot <slot> --invocation-id <id> --comment-url <url> [--json]',
-    '  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> [--tier-intake <path>] [--stage-evidence <path>...] [--author-dispositions <target-path>] [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--phase <pre-lens|post-lens|final-acceptance>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--json]',
-    '  create-issue-stage-finalize.ts check-artifacts --review-dir <path> [--tier-intake <path>] [--stage-evidence <path>...] [--author-dispositions <derived-path>] [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--json]',
-    '  manager-result commands additionally accept --blocked-on-json <json> only for a coordinator/task-dispatch authoritative active-unsatisfied-blocker assertion',
-  ].join('\n');
+export function stageFinalizeUsage(command?: string): string {
+  return renderManagerCliUsage(STAGE_FINALIZE_CLI_DECLARATION, command ?? null);
 }
 
 export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
@@ -514,7 +515,6 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
     command,
     repo: 'chetwerikoff/orchestrator-pack',
     issueNumber: 0,
-    publicActor: 'cursor-flow-manager',
     json: false,
     stageEvidencePaths: [],
     claudeProducerEvidencePaths: [],
@@ -671,18 +671,16 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
         opts.operatorReason = String(argv[++i] ?? '');
         break;
       default:
-        i = finalizeJournalArgvIndex(arg, argv, i, opts, stageFinalizeUsage());
+        i = finalizeJournalArgvIndex(arg, argv, i, opts, stageFinalizeUsage(command));
         break;
     }
   }
+  if (command === 'start-cycle') requirePublicActor(opts);
   return opts;
 }
 
 function finalAcceptanceUsage(): string {
-  return [
-    'Usage:',
-    `  create-issue-final-acceptance.ts --repo <owner/name> --issue-number <n> --review-dir <path> [--cycle-id <assertion>] [--issue-body <assertion-path>] [--issue-revision <assertion-rNN>] [--stage-receipt <assertion-path>...] [--capture <path>...] [--ledger <path>] [--relay-evidence <path>...] [--claude-producer-evidence <path>...] [--external-pass-receipt <path>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--public-actor <${[...PUBLIC_ACTORS].join('|')}>] [--workdir <path>] [--json]`,
-  ].join('\n');
+  return renderManagerCliUsage(FINAL_ACCEPTANCE_CLI_DECLARATION);
 }
 
 function parseFinalAcceptanceArgs(argv: string[]): FinalAcceptanceCliOptions {
@@ -697,7 +695,6 @@ function parseFinalAcceptanceArgs(argv: string[]): FinalAcceptanceCliOptions {
     capturePaths: [],
     relayEvidencePaths: [],
     claudeProducerEvidencePaths: [],
-    publicActor: 'cursor-flow-manager',
     json: false,
   };
   for (let i = 2; i < argv.length; i += 1) {
@@ -765,6 +762,7 @@ function parseFinalAcceptanceArgs(argv: string[]): FinalAcceptanceCliOptions {
         break;
     }
   }
+  requirePublicActor(opts);
   return opts;
 }
 
@@ -1067,7 +1065,7 @@ function poisonSuccessorStartCycleArgv(
     '--expected-source-revision', binding.sourceRevision,
     '--expected-stage', binding.stage,
     '--expected-stage-attempt-id', binding.stageAttemptId ?? '',
-    '--public-actor', opts.publicActor,
+    '--public-actor', requirePublicActor(opts),
     '--json',
   ];
   if (opts.competitiveDecision) argv.push('--competitive-decision', opts.competitiveDecision);
@@ -1205,7 +1203,7 @@ function staleRetryPendingBinding(
 }
 
 export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: GhTransport): number {
-  return runParsedCli(argv, 'create-issue-stage-finalize', parseStageFinalizeArgs, (opts) => {
+  return runParsedCli(argv, 'create-issue-stage-finalize', STAGE_FINALIZE_CLI_DECLARATION, argv.slice(2), parseStageFinalizeArgs, (opts) => {
     if (opts.command === 'bind-published-comment') {
       const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
       const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
@@ -1566,7 +1564,7 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
         tier,
         competitiveDecision: opts.competitiveDecision,
         competitiveRationale: opts.competitiveRationale,
-        publicActor: opts.publicActor,
+        publicActor: requirePublicActor(opts),
         predecessorCycleId: opts.predecessorCycleId,
         workdir: opts.workdir,
       });
@@ -1873,7 +1871,7 @@ function acceptanceAuthorityPause(evidence: string) {
 }
 
 export function runFinalAcceptanceCli(argv: string[]): number {
-  return runParsedCli(argv, 'create-issue-final-acceptance', parseFinalAcceptanceArgs, (opts) => {
+  return runParsedCli(argv, 'create-issue-final-acceptance', FINAL_ACCEPTANCE_CLI_DECLARATION, argv.slice(2), parseFinalAcceptanceArgs, (opts) => {
     const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
     const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
     const transport = defaultGhTransport();
