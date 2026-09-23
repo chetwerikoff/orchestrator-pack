@@ -4,6 +4,9 @@ export const CREATE_ISSUE_STALE_ACTION_SCHEMA = 'create-issue-stale-next-action/
 export const CREATE_ISSUE_NEXT_ACTION_KINDS = [
   'reconcile-stage-read-only',
   'produce-acceptance-artifacts',
+  'execute-observe-owned-turn',
+  'execute-github-first-read-only',
+  'execute-review-runner-read-only',
   'retry-start-cycle',
   'retry-stage-record-publication',
   'retry-final-acceptance',
@@ -15,6 +18,9 @@ export type CreateIssueNextActionKind = typeof CREATE_ISSUE_NEXT_ACTION_KINDS[nu
 export const CREATE_ISSUE_RECONCILIATION_KINDS = [
   'reconcile-stage-read-only',
   'produce-acceptance-artifacts',
+  'execute-observe-owned-turn',
+  'execute-github-first-read-only',
+  'execute-review-runner-read-only',
 ] as const satisfies readonly CreateIssueNextActionKind[];
 
 export const CREATE_ISSUE_CONTINUATION_KINDS = [
@@ -42,12 +48,16 @@ export type CreateIssueResumePredicate =
   | { pr: number; condition: 'pr_merged' }
   | { operator: true };
 
+export type ExecuteIssueManagerPhase = 'implementation' | 'review' | 'fixer';
+export type ExecuteIssueManagerStage = `execute:${ExecuteIssueManagerPhase}`;
+
 export type CreateIssueSemanticStage =
   | 'competitive'
   | 'architectural-review'
   | 'architectural-lens'
   | 'architectural'
-  | 'acceptance';
+  | 'acceptance'
+  | ExecuteIssueManagerStage;
 
 export interface CreateIssueActionBinding {
   repository: string;
@@ -338,7 +348,10 @@ export function isCreateIssueSemanticStage(value: unknown): value is CreateIssue
     || value === 'architectural-review'
     || value === 'architectural-lens'
     || value === 'architectural'
-    || value === 'acceptance';
+    || value === 'acceptance'
+    || value === 'execute:implementation'
+    || value === 'execute:review'
+    || value === 'execute:fixer';
 }
 
 export function validateCreateIssueActionBinding(value: unknown): string[] {

@@ -110,11 +110,20 @@ If an operation fails, do not repeat the same action blindly. Inspect current st
 
 ### Structured external-dependency parking
 
-A manager-facing create-Issue check returns exactly one of four outcomes:
+The shared #2078/#2081 manager boundary returns exactly one of four outcomes:
 `completed`, `recoverable`, `external_pause`, or boundary-only
 `contract_defect`. A `recoverable` result carries a validated executable
 `nextAction.argv`; execute that distinct argv once. A byte-identical consecutive
 recommendation is not executed again and is escalated as a producer defect.
+
+Create-Issue kinds keep their existing reconciliation/continuation ownership.
+Execute-Issue adds only `execute-observe-owned-turn`,
+`execute-github-first-read-only`, and `execute-review-runner-read-only`; all
+three are reconciliation kinds and every argv they introduce is read-only.
+Paced retry, `--new-chat`, fresh-conversation recovery, reviewer resend, and
+every other ChatGPT send remain owned by the existing execute-Issue runbooks and
+their send/no-resend/final-revalidation gates. A boundary classification never
+grants send authority.
 
 For a manager stage-record invocation, the coordinator/task dispatch supplies
 `--blocked-on-json <json>` only when it authoritatively knows that the named
@@ -139,7 +148,10 @@ GitHub predicate.
 
 The manager sends one escalation with a deterministic thread id derived from
 `(issue, stage, cause, resume_when)`; the receiver treats repeated use of that
-id as the same escalation. If the send fails, retry it exactly once. Then execute
+id as the same escalation. For execute-Issue, render the already-owned manager
+phase into that existing stage component as `execute:<phase>`, where `phase`
+is exactly `implementation`, `review`, or `fixer`. This is a string
+projection for the existing escalation key, not a new lifecycle state. If the send fails, retry it exactly once. Then execute
 independent plan items and perform a non-blocking inbox drain before ending the
 turn without `worker_done`. A manager self-initiates
 `worker_done --outcome succeeded` only after whole-task acceptance;

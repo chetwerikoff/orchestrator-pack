@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -9,7 +9,6 @@ import {
   evaluateCreateIssueManagerBoundary,
 } from './create-issue-manager-boundary.ts';
 import {
-  CREATE_ISSUE_NEXT_ACTION_KINDS,
   createIssueExternalPauseResult,
   createIssueNextAction,
   createIssueRecoverableResult,
@@ -19,20 +18,6 @@ import {
 } from './create-issue-next-action.ts';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-
-function productionTsFiles(root: string): string[] {
-  const out: string[] = [];
-  for (const name of readdirSync(root)) {
-    const path = join(root, name);
-    const stat = statSync(path);
-    if (stat.isDirectory()) {
-      out.push(...productionTsFiles(path));
-    } else if (name.endsWith('.ts') && !name.endsWith('.test.ts')) {
-      out.push(path);
-    }
-  }
-  return out;
-}
 
 const binding: CreateIssueActionBinding = {
   repository: 'chetwerikoff/orchestrator-pack',
@@ -232,20 +217,6 @@ describe('create-Issue manager boundary', () => {
     expect(browserCarrier).not.toContain('process.stdout.write(`${JSON.stringify(');
   });
 
-  it('keeps the closed kind registry equal to production createIssueNextAction literals', () => {
-    const produced = new Set<string>();
-    for (const file of productionTsFiles(join(repoRoot, 'scripts'))) {
-      const source = readFileSync(file, 'utf8');
-      let cursor = 0;
-      while ((cursor = source.indexOf('createIssueNextAction({', cursor)) >= 0) {
-        const fragment = source.slice(cursor, cursor + 800);
-        const literal = /\bkind:\s*'([^']+)'/.exec(fragment)?.[1];
-        if (literal) produced.add(literal);
-        cursor += 'createIssueNextAction({'.length;
-      }
-    }
-    expect([...produced].sort()).toEqual([...CREATE_ISSUE_NEXT_ACTION_KINDS].sort());
-  });
 
   it('frames all four outcomes once for every registered manager entrypoint', () => {
     for (const producer of CREATE_ISSUE_MANAGER_ENTRYPOINTS) {

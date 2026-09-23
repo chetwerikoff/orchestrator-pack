@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
+  CREATE_ISSUE_NEXT_ACTION_KINDS,
   assertCreateIssueActionCurrent,
   createIssueNextAction,
   createIssueRecoverableResult,
@@ -37,6 +38,20 @@ function tempRoot(): string {
   const root = mkdtempSync(join(tmpdir(), 'opk-create-issue-convergence-'));
   roots.push(root);
   return root;
+}
+
+function productionTsFiles(root: string): string[] {
+  const out: string[] = [];
+  for (const name of readdirSync(root)) {
+    const path = join(root, name);
+    const stat = statSync(path);
+    if (stat.isDirectory()) {
+      out.push(...productionTsFiles(path));
+    } else if (name.endsWith('.ts') && !name.endsWith('.test.ts')) {
+      out.push(path);
+    }
+  }
+  return out;
 }
 
 afterEach(() => {
@@ -78,6 +93,26 @@ describe('create-Issue nextAction contract', () => {
     expect(validateCreateIssueManagerResult({ ok: false, cause: 'stuck', nextAction: null })).toContain(
       'recoverable manager result.nextAction must be non-null',
     );
+  });
+
+  it('keeps the one shared closed kind registry equal to production createIssueNextAction literals', () => {
+    const produced = new Set<string>();
+    for (const file of productionTsFiles(join(process.cwd(), 'scripts'))) {
+      const source = readFileSync(file, 'utf8');
+      let cursor = 0;
+      while ((cursor = source.indexOf('createIssueNextAction({', cursor)) >= 0) {
+        const fragment = source.slice(cursor, cursor + 800);
+        const literal = /\bkind:\s*'([^']+)'/.exec(fragment)?.[1];
+        if (literal) produced.add(literal);
+        cursor += 'createIssueNextAction({'.length;
+      }
+    }
+    expect([...produced].sort()).toEqual([...CREATE_ISSUE_NEXT_ACTION_KINDS].sort());
+    expect(CREATE_ISSUE_NEXT_ACTION_KINDS.filter((kind) => kind.startsWith('execute-'))).toEqual([
+      'execute-observe-owned-turn',
+      'execute-github-first-read-only',
+      'execute-review-runner-read-only',
+    ]);
   });
 
   it('returns canonical stale_next_action when any state binding moves', () => {
