@@ -3413,6 +3413,7 @@ function prepareAuthorDispositionsFromGovernedOutput(input: {
   draft: string;
   allowZeroState: boolean;
   errors: string[];
+  authorDiagnostics: AuthorDispositionDiagnostic[];
 }): PreparedAuthorDispositions | null {
   const authorReplyPath = latestAuthorReplyPath(input.reviewDir);
   let payload: JsonRecord;
@@ -3431,7 +3432,11 @@ function prepareAuthorDispositionsFromGovernedOutput(input: {
     };
   } else {
     producer = 'governed-author-output/v1';
-    const parsed = parseGovernedAuthorDispositionOutput(authorReplyPath, input.errors);
+    const parsed = parseGovernedAuthorDispositionOutput(
+      authorReplyPath,
+      input.errors,
+      input.authorDiagnostics,
+    );
     if (!parsed) return null;
     payload = parsed;
   }
@@ -3573,6 +3578,8 @@ export function produceAcceptanceArtifacts(
     : 'stage-time';
 
   const createdInputPaths = new Set<string>();
+  const authorDiagnostics: AuthorDispositionDiagnostic[] = [];
+  const authorSchemaFragment = renderAuthorDispositionPromptFragment();
   let issueSnapshot: AcceptanceIssueSnapshot | null = null;
   let preparedAuthor: PreparedAuthorDispositions | null = null;
   let authorAdjudicationDeferred = false;
@@ -3607,6 +3614,7 @@ export function produceAcceptanceArtifacts(
         draft: issueSnapshot.body,
         allowZeroState: admission === 'lifecycle-zero-state',
         errors,
+        authorDiagnostics,
       });
     }
   }
@@ -3704,6 +3712,7 @@ export function produceAcceptanceArtifacts(
       errors: [...new Set(errors)],
       reviewEpisodeId: episodeId,
       ...(temporary ? { temporary } : {}),
+      ...(authorDiagnostics.length > 0 ? { authorDiagnostics, authorSchemaFragment } : {}),
     };
   }
 
@@ -3830,6 +3839,7 @@ export function produceAcceptanceArtifacts(
       errors: [...new Set(errors)],
       reviewEpisodeId: episodeId,
       ...(temporary ? { temporary } : {}),
+      ...(authorDiagnostics.length > 0 ? { authorDiagnostics, authorSchemaFragment } : {}),
     };
   }
 
