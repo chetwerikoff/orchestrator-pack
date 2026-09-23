@@ -516,7 +516,7 @@ fails closed: no fresh execution conversation, no duplicate prompt, no invented
 history, and `OPERATOR_ACTION_REQUIRED` names the missing identity/evidence
 boundary.
 
-## Operator-visible terminal states
+## Operator-visible outcomes
 
 ### `VERIFIED_COMPLETE`
 
