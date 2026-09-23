@@ -1767,6 +1767,58 @@ describe('Issue #2038 canonical fork loser recovery', () => {
     expect(readPersistedCycleId(workdir)).toBe(result.cycleId);
   });
 
+  it('rechecks loser recovery against the publication census before creating a successor', () => {
+    const issueBody = '<!-- source-revision: r05 -->\nrevision r05';
+    const comments = forkComments();
+    const state = createMockGhState({
+      comments: [...comments],
+      issue: { title: 'Issue #2038 fixture', body: issueBody, labels: [] },
+      nextCommentId: 5774888274,
+    });
+    const baseTransport = createMockTransport(state);
+    let commentCensusRequests = 0;
+    const transport: GhTransport = {
+      runGh(argv: string[], timeoutMs?: number) {
+        const requestPath = argv[2] ?? '';
+        if (argv[1] === 'api' && requestPath.includes('/comments?') && !argv.includes('-f')) {
+          commentCensusRequests += 1;
+          if (commentCensusRequests === 2) {
+            state.comments.push(cycleComment(
+              5774888273,
+              'cycle-2038-descendant',
+              winnerCycleId,
+              '2026-09-22T10:28:00.000Z',
+            ));
+          }
+        }
+        return baseTransport.runGh(argv, timeoutMs);
+      },
+    };
+    const workdir = makeCliTempDir();
+    persistCycleId(workdir, loserCycleId);
+    const result = startReviewCycle(transport, {
+      repo,
+      issueNumber: fixtureIssueNumber,
+      sourceRevision,
+      tier: 'T2',
+      publicActor: 'cursor-flow-manager',
+      predecessorCycleId: winnerCycleId,
+      workdir,
+      census: { pageSize: 100 },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'orphan-cycle',
+        message: expect.stringContaining('became stale before publication'),
+      }),
+    ]));
+    expect(state.commentCreateAttempts).toEqual([]);
+    expect(state.comments.at(-1)).toMatchObject({ id: 5774888273 });
+    expect(readPersistedCycleId(workdir)).toBe(loserCycleId);
+  });
+
   it('refuses a stale canonical ancestor before publishing a successor', () => {
     const comments = forkComments(true);
     const state = createMockGhState({
