@@ -3387,8 +3387,10 @@ describe('Issue #2039 pre-stage T1 author disposition producer', () => {
     expect(['r01', 'r02', 'r03'].every((revision) => existsSync(join(input.reviewDir, `issue-${revision}-body.json`)))).toBe(true);
   });
 
-  it('classifies only the three bounded temporary observation failures as retryable', () => {
+  it('classifies only the three bounded temporary observation failures as retryable without writing state', () => {
     const unavailable = t1Fixture();
+    const unavailableFiles = readdirSync(unavailable.reviewDir).sort();
+    const unavailableRootFiles = readdirSync(unavailable.root).sort();
     const unavailableTransport = {
       runGh: vi.fn(() => ({ exitCode: 1, stdout: '', stderr: 'temporary read failure' })),
     };
@@ -3399,28 +3401,46 @@ describe('Issue #2039 pre-stage T1 author disposition producer', () => {
       sourceRevision: 'r01',
       artifactSourceTransport: unavailableTransport,
     })).toMatchObject({ ok: false, retryable: true, cause: 'source-unavailable' });
+    expect(readdirSync(unavailable.reviewDir).sort()).toEqual(unavailableFiles);
+    expect(readdirSync(unavailable.root).sort()).toEqual(unavailableRootFiles);
 
     const moving = t1Fixture();
+    const movingFiles = readdirSync(moving.reviewDir).sort();
+    const movingRootFiles = readdirSync(moving.root).sort();
     const r02 = '<!-- source-revision: r02 -->\n# moved\n';
+    const movingTransport = transport({ issueBodies: [moving.body, r02] });
     expect(produceAuthorDispositions({
       reviewDir: moving.reviewDir,
       repositoryFullName: REPOSITORY,
       issueNumber: ISSUE,
       sourceRevision: 'r01',
-      artifactSourceTransport: transport({ issueBodies: [moving.body, r02] }),
+      artifactSourceTransport: movingTransport,
     })).toMatchObject({ ok: false, retryable: true, cause: 'observation-lost' });
+    expect(readdirSync(moving.reviewDir).sort()).toEqual(movingFiles);
+    expect(movingTransport.createdIssueComments).toEqual([]);
+    expect(readdirSync(moving.root).sort()).toEqual(movingRootFiles);
+    expect([...movingTransport.issueLabels]).toEqual([]);
 
     const notVisible = t1Fixture('r02');
+    const notVisibleFiles = readdirSync(notVisible.reviewDir).sort();
     const prior = '<!-- source-revision: r01 -->\n# prior\n';
+    const notVisibleRootFiles = readdirSync(notVisible.root).sort();
+    const notVisibleTransport = transport({ issueBodies: [prior, prior] });
     expect(produceAuthorDispositions({
       reviewDir: notVisible.reviewDir,
       repositoryFullName: REPOSITORY,
       issueNumber: ISSUE,
       sourceRevision: 'r02',
-      artifactSourceTransport: transport({ issueBodies: [prior, prior] }),
+      artifactSourceTransport: notVisibleTransport,
     })).toMatchObject({ ok: false, retryable: true, cause: 'requested-revision-not-yet-visible' });
+    expect(readdirSync(notVisible.reviewDir).sort()).toEqual(notVisibleFiles);
+    expect(notVisibleTransport.createdIssueComments).toEqual([]);
+    expect([...notVisibleTransport.issueLabels]).toEqual([]);
+    expect(readdirSync(notVisible.root).sort()).toEqual(notVisibleRootFiles);
 
     const stale = t1Fixture('r01');
+    const staleFiles = readdirSync(stale.reviewDir).sort();
+    const staleRootFiles = readdirSync(stale.root).sort();
     const later = '<!-- source-revision: r03 -->\n# later\n';
     expect(produceAuthorDispositions({
       reviewDir: stale.reviewDir,
@@ -3429,9 +3449,47 @@ describe('Issue #2039 pre-stage T1 author disposition producer', () => {
       sourceRevision: 'r01',
       artifactSourceTransport: transport({ issueBodies: [later, later] }),
     })).toMatchObject({ ok: false, retryable: false, cause: 'authority-conflict' });
+    expect(readdirSync(stale.reviewDir).sort()).toEqual(staleFiles);
+    expect(readdirSync(stale.root).sort()).toEqual(staleRootFiles);
   });
 
-  it('rejects same-revision divergent bindings, cross-episode bindings, non-T1 intake, and any started stage', () => {
+  it('rejects malformed and multiple author blocks plus authority conflicts without stage, browser, or retry effects', () => {
+    const expectTerminalWithoutEffects = (input: ReturnType<typeof t1Fixture>): void => {
+      const source = transport({ issueBodies: [input.body, input.body] });
+      const beforeFiles = readdirSync(input.reviewDir).sort();
+      const beforeRootFiles = readdirSync(input.root).sort();
+      expect(produceAuthorDispositions({
+        reviewDir: input.reviewDir,
+        repositoryFullName: REPOSITORY,
+        issueNumber: ISSUE,
+        sourceRevision: 'r01',
+        artifactSourceTransport: source,
+      })).toMatchObject({ ok: false, retryable: false, cause: 'authority-conflict' });
+      expect(readdirSync(input.reviewDir).sort()).toEqual(beforeFiles);
+      expect(readdirSync(input.root).sort()).toEqual(beforeRootFiles);
+      expect(source.createdIssueComments).toEqual([]);
+      expect([...source.issueLabels]).toEqual([]);
+      expect(source.runGh.mock.calls.some(([argv]) => argv.includes('-X') || argv.includes('-f'))).toBe(false);
+    };
+
+    const malformed = t1Fixture();
+    writeFileSync(malformed.authorReplyPath, 'create-issue-author-dispositions/v1\nnot json\n');
+    expectTerminalWithoutEffects(malformed);
+
+    const multiple = t1Fixture();
+    const payload = JSON.stringify({
+      schema: AUTHOR_DISPOSITIONS_SCHEMA,
+      sourceRevision: 'r01',
+      predecessorStage: null,
+      findings: [],
+      m4: { inventory: [] },
+    });
+    writeFileSync(multiple.authorReplyPath, [
+      'create-issue-author-dispositions/v1', payload,
+      'create-issue-author-dispositions/v1', payload,
+    ].join('\n'));
+    expectTerminalWithoutEffects(multiple);
+
     const divergent = t1Fixture();
     const first = produceAuthorDispositions({
       reviewDir: divergent.reviewDir,
@@ -3445,13 +3503,7 @@ describe('Issue #2039 pre-stage T1 author disposition producer', () => {
     const changed = JSON.parse(readFileSync(authorPath, 'utf8')) as Record<string, any>;
     changed.findings = [];
     writeFileSync(authorPath, JSON.stringify(changed, null, 2) + '\n');
-    expect(produceAuthorDispositions({
-      reviewDir: divergent.reviewDir,
-      repositoryFullName: REPOSITORY,
-      issueNumber: ISSUE,
-      sourceRevision: 'r01',
-      artifactSourceTransport: transport({ issueBodies: [divergent.body, divergent.body] }),
-    })).toMatchObject({ ok: false, retryable: false, cause: 'authority-conflict' });
+    expectTerminalWithoutEffects(divergent);
 
     const foreign = t1Fixture();
     writeFileSync(join(foreign.reviewDir, 'author-dispositions.json'), JSON.stringify({
@@ -3464,40 +3516,36 @@ describe('Issue #2039 pre-stage T1 author disposition producer', () => {
       findings: [],
       m4: { reviewEpisodeId: 'issue:9999@r01', sourceRevision: 'r00', predecessorStage: null, inventory: [] },
     }, null, 2) + '\n');
-    expect(produceAuthorDispositions({
-      reviewDir: foreign.reviewDir,
-      repositoryFullName: REPOSITORY,
-      issueNumber: ISSUE,
-      sourceRevision: 'r01',
-      artifactSourceTransport: transport({ issueBodies: [foreign.body, foreign.body] }),
-    })).toMatchObject({ ok: false, retryable: false, cause: 'authority-conflict' });
+    expectTerminalWithoutEffects(foreign);
 
     const nonT1 = t1Fixture();
     const intakePath = join(nonT1.reviewDir, 'tier-intake.json');
     const intake = JSON.parse(readFileSync(intakePath, 'utf8')) as Record<string, unknown>;
     intake.priorTier = 'T2';
     writeFileSync(intakePath, JSON.stringify(intake, null, 2) + '\n');
-    expect(produceAuthorDispositions({
-      reviewDir: nonT1.reviewDir,
-      repositoryFullName: REPOSITORY,
-      issueNumber: ISSUE,
-      sourceRevision: 'r01',
-      artifactSourceTransport: transport({ issueBodies: [nonT1.body, nonT1.body] }),
-    })).toMatchObject({ ok: false, retryable: false, cause: 'authority-conflict' });
+    expectTerminalWithoutEffects(nonT1);
 
     const started = t1Fixture();
     writeFileSync(join(started.reviewDir, 'attempt-001.json'), JSON.stringify({
       schema: STAGE_EVIDENCE_SCHEMA,
       stage: 'architectural',
     }));
-    expect(produceAuthorDispositions({
-      reviewDir: started.reviewDir,
-      repositoryFullName: REPOSITORY,
+    expectTerminalWithoutEffects(started);
+
+    const snapshotConflict = t1Fixture();
+    const snapshotPath = join(snapshotConflict.reviewDir, 'issue-r01-body.json');
+    const snapshotBytes = JSON.stringify({
+      schema: 'create-issue-live-snapshot/v1',
       issueNumber: ISSUE,
       sourceRevision: 'r01',
-      artifactSourceTransport: transport({ issueBodies: [started.body, started.body] }),
-    })).toMatchObject({ ok: false, retryable: false, cause: 'authority-conflict' });
+      title: 'conflicting snapshot title',
+      body: snapshotConflict.body,
+    }, null, 2) + '\n';
+    writeFileSync(snapshotPath, snapshotBytes);
+    expectTerminalWithoutEffects(snapshotConflict);
+    expect(readFileSync(snapshotPath, 'utf8')).toBe(snapshotBytes);
   });
+
 });
 
 describe('Issue #2009 canonical plural capture verdicts', () => {
