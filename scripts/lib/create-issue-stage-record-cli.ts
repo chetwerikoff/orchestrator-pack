@@ -1601,6 +1601,7 @@ export function runStageFinalizeCli(
         phase: opts.phase,
         operatorAdjudication: operatorAcceptanceAdjudication(opts),
         repositoryFullName: opts.repo,
+        artifactSourceTransport: transport,
       };
       const result = opts.command === 'produce-artifacts'
         ? produceAcceptanceArtifacts(artifactOptions)
