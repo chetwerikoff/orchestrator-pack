@@ -1197,14 +1197,26 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
             reconcileStageReadOnlyAction(opts, issueNumber, reconciliationBinding, reviewDir, stageEvidencePath),
           )
         : null;
-      const output = zeroSendProjection ?? validatedManagerSurfaceOutput(
-        result,
-        result.temporary ?? 'reconciliation_failed',
-        nextAction,
-        result.ok ? undefined : result.errors.join('; '),
-        undefined,
-        opts.blockedOn,
+      const authorityConflict = !result.ok && result.errors.some((error) =>
+        /permanently_noncanonical_publication|authoritative GitHub artifact|foreign[- ]comment|publisher mismatch|edited publication/i.test(error)
       );
+      const output = zeroSendProjection
+        ?? (authorityConflict && !opts.blockedOn
+          ? createIssueExternalPauseResult({
+              cause: 'external:content_authority_conflict',
+              remedy: 'resolve the authoritative GitHub publication conflict, then resume this same Dispatch',
+              resumeWhen: { operator: true },
+              evidence: result.errors.join('; '),
+              blocker: result.errors.join('; '),
+            })
+          : validatedManagerSurfaceOutput(
+              result,
+              result.temporary ?? 'reconciliation_failed',
+              nextAction,
+              result.ok ? undefined : result.errors.join('; '),
+              undefined,
+              opts.blockedOn,
+            ));
       if (!result.ok) process.stderr.write(result.errors.join('\n') + '\n');
       return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
     }
@@ -1340,17 +1352,17 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
         || item.code === 'orphan-cycle'
         || item.code === 'malformed-marker'
       ));
-      const retryBinding = !result.ok && result.stageAttemptId
+      const retryBinding = !result.ok
         ? {
             repository: opts.repo,
             issueNumber,
             sourceRevision,
             stage,
-            stageAttemptId: result.stageAttemptId,
+            ...(result.stageAttemptId ? { stageAttemptId: result.stageAttemptId } : {}),
           } satisfies CreateIssueActionBinding
         : null;
       const nextAction = retryBinding
-        ? hardFailure
+        ? hardFailure || !result.stageAttemptId
           ? (() => {
               const canonical = resolveCanonicalReviewDirectory({ taskIdentity: 'issue:' + issueNumber });
               return reconcileStageReadOnlyAction(
