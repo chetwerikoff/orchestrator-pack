@@ -1167,7 +1167,7 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
         ];
         appendBlockedOnArgv(reconcileArgv, opts.blockedOn);
         const retryableRead = reconcileStageReadIsRetryable(result);
-        if (result.ok && !result.alreadySettled) {
+        if (result.ok) {
           nextAction = createIssueNextAction({
             kind: 'produce-acceptance-artifacts',
             binding,
@@ -1216,23 +1216,31 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
       const authorityConflict = !result.ok && result.errors.some((error) =>
         /permanently_noncanonical_publication|authoritative GitHub artifact (?:was )?edited|foreign[- ]comment|publisher mismatch|principal mismatch|edited publication/i.test(error)
       );
-      const output = zeroSendProjection
-        ?? (authorityConflict && !opts.blockedOn
-          ? createIssueExternalPauseResult({
-              cause: 'external:content_authority_conflict',
-              remedy: 'resolve the authoritative GitHub publication conflict, then resume this same Dispatch',
-              resumeWhen: { operator: true },
-              evidence: result.errors.join('; '),
-              blocker: result.errors.join('; '),
-            })
-          : validatedManagerSurfaceOutput(
-              result,
-              result.temporary ?? 'reconciliation_failed',
-              nextAction,
-              result.ok ? undefined : result.errors.join('; '),
-              undefined,
-              opts.blockedOn,
-            ));
+      const output = opts.blockedOn
+        ? projectBlockedOnToExternalPause(opts.blockedOn)
+        : zeroSendProjection
+          ?? (authorityConflict
+            ? createIssueExternalPauseResult({
+                cause: 'external:content_authority_conflict',
+                remedy: 'resolve the authoritative GitHub publication conflict, then resume this same Dispatch',
+                resumeWhen: { operator: true },
+                evidence: result.errors.join('; '),
+                blocker: result.errors.join('; '),
+              })
+            : result.ok
+              ? (() => {
+                  if (!nextAction) throw new Error('manager_result_without_recovery:reconciliation_ready');
+                  return createIssueRecoverableResult({
+                    cause: 'reconciliation_ready',
+                    nextAction,
+                  });
+                })()
+              : validatedManagerSurfaceOutput(
+                  result,
+                  result.temporary ?? 'reconciliation_failed',
+                  nextAction,
+                  result.errors.join('; '),
+                ));
       if (!result.ok) process.stderr.write(result.errors.join('\n') + '\n');
       return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
     }
