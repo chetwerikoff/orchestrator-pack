@@ -401,9 +401,7 @@ evidence becomes boundary-only `contract_defect`. Neither outcome authorizes
 manager `worker_done --outcome failed`.
 
 Do not insert `sleep`, `ps` polling, or switch to a neighboring Issue as a
-substitute for acting on the current pack-review result. A scrubbed foreign-owner
-diagnostic from another conversation creates no manager retry authority by
-itself.
+substitute for acting on the current pack-review result. A scrubbed foreign-owner diagnostic from another conversation creates no manager retry authority by itself.
 
 An exact owned reviewer turn that is still generating below 15 minutes remains
 active and receives no replacement. At or beyond 15 minutes it is only eligible
