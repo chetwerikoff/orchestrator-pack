@@ -470,6 +470,7 @@ export async function runSupervisedWorkerStart(input: {
   }
   if (delegatedIntegration && (
     !expectedCurrent
+    || expectedCurrent.role !== 'worker'
     || expectedCurrent.taskId !== requestedTaskId
     || expectedCurrent.assignmentId !== delegatedIntegration.predecessorAssignmentId
     || expectedCurrent.generation !== delegatedIntegration.predecessorGeneration
