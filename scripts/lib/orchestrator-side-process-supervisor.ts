@@ -92,7 +92,7 @@ function verifyEpochAndProjection(options: SupervisorOptions): { registryHash: s
   const core = new FileEpochAuthority(options.epochAuthorityPath).verify(options.epochId, options.nonce);
   const projected = projectRegistry(options.targetRegistryPath, options.projectedRegistryPath);
   if (projected.registryHash !== core.registryHash) throw new Error('supervisor_registry_hash_mismatch');
-  const registry = validateSchedulerRegistry(readFileSync(options.projectedRegistryPath));
+  const registry = validateSchedulerRegistry(readFileSync(options.projectedRegistryPath), { requireStallGraceMultiplier: true });
   return {
     registryHash: projected.registryHash,
     cadenceSeconds: registry.children[0].cadenceSeconds,
@@ -317,7 +317,7 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
         if (stopping) break;
       }
 
-      const registry = validateSchedulerRegistry(readFileSync(options.projectedRegistryPath));
+      const registry = validateSchedulerRegistry(readFileSync(options.projectedRegistryPath), { requireStallGraceMultiplier: true });
       const child = registry.children[0];
       const schedulerPath = path.join(options.repoRoot, 'scripts', child.script);
       currentAbort = new AbortController();
