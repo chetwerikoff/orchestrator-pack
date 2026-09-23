@@ -783,9 +783,10 @@ describe('Issue #1935 sanitized measured convergence replay', () => {
       expect(output).toMatchObject({
         ok: true,
         alreadySettled: true,
-        blocked_on: blockedOn,
+        cause: 'completed',
         nextAction: null,
       });
+      expect(output).not.toHaveProperty('blocked_on');
     } finally {
       terminalLogSpy.mockRestore();
     }
@@ -807,7 +808,7 @@ describe('zero-send manager result is action or structured reason (Issue #1999)'
     return JSON.parse(readFileSync(join(fixtureDir, name), 'utf8')) as Record<string, unknown>;
   }
 
-  it('returns nextAction null with a structured reason when a fresh invocation id is offered', () => {
+  it('returns readonly reconciliation with a structured reason for deterministic zero-send input', () => {
     for (const name of [
       'create-issue-926-terminal-competitive-01.json',
       'create-issue-926-terminal-competitive-01-final.json',
@@ -823,7 +824,7 @@ describe('zero-send manager result is action or structured reason (Issue #1999)'
         pacedRetryAction: existingPacedBoundedRetryAction(binding, '01'),
         freshInvocationId: 'fresh-invocation-id',
       });
-      expect(projected?.nextAction).toBeNull();
+      expect(projected?.nextAction).toMatchObject({ kind: 'reconcile-stage-read-only' });
       expect(projected).toEqual(expect.objectContaining({
         ok: false,
         cause: policy?.code,
@@ -839,5 +840,44 @@ describe('zero-send manager result is action or structured reason (Issue #1999)'
       expect(typeof projected?.blocker).toBe('string');
       expect(projected && 'reason' in projected).toBe(true);
     }
+  });
+
+  it('projects marker conflict to readonly reconciliation and exhausted external transient to a typed pause', () => {
+    const reconcile = projectZeroSendManagerResult({
+      policy: {
+        class: 'state-conflict',
+        code: 'marker_conflict',
+        rawCause: 'marker_conflict: canonical lineage disagrees',
+      },
+      attemptOrdinal: 1,
+      binding,
+      pacedRetryAction: existingPacedBoundedRetryAction(binding, '01'),
+    });
+    expect(reconcile).toMatchObject({
+      ok: false,
+      cause: 'marker_conflict',
+      nextAction: { kind: 'reconcile-stage-read-only' },
+    });
+
+    const paused = projectZeroSendManagerResult({
+      policy: {
+        class: 'transient',
+        code: 'transport_unavailable',
+        rawCause: 'GitHub HTTP 503 unavailable',
+      },
+      attemptOrdinal: 2,
+      binding,
+      reviewerSlot: '01',
+      pacedRetryAction: existingPacedBoundedRetryAction(binding, '01'),
+    });
+    expect(paused).toMatchObject({
+      ok: false,
+      cause: 'external:github_unavailable',
+      pause: {
+        resume_when: { operator: true },
+        evidence: 'GitHub HTTP 503 unavailable',
+      },
+      nextAction: null,
+    });
   });
 });
