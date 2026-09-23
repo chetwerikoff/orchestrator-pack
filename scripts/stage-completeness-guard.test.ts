@@ -1068,6 +1068,28 @@ describe('--public-actor argv validation (Issue #1980)', () => {
     'competitive',
   ];
 
+  it('Issue #1998: requires explicit public actor before start-cycle side effects', () => {
+    const chunks: string[] = [];
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      chunks.push(typeof chunk === 'string' ? chunk : String(chunk));
+      return true;
+    });
+    const stdout = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const code = runStageFinalizeCli([
+        ...startCycleArgv,
+        '--tier',
+        'T2',
+        '--json',
+      ]);
+      expect(code).toBe(5);
+      expect(chunks.join('')).toContain('--public-actor is required');
+    } finally {
+      stderr.mockRestore();
+      stdout.mockRestore();
+    }
+  });
+
   it('AC1: rejects flow-manager at argv parse with the accepted set in stderr', () => {
     const chunks: string[] = [];
     const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
