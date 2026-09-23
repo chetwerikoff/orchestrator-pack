@@ -167,14 +167,7 @@ function sourceVerdictEvidenceMap(
       : '';
     if (purpose === 'stage-time' && producerIdentities.has(producerIdentity)) return null;
     if (producerIdentity) producerIdentities.add(producerIdentity);
-    const verdict = normalizeMaterialVerdict(
-      isRecord(evidence)
-        && evidence.credentialingAuthority === 'authoritative-github-artifact'
-        && nonEmpty(evidence.producerEvidenceIdentity)
-        && evidence.producerEvidenceIdentity.startsWith('authoritative-github-artifact:comment-')
-        ? { ...evidence, terminalClassification: 'complete' }
-        : evidence,
-    );
+    const verdict = normalizeMaterialVerdict(evidence);
     if ((verdict === 'accept' || verdict === 'material-findings') && nonEmpty(evidence.captureIdentity)) {
       const captureIdentity = evidence.captureIdentity.trim();
       if (substantiveCaptureIdentities.has(captureIdentity)) return null;

@@ -3690,8 +3690,9 @@ describe('Issue #2017 routed missing-slot recovery', () => {
     expect(stored.reviewLane.sourceVerdicts['01']).toBe('accept');
     expect(stored.reviewLane.sourceVerdicts['02']).toBe('accept');
     expect(stored.reviewLane.sourceVerdicts['03']).toBe('accept');
-    expect(stored.reviewLane.sourceVerdictEvidence['01'].terminalClassification).toBe('incident');
-    expect(stored.reviewLane.sourceVerdictEvidence['02'].terminalClassification).toBe('incident');
+    expect(stored.reviewLane.sourceVerdictEvidence['01'].terminalClassification).toBe('complete');
+    expect(stored.reviewLane.sourceVerdictEvidence['02'].terminalClassification).toBe('complete');
+    expect(validateReviewLaneRecord(stored.reviewLane).ok).toBe(true);
     const parsed = parseConsumableStageReceipt({ ...stored, completedSourceCount: 3 });
     expect(parsed.errors, parsed.errors.join('\n')).toEqual([]);
     expect(parsed.receipt).not.toBeNull();

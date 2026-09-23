@@ -2212,7 +2212,9 @@ export function reconcileCreateIssueStage(
       sourceVerdictEvidence[slot] = {
         producerEvidenceIdentity: 'authoritative-github-artifact:comment-' + resolvedArtifact.authority.commentId,
         captureIdentity: resolvedArtifact.capture.captureIdentity,
-        terminalClassification: finalInvocation.terminalClassification,
+        terminalClassification: resolvedArtifact.authority.kind === AUTHORITATIVE_GITHUB_ARTIFACT_BASIS
+          ? 'complete'
+          : finalInvocation.terminalClassification,
         credentialingAuthority: 'authoritative-github-artifact',
         captureVerified: true,
         digestMatches: true,
