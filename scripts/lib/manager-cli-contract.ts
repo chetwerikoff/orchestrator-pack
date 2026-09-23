@@ -80,6 +80,7 @@ function invalid(
 export function inspectManagerCliInvocation(
   declaration: ManagerCliDeclaration,
   tokens: readonly string[],
+  options: { readonly validateRequired?: boolean } = {},
 ): ManagerCliInspection {
   let command: string | null = null;
   let offset = 0;
@@ -103,8 +104,8 @@ export function inspectManagerCliInvocation(
     return { help: renderManagerCliUsage(declaration), error: null, command: null };
   }
 
-  const options = managerCliOptionInventory(declaration, command);
-  const byFlag = new Map(options.map((option) => [option.flag, option]));
+  const declaredOptions = managerCliOptionInventory(declaration, command);
+  const byFlag = new Map(declaredOptions.map((option) => [option.flag, option]));
   const seen = new Map<string, number>();
 
   for (let index = offset; index < tokens.length; index += 1) {
@@ -142,9 +143,11 @@ export function inspectManagerCliInvocation(
     index += 1;
   }
 
-  for (const option of options) {
-    if (option.required && !seen.has(option.flag)) {
-      return invalid(declaration, command, `${option.flag} is required`);
+  if (options.validateRequired !== false) {
+    for (const option of managerCliOptionInventory(declaration, command)) {
+      if (option.required && !seen.has(option.flag)) {
+        return invalid(declaration, command, `${option.flag} is required`);
+      }
     }
   }
 
