@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { TURN_STATES } from '../chatgpt-browser-turn/contracts.ts';
 import type { ProbeStatus } from '../browser-gpt-page-probe.ts';
 import {
@@ -15,21 +17,12 @@ import {
 } from './execute-issue-manager-boundary.ts';
 import { runExecuteIssueManagerBoundaryCli } from '../execute-issue-manager-boundary.ts';
 
-const PROBE_STATUSES = [
-  'ok',
-  'not_found',
-  'ambiguous',
-  'stale_node',
-  'unsafe_output',
-  'surface_unknown',
-  'unavailable',
-  'export_failed',
-  'cleanup_failed',
-  'input_invalid',
-] as const satisfies readonly ProbeStatus[];
-type MissingProbeStatus = Exclude<ProbeStatus, typeof PROBE_STATUSES[number]>;
-const probeCoverageIsExhaustive: MissingProbeStatus extends never ? true : never = true;
-void probeCoverageIsExhaustive;
+function trackedProbeStatuses(): ProbeStatus[] {
+  const source = readFileSync(join(process.cwd(), 'scripts', 'browser-gpt-page-probe.ts'), 'utf8');
+  const declaration = /export type ProbeStatus =([\\s\\S]*?);/u.exec(source)?.[1];
+  if (!declaration) throw new Error('ProbeStatus declaration not found');
+  return [...declaration.matchAll(/'([^']+)'/gu)].map((match) => match[1] as ProbeStatus);
+}
 
 const context: ExecuteIssueManagerBoundaryContext = {
   repository: 'chetwerikoff/orchestrator-pack',
@@ -76,7 +69,7 @@ function resultAction(evaluated: ReturnType<typeof classifyExecuteIssueManagerRe
 describe('execute-Issue manager boundary', () => {
   it('covers the exact closed TURN_STATES and ProbeStatus sets', () => {
     expect(Object.keys(EXECUTE_ISSUE_TURN_CLASSIFICATION).sort()).toEqual([...TURN_STATES].sort());
-    expect(Object.keys(EXECUTE_ISSUE_PROBE_CLASSIFICATION).sort()).toEqual([...PROBE_STATUSES].sort());
+    expect(Object.keys(EXECUTE_ISSUE_PROBE_CLASSIFICATION).sort()).toEqual(trackedProbeStatuses().sort());
   });
 
   it('extends the one shared kind vocabulary with exactly three execute read-only reconciliation kinds', () => {

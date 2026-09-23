@@ -120,7 +120,7 @@ active, ownership is ambiguous, or the continuation head/completion state is no
 longer current, the fresh send is blocked and ordinary observation/recovery
 resumes.
 
-## Operator-visible outcomes
+## Terminal outcomes
 
 Normal operator-visible completion is `VERIFIED_COMPLETE`. For a
 manager-controlled Browser-GPT implementation, the manager may complete its own
