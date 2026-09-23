@@ -1,0 +1,52 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2062,
+  "declared_paths": [
+    "docs/declarations/2062.pr-scope.json",
+    "docs/orchestration-runbook.md",
+    "scripts/cursor-unsent-composer-submit.test.ts",
+    "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/lib/cutover/activation-registry-projection.ts",
+    "scripts/lib/cutover/types.ts",
+    "scripts/lib/orchestrator-side-process-supervisor.ts",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/pr2-foundation/post-review-smoke.test.ts",
+    "scripts/pr2-foundation/post-review-smoke.ts",
+    "scripts/pr2-foundation/scheduler-post-review-smoke-production.test.ts",
+    "scripts/pr2-foundation/scheduler.ts",
+    "scripts/runtime/contracts.ts",
+    "scripts/worker-smoke-run.ts"
+  ],
+  "denylist": [
+    "credentials/**",
+    "packages/core/**",
+    "secrets/**",
+    "vendor/**"
+  ],
+  "allowed_roots": [
+    "docs/declarations/**",
+    "docs/orchestration-runbook.md",
+    "scripts/cursor-unsent-composer-submit.test.ts",
+    "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/lib/cutover/activation-registry-projection.ts",
+    "scripts/lib/cutover/types.ts",
+    "scripts/lib/orchestrator-side-process-supervisor.ts",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/native.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/pr2-foundation/post-review-smoke-preaction.test.ts",
+    "scripts/pr2-foundation/post-review-smoke-race.test.ts",
+    "scripts/pr2-foundation/post-review-smoke.test.ts",
+    "scripts/pr2-foundation/post-review-smoke.ts",
+    "scripts/pr2-foundation/scheduler-post-review-smoke-production.test.ts",
+    "scripts/pr2-foundation/scheduler.ts",
+    "scripts/runtime/contracts.ts",
+    "scripts/worker-smoke-run.ts",
+    "tests/external-output-references/capture-manifest.json",
+    "tests/external-output-references/captures/orca-runtime/**"
+  ],
+  "source_revision": "30141512bd743934ce41fbb12f735e5836c42360"
+}
