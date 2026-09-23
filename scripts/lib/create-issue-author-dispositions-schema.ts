@@ -172,6 +172,37 @@ export function classifyAuthorDispositionFailure(message: string): AuthorDisposi
   return 'unclassified';
 }
 
+export function authorDispositionDiagnosticFromFailure(
+  message: string,
+): AuthorDispositionDiagnostic | null {
+  if (classifyAuthorDispositionFailure(message) !== 'author-owned') return null;
+  const normalized = message.toLowerCase();
+  let field = '$';
+  let reason: AuthorDispositionDiagnosticReason = 'invalid_author_field';
+  if (normalized.includes('missing_schema_label') || normalized.includes('schema label')) {
+    field = 'schema-label';
+    reason = 'missing_schema_label';
+  } else if (normalized.includes('proposalreason') || normalized.includes('proposal reason')) {
+    field = 'findings[].proposalReason';
+  } else if (normalized.includes('rejectreason') || normalized.includes('reject reason')) {
+    field = 'findings[].rejectReason';
+  } else if (normalized.includes('occurrence')
+    || normalized.includes('capture mapping')
+    || normalized.includes('capture identity')
+    || normalized.includes('omitted required')
+    || normalized.includes('duplicate')) {
+    field = 'findings[].occurrences';
+  } else if (normalized.includes('remedydisposition') || normalized.includes('remedy disposition')) {
+    field = 'findings[].remedyDisposition';
+  } else if (normalized.includes('defectdisposition') || normalized.includes('defect disposition')) {
+    field = 'findings[].defectDisposition';
+  } else if (normalized.includes('m4') || normalized.includes('inventory')) {
+    field = 'm4.inventory';
+  } else if (normalized.includes('finding')) {
+    field = 'findings';
+  }
+  return diagnostic(reason, field, message);
+
 function diagnostic(
   reason: AuthorDispositionDiagnosticReason,
   field: string,
