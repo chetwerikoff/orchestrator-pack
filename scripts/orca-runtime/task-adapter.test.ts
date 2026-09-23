@@ -287,33 +287,50 @@ describe('OpenCode HTTP control plane', () => {
     })).toBeUndefined();
   });
 
-  it('fails stale, missing, and OpenCode-like non-token terminal-show evidence closed', () => {
-    const commands = [
-      [undefined, 'runtime_composer_command_unbound'],
-      ['wrapper-opencode', 'runtime_composer_family_ambiguous'],
-    ] as const;
-    for (const [command, reason] of commands) {
-      const terminal = {
-        handle: 'term-family-unbound',
-        incarnationId: 'generation-family-current',
-        worktreePath: process.cwd(),
-        title: 'family-unbound',
-        ...(command === undefined ? {} : { command }),
-        status: 'running' as const,
-      };
-      const adapter = new OrcaTaskRuntimeAdapter({
-        runJson: vi.fn((args: readonly string[]): OrcaJsonResponse =>
-          args[0] === 'terminal' && args[1] === 'show'
-            ? { ok: true, result: { terminal } }
-            : { ok: false, error: { code: 'unexpected_operation', message: args.join(' ') } }) as never,
-      });
-      expect(adapter.observeComposerFamily?.({
-        runtime: 'orca',
-        id: terminal.handle,
-        generation: terminal.incarnationId,
-      })).toMatchObject({ status: 'unbound', reason, provenance: 'orca-terminal-show' });
-    }
+  it('classifies a missing terminal command as Cursor and keeps ambiguous evidence closed', () => {
+    const terminal = {
+      handle: 'term-family-unbound',
+      incarnationId: 'generation-family-current',
+      worktreePath: process.cwd(),
+      title: 'family-unbound',
+      status: 'running' as const,
+    };
+    const missingCommand = new OrcaTaskRuntimeAdapter({
+      runJson: vi.fn((args: readonly string[]): OrcaJsonResponse =>
+        args[0] === 'terminal' && args[1] === 'show'
+          ? { ok: true, result: { terminal } }
+          : { ok: false, error: { code: 'unexpected_operation', message: args.join(' ') } }) as never,
+    });
+    expect(missingCommand.observeComposerFamily?.({
+      runtime: 'orca',
+      id: terminal.handle,
+      generation: terminal.incarnationId,
+    })).toEqual({
+      status: 'known',
+      family: 'non-opencode',
+      command: 'cursor-agent',
+      provenance: 'orca-terminal-show',
+    });
 
+    const ambiguousTerminal = { ...terminal, command: 'wrapper-opencode' };
+    const ambiguous = new OrcaTaskRuntimeAdapter({
+      runJson: vi.fn((args: readonly string[]): OrcaJsonResponse =>
+        args[0] === 'terminal' && args[1] === 'show'
+          ? { ok: true, result: { terminal: ambiguousTerminal } }
+          : { ok: false, error: { code: 'unexpected_operation', message: args.join(' ') } }) as never,
+    });
+    expect(ambiguous.observeComposerFamily?.({
+      runtime: 'orca',
+      id: terminal.handle,
+      generation: terminal.incarnationId,
+    })).toMatchObject({
+      status: 'unbound',
+      reason: 'runtime_composer_family_ambiguous',
+      provenance: 'orca-terminal-show',
+    });
+  });
+
+  it('rejects stale terminal-show generation evidence', () => {
     const staleTerminal = {
       handle: 'term-family-stale',
       incarnationId: 'generation-family-current',

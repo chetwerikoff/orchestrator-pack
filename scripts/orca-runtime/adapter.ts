@@ -989,7 +989,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
     const command = typeof terminal.command === 'string' ? terminal.command.trim() : '';
     if (!command) {
-      return { status: 'unbound', reason: 'runtime_composer_command_unbound', provenance };
+      return { status: 'known', family: 'non-opencode', command: 'cursor-agent', provenance };
     }
     if (/(?:^|\s)opencode(?:\s|$)/iu.test(command)) {
       return { status: 'known', family: 'opencode', command, provenance };
