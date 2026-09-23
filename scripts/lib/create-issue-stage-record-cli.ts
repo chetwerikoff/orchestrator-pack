@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { join, resolve } from 'node:path';
 import { defaultGhTransport, fetchIssueRevision } from './create-issue-stage-record-gh.ts';
 import {
@@ -1079,9 +1079,9 @@ function defaultAuthorRoundRunner(input: AuthorRoundRunnerInput): AuthorRoundRun
   const attemptIdentity = 'author-round-attempt-' + randomUUID();
   const handoffReceipt = join(input.reviewDir, `.author-round-${invocationId}.handoff.json`);
   const terminalEnvelope = join(input.reviewDir, `.author-round-${invocationId}.terminal.json`);
-  const child = spawnSync(
-    process.execPath,
-    [
+  const child = runProcessSync({
+    command: process.execPath,
+    args: [
       '--experimental-strip-types',
       'scripts/flow-manager-browser-gpt-long-run.ts',
       '--run-identity', runIdentity,
@@ -1096,21 +1096,16 @@ function defaultAuthorRoundRunner(input: AuthorRoundRunnerInput): AuthorRoundRun
       '--new-chat',
       '--project-url', projectUrl,
     ],
-    {
-      cwd: process.cwd(),
-      env: { ...process.env, OPK_FM_LONG_CHILD_DISABLE_DETACH: '1' },
-      encoding: 'utf8',
-      maxBuffer: 4 * 1024 * 1024,
-      timeout: 20 * 60 * 1000,
-    },
-  );
-  if (child.error) {
-    return { ok: false, blocker: child.error.message };
-  }
-  if (child.status !== 0 || !existsSync(input.outputPath)) {
+    cwd: process.cwd(),
+    env: { OPK_FM_LONG_CHILD_DISABLE_DETACH: '1' },
+    inheritParentEnv: true,
+    encoding: 'utf8',
+    timeoutMs: 20 * 60 * 1000,
+  });
+  if (!child.ok || !existsSync(input.outputPath)) {
     return {
       ok: false,
-      blocker: (child.stderr || child.stdout || `Browser-GPT author round exited ${String(child.status)}`).trim(),
+      blocker: (child.error || child.stderr || child.stdout || `Browser-GPT author round exited ${String(child.exitCode)}`).trim(),
     };
   }
   return { ok: true };
