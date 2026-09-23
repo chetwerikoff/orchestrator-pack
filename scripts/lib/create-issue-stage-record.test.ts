@@ -1643,7 +1643,7 @@ function makeCliTempDir(): string {
 }
 
 
-describe('poisoned canonical deterministic attempt stays terminal (Issue #1999)', () => {
+describe('poisoned canonical deterministic attempt stays terminal (Issue #1999 / #2037)', () => {
   const fixturePath = join(
     fileURLToPath(new URL('../..', import.meta.url)),
     'tests/external-output-references/create-issue-1977-poisoned-canonical-attempt.json',
@@ -1659,86 +1659,45 @@ describe('poisoned canonical deterministic attempt stays terminal (Issue #1999)'
     return { reviewDir, evidencePath, bytes };
   }
 
-  it('start-cycle and read-only reconcile-stage return nextAction null and keep the canonical stageAttemptId', () => {
+  it('keeps the #926-style deterministic attempt terminal when reconciling its exact evidence', () => {
     const stateRoot = makeCliTempDir();
-    const previous = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
-    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = stateRoot;
     const prepared = writeCanonicalAttempt(stateRoot);
     const logs: string[] = [];
     const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
       logs.push(String(line));
     });
     try {
-      const startCode = runStageFinalizeCli([
-        'node', 'scripts/create-issue-stage-finalize.ts', 'start-cycle',
+      const code = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
         '--repo', 'chetwerikoff/orchestrator-pack',
         '--issue-number', String(issueNumber),
-        '--source-revision', 'r04',
-        '--stage', 'competitive',
-        '--tier', 'T2',
-        '--public-actor', 'cursor-flow-manager',
+        '--review-dir', prepared.reviewDir,
+        '--stage-evidence', prepared.evidencePath,
         '--json',
       ]);
-      expect(startCode).toBe(1);
-      const started = JSON.parse(logs.at(-1) ?? '') as {
+      expect(code).toBe(1);
+      const output = JSON.parse(logs.at(-1) ?? '') as {
         nextAction: unknown;
         stageAttemptId: string;
         reason: { class: string; code: string };
       };
-      expect(started.nextAction).toBeNull();
-      expect(started.stageAttemptId).toBe('1977-poisoned-canonical-attempt');
-      expect(started.reason).toMatchObject({ class: 'deterministic-input', code: 'input_invalid' });
-
-      const reviewDir = makeCliTempDir();
-      const evidencePath = join(reviewDir, 'attempt-001.json');
-      writeFileSync(evidencePath, prepared.bytes);
-      const reconcileCode = runStageFinalizeCli([
-        'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
-        '--repo', 'chetwerikoff/orchestrator-pack',
-        '--issue-number', String(issueNumber),
-        '--review-dir', reviewDir,
-        '--stage-evidence', evidencePath,
-        '--json',
-      ]);
-      expect(reconcileCode).toBe(1);
-      const reconciled = JSON.parse(logs.at(-1) ?? '') as {
-        nextAction: unknown;
-        stageAttemptId: string;
-      };
-      expect(reconciled.nextAction).toBeNull();
-      expect(reconciled.stageAttemptId).toBe('1977-poisoned-canonical-attempt');
-      expect(readFileSync(evidencePath, 'utf8')).toBe(prepared.bytes);
+      expect(output.nextAction).toBeNull();
+      expect(output.stageAttemptId).toBe('1977-poisoned-canonical-attempt');
+      expect(output.reason).toMatchObject({ class: 'deterministic-input', code: 'input_invalid' });
       expect(readFileSync(prepared.evidencePath, 'utf8')).toBe(prepared.bytes);
     } finally {
       spy.mockRestore();
-      if (previous === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
-      else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previous;
     }
   });
 
-  it('does not call GitHub or replace the canonical attempt from startReviewCycle', () => {
-    const stateRoot = makeCliTempDir();
-    const prepared = writeCanonicalAttempt(stateRoot);
-    let ghCalls = 0;
-    const result = startReviewCycle({
-      runGh() {
-        ghCalls += 1;
-        return { exitCode: 1, stdout: '', stderr: 'must not be called' };
-      },
-    }, {
-      repo: 'chetwerikoff/orchestrator-pack',
-      issueNumber,
-      sourceRevision: 'r04',
-      stage: 'competitive',
-      tier: 'T2',
-      publicActor: 'cursor-flow-manager',
-      stateRootOverride: stateRoot,
-      workdir: makeCliTempDir(),
-    });
-    expect(result.ok).toBe(false);
-    expect(result.stageAttemptId).toBe('1977-poisoned-canonical-attempt');
-    expect(ghCalls).toBe(0);
-    expect(readFileSync(prepared.evidencePath, 'utf8')).toBe(prepared.bytes);
+  it('removes the coarse Issue/revision/stage terminal scan before lifecycle admission', () => {
+    const cliSource = readFileSync(join(process.cwd(), 'scripts', 'lib', 'create-issue-stage-record-cli.ts'), 'utf8');
+    const coreSource = readFileSync(join(process.cwd(), 'scripts', 'lib', 'create-issue-stage-record-core.ts'), 'utf8');
+    expect(cliSource).not.toContain('readCanonicalZeroSendTerminal');
+    expect(coreSource).not.toContain('readCanonicalZeroSendTerminal');
+    expect(coreSource.indexOf('admitStageLaunch(admissionInput)')).toBeGreaterThan(
+      coreSource.indexOf('export function startReviewCycle('),
+    );
   });
 });
 
