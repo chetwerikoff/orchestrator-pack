@@ -377,6 +377,7 @@ function executionRecoveryInspect(value: JsonRecord): ExecutionRecoveryInspectEv
       return embedded as unknown as ExecutionRecoveryInspectEvidence;
     }
   }
+  if (!Object.prototype.hasOwnProperty.call(value, 'execution_recovery_evidence')) return null;
   return projectExecutionRecoveryInspect(value);
 }
 
