@@ -214,6 +214,111 @@ describe('OpenCode HTTP control plane', () => {
     });
   }
 
+  it('classifies exact terminal-show command metadata before any URL-dependent control lookup', () => {
+    const terminal = {
+      handle: 'term-family-opencode',
+      incarnationId: 'generation-family-opencode',
+      worktreePath: process.cwd(),
+      title: 'opencode',
+      command: 'opencode --agent pack-opk-fixture',
+      status: 'running' as const,
+    };
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse =>
+      args[0] === 'terminal' && args[1] === 'show'
+        ? { ok: true, result: { terminal } }
+        : { ok: false, error: { code: 'unexpected_operation', message: args.join(' ') } });
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+
+    expect(adapter.observeComposerFamily?.({
+      runtime: 'orca',
+      id: terminal.handle,
+      generation: terminal.incarnationId,
+    })).toEqual({
+      status: 'known',
+      family: 'opencode',
+      command: terminal.command,
+      provenance: 'orca-terminal-show',
+    });
+    expect(adapter.composerControl?.({
+      runtime: 'orca',
+      id: terminal.handle,
+      generation: terminal.incarnationId,
+    })).toBeUndefined();
+  });
+
+  it('fails stale, missing, and OpenCode-like non-token terminal-show evidence closed', () => {
+    const commands = [
+      [undefined, 'runtime_composer_command_unbound'],
+      ['wrapper-opencode', 'runtime_composer_family_ambiguous'],
+    ] as const;
+    for (const [command, reason] of commands) {
+      const terminal = {
+        handle: 'term-family-unbound',
+        incarnationId: 'generation-family-current',
+        worktreePath: process.cwd(),
+        title: 'family-unbound',
+        ...(command === undefined ? {} : { command }),
+        status: 'running' as const,
+      };
+      const adapter = new OrcaTaskRuntimeAdapter({
+        runJson: vi.fn((args: readonly string[]): OrcaJsonResponse =>
+          args[0] === 'terminal' && args[1] === 'show'
+            ? { ok: true, result: { terminal } }
+            : { ok: false, error: { code: 'unexpected_operation', message: args.join(' ') } }) as never,
+      });
+      expect(adapter.observeComposerFamily?.({
+        runtime: 'orca',
+        id: terminal.handle,
+        generation: terminal.incarnationId,
+      })).toMatchObject({ status: 'unbound', reason, provenance: 'orca-terminal-show' });
+    }
+
+    const staleTerminal = {
+      handle: 'term-family-stale',
+      incarnationId: 'generation-family-current',
+      worktreePath: process.cwd(),
+      title: 'family-stale',
+      command: 'opencode --agent pack-opk-fixture',
+      status: 'running' as const,
+    };
+    const stale = new OrcaTaskRuntimeAdapter({
+      runJson: vi.fn((): OrcaJsonResponse => ({ ok: true, result: { terminal: staleTerminal } })) as never,
+    });
+    expect(stale.observeComposerFamily?.({
+      runtime: 'orca',
+      id: staleTerminal.handle,
+      generation: 'generation-family-old',
+    })).toEqual({
+      status: 'unbound',
+      reason: 'worker_generation_not_found',
+      provenance: 'orca-terminal-show',
+    });
+  });
+
+  it('classifies trustworthy non-OpenCode terminal-show command metadata for Cursor routing', () => {
+    const terminal = {
+      handle: 'term-family-cursor',
+      incarnationId: 'generation-family-cursor',
+      worktreePath: process.cwd(),
+      title: 'cursor',
+      command: 'cursor-agent --resume fixture',
+      status: 'running' as const,
+    };
+    const adapter = new OrcaTaskRuntimeAdapter({
+      runJson: vi.fn((): OrcaJsonResponse => ({ ok: true, result: { terminal } })) as never,
+    });
+    expect(adapter.observeComposerFamily?.({
+      runtime: 'orca',
+      id: terminal.handle,
+      generation: terminal.incarnationId,
+    })).toEqual({
+      status: 'known',
+      family: 'non-opencode',
+      command: terminal.command,
+      provenance: 'orca-terminal-show',
+    });
+  });
+
   it('uses health and visible TUI append/submit for an exact spawned OpenCode worker', () => {
     const requests: Array<{ url: string; method: 'GET' | 'POST'; body?: string; timeoutMs: number }> = [];
     const adapter = makeAdapter((input) => {
