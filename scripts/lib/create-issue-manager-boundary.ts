@@ -94,7 +94,7 @@ function classifyThrown(input: CreateIssueManagerBoundaryInput, error: unknown):
     });
   }
 
-  if (/authoritative github artifact.*edited|foreign[- ]comment|publisher mismatch|principal mismatch/u.test(lower)) {
+  if (/permanently_noncanonical_publication|authoritative github artifact.*edited|foreign[- ]comment|publisher mismatch|principal mismatch/u.test(lower)) {
     return createIssueExternalPauseResult({
       cause: 'external:content_authority_conflict',
       evidence: message,
@@ -132,7 +132,7 @@ function classifyThrown(input: CreateIssueManagerBoundaryInput, error: unknown):
 
   if (/stale_next_action/u.test(lower) && input.reconcileAction) {
     return createIssueRecoverableResult({
-      cause: 'stale_next_action',
+      cause: 'stale_next_action_reconciliation',
       blocker: message,
       nextAction: input.reconcileAction,
     });
