@@ -101,6 +101,18 @@ policy. Do not introduce Node 20, emitted build artifacts, `tsx`, `ts-node`, or
 loader fallbacks. Optional Git hooks may run the same checks before push, but hooks
 never replace server-side CI.
 
+### Replay fixture harvesting
+
+Covered live-transport replay fixtures are harvested through
+`scripts/replay-fixture-import.ts`. Whole-file inputs and selected JSONL records
+use the same deterministic scrub path, and provenance sidecars bind the raw
+selected source bytes when available plus the current scrubbed fixture bytes.
+
+Hand-written replay shapes are limited to explicit synthetic/negative cases whose
+provenance declares `synthetic: true`. Synthetic status never bypasses the
+sensitive-pattern scan. `scripts/verify.ts` runs the same closed-inventory
+provenance and sensitive-data policy check used by the importer.
+
 ## GitHub protection
 
 Protect the default branch so:
