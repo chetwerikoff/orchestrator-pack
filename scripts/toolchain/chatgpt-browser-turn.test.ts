@@ -95,6 +95,7 @@ import {
   deriveComposerInsertionBudgetMs,
   __testComposerMutation,
 } from '../chatgpt-browser-turn/state-light-turn.ts';
+import { isPostSendTargetCrash } from '../chatgpt-browser-turn/state-light-turn-base.ts';
 import {
   collectionLocator,
   readyTurnObservationFrames,
@@ -137,6 +138,14 @@ function assertTimingBudgetConsumed(
     );
   }
 }
+
+describe('Issue #1998 Target crash classification', () => {
+  it('matches only the explicit Playwright Target crashed signature', () => {
+    expect(isPostSendTargetCrash(new Error('locator.count: Target crashed'))).toBe(true);
+    expect(isPostSendTargetCrash(new Error('Target closed'))).toBe(false);
+    expect(isPostSendTargetCrash(new Error('locator.count: Timeout 5000ms exceeded'))).toBe(false);
+  });
+});
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'opk-964-'));
