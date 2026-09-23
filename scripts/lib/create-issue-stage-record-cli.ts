@@ -1558,7 +1558,7 @@ export function runStageFinalizeCli(
     if (opts.command === 'produce-artifacts' || opts.command === 'check-artifacts') {
       const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
       const issueNumber = artifactIssueNumber(opts, reviewDir);
-      const stale = staleArtifactBinding(opts, reviewDir, issueNumber);
+      const stale = staleArtifactBinding(opts, reviewDir, issueNumber, transport);
       if (stale) {
         if (opts.json) console.log(JSON.stringify(stale));
         else process.stderr.write('stale_next_action\n');
@@ -1586,11 +1586,23 @@ export function runStageFinalizeCli(
       let nextAction = null;
       if (binding && !result.ok) {
         const errors = 'errors' in result ? result.errors : result.missing.map((item) => item.reason);
-        const external = errors.some((error) => error.includes('authority=author-owned')
-          || error.includes('operator')
+        const structuredAuthorDiagnostics = 'authorDiagnostics' in result
+          && Array.isArray(result.authorDiagnostics)
+          ? result.authorDiagnostics
+          : [];
+        const onlyAuthorActionable = structuredAuthorDiagnostics.length > 0
+          && structuredAuthorDiagnostics.every((item) => item.ownership === 'author-owned');
+        const lifecycleInjectedFailure = errors.some(
+          (error) => classifyAuthorDispositionFailure(error) === 'lifecycle-injected',
+        );
+        const terminalExternal = errors.some((error) => (
+          error.includes('operator')
           || error.includes('stage_slot_consumed')
-          || error.includes('stale_next_action'));
-        if (!external) {
+          || error.includes('stale_next_action')
+        ));
+        if (opts.command === 'produce-artifacts' && onlyAuthorActionable && !lifecycleInjectedFailure) {
+          nextAction = authorRoundAction(binding, reviewDir);
+        } else if (!lifecycleInjectedFailure && !terminalExternal) {
           nextAction = createIssueNextAction({
             kind: opts.command === 'check-artifacts' ? 'produce-acceptance-artifacts' : 'retry-acceptance-production',
             binding,
@@ -1646,6 +1658,64 @@ export function runStageFinalizeCli(
         else process.stderr.write('stale_next_action\n');
         return 1;
       }
+
+      let live;
+      try {
+        live = fetchIssueRevision(transport, opts.repo, issueNumber);
+      } catch (error) {
+        const output = createIssueTerminalResult({
+          ok: false,
+          cause: 'source-unavailable',
+          blocker: error instanceof Error ? error.message : String(error),
+        });
+        if (opts.json) console.log(JSON.stringify(output));
+        else process.stderr.write((output.blocker ?? output.cause) + '\n');
+        return 1;
+      }
+      const liveRevision = issueSourceRevision(live.body);
+      if (!liveRevision || liveRevision.toLowerCase() !== sourceRevision.toLowerCase()) {
+        const binding: CreateIssueActionBinding = {
+          repository: opts.repo,
+          issueNumber,
+          sourceRevision,
+          stage,
+        };
+        const staleLive = createIssueStaleNextAction({
+          binding,
+          observed: {
+            repository: opts.repo,
+            issueNumber,
+            ...(liveRevision ? { sourceRevision: liveRevision } : {}),
+            stage,
+          },
+          nextAction: null,
+        });
+        if (opts.json) console.log(JSON.stringify(staleLive));
+        else process.stderr.write('stale_next_action\n');
+        return 1;
+      }
+      const floorErrors = bodyFloorDiagnostics(live.body, tier);
+      if (floorErrors.length > 0) {
+        const binding: CreateIssueActionBinding = {
+          repository: opts.repo,
+          issueNumber,
+          sourceRevision,
+          stage,
+        };
+        const action = authorRoundAction(binding, canonicalAuthorRoundDirectory(issueNumber));
+        const output = validatedManagerSurfaceOutput(
+          { ok: false, bodyFloorDiagnostics: floorErrors },
+          'body_floor_rejected',
+          action,
+          floorErrors.join('; '),
+          undefined,
+          opts.blockedOn,
+        );
+        if (opts.json) console.log(JSON.stringify(output));
+        else process.stderr.write((output.blocker ?? output.cause ?? 'body_floor_rejected') + '\n');
+        return 1;
+      }
+
       const result = startReviewCycle(transport, {
         repo: opts.repo,
         issueNumber,
