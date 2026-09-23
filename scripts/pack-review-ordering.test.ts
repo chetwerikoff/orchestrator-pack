@@ -1445,6 +1445,7 @@ describe('Issue #1436 smoke/review ordering', () => {
       reviewRuns: readonly PackReviewStartConsumptionRecord[],
     ): string {
       const fixture = persistEntryPointFixture(authority, reviewRuns);
+      const beforeAuthority = readPackReviewAuthority(OBSERVED_PR, fixture.options);
       const beforeRunIds = listPackReviewRuns({
         projectId: 'orchestrator-pack',
         storeRoot: fixture.options.storeRoot,
@@ -1471,6 +1472,9 @@ describe('Issue #1436 smoke/review ordering', () => {
           projectId: 'orchestrator-pack',
           storeRoot: fixture.options.storeRoot,
         }).map((run) => run.id)).toEqual(beforeRunIds);
+        if (result !== 'admit') {
+          expect(readPackReviewAuthority(OBSERVED_PR, fixture.options)).toEqual(beforeAuthority);
+        }
         return result;
       } finally {
         if (previousStoreRoot === undefined) delete process.env.PACK_REVIEW_RUN_STORE_ROOT;
@@ -1624,6 +1628,24 @@ describe('Issue #1436 smoke/review ordering', () => {
         authority: (derived) => makeAuthority({
           reviewStageComplete: derived,
           reviewStartConsumed: derived,
+        }),
+        runVariants: [[observedRun()]],
+      },
+      {
+        id: 'A12b Issue #2052 prior finding on authority head rejects requested head drift without mutation',
+        expected: 'smoke_ordering_head_mismatch',
+        requestedHead: OTHER_HEAD,
+        authority: (derived) => makeAuthority({
+          reviewStageComplete: derived,
+          reviewStartConsumed: derived,
+          independent: {
+            startedEver: true,
+            headSha: OBSERVED_HEAD,
+            status: 'failed',
+            failureKind: 'finding',
+            failureHeadSha: OBSERVED_HEAD,
+            updatedAtUtc: CURRENT_RUN_AT,
+          },
         }),
         runVariants: [[observedRun()]],
       },
