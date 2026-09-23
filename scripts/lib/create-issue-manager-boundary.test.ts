@@ -54,7 +54,7 @@ describe('create-Issue manager boundary', () => {
   it('maps the four outcomes to one JSON object and exit codes 0/3/4/5', () => {
     const fixtures = [
       { expected: 0, value: createIssueTerminalResult({ ok: true, cause: 'completed' }) },
-      { expected: 3, value: createIssueRecoverableResult({ cause: 'stale_next_action', nextAction: action(['reconcile']) }) },
+      { expected: 3, value: createIssueRecoverableResult({ cause: 'reconciliation_ready', nextAction: action(['reconcile']) }) },
       {
         expected: 4,
         value: createIssueExternalPauseResult({
@@ -102,7 +102,7 @@ describe('create-Issue manager boundary', () => {
       producer: 'reconcile-stage',
       currentArgv: argv,
       produce: () => createIssueRecoverableResult({
-        cause: 'stale_next_action',
+        cause: 'reconciliation_ready',
         nextAction: action(argv),
       }),
     });
