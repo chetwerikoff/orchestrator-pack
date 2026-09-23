@@ -1154,6 +1154,277 @@ export function runStageFinalizeCli(
 ): number {
   return runParsedCli(argv, 'create-issue-stage-finalize', parseStageFinalizeArgs, (opts) => {
     const transport = artifactSourceTransport ?? defaultGhTransport();
+
+    if (opts.command === 'author-round') {
+      const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
+      const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
+      const canonicalReviewDir = canonicalAuthorRoundDirectory(issueNumber);
+      if (resolve(reviewDir) !== resolve(canonicalReviewDir)) {
+        const output = createIssueTerminalResult({
+          ok: false,
+          cause: 'author_round_noncanonical_review_dir',
+          blocker: `author-round requires canonical review directory ${canonicalReviewDir}`,
+        });
+        if (opts.json) console.log(JSON.stringify(output));
+        else process.stderr.write((output.blocker ?? output.cause) + '\n');
+        return 1;
+      }
+      const expectedSourceRevision = parseRequiredNonEmptyString(
+        opts.expectedSourceRevision,
+        '--expected-source-revision',
+      );
+      const expectedStage = parseRequiredNonEmptyString(
+        opts.expectedStage,
+        '--expected-stage',
+      ) as LifecycleReviewStage;
+      const binding: CreateIssueActionBinding = {
+        repository: opts.repo,
+        issueNumber,
+        sourceRevision: expectedSourceRevision,
+        stage: expectedStage,
+        ...(opts.expectedStageAttemptId
+          ? { stageAttemptId: parseRequiredNonEmptyString(opts.expectedStageAttemptId, '--expected-stage-attempt-id') }
+          : {}),
+      };
+
+      let live;
+      try {
+        live = fetchIssueRevision(transport, opts.repo, issueNumber);
+      } catch (error) {
+        const output = createIssueTerminalResult({
+          ok: false,
+          cause: 'source-unavailable',
+          blocker: error instanceof Error ? error.message : String(error),
+        });
+        if (opts.json) console.log(JSON.stringify(output));
+        else process.stderr.write((output.blocker ?? output.cause) + '\n');
+        return 1;
+      }
+      const liveRevision = issueSourceRevision(live.body);
+      if (liveRevision.toLowerCase() !== expectedSourceRevision.toLowerCase()) {
+        const stale = createIssueStaleNextAction({
+          binding,
+          observed: {
+            repository: opts.repo,
+            issueNumber,
+            ...(liveRevision ? { sourceRevision: liveRevision } : {}),
+            stage: expectedStage,
+          },
+          nextAction: null,
+        });
+        if (opts.json) console.log(JSON.stringify(stale));
+        else process.stderr.write('stale_next_action\n');
+        return 1;
+      }
+
+      let repairClass: 'body-floor' | 'author-schema';
+      let diagnostics: string[];
+      let schemaFragment = renderAuthorDispositionPromptFragment();
+
+      if (binding.stageAttemptId) {
+        const observed = artifactBindingFromState(
+          { ...opts, stageEvidencePaths: [] },
+          reviewDir,
+          issueNumber,
+          transport,
+        );
+        if (!observed
+          || observed.repository.toLowerCase() !== binding.repository.toLowerCase()
+          || observed.issueNumber !== binding.issueNumber
+          || observed.sourceRevision.toLowerCase() !== binding.sourceRevision.toLowerCase()
+          || observed.stage !== binding.stage
+          || observed.stageAttemptId !== binding.stageAttemptId) {
+          const stale = createIssueStaleNextAction({
+            binding,
+            observed: observed ?? { repository: opts.repo, issueNumber, sourceRevision: liveRevision },
+            nextAction: null,
+          });
+          if (opts.json) console.log(JSON.stringify(stale));
+          else process.stderr.write('stale_next_action\n');
+          return 1;
+        }
+        repairClass = 'author-schema';
+        const inspected = authorSchemaDiagnostics(reviewDir);
+        schemaFragment = inspected.schemaFragment;
+        diagnostics = inspected.diagnostics.map(
+          (item) => `${item.reason}:${item.field}: ${item.message}`,
+        );
+        if (diagnostics.length === 0) {
+          const output = createIssueTerminalResult({
+            ok: true,
+            cause: 'author_round_not_required',
+          });
+          if (opts.json) console.log(JSON.stringify(output));
+          return 0;
+        }
+      } else {
+        const existing = existingAttemptForStage(reviewDir, expectedStage);
+        if (existing) {
+          const stale = createIssueStaleNextAction({
+            binding,
+            observed: {
+              repository: opts.repo,
+              issueNumber,
+              sourceRevision: liveRevision,
+              stage: expectedStage,
+              stageAttemptId: existing.stageAttemptId,
+            },
+            nextAction: null,
+          });
+          if (opts.json) console.log(JSON.stringify(stale));
+          else process.stderr.write('stale_next_action\n');
+          return 1;
+        }
+        repairClass = 'body-floor';
+        diagnostics = bodyFloorDiagnostics(live.body);
+        if (diagnostics.length === 0) {
+          const output = createIssueTerminalResult({
+            ok: true,
+            cause: 'author_round_not_required',
+          });
+          if (opts.json) console.log(JSON.stringify(output));
+          return 0;
+        }
+      }
+
+      const paths = nextAuthorReplyPaths(reviewDir);
+      mkdirSync(reviewDir, { recursive: true });
+      const prompt = authorRoundPrompt({
+        repository: opts.repo,
+        issueNumber,
+        sourceRevision: expectedSourceRevision,
+        stage: expectedStage,
+        stageAttemptId: binding.stageAttemptId,
+        repairClass,
+        diagnostics,
+        schemaFragment,
+      });
+      const runner = authorRoundRunner ?? defaultAuthorRoundRunner;
+      const launched = runner({
+        repository: opts.repo,
+        issueNumber,
+        sourceRevision: expectedSourceRevision,
+        stage: expectedStage,
+        stageAttemptId: binding.stageAttemptId,
+        reviewDir,
+        prompt,
+        promptPath: paths.promptPath,
+        outputPath: paths.outputPath,
+      });
+      if (!launched.ok) {
+        const output = createIssueTerminalResult({
+          ok: false,
+          cause: 'author_round_launch_failed',
+          blocker: launched.blocker ?? 'Browser-GPT author round failed without a diagnostic',
+        });
+        if (opts.json) console.log(JSON.stringify(output));
+        else process.stderr.write((output.blocker ?? output.cause) + '\n');
+        return 1;
+      }
+      if (!existsSync(paths.outputPath)) {
+        const output = createIssueTerminalResult({
+          ok: false,
+          cause: 'author_round_output_missing',
+          blocker: `Browser-GPT author round did not publish ${paths.outputPath}`,
+        });
+        if (opts.json) console.log(JSON.stringify(output));
+        else process.stderr.write((output.blocker ?? output.cause) + '\n');
+        return 1;
+      }
+
+      const after = fetchIssueRevision(transport, opts.repo, issueNumber);
+      const afterRevision = issueSourceRevision(after.body);
+      if (repairClass === 'body-floor') {
+        const expectedNext = nextRevision(expectedSourceRevision);
+        const floorErrors = bodyFloorDiagnostics(after.body);
+        if (!expectedNext || afterRevision.toLowerCase() !== expectedNext.toLowerCase() || floorErrors.length > 0) {
+          const output = createIssueTerminalResult({
+            ok: false,
+            cause: 'author_round_body_floor_unresolved',
+            blocker: [
+              `expected exactly one revision advance ${expectedSourceRevision} -> ${expectedNext ?? '<invalid>'}; observed ${afterRevision || '<missing>'}`,
+              ...floorErrors,
+            ].join('; '),
+          });
+          if (opts.json) console.log(JSON.stringify(output));
+          else process.stderr.write((output.blocker ?? output.cause) + '\n');
+          return 1;
+        }
+      } else {
+        if (afterRevision.toLowerCase() !== expectedSourceRevision.toLowerCase()) {
+          const stale = createIssueStaleNextAction({
+            binding,
+            observed: {
+              repository: opts.repo,
+              issueNumber,
+              sourceRevision: afterRevision,
+              stage: expectedStage,
+              stageAttemptId: binding.stageAttemptId,
+            },
+            nextAction: null,
+          });
+          if (opts.json) console.log(JSON.stringify(stale));
+          else process.stderr.write('stale_next_action\n');
+          return 1;
+        }
+        const inspected = authorSchemaDiagnostics(reviewDir);
+        if (inspected.diagnostics.length > 0) {
+          const output = createIssueTerminalResult({
+            ok: false,
+            cause: 'author_round_schema_unresolved',
+            blocker: inspected.diagnostics
+              .map((item) => `${item.reason}:${item.field}: ${item.message}`)
+              .join('; '),
+          });
+          if (opts.json) console.log(JSON.stringify(output));
+          else process.stderr.write((output.blocker ?? output.cause) + '\n');
+          return 1;
+        }
+        const produced = produceAcceptanceArtifacts({
+          reviewDir,
+          tierIntakePath: join(reviewDir, 'tier-intake.json'),
+          stageEvidencePaths: [],
+          authorDispositionsPath: join(reviewDir, 'author-dispositions.json'),
+          outputDir: reviewDir,
+          phase: authorRoundPhase(expectedStage),
+          repositoryFullName: opts.repo,
+          artifactSourceTransport: transport,
+        });
+        if (!produced.ok) {
+          const lifecycleOwned = produced.errors.some(
+            (error) => classifyAuthorDispositionFailure(error) === 'lifecycle-injected',
+          );
+          const output = createIssueTerminalResult({
+            ok: false,
+            cause: lifecycleOwned
+              ? 'author_round_lifecycle_validation_failed'
+              : 'author_round_post_validation_failed',
+            blocker: produced.errors.join('; '),
+          });
+          if (opts.json) console.log(JSON.stringify(output));
+          else process.stderr.write((output.blocker ?? output.cause) + '\n');
+          return 1;
+        }
+      }
+
+      const output = createIssueTerminalResult({
+        ok: true,
+        cause: 'author_round_completed',
+      });
+      if (opts.json) console.log(JSON.stringify({
+        ...output,
+        authorRound: {
+          repairClass,
+          round: paths.round,
+          replyPath: paths.outputPath,
+          sourceRevision: repairClass === 'body-floor' ? afterRevision : expectedSourceRevision,
+          stage: expectedStage,
+          ...(binding.stageAttemptId ? { stageAttemptId: binding.stageAttemptId } : {}),
+        },
+      }));
+      return 0;
+    }
+
     if (opts.command === 'bind-published-comment') {
       const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
       const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
