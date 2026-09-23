@@ -489,6 +489,36 @@ values:
 npm run browser-gpt-page-probe -- inspect --cdp "${CDP_ENDPOINT}" --url "${CHAT_URL}"
 ```
 
+When the caller already owns an exact durable state-light invocation, use the
+identity-bound diagnostic form rather than page-wide marker discovery:
+
+```bash
+npm run browser-gpt-page-probe -- inspect \
+  --cdp "${CDP_ENDPOINT}" \
+  --profile "${BROWSER_PROFILE}" \
+  --invocation-id "${INVOCATION_ID}" \
+  --url "${CHAT_URL}"
+```
+
+`--profile` and `--invocation-id` are a pair. Identity-bound inspect derives
+the configured profile key and reads exactly that
+`state-light-turn-observation/v1` record. Missing, malformed, wrong-profile, or
+wrong-invocation state fails closed; there is no sibling-record,
+alternate-profile, or page-wide marker fallback. A non-null durable
+`conversation_url` must match the inspected conversation.
+
+Durable phase semantics are applied before marker projection. `not_sent` and
+`prepared` project no marker and therefore no recovery cause. `dispatching`,
+`sent_unbound`, `sent_unharvested`, and `harvested` may project only the
+persisted exact marker for read-only classification. Exactly one user carrier
+with exactly one occurrence of that expected marker is required; different
+historical transport markers elsewhere on the page are irrelevant, while zero
+or duplicate expected-marker occurrences fail closed. This diagnostic result
+does not alter the underlying delivery classification and creates no resend,
+replacement, or fresh-chat authority. Identity-bound inspect does not support
+`--open-if-missing` and redacts prompt/marker text witnesses from its returned
+snapshot.
+
 `list`, `inspect`, `export`, and `liveness` are diagnostic-only and always have
 `workflow_authority: none`. `harvest` is the sole action-producing probe
 (`diagnostic_only: false`), and it also has `workflow_authority: none`; it may

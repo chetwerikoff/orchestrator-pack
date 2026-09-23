@@ -1778,6 +1778,106 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
   });
 });
 
+describe('Issue #2050 execute-Issue identity-bound re-observation contract', () => {
+  const executeSkill = readFileSync(
+    new URL('../.cursor/skills/execute-issue-with-gpt/SKILL.md', import.meta.url),
+    'utf8',
+  );
+  const executionRunbook = readFileSync(
+    new URL('../docs/chatgpt-task-execution-runbook.md', import.meta.url),
+    'utf8',
+  );
+  const transportReadme = readFileSync(
+    new URL('./chatgpt-browser-turn/README.md', import.meta.url),
+    'utf8',
+  );
+  const compact = (value: string) => value.replace(/\s+/gu, ' ').trim();
+
+  it('binds execute-Issue checkpoint inspection to the exact durable invocation without fallback', () => {
+    const skill = compact(executeSkill);
+    const execution = compact(executionRunbook);
+    const shared = compact(browserRunbook);
+    const transport = compact(transportReadme);
+
+    expect(skill).toContain(
+      'browser-gpt-page-probe inspect --cdp <exact retained endpoint> --profile <exact retained configured profile> --invocation-id <exact retained invocation id>',
+    );
+    expect(execution).toContain(
+      'browser-gpt-page-probe inspect --cdp <exact retained endpoint> --profile <exact retained configured profile> --invocation-id <exact retained invocation id>',
+    );
+    expect(shared).toContain(
+      '`--profile` and `--invocation-id` are a pair. Identity-bound inspect derives the configured profile key and reads exactly that `state-light-turn-observation/v1` record.',
+    );
+    expect(shared).toContain(
+      'there is no sibling-record, alternate-profile, or page-wide marker fallback',
+    );
+    expect(shared).toContain(
+      '`not_sent` and `prepared` project no marker and therefore no recovery cause',
+    );
+    expect(shared).toContain(
+      'different historical transport markers elsewhere on the page are irrelevant',
+    );
+    expect(transport).toContain(
+      '`--profile` and `--invocation-id` must be supplied together',
+    );
+    expect(transport).toContain(
+      '`diagnostic_only: true`, and `workflow_authority: none`',
+    );
+    expect(transport).toContain(
+      'Its snapshot omits prompt/marker text witnesses',
+    );
+  });
+
+  it('keeps observer-slice expiry non-terminal and one post-checkpoint budget non-resetting', () => {
+    const skill = compact(executeSkill);
+    const execution = compact(executionRunbook);
+
+    expect(skill).toContain(
+      'A bounded observer/wait slice is not the lifetime of the Browser-GPT turn.',
+    );
+    expect(skill).toContain(
+      'preserves the exact run identity, attempt identity, invocation id, profile, CDP endpoint, and conversation binding',
+    );
+    expect(execution).toContain(
+      'treat expiry or loss of a bounded observer/wait slice as observation loss only. It does not settle the turn.',
+    );
+    expect(execution).toContain(
+      'Preserve the exact run identity, attempt identity, invocation id, profile, CDP endpoint, and conversation binding',
+    );
+    expect(skill).toContain(
+      'The first post-checkpoint continuation starts one recovery-observation episode with the existing `DEFAULT_TIMEOUT_MS = 1_800_000 ms` ceiling',
+    );
+    expect(execution).toContain(
+      'The first post-checkpoint continuation starts one recovery-observation episode whose total automatic-continuation ceiling is the existing `DEFAULT_TIMEOUT_MS = 1_800_000 ms`',
+    );
+    expect(execution).toContain(
+      'every later slice consumes the same remaining budget and cannot reset or extend it',
+    );
+    expect(execution).toContain(
+      'stop automatic re-observation and hand the exact fail-closed condition to the existing supervisor boundary',
+    );
+    expect(execution).toContain(
+      'send zero new user messages and continue observation of the same invocation inside the one post-checkpoint recovery-observation episode',
+    );
+  });
+
+  it('keeps D2 as manager contract evidence rather than a new executable recovery state machine', () => {
+    const skill = compact(executeSkill);
+    const execution = compact(executionRunbook);
+    expect(skill).toContain(
+      'Exhaustion creates no resend, replacement-invocation, or fresh-chat authority.',
+    );
+    expect(execution).toContain(
+      'Exhaustion grants no resend, replacement invocation, or fresh-chat authority',
+    );
+    expect(execution).toContain(
+      'do not add a second monitor, watcher, daemon, polling loop, durable timer, or recovery store',
+   );
+    expect(pageProbe).not.toContain('recoveryObservationEpisodeStore');
+    expect(pageProbe).not.toContain('replacementEligible');
+  });
+});
+
 describe('Issue #2004 derived external-dependency parking contract', () => {
   const orchestrationRunbook = readFileSync(
     new URL('../docs/orchestration-runbook.md', import.meta.url),

@@ -159,6 +159,10 @@ describe('runtime caller census', () => {
       surface: 'scripts/pr2-foundation/fleet-observer.ts',
       disposition: 'already-runtime-neutral',
     }));
+    expect(RUNTIME_CALLER_CENSUS).toContainEqual(expect.objectContaining({
+      surface: 'scripts/pr2-foundation/supervised-worker-start.ts',
+      operations: expect.arrayContaining(['runtime-composition', 'find', 'stop']),
+    }));
   });
 
   it('has no PowerShell consumers of retired supervisor invariants', () => {

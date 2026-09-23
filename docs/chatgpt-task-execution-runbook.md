@@ -154,21 +154,47 @@ For every submitted execution turn:
    process it normally; an exact-owned `recovery_required` result with either
    reserved product cause enters the GitHub-first recovery section immediately;
 3. when 27 minutes elapse after submission without an authoritative completed
-   turn result, perform one **fresh observation of the actual bound ChatGPT
-   conversation** using `scripts/browser-gpt-page-probe.ts inspect` and the exact
-   authoritative profile/CDP/conversation/target binding already owned by the
-   workflow;
-4. do not use `--open-if-missing`, create a page, close a page, navigate, Retry,
+   turn result, perform a **fresh identity-bound observation of the actual owned
+   ChatGPT conversation** with the caller-retained binding:
+
+   ```text
+   browser-gpt-page-probe inspect
+     --cdp <exact retained endpoint>
+     --profile <exact retained configured profile>
+     --invocation-id <exact retained invocation id>
+     (--url <exact owned conversation url> | --target-id <exact owned target id>)
+   ```
+
+   The probe derives the configured profile key, reads only the exact
+   `state-light-turn-observation/v1` record for that invocation, applies its
+   durable phase before marker projection, and never falls back to another
+   record/profile or a page-wide marker choice;
+4. treat expiry or loss of a bounded observer/wait slice as observation loss
+   only. It does not settle the turn. Preserve the exact run identity, attempt
+   identity, invocation id, profile, CDP endpoint, and conversation binding for
+   continued observation;
+5. do not use `--open-if-missing`, create a page, close a page, navigate, Retry,
    resend, or invent a replacement target for this checkpoint; the probe is
    diagnostic/observation-only and its envelope keeps `workflow_authority:
    none`;
-5. consume the probe's bounded normalized `execution_recovery_cause` only in
+6. if the identity-bound checkpoint reports the exact owned turn still
+   generating with no supported cause, send zero new user messages and continue
+   bounded observation/re-observation of that same invocation. The first
+   post-checkpoint continuation starts one recovery-observation episode whose
+   total automatic-continuation ceiling is the existing
+   `DEFAULT_TIMEOUT_MS = 1_800_000 ms`; every later slice consumes the same
+   remaining budget and cannot reset or extend it;
+7. if that single post-checkpoint budget is exhausted while the exact turn is
+   still unsettled/generating, stop automatic re-observation and hand the exact
+   fail-closed condition to the existing supervisor boundary. Exhaustion grants
+   no resend, replacement invocation, or fresh-chat authority;
+8. consume the probe's bounded normalized `execution_recovery_cause` only in
    combination with exact current-turn evidence: the exact execute-Issue owned
    prompt is the current prompt, no completed attributable assistant reply is
-   present, and generation is positively not active;
-6. do not decide turn completion or replacement authority from helper/launcher
-   PID, shell state, heartbeat, elapsed time, missing output, log silence,
-   terminal-envelope absence, or the product-cause projection by itself.
+   present, and generation is positively not active. Do not decide completion
+   or replacement authority from helper/launcher PID, shell state, heartbeat,
+   elapsed time, missing output, log silence, terminal-envelope absence, or the
+   product-cause projection by itself.
 
 The probe's `execution_recovery_cause` is derived from the same Browser-GPT
 product-state helper used by the immediate state-light path. The manager does not
@@ -180,7 +206,9 @@ Interpret the checkpoint evidence only through this mapping:
   completed reply + no active generation:** enter **Product-error recovery
   (GitHub-first)** below.
 - **Generation active:** send zero new user messages and continue observation of
-  the same turn.
+  the same invocation inside the one post-checkpoint recovery-observation
+  episode; later bounded slices consume its remaining `1_800_000 ms` budget
+  rather than starting a new checkpoint or resetting that ceiling.
 - **Completed attributable reply:** recover/consume the original turn through
   the existing same-invocation harvest/settlement path before any follow-up.
 - **Foreign/sibling prompt, ambiguous ownership, stale earlier-turn product
