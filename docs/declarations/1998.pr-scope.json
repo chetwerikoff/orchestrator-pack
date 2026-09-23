@@ -1,0 +1,53 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1998,
+  "declared_paths": [
+    ".claude/skills/discuss-with-gpt/config.mjs",
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
+    "scripts/command-runtime-bootstrap.test.ts",
+    "scripts/create-issue-convergence.test.ts",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/lib/command-runtime-bootstrap.d.mts",
+    "scripts/lib/command-runtime-bootstrap.mjs",
+    "scripts/lib/create-issue-browser-gpt-preflight.ts",
+    "scripts/lib/manager-cli-contract.ts",
+    "scripts/manager-review-terminal-bundle.ts",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts",
+    "scripts/toolchain/create-issue-final-acceptance.test.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "tests/external-output-references/browser-turn-target-crashed-2026-09-21.txt"
+  ],
+  "denylist": [
+    ".github/",
+    ".orca/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/discuss-with-gpt/config.mjs",
+    ".claude/skills/discuss-with-gpt/local.config.example.json",
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    "docs/declarations/",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
+    "scripts/command-runtime-bootstrap.test.ts",
+    "scripts/create-issue-convergence.test.ts",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/lib/command-runtime-bootstrap.d.mts",
+    "scripts/lib/command-runtime-bootstrap.mjs",
+    "scripts/lib/create-issue-browser-gpt-preflight.ts",
+    "scripts/lib/create-issue-stage-record-cli.ts",
+    "scripts/lib/manager-cli-contract.ts",
+    "scripts/manager-review-terminal-bundle.ts",
+    "scripts/stage-completeness-guard.test.ts",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts",
+    "scripts/toolchain/create-issue-final-acceptance.test.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "tests/external-output-references/browser-turn-target-crashed-2026-09-21.txt"
+  ],
+  "source_revision": "273d28299ecbf195bd0e13f5abd289286817049a"
+}
