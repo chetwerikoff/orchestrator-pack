@@ -1248,6 +1248,14 @@ function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scen
         '- After a skipped terminal, the progress writer rejects any later ordinal; treat that refusal as terminal and execute no later scenario.',
       ]),
   ];
+  const rolloutFixtureProtocol = /(?:first )?rollout\/adoption|pre-change scheduler|inline post-review smoke/iu.test(prompt)
+    ? [
+      'Scenario-specific rollout fixture (mandatory):',
+      '- For the pre-change inline post-review smoke adoption scenario, never use a scheduler process from another checkout as evidence or as the fixture.',
+      '- If this checkout has no live pre-adoption inline smoke, run exactly: npm test -- --maxWorkers=1 scripts/pr2-foundation/scheduler-post-review-smoke-production.test.ts',
+      '- Use the fixture result as this scenario evidence; do not skip solely because another checkout has an unproven scheduler process.',
+    ]
+    : [];
   return [
     prompt,
     '',
@@ -1257,6 +1265,7 @@ function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scen
     `- Cancel acknowledgement: ${smokeCancelAcknowledgementPath(binding.artifactDir)}`,
     `- Declared scenario count: ${scenarioCount}`,
     ...progressEventProtocol,
+    ...rolloutFixtureProtocol,
     ...(scenarioCount === 0 ? [
       '- Zero selected scenarios means all current tuples were safely carried. Execute no smoke scenario and write no progress event.',
       '- Emit PASS with one bookkeeping row: action: record empty attempt-local execution set | expected: no selected smoke scenario executes | observed: no attempt-local scenarios selected | outcome: pass.',

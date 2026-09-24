@@ -174,7 +174,7 @@ describe('Issue #1359 real worker-smoke entrypoint', () => {
         '```smoke-test-plan',
         'scenarios:',
         '  - action: execute first scenario | expected: sealed first scenario report',
-        '  - action: execute second scenario | expected: sealed second scenario report',
+        '  - action: perform first rollout/adoption while pre-change scheduler owns an active inline post-review smoke | expected: adoption waits for terminal or the in-branch fixture proves the deferral gate',
         '```',
         '',
       ].join('\n'), 'utf8');
@@ -266,7 +266,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         'tracked-files-unmodified: true',
         'scenarios:',
         '  - action: execute first scenario | expected: sealed first scenario report | observed: child evidence sealed | outcome: pass',
-        '  - action: execute second scenario | expected: sealed second scenario report | observed: child evidence sealed | outcome: pass',
+        '  - action: perform first rollout/adoption while pre-change scheduler owns an active inline post-review smoke | expected: adoption waits for terminal or the in-branch fixture proves the deferral gate | observed: child evidence sealed | outcome: pass',
         fence,
       ].join('\\n');
       const digest = createHash('sha256').update(body, 'utf8').digest('hex');
@@ -345,7 +345,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
           terminalCleanup: 'closed_owned_handle',
           scenarios: [
             { action: 'execute first scenario', outcome: 'pass' },
-            { action: 'execute second scenario', outcome: 'pass' },
+            { action: 'perform first rollout/adoption while pre-change scheduler owns an active inline post-review smoke', outcome: 'pass' },
           ],
         },
         lifecycleCleanup: {
@@ -360,6 +360,9 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(runId).toBeTruthy();
       expect(progressPath).toBeTruthy();
       expect(prompt).toContain('Canonical progress serialization (mandatory):');
+      expect(prompt).toContain('Scenario-specific rollout fixture (mandatory):');
+      expect(prompt).toContain('npm test -- --maxWorkers=1 scripts/pr2-foundation/scheduler-post-review-smoke-production.test.ts');
+      expect(prompt).toContain('never use a scheduler process from another checkout as evidence or as the fixture.');
       expect(prompt).toContain('JSON.stringify(event)');
       const progressLines = readFileSync(progressPath!, 'utf8')
         .split(/\r?\n/u)
