@@ -458,6 +458,26 @@ describe('Issue #1514 flow-manager recovery ownership contract', () => {
   });
 });
 
+describe('Issue #2039 T1 author-disposition producer authority', () => {
+  it('routes a harvested T1 author reply through the producer before first architectural start-cycle', () => {
+    const start = contract.indexOf('## Review artifacts');
+    const end = contract.indexOf('## GitHub issue journal', start);
+    const reviewArtifacts = contract.slice(start, end);
+    expect(reviewArtifacts).toContain(
+      'scripts/create-issue-stage-finalize.ts produce-author-dispositions',
+    );
+    expect(reviewArtifacts).toContain(
+      'before the first `architectural` `start-cycle`',
+    );
+    expect(reviewArtifacts).toContain(
+      'The manager invokes lifecycle, reconciliation and acceptance producers; it does\nnot create or repair these files by hand.',
+    );
+    expect(reviewArtifacts).toContain(
+      'It creates no\nreview cycle, stage receipt, finding ledger, relay evidence, acceptance\nmanifest, reviewer invocation, Issue comment, or label projection.',
+    );
+  });
+});
+
 describe('Issue #1431 manager reviewer canon', () => {
   it('keeps one canon declaration and retires the runbook reviewer template', () => {
     expect(contract.match(/```manager-review-brief-canon/g)).toHaveLength(1);

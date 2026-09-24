@@ -9,6 +9,7 @@ import {
   checkSmokeTestPlan,
   createSmokeControlPlaneDiagnostic,
   ensureSmokeRunArtifactDir,
+  resolveSmokeRunArtifactDir,
   evaluateReadyForReviewCombinations,
   evaluateWorkerSmokeCoverage,
   evaluateWorkerSmokeGate,
@@ -1558,6 +1559,65 @@ describe('runtime-neutral worker smoke', () => {
   });
 });
 
+describe('worker-smoke-run wait for expired unbound lifecycle', () => {
+  it('returns the observed create diagnostic instead of waiting on a dead supervisor', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-wait-unbound-'));
+    const runId = 'c1222134-9261-485e-ad14-c1eae6e48c43';
+    const artifactDir = resolveSmokeRunArtifactDir(root, runId);
+    mkdirSync(artifactDir, { recursive: true });
+    let supervisorPid = 0;
+    const supervisor = await runProcess({
+      command: process.execPath,
+      args: ['-e', 'process.exit(0)'],
+      allowEmptyStdout: true,
+      onSpawn: (pid) => { supervisorPid = pid; },
+    });
+    const createDiagnostic = 'smoke_ordering_head_mismatch: expected 8136cb39a2508baee944c38270aec5c444894b4d, got 6407de3b54c94ca83eab625990254c5a371f15d4';
+    try {
+      expect(supervisor.ok).toBe(true);
+      expect(supervisorPid).toBeGreaterThan(0);
+      writeFileSync(join(artifactDir, 'lifecycle.json'), `${JSON.stringify({
+        version: 1,
+        runId,
+        issueNumber: 2078,
+        prNumber: 2079,
+        headSha: '6407de3b54c94ca83eab625990254c5a371f15d4',
+        artifactDir,
+        supervisorPid,
+        createdAtMs: 1790242313822,
+        updatedAtMs: 1790242313834,
+        spawnState: 'ambiguous_unbound',
+        createDeadlineMs: Date.now() - 1,
+        scenarioCount: 7,
+        createDiagnostic,
+      })}\n`, 'utf8');
+      const result = await runProcess({
+        command: process.execPath,
+        args: [
+          '--experimental-strip-types',
+          join(process.cwd(), 'scripts/worker-smoke-run.ts'),
+          'wait', '--run', runId, '--cwd', root, '--json',
+        ],
+        cwd: root,
+        inheritParentEnv: true,
+        allowEmptyStdout: true,
+        timeoutMs: 2_000,
+      });
+      expect(result.timedOut).toBe(false);
+      expect(result.exitCode).toBe(1);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: false,
+        runId,
+        result: 'FAIL',
+        reason: createDiagnostic,
+        createDiagnostic,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 10_000);
+});
+
 
 describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
   const POLL_MS = SMOKE_LIFECYCLE_POLL_MS;
@@ -2727,7 +2787,7 @@ describe('buildSmokeAgentPrompt selected declaration artifact', () => {
     expect(prompt).toMatch(/Do not FAIL an exact-scope or allowed-path scenario solely because that file appears in git diff/u);
   });
 
-  it('advises bounded await handling for shell jobs', () => {
+  it('runtime-neutral bounded await handling', () => {
     const prompt = buildSmokeAgentPrompt({
       issueNumber: 1260,
       issueBody: ['```smoke-test-plan', 'scenarios:', '  - action: scan paths | expected: only seven allowed paths', '```'].join('\n'),
@@ -2739,7 +2799,10 @@ describe('buildSmokeAgentPrompt selected declaration artifact', () => {
       },
     });
 
-    expect(prompt).toContain('Never await a shell that has already ended: read ~/.cursor/projects/<slug>/terminals/<shell_id>.txt first — if its tail carries exit_code:, the job is over and await will burn the whole ceiling instead of returning.');
+    expect(prompt).toContain('When waiting for executor work, use only a completion or session identifier actually returned by the selected executor; never invent a shell_id or a transcript path.');
+    expect(prompt).toContain('Continue to follow the existing lifecycle progress and cancellation protocol.');
+    expect(prompt).not.toContain('~/.cursor/projects/');
+    expect(prompt).not.toContain('Never await a shell that has already ended');
     expect(prompt).toContain('Cap any single block_until_ms at 300000; re-check and re-await instead of one long block.');
   });
 });

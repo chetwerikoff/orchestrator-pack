@@ -17,6 +17,8 @@ import {
   type CreateIssueActionBinding,
 } from './lib/create-issue-next-action.ts';
 import { runStageFinalizeCli } from './lib/create-issue-stage-record-cli.ts';
+import { startReviewCycle } from './lib/create-issue-stage-record-core.ts';
+import { createMockGhState, createMockTransport } from './lib/create-issue-stage-record-test-helpers.ts';
 import type { GhTransport } from './lib/create-issue-stage-record-types.ts';
 import { resolveCreateIssueBrowserOperatorConfig } from './lib/create-issue-browser-gpt-preflight.ts';
 import {
@@ -27,11 +29,9 @@ import {
 } from './lib/create-issue-stage-record-artifacts.ts';
 import { buildManagerReviewTerminalBundle } from './lib/manager-review-terminal-bundle.ts';
 import { canonicalStagePlan } from './lib/create-issue-stage-topology.ts';
-import { startReviewCycle } from './lib/create-issue-stage-record-core.ts';
 import { admitStageLaunch, ensureLifecycleTierIntake, loadCanonicalLifecycleAuthority } from './lib/create-issue-stage-lifecycle.ts';
 import { serializeCommentBody } from './lib/create-issue-stage-record-marker.ts';
 import { CYCLE_SCHEMA, type CycleEventLogical } from './lib/create-issue-stage-record-types.ts';
-import { createMockGhState, createMockTransport } from './lib/create-issue-stage-record-test-helpers.ts';
 import {
   selectPrincipalOwnedCanonicalArtifact,
   sameGithubPrincipal,
@@ -59,6 +59,228 @@ const binding: CreateIssueActionBinding = {
   stage: 'architectural-review',
   stageAttemptId: 'attempt-1935',
 };
+
+const freshR01AuthorTurnReplay = {
+  issue: {
+    title: 'T1 convergence fixture',
+    body: '<!-- source-revision: r01 -->\n# T1 convergence fixture\n',
+  },
+  governedReply: [
+    'create-issue-author-dispositions/v1',
+    JSON.stringify({
+      schema: 'create-issue-author-dispositions/v1',
+      sourceRevision: 'r01',
+      predecessorStage: null,
+      findings: [],
+      m4: { inventory: [] },
+    }),
+  ].join('\n'),
+} as const;
+
+describe('Issue #2039 T1 author-turn producer convergence', () => {
+  it('replays a fresh r01 author turn against an isolated fixture without publishing an Issue revision', () => {
+    const root = tempRoot();
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = root;
+    const issueNumber = 2039;
+    const repo = 'chetwerikoff/orchestrator-pack';
+    const reviewDir = join(root, '.review', String(issueNumber));
+    mkdirSync(reviewDir, { recursive: true });
+    const { body } = freshR01AuthorTurnReplay.issue;
+    writeFileSync(join(reviewDir, 'tier-intake.json'), JSON.stringify({
+      schema: 'tier-intake/v1',
+      producer: 'fixture',
+      taskIdentity: 'issue:' + issueNumber,
+      kind: 'fresh',
+      priorTier: 'T1',
+      firstRevision: 'r01',
+    }, null, 2) + '\n');
+    writeFileSync(join(reviewDir, 'round-01-author-reply.md'), freshR01AuthorTurnReplay.governedReply);
+
+    const state = createMockGhState({ issue: { ...freshR01AuthorTurnReplay.issue, labels: [] } });
+    const transport = createMockTransport(state);
+
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => logs.push(String(line)));
+    try {
+      const code = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'produce-author-dispositions',
+        '--repo', repo,
+        '--issue-number', String(issueNumber),
+        '--review-dir', reviewDir,
+        '--source-revision', 'r01',
+        '--json',
+      ], transport);
+      expect(code).toBe(0);
+      expect(JSON.parse(logs.at(-1) ?? '{}')).toMatchObject({ ok: true, retryable: false });
+    } finally {
+      spy.mockRestore();
+    }
+
+    // The fresh r01 turn is replayed against the local authenticated-Issue fixture;
+    // the live Issue at r02 is never read or mutated by this test fixture.
+    expect(state.issue.body).toBe(body);
+    expect(state.commentCreateAttempts).toEqual([]);
+    expect([...state.labels]).toEqual([]);
+
+    expect(JSON.parse(readFileSync(join(reviewDir, 'issue-r01-body.json'), 'utf8'))).toMatchObject({
+      schema: 'create-issue-live-snapshot/v1',
+      issueNumber,
+      sourceRevision: 'r01',
+      body,
+    });
+    expect(JSON.parse(readFileSync(join(reviewDir, 'author-dispositions.json'), 'utf8'))).toMatchObject({
+      producer: 'governed-author-output/v1',
+      reviewEpisodeId: 'issue:2039@r01',
+      sourceRevision: 'r01',
+      predecessorStage: null,
+      draft: body,
+    });
+    expect(() => readFileSync(join(reviewDir, 'finding-disposition-ledger.json'), 'utf8')).toThrow();
+
+    // The zero-state ledger is existing terminal-bundle authority, not an output
+    // of produce-author-dispositions. Supplying it proves the new producer closes
+    // only the missing-author/snapshot gap before ordinary lifecycle admission.
+    writeFileSync(join(reviewDir, 'finding-disposition-ledger.json'), JSON.stringify({
+      version: 2,
+      reviewEpisodeId: 'issue:2039@r01',
+      sourceRevision: 'r01',
+      predecessorStage: null,
+      draft: body,
+      counts: { rawFindingCount: 0, distinctFindingCount: 0, processedDistinctCount: 0 },
+      findings: [],
+    }, null, 2) + '\n');
+
+    const startInput = {
+      repo,
+      issueNumber,
+      sourceRevision: 'r01',
+      stage: 'architectural',
+      tier: 'T1',
+      publicActor: 'cursor-flow-manager',
+      workdir: root,
+    } as const;
+    const ledgerPath = join(reviewDir, 'finding-disposition-ledger.json');
+    const originalLedgerBytes = readFileSync(ledgerPath, 'utf8');
+    try {
+      const ledger = JSON.parse(originalLedgerBytes) as Record<string, unknown>;
+      writeFileSync(ledgerPath, JSON.stringify({
+        ...ledger,
+        findings: [{
+          id: 'T1-FINDING-001',
+          defectDisposition: 'addressed',
+          remedyDisposition: 'accepted',
+        }],
+      }, null, 2) + '\n');
+      const rejected = startReviewCycle(transport, startInput);
+      expect(rejected.ok).toBe(false);
+      expect(rejected.diagnostics.map((item) => item.message)).toContain(
+        'finding disposition ledger findings do not match the bound author disposition record',
+      );
+      expect(rejected.cycleId).toBeUndefined();
+      expect(rejected.eventKey).toBeUndefined();
+      expect(state.commentCreateAttempts).toEqual([]);
+      expect(state.comments).toEqual([]);
+    } finally {
+      writeFileSync(ledgerPath, originalLedgerBytes);
+    }
+    expect(readFileSync(ledgerPath, 'utf8')).toBe(originalLedgerBytes);
+
+    const started = startReviewCycle(transport, startInput);
+    expect(started.ok, started.diagnostics.map((item) => item.message).join('\n')).toBe(true);
+    expect(started.stageAttemptId).toBeTruthy();
+  });
+
+  it('admits a bound non-empty governed T1 author record through first-stage start-cycle', () => {
+    const root = tempRoot();
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = root;
+    const issueNumber = 2039;
+    const repo = 'chetwerikoff/orchestrator-pack';
+    const reviewDir = join(root, '.review', String(issueNumber));
+    mkdirSync(reviewDir, { recursive: true });
+    const { body, title } = freshR01AuthorTurnReplay.issue;
+    const finding = {
+      id: 't1-author-finding',
+      type: 'quality',
+      occurrences: ['sha256:' + 'a'.repeat(64) + ':t1-author-finding:1'],
+      defectDisposition: 'rejected-as-false',
+      rejectReason: 'Not part of the task specification.',
+      remedyDisposition: 'accepted',
+    };
+    const m4 = [{ mechanism: 'existing-authority', disposition: 'keep' }];
+    const governedReply = [
+      'create-issue-author-dispositions/v1',
+      JSON.stringify({
+        schema: 'create-issue-author-dispositions/v1',
+        sourceRevision: 'r01',
+        predecessorStage: null,
+        findings: [finding],
+        m4: { inventory: m4 },
+      }),
+    ].join('\n');
+    writeFileSync(join(reviewDir, 'tier-intake.json'), JSON.stringify({
+      schema: 'tier-intake/v1',
+      producer: 'fixture',
+      taskIdentity: 'issue:' + issueNumber,
+      kind: 'fresh',
+      priorTier: 'T1',
+      firstRevision: 'r01',
+    }, null, 2) + '\n');
+    writeFileSync(join(reviewDir, 'round-01-author-reply.md'), governedReply);
+    const state = createMockGhState({ issue: { title, body, labels: [] } });
+    const transport = createMockTransport(state);
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => logs.push(String(line)));
+    try {
+      const code = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'produce-author-dispositions',
+        '--repo', repo,
+        '--issue-number', String(issueNumber),
+        '--review-dir', reviewDir,
+        '--source-revision', 'r01',
+        '--json',
+      ], transport);
+      expect(code, logs.join('\n')).toBe(0);
+      expect(JSON.parse(logs.at(-1) ?? '{}')).toMatchObject({ ok: true, retryable: false });
+    } finally {
+      spy.mockRestore();
+    }
+    const author = JSON.parse(readFileSync(join(reviewDir, 'author-dispositions.json'), 'utf8')) as Record<string, unknown>;
+    expect(author).toMatchObject({
+      producer: 'governed-author-output/v1',
+      reviewEpisodeId: 'issue:2039@r01',
+      sourceRevision: 'r01',
+      predecessorStage: null,
+      draft: body,
+      findings: [finding],
+      m4: { inventory: m4 },
+    });
+    expect(() => readFileSync(join(reviewDir, 'finding-disposition-ledger.json'), 'utf8')).toThrow();
+    const bundle = buildManagerReviewTerminalBundle({
+      repositoryFullName: repo,
+      issueNumber,
+      sourceRevision: 'r01',
+      reviewDir,
+      transport,
+      liveIssueBody: body,
+    });
+    expect(bundle.predecessorStage).toBeNull();
+    expect(bundle.rejectPartition).toEqual([finding]);
+    expect(bundle.authorM4).toEqual(m4);
+    const started = startReviewCycle(transport, {
+      repo,
+      issueNumber,
+      sourceRevision: 'r01',
+      stage: 'architectural',
+      tier: 'T1',
+      publicActor: 'cursor-flow-manager',
+      workdir: root,
+    });
+    expect(started.ok, started.diagnostics.map((item) => item.message).join('\n')).toBe(true);
+    expect(started.stageAttemptId).toBeTruthy();
+    expect(() => readFileSync(join(reviewDir, 'finding-disposition-ledger.json'), 'utf8')).toThrow();
+    expect(state.comments.length).toBeGreaterThan(0);
+  });
+});
 
 describe('create-Issue nextAction contract', () => {
   it('uses one validated argv-bearing action shape and terminal null shape', () => {

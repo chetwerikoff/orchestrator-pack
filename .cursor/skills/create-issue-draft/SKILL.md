@@ -865,11 +865,15 @@ Materialize that bundle with `scripts/manager-review-terminal-bundle.ts` before
 rendering the terminal prompt. For T2, first run `produce-artifacts --phase
 pre-lens`; for T3, use `produce-artifacts --phase post-lens`. In either case the
 producer consumes the canonical stage receipts, verified relay evidence, and
-finding ledger already checked by the existing guards. For T1,
-there is intentionally no predecessor receipt: the producer accepts the
-current-bound zero-state `tier-intake.json` plus the producer-generated
-zero-state `author-dispositions.json` with empty prior findings/M3/M4 instead
-of inventing predecessor evidence.
+finding ledger already checked by the existing guards. For T1, there is intentionally no predecessor receipt. After a tracked author
+turn has been durably harvested and the author's Issue write is observable,
+invoke `produce-author-dispositions` before the first `architectural`
+`start-cycle`; that producer binds the governed author payload to the stable
+live Issue and current lifecycle episode without starting a stage. The existing
+producer-generated zero-state `author-dispositions.json` fallback remains
+unchanged only for flows where the current canon legitimately has no governed
+author reply; a present tracked author payload must not be discarded for
+zero-state.
 
 `author-dispositions.json` is a producer output over three authorities: exact
 draft/revision from the stable GitHub Issue snapshot, episode/predecessor binding
@@ -1134,6 +1138,22 @@ classifies every acceptance input and review artifact by its owner and role.
   `{issueNumber, sourceRevision, title, body}` snapshot.
 - `author-dispositions.json`: derived binding over the stable GitHub snapshot,
   lifecycle topology, and governed author payload.
+
+For a completed tracked T1 author turn, the single next producer step before the first `architectural` `start-cycle` is:
+
+```bash
+node --experimental-strip-types scripts/create-issue-stage-finalize.ts produce-author-dispositions \
+  --repo <owner/name> --issue-number <N> \
+  --review-dir "$REVIEW_DIR" --source-revision <rNN> --json
+```
+
+This action writes the stable `issue-rNN-body.json` first and
+`author-dispositions.json` second as the handoff commit point. It creates no
+review cycle, stage receipt, finding ledger, relay evidence, acceptance
+manifest, reviewer invocation, Issue comment, or label projection. Only an
+authenticated Issue read outage, a moving/lost two-read observation, or an
+immediately-prior live revision while the requested next revision is not yet
+visible is retryable by rerunning the exact command.
 
 The manager invokes lifecycle, reconciliation and acceptance producers; it does
 not create or repair these files by hand. Missing authority is an explicit
