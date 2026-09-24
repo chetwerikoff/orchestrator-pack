@@ -83,6 +83,7 @@ export interface OrcaTerminalSummary extends OrcaTerminalHandle {
   status?: 'running' | 'exited' | 'unknown';
 }
 
+
 export interface OrcaTerminalReadResult {
   /** Legacy pack capture shape. */
   lines?: string[];
@@ -237,7 +238,9 @@ export function parseOrcaJsonOutput<T>(
   const normalized = String(stdout).trim();
   try {
     const parsed = JSON.parse(normalized) as OrcaJsonResponse<T>;
-    if (parsed.ok) return { ...parsed, operation };
+    if (parsed.ok) {
+      return { ...parsed, operation };
+    }
     return {
       ...parsed,
       operation,

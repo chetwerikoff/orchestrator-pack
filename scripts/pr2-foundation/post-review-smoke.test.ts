@@ -1,7 +1,7 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -27,6 +27,15 @@ import {
   reconcilePostReviewSmoke,
   type PostReviewSmokeDependencies,
 } from './post-review-smoke.ts';
+import {
+  observeDetachedSmokeAttempt,
+  startDetachedSmokeAttempt,
+  type CliOptions,
+} from '../worker-smoke-run.ts';
+import {
+  createSmokeLifecycleReservation,
+  markSmokeCreateInProgress,
+} from '../lib/worker-smoke-lifecycle.ts';
 
 const REPOSITORY = 'chetwerikoff/orchestrator-pack';
 const ISSUE = 1418;
@@ -202,6 +211,8 @@ function dependencies(input: {
   assignmentStorePath: string;
   adapter: RuntimeAdapter;
   runAttempt?: NonNullable<PostReviewSmokeDependencies['runAttempt']>;
+  observeDetachedAttempt?: NonNullable<PostReviewSmokeDependencies['observeDetachedAttempt']>;
+  startDetachedAttempt?: NonNullable<PostReviewSmokeDependencies['startDetachedAttempt']>;
 }): PostReviewSmokeDependencies {
   return {
     projectId: 'orchestrator-pack',
@@ -217,6 +228,8 @@ function dependencies(input: {
       '```',
     ].join('\n'),
     ...(input.runAttempt ? { runAttempt: input.runAttempt } : {}),
+    ...(input.observeDetachedAttempt ? { observeDetachedAttempt: input.observeDetachedAttempt } : {}),
+    ...(input.startDetachedAttempt ? { startDetachedAttempt: input.startDetachedAttempt } : {}),
   };
 }
 function remoteActuationRecords(options: PackReviewAuthorityOptions) {
@@ -288,6 +301,222 @@ describe('Issue #1418 post-review smoke reconciliation', () => {
 
     expect(result).toEqual({ handled: true, attempted: true, reason: 'post_review_smoke_completed', exitCode: 0 });
     expect(effects).toBe(1);
+  });
+
+  it('starts one detached owner for an absent exact-head lifecycle and returns without waiting for smoke completion', async () => {
+    const fixture = rootFixture();
+    const options: PackReviewAuthorityOptions = { storeRoot: fixture.reviewStoreRoot };
+    settleReview(options);
+    const assignment = await publishLocal(fixture.assignmentStorePath, 'dispatch-detached-start');
+    const workspacePath = path.join(fixture.root, 'worker-detached-start');
+    const adapter = runtimeFor(assignment.bindingKey, workspacePath);
+    const startDetachedAttempt = vi.fn(async (smokeOptions) => {
+      expect(smokeOptions).toMatchObject({
+        issueNumber: ISSUE,
+        prNumber: PR,
+        headSha: HEAD,
+        cwd: workspacePath,
+        repoRoot: workspacePath,
+        smokeActor: 'independent',
+      });
+      return { ok: true as const, runId: 'run-detached-start' };
+    });
+
+    const result = await reconcilePostReviewSmoke(candidate, dependencies({
+      ...fixture,
+      adapter,
+      observeDetachedAttempt: () => ({ kind: 'absent' as const }),
+      startDetachedAttempt,
+    }));
+
+    expect(result).toEqual({
+      handled: true,
+      attempted: true,
+      reason: 'post_review_smoke_detached_started',
+    });
+    expect(startDetachedAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it('observes one active exact-head detached owner without starting a duplicate', async () => {
+    const fixture = rootFixture();
+    const options: PackReviewAuthorityOptions = { storeRoot: fixture.reviewStoreRoot };
+    settleReview(options);
+    const assignment = await publishLocal(fixture.assignmentStorePath, 'dispatch-detached-active');
+    const adapter = runtimeFor(assignment.bindingKey, path.join(fixture.root, 'worker-detached-active'));
+    const startDetachedAttempt = vi.fn(async () => ({ ok: true as const, runId: 'unexpected' }));
+
+    const result = await reconcilePostReviewSmoke(candidate, dependencies({
+      ...fixture,
+      adapter,
+      observeDetachedAttempt: () => ({
+        kind: 'active' as const,
+        runId: 'run-detached-active',
+        artifactDir: '/tmp/run-detached-active',
+      }),
+      startDetachedAttempt,
+    }));
+
+    expect(result).toEqual({
+      handled: true,
+      attempted: false,
+      reason: 'post_review_smoke_detached_active',
+    });
+    expect(startDetachedAttempt).not.toHaveBeenCalled();
+  });
+
+  it('does not leave a census-poisoning run directory when detached bootstrap dies before lifecycle', async () => {
+    const fixture = rootFixture();
+    const workspacePath = path.join(fixture.root, 'worker-detached-bootstrap-failure');
+    mkdirSync(workspacePath, { recursive: true });
+    const missingIssueBody = path.join(workspacePath, 'missing-issue-body.md');
+    const smokeOptions: CliOptions = {
+      command: 'run',
+      issueNumber: ISSUE,
+      prNumber: PR,
+      headSha: HEAD,
+      issueBodyFile: missingIssueBody,
+      smokeComplexity: 'complex',
+      smokeActor: 'independent',
+      repoRoot: workspacePath,
+      cwd: workspacePath,
+      dryRun: false,
+      json: true,
+      reviewId: '',
+      reviewHeadSha: '',
+    };
+
+    const started = await startDetachedSmokeAttempt(smokeOptions);
+
+    expect(started).toMatchObject({
+      ok: false,
+      reason: 'detached_smoke_owner_exited_before_lifecycle',
+    });
+    expect(started.runId).toBeTruthy();
+    expect(existsSync(path.join(
+      workspacePath,
+      '.orca-worker-smoke',
+      'runs',
+      started.runId!,
+    ))).toBe(false);
+    expect(observeDetachedSmokeAttempt({
+      cwd: workspacePath,
+      issueNumber: ISSUE,
+      prNumber: PR,
+      headSha: HEAD,
+    })).toEqual({ kind: 'absent' });
+  });
+
+  it('routes a dead nonterminal detached owner back through detached start/recovery', async () => {
+    const fixture = rootFixture();
+    const options: PackReviewAuthorityOptions = { storeRoot: fixture.reviewStoreRoot };
+    settleReview(options);
+    const assignment = await publishLocal(fixture.assignmentStorePath, 'dispatch-detached-dead-owner');
+    const workspacePath = path.join(fixture.root, 'worker-detached-dead-owner');
+    const runId = 'run-detached-dead-owner';
+    const artifactDir = path.join(workspacePath, '.orca-worker-smoke', 'runs', runId);
+    createSmokeLifecycleReservation({
+      runId,
+      artifactDir,
+      issueNumber: ISSUE,
+      prNumber: PR,
+      headSha: HEAD,
+      supervisorPid: 2_147_483_647,
+      nowMs: 1,
+      createTimeoutMs: 1,
+      scenarioCount: 1,
+    });
+    markSmokeCreateInProgress(artifactDir, 2);
+    const adapter = runtimeFor(assignment.bindingKey, workspacePath);
+    const startDetachedAttempt = vi.fn(async () => ({ ok: true as const, runId: 'run-detached-recovery' }));
+
+    expect(observeDetachedSmokeAttempt({
+      cwd: workspacePath,
+      issueNumber: ISSUE,
+      prNumber: PR,
+      headSha: HEAD,
+    })).toEqual({
+      kind: 'recoverable',
+      runId,
+      artifactDir,
+      reason: 'detached_smoke_owner_not_alive',
+    });
+
+    const result = await reconcilePostReviewSmoke(candidate, dependencies({
+      ...fixture,
+      adapter,
+      observeDetachedAttempt: observeDetachedSmokeAttempt,
+      startDetachedAttempt,
+    }));
+
+    expect(result).toEqual({
+      handled: true,
+      attempted: true,
+      reason: 'post_review_smoke_detached_started',
+    });
+    expect(startDetachedAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['PASS', 0, 'post_review_smoke_detached_terminal_pass'],
+    ['FAIL', 1, 'post_review_smoke_detached_terminal_fail'],
+    ['BLOCKED', 1, 'post_review_smoke_detached_terminal_blocked'],
+  ] as const)('consumes terminal detached %s evidence without rerunning the same head', async (resultName, exitCode, reason) => {
+    const fixture = rootFixture();
+    const options: PackReviewAuthorityOptions = { storeRoot: fixture.reviewStoreRoot };
+    settleReview(options);
+    const assignment = await publishLocal(fixture.assignmentStorePath, `dispatch-detached-terminal-${resultName.toLowerCase()}`);
+    const adapter = runtimeFor(assignment.bindingKey, path.join(fixture.root, `worker-detached-terminal-${resultName.toLowerCase()}`));
+    const startDetachedAttempt = vi.fn(async () => ({ ok: true as const, runId: 'unexpected' }));
+
+    const result = await reconcilePostReviewSmoke(candidate, dependencies({
+      ...fixture,
+      adapter,
+      observeDetachedAttempt: () => ({
+        kind: 'terminal' as const,
+        runId: `run-detached-${resultName.toLowerCase()}`,
+        artifactDir: `/tmp/run-detached-${resultName.toLowerCase()}`,
+        result: resultName,
+      }),
+      startDetachedAttempt,
+    }));
+
+    expect(result).toEqual({ handled: true, attempted: false, reason, exitCode });
+    expect(startDetachedAttempt).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing', false],
+    ['unreadable', true],
+  ] as const)('does not treat a detached run directory with %s lifecycle as active', async (label, corruptLifecycle) => {
+    const fixture = rootFixture();
+    const options: PackReviewAuthorityOptions = { storeRoot: fixture.reviewStoreRoot };
+    settleReview(options);
+    const assignment = await publishLocal(fixture.assignmentStorePath, `dispatch-detached-${label}-lifecycle`);
+    const workspacePath = path.join(fixture.root, `worker-detached-${label}-lifecycle`);
+    const runId = `run-detached-${label}-lifecycle`;
+    const artifactDir = path.join(workspacePath, '.orca-worker-smoke', 'runs', runId);
+    mkdirSync(artifactDir, { recursive: true });
+    if (corruptLifecycle) writeFileSync(path.join(artifactDir, 'lifecycle.json'), '{ invalid json', 'utf8');
+    const adapter = runtimeFor(assignment.bindingKey, workspacePath);
+    const startDetachedAttempt = vi.fn(async () => ({ ok: true as const, runId: 'unexpected' }));
+
+    expect(observeDetachedSmokeAttempt({ cwd: workspacePath, issueNumber: ISSUE, prNumber: PR, headSha: HEAD })).toEqual({
+      kind: 'untrusted',
+      reason: `detached_smoke_lifecycle_unreadable:${runId}`,
+    });
+    const result = await reconcilePostReviewSmoke(candidate, dependencies({
+      ...fixture,
+      adapter,
+      observeDetachedAttempt: observeDetachedSmokeAttempt,
+      startDetachedAttempt,
+    }));
+
+    expect(result).toEqual({
+      handled: true,
+      attempted: false,
+      reason: `post_review_smoke_lifecycle_untrusted:detached_smoke_lifecycle_unreadable:${runId}`,
+    });
+    expect(startDetachedAttempt).not.toHaveBeenCalled();
   });
 
   it('admits smoke after authoritative at-cap architect DEFER', async () => {

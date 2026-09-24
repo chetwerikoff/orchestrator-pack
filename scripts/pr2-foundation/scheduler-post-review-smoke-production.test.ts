@@ -13,7 +13,7 @@ import type { RuntimeAdapter, RuntimeWorker, RuntimeWorkerIdentity } from '../ru
 import { DeterministicRuntimeAdapter } from '../runtime/test-adapter.ts';
 import { runSmokeAttempt } from '../worker-smoke-run.ts';
 import { reconcilePostReviewSmoke, type PostReviewSmokeDependencies } from './post-review-smoke.ts';
-import { createProductionPostReviewSmokeReconciler, runSchedulerTick, type SchedulerBoundary, type SchedulerCurrentPr } from './scheduler.ts';
+import { SCHEDULER_RUN_TICK_PHASE_INVENTORY, createProductionPostReviewSmokeReconciler, runSchedulerTick, type SchedulerBoundary, type SchedulerCurrentPr } from './scheduler.ts';
 
 const REPO = 'chetwerikoff/orchestrator-pack';
 const TASK_ISSUE = 1418;
@@ -184,15 +184,103 @@ afterEach(() => {
 });
 
 describe('scheduler production smoke uses the existing lifecycle surface', () => {
-  it('records the real reservation/spawn/bind prefix through runSchedulerTick', async () => {
+  it('keeps every explicit tick timeout below the supervisor generation deadline and inventories unbounded phases', () => {
+    expect(SCHEDULER_RUN_TICK_PHASE_INVENTORY.map((row) => row.phase)).toEqual([
+      'fleet-observer-escalation',
+      'fleet-nudge',
+      'orchestration-mail-reconcile-loop-drain',
+      'read-current-pr',
+      'detached-post-review-smoke-start-or-observe',
+      'read-checks',
+      'start-pack-review',
+    ]);
+    for (const row of SCHEDULER_RUN_TICK_PHASE_INVENTORY) {
+      if (row.scopedTimeoutMs !== null) expect(row.scopedTimeoutMs).toBeLessThan(70_000);
+      expect(row.supervisorGenerationCapped).toBe(true);
+    }
+  });
+
+  it('uses an in-branch fixture to defer adoption while a pre-change inline smoke is active until terminal', async () => {
     const f = makeFixture(); setSmokeEnv(f); completeReview(f); liveGh.body = smokeIssueBody(); liveGh.head = f.head;
     const assignment = await assignLocal(f, 'production-prefix');
     let sawBound = false;
     const rt = runtime(assignment.bindingKey, f.workspace, { dispatchFails: true, dispatch: () => { sawBound = smokeRuns(f.workspace).some((run) => readSmokeLifecycleRegistry(run)?.spawnState === 'bound'); } });
-    const result = await runSchedulerTick(boundary(f, smokeDeps(f, rt.adapter)), schedulerEnv(f.root));
+    const original = smokeDeps(f, rt.adapter);
+    let releaseInlineSmoke!: () => void;
+    let inlineSmokeStarted!: () => void;
+    let inlineSmokeState: 'not-started' | 'active' | 'terminal' = 'not-started';
+    const inlineSmokeTerminal = new Promise<void>((resolve) => { releaseInlineSmoke = resolve; });
+    const inlineStarted = new Promise<void>((resolve) => { inlineSmokeStarted = resolve; });
+    const runAttempt = vi.fn(async (options: Parameters<NonNullable<PostReviewSmokeDependencies['runAttempt']>>[0], dependencies: Parameters<NonNullable<PostReviewSmokeDependencies['runAttempt']>>[1]) => {
+      const result = await runSmokeAttempt({ ...options, dryRun: true }, {
+        ...dependencies,
+        startFence: async <T>(action: () => T | Promise<T>) => {
+          const value = await action();
+          if (typeof value === 'object' && value !== null && 'kind' in value && value.kind === 'started') {
+            inlineSmokeState = 'active';
+            inlineSmokeStarted();
+            await inlineSmokeTerminal;
+          }
+          return { ok: true as const, value };
+        },
+      });
+      inlineSmokeState = 'terminal';
+      return result;
+    });
+    let tickSettled = false;
+    const tick = runSchedulerTick(boundary(f, { ...original, runAttempt }), schedulerEnv(f.root)).finally(() => { tickSettled = true; });
+    await inlineStarted;
+    expect(runAttempt.mock.calls[0]?.[0]).toMatchObject({
+      issueNumber: TASK_ISSUE, prNumber: TASK_PR, headSha: f.head, repoRoot: f.workspace, cwd: f.workspace,
+    });
+    expect(runAttempt).toHaveBeenCalledTimes(1);
+    expect(inlineSmokeState).toBe('active');
+    expect(tickSettled).toBe(false);
+    expect(smokeRuns(f.workspace).some((run) => readSmokeLifecycleRegistry(run)?.spawnState === 'bound')).toBe(true);
+    expect(rt.smokeSpawns()).toBe(1);
+    releaseInlineSmoke();
+    const result = await tick;
+    expect(inlineSmokeState).toBe('terminal');
+    expect(tickSettled).toBe(true);
+    expect(smokeRuns(f.workspace).every((run) => readSmokeLifecycleRegistry(run)?.spawnState === 'clean')).toBe(true);
     expect(result).toMatchObject({ attempted: 1, started: 0, skipped: 1 });
     expect(rt.smokeSpawns()).toBe(1);
     expect(sawBound).toBe(true);
+  });
+
+  it('keeps one detached smoke owner active after scheduler replacement without a duplicate launch', async () => {
+    const f = makeFixture(); setSmokeEnv(f); completeReview(f); liveGh.body = smokeIssueBody(); liveGh.head = f.head;
+    const assignment = await assignLocal(f, 'production-detached-owner');
+    const rt = runtime(assignment.bindingKey, f.workspace);
+    let activeOwner: { runId: string; artifactDir: string } | undefined;
+    let startCount = 0;
+    let observeCount = 0;
+    const startDetachedAttempt: NonNullable<PostReviewSmokeDependencies['startDetachedAttempt']> = async (options) => {
+      startCount += 1;
+      expect(options).toMatchObject({ issueNumber: TASK_ISSUE, prNumber: TASK_PR, headSha: f.head, cwd: f.workspace, repoRoot: f.workspace });
+      activeOwner = { runId: 'production-detached-owner-run', artifactDir: path.join(f.root, 'detached-owner-run') };
+      return { ok: true, runId: activeOwner.runId };
+    };
+    const observeDetachedAttempt: NonNullable<PostReviewSmokeDependencies['observeDetachedAttempt']> = () => {
+      observeCount += 1;
+      return activeOwner ? { kind: 'active', ...activeOwner } : { kind: 'absent' };
+    };
+    const { runAttempt: _legacyRunAttempt, ...detachedDependencies } = smokeDeps(f, rt.adapter);
+    void _legacyRunAttempt;
+    const deps: PostReviewSmokeDependencies = { ...detachedDependencies, startDetachedAttempt, observeDetachedAttempt };
+    const scheduler = boundary(f, deps);
+    const env = schedulerEnv(f.root);
+
+    await runSchedulerTick(scheduler, env);
+    const ownerAfterFirstTick = activeOwner;
+    expect(startCount).toBe(1);
+    expect(ownerAfterFirstTick).toEqual({ runId: 'production-detached-owner-run', artifactDir: path.join(f.root, 'detached-owner-run') });
+
+    await runSchedulerTick(boundary(f, deps), schedulerEnv(f.root));
+    expect(observeCount).toBe(2);
+    expect(startCount).toBe(1);
+    expect(activeOwner).toEqual(ownerAfterFirstTick);
+    expect(rt.smokeSpawns()).toBe(0);
   });
 
   it('starts zero lifecycle work when reassignment wins before the final fence', async () => {
