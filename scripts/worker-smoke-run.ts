@@ -749,7 +749,7 @@ export function resolveCiGreen(prNumber: number, headSha: string, repositorySlug
   if (positiveInteger(pr.number) !== prNumber || String(pr.state ?? '').toLowerCase() !== 'open'
     || String(head.sha ?? '').trim().toLowerCase() !== headSha.trim().toLowerCase()) return false;
   const checks = JSON.parse(requireProcessOutput('required-ci-checks', runSmokeGhSync(
-    ['pr', 'checks', String(prNumber), '--repo', repositorySlug, '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description'], repoRoot,
+    ['pr', 'checks', String(prNumber), '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description'], repoRoot,
   ))) as { name?: string; state?: string; bucket?: string }[];
   const baseRef = String(base.ref ?? 'main').trim() || 'main';
   let requiredCheckNames: string[] = [];
@@ -1710,6 +1710,11 @@ function zeroExecutionCarryOnlyPass(report: SmokeReport, headSha: string): boole
     || isProvenCarryOnlySmokeReport(report, headSha);
 }
 
+export function smokeReportHasScenarioFinding(report: SmokeReport): boolean {
+  return report.result === 'FAIL'
+    && report.scenarios.some((scenario) => scenario.outcome === 'fail');
+}
+
 function orderingOwnerEvidence(
   marker: { attemptId?: string; supervisorPid?: number; runId?: string } | undefined,
   options: CliOptions,
@@ -1719,6 +1724,7 @@ function orderingOwnerEvidence(
   if (!attemptId || !Number.isInteger(supervisorPid) || supervisorPid <= 0) return undefined;
   const runId = marker?.runId?.trim() || undefined;
   let authoritativeResult: SmokeReport['result'] | undefined;
+  let scenarioFinding: boolean | undefined;
   let executionMode: 'executed' | 'carry-only' | undefined;
   let cleanupSafe: boolean | undefined;
   if (runId) {
@@ -1731,6 +1737,7 @@ function orderingOwnerEvidence(
     });
     const selected = runtime ?? noExecution;
     authoritativeResult = selected?.result;
+    scenarioFinding = selected ? smokeReportHasScenarioFinding(selected.report) : undefined;
     if (selected?.result === 'PASS' && selected.mode === 'no_execution' && zeroExecutionCarryOnlyPass(selected.report, options.headSha)) {
       executionMode = 'carry-only';
     } else if (runtime?.result === 'PASS') {
@@ -1753,6 +1760,7 @@ function orderingOwnerEvidence(
     supervisorAlive: processIsAlive(supervisorPid),
     ...(cleanupSafe !== undefined ? { cleanupSafe } : {}),
     ...(authoritativeResult ? { authoritativeResult } : {}),
+    ...(scenarioFinding !== undefined ? { scenarioFinding } : {}),
     ...(executionMode ? { executionMode } : {}),
   };
 }
@@ -1995,7 +2003,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   const recordPublishedOrdering = (report: SmokeReport, published: boolean): void => {
     if (!published || publishedPassRecorded) return;
     orderingOutcome = report.result === 'PASS' ? 'passed' : 'failed';
-    orderingFailureKind = report.result === 'FAIL' ? 'finding' : 'retryable';
+    orderingFailureKind = smokeReportHasScenarioFinding(report) ? 'finding' : 'retryable';
     if (report.result === 'PASS') publishedPassRecorded = true;
   };
   let pendingDetachedTerminalization: DetachedTerminalizationRequest | undefined;
