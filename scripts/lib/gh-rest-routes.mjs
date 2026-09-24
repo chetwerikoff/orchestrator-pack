@@ -44,11 +44,17 @@ function mapPullMergeStateStatus(pull) {
  */
 export function mapPullForFields(pull, fields) {
   const mapped = mapPullToGhJson(pull, fields);
+  const headRepository = pull.head?.repo;
   return pickJsonFields({
     ...mapped,
     mergeable: mapPullMergeable(pull),
     mergeStateStatus: mapPullMergeStateStatus(pull),
     mergeCommit: pull.merge_commit_sha ? { oid: pull.merge_commit_sha } : null,
+    headRepository: headRepository ? {
+      id: headRepository.node_id,
+      name: headRepository.name,
+      nameWithOwner: headRepository.full_name,
+    } : null,
   }, fields);
 }
 
