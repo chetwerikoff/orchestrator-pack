@@ -740,16 +740,44 @@ export function composeTerminalBundle(input: {
   if ((author.predecessorStage ?? null) !== input.predecessorStage) throw new Error('author dispositions predecessorStage binding is stale');
   if (author.draft !== input.issueBody) throw new Error('author dispositions draft binding does not equal the exact live Issue bytes');
 
-  const ledger = requiredJsonRecord(join(input.reviewDir, 'finding-disposition-ledger.json'), 'finding disposition ledger');
-  const counts = isRecord(ledger.counts) ? ledger.counts : null;
-  if (!counts || !Number.isInteger(counts.rawFindingCount) || Number(counts.rawFindingCount) < 0) throw new Error('finding disposition ledger is missing review-economics rawFindingCount');
-  if (ledger.reviewEpisodeId !== input.reviewEpisodeId) throw new Error('finding disposition ledger reviewEpisodeId binding is stale or foreign');
-  if (ledger.sourceRevision !== input.sourceRevision) throw new Error('finding disposition ledger sourceRevision binding is stale');
-  if ((ledger.predecessorStage ?? null) !== input.predecessorStage) throw new Error('finding disposition ledger predecessorStage binding is stale');
-  if (ledger.draft !== input.issueBody) throw new Error('finding disposition ledger is not bound to the exact live Issue bytes');
-  if (!Array.isArray(ledger.findings) || !jsonEqual(ledger.findings, author.findings)) throw new Error('finding disposition ledger findings do not match the bound author disposition record');
-  const receiptRawFindingCount = rawFindingCountFromReceipts(authorityReceipts);
-  if (Number(counts.rawFindingCount) !== receiptRawFindingCount) throw new Error(`finding disposition ledger is stale for current receipt chain: ledger rawFindingCount=${String(counts.rawFindingCount)} receipts=${receiptRawFindingCount}`);
+  const ledgerPath = join(input.reviewDir, 'finding-disposition-ledger.json');
+  let reviewEconomics: Record<string, unknown>;
+  if (!existsSync(ledgerPath)) {
+    const intake = parseLifecycleTierIntake(readJson(join(input.reviewDir, 'tier-intake.json')));
+    if (input.predecessorStage !== null
+      || author.producer !== 'governed-author-output/v1'
+      || intake?.priorTier !== 'T1'
+      || `${intake.taskIdentity}@${intake.firstRevision}` !== input.reviewEpisodeId) {
+      throw new Error('missing finding disposition ledger');
+    }
+    reviewEconomics = {
+      rawFindingCount: 0,
+      distinctFindingCount: 0,
+      processedDistinctCount: 0,
+      reviewEpisodeId: input.reviewEpisodeId,
+      sourceRevision: input.sourceRevision,
+      predecessorStage: null,
+      evidenceBasis: 'governed-author-output/v1',
+    };
+  } else {
+    const ledger = requiredJsonRecord(ledgerPath, 'finding disposition ledger');
+    const counts = isRecord(ledger.counts) ? ledger.counts : null;
+    if (!counts || !Number.isInteger(counts.rawFindingCount) || Number(counts.rawFindingCount) < 0) throw new Error('finding disposition ledger is missing review-economics rawFindingCount');
+    if (ledger.reviewEpisodeId !== input.reviewEpisodeId) throw new Error('finding disposition ledger reviewEpisodeId binding is stale or foreign');
+    if (ledger.sourceRevision !== input.sourceRevision) throw new Error('finding disposition ledger sourceRevision binding is stale');
+    if ((ledger.predecessorStage ?? null) !== input.predecessorStage) throw new Error('finding disposition ledger predecessorStage binding is stale');
+    if (ledger.draft !== input.issueBody) throw new Error('finding disposition ledger is not bound to the exact live Issue bytes');
+    if (!Array.isArray(ledger.findings) || !jsonEqual(ledger.findings, author.findings)) throw new Error('finding disposition ledger findings do not match the bound author disposition record');
+    const receiptRawFindingCount = rawFindingCountFromReceipts(authorityReceipts);
+    if (Number(counts.rawFindingCount) !== receiptRawFindingCount) throw new Error(`finding disposition ledger is stale for current receipt chain: ledger rawFindingCount=${String(counts.rawFindingCount)} receipts=${receiptRawFindingCount}`);
+    reviewEconomics = {
+      ...counts,
+      reviewEpisodeId: ledger.reviewEpisodeId,
+      sourceRevision: ledger.sourceRevision,
+      predecessorStage: ledger.predecessorStage ?? null,
+      evidenceBasis: 'receipt-backed-finding-ledger/v1',
+    };
+  }
 
   const findings = author.findings.filter(isRecord);
   if (findings.length !== author.findings.length) throw new Error('author dispositions findings must all be objects');
@@ -765,12 +793,6 @@ export function composeTerminalBundle(input: {
     rejectPartition,
     protectedM3,
     authorM4,
-    reviewEconomics: {
-      ...counts,
-      reviewEpisodeId: ledger.reviewEpisodeId,
-      sourceRevision: ledger.sourceRevision,
-      predecessorStage: ledger.predecessorStage ?? null,
-      evidenceBasis: 'receipt-backed-finding-ledger/v1',
-    },
+    reviewEconomics,
   };
 }
