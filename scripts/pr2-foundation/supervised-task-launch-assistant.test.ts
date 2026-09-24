@@ -817,6 +817,41 @@ describe('supervised Task launch assistant', () => {
     expect(LAUNCH_STARTUP_OBSERVATION_WINDOW_MS).toBeGreaterThan(1_000);
   });
 
+  it('continues a busy Task using the same persisted terminal without creating a second pane', async () => {
+    const ownership = new Map<string, RuntimeWorker>();
+    const spawnAttempts: string[] = [];
+    let paneCreations = 0;
+    const adapterForInvocation = (): RuntimeAdapter => {
+      const base = runtimeAdapter({ liveness: 'busy' });
+      return {
+        ...base,
+        spawnWorker: ({ title }) => {
+          spawnAttempts.push(title);
+          const existing = ownership.get(title);
+          if (existing) return { status: 'ok', value: existing };
+          const created = { ...worker, title };
+          ownership.set(title, created);
+          paneCreations += 1;
+          return { status: 'ok', value: created };
+        },
+      };
+    };
+
+    const first = await runSupervisedTaskLaunchAssistant(launchInput(), deps({ adapter: adapterForInvocation() }));
+    const continuation = await runSupervisedTaskLaunchAssistant(launchInput(), deps({ adapter: adapterForInvocation() }));
+
+    expect(first).toMatchObject({
+      outcome: 'continue', stage: 'terminal_prepare', observedCause: 'terminal_liveness_busy',
+      resources: { terminal: worker.identity },
+    });
+    expect(continuation).toMatchObject({
+      outcome: 'continue', stage: 'terminal_prepare', observedCause: 'terminal_liveness_busy',
+      resources: { terminal: worker.identity },
+    });
+    expect(spawnAttempts).toEqual(['opk-t2-task-1', 'opk-t2-task-1']);
+    expect(paneCreations).toBe(1);
+  });
+
   it('fails closed when liveness observes a recreated terminal generation', async () => {
     const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({
       adapter: runtimeAdapter({ livenessWorker: { ...worker.identity, generation: 'pty-2' } }),
