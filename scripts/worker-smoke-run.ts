@@ -1690,6 +1690,12 @@ function zeroExecutionCarryOnlyPass(report: SmokeReport, headSha: string): boole
     || isProvenCarryOnlySmokeReport(report, headSha);
 }
 
+export function smokeReportHasScenarioFinding(report: SmokeReport): boolean {
+  return report.result === 'FAIL'
+    && (isWorkerSmokeScenarioCauseFamily(report.causeFamily)
+      || report.scenarios.some((scenario) => isWorkerSmokeScenarioCauseFamily(scenario.causeFamily)));
+}
+
 function orderingOwnerEvidence(
   marker: { attemptId?: string; supervisorPid?: number; runId?: string } | undefined,
   options: CliOptions,
@@ -1699,6 +1705,7 @@ function orderingOwnerEvidence(
   if (!attemptId || !Number.isInteger(supervisorPid) || supervisorPid <= 0) return undefined;
   const runId = marker?.runId?.trim() || undefined;
   let authoritativeResult: SmokeReport['result'] | undefined;
+  let scenarioFinding: boolean | undefined;
   let executionMode: 'executed' | 'carry-only' | undefined;
   let cleanupSafe: boolean | undefined;
   if (runId) {
@@ -1711,6 +1718,7 @@ function orderingOwnerEvidence(
     });
     const selected = runtime ?? noExecution;
     authoritativeResult = selected?.result;
+    scenarioFinding = selected ? smokeReportHasScenarioFinding(selected.report) : undefined;
     if (selected?.result === 'PASS' && selected.mode === 'no_execution' && zeroExecutionCarryOnlyPass(selected.report, options.headSha)) {
       executionMode = 'carry-only';
     } else if (runtime?.result === 'PASS') {
@@ -1733,6 +1741,7 @@ function orderingOwnerEvidence(
     supervisorAlive: processIsAlive(supervisorPid),
     ...(cleanupSafe !== undefined ? { cleanupSafe } : {}),
     ...(authoritativeResult ? { authoritativeResult } : {}),
+    ...(scenarioFinding !== undefined ? { scenarioFinding } : {}),
     ...(executionMode ? { executionMode } : {}),
   };
 }
@@ -1975,7 +1984,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   const recordPublishedOrdering = (report: SmokeReport, published: boolean): void => {
     if (!published || publishedPassRecorded) return;
     orderingOutcome = report.result === 'PASS' ? 'passed' : 'failed';
-    orderingFailureKind = report.result === 'FAIL' ? 'finding' : 'retryable';
+    orderingFailureKind = smokeReportHasScenarioFinding(report) ? 'finding' : 'retryable';
     if (report.result === 'PASS') publishedPassRecorded = true;
   };
   let pendingDetachedTerminalization: DetachedTerminalizationRequest | undefined;

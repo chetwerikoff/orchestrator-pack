@@ -64,6 +64,7 @@ import {
   runSmokeAttempt,
   resolveSmokeExecutorProfile,
   smokeCommentSnapshotDigest,
+  smokeReportHasScenarioFinding,
   stabilizeSmokeCommentCensus,
   waitForRuntimeSmokeCompletion,
   type CliOptions,
@@ -1716,6 +1717,25 @@ describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }
+  });
+
+  it('classifies harness FAIL without a scenario failure as retryable', () => {
+    const unsealedWrongBinding = {
+      ...report('FAIL', []),
+      causeFamily: 'harness_observation_interrupted',
+      environmentNotes: ['agent_idle_without_report', 'wrong_run_binding=true'],
+    };
+    const scenarioFailure = {
+      ...report('FAIL', [{
+        action: 'run declared scenario',
+        expected: 'passes',
+        observed: 'scenario assertion failed',
+        outcome: 'fail' as const,
+        causeFamily: 'scenario_assertion_failed' as const,
+      }]),
+    };
+    expect(smokeReportHasScenarioFinding(unsealedWrongBinding)).toBe(false);
+    expect(smokeReportHasScenarioFinding(scenarioFailure)).toBe(true);
   });
 
   it.each(['gone', 'exited'] as const)('keeps child %s failure behavior without a valid seal', (terminalState) => {
