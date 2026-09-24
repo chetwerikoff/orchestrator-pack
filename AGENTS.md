@@ -221,8 +221,11 @@ gate.
 ## Command-runtime bootstrap
 
 Before an autonomous command turn performs side effects, pass the tracked
-command-runtime preflight. Missing required Node 22 or GitHub transport must
-fail closed. Do not edit shell dotfiles or create temporary
+command-runtime preflight:
+`PATH="<pack>/scripts:$PATH" node scripts/lib/command-runtime-bootstrap.mjs livePreflight --pack-root <pack>`.
+Pack `scripts/gh` must be the first `gh` on `PATH`, or the preflight fails with
+`pack scripts/gh must be first gh on PATH`. Missing required Node 22 or GitHub
+transport must fail closed. Do not edit shell dotfiles or create temporary
 executable wrappers as recovery. Structured wrappers parse stdout JSON only.
 
 ## Operator-only merge and failed runs
