@@ -99,9 +99,12 @@ function screenLines(screen: string): string[] {
 }
 
 export class FleetScreenReadError extends Error {
-  constructor(readonly handle: string, detail: string) {
+  readonly handle: string;
+
+  constructor(handle: string, detail: string) {
     super(`${handle} unreadable: ${detail}`);
     this.name = 'FleetScreenReadError';
+    this.handle = handle;
   }
 }
 
