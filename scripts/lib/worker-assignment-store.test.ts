@@ -10,7 +10,6 @@ import {
   currentWorkerAssignment,
   publishCurrentWorkerAssignment,
   resolveWorkerAssignmentStorePath,
-  setWorkerAssignmentDeadObservationTicks,
   withCurrentWorkerAssignmentFence,
 } from './worker-assignment-store.ts';
 
@@ -201,26 +200,6 @@ describe('WorkerAssignment compare-and-publish', () => {
       },
     });
     expect(stale).toEqual({ ok: false, reason: 'assignment_stale' });
-    expect(currentWorkerAssignment(file, 1416)).toEqual(first.assignment);
-  });
-
-  it('clears aged dead progress for the exact identity after mutable Issue-number drift', async () => {
-    const { file } = fixture();
-    const first = await publishCurrentWorkerAssignment(publishInput(file, 'dispatch-reset'));
-    if (!first.ok) throw new Error(first.reason);
-    const aged = await setWorkerAssignmentDeadObservationTicks({
-      file,
-      expected: first.assignment,
-      ticks: 2,
-    });
-    if (!aged.ok) throw new Error(aged.reason);
-
-    const reset = await setWorkerAssignmentDeadObservationTicks({
-      file,
-      expected: { ...aged.assignment, issueNumber: 1417 },
-      ticks: 0,
-    });
-    expect(reset).toMatchObject({ ok: true });
     expect(currentWorkerAssignment(file, 1416)).toEqual(first.assignment);
   });
 

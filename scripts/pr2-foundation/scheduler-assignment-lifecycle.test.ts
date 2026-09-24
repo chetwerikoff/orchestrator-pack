@@ -408,6 +408,46 @@ describe('Issue #2106 bounded scheduler assignment lifecycle reconciliation', ()
     });
   });
 
+  it('resets active dead progress after Issue attachment changes mutable assignment fields', async () => {
+    const { store } = fixture();
+    const published = await publishCurrentWorkerAssignment({
+      file: store,
+      repository: REPOSITORY,
+      taskId: 'active-reset-task',
+      kind: 'local',
+      provider: 'orca',
+      bindingKey: 'dispatch-active-reset',
+      role: 'worker',
+    });
+    if (!published.ok) throw new Error(published.reason);
+    const aged = await setWorkerAssignmentDeadObservationTicks({
+      file: store,
+      expected: published.assignment,
+      ticks: 2,
+    });
+    if (!aged.ok) throw new Error(aged.reason);
+    const attached = await attachWorkerAssignmentIssueNumber({
+      file: store,
+      expected: aged.assignment,
+      issueNumber: 1899,
+    });
+    if (!attached.ok) throw new Error(attached.reason);
+
+    const reset = await setWorkerAssignmentDeadObservationTicks({
+      file: store,
+      expected: aged.assignment,
+      ticks: 0,
+    });
+    expect(reset).toMatchObject({ ok: true, assignment: { issueNumber: 1899 } });
+    if (!reset.ok) throw new Error(reset.reason);
+    expect(reset.assignment).not.toHaveProperty('deadObservationTicks');
+    expect(currentWorkerAssignmentByDeliverable(
+      store,
+      published.assignment.taskId,
+      published.assignment.bindingKey,
+    )).not.toHaveProperty('deadObservationTicks');
+  });
+
   it('does zero mail and zero retirement from stale terminal evidence after Issue attachment', async () => {
     const { store, ledger } = fixture();
     const published = await publishCurrentWorkerAssignment({
