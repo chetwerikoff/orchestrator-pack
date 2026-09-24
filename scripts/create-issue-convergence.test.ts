@@ -1026,6 +1026,71 @@ describe('create-Issue send-boundary adoption', () => {
     expect(source).toContain("options.get('operator-browser-config')");
   });
 
+  it('projects tracked GitHub preflight unavailability to external_pause before admission or launch', async () => {
+    const root = tempRoot();
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      logs.push(String(line));
+    });
+    const argv = [
+      '--run-identity', 'run-github-pause',
+      '--attempt-identity', 'attempt-github-pause',
+      '--handoff-receipt', join(root, 'handoff.json'),
+      '--invocation-id', 'invocation-github-pause',
+      '--terminal-envelope', join(root, 'terminal.json'),
+      '--output', join(root, 'output.json'),
+      '--profile', root,
+      '--cdp', 'http://127.0.0.1:9222',
+      '--input', join(root, 'input.txt'),
+      '--reviewer-source-output', join(root, 'source.txt'),
+      '--reviewer-source', 'slot-01#capture=direct-publication/v1',
+      '--repository', binding.repository,
+      '--issue-number', String(binding.issueNumber),
+      '--source-revision', binding.sourceRevision,
+      '--stage', binding.stage,
+      '--source-slot', '01',
+      '--stage-attempt-id', binding.stageAttemptId!,
+    ];
+    const inspectLifecycleBinding = vi.fn();
+    const recordAdmission = vi.fn();
+    const readIssueRevision = vi.fn();
+    const spawnLauncher = vi.fn(async () => 10001);
+    try {
+      const code = await runBrowserAdapter(argv, {
+        runPreflight: () => ({
+          ok: false,
+          schema: 'create-issue-browser-gpt-preflight/v1',
+          cause: 'tracked_github_unavailable',
+          blocker: 'tracked scripts/gh returned HTTP 503',
+          remedy: 'restore tracked GitHub access, then resume this Dispatch',
+          evidence: 'gh api returned HTTP 503',
+          nextAction: null,
+        }),
+        readIssueRevision,
+        inspectLifecycleBinding,
+        recordAdmission,
+        spawnLauncher,
+      });
+      expect(code).toBe(4);
+      expect(JSON.parse(logs.at(-1) ?? '{}')).toMatchObject({
+        ok: false,
+        cause: 'external:github_unavailable',
+        pause: {
+          remedy: 'restore tracked GitHub access, then resume this Dispatch',
+          evidence: 'gh api returned HTTP 503',
+          resume_when: { operator: true },
+        },
+        nextAction: null,
+      });
+      expect(readIssueRevision).not.toHaveBeenCalled();
+      expect(inspectLifecycleBinding).not.toHaveBeenCalled();
+      expect(recordAdmission).not.toHaveBeenCalled();
+      expect(spawnLauncher).not.toHaveBeenCalled();
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   it('inventories exactly the canonical tracked GET /user principal read for Issue 1935', () => {
     const inventory = JSON.parse(readFileSync(join(process.cwd(), 'scripts', 'lib', 'graphql-quota-github-read-inventory.json'), 'utf8')) as {
       rows: Array<{ id?: string; ownerClass?: string; pattern?: string; ownerIssue?: number }>;
