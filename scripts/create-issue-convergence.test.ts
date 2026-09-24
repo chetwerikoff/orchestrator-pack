@@ -27,11 +27,9 @@ import {
 } from './lib/create-issue-stage-record-artifacts.ts';
 import { buildManagerReviewTerminalBundle } from './lib/manager-review-terminal-bundle.ts';
 import { canonicalStagePlan } from './lib/create-issue-stage-topology.ts';
-import { startReviewCycle } from './lib/create-issue-stage-record-core.ts';
 import { admitStageLaunch, ensureLifecycleTierIntake, loadCanonicalLifecycleAuthority } from './lib/create-issue-stage-lifecycle.ts';
 import { serializeCommentBody } from './lib/create-issue-stage-record-marker.ts';
 import { CYCLE_SCHEMA, type CycleEventLogical } from './lib/create-issue-stage-record-types.ts';
-import { createMockGhState, createMockTransport } from './lib/create-issue-stage-record-test-helpers.ts';
 import {
   selectPrincipalOwnedCanonicalArtifact,
   sameGithubPrincipal,
