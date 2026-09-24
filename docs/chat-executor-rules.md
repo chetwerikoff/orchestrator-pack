@@ -251,7 +251,7 @@ current supervised local integration assignment using the delegated branch of
 `.cursor/skills/merge-with-local-adoption/SKILL.md`; a task/Issue/PR comment, free-form
 "merge mode" string, lifecycle state, or review-cap state does not create that authority.
 
-For orchestrator-delegated integration, fail closed unless all of these are freshly true:
+For orchestrator-delegated integration, reject the merge unless all of these are freshly true:
 
 1. the current WorkerAssignment is local/Orca/worker, carries the closed
    `delegatedIntegration` marker, and its `taskId`, `bindingKey`, `assignmentId`,
