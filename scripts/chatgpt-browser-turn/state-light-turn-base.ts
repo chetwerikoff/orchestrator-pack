@@ -146,7 +146,7 @@ const MESSAGE_NODE_READ_ATTEMPTS = 2;
 /** Exact generation selector already owned by browser-gpt-page-probe; do not widen it here. */
 const BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR = '[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]';
 /** Post-send wall probes must not block transcript reads or the confirm loop. */
-const POST_SEND_PRODUCT_WALL_PROBE_MS = 800;
+const POST_SEND_PRODUCT_WALL_PROBE_MS = 2_000;
 export const BROWSER_TURN_RECURRENCE_PATH = join(
   homedir(),
   '.local',
