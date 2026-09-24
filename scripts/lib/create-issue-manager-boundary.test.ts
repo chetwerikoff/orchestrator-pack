@@ -275,6 +275,24 @@ describe('create-Issue manager boundary', () => {
         expect(writes).toHaveLength(1);
         expect(() => JSON.parse(writes[0]!)).not.toThrow();
       }
+
+      const writes: string[] = [];
+      const thrown = emitCreateIssueManagerResult({
+        producer,
+        currentArgv: ['current-entrypoint'],
+        produce: () => { throw new Error('result construction failed'); },
+        stdout: (value) => writes.push(value),
+      });
+      expect(thrown.exitCode).toBe(5);
+      expect(writes).toHaveLength(1);
+      const emitted = JSON.parse(writes[0]!) as unknown;
+      expect(validateCreateIssueManagerResult(emitted, { boundary: true })).toEqual([]);
+      expect(emitted).toMatchObject({
+        ok: false,
+        cause: 'producer_contract_defect',
+        defect: { producer },
+        nextAction: null,
+      });
     }
   });
 });
