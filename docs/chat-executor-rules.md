@@ -168,9 +168,9 @@ existing escalation key, not a new lifecycle state.
 
 Dispatch/re-dispatch payloads remain role plus task invariants; procedure
 comes from the current CLI `--help` and returned `nextAction`; do not re-paste
-the create-Issue skill or runbooks into repeated dispatches. Browser-GPT
-`TerminalEnvelope` remains a separate transport and does not carry
-`blocked_on`.
+the create-Issue skill or runbooks into repeated dispatches.
+Browser-GPT `TerminalEnvelope` remains a separate unchanged
+transport and does not carry `blocked_on`.
 
 ## 7. Independent review role
 
