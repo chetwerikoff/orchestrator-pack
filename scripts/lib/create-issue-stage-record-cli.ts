@@ -35,6 +35,7 @@ import {
   validateCreateIssueManagerResult,
   type CreateIssueActionBinding,
   type CreateIssueBlockedOn,
+  type CreateIssueContractDefectResult,
   type CreateIssueNextAction,
   type CreateIssueZeroSendReason,
 } from './create-issue-next-action.ts';
@@ -1104,21 +1105,13 @@ function canonicalAuthorRoundDirectory(issueNumber: number): string {
 function authorRoundAction(
   binding: CreateIssueActionBinding,
   reviewDir: string,
-): CreateIssueNextAction {
-  const argv = [
-    'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
-    'author-round',
-    '--repo', binding.repository,
-    '--issue-number', String(binding.issueNumber),
-    '--review-dir', reviewDir,
-    '--expected-source-revision', binding.sourceRevision,
-    '--expected-stage', binding.stage,
-  ];
-  if (binding.stageAttemptId) {
-    argv.push('--expected-stage-attempt-id', binding.stageAttemptId);
-  }
-  argv.push('--json');
-  return createIssueNextAction({ kind: 'author-round', binding, argv });
+ ): CreateIssueNextAction {
+  return reconcileStageReadOnlyAction(
+    { repo: binding.repository },
+    binding.issueNumber,
+    binding,
+    reviewDir,
+  );
 }
 
 function existingAttemptForStage(
@@ -1298,14 +1291,16 @@ export function runStageFinalizeCli(
       const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
       const canonicalReviewDir = canonicalAuthorRoundDirectory(issueNumber);
       if (resolve(reviewDir) !== resolve(canonicalReviewDir)) {
-        const output = createIssueTerminalResult({
+        const output: CreateIssueContractDefectResult = {
           ok: false,
-          cause: 'author_round_noncanonical_review_dir',
-          blocker: `author-round requires canonical review directory ${canonicalReviewDir}`,
-        });
-        if (opts.json) console.log(JSON.stringify(output));
-        else process.stderr.write((output.blocker ?? output.cause) + '\n');
-        return 1;
+          cause: 'producer_contract_defect',
+          defect: {
+            producer: 'create-issue-stage-record-cli.ts:main',
+            detail: [`author-round requires canonical review directory ${canonicalReviewDir}`],
+          },
+          nextAction: null,
+        };
+        return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
       }
       const expectedSourceRevision = parseRequiredNonEmptyString(
         opts.expectedSourceRevision,
@@ -1329,14 +1324,15 @@ export function runStageFinalizeCli(
       try {
         live = fetchIssueRevision(transport, opts.repo, issueNumber);
       } catch (error) {
-        const output = createIssueTerminalResult({
-          ok: false,
-          cause: 'source-unavailable',
-          blocker: error instanceof Error ? error.message : String(error),
+        const evidence = error instanceof Error ? error.message : String(error);
+        const output = createIssueExternalPauseResult({
+          cause: 'external:github_unavailable',
+          remedy: 'restore GitHub Issue reads, then resume this same Dispatch',
+          resumeWhen: { operator: true },
+          evidence,
+          blocker: evidence,
         });
-        if (opts.json) console.log(JSON.stringify(output));
-        else process.stderr.write((output.blocker ?? output.cause) + '\n');
-        return 1;
+        return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
       }
       const liveRevision = issueSourceRevision(live.body);
       if (liveRevision.toLowerCase() !== expectedSourceRevision.toLowerCase()) {
@@ -1348,11 +1344,9 @@ export function runStageFinalizeCli(
             ...(liveRevision ? { sourceRevision: liveRevision } : {}),
             stage: expectedStage,
           },
-          nextAction: null,
+          nextAction: reconcileStageReadOnlyAction(opts, issueNumber, binding, reviewDir),
         });
-        if (opts.json) console.log(JSON.stringify(stale));
-        else process.stderr.write('stale_next_action\n');
-        return 1;
+        return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, stale);
       }
 
       let repairClass: 'body-floor' | 'author-schema';
@@ -1375,11 +1369,9 @@ export function runStageFinalizeCli(
           const stale = createIssueStaleNextAction({
             binding,
             observed: observed ?? { repository: opts.repo, issueNumber, sourceRevision: liveRevision },
-            nextAction: null,
+            nextAction: reconcileStageReadOnlyAction(opts, issueNumber, binding, reviewDir),
           });
-          if (opts.json) console.log(JSON.stringify(stale));
-          else process.stderr.write('stale_next_action\n');
-          return 1;
+          return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, stale);
         }
         repairClass = 'author-schema';
         const inspected = authorSchemaDiagnostics(reviewDir);
@@ -1412,16 +1404,14 @@ export function runStageFinalizeCli(
           );
           const authorDiagnostics = validation.authorDiagnostics ?? [];
           if (lifecycleOwned || authorDiagnostics.length === 0) {
-            const output = createIssueTerminalResult({
-              ok: false,
+            const output = createIssueRecoverableResult({
               cause: lifecycleOwned
                 ? 'author_round_lifecycle_validation_failed'
                 : 'author_round_non_author_failure',
               blocker: validation.errors.join('; '),
+              nextAction: reconcileStageReadOnlyAction(opts, issueNumber, binding, reviewDir),
             });
-            if (opts.json) console.log(JSON.stringify(output));
-            else process.stderr.write((output.blocker ?? output.cause) + '\n');
-            return 1;
+            return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
           }
           schemaFragment = validation.authorSchemaFragment ?? renderAuthorDispositionPromptFragment();
           diagnostics = authorDiagnostics.map(
@@ -1440,11 +1430,9 @@ export function runStageFinalizeCli(
               stage: expectedStage,
               stageAttemptId: existing.stageAttemptId,
             },
-            nextAction: null,
+            nextAction: reconcileStageReadOnlyAction(opts, issueNumber, binding, reviewDir),
           });
-          if (opts.json) console.log(JSON.stringify(stale));
-          else process.stderr.write('stale_next_action\n');
-          return 1;
+          return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, stale);
         }
         repairClass = 'body-floor';
         diagnostics = bodyFloorDiagnostics(live.body);
@@ -1483,24 +1471,26 @@ export function runStageFinalizeCli(
         outputPath: paths.outputPath,
       });
       if (!launched.ok) {
-        const output = createIssueTerminalResult({
-          ok: false,
-          cause: 'author_round_launch_failed',
-          blocker: launched.blocker ?? 'Browser-GPT author round failed without a diagnostic',
+        const evidence = launched.blocker ?? 'Browser-GPT author round failed without a diagnostic';
+        const output = createIssueExternalPauseResult({
+          cause: 'external:chrome_not_running',
+          remedy: 'restore the Browser-GPT transport, then resume this same Dispatch',
+          resumeWhen: { operator: true },
+          evidence,
+          blocker: evidence,
         });
-        if (opts.json) console.log(JSON.stringify(output));
-        else process.stderr.write((output.blocker ?? output.cause) + '\n');
-        return 1;
+        return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
       }
       if (!existsSync(paths.outputPath)) {
-        const output = createIssueTerminalResult({
-          ok: false,
-          cause: 'author_round_output_missing',
-          blocker: `Browser-GPT author round did not publish ${paths.outputPath}`,
+        const evidence = `Browser-GPT author round did not publish ${paths.outputPath}`;
+        const output = createIssueExternalPauseResult({
+          cause: 'external:chrome_not_running',
+          remedy: 'restore the Browser-GPT transport, then resume this same Dispatch',
+          resumeWhen: { operator: true },
+          evidence,
+          blocker: evidence,
         });
-        if (opts.json) console.log(JSON.stringify(output));
-        else process.stderr.write((output.blocker ?? output.cause) + '\n');
-        return 1;
+        return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
       }
 
       const after = fetchIssueRevision(transport, opts.repo, issueNumber);
@@ -1509,17 +1499,15 @@ export function runStageFinalizeCli(
         const expectedNext = nextRevision(expectedSourceRevision);
         const floorErrors = bodyFloorDiagnostics(after.body);
         if (!expectedNext || afterRevision.toLowerCase() !== expectedNext.toLowerCase() || floorErrors.length > 0) {
-          const output = createIssueTerminalResult({
-            ok: false,
+          const output = createIssueRecoverableResult({
             cause: 'author_round_body_floor_unresolved',
             blocker: [
               `expected exactly one revision advance ${expectedSourceRevision} -> ${expectedNext ?? '<invalid>'}; observed ${afterRevision || '<missing>'}`,
               ...floorErrors,
             ].join('; '),
+            nextAction: reconcileStageReadOnlyAction(opts, issueNumber, binding, reviewDir),
           });
-          if (opts.json) console.log(JSON.stringify(output));
-          else process.stderr.write((output.blocker ?? output.cause) + '\n');
-          return 1;
+          return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
         }
       } else {
         if (afterRevision.toLowerCase() !== expectedSourceRevision.toLowerCase()) {
@@ -1532,24 +1520,20 @@ export function runStageFinalizeCli(
               stage: expectedStage,
               stageAttemptId: binding.stageAttemptId,
             },
-            nextAction: null,
+            nextAction: reconcileStageReadOnlyAction(opts, issueNumber, binding, reviewDir),
           });
-          if (opts.json) console.log(JSON.stringify(stale));
-          else process.stderr.write('stale_next_action\n');
-          return 1;
+          return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, stale);
         }
         const inspected = authorSchemaDiagnostics(reviewDir);
         if (inspected.diagnostics.length > 0) {
-          const output = createIssueTerminalResult({
-            ok: false,
+          const output = createIssueRecoverableResult({
             cause: 'author_round_schema_unresolved',
             blocker: inspected.diagnostics
               .map((item) => `${item.reason}:${item.field}: ${item.message}`)
               .join('; '),
+            nextAction: reconcileStageReadOnlyAction(opts, issueNumber, binding, reviewDir),
           });
-          if (opts.json) console.log(JSON.stringify(output));
-          else process.stderr.write((output.blocker ?? output.cause) + '\n');
-          return 1;
+          return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
         }
         const produced = produceAcceptanceArtifacts({
           reviewDir,
@@ -1565,16 +1549,14 @@ export function runStageFinalizeCli(
           const lifecycleOwned = produced.errors.some(
             (error) => classifyAuthorDispositionFailure(error) === 'lifecycle-injected',
           );
-          const output = createIssueTerminalResult({
-            ok: false,
+          const output = createIssueRecoverableResult({
             cause: lifecycleOwned
               ? 'author_round_lifecycle_validation_failed'
               : 'author_round_post_validation_failed',
             blocker: produced.errors.join('; '),
+            nextAction: reconcileStageReadOnlyAction(opts, issueNumber, binding, reviewDir),
           });
-          if (opts.json) console.log(JSON.stringify(output));
-          else process.stderr.write((output.blocker ?? output.cause) + '\n');
-          return 1;
+          return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
         }
       }
 
@@ -2047,14 +2029,15 @@ export function runStageFinalizeCli(
       try {
         live = fetchIssueRevision(transport, opts.repo, issueNumber);
       } catch (error) {
-        const output = createIssueTerminalResult({
-          ok: false,
-          cause: 'source-unavailable',
-          blocker: error instanceof Error ? error.message : String(error),
+        const evidence = error instanceof Error ? error.message : String(error);
+        const output = createIssueExternalPauseResult({
+          cause: 'external:github_unavailable',
+          remedy: 'restore GitHub Issue reads, then resume this same Dispatch',
+          resumeWhen: { operator: true },
+          evidence,
+          blocker: evidence,
         });
-        if (opts.json) console.log(JSON.stringify(output));
-        else process.stderr.write((output.blocker ?? output.cause) + '\n');
-        return 1;
+        return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
       }
       const liveRevision = issueSourceRevision(live.body);
       if (!liveRevision || liveRevision.toLowerCase() !== sourceRevision.toLowerCase()) {
@@ -2064,6 +2047,7 @@ export function runStageFinalizeCli(
           sourceRevision,
           stage,
         };
+        const canonical = resolveCanonicalReviewDirectory({ taskIdentity: 'issue:' + issueNumber });
         const staleLive = createIssueStaleNextAction({
           binding,
           observed: {
@@ -2072,11 +2056,15 @@ export function runStageFinalizeCli(
             ...(liveRevision ? { sourceRevision: liveRevision } : {}),
             stage,
           },
-          nextAction: null,
+          nextAction: reconcileStageReadOnlyAction(
+            opts,
+            issueNumber,
+            binding,
+            canonical.directory,
+            evidencePathForBinding(canonical.directory, binding),
+          ),
         });
-        if (opts.json) console.log(JSON.stringify(staleLive));
-        else process.stderr.write('stale_next_action\n');
-        return 1;
+        return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, staleLive);
       }
       const floorErrors = bodyFloorDiagnostics(live.body, tier);
       if (floorErrors.length > 0) {
