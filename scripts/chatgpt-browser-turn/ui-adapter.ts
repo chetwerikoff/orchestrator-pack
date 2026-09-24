@@ -209,8 +209,9 @@ function emptyClassification(
  * Product text alone is never recovery authority: the exact owned prompt must
  * be unique, the banner must be a bounded descendant of the assistant carrier
  * in the structural successor conversation-turn, that same carrier must hold
- * regenerate-thread-error-button, generation must be positively stopped, and
- * no later user turn or extra assistant carrier may be present.
+ * regenerate-thread-error-button, generation must be positively stopped unless
+ * the exact evidence is confirmed by two stable reads, and no later user turn or
+ * extra assistant carrier may be present.
  */
 export function classifyExecutionRecoveryProductError(
   evidence: ExecutionRecoveryProductErrorEvidence,
@@ -493,12 +494,15 @@ async function readOwnedTurnSnapshot(
 function recoveryCauseFromSnapshot(
   snapshot: OwnedTurnSnapshot | undefined,
   marker: string,
-): ExecutionRecoveryProductCause | undefined {
+  allowGenerationSelectorCandidate = false,
+ ): ExecutionRecoveryProductCause | undefined {
   if (!snapshot) return undefined;
   return classifyExecutionRecoveryProductError({
     marker,
     transcriptComplete: snapshot.complete,
-    generationInProgress: snapshot.generationInProgress,
+    generationInProgress: allowGenerationSelectorCandidate && snapshot.generationInProgress === true
+      ? false
+      : snapshot.generationInProgress,
     messages: snapshot.rows,
     conversationTurnKeys: snapshot.conversationTurnKeys,
     bannerCandidates: snapshot.bannerCandidates,
@@ -532,17 +536,15 @@ export async function productStatusText(
   if (!marker) return initial;
 
   const firstSnapshot = await readOwnedTurnSnapshot(page, remainingMs);
-  const firstCause = recoveryCauseFromSnapshot(firstSnapshot, marker);
+  const firstCause = recoveryCauseFromSnapshot(firstSnapshot, marker, true);
   if (!firstCause) return initial;
 
-  const beforeDelay = remainingMs();
-  if (beforeDelay <= EXECUTION_RECOVERY_CONFIRM_DELAY_MS) return initial;
   await delay(page, EXECUTION_RECOVERY_CONFIRM_DELAY_MS);
   if (remainingMs() <= 0) return initial;
 
   const confirmed = await base.productStatusText(page, remainingSource);
   const secondSnapshot = await readOwnedTurnSnapshot(page, remainingMs);
-  const secondCause = recoveryCauseFromSnapshot(secondSnapshot, marker);
+  const secondCause = recoveryCauseFromSnapshot(secondSnapshot, marker, true);
   if (secondCause !== firstCause) return confirmed;
 
   return { ...confirmed, execution_recovery_cause_stable: firstCause };
