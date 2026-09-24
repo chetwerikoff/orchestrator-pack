@@ -729,23 +729,22 @@ defect/remedy dispositions plus one M4 update for the logical stage. Issue edits
 are included only when findings require the one bounded correction; a clean stage
 returns disposition-only closure and preserves exact Issue bytes.
 
-The governed author response must also contain exactly one mechanically consumable
-payload. This is the existing author authority, not a second store:
+The governed author response contains exactly one mechanically consumable
+`create-issue-author-dispositions/v1` payload. The single field/enum/ownership
+authority is `scripts/lib/create-issue-author-dispositions-schema.ts`; the
+Browser-GPT author prompt consumes its
+`renderAuthorDispositionPromptFragment()` output instead of duplicating the
+schema here. The whole-line schema label is mandatory even when browser
+`innerText` removes the Markdown fence; an in-object `schema` key is not a
+replacement label.
 
-```create-issue-author-dispositions/v1
-{
-  "schema": "create-issue-author-dispositions/v1",
-  "sourceRevision": "rNN",
-  "predecessorStage": "competitive | architectural-review | architectural-lens | architectural | null",
-  "findings": [],
-  "m4": { "inventory": [] }
-}
-```
-
-The author owns the substantive finding/remedy/M3/M4 values. The producer reads
-that payload verbatim and adds only GitHub-witnessed draft/revision facts and
-lifecycle-witnessed episode/predecessor/topology bindings. The manager must not
-construct or repair `author-dispositions.json` itself.
+The author owns the substantive finding/remedy/M3/M4 values and governed
+occurrence references described by that owner. The producer reads the payload
+verbatim and injects only the lifecycle/GitHub fields classified by the same
+owner, including the topology-derived predecessor binding. The manager must not
+construct or repair `author-dispositions.json` itself. Author-actionable
+validation returns the state-bound `author-round` continuation; lifecycle-only
+validation failures remain fail-closed and do not launch an author repair turn.
 
 Concise receipts avoid browser insertion and rendering work that grows with
 manager-facing response size, and remove an avoidable relay step with loss
