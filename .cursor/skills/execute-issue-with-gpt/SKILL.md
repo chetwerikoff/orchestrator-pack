@@ -100,6 +100,38 @@ generation evidence before it can authorize that same recovery branch. Elapsed
 time, missing output, helper silence, `stream_timeout`, or `no_reply` alone never
 authorize a replacement conversation.
 
+For execute-Issue recovery, the 27-minute checkpoint uses the exact durable
+invocation identity already retained by the manager. Invoke the existing probe
+in identity-bound form with the exact retained CDP/profile/invocation plus the
+already-owned page locator:
+
+```text
+browser-gpt-page-probe inspect
+  --cdp <exact retained endpoint>
+  --profile <exact retained configured profile>
+  --invocation-id <exact retained invocation id>
+  (--url <exact owned conversation url> | --target-id <exact owned target id>)
+```
+
+The probe resolves only the matching `state-light-turn-observation/v1` record
+for `{configured profile key, invocation id}`; it does not scan sibling records,
+alternate profiles, or page-wide markers to recover identity. A bounded
+observer/wait slice is not the lifetime of the Browser-GPT turn. Slice expiry
+without authoritative settlement preserves the exact run identity, attempt
+identity, invocation id, profile, CDP endpoint, and conversation binding and
+permits only continued observation of that same invocation.
+
+When the identity-bound 27-minute read says the exact owned turn is still
+generating, send zero new user messages and continue bounded observation of the
+same invocation. The first post-checkpoint continuation starts one
+recovery-observation episode with the existing
+`DEFAULT_TIMEOUT_MS = 1_800_000 ms` ceiling; later observation slices consume
+the remaining budget and never reset or extend it. If the exact turn is still
+unsettled/generating when that ceiling is exhausted, automatic re-observation
+stops and the exact fail-closed condition is handed to the existing supervisor
+boundary. Exhaustion creates no resend, replacement-invocation, or fresh-chat
+authority.
+
 A replacement/resumed manager does not create a new conversation merely because
 it is a new process. It first follows the execution runbook's recovery branch and
 the shared Browser-GPT evidence requirements. Before any replacement send after

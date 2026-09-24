@@ -221,6 +221,55 @@ This evidence step is separate from operator authorization. Even a valid
 authorize merge; the explicit operator-authorization procedure below remains
 unchanged.
 
+## Orchestrator-delegated projection repair (not a waiver)
+
+Issue #926 adds one separate, narrower use of the same exact-head commit-status transport. It
+does **not** use operator-waiver authority and must never be described as "merge without review".
+
+A current supervised local integration assignment may repair the
+`orchestrator-pack/pack-review` projection only when all of the following were freshly
+re-read and remain true:
+
+1. its canonical current WorkerAssignment/Dispatch identity and closed
+   `delegatedIntegration` marker exactly match the target PR/head and predecessor assignment;
+2. live explicit dependency sequencing is `merge_now` and no second active delegated
+   integration assignment owns the primary checkout;
+3. the production `evaluatePostSmokeReadiness()` result for the exact
+   repository/Issue/current-assignment/PR/head is `readiness.state === READY_TO_MERGE`;
+4. the PR is OPEN, non-draft, non-conflicting/mergeable, and still on the marker's exact head
+   and expected base;
+5. the newest exact-head `orchestrator-pack/pack-review` status is FAILURE or absent.
+
+If the status is already SUCCESS, do nothing. If production readiness is NOT_READY/unknown,
+the head/base moved, a finding/CI/smoke/dependency predicate is unresolved, or assignment/marker
+identity drifted, post nothing and return control to the orchestrator.
+
+Immediately before the POST, re-read all five facts. Post success only to the exact head with a
+bounded description naming the production readiness authority, for example:
+
+```bash
+P=<PR_NUMBER>
+HEAD_SHA=<marker-expected-40-hex>
+
+./scripts/gh api "repos/chetwerikoff/orchestrator-pack/statuses/${HEAD_SHA}" \
+  -f state=success \
+  -f context='orchestrator-pack/pack-review' \
+  -f description="Delegated projection repair: evaluatePostSmokeReadiness=READY_TO_MERGE; pr=${P}"
+```
+
+Then read the exact-head status history back and require the newest row for the context to be
+that success:
+
+```bash
+./scripts/gh api "repos/chetwerikoff/orchestrator-pack/commits/${HEAD_SHA}/status" \
+  --jq '.statuses[] | select(.context=="orchestrator-pack/pack-review") | {state,description,created_at,creator:.creator.login}'
+```
+
+This is a projection repair only. It does not create review evidence, clear a finding, waive
+required CI/smoke/dependency order, or turn cap/strict-descendant/lifecycle state into merge
+authority. Re-read assignment+marker, sequencing, production readiness, PR head/base, draft,
+conflict, and mergeability again before merge. Any drift stops the delegated path.
+
 ## Waiver procedure (failed review or missing status)
 
 Replace `P`, `HEAD_SHA`, and the description with live values.
@@ -316,9 +365,9 @@ Do not hand-edit review-run JSON on disk.
    ```
 2. **Delegate to worker** — `merge-with-local-adoption` Step 3b when a worker session
    exists.
-3. **Future automation** — Issue [#926](https://github.com/chetwerikoff/orchestrator-pack/issues/926)
-   (merge actuator) is designed to admit merges only under typed policy tokens; it does
-   not replace ad-hoc operator waiver until enabled.
+3. **Delegated integration** — use the canonical merge skill only from the exact current
+   supervised integration assignment with its closed PR/head/predecessor marker and a fresh
+   production `READY_TO_MERGE` result. This is separate from operator waiver authority.
 
 ## Do not
 

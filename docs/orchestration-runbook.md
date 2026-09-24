@@ -1005,6 +1005,15 @@ before another start is considered. A dead owner without final evidence becomes
 terminal or unresolved cleanup stays fail-closed and continues to refuse a new
 owner until the existing lifecycle/close authority proves cleanup.
 
+### Orchestrator-delegated integration
+
+After current-head implementation/review/CI/smoke readiness, delegated
+merge/adoption/cleanup uses one separate supervised local integration assignment.
+The bounded carrier, sequencing, exact-current fencing, production-readiness
+reuse, projection-repair, adoption, verification, and report contract lives in
+[the orchestrator-delegated integration runbook](orchestrator-delegated-integration.md).
+Do not replace it with another role, store, queue, lock, evaluator, or outcome ledger.
+
 ### Operator adoption handoff
 
 When work changes operator-facing configuration, runtime selection, supervised
