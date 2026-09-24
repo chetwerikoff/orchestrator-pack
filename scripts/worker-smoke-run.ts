@@ -749,7 +749,7 @@ export function resolveCiGreen(prNumber: number, headSha: string, repositorySlug
   if (positiveInteger(pr.number) !== prNumber || String(pr.state ?? '').toLowerCase() !== 'open'
     || String(head.sha ?? '').trim().toLowerCase() !== headSha.trim().toLowerCase()) return false;
   const checks = JSON.parse(requireProcessOutput('required-ci-checks', runSmokeGhSync(
-    ['pr', 'checks', String(prNumber), '--repo', repositorySlug, '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description'], repoRoot,
+    ['pr', 'checks', String(prNumber), '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description'], repoRoot,
   ))) as { name?: string; state?: string; bucket?: string }[];
   const baseRef = String(base.ref ?? 'main').trim() || 'main';
   let requiredCheckNames: string[] = [];
