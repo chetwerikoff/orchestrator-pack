@@ -211,6 +211,41 @@ describe('scheduler production smoke uses the existing lifecycle surface', () =>
     expect(sawBound).toBe(true);
   });
 
+  it('keeps one detached smoke owner active after scheduler replacement without a duplicate launch', async () => {
+    const f = makeFixture(); setSmokeEnv(f); completeReview(f); liveGh.body = smokeIssueBody(); liveGh.head = f.head;
+    const assignment = await assignLocal(f, 'production-detached-owner');
+    const rt = runtime(assignment.bindingKey, f.workspace);
+    let activeOwner: { runId: string; artifactDir: string } | undefined;
+    let startCount = 0;
+    let observeCount = 0;
+    const startDetachedAttempt: NonNullable<PostReviewSmokeDependencies['startDetachedAttempt']> = async (options) => {
+      startCount += 1;
+      expect(options).toMatchObject({ issueNumber: TASK_ISSUE, prNumber: TASK_PR, headSha: f.head, cwd: f.workspace, repoRoot: f.workspace });
+      activeOwner = { runId: 'production-detached-owner-run', artifactDir: path.join(f.root, 'detached-owner-run') };
+      return { ok: true, runId: activeOwner.runId };
+    };
+    const observeDetachedAttempt: NonNullable<PostReviewSmokeDependencies['observeDetachedAttempt']> = () => {
+      observeCount += 1;
+      return activeOwner ? { kind: 'active', ...activeOwner } : { kind: 'absent' };
+    };
+    const { runAttempt: _legacyRunAttempt, ...detachedDependencies } = smokeDeps(f, rt.adapter);
+    void _legacyRunAttempt;
+    const deps: PostReviewSmokeDependencies = { ...detachedDependencies, startDetachedAttempt, observeDetachedAttempt };
+    const scheduler = boundary(f, deps);
+    const env = schedulerEnv(f.root);
+
+    await runSchedulerTick(scheduler, env);
+    const ownerAfterFirstTick = activeOwner;
+    expect(startCount).toBe(1);
+    expect(ownerAfterFirstTick).toEqual({ runId: 'production-detached-owner-run', artifactDir: path.join(f.root, 'detached-owner-run') });
+
+    await runSchedulerTick(boundary(f, deps), schedulerEnv(f.root));
+    expect(observeCount).toBe(2);
+    expect(startCount).toBe(1);
+    expect(activeOwner).toEqual(ownerAfterFirstTick);
+    expect(rt.smokeSpawns()).toBe(0);
+  });
+
   it('starts zero lifecycle work when reassignment wins before the final fence', async () => {
     const f = makeFixture(); setSmokeEnv(f); completeReview(f); liveGh.body = smokeIssueBody(); liveGh.head = f.head;
     const assignment = await assignLocal(f, 'production-old-generation');
