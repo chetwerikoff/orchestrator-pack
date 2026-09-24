@@ -119,7 +119,7 @@ describe('create-issue-final-acceptance CLI entry point', () => {
         '--issue-number', '1192',
         '--review-dir', dir,
         '--json',
-      ])).toBe(1);
+      ])).toBe(3);
       const output = JSON.parse(String(stdout.mock.calls.at(-1)?.[0] ?? '{}')) as {
         ok?: boolean;
         cause?: string;
@@ -182,7 +182,7 @@ describe('create-issue-final-acceptance CLI entry point', () => {
         '--issue-number', '1192',
         '--review-dir', dir,
         '--json',
-      ])).toBe(1);
+      ])).toBe(3);
       const output = JSON.parse(String(stdout.mock.calls.at(-1)?.[0] ?? '{}')) as {
         nextAction?: {
           kind?: string;

@@ -50,8 +50,11 @@ path, prompt/output path, receipt, envelope, cookie, token, or credential.
    supervised Task launch assistant: resolve the selector through Orca, prove
    repository/path identity with only bounded read-only git queries, fetch
    `origin/main`, then require already-equal or a clean ancestor-only
-   fast-forward on the distinct manager-local branch. Any refusal prevents the
-   new shift from starting. A generic Browser-GPT shift without this manager
+   fast-forward on the distinct manager-local branch. For a manager-bound
+   create-Issue shift, a repository-owned mismatch returns
+   `recoverable(reconcile-stage-read-only)`; external reality returns
+   `external_pause`; malformed producer output is a boundary
+   `contract_defect`. A generic Browser-GPT shift without this manager
    binding emits no manager-refresh git command, and an already-running turn or
    frozen create-Issue stage attempt is never refreshed mid-turn.
 3. Resolve Browser-GPT configuration without copying operator files into the
@@ -59,8 +62,11 @@ path, prompt/output path, receipt, envelope, cookie, token, or credential.
    create-Issue send may instead pass
    `--operator-browser-config <absolute-path>`; the inline send-boundary
    preflight reads that exact operator-local file in place and never copies it
-   into the repository. Missing/incomplete configuration is a pre-send refusal
-   with a state-bound `nextAction` only when retrying the boundary is legal.
+   into the repository. For a governed create-Issue caller, a legal retry is
+   `recoverable(retry-create-issue-browser-preflight)`; operator-owned
+   configuration that must change outside the repository is an
+   `external_pause` with the exact remedy/evidence, never a terminal manager
+   refusal.
 4. Confirm the configured headed automation Chrome is running and logged in.
    Never type credentials. Create-Issue callers do not run a separate mandatory
    preflight command: Node 22, tracked GitHub transport and Browser-GPT
@@ -157,6 +163,16 @@ and current `path@blobSha` diagnostics, never prompt bytes.
 
 For a fresh project launch, use the same command with
 `--new-chat --project-url "${GPT_PROJECT_URL}"` instead of `--chat-url`.
+
+For governed create-Issue manager calls, the long-running adapter emits exactly
+one manager-result JSON object on stdout: `completed` with exit 0,
+`recoverable` with exit 3 and executable `nextAction.argv`,
+`external_pause` with exit 4 and typed external evidence/resumption, or
+boundary-only `contract_defect` with exit 5. Diagnostics go to stderr. Source
+revision, stage-attempt, lifecycle-binding, wrong-Issue, wrong-conversation, and
+stale-handoff mismatches first return a read-only reconciliation action; they do
+not settle the manager Task.
+
 
 For an ordinary tracked turn, the underlying reference is
 `npm run chatgpt-browser-turn -- turn --invocation-id "${INVOCATION_ID}" ...`
