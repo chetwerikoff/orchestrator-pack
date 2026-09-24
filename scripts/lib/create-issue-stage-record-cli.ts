@@ -24,6 +24,8 @@ import {
 } from './create-issue-stage-record-artifacts.ts';
 import {
   createIssueExternalPauseResult,
+  CREATE_ISSUE_NEXT_ACTION_SCHEMA,
+  CREATE_ISSUE_STALE_ACTION_SCHEMA,
   createIssueNextAction,
   createIssueRecoverableResult,
   createIssueStaleNextAction,
@@ -1114,6 +1116,50 @@ function authorRoundAction(
   );
 }
 
+interface PreMintAuthorRoundAction {
+  schema: typeof CREATE_ISSUE_NEXT_ACTION_SCHEMA;
+  kind: 'author-round';
+  binding: CreateIssueActionBinding;
+  argv: string[];
+}
+
+function preMintAuthorRoundAction(
+  binding: CreateIssueActionBinding,
+  reviewDir: string,
+): PreMintAuthorRoundAction {
+  const argv = [
+    'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+    'author-round',
+    '--repo', binding.repository,
+    '--issue-number', String(binding.issueNumber),
+    '--review-dir', reviewDir,
+    '--expected-source-revision', binding.sourceRevision,
+    '--expected-stage', binding.stage,
+  ];
+  if (binding.stageAttemptId) argv.push('--expected-stage-attempt-id', binding.stageAttemptId);
+  argv.push('--json');
+  return { schema: CREATE_ISSUE_NEXT_ACTION_SCHEMA, kind: 'author-round', binding: { ...binding }, argv };
+}
+
+interface LegacyAuthorRoundFailure {
+  schema?: typeof CREATE_ISSUE_STALE_ACTION_SCHEMA;
+  ok: false;
+  cause: string;
+  blocker?: string;
+  binding?: CreateIssueActionBinding;
+  observed?: Partial<CreateIssueActionBinding>;
+  nextAction: null;
+}
+
+function emitLegacyAuthorRoundFailure(
+  opts: Pick<StageFinalizeCliOptions, 'json'>,
+  output: LegacyAuthorRoundFailure,
+): number {
+  if (opts.json) console.log(JSON.stringify(output));
+  else process.stderr.write((output.blocker ?? output.cause) + '\n');
+  return 1;
+}
+
 function existingAttemptForStage(
   reviewDir: string,
   stage: LifecycleReviewStage,
@@ -1336,7 +1382,10 @@ export function runStageFinalizeCli(
       }
       const liveRevision = issueSourceRevision(live.body);
       if (liveRevision.toLowerCase() !== expectedSourceRevision.toLowerCase()) {
-        const stale = createIssueStaleNextAction({
+        const stale: LegacyAuthorRoundFailure = {
+          schema: CREATE_ISSUE_STALE_ACTION_SCHEMA,
+          ok: false,
+          cause: 'stale_next_action',
           binding,
           observed: {
             repository: opts.repo,
@@ -1344,9 +1393,9 @@ export function runStageFinalizeCli(
             ...(liveRevision ? { sourceRevision: liveRevision } : {}),
             stage: expectedStage,
           },
-          nextAction: reconcileStageReadOnlyAction(opts, issueNumber, binding, reviewDir),
-        });
-        return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, stale);
+          nextAction: null,
+        };
+        return emitLegacyAuthorRoundFailure(opts, stale);
       }
 
       let repairClass: 'body-floor' | 'author-schema';
@@ -1483,14 +1532,12 @@ export function runStageFinalizeCli(
       }
       if (!existsSync(paths.outputPath)) {
         const evidence = `Browser-GPT author round did not publish ${paths.outputPath}`;
-        const output = createIssueExternalPauseResult({
-          cause: 'external:chrome_not_running',
-          remedy: 'restore the Browser-GPT transport, then resume this same Dispatch',
-          resumeWhen: { operator: true },
-          evidence,
+        return emitLegacyAuthorRoundFailure(opts, {
+          ok: false,
+          cause: 'author_round_output_missing',
           blocker: evidence,
+          nextAction: null,
         });
-        return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
       }
 
       const after = fetchIssueRevision(transport, opts.repo, issueNumber);
@@ -2074,17 +2121,21 @@ export function runStageFinalizeCli(
           sourceRevision,
           stage,
         };
-        const action = authorRoundAction(binding, canonicalAuthorRoundDirectory(issueNumber));
-        const output = validatedManagerSurfaceOutput(
-          { ok: false, bodyFloorDiagnostics: floorErrors },
-          'body_floor_rejected',
-          action,
-          floorErrors.join('; '),
-          undefined,
-          opts.blockedOn,
-        );
+        if (opts.blockedOn) {
+          return emitManagerBoundary(
+            'create-issue-stage-record-cli.ts:main',
+            argv,
+            projectBlockedOnToExternalPause(opts.blockedOn),
+          );
+        }
+        const output = {
+          ok: false,
+          cause: 'body_floor_rejected',
+          blocker: floorErrors.join('; '),
+          nextAction: preMintAuthorRoundAction(binding, canonicalAuthorRoundDirectory(issueNumber)),
+        };
         if (opts.json) console.log(JSON.stringify(output));
-        else process.stderr.write((output.blocker ?? output.cause ?? 'body_floor_rejected') + '\n');
+        else process.stderr.write((output.blocker ?? output.cause) + '\n');
         return 1;
       }
 
