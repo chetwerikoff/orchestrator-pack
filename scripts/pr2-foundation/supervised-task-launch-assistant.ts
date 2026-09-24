@@ -1165,7 +1165,7 @@ export async function prepareWorktreeWithOrca(
     'orca', 'worktree', 'create', '--repo', `id:${repositoryId}`, '--name', request.worktreeName!,
     ...(request.baseBranch ? ['--base-branch', request.baseBranch] : []),
     ...(request.issueNumber ? ['--issue', String(request.issueNumber)] : ['--no-parent']),
-    '--setup', 'skip', '--json',
+    '--setup', 'run', '--json',
   ], 120_000)));
   const worktree = created && record(created.worktree) ? created.worktree : null;
   const id = text(worktree?.id);

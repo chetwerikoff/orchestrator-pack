@@ -955,7 +955,7 @@ describe('supervised Task launch assistant', () => {
     expect(calls[0]).toEqual(['orca', 'repo', 'list', '--json']);
     expect(calls[1]).toEqual([
       'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'wt',
-      '--issue', '1479', '--setup', 'skip', '--json',
+      '--issue', '1479', '--setup', 'run', '--json',
     ]);
   });
 
@@ -1032,7 +1032,7 @@ describe('supervised Task launch assistant', () => {
     expect(mutableCalls).toHaveLength(2);
   });
 
-  it('accepts a fresh worktree when skip setup returns no setup receipt', async () => {
+  it('accepts a fresh worktree with no setup receipt', async () => {
     const calls: string[][] = [];
     const result = await prepareWorktreeWithOrca({
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', issueNumber: 1479,
@@ -1049,7 +1049,7 @@ describe('supervised Task launch assistant', () => {
     });
     expect(calls[1]).toEqual([
       'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'wt',
-      '--issue', '1479', '--setup', 'skip', '--json',
+      '--issue', '1479', '--setup', 'run', '--json',
     ]);
   });
 
@@ -1072,6 +1072,10 @@ describe('supervised Task launch assistant', () => {
       } }) };
     });
     expect(result).toMatchObject({ status: 'ok', value: { setupWitness: 'same_invocation_complete' } });
+    expect(calls[1]).toEqual([
+      'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'wt',
+      '--base-branch', 'main', '--no-parent', '--setup', 'run', '--json',
+    ]);
     expect(calls[2]).toEqual(['orca', 'terminal', 'wait', '--terminal', 'setup-term', '--for', 'exit', '--timeout-ms', '120000', '--json']);
   });
 
@@ -1333,7 +1337,7 @@ describe('supervised Task launch assistant', () => {
     });
     expect(calls[1]).toEqual([
       'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'manager-2024',
-      '--base-branch', 'origin/main', '--issue', '2024', '--setup', 'skip', '--json',
+      '--base-branch', 'origin/main', '--issue', '2024', '--setup', 'run', '--json',
     ]);
   });
 
