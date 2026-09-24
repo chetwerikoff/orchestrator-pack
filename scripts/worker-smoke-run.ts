@@ -1231,20 +1231,31 @@ function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scen
   const runIdToken = Buffer.from(binding.runId, 'utf8').toString('base64');
   const writer = [
     'node -e',
-    "'const fs=require(\"node:fs\");const [p64,r64,ordinal,phase,outcome]=process.argv.slice(1);const event={runId:Buffer.from(r64,\"base64\").toString(\"utf8\"),scenarioOrdinal:Number(ordinal),phase};if(outcome)event.outcome=outcome;fs.appendFileSync(Buffer.from(p64,\"base64\").toString(\"utf8\"),JSON.stringify(event)+\"\\n\",\"utf8\")'",
-  ].join(' ');
+    "'const fs=require(\"node:fs\");const [p64,r64,ordinalText,phase,outcome]=process.argv.slice(1);const file=Buffer.from(p64,\"base64\").toString(\"utf8\");const runId=Buffer.from(r64,\"base64\").toString(\"utf8\");const ordinal=Number(ordinalText);const previous=fs.existsSync(file)?fs.readFileSync(file,\"utf8\").split(/\\r?\\n/u).filter(Boolean).map((line)=>{try{return JSON.parse(line)}catch{return null}}):[];const skipped=previous.find((entry)=>entry?.runId===runId&&entry.phase===\"terminal\"&&entry.outcome===\"skipped\");if(skipped&&ordinal>Number(skipped.scenarioOrdinal)){process.stderr.write(\"progress_protocol_failure:progress_after_skipped_terminal\\n\");process.exit(1)}const event={runId,scenarioOrdinal:ordinal,phase};if(outcome)event.outcome=outcome;fs.appendFileSync(file,JSON.stringify(event)+\"\\n\",\"utf8\")'",
+    ].join(' ');
   const progressEventProtocol = [
     'Canonical progress serialization (mandatory):',
     ...(scenarioCount === 0
       ? ['- Do not write progress events when this attempt has no selected scenarios.']
       : [
+        '- Never write, append, or edit progress JSON manually; use only the generated writer commands below.',
+        '- Do not type, reconstruct, or reuse a run id; the encoded writer argument binds this exact run.',
         `- Before scenario 1, run exactly: ${writer} ${progressPathToken} ${runIdToken} 1 started`,
         `- The first non-empty progress line must parse exactly as: ${JSON.stringify({ runId: binding.runId, scenarioOrdinal: 1, phase: 'started' })}`,
         '- For later started events, reuse the command with the declared ordinal and phase started, omitting outcome.',
         '- For terminal events, reuse the command with the same ordinal, phase terminal, and one outcome: pass|fail|blocked|skipped.',
         '- Never append a terminal event before its matching started event.',
+        '- After a skipped terminal, the progress writer rejects any later ordinal; treat that refusal as terminal and execute no later scenario.',
       ]),
   ];
+  const rolloutFixtureProtocol = /(?:first )?rollout\/adoption|pre-change scheduler|inline post-review smoke/iu.test(prompt)
+    ? [
+      'Scenario-specific rollout fixture (mandatory):',
+      '- For the pre-change inline post-review smoke adoption scenario, never use a scheduler process from another checkout as evidence or as the fixture.',
+      '- If this checkout has no live pre-adoption inline smoke, run exactly: npm test -- --maxWorkers=1 scripts/pr2-foundation/scheduler-post-review-smoke-production.test.ts',
+      '- Use the fixture result as this scenario evidence; do not skip solely because another checkout has an unproven scheduler process.',
+    ]
+    : [];
   return [
     prompt,
     '',
@@ -1254,6 +1265,7 @@ function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scen
     `- Cancel acknowledgement: ${smokeCancelAcknowledgementPath(binding.artifactDir)}`,
     `- Declared scenario count: ${scenarioCount}`,
     ...progressEventProtocol,
+    ...rolloutFixtureProtocol,
     ...(scenarioCount === 0 ? [
       '- Zero selected scenarios means all current tuples were safely carried. Execute no smoke scenario and write no progress event.',
       '- Emit PASS with one bookkeeping row: action: record empty attempt-local execution set | expected: no selected smoke scenario executes | observed: no attempt-local scenarios selected | outcome: pass.',
@@ -1262,7 +1274,7 @@ function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scen
     '- For PR scope accounting, compare HEAD to the verified PR base merge-base (git diff "$(git merge-base HEAD origin/main)" HEAD), never to a local branch named main.',
     '- Use declared order only and check cancel-request.json before each new scenario.',
     '- For each scenario N, append and durably flush N started, execute only N, then append and durably flush N terminal before doing any work or writing progress for N+1.',
-    '- Never run scenarios in parallel, start a later ordinal early, or skip an ordinal, and after fail/blocked/skipped terminal stop without starting another scenario.',
+    '- Never run scenarios in parallel, start a later ordinal early, or skip an ordinal. After a fail/blocked/skipped terminal, stop without starting another scenario or writing any later-scenario progress; a refused later-start command is terminal, and progress after skipped is a protocol failure.',
   ].join('\n');
 }
 
@@ -1350,6 +1362,30 @@ function completionFailureReason(cause: string, observation: SmokeCompletionObse
     `plan_complete=${progress.planComplete}`, observation.wrongRunBinding ? 'wrong_run_binding=true' : ''].filter(Boolean).join(';');
 }
 
+function skippedTerminalProtocolFailure(binding: SmokeRunBinding, scenarioCount: number): string | undefined {
+  const progressPath = smokeProgressPath(binding.artifactDir);
+  if (!existsSync(progressPath)) return undefined;
+  let skippedOrdinal = 0;
+  for (const [index, line] of readFileSync(progressPath, 'utf8').split(/\r?\n/u).entries()) {
+    if (!line.trim()) continue;
+    let event: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (!record(parsed)) continue;
+      event = parsed;
+    } catch {
+      continue;
+    }
+    if (event.runId !== binding.runId || !Number.isInteger(event.scenarioOrdinal)) continue;
+    const ordinal = Number(event.scenarioOrdinal);
+    if (skippedOrdinal > 0 && ordinal > skippedOrdinal) {
+      return `progress_protocol_failure:progress_after_skipped_terminal:line_${index + 1}:scenario_${skippedOrdinal}`;
+    }
+    if (ordinal <= scenarioCount && event.phase === 'terminal' && event.outcome === 'skipped') skippedOrdinal = ordinal;
+  }
+  return undefined;
+}
+
 export interface RuntimeSmokeCompletionResult {
   ok: boolean;
   partial?: Partial<SmokeReport> | null;
@@ -1384,6 +1420,14 @@ function completionWithFailures(
   return failures.length > 0 ? { ...result, observationFailures: [...failures] } : result;
 }
 
+function acceptSmokeCompletion(input: {
+  binding: SmokeRunBinding; scenarioCount: number; progress: SmokeProgress; partial: Partial<SmokeReport>; failures: readonly string[];
+}): RuntimeSmokeCompletionResult {
+  const protocolFailure = skippedTerminalProtocolFailure(input.binding, input.scenarioCount);
+  if (protocolFailure) return completionWithFailures({ ok: false, reason: `${protocolFailure};plan_complete=${input.progress.planComplete}`, progress: input.progress }, input.failures);
+  return completionWithFailures({ ok: true, partial: input.partial, progress: input.progress }, input.failures);
+}
+
 function finalFailureDetail(base: string, failures: readonly string[]): string {
   const last = failures.at(-1);
   return last ? `${base};last_observation_failure=${last}` : base;
@@ -1406,13 +1450,15 @@ function waitForRuntimeSmokeCompletionDeterministic(
     const aborted = input.abortReason(); if (aborted) return completionWithFailures({ ok: false, reason: `operator_cancelled:${aborted}` }, observationFailures);
     const progress = inspectSmokeProgress({ artifactDir: input.binding.artifactDir, runId: input.binding.runId, scenarioCount: input.scenarioCount });
     lastProgress = progress;
+    const protocolFailure = skippedTerminalProtocolFailure(input.binding, input.scenarioCount);
+    if (protocolFailure) return completionWithFailures({ ok: false, reason: `${protocolFailure};plan_complete=${progress.planComplete}`, progress }, observationFailures);
     const progressIncreased = progress.acceptedCount > acceptedProgress;
     if (progressIncreased) { acceptedProgress = progress.acceptedCount; lastProgressAt = now(); }
     const observed = observeSmokeCompletionEvidence(input.binding, completionState);
     completionState = observed.state; lastObservation = observed.observation;
     const publicationStateChanged = previousPublicationState !== undefined && previousPublicationState !== observed.observation.publicationState;
     previousPublicationState = observed.observation.publicationState;
-    if (observed.observation.publicationState === 'publish_complete_single' && observed.observation.partial) return completionWithFailures({ ok: true, partial: observed.observation.partial, progress }, observationFailures);
+    if (observed.observation.publicationState === 'publish_complete_single' && observed.observation.partial) return acceptSmokeCompletion({ binding: input.binding, scenarioCount: input.scenarioCount, progress, partial: observed.observation.partial, failures: observationFailures });
     if (observed.observation.publicationState === 'publish_complete_duplicate') return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_duplicate', observed.observation, progress), progress }, observationFailures);
     if (observed.observation.publicationState === 'publish_complete_unfenced') return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_unfenced', observed.observation, progress), progress }, observationFailures);
     if (observed.observation.wrongRunBinding && (observed.observation.publicationState === 'none' || observed.observation.publicationState === 'partial')) {
@@ -1438,7 +1484,7 @@ function waitForRuntimeSmokeCompletionDeterministic(
     const liveness = input.adapter.liveness({ worker: input.worker, observationWindowMs: SMOKE_LIFECYCLE_POLL_MS }, { cwd: input.cwd });
     if (read.value.terminalState === 'exited' || liveness.status === 'gone') {
       const finalObservation = observeSmokeCompletionEvidence(input.binding, completionState); completionState = finalObservation.state;
-      if (finalObservation.observation.publicationState === 'publish_complete_single' && finalObservation.observation.partial) return completionWithFailures({ ok: true, partial: finalObservation.observation.partial, progress }, observationFailures);
+      if (finalObservation.observation.publicationState === 'publish_complete_single' && finalObservation.observation.partial) return acceptSmokeCompletion({ binding: input.binding, scenarioCount: input.scenarioCount, progress, partial: finalObservation.observation.partial, failures: observationFailures });
       return completionWithFailures({ ok: false, reason: completionFailureReason('agent_exited_without_report', finalObservation.observation, progress), progress }, observationFailures);
     }
     if (now() - lastProgressAt >= progressStallMs) return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_timeout', observed.observation, progress, finalFailureDetail('reason=progress_stall', observationFailures)), progress }, observationFailures);
@@ -1450,7 +1496,7 @@ function waitForRuntimeSmokeCompletionDeterministic(
   }
   const progress = lastProgress ?? inspectSmokeProgress({ artifactDir: input.binding.artifactDir, runId: input.binding.runId, scenarioCount: input.scenarioCount });
   const finalObservation = observeSmokeCompletionEvidence(input.binding, completionState);
-  if (finalObservation.observation.publicationState === 'publish_complete_single' && finalObservation.observation.partial) return completionWithFailures({ ok: true, partial: finalObservation.observation.partial, progress }, observationFailures);
+  if (finalObservation.observation.publicationState === 'publish_complete_single' && finalObservation.observation.partial) return acceptSmokeCompletion({ binding: input.binding, scenarioCount: input.scenarioCount, progress, partial: finalObservation.observation.partial, failures: observationFailures });
   return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_timeout', finalObservation.observation ?? lastObservation!, progress, finalFailureDetail('reason=absolute_safety_ceiling', observationFailures)), progress }, observationFailures);
 }
 
@@ -1470,13 +1516,15 @@ async function waitForRuntimeSmokeCompletionInterruptSafe(
     const aborted = input.abortReason(); if (aborted) return completionWithFailures({ ok: false, reason: `operator_cancelled:${aborted}` }, observationFailures);
     const progress = inspectSmokeProgress({ artifactDir: input.binding.artifactDir, runId: input.binding.runId, scenarioCount: input.scenarioCount });
     lastProgress = progress;
+    const protocolFailure = skippedTerminalProtocolFailure(input.binding, input.scenarioCount);
+    if (protocolFailure) return completionWithFailures({ ok: false, reason: `${protocolFailure};plan_complete=${progress.planComplete}`, progress }, observationFailures);
     const progressIncreased = progress.acceptedCount > acceptedProgress;
     if (progressIncreased) { acceptedProgress = progress.acceptedCount; lastProgressAt = now(); }
     const observed = observeSmokeCompletionEvidence(input.binding, completionState);
     completionState = observed.state; lastObservation = observed.observation;
     const publicationStateChanged = previousPublicationState !== undefined && previousPublicationState !== observed.observation.publicationState;
     previousPublicationState = observed.observation.publicationState;
-    if (observed.observation.publicationState === 'publish_complete_single' && observed.observation.partial) return completionWithFailures({ ok: true, partial: observed.observation.partial, progress }, observationFailures);
+    if (observed.observation.publicationState === 'publish_complete_single' && observed.observation.partial) return acceptSmokeCompletion({ binding: input.binding, scenarioCount: input.scenarioCount, progress, partial: observed.observation.partial, failures: observationFailures });
     if (observed.observation.publicationState === 'publish_complete_duplicate') return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_duplicate', observed.observation, progress), progress }, observationFailures);
     if (observed.observation.publicationState === 'publish_complete_unfenced') return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_unfenced', observed.observation, progress), progress }, observationFailures);
     if (observed.observation.wrongRunBinding && (observed.observation.publicationState === 'none' || observed.observation.publicationState === 'partial')) {
@@ -1506,7 +1554,7 @@ async function waitForRuntimeSmokeCompletionInterruptSafe(
     if (postLivenessAbort) return completionWithFailures({ ok: false, reason: `operator_cancelled:${postLivenessAbort}`, progress }, observationFailures);
     if (read.value.terminalState === 'exited' || liveness.status === 'gone') {
       const finalObservation = observeSmokeCompletionEvidence(input.binding, completionState); completionState = finalObservation.state;
-      if (finalObservation.observation.publicationState === 'publish_complete_single' && finalObservation.observation.partial) return completionWithFailures({ ok: true, partial: finalObservation.observation.partial, progress }, observationFailures);
+      if (finalObservation.observation.publicationState === 'publish_complete_single' && finalObservation.observation.partial) return acceptSmokeCompletion({ binding: input.binding, scenarioCount: input.scenarioCount, progress, partial: finalObservation.observation.partial, failures: observationFailures });
       return completionWithFailures({ ok: false, reason: completionFailureReason('agent_exited_without_report', finalObservation.observation, progress), progress }, observationFailures);
     }
     if (now() - lastProgressAt >= progressStallMs) return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_timeout', observed.observation, progress, finalFailureDetail('reason=progress_stall', observationFailures)), progress }, observationFailures);
@@ -1520,7 +1568,7 @@ async function waitForRuntimeSmokeCompletionInterruptSafe(
   }
   const progress = lastProgress ?? inspectSmokeProgress({ artifactDir: input.binding.artifactDir, runId: input.binding.runId, scenarioCount: input.scenarioCount });
   const finalObservation = observeSmokeCompletionEvidence(input.binding, completionState);
-  if (finalObservation.observation.publicationState === 'publish_complete_single' && finalObservation.observation.partial) return completionWithFailures({ ok: true, partial: finalObservation.observation.partial, progress }, observationFailures);
+  if (finalObservation.observation.publicationState === 'publish_complete_single' && finalObservation.observation.partial) return acceptSmokeCompletion({ binding: input.binding, scenarioCount: input.scenarioCount, progress, partial: finalObservation.observation.partial, failures: observationFailures });
   return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_timeout', finalObservation.observation ?? lastObservation!, progress, finalFailureDetail('reason=absolute_safety_ceiling', observationFailures)), progress }, observationFailures);
 }
 
@@ -2312,18 +2360,114 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   }
 }
 
-function detachedChildIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
-  }
+export type DetachedSmokeAttemptObservation =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'active'; readonly runId: string; readonly artifactDir: string }
+  | { readonly kind: 'recoverable'; readonly runId: string; readonly artifactDir: string; readonly reason: 'detached_smoke_owner_not_alive' }
+  | { readonly kind: 'terminal'; readonly runId: string; readonly artifactDir: string; readonly result: SmokeReport['result'] }
+  | { readonly kind: 'untrusted'; readonly reason: string };
+
+export interface DetachedSmokeStartResult {
+  readonly ok: boolean;
+  readonly runId?: string;
+  readonly reason?: string;
 }
 
-async function runDetachedBootstrap(argv: readonly string[], options: CliOptions): Promise<number> {
-  if (options.detachedOwner || options.runId) throw new Error('detached bootstrap may not supply --detached-owner or --run');
+function detachedSmokeRunRoot(repoRoot: string): string {
+  return join(repoRoot, '.orca-worker-smoke', 'runs');
+}
+
+function exactDetachedSmokeTask(
+  lifecycle: NonNullable<ReturnType<typeof readSmokeLifecycleRegistry>>,
+  input: { readonly issueNumber: number; readonly prNumber: number; readonly headSha: string },
+): boolean {
+  return lifecycle.issueNumber === input.issueNumber
+    && lifecycle.prNumber === input.prNumber
+    && lifecycle.headSha === input.headSha.trim().toLowerCase();
+}
+
+export function observeDetachedSmokeAttempt(input: {
+  readonly cwd: string;
+  readonly issueNumber: number;
+  readonly prNumber: number;
+  readonly headSha: string;
+}): DetachedSmokeAttemptObservation {
+  const root = detachedSmokeRunRoot(input.cwd);
+  if (!existsSync(root)) return { kind: 'absent' };
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return { kind: 'untrusted', reason: 'detached_smoke_lifecycle_root_unreadable' };
+  }
+  const matching: Array<{
+    lifecycle: NonNullable<ReturnType<typeof readSmokeLifecycleRegistry>>;
+    artifactDir: string;
+  }> = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const artifactDir = join(root, entry.name);
+    const lifecycle = readSmokeLifecycleRegistry(artifactDir);
+    if (!lifecycle) return { kind: 'untrusted', reason: `detached_smoke_lifecycle_unreadable:${entry.name}` };
+    if (lifecycle.runId !== entry.name) return { kind: 'untrusted', reason: `detached_smoke_run_binding_mismatch:${entry.name}` };
+    if (exactDetachedSmokeTask(lifecycle, input)) matching.push({ lifecycle, artifactDir });
+  }
+  if (matching.length === 0) return { kind: 'absent' };
+
+  const active = matching.filter(({ lifecycle }) =>
+    lifecycle.launcherTerminalizedAtMs === undefined || !lifecycle.finalEvidencePath);
+  if (active.length > 1) return { kind: 'untrusted', reason: 'detached_smoke_duplicate_active_attempts' };
+  if (active.length === 1) {
+    const current = active[0]!;
+    if (!processIsAlive(current.lifecycle.supervisorPid)) {
+      return {
+        kind: 'recoverable',
+        runId: current.lifecycle.runId,
+        artifactDir: current.artifactDir,
+        reason: 'detached_smoke_owner_not_alive',
+      };
+    }
+    return { kind: 'active', runId: current.lifecycle.runId, artifactDir: current.artifactDir };
+  }
+
+  const terminal = [...matching].sort((left, right) =>
+    right.lifecycle.createdAtMs - left.lifecycle.createdAtMs)[0]!;
+  const { lifecycle, artifactDir } = terminal;
+  const mode = lifecycle.mode === 'no_execution' ? 'no_execution' : 'runtime';
+  const expectedTerminalState = mode === 'no_execution'
+    ? lifecycle.spawnState === 'no_execution_terminal'
+    : lifecycle.spawnState === 'clean' || lifecycle.spawnState === 'cleanup_failed';
+  if (!expectedTerminalState
+      || !lifecycle.finalEvidencePath
+      || resolve(lifecycle.finalEvidencePath) !== resolve(smokeRunFinalEvidencePath(artifactDir))) {
+    return { kind: 'untrusted', reason: 'detached_smoke_terminal_state_invalid' };
+  }
+  const evidence = readWorkerSmokeRunFinalEvidence({
+    artifactDir,
+    runId: lifecycle.runId,
+    issueNumber: input.issueNumber,
+    prNumber: input.prNumber,
+    headSha: input.headSha,
+    mode,
+  });
+  if (!evidence
+      || evidence.runId !== lifecycle.runId
+      || evidence.report.result !== evidence.result
+      || !verifySmokeRunReceipt(evidence.report, lifecycle.runId, lifecycle.runId)) {
+    return { kind: 'untrusted', reason: 'detached_smoke_final_evidence_invalid' };
+  }
+  return { kind: 'terminal', runId: lifecycle.runId, artifactDir, result: evidence.result };
+}
+
+async function startDetachedSmokeOwner(
+  argv: readonly string[],
+  options: CliOptions,
+): Promise<DetachedSmokeStartResult> {
+  if (options.detachedOwner || options.runId) {
+    return { ok: false, reason: 'detached_bootstrap_ownership_flags_invalid' };
+  }
   const runId = createSmokeRunIdentity();
+  const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
   const childArgs = argv.filter((value) => value !== '--detach');
   childArgs.push('--detached-owner', '--run', runId);
   const env = { ...process.env };
@@ -2346,27 +2490,69 @@ async function runDetachedBootstrap(argv: readonly string[], options: CliOptions
     timeoutMs: 10_000,
   });
   if (!detached.ok || !/^\d+$/u.test(detached.stdout.trim())) {
-    process.stderr.write('worker_smoke_detach_spawn_failed\n');
-    return 1;
+    return { ok: false, runId, reason: 'worker_smoke_detach_spawn_failed' };
   }
-  const childPid = Number(detached.stdout.trim());
+  const ownerPid = Number(detached.stdout.trim());
 
-  const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
   const deadline = Date.now() + SMOKE_CREATE_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const lifecycle = readSmokeLifecycleRegistry(artifactDir);
-    if (lifecycle?.runId === runId) {
-      process.stdout.write(`${runId}\n`);
-      return 0;
+    // Directory existence alone is not a live attempt; require its exact readable lifecycle.
+    if (!lifecycle || lifecycle.runId !== runId) {
+      if (!processIsAlive(ownerPid)) {
+        return { ok: false, runId, reason: 'detached_smoke_owner_exited_before_lifecycle' };
+      }
+      await sleepAsync(SMOKE_LIFECYCLE_POLL_MS);
+      continue;
     }
-    if (!detachedChildIsAlive(childPid)) {
-      process.stderr.write('worker_smoke_detach_child_exited_before_lifecycle\n');
-      return 1;
+    if (!exactDetachedSmokeTask(lifecycle, options)) {
+      return { ok: false, runId, reason: 'detached_smoke_lifecycle_task_mismatch' };
     }
-    await sleepAsync(SMOKE_LIFECYCLE_POLL_MS);
+    return { ok: true, runId };
   }
-  process.stderr.write('worker_smoke_detach_lifecycle_timeout\n');
-  return 1;
+  return { ok: false, runId, reason: 'worker_smoke_detach_lifecycle_timeout' };
+}
+
+function detachedRunArgv(options: CliOptions): string[] {
+  const args = [
+    'run',
+    '--issue', String(options.issueNumber),
+    '--pr', String(options.prNumber),
+    '--head-sha', options.headSha,
+    '--issue-body-file', options.issueBodyFile,
+    '--smoke-complexity', options.smokeComplexity,
+    '--smoke-actor', options.smokeActor ?? 'worker-owned',
+    '--repo-root', options.repoRoot,
+    '--cwd', options.cwd,
+  ];
+  if (options.operatorSmokeOnly) args.push('--operator-smoke-only');
+  if (options.operatorOverrideReason) args.push('--operator-override', options.operatorOverrideReason);
+  if (options.dryRun) args.push('--dry-run');
+  if (options.json) args.push('--json');
+  if (options.reviewId) args.push('--review-id', options.reviewId);
+  if (options.reviewHeadSha) args.push('--review-head-sha', options.reviewHeadSha);
+  args.push('--detach');
+  return args;
+}
+
+export async function startDetachedSmokeAttempt(options: CliOptions): Promise<DetachedSmokeStartResult> {
+  // The caller keeps issueBodyFile alive until lifecycle establishment. Do not create
+  // the durable run directory in the bootstrap parent; the detached owner creates it
+  // together with its lifecycle reservation.
+  return startDetachedSmokeOwner(detachedRunArgv(options), options);
+}
+
+async function runDetachedBootstrap(argv: readonly string[], options: CliOptions): Promise<number> {
+  const result = await startDetachedSmokeOwner(argv, options);
+  if (!result.ok || !result.runId) {
+    const reason = result.reason === 'detached_smoke_owner_exited_before_lifecycle'
+      ? 'worker_smoke_detach_child_exited_before_lifecycle'
+      : result.reason ?? 'worker_smoke_detach_start_failed';
+    process.stderr.write(`${reason}\n`);
+    return 1;
+  }
+  process.stdout.write(`${result.runId}\n`);
+  return 0;
 }
 
 export async function runSmokeWait(options: CliOptions): Promise<number> {

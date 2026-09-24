@@ -27,6 +27,7 @@ function composerDeps(submitted: string[]): UnsentComposerSubmitDeps {
       }],
     }),
     read: () => ({ ok: true, lines: CURSOR_SCREEN, source: 'screen' }),
+    composerFamily: () => ({ status: 'known', family: 'non-opencode', command: 'cursor-agent --fixture', provenance: 'orca-terminal-show' }),
     submit: () => {
       submitted.push('enter');
       return { status: 'dispatched' };

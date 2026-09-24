@@ -71,6 +71,7 @@ const terminal = (worker) => ({
   worktreePath: worker.worktreePath ?? process.cwd(),
   title: 'fixture-' + worker.id,
   status: worker.liveness === 'gone' ? 'exited' : 'running',
+  ...(worker.command ? { command: worker.command } : {}),
 });
 if (!fixturePath) process.exit(2);
 switch (operation) {
@@ -279,6 +280,7 @@ interface FixtureState {
     bindingKey: string;
     lines: string[];
     liveness: string;
+    command?: string;
     worktreePath?: string;
     worktreeId?: string;
     runId?: string;
@@ -514,13 +516,13 @@ describe('scheduler bounded-child production composition', () => {
     ['coordinator-unbound', { ok: false as const, error: { code: 'consumer_fenced' as const, message: 'This coordinator terminal is no longer bound to Run <R>' } }],
   ] as const;
 
-  it('delivers terminal-fenced mail through the production scheduler without duplicate Enter', async () => {
+  it('does not Enter a consumer-fenced OpenCode worker without bound control', async () => {
     const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json');
     const target = 'term_mail_fenced';
     const pointer = `You have 1 orchestration message. Read and act on your orchestration message. Run \`orca orchestration check --terminal ${target}\`.`;
     writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
     writeFileSync(fixturePath, JSON.stringify({
-      workers: [{ id: target, generation: 'generation-mail-fenced', bindingKey: 'dispatch-mail-fenced', lines: [pointer, 'Cursor Grok 4.6 High · 40.6% Run Everything', '~/projects/orchestrator-pack · main'], liveness: 'busy' }],
+      workers: [{ id: target, generation: 'generation-mail-fenced', bindingKey: 'dispatch-mail-fenced', command: 'opencode --agent pack-worker', lines: [pointer, 'Cursor Grok 4.6 High · 40.6% Run Everything', '~/projects/orchestrator-pack · main'], liveness: 'busy' }],
       mailMessages: [{ id: 'msg-mail-fenced', run_id: 'run-mail-fenced', to_handle: target, read: 0 }],
       mailMessagesVisibleAfter: 2,
       retrievability: 'consumer_fenced', consumePointerOnSubmit: true, dispatches: [], sendCalls: 0,
@@ -529,22 +531,27 @@ describe('scheduler bounded-child production composition', () => {
     const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-mail-fenced', 'nonce-mail-fenced');
     await publishLocal(env, 'dispatch-mail-fenced', 'task-mail-fenced');
     const first = await runTick(env);
-    expect(fixture(fixturePath).dispatches?.filter(({ message }) => message === '')).toHaveLength(1);
-    expect((schedulerResult(first).orchestrationMailReconcile as Record<string, unknown>).nudged).toBeGreaterThanOrEqual(1);
-    expect(fixture(fixturePath).workers[0]?.lines).not.toContain(pointer);
+    const firstMail = schedulerResult(first).orchestrationMailReconcile as Record<string, unknown>;
+    expect(firstMail.nudged).toBe(0);
+    expect(firstMail.reasons).toContain('msg-mail-fenced:opencode_control_unbound');
+    expect(fixture(fixturePath).enterDispatches ?? 0).toBe(0);
+    expect(fixture(fixturePath).dispatches?.filter(({ message }) => message === '')).toHaveLength(0);
+    expect(fixture(fixturePath).workers[0]?.lines).toContain(pointer);
     const second = await runTick(env);
-    expect(fixture(fixturePath).dispatches?.filter(({ message }) => message === '')).toHaveLength(1);
-    expect((schedulerResult(second).orchestrationMailReconcile as Record<string, unknown>).nudged).toBe(0);
+    const secondMail = schedulerResult(second).orchestrationMailReconcile as Record<string, unknown>;
+    expect(secondMail.nudged).toBe(0);
+    expect(fixture(fixturePath).enterDispatches ?? 0).toBe(0);
+    expect(fixture(fixturePath).dispatches?.filter(({ message }) => message === '')).toHaveLength(0);
   });
 
   it.each(observedConsumerFencedResponses)(
-    'at the Orca CLI boundary, consumer_fenced %s qualifies only with an exact visible target pointer and disabled pack pointer creation',
+    'at the Orca CLI boundary, consumer_fenced %s does not Enter positive OpenCode without HTTP control',
     async (label, response) => {
       const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json');
       const target = `term_cli_fenced_${label}`; const messageId = `msg_cli_fenced_${label}`; const pointer = `You have 1 orchestration message. Read and act on your orchestration message. Run \`orca orchestration check --terminal ${target}\`.`;
       writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
       writeFileSync(fixturePath, JSON.stringify({
-        workers: [{ id: target, generation: `generation-${label}`, bindingKey: `dispatch-${label}`, lines: [pointer, 'Cursor Grok 4.6 High · 40.6% Run Everything', '~/projects/orchestrator-pack · main'], liveness: 'busy' }],
+        workers: [{ id: target, generation: `generation-${label}`, bindingKey: `dispatch-${label}`, command: 'opencode --agent pack-worker', lines: [pointer, 'Cursor Grok 4.6 High · 40.6% Run Everything', '~/projects/orchestrator-pack · main'], liveness: 'busy' }],
         mailMessages: [{ id: messageId, run_id: `run_cli_fenced_${label}`, to_handle: target, read: 0 }],
         mailMessagesVisibleAfter: 2,
         retrievability: 'consumer_fenced', consumerFencedResponse: response, consumePointerOnSubmit: true, dispatches: [], sendCalls: 0,
@@ -559,17 +566,17 @@ describe('scheduler bounded-child production composition', () => {
       expect(response.error.code).toBe('consumer_fenced');
       expect(observed).toEqual(expect.arrayContaining([response]));
       expect(firstMail.attempted).toBe(1);
-      expect(firstMail.nudged).toBeGreaterThanOrEqual(1);
-      expect(firstMail.reasons).toContain(`${messageId}:enter_sent`);
+      expect(firstMail.nudged).toBe(0);
+      expect(firstMail.reasons).toContain(`${messageId}:opencode_control_unbound`);
       expect(fixture(fixturePath).pointerWrites ?? 0).toBe(0);
-      expect(fixture(fixturePath).enterDispatches ?? 0).toBe(1);
-      expect(fixture(fixturePath).dispatches?.filter(({ message }) => message === '')).toHaveLength(1);
-      expect(fixture(fixturePath).workers[0]?.lines).not.toContain(pointer);
+      expect(fixture(fixturePath).enterDispatches ?? 0).toBe(0);
+      expect(fixture(fixturePath).dispatches?.filter(({ message }) => message === '')).toHaveLength(0);
+      expect(fixture(fixturePath).workers[0]?.lines).toContain(pointer);
       const second = await runTick(env);
       const secondMail = schedulerResult(second).orchestrationMailReconcile as Record<string, unknown>;
       expect(secondMail.nudged).toBe(0);
-      expect(fixture(fixturePath).enterDispatches ?? 0).toBe(1);
-      expect(fixture(fixturePath).dispatches?.filter(({ message }) => message === '')).toHaveLength(1);
+      expect(fixture(fixturePath).enterDispatches ?? 0).toBe(0);
+      expect(fixture(fixturePath).dispatches?.filter(({ message }) => message === '')).toHaveLength(0);
     },
   );
 
@@ -580,7 +587,7 @@ describe('scheduler bounded-child production composition', () => {
       const target = `term_cli_fenced_mismatch_${label}`; const otherTarget = `term_other_fenced_${label}`; const messageId = `msg_cli_fenced_mismatch_${label}`; const pointer = `You have 1 orchestration message. Read and act on your orchestration message. Run \`orca orchestration check --terminal ${otherTarget}\`.`;
       writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
       writeFileSync(fixturePath, JSON.stringify({
-        workers: [{ id: target, generation: `generation-mismatch-${label}`, bindingKey: `dispatch-mismatch-${label}`, lines: [pointer, 'Cursor Grok 4.6 High · 40.6% Run Everything', '~/projects/orchestrator-pack · main'], liveness: 'busy' }],
+        workers: [{ id: target, generation: `generation-mismatch-${label}`, bindingKey: `dispatch-mismatch-${label}`, command: 'cursor-agent', lines: [pointer, 'Cursor Grok 4.6 High · 40.6% Run Everything', '~/projects/orchestrator-pack · main'], liveness: 'busy' }],
         mailMessages: [{ id: messageId, run_id: `run_cli_fenced_mismatch_${label}`, to_handle: target, read: 0 }],
         mailMessagesVisibleAfter: 2,
         retrievability: 'consumer_fenced', consumerFencedResponse: response, consumePointerOnSubmit: true, dispatches: [], sendCalls: 0,
@@ -622,6 +629,7 @@ describe('scheduler bounded-child production composition', () => {
     let submits = 0;
     const submitDeps: UnsentComposerSubmitDeps = {
       listWorkers: () => ({ ok: true, workers: [target] }),
+      composerFamily: () => ({ status: 'known', family: 'opencode', command: 'opencode', provenance: 'orca-terminal-show' }),
       read: () => ({ ok: true, lines: ['→ Add a follow-up'], source: 'screen' }),
       submit: () => { submits += 1; return { status: 'dispatched' }; },
       composerControl: () => ({
@@ -643,7 +651,7 @@ describe('scheduler bounded-child production composition', () => {
     });
 
     expect(result.nudged).toBe(0);
-    expect(result.reasons).toContain(`${message.id}:pointer_absent_orca_did_not_notify`);
+    expect(result.reasons).toContain(`${message.id}:opencode_control_unbound`);
     expect(writes).toBe(0);
     expect(controlDispatches).toBe(0);
     expect(submits).toBe(0);
@@ -676,6 +684,7 @@ describe('scheduler bounded-child production composition', () => {
     let submits = 0;
     const submitDeps: UnsentComposerSubmitDeps = {
       listWorkers: () => ({ ok: true, workers: [target] }),
+      composerFamily: () => ({ status: 'known', family: 'non-opencode', command: 'cursor-agent', provenance: 'orca-terminal-show' }),
       read: () => {
         reads += 1;
         return {

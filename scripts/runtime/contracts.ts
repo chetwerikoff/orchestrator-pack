@@ -155,6 +155,20 @@ export interface RuntimeComposerControl {
   readonly dispatch: (request: RuntimeComposerControlRequest, options?: RuntimeCallOptions) => RuntimeDispatchResult;
 }
 
+export type RuntimeComposerFamilyObservation =
+  | {
+      readonly status: 'known';
+      readonly family: 'opencode' | 'non-opencode';
+      readonly command: string;
+      readonly provenance: 'orca-terminal-show';
+    }
+  | {
+      readonly status: 'unbound';
+      readonly reason: string;
+      readonly command?: string;
+      readonly provenance: 'orca-terminal-show';
+    };
+
 export interface RuntimeOpenCodeHealth {
   readonly healthy: true;
   readonly version: string;
@@ -329,6 +343,12 @@ export interface RuntimeAdapter {
     },
     options?: RuntimeCallOptions,
   ): RuntimeDispatchResult;
+
+  /** Exact current composer-family evidence used before provider-specific parsing. */
+  observeComposerFamily?(
+    worker: RuntimeWorkerIdentity,
+    options?: RuntimeCallOptions,
+  ): RuntimeComposerFamilyObservation;
 
   /** Optional provider control plane for runtimes with a non-screen composer. */
   composerControl?(

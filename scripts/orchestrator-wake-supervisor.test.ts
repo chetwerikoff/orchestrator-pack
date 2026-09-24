@@ -2,7 +2,7 @@
 // @vitest-pre-topology-seconds 120
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { runProcessSync } from './kernel/subprocess.ts';
+import { runProcess, runProcessSync } from './kernel/subprocess.ts';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -93,6 +93,7 @@ function issue1917Status(root: string, cadenceSeconds = 5): SupervisorStatus {
       script: 'pr2-foundation/scheduler.ts',
       sideEffecting: true,
       cadenceSeconds,
+      stallGraceMultiplier: 14,
     }],
   };
   writeFileSync(registrySource, `${JSON.stringify(registry)}\n`, 'utf8');
@@ -114,6 +115,8 @@ function issue1917Status(root: string, cadenceSeconds = 5): SupervisorStatus {
     lastChildStartAt: new Date().toISOString(),
     cordonReason: 'post-cas-epoch-owner',
     refusalReason: null,
+    consecutiveStallTerminations: 0,
+    lastTerminationReason: null,
     crashBackoff: {
       rapidExits: 0,
       backoffUntilMs: 0,
@@ -341,6 +344,7 @@ describe('Issue #1484 truthful supervisor status', () => {
           script: 'pr2-foundation/scheduler.ts',
           sideEffecting: true,
           cadenceSeconds: 1,
+          stallGraceMultiplier: 14,
         }],
       };
       writeFileSync(targetRegistryPath, `${JSON.stringify(registry)}\n`, 'utf8');
@@ -420,6 +424,248 @@ describe('Issue #1484 truthful supervisor status', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('terminates a stalled generation, waits for close plus full cadence, and never charges rapid exits', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'opk-2062-supervisor-stall-'));
+    try {
+      const fakeRepo = path.join(root, 'repo');
+      const stateDir = path.join(root, 'state');
+      const schedulerDir = path.join(fakeRepo, 'scripts', 'pr2-foundation');
+      const schedulerPath = path.join(schedulerDir, 'scheduler.ts');
+      const markerPath = path.join(root, 'scheduler-events.jsonl');
+      const targetRegistryPath = path.join(root, 'target-registry.json');
+      const projectedRegistryPath = path.join(stateDir, 'projected-registry.json');
+      const epochAuthorityPath = path.join(root, 'epoch-authority.json');
+      mkdirSync(schedulerDir, { recursive: true });
+      writeFileSync(
+        schedulerPath,
+        [
+          "import { appendFileSync } from 'node:fs';",
+          `const marker = ${JSON.stringify(markerPath)};`,
+          "const write = (event) => appendFileSync(marker, JSON.stringify({ event, at: Date.now(), pid: process.pid }) + '\\n', 'utf8');",
+          "write('start');",
+          "process.on('SIGTERM', () => {",
+          "  write('sigterm');",
+          "  setTimeout(() => { write('close'); process.exit(0); }, 120);",
+          "});",
+          "setInterval(() => {}, 1000);",
+        ].join('\n') + '\n',
+        'utf8',
+      );
+      const registry = {
+        schemaVersion: 2,
+        requiredChildIds: ['pr2-scheduler'],
+        children: [{
+          id: 'pr2-scheduler',
+          runtime: 'node',
+          script: 'pr2-foundation/scheduler.ts',
+          sideEffecting: true,
+          cadenceSeconds: 1,
+          stallGraceMultiplier: 1,
+        }],
+      };
+      const registryBytes = `${JSON.stringify(registry)}\n`;
+      writeFileSync(targetRegistryPath, registryBytes, 'utf8');
+      const epochId = 'epoch-2062-supervisor-stall';
+      const nonce = 'nonce-2062-supervisor-stall';
+      new FileEpochAuthority(epochAuthorityPath).commit(null, {
+        epochId,
+        nonce,
+        hostId: 'test-host',
+        repoRoot: fakeRepo,
+        installedCommitSha: 'a'.repeat(40),
+        snapshotDigests: { reconcile: 'snapshot-r', reevaluation: 'snapshot-e', reportStateSeed: 'snapshot-s' },
+        importDigests: { reconcile: 'import-r', reevaluation: 'import-e', reportStateSeed: 'import-s' },
+        registryHash: sha256Bytes(Buffer.from(registryBytes)),
+        preCommitLogDigest: 'issue-2062-stall',
+        commitAt: new Date().toISOString(),
+      });
+
+      const result = runProcessSync({
+        command: process.execPath,
+        args: [
+          '--experimental-strip-types',
+          supervisorScript,
+          'run',
+          '--state-dir', stateDir,
+          '--repo-root', fakeRepo,
+          '--epoch-authority', epochAuthorityPath,
+          '--epoch-id', epochId,
+          '--nonce', nonce,
+          '--target-registry', targetRegistryPath,
+          '--projected-registry', projectedRegistryPath,
+        ],
+        cwd: repoRoot,
+        inheritParentEnv: true,
+        env: {
+          OPK_SUPERVISOR_CRASH_TERMINAL_RAPID_EXITS: '2',
+          OPK_SUPERVISOR_CRASH_MAX_RAPID_EXITS: '1',
+          OPK_SUPERVISOR_CRASH_BASE_BACKOFF_MS: '1',
+          OPK_SUPERVISOR_CRASH_MAX_BACKOFF_MS: '1',
+        },
+        timeoutMs: 8_000,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.timedOut).toBe(false);
+      const status = JSON.parse(readFileSync(
+        path.join(stateDir, 'typescript-supervisor-status.json'),
+        'utf8',
+      )) as {
+        consecutiveStallTerminations: number;
+        lastTerminationReason: string | null;
+        restartState: string;
+        refusalReason: string | null;
+        crashBackoff: { rapidExits: number; terminal: boolean };
+      };
+      expect(status).toMatchObject({
+        consecutiveStallTerminations: 2,
+        lastTerminationReason: 'stall_terminated',
+        restartState: 'refused',
+        refusalReason: 'scheduler_child_stall_loop',
+        crashBackoff: { rapidExits: 0, terminal: false },
+      });
+
+      const events = readFileSync(markerPath, 'utf8').trim().split(/\r?\n/u)
+        .map((line) => JSON.parse(line) as { event: string; at: number; pid: number });
+      const starts = events.filter((row) => row.event === 'start');
+      const closes = events.filter((row) => row.event === 'close');
+      const signals = events.filter((row) => row.event === 'sigterm');
+      expect(starts).toHaveLength(2);
+      expect(signals).toHaveLength(2);
+      expect(closes).toHaveLength(2);
+      expect(signals[0]!.at - starts[0]!.at).toBeGreaterThanOrEqual(900);
+      expect(closes[0]!.at - signals[0]!.at).toBeGreaterThanOrEqual(80);
+      expect(starts[1]!.at - closes[0]!.at).toBeGreaterThanOrEqual(900);
+      expect(starts[0]!.pid).not.toBe(starts[1]!.pid);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('uses the 70-second registry deadline, closes generation A, and reloads changed scheduler bytes in B', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'opk-2062-supervisor-70s-stall-'));
+    try {
+      const fakeRepo = path.join(root, 'repo');
+      const stateDir = path.join(root, 'state');
+      const schedulerDir = path.join(fakeRepo, 'scripts', 'pr2-foundation');
+      const schedulerPath = path.join(schedulerDir, 'scheduler.ts');
+      const markerPath = path.join(root, 'scheduler-events.jsonl');
+      const targetRegistryPath = path.join(root, 'target-registry.json');
+      const projectedRegistryPath = path.join(stateDir, 'projected-registry.json');
+      const epochAuthorityPath = path.join(root, 'epoch-authority.json');
+      const statusPath = path.join(stateDir, 'typescript-supervisor-status.json');
+      mkdirSync(schedulerDir, { recursive: true });
+      const schedulerSource = (generation: 'A' | 'B'): string => [
+        "import { appendFileSync } from 'node:fs';",
+        `const marker = ${JSON.stringify(markerPath)};`,
+        `const generation = ${JSON.stringify(generation)};`,
+        "const write = (event) => appendFileSync(marker, JSON.stringify({ event, generation, at: Date.now(), pid: process.pid }) + '\\n', 'utf8');",
+        "write('start');",
+        "process.on('SIGTERM', () => {",
+        "  write('sigterm');",
+        "  setTimeout(() => { write('close'); process.exit(0); }, 120);",
+        "});",
+        "setInterval(() => {}, 1000);",
+      ].join('\n') + '\n';
+      writeFileSync(schedulerPath, schedulerSource('A'), 'utf8');
+      const registry = {
+        schemaVersion: 2, requiredChildIds: ['pr2-scheduler'],
+        children: [{
+          id: 'pr2-scheduler', runtime: 'node', script: 'pr2-foundation/scheduler.ts',
+          sideEffecting: true, cadenceSeconds: 5, stallGraceMultiplier: 14,
+        }],
+      };
+      const registryBytes = `${JSON.stringify(registry)}\n`;
+      writeFileSync(targetRegistryPath, registryBytes, 'utf8');
+      const epochId = 'epoch-2062-supervisor-70s-stall';
+      const nonce = 'nonce-2062-supervisor-70s-stall';
+      new FileEpochAuthority(epochAuthorityPath).commit(null, {
+        epochId, nonce, hostId: 'test-host', repoRoot: fakeRepo, installedCommitSha: 'a'.repeat(40),
+        snapshotDigests: { reconcile: 'snapshot-r', reevaluation: 'snapshot-e', reportStateSeed: 'snapshot-s' },
+        importDigests: { reconcile: 'import-r', reevaluation: 'import-e', reportStateSeed: 'import-s' },
+        registryHash: sha256Bytes(Buffer.from(registryBytes)),
+        preCommitLogDigest: 'issue-2062-70s-stall', commitAt: new Date().toISOString(),
+      });
+
+      const controller = new AbortController();
+      const resultPromise = runProcess({
+        command: process.execPath,
+        args: [
+          '--experimental-strip-types', supervisorScript, 'run',
+          '--state-dir', stateDir, '--repo-root', fakeRepo,
+          '--epoch-authority', epochAuthorityPath, '--epoch-id', epochId, '--nonce', nonce,
+          '--target-registry', targetRegistryPath, '--projected-registry', projectedRegistryPath,
+        ],
+        cwd: repoRoot, inheritParentEnv: true, signal: controller.signal, timeoutMs: 100_000, killGraceMs: 500,
+        env: {
+          OPK_SUPERVISOR_CRASH_TERMINAL_RAPID_EXITS: '2',
+          OPK_SUPERVISOR_CRASH_MAX_RAPID_EXITS: '1',
+          OPK_SUPERVISOR_CRASH_BASE_BACKOFF_MS: '1',
+          OPK_SUPERVISOR_CRASH_MAX_BACKOFF_MS: '1',
+        },
+      });
+      const readEvents = (): { event: string; generation: string; at: number; pid: number }[] => {
+        if (!existsSync(markerPath)) return [];
+        return readFileSync(markerPath, 'utf8').trim().split(/\r?\n/u).filter(Boolean)
+          .map((line) => JSON.parse(line) as { event: string; generation: string; at: number; pid: number });
+      };
+      let supervisorStartAt: number | undefined;
+      let moduleChangedAt: number | undefined;
+      let sawGenerationB = false;
+      const deadline = Date.now() + 95_000;
+      while (Date.now() < deadline) {
+        const events = readEvents();
+        const startA = events.find((row) => row.event === 'start' && row.generation === 'A');
+        if (startA && moduleChangedAt === undefined) {
+          const status = JSON.parse(readFileSync(statusPath, 'utf8')) as { childGeneration: number; lastChildStartAt: string | null; restartState: string };
+          expect(status).toMatchObject({ childGeneration: 1, restartState: 'running' });
+          supervisorStartAt = Date.parse(status.lastChildStartAt ?? '');
+          writeFileSync(schedulerPath, schedulerSource('B'), 'utf8');
+          moduleChangedAt = Date.now();
+        }
+        if (events.some((row) => row.event === 'start' && row.generation === 'B')) {
+          sawGenerationB = true;
+          controller.abort();
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      if (!sawGenerationB) controller.abort();
+      const result = await resultPromise;
+      expect(result.outcome).toBe('cancelled');
+      expect(moduleChangedAt).toBeDefined();
+      expect(sawGenerationB).toBe(true);
+
+      const events = readEvents();
+      const startsA = events.filter((row) => row.event === 'start' && row.generation === 'A');
+      const startsB = events.filter((row) => row.event === 'start' && row.generation === 'B');
+      const signalA = events.find((row) => row.event === 'sigterm' && row.generation === 'A');
+      const closeA = events.find((row) => row.event === 'close' && row.generation === 'A');
+      expect(startsA).toHaveLength(1);
+      expect(startsB).toHaveLength(1);
+      expect(signalA).toBeDefined();
+      expect(closeA).toBeDefined();
+      expect(startsA[0]!.pid).not.toBe(startsB[0]!.pid);
+      expect(moduleChangedAt!).toBeGreaterThan(startsA[0]!.at);
+      expect(moduleChangedAt!).toBeLessThan(signalA!.at);
+      expect(signalA!.at - supervisorStartAt!).toBeGreaterThanOrEqual(69_000);
+      expect(signalA!.at - supervisorStartAt!).toBeLessThanOrEqual(72_000);
+      expect(closeA!.at - signalA!.at).toBeGreaterThanOrEqual(80);
+      expect(startsB[0]!.at - closeA!.at).toBeGreaterThanOrEqual(4_900);
+      expect(startsB[0]!.at - closeA!.at).toBeLessThan(8_000);
+      expect(events.findIndex((row) => row.event === 'close' && row.generation === 'A'))
+        .toBeLessThan(events.findIndex((row) => row.event === 'start' && row.generation === 'B'));
+
+      const status = JSON.parse(readFileSync(statusPath, 'utf8')) as {
+        lastTerminationReason: string | null; crashBackoff: { rapidExits: number };
+      };
+      expect(status.lastTerminationReason).toBe('stall_terminated');
+      expect(status.crashBackoff.rapidExits).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 110_000);
 
   it('accumulates repeated child failures to the existing fuse while retaining the concrete cause', () => {
     const policy: CrashBackoffPolicy = {
@@ -522,6 +768,7 @@ describe('Issue #1484 truthful supervisor status', () => {
           script: 'pr2-foundation/scheduler.ts',
           sideEffecting: true,
           cadenceSeconds: 1,
+          stallGraceMultiplier: 14,
         }],
       };
       const registryBytes = `${JSON.stringify(registry)}\n`;
@@ -741,6 +988,7 @@ describe('Issue #1880 supervisor epoch-authority admission', () => {
             script: 'pr2-foundation/scheduler.ts',
             sideEffecting: true,
             cadenceSeconds: 5,
+            stallGraceMultiplier: 14,
           }],
         };
         const registryBytes = `${JSON.stringify(registry)}\n`;
