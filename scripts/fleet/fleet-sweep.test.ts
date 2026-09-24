@@ -31,7 +31,10 @@ function fakeExecutor(
   return (args) => {
     calls.push([...args]);
     if (args[0] === 'terminal' && args[1] === 'list') {
-      return result(JSON.stringify({ ok: true, result: { terminals } }));
+      return result(JSON.stringify({
+        ok: true,
+        result: { terminals, totalCount: terminals.length, truncated: false },
+      }));
     }
     if (args[0] === 'terminal' && args[1] === 'read') {
       const handle = args[args.indexOf('--terminal') + 1] ?? '';
@@ -76,6 +79,17 @@ describe('fleet sweep classification', () => {
     expect(store.marks.has('p1')).toBe(false);
     expect(classifyFleetPane(screen, 'p1', store)).toBe('busy');
   });
+
+  it('clears a polling mark when polling text is stale scrollback behind newer busy work', () => {
+    const store = new MemoryPollingStore();
+    store.setPollingMark('p1');
+    expect(classifyFleetPane(
+      'sleep 60\nold wait output\nnew useful work\nesc interrupt',
+      'p1',
+      store,
+    )).toBe('busy');
+    expect(store.marks.has('p1')).toBe(false);
+  });
 });
 
 describe('fleet sweep pane selection and reads', () => {
@@ -105,5 +119,34 @@ describe('fleet sweep pane selection and reads', () => {
     ]);
     expect(calls.filter((call) => call[1] === 'read')).toHaveLength(2);
     expect(calls.every((call) => call[1] === 'list' || call[1] === 'read')).toBe(true);
+  });
+
+  it('fails closed on incomplete or malformed terminal census data', () => {
+    const terminal = pane('a', 'OpenCode worker');
+    const payloads = [
+      { ok: true, result: { terminals: [terminal], totalCount: 1, truncated: true } },
+      { ok: true, result: { terminals: [terminal], totalCount: 2, truncated: false } },
+      { ok: true, result: { terminals: [{ handle: 'a', title: 'OpenCode worker' }], totalCount: 1, truncated: false } },
+    ];
+    for (const payload of payloads) {
+      const executor: OrcaExecutor = (args) => (
+        args[0] === 'terminal' && args[1] === 'list'
+          ? result(JSON.stringify(payload))
+          : result('', false)
+      );
+      expect(() => runFleetSweep({ primary, executor, store: new MemoryPollingStore() }))
+        .toThrow(/terminal list unreadable/u);
+    }
+  });
+
+  it('returns no pane lines when --lines is zero', () => {
+    const observed = runFleetSweep({
+      primary,
+      executor: fakeExecutor([pane('a', 'OpenCode worker')], { a: 'done\nline-a' }),
+      store: new MemoryPollingStore(),
+      lines: 0,
+    });
+    expect(observed).toHaveLength(1);
+    expect(observed[0]?.lines).toEqual([]);
   });
 });

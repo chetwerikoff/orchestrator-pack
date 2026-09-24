@@ -84,7 +84,14 @@ export function resolveCoordinatorPane(
   config: FleetWakeConfig,
 ): FleetTerminal | undefined {
   if (config.orchestratorHandle) {
-    return terminals.find((terminal) => terminal.handle === config.orchestratorHandle);
+    const pinned = terminals.find((terminal) => terminal.handle === config.orchestratorHandle);
+    if (!pinned) return undefined;
+    const worktree = pinned.worktreePath.replaceAll('\\', '/');
+    config.workspaceRe.lastIndex = 0;
+    if (!samePath(pinned.worktreePath, config.primary) && config.workspaceRe.test(worktree)) {
+      return undefined;
+    }
+    return pinned;
   }
   return terminals.find((terminal) => {
     config.orchestratorTitleRe.lastIndex = 0;
@@ -187,7 +194,8 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
 
   const coordinatorState: 'idle' | 'busy' = isBusyScreen(coordinatorScreen, config.busyRe) ? 'busy' : 'idle';
   const signature = stoppedSignature(observations);
-  if (coordinatorState === 'busy' && store.readLastSentSignature() === signature) {
+  const deliverySignature = `${coordinator.handle}\n${signature}`;
+  if (coordinatorState === 'busy' && store.readLastSentSignature() === deliverySignature) {
     log(`${coordinator.handle} same stopped set already queued`);
     return { state: 'same_stopped_set', coordinator: coordinator.handle, signature };
   }
@@ -203,7 +211,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     return { state: 'send_failed', coordinator: coordinator.handle };
   }
 
-  store.writeLastSentSignature(signature);
+  store.writeLastSentSignature(deliverySignature);
   log(`sent to ${coordinator.handle} (${coordinatorState}): ${stopped.length} need a step`);
   return {
     state: 'sent',

@@ -79,7 +79,8 @@ export function isBusyScreen(screen: string, busyRe: RegExp = DEFAULT_BUSY_RE): 
 }
 
 export function hasPollingEvidence(screen: string): boolean {
-  return POLLING_RE.test(screen);
+  const recent = nonChromeLines(screen).slice(-2).join('\n');
+  return POLLING_RE.test(recent);
 }
 
 function nonChromeLines(screen: string): string[] {
@@ -151,16 +152,42 @@ export function defaultOrcaExecutor(args: readonly string[]): OrcaCommandResult 
   };
 }
 
-function terminalArray(payload: unknown): unknown[] {
-  if (!payload || typeof payload !== 'object') return [];
-  const record = payload as Record<string, unknown>;
-  const direct = record.terminals;
-  if (Array.isArray(direct)) return direct;
-  const result = record.result;
-  if (result && typeof result === 'object' && Array.isArray((result as Record<string, unknown>).terminals)) {
-    return (result as Record<string, unknown>).terminals as unknown[];
+function terminalCensus(payload: unknown): FleetTerminal[] {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('terminal list unreadable: malformed census');
   }
-  return [];
+  const record = payload as Record<string, unknown>;
+  const result = record.result;
+  if (record.ok !== true || !result || typeof result !== 'object') {
+    throw new Error('terminal list unreadable: malformed census');
+  }
+  const resultRecord = result as Record<string, unknown>;
+  const terminals = resultRecord.terminals;
+  const totalCount = resultRecord.totalCount;
+  const truncated = resultRecord.truncated;
+  if (!Array.isArray(terminals)
+    || truncated !== false
+    || typeof totalCount !== 'number'
+    || !Number.isInteger(totalCount)
+    || totalCount !== terminals.length) {
+    throw new Error('terminal list unreadable: incomplete census');
+  }
+  return terminals.map((value, index): FleetTerminal => {
+    if (!value || typeof value !== 'object') {
+      throw new Error(`terminal list unreadable: malformed row ${index}`);
+    }
+    const item = value as Record<string, unknown>;
+    const handle = typeof item.handle === 'string' ? item.handle.trim() : '';
+    const worktreePath = typeof item.worktreePath === 'string' ? item.worktreePath.trim() : '';
+    if (!handle || !worktreePath) {
+      throw new Error(`terminal list unreadable: malformed row ${index}`);
+    }
+    return {
+      handle,
+      title: typeof item.title === 'string' ? item.title : '',
+      worktreePath,
+    };
+  });
 }
 
 export function listFleetTerminals(executor: OrcaExecutor = defaultOrcaExecutor): FleetTerminal[] {
@@ -174,17 +201,7 @@ export function listFleetTerminals(executor: OrcaExecutor = defaultOrcaExecutor)
   } catch (error) {
     throw new Error(`terminal list unreadable: invalid JSON (${error instanceof Error ? error.message : String(error)})`);
   }
-  return terminalArray(parsed).flatMap((value): FleetTerminal[] => {
-    if (!value || typeof value !== 'object') return [];
-    const item = value as Record<string, unknown>;
-    const handle = typeof item.handle === 'string' ? item.handle.trim() : '';
-    if (!handle) return [];
-    return [{
-      handle,
-      title: typeof item.title === 'string' ? item.title : '',
-      worktreePath: typeof item.worktreePath === 'string' ? item.worktreePath : '',
-    }];
-  });
+  return terminalCensus(parsed);
 }
 
 export function readFleetScreen(handle: string, executor: OrcaExecutor = defaultOrcaExecutor): string {
@@ -258,7 +275,7 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
     return {
       ...terminal,
       state: classifyFleetPane(screen, terminal.handle, store, busyRe),
-      lines: nonChromeLines(screen).slice(-lineCount),
+      lines: lineCount === 0 ? [] : nonChromeLines(screen).slice(-lineCount),
     };
   });
 }

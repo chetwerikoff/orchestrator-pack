@@ -56,7 +56,10 @@ function fakeOrca(
   return (args) => {
     calls.push([...args]);
     if (args[0] === 'terminal' && args[1] === 'list') {
-      return commandResult(JSON.stringify({ ok: true, result: { terminals: customTerminals } }));
+      return commandResult(JSON.stringify({
+        ok: true,
+        result: { terminals: customTerminals, totalCount: customTerminals.length, truncated: false },
+      }));
     }
     if (args[0] === 'terminal' && args[1] === 'read') {
       const handle = args[args.indexOf('--terminal') + 1] ?? '';
@@ -140,6 +143,25 @@ describe('fleet alarm', () => {
     expect(message).toContain('STOPPED two');
   });
 
+  it('does not suppress the same stopped set after the coordinator pane is replaced', async () => {
+    const store = new MemoryWakeStore();
+    const workers = terminals.filter((terminal) => terminal.handle !== 'coord');
+    const first = await tick({
+      terminals: [{ handle: 'coord-a', title: 'Cursor coordinator', worktreePath: primary }, ...workers],
+      screens: { 'coord-a': 'working\nctrl+c to stop', one: 'done', two: 'working\nesc to interrupt' },
+      store,
+    });
+    expect(first.result).toMatchObject({ state: 'sent', coordinator: 'coord-a', coordinatorState: 'busy', count: 1 });
+
+    const replacement = await tick({
+      terminals: [{ handle: 'coord-b', title: 'Cursor coordinator', worktreePath: primary }, ...workers],
+      screens: { 'coord-b': 'working\nctrl+c to stop', one: 'done', two: 'working\nesc to interrupt' },
+      store,
+    });
+    expect(replacement.result).toMatchObject({ state: 'sent', coordinator: 'coord-b', coordinatorState: 'busy', count: 1 });
+    expect(sends(replacement.calls)).toHaveLength(2);
+  });
+
   it('sends nothing for busy or PARKED panes and clears the remembered signature', async () => {
     const store = new MemoryWakeStore();
     store.signature = 'STOPPED one';
@@ -165,6 +187,13 @@ describe('fleet alarm', () => {
     });
     expect(pinned.result).toMatchObject({ state: 'sent', coordinator: 'pinned' });
     expect(sends(pinned.calls).every((call) => call.includes('pinned'))).toBe(true);
+
+    const staleWorkerPin = await tick({
+      config: config({ orchestratorHandle: 'one' }),
+      screens: { one: 'done', two: 'working\nesc to interrupt' },
+    });
+    expect(staleWorkerPin.result.state).toBe('no_orchestrator');
+    expect(sends(staleWorkerPin.calls)).toHaveLength(0);
 
     const missing = await tick({
       config: config({ orchestratorHandle: 'missing' }),
