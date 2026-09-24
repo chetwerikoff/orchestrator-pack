@@ -12,6 +12,7 @@ import {
   resolveLiveExecutorProfile,
   finalizeOpenCodeExecutorProfile,
   runSupervisedTaskLaunchAssistant,
+  LAUNCH_STARTUP_OBSERVATION_WINDOW_MS,
   repoCanonicalKey,
   type DispatchObservation,
   type EdgeResult,
@@ -41,11 +42,15 @@ const worker: RuntimeWorker = {
 function runtimeAdapter(input: {
   worker?: RuntimeWorker;
   liveness?: 'busy' | 'idle' | 'unknown' | 'gone';
+  livenessSequence?: readonly ('busy' | 'idle' | 'unknown' | 'gone')[];
   livenessWorker?: RuntimeWorker['identity'];
   onSpawn?: () => void;
+  onLiveness?: (observationWindowMs: number) => void;
+  onLivenessSample?: (status: 'busy' | 'idle' | 'unknown' | 'gone') => void;
 } = {}): RuntimeAdapter {
   const target = input.worker ?? worker;
-  const status = input.liveness ?? 'idle';
+  const fixedStatus = input.liveness ?? 'idle';
+  const livenessSequence = [...(input.livenessSequence ?? [fixedStatus])];
   return {
     id: 'orca',
     readiness: () => ({ status: 'ok', value: { ready: true, workspacePath: target.workspacePath } }),
@@ -62,7 +67,16 @@ function runtimeAdapter(input: {
       changed: false,
       terminalState: 'running',
     } }),
-    liveness: () => ({ status, worker: input.livenessWorker ?? target.identity }),
+    liveness: ({ observationWindowMs }) => {
+      input.onLiveness?.(observationWindowMs);
+      let status = fixedStatus;
+      for (const sample of livenessSequence) {
+        status = sample;
+        input.onLivenessSample?.(sample);
+        if (sample !== 'busy') break;
+      }
+      return { status, worker: input.livenessWorker ?? target.identity };
+    },
     stopWorker: () => ({ status: 'ok', value: { stopped: true } }),
   };
 }
@@ -783,6 +797,59 @@ describe('supervised Task launch assistant', () => {
       outcome: 'continue', stage: 'terminal_prepare', observedCause: cause,
       resources: { terminal: target.identity },
     });
+  });
+
+  it('uses the bounded startup window to reach ready when the TUI settles within it', async () => {
+    let spawns = 0;
+    const windows: number[] = [];
+    const samples: string[] = [];
+    const adapter = runtimeAdapter({
+      livenessSequence: ['busy', 'idle'],
+      onSpawn: () => { spawns += 1; },
+      onLiveness: (window) => { windows.push(window); },
+      onLivenessSample: (status) => { samples.push(status); },
+    });
+    const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({ adapter }));
+    expect(result).toMatchObject({ outcome: 'ready', resources: { terminal: worker.identity } });
+    expect(spawns).toBe(1);
+    expect(windows).toEqual([LAUNCH_STARTUP_OBSERVATION_WINDOW_MS]);
+    expect(samples).toEqual(['busy', 'idle']);
+    expect(LAUNCH_STARTUP_OBSERVATION_WINDOW_MS).toBeGreaterThan(1_000);
+  });
+
+  it('continues a busy Task using the same persisted terminal without creating a second pane', async () => {
+    const ownership = new Map<string, RuntimeWorker>();
+    const spawnAttempts: string[] = [];
+    let paneCreations = 0;
+    const adapterForInvocation = (): RuntimeAdapter => {
+      const base = runtimeAdapter({ liveness: 'busy' });
+      return {
+        ...base,
+        spawnWorker: ({ title }) => {
+          spawnAttempts.push(title);
+          const existing = ownership.get(title);
+          if (existing) return { status: 'ok', value: existing };
+          const created = { ...worker, title };
+          ownership.set(title, created);
+          paneCreations += 1;
+          return { status: 'ok', value: created };
+        },
+      };
+    };
+
+    const first = await runSupervisedTaskLaunchAssistant(launchInput(), deps({ adapter: adapterForInvocation() }));
+    const continuation = await runSupervisedTaskLaunchAssistant(launchInput(), deps({ adapter: adapterForInvocation() }));
+
+    expect(first).toMatchObject({
+      outcome: 'continue', stage: 'terminal_prepare', observedCause: 'terminal_liveness_busy',
+      resources: { terminal: worker.identity },
+    });
+    expect(continuation).toMatchObject({
+      outcome: 'continue', stage: 'terminal_prepare', observedCause: 'terminal_liveness_busy',
+      resources: { terminal: worker.identity },
+    });
+    expect(spawnAttempts).toEqual(['opk-t2-task-1', 'opk-t2-task-1']);
+    expect(paneCreations).toBe(1);
   });
 
   it('fails closed when liveness observes a recreated terminal generation', async () => {
