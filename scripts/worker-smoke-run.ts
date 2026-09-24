@@ -2304,6 +2304,15 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   }
 }
 
+function detachedChildIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
 async function runDetachedBootstrap(argv: readonly string[], options: CliOptions): Promise<number> {
   if (options.detachedOwner || options.runId) throw new Error('detached bootstrap may not supply --detached-owner or --run');
   const runId = createSmokeRunIdentity();
@@ -2332,6 +2341,7 @@ async function runDetachedBootstrap(argv: readonly string[], options: CliOptions
     process.stderr.write('worker_smoke_detach_spawn_failed\n');
     return 1;
   }
+  const childPid = Number(detached.stdout.trim());
 
   const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
   const deadline = Date.now() + SMOKE_CREATE_TIMEOUT_MS;
@@ -2340,6 +2350,10 @@ async function runDetachedBootstrap(argv: readonly string[], options: CliOptions
     if (lifecycle?.runId === runId) {
       process.stdout.write(`${runId}\n`);
       return 0;
+    }
+    if (!detachedChildIsAlive(childPid)) {
+      process.stderr.write('worker_smoke_detach_child_exited_before_lifecycle\n');
+      return 1;
     }
     await sleepAsync(SMOKE_LIFECYCLE_POLL_MS);
   }

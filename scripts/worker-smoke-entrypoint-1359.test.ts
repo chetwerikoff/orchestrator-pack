@@ -123,6 +123,32 @@ function installTrustedTargetFixture(
 }
 
 describe('Issue #1359 real worker-smoke entrypoint', () => {
+  it('reports a detached child exit before lifecycle reservation separately from the deadline', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-detach-early-exit-'));
+
+    try {
+      const result = run(resolve('scripts/worker-smoke-run'), [
+        'run', '--detach',
+        '--issue', '1933',
+        '--pr', '1941',
+        '--head-sha', '1'.repeat(40),
+        '--issue-body-file', join(root, 'missing-issue.md'),
+        '--smoke-complexity', 'complex',
+        '--repo-root', root,
+        '--cwd', root,
+        '--dry-run',
+        '--json',
+      ], { cwd: root });
+
+      expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(1);
+      expect(result.stderr).toContain('worker_smoke_detach_child_exited_before_lifecycle');
+      expect(result.stderr).not.toContain('worker_smoke_detach_lifecycle_timeout');
+      expect(existsSync(join(root, '.orca-worker-smoke', 'runs'))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('submits one combined prompt actuation, confirms first-ordinal evidence, and closes the frozen owned handle', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-entrypoint-1359-'));
     const bin = join(root, 'bin');
