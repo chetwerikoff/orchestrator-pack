@@ -19,6 +19,7 @@ const PR_VIEW_REST_FIELDS = new Set([
   'body',
   'headRefName',
   'headRefOid',
+  'headRepository',
   'isDraft',
   'mergeCommit',
   'mergeStateStatus',
