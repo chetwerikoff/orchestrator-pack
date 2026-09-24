@@ -451,6 +451,60 @@ describe('Issue #1436 smoke/review ordering', () => {
     });
   });
 
+  it('allows same-head retry for an unsealed wrong-run FAIL but blocks a scenario finding', () => {
+    const observedHead = 'ab3c87027b2729818cd5e1394750dd4b3c82522f';
+    const startAndRetry = (scenarioFinding: boolean) => {
+      const root = mkdtempSync(join(tmpdir(), 'pack-review-ordering-independent-fail-'));
+      roots.push(root);
+      const options: PackReviewAuthorityOptions = { storeRoot: root };
+      const authority = initializePackReviewAuthority({
+        prNumber: 2091,
+        headSha: observedHead,
+        tier: 'T3',
+        capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+        options,
+      });
+      const started = commitSmokeOrderingTransition({
+        prNumber: 2091,
+        expectedTransitionSeq: authority.transitionSeq,
+        actor: 'independent',
+        headSha: observedHead,
+        status: 'started',
+        attemptId: 'attempt-observed',
+        supervisorPid: 51001,
+        runId: 'attempt-observed',
+        reviewRuns: [],
+        operatorSmokeOnly: true,
+        options,
+      });
+      return () => commitSmokeOrderingTransition({
+        prNumber: 2091,
+        expectedTransitionSeq: started.transitionSeq,
+        actor: 'independent',
+        headSha: observedHead,
+        status: 'started',
+        attemptId: 'attempt-retry',
+        supervisorPid: 51002,
+        runId: 'attempt-retry',
+        ownerStateEvidence: {
+          attemptId: 'attempt-observed',
+          supervisorPid: 51001,
+          runId: 'attempt-observed',
+          supervisorAlive: false,
+          cleanupSafe: false,
+          authoritativeResult: 'FAIL',
+          scenarioFinding,
+        },
+        reviewRuns: [],
+        operatorSmokeOnly: true,
+        options,
+      });
+    };
+
+    expect(startAndRetry(false)).not.toThrow();
+    expect(startAndRetry(true)).toThrow('smoke_ordering_independent_same_head_forbidden');
+  });
+
   it('lets logical-accounting review and independent smoke run without an execution mutex', () => {
     const root = mkdtempSync(join(tmpdir(), 'pack-review-ordering-logical-independent-'));
     roots.push(root);
