@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { DeterministicRuntimeAdapter } from '../runtime/test-adapter.ts';
 import { executeRuntimeTaskLifecycle } from '../runtime/task-lifecycle.ts';
-import type { OrcaJsonResponse } from './native.ts';
+import { parseOrcaJsonOutput, type OrcaJsonResponse } from './native.ts';
 import { isOpenCodeComposerEmpty, OrcaRuntimeAdapter } from './adapter.ts';
 import { readOrcaTerminal } from './compat.ts';
 import { hasExecutorStartupBanner } from '../lib/worker-smoke-bounded-create.ts';
@@ -101,6 +101,27 @@ describe('Orca async transport envelope classification', () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe('Orca terminal-show metadata', () => {
+  it('preserves an absent command instead of inferring it from other fields', () => {
+    const response = parseOrcaJsonOutput<{
+      terminal?: { handle: string; worktreeId?: string; worktreePath?: string; agentIdentity?: string; command?: string };
+    }>(JSON.stringify({
+      ok: true,
+      result: {
+        terminal: {
+          handle: 'term-exact',
+          worktreeId: 'repo::/tmp/exact',
+          worktreePath: '/tmp/exact',
+          agentIdentity: 'opencode',
+        },
+      },
+    }), 'terminal_show');
+
+    expect(response.ok).toBe(true);
+    expect(response.result?.terminal?.command).toBeUndefined();
   });
 });
 
@@ -285,6 +306,127 @@ describe('OpenCode HTTP control plane', () => {
       ...(now ? { now } : {}),
     });
   }
+
+  it('classifies exact terminal-show command metadata before any URL-dependent control lookup', () => {
+    const terminal = {
+      handle: 'term-family-opencode',
+      incarnationId: 'generation-family-opencode',
+      worktreePath: process.cwd(),
+      title: 'opencode',
+      command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture',
+      status: 'running' as const,
+    };
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse =>
+      args[0] === 'terminal' && args[1] === 'show'
+        ? { ok: true, result: { terminal } }
+        : { ok: false, error: { code: 'unexpected_operation', message: args.join(' ') } });
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+
+    expect(adapter.observeComposerFamily?.({
+      runtime: 'orca',
+      id: terminal.handle,
+      generation: terminal.incarnationId,
+    })).toEqual({
+      status: 'known',
+      family: 'opencode',
+      command: terminal.command,
+      provenance: 'orca-terminal-show',
+    });
+    expect(adapter.composerControl?.({
+      runtime: 'orca',
+      id: terminal.handle,
+      generation: terminal.incarnationId,
+    })).toBeUndefined();
+  });
+
+  it('leaves a missing terminal command unbound and keeps ambiguous evidence closed', () => {
+    const terminal = {
+      handle: 'term-family-unbound',
+      incarnationId: 'generation-family-current',
+      worktreePath: process.cwd(),
+      title: 'family-unbound',
+      status: 'running' as const,
+    };
+    const missingCommand = new OrcaTaskRuntimeAdapter({
+      runJson: vi.fn((args: readonly string[]): OrcaJsonResponse =>
+        args[0] === 'terminal' && args[1] === 'show'
+          ? { ok: true, result: { terminal } }
+          : { ok: false, error: { code: 'unexpected_operation', message: args.join(' ') } }) as never,
+    });
+    expect(missingCommand.observeComposerFamily?.({
+      runtime: 'orca',
+      id: terminal.handle,
+      generation: terminal.incarnationId,
+    })).toEqual({
+      status: 'unbound',
+      reason: 'runtime_composer_command_unbound',
+      provenance: 'orca-terminal-show',
+    });
+
+    const ambiguousTerminal = { ...terminal, command: 'wrapper-opencode' };
+    const ambiguous = new OrcaTaskRuntimeAdapter({
+      runJson: vi.fn((args: readonly string[]): OrcaJsonResponse =>
+        args[0] === 'terminal' && args[1] === 'show'
+          ? { ok: true, result: { terminal: ambiguousTerminal } }
+          : { ok: false, error: { code: 'unexpected_operation', message: args.join(' ') } }) as never,
+    });
+    expect(ambiguous.observeComposerFamily?.({
+      runtime: 'orca',
+      id: terminal.handle,
+      generation: terminal.incarnationId,
+    })).toMatchObject({
+      status: 'unbound',
+      reason: 'runtime_composer_family_ambiguous',
+      provenance: 'orca-terminal-show',
+    });
+  });
+
+  it('rejects stale terminal-show generation evidence', () => {
+    const staleTerminal = {
+      handle: 'term-family-stale',
+      incarnationId: 'generation-family-current',
+      worktreePath: process.cwd(),
+      title: 'family-stale',
+      command: 'opencode --agent pack-opk-fixture',
+      status: 'running' as const,
+    };
+    const stale = new OrcaTaskRuntimeAdapter({
+      runJson: vi.fn((): OrcaJsonResponse => ({ ok: true, result: { terminal: staleTerminal } })) as never,
+    });
+    expect(stale.observeComposerFamily?.({
+      runtime: 'orca',
+      id: staleTerminal.handle,
+      generation: 'generation-family-old',
+    })).toEqual({
+      status: 'unbound',
+      reason: 'worker_generation_not_found',
+      provenance: 'orca-terminal-show',
+    });
+  });
+
+  it('classifies trustworthy non-OpenCode terminal-show command metadata for Cursor routing', () => {
+    const terminal = {
+      handle: 'term-family-cursor',
+      incarnationId: 'generation-family-cursor',
+      worktreePath: process.cwd(),
+      title: 'cursor',
+      command: 'cursor-agent --resume fixture',
+      status: 'running' as const,
+    };
+    const adapter = new OrcaTaskRuntimeAdapter({
+      runJson: vi.fn((): OrcaJsonResponse => ({ ok: true, result: { terminal } })) as never,
+    });
+    expect(adapter.observeComposerFamily?.({
+      runtime: 'orca',
+      id: terminal.handle,
+      generation: terminal.incarnationId,
+    })).toEqual({
+      status: 'known',
+      family: 'non-opencode',
+      command: terminal.command,
+      provenance: 'orca-terminal-show',
+    });
+  });
 
   it('uses health and visible TUI append/submit for an exact spawned OpenCode worker', () => {
     const requests: Array<{ url: string; method: 'GET' | 'POST'; body?: string; timeoutMs: number }> = [];
@@ -479,7 +621,7 @@ describe('OpenCode HTTP control plane', () => {
     ]);
   });
 
-  it('recovers OpenCode TUI control from terminal metadata on a fresh adapter', () => {
+  it('does not recover OpenCode control from terminal command metadata on a fresh adapter', () => {
     const requests: string[] = [];
     const first = makeAdapter((input) => {
       requests.push(input.url);
@@ -497,10 +639,8 @@ describe('OpenCode HTTP control plane', () => {
       requests.push(input.url);
       return { status: 200, body: 'true' };
     });
-    const control = second.composerControl?.(spawned.value.identity);
-    expect(control?.kind).toBe('opencode-http');
-    expect(control?.dispatch({ worker: spawned.value.identity, action: 'submit-prompt', text: 'fresh adapter' })).toMatchObject({ status: 'dispatched' });
-    expect(requests.slice(-2)).toEqual(['http://127.0.0.1:18891/tui/append-prompt', 'http://127.0.0.1:18891/tui/submit-prompt']);
+    expect(second.composerControl?.(spawned.value.identity)).toBeUndefined();
+    expect(requests).toEqual([]);
   });
 
   it('bounds health HTTP timeout by the remaining health deadline', () => {
@@ -1749,6 +1889,7 @@ describe('Issue #1587 accepted terminal-send evidence', () => {
               worktreePath: '/tmp/worktree-1587',
               title: 'busy-agent',
               status: 'running',
+              command: 'cursor-agent --resume fixture',
             },
           },
         };

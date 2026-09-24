@@ -250,10 +250,20 @@ export interface SchedulerRegistryChild {
   script: 'pr2-foundation/scheduler.ts';
   sideEffecting: true;
   cadenceSeconds: number;
+  /** Present on the live supervisor registry; legacy cutover fixtures may omit it. */
+  stallGraceMultiplier?: number;
 }
 
 export interface SchedulerRegistry {
   schemaVersion: 2;
   requiredChildIds: ['pr2-scheduler'];
   children: [SchedulerRegistryChild];
+}
+
+export interface DeadlineBoundSchedulerRegistryChild extends SchedulerRegistryChild {
+  stallGraceMultiplier: number;
+}
+
+export interface DeadlineBoundSchedulerRegistry extends Omit<SchedulerRegistry, 'children'> {
+  children: [DeadlineBoundSchedulerRegistryChild];
 }
