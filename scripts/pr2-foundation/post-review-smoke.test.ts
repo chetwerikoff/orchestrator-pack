@@ -1,7 +1,7 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -27,7 +27,11 @@ import {
   reconcilePostReviewSmoke,
   type PostReviewSmokeDependencies,
 } from './post-review-smoke.ts';
-import { observeDetachedSmokeAttempt } from '../worker-smoke-run.ts';
+import {
+  observeDetachedSmokeAttempt,
+  startDetachedSmokeAttempt,
+  type CliOptions,
+} from '../worker-smoke-run.ts';
 import {
   createSmokeLifecycleReservation,
   markSmokeCreateInProgress,
@@ -358,6 +362,48 @@ describe('Issue #1418 post-review smoke reconciliation', () => {
       reason: 'post_review_smoke_detached_active',
     });
     expect(startDetachedAttempt).not.toHaveBeenCalled();
+  });
+
+  it('does not leave a census-poisoning run directory when detached bootstrap dies before lifecycle', async () => {
+    const fixture = rootFixture();
+    const workspacePath = path.join(fixture.root, 'worker-detached-bootstrap-failure');
+    mkdirSync(workspacePath, { recursive: true });
+    const missingIssueBody = path.join(workspacePath, 'missing-issue-body.md');
+    const smokeOptions: CliOptions = {
+      command: 'run',
+      issueNumber: ISSUE,
+      prNumber: PR,
+      headSha: HEAD,
+      issueBodyFile: missingIssueBody,
+      smokeComplexity: 'complex',
+      smokeActor: 'independent',
+      repoRoot: workspacePath,
+      cwd: workspacePath,
+      dryRun: false,
+      json: true,
+      reviewId: '',
+      reviewHeadSha: '',
+    };
+
+    const started = await startDetachedSmokeAttempt(smokeOptions);
+
+    expect(started).toMatchObject({
+      ok: false,
+      reason: 'detached_smoke_owner_exited_before_lifecycle',
+    });
+    expect(started.runId).toBeTruthy();
+    expect(existsSync(path.join(
+      workspacePath,
+      '.orca-worker-smoke',
+      'runs',
+      started.runId!,
+    ))).toBe(false);
+    expect(observeDetachedSmokeAttempt({
+      cwd: workspacePath,
+      issueNumber: ISSUE,
+      prNumber: PR,
+      headSha: HEAD,
+    })).toEqual({ kind: 'absent' });
   });
 
   it('routes a dead nonterminal detached owner back through detached start/recovery', async () => {

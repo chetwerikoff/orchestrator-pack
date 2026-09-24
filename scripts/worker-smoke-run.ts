@@ -2416,12 +2416,16 @@ async function startDetachedSmokeOwner(
   if (!detached.ok || !/^\d+$/u.test(detached.stdout.trim())) {
     return { ok: false, runId, reason: 'worker_smoke_detach_spawn_failed' };
   }
+  const ownerPid = Number(detached.stdout.trim());
 
   const deadline = Date.now() + SMOKE_CREATE_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const lifecycle = readSmokeLifecycleRegistry(artifactDir);
     // Directory existence alone is not a live attempt; require its exact readable lifecycle.
     if (!lifecycle || lifecycle.runId !== runId) {
+      if (!processIsAlive(ownerPid)) {
+        return { ok: false, runId, reason: 'detached_smoke_owner_exited_before_lifecycle' };
+      }
       await sleepAsync(SMOKE_LIFECYCLE_POLL_MS);
       continue;
     }
