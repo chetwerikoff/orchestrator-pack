@@ -34,7 +34,7 @@ import {
   type VerifiedRelayEvidenceV1,
   resolveCanonicalReviewDirectory,
 } from './stage-completeness-core.ts';
-import { canonicalStagePlan, stagesForPhase } from './create-issue-stage-topology.ts';
+import { canonicalPredecessorStage, canonicalStagePlan, stagesForPhase } from './create-issue-stage-topology.ts';
 import { evaluateStageCredentialingSettlement } from './create-issue-stage-lifecycle-acceptance.ts';
 import { readEvidenceWaiverProducerEvidence } from './create-issue-stage-record-receipt.ts';
 import { extractMarker, resolveRecoveredInvalidPublicActorPoisonWitness } from './create-issue-stage-record-marker.ts';
@@ -51,9 +51,25 @@ import {
   sameGithubPrincipal,
   selectPrincipalOwnedCanonicalArtifact,
 } from './create-issue-github-artifact-authority.ts';
+import {
+  AUTHOR_DISPOSITIONS_SCHEMA,
+  DEFECT_DISPOSITION_VALUES,
+  REMEDY_DISPOSITION_VALUES,
+  authorDispositionDiagnosticFromFailure,
+  authorDispositionDiagnosticsText,
+  locateGovernedAuthorDispositionBlock as locateAuthorDispositionBlock,
+  parseGovernedAuthorDispositionText,
+  renderAuthorDispositionPromptFragment,
+  type AuthorDispositionDiagnostic,
+} from './create-issue-author-dispositions-schema.ts';
+
+export {
+  AUTHOR_DISPOSITIONS_SCHEMA,
+  DEFECT_DISPOSITION_VALUES,
+  REMEDY_DISPOSITION_VALUES,
+} from './create-issue-author-dispositions-schema.ts';
 
 export const STAGE_EVIDENCE_SCHEMA = 'create-issue-stage-evidence/v1' as const;
-export const AUTHOR_DISPOSITIONS_SCHEMA = 'create-issue-author-dispositions/v1' as const;
 export const ARTIFACT_MANIFEST_SCHEMA = 'create-issue-acceptance-artifacts/v1' as const;
 export const TURN_RESULT_SCHEMA = 'turn-result/v1' as const;
 export const AUTHORITATIVE_GITHUB_ARTIFACT_BASIS = 'authoritative-github-artifact' as const;
@@ -89,17 +105,6 @@ export const ACCEPTANCE_ARTIFACT_OUTPUT_NAMES = [
   'finding-disposition-ledger.json',
   'review-episode-inventory.json',
   'acceptance-artifacts.json',
-] as const;
-
-export const DEFECT_DISPOSITION_VALUES = [
-  'addressed',
-  'rejected-as-false',
-  'unresolved',
-] as const;
-export const REMEDY_DISPOSITION_VALUES = [
-  'accepted',
-  'replaced-by-cheaper-sufficient',
-  'rejected-as-overengineering',
 ] as const;
 
 export type AcceptanceArtifactTemporaryClassification =
@@ -207,6 +212,8 @@ export interface AcceptanceArtifactResult {
   errors: string[];
   reviewEpisodeId?: string;
   temporary?: AcceptanceArtifactTemporaryClassification;
+  authorDiagnostics?: AuthorDispositionDiagnostic[];
+  authorSchemaFragment?: string;
 }
 
 export interface AcceptanceArtifactStatus {
@@ -245,6 +252,47 @@ function optionalString(value: unknown): string | undefined {
 
 function reviewTier(value: unknown): ReviewTier | null {
   return value === 'T1' || value === 'T2' || value === 'T3' ? value : null;
+}
+
+function canonicalTerminalPredecessor(
+  intake: TierIntakeAuthorityV1,
+  errors?: string[],
+): ReviewStage | null {
+  const tier = reviewTier(intake.priorTier);
+  if (!tier) {
+    errors?.push('tier-intake priorTier is invalid for canonical predecessor derivation');
+    return null;
+  }
+  try {
+    return canonicalPredecessorStage(tier, 'architectural', {
+      competitiveDecision: intake.competitiveDecision === 'required' || intake.competitiveDecision === 'skipped'
+        ? intake.competitiveDecision
+        : undefined,
+      competitiveRationale: typeof intake.competitiveRationale === 'string'
+        ? intake.competitiveRationale
+        : undefined,
+    });
+  } catch (error) {
+    errors?.push(
+      'canonical predecessor derivation failed: '
+      + (error instanceof Error ? error.message : String(error)),
+    );
+    return null;
+  }
+}
+
+function authorBindingPredecessor(
+  intake: TierIntakeAuthorityV1,
+  stageInputs: readonly { path: string; value: JsonRecord }[],
+  phase: 'pre-lens' | 'post-lens' | 'final-acceptance',
+  errors: string[],
+): ReviewStage | null {
+  // Before a terminal author-adjudication consumer exists, the binding is the
+  // actually settled lifecycle predecessor. With no stage evidence there is no
+  // predecessor at all and lifecycle zero-state remains valid.
+  if (stageInputs.length === 0) return null;
+  if (!producerConsumesAuthorAdjudication(phase)) return latestLifecycleStage(stageInputs);
+  return canonicalTerminalPredecessor(intake, errors);
 }
 
 function reviewStage(value: unknown): ReviewStage | null {
@@ -1220,6 +1268,7 @@ export interface ZeroSendTerminalObservation {
   sourceRevision: string;
   stage: string;
   attemptOrdinal: 1;
+  retryClass: ReconciliationRetryClass;
   policy: ZeroSendCausePolicy;
   invocationId?: string;
   reviewerSlot?: string;
@@ -1266,9 +1315,8 @@ function deterministicZeroSendCode(state: string, cause: string): string | null 
 }
 
 function transientZeroSendCode(state: string, cause: string): string | null {
-  if (state === 'rate_limit' || cause === 'rate_limit') return 'rate_limit';
+  if (state === 'rate_limit' || cause === 'rate_limit') return null;
   if (state === 'quota' || cause === 'quota') return 'quota';
-  if (state === 'chrome_not_running' || cause === 'chrome_not_running') return 'chrome_not_running';
   if (state === 'composer-refusal' || cause.includes('composer') || cause === 'blocking_page_overlay') return 'composer-refusal';
   if (state === 'fill-timeout' || cause.includes('fill')) return 'fill-timeout';
   return null;
@@ -1353,6 +1401,7 @@ export function readEvidenceZeroSendTerminal(evidencePath: string): ZeroSendTerm
   const stage = optionalString(parsed.stage);
   if (!stageAttemptId || !sourceRevision || !stage) return null;
   let conflict: ZeroSendTerminalObservation | null = null;
+  let retryable: ZeroSendTerminalObservation | null = null;
   for (const invocation of parsed.invocations) {
     if (!isRecord(invocation)) continue;
     if (invocation.attemptOrdinal === 2) continue;
@@ -1360,22 +1409,51 @@ export function readEvidenceZeroSendTerminal(evidencePath: string): ZeroSendTerm
     const envelope = resolveInvocationEnvelope(evidencePath, invocation);
     if (!envelope) continue;
     const policy = classifyZeroSendCausePolicy(envelope);
-    if (!policy || policy.class === 'transient') continue;
+    if (!policy) continue;
+    const transport = classifyReconciliationTransport(envelope, 1);
+    if (!transport) continue;
+    const observedRetryClass = retryClass(invocation.retryClass);
+    const reviewerSlot = optionalString(invocation.reviewerSlot);
+    const retryConsumed = reviewerSlot !== undefined
+      && parsed.invocations.some((candidate) => isRecord(candidate)
+        && optionalString(candidate.reviewerSlot) === reviewerSlot
+        && candidate.attemptOrdinal === 2);
+    if (policy.class === 'transient'
+      && (observedRetryClass !== 'eligible-zero-send'
+        || transport.retryClass !== 'eligible-zero-send'
+        || retryConsumed
+        || !optionalString(invocation.invocationId)
+        || optionalString(envelope.observed_invocation_id) !== optionalString(invocation.invocationId)
+        || optionalString(invocation.stageAttemptId) !== stageAttemptId
+        || optionalString(invocation.sourceRevision)?.toLowerCase() !== sourceRevision.toLowerCase()
+        || optionalString(invocation.stage) !== stage
+        || invocation.attemptOrdinal !== 1
+        || invocation.retryAttempt !== false
+        || !reviewerSlot
+        || !/^\d{2}$/.test(reviewerSlot)
+        || Number(invocation.reviewerOrdinal) !== Number(reviewerSlot))) continue;
+    const effectiveRetryClass = observedRetryClass ?? transport.retryClass;
+    if (!effectiveRetryClass) continue;
     const diagnostics = zeroSendEnvelopeDiagnostics(envelope);
     const observation: ZeroSendTerminalObservation = {
       stageAttemptId,
       sourceRevision,
       stage,
       attemptOrdinal: 1,
+      retryClass: effectiveRetryClass,
       policy,
       ...(optionalString(invocation.invocationId) ? { invocationId: optionalString(invocation.invocationId) } : {}),
-      ...(optionalString(invocation.reviewerSlot) ? { reviewerSlot: optionalString(invocation.reviewerSlot) } : {}),
+      ...(reviewerSlot ? { reviewerSlot } : {}),
       ...diagnostics,
     };
     if (policy.class === 'deterministic-input') return observation;
-    if (!conflict) conflict = observation;
+    if (policy.class === 'state-conflict') {
+      if (!conflict) conflict = observation;
+      continue;
+    }
+    if (!retryable) retryable = observation;
   }
-  return conflict;
+  return conflict ?? retryable;
 }
 
 export function readCanonicalZeroSendTerminal(input: {
@@ -1460,11 +1538,15 @@ export function classifyReconciliationTransport(
   } else {
     terminalClassification = 'incident';
   }
-  // A child-witnessed sendCount 0 proves nothing reached the reviewer, whatever the
-  // pre-send cause; the two-attempt budget bounds the single retry.
+  const ownerAuthorizedRetryableZeroSend = zeroSendPolicy?.class === 'transient'
+    && (
+      zeroSendPolicy.code === 'quota'
+      || zeroSendPolicy.code === 'composer-refusal'
+      || zeroSendPolicy.code === 'fill-timeout'
+    );
   const retryableZeroSend = attemptOrdinal === 1
     && sendCount === 0
-    && terminalClassification !== 'complete';
+    && ownerAuthorizedRetryableZeroSend;
   return {
     terminalClassification,
     sendCount,
@@ -1480,6 +1562,7 @@ function hydrateReconciliationTransport(
   evidencePath: string,
   invocation: JsonRecord,
   index: number,
+  expectedBinding: { stageAttemptId: string; sourceRevision: string; stage: string },
   errors: string[],
 ): JsonRecord | null {
   const existingTerminalClassification = terminalClassification(invocation.terminalClassification);
@@ -1488,17 +1571,9 @@ function hydrateReconciliationTransport(
     && existingTerminalClassification !== null
     && (invocation.sendCount === 0 || invocation.sendCount === 1)
     && existingRetryClass !== null;
-  const existingNeedsObservedZeroSendIdentity = completeExisting
-    && invocation.sendCount === 0
-    && existingTerminalClassification === 'incident'
-    && existingRetryClass === 'retry-forbidden';
   const attemptOrdinal = invocation.attemptOrdinal === 2 ? 2 : 1;
-  const storedEligibleZeroSendOnSecondAttempt = completeExisting
-    && attemptOrdinal === 2
-    && invocation.sendCount === 0
-    && existingRetryClass === 'eligible-zero-send';
-  const reuseStoredTransport = completeExisting && !storedEligibleZeroSendOnSecondAttempt;
-  if (reuseStoredTransport && !existingNeedsObservedZeroSendIdentity) return { ...invocation };
+  const reuseStoredTransport = completeExisting && invocation.sendCount === 1;
+  if (reuseStoredTransport) return { ...invocation };
 
   const terminalEnvelopePath = optionalString(invocation.terminalEnvelopePath);
   if (!terminalEnvelopePath) {
@@ -1525,26 +1600,39 @@ function hydrateReconciliationTransport(
     && (
       existingTerminalClassification !== transport.terminalClassification
       || invocation.sendCount !== transport.sendCount
+      || existingRetryClass !== transport.retryClass
     )
   ) {
     errors.push('stage evidence invocation[' + index + '] terminal transport disagrees with its bound terminal envelope');
     return null;
   }
 
-  const needsObservedZeroSendIdentity = reuseStoredTransport
-    ? existingNeedsObservedZeroSendIdentity
-    : transport.sendCount === 0
-      && transport.terminalClassification === 'incident'
-      && transport.retryClass === 'retry-forbidden';
-  let observedTerminalResultIdentity: string | undefined;
-  if (needsObservedZeroSendIdentity) {
-    const admittedInvocationId = optionalString(invocation.invocationId);
-    const observedInvocationId = optionalString(observed.observed_invocation_id);
-    const observedIdentity = optionalString(observed.observed_turn_result_identity);
-    if (!admittedInvocationId || observedInvocationId !== admittedInvocationId) {
-      errors.push('stage evidence invocation[' + index + '] terminal envelope observed_invocation_id does not match admitted invocationId');
+  const admittedInvocationId = optionalString(invocation.invocationId);
+  const observedInvocationId = optionalString(observed.observed_invocation_id);
+  if (transport.sendCount === 0 && (!admittedInvocationId || observedInvocationId !== admittedInvocationId)) {
+    errors.push('stage evidence invocation[' + index + '] terminal envelope observed_invocation_id does not match admitted invocationId');
+    return null;
+  }
+  if (transport.retryClass === 'eligible-zero-send') {
+    const reviewerSlot = optionalString(invocation.reviewerSlot);
+    if (optionalString(invocation.stageAttemptId) !== expectedBinding.stageAttemptId
+      || optionalString(invocation.sourceRevision)?.toLowerCase() !== expectedBinding.sourceRevision.toLowerCase()
+      || optionalString(invocation.stage) !== expectedBinding.stage
+      || invocation.attemptOrdinal !== 1
+      || invocation.retryAttempt !== false
+      || !reviewerSlot
+      || !/^\d{2}$/.test(reviewerSlot)
+      || Number(invocation.reviewerOrdinal) !== Number(reviewerSlot)) {
+      errors.push('stage evidence invocation[' + index + '] retryable zero-send authority does not match stage evidence binding');
       return null;
     }
+  }
+  const needsObservedZeroSendIdentity = transport.sendCount === 0
+    && transport.terminalClassification === 'incident'
+    && transport.retryClass === 'retry-forbidden';
+  let observedTerminalResultIdentity: string | undefined;
+  if (needsObservedZeroSendIdentity) {
+    const observedIdentity = optionalString(observed.observed_turn_result_identity);
     if (!observedIdentity || !/^sha256:[0-9a-f]{64}:turn-result-v1$/.test(observedIdentity)) {
       errors.push('stage evidence invocation[' + index + '] terminal envelope lacks a valid observed turn-result identity');
       return null;
@@ -1559,11 +1647,9 @@ function hydrateReconciliationTransport(
   return {
     ...invocation,
     terminal: true,
-    ...(reuseStoredTransport ? {} : {
-      terminalClassification: transport.terminalClassification,
-      sendCount: transport.sendCount,
-      retryClass: transport.retryClass,
-    }),
+    terminalClassification: transport.terminalClassification,
+    sendCount: transport.sendCount,
+    retryClass: transport.retryClass,
     ...(observedTerminalResultIdentity ? { terminalResultIdentity: observedTerminalResultIdentity } : {}),
   };
 }
@@ -2056,7 +2142,7 @@ export function reconcileCreateIssueStage(
     return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: ['stage evidence.invocations is missing'] };
   }
   const hydrated = raw.invocations.map((value, index) => (
-    isRecord(value) ? hydrateReconciliationTransport(options.stageEvidencePath, value, index, errors) : null
+    isRecord(value) ? hydrateReconciliationTransport(options.stageEvidencePath, value, index, { stageAttemptId, sourceRevision, stage }, errors) : null
   ));
   if (hydrated.some((value) => value === null)) {
     if (raw.invocations.some((value) => !isRecord(value))) errors.push('stage evidence invocations must all be objects');
@@ -2069,6 +2155,33 @@ export function reconcileCreateIssueStage(
   const initialRequiredSlots = routing ? routing.initiallyActivatedSlots : requiredFinalSlots(raw);
   if (initialRequiredSlots.length === 0) {
     return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: ['stage evidence has no required reviewer slots'] };
+  }
+
+  const retryAuthorityEvidence = structuredClone(rawValue) as JsonRecord;
+  const retryAuthorityInvocations = retryAuthorityEvidence.invocations as JsonRecord[];
+  let retryAuthorityChanged = false;
+  for (const [index, invocation] of invocations.entries()) {
+    if (invocation.terminal !== true || invocation.sendCount !== 0 || invocation.retryClass !== 'eligible-zero-send') continue;
+    const original = retryAuthorityInvocations[index]!;
+    if (original.terminal === true
+      && original.terminalClassification === invocation.terminalClassification
+      && original.sendCount === 0
+      && original.retryClass === 'eligible-zero-send') continue;
+    retryAuthorityInvocations[index] = {
+      ...original,
+      terminal: true,
+      terminalClassification: invocation.terminalClassification,
+      sendCount: 0,
+      retryClass: 'eligible-zero-send',
+    };
+    retryAuthorityChanged = true;
+  }
+  if (retryAuthorityChanged) {
+    const retryAuthorityText = JSON.stringify(retryAuthorityEvidence, null, 2) + '\n';
+    if (!atomicReplaceStageEvidence(options.stageEvidencePath, originalText, retryAuthorityEvidence, errors)) {
+      return { ok: false, stageAttemptId, stage, sourceRevision, capturePaths: [], errors: [...new Set(errors)] };
+    }
+    originalText = retryAuthorityText;
   }
 
   const transport = options.artifactSourceTransport ?? defaultGhTransport();
@@ -3236,47 +3349,69 @@ function latestAuthorReplyPath(reviewDir: string): string | null {
 export function locateGovernedAuthorDispositionBlock(
   text: string,
 ): { body: string } | { error: 'multiple' | 'none' } {
-  // innerText harvest cannot carry the literal fence characters, so a whole-line
-  // schema label with or without a ``` opener both count as a block start.
-  const startPattern = /^(?:```)?create-issue-author-dispositions\/v1\s*$/gm;
-  const starts = [...text.matchAll(startPattern)];
-  if (starts.length !== 1) {
-    return { error: starts.length === 0 ? 'none' : 'multiple' };
-  }
-  const start = starts[0]!;
-  let offset = start.index! + start[0].length;
-  if (text.startsWith('\r\n', offset)) offset += 2;
-  else if (text.startsWith('\n', offset) || text.startsWith('\r', offset)) offset += 1;
-  const rest = text.slice(offset);
-  const close = /^```[ \t]*$/m.exec(rest);
-  return { body: (close ? rest.slice(0, close.index) : rest).trim() };
+  return locateAuthorDispositionBlock(text);
 }
 
-function parseGovernedAuthorDispositionOutput(path: string, errors: string[]): JsonRecord | null {
+export interface GovernedAuthorDispositionInspection {
+  path: string;
+  value: JsonRecord | null;
+  diagnostics: AuthorDispositionDiagnostic[];
+  schemaFragment: string;
+}
+
+export function inspectGovernedAuthorDispositionReply(path: string): GovernedAuthorDispositionInspection {
   let text: string;
-  try { text = readFileSync(path, 'utf8'); } catch {
-    errors.push('governed author output is unreadable: ' + path + '; authority=author-owned');
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    return {
+      path,
+      value: null,
+      diagnostics: [{
+        reason: 'invalid_author_field',
+        ownership: 'author-owned',
+        field: '$',
+        message: 'governed author output is unreadable: ' + path,
+      }],
+      schemaFragment: renderAuthorDispositionPromptFragment(),
+    };
+  }
+  const parsed = parseGovernedAuthorDispositionText(text);
+  return {
+    path,
+    value: parsed.diagnostics.length === 0 && isRecord(parsed.value) ? parsed.value : null,
+    diagnostics: parsed.diagnostics,
+    schemaFragment: parsed.schemaFragment,
+  };
+}
+
+export function latestGovernedAuthorReplyPath(reviewDir: string): string | null {
+  return latestAuthorReplyPath(reviewDir);
+}
+
+export function inspectLatestGovernedAuthorDisposition(
+  reviewDir: string,
+): GovernedAuthorDispositionInspection | null {
+  const path = latestAuthorReplyPath(reviewDir);
+  return path ? inspectGovernedAuthorDispositionReply(path) : null;
+}
+
+function parseGovernedAuthorDispositionOutput(
+  path: string,
+  errors: string[],
+  authorDiagnostics?: AuthorDispositionDiagnostic[],
+): JsonRecord | null {
+  const inspection = inspectGovernedAuthorDispositionReply(path);
+  if (inspection.diagnostics.length > 0) {
+    authorDiagnostics?.push(...inspection.diagnostics);
+    errors.push(
+      'governed author disposition rejected: '
+      + authorDispositionDiagnosticsText(inspection.diagnostics)
+      + '; authority=author-owned',
+    );
     return null;
   }
-  const located = locateGovernedAuthorDispositionBlock(text);
-  if ('error' in located) {
-    errors.push('governed author output must contain exactly one create-issue-author-dispositions/v1 block: ' + path + '; authority=author-owned');
-    return null;
-  }
-  let parsed: unknown;
-  try { parsed = JSON.parse(located.body) as unknown; } catch {
-    errors.push('governed author disposition block is malformed JSON: ' + path + '; authority=author-owned');
-    return null;
-  }
-  if (!isRecord(parsed) || parsed.schema !== AUTHOR_DISPOSITIONS_SCHEMA || !Array.isArray(parsed.findings) || !isRecord(parsed.m4) || !Array.isArray(parsed.m4.inventory)) {
-    errors.push('governed author disposition payload is incomplete: ' + path + '; authority=author-owned');
-    return null;
-  }
-  if (parsed.findings.some((finding) => !isRecord(finding)) || parsed.m4.inventory.some((item) => !isRecord(item))) {
-    errors.push('governed author disposition payload contains malformed finding/M4 rows: ' + path + '; authority=author-owned');
-    return null;
-  }
-  return parsed;
+  return inspection.value;
 }
 
 interface PreparedAuthorDispositions {
@@ -3345,7 +3480,13 @@ function authorReplyDispositionForStage(
   const errors: string[] = [];
   const parsed = parseGovernedAuthorDispositionOutput(authorReplyPath, errors);
   if (!parsed) return 'malformed';
-  if (sourceRevision === null || parsed.sourceRevision !== sourceRevision || parsed.predecessorStage !== predecessorStage) return 'historical';
+  if (sourceRevision === null || parsed.sourceRevision !== sourceRevision) return 'historical';
+  // predecessorStage is lifecycle-owned now. Legacy replies may still carry it;
+  // when present it remains useful only to recognize that the reply belongs to
+  // an earlier settled stage, never as current authority.
+  if (parsed.predecessorStage !== undefined && parsed.predecessorStage !== predecessorStage) {
+    return 'historical';
+  }
   return 'current';
 }
 
@@ -3358,6 +3499,7 @@ function prepareAuthorDispositionsFromGovernedOutput(input: {
   draft: string;
   allowZeroState: boolean;
   errors: string[];
+  authorDiagnostics: AuthorDispositionDiagnostic[];
 }): PreparedAuthorDispositions | null {
   const authorReplyPath = latestAuthorReplyPath(input.reviewDir);
   let payload: JsonRecord;
@@ -3371,23 +3513,22 @@ function prepareAuthorDispositionsFromGovernedOutput(input: {
     payload = {
       schema: AUTHOR_DISPOSITIONS_SCHEMA,
       sourceRevision: input.sourceRevision,
-      predecessorStage: input.predecessorStage,
       findings: [],
       m4: { inventory: [] },
     };
   } else {
     producer = 'governed-author-output/v1';
-    const parsed = parseGovernedAuthorDispositionOutput(authorReplyPath, input.errors);
+    const parsed = parseGovernedAuthorDispositionOutput(
+      authorReplyPath,
+      input.errors,
+      input.authorDiagnostics,
+    );
     if (!parsed) return null;
     payload = parsed;
   }
 
   if (payload.sourceRevision !== input.sourceRevision) {
     input.errors.push('author dispositions sourceRevision disagrees with the stable GitHub snapshot; field=sourceRevision authority=GitHub-witnessed');
-    return null;
-  }
-  if (payload.predecessorStage !== input.predecessorStage) {
-    input.errors.push('author dispositions predecessorStage disagrees with lifecycle stage evidence; field=predecessorStage authority=lifecycle-tool-witnessed');
     return null;
   }
   const m4 = payload.m4 as JsonRecord;
@@ -3523,6 +3664,8 @@ export function produceAcceptanceArtifacts(
     : 'stage-time';
 
   const createdInputPaths = new Set<string>();
+  const authorDiagnostics: AuthorDispositionDiagnostic[] = [];
+  const authorSchemaFragment = renderAuthorDispositionPromptFragment();
   let issueSnapshot: AcceptanceIssueSnapshot | null = null;
   let preparedAuthor: PreparedAuthorDispositions | null = null;
   let authorAdjudicationDeferred = false;
@@ -3538,8 +3681,13 @@ export function produceAcceptanceArtifacts(
     );
   }
   if (issueSnapshot) {
-    const predecessorStage = latestLifecycleStage(validStageInputs);
     const artifactPhase = options.phase ?? 'final-acceptance';
+    const predecessorStage = authorBindingPredecessor(
+      intake,
+      validStageInputs,
+      artifactPhase,
+      errors,
+    );
     const admission = authorDispositionAdmission({
       consumesAuthorAdjudication: producerConsumesAuthorAdjudication(artifactPhase),
       predecessorPresent: predecessorStage !== null,
@@ -3557,6 +3705,7 @@ export function produceAcceptanceArtifacts(
         draft: issueSnapshot.body,
         allowZeroState: admission === 'lifecycle-zero-state',
         errors,
+        authorDiagnostics,
       });
     }
   }
@@ -3654,6 +3803,7 @@ export function produceAcceptanceArtifacts(
       errors: [...new Set(errors)],
       reviewEpisodeId: episodeId,
       ...(temporary ? { temporary } : {}),
+      ...(authorDiagnostics.length > 0 ? { authorDiagnostics, authorSchemaFragment } : {}),
     };
   }
 
@@ -3770,6 +3920,16 @@ export function produceAcceptanceArtifacts(
     }
   }
   if (errors.length > 0 || !tier || !issueSnapshot || (!authorAdjudicationDeferred && (!ledger || !preparedAuthor))) {
+    for (const error of errors) {
+      const derived = authorDispositionDiagnosticFromFailure(error);
+      if (derived && !authorDiagnostics.some((item) => (
+        item.reason === derived.reason
+        && item.field === derived.field
+        && item.message === derived.message
+      ))) {
+        authorDiagnostics.push(derived);
+      }
+    }
     rollbackCreatedInputs(createdInputPaths);
     const temporary = temporaryClassification(errors);
     return {
@@ -3780,6 +3940,7 @@ export function produceAcceptanceArtifacts(
       errors: [...new Set(errors)],
       reviewEpisodeId: episodeId,
       ...(temporary ? { temporary } : {}),
+      ...(authorDiagnostics.length > 0 ? { authorDiagnostics, authorSchemaFragment } : {}),
     };
   }
 

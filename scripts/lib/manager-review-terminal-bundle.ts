@@ -3,7 +3,13 @@ import { basename, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { defaultGhTransport, fetchIssueRevision } from './create-issue-stage-record-gh.ts';
 import type { GhTransport } from './create-issue-stage-record-types.ts';
-import { canonicalStagePlan, type ReviewTier } from './create-issue-stage-topology.ts';
+import { canonicalPredecessorStage, type ReviewTier } from './create-issue-stage-topology.ts';
+import {
+  AUTHOR_DISPOSITIONS_SCHEMA,
+  DEFECT_DISPOSITION_VALUES,
+  M4_DISPOSITION_VALUES,
+  REMEDY_DISPOSITION_VALUES,
+} from './create-issue-author-dispositions-schema.ts';
 import {
   deriveReviewEpisodeState,
   resolveCanonicalReviewDirectory,
@@ -18,9 +24,9 @@ import {
 
 export const MANAGER_REVIEW_TERMINAL_BUNDLE_SCHEMA = 'manager-review-terminal-input-bundle/v1' as const;
 
-const DEFECT_DISPOSITIONS = new Set(['addressed', 'rejected-as-false', 'unresolved']);
-const REMEDY_DISPOSITIONS = new Set(['accepted', 'replaced-by-cheaper-sufficient', 'rejected-as-overengineering']);
-const M4_DISPOSITIONS = new Set(['keep', 'simplify', 'defer', 'cut']);
+const DEFECT_DISPOSITIONS = new Set<string>(DEFECT_DISPOSITION_VALUES);
+const REMEDY_DISPOSITIONS = new Set<string>(REMEDY_DISPOSITION_VALUES);
+const M4_DISPOSITIONS = new Set<string>(M4_DISPOSITION_VALUES);
 const PROTECTED_TYPES = new Set(['security', 'scope-violation']);
 const REVISION_RE = /^r[0-9]{2,}$/;
 const SOURCE_REVISION_MARKER_RE = /<!--\s*source-revision:\s*(r[0-9]{2,})\s*-->/i;
@@ -231,9 +237,9 @@ function resolveTierAndPredecessor(
   if (priorTier !== 'T1' && priorTier !== 'T2' && priorTier !== 'T3') {
     throw new Error('terminal_bundle_tier_intake_invalid');
   }
-  let plan;
+  let expectedPredecessorStage: string | null;
   try {
-    plan = canonicalStagePlan(priorTier, {
+    expectedPredecessorStage = canonicalPredecessorStage(priorTier, 'architectural', {
       competitiveDecision: intake.competitiveDecision === 'required' || intake.competitiveDecision === 'skipped'
         ? intake.competitiveDecision
         : undefined,
@@ -244,9 +250,6 @@ function resolveTierAndPredecessor(
   } catch {
     throw new Error('terminal_bundle_tier_intake_invalid');
   }
-  const expectedPredecessorStage = plan.stages.length > 1
-    ? plan.stages[plan.stages.length - 2]!.stage
-    : null;
   if (predecessorStage !== expectedPredecessorStage) {
     throw new Error('terminal_bundle_predecessor_invalid');
   }
@@ -310,7 +313,7 @@ export function buildManagerReviewTerminalBundle(options: BuildManagerReviewTerm
   const reviewDir = resolve(options.reviewDir);
   const authorDispositionsPath = resolve(options.authorDispositionsPath ?? join(reviewDir, 'author-dispositions.json'));
   const author = readJson(authorDispositionsPath, 'terminal_bundle_author_dispositions_invalid');
-  if (author.schema !== 'create-issue-author-dispositions/v1'
+  if (author.schema !== AUTHOR_DISPOSITIONS_SCHEMA
     || (author.producer !== 'governed-author-output/v1' && author.producer !== 'lifecycle-zero-state/v1')) {
     throw new Error('terminal_bundle_author_dispositions_invalid');
   }

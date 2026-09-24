@@ -1,0 +1,90 @@
+```create-issue-author-dispositions/v1
+{
+"schema": "create-issue-author-dispositions/v1",
+"sourceRevision": "r02",
+"predecessorStage": "architectural",
+"findings": [
+{
+"id": "tier-underclassifies-review-authority-guarantee",
+"type": "spec",
+"occurrences": [
+"sha256:73a07da6eb54dddf36e7ed293ae0fb4777f61f7745c59940ede0f9c2ac750fe9:pass-01-architectural-review-01.capture.txt:1"
+],
+"defectDisposition": "rejected-as-false",
+"rejectReason": "docs/tiering.md makes post-capture over-tier observations advisory and requires any subsequent tier change to use a new Issue/task contract; this occurrence therefore cannot mutate the already-frozen T2 contract for #1958.",
+"remedyDisposition": "accepted"
+},
+{
+"id": "manual-ci-gate-pre-reconcile-side-effects",
+"type": "spec",
+"occurrences": [
+"sha256:946dcf3c592179457cbac2267581b37567f63cb49fd2d6f49d9dc7df96878ede:pass-01-architectural-review-02.capture.txt:1"
+],
+"defectDisposition": "addressed",
+"remedyDisposition": "accepted"
+},
+{
+"id": "tier-underclassified-review-authority",
+"type": "spec",
+"occurrences": [
+"sha256:8d54e569c4512d8d8c146cd7999b1cff8aaf306130a03c9b8219624672b2fdd5:pass-01-architectural-review-03.capture.txt:1"
+],
+"defectDisposition": "rejected-as-false",
+"rejectReason": "docs/tiering.md makes post-capture over-tier observations advisory and requires any subsequent tier change to use a new Issue/task contract; this occurrence therefore cannot mutate the already-frozen T2 contract for #1958.",
+"remedyDisposition": "accepted"
+},
+{
+"id": "manual-ci-refusal-reason-field-ambiguous",
+"type": "spec",
+"occurrences": [
+"sha256:8d54e569c4512d8d8c146cd7999b1cff8aaf306130a03c9b8219624672b2fdd5:pass-01-architectural-review-03.capture.txt:2"
+],
+"defectDisposition": "addressed",
+"remedyDisposition": "accepted"
+},
+{
+"id": "post-grace-nonpartial-negative-coverage",
+"type": "test",
+"occurrences": [
+"sha256:8d54e569c4512d8d8c146cd7999b1cff8aaf306130a03c9b8219624672b2fdd5:pass-01-architectural-review-03.capture.txt:3"
+],
+"defectDisposition": "addressed",
+"remedyDisposition": "accepted"
+},
+{
+"id": "advisory-post-capture-tier-note-cannot-block-frozen-t2",
+"type": "spec",
+"occurrences": [
+"sha256:35a6a8985c87c09061744742983e964731065788240be73a8dc5add21855e2c8:pass-02-architectural.capture.txt:1"
+],
+"defectDisposition": "rejected-as-false",
+"rejectReason": "docs/tiering.md makes post-capture over-tier observations advisory and requires any subsequent tier change to use a new Issue/task contract; this occurrence therefore cannot mutate or block the already-frozen T2 contract for #1958.",
+"remedyDisposition": "accepted"
+}
+],
+"m4": {
+"inventory": [
+{
+"mechanism": "post-capture-tier-reclassification-to-T3",
+"disposition": "cut"
+},
+{
+"mechanism": "pre-reconcile-exact-head-required-ci-gate",
+"disposition": "keep"
+},
+{
+"mechanism": "explicit-cli-runnerReason-required-ci-not-green-contract",
+"disposition": "keep"
+},
+{
+"mechanism": "expired-2-of-3-nonpartial-negative-regression",
+"disposition": "keep"
+},
+{
+"mechanism": "new-bypass-state-late-source-machinery",
+"disposition": "cut"
+}
+]
+}
+}
+```

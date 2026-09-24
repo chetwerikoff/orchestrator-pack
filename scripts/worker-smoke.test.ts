@@ -26,6 +26,7 @@ import {
   type WorkerSmokeCommentRecord,
   type WorkerSmokeTrustedTarget,
 } from './lib/worker-smoke-core.ts';
+import { publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath } from './lib/worker-assignment-store.ts';
 import {
   computeSmokeCompletionBodyDigest,
   WORKER_SMOKE_CAUSE_FAMILIES,
@@ -58,6 +59,7 @@ import {
   reviewIndependentRequiredCiContexts,
   resolveLiveSmokeExecutorProfile,
   resolveSmokeTarget,
+  runDelegatedReadiness,
   runGateCheck,
   runSmokeAttempt,
   resolveSmokeExecutorProfile,
@@ -2184,6 +2186,198 @@ async function runGateQuietly(
     output.mockRestore();
   }
 }
+describe('delegated readiness consumes the production post-smoke owner', () => {
+  async function runDelegatedReadinessForComments(
+    root: string,
+    issueBodyFile: string,
+    comments: readonly WorkerSmokeCommentRecord[],
+  ): Promise<{ code: number; result: { ok: boolean; readiness: { state: string; failedPredicates: string[] }; smokeEvidence: { state: string; headSha: string } } }> {
+    const assignmentFile = resolveWorkerAssignmentStorePath('orchestrator-pack', process.env);
+    const implementation = await publishCurrentWorkerAssignment({
+      file: assignmentFile, repository: REPOSITORY, issueNumber: 1343, taskId: 'task-delegated-integration',
+      kind: 'local', provider: 'orca', bindingKey: 'dispatch-implementation', role: 'worker',
+    });
+    if (!implementation.ok) throw new Error(implementation.reason);
+    const marker = {
+      prNumber: 2001, expectedHeadSha: HEAD_ONE,
+      predecessorAssignmentId: implementation.assignment.assignmentId,
+      predecessorGeneration: implementation.assignment.generation,
+    };
+    const published = await publishCurrentWorkerAssignment({
+      file: assignmentFile, repository: REPOSITORY, issueNumber: 1343, taskId: 'task-delegated-integration',
+      kind: 'local', provider: 'orca', bindingKey: 'dispatch-delegated-integration',
+      expectedCurrent: { assignmentId: implementation.assignment.assignmentId, generation: implementation.assignment.generation },
+      role: 'worker', delegatedIntegration: marker,
+    });
+    if (!published.ok) throw new Error(published.reason);
+    const issueBodyFileContents = readFileSync(issueBodyFile, 'utf8');
+    const smokeTarget: ResolvedSmokeTarget = {
+      ...resolvedTarget(issueBodyFileContents), prBody: 'Closes #1343', prOpen: true,
+      baseRef: 'main', expectedTargetRef: 'main', expectedTarget: true,
+    };
+    const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      const code = await runDelegatedReadiness({
+        ...gateOptions(root, issueBodyFile), command: 'delegated-readiness',
+      }, {
+        resolveTarget: () => smokeTarget, fetchCurrentHead: () => HEAD_ONE,
+        selectAdapter: async () => new DeterministicRuntimeAdapter(),
+        readiness: {
+          resolveCiGreen: () => true,
+          currentPackReviewStatusFact: () => ({ hasLegitimateReview: true, unresolvedBlockingFinding: false }),
+          fetchCurrentHead: () => HEAD_ONE,
+          fetchSmokeComments: () => [...comments],
+          listDirectReviews: async () => [], isAncestor: () => false,
+        },
+      });
+      const rendered = output.mock.calls.map((entry) => String(entry[0])).join('');
+      return {
+        code,
+        result: JSON.parse(rendered) as {
+          ok: boolean; readiness: { state: string; failedPredicates: string[] };
+          smokeEvidence: { state: string; headSha: string };
+        },
+      };
+    } finally {
+      output.mockRestore();
+    }
+  }
+  it('refuses the exact current integration assignment when exact-head smoke evidence is missing', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'delegated-readiness-smoke-'));
+    const issueBodyFile = join(root, 'issue.md');
+    writeFileSync(issueBodyFile, issueBody, 'utf8');
+    const previousBase = process.env.OPK_BASE_DIR;
+    process.env.OPK_BASE_DIR = root;
+    const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      const assignmentFile = resolveWorkerAssignmentStorePath('orchestrator-pack', process.env);
+      const implementation = await publishCurrentWorkerAssignment({
+        file: assignmentFile,
+        repository: REPOSITORY,
+        issueNumber: 1343,
+        taskId: 'task-delegated-integration',
+        kind: 'local',
+        provider: 'orca',
+        bindingKey: 'dispatch-implementation',
+        role: 'worker',
+      });
+      if (!implementation.ok) throw new Error(implementation.reason);
+      const marker = {
+        prNumber: 2001,
+        expectedHeadSha: HEAD_ONE,
+        predecessorAssignmentId: implementation.assignment.assignmentId,
+        predecessorGeneration: implementation.assignment.generation,
+      };
+      const published = await publishCurrentWorkerAssignment({
+        file: assignmentFile,
+        repository: REPOSITORY,
+        issueNumber: 1343,
+        taskId: 'task-delegated-integration',
+        kind: 'local',
+        provider: 'orca',
+        bindingKey: 'dispatch-delegated-integration',
+        expectedCurrent: {
+          assignmentId: implementation.assignment.assignmentId,
+          generation: implementation.assignment.generation,
+        },
+        role: 'worker',
+        delegatedIntegration: marker,
+      });
+      if (!published.ok) throw new Error(published.reason);
+      const smokeTarget: ResolvedSmokeTarget = {
+        ...resolvedTarget(issueBody),
+        prBody: 'Closes #1343',
+        prOpen: true,
+        baseRef: 'main',
+        expectedTargetRef: 'main',
+        expectedTarget: true,
+      };
+      const options = {
+        ...gateOptions(root, issueBodyFile),
+        command: 'delegated-readiness',
+      };
+      const code = await runDelegatedReadiness(options, {
+        resolveTarget: () => smokeTarget,
+        fetchCurrentHead: () => HEAD_ONE,
+        selectAdapter: async () => new DeterministicRuntimeAdapter(),
+        readiness: {
+          resolveCiGreen: () => true,
+          currentPackReviewStatusFact: () => ({ hasLegitimateReview: true, unresolvedBlockingFinding: false }),
+          fetchCurrentHead: () => HEAD_ONE,
+          fetchSmokeComments: () => [],
+          listDirectReviews: async () => [],
+          isAncestor: () => false,
+        },
+      });
+      const rendered = output.mock.calls.map((entry) => String(entry[0])).join('');
+      const result = JSON.parse(rendered) as {
+        ok: boolean;
+        readiness: { state: string; failedPredicates: string[] };
+        smokeEvidence: { state: string; headSha: string };
+      };
+      expect(code).toBe(1);
+      expect(result.ok).toBe(false);
+      expect(result.smokeEvidence).toEqual({ state: 'missing', headSha: HEAD_ONE });
+      expect(result.readiness.state).toBe('NOT_READY');
+      expect(result.readiness.failedPredicates).toContain('exact_head_smoke_not_passed');
+    } finally {
+      output.mockRestore();
+      if (previousBase === undefined) delete process.env.OPK_BASE_DIR;
+      else process.env.OPK_BASE_DIR = previousBase;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('requires the full exact-head census to end in a provenance-valid PASS', async () => {
+    const failing = {
+      ...report('FAIL', [{ ...scenario('run runtime lifecycle', 'PASS', 'fail'), causeFamily: 'scenario_assertion_failed' }]),
+      terminalHandle: 'terminal-fail',
+    };
+    const blocked = {
+      ...report('BLOCKED', [scenario('run runtime lifecycle', 'PASS', 'blocked')]),
+      terminalHandle: 'terminal-blocked',
+    };
+    const passing = {
+      ...report('PASS', [scenario('run runtime lifecycle', 'PASS')]),
+      terminalHandle: 'terminal-pass',
+    };
+    const cases = [
+      { name: 'FAIL only', reports: [failing], expected: 'missing' },
+      { name: 'BLOCKED only', reports: [blocked], expected: 'missing' },
+      { name: 'PASS then FAIL', reports: [passing, failing], expected: 'missing' },
+      { name: 'PASS then BLOCKED', reports: [passing, blocked], expected: 'missing' },
+      { name: 'PASS only', reports: [passing], expected: 'verified' },
+    ] as const;
+
+    for (const testCase of cases) {
+      const root = mkdtempSync(join(tmpdir(), 'delegated-readiness-smoke-census-'));
+      const issueBodyFile = join(root, 'issue.md');
+      writeFileSync(issueBodyFile, issueBody, 'utf8');
+      const previousBase = process.env.OPK_BASE_DIR;
+      const previousReceiptRoot = process.env.WORKER_SMOKE_RECEIPT_ROOT;
+      process.env.OPK_BASE_DIR = root;
+      process.env.WORKER_SMOKE_RECEIPT_ROOT = join(root, 'smoke-receipts');
+      try {
+        for (const smokeReport of testCase.reports) writeWorkerSmokeReceipt(smokeReport);
+        const comments = testCase.reports.map((smokeReport, index) => comment(index + 1, smokeReport));
+        const { code, result } = await runDelegatedReadinessForComments(root, issueBodyFile, comments);
+        expect(result.smokeEvidence.state, testCase.name).toBe(testCase.expected);
+        if (testCase.expected === 'missing') {
+          expect(code, testCase.name).toBe(1);
+          expect(result.readiness.failedPredicates, testCase.name).toContain('exact_head_smoke_not_passed');
+        } else {
+          expect(result.readiness.failedPredicates, testCase.name).not.toContain('exact_head_smoke_not_passed');
+        }
+      } finally {
+        if (previousBase === undefined) delete process.env.OPK_BASE_DIR;
+        else process.env.OPK_BASE_DIR = previousBase;
+        if (previousReceiptRoot === undefined) delete process.env.WORKER_SMOKE_RECEIPT_ROOT;
+        else process.env.WORKER_SMOKE_RECEIPT_ROOT = previousReceiptRoot;
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+});
 
 function executable(path: string, source: string): void {
   writeFileSync(path, source, 'utf8');

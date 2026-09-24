@@ -1,0 +1,15 @@
+Не могу корректно выдать требуемый create-issue-author-dispositions/v1: в доступном live GitHub state отсутствуют авторитетные значения, которые запрещено восстанавливать догадкой.
+
+Live Issue по-прежнему r03, поэтому Issue я не редактировал. GitHub содержит запись, что architectural-lens для r02 успешно завершён (stageAttemptId=764538f6-14f2-44b0-a9de-625a90332338, producer-evidence=verified), но эта запись не содержит сам Claude capture, шесть Claude findings, их occurrence IDs, economics или M3 contest values.
+
+Из-за этого невозможно без фабрикации сохранить одновременно:
+
+точные cheapest-sufficient-alternative findings 4 и 6 вместе с их текущими stakes-price / trade-in;
+
+текущие protected/M3 contest values findings 2 и 5 и их Claude occurrence mappings;
+
+все остальные Claude occurrence IDs и текущий M4.
+
+Это не значения, которые допустимо вывести из текста r03: guard требует для принятой persistent-machinery occurrence точного совпадения economics с исходным capture, а protected state должен быть текущим occurrence-level state, а не восстановленным по смыслу.
+
+Поэтому я не выпустил ложный JSON, не создал Issue/PR и не изменил #1935. Для успешного следующего author invocation producer должен передать governed Claude capture/current disposition state, содержащий эти значения; менеджер не должен заполнять их сам.

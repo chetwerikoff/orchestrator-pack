@@ -7,6 +7,7 @@ import {
   buildSourceRecords,
   buildTopology,
   canonicalJson,
+  canonicalPredecessorStage,
   deriveAdmission,
   buildAuthorDisposition,
   validateAuthorDisposition,
@@ -40,6 +41,19 @@ const active: LifecycleBinding = {
 };
 
 describe('create-issue remote review topology', () => {
+  it('derives the terminal predecessor only from the canonical stage plan', () => {
+    expect(canonicalPredecessorStage('T1', 'architectural')).toBeNull();
+    expect(canonicalPredecessorStage('T2', 'architectural')).toBe('architectural-review');
+    expect(canonicalPredecessorStage('T3', 'architectural', {
+      competitiveDecision: 'required',
+      competitiveRationale: 'independent solution designs exist',
+    })).toBe('architectural-lens');
+    expect(canonicalPredecessorStage('T3', 'architectural', {
+      competitiveDecision: 'skipped',
+      competitiveRationale: 'one bounded design is sufficient',
+    })).toBe('architectural-lens');
+  });
+
   it('uses triple-source topology for T2 architectural review but rejects T2 competitive', () => {
     const architectural = buildTopology({
       ...identity,
