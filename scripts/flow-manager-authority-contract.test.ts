@@ -38,10 +38,17 @@ import {
 } from './lib/create-issue-stage-lifecycle.ts';
 import { evaluateStageCredentialingSettlement } from './lib/create-issue-stage-lifecycle-acceptance.ts';
 import {
+  createIssueExternalPauseResult,
   createIssueNextAction,
+  createIssueRecoverableResult,
   projectBlockedOnToExternalPause,
   validateCreateIssueBlockedOn,
+  type CreateIssueManagerResult,
 } from './lib/create-issue-next-action.ts';
+import {
+  createIssueEscalationThreadId,
+  evaluateCreateIssueManagerBoundary,
+} from './lib/create-issue-manager-boundary.ts';
 
 const contract = readFileSync(new URL('../.cursor/skills/create-issue-draft/SKILL.md', import.meta.url), 'utf8');
 const defaultGhTransportSlot = vi.hoisted(() => ({
@@ -2088,3 +2095,169 @@ describe('Issue #1954 standalone GPT PR-review manager entry contract', () => {
   });
 });
 
+interface Issue2078FixtureManagerHooks {
+  sendEscalation(threadId: string): void;
+  drainInbox(): readonly string[];
+  executeNextAction(argv: readonly string[]): void;
+  sendWorkerDone(): void;
+}
+
+function runIssue2078FixtureManager(result: CreateIssueManagerResult, hooks: Issue2078FixtureManagerHooks) {
+  let escalationSendAttempts = 0;
+  let inboxDrainCalls = 0;
+  let actionExecutions = 0;
+  let workerDoneCount = 0;
+  let escalationThreadId: string | undefined;
+  let turnEndedWithoutWorkerDone = false;
+
+  if (result.ok) {
+    hooks.sendWorkerDone();
+    workerDoneCount += 1;
+  } else if ('pause' in result || 'defect' in result) {
+    escalationThreadId = createIssueEscalationThreadId({
+      issueNumber: 2078,
+      stage: 'architectural-review',
+      cause: result.cause,
+      resumeWhen: 'pause' in result ? result.pause.resume_when : null,
+    });
+    const send = () => {
+      escalationSendAttempts += 1;
+      hooks.sendEscalation(escalationThreadId!);
+    };
+    try {
+      send();
+    } catch {
+      send();
+    }
+    inboxDrainCalls += 1;
+    if (hooks.drainInbox().length !== 0) throw new Error('fixture_manager_inbox_not_drained');
+    turnEndedWithoutWorkerDone = workerDoneCount === 0;
+  } else {
+    actionExecutions += 1;
+    hooks.executeNextAction(result.nextAction.argv);
+  }
+
+  return {
+    escalationThreadId,
+    escalationSendAttempts,
+    inboxDrainCalls,
+    inboxDrained: inboxDrainCalls > 0,
+    actionExecutions,
+    workerDoneCount,
+    turnEndedWithoutWorkerDone,
+    taskTerminal: workerDoneCount > 0,
+    dispatchTerminal: workerDoneCount > 0,
+  };
+}
+
+describe('Issue #2078 smoke scenarios 3 and 5 fixture manager', () => {
+  const binding = {
+    repository: 'chetwerikoff/orchestrator-pack',
+    issueNumber: 2078,
+    sourceRevision: 'r02',
+    stage: 'architectural-review' as const,
+    stageAttemptId: 'scenario-3-attempt',
+  };
+
+  it('scenario 3 escalates the boundary self-recommendation without re-executing its argv', () => {
+    const argv = [
+      'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
+      '--expected-stage-attempt-id', '316369ff',
+    ];
+    const boundary = evaluateCreateIssueManagerBoundary({
+      producer: 'reconcile-stage',
+      currentArgv: argv,
+      produce: () => createIssueRecoverableResult({
+        cause: 'reconciliation_ready',
+        nextAction: createIssueNextAction({
+          kind: 'reconcile-stage-read-only',
+          binding,
+          argv,
+        }),
+      }),
+    });
+    const sentThreadIds: string[] = [];
+    const executedArgvs: string[][] = [];
+    const trace = runIssue2078FixtureManager(boundary.result, {
+      sendEscalation: (threadId) => sentThreadIds.push(threadId),
+      drainInbox: () => [],
+      executeNextAction: (nextArgv) => executedArgvs.push([...nextArgv]),
+      sendWorkerDone: () => { throw new Error('unexpected_worker_done'); },
+    });
+    const expectedThreadId = createIssueEscalationThreadId({
+      issueNumber: 2078,
+      stage: 'architectural-review',
+      cause: 'self_recommendation',
+      resumeWhen: null,
+    });
+
+    expect(boundary.exitCode).toBe(5);
+    expect(boundary.result).toMatchObject({
+      ok: false,
+      cause: 'self_recommendation',
+      defect: { producer: 'reconcile-stage' },
+      nextAction: null,
+    });
+    expect(sentThreadIds).toEqual([expectedThreadId]);
+    expect(executedArgvs).toEqual([]);
+    expect(trace).toMatchObject({
+      escalationThreadId: expectedThreadId,
+      escalationSendAttempts: 1,
+      inboxDrainCalls: 1,
+      inboxDrained: true,
+      actionExecutions: 0,
+      workerDoneCount: 0,
+      turnEndedWithoutWorkerDone: true,
+      taskTerminal: false,
+      dispatchTerminal: false,
+    });
+  });
+
+  it('scenario 5 retries one failed escalation send, drains the inbox, and leaves the manager live', () => {
+    const result = createIssueExternalPauseResult({
+      cause: 'external:github_unavailable',
+      remedy: 'resume after the fixture transport becomes available',
+      resumeWhen: { operator: true },
+      evidence: 'fixture HTTP 503',
+    });
+    const sentThreadIds: string[] = [];
+    const executedArgvs: string[][] = [];
+    let sendAttempts = 0;
+    let inboxDrainCalls = 0;
+    const trace = runIssue2078FixtureManager(result, {
+      sendEscalation: (threadId) => {
+        sendAttempts += 1;
+        if (sendAttempts === 1) throw new Error('fixture_send_rejected_before_delivery');
+        sentThreadIds.push(threadId);
+      },
+      drainInbox: () => {
+        inboxDrainCalls += 1;
+        return [];
+      },
+      executeNextAction: (argv) => executedArgvs.push([...argv]),
+      sendWorkerDone: () => { throw new Error('unexpected_worker_done'); },
+    });
+    const expectedThreadId = createIssueEscalationThreadId({
+      issueNumber: 2078,
+      stage: 'architectural-review',
+      cause: 'external:github_unavailable',
+      resumeWhen: { operator: true },
+    });
+
+    expect(sendAttempts).toBe(2);
+    expect(sentThreadIds).toEqual([expectedThreadId]);
+    expect(executedArgvs).toEqual([]);
+    expect(inboxDrainCalls).toBe(1);
+    expect(trace).toMatchObject({
+      escalationThreadId: expectedThreadId,
+      escalationSendAttempts: 2,
+      inboxDrainCalls: 1,
+      inboxDrained: true,
+      actionExecutions: 0,
+      workerDoneCount: 0,
+      turnEndedWithoutWorkerDone: true,
+      taskTerminal: false,
+      dispatchTerminal: false,
+    });
+  });
+});
