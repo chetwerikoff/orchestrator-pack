@@ -78,6 +78,7 @@
     "scripts/lib/create-issue-comment-census.test.ts": "light",
     "scripts/lib/create-issue-completed-result.test.ts": "light",
     "scripts/lib/create-issue-final-acceptance-revision.test.ts": "light",
+    "scripts/lib/create-issue-manager-boundary.test.ts": "light",
     "scripts/lib/execute-issue-manager-boundary.test.ts": "light",
     "scripts/lib/create-issue-stage-lifecycle-acceptance.test.ts": "light",
     "scripts/lib/create-issue-stage-lifecycle.test.ts": "light",

@@ -1,4 +1,4 @@
-// @vitest-ci-lane heavy
+// @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -340,6 +340,9 @@ describe('guarded Git-only recovery', () => {
       effects: [],
     });
     expect(value.ignoredReads).toBe(2);
+    expect(value.invocations.some((item) => item.args.includes(
+      'headRefName,state,headRefOid,mergeCommit,headRepository,baseRefName',
+    ))).toBe(true);
     expect(value.removeCount).toBe(0);
   });
 

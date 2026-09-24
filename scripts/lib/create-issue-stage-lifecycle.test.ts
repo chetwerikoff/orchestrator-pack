@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -11,6 +11,8 @@ import {
   admitStageLaunch,
   canonicalStageTopology,
   composeTerminalBundle,
+  ensureLifecycleStageEvidenceSeed,
+  recordLifecycleInvocationAdmission,
   type LifecycleReviewTier,
   type LifecycleTierIntakeV1,
   type TerminalBundleV1,
@@ -113,6 +115,41 @@ describe('Issue #1439 canonical stage lifecycle', () => {
       'architectural-review',
       'architectural',
     ]);
+  });
+
+  it('does not mutate lifecycle evidence when recordAdmission cannot commit its atomic replacement', () => {
+    const stateRoot = mkdtempSync(join(tmpdir(), 'opk-2078-admission-failure-'));
+    try {
+      const reviewDir = join(stateRoot, '.review', '1439');
+      mkdirSync(reviewDir, { recursive: true });
+      writeFileSync(join(reviewDir, 'tier-intake.json'), JSON.stringify(intake({ priorTier: 'T2' }), null, 2) + '\n');
+      const seeded = ensureLifecycleStageEvidenceSeed({
+        issueNumber: 1439,
+        tier: 'T2',
+        stage: 'architectural-review',
+        stageAttemptId: 'attempt-review-atomic',
+        cycleId: 'cycle-review-atomic',
+        sourceRevision: 'r01',
+        stateRootOverride: stateRoot,
+      });
+      const before = readFileSync(seeded.path, 'utf8');
+      writeFileSync(seeded.path + '.tmp-' + process.pid, 'force atomic write failure\n');
+
+      expect(() => recordLifecycleInvocationAdmission({
+        issueNumber: 1439,
+        stage: 'architectural-review',
+        stageAttemptId: 'attempt-review-atomic',
+        sourceRevision: 'r01',
+        invocationId: '11111111-2222-4333-8444-555555555555',
+        reviewerSlot: '01',
+        terminalEnvelopePath: '/tmp/terminal.json',
+        reviewerSource: 'slot-01#capture=direct-publication/v1',
+        stateRootOverride: stateRoot,
+      })).toThrow();
+      expect(readFileSync(seeded.path, 'utf8')).toBe(before);
+    } finally {
+      rmSync(stateRoot, { recursive: true, force: true });
+    }
   });
 
   it('refuses a consumed semantic stage slot with the consuming attempt id across revisions', () => {
