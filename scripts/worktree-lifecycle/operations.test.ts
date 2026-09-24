@@ -340,6 +340,9 @@ describe('guarded Git-only recovery', () => {
       effects: [],
     });
     expect(value.ignoredReads).toBe(2);
+    expect(value.invocations.some((item) => item.args.includes(
+      'headRefName,state,headRefOid,mergeCommit,headRepository,baseRefName',
+    ))).toBe(true);
     expect(value.removeCount).toBe(0);
   });
 

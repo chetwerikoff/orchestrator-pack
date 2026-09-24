@@ -653,6 +653,63 @@ describe('gh pr view state-only REST execution (Issue #538)', () => {
     }
   });
 });
+describe('merged PR cleanup headRepository REST projection (Issue #2103)', () => {
+  const cleanupFields = 'headRefName,state,headRefOid,mergeCommit,headRepository,baseRefName';
+  const cleanupArgv = [
+    'pr', 'view', '2093', '--repo', 'chetwerikoff/orchestrator-pack', '--json', cleanupFields,
+  ];
+
+  it('routes the observed cleanup command and projects headRepository through REST', () => {
+    const { parsed, route } = classifyArgv(cleanupArgv);
+    expect(route?.id).toBe('pr-view');
+    expect(route?.prNumber).toBe(2093);
+    if (!route) return;
+
+    const apiSpy = vi.spyOn(repoResolve, 'ghApiJson').mockImplementation(() => ({
+      number: 2093,
+      state: 'closed',
+      merged_at: '2026-09-01T00:00:00Z',
+      head: { ref: 'agent/issue-2103', sha: 'deadbeef', repo: { node_id: 'R_123', name: 'orchestrator-pack', full_name: 'chetwerikoff/orchestrator-pack' } },
+      base: { ref: 'main' },
+      merge_commit_sha: 'cafebabe',
+    }));
+    try {
+      expect(executeRestRoute(route.id, {
+        realGh: 'gh',
+        parsed,
+        route,
+        cwd: process.cwd(),
+      })).toEqual({
+        headRefName: 'agent/issue-2103',
+        state: 'MERGED',
+        headRefOid: 'deadbeef',
+        mergeCommit: { oid: 'cafebabe' },
+        headRepository: { id: 'R_123', name: 'orchestrator-pack', nameWithOwner: 'chetwerikoff/orchestrator-pack' },
+        baseRefName: 'main',
+      });
+
+      apiSpy.mockImplementation(() => ({
+        number: 2093,
+        state: 'closed',
+        merged_at: '2026-09-01T00:00:00Z',
+        head: { ref: 'agent/issue-2103', sha: 'deadbeef', repo: null },
+        base: { ref: 'main' },
+        merge_commit_sha: 'cafebabe',
+      }));
+      expect(executeRestRoute(route.id, { realGh: 'gh', parsed, route, cwd: process.cwd() })).toMatchObject({
+        state: 'MERGED',
+        headRepository: null,
+      });
+    } finally {
+      apiSpy.mockRestore();
+    }
+
+    expect(classifyArgv([
+      'pr', 'view', '2093', '--repo', 'chetwerikoff/orchestrator-pack',
+      '--json', `${cleanupFields},commits`,
+    ]).route).toBeNull();
+  });
+});
 
 function twoWrapperPathFixture(order: 'ao-first' | 'pack-first') {
   const root = mkdtempSync(join(tmpdir(), 'gh-two-wrapper-'));

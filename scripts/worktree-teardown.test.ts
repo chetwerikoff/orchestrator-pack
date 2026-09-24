@@ -300,6 +300,9 @@ describe('post-merge destructive teardown', () => {
       },
     });
     expect(report.authority.authorizedHeads).toEqual([H0, H1]);
+    expect(state.invocations.some((item) => item.args.includes(
+      'headRefName,state,headRefOid,mergeCommit,headRepository,baseRefName',
+    ))).toBe(true);
     expect(report.manifest?.entries).toEqual([
       { category: 'ignored', path: 'private-cache/token.txt' },
       { category: 'tracked', path: 'tracked.txt' },
