@@ -1,0 +1,31 @@
+Read revision: #1968 r01
+INVOCATION_ID_TO_ECHO: 22222222-2222-4222-8222-222222222222
+review-economics-contract: v1
+stage: architectural-review
+source-slot: 02
+VERDICT: FINDINGS
+
+Contradiction check: the bridge says the forward main-side delta must be disjoint from the task's declared scope, but condition 5 derives that boundary from the active pr-scope declaration. The current declaration contract permits that artifact to be a stale narrower view of the live Issue scope, so the stated invariant is not actually proved.
+
+Feasibility check: the no-tier portion is executable on the current main implementation. `runSmokeAttempt` currently gates trusted-target resolution on a complexity-tier fence for required smoke, while `ordinaryFullAttemptSelection` can emit `no_prior_canonical_observation` before a history census. The existing selective planner already owns the five fallback reasons and per-tuple folding, so extending that planner rather than adding a second selector is feasible. The exact Git-object rebase proof is also mechanically implementable if its scope witness is made current.
+
+Forced-cut verdicts:
+- tier-independent trusted target resolution for required smoke — keep
+- canonical census before `no_prior_canonical_observation` — keep
+- one exact raw-diff equivalent-rebase continuation edge — keep
+- strict-forward base movement plus main-side path invalidation — keep, but bind it to current scope authority
+- fresh current-head projection of carried rows — keep
+- patch-id as carry authority — cut, as the Issue already requires
+- any persistent bridge ledger/store/approval mechanism — cut, as the Issue already requires
+
+Missed gap: declaration freshness/current-scope equivalence is not established before the declaration is used as a safety boundary for carry admission.
+
+id: rebase-bridge-stale-scope-declaration
+type: spec
+severity: P1
+title: Rebase carry can use a stale narrower scope declaration
+evidence: Condition 5 admits carry when the forward main-side paths do not match the active `orchestrator-pack/pr-scope-declaration/v1` `declared_paths` or `allowed_roots`. On current main, `PrScopeDeclaration.source_revision` is explicitly informational and “never used as a source or trust witness”; `pr-scope-check.ts` accepts a declaration when its `allowed_roots` are a subset of the live Issue `allowed-roots`, not necessarily equal to them. Therefore an Issue can widen its live allowed roots after a declaration was created while the older narrower declaration remains policy-compatible. A forward main-side change inside that newly added live root but outside the stale declaration's roots would be invisible to the bridge and could authorize carried PASS even though the change is inside the task's current declared scope.
+recommendation: Make the bridge's overlap proof include the current trusted live Issue `allowed-roots` already obtained through trusted target resolution, or require an exact mechanically proven current-scope equivalence before a declaration can stand in for those roots. Add a regression where the live Issue widens scope after declaration creation and a forward main-side change in the newly added root must reject the bridge with `history_non_descendant`.
+persistent-machinery: no
+
+SIMPLIFICATION_CLEAN

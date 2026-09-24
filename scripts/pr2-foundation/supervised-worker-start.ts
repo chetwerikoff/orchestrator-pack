@@ -4,9 +4,12 @@ import {
   currentWorkerAssignment,
   currentWorkerAssignmentByDeliverable,
   inspectWorkerAssignmentStore,
+  parseDelegatedIntegrationMarker,
+  sameDelegatedIntegrationMarker,
   parseWorkerAssignmentRole,
   publishCurrentWorkerAssignment,
   resolveWorkerAssignmentStorePath,
+  type DelegatedIntegrationMarker,
   type WorkerAssignment,
   type WorkerAssignmentExpectation,
   type WorkerAssignmentRecord,
@@ -14,7 +17,11 @@ import {
   type WorkerAssignmentStoreTrustCause,
 } from '../lib/worker-assignment-store.ts';
 import { existsSync, readFileSync } from 'node:fs';
-import { admitCurrentWorkerAssignmentReplacement } from '../lib/worker-assignment-runtime.ts';
+import {
+  admitCurrentWorkerAssignmentReplacement,
+  resolveCurrentWorkerAssignmentTarget,
+} from '../lib/worker-assignment-runtime.ts';
+import { withCurrentWorkerAssignmentFence } from '../lib/worker-assignment-store.ts';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
 import type { RuntimeAdapter } from '../runtime/contracts.ts';
 
@@ -277,6 +284,32 @@ function expectedCurrentForPublish(
     : undefined;
 }
 
+async function stopDelegatedImplementationPredecessor(input: {
+  readonly file: string;
+  readonly expected: WorkerAssignment;
+  readonly adapter: RuntimeAdapter;
+  readonly cwd?: string;
+}): Promise<string | null> {
+  const fenced = await withCurrentWorkerAssignmentFence(input.file, input.expected, async () => {
+    const target = resolveCurrentWorkerAssignmentTarget({
+      file: input.file,
+      expected: input.expected,
+      adapter: input.adapter,
+    });
+    if (target.status === 'gone') return null;
+    if (target.status !== 'resolved') return `predecessor_${target.status}`;
+
+    const callOptions = input.cwd ? { cwd: input.cwd } : undefined;
+    const stopped = input.adapter.stopWorker(target.worker.identity, callOptions);
+    if (stopped.status !== 'ok') return `predecessor_stop_${stopped.reason}`;
+    const readback = input.adapter.findWorker(target.worker.identity, callOptions);
+    if (readback.status !== 'ok') return `predecessor_stop_readback_${readback.reason}`;
+    return readback.value === null ? null : 'predecessor_stop_readback_still_live';
+  });
+  if (!fenced.ok) return fenced.reason;
+  return fenced.value;
+}
+
 function residualDiagnostic(input: {
   readonly taskId: string;
   readonly dispatchId: string;
@@ -400,6 +433,7 @@ export async function runSupervisedWorkerStart(input: {
   readonly repository: string;
   readonly projectId?: string;
   readonly role?: WorkerAssignmentRole | string;
+  readonly delegatedIntegration?: DelegatedIntegrationMarker;
   readonly orcaArgs: readonly string[];
   readonly env?: NodeJS.ProcessEnv;
   readonly cwd?: string;
@@ -409,13 +443,18 @@ export async function runSupervisedWorkerStart(input: {
 }): Promise<SupervisedWorkerStartResult> {
   const repository = input.repository.trim().toLowerCase();
   const role = parseWorkerAssignmentRole(input.role);
+  const delegatedIntegration = input.delegatedIntegration === undefined
+    ? undefined
+    : parseDelegatedIntegrationMarker(input.delegatedIntegration);
   const mode = input.mode ?? 'exact_terminal_worktree';
   if (mode !== 'exact_terminal_worktree' && mode !== 'provider_new_top_level') {
     return { ok: false, reason: 'supervised_start_mode_invalid' };
   }
   if (!repository
     || (input.issueNumber !== undefined
-      && (!Number.isInteger(input.issueNumber) || input.issueNumber <= 0))) {
+      && (!Number.isInteger(input.issueNumber) || input.issueNumber <= 0))
+    || (input.delegatedIntegration !== undefined && !delegatedIntegration)
+    || (delegatedIntegration && (input.issueNumber === undefined || role !== 'worker'))) {
     return { ok: false, reason: 'supervised_start_input_invalid' };
   }
   if (!role) {
@@ -459,6 +498,28 @@ export async function runSupervisedWorkerStart(input: {
     : currentWorkerAssignment(file, input.issueNumber);
   if (expectedCurrent?.repository !== undefined && expectedCurrent.repository !== repository) {
     return { ok: false, reason: 'assignment_stale' };
+  }
+  const sameCurrentDelegatedIntegration = Boolean(
+    delegatedIntegration
+    && expectedCurrent?.role === 'worker'
+    && expectedCurrent.taskId === requestedTaskId
+    && sameDelegatedIntegrationMarker(
+      expectedCurrent.delegatedIntegration,
+      delegatedIntegration,
+    )
+  );
+  const exactImplementationPredecessor = Boolean(
+    delegatedIntegration
+    && expectedCurrent?.role === 'worker'
+    && expectedCurrent.taskId === requestedTaskId
+    && !expectedCurrent.delegatedIntegration
+    && expectedCurrent.assignmentId === delegatedIntegration.predecessorAssignmentId
+    && expectedCurrent.generation === delegatedIntegration.predecessorGeneration
+  );
+  if (delegatedIntegration
+    && !sameCurrentDelegatedIntegration
+    && !exactImplementationPredecessor) {
+    return { ok: false, reason: 'delegated_integration_predecessor_mismatch' };
   }
   if (expectedCurrent && expectedCurrent.taskId !== requestedTaskId && expectedCurrent.kind !== 'local') {
     return { ok: false, reason: 'assignment_stale' };
@@ -519,7 +580,33 @@ export async function runSupervisedWorkerStart(input: {
       }
     }
     if (admission.status !== 'replaceable') {
-      return { ok: false, reason: admission.status };
+      if (sameCurrentDelegatedIntegration && expectedCurrent && admission.status === 'skipped_live') {
+        return {
+          ok: true,
+          reason: 'delegated_integration_assignment_reused',
+          assignment: expectedCurrent,
+        };
+      }
+      if (delegatedIntegration
+        && exactImplementationPredecessor
+        && expectedCurrent
+        && admission.status === 'skipped_live') {
+        const stopFailure = await stopDelegatedImplementationPredecessor({
+          file,
+          expected: expectedCurrent,
+          adapter,
+          cwd: input.cwd,
+        });
+        if (stopFailure) {
+          return {
+            ok: false,
+            reason: 'delegated_integration_predecessor_shutdown_failed',
+            errorMessage: stopFailure,
+          };
+        }
+      } else {
+        return { ok: false, reason: admission.status };
+      }
     }
   }
 
@@ -600,6 +687,7 @@ export async function runSupervisedWorkerStart(input: {
     bindingKey: dispatchId,
     expectedCurrent: expectedCurrentForPublish(expectedCurrent),
     role,
+    ...(delegatedIntegration ? { delegatedIntegration } : {}),
   };
   const published = input.issueNumber === undefined
     ? await publishCurrentWorkerAssignment(publishBase)
@@ -677,27 +765,43 @@ function parseStartCli(argv: readonly string[]): {
   repository: string;
   projectId?: string;
   role?: string;
+  delegatedIntegration?: DelegatedIntegrationMarker;
   orcaArgs: string[];
 } {
   const separator = argv.indexOf('--');
-  if (separator < 0) throw new Error('usage: supervised-worker-start [--issue-number N] --repository owner/repo [--project-id id] --role worker|orchestrator -- --task task_id --terminal handle --worktree selector ...');
+  if (separator < 0) throw new Error('usage: supervised-worker-start [--issue-number N] --repository owner/repo [--project-id id] --role worker|orchestrator [--delegated-integration JSON] -- --task task_id --terminal handle --worktree selector ...');
   const own = argv.slice(0, separator);
   const orcaArgs = argv.slice(separator + 1);
   if (countFlag(own, '--role') !== 1) {
     throw new Error('exactly one --role worker|orchestrator is required');
   }
   if (countFlag(own, '--mode') > 1) throw new Error('at most one --mode is allowed');
+  if (countFlag(own, '--delegated-integration') > 1) {
+    throw new Error('at most one --delegated-integration is allowed');
+  }
   const modeRaw = optionValue(own, '--mode');
   if (modeRaw && modeRaw !== 'exact_terminal_worktree' && modeRaw !== 'provider_new_top_level') {
     throw new Error('--mode must be exact_terminal_worktree|provider_new_top_level');
   }
   const issueNumberRaw = optionValue(own, '--issue-number');
+  const delegatedIntegrationRaw = optionValue(own, '--delegated-integration');
+  let delegatedIntegration: DelegatedIntegrationMarker | undefined;
+  if (delegatedIntegrationRaw) {
+    let parsed: unknown;
+    try { parsed = JSON.parse(delegatedIntegrationRaw); }
+    catch { throw new Error('--delegated-integration must be valid JSON'); }
+    delegatedIntegration = parseDelegatedIntegrationMarker(parsed) ?? undefined;
+    if (!delegatedIntegration) {
+      throw new Error('--delegated-integration must contain exactly prNumber, expectedHeadSha, predecessorAssignmentId, and predecessorGeneration');
+    }
+  }
   return {
     ...(optionValue(own, '--mode') ? { mode: optionValue(own, '--mode') as WorkerStartMode } : {}),
     ...(issueNumberRaw ? { issueNumber: Number(issueNumberRaw) } : {}),
     repository: optionValue(own, '--repository'),
     ...(optionValue(own, '--project-id') ? { projectId: optionValue(own, '--project-id') } : {}),
     role: optionValue(own, '--role'),
+    ...(delegatedIntegration ? { delegatedIntegration } : {}),
     orcaArgs,
   };
 }
