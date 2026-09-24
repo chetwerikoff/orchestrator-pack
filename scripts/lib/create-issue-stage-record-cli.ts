@@ -480,6 +480,35 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
   return opts;
 }
 
+const CREATE_ISSUE_FINAL_ACCEPTANCE_CLI_DECLARATION = {
+  program: 'create-issue-final-acceptance',
+  options: [
+    { flag: '--repo', value: 'owner/name' },
+    { flag: '--issue-number', value: 'n' },
+    { flag: '--cycle-id', value: 'id' },
+    { flag: '--issue-body', value: 'path' },
+    { flag: '--issue-revision', value: 'revision' },
+    { flag: '--review-dir', value: 'path' },
+    { flag: '--stage-receipt', value: 'path', repeatable: true },
+    { flag: '--capture', value: 'path', repeatable: true },
+    { flag: '--ledger', value: 'path' },
+    { flag: '--relay-evidence', value: 'path', repeatable: true },
+    { flag: '--claude-producer-evidence', value: 'path', repeatable: true },
+    { flag: '--external-pass-receipt', value: 'path' },
+    { flag: '--operator-issue-number', value: 'n' },
+    { flag: '--operator-source-revision', value: 'revision' },
+    { flag: '--operator-verdict-url', value: 'url' },
+    { flag: '--operator-verdict-sha256', value: 'hex' },
+    { flag: '--operator-verdict-byte-length', value: 'n' },
+    { flag: '--operator-finding-count', value: 'n' },
+    { flag: '--operator-reason', value: 'text' },
+    { flag: '--public-actor', value: 'actor', required: true, values: [...PUBLIC_ACTORS] },
+    { flag: '--workdir', value: 'path' },
+    { flag: '--json' },
+  ],
+} as const satisfies ManagerCliDeclaration;
+
+
 function finalAcceptanceUsage(): string {
   return renderManagerCliUsage(CREATE_ISSUE_FINAL_ACCEPTANCE_CLI_DECLARATION);
 }
