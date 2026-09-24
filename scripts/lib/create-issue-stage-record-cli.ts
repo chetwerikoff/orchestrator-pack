@@ -15,6 +15,7 @@ import {
   inspectAcceptanceArtifacts,
   inspectLatestGovernedAuthorDisposition,
   produceAcceptanceArtifacts,
+  produceAuthorDispositions,
   readEvidenceZeroSendTerminal,
   reconcileCreateIssueStage,
   reconcileStageReadIsRetryable,
@@ -61,7 +62,7 @@ interface JournalTailCliOptions {
 }
 
 interface StageFinalizeCliOptions extends JournalTailCliOptions {
-  command: 'start-cycle' | 'author-round' | 'publish-stage' | 'retry-pending' | 'reconcile-stage' | 'bind-published-comment' | 'produce-artifacts' | 'check-artifacts';
+  command: 'start-cycle' | 'author-round' | 'publish-stage' | 'retry-pending' | 'reconcile-stage' | 'bind-published-comment' | 'produce-author-dispositions' | 'produce-artifacts' | 'check-artifacts';
   repo: string;
   issueNumber: number;
   sourceRevision?: string;
@@ -293,6 +294,7 @@ export function stageFinalizeUsage(): string {
     '  create-issue-stage-finalize.ts retry-pending --repo <owner/name> --issue-number <n> [--workdir <path>] [--expected-source-revision <rNN> --expected-stage <stage> --expected-stage-attempt-id <id>] [--json]',
     '  create-issue-stage-finalize.ts reconcile-stage --repo <owner/name> --issue-number <n> --review-dir <path> --stage-evidence <attempt-NNN.json> [--json]',
     '  create-issue-stage-finalize.ts bind-published-comment --repo <owner/name> --issue-number <n> --review-dir <path> --stage-evidence <attempt-NNN.json> --reviewer-slot <slot> --invocation-id <id> --comment-url <url> [--json]',
+    '  create-issue-stage-finalize.ts produce-author-dispositions --repo <owner/name> --issue-number <n> --review-dir <path> --source-revision <rNN> [--json]',
     '  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> [--tier-intake <path>] [--stage-evidence <path>...] [--author-dispositions <target-path>] [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--phase <pre-lens|post-lens|final-acceptance>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--json]',
     '  create-issue-stage-finalize.ts check-artifacts --review-dir <path> [--tier-intake <path>] [--stage-evidence <path>...] [--author-dispositions <derived-path>] [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--json]',
     '  manager-result commands additionally accept --blocked-on-json <json> only for a coordinator/task-dispatch authoritative active-unsatisfied-blocker assertion',
@@ -301,7 +303,7 @@ export function stageFinalizeUsage(): string {
 
 export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
   const command = argv[2];
-  if (command !== 'start-cycle' && command !== 'author-round' && command !== 'publish-stage' && command !== 'retry-pending' && command !== 'reconcile-stage' && command !== 'bind-published-comment' && command !== 'produce-artifacts' && command !== 'check-artifacts') {
+  if (command !== 'start-cycle' && command !== 'author-round' && command !== 'publish-stage' && command !== 'retry-pending' && command !== 'reconcile-stage' && command !== 'bind-published-comment' && command !== 'produce-author-dispositions' && command !== 'produce-artifacts' && command !== 'check-artifacts') {
     throw new Error(`unknown command\n${stageFinalizeUsage()}`);
   }
   const opts: StageFinalizeCliOptions = {
@@ -314,7 +316,7 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
     claudeProducerEvidencePaths: [],
   };
   const artifactCommand = command === 'reconcile-stage' || command === 'bind-published-comment' || command === 'produce-artifacts' || command === 'check-artifacts';
-  const reviewDirCommand = artifactCommand || command === 'author-round';
+  const reviewDirCommand = artifactCommand || command === 'author-round' || command === 'produce-author-dispositions';
   const boundActionCommand = artifactCommand || command === 'start-cycle' || command === 'author-round' || command === 'retry-pending';
   const requireArtifactCommand = (arg: string): void => {
     if (!artifactCommand) throw new Error(`${arg} is only valid with reconcile-stage, produce-artifacts, or check-artifacts`);
@@ -388,7 +390,7 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
         opts.reviewerSlot = String(argv[++i] ?? '');
         break;
       case '--review-dir':
-        if (!reviewDirCommand) throw new Error(`${arg} is only valid with an artifact or author-round command`);
+        if (!reviewDirCommand) throw new Error(`${arg} is only valid with a review-directory command`);
         opts.reviewDir = String(argv[++i] ?? '');
         break;
       case '--output-dir':
@@ -419,7 +421,7 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
         break;
       }
       case '--blocked-on-json':
-        if (command === 'bind-published-comment') throw new Error('--blocked-on-json is not valid with bind-published-comment');
+        if (command === 'bind-published-comment' || command === 'produce-author-dispositions') throw new Error('--blocked-on-json is not valid with this command');
         if (opts.blockedOn) throw new Error('--blocked-on-json may be supplied only once');
         opts.blockedOn = parseBlockedOnJson(String(argv[++i] ?? ''));
         break;
@@ -1149,6 +1151,21 @@ export function runStageFinalizeCli(
   authorRoundRunner?: AuthorRoundRunner,
 ): number {
   return runParsedCli(argv, 'create-issue-stage-finalize', parseStageFinalizeArgs, (opts) => {
+    if (opts.command === 'produce-author-dispositions') {
+      const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
+      const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
+      const sourceRevision = parseRequiredNonEmptyString(opts.sourceRevision, '--source-revision');
+      const result = produceAuthorDispositions({
+        reviewDir,
+        repositoryFullName: opts.repo,
+        issueNumber,
+        sourceRevision,
+        ...(artifactSourceTransport ? { artifactSourceTransport } : {}),
+      });
+      if (opts.json) console.log(JSON.stringify(result));
+      else if (!result.ok) process.stderr.write(result.errors.join('\n') + '\n');
+      return result.ok ? 0 : 1;
+    }
     const transport = artifactSourceTransport ?? defaultGhTransport();
 
     if (opts.command === 'author-round') {
