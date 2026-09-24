@@ -134,18 +134,13 @@ async function resetActiveDeadObservationProgress(input: {
   readonly assignment: WorkerAssignmentRecord;
 }): Promise<AssignmentProgressUpdate> {
   let expected = input.assignment;
-  let lastFailure: Extract<AssignmentProgressUpdate, { readonly ok: false }> = {
-    ok: false,
-    reason: 'assignment_update_failed',
-  };
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (;;) {
     const reset = await setWorkerAssignmentDeadObservationTicks({
       file: input.file,
       expected,
       ticks: 0,
     });
     if (reset.ok) return reset;
-    lastFailure = reset;
     if (reset.reason !== 'assignment_stale'
       && reset.reason !== 'assignment_store_busy'
       && reset.reason !== 'assignment_update_failed') return reset;
@@ -159,8 +154,8 @@ async function resetActiveDeadObservationProgress(input: {
     }
     if (current.deadObservationTicks === undefined) return { ok: true, assignment: current };
     expected = current;
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
   }
-  return lastFailure;
 }
 
 async function advanceDeadObservationProgress(input: {

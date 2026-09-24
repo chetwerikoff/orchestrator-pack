@@ -11,6 +11,7 @@ import {
   currentWorkerAssignmentByDeliverable,
   publishCurrentWorkerAssignment,
   retireCurrentWorkerAssignment,
+  setWorkerAssignmentAtomicReplaceTestHook,
   setWorkerAssignmentDeadObservationTicks,
   workerAssignmentKey,
   type WorkerAssignmentRecord,
@@ -169,6 +170,7 @@ class LifecycleAdapter extends DeterministicRuntimeAdapter {
 }
 
 afterEach(() => {
+  setWorkerAssignmentAtomicReplaceTestHook();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -446,6 +448,91 @@ describe('Issue #2106 bounded scheduler assignment lifecycle reconciliation', ()
       published.assignment.taskId,
       published.assignment.bindingKey,
     )).not.toHaveProperty('deadObservationTicks');
+  });
+
+  it('keeps retrying active reset until stale dead progress is durably cleared', async () => {
+    const { store, ledger } = fixture();
+    const published = await publishCurrentWorkerAssignment({
+      file: store,
+      repository: REPOSITORY,
+      issueNumber: 1899,
+      taskId: 'active-reset-retry-task',
+      kind: 'local',
+      provider: 'orca',
+      bindingKey: 'dispatch-8',
+      role: 'worker',
+    });
+    if (!published.ok) throw new Error(published.reason);
+    const aged = await setWorkerAssignmentDeadObservationTicks({
+      file: store,
+      expected: published.assignment,
+      ticks: 2,
+    });
+    if (!aged.ok) throw new Error(aged.reason);
+
+    let failedWrites = 0;
+    setWorkerAssignmentAtomicReplaceTestHook((phase) => {
+      if (phase === 'before_write' && failedWrites < 3) {
+        failedWrites += 1;
+        throw new Error('injected-active-reset-write-failure');
+      }
+    });
+    const adapter = new class extends LifecycleAdapter {
+      #active = true;
+      override observeAssignmentLifecycle(
+        input: { readonly provider: string; readonly bindingKey: string },
+        options: RuntimeCallOptions = {},
+      ): RuntimeResult<RuntimeAssignmentLifecycleObservation> {
+        if (!this.#active) return super.observeAssignmentLifecycle(input, options);
+        this.#active = false;
+        return {
+          status: 'ok',
+          value: {
+            kind: 'active',
+            worker: {
+              identity: { runtime: 'test', id: 'worker-active-reset', generation: 'g1' },
+              workspacePath: '/tmp/worker-active-reset',
+              title: 'worker-active-reset',
+              provenance: 'internal',
+            },
+          },
+        };
+      }
+    }();
+    const terminalMailDeps: DispatchTerminalMailDeps = {
+      ledgerPath: ledger,
+      deliverMessage: null,
+      runJson: (() => ({ ok: false, error: { code: 'injected_failure' } })) as unknown as typeof runOrcaJson,
+    };
+
+    const active = await reconcileWorkerAssignments({
+      file: store,
+      repository: REPOSITORY,
+      adapter,
+      terminalMailDeps,
+    });
+    expect(active.status).toBe('ok');
+    expect(active.counts.active).toBe(1);
+    expect(failedWrites).toBe(3);
+    expect(currentWorkerAssignmentByDeliverable(
+      store,
+      published.assignment.taskId,
+      published.assignment.bindingKey,
+    )).not.toHaveProperty('deadObservationTicks');
+
+    const terminal = await reconcileWorkerAssignments({
+      file: store,
+      repository: REPOSITORY,
+      adapter,
+      terminalMailDeps,
+    });
+    expect(terminal.status).toBe('ok');
+    expect(terminal.counts).toMatchObject({ terminal: 1, terminalMailUnsettled: 1, boundedGiveUps: 0 });
+    expect(currentWorkerAssignmentByDeliverable(
+      store,
+      published.assignment.taskId,
+      published.assignment.bindingKey,
+    )).toMatchObject({ ...published.assignment, deadObservationTicks: 1 });
   });
 
   it('does zero mail and zero retirement from stale terminal evidence after Issue attachment', async () => {
