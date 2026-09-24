@@ -103,6 +103,14 @@ Do not restart an arbitrary timer and blindly wait or send.
 
 ## Per-turn execution contract
 
+At the start of every manager turn, before preparing or sending any ChatGPT
+continuation, re-read the live Issue through the tracked GitHub read surface.
+Compare it with the manager's last authoritative Issue read. When the live
+title/body changed, the new bytes are delta scope for the **same** Issue-bound
+PR/branch: include or implement that delta through the ordinary continuation
+loop. The change does not require operator re-acceptance, a second implementation
+conversation, or reopening/re-arming create-Issue review stages.
+
 Every manager -> ChatGPT execution turn is one ordinary tracked Browser-GPT turn
 under `docs/browser-gpt-turn-runbook.md` plus the execution-only checkpoint in
 the next section.
