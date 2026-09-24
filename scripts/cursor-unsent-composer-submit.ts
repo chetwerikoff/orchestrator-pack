@@ -8,6 +8,7 @@ import { runOrcaJson, type OrcaJsonResponse } from './orca-runtime/native.ts';
 import {
   type RuntimeAdapter,
   type RuntimeComposerControl,
+  type RuntimeComposerFamilyObservation,
   type RuntimeDispatchResult,
   type RuntimeLiveness,
   type RuntimeWorker,
@@ -372,6 +373,7 @@ export interface UnsentComposerSubmitDeps {
     | { ok: false; reason: string }
   >;
   readonly submit: (worker: RuntimeWorkerIdentity) => RuntimeDispatchResult;
+  readonly composerFamily?: (worker: RuntimeWorkerIdentity) => RuntimeComposerFamilyObservation | undefined;
   readonly composerControl?: (worker: RuntimeWorkerIdentity) => RuntimeComposerControl | undefined;
   readonly liveness?: (worker: RuntimeWorkerIdentity, observationWindowMs: number) =>
     RuntimeLiveness;
@@ -693,6 +695,27 @@ function settleComposerObservation(
   const identity = worker.identity;
   const key = workerKey(identity);
   const base = { terminal: identity.id, generation: identity.generation };
+  const family = deps.composerFamily?.(identity);
+  if (!family || family.status === 'unbound') {
+    return {
+      ...base,
+      ok: false,
+      unsent: true,
+      enter: false,
+      reason: family?.status === 'unbound' ? family.reason : 'composer_family_unbound',
+    };
+  }
+  if (family.family === 'opencode') {
+    return {
+      ...base,
+      ok: false,
+      unsent: true,
+      enter: false,
+      reason: deps.composerControl?.(identity)?.kind === 'opencode-http'
+        ? 'opencode_http_control_required'
+        : 'opencode_control_unbound',
+    };
+  }
   if (!shown.ok) {
     return { ...base, ok: false, unsent: false, enter: false, reason: shown.reason };
   }
@@ -1193,9 +1216,16 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     return deliveryNoEffect('orchestration_episode_already_claimed', worker, false);
   }
 
-  const control = deps.submitDeps.composerControl?.(worker.identity);
-
-  if (control?.kind === 'opencode-http') {
+  const family = deps.submitDeps.composerFamily?.(worker.identity);
+  if (!family || family.status === 'unbound') {
+    const reason = family?.status === 'unbound' ? family.reason : 'composer_family_unbound';
+    return deliveryNoEffect(reason, worker, false);
+  }
+  if (family?.status === 'known' && family.family === 'opencode') {
+    const control = deps.submitDeps.composerControl?.(worker.identity);
+    if (control?.kind !== 'opencode-http') {
+      return deliveryNoEffect('opencode_control_unbound', worker, false);
+    }
     const liveness = currentLiveness(deps.submitDeps, worker.identity);
     if (liveness !== 'idle') return deliveryNoEffect(`worker_${liveness}`, worker);
 
@@ -1587,8 +1617,18 @@ async function drainStalePointers(
     .filter((worker) => isLiveCursorRecipient(worker) && !touchedWorkerKeys.has(workerKey(worker.identity)))
     .map(async (worker) => {
       const key = workerKey(worker.identity);
-      if (deps.submitDeps.composerControl?.(worker.identity)?.kind === 'opencode-http') {
-        return { worker, key, skipped: true as const };
+      const family = deps.submitDeps.composerFamily?.(worker.identity);
+      if (!family || family.status === 'unbound') {
+        return { worker, key, skipped: true as const, reason: family?.reason ?? 'composer_family_unbound' };
+      }
+      if (family.family === 'opencode') {
+        const control = deps.submitDeps.composerControl?.(worker.identity);
+        return {
+          worker,
+          key,
+          skipped: true as const,
+          ...(control?.kind === 'opencode-http' ? {} : { reason: 'opencode_control_unbound' }),
+        };
       }
       const liveness = currentLiveness(deps.submitDeps, worker.identity);
       if (liveness !== 'idle' && liveness !== 'busy') {
@@ -1604,6 +1644,7 @@ async function drainStalePointers(
     const { worker, key } = observation;
     if (observation.skipped) {
       delete staleObservations[key];
+      if ('reason' in observation && observation.reason) reasons.push(`${worker.identity.id}:${observation.reason}`);
       continue;
     }
     const { shown } = observation;
@@ -2053,6 +2094,7 @@ export function createAdapterSubmitDeps(
       return { ok: true, lines: output.value.lines, source: 'screen' };
     },
     submit: (worker) => adapter.dispatchInput({ worker, submitOnly: true }),
+    composerFamily: (worker) => adapter.observeComposerFamily?.(worker),
     composerControl: (worker) => adapter.composerControl?.(worker),
     liveness: (worker, observationWindowMs) => adapter.liveness({ worker, observationWindowMs }).status,
     sentStorePath: SENT_STORE_PATH,

@@ -590,6 +590,14 @@
       "path": "captures/gh-pr-open/pulls-mergeable-state.raw.json",
       "contentHash": "sha256:c0c2c9663462ac8343335487bd82e9eea7b18c58a9e109fe8c8b96a9f0d62083"
     },
+    "orca-runtime/terminal-show-opencode": {
+      "id": "orca-runtime/terminal-show-opencode",
+      "producer": "orca-runtime",
+      "sourceCommand": "orca terminal show --terminal term_47af341f-f7eb-457d-a5cb-5952026b6cad --json",
+      "kind": "structured",
+      "path": "captures/orca-runtime/terminal-show-opencode.raw.json",
+      "contentHash": "sha256:b6e7af70e4f9baa68d481720a28ab4512c10bffd593e459e43d14fa305eb97b5"
+    },
     "orca-worker-smoke/terminal-create": {
       "id": "orca-worker-smoke/terminal-create",
       "producer": "orca-worker-smoke",
