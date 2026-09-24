@@ -18,6 +18,7 @@ import { withCrashRecoverableFileLock } from '../pr2-foundation/journal-lock.ts'
 export const WORKER_ASSIGNMENT_SCHEMA = 'orchestrator-pack/worker-assignment/v1' as const;
 export const WORKER_ASSIGNMENT_STORE_SCHEMA = 'orchestrator-pack/worker-assignment-store/v1' as const;
 export const MAX_WORKER_ASSIGNMENTS = 256 as const;
+export const MAX_UNSETTLED_DEAD_OBSERVATION_TICKS = 3 as const;
 export const MAX_WORKER_ASSIGNMENT_STORE_BYTES = 262_144 as const;
 
 export type WorkerAssignmentKind = 'local' | 'remote';
@@ -76,6 +77,8 @@ interface WorkerAssignmentBase {
   readonly role?: WorkerAssignmentRole;
   /** Optional, closed orchestrator-delegated integration witness; absent on ordinary assignments. */
   readonly delegatedIntegration?: DelegatedIntegrationMarker;
+  /** Consecutive exact terminal/gone observations with an unsettled mail obligation. */
+  readonly deadObservationTicks?: number;
 }
 
 /** Existing Issue-scoped assignment shape retained for all numbered consumers. */
@@ -307,6 +310,10 @@ function validAssignment(value: unknown): value is WorkerAssignmentRecord {
     && Boolean(bounded(row.bindingKey, 240))
     && typeof row.createdAtUtc === 'string'
     && Number.isFinite(Date.parse(row.createdAtUtc))
+    && (!('deadObservationTicks' in row)
+      || (Number.isInteger(row.deadObservationTicks)
+        && Number(row.deadObservationTicks) > 0
+        && Number(row.deadObservationTicks) <= MAX_UNSETTLED_DEAD_OBSERVATION_TICKS))
     && roleValid
     && delegatedIntegrationValid;
 }
@@ -916,8 +923,61 @@ function sameAssignment(left: WorkerAssignmentRecord | null, right: WorkerAssign
     && left.provider === right.provider
     && left.bindingKey === right.bindingKey
     && left.createdAtUtc === right.createdAtUtc
+    && left.deadObservationTicks === right.deadObservationTicks
     && left.role === right.role
     && sameDelegatedIntegrationMarker(left.delegatedIntegration, right.delegatedIntegration));
+}
+
+/** Persist or clear exact-current consecutive dead-observation progress. */
+export async function setWorkerAssignmentDeadObservationTicks(input: {
+  readonly file: string;
+  readonly expected: WorkerAssignmentRecord;
+  readonly ticks: number;
+}): Promise<
+  | { readonly ok: true; readonly assignment: WorkerAssignmentRecord }
+  | { readonly ok: false; readonly reason: 'assignment_input_invalid' | 'assignment_stale' | 'assignment_store_untrusted' | 'assignment_store_busy' | 'assignment_update_failed' }
+> {
+  const key = workerAssignmentKey(input.expected.taskId, input.expected.bindingKey);
+  if (!key || !validAssignment(input.expected)
+    || !Number.isInteger(input.ticks)
+    || input.ticks < 0
+    || input.ticks > MAX_UNSETTLED_DEAD_OBSERVATION_TICKS) {
+    return { ok: false, reason: 'assignment_input_invalid' };
+  }
+  try {
+    return await withCrashRecoverableFileLock(`${input.file}.lock`, 10, () => {
+      const migrated = migrateWorkerAssignmentStoreLocked(input.file);
+      if (!migrated.ok) return migrated;
+      const store = migrated.store;
+      const current = store.assignments[key];
+      if (!current || !sameAssignment(current, input.expected)) {
+        return { ok: false, reason: 'assignment_stale' } as const;
+      }
+      if ((current.deadObservationTicks ?? 0) === input.ticks) {
+        return { ok: true, assignment: current } as const;
+      }
+      const { deadObservationTicks: _previousTicks, ...base } = current;
+      const assignment: WorkerAssignmentRecord = input.ticks === 0
+        ? base
+        : { ...base, deadObservationTicks: input.ticks };
+      const next: WorkerAssignmentStore = {
+        schema: WORKER_ASSIGNMENT_STORE_SCHEMA,
+        revision: store.revision + 1,
+        assignments: { ...store.assignments, [key]: assignment },
+        ...(store.operatorPrimary ? { operatorPrimary: store.operatorPrimary } : {}),
+      };
+      return atomicReplaceReadBack(input.file, next)
+        ? { ok: true, assignment } as const
+        : { ok: false, reason: 'assignment_update_failed' } as const;
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      reason: error instanceof Error && error.message === 'journal_busy'
+        ? 'assignment_store_busy'
+        : 'assignment_update_failed',
+    };
+  }
 }
 
 export function assignmentStillCurrent(file: string, expected: WorkerAssignmentRecord): boolean {

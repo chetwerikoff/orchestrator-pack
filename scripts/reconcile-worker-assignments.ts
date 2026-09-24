@@ -1,6 +1,8 @@
 import {
+  MAX_UNSETTLED_DEAD_OBSERVATION_TICKS,
   listCurrentWorkerAssignmentRecords,
   retireCurrentWorkerAssignment,
+  setWorkerAssignmentDeadObservationTicks,
   withCurrentWorkerAssignmentFence,
   type WorkerAssignment,
   type WorkerAssignmentRecord,
@@ -29,6 +31,8 @@ export interface WorkerAssignmentReconciliationCounts {
   readonly retired: number;
   readonly remoteRetained: number;
   readonly mailTurns: number;
+  readonly terminalMailUnsettled: number;
+  readonly boundedGiveUps: number;
 }
 
 export type WorkerAssignmentLifecycleSweepResult =
@@ -68,6 +72,8 @@ function emptyCounts(): WorkerAssignmentReconciliationCounts {
     retired: 0,
     remoteRetained: 0,
     mailTurns: 0,
+    terminalMailUnsettled: 0,
+    boundedGiveUps: 0,
   };
 }
 
@@ -117,6 +123,42 @@ function classifyRetirement(
   }
   counts.unresolved += 1;
   return 'unresolved';
+}
+
+async function retainOrGiveUpDeadAssignment(input: {
+  readonly file: string;
+  readonly assignment: WorkerAssignmentRecord;
+  readonly counts: Record<keyof WorkerAssignmentReconciliationCounts, number>;
+  readonly reconciliations: WorkerAssignmentReconciliation[];
+  readonly terminalMailUnsettled: boolean;
+}): Promise<void> {
+  const nextTicks = (input.assignment.deadObservationTicks ?? 0) + 1;
+  if (input.terminalMailUnsettled) input.counts.terminalMailUnsettled += 1;
+  if (nextTicks >= MAX_UNSETTLED_DEAD_OBSERVATION_TICKS) {
+    const retired = await retireCurrentWorkerAssignment({
+      file: input.file,
+      expected: input.assignment,
+    });
+    const retirementClass = classifyRetirement(retired, input.counts);
+    if (retirementClass === 'retired') input.counts.boundedGiveUps += 1;
+    else if (retirementClass === 'protected' || retirementClass === 'unresolved') {
+      addReconciliation(input.reconciliations, input.assignment);
+    }
+    return;
+  }
+  const updated = await setWorkerAssignmentDeadObservationTicks({
+    file: input.file,
+    expected: input.assignment,
+    ticks: nextTicks,
+  });
+  if (!updated.ok) {
+    if (updated.reason === 'assignment_stale') input.counts.stale += 1;
+    else input.counts.unresolved += 1;
+    addReconciliation(input.reconciliations, input.assignment);
+    return;
+  }
+  input.counts.unresolved += 1;
+  addReconciliation(input.reconciliations, updated.assignment);
 }
 
 /**
@@ -197,13 +239,32 @@ export async function reconcileWorkerAssignments(
 
     if (observation.status === 'active') {
       counts.active += 1;
-      if (isNumberedWorkerPartition(observation.assignment)) {
+      let activeAssignment = observation.assignment;
+      if (activeAssignment.deadObservationTicks !== undefined) {
+        const reset = await setWorkerAssignmentDeadObservationTicks({
+          file: input.file,
+          expected: activeAssignment,
+          ticks: 0,
+        });
+        if (!reset.ok) {
+          if (reset.reason === 'assignment_stale') counts.stale += 1;
+          else counts.unresolved += 1;
+          addReconciliation(reconciliations, activeAssignment);
+          if (counts.observed % batchSize === 0 && input.betweenBatches) {
+            await input.betweenBatches();
+            counts.mailTurns += 1;
+          }
+          continue;
+        }
+        activeAssignment = reset.assignment;
+      }
+      if (isNumberedWorkerPartition(activeAssignment)) {
         if (workers.some((candidate) => sameRuntimeWorker(candidate.identity, observation.worker.identity))) {
           counts.unresolved += 1;
-          addReconciliation(reconciliations, observation.assignment);
+          addReconciliation(reconciliations, activeAssignment);
         } else {
           workers.push(observation.worker);
-          bindings.push({ assignment: observation.assignment, worker: observation.worker });
+          bindings.push({ assignment: activeAssignment, worker: observation.worker });
         }
       }
     } else if (observation.status === 'terminal') {
@@ -218,18 +279,30 @@ export async function reconcileWorkerAssignments(
         counts.protected += 1;
         addReconciliation(reconciliations, observation.assignment);
       } else if (consumed.status === 'stale') counts.stale += 1;
-      else {
+      else if (consumed.status === 'retained_unresolved') {
+        await retainOrGiveUpDeadAssignment({
+          file: input.file,
+          assignment: observation.assignment,
+          counts,
+          reconciliations,
+          terminalMailUnsettled: true,
+        });
+      } else {
         counts.unresolved += 1;
         addReconciliation(reconciliations, observation.assignment);
       }
     } else if (observation.status === 'gone') {
       counts.gone += 1;
-      // Exact runtime absence is not evidence that terminal notification was
-      // settled before the Dispatch disappeared. Retain fail-closed unless the
-      // existing at-most-once ledger already proves that obligation settled.
+      // The at-most-once ledger remains the only settlement authority. Exact
+      // producer-backed absence without that proof gets a finite retry lifetime.
       if (!hasRecordedDispatchTerminalMail(observation.assignment.bindingKey, input.terminalMailDeps)) {
-        counts.unresolved += 1;
-        addReconciliation(reconciliations, observation.assignment);
+        await retainOrGiveUpDeadAssignment({
+          file: input.file,
+          assignment: observation.assignment,
+          counts,
+          reconciliations,
+          terminalMailUnsettled: true,
+        });
       } else {
         const retired = await retireCurrentWorkerAssignment({
           file: input.file,
