@@ -2287,6 +2287,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
 export type DetachedSmokeAttemptObservation =
   | { readonly kind: 'absent' }
   | { readonly kind: 'active'; readonly runId: string; readonly artifactDir: string }
+  | { readonly kind: 'recoverable'; readonly runId: string; readonly artifactDir: string; readonly reason: 'detached_smoke_owner_not_alive' }
   | { readonly kind: 'terminal'; readonly runId: string; readonly artifactDir: string; readonly result: SmokeReport['result'] }
   | { readonly kind: 'untrusted'; readonly reason: string };
 
@@ -2341,7 +2342,16 @@ export function observeDetachedSmokeAttempt(input: {
     lifecycle.launcherTerminalizedAtMs === undefined || !lifecycle.finalEvidencePath);
   if (active.length > 1) return { kind: 'untrusted', reason: 'detached_smoke_duplicate_active_attempts' };
   if (active.length === 1) {
-    return { kind: 'active', runId: active[0]!.lifecycle.runId, artifactDir: active[0]!.artifactDir };
+    const current = active[0]!;
+    if (!processIsAlive(current.lifecycle.supervisorPid)) {
+      return {
+        kind: 'recoverable',
+        runId: current.lifecycle.runId,
+        artifactDir: current.artifactDir,
+        reason: 'detached_smoke_owner_not_alive',
+      };
+    }
+    return { kind: 'active', runId: current.lifecycle.runId, artifactDir: current.artifactDir };
   }
 
   const terminal = [...matching].sort((left, right) =>
@@ -2373,39 +2383,16 @@ export function observeDetachedSmokeAttempt(input: {
   return { kind: 'terminal', runId: lifecycle.runId, artifactDir, result: evidence.result };
 }
 
-function replaceCliArgument(argv: readonly string[], name: string, value: string): string[] {
-  const result = [...argv];
-  const index = result.indexOf(name);
-  if (index < 0 || index + 1 >= result.length) throw new Error(`detached bootstrap missing ${name}`);
-  result[index + 1] = value;
-  return result;
-}
-
 async function startDetachedSmokeOwner(
   argv: readonly string[],
   options: CliOptions,
-  durableIssueBody: boolean,
 ): Promise<DetachedSmokeStartResult> {
   if (options.detachedOwner || options.runId) {
     return { ok: false, reason: 'detached_bootstrap_ownership_flags_invalid' };
   }
   const runId = createSmokeRunIdentity();
   const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
-  let childArgs = argv.filter((value) => value !== '--detach');
-  if (durableIssueBody) {
-    ensureSmokeRunArtifactDir(artifactDir);
-    const durableIssueBodyFile = join(artifactDir, 'issue-body.input.md');
-    try {
-      writeFileSync(durableIssueBodyFile, readFileSync(options.issueBodyFile, 'utf8'), 'utf8');
-    } catch {
-      return { ok: false, runId, reason: 'detached_smoke_issue_body_copy_failed' };
-    }
-    try {
-      childArgs = replaceCliArgument(childArgs, '--issue-body-file', durableIssueBodyFile);
-    } catch {
-      return { ok: false, runId, reason: 'detached_smoke_issue_body_binding_missing' };
-    }
-  }
+  const childArgs = argv.filter((value) => value !== '--detach');
   childArgs.push('--detached-owner', '--run', runId);
   const env = { ...process.env };
   delete env.WORKER_SMOKE_WRAPPER_STATE_FILE;
@@ -2469,11 +2456,14 @@ function detachedRunArgv(options: CliOptions): string[] {
 }
 
 export async function startDetachedSmokeAttempt(options: CliOptions): Promise<DetachedSmokeStartResult> {
-  return startDetachedSmokeOwner(detachedRunArgv(options), options, true);
+  // The caller keeps issueBodyFile alive until lifecycle establishment. Do not create
+  // the durable run directory in the bootstrap parent; the detached owner creates it
+  // together with its lifecycle reservation.
+  return startDetachedSmokeOwner(detachedRunArgv(options), options);
 }
 
 async function runDetachedBootstrap(argv: readonly string[], options: CliOptions): Promise<number> {
-  const result = await startDetachedSmokeOwner(argv, options, false);
+  const result = await startDetachedSmokeOwner(argv, options);
   if (!result.ok || !result.runId) {
     process.stderr.write(`${result.reason ?? 'worker_smoke_detach_start_failed'}\n`);
     return 1;

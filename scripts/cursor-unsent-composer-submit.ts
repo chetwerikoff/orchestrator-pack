@@ -1146,7 +1146,6 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   message: DeliveryMessage,
   deps: DeliveryMessageSubmitDeps,
   allowConsumedRetry = false,
-  consumerFencedPointerOnly = false,
 ): Promise<UnsentComposerSubmitResult> {
   if (message.consumed && !allowConsumedRetry) return deliveryNoEffect('delivery_already_consumed');
   const resolved = deps.resolveWorker(message);
@@ -1197,11 +1196,7 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   }
 
   const family = deps.submitDeps.composerFamily?.(worker.identity);
-  const familyUnbound = !family || family.status === 'unbound';
-  // Consumer-fenced handling may submit only an exact visible pointer; it does not establish family.
-  const consumerFencedPointerOnlyAllowed = consumerFencedPointerOnly && (!family
-    || (family.status === 'unbound' && family.reason === 'runtime_composer_command_unbound'));
-  if (familyUnbound && !consumerFencedPointerOnlyAllowed) {
+  if (!family || family.status === 'unbound') {
     const reason = family?.status === 'unbound' ? family.reason : 'composer_family_unbound';
     return deliveryNoEffect(reason, worker, false);
   }
@@ -1308,10 +1303,8 @@ async function submitOrcaMessageDeliveryPointerForMessage(
     ? await deps.submitDeps.readAsync(worker.identity)
     : deps.submitDeps.read(worker.identity);
   if (!shown.ok) return deliveryNoEffect(shown.reason, worker, false);
-  let composerKind = familyUnbound && consumerFencedPointerOnlyAllowed
-    ? 'empty'
-    : classifyCursorComposer(shown.lines.join('\n'));
-  if (composerKind === 'empty' && !consumerFencedPointerOnlyAllowed) {
+  let composerKind = classifyCursorComposer(shown.lines.join('\n'));
+  if (composerKind === 'empty') {
     await (deps.submitDeps.sleepAsync ?? sleepAsync)(DELIVERY_RENDER_GRACE_MS);
     shown = deps.submitDeps.readAsync
       ? await deps.submitDeps.readAsync(worker.identity)
@@ -1321,7 +1314,7 @@ async function submitOrcaMessageDeliveryPointerForMessage(
   }
   const preview = shown.lines.join('\n');
   const observedPointer = exactOrchestrationPointerFingerprint(preview);
-  const previewUnrecognized = observedPointer === undefined && !consumerFencedPointerOnlyAllowed && !isRecognizedComposerPreview(preview);
+  const previewUnrecognized = observedPointer === undefined && !isRecognizedComposerPreview(preview);
   const alreadyShown = observedPointer !== undefined;
   if (alreadyShown && !pointerMatchesDelivery(observedPointer, message, worker)) {
     return deliveryNoEffect('orchestration_pointer_target_mismatch', worker);
@@ -1963,7 +1956,6 @@ export async function runOrchestrationMailReconcileTick(
                 message,
                 submissionDeps,
                 retryableEpisodeIds.has(id) || recentReadIds.has(id),
-                consumerFenced,
               );
               const terminal = result.terminals[0];
               const pointerAttempted = terminal?.enter

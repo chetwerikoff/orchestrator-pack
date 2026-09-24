@@ -307,6 +307,9 @@ export async function reconcilePostReviewSmoke(
   if (detachedObservation.kind === 'active') {
     return { handled: true, attempted: false, reason: 'post_review_smoke_detached_active' };
   }
+  // A dead detached supervisor is not an active authority. Fall through to a new
+  // detached launch; its existing worker-smoke preflight owns stale-lifecycle
+  // recovery and remains the only cleanup/retry authority.
   if (detachedObservation.kind === 'terminal') {
     return {
       handled: true,

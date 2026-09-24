@@ -2246,6 +2246,57 @@ describe('orchestration mail reconciliation', () => {
     expect(submitted).toEqual([target.identity]);
   });
 
+  it('keeps consumer-fenced missing-command recipients behind the family fence', async () => {
+    const target = worker('term_fenced_missing_command');
+    const message = {
+      id: 'msg_fenced_missing_command',
+      runId: 'run_fenced_missing_command',
+      recipient: 'run:run_fenced_missing_command',
+      consumed: false,
+    };
+    const submitted: RuntimeWorkerIdentity[] = [];
+    let reads = 0;
+    const root = mkdtempSync(join(tmpdir(), 'opk-reconcile-fenced-missing-command-'));
+    try {
+      const result = await runOrchestrationMailReconcileTick({
+        readInbox: () => ({
+          ok: true as const,
+          result: { messages: [{ id: message.id, run_id: message.runId, to_handle: message.recipient, read: 0 }] },
+        }),
+        lookupMessage: () => ({ ok: true as const, message }),
+        resolveWorker: () => ({ ok: true as const, worker: target }),
+        isMessageRetrievable: () => ({ ok: false as const, reason: 'consumer_fenced' }),
+        submitDeps: depsFor({}, {
+          submitted,
+          composerFamily: () => ({
+            status: 'unbound' as const,
+            reason: 'runtime_composer_command_unbound',
+            provenance: 'orca-terminal-show' as const,
+          }),
+          read: () => {
+            reads += 1;
+            return {
+              ok: true as const,
+              lines: [buildDeliveryPointer(message), ...CURSOR_FOOTER],
+              source: 'screen' as const,
+            };
+          },
+        }),
+      }, {
+        ledgerPath: join(root, 'orchestration-mail-reconcile.json'),
+        lockPath: join(root, 'orchestration-mail-reconcile.lock'),
+        now: () => 1_000,
+      });
+
+      expect(result.nudged).toBe(0);
+      expect(result.reasons).toContain(`${message.id}:runtime_composer_command_unbound`);
+      expect(reads).toBe(0);
+      expect(submitted).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('keeps terminal-fenced reconciliation fail-closed on a mismatched target pointer', async () => {
     const target = worker('term_fenced_target_mismatch');
     const message = { id: 'msg_fenced_target_mismatch', runId: 'run_fenced_target_mismatch', recipient: `run:run_fenced_target_mismatch`, consumed: false };

@@ -28,6 +28,10 @@ import {
   type PostReviewSmokeDependencies,
 } from './post-review-smoke.ts';
 import { observeDetachedSmokeAttempt } from '../worker-smoke-run.ts';
+import {
+  createSmokeLifecycleReservation,
+  markSmokeCreateInProgress,
+} from '../lib/worker-smoke-lifecycle.ts';
 
 const REPOSITORY = 'chetwerikoff/orchestrator-pack';
 const ISSUE = 1418;
@@ -354,6 +358,56 @@ describe('Issue #1418 post-review smoke reconciliation', () => {
       reason: 'post_review_smoke_detached_active',
     });
     expect(startDetachedAttempt).not.toHaveBeenCalled();
+  });
+
+  it('routes a dead nonterminal detached owner back through detached start/recovery', async () => {
+    const fixture = rootFixture();
+    const options: PackReviewAuthorityOptions = { storeRoot: fixture.reviewStoreRoot };
+    settleReview(options);
+    const assignment = await publishLocal(fixture.assignmentStorePath, 'dispatch-detached-dead-owner');
+    const workspacePath = path.join(fixture.root, 'worker-detached-dead-owner');
+    const runId = 'run-detached-dead-owner';
+    const artifactDir = path.join(workspacePath, '.orca-worker-smoke', 'runs', runId);
+    createSmokeLifecycleReservation({
+      runId,
+      artifactDir,
+      issueNumber: ISSUE,
+      prNumber: PR,
+      headSha: HEAD,
+      supervisorPid: 2_147_483_647,
+      nowMs: 1,
+      createTimeoutMs: 1,
+      scenarioCount: 1,
+    });
+    markSmokeCreateInProgress(artifactDir, 2);
+    const adapter = runtimeFor(assignment.bindingKey, workspacePath);
+    const startDetachedAttempt = vi.fn(async () => ({ ok: true as const, runId: 'run-detached-recovery' }));
+
+    expect(observeDetachedSmokeAttempt({
+      cwd: workspacePath,
+      issueNumber: ISSUE,
+      prNumber: PR,
+      headSha: HEAD,
+    })).toEqual({
+      kind: 'recoverable',
+      runId,
+      artifactDir,
+      reason: 'detached_smoke_owner_not_alive',
+    });
+
+    const result = await reconcilePostReviewSmoke(candidate, dependencies({
+      ...fixture,
+      adapter,
+      observeDetachedAttempt: observeDetachedSmokeAttempt,
+      startDetachedAttempt,
+    }));
+
+    expect(result).toEqual({
+      handled: true,
+      attempted: true,
+      reason: 'post_review_smoke_detached_started',
+    });
+    expect(startDetachedAttempt).toHaveBeenCalledTimes(1);
   });
 
   it.each([
