@@ -42,12 +42,15 @@ const worker: RuntimeWorker = {
 function runtimeAdapter(input: {
   worker?: RuntimeWorker;
   liveness?: 'busy' | 'idle' | 'unknown' | 'gone';
+  livenessSequence?: readonly ('busy' | 'idle' | 'unknown' | 'gone')[];
   livenessWorker?: RuntimeWorker['identity'];
   onSpawn?: () => void;
   onLiveness?: (observationWindowMs: number) => void;
+  onLivenessSample?: (status: 'busy' | 'idle' | 'unknown' | 'gone') => void;
 } = {}): RuntimeAdapter {
   const target = input.worker ?? worker;
   const fixedStatus = input.liveness ?? 'idle';
+  const livenessSequence = [...(input.livenessSequence ?? [fixedStatus])];
   return {
     id: 'orca',
     readiness: () => ({ status: 'ok', value: { ready: true, workspacePath: target.workspacePath } }),
@@ -66,7 +69,13 @@ function runtimeAdapter(input: {
     } }),
     liveness: ({ observationWindowMs }) => {
       input.onLiveness?.(observationWindowMs);
-      return { status: fixedStatus, worker: input.livenessWorker ?? target.identity };
+      let status = fixedStatus;
+      for (const sample of livenessSequence) {
+        status = sample;
+        input.onLivenessSample?.(sample);
+        if (sample !== 'busy') break;
+      }
+      return { status, worker: input.livenessWorker ?? target.identity };
     },
     stopWorker: () => ({ status: 'ok', value: { stopped: true } }),
   };
@@ -793,15 +802,18 @@ describe('supervised Task launch assistant', () => {
   it('uses the bounded startup window to reach ready when the TUI settles within it', async () => {
     let spawns = 0;
     const windows: number[] = [];
+    const samples: string[] = [];
     const adapter = runtimeAdapter({
-      liveness: 'idle',
+      livenessSequence: ['busy', 'idle'],
       onSpawn: () => { spawns += 1; },
       onLiveness: (window) => { windows.push(window); },
+      onLivenessSample: (status) => { samples.push(status); },
     });
     const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({ adapter }));
     expect(result).toMatchObject({ outcome: 'ready', resources: { terminal: worker.identity } });
     expect(spawns).toBe(1);
     expect(windows).toEqual([LAUNCH_STARTUP_OBSERVATION_WINDOW_MS]);
+    expect(samples).toEqual(['busy', 'idle']);
     expect(LAUNCH_STARTUP_OBSERVATION_WINDOW_MS).toBeGreaterThan(1_000);
   });
 
