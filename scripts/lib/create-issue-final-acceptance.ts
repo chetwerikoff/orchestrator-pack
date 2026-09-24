@@ -19,8 +19,10 @@ import { appendPublishedLogicalJournalEvent } from './create-issue-stage-record-
 import {
   executeFinalAcceptanceGuards,
   FINAL_ACCEPTANCE_CONTRACT_VERSION,
+  resolveOperatorAmendmentEvidence,
   validateExactTerminalBodyBinding,
   type FinalAcceptanceGuardInput,
+  type OperatorAmendmentEvidence,
 } from './create-issue-final-acceptance-contract.ts';
 import type { OperatorAcceptanceAdjudication } from './create-issue-stage-record-artifacts.ts';
 import { resolvePublishedAuthorState } from './resolve-published-author-state.ts';
@@ -55,6 +57,7 @@ export interface FinalAcceptanceResult {
   guardErrors: string[];
   eventKey?: string;
   projectionPendingRepair?: boolean;
+  acceptanceEvidence?: OperatorAmendmentEvidence;
 }
 
 type FinalAcceptanceCensusState = ReturnType<typeof loadIssueJournalCensus>;
@@ -315,46 +318,71 @@ export function runFinalAcceptance(
     }
   }
 
-  let canonicalInventory: ReturnType<typeof loadCanonicalReceiptInventory>;
-  try {
-    canonicalInventory = loadCanonicalReceiptInventory({
-      tierIntakePath: input.tierIntakePath ?? join(input.reviewDir, 'tier-intake.json'),
-      receiptDirectory: input.reviewDir,
-      stageReceiptPaths: input.stageReceiptPaths,
-      claudeProducerEvidencePaths: input.claudeProducerEvidencePaths,
-    });
-  } catch (error) {
-    return {
-      ok: false,
-      diagnostics,
-      guardErrors: [error instanceof Error ? error.message : String(error)],
-    };
-  }
-  const inventoryErrors = validateCanonicalReceiptPathSet(
-    canonicalInventory.receiptPaths,
-    input.stageReceiptPaths,
-  );
-  if (inventoryErrors.length > 0) {
-    return { ok: false, diagnostics, guardErrors: inventoryErrors };
-  }
-
-  const guard = executeFinalAcceptanceGuards({
-    ...input,
-    issueBody: liveIssue.body,
-    terminalSourceBody,
-    currentIssueBody: liveIssue.body,
-    stageReceiptValues: canonicalInventory.receiptValues,
-    stageReceiptPaths: canonicalInventory.receiptPaths,
-    episodeAuthority: canonicalInventory.authority,
-    tierIntakePath: canonicalInventory.intakePath,
-    cycleId: input.cycleId,
-    issueRevision: liveRevision,
-    ...(censusUsable ? { canonicalLineage: censusState.lineage } : {}),
-    ...(publishedAuthorStateResult.state ? { publishedAuthorState: publishedAuthorStateResult.state } : {}),
+  const operatorAmendment = resolveOperatorAmendmentEvidence(liveIssue.body, liveRevision, {
+    issueBodyEditorLogin: input.issueBodyEditorLogin,
+    repositoryOwnerLogin: censusState.ownerLogin,
+    governedAuthorLogin: input.governedAuthorLogin,
   });
+
+  let guard: ReturnType<typeof executeFinalAcceptanceGuards>;
+  if (operatorAmendment) {
+    guard = executeFinalAcceptanceGuards({
+      ...input,
+      issueBody: liveIssue.body,
+      terminalSourceBody,
+      currentIssueBody: liveIssue.body,
+      stageReceiptValues: [],
+      stageReceiptPaths: [],
+      cycleId: input.cycleId,
+      issueRevision: liveRevision,
+      repositoryOwnerLogin: censusState.ownerLogin,
+      ...(censusUsable ? { canonicalLineage: censusState.lineage } : {}),
+      ...(publishedAuthorStateResult.state ? { publishedAuthorState: publishedAuthorStateResult.state } : {}),
+    });
+  } else {
+    let canonicalInventory: ReturnType<typeof loadCanonicalReceiptInventory>;
+    try {
+      canonicalInventory = loadCanonicalReceiptInventory({
+        tierIntakePath: input.tierIntakePath ?? join(input.reviewDir, 'tier-intake.json'),
+        receiptDirectory: input.reviewDir,
+        stageReceiptPaths: input.stageReceiptPaths,
+        claudeProducerEvidencePaths: input.claudeProducerEvidencePaths,
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        diagnostics,
+        guardErrors: [error instanceof Error ? error.message : String(error)],
+      };
+    }
+    const inventoryErrors = validateCanonicalReceiptPathSet(
+      canonicalInventory.receiptPaths,
+      input.stageReceiptPaths,
+    );
+    if (inventoryErrors.length > 0) {
+      return { ok: false, diagnostics, guardErrors: inventoryErrors };
+    }
+
+    guard = executeFinalAcceptanceGuards({
+      ...input,
+      issueBody: liveIssue.body,
+      terminalSourceBody,
+      currentIssueBody: liveIssue.body,
+      stageReceiptValues: canonicalInventory.receiptValues,
+      stageReceiptPaths: canonicalInventory.receiptPaths,
+      episodeAuthority: canonicalInventory.authority,
+      tierIntakePath: canonicalInventory.intakePath,
+      cycleId: input.cycleId,
+      issueRevision: liveRevision,
+      repositoryOwnerLogin: censusState.ownerLogin,
+      ...(censusUsable ? { canonicalLineage: censusState.lineage } : {}),
+      ...(publishedAuthorStateResult.state ? { publishedAuthorState: publishedAuthorStateResult.state } : {}),
+    });
+  }
   if (!guard.ok) {
     return { ok: false, diagnostics, guardErrors: guard.errors };
   }
+  const acceptanceEvidence = guard.acceptanceEvidence;
 
   let publishIssue: ReturnType<typeof fetchIssueRevision>;
   try {
@@ -392,6 +420,7 @@ export function runFinalAcceptance(
       diagnostics,
       guardErrors: [],
       projectionPendingRepair: true,
+      ...(acceptanceEvidence ? { acceptanceEvidence } : {}),
     };
   }
 
@@ -466,6 +495,7 @@ export function runFinalAcceptance(
       guardErrors: [],
       eventKey,
       projectionPendingRepair: true,
+      ...(acceptanceEvidence ? { acceptanceEvidence } : {}),
     };
   }
 
@@ -521,6 +551,7 @@ export function runFinalAcceptance(
       guardErrors: [],
       eventKey,
       projectionPendingRepair: true,
+      ...(acceptanceEvidence ? { acceptanceEvidence } : {}),
     };
   }
   const readbackHeadErrors = validateFinalAcceptanceReadbackHead(
@@ -539,6 +570,7 @@ export function runFinalAcceptance(
       guardErrors: [],
       eventKey,
       projectionPendingRepair: true,
+      ...(acceptanceEvidence ? { acceptanceEvidence } : {}),
     };
   }
   const confirmed = refreshed.lineage.eventsByKey.get(eventKey);
@@ -552,6 +584,7 @@ export function runFinalAcceptance(
       guardErrors: [],
       eventKey,
       projectionPendingRepair: true,
+      ...(acceptanceEvidence ? { acceptanceEvidence } : {}),
     };
   }
 
@@ -571,6 +604,7 @@ export function runFinalAcceptance(
     guardErrors: [],
     eventKey,
     projectionPendingRepair: projection.pendingRepair || projectionPendingRepair,
+    ...(acceptanceEvidence ? { acceptanceEvidence } : {}),
   };
 }
 
