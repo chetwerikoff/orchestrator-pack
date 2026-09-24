@@ -2,6 +2,7 @@ export const CREATE_ISSUE_NEXT_ACTION_SCHEMA = 'create-issue-next-action/v1' as 
 export const CREATE_ISSUE_STALE_ACTION_SCHEMA = 'create-issue-stale-next-action/v1' as const;
 
 export const CREATE_ISSUE_NEXT_ACTION_KINDS = [
+  'author-round',
   'reconcile-stage-read-only',
   'produce-acceptance-artifacts',
   'retry-start-cycle',
