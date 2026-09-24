@@ -1719,11 +1719,23 @@ describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
     }
   });
 
-  it('classifies harness FAIL without a scenario failure as retryable', () => {
+  it('classifies only failed scenario rows as findings', () => {
     const unsealedWrongBinding = {
       ...report('FAIL', []),
-      causeFamily: 'harness_observation_interrupted',
+      causeFamily: 'harness_observation_interrupted' as const,
       environmentNotes: ['agent_idle_without_report', 'wrong_run_binding=true'],
+    };
+    const blockedScenarios = {
+      ...report('FAIL', [
+        {
+          ...scenario('check precondition', 'available', 'blocked'),
+          causeFamily: 'scenario_precondition_unavailable' as const,
+        },
+        {
+          ...scenario('collect evidence', 'present', 'blocked'),
+          causeFamily: 'scenario_evidence_missing' as const,
+        },
+      ]),
     };
     const scenarioFailure = {
       ...report('FAIL', [{
@@ -1735,6 +1747,7 @@ describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
       }]),
     };
     expect(smokeReportHasScenarioFinding(unsealedWrongBinding)).toBe(false);
+    expect(smokeReportHasScenarioFinding(blockedScenarios)).toBe(false);
     expect(smokeReportHasScenarioFinding(scenarioFailure)).toBe(true);
   });
 

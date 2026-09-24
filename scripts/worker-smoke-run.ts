@@ -1692,8 +1692,7 @@ function zeroExecutionCarryOnlyPass(report: SmokeReport, headSha: string): boole
 
 export function smokeReportHasScenarioFinding(report: SmokeReport): boolean {
   return report.result === 'FAIL'
-    && (isWorkerSmokeScenarioCauseFamily(report.causeFamily)
-      || report.scenarios.some((scenario) => isWorkerSmokeScenarioCauseFamily(scenario.causeFamily)));
+    && report.scenarios.some((scenario) => scenario.outcome === 'fail');
 }
 
 function orderingOwnerEvidence(
