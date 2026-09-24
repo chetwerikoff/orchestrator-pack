@@ -1104,17 +1104,6 @@ function canonicalAuthorRoundDirectory(issueNumber: number): string {
   return resolveCanonicalReviewDirectory({ taskIdentity: 'issue:' + issueNumber }).directory;
 }
 
-function authorRoundAction(
-  binding: CreateIssueActionBinding,
-  reviewDir: string,
- ): CreateIssueNextAction {
-  return reconcileStageReadOnlyAction(
-    { repo: binding.repository },
-    binding.issueNumber,
-    binding,
-    reviewDir,
-  );
-}
 
 interface PreMintAuthorRoundAction {
   schema: typeof CREATE_ISSUE_NEXT_ACTION_SCHEMA;
@@ -1983,23 +1972,47 @@ export function runStageFinalizeCli(
       let nextAction = null;
       if (binding && !result.ok) {
         const errors = 'errors' in result ? result.errors : result.missing.map((item) => item.reason);
-        const structuredAuthorDiagnostics = 'authorDiagnostics' in result
-          && Array.isArray(result.authorDiagnostics)
-          ? result.authorDiagnostics
+        const resultWithAuthorDiagnostics = result as typeof result & {
+          authorDiagnostics?: AuthorDispositionDiagnostic[];
+          authorSchemaFragment?: string;
+        };
+        const structuredAuthorDiagnostics = Array.isArray(resultWithAuthorDiagnostics.authorDiagnostics)
+          ? resultWithAuthorDiagnostics.authorDiagnostics
           : [];
         const onlyAuthorActionable = structuredAuthorDiagnostics.length > 0
           && structuredAuthorDiagnostics.every((item) => item.ownership === 'author-owned');
         const lifecycleInjectedFailure = errors.some(
           (error) => classifyAuthorDispositionFailure(error) === 'lifecycle-injected',
         );
+        if (opts.command === 'produce-artifacts' && !opts.blockedOn && lifecycleInjectedFailure) {
+          return emitLegacyAuthorRoundFailure(opts, {
+            ok: false,
+            cause: 'author_round_lifecycle_validation_failed',
+            blocker: errors.join('; '),
+            nextAction: null,
+          });
+        }
+        if (opts.command === 'produce-artifacts' && !opts.blockedOn && onlyAuthorActionable) {
+          const output = {
+            ok: false,
+            cause: 'acceptance_artifact_production_failed',
+            blocker: messages.join('; '),
+            authorDiagnostics: structuredAuthorDiagnostics,
+            authorSchemaFragment: typeof resultWithAuthorDiagnostics.authorSchemaFragment === 'string'
+              ? resultWithAuthorDiagnostics.authorSchemaFragment
+              : renderAuthorDispositionPromptFragment(),
+            nextAction: preMintAuthorRoundAction(binding, reviewDir),
+          };
+          if (opts.json) console.log(JSON.stringify(output));
+          else process.stderr.write((output.blocker ?? output.cause) + '\n');
+          return 1;
+        }
         const terminalExternal = errors.some((error) => (
           error.includes('operator')
           || error.includes('stage_slot_consumed')
           || error.includes('stale_next_action')
         ));
-        if (opts.command === 'produce-artifacts' && onlyAuthorActionable && !lifecycleInjectedFailure) {
-          nextAction = authorRoundAction(binding, reviewDir);
-        } else if (!lifecycleInjectedFailure && !terminalExternal) {
+        if (!lifecycleInjectedFailure && !terminalExternal) {
           nextAction = createIssueNextAction({
             kind: 'produce-acceptance-artifacts',
             binding,
