@@ -2,7 +2,7 @@
 import '../toolchain/native-entrypoint-preflight.ts';
 
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -134,16 +134,17 @@ export class FileFleetStateStore implements FleetPollingStore {
 }
 
 export function defaultOrcaExecutor(args: readonly string[]): OrcaCommandResult {
-  const result = spawnSync('orca', [...args], {
-    encoding: 'utf8',
-    timeout: 15_000,
-    killSignal: 'SIGTERM',
+  const result = runProcessSync({
+    command: 'orca',
+    args,
+    timeoutMs: 15_000,
+    inheritParentEnv: true,
   });
   return {
-    ok: result.error === undefined && result.status === 0 && result.signal === null,
-    stdout: String(result.stdout ?? ''),
-    stderr: String(result.stderr ?? result.error?.message ?? ''),
-    exitCode: typeof result.status === 'number' ? result.status : null,
+    ok: result.ok,
+    stdout: result.stdout,
+    stderr: result.stderr || result.error || '',
+    exitCode: result.exitCode,
   };
 }
 

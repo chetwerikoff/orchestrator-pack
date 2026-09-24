@@ -13,25 +13,25 @@
     "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
-    "credentials/**",
-    "packages/core/**",
+    "credentials/",
+    "packages/core/",
     "scripts/cursor-unsent-composer-submit.ts",
     "scripts/lib/orchestrator-side-process-supervisor.ts",
-    "scripts/orca-runtime/**",
+    "scripts/orca-runtime/",
     "scripts/orchestrator-side-process-registry.cutover-target.json",
     "scripts/orchestrator-side-process-registry.json",
     "scripts/orchestrator-wake-supervisor.ts",
-    "scripts/pr2-foundation/**",
-    "secrets/**",
-    "vendor/**"
+    "scripts/pr2-foundation/",
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
-    "docs/declarations/**",
+    "docs/declarations/",
     "docs/fleet-alarm.md",
     "docs/orchestration-runbook.md",
     "package.json",
-    "scripts/fleet/**",
+    "scripts/fleet/",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "96ab8dd2deaca40448b22b4d51b83dcc35e86b4e"
+  "source_revision": "0b668a55cd5cb1e5d43c1bf01061211e960e9119"
 }
