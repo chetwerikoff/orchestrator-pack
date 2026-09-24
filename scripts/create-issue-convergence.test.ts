@@ -149,7 +149,7 @@ describe('Issue #2039 T1 author-turn producer convergence', () => {
       findings: [],
     }, null, 2) + '\n');
 
-    const started = startReviewCycle(transport, {
+    const startInput = {
       repo,
       issueNumber,
       sourceRevision: 'r01',
@@ -157,7 +157,34 @@ describe('Issue #2039 T1 author-turn producer convergence', () => {
       tier: 'T1',
       publicActor: 'cursor-flow-manager',
       workdir: root,
-    });
+    } as const;
+    const ledgerPath = join(reviewDir, 'finding-disposition-ledger.json');
+    const originalLedgerBytes = readFileSync(ledgerPath, 'utf8');
+    try {
+      const ledger = JSON.parse(originalLedgerBytes) as Record<string, unknown>;
+      writeFileSync(ledgerPath, JSON.stringify({
+        ...ledger,
+        findings: [{
+          id: 'T1-FINDING-001',
+          defectDisposition: 'addressed',
+          remedyDisposition: 'accepted',
+        }],
+      }, null, 2) + '\n');
+      const rejected = startReviewCycle(transport, startInput);
+      expect(rejected.ok).toBe(false);
+      expect(rejected.diagnostics.map((item) => item.message)).toContain(
+        'finding disposition ledger findings do not match the bound author disposition record',
+      );
+      expect(rejected.cycleId).toBeUndefined();
+      expect(rejected.eventKey).toBeUndefined();
+      expect(state.commentCreateAttempts).toEqual([]);
+      expect(state.comments).toEqual([]);
+    } finally {
+      writeFileSync(ledgerPath, originalLedgerBytes);
+    }
+    expect(readFileSync(ledgerPath, 'utf8')).toBe(originalLedgerBytes);
+
+    const started = startReviewCycle(transport, startInput);
     expect(started.ok, started.diagnostics.map((item) => item.message).join('\n')).toBe(true);
     expect(started.stageAttemptId).toBeTruthy();
   });
