@@ -5,7 +5,9 @@
     "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/orca-runtime/task-adapter.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
-    "scripts/pr2-foundation/supervised-task-launch-assistant.ts"
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
+    "scripts/worker-smoke-entrypoint-1359.test.ts",
+    "scripts/worker-smoke-run.ts"
   ],
   "denylist": [
     "credentials/",
@@ -18,7 +20,9 @@
     "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/orca-runtime/task-adapter.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
-    "scripts/pr2-foundation/supervised-task-launch-assistant.ts"
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
+    "scripts/worker-smoke-entrypoint-1359.test.ts",
+    "scripts/worker-smoke-run.ts"
   ],
-  "source_revision": "406624204d162d443d758c644a64ecc8e7a86ed5"
+  "source_revision": "382d69ba3ad478be63a07f36c0b3e0afc9180e2f"
 }

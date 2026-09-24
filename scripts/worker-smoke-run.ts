@@ -1226,14 +1226,34 @@ function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scen
         '(none — execute no smoke scenarios; emit PASS using the carry-only bookkeeping row required below)',
       )
     : basePrompt;
+  const progressPath = smokeProgressPath(binding.artifactDir);
+  const progressPathToken = Buffer.from(progressPath, 'utf8').toString('base64');
+  const runIdToken = Buffer.from(binding.runId, 'utf8').toString('base64');
+  const writer = [
+    'node -e',
+    "'const fs=require(\"node:fs\");const [p64,r64,ordinal,phase,outcome]=process.argv.slice(1);const event={runId:Buffer.from(r64,\"base64\").toString(\"utf8\"),scenarioOrdinal:Number(ordinal),phase};if(outcome)event.outcome=outcome;fs.appendFileSync(Buffer.from(p64,\"base64\").toString(\"utf8\"),JSON.stringify(event)+\"\\n\",\"utf8\")'",
+  ].join(' ');
+  const progressEventProtocol = [
+    'Canonical progress serialization (mandatory):',
+    ...(scenarioCount === 0
+      ? ['- Do not write progress events when this attempt has no selected scenarios.']
+      : [
+        `- Before scenario 1, run exactly: ${writer} ${progressPathToken} ${runIdToken} 1 started`,
+        `- The first non-empty progress line must parse exactly as: ${JSON.stringify({ runId: binding.runId, scenarioOrdinal: 1, phase: 'started' })}`,
+        '- For later started events, reuse the command with the declared ordinal and phase started, omitting outcome.',
+        '- For terminal events, reuse the command with the same ordinal, phase terminal, and one outcome: pass|fail|blocked|skipped.',
+        '- Never append a terminal event before its matching started event.',
+      ]),
+  ];
   return [
     prompt,
     '',
     'Lifecycle protocol (child-produced evidence only):',
-    `- Progress file: ${smokeProgressPath(binding.artifactDir)}`,
+    `- Progress file: ${progressPath}`,
     `- Cancel request: ${smokeCancelRequestPath(binding.artifactDir)}`,
     `- Cancel acknowledgement: ${smokeCancelAcknowledgementPath(binding.artifactDir)}`,
     `- Declared scenario count: ${scenarioCount}`,
+    ...progressEventProtocol,
     ...(scenarioCount === 0 ? [
       '- Zero selected scenarios means all current tuples were safely carried. Execute no smoke scenario and write no progress event.',
       '- Emit PASS with one bookkeeping row: action: record empty attempt-local execution set | expected: no selected smoke scenario executes | observed: no attempt-local scenarios selected | outcome: pass.',

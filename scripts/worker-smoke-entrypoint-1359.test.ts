@@ -327,6 +327,13 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(firstProgress).toEqual({ runId, scenarioOrdinal: 1, phase: 'started' });
       expect(Object.keys(firstProgress)).toEqual(['runId', 'scenarioOrdinal', 'phase']);
       expect(prompt.match(/Canonical progress serialization \(mandatory\):/gu)).toHaveLength(1);
+      const firstStartCommand = prompt.match(/^- Before scenario 1, run exactly: (.+)$/mu)?.[1];
+      expect(firstStartCommand).toBeTruthy();
+      expect(firstStartCommand).toContain(Buffer.from(progressPath!, 'utf8').toString('base64'));
+      expect(firstStartCommand).toContain(Buffer.from(runId!, 'utf8').toString('base64'));
+      expect(firstStartCommand).toMatch(/ 1 started$/u);
+      expect(prompt).toContain('- For later started events, reuse the command with the declared ordinal and phase started, omitting outcome.');
+      expect(prompt).toContain('- For terminal events, reuse the command with the same ordinal, phase terminal, and one outcome: pass|fail|blocked|skipped.');
       expect(prompt).not.toContain('Before each scenario append one JSON line:');
       expect(prompt).not.toContain('After each scenario append one JSON line:');
       expect(prompt).toContain('Emit each declared progress event exactly once; never repeat a started or terminal event.');
@@ -373,7 +380,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(readIndexes.some((index) => index > sendIndexes[0]! && index < sendIndexes[1]!)).toBe(true);
       expect(operations.filter((value) => value === 'terminal close')).toHaveLength(1);
       expect(operations.filter((value) => value === 'terminal list')).toHaveLength(0);
-      expect(createHash('sha256').update(readFileSync(wrapper), 'utf8').digest('hex')).toMatch(/^[0-9a-f]{64}$/u);
+      expect(createHash('sha256').update(readFileSync(wrapper)).digest('hex')).toMatch(/^[0-9a-f]{64}$/u);
 
       rmSync(promptPath, { force: true });
       rmSync(join(root, 'agent-started'), { force: true });
@@ -390,6 +397,17 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(wait.exitCode, `${wait.stdout}\n${wait.stderr}`).toBe(1);
       const waited = JSON.parse(String(wait.stdout).trim()) as { ok?: boolean; runId?: string; reason?: string };
       expect(waited).toMatchObject({ ok: false, runId: detachedRunId, reason: 'terminal_evidence_invalid' });
+      const detachedPrompt = readFileSync(promptPath, 'utf8');
+      const detachedPromptRunId = detachedPrompt.match(/^run-id:\s*(\S+)\s*$/mu)?.[1]?.trim();
+      const detachedProgressPath = detachedPrompt.match(/^- Progress file:\s*(.+?)\s*$/mu)?.[1]?.trim();
+      expect(detachedPromptRunId).toBe(detachedRunId);
+      expect(detachedProgressPath).toBeTruthy();
+      expect(detachedPrompt).toContain('Canonical progress serialization (mandatory):');
+      const detachedStartCommand = detachedPrompt.match(/^- Before scenario 1, run exactly: (.+)$/mu)?.[1];
+      expect(detachedStartCommand).toBeTruthy();
+      expect(detachedStartCommand).toContain(Buffer.from(detachedProgressPath!, 'utf8').toString('base64'));
+      expect(detachedStartCommand).toContain(Buffer.from(detachedRunId, 'utf8').toString('base64'));
+      expect(detachedStartCommand).toMatch(/ 1 started$/u);
       expect(existsSync(finalEvidencePath)).toBe(true);
       const lifecycleBefore = readFileSync(lifecyclePath, 'utf8');
       const finalBefore = readFileSync(finalEvidencePath, 'utf8');
