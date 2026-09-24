@@ -66,6 +66,19 @@ describe('execute-Issue manager boundary', () => {
     expect(expectReadOnly(classifyExecuteIssueManagerRecord(turn('orphaned_fresh_turn', { conversation_id: undefined }), { ...context, targetId: undefined, conversationUrl: undefined })).kind).toBe('execute-observe-owned-turn');
   });
 
+  it('pauses when recoverable observation has no retained CDP surface', () => {
+    const evaluated = classifyExecuteIssueManagerRecord(
+      turn('observation_uncertain'),
+      { ...context, cdp: undefined },
+    );
+    expect(evaluated.exitCode).toBe(4);
+    expect(evaluated.result).toMatchObject({
+      cause: 'external:chrome_not_running',
+      pause: { resume_when: { operator: true } },
+      nextAction: null,
+    });
+  });
+
   it('projects typed external pauses and retains producer evidence', () => {
     const turnPause = classifyExecuteIssueManagerRecord(turn('chrome_not_running', { scope: 'machine' }), context);
     expect(turnPause.exitCode).toBe(4);
@@ -147,6 +160,30 @@ describe('execute-Issue manager boundary', () => {
     expect(output).toHaveLength(1);
     expect(errors).toEqual([]);
     expect(JSON.parse(output[0]!)).toMatchObject({ cause: 'external:chrome_not_running', nextAction: null });
+  });
+
+  it('uses explicit CLI CDP and conversation URL for read-only uncertain-turn inspection', () => {
+    const output: string[] = [];
+    const errors: string[] = [];
+    const code = runExecuteIssueManagerBoundaryCli([
+      'classify', '--record', '/fixture/turn.json', '--repo', context.repository, '--issue-number', '2081',
+      '--source-revision', 'r03', '--phase', 'implementation', '--production-argv-json', JSON.stringify(context.productionArgv),
+      '--cdp', context.cdp!, '--conversation-url', context.conversationUrl!,
+    ], {
+      readFile: () => JSON.stringify(turn('observation_uncertain')),
+      stdout: { write: (value) => output.push(value) }, stderr: { write: (value) => errors.push(value) },
+      currentArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'],
+    });
+    expect(code).toBe(3);
+    expect(output).toHaveLength(1);
+    expect(errors).toEqual([]);
+    const result = JSON.parse(output[0]!);
+    expect(result.cause).toBe('execute_owned_turn_reobserve');
+    expect(result.nextAction.argv).toEqual([
+      'node', '--experimental-strip-types', 'scripts/browser-gpt-page-probe.ts', 'inspect',
+      '--cdp', context.cdp, '--url', context.conversationUrl,
+    ]);
+    expect(isExecuteIssueReadOnlyArgv(result.nextAction.argv)).toBe(true);
   });
 
   it('rejects an incomplete identity pair at the CLI boundary', () => {

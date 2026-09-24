@@ -345,9 +345,18 @@ function classifyTurn(
     case 'foreign_activity':
     case 'output_conflict':
       return pause(context, producer, 'external:content_authority_conflict', value, 'resolve the content-authority conflict, then resume the same execute-Issue Dispatch');
+    case 'observation_uncertain':
+      return text(context.cdp)
+        ? recoverObservation(context, producer, value, 'execute_owned_turn_reobserve')
+        : pause(
+          context,
+          producer,
+          'external:chrome_not_running',
+          value,
+          'restore the retained Chrome/CDP surface, then resume the same execute-Issue Dispatch',
+        );
     case 'stream_timeout':
     case 'no_reply':
-    case 'observation_uncertain':
     case 'conversation_busy':
     case 'profile_busy':
     case 'send_failed':
