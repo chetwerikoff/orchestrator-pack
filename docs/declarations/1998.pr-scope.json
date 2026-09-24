@@ -51,5 +51,5 @@
     "scripts/vitest-ci-lanes.config.json",
     "tests/external-output-references/browser-turn-target-crashed-2026-09-21.txt"
   ],
-  "source_revision": "496c99d474da9e58b5461fb36aedff78d6218527"
+  "source_revision": "95aafdba280f4c9dfd13fa09a1bee7baad64e0c8"
 }
