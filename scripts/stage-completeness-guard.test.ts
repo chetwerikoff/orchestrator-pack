@@ -1068,6 +1068,21 @@ describe('--public-actor argv validation (Issue #1980)', () => {
     'competitive',
   ];
 
+  it('requires explicit --public-actor before start-cycle can inspect or project state', () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const runGh = vi.fn((_argv: string[]) => ({ exitCode: 0, stdout: '', stderr: '' }));
+    try {
+      expect(runStageFinalizeCli([...startCycleArgv, '--tier', 'T2', '--json'], { runGh })).toBe(2);
+      expect(stderr.mock.calls.flat().join('')).toContain('--public-actor is required');
+      expect(stdout).not.toHaveBeenCalled();
+      expect(runGh).not.toHaveBeenCalled();
+    } finally {
+      stderr.mockRestore();
+      stdout.mockRestore();
+    }
+  });
+
   it('AC1: rejects flow-manager at argv parse with the accepted set in stderr', () => {
     const chunks: string[] = [];
     const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
@@ -1150,6 +1165,8 @@ describe('--public-actor argv validation (Issue #1980)', () => {
         'node',
         'scripts/create-issue-stage-finalize.ts',
         'start-cycle',
+        '--public-actor',
+        'cursor-flow-manager',
         '--jsoon',
       ], { runGh });
       expect(exitCode).toBe(2);

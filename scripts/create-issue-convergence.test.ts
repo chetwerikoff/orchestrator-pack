@@ -749,6 +749,47 @@ describe('Issue #2037 zero-send retry convergence', () => {
   });
 });
 
+describe('start-cycle actor binding on read-only reconciliation', () => {
+  it('preserves the supplied public actor in a stale-binding reconcile-stage action', () => {
+    const root = tempRoot();
+    const stateRoot = join(root, 'state');
+    mkdirSync(stateRoot, { recursive: true });
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = stateRoot;
+    const issueNumber = 2037;
+    const repo = 'chetwerikoff/orchestrator-pack';
+    const state = createMockGhState({
+      issue: { title: 'actor binding fixture', body: '<!-- source-revision: r03 -->\nfixture', labels: [] },
+    });
+    const transport = createMockTransport(state);
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => logs.push(String(line)));
+    try {
+      const code = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'start-cycle',
+        '--repo', repo,
+        '--issue-number', String(issueNumber),
+        '--source-revision', 'r03',
+        '--stage', 'competitive',
+        '--tier', 'T2',
+        '--public-actor', 'other-flow-manager',
+        '--expected-source-revision', 'r02',
+        '--expected-stage', 'competitive',
+        '--json',
+      ], transport);
+      expect(code).toBe(3);
+      const output = JSON.parse(logs.at(-1) ?? '{}') as {
+        nextAction?: { argv?: string[] };
+      };
+      expect(output.nextAction?.argv).toEqual(expect.arrayContaining([
+        '--public-actor', 'other-flow-manager',
+      ]));
+      expect(state.comments).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe('structured blocked_on manager contract (Issue #2004)', () => {
   const issueBlockedOn = {
     issue: 1977,
@@ -1689,6 +1730,8 @@ describe('Issue #1997 author-round convergence', () => {
         '--source-revision', 'r01',
         '--stage', 'architectural-review',
         '--tier', 'T2',
+        '--public-actor',
+        'cursor-flow-manager',
         '--json',
       ], transport);
       expect(code).toBe(3);
@@ -1739,6 +1782,8 @@ describe('Issue #1997 author-round convergence', () => {
         '--source-revision', 'r01',
         '--stage', 'architectural-review',
         '--tier', 'T2',
+        '--public-actor',
+        'cursor-flow-manager',
         '--json',
       ], transport)).toBe(3);
       action = JSON.parse(initialLogs.at(-1) ?? '{}').nextAction;

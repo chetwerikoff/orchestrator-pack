@@ -84,6 +84,7 @@ interface JournalTailCliOptions {
 
 interface StageFinalizeCliOptions extends JournalTailCliOptions {
   command: 'start-cycle' | 'author-round' | 'publish-stage' | 'retry-pending' | 'reconcile-stage' | 'bind-published-comment' | 'produce-author-dispositions' | 'produce-artifacts' | 'check-artifacts';
+  publicActorExplicit?: boolean;
   repo: string;
   issueNumber: number;
   sourceRevision?: string;
@@ -381,6 +382,7 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
     repo: 'chetwerikoff/orchestrator-pack',
     issueNumber: 0,
     publicActor: 'cursor-flow-manager',
+    publicActorExplicit: false,
     json: false,
     stageEvidencePaths: [],
     claudeProducerEvidencePaths: [],
@@ -545,6 +547,7 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
         break;
     }
   }
+  opts.publicActorExplicit = argv.slice(3).includes('--public-actor');
   return opts;
 }
 
@@ -783,7 +786,7 @@ function evidencePathForBinding(
 }
 
 function reconcileStageReadOnlyAction(
-  opts: Pick<StageFinalizeCliOptions, 'repo' | 'blockedOn'>,
+  opts: Pick<StageFinalizeCliOptions, 'repo' | 'blockedOn' | 'publicActor' | 'publicActorExplicit'>,
   issueNumber: number,
   binding: CreateIssueActionBinding,
   reviewDir?: string,
@@ -799,6 +802,7 @@ function reconcileStageReadOnlyAction(
     ...(binding.stageAttemptId ? ['--expected-stage-attempt-id', binding.stageAttemptId] : []),
     '--json',
   ];
+  if (opts.publicActorExplicit && opts.publicActor) argv.push('--public-actor', opts.publicActor);
   if (reviewDir) argv.push('--review-dir', reviewDir);
   if (stageEvidencePath) argv.push('--stage-evidence', stageEvidencePath);
   return createIssueNextAction({
@@ -1325,6 +1329,10 @@ export function runStageFinalizeCli(
   if (argv[2] === '--help' || argv[2] === '-h') {
     process.stdout.write(stageFinalizeUsage() + '\n');
     return 0;
+  }
+  if (argv[2] === 'start-cycle' && !argv.slice(3).includes('--public-actor') && !argv.slice(3).some((arg) => arg === '--help' || arg === '-h')) {
+    process.stderr.write('create-issue-stage-finalize: --public-actor is required\n');
+    return 2;
   }
   return runParsedCli(argv, 'create-issue-stage-finalize', parseStageFinalizeArgs, (opts) => {
     if (opts.command === 'produce-author-dispositions') {
