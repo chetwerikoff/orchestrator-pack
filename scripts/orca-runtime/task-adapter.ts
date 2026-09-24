@@ -1,4 +1,6 @@
-import { resolve } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import {
   runtimeFailure,
   runtimeUnsupported,
@@ -27,7 +29,10 @@ import {
   TERMINAL_DISPATCH_STATES,
   TERMINAL_WORKER_STATES,
 } from './dispatch-terminal-mail.ts';
-import { resolveDispatchTerminalMailLedgerPath } from '../pr2-foundation/wake-supervisor-state-root.ts';
+import {
+  resolveDispatchTerminalMailLedgerPath,
+  resolveWakeSupervisorStateRoot,
+} from '../pr2-foundation/wake-supervisor-state-root.ts';
 
 function usesNativePtyFallback(generation: string): boolean {
   return generation.includes('@@');
@@ -87,6 +92,65 @@ type OrcaAssignmentLifecycleObservation =
 const DISPATCH_HEARTBEAT_STALE_AFTER_MS = 10 * 60 * 1_000;
 const SQLITE_UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/u;
 const RFC3339_UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?Z$/u;
+const LAUNCH_ASSISTANT_TASK_TITLE = /^opk-(?:manager|t[123])-.+$/u;
+type LaunchTaskTerminalOwnership = Readonly<{
+  title: string;
+  workspacePath: string;
+  identity: RuntimeWorkerIdentity;
+}>;
+type OwnershipRead =
+  | { readonly ok: true; readonly value: LaunchTaskTerminalOwnership | null }
+  | { readonly ok: false };
+
+function isLaunchAssistantTaskTitle(title: string): boolean {
+  return LAUNCH_ASSISTANT_TASK_TITLE.test(title);
+}
+
+function launchTaskTerminalOwnershipPath(title: string, stateRoot: string): string {
+  const key = createHash('sha256').update(title).digest('hex');
+  return join(stateRoot, 'launch-task-terminals', `${key}.json`);
+}
+
+function readLaunchTaskTerminalOwnership(path: string): OwnershipRead {
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { ok: true, value: null };
+    return { ok: false };
+  }
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (!isRecord(parsed) || !isRecord(parsed.identity)) return { ok: false };
+    const identity = parsed.identity;
+    if (typeof parsed.title !== 'string' || typeof parsed.workspacePath !== 'string'
+      || typeof identity.id !== 'string' || typeof identity.generation !== 'string'
+      || typeof identity.runtime !== 'string') return { ok: false };
+    return {
+      ok: true,
+      value: {
+        title: parsed.title,
+        workspacePath: parsed.workspacePath,
+        identity: { id: identity.id, generation: identity.generation, runtime: identity.runtime },
+      },
+    };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function persistLaunchTaskTerminalOwnership(path: string, ownership: LaunchTaskTerminalOwnership): boolean {
+  const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    writeFileSync(temporaryPath, `${JSON.stringify(ownership)}\n`, { mode: 0o600, flag: 'wx' });
+    renameSync(temporaryPath, path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function failureDetail(failure: RuntimeOperationFailure): string {
   return `${failure.operation}:${failure.status}:${failure.reason}`;
 }
@@ -378,9 +442,21 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
 
   #assignmentProvenance(worker: RuntimeWorker): RuntimeWorker {
     const assignmentOwned = this.#assignmentOwned.get(worker.identity.id);
-    return assignmentOwned && sameRuntimeWorker(assignmentOwned, worker.identity)
-      ? { ...worker, provenance: 'internal' }
-      : worker;
+    if (assignmentOwned && sameRuntimeWorker(assignmentOwned, worker.identity)) {
+      return { ...worker, provenance: 'internal' };
+    }
+    if (!worker.title || !isLaunchAssistantTaskTitle(worker.title)) return worker;
+    const ownershipPath = launchTaskTerminalOwnershipPath(
+      worker.title,
+      resolveWakeSupervisorStateRoot({ env: this.#options.env }),
+    );
+    const persisted = readLaunchTaskTerminalOwnership(ownershipPath);
+    if (!persisted.ok || !persisted.value) return worker;
+    const ownership = persisted.value;
+    if (ownership.title !== worker.title || ownership.workspacePath !== worker.workspacePath
+      || !sameRuntimeWorker(ownership.identity, worker.identity)) return worker;
+    this.#assignmentOwned.set(worker.identity.id, worker.identity);
+    return { ...worker, provenance: 'internal' };
   }
 
   override listWorkers(
@@ -599,26 +675,77 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     },
     options: RuntimeCallOptions = {},
   ): RuntimeResult<RuntimeWorker> {
-    const result = super.spawnWorker(input, options);
-    if (result.status === 'ok') {
-      let worker = result.value;
-      if (usesNativePtyFallback(worker.identity.generation)) {
-        const exact = super.findWorkerById(worker.identity.id, options);
-        if (exact.status !== 'ok') {
-          return runtimeFailure('spawn_worker', `runtime_worker_identity_readback_failed:${exact.reason}`);
-        }
-        if (!exact.value) {
-          return runtimeUnsupported('spawn_worker', 'runtime_worker_identity_missing');
-        }
-        this.rebindOpenCodeUrl(worker.identity, exact.value.identity);
-        worker = { ...exact.value, provenance: 'internal' };
+    const launchTaskTitle = isLaunchAssistantTaskTitle(input.title);
+    const ownershipPath = launchTaskTitle
+      ? launchTaskTerminalOwnershipPath(
+        input.title,
+        resolveWakeSupervisorStateRoot({ env: this.#options.env }),
+      )
+      : null;
+    if (ownershipPath) {
+      const persisted = readLaunchTaskTerminalOwnership(ownershipPath);
+      if (!persisted.ok) {
+        return runtimeFailure('spawn_worker', 'launch_task_terminal_ownership_unreadable');
       }
-      this.#unprovenOwnedPresence.delete(worker.identity.id);
-      this.#ownedForStop.set(worker.identity.id, worker.identity);
-      this.#stopWorkspace.set(worker.identity.id, input.workspace ?? 'active');
-      return { status: 'ok', value: worker };
+      if (persisted.value) {
+        const ownership = persisted.value;
+        if (ownership.title !== input.title) {
+          return runtimeFailure('spawn_worker', 'launch_task_terminal_title_mismatch');
+        }
+        const current = super.findWorker(ownership.identity, options);
+        if (current.status !== 'ok') return current;
+        if (!current.value
+          || !sameRuntimeWorker(current.value.identity, ownership.identity)
+          || current.value.title !== ownership.title
+          || current.value.workspacePath !== ownership.workspacePath) {
+          return runtimeFailure('spawn_worker', 'launch_task_terminal_identity_unproven');
+        }
+        if (input.workspace && input.workspace !== 'active'
+          && resolve(input.workspace) !== resolve(ownership.workspacePath)) {
+          return runtimeFailure('spawn_worker', 'launch_task_terminal_workspace_mismatch');
+        }
+        if (!input.workspace || input.workspace === 'active') {
+          const readiness = super.readiness(options);
+          if (readiness.status !== 'ok') return readiness;
+          if (readiness.value.workspacePath !== ownership.workspacePath) {
+            return runtimeFailure('spawn_worker', 'launch_task_terminal_workspace_mismatch');
+          }
+        }
+        this.#assignmentOwned.set(current.value.identity.id, current.value.identity);
+        this.#ownedForStop.set(current.value.identity.id, current.value.identity);
+        this.#stopWorkspace.set(current.value.identity.id, input.workspace ?? ownership.workspacePath);
+        return { status: 'ok', value: { ...current.value, provenance: 'internal' } };
+      }
+      const existingWorkers = super.listWorkers({ workspace: input.workspace ?? 'active' }, options);
+      if (existingWorkers.status !== 'ok') return existingWorkers;
+      if (existingWorkers.value.some((worker) => worker.title === input.title)) {
+        return runtimeFailure('spawn_worker', 'launch_task_terminal_existing_owner_unproven');
+      }
     }
-    return result;
+    const result = super.spawnWorker(input, options);
+    if (result.status !== 'ok') return result;
+    let worker = result.value;
+    if (usesNativePtyFallback(worker.identity.generation)) {
+      const exact = super.findWorkerById(worker.identity.id, options);
+      if (exact.status !== 'ok') {
+        return runtimeFailure('spawn_worker', `runtime_worker_identity_readback_failed:${exact.reason}`);
+      }
+      if (!exact.value) return runtimeUnsupported('spawn_worker', 'runtime_worker_identity_missing');
+      this.rebindOpenCodeUrl(worker.identity, exact.value.identity);
+      worker = { ...exact.value, provenance: 'internal' };
+    }
+    if (ownershipPath && !persistLaunchTaskTerminalOwnership(ownershipPath, {
+      title: input.title,
+      workspacePath: worker.workspacePath,
+      identity: worker.identity,
+    })) {
+      return runtimeFailure('spawn_worker', 'launch_task_terminal_ownership_persist_failed');
+    }
+    this.#unprovenOwnedPresence.delete(worker.identity.id);
+    this.#assignmentOwned.set(worker.identity.id, worker.identity);
+    this.#ownedForStop.set(worker.identity.id, worker.identity);
+    this.#stopWorkspace.set(worker.identity.id, input.workspace ?? 'active');
+    return { status: 'ok', value: worker };
   }
 
   override stopWorker(

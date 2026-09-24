@@ -1,6 +1,7 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { DeterministicRuntimeAdapter } from '../runtime/test-adapter.ts';
@@ -196,6 +197,77 @@ describe('Orca task adapter exact spawn identity', () => {
     const showIndex = operations.indexOf('terminal show');
     expect(showIndex).toBeGreaterThan(createIndex);
     expect(operations.slice(createIndex + 1, showIndex)).not.toContain('terminal read');
+  });
+});
+
+describe('Orca task terminal ownership persistence', () => {
+  it('restores only the exact task-owned terminal across adapter instances', () => {
+    const stateRoot = mkdtempSync(join(tmpdir(), 'opk-task-terminal-ownership-'));
+    const env = { OPK_WAKE_SUPERVISOR_STATE_DIR: stateRoot };
+    const workspacePath = '/tmp/opk-task-2107';
+    const title = 'opk-t2-task_2107';
+    const ownedTerminal = {
+      handle: 'term-task-2107',
+      incarnationId: 'generation-task-2107',
+      worktreePath: workspacePath,
+      title,
+      status: 'running' as const,
+    };
+    const foreignTerminal = {
+      ...ownedTerminal,
+      handle: 'term-task-foreign',
+      incarnationId: 'generation-task-foreign',
+      title: 'opk-t2-task_9999',
+    };
+    const terminals: typeof ownedTerminal[] = [];
+    let creates = 0;
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${String(args[0] ?? '')} ${String(args[1] ?? '')}`;
+      switch (operation) {
+        case 'terminal create':
+          creates += 1;
+          terminals.push(ownedTerminal);
+          return { ok: true, result: { terminal: ownedTerminal } };
+        case 'terminal show': {
+          const handle = String(args[args.indexOf('--terminal') + 1] ?? '');
+          const terminal = terminals.find((candidate) => candidate.handle === handle);
+          return terminal
+            ? { ok: true, result: { terminal } }
+            : { ok: false, error: { code: 'not_found', message: 'not found' } };
+        }
+        case 'terminal list':
+          return { ok: true, result: { totalCount: terminals.length, truncated: false, terminals } };
+        default:
+          return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+      }
+    });
+    try {
+      const firstAdapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env });
+      const first = firstAdapter.spawnWorker({ title, command: 'opencode', workspace: workspacePath });
+      expect(first.status).toBe('ok');
+      if (first.status !== 'ok') return;
+      expect(first.value.provenance).toBe('internal');
+      expect(creates).toBe(1);
+
+      terminals.push(foreignTerminal);
+      terminals.push({
+        ...ownedTerminal,
+        handle: 'term-task-impostor',
+        incarnationId: 'generation-task-impostor',
+      });
+      const secondAdapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env });
+      const reused = secondAdapter.spawnWorker({ title, command: 'opencode', workspace: workspacePath });
+      expect(reused).toMatchObject({ status: 'ok', value: { identity: first.value.identity, provenance: 'internal' } });
+      expect(creates).toBe(1);
+      const listed = secondAdapter.listWorkers({ workspace: workspacePath });
+      expect(listed.status).toBe('ok');
+      if (listed.status !== 'ok') return;
+      expect(listed.value.find((worker) => worker.title === title)?.provenance).toBe('internal');
+      expect(listed.value.find((worker) => worker.title === foreignTerminal.title)?.provenance).toBe('external');
+      expect(listed.value.find((worker) => worker.identity.id === 'term-task-impostor')?.provenance).toBe('external');
+    } finally {
+      rmSync(stateRoot, { recursive: true, force: true });
+    }
   });
 });
 

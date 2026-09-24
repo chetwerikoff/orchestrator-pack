@@ -123,6 +123,32 @@ function installTrustedTargetFixture(
 }
 
 describe('Issue #1359 real worker-smoke entrypoint', () => {
+  it('reports a detached child exit before lifecycle reservation separately from the deadline', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-detach-early-exit-'));
+
+    try {
+      const result = run(resolve('scripts/worker-smoke-run'), [
+        'run', '--detach',
+        '--issue', '1933',
+        '--pr', '1941',
+        '--head-sha', '1'.repeat(40),
+        '--issue-body-file', join(root, 'missing-issue.md'),
+        '--smoke-complexity', 'complex',
+        '--repo-root', root,
+        '--cwd', root,
+        '--dry-run',
+        '--json',
+      ], { cwd: root });
+
+      expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(1);
+      expect(result.stderr).toContain('worker_smoke_detach_child_exited_before_lifecycle');
+      expect(result.stderr).not.toContain('worker_smoke_detach_lifecycle_timeout');
+      expect(existsSync(join(root, '.orca-worker-smoke', 'runs'))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('submits one combined prompt actuation, confirms first-ordinal evidence, and closes the frozen owned handle', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-entrypoint-1359-'));
     const bin = join(root, 'bin');
@@ -328,6 +354,13 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(firstProgress).toEqual({ runId, scenarioOrdinal: 1, phase: 'started' });
       expect(Object.keys(firstProgress)).toEqual(['runId', 'scenarioOrdinal', 'phase']);
       expect(prompt.match(/Canonical progress serialization \(mandatory\):/gu)).toHaveLength(1);
+      const firstStartCommand = prompt.match(/^- Before scenario 1, run exactly: (.+)$/mu)?.[1];
+      expect(firstStartCommand).toBeTruthy();
+      expect(firstStartCommand).toContain(Buffer.from(progressPath!, 'utf8').toString('base64'));
+      expect(firstStartCommand).toContain(Buffer.from(runId!, 'utf8').toString('base64'));
+      expect(firstStartCommand).toMatch(/ 1 started$/u);
+      expect(prompt).toContain('- For later started events, reuse the command with the declared ordinal and phase started, omitting outcome.');
+      expect(prompt).toContain('- For terminal events, reuse the command with the same ordinal, phase terminal, and one outcome: pass|fail|blocked|skipped.');
       expect(prompt).not.toContain('Before each scenario append one JSON line:');
       expect(prompt).not.toContain('After each scenario append one JSON line:');
       expect(prompt).toContain('Emit each declared progress event exactly once; never repeat a started or terminal event.');
@@ -374,7 +407,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(readIndexes.some((index) => index > sendIndexes[0]! && index < sendIndexes[1]!)).toBe(true);
       expect(operations.filter((value) => value === 'terminal close')).toHaveLength(1);
       expect(operations.filter((value) => value === 'terminal list')).toHaveLength(0);
-      expect(createHash('sha256').update(readFileSync(wrapper), 'utf8').digest('hex')).toMatch(/^[0-9a-f]{64}$/u);
+      expect(createHash('sha256').update(readFileSync(wrapper)).digest('hex')).toMatch(/^[0-9a-f]{64}$/u);
 
       rmSync(promptPath, { force: true });
       rmSync(join(root, 'agent-started'), { force: true });
@@ -391,6 +424,17 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(wait.exitCode, `${wait.stdout}\n${wait.stderr}`).toBe(1);
       const waited = JSON.parse(String(wait.stdout).trim()) as { ok?: boolean; runId?: string; reason?: string };
       expect(waited).toMatchObject({ ok: false, runId: detachedRunId, reason: 'terminal_evidence_invalid' });
+      const detachedPrompt = readFileSync(promptPath, 'utf8');
+      const detachedPromptRunId = detachedPrompt.match(/^run-id:\s*(\S+)\s*$/mu)?.[1]?.trim();
+      const detachedProgressPath = detachedPrompt.match(/^- Progress file:\s*(.+?)\s*$/mu)?.[1]?.trim();
+      expect(detachedPromptRunId).toBe(detachedRunId);
+      expect(detachedProgressPath).toBeTruthy();
+      expect(detachedPrompt).toContain('Canonical progress serialization (mandatory):');
+      const detachedStartCommand = detachedPrompt.match(/^- Before scenario 1, run exactly: (.+)$/mu)?.[1];
+      expect(detachedStartCommand).toBeTruthy();
+      expect(detachedStartCommand).toContain(Buffer.from(detachedProgressPath!, 'utf8').toString('base64'));
+      expect(detachedStartCommand).toContain(Buffer.from(detachedRunId, 'utf8').toString('base64'));
+      expect(detachedStartCommand).toMatch(/ 1 started$/u);
       expect(existsSync(finalEvidencePath)).toBe(true);
       const lifecycleBefore = readFileSync(lifecyclePath, 'utf8');
       const finalBefore = readFileSync(finalEvidencePath, 'utf8');
