@@ -1,0 +1,25 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2103,
+  "declared_paths": [
+    "scripts/gh-wrapper.test.ts",
+    "scripts/lib/gh-inventory-match.mjs",
+    "scripts/lib/gh-rest-routes.mjs",
+    "scripts/worktree-lifecycle/operations.test.ts",
+    "scripts/worktree-teardown.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/gh-wrapper.test.ts",
+    "scripts/lib/gh-inventory-match.mjs",
+    "scripts/lib/gh-rest-routes.mjs",
+    "scripts/worktree-lifecycle/operations.test.ts",
+    "scripts/worktree-teardown.test.ts"
+  ],
+  "source_revision": "43e04bb2865ad26637845c955d3f687900298f72"
+}
