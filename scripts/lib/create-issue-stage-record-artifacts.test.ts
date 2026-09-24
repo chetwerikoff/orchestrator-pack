@@ -19,6 +19,8 @@ import {
   locateGovernedAuthorDispositionBlock,
   parseCanonicalCaptureRevision,
   produceAcceptanceArtifacts,
+  produceAuthorDispositions,
+  serializeAuthorDispositionBinding,
   authorDispositionAdmission,
   bindPublishedCommentToSlot,
   reconcileCreateIssueStage,
@@ -77,10 +79,13 @@ const CYCLE_COMMENT_ID = COMMENT_ID + 900;
 const PUBLISHER = 'chetwerikoff';
 const CREATED_AT = '2026-08-07T04:00:00Z';
 const tempDirs: string[] = [];
+const originalCreateIssueStateRoot = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
 
 afterEach(() => {
   vi.clearAllMocks();
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  if (originalCreateIssueStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+  else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = originalCreateIssueStateRoot;
 });
 
 function canonicalVerdict(
@@ -3244,12 +3249,12 @@ describe('Issue #2037 durable legal zero-send retry authority', () => {
         '--json',
       ], transport({ issueBodies: [finalAcceptanceIssueBody('r999')] }));
 
-      expect(result).toBe(1);
+      expect(result).toBe(3);
       const output = JSON.parse(logs.at(-1) ?? '{}') as Record<string, any>;
       expect(output).toMatchObject({
         ok: false,
         cause: 'stale_next_action',
-        nextAction: null,
+        nextAction: { kind: 'reconcile-stage-read-only' },
         binding: { sourceRevision: initialEvidence.sourceRevision, stageAttemptId: initialEvidence.stageAttemptId },
         observed: { repository: REPOSITORY, issueNumber: ISSUE },
       });
@@ -3518,6 +3523,369 @@ describe('governed author disposition block shapes (Issue #1983)', () => {
     const result = produce(input);
     expect(result.ok, result.errors.join('\n')).toBe(true);
   });
+
+  it('fails closed on same-episode same-revision author binding divergence without overwriting the producer-owned file', () => {
+    const input = fixture({ transportClassification: 'complete', withTurnResult: true, withCapture: true });
+    const first = produce(input);
+    expect(first.ok, first.errors.join('\n')).toBe(true);
+
+    const originalBytes = readFileSync(input.authorPath, 'utf8');
+    writeGovernedAuthorReply(input.authorReplyPath, {
+      sourceRevision: REVISION,
+      predecessorStage: 'architectural',
+      findings: [{
+        id: 'divergent-author-finding',
+        type: 'quality',
+        occurrences: ['sha256:' + 'b'.repeat(64) + ':divergent-author-finding:1'],
+        defectDisposition: 'addressed',
+        remedyDisposition: 'accepted',
+      }],
+      m4: [{ mechanism: 'divergent-author-mechanism', disposition: 'keep' }],
+    });
+
+    const retry = produce(input);
+    expect(retry.ok).toBe(false);
+    expect(retry.errors.join('\n')).toContain('conflicts with the same binding');
+    expect(readFileSync(input.authorPath, 'utf8')).toBe(originalBytes);
+  });
+});
+
+describe('Issue #2039 pre-stage T1 author disposition producer', () => {
+  function t1Fixture(revision = 'r01') {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2039-author-producer-'));
+    tempDirs.push(root);
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = root;
+    const reviewDir = join(root, '.review', String(ISSUE));
+    mkdirSync(reviewDir, { recursive: true });
+    writeFileSync(join(reviewDir, 'tier-intake.json'), JSON.stringify({
+      schema: 'tier-intake/v1',
+      producer: 'fixture',
+      taskIdentity: TASK,
+      kind: 'fresh',
+      priorTier: 'T1',
+      firstRevision: 'r01',
+    }, null, 2) + '\n');
+    const authorReplyPath = join(reviewDir, 'round-01-author-reply.md');
+    writeGovernedAuthorReply(authorReplyPath, {
+      sourceRevision: revision,
+      predecessorStage: null,
+      findings: [{
+        id: 't1-author-finding',
+        type: 'quality',
+        occurrences: ['sha256:' + 'a'.repeat(64) + ':t1-author-finding:1'],
+        defectDisposition: 'addressed',
+        remedyDisposition: 'accepted',
+      }],
+      m4: [{ mechanism: 'existing-authority', disposition: 'keep' }],
+    });
+    const body = `<!-- source-revision: ${revision} -->\n# T1 producer fixture\n`;
+    return { root, reviewDir, authorReplyPath, body };
+  }
+
+  it('materializes the stable snapshot first and producer-bound governed author bytes without stage side effects', () => {
+    const input = t1Fixture();
+    const result = produceAuthorDispositions({
+      reviewDir: input.reviewDir,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      sourceRevision: 'r01',
+      artifactSourceTransport: transport({ issueBodies: [input.body, input.body] }),
+    });
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.retryable).toBe(false);
+    expect(result.reviewEpisodeId).toBe(`${TASK}@r01`);
+
+    const authorPath = join(input.reviewDir, 'author-dispositions.json');
+    const snapshotPath = join(input.reviewDir, 'issue-r01-body.json');
+    const author = JSON.parse(readFileSync(authorPath, 'utf8')) as Record<string, any>;
+    expect(author).toMatchObject({
+      schema: AUTHOR_DISPOSITIONS_SCHEMA,
+      producer: 'governed-author-output/v1',
+      reviewEpisodeId: `${TASK}@r01`,
+      sourceRevision: 'r01',
+      predecessorStage: null,
+      draft: input.body,
+      findings: [{ id: 't1-author-finding' }],
+      m4: {
+        reviewEpisodeId: `${TASK}@r01`,
+        sourceRevision: 'r01',
+        predecessorStage: null,
+        inventory: [{ mechanism: 'existing-authority', disposition: 'keep' }],
+      },
+    });
+    const expected = serializeAuthorDispositionBinding({
+      payload: {
+        schema: AUTHOR_DISPOSITIONS_SCHEMA,
+        sourceRevision: 'r01',
+        findings: author.findings,
+        m4: { inventory: author.m4.inventory },
+      },
+      producer: 'governed-author-output/v1',
+      reviewEpisodeId: `${TASK}@r01`,
+      sourceRevision: 'r01',
+      predecessorStage: null,
+      draft: input.body,
+    });
+    expect(readFileSync(authorPath, 'utf8')).toBe(expected.bytes);
+    expect(JSON.parse(readFileSync(snapshotPath, 'utf8'))).toMatchObject({
+      schema: 'create-issue-live-snapshot/v1',
+      issueNumber: ISSUE,
+      sourceRevision: 'r01',
+      body: input.body,
+    });
+    expect(readdirSync(input.reviewDir).some((name) => /^attempt-/.test(name))).toBe(false);
+    expect(readdirSync(input.reviewDir).some((name) => /^stage-completeness-receipt-/.test(name))).toBe(false);
+    expect(existsSync(join(input.reviewDir, 'finding-disposition-ledger.json'))).toBe(false);
+    expect(existsSync(join(input.reviewDir, 'acceptance-artifacts.json'))).toBe(false);
+
+    const before = readFileSync(authorPath, 'utf8');
+    const rerun = produceAuthorDispositions({
+      reviewDir: input.reviewDir,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      sourceRevision: 'r01',
+      artifactSourceTransport: transport({ issueBodies: [input.body, input.body] }),
+    });
+    expect(rerun.ok, rerun.errors.join('\n')).toBe(true);
+    expect(readFileSync(authorPath, 'utf8')).toBe(before);
+  });
+
+  it('leaves an inert snapshot when failure occurs after snapshot commit and exact retry completes the handoff', () => {
+    const input = t1Fixture();
+    const failed = produceAuthorDispositions({
+      reviewDir: input.reviewDir,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      sourceRevision: 'r01',
+      artifactSourceTransport: transport({ issueBodies: [input.body, input.body] }),
+      afterIssueSnapshotCommit: () => { throw new Error('injected-after-snapshot'); },
+    });
+    expect(failed).toMatchObject({ ok: false, retryable: false, cause: 'write-failed' });
+    expect(existsSync(join(input.reviewDir, 'issue-r01-body.json'))).toBe(true);
+    expect(existsSync(join(input.reviewDir, 'author-dispositions.json'))).toBe(false);
+
+    const retried = produceAuthorDispositions({
+      reviewDir: input.reviewDir,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      sourceRevision: 'r01',
+      artifactSourceTransport: transport({ issueBodies: [input.body, input.body] }),
+    });
+    expect(retried.ok, retried.errors.join('\n')).toBe(true);
+    expect(existsSync(join(input.reviewDir, 'author-dispositions.json'))).toBe(true);
+  });
+
+  it('keeps the immutable episode identity across r01-r02-r03 pre-capture replacement and preserves snapshots', () => {
+    const input = t1Fixture('r01');
+    for (const revision of ['r01', 'r02', 'r03']) {
+      const body = finalAcceptanceIssueBody(revision).replace('tier: T2', 'tier: T1');
+      writeGovernedAuthorReply(input.authorReplyPath, {
+        sourceRevision: revision,
+        predecessorStage: null,
+        findings: [],
+        m4: [],
+      });
+      const result = produceAuthorDispositions({
+        reviewDir: input.reviewDir,
+        repositoryFullName: REPOSITORY,
+        issueNumber: ISSUE,
+        sourceRevision: revision,
+        artifactSourceTransport: transport({ issueBodies: [body, body] }),
+      });
+      expect(result.ok, result.errors.join('\n')).toBe(true);
+      const author = JSON.parse(readFileSync(join(input.reviewDir, 'author-dispositions.json'), 'utf8')) as Record<string, unknown>;
+      expect(author.reviewEpisodeId).toBe(`${TASK}@r01`);
+      expect(author.sourceRevision).toBe(revision);
+      expect(existsSync(join(input.reviewDir, `issue-${revision}-body.json`))).toBe(true);
+    }
+    expect(['r01', 'r02', 'r03'].every((revision) => existsSync(join(input.reviewDir, `issue-${revision}-body.json`)))).toBe(true);
+
+    const r03Body = finalAcceptanceIssueBody('r03').replace('tier: T2', 'tier: T1');
+    const source = transport({
+      issueBodies: [r03Body, r03Body],
+      persistCreatedIssueComments: true,
+    });
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => logs.push(String(line)));
+    try {
+      const exitCode = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'start-cycle',
+        '--repo', REPOSITORY,
+        '--issue-number', String(ISSUE),
+        '--source-revision', 'r03',
+        '--stage', 'architectural',
+        '--tier', 'T1',
+        '--workdir', input.reviewDir,
+        '--json',
+      ], source);
+      expect(exitCode, logs.at(-1) ?? 'missing start-cycle result').toBe(0);
+      const admitted = JSON.parse(logs.at(-1) ?? '{}') as Record<string, unknown>;
+      expect(admitted).toMatchObject({ ok: true, diagnostics: [], stageAttemptId: expect.any(String) });
+      expect(admitted.cycleId).toEqual(expect.any(String));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('classifies only the three bounded temporary observation failures as retryable without writing state', () => {
+    const unavailable = t1Fixture();
+    const unavailableFiles = readdirSync(unavailable.reviewDir).sort();
+    const unavailableRootFiles = readdirSync(unavailable.root).sort();
+    const unavailableTransport = {
+      runGh: vi.fn(() => ({ exitCode: 1, stdout: '', stderr: 'temporary read failure' })),
+    };
+    expect(produceAuthorDispositions({
+      reviewDir: unavailable.reviewDir,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      sourceRevision: 'r01',
+      artifactSourceTransport: unavailableTransport,
+    })).toMatchObject({ ok: false, retryable: true, cause: 'source-unavailable' });
+    expect(readdirSync(unavailable.reviewDir).sort()).toEqual(unavailableFiles);
+    expect(readdirSync(unavailable.root).sort()).toEqual(unavailableRootFiles);
+
+    const moving = t1Fixture();
+    const movingFiles = readdirSync(moving.reviewDir).sort();
+    const movingRootFiles = readdirSync(moving.root).sort();
+    const r02 = '<!-- source-revision: r02 -->\n# moved\n';
+    const movingTransport = transport({ issueBodies: [moving.body, r02] });
+    expect(produceAuthorDispositions({
+      reviewDir: moving.reviewDir,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      sourceRevision: 'r01',
+      artifactSourceTransport: movingTransport,
+    })).toMatchObject({ ok: false, retryable: true, cause: 'observation-lost' });
+    expect(readdirSync(moving.reviewDir).sort()).toEqual(movingFiles);
+    expect(movingTransport.createdIssueComments).toEqual([]);
+    expect(readdirSync(moving.root).sort()).toEqual(movingRootFiles);
+    expect([...movingTransport.issueLabels]).toEqual([]);
+
+    const notVisible = t1Fixture('r02');
+    const notVisibleFiles = readdirSync(notVisible.reviewDir).sort();
+    const prior = '<!-- source-revision: r01 -->\n# prior\n';
+    const notVisibleRootFiles = readdirSync(notVisible.root).sort();
+    const notVisibleTransport = transport({ issueBodies: [prior, prior] });
+    expect(produceAuthorDispositions({
+      reviewDir: notVisible.reviewDir,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      sourceRevision: 'r02',
+      artifactSourceTransport: notVisibleTransport,
+    })).toMatchObject({ ok: false, retryable: true, cause: 'requested-revision-not-yet-visible' });
+    expect(readdirSync(notVisible.reviewDir).sort()).toEqual(notVisibleFiles);
+    expect(notVisibleTransport.createdIssueComments).toEqual([]);
+    expect([...notVisibleTransport.issueLabels]).toEqual([]);
+    expect(readdirSync(notVisible.root).sort()).toEqual(notVisibleRootFiles);
+
+    const stale = t1Fixture('r01');
+    const staleFiles = readdirSync(stale.reviewDir).sort();
+    const staleRootFiles = readdirSync(stale.root).sort();
+    const later = '<!-- source-revision: r03 -->\n# later\n';
+    expect(produceAuthorDispositions({
+      reviewDir: stale.reviewDir,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      sourceRevision: 'r01',
+      artifactSourceTransport: transport({ issueBodies: [later, later] }),
+    })).toMatchObject({ ok: false, retryable: false, cause: 'authority-conflict' });
+    expect(readdirSync(stale.reviewDir).sort()).toEqual(staleFiles);
+    expect(readdirSync(stale.root).sort()).toEqual(staleRootFiles);
+  });
+
+  it('rejects malformed and multiple author blocks plus authority conflicts without stage, browser, or retry effects', () => {
+    const expectTerminalWithoutEffects = (input: ReturnType<typeof t1Fixture>): void => {
+      const source = transport({ issueBodies: [input.body, input.body] });
+      const beforeFiles = readdirSync(input.reviewDir).sort();
+      const beforeRootFiles = readdirSync(input.root).sort();
+      expect(produceAuthorDispositions({
+        reviewDir: input.reviewDir,
+        repositoryFullName: REPOSITORY,
+        issueNumber: ISSUE,
+        sourceRevision: 'r01',
+        artifactSourceTransport: source,
+      })).toMatchObject({ ok: false, retryable: false, cause: 'authority-conflict' });
+      expect(readdirSync(input.reviewDir).sort()).toEqual(beforeFiles);
+      expect(readdirSync(input.root).sort()).toEqual(beforeRootFiles);
+      expect(source.createdIssueComments).toEqual([]);
+      expect([...source.issueLabels]).toEqual([]);
+      expect(source.runGh.mock.calls.some(([argv]) => argv.includes('-X') || argv.includes('-f'))).toBe(false);
+    };
+
+    const malformed = t1Fixture();
+    writeFileSync(malformed.authorReplyPath, 'create-issue-author-dispositions/v1\nnot json\n');
+    expectTerminalWithoutEffects(malformed);
+
+    const multiple = t1Fixture();
+    const payload = JSON.stringify({
+      schema: AUTHOR_DISPOSITIONS_SCHEMA,
+      sourceRevision: 'r01',
+      predecessorStage: null,
+      findings: [],
+      m4: { inventory: [] },
+    });
+    writeFileSync(multiple.authorReplyPath, [
+      'create-issue-author-dispositions/v1', payload,
+      'create-issue-author-dispositions/v1', payload,
+    ].join('\n'));
+    expectTerminalWithoutEffects(multiple);
+
+    const divergent = t1Fixture();
+    const first = produceAuthorDispositions({
+      reviewDir: divergent.reviewDir,
+      repositoryFullName: REPOSITORY,
+      issueNumber: ISSUE,
+      sourceRevision: 'r01',
+      artifactSourceTransport: transport({ issueBodies: [divergent.body, divergent.body] }),
+    });
+    expect(first.ok).toBe(true);
+    const authorPath = join(divergent.reviewDir, 'author-dispositions.json');
+    const changed = JSON.parse(readFileSync(authorPath, 'utf8')) as Record<string, any>;
+    changed.findings = [];
+    writeFileSync(authorPath, JSON.stringify(changed, null, 2) + '\n');
+    expectTerminalWithoutEffects(divergent);
+
+    const foreign = t1Fixture();
+    writeFileSync(join(foreign.reviewDir, 'author-dispositions.json'), JSON.stringify({
+      schema: AUTHOR_DISPOSITIONS_SCHEMA,
+      producer: 'governed-author-output/v1',
+      reviewEpisodeId: 'issue:9999@r01',
+      sourceRevision: 'r00',
+      predecessorStage: null,
+      draft: 'foreign',
+      findings: [],
+      m4: { reviewEpisodeId: 'issue:9999@r01', sourceRevision: 'r00', predecessorStage: null, inventory: [] },
+    }, null, 2) + '\n');
+    expectTerminalWithoutEffects(foreign);
+
+    const nonT1 = t1Fixture();
+    const intakePath = join(nonT1.reviewDir, 'tier-intake.json');
+    const intake = JSON.parse(readFileSync(intakePath, 'utf8')) as Record<string, unknown>;
+    intake.priorTier = 'T2';
+    writeFileSync(intakePath, JSON.stringify(intake, null, 2) + '\n');
+    expectTerminalWithoutEffects(nonT1);
+
+    const started = t1Fixture();
+    writeFileSync(join(started.reviewDir, 'attempt-001.json'), JSON.stringify({
+      schema: STAGE_EVIDENCE_SCHEMA,
+      stage: 'architectural',
+    }));
+    expectTerminalWithoutEffects(started);
+
+    const snapshotConflict = t1Fixture();
+    const snapshotPath = join(snapshotConflict.reviewDir, 'issue-r01-body.json');
+    const snapshotBytes = JSON.stringify({
+      schema: 'create-issue-live-snapshot/v1',
+      issueNumber: ISSUE,
+      sourceRevision: 'r01',
+      title: 'conflicting snapshot title',
+      body: snapshotConflict.body,
+    }, null, 2) + '\n';
+    writeFileSync(snapshotPath, snapshotBytes);
+    expectTerminalWithoutEffects(snapshotConflict);
+    expect(readFileSync(snapshotPath, 'utf8')).toBe(snapshotBytes);
+  });
+
 });
 
 describe('Issue #2009 canonical plural capture verdicts', () => {
@@ -4758,7 +5126,7 @@ describe('Issue #1997 producer continuation routing', () => {
       census: [...input.reviewComments, comment(input.body)],
     });
     const { code, output } = runArtifactCli(input, source);
-    expect(code).toBe(1);
+    expect(code).toBe(3);
     expect(output.blocker).toContain('missing_schema_label');
     expect(output.authorDiagnostics).toMatchObject([{
       reason: 'missing_schema_label',
@@ -4796,9 +5164,9 @@ describe('Issue #1997 producer continuation routing', () => {
       census: [...input.reviewComments, comment(input.body)],
     });
     const { code, output } = runArtifactCli(input, source);
-    expect(code).toBe(1);
+    expect(code).toBe(3);
     expect(String(output.blocker)).toMatch(/terminal must be boolean|invocation\[0\]\.terminal/i);
-    expect(output.nextAction).toBeNull();
+    expect(output.nextAction).toMatchObject({ kind: 'reconcile-stage-read-only' });
   });
 
   it.each([
@@ -4821,7 +5189,7 @@ describe('Issue #1997 producer continuation routing', () => {
     const { code, output } = runArtifactCli(input, transport({
       census: [...input.reviewComments, comment(input.body)],
     }));
-    expect(code).toBe(1);
+    expect(code).toBe(3);
     expect(output.authorDiagnostics).toMatchObject([{
       reason: 'invalid_author_field',
       ownership: 'author-owned',
@@ -4848,10 +5216,10 @@ describe('Issue #1997 producer continuation routing', () => {
     const { code, output } = runArtifactCli(input, transport({
       census: [...input.reviewComments, comment(input.body)],
     }));
-    expect(code).toBe(1);
+    expect(code).toBe(3);
     expect(output.blocker).toContain(failure);
     expect(output.authorDiagnostics).toBeUndefined();
-    expect(output.nextAction).toBeNull();
+    expect(output.nextAction).toMatchObject({ kind: 'reconcile-stage-read-only' });
   });
 });
 

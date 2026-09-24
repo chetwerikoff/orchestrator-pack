@@ -749,7 +749,7 @@ export function resolveCiGreen(prNumber: number, headSha: string, repositorySlug
   if (positiveInteger(pr.number) !== prNumber || String(pr.state ?? '').toLowerCase() !== 'open'
     || String(head.sha ?? '').trim().toLowerCase() !== headSha.trim().toLowerCase()) return false;
   const checks = JSON.parse(requireProcessOutput('required-ci-checks', runSmokeGhSync(
-    ['pr', 'checks', String(prNumber), '--repo', repositorySlug, '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description'], repoRoot,
+    ['pr', 'checks', String(prNumber), '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description'], repoRoot,
   ))) as { name?: string; state?: string; bucket?: string }[];
   const baseRef = String(base.ref ?? 'main').trim() || 'main';
   let requiredCheckNames: string[] = [];
@@ -1226,14 +1226,34 @@ function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scen
         '(none — execute no smoke scenarios; emit PASS using the carry-only bookkeeping row required below)',
       )
     : basePrompt;
+  const progressPath = smokeProgressPath(binding.artifactDir);
+  const progressPathToken = Buffer.from(progressPath, 'utf8').toString('base64');
+  const runIdToken = Buffer.from(binding.runId, 'utf8').toString('base64');
+  const writer = [
+    'node -e',
+    "'const fs=require(\"node:fs\");const [p64,r64,ordinal,phase,outcome]=process.argv.slice(1);const event={runId:Buffer.from(r64,\"base64\").toString(\"utf8\"),scenarioOrdinal:Number(ordinal),phase};if(outcome)event.outcome=outcome;fs.appendFileSync(Buffer.from(p64,\"base64\").toString(\"utf8\"),JSON.stringify(event)+\"\\n\",\"utf8\")'",
+  ].join(' ');
+  const progressEventProtocol = [
+    'Canonical progress serialization (mandatory):',
+    ...(scenarioCount === 0
+      ? ['- Do not write progress events when this attempt has no selected scenarios.']
+      : [
+        `- Before scenario 1, run exactly: ${writer} ${progressPathToken} ${runIdToken} 1 started`,
+        `- The first non-empty progress line must parse exactly as: ${JSON.stringify({ runId: binding.runId, scenarioOrdinal: 1, phase: 'started' })}`,
+        '- For later started events, reuse the command with the declared ordinal and phase started, omitting outcome.',
+        '- For terminal events, reuse the command with the same ordinal, phase terminal, and one outcome: pass|fail|blocked|skipped.',
+        '- Never append a terminal event before its matching started event.',
+      ]),
+  ];
   return [
     prompt,
     '',
     'Lifecycle protocol (child-produced evidence only):',
-    `- Progress file: ${smokeProgressPath(binding.artifactDir)}`,
+    `- Progress file: ${progressPath}`,
     `- Cancel request: ${smokeCancelRequestPath(binding.artifactDir)}`,
     `- Cancel acknowledgement: ${smokeCancelAcknowledgementPath(binding.artifactDir)}`,
     `- Declared scenario count: ${scenarioCount}`,
+    ...progressEventProtocol,
     ...(scenarioCount === 0 ? [
       '- Zero selected scenarios means all current tuples were safely carried. Execute no smoke scenario and write no progress event.',
       '- Emit PASS with one bookkeeping row: action: record empty attempt-local execution set | expected: no selected smoke scenario executes | observed: no attempt-local scenarios selected | outcome: pass.',
@@ -1690,6 +1710,11 @@ function zeroExecutionCarryOnlyPass(report: SmokeReport, headSha: string): boole
     || isProvenCarryOnlySmokeReport(report, headSha);
 }
 
+export function smokeReportHasScenarioFinding(report: SmokeReport): boolean {
+  return report.result === 'FAIL'
+    && report.scenarios.some((scenario) => scenario.outcome === 'fail');
+}
+
 function orderingOwnerEvidence(
   marker: { attemptId?: string; supervisorPid?: number; runId?: string } | undefined,
   options: CliOptions,
@@ -1699,6 +1724,7 @@ function orderingOwnerEvidence(
   if (!attemptId || !Number.isInteger(supervisorPid) || supervisorPid <= 0) return undefined;
   const runId = marker?.runId?.trim() || undefined;
   let authoritativeResult: SmokeReport['result'] | undefined;
+  let scenarioFinding: boolean | undefined;
   let executionMode: 'executed' | 'carry-only' | undefined;
   let cleanupSafe: boolean | undefined;
   if (runId) {
@@ -1711,6 +1737,7 @@ function orderingOwnerEvidence(
     });
     const selected = runtime ?? noExecution;
     authoritativeResult = selected?.result;
+    scenarioFinding = selected ? smokeReportHasScenarioFinding(selected.report) : undefined;
     if (selected?.result === 'PASS' && selected.mode === 'no_execution' && zeroExecutionCarryOnlyPass(selected.report, options.headSha)) {
       executionMode = 'carry-only';
     } else if (runtime?.result === 'PASS') {
@@ -1733,6 +1760,7 @@ function orderingOwnerEvidence(
     supervisorAlive: processIsAlive(supervisorPid),
     ...(cleanupSafe !== undefined ? { cleanupSafe } : {}),
     ...(authoritativeResult ? { authoritativeResult } : {}),
+    ...(scenarioFinding !== undefined ? { scenarioFinding } : {}),
     ...(executionMode ? { executionMode } : {}),
   };
 }
@@ -1975,7 +2003,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   const recordPublishedOrdering = (report: SmokeReport, published: boolean): void => {
     if (!published || publishedPassRecorded) return;
     orderingOutcome = report.result === 'PASS' ? 'passed' : 'failed';
-    orderingFailureKind = report.result === 'FAIL' ? 'finding' : 'retryable';
+    orderingFailureKind = smokeReportHasScenarioFinding(report) ? 'finding' : 'retryable';
     if (report.result === 'PASS') publishedPassRecorded = true;
   };
   let pendingDetachedTerminalization: DetachedTerminalizationRequest | undefined;
@@ -2284,6 +2312,15 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   }
 }
 
+function detachedChildIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
 async function runDetachedBootstrap(argv: readonly string[], options: CliOptions): Promise<number> {
   if (options.detachedOwner || options.runId) throw new Error('detached bootstrap may not supply --detached-owner or --run');
   const runId = createSmokeRunIdentity();
@@ -2312,6 +2349,7 @@ async function runDetachedBootstrap(argv: readonly string[], options: CliOptions
     process.stderr.write('worker_smoke_detach_spawn_failed\n');
     return 1;
   }
+  const childPid = Number(detached.stdout.trim());
 
   const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
   const deadline = Date.now() + SMOKE_CREATE_TIMEOUT_MS;
@@ -2320,6 +2358,10 @@ async function runDetachedBootstrap(argv: readonly string[], options: CliOptions
     if (lifecycle?.runId === runId) {
       process.stdout.write(`${runId}\n`);
       return 0;
+    }
+    if (!detachedChildIsAlive(childPid)) {
+      process.stderr.write('worker_smoke_detach_child_exited_before_lifecycle\n');
+      return 1;
     }
     await sleepAsync(SMOKE_LIFECYCLE_POLL_MS);
   }
@@ -2337,6 +2379,15 @@ export async function runSmokeWait(options: CliOptions): Promise<number> {
     if (lifecycle) {
       if (lifecycle.runId !== runId) {
         process.stderr.write('worker_smoke_wait_run_mismatch\n');
+        return 1;
+      }
+      if (
+        (lifecycle.spawnState === 'ambiguous_unbound' || lifecycle.spawnState === 'abandoned_unbound')
+        && Date.now() > lifecycle.createDeadlineMs
+        && !processIsAlive(lifecycle.supervisorPid)
+      ) {
+        const createDiagnostic = lifecycle.createDiagnostic ?? 'smoke_create_unbound_expired';
+        emit({ ok: false, runId, result: 'FAIL', reason: createDiagnostic, createDiagnostic }, options.json);
         return 1;
       }
       if (lifecycle.launcherTerminalizedAtMs !== undefined && lifecycle.finalEvidencePath) {

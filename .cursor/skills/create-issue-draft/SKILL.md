@@ -319,12 +319,15 @@ stage.
 - `node --experimental-strip-types scripts/create-issue-stage-finalize.ts retry-pending`
   is the sole retry path for delayed local journal delivery. Pending files are
   best-effort transport state, never acceptance authority. Manager-facing
-  journal non-success results use the shared create-Issue result contract:
-  recoverable `start-cycle`/stage-publication states return only a state-bound
-  `nextAction.argv` using the same deterministic attempt or this existing
-  `retry-pending` path; stale, consumed, exhausted, conflicting, or externally
-  blocked states return `nextAction: null`. A bound action is revalidated
-  before projection/journal mutation.
+  journal results use the shared four-outcome create-Issue boundary:
+  `completed` is success only; `recoverable` always carries a validated
+  executable `nextAction.argv`; `external_pause` carries typed external
+  evidence and resumption with a null action; boundary-only `contract_defect`
+  names malformed/self-recommending producer output. Stale, consumed,
+  conflicting, lineage, marker, and binding mismatches first recommend
+  `reconcile-stage-read-only`; recoverable publication/acceptance production
+  uses the existing continuation kinds. A bound action is revalidated before
+  projection/journal mutation.
 - `node --experimental-strip-types scripts/create-issue-final-acceptance.ts --public-actor <actor>`
   executes tier-gate, stage-completeness, lifecycle-topology, and finding-ledger
   guards directly, then alone writes `create-issue-final-acceptance/v1` and
@@ -862,11 +865,15 @@ Materialize that bundle with `scripts/manager-review-terminal-bundle.ts` before
 rendering the terminal prompt. For T2, first run `produce-artifacts --phase
 pre-lens`; for T3, use `produce-artifacts --phase post-lens`. In either case the
 producer consumes the canonical stage receipts, verified relay evidence, and
-finding ledger already checked by the existing guards. For T1,
-there is intentionally no predecessor receipt: the producer accepts the
-current-bound zero-state `tier-intake.json` plus the producer-generated
-zero-state `author-dispositions.json` with empty prior findings/M3/M4 instead
-of inventing predecessor evidence.
+finding ledger already checked by the existing guards. For T1, there is intentionally no predecessor receipt. After a tracked author
+turn has been durably harvested and the author's Issue write is observable,
+invoke `produce-author-dispositions` before the first `architectural`
+`start-cycle`; that producer binds the governed author payload to the stable
+live Issue and current lifecycle episode without starting a stage. The existing
+producer-generated zero-state `author-dispositions.json` fallback remains
+unchanged only for flows where the current canon legitimately has no governed
+author reply; a present tracked author payload must not be discarded for
+zero-state.
 
 `author-dispositions.json` is a producer output over three authorities: exact
 draft/revision from the stable GitHub Issue snapshot, episode/predecessor binding
@@ -962,9 +969,12 @@ Existing `blocked` and `refused` values may remain in receipt and transport
 schemas for compatibility. They describe the current operation or stage only;
 they do not complete the parent manager Task.
 
-Whole-task `worker_done`, cancellation, and external termination remain owned
-solely by #1486 §6. This section adds no second completion classifier,
-cancellation rule, or external-termination contract.
+Whole-task completion and external termination remain owned solely by #1486 §6.
+For this manager, the only self-initiated terminal message is
+`worker_done --outcome succeeded` after whole-task acceptance.
+`worker_done --outcome failed` is legal only after a direct
+coordinator/operator cancellation message. `recoverable`, `external_pause`,
+and `contract_defect` never complete or settle the parent manager Task.
 
 ### Create-flow consumption of retry/no-resend authority
 
@@ -1028,14 +1038,18 @@ does not become parent-manager completion, permission to invent another wait, or
 a new retry authority. When reconciliation classifies a condition as
 `orchestrator_required`, use the existing durable `fleet-reconciliation-handoff/v1`;
 this section adds no writer, queue, acknowledgement, retry, or lifecycle authority.
-If no legal manager action is currently available, leave visible bounded-wait or
-routing evidence rather than silently idling or completing the parent Task.
+If no legal repository-owned continuation is currently available, classify the
+result at the shared boundary: external reality becomes `external_pause` with
+remedy/evidence/resumption, and a missing or malformed producer becomes
+`contract_defect`. Continue independent plan items and drain the inbox before
+ending the turn without `worker_done`; never settle the parent Task because a
+bookkeeping producer has no legal action.
 
 ### Existing escalation and published-exception authority
 
-operator-only-escalation-classes: business-contract-change, material-reviewer-conflict, terminal-infrastructure-refusal
+operator-only-escalation-classes: business-contract-change, material-reviewer-conflict
 
-The existing escalation meanings remain unchanged:
+The existing content-decision escalation meanings remain unchanged:
 
 1. `business-contract-change` applies when resolution would change the goal,
    acceptance meaning, frozen scope, denylist/allowed roots, required
@@ -1043,9 +1057,12 @@ The existing escalation meanings remain unchanged:
 2. `material-reviewer-conflict` applies when independent material reviewer
    verdicts still disagree after mechanical reconciliation of the same
    authoritative evidence.
-3. `terminal-infrastructure-refusal` applies when an authoritative
-   infrastructure or transport surface reports terminal refusal and no existing
-   local remedy is legal.
+
+Repository-owned infrastructure/bookkeeping failures are not an operator-only
+terminal class. They use the shared manager boundary: execute a distinct
+`recoverable.nextAction.argv` once; `external_pause` and `contract_defect`
+send one deterministic-thread escalation, continue independent plan items, and
+drain before ending the turn without `worker_done`.
 
 The existing published-exception authority remains limited to a non-business
 procedural gate about publication, observation, formatting, or mechanical
@@ -1121,6 +1138,22 @@ classifies every acceptance input and review artifact by its owner and role.
   `{issueNumber, sourceRevision, title, body}` snapshot.
 - `author-dispositions.json`: derived binding over the stable GitHub snapshot,
   lifecycle topology, and governed author payload.
+
+For a completed tracked T1 author turn, the single next producer step before the first `architectural` `start-cycle` is:
+
+```bash
+node --experimental-strip-types scripts/create-issue-stage-finalize.ts produce-author-dispositions \
+  --repo <owner/name> --issue-number <N> \
+  --review-dir "$REVIEW_DIR" --source-revision <rNN> --json
+```
+
+This action writes the stable `issue-rNN-body.json` first and
+`author-dispositions.json` second as the handoff commit point. It creates no
+review cycle, stage receipt, finding ledger, relay evidence, acceptance
+manifest, reviewer invocation, Issue comment, or label projection. Only an
+authenticated Issue read outage, a moving/lost two-read observation, or an
+immediately-prior live revision while the requested next revision is not yet
+visible is retryable by rerunning the exact command.
 
 The manager invokes lifecycle, reconciliation and acceptance producers; it does
 not create or repair these files by hand. Missing authority is an explicit

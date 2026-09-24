@@ -2,7 +2,7 @@
 import './toolchain/native-entrypoint-preflight.ts';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { runProcess } from './kernel/subprocess.ts';
 import {
   HANDOFF_SCHEMA,
@@ -14,14 +14,15 @@ import {
   type CreateIssueBrowserPreflightFailure,
 } from './lib/create-issue-browser-gpt-preflight.ts';
 import {
+  createIssueExternalPauseResult,
   createIssueNextAction,
   createIssueRecoverableResult,
   createIssueStaleNextAction,
   createIssueTerminalResult,
-  validateCreateIssueManagerResult,
   type CreateIssueActionBinding,
   type CreateIssueSemanticStage,
 } from './lib/create-issue-next-action.ts';
+import { emitCreateIssueManagerResult } from './lib/create-issue-manager-boundary.ts';
 import {
   inspectManagerCliInvocation,
   type ManagerCliDeclaration,
@@ -32,6 +33,7 @@ import {
   type LifecycleReviewStage,
 } from './lib/create-issue-stage-lifecycle.ts';
 import { defaultGhTransport, fetchIssueRevision } from './lib/create-issue-stage-record-gh.ts';
+import { resolveCanonicalReviewDirectory } from './lib/canonical-review-directory.ts';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const launcherPath = join(repoRoot, 'scripts/flow-manager-long-running-child.ts');
@@ -78,26 +80,42 @@ function requiredOption(options: Map<string, string | true>, key: string): strin
   return value;
 }
 
-function emitBrowserManagerResult(_argv: readonly string[], result: unknown): number {
-  const errors = validateCreateIssueManagerResult(result);
-  if (errors.length > 0) {
-    process.stderr.write('flow-manager-browser-gpt-long-run: invalid manager result: ' + errors.join('; ') + '\n');
-    return 2;
-  }
-  const serialized = JSON.stringify(result) + '\n';
-  const managerResult = result as { ok: boolean };
-  if (managerResult.ok) process.stdout.write(serialized);
-  else process.stderr.write(serialized);
-  return managerResult.ok ? 0 : 2;
+function emitBrowserManagerResult(
+  argv: readonly string[],
+  result: unknown,
+  boundary: {
+    retryBudgetEvidence?: { reviewerSlot: string; externalCauses: readonly string[] };
+  } = {},
+): number {
+  return emitCreateIssueManagerResult({
+    producer: 'flow-manager-browser-gpt-long-run.ts:main',
+    currentArgv: argv,
+    ...boundary,
+    produce: () => result,
+  }).exitCode;
 }
 
-function refuse(_argv: readonly string[], reason: string, details: Record<string, unknown> = {}): number {
-  process.stderr.write(JSON.stringify({
-    schema: 'flow-manager-browser-gpt-long-run-refusal/v1',
+function refuse(argv: readonly string[], reason: string, details: Record<string, unknown> = {}): number {
+  process.stderr.write(`flow-manager-browser-gpt-long-run: ${reason}\n`);
+  const binding = createIssueBinding(parseFlagArgv(argv));
+  // Preserve the two legacy unbound adapter-only refusals that predate the
+  // manager result surface. Other direct-publication refusals are manager-facing
+  // contract defects even when the malformed argv is too incomplete to build a
+  // full create-Issue binding.
+  if (!binding && (reason === 'forbidden_authority_selector' || reason === 'stale_handoff_receipt')) return 2;
+  const detail = [
     reason,
-    ...details,
-  }) + '\n');
-  return 2;
+    typeof details.blocker === 'string' ? details.blocker : '',
+    typeof details.remedy === 'string' ? details.remedy : '',
+  ].filter(Boolean).join(': ');
+  return emitCreateIssueManagerResult({
+    producer: 'flow-manager-browser-gpt-long-run.ts:main',
+    currentArgv: argv,
+    ...(binding ? { reconcileAction: browserReconcileAction(binding) } : {}),
+    produce: () => {
+      throw new Error(detail);
+    },
+  }).exitCode;
 }
 
 function browserReconcileAction(binding: CreateIssueActionBinding) {
@@ -118,17 +136,37 @@ function browserReconcileAction(binding: CreateIssueActionBinding) {
   });
 }
 
+
 function projectPreflightFailure(
   argv: readonly string[],
   result: CreateIssueBrowserPreflightFailure,
 ): number {
-  return refuse(argv, 'create_issue_browser_preflight_failed', {
+  process.stderr.write(`flow-manager-browser-gpt-long-run: ${result.blocker}\n`);
+  if (result.nextAction) {
+    return emitBrowserManagerResult(argv, createIssueRecoverableResult({
+      cause: result.cause,
+      blocker: result.blocker,
+      nextAction: result.nextAction,
+    }));
+  }
+  if (result.cause === 'tracked_github_unavailable') {
+    return emitBrowserManagerResult(argv, createIssueExternalPauseResult({
+      cause: 'external:github_unavailable',
+      remedy: result.remedy,
+      resumeWhen: { operator: true },
+      evidence: result.evidence,
+      blocker: result.blocker,
+    }));
+  }
+  process.stderr.write(JSON.stringify({
+    schema: 'flow-manager-browser-gpt-long-run-refusal/v1',
+    reason: 'create_issue_browser_preflight_failed',
     cause: result.cause,
-    blocker: result.blocker,
     remedy: result.remedy,
     evidence: result.evidence,
-    nextAction: result.nextAction,
-  });
+    nextAction: null,
+  }) + '\n');
+  return 2;
 }
 
 export interface BrowserAdapterDependencies {
@@ -250,6 +288,55 @@ function createIssueBinding(
   };
 }
 
+
+function readRetryBudgetEvidence(
+  binding: CreateIssueActionBinding,
+  reviewerSlot: string,
+): { reviewerSlot: string; externalCauses: string[] } {
+  const evidence = { reviewerSlot, externalCauses: [] as string[] };
+  try {
+    const canonical = resolveCanonicalReviewDirectory({ taskIdentity: `issue:${binding.issueNumber}` });
+    const evidencePaths = readdirSync(canonical.directory)
+      .filter((name: string) => /^attempt-[0-9]{3}\.json$/.test(name))
+      .sort()
+      .map((name: string) => join(canonical.directory, name));
+    const evidencePath = evidencePaths.find((path: string) => {
+      try {
+        const value = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+        return value.stage === binding.stage
+          && value.sourceRevision === binding.sourceRevision
+          && value.stageAttemptId === binding.stageAttemptId;
+      } catch {
+        return false;
+      }
+    });
+    if (!evidencePath) return evidence;
+    const value = JSON.parse(readFileSync(evidencePath, 'utf8')) as Record<string, unknown>;
+    const invocations = (Array.isArray(value.invocations) ? value.invocations : [])
+      .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+      .filter((item) => item.reviewerSlot === reviewerSlot)
+      .sort((left, right) => Number(left.attemptOrdinal ?? 0) - Number(right.attemptOrdinal ?? 0));
+    for (const invocation of invocations.slice(0, 2)) {
+      const envelopePath = typeof invocation.terminalEnvelopePath === 'string'
+        ? resolve(dirname(evidencePath), invocation.terminalEnvelopePath)
+        : '';
+      try {
+        const envelope = JSON.parse(readFileSync(envelopePath, 'utf8')) as Record<string, unknown>;
+        const cause = typeof envelope.turn_result_cause === 'string'
+          ? envelope.turn_result_cause
+          : typeof envelope.cause === 'string'
+            ? envelope.cause
+            : typeof envelope.incident === 'string' ? envelope.incident : '';
+        evidence.externalCauses.push(cause);
+      } catch {
+        evidence.externalCauses.push('');
+      }
+    }
+  } catch {
+    // Missing or malformed evidence remains a boundary contract defect.
+  }
+  return evidence;
+}
 export async function runBrowserAdapter(
   argv: readonly string[],
   deps: BrowserAdapterDependencies = {},
@@ -267,6 +354,14 @@ export async function runBrowserAdapter(
     return 2;
   }
   const options = parseFlagArgv(argv);
+  const runIdentity = requiredOption(options, 'run-identity');
+  const attemptIdentity = requiredOption(options, 'attempt-identity');
+  const handoffReceipt = requiredOption(options, 'handoff-receipt');
+  const staleReceiptCode = staleHandoffReceiptResult(argv, handoffReceipt, runIdentity, attemptIdentity);
+  if (staleReceiptCode !== null) return staleReceiptCode;
+  const invocationId = requiredOption(options, 'invocation-id');
+  const terminalEnvelope = requiredOption(options, 'terminal-envelope');
+  const browserOutput = requiredOption(options, 'output');
   const reviewerSourceOutput = typeof options.get('reviewer-source-output') === 'string'
     ? options.get('reviewer-source-output') as string
     : undefined;
@@ -291,11 +386,6 @@ export async function runBrowserAdapter(
       return 2;
     }
   }
-  const runIdentity = requiredOption(options, 'run-identity');
-  const attemptIdentity = requiredOption(options, 'attempt-identity');
-  const handoffReceipt = requiredOption(options, 'handoff-receipt');
-  const staleReceiptCode = staleHandoffReceiptResult(argv, handoffReceipt, runIdentity, attemptIdentity);
-  if (staleReceiptCode !== null) return staleReceiptCode;
   if (directRequested && (
     reviewerSourceOutput === undefined
     || directArgumentKeys.some((key) => typeof options.get(key) !== 'string')
@@ -329,9 +419,6 @@ export async function runBrowserAdapter(
     }
     requiredOptionsValidated = true;
   }
-  const invocationId = requiredOption(options, 'invocation-id');
-  const terminalEnvelope = requiredOption(options, 'terminal-envelope');
-  const browserOutput = requiredOption(options, 'output');
   const profile = requiredOption(options, 'profile');
   const cdp = requiredOption(options, 'cdp');
   const input = requiredOption(options, 'input');
@@ -390,7 +477,7 @@ export async function runBrowserAdapter(
           issueNumber: binding.issueNumber,
           ...(liveRevision ? { sourceRevision: liveRevision } : {}),
         },
-        nextAction: null,
+        nextAction: browserReconcileAction(binding),
       }));
     }
 
@@ -410,7 +497,7 @@ export async function runBrowserAdapter(
           sourceRevision: liveRevision,
           ...lifecycleBinding.observed,
         },
-        nextAction: null,
+        nextAction: browserReconcileAction(binding),
       }));
     }
 
@@ -428,6 +515,16 @@ export async function runBrowserAdapter(
         reviewerSourceOutputPath: reviewerSourceOutput,
       });
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const exhausted = /reviewerSlot\s+(\S+)\s+retry budget is exhausted/i.exec(message);
+      if (exhausted?.[1]) {
+        return emitCreateIssueManagerResult({
+          producer: 'flow-manager-browser-gpt-long-run.ts:main',
+          currentArgv: argv,
+          retryBudgetEvidence: readRetryBudgetEvidence(binding, exhausted[1]),
+          produce: () => { throw error; },
+        }).exitCode;
+      }
       const observed = inspectBinding({
         issueNumber: binding.issueNumber,
         stage: binding.stage as LifecycleReviewStage,
@@ -453,7 +550,7 @@ export async function runBrowserAdapter(
       });
       return emitBrowserManagerResult(argv, createIssueRecoverableResult({
         cause: 'create_issue_lifecycle_admission_failed',
-        blocker: error instanceof Error ? error.message : String(error),
+        blocker: message,
         nextAction: retryAction,
       }));
     }

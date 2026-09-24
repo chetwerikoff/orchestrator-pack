@@ -11,6 +11,8 @@ import {
   currentWorkerAssignmentByDeliverable,
   publishCurrentWorkerAssignment,
   retireCurrentWorkerAssignment,
+  setWorkerAssignmentAtomicReplaceTestHook,
+  setWorkerAssignmentDeadObservationTicks,
   workerAssignmentKey,
   type WorkerAssignmentRecord,
   type WorkerAssignmentStore,
@@ -168,16 +170,19 @@ class LifecycleAdapter extends DeterministicRuntimeAdapter {
 }
 
 afterEach(() => {
+  setWorkerAssignmentAtomicReplaceTestHook();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe('Issue #1899 scheduler assignment lifecycle reconciliation', () => {
+describe('Issue #2106 bounded scheduler assignment lifecycle reconciliation', () => {
   it('drains a 72-row history in one observation per local row and only re-observes the retained set', async () => {
     const { store, ledger } = fixture();
-    write72RowStore(store);
+    const rows = write72RowStore(store);
+    const agedActive = await setWorkerAssignmentDeadObservationTicks({ file: store, expected: rows[0]!, ticks: 2 });
+    expect(agedActive.ok).toBe(true);
     writeFileSync(ledger, `${JSON.stringify({
-      notified: Object.fromEntries(Array.from({ length: 60 }, (_, offset) => {
-        const index = 11 + offset;
+      notified: Object.fromEntries(Array.from({ length: 59 }, (_, offset) => {
+        const index = 12 + offset;
         return [`dispatch-${index}`, `sent:history-${index}`];
       })),
     }, null, 2)}\n`);
@@ -221,11 +226,14 @@ describe('Issue #1899 scheduler assignment lifecycle reconciliation', () => {
       active: 8,
       terminal: 3,
       gone: 61,
-      unresolved: 2,
-      protected: 1,
+      unresolved: 3,
+      protected: 0,
       retired: 61,
     });
     expect(first.bindings).toHaveLength(6);
+    const activeBinding = first.bindings.find((binding) => binding.assignment.taskId === 'task-0');
+    expect(activeBinding).toBeDefined();
+    expect(activeBinding?.assignment).not.toHaveProperty('deadObservationTicks');
     expect(first.reconciliations.every((row) => row.assignment.role !== 'orchestrator')).toBe(true);
     expect(adapter.observations).toHaveLength(72);
     expect(new Set(adapter.observations)).toHaveLength(72);
@@ -251,15 +259,280 @@ describe('Issue #1899 scheduler assignment lifecycle reconciliation', () => {
       },
     });
     expect(second.status).toBe('ok');
-    expect(second.counts).toMatchObject({ observed: 11, active: 8, terminal: 1, gone: 2, retired: 0, protected: 1, unresolved: 2 });
+    expect(second.counts).toMatchObject({ observed: 11, active: 8, terminal: 1, gone: 2, retired: 0, protected: 0, unresolved: 3 });
     expect(second.reconciliations.every((row) => row.assignment.role !== 'orchestrator')).toBe(true);
     expect(adapter.observations).toHaveLength(11);
     expect(sentArgs).toHaveLength(2);
     expect(adapter.peakInFlight).toBe(1);
 
-    const persisted = JSON.parse(readFileSync(store, 'utf8')) as WorkerAssignmentStore;
-    expect(Object.keys(persisted.assignments)).toHaveLength(11);
-    expect(persisted.operatorPrimary?.assignmentId).toBe('wa-11');
+    adapter.observations.splice(0);
+    const third = await reconcileWorkerAssignments({
+      file: store,
+      repository: REPOSITORY,
+      adapter,
+      timeoutMs: 250,
+      terminalMailDeps,
+    });
+    expect(third.status).toBe('ok');
+    expect(third.counts).toMatchObject({ observed: 11, active: 8, terminal: 1, gone: 2, retired: 2, protected: 1, unresolved: 0, boundedGiveUps: 2 });
+    expect(adapter.observations).toHaveLength(11);
+    expect(adapter.observations).toContain('dispatch-10');
+    expect(adapter.observations).toContain('dispatch-71');
+    expect(sentArgs).toHaveLength(2);
+    expect(currentWorkerAssignmentByDeliverable(store, 'task-10', 'dispatch-10')).toBeNull();
+    expect(currentWorkerAssignmentByDeliverable(store, 'task-71', 'dispatch-71')).toBeNull();
+
+    adapter.observations.splice(0);
+    const fourth = await reconcileWorkerAssignments({
+      file: store,
+      repository: REPOSITORY,
+      adapter,
+      timeoutMs: 250,
+      terminalMailDeps,
+    });
+    expect(fourth.status).toBe('ok');
+    expect(fourth.counts).toMatchObject({ observed: 9, active: 8, gone: 1, retired: 0, protected: 1, boundedGiveUps: 0 });
+    expect(adapter.observations).not.toContain('dispatch-10');
+    expect(adapter.observations).not.toContain('dispatch-71');
+    expect(adapter.observations).toHaveLength(9);
+
+    const converged = JSON.parse(readFileSync(store, 'utf8')) as WorkerAssignmentStore;
+    expect(Object.keys(converged.assignments)).toHaveLength(9);
+    expect(converged.operatorPrimary?.assignmentId).toBe('wa-11');
+  });
+
+  it('gives up after three persisted exact terminal observations without forging mail settlement', async () => {
+    const { store, ledger } = fixture();
+    const published = await publishCurrentWorkerAssignment({
+      file: store,
+      repository: REPOSITORY,
+      issueNumber: 1899,
+      taskId: 'failed-terminal-task',
+      kind: 'local',
+      provider: 'orca',
+      bindingKey: 'dispatch-8',
+      role: 'worker',
+    });
+    expect(published.ok).toBe(true);
+    if (!published.ok) throw new Error(published.reason);
+
+    let sends = 0;
+    const persistedTicksAtSend: number[] = [];
+    const terminalMailDeps: DispatchTerminalMailDeps = {
+      ledgerPath: ledger,
+      deliverMessage: null,
+      runJson: (() => {
+        sends += 1;
+        persistedTicksAtSend.push(currentWorkerAssignmentByDeliverable(
+          store,
+          'failed-terminal-task',
+          'dispatch-8',
+        )?.deadObservationTicks ?? -1);
+        return { ok: false, error: { code: 'injected_failure' } };
+      }) as unknown as typeof runOrcaJson,
+    };
+    const adapter = new LifecycleAdapter();
+    for (let tick = 1; tick <= 3; tick += 1) {
+      const result = await reconcileWorkerAssignments({
+        file: store,
+        repository: REPOSITORY,
+        adapter,
+        terminalMailDeps,
+      });
+      expect(result.status).toBe('ok');
+      expect(result.counts.terminalMailUnsettled).toBe(1);
+      expect(result.counts.boundedGiveUps).toBe(tick === 3 ? 1 : 0);
+    }
+
+    expect(sends).toBe(3);
+    expect(persistedTicksAtSend).toEqual([1, 2, 3]);
+    expect(currentWorkerAssignmentByDeliverable(store, 'failed-terminal-task', 'dispatch-8')).toBeNull();
+    expect(JSON.parse(readFileSync(ledger, 'utf8'))).toEqual({ notified: {} });
+  });
+
+  it('stops unsettled terminal-mail retries at the bound while retaining operator-primary protection', async () => {
+    const { store, ledger } = fixture();
+    const published = await publishCurrentWorkerAssignment({
+      file: store,
+      repository: REPOSITORY,
+      issueNumber: 1899,
+      taskId: 'protected-terminal-task',
+      kind: 'local',
+      provider: 'orca',
+      bindingKey: 'dispatch-8',
+      role: 'worker',
+    });
+    expect(published.ok).toBe(true);
+    if (!published.ok) throw new Error(published.reason);
+
+    const current = JSON.parse(readFileSync(store, 'utf8')) as WorkerAssignmentStore;
+    writeFileSync(store, `${JSON.stringify({
+      ...current,
+      operatorPrimary: {
+        route: 'operator-primary',
+        taskId: published.assignment.taskId,
+        bindingKey: published.assignment.bindingKey,
+        assignmentId: published.assignment.assignmentId,
+        assignmentGeneration: published.assignment.generation,
+      },
+    }, null, 2)}\n`);
+
+    let sends = 0;
+    const terminalMailDeps: DispatchTerminalMailDeps = {
+      ledgerPath: ledger,
+      deliverMessage: null,
+      runJson: (() => {
+        sends += 1;
+        return { ok: false, error: { code: 'injected_failure' } };
+      }) as unknown as typeof runOrcaJson,
+    };
+    const adapter = new LifecycleAdapter();
+    for (let tick = 1; tick <= 4; tick += 1) {
+      const result = await reconcileWorkerAssignments({
+        file: store,
+        repository: REPOSITORY,
+        adapter,
+        terminalMailDeps,
+      });
+      expect(result.status).toBe('ok');
+      expect(result.counts.terminalMailUnsettled).toBe(1);
+      expect(result.counts.protected).toBe(tick >= 3 ? 1 : 0);
+    }
+
+    expect(sends).toBe(3);
+    expect(currentWorkerAssignmentByDeliverable(
+      store,
+      published.assignment.taskId,
+      published.assignment.bindingKey,
+    )).toMatchObject({ ...published.assignment, deadObservationTicks: 3 });
+    expect(JSON.parse(readFileSync(store, 'utf8'))).toMatchObject({
+      operatorPrimary: { assignmentId: published.assignment.assignmentId },
+    });
+  });
+
+  it('resets active dead progress after Issue attachment changes mutable assignment fields', async () => {
+    const { store } = fixture();
+    const published = await publishCurrentWorkerAssignment({
+      file: store,
+      repository: REPOSITORY,
+      taskId: 'active-reset-task',
+      kind: 'local',
+      provider: 'orca',
+      bindingKey: 'dispatch-active-reset',
+      role: 'worker',
+    });
+    if (!published.ok) throw new Error(published.reason);
+    const aged = await setWorkerAssignmentDeadObservationTicks({
+      file: store,
+      expected: published.assignment,
+      ticks: 2,
+    });
+    if (!aged.ok) throw new Error(aged.reason);
+    const attached = await attachWorkerAssignmentIssueNumber({
+      file: store,
+      expected: aged.assignment,
+      issueNumber: 1899,
+    });
+    if (!attached.ok) throw new Error(attached.reason);
+
+    const reset = await setWorkerAssignmentDeadObservationTicks({
+      file: store,
+      expected: aged.assignment,
+      ticks: 0,
+    });
+    expect(reset).toMatchObject({ ok: true, assignment: { issueNumber: 1899 } });
+    if (!reset.ok) throw new Error(reset.reason);
+    expect(reset.assignment).not.toHaveProperty('deadObservationTicks');
+    expect(currentWorkerAssignmentByDeliverable(
+      store,
+      published.assignment.taskId,
+      published.assignment.bindingKey,
+    )).not.toHaveProperty('deadObservationTicks');
+  });
+
+  it('keeps retrying active reset until stale dead progress is durably cleared', async () => {
+    const { store, ledger } = fixture();
+    const published = await publishCurrentWorkerAssignment({
+      file: store,
+      repository: REPOSITORY,
+      issueNumber: 1899,
+      taskId: 'active-reset-retry-task',
+      kind: 'local',
+      provider: 'orca',
+      bindingKey: 'dispatch-8',
+      role: 'worker',
+    });
+    if (!published.ok) throw new Error(published.reason);
+    const aged = await setWorkerAssignmentDeadObservationTicks({
+      file: store,
+      expected: published.assignment,
+      ticks: 2,
+    });
+    if (!aged.ok) throw new Error(aged.reason);
+
+    let failedWrites = 0;
+    setWorkerAssignmentAtomicReplaceTestHook((phase) => {
+      if (phase === 'before_write' && failedWrites < 3) {
+        failedWrites += 1;
+        throw new Error('injected-active-reset-write-failure');
+      }
+    });
+    const adapter = new class extends LifecycleAdapter {
+      #active = true;
+      override observeAssignmentLifecycle(
+        input: { readonly provider: string; readonly bindingKey: string },
+        options: RuntimeCallOptions = {},
+      ): RuntimeResult<RuntimeAssignmentLifecycleObservation> {
+        if (!this.#active) return super.observeAssignmentLifecycle(input, options);
+        this.#active = false;
+        return {
+          status: 'ok',
+          value: {
+            kind: 'active',
+            worker: {
+              identity: { runtime: 'test', id: 'worker-active-reset', generation: 'g1' },
+              workspacePath: '/tmp/worker-active-reset',
+              title: 'worker-active-reset',
+              provenance: 'internal',
+            },
+          },
+        };
+      }
+    }();
+    const terminalMailDeps: DispatchTerminalMailDeps = {
+      ledgerPath: ledger,
+      deliverMessage: null,
+      runJson: (() => ({ ok: false, error: { code: 'injected_failure' } })) as unknown as typeof runOrcaJson,
+    };
+
+    const active = await reconcileWorkerAssignments({
+      file: store,
+      repository: REPOSITORY,
+      adapter,
+      terminalMailDeps,
+    });
+    expect(active.status).toBe('ok');
+    expect(active.counts.active).toBe(1);
+    expect(failedWrites).toBe(3);
+    expect(currentWorkerAssignmentByDeliverable(
+      store,
+      published.assignment.taskId,
+      published.assignment.bindingKey,
+    )).not.toHaveProperty('deadObservationTicks');
+
+    const terminal = await reconcileWorkerAssignments({
+      file: store,
+      repository: REPOSITORY,
+      adapter,
+      terminalMailDeps,
+    });
+    expect(terminal.status).toBe('ok');
+    expect(terminal.counts).toMatchObject({ terminal: 1, terminalMailUnsettled: 1, boundedGiveUps: 0 });
+    expect(currentWorkerAssignmentByDeliverable(
+      store,
+      published.assignment.taskId,
+      published.assignment.bindingKey,
+    )).toMatchObject({ ...published.assignment, deadObservationTicks: 1 });
   });
 
   it('does zero mail and zero retirement from stale terminal evidence after Issue attachment', async () => {
@@ -386,7 +659,7 @@ describe('Issue #1899 scheduler assignment lifecycle reconciliation', () => {
       store,
       published.assignment.taskId,
       published.assignment.bindingKey,
-    )).toEqual(published.assignment);
+    )).toMatchObject({ ...published.assignment, deadObservationTicks: 1 });
 
     writeFileSync(ledger, `${JSON.stringify({
       notified: { [published.assignment.bindingKey]: 'sent:msg-gone' },
@@ -404,6 +677,46 @@ describe('Issue #1899 scheduler assignment lifecycle reconciliation', () => {
       published.assignment.taskId,
       published.assignment.bindingKey,
     )).toBeNull();
+  });
+
+  it('does not age out generic unknown lifecycle evidence', async () => {
+    const { store } = fixture();
+    const published = await publishCurrentWorkerAssignment({
+      file: store,
+      repository: REPOSITORY,
+      issueNumber: 1899,
+      taskId: 'unknown-lifecycle-task',
+      kind: 'local',
+      provider: 'orca',
+      bindingKey: 'dispatch-unknown',
+      role: 'worker',
+    });
+    expect(published.ok).toBe(true);
+    if (!published.ok) throw new Error(published.reason);
+    const aged = await setWorkerAssignmentDeadObservationTicks({
+      file: store,
+      expected: published.assignment,
+      ticks: 2,
+    });
+    expect(aged.ok).toBe(true);
+    if (!aged.ok) throw new Error(aged.reason);
+
+    const adapter = new class extends DeterministicRuntimeAdapter {
+      observeAssignmentLifecycle(
+        _input: { readonly provider: string; readonly bindingKey: string },
+        _options: RuntimeCallOptions = {},
+      ): RuntimeResult<RuntimeAssignmentLifecycleObservation> {
+        return runtimeFailure('find_worker', 'injected_unavailable');
+      }
+    }();
+    const result = await reconcileWorkerAssignments({ file: store, repository: REPOSITORY, adapter });
+    expect(result.status).toBe('ok');
+    expect(result.counts).toMatchObject({ observed: 1, unresolved: 1, retired: 0, boundedGiveUps: 0 });
+    expect(currentWorkerAssignmentByDeliverable(
+      store,
+      published.assignment.taskId,
+      published.assignment.bindingKey,
+    )).toMatchObject({ ...aged.assignment, deadObservationTicks: 2 });
   });
 
   it('exact retirement cannot delete a concurrent replacement', async () => {

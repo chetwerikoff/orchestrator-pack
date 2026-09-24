@@ -9,6 +9,7 @@ import {
   createIssueRecoverableResult,
   createIssueTerminalResult,
   existingPacedBoundedRetryAction,
+  projectBlockedOnToExternalPause,
   projectZeroSendManagerResult,
   validateCreateIssueBlockedOn,
   validateCreateIssueManagerResult,
@@ -17,6 +18,8 @@ import {
 } from './lib/create-issue-next-action.ts';
 import { runBrowserAdapter } from './flow-manager-browser-gpt-long-run.ts';
 import { runStageFinalizeCli } from './lib/create-issue-stage-record-cli.ts';
+import { startReviewCycle } from './lib/create-issue-stage-record-core.ts';
+import { createMockGhState, createMockTransport } from './lib/create-issue-stage-record-test-helpers.ts';
 import type { GhTransport } from './lib/create-issue-stage-record-types.ts';
 import { resolveCreateIssueBrowserOperatorConfig } from './lib/create-issue-browser-gpt-preflight.ts';
 import {
@@ -28,11 +31,9 @@ import {
 import { buildManagerReviewTerminalBundle } from './lib/manager-review-terminal-bundle.ts';
 import { runManagerReviewTerminalBundleCli } from './manager-review-terminal-bundle.ts';
 import { canonicalStagePlan } from './lib/create-issue-stage-topology.ts';
-import { startReviewCycle } from './lib/create-issue-stage-record-core.ts';
 import { admitStageLaunch, ensureLifecycleTierIntake, loadCanonicalLifecycleAuthority } from './lib/create-issue-stage-lifecycle.ts';
 import { serializeCommentBody } from './lib/create-issue-stage-record-marker.ts';
 import { CYCLE_SCHEMA, type CycleEventLogical } from './lib/create-issue-stage-record-types.ts';
-import { createMockGhState, createMockTransport } from './lib/create-issue-stage-record-test-helpers.ts';
 import {
   selectPrincipalOwnedCanonicalArtifact,
   sameGithubPrincipal,
@@ -61,10 +62,232 @@ const binding: CreateIssueActionBinding = {
   stageAttemptId: 'attempt-1935',
 };
 
+const freshR01AuthorTurnReplay = {
+  issue: {
+    title: 'T1 convergence fixture',
+    body: '<!-- source-revision: r01 -->\n# T1 convergence fixture\n',
+  },
+  governedReply: [
+    'create-issue-author-dispositions/v1',
+    JSON.stringify({
+      schema: 'create-issue-author-dispositions/v1',
+      sourceRevision: 'r01',
+      predecessorStage: null,
+      findings: [],
+      m4: { inventory: [] },
+    }),
+  ].join('\n'),
+} as const;
+
+describe('Issue #2039 T1 author-turn producer convergence', () => {
+  it('replays a fresh r01 author turn against an isolated fixture without publishing an Issue revision', () => {
+    const root = tempRoot();
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = root;
+    const issueNumber = 2039;
+    const repo = 'chetwerikoff/orchestrator-pack';
+    const reviewDir = join(root, '.review', String(issueNumber));
+    mkdirSync(reviewDir, { recursive: true });
+    const { body } = freshR01AuthorTurnReplay.issue;
+    writeFileSync(join(reviewDir, 'tier-intake.json'), JSON.stringify({
+      schema: 'tier-intake/v1',
+      producer: 'fixture',
+      taskIdentity: 'issue:' + issueNumber,
+      kind: 'fresh',
+      priorTier: 'T1',
+      firstRevision: 'r01',
+    }, null, 2) + '\n');
+    writeFileSync(join(reviewDir, 'round-01-author-reply.md'), freshR01AuthorTurnReplay.governedReply);
+
+    const state = createMockGhState({ issue: { ...freshR01AuthorTurnReplay.issue, labels: [] } });
+    const transport = createMockTransport(state);
+
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => logs.push(String(line)));
+    try {
+      const code = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'produce-author-dispositions',
+        '--repo', repo,
+        '--issue-number', String(issueNumber),
+        '--review-dir', reviewDir,
+        '--source-revision', 'r01',
+        '--json',
+      ], transport);
+      expect(code).toBe(0);
+      expect(JSON.parse(logs.at(-1) ?? '{}')).toMatchObject({ ok: true, retryable: false });
+    } finally {
+      spy.mockRestore();
+    }
+
+    // The fresh r01 turn is replayed against the local authenticated-Issue fixture;
+    // the live Issue at r02 is never read or mutated by this test fixture.
+    expect(state.issue.body).toBe(body);
+    expect(state.commentCreateAttempts).toEqual([]);
+    expect([...state.labels]).toEqual([]);
+
+    expect(JSON.parse(readFileSync(join(reviewDir, 'issue-r01-body.json'), 'utf8'))).toMatchObject({
+      schema: 'create-issue-live-snapshot/v1',
+      issueNumber,
+      sourceRevision: 'r01',
+      body,
+    });
+    expect(JSON.parse(readFileSync(join(reviewDir, 'author-dispositions.json'), 'utf8'))).toMatchObject({
+      producer: 'governed-author-output/v1',
+      reviewEpisodeId: 'issue:2039@r01',
+      sourceRevision: 'r01',
+      predecessorStage: null,
+      draft: body,
+    });
+    expect(() => readFileSync(join(reviewDir, 'finding-disposition-ledger.json'), 'utf8')).toThrow();
+
+    // The zero-state ledger is existing terminal-bundle authority, not an output
+    // of produce-author-dispositions. Supplying it proves the new producer closes
+    // only the missing-author/snapshot gap before ordinary lifecycle admission.
+    writeFileSync(join(reviewDir, 'finding-disposition-ledger.json'), JSON.stringify({
+      version: 2,
+      reviewEpisodeId: 'issue:2039@r01',
+      sourceRevision: 'r01',
+      predecessorStage: null,
+      draft: body,
+      counts: { rawFindingCount: 0, distinctFindingCount: 0, processedDistinctCount: 0 },
+      findings: [],
+    }, null, 2) + '\n');
+
+    const startInput = {
+      repo,
+      issueNumber,
+      sourceRevision: 'r01',
+      stage: 'architectural',
+      tier: 'T1',
+      publicActor: 'cursor-flow-manager',
+      workdir: root,
+    } as const;
+    const ledgerPath = join(reviewDir, 'finding-disposition-ledger.json');
+    const originalLedgerBytes = readFileSync(ledgerPath, 'utf8');
+    try {
+      const ledger = JSON.parse(originalLedgerBytes) as Record<string, unknown>;
+      writeFileSync(ledgerPath, JSON.stringify({
+        ...ledger,
+        findings: [{
+          id: 'T1-FINDING-001',
+          defectDisposition: 'addressed',
+          remedyDisposition: 'accepted',
+        }],
+      }, null, 2) + '\n');
+      const rejected = startReviewCycle(transport, startInput);
+      expect(rejected.ok).toBe(false);
+      expect(rejected.diagnostics.map((item) => item.message)).toContain(
+        'finding disposition ledger findings do not match the bound author disposition record',
+      );
+      expect(rejected.cycleId).toBeUndefined();
+      expect(rejected.eventKey).toBeUndefined();
+      expect(state.commentCreateAttempts).toEqual([]);
+      expect(state.comments).toEqual([]);
+    } finally {
+      writeFileSync(ledgerPath, originalLedgerBytes);
+    }
+    expect(readFileSync(ledgerPath, 'utf8')).toBe(originalLedgerBytes);
+
+    const started = startReviewCycle(transport, startInput);
+    expect(started.ok, started.diagnostics.map((item) => item.message).join('\n')).toBe(true);
+    expect(started.stageAttemptId).toBeTruthy();
+  });
+
+  it('admits a bound non-empty governed T1 author record through first-stage start-cycle', () => {
+    const root = tempRoot();
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = root;
+    const issueNumber = 2039;
+    const repo = 'chetwerikoff/orchestrator-pack';
+    const reviewDir = join(root, '.review', String(issueNumber));
+    mkdirSync(reviewDir, { recursive: true });
+    const { body, title } = freshR01AuthorTurnReplay.issue;
+    const finding = {
+      id: 't1-author-finding',
+      type: 'quality',
+      occurrences: ['sha256:' + 'a'.repeat(64) + ':t1-author-finding:1'],
+      defectDisposition: 'rejected-as-false',
+      rejectReason: 'Not part of the task specification.',
+      remedyDisposition: 'accepted',
+    };
+    const m4 = [{ mechanism: 'existing-authority', disposition: 'keep' }];
+    const governedReply = [
+      'create-issue-author-dispositions/v1',
+      JSON.stringify({
+        schema: 'create-issue-author-dispositions/v1',
+        sourceRevision: 'r01',
+        predecessorStage: null,
+        findings: [finding],
+        m4: { inventory: m4 },
+      }),
+    ].join('\n');
+    writeFileSync(join(reviewDir, 'tier-intake.json'), JSON.stringify({
+      schema: 'tier-intake/v1',
+      producer: 'fixture',
+      taskIdentity: 'issue:' + issueNumber,
+      kind: 'fresh',
+      priorTier: 'T1',
+      firstRevision: 'r01',
+    }, null, 2) + '\n');
+    writeFileSync(join(reviewDir, 'round-01-author-reply.md'), governedReply);
+    const state = createMockGhState({ issue: { title, body, labels: [] } });
+    const transport = createMockTransport(state);
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => logs.push(String(line)));
+    try {
+      const code = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'produce-author-dispositions',
+        '--repo', repo,
+        '--issue-number', String(issueNumber),
+        '--review-dir', reviewDir,
+        '--source-revision', 'r01',
+        '--json',
+      ], transport);
+      expect(code, logs.join('\n')).toBe(0);
+      expect(JSON.parse(logs.at(-1) ?? '{}')).toMatchObject({ ok: true, retryable: false });
+    } finally {
+      spy.mockRestore();
+    }
+    const author = JSON.parse(readFileSync(join(reviewDir, 'author-dispositions.json'), 'utf8')) as Record<string, unknown>;
+    expect(author).toMatchObject({
+      producer: 'governed-author-output/v1',
+      reviewEpisodeId: 'issue:2039@r01',
+      sourceRevision: 'r01',
+      predecessorStage: null,
+      draft: body,
+      findings: [finding],
+      m4: { inventory: m4 },
+    });
+    expect(() => readFileSync(join(reviewDir, 'finding-disposition-ledger.json'), 'utf8')).toThrow();
+    const bundle = buildManagerReviewTerminalBundle({
+      repositoryFullName: repo,
+      issueNumber,
+      sourceRevision: 'r01',
+      reviewDir,
+      transport,
+      liveIssueBody: body,
+    });
+    expect(bundle.predecessorStage).toBeNull();
+    expect(bundle.rejectPartition).toEqual([finding]);
+    expect(bundle.authorM4).toEqual(m4);
+    const started = startReviewCycle(transport, {
+      repo,
+      issueNumber,
+      sourceRevision: 'r01',
+      stage: 'architectural',
+      tier: 'T1',
+      publicActor: 'cursor-flow-manager',
+      workdir: root,
+    });
+    expect(started.ok, started.diagnostics.map((item) => item.message).join('\n')).toBe(true);
+    expect(started.stageAttemptId).toBeTruthy();
+    expect(() => readFileSync(join(reviewDir, 'finding-disposition-ledger.json'), 'utf8')).toThrow();
+    expect(state.comments.length).toBeGreaterThan(0);
+  });
+});
+
 describe('create-Issue nextAction contract', () => {
   it('uses one validated argv-bearing action shape and terminal null shape', () => {
     const action = createIssueNextAction({
-      kind: 'reconcile-stage',
+      kind: 'reconcile-stage-read-only',
       binding,
       argv: ['node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage'],
     });
@@ -76,27 +299,28 @@ describe('create-Issue nextAction contract', () => {
       nextAction: action,
     });
     expect(validateCreateIssueManagerResult(recoverable)).toEqual([]);
-    const terminal = createIssueTerminalResult({ ok: false, cause: 'external_prerequisite' });
+    const terminal = createIssueTerminalResult({ ok: true, cause: 'completed' });
     expect(terminal).toEqual({
-      ok: false,
-      cause: 'external_prerequisite',
+      ok: true,
+      cause: 'completed',
       nextAction: null,
     });
     expect(validateCreateIssueManagerResult(terminal)).toEqual([]);
-    expect(validateCreateIssueManagerResult({ ok: false, nextAction: null })).toContain(
-      'manager non-success result.cause must be non-empty',
+    expect(validateCreateIssueManagerResult({ ok: false, cause: 'stuck', nextAction: null })).toContain(
+      'recoverable manager result.nextAction must be non-null',
     );
   });
 
   it('returns canonical stale_next_action when any state binding moves', () => {
     const action = createIssueNextAction({
-      kind: 'reconcile-stage',
+      kind: 'reconcile-stage-read-only',
       binding,
       argv: ['node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage'],
     });
     const stale = assertCreateIssueActionCurrent({
       action,
       observed: { ...binding, sourceRevision: 'r04' },
+      nextAction: action,
     });
     expect(stale).toMatchObject({
       ok: false,
@@ -104,7 +328,7 @@ describe('create-Issue nextAction contract', () => {
       cause: 'stale_next_action',
       binding,
       observed: { sourceRevision: 'r04' },
-      nextAction: null,
+      nextAction: action,
     });
     expect(validateCreateIssueManagerResult(stale)).toEqual([]);
   });
@@ -119,6 +343,9 @@ describe('create-Issue nextAction contract', () => {
     expect(cliSource).toContain("'--expected-stage-attempt-id'");
     expect(cliSource).toContain('validateCreateIssueManagerResult(output)');
 
+    expect(cliSource).toContain('semanticStageAttemptId(opts.repo, issueNumber, stage)');
+    expect(cliSource).toContain('stageAttemptId: canonicalAttemptId');
+    expect(cliSource).toContain('argv: startCycleRetryArgv(retryOpts, issueNumber, binding)');
     const coreSource = readFileSync(join(process.cwd(), 'scripts', 'lib', 'create-issue-stage-record-core.ts'), 'utf8');
     const functionStart = coreSource.indexOf('export function startReviewCycle(');
     const admission = coreSource.indexOf('admitStageLaunch(admissionInput)', functionStart);
@@ -126,6 +353,7 @@ describe('create-Issue nextAction contract', () => {
     expect(functionStart).toBeGreaterThanOrEqual(0);
     expect(admission).toBeGreaterThan(functionStart);
     expect(projection).toBeGreaterThan(admission);
+    expect(coreSource).toContain('export function semanticStageAttemptId(');
   });
 });
 
@@ -276,7 +504,7 @@ describe('Issue #2037 zero-send retry convergence', () => {
         '--stage-evidence', evidencePath,
         '--json',
       ];
-      expect(runStageFinalizeCli(argv, transport)).toBe(1);
+      expect(runStageFinalizeCli(argv, transport)).toBe(3);
       const first = JSON.parse(logs.at(-1) ?? '{}') as Record<string, any>;
       expect(first).toMatchObject({
         ok: false,
@@ -305,7 +533,7 @@ describe('Issue #2037 zero-send retry convergence', () => {
 
       const committedBytes = readFileSync(evidencePath, 'utf8');
       logs.length = 0;
-      expect(runStageFinalizeCli(argv, transport)).toBe(1);
+      expect(runStageFinalizeCli(argv, transport)).toBe(3);
       expect(readFileSync(evidencePath, 'utf8')).toBe(committedBytes);
       expect(JSON.parse(logs.at(-1) ?? '{}').nextAction?.kind).toBe('retry-create-issue-browser-preflight');
 
@@ -337,7 +565,7 @@ describe('Issue #2037 zero-send retry convergence', () => {
       ];
 
       logs.length = 0;
-      expect(runStageFinalizeCli(argv, transport)).toBe(0);
+      expect(runStageFinalizeCli(argv, transport)).toBe(3);
       const second = JSON.parse(logs.at(-1) ?? '{}') as Record<string, any>;
       expect(second.nextAction?.kind).toBe('produce-acceptance-artifacts');
       expect(second.nextAction?.kind).not.toBe('retry-create-issue-browser-preflight');
@@ -536,14 +764,22 @@ describe('structured blocked_on manager contract (Issue #2004)', () => {
   it('accepts only the two selector-compatible closed predicate variants', () => {
     expect(validateCreateIssueBlockedOn(issueBlockedOn)).toEqual([]);
     expect(validateCreateIssueBlockedOn(prBlockedOn)).toEqual([]);
-    expect(createIssueTerminalResult({
+    expect(projectBlockedOnToExternalPause(issueBlockedOn)).toMatchObject({
       ok: false,
-      cause: 'external_prerequisite',
-      blockedOn: issueBlockedOn,
-    })).toEqual({
+      cause: 'external:waiting_on_issue',
+      pause: {
+        resume_when: { issue: 1977, condition: 'issue_closed' },
+        evidence: issueBlockedOn.evidence,
+      },
+      nextAction: null,
+    });
+    expect(projectBlockedOnToExternalPause(prBlockedOn)).toMatchObject({
       ok: false,
-      cause: 'external_prerequisite',
-      blocked_on: issueBlockedOn,
+      cause: 'external:waiting_on_pr',
+      pause: {
+        resume_when: { pr: 1885, condition: 'pr_merged' },
+        evidence: prBlockedOn.evidence,
+      },
       nextAction: null,
     });
 
@@ -565,17 +801,18 @@ describe('structured blocked_on manager contract (Issue #2004)', () => {
       cause: 'external_prerequisite',
       blocked_on: issueBlockedOn,
       nextAction: createIssueNextAction({
-        kind: 'reconcile-stage',
+        kind: 'reconcile-stage-read-only',
         binding,
         argv: ['node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage'],
       }),
-    })).toContain('manager result.blocked_on requires nextAction=null');
+    })).toContain('manager result.blocked_on is retired; project the coordinator-supplied predicate to external_pause');
 
     expect(validateCreateIssueManagerResult({
       ok: true,
+      cause: 'completed',
       blocked_on: issueBlockedOn,
       nextAction: null,
-    })).toEqual([]);
+    })).toContain('manager result.blocked_on is retired; project the coordinator-supplied predicate to external_pause');
   });
 
   it.each([
@@ -605,10 +842,17 @@ describe('structured blocked_on manager contract (Issue #2004)', () => {
         '--blocked-on-json', JSON.stringify(blockedOn),
         '--json',
       ]);
-      expect(code).toBe(1);
+      expect(code).toBe(4);
       const output = JSON.parse(logs.at(-1) ?? '{}') as Record<string, unknown>;
       expect(output.nextAction).toBeNull();
-      expect(output.blocked_on).toEqual(blockedOn);
+      expect(output).not.toHaveProperty('blocked_on');
+      expect(output.cause).toBe('issue' in blockedOn ? 'external:waiting_on_issue' : 'external:waiting_on_pr');
+      expect(output.pause).toMatchObject({
+        resume_when: 'issue' in blockedOn
+          ? { issue: blockedOn.issue, condition: 'issue_closed' }
+          : { pr: blockedOn.pr, condition: 'pr_merged' },
+        evidence: blockedOn.evidence,
+      });
     } finally {
       logSpy.mockRestore();
     }
@@ -637,10 +881,14 @@ describe('structured blocked_on manager contract (Issue #2004)', () => {
         '--stage-evidence', evidencePath,
         '--json',
       ]);
-      expect(code).toBe(1);
+      expect(code).toBe(5);
       const output = JSON.parse(logs.at(-1) ?? '{}') as Record<string, unknown>;
-      expect(output.nextAction).toBeNull();
+      expect(output).toMatchObject({
+        cause: 'producer_contract_defect',
+        nextAction: null,
+      });
       expect(output).not.toHaveProperty('blocked_on');
+      expect(output).not.toHaveProperty('pause');
     } finally {
       logSpy.mockRestore();
     }
@@ -662,7 +910,7 @@ describe('structured blocked_on manager contract (Issue #2004)', () => {
         }),
         '--json',
       ]);
-      expect(code).toBe(2);
+      expect(code).toBe(5);
       expect(stderr.mock.calls.flat().join('')).toContain('--blocked-on-json is invalid');
     } finally {
       stderr.mockRestore();
@@ -1010,7 +1258,6 @@ describe('Issue #1935 sanitized measured convergence replay', () => {
     const continuationLogSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
       continuationLogs.push(String(line));
     });
-    let continuationBlockedOnJson = '';
     try {
       const code = runStageFinalizeCli([
         'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
@@ -1021,16 +1268,20 @@ describe('Issue #1935 sanitized measured convergence replay', () => {
         '--blocked-on-json', JSON.stringify(blockedOn),
         '--json',
       ], transport);
-      expect(code).toBe(0);
+      expect(code).toBe(4);
       const output = JSON.parse(continuationLogs.at(-1) ?? '{}') as {
-        nextAction?: { kind?: string; argv?: string[] } | null;
+        cause?: string;
+        nextAction?: unknown;
+        pause?: { resume_when?: unknown; evidence?: string };
       };
-      expect(output.nextAction?.kind).toBe('produce-acceptance-artifacts');
-      const argv = output.nextAction?.argv ?? [];
-      const blockedOnIndex = argv.indexOf('--blocked-on-json');
-      expect(blockedOnIndex).toBeGreaterThanOrEqual(0);
-      continuationBlockedOnJson = argv[blockedOnIndex + 1] ?? '';
-      expect(JSON.parse(continuationBlockedOnJson)).toEqual(blockedOn);
+      expect(output).toMatchObject({
+        cause: 'external:waiting_on_issue',
+        nextAction: null,
+        pause: {
+          resume_when: { issue: 1977, condition: 'issue_closed' },
+          evidence: blockedOn.evidence,
+        },
+      });
     } finally {
       continuationLogSpy.mockRestore();
     }
@@ -1158,17 +1409,21 @@ describe('Issue #1935 sanitized measured convergence replay', () => {
         '--issue-number', String(replay.source.issueNumber),
         '--review-dir', reviewDir,
         '--stage-evidence', evidencePath,
-        '--blocked-on-json', continuationBlockedOnJson,
         '--json',
       ], transport);
-      expect(code).toBe(0);
-      const output = JSON.parse(terminalLogs.at(-1) ?? '{}') as Record<string, unknown>;
+      expect(code).toBe(3);
+      const output = JSON.parse(terminalLogs.at(-1) ?? '{}') as {
+        ok?: boolean;
+        cause?: string;
+        nextAction?: { kind?: string } | null;
+      };
       expect(output).toMatchObject({
-        ok: true,
-        alreadySettled: true,
-        blocked_on: blockedOn,
-        nextAction: null,
+        ok: false,
+        cause: 'reconciliation_failed',
+        nextAction: { kind: 'produce-acceptance-artifacts' },
       });
+      expect(output).not.toHaveProperty('blocked_on');
+      expect(output).not.toHaveProperty('pause');
     } finally {
       terminalLogSpy.mockRestore();
     }
@@ -1186,11 +1441,27 @@ describe('zero-send manager result is action or structured reason (Issue #1999)'
   };
   const fixtureDir = join(process.cwd(), 'tests/external-output-references');
 
+  function managerReconcileAction() {
+    return createIssueNextAction({
+      kind: 'reconcile-stage-read-only',
+      binding,
+      argv: [
+        'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
+        '--repo', binding.repository,
+        '--issue-number', String(binding.issueNumber),
+        '--expected-source-revision', binding.sourceRevision,
+        '--expected-stage', binding.stage,
+        '--expected-stage-attempt-id', binding.stageAttemptId!,
+        '--json',
+      ],
+    });
+  }
+
   function envelope(name: string): Record<string, unknown> {
     return JSON.parse(readFileSync(join(fixtureDir, name), 'utf8')) as Record<string, unknown>;
   }
 
-  it('returns nextAction null with a structured reason when a fresh invocation id is offered', () => {
+  it('returns readonly reconciliation with a structured reason for deterministic zero-send input', () => {
     for (const name of [
       'create-issue-926-terminal-competitive-01.json',
       'create-issue-926-terminal-competitive-01-final.json',
@@ -1204,9 +1475,10 @@ describe('zero-send manager result is action or structured reason (Issue #1999)'
         invocationId: 'original-invocation',
         reviewerSlot: '01',
         pacedRetryAction: existingPacedBoundedRetryAction(binding, '01'),
+        reconcileAction: managerReconcileAction(),
         freshInvocationId: 'fresh-invocation-id',
       });
-      expect(projected?.nextAction).toBeNull();
+      expect(projected?.nextAction).toMatchObject({ kind: 'reconcile-stage-read-only' });
       expect(projected).toEqual(expect.objectContaining({
         ok: false,
         cause: policy?.code,
@@ -1222,6 +1494,47 @@ describe('zero-send manager result is action or structured reason (Issue #1999)'
       expect(typeof projected?.blocker).toBe('string');
       expect(projected && 'reason' in projected).toBe(true);
     }
+  });
+
+  it('projects marker conflict to readonly reconciliation and exhausted external transient to a typed pause', () => {
+    const reconcile = projectZeroSendManagerResult({
+      policy: {
+        class: 'state-conflict',
+        code: 'marker_conflict',
+        rawCause: 'marker_conflict: canonical lineage disagrees',
+      },
+      attemptOrdinal: 1,
+      binding,
+      pacedRetryAction: existingPacedBoundedRetryAction(binding, '01'),
+      reconcileAction: managerReconcileAction(),
+    });
+    expect(reconcile).toMatchObject({
+      ok: false,
+      cause: 'marker_conflict',
+      nextAction: { kind: 'reconcile-stage-read-only' },
+    });
+
+    const paused = projectZeroSendManagerResult({
+      policy: {
+        class: 'transient',
+        code: 'transport_unavailable',
+        rawCause: 'GitHub HTTP 503 unavailable',
+      },
+      attemptOrdinal: 2,
+      binding,
+      reviewerSlot: '01',
+      pacedRetryAction: existingPacedBoundedRetryAction(binding, '01'),
+      reconcileAction: managerReconcileAction(),
+    });
+    expect(paused).toMatchObject({
+      ok: false,
+      cause: 'external:github_unavailable',
+      pause: {
+        resume_when: { operator: true },
+        evidence: 'GitHub HTTP 503 unavailable',
+      },
+      nextAction: null,
+    });
   });
 });
 
@@ -1313,7 +1626,7 @@ describe('Issue #1997 author-round convergence', () => {
         '--tier', 'T2',
         '--json',
       ], transport);
-      expect(code).toBe(1);
+      expect(code).toBe(3);
       const output = JSON.parse(logs.at(-1) ?? '{}') as {
         blocker?: string;
         nextAction?: {
@@ -1362,7 +1675,7 @@ describe('Issue #1997 author-round convergence', () => {
         '--stage', 'architectural-review',
         '--tier', 'T2',
         '--json',
-      ], transport)).toBe(1);
+      ], transport)).toBe(3);
       action = JSON.parse(initialLogs.at(-1) ?? '{}').nextAction;
     } finally {
       firstSpy.mockRestore();
@@ -1380,7 +1693,7 @@ describe('Issue #1997 author-round convergence', () => {
       expect(runStageFinalizeCli(executionArgv, transport, () => {
         launches += 1;
         return { ok: true };
-      })).toBe(1);
+      })).toBe(3);
       expect(JSON.parse(failingLogs.at(-1) ?? '{}')).toMatchObject({
         cause: 'author_round_output_missing',
       });
@@ -1396,10 +1709,10 @@ describe('Issue #1997 author-round convergence', () => {
       expect(runStageFinalizeCli(executionArgv, transport, () => {
         launches += 1;
         return { ok: true };
-      })).toBe(1);
+      })).toBe(3);
       expect(JSON.parse(staleLogs.at(-1) ?? '{}')).toMatchObject({
         cause: 'stale_next_action',
-        nextAction: null,
+        nextAction: { kind: 'reconcile-stage-read-only' },
       });
       expect(launches).toBe(0);
     } finally {
