@@ -695,6 +695,27 @@ function settleComposerObservation(
   const identity = worker.identity;
   const key = workerKey(identity);
   const base = { terminal: identity.id, generation: identity.generation };
+  const family = deps.composerFamily?.(identity);
+  if (!family || family.status === 'unbound') {
+    return {
+      ...base,
+      ok: false,
+      unsent: true,
+      enter: false,
+      reason: family?.status === 'unbound' ? family.reason : 'composer_family_unbound',
+    };
+  }
+  if (family.family === 'opencode') {
+    return {
+      ...base,
+      ok: false,
+      unsent: true,
+      enter: false,
+      reason: deps.composerControl?.(identity)?.kind === 'opencode-http'
+        ? 'opencode_http_control_required'
+        : 'opencode_control_unbound',
+    };
+  }
   if (!shown.ok) {
     return { ...base, ok: false, unsent: false, enter: false, reason: shown.reason };
   }

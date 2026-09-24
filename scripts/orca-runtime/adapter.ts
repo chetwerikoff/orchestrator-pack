@@ -1452,6 +1452,23 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       return { status: 'send_failed', reason: 'worker_generation_not_found' };
     }
     const control = this.composerControl(input.worker);
+    const family = this.observeComposerFamily(input.worker, options);
+    if (family.status === 'known' && family.family === 'opencode') {
+      if (control?.kind !== 'opencode-http') {
+        return { status: 'send_failed', reason: 'opencode_control_unbound' };
+      }
+      if (input.writeOnly || input.submitOnly || input.text !== undefined) {
+        return control.dispatch({
+          worker: input.worker,
+          action: input.writeOnly ? 'append-prompt' : 'submit-prompt',
+          ...(input.text !== undefined ? { text: input.text } : {}),
+        }, options);
+      }
+      return { status: 'send_failed', reason: 'opencode_control_action_required' };
+    }
+    if (input.submitOnly && family.status === 'unbound') {
+      return { status: 'send_failed', reason: family.reason };
+    }
     if (control && (input.writeOnly || input.submitOnly || input.text !== undefined)) {
       return control.dispatch({
         worker: input.worker,

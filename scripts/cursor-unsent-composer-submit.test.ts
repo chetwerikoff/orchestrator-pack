@@ -395,6 +395,7 @@ describe('submitUnsentCursorComposer', () => {
     const second = worker('term_second');
     const deps: UnsentComposerSubmitDeps = {
       listWorkers: () => ({ ok: true, workers: [first, second] }),
+      composerFamily: () => ({ status: 'known', family: 'non-opencode', command: 'cursor-agent --fixture', provenance: 'orca-terminal-show' }),
       read: () => ({ ok: true as const, lines: [POKE, ...CURSOR_FOOTER], source: 'screen' as const }),
       submit: (identity) => {
         submitted.push(identity);
@@ -410,6 +411,7 @@ describe('submitUnsentCursorComposer', () => {
     const reads: Array<{ screen?: boolean }> = [];
     const adapter = {
       listWorkers: () => ({ status: 'ok' as const, value: [worker('term_production')] }),
+      observeComposerFamily: () => ({ status: 'known' as const, family: 'non-opencode' as const, command: 'cursor-agent --fixture', provenance: 'orca-terminal-show' as const }),
       readBoundedOutput: (input: { screen?: boolean }) => {
         reads.push(input);
         return {
@@ -431,6 +433,7 @@ describe('submitUnsentCursorComposer', () => {
           worker: input.worker,
         });
       })(),
+      observeComposerFamily: () => ({ status: 'known' as const, family: 'non-opencode' as const, command: 'cursor-agent --fixture', provenance: 'orca-terminal-show' as const }),
       dispatchInput: () => ({ status: 'dispatched' as const }),
     } as unknown as Parameters<typeof createAdapterSubmitDeps>[0];
     const deps = { ...createAdapterSubmitDeps(adapter, () => ({ ok: true, result: {} })), sentStorePath: undefined };

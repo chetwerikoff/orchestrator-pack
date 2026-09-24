@@ -1817,6 +1817,7 @@ describe('Issue #1587 accepted terminal-send evidence', () => {
               worktreePath: '/tmp/worktree-1587',
               title: 'busy-agent',
               status: 'running',
+              command: 'cursor-agent --resume fixture',
             },
           },
         };

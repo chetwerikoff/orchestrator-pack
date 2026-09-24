@@ -16,6 +16,7 @@
     "scripts/pr2-foundation/post-review-smoke.test.ts",
     "scripts/pr2-foundation/post-review-smoke.ts",
     "scripts/pr2-foundation/scheduler-post-review-smoke-production.test.ts",
+    "scripts/pr2-foundation/scheduler-process-integration.test.ts",
     "scripts/pr2-foundation/scheduler.ts",
     "scripts/runtime/contracts.ts",
     "scripts/worker-smoke-run.ts",
@@ -46,11 +47,12 @@
     "scripts/pr2-foundation/post-review-smoke.test.ts",
     "scripts/pr2-foundation/post-review-smoke.ts",
     "scripts/pr2-foundation/scheduler-post-review-smoke-production.test.ts",
+    "scripts/pr2-foundation/scheduler-process-integration.test.ts",
     "scripts/pr2-foundation/scheduler.ts",
     "scripts/runtime/contracts.ts",
     "scripts/worker-smoke-run.ts",
     "tests/external-output-references/capture-manifest.json",
     "tests/external-output-references/captures/orca-runtime/"
   ],
-  "source_revision": "cbd630509b69f5acb645b0cf10d5dbb20e48b5e3"
+  "source_revision": "e83668cafad8b28d400008be660f96fd42ce8717"
 }
