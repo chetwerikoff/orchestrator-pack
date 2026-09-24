@@ -122,6 +122,16 @@ export interface SchedulerBoundary {
   }) => { ok: boolean; reason?: string; record?: FleetReconciliationHandoff };
 }
 
+export const SCHEDULER_RUN_TICK_PHASE_INVENTORY = Object.freeze([
+  { phase: 'fleet-observer-escalation', scopedTimeoutMs: 5_000, supervisorGenerationCapped: true },
+  { phase: 'fleet-nudge', scopedTimeoutMs: null, supervisorGenerationCapped: true },
+  { phase: 'orchestration-mail-reconcile-loop-drain', scopedTimeoutMs: null, supervisorGenerationCapped: true },
+  { phase: 'read-current-pr', scopedTimeoutMs: 30_000, supervisorGenerationCapped: true },
+  { phase: 'detached-post-review-smoke-start-or-observe', scopedTimeoutMs: null, supervisorGenerationCapped: true },
+  { phase: 'read-checks', scopedTimeoutMs: 30_000, supervisorGenerationCapped: true },
+  { phase: 'start-pack-review', scopedTimeoutMs: null, supervisorGenerationCapped: true },
+] as const);
+
 // An active Orca lifecycle observation can issue worker-show plus terminal-show.
 // Two assignments at 2 s per call cap serialized time before the mail turn at 8 s.
 const ASSIGNMENT_RESOLUTION_CALL_TIMEOUT_MS = 2_000;

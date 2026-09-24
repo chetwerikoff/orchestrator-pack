@@ -11,6 +11,7 @@ import {
   type RuntimeCallOptions,
   type RuntimeComposerControl,
   type RuntimeComposerControlRequest,
+  type RuntimeComposerFamilyObservation,
   type RuntimeDispatchResult,
   type RuntimeDispatchWitness,
   type RuntimeInboxCheckResult,
@@ -937,13 +938,6 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
     const currentOwned = this.#owned.get(handle);
     const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: handle, generation };
-    const openCodeUrl = typeof terminal.command === 'string'
-      ? openCodeUrlFromCommand(terminal.command)
-      : undefined;
-    const openCodeAgent = typeof terminal.command === 'string'
-      ? openCodeAgentFromCommand(terminal.command)
-      : undefined;
-    if (openCodeUrl) this.#rememberOpenCodeUrl(identity, openCodeUrl, openCodeAgent);
     const worker: RuntimeWorker = {
       identity,
       workspacePath,
@@ -954,6 +948,49 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     };
     this.#rememberWorkspace(identity, workspaceSelector, workspacePath);
     return { status: 'ok', value: worker };
+  }
+
+  observeComposerFamily(
+    worker: RuntimeWorkerIdentity,
+    options: RuntimeCallOptions = {},
+  ): RuntimeComposerFamilyObservation {
+    const provenance = 'orca-terminal-show' as const;
+    if (worker.runtime !== 'orca' || !worker.id.trim() || !worker.generation.trim()) {
+      return { status: 'unbound', reason: 'runtime_composer_identity_invalid', provenance };
+    }
+    const response = this.#run<{ terminal?: OrcaTerminalSummary }>(
+      ['terminal', 'show', '--terminal', worker.id],
+      options,
+    );
+    if (!response.ok) {
+      return { status: 'unbound', reason: neutralFailureReason(response), provenance };
+    }
+    const terminal = response.result?.terminal;
+    if (!terminal) {
+      return { status: 'unbound', reason: 'runtime_composer_terminal_show_shape_unsupported', provenance };
+    }
+    const current = this.#workerFromTerminal(
+      terminal,
+      terminal.worktreePath?.trim() || 'active',
+      'find_worker_by_id',
+    );
+    if (current.status !== 'ok') {
+      return { status: 'unbound', reason: current.reason, provenance };
+    }
+    if (!sameRuntimeWorker(current.value.identity, worker)) {
+      return { status: 'unbound', reason: 'worker_generation_not_found', provenance };
+    }
+    const command = typeof terminal.command === 'string' ? terminal.command.trim() : '';
+    if (!command) {
+      return { status: 'unbound', reason: 'runtime_composer_command_unbound', provenance };
+    }
+    if (/(?:^|\s)opencode(?:\s|$)/iu.test(command)) {
+      return { status: 'known', family: 'opencode', command, provenance };
+    }
+    if (/opencode/iu.test(command)) {
+      return { status: 'unbound', reason: 'runtime_composer_family_ambiguous', command, provenance };
+    }
+    return { status: 'known', family: 'non-opencode', command, provenance };
   }
 
   composerControl(
@@ -1415,6 +1452,23 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       return { status: 'send_failed', reason: 'worker_generation_not_found' };
     }
     const control = this.composerControl(input.worker);
+    const family = this.observeComposerFamily(input.worker, options);
+    if (family.status === 'known' && family.family === 'opencode') {
+      if (control?.kind !== 'opencode-http') {
+        return { status: 'send_failed', reason: 'opencode_control_unbound' };
+      }
+      if (input.writeOnly || input.submitOnly || input.text !== undefined) {
+        return control.dispatch({
+          worker: input.worker,
+          action: input.writeOnly ? 'append-prompt' : 'submit-prompt',
+          ...(input.text !== undefined ? { text: input.text } : {}),
+        }, options);
+      }
+      return { status: 'send_failed', reason: 'opencode_control_action_required' };
+    }
+    if (input.submitOnly && family.status === 'unbound') {
+      return { status: 'send_failed', reason: family.reason };
+    }
     if (control && (input.writeOnly || input.submitOnly || input.text !== undefined)) {
       return control.dispatch({
         worker: input.worker,
