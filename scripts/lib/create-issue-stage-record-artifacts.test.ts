@@ -3678,7 +3678,7 @@ describe('Issue #2039 pre-stage T1 author disposition producer', () => {
   it('keeps the immutable episode identity across r01-r02-r03 pre-capture replacement and preserves snapshots', () => {
     const input = t1Fixture('r01');
     for (const revision of ['r01', 'r02', 'r03']) {
-      const body = `<!-- source-revision: ${revision} -->\n# T1 producer fixture ${revision}\n`;
+      const body = finalAcceptanceIssueBody(revision).replace('tier: T2', 'tier: T1');
       writeGovernedAuthorReply(input.authorReplyPath, {
         sourceRevision: revision,
         predecessorStage: null,
@@ -3699,6 +3699,32 @@ describe('Issue #2039 pre-stage T1 author disposition producer', () => {
       expect(existsSync(join(input.reviewDir, `issue-${revision}-body.json`))).toBe(true);
     }
     expect(['r01', 'r02', 'r03'].every((revision) => existsSync(join(input.reviewDir, `issue-${revision}-body.json`)))).toBe(true);
+
+    const r03Body = finalAcceptanceIssueBody('r03').replace('tier: T2', 'tier: T1');
+    const source = transport({
+      issueBodies: [r03Body, r03Body],
+      persistCreatedIssueComments: true,
+    });
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => logs.push(String(line)));
+    try {
+      const exitCode = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'start-cycle',
+        '--repo', REPOSITORY,
+        '--issue-number', String(ISSUE),
+        '--source-revision', 'r03',
+        '--stage', 'architectural',
+        '--tier', 'T1',
+        '--workdir', input.reviewDir,
+        '--json',
+      ], source);
+      expect(exitCode, logs.at(-1) ?? 'missing start-cycle result').toBe(0);
+      const admitted = JSON.parse(logs.at(-1) ?? '{}') as Record<string, unknown>;
+      expect(admitted).toMatchObject({ ok: true, diagnostics: [], stageAttemptId: expect.any(String) });
+      expect(admitted.cycleId).toEqual(expect.any(String));
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('classifies only the three bounded temporary observation failures as retryable without writing state', () => {
