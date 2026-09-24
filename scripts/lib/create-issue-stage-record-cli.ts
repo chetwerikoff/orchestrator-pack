@@ -375,7 +375,8 @@ export function stageFinalizeUsage(): string {
 export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
   const command = argv[2];
   if (command !== 'start-cycle' && command !== 'author-round' && command !== 'publish-stage' && command !== 'retry-pending' && command !== 'reconcile-stage' && command !== 'bind-published-comment' && command !== 'produce-author-dispositions' && command !== 'produce-artifacts' && command !== 'check-artifacts') {
-    throw new Error(`unknown command\n${stageFinalizeUsage()}`);
+    const commandError = command === undefined ? 'command is required' : `unknown command ${command}`;
+    throw new Error(`${commandError}\n${stageFinalizeUsage()}`);
   }
   const opts: StageFinalizeCliOptions = {
     command,
