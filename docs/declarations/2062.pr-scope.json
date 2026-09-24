@@ -13,12 +13,16 @@
     "scripts/orca-runtime/native.ts",
     "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/pr2-foundation/post-review-smoke-preaction.test.ts",
+    "scripts/pr2-foundation/post-review-smoke-race.test.ts",
     "scripts/pr2-foundation/post-review-smoke.test.ts",
     "scripts/pr2-foundation/post-review-smoke.ts",
+    "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts",
     "scripts/pr2-foundation/scheduler-post-review-smoke-production.test.ts",
     "scripts/pr2-foundation/scheduler-process-integration.test.ts",
     "scripts/pr2-foundation/scheduler.ts",
     "scripts/runtime/contracts.ts",
+    "scripts/worker-smoke-entrypoint-1359.test.ts",
     "scripts/worker-smoke-run.ts",
     "tests/external-output-references/capture-manifest.json",
     "tests/external-output-references/captures/orca-runtime/terminal-show-opencode.provenance.json",
@@ -46,13 +50,15 @@
     "scripts/pr2-foundation/post-review-smoke-race.test.ts",
     "scripts/pr2-foundation/post-review-smoke.test.ts",
     "scripts/pr2-foundation/post-review-smoke.ts",
+    "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts",
     "scripts/pr2-foundation/scheduler-post-review-smoke-production.test.ts",
     "scripts/pr2-foundation/scheduler-process-integration.test.ts",
     "scripts/pr2-foundation/scheduler.ts",
     "scripts/runtime/contracts.ts",
+    "scripts/worker-smoke-entrypoint-1359.test.ts",
     "scripts/worker-smoke-run.ts",
     "tests/external-output-references/capture-manifest.json",
     "tests/external-output-references/captures/orca-runtime/"
   ],
-  "source_revision": "e83668cafad8b28d400008be660f96fd42ce8717"
+  "source_revision": "d78cd93cb6a4bb1de580e05b2f9bd454b5b005e7"
 }

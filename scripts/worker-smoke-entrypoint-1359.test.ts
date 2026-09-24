@@ -180,6 +180,7 @@ const terminal = {
   title: 'smoke-1359-renamed',
   incarnationId: 'stable-generation-1359',
   worktreePath: root,
+  command: 'cursor-agent --model fixture-routine-model-fixture-routine-effort',
   status: 'running',
 };
 const ok = (result) => process.stdout.write(JSON.stringify({ ok: true, result }));
@@ -933,6 +934,7 @@ process.exitCode = 2;
       incarnationId: 'generation-agent-start',
       worktreePath: root,
       status: 'running',
+      command: 'cursor-agent',
     };
     const calls: string[][] = [];
     const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => {
