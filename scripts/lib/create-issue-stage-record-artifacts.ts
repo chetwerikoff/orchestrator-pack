@@ -34,7 +34,7 @@ import {
   type VerifiedRelayEvidenceV1,
   resolveCanonicalReviewDirectory,
 } from './stage-completeness-core.ts';
-import { canonicalStagePlan, stagesForPhase } from './create-issue-stage-topology.ts';
+import { canonicalPredecessorStage, canonicalStagePlan, stagesForPhase } from './create-issue-stage-topology.ts';
 import { evaluateStageCredentialingSettlement } from './create-issue-stage-lifecycle-acceptance.ts';
 import { readEvidenceWaiverProducerEvidence } from './create-issue-stage-record-receipt.ts';
 import { extractMarker, resolveRecoveredInvalidPublicActorPoisonWitness } from './create-issue-stage-record-marker.ts';
@@ -51,9 +51,25 @@ import {
   sameGithubPrincipal,
   selectPrincipalOwnedCanonicalArtifact,
 } from './create-issue-github-artifact-authority.ts';
+import {
+  AUTHOR_DISPOSITIONS_SCHEMA,
+  DEFECT_DISPOSITION_VALUES,
+  REMEDY_DISPOSITION_VALUES,
+  authorDispositionDiagnosticFromFailure,
+  authorDispositionDiagnosticsText,
+  locateGovernedAuthorDispositionBlock as locateAuthorDispositionBlock,
+  parseGovernedAuthorDispositionText,
+  renderAuthorDispositionPromptFragment,
+  type AuthorDispositionDiagnostic,
+} from './create-issue-author-dispositions-schema.ts';
+
+export {
+  AUTHOR_DISPOSITIONS_SCHEMA,
+  DEFECT_DISPOSITION_VALUES,
+  REMEDY_DISPOSITION_VALUES,
+} from './create-issue-author-dispositions-schema.ts';
 
 export const STAGE_EVIDENCE_SCHEMA = 'create-issue-stage-evidence/v1' as const;
-export const AUTHOR_DISPOSITIONS_SCHEMA = 'create-issue-author-dispositions/v1' as const;
 export const ARTIFACT_MANIFEST_SCHEMA = 'create-issue-acceptance-artifacts/v1' as const;
 export const TURN_RESULT_SCHEMA = 'turn-result/v1' as const;
 export const AUTHORITATIVE_GITHUB_ARTIFACT_BASIS = 'authoritative-github-artifact' as const;
@@ -89,17 +105,6 @@ export const ACCEPTANCE_ARTIFACT_OUTPUT_NAMES = [
   'finding-disposition-ledger.json',
   'review-episode-inventory.json',
   'acceptance-artifacts.json',
-] as const;
-
-export const DEFECT_DISPOSITION_VALUES = [
-  'addressed',
-  'rejected-as-false',
-  'unresolved',
-] as const;
-export const REMEDY_DISPOSITION_VALUES = [
-  'accepted',
-  'replaced-by-cheaper-sufficient',
-  'rejected-as-overengineering',
 ] as const;
 
 export type AcceptanceArtifactTemporaryClassification =
@@ -207,6 +212,8 @@ export interface AcceptanceArtifactResult {
   errors: string[];
   reviewEpisodeId?: string;
   temporary?: AcceptanceArtifactTemporaryClassification;
+  authorDiagnostics?: AuthorDispositionDiagnostic[];
+  authorSchemaFragment?: string;
 }
 
 export interface AcceptanceArtifactStatus {
@@ -245,6 +252,47 @@ function optionalString(value: unknown): string | undefined {
 
 function reviewTier(value: unknown): ReviewTier | null {
   return value === 'T1' || value === 'T2' || value === 'T3' ? value : null;
+}
+
+function canonicalTerminalPredecessor(
+  intake: TierIntakeAuthorityV1,
+  errors?: string[],
+): ReviewStage | null {
+  const tier = reviewTier(intake.priorTier);
+  if (!tier) {
+    errors?.push('tier-intake priorTier is invalid for canonical predecessor derivation');
+    return null;
+  }
+  try {
+    return canonicalPredecessorStage(tier, 'architectural', {
+      competitiveDecision: intake.competitiveDecision === 'required' || intake.competitiveDecision === 'skipped'
+        ? intake.competitiveDecision
+        : undefined,
+      competitiveRationale: typeof intake.competitiveRationale === 'string'
+        ? intake.competitiveRationale
+        : undefined,
+    });
+  } catch (error) {
+    errors?.push(
+      'canonical predecessor derivation failed: '
+      + (error instanceof Error ? error.message : String(error)),
+    );
+    return null;
+  }
+}
+
+function authorBindingPredecessor(
+  intake: TierIntakeAuthorityV1,
+  stageInputs: readonly { path: string; value: JsonRecord }[],
+  phase: 'pre-lens' | 'post-lens' | 'final-acceptance',
+  errors: string[],
+): ReviewStage | null {
+  // Before a terminal author-adjudication consumer exists, the binding is the
+  // actually settled lifecycle predecessor. With no stage evidence there is no
+  // predecessor at all and lifecycle zero-state remains valid.
+  if (stageInputs.length === 0) return null;
+  if (!producerConsumesAuthorAdjudication(phase)) return latestLifecycleStage(stageInputs);
+  return canonicalTerminalPredecessor(intake, errors);
 }
 
 function reviewStage(value: unknown): ReviewStage | null {
@@ -3301,47 +3349,69 @@ function latestAuthorReplyPath(reviewDir: string): string | null {
 export function locateGovernedAuthorDispositionBlock(
   text: string,
 ): { body: string } | { error: 'multiple' | 'none' } {
-  // innerText harvest cannot carry the literal fence characters, so a whole-line
-  // schema label with or without a ``` opener both count as a block start.
-  const startPattern = /^(?:```)?create-issue-author-dispositions\/v1\s*$/gm;
-  const starts = [...text.matchAll(startPattern)];
-  if (starts.length !== 1) {
-    return { error: starts.length === 0 ? 'none' : 'multiple' };
-  }
-  const start = starts[0]!;
-  let offset = start.index! + start[0].length;
-  if (text.startsWith('\r\n', offset)) offset += 2;
-  else if (text.startsWith('\n', offset) || text.startsWith('\r', offset)) offset += 1;
-  const rest = text.slice(offset);
-  const close = /^```[ \t]*$/m.exec(rest);
-  return { body: (close ? rest.slice(0, close.index) : rest).trim() };
+  return locateAuthorDispositionBlock(text);
 }
 
-function parseGovernedAuthorDispositionOutput(path: string, errors: string[]): JsonRecord | null {
+export interface GovernedAuthorDispositionInspection {
+  path: string;
+  value: JsonRecord | null;
+  diagnostics: AuthorDispositionDiagnostic[];
+  schemaFragment: string;
+}
+
+export function inspectGovernedAuthorDispositionReply(path: string): GovernedAuthorDispositionInspection {
   let text: string;
-  try { text = readFileSync(path, 'utf8'); } catch {
-    errors.push('governed author output is unreadable: ' + path + '; authority=author-owned');
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    return {
+      path,
+      value: null,
+      diagnostics: [{
+        reason: 'invalid_author_field',
+        ownership: 'author-owned',
+        field: '$',
+        message: 'governed author output is unreadable: ' + path,
+      }],
+      schemaFragment: renderAuthorDispositionPromptFragment(),
+    };
+  }
+  const parsed = parseGovernedAuthorDispositionText(text);
+  return {
+    path,
+    value: parsed.diagnostics.length === 0 && isRecord(parsed.value) ? parsed.value : null,
+    diagnostics: parsed.diagnostics,
+    schemaFragment: parsed.schemaFragment,
+  };
+}
+
+export function latestGovernedAuthorReplyPath(reviewDir: string): string | null {
+  return latestAuthorReplyPath(reviewDir);
+}
+
+export function inspectLatestGovernedAuthorDisposition(
+  reviewDir: string,
+): GovernedAuthorDispositionInspection | null {
+  const path = latestAuthorReplyPath(reviewDir);
+  return path ? inspectGovernedAuthorDispositionReply(path) : null;
+}
+
+function parseGovernedAuthorDispositionOutput(
+  path: string,
+  errors: string[],
+  authorDiagnostics?: AuthorDispositionDiagnostic[],
+): JsonRecord | null {
+  const inspection = inspectGovernedAuthorDispositionReply(path);
+  if (inspection.diagnostics.length > 0) {
+    authorDiagnostics?.push(...inspection.diagnostics);
+    errors.push(
+      'governed author disposition rejected: '
+      + authorDispositionDiagnosticsText(inspection.diagnostics)
+      + '; authority=author-owned',
+    );
     return null;
   }
-  const located = locateGovernedAuthorDispositionBlock(text);
-  if ('error' in located) {
-    errors.push('governed author output must contain exactly one create-issue-author-dispositions/v1 block: ' + path + '; authority=author-owned');
-    return null;
-  }
-  let parsed: unknown;
-  try { parsed = JSON.parse(located.body) as unknown; } catch {
-    errors.push('governed author disposition block is malformed JSON: ' + path + '; authority=author-owned');
-    return null;
-  }
-  if (!isRecord(parsed) || parsed.schema !== AUTHOR_DISPOSITIONS_SCHEMA || !Array.isArray(parsed.findings) || !isRecord(parsed.m4) || !Array.isArray(parsed.m4.inventory)) {
-    errors.push('governed author disposition payload is incomplete: ' + path + '; authority=author-owned');
-    return null;
-  }
-  if (parsed.findings.some((finding) => !isRecord(finding)) || parsed.m4.inventory.some((item) => !isRecord(item))) {
-    errors.push('governed author disposition payload contains malformed finding/M4 rows: ' + path + '; authority=author-owned');
-    return null;
-  }
-  return parsed;
+  return inspection.value;
 }
 
 interface PreparedAuthorDispositions {
@@ -3495,7 +3565,13 @@ function authorReplyDispositionForStage(
   const errors: string[] = [];
   const parsed = parseGovernedAuthorDispositionOutput(authorReplyPath, errors);
   if (!parsed) return 'malformed';
-  if (sourceRevision === null || parsed.sourceRevision !== sourceRevision || parsed.predecessorStage !== predecessorStage) return 'historical';
+  if (sourceRevision === null || parsed.sourceRevision !== sourceRevision) return 'historical';
+  // predecessorStage is lifecycle-owned now. Legacy replies may still carry it;
+  // when present it remains useful only to recognize that the reply belongs to
+  // an earlier settled stage, never as current authority.
+  if (parsed.predecessorStage !== undefined && parsed.predecessorStage !== predecessorStage) {
+    return 'historical';
+  }
   return 'current';
 }
 
@@ -3508,6 +3584,7 @@ function prepareAuthorDispositionsFromGovernedOutput(input: {
   draft: string;
   allowZeroState: boolean;
   errors: string[];
+  authorDiagnostics: AuthorDispositionDiagnostic[];
 }): PreparedAuthorDispositions | null {
   const authorReplyPath = latestAuthorReplyPath(input.reviewDir);
   let payload: JsonRecord;
@@ -3521,23 +3598,22 @@ function prepareAuthorDispositionsFromGovernedOutput(input: {
     payload = {
       schema: AUTHOR_DISPOSITIONS_SCHEMA,
       sourceRevision: input.sourceRevision,
-      predecessorStage: input.predecessorStage,
       findings: [],
       m4: { inventory: [] },
     };
   } else {
     producer = 'governed-author-output/v1';
-    const parsed = parseGovernedAuthorDispositionOutput(authorReplyPath, input.errors);
+    const parsed = parseGovernedAuthorDispositionOutput(
+      authorReplyPath,
+      input.errors,
+      input.authorDiagnostics,
+    );
     if (!parsed) return null;
     payload = parsed;
   }
 
   if (payload.sourceRevision !== input.sourceRevision) {
     input.errors.push('author dispositions sourceRevision disagrees with the stable GitHub snapshot; field=sourceRevision authority=GitHub-witnessed');
-    return null;
-  }
-  if (payload.predecessorStage !== input.predecessorStage) {
-    input.errors.push('author dispositions predecessorStage disagrees with lifecycle stage evidence; field=predecessorStage authority=lifecycle-tool-witnessed');
     return null;
   }
   let serialized: SerializedAuthorDispositionBinding;
@@ -3824,6 +3900,7 @@ export function produceAuthorDispositions(
   }
 
   const authorPath = join(reviewDir, 'author-dispositions.json');
+  const authorDiagnostics: AuthorDispositionDiagnostic[] = [];
   const prepared = prepareAuthorDispositionsFromGovernedOutput({
     reviewDir,
     targetPath: authorPath,
@@ -3833,6 +3910,7 @@ export function produceAuthorDispositions(
     draft: first.body,
     allowZeroState: false,
     errors,
+    authorDiagnostics,
   });
   if (!prepared) return produceAuthorFailure('authority-conflict', false, errors, reviewEpisodeId, requestedRevision);
 
@@ -3923,6 +4001,8 @@ export function produceAcceptanceArtifacts(
     : 'stage-time';
 
   const createdInputPaths = new Set<string>();
+  const authorDiagnostics: AuthorDispositionDiagnostic[] = [];
+  const authorSchemaFragment = renderAuthorDispositionPromptFragment();
   let issueSnapshot: AcceptanceIssueSnapshot | null = null;
   let preparedAuthor: PreparedAuthorDispositions | null = null;
   let authorAdjudicationDeferred = false;
@@ -3938,8 +4018,13 @@ export function produceAcceptanceArtifacts(
     );
   }
   if (issueSnapshot) {
-    const predecessorStage = latestLifecycleStage(validStageInputs);
     const artifactPhase = options.phase ?? 'final-acceptance';
+    const predecessorStage = authorBindingPredecessor(
+      intake,
+      validStageInputs,
+      artifactPhase,
+      errors,
+    );
     const admission = authorDispositionAdmission({
       consumesAuthorAdjudication: producerConsumesAuthorAdjudication(artifactPhase),
       predecessorPresent: predecessorStage !== null,
@@ -3957,6 +4042,7 @@ export function produceAcceptanceArtifacts(
         draft: issueSnapshot.body,
         allowZeroState: admission === 'lifecycle-zero-state',
         errors,
+        authorDiagnostics,
       });
     }
   }
@@ -4054,6 +4140,7 @@ export function produceAcceptanceArtifacts(
       errors: [...new Set(errors)],
       reviewEpisodeId: episodeId,
       ...(temporary ? { temporary } : {}),
+      ...(authorDiagnostics.length > 0 ? { authorDiagnostics, authorSchemaFragment } : {}),
     };
   }
 
@@ -4170,6 +4257,16 @@ export function produceAcceptanceArtifacts(
     }
   }
   if (errors.length > 0 || !tier || !issueSnapshot || (!authorAdjudicationDeferred && (!ledger || !preparedAuthor))) {
+    for (const error of errors) {
+      const derived = authorDispositionDiagnosticFromFailure(error);
+      if (derived && !authorDiagnostics.some((item) => (
+        item.reason === derived.reason
+        && item.field === derived.field
+        && item.message === derived.message
+      ))) {
+        authorDiagnostics.push(derived);
+      }
+    }
     rollbackCreatedInputs(createdInputPaths);
     const temporary = temporaryClassification(errors);
     return {
@@ -4180,6 +4277,7 @@ export function produceAcceptanceArtifacts(
       errors: [...new Set(errors)],
       reviewEpisodeId: episodeId,
       ...(temporary ? { temporary } : {}),
+      ...(authorDiagnostics.length > 0 ? { authorDiagnostics, authorSchemaFragment } : {}),
     };
   }
 

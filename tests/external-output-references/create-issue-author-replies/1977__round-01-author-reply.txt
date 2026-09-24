@@ -1,0 +1,63 @@
+```create-issue-author-dispositions/v1
+{
+ "schema": "create-issue-author-dispositions/v1",
+ "sourceRevision": "r02",
+ "predecessorStage": "architectural",
+ "policyReadback": [
+ "AGENTS.md прочитан: 2d653082719925b0d158e48b68cb8ef479c5ac7e",
+ "Chat executor rules прочитаны: c2dcb0c5ddff6b23755337e2250a90f884873e8f",
+ "Default branch HEAD: 987b52be8eab2f19e73981635fa5b46f5ef15c5c"
+ ],
+ "findings": [
+ {
+ "id": "zero-send-partial-acceptance-owner-out-of-scope",
+ "type": "spec",
+ "occurrences": [
+ "sha256:f737d0ca3f982e3652154cb56b995960bd6833f67fa51fe84c4f96fba2362348:pass-01-architectural-review-01.capture.txt:1",
+ "sha256:8cf6fe93dc0fae2c3f664e0175e206f977acf54969c00a68ed4a8b27def5b0bd:pass-01-architectural-review-02.capture.txt:1",
+ "sha256:fb9b53f3f3b55ac860c343130c9a50d9e0739ae75f1d9aecb4006f2b7e104102:pass-01-architectural-review-03.capture.txt:1"
+ ],
+ "defectDisposition": "addressed",
+ "remedyDisposition": "accepted"
+ },
+ {
+ "id": "conditional-parity-scope-is-unexecutable",
+ "type": "spec",
+ "occurrences": [
+ "sha256:fb9b53f3f3b55ac860c343130c9a50d9e0739ae75f1d9aecb4006f2b7e104102:pass-01-architectural-review-03.capture.txt:2"
+ ],
+ "defectDisposition": "addressed",
+ "remedyDisposition": "accepted",
+ "simplificationCutCandidate": true
+ }
+ ],
+ "m4": {
+ "inventory": [
+ {
+ "mechanism": "reuse the existing lifecycle-acceptance predicate as the sole partial-credentialing owner, narrowly extending it for the proven terminal zero-send retry-forbidden incident with the existing exact witness",
+ "disposition": "keep"
+ },
+ {
+ "mechanism": "reuse the two authoritative GitHub sibling captures and existing partialMissingSources settlement path without manufacturing slot-01 delivery evidence",
+ "disposition": "keep"
+ },
+ {
+ "mechanism": "preserve exact send/retry facts and existing no-resend authority boundaries for zero-send and possible/post-send cases",
+ "disposition": "keep"
+ },
+ {
+ "mechanism": "focused #926-shaped producer and lifecycle-acceptance regressions plus send_count:1 and generic zero-send negative controls",
+ "disposition": "keep"
+ },
+ {
+ "mechanism": "unnamed conditional sibling-producer parity escape hatch",
+ "disposition": "cut"
+ },
+ {
+ "mechanism": "new transport classifier, retry seam, waiver, topology, or parallel acceptance subsystem",
+ "disposition": "cut"
+ }
+ ]
+ }
+}
+```

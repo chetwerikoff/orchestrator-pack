@@ -1,0 +1,11 @@
+{
+  "source_kind": "author-reply",
+  "issue": 1968,
+  "stage": "architectural-review",
+  "slot": "round-01-author-reply",
+  "captured_at": "2026-09-21",
+  "source_sha256": "b193addf10c26005da4382c12908325f4e3dd9aa9d6081709619b75241a82929",
+  "scrubbed_sha256": "b193addf10c26005da4382c12908325f4e3dd9aa9d6081709619b75241a82929",
+  "scrub_rules": [],
+  "synthetic": false
+}

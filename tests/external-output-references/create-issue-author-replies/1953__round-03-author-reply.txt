@@ -1,0 +1,35 @@
+AGENTS.md прочитан: bf6e310f9003fc3d7797f50247e559cc5207c20f; Chat executor rules прочитаны: 4fe1d8b7db66cccd78ecd1ed933ce966e6682ca8; Default branch HEAD: 21b712e2a8929424acc219a445b04d0c41483cf3. Issue не изменялся.
+
+```create-issue-author-dispositions/v1
+{
+ "schema": "create-issue-author-dispositions/v1",
+ "sourceRevision": "r03",
+ "predecessorStage": "architectural",
+ "findings": [
+ {
+ "id": "worker-smoke-ordering-canonical-doc-conflict",
+ "type": "spec",
+ "title": "Canonical smoke-ordering documentation must distinguish ordinary worker and manager-controlled Browser-GPT paths",
+ "evidence": "Both governed findings identify the same contract defect: current docs/worker-smoke-testing.md states the ordinary implementation -> worker-owned smoke PASS -> pack-review order unconditionally, while current logical-cap admission already permits the manager-controlled Browser-GPT path to run manager-owned pack review without synthetic pre-review worker-owned smoke. Revision r02 makes the narrow documentation update mandatory, preserves the ordinary local coding-worker ordering, explicitly defines the manager-controlled Browser-GPT review-before-independent-smoke path, and requires focused contract coverage for the distinction.",
+ "recommendation": "Update docs/worker-smoke-testing.md narrowly: preserve worker-owned smoke before pack-review for ordinary local coding workers; for the manager-controlled Browser-GPT logical-cap path require no synthetic pre-review worker-owned smoke, settle manager-owned pack review first, then hand off so the supervisor launches the local independent-smoke parent.",
+ "occurrences": [
+ "sha256:b145b8edaec0f8691a58454fb67c07e6858b5027b743418931a9f4ed59a8faf8:pass-01-architectural-review-01.capture.txt:1",
+ "sha256:096ec3f7bd122a1508113675340a032143e346dbaeb525b9cd3ee8caebc5f1f3:pass-01-architectural-review-02.capture.txt:1"
+ ],
+ "defectDisposition": "addressed",
+ "remedyDisposition": "accepted",
+ "persistent-machinery": "no"
+ }
+ ],
+ "m4": {
+ "inventory": [
+ {"mechanism": "manager-owned canonical GPT pack-review convergence", "disposition": "keep"},
+ {"mechanism": "three fresh independent reviewer chats per required logical round", "disposition": "keep"},
+ {"mechanism": "one fresh fixer chat per findings-bearing logical round", "disposition": "keep"},
+ {"mechanism": "manager whole-role handoff followed by supervisor-owned local independent smoke", "disposition": "keep"},
+ {"mechanism": "mandatory narrow docs/worker-smoke-testing.md ordering distinction between ordinary local coding-worker and manager-controlled Browser-GPT paths", "disposition": "keep"},
+ {"mechanism": "scheduler ready_for_review bridge, second review engine, or second independent-smoke implementation", "disposition": "cut"}
+ ]
+ }
+}
+```
