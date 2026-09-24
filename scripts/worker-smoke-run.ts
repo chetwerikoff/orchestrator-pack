@@ -1226,14 +1226,34 @@ function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scen
         '(none — execute no smoke scenarios; emit PASS using the carry-only bookkeeping row required below)',
       )
     : basePrompt;
+  const progressPath = smokeProgressPath(binding.artifactDir);
+  const progressPathToken = Buffer.from(progressPath, 'utf8').toString('base64');
+  const runIdToken = Buffer.from(binding.runId, 'utf8').toString('base64');
+  const writer = [
+    'node -e',
+    "'const fs=require(\"node:fs\");const [p64,r64,ordinal,phase,outcome]=process.argv.slice(1);const event={runId:Buffer.from(r64,\"base64\").toString(\"utf8\"),scenarioOrdinal:Number(ordinal),phase};if(outcome)event.outcome=outcome;fs.appendFileSync(Buffer.from(p64,\"base64\").toString(\"utf8\"),JSON.stringify(event)+\"\\n\",\"utf8\")'",
+  ].join(' ');
+  const progressEventProtocol = [
+    'Canonical progress serialization (mandatory):',
+    ...(scenarioCount === 0
+      ? ['- Do not write progress events when this attempt has no selected scenarios.']
+      : [
+        `- Before scenario 1, run exactly: ${writer} ${progressPathToken} ${runIdToken} 1 started`,
+        `- The first non-empty progress line must parse exactly as: ${JSON.stringify({ runId: binding.runId, scenarioOrdinal: 1, phase: 'started' })}`,
+        '- For later started events, reuse the command with the declared ordinal and phase started, omitting outcome.',
+        '- For terminal events, reuse the command with the same ordinal, phase terminal, and one outcome: pass|fail|blocked|skipped.',
+        '- Never append a terminal event before its matching started event.',
+      ]),
+  ];
   return [
     prompt,
     '',
     'Lifecycle protocol (child-produced evidence only):',
-    `- Progress file: ${smokeProgressPath(binding.artifactDir)}`,
+    `- Progress file: ${progressPath}`,
     `- Cancel request: ${smokeCancelRequestPath(binding.artifactDir)}`,
     `- Cancel acknowledgement: ${smokeCancelAcknowledgementPath(binding.artifactDir)}`,
     `- Declared scenario count: ${scenarioCount}`,
+    ...progressEventProtocol,
     ...(scenarioCount === 0 ? [
       '- Zero selected scenarios means all current tuples were safely carried. Execute no smoke scenario and write no progress event.',
       '- Emit PASS with one bookkeeping row: action: record empty attempt-local execution set | expected: no selected smoke scenario executes | observed: no attempt-local scenarios selected | outcome: pass.',
@@ -2284,6 +2304,15 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   }
 }
 
+function detachedChildIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
 async function runDetachedBootstrap(argv: readonly string[], options: CliOptions): Promise<number> {
   if (options.detachedOwner || options.runId) throw new Error('detached bootstrap may not supply --detached-owner or --run');
   const runId = createSmokeRunIdentity();
@@ -2312,6 +2341,7 @@ async function runDetachedBootstrap(argv: readonly string[], options: CliOptions
     process.stderr.write('worker_smoke_detach_spawn_failed\n');
     return 1;
   }
+  const childPid = Number(detached.stdout.trim());
 
   const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
   const deadline = Date.now() + SMOKE_CREATE_TIMEOUT_MS;
@@ -2320,6 +2350,10 @@ async function runDetachedBootstrap(argv: readonly string[], options: CliOptions
     if (lifecycle?.runId === runId) {
       process.stdout.write(`${runId}\n`);
       return 0;
+    }
+    if (!detachedChildIsAlive(childPid)) {
+      process.stderr.write('worker_smoke_detach_child_exited_before_lifecycle\n');
+      return 1;
     }
     await sleepAsync(SMOKE_LIFECYCLE_POLL_MS);
   }
