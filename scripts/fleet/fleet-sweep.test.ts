@@ -105,6 +105,28 @@ describe('fleet sweep pane selection and reads', () => {
       .toEqual(['worker', 'claude']);
   });
 
+  it('includes sibling checkouts in the project workspace and excludes the primary pane', () => {
+    const workspacePrimary = '/home/che/orca/workspaces/orchestrator-pack/smoke-2124';
+    const terminals = [
+      pane('primary', 'Cursor — smoke worker', workspacePrimary),
+      pane('sibling-a', 'OpenCode — agent', '/home/che/orca/workspaces/orchestrator-pack/other-checkout'),
+      pane('sibling-b', 'Claude Code — agent', '/home/che/orca/workspaces/orchestrator-pack/another-checkout'),
+    ];
+    const observed = runFleetSweep({
+      primary: workspacePrimary,
+      terminals,
+      executor: fakeExecutor(terminals, {
+        'sibling-a': 'working\nesc interrupt\n',
+        'sibling-b': 'done\n',
+      }),
+      store: new MemoryPollingStore(),
+    });
+
+    expect(observed.map(({ handle }) => handle)).toEqual(['sibling-a', 'sibling-b']);
+    expect(observed).not.toHaveLength(0);
+    expect(observed.some(({ handle }) => handle === 'primary')).toBe(false);
+  });
+
   it('reads every selected pane exactly once and performs no Orca mutation', () => {
     const calls: string[][] = [];
     const terminals = [pane('a', 'OC | worker'), pane('b', 'Cursor worker')];

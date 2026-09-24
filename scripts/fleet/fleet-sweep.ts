@@ -60,7 +60,9 @@ function normalizedPath(value: string): string {
 }
 
 export function defaultWorkspaceRegex(primary: string): RegExp {
-  const project = basename(resolve(primary));
+  const normalizedPrimary = normalizedPath(primary);
+  const workspaceMatch = normalizedPrimary.match(/(?:^|\/)orca\/workspaces\/([^/]+)\/[^/]+(?:\/|$)/u);
+  const project = workspaceMatch?.[1] ?? basename(resolve(primary));
   return new RegExp(`(?:^|/)orca/workspaces/${escapeRegExp(project)}/`, 'u');
 }
 
