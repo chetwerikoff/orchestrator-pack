@@ -12,6 +12,7 @@ import {
   resolveLiveExecutorProfile,
   finalizeOpenCodeExecutorProfile,
   runSupervisedTaskLaunchAssistant,
+  LAUNCH_STARTUP_OBSERVATION_WINDOW_MS,
   repoCanonicalKey,
   type DispatchObservation,
   type EdgeResult,
@@ -43,9 +44,10 @@ function runtimeAdapter(input: {
   liveness?: 'busy' | 'idle' | 'unknown' | 'gone';
   livenessWorker?: RuntimeWorker['identity'];
   onSpawn?: () => void;
+  onLiveness?: (observationWindowMs: number) => void;
 } = {}): RuntimeAdapter {
   const target = input.worker ?? worker;
-  const status = input.liveness ?? 'idle';
+  const fixedStatus = input.liveness ?? 'idle';
   return {
     id: 'orca',
     readiness: () => ({ status: 'ok', value: { ready: true, workspacePath: target.workspacePath } }),
@@ -62,7 +64,10 @@ function runtimeAdapter(input: {
       changed: false,
       terminalState: 'running',
     } }),
-    liveness: () => ({ status, worker: input.livenessWorker ?? target.identity }),
+    liveness: ({ observationWindowMs }) => {
+      input.onLiveness?.(observationWindowMs);
+      return { status: fixedStatus, worker: input.livenessWorker ?? target.identity };
+    },
     stopWorker: () => ({ status: 'ok', value: { stopped: true } }),
   };
 }
@@ -783,6 +788,21 @@ describe('supervised Task launch assistant', () => {
       outcome: 'continue', stage: 'terminal_prepare', observedCause: cause,
       resources: { terminal: target.identity },
     });
+  });
+
+  it('uses the bounded startup window to reach ready when the TUI settles within it', async () => {
+    let spawns = 0;
+    const windows: number[] = [];
+    const adapter = runtimeAdapter({
+      liveness: 'idle',
+      onSpawn: () => { spawns += 1; },
+      onLiveness: (window) => { windows.push(window); },
+    });
+    const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({ adapter }));
+    expect(result).toMatchObject({ outcome: 'ready', resources: { terminal: worker.identity } });
+    expect(spawns).toBe(1);
+    expect(windows).toEqual([LAUNCH_STARTUP_OBSERVATION_WINDOW_MS]);
+    expect(LAUNCH_STARTUP_OBSERVATION_WINDOW_MS).toBeGreaterThan(1_000);
   });
 
   it('fails closed when liveness observes a recreated terminal generation', async () => {
