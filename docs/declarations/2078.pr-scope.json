@@ -14,6 +14,7 @@
     "scripts/lib/create-issue-manager-boundary.ts",
     "scripts/lib/create-issue-next-action.ts",
     "scripts/lib/create-issue-stage-lifecycle.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
     "scripts/lib/create-issue-stage-record-cli.ts",
     "scripts/lib/create-issue-stage-record-core.ts",
     "scripts/lib/create-issue-stage-record.test.ts",
@@ -52,6 +53,7 @@
     "scripts/lib/create-issue-next-action.ts",
     "scripts/lib/create-issue-stage-lifecycle.test.ts",
     "scripts/lib/create-issue-stage-lifecycle.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
     "scripts/lib/create-issue-stage-record-cli.ts",
     "scripts/lib/create-issue-stage-record-core.ts",
     "scripts/lib/create-issue-stage-record.test.ts",
@@ -59,5 +61,5 @@
     "scripts/toolchain/create-issue-final-acceptance.test.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "58adf70d4b82f302d6ffb12df9b8b1433d53eca8"
+  "source_revision": "8136cb39a2508baee944c38270aec5c444894b4d"
 }

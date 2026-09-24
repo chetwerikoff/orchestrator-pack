@@ -3244,12 +3244,12 @@ describe('Issue #2037 durable legal zero-send retry authority', () => {
         '--json',
       ], transport({ issueBodies: [finalAcceptanceIssueBody('r999')] }));
 
-      expect(result).toBe(1);
+      expect(result).toBe(3);
       const output = JSON.parse(logs.at(-1) ?? '{}') as Record<string, any>;
       expect(output).toMatchObject({
         ok: false,
         cause: 'stale_next_action',
-        nextAction: null,
+        nextAction: { kind: 'reconcile-stage-read-only' },
         binding: { sourceRevision: initialEvidence.sourceRevision, stageAttemptId: initialEvidence.stageAttemptId },
         observed: { repository: REPOSITORY, issueNumber: ISSUE },
       });
@@ -4758,7 +4758,7 @@ describe('Issue #1997 producer continuation routing', () => {
       census: [...input.reviewComments, comment(input.body)],
     });
     const { code, output } = runArtifactCli(input, source);
-    expect(code).toBe(1);
+    expect(code).toBe(3);
     expect(output.blocker).toContain('missing_schema_label');
     expect(output.authorDiagnostics).toMatchObject([{
       reason: 'missing_schema_label',
@@ -4796,9 +4796,9 @@ describe('Issue #1997 producer continuation routing', () => {
       census: [...input.reviewComments, comment(input.body)],
     });
     const { code, output } = runArtifactCli(input, source);
-    expect(code).toBe(1);
+    expect(code).toBe(3);
     expect(String(output.blocker)).toMatch(/terminal must be boolean|invocation\[0\]\.terminal/i);
-    expect(output.nextAction).toBeNull();
+    expect(output.nextAction).toMatchObject({ kind: 'reconcile-stage-read-only' });
   });
 
   it.each([
@@ -4821,7 +4821,7 @@ describe('Issue #1997 producer continuation routing', () => {
     const { code, output } = runArtifactCli(input, transport({
       census: [...input.reviewComments, comment(input.body)],
     }));
-    expect(code).toBe(1);
+    expect(code).toBe(3);
     expect(output.authorDiagnostics).toMatchObject([{
       reason: 'invalid_author_field',
       ownership: 'author-owned',
@@ -4848,10 +4848,10 @@ describe('Issue #1997 producer continuation routing', () => {
     const { code, output } = runArtifactCli(input, transport({
       census: [...input.reviewComments, comment(input.body)],
     }));
-    expect(code).toBe(1);
+    expect(code).toBe(3);
     expect(output.blocker).toContain(failure);
     expect(output.authorDiagnostics).toBeUndefined();
-    expect(output.nextAction).toBeNull();
+    expect(output.nextAction).toMatchObject({ kind: 'reconcile-stage-read-only' });
   });
 });
 
