@@ -1,0 +1,25 @@
+Read revision: #1968 r02
+INVOCATION_ID_TO_ECHO: 66666666-6666-4666-8666-666666666666
+review-economics-contract: v1
+stage: architectural
+source-slot: 01
+VERDICT: CLEAN
+
+Contradiction check: none material. The r02 contract consistently requires trusted-target resolution for every required smoke plan, permits `no_prior_canonical_observation` only after a successful empty canonical-history census, and keeps non-descendant history fail-closed.
+
+Feasibility check: executable on current default branch. In `scripts/worker-smoke-run.ts`, `runSmokeAttempt` currently gates trusted-target resolution on `smokeOrderingRequired(...) && suppliedTier.kind === 'tier-fence'`, so a no-tier required plan can reach `selectSmokeAttempt` without a resolved target. `selectSmokeAttempt` then routes a missing target through `ordinaryFullAttemptSelection`, which currently hard-codes `no_prior_canonical_observation`. The requested change is therefore localized to the declared worker-smoke entry/selection surface and can reuse the existing history census and selective planner without a second authority.
+
+Forced-cut verdicts:
+- tier-independent trusted-target resolution for required smoke — keep; it closes the observed no-tier admission gap while preserving existing target trust.
+- canonical-history census before `no_prior_canonical_observation` — keep; it makes the diagnostic truthful without adding a taxonomy or state store.
+- reuse of the existing #1924 selector, tuple precedence, affected carrier, and fresh current-head projection — keep; it avoids duplicate planning authority.
+- `history_non_descendant` full-plan fallback — keep; it preserves the exact fail-closed safety boundary exposed by PR #1962.
+- equivalent-rebase PASS carry bridge — cut; r02 correctly removes it rather than adding semantic/path-disjoint proof machinery.
+- scope-freshness/current-scope-equivalence witness for rebase carry — cut; once cross-rebase carry is removed, that witness is unnecessary machinery.
+- second selector, persistent carry ledger, proof/approval step, new CI/status, daemon/queue/watcher/lease — cut; none is needed to satisfy the contract.
+
+Missed-gap check: no material unverified contract gap remains in r02. AC1-AC3 explicitly cover the production `runSmokeAttempt` path, successful empty census, and trusted-target failure; AC4-AC6 preserve existing tuple/fallback/lifecycle semantics; AC7 binds docs; AC8 excludes new persistent authority. The negative control for PR #1962 directly guards against accidentally reintroducing cross-rebase carry.
+
+NO_FINDINGS
+SIMPLIFICATION_CLEAN
+FINDING_COUNT: 0

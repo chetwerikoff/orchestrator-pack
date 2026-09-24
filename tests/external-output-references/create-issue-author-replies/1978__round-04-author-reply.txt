@@ -1,0 +1,77 @@
+```create-issue-author-dispositions/v1
+{
+ "schema": "create-issue-author-dispositions/v1",
+ "sourceRevision": "r03",
+ "predecessorStage": "architectural",
+ "findings": [
+ {
+  "id": "recovered-poison-reblocks-after-successor",
+  "type": "spec",
+  "occurrences": [
+   "sha256:5bd352387502c44dea3e2983cc72bec015983a7feb469b885f121028abb5b82d:pass-01-architectural-review-01.capture.txt:1"
+  ],
+  "defectDisposition": "addressed",
+  "remedyDisposition": "accepted",
+  "reason": "r01 could recover one successor while allowing the unchanged historical malformed marker to block the next ordinary journal publication. r02 addresses that defect by defining durable recovered-poison recognition from existing immutable remote journal evidence after the valid successor is authoritatively confirmed, while keeping the poison malformed and noncanonical."
+ },
+ {
+  "id": "tier-understates-journal-recovery-blast-radius",
+  "type": "spec",
+  "occurrences": [
+   "sha256:7ad4b1eea4086638dbba020a7984c74e041f5984116e903ce93f7f2903b722c5:pass-01-architectural-review-02.capture.txt:1"
+  ],
+  "defectDisposition": "rejected-as-false",
+  "rejectReason": "Rejected-as-false only as a blocking defect for this already-captured episode. The observation may correctly describe the standalone docs/tiering.md T3 rubric; that rubric is not being rejected. The current flow-manager authority explicitly classifies post-capture over-tier P1 observations as advisory and preserves the frozen T2 intake. This occurrence therefore cannot alter #1978's post-capture T2 authority or require a second task as a condition of this episode's acceptance; #1978 continues as T2.",
+  "remedyDisposition": "accepted"
+ },
+ {
+  "id": "successor-does-not-unpin-later-publications",
+  "type": "spec",
+  "occurrences": [
+   "sha256:7ad4b1eea4086638dbba020a7984c74e041f5984116e903ce93f7f2903b722c5:pass-01-architectural-review-02.capture.txt:2"
+  ],
+  "defectDisposition": "addressed",
+  "remedyDisposition": "accepted",
+  "reason": "One successfully published successor did not itself give later census consumers durable authority to distinguish the recovered poison after obsolete local poison state was cleared or superseded. r02 adds the bounded remote poison/successor pairing witness and AC7, allowing only that exact recovered observation to cease blocking while unrelated malformed evidence remains fail-closed."
+ },
+ {
+  "id": "tier-underclassifies-recovery-trust-boundary",
+  "type": "spec",
+  "occurrences": [
+   "sha256:3e96effa4c8248a672ebbbdab175fac9e74ec5b9b63d3c09107eaf243095ffb4:pass-01-architectural-review-03.capture.txt:1"
+  ],
+  "defectDisposition": "rejected-as-false",
+  "rejectReason": "Rejected-as-false only as a blocking defect for this already-captured episode. The observation may correctly characterize the standalone docs/tiering.md recovery/trust-boundary test; that underlying rubric is not being declared false. The current flow-manager authority narrows post-capture over-tier P1 observations to advisory tier commentary and leaves the immutable T2 intake in force. This occurrence therefore cannot mutate #1978's frozen T2 authority or require a second task here as a prerequisite to acceptance; #1978 continues as T2.",
+  "remedyDisposition": "accepted"
+ },
+ {
+  "id": "successor-only-acceptance-does-not-prove-lifecycle-recovery",
+  "type": "spec",
+  "occurrences": [
+   "sha256:3e96effa4c8248a672ebbbdab175fac9e74ec5b9b63d3c09107eaf243095ffb4:pass-01-architectural-review-03.capture.txt:2"
+  ],
+  "defectDisposition": "addressed",
+  "remedyDisposition": "accepted",
+  "reason": "r01 did not prove that ordinary publish-stage remained usable after successor recovery while the historical malformed comment stayed present. r02 adds AC7 and focused verification requiring an ordinary successor-bound stage publication to succeed after obsolete local poison state is cleared or superseded, with a second or unrelated malformed marker still blocking."
+ },
+ {
+  "id": "recovered-poison-still-blocks-noncore-census-consumers",
+  "type": "spec",
+  "occurrences": [
+   "sha256:30dfdbf8c8991b62e5970f94716a41e74b7c6b24fc029f81e5e355af17db5d04:pass-02-architectural.capture.txt:1"
+  ],
+  "defectDisposition": "addressed",
+  "remedyDisposition": "accepted",
+  "reason": "r02 made the recovered-poison witness sufficient for ordinary journal publication but left mandatory stage-time artifact production and final-acceptance census/projection paths able to block on the same unchanged malformed observation. r03 extends the exact bounded remote poison/successor decision to those mandatory census consumers, adds the required artifact/final-acceptance files to scope, and adds AC8 coverage proving stage-time/final artifact production plus ordinary final accepted-event and spec-review:accepted projection can complete while the recovered poison remains malformed and noncanonical; any missing witness or second/unrelated malformed marker remains fail-closed."
+ }
+ ],
+ "m4": {
+  "inventory": [
+  {
+   "mechanism": "durable recovered-poison recognition from existing immutable remote journal evidence",
+   "disposition": "keep"
+  }
+ ]
+ }
+}
+```
