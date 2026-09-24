@@ -10,6 +10,7 @@ import {
 } from './create-issue-final-acceptance.ts';
 import {
   executeFinalAcceptanceGuards,
+  resolveOperatorAmendmentEvidence,
   validateTerminalOneShotBodyBinding,
 } from './create-issue-final-acceptance-contract.ts';
 import { buildCanonicalLineage } from './create-issue-stage-record-lineage.ts';
@@ -412,6 +413,121 @@ describe('revision-aware final acceptance', () => {
 
     expect(errors.join('\n')).toContain('stage order moves backward');
     expect(errors.join('\n')).toContain('published stage event cycle-r09:competitive:attempt-1 is duplicated');
+  });
+
+  it('recognizes only one matching live operator-amendment marker', () => {
+    const matchingBody = [
+      '<!-- source-revision: r04 -->',
+      '<!-- operator-amendment: r04; operator expanded execution scope -->',
+      'body',
+    ].join('\n');
+    const matching = resolveOperatorAmendmentEvidence(matchingBody, 'r04');
+    expect(matching).toMatchObject({
+      kind: 'operator_amendment',
+      sourceRevision: 'r04',
+      markerLine: '<!-- operator-amendment: r04; operator expanded execution scope -->',
+    });
+    expect(matching?.bodySha256).toMatch(/^[0-9a-f]{64}$/);
+
+    expect(resolveOperatorAmendmentEvidence(
+      matchingBody.replace('operator-amendment: r04', 'operator-amendment: r03'),
+      'r04',
+    )).toBeUndefined();
+
+    expect(resolveOperatorAmendmentEvidence([
+      matchingBody,
+      '<!-- operator-amendment: r04; duplicate marker -->',
+    ].join('\n'), 'r04')).toBeUndefined();
+
+    expect(resolveOperatorAmendmentEvidence([
+      '<!-- source-revision: r04 -->',
+      '```markdown',
+      '<!-- operator-amendment: r04; fenced example -->',
+      '```',
+    ].join('\n'), 'r04')).toBeUndefined();
+  });
+
+  it('accepts owner-editor evidence only when it is explicit and distinct from the governed author', () => {
+    const body = '<!-- source-revision: r04 -->\noperator-edited body';
+    expect(resolveOperatorAmendmentEvidence(body, 'r04', {
+      issueBodyEditorLogin: 'repo-owner',
+      repositoryOwnerLogin: 'repo-owner',
+      governedAuthorLogin: 'governed-bot',
+    })).toMatchObject({
+      kind: 'operator_amendment',
+      sourceRevision: 'r04',
+      editorLogin: 'repo-owner',
+    });
+
+    expect(resolveOperatorAmendmentEvidence(body, 'r04', {
+      issueBodyEditorLogin: 'repo-owner',
+      repositoryOwnerLogin: 'repo-owner',
+    })).toBeUndefined();
+    expect(resolveOperatorAmendmentEvidence(body, 'r04', {
+      issueBodyEditorLogin: 'repo-owner',
+      repositoryOwnerLogin: 'repo-owner',
+      governedAuthorLogin: 'repo-owner',
+    })).toBeUndefined();
+    expect(resolveOperatorAmendmentEvidence(body, 'r04', {
+      issueBodyEditorLogin: 'someone-else',
+      repositoryOwnerLogin: 'repo-owner',
+      governedAuthorLogin: 'governed-bot',
+    })).toBeUndefined();
+  });
+
+  it('accepts a matching operator amendment before review-cycle finalization formalities', () => {
+    const body = [
+      '<!-- source-revision: r04 -->',
+      '<!-- operator-amendment: r04; accepted directly by operator -->',
+      '',
+      '```behavior-kind',
+      'action-producing',
+      '```',
+      '```complexity-tier',
+      'tier: T2',
+      'advisory-prior: T2',
+      'failure-type: local-behavior',
+      'size: single-component-design-judgment',
+      'risk-note: bounded final-acceptance evidence path only',
+      '```',
+      '```positive-outcome',
+      'asserts: operator amendment is accepted without reopening consumed review slots',
+      'input: realistic',
+      '```',
+      '```denylist',
+      'vendor/**',
+      'packages/core/**',
+      '```',
+      '```allowed-roots',
+      'scripts/lib/create-issue-final-acceptance.ts',
+      '```',
+      '```smoke-test-plan',
+      '- action: evaluate a matching amendment | expected: accepted without new review work',
+      '```',
+      '```contract-evidence',
+      'none',
+      '```',
+    ].join('\n');
+    const result = executeFinalAcceptanceGuards({
+      issueBody: body,
+      terminalSourceBody: '<!-- source-revision: r03 -->\nreviewed body',
+      currentIssueBody: body,
+      issueRevision: 'r04',
+      cycleId: 'cycle-r03',
+      tier: 'T2',
+      reviewDir: '/fixture/review',
+      stageReceiptPaths: ['/fixture/missing-receipt.json'],
+      capturePaths: ['/fixture/missing-capture.txt'],
+      ledgerPath: '/fixture/missing-ledger.json',
+    });
+
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.acceptanceEvidence).toMatchObject({
+      kind: 'operator_amendment',
+      sourceRevision: 'r04',
+    });
+    expect(result.errors.some((error) => error.startsWith('stage-completeness:'))).toBe(false);
+    expect(result.errors.some((error) => error.startsWith('finding-ledger:'))).toBe(false);
   });
 
   it('requires exactly one canonical source-revision marker', () => {
