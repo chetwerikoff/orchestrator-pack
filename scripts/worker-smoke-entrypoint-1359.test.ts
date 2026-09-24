@@ -465,6 +465,8 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(detachedPromptRunId).toBe(detachedRunId);
       expect(detachedProgressPath).toBeTruthy();
       expect(detachedPrompt).toContain('Canonical progress serialization (mandatory):');
+      expect(detachedPrompt).toContain('Never write, append, or edit progress JSON manually; use only the generated writer commands below.');
+      expect(detachedPrompt).toContain('Do not type, reconstruct, or reuse a run id; the encoded writer argument binds this exact run.');
       const detachedStartCommand = detachedPrompt.match(/^- Before scenario 1, run exactly: (.+)$/mu)?.[1];
       expect(detachedStartCommand).toBeTruthy();
       expect(detachedStartCommand).toContain(Buffer.from(detachedProgressPath!, 'utf8').toString('base64'));

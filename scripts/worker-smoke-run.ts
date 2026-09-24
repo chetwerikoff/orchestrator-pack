@@ -1238,6 +1238,8 @@ function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scen
     ...(scenarioCount === 0
       ? ['- Do not write progress events when this attempt has no selected scenarios.']
       : [
+        '- Never write, append, or edit progress JSON manually; use only the generated writer commands below.',
+        '- Do not type, reconstruct, or reuse a run id; the encoded writer argument binds this exact run.',
         `- Before scenario 1, run exactly: ${writer} ${progressPathToken} ${runIdToken} 1 started`,
         `- The first non-empty progress line must parse exactly as: ${JSON.stringify({ runId: binding.runId, scenarioOrdinal: 1, phase: 'started' })}`,
         '- For later started events, reuse the command with the declared ordinal and phase started, omitting outcome.',
