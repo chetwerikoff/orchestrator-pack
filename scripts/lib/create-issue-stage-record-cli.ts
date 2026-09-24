@@ -1220,6 +1220,33 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
         issueNumber,
         ...(artifactSourceTransport ? { artifactSourceTransport } : {}),
       });
+      const obsoleteIssueRevisionError = result.errors.find((error) =>
+        /^stale_next_action: live Issue revision is (r[0-9]+), expected (r[0-9]+)$/.test(error),
+      );
+      const obsoleteIssueRevision = obsoleteIssueRevisionError
+        ? /^stale_next_action: live Issue revision is (r[0-9]+), expected (r[0-9]+)$/.exec(obsoleteIssueRevisionError)
+        : null;
+      if (obsoleteIssueRevision && result.stage && result.stageAttemptId && result.sourceRevision) {
+        process.stderr.write(result.errors.join('\n') + '\n');
+        console.log(JSON.stringify({
+          ok: false,
+          cause: 'stale_next_action',
+          nextAction: null,
+          binding: {
+            repository: opts.repo,
+            issueNumber,
+            sourceRevision: result.sourceRevision,
+            stage: result.stage,
+            stageAttemptId: result.stageAttemptId,
+          },
+          observed: {
+            repository: opts.repo,
+            issueNumber,
+            sourceRevision: obsoleteIssueRevision[1],
+          },
+        }));
+        return 1;
+      }
       let nextAction = null;
       if (result.stage && result.stageAttemptId && result.sourceRevision) {
         const binding: CreateIssueActionBinding = {
