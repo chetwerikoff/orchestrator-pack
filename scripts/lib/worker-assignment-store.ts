@@ -910,12 +910,14 @@ export async function attachWorkerAssignmentIssueNumber(input: {
   }
 }
 
-function sameAssignment(left: WorkerAssignmentRecord | null, right: WorkerAssignmentRecord): boolean {
+export function sameWorkerAssignmentIdentity(
+  left: WorkerAssignmentRecord | null,
+  right: WorkerAssignmentRecord,
+): boolean {
   return Boolean(left
     && left.schema === right.schema
     && left.projectId === right.projectId
     && left.repository === right.repository
-    && left.issueNumber === right.issueNumber
     && left.taskId === right.taskId
     && left.assignmentId === right.assignmentId
     && left.generation === right.generation
@@ -923,9 +925,15 @@ function sameAssignment(left: WorkerAssignmentRecord | null, right: WorkerAssign
     && left.provider === right.provider
     && left.bindingKey === right.bindingKey
     && left.createdAtUtc === right.createdAtUtc
-    && left.deadObservationTicks === right.deadObservationTicks
     && left.role === right.role
     && sameDelegatedIntegrationMarker(left.delegatedIntegration, right.delegatedIntegration));
+}
+
+function sameAssignment(left: WorkerAssignmentRecord | null, right: WorkerAssignmentRecord): boolean {
+  return Boolean(left
+    && sameWorkerAssignmentIdentity(left, right)
+    && left.issueNumber === right.issueNumber
+    && left.deadObservationTicks === right.deadObservationTicks);
 }
 
 /** Persist or clear exact-current consecutive dead-observation progress. */
@@ -950,7 +958,10 @@ export async function setWorkerAssignmentDeadObservationTicks(input: {
       if (!migrated.ok) return migrated;
       const store = migrated.store;
       const current = store.assignments[key];
-      if (!current || !sameAssignment(current, input.expected)) {
+      const exactCurrent = current && sameAssignment(current, input.expected);
+      const activeResetCurrent = input.ticks === 0
+        && current && sameWorkerAssignmentIdentity(current, input.expected);
+      if (!current || (!exactCurrent && !activeResetCurrent)) {
         return { ok: false, reason: 'assignment_stale' } as const;
       }
       if ((current.deadObservationTicks ?? 0) === input.ticks) {

@@ -315,11 +315,17 @@ describe('Issue #2106 bounded scheduler assignment lifecycle reconciliation', ()
     if (!published.ok) throw new Error(published.reason);
 
     let sends = 0;
+    const persistedTicksAtSend: number[] = [];
     const terminalMailDeps: DispatchTerminalMailDeps = {
       ledgerPath: ledger,
       deliverMessage: null,
       runJson: (() => {
         sends += 1;
+        persistedTicksAtSend.push(currentWorkerAssignmentByDeliverable(
+          store,
+          'failed-terminal-task',
+          'dispatch-8',
+        )?.deadObservationTicks ?? -1);
         return { ok: false, error: { code: 'injected_failure' } };
       }) as unknown as typeof runOrcaJson,
     };
@@ -337,8 +343,69 @@ describe('Issue #2106 bounded scheduler assignment lifecycle reconciliation', ()
     }
 
     expect(sends).toBe(3);
+    expect(persistedTicksAtSend).toEqual([1, 2, 3]);
     expect(currentWorkerAssignmentByDeliverable(store, 'failed-terminal-task', 'dispatch-8')).toBeNull();
     expect(JSON.parse(readFileSync(ledger, 'utf8'))).toEqual({ notified: {} });
+  });
+
+  it('stops unsettled terminal-mail retries at the bound while retaining operator-primary protection', async () => {
+    const { store, ledger } = fixture();
+    const published = await publishCurrentWorkerAssignment({
+      file: store,
+      repository: REPOSITORY,
+      issueNumber: 1899,
+      taskId: 'protected-terminal-task',
+      kind: 'local',
+      provider: 'orca',
+      bindingKey: 'dispatch-8',
+      role: 'worker',
+    });
+    expect(published.ok).toBe(true);
+    if (!published.ok) throw new Error(published.reason);
+
+    const current = JSON.parse(readFileSync(store, 'utf8')) as WorkerAssignmentStore;
+    writeFileSync(store, `${JSON.stringify({
+      ...current,
+      operatorPrimary: {
+        route: 'operator-primary',
+        taskId: published.assignment.taskId,
+        bindingKey: published.assignment.bindingKey,
+        assignmentId: published.assignment.assignmentId,
+        assignmentGeneration: published.assignment.generation,
+      },
+    }, null, 2)}\n`);
+
+    let sends = 0;
+    const terminalMailDeps: DispatchTerminalMailDeps = {
+      ledgerPath: ledger,
+      deliverMessage: null,
+      runJson: (() => {
+        sends += 1;
+        return { ok: false, error: { code: 'injected_failure' } };
+      }) as unknown as typeof runOrcaJson,
+    };
+    const adapter = new LifecycleAdapter();
+    for (let tick = 1; tick <= 4; tick += 1) {
+      const result = await reconcileWorkerAssignments({
+        file: store,
+        repository: REPOSITORY,
+        adapter,
+        terminalMailDeps,
+      });
+      expect(result.status).toBe('ok');
+      expect(result.counts.terminalMailUnsettled).toBe(1);
+      expect(result.counts.protected).toBe(tick >= 3 ? 1 : 0);
+    }
+
+    expect(sends).toBe(3);
+    expect(currentWorkerAssignmentByDeliverable(
+      store,
+      published.assignment.taskId,
+      published.assignment.bindingKey,
+    )).toMatchObject({ ...published.assignment, deadObservationTicks: 3 });
+    expect(JSON.parse(readFileSync(store, 'utf8'))).toMatchObject({
+      operatorPrimary: { assignmentId: published.assignment.assignmentId },
+    });
   });
 
   it('does zero mail and zero retirement from stale terminal evidence after Issue attachment', async () => {
