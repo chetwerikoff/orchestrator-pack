@@ -1,0 +1,15 @@
+Read revision: #1968 r01
+review-economics-contract: v1
+stage: architectural-review
+source-slot: 03
+INVOCATION_ID_TO_ECHO: 33333333-3333-4333-8333-333333333333
+VERDICT: FINDINGS
+
+id: scope-disjoint-rebase-carry-has-no-unaffectedness-witness
+type: spec
+severity: P1
+title: Path-disjoint main changes cannot safely authorize smoke carry
+evidence: The proposed equivalent-rebase bridge authorizes reuse of an earlier PASS when the forward B_old..B_new changed-path set misses the active declaration's declared_paths, allowed_roots, and the branch-delta paths, while Binding surface §3.6 explicitly states that this path disjointness does not prove semantic independence and the Issue also forbids dependency inference / a semantic-diff engine. That leaves no production witness that an out-of-scope main change cannot alter the runtime, toolchain, shared dependency, fixture, or other behavior exercised by an in-scope smoke tuple. On current main@0d7f7ba3af98b6b487aa68217eedec1af1bc175e, scripts/lib/worker-smoke-core.ts:890-909 fail-closes any valid non-descendant history to history_non_descendant; the new bridge therefore weakens the smoke authority boundary without proving that the carried tuple is unaffected.
+recommendation: Keep the no-tier trusted-target/census truthfulness fixes, but cut cross-rebase PASS carry unless B_old..B_new is mechanically tree-empty, or an already-existing production evidence source can prove the exact tuple unaffected. Otherwise retain history_non_descendant and run the ordinary full plan. Do not add a dependency graph or semantic engine just to preserve this optimization.
+persistent-machinery: no
+simplification-cut-candidate: yes

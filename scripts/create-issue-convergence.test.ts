@@ -16,6 +16,7 @@ import {
   type CreateIssueActionBinding,
 } from './lib/create-issue-next-action.ts';
 import { runStageFinalizeCli } from './lib/create-issue-stage-record-cli.ts';
+import type { GhTransport } from './lib/create-issue-stage-record-types.ts';
 import { resolveCreateIssueBrowserOperatorConfig } from './lib/create-issue-browser-gpt-preflight.ts';
 import {
   reconcileCreateIssueStage,
@@ -1218,6 +1219,207 @@ describe('zero-send manager result is action or structured reason (Issue #1999)'
       expect(JSON.stringify(projected)).not.toContain('fresh-invocation-id');
       expect(typeof projected?.blocker).toBe('string');
       expect(projected && 'reason' in projected).toBe(true);
+    }
+  });
+});
+
+
+function issue1997Body(options: {
+  revision?: string;
+  includeVerification?: boolean;
+  contractEvidence?: string;
+} = {}): string {
+  return [
+    `<!-- source-revision: ${options.revision ?? 'r01'} -->`,
+    '## Goal',
+    'Exercise pre-mint body floors.',
+    '',
+    '```behavior-kind',
+    'action-producing',
+    '```',
+    '',
+    '```complexity-tier',
+    'tier: T2',
+    '```',
+    '',
+    '```positive-outcome',
+    'asserts: a valid request reaches the intended create-Issue action',
+    'input: realistic',
+    '```',
+    '',
+    '```denylist',
+    'vendor/**',
+    'packages/core/**',
+    '```',
+    '',
+    '```allowed-roots',
+    'scripts/**',
+    '```',
+    '',
+    '## Acceptance criteria',
+    '1. The pre-mint gate is deterministic.',
+    '',
+    ...(options.includeVerification === false ? [] : ['## Verification', 'Run the focused gate.', '']),
+    '```contract-evidence',
+    options.contractEvidence ?? 'none',
+    '```',
+    '',
+  ].join('\n');
+}
+
+function issue1997Transport(state: { body: string; calls: string[] }): GhTransport {
+  return {
+    runGh(argv: string[]) {
+      state.calls.push(argv.join(' '));
+      if (argv[1] === 'api'
+        && argv[2] === 'repos/chetwerikoff/orchestrator-pack/issues/1997'
+        && argv.includes('--jq')) {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({ title: 'Issue 1997 fixture', body: state.body, labels: [] }),
+          stderr: '',
+        };
+      }
+      return { exitCode: 1, stdout: '', stderr: 'unexpected GitHub call: ' + argv.join(' ') };
+    },
+  };
+}
+
+describe('Issue #1997 author-round convergence', () => {
+  it.each([
+    ['missing Verification', issue1997Body({ includeVerification: false }), 'tier-gate: worker-safety floor: missing ## Verification section'],
+    ['invalid contract-evidence', issue1997Body({
+      contractEvidence: [
+        'binding-id: orchestrator-pack:datum:broken',
+        'binding-type: structured',
+      ].join('\n'),
+    }), 'contract-evidence:'],
+  ])('fails %s before stage mint and returns the exact pre-mint author-round binding', (_label, body, diagnostic) => {
+    const root = tempRoot();
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = root;
+    const state = { body, calls: [] as string[] };
+    const transport = issue1997Transport(state);
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => logs.push(String(line)));
+    try {
+      const code = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'start-cycle',
+        '--repo', 'chetwerikoff/orchestrator-pack',
+        '--issue-number', '1997',
+        '--source-revision', 'r01',
+        '--stage', 'architectural-review',
+        '--tier', 'T2',
+        '--json',
+      ], transport);
+      expect(code).toBe(1);
+      const output = JSON.parse(logs.at(-1) ?? '{}') as {
+        blocker?: string;
+        nextAction?: {
+          kind?: string;
+          binding?: Record<string, unknown>;
+          argv?: string[];
+        };
+      };
+      expect(output.blocker).toContain(diagnostic);
+      expect(output.nextAction?.kind).toBe('author-round');
+      expect(output.nextAction?.binding).toEqual({
+        repository: 'chetwerikoff/orchestrator-pack',
+        issueNumber: 1997,
+        sourceRevision: 'r01',
+        stage: 'architectural-review',
+      });
+      const argv = output.nextAction?.argv ?? [];
+      expect(argv).toContain('--review-dir');
+      expect(argv).toContain('--expected-source-revision');
+      expect(argv).toContain('--expected-stage');
+      expect(argv).not.toContain('--expected-stage-attempt-id');
+      expect(argv).not.toContain('--source-revision');
+      expect(argv).not.toContain('--stage');
+      expect(argv).not.toContain('--stage-attempt-id');
+      expect(argv).not.toContain('--reason');
+      expect(state.calls.every((call) => !call.includes(' -f ') && !call.includes(' -X '))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('makes pre-mint author-round stale on revision movement and no-ops when the same binding is already clean', () => {
+    const root = tempRoot();
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = root;
+    const state = { body: issue1997Body({ includeVerification: false }), calls: [] as string[] };
+    const transport = issue1997Transport(state);
+    const initialLogs: string[] = [];
+    const firstSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => initialLogs.push(String(line)));
+    let action: { argv: string[] };
+    try {
+      expect(runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'start-cycle',
+        '--repo', 'chetwerikoff/orchestrator-pack',
+        '--issue-number', '1997',
+        '--source-revision', 'r01',
+        '--stage', 'architectural-review',
+        '--tier', 'T2',
+        '--json',
+      ], transport)).toBe(1);
+      action = JSON.parse(initialLogs.at(-1) ?? '{}').nextAction;
+    } finally {
+      firstSpy.mockRestore();
+    }
+
+    const executionArgv = [
+      action!.argv[0]!,
+      action!.argv[2]!,
+      ...action!.argv.slice(3),
+    ];
+    let launches = 0;
+    const failingLogs: string[] = [];
+    const failingSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => failingLogs.push(String(line)));
+    try {
+      expect(runStageFinalizeCli(executionArgv, transport, () => {
+        launches += 1;
+        return { ok: true };
+      })).toBe(1);
+      expect(JSON.parse(failingLogs.at(-1) ?? '{}')).toMatchObject({
+        cause: 'author_round_output_missing',
+      });
+      expect(launches).toBe(1);
+    } finally {
+      failingSpy.mockRestore();
+    }
+    launches = 0;
+    state.body = issue1997Body({ revision: 'r02', includeVerification: false });
+    const staleLogs: string[] = [];
+    const staleSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => staleLogs.push(String(line)));
+    try {
+      expect(runStageFinalizeCli(executionArgv, transport, () => {
+        launches += 1;
+        return { ok: true };
+      })).toBe(1);
+      expect(JSON.parse(staleLogs.at(-1) ?? '{}')).toMatchObject({
+        cause: 'stale_next_action',
+        nextAction: null,
+      });
+      expect(launches).toBe(0);
+    } finally {
+      staleSpy.mockRestore();
+    }
+
+    state.body = issue1997Body({ revision: 'r01' });
+    const cleanLogs: string[] = [];
+    const cleanSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => cleanLogs.push(String(line)));
+    try {
+      expect(runStageFinalizeCli(executionArgv, transport, () => {
+        launches += 1;
+        return { ok: true };
+      })).toBe(0);
+      expect(JSON.parse(cleanLogs.at(-1) ?? '{}')).toMatchObject({
+        ok: true,
+        cause: 'author_round_not_required',
+        nextAction: null,
+      });
+      expect(launches).toBe(0);
+    } finally {
+      cleanSpy.mockRestore();
     }
   });
 });

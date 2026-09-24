@@ -31,6 +31,7 @@ import { validateTerminalOneShotBodyBinding } from './create-issue-final-accepta
 import {
   deriveReviewEpisodeId,
   deriveReviewEpisodeState,
+  resolveCanonicalReviewDirectory,
   validateReviewEpisodeTopology,
   type CaptureIdentityV1,
   type ReviewEpisodeDerivationAuthorityV1,
@@ -39,6 +40,16 @@ import {
   type VerifiedRelayEvidenceV1,
 } from './stage-completeness-core.ts';
 import { validateReviewLaneRecord } from './review-lane-record.ts';
+import {
+  AUTHOR_DISPOSITION_FIELD_OWNERSHIP,
+  AUTHOR_FINDING_TYPES,
+  DEFECT_DISPOSITION_VALUES as AUTHOR_DEFECT_DISPOSITIONS,
+  REMEDY_DISPOSITION_VALUES as AUTHOR_REMEDY_DISPOSITIONS,
+  authorDispositionDiagnosticFromFailure,
+  classifyAuthorDispositionFailure,
+  parseGovernedAuthorDispositionText,
+  renderAuthorDispositionPromptFragment,
+} from './create-issue-author-dispositions-schema.ts';
 import {
   existingPacedBoundedRetryAction,
   projectZeroSendManagerResult,
@@ -3388,18 +3399,77 @@ describe('governed author disposition block shapes (Issue #1983)', () => {
     expect(JSON.parse(fencedLocated.body)).toEqual(JSON.parse(fencelessLocated.body));
   });
 
-  it('AC3: locates and parses the #1968 prose-then-fenced single-line JSON shape', () => {
-    const json = JSON.stringify({
-      schema: AUTHOR_DISPOSITIONS_SCHEMA,
-      sourceRevision: REVISION,
-      predecessorStage: 'architectural',
-      findings: [],
-      m4: { inventory: [] },
-    });
-    const text = ['Governed author output:', '', '```create-issue-author-dispositions/v1', json, '```', ''].join('\n');
-    const located = locateGovernedAuthorDispositionBlock(text);
-    if (!('body' in located)) throw new Error('expected a located body');
-    expect(JSON.parse(located.body)).toEqual(JSON.parse(json));
+  it('AC3: replays each scrubbed raw author reply against its inline expected outcome', () => {
+    const fixtureDir = join(
+      fileURLToPath(new URL('../..', import.meta.url)),
+      'tests/external-output-references/create-issue-author-replies',
+    );
+    const replayOracle = [
+      ['1935__author-recovery-8-output.txt', 'missing_schema_label'],
+      ['1935__author-recovery-12-output.txt', 'missing_schema_label'],
+      ['1935__author-recovery-13-output.txt', 'missing_schema_label'],
+      ['1935__author-recovery-21-output.txt', 'missing_schema_label'],
+      ['1935__author-recovery-25-output.txt', 'missing_schema_label'],
+      ['1935__author-recovery-26-output.txt', 'missing_schema_label'],
+      ['1935__author-recovery-28-output.txt', 'missing_schema_label'],
+      ['1935__author-recovery-29-output.txt', 'missing_schema_label'],
+      ['1935__author-recovery-30-output.txt', 'missing_schema_label'],
+      ['1935__author-recovery-31-output.txt', 'missing_schema_label'],
+      ['1935__author-recovery-32-output.txt', 'missing_schema_label'],
+      ['1953__round-01-author-reply.txt', 'pass'],
+      ['1953__round-02-author-reply.txt', 'pass'],
+      ['1953__round-03-author-reply.txt', 'pass'],
+      ['1958__round-01-author-reply.txt', 'pass'],
+      ['1958__round-02-author-reply.txt', 'pass'],
+      ['1958__round-03-author-reply.txt', 'pass'],
+      ['1977__round-01-author-reply.txt', 'pass'],
+      ['1977__round-02-author-reply.txt', 'pass'],
+      ['1977__round-03-author-reply.txt', 'pass'],
+      ['1977__round-04-author-reply.txt', 'pass'],
+      ['1978__round-01-author-reply.txt', 'pass'],
+      ['1978__round-02-author-reply.txt', 'pass'],
+      ['1978__round-03-author-reply.txt', 'pass'],
+      ['1978__round-04-author-reply.txt', 'pass'],
+      ['1978__round-05-author-reply.txt', 'pass'],
+      ['1968__round-01-author-reply.txt', 'pass'],
+      ['1968__pass-01-architectural-review-01.capture.txt', 'missing_schema_label'],
+      ['1968__pass-01-architectural-review-02.capture.txt', 'missing_schema_label'],
+      ['1968__pass-01-architectural-review-03.capture.txt', 'missing_schema_label'],
+      ['1968__pass-02-architectural.capture.txt', 'missing_schema_label'],
+    ] as const;
+    expect(readdirSync(fixtureDir).filter((name) => name.endsWith('.txt')).sort())
+      .toEqual(replayOracle.map(([name]) => name).sort());
+
+    const observedOutcomes: Array<readonly [string, string | undefined]> = [];
+    for (const [name, expected] of replayOracle) {
+      const rawReply = readFileSync(join(fixtureDir, name), 'utf8');
+      const issueNumber = Number(name.split('__', 1)[0]);
+      const sourceRevision = rawReply.match(/"sourceRevision"\s*:\s*"(r[0-9]+)"/i)?.[1]
+        ?? (issueNumber === 1935 ? 'r03' : REVISION);
+      const input = fixture({
+        issueNumber,
+        intakeRevision: sourceRevision,
+        sourceRevision,
+        transportClassification: 'complete',
+        withTurnResult: true,
+        withCapture: true,
+      });
+      writeFileSync(input.authorReplyPath, rawReply);
+      const result = produce(input);
+      const authorDiagnostic = result.authorDiagnostics?.find((item) => item.ownership === 'author-owned');
+      const lifecycleDiagnostic = result.authorDiagnostics?.find((item) => item.ownership === 'lifecycle-injected');
+      const actual = result.ok
+        ? 'pass'
+        : authorDiagnostic?.reason === 'missing_schema_label'
+          ? 'missing_schema_label'
+          : authorDiagnostic
+            ? `author-actionable:${authorDiagnostic.field}`
+            : lifecycleDiagnostic
+              ? 'lifecycle-injected'
+              : undefined;
+      observedOutcomes.push([name, actual]);
+    }
+    expect(observedOutcomes).toEqual(replayOracle);
   });
 
   it('AC4: two block-start lines are rejected as multiple', () => {
@@ -4547,5 +4617,361 @@ describe('Issue #2032 permanently noncanonical owner publications', () => {
     expect(parseCanonicalCaptureRevision(String(comments[0]!.body))).toBeNull();
     expect(parseCanonicalCaptureRevision(String(comments[1]!.body))).toMatchObject({ findingCount: 2 });
     expect(parseCanonicalCaptureRevision(String(comments[2]!.body))).toBeNull();
+  });
+});
+
+
+describe('Issue #1997 single author-disposition schema owner', () => {
+  it('renders every author-owned requirement without turning lifecycle fields into author requirements', () => {
+    const fragment = renderAuthorDispositionPromptFragment();
+    for (const field of AUTHOR_DISPOSITION_FIELD_OWNERSHIP.authorOwnedRequired) {
+      const token = field.replace(/\[\]/g, '');
+      expect(fragment).toContain(token.split('.')[0]!);
+    }
+    for (const value of AUTHOR_FINDING_TYPES) expect(fragment).toContain(value);
+    for (const value of AUTHOR_DEFECT_DISPOSITIONS) expect(fragment).toContain(value);
+    for (const value of AUTHOR_REMEDY_DISPOSITIONS) expect(fragment).toContain(value);
+    for (const field of AUTHOR_DISPOSITION_FIELD_OWNERSHIP.lifecycleInjected) {
+      expect(fragment).not.toContain(field);
+    }
+  });
+
+  it('accepts a harvested label-line payload and rejects unlabeled bare JSON as missing_schema_label', () => {
+    const labelled = readFileSync(
+      fileURLToPath(new URL('../../tests/external-output-references/create-issue-author-reply-fenceless-1978-r02.txt', import.meta.url)),
+      'utf8',
+    );
+    expect(parseGovernedAuthorDispositionText(labelled).diagnostics).toEqual([]);
+
+    const bare = JSON.stringify({
+      schema: AUTHOR_DISPOSITIONS_SCHEMA,
+      sourceRevision: 'r02',
+      findings: [],
+      m4: { inventory: [] },
+    });
+    const rejected = parseGovernedAuthorDispositionText(bare);
+    expect(rejected.diagnostics).toMatchObject([{
+      reason: 'missing_schema_label',
+      ownership: 'author-owned',
+      field: 'schema-label',
+    }]);
+    expect(rejected.schemaFragment).toContain('whole-line schema label');
+  });
+
+  it('returns field-level author diagnostics and classifies lifecycle-only failures separately', () => {
+    const invalid = [
+      'create-issue-author-dispositions/v1',
+      JSON.stringify({
+        schema: AUTHOR_DISPOSITIONS_SCHEMA,
+        sourceRevision: 'r02',
+        findings: [{
+          id: 'F1',
+          type: 'spec',
+          occurrences: ['sha256:' + 'a'.repeat(64) + ':pass-01-architectural-review-01.capture.txt:1'],
+          defectDisposition: 'addressed',
+          remedyDisposition: 'replaced-by-cheaper-sufficient',
+        }],
+        m4: { inventory: [] },
+      }),
+    ].join('\n');
+    const parsed = parseGovernedAuthorDispositionText(invalid);
+    expect(parsed.diagnostics.map((item) => item.field)).toContain('findings[0].proposalReason');
+    expect(parsed.schemaFragment).toContain('proposalReason');
+
+    expect(classifyAuthorDispositionFailure('predecessorStage disagrees with lifecycle stage evidence')).toBe('lifecycle-injected');
+    expect(classifyAuthorDispositionFailure('terminalResultIdentity is missing')).toBe('lifecycle-injected');
+    expect(classifyAuthorDispositionFailure('missing_schema_label:schema-label')).toBe('author-owned');
+  });
+
+  it('classifies production occurrence-ledger errors as author-owned field diagnostics', () => {
+    const failures = [
+      'review-economics: occurrence sha256:abc is not mapped exactly once',
+      'review-economics: occurrence sha256:abc maps more than once',
+      'review-economics: ledger row F1 references unknown occurrence sha256:abc',
+      'review-economics: receipt-backed ledger row F1 has no mapped occurrence',
+    ];
+    for (const failure of failures) {
+      expect(classifyAuthorDispositionFailure(failure)).toBe('author-owned');
+      expect(authorDispositionDiagnosticFromFailure(failure)).toMatchObject({
+        ownership: 'author-owned',
+        field: 'findings[].occurrences',
+      });
+    }
+  });
+
+  it('classifies governed capture-integrity errors as lifecycle-injected failures', () => {
+    const failures = [
+      'review-economics: supplied capture text count must equal governedCaptureUnion',
+      'review-economics: supplied capture pass-02-architectural.capture.txt is not governed',
+      'review-economics: governed capture sha256:abc supplied more than once',
+      'review-economics: capture sha256:abc name mismatch',
+      'review-economics: capture sha256:abc byteLength mismatch',
+      'review-economics: capture sha256:abc sha256 mismatch',
+      'review-economics: capture sha256:abc rawFindingCount mismatch',
+      'review-economics: governed capture sha256:abc has no supplied immutable text',
+    ];
+    for (const failure of failures) {
+      expect(classifyAuthorDispositionFailure(failure)).toBe('lifecycle-injected');
+      expect(authorDispositionDiagnosticFromFailure(failure)).toBeNull();
+    }
+  });
+});
+
+
+describe('Issue #1997 producer continuation routing', () => {
+  function runArtifactCli(input: ReturnType<typeof fixture>, source: ReturnType<typeof transport>) {
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => logs.push(String(line)));
+    try {
+      const code = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'produce-artifacts',
+        '--repo', REPOSITORY,
+        '--issue-number', String(input.issueNumber),
+        '--review-dir', input.dir,
+        '--tier-intake', input.intakePath,
+        '--stage-evidence', input.reviewEvidencePath,
+        '--stage-evidence', input.evidencePath,
+        '--author-dispositions', input.authorPath,
+        '--output-dir', input.outputDir,
+        '--phase', 'final-acceptance',
+        '--json',
+      ], source);
+      return { code, output: JSON.parse(logs.at(-1) ?? '{}') as Record<string, any> };
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it('routes a missing whole-line schema label to one settled author-round with exact stageAttemptId', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      withTurnResult: true,
+      withCapture: true,
+    });
+    writeFileSync(input.authorReplyPath, JSON.stringify({
+      schema: AUTHOR_DISPOSITIONS_SCHEMA,
+      sourceRevision: REVISION,
+      findings: [],
+      m4: { inventory: [] },
+    }));
+    const source = transport({
+      census: [...input.reviewComments, comment(input.body)],
+    });
+    const { code, output } = runArtifactCli(input, source);
+    expect(code).toBe(1);
+    expect(output.blocker).toContain('missing_schema_label');
+    expect(output.authorDiagnostics).toMatchObject([{
+      reason: 'missing_schema_label',
+      ownership: 'author-owned',
+      field: 'schema-label',
+    }]);
+    expect(output.authorSchemaFragment).toBe(renderAuthorDispositionPromptFragment());
+    expect(output.nextAction).toMatchObject({
+      kind: 'author-round',
+      binding: {
+        repository: REPOSITORY,
+        issueNumber: ISSUE,
+        sourceRevision: REVISION,
+        stage: 'architectural',
+        stageAttemptId: 'attempt-001',
+      },
+    });
+    const argv = output.nextAction.argv as string[];
+    expect(argv.filter((item) => item === '--expected-source-revision')).toHaveLength(1);
+    expect(argv.filter((item) => item === '--expected-stage')).toHaveLength(1);
+    expect(argv.filter((item) => item === '--expected-stage-attempt-id')).toHaveLength(1);
+    expect(argv).not.toContain('--reason');
+  });
+
+  it('fails closed with no author-round when the rejection is lifecycle-injected', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      withTurnResult: true,
+      withCapture: true,
+    });
+    const evidence = JSON.parse(readFileSync(input.evidencePath, 'utf8')) as Record<string, any>;
+    delete evidence.invocations[0].terminal;
+    writeFileSync(input.evidencePath, JSON.stringify(evidence));
+    const source = transport({
+      census: [...input.reviewComments, comment(input.body)],
+    });
+    const { code, output } = runArtifactCli(input, source);
+    expect(code).toBe(1);
+    expect(String(output.blocker)).toMatch(/terminal must be boolean|invocation\[0\]\.terminal/i);
+    expect(output.nextAction).toBeNull();
+  });
+
+  it.each([
+    'review-economics: occurrence sha256:abc is not mapped exactly once',
+    'review-economics: occurrence sha256:abc maps more than once',
+    'review-economics: ledger row F1 references unknown occurrence sha256:abc',
+  ])('routes occurrence-ledger error to author-round: %s', (ledgerError) => {
+    const input = fixture({
+      transportClassification: 'complete',
+      withTurnResult: true,
+      withCapture: true,
+    });
+    vi.mocked(checkFindingLedgerGuard).mockReturnValueOnce({
+      ok: false,
+      errors: [ledgerError],
+      ledger: { version: 1, draft: null, counts: null, findings: [] },
+      captureFindings: [],
+      protectedSignals: [],
+    });
+    const { code, output } = runArtifactCli(input, transport({
+      census: [...input.reviewComments, comment(input.body)],
+    }));
+    expect(code).toBe(1);
+    expect(output.authorDiagnostics).toMatchObject([{
+      reason: 'invalid_author_field',
+      ownership: 'author-owned',
+      field: 'findings[].occurrences',
+    }]);
+    expect(output.authorSchemaFragment).toBe(renderAuthorDispositionPromptFragment());
+    expect(output.nextAction.kind).toBe('author-round');
+  });
+
+  it('does not retry or author-round on governed capture-integrity failure', () => {
+    const input = fixture({
+      transportClassification: 'complete',
+      withTurnResult: true,
+      withCapture: true,
+    });
+    const failure = 'review-economics: supplied capture pass-02-architectural.capture.txt is not governed';
+    vi.mocked(checkFindingLedgerGuard).mockReturnValueOnce({
+      ok: false,
+      errors: [failure],
+      ledger: { version: 1, draft: null, counts: null, findings: [] },
+      captureFindings: [],
+      protectedSignals: [],
+    });
+    const { code, output } = runArtifactCli(input, transport({
+      census: [...input.reviewComments, comment(input.body)],
+    }));
+    expect(code).toBe(1);
+    expect(output.blocker).toContain(failure);
+    expect(output.authorDiagnostics).toBeUndefined();
+    expect(output.nextAction).toBeNull();
+  });
+});
+
+
+describe('Issue #1997 settled author-round execution', () => {
+  it('writes the next numeric governed reply on the same settled attempt, keeps the Issue revision, and then becomes a no-op', () => {
+    const oldRoot = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+    const stateRoot = mkdtempSync(join(tmpdir(), 'opk-1997-author-round-'));
+    tempDirs.push(stateRoot);
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = stateRoot;
+    try {
+      const input = fixture({
+        transportClassification: 'complete',
+        withTurnResult: true,
+        withCapture: true,
+      });
+      const canonical = resolveCanonicalReviewDirectory({ taskIdentity: `issue:${ISSUE}` }).directory;
+      mkdirSync(canonical, { recursive: true });
+      writeFileSync(join(canonical, basename(input.intakePath)), readFileSync(input.intakePath));
+      for (const evidencePath of [input.reviewEvidencePath, input.evidencePath]) {
+        const evidence = JSON.parse(readFileSync(evidencePath, 'utf8')) as Record<string, any>;
+        for (const invocation of evidence.invocations ?? []) {
+          for (const field of ['capturePath', 'turnResultPath'] as const) {
+            const sourcePath = typeof invocation[field] === 'string' ? invocation[field] : '';
+            if (!sourcePath) continue;
+            const canonicalPath = join(canonical, basename(sourcePath));
+            writeFileSync(canonicalPath, readFileSync(sourcePath));
+            invocation[field] = canonicalPath;
+          }
+        }
+        writeFileSync(join(canonical, basename(evidencePath)), JSON.stringify(evidence));
+      }
+      writeFileSync(join(canonical, 'round-01-author-reply.md'), JSON.stringify({
+        schema: AUTHOR_DISPOSITIONS_SCHEMA,
+        sourceRevision: REVISION,
+        findings: [],
+        m4: { inventory: [] },
+      }));
+
+      const source = transport({
+        census: [...input.reviewComments, comment(input.body)],
+        issueBodies: [finalAcceptanceIssueBody(REVISION)],
+      });
+      let launches = 0;
+      const runner = (request: {
+        outputPath: string;
+        prompt: string;
+        stageAttemptId?: string;
+      }) => {
+        launches += 1;
+        expect(request.stageAttemptId).toBe('attempt-001');
+        expect(request.prompt).toContain('missing_schema_label');
+        expect(request.prompt).toContain(renderAuthorDispositionPromptFragment());
+        writeGovernedAuthorReply(request.outputPath, {
+          sourceRevision: REVISION,
+          predecessorStage: 'architectural-review',
+        });
+        return { ok: true };
+      };
+      const argv = [
+        'node', 'scripts/create-issue-stage-finalize.ts', 'author-round',
+        '--repo', REPOSITORY,
+        '--issue-number', String(ISSUE),
+        '--review-dir', canonical,
+        '--expected-source-revision', REVISION,
+        '--expected-stage', 'architectural',
+        '--expected-stage-attempt-id', 'attempt-001',
+        '--json',
+      ];
+      const logs: string[] = [];
+      const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => logs.push(String(line)));
+      try {
+        const code = runStageFinalizeCli(argv, source, runner as never);
+        expect(code, logs.at(-1) ?? 'missing manager result').toBe(0);
+        expect(JSON.parse(logs.at(-1) ?? '{}')).toMatchObject({
+          ok: true,
+          cause: 'author_round_completed',
+          nextAction: null,
+          authorRound: {
+            repairClass: 'author-schema',
+            round: 2,
+            sourceRevision: REVISION,
+            stage: 'architectural',
+            stageAttemptId: 'attempt-001',
+          },
+        });
+      } finally {
+        spy.mockRestore();
+      }
+      expect(launches).toBe(1);
+      expect(existsSync(join(canonical, 'round-02-author-reply.txt'))).toBe(true);
+      expect(readdirSync(canonical).filter((name) => /^attempt-[0-9]{3}\.json$/.test(name)).sort())
+        .toEqual(['attempt-000.json', 'attempt-001.json']);
+      const produced = JSON.parse(readFileSync(join(canonical, 'author-dispositions.json'), 'utf8'));
+      expect(produced).toMatchObject({
+        producer: 'governed-author-output/v1',
+        sourceRevision: REVISION,
+        predecessorStage: 'architectural-review',
+        findings: [],
+      });
+
+      const rerunLogs: string[] = [];
+      const rerunSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => rerunLogs.push(String(line)));
+      try {
+        expect(runStageFinalizeCli(argv, source, () => {
+          launches += 1;
+          return { ok: true };
+        })).toBe(0);
+        expect(JSON.parse(rerunLogs.at(-1) ?? '{}')).toMatchObject({
+          ok: true,
+          cause: 'author_round_not_required',
+          nextAction: null,
+        });
+      } finally {
+        rerunSpy.mockRestore();
+      }
+      expect(launches).toBe(1);
+    } finally {
+      if (oldRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = oldRoot;
+    }
   });
 });

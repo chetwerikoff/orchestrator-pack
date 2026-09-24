@@ -1,4 +1,6 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { join, resolve } from 'node:path';
 import { defaultGhTransport, fetchIssueRevision } from './create-issue-stage-record-gh.ts';
 import {
@@ -11,6 +13,7 @@ import {
   ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS,
   bindPublishedCommentToSlot,
   inspectAcceptanceArtifacts,
+  inspectLatestGovernedAuthorDisposition,
   produceAcceptanceArtifacts,
   readEvidenceZeroSendTerminal,
   reconcileCreateIssueStage,
@@ -32,6 +35,13 @@ import {
   type CreateIssueZeroSendReason,
 } from './create-issue-next-action.ts';
 import { resolveCanonicalReviewDirectory } from './stage-completeness-core.ts';
+import { checkTierGateGuard } from './tier-gate-core.ts';
+import { checkContractEvidence } from '../contract-evidence-validator.mjs';
+import {
+  classifyAuthorDispositionFailure,
+  renderAuthorDispositionPromptFragment,
+  type AuthorDispositionDiagnostic,
+} from './create-issue-author-dispositions-schema.ts';
 import type { LifecycleReviewStage } from './create-issue-stage-lifecycle.ts';
 import { isPublicActor, PUBLIC_ACTORS } from './create-issue-stage-record-marker.ts';
 import type { GhTransport, PublicActor } from './create-issue-stage-record-types.ts';
@@ -51,7 +61,7 @@ interface JournalTailCliOptions {
 }
 
 interface StageFinalizeCliOptions extends JournalTailCliOptions {
-  command: 'start-cycle' | 'publish-stage' | 'retry-pending' | 'reconcile-stage' | 'bind-published-comment' | 'produce-artifacts' | 'check-artifacts';
+  command: 'start-cycle' | 'author-round' | 'publish-stage' | 'retry-pending' | 'reconcile-stage' | 'bind-published-comment' | 'produce-artifacts' | 'check-artifacts';
   repo: string;
   issueNumber: number;
   sourceRevision?: string;
@@ -108,6 +118,25 @@ interface FinalAcceptanceCliOptions extends JournalTailCliOptions {
   operatorFindingCount?: string;
   operatorReason?: string;
 }
+
+export interface AuthorRoundRunnerInput {
+  repository: string;
+  issueNumber: number;
+  sourceRevision: string;
+  stage: LifecycleReviewStage;
+  stageAttemptId?: string;
+  reviewDir: string;
+  prompt: string;
+  promptPath: string;
+  outputPath: string;
+}
+
+export interface AuthorRoundRunnerResult {
+  ok: boolean;
+  blocker?: string;
+}
+
+export type AuthorRoundRunner = (input: AuthorRoundRunnerInput) => AuthorRoundRunnerResult;
 
 function finishJournalArgvParse<T extends { json: boolean }>(
   arg: string,
@@ -259,6 +288,7 @@ export function stageFinalizeUsage(): string {
   return [
     'Usage:',
     `  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> --stage <competitive|architectural-review|architectural-lens|architectural> --tier <T1|T2|T3> [--competitive-decision <required|skipped> --competitive-rationale <text>] [--stage-attempt-id <retry-id>] [--permitted-lane-override <normal|disputed>] [--public-actor <${[...PUBLIC_ACTORS].join('|')}>] [--predecessor-cycle-id <id>] [--workdir <path>] [--expected-source-revision <rNN> --expected-stage <stage> --expected-stage-attempt-id <id>] [--json]`,
+    '  create-issue-stage-finalize.ts author-round --repo <owner/name> --issue-number <n> --review-dir <canonical-review-dir> --expected-source-revision <rNN> --expected-stage <stage> [--expected-stage-attempt-id <settled-id>] [--json]',
     '  create-issue-stage-finalize.ts publish-stage --repo <owner/name> --issue-number <n> --receipt <path> [--waiver <path>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts retry-pending --repo <owner/name> --issue-number <n> [--workdir <path>] [--expected-source-revision <rNN> --expected-stage <stage> --expected-stage-attempt-id <id>] [--json]',
     '  create-issue-stage-finalize.ts reconcile-stage --repo <owner/name> --issue-number <n> --review-dir <path> --stage-evidence <attempt-NNN.json> [--json]',
@@ -271,7 +301,7 @@ export function stageFinalizeUsage(): string {
 
 export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
   const command = argv[2];
-  if (command !== 'start-cycle' && command !== 'publish-stage' && command !== 'retry-pending' && command !== 'reconcile-stage' && command !== 'bind-published-comment' && command !== 'produce-artifacts' && command !== 'check-artifacts') {
+  if (command !== 'start-cycle' && command !== 'author-round' && command !== 'publish-stage' && command !== 'retry-pending' && command !== 'reconcile-stage' && command !== 'bind-published-comment' && command !== 'produce-artifacts' && command !== 'check-artifacts') {
     throw new Error(`unknown command\n${stageFinalizeUsage()}`);
   }
   const opts: StageFinalizeCliOptions = {
@@ -284,7 +314,8 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
     claudeProducerEvidencePaths: [],
   };
   const artifactCommand = command === 'reconcile-stage' || command === 'bind-published-comment' || command === 'produce-artifacts' || command === 'check-artifacts';
-  const boundActionCommand = artifactCommand || command === 'start-cycle' || command === 'retry-pending';
+  const reviewDirCommand = artifactCommand || command === 'author-round';
+  const boundActionCommand = artifactCommand || command === 'start-cycle' || command === 'author-round' || command === 'retry-pending';
   const requireArtifactCommand = (arg: string): void => {
     if (!artifactCommand) throw new Error(`${arg} is only valid with reconcile-stage, produce-artifacts, or check-artifacts`);
   };
@@ -301,9 +332,11 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
         opts.issueNumber = Number(argv[++i]);
         break;
       case '--source-revision':
+        if (command === 'author-round') throw new Error('--source-revision is not valid with author-round; use --expected-source-revision');
         opts.sourceRevision = String(argv[++i] ?? '');
         break;
       case '--stage': {
+        if (command === 'author-round') throw new Error('--stage is not valid with author-round; use --expected-stage');
         const stage = String(argv[++i] ?? '');
         if (stage !== 'competitive' && stage !== 'architectural-review' && stage !== 'architectural-lens' && stage !== 'architectural') {
           throw new Error('--stage must be competitive, architectural-review, architectural-lens, or architectural');
@@ -312,6 +345,7 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
         break;
       }
       case '--stage-attempt-id':
+        if (command === 'author-round') throw new Error('--stage-attempt-id is not valid with author-round; use --expected-stage-attempt-id');
         opts.stageAttemptId = String(argv[++i] ?? '');
         break;
       case '--permitted-lane-override': {
@@ -354,7 +388,7 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
         opts.reviewerSlot = String(argv[++i] ?? '');
         break;
       case '--review-dir':
-        requireArtifactCommand(arg);
+        if (!reviewDirCommand) throw new Error(`${arg} is only valid with an artifact or author-round command`);
         opts.reviewDir = String(argv[++i] ?? '');
         break;
       case '--output-dir':
@@ -562,10 +596,11 @@ function artifactBindingFromState(
   opts: StageFinalizeCliOptions,
   reviewDir: string,
   issueNumber: number,
+  transport: GhTransport = defaultGhTransport(),
 ): CreateIssueActionBinding | null {
   let liveRevision = '';
   try {
-    const live = fetchIssueRevision(defaultGhTransport(), opts.repo, issueNumber);
+    const live = fetchIssueRevision(transport, opts.repo, issueNumber);
     liveRevision = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i.exec(live.body)?.[1] ?? '';
   } catch {
     return null;
@@ -629,6 +664,7 @@ function staleArtifactBinding(
   opts: StageFinalizeCliOptions,
   reviewDir: string,
   issueNumber: number,
+  transport: GhTransport = defaultGhTransport(),
 ): ReturnType<typeof createIssueStaleNextAction> | null {
   if (!opts.expectedSourceRevision && !opts.expectedStage && !opts.expectedStageAttemptId) return null;
   if (!opts.expectedSourceRevision || !opts.expectedStage || !opts.expectedStageAttemptId) {
@@ -641,7 +677,7 @@ function staleArtifactBinding(
     stage: opts.expectedStage,
     stageAttemptId: opts.expectedStageAttemptId,
   };
-  const observed = artifactBindingFromState(opts, reviewDir, issueNumber);
+  const observed = artifactBindingFromState(opts, reviewDir, issueNumber, transport);
   if (observed
     && observed.repository.toLowerCase() === expected.repository.toLowerCase()
     && observed.issueNumber === expected.issueNumber
@@ -819,6 +855,7 @@ function startCycleRetryArgv(
 function staleStartCycleBinding(
   opts: StageFinalizeCliOptions,
   issueNumber: number,
+  transport: GhTransport = defaultGhTransport(),
 ): ReturnType<typeof createIssueStaleNextAction> | null {
   if (!opts.expectedSourceRevision && !opts.expectedStage && !opts.expectedStageAttemptId) return null;
   if (!opts.expectedSourceRevision || !opts.expectedStage) {
@@ -833,7 +870,7 @@ function staleStartCycleBinding(
   };
   let liveRevision = '';
   try {
-    const live = fetchIssueRevision(defaultGhTransport(), opts.repo, issueNumber);
+    const live = fetchIssueRevision(transport, opts.repo, issueNumber);
     liveRevision = /<!--\s*source-revision:\s*(r[0-9]+)\s*-->/i.exec(live.body)?.[1] ?? '';
   } catch {
     return createIssueStaleNextAction({
@@ -862,6 +899,7 @@ function staleStartCycleBinding(
 function staleRetryPendingBinding(
   opts: StageFinalizeCliOptions,
   issueNumber: number,
+  transport: GhTransport = defaultGhTransport(),
 ): ReturnType<typeof createIssueStaleNextAction> | null {
   if (!opts.expectedSourceRevision && !opts.expectedStage && !opts.expectedStageAttemptId) return null;
   if (!opts.expectedSourceRevision || !opts.expectedStage || !opts.expectedStageAttemptId) {
@@ -875,7 +913,7 @@ function staleRetryPendingBinding(
     stageAttemptId: opts.expectedStageAttemptId,
   };
   const canonical = resolveCanonicalReviewDirectory({ taskIdentity: 'issue:' + issueNumber });
-  const observed = artifactBindingFromState({ ...opts, stageEvidencePaths: [] }, canonical.directory, issueNumber);
+  const observed = artifactBindingFromState({ ...opts, stageEvidencePaths: [] }, canonical.directory, issueNumber, transport);
   if (observed
     && observed.repository.toLowerCase() === expected.repository.toLowerCase()
     && observed.issueNumber === expected.issueNumber
@@ -891,8 +929,531 @@ function staleRetryPendingBinding(
   });
 }
 
-export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: GhTransport): number {
+
+function issueSourceRevision(body: string): string {
+  const matches = [...body.matchAll(/<!--\s*source-revision:\s*(r[0-9]+)\s*-->/gi)];
+  return matches.length === 1 && matches[0]?.[1] ? matches[0][1] : '';
+}
+
+function bodyFloorDiagnostics(body: string, tier?: string): string[] {
+  const errors: string[] = [];
+  const tierResult = checkTierGateGuard(body, {
+    ...(tier ? { tier } : {}),
+    repoRoot: process.cwd(),
+  });
+  if (!tierResult.ok) {
+    errors.push(...tierResult.errors.map((item) => 'tier-gate: ' + item));
+  }
+  const contractResult = checkContractEvidence(body, { repoRoot: process.cwd() }) as {
+    ok: boolean;
+    errors: string[];
+    skipped?: boolean;
+  };
+  if (!contractResult.ok && !contractResult.skipped) {
+    errors.push(...contractResult.errors.map((item) => 'contract-evidence: ' + item));
+  }
+  return [...new Set(errors)];
+}
+
+function canonicalAuthorRoundDirectory(issueNumber: number): string {
+  return resolveCanonicalReviewDirectory({ taskIdentity: 'issue:' + issueNumber }).directory;
+}
+
+function authorRoundAction(
+  binding: CreateIssueActionBinding,
+  reviewDir: string,
+): CreateIssueNextAction {
+  const argv = [
+    'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+    'author-round',
+    '--repo', binding.repository,
+    '--issue-number', String(binding.issueNumber),
+    '--review-dir', reviewDir,
+    '--expected-source-revision', binding.sourceRevision,
+    '--expected-stage', binding.stage,
+  ];
+  if (binding.stageAttemptId) {
+    argv.push('--expected-stage-attempt-id', binding.stageAttemptId);
+  }
+  argv.push('--json');
+  return createIssueNextAction({ kind: 'author-round', binding, argv });
+}
+
+function existingAttemptForStage(
+  reviewDir: string,
+  stage: LifecycleReviewStage,
+): { stageAttemptId: string; sourceRevision: string } | null {
+  const candidates = canonicalAttemptPaths(reviewDir, []).flatMap((path) => {
+    try {
+      const value = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+      if (value.stage !== stage) return [];
+      const stageAttemptId = typeof value.stageAttemptId === 'string' ? value.stageAttemptId : '';
+      const sourceRevision = typeof value.sourceRevision === 'string' ? value.sourceRevision : '';
+      return stageAttemptId && sourceRevision ? [{ stageAttemptId, sourceRevision }] : [];
+    } catch {
+      return [];
+    }
+  });
+  return candidates.at(-1) ?? null;
+}
+
+function nextAuthorReplyPaths(reviewDir: string): {
+  round: number;
+  promptPath: string;
+  outputPath: string;
+} {
+  let maximum = 0;
+  if (existsSync(reviewDir)) {
+    for (const name of readdirSync(reviewDir)) {
+      const match = /^round-([0-9]+)-author-reply\.(?:md|txt)$/.exec(name);
+      if (match?.[1]) maximum = Math.max(maximum, Number(match[1]));
+    }
+  }
+  const round = maximum + 1;
+  const token = String(round).padStart(2, '0');
+  return {
+    round,
+    promptPath: join(reviewDir, `round-${token}-author-prompt.txt`),
+    outputPath: join(reviewDir, `round-${token}-author-reply.txt`),
+  };
+}
+
+function authorRoundPrompt(input: {
+  repository: string;
+  issueNumber: number;
+  sourceRevision: string;
+  stage: LifecycleReviewStage;
+  stageAttemptId?: string;
+  repairClass: 'body-floor' | 'author-schema';
+  diagnostics: readonly string[];
+  schemaFragment: string;
+}): string {
+  const issueUrl = `https://github.com/${input.repository}/issues/${input.issueNumber}`;
+  const repairInstruction = input.repairClass === 'body-floor'
+    ? [
+        'This is a pre-mint Issue-body repair. Edit only the target Issue title/body as needed to satisfy every diagnostic below.',
+        'If Issue bytes change, advance the source-revision marker exactly once. Do not create a review cycle, stage attempt, PR, label, milestone, or unrelated mutation.',
+        'After authoritative Issue read-back, return one governed author payload for the resulting revision with findings: [] and m4.inventory: [].',
+      ]
+    : [
+        'This is a pure governed author-output/schema repair for an already-settled stage.',
+        'Do not edit the Issue title/body and do not change its source revision.',
+        'Return a corrected governed author payload for the same revision and the same settled stage evidence. Do not create/reopen a reviewer stage or stage attempt.',
+      ];
+  return [
+    `Role: author for ${input.repository}.`,
+    'Mode: revise-existing-issue.',
+    `Authoritative input: live Issue ${issueUrl}; expected revision: ${input.sourceRevision}.`,
+    '',
+    'Read the live target through GitHub. Follow the canonical create-issue-draft role boundary.',
+    ...repairInstruction,
+    '',
+    `Bound semantic stage: ${input.stage}${input.stageAttemptId ? `; settled stageAttemptId: ${input.stageAttemptId}` : '; no stageAttemptId exists yet'}.`,
+    '',
+    'Current validation diagnostics (all must be addressed; do not invent replacements):',
+    ...input.diagnostics.map((item) => '- ' + item),
+    '',
+    input.schemaFragment,
+    '',
+    'Output only the whole-line schema label followed by the JSON payload. The Markdown fence is optional.',
+    'Never include or fabricate an OPKTURNV1 transport marker.',
+  ].join('\n');
+}
+
+function defaultAuthorRoundRunner(input: AuthorRoundRunnerInput): AuthorRoundRunnerResult {
+  const profile = process.env.DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR?.trim() ?? '';
+  const projectUrl = process.env.DISCUSS_WITH_GPT_PROJECT_URL?.trim() ?? '';
+  const cdp = process.env.CDP_ENDPOINT?.trim() ?? '';
+  if (!profile || !projectUrl || !cdp) {
+    return {
+      ok: false,
+      blocker: 'Browser-GPT author-round requires DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR, DISCUSS_WITH_GPT_PROJECT_URL, and the existing CDP_ENDPOINT shell binding',
+    };
+  }
+  mkdirSync(input.reviewDir, { recursive: true });
+  writeFileSync(input.promptPath, input.prompt, { encoding: 'utf8', flag: 'wx' });
+  const invocationId = randomUUID();
+  const runIdentity = 'author-round-' + randomUUID();
+  const attemptIdentity = 'author-round-attempt-' + randomUUID();
+  const handoffReceipt = join(input.reviewDir, `.author-round-${invocationId}.handoff.json`);
+  const terminalEnvelope = join(input.reviewDir, `.author-round-${invocationId}.terminal.json`);
+  const child = runProcessSync({
+    command: process.execPath,
+    args: [
+      '--experimental-strip-types',
+      'scripts/flow-manager-browser-gpt-long-run.ts',
+      '--run-identity', runIdentity,
+      '--attempt-identity', attemptIdentity,
+      '--invocation-id', invocationId,
+      '--handoff-receipt', handoffReceipt,
+      '--terminal-envelope', terminalEnvelope,
+      '--output', input.outputPath,
+      '--profile', profile,
+      '--cdp', cdp,
+      '--input', input.promptPath,
+      '--new-chat',
+      '--project-url', projectUrl,
+    ],
+    cwd: process.cwd(),
+    env: { OPK_FM_LONG_CHILD_DISABLE_DETACH: '1' },
+    inheritParentEnv: true,
+    encoding: 'utf8',
+    timeoutMs: 20 * 60 * 1000,
+  });
+  if (!child.ok || !existsSync(input.outputPath)) {
+    return {
+      ok: false,
+      blocker: (child.error || child.stderr || child.stdout || `Browser-GPT author round exited ${String(child.exitCode)}`).trim(),
+    };
+  }
+  return { ok: true };
+}
+
+function authorSchemaDiagnostics(
+  reviewDir: string,
+): { diagnostics: AuthorDispositionDiagnostic[]; schemaFragment: string } {
+  const inspection = inspectLatestGovernedAuthorDisposition(reviewDir);
+  if (!inspection) {
+    return {
+      diagnostics: [{
+        reason: 'missing_schema_label',
+        ownership: 'author-owned',
+        field: 'schema-label',
+        message: 'no governed round-NN-author-reply.* exists for the current author correction',
+      }],
+      schemaFragment: renderAuthorDispositionPromptFragment(),
+    };
+  }
+  return {
+    diagnostics: inspection.diagnostics,
+    schemaFragment: inspection.schemaFragment,
+  };
+}
+
+function authorRoundPhase(stage: LifecycleReviewStage): 'pre-lens' | 'post-lens' | 'final-acceptance' {
+  if (stage === 'architectural') return 'final-acceptance';
+  if (stage === 'architectural-lens') return 'post-lens';
+  return 'pre-lens';
+}
+
+function nextRevision(revision: string): string | null {
+  const match = /^r([0-9]+)$/i.exec(revision);
+  if (!match?.[1]) return null;
+  const width = match[1].length;
+  return 'r' + String(Number(match[1]) + 1).padStart(width, '0');
+}
+
+export function runStageFinalizeCli(
+  argv: string[],
+  artifactSourceTransport?: GhTransport,
+  authorRoundRunner?: AuthorRoundRunner,
+): number {
   return runParsedCli(argv, 'create-issue-stage-finalize', parseStageFinalizeArgs, (opts) => {
+    const transport = artifactSourceTransport ?? defaultGhTransport();
+
+    if (opts.command === 'author-round') {
+      const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
+      const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
+      const canonicalReviewDir = canonicalAuthorRoundDirectory(issueNumber);
+      if (resolve(reviewDir) !== resolve(canonicalReviewDir)) {
+        const output = createIssueTerminalResult({
+          ok: false,
+          cause: 'author_round_noncanonical_review_dir',
+          blocker: `author-round requires canonical review directory ${canonicalReviewDir}`,
+        });
+        if (opts.json) console.log(JSON.stringify(output));
+        else process.stderr.write((output.blocker ?? output.cause) + '\n');
+        return 1;
+      }
+      const expectedSourceRevision = parseRequiredNonEmptyString(
+        opts.expectedSourceRevision,
+        '--expected-source-revision',
+      );
+      const expectedStage = parseRequiredNonEmptyString(
+        opts.expectedStage,
+        '--expected-stage',
+      ) as LifecycleReviewStage;
+      const binding: CreateIssueActionBinding = {
+        repository: opts.repo,
+        issueNumber,
+        sourceRevision: expectedSourceRevision,
+        stage: expectedStage,
+        ...(opts.expectedStageAttemptId
+          ? { stageAttemptId: parseRequiredNonEmptyString(opts.expectedStageAttemptId, '--expected-stage-attempt-id') }
+          : {}),
+      };
+
+      let live;
+      try {
+        live = fetchIssueRevision(transport, opts.repo, issueNumber);
+      } catch (error) {
+        const output = createIssueTerminalResult({
+          ok: false,
+          cause: 'source-unavailable',
+          blocker: error instanceof Error ? error.message : String(error),
+        });
+        if (opts.json) console.log(JSON.stringify(output));
+        else process.stderr.write((output.blocker ?? output.cause) + '\n');
+        return 1;
+      }
+      const liveRevision = issueSourceRevision(live.body);
+      if (liveRevision.toLowerCase() !== expectedSourceRevision.toLowerCase()) {
+        const stale = createIssueStaleNextAction({
+          binding,
+          observed: {
+            repository: opts.repo,
+            issueNumber,
+            ...(liveRevision ? { sourceRevision: liveRevision } : {}),
+            stage: expectedStage,
+          },
+          nextAction: null,
+        });
+        if (opts.json) console.log(JSON.stringify(stale));
+        else process.stderr.write('stale_next_action\n');
+        return 1;
+      }
+
+      let repairClass: 'body-floor' | 'author-schema';
+      let diagnostics: string[];
+      let schemaFragment = renderAuthorDispositionPromptFragment();
+
+      if (binding.stageAttemptId) {
+        const observed = artifactBindingFromState(
+          { ...opts, stageEvidencePaths: [] },
+          reviewDir,
+          issueNumber,
+          transport,
+        );
+        if (!observed
+          || observed.repository.toLowerCase() !== binding.repository.toLowerCase()
+          || observed.issueNumber !== binding.issueNumber
+          || observed.sourceRevision.toLowerCase() !== binding.sourceRevision.toLowerCase()
+          || observed.stage !== binding.stage
+          || observed.stageAttemptId !== binding.stageAttemptId) {
+          const stale = createIssueStaleNextAction({
+            binding,
+            observed: observed ?? { repository: opts.repo, issueNumber, sourceRevision: liveRevision },
+            nextAction: null,
+          });
+          if (opts.json) console.log(JSON.stringify(stale));
+          else process.stderr.write('stale_next_action\n');
+          return 1;
+        }
+        repairClass = 'author-schema';
+        const inspected = authorSchemaDiagnostics(reviewDir);
+        if (inspected.diagnostics.length > 0) {
+          schemaFragment = inspected.schemaFragment;
+          diagnostics = inspected.diagnostics.map(
+            (item) => `${item.reason}:${item.field}: ${item.message}`,
+          );
+        } else {
+          const validation = produceAcceptanceArtifacts({
+            reviewDir,
+            tierIntakePath: join(reviewDir, 'tier-intake.json'),
+            stageEvidencePaths: [],
+            authorDispositionsPath: join(reviewDir, 'author-dispositions.json'),
+            outputDir: reviewDir,
+            phase: authorRoundPhase(expectedStage),
+            repositoryFullName: opts.repo,
+            artifactSourceTransport: transport,
+          });
+          if (validation.ok) {
+            const output = createIssueTerminalResult({
+              ok: true,
+              cause: 'author_round_not_required',
+            });
+            if (opts.json) console.log(JSON.stringify(output));
+            return 0;
+          }
+          const lifecycleOwned = validation.errors.some(
+            (error) => classifyAuthorDispositionFailure(error) === 'lifecycle-injected',
+          );
+          const authorDiagnostics = validation.authorDiagnostics ?? [];
+          if (lifecycleOwned || authorDiagnostics.length === 0) {
+            const output = createIssueTerminalResult({
+              ok: false,
+              cause: lifecycleOwned
+                ? 'author_round_lifecycle_validation_failed'
+                : 'author_round_non_author_failure',
+              blocker: validation.errors.join('; '),
+            });
+            if (opts.json) console.log(JSON.stringify(output));
+            else process.stderr.write((output.blocker ?? output.cause) + '\n');
+            return 1;
+          }
+          schemaFragment = validation.authorSchemaFragment ?? renderAuthorDispositionPromptFragment();
+          diagnostics = authorDiagnostics.map(
+            (item) => `${item.reason}:${item.field}: ${item.message}`,
+          );
+        }
+      } else {
+        const existing = existingAttemptForStage(reviewDir, expectedStage);
+        if (existing) {
+          const stale = createIssueStaleNextAction({
+            binding,
+            observed: {
+              repository: opts.repo,
+              issueNumber,
+              sourceRevision: liveRevision,
+              stage: expectedStage,
+              stageAttemptId: existing.stageAttemptId,
+            },
+            nextAction: null,
+          });
+          if (opts.json) console.log(JSON.stringify(stale));
+          else process.stderr.write('stale_next_action\n');
+          return 1;
+        }
+        repairClass = 'body-floor';
+        diagnostics = bodyFloorDiagnostics(live.body);
+        if (diagnostics.length === 0) {
+          const output = createIssueTerminalResult({
+            ok: true,
+            cause: 'author_round_not_required',
+          });
+          if (opts.json) console.log(JSON.stringify(output));
+          return 0;
+        }
+      }
+
+      const paths = nextAuthorReplyPaths(reviewDir);
+      mkdirSync(reviewDir, { recursive: true });
+      const prompt = authorRoundPrompt({
+        repository: opts.repo,
+        issueNumber,
+        sourceRevision: expectedSourceRevision,
+        stage: expectedStage,
+        stageAttemptId: binding.stageAttemptId,
+        repairClass,
+        diagnostics,
+        schemaFragment,
+      });
+      const runner = authorRoundRunner ?? defaultAuthorRoundRunner;
+      const launched = runner({
+        repository: opts.repo,
+        issueNumber,
+        sourceRevision: expectedSourceRevision,
+        stage: expectedStage,
+        stageAttemptId: binding.stageAttemptId,
+        reviewDir,
+        prompt,
+        promptPath: paths.promptPath,
+        outputPath: paths.outputPath,
+      });
+      if (!launched.ok) {
+        const output = createIssueTerminalResult({
+          ok: false,
+          cause: 'author_round_launch_failed',
+          blocker: launched.blocker ?? 'Browser-GPT author round failed without a diagnostic',
+        });
+        if (opts.json) console.log(JSON.stringify(output));
+        else process.stderr.write((output.blocker ?? output.cause) + '\n');
+        return 1;
+      }
+      if (!existsSync(paths.outputPath)) {
+        const output = createIssueTerminalResult({
+          ok: false,
+          cause: 'author_round_output_missing',
+          blocker: `Browser-GPT author round did not publish ${paths.outputPath}`,
+        });
+        if (opts.json) console.log(JSON.stringify(output));
+        else process.stderr.write((output.blocker ?? output.cause) + '\n');
+        return 1;
+      }
+
+      const after = fetchIssueRevision(transport, opts.repo, issueNumber);
+      const afterRevision = issueSourceRevision(after.body);
+      if (repairClass === 'body-floor') {
+        const expectedNext = nextRevision(expectedSourceRevision);
+        const floorErrors = bodyFloorDiagnostics(after.body);
+        if (!expectedNext || afterRevision.toLowerCase() !== expectedNext.toLowerCase() || floorErrors.length > 0) {
+          const output = createIssueTerminalResult({
+            ok: false,
+            cause: 'author_round_body_floor_unresolved',
+            blocker: [
+              `expected exactly one revision advance ${expectedSourceRevision} -> ${expectedNext ?? '<invalid>'}; observed ${afterRevision || '<missing>'}`,
+              ...floorErrors,
+            ].join('; '),
+          });
+          if (opts.json) console.log(JSON.stringify(output));
+          else process.stderr.write((output.blocker ?? output.cause) + '\n');
+          return 1;
+        }
+      } else {
+        if (afterRevision.toLowerCase() !== expectedSourceRevision.toLowerCase()) {
+          const stale = createIssueStaleNextAction({
+            binding,
+            observed: {
+              repository: opts.repo,
+              issueNumber,
+              sourceRevision: afterRevision,
+              stage: expectedStage,
+              stageAttemptId: binding.stageAttemptId,
+            },
+            nextAction: null,
+          });
+          if (opts.json) console.log(JSON.stringify(stale));
+          else process.stderr.write('stale_next_action\n');
+          return 1;
+        }
+        const inspected = authorSchemaDiagnostics(reviewDir);
+        if (inspected.diagnostics.length > 0) {
+          const output = createIssueTerminalResult({
+            ok: false,
+            cause: 'author_round_schema_unresolved',
+            blocker: inspected.diagnostics
+              .map((item) => `${item.reason}:${item.field}: ${item.message}`)
+              .join('; '),
+          });
+          if (opts.json) console.log(JSON.stringify(output));
+          else process.stderr.write((output.blocker ?? output.cause) + '\n');
+          return 1;
+        }
+        const produced = produceAcceptanceArtifacts({
+          reviewDir,
+          tierIntakePath: join(reviewDir, 'tier-intake.json'),
+          stageEvidencePaths: [],
+          authorDispositionsPath: join(reviewDir, 'author-dispositions.json'),
+          outputDir: reviewDir,
+          phase: authorRoundPhase(expectedStage),
+          repositoryFullName: opts.repo,
+          artifactSourceTransport: transport,
+        });
+        if (!produced.ok) {
+          const lifecycleOwned = produced.errors.some(
+            (error) => classifyAuthorDispositionFailure(error) === 'lifecycle-injected',
+          );
+          const output = createIssueTerminalResult({
+            ok: false,
+            cause: lifecycleOwned
+              ? 'author_round_lifecycle_validation_failed'
+              : 'author_round_post_validation_failed',
+            blocker: produced.errors.join('; '),
+          });
+          if (opts.json) console.log(JSON.stringify(output));
+          else process.stderr.write((output.blocker ?? output.cause) + '\n');
+          return 1;
+        }
+      }
+
+      const output = createIssueTerminalResult({
+        ok: true,
+        cause: 'author_round_completed',
+      });
+      if (opts.json) console.log(JSON.stringify({
+        ...output,
+        authorRound: {
+          repairClass,
+          round: paths.round,
+          replyPath: paths.outputPath,
+          sourceRevision: repairClass === 'body-floor' ? afterRevision : expectedSourceRevision,
+          stage: expectedStage,
+          ...(binding.stageAttemptId ? { stageAttemptId: binding.stageAttemptId } : {}),
+        },
+      }));
+      return 0;
+    }
+
     if (opts.command === 'bind-published-comment') {
       const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
       const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
@@ -943,7 +1504,7 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
           return 1;
         }
       }
-      const stale = staleArtifactBinding(opts, reviewDir, issueNumber);
+      const stale = staleArtifactBinding(opts, reviewDir, issueNumber, transport);
       if (stale) {
         if (opts.json) console.log(JSON.stringify(stale));
         else process.stderr.write('stale_next_action\n');
@@ -1043,7 +1604,7 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
     if (opts.command === 'produce-artifacts' || opts.command === 'check-artifacts') {
       const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
       const issueNumber = artifactIssueNumber(opts, reviewDir);
-      const stale = staleArtifactBinding(opts, reviewDir, issueNumber);
+      const stale = staleArtifactBinding(opts, reviewDir, issueNumber, transport);
       if (stale) {
         if (opts.json) console.log(JSON.stringify(stale));
         else process.stderr.write('stale_next_action\n');
@@ -1063,19 +1624,32 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
         phase: opts.phase,
         operatorAdjudication: operatorAcceptanceAdjudication(opts),
         repositoryFullName: opts.repo,
+        artifactSourceTransport: transport,
       };
       const result = opts.command === 'produce-artifacts'
         ? produceAcceptanceArtifacts(artifactOptions)
         : inspectAcceptanceArtifacts(artifactOptions);
-      const binding = artifactBindingFromState(opts, reviewDir, issueNumber);
+      const binding = artifactBindingFromState(opts, reviewDir, issueNumber, transport);
       let nextAction = null;
       if (binding && !result.ok) {
         const errors = 'errors' in result ? result.errors : result.missing.map((item) => item.reason);
-        const external = errors.some((error) => error.includes('authority=author-owned')
-          || error.includes('operator')
+        const structuredAuthorDiagnostics = 'authorDiagnostics' in result
+          && Array.isArray(result.authorDiagnostics)
+          ? result.authorDiagnostics
+          : [];
+        const onlyAuthorActionable = structuredAuthorDiagnostics.length > 0
+          && structuredAuthorDiagnostics.every((item) => item.ownership === 'author-owned');
+        const lifecycleInjectedFailure = errors.some(
+          (error) => classifyAuthorDispositionFailure(error) === 'lifecycle-injected',
+        );
+        const terminalExternal = errors.some((error) => (
+          error.includes('operator')
           || error.includes('stage_slot_consumed')
-          || error.includes('stale_next_action'));
-        if (!external) {
+          || error.includes('stale_next_action')
+        ));
+        if (opts.command === 'produce-artifacts' && onlyAuthorActionable && !lifecycleInjectedFailure) {
+          nextAction = authorRoundAction(binding, reviewDir);
+        } else if (!lifecycleInjectedFailure && !terminalExternal) {
           nextAction = createIssueNextAction({
             kind: opts.command === 'check-artifacts' ? 'produce-acceptance-artifacts' : 'retry-acceptance-production',
             binding,
@@ -1099,7 +1673,6 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
       return result.ok ? 0 : 1;
     }
     const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
-    const transport = defaultGhTransport();
 
     if (opts.command === 'start-cycle') {
       const sourceRevision = parseRequiredNonEmptyString(opts.sourceRevision, '--source-revision');
@@ -1111,6 +1684,64 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
         else process.stderr.write('stale_next_action\n');
         return 1;
       }
+
+      let live;
+      try {
+        live = fetchIssueRevision(transport, opts.repo, issueNumber);
+      } catch (error) {
+        const output = createIssueTerminalResult({
+          ok: false,
+          cause: 'source-unavailable',
+          blocker: error instanceof Error ? error.message : String(error),
+        });
+        if (opts.json) console.log(JSON.stringify(output));
+        else process.stderr.write((output.blocker ?? output.cause) + '\n');
+        return 1;
+      }
+      const liveRevision = issueSourceRevision(live.body);
+      if (!liveRevision || liveRevision.toLowerCase() !== sourceRevision.toLowerCase()) {
+        const binding: CreateIssueActionBinding = {
+          repository: opts.repo,
+          issueNumber,
+          sourceRevision,
+          stage,
+        };
+        const staleLive = createIssueStaleNextAction({
+          binding,
+          observed: {
+            repository: opts.repo,
+            issueNumber,
+            ...(liveRevision ? { sourceRevision: liveRevision } : {}),
+            stage,
+          },
+          nextAction: null,
+        });
+        if (opts.json) console.log(JSON.stringify(staleLive));
+        else process.stderr.write('stale_next_action\n');
+        return 1;
+      }
+      const floorErrors = bodyFloorDiagnostics(live.body, tier);
+      if (floorErrors.length > 0) {
+        const binding: CreateIssueActionBinding = {
+          repository: opts.repo,
+          issueNumber,
+          sourceRevision,
+          stage,
+        };
+        const action = authorRoundAction(binding, canonicalAuthorRoundDirectory(issueNumber));
+        const output = validatedManagerSurfaceOutput(
+          { ok: false, bodyFloorDiagnostics: floorErrors },
+          'body_floor_rejected',
+          action,
+          floorErrors.join('; '),
+          undefined,
+          opts.blockedOn,
+        );
+        if (opts.json) console.log(JSON.stringify(output));
+        else process.stderr.write((output.blocker ?? output.cause ?? 'body_floor_rejected') + '\n');
+        return 1;
+      }
+
       const result = startReviewCycle(transport, {
         repo: opts.repo,
         issueNumber,
@@ -1194,7 +1825,7 @@ export function runStageFinalizeCli(argv: string[], artifactSourceTransport?: Gh
       return result.ok ? 0 : 1;
     }
 
-    const stale = staleRetryPendingBinding(opts, issueNumber);
+    const stale = staleRetryPendingBinding(opts, issueNumber, transport);
     if (stale) {
       if (opts.json) console.log(JSON.stringify(stale));
       else process.stderr.write('stale_next_action\n');

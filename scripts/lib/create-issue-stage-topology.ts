@@ -352,6 +352,17 @@ export function canonicalStagePlan(tier: ReviewTier, input: CanonicalStagePlanIn
   };
 }
 
+export function canonicalPredecessorStage(
+  tier: ReviewTier,
+  stage: ReviewStage,
+  input: CanonicalStagePlanInput = {},
+): ReviewStage | null {
+  const plan = canonicalStagePlan(tier, input);
+  const index = plan.stages.findIndex((entry) => entry.stage === stage);
+  if (index < 0) throw new Error(`stage ${stage} is not present in canonical ${tier} stage plan`);
+  return index === 0 ? null : plan.stages[index - 1]!.stage;
+}
+
 export function defaultRequiredSlots(
   tier: ReviewTier,
   stage: ReviewStage,

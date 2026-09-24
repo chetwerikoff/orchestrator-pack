@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
+import { checkContractEvidence } from '../contract-evidence-validator.mjs';
 import { checkSmokeTestPlan, resolveSmokeRequirement } from '../draft-discipline.mjs';
 import {
   deriveReviewEpisodeState,
@@ -222,12 +223,18 @@ export function executeFinalAcceptanceGuards(
     ? tierEvidence as TierTransitionEvidence
     : input.tierTransitionEvidence;
 
-  const tierResult = checkTierGateGuard(input.issueBody, {
+  const tierResult = checkTierGateGuard(currentIssueBody, {
     tier: input.tier,
     repoRoot: process.cwd(),
     transitionEvidence,
   });
   if (!tierResult.ok) errors.push(...tierResult.errors.map((item) => `tier-gate: ${item}`));
+  const contractEvidenceResult = checkContractEvidence(currentIssueBody, {
+    repoRoot: process.cwd(),
+  }) as { ok: boolean; errors: string[]; skipped?: boolean };
+  if (!contractEvidenceResult.ok && !contractEvidenceResult.skipped) {
+    errors.push(...contractEvidenceResult.errors.map((item) => `contract-evidence: ${item}`));
+  }
 
   const stageReceipts = input.stageReceiptValues
     ? [...input.stageReceiptValues]

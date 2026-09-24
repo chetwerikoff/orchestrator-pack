@@ -10,6 +10,14 @@ const standaloneSkill = readFileSync(
   new URL('../../.cursor/skills/discuss-with-gpt/SKILL.md', import.meta.url),
   'utf8',
 );
+const browserCarrier = readFileSync(
+  new URL('../../.cursor/rules/flow-manager-browser-turn-monitoring.mdc', import.meta.url),
+  'utf8',
+);
+const authorSchemaOwner = readFileSync(
+  new URL('../lib/create-issue-author-dispositions-schema.ts', import.meta.url),
+  'utf8',
+);
 const normalizedSkill = skill.replace(/\s+/g, ' ').trim();
 const normalizedAgents = agents.replace(/\s+/g, ' ').trim();
 const normalizedStandaloneSkill = standaloneSkill.replace(/\s+/g, ' ');
@@ -193,5 +201,19 @@ describe('standalone discuss-with-gpt terminal read-back contract', () => {
     expect(normalizedStandaloneSkill).toContain(
       '4. Validate PASS_ID/SHA and packet shape; record the durable state/artifact, then re-read the newest artifact before reporting any standalone terminal state.',
     );
+  });
+});
+
+
+describe('Issue #1997 author-disposition contract ownership', () => {
+  it('keeps one executable schema owner and prose surfaces as pointers only', () => {
+    expect(authorSchemaOwner).toContain("AUTHOR_DISPOSITIONS_SCHEMA = 'create-issue-author-dispositions/v1'");
+    expect(authorSchemaOwner).toContain('renderAuthorDispositionPromptFragment');
+    expect(authorSchemaOwner).toContain('AUTHOR_DISPOSITION_FIELD_OWNERSHIP');
+    expect(skill).toContain('scripts/lib/create-issue-author-dispositions-schema.ts');
+    expect(skill).toContain('renderAuthorDispositionPromptFragment()');
+    expect(browserCarrier).toContain('scripts/lib/create-issue-author-dispositions-schema.ts');
+    expect(skill).not.toContain('```create-issue-author-dispositions/v1');
+    expect(browserCarrier).not.toContain('```create-issue-author-dispositions/v1');
   });
 });
