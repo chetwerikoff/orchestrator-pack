@@ -1322,6 +1322,10 @@ export function runStageFinalizeCli(
   artifactSourceTransport?: GhTransport,
   authorRoundRunner?: AuthorRoundRunner,
 ): number {
+  if (argv[2] === '--help' || argv[2] === '-h') {
+    process.stdout.write(stageFinalizeUsage() + '\n');
+    return 0;
+  }
   return runParsedCli(argv, 'create-issue-stage-finalize', parseStageFinalizeArgs, (opts) => {
     if (opts.command === 'produce-author-dispositions') {
       const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
