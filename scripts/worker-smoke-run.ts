@@ -2373,6 +2373,15 @@ export async function runSmokeWait(options: CliOptions): Promise<number> {
         process.stderr.write('worker_smoke_wait_run_mismatch\n');
         return 1;
       }
+      if (
+        (lifecycle.spawnState === 'ambiguous_unbound' || lifecycle.spawnState === 'abandoned_unbound')
+        && Date.now() > lifecycle.createDeadlineMs
+        && !processIsAlive(lifecycle.supervisorPid)
+      ) {
+        const createDiagnostic = lifecycle.createDiagnostic ?? 'smoke_create_unbound_expired';
+        emit({ ok: false, runId, result: 'FAIL', reason: createDiagnostic, createDiagnostic }, options.json);
+        return 1;
+      }
       if (lifecycle.launcherTerminalizedAtMs !== undefined && lifecycle.finalEvidencePath) {
         const mode = lifecycle.mode === 'no_execution' ? 'no_execution' : 'runtime';
         const expectedTerminalState = mode === 'no_execution'
