@@ -200,7 +200,7 @@ describe('scheduler production smoke uses the existing lifecycle surface', () =>
     }
   });
 
-  it('defers adoption while a pre-change inline smoke is active until it reaches terminal state', async () => {
+  it('uses an in-branch fixture to defer adoption while a pre-change inline smoke is active until terminal', async () => {
     const f = makeFixture(); setSmokeEnv(f); completeReview(f); liveGh.body = smokeIssueBody(); liveGh.head = f.head;
     const assignment = await assignLocal(f, 'production-prefix');
     let sawBound = false;
@@ -230,6 +230,9 @@ describe('scheduler production smoke uses the existing lifecycle surface', () =>
     let tickSettled = false;
     const tick = runSchedulerTick(boundary(f, { ...original, runAttempt }), schedulerEnv(f.root)).finally(() => { tickSettled = true; });
     await inlineStarted;
+    expect(runAttempt.mock.calls[0]?.[0]).toMatchObject({
+      issueNumber: TASK_ISSUE, prNumber: TASK_PR, headSha: f.head, repoRoot: f.workspace, cwd: f.workspace,
+    });
     expect(runAttempt).toHaveBeenCalledTimes(1);
     expect(inlineSmokeState).toBe('active');
     expect(tickSettled).toBe(false);

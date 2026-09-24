@@ -828,6 +828,11 @@ After landing the production implementation:
 6. verify one stale/remapped runtime identity fences without a stale-handle effect and one Orca error envelope preserves its exact non-empty `error.code` while any provider mutation recovery remains attempt-bound and safely projected by the assistant;
 7. perform one controlled selected-profile adoption smoke for every executor family actually admitted on the installed machine; an OpenCode external gate is a valid fail-closed result, not permission to invent a provider/TUI form;
 8. before restarting/adopting the supervisor revision, verify no pre-adoption in-line post-review smoke is still active; if one is active, let that old run reach its existing terminal lifecycle and only then restart the supervisor, then verify a supervisor-owned `scheduler.ts tick` under the current activation epoch;
+   when no live pre-adoption inline smoke is available in this checkout, verify the same deferral gate with the in-branch deterministic fixture:
+   ```text
+   npm test -- --maxWorkers=1 scripts/pr2-foundation/scheduler-post-review-smoke-production.test.ts
+   ```
+   The fixture holds a controlled pre-change inline smoke active, proves the scheduler tick remains pending with its bound lifecycle intact, then releases it and verifies terminal cleanup. Do not use a scheduler process from another checkout as evidence or as the fixture.
 9. verify later bounded children retain the same trusted S1 lineage and advancing tick sequence;
 10. verify one exact REST-visible author/reviewer artifact settles its manager turn even when the helper child is silent/gone, and one published sibling makes a silent concurrent slot possible-or-actual/no-resend without claiming that its payload was proven delivered;
 11. verify the latest `fleet-reconciliation-handoff/v1` is readable before treating silence as healthy.
