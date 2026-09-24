@@ -12,6 +12,7 @@
     "scripts/lib/command-runtime-bootstrap.d.mts",
     "scripts/lib/command-runtime-bootstrap.mjs",
     "scripts/lib/create-issue-browser-gpt-preflight.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
     "scripts/lib/create-issue-stage-record-cli.ts",
     "scripts/lib/manager-cli-contract.ts",
     "scripts/manager-review-terminal-bundle.ts",
@@ -42,6 +43,7 @@
     "scripts/lib/command-runtime-bootstrap.d.mts",
     "scripts/lib/command-runtime-bootstrap.mjs",
     "scripts/lib/create-issue-browser-gpt-preflight.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
     "scripts/lib/create-issue-stage-record-cli.ts",
     "scripts/lib/manager-cli-contract.ts",
     "scripts/manager-review-terminal-bundle.ts",
@@ -51,5 +53,5 @@
     "scripts/vitest-ci-lanes.config.json",
     "tests/external-output-references/browser-turn-target-crashed-2026-09-21.txt"
   ],
-  "source_revision": "95aafdba280f4c9dfd13fa09a1bee7baad64e0c8"
+  "source_revision": "aa99f4266bd5626ab00d78b71fba3925cc908df8"
 }
