@@ -188,6 +188,97 @@ describe('Issue #2039 T1 author-turn producer convergence', () => {
     expect(started.ok, started.diagnostics.map((item) => item.message).join('\n')).toBe(true);
     expect(started.stageAttemptId).toBeTruthy();
   });
+
+  it('admits a bound non-empty governed T1 author record through first-stage start-cycle', () => {
+    const root = tempRoot();
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = root;
+    const issueNumber = 2039;
+    const repo = 'chetwerikoff/orchestrator-pack';
+    const reviewDir = join(root, '.review', String(issueNumber));
+    mkdirSync(reviewDir, { recursive: true });
+    const { body, title } = freshR01AuthorTurnReplay.issue;
+    const finding = {
+      id: 't1-author-finding',
+      type: 'quality',
+      occurrences: ['sha256:' + 'a'.repeat(64) + ':t1-author-finding:1'],
+      defectDisposition: 'rejected-as-false',
+      rejectReason: 'Not part of the task specification.',
+      remedyDisposition: 'accepted',
+    };
+    const m4 = [{ mechanism: 'existing-authority', disposition: 'keep' }];
+    const governedReply = [
+      'create-issue-author-dispositions/v1',
+      JSON.stringify({
+        schema: 'create-issue-author-dispositions/v1',
+        sourceRevision: 'r01',
+        predecessorStage: null,
+        findings: [finding],
+        m4: { inventory: m4 },
+      }),
+    ].join('\n');
+    writeFileSync(join(reviewDir, 'tier-intake.json'), JSON.stringify({
+      schema: 'tier-intake/v1',
+      producer: 'fixture',
+      taskIdentity: 'issue:' + issueNumber,
+      kind: 'fresh',
+      priorTier: 'T1',
+      firstRevision: 'r01',
+    }, null, 2) + '\n');
+    writeFileSync(join(reviewDir, 'round-01-author-reply.md'), governedReply);
+    const state = createMockGhState({ issue: { title, body, labels: [] } });
+    const transport = createMockTransport(state);
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => logs.push(String(line)));
+    try {
+      const code = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'produce-author-dispositions',
+        '--repo', repo,
+        '--issue-number', String(issueNumber),
+        '--review-dir', reviewDir,
+        '--source-revision', 'r01',
+        '--json',
+      ], transport);
+      expect(code, logs.join('\n')).toBe(0);
+      expect(JSON.parse(logs.at(-1) ?? '{}')).toMatchObject({ ok: true, retryable: false });
+    } finally {
+      spy.mockRestore();
+    }
+    const author = JSON.parse(readFileSync(join(reviewDir, 'author-dispositions.json'), 'utf8')) as Record<string, unknown>;
+    expect(author).toMatchObject({
+      producer: 'governed-author-output/v1',
+      reviewEpisodeId: 'issue:2039@r01',
+      sourceRevision: 'r01',
+      predecessorStage: null,
+      draft: body,
+      findings: [finding],
+      m4: { inventory: m4 },
+    });
+    expect(() => readFileSync(join(reviewDir, 'finding-disposition-ledger.json'), 'utf8')).toThrow();
+    const bundle = buildManagerReviewTerminalBundle({
+      repositoryFullName: repo,
+      issueNumber,
+      sourceRevision: 'r01',
+      reviewDir,
+      transport,
+      liveIssueBody: body,
+    });
+    expect(bundle.predecessorStage).toBeNull();
+    expect(bundle.rejectPartition).toEqual([finding]);
+    expect(bundle.authorM4).toEqual(m4);
+    const started = startReviewCycle(transport, {
+      repo,
+      issueNumber,
+      sourceRevision: 'r01',
+      stage: 'architectural',
+      tier: 'T1',
+      publicActor: 'cursor-flow-manager',
+      workdir: root,
+    });
+    expect(started.ok, started.diagnostics.map((item) => item.message).join('\n')).toBe(true);
+    expect(started.stageAttemptId).toBeTruthy();
+    expect(() => readFileSync(join(reviewDir, 'finding-disposition-ledger.json'), 'utf8')).toThrow();
+    expect(state.comments.length).toBeGreaterThan(0);
+  });
 });
 
 describe('create-Issue nextAction contract', () => {
