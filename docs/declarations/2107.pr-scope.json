@@ -8,11 +8,11 @@
     "scripts/pr2-foundation/supervised-task-launch-assistant.ts"
   ],
   "denylist": [
-    "credentials/**",
+    "credentials/",
     "executor-profiles.env",
-    "packages/core/**",
-    "secrets/**",
-    "vendor/**"
+    "packages/core/",
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
     "scripts/orca-runtime/task-adapter.test.ts",
