@@ -1118,4 +1118,49 @@ describe('--public-actor argv validation (Issue #1980)', () => {
   it('AC5: stageFinalizeUsage lists the accepted public actors', () => {
     expect(stageFinalizeUsage()).toContain('opencode-flow-manager|cursor-flow-manager|codex-flow-manager|other-flow-manager');
   });
+
+  it.each(['--help', '-h'])('prints usage to stdout for %s before parsing', (flag) => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const runGh = vi.fn((_argv: string[]) => ({ exitCode: 0, stdout: '', stderr: '' }));
+    try {
+      const exitCode = runStageFinalizeCli([
+        'node',
+        'scripts/create-issue-stage-finalize.ts',
+        flag,
+      ], { runGh });
+      expect(exitCode).toBe(0);
+      const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join('');
+      expect(output).toContain('Usage:');
+      expect(output).toContain('create-issue-stage-finalize.ts start-cycle');
+      expect(stderr).not.toHaveBeenCalled();
+      expect(runGh).not.toHaveBeenCalled();
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
+  });
+
+  it('keeps an unknown option on stderr without invoking GitHub', () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const runGh = vi.fn((_argv: string[]) => ({ exitCode: 0, stdout: '', stderr: '' }));
+    try {
+      const exitCode = runStageFinalizeCli([
+        'node',
+        'scripts/create-issue-stage-finalize.ts',
+        'start-cycle',
+        '--jsoon',
+      ], { runGh });
+      expect(exitCode).toBe(2);
+      expect(stdout).not.toHaveBeenCalled();
+      const error = stderr.mock.calls.map(([chunk]) => String(chunk)).join('');
+      expect(error).toContain('--jsoon');
+      expect(error).toContain('Usage:');
+      expect(runGh).not.toHaveBeenCalled();
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
+  });
 });
