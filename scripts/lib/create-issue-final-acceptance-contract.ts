@@ -24,6 +24,14 @@ export interface PublishedAuthorState {
   byteLength: number;
 }
 
+export interface OperatorAmendmentEvidence {
+  kind: 'operator_amendment';
+  sourceRevision: string;
+  bodySha256: string;
+  markerLine?: string;
+  editorLogin?: string;
+}
+
 export interface FinalAcceptanceGuardInput {
   issueBody: string;
   /** Immutable body artifact supplied to the terminal reviewer. */
@@ -47,6 +55,12 @@ export interface FinalAcceptanceGuardInput {
   tierIntakePath?: string;
   externalPassReceiptPath?: string;
   publishedAuthorState?: PublishedAuthorState;
+  /** Optional evidence supplied only when the caller can prove the last body editor. */
+  issueBodyEditorLogin?: string;
+  /** Repository-owner login used to validate optional editor evidence. */
+  repositoryOwnerLogin?: string;
+  /** Governed author login, when independently known; owner fallback is fail-closed without it. */
+  governedAuthorLogin?: string;
   readText?: (path: string) => string;
   readJson?: (path: string) => unknown;
 }
@@ -55,6 +69,7 @@ export interface FinalAcceptanceGuardResult {
   ok: boolean;
   contractVersion: string;
   errors: string[];
+  acceptanceEvidence?: OperatorAmendmentEvidence;
 }
 
 function defaultReadText(path: string): string {
@@ -103,6 +118,73 @@ function tryReadJson(path: string, readJson: (path: string) => unknown): unknown
 
 function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function operatorAmendmentMarkerLines(body: string): string[] {
+  let fencedCode: '`' | '~' | null = null;
+  const markers: string[] = [];
+  for (const line of body.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (fencedCode !== null) {
+      if (trimmed.startsWith(fencedCode.repeat(3))) fencedCode = null;
+      continue;
+    }
+    if (trimmed.startsWith('```')) {
+      fencedCode = '`';
+      continue;
+    }
+    if (trimmed.startsWith('~~~')) {
+      fencedCode = '~';
+      continue;
+    }
+    if (trimmed.includes('operator-amendment:')) markers.push(trimmed);
+  }
+  return markers;
+}
+
+export function resolveOperatorAmendmentEvidence(
+  currentIssueBody: string,
+  issueRevision: string,
+  options: Pick<
+    FinalAcceptanceGuardInput,
+    'issueBodyEditorLogin' | 'repositoryOwnerLogin' | 'governedAuthorLogin'
+  > = {},
+): OperatorAmendmentEvidence | undefined {
+  const sourceRevision = SOURCE_REVISION_MARKER_RE.exec(currentIssueBody)?.[1];
+  if (!sourceRevision || sourceRevision.toLowerCase() !== issueRevision.trim().toLowerCase()) return undefined;
+
+  const bodySha256 = createHash('sha256').update(Buffer.from(currentIssueBody, 'utf8')).digest('hex');
+  const markerLines = operatorAmendmentMarkerLines(currentIssueBody);
+  if (markerLines.length === 1) {
+    const marker = /^<!--\s*operator-amendment:\s*(r[0-9]+)\s*;\s*(\S(?:.*\S)?)\s*-->$/i.exec(markerLines[0]!);
+    if (marker && marker[1]!.toLowerCase() === sourceRevision.toLowerCase()) {
+      return {
+        kind: 'operator_amendment',
+        sourceRevision,
+        bodySha256,
+        markerLine: markerLines[0]!,
+      };
+    }
+  }
+
+  const editorLogin = options.issueBodyEditorLogin?.trim();
+  const ownerLogin = options.repositoryOwnerLogin?.trim();
+  const governedAuthorLogin = options.governedAuthorLogin?.trim();
+  if (
+    editorLogin
+    && ownerLogin
+    && governedAuthorLogin
+    && editorLogin.toLowerCase() === ownerLogin.toLowerCase()
+    && editorLogin.toLowerCase() !== governedAuthorLogin.toLowerCase()
+  ) {
+    return {
+      kind: 'operator_amendment',
+      sourceRevision,
+      bodySha256,
+      editorLogin,
+    };
+  }
+  return undefined;
 }
 
 export function validateExactTerminalBodyBinding(
@@ -234,6 +316,16 @@ export function executeFinalAcceptanceGuards(
   }) as { ok: boolean; errors: string[]; skipped?: boolean };
   if (!contractEvidenceResult.ok && !contractEvidenceResult.skipped) {
     errors.push(...contractEvidenceResult.errors.map((item) => `contract-evidence: ${item}`));
+  }
+
+  const acceptanceEvidence = resolveOperatorAmendmentEvidence(currentIssueBody, input.issueRevision, input);
+  if (acceptanceEvidence) {
+    return {
+      ok: errors.length === 0,
+      contractVersion: FINAL_ACCEPTANCE_CONTRACT_VERSION,
+      errors: [...new Set(errors)],
+      acceptanceEvidence,
+    };
   }
 
   const stageReceipts = input.stageReceiptValues
