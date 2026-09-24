@@ -596,5 +596,5 @@ GitHub-first/final-revalidation gates above.
 
 If real implementation requires a new persistent cross-process ownership or
 recovery guarantee, new generic Browser-GPT resend authority, or another
-stronger subsystem guarantee, stop before widening this workflow and return to
-the live Issue/tier authority.
+stronger subsystem guarantee, do not expand this workflow; return to the live
+Issue/tier authority.
