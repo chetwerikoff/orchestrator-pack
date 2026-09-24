@@ -31,6 +31,7 @@ import {
 import { runSupervisedWorkerStart, type SupervisedWorkerStartResult, type WorkerStartMode } from './supervised-worker-start.ts';
 
 export const LAUNCH_ASSISTANT_SCHEMA = 'supervised-task-launch-assistant/v1' as const;
+export const LAUNCH_STARTUP_OBSERVATION_WINDOW_MS = 30_000;
 export const LAUNCH_WORK_CLASSES = ['manager', 't1', 't2', 't3'] as const;
 export type LaunchWorkClass = (typeof LAUNCH_WORK_CLASSES)[number];
 export type LaunchStage = 'command_preflight' | 'repository_preflight' | 'executor_profile'
@@ -466,13 +467,13 @@ export async function runSupervisedTaskLaunchAssistant(
       nextAction: { kind: 'remediate_terminal', note: 'reconcile the exact prepared worktree path before creating a terminal' },
     }, resources, startedAtMs, timings, deps.now);
     const terminalStartedAt = deps.now();
+    let terminalCause = '';
+    let liveness: ReturnType<RuntimeAdapter['liveness']> | null = null;
     const spawn = deps.adapter.spawnWorker({
       title: `opk-${input.workClass}-${taskId}`,
       command: profile.launchCommand,
       workspace: prepared.value.path,
     });
-    let terminalCause = '';
-    let liveness: ReturnType<RuntimeAdapter['liveness']> | null = null;
     if (spawn.status !== 'ok') terminalCause = `terminal_spawn_${spawn.status}`;
     else if (!text(spawn.value.identity.runtime) || !text(spawn.value.identity.id) || !text(spawn.value.identity.generation)) terminalCause = 'terminal_identity_invalid';
     else {
@@ -480,20 +481,20 @@ export async function runSupervisedTaskLaunchAssistant(
       if (spawn.value.provenance !== 'internal') terminalCause = 'terminal_provenance_external';
       else if (spawn.value.workspacePath !== prepared.value.path) terminalCause = 'terminal_workspace_mismatch';
       else if (spawn.value.identity.runtime !== deps.adapter.id) terminalCause = 'terminal_runtime_mismatch';
-      else {
-        liveness = deps.adapter.liveness({ worker: spawn.value.identity, observationWindowMs: 1_000 });
-        if (!sameIdentity(liveness.worker, spawn.value.identity)) terminalCause = 'terminal_generation_mismatch';
-        else if (liveness.status !== 'idle') terminalCause = `terminal_liveness_${liveness.status}`;
-      }
+      else terminal = spawn.value;
+    }
+    if (!terminalCause && terminal) {
+      liveness = deps.adapter.liveness({ worker: terminal.identity, observationWindowMs: LAUNCH_STARTUP_OBSERVATION_WINDOW_MS });
+      if (!sameIdentity(liveness.worker, terminal.identity)) terminalCause = 'terminal_generation_mismatch';
+      else if (liveness.status !== 'idle') terminalCause = `terminal_liveness_${liveness.status}`;
     }
     const terminalFinishedAt = deps.now();
     timings.push({ stage: 'terminal_prepare', startedAtMs: terminalStartedAt, finishedAtMs: terminalFinishedAt,
       elapsedMs: Math.max(0, terminalFinishedAt - terminalStartedAt), outcome: terminalCause ? 'continued' : 'passed' });
-    if (terminalCause || spawn.status !== 'ok') return continued(input, 'terminal_prepare', {
-      cause: terminalCause, actor: 'orchestrator', evidence: { liveness: liveness?.status ?? 'not_observed' },
-      nextAction: { kind: 'remediate_terminal', note: 'remediate the owned fresh terminal; never reuse a foreign/pre-existing or non-idle target' },
+    if (terminalCause || !terminal) return continued(input, 'terminal_prepare', {
+      cause: terminalCause || 'terminal_unavailable', actor: 'orchestrator', evidence: { liveness: liveness?.status ?? 'not_observed' },
+      nextAction: { kind: 'remediate_terminal', note: 'reuse only the exact owned terminal identity after a bounded startup refusal; never reuse a foreign, replaced, or mismatched target' },
     }, resources, startedAtMs, timings, deps.now);
-    terminal = spawn.value;
   }
 
   const final = await checkpoint('dispatch_admission_final', timings, deps.now, () => deps.observeDispatch(taskId));
