@@ -200,12 +200,46 @@ describe('scheduler production smoke uses the existing lifecycle surface', () =>
     }
   });
 
-  it('records the real reservation/spawn/bind prefix through runSchedulerTick', async () => {
+  it('defers adoption while a pre-change inline smoke is active until it reaches terminal state', async () => {
     const f = makeFixture(); setSmokeEnv(f); completeReview(f); liveGh.body = smokeIssueBody(); liveGh.head = f.head;
     const assignment = await assignLocal(f, 'production-prefix');
     let sawBound = false;
     const rt = runtime(assignment.bindingKey, f.workspace, { dispatchFails: true, dispatch: () => { sawBound = smokeRuns(f.workspace).some((run) => readSmokeLifecycleRegistry(run)?.spawnState === 'bound'); } });
-    const result = await runSchedulerTick(boundary(f, smokeDeps(f, rt.adapter)), schedulerEnv(f.root));
+    const original = smokeDeps(f, rt.adapter);
+    let releaseInlineSmoke!: () => void;
+    let inlineSmokeStarted!: () => void;
+    let inlineSmokeState: 'not-started' | 'active' | 'terminal' = 'not-started';
+    const inlineSmokeTerminal = new Promise<void>((resolve) => { releaseInlineSmoke = resolve; });
+    const inlineStarted = new Promise<void>((resolve) => { inlineSmokeStarted = resolve; });
+    const runAttempt = vi.fn(async (options: Parameters<NonNullable<PostReviewSmokeDependencies['runAttempt']>>[0], dependencies: Parameters<NonNullable<PostReviewSmokeDependencies['runAttempt']>>[1]) => {
+      const result = await runSmokeAttempt({ ...options, dryRun: true }, {
+        ...dependencies,
+        startFence: async <T>(action: () => T | Promise<T>) => {
+          const value = await action();
+          if (typeof value === 'object' && value !== null && 'kind' in value && value.kind === 'started') {
+            inlineSmokeState = 'active';
+            inlineSmokeStarted();
+            await inlineSmokeTerminal;
+          }
+          return { ok: true as const, value };
+        },
+      });
+      inlineSmokeState = 'terminal';
+      return result;
+    });
+    let tickSettled = false;
+    const tick = runSchedulerTick(boundary(f, { ...original, runAttempt }), schedulerEnv(f.root)).finally(() => { tickSettled = true; });
+    await inlineStarted;
+    expect(runAttempt).toHaveBeenCalledTimes(1);
+    expect(inlineSmokeState).toBe('active');
+    expect(tickSettled).toBe(false);
+    expect(smokeRuns(f.workspace).some((run) => readSmokeLifecycleRegistry(run)?.spawnState === 'bound')).toBe(true);
+    expect(rt.smokeSpawns()).toBe(1);
+    releaseInlineSmoke();
+    const result = await tick;
+    expect(inlineSmokeState).toBe('terminal');
+    expect(tickSettled).toBe(true);
+    expect(smokeRuns(f.workspace).every((run) => readSmokeLifecycleRegistry(run)?.spawnState === 'clean')).toBe(true);
     expect(result).toMatchObject({ attempted: 1, started: 0, skipped: 1 });
     expect(rt.smokeSpawns()).toBe(1);
     expect(sawBound).toBe(true);

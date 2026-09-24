@@ -1231,8 +1231,8 @@ function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scen
   const runIdToken = Buffer.from(binding.runId, 'utf8').toString('base64');
   const writer = [
     'node -e',
-    "'const fs=require(\"node:fs\");const [p64,r64,ordinal,phase,outcome]=process.argv.slice(1);const event={runId:Buffer.from(r64,\"base64\").toString(\"utf8\"),scenarioOrdinal:Number(ordinal),phase};if(outcome)event.outcome=outcome;fs.appendFileSync(Buffer.from(p64,\"base64\").toString(\"utf8\"),JSON.stringify(event)+\"\\n\",\"utf8\")'",
-  ].join(' ');
+    "'const fs=require(\"node:fs\");const [p64,r64,ordinalText,phase,outcome]=process.argv.slice(1);const file=Buffer.from(p64,\"base64\").toString(\"utf8\");const runId=Buffer.from(r64,\"base64\").toString(\"utf8\");const ordinal=Number(ordinalText);const previous=fs.existsSync(file)?fs.readFileSync(file,\"utf8\").split(/\\r?\\n/u).filter(Boolean).map((line)=>{try{return JSON.parse(line)}catch{return null}}):[];const skipped=previous.find((entry)=>entry?.runId===runId&&entry.phase===\"terminal\"&&entry.outcome===\"skipped\");if(skipped&&ordinal>Number(skipped.scenarioOrdinal)){process.stderr.write(\"progress_protocol_failure:progress_after_skipped_terminal\\n\");process.exit(1)}const event={runId,scenarioOrdinal:ordinal,phase};if(outcome)event.outcome=outcome;fs.appendFileSync(file,JSON.stringify(event)+\"\\n\",\"utf8\")'",
+    ].join(' ');
   const progressEventProtocol = [
     'Canonical progress serialization (mandatory):',
     ...(scenarioCount === 0
@@ -1243,6 +1243,7 @@ function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scen
         '- For later started events, reuse the command with the declared ordinal and phase started, omitting outcome.',
         '- For terminal events, reuse the command with the same ordinal, phase terminal, and one outcome: pass|fail|blocked|skipped.',
         '- Never append a terminal event before its matching started event.',
+        '- After a skipped terminal, the progress writer rejects any later ordinal; treat that refusal as terminal and execute no later scenario.',
       ]),
   ];
   return [
@@ -1262,7 +1263,7 @@ function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scen
     '- For PR scope accounting, compare HEAD to the verified PR base merge-base (git diff "$(git merge-base HEAD origin/main)" HEAD), never to a local branch named main.',
     '- Use declared order only and check cancel-request.json before each new scenario.',
     '- For each scenario N, append and durably flush N started, execute only N, then append and durably flush N terminal before doing any work or writing progress for N+1.',
-    '- Never run scenarios in parallel, start a later ordinal early, or skip an ordinal, and after fail/blocked/skipped terminal stop without starting another scenario.',
+    '- Never run scenarios in parallel, start a later ordinal early, or skip an ordinal. After a fail/blocked/skipped terminal, stop without starting another scenario or writing any later-scenario progress; a refused later-start command is terminal, and progress after skipped is a protocol failure.',
   ].join('\n');
 }
 
@@ -1350,6 +1351,30 @@ function completionFailureReason(cause: string, observation: SmokeCompletionObse
     `plan_complete=${progress.planComplete}`, observation.wrongRunBinding ? 'wrong_run_binding=true' : ''].filter(Boolean).join(';');
 }
 
+function skippedTerminalProtocolFailure(binding: SmokeRunBinding, scenarioCount: number): string | undefined {
+  const progressPath = smokeProgressPath(binding.artifactDir);
+  if (!existsSync(progressPath)) return undefined;
+  let skippedOrdinal = 0;
+  for (const [index, line] of readFileSync(progressPath, 'utf8').split(/\r?\n/u).entries()) {
+    if (!line.trim()) continue;
+    let event: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (!record(parsed)) continue;
+      event = parsed;
+    } catch {
+      continue;
+    }
+    if (event.runId !== binding.runId || !Number.isInteger(event.scenarioOrdinal)) continue;
+    const ordinal = Number(event.scenarioOrdinal);
+    if (skippedOrdinal > 0 && ordinal > skippedOrdinal) {
+      return `progress_protocol_failure:progress_after_skipped_terminal:line_${index + 1}:scenario_${skippedOrdinal}`;
+    }
+    if (ordinal <= scenarioCount && event.phase === 'terminal' && event.outcome === 'skipped') skippedOrdinal = ordinal;
+  }
+  return undefined;
+}
+
 export interface RuntimeSmokeCompletionResult {
   ok: boolean;
   partial?: Partial<SmokeReport> | null;
@@ -1384,6 +1409,14 @@ function completionWithFailures(
   return failures.length > 0 ? { ...result, observationFailures: [...failures] } : result;
 }
 
+function acceptSmokeCompletion(input: {
+  binding: SmokeRunBinding; scenarioCount: number; progress: SmokeProgress; partial: Partial<SmokeReport>; failures: readonly string[];
+}): RuntimeSmokeCompletionResult {
+  const protocolFailure = skippedTerminalProtocolFailure(input.binding, input.scenarioCount);
+  if (protocolFailure) return completionWithFailures({ ok: false, reason: `${protocolFailure};plan_complete=${input.progress.planComplete}`, progress: input.progress }, input.failures);
+  return completionWithFailures({ ok: true, partial: input.partial, progress: input.progress }, input.failures);
+}
+
 function finalFailureDetail(base: string, failures: readonly string[]): string {
   const last = failures.at(-1);
   return last ? `${base};last_observation_failure=${last}` : base;
@@ -1406,13 +1439,15 @@ function waitForRuntimeSmokeCompletionDeterministic(
     const aborted = input.abortReason(); if (aborted) return completionWithFailures({ ok: false, reason: `operator_cancelled:${aborted}` }, observationFailures);
     const progress = inspectSmokeProgress({ artifactDir: input.binding.artifactDir, runId: input.binding.runId, scenarioCount: input.scenarioCount });
     lastProgress = progress;
+    const protocolFailure = skippedTerminalProtocolFailure(input.binding, input.scenarioCount);
+    if (protocolFailure) return completionWithFailures({ ok: false, reason: `${protocolFailure};plan_complete=${progress.planComplete}`, progress }, observationFailures);
     const progressIncreased = progress.acceptedCount > acceptedProgress;
     if (progressIncreased) { acceptedProgress = progress.acceptedCount; lastProgressAt = now(); }
     const observed = observeSmokeCompletionEvidence(input.binding, completionState);
     completionState = observed.state; lastObservation = observed.observation;
     const publicationStateChanged = previousPublicationState !== undefined && previousPublicationState !== observed.observation.publicationState;
     previousPublicationState = observed.observation.publicationState;
-    if (observed.observation.publicationState === 'publish_complete_single' && observed.observation.partial) return completionWithFailures({ ok: true, partial: observed.observation.partial, progress }, observationFailures);
+    if (observed.observation.publicationState === 'publish_complete_single' && observed.observation.partial) return acceptSmokeCompletion({ binding: input.binding, scenarioCount: input.scenarioCount, progress, partial: observed.observation.partial, failures: observationFailures });
     if (observed.observation.publicationState === 'publish_complete_duplicate') return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_duplicate', observed.observation, progress), progress }, observationFailures);
     if (observed.observation.publicationState === 'publish_complete_unfenced') return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_unfenced', observed.observation, progress), progress }, observationFailures);
     if (observed.observation.wrongRunBinding && (observed.observation.publicationState === 'none' || observed.observation.publicationState === 'partial')) {
@@ -1438,7 +1473,7 @@ function waitForRuntimeSmokeCompletionDeterministic(
     const liveness = input.adapter.liveness({ worker: input.worker, observationWindowMs: SMOKE_LIFECYCLE_POLL_MS }, { cwd: input.cwd });
     if (read.value.terminalState === 'exited' || liveness.status === 'gone') {
       const finalObservation = observeSmokeCompletionEvidence(input.binding, completionState); completionState = finalObservation.state;
-      if (finalObservation.observation.publicationState === 'publish_complete_single' && finalObservation.observation.partial) return completionWithFailures({ ok: true, partial: finalObservation.observation.partial, progress }, observationFailures);
+      if (finalObservation.observation.publicationState === 'publish_complete_single' && finalObservation.observation.partial) return acceptSmokeCompletion({ binding: input.binding, scenarioCount: input.scenarioCount, progress, partial: finalObservation.observation.partial, failures: observationFailures });
       return completionWithFailures({ ok: false, reason: completionFailureReason('agent_exited_without_report', finalObservation.observation, progress), progress }, observationFailures);
     }
     if (now() - lastProgressAt >= progressStallMs) return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_timeout', observed.observation, progress, finalFailureDetail('reason=progress_stall', observationFailures)), progress }, observationFailures);
@@ -1450,7 +1485,7 @@ function waitForRuntimeSmokeCompletionDeterministic(
   }
   const progress = lastProgress ?? inspectSmokeProgress({ artifactDir: input.binding.artifactDir, runId: input.binding.runId, scenarioCount: input.scenarioCount });
   const finalObservation = observeSmokeCompletionEvidence(input.binding, completionState);
-  if (finalObservation.observation.publicationState === 'publish_complete_single' && finalObservation.observation.partial) return completionWithFailures({ ok: true, partial: finalObservation.observation.partial, progress }, observationFailures);
+  if (finalObservation.observation.publicationState === 'publish_complete_single' && finalObservation.observation.partial) return acceptSmokeCompletion({ binding: input.binding, scenarioCount: input.scenarioCount, progress, partial: finalObservation.observation.partial, failures: observationFailures });
   return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_timeout', finalObservation.observation ?? lastObservation!, progress, finalFailureDetail('reason=absolute_safety_ceiling', observationFailures)), progress }, observationFailures);
 }
 
@@ -1470,13 +1505,15 @@ async function waitForRuntimeSmokeCompletionInterruptSafe(
     const aborted = input.abortReason(); if (aborted) return completionWithFailures({ ok: false, reason: `operator_cancelled:${aborted}` }, observationFailures);
     const progress = inspectSmokeProgress({ artifactDir: input.binding.artifactDir, runId: input.binding.runId, scenarioCount: input.scenarioCount });
     lastProgress = progress;
+    const protocolFailure = skippedTerminalProtocolFailure(input.binding, input.scenarioCount);
+    if (protocolFailure) return completionWithFailures({ ok: false, reason: `${protocolFailure};plan_complete=${progress.planComplete}`, progress }, observationFailures);
     const progressIncreased = progress.acceptedCount > acceptedProgress;
     if (progressIncreased) { acceptedProgress = progress.acceptedCount; lastProgressAt = now(); }
     const observed = observeSmokeCompletionEvidence(input.binding, completionState);
     completionState = observed.state; lastObservation = observed.observation;
     const publicationStateChanged = previousPublicationState !== undefined && previousPublicationState !== observed.observation.publicationState;
     previousPublicationState = observed.observation.publicationState;
-    if (observed.observation.publicationState === 'publish_complete_single' && observed.observation.partial) return completionWithFailures({ ok: true, partial: observed.observation.partial, progress }, observationFailures);
+    if (observed.observation.publicationState === 'publish_complete_single' && observed.observation.partial) return acceptSmokeCompletion({ binding: input.binding, scenarioCount: input.scenarioCount, progress, partial: observed.observation.partial, failures: observationFailures });
     if (observed.observation.publicationState === 'publish_complete_duplicate') return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_duplicate', observed.observation, progress), progress }, observationFailures);
     if (observed.observation.publicationState === 'publish_complete_unfenced') return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_unfenced', observed.observation, progress), progress }, observationFailures);
     if (observed.observation.wrongRunBinding && (observed.observation.publicationState === 'none' || observed.observation.publicationState === 'partial')) {
@@ -1506,7 +1543,7 @@ async function waitForRuntimeSmokeCompletionInterruptSafe(
     if (postLivenessAbort) return completionWithFailures({ ok: false, reason: `operator_cancelled:${postLivenessAbort}`, progress }, observationFailures);
     if (read.value.terminalState === 'exited' || liveness.status === 'gone') {
       const finalObservation = observeSmokeCompletionEvidence(input.binding, completionState); completionState = finalObservation.state;
-      if (finalObservation.observation.publicationState === 'publish_complete_single' && finalObservation.observation.partial) return completionWithFailures({ ok: true, partial: finalObservation.observation.partial, progress }, observationFailures);
+      if (finalObservation.observation.publicationState === 'publish_complete_single' && finalObservation.observation.partial) return acceptSmokeCompletion({ binding: input.binding, scenarioCount: input.scenarioCount, progress, partial: finalObservation.observation.partial, failures: observationFailures });
       return completionWithFailures({ ok: false, reason: completionFailureReason('agent_exited_without_report', finalObservation.observation, progress), progress }, observationFailures);
     }
     if (now() - lastProgressAt >= progressStallMs) return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_timeout', observed.observation, progress, finalFailureDetail('reason=progress_stall', observationFailures)), progress }, observationFailures);
@@ -1520,7 +1557,7 @@ async function waitForRuntimeSmokeCompletionInterruptSafe(
   }
   const progress = lastProgress ?? inspectSmokeProgress({ artifactDir: input.binding.artifactDir, runId: input.binding.runId, scenarioCount: input.scenarioCount });
   const finalObservation = observeSmokeCompletionEvidence(input.binding, completionState);
-  if (finalObservation.observation.publicationState === 'publish_complete_single' && finalObservation.observation.partial) return completionWithFailures({ ok: true, partial: finalObservation.observation.partial, progress }, observationFailures);
+  if (finalObservation.observation.publicationState === 'publish_complete_single' && finalObservation.observation.partial) return acceptSmokeCompletion({ binding: input.binding, scenarioCount: input.scenarioCount, progress, partial: finalObservation.observation.partial, failures: observationFailures });
   return completionWithFailures({ ok: false, reason: completionFailureReason('agent_report_timeout', finalObservation.observation ?? lastObservation!, progress, finalFailureDetail('reason=absolute_safety_ceiling', observationFailures)), progress }, observationFailures);
 }
 

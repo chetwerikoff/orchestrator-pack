@@ -173,7 +173,8 @@ describe('Issue #1359 real worker-smoke entrypoint', () => {
         '',
         '```smoke-test-plan',
         'scenarios:',
-        '  - action: execute real entrypoint | expected: sealed scenario report',
+        '  - action: execute first scenario | expected: sealed first scenario report',
+        '  - action: execute second scenario | expected: sealed second scenario report',
         '```',
         '',
       ].join('\n'), 'utf8');
@@ -244,18 +245,28 @@ if (args[0] === 'worktree' && args[1] === 'current') {
     } else {
       mkdirSync(artifactDir, { recursive: true });
       writeFileSync(path.join(artifactDir, 'delivery.sealed.json'), JSON.stringify({ runId }), 'utf8');
-      writeFileSync(progressPath, [
-        JSON.stringify({ runId, scenarioOrdinal: 1, phase: 'started' }),
-        JSON.stringify({ runId, scenarioOrdinal: 1, phase: 'terminal', outcome: 'pass' }),
-        '',
-      ].join('\\n'), 'utf8');
+      const progressEvents = process.env.FAKE_PROGRESS_AFTER_SKIPPED === '1'
+        ? [
+          { runId, scenarioOrdinal: 1, phase: 'started' },
+          { runId, scenarioOrdinal: 1, phase: 'terminal', outcome: 'skipped' },
+          { runId, scenarioOrdinal: 2, phase: 'started' },
+          { runId, scenarioOrdinal: 2, phase: 'terminal', outcome: 'pass' },
+        ]
+        : [
+          { runId, scenarioOrdinal: 1, phase: 'started' },
+          { runId, scenarioOrdinal: 1, phase: 'terminal', outcome: 'pass' },
+          { runId, scenarioOrdinal: 2, phase: 'started' },
+          { runId, scenarioOrdinal: 2, phase: 'terminal', outcome: 'pass' },
+        ];
+      writeFileSync(progressPath, [...progressEvents.map((event) => JSON.stringify(event)), ''].join('\\n'), 'utf8');
       const fence = String.fromCharCode(96).repeat(3);
       const body = [
         fence + 'worker-smoke-report',
         'result: PASS',
         'tracked-files-unmodified: true',
         'scenarios:',
-        '  - action: execute real entrypoint | expected: sealed scenario report | observed: one prompt actuation and child evidence sealed | outcome: pass',
+        '  - action: execute first scenario | expected: sealed first scenario report | observed: child evidence sealed | outcome: pass',
+        '  - action: execute second scenario | expected: sealed second scenario report | observed: child evidence sealed | outcome: pass',
         fence,
       ].join('\\n');
       const digest = createHash('sha256').update(body, 'utf8').digest('hex');
@@ -298,6 +309,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'cursor',
         PACK_EXECUTOR_SMOKE_ROUTINE_MODEL: 'fixture-routine-model',
         PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT: 'fixture-routine-effort',
+        FAKE_PROGRESS_AFTER_SKIPPED: '0',
       };
       const runArgs = [
         'run',
@@ -331,7 +343,10 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         report: {
           result: 'PASS',
           terminalCleanup: 'closed_owned_handle',
-          scenarios: [{ action: 'execute real entrypoint', outcome: 'pass' }],
+          scenarios: [
+            { action: 'execute first scenario', outcome: 'pass' },
+            { action: 'execute second scenario', outcome: 'pass' },
+          ],
         },
         lifecycleCleanup: {
           clean: true,
@@ -349,7 +364,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       const progressLines = readFileSync(progressPath!, 'utf8')
         .split(/\r?\n/u)
         .filter((line) => line.trim());
-      expect(progressLines).toHaveLength(2);
+      expect(progressLines).toHaveLength(4);
       const firstProgress = JSON.parse(progressLines[0]!) as Record<string, unknown>;
       expect(firstProgress).toEqual({ runId, scenarioOrdinal: 1, phase: 'started' });
       expect(Object.keys(firstProgress)).toEqual(['runId', 'scenarioOrdinal', 'phase']);
@@ -368,7 +383,7 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         '- For each scenario N, append and durably flush N started, execute only N, then append and durably flush N terminal before doing any work or writing progress for N+1.',
       );
       expect(prompt).toContain(
-        '- Never run scenarios in parallel, start a later ordinal early, or skip an ordinal, and after fail/blocked/skipped terminal stop without starting another scenario.',
+        '- Never run scenarios in parallel, start a later ordinal early, or skip an ordinal. After a fail/blocked/skipped terminal, stop without starting another scenario or writing any later-scenario progress; a refused later-start command is terminal, and progress after skipped is a protocol failure.',
       );
       expect(prompt).toContain('git diff "$(git merge-base HEAD origin/main)" HEAD');
       expect(prompt).not.toContain('git diff main HEAD');
@@ -376,6 +391,26 @@ if (args[0] === 'worktree' && args[1] === 'current') {
         `The first non-empty progress line must parse exactly as: ${JSON.stringify(firstProgress)}`,
       );
 
+
+      writeFileSync(progressPath!, [
+        JSON.stringify({ runId, scenarioOrdinal: 1, phase: 'started' }),
+        JSON.stringify({ runId, scenarioOrdinal: 1, phase: 'terminal', outcome: 'skipped' }),
+        '',
+      ].join('\n'), 'utf8');
+      const laterStartCommand = firstStartCommand!.replace(/ 1 started$/u, ' 2 started');
+      const rejectedLaterStart = run('/bin/sh', ['-c', laterStartCommand], { cwd: root, env: runtimeEnv });
+      expect(rejectedLaterStart.exitCode, rejectedLaterStart.stderr).toBe(1);
+      expect(rejectedLaterStart.stderr).toContain('progress_protocol_failure:progress_after_skipped_terminal');
+      expect(readFileSync(progressPath!, 'utf8').split(/\r?\n/u).filter(Boolean)).toHaveLength(2);
+
+      rmSync(promptPath, { force: true });
+      rmSync(join(root, 'agent-started'), { force: true });
+      runtimeEnv.FAKE_PROGRESS_AFTER_SKIPPED = '1';
+      const skippedThenLater = run(wrapper, runArgs, { cwd: root, env: runtimeEnv });
+      expect(skippedThenLater.exitCode, `${skippedThenLater.stdout}\\n${skippedThenLater.stderr}`).toBe(1);
+      const skippedEnvelope = JSON.parse(String(skippedThenLater.stdout).trim()) as { ok?: boolean; report?: { result?: string; scenarios?: Array<{ observed?: string }> } };
+      expect(skippedEnvelope.ok).toBe(false);
+      expect(skippedEnvelope.report?.scenarios?.[0]?.observed).toContain('progress_protocol_failure:progress_after_skipped_terminal');
       const calls = readFileSync(callsPath, 'utf8')
         .trim()
         .split(/\r?\n/u)
@@ -398,14 +433,14 @@ if (args[0] === 'worktree' && args[1] === 'current') {
       expect(commandIndex).toBeGreaterThanOrEqual(0);
       expect(createArgs[commandIndex! + 1]).toBe("agent --model 'fixture-routine-model-fixture-routine-effort'");
       expect(showIndexes.length).toBeGreaterThanOrEqual(3);
-      expect(sendIndexes).toHaveLength(2);
+      expect(sendIndexes).toHaveLength(4);
       expect(calls[sendIndexes[0]!] ?? []).not.toContain('--text');
       expect(calls[sendIndexes[0]!] ?? []).toContain('--enter');
       expect(calls[sendIndexes[1]!] ?? []).toContain('--text');
       expect(calls[sendIndexes[1]!] ?? []).toContain('--enter');
       expect(readIndexes.some((index) => index > createIndex && index < sendIndexes[0]!)).toBe(true);
       expect(readIndexes.some((index) => index > sendIndexes[0]! && index < sendIndexes[1]!)).toBe(true);
-      expect(operations.filter((value) => value === 'terminal close')).toHaveLength(1);
+      expect(operations.filter((value) => value === 'terminal close')).toHaveLength(2);
       expect(operations.filter((value) => value === 'terminal list')).toHaveLength(0);
       expect(createHash('sha256').update(readFileSync(wrapper)).digest('hex')).toMatch(/^[0-9a-f]{64}$/u);
 
