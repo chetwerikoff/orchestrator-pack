@@ -366,7 +366,10 @@ export function buildManagerReviewTerminalBundle(options: BuildManagerReviewTerm
     throw new Error('terminal_bundle_noncanonical_review_dir');
   }
   const { tier } = resolveTierAndPredecessor(intake, predecessorStage);
-  if (tier === 'T1' && predecessorStage === null && authorM4.length > 0) {
+  if (tier === 'T1'
+    && predecessorStage === null
+    && authorM4.length > 0
+    && author.producer !== 'governed-author-output/v1') {
     throw new Error('terminal_bundle_zero_state_m4_invalid');
   }
 
@@ -380,7 +383,10 @@ export function buildManagerReviewTerminalBundle(options: BuildManagerReviewTerm
   };
 
   if (predecessorStage === null) {
-    if (findings.length > 0) throw new Error('terminal_bundle_zero_state_findings_invalid');
+    if (findings.length > 0
+      && !(tier === 'T1' && author.producer === 'governed-author-output/v1')) {
+      throw new Error('terminal_bundle_zero_state_findings_invalid');
+    }
   } else {
     const manifest = readJson(join(reviewDir, 'acceptance-artifacts.json'), 'terminal_bundle_acceptance_manifest_invalid');
     const files = manifestFiles(manifest);
