@@ -68,6 +68,13 @@ first Browser-GPT side effect it reads both:
 - [`docs/chatgpt-task-execution-runbook.md`](../../../docs/chatgpt-task-execution-runbook.md);
 - [`docs/browser-gpt-turn-runbook.md`](../../../docs/browser-gpt-turn-runbook.md).
 
+At the start of **every** manager turn, re-read the live Issue before choosing
+the turn prompt or next action. If the title/body changed since the manager's
+last authoritative read, treat those live bytes as delta scope for the same
+Issue-bound PR/branch and carry that delta through the existing execution loop.
+Do not ask the operator to re-accept their edit, open a second implementation,
+or restart/re-arm create-Issue review stages merely because the Issue changed.
+
 The execution runbook owns first-session initialization, same-conversation
 continuations, the execution-only 27-minute live-chat checkpoint, candidate-state
 verification, the reusable manager-owned PR-review convergence phase, and
