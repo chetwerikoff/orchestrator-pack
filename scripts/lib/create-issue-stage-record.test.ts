@@ -32,7 +32,8 @@ import {
   retryPendingEvents,
   startReviewCycle,
 } from './create-issue-stage-record-core.ts';
-import { parseStageFinalizeArgs } from './create-issue-stage-record-cli.ts';
+import { parseStageFinalizeArgs, runFinalAcceptanceCli } from './create-issue-stage-record-cli.ts';
+import { createIssueEscalationThreadId } from './create-issue-manager-boundary.ts';
 import { bindPublishedCommentToSlot, STAGE_EVIDENCE_SCHEMA } from './create-issue-stage-record-artifacts.ts';
 import { parseConsumableStageReceipt } from './create-issue-stage-record-receipt.ts';
 import { runStageFinalizeCli } from './create-issue-stage-record-cli.ts';
@@ -679,7 +680,7 @@ describe('Issue #1978 invalid public-actor recovery', () => {
       '--tier', 'T2',
       '--public-actor', 'flow-manager',
     ]);
-    expect(exitCode).toBe(2);
+    expect(exitCode).toBe(5);
     expect(stderr.mock.calls.flat().join('')).toContain('flow-manager');
 
     let ghCalls = 0;
@@ -1723,6 +1724,267 @@ describe('Issue #1171 exact terminal body binding', () => {
   });
 });
 
+describe('final acceptance CLI manager boundary', () => {
+  const canonicalBody = '<!-- source-revision: r01 -->\ncanonical Issue body\n';
+  const finalAcceptanceArgs = (reviewDir: string, extra: string[] = []): string[] => [
+    'node', 'scripts/create-issue-final-acceptance.ts',
+    '--repo', repo,
+    '--issue-number', String(issueNumber),
+    '--review-dir', reviewDir,
+    '--json',
+    ...extra,
+  ];
+  const transportFor = (body: string): GhTransport => ({
+    runGh: () => ({
+      exitCode: 0,
+      stdout: JSON.stringify({ title: 'fixture', body, labels: [] }),
+      stderr: '',
+    }),
+  });
+  function writeFixture(root: string): { reviewDir: string; receiptPath: string; cycleId: string } {
+    const reviewDir = join(root, 'review');
+    mkdirSync(reviewDir, { recursive: true });
+    const cycleId = 'cycle-terminal';
+    const receiptPath = join(reviewDir, 'stage-completeness-receipt-terminal.json');
+    writeFileSync(join(reviewDir, 'issue-r01-body.json'), JSON.stringify({
+      schema: 'create-issue-live-snapshot/v1',
+      issueNumber,
+      sourceRevision: 'r01',
+      title: 'fixture',
+      body: canonicalBody,
+    }) + '\n');
+    writeFileSync(receiptPath, JSON.stringify({
+      stage: 'architectural',
+      sourceRevision: 'r01',
+      cycleId,
+      stageAttemptId: 'terminal-attempt',
+    }) + '\n');
+    return { reviewDir, receiptPath, cycleId };
+  }
+  function runMismatch(
+    extra: string[],
+    fixture: { reviewDir: string },
+  ): { code: number; output: Record<string, unknown> } {
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      logs.push(String(line));
+    });
+    try {
+      const code = runFinalAcceptanceCli(
+        finalAcceptanceArgs(fixture.reviewDir, extra),
+        transportFor(canonicalBody),
+      );
+      return { code, output: JSON.parse(logs.at(-1) ?? '{}') as Record<string, unknown> };
+    } finally {
+      logSpy.mockRestore();
+    }
+  }
+  it.each([
+    ['caller Issue body', (root: string) => ['--issue-body', join(root, 'caller-body.md')]],
+    ['caller stage receipt inventory', (root: string) => ['--stage-receipt', join(root, 'caller-receipt.json')]],
+    ['caller cycle id', () => ['--cycle-id', 'caller-cycle']],
+  ] as const)('returns reconcile-stage-read-only for a %s mismatch', (_label, extra) => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-final-acceptance-boundary-'));
+    try {
+      const fixture = writeFixture(root);
+      if (_label === 'caller Issue body') writeFileSync(join(root, 'caller-body.md'), 'stale caller body\n');
+      const result = runMismatch(extra(root), fixture);
+      expect(result.code).toBe(3);
+      expect(result.output).toMatchObject({
+        ok: false,
+        cause: 'final_acceptance_caller_bookkeeping_mismatch',
+        nextAction: {
+          kind: 'reconcile-stage-read-only',
+          binding: { stage: 'architectural', stageAttemptId: 'terminal-attempt' },
+        },
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it('keeps observed missing GitHub authority as external_pause', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-final-acceptance-authority-'));
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      logs.push(String(line));
+    });
+    try {
+      const code = runFinalAcceptanceCli(
+        finalAcceptanceArgs(root),
+        transportFor('Issue body without the canonical marker'),
+      );
+      expect(code).toBe(4);
+      expect(JSON.parse(logs.at(-1) ?? '{}')).toMatchObject({
+        ok: false,
+        cause: 'external:content_authority_conflict',
+        nextAction: null,
+      });
+    } finally {
+      logSpy.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it('replays Issue #2078 scenario-2 pauses into one escalation and resumes acceptance artifacts', () => {
+    const scenarioRepo = 'chetwerikoff/orchestrator-pack';
+    const scenarioIssueNumber = 2078;
+    const canonicalBody = '<!-- source-revision: r01 -->\n';
+    const root = makeTempDir();
+    const home = join(root, 'home');
+    const reviewDir = join(root, 'review');
+    const stateRoot = join(root, 'state');
+    const xdgStateHome = join(root, 'xdg-state');
+    const issueReadPath = `repos/${scenarioRepo}/issues/${scenarioIssueNumber}`;
+    mkdirSync(home, { recursive: true });
+    mkdirSync(reviewDir, { recursive: true });
+    writeFileSync(join(reviewDir, 'issue-r01-body.json'), JSON.stringify({
+      schema: 'create-issue-live-snapshot/v1',
+      issueNumber: scenarioIssueNumber,
+      sourceRevision: 'r01',
+      title: 'fixture',
+      body: canonicalBody,
+    }) + '\n');
+    const previousHome = process.env.HOME;
+    const previousStateRoot = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+    const previousXdgStateHome = process.env.XDG_STATE_HOME;
+    process.env.HOME = home;
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = stateRoot;
+    process.env.XDG_STATE_HOME = xdgStateHome;
+    const issueReads: string[][] = [];
+    let invocation = 0;
+    const transport: GhTransport = {
+      runGh(argv: string[]) {
+        if (argv[2] !== issueReadPath || !argv.includes('--jq')) {
+          throw new Error(`unexpected transport call: ${argv.join(' ')}`);
+        }
+        issueReads.push([...argv]);
+        invocation += 1;
+        if (invocation <= 3) {
+          return { exitCode: 1, stdout: '', stderr: 'HTTP 503 Service Unavailable' };
+        }
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({ title: 'fixture', body: canonicalBody, labels: [] }),
+          stderr: '',
+        };
+      },
+    };
+    const escalationInput = {
+      issueNumber: scenarioIssueNumber,
+      stage: 'architectural' as const,
+      cause: 'external:github_unavailable',
+      resumeWhen: { operator: true } as const,
+    };
+    const escalationThreadIds: string[] = [];
+    const recordedEscalationIds = new Set<string>();
+    const recordedPauses = new Map<string, Record<string, unknown>>();
+    const escalationArgv: string[][] = [];
+    const recordEscalation = (result: Record<string, unknown>) => {
+      const threadId = createIssueEscalationThreadId(escalationInput);
+      escalationThreadIds.push(threadId);
+      if (recordedEscalationIds.has(threadId)) return;
+      recordedEscalationIds.add(threadId);
+      recordedPauses.set(threadId, result);
+      escalationArgv.push(['orca', 'orchestration', 'send', '--type', 'escalation', '--thread-id', threadId]);
+    };
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      logs.push(String(line));
+    });
+    const finalAcceptanceArgs2078 = [
+      'node', 'scripts/create-issue-final-acceptance.ts',
+      '--repo', scenarioRepo,
+      '--issue-number', String(scenarioIssueNumber),
+      '--review-dir', reviewDir,
+      '--json',
+    ];
+    try {
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        const readsBefore = issueReads.length;
+        const logsBefore = logs.length;
+        const code = runFinalAcceptanceCli(finalAcceptanceArgs2078, transport);
+        expect(code).toBe(4);
+        expect(issueReads).toHaveLength(readsBefore + 1);
+        expect(issueReads.at(-1)).toEqual([
+          'gh', 'api', issueReadPath, '--jq', '{title, body, labels: [.labels[].name]}',
+        ]);
+        expect(logs).toHaveLength(logsBefore + 1);
+        const output = JSON.parse(logs.at(-1) ?? '{}') as Record<string, unknown>;
+        expect(output).toMatchObject({
+          ok: false,
+          cause: 'external:github_unavailable',
+          pause: {
+            evidence: expect.stringContaining('HTTP 503'),
+            remedy: expect.any(String),
+            resume_when: { operator: true },
+          },
+          nextAction: null,
+        });
+        recordEscalation(output);
+      }
+      const expectedThreadId = createIssueEscalationThreadId(escalationInput);
+      expect(escalationThreadIds).toEqual([expectedThreadId, expectedThreadId, expectedThreadId]);
+      expect(escalationArgv).toEqual([[
+        'orca', 'orchestration', 'send', '--type', 'escalation', '--thread-id', expectedThreadId,
+      ]]);
+      expect(recordedEscalationIds).toHaveLength(1);
+      expect(recordedPauses).toHaveLength(1);
+      expect([...recordedPauses.values()][0]).toMatchObject({
+        ok: false,
+        cause: 'external:github_unavailable',
+        pause: { evidence: expect.stringContaining('HTTP 503') },
+        nextAction: null,
+      });
+      const readsBeforeRecovery = issueReads.length;
+      const logsBeforeRecovery = logs.length;
+      const recoveryCode = runFinalAcceptanceCli(finalAcceptanceArgs2078, transport);
+      expect(recoveryCode).toBe(3);
+      expect(issueReads).toHaveLength(readsBeforeRecovery + 1);
+      expect(issueReads.at(-1)).toEqual([
+        'gh', 'api', issueReadPath, '--jq', '{title, body, labels: [.labels[].name]}',
+      ]);
+      expect(logs).toHaveLength(logsBeforeRecovery + 1);
+      const recovery = JSON.parse(logs.at(-1) ?? '{}') as Record<string, unknown>;
+      expect(recovery).toMatchObject({
+        ok: false,
+        cause: 'acceptance-input-missing',
+        nextAction: {
+          kind: 'produce-acceptance-artifacts',
+          binding: { issueNumber: scenarioIssueNumber, sourceRevision: 'r01', stage: 'architectural' },
+        },
+      });
+      expect(recovery.nextAction).not.toBeNull();
+    } finally {
+      logSpy.mockRestore();
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previousStateRoot;
+      if (previousXdgStateHome === undefined) delete process.env.XDG_STATE_HOME;
+      else process.env.XDG_STATE_HOME = previousXdgStateHome;
+    }
+  });
+  it('returns the exact contract_defect exit code for malformed manager-shaped CLI input', () => {
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+      logs.push(String(line));
+    });
+    try {
+      const code = runFinalAcceptanceCli([
+        'node', 'scripts/create-issue-final-acceptance.ts',
+        '--blocked-on-json', 'not-json',
+      ]);
+      expect(code).toBe(5);
+      expect(JSON.parse(logs.at(-1) ?? '{}')).toMatchObject({
+        ok: false,
+        cause: 'producer_contract_defect',
+        nextAction: null,
+      });
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+});
+
 describe('create-issue-stage-record receipt binding', () => {
   it('requires pre-launch cycle binding witness and rejects rebinding or revision mismatch', () => {
     const valid = parseConsumableStageReceipt({
@@ -2162,41 +2424,67 @@ describe('poisoned canonical deterministic attempt stays terminal (Issue #1999 /
     return { reviewDir, evidencePath, bytes };
   }
 
-  it('keeps the #926-style deterministic attempt terminal when reconciling its exact evidence', () => {
+  it('start-cycle and read-only reconcile-stage return readonly recovery and keep the canonical stageAttemptId', () => {
     const stateRoot = makeCliTempDir();
+    const previous = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = stateRoot;
     const prepared = writeCanonicalAttempt(stateRoot);
     const logs: string[] = [];
     const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
       logs.push(String(line));
     });
     try {
-      const code = runStageFinalizeCli([
-        'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
+      const startCode = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'start-cycle',
         '--repo', 'chetwerikoff/orchestrator-pack',
         '--issue-number', String(issueNumber),
-        '--review-dir', prepared.reviewDir,
-        '--stage-evidence', prepared.evidencePath,
+        '--source-revision', 'r04',
+        '--stage', 'competitive',
+        '--tier', 'T2',
+        '--public-actor', 'cursor-flow-manager',
         '--json',
       ]);
-      expect(code).toBe(1);
-      const output = JSON.parse(logs.at(-1) ?? '') as {
+      expect(startCode).toBe(3);
+      const started = JSON.parse(logs.at(-1) ?? '') as {
         nextAction: unknown;
         stageAttemptId: string;
         reason: { class: string; code: string };
       };
-      expect(output.nextAction).toBeNull();
-      expect(output.stageAttemptId).toBe('1977-poisoned-canonical-attempt');
-      expect(output.reason).toMatchObject({ class: 'deterministic-input', code: 'input_invalid' });
+      expect(started.nextAction).toMatchObject({ kind: 'reconcile-stage-read-only' });
+      expect(started.stageAttemptId).toBe('1977-poisoned-canonical-attempt');
+      expect(started.reason).toMatchObject({ class: 'deterministic-input', code: 'input_invalid' });
+      const reviewDir = makeCliTempDir();
+      const evidencePath = join(reviewDir, 'attempt-001.json');
+      writeFileSync(evidencePath, prepared.bytes);
+      const reconcileCode = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
+        '--repo', 'chetwerikoff/orchestrator-pack',
+        '--issue-number', String(issueNumber),
+        '--review-dir', reviewDir,
+        '--stage-evidence', evidencePath,
+        '--json',
+      ]);
+      expect(reconcileCode).toBe(3);
+      const reconciled = JSON.parse(logs.at(-1) ?? '') as {
+        nextAction: unknown;
+        stageAttemptId: string;
+      };
+      expect(reconciled.nextAction).toMatchObject({ kind: 'reconcile-stage-read-only' });
+      expect(reconciled.stageAttemptId).toBe('1977-poisoned-canonical-attempt');
+      expect(readFileSync(evidencePath, 'utf8')).toBe(prepared.bytes);
       expect(readFileSync(prepared.evidencePath, 'utf8')).toBe(prepared.bytes);
     } finally {
       spy.mockRestore();
+      if (previous === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previous;
     }
   });
 
-  it('removes the coarse Issue/revision/stage terminal scan before lifecycle admission', () => {
+  it('routes deterministic-input start-cycle projection through the manager boundary', () => {
     const cliSource = readFileSync(join(process.cwd(), 'scripts', 'lib', 'create-issue-stage-record-cli.ts'), 'utf8');
     const coreSource = readFileSync(join(process.cwd(), 'scripts', 'lib', 'create-issue-stage-record-core.ts'), 'utf8');
-    expect(cliSource).not.toContain('readCanonicalZeroSendTerminal');
+    expect(cliSource).toContain("if (deterministicTerminal?.policy.class === 'deterministic-input')");
+    expect(cliSource).toContain("return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, projected);");
     expect(coreSource).not.toContain('readCanonicalZeroSendTerminal');
     expect(coreSource.indexOf('admitStageLaunch(admissionInput)')).toBeGreaterThan(
       coreSource.indexOf('export function startReviewCycle('),
@@ -2346,7 +2634,7 @@ describe('Issue #2032 reconcile-stage next action for noncanonical publications'
 
   it('keeps a complete census with no bound publication on the read-only reconcile continuation', () => {
     const result = reconcile(oneSlot, []);
-    expect(result.code).toBe(1);
+    expect(result.code).toBe(3);
     expect(result.output.ok).toBe(false);
     expect(result.output.nextAction?.kind).toBe('reconcile-stage-read-only');
     expect(result.output.nextAction?.argv).toContain('reconcile-stage');
@@ -2356,14 +2644,14 @@ describe('Issue #2032 reconcile-stage next action for noncanonical publications'
 
   it('keeps a temporary census failure on the read-only reconcile continuation', () => {
     const result = reconcile(oneSlot, [], 'census-down');
-    expect(result.code).toBe(1);
+    expect(result.code).toBe(3);
     expect(result.output.temporary).toBe('source-unavailable');
     expect(result.output.nextAction?.kind).toBe('reconcile-stage-read-only');
   });
 
   it('keeps an unresolved principal on the read-only reconcile continuation', () => {
     const result = reconcile(oneSlot, [], 'identity-down');
-    expect(result.code).toBe(1);
+    expect(result.code).toBe(3);
     expect(result.output.temporary).toBe('identity-unresolved');
     expect(result.output.nextAction?.kind).toBe('reconcile-stage-read-only');
   });
@@ -2371,33 +2659,33 @@ describe('Issue #2032 reconcile-stage next action for noncanonical publications'
   it.each([
     [5772579436, slot01Invocation],
     [5772564705, slot03Invocation],
-  ])('returns nextAction null for permanently noncanonical publication %s', (commentId, invocationId) => {
+  ])('returns an external authority pause for permanently noncanonical publication %s', (commentId, invocationId) => {
     const result = reconcile([{ slot: '01', invocationId }], [
       ghComment(commentId, findingsBody(invocationId, 'findings')),
     ]);
-    const errors = result.output.errors?.join('\n') ?? '';
-    expect(result.code).toBe(1);
+    const blocker = result.output.blocker ?? '';
+    expect(result.code).toBe(4);
     expect(result.output.nextAction).toBeNull();
-    expect(result.output.cause).toBe('reconciliation_failed');
-    expect(errors).toContain('permanently_noncanonical_publication');
-    expect(errors).not.toContain('zero_principal_owned_match');
-    expect(errors).not.toContain('authoritative GitHub artifact absent');
-    expect(result.output.blocker).not.toContain('reconcile-stage');
+    expect(result.output.cause).toBe('external:content_authority_conflict');
+    expect(blocker).toContain('permanently_noncanonical_publication');
+    expect(blocker).not.toContain('zero_principal_owned_match');
+    expect(blocker).not.toContain('authoritative GitHub artifact absent');
+    expect(blocker).not.toContain('reconcile-stage');
   });
 
-  it('returns nextAction null for lowercase VERDICT even without a raw finding id', () => {
+  it('returns an external authority pause for lowercase VERDICT even without a raw finding id', () => {
     const body = findingsBody(slot01Invocation, 'findings')
       .split(/\r?\n/)
       .filter((line) => !/^id:\s*/i.test(line.trim()))
       .join('\n');
     const result = reconcile(oneSlot, [ghComment(5772579436, body)]);
-    const errors = result.output.errors?.join('\n') ?? '';
+    const blocker = result.output.blocker ?? '';
     expect(body).not.toMatch(/^id:\s*/im);
-    expect(result.code).toBe(1);
+    expect(result.code).toBe(4);
     expect(result.output.nextAction).toBeNull();
-    expect(result.output.cause).toBe('reconciliation_failed');
-    expect(errors).toContain('permanently_noncanonical_publication');
-    expect(errors).not.toContain('zero_principal_owned_match');
+    expect(result.output.cause).toBe('external:content_authority_conflict');
+    expect(blocker).toContain('permanently_noncanonical_publication');
+    expect(blocker).not.toContain('zero_principal_owned_match');
   });
 
   it('does not return the same reconcile argv for the Issue #2024 mixed slot shape', () => {
@@ -2411,11 +2699,12 @@ describe('Issue #2032 reconcile-stage next action for noncanonical publications'
       ghComment(5772585168, findingsBody(slot02Invocation, 'FINDINGS')),
       ghComment(5772564705, findingsBody(slot03Invocation, 'findings')),
     ]);
-    const errors = result.output.errors?.join('\n') ?? '';
-    expect(result.code).toBe(1);
+    const blocker = result.output.blocker ?? '';
+    expect(result.code).toBe(4);
     expect(result.output.nextAction).toBeNull();
-    expect(errors).toContain(`invocationId=${slot01Invocation}`);
-    expect(errors).not.toContain(`invocationId=${slot02Invocation}`);
-    expect(errors).not.toContain('zero_principal_owned_match');
+    expect(result.output.cause).toBe('external:content_authority_conflict');
+    expect(blocker).toContain(`invocationId=${slot01Invocation}`);
+    expect(blocker).not.toContain(`invocationId=${slot02Invocation}`);
+    expect(blocker).not.toContain('zero_principal_owned_match');
   });
 });

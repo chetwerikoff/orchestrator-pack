@@ -595,13 +595,13 @@ The provider does not expose a reliable snapshot of “Deliveries present when t
 
 Role obligations are mandatory:
 
-- **Manager:** drain before starting or claiming the next authoring/review stage and immediately before manager `worker_done`.
+- **Manager:** drain before starting or claiming the next authoring/review stage, immediately before manager `worker_done`, and immediately before ending a turn without `worker_done`.
 - **Worker:** drain immediately before worker `worker_done` and before emitting a blocker/escalation that hands control upward.
 - **Coordinator / flow-manager / orchestrator acting on the bound Run:** drain before issuing a reply, ruling, escalation decision, or dispatch, and again before reporting its own turn complete.
 
 Every message returned by the drain is surfaced and processed in the same role turn before the guarded action. An unreachable/unsupported/ambiguous drain is reported as degraded/blocking evidence and is never silently skipped.
 
-Supervised agents do not emit `type: heartbeat` / `subject: alive` control chatter merely to assert liveness. A supervised agent with no actionable report sends nothing. A supervised agent emits `worker_done` exactly once, and only after its role's existing whole-task completion contract is satisfied. `blocked_on` is not `worker_done` and never completes the parent task. S1 remains the sole liveness observer; existing observer heartbeat/process-liveness artifacts remain observation evidence, not agent assertions.
+Supervised agents do not emit `type: heartbeat` / `subject: alive` control chatter merely to assert liveness. A supervised agent with no actionable report sends nothing. A supervised manager emits `worker_done --outcome succeeded` exactly once, and only after acceptance satisfies its existing whole-task completion contract. `recoverable`, `external_pause`, and `contract_defect` never complete or settle the parent task. A manager sends `worker_done --outcome failed` only after a direct coordinator/operator cancellation message, never because a repository-owned check refused or paused work. S1 remains the sole liveness observer; existing observer heartbeat/process-liveness artifacts remain observation evidence, not agent assertions.
 
 ## Published GitHub artifact completion and batch attribution
 
@@ -703,43 +703,67 @@ authoritative Task/role/assignment facts
 
 ## Structured external-dependency parking
 
-The coordinator/task dispatch may supply `--blocked-on-json <json>` only when it
-authoritatively asserts that the named external dependency predicate is the active
-unsatisfied blocker for that exact manager invocation. The supplied object is a
-task invariant, not manager-discovered state. It is exactly one of
+The create-Issue manager boundary emits exactly one JSON result on stdout and
+uses four closed outcomes: `completed` (exit 0), `recoverable` (exit 3 with
+an executable non-null `nextAction.argv`), `external_pause` (exit 4 with
+typed `pause.remedy`, `pause.resume_when`, and `pause.evidence`), or the
+boundary-only `contract_defect` (exit 5). Diagnostics remain on stderr.
+
+The coordinator/task dispatch may supply `--blocked-on-json <json>` only when
+it authoritatively asserts that the named external dependency predicate is the
+active unsatisfied blocker for that exact manager invocation. The supplied
+object is a task invariant, not manager-discovered state. It is exactly one of
 `{ issue: <positive integer>, condition: "issue_closed", evidence: <non-empty> }`
 or `{ pr: <positive integer>, condition: "pr_merged", evidence: <non-empty> }`.
-Manager code validates and propagates that object only on a terminal
-`nextAction: null` result; it never infers dependency identity, predicate,
-evidence, or causality from `cause`, `blocker`, free-form prose, the managed
-Issue number, reverse search, guessed PR linkage, or `nextAction: null` itself.
-For any invocation whose null action has another cause, the dispatch omits the
-flag and the result omits `blocked_on`.
+Manager code validates this input and projects it to
+`external_pause(external:waiting_on_issue|external:waiting_on_pr)`; the
+`pause.resume_when` predicate keeps the same selector and condition and
+`pause.evidence` keeps the supplied evidence. Never manufacture that dependency
+identity, predicate, evidence, or causality from `cause`, `blocker`, prose,
+the managed Issue number, reverse search, guessed PR linkage, or a null action.
 
-When a manager result carries `blocked_on`, the coordinator records the existing
-task as `parked` with that exact predicate and stops unchanged periodic
-re-dispatch, including repeated identical manager commands and dispatch preambles.
-Parking is derived rather than event-driven or separately persisted. On every
-existing coordinator wake or restart, re-read only the GitHub state named by the
-predicate through tracked `scripts/gh`: `issue_closed` reads the named Issue
-`state` and is satisfied only by `closed`; `pr_merged` reads the named PR
-`merged` field and is satisfied only by `true`. If the predicate is still
-unsatisfied, leave the task parked with zero unchanged re-dispatch. If it is
-already satisfied when the wake begins, resume immediately from that read without
-waiting for an event.
+On `recoverable` execute the returned `nextAction.argv` once. If the next
+result recommends a byte-identical argv, do not execute it again: send one
+`escalation` naming the producer and continue independent plan items. On
+`contract_defect` send one `escalation` naming the producer and continue
+independent plan items. On `external_pause` send one `escalation` with its
+`remedy` and continue independent plan items. Before ending a turn without
+`worker_done`, drain the inbox. Never send `worker_done --outcome failed` for
+any of these. Do not synthesize the refused effect through another tool.
 
-Dispatch and re-dispatch payloads contain only role plus task invariants. A known
-authoritative `blocked_on` binding is one such invariant and is passed through
-`--blocked-on-json`; otherwise that flag is absent. Procedure comes from the
-current CLI `--help` and returned `nextAction`, not by re-pasting the
-create-Issue skill or runbooks. This contract adds no watcher, polling daemon,
-queue, lease, parking store, acknowledgement protocol, prose parser, reverse
-dependency lookup, or second persistent coordinator mechanism.
+For `external_pause` and `contract_defect`, use
+`orca orchestration send --type escalation --thread-id <escalation-id>`.
+Derive `escalation-id` deterministically from
+`(issue, stage, cause, resume_when)`; the receiver treats the same thread id as
+the same escalation. Keep no sender-side send record. If the escalation send
+itself fails, retry it exactly once, then continue every independent plan item
+and perform the required non-blocking inbox drain before ending the turn without
+`worker_done`.
+
+A live Dispatch whose most recent manager message is that escalation is a
+**paused unit** while `worker-show` remains non-terminal. The coordinator
+identifies it from the Run inbox plus that non-terminal `worker-show` state and
+must not re-dispatch the same argv into it. On each existing coordinator wake or
+restart, re-read only the typed `resume_when` condition through tracked
+`scripts/gh`: `issue_closed` is satisfied only by the named Issue
+`state=closed`; `pr_merged` only by the named PR `merged=true`; and
+`{ operator: true }` waits for an operator message. When satisfied, send the
+continuation to the same Dispatch. Until a separate coordinator sweep/wake
+change lands, this resumption occurs only on those existing wakes or operator
+messages; that is a latency limitation, not permission to settle the Task.
+
+Dispatch/re-dispatch payloads contain role plus task invariants only. Procedure
+comes from the current CLI `--help` and returned `nextAction`; do not re-paste
+the create-Issue skill or runbooks into repeated dispatches. Browser-GPT
+`TerminalEnvelope` remains a separate transport and is unchanged. This
+contract adds no watcher, polling daemon, queue, lease, parking store,
+acknowledgement protocol, prose parser, reverse dependency lookup, epoch,
+fingerprint record, or second persistent coordinator mechanism.
 
 ## Core operating laws
 
 1. Watch objective state: live Issue/Task, assignment generation, S1, S2, PR/head, CI/review/smoke and accepted reports. Worker prose is context only.
-2. Completion follows the canonical heartbeat/`worker_done` rule above; end-of-turn, substep, wait, helper failure, question, escalation, timer expiry, and `blocked_on` never satisfy it.
+2. Completion follows the canonical heartbeat/`worker_done` rule above; end-of-turn, substep, wait, helper failure, question, escalation, timer expiry, `recoverable`, `external_pause`, and `contract_defect` never satisfy it.
 3. Keep one Dispatch across recoverable substeps. Create a fresh Dispatch only for a real Task/subtask/reviewer/correction/reassignment/retry boundary.
 4. Re-read authoritative state before retry. Timeout or helper loss does not prove the operation failed.
 5. Helper failure is recovery first. Escalate only for missing capability/permission, ownership/spec conflict, destructive choice, or exhausted legitimate recovery.

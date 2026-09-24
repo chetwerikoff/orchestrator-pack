@@ -174,7 +174,7 @@ function resolveWorkdir(issueNumber: number, workdir?: string): string {
   return workdir ?? defaultWorkdir(issueNumber);
 }
 
-function semanticStageAttemptId(repo: string, issueNumber: number, stage: LifecycleReviewStage): string {
+export function semanticStageAttemptId(repo: string, issueNumber: number, stage: LifecycleReviewStage): string {
   const hex = createHash('sha256')
     .update(`create-issue-stage-attempt/v1\n${repo}\n${issueNumber}\n${stage}`, 'utf8')
     .digest('hex')
