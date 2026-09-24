@@ -15,6 +15,7 @@
     "scripts/lib/create-issue-stage-record-cli.ts",
     "scripts/lib/manager-cli-contract.ts",
     "scripts/manager-review-terminal-bundle.ts",
+    "scripts/stage-completeness-guard.test.ts",
     "scripts/toolchain/chatgpt-browser-turn.test.ts",
     "scripts/toolchain/create-issue-final-acceptance.test.ts",
     "scripts/vitest-ci-lanes.config.json",
