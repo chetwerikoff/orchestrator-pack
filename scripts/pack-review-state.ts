@@ -38,6 +38,8 @@ export interface SmokeOrderingOwnerEvidence {
   supervisorAlive: boolean;
   cleanupSafe?: boolean;
   authoritativeResult?: 'PASS' | 'FAIL' | 'BLOCKED';
+  /** True only when the sealed FAIL report names a scenario failure. */
+  scenarioFinding?: boolean;
   /** Transient admission fact. Not stored on the authority document. */
   executionMode?: 'executed' | 'carry-only';
 }
@@ -1233,6 +1235,7 @@ function reconcileStartedSmokeOwner<T extends SmokeOrderingOwnerFields & {
   status: SmokeOrderingStatus;
   updatedAtUtc: string;
   failureKind?: SmokeOrderingFailureKind;
+  failureHeadSha?: string;
 }>(input: {
   marker: T;
   evidence?: SmokeOrderingOwnerEvidence;
@@ -1255,13 +1258,15 @@ function reconcileStartedSmokeOwner<T extends SmokeOrderingOwnerFields & {
   }
   if (input.evidence.authoritativeResult && !workerOwnedCarryOnlyPass(input.evidence, input.actor)) {
     const result = input.evidence.authoritativeResult;
+    const scenarioFinding = result === 'FAIL' && input.evidence.scenarioFinding === true;
     return {
       ...input.marker,
       status: result === 'PASS' ? 'passed' : 'failed',
       updatedAtUtc: input.now,
       ...(result === 'PASS'
         ? { failureKind: undefined }
-        : { failureKind: result === 'FAIL' ? 'finding' as const : 'retryable' as const }),
+        : { failureKind: scenarioFinding ? 'finding' as const : 'retryable' as const }),
+      failureHeadSha: scenarioFinding && input.actor === 'independent' ? input.headSha : undefined,
     };
   }
   if (!input.evidence.supervisorAlive) {
