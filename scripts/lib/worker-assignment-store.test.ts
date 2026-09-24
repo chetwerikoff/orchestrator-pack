@@ -1,6 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -69,6 +69,112 @@ describe('WorkerAssignment compare-and-publish', () => {
     expect(replacement.assignment.assignmentId).not.toBe(first.assignment.assignmentId);
     expect(replacement.assignment.bindingKey).toBe('dispatch-2');
     expect(assignmentStillCurrent(file, replacement.assignment)).toBe(true);
+  });
+
+  it('round-trips and fences the closed delegated-integration marker', async () => {
+    const { file } = fixture();
+    const implementation = await publishCurrentWorkerAssignment(publishInput(file, 'dispatch-implementation'));
+    if (!implementation.ok) throw new Error(implementation.reason);
+    const delegatedIntegration = {
+      prNumber: 926,
+      expectedHeadSha: 'a'.repeat(40),
+      predecessorAssignmentId: implementation.assignment.assignmentId,
+      predecessorGeneration: implementation.assignment.generation,
+    };
+    const integration = await publishCurrentWorkerAssignment({
+      ...publishInput(file, 'dispatch-integration'),
+      expectedCurrent: {
+        assignmentId: implementation.assignment.assignmentId,
+        generation: implementation.assignment.generation,
+      },
+      delegatedIntegration,
+    });
+    expect(integration.ok).toBe(true);
+    if (!integration.ok) throw new Error(integration.reason);
+    expect(integration.assignment).toMatchObject({
+      assignmentId: expect.stringMatching(/^wa-/u),
+      generation: implementation.assignment.generation + 1,
+      delegatedIntegration,
+    });
+    expect(integration.assignment.assignmentId).not.toBe(implementation.assignment.assignmentId);
+    expect(currentWorkerAssignment(file, 1416)).toEqual(integration.assignment);
+    expect(assignmentStillCurrent(file, integration.assignment)).toBe(true);
+
+    const drifted = {
+      ...integration.assignment,
+      delegatedIntegration: { ...delegatedIntegration, expectedHeadSha: 'b'.repeat(40) },
+    };
+    expect(assignmentStillCurrent(file, drifted)).toBe(false);
+    const fenced = await withCurrentWorkerAssignmentFence(file, drifted, () => 'must-not-run');
+    expect(fenced).toEqual({ ok: false, reason: 'assignment_stale', actionEntered: false });
+  });
+
+  it('allows a same-marker delegated retry after the prior integration assignment becomes replaceable', async () => {
+    const { file } = fixture();
+    const implementation = await publishCurrentWorkerAssignment(publishInput(file, 'dispatch-implementation'));
+    if (!implementation.ok) throw new Error(implementation.reason);
+    const delegatedIntegration = {
+      prNumber: 926,
+      expectedHeadSha: 'a'.repeat(40),
+      predecessorAssignmentId: implementation.assignment.assignmentId,
+      predecessorGeneration: implementation.assignment.generation,
+    };
+    const first = await publishCurrentWorkerAssignment({
+      ...publishInput(file, 'dispatch-integration-1'),
+      expectedCurrent: {
+        assignmentId: implementation.assignment.assignmentId,
+        generation: implementation.assignment.generation,
+      },
+      delegatedIntegration,
+    });
+    if (!first.ok) throw new Error(first.reason);
+    const second = await publishCurrentWorkerAssignment({
+      ...publishInput(file, 'dispatch-integration-2'),
+      expectedCurrent: {
+        assignmentId: first.assignment.assignmentId,
+        generation: first.assignment.generation,
+      },
+      delegatedIntegration,
+    });
+    expect(second.ok).toBe(true);
+    if (!second.ok) throw new Error(second.reason);
+    expect(second.assignment).toMatchObject({
+      generation: first.assignment.generation + 1,
+      delegatedIntegration,
+    });
+    expect(second.assignment.assignmentId).not.toBe(first.assignment.assignmentId);
+    expect(second.assignment.assignmentId).not.toBe(implementation.assignment.assignmentId);
+  });
+
+  it('fails closed on incomplete or non-closed delegated-integration markers', async () => {
+    const { file } = fixture();
+    const implementation = await publishCurrentWorkerAssignment(publishInput(file, 'dispatch-implementation'));
+    if (!implementation.ok) throw new Error(implementation.reason);
+    const expectedCurrent = {
+      assignmentId: implementation.assignment.assignmentId,
+      generation: implementation.assignment.generation,
+    };
+    const baseMarker = {
+      prNumber: 926,
+      expectedHeadSha: 'a'.repeat(40),
+      predecessorAssignmentId: implementation.assignment.assignmentId,
+      predecessorGeneration: implementation.assignment.generation,
+    };
+
+    const extra = await publishCurrentWorkerAssignment({
+      ...publishInput(file, 'dispatch-extra'),
+      expectedCurrent,
+      delegatedIntegration: { ...baseMarker, authorizationMode: 'waiver' } as never,
+    });
+    expect(extra).toEqual({ ok: false, reason: 'assignment_input_invalid' });
+
+    const stale = await publishCurrentWorkerAssignment({
+      ...publishInput(file, 'dispatch-stale-marker'),
+      expectedCurrent,
+      delegatedIntegration: { ...baseMarker, predecessorAssignmentId: 'wa-other' },
+    });
+    expect(stale).toEqual({ ok: false, reason: 'assignment_stale' });
+    expect(currentWorkerAssignment(file, 1416)).toEqual(implementation.assignment);
   });
 
   it('treats a missing expectation as expect-none and rejects overwrite of an existing row', async () => {
@@ -157,7 +263,7 @@ describe('WorkerAssignment compare-and-publish', () => {
   });
 });
 
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import {
   inspectWorkerAssignmentStore,
   migrateWorkerAssignmentStoreIfNeeded,
@@ -464,5 +570,29 @@ describe('WorkerAssignment legacy key migration and role compatibility', () => {
     expect(inspected.needsMigration).toBe(true);
     expect(inspected.store.assignments[workerAssignmentKey('task-7', 'dispatch-7')]).toEqual(legacyRow(7));
     expect(Object.prototype.hasOwnProperty.call(inspected.store.assignments[workerAssignmentKey('task-7', 'dispatch-7')], 'role')).toBe(false);
+  });
+
+  it('keeps delegated integration on canonical readiness with report-only operational outcomes', () => {
+    const skill = readFileSync(path.resolve('.cursor/skills/merge-with-local-adoption/SKILL.md'), 'utf8');
+    const runbook = readFileSync(path.resolve('docs/orchestration-runbook.md'), 'utf8');
+    const delegatedRunbook = readFileSync(path.resolve('docs/orchestrator-delegated-integration.md'), 'utf8');
+    const executorRules = readFileSync(path.resolve('docs/chat-executor-rules.md'), 'utf8');
+    const repairRunbook = readFileSync(path.resolve('docs/pack-review-waiver-merge-runbook.md'), 'utf8');
+
+    expect(skill).toContain('evaluatePostSmokeReadiness()');
+    expect(skill).toContain('readiness.state === READY_TO_MERGE');
+    expect(skill).toContain('merge_now');
+    expect(skill).toContain('wait_for_dependency');
+    expect(skill).toContain('delegated mode never\nuses the direct-user cleanup override');
+    expect(skill).toContain('operationally_complete');
+    expect(skill).toContain('operationally_incomplete');
+
+    expect(runbook).toContain('orchestrator-delegated integration runbook');
+    expect(delegatedRunbook).toContain('The existing WorkerAssignment store remains the only persistent carrier.');
+    expect(delegatedRunbook).toContain('Do not create a second role, assignment store, integration registry,');
+    expect(delegatedRunbook).toContain('establishes its ordinary corroborated current');
+    expect(executorRules).toContain('A delegated worker never inherits the direct-user override.');
+    expect(repairRunbook).toContain('Orchestrator-delegated projection repair (not a waiver)');
+    expect(repairRunbook).toContain('evaluatePostSmokeReadiness=READY_TO_MERGE');
   });
 });

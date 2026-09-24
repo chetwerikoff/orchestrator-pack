@@ -19,6 +19,11 @@ are owned by the runbook sections for
 Long-running child mechanics remain owned by
 [`docs/flow-manager-long-running-child-runbook.md`](../../docs/flow-manager-long-running-child-runbook.md).
 
+Governed create-Issue author-output fields, enums, ownership classification, and
+the author-visible schema fragment are owned only by
+`scripts/lib/create-issue-author-dispositions-schema.ts`. This carrier does not
+mirror that field contract.
+
 ## Launch and observation
 
 For tracked create-issue and pack-review turns, use
