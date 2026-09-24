@@ -2126,7 +2126,15 @@ export function runStageFinalizeCli(
         });
         return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, staleLive);
       }
-      const floorErrors = bodyFloorDiagnostics(live.body, tier);
+      const reconciledContinuation = Boolean(
+        opts.expectedSourceRevision
+        && opts.expectedSourceRevision.toLowerCase() === sourceRevision.toLowerCase()
+        && opts.expectedStage === stage
+        && opts.expectedStageAttemptId
+        && opts.expectedStageAttemptId === opts.stageAttemptId
+        && opts.stageAttemptId === semanticStageAttemptId(opts.repo, issueNumber, stage),
+      );
+      const floorErrors = reconciledContinuation ? [] : bodyFloorDiagnostics(live.body, tier);
       if (floorErrors.length > 0) {
         const binding: CreateIssueActionBinding = {
           repository: opts.repo,
