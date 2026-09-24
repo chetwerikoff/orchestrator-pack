@@ -44,5 +44,5 @@
     "scripts/lib/execute-issue-manager-boundary.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "79cb10cd853a6021537e7d7e2f40eeb338cdde42"
+  "source_revision": "52fed680c70f7c876c31650c53d5636d5a13156b"
 }
