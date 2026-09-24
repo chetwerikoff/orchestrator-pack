@@ -4,6 +4,7 @@ export const CREATE_ISSUE_STALE_ACTION_SCHEMA = 'create-issue-stale-next-action/
 export const CREATE_ISSUE_NEXT_ACTION_KINDS = [
   'reconcile-stage-read-only',
   'produce-acceptance-artifacts',
+  'author-round',
   'retry-start-cycle',
   'retry-stage-record-publication',
   'retry-final-acceptance',
@@ -18,11 +19,12 @@ export const CREATE_ISSUE_RECONCILIATION_KINDS = [
 ] as const satisfies readonly CreateIssueNextActionKind[];
 
 export const CREATE_ISSUE_CONTINUATION_KINDS = [
+  'author-round',
   'retry-start-cycle',
   'retry-stage-record-publication',
   'retry-final-acceptance',
   'retry-create-issue-browser-preflight',
-] as const satisfies readonly CreateIssueNextActionKind[];
+ ] as const satisfies readonly CreateIssueNextActionKind[];
 
 export const CREATE_ISSUE_EXTERNAL_PAUSE_CAUSES = [
   'external:chrome_not_running',

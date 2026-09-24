@@ -1402,7 +1402,7 @@ describe('Issue #1997 author-round convergence', () => {
         '--tier', 'T2',
         '--json',
       ], transport);
-      expect(code).toBe(1);
+      expect(code).toBe(3);
       const output = JSON.parse(logs.at(-1) ?? '{}') as {
         blocker?: string;
         nextAction?: {
@@ -1451,7 +1451,7 @@ describe('Issue #1997 author-round convergence', () => {
         '--stage', 'architectural-review',
         '--tier', 'T2',
         '--json',
-      ], transport)).toBe(1);
+      ], transport)).toBe(3);
       action = JSON.parse(initialLogs.at(-1) ?? '{}').nextAction;
     } finally {
       firstSpy.mockRestore();
@@ -1469,7 +1469,7 @@ describe('Issue #1997 author-round convergence', () => {
       expect(runStageFinalizeCli(executionArgv, transport, () => {
         launches += 1;
         return { ok: true };
-      })).toBe(1);
+      })).toBe(3);
       expect(JSON.parse(failingLogs.at(-1) ?? '{}')).toMatchObject({
         cause: 'author_round_output_missing',
       });
@@ -1485,10 +1485,10 @@ describe('Issue #1997 author-round convergence', () => {
       expect(runStageFinalizeCli(executionArgv, transport, () => {
         launches += 1;
         return { ok: true };
-      })).toBe(1);
+      })).toBe(3);
       expect(JSON.parse(staleLogs.at(-1) ?? '{}')).toMatchObject({
         cause: 'stale_next_action',
-        nextAction: null,
+        nextAction: { kind: 'reconcile-stage-read-only' },
       });
       expect(launches).toBe(0);
     } finally {
