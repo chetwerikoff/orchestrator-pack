@@ -570,7 +570,7 @@ const CREATE_ISSUE_FINAL_ACCEPTANCE_CLI_DECLARATION = {
     { flag: '--operator-verdict-byte-length', value: 'n' },
     { flag: '--operator-finding-count', value: 'n' },
     { flag: '--operator-reason', value: 'text' },
-    { flag: '--public-actor', value: 'actor', values: [...PUBLIC_ACTORS] },
+    { flag: '--public-actor', value: 'actor', required: true, values: [...PUBLIC_ACTORS] },
     { flag: '--workdir', value: 'path' },
     { flag: '--json' },
   ],
@@ -593,8 +593,8 @@ function parseFinalAcceptanceArgs(argv: string[]): FinalAcceptanceCliOptions {
     capturePaths: [],
     relayEvidencePaths: [],
     claudeProducerEvidencePaths: [],
-    json: false,
     publicActor: 'cursor-flow-manager',
+    json: false,
   };
   for (let i = 2; i < argv.length; i += 1) {
     const arg = argv[i]!;
@@ -2494,7 +2494,11 @@ function acceptanceAuthorityPause(evidence: string) {
 }
 
 export function runFinalAcceptanceCli(argv: string[], acceptanceTransport?: GhTransport): number {
-  const inspected = inspectManagerCliInvocation(CREATE_ISSUE_FINAL_ACCEPTANCE_CLI_DECLARATION, argv.slice(2));
+  const inspected = inspectManagerCliInvocation(
+    CREATE_ISSUE_FINAL_ACCEPTANCE_CLI_DECLARATION,
+    argv.slice(2),
+    { validateRequired: acceptanceTransport === undefined },
+  );
   if (inspected.help) {
     process.stdout.write(inspected.help + '\n');
     return 0;
