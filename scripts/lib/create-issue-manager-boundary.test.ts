@@ -232,6 +232,21 @@ describe('create-Issue manager boundary', () => {
     expect(browserCarrier).not.toContain('process.stdout.write(`${JSON.stringify(');
   });
 
+  it('keeps the closed kind registry equal to production createIssueNextAction literals', () => {
+    const produced = new Set<string>();
+    for (const file of productionTsFiles(join(repoRoot, 'scripts'))) {
+      const source = readFileSync(file, 'utf8');
+      let cursor = 0;
+      while ((cursor = source.indexOf('createIssueNextAction({', cursor)) >= 0) {
+        const fragment = source.slice(cursor, cursor + 800);
+        const literal = /\bkind:\s*'([^']+)'/.exec(fragment)?.[1];
+        if (literal) produced.add(literal);
+        cursor += 'createIssueNextAction({'.length;
+      }
+    }
+    expect([...produced].sort()).toEqual([...CREATE_ISSUE_NEXT_ACTION_KINDS].sort());
+  });
+
   it('frames all four outcomes once for every registered manager entrypoint', () => {
     for (const producer of CREATE_ISSUE_MANAGER_ENTRYPOINTS) {
       const cases = [

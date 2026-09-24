@@ -337,19 +337,7 @@ describe('create-Issue nextAction contract', () => {
     });
   });
 
-  it('keeps the one shared closed kind registry equal to production createIssueNextAction literals', () => {
-    const produced = new Set<string>();
-    for (const file of productionTsFiles(join(process.cwd(), 'scripts'))) {
-      const source = readFileSync(file, 'utf8');
-      let cursor = 0;
-      while ((cursor = source.indexOf('createIssueNextAction({', cursor)) >= 0) {
-        const fragment = source.slice(cursor, cursor + 800);
-        const literal = /\bkind:\s*'([^']+)'/.exec(fragment)?.[1];
-        if (literal) produced.add(literal);
-        cursor += 'createIssueNextAction({'.length;
-      }
-    }
-    expect([...produced].sort()).toEqual([...CREATE_ISSUE_NEXT_ACTION_KINDS].sort());
+  it('registers the execute-Issue read-only kinds in the shared closed registry', () => {
     expect(CREATE_ISSUE_NEXT_ACTION_KINDS.filter((kind) => kind.startsWith('execute-'))).toEqual([
       'execute-observe-owned-turn',
       'execute-github-first-read-only',
