@@ -17,10 +17,13 @@ import {
 } from './create-issue-stage-record-gh.ts';
 import { appendPublishedLogicalJournalEvent } from './create-issue-stage-record-core.ts';
 import {
+  collectUnfencedLinesContaining,
   executeFinalAcceptanceGuards,
   FINAL_ACCEPTANCE_CONTRACT_VERSION,
+  resolveOperatorAmendmentEvidence,
   validateExactTerminalBodyBinding,
   type FinalAcceptanceGuardInput,
+  type OperatorAmendmentEvidence,
 } from './create-issue-final-acceptance-contract.ts';
 import type { OperatorAcceptanceAdjudication } from './create-issue-stage-record-artifacts.ts';
 import { resolvePublishedAuthorState } from './resolve-published-author-state.ts';
@@ -55,6 +58,7 @@ export interface FinalAcceptanceResult {
   guardErrors: string[];
   eventKey?: string;
   projectionPendingRepair?: boolean;
+  acceptanceEvidence?: OperatorAmendmentEvidence;
 }
 
 type FinalAcceptanceCensusState = ReturnType<typeof loadIssueJournalCensus>;
@@ -84,24 +88,7 @@ export function parseCanonicalSourceRevisionMarker(body: string): {
   errors: string[];
 } {
   const errors: string[] = [];
-  let fencedCode: '`' | '~' | null = null;
-  const markerLines: string[] = [];
-  for (const line of body.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (fencedCode !== null) {
-      if (trimmed.startsWith(fencedCode.repeat(3))) fencedCode = null;
-      continue;
-    }
-    if (trimmed.startsWith('```')) {
-      fencedCode = '`';
-      continue;
-    }
-    if (trimmed.startsWith('~~~')) {
-      fencedCode = '~';
-      continue;
-    }
-    if (line.includes('source-revision:')) markerLines.push(line);
-  }
+  const markerLines = collectUnfencedLinesContaining(body, 'source-revision:');
   if (markerLines.length === 0) {
     return { errors: ['live Issue body is missing the canonical source-revision marker'] };
   }
@@ -315,46 +302,65 @@ export function runFinalAcceptance(
     }
   }
 
-  let canonicalInventory: ReturnType<typeof loadCanonicalReceiptInventory>;
-  try {
-    canonicalInventory = loadCanonicalReceiptInventory({
-      tierIntakePath: input.tierIntakePath ?? join(input.reviewDir, 'tier-intake.json'),
-      receiptDirectory: input.reviewDir,
-      stageReceiptPaths: input.stageReceiptPaths,
-      claudeProducerEvidencePaths: input.claudeProducerEvidencePaths,
-    });
-  } catch (error) {
-    return {
-      ok: false,
-      diagnostics,
-      guardErrors: [error instanceof Error ? error.message : String(error)],
-    };
-  }
-  const inventoryErrors = validateCanonicalReceiptPathSet(
-    canonicalInventory.receiptPaths,
-    input.stageReceiptPaths,
-  );
-  if (inventoryErrors.length > 0) {
-    return { ok: false, diagnostics, guardErrors: inventoryErrors };
-  }
+  const operatorAmendment = resolveOperatorAmendmentEvidence(liveIssue.body, liveRevision);
 
-  const guard = executeFinalAcceptanceGuards({
-    ...input,
-    issueBody: liveIssue.body,
-    terminalSourceBody,
-    currentIssueBody: liveIssue.body,
-    stageReceiptValues: canonicalInventory.receiptValues,
-    stageReceiptPaths: canonicalInventory.receiptPaths,
-    episodeAuthority: canonicalInventory.authority,
-    tierIntakePath: canonicalInventory.intakePath,
-    cycleId: input.cycleId,
-    issueRevision: liveRevision,
-    ...(censusUsable ? { canonicalLineage: censusState.lineage } : {}),
-    ...(publishedAuthorStateResult.state ? { publishedAuthorState: publishedAuthorStateResult.state } : {}),
-  });
+  let guard: ReturnType<typeof executeFinalAcceptanceGuards>;
+  if (operatorAmendment) {
+    guard = executeFinalAcceptanceGuards({
+      ...input,
+      issueBody: liveIssue.body,
+      terminalSourceBody,
+      currentIssueBody: liveIssue.body,
+      stageReceiptValues: [],
+      stageReceiptPaths: [],
+      cycleId: input.cycleId,
+      issueRevision: liveRevision,
+      ...(censusUsable ? { canonicalLineage: censusState.lineage } : {}),
+      ...(publishedAuthorStateResult.state ? { publishedAuthorState: publishedAuthorStateResult.state } : {}),
+    });
+  } else {
+    let canonicalInventory: ReturnType<typeof loadCanonicalReceiptInventory>;
+    try {
+      canonicalInventory = loadCanonicalReceiptInventory({
+        tierIntakePath: input.tierIntakePath ?? join(input.reviewDir, 'tier-intake.json'),
+        receiptDirectory: input.reviewDir,
+        stageReceiptPaths: input.stageReceiptPaths,
+        claudeProducerEvidencePaths: input.claudeProducerEvidencePaths,
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        diagnostics,
+        guardErrors: [error instanceof Error ? error.message : String(error)],
+      };
+    }
+    const inventoryErrors = validateCanonicalReceiptPathSet(
+      canonicalInventory.receiptPaths,
+      input.stageReceiptPaths,
+    );
+    if (inventoryErrors.length > 0) {
+      return { ok: false, diagnostics, guardErrors: inventoryErrors };
+    }
+
+    guard = executeFinalAcceptanceGuards({
+      ...input,
+      issueBody: liveIssue.body,
+      terminalSourceBody,
+      currentIssueBody: liveIssue.body,
+      stageReceiptValues: canonicalInventory.receiptValues,
+      stageReceiptPaths: canonicalInventory.receiptPaths,
+      episodeAuthority: canonicalInventory.authority,
+      tierIntakePath: canonicalInventory.intakePath,
+      cycleId: input.cycleId,
+      issueRevision: liveRevision,
+      ...(censusUsable ? { canonicalLineage: censusState.lineage } : {}),
+      ...(publishedAuthorStateResult.state ? { publishedAuthorState: publishedAuthorStateResult.state } : {}),
+    });
+  }
   if (!guard.ok) {
     return { ok: false, diagnostics, guardErrors: guard.errors };
   }
+  const acceptanceEvidence = guard.acceptanceEvidence;
 
   let publishIssue: ReturnType<typeof fetchIssueRevision>;
   try {
@@ -392,6 +398,7 @@ export function runFinalAcceptance(
       diagnostics,
       guardErrors: [],
       projectionPendingRepair: true,
+      ...(acceptanceEvidence ? { acceptanceEvidence } : {}),
     };
   }
 
@@ -466,6 +473,7 @@ export function runFinalAcceptance(
       guardErrors: [],
       eventKey,
       projectionPendingRepair: true,
+      ...(acceptanceEvidence ? { acceptanceEvidence } : {}),
     };
   }
 
@@ -521,6 +529,7 @@ export function runFinalAcceptance(
       guardErrors: [],
       eventKey,
       projectionPendingRepair: true,
+      ...(acceptanceEvidence ? { acceptanceEvidence } : {}),
     };
   }
   const readbackHeadErrors = validateFinalAcceptanceReadbackHead(
@@ -539,6 +548,7 @@ export function runFinalAcceptance(
       guardErrors: [],
       eventKey,
       projectionPendingRepair: true,
+      ...(acceptanceEvidence ? { acceptanceEvidence } : {}),
     };
   }
   const confirmed = refreshed.lineage.eventsByKey.get(eventKey);
@@ -552,6 +562,7 @@ export function runFinalAcceptance(
       guardErrors: [],
       eventKey,
       projectionPendingRepair: true,
+      ...(acceptanceEvidence ? { acceptanceEvidence } : {}),
     };
   }
 
@@ -571,6 +582,7 @@ export function runFinalAcceptance(
     guardErrors: [],
     eventKey,
     projectionPendingRepair: projection.pendingRepair || projectionPendingRepair,
+    ...(acceptanceEvidence ? { acceptanceEvidence } : {}),
   };
 }
 
