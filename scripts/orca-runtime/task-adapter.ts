@@ -13,7 +13,9 @@ import {
 } from '../runtime/contracts.ts';
 import {
   neutralFailureReason,
+  openCodeControlFromCommand,
   OrcaRuntimeAdapter,
+  type OpenCodeControlBinding,
   type OrcaRuntimeAdapterOptions,
 } from './adapter.ts';
 import {
@@ -97,6 +99,7 @@ type LaunchTaskTerminalOwnership = Readonly<{
   title: string;
   workspacePath: string;
   identity: RuntimeWorkerIdentity;
+  openCodeControl?: OpenCodeControlBinding;
 }>;
 type OwnershipRead =
   | { readonly ok: true; readonly value: LaunchTaskTerminalOwnership | null }
@@ -109,6 +112,16 @@ function isLaunchAssistantTaskTitle(title: string): boolean {
 function launchTaskTerminalOwnershipPath(title: string, stateRoot: string): string {
   const key = createHash('sha256').update(title).digest('hex');
   return join(stateRoot, 'launch-task-terminals', `${key}.json`);
+}
+
+function parseOpenCodeControlBinding(value: unknown): OpenCodeControlBinding | null | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return null;
+  const url = typeof value.url === 'string' ? value.url.trim() : '';
+  if (!/^http:\/\/127\.0\.0\.1:[1-9]\d*$/u.test(url)) return null;
+  if (value.agent !== undefined && (typeof value.agent !== 'string' || !value.agent.trim())) return null;
+  const agent = typeof value.agent === 'string' ? value.agent.trim() : undefined;
+  return { url, ...(agent ? { agent } : {}) };
 }
 
 function readLaunchTaskTerminalOwnership(path: string): OwnershipRead {
@@ -126,12 +139,15 @@ function readLaunchTaskTerminalOwnership(path: string): OwnershipRead {
     if (typeof parsed.title !== 'string' || typeof parsed.workspacePath !== 'string'
       || typeof identity.id !== 'string' || typeof identity.generation !== 'string'
       || typeof identity.runtime !== 'string') return { ok: false };
+    const openCodeControl = parseOpenCodeControlBinding(parsed.openCodeControl);
+    if (openCodeControl === null) return { ok: false };
     return {
       ok: true,
       value: {
         title: parsed.title,
         workspacePath: parsed.workspacePath,
         identity: { id: identity.id, generation: identity.generation, runtime: identity.runtime },
+        ...(openCodeControl ? { openCodeControl } : {}),
       },
     };
   } catch {
@@ -355,6 +371,29 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     super(options);
     this.#options = options;
     this.#runJson = options.runJson ?? runOrcaJson;
+  }
+
+  protected override recoverOpenCodeControl(
+    worker: RuntimeWorkerIdentity,
+    current: RuntimeWorker,
+  ): OpenCodeControlBinding | undefined {
+    if (!sameRuntimeWorker(worker, current.identity)) return undefined;
+    const title = current.title?.trim() ?? '';
+    if (!title || !isLaunchAssistantTaskTitle(title)) return undefined;
+    const persisted = readLaunchTaskTerminalOwnership(
+      launchTaskTerminalOwnershipPath(
+        title,
+        resolveWakeSupervisorStateRoot({ env: this.#options.env }),
+      ),
+    );
+    if (!persisted.ok || !persisted.value?.openCodeControl) return undefined;
+    const ownership = persisted.value;
+    if (
+      ownership.title !== title
+      || ownership.workspacePath !== current.workspacePath
+      || !sameRuntimeWorker(ownership.identity, worker)
+    ) return undefined;
+    return ownership.openCodeControl;
   }
 
   #run<T>(args: readonly string[], options: RuntimeCallOptions): OrcaJsonResponse<T> {
@@ -734,10 +773,12 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       this.rebindOpenCodeUrl(worker.identity, exact.value.identity);
       worker = { ...exact.value, provenance: 'internal' };
     }
+    const openCodeControl = openCodeControlFromCommand(input.command);
     if (ownershipPath && !persistLaunchTaskTerminalOwnership(ownershipPath, {
       title: input.title,
       workspacePath: worker.workspacePath,
       identity: worker.identity,
+      ...(openCodeControl ? { openCodeControl } : {}),
     })) {
       return runtimeFailure('spawn_worker', 'launch_task_terminal_ownership_persist_failed');
     }
