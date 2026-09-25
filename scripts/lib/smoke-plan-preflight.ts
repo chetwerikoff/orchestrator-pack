@@ -55,7 +55,7 @@ function liveSourceRevision(issueBody: string): string | undefined {
       if (close.test(trimmed)) fence = undefined;
       continue;
     }
-    const opener = /^(\`{3,}|~{3,})/u.exec(trimmed)?.[1];
+    const opener = /^(`{3,}|~{3,})/u.exec(trimmed)?.[1];
     if (opener) {
       fence = { character: opener[0] as '`' | '~', length: opener.length };
       continue;
@@ -73,7 +73,7 @@ function cleanPathCandidate(value: string): string {
 
 function absolutePathReferences(text: string): AbsolutePathReference[] {
   const references: AbsolutePathReference[] = [];
-  const posix = /(?:^|[\s"'`=(])((?:\/(?!\/)[^\s"'`|<>])+)/gu;
+  const posix = /(?:^|[\s"'`=(])((?:\/(?!\/)[^\/\s"'`|<>]+)+)/gu;
   for (const match of text.matchAll(posix)) {
     const value = cleanPathCandidate(match[1] ?? '');
     if (!value || !isAbsolute(value)) continue;
