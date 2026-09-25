@@ -1,5 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   classifyFleetPane,
@@ -89,6 +90,41 @@ describe('fleet sweep classification', () => {
       store,
     )).toBe('busy');
     expect(store.marks.has('p1')).toBe(false);
+  });
+});
+
+describe('fleet sweep on real OpenCode screens', () => {
+  const fixture = (name: string): string =>
+    readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
+
+  it('reports POLLING on the second sweep while a wrapped sleep command is running', () => {
+    const screen = fixture('opencode-running-sleep.screen.txt');
+    const store = new MemoryPollingStore();
+    expect(classifyFleetPane(screen, 'p1', store)).toBe('busy');
+    expect(classifyFleetPane(screen, 'p1', store)).toBe('POLLING');
+  });
+
+  it('keeps a pane busy when the only sleep is stale scrollback behind newer work', () => {
+    const screen = fixture('opencode-stale-sleep.screen.txt');
+    const store = new MemoryPollingStore();
+    expect(classifyFleetPane(screen, 'p1', store)).toBe('busy');
+    expect(classifyFleetPane(screen, 'p1', store)).toBe('busy');
+  });
+
+  it('prints content lines, not TUI frame, model line or status bar', () => {
+    const terminals = [pane('p1', 'OC | worker')];
+    const [observation] = runFleetSweep({
+      primary,
+      terminals,
+      lines: 4,
+      executor: fakeExecutor(terminals, { p1: fixture('opencode-running-sleep.screen.txt') }),
+      store: new MemoryPollingStore(),
+    });
+    expect(observation?.lines.length).toBeGreaterThan(0);
+    for (const line of observation?.lines ?? []) {
+      expect(line).not.toMatch(/[┃╹▀⬝■▣]|Pack-Opk-|esc interrupt|ctrl\+p commands|\(\d+%\)/u);
+    }
+    expect(observation?.lines.at(-2)).toMatch(/^sleep 60 && scripts\/gh pr checks 2095/u);
   });
 });
 

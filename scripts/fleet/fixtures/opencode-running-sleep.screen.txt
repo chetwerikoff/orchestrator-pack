@@ -1,0 +1,20 @@
+cursor: 2
+oldest cursor: 0
+latest cursor: 2
+warning: older output is no longer retained
+
+  ┃  [✓] Merge current origin/main, resolve if needed, and push the updated PR head
+  ┃  [✓] Prepare fixture worktrees at the new head with the prior configured/no-deps prerequisites
+  ┃  [•] Wait until required CI is green on the updated head
+  ┃  [ ] Run one independent detached worker smoke without override flags and inspect its evidence
+  ┃
+  ┃
+  ┃  ⠏ sleep 60 && scripts/gh pr checks 2095 --json name,state,bucket,link,startedAt,completedAt,workflow,
+  ┃  description
+     ▣  Pack-Opk-144f85ccfd774cf9ab63b135ab55c589 · GPT-6 Luna
+  ┃
+  ┃
+  ┃
+  ┃  Pack-Opk-144f85ccfd774cf9ab63b135ab55c589 · GPT-6 Luna OpenAI · medium
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   ⬝⬝⬝⬝■■■■  esc interrupt                                                            177.1K (65%)  ctrl+p commands
