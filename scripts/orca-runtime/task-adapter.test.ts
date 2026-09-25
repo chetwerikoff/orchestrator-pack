@@ -384,6 +384,10 @@ describe('OpenCode durable launch control', () => {
       const currentIdentity = { ...launched.value.identity, generation: liveGeneration };
       const staleRecordAdapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env, openCodeHttpRequest });
       expect(staleRecordAdapter.composerControl?.(currentIdentity)).toBeUndefined();
+      expect(staleRecordAdapter.openCodeHealth(currentIdentity)).toMatchObject({
+        status: 'unsupported',
+        reason: 'runtime_opencode_control_unavailable',
+      });
       expect(staleRecordAdapter.dispatchInput({ worker: currentIdentity, submitOnly: true })).toEqual({
         status: 'send_failed',
         reason: 'opencode_control_unbound',
@@ -395,6 +399,10 @@ describe('OpenCode durable launch control', () => {
         openCodeHttpRequest,
       });
       expect(noRecordAdapter.composerControl?.(currentIdentity)).toBeUndefined();
+      expect(noRecordAdapter.openCodeHealth(currentIdentity)).toMatchObject({
+        status: 'unsupported',
+        reason: 'runtime_opencode_control_unavailable',
+      });
       expect(noRecordAdapter.dispatchInput({ worker: currentIdentity, submitOnly: true })).toEqual({
         status: 'send_failed',
         reason: 'opencode_control_unbound',
