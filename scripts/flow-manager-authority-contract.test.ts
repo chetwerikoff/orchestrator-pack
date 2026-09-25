@@ -1826,9 +1826,7 @@ describe('Issue #2050 execute-Issue identity-bound re-observation contract', () 
     const shared = compact(browserRunbook);
     const transport = compact(transportReadme);
 
-    expect(skill).toContain(
-      'browser-gpt-page-probe inspect --cdp <exact retained endpoint> --profile <exact retained configured profile> --invocation-id <exact retained invocation id>',
-    );
+    expect(skill).toContain('docs/chatgpt-task-execution-runbook.md');
     expect(execution).toContain(
       'browser-gpt-page-probe inspect --cdp <exact retained endpoint> --profile <exact retained configured profile> --invocation-id <exact retained invocation id>',
     );
@@ -1859,10 +1857,11 @@ describe('Issue #2050 execute-Issue identity-bound re-observation contract', () 
     const skill = compact(executeSkill);
     const execution = compact(executionRunbook);
 
-    expect(skill).toContain(
+    expect(skill).toContain('Follow that runbook; this skill does not restate those mechanics.');
+    expect(execution).toContain(
       'A bounded observer/wait slice is not the lifetime of the Browser-GPT turn.',
     );
-    expect(skill).toContain(
+    expect(execution).toContain(
       'preserves the exact run identity, attempt identity, invocation id, profile, CDP endpoint, and conversation binding',
     );
     expect(execution).toContain(
@@ -1871,7 +1870,7 @@ describe('Issue #2050 execute-Issue identity-bound re-observation contract', () 
     expect(execution).toContain(
       'Preserve the exact run identity, attempt identity, invocation id, profile, CDP endpoint, and conversation binding',
     );
-    expect(skill).toContain(
+    expect(execution).toContain(
       'The first post-checkpoint continuation starts one recovery-observation episode with the existing `DEFAULT_TIMEOUT_MS = 1_800_000 ms` ceiling',
     );
     expect(execution).toContain(
@@ -1889,9 +1888,8 @@ describe('Issue #2050 execute-Issue identity-bound re-observation contract', () 
   });
 
   it('keeps D2 as manager contract evidence rather than a new executable recovery state machine', () => {
-    const skill = compact(executeSkill);
     const execution = compact(executionRunbook);
-    expect(skill).toContain(
+    expect(execution).toContain(
       'Exhaustion creates no resend, replacement-invocation, or fresh-chat authority.',
     );
     expect(execution).toContain(
@@ -2287,7 +2285,10 @@ describe('Issue #2094 execute-Issue product-error continuation contract', () => 
   const executionRunbook = readFileSync(new URL('../docs/chatgpt-task-execution-runbook.md', import.meta.url), 'utf8');
 
   it('recognizes all three reserved causes and continues in the same owned chat before fallback', () => {
-    expect(executeSkill).toContain('`message_delivery_timed_out`, `product_network_error`, and `message_stream_error`');
+    expect(executeSkill).toContain('docs/chatgpt-task-execution-runbook.md');
+    expect(executionRunbook).toContain('message_delivery_timed_out');
+    expect(executionRunbook).toContain('product_network_error');
+    expect(executionRunbook).toContain('message_stream_error');
     expect(executionRunbook).toContain('same exact owned ChatGPT conversation');
     expect(executionRunbook).toContain('Error in message stream');
     expect(executionRunbook).toContain('Never press the product `Retry` control.');
