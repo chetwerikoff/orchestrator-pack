@@ -381,6 +381,32 @@ describe('OpenCode HTTP control plane', () => {
     });
   });
 
+  it.each([
+    ['opencode', 'opencode'],
+    ['cursor', 'non-opencode'],
+    ['claude', 'non-opencode'],
+  ] as const)('uses terminal agentIdentity %s when command metadata is absent', (agentIdentity, family) => {
+    const terminal = {
+      handle: 'term-family-agent-identity',
+      incarnationId: 'generation-family-agent-identity',
+      worktreePath: process.cwd(),
+      title: 'family-agent-identity',
+      status: 'running' as const,
+    };
+    const identityTerminal = { ...terminal, agentIdentity };
+    const adapter = new OrcaTaskRuntimeAdapter({
+      runJson: vi.fn((args: readonly string[]): OrcaJsonResponse =>
+        args[0] === 'terminal' && args[1] === 'show'
+          ? { ok: true, result: { terminal: identityTerminal } }
+          : { ok: false, error: { code: 'unexpected_operation', message: args.join(' ') } }) as never,
+    });
+    expect(adapter.observeComposerFamily?.({
+      runtime: 'orca',
+      id: terminal.handle,
+      generation: terminal.incarnationId,
+    })).toMatchObject({ status: 'known', family, provenance: 'orca-terminal-show' });
+  });
+
   it('rejects stale terminal-show generation evidence', () => {
     const staleTerminal = {
       handle: 'term-family-stale',
