@@ -1,7 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 20
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { once } from 'node:events';
+import { runProcess, runProcessSync, type ProcessResult } from './kernel/subprocess.ts';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -47,17 +46,36 @@ async function waitForProcessStart(pid: number): Promise<number> {
   throw new Error('fixture process start time was not observable');
 }
 
-async function stopFixture(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  child.kill('SIGTERM');
-  await Promise.race([once(child, 'exit'), delay(2_000)]);
+interface FixtureProcess {
+  readonly pid: number;
+  readonly abort: AbortController;
+  readonly done: Promise<ProcessResult>;
 }
 
-async function startFixture(): Promise<ChildProcess> {
-  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
-  if (!child.pid) throw new Error('fixture process did not start');
-  await waitForProcessStart(child.pid);
-  return child;
+async function stopFixture(child: FixtureProcess): Promise<void> {
+  child.abort.abort();
+  await child.done;
+}
+
+async function startFixture(): Promise<FixtureProcess> {
+  const abort = new AbortController();
+  let pid = 0;
+  const done = runProcess({
+    command: process.execPath,
+    args: ['-e', 'setInterval(() => {}, 1000)'],
+    inheritParentEnv: true,
+    signal: abort.signal,
+    onSpawn: (spawnedPid) => { pid = spawnedPid; },
+  });
+  const deadline = Date.now() + 5_000;
+  while (pid === 0 && Date.now() < deadline) await delay(5);
+  if (pid === 0) {
+    abort.abort();
+    const result = await done;
+    throw new Error('fixture process did not start: ' + (result.error ?? result.stderr ?? result.outcome));
+  }
+  await waitForProcessStart(pid);
+  return { pid, abort, done };
 }
 
 describe('Issue #2145 merge adoption effect verification', () => {
@@ -86,13 +104,13 @@ describe('Issue #2145 merge adoption effect verification', () => {
     let child = await startFixture();
     let restartCount = 0;
     try {
-      const oldStart = await waitForProcessStart(child.pid!);
+      const oldStart = await waitForProcessStart(child.pid);
       await delay(100);
       const adoptionStartedAtMs = Date.now();
       expect(oldStart).toBeLessThan(adoptionStartedAtMs);
       const controller: ConsumerController = {
         observe: async () => {
-          const startedAtMs = await waitForProcessStart(child.pid!);
+          const startedAtMs = await waitForProcessStart(child.pid);
           return { state: 'running', startedAtMs, identity: String(child.pid) };
         },
         restart: async () => {
@@ -137,9 +155,13 @@ describe('Issue #2145 merge adoption effect verification', () => {
   it('runs the executable Issue live check from the adopted primary checkout', async () => {
     const root = mappingFixture();
     const git = (...args: string[]) => {
-      const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8' });
-      if (result.status !== 0) throw new Error(result.stderr || 'git fixture command failed');
-      return (result.stdout ?? '').trim();
+      const result = runProcessSync({
+        command: 'git',
+        args: ['-C', root, ...args],
+        inheritParentEnv: true,
+      });
+      if (!result.ok) throw new Error(result.stderr || result.error || 'git fixture command failed');
+      return result.stdout.trim();
     };
     try {
       git('init', '-q');
