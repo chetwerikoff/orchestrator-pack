@@ -9,9 +9,15 @@ export const CREATE_ISSUE_NEXT_ACTION_KINDS = [
   'retry-stage-record-publication',
   'retry-final-acceptance',
   'retry-create-issue-browser-preflight',
+  'execute-observe-owned-turn',
+  'execute-github-first-read-only',
+  'execute-review-runner-read-only',
 ] as const;
 
 export type CreateIssueNextActionKind = typeof CREATE_ISSUE_NEXT_ACTION_KINDS[number];
+
+export type ExecuteIssueManagerPhase = 'implementation' | 'review' | 'fixer';
+export type ExecuteIssueManagerStage = `execute:${ExecuteIssueManagerPhase}`;
 
 export const CREATE_ISSUE_RECONCILIATION_KINDS = [
   'reconcile-stage-read-only',
@@ -24,7 +30,7 @@ export const CREATE_ISSUE_CONTINUATION_KINDS = [
   'retry-stage-record-publication',
   'retry-final-acceptance',
   'retry-create-issue-browser-preflight',
- ] as const satisfies readonly CreateIssueNextActionKind[];
+] as const satisfies readonly CreateIssueNextActionKind[];
 
 export const CREATE_ISSUE_EXTERNAL_PAUSE_CAUSES = [
   'external:chrome_not_running',
@@ -49,7 +55,8 @@ export type CreateIssueSemanticStage =
   | 'architectural-review'
   | 'architectural-lens'
   | 'architectural'
-  | 'acceptance';
+  | 'acceptance'
+  | ExecuteIssueManagerStage;
 
 export interface CreateIssueActionBinding {
   repository: string;
@@ -97,6 +104,7 @@ export interface CreateIssueTerminalResult {
   blocker?: string;
   nextAction: null;
 }
+export type CreateIssueManagerContractDefectResult = CreateIssueContractDefectResult;
 
 export interface CreateIssueStaleNextActionResult extends CreateIssueRecoverableResult {
   schema: typeof CREATE_ISSUE_STALE_ACTION_SCHEMA;
@@ -132,6 +140,7 @@ export interface CreateIssueContractDefectResult {
 export type CreateIssueManagerResult =
   | CreateIssueTerminalResult
   | CreateIssueRecoverableResult
+  | CreateIssueStaleNextActionResult
   | CreateIssueExternalPauseResult
   | CreateIssueContractDefectResult;
 
@@ -340,7 +349,10 @@ export function isCreateIssueSemanticStage(value: unknown): value is CreateIssue
     || value === 'architectural-review'
     || value === 'architectural-lens'
     || value === 'architectural'
-    || value === 'acceptance';
+    || value === 'acceptance'
+    || value === 'execute:implementation'
+    || value === 'execute:review'
+    || value === 'execute:fixer';
 }
 
 export function validateCreateIssueActionBinding(value: unknown): string[] {
@@ -368,6 +380,7 @@ export function validateCreateIssueNextAction(value: unknown): string[] {
   const action = value as Record<string, unknown>;
   const errors: string[] = [];
   if (action.schema !== CREATE_ISSUE_NEXT_ACTION_SCHEMA) errors.push(`nextAction.schema must be ${CREATE_ISSUE_NEXT_ACTION_SCHEMA}`);
+  if (!nonEmpty(action.kind)) errors.push('nextAction.kind must be non-empty');
   if (!CREATE_ISSUE_NEXT_ACTION_KINDS.includes(action.kind as CreateIssueNextActionKind)) {
     errors.push('nextAction.kind is outside the closed manager kind set');
   }
@@ -476,7 +489,6 @@ export function projectBlockedOnToExternalPause(
     evidence: blockedOn.evidence,
   });
 }
-
 export function sameCreateIssueActionBinding(
   expected: CreateIssueActionBinding,
   observed: Partial<CreateIssueActionBinding>,
@@ -683,4 +695,64 @@ export function assertCreateIssueActionCurrent(input: {
         observed: input.observed,
         nextAction: input.nextAction,
       });
+}
+
+export interface CreateIssueManagerBoundaryEvaluation {
+  result: CreateIssueManagerResult;
+  exitCode: 0 | 3 | 4 | 5;
+}
+
+function createIssueManagerContractDefect(producer: string, detail: string[]): CreateIssueManagerContractDefectResult {
+  return {
+    ok: false,
+    cause: 'producer_contract_defect',
+    defect: { producer, detail },
+    nextAction: null,
+  };
+}
+
+function sameArgv(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+export function evaluateCreateIssueManagerBoundary(input: {
+  producer: string;
+  currentArgv: readonly string[];
+  produce: () => unknown;
+}): CreateIssueManagerBoundaryEvaluation {
+  let candidate: unknown;
+  try {
+    candidate = input.produce();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const result = createIssueManagerContractDefect(input.producer, [detail]);
+    return { result, exitCode: 5 };
+  }
+  const errors = validateCreateIssueManagerResult(candidate);
+  if (errors.length > 0) {
+    const result = createIssueManagerContractDefect(input.producer, errors);
+    return { result, exitCode: 5 };
+  }
+  const result = candidate as CreateIssueManagerResult;
+  if (!result.ok && result.nextAction !== null && sameArgv(result.nextAction.argv, input.currentArgv)) {
+    const defect = createIssueManagerContractDefect(input.producer, [
+      'recoverable nextAction.argv must not be byte-identical to currentArgv',
+    ]);
+    const result: CreateIssueManagerContractDefectResult = {
+      ...defect,
+      cause: 'self_recommendation',
+    };
+    return { result, exitCode: 5 };
+  }
+  if (result.ok) return { result, exitCode: 0 };
+  if (CREATE_ISSUE_EXTERNAL_PAUSE_CAUSES.includes(result.cause as CreateIssueExternalPauseCause)) return { result, exitCode: 4 };
+  if (result.cause === 'producer_contract_defect' || result.cause === 'self_recommendation') return { result, exitCode: 5 };
+  if (result.cause === 'stale_next_action') return { result, exitCode: 3 };
+  if (result.nextAction === null) {
+    const defect = createIssueManagerContractDefect(input.producer, [
+      'non-success terminal result must be an external pause, contract defect, or stale next action',
+    ]);
+    return { result: defect, exitCode: 5 };
+  }
+  return { result, exitCode: 3 };
 }

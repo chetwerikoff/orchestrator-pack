@@ -416,12 +416,20 @@ uses the existing Browser-GPT pack-review recovery order, not the execute-Issue
 3. when required, perform the shared runbook's read-only CDP census.
 
 When the canonical runner returns a runner-owned `nextAction`, execute that
-action promptly within the runner's own bound. Do not insert `sleep`, `ps`
-polling, or switch to a neighboring Issue as a substitute for acting on the
-current pack-review result. A scrubbed foreign-owner diagnostic from another
-conversation creates no manager retry authority by itself. When the runner
-returns no legal `nextAction`, preserve its existing terminal/no-resend result
-instead of inventing one.
+action promptly within the runner's own bound only after projecting the
+manager-facing runner result through the shared #2078/#2081 manager result
+boundary. A runner-owned `nextAction` may pass through only when its argv is
+already read-only and its kind belongs to the shared closed set. A send-capable
+or opaque runner action is never copied into a boundary argv: first run only
+`execute-review-runner-read-only`, then return to this runbook, which alone may
+reach the runner-owned send-capable action after its existing gates.
+`review_target_unavailable` or another proven external wall becomes
+`external_pause`; non-success with no legal read-only action and no external
+evidence becomes boundary-only `contract_defect`. Neither outcome authorizes
+manager `worker_done --outcome failed`.
+
+Do not insert `sleep`, `ps` polling, or switch to a neighboring Issue as a
+substitute for acting on the current pack-review result. A scrubbed foreign-owner diagnostic from another conversation creates no manager retry authority by itself.
 
 An exact owned reviewer turn that is still generating below 15 minutes remains
 active and receives no replacement. At or beyond 15 minutes it is only eligible
@@ -495,10 +503,21 @@ that failed chat.
 
 ## Recovery handoff to the supervisor
 
-Do not create a new blocker/result state machine.
+The #2078/#2081 shared manager result boundary is the only result classifier.
+Do not create another blocker/result state machine, ledger, retry engine, store,
+daemon, registry, or supervisor recovery subsystem.
 
-When the manager reaches a condition it cannot legally repair within its
-execution scope, return through the existing Task/Dispatch/manager handoff with:
+When the manager reaches a repository-owned bookkeeping/observation condition
+or another condition it cannot legally repair within its execution scope, pass
+the manager-facing producer result through
+`scripts/execute-issue-manager-boundary.ts`. On `recoverable`, execute only
+the returned read-only observation/reconciliation prerequisite and then resume
+the owning runbook. On `external_pause` or `contract_defect`, use the existing
+#2078 escalation/non-terminal pause mechanics. A boundary outcome never becomes
+manager `worker_done --outcome failed` and never grants replacement-send
+authority.
+
+Then return through the existing Task/Dispatch/manager handoff with:
 
 - the Issue identity;
 - the concrete obstacle;
@@ -525,7 +544,7 @@ fails closed: no fresh execution conversation, no duplicate prompt, no invented
 history, and `OPERATOR_ACTION_REQUIRED` names the missing identity/evidence
 boundary.
 
-## Operator-visible terminal states
+## Operator-visible outcomes
 
 ### `VERIFIED_COMPLETE`
 
@@ -541,7 +560,11 @@ not sufficient. This is the normal top-level terminal outcome.
 Use only after legal recovery is exhausted and the remaining obstacle is a
 genuine external permission/capability requirement, impossibility, unresolved
 target ambiguity, or the possible-send active-turn identity gap for which the
-shared Browser-GPT authority forbids guessing.
+shared Browser-GPT authority forbids guessing. The supervisor-visible name and
+trigger meaning stay unchanged, but its manager-side effect is the #2078
+escalation with `resume_when: { operator: true }`; the parent Task and manager
+Dispatch remain non-terminal, and the manager does not emit
+`worker_done --outcome failed`.
 
 Do not use `OPERATOR_ACTION_REQUIRED` merely because a manager/helper/browser
 attempt failed, CI is red, GPT left work incomplete, or a recoverable runtime
@@ -573,5 +596,5 @@ GitHub-first/final-revalidation gates above.
 
 If real implementation requires a new persistent cross-process ownership or
 recovery guarantee, new generic Browser-GPT resend authority, or another
-stronger subsystem guarantee, stop before widening this workflow and return to
-the live Issue/tier authority.
+stronger subsystem guarantee, do not expand this workflow; return to the live
+Issue/tier authority.
