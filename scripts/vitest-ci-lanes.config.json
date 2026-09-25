@@ -4,7 +4,9 @@
   "lightShardCount": 2,
   "heavyDefaultRuntimeMs": 120000,
   "heavyForkPoolMinRuntimeMs": 6826,
-  "heavyPerTestIsolate": ["scripts/pr2a/final-conformance.test.ts"],
+  "heavyPerTestIsolate": [
+    "scripts/pr2a/final-conformance.test.ts"
+  ],
   "heavyFileBatchIsolate": [
     "scripts/pr2-foundation/mutation-external-ci.test.ts"
   ],
@@ -82,13 +84,13 @@
     "scripts/lib/create-issue-completed-result.test.ts": "light",
     "scripts/lib/create-issue-final-acceptance-revision.test.ts": "light",
     "scripts/lib/create-issue-manager-boundary.test.ts": "light",
-    "scripts/lib/execute-issue-manager-boundary.test.ts": "light",
     "scripts/lib/create-issue-stage-lifecycle-acceptance.test.ts": "light",
     "scripts/lib/create-issue-stage-lifecycle.test.ts": "light",
     "scripts/lib/create-issue-stage-record-artifacts.test.ts": "heavy",
     "scripts/lib/create-issue-stage-record-review-lane.test.ts": "light",
     "scripts/lib/create-issue-stage-record.test.ts": "light",
     "scripts/lib/create-issue-stage-topology.test.ts": "light",
+    "scripts/lib/execute-issue-manager-boundary.test.ts": "light",
     "scripts/lib/operator-primary-target.test.ts": "light",
     "scripts/lib/operator-publication.test.ts": "light",
     "scripts/lib/protected-signal-receipt.test.ts": "light",
@@ -98,6 +100,7 @@
     "scripts/lib/worker-degraded-ci-handoff.test.ts": "light",
     "scripts/lib/worker-report-store.test.ts": "light",
     "scripts/lib/worker-smoke-bounded-create.test.ts": "light",
+    "scripts/merge-adoption-effect.test.ts": "heavy",
     "scripts/merge-triage-evidence.test.ts": "light",
     "scripts/operator-primary-binding.test.ts": "light",
     "scripts/orca-runtime/dispatch-terminal-mail.test.ts": "light",
