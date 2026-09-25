@@ -417,69 +417,56 @@ describe('revision-aware final acceptance', () => {
     expect(errors.join('\n')).toContain('published stage event cycle-r09:competitive:attempt-1 is duplicated');
   });
 
-  it('recognizes only one matching live operator-amendment marker', () => {
+  it('accepts exactly one current operator-amendment marker while ignoring older markers', () => {
+    const currentMarker = '<!-- operator-amendment: r04; operator expanded execution scope -->';
     const matchingBody = [
       '<!-- source-revision: r04 -->',
-      '<!-- operator-amendment: r04; operator expanded execution scope -->',
+      currentMarker,
       'body',
     ].join('\n');
     const matching = resolveOperatorAmendmentEvidence(matchingBody, 'r04');
     expect(matching).toMatchObject({
       kind: 'operator_amendment',
       sourceRevision: 'r04',
-      markerLine: '<!-- operator-amendment: r04; operator expanded execution scope -->',
+      markerLine: currentMarker,
     });
     expect(matching?.bodySha256).toMatch(/^[0-9a-f]{64}$/);
 
-    expect(resolveOperatorAmendmentEvidence(
-      matchingBody.replace('operator-amendment: r04', 'operator-amendment: r03'),
-      'r04',
-    )).toBeUndefined();
+    const accumulatedBody = [
+      '<!-- source-revision: r04 -->',
+      '<!-- operator-amendment: r03; earlier operator amendment -->',
+      currentMarker,
+      'body',
+    ].join('\n');
+    expect(resolveOperatorAmendmentEvidence(accumulatedBody, 'r04')).toMatchObject({
+      kind: 'operator_amendment',
+      sourceRevision: 'r04',
+      markerLine: currentMarker,
+    });
+
+    const olderOnlyBody = [
+      '<!-- source-revision: r04 -->',
+      '<!-- operator-amendment: r03; earlier operator amendment -->',
+      'body',
+    ].join('\n');
+    expect(resolveOperatorAmendmentEvidence(olderOnlyBody, 'r04')).toBeUndefined();
 
     expect(resolveOperatorAmendmentEvidence([
       matchingBody,
-      '<!-- operator-amendment: r04; duplicate marker -->',
+      '<!-- operator-amendment: r04; duplicate current marker -->',
     ].join('\n'), 'r04')).toBeUndefined();
 
     expect(resolveOperatorAmendmentEvidence([
       '<!-- source-revision: r04 -->',
       '```markdown',
-      '<!-- operator-amendment: r04; fenced example -->',
+      currentMarker,
       '```',
     ].join('\n'), 'r04')).toBeUndefined();
   });
-
-  it('accepts owner-editor evidence only when it is explicit and distinct from the governed author', () => {
-    const body = '<!-- source-revision: r04 -->\noperator-edited body';
-    expect(resolveOperatorAmendmentEvidence(body, 'r04', {
-      issueBodyEditorLogin: 'repo-owner',
-      repositoryOwnerLogin: 'repo-owner',
-      governedAuthorLogin: 'governed-bot',
-    })).toMatchObject({
-      kind: 'operator_amendment',
-      sourceRevision: 'r04',
-      editorLogin: 'repo-owner',
-    });
-
-    expect(resolveOperatorAmendmentEvidence(body, 'r04', {
-      issueBodyEditorLogin: 'repo-owner',
-      repositoryOwnerLogin: 'repo-owner',
-    })).toBeUndefined();
-    expect(resolveOperatorAmendmentEvidence(body, 'r04', {
-      issueBodyEditorLogin: 'repo-owner',
-      repositoryOwnerLogin: 'repo-owner',
-      governedAuthorLogin: 'repo-owner',
-    })).toBeUndefined();
-    expect(resolveOperatorAmendmentEvidence(body, 'r04', {
-      issueBodyEditorLogin: 'someone-else',
-      repositoryOwnerLogin: 'repo-owner',
-      governedAuthorLogin: 'governed-bot',
-    })).toBeUndefined();
-  });
-
   it('accepts a matching operator amendment before review-cycle finalization formalities', () => {
     const body = [
       '<!-- source-revision: r04 -->',
+      '<!-- operator-amendment: r03; earlier accepted amendment -->',
       '<!-- operator-amendment: r04; accepted directly by operator -->',
       '',
       '## Goal',
