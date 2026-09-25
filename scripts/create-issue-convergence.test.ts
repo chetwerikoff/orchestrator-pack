@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
+  CREATE_ISSUE_NEXT_ACTION_KINDS,
   assertCreateIssueActionCurrent,
   createIssueNextAction,
   createIssueRecoverableResult,
   createIssueTerminalResult,
+  evaluateCreateIssueManagerBoundary,
   existingPacedBoundedRetryAction,
   projectBlockedOnToExternalPause,
   projectZeroSendManagerResult,
@@ -46,6 +48,17 @@ function tempRoot(): string {
   const root = mkdtempSync(join(tmpdir(), 'opk-create-issue-convergence-'));
   roots.push(root);
   return root;
+}
+
+function productionTsFiles(root: string): string[] {
+  const out: string[] = [];
+  for (const name of readdirSync(root)) {
+    const path = join(root, name);
+    const stat = statSync(path);
+    if (stat.isDirectory()) out.push(...productionTsFiles(path));
+    else if (name.endsWith('.ts') && !name.endsWith('.test.ts')) out.push(path);
+  }
+  return out;
 }
 
 afterEach(() => {
@@ -309,6 +322,29 @@ describe('create-Issue nextAction contract', () => {
     expect(validateCreateIssueManagerResult({ ok: false, cause: 'stuck', nextAction: null })).toContain(
       'recoverable manager result.nextAction must be non-null',
     );
+  });
+
+  it('classifies an ordinary non-success terminal result as a producer contract defect', () => {
+    const terminal = { ok: false as const, cause: 'ordinary_terminal_result', nextAction: null };
+    const evaluated = evaluateCreateIssueManagerBoundary({
+      producer: 'fixture-producer',
+      currentArgv: ['node', 'fixture.ts'],
+      produce: () => terminal,
+    });
+    expect(evaluated.exitCode).toBe(5);
+    expect(evaluated.result).toMatchObject({
+      ok: false,
+      cause: 'producer_contract_defect',
+      nextAction: null,
+    });
+  });
+
+  it('registers the execute-Issue read-only kinds in the shared closed registry', () => {
+    expect(CREATE_ISSUE_NEXT_ACTION_KINDS.filter((kind) => kind.startsWith('execute-'))).toEqual([
+      'execute-observe-owned-turn',
+      'execute-github-first-read-only',
+      'execute-review-runner-read-only',
+    ]);
   });
 
   it('returns canonical stale_next_action when any state binding moves', () => {
