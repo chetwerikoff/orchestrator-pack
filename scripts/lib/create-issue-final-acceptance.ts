@@ -17,6 +17,7 @@ import {
 } from './create-issue-stage-record-gh.ts';
 import { appendPublishedLogicalJournalEvent } from './create-issue-stage-record-core.ts';
 import {
+  collectUnfencedLinesContaining,
   executeFinalAcceptanceGuards,
   FINAL_ACCEPTANCE_CONTRACT_VERSION,
   resolveOperatorAmendmentEvidence,
@@ -87,24 +88,7 @@ export function parseCanonicalSourceRevisionMarker(body: string): {
   errors: string[];
 } {
   const errors: string[] = [];
-  let fencedCode: '`' | '~' | null = null;
-  const markerLines: string[] = [];
-  for (const line of body.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (fencedCode !== null) {
-      if (trimmed.startsWith(fencedCode.repeat(3))) fencedCode = null;
-      continue;
-    }
-    if (trimmed.startsWith('```')) {
-      fencedCode = '`';
-      continue;
-    }
-    if (trimmed.startsWith('~~~')) {
-      fencedCode = '~';
-      continue;
-    }
-    if (line.includes('source-revision:')) markerLines.push(line);
-  }
+  const markerLines = collectUnfencedLinesContaining(body, 'source-revision:');
   if (markerLines.length === 0) {
     return { errors: ['live Issue body is missing the canonical source-revision marker'] };
   }
