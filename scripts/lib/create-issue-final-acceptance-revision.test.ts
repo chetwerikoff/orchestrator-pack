@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   parseCanonicalSourceRevisionMarker,
+  runFinalAcceptance,
   validateTerminalSourceRevision,
   validateFinalAcceptanceReadbackHead,
   validateCanonicalReceiptPathSet,
@@ -26,6 +27,7 @@ import {
 import { logicalFingerprint, parseLogicalFromCommentBody } from './create-issue-stage-record-marker.ts';
 import { evaluateStageCredentialingSettlement } from './create-issue-stage-lifecycle-acceptance.ts';
 import { validateReviewLaneRecord } from './review-lane-record.ts';
+import { createMockGhState, createMockTransport } from './create-issue-stage-record-test-helpers.ts';
 
 const temporaryDirectories: string[] = [];
 
@@ -528,6 +530,68 @@ describe('revision-aware final acceptance', () => {
     });
     expect(result.errors.some((error) => error.startsWith('stage-completeness:'))).toBe(false);
     expect(result.errors.some((error) => error.startsWith('finding-ledger:'))).toBe(false);
+  });
+
+
+  it('runs full final acceptance for an operator amendment without loading a new review cycle', () => {
+    const body = [
+      '<!-- source-revision: r04 -->',
+      '<!-- operator-amendment: r04; operator expanded execution scope -->',
+      '',
+      '```behavior-kind',
+      'action-producing',
+      '```',
+      '```complexity-tier',
+      'tier: T2',
+      'advisory-prior: T2',
+      'failure-type: local-behavior',
+      'size: single-component-design-judgment',
+      'risk-note: bounded final-acceptance evidence path only',
+      '```',
+      '```positive-outcome',
+      'asserts: operator amendment is accepted without reopening consumed review slots',
+      'input: realistic',
+      '```',
+      '```denylist',
+      'vendor/**',
+      'packages/core/**',
+      '```',
+      '```allowed-roots',
+      'scripts/lib/create-issue-final-acceptance.ts',
+      '```',
+      '```smoke-test-plan',
+      '- action: evaluate a matching amendment | expected: accepted without new review work',
+      '```',
+      '```contract-evidence',
+      'none',
+      '```',
+    ].join('\n');
+    const state = createMockGhState({
+      issue: { title: 'operator amendment fixture', body, labels: [] },
+    });
+    const reviewDir = join(mkdtempSync(join(tmpdir(), 'opk-operator-amendment-')), 'missing-review');
+    temporaryDirectories.push(join(reviewDir, '..'));
+
+    const result = runFinalAcceptance(createMockTransport(state), {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 2135,
+      publicActor: 'cursor-flow-manager',
+      issueBody: '<!-- source-revision: r03 -->\nreviewed body',
+      terminalSourceBody: '<!-- source-revision: r03 -->\nreviewed body',
+      issueRevision: 'r04',
+      cycleId: 'consumed-cycle-r03',
+      tier: 'T2',
+      reviewDir,
+      stageReceiptPaths: [join(reviewDir, 'missing-receipt.json')],
+      capturePaths: [join(reviewDir, 'missing-capture.txt')],
+    });
+
+    expect(result.ok, result.guardErrors.join('\n')).toBe(true);
+    expect(result.acceptanceEvidence).toMatchObject({
+      kind: 'operator_amendment',
+      sourceRevision: 'r04',
+    });
+    expect(result.guardErrors).toEqual([]);
   });
 
   it('requires exactly one canonical source-revision marker', () => {
