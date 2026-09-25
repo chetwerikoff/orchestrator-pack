@@ -24,6 +24,13 @@ export interface PublishedAuthorState {
   byteLength: number;
 }
 
+export interface OperatorAmendmentEvidence {
+  kind: 'operator_amendment';
+  sourceRevision: string;
+  bodySha256: string;
+  markerLine: string;
+}
+
 export interface FinalAcceptanceGuardInput {
   issueBody: string;
   /** Immutable body artifact supplied to the terminal reviewer. */
@@ -55,6 +62,7 @@ export interface FinalAcceptanceGuardResult {
   ok: boolean;
   contractVersion: string;
   errors: string[];
+  acceptanceEvidence?: OperatorAmendmentEvidence;
 }
 
 function defaultReadText(path: string): string {
@@ -103,6 +111,52 @@ function tryReadJson(path: string, readJson: (path: string) => unknown): unknown
 
 function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+export function collectUnfencedLinesContaining(body: string, token: string): string[] {
+  let fencedCode: { character: '`' | '~'; length: number } | null = null;
+  const matches: string[] = [];
+  for (const line of body.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (fencedCode !== null) {
+      const closingFence = new RegExp(`^${fencedCode.character}{${fencedCode.length},}\\s*$`);
+      if (closingFence.test(trimmed)) fencedCode = null;
+      continue;
+    }
+    const openingFence = /^(`{3,}|~{3,})/.exec(trimmed);
+    if (openingFence) {
+      fencedCode = {
+        character: openingFence[1]![0] as '`' | '~',
+        length: openingFence[1]!.length,
+      };
+      continue;
+    }
+    if (line.includes(token)) matches.push(line);
+  }
+  return matches;
+}
+
+export function resolveOperatorAmendmentEvidence(
+  currentIssueBody: string,
+  issueRevision: string,
+): OperatorAmendmentEvidence | undefined {
+  const sourceRevision = SOURCE_REVISION_MARKER_RE.exec(currentIssueBody)?.[1];
+  if (!sourceRevision || sourceRevision.toLowerCase() !== issueRevision.trim().toLowerCase()) return undefined;
+
+  const matchingMarkerLines = collectUnfencedLinesContaining(currentIssueBody, 'operator-amendment:')
+    .map((line) => line.trim())
+    .filter((line) => {
+      const marker = /^<!--\s*operator-amendment:\s*(r[0-9]+)\s*;\s*(\S(?:.*\S)?)\s*-->$/i.exec(line);
+      return marker?.[1]?.toLowerCase() === sourceRevision.toLowerCase();
+    });
+  if (matchingMarkerLines.length !== 1) return undefined;
+
+  return {
+    kind: 'operator_amendment',
+    sourceRevision,
+    bodySha256: createHash('sha256').update(Buffer.from(currentIssueBody, 'utf8')).digest('hex'),
+    markerLine: matchingMarkerLines[0]!,
+  };
 }
 
 export function validateExactTerminalBodyBinding(
@@ -234,6 +288,16 @@ export function executeFinalAcceptanceGuards(
   }) as { ok: boolean; errors: string[]; skipped?: boolean };
   if (!contractEvidenceResult.ok && !contractEvidenceResult.skipped) {
     errors.push(...contractEvidenceResult.errors.map((item) => `contract-evidence: ${item}`));
+  }
+
+  const acceptanceEvidence = resolveOperatorAmendmentEvidence(currentIssueBody, input.issueRevision);
+  if (acceptanceEvidence) {
+    return {
+      ok: errors.length === 0,
+      contractVersion: FINAL_ACCEPTANCE_CONTRACT_VERSION,
+      errors: [...new Set(errors)],
+      acceptanceEvidence,
+    };
   }
 
   const stageReceipts = input.stageReceiptValues
