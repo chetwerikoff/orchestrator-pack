@@ -390,6 +390,8 @@ conversation after fallback is authorized and the continuation is settled;
 never close foreign/sibling conversations. Closing a tab is cleanup, not proof
 of repository or server-side state.
 
+## Multi-turn completion loop
+
 ```text
 submitted GPT turn
   -> authoritative recovery_required/conversation product cause
