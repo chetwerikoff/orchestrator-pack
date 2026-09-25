@@ -1,4 +1,4 @@
-// @vitest-ci-lane light
+// @vitest-ci-lane heavy
 // @vitest-pre-topology-seconds 20
 import { runProcess, runProcessSync, type ProcessResult } from './kernel/subprocess.ts';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
