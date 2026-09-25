@@ -69,6 +69,7 @@ import {
   type WorkerSmokeSelectiveRetryPlan,
   type WorkerSmokeTrustedTarget,
 } from './lib/worker-smoke-core.ts';
+import { evaluateSmokePlanPreflight } from './lib/smoke-plan-preflight.ts';
 import {
   bindSmokeTerminalHandle,
   cleanupSmokeLifecycle,
@@ -1995,6 +1996,32 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     return 1;
   }
 
+  const planArtifactDir = resolveSmokeRunArtifactDir(options.cwd, attemptId);
+  const planPreflight = evaluateSmokePlanPreflight({
+    issueBody,
+    scenarios: plan.scenarios,
+    artifactDir: planArtifactDir,
+  });
+  if (!planPreflight.ok) {
+    const { violation } = planPreflight;
+    const report = operationalReport('scenario_precondition_unavailable', options, {
+      action: violation.action,
+      expected: violation.expected,
+      observed: violation.observed,
+      terminalCleanup: 'not_started',
+    });
+    publishSmokeReport(report, options, preAttempt, publishComment);
+    emit({
+      ok: false,
+      attempted: false,
+      reason: 'scenario_precondition_unavailable',
+      report,
+      attemptId,
+      preflight: { reason: violation.reason, scenarioOrdinal: violation.scenarioOrdinal },
+    }, options.json);
+    return 1;
+  }
+
   let trackedSmokeRuntimePaths: string[];
   try {
     trackedSmokeRuntimePaths = gitTrackedSmokeRuntimePaths(options.cwd);
@@ -2184,7 +2211,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   }
 
   const runId = attemptId;
-  const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
+  const artifactDir = planArtifactDir;
   const runPublication: SmokePublicationBinding = {
     attemptId,
     runId,
