@@ -34,8 +34,9 @@ The supervisor owns **completion continuity**, not substantive implementation.
    with `work-class=manager`; do not add another manager class or launch system.
 2. Give the manager the Issue identity/URL and the execute-Issue assignment.
 3. Keep the parent task alive until the execution runbook reaches
-   `VERIFIED_COMPLETE` or the existing top-level stop boundary is genuinely
-   reached.
+   `VERIFIED_COMPLETE` or a genuine external top-level stop boundary is
+   reached. Shared-boundary `external_pause` and `contract_defect` are
+   non-terminal manager outcomes and do not settle the parent Task/Dispatch.
 4. Treat manager/helper/browser/runtime failures as recovery work while the
    existing authoritative evidence still identifies the owned execution
    session/turn, or proves that no prior send/session must be preserved.
@@ -67,6 +68,14 @@ first Browser-GPT side effect it reads both:
 
 - [`docs/chatgpt-task-execution-runbook.md`](../../../docs/chatgpt-task-execution-runbook.md);
 - [`docs/browser-gpt-turn-runbook.md`](../../../docs/browser-gpt-turn-runbook.md).
+Every manager-facing turn-driver, page-probe, and review-runner result is
+projected through the single shared #2078/#2081 four-outcome boundary before the
+manager acts on it. Execute-Issue boundary actions are limited to the three
+read-only reconciliation kinds; the boundary never emits `--new-chat`, a fresh
+conversation, reviewer resend, or another ChatGPT-send-capable argv. Send
+authority remains exclusively with the existing runbook send/no-resend/final-
+revalidation gates. A boundary outcome never becomes manager
+`worker_done --outcome failed`.
 
 At the start of **every** manager turn, re-read the live Issue before choosing
 the turn prompt or next action. If the title/body changed since the manager's
@@ -164,12 +173,19 @@ than overall completion authority.
 `OPERATOR_ACTION_REQUIRED` is exceptional. Use it only after the legal existing
 recovery path is exhausted and the remaining condition is a genuine external
 permission/capability failure, impossibility, unresolved target ambiguity, or the
-fail-closed possible-send identity gap described above.
+fail-closed possible-send identity gap described above. The visible report name
+and trigger meaning stay unchanged, but the manager-side effect is the shared
+#2078 escalation with `resume_when: { operator: true }`; the parent Task and
+manager Dispatch remain non-terminal and no `worker_done --outcome failed` is
+sent.
 
 Merge is never implicit. Stop at the verified repository completion/readiness
 state unless the direct top-level operator separately orders merge.
 
 ## No new machinery
+The #2078/#2081 shared boundary is the only manager result classifier. Do not
+add a second blocker/result classifier, ledger, retry engine, store, daemon,
+registry, or supervisor recovery subsystem.
 
 This workflow adds no second Browser-GPT transport/probe/runtime behavior,
 generic browser skill, daemon, scheduler, watcher, queue, lease, retry service,
