@@ -51,6 +51,11 @@ const ORCHESTRATION_RECONCILE_WINDOW_MS = 60_000;
 const ORCHESTRATION_RECONCILE_MAX_BACKOFF_MS = 30 * 60_000;
 export const ORCHESTRATION_POINTER_ABSENT_BACKOFF_MS = 5_000;
 export const ORCHESTRATION_STALE_POINTER_DRAIN_MS = 10_000;
+// Unread mail older than this whose recipient does not resolve to a live worker is
+// backlog (settled dispatches, closed panes). Its failed resolution is cached so each
+// pass does not re-query every dead target through the runtime CLI.
+export const ORCHESTRATION_STALE_TARGET_MIN_AGE_MS = 60 * 60_000;
+export const ORCHESTRATION_STALE_TARGET_BACKOFF_MS = 15 * 60_000;
 const ORCHESTRATION_INBOX_LIMIT = 5_000;
 const RECONCILE_COMMAND_TIMEOUT_MS = 10_000;
 
@@ -458,6 +463,7 @@ interface PersistedReconcileState {
   readonly episodes: Record<string, EpisodeRecord>;
   staleObservations?: Record<string, StalePointerObservation>;
   submittedFingerprint?: Record<string, string>;
+  unresolvedTargets?: Record<string, number>;
 }
 
 function recipientEpisodeKey(worker: RuntimeWorker): string {
@@ -564,9 +570,15 @@ function loadReconcileState(path: string): PersistedReconcileState {
         if (typeof value === 'string' && value.trim()) submittedFingerprint[key] = value;
       }
     }
-    return { messages, episodes, staleObservations, submittedFingerprint };
+    const unresolvedTargets: Record<string, number> = {};
+    if (record.unresolvedTargets && typeof record.unresolvedTargets === 'object' && !Array.isArray(record.unresolvedTargets)) {
+      for (const [key, value] of Object.entries(record.unresolvedTargets as Record<string, unknown>)) {
+        if (typeof value === 'number' && Number.isFinite(value)) unresolvedTargets[key] = value;
+      }
+    }
+    return { messages, episodes, staleObservations, submittedFingerprint, unresolvedTargets };
   } catch {
-    return { messages: {}, episodes: {}, staleObservations: {}, submittedFingerprint: {} };
+    return { messages: {}, episodes: {}, staleObservations: {}, submittedFingerprint: {}, unresolvedTargets: {} };
   }
 }
 
@@ -577,6 +589,7 @@ function saveReconcileState(path: string, state: PersistedReconcileState): void 
     episodes: state.episodes,
     staleObservations: state.staleObservations ?? {},
     submittedFingerprint: state.submittedFingerprint ?? {},
+    unresolvedTargets: state.unresolvedTargets ?? {},
   }) + '\n');
 }
 
@@ -1841,12 +1854,28 @@ export async function runOrchestrationMailReconcileTick(
     type Resolution = ReturnType<DeliveryMessageSubmitDeps['resolveWorker']>;
     const resolutions = new Map<string, Resolution>();
     const retrievable = new Map<string, ReturnType<NonNullable<DeliveryMessageSubmitDeps['isMessageRetrievable']>> | { readonly ok: true; readonly messageIds: ReadonlySet<string> } | { readonly ok: false; readonly reason: string }>();
+    const createdAtById = new Map(rankedRows.map((candidate) => [candidate.id, candidate.createdAt]));
+    const unresolvedTargets = state.unresolvedTargets ?? {};
+    state.unresolvedTargets = unresolvedTargets;
+    for (const [key, until] of Object.entries(unresolvedTargets)) {
+      if (current >= until) delete unresolvedTargets[key];
+    }
+    const isStaleBacklog = (message: DeliveryMessage): boolean => {
+      const createdAt = createdAtById.get(message.id) ?? 0;
+      return createdAt > 0 && current - createdAt >= ORCHESTRATION_STALE_TARGET_MIN_AGE_MS;
+    };
     const resolveWorker = (message: DeliveryMessage): Resolution => {
       const cacheKey = message.recipient + '\u0000' + message.runId;
       const cached = resolutions.get(cacheKey);
       if (cached) return cached;
+      const staleBacklog = isStaleBacklog(message);
+      if (staleBacklog && unresolvedTargets[cacheKey] !== undefined) {
+        return { ok: false, reason: 'orchestration_target_unresolved_backoff' };
+      }
       const resolved = deps.resolveWorker(message);
       resolutions.set(cacheKey, resolved);
+      if (resolved.ok && resolved.worker) delete unresolvedTargets[cacheKey];
+      else if (staleBacklog) unresolvedTargets[cacheKey] = current + ORCHESTRATION_STALE_TARGET_BACKOFF_MS;
       return resolved;
     };
     const activeEpisodeKeys = new Set<string>();

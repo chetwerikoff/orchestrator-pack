@@ -1858,6 +1858,41 @@ describe('orchestration mail reconciliation', () => {
     expect(result.reasons).toContain('msg_revoked:orchestration_message_unretrievable');
   });
 
+  it('backs off re-resolving dead targets of stale unread backlog across passes', async () => {
+    const target = worker('term_live_backlog');
+    const hourMs = 60 * 60_000;
+    const now = 10 * hourMs;
+    const rows = [
+      { id: 'msg_old_dead', run_id: 'run_old', to_handle: 'dispatch:ctx_settled', read: 0, created_at: now - 2 * hourMs },
+      { id: 'msg_fresh_dead', run_id: 'run_fresh', to_handle: 'dispatch:ctx_new', read: 0, created_at: now - 1_000 },
+    ];
+    const resolved: string[] = [];
+    const deps = {
+      ...reconciliationDeps(rows, target),
+      resolveWorker: (message: { readonly recipient: string }) => {
+        resolved.push(message.recipient);
+        return { ok: false as const, reason: 'assignment_target_unresolved' };
+      },
+    };
+    const suffix = `${process.pid}-${Date.now()}`;
+    const options = {
+      ledgerPath: join(tmpdir(), `opk-reconcile-backlog-${suffix}.json`),
+      lockPath: join(tmpdir(), `opk-reconcile-backlog-${suffix}.lock`),
+    };
+
+    await runOrchestrationMailReconcileTick(deps, { ...options, now: () => now });
+    expect(resolved.sort()).toEqual(['dispatch:ctx_new', 'dispatch:ctx_settled']);
+
+    resolved.length = 0;
+    const second = await runOrchestrationMailReconcileTick(deps, { ...options, now: () => now + 5_000 });
+    expect(resolved).toEqual(['dispatch:ctx_new']);
+    expect(second.reasons).toContain('msg_old_dead:orchestration_target_unresolved_backoff');
+
+    resolved.length = 0;
+    await runOrchestrationMailReconcileTick(deps, { ...options, now: () => now + 16 * 60_000 });
+    expect(resolved.sort()).toEqual(['dispatch:ctx_new', 'dispatch:ctx_settled']);
+  });
+
   it('delivers unread Run mail after exact Run retrievability succeeds', async () => {
     const target = worker('term_run_mail_unread');
     const submitted: RuntimeWorkerIdentity[] = [];
