@@ -73,6 +73,18 @@ function openCodeAgentFromCommand(command: string): string | undefined {
   return agent?.trim() || undefined;
 }
 
+export interface OpenCodeControlBinding {
+  readonly url: string;
+  readonly agent?: string;
+}
+
+export function openCodeControlFromCommand(command: string): OpenCodeControlBinding | undefined {
+  const url = openCodeUrlFromCommand(command);
+  if (!url) return undefined;
+  const agent = openCodeAgentFromCommand(command);
+  return { url, ...(agent ? { agent } : {}) };
+}
+
 function defaultOpenCodeHttpRequest(input: {
   readonly url: string;
   readonly method: 'GET' | 'POST';
@@ -239,10 +251,8 @@ interface OwnedWorkerRecord {
   readonly openCodeUrl?: string;
 }
 
-interface OpenCodeUrlRecord {
+interface OpenCodeUrlRecord extends OpenCodeControlBinding {
   readonly identity: RuntimeWorkerIdentity;
-  readonly url: string;
-  readonly agent?: string;
 }
 
 interface KnownWorkspaceRecord {
@@ -703,6 +713,13 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     this.#knownWorkspace.set(identityKey(identity), { workspaceSelector, workspacePath });
   }
 
+  protected recoverOpenCodeControl(
+    _worker: RuntimeWorkerIdentity,
+    _current: RuntimeWorker,
+  ): OpenCodeControlBinding | undefined {
+    return undefined;
+  }
+
   protected rebindOpenCodeUrl(
     previousIdentity: RuntimeWorkerIdentity,
     nextIdentity: RuntimeWorkerIdentity,
@@ -1009,9 +1026,15 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     let record = this.#openCodeUrls.get(worker.id);
     if (!record || !sameRuntimeWorker(record.identity, worker)) {
       const current = this.findWorker(worker);
-      record = current.status === 'ok' && current.value && sameRuntimeWorker(current.value.identity, worker)
-        ? this.#openCodeUrls.get(worker.id)
-        : undefined;
+      if (current.status === 'ok' && current.value && sameRuntimeWorker(current.value.identity, worker)) {
+        const recovered = this.recoverOpenCodeControl(worker, current.value);
+        if (recovered) {
+          this.#rememberOpenCodeUrl(worker, recovered.url, recovered.agent);
+        }
+        record = this.#openCodeUrls.get(worker.id);
+      } else {
+        record = undefined;
+      }
     }
     if (!record || !sameRuntimeWorker(record.identity, worker)) return undefined;
     return {
@@ -1030,7 +1053,14 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     const current = this.findWorker(worker, currentOptions);
     if (current.status !== 'ok') return current;
     if (current.value === null) return runtimeFailure('readiness', 'worker_generation_not_found');
-    const urlRecord = this.#openCodeUrls.get(worker.id);
+    let urlRecord = this.#openCodeUrls.get(worker.id);
+    if (!urlRecord || !sameRuntimeWorker(urlRecord.identity, current.value.identity)) {
+      const recovered = this.recoverOpenCodeControl(worker, current.value);
+      if (recovered) {
+        this.#rememberOpenCodeUrl(current.value.identity, recovered.url, recovered.agent);
+        urlRecord = this.#openCodeUrls.get(worker.id);
+      }
+    }
     if (!urlRecord || !sameRuntimeWorker(urlRecord.identity, current.value.identity)) {
       return runtimeUnsupported('readiness', 'runtime_opencode_control_unavailable');
     }
@@ -1428,16 +1458,17 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       title: terminal.title ?? input.title,
       provenance: 'internal',
     };
-    const openCodeUrl = openCodeUrlFromCommand(input.command);
-    const openCodeAgent = openCodeAgentFromCommand(input.command);
+    const openCodeControl = openCodeControlFromCommand(input.command);
     this.#owned.set(handle, {
       identity,
       workspacePath: worker.workspacePath,
       workspaceSelector: workspace,
       title: worker.title,
-      ...(openCodeUrl ? { openCodeUrl } : {}),
+      ...(openCodeControl ? { openCodeUrl: openCodeControl.url } : {}),
     });
-    if (openCodeUrl) this.#rememberOpenCodeUrl(identity, openCodeUrl, openCodeAgent);
+    if (openCodeControl) {
+      this.#rememberOpenCodeUrl(identity, openCodeControl.url, openCodeControl.agent);
+    }
     this.#rememberWorkspace(identity, workspace, worker.workspacePath);
     return { status: 'ok', value: worker };
   }
