@@ -53,6 +53,8 @@
     "scripts/estate-cut/issue-906-vertical-slice.test.ts": "light",
     "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": "heavy",
     "scripts/finding-ledger-guard.test.ts": "light",
+    "scripts/fleet/fleet-sweep.test.ts": "light",
+    "scripts/fleet/fleet-wake.test.ts": "light",
     "scripts/flow-manager-authority-contract.test.ts": "light",
     "scripts/flow-manager-long-running-child.test.ts": "light",
     "scripts/gate-runner/bulk-declarative-gates.test.ts": "light",
