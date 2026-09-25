@@ -302,11 +302,7 @@ export function runFinalAcceptance(
     }
   }
 
-  const operatorAmendment = resolveOperatorAmendmentEvidence(liveIssue.body, liveRevision, {
-    issueBodyEditorLogin: input.issueBodyEditorLogin,
-    repositoryOwnerLogin: censusState.ownerLogin,
-    governedAuthorLogin: input.governedAuthorLogin,
-  });
+  const operatorAmendment = resolveOperatorAmendmentEvidence(liveIssue.body, liveRevision);
 
   let guard: ReturnType<typeof executeFinalAcceptanceGuards>;
   if (operatorAmendment) {
@@ -319,7 +315,6 @@ export function runFinalAcceptance(
       stageReceiptPaths: [],
       cycleId: input.cycleId,
       issueRevision: liveRevision,
-      repositoryOwnerLogin: censusState.ownerLogin,
       ...(censusUsable ? { canonicalLineage: censusState.lineage } : {}),
       ...(publishedAuthorStateResult.state ? { publishedAuthorState: publishedAuthorStateResult.state } : {}),
     });
@@ -358,7 +353,6 @@ export function runFinalAcceptance(
       tierIntakePath: canonicalInventory.intakePath,
       cycleId: input.cycleId,
       issueRevision: liveRevision,
-      repositoryOwnerLogin: censusState.ownerLogin,
       ...(censusUsable ? { canonicalLineage: censusState.lineage } : {}),
       ...(publishedAuthorStateResult.state ? { publishedAuthorState: publishedAuthorStateResult.state } : {}),
     });
