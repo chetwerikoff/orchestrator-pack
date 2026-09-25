@@ -29,5 +29,5 @@
     "scripts/chatgpt-browser-turn/ui-adapter.ts",
     "scripts/flow-manager-authority-contract.test.ts"
   ],
-  "source_revision": "74139f4023e8319fc7e18d9fa825b6c1cf10ec87"
+  "source_revision": "c693ff82ab232dca92537c7260784584fe941966"
 }
