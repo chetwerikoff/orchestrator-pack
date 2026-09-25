@@ -29,6 +29,7 @@ import {
   workerKey,
   type UnsentComposerSubmitDeps,
 } from './cursor-unsent-composer-submit.ts';
+import { OrcaRuntimeAdapter } from './orca-runtime/adapter.ts';
 import type { OrcaJsonResponse } from './orca-runtime/native.ts';
 import type { RuntimeAdapter, RuntimeComposerControlRequest, RuntimeWorker, RuntimeWorkerIdentity } from './runtime/contracts.ts';
 
@@ -1994,6 +1995,53 @@ describe('orchestration mail reconciliation', () => {
       ['orchestration', 'check', '--run', message.runId, '--peek'],
       ['orchestration', 'check', '--terminal', target.identity.id, '--peek'],
     ]);
+  });
+
+  it.each([
+    ['cursor', 'enter_sent', true],
+    [undefined, 'runtime_composer_command_unbound', false],
+  ] as const)('reconciles missing-command mail using agentIdentity %s', async (agentIdentity, expectedReason, shouldSubmit) => {
+    const target = worker('term_family_cursor_mail', 'generation-family-cursor');
+    const terminal = {
+      handle: target.identity.id,
+      incarnationId: target.identity.generation,
+      worktreePath: '/tmp',
+      title: 'cursor',
+      status: 'running' as const,
+      ...(agentIdentity ? { agentIdentity } : {}),
+    };
+    const runtime = new OrcaRuntimeAdapter({
+      runJson: vi.fn((args: readonly string[]): OrcaJsonResponse =>
+        args[0] === 'terminal' && args[1] === 'show'
+          ? { ok: true, result: { terminal } }
+          : { ok: false, error: { code: 'unexpected_operation', message: args.join(' ') } }) as never,
+    });
+    const message = { id: 'msg_cursor_identity', runId: 'run_cursor_identity', recipient: target.identity.id, consumed: false };
+    const submitted: RuntimeWorkerIdentity[] = [];
+    const deps = {
+      readInbox: () => ({ ok: true as const, result: { messages: [{ id: message.id, run_id: message.runId, to_handle: message.recipient, read: 0, created_at: 900 }] } }),
+      lookupMessage: () => ({ ok: true as const, message }),
+      resolveWorker: () => ({ ok: true as const, worker: target }),
+      isMessageRetrievable: () => ({ ok: true as const }),
+      submitDeps: depsFor({}, {
+        submitted,
+        read: () => ({ ok: true as const, lines: submitted.length === 0 ? [buildDeliveryPointer(message), ...CURSOR_FOOTER] : ['→ Add a follow-up', ...CURSOR_FOOTER], source: 'screen' as const }),
+        composerFamily: (identity) => runtime.observeComposerFamily?.(identity),
+      }),
+    };
+    const root = mkdtempSync(join(tmpdir(), 'opk-reconcile-cursor-agent-identity-'));
+    try {
+      const result = await runOrchestrationMailReconcileTick(deps, {
+        ledgerPath: join(root, 'orchestration-mail-reconcile.json'),
+        lockPath: join(root, 'orchestration-mail-reconcile.lock'),
+        now: () => 1_000,
+        workerRoster: [target],
+      });
+      expect(result.reasons).toEqual([`msg_cursor_identity:${expectedReason}`]);
+      expect(submitted).toEqual(shouldSubmit ? [target.identity] : []);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('falls back to the bound terminal when a successful Run peek omits the message', () => {
