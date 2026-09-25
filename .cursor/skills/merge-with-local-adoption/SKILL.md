@@ -115,7 +115,7 @@ The active runtime is Orca. Runtime-specific commands stay at the edge.
 
 Ordinarily use `scripts/worktree-lifecycle/cli.ts --context post-merge-cleanup`. When that
 wrapper refuses solely because of repository policy and the user directly ordered completion,
-continue through the exact-target override path in Step 10 instead of returning
+continue through the exact-target override path in Step 9 instead of returning
 `cleanup_deferred` as the final answer.
 
 AO is retired. Do not use `ao session`, ProjectConfig, AO runtime-worktree probes, or AO
@@ -183,7 +183,7 @@ live head and branch/detached state. Branch, head, or linkage mismatches are rep
 are not repository-policy vetoes after a direct user instruction. A branch mismatch, third head,
 stale or conflicting linkage, missing gate-specific input, or `cleanup_deferred` result is
 diagnostic evidence, not a terminal cleanup veto. Continue with the exact absolute target path
-through the lower-level Orca/Git removal path in Step 10, then perform the final Git/Orca
+through the lower-level Orca/Git removal path in Step 9, then perform the final Git/Orca
 read-back. A second plausible target or an inability to distinguish the primary checkout remains
 real ambiguity.
 
@@ -256,7 +256,7 @@ Also identify the smallest executable live check required by the linked Issue's 
 `Fixed means` / `smoke-test-plan` and express it as one or more exact argv arrays in
 `LIVE_CHECK_JSON`. The check must run from the primary checkout after adoption. If the
 Issue does not provide enough information to bind an executable live check, do not substitute
-Git ancestry, process existence, or prose inspection: Step 8 must end `effect_unverified`.
+Git ancestry, process existence, or prose inspection: the Verify-effect step must end `effect_unverified`.
 
 Set `RULES_TOUCHED=yes` when the diff includes any of:
 
@@ -325,7 +325,7 @@ Apply the instructions identified in Step 4. Keep edits surgical and report rema
 action. Never commit secrets or machine-local values unless the same direct user message
 explicitly requested it.
 
-## Step 8 — Verify effect
+## Verify effect — mandatory after Step 7
 
 This step is mandatory for **every** merge mode. Step 6 ancestry proves only that the merge is
 present in repository history; it is never evidence that a long-lived consumer is running the
@@ -371,15 +371,15 @@ operator mode surface the same blocker in the final report. Delegated-integratio
 keeps its existing post-merge fail-closed rule: after an unverified effect, stop further
 mutation unless an already-supported component recovery path applies.
 
-## Step 9 — Sibling advisory
+## Step 8 — Sibling advisory
 
 When `RULES_TOUCHED=yes`, report how far non-primary manager worktrees are behind and their agent
 state. This is advisory and never blocks cleanup. Do not touch unrelated siblings unless the
 direct user instruction explicitly includes them.
 
-## Step 10 — Complete merged-worktree cleanup
+## Step 9 — Complete merged-worktree cleanup
 
-### 10a — Ordinary lifecycle attempt
+### 9a — Ordinary lifecycle attempt
 
 Run the normal dry-run first because it provides useful census and diagnostics:
 
@@ -402,7 +402,7 @@ disagreeing fields, processes, terminals, and error.
   `task_degraded`: these are evidence, not a final repository veto when the user directly
   ordered cleanup.
 
-### 10b — Direct-user exact-target override
+### 9b — Direct-user exact-target override
 
 Delegated-integration mode must not enter this subsection. A delegated cleanup refusal is
 reported as `operationally_incomplete`; it is not authority for this override.
@@ -455,13 +455,13 @@ Record every mismatch as overridden.
    Report cleanup complete only when the selected path is absent and unrelated targets are
    unchanged.
 
-### 10c — Ordinary apply path
+### 9c — Ordinary apply path
 
 When the dry-run is eligible, run the same lifecycle command with `--apply`. Its internal
 quiescence, discard-manifest, removal, branch-CAS, and dual-read-back remain the preferred path.
-A later pack-owned refusal still falls back to Step 10b under the same direct instruction.
+A later pack-owned refusal still falls back to Step 9b under the same direct instruction.
 
-## Step 11 — Report
+## Step 10 — Report
 
 Report in the user's language:
 
@@ -481,7 +481,7 @@ Report in the user's language:
 - final Git+Orca read-back and any external/technical refusal;
 - in delegated-integration mode, the marker PR/head/predecessor identity, sequencing result,
   production `READY_TO_MERGE` source/result, any projection-repair POST/read-back, adoption
-  source paths and live observations, adoption actions, the common Step 8 effect receipt,
+  source paths and live observations, adoption actions, the common Verify-effect receipt,
   exact residual state/blocker, and next action.
 
 Never claim merge, adoption, quiescence, removal, branch deletion, or read-back succeeded without
