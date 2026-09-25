@@ -284,6 +284,7 @@ describe('OpenCode durable launch control', () => {
     const command = 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-2150';
     let liveGeneration = 'generation-opencode-2150';
     let submitted = false;
+    let created = false;
     const currentTerminal = () => ({
       handle,
       incarnationId: liveGeneration,
@@ -294,10 +295,15 @@ describe('OpenCode durable launch control', () => {
     });
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
       const operation = `${String(args[0] ?? '')} ${String(args[1] ?? '')}`;
-      if (operation === 'terminal create') return { ok: true, result: { terminal: currentTerminal() } };
+      if (operation === 'terminal create') {
+        created = true;
+        return { ok: true, result: { terminal: currentTerminal() } };
+      }
       if (operation === 'terminal show') return { ok: true, result: { terminal: currentTerminal() } };
       if (operation === 'terminal list') {
-        return { ok: true, result: { totalCount: 1, truncated: false, terminals: [currentTerminal()] } };
+        return created
+          ? { ok: true, result: { totalCount: 1, truncated: false, terminals: [currentTerminal()] } }
+          : { ok: true, result: { totalCount: 0, truncated: false, terminals: [] } };
       }
       if (operation === 'terminal read') {
         return {
