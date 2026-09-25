@@ -514,7 +514,7 @@ S1 owns `busy | livelock | idle | exempt | unknown`.
 - failed, timed-out, stale, contradictory, unsupported or wrong-generation evidence is `unknown`;
 - process/pane/spinner/heartbeat existence alone is not progress or completion evidence.
 
-Do not add a second observer, pane debounce, idle detector, or resident monitor.
+Do not add a second observer, pane debounce, idle detector, or resident monitor, except the operator-installed advisory coordinator fleet alarm defined in `docs/fleet-alarm.md`. That alarm may read project agent panes and send only a plain-text wake to the coordinator; it never acts on units, reads or mutates Task/Dispatch/assignment/PR/GitHub state, joins scheduler/supervisor ownership, or authorizes any effect. All other observers and every effect-authorizing observer remain forbidden.
 
 ## S1 continuity across bounded scheduler children
 
@@ -657,6 +657,8 @@ S1 observation
 The existing `liveCandidates()` path remains limited to `ready_for_review` workers with PR/head binding. Do not widen it to managers or pre-handoff workers.
 
 The registered production owner remains `scripts/lib/orchestrator-side-process-supervisor.ts::runSupervisor` with the existing `pr2-scheduler` child. Do not replace bounded `scheduler.ts tick` children with `runLoop()`, another daemon, timer, watcher, or watchdog. The periodic scheduler tick owns fleet supervision only; it does not read Cursor composer screens.
+
+The coordinator fleet alarm in `docs/fleet-alarm.md` is an operator-installed per-project user service. It is advisory only and separate from scheduler tick, supervisor ownership, and the side-process registry; its sole Orca mutation is a plain-text terminal send to the resolved coordinator pane, never a unit or orchestration-state mutation and never effect authority.
 
 Post-review worker smoke is not owned by the scheduler child. The scheduler performs one exact task `(Issue, PR, head)` start-or-observe operation against the existing detached `worker-smoke-run.ts run --detach` lifecycle and then returns; an active matching run suppresses duplicate start, while terminal lifecycle plus final evidence is consumed without rerunning the same head. The detached process remains the smoke lifecycle owner across scheduler replacement.
 
