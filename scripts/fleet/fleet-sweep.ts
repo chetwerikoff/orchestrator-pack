@@ -52,6 +52,13 @@ const DEFAULT_AGENT_TITLE_RE = /(?:\bOpenCode\b|\bCursor\b|\bClaude\b|\bOC\s*\||
 export const DEFAULT_BUSY_RE = /(?:esc\s+(?:to\s+)?interrupt|ctrl\+c\s+to\s+stop)/iu;
 const POLLING_RE = /(?:\bsleep\s+\d+(?:\.\d+)?\b|\bWAIT_EXIT\s*=\s*124\b|\bexit(?:[_ -]?code)?\s*[:=]?\s*124\b)/iu;
 const CHROME_LINE_RE = /^(?:Cursor Agent|OpenCode|Claude Code)(?:\s|$)|^(?:model|context|tokens?)\s*:/iu;
+// Agent TUIs frame content with box glyphs and add a model line and a status bar; none of it is
+// pane content. OpenCode: `┃  …`, `╹▀▀▀…`, `▣  Pack-Opk-… · GPT-… · medium`, `⬝⬝■■ esc interrupt  175K (64%)  ctrl+p commands`.
+const TUI_FRAME_PREFIX_RE = /^[\s┃│╹╻▀▄█▌▐⬝■▣◆●•·]+/u;
+const TUI_STATUS_LINE_RE = /esc\s+(?:to\s+)?interrupt|ctrl\+[cp]\s+(?:to\s+stop|commands)|\b\d+(?:\.\d+)?K\s*\(\d+%\)|^Pack-Opk-|\s·\s*(?:GPT|OpenAI|Claude)\b|^Click to expand$|^Tip:|^…$/iu;
+const GLYPH_ONLY_LINE_RE = /^(?:[▀▄╹╻⬝■┃│\s]+|\s*[─━═-]{8,}\s*)$/u;
+// A braille spinner in front of a line marks the command or step that is running right now.
+const RUNNING_SPINNER_PREFIX_RE = /^[\u2800-\u28FF]\s+/u;
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
@@ -83,20 +90,34 @@ export function isBusyScreen(screen: string, busyRe: RegExp = DEFAULT_BUSY_RE): 
 }
 
 export function hasPollingEvidence(screen: string): boolean {
-  const recent = nonChromeLines(screen).slice(-2).join('\n');
-  return POLLING_RE.test(recent);
+  const content = contentLines(screen);
+  const recent = content.slice(-2).map((line) => line.text).join('\n');
+  if (POLLING_RE.test(recent)) return true;
+  // A long running command wraps over several lines; its first line carries the spinner.
+  const running = [...content].reverse().find((line) => line.running);
+  return running !== undefined && POLLING_RE.test(running.text);
+}
+
+interface ContentLine {
+  readonly text: string;
+  readonly running: boolean;
+}
+
+function contentLines(screen: string): ContentLine[] {
+  const lines: ContentLine[] = [];
+  for (const raw of screen.split(/\r?\n/u)) {
+    const framed = raw.replace(/\s+$/u, '').replace(TUI_FRAME_PREFIX_RE, '');
+    if (!framed.trim() || GLYPH_ONLY_LINE_RE.test(framed)) continue;
+    const running = RUNNING_SPINNER_PREFIX_RE.test(framed);
+    const text = framed.replace(RUNNING_SPINNER_PREFIX_RE, '').trim();
+    if (!text || CHROME_LINE_RE.test(text) || TUI_STATUS_LINE_RE.test(text)) continue;
+    lines.push({ text, running });
+  }
+  return lines;
 }
 
 function nonChromeLines(screen: string): string[] {
-  return screen
-    .split(/\r?\n/u)
-    .map((line) => line.replace(/\s+$/u, ''))
-    .filter((line) => {
-      const trimmed = line.trim();
-      if (!trimmed) return false;
-      if (/^[─━═-]{8,}$/u.test(trimmed)) return false;
-      return !CHROME_LINE_RE.test(trimmed);
-    });
+  return contentLines(screen).map((line) => line.text);
 }
 
 function screenLines(screen: string): string[] {
