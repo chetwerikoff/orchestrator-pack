@@ -3412,3 +3412,159 @@ describe('independent pass is stored only after publication', () => {
     }
   });
 });
+
+describe('worker-smoke run-owned plan admission', () => {
+  function planAdmissionBody(action: string): string {
+    return [
+      '<!-- source-revision: r10 -->',
+      '```behavior-kind',
+      'action-producing',
+      '```',
+      '',
+      '```complexity-tier',
+      'tier: T2',
+      '```',
+      '',
+      '```smoke-test-plan',
+      'scenarios:',
+      `  - action: ${action} | expected: admission observation`,
+      '```',
+    ].join('\n');
+  }
+
+  function admissionGitFixture(prefix: string): { root: string; headSha: string } {
+    const root = mkdtempSync(join(tmpdir(), prefix));
+    const git = (...args: string[]): string => {
+      const result = runProcessSync({ command: 'git', args, cwd: root });
+      if (!result.ok) throw new Error(result.stderr || result.stdout || args.join(' '));
+      return result.stdout.trim();
+    };
+    git('init', '--quiet');
+    git('config', 'user.name', 'Smoke Admission Fixture');
+    git('config', 'user.email', 'smoke-admission@example.invalid');
+    git('config', 'commit.gpgsign', 'false');
+    writeFileSync(join(root, 'fixture.txt'), 'fixture\n', 'utf8');
+    git('add', 'fixture.txt');
+    git('commit', '-m', 'fixture');
+    return { root, headSha: git('rev-parse', 'HEAD').toLowerCase() };
+  }
+
+  async function runPlanAdmission(action: string, prNumber: number): Promise<{
+    code: number;
+    spawnCalls: number;
+    output: Record<string, unknown>;
+  }> {
+    const fixture = admissionGitFixture('worker-smoke-plan-admission-');
+    const issueBodyFile = join(fixture.root, 'issue.md');
+    const body = planAdmissionBody(action);
+    writeFileSync(issueBodyFile, body, 'utf8');
+    const adapter = new DeterministicRuntimeAdapter();
+    let spawnCalls = 0;
+    Object.defineProperty(adapter, 'readiness', {
+      configurable: true,
+      value: () => ({ status: 'ok', value: { ready: true, workspacePath: fixture.root, headSha: fixture.headSha } }),
+    });
+    Object.defineProperty(adapter, 'spawnWorker', {
+      configurable: true,
+      value: () => {
+        spawnCalls += 1;
+        return { status: 'failed', operation: 'spawn_worker', reason: 'admission-fixture-stop-at-spawn' };
+      },
+    });
+    let rendered = '';
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      rendered += String(chunk ?? '');
+      return true;
+    });
+    const previousStore = process.env.PACK_REVIEW_RUN_STORE_ROOT;
+    const previousReceipts = process.env.WORKER_SMOKE_RECEIPT_ROOT;
+    process.env.PACK_REVIEW_RUN_STORE_ROOT = join(fixture.root, 'review-store');
+    process.env.WORKER_SMOKE_RECEIPT_ROOT = join(fixture.root, 'receipts');
+    try {
+      const code = await runSmokeAttempt({
+        command: 'run',
+        issueNumber: 2151,
+        prNumber,
+        headSha: fixture.headSha,
+        issueBodyFile,
+        smokeComplexity: 'routine',
+        smokeActor: 'worker-owned',
+        repoRoot: fixture.root,
+        cwd: fixture.root,
+        dryRun: true,
+        json: true,
+        reviewId: '',
+        reviewHeadSha: '',
+      }, {
+        adapter,
+        resolveProfile: () => ({
+          complexity: 'routine',
+          family: 'cursor',
+          agent: 'cursor-agent',
+          command: 'cursor-agent',
+          names: [
+            'PACK_EXECUTOR_SMOKE_ROUTINE_AGENT',
+            'PACK_EXECUTOR_SMOKE_ROUTINE_MODEL',
+            'PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT',
+          ],
+        }),
+        resolveTarget: () => ({
+          repositorySlug: REPOSITORY,
+          issueNumber: 2151,
+          prNumber,
+          headSha: fixture.headSha,
+          issueBody: body,
+          prBody: 'Closes #2151',
+          issueBodyMatchesTarget: true,
+          trustedPublisherLogin: TRUSTED_ACTOR,
+          prOpen: true,
+          baseRef: 'main',
+          expectedTargetRef: 'main',
+          expectedTarget: true,
+        }),
+        fetchHistoryComments: () => [],
+        publishComment: () => undefined,
+      });
+      const jsonLines = rendered.trim().split(/\r?\n/u).filter(Boolean);
+      const output = JSON.parse(jsonLines.at(-1) ?? '{}') as Record<string, unknown>;
+      return { code, spawnCalls, output };
+    } finally {
+      stdout.mockRestore();
+      if (previousStore === undefined) delete process.env.PACK_REVIEW_RUN_STORE_ROOT;
+      else process.env.PACK_REVIEW_RUN_STORE_ROOT = previousStore;
+      if (previousReceipts === undefined) delete process.env.WORKER_SMOKE_RECEIPT_ROOT;
+      else process.env.WORKER_SMOKE_RECEIPT_ROOT = previousReceipts;
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }
+
+  it.each([
+    ['absolute worktree', 'use fixture worktree /tmp/orchestrator-pack/worktrees/foreign-run', 215101],
+    ['operator CDP', 'run browser check with --cdp http://127.0.0.1:9222', 215102],
+    ['operator local config', 'read /home/operator/orchestrator-pack/.claude/skills/discuss-with-gpt/local.config.json', 215103],
+    ['stale source revision', 'invoke manager with --source-revision r09', 215104],
+  ] as const)('rejects %s before the smoke child starts', async (_name, action, prNumber) => {
+    const result = await runPlanAdmission(action, prNumber);
+    expect(result.code).toBe(1);
+    expect(result.spawnCalls).toBe(0);
+    expect(result.output).toMatchObject({
+      ok: false,
+      attempted: false,
+      reason: 'scenario_precondition_unavailable',
+      report: {
+        result: 'BLOCKED',
+        causeFamily: 'scenario_precondition_unavailable',
+      },
+    });
+  });
+
+  it('admits a run-owned artifactDir/live-marker plan through the child-start seam', async () => {
+    const result = await runPlanAdmission(
+      'git worktree add --detach $RUN_ARTIFACT_DIR/fixtures/scenario-01 HEAD; read SOURCE_REVISION from the live source-revision marker; start a run-owned browser on http://127.0.0.1:43125; remove the fixture',
+      215105,
+    );
+    expect(result.spawnCalls).toBe(1);
+    expect(result.output).not.toMatchObject({ reason: 'scenario_precondition_unavailable' });
+  });
+});
+
