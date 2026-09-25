@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawnSync } from 'node:child_process';
+import { runProcessSync } from './kernel/subprocess.ts';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -183,9 +183,15 @@ export function mapChangedPathsToConsumers(repoRootValue: string, changedPaths: 
   });
 }
 
-function runProcess(command: string, args: readonly string[], cwd?: string, timeout = 30_000) {
-  const result = spawnSync(command, [...args], { cwd, encoding: 'utf8', env: process.env, shell: false, timeout });
-  return { ok: result.status === 0 && !result.error, status: result.status, stdout: result.stdout ?? '' };
+function runCommand(command: string, args: readonly string[], cwd?: string, timeout = 30_000) {
+  const result = runProcessSync({
+    command,
+    args,
+    ...(cwd ? { cwd } : {}),
+    inheritParentEnv: true,
+    timeoutMs: timeout,
+  });
+  return { ok: result.ok, status: result.exitCode, stdout: result.stdout };
 }
 
 function procStartTicks(pid: number): string | null {
@@ -202,7 +208,7 @@ export function linuxProcessStartTimeMs(pid: number): number | null {
   if (!startTicksText) return null;
   try {
     const uptimeSeconds = Number(readFileSync('/proc/uptime', 'utf8').trim().split(/\s+/u)[0]);
-    const clock = runProcess('getconf', ['CLK_TCK']);
+    const clock = runCommand('getconf', ['CLK_TCK']);
     const ticksPerSecond = Number(clock.stdout.trim());
     const startTicks = Number(startTicksText);
     if (!Number.isFinite(uptimeSeconds) || !Number.isFinite(ticksPerSecond) || ticksPerSecond <= 0 || !Number.isFinite(startTicks)) return null;
@@ -245,7 +251,7 @@ function supervisorController(stateDir: string, restartArgv: readonly string[] |
     ...(restartArgv && restartArgv.length > 0 ? { restart() {
       const [command, ...args] = restartArgv;
       if (!command) throw new Error('supervisor restart control is empty');
-      const result = runProcess(command, args, undefined, 120_000);
+      const result = runCommand(command, args, undefined, 120_000);
       if (!result.ok) throw new Error('supervisor normal control failed:' + String(result.status ?? 'unknown'));
     } } : {}),
   };
@@ -279,13 +285,13 @@ function schedulerController(stateDir: string, adoptionStartedAtMs: number): Con
 
 function fleetWakeController(): ConsumerController {
   const observe = (): ConsumerObservation => {
-    const active = runProcess('systemctl', ['--user', 'is-active', FLEET_WAKE_SERVICE]);
+    const active = runCommand('systemctl', ['--user', 'is-active', FLEET_WAKE_SERVICE]);
     if (!active.ok) {
       const state = active.stdout.trim();
       if (state === 'inactive' || state === 'failed' || state === 'unknown') return { state: 'not_running' };
       return { state: 'unknown', reason: 'fleet_wake_unit_state_unavailable' };
     }
-    const pidResult = runProcess('systemctl', ['--user', 'show', FLEET_WAKE_SERVICE, '--property=MainPID', '--value']);
+    const pidResult = runCommand('systemctl', ['--user', 'show', FLEET_WAKE_SERVICE, '--property=MainPID', '--value']);
     const pid = Number(pidResult.stdout.trim());
     if (!pidResult.ok || !Number.isInteger(pid) || pid <= 1) return { state: 'unknown', reason: 'fleet_wake_main_pid_unavailable' };
     const startedAtMs = linuxProcessStartTimeMs(pid);
@@ -296,7 +302,7 @@ function fleetWakeController(): ConsumerController {
   return {
     observe,
     restart() {
-      const result = runProcess('systemctl', ['--user', 'restart', FLEET_WAKE_SERVICE], undefined, 120_000);
+      const result = runCommand('systemctl', ['--user', 'restart', FLEET_WAKE_SERVICE], undefined, 120_000);
       if (!result.ok) throw new Error('fleet-wake normal control failed:' + String(result.status ?? 'unknown'));
     },
   };
@@ -441,7 +447,7 @@ function parseArgv(argv: readonly string[]): CliOptions {
 }
 
 function changedPathsForMerge(repoRoot: string, mergeSha: string): string[] {
-  const result = runProcess('git', ['-C', repoRoot, 'diff-tree', '--no-commit-id', '--name-only', '-r', mergeSha + '^1', mergeSha]);
+  const result = runCommand('git', ['-C', repoRoot, 'diff-tree', '--no-commit-id', '--name-only', '-r', mergeSha + '^1', mergeSha]);
   if (!result.ok) throw new Error('changed path read failed:' + String(result.status ?? 'unknown'));
   return result.stdout.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean).map(normalizeRepoPath);
 }
@@ -450,7 +456,7 @@ function runLiveChecks(repoRoot: string, checks: readonly string[][]): LiveCheck
   for (const argv of checks) {
     const [command, ...args] = argv;
     if (!command) return { ok: false, reason: 'live_check_command_empty' };
-    const result = runProcess(command, args, repoRoot, 120_000);
+    const result = runCommand(command, args, repoRoot, 120_000);
     if (!result.ok) return { ok: false, reason: 'command_failed:' + path.basename(command) + ':' + String(result.status ?? 'unknown') };
   }
   return { ok: true };
