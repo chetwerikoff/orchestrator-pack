@@ -28,8 +28,7 @@ export interface OperatorAmendmentEvidence {
   kind: 'operator_amendment';
   sourceRevision: string;
   bodySha256: string;
-  markerLine?: string;
-  editorLogin?: string;
+  markerLine: string;
 }
 
 export interface FinalAcceptanceGuardInput {
@@ -55,12 +54,6 @@ export interface FinalAcceptanceGuardInput {
   tierIntakePath?: string;
   externalPassReceiptPath?: string;
   publishedAuthorState?: PublishedAuthorState;
-  /** Optional evidence supplied only when the caller can prove the last body editor. */
-  issueBodyEditorLogin?: string;
-  /** Repository-owner login used to validate optional editor evidence. */
-  repositoryOwnerLogin?: string;
-  /** Governed author login, when independently known; owner fallback is fail-closed without it. */
-  governedAuthorLogin?: string;
   readText?: (path: string) => string;
   readJson?: (path: string) => unknown;
 }
@@ -145,46 +138,24 @@ export function collectUnfencedLinesContaining(body: string, token: string): str
 export function resolveOperatorAmendmentEvidence(
   currentIssueBody: string,
   issueRevision: string,
-  options: Pick<
-    FinalAcceptanceGuardInput,
-    'issueBodyEditorLogin' | 'repositoryOwnerLogin' | 'governedAuthorLogin'
-  > = {},
 ): OperatorAmendmentEvidence | undefined {
   const sourceRevision = SOURCE_REVISION_MARKER_RE.exec(currentIssueBody)?.[1];
   if (!sourceRevision || sourceRevision.toLowerCase() !== issueRevision.trim().toLowerCase()) return undefined;
 
-  const bodySha256 = createHash('sha256').update(Buffer.from(currentIssueBody, 'utf8')).digest('hex');
-  const markerLines = collectUnfencedLinesContaining(currentIssueBody, 'operator-amendment:').map((line) => line.trim());
-  if (markerLines.length === 1) {
-    const marker = /^<!--\s*operator-amendment:\s*(r[0-9]+)\s*;\s*(\S(?:.*\S)?)\s*-->$/i.exec(markerLines[0]!);
-    if (marker && marker[1]!.toLowerCase() === sourceRevision.toLowerCase()) {
-      return {
-        kind: 'operator_amendment',
-        sourceRevision,
-        bodySha256,
-        markerLine: markerLines[0]!,
-      };
-    }
-  }
+  const matchingMarkerLines = collectUnfencedLinesContaining(currentIssueBody, 'operator-amendment:')
+    .map((line) => line.trim())
+    .filter((line) => {
+      const marker = /^<!--\s*operator-amendment:\s*(r[0-9]+)\s*;\s*(\S(?:.*\S)?)\s*-->$/i.exec(line);
+      return marker?.[1]?.toLowerCase() === sourceRevision.toLowerCase();
+    });
+  if (matchingMarkerLines.length !== 1) return undefined;
 
-  const editorLogin = options.issueBodyEditorLogin?.trim();
-  const ownerLogin = options.repositoryOwnerLogin?.trim();
-  const governedAuthorLogin = options.governedAuthorLogin?.trim();
-  if (
-    editorLogin
-    && ownerLogin
-    && governedAuthorLogin
-    && editorLogin.toLowerCase() === ownerLogin.toLowerCase()
-    && editorLogin.toLowerCase() !== governedAuthorLogin.toLowerCase()
-  ) {
-    return {
-      kind: 'operator_amendment',
-      sourceRevision,
-      bodySha256,
-      editorLogin,
-    };
-  }
-  return undefined;
+  return {
+    kind: 'operator_amendment',
+    sourceRevision,
+    bodySha256: createHash('sha256').update(Buffer.from(currentIssueBody, 'utf8')).digest('hex'),
+    markerLine: matchingMarkerLines[0]!,
+  };
 }
 
 export function validateExactTerminalBodyBinding(
@@ -318,7 +289,7 @@ export function executeFinalAcceptanceGuards(
     errors.push(...contractEvidenceResult.errors.map((item) => `contract-evidence: ${item}`));
   }
 
-  const acceptanceEvidence = resolveOperatorAmendmentEvidence(currentIssueBody, input.issueRevision, input);
+  const acceptanceEvidence = resolveOperatorAmendmentEvidence(currentIssueBody, input.issueRevision);
   if (acceptanceEvidence) {
     return {
       ok: errors.length === 0,
