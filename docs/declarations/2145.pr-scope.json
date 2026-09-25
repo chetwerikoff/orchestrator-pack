@@ -1,0 +1,21 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2145,
+  "declared_paths": [
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "scripts/merge-adoption-effect.test.ts",
+    "scripts/merge-adoption-effect.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "scripts/"
+  ],
+  "source_revision": "68438b0bb80ad29cd85b44db83de785b46fd1c24"
+}
