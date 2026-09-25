@@ -62,8 +62,13 @@ const SUPERVISOR_ENTRYPOINT = 'scripts/orchestrator-wake-supervisor.ts';
 const FLEET_WAKE_ENTRYPOINT = 'scripts/fleet/fleet-wake.ts';
 const FLEET_WAKE_UNIT = 'scripts/fleet/fleet-wake@.service';
 const FLEET_WAKE_SERVICE = 'fleet-wake@orchestrator-pack.service';
-const AGENT_HOOK_ENTRYPOINTS = ['scripts/invoke-read-delegation-audit-stop.ts'] as const;
-const IMPORT_RE = /(?:\b(?:import|export)\s+(?:[^'";]+?\s+from\s+)?|\bimport\s*\()\s*['"](\.[^'"]+)['"]/gu;
+const TYPESCRIPT_CLI_ENTRYPOINT = 'scripts/lib/Invoke-TypeScriptCli.ts';
+const AGENT_HOOK_ENTRYPOINTS = [
+  'scripts/invoke-read-delegation-audit-stop.ts',
+  'scripts/json-producers/read-delegation-audit-stop.ts',
+  TYPESCRIPT_CLI_ENTRYPOINT,
+] as const;
+const IMPORT_RE = /(?:\b(?:import|export)\s+(?:[^'";]+?\s+from\s+)?|\bimport\s*\()\s*['"]([^'"]+)['"]/gu;
 const FULL_SHA = /^[0-9a-f]{40}$/iu;
 
 function normalizeRepoPath(value: string): string {
@@ -94,6 +99,33 @@ function resolveRelativeImport(repoRoot: string, importer: string, specifier: st
   return null;
 }
 
+function resolvePackageImport(repoRoot: string, specifier: string): string | null {
+  const pkg = readJsonObject(path.join(repoRoot, 'package.json'));
+  const imports = pkg.imports;
+  if (!imports || typeof imports !== 'object' || Array.isArray(imports)) return null;
+  for (const [pattern, targetValue] of Object.entries(imports as Record<string, unknown>)) {
+    if (typeof targetValue !== 'string') continue;
+    if (!pattern.includes('*')) {
+      if (pattern !== specifier) continue;
+      const candidate = normalizeRepoPath(targetValue);
+      return existsSync(path.join(repoRoot, candidate)) ? candidate : null;
+    }
+    const [prefix, suffix = ''] = pattern.split('*');
+    if (!specifier.startsWith(prefix) || !specifier.endsWith(suffix)) continue;
+    const wildcard = specifier.slice(prefix.length, specifier.length - suffix.length);
+    const target = targetValue.replace('*', wildcard);
+    const candidate = normalizeRepoPath(target);
+    if (existsSync(path.join(repoRoot, candidate))) return candidate;
+  }
+  return null;
+}
+
+function resolveInternalImport(repoRoot: string, importer: string, specifier: string): string | null {
+  if (specifier.startsWith('.')) return resolveRelativeImport(repoRoot, importer, specifier);
+  if (specifier.startsWith('#')) return resolvePackageImport(repoRoot, specifier);
+  return null;
+}
+
 export function staticDependencyClosure(repoRootValue: string, entrypoints: readonly string[]): Set<string> {
   const repoRoot = realpathSync(repoRootValue);
   const pending = entrypoints.map(normalizeRepoPath);
@@ -108,7 +140,8 @@ export function staticDependencyClosure(repoRootValue: string, entrypoints: read
     for (const match of source.matchAll(IMPORT_RE)) {
       const specifier = match[1];
       if (!specifier) continue;
-      const resolved = resolveRelativeImport(repoRoot, current, specifier);
+      if (specifier.startsWith('#')) visited.add('package.json');
+      const resolved = resolveInternalImport(repoRoot, current, specifier);
       if (resolved && !visited.has(resolved)) pending.push(resolved);
     }
   }
@@ -134,7 +167,7 @@ function consumerDefinitions(repoRoot: string): ConsumerDefinition[] {
   return [
     { id: 'orchestrator-side-process-supervisor', entrypoints: [SUPERVISOR_ENTRYPOINT], extraPaths: [REGISTRY_PATH], control: 'supervisor' },
     ...children,
-    { id: FLEET_WAKE_SERVICE, entrypoints: [FLEET_WAKE_ENTRYPOINT], extraPaths: [FLEET_WAKE_UNIT], control: 'systemd-user' },
+    { id: FLEET_WAKE_SERVICE, entrypoints: [FLEET_WAKE_ENTRYPOINT, TYPESCRIPT_CLI_ENTRYPOINT], extraPaths: [FLEET_WAKE_UNIT], control: 'systemd-user' },
     { id: 'agent-hooks', entrypoints: AGENT_HOOK_ENTRYPOINTS, control: 'agent-hook' },
   ];
 }
