@@ -120,9 +120,9 @@ function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function operatorAmendmentMarkerLines(body: string): string[] {
+export function collectUnfencedLinesContaining(body: string, token: string): string[] {
   let fencedCode: '`' | '~' | null = null;
-  const markers: string[] = [];
+  const matches: string[] = [];
   for (const line of body.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (fencedCode !== null) {
@@ -137,9 +137,9 @@ function operatorAmendmentMarkerLines(body: string): string[] {
       fencedCode = '~';
       continue;
     }
-    if (trimmed.includes('operator-amendment:')) markers.push(trimmed);
+    if (line.includes(token)) matches.push(line);
   }
-  return markers;
+  return matches;
 }
 
 export function resolveOperatorAmendmentEvidence(
@@ -154,7 +154,7 @@ export function resolveOperatorAmendmentEvidence(
   if (!sourceRevision || sourceRevision.toLowerCase() !== issueRevision.trim().toLowerCase()) return undefined;
 
   const bodySha256 = createHash('sha256').update(Buffer.from(currentIssueBody, 'utf8')).digest('hex');
-  const markerLines = operatorAmendmentMarkerLines(currentIssueBody);
+  const markerLines = collectUnfencedLinesContaining(currentIssueBody, 'operator-amendment:').map((line) => line.trim());
   if (markerLines.length === 1) {
     const marker = /^<!--\s*operator-amendment:\s*(r[0-9]+)\s*;\s*(\S(?:.*\S)?)\s*-->$/i.exec(markerLines[0]!);
     if (marker && marker[1]!.toLowerCase() === sourceRevision.toLowerCase()) {
