@@ -183,7 +183,7 @@ live head and branch/detached state. Branch, head, or linkage mismatches are rep
 are not repository-policy vetoes after a direct user instruction. A branch mismatch, third head,
 stale or conflicting linkage, missing gate-specific input, or `cleanup_deferred` result is
 diagnostic evidence, not a terminal cleanup veto. Continue with the exact absolute target path
-through the lower-level Orca/Git removal path in Step 9, then perform the final Git/Orca
+through the lower-level Orca/Git removal path in Step 10, then perform the final Git/Orca
 read-back. A second plausible target or an inability to distinguish the primary checkout remains
 real ambiguity.
 
