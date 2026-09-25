@@ -90,6 +90,7 @@ GitHub-first reconciliation, it first attempts one tracked continuation in the
 same exact owned conversation. That episode is available only for
 `message_delivery_timed_out`, `product_network_error`, or `message_stream_error`
 after exact owned-turn proof.
+
 If a possible send occurred but the exact authoritative
 conversation/invocation/profile/CDP identity required by the owning recovery
 branch is unavailable, send nothing and hand that exact fail-closed condition to
