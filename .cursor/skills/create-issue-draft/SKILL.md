@@ -177,6 +177,15 @@ transport side effect is minted. A semantic stage slot is Issue-lifetime singula
 its first settled `complete`, `partial`, `blocked`, or `incident` receipt consumes
 the slot across all later Issue revisions. A consumed slot is never re-armed.
 
+A live Issue revision is operator-accepted when its unfenced
+`<!-- operator-amendment: rNN; ... -->` lines contain exactly one marker whose
+`rNN` equals the current `source-revision`. Marker lines for older revisions
+are ignored; the marker is the only operator-amendment signal and no
+editor/owner/author identity evidence is used. The accepted amendment does not
+reopen review, re-arm a consumed slot, mint a replacement stage/cycle/terminal
+turn, or require the governed author to re-accept the operator's bytes. Proceed
+from that live revision to the existing handoff/execution path.
+
 Stage closure is content-sensitive, not an automatic author-edit round:
 
 - if the governed stage union is genuinely clean, record the author disposition,

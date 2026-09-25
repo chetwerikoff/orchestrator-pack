@@ -4,12 +4,14 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   parseCanonicalSourceRevisionMarker,
+  runFinalAcceptance,
   validateTerminalSourceRevision,
   validateFinalAcceptanceReadbackHead,
   validateCanonicalReceiptPathSet,
 } from './create-issue-final-acceptance.ts';
 import {
   executeFinalAcceptanceGuards,
+  resolveOperatorAmendmentEvidence,
   validateTerminalOneShotBodyBinding,
 } from './create-issue-final-acceptance-contract.ts';
 import { buildCanonicalLineage } from './create-issue-stage-record-lineage.ts';
@@ -25,6 +27,7 @@ import {
 import { logicalFingerprint, parseLogicalFromCommentBody } from './create-issue-stage-record-marker.ts';
 import { evaluateStageCredentialingSettlement } from './create-issue-stage-lifecycle-acceptance.ts';
 import { validateReviewLaneRecord } from './review-lane-record.ts';
+import { createMockGhState, createMockTransport } from './create-issue-stage-record-test-helpers.ts';
 
 const temporaryDirectories: string[] = [];
 
@@ -412,6 +415,211 @@ describe('revision-aware final acceptance', () => {
 
     expect(errors.join('\n')).toContain('stage order moves backward');
     expect(errors.join('\n')).toContain('published stage event cycle-r09:competitive:attempt-1 is duplicated');
+  });
+
+  it('accepts exactly one current operator-amendment marker while ignoring older markers', () => {
+    const currentMarker = '<!-- operator-amendment: r04; operator expanded execution scope -->';
+    const matchingBody = [
+      '<!-- source-revision: r04 -->',
+      currentMarker,
+      'body',
+    ].join('\n');
+    const matching = resolveOperatorAmendmentEvidence(matchingBody, 'r04');
+    expect(matching).toMatchObject({
+      kind: 'operator_amendment',
+      sourceRevision: 'r04',
+      markerLine: currentMarker,
+    });
+    expect(matching?.bodySha256).toMatch(/^[0-9a-f]{64}$/);
+
+    const accumulatedBody = [
+      '<!-- source-revision: r04 -->',
+      '<!-- operator-amendment: r03; earlier operator amendment -->',
+      currentMarker,
+      'body',
+    ].join('\n');
+    expect(resolveOperatorAmendmentEvidence(accumulatedBody, 'r04')).toMatchObject({
+      kind: 'operator_amendment',
+      sourceRevision: 'r04',
+      markerLine: currentMarker,
+    });
+
+    const olderOnlyBody = [
+      '<!-- source-revision: r04 -->',
+      '<!-- operator-amendment: r03; earlier operator amendment -->',
+      'body',
+    ].join('\n');
+    expect(resolveOperatorAmendmentEvidence(olderOnlyBody, 'r04')).toBeUndefined();
+
+    expect(resolveOperatorAmendmentEvidence([
+      matchingBody,
+      '<!-- operator-amendment: r04; duplicate current marker -->',
+    ].join('\n'), 'r04')).toBeUndefined();
+
+    expect(resolveOperatorAmendmentEvidence([
+      '<!-- source-revision: r04 -->',
+      '```markdown',
+      currentMarker,
+      '```',
+    ].join('\n'), 'r04')).toBeUndefined();
+
+    const nestedFenceBody = [
+      '<!-- source-revision: r04 -->',
+      '````markdown',
+      '```',
+      currentMarker,
+      '````',
+    ].join('\n');
+    expect(resolveOperatorAmendmentEvidence(nestedFenceBody, 'r04')).toBeUndefined();
+    expect(resolveOperatorAmendmentEvidence([
+      '<!-- source-revision: r04 -->',
+      currentMarker,
+    ].join('\n'), 'r04')).toMatchObject({ markerLine: currentMarker });
+  });
+  it('accepts a matching operator amendment before review-cycle finalization formalities', () => {
+    const body = [
+      '<!-- source-revision: r04 -->',
+      '<!-- operator-amendment: r03; earlier accepted amendment -->',
+      '<!-- operator-amendment: r04; accepted directly by operator -->',
+      '',
+      '## Goal',
+      '',
+      'Accept the operator-amended revision without reopening consumed review work.',
+      '',
+      '```behavior-kind',
+      'action-producing',
+      '```',
+      '```complexity-tier',
+      'tier: T2',
+      'advisory-prior: T2',
+      'failure-type: local-behavior',
+      'size: single-component-design-judgment',
+      'risk-note: bounded final-acceptance evidence path only',
+      '```',
+      '```positive-outcome',
+      'asserts: operator amendment is accepted without reopening consumed review slots',
+      'input: realistic',
+      '```',
+      '',
+      '## Acceptance criteria',
+      '',
+      '1. Matching operator amendment is accepted without reopening consumed review work.',
+      '',
+      '```denylist',
+      'vendor/**',
+      'packages/core/**',
+      '```',
+      '```allowed-roots',
+      'scripts/lib/create-issue-final-acceptance.ts',
+      '```',
+      '```smoke-test-plan',
+      '- action: evaluate a matching amendment | expected: accepted without new review work',
+      '```',
+      '',
+      '## Verification',
+      '',
+      '- final acceptance validates the current operator-amended revision',
+      '',
+      '```contract-evidence',
+      'none',
+      '```',
+    ].join('\n');
+    const result = executeFinalAcceptanceGuards({
+      issueBody: body,
+      terminalSourceBody: '<!-- source-revision: r03 -->\nreviewed body',
+      currentIssueBody: body,
+      issueRevision: 'r04',
+      cycleId: 'cycle-r03',
+      tier: 'T2',
+      reviewDir: '/fixture/review',
+      stageReceiptPaths: ['/fixture/missing-receipt.json'],
+      capturePaths: ['/fixture/missing-capture.txt'],
+      ledgerPath: '/fixture/missing-ledger.json',
+    });
+
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.acceptanceEvidence).toMatchObject({
+      kind: 'operator_amendment',
+      sourceRevision: 'r04',
+    });
+    expect(result.errors.some((error) => error.startsWith('stage-completeness:'))).toBe(false);
+    expect(result.errors.some((error) => error.startsWith('finding-ledger:'))).toBe(false);
+  });
+
+
+  it('runs full final acceptance for an operator amendment without loading a new review cycle', () => {
+    const body = [
+      '<!-- source-revision: r04 -->',
+      '<!-- operator-amendment: r04; operator expanded execution scope -->',
+      '',
+      '## Goal',
+      '',
+      'Accept the operator-amended revision without reopening consumed review work.',
+      '',
+      '```behavior-kind',
+      'action-producing',
+      '```',
+      '```complexity-tier',
+      'tier: T2',
+      'advisory-prior: T2',
+      'failure-type: local-behavior',
+      'size: single-component-design-judgment',
+      'risk-note: bounded final-acceptance evidence path only',
+      '```',
+      '```positive-outcome',
+      'asserts: operator amendment is accepted without reopening consumed review slots',
+      'input: realistic',
+      '```',
+      '',
+      '## Acceptance criteria',
+      '',
+      '1. Matching operator amendment is accepted without reopening consumed review work.',
+      '',
+      '```denylist',
+      'vendor/**',
+      'packages/core/**',
+      '```',
+      '```allowed-roots',
+      'scripts/lib/create-issue-final-acceptance.ts',
+      '```',
+      '```smoke-test-plan',
+      '- action: evaluate a matching amendment | expected: accepted without new review work',
+      '```',
+      '',
+      '## Verification',
+      '',
+      '- final acceptance validates the current operator-amended revision',
+      '',
+      '```contract-evidence',
+      'none',
+      '```',
+    ].join('\n');
+    const state = createMockGhState({
+      issue: { title: 'operator amendment fixture', body, labels: [] },
+    });
+    const reviewDir = join(mkdtempSync(join(tmpdir(), 'opk-operator-amendment-')), 'missing-review');
+    temporaryDirectories.push(join(reviewDir, '..'));
+
+    const result = runFinalAcceptance(createMockTransport(state), {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 2135,
+      publicActor: 'cursor-flow-manager',
+      issueBody: '<!-- source-revision: r03 -->\nreviewed body',
+      terminalSourceBody: '<!-- source-revision: r03 -->\nreviewed body',
+      issueRevision: 'r04',
+      cycleId: 'consumed-cycle-r03',
+      tier: 'T2',
+      reviewDir,
+      stageReceiptPaths: [join(reviewDir, 'missing-receipt.json')],
+      capturePaths: [join(reviewDir, 'missing-capture.txt')],
+    });
+
+    expect(result.ok, result.guardErrors.join('\n')).toBe(true);
+    expect(result.acceptanceEvidence).toMatchObject({
+      kind: 'operator_amendment',
+      sourceRevision: 'r04',
+    });
+    expect(result.guardErrors).toEqual([]);
   });
 
   it('requires exactly one canonical source-revision marker', () => {
