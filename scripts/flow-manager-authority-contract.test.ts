@@ -2281,3 +2281,33 @@ describe('Issue #2078 smoke scenarios 3 and 5 fixture manager', () => {
     });
   });
 });
+
+describe('Issue #2094 execute-Issue product-error continuation contract', () => {
+  const executeSkill = readFileSync(new URL('../.cursor/skills/execute-issue-with-gpt/SKILL.md', import.meta.url), 'utf8');
+  const executionRunbook = readFileSync(new URL('../docs/chatgpt-task-execution-runbook.md', import.meta.url), 'utf8');
+
+  it('recognizes all three reserved causes and continues in the same owned chat before fallback', () => {
+    expect(executeSkill).toContain('`message_delivery_timed_out`, `product_network_error`, and `message_stream_error`');
+    expect(executionRunbook).toContain('same exact owned ChatGPT conversation');
+    expect(executionRunbook).toContain('Error in message stream');
+    expect(executionRunbook).toContain('Never press the product `Retry` control.');
+    expect(executionRunbook).toContain('minimum **10-minute grace window**');
+  });
+
+  it('requires settlement and unchanged PR, branch, or no-work baseline before replacement', () => {
+    expect(executionRunbook).toContain('The 10-minute grace is not turn-settlement');
+    expect(executionRunbook).toContain('authoritatively');
+    expect(executionRunbook).toContain('**No observed Issue-bound work:** still no Issue-bound PR');
+    expect(executionRunbook).toContain('Do not create a replacement branch or PR');
+    expect(executionRunbook).toContain('close only the exact old owned');
+    expect(executionRunbook).toContain('candidate-complete');
+  });
+
+  it('keeps message-stream classification exact and preserves page-probe gates', () => {
+    const pageProbe = readFileSync(new URL('./browser-gpt-page-probe.ts', import.meta.url), 'utf8');
+    expect(pageProbe).toContain("${JSON.stringify('Error in message stream')}");
+    expect(pageProbe).toContain("stripped === STREAM_TEXT + '…'");
+    expect(pageProbe).toContain("stripped === STREAM_TEXT + '...'");
+    expect(pageProbe).toContain('classifyExecutionRecoveryProductError(');
+  });
+});

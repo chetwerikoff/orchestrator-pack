@@ -1245,6 +1245,7 @@ function inspectionExpression(): string {
     const CHROME_SELECTOR = ${JSON.stringify(`${ASSISTANT_TURN_ACTION_SELECTOR}, .sr-only, [role="alert"]`)};
     const TIMEOUT_TEXT = ${JSON.stringify('Message delivery timed out. Please try again.')};
     const NETWORK_TEXT = ${JSON.stringify('A network error occurred. Please check your connection and try again. If this issue persists please contact us through our help center at help.openai.com.')};
+    const STREAM_TEXT = ${JSON.stringify('Error in message stream')};
     const MAX_RECOVERY_TURNS = ${MAX_MESSAGE_SUMMARIES};
     const points = (value) => Array.from(value);
     const head = (value) => points(value).slice(0, MAX_TEXT).join('');
@@ -1349,11 +1350,12 @@ function inspectionExpression(): string {
       const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').replace(/help\\.openai\\.com \\.$/u, 'help.openai.com.').trim();
       const isReservedBanner = (value) => {
         const normalized = normalize(value);
-        if (normalized === TIMEOUT_TEXT || normalized === NETWORK_TEXT) return true;
+        if (normalized === TIMEOUT_TEXT || normalized === NETWORK_TEXT || normalized === STREAM_TEXT) return true;
         const stripped = normalized.replace(collapseRe, '').trim();
-        return stripped === TIMEOUT_TEXT || stripped === NETWORK_TEXT
+        return stripped === TIMEOUT_TEXT || stripped === NETWORK_TEXT || stripped === STREAM_TEXT
           || stripped === TIMEOUT_TEXT + '…' || stripped === TIMEOUT_TEXT + '...'
-          || stripped === NETWORK_TEXT + '…' || stripped === NETWORK_TEXT + '...';
+          || stripped === NETWORK_TEXT + '…' || stripped === NETWORK_TEXT + '...'
+          || stripped === STREAM_TEXT + '…' || stripped === STREAM_TEXT + '...';
       };
       const hasNonBannerVisibleText = (assistant) => {
         let remaining = normalize(assistant.innerText || '');

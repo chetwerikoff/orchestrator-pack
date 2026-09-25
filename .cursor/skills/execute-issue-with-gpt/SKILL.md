@@ -88,17 +88,23 @@ The shared Browser-GPT runbook remains the sole owner of one-turn launch,
 observation, attribution, recovery, retry/no-resend, publication, and tab
 mechanics.
 
-For execute-Issue recovery, the two reserved product causes are
-`message_delivery_timed_out` and `product_network_error`. They stay on the
-existing `turn-result/v1` axis as `state: recovery_required` with
-`scope: conversation`; they do not introduce a new turn state. An authoritative
-owned result with either cause enters the execution runbook's GitHub-first
-reconciliation immediately. At the existing 27-minute checkpoint, use
-`browser-gpt-page-probe inspect` only as observation: its normalized
-`execution_recovery_cause` must be combined with exact owned-turn, reply, and
-generation evidence before it can authorize that same recovery branch. Elapsed
-time, missing output, helper silence, `stream_timeout`, or `no_reply` alone never
-authorize a replacement conversation.
+For execute-Issue recovery, the three reserved product causes are
+`message_delivery_timed_out`, `product_network_error`, and `message_stream_error`.
+They stay on the existing `turn-result/v1` axis as
+`state: recovery_required` with `scope: conversation`; they do not introduce a
+new turn state. An authoritative owned result with one of these causes enters
+the execution runbook's GitHub-first reconciliation immediately. If work remains,
+the manager first sends one ordinary tracked continuation in the same exact
+owned conversation; this is not the product Retry control. Fresh-chat fallback
+is allowed only after the continuation has received the full 10-minute minimum
+grace, is authoritatively settled/recovered under the existing Browser-GPT
+lifecycle, and final chat/GitHub reads prove no progress and the saved
+PR/head, branch/head, or no-work baseline remains unchanged. At the existing
+27-minute checkpoint, use `browser-gpt-page-probe inspect` only as observation:
+its normalized `execution_recovery_cause` must be combined with exact owned-turn,
+reply, and generation evidence before it can authorize that same recovery
+branch. Elapsed time, missing output, helper silence, `stream_timeout`, or
+`no_reply` alone never authorize a replacement conversation.
 
 For execute-Issue recovery, the 27-minute checkpoint uses the exact durable
 invocation identity already retained by the manager. Invoke the existing probe
@@ -134,13 +140,15 @@ authority.
 
 A replacement/resumed manager does not create a new conversation merely because
 it is a new process. It first follows the execution runbook's recovery branch and
-the shared Browser-GPT evidence requirements. Before any replacement send after
-one of the two supported product-error proofs, it must re-observe the exact old
-owned conversation and re-read live GitHub continuation/completion state. If the
-product cause is no longer present, a completed reply appeared, generation is
-active, ownership is ambiguous, or the continuation head/completion state is no
-longer current, the fresh send is blocked and ordinary observation/recovery
-resumes.
+the shared Browser-GPT evidence requirements. After exact product-error proof,
+reconcile GitHub and try the one tracked continuation in the same exact owned
+conversation. Before any fresh-chat fallback, the exact continuation invocation
+must have completed the full 10-minute grace and be authoritatively
+settled/recovered under existing Browser-GPT authority; fresh chat additionally
+requires final reads proving no chat progress and the unchanged saved repository
+baseline. If the cause is gone, a reply or generation appeared, ownership is
+ambiguous, the baseline changed, or settlement evidence is unavailable, do not
+send the fallback; resume ordinary observation/recovery or review convergence.
 
 ## Terminal outcomes
 

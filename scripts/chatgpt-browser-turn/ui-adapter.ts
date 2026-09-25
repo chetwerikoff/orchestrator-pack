@@ -1,7 +1,7 @@
 // Issue #1937 keeps the existing UI adapter implementation isolated below and
 // adds one narrow execute-Issue recovery classifier at the public adapter edge.
 // All ordinary Browser-GPT behavior continues to delegate to the existing
-// implementation; this file owns only the two exact product-error literals and
+// implementation; this file owns only the three exact product-error literals and
 // their bounded owned-turn confirmation.
 export * from './ui-adapter-base.ts';
 
@@ -25,7 +25,8 @@ import { recoveryMarkerCardinality } from './state-light-turn-recovery.ts';
 
 export type ExecutionRecoveryProductCause =
   | 'message_delivery_timed_out'
-  | 'product_network_error';
+  | 'product_network_error'
+  | 'message_stream_error';
 
 export interface ExecutionRecoveryMessage {
   readonly role: 'user' | 'assistant';
@@ -85,6 +86,7 @@ const EXECUTION_RECOVERY_CONFIRM_DELAY_MS = 100;
 const EXECUTION_RECOVERY_EVIDENCE_READ_CAP_MS = 300;
 const MESSAGE_DELIVERY_TIMED_OUT_TEXT = 'Message delivery timed out. Please try again.';
 const PRODUCT_NETWORK_ERROR_TEXT = 'A network error occurred. Please check your connection and try again. If this issue persists please contact us through our help center at help.openai.com.';
+const MESSAGE_STREAM_ERROR_TEXT = 'Error in message stream';
 const OWNED_TURN_GENERATION_SELECTOR = [
   STOP_BUTTON_SELECTOR,
   ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
@@ -156,6 +158,9 @@ function executionRecoveryCauseFromText(value: string): ExecutionRecoveryProduct
   if (matchesExecutionRecoveryProductText(value, PRODUCT_NETWORK_ERROR_TEXT)) {
     return 'product_network_error';
   }
+  if (matchesExecutionRecoveryProductText(value, MESSAGE_STREAM_ERROR_TEXT)) {
+    return 'message_stream_error';
+  }
   return undefined;
 }
 
@@ -205,7 +210,7 @@ function emptyClassification(
 }
 
 /**
- * Sole matcher/owned-turn classifier for the two execute-Issue product errors.
+ * Sole matcher/owned-turn classifier for the three execute-Issue product errors.
  * Product text alone is never recovery authority: the exact owned prompt must
  * be unique, the banner must be a bounded descendant of the assistant carrier
  * in the structural successor conversation-turn, that same carrier must hold
@@ -371,19 +376,23 @@ async function readOwnedTurnSnapshot(
         chromeSelector: string;
         timeoutText: string;
         networkText: string;
+        streamText: string;
       }) => {
         const normalize = (value: string): string => value.replace(/\s+/g, ' ').replace(/help\.openai\.com \.$/u, 'help.openai.com.').trim();
         const collapseRe = /(?:\s*(?:show more|read more|see more|view more|continue reading)\s*)+$/iu;
         const isReservedBanner = (value: string): boolean => {
           const normalized = normalize(value);
-          if (normalized === args.timeoutText || normalized === args.networkText) return true;
+          if (normalized === args.timeoutText || normalized === args.networkText || normalized === args.streamText) return true;
           const stripped = normalized.replace(collapseRe, '').trim();
           return stripped === args.timeoutText
             || stripped === args.networkText
+            || stripped === args.streamText
             || stripped === `${args.timeoutText}…`
             || stripped === `${args.timeoutText}...`
             || stripped === `${args.networkText}…`
-            || stripped === `${args.networkText}...`;
+            || stripped === `${args.networkText}...`
+            || stripped === `${args.streamText}…`
+            || stripped === `${args.streamText}...`;
         };
         const hasNonBannerVisibleText = (assistant: Element): boolean => {
           let remaining = normalize((assistant as HTMLElement).innerText || '');
@@ -483,6 +492,7 @@ async function readOwnedTurnSnapshot(
         chromeSelector: ASSISTANT_TURN_ACTION_SELECTOR,
         timeoutText: MESSAGE_DELIVERY_TIMED_OUT_TEXT,
         networkText: PRODUCT_NETWORK_ERROR_TEXT,
+        streamText: MESSAGE_STREAM_ERROR_TEXT,
       })),
       waitMs,
     ) as OwnedTurnSnapshot;
