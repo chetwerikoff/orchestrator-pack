@@ -86,8 +86,9 @@ head/base drift, or assignment/marker drift remains blocked.
 After merge, use the ordinary adoption and exact-target cleanup path, but delegated mode never
 uses the direct-user cleanup override. Independently derive local adoption from the live Issue,
 PR body including `## Operator adoption`, changed paths/content, current migration/runbooks,
-and live machine state. Prose is a hint, not proof. Verify changed runtime behavior through the
-smallest supported real CLI/API/status read-back.
+and live machine state. Prose is a hint, not proof. The common mandatory Verify-effect step
+below owns the runtime read-back for delegated mode exactly as it does for direct-user and
+orchestrator-issued Task modes.
 
 The delegated final report includes the marker PR/head/predecessor identity, sequencing result,
 production readiness source/result, any projection-repair receipt, merge SHA, adopted local
@@ -114,7 +115,7 @@ The active runtime is Orca. Runtime-specific commands stay at the edge.
 
 Ordinarily use `scripts/worktree-lifecycle/cli.ts --context post-merge-cleanup`. When that
 wrapper refuses solely because of repository policy and the user directly ordered completion,
-continue through the exact-target override path in Step 9 instead of returning
+continue through the exact-target override path in Step 10 instead of returning
 `cleanup_deferred` as the final answer.
 
 AO is retired. Do not use `ao session`, ProjectConfig, AO runtime-worktree probes, or AO
@@ -251,6 +252,12 @@ Read the PR body, changed paths/content, linked Issue, applicable migration note
 environment docs, runbooks, and rules-channel files. State the local post-merge work. Do not
 invent secrets, ports, or machine-local values.
 
+Also identify the smallest executable live check required by the linked Issue's current
+`Fixed means` / `smoke-test-plan` and express it as one or more exact argv arrays in
+`LIVE_CHECK_JSON`. The check must run from the primary checkout after adoption. If the
+Issue does not provide enough information to bind an executable live check, do not substitute
+Git ancestry, process existence, or prose inspection: Step 8 must end `effect_unverified`.
+
 Set `RULES_TOUCHED=yes` when the diff includes any of:
 
 ```text
@@ -276,6 +283,12 @@ of `state=MERGED` before claiming success. Record `MERGE_SHA`, the pre-merge tar
 the live merged PR head.
 
 ## Step 6 — Adopt merged main
+
+Immediately before updating the primary checkout, record the local adoption boundary:
+
+```bash
+ADOPTION_STARTED_AT_UTC=$(node -e 'process.stdout.write(new Date().toISOString())')
+```
 
 Fetch and update the primary checkout without discarding its pre-existing changes. After adoption
 verify:
@@ -312,15 +325,61 @@ Apply the instructions identified in Step 4. Keep edits surgical and report rema
 action. Never commit secrets or machine-local values unless the same direct user message
 explicitly requested it.
 
-## Step 8 — Sibling advisory
+## Step 8 — Verify effect
+
+This step is mandatory for **every** merge mode. Step 6 ancestry proves only that the merge is
+present in repository history; it is never evidence that a long-lived consumer is running the
+adopted code.
+
+Run the pack-owned verifier from the primary checkout, using the exact Issue live check selected
+in Step 4:
+
+```bash
+node --experimental-strip-types scripts/merge-adoption-effect.ts verify \
+  --repo-root REPO \
+  --merge-sha "$MERGE_SHA" \
+  --adopted-at "$ADOPTION_STARTED_AT_UTC" \
+  --live-check-json "$LIVE_CHECK_JSON"
+```
+
+The script, rather than merge prose, maps changed paths through the static import closures of
+the supervisor entrypoint, every child named by
+`scripts/orchestrator-side-process-registry.json`, the
+`fleet-wake@orchestrator-pack.service` entrypoint/unit, and the tracked agent-hook
+entrypoint. Registry and unit files are explicit mapping inputs.
+
+For a mapped running consumer whose observed start time is not later than
+`ADOPTION_STARTED_AT_UTC`, the verifier must use that consumer's existing normal control and
+then read back a new post-adoption process start. The registered `pr2-scheduler` uses its
+supervisor-owned normal cadence; `fleet-wake@orchestrator-pack.service` uses
+`systemctl --user restart`. When the current supervisor installation has an existing
+supported normal restart command identified in Step 4, pass that exact argv (never shell text)
+through `--restart-control-json`, for example an object keyed by
+`orchestrator-side-process-supervisor`. If no supported supervisor restart control can be
+established, the verifier fails closed. **Never direct-signal a supervisor PID to make this
+check pass.** Agent-hook entrypoints are fresh per hook invocation, so they have no stale hook
+process to restart; their effect remains covered by the mandatory Issue live check.
+
+Use `--supervisor-state-dir <path>` only when the live installation uses a non-default state
+root. Do not invent a state root or restart command.
+
+The verifier's JSON is the effect receipt. Success requires exactly
+`effect_verified` and `operationally_complete`. Any
+`effect_unverified(<reason>)` is `operationally_incomplete`, even when Step 6 ancestry is
+green. Send the emitted `coordinatorMessage` to the coordinator when one exists; in direct
+operator mode surface the same blocker in the final report. Delegated-integration mode also
+keeps its existing post-merge fail-closed rule: after an unverified effect, stop further
+mutation unless an already-supported component recovery path applies.
+
+## Step 9 — Sibling advisory
 
 When `RULES_TOUCHED=yes`, report how far non-primary manager worktrees are behind and their agent
 state. This is advisory and never blocks cleanup. Do not touch unrelated siblings unless the
 direct user instruction explicitly includes them.
 
-## Step 9 — Complete merged-worktree cleanup
+## Step 10 — Complete merged-worktree cleanup
 
-### 9a — Ordinary lifecycle attempt
+### 10a — Ordinary lifecycle attempt
 
 Run the normal dry-run first because it provides useful census and diagnostics:
 
@@ -343,7 +402,7 @@ disagreeing fields, processes, terminals, and error.
   `task_degraded`: these are evidence, not a final repository veto when the user directly
   ordered cleanup.
 
-### 9b — Direct-user exact-target override
+### 10b — Direct-user exact-target override
 
 Delegated-integration mode must not enter this subsection. A delegated cleanup refusal is
 reported as `operationally_incomplete`; it is not authority for this override.
@@ -396,13 +455,13 @@ Record every mismatch as overridden.
    Report cleanup complete only when the selected path is absent and unrelated targets are
    unchanged.
 
-### 9c — Ordinary apply path
+### 10c — Ordinary apply path
 
 When the dry-run is eligible, run the same lifecycle command with `--apply`. Its internal
 quiescence, discard-manifest, removal, branch-CAS, and dual-read-back remain the preferred path.
-A later pack-owned refusal still falls back to Step 9b under the same direct instruction.
+A later pack-owned refusal still falls back to Step 10b under the same direct instruction.
 
-## Step 10 — Report
+## Step 11 — Report
 
 Report in the user's language:
 
@@ -411,6 +470,10 @@ Report in the user's language:
 - for any waiver, the source of the direct operator authorization (channel/reference only,
   with private data omitted), plus the waiver status description and POST/read-back result;
 - operator-checkout adoption and preservation of existing changes;
+- the merge-effect receipt: mapped consumers, before/after start-time read-back, the exact
+  primary-checkout Issue live check, `effect_verified|effect_unverified(<reason>)`, and exactly
+  one `operationally_complete|operationally_incomplete` outcome; for an unverified effect,
+  include the coordinator message/blocker;
 - target absolute path and why it was the selected non-primary worktree;
 - every lifecycle disagreement/blocked condition that was overridden;
 - terminal/process quiescence and residual counts;
@@ -418,9 +481,8 @@ Report in the user's language:
 - final Git+Orca read-back and any external/technical refusal;
 - in delegated-integration mode, the marker PR/head/predecessor identity, sequencing result,
   production `READY_TO_MERGE` source/result, any projection-repair POST/read-back, adoption
-  source paths and live observations, adoption actions, target-specific live verification,
-  exact residual state/blocker and next action, and exactly one
-  `operationally_complete|operationally_incomplete` outcome.
+  source paths and live observations, adoption actions, the common Step 8 effect receipt,
+  exact residual state/blocker, and next action.
 
 Never claim merge, adoption, quiescence, removal, branch deletion, or read-back succeeded without
 corresponding remote/runtime evidence.
