@@ -38,6 +38,8 @@ export interface FleetPollingStore {
 export interface FleetSweepOptions {
   readonly primary: string;
   readonly workspaceRe?: RegExp;
+  readonly coordinatorHandle?: string;
+  readonly coordinatorTitleRe?: RegExp;
   readonly busyRe?: RegExp;
   readonly lines?: number;
   readonly json?: boolean;
@@ -214,18 +216,24 @@ export function readFleetScreen(handle: string, executor: OrcaExecutor = default
   return response.stdout;
 }
 
+export const DEFAULT_ORCHESTRATOR_TITLE_RE = /Cursor/iu;
+
 export function selectAgentTerminals(
   terminals: readonly FleetTerminal[],
   primary: string,
   workspaceRe: RegExp = defaultWorkspaceRegex(primary),
+  coordinatorHandle?: string,
+  coordinatorTitleRe: RegExp = DEFAULT_ORCHESTRATOR_TITLE_RE,
 ): FleetTerminal[] {
   const primaryPath = normalizedPath(primary);
   return terminals.filter((terminal) => {
     if (!terminal.worktreePath) return false;
+    if (terminal.handle === coordinatorHandle) return false;
+    coordinatorTitleRe.lastIndex = 0;
+    if (normalizedPath(terminal.worktreePath) === primaryPath && coordinatorTitleRe.test(terminal.title)) return false;
     const worktree = terminal.worktreePath.replaceAll('\\', '/');
     workspaceRe.lastIndex = 0;
     if (!workspaceRe.test(worktree)) return false;
-    if (normalizedPath(terminal.worktreePath) === primaryPath) return false;
     return looksLikeAgentPane(terminal.title);
   });
 }
@@ -261,6 +269,8 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
     terminals,
     options.primary,
     options.workspaceRe ?? defaultWorkspaceRegex(options.primary),
+    options.coordinatorHandle ?? process.env.ORCH_HANDLE?.trim(),
+    options.coordinatorTitleRe ?? compileRegex(process.env.ORCH_TITLE_RE, DEFAULT_ORCHESTRATOR_TITLE_RE),
   );
   const lineCount = options.lines ?? 4;
   if (!Number.isInteger(lineCount) || lineCount < 0) throw new Error('--lines must be a non-negative integer');

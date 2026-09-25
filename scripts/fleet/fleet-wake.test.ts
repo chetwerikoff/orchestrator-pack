@@ -116,6 +116,27 @@ describe('fleet alarm', () => {
     expect(second.result).toMatchObject({ state: 'sent', coordinatorState: 'idle', count: 1 });
     expect(sends(second.calls)).toHaveLength(2);
   });
+  it('excludes the coordinator while sweeping agent panes in the same primary worktree', async () => {
+    const workspacePrimary = '/home/che/orca/workspaces/project/fixture';
+    const observed = await tick({
+      config: config({ primary: workspacePrimary }),
+      terminals: [
+        { handle: 'coord', title: 'Cursor fixture-coordinator', worktreePath: workspacePrimary },
+        { handle: 'agent', title: 'OC | fixture-agent', worktreePath: workspacePrimary },
+        { handle: 'stopped', title: 'OC | fixture-stopped', worktreePath: workspacePrimary },
+      ],
+      screens: {
+        coord: 'idle prompt',
+        agent: 'doing work\nesc interrupt\n',
+        stopped: 'done\n>',
+      },
+    });
+    expect(observed.result).toMatchObject({ state: 'sent', coordinator: 'coord', count: 1 });
+    const message = sends(observed.calls)[0]![sends(observed.calls)[0]!.indexOf('--text') + 1]!;
+    expect(message).toContain('STOPPED stopped OC | fixture-stopped');
+    expect(message).not.toContain('fixture-coordinator');
+    expect(message).not.toContain('fixture-agent');
+  });
 
   it('suppresses the same stopped set while coordinator is busy, then sends when the set changes', async () => {
     const store = new MemoryWakeStore();

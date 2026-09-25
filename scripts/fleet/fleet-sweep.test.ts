@@ -93,38 +93,42 @@ describe('fleet sweep classification', () => {
 });
 
 describe('fleet sweep pane selection and reads', () => {
-  it('keeps matching agent worktrees and ignores primary, outside worktrees, and plain shells', () => {
+  it('includes primary-worktree agents while excluding the coordinator, outside worktrees, and plain shells', () => {
+    const workspacePrimary = '/home/user/orca/workspaces/project/primary';
     const terminals = [
       pane('worker', 'OpenCode — manager'),
       pane('shell', 'zsh'),
       pane('outside', 'Cursor', '/tmp/other'),
-      pane('primary', 'Cursor', primary),
+      pane('primary-agent', 'OpenCode — primary agent', workspacePrimary),
+      pane('coordinator', 'Cursor coordinator', workspacePrimary),
       pane('claude', 'Claude Code'),
     ];
-    expect(selectAgentTerminals(terminals, primary, defaultWorkspaceRegex(primary)).map((item) => item.handle))
-      .toEqual(['worker', 'claude']);
+    expect(selectAgentTerminals(terminals, workspacePrimary, defaultWorkspaceRegex(workspacePrimary)).map((item) => item.handle))
+      .toEqual(['worker', 'primary-agent', 'claude']);
   });
 
-  it('includes sibling checkouts in the project workspace and excludes the primary pane', () => {
+  it('sweeps primary-worktree agent panes but excludes the exact coordinator pane', () => {
     const workspacePrimary = '/home/che/orca/workspaces/orchestrator-pack/smoke-2124';
     const terminals = [
-      pane('primary', 'Cursor — smoke worker', workspacePrimary),
+      pane('primary-agent', 'OpenCode — smoke worker', workspacePrimary),
+      pane('coordinator', 'OpenCode fixture-coordinator', workspacePrimary),
       pane('sibling-a', 'OpenCode — agent', '/home/che/orca/workspaces/orchestrator-pack/other-checkout'),
       pane('sibling-b', 'Claude Code — agent', '/home/che/orca/workspaces/orchestrator-pack/another-checkout'),
     ];
     const observed = runFleetSweep({
       primary: workspacePrimary,
+      coordinatorHandle: 'coordinator',
       terminals,
       executor: fakeExecutor(terminals, {
+        'primary-agent': 'done\n>',
         'sibling-a': 'working\nesc interrupt\n',
         'sibling-b': 'done\n',
       }),
       store: new MemoryPollingStore(),
     });
 
-    expect(observed.map(({ handle }) => handle)).toEqual(['sibling-a', 'sibling-b']);
-    expect(observed).not.toHaveLength(0);
-    expect(observed.some(({ handle }) => handle === 'primary')).toBe(false);
+    expect(observed.map(({ handle }) => handle)).toEqual(['primary-agent', 'sibling-a', 'sibling-b']);
+    expect(observed.some(({ handle }) => handle === 'coordinator')).toBe(false);
   });
 
   it('reads every selected pane exactly once and performs no Orca mutation', () => {

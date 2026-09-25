@@ -6,6 +6,7 @@ import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_BUSY_RE,
+  DEFAULT_ORCHESTRATOR_TITLE_RE,
   FileFleetStateStore,
   FleetScreenReadError,
   compileRegex,
@@ -163,6 +164,8 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     observations = runFleetSweep({
       primary: config.primary,
       workspaceRe: config.workspaceRe,
+      coordinatorHandle: coordinator.handle,
+      coordinatorTitleRe: config.orchestratorTitleRe,
       busyRe: config.busyRe,
       executor,
       store,
@@ -232,7 +235,7 @@ export function fleetWakeConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Fl
   return {
     primary,
     workspaceRe: compileRegex(env.WORKSPACE_RE, defaultWorkspaceRegex(primary)),
-    orchestratorTitleRe: compileRegex(env.ORCH_TITLE_RE, /Cursor/iu),
+    orchestratorTitleRe: compileRegex(env.ORCH_TITLE_RE, DEFAULT_ORCHESTRATOR_TITLE_RE),
     ...(env.ORCH_HANDLE?.trim() ? { orchestratorHandle: env.ORCH_HANDLE.trim() } : {}),
     busyRe: compileRegex(env.BUSY_RE, DEFAULT_BUSY_RE),
     intervalSeconds,
