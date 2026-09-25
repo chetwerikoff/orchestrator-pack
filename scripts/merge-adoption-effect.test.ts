@@ -183,7 +183,7 @@ describe('Issue #2145 merge adoption effect verification', () => {
 
   it('tracks the common merge procedure rather than delegated integration only', () => {
     const skill = readFileSync('.cursor/skills/merge-with-local-adoption/SKILL.md', 'utf8');
-    expect(skill).toContain('### 8. Verify effect');
+    expect(skill).toContain('## Verify effect — mandatory after Step 7');
     expect(skill).toContain('scripts/merge-adoption-effect.ts');
     expect(skill).toContain('effect_verified');
     expect(skill).toContain('effect_unverified(<reason>)');
