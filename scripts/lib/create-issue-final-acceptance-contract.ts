@@ -114,20 +114,21 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 
 export function collectUnfencedLinesContaining(body: string, token: string): string[] {
-  let fencedCode: '`' | '~' | null = null;
+  let fencedCode: { character: '`' | '~'; length: number } | null = null;
   const matches: string[] = [];
   for (const line of body.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (fencedCode !== null) {
-      if (trimmed.startsWith(fencedCode.repeat(3))) fencedCode = null;
+      const closingFence = new RegExp(`^${fencedCode.character}{${fencedCode.length},}\\s*$`);
+      if (closingFence.test(trimmed)) fencedCode = null;
       continue;
     }
-    if (trimmed.startsWith('```')) {
-      fencedCode = '`';
-      continue;
-    }
-    if (trimmed.startsWith('~~~')) {
-      fencedCode = '~';
+    const openingFence = /^(`{3,}|~{3,})/.exec(trimmed);
+    if (openingFence) {
+      fencedCode = {
+        character: openingFence[1]![0] as '`' | '~',
+        length: openingFence[1]!.length,
+      };
       continue;
     }
     if (line.includes(token)) matches.push(line);

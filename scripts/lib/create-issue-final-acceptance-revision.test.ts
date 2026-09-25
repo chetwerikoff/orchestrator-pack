@@ -462,6 +462,19 @@ describe('revision-aware final acceptance', () => {
       currentMarker,
       '```',
     ].join('\n'), 'r04')).toBeUndefined();
+
+    const nestedFenceBody = [
+      '<!-- source-revision: r04 -->',
+      '````markdown',
+      '```',
+      currentMarker,
+      '````',
+    ].join('\n');
+    expect(resolveOperatorAmendmentEvidence(nestedFenceBody, 'r04')).toBeUndefined();
+    expect(resolveOperatorAmendmentEvidence([
+      '<!-- source-revision: r04 -->',
+      currentMarker,
+    ].join('\n'), 'r04')).toMatchObject({ markerLine: currentMarker });
   });
   it('accepts a matching operator amendment before review-cycle finalization formalities', () => {
     const body = [
