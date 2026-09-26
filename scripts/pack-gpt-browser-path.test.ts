@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,7 +15,6 @@ import {
 } from './lib/pack-gpt-reviewer.ts';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-const harnessBin = join(repoRoot, 'tests/fixtures/bin');
 const harnessSmokeRecord = JSON.parse(readFileSync(
   join(repoRoot, 'tests/external-output-references/pack-gpt-browser-smoke-56875db8.json'),
   'utf8',
@@ -248,27 +247,48 @@ describe('GPT browser transport path (Issue #1031 AC3/AC12)', () => {
   });
 
   it('returns parseable terminal stdout through harness integration npm shim without runProcess mocks', async () => {
-    chmodSync(join(harnessBin, 'npm'), 0o755);
+    const fixtureRoot = mkdtempSync(join(tmpdir(), 'opk-browser-harness-fixture-'));
+    const tempHarnessBin = join(fixtureRoot, 'bin');
+    const tempNpm = join(tempHarnessBin, 'npm');
+    const trackedNpm = join(repoRoot, 'tests/fixtures/bin/npm');
+    const trackedNpmMode = statSync(trackedNpm).mode & 0o777;
     const priorPath = process.env.PATH;
-    process.env.PATH = `${harnessBin}:${priorPath ?? ''}`;
-    process.env.OPK_VITEST_HARNESS = '1';
 
-    const result = await runGptPackReview({
-      repoRoot: process.cwd(),
-      repoSlug: 'chetwerikoff/orchestrator-pack',
-      prNumber: 1050,
-      headSha: harnessSmokeRecord.headSha,
-    }, {}, {
-      PACK_GPT_BROWSER_PROFILE: '/tmp/opk-harness-profile',
-      PACK_GPT_BROWSER_CDP: 'http://127.0.0.1:9222',
-      PACK_GPT_BROWSER_CHAT_URL: 'https://chatgpt.com/c/harness-smoke',
-    });
+    let result: Awaited<ReturnType<typeof runGptPackReview>>;
+    try {
+      cpSync(join(repoRoot, 'tests/fixtures'), fixtureRoot, { recursive: true });
+      chmodSync(tempNpm, 0o755);
+      process.env.PATH = `${tempHarnessBin}:${priorPath ?? ''}`;
+      process.env.OPK_VITEST_HARNESS = '1';
+      result = await runGptPackReview({
+        repoRoot: process.cwd(),
+        repoSlug: 'chetwerikoff/orchestrator-pack',
+        prNumber: 1050,
+        headSha: harnessSmokeRecord.headSha,
+      }, {}, {
+        PACK_GPT_BROWSER_PROFILE: '/tmp/opk-harness-profile',
+        PACK_GPT_BROWSER_CDP: 'http://127.0.0.1:9222',
+        PACK_GPT_BROWSER_CHAT_URL: 'https://chatgpt.com/c/harness-smoke',
+      });
+    } finally {
+      if (priorPath === undefined) delete process.env.PATH;
+      else process.env.PATH = priorPath;
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
 
-    process.env.PATH = priorPath;
     expect(result.exitCode).toBe(0);
     const output = result.stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line));
     expect(output[0]).toMatchObject({ schema: 'turn-result/v1', send_count: 1 });
     expect(output.at(-1)).toEqual({ verdict: 'clean', findingCount: 0, findings: [] });
+    expect(statSync(trackedNpm).mode & 0o777).toBe(trackedNpmMode);
+    const status = subprocess.runProcessSync({
+      command: 'git',
+      args: ['status', '--short', '--', 'tests/fixtures/bin/npm'],
+      cwd: repoRoot,
+      inheritParentEnv: true,
+    });
+    expect(status.ok).toBe(true);
+    expect(status.stdout).toBe('');
   });
 
   it('writes adapter prompt, terminal reply, and mapped stdout when evidence dir is set', async () => {
