@@ -18,5 +18,5 @@
     "scripts/vitest-ci-runner.test.ts",
     "scripts/vitest-ci-runner.ts"
   ],
-  "source_revision": "f644c3ef261669620672ab4cb9f5472ca1c9a745"
+  "source_revision": "2cd9bb11f296a4a2118abeb4078d115d7e2df316"
 }
