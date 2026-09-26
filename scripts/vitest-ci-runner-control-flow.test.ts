@@ -1,7 +1,8 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
 
-import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -165,6 +166,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function worktreeStatus(): string {
+  return execFileSync('git', ['status', '--short'], { cwd: process.cwd(), encoding: 'utf8' });
+}
+
 async function runHeavyThroughRetryDelays(): Promise<number> {
   vi.useFakeTimers();
   const pending = main(['heavy', '--shard', '99']);
@@ -205,6 +210,23 @@ describe('Vitest CI runner actual fail-closed control flow', () => {
     await expect(runHeavyThroughRetryDelays()).resolves.toBe(0);
     expect(fleet.cleanup).toHaveBeenCalledTimes(1);
     expect(subprocess.run.mock.calls.filter(([input]) => input.args?.[0] === 'test')).toHaveLength(2);
+  });
+
+  it('cleans every heavy-shard report and metadata file before returning', async () => {
+    const shard = 2159;
+    const file = 'scripts/control-heavy-hygiene.test.ts';
+    scenario.heavyPlan = { shard, files: [file], totalRuntimeMs: 1 };
+    scenario.filePlans[file] = { mode: 'file', pool: 'threads' };
+    scenario.npm.push({ ok: true, writeReport: true });
+    const statusBefore = worktreeStatus();
+    const reportPrefix = `.vitest-runtime-report-heavy-${shard}`;
+
+    await expect(main(['heavy', '--shard', String(shard)])).resolves.toBe(0);
+
+    expect(readdirSync(process.cwd()).filter((name) => name.startsWith(reportPrefix))).toEqual([]);
+    const statusAfter = worktreeStatus();
+    if (statusBefore === '') expect(statusAfter).toBe('');
+    else expect(statusAfter).toBe(statusBefore);
   });
 
   it('does not retry a heavy RPC flake when the report contains a genuine test failure', async () => {
