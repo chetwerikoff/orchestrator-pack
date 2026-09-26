@@ -1,0 +1,58 @@
+handle: term_29a46c88-6d46-4c5d-9f6d-6cd6db3d1a99
+status: running
+source: screen
+cursor: 5109033
+oldest cursor: 5107033
+latest cursor: 5109033
+warning: older output is no longer retained
+warning: output limited; page retained output with --cursor 5107033 --limit <count>
+
+    Globbed "**/*ses*" in /home/che/.local/share/opencode
+    Found 0 files
+  $ export PATH="/home/che/.local/bin:/usr/bin:/bin"
+    python3 - << 'PY' 925ms
+    … 4 input + 16 output lines hidden · ctrl+o to expand
+      ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀…
+       ⬝⬝⬝⬝⬝⬝⬝⬝  esc interrupt                                                             92.7K (34%)  ctrl+p com…
+  $ export PATH="/home/che/.local/bin:/usr/bin:/bin"
+    cat > /tmp/step-2095-checks.txt << 'EOF' 1.3s
+    … 3 input + 30 output lines hidden · ctrl+o to expand
+      }
+    }
+  $ export PATH="/home/che/.local/bin:/usr/bin:/bin"
+    python3 - << 'PY' 730ms
+    … 6 input + 1 output lines hidden · ctrl+o to expand
+    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+       ⬝⬝⬝⬝⬝⬝⬝⬝  esc interrupt                                                            175.9K (65%)  ctrl+p com…
+  $ export PATH="/home/che/.local/bin:/usr/bin:/bin"; orca --help 2>&1 | head -40 626ms
+    … 38 output lines hidden · ctrl+o to expand
+    Environment Recipes:
+  Три остановленных окна получили новые шаги. Ветка #2138 отстала от main, поэтому #2094 больше не стоит на
+  месте.
+  ┌────────┬───────────────┬────────────────────────────────────────────────────────────────────────────────────┐
+  │ Окно   │ Issue / PR    │ Состояние                                                                          │
+  ├────────┼───────────────┼────────────────────────────────────────────────────────────────────────────────────┤
+  │ term_1 │ #2094 / PR    │ stopped → шаг: влить origin/main 94259b42, дождаться зелёного required CI. Без     │
+  │ 73eccb │ #2138,        │ smoke, pack-review и мержа PR. Модель уже думает.                                  │
+  │ 3      │ 5f33211f      │                                                                                    │
+  ├────────┼───────────────┼────────────────────────────────────────────────────────────────────────────────────┤
+  │ term_4 │ #2150 / PR    │ stopped → шаг: retired-surface-selftest.ts. Проза уходила в bash у агента Build,   │
+  │ c8ee81 │ #2153,        │ поэтому отправлена одна команда. Модель думает.                                    │
+  │ 0      │ 76fa8b007     │                                                                                    │
+  ├────────┼───────────────┼────────────────────────────────────────────────────────────────────────────────────┤
+  │ term_8 │ #1998 / PR    │ stopped → шаг: назвать все не-SUCCESS checks. 29ad5495 остаётся FAIL, новый smoke  │
+  │ bcb82a │ #2095,        │ не запускать. Модель думает.                                                       │
+  │ 0      │ 053c79d0      │                                                                                    │
+  ├────────┼───────────────┼────────────────────────────────────────────────────────────────────────────────────┤
+  │ term_8 │ #2145 / PR    │ parked: PR уже влит.                                                               │
+  │ 7cd645 │ #2148,        │                                                                                    │
+  │ 0      │ d5682714c     │                                                                                    │
+  ├────────┼───────────────┼────────────────────────────────────────────────────────────────────────────────────┤
+  │ term_d │ PR #2153,     │ waiting on Run pack contract tests и Vitest heavy shard 1/1 — оба FAILURE.         │
+  │ 9c12c8 │ 76fa8b007     │ OpenCode в этом окне уже вышел в shell. Пока эти два красные, waiver и мерж не     │
+  │ 0      │               │ начинаются.                                                                        │
+  └────────┴───────────────┴────────────────────────────────────────────────────────────────────────────────────┘
+  → Add a follow-up
+  1 task
+  Grok 4.7 256K Medium · 20.2% · 10 files edited                                                     Run Everything
+  ~/Projects/orchestrator-pack · main
