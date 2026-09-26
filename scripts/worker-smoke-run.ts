@@ -4,7 +4,7 @@ import './toolchain/native-entrypoint-preflight.ts';
 import { classifyRequiredCiLevel } from '../docs/review-ready-stuck-guard.mjs';
 import { runProcess, runProcessSync } from './kernel/subprocess.ts';
 import { overlayExecutorProfileEnv } from './executor-profile-store.ts';
-import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
+import { resolveRealGhBinary, resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from './pr-scope-contract.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -518,7 +518,7 @@ function requireProcessOutput(label: string, result: ReturnType<typeof runProces
 const SMOKE_GH_TIMEOUT_MS = 60_000;
 const SMOKE_GH_RETRY_COUNT = 1;
 
-function runSmokeGhProcess(
+export function runSmokeGhProcess(
   command: string,
   args: readonly string[],
   cwd: string,
@@ -541,13 +541,13 @@ export function runSmokeGhSync(
   return runSmokeGhProcess(resolveTrackedGhWrapper(), args, cwd, { ...buildSmokeGhChildEnv(), ...extraEnv });
 }
 
-function runSmokeGhWriteSync(
+export function runSmokeGhWriteSync(
   args: readonly string[],
   cwd: string,
   extraEnv: Readonly<NodeJS.ProcessEnv> = {},
   timeoutMs = SMOKE_GH_TIMEOUT_MS,
 ): ReturnType<typeof runProcessSync> {
-  return runSmokeGhProcess('gh', args, cwd, { ...buildSmokeGhChildEnv(), ...extraEnv }, timeoutMs);
+  return runSmokeGhProcess(resolveRealGhBinary(), args, cwd, { ...buildSmokeGhChildEnv(), ...extraEnv }, timeoutMs);
 }
 
 function gitPorcelain(cwd: string): string[] {
@@ -818,9 +818,15 @@ export function publishPrComment(prNumber: number, body: string, repoRoot: strin
   const bodyFile = join(tempDir, 'body.md');
   try {
     writeFileSync(bodyFile, JSON.stringify({ body }), 'utf8');
-    const result = runSmokeGhWriteSync(
-      ['api', `repos/${TRUSTED_REPOSITORY_SLUG}/issues/${String(prNumber)}/comments`, '--method', 'POST', '--input', bodyFile], repoRoot, {}, timeoutMs,
-    );
+    let result: ReturnType<typeof runProcessSync>;
+    try {
+      result = runSmokeGhWriteSync(
+        ['api', `repos/${TRUSTED_REPOSITORY_SLUG}/issues/${String(prNumber)}/comments`, '--method', 'POST', '--input', bodyFile], repoRoot, {}, timeoutMs,
+      );
+    } catch (error) {
+      const detail = scrubSmokeOutput(scrubForwardedGhSecrets(error instanceof Error ? error.message : String(error), buildSmokeGhChildEnv()));
+      throw new Error(`publication_unconfirmed: ${detail}`);
+    }
     if (!result.ok) {
       const detail = scrubSmokeOutput(scrubForwardedGhSecrets(result.stderr || result.error || 'non-zero exit', buildSmokeGhChildEnv()));
       throw new Error(`publication_unconfirmed: ${detail}`);
