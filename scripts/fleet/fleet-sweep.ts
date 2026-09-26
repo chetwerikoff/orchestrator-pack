@@ -84,9 +84,20 @@ export function looksLikeAgentPane(title: string): boolean {
   return DEFAULT_AGENT_TITLE_RE.test(title);
 }
 
+// Every supported TUI renders its running-turn marker in the bottom status region. Scrollback
+// above it can quote another pane's screen (e.g. `orca terminal read` output), whose status bar
+// must not make an idle pane look busy. A marker pushed above the window yields a spurious
+// STOPPED (one extra alarm), which is the safe direction; a false busy silences alarms.
+export const BUSY_MARKER_WINDOW_LINES = 12;
+
 export function isBusyScreen(screen: string, busyRe: RegExp = DEFAULT_BUSY_RE): boolean {
+  const statusRegion = screen
+    .split(/\r?\n/u)
+    .filter((line) => line.trim() !== '')
+    .slice(-BUSY_MARKER_WINDOW_LINES)
+    .join('\n');
   busyRe.lastIndex = 0;
-  return busyRe.test(screen);
+  return busyRe.test(statusRegion);
 }
 
 export function hasPollingEvidence(screen: string): boolean {
