@@ -14,6 +14,7 @@ import {
   type CreateIssueBrowserPreflightFailure,
 } from './lib/create-issue-browser-gpt-preflight.ts';
 import {
+  createIssueExternalPauseResult,
   createIssueNextAction,
   createIssueRecoverableResult,
   createIssueStaleNextAction,
@@ -22,6 +23,10 @@ import {
   type CreateIssueSemanticStage,
 } from './lib/create-issue-next-action.ts';
 import { emitCreateIssueManagerResult } from './lib/create-issue-manager-boundary.ts';
+import {
+  inspectManagerCliInvocation,
+  type ManagerCliDeclaration,
+} from './lib/manager-cli-contract.ts';
 import {
   inspectLifecycleInvocationBinding,
   recordLifecycleInvocationAdmission,
@@ -34,6 +39,40 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const launcherPath = join(repoRoot, 'scripts/flow-manager-long-running-child.ts');
 const browserEntry = join(repoRoot, 'scripts/chatgpt-browser-turn/state-light-entry.ts');
 const adapterPath = join(repoRoot, 'scripts/flow-manager-browser-gpt-long-run.ts');
+
+const FLOW_MANAGER_BROWSER_GPT_CLI = {
+  program: 'flow-manager-browser-gpt-long-run.ts',
+  options: [
+    { flag: '--run-identity', value: 'id', required: true },
+    { flag: '--attempt-identity', value: 'id', required: true },
+    { flag: '--handoff-receipt', value: 'path', required: true },
+    { flag: '--invocation-id', value: 'id', required: true },
+    { flag: '--terminal-envelope', value: 'path', required: true },
+    { flag: '--output', value: 'path', required: true },
+    { flag: '--profile', value: 'key', required: true },
+    { flag: '--cdp', value: 'url', required: true },
+    { flag: '--input', value: 'path', required: true },
+    { flag: '--cwd', value: 'path' },
+    { flag: '--reviewer-source-output', value: 'path' },
+    { flag: '--reviewer-source', value: 'source' },
+    { flag: '--repository', value: 'owner/name' },
+    { flag: '--issue-number', value: 'n' },
+    { flag: '--source-revision', value: 'rNN' },
+    { flag: '--stage', value: 'stage', values: ['competitive', 'architectural-review', 'architectural-lens', 'architectural'] },
+    { flag: '--source-slot', value: 'slot', values: ['01', '02', '03'] },
+    { flag: '--stage-attempt-id', value: 'id' },
+    { flag: '--terminal-input-bundle', value: 'path' },
+    { flag: '--review-dir', value: 'path' },
+    { flag: '--project-url', value: 'url' },
+    { flag: '--operator-browser-config', value: 'absolute-path' },
+    { flag: '--timeout-ms', value: 'ms' },
+    { flag: '--poll-ms', value: 'ms' },
+    { flag: '--chat-url', value: 'url' },
+    { flag: '--new-chat' },
+  ],
+} as const satisfies ManagerCliDeclaration;
+
+export const FLOW_MANAGER_BROWSER_GPT_CLI_DECLARATION = FLOW_MANAGER_BROWSER_GPT_CLI;
 
 function requiredOption(options: Map<string, string | true>, key: string): string {
   const value = options.get(key);
@@ -97,6 +136,7 @@ function browserReconcileAction(binding: CreateIssueActionBinding) {
   });
 }
 
+
 function projectPreflightFailure(
   argv: readonly string[],
   result: CreateIssueBrowserPreflightFailure,
@@ -109,10 +149,24 @@ function projectPreflightFailure(
       nextAction: result.nextAction,
     }));
   }
-  return refuse(argv, result.cause, {
-    blocker: result.blocker,
+  if (result.cause === 'tracked_github_unavailable') {
+    return emitBrowserManagerResult(argv, createIssueExternalPauseResult({
+      cause: 'external:github_unavailable',
+      remedy: result.remedy,
+      resumeWhen: { operator: true },
+      evidence: result.evidence,
+      blocker: result.blocker,
+    }));
+  }
+  process.stderr.write(JSON.stringify({
+    schema: 'flow-manager-browser-gpt-long-run-refusal/v1',
+    reason: 'create_issue_browser_preflight_failed',
+    cause: result.cause,
     remedy: result.remedy,
-  });
+    evidence: result.evidence,
+    nextAction: null,
+  }) + '\n');
+  return 2;
 }
 
 export interface BrowserAdapterDependencies {
@@ -287,8 +341,17 @@ export async function runBrowserAdapter(
   argv: readonly string[],
   deps: BrowserAdapterDependencies = {},
 ): Promise<number> {
+  const inspected = inspectManagerCliInvocation(FLOW_MANAGER_BROWSER_GPT_CLI, argv, { validateRequired: false });
+  if (inspected.help) {
+    process.stdout.write(inspected.help + '\n');
+    return 0;
+  }
   if (argv.some((token) => token === '--completion-mode' || token === '--authority' || token === '--result-protocol')) {
     return refuse(argv, 'forbidden_authority_selector');
+  }
+  if (inspected.error) {
+    process.stderr.write('flow-manager-browser-gpt-long-run: ' + inspected.error + '\n');
+    return 2;
   }
   const options = parseFlagArgv(argv);
   const runIdentity = requiredOption(options, 'run-identity');
@@ -313,6 +376,16 @@ export async function runBrowserAdapter(
   ];
   const directRequested = reviewerSourceOutput !== undefined
     || directArgumentKeys.some((key) => options.has(key));
+  const coreIdentityIncomplete = ['run-identity', 'attempt-identity', 'handoff-receipt']
+    .some((key) => !options.has(key));
+  let requiredOptionsValidated = !directRequested || coreIdentityIncomplete;
+  if (requiredOptionsValidated) {
+    const requiredInspection = inspectManagerCliInvocation(FLOW_MANAGER_BROWSER_GPT_CLI, argv);
+    if (requiredInspection.error) {
+      process.stderr.write('flow-manager-browser-gpt-long-run: ' + requiredInspection.error + '\n');
+      return 2;
+    }
+  }
   if (directRequested && (
     reviewerSourceOutput === undefined
     || directArgumentKeys.some((key) => typeof options.get(key) !== 'string')
@@ -337,6 +410,14 @@ export async function runBrowserAdapter(
   }
   if (directRequested && directStage !== 'architectural' && terminalInputBundle) {
     return refuse(argv, 'direct_publication_terminal_bundle_unexpected');
+  }
+  if (!requiredOptionsValidated) {
+    const requiredInspection = inspectManagerCliInvocation(FLOW_MANAGER_BROWSER_GPT_CLI, argv);
+    if (requiredInspection.error) {
+      process.stderr.write('flow-manager-browser-gpt-long-run: ' + requiredInspection.error + '\n');
+      return 2;
+    }
+    requiredOptionsValidated = true;
   }
   const profile = requiredOption(options, 'profile');
   const cdp = requiredOption(options, 'cdp');

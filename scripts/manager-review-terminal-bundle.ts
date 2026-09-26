@@ -7,6 +7,24 @@ import {
   terminalBundleFileName,
   writeManagerReviewTerminalBundle,
 } from './lib/manager-review-terminal-bundle.ts';
+import {
+  inspectManagerCliInvocation,
+  type ManagerCliDeclaration,
+} from './lib/manager-cli-contract.ts';
+
+const MANAGER_REVIEW_TERMINAL_BUNDLE_CLI = {
+  program: 'manager-review-terminal-bundle.ts',
+  options: [
+    { flag: '--repo', value: 'owner/name' },
+    { flag: '--issue-number', value: 'n', required: true },
+    { flag: '--source-revision', value: 'rNN', required: true },
+    { flag: '--review-dir', value: 'path', required: true },
+    { flag: '--output', value: 'path' },
+    { flag: '--author-dispositions', value: 'path' },
+  ],
+} as const satisfies ManagerCliDeclaration;
+
+export const MANAGER_REVIEW_TERMINAL_BUNDLE_CLI_DECLARATION = MANAGER_REVIEW_TERMINAL_BUNDLE_CLI;
 
 function option(argv: readonly string[], key: string): string | undefined {
   const flag = `--${key}`;
@@ -17,6 +35,15 @@ function option(argv: readonly string[], key: string): string | undefined {
 }
 
 export function runManagerReviewTerminalBundleCli(argv: readonly string[]): number {
+  const inspected = inspectManagerCliInvocation(MANAGER_REVIEW_TERMINAL_BUNDLE_CLI, argv);
+  if (inspected.help) {
+    process.stdout.write(inspected.help + '\n');
+    return 0;
+  }
+  if (inspected.error) {
+    process.stderr.write(inspected.error + '\n');
+    return 2;
+  }
   try {
     const repo = option(argv, 'repo') ?? 'chetwerikoff/orchestrator-pack';
     const issueRaw = option(argv, 'issue-number');
