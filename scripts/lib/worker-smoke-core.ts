@@ -672,7 +672,77 @@ export type WorkerSmokeSelectiveFallbackReason =
   | 'history_unreadable'
   | 'history_lineage_unprovable'
   | 'history_non_descendant'
+  | 'main_merge_carry_refused'
   | 'history_binding_untrusted';
+
+export interface WorkerSmokeMainMergeCarryProof {
+  readonly sourceHeadSha: string;
+  readonly destinationHeadSha: string;
+  readonly mergeBaseSha: string;
+  readonly destinationBaseSha: string;
+  readonly sourcePatchId: string;
+  readonly destinationPatchId: string;
+  readonly mainPaths: readonly string[];
+  readonly protectedPaths: readonly string[];
+  readonly cleanMainMerge: boolean;
+  readonly descendant: boolean;
+  readonly hasConflictResolution: boolean;
+}
+
+export type WorkerSmokeMainMergeCarryDecision =
+  | { readonly allowed: true; readonly equalityProof: string; readonly mainPaths: readonly string[] }
+  | { readonly allowed: false; readonly reason: 'invalid_binding' | 'not_clean_main_merge' | 'history_non_descendant' | 'patch_id_mismatch' | 'main_dependency_overlap' | 'merge_conflict_resolution' };
+
+export function evaluateWorkerSmokeMainMergeCarry(
+  proof: WorkerSmokeMainMergeCarryProof,
+  expectedDestinationHeadSha: string,
+  expectedSourceHeadSha: string,
+): WorkerSmokeMainMergeCarryDecision {
+  const fullSha = /^[0-9a-f]{40}$/u;
+  const patchId = /^[0-9a-f]{40}$/u;
+  const source = proof.sourceHeadSha.trim().toLowerCase();
+  const destination = proof.destinationHeadSha.trim().toLowerCase();
+  const mergeBase = proof.mergeBaseSha.trim().toLowerCase();
+  const destinationBase = proof.destinationBaseSha.trim().toLowerCase();
+  if (!fullSha.test(source) || !fullSha.test(destination) || !fullSha.test(mergeBase) || !fullSha.test(destinationBase)
+      || source !== expectedSourceHeadSha.trim().toLowerCase()
+      || destination !== expectedDestinationHeadSha.trim().toLowerCase()) {
+    return { allowed: false, reason: 'invalid_binding' };
+  }
+  if (proof.hasConflictResolution) return { allowed: false, reason: 'merge_conflict_resolution' };
+  if (!proof.cleanMainMerge) return { allowed: false, reason: 'not_clean_main_merge' };
+  if (!proof.descendant) return { allowed: false, reason: 'history_non_descendant' };
+  const sourcePatchId = proof.sourcePatchId.trim().toLowerCase();
+  const destinationPatchId = proof.destinationPatchId.trim().toLowerCase();
+  if (!patchId.test(sourcePatchId) || !patchId.test(destinationPatchId) || sourcePatchId !== destinationPatchId) {
+    return { allowed: false, reason: 'patch_id_mismatch' };
+  }
+  const mainPaths = [...new Set(proof.mainPaths.filter(Boolean))].sort();
+  const protectedPaths = new Set(proof.protectedPaths.filter(Boolean));
+  if (mainPaths.some((path) => protectedPaths.has(path))) {
+    return { allowed: false, reason: 'main_dependency_overlap' };
+  }
+  return {
+    allowed: true,
+    equalityProof: `git-patch-id:${sourcePatchId}=${destinationPatchId};merge-base:${mergeBase};destination-base:${destinationBase}`,
+    mainPaths,
+  };
+}
+
+export function smokePlanDependencyPaths(issueBody: string): string[] {
+  const plan = base.parseSmokeTestPlan(issueBody);
+  if (!plan) return [];
+  const paths = new Set<string>();
+  const pathPattern = /\b(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\b/gu;
+  for (const scenario of plan.scenarios) {
+    for (const text of [scenario.action, scenario.expected]) {
+      for (const match of text.matchAll(pathPattern)) {
+        if (match[0]) paths.add(match[0]);
+      }
+    }
+  }
+  return [...paths].sort();
+}
 
 export interface WorkerSmokeSelectiveRetryPlan {
   readonly fullPlan: base.SmokeTestPlan;
@@ -681,6 +751,12 @@ export interface WorkerSmokeSelectiveRetryPlan {
   readonly affectedTupleKeys: readonly string[];
   readonly affectedDiagnostics: readonly WorkerSmokeAffectedDiagnostic[];
   readonly tupleDiagnostics: readonly { tuple: string; reason: string }[];
+  readonly mainMergeCarry?: {
+    readonly sourceHeadSha: string;
+    readonly destinationHeadSha: string;
+    readonly equalityProof: string;
+    readonly mainPaths: readonly string[];
+  };
   readonly fallbackReason?: WorkerSmokeSelectiveFallbackReason;
 }
 
