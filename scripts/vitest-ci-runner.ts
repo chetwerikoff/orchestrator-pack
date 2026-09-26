@@ -289,6 +289,8 @@ async function runHeavy(shard: number, env: NodeJS.ProcessEnv): Promise<number> 
   }
   const finalReport = reportPath(`.vitest-runtime-report-heavy-${shard}.json`);
   removeIfPresent(finalReport);
+  removeIfPresent(`${finalReport}.meta.json`);
+  const reportsToClean = [finalReport, `${finalReport}.meta.json`];
   const plans = new Map<string, HeavyFileRunPlan>();
   for (const file of plan.files) plans.set(file, await jsonNode<HeavyFileRunPlan>('scripts/resolve-vitest-heavy-file-run-plan.mjs', [file], env));
   const batchSize = positive(env.VITEST_HEAVY_FILE_BATCH_SIZE, 4);
@@ -304,6 +306,7 @@ async function runHeavy(shard: number, env: NodeJS.ProcessEnv): Promise<number> 
       sequence += 1;
       const safe = invocation.label.replace(/[^\w.-]+/gu, '_');
       const report = reportPath(`.vitest-runtime-report-heavy-${shard}-${sequence}-${safe}.json`);
+      reportsToClean.push(report);
       let passed = false;
       const attempts = heavyAttemptLimit(env);
       for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -381,7 +384,7 @@ async function runHeavy(shard: number, env: NodeJS.ProcessEnv): Promise<number> 
       }
     }
   } finally {
-    for (const report of partialReports) removeIfPresent(report);
+    for (const report of reportsToClean) removeIfPresent(report);
   }
 
   const hygiene = await observeHeavyShardFleet(shard, env);
