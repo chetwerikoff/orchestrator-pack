@@ -1,0 +1,32 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2161,
+  "declared_paths": [
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "docs/chat-executor-rules.md",
+    "docs/orchestration-runbook.md",
+    "docs/worker-smoke-testing.md",
+    "scripts/lib/worker-smoke-core.ts",
+    "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "docs/chat-executor-rules.md",
+    "docs/orchestration-runbook.md",
+    "docs/worker-smoke-testing.md",
+    "scripts/lib/worker-smoke-core.ts",
+    "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/pr2-foundation/post-review-smoke-preaction.test.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "source_revision": "b2d2447197ec480dd18551465b71c3947dd65efe"
+}

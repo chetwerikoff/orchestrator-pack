@@ -233,6 +233,8 @@ Selective smoke retry uses the existing live PR body as its only affected-scenar
 
 Ordinary full-plan smoke is reserved for the narrow whole-attempt cases where selective reconstruction is mechanically unavailable: a successfully read canonical census contains no prior canonical observation for the Issue/PR lineage, the required canonical history cannot be read or parsed at all, the current head cannot be established as a descendant continuation of reusable history, or trusted task binding cannot establish that the prior observations belong to the exact lineage. Readable non-descendant history uses `history_non_descendant` and the ordinary full plan; PASS is never carried across that rewrite. An unusable or ancestry-ambiguous individual tuple reruns only that tuple. This mechanism adds no reviewer, proof/attestation step, test-result admission, materialized coverage ledger, required status/check, or separate workflow before smoke.
 
+Issue #2161 branch-update sequencing follows the canonical rule in the [orchestration runbook](orchestration-runbook.md#issue-2161-main-update-sequencing).
+
 A persisted clean terminal for the exact same head suppresses a redundant automatic/common reviewer-model invocation. A cycle already at cap also suppresses further automatic/common model calls. Neither case weakens current-head CI or smoke. Smoke admission remains required for a new head before an at-cap refusal, so cap exhaustion cannot hide absent or failed current-head smoke authority.
 
 Missing, pending, cancelled, failed, or earlier-head required checks are not green for the current head.

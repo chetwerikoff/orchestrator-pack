@@ -49,6 +49,13 @@ export interface WorkerSmokeAttemptObservation {
   causeFamily?: WorkerSmokeCauseFamily;
 }
 
+export interface WorkerSmokeMainMergeCarryRecord {
+  sourceHeadSha: string;
+  destinationHeadSha: string;
+  equalityProof: string;
+  mainPaths: readonly string[];
+}
+
 export interface WorkerSmokeReceipt {
   schema: typeof WORKER_SMOKE_RECEIPT_SCHEMA;
   issueNumber: number;
@@ -65,6 +72,7 @@ export interface WorkerSmokeReceipt {
   attemptObservations?: WorkerSmokeAttemptObservation[];
   operatorOverrideReason?: string;
   failureCause?: WorkerSmokeFailureCause;
+  mainMergeCarry?: WorkerSmokeMainMergeCarryRecord;
 }
 
 export interface WorkerSmokeReceiptWriteOptions {
@@ -74,6 +82,7 @@ export interface WorkerSmokeReceiptWriteOptions {
   attemptObservations?: readonly WorkerSmokeAttemptObservation[];
   operatorOverrideReason?: string;
   publishedAt?: string;
+  mainMergeCarry?: WorkerSmokeMainMergeCarryRecord;
 }
 
 export type WorkerSmokeRunMode = 'runtime' | 'no_execution';
@@ -509,6 +518,16 @@ export function writeWorkerSmokeReceipt(
     options.attemptObservations ?? freshAttemptObservationsFromReport(report),
   );
   const failureCause = deriveWorkerSmokeFailureCause(report);
+  const mainMergeCarry = options.mainMergeCarry;
+  if (mainMergeCarry && (
+    executionMode !== 'carry-only'
+    || mainMergeCarry.destinationHeadSha.trim().toLowerCase() !== report.headSha.trim().toLowerCase()
+    || !/^[0-9a-f]{40}$/u.test(mainMergeCarry.sourceHeadSha.trim().toLowerCase())
+    || mainMergeCarry.sourceHeadSha.trim().toLowerCase() === mainMergeCarry.destinationHeadSha.trim().toLowerCase()
+    || !/^git-patch-id:([0-9a-f]{40})=\1;merge-base:[0-9a-f]{40};destination-base:[0-9a-f]{40}$/u.test(mainMergeCarry.equalityProof)
+    || !Array.isArray(mainMergeCarry.mainPaths)
+    || mainMergeCarry.mainPaths.some((path) => typeof path !== 'string' || !path)
+  )) throw new Error('worker_smoke_receipt_main_merge_carry_invalid');
   const receipt: WorkerSmokeReceipt = {
     schema: WORKER_SMOKE_RECEIPT_SCHEMA,
     issueNumber: report.issueNumber,
@@ -525,6 +544,14 @@ export function writeWorkerSmokeReceipt(
     attemptObservations: observations,
     ...(overrideReason ? { operatorOverrideReason: overrideReason } : {}),
     ...(failureCause ? { failureCause } : {}),
+    ...(mainMergeCarry ? {
+      mainMergeCarry: {
+        sourceHeadSha: mainMergeCarry.sourceHeadSha.trim().toLowerCase(),
+        destinationHeadSha: mainMergeCarry.destinationHeadSha.trim().toLowerCase(),
+        equalityProof: mainMergeCarry.equalityProof,
+        mainPaths: [...new Set(mainMergeCarry.mainPaths)].sort(),
+      },
+    } : {}),
   };
   mkdirSync(receiptRoot(), { recursive: true });
   writeCreateOnlyJson(attemptReceiptPath(report.prNumber, report.headSha, attemptId), receipt);
@@ -616,6 +643,21 @@ function parseWorkerSmokeReceipt(
     failureCause = parseWorkerSmokeFailureCause(raw.failureCause, !attemptId);
     if (!failureCause) return null;
   }
+  let mainMergeCarry: WorkerSmokeMainMergeCarryRecord | undefined;
+  if (raw.mainMergeCarry !== undefined) {
+    if (!isRecord(raw.mainMergeCarry) || !Array.isArray(raw.mainMergeCarry.mainPaths)) return null;
+    const sourceHeadSha = String(raw.mainMergeCarry.sourceHeadSha ?? '').trim().toLowerCase();
+    const destinationHeadSha = String(raw.mainMergeCarry.destinationHeadSha ?? '').trim().toLowerCase();
+    const equalityProof = String(raw.mainMergeCarry.equalityProof ?? '').trim();
+    const mainPaths = raw.mainMergeCarry.mainPaths.map((path) => String(path ?? ''));
+    if (!/^[0-9a-f]{40}$/u.test(sourceHeadSha) || sourceHeadSha === destinationHeadSha
+      || destinationHeadSha !== normalizedHead
+      || !/^git-patch-id:([0-9a-f]{40})=\1;merge-base:[0-9a-f]{40};destination-base:[0-9a-f]{40}$/u.test(equalityProof)
+      || mainPaths.some((path) => !path)
+      || new Set(mainPaths).size !== mainPaths.length
+      || JSON.stringify(mainPaths) !== JSON.stringify([...mainPaths].sort())) return null;
+    mainMergeCarry = { sourceHeadSha, destinationHeadSha, equalityProof, mainPaths };
+  }
   const parsed: WorkerSmokeReceipt = {
     schema: WORKER_SMOKE_RECEIPT_SCHEMA,
     issueNumber: Number(raw.issueNumber),
@@ -632,6 +674,7 @@ function parseWorkerSmokeReceipt(
     ...(attemptObservations ? { attemptObservations } : {}),
     ...(operatorOverrideReason ? { operatorOverrideReason } : {}),
     ...(failureCause ? { failureCause } : {}),
+    ...(mainMergeCarry ? { mainMergeCarry } : {}),
   };
   return parsed;
 }
@@ -740,7 +783,7 @@ function legacyReceiptForExactTarget(prNumber: number, headSha: string): WorkerS
 
 export function workerSmokeReceiptMatchesReport(receipt: WorkerSmokeReceipt, report: SmokeReport): boolean {
   const expectedFailureCause = deriveWorkerSmokeFailureCause(report);
-  return receipt.producer === SMOKE_REPORT_PRODUCER
+  const matches = receipt.producer === SMOKE_REPORT_PRODUCER
     && receipt.issueNumber === report.issueNumber
     && receipt.prNumber === report.prNumber
     && receipt.headSha === report.headSha.trim().toLowerCase()
@@ -748,6 +791,14 @@ export function workerSmokeReceiptMatchesReport(receipt: WorkerSmokeReceipt, rep
     && receipt.orcaExecutable === String(report.orcaExecutable ?? '').trim()
     && receipt.result === report.result
     && JSON.stringify(receipt.failureCause ?? null) === JSON.stringify(expectedFailureCause ?? null);
+  if (!matches) return false;
+  const carry = receipt.mainMergeCarry;
+  return !carry || (receipt.executionMode === 'carry-only' && report.result === 'PASS'
+    && carry.destinationHeadSha === report.headSha.trim().toLowerCase()
+    && report.scenarios.length > 0
+    && report.scenarios.every((scenario) =>
+      String(scenario.observed ?? '').includes(`carried PASS from head ${carry.sourceHeadSha}`)
+      && String(scenario.observed ?? '').includes(`not freshly executed on ${carry.destinationHeadSha}`)));
 }
 
 export function verifySmokeRunReceipt(

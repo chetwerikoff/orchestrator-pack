@@ -15,6 +15,9 @@ import {
   evaluateWorkerSmokeGate,
   extractSmokeReportsFromComments,
   formatSmokeReportComment,
+  evaluateWorkerSmokeMainMergeCarry,
+  type WorkerSmokeMainMergeCarryProof,
+  smokePlanDependencyPaths,
   normalizeSmokeReport,
   resolveSmokeRequirement,
   smokeCompletionBodyPath,
@@ -64,6 +67,7 @@ import {
   runGateCheck,
   runSmokeAttempt,
   resolveSmokeExecutorProfile,
+  deriveMainMergeCarryProof,
   smokeCommentSnapshotDigest,
   smokeReportHasScenarioFinding,
   stabilizeSmokeCommentCensus,
@@ -187,6 +191,176 @@ function mutateMachineBlock(body: string, mutate: (block: string) => string): st
   if (start < 0 || end < 0) throw new Error('machine report block missing');
   return `${body.slice(0, start)}${mutate(body.slice(start, end))}${body.slice(end)}`;
 }
+
+describe('Issue #2161 clean main-merge smoke carry decision', () => {
+  const source = 'a'.repeat(40);
+  const destination = 'b'.repeat(40);
+  const mergeBase = 'c'.repeat(40);
+  const patch = 'd'.repeat(40);
+  const proof: WorkerSmokeMainMergeCarryProof = {
+    sourceHeadSha: source,
+    destinationHeadSha: destination,
+    mergeBaseSha: mergeBase,
+    destinationBaseSha: 'e'.repeat(40),
+    sourcePatchId: patch,
+    destinationPatchId: patch,
+    mainPaths: ['docs/runtime-history.md', 'scripts/runner.ts'],
+    protectedPaths: ['scripts/worker-smoke-run.ts', 'docs/smoke-fixture.json'],
+    cleanMainMerge: true,
+    descendant: true,
+    hasConflictResolution: false,
+  };
+
+  it('carries PASS for an equal-patch clean descendant with no protected-path overlap', () => {
+    expect(evaluateWorkerSmokeMainMergeCarry(proof, destination, source)).toEqual({
+      allowed: true,
+      equalityProof: `git-patch-id:${patch}=${patch};merge-base:${mergeBase};destination-base:${'e'.repeat(40)}`,
+      mainPaths: ['docs/runtime-history.md', 'scripts/runner.ts'],
+    });
+  });
+
+  it('requires fresh smoke when the PR patch-id changed', () => {
+    expect(evaluateWorkerSmokeMainMergeCarry({ ...proof, destinationPatchId: 'e'.repeat(40) }, destination, source))
+      .toEqual({ allowed: false, reason: 'patch_id_mismatch' });
+  });
+
+  it('requires fresh smoke when main touched a smoke-plan dependency path', () => {
+    expect(evaluateWorkerSmokeMainMergeCarry({
+      ...proof, mainPaths: [...proof.mainPaths, 'docs/smoke-fixture.json'],
+    }, destination, source)).toEqual({ allowed: false, reason: 'main_dependency_overlap' });
+  });
+
+  it('requires fresh smoke when the merge contains conflict-resolution changes', () => {
+    expect(evaluateWorkerSmokeMainMergeCarry({ ...proof, hasConflictResolution: true }, destination, source))
+      .toEqual({ allowed: false, reason: 'merge_conflict_resolution' });
+  });
+
+  it('preserves history_non_descendant refusal for rebased history', () => {
+    expect(evaluateWorkerSmokeMainMergeCarry({ ...proof, descendant: false }, destination, source))
+      .toEqual({ allowed: false, reason: 'history_non_descendant' });
+  });
+});
+
+describe('Issue #2161 smoke-plan dependency path scope', () => {
+  it('uses dependency paths from smoke scenarios and ignores paths elsewhere in the Issue body', () => {
+    const body = [
+      'Issue scope mentions scripts/not-a-smoke-dependency.ts',
+      '```smoke-test-plan',
+      'scenarios:',
+      '  - action: inspect `scripts/worker-smoke-run.ts` | expected: `docs/smoke-fixture.json` stays unchanged',
+      '```',
+    ].join('\n');
+    expect(smokePlanDependencyPaths(body)).toEqual([
+      'docs/smoke-fixture.json',
+      'scripts/worker-smoke-run.ts',
+    ]);
+  });
+});
+
+describe('Issue #2161 Git main-merge carry derivation', () => {
+  it('compares the PASS patch against the merged head relative to the updated-main parent', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-main-merge-git-'));
+    const git = (...args: string[]): string => {
+      const result = runProcessSync({ command: 'git', args, cwd: root });
+      if (!result.ok) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+      return result.stdout.trim();
+    };
+    try {
+      git('init', '--quiet', '-b', 'main');
+      git('config', 'user.name', 'Smoke test');
+      git('config', 'user.email', 'smoke-test@example.invalid');
+      mkdirSync(join(root, 'src'), { recursive: true });
+      writeFileSync(join(root, 'src', 'pr-change.txt'), 'base\n', 'utf8');
+      git('add', 'src/pr-change.txt');
+      git('commit', '--quiet', '-m', 'base');
+      git('checkout', '-b', 'feature');
+      writeFileSync(join(root, 'src', 'pr-change.txt'), 'feature\n', 'utf8');
+      git('commit', '--quiet', '-am', 'PR change');
+      const sourceHead = git('rev-parse', 'HEAD');
+      git('checkout', 'main');
+      mkdirSync(join(root, 'docs'), { recursive: true });
+      writeFileSync(join(root, 'docs', 'main-change.md'), 'main\n', 'utf8');
+      git('add', 'docs/main-change.md');
+      git('commit', '--quiet', '-m', 'main change');
+      const mainHead = git('rev-parse', 'HEAD');
+      git('update-ref', 'refs/remotes/origin/main', mainHead);
+      git('checkout', 'feature');
+      git('merge', '--no-ff', '--no-edit', 'main');
+      const destinationHead = git('rev-parse', 'HEAD');
+      expect(deriveMainMergeCarryProof(root, sourceHead, destinationHead, planBody([
+        { action: 'inspect docs/smoke-fixture.json', expected: 'fixture unchanged' },
+      ]))).toMatchObject({
+        sourceHeadSha: sourceHead,
+        destinationHeadSha: destinationHead,
+        mainPaths: ['docs/main-change.md'],
+      });
+      expect(deriveMainMergeCarryProof(root, sourceHead, destinationHead, planBody([
+        { action: 'inspect docs/main-change.md', expected: 'main dependency remains unchanged' },
+      ]))).toBeUndefined();
+      git('checkout', '-b', 'changed-pr', destinationHead);
+      writeFileSync(join(root, 'src', 'pr-change.txt'), 'changed after PASS\n', 'utf8');
+      git('commit', '--quiet', '-am', 'change PR diff after PASS');
+      const changedHead = git('rev-parse', 'HEAD');
+      expect(deriveMainMergeCarryProof(root, sourceHead, changedHead, planBody([
+        { action: 'inspect docs/smoke-fixture.json', expected: 'fixture unchanged' },
+      ]))).toBeUndefined();
+      git('checkout', 'main');
+      writeFileSync(join(root, 'src', 'pr-change.txt'), 'main conflicting change\n', 'utf8');
+      git('commit', '--quiet', '-am', 'main conflicting change');
+      const conflictMainHead = git('rev-parse', 'HEAD');
+      git('update-ref', 'refs/remotes/origin/main', conflictMainHead);
+      git('checkout', '-b', 'conflict-pr', sourceHead);
+      const conflictMerge = runProcessSync({ command: 'git', args: ['merge', '--no-ff', '--no-commit', 'main'], cwd: root });
+      expect(conflictMerge.ok).toBe(false);
+      writeFileSync(join(root, 'src', 'pr-change.txt'), 'resolved conflict\n', 'utf8');
+      git('add', 'src/pr-change.txt');
+      git('commit', '--quiet', '-m', 'resolve main merge conflict');
+      const conflictHead = git('rev-parse', 'HEAD');
+      expect(deriveMainMergeCarryProof(root, sourceHead, conflictHead, planBody([
+        { action: 'inspect docs/smoke-fixture.json', expected: 'fixture unchanged' },
+      ]))).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Issue #2161 durable main-merge carry receipt', () => {
+  it('stores and validates exact source and destination head bindings', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-main-merge-receipt-'));
+    const previous = process.env.WORKER_SMOKE_RECEIPT_ROOT;
+    process.env.WORKER_SMOKE_RECEIPT_ROOT = root;
+    try {
+      const carried = {
+        ...report('PASS', [{
+          action: 'check dependency', expected: 'dependency unchanged',
+          observed: `carried PASS from head ${HEAD_ONE} comment 42; not freshly executed on ${HEAD_TWO}`, outcome: 'pass',
+        }], HEAD_TWO),
+        terminalHandle: undefined, terminalCleanup: 'not_started_no_execution',
+        environmentNotes: ['smoke-execution=carry-only'],
+      };
+      const mainMergeCarry = {
+        sourceHeadSha: HEAD_ONE, destinationHeadSha: HEAD_TWO,
+        equalityProof: `git-patch-id:${'3'.repeat(40)}=${'3'.repeat(40)};merge-base:${'4'.repeat(40)};destination-base:${'5'.repeat(40)}`,
+        mainPaths: ['docs/main-change.md'],
+      };
+      writeWorkerSmokeReceipt(carried, {
+        attemptId: 'main-merge-carry', executionMode: 'carry-only', mainMergeCarry,
+      });
+      expect(verifySmokeRunReceipt(carried, 'main-merge-carry')).toBe(true);
+      const path = join(root, `pr-2001|${HEAD_TWO}|main-merge-carry.json`);
+      const saved = JSON.parse(readFileSync(path, 'utf8')) as { mainMergeCarry: { destinationHeadSha: string } };
+      saved.mainMergeCarry.destinationHeadSha = HEAD_ONE;
+      writeFileSync(path, `${JSON.stringify(saved)}\n`, 'utf8');
+      expect(verifySmokeRunReceipt(carried, 'main-merge-carry')).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.WORKER_SMOKE_RECEIPT_ROOT;
+      else process.env.WORKER_SMOKE_RECEIPT_ROOT = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 
 describe('Issue #1936 truthful smoke evidence', () => {
   it('keeps the cause vocabulary closed and maps harness reasons without prose classification', () => {
