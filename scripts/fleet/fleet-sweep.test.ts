@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyFleetPane,
   defaultWorkspaceRegex,
+  isBusyScreen,
   runFleetSweep,
   selectAgentTerminals,
   type FleetPollingStore,
@@ -59,6 +60,19 @@ describe('fleet sweep classification', () => {
     ['Claude', 'doing work\nesc to interrupt\n'],
   ])('classifies %s running-turn marker as busy', (_name, screen) => {
     expect(classifyFleetPane(screen, 'p1', new MemoryPollingStore())).toBe('busy');
+  });
+
+  it('ignores a quoted status bar in scrollback of an idle pane', () => {
+    const screen = readFileSync(new URL('./fixtures/cursor-idle-quoted-opencode-status.screen.txt', import.meta.url), 'utf8');
+    expect(screen).toMatch(/esc interrupt/u);
+    expect(isBusyScreen(screen)).toBe(false);
+    expect(classifyFleetPane(screen, 'p1', new MemoryPollingStore())).toBe('STOPPED');
+  });
+
+  it('still sees the marker of a busy pane below a quoted status bar', () => {
+    const screen = readFileSync(new URL('./fixtures/cursor-idle-quoted-opencode-status.screen.txt', import.meta.url), 'utf8')
+      .replace(/→ Add a follow-up\s*$/mu, '→ Add a follow-up                                   ctrl+c to stop');
+    expect(isBusyScreen(screen)).toBe(true);
   });
 
   it('classifies stopped and parked panes', () => {
