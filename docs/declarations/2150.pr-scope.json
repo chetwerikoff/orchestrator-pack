@@ -4,7 +4,9 @@
   "declared_paths": [
     "scripts/orca-runtime/adapter.ts",
     "scripts/orca-runtime/task-adapter.test.ts",
-    "scripts/orca-runtime/task-adapter.ts"
+    "scripts/orca-runtime/task-adapter.ts",
+    "scripts/runtime-retirement/retired-surface-guard.test.ts",
+    "scripts/runtime-retirement/retired-surface-guard.ts"
   ],
   "denylist": [
     "credentials/",
@@ -16,7 +18,10 @@
     "docs/declarations/2150.pr-scope.json",
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
-    "scripts/orca-runtime/"
+    "scripts/orca-runtime/",
+    "scripts/runtime-retirement/retired-surface-guard.test.ts",
+    "scripts/runtime-retirement/retired-surface-guard.ts",
+    "scripts/runtime-retirement/retired-surface-selftest.ts"
   ],
-  "source_revision": "111bf6c8c37d166bee1c36c64f32a60f0e72de32"
+  "source_revision": "e87a80e15b4233a83f6a8d8a0606082814adfd04"
 }
