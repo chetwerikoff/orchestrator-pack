@@ -1,7 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
 
-import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -166,8 +165,16 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function worktreeStatus(): string {
-  return execFileSync('git', ['status', '--short'], { cwd: process.cwd(), encoding: 'utf8' });
+async function worktreeStatus(): Promise<string> {
+  const actual = await vi.importActual<typeof import('./kernel/subprocess.ts')>('./kernel/subprocess.ts');
+  const result = actual.runProcessSync({
+    command: 'git',
+    args: ['status', '--short'],
+    cwd: process.cwd(),
+    inheritParentEnv: true,
+  });
+  if (!result.ok) throw new Error(`git status failed: ${result.stderr}`);
+  return result.stdout;
 }
 
 async function runHeavyThroughRetryDelays(): Promise<number> {
@@ -218,13 +225,13 @@ describe('Vitest CI runner actual fail-closed control flow', () => {
     scenario.heavyPlan = { shard, files: [file], totalRuntimeMs: 1 };
     scenario.filePlans[file] = { mode: 'file', pool: 'threads' };
     scenario.npm.push({ ok: true, writeReport: true });
-    const statusBefore = worktreeStatus();
+    const statusBefore = await worktreeStatus();
     const reportPrefix = `.vitest-runtime-report-heavy-${shard}`;
 
     await expect(main(['heavy', '--shard', String(shard)])).resolves.toBe(0);
 
     expect(readdirSync(process.cwd()).filter((name) => name.startsWith(reportPrefix))).toEqual([]);
-    const statusAfter = worktreeStatus();
+    const statusAfter = await worktreeStatus();
     if (statusBefore === '') expect(statusAfter).toBe('');
     else expect(statusAfter).toBe(statusBefore);
   });

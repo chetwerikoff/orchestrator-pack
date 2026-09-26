@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { cpSync, chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -282,10 +281,14 @@ describe('GPT browser transport path (Issue #1031 AC3/AC12)', () => {
     expect(output[0]).toMatchObject({ schema: 'turn-result/v1', send_count: 1 });
     expect(output.at(-1)).toEqual({ verdict: 'clean', findingCount: 0, findings: [] });
     expect(statSync(trackedNpm).mode & 0o777).toBe(trackedNpmMode);
-    expect(execFileSync('git', ['status', '--short', '--', 'tests/fixtures/bin/npm'], {
+    const status = subprocess.runProcessSync({
+      command: 'git',
+      args: ['status', '--short', '--', 'tests/fixtures/bin/npm'],
       cwd: repoRoot,
-      encoding: 'utf8',
-    })).toBe('');
+      inheritParentEnv: true,
+    });
+    expect(status.ok).toBe(true);
+    expect(status.stdout).toBe('');
   });
 
   it('writes adapter prompt, terminal reply, and mapped stdout when evidence dir is set', async () => {
