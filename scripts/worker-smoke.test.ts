@@ -37,7 +37,7 @@ import {
   smokeResultForWorkerSmokeCauseFamily,
   workerSmokeCauseFamilyForHarnessReason,
 } from './lib/worker-smoke-core-base.ts';
-import { inspectSmokeProgress } from './lib/worker-smoke-lifecycle-base.ts';
+import { inspectSmokeProgress, readSmokeLifecycleRegistry } from './lib/worker-smoke-lifecycle-base.ts';
 import { evaluateSmokeLifecycleCleanliness, SMOKE_LIFECYCLE_POLL_MS } from './lib/worker-smoke-lifecycle.ts';
 import {
   evaluateSameHeadBlockedRetryAdmission,
@@ -1793,6 +1793,32 @@ describe('worker-smoke-run wait for expired unbound lifecycle', () => {
   }, 10_000);
 });
 
+describe('worker-smoke-run wait for a missing run', () => {
+  it('fails immediately with run_not_found for the observed id without an artifact directory', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-wait-missing-'));
+    const runId = 'd66e1692-df5b-4ac0-94f1-90f81264f895';
+    try {
+      const result = await runProcess({
+        command: process.execPath,
+        args: [
+          '--experimental-strip-types',
+          join(process.cwd(), 'scripts/worker-smoke-run.ts'),
+          'wait', '--run', runId, '--cwd', root, '--json',
+        ],
+        cwd: root,
+        inheritParentEnv: true,
+        allowEmptyStdout: true,
+        timeoutMs: 2_000,
+      });
+      expect(result.timedOut).toBe(false);
+      expect(result.exitCode).toBe(1);
+      expect(JSON.parse(result.stdout)).toEqual({ ok: false, runId, reason: 'run_not_found' });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 10_000);
+});
+
 
 describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
   const POLL_MS = SMOKE_LIFECYCLE_POLL_MS;
@@ -2698,6 +2724,28 @@ if (idx !== -1) {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('times out and retries a hung gh comment publication once, reporting publication_unconfirmed', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-publish-timeout-'));
+    const bin = join(root, 'bin');
+    mkdirSync(bin, { recursive: true });
+    const callsFile = join(root, 'calls.txt');
+    executable(join(bin, 'gh'), `#!/usr/bin/env node
+const { appendFileSync } = require('node:fs');
+appendFileSync(${JSON.stringify(callsFile)}, 'call\\n', 'utf8');
+setTimeout(() => {}, 1000);
+`);
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}:${previousPath ?? ''}`;
+    try {
+      expect(() => publishPrComment(1586, 'hello', root, 25)).toThrow(/publication_unconfirmed/u);
+      expect(readFileSync(callsFile, 'utf8').trim().split(/\r?\n/u)).toHaveLength(2);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('worker-smoke consolidated gate regressions', () => {
@@ -3077,6 +3125,7 @@ describe('independent pass is stored only after publication', () => {
     actor: 'independent' | 'worker-owned';
     history: boolean;
     publishComment: (prNumber: number, body: string, repoRoot: string) => void;
+    detachedOwner?: boolean;
     spawnFails?: boolean;
     receiptWriteFails?: boolean;
     executePass?: boolean;
@@ -3141,6 +3190,7 @@ describe('independent pass is stored only after publication', () => {
         json: true,
         reviewId: '',
         reviewHeadSha: '',
+        ...(input.detachedOwner ? { detachedOwner: true, runId: `run-${input.prNumber}` } : {}),
       }, {
         adapter,
         resolveProfile: () => ({
@@ -3402,6 +3452,42 @@ describe('independent pass is stored only after publication', () => {
       expect(workerOwnedStatus(207113, result.storeRoot)).not.toBe('started');
     } finally {
       rmSync(result.root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it('terminalizes the smoke run with publication_unconfirmed without changing the scenario verdict', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-publish-terminal-'));
+    const bin = join(root, 'bin');
+    mkdirSync(bin, { recursive: true });
+    executable(join(bin, 'gh'), `#!/usr/bin/env node
+setTimeout(() => {}, 1000);
+`);
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}:${previousPath ?? ''}`;
+    const runId = 'run-207115';
+    const result = await runOrdering({
+      prefix: 'ordering-worker-publication-timeout-',
+      prNumber: 207115,
+      actor: 'worker-owned',
+      history: false,
+      executePass: true,
+      detachedOwner: true,
+      publishComment: (prNumber, body, repoRoot) => publishPrComment(prNumber, body, repoRoot, 25),
+    });
+    try {
+      expect(result.error, result.outputText).toBeUndefined();
+      expect(result.code, result.outputText).toBe(0);
+      const output = JSON.parse(result.outputText ?? '') as { report: SmokeReport };
+      expect(output.report.result).toBe('PASS');
+      expect(output.report.scenarios[0]?.outcome).toBe('pass');
+      expect(output.report.limitations.join(' ')).toContain('publication_unconfirmed');
+      const lifecycle = readSmokeLifecycleRegistry(resolveSmokeRunArtifactDir(result.root, runId));
+      expect(lifecycle?.launcherTerminalizedAtMs).toEqual(expect.any(Number));
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      rmSync(root, { recursive: true, force: true });
+      if (result.root !== root) rmSync(result.root, { recursive: true, force: true });
     }
   }, 20_000);
 

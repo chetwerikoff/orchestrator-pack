@@ -515,20 +515,39 @@ function requireProcessOutput(label: string, result: ReturnType<typeof runProces
   return result.stdout;
 }
 
+const SMOKE_GH_TIMEOUT_MS = 60_000;
+const SMOKE_GH_RETRY_COUNT = 1;
+
+function runSmokeGhProcess(
+  command: string,
+  args: readonly string[],
+  cwd: string,
+  env: Readonly<NodeJS.ProcessEnv>,
+  timeoutMs = SMOKE_GH_TIMEOUT_MS,
+): ReturnType<typeof runProcessSync> {
+  let result: ReturnType<typeof runProcessSync> | undefined;
+  for (let attempt = 0; attempt <= SMOKE_GH_RETRY_COUNT; attempt += 1) {
+    result = runProcessSync({ command, args: [...args], cwd, env, timeoutMs });
+    if (result.ok) return result;
+  }
+  return result!;
+}
+
 export function runSmokeGhSync(
   args: readonly string[],
   cwd: string,
   extraEnv: Readonly<NodeJS.ProcessEnv> = {},
 ): ReturnType<typeof runProcessSync> {
-  return runProcessSync({ command: resolveTrackedGhWrapper(), args: [...args], cwd, env: { ...buildSmokeGhChildEnv(), ...extraEnv } });
+  return runSmokeGhProcess(resolveTrackedGhWrapper(), args, cwd, { ...buildSmokeGhChildEnv(), ...extraEnv });
 }
 
 function runSmokeGhWriteSync(
   args: readonly string[],
   cwd: string,
   extraEnv: Readonly<NodeJS.ProcessEnv> = {},
+  timeoutMs = SMOKE_GH_TIMEOUT_MS,
 ): ReturnType<typeof runProcessSync> {
-  return runProcessSync({ command: 'gh', args: [...args], cwd, env: { ...buildSmokeGhChildEnv(), ...extraEnv } });
+  return runSmokeGhProcess('gh', args, cwd, { ...buildSmokeGhChildEnv(), ...extraEnv }, timeoutMs);
 }
 
 function gitPorcelain(cwd: string): string[] {
@@ -794,14 +813,18 @@ export function fetchLivePrHead(prNumber: number, repositorySlug: string, repoRo
   return String(head.sha ?? '').trim().toLowerCase();
 }
 
-export function publishPrComment(prNumber: number, body: string, repoRoot: string): void {
+export function publishPrComment(prNumber: number, body: string, repoRoot: string, timeoutMs = SMOKE_GH_TIMEOUT_MS): void {
   const tempDir = mkdtempSync(join(tmpdir(), 'worker-smoke-comment-'));
   const bodyFile = join(tempDir, 'body.md');
   try {
     writeFileSync(bodyFile, JSON.stringify({ body }), 'utf8');
-    requireProcessOutput('gh api issue comment', runSmokeGhWriteSync(
-      ['api', `repos/${TRUSTED_REPOSITORY_SLUG}/issues/${String(prNumber)}/comments`, '--method', 'POST', '--input', bodyFile], repoRoot,
-    ));
+    const result = runSmokeGhWriteSync(
+      ['api', `repos/${TRUSTED_REPOSITORY_SLUG}/issues/${String(prNumber)}/comments`, '--method', 'POST', '--input', bodyFile], repoRoot, {}, timeoutMs,
+    );
+    if (!result.ok) {
+      const detail = scrubSmokeOutput(scrubForwardedGhSecrets(result.stderr || result.error || 'non-zero exit', buildSmokeGhChildEnv()));
+      throw new Error(`publication_unconfirmed: ${detail}`);
+    }
   } finally { rmSync(tempDir, { recursive: true, force: true }); }
 }
 
@@ -2436,7 +2459,19 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     report.terminalCleanup = terminalCleanup;
     if (!lifecycleCleanup.clean && report.result === 'PASS') report.result = 'FAIL';
     if (!lifecycleCleanup.clean) report.causeFamily = 'lifecycle_cleanup_failed';
-    publishSmokeReport(report, options, { ...runPublication, attemptObservations: freshAttemptObservations }, publishComment, () => { recordPublishedOrdering(report, true); });
+    let published = false;
+    try {
+      published = publishSmokeReport(report, options, { ...runPublication, attemptObservations: freshAttemptObservations }, publishComment, () => { recordPublishedOrdering(report, true); });
+    } catch (error) {
+      const observed = scrubSmokeOutput(error instanceof Error ? error.message : String(error));
+      if (!observed.startsWith('publication_unconfirmed:')) throw error;
+      report.limitations.push(`publication_unconfirmed: ${observed}`);
+    }
+    if (!published && !options.dryRun) {
+      deferDetachedTerminalization(runId, artifactDir, 'runtime', report);
+      emit({ ok: report.result === 'PASS', report, lifecycleCleanup, attemptId, runId }, options.json);
+      return report.result === 'PASS' ? 0 : 1;
+    }
     let postSmoke: PostSmokeReadinessResult | undefined;
     if (report.result === 'PASS' && !options.dryRun) {
       try {
@@ -2468,7 +2503,12 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       terminalCleanup: worker ? terminalCleanup : startedAtMs > 0 ? 'ambiguous_unbound' : 'not_started', worker, adapterId: adapter.id,
     });
     const publication = startedAtMs > 0 ? runPublication : preAttempt;
-    publishSmokeReport(report, options, publication, publishComment, () => { recordPublishedOrdering(report, true); });
+    if (observed.startsWith('publication_unconfirmed:')) {
+      report.limitations.push(observed);
+    } else {
+      const published = publishSmokeReport(report, options, publication, publishComment, () => { recordPublishedOrdering(report, true); });
+      if (!published && !options.dryRun) report.limitations.push('publication_unconfirmed: publication did not complete');
+    }
     if (options.detachedOwner && cleanupFinished) deferDetachedTerminalization(runId, artifactDir, 'runtime', report);
     emit({ ok: false, report, attemptId }, options.json); return 1;
   } finally {
@@ -2678,6 +2718,10 @@ export async function runSmokeWait(options: CliOptions): Promise<number> {
   const runId = (options.runId ?? '').trim();
   if (!runId) throw new Error('wait requires --run <id>');
   const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
+  if (!existsSync(artifactDir)) {
+    emit({ ok: false, runId, reason: 'run_not_found' }, options.json);
+    return 1;
+  }
   const deadline = Date.now() + SMOKE_ABSOLUTE_CEILING_MS + SMOKE_SHUTDOWN_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const lifecycle = readSmokeLifecycleRegistry(artifactDir);
