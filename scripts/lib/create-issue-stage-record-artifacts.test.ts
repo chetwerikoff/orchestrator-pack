@@ -3715,6 +3715,7 @@ describe('Issue #2039 pre-stage T1 author disposition producer', () => {
         '--source-revision', 'r03',
         '--stage', 'architectural',
         '--tier', 'T1',
+        '--public-actor', 'opencode-flow-manager',
         '--workdir', input.reviewDir,
         '--json',
       ], source);

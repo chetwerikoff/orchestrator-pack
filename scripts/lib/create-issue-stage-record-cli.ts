@@ -70,15 +70,21 @@ import {
   parseRequiredPositiveInt,
   runReviewerTsCli,
 } from './reviewer-ts-cli.ts';
+import {
+  inspectManagerCliInvocation,
+  renderManagerCliUsage,
+  type ManagerCliDeclaration,
+} from './manager-cli-contract.ts';
 
 interface JournalTailCliOptions {
   json: boolean;
-  publicActor: PublicActor;
+  publicActor?: PublicActor;
   workdir?: string;
 }
 
 interface StageFinalizeCliOptions extends JournalTailCliOptions {
   command: 'start-cycle' | 'author-round' | 'publish-stage' | 'retry-pending' | 'reconcile-stage' | 'bind-published-comment' | 'produce-author-dispositions' | 'produce-artifacts' | 'check-artifacts';
+  publicActorExplicit?: boolean;
   repo: string;
   issueNumber: number;
   sourceRevision?: string;
@@ -369,13 +375,15 @@ export function stageFinalizeUsage(): string {
 export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
   const command = argv[2];
   if (command !== 'start-cycle' && command !== 'author-round' && command !== 'publish-stage' && command !== 'retry-pending' && command !== 'reconcile-stage' && command !== 'bind-published-comment' && command !== 'produce-author-dispositions' && command !== 'produce-artifacts' && command !== 'check-artifacts') {
-    throw new Error(`unknown command\n${stageFinalizeUsage()}`);
+    const commandError = command === undefined ? 'command is required' : `unknown command ${command}`;
+    throw new Error(`${commandError}\n${stageFinalizeUsage()}`);
   }
   const opts: StageFinalizeCliOptions = {
     command,
     repo: 'chetwerikoff/orchestrator-pack',
     issueNumber: 0,
     publicActor: 'cursor-flow-manager',
+    publicActorExplicit: false,
     json: false,
     stageEvidencePaths: [],
     claudeProducerEvidencePaths: [],
@@ -540,14 +548,41 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
         break;
     }
   }
+  opts.publicActorExplicit = argv.slice(3).includes('--public-actor');
   return opts;
 }
 
+const CREATE_ISSUE_FINAL_ACCEPTANCE_CLI_DECLARATION = {
+  program: 'create-issue-final-acceptance',
+  options: [
+    { flag: '--repo', value: 'owner/name' },
+    { flag: '--issue-number', value: 'n' },
+    { flag: '--cycle-id', value: 'id' },
+    { flag: '--issue-body', value: 'path' },
+    { flag: '--issue-revision', value: 'revision' },
+    { flag: '--review-dir', value: 'path' },
+    { flag: '--stage-receipt', value: 'path', repeatable: true },
+    { flag: '--capture', value: 'path', repeatable: true },
+    { flag: '--ledger', value: 'path' },
+    { flag: '--relay-evidence', value: 'path', repeatable: true },
+    { flag: '--claude-producer-evidence', value: 'path', repeatable: true },
+    { flag: '--external-pass-receipt', value: 'path' },
+    { flag: '--operator-issue-number', value: 'n' },
+    { flag: '--operator-source-revision', value: 'revision' },
+    { flag: '--operator-verdict-url', value: 'url' },
+    { flag: '--operator-verdict-sha256', value: 'hex' },
+    { flag: '--operator-verdict-byte-length', value: 'n' },
+    { flag: '--operator-finding-count', value: 'n' },
+    { flag: '--operator-reason', value: 'text' },
+    { flag: '--public-actor', value: 'actor', required: true, values: [...PUBLIC_ACTORS] },
+    { flag: '--workdir', value: 'path' },
+    { flag: '--json' },
+  ],
+} as const satisfies ManagerCliDeclaration;
+
+
 function finalAcceptanceUsage(): string {
-  return [
-    'Usage:',
-    `  create-issue-final-acceptance.ts --repo <owner/name> --issue-number <n> --review-dir <path> [--cycle-id <assertion>] [--issue-body <assertion-path>] [--issue-revision <assertion-rNN>] [--stage-receipt <assertion-path>...] [--capture <path>...] [--ledger <path>] [--relay-evidence <path>...] [--claude-producer-evidence <path>...] [--external-pass-receipt <path>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--public-actor <${[...PUBLIC_ACTORS].join('|')}>] [--workdir <path>] [--json]`,
-  ].join('\n');
+  return renderManagerCliUsage(CREATE_ISSUE_FINAL_ACCEPTANCE_CLI_DECLARATION);
 }
 
 function parseFinalAcceptanceArgs(argv: string[]): FinalAcceptanceCliOptions {
@@ -752,7 +787,7 @@ function evidencePathForBinding(
 }
 
 function reconcileStageReadOnlyAction(
-  opts: Pick<StageFinalizeCliOptions, 'repo' | 'blockedOn'>,
+  opts: Pick<StageFinalizeCliOptions, 'repo' | 'blockedOn' | 'publicActor' | 'publicActorExplicit'>,
   issueNumber: number,
   binding: CreateIssueActionBinding,
   reviewDir?: string,
@@ -768,6 +803,7 @@ function reconcileStageReadOnlyAction(
     ...(binding.stageAttemptId ? ['--expected-stage-attempt-id', binding.stageAttemptId] : []),
     '--json',
   ];
+  if (opts.publicActorExplicit && opts.publicActor) argv.push('--public-actor', opts.publicActor);
   if (reviewDir) argv.push('--review-dir', reviewDir);
   if (stageEvidencePath) argv.push('--stage-evidence', stageEvidencePath);
   return createIssueNextAction({
@@ -935,9 +971,9 @@ function poisonSuccessorStartCycleArgv(
     '--expected-source-revision', binding.sourceRevision,
     '--expected-stage', binding.stage,
     '--expected-stage-attempt-id', binding.stageAttemptId ?? '',
-    '--public-actor', opts.publicActor,
     '--json',
   ];
+  if (opts.publicActor) argv.push('--public-actor', opts.publicActor);
   if (opts.competitiveDecision) argv.push('--competitive-decision', opts.competitiveDecision);
   if (opts.competitiveRationale) argv.push('--competitive-rationale', opts.competitiveRationale);
   if (opts.permittedLaneOverride) argv.push('--permitted-lane-override', opts.permittedLaneOverride);
@@ -1291,6 +1327,14 @@ export function runStageFinalizeCli(
   artifactSourceTransport?: GhTransport,
   authorRoundRunner?: AuthorRoundRunner,
 ): number {
+  if (argv[2] === '--help' || argv[2] === '-h') {
+    process.stdout.write(stageFinalizeUsage() + '\n');
+    return 0;
+  }
+  if (argv[2] === 'start-cycle' && !argv.slice(3).includes('--public-actor') && !argv.slice(3).some((arg) => arg === '--help' || arg === '-h')) {
+    process.stderr.write('create-issue-stage-finalize: --public-actor is required\n');
+    return 2;
+  }
   return runParsedCli(argv, 'create-issue-stage-finalize', parseStageFinalizeArgs, (opts) => {
     if (opts.command === 'produce-author-dispositions') {
       const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
@@ -2156,7 +2200,7 @@ export function runStageFinalizeCli(
         tier,
         competitiveDecision: opts.competitiveDecision,
         competitiveRationale: opts.competitiveRationale,
-        publicActor: opts.publicActor,
+        publicActor: opts.publicActor!,
         predecessorCycleId: opts.predecessorCycleId,
         workdir: opts.workdir,
       });
@@ -2279,7 +2323,7 @@ export function runStageFinalizeCli(
           ...(opts.expectedStageAttemptId ? { stageAttemptId: opts.expectedStageAttemptId } : {}),
         }
       : null;
-    const nextAction = recoveryBinding && recovery
+    const nextAction = recoveryBinding && recovery && opts.publicActor
       ? createIssueNextAction({
           kind: 'retry-start-cycle',
           binding: recoveryBinding,
@@ -2342,9 +2386,9 @@ function finalAcceptanceRetryAction(
     '--issue-number', String(issueNumber),
     '--review-dir', reviewDir,
     '--issue-revision', sourceRevision,
-    '--public-actor', opts.publicActor,
     '--json',
   ];
+  if (opts.publicActor) actionArgv.push('--public-actor', opts.publicActor);
   if (opts.workdir) actionArgv.push('--workdir', opts.workdir);
   if (opts.externalPassReceiptPath) actionArgv.push('--external-pass-receipt', opts.externalPassReceiptPath);
   for (const path of opts.claudeProducerEvidencePaths) actionArgv.push('--claude-producer-evidence', path);
@@ -2463,6 +2507,23 @@ function acceptanceAuthorityPause(evidence: string) {
 }
 
 export function runFinalAcceptanceCli(argv: string[], acceptanceTransport?: GhTransport): number {
+  const inspected = inspectManagerCliInvocation(
+    CREATE_ISSUE_FINAL_ACCEPTANCE_CLI_DECLARATION,
+    argv.slice(2),
+    { validateRequired: acceptanceTransport === undefined },
+  );
+  if (inspected.help) {
+    process.stdout.write(inspected.help + '\n');
+    return 0;
+  }
+  const managerShaped = argv.includes('--blocked-on-json')
+    || argv.includes('--expected-source-revision')
+    || argv.includes('--expected-stage')
+    || argv.includes('--expected-stage-attempt-id');
+  if (inspected.error && !managerShaped) {
+    process.stderr.write('create-issue-final-acceptance: ' + inspected.error + '\n');
+    return 2;
+  }
   return runParsedCli(argv, 'create-issue-final-acceptance', parseFinalAcceptanceArgs, (opts) => {
     const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
     const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
@@ -2725,7 +2786,7 @@ export function runFinalAcceptanceCli(argv: string[], acceptanceTransport?: GhTr
       claudeProducerEvidencePaths: claudePaths,
       externalPassReceiptPath: opts.externalPassReceiptPath,
       operatorAdjudication: operatorAcceptanceAdjudication({ ...opts, phase: 'final-acceptance' }),
-      publicActor: opts.publicActor,
+      publicActor: opts.publicActor!,
       workdir: opts.workdir,
     });
 

@@ -118,6 +118,7 @@ describe('create-issue-final-acceptance CLI entry point', () => {
         '--repo', 'chetwerikoff/orchestrator-pack',
         '--issue-number', '1192',
         '--review-dir', dir,
+        '--public-actor', 'cursor-flow-manager',
         '--json',
       ])).toBe(3);
       const output = JSON.parse(String(stdout.mock.calls.at(-1)?.[0] ?? '{}')) as {
@@ -144,6 +145,7 @@ describe('create-issue-final-acceptance CLI entry point', () => {
       });
       expect(output.nextAction?.argv).toContain('--issue-revision');
       expect(output.nextAction?.argv).toContain('r01');
+      expect(output.nextAction?.argv).toEqual(expect.arrayContaining(['--public-actor', 'cursor-flow-manager']));
     } finally {
       stdout.mockRestore();
     }
@@ -181,6 +183,7 @@ describe('create-issue-final-acceptance CLI entry point', () => {
         '--repo', 'chetwerikoff/orchestrator-pack',
         '--issue-number', '1192',
         '--review-dir', dir,
+        '--public-actor', 'cursor-flow-manager',
         '--json',
       ])).toBe(3);
       const output = JSON.parse(String(stdout.mock.calls.at(-1)?.[0] ?? '{}')) as {
@@ -210,4 +213,33 @@ describe('create-issue-final-acceptance CLI entry point', () => {
     }
   });
 
+
+  it('renders top-level help from the manager CLI declaration', () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      expect(runCli(['node', 'scripts/create-issue-final-acceptance.ts', '--help'])).toBe(0);
+      const output = stdout.mock.calls.flat().join('');
+      expect(output).toContain('Usage:');
+      expect(output).toContain('--issue-number');
+      expect(output).toContain('--public-actor');
+      expect(finalAcceptanceMock.runFinalAcceptance).not.toHaveBeenCalled();
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it('requires explicit public actor before final-acceptance reads or mutation', () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      expect(runCli([
+        'node', 'scripts/create-issue-final-acceptance.ts',
+        '--issue-number', '1192',
+        '--review-dir', '/unused',
+      ])).toBe(2);
+      expect(stderr.mock.calls.flat().join('')).toContain('--public-actor is required');
+      expect(finalAcceptanceMock.runFinalAcceptance).not.toHaveBeenCalled();
+    } finally {
+      stderr.mockRestore();
+    }
+  });
 });
