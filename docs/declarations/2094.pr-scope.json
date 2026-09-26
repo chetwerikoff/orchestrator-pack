@@ -1,0 +1,33 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2094,
+  "declared_paths": [
+    ".cursor/skills/execute-issue-with-gpt/SKILL.md",
+    "docs/chatgpt-task-execution-runbook.md",
+    "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/browser-gpt-page-probe.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter.ts",
+    "scripts/flow-manager-authority-contract.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "scripts/chatgpt-browser-turn/product-page-selectors.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/skills/execute-issue-with-gpt/SKILL.md",
+    "docs/browser-gpt-turn-runbook.md",
+    "docs/chatgpt-task-execution-runbook.md",
+    "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/browser-gpt-page-probe.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter.ts",
+    "scripts/flow-manager-authority-contract.test.ts"
+  ],
+  "source_revision": "fda792083f90d50621eef6e6ee15a1c89360a2dd"
+}

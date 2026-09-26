@@ -453,10 +453,14 @@ test('inspect projects only exact current-owned execute-Issue product errors wit
   const marker = `OPKTURNV1${'ab'.repeat(16)}`;
   const timeoutText = 'Message delivery timed out. Please try again.';
   const networkText = 'A network error occurred. Please check your connection and try again. If this issue persists please contact us through our help center at help.openai.com.';
+  const streamText = 'Error in message stream';
 
   for (const [text, expectedCause] of [
     [timeoutText, 'message_delivery_timed_out'],
     [networkText, 'product_network_error'],
+    [streamText, 'message_stream_error'],
+    [`${streamText}…`, 'message_stream_error'],
+    [`${streamText}...`, 'message_stream_error'],
   ] as const) {
     const fixture = productionRecoveryFixture({ marker, literal: text });
     const raw = await evaluateExpression(
@@ -498,8 +502,8 @@ test('inspect projects only exact current-owned execute-Issue product errors wit
   assert.deepEqual(classifyProductWall({
     text: 'transport fallback',
     composer: true,
-    execution_recovery_cause_stable: 'product_network_error',
-  }), { state: 'recovery_required', cause: 'product_network_error' });
+    execution_recovery_cause_stable: 'message_stream_error',
+  }), { state: 'recovery_required', cause: 'message_stream_error' });
 });
 
 test('execute-Issue recovery projection fails closed for near matches, stale turns, replies, generation, and ambiguity', async () => {
@@ -517,6 +521,11 @@ test('execute-Issue recovery projection fails closed for near matches, stale tur
       name: 'near-miss literal',
       reason: 'literal_not_found',
       fixture: { marker, literal: `prefix ${timeoutText} suffix` },
+    },
+    {
+      name: 'near-miss message stream literal',
+      reason: 'literal_not_found',
+      fixture: { marker, literal: 'An error occurred in the message stream' },
     },
     {
       name: 'generic network failure',
