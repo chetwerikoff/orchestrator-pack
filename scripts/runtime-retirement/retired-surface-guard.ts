@@ -74,6 +74,7 @@ const EXCLUDED_EXACT = new Set([
   'scripts/fixtures/reaction-config/report_stale_message.live-capture.txt',
   'scripts/lib/vitest-pre-topology-measurement.mjs',
 ]);
+const GENERATED_VITEST_RUNTIME_REPORT = /(?:^|\/)\.vitest-runtime-report.*\.json$/u;
 
 function normalizePath(path: string): string {
   return path.replaceAll('\\', '/').replace(/^\.\//u, '');
@@ -121,7 +122,8 @@ export function isHistoricalOrDeniedPath(path: string, historicalExact: Readonly
   return historicalExact.has(normalized)
     || EXCLUDED_EXACT.has(normalized)
     || SELF_AUTHORITY_PATHS.has(normalized)
-    || EXCLUDED_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+    || EXCLUDED_PREFIXES.some((prefix) => normalized.startsWith(prefix))
+    || GENERATED_VITEST_RUNTIME_REPORT.test(normalized);
 }
 
 function walk(root: string, current = root, historicalExact: ReadonlySet<string> = EXCLUDED_EXACT): string[] {

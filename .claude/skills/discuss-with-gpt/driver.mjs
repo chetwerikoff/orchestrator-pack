@@ -268,7 +268,8 @@ END-OF-DRAFT TOKEN (echo as "SPEC_RECEIVED: ..."): ${END_NONCE}`;
   }
 
   // richer preflight: distinguish login vs quota vs challenge vs wrong project
-  const composer = '#prompt-textarea';
+  // Keep in sync with COMPOSER_SELECTOR in scripts/chatgpt-browser-turn/product-page-selectors.ts.
+  const composer = '#prompt-textarea, [contenteditable="true"][role="textbox"]';
   const hasText = async (re) => (await page.getByText(re).count().catch(() => 0)) > 0;
   let ready = false;
   for (let i = 0; i < 12; i++) {
@@ -288,7 +289,9 @@ END-OF-DRAFT TOKEN (echo as "SPEC_RECEIVED: ..."): ${END_NONCE}`;
     await fail('wrong_project', 10,
       { note: 'expected project id ' + projCore + ' not in url=' + page.url() + ' (pass --project-url for a different project)' });
 
-  const asst = '[data-message-author-role="assistant"]';
+  // Live ChatGPT markers drift; keep legacy role attributes plus current markdown markers.
+  // Agentic turns interleave "tertiary" progress notes with "primary" answer text.
+  const asst = '[data-message-author-role="assistant"], [data-markdown-text-style="assistant-message"]:not([data-markdown-text-tone="tertiary"])';
   // Let an existing conversation finish rendering before anchoring: a count taken
   // mid-render undercounts, so the loop below would compare against the wrong
   // turn and never settle, burning the whole deadline on an answer already there.
@@ -302,12 +305,12 @@ END-OF-DRAFT TOKEN (echo as "SPEC_RECEIVED: ..."): ${END_NONCE}`;
     }
   }
 
-  await page.locator(composer).click();
+  await page.locator(composer).first().click();
   await page.keyboard.press('Control+A');   // clear any stale composer text first
   await page.keyboard.press('Delete');
   await page.keyboard.insertText(prompt);
   const preCount = await page.locator(asst).count().catch(() => 0);  // anchor to the NEW turn
-  const userSel = '[data-message-author-role="user"]';
+  const userSel = '[data-message-author-role="user"], [data-user-message-bubble="true"]';
   const preUserCount = await page.locator(userSel).count().catch(() => 0);
   const send = page.locator('[data-testid="send-button"]');
   if (await send.count()) await send.click(); else await page.keyboard.press('Enter');
@@ -338,7 +341,10 @@ END-OF-DRAFT TOKEN (echo as "SPEC_RECEIVED: ..."): ${END_NONCE}`;
   while (Date.now() < deadline) {
     const c = await page.locator(asst).count().catch(() => 0);
     const t = c > preCount ? await page.locator(asst).nth(c - 1).innerText().catch(() => '') : '';
-    const busy = (await page.locator('[data-testid="stop-button"]').count().catch(() => 0)) ||
+    // Keep in sync with STOP_BUTTON_SELECTOR / ASSISTANT_TURN_IN_PROGRESS_SELECTOR in
+    // scripts/chatgpt-browser-turn/product-page-selectors.ts; tool/research phases
+    // leave a stable preamble on screen while the turn is still running.
+    const busy = (await page.locator('[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]').count().catch(() => 0)) ||
                  (await page.getByText('Continue generating').count().catch(() => 0));
     if (t && t === lastText && !busy) { if (++stable >= 2) { completed = true; break; } } else stable = 0;
     lastText = t;

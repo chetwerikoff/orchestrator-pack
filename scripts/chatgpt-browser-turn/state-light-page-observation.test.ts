@@ -65,7 +65,7 @@ async function runProductAttributeChurnFixture() {
   let idIndex = 0;
   const ownedNode = {
     getAttribute: vi.fn(async (name: string) => {
-      if (name === MESSAGE_AUTHOR_ROLE_ATTR) return 'user';
+      if (name === MESSAGE_AUTHOR_ROLE_ATTR) return 'user-message';
       if (name === 'data-message-id') return ids[Math.min(idIndex++, ids.length - 1)];
       return null;
     }),
@@ -107,7 +107,7 @@ async function runCollapsedDuplicateFixture() {
   const makeCollapsedNode = (text: string) => ({
     collapsed: true,
     showMore: true,
-    getAttribute: vi.fn(async (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR ? 'user' : null),
+    getAttribute: vi.fn(async (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR ? 'user-message' : null),
     innerText: vi.fn(async () => text),
     textContent: vi.fn(async () => 'collapsed preview'),
   });
@@ -164,12 +164,18 @@ describe('state-light completion probes', () => {
     const assistant = scalarLocator({
       count: vi.fn(async () => 1),
       getAttribute: vi.fn(async (name: string) => {
-        if (name === MESSAGE_AUTHOR_ROLE_ATTR) return 'assistant';
+        if (name === MESSAGE_AUTHOR_ROLE_ATTR) return 'assistant-message';
         if (name === 'data-is-streaming') return generating ? 'true' : null;
         return null;
       }),
       innerText: vi.fn(async () => 'FINAL'),
       locator: vi.fn((selector: string) => {
+        if (selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`) {
+          return scalarLocator({
+            count: vi.fn(async () => 1),
+            getAttribute: vi.fn(async () => 'assistant-message'),
+          });
+        }
         if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=')) {
           return scalarLocator({ count: vi.fn(async () => actionButtons ? 1 : 0) });
         }
@@ -331,10 +337,13 @@ describe('DOM observation boundary', () => {
   ) {
     const elements = messages.map((message, index) => ({
       getAttribute: (name: string) => {
-        if (name === MESSAGE_AUTHOR_ROLE_ATTR) return message.role;
+        if (name === MESSAGE_AUTHOR_ROLE_ATTR) return message.role === 'user' ? 'user-message' : 'assistant-message';
         if (name === 'data-message-id') return `${message.role}-${index}-12345678`;
         return null;
       },
+      querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+        ? { getAttribute: () => message.role === 'user' ? 'user-message' : 'assistant-message' }
+        : null,
       querySelectorAll: () => [],
       innerText: message.text,
     }));

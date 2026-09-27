@@ -176,7 +176,7 @@ queue, lease, runtime selector, or completion authority.
 
 Composer interaction uses two phases. The readiness phase starts immediately
 before its first probe and has a deadline of 12 seconds, bounded by the
-invocation deadline. A qualifying observation must find `#prompt-textarea`
+invocation deadline. A qualifying observation must find `COMPOSER_SELECTOR`
 present, visible, enabled, and content-editable.
 
 After a successful readiness observation, the insertion phase starts with a

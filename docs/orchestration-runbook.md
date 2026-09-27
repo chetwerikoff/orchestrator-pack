@@ -916,6 +916,10 @@ and declared smoke stay exact-current-head. On a new head, smoke admission is ch
 before an at-cap automatic refusal; conflict-free carry-over may remove the model
 call but not the current-head smoke or CI obligation.
 
+### Issue #2161 main-update sequencing
+
+The merge agent performs the sole branch update from `origin/main` immediately before merge, after smoke PASS or a valid clean-main-merge PASS carry and after required CI is green on that exact head. Workers and coordinators must not merge main to clear BEHIND during smoke or review; exact-head smoke, CI, and review authority remain unchanged.
+
 #### Pack-review recovery recipe
 
 Recover an interrupted or stale GPT review through the existing scoped runner; do

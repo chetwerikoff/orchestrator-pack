@@ -4,7 +4,7 @@ import './toolchain/native-entrypoint-preflight.ts';
 import { classifyRequiredCiLevel } from '../docs/review-ready-stuck-guard.mjs';
 import { runProcess, runProcessSync } from './kernel/subprocess.ts';
 import { overlayExecutorProfileEnv } from './executor-profile-store.ts';
-import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
+import { resolveRealGhBinary, resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from './pr-scope-contract.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -68,6 +68,9 @@ import {
   type WorkerSmokeCommentRecord,
   type WorkerSmokeSelectiveRetryPlan,
   type WorkerSmokeTrustedTarget,
+  evaluateWorkerSmokeMainMergeCarry,
+  smokePlanDependencyPaths,
+  type WorkerSmokeMainMergeCarryProof,
 } from './lib/worker-smoke-core.ts';
 import { evaluateSmokePlanPreflight } from './lib/smoke-plan-preflight.ts';
 import {
@@ -109,6 +112,7 @@ import {
   writeWorkerSmokeRunFinalEvidence,
   type WorkerSmokeAttemptObservation,
   type WorkerSmokeExecutionMode,
+  type WorkerSmokeMainMergeCarryRecord,
 } from './lib/worker-smoke-receipt.ts';
 import {
   commitSmokeOrderingTransition,
@@ -511,20 +515,39 @@ function requireProcessOutput(label: string, result: ReturnType<typeof runProces
   return result.stdout;
 }
 
+const SMOKE_GH_TIMEOUT_MS = 60_000;
+const SMOKE_GH_RETRY_COUNT = 1;
+
+export function runSmokeGhProcess(
+  command: string,
+  args: readonly string[],
+  cwd: string,
+  env: Readonly<NodeJS.ProcessEnv>,
+  timeoutMs = SMOKE_GH_TIMEOUT_MS,
+): ReturnType<typeof runProcessSync> {
+  let result: ReturnType<typeof runProcessSync> | undefined;
+  for (let attempt = 0; attempt <= SMOKE_GH_RETRY_COUNT; attempt += 1) {
+    result = runProcessSync({ command, args: [...args], cwd, env, timeoutMs });
+    if (result.ok) return result;
+  }
+  return result!;
+}
+
 export function runSmokeGhSync(
   args: readonly string[],
   cwd: string,
   extraEnv: Readonly<NodeJS.ProcessEnv> = {},
 ): ReturnType<typeof runProcessSync> {
-  return runProcessSync({ command: resolveTrackedGhWrapper(), args: [...args], cwd, env: { ...buildSmokeGhChildEnv(), ...extraEnv } });
+  return runSmokeGhProcess(resolveTrackedGhWrapper(), args, cwd, { ...buildSmokeGhChildEnv(), ...extraEnv });
 }
 
-function runSmokeGhWriteSync(
+export function runSmokeGhWriteSync(
   args: readonly string[],
   cwd: string,
   extraEnv: Readonly<NodeJS.ProcessEnv> = {},
+  timeoutMs = SMOKE_GH_TIMEOUT_MS,
 ): ReturnType<typeof runProcessSync> {
-  return runProcessSync({ command: 'gh', args: [...args], cwd, env: { ...buildSmokeGhChildEnv(), ...extraEnv } });
+  return runSmokeGhProcess(resolveTrackedGhWrapper(), args, cwd, { ...buildSmokeGhChildEnv(), ...extraEnv }, timeoutMs);
 }
 
 function gitPorcelain(cwd: string): string[] {
@@ -540,6 +563,69 @@ export function gitTrackedSmokeRuntimePaths(cwd: string): string[] {
     .split(/\r?\n/u)
     .map((line) => line.trim())
     .filter((line) => line === '.orca-worker-smoke' || line.startsWith('.orca-worker-smoke/'));
+}
+
+function gitRead(cwd: string, args: readonly string[], input?: string): string | undefined {
+  const result = runProcessSync({ command: 'git', args: [...args], cwd, ...(input === undefined ? {} : { input }) });
+  return result.ok ? result.stdout.trim() : undefined;
+}
+
+function gitNames(cwd: string, range: string): string[] | undefined {
+  const result = runProcessSync({ command: 'git', args: ['diff', '--name-only', '-z', range], cwd });
+  return result.ok ? result.stdout.split('\0').filter(Boolean) : undefined;
+}
+
+function patchId(cwd: string, baseSha: string, headSha: string): string | undefined {
+  const diff = runProcessSync({ command: 'git', args: ['diff', `${baseSha}..${headSha}`], cwd });
+  if (!diff.ok) return undefined;
+  const result = runProcessSync({ command: 'git', args: ['patch-id', '--stable'], cwd, input: diff.stdout });
+  const match = result.ok ? result.stdout.trim().match(/^([0-9a-f]{40})\s/u) : null;
+  return match?.[1];
+}
+
+export function deriveMainMergeCarryProof(
+  cwd: string,
+  sourceHeadSha: string,
+  destinationHeadSha: string,
+  issueBody: string,
+): WorkerSmokeMainMergeCarryRecord | undefined {
+  const source = sourceHeadSha.trim().toLowerCase();
+  const destination = destinationHeadSha.trim().toLowerCase();
+  const main = gitRead(cwd, ['rev-parse', '--verify', 'refs/remotes/origin/main^{commit}']);
+  if (!main || !/^[0-9a-f]{40}$/u.test(source) || !/^[0-9a-f]{40}$/u.test(destination)) return undefined;
+  const mergeCommits = gitRead(cwd, ['rev-list', '--merges', `${source}..${destination}`])?.split(/\r?\n/u).filter(Boolean) ?? [];
+  const mainMerges = mergeCommits.flatMap((merge) => {
+    const parents = gitRead(cwd, ['show', '-s', '--format=%P', merge])?.split(/\s+/u) ?? [];
+    return parents.length === 2
+      && gitRead(cwd, ['merge-base', '--is-ancestor', source, parents[0]!]) !== undefined
+      && gitRead(cwd, ['merge-base', '--is-ancestor', parents[1]!, main]) !== undefined
+      ? [{ merge, parents }] : [];
+  });
+  if (mainMerges.length !== 1) return undefined;
+  const { merge, parents } = mainMerges[0]!;
+  const mergeBase = gitRead(cwd, ['merge-base', source, parents[1]!]);
+  const destinationBase = parents[1]!;
+  if (!mergeBase) return undefined;
+  const sourcePatchId = patchId(cwd, mergeBase, source);
+  const destinationPatchId = patchId(cwd, destinationBase, destination);
+  const mainPaths = gitNames(cwd, `${mergeBase}..${destinationBase}`);
+  const prPaths = gitNames(cwd, `${mergeBase}..${source}`);
+  if (!sourcePatchId || !destinationPatchId || !mainPaths || !prPaths) return undefined;
+  const planPaths = smokePlanDependencyPaths(issueBody);
+  const automatic = runProcessSync({ command: 'git', args: ['merge-tree', '--write-tree', parents[0]!, parents[1]!], cwd });
+  const automaticTree = automatic.ok ? automatic.stdout.trim().split(/\r?\n/u)[0] : '';
+  const mergeTree = gitRead(cwd, ['rev-parse', `${merge}^{tree}`]);
+  const cleanMainMerge = Boolean(automaticTree && automaticTree === mergeTree);
+  const descendant = gitRead(cwd, ['merge-base', '--is-ancestor', source, destination]) !== undefined;
+  const proof: WorkerSmokeMainMergeCarryProof = {
+    sourceHeadSha: source, destinationHeadSha: destination, mergeBaseSha: mergeBase, destinationBaseSha: destinationBase,
+    sourcePatchId, destinationPatchId, mainPaths, protectedPaths: [...new Set([...prPaths, ...planPaths])],
+    cleanMainMerge, descendant,
+    hasConflictResolution: !cleanMainMerge,
+  };
+  const decision = evaluateWorkerSmokeMainMergeCarry(proof, destination, source);
+  if (!decision.allowed) return undefined;
+  return { sourceHeadSha: source, destinationHeadSha: destination, equalityProof: decision.equalityProof, mainPaths: [...decision.mainPaths] };
 }
 
 function gitHead(cwd: string): string {
@@ -727,14 +813,24 @@ export function fetchLivePrHead(prNumber: number, repositorySlug: string, repoRo
   return String(head.sha ?? '').trim().toLowerCase();
 }
 
-export function publishPrComment(prNumber: number, body: string, repoRoot: string): void {
+export function publishPrComment(prNumber: number, body: string, repoRoot: string, timeoutMs = SMOKE_GH_TIMEOUT_MS): void {
   const tempDir = mkdtempSync(join(tmpdir(), 'worker-smoke-comment-'));
   const bodyFile = join(tempDir, 'body.md');
   try {
     writeFileSync(bodyFile, JSON.stringify({ body }), 'utf8');
-    requireProcessOutput('gh api issue comment', runSmokeGhWriteSync(
-      ['api', `repos/${TRUSTED_REPOSITORY_SLUG}/issues/${String(prNumber)}/comments`, '--method', 'POST', '--input', bodyFile], repoRoot,
-    ));
+    let result: ReturnType<typeof runProcessSync>;
+    try {
+      result = runSmokeGhWriteSync(
+        ['api', `repos/${TRUSTED_REPOSITORY_SLUG}/issues/${String(prNumber)}/comments`, '--method', 'POST', '--input', bodyFile], repoRoot, {}, timeoutMs,
+      );
+    } catch (error) {
+      const detail = scrubSmokeOutput(scrubForwardedGhSecrets(error instanceof Error ? error.message : String(error), buildSmokeGhChildEnv()));
+      throw new Error(`publication_unconfirmed: ${detail}`);
+    }
+    if (!result.ok) {
+      const detail = scrubSmokeOutput(scrubForwardedGhSecrets(result.stderr || result.error || 'non-zero exit', buildSmokeGhChildEnv()));
+      throw new Error(`publication_unconfirmed: ${detail}`);
+    }
   } finally { rmSync(tempDir, { recursive: true, force: true }); }
 }
 
@@ -1145,6 +1241,7 @@ interface SmokePublicationBinding {
   executionMode: WorkerSmokeExecutionMode;
   attemptObservations?: readonly WorkerSmokeAttemptObservation[];
   operatorOverrideReason?: string;
+  mainMergeCarry?: WorkerSmokeMainMergeCarryRecord;
 }
 
 function publishSmokeReport(
@@ -1636,14 +1733,37 @@ function selectSmokeAttempt(
     dependencies.isHistoryAncestor
       ? dependencies.isHistoryAncestor(ancestorSha, descendantSha, target, options)
       : githubCommitIsAncestor(target.repositorySlug, ancestorSha, descendantSha, options.repoRoot);
-  return planWorkerSmokeSelectiveRetry({
-    issueBody,
-    prBody: target.prBody,
-    comments,
-    target: coverageTarget(target, target.headSha),
-    isAncestor,
-    historyReadable,
+  const selection = planWorkerSmokeSelectiveRetry({
+    issueBody, prBody: target.prBody, comments, target: coverageTarget(target, target.headSha), isAncestor, historyReadable,
   });
+  const sourceHeads = [...new Set(selection.carried.map((entry) => entry.sourceHeadSha))];
+  if (selection.carried.length === 0) return selection;
+  const mergeCommitsBySource = sourceHeads.map((sourceHead) =>
+    gitRead(options.repoRoot, ['rev-list', '--merges', `${sourceHead}..${target.headSha}`])?.split(/\r?\n/u).filter(Boolean) ?? [],
+  );
+  const mergeCommits = [...new Set(mergeCommitsBySource.flat())];
+  if (mergeCommits.length === 0) return selection;
+  const mainRef = gitRead(options.repoRoot, ['rev-parse', '--verify', 'refs/remotes/origin/main^{commit}']);
+  const hasMainMerge = Boolean(mainRef && mergeCommits.some((merge) => {
+    const parents = gitRead(options.repoRoot, ['show', '-s', '--format=%P', merge])?.split(/\s+/u) ?? [];
+    return parents.length === 2
+      && gitRead(options.repoRoot, ['merge-base', '--is-ancestor', parents[1]!, mainRef]) !== undefined;
+  }));
+  const refuseCarry = (): WorkerSmokeSelectiveRetryPlan => ({
+    ...selection,
+    attemptPlan: { ...selection.fullPlan, scenarios: [...selection.fullPlan.scenarios] },
+    carried: [],
+    fallbackReason: 'main_merge_carry_refused',
+  });
+  if (mergeCommits.length > 0 && !mainRef) return refuseCarry();
+  if (!hasMainMerge) return selection;
+  if (sourceHeads.length !== 1) return refuseCarry();
+  const sourceHeadSha = sourceHeads[0]!;
+  const sourceReport = selection.carried.find((entry) => entry.sourceHeadSha === sourceHeadSha)?.sourceReport;
+  if (!sourceReport || sourceReport.result !== 'PASS' || !verifySmokeReportReceiptProvenance(sourceReport)) return refuseCarry();
+  const mainMergeCarry = deriveMainMergeCarryProof(options.repoRoot, sourceHeadSha, target.headSha, issueBody);
+  if (!mainMergeCarry) return refuseCarry();
+  return { ...selection, mainMergeCarry };
 }
 
 export function findVerifiedSmokeReceiptWitness(input: { issueBody: string; comments: readonly WorkerSmokeCommentRecord[]; target: WorkerSmokeTrustedTarget }): SmokeReport | undefined {
@@ -2124,6 +2244,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     const carryPublication = preAttemptPublication(attemptId, appliedOverrideReason, {
       ...(detachedRunId ? { runId: detachedRunId } : {}),
       executionMode: 'carry-only',
+      ...(selection.mainMergeCarry ? { mainMergeCarry: selection.mainMergeCarry } : {}),
     });
     if (!lifecycle.clean) {
       const report = operationalReport('harness_admission_refused', options, {
@@ -2344,7 +2465,19 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     report.terminalCleanup = terminalCleanup;
     if (!lifecycleCleanup.clean && report.result === 'PASS') report.result = 'FAIL';
     if (!lifecycleCleanup.clean) report.causeFamily = 'lifecycle_cleanup_failed';
-    publishSmokeReport(report, options, { ...runPublication, attemptObservations: freshAttemptObservations }, publishComment, () => { recordPublishedOrdering(report, true); });
+    let published = false;
+    try {
+      published = publishSmokeReport(report, options, { ...runPublication, attemptObservations: freshAttemptObservations }, publishComment, () => { recordPublishedOrdering(report, true); });
+    } catch (error) {
+      const observed = scrubSmokeOutput(error instanceof Error ? error.message : String(error));
+      if (!observed.startsWith('publication_unconfirmed:')) throw error;
+      report.limitations.push(`publication_unconfirmed: ${observed}`);
+    }
+    if (!published && !options.dryRun) {
+      deferDetachedTerminalization(runId, artifactDir, 'runtime', report);
+      emit({ ok: report.result === 'PASS', report, lifecycleCleanup, attemptId, runId }, options.json);
+      return report.result === 'PASS' ? 0 : 1;
+    }
     let postSmoke: PostSmokeReadinessResult | undefined;
     if (report.result === 'PASS' && !options.dryRun) {
       try {
@@ -2376,7 +2509,12 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       terminalCleanup: worker ? terminalCleanup : startedAtMs > 0 ? 'ambiguous_unbound' : 'not_started', worker, adapterId: adapter.id,
     });
     const publication = startedAtMs > 0 ? runPublication : preAttempt;
-    publishSmokeReport(report, options, publication, publishComment, () => { recordPublishedOrdering(report, true); });
+    if (observed.startsWith('publication_unconfirmed:')) {
+      report.limitations.push(observed);
+    } else {
+      const published = publishSmokeReport(report, options, publication, publishComment, () => { recordPublishedOrdering(report, true); });
+      if (!published && !options.dryRun) report.limitations.push('publication_unconfirmed: publication did not complete');
+    }
     if (options.detachedOwner && cleanupFinished) deferDetachedTerminalization(runId, artifactDir, 'runtime', report);
     emit({ ok: false, report, attemptId }, options.json); return 1;
   } finally {
@@ -2586,6 +2724,10 @@ export async function runSmokeWait(options: CliOptions): Promise<number> {
   const runId = (options.runId ?? '').trim();
   if (!runId) throw new Error('wait requires --run <id>');
   const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
+  if (!existsSync(artifactDir)) {
+    emit({ ok: false, runId, reason: 'run_not_found' }, options.json);
+    return 1;
+  }
   const deadline = Date.now() + SMOKE_ABSOLUTE_CEILING_MS + SMOKE_SHUTDOWN_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const lifecycle = readSmokeLifecycleRegistry(artifactDir);

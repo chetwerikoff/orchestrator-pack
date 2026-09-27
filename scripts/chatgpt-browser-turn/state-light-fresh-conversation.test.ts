@@ -128,6 +128,7 @@ import {
   ASSISTANT_MESSAGE_SELECTOR,
   ASSISTANT_TURN_ANCESTOR_XPATH,
   COMPOSER_SELECTOR,
+  MESSAGE_AUTHOR_ROLE_ATTR,
   matchesNewChatControlSelector,
   matchesStopButtonSelector,
   MESSAGE_NODE_SELECTOR,
@@ -161,8 +162,13 @@ import {
 } from './state-light-fresh-conversation.ts';
 
 const PROJECT_URL = 'https://chatgpt.com/g/g-p-test/project';
-const SHARED_CONV = `${PROJECT_URL}/c/11111111-1111-4111-8111-111111111111`;
-const LOSER_CONV = `${PROJECT_URL}/c/22222222-2222-4222-8222-222222222222`;
+const PROJECT_CONVERSATION_ROOT = 'https://chatgpt.com/g/g-p-test';
+const SHARED_CONV = `${PROJECT_CONVERSATION_ROOT}/c/11111111-1111-4111-8111-111111111111`;
+const LOSER_CONV = `${PROJECT_CONVERSATION_ROOT}/c/22222222-2222-4222-8222-222222222222`;
+const ISSUE_PROJECT_URL = 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/project';
+const ISSUE_CONVERSATION_URL = 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/c/6ab8cb78-4e14-83ec-92ff-3e7b67611185';
+const OTHER_PROJECT_CONVERSATION_URL = 'https://chatgpt.com/g/g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-other/c/6ab8cb78-4e14-83ec-92ff-3e7b67611185';
+const OTHER_ORIGIN_CONVERSATION_URL = 'https://example.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/c/6ab8cb78-4e14-83ec-92ff-3e7b67611185';
 
 function disableSendSlotForTest(): void {
   process.env.OPK_STATE_LIGHT_DISABLE_NEW_CHAT_SEND_SLOT = '1';
@@ -260,6 +266,7 @@ async function runNewChatTurn(
   outputPath: string,
   timeoutMs = '5000',
   invocationId = randomUUID(),
+  projectUrl = PROJECT_URL,
 ) {
   enqueueBrowserForTurn(mocks, page);
   return runStateLightTurnWithStdoutCapture(runStateLightTurn, [
@@ -267,7 +274,7 @@ async function runNewChatTurn(
     '--invocation-id', invocationId,
     '--output', outputPath,
     '--new-chat',
-    '--project-url', PROJECT_URL,
+    '--project-url', projectUrl,
     '--timeout-ms', timeoutMs,
     '--poll-ms', '1',
   ]);
@@ -889,10 +896,83 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(url).toBe(conversation);
   });
 
-  it('reads project conversation urls only when a conversation uuid is present', () => {
-    const conversation = `${PROJECT_URL}/c/33333333-3333-4333-8333-333333333333`;
-    expect(readProjectConversationUrl({ url: () => conversation }, PROJECT_URL)).toBe(conversation);
-    expect(readProjectConversationUrl({ url: () => PROJECT_URL }, PROJECT_URL)).toBeUndefined();
+  it('reads a same-project /c/<uuid> URL when the configured project URL ends in /project', () => {
+    expect(readProjectConversationUrl({ url: () => ISSUE_CONVERSATION_URL }, ISSUE_PROJECT_URL))
+      .toBe(ISSUE_CONVERSATION_URL);
+    expect(readProjectConversationUrl({ url: () => OTHER_PROJECT_CONVERSATION_URL }, ISSUE_PROJECT_URL))
+      .toBeUndefined();
+    expect(readProjectConversationUrl({ url: () => OTHER_ORIGIN_CONVERSATION_URL }, ISSUE_PROJECT_URL))
+      .toBeUndefined();
+    expect(readProjectConversationUrl({ url: () => ISSUE_PROJECT_URL }, ISSUE_PROJECT_URL))
+      .toBeUndefined();
+  });
+
+  it('does not report fresh_conversation_landing_mismatch at the deadline when the same-project conversation is open', async () => {
+    const prompt = 'PROMPT-LANDED-FRESH';
+    let sent = false;
+    let conversationAppearsAt = Number.POSITIVE_INFINITY;
+    const staleAssistant: StateLightTestSnapshot = {
+      messages: [{ role: 'assistant', text: 'foreign', finalAction: true, finalActionInTurnContainer: true }],
+      generating: false,
+    };
+    const composer = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => undefined),
+      fill: vi.fn(async () => undefined),
+      press: vi.fn(async () => {
+        sent = true;
+        conversationAppearsAt = mocks.nowMs + 3_000;
+      }),
+    });
+    const sendButton = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => {
+        sent = true;
+        conversationAppearsAt = mocks.nowMs + 3_000;
+      }),
+    });
+    const page: any = {
+      __fakeBrowserGptPage: true,
+      goto: vi.fn(async () => undefined),
+      url: vi.fn(() => sent && mocks.nowMs >= conversationAppearsAt ? ISSUE_CONVERSATION_URL : ISSUE_PROJECT_URL),
+      isClosed: vi.fn(() => false),
+      waitForTimeout: vi.fn(async (ms: number) => { mocks.nowMs += ms; }),
+      close: vi.fn(async () => undefined),
+      getByText: vi.fn(() => scalarLocator()),
+      getByRole: vi.fn(() => scalarLocator()),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (matchesNewChatControlSelector(selector)) {
+          return scalarLocator({ count: vi.fn(async () => 0) });
+        }
+        if (selector === MESSAGE_NODE_SELECTOR) {
+          if (!sent) return collectionLocator([]);
+          return collectionLocator(staleAssistant.messages, staleAssistant.generating);
+        }
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+          return messageLocator(staleAssistant.messages[0]!, staleAssistant.generating);
+        }
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) {
+          return collectionLocator(staleAssistant.messages);
+        }
+        if (selector.includes(STOP_BUTTON_TESTID)) return scalarLocator();
+        return scalarLocator();
+      }),
+    };
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(
+      page,
+      '/tmp/fresh-landing-same-project.txt',
+      '3000',
+      randomUUID(),
+      ISSUE_PROJECT_URL,
+    );
+
+    expect(outcome.result.send_count).toBe(1);
+    expect(outcome.result.cause).not.toBe('fresh_conversation_landing_mismatch');
+    expect(outcome.result.incidents).not.toContain('conversation_landing_mismatch');
   });
 
   it('returns fresh_conversation_landing_mismatch when url and owned prompt never materialize', async () => {
@@ -2027,22 +2107,24 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
     function messageElements() {
       phase = currentPhase();
       const user = {
-        getAttribute: (name: string) => (name === 'data-message-author-role' ? 'user' : null),
+        getAttribute: (name: string) => (name === MESSAGE_AUTHOR_ROLE_ATTR ? 'user-message' : null),
         innerText: filled || `${TEST_OWNED_MARKER}\n\nPROMPT`,
         closest: (selector: string) => (
-          selector.includes('conversation-turn')
+          selector.includes('data-turn-key')
             ? { getAttribute: () => 'conversation-turn-1' }
             : null
         ),
         querySelectorAll: () => [],
-        querySelector: () => null,
+        querySelector: (selector: string) => (
+          selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]` ? { getAttribute: () => 'user-message' } : null
+        ),
       };
       const assistantInner = phase === 'banner' ? `${bannerText}\n\nRetry` : 'working';
       const assistant = {
-        getAttribute: (name: string) => (name === 'data-message-author-role' ? 'assistant' : null),
+        getAttribute: (name: string) => (name === MESSAGE_AUTHOR_ROLE_ATTR ? 'assistant-message' : null),
         innerText: assistantInner,
         closest: (selector: string) => (
-          selector.includes('conversation-turn')
+          selector.includes('data-turn-key')
             ? { getAttribute: () => 'conversation-turn-2' }
             : null
         ),
@@ -2050,7 +2132,11 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
           selector === 'p' && phase === 'banner' ? [{ innerText: bannerText }] : []
         ),
         querySelector: (selector: string) => (
-          selector.includes('regenerate-thread-error') && phase === 'banner' ? { innerText: 'Retry' } : null
+          selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+            ? { getAttribute: () => 'assistant-message' }
+            : selector.includes('regenerate-thread-error') && phase === 'banner'
+              ? { innerText: 'Retry' }
+              : null
         ),
       };
       return { user, assistant, phase };
@@ -2112,7 +2198,7 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
             const generating = snapshot.phase === 'generating';
             (globalThis as { document?: unknown }).document = {
               querySelectorAll: (sel: string) => {
-                if (sel.includes('conversation-turn-')) {
+                if (sel.includes('data-turn-key')) {
                   return [
                     { getAttribute: () => 'conversation-turn-1' },
                     { getAttribute: () => 'conversation-turn-2' },
@@ -2146,7 +2232,7 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
             text: snapshot.phase === 'banner' ? `${timeoutText}\n\nRetry` : 'working',
           }], snapshot.phase === 'generating');
         }
-        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH) {
           return scalarLocator({ count: vi.fn(async () => 0) });
         }
         if (matchesStopButtonSelector(selector) || selector.includes(STOP_BUTTON_TESTID)) {

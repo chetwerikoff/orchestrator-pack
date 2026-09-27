@@ -1,0 +1,27 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2150,
+  "declared_paths": [
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/orca-runtime/task-adapter.ts",
+    "scripts/runtime-retirement/retired-surface-guard.test.ts",
+    "scripts/runtime-retirement/retired-surface-guard.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/2150.pr-scope.json",
+    "scripts/cursor-unsent-composer-submit.test.ts",
+    "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/orca-runtime/",
+    "scripts/runtime-retirement/retired-surface-guard.test.ts",
+    "scripts/runtime-retirement/retired-surface-guard.ts",
+    "scripts/runtime-retirement/retired-surface-selftest.ts"
+  ],
+  "source_revision": "e87a80e15b4233a83f6a8d8a0606082814adfd04"
+}

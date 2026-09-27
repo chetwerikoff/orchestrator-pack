@@ -139,6 +139,20 @@ describe('runtime retirement closed-world scanner', () => {
     expect(result.violations).toEqual([]);
   });
 
+  it('excludes generated Vitest runtime reports but continues scanning active files', () => {
+    const reportPath = '.vitest-runtime-report-heavy-1-26-review-cycle.test.ts.json';
+    const reportText = ' ao review\n ao status';
+    const root = fixture(reportText, reportPath);
+    const active = join(root, 'scripts/active.ts');
+    mkdirSync(dirname(active), { recursive: true });
+    writeFileSync(active, reportText);
+
+    const result = scanRetiredRuntimeSurfaces({ repoRoot: root, paths: [reportPath, 'scripts/active.ts'] });
+    expect(result.excludedPaths).toEqual([reportPath]);
+    expect(result.scannedPaths).toEqual(['scripts/active.ts']);
+    expect(result.violations.map((entry) => entry.path)).toEqual(['scripts/active.ts', 'scripts/active.ts']);
+  });
+
   it('honors only exact per-file historical dispositions', () => {
     const root = fixture('neutral');
     const manifest = join(root, 'docs/investigations/runtime-hard-cut/historical-dispositions.json');

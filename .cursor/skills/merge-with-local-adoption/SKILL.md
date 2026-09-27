@@ -272,6 +272,8 @@ prompts/**
 
 Use the requested supported strategy, otherwise the repository default:
 
+For Issue #2161 branch-update sequencing, follow the canonical [orchestration runbook rule](../../../docs/orchestration-runbook.md#issue-2161-main-update-sequencing).
+
 ```bash
 gh pr merge P --repo chetwerikoff/orchestrator-pack --merge --delete-branch
 gh pr view P --repo chetwerikoff/orchestrator-pack \

@@ -70,6 +70,7 @@ import {
   transitionStateLightTurnObservation,
 } from './state-light-turn-observation.ts';
 import {
+  ASSISTANT_MESSAGE_STYLE,
   ASSISTANT_TURN_ACTION_SELECTOR,
   ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
   classifyProductWall,
@@ -77,6 +78,8 @@ import {
   CONVERSATION_TURN_SECTION_SELECTOR,
   loadChromium,
   MESSAGE_AUTHOR_ROLE_ATTR,
+  MESSAGE_UNIT_KEY_ATTR,
+  resolveMessageRoleStyle,
   MESSAGE_NODE_SELECTOR,
   normalizeConversationUrl,
   productStatusText,
@@ -85,6 +88,7 @@ import {
   readAssistantTurnCompletionReady,
   SEND_BUTTON_SELECTOR,
   stripUiCollapseAffixes,
+  USER_MESSAGE_STYLE,
   verifyProfile,
   BrowserOperationTimeoutError,
   createTurnOperationBudget,
@@ -488,6 +492,9 @@ export async function revalidateKeyedHarvest(
     const observed = await boundedBrowserRead(
       nodes.evaluateAll((elements: Element[], args: {
         roleAttribute: string;
+        userMessageStyle: string;
+        unitKeyAttribute: string;
+        assistantMessageStyle: string;
         assistantKey: string;
         turnSelector: string;
         inProgressSelector: string;
@@ -495,7 +502,7 @@ export async function revalidateKeyedHarvest(
       }) => {
         const valid = (value: string | null): value is string => Boolean(value && value.length >= 8);
         const canonicalKey = (element: Element): string | undefined => {
-          for (const attribute of ['data-message-id', 'data-turn-id']) {
+          for (const attribute of ['data-chatgpt-selection-message-id', 'data-message-id', 'data-turn-id', 'data-chatgpt-search-message-ids']) {
             const direct = element.getAttribute(attribute);
             if (valid(direct)) return `${attribute}:${direct}`;
             const descendant = Array.from(element.querySelectorAll(`[${attribute}]`))
@@ -509,8 +516,13 @@ export async function revalidateKeyedHarvest(
         for (let domIndex = 0; domIndex < elements.length; domIndex++) {
           const element = elements[domIndex]!;
           try {
+            const rawStyle = element.querySelector(`[${args.roleAttribute}]`)?.getAttribute(args.roleAttribute);
+            const style = rawStyle === args.userMessageStyle || rawStyle === args.assistantMessageStyle
+              ? rawStyle
+              : (element.getAttribute?.(args.unitKeyAttribute) ?? '').endsWith(':user') ? args.userMessageStyle : undefined;
+            const role = style === args.userMessageStyle ? 'user' : style === args.assistantMessageStyle ? 'assistant' : '';
             rows.push({
-              role: element.getAttribute(args.roleAttribute) ?? '',
+              role,
               text: (element as HTMLElement).innerText,
               key: canonicalKey(element),
               domIndex,
@@ -530,6 +542,9 @@ export async function revalidateKeyedHarvest(
         return { rows, assistantFinal };
       }, {
         roleAttribute: MESSAGE_AUTHOR_ROLE_ATTR,
+        userMessageStyle: USER_MESSAGE_STYLE,
+        unitKeyAttribute: MESSAGE_UNIT_KEY_ATTR,
+        assistantMessageStyle: ASSISTANT_MESSAGE_STYLE,
         assistantKey: expected.assistantKey,
         turnSelector: CONVERSATION_TURN_SECTION_SELECTOR,
         inProgressSelector: ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
@@ -1288,6 +1303,11 @@ async function sleep(page: any, ms: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
+export function isPostSendTargetCrash(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('Target crashed');
+}
+
 async function locatorCount(
   locator: any,
   deadlineMs = Date.now() + MAX_LOCAL_READ_WAIT_MS,
@@ -1302,6 +1322,7 @@ async function locatorCount(
       timeoutCause,
     ));
   } catch (error) {
+    if (isPostSendTargetCrash(error)) throw error;
     if (error instanceof Error && error.message === timeoutCause) throw error;
     return 0;
   }
@@ -1312,7 +1333,8 @@ async function locatorText(locator: any, timeoutMs = MAX_LOCAL_READ_WAIT_MS): Pr
   // ownership input because it can include screen-reader-only prefixes.
   try {
     return String(await locator.innerText({ timeout: timeoutMs }) ?? '');
-  } catch {
+  } catch (error) {
+    if (isPostSendTargetCrash(error)) throw error;
     return '';
   }
 }
@@ -1325,7 +1347,8 @@ async function readLocatorAttribute(
   for (const timeoutMs of timeouts) {
     try {
       return String(await locator.getAttribute(attribute, { timeout: timeoutMs }) ?? '');
-    } catch {
+    } catch (error) {
+      if (isPostSendTargetCrash(error)) throw error;
       // Retry with the next shorter budget.
     }
   }
@@ -1382,11 +1405,14 @@ export async function readPageObservation(
       const observed = await boundedBrowserRead(
         evaluateAll.call(nodes, (elements: Element[], args: {
           roleAttribute: string;
+          userMessageStyle: string;
+          unitKeyAttribute: string;
+          assistantMessageStyle: string;
           generationSelector: string;
         }) => {
           const valid = (value: string | null): value is string => Boolean(value && value.length >= 8);
           const canonicalKey = (element: Element): string | undefined => {
-            for (const attribute of ['data-message-id', 'data-turn-id']) {
+            for (const attribute of ['data-chatgpt-selection-message-id', 'data-message-id', 'data-turn-id', 'data-chatgpt-search-message-ids']) {
               const direct = element.getAttribute(attribute);
               if (valid(direct)) return `${attribute}:${direct}`;
               const descendants = Array.from(element.querySelectorAll(`[${attribute}]`));
@@ -1402,7 +1428,11 @@ export async function readPageObservation(
           for (let domIndex = 0; domIndex < elements.length; domIndex++) {
             const element = elements[domIndex]!;
             try {
-              const role = element.getAttribute(args.roleAttribute) ?? '';
+              const rawStyle = element.querySelector(`[${args.roleAttribute}]`)?.getAttribute(args.roleAttribute);
+              const style = rawStyle === args.userMessageStyle || rawStyle === args.assistantMessageStyle
+                ? rawStyle
+                : (element.getAttribute?.(args.unitKeyAttribute) ?? '').endsWith(':user') ? args.userMessageStyle : undefined;
+              const role = style === args.userMessageStyle ? 'user' : style === args.assistantMessageStyle ? 'assistant' : '';
               if (role === 'user' || role === 'assistant') {
                 observedMessageNodes += 1;
                 if (role === 'assistant') observedAssistantNodes += 1;
@@ -1427,6 +1457,9 @@ export async function readPageObservation(
           };
         }, {
           roleAttribute: MESSAGE_AUTHOR_ROLE_ATTR,
+          userMessageStyle: USER_MESSAGE_STYLE,
+          unitKeyAttribute: MESSAGE_UNIT_KEY_ATTR,
+          assistantMessageStyle: ASSISTANT_MESSAGE_STYLE,
           generationSelector: BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR,
         }),
         snapshotWaitMs,
@@ -1452,7 +1485,8 @@ export async function readPageObservation(
         });
       }
       if (observed.rows.length !== carriers.length) transcriptIncomplete = true;
-    } catch {
+    } catch (error) {
+      if (isPostSendTargetCrash(error)) throw error;
       if (strictTranscriptCount) return incomplete();
       transcriptIncomplete = true;
     }
@@ -1471,14 +1505,29 @@ export async function readPageObservation(
         'legacy_transcript_count_timeout',
       ));
       if (!Number.isSafeInteger(count) || count < 0) return incomplete();
-    } catch {
+    } catch (error) {
+      if (isPostSendTargetCrash(error)) throw error;
       return incomplete();
     }
     const roleTimeouts = [MESSAGE_NODE_READ_TIMEOUT_MS, MESSAGE_NODE_READ_RETRY_TIMEOUT_MS]
       .slice(0, MESSAGE_NODE_READ_ATTEMPTS);
     for (let domIndex = 0; domIndex < count; domIndex++) {
       const node = nodes.nth(domIndex);
-      const role = await readLocatorAttribute(node, MESSAGE_AUTHOR_ROLE_ATTR, roleTimeouts);
+      let roleStyle = await readLocatorAttribute(node, MESSAGE_AUTHOR_ROLE_ATTR, roleTimeouts);
+      if (!roleStyle && typeof node.locator === 'function') {
+        roleStyle = await readLocatorAttribute(
+          node.locator(`[${MESSAGE_AUTHOR_ROLE_ATTR}]`).first(),
+          MESSAGE_AUTHOR_ROLE_ATTR,
+          roleTimeouts,
+        );
+      }
+      if (roleStyle !== USER_MESSAGE_STYLE && roleStyle !== ASSISTANT_MESSAGE_STYLE) {
+        roleStyle = resolveMessageRoleStyle(
+          roleStyle,
+          await readLocatorAttribute(node, MESSAGE_UNIT_KEY_ATTR, roleTimeouts),
+        ) ?? null;
+      }
+      const role = roleStyle === USER_MESSAGE_STYLE ? 'user' : roleStyle === ASSISTANT_MESSAGE_STYLE ? 'assistant' : undefined;
       if (role !== 'user' && role !== 'assistant') {
         transcriptIncomplete = true;
         continue;
@@ -1595,7 +1644,8 @@ async function readPostSendObservation(
     if (wallProbeMs > 0) {
       wall = classifyProductWall(await productStatusText(page, wallProbeMs));
     }
-  } catch {
+  } catch (error) {
+    if (isPostSendTargetCrash(error)) throw error;
     // Product-status probes must not block or invalidate transcript reads.
   }
   return {
@@ -1616,7 +1666,8 @@ async function maybeContinueGeneration(page: any, deadlineMs: number): Promise<b
     if (remainingMs <= 0) return false;
     await continuation.first().click({ timeout: Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs) });
     return true;
-  } catch {
+  } catch (error) {
+    if (isPostSendTargetCrash(error)) throw error;
     return false;
   }
 }
@@ -1663,7 +1714,8 @@ async function readComposerReadiness(page: any, deadline: number): Promise<boole
       && observed.contentEditable
       && Date.now() < deadline,
     );
-  } catch {
+  } catch (error) {
+    if (isPostSendTargetCrash(error)) throw error;
     return false;
   }
 }
@@ -3014,6 +3066,27 @@ async function runTurn(
           hardExhaustionDeadline,
         );
       } catch (error) {
+        if (isPostSendTargetCrash(error)) {
+          incident('post_send_target_loss', 'post_send_target_crashed', 'retain_owned_page_no_resend');
+          return {
+            page,
+            browser,
+            cleanupAction: 'preserve',
+            result: compactResult(
+              'driver_error',
+              'invocation',
+              'post_send_target_crashed',
+              invocationId,
+              profileKey,
+              sendCount,
+              pollCount,
+              navigation,
+              incidents,
+              { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+              journalWriteFailed,
+            ),
+          };
+        }
         if (browserOrPageDefinitelyLost(page, browser)) {
           const terminal = await recoverCurrentObservation();
           if (terminal) return terminal;
@@ -3710,16 +3783,41 @@ async function runTurn(
         lastReadyReply = '';
         bestReadyReply = '';
       }
-      if (
-        !ownershipForfeited
+      const mayContinueGeneration = !ownershipForfeited
         && (!config.newChat
           || !ownedConversationUrl
-          || freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs))
-        && await maybeContinueGeneration(page, hardExhaustionDeadline)
-      ) {
-        updateHeartbeatForPoll(decision);
-        await sleep(page, INITIAL_POLL_MS);
-        continue;
+          || freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs));
+      if (mayContinueGeneration) {
+        let continued = false;
+        try {
+          continued = await maybeContinueGeneration(page, hardExhaustionDeadline);
+        } catch (error) {
+          if (!isPostSendTargetCrash(error)) throw error;
+          incident('post_send_target_loss', 'post_send_target_crashed', 'retain_owned_page_no_resend');
+          return {
+            page,
+            browser,
+            cleanupAction: 'preserve',
+            result: compactResult(
+              'driver_error',
+              'invocation',
+              'post_send_target_crashed',
+              invocationId,
+              profileKey,
+              sendCount,
+              pollCount,
+              navigation,
+              incidents,
+              { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+              journalWriteFailed,
+            ),
+          };
+        }
+        if (continued) {
+          updateHeartbeatForPoll(decision);
+          await sleep(page, INITIAL_POLL_MS);
+          continue;
+        }
       }
       if (
         config.newChat

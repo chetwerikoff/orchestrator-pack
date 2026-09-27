@@ -44,12 +44,17 @@ import {
   CONTINUE_GENERATING_TESTID_SELECTOR,
   CONVERSATION_TURN_ID_PREFIX,
   MESSAGE_AUTHOR_ROLE_ATTR,
+  MESSAGE_ID_ATTR,
   MESSAGE_NODE_SELECTOR,
   NEW_CHAT_CONTROL_SELECTORS,
   PRODUCT_STATUS_PROBE_SELECTORS,
   SEND_BUTTON_SELECTOR,
   STOP_BUTTON_SELECTOR,
   TURN_START_MESSAGE_ATTR,
+  normalizeMessageRoleStyle,
+  resolveMessageRoleStyle,
+  MESSAGE_UNIT_IDS_ATTR,
+  MESSAGE_UNIT_KEY_ATTR,
   USER_MESSAGE_SELECTOR,
 } from './product-page-selectors.ts';
 
@@ -157,13 +162,77 @@ export function createFreshIdentityRetention(
   return { observedConversationUrls: [], ...(retain ? { retain } : {}) };
 }
 
-function projectConversationPrefix(projectUrl: string): string {
-  return normalizeConversationUrl(projectUrl).replace(/\/+$/, '');
+interface ProjectConversationIdentity {
+  readonly identityRoot: string;
+  readonly projectSurface: string;
+  readonly origin: string;
+  readonly canonicalProjectId: boolean;
+}
+
+const CANONICAL_PROJECT_GPT_SEGMENT_RE = /^g-p-[0-9a-f]{32}(?:-[^/]+)?$/i;
+
+function projectConversationIdentity(projectUrl: string): ProjectConversationIdentity | undefined {
+  try {
+    const projectSurface = normalizeConversationUrl(projectUrl);
+    const parsed = new URL(projectSurface);
+    const match = /^\/g\/(g-p-[^/]+)/i.exec(parsed.pathname);
+    const projectSegment = match?.[1];
+    if (!projectSegment) return undefined;
+    return {
+      identityRoot: normalizeConversationUrl(`${parsed.origin}/g/${projectSegment}`),
+      projectSurface,
+      origin: parsed.origin,
+      canonicalProjectId: CANONICAL_PROJECT_GPT_SEGMENT_RE.test(projectSegment),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export function projectConversationPrefix(projectUrl: string): string | undefined {
+  const identity = projectConversationIdentity(projectUrl);
+  if (!identity) return undefined;
+  return identity.canonicalProjectId ? identity.identityRoot : identity.projectSurface;
 }
 
 function conversationPrefixFromObservedUrl(normalizedUrl: string): string | undefined {
   const match = /^(.*)\/c\/[0-9a-f-]{36}$/i.exec(normalizedUrl);
   return match?.[1];
+}
+
+export function projectConversationUrlMatchesProject(
+  conversationUrl: string,
+  projectUrl: string,
+): boolean {
+  try {
+    const identity = projectConversationIdentity(projectUrl);
+    if (!identity) return false;
+    const conversationPrefix = conversationPrefixFromObservedUrl(
+      normalizeConversationUrl(conversationUrl),
+    );
+    return conversationPrefix === identity.identityRoot
+      || conversationPrefix === identity.projectSurface;
+  } catch {
+    return false;
+  }
+}
+
+function observedConversationUrlAllowedForProject(
+  conversationUrl: string,
+  projectUrl: string,
+): boolean {
+  try {
+    const identity = projectConversationIdentity(projectUrl);
+    if (!identity) return false;
+    const conversationPrefix = conversationPrefixFromObservedUrl(
+      normalizeConversationUrl(conversationUrl),
+    );
+    return conversationPrefix === identity.identityRoot
+      || conversationPrefix === identity.projectSurface
+      || conversationPrefix === identity.origin;
+  } catch {
+    return false;
+  }
 }
 
 function buildConversationUrlFromPrefix(prefix: string, conversationUuid: string): string {
@@ -181,6 +250,7 @@ export function observeFreshConversationUrl(
     if (!normalized || (project && normalized === project)) return;
     if (!normalized.includes('/c/')) return;
     if (!conversationPrefixFromObservedUrl(normalized)) return;
+    if (projectUrl && !observedConversationUrlAllowedForProject(normalized, projectUrl)) return;
     if (!retention.observedConversationUrls.includes(normalized)) {
       retention.observedConversationUrls.push(normalized);
     }
@@ -1363,7 +1433,7 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
 }
 
 async function serviceId(locator: any, waitSource?: OperationWaitSource): Promise<string> {
-  for (const attr of ['data-message-id', 'data-turn-id']) {
+  for (const attr of [MESSAGE_ID_ATTR, 'data-message-id', 'data-turn-id', MESSAGE_UNIT_IDS_ATTR]) {
     const direct = await readLocatorAttribute(locator, attr, waitSource);
     if (direct && direct.length >= 8) return direct;
     const parent = locator.locator(`[${attr}]`).first();
@@ -1385,6 +1455,19 @@ async function parentServiceId(locator: any, waitSource?: OperationWaitSource): 
     }
   }
   return '';
+}
+
+async function readMessageRole(locator: any, waitSource?: OperationWaitSource): Promise<'user' | 'assistant' | undefined> {
+  const styles = locator.locator(`[${MESSAGE_AUTHOR_ROLE_ATTR}]`);
+  const count = await boundedLocatorCount(styles, resolveOperationWaitMs(waitSource));
+  const style = count === 1
+    ? await readWitnessAttribute(styles.first(), MESSAGE_AUTHOR_ROLE_ATTR, waitSource ?? MAX_BROWSER_OPERATION_WAIT_MS)
+    : undefined;
+  if (count > 1) return undefined;
+  const unitKey = count === 0
+    ? await readWitnessAttribute(locator, MESSAGE_UNIT_KEY_ATTR, waitSource ?? MAX_BROWSER_OPERATION_WAIT_MS)
+    : undefined;
+  return normalizeMessageRoleStyle(resolveMessageRoleStyle(style, unitKey));
 }
 
 export type WitnessSurfaceProbe = 'available' | 'absent' | 'empty';
@@ -1422,7 +1505,7 @@ export async function runtimeWitnessSurfaceAvailable(
   for (let index = Math.max(0, count - 8); index < count; index++) {
     waitMs = clampWitnessWait();
     const locator = messages.nth(index);
-    const role = await readWitnessAttribute(locator, MESSAGE_AUTHOR_ROLE_ATTR, clampWitnessWait);
+    const role = await readMessageRole(locator, clampWitnessWait);
     if (role === 'user') {
       const id = await serviceId(locator, clampWitnessWait);
       if (id) userIds.add(id);
@@ -1437,12 +1520,13 @@ export async function runtimeWitnessSurfaceAvailable(
     waitMs = clampWitnessWait();
     const locator = messages.nth(index);
     const next = messages.nth(index + 1);
-    const role = await readWitnessAttribute(locator, MESSAGE_AUTHOR_ROLE_ATTR, clampWitnessWait);
-    const nextRole = await readWitnessAttribute(next, MESSAGE_AUTHOR_ROLE_ATTR, clampWitnessWait);
+    const role = await readMessageRole(locator, clampWitnessWait);
+    const nextRole = await readMessageRole(next, clampWitnessWait);
     if (role !== 'user' || nextRole !== 'assistant') continue;
     const userId = await serviceId(locator, clampWitnessWait);
-    const turnStart = await readWitnessAttribute(next, TURN_START_MESSAGE_ATTR, clampWitnessWait);
-    if (userId && turnStart === 'true') return 'available';
+    const turn = next.locator(ASSISTANT_TURN_ANCESTOR_XPATH);
+    const turnKey = await readLocatorAttribute(turn.first(), TURN_START_MESSAGE_ATTR, clampWitnessWait);
+    if (userId && turnKey) return 'available';
   }
   return 'absent';
 }
@@ -1548,9 +1632,9 @@ export async function readAssistantNodeCompletionReady(
   node: any,
   waitMs = MAX_BROWSER_OPERATION_WAIT_MS,
 ): Promise<boolean> {
-  let role = '';
+  let role: string | undefined;
   try {
-    role = String(await node.getAttribute(MESSAGE_AUTHOR_ROLE_ATTR, { timeout: waitMs }) ?? '');
+    role = await readMessageRole(node, waitMs);
   } catch {
     return false;
   }

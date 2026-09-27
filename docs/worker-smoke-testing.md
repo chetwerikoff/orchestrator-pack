@@ -220,6 +220,8 @@ Responsibility remains split as follows:
 
 For every `required` smoke plan, the launcher resolves the existing trusted Issue/PR/exact-head target before selective selection even when the Issue has no `complexity-tier` fence. No-tier/firefighter required smoke uses the same canonical PR-comment census and the same ancestor/current-lineage selective planner as tiered required smoke. `no_prior_canonical_observation` means that the trusted lineage census completed successfully and contained zero canonical candidates; target-resolution failure remains the existing harness admission failure. Readable non-descendant history remains fail-closed with `history_non_descendant` and the ordinary full plan, with no cross-rebase PASS carry.
 
+Issue #2161 branch-update sequencing follows the canonical rule in the [orchestration runbook](orchestration-runbook.md#issue-2161-main-update-sequencing).
+
 ```bash
 export PATH="$PWD/scripts:$PATH"
 worker-smoke-run run \

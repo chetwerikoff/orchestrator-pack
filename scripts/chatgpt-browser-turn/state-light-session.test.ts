@@ -129,12 +129,15 @@ function makeHarness(
           evaluateAll: async (callback: (elements: any[], args: any) => unknown, args: any) => {
             const elements = options.atomicRows!().map((row) => ({
               getAttribute: (attribute: string) => {
-                if (attribute === MESSAGE_AUTHOR_ROLE_ATTR) return row.role;
+                if (attribute === 'data-chatgpt-selection-message-id' && row.key?.startsWith('data-chatgpt-selection-message-id:')) return row.key.slice('data-chatgpt-selection-message-id:'.length);
                 if (attribute === 'data-message-id' && row.key?.startsWith('data-message-id:')) return row.key.slice('data-message-id:'.length);
                 if (attribute === 'data-turn-id' && row.key?.startsWith('data-turn-id:')) return row.key.slice('data-turn-id:'.length);
                 return null;
               },
               innerText: row.text,
+              querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+                ? { getAttribute: () => row.role === 'user' ? 'user-message' : 'assistant-message' }
+                : null,
               querySelectorAll: () => [],
               closest: () => ({
                 querySelector: (query: string) => query === args.inProgressSelector ? null : {},

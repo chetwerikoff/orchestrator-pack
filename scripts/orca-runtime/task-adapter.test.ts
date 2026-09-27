@@ -1,6 +1,7 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -11,6 +12,7 @@ import { isOpenCodeComposerEmpty, OrcaRuntimeAdapter } from './adapter.ts';
 import { readOrcaTerminal } from './compat.ts';
 import { hasExecutorStartupBanner } from '../lib/worker-smoke-bounded-create.ts';
 import { OrcaTaskRuntimeAdapter } from './task-adapter.ts';
+import { createAdapterSubmitDeps, submitOrcaMessageDeliveryPointer } from '../cursor-unsent-composer-submit.ts';
 
 // Producer-backed fixture contract, pinned to stablyai/orca@
 // f5fd7303ab00bcfeff72c92f2bc33ba9364cd622:
@@ -267,6 +269,149 @@ describe('Orca task terminal ownership persistence', () => {
       expect(listed.value.find((worker) => worker.identity.id === 'term-task-impostor')?.provenance).toBe('external');
     } finally {
       rmSync(stateRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('OpenCode durable launch control', () => {
+  it('recovers exact launch control across adapter instances and keeps stale or absent records unbound', async () => {
+    const stateRoot = mkdtempSync(join(tmpdir(), 'opk-task-open-code-control-'));
+    const emptyStateRoot = mkdtempSync(join(tmpdir(), 'opk-task-open-code-control-empty-'));
+    const env = { OPK_WAKE_SUPERVISOR_STATE_DIR: stateRoot };
+    const workspacePath = '/tmp/opk-task-2150';
+    const title = 'opk-t2-task_2150';
+    const handle = 'term_opencode_2150';
+    const command = 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-2150';
+    let liveGeneration = 'generation-opencode-2150';
+    let submitted = false;
+    let created = false;
+    const currentTerminal = () => ({
+      handle,
+      incarnationId: liveGeneration,
+      worktreePath: workspacePath,
+      title,
+      command,
+      status: 'running' as const,
+    });
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${String(args[0] ?? '')} ${String(args[1] ?? '')}`;
+      if (operation === 'terminal create') {
+        created = true;
+        return { ok: true, result: { terminal: currentTerminal() } };
+      }
+      if (operation === 'terminal show') return { ok: true, result: { terminal: currentTerminal() } };
+      if (operation === 'terminal list') {
+        return created
+          ? { ok: true, result: { totalCount: 1, truncated: false, terminals: [currentTerminal()] } }
+          : { ok: true, result: { totalCount: 0, truncated: false, terminals: [] } };
+      }
+      if (operation === 'terminal read') {
+        return {
+          ok: true,
+          result: {
+            terminal: {
+              ...currentTerminal(),
+              tail: submitted ? ['rendered pointer'] : ['┃', '╹▀▀▀▀▀▀'],
+              nextCursor: null,
+              source: 'screen',
+            },
+          },
+        };
+      }
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    const requests: string[] = [];
+    const openCodeHttpRequest = (input: { url: string; method: 'GET' | 'POST'; body?: string; timeoutMs: number }) => {
+      requests.push(input.url);
+      if (input.url.endsWith('/global/health')) {
+        return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) };
+      }
+      if (input.url.includes('/session?directory=')) {
+        return { status: 200, body: JSON.stringify([{ id: 'ses-2150', directory: workspacePath }]) };
+      }
+      if (input.url.endsWith('/tui/submit-prompt')) submitted = true;
+      return { status: 200, body: 'true' };
+    };
+
+    try {
+      const launcher = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env, openCodeHttpRequest });
+      const launched = launcher.spawnWorker({ title, command, workspace: workspacePath });
+      expect(launched.status).toBe('ok');
+      if (launched.status !== 'ok') return;
+
+      const recordPath = join(
+        stateRoot,
+        'launch-task-terminals',
+        `${createHash('sha256').update(title).digest('hex')}.json`,
+      );
+      expect(JSON.parse(readFileSync(recordPath, 'utf8'))).toMatchObject({
+        identity: launched.value.identity,
+        openCodeControl: {
+          url: 'http://127.0.0.1:18891',
+          agent: 'pack-opk-2150',
+        },
+      });
+
+      const healthAdapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env, openCodeHttpRequest });
+      expect(healthAdapter.openCodeHealth(launched.value.identity)).toEqual({
+        status: 'ok',
+        value: { healthy: true, version: '1.18.25' },
+      });
+
+      const deliveryAdapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env, openCodeHttpRequest });
+      expect(deliveryAdapter.composerControl?.(launched.value.identity)?.kind).toBe('opencode-http');
+      let livenessReads = 0;
+      const submitDeps = {
+        ...createAdapterSubmitDeps(deliveryAdapter, () => ({ ok: true, result: {} })),
+        liveness: () => livenessReads++ === 0 ? 'idle' as const : 'busy' as const,
+        sentStorePath: undefined,
+      };
+      const message = {
+        id: 'msg_opencode_2150',
+        runId: 'run_opencode_2150',
+        recipient: launched.value.identity.id,
+        consumed: false,
+      };
+      const delivered = await submitOrcaMessageDeliveryPointer(message.id, {
+        lookupMessage: () => ({ ok: true as const, message }),
+        resolveWorker: () => ({ ok: true as const, worker: launched.value }),
+        submitDeps,
+      });
+      expect(delivered.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
+      expect(requests).toContain('http://127.0.0.1:18891/tui/submit-prompt');
+
+      liveGeneration = 'generation-opencode-2150-next';
+      const currentIdentity = { ...launched.value.identity, generation: liveGeneration };
+      const staleRecordAdapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env, openCodeHttpRequest });
+      expect(staleRecordAdapter.composerControl?.(currentIdentity)).toBeUndefined();
+      expect(staleRecordAdapter.openCodeHealth(currentIdentity)).toMatchObject({
+        status: 'unsupported',
+        reason: 'runtime_opencode_control_unavailable',
+      });
+      expect(staleRecordAdapter.dispatchInput({ worker: currentIdentity, submitOnly: true })).toEqual({
+        status: 'send_failed',
+        reason: 'opencode_control_unbound',
+      });
+
+      const noRecordAdapter = new OrcaTaskRuntimeAdapter({
+        runJson: runJson as never,
+        env: { OPK_WAKE_SUPERVISOR_STATE_DIR: emptyStateRoot },
+        openCodeHttpRequest,
+      });
+      expect(noRecordAdapter.composerControl?.(currentIdentity)).toBeUndefined();
+      expect(noRecordAdapter.openCodeHealth(currentIdentity)).toMatchObject({
+        status: 'unsupported',
+        reason: 'runtime_opencode_control_unavailable',
+      });
+      expect(noRecordAdapter.dispatchInput({ worker: currentIdentity, submitOnly: true })).toEqual({
+        status: 'send_failed',
+        reason: 'opencode_control_unbound',
+      });
+      expect(readFileSync(new URL('./adapter.ts', import.meta.url), 'utf8')).not.toContain('/proc');
+      expect(readFileSync(new URL('./task-adapter.ts', import.meta.url), 'utf8')).not.toContain('/proc');
+    } finally {
+      rmSync(stateRoot, { recursive: true, force: true });
+      rmSync(emptyStateRoot, { recursive: true, force: true });
     }
   });
 });

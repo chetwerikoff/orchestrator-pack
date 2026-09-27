@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { runProcessSync } from './kernel/subprocess.ts';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveWakeSupervisorStateRoot } from './pr2-foundation/wake-supervisor-state-root.ts';
 
 export type ConsumerState = 'running' | 'not_running' | 'ephemeral' | 'unknown';
 export interface ConsumerObservation { readonly state: ConsumerState; readonly startedAtMs?: number; readonly identity?: string; readonly reason?: string; }
@@ -216,11 +216,9 @@ export function linuxProcessStartTimeMs(pid: number): number | null {
   } catch { return null; }
 }
 
-function defaultSupervisorStateDir(): string {
-  const explicit = String(process.env.OPK_WAKE_SUPERVISOR_STATE_DIR ?? '').trim();
-  if (explicit) return path.resolve(explicit);
-  const stateHome = String(process.env.XDG_STATE_HOME ?? '').trim();
-  return path.resolve(stateHome || path.join(homedir(), '.local', 'state'), 'orchestrator-pack-wake-supervisor');
+/** The supervisor writes its status under `<wake-supervisor state root>/supervisor`, as the cutover layout defines it. */
+export function defaultSupervisorStateDir(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(path.resolve(resolveWakeSupervisorStateRoot({ env })), 'supervisor');
 }
 
 function readSupervisorStatus(stateDir: string): SupervisorStatus | null {

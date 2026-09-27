@@ -4,25 +4,51 @@
 
 export const COMPOSER_SELECTOR = '#prompt-textarea, [contenteditable="true"][role="textbox"]';
 export const SEND_BUTTON_SELECTOR = '[data-testid="send-button"]';
-export const MESSAGE_AUTHOR_ROLE_ATTR = 'data-message-author-role';
-export const MESSAGE_NODE_SELECTOR = `[${MESSAGE_AUTHOR_ROLE_ATTR}]`;
-export const USER_MESSAGE_SELECTOR = `[${MESSAGE_AUTHOR_ROLE_ATTR}="user"]`;
-export const ASSISTANT_MESSAGE_SELECTOR = `[${MESSAGE_AUTHOR_ROLE_ATTR}="assistant"]`;
-export const TURN_START_MESSAGE_ATTR = 'data-turn-start-message';
+export const MESSAGE_AUTHOR_ROLE_ATTR = 'data-markdown-text-style';
+export const MESSAGE_ID_ATTR = 'data-chatgpt-selection-message-id';
+// Live user messages carry no selection id or markdown style; their search unit
+// (`<turn>:<n>:user`) is the only stable per-message user node and id carrier.
+export const MESSAGE_UNIT_KEY_ATTR = 'data-chatgpt-search-unit-key';
+export const MESSAGE_UNIT_IDS_ATTR = 'data-chatgpt-search-message-ids';
+export const USER_MESSAGE_UNIT_SELECTOR = `[${MESSAGE_UNIT_KEY_ATTR}$=":user"]`;
+const SELECTION_MESSAGE_NODE_SELECTOR = `[${MESSAGE_ID_ATTR}]:not(${USER_MESSAGE_UNIT_SELECTOR} *)`;
+export const MESSAGE_NODE_SELECTOR = `${USER_MESSAGE_UNIT_SELECTOR}, ${SELECTION_MESSAGE_NODE_SELECTOR}`;
+export const USER_MESSAGE_STYLE = 'user-message';
+export const ASSISTANT_MESSAGE_STYLE = 'assistant-message';
+export const USER_MESSAGE_SELECTOR = `${USER_MESSAGE_UNIT_SELECTOR}, ${SELECTION_MESSAGE_NODE_SELECTOR}:has([${MESSAGE_AUTHOR_ROLE_ATTR}="${USER_MESSAGE_STYLE}"])`;
+export const ASSISTANT_MESSAGE_SELECTOR = `${SELECTION_MESSAGE_NODE_SELECTOR}:has([${MESSAGE_AUTHOR_ROLE_ATTR}="${ASSISTANT_MESSAGE_STYLE}"])`;
+export const TURN_START_MESSAGE_ATTR = 'data-turn-key';
 export const STOP_BUTTON_TESTID = 'stop-button';
 export const STOP_BUTTON_SELECTOR = `[data-testid="${STOP_BUTTON_TESTID}"], button[aria-label*="Stop"]`;
 export const REGENERATE_THREAD_ERROR_BUTTON_TESTID = 'regenerate-thread-error-button';
 export const REGENERATE_THREAD_ERROR_BUTTON_SELECTOR = `[data-testid="${REGENERATE_THREAD_ERROR_BUTTON_TESTID}"]`;
 export const CONTINUE_GENERATING_BUTTON_NAME = /continue generating/i;
 export const CONTINUE_GENERATING_TESTID_SELECTOR = '[data-testid*="continue-generating"], [data-testid*="continue_generating"]';
-export const CONVERSATION_TURN_SECTION_SELECTOR = 'section[data-testid^="conversation-turn-"]';
-export const ASSISTANT_TURN_ANCESTOR_XPATH = 'xpath=ancestor-or-self::section[starts-with(@data-testid, "conversation-turn-")][1]';
+export const CONVERSATION_TURN_SECTION_SELECTOR = 'div[data-turn-key]';
+export const ASSISTANT_TURN_ANCESTOR_XPATH = 'xpath=ancestor-or-self::div[@data-turn-key][1]';
 export const CONVERSATION_TURN_ID_PREFIX = 'conversation-turn-';
+
+export function normalizeMessageRoleStyle(value: string | null | undefined): 'user' | 'assistant' | undefined {
+  if (value === USER_MESSAGE_STYLE) return 'user';
+  if (value === ASSISTANT_MESSAGE_STYLE) return 'assistant';
+  return undefined;
+}
+
+/** Role style of a message node: its markdown style, else a user search-unit key. */
+export function resolveMessageRoleStyle(
+  style: string | null | undefined,
+  unitKey: string | null | undefined,
+): string | undefined {
+  if (style === USER_MESSAGE_STYLE || style === ASSISTANT_MESSAGE_STYLE) return style;
+  return typeof unitKey === 'string' && unitKey.endsWith(':user') ? USER_MESSAGE_STYLE : undefined;
+}
 
 export const ASSISTANT_TURN_ACTION_SELECTOR = [
   '[data-testid="copy-turn-action-button"]',
   '[data-testid="good-response-turn-action-button"]',
   '[data-testid="bad-response-turn-action-button"]',
+  'button[aria-label="Copy"]',
+  'button[aria-label="Rate response"]',
 ].join(', ');
 
 export const ASSISTANT_TURN_IN_PROGRESS_SELECTOR = [
