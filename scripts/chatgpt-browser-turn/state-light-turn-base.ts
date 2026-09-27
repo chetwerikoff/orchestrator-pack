@@ -78,6 +78,8 @@ import {
   CONVERSATION_TURN_SECTION_SELECTOR,
   loadChromium,
   MESSAGE_AUTHOR_ROLE_ATTR,
+  MESSAGE_UNIT_KEY_ATTR,
+  resolveMessageRoleStyle,
   MESSAGE_NODE_SELECTOR,
   normalizeConversationUrl,
   productStatusText,
@@ -491,6 +493,7 @@ export async function revalidateKeyedHarvest(
       nodes.evaluateAll((elements: Element[], args: {
         roleAttribute: string;
         userMessageStyle: string;
+        unitKeyAttribute: string;
         assistantMessageStyle: string;
         assistantKey: string;
         turnSelector: string;
@@ -499,7 +502,7 @@ export async function revalidateKeyedHarvest(
       }) => {
         const valid = (value: string | null): value is string => Boolean(value && value.length >= 8);
         const canonicalKey = (element: Element): string | undefined => {
-          for (const attribute of ['data-chatgpt-selection-message-id', 'data-message-id', 'data-turn-id']) {
+          for (const attribute of ['data-chatgpt-selection-message-id', 'data-message-id', 'data-turn-id', 'data-chatgpt-search-message-ids']) {
             const direct = element.getAttribute(attribute);
             if (valid(direct)) return `${attribute}:${direct}`;
             const descendant = Array.from(element.querySelectorAll(`[${attribute}]`))
@@ -513,7 +516,10 @@ export async function revalidateKeyedHarvest(
         for (let domIndex = 0; domIndex < elements.length; domIndex++) {
           const element = elements[domIndex]!;
           try {
-            const style = element.querySelector(`[${args.roleAttribute}]`)?.getAttribute(args.roleAttribute);
+            const rawStyle = element.querySelector(`[${args.roleAttribute}]`)?.getAttribute(args.roleAttribute);
+            const style = rawStyle === args.userMessageStyle || rawStyle === args.assistantMessageStyle
+              ? rawStyle
+              : (element.getAttribute?.(args.unitKeyAttribute) ?? '').endsWith(':user') ? args.userMessageStyle : undefined;
             const role = style === args.userMessageStyle ? 'user' : style === args.assistantMessageStyle ? 'assistant' : '';
             rows.push({
               role,
@@ -537,6 +543,7 @@ export async function revalidateKeyedHarvest(
       }, {
         roleAttribute: MESSAGE_AUTHOR_ROLE_ATTR,
         userMessageStyle: USER_MESSAGE_STYLE,
+        unitKeyAttribute: MESSAGE_UNIT_KEY_ATTR,
         assistantMessageStyle: ASSISTANT_MESSAGE_STYLE,
         assistantKey: expected.assistantKey,
         turnSelector: CONVERSATION_TURN_SECTION_SELECTOR,
@@ -1399,12 +1406,13 @@ export async function readPageObservation(
         evaluateAll.call(nodes, (elements: Element[], args: {
           roleAttribute: string;
           userMessageStyle: string;
+          unitKeyAttribute: string;
           assistantMessageStyle: string;
           generationSelector: string;
         }) => {
           const valid = (value: string | null): value is string => Boolean(value && value.length >= 8);
           const canonicalKey = (element: Element): string | undefined => {
-            for (const attribute of ['data-chatgpt-selection-message-id', 'data-message-id', 'data-turn-id']) {
+            for (const attribute of ['data-chatgpt-selection-message-id', 'data-message-id', 'data-turn-id', 'data-chatgpt-search-message-ids']) {
               const direct = element.getAttribute(attribute);
               if (valid(direct)) return `${attribute}:${direct}`;
               const descendants = Array.from(element.querySelectorAll(`[${attribute}]`));
@@ -1420,7 +1428,10 @@ export async function readPageObservation(
           for (let domIndex = 0; domIndex < elements.length; domIndex++) {
             const element = elements[domIndex]!;
             try {
-              const style = element.querySelector(`[${args.roleAttribute}]`)?.getAttribute(args.roleAttribute);
+              const rawStyle = element.querySelector(`[${args.roleAttribute}]`)?.getAttribute(args.roleAttribute);
+              const style = rawStyle === args.userMessageStyle || rawStyle === args.assistantMessageStyle
+                ? rawStyle
+                : (element.getAttribute?.(args.unitKeyAttribute) ?? '').endsWith(':user') ? args.userMessageStyle : undefined;
               const role = style === args.userMessageStyle ? 'user' : style === args.assistantMessageStyle ? 'assistant' : '';
               if (role === 'user' || role === 'assistant') {
                 observedMessageNodes += 1;
@@ -1447,6 +1458,7 @@ export async function readPageObservation(
         }, {
           roleAttribute: MESSAGE_AUTHOR_ROLE_ATTR,
           userMessageStyle: USER_MESSAGE_STYLE,
+          unitKeyAttribute: MESSAGE_UNIT_KEY_ATTR,
           assistantMessageStyle: ASSISTANT_MESSAGE_STYLE,
           generationSelector: BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR,
         }),
@@ -1508,6 +1520,12 @@ export async function readPageObservation(
           MESSAGE_AUTHOR_ROLE_ATTR,
           roleTimeouts,
         );
+      }
+      if (roleStyle !== USER_MESSAGE_STYLE && roleStyle !== ASSISTANT_MESSAGE_STYLE) {
+        roleStyle = resolveMessageRoleStyle(
+          roleStyle,
+          await readLocatorAttribute(node, MESSAGE_UNIT_KEY_ATTR, roleTimeouts),
+        ) ?? null;
       }
       const role = roleStyle === USER_MESSAGE_STYLE ? 'user' : roleStyle === ASSISTANT_MESSAGE_STYLE ? 'assistant' : undefined;
       if (role !== 'user' && role !== 'assistant') {

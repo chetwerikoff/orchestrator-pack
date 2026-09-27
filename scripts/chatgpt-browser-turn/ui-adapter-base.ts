@@ -52,6 +52,9 @@ import {
   STOP_BUTTON_SELECTOR,
   TURN_START_MESSAGE_ATTR,
   normalizeMessageRoleStyle,
+  resolveMessageRoleStyle,
+  MESSAGE_UNIT_IDS_ATTR,
+  MESSAGE_UNIT_KEY_ATTR,
   USER_MESSAGE_SELECTOR,
 } from './product-page-selectors.ts';
 
@@ -1430,7 +1433,7 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
 }
 
 async function serviceId(locator: any, waitSource?: OperationWaitSource): Promise<string> {
-  for (const attr of [MESSAGE_ID_ATTR, 'data-message-id', 'data-turn-id']) {
+  for (const attr of [MESSAGE_ID_ATTR, 'data-message-id', 'data-turn-id', MESSAGE_UNIT_IDS_ATTR]) {
     const direct = await readLocatorAttribute(locator, attr, waitSource);
     if (direct && direct.length >= 8) return direct;
     const parent = locator.locator(`[${attr}]`).first();
@@ -1457,12 +1460,14 @@ async function parentServiceId(locator: any, waitSource?: OperationWaitSource): 
 async function readMessageRole(locator: any, waitSource?: OperationWaitSource): Promise<'user' | 'assistant' | undefined> {
   const styles = locator.locator(`[${MESSAGE_AUTHOR_ROLE_ATTR}]`);
   const count = await boundedLocatorCount(styles, resolveOperationWaitMs(waitSource));
-  if (count !== 1) return undefined;
-  return normalizeMessageRoleStyle(await readWitnessAttribute(
-    styles.first(),
-    MESSAGE_AUTHOR_ROLE_ATTR,
-    waitSource ?? MAX_BROWSER_OPERATION_WAIT_MS,
-  ));
+  const style = count === 1
+    ? await readWitnessAttribute(styles.first(), MESSAGE_AUTHOR_ROLE_ATTR, waitSource ?? MAX_BROWSER_OPERATION_WAIT_MS)
+    : undefined;
+  if (count > 1) return undefined;
+  const unitKey = count === 0
+    ? await readWitnessAttribute(locator, MESSAGE_UNIT_KEY_ATTR, waitSource ?? MAX_BROWSER_OPERATION_WAIT_MS)
+    : undefined;
+  return normalizeMessageRoleStyle(resolveMessageRoleStyle(style, unitKey));
 }
 
 export type WitnessSurfaceProbe = 'available' | 'absent' | 'empty';

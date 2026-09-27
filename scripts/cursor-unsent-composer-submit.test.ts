@@ -1893,6 +1893,127 @@ describe('orchestration mail reconciliation', () => {
     expect(resolved.sort()).toEqual(['dispatch:ctx_new', 'dispatch:ctx_settled']);
   });
 
+  it('stops retrying a refused episode of read Run mail once it leaves the reconcile window', async () => {
+    const target = worker('term_run_read_backlog');
+    const hourMs = 60 * 60_000;
+    const now = 10 * hourMs;
+    const runId = 'run_read_backlog';
+    const recipient = `run:${runId}`;
+    const refusedEpisode = (messageId: string) => ({
+      messageId,
+      runId,
+      recipient,
+      workerKey: 'orca\u0000term_run_read_backlog',
+      reason: 'pointer_absent_orca_did_not_notify',
+      nextEligibleAt: 0,
+      state: 'refused',
+    });
+    const run = async (createdAt: number) => {
+      const suffix = `${process.pid}-${Date.now()}-${createdAt}`;
+      const ledgerPath = join(tmpdir(), `opk-reconcile-read-backlog-${suffix}.json`);
+      writeFileSync(ledgerPath, JSON.stringify({ messages: {}, episodes: { seeded: refusedEpisode('msg_read') } }));
+      let retrievabilityChecks = 0;
+      let reads = 0;
+      const deps = {
+        readInbox: () => ({
+          ok: true as const,
+          result: { messages: [{ id: 'msg_read', run_id: runId, to_handle: recipient, read: 1, created_at: createdAt }] },
+        }),
+        lookupMessage: () => ({ ok: false as const, reason: 'unused' }),
+        resolveWorker: () => ({ ok: true as const, worker: target }),
+        isMessageRetrievable: () => { retrievabilityChecks += 1; return { ok: false as const, reason: 'orchestration_message_unretrievable' }; },
+        submitDeps: depsFor({}, {
+          read: () => { reads += 1; return { ok: true as const, lines: ['→ Add a follow-up', ...CURSOR_FOOTER], source: 'screen' as const }; },
+        }),
+      };
+      const result = await runOrchestrationMailReconcileTick(deps, {
+        ledgerPath,
+        lockPath: join(tmpdir(), `opk-reconcile-read-backlog-${suffix}.lock`),
+        now: () => now,
+        workerRoster: [],
+      });
+      return { result, retrievabilityChecks, reads };
+    };
+
+    const stale = await run(now - 2 * hourMs);
+    expect(stale.retrievabilityChecks).toBe(0);
+    expect(stale.reads).toBe(0);
+    expect(stale.result.attempted).toBe(0);
+
+    const fresh = await run(now - 1_000);
+    expect(fresh.retrievabilityChecks).toBe(1);
+    expect(fresh.result.attempted).toBe(1);
+  });
+
+  it('stops starting rows when the reconcile budget is spent and takes the rest next pass', async () => {
+    const target = worker('term_budget');
+    const hourMs = 60 * 60_000;
+    const now = 10 * hourMs;
+    const rows = Array.from({ length: 5 }, (_, index) => ({
+      id: `msg_budget_${index}`, run_id: 'run_budget', to_handle: `dispatch:ctx_budget_${index}`, read: 0, created_at: now - 2 * hourMs,
+    }));
+    const resolved: string[] = [];
+    const deps = {
+      ...reconciliationDeps(rows, target),
+      resolveWorker: (message: { readonly recipient: string }) => {
+        resolved.push(message.recipient);
+        return { ok: false as const, reason: 'assignment_target_unresolved' };
+      },
+    };
+    const suffix = `${process.pid}-${Date.now()}`;
+    const options = {
+      ledgerPath: join(tmpdir(), `opk-reconcile-budget-${suffix}.json`),
+      lockPath: join(tmpdir(), `opk-reconcile-budget-${suffix}.lock`),
+      budgetMs: 2,
+    };
+
+    // Each budget check costs one unit; two units allow exactly two pre-loop resolutions.
+    let spent = 0;
+    const first = await runOrchestrationMailReconcileTick(deps, { ...options, now: () => now, elapsedMs: () => spent++ });
+    expect(resolved).toHaveLength(2);
+    expect(first.attempted).toBe(0);
+    expect(first.reasons).toContain('orchestration_reconcile_budget_exhausted');
+
+    const spentAll = await runOrchestrationMailReconcileTick(deps, { ...options, now: () => now, budgetMs: 0 });
+    expect(spentAll.attempted).toBe(0);
+    expect(spentAll.reasons).toEqual(['orchestration_reconcile_budget_exhausted']);
+
+    resolved.length = 0;
+    const unbounded = await runOrchestrationMailReconcileTick(deps, { ...options, now: () => now, budgetMs: Number.POSITIVE_INFINITY });
+    expect(unbounded.attempted).toBe(5);
+    expect(unbounded.reasons).not.toContain('orchestration_reconcile_budget_exhausted');
+  });
+
+  it('prunes episodes of inactive messages even while an unresolved row blocks the exact sweep', async () => {
+    const target = worker('term_prune');
+    const hourMs = 60 * 60_000;
+    const now = 10 * hourMs;
+    const suffix = `${process.pid}-${Date.now()}`;
+    const ledgerPath = join(tmpdir(), `opk-reconcile-prune-${suffix}.json`);
+    const episode = (messageId: string) => ({
+      messageId, runId: 'run_prune', recipient: 'run:run_prune', workerKey: 'orca\u0000term_prune', nextEligibleAt: now + hourMs, state: 'confirmed',
+    });
+    writeFileSync(ledgerPath, JSON.stringify({
+      messages: {},
+      episodes: { gone: episode('msg_gone'), active: episode('msg_dead_unread') },
+    }));
+    const rows = [{ id: 'msg_dead_unread', run_id: 'run_prune', to_handle: 'dispatch:ctx_dead', read: 0, created_at: now - 2 * hourMs }];
+    const deps = {
+      ...reconciliationDeps(rows, target),
+      resolveWorker: () => ({ ok: false as const, reason: 'assignment_target_unresolved' }),
+    };
+
+    await runOrchestrationMailReconcileTick(deps, {
+      ledgerPath,
+      lockPath: join(tmpdir(), `opk-reconcile-prune-${suffix}.lock`),
+      now: () => now,
+      workerRoster: [],
+    });
+
+    const saved = JSON.parse(readFileSync(ledgerPath, 'utf8')) as { episodes: Record<string, { messageId: string }> };
+    expect(Object.values(saved.episodes).map((row) => row.messageId)).toEqual(['msg_dead_unread']);
+  });
+
   it('delivers unread Run mail after exact Run retrievability succeeds', async () => {
     const target = worker('term_run_mail_unread');
     const submitted: RuntimeWorkerIdentity[] = [];
@@ -1994,6 +2115,67 @@ describe('orchestration mail reconciliation', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it.each([
+    ['completed', { kind: 'gone' }, 'orchestration_dispatch_settled'],
+    ['failed', null, 'orchestration_dispatch_settled'],
+    ['dispatched', { kind: 'gone' }, undefined],
+  ] as const)('classifies unresolved mail to a %s Dispatch by its status', (status, value, expectedReason) => {
+    const calls: string[][] = [];
+    const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => {
+      calls.push([...args]);
+      return { ok: true, result: { dispatch: { status } } as T };
+    };
+    const adapter = {
+      resolveAssignmentWorker: () => value
+        ? { status: 'ok' as const, value }
+        : { status: 'failed' as const, reason: 'assignment_target_unresolved' },
+    } as unknown as RuntimeAdapter;
+    const deps = createOrcaMessageSubmitDeps(adapter, undefined, runJson);
+    const resolved = deps.resolveWorker({ id: 'msg_settled', runId: 'run_settled', recipient: 'dispatch:ctx_settled', consumed: false });
+    if (expectedReason) expect(resolved).toEqual({ ok: false, reason: expectedReason });
+    else expect(resolved).toEqual({ ok: true, worker: null });
+    expect(calls).toEqual([['orchestration', 'worker-show', '--dispatch', 'ctx_settled']]);
+  });
+
+  it('never re-resolves a settled Dispatch target and forgets it once its mail is gone', async () => {
+    const target = worker('term_settled_backlog');
+    const hourMs = 60 * 60_000;
+    const now = 10 * hourMs;
+    const rows = [
+      { id: 'msg_settled_a', run_id: 'run_settled', to_handle: 'dispatch:ctx_done', read: 0, created_at: now - 2 * hourMs },
+      { id: 'msg_settled_b', run_id: 'run_settled', to_handle: 'dispatch:ctx_done', read: 0, created_at: now - 1_000 },
+    ];
+    const resolved: string[] = [];
+    let inbox = rows;
+    const deps = {
+      ...reconciliationDeps(rows, target),
+      readInbox: () => ({ ok: true as const, result: { messages: inbox } }),
+      resolveWorker: (message: { readonly recipient: string }) => {
+        resolved.push(message.recipient);
+        return { ok: false as const, reason: 'orchestration_dispatch_settled' };
+      },
+    };
+    const suffix = `${process.pid}-${Date.now()}`;
+    const options = {
+      ledgerPath: join(tmpdir(), `opk-reconcile-settled-${suffix}.json`),
+      lockPath: join(tmpdir(), `opk-reconcile-settled-${suffix}.lock`),
+      workerRoster: [],
+    };
+
+    const first = await runOrchestrationMailReconcileTick(deps, { ...options, now: () => now });
+    expect(resolved).toEqual(['dispatch:ctx_done']);
+    expect(first.reasons).toContain('msg_settled_b:orchestration_dispatch_settled');
+
+    resolved.length = 0;
+    await runOrchestrationMailReconcileTick(deps, { ...options, now: () => now + 24 * hourMs });
+    expect(resolved).toEqual([]);
+
+    inbox = [];
+    await runOrchestrationMailReconcileTick(deps, { ...options, now: () => now + 25 * hourMs });
+    const saved = JSON.parse(readFileSync(options.ledgerPath, 'utf8')) as { settledTargets: Record<string, number> };
+    expect(saved.settledTargets).toEqual({});
   });
 
   it('falls back to exact terminal peek when a Run consumer is fenced', () => {
