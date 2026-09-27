@@ -24,6 +24,7 @@ import {
 import { productionFleetObserverSource, runSchedulerTick, type SchedulerBoundary } from './scheduler.ts';
 
 const roots: string[] = [];
+const DEFAULT_S1_FIXTURE_REPEATS = 20;
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -63,7 +64,11 @@ const fixturePath = String(process.env.OPK_PROCESS_FIXTURE_PATH ?? '');
 const state = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
 const get = (name) => { const index = args.indexOf(name); return index < 0 ? '' : String(args[index + 1] ?? ''); };
 const operation = args.slice(0, 2).join(' ');
-const save = () => fs.writeFileSync(fixturePath, JSON.stringify(state));
+const save = () => {
+  const temporaryPath = fixturePath + '.' + String(process.pid) + '.tmp';
+  fs.writeFileSync(temporaryPath, JSON.stringify(state));
+  fs.renameSync(temporaryPath, fixturePath);
+};
 const out = (value) => { save(); process.stdout.write(JSON.stringify(value) + '\\n'); };
 const terminal = (worker) => ({
   handle: worker.id,
@@ -732,7 +737,9 @@ describe('scheduler bounded-child production composition', () => {
   });
 
   it('uses the established default S1 config and snapshot authorities across bounded children', async () => {
-    const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const legacyHome = path.join(root, 'home'); const legacyConfig = path.join(legacyHome, '.config', 'orchestrator-pack', 'fleet-observer.json'); mkdirSync(path.dirname(legacyConfig), { recursive: true }); writeFileSync(legacyConfig, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 })); writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }], dispatchOutcome: 'dispatch_unknown', dispatches: [] })); writeEpoch(epochPath, 'epoch-defaults', 'nonce-defaults'); const env = processEnv(root, fixturePath, epochPath, legacyConfig, 'epoch-defaults', 'nonce-defaults'); delete env.OPK_SIDE_PROCESS_STATE_DIR; delete env.OPK_FLEET_OBSERVER_CONFIG; env.HOME = legacyHome; await publishLocal(env); const first = await runTick(env); const second = await runTick(env); expect(observerResult(first).schedulerGeneration).toBe(observerResult(second).schedulerGeneration); expect(fixture(fixturePath).dispatches).toHaveLength(0); expect(existsSync(path.join(legacyHome, '.local', 'state', 'orchestrator-pack', 'fleet-observer', 'snapshot.json'))).toBe(true);
+    for (let iteration = 0; iteration < DEFAULT_S1_FIXTURE_REPEATS; iteration += 1) {
+      const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const legacyHome = path.join(root, 'home'); const legacyConfig = path.join(legacyHome, '.config', 'orchestrator-pack', 'fleet-observer.json'); mkdirSync(path.dirname(legacyConfig), { recursive: true }); writeFileSync(legacyConfig, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 })); writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }], dispatchOutcome: 'dispatch_unknown', dispatches: [] })); writeEpoch(epochPath, 'epoch-defaults', 'nonce-defaults'); const env = processEnv(root, fixturePath, epochPath, legacyConfig, 'epoch-defaults', 'nonce-defaults'); delete env.OPK_SIDE_PROCESS_STATE_DIR; delete env.OPK_FLEET_OBSERVER_CONFIG; env.HOME = legacyHome; await publishLocal(env); const first = await runTick(env); const second = await runTick(env); expect(observerResult(first).schedulerGeneration).toBe(observerResult(second).schedulerGeneration); expect(fixture(fixturePath).dispatches).toHaveLength(0); expect(existsSync(path.join(legacyHome, '.local', 'state', 'orchestrator-pack', 'fleet-observer', 'snapshot.json'))).toBe(true);
+    }
   });
 
   it('re-resolves the persistence-safe Dispatch before S2 claim/send', async () => {
