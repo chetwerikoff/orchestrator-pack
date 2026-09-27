@@ -227,6 +227,18 @@ async function evaluateExpression(
   });
 }
 
+test('inspection reports a generating fresh turn with no message nodes instead of message_nodes_missing', async () => {
+  const generatingRaw = await evaluateExpression(INSPECTION_EXPRESSION, [], true);
+  assert.equal(generatingRaw.status, 'ok', JSON.stringify(generatingRaw));
+  assert.equal(generatingRaw.generation_in_progress, true);
+  assert.equal(generatingRaw.observed_message_nodes, 0);
+  assert.equal(generatingRaw.last_assistant_sha256, null);
+
+  const idleRaw = await evaluateExpression(INSPECTION_EXPRESSION, [], false);
+  assert.equal(idleRaw.status, 'surface_unknown');
+  assert.equal(idleRaw.reason, 'message_nodes_missing');
+});
+
 test('Issue #2171 classifies a marker-bearing assistant node by markdown role style', async () => {
   const marker = 'OPKTURNV1.fixture-owned-marker';
   const result = await evaluateExpression(INSPECTION_EXPRESSION, [
