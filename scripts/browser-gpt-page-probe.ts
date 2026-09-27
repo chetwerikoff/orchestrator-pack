@@ -13,6 +13,7 @@ import {
   MESSAGE_AUTHOR_ROLE_ATTR,
   MESSAGE_ID_ATTR,
   MESSAGE_NODE_SELECTOR,
+  MESSAGE_UNIT_KEY_ATTR,
   PRODUCT_STATUS_PROBE_SELECTORS,
   REGENERATE_THREAD_ERROR_BUTTON_SELECTOR,
   USER_MESSAGE_STYLE,
@@ -1266,7 +1267,8 @@ function inspectionExpression(): string {
     for (let documentOrdinal = 0; documentOrdinal < raw.length; documentOrdinal++) {
       const node = raw[documentOrdinal];
       const styleNode = node.querySelector(${JSON.stringify(`[${MESSAGE_AUTHOR_ROLE_ATTR}]`)});
-      const style = styleNode?.getAttribute(${JSON.stringify(MESSAGE_AUTHOR_ROLE_ATTR)});
+      const rawStyle = styleNode?.getAttribute(${JSON.stringify(MESSAGE_AUTHOR_ROLE_ATTR)});
+      const style = rawStyle === ${JSON.stringify(USER_MESSAGE_STYLE)} || rawStyle === ${JSON.stringify(ASSISTANT_MESSAGE_STYLE)} ? rawStyle : String(node.getAttribute(${JSON.stringify(MESSAGE_UNIT_KEY_ATTR)}) || '').endsWith(':user') ? ${JSON.stringify(USER_MESSAGE_STYLE)} : undefined;
       const role = style === ${JSON.stringify(USER_MESSAGE_STYLE)} ? 'user' : style === ${JSON.stringify(ASSISTANT_MESSAGE_STYLE)} ? 'assistant' : undefined;
       if (!role) continue;
       const ordinal = roleCounts[role]++;
@@ -1398,7 +1400,7 @@ function inspectionExpression(): string {
         let hasNonBannerContent = false;
         try { hasNonBannerContent = hasNonBannerVisibleText(assistant); } catch { recoveryComplete = false; }
         let turnKey;
-        try { turnKey = assistant.closest(TURN_SELECTOR)?.getAttribute('data-testid') || undefined; } catch { recoveryComplete = false; }
+        try { turnKey = assistant.closest(TURN_SELECTOR)?.getAttribute('data-turn-key') || undefined; } catch { recoveryComplete = false; }
         bannerCandidates.push({
           paragraph_texts: paragraphTexts,
           retry_control_present: retryControlPresent,
@@ -1450,7 +1452,8 @@ export const HARVEST_EXPRESSION = `(async () => {
   const rows = [];
   for (let documentOrdinal = 0; documentOrdinal < raw.length; documentOrdinal++) {
     const node = raw[documentOrdinal];
-    const style = node.querySelector(${JSON.stringify(`[${MESSAGE_AUTHOR_ROLE_ATTR}]`)})?.getAttribute(${JSON.stringify(MESSAGE_AUTHOR_ROLE_ATTR)});
+    const rawStyle = node.querySelector(${JSON.stringify(`[${MESSAGE_AUTHOR_ROLE_ATTR}]`)})?.getAttribute(${JSON.stringify(MESSAGE_AUTHOR_ROLE_ATTR)});
+    const style = rawStyle === ${JSON.stringify(USER_MESSAGE_STYLE)} || rawStyle === ${JSON.stringify(ASSISTANT_MESSAGE_STYLE)} ? rawStyle : String(node.getAttribute(${JSON.stringify(MESSAGE_UNIT_KEY_ATTR)}) || '').endsWith(':user') ? ${JSON.stringify(USER_MESSAGE_STYLE)} : undefined;
     const role = style === ${JSON.stringify(USER_MESSAGE_STYLE)} ? 'user' : style === ${JSON.stringify(ASSISTANT_MESSAGE_STYLE)} ? 'assistant' : undefined;
     if (!role) continue;
     const text = typeof node.innerText === 'string' ? node.innerText : null;
@@ -1848,7 +1851,8 @@ export function buildExportExpression(witness: ExportWitness): string {
     const raw = Array.from(document.querySelectorAll(${JSON.stringify(MESSAGE_NODE_SELECTOR)}));
     const roleCounts = { user: 0, assistant: 0 };
     const nodes = raw.map((node, documentOrdinal) => {
-      const style = node.querySelector(${JSON.stringify(`[${MESSAGE_AUTHOR_ROLE_ATTR}]`)})?.getAttribute(${JSON.stringify(MESSAGE_AUTHOR_ROLE_ATTR)});
+      const rawStyle = node.querySelector(${JSON.stringify(`[${MESSAGE_AUTHOR_ROLE_ATTR}]`)})?.getAttribute(${JSON.stringify(MESSAGE_AUTHOR_ROLE_ATTR)});
+      const style = rawStyle === ${JSON.stringify(USER_MESSAGE_STYLE)} || rawStyle === ${JSON.stringify(ASSISTANT_MESSAGE_STYLE)} ? rawStyle : String(node.getAttribute(${JSON.stringify(MESSAGE_UNIT_KEY_ATTR)}) || '').endsWith(':user') ? ${JSON.stringify(USER_MESSAGE_STYLE)} : undefined;
       const role = style === ${JSON.stringify(USER_MESSAGE_STYLE)} ? 'user' : style === ${JSON.stringify(ASSISTANT_MESSAGE_STYLE)} ? 'assistant' : undefined;
       if (!role) return null;
       const ordinal = roleCounts[role]++;

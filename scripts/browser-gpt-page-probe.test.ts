@@ -136,6 +136,13 @@ function nodeMatchesOneSelector(node: FakeNode, selector: string): boolean {
     if (node.tagName !== tagMatch[1]!.toUpperCase()) return false;
     rest = rest.slice(tagMatch[1]!.length);
   }
+  const notDescendantMatch = rest.match(/:not\(([^()]+) \*\)/u);
+  if (notDescendantMatch) {
+    for (let ancestor = node.parent; ancestor; ancestor = ancestor.parent) {
+      if (nodeMatchesOneSelector(ancestor, notDescendantMatch[1]!)) return false;
+    }
+    rest = rest.replace(notDescendantMatch[0], '');
+  }
   const hasMatch = rest.match(/:has\((\[[^)]+\])\)/u);
   if (hasMatch) {
     if (node.querySelectorAll(hasMatch[1]!).length === 0) return false;
@@ -377,6 +384,25 @@ test('URL targeting fails closed on zero and duplicate exact normalized matches'
     (error: any) => error.status === 'ambiguous',
   );
   assert.deepEqual({ createCalls, closeCalls, evaluateCalls }, { createCalls: 0, closeCalls: 0, evaluateCalls: 0 });
+});
+
+test('inspection counts live user search units that carry no selection id or markdown style', async () => {
+  const user = new FakeNode('', 'Question', 'Question', {
+    'data-chatgpt-search-unit-key': 'fallback-turn-0:0:user',
+    'data-chatgpt-search-message-ids': 'u-live-1',
+  });
+  user.appendChild(new FakeNode('', '', '', { 'data-user-message-bubble': 'true' }));
+  const nodes = [
+    user,
+    new FakeNode('assistant', 'Answer', 'Answer', { 'data-message-id': 'a-live-1' }),
+  ];
+  const raw = await evaluateExpression(INSPECTION_EXPRESSION, nodes, false);
+  assert.equal(raw.status, 'ok');
+  assert.equal(raw.observed_user_nodes, 1);
+  assert.equal(raw.observed_assistant_nodes, 1);
+  assert.equal(raw.nodes[0].role, 'user');
+  assert.equal(raw.nodes[0].attributes['data-markdown-text-style'], 'user-message');
+  assert.equal(raw.nodes[1].role, 'assistant');
 });
 
 test('inspection keeps innerText and textContent distinct and emits bounded witnesses', async () => {

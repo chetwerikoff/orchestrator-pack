@@ -13,6 +13,7 @@ import {
   ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
   CONVERSATION_TURN_SECTION_SELECTOR,
   MESSAGE_AUTHOR_ROLE_ATTR,
+  MESSAGE_UNIT_KEY_ATTR,
   MESSAGE_NODE_SELECTOR,
   REGENERATE_THREAD_ERROR_BUTTON_SELECTOR,
   STOP_BUTTON_SELECTOR,
@@ -367,6 +368,7 @@ async function readOwnedTurnSnapshot(
       nodes.evaluateAll((elements: Element[], args: {
         roleAttribute: string;
         userMessageStyle: string;
+        unitKeyAttribute: string;
         assistantMessageStyle: string;
         generationSelector: string;
         turnSelector: string;
@@ -429,7 +431,10 @@ async function readOwnedTurnSnapshot(
         }
         for (const element of elements) {
           try {
-            const style = element.querySelector(`[${args.roleAttribute}]`)?.getAttribute(args.roleAttribute);
+            const rawStyle = element.querySelector(`[${args.roleAttribute}]`)?.getAttribute(args.roleAttribute);
+            const style = rawStyle === args.userMessageStyle || rawStyle === args.assistantMessageStyle
+              ? rawStyle
+              : (element.getAttribute?.(args.unitKeyAttribute) ?? '').endsWith(':user') ? args.userMessageStyle : undefined;
             const role = style === args.userMessageStyle ? 'user' : style === args.assistantMessageStyle ? 'assistant' : '';
             const text = (element as HTMLElement).innerText;
             if (role === 'user' || role === 'assistant') {
@@ -482,6 +487,7 @@ async function readOwnedTurnSnapshot(
       }, {
         roleAttribute: MESSAGE_AUTHOR_ROLE_ATTR,
         userMessageStyle: USER_MESSAGE_STYLE,
+        unitKeyAttribute: MESSAGE_UNIT_KEY_ATTR,
         assistantMessageStyle: ASSISTANT_MESSAGE_STYLE,
         generationSelector: OWNED_TURN_GENERATION_SELECTOR,
         turnSelector: CONVERSATION_TURN_SECTION_SELECTOR,
