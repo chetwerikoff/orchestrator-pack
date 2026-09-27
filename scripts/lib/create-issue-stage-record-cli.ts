@@ -117,6 +117,7 @@ interface StageFinalizeCliOptions extends JournalTailCliOptions {
   expectedSourceRevision?: string;
   expectedStage?: LifecycleReviewStage;
   expectedStageAttemptId?: string;
+  afterLifecycleValidationFailure?: boolean;
   blockedOn?: CreateIssueBlockedOn;
 }
 
@@ -363,7 +364,7 @@ export function stageFinalizeUsage(): string {
     '  create-issue-stage-finalize.ts author-round --repo <owner/name> --issue-number <n> --review-dir <canonical-review-dir> --expected-source-revision <rNN> --expected-stage <stage> [--expected-stage-attempt-id <settled-id>] [--json]',
     '  create-issue-stage-finalize.ts publish-stage --repo <owner/name> --issue-number <n> --receipt <path> [--waiver <path>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts retry-pending --repo <owner/name> --issue-number <n> [--workdir <path>] [--expected-source-revision <rNN> --expected-stage <stage> --expected-stage-attempt-id <id>] [--json]',
-    '  create-issue-stage-finalize.ts reconcile-stage --repo <owner/name> --issue-number <n> --review-dir <path> --stage-evidence <attempt-NNN.json> [--json]',
+    '  create-issue-stage-finalize.ts reconcile-stage --repo <owner/name> --issue-number <n> --review-dir <path> --stage-evidence <attempt-NNN.json> [--after-lifecycle-validation-failure] [--json]',
     '  create-issue-stage-finalize.ts bind-published-comment --repo <owner/name> --issue-number <n> --review-dir <path> --stage-evidence <attempt-NNN.json> --reviewer-slot <slot> --invocation-id <id> --comment-url <url> [--json]',
     '  create-issue-stage-finalize.ts produce-author-dispositions --repo <owner/name> --issue-number <n> --review-dir <path> --source-revision <rNN> [--json]',
     '  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> [--tier-intake <path>] [--stage-evidence <path>...] [--author-dispositions <target-path>] [--claude-producer-evidence <path>...] [--waiver <path>] [--output-dir <path>] [--phase <pre-lens|post-lens|final-acceptance>] [--operator-issue-number <n> --operator-source-revision <rNN> --operator-verdict-url <url> --operator-verdict-sha256 <hex> --operator-verdict-byte-length <n> --operator-finding-count <n> --operator-reason <text>] [--json]',
@@ -493,6 +494,10 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
         opts.phase = phase;
         break;
       }
+      case '--after-lifecycle-validation-failure':
+        if (command !== 'reconcile-stage') throw new Error('--after-lifecycle-validation-failure is only valid with reconcile-stage');
+        opts.afterLifecycleValidationFailure = true;
+        break;
       case '--blocked-on-json':
         if (command === 'bind-published-comment' || command === 'produce-author-dispositions') throw new Error('--blocked-on-json is not valid with this command');
         if (opts.blockedOn) throw new Error('--blocked-on-json may be supplied only once');
@@ -787,11 +792,15 @@ function evidencePathForBinding(
 }
 
 function reconcileStageReadOnlyAction(
-  opts: Pick<StageFinalizeCliOptions, 'repo' | 'blockedOn' | 'publicActor' | 'publicActorExplicit'>,
+  opts: Pick<
+    StageFinalizeCliOptions,
+    'repo' | 'blockedOn' | 'publicActor' | 'publicActorExplicit' | 'afterLifecycleValidationFailure'
+  >,
   issueNumber: number,
   binding: CreateIssueActionBinding,
   reviewDir?: string,
   stageEvidencePath?: string,
+  afterLifecycleValidationFailure = opts.afterLifecycleValidationFailure ?? false,
 ): CreateIssueNextAction {
   const argv = [
     'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
@@ -801,6 +810,7 @@ function reconcileStageReadOnlyAction(
     '--expected-source-revision', binding.sourceRevision,
     '--expected-stage', binding.stage,
     ...(binding.stageAttemptId ? ['--expected-stage-attempt-id', binding.stageAttemptId] : []),
+    ...(afterLifecycleValidationFailure ? ['--after-lifecycle-validation-failure'] : []),
     '--json',
   ];
   if (opts.publicActorExplicit && opts.publicActor) argv.push('--public-actor', opts.publicActor);
@@ -1885,28 +1895,34 @@ export function runStageFinalizeCli(
           '--expected-source-revision', result.sourceRevision,
           '--expected-stage', result.stage,
           '--expected-stage-attempt-id', result.stageAttemptId,
+          ...(opts.afterLifecycleValidationFailure ? ['--after-lifecycle-validation-failure'] : []),
           '--json',
         ];
         appendBlockedOnArgv(reconcileArgv, opts.blockedOn);
         const retryableRead = reconcileStageReadIsRetryable(result);
         if (result.ok) {
-          nextAction = createIssueNextAction({
-            kind: 'produce-acceptance-artifacts',
-            binding,
-            argv: appendBlockedOnArgv([
-              'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
-              'produce-artifacts',
-              '--repo', opts.repo,
-              '--issue-number', String(issueNumber),
-              '--review-dir', reviewDir,
-              '--stage-evidence', stageEvidencePath,
-              '--phase', result.stage === 'architectural' ? 'final-acceptance' : 'pre-lens',
-              '--expected-source-revision', result.sourceRevision,
-              '--expected-stage', result.stage,
-              '--expected-stage-attempt-id', result.stageAttemptId,
-              '--json',
-            ], opts.blockedOn),
-          });
+          nextAction = opts.afterLifecycleValidationFailure
+            && !result.alreadySettled
+            && result.stage !== 'architectural'
+            && (result.materialFindingCount ?? 0) > 0
+            ? preMintAuthorRoundAction(binding, reviewDir)
+            : createIssueNextAction({
+                kind: 'produce-acceptance-artifacts',
+                binding,
+                argv: appendBlockedOnArgv([
+                  'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+                  'produce-artifacts',
+                  '--repo', opts.repo,
+                  '--issue-number', String(issueNumber),
+                  '--review-dir', reviewDir,
+                  '--stage-evidence', stageEvidencePath,
+                  '--phase', result.stage === 'architectural' ? 'final-acceptance' : 'pre-lens',
+                  '--expected-source-revision', result.sourceRevision,
+                  '--expected-stage', result.stage,
+                  '--expected-stage-attempt-id', result.stageAttemptId,
+                  '--json',
+                ], opts.blockedOn),
+              });
         } else if (!result.ok && retryableRead && !result.errors.some((error) => error.includes('stale_next_action'))) {
           nextAction = createIssueNextAction({
             kind: 'reconcile-stage-read-only',
@@ -2030,7 +2046,14 @@ export function runStageFinalizeCli(
             createIssueRecoverableResult({
               cause: 'author_round_lifecycle_validation_failed',
               blocker: errors.join('; '),
-              nextAction: reconcileStageReadOnlyAction(opts, issueNumber, binding, reviewDir),
+              nextAction: reconcileStageReadOnlyAction(
+                opts,
+                issueNumber,
+                binding,
+                reviewDir,
+                undefined,
+                true,
+              ),
             }),
           );
         }
