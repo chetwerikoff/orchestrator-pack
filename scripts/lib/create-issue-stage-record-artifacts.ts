@@ -637,7 +637,7 @@ function isCredentialablePublishedReviewerArtifact(
   invocationId: string,
 ): boolean {
   if (isCanonicalReviewerArtifact(text, stage, issueNumber, sourceRevision, invocationId)) return true;
-  if (stage === 'architectural') return false;
+  if (stage !== 'architectural-review') return false;
   const revision = parseCanonicalCaptureRevision(text);
   if (!revision
     || revision.issueNumber !== issueNumber
