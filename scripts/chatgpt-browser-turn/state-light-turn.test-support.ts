@@ -154,6 +154,7 @@ function makePage(
     transientReadErrors?: number | 'always';
     failMessageReadAt?: (messageIndex: number, pollIndex: number) => boolean;
     blockProductStatus?: boolean;
+    targetCrashStatus?: boolean;
     sendButton?: boolean;
     wallText?: string;
     wallAfterPoll?: number;
@@ -191,6 +192,9 @@ function makePage(
   const page: any = {
     __fakeBrowserGptPage: true,
     __productStatusText: () => {
+      if (sent && options.targetCrashStatus) {
+        throw new Error('locator.count: Target crashed');
+      }
       if (sent && options.blockProductStatus) {
         throw new Error('locator.innerText: Timeout 5000ms exceeded waiting for locator([role=alert]).nth(1)');
       }
@@ -797,6 +801,33 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     const journal = mocks.appendFileSync.mock.calls.map((call) => String(call[1])).join('\n');
     expect(journal).toContain('continue_polling_owned_page');
     expect(journal).not.toContain('caller_may_open_fresh_chat');
+  });
+
+  it('settles locator.count Target crashed once without recovery or another observation poll', async () => {
+    const working: StateLightTestSnapshot = {
+      messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'working' }],
+      generating: true,
+    };
+    const fake = makePage([working, working], { targetCrashStatus: true });
+    const outcome = await runAndCapture(fake.page);
+
+    expect(outcome.result).toMatchObject({
+      state: 'driver_error',
+      scope: 'invocation',
+      cause: 'post_send_target_crashed',
+      send_count: 1,
+    });
+    expect(outcome.result.incidents?.filter((item) => item === 'post_send_target_loss')).toHaveLength(1);
+    expect(outcome.result.incidents).not.toContain('post_send_observation_error');
+    expect(fake.metrics.sends).toBe(1);
+    expect(fake.metrics.polls).toBe(1);
+    expect(outcome.context.newPage).toHaveBeenCalledTimes(1);
+
+    const journal = mocks.appendFileSync.mock.calls.map((call) => String(call[1])).join('\n');
+    expect(journal).toContain('"eventClass":"post_send_target_loss"');
+    expect(journal).toContain('"symptom":"post_send_target_crashed"');
+    expect(journal).toContain('"action":"retain_owned_page_no_resend"');
+    expect(journal).not.toContain('"eventClass":"post_send_observation_error"');
   });
 
   it('reports page loss after send without sending a replacement request', async () => {
