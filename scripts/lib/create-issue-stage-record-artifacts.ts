@@ -629,6 +629,55 @@ function isCanonicalReviewerArtifact(
     || (declaredFindingCounts.length === 1 && declaredFindingCounts[0] === revision.findingCount);
 }
 
+function isCredentialablePublishedReviewerArtifact(
+  text: string,
+  stage: Exclude<ReviewStage, 'architectural-lens'>,
+  issueNumber: number,
+  sourceRevision: string,
+  invocationId: string,
+): boolean {
+  if (isCanonicalReviewerArtifact(text, stage, issueNumber, sourceRevision, invocationId)) return true;
+  if (stage === 'architectural') return false;
+  const revision = parseCanonicalCaptureRevision(text);
+  if (!revision
+    || revision.issueNumber !== issueNumber
+    || revision.sourceRevision !== sourceRevision
+    || revision.findingCount <= 0) return false;
+  const lines = text.split(/\r?\n/).map((line) => line.trim());
+  if (lines.filter((line) => line === 'review-economics-contract: v1').length !== 1) return false;
+  const invocationEchoes = lines.flatMap((line) => {
+    const match = INVOCATION_ECHO_RE.exec(line);
+    return match ? [match[1]!] : [];
+  });
+  if (invocationEchoes.length !== 1 || invocationEchoes[0] !== invocationId) return false;
+  if (lines.some((line) => line === 'NO_FINDINGS')) return false;
+  if (lines.some((line) => line === 'simplification-cut-candidate: yes')) return false;
+  if (lines.some((line) => line === 'SIMPLIFICATION_CLEAN')) return false;
+  const declaredFindingCounts = lines.flatMap((line) => {
+    const match = /^FINDING_COUNT: ([0-9]+)$/.exec(line);
+    return match ? [Number(match[1])] : [];
+  });
+  return declaredFindingCounts.length === 0
+    || (declaredFindingCounts.length === 1 && declaredFindingCounts[0] === revision.findingCount);
+}
+
+function credentialablePublishedReviewerArtifactRevision(
+  text: string,
+  stage: Exclude<ReviewStage, 'architectural-lens'>,
+  issueNumber: number,
+  invocationId: string,
+): string | null {
+  const revision = parseCanonicalCaptureRevision(text);
+  if (!revision || revision.issueNumber !== issueNumber) return null;
+  return isCredentialablePublishedReviewerArtifact(
+    text,
+    stage,
+    issueNumber,
+    revision.sourceRevision,
+    invocationId,
+  ) ? revision.sourceRevision : null;
+}
+
 function canonicalReviewerArtifactRevision(
   text: string,
   stage: Exclude<ReviewStage, 'architectural-lens'>,
@@ -1088,7 +1137,7 @@ function rereadAuthoritativeIssueComment(
     errors.push(`authoritative GitHub artifact was edited: ${reread.htmlUrl}`);
     return null;
   }
-  if (!isCanonicalReviewerArtifact(
+  if (!isCredentialablePublishedReviewerArtifact(
     reread.body,
     stage,
     context.census.issueNumber,
@@ -1145,7 +1194,7 @@ function resolveAuthoritativeArtifact(
   const selection = selectPrincipalOwnedCanonicalArtifact(
     targetedComments,
     context.principalLogin,
-    (comment) => isCanonicalReviewerArtifact(
+    (comment) => isCredentialablePublishedReviewerArtifact(
       comment.body,
       stage,
       context.census.issueNumber,
@@ -1157,7 +1206,7 @@ function resolveAuthoritativeArtifact(
     if (selection.cause === 'zero_principal_owned_match') {
       const principalRevisionCandidates = targetedComments.flatMap((comment) => {
         if (!comment.userLogin || !sameGithubPrincipal(comment.userLogin, context.principalLogin)) return [];
-        const observedRevision = canonicalReviewerArtifactRevision(
+        const observedRevision = credentialablePublishedReviewerArtifactRevision(
           comment.body,
           stage,
           context.census.issueNumber,
@@ -1952,6 +2001,7 @@ export interface ReconcileCreateIssueStageResult {
   sourceRevision?: string;
   capturePaths: string[];
   alreadySettled?: boolean;
+  materialFindingCount?: number;
   errors: string[];
   temporary?: AcceptanceArtifactTemporaryClassification;
 }
@@ -2322,9 +2372,7 @@ export function reconcileCreateIssueStage(
       sourceVerdictEvidence[slot] = {
         producerEvidenceIdentity: 'authoritative-github-artifact:comment-' + resolvedArtifact.authority.commentId,
         captureIdentity: resolvedArtifact.capture.captureIdentity,
-        terminalClassification: resolvedArtifact.authority.kind === AUTHORITATIVE_GITHUB_ARTIFACT_BASIS
-          ? 'complete'
-          : finalInvocation.terminalClassification,
+        terminalClassification: finalInvocation.terminalClassification,
         credentialingAuthority: 'authoritative-github-artifact',
         captureVerified: true,
         digestMatches: true,
@@ -2369,6 +2417,10 @@ export function reconcileCreateIssueStage(
     ? reviewLane.finalRequiredSlots.filter((slot): slot is string => typeof slot === 'string')
     : initialRequiredSlots;
   const unresolvedRequiredSlots = finalRequiredSlots.filter((slot) => !resolvedBySlot.has(slot));
+  const materialFindingCount = finalRequiredSlots.reduce(
+    (sum, slot) => sum + (resolvedBySlot.get(slot)?.capture.rawFindingCount ?? 0),
+    0,
+  );
   raw.outcome = unresolvedRequiredSlots.length === 0 ? 'complete' : 'partial';
   raw.producerEvidence = 'not-applicable';
   if (unresolvedRequiredSlots.length === 0) raw.partialMissingSources = [];
@@ -2416,6 +2468,7 @@ export function reconcileCreateIssueStage(
         sourceRevision,
         capturePaths: [],
         alreadySettled: true,
+        materialFindingCount,
         errors: [],
       };
     }
@@ -2434,7 +2487,7 @@ export function reconcileCreateIssueStage(
     }
   }
 
-  return { ok: true, stageAttemptId, stage, sourceRevision, capturePaths, errors: [] };
+  return { ok: true, stageAttemptId, stage, sourceRevision, capturePaths, materialFindingCount, errors: [] };
 }
 
 function readClaudeProducerEvidence(
