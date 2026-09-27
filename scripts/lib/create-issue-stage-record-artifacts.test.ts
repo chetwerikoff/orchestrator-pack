@@ -5526,6 +5526,7 @@ describe('Issue #2209 recorded pre-lens lifecycle recovery', () => {
           '--expected-source-revision', 'r02',
           '--expected-stage', 'architectural-review',
           '--expected-stage-attempt-id', recorded.stageAttemptId,
+          '--after-lifecycle-validation-failure',
           '--json',
         ], source);
         expect(code).toBe(3);
