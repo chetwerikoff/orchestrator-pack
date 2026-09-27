@@ -547,7 +547,7 @@ export function runSmokeGhWriteSync(
   extraEnv: Readonly<NodeJS.ProcessEnv> = {},
   timeoutMs = SMOKE_GH_TIMEOUT_MS,
 ): ReturnType<typeof runProcessSync> {
-  return runSmokeGhProcess(resolveRealGhBinary(), args, cwd, { ...buildSmokeGhChildEnv(), ...extraEnv }, timeoutMs);
+  return runSmokeGhProcess(resolveTrackedGhWrapper(), args, cwd, { ...buildSmokeGhChildEnv(), ...extraEnv }, timeoutMs);
 }
 
 function gitPorcelain(cwd: string): string[] {

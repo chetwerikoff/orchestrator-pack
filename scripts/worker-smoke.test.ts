@@ -4,7 +4,7 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFile
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { runProcess, runProcessSync } from './kernel/subprocess.ts';
-import { resolveRealGhBinary } from './lib/gh-resolve-real-binary.mjs';
+import { resolveRealGhBinary, resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import {
   buildSmokeAgentPrompt,
   buildSmokeGhChildEnv,
@@ -2699,7 +2699,7 @@ function runChild(
 }
 
 describe('publishPrComment', () => {
-  it('executes gh writes through the absolute native binary under the minimal smoke child environment', () => {
+  it('executes gh writes through scripts/gh under the minimal smoke child environment, not a PATH wrapper', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-publish-native-'));
     const machineBin = join(root, 'machine-bin');
     mkdirSync(machineBin, { recursive: true });
@@ -2712,6 +2712,7 @@ describe('publishPrComment', () => {
     process.env.PATH = `${machineBin}:${dirname(nativeBinary)}:${previousPath ?? ''}`;
     try {
       expect(resolveRealGhBinary()).toBe(nativeBinary);
+      expect(resolveTrackedGhWrapper()).toBe(join(process.cwd(), 'scripts', 'gh'));
       const result = runSmokeGhWriteSync(['api', '--method', 'POST', '--help'], root);
       expect(result.ok).toBe(true);
       expect(result.stdout).toMatch(/usage/iu);
@@ -2732,7 +2733,7 @@ describe('publishPrComment', () => {
     const callsFile = join(root, 'calls.txt');
     executable(hungGh, `#!${process.execPath}\nconst { appendFileSync } = require('node:fs');\nappendFileSync(${JSON.stringify(callsFile)}, 'call\\n', 'utf8');\nsetTimeout(() => {}, 1000);\n`);
     try {
-      const result = runSmokeGhProcess(hungGh, ['api'], root, buildSmokeGhChildEnv({}), 25);
+      const result = runSmokeGhProcess(hungGh, ['api'], root, buildSmokeGhChildEnv({}), 500);
       expect(result.ok).toBe(false);
       expect(readFileSync(callsFile, 'utf8').trim().split(/\r?\n/u)).toHaveLength(2);
     } finally {
