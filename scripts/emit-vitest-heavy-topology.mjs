@@ -4,6 +4,7 @@
  * (Issue #695).
  */
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runProcessSync } from './kernel/subprocess.mjs';
@@ -36,6 +37,13 @@ function parseArgs(argv) {
     failOnGuard: !flags.has('--skip-oversized-guard'),
     repoRoot: process.env.OPK_REPO_ROOT?.replace(/\\/g, '/') || defaultRepoRoot,
   };
+}
+
+function resolveTopologyArtifactOutputPath(repoRoot, ghaOutput) {
+  if (ghaOutput && process.env.GITHUB_ACTIONS === 'true') {
+    return topologyArtifactPath(repoRoot);
+  }
+  return join(tmpdir(), `opk-vitest-heavy-topology-${process.pid}.plan.json`);
 }
 
 function writeGhaOutput(topology) {
@@ -155,6 +163,7 @@ async function withEphemeralChangedTestClassifications(repoRoot, changedFiles, a
 }
 
 const { ghaOutput, failOnGuard, repoRoot } = parseArgs(process.argv);
+const artifactPath = resolveTopologyArtifactOutputPath(repoRoot, ghaOutput);
 const rawManifest = resolveChangedPathManifest(repoRoot);
 const changedPathManifest = rawManifest
   ? {
@@ -235,7 +244,7 @@ if (diagnostic) {
     heavyShards: [{ shard: 1, files: [], totalRuntimeMs: 0 }],
     measurementDiagnostic: diagnostic,
   };
-  writeFileSync(topologyArtifactPath(repoRoot), `${JSON.stringify(artifact, null, 2)}\n`);
+  writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
   console.error(JSON.stringify(artifact));
   process.exit(1);
 }
@@ -264,7 +273,7 @@ const artifact = {
   lightShards: result.lightShards,
   heavyShards: result.heavyShards,
 };
-writeFileSync(topologyArtifactPath(repoRoot), `${JSON.stringify(artifact, null, 2)}\n`);
+writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
 
 if (result.topology.underProvisioned) {
   console.warn(
