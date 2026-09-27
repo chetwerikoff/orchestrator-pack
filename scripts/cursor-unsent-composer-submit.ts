@@ -56,6 +56,14 @@ export const ORCHESTRATION_STALE_POINTER_DRAIN_MS = 10_000;
 // pass does not re-query every dead target through the runtime CLI.
 export const ORCHESTRATION_STALE_TARGET_MIN_AGE_MS = 60 * 60_000;
 export const ORCHESTRATION_STALE_TARGET_BACKOFF_MS = 15 * 60_000;
+/**
+ * Wall-clock budget for one reconcile pass. The supervisor kills a scheduler
+ * tick after 70 s; whatever backlog shape Orca holds, the pass stops starting
+ * new rows here and the rest are taken next tick, oldest attempt first.
+ */
+export const ORCHESTRATION_RECONCILE_TICK_BUDGET_MS = 20_000;
+export const ORCHESTRATION_DISPATCH_SETTLED = 'orchestration_dispatch_settled';
+const SETTLED_DISPATCH_STATUSES: ReadonlySet<string> = new Set(['completed', 'failed']);
 const ORCHESTRATION_INBOX_LIMIT = 5_000;
 const RECONCILE_COMMAND_TIMEOUT_MS = 10_000;
 
@@ -464,6 +472,8 @@ interface PersistedReconcileState {
   staleObservations?: Record<string, StalePointerObservation>;
   submittedFingerprint?: Record<string, string>;
   unresolvedTargets?: Record<string, number>;
+  /** Recipients whose Orca Dispatch is completed or failed; mail to them is never deliverable. */
+  settledTargets?: Record<string, number>;
 }
 
 function recipientEpisodeKey(worker: RuntimeWorker): string {
@@ -576,9 +586,15 @@ function loadReconcileState(path: string): PersistedReconcileState {
         if (typeof value === 'number' && Number.isFinite(value)) unresolvedTargets[key] = value;
       }
     }
-    return { messages, episodes, staleObservations, submittedFingerprint, unresolvedTargets };
+    const settledTargets: Record<string, number> = {};
+    if (record.settledTargets && typeof record.settledTargets === 'object' && !Array.isArray(record.settledTargets)) {
+      for (const [key, value] of Object.entries(record.settledTargets as Record<string, unknown>)) {
+        if (typeof value === 'number' && Number.isFinite(value)) settledTargets[key] = value;
+      }
+    }
+    return { messages, episodes, staleObservations, submittedFingerprint, unresolvedTargets, settledTargets };
   } catch {
-    return { messages: {}, episodes: {}, staleObservations: {}, submittedFingerprint: {}, unresolvedTargets: {} };
+    return { messages: {}, episodes: {}, staleObservations: {}, submittedFingerprint: {}, unresolvedTargets: {}, settledTargets: {} };
   }
 }
 
@@ -590,6 +606,7 @@ function saveReconcileState(path: string, state: PersistedReconcileState): void 
     staleObservations: state.staleObservations ?? {},
     submittedFingerprint: state.submittedFingerprint ?? {},
     unresolvedTargets: state.unresolvedTargets ?? {},
+    settledTargets: state.settledTargets ?? {},
   }) + '\n');
 }
 
@@ -1502,15 +1519,24 @@ export function createOrcaMessageSubmitDeps(
     ['orchestration', 'inbox', '--full', '--limit', String(ORCHESTRATION_INBOX_LIMIT)],
     { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS },
   );
+  const isDispatchSettled = (dispatchId: string): boolean => {
+    const shown = runJson<{ readonly dispatch?: { readonly status?: string } }>(
+      ['orchestration', 'worker-show', '--dispatch', dispatchId],
+      { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS },
+    );
+    const status = shown.ok ? shown.result?.dispatch?.status?.trim().toLowerCase() ?? '' : '';
+    return SETTLED_DISPATCH_STATUSES.has(status);
+  };
   const resolveWorker: DeliveryMessageSubmitDeps['resolveWorker'] = (message) => {
       if (message.recipient.startsWith('dispatch:')) {
         if (!adapter.resolveAssignmentWorker) return { ok: false, reason: 'runtime_assignment_resolution_unsupported' };
         const bindingKey = message.recipient.slice('dispatch:'.length).trim();
         const resolved = adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey });
+        if (resolved.status === 'ok' && resolved.value.kind === 'resolved') return { ok: true, worker: resolved.value.worker };
+        // No live target: a completed or failed Dispatch never takes mail again.
+        if (isDispatchSettled(bindingKey)) return { ok: false, reason: ORCHESTRATION_DISPATCH_SETTLED };
         if (resolved.status !== 'ok') return { ok: false, reason: resolved.reason };
-        return resolved.value.kind === 'resolved'
-          ? { ok: true, worker: resolved.value.worker }
-          : { ok: true, worker: null };
+        return { ok: true, worker: null };
       }
       let handle = message.recipient;
       if (message.recipient.startsWith('run:')) {
@@ -1725,8 +1751,12 @@ async function drainStalePointers(
 /** Reconcile unread Orca mail without inspecting composer screens globally. */
 export async function runOrchestrationMailReconcileTick(
   deps: DeliveryMessageSubmitDeps,
-  options: { readonly ledgerPath?: string; readonly lockPath?: string; readonly now?: () => number; readonly maxRecipientGroups?: number; readonly maxMessages?: number; readonly workerRoster?: readonly RuntimeWorker[] } = {},
+  options: { readonly ledgerPath?: string; readonly lockPath?: string; readonly now?: () => number; readonly maxRecipientGroups?: number; readonly maxMessages?: number; readonly workerRoster?: readonly RuntimeWorker[]; readonly budgetMs?: number; readonly elapsedMs?: () => number } = {},
 ): Promise<OrchestrationMailReconcileResult> {
+  const startedAt = performance.now();
+  const elapsedMs = options.elapsedMs ?? (() => performance.now() - startedAt);
+  const budgetMs = options.budgetMs ?? ORCHESTRATION_RECONCILE_TICK_BUDGET_MS;
+  const overBudget = (): boolean => elapsedMs() >= budgetMs;
   const ledgerPath = options.ledgerPath ?? deps.episodeStatePath ?? ORCHESTRATION_RECONCILE_LEDGER_PATH;
   const lockPath = options.lockPath ?? deps.episodeLockPath ?? ORCHESTRATION_RECONCILE_LOCK_PATH;
   const held = tryAcquireHeldFileLock(lockPath);
@@ -1863,6 +1893,12 @@ export async function runOrchestrationMailReconcileTick(
     for (const [key, until] of Object.entries(unresolvedTargets)) {
       if (current >= until) delete unresolvedTargets[key];
     }
+    const settledTargets = state.settledTargets ?? {};
+    state.settledTargets = settledTargets;
+    const activeTargetKeys = new Set(activeRows.map((row) => `${row.to_handle?.trim() ?? ''}\u0000${row.run_id?.trim() ?? ''}`));
+    for (const key of Object.keys(settledTargets)) {
+      if (!activeTargetKeys.has(key)) delete settledTargets[key];
+    }
     const isStaleBacklog = (message: DeliveryMessage): boolean => {
       const createdAt = createdAtById.get(message.id) ?? 0;
       return createdAt > 0 && current - createdAt >= ORCHESTRATION_STALE_TARGET_MIN_AGE_MS;
@@ -1871,12 +1907,18 @@ export async function runOrchestrationMailReconcileTick(
       const cacheKey = message.recipient + '\u0000' + message.runId;
       const cached = resolutions.get(cacheKey);
       if (cached) return cached;
+      if (settledTargets[cacheKey] !== undefined) return { ok: false, reason: ORCHESTRATION_DISPATCH_SETTLED };
       const staleBacklog = isStaleBacklog(message);
       if (staleBacklog && unresolvedTargets[cacheKey] !== undefined) {
         return { ok: false, reason: 'orchestration_target_unresolved_backoff' };
       }
       const resolved = deps.resolveWorker(message);
       resolutions.set(cacheKey, resolved);
+      if (!resolved.ok && resolved.reason === ORCHESTRATION_DISPATCH_SETTLED) {
+        settledTargets[cacheKey] = current;
+        delete unresolvedTargets[cacheKey];
+        return resolved;
+      }
       if (resolved.ok && resolved.worker) delete unresolvedTargets[cacheKey];
       else if (staleBacklog) unresolvedTargets[cacheKey] = current + ORCHESTRATION_STALE_TARGET_BACKOFF_MS;
       return resolved;
@@ -1885,6 +1927,10 @@ export async function runOrchestrationMailReconcileTick(
     const activeEpisodeKeysByMessage = new Map<string, string>();
     let unresolvedActive = false;
     for (const row of activeRows) {
+      if (overBudget()) {
+        unresolvedActive = true;
+        break;
+      }
       const parsed = deliveryMessageFromInboxRow(row);
       if (!parsed.ok) {
         unresolvedActive = true;
@@ -1905,6 +1951,13 @@ export async function runOrchestrationMailReconcileTick(
       for (const key of Object.keys(state.episodes)) {
         if (!activeEpisodeKeys.has(key)) delete state.episodes[key];
       }
+    } else {
+      // An unresolved row blocks the exact key sweep above, and after an Orca
+      // restart one always exists. Episodes of messages that are no longer
+      // active at all can never be processed again; drop them regardless.
+      for (const [key, episode] of Object.entries(state.episodes)) {
+        if (!activeMessageIds.has(episode.messageId)) delete state.episodes[key];
+      }
     }
     const reconcileDeps: DeliveryMessageSubmitDeps = {
       ...deps,
@@ -1919,7 +1972,12 @@ export async function runOrchestrationMailReconcileTick(
     const coalescedPointerKeys = new Set<string>();
     const touchedWorkerKeys = new Set<string>();
     let attempted = 0; let nudged = 0; let skipped = 0;
+    let budgetExhausted = false;
     for (const row of rowsToProcess) {
+      if (overBudget()) {
+        budgetExhausted = true;
+        break;
+      }
       const id = row.id!.trim();
       attempted += 1;
       const rows = rowsById.get(id) ?? [];
@@ -2028,7 +2086,8 @@ export async function runOrchestrationMailReconcileTick(
       state.messages[id] = current;
       if (result.terminals[0]?.reason) reasons.push(`${id}:${result.terminals[0].reason}`);
     }
-    nudged += await drainStalePointers(deps, state, inboxRows, current, resolveWorker, reasons, workerRoster, touchedWorkerKeys);
+    if (budgetExhausted || overBudget()) reasons.push('orchestration_reconcile_budget_exhausted');
+    else nudged += await drainStalePointers(deps, state, inboxRows, current, resolveWorker, reasons, workerRoster, touchedWorkerKeys);
     saveReconcileState(ledgerPath, state);
     return { ok: reasons.every((reason) => !/:send_failed$|:dispatch_unknown$|:submission_unconfirmed$/u.test(reason)), attempted, nudged, skipped, reasons, deliveryEvidence };
   } finally {
