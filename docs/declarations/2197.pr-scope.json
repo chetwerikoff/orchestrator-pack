@@ -1,0 +1,23 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2197,
+  "declared_paths": [
+    ".cursor/skills/execute-issue-with-gpt/SKILL.md",
+    "docs/chatgpt-task-execution-runbook.md",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/skills/execute-issue-with-gpt/SKILL.md",
+    "docs/chatgpt-task-execution-runbook.md",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts"
+  ],
+  "source_revision": "b54788a456c30725e0716d106cf767644d34d16e"
+}
