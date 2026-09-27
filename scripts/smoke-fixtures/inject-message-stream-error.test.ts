@@ -7,12 +7,16 @@ import { test } from 'vitest';
 import {
   ASSISTANT_MESSAGE_SELECTOR,
   ASSISTANT_MESSAGE_STYLE,
+  ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
   CONVERSATION_TURN_SECTION_SELECTOR,
   MESSAGE_NODE_SELECTOR,
   PRODUCT_STATUS_PROBE_SELECTORS,
   REGENERATE_THREAD_ERROR_BUTTON_SELECTOR,
+  SEND_BUTTON_SELECTOR,
   STOP_BUTTON_SELECTOR as PRODUCT_STOP_BUTTON_SELECTOR,
+  USER_MESSAGE_SELECTOR,
 } from '../chatgpt-browser-turn/product-page-selectors.ts';
+import { fakeTurnPage } from '../chatgpt-browser-turn/fixtures/fake-turn-page.ts';
 import {
   projectExecutionRecoveryInspect,
   runProbe,
@@ -93,6 +97,12 @@ class FixtureElement {
     if (selector === REGENERATE_THREAD_ERROR_BUTTON_SELECTOR) {
       return descendants.filter((node) => node.attrs['data-testid'] === 'regenerate-thread-error-button');
     }
+    if (selector === ASSISTANT_TURN_IN_PROGRESS_SELECTOR) {
+      return descendants.filter((node) => node.attrs['aria-busy'] === 'true'
+        || node.attrs['data-is-streaming'] === 'true'
+        || (node.attrs['data-testid']?.startsWith('tool') && node.attrs['data-state'] === 'running')
+        || (node.attrs['data-testid']?.startsWith('tool') && node.attrs['data-state'] === 'loading'));
+    }
     if (selector === '[data-markdown-text-style]') {
       return descendants.filter((node) => node.attrs['data-markdown-text-style'] !== undefined);
     }
@@ -146,6 +156,10 @@ class FixtureDocument {
     if (selector === CONVERSATION_TURN_SECTION_SELECTOR) {
       return all.filter((node) => node.tagName === 'DIV' && node.attrs['data-turn-key'] !== undefined);
     }
+    if (selector === USER_MESSAGE_SELECTOR) {
+      return all.filter((node) => node.attrs['data-chatgpt-search-unit-key']?.endsWith(':user')
+        || node.attrs['data-markdown-text-style'] === 'user-message');
+    }
     if (selector === MESSAGE_NODE_SELECTOR) {
       return all.filter((node) => node.attrs['data-chatgpt-search-unit-key']?.endsWith(':user')
         || (node.attrs['data-chatgpt-selection-message-id'] !== undefined
@@ -161,7 +175,7 @@ class FixtureDocument {
   }
 }
 
-function makeFixturePage() {
+function makeFixturePage(inProgress = 'true') {
   const marker = `OPKTURNV1${'ab'.repeat(16)}`;
   const ownedTurn = new FixtureElement('div', { 'data-turn-key': `${CONVERSATION_TURN_ID_PREFIX}owned` });
   const ownedUser = new FixtureElement('div', {
@@ -170,9 +184,7 @@ function makeFixturePage() {
   }, `${marker}\n\nTASK`);
   ownedTurn.appendChild(ownedUser);
   const assistantTurn = new FixtureElement('div', { 'data-turn-key': `${CONVERSATION_TURN_ID_PREFIX}assistant` });
-  const oldAssistant = new FixtureElement('div', { 'data-chatgpt-selection-message-id': 'pending-assistant' });
-  oldAssistant.appendChild(new FixtureElement('span', { 'data-markdown-text-style': ASSISTANT_MESSAGE_STYLE }, 'partial'));
-  assistantTurn.appendChild(oldAssistant);
+  assistantTurn.appendChild(new FixtureElement('div', { 'aria-busy': inProgress }));
   const stop = new FixtureElement('button', { 'data-testid': 'stop-button' }, 'Stop');
   const document = new FixtureDocument([ownedTurn, assistantTurn], stop);
   return { document, ownedTurn, ownedUser, assistantTurn, stop, marker };
@@ -180,10 +192,10 @@ function makeFixturePage() {
 
 async function probePage(document: FixtureDocument) {
   const target = {
-    id: 'new-conversation',
+    id: 'existing-project-tab',
     type: 'page',
-    url: 'https://chatgpt.com/c/smoke-fixture',
-    webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/page/new-conversation',
+    url: 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/project',
+    webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/page/existing-project-tab',
   };
   const dependencies: ProbeDependencies = {
     listTargets: async () => [target],
@@ -205,39 +217,58 @@ async function probePage(document: FixtureDocument) {
   return await runProbe({ operation: 'inspect', cdp: 'http://127.0.0.1:9237', targetId: target.id }, dependencies);
 }
 
-test('CDP injection stops a new running turn and the production page probe classifies its fixture', async () => {
+test('attaches to an existing project tab and injects into the active assistant turn before markdown appears', async () => {
   assert.equal(STOP_BUTTON_SELECTOR, PRODUCT_STOP_BUTTON_SELECTOR);
-  const { document, ownedTurn, ownedUser, assistantTurn, stop, marker } = makeFixturePage();
+  const fake = fakeTurnPage({
+    dispatchCandidateIds: ['smoke-owned-user'],
+    assistants: [{ id: 'streaming-assistant', parent: 'smoke-owned-user', text: '', streaming: true }],
+  });
+  await fake.page.locator(SEND_BUTTON_SELECTOR).click();
+  const streamingAssistant = fake.page.locator(ASSISTANT_MESSAGE_SELECTOR).nth(0);
+  const inProgress = await streamingAssistant.getAttribute('aria-busy');
+  assert.equal(inProgress, 'true');
+  const { document, ownedTurn, ownedUser, assistantTurn, stop, marker } = makeFixturePage(inProgress);
   const target = {
-    id: 'new-conversation',
+    id: 'existing-project-tab',
     type: 'page',
-    url: 'https://chatgpt.com/c/smoke-fixture',
-    webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/page/new-conversation',
+    url: 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/project',
+    webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/page/existing-project-tab',
+  };
+  const foreignTarget = {
+    ...target,
+    id: 'foreign-chat',
+    url: 'https://chatgpt.com/c/foreign',
+    webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/page/foreign-chat',
   };
   let listCalls = 0;
+  const connectedTargets: string[] = [];
   const injected = await injectMessageStreamError({
     cdp: 'http://127.0.0.1:9237',
     timeoutMs: 1_000,
     list: async () => {
       listCalls += 1;
-      return listCalls === 1 ? [{ ...target, id: 'pre-existing' }] : [{ ...target, id: 'pre-existing' }, target];
+      return [foreignTarget, target];
     },
-    connect: async () => ({
-      evaluate: async (expression: string) => await runInNewContext(expression, { document }),
-      close: () => undefined,
-    }),
+    connect: async (connectedTarget) => {
+      connectedTargets.push(connectedTarget.id);
+      return {
+        evaluate: async (expression: string) => await runInNewContext(expression, { document }),
+        close: () => undefined,
+      };
+    },
     wait: async () => undefined,
   });
   assert.deepEqual(injected, {
     status: 'injected',
-    target_id: 'new-conversation',
+    target_id: 'existing-project-tab',
     conversation_url: target.url,
     turn_key: `${CONVERSATION_TURN_ID_PREFIX}assistant`,
     stop_clicked: true,
     retry_clicked: false,
     preserved_turn_node: true,
   });
-  assert.ok(listCalls >= 2);
+  assert.equal(listCalls, 1);
+  assert.deepEqual(connectedTargets, ['existing-project-tab']);
   assert.equal(document.stopActive, false);
   assert.equal(stop.connected, true);
   assert.equal(document.retryClicks, 0);
@@ -257,15 +288,15 @@ test('CDP injection stops a new running turn and the production page probe class
   }), { state: 'recovery_required', cause: 'message_stream_error' });
 });
 
-test('injection refuses when the Stop control or existing assistant turn is absent', async () => {
-  const { document, assistantTurn, stop } = makeFixturePage();
+test('injection refuses when the Stop control or assistant turn is absent', async () => {
+  const { document, stop } = makeFixturePage();
   document.stopActive = false;
   const waitingForStop = await runInNewContext(buildInjectionExpression(), { document });
   assert.equal(waitingForStop.status, 'waiting_for_stop');
   assert.equal(document.retryClicks, 0);
 
   document.stopActive = true;
-  assistantTurn.children.splice(0);
+  document.roots.splice(1, 1);
   const waitingForTurn = await runInNewContext(buildInjectionExpression(), { document });
   assert.equal(waitingForTurn.status, 'waiting_for_assistant_turn');
   assert.equal(document.retryClicks, 0);

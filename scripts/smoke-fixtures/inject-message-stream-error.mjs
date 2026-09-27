@@ -1,10 +1,17 @@
 #!/usr/bin/env node
 import { pathToFileURL } from 'node:url';
+import {
+  ASSISTANT_MESSAGE_SELECTOR,
+  ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
+  CONVERSATION_TURN_ID_PREFIX,
+  CONVERSATION_TURN_SECTION_SELECTOR,
+  REGENERATE_THREAD_ERROR_BUTTON_TESTID,
+  STOP_BUTTON_SELECTOR,
+  USER_MESSAGE_SELECTOR,
+} from '../chatgpt-browser-turn/product-page-selectors.ts';
 
 export const DEFAULT_CDP = 'http://127.0.0.1:9237';
-export const STOP_BUTTON_SELECTOR = '[data-testid="stop-button"], button[aria-label*="Stop"]';
-export const CONVERSATION_TURN_SECTION_SELECTOR = 'div[data-turn-key]';
-export const CONVERSATION_TURN_ID_PREFIX = 'conversation-turn-';
+export { CONVERSATION_TURN_ID_PREFIX, STOP_BUTTON_SELECTOR };
 export const MESSAGE_STREAM_ERROR_TEXT = 'Error in message stream';
 export const POLL_INTERVAL_MS = 100;
 export const POLL_TIMEOUT_MS = 120_000;
@@ -103,27 +110,39 @@ export function buildInjectionExpression() {
   return `(() => {
     const STOP_SELECTOR = ${JSON.stringify(STOP_BUTTON_SELECTOR)};
     const TURN_SELECTOR = ${JSON.stringify(CONVERSATION_TURN_SECTION_SELECTOR)};
+    const USER_SELECTOR = ${JSON.stringify(USER_MESSAGE_SELECTOR)};
+    const IN_PROGRESS_SELECTOR = ${JSON.stringify(ASSISTANT_TURN_IN_PROGRESS_SELECTOR)};
     const TURN_PREFIX = ${JSON.stringify(CONVERSATION_TURN_ID_PREFIX)};
+    const ASSISTANT_SELECTOR = ${JSON.stringify(ASSISTANT_MESSAGE_SELECTOR)};
     const ERROR_TEXT = ${JSON.stringify(MESSAGE_STREAM_ERROR_TEXT)};
-    const stop = document.querySelector(STOP_SELECTOR);
-    if (!stop || !stop.isConnected || stop.disabled) return { status: 'waiting_for_stop' };
-
+    const RETRY_TESTID = ${JSON.stringify(REGENERATE_THREAD_ERROR_BUTTON_TESTID)};
     const turns = Array.from(document.querySelectorAll(TURN_SELECTOR));
-    const candidates = turns.filter((turn) => {
-      const key = turn.getAttribute('data-turn-key') || turn.getAttribute('data-testid') || '';
-      return key.startsWith(TURN_PREFIX)
-        && Array.from(turn.querySelectorAll('[data-markdown-text-style="assistant-message"]')).length > 0;
+    const users = Array.from(document.querySelectorAll(USER_SELECTOR));
+    const lastUser = users.at(-1);
+    const lastUserTurn = lastUser?.closest(TURN_SELECTOR);
+    const lastUserIndex = lastUserTurn ? turns.indexOf(lastUserTurn) : -1;
+    if (lastUserIndex < 0) return { status: 'waiting_for_user_turn' };
+
+    const candidates = turns.slice(lastUserIndex + 1).filter((turn) => {
+      const key = turn.getAttribute('data-turn-key') || '';
+      return key.startsWith(TURN_PREFIX);
     });
     const turn = candidates.at(-1);
     if (!turn) return { status: 'waiting_for_assistant_turn' };
-    const turnKey = turn.getAttribute('data-turn-key') || turn.getAttribute('data-testid');
+    const turnKey = turn.getAttribute('data-turn-key');
     if (!turnKey || !turnKey.startsWith(TURN_PREFIX)) return { status: 'turn_identity_invalid' };
+
+    const stop = document.querySelector(STOP_SELECTOR);
+    const stopAvailable = Boolean(stop && stop.isConnected && !stop.disabled);
+    const inProgress = Array.from(turn.querySelectorAll(IN_PROGRESS_SELECTOR))
+      .some((node) => node.isConnected);
+    if (!inProgress && !stopAvailable) return { status: 'waiting_for_assistant_turn' };
+    if (!stopAvailable) return { status: 'waiting_for_stop' };
 
     // Stop and fixture insertion are one synchronous page action. The enclosing
     // turn and all user-owned markers remain untouched.
     stop.click();
-    const assistantSelector = '[data-chatgpt-selection-message-id]:has([data-markdown-text-style="assistant-message"])';
-    for (const existing of Array.from(turn.querySelectorAll(assistantSelector))) existing.remove();
+    for (const existing of Array.from(turn.querySelectorAll(ASSISTANT_SELECTOR))) existing.remove();
 
     const assistant = document.createElement('div');
     assistant.setAttribute('data-chatgpt-selection-message-id', 'smoke-message-stream-error');
@@ -132,7 +151,7 @@ export function buildInjectionExpression() {
     const banner = document.createElement('p');
     banner.textContent = ERROR_TEXT;
     const retry = document.createElement('button');
-    retry.setAttribute('data-testid', 'regenerate-thread-error-button');
+    retry.setAttribute('data-testid', RETRY_TESTID);
     retry.textContent = 'Retry';
     assistant.append(markdown, banner, retry);
     turn.appendChild(assistant);
@@ -142,12 +161,22 @@ export function buildInjectionExpression() {
       turn_key: turnKey,
       stop_clicked: true,
       retry_clicked: false,
-      preserved_turn_node: turn.getAttribute('data-turn-key') === turnKey
-        || turn.getAttribute('data-testid') === turnKey,
+      preserved_turn_node: turn.getAttribute('data-turn-key') === turnKey,
     };
   })()`;
 }
 
+
+function isOrchestratorPackProjectTarget(target) {
+  if (typeof target.url !== 'string') return false;
+  try {
+    const url = new URL(target.url);
+    return url.hostname === 'chatgpt.com'
+      && /\/g\/g-p-[^/]*orchestrator-pack\/project(?:\/|$)/u.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
 function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -160,16 +189,14 @@ export async function injectMessageStreamError({
   connect = openTarget,
   wait = sleep,
 } = {}) {
-  const baseline = await list(cdp);
-  const existingIds = new Set(baseline.flatMap((target) => typeof target.id === 'string' ? [target.id] : []));
   const deadline = Date.now() + timeoutMs;
-  let lastWaitingStatus = 'waiting_for_new_page';
+  let lastWaitingStatus = 'waiting_for_project_page';
 
   while (Date.now() < deadline) {
     const targets = await list(cdp);
     for (const target of targets) {
-      if (target.type !== 'page' || typeof target.id !== 'string' || existingIds.has(target.id)
-        || typeof target.url !== 'string' || !/^https?:\/\/(?:[^/]+\.)?chatgpt\.com\//u.test(target.url)
+      if (target.type !== 'page' || typeof target.id !== 'string'
+        || !isOrchestratorPackProjectTarget(target)
         || typeof target.webSocketDebuggerUrl !== 'string') continue;
       let channel;
       try {
