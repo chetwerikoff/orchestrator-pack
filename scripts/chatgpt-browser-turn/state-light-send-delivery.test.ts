@@ -1,3 +1,4 @@
+// @vitest-pre-topology-seconds 1
 import { describe, expect, it, vi } from 'vitest';
 
 import { __testSendDelivery } from './state-light-turn-base.ts';
