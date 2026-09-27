@@ -128,7 +128,7 @@ function spawnTsClaim(namespace: string, resultPath: string, startPath: string, 
     import { existsSync, writeFileSync } from 'node:fs';
     while (!existsSync(${JSON.stringify(startPath)})) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
     const result = acquireReviewStartClaim({ prNumber: 948, headSha: 'a'.repeat(40), surface: 'ts-overlap', namespace: ${JSON.stringify(namespace)}, reviewRuns: [] });
-    writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({ acquired: result.acquired, reason: result.reason ?? '' }));
+    writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({ acquired: result.acquired, reason: result.reason ?? '', detail: result.detail ?? '' }));
     while (!existsSync(${JSON.stringify(releasePath)})) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
   `;
   const controller = new AbortController();
@@ -697,10 +697,11 @@ describe('Issue #948 persisted TypeScript claim authority', () => {
       && readdirSync(barrier).filter((name) => name.endsWith('.observed')).length === 2);
     writeFileSync(path.join(barrier, 'go'), 'go\n');
     await waitForFiles(results);
-    const resultRows = results.map((fileName) => JSON.parse(readFileSync(fileName, 'utf8')) as { acquired: boolean; reason: string });
-    expect(resultRows.filter((row) => row.acquired)).toHaveLength(1);
-    expect(resultRows.filter((row) => !row.acquired)).toHaveLength(1);
-    expect(resultRows.find((row) => !row.acquired)?.reason).toBe('claimed');
+    const resultRows = results.map((fileName) => JSON.parse(readFileSync(fileName, 'utf8')) as { acquired: boolean; reason: string; detail?: string });
+    expect(resultRows.filter((row) => row.acquired), JSON.stringify(resultRows)).toHaveLength(1);
+    expect(resultRows.filter((row) => !row.acquired), JSON.stringify(resultRows)).toHaveLength(1);
+    const loser = resultRows.find((row) => !row.acquired);
+    expect(loser?.reason, loser?.detail || JSON.stringify(resultRows)).toBe('claimed');
     writeFileSync(release, 'done');
   }, 60_000);
 
