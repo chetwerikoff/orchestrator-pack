@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
-  enterExecutionRecoveryProductWallScope,
-  productStatusText,
   classifyProductWall,
+  createFreshIdentityRetention,
+  enterExecutionRecoveryProductWallScope,
+  observeFreshConversationUrl,
+  productStatusText,
+  promoteFreshCanonicalIdentity,
 } from './ui-adapter.ts';
 import { generateOwnedPromptMarker, wrapOwnedPromptPayload } from './owned-prompt-marker.ts';
 import {
@@ -118,5 +121,49 @@ describe('owned-turn product recovery confirmation', () => {
     } finally {
       leaveScope();
     }
+  });
+});
+
+
+describe('fresh project conversation identity', () => {
+  const projectUrl = 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/project';
+  const conversationUuid = '6ab8cb78-4e14-83ec-92ff-3e7b67611185';
+  const conversationUrl = 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/c/6ab8cb78-4e14-83ec-92ff-3e7b67611185';
+
+  it('retains only same-project observed conversation URLs', () => {
+    const retention = createFreshIdentityRetention();
+
+    observeFreshConversationUrl(retention, conversationUrl, projectUrl);
+    observeFreshConversationUrl(
+      retention,
+      'https://chatgpt.com/g/g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-other/c/6ab8cb78-4e14-83ec-92ff-3e7b67611185',
+      projectUrl,
+    );
+
+    expect(retention.observedConversationUrls).toEqual([conversationUrl]);
+  });
+
+  it('builds the canonical conversation URL from the project identity root, not /project', () => {
+    const userMessageId = 'user-message-2174';
+    const retention = createFreshIdentityRetention();
+    const network = {
+      messages: [{ id: userMessageId, role: 'user', conversationId: conversationUuid }],
+      serviceSubmittedUserIds: new Set([userMessageId]),
+    };
+
+    const canonical = promoteFreshCanonicalIdentity(
+      retention,
+      {
+        cdp: 'http://127.0.0.1:9222',
+        profile: 'test-profile',
+        projectUrl,
+        newChat: true,
+        timeoutMs: 30_000,
+      },
+      network as any,
+      userMessageId,
+    );
+
+    expect(canonical).toBe(conversationUrl);
   });
 });

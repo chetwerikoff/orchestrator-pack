@@ -159,13 +159,33 @@ export function createFreshIdentityRetention(
   return { observedConversationUrls: [], ...(retain ? { retain } : {}) };
 }
 
-function projectConversationPrefix(projectUrl: string): string {
-  return normalizeConversationUrl(projectUrl).replace(/\/+$/, '');
+export function projectConversationPrefix(projectUrl: string): string | undefined {
+  try {
+    const parsed = new URL(normalizeConversationUrl(projectUrl));
+    const match = /^\/g\/(g-p-[^/]+)/i.exec(parsed.pathname);
+    if (!match?.[1]) return undefined;
+    return normalizeConversationUrl(`${parsed.origin}/g/${match[1]}`);
+  } catch {
+    return undefined;
+  }
 }
 
 function conversationPrefixFromObservedUrl(normalizedUrl: string): string | undefined {
   const match = /^(.*)\/c\/[0-9a-f-]{36}$/i.exec(normalizedUrl);
   return match?.[1];
+}
+
+export function projectConversationUrlMatchesProject(
+  conversationUrl: string,
+  projectUrl: string,
+): boolean {
+  try {
+    const projectPrefix = projectConversationPrefix(projectUrl);
+    if (!projectPrefix) return false;
+    return conversationPrefixFromObservedUrl(normalizeConversationUrl(conversationUrl)) === projectPrefix;
+  } catch {
+    return false;
+  }
 }
 
 function buildConversationUrlFromPrefix(prefix: string, conversationUuid: string): string {
@@ -183,6 +203,7 @@ export function observeFreshConversationUrl(
     if (!normalized || (project && normalized === project)) return;
     if (!normalized.includes('/c/')) return;
     if (!conversationPrefixFromObservedUrl(normalized)) return;
+    if (projectUrl && !projectConversationUrlMatchesProject(normalized, projectUrl)) return;
     if (!retention.observedConversationUrls.includes(normalized)) {
       retention.observedConversationUrls.push(normalized);
     }
