@@ -147,7 +147,7 @@ contract, exit-code contract, or record version. A transport-only
 `stream_timeout`, `no_reply`, helper timeout, browser loss, missing envelope, or
 process exit is not equivalent evidence and grants no fresh-chat authority.
 
-## Mandatory 30-minute live-chat checkpoint
+## Mandatory 27-minute live-chat checkpoint
 
 This checkpoint belongs **only** to this execution workflow. It is not a
 universal Browser-GPT timeout and must not be promoted into the shared
@@ -158,10 +158,10 @@ For every submitted execution turn:
 
 1. start normal observation under the shared Browser-GPT turn/long-running
    contract;
-2. when an authoritative completed turn result arrives before 30 minutes,
+2. when an authoritative completed turn result arrives before 27 minutes,
    process it normally; an exact-owned `recovery_required` result with either
    reserved product cause enters the GitHub-first recovery section immediately;
-3. when 30 minutes elapse after submission without an authoritative completed
+3. when 27 minutes elapse after submission without an authoritative completed
    turn result, perform a **fresh identity-bound observation of the actual owned
    ChatGPT conversation** with the caller-retained binding:
 
@@ -237,12 +237,12 @@ Enter this section only after one of these two proofs for the exact owned turn:
 1. an authoritative immediate `turn-result/v1` reports `state:
    recovery_required`, `scope: conversation`, and cause
    `message_delivery_timed_out` or `product_network_error`; or
-2. the mandatory 30-minute checkpoint independently observes one of those two
+2. the mandatory 27-minute checkpoint independently observes one of those two
    product causes **and** the manager also has exact current owned-prompt proof,
    no attributable completed reply, and no active generation.
 
 Generic helper timeout, launcher timeout, `stream_timeout`, `no_reply`, browser
-loss, missing output/envelope, process death, page ambiguity, or elapsed 30
+loss, missing output/envelope, process death, page ambiguity, or elapsed 27
 minutes by itself **never** enters this section.
 
 After exact product-error proof, perform a fresh live GitHub reconciliation for
@@ -311,7 +311,7 @@ After a finished reply is recovered normally:
 - when independent manager verification already knows a concrete gap, prefer
   that concrete gap over making GPT rediscover it;
 - every continuation is another tracked turn and therefore receives the same
-  shared one-turn mechanics plus the same 30-minute execution checkpoint.
+  shared one-turn mechanics plus the same 27-minute execution checkpoint.
 
 Never create a second execution conversation as a convenience for continuation.
 The only post-send fresh-conversation exception is the exact product-error
@@ -322,7 +322,7 @@ GitHub-first recovery defined above.
 ```text
 submitted GPT turn
   -> authoritative recovery_required/conversation product cause
-       OR 30-minute exact checkpoint proof
+       OR 27-minute exact checkpoint proof
        -> inspect live GitHub first
        -> candidate implementation already complete
             -> no replacement implementation chat
@@ -335,7 +335,7 @@ submitted GPT turn
        -> continue / remaining work
             -> same conversation: "Доделай задачу" or concrete gap
             -> shared one-turn mechanics
-            -> execution-only 30-minute checkpoint
+            -> execution-only 27-minute checkpoint
             -> repeat
        -> claims complete
             -> manager independently resolves live Issue-bound PR/head and required CI
@@ -417,7 +417,7 @@ fix does not reopen pack review.
 Normal completion comes from the foreground runner/long-running-child result plus
 the authoritative GitHub source-comment census. Lost or unsettled observation
 uses the existing Browser-GPT pack-review recovery order, not the execute-Issue
-30-minute checkpoint and not a new review timeout:
+27-minute checkpoint and not a new review timeout:
 
 1. reconcile the exact GitHub source comment for the frozen run/source identity;
 2. read persisted state-light observation for that exact invocation;
@@ -541,7 +541,7 @@ guessing.
 Manager/helper/browser/runtime failure is not by itself an operator-facing
 terminal state. Normal internal recovery includes cases such as manager process
 exit when the exact session/turn binding survives, helper timeout/lost result
-with retained turn identity, a turn crossing the 30-minute checkpoint while the
+with retained turn identity, a turn crossing the 27-minute checkpoint while the
 bound conversation remains observable, temporary browser/CDP/runtime
 unavailability that preserves required identity, stale manager runtime state,
 partial implementation, red CI, or another concrete implementation gap.
@@ -596,7 +596,7 @@ This workflow does not add or redesign:
 - model/provider selection policy;
 - per-engine copies of this workflow.
 
-The execution checkpoint reuses the existing 30-minute workflow checkpoint and
+The execution checkpoint reuses the existing 27-minute workflow checkpoint and
 the diagnostic `browser-gpt-page-probe inspect` observation surface. The probe's
 product-cause projection is bounded, normalized, and authority-free; manager
 logic must combine it with exact owned-turn/reply/generation evidence and the

@@ -85,7 +85,7 @@ Do not ask the operator to re-accept their edit, open a second implementation,
 or restart/re-arm create-Issue review stages merely because the Issue changed.
 
 The execution runbook owns first-session initialization, same-conversation
-continuations, the execution-only 30-minute live-chat checkpoint, candidate-state
+continuations, the execution-only 27-minute live-chat checkpoint, candidate-state
 verification, the reusable manager-owned PR-review convergence phase, and
 manager-to-supervisor handoff. After the implementation conversation reaches a
 candidate-complete current PR/head with required CI green, the manager enters that
@@ -109,14 +109,14 @@ For execute-Issue recovery, the two reserved product causes are
 existing `turn-result/v1` axis as `state: recovery_required` with
 `scope: conversation`; they do not introduce a new turn state. An authoritative
 owned result with either cause enters the execution runbook's GitHub-first
-reconciliation immediately. At the existing 30-minute checkpoint, use
+reconciliation immediately. At the existing 27-minute checkpoint, use
 `browser-gpt-page-probe inspect` only as observation: its normalized
 `execution_recovery_cause` must be combined with exact owned-turn, reply, and
 generation evidence before it can authorize that same recovery branch. Elapsed
 time, missing output, helper silence, `stream_timeout`, or `no_reply` alone never
 authorize a replacement conversation.
 
-For execute-Issue recovery, the 30-minute checkpoint uses the exact durable
+For execute-Issue recovery, the 27-minute checkpoint uses the exact durable
 invocation identity already retained by the manager. Invoke the existing probe
 in identity-bound form with the exact retained CDP/profile/invocation plus the
 already-owned page locator:
@@ -137,7 +137,7 @@ without authoritative settlement preserves the exact run identity, attempt
 identity, invocation id, profile, CDP endpoint, and conversation binding and
 permits only continued observation of that same invocation.
 
-When the identity-bound 30-minute read says the exact owned turn is still
+When the identity-bound 27-minute read says the exact owned turn is still
 generating, send zero new user messages and continue bounded observation of the
 same invocation. The first post-checkpoint continuation starts one
 recovery-observation episode with the existing
