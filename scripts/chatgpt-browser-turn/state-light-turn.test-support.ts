@@ -106,10 +106,11 @@ import {
 } from './state-light-turn.test-fixtures.ts';
 import {
   ASSISTANT_TURN_ANCESTOR_XPATH,
+  ASSISTANT_MESSAGE_SELECTOR,
   COMPOSER_SELECTOR,
   CONTINUE_GENERATING_BUTTON_NAME,
+  MESSAGE_AUTHOR_ROLE_ATTR,
   MESSAGE_NODE_SELECTOR,
-  ASSISTANT_MESSAGE_SELECTOR,
   SEND_BUTTON_SELECTOR,
   matchesStopButtonSelector,
 } from './product-page-selectors.ts';
@@ -1822,10 +1823,13 @@ describe('Issue #1386 dead-turn transport evidence', () => {
     const legacy = collectionLocator(messages, generationInProgress === true);
     const elements = messages.map((message, index) => ({
       getAttribute: (name: string) => {
-        if (name === 'data-message-author-role') return message.role;
+        if (name === 'data-chatgpt-selection-message-id') return `${message.role}-${index}-12345678`;
         if (name === 'data-message-id') return `${message.role}-${index}-12345678`;
         return null;
       },
+      querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+        ? { getAttribute: () => message.role === 'user' ? 'user-message' : 'assistant-message' }
+        : null,
       querySelectorAll: () => [],
       innerText: message.text,
     }));

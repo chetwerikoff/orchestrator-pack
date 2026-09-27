@@ -128,6 +128,7 @@ import {
   ASSISTANT_MESSAGE_SELECTOR,
   ASSISTANT_TURN_ANCESTOR_XPATH,
   COMPOSER_SELECTOR,
+  MESSAGE_AUTHOR_ROLE_ATTR,
   matchesNewChatControlSelector,
   matchesStopButtonSelector,
   MESSAGE_NODE_SELECTOR,
@@ -2027,22 +2028,24 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
     function messageElements() {
       phase = currentPhase();
       const user = {
-        getAttribute: (name: string) => (name === 'data-message-author-role' ? 'user' : null),
+        getAttribute: (name: string) => (name === MESSAGE_AUTHOR_ROLE_ATTR ? 'user-message' : null),
         innerText: filled || `${TEST_OWNED_MARKER}\n\nPROMPT`,
         closest: (selector: string) => (
-          selector.includes('conversation-turn')
+          selector.includes('data-turn-key')
             ? { getAttribute: () => 'conversation-turn-1' }
             : null
         ),
         querySelectorAll: () => [],
-        querySelector: () => null,
+        querySelector: (selector: string) => (
+          selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]` ? { getAttribute: () => 'user-message' } : null
+        ),
       };
       const assistantInner = phase === 'banner' ? `${timeoutText}\n\nRetry` : 'working';
       const assistant = {
-        getAttribute: (name: string) => (name === 'data-message-author-role' ? 'assistant' : null),
+        getAttribute: (name: string) => (name === MESSAGE_AUTHOR_ROLE_ATTR ? 'assistant-message' : null),
         innerText: assistantInner,
         closest: (selector: string) => (
-          selector.includes('conversation-turn')
+          selector.includes('data-turn-key')
             ? { getAttribute: () => 'conversation-turn-2' }
             : null
         ),
@@ -2050,7 +2053,11 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
           selector === 'p' && phase === 'banner' ? [{ innerText: timeoutText }] : []
         ),
         querySelector: (selector: string) => (
-          selector.includes('regenerate-thread-error') && phase === 'banner' ? { innerText: 'Retry' } : null
+          selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+            ? { getAttribute: () => 'assistant-message' }
+            : selector.includes('regenerate-thread-error') && phase === 'banner'
+              ? { innerText: 'Retry' }
+              : null
         ),
       };
       return { user, assistant, phase };
@@ -2112,7 +2119,7 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
             const generating = snapshot.phase === 'generating';
             (globalThis as { document?: unknown }).document = {
               querySelectorAll: (sel: string) => {
-                if (sel.includes('conversation-turn-')) {
+                if (sel.includes('data-turn-key')) {
                   return [
                     { getAttribute: () => 'conversation-turn-1' },
                     { getAttribute: () => 'conversation-turn-2' },
@@ -2146,7 +2153,7 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
             text: snapshot.phase === 'banner' ? `${timeoutText}\n\nRetry` : 'working',
           }], snapshot.phase === 'generating');
         }
-        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH) {
           return scalarLocator({ count: vi.fn(async () => 0) });
         }
         if (matchesStopButtonSelector(selector) || selector.includes(STOP_BUTTON_TESTID)) {

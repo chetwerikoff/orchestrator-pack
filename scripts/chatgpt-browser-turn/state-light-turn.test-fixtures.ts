@@ -62,12 +62,18 @@ export function messageLocator(message: StateLightTestMessage, generating = fals
   return scalarLocator({
     count: vi.fn(async () => 1),
     getAttribute: vi.fn(async (name: string) => {
-      if (name === MESSAGE_AUTHOR_ROLE_ATTR) return message.role;
+      if (name === MESSAGE_AUTHOR_ROLE_ATTR) return message.role === 'user' ? 'user-message' : 'assistant-message';
       if (name === 'data-is-streaming') return generating ? 'true' : null;
       if (name === 'aria-busy') return null;
       return null;
     }),
     locator: vi.fn((selector: string) => {
+      if (selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`) {
+        return scalarLocator({
+          count: vi.fn(async () => 1),
+          getAttribute: vi.fn(async () => message.role === 'user' ? 'user-message' : 'assistant-message'),
+        });
+      }
       if (selector.startsWith('xpath=') || selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.includes('conversation-turn-')) {
         if (!message.finalActionInTurnContainer) return scalarLocator({ count: vi.fn(async () => 0) });
         return scalarLocator({ turnActionButtons: true, count: vi.fn(async () => 1) });
