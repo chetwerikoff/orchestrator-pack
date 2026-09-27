@@ -1881,10 +1881,17 @@ export async function runOrchestrationMailReconcileTick(
     const activeEpisodeKeys = new Set<string>();
     const activeEpisodeKeysByMessage = new Map<string, string>();
     let unresolvedActive = false;
+    const backoffSkippedMessageIds = new Set<string>();
     for (const row of activeRows) {
       const parsed = deliveryMessageFromInboxRow(row);
       if (!parsed.ok) {
         unresolvedActive = true;
+        continue;
+      }
+      const cacheKey = parsed.message.recipient + '\\u0000' + parsed.message.runId;
+      if (isStaleBacklog(parsed.message) && unresolvedTargets[cacheKey] !== undefined) {
+        unresolvedActive = true;
+        backoffSkippedMessageIds.add(parsed.message.id);
         continue;
       }
       const resolved = resolveWorker(parsed.message);
@@ -1926,6 +1933,8 @@ export async function runOrchestrationMailReconcileTick(
       let result: UnsentComposerSubmitResult;
       if (!found.ok) {
         result = deliveryNoEffect(found.reason, undefined, false);
+      } else if (backoffSkippedMessageIds.has(found.message.id)) {
+        result = deliveryNoEffect('orchestration_target_unresolved_backoff', undefined, false);
       } else {
         const resolved = resolveWorker(found.message);
         if (!resolved.ok) {
