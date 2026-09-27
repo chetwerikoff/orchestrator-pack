@@ -522,11 +522,19 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result.incidents).toContain('send_observation_deferred');
   });
 
-  function unrenderedOwnedMessagePage(prompt: string, reply: string, renderAfterReload: boolean) {
+  function unrenderedOwnedMessagePage(
+    prompt: string,
+    reply: string,
+    renderAfterReload: boolean,
+    ambiguousAssistant = false,
+  ) {
     const state = { sent: false, url: PROJECT_URL, reloads: 0, reads: 0 };
     const working = readyTurnObservationFrames(prompt, reply)[0]!;
     const final = readyTurnObservationFrames(prompt, reply).at(-1)!;
-    const assistantOnly = final.filter((message: StateLightTestMessage) => message.role === 'assistant');
+    const assistantOnly = [
+      ...(ambiguousAssistant ? [{ role: 'assistant' as const, text: 'EARLIER ANSWER' }] : []),
+      ...final.filter((message: StateLightTestMessage) => message.role === 'assistant'),
+    ];
     let active: StateLightTestMessage[] = [];
     let generating = false;
     const composer = scalarLocator({
@@ -590,11 +598,26 @@ describe('state-light fresh conversation collision recovery', () => {
     return { page, state };
   }
 
+  it('harvests the single finished reply of an owned fresh chat that renders no user message, without reload', async () => {
+    const prompt = 'PROMPT-FRESH-UNRENDERED';
+    const reply = 'FRESH-UNRENDERED-OK';
+    const output = join(stateDir, 'fresh-unrendered-owned-message.txt');
+    const { page, state } = unrenderedOwnedMessagePage(prompt, reply, false);
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output);
+
+    expect(outcome, JSON.stringify(outcome)).toMatchObject({ code: 0 });
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(state.reloads).toBe(0);
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+  });
+
   it('reloads the owned conversation once when a finished answer renders without the owned user message (#2197)', async () => {
     const prompt = 'PROMPT-UNRENDERED';
     const reply = 'UNRENDERED-OK';
     const output = join(stateDir, 'unrendered-owned-message.txt');
-    const { page, state } = unrenderedOwnedMessagePage(prompt, reply, true);
+    const { page, state } = unrenderedOwnedMessagePage(prompt, reply, true, true);
 
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const outcome = await runNewChatTurn(page, output);
@@ -609,7 +632,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const prompt = 'PROMPT-STILL-UNRENDERED';
     const reply = 'NEVER-HARVESTED';
     const output = join(stateDir, 'still-unrendered-owned-message.txt');
-    const { page, state } = unrenderedOwnedMessagePage(prompt, reply, false);
+    const { page, state } = unrenderedOwnedMessagePage(prompt, reply, false, true);
 
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const outcome = await runNewChatTurn(page, output, '1000');

@@ -2953,6 +2953,7 @@ async function runTurn(
     let deadEvidenceReads = 0;
     let markerlessFinishedReads = 0;
     let markerlessReloadUsed = false;
+    let freshMarkerlessReply = '';
     let sendObservationDeferredLogged = false;
     const updateHeartbeatForPoll = (decision: PageObservationDecision): void => {
       heartbeatDecision = decision;
@@ -3572,6 +3573,39 @@ async function runTurn(
         lastMarkerlessSnapshotSignature = signature;
       } else {
         lastMarkerlessSnapshotSignature = '';
+      }
+
+      // A fresh conversation this invocation created and still owns cannot hold
+      // anyone else's turn. When ChatGPT renders no user message there, the
+      // single finished assistant reply is ours without the marker; harvest it
+      // after two identical finished reads instead of reloading.
+      const freshTranscriptUsers = messages.filter((message) => message.role === 'user').length;
+      const freshTranscriptAssistants = messages.filter((message) => message.role === 'assistant');
+      if (
+        !markerVisible
+        && !forcedDecision
+        && config.newChat
+        && ownedConversationUrl
+        && !ownershipForfeited
+        && freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs)
+        && sendCount >= 1
+        && freshTranscriptUsers === 0
+        && freshTranscriptAssistants.length === 1
+        && ownedWindowCompletionReady
+        && pageTurnEvidence?.generationInProgress !== true
+      ) {
+        const reply = normalizeVisibleText(freshTranscriptAssistants[0]!.text);
+        if (reply && reply === freshMarkerlessReply) {
+          forcedDecision = { state: 'ready', reply };
+          uncertainCause = '';
+          completionReadySeen = true;
+          lastReadyReply = reply;
+          bestReadyReply = reply;
+          stableReads = 1;
+        }
+        freshMarkerlessReply = reply;
+      } else {
+        freshMarkerlessReply = '';
       }
 
       // Issue #2197: after a finished answer ChatGPT can leave the owned user
