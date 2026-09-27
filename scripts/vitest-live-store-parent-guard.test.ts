@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { repoRoot } from './lib/vitest-live-store-harness.mjs';
-import { isExternalJournalSnapshotOnlyChange } from './lib/vitest-live-store-parent-guard.mjs';
+import {
+  isExternalJournalSnapshotOnlyChange,
+  isRegisteredNestedStoreSnapshotOnlyChange,
+} from './lib/vitest-live-store-parent-guard.mjs';
 import { runProcess } from './kernel/subprocess.ts';
 
 const temporaryRoots: string[] = [];
@@ -97,6 +100,53 @@ describe('parent live-store guard', () => {
       'worker-message-dispatch-journal.json',
       'unrelated-live-store-leak.json',
     ])).toBe(false);
+  });
+
+  it('recognizes registered nested wake-store changes without treating an unknown sibling as clean', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-nested-store-'));
+    temporaryRoots.push(root);
+    const env = productionEnvironment(root);
+    expect(isRegisteredNestedStoreSnapshotOnlyChange(['worker-status-store.json'], env)).toBe(true);
+    expect(isRegisteredNestedStoreSnapshotOnlyChange(['worker-report-store.json'], env)).toBe(true);
+    expect(isRegisteredNestedStoreSnapshotOnlyChange(['pr-session-binding-cache.json'], env)).toBe(true);
+    expect(isRegisteredNestedStoreSnapshotOnlyChange(['unrelated-live-store-leak.json'], env)).toBe(false);
+    expect(isRegisteredNestedStoreSnapshotOnlyChange([
+      'worker-status-store.json',
+      'unrelated-live-store-leak.json',
+    ], env)).toBe(false);
+  });
+
+  it('ignores an observed external registered nested-store tick around a passing harness child', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-nested-runtime-'));
+    temporaryRoots.push(root);
+    const fixture = join(repoRoot, 'scripts', '.opk-parent-guard-nested-store-child.test.ts');
+    temporaryFiles.push(fixture);
+    const readyFile = join(root, 'child-live-store-guard-ready');
+    writeFileSync(
+      fixture,
+      [
+        "import { expect, it } from 'vitest';",
+        "import { writeFileSync } from 'node:fs';",
+        "it('passes', async () => {",
+        `  writeFileSync(${JSON.stringify(readyFile)}, 'ready\\n');`,
+        '  await new Promise((resolve) => setTimeout(resolve, 400));',
+        '  expect(true).toBe(true);',
+        '});',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const childEnvironment = productionEnvironment(join(root, 'child-production'));
+    const childPromise = runHarnessedVitest(fixture, childEnvironment);
+    await waitForFile(readyFile);
+    writeFileSync(
+      join(childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!, 'worker-status-store.json'),
+      '{"records":{}}\n',
+      'utf8',
+    );
+    const child = await childPromise;
+
+    expect(child.exitCode, child.stderr).toBe(0);
   });
 
   it('ignores an observed external wake-store tick around a passing harness child', async () => {
