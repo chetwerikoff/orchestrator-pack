@@ -5355,6 +5355,35 @@ describe('Issue #2209 recorded pre-lens lifecycle recovery', () => {
     "cycleId": "b946331c-6e41-4ef2-b089-a5d0b4894f5f",
     "stageAttemptId": "c065e0bb-bc85-42ba-af89-7a7ff0b3664b",
     "routed": true,
+    "attemptInvocations": [
+      {
+        "reviewerSlot": "01",
+        "reviewerOrdinal": 1,
+        "invocationId": "b0a0ac8a-8e36-4521-9579-1da435af7316",
+        "commentId": 5855354190,
+        "terminalClassification": "incident",
+        "sendCount": 1,
+        "retryClass": "retry-forbidden"
+      },
+      {
+        "reviewerSlot": "02",
+        "reviewerOrdinal": 2,
+        "invocationId": "451b7c8a-6560-4f21-b4d6-8048e753bee5",
+        "commentId": 5855350185,
+        "terminalClassification": "incident",
+        "sendCount": 1,
+        "retryClass": "retry-forbidden"
+      },
+      {
+        "reviewerSlot": "03",
+        "reviewerOrdinal": 3,
+        "invocationId": "17b842a1-692d-47f2-8b08-d91a5a3204d0",
+        "commentId": 5855348434,
+        "terminalClassification": "incident",
+        "sendCount": 1,
+        "retryClass": "retry-forbidden"
+      }
+    ],
     "cycleComment": {
       "id": 5855160714,
       "body": "<!-- opk-create-issue-journal:create-issue-review-cycle/v1:b946331c-6e41-4ef2-b089-a5d0b4894f5f -->\n```json\n{\n  \"cycle-id\": \"b946331c-6e41-4ef2-b089-a5d0b4894f5f\",\n  \"event-key\": \"b946331c-6e41-4ef2-b089-a5d0b4894f5f\",\n  \"predecessor-cycle-id\": \"none\",\n  \"public-actor\": \"opencode-flow-manager\",\n  \"routed-lane\": {\n    \"schema\": \"review-lane-routing/v1\",\n    \"routingPolicyIdentity\": \"review-lane-routing/v1\",\n    \"lane\": \"disputed\",\n    \"topology\": \"fixed/v1\",\n    \"policyVersion\": \"review-lane-routing/v1\",\n    \"reviewerCardinality\": 3,\n    \"cardinalityConfigIdentity\": \"d871febc188947e33f7c5f9bd961fa0d93f1b47e92e68a176be19850a558ad6d\",\n    \"possibleSlots\": [\n      \"01\",\n      \"02\",\n      \"03\"\n    ],\n    \"initiallyActivatedSlots\": [\n      \"01\",\n      \"02\",\n      \"03\"\n    ],\n    \"conditionalActivationRule\": null,\n    \"sourceRevision\": \"r02\",\n    \"stageAttemptId\": \"c065e0bb-bc85-42ba-af89-7a7ff0b3664b\",\n    \"laneInputIdentity\": \"r02:7e8037eda2478d1e0650839415ee8b4a6bde19ab73d593a29833157cfeb827ce\",\n    \"classifierIdentity\": \"create-issue-stage-topology-plan/v1\",\n    \"permittedLaneOverride\": null\n  },\n  \"schema\": \"create-issue-review-cycle/v1\",\n  \"source-revision\": \"r02\",\n  \"tier\": \"T3\"\n}\n```"
@@ -5595,6 +5624,64 @@ describe('Issue #2209 recorded pre-lens lifecycle recovery', () => {
     ]);
 
     const { input, source } = prepareRecordedCase(recorded);
+    const recordedAttempt = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+    expect(recorded.attemptInvocations).toEqual([
+      {
+        reviewerSlot: '01',
+        reviewerOrdinal: 1,
+        invocationId: 'b0a0ac8a-8e36-4521-9579-1da435af7316',
+        commentId: 5855354190,
+        terminalClassification: 'incident',
+        sendCount: 1,
+        retryClass: 'retry-forbidden',
+      },
+      {
+        reviewerSlot: '02',
+        reviewerOrdinal: 2,
+        invocationId: '451b7c8a-6560-4f21-b4d6-8048e753bee5',
+        commentId: 5855350185,
+        terminalClassification: 'incident',
+        sendCount: 1,
+        retryClass: 'retry-forbidden',
+      },
+      {
+        reviewerSlot: '03',
+        reviewerOrdinal: 3,
+        invocationId: '17b842a1-692d-47f2-8b08-d91a5a3204d0',
+        commentId: 5855348434,
+        terminalClassification: 'incident',
+        sendCount: 1,
+        retryClass: 'retry-forbidden',
+      },
+    ]);
+    const invocationById = new Map(
+      (recordedAttempt.invocations as Array<Record<string, any>>)
+        .map((invocation) => [String(invocation.invocationId), invocation] as const),
+    );
+    recordedAttempt.invocations = recorded.attemptInvocations.map((fact) => {
+      const invocation = { ...(invocationById.get(fact.invocationId) ?? {}) };
+      delete invocation.reviewerSource;
+      delete invocation.terminalResultIdentity;
+      delete invocation.terminalEnvelopePath;
+      delete invocation.capturePath;
+      delete invocation.captureIdentity;
+      delete invocation.captureByteLength;
+      delete invocation.captureSha256;
+      delete invocation.rawFindingCount;
+      delete invocation.artifactAuthority;
+      return {
+        ...invocation,
+        reviewerSlot: fact.reviewerSlot,
+        reviewerOrdinal: fact.reviewerOrdinal,
+        invocationId: fact.invocationId,
+        terminalClassification: fact.terminalClassification,
+        sendCount: fact.sendCount,
+        retryClass: fact.retryClass,
+      };
+    });
+    delete recordedAttempt.reviewLane;
+    writeFileSync(input.reviewEvidencePath, JSON.stringify(recordedAttempt, null, 2) + '\n');
+
     const canonicalProduceArgv = [
       'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
       'produce-artifacts',
