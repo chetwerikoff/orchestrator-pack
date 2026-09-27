@@ -85,7 +85,7 @@ Do not ask the operator to re-accept their edit, open a second implementation,
 or restart/re-arm create-Issue review stages merely because the Issue changed.
 
 The execution runbook owns first-session initialization, same-conversation
-continuations, the execution-only 27-minute live-chat checkpoint, candidate-state
+continuations, the execution-only 30-minute live-chat checkpoint, candidate-state
 verification, the reusable manager-owned PR-review convergence phase, and
 manager-to-supervisor handoff. After the implementation conversation reaches a
 candidate-complete current PR/head with required CI green, the manager enters that
