@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { repoRoot } from './lib/vitest-live-store-harness.mjs';
 import {
   isExternalJournalSnapshotOnlyChange,
-  isRegisteredNestedStoreSnapshotOnlyChange,
+  isExternalWakeSupervisorSnapshotOnlyChange,
 } from './lib/vitest-live-store-parent-guard.mjs';
 import { runProcess } from './kernel/subprocess.ts';
 
@@ -102,24 +102,27 @@ describe('parent live-store guard', () => {
     ])).toBe(false);
   });
 
-  it('recognizes registered nested wake-store changes without treating an unknown sibling as clean', () => {
-    const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-nested-store-'));
-    temporaryRoots.push(root);
-    const env = productionEnvironment(root);
-    expect(isRegisteredNestedStoreSnapshotOnlyChange(['worker-status-store.json'], env)).toBe(true);
-    expect(isRegisteredNestedStoreSnapshotOnlyChange(['worker-report-store.json'], env)).toBe(true);
-    expect(isRegisteredNestedStoreSnapshotOnlyChange(['pr-session-binding-cache.json'], env)).toBe(true);
-    expect(isRegisteredNestedStoreSnapshotOnlyChange(['unrelated-live-store-leak.json'], env)).toBe(false);
-    expect(isRegisteredNestedStoreSnapshotOnlyChange([
-      'worker-status-store.json',
+  it('settles only exact known external wake-supervisor snapshot paths', () => {
+    expect(isExternalWakeSupervisorSnapshotOnlyChange([
+      'typescript-supervisor-status.json',
+    ])).toBe(true);
+    expect(isExternalWakeSupervisorSnapshotOnlyChange([
+      'worker-message-dispatch-journal.json',
+      'typescript-supervisor-status.json',
+    ])).toBe(true);
+    expect(isExternalWakeSupervisorSnapshotOnlyChange([
       'unrelated-live-store-leak.json',
-    ], env)).toBe(false);
+    ])).toBe(false);
+    expect(isExternalWakeSupervisorSnapshotOnlyChange([
+      'typescript-supervisor-status.json',
+      'unrelated-live-store-leak.json',
+    ])).toBe(false);
   });
 
-  it('ignores an observed external registered nested-store tick around a passing harness child', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-nested-runtime-'));
+  it('ignores an atomic external supervisor-status update around a passing harness child', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-supervisor-status-'));
     temporaryRoots.push(root);
-    const fixture = join(repoRoot, 'scripts', '.opk-parent-guard-nested-store-child.test.ts');
+    const fixture = join(repoRoot, 'scripts', '.opk-parent-guard-supervisor-status-child.test.ts');
     temporaryFiles.push(fixture);
     const readyFile = join(root, 'child-live-store-guard-ready');
     writeFileSync(
@@ -139,11 +142,14 @@ describe('parent live-store guard', () => {
     const childEnvironment = productionEnvironment(join(root, 'child-production'));
     const childPromise = runHarnessedVitest(fixture, childEnvironment);
     await waitForFile(readyFile);
-    writeFileSync(
-      join(childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!, 'worker-status-store.json'),
-      '{"records":{}}\n',
-      'utf8',
+    const wakeRoot = childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!;
+    const status = join(wakeRoot, 'typescript-supervisor-status.json');
+    const temporary = join(
+      wakeRoot,
+      '.typescript-supervisor-status.json.1234.00000000-0000-4000-8000-000000000000.tmp',
     );
+    writeFileSync(temporary, '{"restartState":"running"}\n', 'utf8');
+    renameSync(temporary, status);
     const child = await childPromise;
 
     expect(child.exitCode, child.stderr).toBe(0);
