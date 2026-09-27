@@ -5557,7 +5557,8 @@ describe('Issue #2209 recorded pre-lens lifecycle recovery', () => {
       expect(source.createdIssueComments).toHaveLength(0);
       const stored = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as Record<string, any>;
       for (const [index, published] of comments.entries()) {
-        const slot = String(index + 1).padStart(2, '0');
+        const slot = /^source-slot:\\s*([0-9]+)$/im.exec(String(published.body))?.[1]
+          ?? String(index + 1).padStart(2, '0');
         const capturePath = String(stored.invocations[index]?.capturePath ?? '');
         expect(capturePath).not.toBe('');
         expect(readFileSync(capturePath, 'utf8')).toBe(String(published.body));
