@@ -2,13 +2,16 @@ import type { SemanticNode } from '../semantic.ts';
 import type { DispatchObservationTestControls } from '../dispatch-observation.ts';
 import {
   ASSISTANT_MESSAGE_SELECTOR,
+  ASSISTANT_MESSAGE_STYLE,
   COMPOSER_SELECTOR,
   CONTINUE_GENERATING_BUTTON_NAME,
   MESSAGE_AUTHOR_ROLE_ATTR,
+  MESSAGE_ID_ATTR,
   MESSAGE_NODE_SELECTOR,
   SEND_BUTTON_SELECTOR,
   STOP_BUTTON_TESTID,
   USER_MESSAGE_SELECTOR,
+  USER_MESSAGE_STYLE,
 } from '../product-page-selectors.ts';
 
 export interface FakeAssistantSpec {
@@ -116,14 +119,19 @@ function messageLocator(
       if (textSequence && sequenceIndex < textSequence.length - 1) sequenceIndex++;
     },
     getAttribute: async (name: string) => {
-      if (name === MESSAGE_AUTHOR_ROLE_ATTR) return role;
-      if (name === 'data-message-id') return id;
+      if (name === MESSAGE_AUTHOR_ROLE_ATTR) return role === 'user' ? USER_MESSAGE_STYLE : ASSISTANT_MESSAGE_STYLE;
+      if (name === MESSAGE_ID_ATTR || name === 'data-message-id') return id;
       if (name === 'data-parent-message-id') return parent ?? null;
       if (name === 'data-is-streaming') return streaming ? 'true' : 'false';
       if (name === 'aria-busy') return streaming ? 'true' : 'false';
       return null;
     },
-    locator: () => ({ count: async () => 0, first: () => ({ getAttribute: async () => null }) }),
+    locator: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+      ? {
+        count: async () => 1,
+        first: () => ({ getAttribute: async (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR ? (role === 'user' ? USER_MESSAGE_STYLE : ASSISTANT_MESSAGE_STYLE) : null }),
+      }
+      : { count: async () => 0, first: () => ({ getAttribute: async () => null }) },
     first: () => emptyLocator(),
     count: async () => 1,
     innerText: async () => currentText(),

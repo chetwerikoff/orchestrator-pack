@@ -70,6 +70,7 @@ import {
   transitionStateLightTurnObservation,
 } from './state-light-turn-observation.ts';
 import {
+  ASSISTANT_MESSAGE_STYLE,
   ASSISTANT_TURN_ACTION_SELECTOR,
   ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
   classifyProductWall,
@@ -77,6 +78,8 @@ import {
   CONVERSATION_TURN_SECTION_SELECTOR,
   loadChromium,
   MESSAGE_AUTHOR_ROLE_ATTR,
+  MESSAGE_UNIT_KEY_ATTR,
+  resolveMessageRoleStyle,
   MESSAGE_NODE_SELECTOR,
   normalizeConversationUrl,
   productStatusText,
@@ -85,6 +88,7 @@ import {
   readAssistantTurnCompletionReady,
   SEND_BUTTON_SELECTOR,
   stripUiCollapseAffixes,
+  USER_MESSAGE_STYLE,
   verifyProfile,
   BrowserOperationTimeoutError,
   createTurnOperationBudget,
@@ -488,6 +492,9 @@ export async function revalidateKeyedHarvest(
     const observed = await boundedBrowserRead(
       nodes.evaluateAll((elements: Element[], args: {
         roleAttribute: string;
+        userMessageStyle: string;
+        unitKeyAttribute: string;
+        assistantMessageStyle: string;
         assistantKey: string;
         turnSelector: string;
         inProgressSelector: string;
@@ -495,7 +502,7 @@ export async function revalidateKeyedHarvest(
       }) => {
         const valid = (value: string | null): value is string => Boolean(value && value.length >= 8);
         const canonicalKey = (element: Element): string | undefined => {
-          for (const attribute of ['data-message-id', 'data-turn-id']) {
+          for (const attribute of ['data-chatgpt-selection-message-id', 'data-message-id', 'data-turn-id', 'data-chatgpt-search-message-ids']) {
             const direct = element.getAttribute(attribute);
             if (valid(direct)) return `${attribute}:${direct}`;
             const descendant = Array.from(element.querySelectorAll(`[${attribute}]`))
@@ -509,8 +516,13 @@ export async function revalidateKeyedHarvest(
         for (let domIndex = 0; domIndex < elements.length; domIndex++) {
           const element = elements[domIndex]!;
           try {
+            const rawStyle = element.querySelector(`[${args.roleAttribute}]`)?.getAttribute(args.roleAttribute);
+            const style = rawStyle === args.userMessageStyle || rawStyle === args.assistantMessageStyle
+              ? rawStyle
+              : (element.getAttribute?.(args.unitKeyAttribute) ?? '').endsWith(':user') ? args.userMessageStyle : undefined;
+            const role = style === args.userMessageStyle ? 'user' : style === args.assistantMessageStyle ? 'assistant' : '';
             rows.push({
-              role: element.getAttribute(args.roleAttribute) ?? '',
+              role,
               text: (element as HTMLElement).innerText,
               key: canonicalKey(element),
               domIndex,
@@ -530,6 +542,9 @@ export async function revalidateKeyedHarvest(
         return { rows, assistantFinal };
       }, {
         roleAttribute: MESSAGE_AUTHOR_ROLE_ATTR,
+        userMessageStyle: USER_MESSAGE_STYLE,
+        unitKeyAttribute: MESSAGE_UNIT_KEY_ATTR,
+        assistantMessageStyle: ASSISTANT_MESSAGE_STYLE,
         assistantKey: expected.assistantKey,
         turnSelector: CONVERSATION_TURN_SECTION_SELECTOR,
         inProgressSelector: ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
@@ -1390,11 +1405,14 @@ export async function readPageObservation(
       const observed = await boundedBrowserRead(
         evaluateAll.call(nodes, (elements: Element[], args: {
           roleAttribute: string;
+          userMessageStyle: string;
+          unitKeyAttribute: string;
+          assistantMessageStyle: string;
           generationSelector: string;
         }) => {
           const valid = (value: string | null): value is string => Boolean(value && value.length >= 8);
           const canonicalKey = (element: Element): string | undefined => {
-            for (const attribute of ['data-message-id', 'data-turn-id']) {
+            for (const attribute of ['data-chatgpt-selection-message-id', 'data-message-id', 'data-turn-id', 'data-chatgpt-search-message-ids']) {
               const direct = element.getAttribute(attribute);
               if (valid(direct)) return `${attribute}:${direct}`;
               const descendants = Array.from(element.querySelectorAll(`[${attribute}]`));
@@ -1410,7 +1428,11 @@ export async function readPageObservation(
           for (let domIndex = 0; domIndex < elements.length; domIndex++) {
             const element = elements[domIndex]!;
             try {
-              const role = element.getAttribute(args.roleAttribute) ?? '';
+              const rawStyle = element.querySelector(`[${args.roleAttribute}]`)?.getAttribute(args.roleAttribute);
+              const style = rawStyle === args.userMessageStyle || rawStyle === args.assistantMessageStyle
+                ? rawStyle
+                : (element.getAttribute?.(args.unitKeyAttribute) ?? '').endsWith(':user') ? args.userMessageStyle : undefined;
+              const role = style === args.userMessageStyle ? 'user' : style === args.assistantMessageStyle ? 'assistant' : '';
               if (role === 'user' || role === 'assistant') {
                 observedMessageNodes += 1;
                 if (role === 'assistant') observedAssistantNodes += 1;
@@ -1435,6 +1457,9 @@ export async function readPageObservation(
           };
         }, {
           roleAttribute: MESSAGE_AUTHOR_ROLE_ATTR,
+          userMessageStyle: USER_MESSAGE_STYLE,
+          unitKeyAttribute: MESSAGE_UNIT_KEY_ATTR,
+          assistantMessageStyle: ASSISTANT_MESSAGE_STYLE,
           generationSelector: BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR,
         }),
         snapshotWaitMs,
@@ -1488,7 +1513,21 @@ export async function readPageObservation(
       .slice(0, MESSAGE_NODE_READ_ATTEMPTS);
     for (let domIndex = 0; domIndex < count; domIndex++) {
       const node = nodes.nth(domIndex);
-      const role = await readLocatorAttribute(node, MESSAGE_AUTHOR_ROLE_ATTR, roleTimeouts);
+      let roleStyle = await readLocatorAttribute(node, MESSAGE_AUTHOR_ROLE_ATTR, roleTimeouts);
+      if (!roleStyle && typeof node.locator === 'function') {
+        roleStyle = await readLocatorAttribute(
+          node.locator(`[${MESSAGE_AUTHOR_ROLE_ATTR}]`).first(),
+          MESSAGE_AUTHOR_ROLE_ATTR,
+          roleTimeouts,
+        );
+      }
+      if (roleStyle !== USER_MESSAGE_STYLE && roleStyle !== ASSISTANT_MESSAGE_STYLE) {
+        roleStyle = resolveMessageRoleStyle(
+          roleStyle,
+          await readLocatorAttribute(node, MESSAGE_UNIT_KEY_ATTR, roleTimeouts),
+        ) ?? null;
+      }
+      const role = roleStyle === USER_MESSAGE_STYLE ? 'user' : roleStyle === ASSISTANT_MESSAGE_STYLE ? 'assistant' : undefined;
       if (role !== 'user' && role !== 'assistant') {
         transcriptIncomplete = true;
         continue;

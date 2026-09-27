@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
-  enterExecutionRecoveryProductWallScope,
-  productStatusText,
   classifyProductWall,
+  createFreshIdentityRetention,
+  enterExecutionRecoveryProductWallScope,
+  observeFreshConversationUrl,
+  productStatusText,
+  promoteFreshCanonicalIdentity,
 } from './ui-adapter.ts';
 import { generateOwnedPromptMarker, wrapOwnedPromptPayload } from './owned-prompt-marker.ts';
 import {
@@ -20,26 +23,33 @@ const TIMEOUT_TEXT = 'Message delivery timed out. Please try again.';
 function recoveryPage(options: { generationActive: boolean; laterUser?: boolean; statusReadDelayMs?: number }) {
   const marker = generateOwnedPromptMarker(() => new Uint8Array(16).fill(0x11));
   const turns = ['conversation-turn-1', 'conversation-turn-2'];
-  const section = (key: string) => ({ getAttribute: (name: string) => name === 'data-testid' ? key : null });
+  const section = (key: string) => ({ getAttribute: (name: string) => name === 'data-turn-key' ? key : null });
   const userTurn = section(turns[0]!);
   const assistantTurn = section(turns[1]!);
   const retry = { innerText: 'Retry' };
+  const roleMarker = (style: string) => ({
+    getAttribute: (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR ? style : null,
+  });
   const user = {
-    getAttribute: (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR ? 'user' : null,
+    getAttribute: () => null,
     innerText: wrapOwnedPromptPayload(marker, 'PROMPT'),
     closest: () => userTurn,
+    querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]` ? roleMarker('user-message') : null,
   };
   const assistant = {
-    getAttribute: (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR ? 'assistant' : null,
+    getAttribute: () => null,
     innerText: `${TIMEOUT_TEXT}\nRetry`,
     closest: () => assistantTurn,
     querySelectorAll: (selector: string) => selector === 'p' ? [{ innerText: TIMEOUT_TEXT }] : [],
-    querySelector: (selector: string) => selector === REGENERATE_THREAD_ERROR_BUTTON_SELECTOR ? retry : null,
+    querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+      ? roleMarker('assistant-message')
+      : selector === REGENERATE_THREAD_ERROR_BUTTON_SELECTOR ? retry : null,
   };
   const elements = options.laterUser ? [user, assistant, {
-    getAttribute: (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR ? 'user' : null,
+    getAttribute: () => null,
     innerText: 'a newer user turn',
     closest: () => section('conversation-turn-3'),
+    querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]` ? roleMarker('user-message') : null,
   }] : [user, assistant];
   let reads = 0;
   const page = {
@@ -111,5 +121,49 @@ describe('owned-turn product recovery confirmation', () => {
     } finally {
       leaveScope();
     }
+  });
+});
+
+
+describe('fresh project conversation identity', () => {
+  const projectUrl = 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/project';
+  const conversationUuid = '6ab8cb78-4e14-83ec-92ff-3e7b67611185';
+  const conversationUrl = 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/c/6ab8cb78-4e14-83ec-92ff-3e7b67611185';
+
+  it('retains only same-project observed conversation URLs', () => {
+    const retention = createFreshIdentityRetention();
+
+    observeFreshConversationUrl(retention, conversationUrl, projectUrl);
+    observeFreshConversationUrl(
+      retention,
+      'https://chatgpt.com/g/g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-other/c/6ab8cb78-4e14-83ec-92ff-3e7b67611185',
+      projectUrl,
+    );
+
+    expect(retention.observedConversationUrls).toEqual([conversationUrl]);
+  });
+
+  it('builds the canonical conversation URL from the project identity root, not /project', () => {
+    const userMessageId = 'user-message-2174';
+    const retention = createFreshIdentityRetention();
+    const network = {
+      messages: [{ id: userMessageId, role: 'user', conversationId: conversationUuid }],
+      serviceSubmittedUserIds: new Set([userMessageId]),
+    };
+
+    const canonical = promoteFreshCanonicalIdentity(
+      retention,
+      {
+        cdp: 'http://127.0.0.1:9222',
+        profile: 'test-profile',
+        projectUrl,
+        newChat: true,
+        timeoutMs: 30_000,
+      },
+      network as any,
+      userMessageId,
+    );
+
+    expect(canonical).toBe(conversationUrl);
   });
 });

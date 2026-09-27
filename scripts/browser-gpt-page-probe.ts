@@ -6,11 +6,17 @@ import { pathToFileURL } from 'node:url';
 import { isSupportedChatGptConversationUrl } from './chatgpt-browser-turn/state-light-cancellation.ts';
 import {
   ASSISTANT_MESSAGE_SELECTOR,
+  ASSISTANT_MESSAGE_STYLE,
   ASSISTANT_TURN_ACTION_SELECTOR,
   ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
   CONVERSATION_TURN_SECTION_SELECTOR,
+  MESSAGE_AUTHOR_ROLE_ATTR,
+  MESSAGE_ID_ATTR,
+  MESSAGE_NODE_SELECTOR,
+  MESSAGE_UNIT_KEY_ATTR,
   PRODUCT_STATUS_PROBE_SELECTORS,
   REGENERATE_THREAD_ERROR_BUTTON_SELECTOR,
+  USER_MESSAGE_STYLE,
 } from './chatgpt-browser-turn/product-page-selectors.ts';
 import {
   extractOwnedPromptMarkerToken,
@@ -58,10 +64,10 @@ const SHA256_RE = /^[0-9a-f]{64}$/;
 const TARGET_ID_RE = /^[A-Za-z0-9._:-]{1,256}$/;
 const MESSAGE_ID_RE = /^[^\u0000-\u001f\u007f]{1,512}$/u;
 const ALLOWLISTED_ATTRIBUTES = [
-  'data-message-id',
-  'data-message-author-role',
+  MESSAGE_ID_ATTR,
+  MESSAGE_AUTHOR_ROLE_ATTR,
+  'data-turn-key',
   'data-testid',
-  'data-turn-start-message',
   'aria-busy',
   'data-is-streaming',
   'data-state',
@@ -473,9 +479,10 @@ function validateNodeSummary(value: unknown, snapshot: {
     return malformedSurface();
   }
   const attributes = validateAttributes(value.attributes);
-  if (attributes['data-message-author-role'] !== value.role
+  const roleStyle = value.role === 'user' ? USER_MESSAGE_STYLE : ASSISTANT_MESSAGE_STYLE;
+  if (attributes[MESSAGE_AUTHOR_ROLE_ATTR] !== roleStyle
     || (value.message_id !== null
-      && attributes['data-message-id'] !== boundedCodePoints(value.message_id))) {
+      && attributes[MESSAGE_ID_ATTR] !== boundedCodePoints(value.message_id))) {
     return malformedSurface();
   }
   return {
@@ -1254,15 +1261,18 @@ function inspectionExpression(): string {
       const hash = await crypto.subtle.digest('SHA-256', bytes);
       return { byte_length: bytes.byteLength, code_point_length: points(value).length, sha256: Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, '0')).join(''), head: head(value), tail: tail(value) };
     };
-    const raw = Array.from(document.querySelectorAll('[data-message-author-role]'));
+    const raw = Array.from(document.querySelectorAll(${JSON.stringify(MESSAGE_NODE_SELECTOR)}));
     const roleCounts = { user: 0, assistant: 0 };
     const observed = [];
     for (let documentOrdinal = 0; documentOrdinal < raw.length; documentOrdinal++) {
       const node = raw[documentOrdinal];
-      const role = node.getAttribute('data-message-author-role');
-      if (role !== 'user' && role !== 'assistant') continue;
+      const styleNode = node.querySelector(${JSON.stringify(`[${MESSAGE_AUTHOR_ROLE_ATTR}]`)});
+      const rawStyle = styleNode?.getAttribute(${JSON.stringify(MESSAGE_AUTHOR_ROLE_ATTR)});
+      const style = rawStyle === ${JSON.stringify(USER_MESSAGE_STYLE)} || rawStyle === ${JSON.stringify(ASSISTANT_MESSAGE_STYLE)} ? rawStyle : String(node.getAttribute(${JSON.stringify(MESSAGE_UNIT_KEY_ATTR)}) || '').endsWith(':user') ? ${JSON.stringify(USER_MESSAGE_STYLE)} : undefined;
+      const role = style === ${JSON.stringify(USER_MESSAGE_STYLE)} ? 'user' : style === ${JSON.stringify(ASSISTANT_MESSAGE_STYLE)} ? 'assistant' : undefined;
+      if (!role) continue;
       const ordinal = roleCounts[role]++;
-      observed.push({ node, documentOrdinal, role, ordinal, rawMessageId: node.getAttribute('data-message-id') });
+      observed.push({ node, styleNode, style, documentOrdinal, role, ordinal, rawMessageId: node.getAttribute(${JSON.stringify(MESSAGE_ID_ATTR)}) });
     }
     if (observed.length === 0) return { status: 'surface_unknown', reason: 'message_nodes_missing', page_url: location.href, ready_state: document.readyState };
     const messageIdCounts = new Map();
@@ -1277,7 +1287,9 @@ function inspectionExpression(): string {
       if (innerText === null || textContent === null) return { status: 'surface_unknown', reason: 'text_representation_unavailable', page_url: location.href, ready_state: document.readyState };
       const attrs = {};
       for (const name of ATTRS) {
-        const value = entry.node.getAttribute(name);
+        const value = name === ${JSON.stringify(MESSAGE_AUTHOR_ROLE_ATTR)}
+          ? entry.style
+          : entry.node.getAttribute(name);
         if (typeof value === 'string') attrs[name] = head(value);
       }
       const unique = Boolean(entry.rawMessageId && messageIdCounts.get(entry.rawMessageId) === 1);
@@ -1293,7 +1305,7 @@ function inspectionExpression(): string {
       });
       {
         let turnKey;
-        try { turnKey = entry.node.closest(TURN_SELECTOR)?.getAttribute('data-testid') || undefined; } catch { recoveryComplete = false; }
+        try { turnKey = entry.node.closest(TURN_SELECTOR)?.getAttribute('data-turn-key') || undefined; } catch { recoveryComplete = false; }
         const boundedText = points(innerText).slice(0, MAX_RECOVERY_TEXT).join('');
         recoveryMessages.push({ role: entry.role, text: boundedText, ...(turnKey ? { turn_key: turnKey } : {}) });
       }
@@ -1323,7 +1335,7 @@ function inspectionExpression(): string {
           continue;
         }
         let turnKey;
-        try { turnKey = surface.closest(TURN_SELECTOR)?.getAttribute('data-testid') || undefined; } catch { recoveryComplete = false; }
+        try { turnKey = surface.closest(TURN_SELECTOR)?.getAttribute('data-turn-key') || undefined; } catch { recoveryComplete = false; }
         productSurfaces.push({ text, ...(turnKey ? { turn_key: turnKey } : {}) });
       }
     } catch {
@@ -1332,7 +1344,7 @@ function inspectionExpression(): string {
     const conversationTurnKeys = [];
     try {
       for (const section of Array.from(document.querySelectorAll(TURN_SELECTOR))) {
-        const turnKey = section.getAttribute('data-testid');
+        const turnKey = section.getAttribute('data-turn-key');
         if (typeof turnKey === 'string' && turnKey) conversationTurnKeys.push(turnKey);
       }
       if (conversationTurnKeys.length > MAX_RECOVERY_TURNS) {
@@ -1388,7 +1400,7 @@ function inspectionExpression(): string {
         let hasNonBannerContent = false;
         try { hasNonBannerContent = hasNonBannerVisibleText(assistant); } catch { recoveryComplete = false; }
         let turnKey;
-        try { turnKey = assistant.closest(TURN_SELECTOR)?.getAttribute('data-testid') || undefined; } catch { recoveryComplete = false; }
+        try { turnKey = assistant.closest(TURN_SELECTOR)?.getAttribute('data-turn-key') || undefined; } catch { recoveryComplete = false; }
         bannerCandidates.push({
           paragraph_texts: paragraphTexts,
           retry_control_present: retryControlPresent,
@@ -1435,13 +1447,15 @@ export const LIVENESS_EXPRESSION = `(() => ({
 }))()`;
 
 export const HARVEST_EXPRESSION = `(async () => {
-  const raw = Array.from(document.querySelectorAll('[data-message-author-role]'));
+  const raw = Array.from(document.querySelectorAll(${JSON.stringify(MESSAGE_NODE_SELECTOR)}));
   const roleCounts = { user: 0, assistant: 0 };
   const rows = [];
   for (let documentOrdinal = 0; documentOrdinal < raw.length; documentOrdinal++) {
     const node = raw[documentOrdinal];
-    const role = node.getAttribute('data-message-author-role');
-    if (role !== 'user' && role !== 'assistant') continue;
+    const rawStyle = node.querySelector(${JSON.stringify(`[${MESSAGE_AUTHOR_ROLE_ATTR}]`)})?.getAttribute(${JSON.stringify(MESSAGE_AUTHOR_ROLE_ATTR)});
+    const style = rawStyle === ${JSON.stringify(USER_MESSAGE_STYLE)} || rawStyle === ${JSON.stringify(ASSISTANT_MESSAGE_STYLE)} ? rawStyle : String(node.getAttribute(${JSON.stringify(MESSAGE_UNIT_KEY_ATTR)}) || '').endsWith(':user') ? ${JSON.stringify(USER_MESSAGE_STYLE)} : undefined;
+    const role = style === ${JSON.stringify(USER_MESSAGE_STYLE)} ? 'user' : style === ${JSON.stringify(ASSISTANT_MESSAGE_STYLE)} ? 'assistant' : undefined;
+    if (!role) continue;
     const text = typeof node.innerText === 'string' ? node.innerText : null;
     if (text === null) return { status: 'surface_unknown', reason: 'text_representation_unavailable', page_url: location.href };
     const bytes = new TextEncoder().encode(text);
@@ -1460,7 +1474,7 @@ export const HARVEST_EXPRESSION = `(async () => {
       role,
       ordinal: roleCounts[role]++,
       document_ordinal: documentOrdinal,
-      message_id: node.getAttribute('data-message-id'),
+      message_id: node.getAttribute(${JSON.stringify(MESSAGE_ID_ATTR)}),
       text,
       byte_length: bytes.byteLength,
       sha256: Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, '0')).join(''),
@@ -1834,13 +1848,15 @@ export function buildExportExpression(witness: ExportWitness): string {
   const encoded = Buffer.from(JSON.stringify(witness), 'utf8').toString('base64');
   return `(async () => {
     const witness = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('${encoded}'), (c) => c.charCodeAt(0))));
-    const raw = Array.from(document.querySelectorAll('[data-message-author-role]'));
+    const raw = Array.from(document.querySelectorAll(${JSON.stringify(MESSAGE_NODE_SELECTOR)}));
     const roleCounts = { user: 0, assistant: 0 };
     const nodes = raw.map((node, documentOrdinal) => {
-      const role = node.getAttribute('data-message-author-role');
-      if (role !== 'user' && role !== 'assistant') return null;
+      const rawStyle = node.querySelector(${JSON.stringify(`[${MESSAGE_AUTHOR_ROLE_ATTR}]`)})?.getAttribute(${JSON.stringify(MESSAGE_AUTHOR_ROLE_ATTR)});
+      const style = rawStyle === ${JSON.stringify(USER_MESSAGE_STYLE)} || rawStyle === ${JSON.stringify(ASSISTANT_MESSAGE_STYLE)} ? rawStyle : String(node.getAttribute(${JSON.stringify(MESSAGE_UNIT_KEY_ATTR)}) || '').endsWith(':user') ? ${JSON.stringify(USER_MESSAGE_STYLE)} : undefined;
+      const role = style === ${JSON.stringify(USER_MESSAGE_STYLE)} ? 'user' : style === ${JSON.stringify(ASSISTANT_MESSAGE_STYLE)} ? 'assistant' : undefined;
+      if (!role) return null;
       const ordinal = roleCounts[role]++;
-      return { node, role, ordinal, documentOrdinal, messageId: node.getAttribute('data-message-id') };
+      return { node, role, ordinal, documentOrdinal, messageId: node.getAttribute(${JSON.stringify(MESSAGE_ID_ATTR)}) };
     }).filter(Boolean);
     if (nodes.length === 0) return { status: 'surface_unknown', reason: 'message_nodes_missing' };
     const idCounts = new Map();

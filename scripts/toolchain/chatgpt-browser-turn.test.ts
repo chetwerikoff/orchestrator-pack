@@ -1,3 +1,5 @@
+// @vitest-ci-lane light
+// @vitest-pre-topology-seconds 120
 import { randomUUID } from 'node:crypto';
 import {
   chmodSync,
@@ -107,10 +109,18 @@ import {
   ASSISTANT_MESSAGE_SELECTOR,
   ASSISTANT_TURN_ANCESTOR_XPATH,
   COMPOSER_SELECTOR,
+  CONVERSATION_TURN_SECTION_SELECTOR,
   CONTINUE_GENERATING_TESTID_SELECTOR,
+  MESSAGE_AUTHOR_ROLE_ATTR,
+  MESSAGE_ID_ATTR,
   MESSAGE_NODE_SELECTOR,
+  normalizeMessageRoleStyle,
+  resolveMessageRoleStyle,
+  ASSISTANT_TURN_ACTION_SELECTOR,
   SEND_BUTTON_SELECTOR,
   USER_MESSAGE_SELECTOR,
+  USER_MESSAGE_STYLE,
+  ASSISTANT_MESSAGE_STYLE,
 } from '../chatgpt-browser-turn/product-page-selectors.ts';
 
 
@@ -148,6 +158,38 @@ function assertTimingBudgetConsumed(
     );
   }
 }
+
+describe('Issue #2171 live ChatGPT message and turn selectors', () => {
+  it('selects message containers and identifies roles from markdown style markers', () => {
+    const selectionNode = '[data-chatgpt-selection-message-id]:not([data-chatgpt-search-unit-key$=":user"] *)';
+    expect(MESSAGE_NODE_SELECTOR).toBe(`[data-chatgpt-search-unit-key$=":user"], ${selectionNode}`);
+    expect(MESSAGE_ID_ATTR).toBe('data-chatgpt-selection-message-id');
+    expect(MESSAGE_AUTHOR_ROLE_ATTR).toBe('data-markdown-text-style');
+    expect(USER_MESSAGE_SELECTOR).toBe(
+      `[data-chatgpt-search-unit-key$=":user"], ${selectionNode}:has([data-markdown-text-style="user-message"])`,
+    );
+    expect(ASSISTANT_MESSAGE_SELECTOR).toBe(
+      `${selectionNode}:has([data-markdown-text-style="assistant-message"])`,
+    );
+    expect(normalizeMessageRoleStyle('user-message')).toBe('user');
+    expect(normalizeMessageRoleStyle('assistant-message')).toBe('assistant');
+    expect(normalizeMessageRoleStyle('assistant')).toBeUndefined();
+  });
+
+  it('identifies live user messages from their search unit key', () => {
+    expect(resolveMessageRoleStyle(null, 'fallback-turn-0:0:user')).toBe('user-message');
+    expect(resolveMessageRoleStyle('assistant-message', 'fallback-turn-0:0:user')).toBe('assistant-message');
+    expect(resolveMessageRoleStyle(null, 'fallback-turn-0:2:assistant')).toBeUndefined();
+    expect(resolveMessageRoleStyle(null, null)).toBeUndefined();
+    expect(ASSISTANT_TURN_ACTION_SELECTOR).toContain('button[aria-label="Copy"]');
+    expect(ASSISTANT_TURN_ACTION_SELECTOR).toContain('button[aria-label="Rate response"]');
+  });
+
+  it('selects turn containers by data-turn-key', () => {
+    expect(CONVERSATION_TURN_SECTION_SELECTOR).toBe('div[data-turn-key]');
+    expect(ASSISTANT_TURN_ANCESTOR_XPATH).toBe('xpath=ancestor-or-self::div[@data-turn-key][1]');
+  });
+});
 
 describe('Issue #1998 Target crash classification', () => {
   it('matches only the explicit Playwright Target crashed signature', () => {
@@ -481,14 +523,13 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
     });
     const message = (role: 'user' | 'assistant', id: string) => ({
       getAttribute: async (name: string) => {
-        if (name === 'data-message-author-role') return role;
-        if (name === 'data-message-id') return id;
+        if (name === MESSAGE_AUTHOR_ROLE_ATTR) return role === 'user' ? USER_MESSAGE_STYLE : ASSISTANT_MESSAGE_STYLE;
+        if (name === MESSAGE_ID_ATTR) return id;
         return null;
       },
-      locator: (selector: string) => ({
-        count: async () => (selector.includes('data-parent-message-id') || selector.includes('data-parent-turn-id') ? 0 : 1),
-        first: () => hangingNestedFirst(),
-      }),
+      locator: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+        ? { count: async () => 1, first: () => ({ getAttribute: async () => role === 'user' ? USER_MESSAGE_STYLE : ASSISTANT_MESSAGE_STYLE }) }
+        : { count: async () => 0, first: () => selector === ASSISTANT_TURN_ANCESTOR_XPATH ? { getAttribute: async () => null } : hangingNestedFirst() },
     });
     const page = {
       locator: () => ({
@@ -521,20 +562,20 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
         count: async () => 1,
         nth: () => ({
           getAttribute: async (name: string) => {
-            if (name === 'data-message-author-role') return 'assistant';
-            if (name === 'data-message-id') return 'assistant-12345678';
+            if (name === MESSAGE_AUTHOR_ROLE_ATTR) return ASSISTANT_MESSAGE_STYLE;
+            if (name === MESSAGE_ID_ATTR) return 'assistant-12345678';
             return null;
           },
-          locator: (selector: string) => ({
-            count: async () => (selector.includes('data-parent-message-id') ? 1 : 0),
-            first: () => ({
-              getAttribute: async () => {
+          locator: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+            ? { count: async () => 1, first: () => ({ getAttribute: async () => ASSISTANT_MESSAGE_STYLE }) }
+            : {
+              count: async () => (selector.includes('data-parent-message-id') ? 1 : 0),
+              first: () => ({ getAttribute: async () => {
                 const error = new Error('Timeout 80ms exceeded');
                 error.name = 'TimeoutError';
                 throw error;
-              },
-            }),
-          }),
+              } }),
+            },
         }),
       }),
     };
@@ -570,13 +611,15 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
               }
               return null;
             },
-            locator: (selector: string) => ({
-              count: async () => {
-                nestedCountWait = budget.clampOperationWaitMs();
-                return 0;
+            locator: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+              ? { count: async () => 1, first: () => ({ getAttribute: async () => ASSISTANT_MESSAGE_STYLE }) }
+              : {
+                count: async () => {
+                  nestedCountWait = budget.clampOperationWaitMs();
+                  return 0;
+                },
+                first: () => ({ getAttribute: async () => null }),
               },
-              first: () => ({ getAttribute: async () => null }),
-            }),
           }),
         }),
       };
@@ -2737,7 +2780,7 @@ describe('issue 1023 operation-level bounds', () => {
     });
     const baseLocator = fixture.page.locator.bind(fixture.page);
     fixture.page.locator = (selector: string) => {
-      if (selector === '[data-message-author-role="assistant"]') {
+      if (selector === ASSISTANT_MESSAGE_SELECTOR) {
         return {
           count: async () => assistantVisible ? 1 : 0,
           nth: (index: number) => messageLocator('assistant', assistantId, own, 'late ok'),
@@ -2790,10 +2833,12 @@ describe('issue 1023 operation-level bounds', () => {
           getAttribute: async (name: string) => {
             attrCalls++;
             await new Promise((resolve) => { setTimeout(resolve, 40); });
-            if (name === 'data-message-author-role') return 'assistant';
+            if (name === MESSAGE_AUTHOR_ROLE_ATTR) return ASSISTANT_MESSAGE_STYLE;
             return null;
           },
-          locator: () => ({ first: () => ({ getAttribute: async () => null }) }),
+          locator: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+            ? { count: async () => 1, first: () => ({ getAttribute: async () => { attrCalls++; await new Promise((resolve) => { setTimeout(resolve, 40); }); return ASSISTANT_MESSAGE_STYLE; } }) }
+            : { count: async () => 0, first: () => ({ getAttribute: async () => null }) },
         }),
       }),
     };
@@ -2864,7 +2909,7 @@ describe('issue 1023 operation-level bounds', () => {
     let reads = 0;
     const page = {
       locator: (selector: string) => {
-        if (selector === '#prompt-textarea') return { count: async () => 1 };
+        if (selector === COMPOSER_SELECTOR) return { count: async () => 1 };
         if (selector === '[role="alert"]') {
           return {
             count: async () => 5,

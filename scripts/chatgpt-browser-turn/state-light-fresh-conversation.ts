@@ -14,6 +14,7 @@ import {
   NEW_CHAT_CONTROL_SELECTORS,
   normalizeConversationUrl,
   productStatusText,
+  projectConversationUrlMatchesProject,
   type BrowserConfig,
 } from './ui-adapter.ts';
 import type { TurnState } from './contracts.ts';
@@ -700,11 +701,11 @@ export async function waitForConversationUrlAfterSend(
   sleep: (page: any, ms: number) => Promise<void>,
   pollMs: number,
 ): Promise<string | undefined> {
-  const projectPrefix = projectConversationPrefix(projectUrl);
   while (Date.now() < deadlineMs) {
     try {
       const currentUrl = normalizeConversationUrl(page.url());
-      if (conversationUuidFromUrl(currentUrl) && currentUrl.startsWith(projectPrefix)) {
+      if (conversationUuidFromUrl(currentUrl)
+        && projectConversationUrlMatchesProject(currentUrl, projectUrl)) {
         return currentUrl;
       }
     } catch {
@@ -718,9 +719,9 @@ export async function waitForConversationUrlAfterSend(
 
 export function readProjectConversationUrl(page: any, projectUrl: string): string | undefined {
   try {
-    const projectPrefix = projectConversationPrefix(projectUrl);
     const currentUrl = normalizeConversationUrl(page.url());
-    if (conversationUuidFromUrl(currentUrl) && currentUrl.startsWith(projectPrefix)) {
+    if (conversationUuidFromUrl(currentUrl)
+      && projectConversationUrlMatchesProject(currentUrl, projectUrl)) {
       return currentUrl;
     }
   } catch {

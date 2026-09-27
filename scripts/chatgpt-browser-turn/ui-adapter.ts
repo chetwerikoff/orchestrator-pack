@@ -8,14 +8,17 @@ export * from './ui-adapter-base.ts';
 import * as base from './ui-adapter-base.ts';
 import {
   ASSISTANT_MESSAGE_SELECTOR,
+  ASSISTANT_MESSAGE_STYLE,
   ASSISTANT_TURN_ACTION_SELECTOR,
   ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
   CONVERSATION_TURN_SECTION_SELECTOR,
   MESSAGE_AUTHOR_ROLE_ATTR,
+  MESSAGE_UNIT_KEY_ATTR,
   MESSAGE_NODE_SELECTOR,
   REGENERATE_THREAD_ERROR_BUTTON_SELECTOR,
   STOP_BUTTON_SELECTOR,
   UI_COLLAPSE_AFFIX_RE,
+  USER_MESSAGE_STYLE,
 } from './product-page-selectors.ts';
 import {
   currentOwnedPromptMarker,
@@ -362,8 +365,11 @@ async function readOwnedTurnSnapshot(
     const nodes = page.locator(MESSAGE_NODE_SELECTOR);
     if (typeof nodes?.evaluateAll !== 'function') return undefined;
     return await boundedRead(
-      Promise.resolve(nodes.evaluateAll((elements: Element[], args: {
+      nodes.evaluateAll((elements: Element[], args: {
         roleAttribute: string;
+        userMessageStyle: string;
+        unitKeyAttribute: string;
+        assistantMessageStyle: string;
         generationSelector: string;
         turnSelector: string;
         assistantSelector: string;
@@ -417,7 +423,7 @@ async function readOwnedTurnSnapshot(
         let complete = true;
         try {
           for (const section of Array.from(document.querySelectorAll(args.turnSelector))) {
-            const turnKey = section.getAttribute('data-testid');
+            const turnKey = section.getAttribute('data-turn-key');
             if (turnKey) conversationTurnKeys.push(turnKey);
           }
         } catch {
@@ -425,10 +431,14 @@ async function readOwnedTurnSnapshot(
         }
         for (const element of elements) {
           try {
-            const role = element.getAttribute(args.roleAttribute) ?? '';
+            const rawStyle = element.querySelector(`[${args.roleAttribute}]`)?.getAttribute(args.roleAttribute);
+            const style = rawStyle === args.userMessageStyle || rawStyle === args.assistantMessageStyle
+              ? rawStyle
+              : (element.getAttribute?.(args.unitKeyAttribute) ?? '').endsWith(':user') ? args.userMessageStyle : undefined;
+            const role = style === args.userMessageStyle ? 'user' : style === args.assistantMessageStyle ? 'assistant' : '';
             const text = (element as HTMLElement).innerText;
             if (role === 'user' || role === 'assistant') {
-              const turnKey = element.closest(args.turnSelector)?.getAttribute('data-testid') ?? undefined;
+              const turnKey = element.closest(args.turnSelector)?.getAttribute('data-turn-key') ?? undefined;
               rows.push({ role, text, ...(turnKey ? { turnKey } : {}) });
             } else {
               complete = false;
@@ -439,7 +449,7 @@ async function readOwnedTurnSnapshot(
         }
         try {
           for (const assistant of Array.from(document.querySelectorAll(args.assistantSelector))) {
-            const turnKey = assistant.closest(args.turnSelector)?.getAttribute('data-testid') ?? undefined;
+            const turnKey = assistant.closest(args.turnSelector)?.getAttribute('data-turn-key') ?? undefined;
             const paragraphTexts: string[] = [];
             for (const paragraph of Array.from(assistant.querySelectorAll('p'))) {
               const text = (paragraph as HTMLElement).innerText;
@@ -476,6 +486,9 @@ async function readOwnedTurnSnapshot(
         return { complete, generationInProgress, rows, conversationTurnKeys, bannerCandidates };
       }, {
         roleAttribute: MESSAGE_AUTHOR_ROLE_ATTR,
+        userMessageStyle: USER_MESSAGE_STYLE,
+        unitKeyAttribute: MESSAGE_UNIT_KEY_ATTR,
+        assistantMessageStyle: ASSISTANT_MESSAGE_STYLE,
         generationSelector: OWNED_TURN_GENERATION_SELECTOR,
         turnSelector: CONVERSATION_TURN_SECTION_SELECTOR,
         assistantSelector: ASSISTANT_MESSAGE_SELECTOR,
@@ -483,7 +496,7 @@ async function readOwnedTurnSnapshot(
         chromeSelector: ASSISTANT_TURN_ACTION_SELECTOR,
         timeoutText: MESSAGE_DELIVERY_TIMED_OUT_TEXT,
         networkText: PRODUCT_NETWORK_ERROR_TEXT,
-      })),
+      }),
       waitMs,
     ) as OwnedTurnSnapshot;
   } catch {

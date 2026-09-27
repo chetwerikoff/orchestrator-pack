@@ -44,6 +44,8 @@ import {
 import { publishStateLightReply } from './chatgpt-browser-turn/state-light-turn.ts';
 import { classifyProductWall } from './chatgpt-browser-turn/ui-adapter.ts';
 
+let fixtureMessageId = 0;
+
 class FakeNode {
   readonly innerText: string;
   readonly textContent: string;
@@ -61,10 +63,23 @@ class FakeNode {
   ) {
     this.innerText = innerText;
     this.textContent = textContent;
-    this.tagName = tagName.toUpperCase();
-    this.attrs = role
-      ? { 'data-message-author-role': role, ...attrs }
-      : { ...attrs };
+    this.tagName = tagName.toUpperCase() === 'SECTION' && attrs['data-testid']?.startsWith('conversation-turn-')
+      ? 'DIV'
+      : tagName.toUpperCase();
+    const messageId = attrs['data-chatgpt-selection-message-id'] ?? attrs['data-message-id'];
+    this.attrs = {
+      ...(role ? { 'data-message-author-role': role } : {}),
+      ...(role ? { 'data-chatgpt-selection-message-id': messageId ?? `fixture-message-${++fixtureMessageId}` } : {}),
+      ...(attrs['data-testid']?.startsWith('conversation-turn-')
+        ? { 'data-turn-key': attrs['data-testid'] }
+        : {}),
+      ...attrs,
+    };
+    if (role) {
+      this.appendChild(new FakeNode('', '', '', {
+        'data-markdown-text-style': role === 'user' ? 'user-message' : `${role}-message`,
+      }, 'SPAN'));
+    }
   }
 
   appendChild(child: FakeNode): FakeNode {
@@ -120,6 +135,18 @@ function nodeMatchesOneSelector(node: FakeNode, selector: string): boolean {
   if (tagMatch) {
     if (node.tagName !== tagMatch[1]!.toUpperCase()) return false;
     rest = rest.slice(tagMatch[1]!.length);
+  }
+  const notDescendantMatch = rest.match(/:not\(([^()]+) \*\)/u);
+  if (notDescendantMatch) {
+    for (let ancestor = node.parent; ancestor; ancestor = ancestor.parent) {
+      if (nodeMatchesOneSelector(ancestor, notDescendantMatch[1]!)) return false;
+    }
+    rest = rest.replace(notDescendantMatch[0], '');
+  }
+  const hasMatch = rest.match(/:has\((\[[^)]+\])\)/u);
+  if (hasMatch) {
+    if (node.querySelectorAll(hasMatch[1]!).length === 0) return false;
+    rest = rest.replace(hasMatch[0], '');
   }
   if (!rest) return true;
   const attrRe = /\[([\w-]+)(?:([*^$]?=)"([^"]*)")?\]/gu;
@@ -199,6 +226,21 @@ async function evaluateExpression(
     atob,
   });
 }
+
+test('Issue #2171 classifies a marker-bearing assistant node by markdown role style', async () => {
+  const marker = 'OPKTURNV1.fixture-owned-marker';
+  const result = await evaluateExpression(INSPECTION_EXPRESSION, [
+    new FakeNode('user', 'Question', 'Question', { 'data-message-id': 'u-2171' }),
+    new FakeNode('assistant', `${marker} assistant reply`, `${marker} assistant reply`, { 'data-message-id': 'a-2171' }),
+  ]);
+
+  assert.equal(result.status, 'ok');
+  assert.equal(result.nodes.length, 2);
+  assert.equal(result.nodes[0].role, 'user');
+  assert.equal(result.nodes[1].role, 'assistant');
+  assert.equal(result.nodes[1].attributes['data-markdown-text-style'], 'assistant-message');
+  assert.match(result.nodes[1].innerText.head, /OPKTURNV1\.fixture-owned-marker/u);
+});
 
 function deps(overrides: Partial<ProbeDependencies> = {}): ProbeDependencies {
   return {
@@ -344,6 +386,25 @@ test('URL targeting fails closed on zero and duplicate exact normalized matches'
   assert.deepEqual({ createCalls, closeCalls, evaluateCalls }, { createCalls: 0, closeCalls: 0, evaluateCalls: 0 });
 });
 
+test('inspection counts live user search units that carry no selection id or markdown style', async () => {
+  const user = new FakeNode('', 'Question', 'Question', {
+    'data-chatgpt-search-unit-key': 'fallback-turn-0:0:user',
+    'data-chatgpt-search-message-ids': 'u-live-1',
+  });
+  user.appendChild(new FakeNode('', '', '', { 'data-user-message-bubble': 'true' }));
+  const nodes = [
+    user,
+    new FakeNode('assistant', 'Answer', 'Answer', { 'data-message-id': 'a-live-1' }),
+  ];
+  const raw = await evaluateExpression(INSPECTION_EXPRESSION, nodes, false);
+  assert.equal(raw.status, 'ok');
+  assert.equal(raw.observed_user_nodes, 1);
+  assert.equal(raw.observed_assistant_nodes, 1);
+  assert.equal(raw.nodes[0].role, 'user');
+  assert.equal(raw.nodes[0].attributes['data-markdown-text-style'], 'user-message');
+  assert.equal(raw.nodes[1].role, 'assistant');
+});
+
 test('inspection keeps innerText and textContent distinct and emits bounded witnesses', async () => {
   const nodes = [
     new FakeNode('user', 'Question', 'Question', { 'data-message-id': 'u-1' }),
@@ -361,7 +422,7 @@ test('inspection keeps innerText and textContent distinct and emits bounded witn
   assert.notEqual(raw.nodes[1].innerText.byte_length, raw.nodes[1].textContent.byte_length);
   assert.notEqual(raw.nodes[1].innerText.sha256, raw.nodes[1].textContent.sha256);
   assert.equal(raw.nodes[1].message_id, 'a-1');
-  assert.equal(raw.nodes[1].attributes['data-message-id'], 'a-1');
+  assert.equal(raw.nodes[1].attributes['data-chatgpt-selection-message-id'], 'a-1');
   assert.equal(raw.nodes[1].attributes['data-ignored-secret'], undefined);
   assert.equal(raw.last_assistant_sha256, sha256('Visible answer'));
 });
