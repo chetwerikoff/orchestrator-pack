@@ -115,6 +115,8 @@ import {
   MESSAGE_ID_ATTR,
   MESSAGE_NODE_SELECTOR,
   normalizeMessageRoleStyle,
+  resolveMessageRoleStyle,
+  ASSISTANT_TURN_ACTION_SELECTOR,
   SEND_BUTTON_SELECTOR,
   USER_MESSAGE_SELECTOR,
   USER_MESSAGE_STYLE,
@@ -159,18 +161,28 @@ function assertTimingBudgetConsumed(
 
 describe('Issue #2171 live ChatGPT message and turn selectors', () => {
   it('selects message containers and identifies roles from markdown style markers', () => {
-    expect(MESSAGE_NODE_SELECTOR).toBe('[data-chatgpt-selection-message-id]');
+    const selectionNode = '[data-chatgpt-selection-message-id]:not([data-chatgpt-search-unit-key$=":user"] *)';
+    expect(MESSAGE_NODE_SELECTOR).toBe(`[data-chatgpt-search-unit-key$=":user"], ${selectionNode}`);
     expect(MESSAGE_ID_ATTR).toBe('data-chatgpt-selection-message-id');
     expect(MESSAGE_AUTHOR_ROLE_ATTR).toBe('data-markdown-text-style');
     expect(USER_MESSAGE_SELECTOR).toBe(
-      '[data-chatgpt-selection-message-id]:has([data-markdown-text-style="user-message"])',
+      `[data-chatgpt-search-unit-key$=":user"], ${selectionNode}:has([data-markdown-text-style="user-message"])`,
     );
     expect(ASSISTANT_MESSAGE_SELECTOR).toBe(
-      '[data-chatgpt-selection-message-id]:has([data-markdown-text-style="assistant-message"])',
+      `${selectionNode}:has([data-markdown-text-style="assistant-message"])`,
     );
     expect(normalizeMessageRoleStyle('user-message')).toBe('user');
     expect(normalizeMessageRoleStyle('assistant-message')).toBe('assistant');
     expect(normalizeMessageRoleStyle('assistant')).toBeUndefined();
+  });
+
+  it('identifies live user messages from their search unit key', () => {
+    expect(resolveMessageRoleStyle(null, 'fallback-turn-0:0:user')).toBe('user-message');
+    expect(resolveMessageRoleStyle('assistant-message', 'fallback-turn-0:0:user')).toBe('assistant-message');
+    expect(resolveMessageRoleStyle(null, 'fallback-turn-0:2:assistant')).toBeUndefined();
+    expect(resolveMessageRoleStyle(null, null)).toBeUndefined();
+    expect(ASSISTANT_TURN_ACTION_SELECTOR).toContain('button[aria-label="Copy"]');
+    expect(ASSISTANT_TURN_ACTION_SELECTOR).toContain('button[aria-label="Rate response"]');
   });
 
   it('selects turn containers by data-turn-key', () => {

@@ -10,10 +10,17 @@ import {
 } from './browser-gpt-page-probe.ts';
 import { BEFORE_CDP_BROWSER_RELEASE } from './chatgpt-browser-turn/browser-session.ts';
 import {
+  ASSISTANT_MESSAGE_STYLE,
   ASSISTANT_TURN_ACTION_SELECTOR,
   ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
   CONTINUE_GENERATING_TESTID_SELECTOR,
+  CONVERSATION_TURN_SECTION_SELECTOR,
+  MESSAGE_AUTHOR_ROLE_ATTR,
+  MESSAGE_ID_ATTR,
+  MESSAGE_NODE_SELECTOR,
+  MESSAGE_UNIT_KEY_ATTR,
   STOP_BUTTON_SELECTOR,
+  USER_MESSAGE_STYLE,
 } from './chatgpt-browser-turn/product-page-selectors.ts';
 import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
 import {
@@ -488,6 +495,13 @@ function validateProbeExport(
 }
 
 interface BrowserGuardSelectors {
+  readonly messageNode: string;
+  readonly roleAttribute: string;
+  readonly unitKeyAttribute: string;
+  readonly messageIdAttribute: string;
+  readonly userStyle: string;
+  readonly assistantStyle: string;
+  readonly turn: string;
   readonly stop: string;
   readonly inProgress: string;
   readonly actions: string;
@@ -495,6 +509,13 @@ interface BrowserGuardSelectors {
 }
 
 const BROWSER_GUARD_SELECTORS: BrowserGuardSelectors = {
+  messageNode: MESSAGE_NODE_SELECTOR,
+  roleAttribute: MESSAGE_AUTHOR_ROLE_ATTR,
+  unitKeyAttribute: MESSAGE_UNIT_KEY_ATTR,
+  messageIdAttribute: MESSAGE_ID_ATTR,
+  userStyle: USER_MESSAGE_STYLE,
+  assistantStyle: ASSISTANT_MESSAGE_STYLE,
+  turn: CONVERSATION_TURN_SECTION_SELECTOR,
   stop: STOP_BUTTON_SELECTOR,
   inProgress: ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
   actions: ASSISTANT_TURN_ACTION_SELECTOR,
@@ -507,7 +528,7 @@ function finalGuardExpression(witness: PostSettlementTargetWitness, ordinal: num
     ordinal,
     selectors: BROWSER_GUARD_SELECTORS,
   }), 'utf8').toString('base64');
-  return `(async()=>{const e=JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('${encoded}'),c=>c.charCodeAt(0))));const n=r=>{const u=new URL(r);u.hash='';u.search='';u.hostname=u.hostname.toLowerCase();u.pathname=u.pathname.replace(/\\/+$/u,'')||'/';return u.toString().replace(/\\/$/u,'')};const raw=Array.from(document.querySelectorAll('[data-message-author-role]'));const counts={user:0,assistant:0};const nodes=[];for(let d=0;d<raw.length;d++){const node=raw[d],role=node.getAttribute('data-message-author-role');if(role!=='user'&&role!=='assistant')continue;nodes.push({node,role,ordinal:counts[role]++,documentOrdinal:d,messageId:node.getAttribute('data-message-id')})}const matches=nodes.filter(x=>x.messageId===e.assistant_message_id);if(matches.length!==1)return{ok:false,reason:'assistant_message_identity_changed'};const c=matches[0],last=[...nodes].reverse().find(x=>x.role==='assistant');if(c.role!=='assistant'||c.ordinal!==e.ordinal||c.documentOrdinal!==e.document_ordinal||c!==last||c!==nodes[nodes.length-1])return{ok:false,reason:'assistant_tail_changed'};const turn=c.node.closest('section[data-testid^="conversation-turn-"]')||c.node;let continuation=true,completion=false;try{const byTestId=Boolean(document.querySelector(e.selectors.continueTestId));const byName=Array.from(document.querySelectorAll('button')).some(b=>/continue generating/i.test(String(b.getAttribute('aria-label')||b.textContent||'')));continuation=byTestId||byName;const generating=Boolean(document.querySelector(e.selectors.stop)||turn.querySelector(e.selectors.inProgress));completion=Boolean(turn.querySelector(e.selectors.actions));if(generating||continuation||!completion)return{ok:false,reason:generating?'generation_state_changed':continuation?'continuation_available':'assistant_completion_unproven',generation_in_progress:generating,continuation_available:continuation,completion_ready:completion}}catch{return{ok:false,reason:'completion_surface_unavailable'}}const text=e.representation==='innerText'?c.node.innerText:c.node.textContent;if(typeof text!=='string')return{ok:false,reason:'representation_unavailable'};const bytes=new TextEncoder().encode(text),digest=await crypto.subtle.digest('SHA-256',bytes),hash=Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join(''),url=n(location.href);return{ok:url===e.normalized_url&&bytes.byteLength===e.byte_length&&hash===e.sha256&&counts.user===e.observed_user_nodes&&counts.assistant===e.observed_assistant_nodes&&nodes.length===e.observed_message_nodes,normalized_url:url,byte_length:bytes.byteLength,sha256:hash,observed_user_nodes:counts.user,observed_assistant_nodes:counts.assistant,observed_message_nodes:nodes.length,generation_in_progress:false,nodes_truncated:false,assistant_message_id:c.messageId,representation:e.representation,document_ordinal:c.documentOrdinal,ordinal:c.ordinal,last_assistant:c===last,last_message:c===nodes[nodes.length-1],completion_ready:completion,continuation_available:continuation}})()`;
+  return `(async()=>{const e=JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('${encoded}'),c=>c.charCodeAt(0))));const n=r=>{const u=new URL(r);u.hash='';u.search='';u.hostname=u.hostname.toLowerCase();u.pathname=u.pathname.replace(/\\/+$/u,'')||'/';return u.toString().replace(/\\/$/u,'')};const s=e.selectors;const raw=Array.from(document.querySelectorAll(s.messageNode));const counts={user:0,assistant:0};const nodes=[];for(let d=0;d<raw.length;d++){const node=raw[d],rs=node.querySelector('['+s.roleAttribute+']')?.getAttribute(s.roleAttribute),st=rs===s.userStyle||rs===s.assistantStyle?rs:String(node.getAttribute(s.unitKeyAttribute)||'').endsWith(':user')?s.userStyle:'',role=st===s.userStyle?'user':st===s.assistantStyle?'assistant':'';if(role!=='user'&&role!=='assistant')continue;nodes.push({node,role,ordinal:counts[role]++,documentOrdinal:d,messageId:node.getAttribute(s.messageIdAttribute)})}const matches=nodes.filter(x=>x.messageId===e.assistant_message_id);if(matches.length!==1)return{ok:false,reason:'assistant_message_identity_changed'};const c=matches[0],last=[...nodes].reverse().find(x=>x.role==='assistant');if(c.role!=='assistant'||c.ordinal!==e.ordinal||c.documentOrdinal!==e.document_ordinal||c!==last||c!==nodes[nodes.length-1])return{ok:false,reason:'assistant_tail_changed'};const turn=c.node.closest(s.turn)||c.node;let continuation=true,completion=false;try{const byTestId=Boolean(document.querySelector(e.selectors.continueTestId));const byName=Array.from(document.querySelectorAll('button')).some(b=>/continue generating/i.test(String(b.getAttribute('aria-label')||b.textContent||'')));continuation=byTestId||byName;const generating=Boolean(document.querySelector(e.selectors.stop)||turn.querySelector(e.selectors.inProgress));completion=Boolean(turn.querySelector(e.selectors.actions));if(generating||continuation||!completion)return{ok:false,reason:generating?'generation_state_changed':continuation?'continuation_available':'assistant_completion_unproven',generation_in_progress:generating,continuation_available:continuation,completion_ready:completion}}catch{return{ok:false,reason:'completion_surface_unavailable'}}const text=e.representation==='innerText'?c.node.innerText:c.node.textContent;if(typeof text!=='string')return{ok:false,reason:'representation_unavailable'};const bytes=new TextEncoder().encode(text),digest=await crypto.subtle.digest('SHA-256',bytes),hash=Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join(''),url=n(location.href);return{ok:url===e.normalized_url&&bytes.byteLength===e.byte_length&&hash===e.sha256&&counts.user===e.observed_user_nodes&&counts.assistant===e.observed_assistant_nodes&&nodes.length===e.observed_message_nodes,normalized_url:url,byte_length:bytes.byteLength,sha256:hash,observed_user_nodes:counts.user,observed_assistant_nodes:counts.assistant,observed_message_nodes:nodes.length,generation_in_progress:false,nodes_truncated:false,assistant_message_id:c.messageId,representation:e.representation,document_ordinal:c.documentOrdinal,ordinal:c.ordinal,last_assistant:c===last,last_message:c===nodes[nodes.length-1],completion_ready:completion,continuation_available:continuation}})()`;
 }
 
 function finalGuardMatches(
@@ -973,6 +994,13 @@ async function withCaptureTimeout<T>(operation: Promise<T>): Promise<T> {
 }
 
 interface BrowserGuardSelectors {
+  readonly messageNode: string;
+  readonly roleAttribute: string;
+  readonly unitKeyAttribute: string;
+  readonly messageIdAttribute: string;
+  readonly userStyle: string;
+  readonly assistantStyle: string;
+  readonly turn: string;
   readonly stop: string;
   readonly inProgress: string;
   readonly actions: string;
@@ -1010,7 +1038,7 @@ async function capturePreservedPage(state: CaptureState, tracked: TrackedPage): 
     readonly maximumNodes: number;
     readonly selectors: BrowserGuardSelectors;
   }) => {
-    const raw = Array.from(document.querySelectorAll('[data-message-author-role]'));
+    const raw = Array.from(document.querySelectorAll(selectors.messageNode));
     const counts = { user: 0, assistant: 0 };
     const nodes: Array<{
       readonly node: Element;
@@ -1021,14 +1049,18 @@ async function capturePreservedPage(state: CaptureState, tracked: TrackedPage): 
     }> = [];
     for (let documentOrdinal = 0; documentOrdinal < raw.length; documentOrdinal++) {
       const node = raw[documentOrdinal]!;
-      const role = node.getAttribute('data-message-author-role');
+      const rawStyle = node.querySelector(`[${selectors.roleAttribute}]`)?.getAttribute(selectors.roleAttribute);
+      const style = rawStyle === selectors.userStyle || rawStyle === selectors.assistantStyle
+        ? rawStyle
+        : String(node.getAttribute(selectors.unitKeyAttribute) ?? '').endsWith(':user') ? selectors.userStyle : undefined;
+      const role = style === selectors.userStyle ? 'user' : style === selectors.assistantStyle ? 'assistant' : undefined;
       if (role !== 'user' && role !== 'assistant') continue;
       nodes.push({
         node,
         role,
         ordinal: counts[role]++,
         documentOrdinal,
-        messageId: node.getAttribute('data-message-id'),
+        messageId: node.getAttribute(selectors.messageIdAttribute),
       });
     }
     if (nodes.length === 0 || nodes.length > maximumNodes) {
@@ -1043,7 +1075,7 @@ async function capturePreservedPage(state: CaptureState, tracked: TrackedPage): 
       || candidate !== nodes[nodes.length - 1]) {
       return { ok: false, reason: 'assistant_tail_invalid' };
     }
-    const turn = candidate.node.closest('section[data-testid^="conversation-turn-"]') ?? candidate.node;
+    const turn = candidate.node.closest(selectors.turn) ?? candidate.node;
     let generationInProgress: boolean | 'unknown' = 'unknown';
     let continuationAvailable: boolean | 'unknown' = 'unknown';
     let completionReady: boolean | 'unknown' = 'unknown';
