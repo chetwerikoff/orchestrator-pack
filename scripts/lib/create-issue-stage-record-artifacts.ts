@@ -2368,11 +2368,18 @@ export function reconcileCreateIssueStage(
         .at(-1);
       if (!resolvedArtifact || !finalInvocation) return;
       const verdict = resolvedArtifact.capture.rawFindingCount === 0 ? 'accept' : 'material-findings';
+      const hasRecordedTransportIdentity = Boolean(
+        optionalString(finalInvocation.reviewerSource)
+        || optionalString(finalInvocation.terminalResultIdentity)
+        || optionalString(finalInvocation.terminalEnvelopePath)
+      );
       sourceVerdicts[slot] = verdict;
       sourceVerdictEvidence[slot] = {
         producerEvidenceIdentity: 'authoritative-github-artifact:comment-' + resolvedArtifact.authority.commentId,
         captureIdentity: resolvedArtifact.capture.captureIdentity,
-        terminalClassification: finalInvocation.terminalClassification,
+        terminalClassification: hasRecordedTransportIdentity
+          ? finalInvocation.terminalClassification
+          : 'complete',
         credentialingAuthority: 'authoritative-github-artifact',
         captureVerified: true,
         digestMatches: true,

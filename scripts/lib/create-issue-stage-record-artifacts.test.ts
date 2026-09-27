@@ -4364,12 +4364,14 @@ describe('Issue #2017 routed missing-slot recovery', () => {
     });
     expect(reconciled.ok, reconciled.errors.join('\n')).toBe(true);
     const stored = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as {
+      invocations: Array<{ terminalClassification: string }>;
       reviewLane: { sourceVerdicts: Record<string, string>; sourceVerdictEvidence: Record<string, { terminalClassification: string }> };
       completedSourceCount?: number;
     };
     expect(stored.reviewLane.sourceVerdicts['01']).toBe('accept');
     expect(stored.reviewLane.sourceVerdicts['02']).toBe('accept');
     expect(stored.reviewLane.sourceVerdicts['03']).toBe('accept');
+    expect(stored.invocations[0]?.terminalClassification).toBe('incident');
     expect(stored.reviewLane.sourceVerdictEvidence['01'].terminalClassification).toBe('complete');
     expect(stored.reviewLane.sourceVerdictEvidence['02'].terminalClassification).toBe('complete');
     expect(validateReviewLaneRecord(stored.reviewLane).ok).toBe(true);
