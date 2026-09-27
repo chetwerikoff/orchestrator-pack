@@ -110,8 +110,7 @@ describe('Vitest topology emitter worktree hygiene', () => {
     const root = makeTopologyEmitterFixture();
     const planPath = path.join(root, 'scripts', 'vitest-heavy-topology.plan.json');
     const before = readFileSync(planPath, 'utf8');
-    const binDir = path.join(root, 'bin');
-    mkdirSync(binDir, { recursive: true });
+    const binDir = makeRoot('opk-vitest-fake-npm-');
     const npmPath = path.join(binDir, process.platform === 'win32' ? 'npm.cmd' : 'npm');
     if (process.platform === 'win32') {
       writeFileSync(npmPath, '@exit /b 7\r\n', 'utf8');
