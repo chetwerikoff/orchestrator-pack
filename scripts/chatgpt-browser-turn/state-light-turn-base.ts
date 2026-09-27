@@ -1731,17 +1731,6 @@ async function readComposerTextForSendDelivery(
   if (waitMs <= 0) return undefined;
   const timeoutCause = 'send_delivery_composer_read_timeout';
   try {
-    if (typeof composer.evaluate === 'function') {
-      return String(await boundedBrowserRead(
-        Promise.resolve(composer.evaluate(
-          (element: any) => String(element.innerText ?? element.textContent ?? ''),
-          undefined,
-          { timeout: waitMs },
-        )),
-        waitMs,
-        timeoutCause,
-      ));
-    }
     return String(await boundedBrowserRead(
       Promise.resolve(composer.innerText({ timeout: waitMs })),
       waitMs,
@@ -1799,15 +1788,11 @@ async function dispatchStateLightSendAndObserveDelivery(input: {
   readonly sendButton: any;
   readonly hasSendButton: boolean;
   readonly marker: string;
+  readonly baselineUserNodeCount: number;
   readonly sendWaitMs: number;
   readonly invocationDeadlineMs: number;
   readonly deliveryProofWaitMs?: number;
 }): Promise<{ sendCount: 0 | 1; witness: StateLightSendDeliveryWitness }> {
-  const baselineUserNodeCount = await locatorCount(
-    input.page.locator(USER_MESSAGE_UNIT_SELECTOR),
-    Math.min(input.invocationDeadlineMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
-  );
-
   if (input.hasSendButton) {
     await input.sendButton.click({ timeout: Math.min(MAX_LOCAL_READ_WAIT_MS, input.sendWaitMs) });
   } else {
@@ -1818,7 +1803,7 @@ async function dispatchStateLightSendAndObserveDelivery(input: {
     input.page,
     input.composer,
     input.marker,
-    baselineUserNodeCount,
+    input.baselineUserNodeCount,
     input.invocationDeadlineMs,
     input.deliveryProofWaitMs,
   );
@@ -2388,20 +2373,25 @@ async function runTurn(
       }
       remainingMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+      const baselineUserNodeCount = await locatorCount(
+        page.locator(USER_MESSAGE_UNIT_SELECTOR),
+        Math.min(insertionDeadlineMs, invocationDeadlineMs),
+      );
+      const sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
+      if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       transitionStateLightTurnObservation({
         profileKey,
         invocationId,
         phase: 'dispatching',
         reason: 'dispatch_boundary_entered',
       });
-      const sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
-      if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       const delivery = await dispatchStateLightSendAndObserveDelivery({
         page,
         composer,
         sendButton,
         hasSendButton,
         marker,
+        baselineUserNodeCount,
         sendWaitMs,
         invocationDeadlineMs,
       });
