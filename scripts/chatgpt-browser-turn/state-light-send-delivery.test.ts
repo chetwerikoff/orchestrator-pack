@@ -1,3 +1,4 @@
+// @vitest-ci-lane light
 // @vitest-pre-topology-seconds 1
 import { describe, expect, it, vi } from 'vitest';
 
