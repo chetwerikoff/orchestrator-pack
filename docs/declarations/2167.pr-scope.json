@@ -6,14 +6,14 @@
     "scripts/vitest-live-store-parent-guard.test.ts"
   ],
   "denylist": [
-    "credentials/**",
-    "packages/core/**",
-    "secrets/**",
-    "vendor/**"
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
     "scripts/lib/vitest-live-store-parent-guard.mjs",
     "scripts/vitest-live-store-parent-guard.test.ts"
   ],
-  "source_revision": "c26f089d9953b0ad9313c8a67855aa0e9c4d776e"
+  "source_revision": "dddb324d599ac5e319016feed7a1720582baa4f6"
 }
