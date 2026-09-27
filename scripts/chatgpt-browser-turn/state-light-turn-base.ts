@@ -125,6 +125,9 @@ const DEFAULT_TIMEOUT_MS = 1_800_000;
 export const POST_SEND_OBSERVATION_POLL_MS = 15_000;
 const DEFAULT_POLL_MS = POST_SEND_OBSERVATION_POLL_MS;
 const INITIAL_POLL_MS = 500;
+// Consecutive finished-answer reads without a rendered owned user message
+// before the helper reloads its owned conversation once (Issue #2197).
+const MARKERLESS_RELOAD_SETTLE_READS = 3;
 const DISPATCH_OBSERVATION_MS = 30_000;
 const FRESH_CONVERSATION_LANDING_MS = DISPATCH_OBSERVATION_MS;
 const STABILITY_READ_DELAY_MS = 1_000;
@@ -2948,6 +2951,8 @@ async function runTurn(
     let lastMarkerlessSnapshotSignature = '';
     let completionReadySeen = false;
     let deadEvidenceReads = 0;
+    let markerlessFinishedReads = 0;
+    let markerlessReloadUsed = false;
     let sendObservationDeferredLogged = false;
     const updateHeartbeatForPoll = (decision: PageObservationDecision): void => {
       heartbeatDecision = decision;
@@ -3567,6 +3572,53 @@ async function runTurn(
         lastMarkerlessSnapshotSignature = signature;
       } else {
         lastMarkerlessSnapshotSignature = '';
+      }
+
+      // Issue #2197: after a finished answer ChatGPT can leave the owned user
+      // message unrendered, so neither the marker nor the keyed carrier is
+      // visible; reopening the conversation renders it. Reload the owned
+      // conversation once, never resend, and observe the reloaded page without
+      // the pre-send baseline, as post-send recovery does.
+      if (
+        !markerVisible
+        && !forcedDecision
+        && (uncertainCause === 'owned_carrier_unproven' || uncertainCause === 'transcript_continuity_unproven')
+        && !markerlessReloadUsed
+        && durableConversationUrl
+        && sendCount >= 1
+        && (ownedPromptEverSeen || Date.now() >= dispatchDeadline)
+        && ownedWindowCompletionReady
+        && pageTurnEvidence?.generationInProgress !== true
+      ) {
+        markerlessFinishedReads += 1;
+        if (markerlessFinishedReads >= MARKERLESS_RELOAD_SETTLE_READS) {
+          markerlessReloadUsed = true;
+          incident(
+            'post_send_observation_error',
+            'owned_marker_not_rendered',
+            'reload_owned_conversation_no_resend',
+          );
+          try {
+            navigation.recordGoto();
+            await page.goto(durableConversationUrl, {
+              waitUntil: 'domcontentloaded',
+              timeout: Math.min(
+                MAX_LOCAL_READ_WAIT_MS * 6,
+                Math.max(1, hardExhaustionDeadline - Date.now()),
+              ),
+            });
+          } catch (error) {
+            if (isPostSendTargetCrash(error)) throw error;
+          }
+          baselineSnapshot = undefined;
+          baselineCount = 0;
+          lastMarkerlessSnapshotSignature = '';
+          updateHeartbeatForPoll({ state: 'waiting' });
+          await sleep(page, INITIAL_POLL_MS);
+          continue;
+        }
+      } else {
+        markerlessFinishedReads = 0;
       }
 
       const ownedReplyWindow = resolveOwnedReplyWindow(messages, baselineCount, marker);
