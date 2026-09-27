@@ -4,6 +4,7 @@
   "declared_paths": [
     "scripts/browser-gpt-page-probe.test.ts",
     "scripts/browser-gpt-page-probe.ts",
+    "scripts/chatgpt-browser-turn/fixtures/fake-turn-page.ts",
     "scripts/chatgpt-browser-turn/product-page-selectors.ts",
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
@@ -30,5 +31,5 @@
     "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
     "scripts/toolchain/chatgpt-browser-turn.test.ts"
   ],
-  "source_revision": "1e31e9df5540dca7ac936ffc83aecb1c9848a552"
+  "source_revision": "6ea37446b7ef4b8452f41fefa48060c6f840d600"
 }
