@@ -1,0 +1,19 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2183,
+  "declared_paths": [
+    "scripts/lib/vitest-live-store-parent-guard.mjs",
+    "scripts/vitest-live-store-parent-guard.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/lib/vitest-live-store-parent-guard.mjs",
+    "scripts/vitest-live-store-parent-guard.test.ts"
+  ],
+  "source_revision": "f3ecb17c7ad4d737427d6b6c1371f472499fbe1b"
+}

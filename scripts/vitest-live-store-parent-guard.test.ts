@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { repoRoot } from './lib/vitest-live-store-harness.mjs';
-import { isExternalJournalSnapshotOnlyChange } from './lib/vitest-live-store-parent-guard.mjs';
+import {
+  isExternalJournalSnapshotOnlyChange,
+  isExternalWakeSupervisorSnapshotOnlyChange,
+} from './lib/vitest-live-store-parent-guard.mjs';
 import { runProcess } from './kernel/subprocess.ts';
 
 const temporaryRoots: string[] = [];
@@ -97,6 +100,121 @@ describe('parent live-store guard', () => {
       'worker-message-dispatch-journal.json',
       'unrelated-live-store-leak.json',
     ])).toBe(false);
+  });
+
+  it('settles only exact known external wake-supervisor snapshot paths', () => {
+    expect(isExternalWakeSupervisorSnapshotOnlyChange([
+      'typescript-supervisor-status.json',
+    ])).toBe(true);
+    expect(isExternalWakeSupervisorSnapshotOnlyChange([
+      'worker-message-dispatch-journal.json',
+      'typescript-supervisor-status.json',
+    ])).toBe(true);
+    expect(isExternalWakeSupervisorSnapshotOnlyChange([
+      'unrelated-live-store-leak.json',
+    ])).toBe(false);
+    expect(isExternalWakeSupervisorSnapshotOnlyChange([
+      'typescript-supervisor-status.json',
+      'unrelated-live-store-leak.json',
+    ])).toBe(false);
+  });
+
+  it('ignores an atomic external supervisor-status update around a passing harness child', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-supervisor-status-'));
+    temporaryRoots.push(root);
+    const fixture = join(repoRoot, 'scripts', '.opk-parent-guard-supervisor-status-child.test.ts');
+    temporaryFiles.push(fixture);
+    const readyFile = join(root, 'child-live-store-guard-ready');
+    writeFileSync(
+      fixture,
+      [
+        "import { expect, it } from 'vitest';",
+        "import { writeFileSync } from 'node:fs';",
+        "it('passes', async () => {",
+        `  writeFileSync(${JSON.stringify(readyFile)}, 'ready\\n');`,
+        '  await new Promise((resolve) => setTimeout(resolve, 400));',
+        '  expect(true).toBe(true);',
+        '});',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const childEnvironment = productionEnvironment(join(root, 'child-production'));
+    const childPromise = runHarnessedVitest(fixture, childEnvironment);
+    await waitForFile(readyFile);
+    const wakeRoot = childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!;
+    const status = join(wakeRoot, 'typescript-supervisor-status.json');
+    const temporary = join(
+      wakeRoot,
+      '.typescript-supervisor-status.json.1234.00000000-0000-4000-8000-000000000000.tmp',
+    );
+    writeFileSync(temporary, '{"restartState":"running"}\n', 'utf8');
+    renameSync(temporary, status);
+    const child = await childPromise;
+
+    expect(child.exitCode, child.stderr).toBe(0);
+  });
+
+  it('settles the files a running supervisor writes in the live cutover layout', () => {
+    expect(isExternalWakeSupervisorSnapshotOnlyChange([
+      'supervisor/typescript-supervisor-status.json',
+      'supervisor/projected-registry.json',
+      'orchestration-mail-reconcile.json',
+      'orchestration-mail-reconcile.lock',
+    ])).toBe(true);
+    expect(isExternalWakeSupervisorSnapshotOnlyChange([
+      'supervisor/typescript-supervisor-status.json',
+      'supervisor/unrelated-live-store-leak.json',
+    ])).toBe(false);
+  });
+
+  it('ignores a live supervisor tick under supervisor/ around a passing harness child', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-supervisor-layout-'));
+    temporaryRoots.push(root);
+    const fixture = join(repoRoot, 'scripts', '.opk-parent-guard-supervisor-layout-child.test.ts');
+    temporaryFiles.push(fixture);
+    const readyFile = join(root, 'child-live-store-guard-ready');
+    writeFileSync(
+      fixture,
+      [
+        "import { expect, it } from 'vitest';",
+        "import { writeFileSync } from 'node:fs';",
+        "it('passes', async () => {",
+        `  writeFileSync(${JSON.stringify(readyFile)}, 'ready\\n');`,
+        '  await new Promise((resolve) => setTimeout(resolve, 400));',
+        '  expect(true).toBe(true);',
+        '});',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const childEnvironment = productionEnvironment(join(root, 'child-production'));
+    const wakeRoot = childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!;
+    const supervisorDir = join(wakeRoot, 'supervisor');
+    mkdirSync(supervisorDir, { recursive: true });
+    const durableWrite = (target: string, name: string, content: string): void => {
+      const temporary = join(supervisorDir, `.${name}.1234.00000000-0000-4000-8000-000000000000.tmp`);
+      writeFileSync(temporary, content, 'utf8');
+      renameSync(temporary, target);
+    };
+    const status = join(supervisorDir, 'typescript-supervisor-status.json');
+    const projected = join(supervisorDir, 'projected-registry.json');
+    const reconcile = join(wakeRoot, 'orchestration-mail-reconcile.json');
+    const reconcileLock = join(wakeRoot, 'orchestration-mail-reconcile.lock');
+    writeFileSync(status, '{"restartState":"waiting-restart"}\n', 'utf8');
+    writeFileSync(projected, '{"children":[]}\n', 'utf8');
+    writeFileSync(reconcile, '{"messages":{}}\n', 'utf8');
+    writeFileSync(reconcileLock, '1\n', 'utf8');
+
+    const childPromise = runHarnessedVitest(fixture, childEnvironment);
+    await waitForFile(readyFile);
+    durableWrite(status, 'typescript-supervisor-status.json', '{"restartState":"running"}\n');
+    durableWrite(projected, 'projected-registry.json', '{"children":[{"id":"pr2-scheduler"}]}\n');
+    writeFileSync(reconcileLock, '2\n', 'utf8');
+    writeFileSync(reconcile, '{"messages":{"msg":1}}\n', 'utf8');
+    const child = await childPromise;
+
+    expect(child.exitCode, child.stderr).toBe(0);
   });
 
   it('ignores an observed external wake-store tick around a passing harness child', async () => {

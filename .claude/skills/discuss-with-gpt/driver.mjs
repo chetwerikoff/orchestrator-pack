@@ -312,8 +312,9 @@ END-OF-DRAFT TOKEN (echo as "SPEC_RECEIVED: ..."): ${END_NONCE}`;
   const preCount = await page.locator(asst).count().catch(() => 0);  // anchor to the NEW turn
   const userSel = '[data-message-author-role="user"], [data-user-message-bubble="true"]';
   const preUserCount = await page.locator(userSel).count().catch(() => 0);
-  const send = page.locator('[data-testid="send-button"]');
-  if (await send.count()) await send.click(); else await page.keyboard.press('Enter');
+  // Keep in sync with SEND_BUTTON_SELECTOR in scripts/chatgpt-browser-turn/product-page-selectors.ts.
+  const send = page.locator('[data-testid="send-button"], button[type="submit"][aria-label="Send"]');
+  if (await send.count()) await send.first().click(); else await page.keyboard.press('Enter');
 
   // Prove the turn was actually submitted. A silent non-delivery is otherwise
   // indistinguishable from a slow answer, and waiting on it can only ever end in
