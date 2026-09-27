@@ -5681,6 +5681,9 @@ describe('Issue #2209 recorded pre-lens lifecycle recovery', () => {
     });
     delete recordedAttempt.reviewLane;
     writeFileSync(input.reviewEvidencePath, JSON.stringify(recordedAttempt, null, 2) + '\n');
+    // The recorded failure is pre-lens: the later architectural-stage fixture file
+    // does not exist yet and would make canonical discovery fail before lifecycle validation.
+    rmSync(input.evidencePath, { force: true });
 
     const canonicalProduceArgv = [
       'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
