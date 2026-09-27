@@ -44,11 +44,24 @@ function storeRelativePath(store, candidate) {
   return relative(store.defaultPath, candidate).replaceAll('\\', '/');
 }
 
-function externallyMutablePath(match) {
+function registeredNestedStorePath(match, env) {
+  if (match?.storeId !== 'wake-supervisor-runtime-state' || !match.store) return false;
+  const candidate = match.candidate;
+  return resolvedLiveStores(env).some((store) => {
+    if (store.id === match.storeId) return false;
+    if (store.kind === 'directory') return pathIsSameOrWithin(candidate, store.defaultPath);
+    if (candidate === store.defaultPath) return true;
+    if (!pathIsSameOrWithin(candidate, store.parentPath)) return false;
+    const rel = relative(store.parentPath, candidate).replaceAll('\\\\', '/');
+    return store.sidecarMatchers.some((matcher) => matcher.test(rel));
+  });
+}
+
+function externallyMutablePath(match, env) {
   if (!match?.store) return false;
   const allowed = EXTERNALLY_MUTABLE_STORE_PATHS.get(match.storeId);
-  if (!allowed) return false;
-  return allowed.has(storeRelativePath(match.store, match.candidate));
+  if (allowed?.has(storeRelativePath(match.store, match.candidate))) return true;
+  return registeredNestedStorePath(match, env);
 }
 
 function externallyMutableJournalSidecarPath(match) {
@@ -106,6 +119,24 @@ export function isExternalJournalSnapshotOnlyChange(changedPaths, observedPaths 
   return journalOnly && (observedPaths.has(EXTERNALLY_MUTABLE_JOURNAL_PATH) || changed.length > 0);
 }
 
+export function isRegisteredNestedStoreSnapshotOnlyChange(changedPaths, env = process.env) {
+  const wakeStore = resolvedLiveStores(env).find((store) => store.id === 'wake-supervisor-runtime-state');
+  if (!wakeStore) return false;
+  const nestedStores = resolvedLiveStores(env).filter((store) => store.id !== wakeStore.id);
+  const changed = [...changedPaths].filter((path) => path !== '');
+  if (changed.length === 0) return false;
+  return changed.every((relativePath) => {
+    const candidate = canonicalizeStorePath(join(wakeStore.defaultPath, relativePath));
+    return nestedStores.some((store) => {
+      if (store.kind === 'directory') return pathIsSameOrWithin(candidate, store.defaultPath);
+      if (candidate === store.defaultPath) return true;
+      if (!pathIsSameOrWithin(candidate, store.parentPath)) return false;
+      const rel = relative(store.parentPath, candidate).replaceAll('\\\\', '/');
+      return store.sidecarMatchers.some((matcher) => matcher.test(rel));
+    });
+  });
+}
+
 export function startParentLiveStoreGuard(env = process.env) {
   const baselineGuard = startLiveStoreGuard(env);
   const stores = resolvedLiveStores(env);
@@ -148,7 +179,7 @@ export function startParentLiveStoreGuard(env = process.env) {
         const match = classifyLiveStorePath(candidate, env);
         if (match) {
           const path = storeRelativePath(match.store, match.candidate);
-          if (externallyMutablePath(match)) addTouch(observedExternalTouches, match.storeId, path);
+          if (externallyMutablePath(match, env)) addTouch(observedExternalTouches, match.storeId, path);
           else if (externallyMutableJournalSidecarPath(match)) {
             addTouch(observedJournalSidecars, match.storeId, path);
           } else addTouch(exactTouches, match.storeId, path);
@@ -207,7 +238,8 @@ export function startParentLiveStoreGuard(env = process.env) {
         const observed = observedExternalTouches.get(store.id);
         const changed = changedPathsByStore.get(store.id) ?? [];
         if (store.id === EXTERNALLY_MUTABLE_JOURNAL_STORE_ID
-          && isExternalJournalSnapshotOnlyChange(changed, observed ?? new Set())) {
+          && (isExternalJournalSnapshotOnlyChange(changed, observed ?? new Set())
+            || isRegisteredNestedStoreSnapshotOnlyChange(changed, env))) {
           externallySettledStores.add(store.id);
         }
       }
