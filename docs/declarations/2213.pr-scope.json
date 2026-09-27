@@ -19,5 +19,5 @@
     "scripts/vitest-ci-lanes.config.json",
     "scripts/worker-smoke-run.ts"
   ],
-  "source_revision": "d1cca3aaf23ea94a7a53236a8d704e06d758bd08"
+  "source_revision": "6b625578a6f91733e85ec0aac91f21d73c3bba50"
 }
