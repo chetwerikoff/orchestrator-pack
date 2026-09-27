@@ -8,14 +8,14 @@
     "scripts/vitest-ci-runner.test.ts"
   ],
   "denylist": [
-    "credentials/**",
-    "packages/core/**",
-    "secrets/**",
-    "vendor/**"
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
-    "docs/declarations/**",
-    "scripts/**"
+    "docs/declarations/",
+    "scripts/"
   ],
   "source_revision": "2a4551614398ad3baae6e479736eb83a55f09c3d"
 }
