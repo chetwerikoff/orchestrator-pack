@@ -1275,7 +1275,18 @@ function inspectionExpression(): string {
       const ordinal = roleCounts[role]++;
       observed.push({ node, styleNode, style, documentOrdinal, role, ordinal, rawMessageId: node.getAttribute(${JSON.stringify(MESSAGE_ID_ATTR)}) });
     }
-    if (observed.length === 0) return { status: 'surface_unknown', reason: 'message_nodes_missing', page_url: location.href, ready_state: document.readyState };
+    if (observed.length === 0) {
+      // A fresh agentic turn renders no user unit and no final assistant node
+      // until it finishes; a live generation control means "still working",
+      // not a missing surface.
+      let generatingWithoutNodes = false;
+      try {
+        generatingWithoutNodes = Boolean(document.querySelector('[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]'));
+      } catch {
+        generatingWithoutNodes = false;
+      }
+      if (!generatingWithoutNodes) return { status: 'surface_unknown', reason: 'message_nodes_missing', page_url: location.href, ready_state: document.readyState };
+    }
     const messageIdCounts = new Map();
     for (const entry of observed) if (entry.rawMessageId) messageIdCounts.set(entry.rawMessageId, (messageIdCounts.get(entry.rawMessageId) || 0) + 1);
     const selected = observed.slice(Math.max(0, observed.length - MAX_NODES));
