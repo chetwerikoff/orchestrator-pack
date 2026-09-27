@@ -2897,7 +2897,7 @@ describe('issue 1023 operation-level bounds', () => {
     let reads = 0;
     const page = {
       locator: (selector: string) => {
-        if (selector === '#prompt-textarea') return { count: async () => 1 };
+        if (selector === COMPOSER_SELECTOR) return { count: async () => 1 };
         if (selector === '[role="alert"]') {
           return {
             count: async () => 5,

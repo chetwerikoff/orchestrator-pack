@@ -32,6 +32,7 @@ import { turnExitCode } from '../chatgpt-browser-turn/contracts.ts';
 import { fakeTurnPage } from '../chatgpt-browser-turn/fixtures/fake-turn-page.ts';
 import { liveTurnStreamSequence } from '../chatgpt-browser-turn/fixtures/live-turn-stream-contract.ts';
 
+import { COMPOSER_SELECTOR } from '../chatgpt-browser-turn/product-page-selectors.ts';
 import { mkdirSync, symlinkSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -187,7 +188,7 @@ describe('pack review 4773714081 product-owned wall detection', () => {
     let bodyReads = 0;
     const page = {
       locator: (selector: string) => {
-        if (selector === '#prompt-textarea') return emptyLocator();
+        if (selector === COMPOSER_SELECTOR) return emptyLocator();
         if (selector === 'body') {
           return {
             ...emptyLocator(),
@@ -212,7 +213,7 @@ describe('pack review 4773714081 product-owned wall detection', () => {
     let bodyReads = 0;
     const page = {
       locator: (selector: string) => {
-        if (selector === '#prompt-textarea') return emptyLocator();
+        if (selector === COMPOSER_SELECTOR) return emptyLocator();
         if (selector === '[role="alert"]') {
           return {
             count: async () => 1,
