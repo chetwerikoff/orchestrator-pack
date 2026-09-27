@@ -913,6 +913,7 @@ export function planWorkerSmokeSelectiveRetry(input: {
   isAncestor: (ancestorSha: string, descendantSha: string) => boolean;
   historyReadable?: boolean;
   historyBindingTrusted?: boolean;
+  smokeActor?: 'worker-owned' | 'independent';
 }): WorkerSmokeSelectiveRetryPlan {
   const fullPlan = base.resolveSmokeRequirement(input.issueBody);
   const affected = parseWorkerSmokeAffectedCarrier(input.prBody, input.target.headSha);
@@ -1051,6 +1052,16 @@ export function planWorkerSmokeSelectiveRetry(input: {
     }
 
     const selected = maximal[0];
+    if (input.smokeActor === 'independent'
+        && selected.headSha === currentHead
+        && selected.row.scenario.outcome === 'pass') {
+      execution.push(declared);
+      tupleDiagnostics.push({
+        tuple: tuplePreview(declared.action, declared.expected),
+        reason: 'independent_same_head_requires_execution',
+      });
+      continue;
+    }
     const selectedIsFreshCurrentHead = selected.headSha === currentHead
       && !base.isCarriedSmokeScenarioObservation(selected.row.scenario);
     if (affectedKeys.has(key) && !selectedIsFreshCurrentHead) {

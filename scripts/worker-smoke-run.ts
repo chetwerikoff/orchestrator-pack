@@ -1735,6 +1735,7 @@ function selectSmokeAttempt(
       : githubCommitIsAncestor(target.repositorySlug, ancestorSha, descendantSha, options.repoRoot);
   const selection = planWorkerSmokeSelectiveRetry({
     issueBody, prBody: target.prBody, comments, target: coverageTarget(target, target.headSha), isAncestor, historyReadable,
+    smokeActor: options.smokeActor ?? 'worker-owned',
   });
   const sourceHeads = [...new Set(selection.carried.map((entry) => entry.sourceHeadSha))];
   if (selection.carried.length === 0) return selection;
