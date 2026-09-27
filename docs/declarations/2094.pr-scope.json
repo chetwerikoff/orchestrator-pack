@@ -12,7 +12,8 @@
     "scripts/chatgpt-browser-turn/ui-adapter.ts",
     "scripts/flow-manager-authority-contract.test.ts",
     "scripts/smoke-fixtures/inject-message-stream-error.mjs",
-    "scripts/smoke-fixtures/inject-message-stream-error.test.ts"
+    "scripts/smoke-fixtures/inject-message-stream-error.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
     "credentials/",
@@ -32,7 +33,8 @@
     "scripts/chatgpt-browser-turn/ui-adapter.ts",
     "scripts/flow-manager-authority-contract.test.ts",
     "scripts/smoke-fixtures/inject-message-stream-error.mjs",
-    "scripts/smoke-fixtures/inject-message-stream-error.test.ts"
+    "scripts/smoke-fixtures/inject-message-stream-error.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "a9fc36ed6270de45dc7a698e5ee1d0a6d4d05873"
+  "source_revision": "b8773f253c7aaad319f65a82c06bcea5b695636b"
 }
