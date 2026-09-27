@@ -1723,6 +1723,105 @@ async function readComposerReadiness(page: any, deadline: number): Promise<boole
   }
 }
 
+type StateLightSendDeliveryWitness = 'owned_user_node' | 'composer_cleared' | 'unproven';
+
+async function readComposerTextForSendDelivery(
+  composer: any,
+  deadlineMs: number,
+): Promise<string | undefined> {
+  const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
+  if (waitMs <= 0) return undefined;
+  const timeoutCause = 'send_delivery_composer_read_timeout';
+  try {
+    return String(await boundedBrowserRead(
+      Promise.resolve(composer.innerText({ timeout: waitMs })),
+      waitMs,
+      timeoutCause,
+    ));
+  } catch (error) {
+    if (isPostSendTargetCrash(error)) throw error;
+    return undefined;
+  }
+}
+
+async function observeStateLightSendDelivery(
+  page: any,
+  composer: any,
+  marker: string,
+  baselineUserNodeCount: number,
+  invocationDeadlineMs: number,
+  deliveryProofWaitMs = MAX_LOCAL_READ_WAIT_MS,
+  browser?: any,
+): Promise<StateLightSendDeliveryWitness> {
+  const proofDeadlineMs = Math.min(
+    invocationDeadlineMs,
+    Date.now() + Math.max(0, deliveryProofWaitMs),
+  );
+  while (true) {
+    if (browserOrPageDefinitelyLost(page, browser)) return 'unproven';
+    const attemptDeadlineMs = Math.min(
+      invocationDeadlineMs,
+      Math.max(Date.now() + 1, proofDeadlineMs),
+    );
+    const observation = await readPageObservation(
+      page,
+      undefined,
+      undefined,
+      true,
+      attemptDeadlineMs,
+    );
+    if (!observation.transcriptIncomplete && observation.snapshot?.complete) {
+      const currentUserMessages = observation.messages.filter((message) => message.role === 'user');
+      if (
+        currentUserMessages.length > baselineUserNodeCount
+        && currentUserMessages.slice(baselineUserNodeCount).some((message) => ownedPromptMatches(message.text, marker))
+      ) {
+        return 'owned_user_node';
+      }
+    }
+    const composerText = await readComposerTextForSendDelivery(composer, attemptDeadlineMs);
+    if (composerText !== undefined && normalizeVisibleText(composerText).length === 0) {
+      return 'composer_cleared';
+    }
+    const remainingMs = proofDeadlineMs - Date.now();
+    if (remainingMs <= 0) return 'unproven';
+    await sleep(page, Math.min(INITIAL_POLL_MS, remainingMs));
+  }
+}
+
+async function dispatchStateLightSendAndObserveDelivery(input: {
+  readonly page: any;
+  readonly browser?: any;
+  readonly composer: any;
+  readonly sendButton: any;
+  readonly hasSendButton: boolean;
+  readonly marker: string;
+  readonly baselineUserNodeCount: number;
+  readonly sendWaitMs: number;
+  readonly invocationDeadlineMs: number;
+  readonly deliveryProofWaitMs?: number;
+}): Promise<{ sendCount: 0 | 1; witness: StateLightSendDeliveryWitness }> {
+  if (input.hasSendButton) {
+    await input.sendButton.click({ timeout: Math.min(MAX_LOCAL_READ_WAIT_MS, input.sendWaitMs) });
+  } else {
+    await input.composer.press('Enter', { timeout: Math.min(MAX_LOCAL_READ_WAIT_MS, input.sendWaitMs) });
+  }
+
+  const witness = await observeStateLightSendDelivery(
+    input.page,
+    input.composer,
+    input.marker,
+    input.baselineUserNodeCount,
+    input.invocationDeadlineMs,
+    input.deliveryProofWaitMs,
+    input.browser,
+  );
+  return {
+    sendCount: witness === 'unproven' ? 0 : 1,
+    witness,
+  };
+}
+
 async function waitForComposer(
   page: any,
   invocationDeadlineMs: number,
@@ -2060,6 +2159,7 @@ async function runTurn(
   let journalWriteFailed = false;
   const incidents: BrowserIncident[] = [];
   let afterSend = false;
+  let deliveryProofPendingRecovery = false;
   let ownershipForfeited = false;
   let cancellationReceiptEmitted = false;
   let heartbeatScheduler: TurnScopedHeartbeatScheduler | undefined;
@@ -2179,6 +2279,7 @@ async function runTurn(
     if (config.directPublication) installDirectPublicationObserver(page, directObservation);
 
     let baselineCount = 0;
+    let baselineUserNodeCount = 0;
     let baselineSnapshot: AtomicTranscriptSnapshot | undefined;
     let ownedConversationUrl: string | undefined;
 
@@ -2233,6 +2334,7 @@ async function runTurn(
       }
       baselineSnapshot = baseline.snapshot!;
       baselineCount = baseline.messages.length;
+      baselineUserNodeCount = baseline.messages.filter((message) => message.role === 'user').length;
       return null;
     };
 
@@ -2283,22 +2385,51 @@ async function runTurn(
       }
       remainingMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+      const sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
+      if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       transitionStateLightTurnObservation({
         profileKey,
         invocationId,
         phase: 'dispatching',
         reason: 'dispatch_boundary_entered',
       });
-      if (hasSendButton) {
-        const sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
-        if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
-        await sendButton.click({ timeout: Math.min(MAX_LOCAL_READ_WAIT_MS, sendWaitMs) });
-      } else {
-        const sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
-        if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
-        await composer.press('Enter', { timeout: Math.min(MAX_LOCAL_READ_WAIT_MS, sendWaitMs) });
+      const delivery = await dispatchStateLightSendAndObserveDelivery({
+        page,
+        browser,
+        composer,
+        sendButton,
+        hasSendButton,
+        marker,
+        baselineUserNodeCount,
+        sendWaitMs,
+        invocationDeadlineMs,
+      });
+      if (delivery.sendCount === 0) {
+        if (browserOrPageDefinitelyLost(page, browser)) {
+          deliveryProofPendingRecovery = true;
+          ownedConversationUrl = pageConversationUrl(page) ?? ownedConversationUrl;
+          return null;
+        }
+        incident('send_observation_error', 'send_delivery_unproven', 'return_local_error');
+        return {
+          page,
+          browser,
+          result: compactResult(
+            'send_failed',
+            'invocation',
+            'send_delivery_unproven',
+            invocationId,
+            profileKey,
+            sendCount,
+            pollCount,
+            navigation,
+            incidents,
+            { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+            journalWriteFailed,
+          ),
+        };
       }
-      sendCount += 1;
+      sendCount += delivery.sendCount;
       afterSend = true;
       setHeartbeatPhase('post_send_observation');
       if (!config.newChat && config.chatUrl) {
@@ -2657,18 +2788,20 @@ async function runTurn(
             continue;
           }
           if (claim === 'claimed' || claim === 'owned') {
-            transitionStateLightTurnObservation({
-              profileKey,
-              invocationId,
-              phase: 'sent_unharvested',
-              reason: 'fresh_conversation_url_bound',
-              sendCount,
-              sendWitness: 'numeric_send_count',
-              conversationUrl,
-            });
+            if (!deliveryProofPendingRecovery) {
+              transitionStateLightTurnObservation({
+                profileKey,
+                invocationId,
+                phase: 'sent_unharvested',
+                reason: 'fresh_conversation_url_bound',
+                sendCount,
+                sendWitness: 'numeric_send_count',
+                conversationUrl,
+              });
+            }
             claimed = true;
             ownedConversationUrl = conversationUrl;
-            emitCancellationReceipt(conversationUrl);
+            if (!deliveryProofPendingRecovery) emitCancellationReceipt(conversationUrl);
             break;
           }
         }
@@ -2957,7 +3090,11 @@ async function runTurn(
 
       browser = recovered.browser;
       if (recovered.kind === 'failure') return recoveryFailureOutcome(recovered);
-
+      if (deliveryProofPendingRecovery) {
+        sendCount = 1;
+        afterSend = true;
+        deliveryProofPendingRecovery = false;
+      }
       if (config.newChat && !ownedConversationUrl) {
         let claim: ReturnType<typeof tryClaimStateLightFreshConversation>;
         try {
@@ -3000,6 +3137,7 @@ async function runTurn(
         ownedConversationUrl = recovered.conversationUrl;
         emitCancellationReceipt(recovered.conversationUrl);
       }
+      if (config.newChat) emitCancellationReceipt(recovered.conversationUrl);
       transitionStateLightTurnObservation({
         profileKey,
         invocationId,
@@ -3028,7 +3166,7 @@ async function runTurn(
     // landed and this invocation still owns a reachable page, #1120 requires us
     // to keep that page rather than manufacture lost-chat/resend eligibility.
     while (true) {
-      if (sendCount >= 1 && browserOrPageDefinitelyLost(page, browser)) {
+      if ((sendCount >= 1 || deliveryProofPendingRecovery) && browserOrPageDefinitelyLost(page, browser)) {
         const terminal = await recoverCurrentObservation();
         if (terminal) return terminal;
         continue;
@@ -4049,8 +4187,9 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   const pageLost = browserOrPageDefinitelyLost(outcome.page, outcome.browser);
 
   // A normal pre-send terminal may close prepared observation state. A
-  // dispatching record is deliberately left untouched: click/submit may have
-  // delivered even if the process did not increment its numeric counter.
+  // dispatching record becomes not_sent only for send_delivery_unproven, where
+  // click/Enter returned but neither allowed delivery witness appeared. Other
+  // dispatching terminals remain untouched because delivery may still be unknown.
   if (
     outcome.result.send_count === 0
     && outcome.result.invocation_id.length > 0
@@ -4061,12 +4200,15 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
         outcome.result.configured_profile_key,
         outcome.result.invocation_id,
       );
-      if (observation.phase === 'prepared') {
+      const dispatchProvenNotDelivered = observation.phase === 'dispatching'
+        && outcome.result.state === 'send_failed'
+        && outcome.result.cause === 'send_delivery_unproven';
+      if (observation.phase === 'prepared' || dispatchProvenNotDelivered) {
         transitionStateLightTurnObservation({
           profileKey: outcome.result.configured_profile_key,
           invocationId: outcome.result.invocation_id,
           phase: 'not_sent',
-          reason: 'terminal_pre_send',
+          reason: dispatchProvenNotDelivered ? 'send_delivery_unproven' : 'terminal_pre_send',
           sendCount: 0,
           sendWitness: 'numeric_send_count',
         });
@@ -4162,6 +4304,10 @@ export const __testComposerMutation = {
   mutateComposerOrCause,
   hasBlockingPageOverlay,
   waitForComposer,
+};
+
+export const __testSendDelivery = {
+  dispatchStateLightSendAndObserveDelivery,
 };
 
 export type StateLightTurnDependencies = {
