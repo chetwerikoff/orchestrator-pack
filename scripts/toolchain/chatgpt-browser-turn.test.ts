@@ -185,6 +185,10 @@ describe('Issue #2171 live ChatGPT message and turn selectors', () => {
     expect(ASSISTANT_TURN_ACTION_SELECTOR).toContain('button[aria-label="Rate response"]');
   });
 
+  it('matches the live submit button, which has no send-button test id', () => {
+    expect(SEND_BUTTON_SELECTOR).toBe('[data-testid="send-button"], button[type="submit"][aria-label="Send"]');
+  });
+
   it('selects turn containers by data-turn-key', () => {
     expect(CONVERSATION_TURN_SECTION_SELECTOR).toBe('div[data-turn-key]');
     expect(ASSISTANT_TURN_ANCESTOR_XPATH).toBe('xpath=ancestor-or-self::div[@data-turn-key][1]');
