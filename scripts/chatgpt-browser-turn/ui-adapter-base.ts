@@ -162,13 +162,77 @@ export function createFreshIdentityRetention(
   return { observedConversationUrls: [], ...(retain ? { retain } : {}) };
 }
 
-function projectConversationPrefix(projectUrl: string): string {
-  return normalizeConversationUrl(projectUrl).replace(/\/+$/, '');
+interface ProjectConversationIdentity {
+  readonly identityRoot: string;
+  readonly projectSurface: string;
+  readonly origin: string;
+  readonly canonicalProjectId: boolean;
+}
+
+const CANONICAL_PROJECT_GPT_SEGMENT_RE = /^g-p-[0-9a-f]{32}(?:-[^/]+)?$/i;
+
+function projectConversationIdentity(projectUrl: string): ProjectConversationIdentity | undefined {
+  try {
+    const projectSurface = normalizeConversationUrl(projectUrl);
+    const parsed = new URL(projectSurface);
+    const match = /^\/g\/(g-p-[^/]+)/i.exec(parsed.pathname);
+    const projectSegment = match?.[1];
+    if (!projectSegment) return undefined;
+    return {
+      identityRoot: normalizeConversationUrl(`${parsed.origin}/g/${projectSegment}`),
+      projectSurface,
+      origin: parsed.origin,
+      canonicalProjectId: CANONICAL_PROJECT_GPT_SEGMENT_RE.test(projectSegment),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export function projectConversationPrefix(projectUrl: string): string | undefined {
+  const identity = projectConversationIdentity(projectUrl);
+  if (!identity) return undefined;
+  return identity.canonicalProjectId ? identity.identityRoot : identity.projectSurface;
 }
 
 function conversationPrefixFromObservedUrl(normalizedUrl: string): string | undefined {
   const match = /^(.*)\/c\/[0-9a-f-]{36}$/i.exec(normalizedUrl);
   return match?.[1];
+}
+
+export function projectConversationUrlMatchesProject(
+  conversationUrl: string,
+  projectUrl: string,
+): boolean {
+  try {
+    const identity = projectConversationIdentity(projectUrl);
+    if (!identity) return false;
+    const conversationPrefix = conversationPrefixFromObservedUrl(
+      normalizeConversationUrl(conversationUrl),
+    );
+    return conversationPrefix === identity.identityRoot
+      || conversationPrefix === identity.projectSurface;
+  } catch {
+    return false;
+  }
+}
+
+function observedConversationUrlAllowedForProject(
+  conversationUrl: string,
+  projectUrl: string,
+): boolean {
+  try {
+    const identity = projectConversationIdentity(projectUrl);
+    if (!identity) return false;
+    const conversationPrefix = conversationPrefixFromObservedUrl(
+      normalizeConversationUrl(conversationUrl),
+    );
+    return conversationPrefix === identity.identityRoot
+      || conversationPrefix === identity.projectSurface
+      || conversationPrefix === identity.origin;
+  } catch {
+    return false;
+  }
 }
 
 function buildConversationUrlFromPrefix(prefix: string, conversationUuid: string): string {
@@ -186,6 +250,7 @@ export function observeFreshConversationUrl(
     if (!normalized || (project && normalized === project)) return;
     if (!normalized.includes('/c/')) return;
     if (!conversationPrefixFromObservedUrl(normalized)) return;
+    if (projectUrl && !observedConversationUrlAllowedForProject(normalized, projectUrl)) return;
     if (!retention.observedConversationUrls.includes(normalized)) {
       retention.observedConversationUrls.push(normalized);
     }
