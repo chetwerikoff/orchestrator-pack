@@ -87,7 +87,6 @@ import {
   readAssistantNodeCompletionReady,
   readAssistantTurnCompletionReady,
   SEND_BUTTON_SELECTOR,
-  USER_MESSAGE_UNIT_SELECTOR,
   stripUiCollapseAffixes,
   USER_MESSAGE_STYLE,
   verifyProfile,
@@ -1749,33 +1748,38 @@ async function observeStateLightSendDelivery(
   baselineUserNodeCount: number,
   invocationDeadlineMs: number,
   deliveryProofWaitMs = MAX_LOCAL_READ_WAIT_MS,
+  browser?: any,
 ): Promise<StateLightSendDeliveryWitness> {
   const proofDeadlineMs = Math.min(
     invocationDeadlineMs,
     Date.now() + Math.max(0, deliveryProofWaitMs),
   );
-  const userNodes = page.locator(USER_MESSAGE_UNIT_SELECTOR);
-
   while (true) {
+    if (browserOrPageDefinitelyLost(page, browser)) return 'unproven';
     const attemptDeadlineMs = Math.min(
       invocationDeadlineMs,
       Math.max(Date.now() + 1, proofDeadlineMs),
     );
-    const currentUserNodeCount = await locatorCount(userNodes, attemptDeadlineMs);
-    if (currentUserNodeCount > baselineUserNodeCount) {
-      for (let index = 0; index < currentUserNodeCount; index++) {
-        const remainingMs = attemptDeadlineMs - Date.now();
-        if (remainingMs <= 0) break;
-        const text = await locatorText(userNodes.nth(index), Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs));
-        if (ownedPromptMatches(text, marker)) return 'owned_user_node';
+    const observation = await readPageObservation(
+      page,
+      undefined,
+      undefined,
+      true,
+      attemptDeadlineMs,
+    );
+    if (!observation.transcriptIncomplete && observation.snapshot?.complete) {
+      const currentUserMessages = observation.messages.filter((message) => message.role === 'user');
+      if (
+        currentUserMessages.length > baselineUserNodeCount
+        && currentUserMessages.slice(baselineUserNodeCount).some((message) => ownedPromptMatches(message.text, marker))
+      ) {
+        return 'owned_user_node';
       }
     }
-
     const composerText = await readComposerTextForSendDelivery(composer, attemptDeadlineMs);
     if (composerText !== undefined && normalizeVisibleText(composerText).length === 0) {
       return 'composer_cleared';
     }
-
     const remainingMs = proofDeadlineMs - Date.now();
     if (remainingMs <= 0) return 'unproven';
     await sleep(page, Math.min(INITIAL_POLL_MS, remainingMs));
@@ -1784,6 +1788,7 @@ async function observeStateLightSendDelivery(
 
 async function dispatchStateLightSendAndObserveDelivery(input: {
   readonly page: any;
+  readonly browser?: any;
   readonly composer: any;
   readonly sendButton: any;
   readonly hasSendButton: boolean;
@@ -1806,6 +1811,7 @@ async function dispatchStateLightSendAndObserveDelivery(input: {
     input.baselineUserNodeCount,
     input.invocationDeadlineMs,
     input.deliveryProofWaitMs,
+    input.browser,
   );
   return {
     sendCount: witness === 'unproven' ? 0 : 1,
@@ -2150,6 +2156,7 @@ async function runTurn(
   let journalWriteFailed = false;
   const incidents: BrowserIncident[] = [];
   let afterSend = false;
+  let deliveryProofPendingRecovery = false;
   let ownershipForfeited = false;
   let cancellationReceiptEmitted = false;
   let heartbeatScheduler: TurnScopedHeartbeatScheduler | undefined;
@@ -2269,6 +2276,7 @@ async function runTurn(
     if (config.directPublication) installDirectPublicationObserver(page, directObservation);
 
     let baselineCount = 0;
+    let baselineUserNodeCount = 0;
     let baselineSnapshot: AtomicTranscriptSnapshot | undefined;
     let ownedConversationUrl: string | undefined;
 
@@ -2323,6 +2331,7 @@ async function runTurn(
       }
       baselineSnapshot = baseline.snapshot!;
       baselineCount = baseline.messages.length;
+      baselineUserNodeCount = baseline.messages.filter((message) => message.role === 'user').length;
       return null;
     };
 
@@ -2373,10 +2382,6 @@ async function runTurn(
       }
       remainingMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
-      const baselineUserNodeCount = await locatorCount(
-        page.locator(USER_MESSAGE_UNIT_SELECTOR),
-        Math.min(insertionDeadlineMs, invocationDeadlineMs),
-      );
       const sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       transitionStateLightTurnObservation({
@@ -2387,6 +2392,7 @@ async function runTurn(
       });
       const delivery = await dispatchStateLightSendAndObserveDelivery({
         page,
+        browser,
         composer,
         sendButton,
         hasSendButton,
@@ -2396,6 +2402,11 @@ async function runTurn(
         invocationDeadlineMs,
       });
       if (delivery.sendCount === 0) {
+        if (browserOrPageDefinitelyLost(page, browser)) {
+          deliveryProofPendingRecovery = true;
+          ownedConversationUrl = pageConversationUrl(page) ?? ownedConversationUrl;
+          return null;
+        }
         incident('send_observation_error', 'send_delivery_unproven', 'return_local_error');
         return {
           page,
@@ -2774,18 +2785,20 @@ async function runTurn(
             continue;
           }
           if (claim === 'claimed' || claim === 'owned') {
-            transitionStateLightTurnObservation({
-              profileKey,
-              invocationId,
-              phase: 'sent_unharvested',
-              reason: 'fresh_conversation_url_bound',
-              sendCount,
-              sendWitness: 'numeric_send_count',
-              conversationUrl,
-            });
+            if (!deliveryProofPendingRecovery) {
+              transitionStateLightTurnObservation({
+                profileKey,
+                invocationId,
+                phase: 'sent_unharvested',
+                reason: 'fresh_conversation_url_bound',
+                sendCount,
+                sendWitness: 'numeric_send_count',
+                conversationUrl,
+              });
+            }
             claimed = true;
             ownedConversationUrl = conversationUrl;
-            emitCancellationReceipt(conversationUrl);
+            if (!deliveryProofPendingRecovery) emitCancellationReceipt(conversationUrl);
             break;
           }
         }
@@ -3072,7 +3085,11 @@ async function runTurn(
 
       browser = recovered.browser;
       if (recovered.kind === 'failure') return recoveryFailureOutcome(recovered);
-
+      if (deliveryProofPendingRecovery) {
+        sendCount = 1;
+        afterSend = true;
+        deliveryProofPendingRecovery = false;
+      }
       if (config.newChat && !ownedConversationUrl) {
         let claim: ReturnType<typeof tryClaimStateLightFreshConversation>;
         try {
@@ -3115,6 +3132,7 @@ async function runTurn(
         ownedConversationUrl = recovered.conversationUrl;
         emitCancellationReceipt(recovered.conversationUrl);
       }
+      if (config.newChat) emitCancellationReceipt(recovered.conversationUrl);
       transitionStateLightTurnObservation({
         profileKey,
         invocationId,
@@ -3143,7 +3161,7 @@ async function runTurn(
     // landed and this invocation still owns a reachable page, #1120 requires us
     // to keep that page rather than manufacture lost-chat/resend eligibility.
     while (true) {
-      if (sendCount >= 1 && browserOrPageDefinitelyLost(page, browser)) {
+      if ((sendCount >= 1 || deliveryProofPendingRecovery) && browserOrPageDefinitelyLost(page, browser)) {
         const terminal = await recoverCurrentObservation();
         if (terminal) return terminal;
         continue;

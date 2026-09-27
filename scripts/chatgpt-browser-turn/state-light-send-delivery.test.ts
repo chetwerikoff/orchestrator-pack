@@ -2,6 +2,7 @@
 // @vitest-pre-topology-seconds 1
 import { describe, expect, it, vi } from 'vitest';
 
+import { MESSAGE_AUTHOR_ROLE_ATTR, USER_MESSAGE_STYLE } from './product-page-selectors.ts';
 import { __testSendDelivery } from './state-light-turn-base.ts';
 
 const MARKER = `OPKTURNV1${'ab'.repeat(16)}`;
@@ -38,6 +39,7 @@ function createHarness(transport: Transport, effect: DeliveryEffect) {
     count: vi.fn(async () => userTexts.length),
     nth: vi.fn((index: number) => ({
       innerText: vi.fn(async () => userTexts[index] ?? ''),
+      getAttribute: vi.fn(async (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR ? USER_MESSAGE_STYLE : null),
     })),
   };
   const page = {
