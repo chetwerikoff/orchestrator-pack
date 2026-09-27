@@ -1,3 +1,5 @@
+// @vitest-ci-lane light
+// @vitest-pre-topology-seconds 120
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 import { runInNewContext } from 'node:vm';
