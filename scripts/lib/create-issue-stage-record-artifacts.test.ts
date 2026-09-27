@@ -5344,3 +5344,223 @@ describe('Issue #1997 settled author-round execution', () => {
     }
   });
 });
+
+
+describe('Issue #2209 recorded pre-lens lifecycle recovery', () => {
+  const RECORDED = [
+  {
+    "issue": 2182,
+    "cycleId": "b946331c-6e41-4ef2-b089-a5d0b4894f5f",
+    "stageAttemptId": "c065e0bb-bc85-42ba-af89-7a7ff0b3664b",
+    "routed": true,
+    "comments": [
+      {
+        "id": 5855348434,
+        "body": "Read revision: #2182 r02\nINVOCATION_ID_TO_ECHO: 17b842a1-692d-47f2-8b08-d91a5a3204d0\nreview-economics-contract: v1\nstage: architectural-review\nsource-slot: 03\nVERDICT: FINDINGS\nFINDING_COUNT: 2\n\nArchitectural review sequence\n\n1. Contradiction check: the final Verification instruction is still bound to r01 although the live Issue and this stage are r02.\n2. Feasibility check: the worker-smoke producer projection is implementable in the named boundary, and the existing closed SmokeNonPassCause carrier is an appropriate extension point. The end-to-end coordinator ownership cutover, however, is not acceptance-bound to the operator-local configuration change that the Issue itself says must happen outside the repository.\n3. Forced cut of overengineering: KEEP the single #2078 four-outcome boundary; KEEP one closed structured smoke subcause carrier; KEEP PASS-only readiness; KEEP the existing same-head retry fence and duplicate-argv guard; KEEP one-way coordinator writes plus legacy operator reads. CUT none of these mechanisms; no material simplification cut candidate is present.\n4. Missed-gap search: the required operator-local cutover has no completion/read-back criterion, and the handoff guard instruction names the wrong revision.\n\nid: operator-local-coordinator-cutover-has-no-acceptance-proof\ntype: spec\nseverity: P1\ntitle: The coordinator ownership goal can be accepted before the required operator-local cutover exists\nevidence: Goal 7-8 and Binding surface 5 require owner-driven pauses to become coordinator-owned and say the coordinator clears them without an operator message. Binding surface 7 separately says the exact semantic delta must be applied to the operator-local PROMPT.md and fm-prompt-universal-*.md through an operator-owned configuration workflow, while those files are explicitly out of repository scope. AC10 proves only tracked docs and AC11 proves a compatibility fixture; neither acceptance criterion nor Verification requires authoritative read-back that the operator-local configuration was actually updated. Current main's tracked chat-executor/runbook text still describes { operator: true } as waiting for an operator message, so repository-only completion can leave the real coordinator instruction surface on the old semantics.\nrecommendation: Make the external operator-owned cutover an explicit acceptance/handoff prerequisite with a supported read-back showing the semantic delta is active before claiming Goals 7-8/AC11 end-to-end, or narrow this Issue's completion claim to repository contract support and track operator-local adoption as a separately required operational step. Do not add a watcher, daemon, store, or new retry mechanism.\npersistent-machinery: no\n\nid: final-verification-is-bound-to-stale-r01\ntype: ci\nseverity: P1\ntitle: Final guard verification targets r01 instead of the live r02 specification\nevidence: The live Issue begins with source-revision r02, this architectural-review attempt is bound to r02, and the review-cycle journal records source-revision r02. The final Verification bullet nevertheless says to run the canonical Issue-body/tier/positive-outcome/contract-evidence/smoke-test-plan/allowed-roots/denylist guards against the live r01 body. There is no live r01 body at this stage, so following the stated handoff verification cannot validate the exact bytes under review.\nrecommendation: Change that handoff instruction to the exact current r02 body, preferably phrased as the current live source revision so a later bounded author correction cannot leave another stale literal.\npersistent-machinery: no\n\nSIMPLIFICATION_CLEAN",
+        "invocationId": "17b842a1-692d-47f2-8b08-d91a5a3204d0"
+      },
+      {
+        "id": 5855350185,
+        "body": "Read revision: #2182 r02\nINVOCATION_ID_TO_ECHO: 451b7c8a-6560-4f21-b4d6-8048e753bee5\nreview-economics-contract: v1\nstage: architectural-review\nsource-slot: 02\nVERDICT: FINDINGS\nFINDING_COUNT: 3\n\nid: coordinator-disputed-finding-authority-is-ambiguous\ntype: spec\nseverity: P1\ntitle: Coordinator recovery wording can transfer substantive finding-disposition authority\nevidence: r02 says the coordinator may \"resolve disputed findings within the already-approved Issue contract\", while the same Issue says the coordinator routes recovery and is not a second substantive task author. Current main's authority contract explicitly preserves substantive ownership: the GPT author owns defect/remedy and finding dispositions, reviewer/architect/operator decisions remain with their existing owners, and the manager must not consolidate reviewer findings or make those substantive decisions itself. r02 does not define a boundary that distinguishes the coordinator routing a disputed finding to its existing owner from the coordinator itself deciding that finding, so both incompatible implementations satisfy the literal \"resolve disputed findings\" wording.\nrecommendation: Narrow the delegation text and AC10 so coordinator may route, resume, or invoke the existing owner for disputed-finding resolution but may not choose defect/remedy/finding dispositions itself; add a negative authority assertion preserving the existing owner boundary.\npersistent-machinery: no\n\nid: external-pause-surface-witness-is-not-grounded\ntype: spec\nseverity: P1\ntitle: Required browser-surface identity has no named structured evidence producer\nevidence: Goal 3 and AC9 require structured pause evidence to identify the affected browser/CDP/profile surface sufficiently to repair the right one, while observed prose is explicitly forbidden as classification authority. On current main, the canonical SmokeReport structured fields carry result, Issue/PR/head, scenarios, nonPassCause, causeFamily, controlPlaneDiagnostic, Orca executable/terminal handle, and lifecycle facts; they do not carry a Browser-GPT endpoint/profile/surface identity. SmokeNonPassCause is a reason vocabulary and the existing controlPlaneDiagnostic describes Orca operation/outcome evidence, not a browser-surface binding. r02 requires this identity witness but does not name the authoritative producer or exact structured observation surface that can supply it, so an implementation can only invent a label, trust agent prose, or weaken the \"repair the right one\" guarantee.\nrecommendation: Apply the repository evidence-feasibility rule in the spec: name the minimal structured producer and field that already observes or can truthfully emit the affected surface binding, and make missing/unproven surface evidence fail to contract_defect. If only a surface class rather than an instance identity is actually needed, weaken the requirement explicitly to that observable class.\npersistent-machinery: no\n\nid: verification-targets-stale-r01\ntype: spec\nseverity: P1\ntitle: Final verification is bound to r01 even though the reviewed Issue is r02\nevidence: The live Issue's source-revision marker is r02, and all current stage/journal binding is r02, but the final Verification bullet instructs the implementer to run the canonical guards \"against the live r01 body\". This contradicts the exact-current-revision requirement and can either fail a correct implementation handoff or verify stale bytes instead of the task being implemented.\nrecommendation: Bind that verification step to the exact current live source revision (r02 for this body), preferably without a stale hard-coded revision token.\npersistent-machinery: no\n\nSIMPLIFICATION_CLEAN",
+        "invocationId": "451b7c8a-6560-4f21-b4d6-8048e753bee5"
+      },
+      {
+        "id": 5855354190,
+        "body": "Read revision: #2182 r02\nINVOCATION_ID_TO_ECHO: b0a0ac8a-8e36-4521-9579-1da435af7316\nstage: architectural-review\nsource-slot: 01\nreview-economics-contract: v1\nVERDICT: FINDINGS\nFINDING_COUNT: 3\n\nid: worker-smoke-manager-handoff-unbound\ntype: spec\nseverity: P1\ntitle: The spec adds a worker-smoke classifier without binding the production smoke result back into the manager\nevidence: r02 requires every worker-smoke result consumed by a manager to pass through the existing #2078/#2081 four-outcome boundary, and a proved scenario_assertion_failed to enter the existing fix cycle. On current main caafcbe607c4bb2334174bb73a00fe5c8fd30dc0, docs/chatgpt-task-execution-runbook.md and .cursor/skills/execute-issue-with-gpt/SKILL.md explicitly end the manager role at the settled-review handoff; only after that handoff does the supervisor launch the local independent-smoke worker, and independent-smoke findings belong to that supervisor-launched local worker. The current manager therefore never receives the independent smoke report. AC2 proves only classifier behavior from supplied fixtures, while AC8 states the desired fixer/local-worker result but does not identify or test the production handoff that supplies the canonical pack-worker-smoke-report/v1 to classifyExecuteIssueManagerRecord. An implementation can add the worker-smoke branch and make the focused tests pass while leaving the live independent-smoke path completely outside the boundary.\nrecommendation: Bind one exact production ownership path in the Issue: either keep/resume the same manager Dispatch through the independent-smoke result, or define the existing supervisor-to-manager return that feeds the authoritative exact-head smoke report into the shared boundary. Add a production-shaped regression proving a real canonical worker-smoke result traverses that handoff and that completed/FAIL reaches the existing fixer/local-worker owner without reopening pack review. Do not add a second classifier or new durable handoff subsystem.\npersistent-machinery: no\n\nid: external-surface-evidence-has-no-structured-producer\ntype: spec\nseverity: P1\ntitle: AC9 requires repair-target browser evidence that the current smoke record cannot produce\nevidence: r02 forbids free-form observed text from selecting the manager outcome and requires each worker-smoke external_pause to carry structured evidence identifying the affected browser/CDP/profile surface sufficiently to repair the right one. On current main, SmokeReport in scripts/lib/worker-smoke-core-base.ts has result/Issue/PR/head, scenarios, nonPassCause, causeFamily, Orca executable/terminal handle, and an optional SmokeControlPlaneDiagnostic. That diagnostic is closed to orca_control_plane_unavailable_preflight and orca_control_plane_lost_mid_smoke and its evidence is only operation/outcome/control_plane_code. The smoke-agent prompt gives non-PASS scenarios only the three generic scenario cause-family values and exposes no trusted browser endpoint/profile/surface identity field. Extending SmokeNonPassCause can distinguish why a pause happened, but it does not establish which browser surface the coordinator should repair. The evidence-feasibility rule in docs/chat-executor-rules.md requires the producer and observation surface to be established before making that evidence blocking.\nrecommendation: Either narrow the acceptance claim to the structured surface class that the current producer can actually prove, or explicitly bind the minimum trusted harness-produced field that identifies the repair target and its normalization/redaction rules. If exact endpoint/profile identity is not observable on the worker-smoke path, do not require or infer it from observed prose.\npersistent-machinery: no\n\nid: final-guard-binds-stale-r01\ntype: spec\nseverity: P1\ntitle: Final verification explicitly targets the superseded r01 body\nevidence: The live Issue and the active architectural-review attempt are r02, but the final Verification bullet still says to run the canonical Issue-body/tier/positive-outcome/contract-evidence/smoke-test-plan/allowed-roots/denylist guards against the live r01 body. That contradicts the same spec's current-revision binding and can direct handoff verification to superseded bytes rather than the exact implementation contract reviewed here.\nrecommendation: Replace the stale r01 reference with the exact current live revision requirement (r02 for this revision, or wording that mechanically resolves the current source-revision at handoff) so the guards cannot validate an archived body.\npersistent-machinery: no\n\nSIMPLIFICATION_CLEAN",
+        "invocationId": "b0a0ac8a-8e36-4521-9579-1da435af7316"
+      }
+    ]
+  },
+  {
+    "issue": 2185,
+    "cycleId": "907e81e1-3ffc-405b-82c7-2c8d7d3b9c81",
+    "stageAttemptId": "63933350-f4b8-4113-aa31-d42576d58a11",
+    "routed": true,
+    "comments": [
+      {
+        "id": 5855587928,
+        "body": "Read revision: #2185 r02\nreview-economics-contract: v1\nINVOCATION_ID_TO_ECHO: 48af57b1-c81c-48a1-a123-a2db11082323\nVERDICT: FINDINGS\n\nid: browser-gpt-project-card-surface-outside-allowed-roots\ntype: scope-violation\nseverity: P1\ntitle: Browser-GPT project-card migration requires production files forbidden by allowed-roots\nevidence: r02 says that only `projectUrl` moves out of machine-wide `local.config.json`, that Browser-GPT takes the URL from the selected project card, and that callers building `--project-url` get it from the resolver. On current main, `scripts/flow-manager-browser-gpt-long-run.ts` obtains the project URL from `runCreateIssueBrowserPreflight` and appends `--project-url`; `scripts/lib/create-issue-browser-gpt-preflight.ts` gets that URL from `resolveManagerBrowserOperatorConfig`; `scripts/lib/command-runtime-bootstrap.mjs` still resolves `DISCUSS_WITH_GPT_PROJECT_URL` or requires `projectUrl` in the operator `local.config.json`; `scripts/lib/create-issue-stage-record-cli.ts` independently requires `DISCUSS_WITH_GPT_PROJECT_URL`. Those production files (and `scripts/lib/command-runtime-bootstrap.d.mts`) are outside r02's allowed-roots. Therefore the worker cannot satisfy the stated Browser-GPT invariant for the governed create-Issue path without violating scope, and removing `projectUrl` from local config can instead make that path fail.\nrecommendation: Expand allowed-roots and Scope item 2 to the minimum real Browser-GPT configuration chain, including the long-run adapter, create-Issue preflight, command-runtime browser-config resolver/declaration, and stage-record author path; then test that a selected `--project` supplies the URL while local config contains only machine-wide browser settings. Do not defer these particular consumers to #2188 while r02 simultaneously requires `projectUrl` to leave local config.\npersistent-machinery: no\n\nid: fleet-service-has-no-pack-root-after-env-retirement\ntype: spec\nseverity: P1\ntitle: Retiring the fleet env file leaves the systemd service with no executable pack bootstrap\nevidence: Current `scripts/fleet/fleet-wake@.service` gets `PRIMARY` from `~/.config/orchestrator-fleet/%i.env` and starts `${PRIMARY}/scripts/lib/Invoke-TypeScriptCli.ts ... ${PRIMARY}/scripts/fleet/fleet-wake.ts`. r02 retires that env file, defines `primaryRoot` as the target repository rather than the pack checkout, and separately requires pack scripts to run from `{PACK_ROOT}`. The project card intentionally has no pack-root field, while deployment step 8 only says `systemctl --user enable --now fleet-wake@<projectId>`. As written, after env retirement there is no specified way for systemd to locate and start the pack code that would read the project card, so the documented target deployment cannot reach the new resolver.\nrecommendation: Define the existing service's bootstrap explicitly: install/render it so ExecStart points at the fixed pack checkout (or an already-defined stable operator launcher) and passes `--project %i`; add the migration step that reinstalls/daemon-reloads the unit when the env file is retired, plus a smoke proving the unit starts for a target whose `primaryRoot` does not contain pack scripts. No new daemon or target-selector state is needed.\npersistent-machinery: no\n\nSIMPLIFICATION_CLEAN",
+        "invocationId": "48af57b1-c81c-48a1-a123-a2db11082323"
+      },
+      {
+        "id": 5855620756,
+        "body": "Read revision: #2185 r02\nINVOCATION_ID_TO_ECHO: 97648f65-2a66-492d-a8ea-e6f44d61d57f\nreview-economics-contract: v1\nstage: architectural-review\nsource-slot: 03\nVERDICT: FINDINGS\nFINDING_COUNT: 3\n\nArchitectural review sequence\n\n1. Contradiction check: r02's card-only Browser-GPT invariant conflicts with its own allowed-roots because current production callers that select and forward Browser-GPT project URLs live outside the declared worker scope.\n2. Feasibility check: one tracked target-context resolver is feasible for the listed supervised/operator/fleet surfaces, but the Browser-GPT cutover is not executable as written without either editing out-of-scope selector owners or leaving old projectUrl authorities live.\n3. Forced cut of overengineering: KEEP the operator-owned per-project card, one tracked resolver, explicit origin match, no fallback, and per-project Browser-GPT/supervised/operator/fleet binding. CUT the global \"more than one GitHub remote candidate\" rejection: validating the selected card against origin is sufficient for the stated repository binding, while an unrelated GitHub upstream remote does not make that explicit binding ambiguous.\n4. Missed-gap search: r02 does not define conflict semantics when `--project` and `OPK_PROJECT_ID` are both present and disagree, so two explicit selectors can recreate split-brain without a required fail-closed result.\n\nid: browser-gpt-card-cutover-exceeds-allowed-roots\ntype: scope-violation\nseverity: P1\ntitle: Browser-GPT card-only cutover cannot be completed inside the declared scope\nevidence: r02 Scope 2 requires every `chatgpt-browser-turn` caller that builds `--project-url` to obtain it from `resolveTargetContext`, and AC2 says Browser-GPT resolves the target only through that resolver. On current main caafcbe607c4bb2334174bb73a00fe5c8fd30dc0, `scripts/lib/command-runtime-bootstrap.mjs` resolves `projectUrl` from `DISCUSS_WITH_GPT_PROJECT_URL` or operator `local.config.json`; `scripts/lib/create-issue-browser-gpt-preflight.ts` carries that value into `DISCUSS_WITH_GPT_PROJECT_URL`; `scripts/lib/create-issue-stage-record-cli.ts` reads that env value and builds `--project-url`; `scripts/flow-manager-browser-gpt-long-run.ts` accepts/resolves `--project-url` or operator config and forwards `--project-url`; and `scripts/lib/pack-gpt-reviewer.ts` builds `--project-url` from `PACK_GPT_BROWSER_PROJECT_URL`. None of those production files is in r02's `allowed-roots`, so a worker that respects the fence must leave valid Browser-GPT launch paths on the old selector while claiming card-only resolution.\nrecommendation: Either expand `allowed-roots` to the actual Browser-GPT selector owners/callers and move those paths to the card resolver in this Issue, or narrow Scope 2/AC2 to a precisely named subset and explicitly defer the remaining launch paths to #2188. Do not keep two live projectUrl authorities while claiming a card-only invariant.\npersistent-machinery: no\n\nid: project-selector-conflict-is-undefined\ntype: spec\nseverity: P1\ntitle: `--project` and `OPK_PROJECT_ID` can disagree without a canonical fail-closed rule\nevidence: The Invariant authorizes target selection by `--project <id>` or `OPK_PROJECT_ID`, and the resolver API receives both a `projectId` argument and `env`, but r02 never defines precedence or mismatch behavior when both are non-empty. Required operator launchers pass `--project`, while inherited environments may independently carry `OPK_PROJECT_ID`; AC1-AC3 test missing/mismatched cards and cwd/two-card isolation but never the selector-collision case. Different consumers choosing different precedence recreates the split-brain class this Issue exists to remove.\nrecommendation: Define one resolver-owned rule: when CLI/projectId and `OPK_PROJECT_ID` are both present they must be equal, otherwise fail closed with a typed selector-mismatch code; add a focused test and acceptance assertion. If only one is present, use it; if neither is present, keep the missing-selection failure.\npersistent-machinery: no\n\nid: global-multi-remote-rejection-is-excess\ntype: quality\nseverity: P2\ntitle: Rejecting any checkout with multiple GitHub remotes is stricter than the explicit-card contract needs\nevidence: r02 already makes the card the sole target selector and separately requires `card.repository` to match `git remote get-url origin` of `primaryRoot`. It additionally rejects a card when the checkout has more than one GitHub remote candidate. A normal fork checkout can have `origin` plus a GitHub `upstream`; that second remote does not make target identity ambiguous when only `origin` is used for the repository match, so the extra census creates false fail-closed outcomes without strengthening the stated binding.\nrecommendation: Cut the repository-wide multiple-GitHub-remote rejection. Validate the selected card against `origin` only; if ambiguity of `origin` itself is a real concern, constrain/check the URLs attached to `origin` rather than unrelated remotes.\npersistent-machinery: no\nsimplification-cut-candidate: yes",
+        "invocationId": "97648f65-2a66-492d-a8ea-e6f44d61d57f"
+      },
+      {
+        "id": 5855621190,
+        "body": "Read revision: #2185 r02\nINVOCATION_ID_TO_ECHO: a6c66245-cccb-4dcb-82d6-e741e55bec40\nreview-economics-contract: v1\nVERDICT: FINDINGS\n\nid: browser-gpt-preflight-still-requires-legacy-project-url\ntype: scope-violation\nseverity: P1\ntitle: The governed Browser-GPT path cannot complete the project-card cutover inside the allowed roots\nevidence: r02 requires browserGpt.projectUrl to come only from the selected project card and says projectUrl moves out of machine-wide local.config.json. On current main, scripts/lib/create-issue-browser-gpt-preflight.ts still obtains its Browser-GPT config through evaluateManagerBrowserEnvironmentPreflight and then exports DISCUSS_WITH_GPT_PROJECT_URL from environment.config.projectUrl; scripts/lib/command-runtime-bootstrap.mjs still requires projectUrl together with chromeUserDataDir from either the environment or the operator local.config.json. Neither production file is in r02's allowed-roots. Therefore an operator who performs the required migration by removing projectUrl from local config can make the governed create-Issue Browser-GPT path fail before the in-scope discuss-with-gpt resolver can supply the card URL, and the worker cannot repair that chain without violating scope.\nrecommendation: Expand Scope item 2 and allowed-roots to the minimum existing Browser-GPT preflight/configuration chain that still owns projectUrl, then make that chain take target projectUrl from resolveTargetContext(projectId) while retaining only machine-wide browser/profile settings in local config. Add a focused governed-path test proving a card-selected project works after local config no longer contains projectUrl; do not add a second target selector.\npersistent-machinery: no\n\nid: fleet-unit-cannot-bootstrap-after-env-retirement\ntype: spec\nseverity: P1\ntitle: Retiring the fleet env file removes the systemd unit's only path to the pack executable\nevidence: Current scripts/fleet/fleet-wake@.service loads EnvironmentFile=%h/.config/orchestrator-fleet/%i.env and launches both Invoke-TypeScriptCli.ts and fleet-wake.ts from ${PRIMARY}. r02 retires that per-project env file, defines primaryRoot as the target checkout rather than the pack checkout, and says pack scripts must run from {PACK_ROOT}. The project card intentionally contains no packRoot field, while deployment step 8 starts fleet-wake@<projectId> directly. Once the env file is removed, the unit has no specified bootstrap path to locate pack code before fleet-wake can start and read the selected card, so the documented target deployment is not executable when packRoot and primaryRoot differ.\nrecommendation: Specify the existing service bootstrap as part of this Issue: install/render the unit with a stable machine-wide pack checkout path (or an already-defined operator launcher) and pass the project id to the in-pack fleet entrypoint. Include the migration/daemon-reload step and a smoke where packRoot differs from the card primaryRoot. Keep project-specific target data solely in the card; no new daemon or per-project selector store is needed.\npersistent-machinery: no\n\nSIMPLIFICATION_CLEAN\n\nFINDING_COUNT: 2",
+        "invocationId": "a6c66245-cccb-4dcb-82d6-e741e55bec40"
+      }
+    ]
+  },
+  {
+    "issue": 2187,
+    "cycleId": "87680435-2f77-4a79-9123-add2d7e57bfe",
+    "stageAttemptId": "issue-2187-recorded-attempt",
+    "routed": false,
+    "comments": [
+      {
+        "id": 5855456111,
+        "body": "Read revision: #2187 r02\nINVOCATION_ID_TO_ECHO: bc787da7-0223-43c7-ab49-ef82eb26d51a\nstage: architectural-review\nsource-slot: 03\nreview-economics-contract: v1\nVERDICT: FINDINGS\nFINDING_COUNT: 3\n\nid: tier-understates-merge-guarantee\ntype: spec\nseverity: P1\ntitle: The frozen T2 declaration conflicts with the binding T3 failure mode\nevidence: The live r02 Goal and Binding surface change enforced verification and merge-readiness authority, including the rule that a card/live required-check mismatch blocks readiness. The Issue explicitly states the current failure impact: pack verification can be green while target code is untested and the PR can move toward review and merge. The current docs/tiering.md T3 test names CI/merge guarantee boundaries in prong 1 and treats a defect that can admit, ship, or authorize before fail-closed containment as prong-2 material escape. A defect in this Issue's required-check/live-policy logic can therefore return merge-ready and authorize/ship target work before the intended blocker fires. Both T3 prongs are present, so T2 is not consistent with the live tier contract.\nrecommendation: Do not silently up-tier the already captured T2 episode. Either narrow this Issue so it no longer mutates the required-check/merge-readiness guarantee and move that authority to a fresh T3 task, or restart the full task under a fresh T3 Issue/task identity as allowed by the lifecycle.\npersistent-machinery: no\n\nid: required-check-name-only-identity-is-lossy\ntype: spec\nseverity: P1\ntitle: Name-only requiredChecks cannot prove the live required-check producer binding\nevidence: r02 defines card requiredChecks as CI context names and says merge readiness compares PR-head statuses against those names. On current main@caafcbe607c4bb2334174bb73a00fe5c8fd30dc0, the live branch-protection response exposes required_status_checks.checks as context plus app_id; six required checks are bound to app_id 15368 while orchestrator-pack/pack-review has app_id null. The current repository also has a production path that requests PR checks with appId. If r02 compares only names, a check with the expected context from the wrong producer can satisfy the card-side test even though GitHub's live requirement is producer-bound; the card/live name sets can still look equal.\nrecommendation: Keep the card's simple name list if desired, but after validating the declared name set against live policy, evaluate the head using the exact live required-check identities, including producer/app binding, and collect the corresponding app identity from PR checks. Alternatively, explicitly reject producer-bound live requirements; do not treat name equality alone as readiness authority.\npersistent-machinery: no\n\nid: classic-and-ruleset-composition-undefined\ntype: spec\nseverity: P1\ntitle: The effective live required-check set is undefined when classic protection and rulesets both apply\nevidence: r02 says the implementation reads branch protection or rulesets and AC3 verifies disagreement with branch protection or rulesets, but it never defines how simultaneous applicable policies compose. GitHub can expose classic branch protection and applicable branch rules at the same time. An implementation can therefore select one source, match the card against it, and ignore additional required checks carried by the other source while still satisfying the literal AC3 shape, producing a false merge-ready result that violates the Goal.\nrecommendation: Define one effective live-policy rule: either union all applicable enforced required-check requirements from classic protection and rulesets, or fail closed when both mechanisms contribute required checks until their composition is supported. Add a mixed-policy fixture/acceptance case, and keep unreadable/ambiguous live-policy reads non-green.\npersistent-machinery: no\n\nMechanism verdicts (advisory):\n- card-owned local/focused verification: keep\n- card-owned defaultBranch for PR creation, checkout, comparison, and merge: keep\n- live branch-protection/ruleset comparison: keep, with exact effective-policy composition\n- orchestrator-pack/pack-review required only when declared by the target: keep\n- one-time PR-body disposition of remaining pack-only 'main' literals: keep\n- target deployment/operator runbook updates: keep\n\nSIMPLIFICATION_CLEAN",
+        "invocationId": "bc787da7-0223-43c7-ab49-ef82eb26d51a"
+      },
+      {
+        "id": 5855457876,
+        "body": "Read revision: #2187 r02\nINVOCATION_ID_TO_ECHO: de85f28f-e01d-4c25-91c8-c12b328b4965\nreview-economics-contract: v1\nVERDICT: FINDINGS\n\nid: required-check-provider-binding-is-unspecified\ntype: spec\nseverity: P1\ntitle: A same-name check from the wrong producer can satisfy readiness\nevidence: r02 defines verification.requiredChecks as a list of CI context names and says merge readiness compares PR-head statuses against those names. The current pack read surface already exposes appId on pr checks, and the existing runtime-history policy path treats an exact required-check app id as admission-relevant. r02 never states that an app/integration binding present in live branch protection or ruleset policy must also match the PR-head check. Therefore a different producer can emit the same context name and satisfy the card-by-name check even though the live policy binds that context to another producer, contradicting the goal that target work must not be falsely advanced.\nrecommendation: Keep requiredChecks as names if desired, but define the live policy as the source of any app/integration binding and require readiness to match that binding when present; fail closed on ambiguous duplicate producers and add a fixture where the context name matches but the app/integration does not.\npersistent-machinery: no\n\nid: target-live-policy-read-is-not-admitted-or-fail-closed\ntype: spec\nseverity: P1\ntitle: The required live-policy reads are not executable through the current tracked wrapper contract\nevidence: r02 mandates arbitrary-target reads of repos/{owner}/{repo}/branches/{branch}/protection and repos/{owner}/{repo}/rules/branches/{branch} through scripts/gh. On the current default branch, scripts/lib/gh-inventory-match.mjs admits only the exact orchestrator-pack/main required_status_checks API route and has no rules/branches route. AGENTS.md requires uncovered GitHub reads to be added to the tracked inventory rather than bypassed. r02 also specifies only a card/live mismatch blocker; it does not say what happens when either live-policy read is forbidden, unavailable, or otherwise cannot be proven. Thus the central live comparison is neither currently admitted by the required transport nor fail-closed by an observable acceptance rule.\nrecommendation: Make tracked scripts/gh coverage for the target repository/defaultBranch protection and branch-rules reads part of acceptance, and define an unreadable or incomplete live-policy lookup as a typed readiness blocker rather than as empty policy or card-only fallback.\npersistent-machinery: no\n\nid: smoke-does-not-observe-verification-or-pr-base\ntype: test\nseverity: P2\ntitle: The smoke plan can pass while target verification and PR base selection are still wrong\nevidence: The positive outcome and AC1 require three independent effects: target local commands are the only verification executed, PR base is defaultBranch, and requiredChecks govern readiness. The only smoke action invokes the merge-readiness check. That action can observe CI readiness, but it does not execute target verification and does not create or otherwise exercise the PR-creation/base-selection path. A build-green smoke can therefore pass while pack verification still runs or PR creation still targets main.\nrecommendation: Add the minimum smoke coverage that actually invokes the target verification path and the PR base-selection path, either as two small fixture actions or one end-to-end fixture, while keeping the existing readiness smoke.\npersistent-machinery: no\n\nSIMPLIFICATION_CLEAN\nFINDING_COUNT: 3",
+        "invocationId": "de85f28f-e01d-4c25-91c8-c12b328b4965"
+      },
+      {
+        "id": 5855459256,
+        "body": "Read revision: #2187 r02\nINVOCATION_ID_TO_ECHO: 6aac90c0-b6d6-4d9a-b488-0e2dbafcf4b6\nreview-economics-contract: v1\nstage: architectural-review\nsource-slot: 01\nVERDICT: FINDINGS\n\nid: t2-cannot-contain-merge-readiness-and-base-authority\ntype: spec\nseverity: P1\ntitle: The frozen T2 contract changes a T3 merge/CI guarantee\nevidence: The live tier rubric makes T3 conjunctive: a task is T3 when it changes an enforced production/CI-merge guarantee and a plausible defect can ship, authorize, or otherwise escape safe containment before ordinary operator-visible handling. This Issue changes merge-readiness required-check authority and the branch used for PR creation/comparison/merge. Its own problem statement says the current failure can run pack verification green and move target work toward review and merge while target code is untested. That is the rubric's required-check / merge-contract failure shape, not merely one contained component-design change. Because the selected-stage capture consumes the frozen T2 intake, a post-capture T2→T3 reclassification is not a legal in-place correction.\nrecommendation: Keep this Issue T2 only if the bounded author correction cuts the merge-authorizing/readiness/base-selection guarantee from this contract and leaves a genuinely contained T2 unit; put the cut guarantee work in a separate T3 task. Otherwise the task needs a new T3 Issue/task contract rather than an in-place tier rewrite.\npersistent-machinery: no\n\nid: target-live-policy-read-is-deferred-to-out-of-scope-2188\ntype: scope-violation\nseverity: P1\ntitle: AC3 requires a target GitHub read that the stated sequencing defers to #2188\nevidence: This Issue requires reading the target repository's branch protection or rulesets through the tracked scripts/gh wrapper and treats card/live disagreement as a blocker, while its Files out of scope defer \"Other repository literals\" to #2188. Live Issue #2188, which is explicitly sequenced after #2186 and #2187, identifies scripts/lib/gh-rest-routes.mjs and scripts/lib/gh-inventory-match.mjs as currently allow-listed to orchestrator-pack and assigns #2188 the work of accepting the card repository for canonical REST forms. Therefore #2187 as written cannot exercise its required target-repository live-policy read before #2188 without taking work that the sibling contract says belongs to #2188.\nrecommendation: Make the minimum scripts/gh target-repository routing needed by #2187 an explicit exception owned by #2187, with #2188 later auditing/marking that sink done; alternatively reorder/split the sibling tasks so the routing capability is a prerequisite. Do not leave AC3 dependent on functionality scheduled only after this Issue.\npersistent-machinery: no\n\nid: required-check-live-set-normalization-is-undefined\ntype: spec\nseverity: P1\ntitle: Card/live required-check equality has no deterministic authority set\nevidence: The Issue defines card verification.requiredChecks as a list of CI context names and requires mismatch against live branch protection or rulesets to block readiness, but it does not define how to derive one comparable live set when classic protection and one or more rulesets both apply, how ruleset-required workflows or other non-context CI requirements are handled, or whether an empty requiredChecks list means \"no required checks\" versus invalid configuration. The current classifier in docs/review-ready-stuck-guard.mjs falls back to PACK_MERGE_CONTRACT_CHECK_NAMES when requiredCheckNames is empty, and worker-smoke-run.ts currently reads only classic protection required_status_checks. An implementation can therefore satisfy the named happy-path fixture yet retain a pack fallback or ignore an applicable live rule and still claim AC3.\nrecommendation: Specify the smallest canonical comparison contract: define the live sources that contribute required check names, their union/precedence when multiple sources apply, fail-closed behavior for unreadable or unsupported CI-enforcing live rules, and exact empty-list semantics. Add focused acceptance cases for empty requiredChecks and ruleset-only plus combined protection/ruleset configuration; do not add a second persistent policy store.\npersistent-machinery: no\n\narchitectural-mechanism-verdicts:\n- target card as verification/default-branch input: keep\n- target verification falling back to pack commands: cut\n- live repository configuration as a drift check: keep, once the comparable authority set is defined\n- new persistent policy/state subsystem: cut; no such machinery is needed for the stated contract\n\nFINDING_COUNT: 3",
+        "invocationId": "6aac90c0-b6d6-4d9a-b488-0e2dbafcf4b6"
+      }
+    ]
+  }
+] as const;
+
+  function prepareRecordedCase(recorded: (typeof RECORDED)[number]) {
+    const input = fixture({
+      intakeRevision: 'r02',
+      sourceRevision: 'r02',
+      phase: 'pre-lens',
+      issueNumber: recorded.issue,
+    });
+    const taskIdentity = `issue:${recorded.issue}`;
+    const comments = recorded.comments.map((item) => comment(item.body, {
+      id: item.id,
+      issueNumber: recorded.issue,
+    }));
+    let routing: ReturnType<typeof buildReviewLaneRouting> | undefined;
+    if (recorded.routed) {
+      const declaration: ReviewLaneAuthorDeclaration = {
+        schema: 'review-lane-change-set/v1',
+        owner: 'issue-author',
+        entries: [{
+          kind: 'exact',
+          path: 'scripts/lib/create-issue-stage-record-artifacts.ts',
+          behaviors: ['pure-review-lane-selection'],
+        }],
+      };
+      const normalized = normalizeReviewLaneDeclaration(declaration);
+      if (normalized.status !== 'usable') throw new Error('recorded routing fixture must be usable');
+      routing = buildReviewLaneRouting(
+        { ...normalized, identity: `r02:${normalized.identity}` },
+        classifyReviewLaneDeclaration(declaration),
+        'r02',
+        recorded.stageAttemptId,
+        'disputed',
+      );
+    }
+
+    const evidence = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+    evidence.taskIdentity = taskIdentity;
+    evidence.stage = 'architectural-review';
+    evidence.stageAttemptId = recorded.stageAttemptId;
+    evidence.stageSequence = 1;
+    evidence.cycleId = recorded.cycleId;
+    evidence.cycleBinding = { cycleId: recorded.cycleId, sourceRevision: 'r02', boundBeforeLaunch: true };
+    evidence.sourceRevision = 'r02';
+    evidence.outcome = 'incident';
+    evidence.policyVersion = routing ? 'review-lane-routing/v1' : 'triple-source/v1';
+    evidence.reviewerCardinality = 3;
+    evidence.cardinalityConfigIdentity = routing?.cardinalityConfigIdentity ?? CONFIG;
+    if (routing) evidence.reviewLaneRouting = routing;
+    else delete evidence.reviewLaneRouting;
+    delete evidence.reviewLane;
+    evidence.invocations = recorded.comments.map((item, index) => {
+      const reviewerSlot = String(index + 1).padStart(2, '0');
+      return {
+        schema: 'reviewer-invocation-envelope/v1',
+        reviewEpisodeId: `${taskIdentity}@r02`,
+        stageAttemptId: recorded.stageAttemptId,
+        policyVersion: routing ? 'review-lane-routing/v1' : 'triple-source/v1',
+        reviewerCardinality: 3,
+        cardinalityConfigIdentity: routing?.cardinalityConfigIdentity ?? CONFIG,
+        stage: 'architectural-review',
+        sourceRevision: 'r02',
+        invocationId: item.invocationId,
+        reviewerSource: `browser-gpt-${reviewerSlot}#capture=direct-publication/v1`,
+        reviewerSlot,
+        reviewerOrdinal: index + 1,
+        attemptOrdinal: 1,
+        retryAttempt: false,
+        terminal: true,
+        terminalClassification: 'post-send-failure',
+        sendCount: 1,
+        retryClass: 'retry-forbidden',
+        revisionCheck: 'matched',
+        capacityOutcome: 'admitted',
+        capacityWaitMs: 0,
+        ...(routing ? { reviewLaneRouting: routing } : {}),
+      };
+    });
+    writeFileSync(input.reviewEvidencePath, JSON.stringify(evidence, null, 2) + '\n');
+    for (const name of readdirSync(input.dir)) {
+      if (/^pass-01-architectural-review-\d+\.capture\.txt$/.test(name)) {
+        rmSync(join(input.dir, name), { force: true });
+      }
+    }
+    const source = transport({
+      census: comments,
+      cycleComments: [cycleComment('r02', recorded.cycleId)],
+      issueNumber: recorded.issue,
+    });
+    return { input, source, comments, routing };
+  }
+
+  for (const recorded of RECORDED) {
+    it(`replays Issue #${recorded.issue} publications without resend and advances to author-round`, () => {
+      const { input, source, comments, routing } = prepareRecordedCase(recorded);
+      const logs: string[] = [];
+      const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+        logs.push(String(line));
+      });
+      try {
+        const code = runStageFinalizeCli([
+          'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
+          '--repo', REPOSITORY,
+          '--issue-number', String(recorded.issue),
+          '--review-dir', input.dir,
+          '--stage-evidence', input.reviewEvidencePath,
+          '--expected-source-revision', 'r02',
+          '--expected-stage', 'architectural-review',
+          '--expected-stage-attempt-id', recorded.stageAttemptId,
+          '--json',
+        ], source);
+        expect(code).toBe(3);
+        const output = JSON.parse(logs.at(-1) ?? '{}') as Record<string, any>;
+        expect(output).toMatchObject({
+          ok: false,
+          cause: 'reconciliation_failed',
+          nextAction: { kind: 'author-round' },
+        });
+        expect(output.nextAction?.kind).not.toBe('produce-acceptance-artifacts');
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect(source.createdIssueComments).toHaveLength(0);
+      const stored = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+      for (const [index, published] of comments.entries()) {
+        const slot = String(index + 1).padStart(2, '0');
+        const capturePath = String(stored.invocations[index]?.capturePath ?? '');
+        expect(capturePath).not.toBe('');
+        expect(readFileSync(capturePath, 'utf8')).toBe(String(published.body));
+        expect(stored.invocations[index]).toMatchObject({
+          terminalClassification: 'post-send-failure',
+          sendCount: 1,
+          retryClass: 'retry-forbidden',
+          artifactAuthority: {
+            kind: 'authoritative-github-artifact',
+            commentId: published.id,
+          },
+        });
+        if (routing) {
+          expect(stored.reviewLane.sourceVerdictEvidence[slot].terminalClassification)
+            .toBe('post-send-failure');
+        }
+      }
+    });
+  }
+});
