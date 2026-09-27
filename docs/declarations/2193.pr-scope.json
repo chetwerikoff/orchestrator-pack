@@ -12,26 +12,8 @@
     "vendor/"
   ],
   "allowed_roots": [
-    ".claude/skills/",
-    ".cursor/rules/",
-    ".cursor/skills/",
-    ".github/workflows/",
-    "agent-orchestrator.yaml.example",
-    "AGENTS.md",
-    "CLAUDE.md",
-    "docs/",
-    "docs/declarations/",
-    "package-lock.json",
-    "package.json",
-    "plugins/",
-    "prompts/",
-    "README.md",
-    "scripts/",
-    "tests/external-output-references/",
-    "tests/fixtures/pack-gpt-browser-turn-harness.mjs",
-    "tests/issue854-worker-status-binding-cache.mjs",
-    "tests/README.md",
-    "tests/worker-status-store-live-rca.ts"
+    "scripts/lib/worker-smoke-core-base.ts",
+    "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "f97afded5130cc90b0c1455f8028255815438d25"
+  "source_revision": "141e0c062fadff0b2f7fb2f7c1c13f70f7195610"
 }
