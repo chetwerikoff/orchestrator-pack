@@ -1,12 +1,12 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
 
-import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { runProcessSync } from './kernel/subprocess.ts';
 import { validateHeavyBatchReportPayload, type HeavyInvocationUnit } from './lib/vitest-heavy-batching.mjs';
 import { hasFailedTestsVitestJsonReport } from './lib/vitest-json-report.mjs';
 import { observeHeavyLaneContext, readHeavyLaneContexts } from './lib/testmode-fleet-lane.ts';
@@ -35,9 +35,14 @@ function makeRoot(prefix: string): string {
 }
 
 function runCheckedGit(repoRoot: string, args: string[]): string {
-  const result = spawnSync('git', args, { cwd: repoRoot, encoding: 'utf8' });
-  if (result.status !== 0) {
-    throw new Error(`git ${args.join(' ')} failed: ${result.stderr || result.error?.message || 'unknown error'}`);
+  const result = runProcessSync({
+    command: 'git',
+    args,
+    cwd: repoRoot,
+    inheritParentEnv: true,
+  });
+  if (!result.ok) {
+    throw new Error(`git ${args.join(' ')} failed: ${result.stderr || result.error || 'unknown error'}`);
   }
   return result.stdout;
 }
@@ -86,11 +91,12 @@ function runTopologyEmitter(repoRoot: string, overrides: NodeJS.ProcessEnv = {})
   delete env.VITEST_WORKER_ID;
   delete env.OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT;
   Object.assign(env, overrides);
-  return spawnSync(
-    process.execPath,
-    [path.join(process.cwd(), 'scripts', 'emit-vitest-heavy-topology.mjs'), '--skip-oversized-guard'],
-    { cwd: process.cwd(), env, encoding: 'utf8' },
-  );
+  return runProcessSync({
+    command: process.execPath,
+    args: [path.join(process.cwd(), 'scripts', 'emit-vitest-heavy-topology.mjs'), '--skip-oversized-guard'],
+    cwd: process.cwd(),
+    env,
+  });
 }
 
 describe('Vitest topology emitter worktree hygiene', () => {
@@ -101,7 +107,7 @@ describe('Vitest topology emitter worktree hygiene', () => {
 
     const result = runTopologyEmitter(root, { OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT: '1' });
 
-    expect(result.status).toBe(0);
+    expect(result.exitCode).toBe(0);
     expect(readFileSync(planPath, 'utf8')).toBe(before);
     expect(runCheckedGit(root, ['status', '--porcelain'])).toBe('');
   });
@@ -121,7 +127,7 @@ describe('Vitest topology emitter worktree hygiene', () => {
 
     const result = runTopologyEmitter(root, { PATH: binDir });
 
-    expect(result.status).toBe(1);
+    expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('"fallbackClassification":"pre-topology-measurement-failed"');
     expect(readFileSync(planPath, 'utf8')).toBe(before);
     expect(runCheckedGit(root, ['status', '--porcelain'])).toBe('');
