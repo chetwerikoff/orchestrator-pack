@@ -2,7 +2,7 @@
 // Re-exported from ui-adapter.ts for transport callers; tests/fixtures import here
 // directly to avoid vi.mock cycles on the full ui-adapter module.
 
-export const COMPOSER_SELECTOR = '#prompt-textarea';
+export const COMPOSER_SELECTOR = '#prompt-textarea, [contenteditable="true"][role="textbox"]';
 export const SEND_BUTTON_SELECTOR = '[data-testid="send-button"]';
 export const MESSAGE_AUTHOR_ROLE_ATTR = 'data-message-author-role';
 export const MESSAGE_NODE_SELECTOR = `[${MESSAGE_AUTHOR_ROLE_ATTR}]`;
