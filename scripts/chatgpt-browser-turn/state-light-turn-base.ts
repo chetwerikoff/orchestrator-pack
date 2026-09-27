@@ -87,6 +87,7 @@ import {
   readAssistantNodeCompletionReady,
   readAssistantTurnCompletionReady,
   SEND_BUTTON_SELECTOR,
+  USER_MESSAGE_UNIT_SELECTOR,
   stripUiCollapseAffixes,
   USER_MESSAGE_STYLE,
   verifyProfile,
@@ -1720,6 +1721,113 @@ async function readComposerReadiness(page: any, deadline: number): Promise<boole
   }
 }
 
+type StateLightSendDeliveryWitness = 'owned_user_node' | 'composer_cleared' | 'unproven';
+
+async function readComposerTextForSendDelivery(
+  composer: any,
+  deadlineMs: number,
+): Promise<string | undefined> {
+  const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
+  if (waitMs <= 0) return undefined;
+  const timeoutCause = 'send_delivery_composer_read_timeout';
+  try {
+    if (typeof composer.evaluate === 'function') {
+      return String(await boundedBrowserRead(
+        Promise.resolve(composer.evaluate(
+          (element: any) => String(element.innerText ?? element.textContent ?? ''),
+          undefined,
+          { timeout: waitMs },
+        )),
+        waitMs,
+        timeoutCause,
+      ));
+    }
+    return String(await boundedBrowserRead(
+      Promise.resolve(composer.innerText({ timeout: waitMs })),
+      waitMs,
+      timeoutCause,
+    ));
+  } catch (error) {
+    if (isPostSendTargetCrash(error)) throw error;
+    return undefined;
+  }
+}
+
+async function observeStateLightSendDelivery(
+  page: any,
+  composer: any,
+  marker: string,
+  baselineUserNodeCount: number,
+  invocationDeadlineMs: number,
+  deliveryProofWaitMs = MAX_LOCAL_READ_WAIT_MS,
+): Promise<StateLightSendDeliveryWitness> {
+  const proofDeadlineMs = Math.min(
+    invocationDeadlineMs,
+    Date.now() + Math.max(0, deliveryProofWaitMs),
+  );
+  const userNodes = page.locator(USER_MESSAGE_UNIT_SELECTOR);
+
+  while (true) {
+    const attemptDeadlineMs = Math.min(
+      invocationDeadlineMs,
+      Math.max(Date.now() + 1, proofDeadlineMs),
+    );
+    const currentUserNodeCount = await locatorCount(userNodes, attemptDeadlineMs);
+    if (currentUserNodeCount > baselineUserNodeCount) {
+      for (let index = 0; index < currentUserNodeCount; index++) {
+        const remainingMs = attemptDeadlineMs - Date.now();
+        if (remainingMs <= 0) break;
+        const text = await locatorText(userNodes.nth(index), Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs));
+        if (ownedPromptMatches(text, marker)) return 'owned_user_node';
+      }
+    }
+
+    const composerText = await readComposerTextForSendDelivery(composer, attemptDeadlineMs);
+    if (composerText !== undefined && normalizeVisibleText(composerText).length === 0) {
+      return 'composer_cleared';
+    }
+
+    const remainingMs = proofDeadlineMs - Date.now();
+    if (remainingMs <= 0) return 'unproven';
+    await sleep(page, Math.min(INITIAL_POLL_MS, remainingMs));
+  }
+}
+
+async function dispatchStateLightSendAndObserveDelivery(input: {
+  readonly page: any;
+  readonly composer: any;
+  readonly sendButton: any;
+  readonly hasSendButton: boolean;
+  readonly marker: string;
+  readonly sendWaitMs: number;
+  readonly invocationDeadlineMs: number;
+  readonly deliveryProofWaitMs?: number;
+}): Promise<{ sendCount: 0 | 1; witness: StateLightSendDeliveryWitness }> {
+  const baselineUserNodeCount = await locatorCount(
+    input.page.locator(USER_MESSAGE_UNIT_SELECTOR),
+    Math.min(input.invocationDeadlineMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
+  );
+
+  if (input.hasSendButton) {
+    await input.sendButton.click({ timeout: Math.min(MAX_LOCAL_READ_WAIT_MS, input.sendWaitMs) });
+  } else {
+    await input.composer.press('Enter', { timeout: Math.min(MAX_LOCAL_READ_WAIT_MS, input.sendWaitMs) });
+  }
+
+  const witness = await observeStateLightSendDelivery(
+    input.page,
+    input.composer,
+    input.marker,
+    baselineUserNodeCount,
+    input.invocationDeadlineMs,
+    input.deliveryProofWaitMs,
+  );
+  return {
+    sendCount: witness === 'unproven' ? 0 : 1,
+    witness,
+  };
+}
+
 async function waitForComposer(
   page: any,
   invocationDeadlineMs: number,
@@ -2286,16 +2394,38 @@ async function runTurn(
         phase: 'dispatching',
         reason: 'dispatch_boundary_entered',
       });
-      if (hasSendButton) {
-        const sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
-        if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
-        await sendButton.click({ timeout: Math.min(MAX_LOCAL_READ_WAIT_MS, sendWaitMs) });
-      } else {
-        const sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
-        if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
-        await composer.press('Enter', { timeout: Math.min(MAX_LOCAL_READ_WAIT_MS, sendWaitMs) });
+      const sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
+      if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+      const delivery = await dispatchStateLightSendAndObserveDelivery({
+        page,
+        composer,
+        sendButton,
+        hasSendButton,
+        marker,
+        sendWaitMs,
+        invocationDeadlineMs,
+      });
+      if (delivery.sendCount === 0) {
+        incident('send_observation_error', 'send_delivery_unproven', 'return_local_error');
+        return {
+          page,
+          browser,
+          result: compactResult(
+            'send_failed',
+            'invocation',
+            'send_delivery_unproven',
+            invocationId,
+            profileKey,
+            sendCount,
+            pollCount,
+            navigation,
+            incidents,
+            { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+            journalWriteFailed,
+          ),
+        };
       }
-      sendCount += 1;
+      sendCount += delivery.sendCount;
       afterSend = true;
       setHeartbeatPhase('post_send_observation');
       if (!config.newChat && config.chatUrl) {
@@ -3997,8 +4127,9 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   const pageLost = browserOrPageDefinitelyLost(outcome.page, outcome.browser);
 
   // A normal pre-send terminal may close prepared observation state. A
-  // dispatching record is deliberately left untouched: click/submit may have
-  // delivered even if the process did not increment its numeric counter.
+  // dispatching record becomes not_sent only for send_delivery_unproven, where
+  // click/Enter returned but neither allowed delivery witness appeared. Other
+  // dispatching terminals remain untouched because delivery may still be unknown.
   if (
     outcome.result.send_count === 0
     && outcome.result.invocation_id.length > 0
@@ -4009,12 +4140,15 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
         outcome.result.configured_profile_key,
         outcome.result.invocation_id,
       );
-      if (observation.phase === 'prepared') {
+      const dispatchProvenNotDelivered = observation.phase === 'dispatching'
+        && outcome.result.state === 'send_failed'
+        && outcome.result.cause === 'send_delivery_unproven';
+      if (observation.phase === 'prepared' || dispatchProvenNotDelivered) {
         transitionStateLightTurnObservation({
           profileKey: outcome.result.configured_profile_key,
           invocationId: outcome.result.invocation_id,
           phase: 'not_sent',
-          reason: 'terminal_pre_send',
+          reason: dispatchProvenNotDelivered ? 'send_delivery_unproven' : 'terminal_pre_send',
           sendCount: 0,
           sendWitness: 'numeric_send_count',
         });
@@ -4110,6 +4244,10 @@ export const __testComposerMutation = {
   mutateComposerOrCause,
   hasBlockingPageOverlay,
   waitForComposer,
+};
+
+export const __testSendDelivery = {
+  dispatchStateLightSendAndObserveDelivery,
 };
 
 export type StateLightTurnDependencies = {
