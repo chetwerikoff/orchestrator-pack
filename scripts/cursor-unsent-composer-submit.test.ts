@@ -1893,6 +1893,49 @@ describe('orchestration mail reconciliation', () => {
     expect(resolved.sort()).toEqual(['dispatch:ctx_new', 'dispatch:ctx_settled']);
   });
 
+  it('skips hundreds of stale dead-target messages without per-message Orca resolution while backoff is active', async () => {
+    const target = worker('term_dead_backlog_bound');
+    const hourMs = 60 * 60_000;
+    const now = 10 * hourMs;
+    const rows = Array.from({ length: 300 }, (_, index) => ({
+      id: `msg_dead_${index}`,
+      run_id: 'run_dead_shared',
+      to_handle: 'dispatch:ctx_dead_shared',
+      read: 0,
+      created_at: now - 2 * hourMs - index,
+    }));
+    const resolved: string[] = [];
+    const deps = {
+      ...reconciliationDeps(rows, target),
+      resolveWorker: (message: { readonly recipient: string }) => {
+        resolved.push(message.recipient);
+        return { ok: false as const, reason: 'assignment_target_unresolved' };
+      },
+    };
+    const root = mkdtempSync(join(tmpdir(), 'opk-reconcile-dead-backlog-bound-'));
+    const options = {
+      ledgerPath: join(root, 'orchestration-mail-reconcile.json'),
+      lockPath: join(root, 'orchestration-mail-reconcile.lock'),
+    };
+    try {
+      await runOrchestrationMailReconcileTick(deps, { ...options, now: () => now });
+      expect(resolved).toEqual(['dispatch:ctx_dead_shared']);
+
+      resolved.length = 0;
+      const startedAt = Date.now();
+      const second = await runOrchestrationMailReconcileTick(deps, { ...options, now: () => now + 5_000 });
+      const elapsedMs = Date.now() - startedAt;
+
+      expect(resolved).toEqual([]);
+      expect(second.attempted).toBe(300);
+      expect(second.reasons).toHaveLength(300);
+      expect(second.reasons.every((reason) => reason.endsWith(':orchestration_target_unresolved_backoff'))).toBe(true);
+      expect(elapsedMs).toBeLessThan(70_000);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('delivers unread Run mail after exact Run retrievability succeeds', async () => {
     const target = worker('term_run_mail_unread');
     const submitted: RuntimeWorkerIdentity[] = [];
