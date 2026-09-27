@@ -10,7 +10,9 @@
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.ts",
     "scripts/chatgpt-browser-turn/ui-adapter.ts",
-    "scripts/flow-manager-authority-contract.test.ts"
+    "scripts/flow-manager-authority-contract.test.ts",
+    "scripts/smoke-fixtures/inject-message-stream-error.mjs",
+    "scripts/smoke-fixtures/inject-message-stream-error.test.ts"
   ],
   "denylist": [
     "credentials/",
@@ -28,7 +30,9 @@
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.ts",
     "scripts/chatgpt-browser-turn/ui-adapter.ts",
-    "scripts/flow-manager-authority-contract.test.ts"
+    "scripts/flow-manager-authority-contract.test.ts",
+    "scripts/smoke-fixtures/inject-message-stream-error.mjs",
+    "scripts/smoke-fixtures/inject-message-stream-error.test.ts"
   ],
-  "source_revision": "0ea303ed2251596f04c47ea29ab201850a46e03c"
+  "source_revision": "a9fc36ed6270de45dc7a698e5ee1d0a6d4d05873"
 }
