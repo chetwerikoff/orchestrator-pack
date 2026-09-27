@@ -128,7 +128,7 @@ function spawnTsClaim(namespace: string, resultPath: string, startPath: string, 
     import { existsSync, writeFileSync } from 'node:fs';
     while (!existsSync(${JSON.stringify(startPath)})) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
     const result = acquireReviewStartClaim({ prNumber: 948, headSha: 'a'.repeat(40), surface: 'ts-overlap', namespace: ${JSON.stringify(namespace)}, reviewRuns: [] });
-    writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({ acquired: result.acquired, reason: result.reason ?? '' }));
+    writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({ acquired: result.acquired, reason: result.reason ?? '', detail: result.detail ?? '' }));
     while (!existsSync(${JSON.stringify(releasePath)})) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
   `;
   const controller = new AbortController();
@@ -670,38 +670,47 @@ describe('Issue #948 persisted TypeScript claim authority', () => {
   }, 60_000);
 
   it('owner-binds stale-lock takeover under two barrier-controlled recoverers', async () => {
-    const root = makeRoot('pr2a-stale-takeover-');
-    const sha = 'c'.repeat(40);
-    const seed = acquireReviewStartClaim({ prNumber: 948, headSha: sha, surface: 'stale-seed', namespace: root, reviewRuns: [] });
-    expect(seed.acquired).toBe(true);
-    const recordPath = claimPath(root, 948, sha);
-    const stale = readClaimRecord(recordPath).record!;
-    stale.holder.pid = 2_147_483_000;
-    stale.holder.processGuid = 'stale-holder';
-    delete stale.holder.startTimeTicks;
-    delete stale.holder.bootIdHash;
-    stale.acquiredAtUtc = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    atomicWriteJson(recordPath, stale);
-    const lock = claimLockDir(root, 948, sha);
-    mkdirSync(lock, { recursive: true, mode: 0o700 });
-    writeFileSync(path.join(lock, 'owner.json'), `${JSON.stringify({
-      pid: 2_147_483_000,
-      processGuid: 'stale-lock-owner',
-      acquiredAtUtc: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
-    })}\n`);
-    const barrier = path.join(root, 'barrier');
-    const release = path.join(root, 'release');
-    const results = [path.join(root, 'recover-a.json'), path.join(root, 'recover-b.json')];
-    results.forEach((result) => spawnStaleRecoverer(root, barrier, result, release));
-    await waitForCondition(() => existsSync(barrier)
-      && readdirSync(barrier).filter((name) => name.endsWith('.observed')).length === 2);
-    writeFileSync(path.join(barrier, 'go'), 'go\n');
-    await waitForFiles(results);
-    const resultRows = results.map((fileName) => JSON.parse(readFileSync(fileName, 'utf8')) as { acquired: boolean; reason: string });
-    expect(resultRows.filter((row) => row.acquired)).toHaveLength(1);
-    expect(resultRows.filter((row) => !row.acquired)).toHaveLength(1);
-    expect(resultRows.find((row) => !row.acquired)?.reason).toBe('claimed');
-    writeFileSync(release, 'done');
+    for (let round = 0; round < 4; round += 1) {
+      const root = makeRoot(`pr2a-stale-takeover-${round}-`);
+      const sha = 'c'.repeat(40);
+      const seed = acquireReviewStartClaim({
+        prNumber: 948,
+        headSha: sha,
+        surface: 'stale-seed',
+        namespace: root,
+        reviewRuns: [],
+      });
+      expect(seed.acquired).toBe(true);
+      const recordPath = claimPath(root, 948, sha);
+      const stale = readClaimRecord(recordPath).record!;
+      stale.holder.pid = 2_147_483_000;
+      stale.holder.processGuid = 'stale-holder';
+      delete stale.holder.startTimeTicks;
+      delete stale.holder.bootIdHash;
+      stale.acquiredAtUtc = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      atomicWriteJson(recordPath, stale);
+      const lock = claimLockDir(root, 948, sha);
+      mkdirSync(lock, { recursive: true, mode: 0o700 });
+      writeFileSync(path.join(lock, 'owner.json'), `${JSON.stringify({
+        pid: 2_147_483_000,
+        processGuid: 'stale-lock-owner',
+        acquiredAtUtc: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      })}\n`);
+      const barrier = path.join(root, 'barrier');
+      const release = path.join(root, 'release');
+      const results = [path.join(root, 'recover-a.json'), path.join(root, 'recover-b.json')];
+      results.forEach((result) => spawnStaleRecoverer(root, barrier, result, release));
+      await waitForCondition(() => existsSync(barrier)
+        && readdirSync(barrier).filter((name) => name.endsWith('.observed')).length === 2);
+      writeFileSync(path.join(barrier, 'go'), 'go\n');
+      await waitForFiles(results);
+      const resultRows = results.map((fileName) => JSON.parse(readFileSync(fileName, 'utf8')) as { acquired: boolean; reason: string; detail?: string });
+      expect(resultRows.filter((row) => row.acquired), `round=${round} ${JSON.stringify(resultRows)}`).toHaveLength(1);
+      expect(resultRows.filter((row) => !row.acquired), `round=${round} ${JSON.stringify(resultRows)}`).toHaveLength(1);
+      const loser = resultRows.find((row) => !row.acquired);
+      expect(loser?.reason, loser?.detail || `round=${round} ${JSON.stringify(resultRows)}`).toBe('claimed');
+      writeFileSync(release, 'done');
+    }
   }, 60_000);
 
   it('generation-fences completion from a superseded holder', () => {

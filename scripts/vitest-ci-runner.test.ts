@@ -1,11 +1,12 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { runProcessSync } from './kernel/subprocess.ts';
 import { validateHeavyBatchReportPayload, type HeavyInvocationUnit } from './lib/vitest-heavy-batching.mjs';
 import { hasFailedTestsVitestJsonReport } from './lib/vitest-json-report.mjs';
 import { observeHeavyLaneContext, readHeavyLaneContexts } from './lib/testmode-fleet-lane.ts';
@@ -32,6 +33,106 @@ function makeRoot(prefix: string): string {
   roots.push(root);
   return root;
 }
+
+function runCheckedGit(repoRoot: string, args: string[]): string {
+  const result = runProcessSync({
+    command: 'git',
+    args,
+    cwd: repoRoot,
+    inheritParentEnv: true,
+  });
+  if (!result.ok) {
+    throw new Error(`git ${args.join(' ')} failed: ${result.stderr || result.error || 'unknown error'}`);
+  }
+  return result.stdout;
+}
+
+function makeTopologyEmitterFixture(): string {
+  const root = makeRoot('opk-vitest-emitter-');
+  mkdirSync(path.join(root, 'scripts'), { recursive: true });
+  mkdirSync(path.join(root, 'plugins'), { recursive: true });
+  writeFileSync(path.join(root, 'scripts', 'sample.test.ts'), 'export {};\n', 'utf8');
+  writeFileSync(path.join(root, 'scripts', 'vitest-ci-lanes.config.json'), `${JSON.stringify({
+    lightMaxWorkers: 1,
+    lightShardCount: 1,
+    heavyDefaultRuntimeMs: 1000,
+    heavyForkPoolMinRuntimeMs: 1000,
+    targetShardSeconds: 60,
+    minShardCount: 1,
+    maxShardCount: 2,
+    fallbackHeavyShardCount: 1,
+    classification: {
+      'scripts/sample.test.ts': 'heavy',
+    },
+  }, null, 2)}\n`, 'utf8');
+  writeFileSync(path.join(root, 'scripts', 'vitest-runtime-history.json'), '{"files": {}}\n', 'utf8');
+  writeFileSync(path.join(root, 'scripts', 'vitest-heavy-topology.plan.json'), 'sentinel\n', 'utf8');
+
+  runCheckedGit(root, ['init', '--quiet']);
+  runCheckedGit(root, ['add', '.']);
+  runCheckedGit(root, [
+    '-c', 'user.name=orchestrator-pack-test',
+    '-c', 'user.email=orchestrator-pack-test@example.invalid',
+    'commit', '--quiet', '-m', 'fixture',
+  ]);
+  return root;
+}
+
+function runTopologyEmitter(repoRoot: string, overrides: NodeJS.ProcessEnv = {}) {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    OPK_REPO_ROOT: repoRoot,
+    GITHUB_ACTIONS: 'false',
+    ...overrides,
+  };
+  delete env.GITHUB_EVENT_NAME;
+  delete env.GITHUB_BASE_REF;
+  delete env.VITEST;
+  delete env.VITEST_WORKER_ID;
+  delete env.OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT;
+  Object.assign(env, overrides);
+  return runProcessSync({
+    command: process.execPath,
+    args: [path.join(process.cwd(), 'scripts', 'emit-vitest-heavy-topology.mjs'), '--skip-oversized-guard'],
+    cwd: process.cwd(),
+    env,
+  });
+}
+
+describe('Vitest topology emitter worktree hygiene', () => {
+  it('leaves the tracked topology plan clean after a successful local run', () => {
+    const root = makeTopologyEmitterFixture();
+    const planPath = path.join(root, 'scripts', 'vitest-heavy-topology.plan.json');
+    const before = readFileSync(planPath, 'utf8');
+
+    const result = runTopologyEmitter(root, { OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT: '1' });
+
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(planPath, 'utf8')).toBe(before);
+    expect(runCheckedGit(root, ['status', '--porcelain'])).toBe('');
+  });
+
+  it('leaves the tracked topology plan clean after the diagnostic failure path', () => {
+    const root = makeTopologyEmitterFixture();
+    const planPath = path.join(root, 'scripts', 'vitest-heavy-topology.plan.json');
+    const before = readFileSync(planPath, 'utf8');
+    const binDir = makeRoot('opk-vitest-fake-npm-');
+    const npmPath = path.join(binDir, process.platform === 'win32' ? 'npm.cmd' : 'npm');
+    if (process.platform === 'win32') {
+      writeFileSync(npmPath, '@exit /b 7\r\n', 'utf8');
+    } else {
+      writeFileSync(npmPath, '#!/bin/sh\nexit 7\n', 'utf8');
+      chmodSync(npmPath, 0o755);
+    }
+
+    const result = runTopologyEmitter(root, { PATH: binDir });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('"fallbackClassification":"pre-topology-measurement-failed"');
+    expect(readFileSync(planPath, 'utf8')).toBe(before);
+    expect(runCheckedGit(root, ['status', '--porcelain'])).toBe('');
+  });
+});
 
 function greenAggregate() {
   return {

@@ -27,7 +27,9 @@ import type { GhTransport } from './lib/create-issue-stage-record-types.ts';
 import {
   publishSettledStageRecord,
   semanticStageAttemptId,
+  startReviewCycle,
 } from './lib/create-issue-stage-record-core.ts';
+import { persistCycleId } from './lib/create-issue-stage-record-gh.ts';
 import { createMockGhState, createMockTransport } from './lib/create-issue-stage-record-test-helpers.ts';
 import {
   ensureLifecycleStageEvidenceSeed,
@@ -2279,5 +2281,197 @@ describe('Issue #2078 smoke scenarios 3 and 5 fixture manager', () => {
       taskTerminal: false,
       dispatchTerminal: false,
     });
+  });
+});
+
+
+describe('Issue #2194 existing stage-cycle retry reconciliation', () => {
+  it('reconciles the observed #2182 attempt instead of re-emitting a conflicting start-cycle', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2194-existing-stage-cycle-'));
+    const stateRoot = join(root, 'state');
+    const workdir = join(root, 'journal');
+    const previousStateRoot = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+    const repo = 'chetwerikoff/orchestrator-pack';
+    const issueNumber = 2182;
+    const sourceRevision = 'r02';
+    const stage = 'architectural-review' as const;
+    const stageAttemptId = semanticStageAttemptId(repo, issueNumber, stage);
+    const cycleId = 'b946331c-6e41-4ef2-b089-a5d0b4894f5f';
+    const competitiveRationale = 'Issue #2194 observed #2182 retry regression fixture';
+    const liveIssueBody = '<!-- source-revision: r02 -->\nIssue #2182 retry-start-cycle regression fixture\n';
+    const boundSlots = [
+      { slot: '01', invocationId: 'b0a0ac8a-8e36-4521-9579-1da435af7316', commentId: 5855354190 },
+      { slot: '02', invocationId: '451b7c8a-6560-4f21-b4d6-8048e753bee5', commentId: 5855350185 },
+      { slot: '03', invocationId: '17b842a1-692d-47f2-8b08-d91a5a3204d0', commentId: 5855348434 },
+    ] as const;
+
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = stateRoot;
+    mkdirSync(workdir, { recursive: true });
+    const state = createMockGhState({
+      issue: { title: 'Issue #2182 retry fixture', body: liveIssueBody, labels: [] },
+      nextCommentId: 5855160714,
+    });
+    const transport = createMockTransport(state);
+    defaultGhTransportSlot.current = transport;
+    try {
+      expect(stageAttemptId).toBe('c065e0bb-bc85-42ba-af89-7a7ff0b3664b');
+      ensureLifecycleTierIntake({
+        issueNumber,
+        tier: 'T3',
+        firstRevision: sourceRevision,
+        competitiveDecision: 'skipped',
+        competitiveRationale,
+        stateRootOverride: stateRoot,
+      });
+      persistCycleId(workdir, cycleId);
+      const started = startReviewCycle(transport, {
+        repo,
+        issueNumber,
+        sourceRevision,
+        stage,
+        stageAttemptId,
+        tier: 'T3',
+        competitiveDecision: 'skipped',
+        competitiveRationale,
+        publicActor: 'opencode-flow-manager',
+        workdir,
+      });
+      expect(started.ok, started.diagnostics.map((item) => item.message).join('\n')).toBe(true);
+      expect(started.cycleId).toBe(cycleId);
+      expect(started.stageAttemptId).toBe(stageAttemptId);
+
+      const reviewDir = join(stateRoot, '.review', String(issueNumber));
+      const evidencePath = join(reviewDir, 'attempt-001.json');
+      const evidence = JSON.parse(readFileSync(evidencePath, 'utf8')) as Record<string, any>;
+      evidence.invocations = boundSlots.map(({ slot, invocationId, commentId }, index) => ({
+        schema: 'reviewer-invocation-envelope/v1',
+        reviewEpisodeId: `issue:${issueNumber}@${sourceRevision}`,
+        stageAttemptId,
+        policyVersion: evidence.policyVersion,
+        reviewerCardinality: 3,
+        cardinalityConfigIdentity: evidence.cardinalityConfigIdentity,
+        stage,
+        sourceRevision,
+        invocationId,
+        reviewerSlot: slot,
+        reviewerOrdinal: index + 1,
+        attemptOrdinal: 1,
+        retryAttempt: false,
+        terminal: true,
+        terminalClassification: 'incident',
+        sendCount: 1,
+        retryClass: 'retry-forbidden',
+        revisionCheck: 'matched',
+        capacityOutcome: 'admitted',
+        capacityWaitMs: 0,
+        artifactAuthority: {
+          kind: 'authoritative-github-artifact',
+          repositoryFullName: repo,
+          issueNumber,
+          commentId,
+          commentUrl: `https://github.com/${repo}/issues/${issueNumber}#issuecomment-${commentId}`,
+          publisherLogin: 'chetwerikoff',
+          createdAt: '2026-09-27T00:00:00.000Z',
+          updatedAt: '2026-09-27T00:00:00.000Z',
+        },
+      }));
+      writeFileSync(evidencePath, JSON.stringify(evidence, null, 2) + '\n');
+      expect(evidence.cycleId).toBe(cycleId);
+      expect(evidence.stageAttemptId).toBe(stageAttemptId);
+      expect(evidence.invocations.map((row: Record<string, unknown>) => row.reviewerSlot)).toEqual(['01', '02', '03']);
+
+      // This is the exact pre-fix conflict: the same persisted cycle and attempt
+      // are retried under the current manager actor instead of being reconciled.
+      const priorFailure = startReviewCycle(transport, {
+        repo,
+        issueNumber,
+        sourceRevision,
+        stage,
+        stageAttemptId,
+        tier: 'T3',
+        competitiveDecision: 'skipped',
+        competitiveRationale,
+        publicActor: 'cursor-flow-manager',
+        workdir,
+      });
+      expect(priorFailure.ok).toBe(false);
+      expect(priorFailure.diagnostics.map((item) => item.code)).toContain('conflicting-cycle-id');
+
+      const reconcileLogs: string[] = [];
+      const reconcileLogSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+        reconcileLogs.push(String(line));
+      });
+      const stderr = captureWrite(process.stderr);
+      try {
+        expect(runStageFinalizeCli([
+          'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
+          '--repo', repo,
+          '--issue-number', String(issueNumber),
+          '--review-dir', reviewDir,
+          '--expected-source-revision', sourceRevision,
+          '--expected-stage', stage,
+          '--expected-stage-attempt-id', stageAttemptId,
+          '--json',
+        ], transport)).toBe(3);
+        const reconciled = JSON.parse(reconcileLogs.at(-1) ?? '{}') as {
+          cause?: string;
+          nextAction?: { kind?: string; argv?: string[]; binding?: Record<string, unknown> };
+        };
+        expect(reconciled).toMatchObject({
+          cause: 'reconciliation_failed',
+          nextAction: {
+            kind: 'reconcile-stage-read-only',
+            binding: { sourceRevision, stage, stageAttemptId },
+          },
+        });
+        expect(reconciled.nextAction?.argv).toContain('--stage-evidence');
+        expect(reconciled.nextAction?.argv).toContain(evidencePath);
+        expect(reconciled.nextAction?.argv).toContain('reconcile-stage');
+        expect(reconciled.nextAction?.argv).not.toContain('start-cycle');
+      } finally {
+        reconcileLogSpy.mockRestore();
+        stderr.restore();
+      }
+
+      const startLogs: string[] = [];
+      const startLogSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+        startLogs.push(String(line));
+      });
+      const startStderr = captureWrite(process.stderr);
+      try {
+        expect(runStageFinalizeCli([
+          'node', 'scripts/create-issue-stage-finalize.ts', 'start-cycle',
+          '--repo', repo,
+          '--issue-number', String(issueNumber),
+          '--source-revision', sourceRevision,
+          '--stage', stage,
+          '--stage-attempt-id', stageAttemptId,
+          '--tier', 'T3',
+          '--competitive-decision', 'skipped',
+          '--competitive-rationale', competitiveRationale,
+          '--public-actor', 'cursor-flow-manager',
+          '--workdir', workdir,
+          '--expected-source-revision', sourceRevision,
+          '--expected-stage', stage,
+          '--expected-stage-attempt-id', stageAttemptId,
+          '--json',
+        ], transport)).toBe(3);
+        const projected = JSON.parse(startLogs.at(-1) ?? '{}') as {
+          nextAction?: { kind?: string; argv?: string[] };
+        };
+        expect(projected.nextAction?.kind).toBe('reconcile-stage-read-only');
+        expect(projected.nextAction?.argv).toContain('--stage-evidence');
+        expect(projected.nextAction?.argv).toContain(evidencePath);
+        expect(projected.nextAction?.argv).not.toContain('start-cycle');
+      } finally {
+        startLogSpy.mockRestore();
+        startStderr.restore();
+      }
+    } finally {
+      defaultGhTransportSlot.current = undefined;
+      if (previousStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previousStateRoot;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
