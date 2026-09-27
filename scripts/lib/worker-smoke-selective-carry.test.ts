@@ -96,6 +96,7 @@ describe('Issue #2213 actor-sensitive selective smoke carry', () => {
     const workerOwned = planWorkerSmokeSelectiveRetry({
       ...common,
       smokeActor: 'worker-owned',
+      workerOwnedPassHeadShas: [CURRENT_HEAD],
     });
     expect(workerOwned.carried).toHaveLength(1);
     expect(workerOwned.attemptPlan.scenarios).toHaveLength(0);
@@ -103,16 +104,11 @@ describe('Issue #2213 actor-sensitive selective smoke carry', () => {
     const independent = planWorkerSmokeSelectiveRetry({
       ...common,
       smokeActor: 'independent',
+      workerOwnedPassHeadShas: [CURRENT_HEAD],
     });
     expect(independent.carried).toHaveLength(0);
     expect(independent.attemptPlan.scenarios).toEqual([
       { action: ACTION, expected: EXPECTED },
-    ]);
-    expect(independent.tupleDiagnostics).toEqual([
-      {
-        tuple: ACTION + ' | ' + EXPECTED,
-        reason: 'independent_same_head_requires_execution',
-      },
     ]);
   });
 
@@ -120,11 +116,15 @@ describe('Issue #2213 actor-sensitive selective smoke carry', () => {
     const selection = planWorkerSmokeSelectiveRetry({
       issueBody: issueBody(),
       prBody: '',
-      comments: [comment(1, passReport(EARLIER_HEAD))],
+      comments: [
+        comment(1, passReport(EARLIER_HEAD)),
+        comment(2, passReport(CURRENT_HEAD)),
+      ],
       target: target(),
       isAncestor: (ancestorSha, descendantSha) =>
         ancestorSha === EARLIER_HEAD && descendantSha === CURRENT_HEAD,
       smokeActor: 'independent',
+      workerOwnedPassHeadShas: [CURRENT_HEAD],
     });
 
     expect(selection.attemptPlan.scenarios).toHaveLength(0);

@@ -1733,9 +1733,23 @@ function selectSmokeAttempt(
     dependencies.isHistoryAncestor
       ? dependencies.isHistoryAncestor(ancestorSha, descendantSha, target, options)
       : githubCommitIsAncestor(target.repositorySlug, ancestorSha, descendantSha, options.repoRoot);
+  let workerOwnedPassHeadShas: string[] = [];
+  if ((options.smokeActor ?? 'worker-owned') === 'independent') {
+    try {
+      const storeRoot = resolvePackReviewRunStoreRoot({
+        projectId: 'orchestrator-pack',
+        storeRoot: process.env.PACK_REVIEW_RUN_STORE_ROOT,
+      });
+      const workerOwned = readPackReviewAuthority(target.prNumber, { storeRoot })?.smokeOrdering?.workerOwned;
+      if (workerOwned?.status === 'passed') workerOwnedPassHeadShas = [workerOwned.headSha];
+    } catch {
+      workerOwnedPassHeadShas = [];
+    }
+  }
   const selection = planWorkerSmokeSelectiveRetry({
     issueBody, prBody: target.prBody, comments, target: coverageTarget(target, target.headSha), isAncestor, historyReadable,
     smokeActor: options.smokeActor ?? 'worker-owned',
+    workerOwnedPassHeadShas,
   });
   const sourceHeads = [...new Set(selection.carried.map((entry) => entry.sourceHeadSha))];
   if (selection.carried.length === 0) return selection;

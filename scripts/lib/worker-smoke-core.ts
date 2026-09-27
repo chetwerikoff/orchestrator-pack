@@ -914,6 +914,7 @@ export function planWorkerSmokeSelectiveRetry(input: {
   historyReadable?: boolean;
   historyBindingTrusted?: boolean;
   smokeActor?: 'worker-owned' | 'independent';
+  workerOwnedPassHeadShas?: readonly string[];
 }): WorkerSmokeSelectiveRetryPlan {
   const fullPlan = base.resolveSmokeRequirement(input.issueBody);
   const affected = parseWorkerSmokeAffectedCarrier(input.prBody, input.target.headSha);
@@ -954,6 +955,11 @@ export function planWorkerSmokeSelectiveRetry(input: {
   }
 
   const currentHead = input.target.headSha.trim().toLowerCase();
+  const workerOwnedPassHeads = new Set(
+    (input.workerOwnedPassHeadShas ?? [])
+      .map((head) => head.trim().toLowerCase())
+      .filter((head) => FULL_SHA.test(head)),
+  );
   const ancestry = new Map<string, boolean>();
   const ancestorOfCurrent = (head: string): boolean => {
     if (head === currentHead) return true;
@@ -968,6 +974,11 @@ export function planWorkerSmokeSelectiveRetry(input: {
   let lineageUnprovable = false;
   let nonDescendant = false;
   for (const candidate of valid) {
+    if (input.smokeActor === 'independent'
+        && candidate.report.result === 'PASS'
+        && workerOwnedPassHeads.has(candidate.headSha)) {
+      continue;
+    }
     try {
       if (ancestorOfCurrent(candidate.headSha)) relevant.push(candidate);
       else nonDescendant = true;
@@ -1052,16 +1063,6 @@ export function planWorkerSmokeSelectiveRetry(input: {
     }
 
     const selected = maximal[0];
-    if (input.smokeActor === 'independent'
-        && selected.headSha === currentHead
-        && selected.row.scenario.outcome === 'pass') {
-      execution.push(declared);
-      tupleDiagnostics.push({
-        tuple: tuplePreview(declared.action, declared.expected),
-        reason: 'independent_same_head_requires_execution',
-      });
-      continue;
-    }
     const selectedIsFreshCurrentHead = selected.headSha === currentHead
       && !base.isCarriedSmokeScenarioObservation(selected.row.scenario);
     if (affectedKeys.has(key) && !selectedIsFreshCurrentHead) {
