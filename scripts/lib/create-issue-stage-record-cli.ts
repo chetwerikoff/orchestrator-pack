@@ -1906,7 +1906,7 @@ export function runStageFinalizeCli(
         const retryableRead = reconcileStageReadIsRetryable(result);
         if (result.ok) {
           nextAction = opts.afterLifecycleValidationFailure
-            && !result.alreadySettled
+            && (!result.alreadySettled || result.stage === 'architectural-lens')
             && result.stage !== 'architectural'
             && (result.materialFindingCount ?? 0) > 0
             ? preMintAuthorRoundAction(binding, reviewDir, true)
@@ -1920,8 +1920,7 @@ export function runStageFinalizeCli(
                   '--issue-number', String(issueNumber),
                   '--review-dir', reviewDir,
                   '--stage-evidence', stageEvidencePath,
-                  '--phase', result.stage === 'architectural' ? 'final-acceptance' : 'pre-lens',
-                  '--expected-source-revision', result.sourceRevision,
+                  '--phase', result.stage === 'architectural' ? 'final-acceptance' : result.stage === 'architectural-lens' ? 'post-lens' : 'pre-lens',
                   '--expected-stage', result.stage,
                   '--expected-stage-attempt-id', result.stageAttemptId,
                   '--json',
@@ -2055,7 +2054,7 @@ export function runStageFinalizeCli(
                 issueNumber,
                 binding,
                 reviewDir,
-                undefined,
+                evidencePathForBinding(reviewDir, binding),
                 true,
               ),
             }),

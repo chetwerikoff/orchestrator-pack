@@ -424,6 +424,7 @@ function fixture(input: {
   turnResultInvocationId?: string;
   terminalResultIdentity?: string;
   issueNumber?: number;
+  reviewDir?: string;
 } = {}) {
   const issueNumber = input.issueNumber ?? ISSUE;
   const taskIdentity = `issue:${issueNumber}`;
@@ -445,7 +446,8 @@ function fixture(input: {
   const invocationEchoLabel = input.invocationEchoLabel ?? 'INVOCATION_ID_TO_ECHO';
   const stageInvocationId = input.stageInvocationId ?? 'invocation-001';
   const turnResultInvocationId = input.turnResultInvocationId ?? 'invocation-001';
-  const dir = mkdtempSync(join(tmpdir(), 'opk-1385-artifacts-'));
+  const dir = input.reviewDir ?? mkdtempSync(join(tmpdir(), 'opk-1385-artifacts-'));
+  if (input.reviewDir) mkdirSync(dir, { recursive: true });
   tempDirs.push(dir);
   const intakePath = join(dir, 'tier-intake.json');
   const evidencePath = join(dir, 'attempt-001.json');
@@ -5455,13 +5457,14 @@ describe('Issue #2209 recorded pre-lens lifecycle recovery', () => {
 ] as const;
 
   function prepareRecordedCase(recorded: (typeof RECORDED)[number]) {
+    const taskIdentity = `issue:${recorded.issue}`;
     const input = fixture({
       intakeRevision: 'r02',
       sourceRevision: 'r02',
       phase: 'pre-lens',
       issueNumber: recorded.issue,
+      reviewDir: resolveCanonicalReviewDirectory({ taskIdentity }).directory,
     });
-    const taskIdentity = `issue:${recorded.issue}`;
     const comments = recorded.comments.map((item) => comment(item.body, {
       id: item.id,
       issueNumber: recorded.issue,
@@ -5608,7 +5611,7 @@ describe('Issue #2209 recorded pre-lens lifecycle recovery', () => {
     });
   }
 
-  it('replays the recorded Issue #2182 pre-lens loop through author_round_non_author_failure and requires a distinct next command', () => {
+  it('reconciles the recorded Issue #2182 pre-lens loop directly to author-round', () => {
     const recorded = RECORDED[0];
     expect(recorded).toMatchObject({
       issue: 2182,
@@ -5738,30 +5741,137 @@ describe('Issue #2209 recorded pre-lens lifecycle recovery', () => {
       nextAction: { kind: 'author-round' },
     });
 
-    const authorRound = execute(firstReconcile.output.nextAction.argv as string[]);
-    expect(authorRound.output).toMatchObject({
-      ok: false,
-      cause: 'author_round_non_author_failure',
-      nextAction: { kind: 'reconcile-stage-read-only' },
-    });
-
-    const secondReconcile = execute(authorRound.output.nextAction.argv as string[]);
-    expect(secondReconcile.output).toMatchObject({
-      ok: false,
-      cause: 'reconciliation_failed',
-    });
-    expect(secondReconcile.output.nextAction?.kind).not.toBe('produce-acceptance-artifacts');
-    expect((secondReconcile.output.nextAction?.argv as string[] | undefined)?.[3]).not.toBe('produce-artifacts');
-
-    for (const output of [
-      initial.output,
-      firstReconcile.output,
-      authorRound.output,
-      secondReconcile.output,
-    ]) {
-      expect(output.nextAction?.argv ?? []).not.toContain('retry-start-cycle');
-    }
+    expect(firstReconcile.output.nextAction.argv).toContain('--after-lifecycle-validation-failure');
     expect(source.createdIssueComments).toHaveLength(0);
+  });
+
+  it('routes settled Issue #2185 r03 architectural-lens findings to post-lens author-round', () => {
+    const issueNumber = 2185;
+    const taskIdentity = `issue:${issueNumber}`;
+    const stageAttemptId = '7f31a790-ab45-4527-a1ee-e952e30f7465';
+    const reviewDir = resolveCanonicalReviewDirectory({ taskIdentity }).directory;
+    const input = fixture({ issueNumber, intakeRevision: 'r02', sourceRevision: 'r03', reviewDir });
+    const stageEvidencePath = join(reviewDir, 'attempt-002.json');
+    const evidence = JSON.parse(readFileSync(input.reviewEvidencePath, 'utf8')) as Record<string, any>;
+    evidence.taskIdentity = taskIdentity;
+    evidence.tier = 'T3';
+    evidence.stage = 'architectural-lens';
+    evidence.stageAttemptId = stageAttemptId;
+    evidence.stageSequence = 3;
+    evidence.sourceRevision = 'r03';
+    evidence.cycleId = 'cycle-2185-lens-r03';
+    evidence.cycleBinding = { cycleId: evidence.cycleId, sourceRevision: 'r03', boundBeforeLaunch: true };
+    evidence.policyVersion = 'single-source/v1';
+    evidence.reviewerCardinality = 1;
+    evidence.invocations = [];
+    writeFileSync(stageEvidencePath, JSON.stringify(evidence));
+    const captureName = 'pass-02-architectural-lens.capture.txt';
+    const captureText = 'Read revision: #2185 r03\nVERDICT: FINDINGS\nFINDING_COUNT: 2\n';
+    const captureBytes = Buffer.from(captureText);
+    const captureSha256 = createHash('sha256').update(captureBytes).digest('hex');
+    writeFileSync(join(reviewDir, captureName), captureBytes);
+    const lensCapture = {
+      captureIdentity: `sha256:${captureSha256}:${captureName}`,
+      name: captureName,
+      byteLength: captureBytes.length,
+      sha256: captureSha256,
+      rawFindingCount: 2,
+    };
+    const predecessorReceiptId = 'architectural-review-r02-receipt';
+    writeFileSync(join(reviewDir, 'stage-completeness-receipt-63933350.json'), JSON.stringify({
+      schema: 'stage-completeness-receipt/v1',
+      tier: 'T3',
+      taskIdentity,
+      stage: 'architectural-review',
+      stageAttemptId: '63933350',
+      cycleId: 'cycle-2185-architectural-review-r02',
+      policyVersion: 'triple-source/v1',
+      sourceRevision: 'r02',
+      outcome: 'complete',
+      reviewerCardinality: 3,
+      completedSourceCount: 3,
+      cycleBinding: { cycleId: 'cycle-2185-architectural-review-r02', sourceRevision: 'r02', boundBeforeLaunch: true },
+      producerEvidence: 'not-applicable',
+      tierTransition: 'none',
+    }));
+    const lensReceipt = {
+      schema: 'stage-completeness-receipt/v1',
+      tier: 'T3',
+      taskIdentity,
+      episodeFirstRevision: 'r02',
+      reviewEpisodeId: deriveReviewEpisodeId(taskIdentity, 'r02'),
+      stageReceiptId: 'architectural-lens-r03-receipt',
+      previousStageReceiptId: predecessorReceiptId,
+      receiptCensus: [predecessorReceiptId, 'architectural-lens-r03-receipt'],
+      stageAttemptId,
+      stageSequence: 3,
+      stage: 'architectural-lens',
+      policyVersion: 'single-source/v1',
+      reviewerCardinality: 1,
+      cardinalityConfigIdentity: CONFIG,
+      sourceRevision: 'r03',
+      cycleId: evidence.cycleId,
+      cycleBinding: { cycleId: evidence.cycleId, sourceRevision: 'r03', boundBeforeLaunch: true },
+      outcome: 'complete',
+      completedSourceCount: 1,
+      producerEvidence: 'verified',
+      revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' },
+      settlement: { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true },
+      claude: {
+        kind: 'capture',
+        provider: 'claude-cli',
+        invocationId: 'claude-2185-r03',
+        producingRunIdentity: 'run-2185-r03',
+        terminalResultIdentity: 'terminal-2185-r03',
+        producerEvidenceIdentity: 'evidence-2185-r03',
+        terminal: true,
+        terminalClassification: 'complete',
+        exitCode: 0,
+        capture: lensCapture,
+        m3Status: 'recorded',
+      },
+      credentialingCaptures: [lensCapture],
+      relayEligibleCaptures: [lensCapture],
+    };
+    writeFileSync(join(reviewDir, `stage-completeness-receipt-${stageAttemptId}.json`), JSON.stringify(lensReceipt));
+    const source = transport({
+      issueNumber,
+      census: [comment(canonicalVerdict('r03', 'lens-test', issueNumber), { issueNumber })],
+      cycleComments: [cycleComment('r03', 'cycle-2185-lens-r03', 'none', CYCLE_COMMENT_ID + 2185)],
+    });
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => { logs.push(String(line)); });
+    try {
+      const code = runStageFinalizeCli([
+        'node', 'scripts/create-issue-stage-finalize.ts', 'reconcile-stage',
+        '--repo', REPOSITORY,
+        '--issue-number', String(issueNumber),
+        '--review-dir', reviewDir,
+        '--stage-evidence', stageEvidencePath,
+        '--expected-source-revision', 'r03',
+        '--expected-stage', 'architectural-lens',
+        '--expected-stage-attempt-id', stageAttemptId,
+        '--after-lifecycle-validation-failure',
+        '--json',
+      ], source);
+      expect(code).toBe(3);
+      const output = JSON.parse(logs.at(-1) ?? '{}') as Record<string, any>;
+      expect(output).toMatchObject({
+        ok: false,
+        cause: 'reconciliation_failed',
+        nextAction: {
+          kind: 'author-round',
+          binding: { issueNumber, sourceRevision: 'r03', stage: 'architectural-lens', stageAttemptId },
+        },
+      });
+      expect(output.nextAction.argv).toContain('--expected-source-revision');
+      expect(output.nextAction.argv).toContain('r03');
+      expect(output.nextAction.argv).toContain('--expected-stage');
+      expect(output.nextAction.argv).toContain('architectural-lens');
+      expect(source.createdIssueComments).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
 });
