@@ -62,6 +62,7 @@ async function dispatch(harness: ReturnType<typeof createHarness>) {
     sendButton: harness.sendButton,
     hasSendButton: harness.transport === 'click',
     marker: MARKER,
+    baselineUserNodeCount: 1,
     sendWaitMs: 1_000,
     invocationDeadlineMs: Date.now() + 1_000,
     deliveryProofWaitMs: 10,
