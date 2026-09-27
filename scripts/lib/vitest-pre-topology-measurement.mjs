@@ -51,6 +51,9 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   'scripts/worker-smoke-entrypoint-1359.test.ts': 120,
   'scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts': 120,
   'scripts/chatgpt-browser-turn/state-light-page-observation.test.ts': 120,
+  // Issue #2191 send-delivery proof suite is fast fixture coverage; fixed estimate
+  // keeps the 32-file pre-topology bound until runtime history measures it.
+  'scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts': 120,
   // Issue #1238 lifecycle tests were locally measured at 350ms and 23ms.
   'scripts/chatgpt-browser-turn/tab-lifecycle.subprocess.test.ts': 0.350,
   'scripts/chatgpt-browser-turn/tab-lifecycle.test.ts': 0.023,
