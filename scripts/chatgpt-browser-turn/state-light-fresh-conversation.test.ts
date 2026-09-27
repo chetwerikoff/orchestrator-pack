@@ -162,11 +162,13 @@ import {
 } from './state-light-fresh-conversation.ts';
 
 const PROJECT_URL = 'https://chatgpt.com/g/g-p-test/project';
-const SHARED_CONV = `${PROJECT_URL}/c/11111111-1111-4111-8111-111111111111`;
-const LOSER_CONV = `${PROJECT_URL}/c/22222222-2222-4222-8222-222222222222`;
+const PROJECT_CONVERSATION_ROOT = 'https://chatgpt.com/g/g-p-test';
+const SHARED_CONV = `${PROJECT_CONVERSATION_ROOT}/c/11111111-1111-4111-8111-111111111111`;
+const LOSER_CONV = `${PROJECT_CONVERSATION_ROOT}/c/22222222-2222-4222-8222-222222222222`;
 const ISSUE_PROJECT_URL = 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/project';
 const ISSUE_CONVERSATION_URL = 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/c/6ab8cb78-4e14-83ec-92ff-3e7b67611185';
 const OTHER_PROJECT_CONVERSATION_URL = 'https://chatgpt.com/g/g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-other/c/6ab8cb78-4e14-83ec-92ff-3e7b67611185';
+const OTHER_ORIGIN_CONVERSATION_URL = 'https://example.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/c/6ab8cb78-4e14-83ec-92ff-3e7b67611185';
 
 function disableSendSlotForTest(): void {
   process.env.OPK_STATE_LIGHT_DISABLE_NEW_CHAT_SEND_SLOT = '1';
@@ -899,6 +901,8 @@ describe('state-light fresh conversation collision recovery', () => {
       .toBe(ISSUE_CONVERSATION_URL);
     expect(readProjectConversationUrl({ url: () => OTHER_PROJECT_CONVERSATION_URL }, ISSUE_PROJECT_URL))
       .toBeUndefined();
+    expect(readProjectConversationUrl({ url: () => OTHER_ORIGIN_CONVERSATION_URL }, ISSUE_PROJECT_URL))
+      .toBeUndefined();
     expect(readProjectConversationUrl({ url: () => ISSUE_PROJECT_URL }, ISSUE_PROJECT_URL))
       .toBeUndefined();
   });
@@ -906,6 +910,7 @@ describe('state-light fresh conversation collision recovery', () => {
   it('does not report fresh_conversation_landing_mismatch at the deadline when the same-project conversation is open', async () => {
     const prompt = 'PROMPT-LANDED-FRESH';
     let sent = false;
+    let conversationAppearsAt = Number.POSITIVE_INFINITY;
     const staleAssistant: StateLightTestSnapshot = {
       messages: [{ role: 'assistant', text: 'foreign', finalAction: true, finalActionInTurnContainer: true }],
       generating: false,
@@ -914,16 +919,22 @@ describe('state-light fresh conversation collision recovery', () => {
       count: vi.fn(async () => 1),
       click: vi.fn(async () => undefined),
       fill: vi.fn(async () => undefined),
-      press: vi.fn(async () => { sent = true; }),
+      press: vi.fn(async () => {
+        sent = true;
+        conversationAppearsAt = mocks.nowMs + 3_000;
+      }),
     });
     const sendButton = scalarLocator({
       count: vi.fn(async () => 1),
-      click: vi.fn(async () => { sent = true; }),
+      click: vi.fn(async () => {
+        sent = true;
+        conversationAppearsAt = mocks.nowMs + 3_000;
+      }),
     });
     const page: any = {
       __fakeBrowserGptPage: true,
       goto: vi.fn(async () => undefined),
-      url: vi.fn(() => sent && mocks.nowMs >= 13_000 ? ISSUE_CONVERSATION_URL : ISSUE_PROJECT_URL),
+      url: vi.fn(() => sent && mocks.nowMs >= conversationAppearsAt ? ISSUE_CONVERSATION_URL : ISSUE_PROJECT_URL),
       isClosed: vi.fn(() => false),
       waitForTimeout: vi.fn(async (ms: number) => { mocks.nowMs += ms; }),
       close: vi.fn(async () => undefined),
