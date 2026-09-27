@@ -1783,6 +1783,14 @@ export function runStageFinalizeCli(
         if (!lifecycleBinding.ok && !noRecordedAttempt) {
           return reconcile(lifecycleBinding.message ?? 'lifecycle stage binding is not admissible');
         }
+        if (lifecycleBinding.ok) {
+          const output = createIssueRecoverableResult({
+            cause: 'reconciliation_failed',
+            blocker: `readonly reconciliation found existing lifecycle attempt ${canonicalAttemptId}; reconcile its bound stage evidence before any cycle start`,
+            nextAction: reconcileAction(),
+          });
+          return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, output);
+        }
         const retryOpts = { ...opts, tier: intake.priorTier };
         const output = createIssueRecoverableResult({
           cause: 'reconciliation_failed',
@@ -2209,6 +2217,7 @@ export function runStageFinalizeCli(
         || item.code === 'stage_slot_consumed'
         || item.code === 'stage_order_violation'
         || item.code === 'conflicting-remote-event'
+        || item.code === 'conflicting-cycle-id'
         || item.code === 'orphan-cycle'
         || item.code === 'malformed-marker'
       ));
