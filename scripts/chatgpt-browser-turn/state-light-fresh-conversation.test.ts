@@ -522,6 +522,103 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result.incidents).toContain('send_observation_deferred');
   });
 
+  function unrenderedOwnedMessagePage(prompt: string, reply: string, renderAfterReload: boolean) {
+    const state = { sent: false, url: PROJECT_URL, reloads: 0, reads: 0 };
+    const working = readyTurnObservationFrames(prompt, reply)[0]!;
+    const final = readyTurnObservationFrames(prompt, reply).at(-1)!;
+    const assistantOnly = final.filter((message: StateLightTestMessage) => message.role === 'assistant');
+    let active: StateLightTestMessage[] = [];
+    let generating = false;
+    const composer = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => undefined),
+      fill: vi.fn(async () => undefined),
+      innerText: vi.fn(async () => (state.sent ? '' : prompt)),
+      textContent: vi.fn(async () => (state.sent ? '' : prompt)),
+      press: vi.fn(async () => { state.sent = true; state.url = SHARED_CONV; }),
+    });
+    const sendButton = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => { state.sent = true; state.url = SHARED_CONV; }),
+    });
+    const page: any = {
+      __fakeBrowserGptPage: true,
+      goto: vi.fn(async (target: string) => {
+        if (state.sent && target === SHARED_CONV) state.reloads += 1;
+        state.url = target;
+      }),
+      url: vi.fn(() => state.url),
+      isClosed: vi.fn(() => false),
+      waitForTimeout: vi.fn(async (ms: number) => { mocks.nowMs += ms; }),
+      close: vi.fn(async () => undefined),
+      getByText: vi.fn(() => scalarLocator()),
+      getByRole: vi.fn(() => scalarLocator()),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (matchesNewChatControlSelector(selector)) return scalarLocator({ count: vi.fn(async () => 0) });
+        if (selector === MESSAGE_NODE_SELECTOR) {
+          if (!state.sent) return collectionLocator([]);
+          state.reads += 1;
+          if (state.reads <= 2) {
+            active = working;
+            generating = true;
+          } else if (state.reloads > 0 && renderAfterReload) {
+            active = final;
+            generating = false;
+          } else {
+            active = assistantOnly;
+            generating = false;
+          }
+          return collectionLocator(active, generating);
+        }
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+          const last = active.at(-1);
+          if (last?.finalActionInTurnContainer) return messageLocator(last, generating);
+          return scalarLocator({ count: vi.fn(async () => 0) });
+        }
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) {
+          return collectionLocator(
+            active.filter((message: StateLightTestMessage) => message.role === 'assistant'),
+            generating,
+          );
+        }
+        if (selector.includes(STOP_BUTTON_TESTID)) return scalarLocator();
+        return scalarLocator();
+      }),
+    };
+    return { page, state };
+  }
+
+  it('reloads the owned conversation once when a finished answer renders without the owned user message (#2197)', async () => {
+    const prompt = 'PROMPT-UNRENDERED';
+    const reply = 'UNRENDERED-OK';
+    const output = join(stateDir, 'unrendered-owned-message.txt');
+    const { page, state } = unrenderedOwnedMessagePage(prompt, reply, true);
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output);
+
+    expect(outcome, JSON.stringify(outcome)).toMatchObject({ code: 0 });
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(state.reloads).toBe(1);
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+  });
+
+  it('reloads at most once and never resends when the owned user message stays unrendered (#2197)', async () => {
+    const prompt = 'PROMPT-STILL-UNRENDERED';
+    const reply = 'NEVER-HARVESTED';
+    const output = join(stateDir, 'still-unrendered-owned-message.txt');
+    const { page, state } = unrenderedOwnedMessagePage(prompt, reply, false);
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output, '1000');
+
+    expect(outcome.result.state).not.toBe('ok');
+    expect(outcome.result.send_count).toBe(1);
+    expect(state.reloads).toBe(1);
+  });
+
   it('does not bind a delayed fresh-chat URL until that surface proves the owned marker', async () => {
     const prompt = 'PROMPT-LATE-BIND';
     const reply = 'OWNED FINAL';
