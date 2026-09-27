@@ -115,6 +115,8 @@ import {
   normalizeMessageRoleStyle,
   SEND_BUTTON_SELECTOR,
   USER_MESSAGE_SELECTOR,
+  USER_MESSAGE_STYLE,
+  ASSISTANT_MESSAGE_STYLE,
 } from '../chatgpt-browser-turn/product-page-selectors.ts';
 
 
@@ -507,14 +509,13 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
     });
     const message = (role: 'user' | 'assistant', id: string) => ({
       getAttribute: async (name: string) => {
-        if (name === 'data-message-author-role') return role;
-        if (name === 'data-message-id') return id;
+        if (name === MESSAGE_AUTHOR_ROLE_ATTR) return role === 'user' ? USER_MESSAGE_STYLE : ASSISTANT_MESSAGE_STYLE;
+        if (name === MESSAGE_ID_ATTR) return id;
         return null;
       },
-      locator: (selector: string) => ({
-        count: async () => (selector.includes('data-parent-message-id') || selector.includes('data-parent-turn-id') ? 0 : 1),
-        first: () => hangingNestedFirst(),
-      }),
+      locator: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+        ? { count: async () => 1, first: () => ({ getAttribute: async () => role === 'user' ? USER_MESSAGE_STYLE : ASSISTANT_MESSAGE_STYLE }) }
+        : { count: async () => 0, first: () => selector === ASSISTANT_TURN_ANCESTOR_XPATH ? { getAttribute: async () => null } : hangingNestedFirst() },
     });
     const page = {
       locator: () => ({
@@ -547,20 +548,20 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
         count: async () => 1,
         nth: () => ({
           getAttribute: async (name: string) => {
-            if (name === 'data-message-author-role') return 'assistant';
-            if (name === 'data-message-id') return 'assistant-12345678';
+            if (name === MESSAGE_AUTHOR_ROLE_ATTR) return ASSISTANT_MESSAGE_STYLE;
+            if (name === MESSAGE_ID_ATTR) return 'assistant-12345678';
             return null;
           },
-          locator: (selector: string) => ({
-            count: async () => (selector.includes('data-parent-message-id') ? 1 : 0),
-            first: () => ({
-              getAttribute: async () => {
+          locator: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+            ? { count: async () => 1, first: () => ({ getAttribute: async () => ASSISTANT_MESSAGE_STYLE }) }
+            : {
+              count: async () => (selector.includes('data-parent-message-id') ? 1 : 0),
+              first: () => ({ getAttribute: async () => {
                 const error = new Error('Timeout 80ms exceeded');
                 error.name = 'TimeoutError';
                 throw error;
-              },
-            }),
-          }),
+              } }),
+            },
         }),
       }),
     };
@@ -596,13 +597,15 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
               }
               return null;
             },
-            locator: (selector: string) => ({
-              count: async () => {
-                nestedCountWait = budget.clampOperationWaitMs();
-                return 0;
+            locator: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+              ? { count: async () => 1, first: () => ({ getAttribute: async () => ASSISTANT_MESSAGE_STYLE }) }
+              : {
+                count: async () => {
+                  nestedCountWait = budget.clampOperationWaitMs();
+                  return 0;
+                },
+                first: () => ({ getAttribute: async () => null }),
               },
-              first: () => ({ getAttribute: async () => null }),
-            }),
           }),
         }),
       };
@@ -2763,7 +2766,7 @@ describe('issue 1023 operation-level bounds', () => {
     });
     const baseLocator = fixture.page.locator.bind(fixture.page);
     fixture.page.locator = (selector: string) => {
-      if (selector === '[data-message-author-role="assistant"]') {
+      if (selector === ASSISTANT_MESSAGE_SELECTOR) {
         return {
           count: async () => assistantVisible ? 1 : 0,
           nth: (index: number) => messageLocator('assistant', assistantId, own, 'late ok'),
@@ -2816,10 +2819,12 @@ describe('issue 1023 operation-level bounds', () => {
           getAttribute: async (name: string) => {
             attrCalls++;
             await new Promise((resolve) => { setTimeout(resolve, 40); });
-            if (name === 'data-message-author-role') return 'assistant';
+            if (name === MESSAGE_AUTHOR_ROLE_ATTR) return ASSISTANT_MESSAGE_STYLE;
             return null;
           },
-          locator: () => ({ first: () => ({ getAttribute: async () => null }) }),
+          locator: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+            ? { count: async () => 1, first: () => ({ getAttribute: async () => { attrCalls++; await new Promise((resolve) => { setTimeout(resolve, 40); }); return ASSISTANT_MESSAGE_STYLE; } }) }
+            : { count: async () => 0, first: () => ({ getAttribute: async () => null }) },
         }),
       }),
     };

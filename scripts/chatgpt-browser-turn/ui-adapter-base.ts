@@ -1393,7 +1393,11 @@ async function readMessageRole(locator: any, waitSource?: OperationWaitSource): 
   const styles = locator.locator(`[${MESSAGE_AUTHOR_ROLE_ATTR}]`);
   const count = await boundedLocatorCount(styles, resolveOperationWaitMs(waitSource));
   if (count !== 1) return undefined;
-  return normalizeMessageRoleStyle(await readLocatorAttribute(styles.first(), MESSAGE_AUTHOR_ROLE_ATTR, waitSource));
+  return normalizeMessageRoleStyle(await readWitnessAttribute(
+    styles.first(),
+    MESSAGE_AUTHOR_ROLE_ATTR,
+    waitSource ?? MAX_BROWSER_OPERATION_WAIT_MS,
+  ));
 }
 
 export type WitnessSurfaceProbe = 'available' | 'absent' | 'empty';
