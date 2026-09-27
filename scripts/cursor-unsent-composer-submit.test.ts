@@ -1893,6 +1893,58 @@ describe('orchestration mail reconciliation', () => {
     expect(resolved.sort()).toEqual(['dispatch:ctx_new', 'dispatch:ctx_settled']);
   });
 
+  it('stops retrying a refused episode of read Run mail once it leaves the reconcile window', async () => {
+    const target = worker('term_run_read_backlog');
+    const hourMs = 60 * 60_000;
+    const now = 10 * hourMs;
+    const runId = 'run_read_backlog';
+    const recipient = `run:${runId}`;
+    const refusedEpisode = (messageId: string) => ({
+      messageId,
+      runId,
+      recipient,
+      workerKey: 'orca\u0000term_run_read_backlog',
+      reason: 'pointer_absent_orca_did_not_notify',
+      nextEligibleAt: 0,
+      state: 'refused',
+    });
+    const run = async (createdAt: number) => {
+      const suffix = `${process.pid}-${Date.now()}-${createdAt}`;
+      const ledgerPath = join(tmpdir(), `opk-reconcile-read-backlog-${suffix}.json`);
+      writeFileSync(ledgerPath, JSON.stringify({ messages: {}, episodes: { seeded: refusedEpisode('msg_read') } }));
+      let retrievabilityChecks = 0;
+      let reads = 0;
+      const deps = {
+        readInbox: () => ({
+          ok: true as const,
+          result: { messages: [{ id: 'msg_read', run_id: runId, to_handle: recipient, read: 1, created_at: createdAt }] },
+        }),
+        lookupMessage: () => ({ ok: false as const, reason: 'unused' }),
+        resolveWorker: () => ({ ok: true as const, worker: target }),
+        isMessageRetrievable: () => { retrievabilityChecks += 1; return { ok: false as const, reason: 'orchestration_message_unretrievable' }; },
+        submitDeps: depsFor({}, {
+          read: () => { reads += 1; return { ok: true as const, lines: ['→ Add a follow-up', ...CURSOR_FOOTER], source: 'screen' as const }; },
+        }),
+      };
+      const result = await runOrchestrationMailReconcileTick(deps, {
+        ledgerPath,
+        lockPath: join(tmpdir(), `opk-reconcile-read-backlog-${suffix}.lock`),
+        now: () => now,
+        workerRoster: [],
+      });
+      return { result, retrievabilityChecks, reads };
+    };
+
+    const stale = await run(now - 2 * hourMs);
+    expect(stale.retrievabilityChecks).toBe(0);
+    expect(stale.reads).toBe(0);
+    expect(stale.result.attempted).toBe(0);
+
+    const fresh = await run(now - 1_000);
+    expect(fresh.retrievabilityChecks).toBe(1);
+    expect(fresh.result.attempted).toBe(1);
+  });
+
   it('delivers unread Run mail after exact Run retrievability succeeds', async () => {
     const target = worker('term_run_mail_unread');
     const submitted: RuntimeWorkerIdentity[] = [];

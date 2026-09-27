@@ -1792,9 +1792,12 @@ export async function runOrchestrationMailReconcileTick(
       if ((!unreadIds.has(id) && !retryableEpisodeIds.has(id))
         || current - state.messages[id]! > ORCHESTRATION_RECONCILE_WINDOW_MS) delete state.messages[id];
     }
+    // A read row stays retryable only inside the same window as recentReadRows:
+    // after it the recipient has consumed the message, and retrying a refused
+    // episode every tick for hours only costs Orca calls and pane reads.
     const retryableRows = inboxRows.filter((row) => {
       const id = row.id?.trim() ?? '';
-      return id && retryableEpisodeIds.has(id) && (row.read === 1 || row.read === true);
+      return id && retryableEpisodeIds.has(id) && recentArrivalIds.has(id) && (row.read === 1 || row.read === true);
     });
     const activeRows = [...unread, ...retryableRows, ...recentReadRows];
     const activeMessageIds = new Set(activeRows.map((row) => row.id!.trim()));
