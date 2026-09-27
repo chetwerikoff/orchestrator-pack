@@ -52,7 +52,7 @@ function registeredNestedStorePath(match, env) {
     if (store.kind === 'directory') return pathIsSameOrWithin(candidate, store.defaultPath);
     if (candidate === store.defaultPath) return true;
     if (!pathIsSameOrWithin(candidate, store.parentPath)) return false;
-    const rel = relative(store.parentPath, candidate).replaceAll('\\\\', '/');
+    const rel = relative(store.parentPath, candidate).replaceAll('\\', '/');
     return store.sidecarMatchers.some((matcher) => matcher.test(rel));
   });
 }
@@ -131,7 +131,7 @@ export function isRegisteredNestedStoreSnapshotOnlyChange(changedPaths, env = pr
       if (store.kind === 'directory') return pathIsSameOrWithin(candidate, store.defaultPath);
       if (candidate === store.defaultPath) return true;
       if (!pathIsSameOrWithin(candidate, store.parentPath)) return false;
-      const rel = relative(store.parentPath, candidate).replaceAll('\\\\', '/');
+      const rel = relative(store.parentPath, candidate).replaceAll('\\', '/');
       return store.sidecarMatchers.some((matcher) => matcher.test(rel));
     });
   });
