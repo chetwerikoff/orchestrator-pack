@@ -1,0 +1,18 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2207,
+  "declared_paths": [
+    "scripts/pr2-foundation/scheduler-process-integration.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/"
+  ],
+  "source_revision": "570aefeff114bc1eaa7f0af3001a0415d153bca4"
+}
