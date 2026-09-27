@@ -3,7 +3,7 @@
 // directly to avoid vi.mock cycles on the full ui-adapter module.
 
 export const COMPOSER_SELECTOR = '#prompt-textarea, [contenteditable="true"][role="textbox"]';
-export const SEND_BUTTON_SELECTOR = '[data-testid="send-button"]';
+export const SEND_BUTTON_SELECTOR = '[data-testid="send-button"], button[type="submit"][aria-label="Send"]';
 export const MESSAGE_AUTHOR_ROLE_ATTR = 'data-markdown-text-style';
 export const MESSAGE_ID_ATTR = 'data-chatgpt-selection-message-id';
 // Live user messages carry no selection id or markdown style; their search unit
