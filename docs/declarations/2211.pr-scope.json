@@ -1,0 +1,20 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2211,
+  "declared_paths": [
+    "docs/declarations/2211.pr-scope.json",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-cli.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/"
+  ],
+  "source_revision": "fb2cc793879abada5137324504457930b5e18037"
+}
