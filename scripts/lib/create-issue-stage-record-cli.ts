@@ -792,12 +792,15 @@ function evidencePathForBinding(
 }
 
 function reconcileStageReadOnlyAction(
-  opts: Pick<StageFinalizeCliOptions, 'repo' | 'blockedOn' | 'publicActor' | 'publicActorExplicit'>,
+  opts: Pick<
+    StageFinalizeCliOptions,
+    'repo' | 'blockedOn' | 'publicActor' | 'publicActorExplicit' | 'afterLifecycleValidationFailure'
+  >,
   issueNumber: number,
   binding: CreateIssueActionBinding,
   reviewDir?: string,
   stageEvidencePath?: string,
-  afterLifecycleValidationFailure = false,
+  afterLifecycleValidationFailure = opts.afterLifecycleValidationFailure ?? false,
 ): CreateIssueNextAction {
   const argv = [
     'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
