@@ -2435,8 +2435,7 @@ describe('Issue #1556 pre-lens architectural-review routing', () => {
       const sourceVerdicts = { '01': 'accept' as const, '02': 'accept' as const, '03': 'accept' as const };
       const settlement = settleReviewLane(routing, sourceVerdicts);
       const sourceVerdictEvidence = Object.fromEntries(input.reviewComments.map((reviewComment, index) => {
-        const slot = /^source-slot:\\s*([0-9]+)$/im.exec(String(published.body))?.[1]
-          ?? String(index + 1).padStart(2, '0');
+        const slot = String(index + 1).padStart(2, '0');
         const name = `pass-01-architectural-review-${slot}.capture.txt`;
         const body = String(reviewComment.body);
         const digest = createHash('sha256').update(body).digest('hex');
