@@ -1890,23 +1890,27 @@ export function runStageFinalizeCli(
         appendBlockedOnArgv(reconcileArgv, opts.blockedOn);
         const retryableRead = reconcileStageReadIsRetryable(result);
         if (result.ok) {
-          nextAction = createIssueNextAction({
-            kind: 'produce-acceptance-artifacts',
-            binding,
-            argv: appendBlockedOnArgv([
-              'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
-              'produce-artifacts',
-              '--repo', opts.repo,
-              '--issue-number', String(issueNumber),
-              '--review-dir', reviewDir,
-              '--stage-evidence', stageEvidencePath,
-              '--phase', result.stage === 'architectural' ? 'final-acceptance' : 'pre-lens',
-              '--expected-source-revision', result.sourceRevision,
-              '--expected-stage', result.stage,
-              '--expected-stage-attempt-id', result.stageAttemptId,
-              '--json',
-            ], opts.blockedOn),
-          });
+          nextAction = !result.alreadySettled
+            && result.stage !== 'architectural'
+            && (result.materialFindingCount ?? 0) > 0
+            ? preMintAuthorRoundAction(binding, reviewDir)
+            : createIssueNextAction({
+                kind: 'produce-acceptance-artifacts',
+                binding,
+                argv: appendBlockedOnArgv([
+                  'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
+                  'produce-artifacts',
+                  '--repo', opts.repo,
+                  '--issue-number', String(issueNumber),
+                  '--review-dir', reviewDir,
+                  '--stage-evidence', stageEvidencePath,
+                  '--phase', result.stage === 'architectural' ? 'final-acceptance' : 'pre-lens',
+                  '--expected-source-revision', result.sourceRevision,
+                  '--expected-stage', result.stage,
+                  '--expected-stage-attempt-id', result.stageAttemptId,
+                  '--json',
+                ], opts.blockedOn),
+              });
         } else if (!result.ok && retryableRead && !result.errors.some((error) => error.includes('stale_next_action'))) {
           nextAction = createIssueNextAction({
             kind: 'reconcile-stage-read-only',
