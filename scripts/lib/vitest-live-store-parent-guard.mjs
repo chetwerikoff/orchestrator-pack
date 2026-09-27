@@ -13,17 +13,25 @@ import {
 
 const MAX_PARENT_WATCHERS = 512;
 // Residual: pathname-only exemption; fs.watch cannot prove writer provenance,
-// so same-path child bypass of this journal is accepted.
+// so same-path child bypass of these files is accepted. The list is what a
+// running wake supervisor writes on its own cadence: its status and projected
+// registry under `supervisor/` (the cutover layout; a state dir equal to the
+// root keeps the status at the top level) and the scheduler's mail reconcile.
 const EXTERNALLY_MUTABLE_STORE_PATHS = new Map([
   ['wake-supervisor-runtime-state', new Set([
     'worker-message-dispatch-journal.json',
     'typescript-supervisor-status.json',
+    'supervisor/typescript-supervisor-status.json',
+    'supervisor/projected-registry.json',
+    'orchestration-mail-reconcile.json',
+    'orchestration-mail-reconcile.lock',
   ])],
 ]);
 const EXTERNALLY_MUTABLE_JOURNAL_STORE_ID = 'wake-supervisor-runtime-state';
 const EXTERNALLY_MUTABLE_JOURNAL_PATH = 'worker-message-dispatch-journal.json';
 const JOURNAL_ATOMIC_TEMP_PATH = /^\.[0-9a-f]{32}\.tmp$/i;
-const SUPERVISOR_STATUS_ATOMIC_TEMP_PATH = /^\.typescript-supervisor-status\.json\.\d+\.[0-9a-f-]{36}\.tmp$/i;
+// writeDurableFile temp name: `.<basename>.<pid>.<uuid>.tmp` beside the target.
+const SUPERVISOR_STATUS_ATOMIC_TEMP_PATH = /^(?:supervisor\/)?\.(?:typescript-supervisor-status|projected-registry)\.json\.\d+\.[0-9a-f-]{36}\.tmp$/i;
 function pathIsSameOrWithin(candidate, root) {
   const rel = relative(root, candidate);
   return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
