@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { parseSmokeTestPlan } from './draft-discipline.mjs';
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { runProcess, runProcessSync } from './kernel/subprocess.ts';
+import { resolveRealGhBinary, resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import {
   buildSmokeAgentPrompt,
+  buildSmokeGhChildEnv,
   checkSmokeTestPlan,
   createSmokeControlPlaneDiagnostic,
   ensureSmokeRunArtifactDir,
@@ -37,7 +39,7 @@ import {
   smokeResultForWorkerSmokeCauseFamily,
   workerSmokeCauseFamilyForHarnessReason,
 } from './lib/worker-smoke-core-base.ts';
-import { inspectSmokeProgress } from './lib/worker-smoke-lifecycle-base.ts';
+import { inspectSmokeProgress, readSmokeLifecycleRegistry } from './lib/worker-smoke-lifecycle-base.ts';
 import { evaluateSmokeLifecycleCleanliness, SMOKE_LIFECYCLE_POLL_MS } from './lib/worker-smoke-lifecycle.ts';
 import {
   evaluateSameHeadBlockedRetryAdmission,
@@ -66,6 +68,8 @@ import {
   runDelegatedReadiness,
   runGateCheck,
   runSmokeAttempt,
+  runSmokeGhProcess,
+  runSmokeGhWriteSync,
   resolveSmokeExecutorProfile,
   deriveMainMergeCarryProof,
   smokeCommentSnapshotDigest,
@@ -1793,6 +1797,32 @@ describe('worker-smoke-run wait for expired unbound lifecycle', () => {
   }, 10_000);
 });
 
+describe('worker-smoke-run wait for a missing run', () => {
+  it('fails immediately with run_not_found for the observed id without an artifact directory', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-wait-missing-'));
+    const runId = 'd66e1692-df5b-4ac0-94f1-90f81264f895';
+    try {
+      const result = await runProcess({
+        command: process.execPath,
+        args: [
+          '--experimental-strip-types',
+          join(process.cwd(), 'scripts/worker-smoke-run.ts'),
+          'wait', '--run', runId, '--cwd', root, '--json',
+        ],
+        cwd: root,
+        inheritParentEnv: true,
+        allowEmptyStdout: true,
+        timeoutMs: 2_000,
+      });
+      expect(result.timedOut).toBe(false);
+      expect(result.exitCode).toBe(1);
+      expect(JSON.parse(result.stdout)).toEqual({ ok: false, runId, reason: 'run_not_found' });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 10_000);
+});
+
 
 describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
   const POLL_MS = SMOKE_LIFECYCLE_POLL_MS;
@@ -2669,33 +2699,56 @@ function runChild(
 }
 
 describe('publishPrComment', () => {
-  it('publishes via gh api --input temp file', () => {
-    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-publish-'));
-    const bin = join(root, 'bin');
-    mkdirSync(bin, { recursive: true });
-    const argvFile = join(root, 'argv.json');
-    const payloadFile = join(root, 'payload.json');
-    executable(join(bin, 'gh'), `#!/usr/bin/env node
-const { readFileSync, writeFileSync } = require('node:fs');
-writeFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2)), 'utf8');
-const idx = process.argv.indexOf('--input');
-if (idx !== -1) {
-  writeFileSync(${JSON.stringify(payloadFile)}, readFileSync(process.argv[idx + 1], 'utf8'), 'utf8');
-}
-`);
-    const body = 'hello\nworld';
+  it('executes gh writes through scripts/gh under the minimal smoke child environment, not a PATH wrapper', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-publish-native-'));
+    const machineBin = join(root, 'machine-bin');
+    mkdirSync(machineBin, { recursive: true });
+    const wrapperMarker = join(root, 'machine-wrapper-ran');
     const previousPath = process.env.PATH;
-    process.env.PATH = `${bin}:${previousPath ?? ''}`;
+    const previousRealBinary = process.env.GH_REAL_BINARY;
+    executable(join(machineBin, 'gh'), `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(wrapperMarker)}, 'ran');\n`);
+    delete process.env.GH_REAL_BINARY;
+    const nativeBinary = resolveRealGhBinary();
+    process.env.PATH = `${machineBin}:${dirname(nativeBinary)}:${previousPath ?? ''}`;
     try {
-      publishPrComment(1586, body, root);
-      const argv = JSON.parse(readFileSync(argvFile, 'utf8'));
-      expect(argv).toEqual(['api', 'repos/chetwerikoff/orchestrator-pack/issues/1586/comments', '--method', 'POST', '--input', expect.stringMatching(/worker-smoke-comment-[^/]+\/body\.md$/u)]);
-      const payload = JSON.parse(readFileSync(payloadFile, 'utf8'));
-      expect(payload.body).toBe(body);
+      expect(resolveRealGhBinary()).toBe(nativeBinary);
+      expect(resolveTrackedGhWrapper()).toBe(join(process.cwd(), 'scripts', 'gh'));
+      const result = runSmokeGhWriteSync(['api', '--method', 'POST', '--help'], root);
+      expect(result.ok).toBe(true);
+      expect(result.stdout).toMatch(/usage/iu);
+      expect(existsSync(wrapperMarker)).toBe(false);
+      expect(buildSmokeGhChildEnv({})).toEqual({});
     } finally {
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;
+      if (previousRealBinary === undefined) delete process.env.GH_REAL_BINARY;
+      else process.env.GH_REAL_BINARY = previousRealBinary;
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('times out and retries a hung gh invocation once', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-gh-timeout-'));
+    const hungGh = join(root, 'gh');
+    const callsFile = join(root, 'calls.txt');
+    executable(hungGh, `#!${process.execPath}\nconst { appendFileSync } = require('node:fs');\nappendFileSync(${JSON.stringify(callsFile)}, 'call\\n', 'utf8');\nsetTimeout(() => {}, 1000);\n`);
+    try {
+      const result = runSmokeGhProcess(hungGh, ['api'], root, buildSmokeGhChildEnv({}), 500);
+      expect(result.ok).toBe(false);
+      expect(readFileSync(callsFile, 'utf8').trim().split(/\r?\n/u)).toHaveLength(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports publication_unconfirmed when the native gh command fails', () => {
+    const previousRealBinary = process.env.GH_REAL_BINARY;
+    process.env.GH_REAL_BINARY = process.execPath;
+    try {
+      expect(() => publishPrComment(1586, 'hello', process.cwd(), 25)).toThrow(/publication_unconfirmed/u);
+    } finally {
+      if (previousRealBinary === undefined) delete process.env.GH_REAL_BINARY;
+      else process.env.GH_REAL_BINARY = previousRealBinary;
     }
   });
 });
@@ -3077,6 +3130,7 @@ describe('independent pass is stored only after publication', () => {
     actor: 'independent' | 'worker-owned';
     history: boolean;
     publishComment: (prNumber: number, body: string, repoRoot: string) => void;
+    detachedOwner?: boolean;
     spawnFails?: boolean;
     receiptWriteFails?: boolean;
     executePass?: boolean;
@@ -3141,6 +3195,7 @@ describe('independent pass is stored only after publication', () => {
         json: true,
         reviewId: '',
         reviewHeadSha: '',
+        ...(input.detachedOwner ? { detachedOwner: true, runId: `run-${input.prNumber}` } : {}),
       }, {
         adapter,
         resolveProfile: () => ({
@@ -3402,6 +3457,37 @@ describe('independent pass is stored only after publication', () => {
       expect(workerOwnedStatus(207113, result.storeRoot)).not.toBe('started');
     } finally {
       rmSync(result.root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it('terminalizes the smoke run with publication_unconfirmed without changing the scenario verdict', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-publish-terminal-'));
+    const previousRealBinary = process.env.GH_REAL_BINARY;
+    process.env.GH_REAL_BINARY = process.execPath;
+    const runId = 'run-207115';
+    const result = await runOrdering({
+      prefix: 'ordering-worker-publication-failure-',
+      prNumber: 207115,
+      actor: 'worker-owned',
+      history: false,
+      executePass: true,
+      detachedOwner: true,
+      publishComment: (prNumber, body, repoRoot) => publishPrComment(prNumber, body, repoRoot, 25),
+    });
+    try {
+      expect(result.error, result.outputText).toBeUndefined();
+      expect(result.code, result.outputText).toBe(0);
+      const output = JSON.parse(result.outputText ?? '') as { report: SmokeReport };
+      expect(output.report.result).toBe('PASS');
+      expect(output.report.scenarios[0]?.outcome).toBe('pass');
+      expect(output.report.limitations.join(' ')).toContain('publication_unconfirmed');
+      const lifecycle = readSmokeLifecycleRegistry(resolveSmokeRunArtifactDir(result.root, runId));
+      expect(lifecycle?.launcherTerminalizedAtMs).toEqual(expect.any(Number));
+    } finally {
+      if (previousRealBinary === undefined) delete process.env.GH_REAL_BINARY;
+      else process.env.GH_REAL_BINARY = previousRealBinary;
+      rmSync(root, { recursive: true, force: true });
+      if (result.root !== root) rmSync(result.root, { recursive: true, force: true });
     }
   }, 20_000);
 
