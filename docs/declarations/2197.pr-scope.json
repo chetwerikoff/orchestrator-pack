@@ -3,7 +3,8 @@
   "issue_number": 2197,
   "declared_paths": [
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
-    "scripts/chatgpt-browser-turn/state-light-turn-base.ts"
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs"
   ],
   "denylist": [
     "credentials/",
@@ -13,7 +14,8 @@
   ],
   "allowed_roots": [
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
-    "scripts/chatgpt-browser-turn/state-light-turn-base.ts"
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs"
   ],
   "source_revision": "b54788a456c30725e0716d106cf767644d34d16e"
 }
