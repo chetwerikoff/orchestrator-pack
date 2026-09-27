@@ -5,7 +5,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { canonicalFoundationPaths } from './lib/cutover/foundation-observation.ts';
 import {
+  defaultSupervisorStateDir,
   linuxProcessStartTimeMs,
   mapChangedPathsToConsumers,
   runCli,
@@ -201,6 +203,14 @@ describe('Issue #2145 merge adoption effect verification', () => {
     });
     expect(report.effect).toContain('effect_unverified');
     expect(report.operationalOutcome).toBe('operationally_incomplete');
+  });
+
+  it('looks for supervisor status in the supervisor directory the cutover layout defines', () => {
+    const home = '/home/operator';
+    expect(defaultSupervisorStateDir({ HOME: home })).toBe(canonicalFoundationPaths('/repo', home).supervisorStateDir);
+    expect(defaultSupervisorStateDir({ HOME: home })).toBe('/home/operator/.local/state/orchestrator-pack-wake-supervisor/supervisor');
+    expect(defaultSupervisorStateDir({ HOME: home, XDG_STATE_HOME: '/xdg' })).toBe('/xdg/orchestrator-pack-wake-supervisor/supervisor');
+    expect(defaultSupervisorStateDir({ OPK_WAKE_SUPERVISOR_STATE_DIR: '/custom/root' })).toBe('/custom/root/supervisor');
   });
 
   it('tracks the common merge procedure rather than delegated integration only', () => {
