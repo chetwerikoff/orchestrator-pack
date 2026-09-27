@@ -411,6 +411,7 @@ export function buildSmokeAgentPrompt(input: {
     'Do not edit tracked implementation files, commit, push, merge, alter the Issue, or call pack-worker-report.',
     'When waiting for executor work, use only a completion or session identifier actually returned by the selected executor; never invent a shell_id or a transcript path.',
     'Continue to follow the existing lifecycle progress and cancellation protocol.',
+    'For any smoke scenario that requires pressing product Stop and injecting a synthetic Browser-GPT recovery fixture while the assistant turn is in flight, use the live Stop/generation control as the synchronization witness. Do not wait for an assistant reply or assistant-turn node before Stop; while that control is still present, press Stop first, then immediately perform the scenario\'s synthetic injection. If the Stop/generation witness disappears before the Stop action, do not inject into the settled turn; report the scenario as precondition unavailable.',
     'Cap any single block_until_ms at 300000; re-check and re-await instead of one long block.',
     'Invoke pack review only when a listed smoke scenario explicitly requires one live pack-review manager turn; do not start any other review.',
     'For each non-PASS scenario row, include exactly one cause-family from: scenario_precondition_unavailable, scenario_assertion_failed, scenario_evidence_missing. PASS rows omit cause-family.',
