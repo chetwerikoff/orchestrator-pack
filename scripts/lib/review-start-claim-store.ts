@@ -239,8 +239,14 @@ function withClaimReadValidation<T>(operation: () => T): T {
 }
 function restoreQuarantine(lockDir: string, quarantine: string): void {
   if (!originalExistsSync(quarantine) || originalExistsSync(lockDir)) return;
-  originalRenameSync(quarantine, lockDir);
-  syncDirectory(dirname(lockDir));
+  try {
+    originalRenameSync(quarantine, lockDir);
+    syncDirectory(dirname(lockDir));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'EEXIST' || code === 'ENOTEMPTY') return;
+    throw error;
+  }
 }
 function waitAtStaleTakeoverBarrier(): void {
   if (process.env.OPK_VITEST_HARNESS !== '1') return;
