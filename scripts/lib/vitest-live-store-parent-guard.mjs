@@ -15,11 +15,15 @@ const MAX_PARENT_WATCHERS = 512;
 // Residual: pathname-only exemption; fs.watch cannot prove writer provenance,
 // so same-path child bypass of this journal is accepted.
 const EXTERNALLY_MUTABLE_STORE_PATHS = new Map([
-  ['wake-supervisor-runtime-state', new Set(['worker-message-dispatch-journal.json'])],
+  ['wake-supervisor-runtime-state', new Set([
+    'worker-message-dispatch-journal.json',
+    'typescript-supervisor-status.json',
+  ])],
 ]);
 const EXTERNALLY_MUTABLE_JOURNAL_STORE_ID = 'wake-supervisor-runtime-state';
 const EXTERNALLY_MUTABLE_JOURNAL_PATH = 'worker-message-dispatch-journal.json';
 const JOURNAL_ATOMIC_TEMP_PATH = /^\.[0-9a-f]{32}\.tmp$/i;
+const SUPERVISOR_STATUS_ATOMIC_TEMP_PATH = /^\.typescript-supervisor-status\.json\.\d+\.[0-9a-f-]{36}\.tmp$/i;
 function pathIsSameOrWithin(candidate, root) {
   const rel = relative(root, candidate);
   return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
@@ -51,11 +55,12 @@ function externallyMutablePath(match) {
   return allowed.has(storeRelativePath(match.store, match.candidate));
 }
 
-function externallyMutableJournalSidecarPath(match) {
+function externallyMutableSidecarPath(match) {
   if (match?.storeId !== EXTERNALLY_MUTABLE_JOURNAL_STORE_ID || !match.store) return false;
   const relativePath = storeRelativePath(match.store, match.candidate);
   return relativePath === `${EXTERNALLY_MUTABLE_JOURNAL_PATH}.lock`
-    || JOURNAL_ATOMIC_TEMP_PATH.test(relativePath);
+    || JOURNAL_ATOMIC_TEMP_PATH.test(relativePath)
+    || SUPERVISOR_STATUS_ATOMIC_TEMP_PATH.test(relativePath);
 }
 
 function snapshotTree(root) {
@@ -106,6 +111,12 @@ export function isExternalJournalSnapshotOnlyChange(changedPaths, observedPaths 
   return journalOnly && (observedPaths.has(EXTERNALLY_MUTABLE_JOURNAL_PATH) || changed.length > 0);
 }
 
+export function isExternalWakeSupervisorSnapshotOnlyChange(changedPaths) {
+  const allowed = EXTERNALLY_MUTABLE_STORE_PATHS.get(EXTERNALLY_MUTABLE_JOURNAL_STORE_ID) ?? new Set();
+  const changed = [...changedPaths].filter((path) => path !== '');
+  return changed.length > 0 && changed.every((path) => allowed.has(path));
+}
+
 export function startParentLiveStoreGuard(env = process.env) {
   const baselineGuard = startLiveStoreGuard(env);
   const stores = resolvedLiveStores(env);
@@ -149,7 +160,7 @@ export function startParentLiveStoreGuard(env = process.env) {
         if (match) {
           const path = storeRelativePath(match.store, match.candidate);
           if (externallyMutablePath(match)) addTouch(observedExternalTouches, match.storeId, path);
-          else if (externallyMutableJournalSidecarPath(match)) {
+          else if (externallyMutableSidecarPath(match)) {
             addTouch(observedJournalSidecars, match.storeId, path);
           } else addTouch(exactTouches, match.storeId, path);
         }
@@ -207,7 +218,8 @@ export function startParentLiveStoreGuard(env = process.env) {
         const observed = observedExternalTouches.get(store.id);
         const changed = changedPathsByStore.get(store.id) ?? [];
         if (store.id === EXTERNALLY_MUTABLE_JOURNAL_STORE_ID
-          && isExternalJournalSnapshotOnlyChange(changed, observed ?? new Set())) {
+          && (isExternalJournalSnapshotOnlyChange(changed, observed ?? new Set())
+            || isExternalWakeSupervisorSnapshotOnlyChange(changed))) {
           externallySettledStores.add(store.id);
         }
       }
