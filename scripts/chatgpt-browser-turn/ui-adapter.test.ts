@@ -20,26 +20,33 @@ const TIMEOUT_TEXT = 'Message delivery timed out. Please try again.';
 function recoveryPage(options: { generationActive: boolean; laterUser?: boolean; statusReadDelayMs?: number }) {
   const marker = generateOwnedPromptMarker(() => new Uint8Array(16).fill(0x11));
   const turns = ['conversation-turn-1', 'conversation-turn-2'];
-  const section = (key: string) => ({ getAttribute: (name: string) => name === 'data-testid' ? key : null });
+  const section = (key: string) => ({ getAttribute: (name: string) => name === 'data-turn-key' ? key : null });
   const userTurn = section(turns[0]!);
   const assistantTurn = section(turns[1]!);
   const retry = { innerText: 'Retry' };
+  const roleMarker = (style: string) => ({
+    getAttribute: (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR ? style : null,
+  });
   const user = {
-    getAttribute: (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR ? 'user' : null,
+    getAttribute: () => null,
     innerText: wrapOwnedPromptPayload(marker, 'PROMPT'),
     closest: () => userTurn,
+    querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]` ? roleMarker('user-message') : null,
   };
   const assistant = {
-    getAttribute: (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR ? 'assistant' : null,
+    getAttribute: () => null,
     innerText: `${TIMEOUT_TEXT}\nRetry`,
     closest: () => assistantTurn,
     querySelectorAll: (selector: string) => selector === 'p' ? [{ innerText: TIMEOUT_TEXT }] : [],
-    querySelector: (selector: string) => selector === REGENERATE_THREAD_ERROR_BUTTON_SELECTOR ? retry : null,
+    querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+      ? roleMarker('assistant-message')
+      : selector === REGENERATE_THREAD_ERROR_BUTTON_SELECTOR ? retry : null,
   };
   const elements = options.laterUser ? [user, assistant, {
-    getAttribute: (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR ? 'user' : null,
+    getAttribute: () => null,
     innerText: 'a newer user turn',
     closest: () => section('conversation-turn-3'),
+    querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]` ? roleMarker('user-message') : null,
   }] : [user, assistant];
   let reads = 0;
   const page = {

@@ -107,8 +107,12 @@ import {
   ASSISTANT_MESSAGE_SELECTOR,
   ASSISTANT_TURN_ANCESTOR_XPATH,
   COMPOSER_SELECTOR,
+  CONVERSATION_TURN_SECTION_SELECTOR,
   CONTINUE_GENERATING_TESTID_SELECTOR,
+  MESSAGE_AUTHOR_ROLE_ATTR,
+  MESSAGE_ID_ATTR,
   MESSAGE_NODE_SELECTOR,
+  normalizeMessageRoleStyle,
   SEND_BUTTON_SELECTOR,
   USER_MESSAGE_SELECTOR,
 } from '../chatgpt-browser-turn/product-page-selectors.ts';
@@ -148,6 +152,28 @@ function assertTimingBudgetConsumed(
     );
   }
 }
+
+describe('Issue #2171 live ChatGPT message and turn selectors', () => {
+  it('selects message containers and identifies roles from markdown style markers', () => {
+    expect(MESSAGE_NODE_SELECTOR).toBe('[data-chatgpt-selection-message-id]');
+    expect(MESSAGE_ID_ATTR).toBe('data-chatgpt-selection-message-id');
+    expect(MESSAGE_AUTHOR_ROLE_ATTR).toBe('data-markdown-text-style');
+    expect(USER_MESSAGE_SELECTOR).toBe(
+      '[data-chatgpt-selection-message-id]:has([data-markdown-text-style="user-message"])',
+    );
+    expect(ASSISTANT_MESSAGE_SELECTOR).toBe(
+      '[data-chatgpt-selection-message-id]:has([data-markdown-text-style="assistant-message"])',
+    );
+    expect(normalizeMessageRoleStyle('user-message')).toBe('user');
+    expect(normalizeMessageRoleStyle('assistant-message')).toBe('assistant');
+    expect(normalizeMessageRoleStyle('assistant')).toBeUndefined();
+  });
+
+  it('selects turn containers by data-turn-key', () => {
+    expect(CONVERSATION_TURN_SECTION_SELECTOR).toBe('div[data-turn-key]');
+    expect(ASSISTANT_TURN_ANCESTOR_XPATH).toBe('xpath=ancestor-or-self::div[@data-turn-key][1]');
+  });
+});
 
 describe('Issue #1998 Target crash classification', () => {
   it('matches only the explicit Playwright Target crashed signature', () => {

@@ -4,20 +4,29 @@
 
 export const COMPOSER_SELECTOR = '#prompt-textarea';
 export const SEND_BUTTON_SELECTOR = '[data-testid="send-button"]';
-export const MESSAGE_AUTHOR_ROLE_ATTR = 'data-message-author-role';
-export const MESSAGE_NODE_SELECTOR = `[${MESSAGE_AUTHOR_ROLE_ATTR}]`;
-export const USER_MESSAGE_SELECTOR = `[${MESSAGE_AUTHOR_ROLE_ATTR}="user"]`;
-export const ASSISTANT_MESSAGE_SELECTOR = `[${MESSAGE_AUTHOR_ROLE_ATTR}="assistant"]`;
-export const TURN_START_MESSAGE_ATTR = 'data-turn-start-message';
+export const MESSAGE_AUTHOR_ROLE_ATTR = 'data-markdown-text-style';
+export const MESSAGE_NODE_SELECTOR = '[data-chatgpt-selection-message-id]';
+export const MESSAGE_ID_ATTR = 'data-chatgpt-selection-message-id';
+export const USER_MESSAGE_STYLE = 'user-message';
+export const ASSISTANT_MESSAGE_STYLE = 'assistant-message';
+export const USER_MESSAGE_SELECTOR = `${MESSAGE_NODE_SELECTOR}:has([${MESSAGE_AUTHOR_ROLE_ATTR}="${USER_MESSAGE_STYLE}"])`;
+export const ASSISTANT_MESSAGE_SELECTOR = `${MESSAGE_NODE_SELECTOR}:has([${MESSAGE_AUTHOR_ROLE_ATTR}="${ASSISTANT_MESSAGE_STYLE}"])`;
+export const TURN_START_MESSAGE_ATTR = 'data-turn-key';
 export const STOP_BUTTON_TESTID = 'stop-button';
 export const STOP_BUTTON_SELECTOR = `[data-testid="${STOP_BUTTON_TESTID}"], button[aria-label*="Stop"]`;
 export const REGENERATE_THREAD_ERROR_BUTTON_TESTID = 'regenerate-thread-error-button';
 export const REGENERATE_THREAD_ERROR_BUTTON_SELECTOR = `[data-testid="${REGENERATE_THREAD_ERROR_BUTTON_TESTID}"]`;
 export const CONTINUE_GENERATING_BUTTON_NAME = /continue generating/i;
 export const CONTINUE_GENERATING_TESTID_SELECTOR = '[data-testid*="continue-generating"], [data-testid*="continue_generating"]';
-export const CONVERSATION_TURN_SECTION_SELECTOR = 'section[data-testid^="conversation-turn-"]';
-export const ASSISTANT_TURN_ANCESTOR_XPATH = 'xpath=ancestor-or-self::section[starts-with(@data-testid, "conversation-turn-")][1]';
+export const CONVERSATION_TURN_SECTION_SELECTOR = 'div[data-turn-key]';
+export const ASSISTANT_TURN_ANCESTOR_XPATH = 'xpath=ancestor-or-self::div[@data-turn-key][1]';
 export const CONVERSATION_TURN_ID_PREFIX = 'conversation-turn-';
+
+export function normalizeMessageRoleStyle(value: string | null | undefined): 'user' | 'assistant' | undefined {
+  if (value === USER_MESSAGE_STYLE) return 'user';
+  if (value === ASSISTANT_MESSAGE_STYLE) return 'assistant';
+  return undefined;
+}
 
 export const ASSISTANT_TURN_ACTION_SELECTOR = [
   '[data-testid="copy-turn-action-button"]',
