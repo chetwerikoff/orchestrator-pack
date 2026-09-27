@@ -3047,6 +3047,32 @@ describe('buildSmokeAgentPrompt selected declaration artifact', () => {
     expect(prompt).toMatch(/Do not FAIL an exact-scope or allowed-path scenario solely because that file appears in git diff/u);
   });
 
+  it('keeps the #2193 Stop/injection fixture in flight before synthetic recovery injection', () => {
+    const failedScenario = [
+      'Start the long-run command immediately.',
+      'As soon as the assistant turn node exists, and while that long-run process is still running,',
+      'press the product Stop control and use CDP Runtime.evaluate to insert the Error in message stream nodes.',
+    ].join(' ');
+
+    const prompt = buildSmokeAgentPrompt({
+      issueNumber: 2094,
+      issueBody: ['```smoke-test-plan', 'scenarios:', `  - action: ${failedScenario} | expected: production turn-result recovery proof`, '```'].join('\n'),
+      prNumber: 2138,
+      headSha: '0'.repeat(40),
+      plan: {
+        requirement: 'required',
+        scenarios: [{ action: failedScenario, expected: 'production turn-result recovery proof' }],
+      },
+    });
+
+    const guard = 'use the live Stop/generation control as the synchronization witness';
+    expect(prompt).toContain(guard);
+    expect(prompt).toContain('Do not wait for an assistant reply or assistant-turn node before Stop');
+    expect(prompt).toContain('If the Stop/generation witness disappears before the Stop action, do not inject into the settled turn');
+    expect(prompt.indexOf(guard)).toBeLessThan(prompt.indexOf('Smoke scenarios:'));
+    expect(prompt).toContain(failedScenario);
+  });
+
   it('runtime-neutral bounded await handling', () => {
     const prompt = buildSmokeAgentPrompt({
       issueNumber: 1260,
