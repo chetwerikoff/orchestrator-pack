@@ -823,11 +823,15 @@ export function verifySmokeRunReceipt(
   return workerSmokeReceiptMatchesReport(receipt, report);
 }
 
-export function verifySmokeReportReceiptProvenance(report: SmokeReport): boolean {
+export function verifySmokeReportReceiptProvenance(
+  report: SmokeReport,
+  expectedExecutionMode?: WorkerSmokeExecutionMode,
+): boolean {
   const candidates = listWorkerSmokeReceipts(report.prNumber, report.headSha)
     .filter((receipt) => workerSmokeReceiptMatchesReport(receipt, report));
   if (candidates.length !== 1) return false;
   const receipt = candidates[0]!;
+  if (expectedExecutionMode && receipt.executionMode !== expectedExecutionMode) return false;
   return receipt.attemptId
     ? verifySmokeRunReceipt(report, receipt.attemptId, receipt.runId)
     : verifySmokeRunReceipt(report);

@@ -1777,7 +1777,7 @@ function ordinaryFullAttemptSelection(plan: SmokeTestPlan): WorkerSmokeSelective
   };
 }
 
-function selectSmokeAttempt(
+export function selectSmokeAttempt(
   options: CliOptions,
   issueBody: string,
   target: ResolvedSmokeTarget | undefined,
@@ -1839,7 +1839,7 @@ function selectSmokeAttempt(
   if (sourceHeads.length !== 1) return refuseCarry();
   const sourceHeadSha = sourceHeads[0]!;
   const sourceReport = selection.carried.find((entry) => entry.sourceHeadSha === sourceHeadSha)?.sourceReport;
-  if (!sourceReport || sourceReport.result !== 'PASS' || !verifySmokeReportReceiptProvenance(sourceReport)) return refuseCarry();
+  if (!sourceReport || sourceReport.result !== 'PASS' || !verifySmokeReportReceiptProvenance(sourceReport, 'executed')) return refuseCarry();
   const mainMergeCarry = deriveMainMergeCarryProof(options.repoRoot, sourceHeadSha, target.headSha, issueBody);
   if (!mainMergeCarry) return refuseCarry();
   return { ...selection, mainMergeCarry };
@@ -1975,6 +1975,8 @@ function orderingOwnerEvidence(
   let scenarioFinding: boolean | undefined;
   let executionMode: 'executed' | 'carry-only' | undefined;
   let cleanupSafe: boolean | undefined;
+  const receipt = listWorkerSmokeReceipts(options.prNumber, options.headSha)
+    .find((candidate) => candidate.attemptId === attemptId);
   if (runId) {
     const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
     const runtime = readWorkerSmokeRunFinalEvidence({
@@ -2001,6 +2003,8 @@ function orderingOwnerEvidence(
       )
     );
   }
+  if (!authoritativeResult && receipt?.result === 'PASS') authoritativeResult = 'PASS';
+  if (!executionMode && receipt?.result === 'PASS' && receipt.executionMode) executionMode = receipt.executionMode;
   return {
     attemptId,
     supervisorPid,
@@ -2043,12 +2047,14 @@ export function beginSmokeOrdering(
   const existingOwner = actor === 'worker-owned'
     ? authority.smokeOrdering?.workerOwned
     : authority.smokeOrdering?.independent;
+  const ownerStateEvidence = existingOwner
+    && (existingOwner.status === 'started' || (actor === 'independent' && existingOwner.status === 'passed'))
+    ? orderingOwnerEvidence(existingOwner, options)
+    : undefined;
   commitSmokeOrderingTransition({
     prNumber: options.prNumber, expectedTransitionSeq: authority.transitionSeq, actor, headSha: options.headSha, status: 'started',
     ...owner,
-    ...(existingOwner?.status === 'started'
-      ? { ownerStateEvidence: orderingOwnerEvidence(existingOwner, options) }
-      : {}),
+    ...(ownerStateEvidence ? { ownerStateEvidence } : {}),
     ...(actor === 'independent' ? { reviewRuns, operatorSmokeOnly: options.operatorSmokeOnly } : {}), options: authorityOptions,
   });
   return { actor, prNumber: options.prNumber, headSha: options.headSha, options: authorityOptions, ...owner };
@@ -2363,9 +2369,8 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
         producer: SMOKE_REPORT_PRODUCER, orcaExecutable: adapter.id,
       }, { issueNumber: options.issueNumber, prNumber: options.prNumber, headSha: options.headSha }, { executionMode: 'carry-only' });
       const report = normalized.report;
-      const workerOwnedCarryOnlyPass = report.result === 'PASS'
-        && (options.smokeActor ?? 'worker-owned') === 'worker-owned';
-      if (workerOwnedCarryOnlyPass) {
+      const carryOnlyPass = report.result === 'PASS';
+      if (carryOnlyPass) {
         orderingOutcome = 'failed';
         orderingFailureKind = 'retryable';
       }
@@ -2374,7 +2379,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
         options,
         carryPublication,
         publishComment,
-        workerOwnedCarryOnlyPass ? undefined : () => { recordPublishedOrdering(report, true); },
+        carryOnlyPass ? undefined : () => { recordPublishedOrdering(report, true); },
       );
       let postSmoke: PostSmokeReadinessResult | undefined;
       if (report.result === 'PASS' && !options.dryRun) {

@@ -1165,6 +1165,7 @@ export function assertIndependentSmokeAdmission(input: {
   headSha: string;
   reviewRuns: readonly PackReviewStartConsumptionRecord[];
   operatorSmokeOnly?: boolean;
+  ownerStateEvidence?: SmokeOrderingOwnerEvidence;
 }): void {
   const headSha = normalizeSha(input.headSha, 'headSha');
   if (input.authority.currentHeadSha !== headSha) {
@@ -1172,7 +1173,8 @@ export function assertIndependentSmokeAdmission(input: {
   }
   const ordering = input.authority.smokeOrdering;
   const independent = ordering?.independent;
-  if (independent?.startedEver && !independentPassedOnPreviousHead(independent, headSha)) {
+  const carryOnlyPass = independentCarryOnlyPassOnHead(independent, headSha, input.ownerStateEvidence);
+  if (independent?.startedEver && !independentPassedOnPreviousHead(independent, headSha) && !carryOnlyPass) {
     if (independent.status === 'failed'
         && independent.failureKind === 'finding'
         && independent.failureHeadSha === headSha) {
@@ -1221,13 +1223,31 @@ export function assertIndependentSmokeAdmission(input: {
   }
 }
 
-function workerOwnedCarryOnlyPass(
-  evidence: SmokeOrderingOwnerEvidence | undefined,
-  actor: SmokeOrderingActor,
-): boolean {
-  return actor === 'worker-owned'
-    && evidence?.authoritativeResult === 'PASS'
+function carryOnlyPass(evidence: SmokeOrderingOwnerEvidence | undefined): boolean {
+  return evidence?.authoritativeResult === 'PASS'
     && evidence.executionMode === 'carry-only';
+}
+
+function ownerEvidenceMatchesMarker(
+  marker: SmokeOrderingOwnerFields,
+  evidence: SmokeOrderingOwnerEvidence | undefined,
+): boolean {
+  if (!evidence || !marker.attemptId || !marker.supervisorPid) return false;
+  const owner = smokeOrderingOwnerFields(evidence);
+  return owner.attemptId === marker.attemptId
+    && owner.supervisorPid === marker.supervisorPid
+    && (owner.runId ?? '') === (marker.runId ?? '');
+}
+
+function independentCarryOnlyPassOnHead(
+  independent: PackReviewSmokeOrdering['independent'],
+  headSha: string,
+  evidence: SmokeOrderingOwnerEvidence | undefined,
+): boolean {
+  return independent?.status === 'passed'
+    && independent.headSha === headSha
+    && carryOnlyPass(evidence)
+    && ownerEvidenceMatchesMarker(independent, evidence);
 }
 
 function reconcileStartedSmokeOwner<T extends SmokeOrderingOwnerFields & {
@@ -1256,8 +1276,17 @@ function reconcileStartedSmokeOwner<T extends SmokeOrderingOwnerFields & {
       'owner-state evidence does not match the persisted started marker',
     );
   }
-  if (input.evidence.authoritativeResult && !workerOwnedCarryOnlyPass(input.evidence, input.actor)) {
+  if (input.evidence.authoritativeResult) {
     const result = input.evidence.authoritativeResult;
+    if (result === 'PASS' && carryOnlyPass(input.evidence)) {
+      return {
+        ...input.marker,
+        status: 'failed',
+        failureKind: 'retryable',
+        failureHeadSha: undefined,
+        updatedAtUtc: input.now,
+      };
+    }
     const scenarioFinding = result === 'FAIL' && input.evidence.scenarioFinding === true;
     return {
       ...input.marker,
@@ -1348,8 +1377,7 @@ export function commitSmokeOrderingTransition(input: {
             );
           }
           if (reconciled.headSha === headSha
-              && reconciled.status === 'passed'
-              && !workerOwnedCarryOnlyPass(input.ownerStateEvidence, input.actor)) {
+              && reconciled.status === 'passed') {
             const refusal = new PackReviewAuthorityError(
               'smoke_ordering_worker_owned_already_passed',
               'worker-owned smoke already passed for the exact head',
@@ -1424,6 +1452,7 @@ export function commitSmokeOrderingTransition(input: {
             headSha,
             reviewRuns,
             operatorSmokeOnly: input.operatorSmokeOnly,
+            ownerStateEvidence: input.ownerStateEvidence,
           });
         } else if (!authority.smokeOrdering?.independent?.startedEver
             || authority.smokeOrdering.independent.status !== 'started') {

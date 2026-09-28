@@ -1202,6 +1202,63 @@ describe('Issue #1436 smoke/review ordering', () => {
     {
       const { options, authority } = authorityFixture();
       const settled = settleWorkerAndReview(options, authority);
+      const legacyOwner = {
+        attemptId: 'legacy-independent-carry-only',
+        supervisorPid: process.pid,
+        runId: 'legacy-independent-carry-only',
+      };
+      const legacyStarted = commitSmokeOrderingTransition({
+        prNumber: 1436,
+        expectedTransitionSeq: settled.transitionSeq,
+        actor: 'independent',
+        headSha: HEAD,
+        status: 'started',
+        ...legacyOwner,
+        options,
+      });
+      const legacyPassed = commitSmokeOrderingTransition({
+        prNumber: 1436,
+        expectedTransitionSeq: legacyStarted.transitionSeq,
+        actor: 'independent',
+        headSha: HEAD,
+        status: 'passed',
+        ...legacyOwner,
+        options,
+      });
+      const carryOnlyEvidence = {
+        ...legacyOwner,
+        supervisorAlive: false,
+        authoritativeResult: 'PASS' as const,
+        executionMode: 'carry-only' as const,
+      };
+      expect(() => assertIndependentSmokeAdmission({
+        authority: legacyPassed,
+        headSha: HEAD,
+        reviewRuns: [],
+        ownerStateEvidence: carryOnlyEvidence,
+      })).not.toThrow();
+      const retried = commitSmokeOrderingTransition({
+        prNumber: 1436,
+        expectedTransitionSeq: legacyPassed.transitionSeq,
+        actor: 'independent',
+        headSha: HEAD,
+        status: 'started',
+        attemptId: 'fresh-independent-executed',
+        supervisorPid: process.pid,
+        runId: 'fresh-independent-executed',
+        ownerStateEvidence: carryOnlyEvidence,
+        options,
+      });
+      expect(retried.smokeOrdering?.independent).toMatchObject({
+        headSha: HEAD,
+        status: 'started',
+        attemptId: 'fresh-independent-executed',
+      });
+    }
+
+    {
+      const { options, authority } = authorityFixture();
+      const settled = settleWorkerAndReview(options, authority);
       const independentStarted = commitSmokeOrderingTransition({
         prNumber: 1436,
         expectedTransitionSeq: settled.transitionSeq,
