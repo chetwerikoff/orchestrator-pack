@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
-import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { hostname, tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runProcess, runProcessSync, type ProcessResult } from '../kernel/subprocess.ts';
@@ -144,7 +144,7 @@ function spawnTsClaim(namespace: string, resultPath: string, startPath: string, 
   claimChildren.push({ controller, result });
 }
 
-function spawnStaleRecoverer(namespace: string, barrier: string, resultPath: string, releasePath: string): void {
+function spawnStaleRecoverer(namespace: string, barrier: string | null, resultPath: string, releasePath: string): void {
   const code = `
     import { acquireReviewStartClaim } from ${JSON.stringify(storeUrl)};
     import { existsSync, writeFileSync } from 'node:fs';
@@ -160,7 +160,7 @@ function spawnStaleRecoverer(namespace: string, barrier: string, resultPath: str
     inheritParentEnv: true,
     env: {
       OPK_VITEST_HARNESS: '1',
-      OPK_REVIEW_CLAIM_TEST_STALE_BARRIER_DIR: barrier,
+      ...(barrier ? { OPK_REVIEW_CLAIM_TEST_STALE_BARRIER_DIR: barrier } : {}),
       OPK_REVIEW_CLAIM_MUTEX_STALE_SECONDS: '1',
     },
     signal: controller.signal,
@@ -168,6 +168,32 @@ function spawnStaleRecoverer(namespace: string, barrier: string, resultPath: str
     allowEmptyStdout: true,
   });
   claimChildren.push({ controller, result });
+}
+
+function mutexResidue(root: string): string[] {
+  const locks = path.join(root, '.locks');
+  return existsSync(locks) ? readdirSync(locks).filter((name) => /\.(acquire|stale)-/u.test(name)) : [];
+}
+
+function seedStaleClaimAndLock(root: string, sha: string): string {
+  const seed = acquireReviewStartClaim({ prNumber: 948, headSha: sha, surface: 'stale-seed', namespace: root, reviewRuns: [] });
+  expect(seed.acquired).toBe(true);
+  const recordPath = claimPath(root, 948, sha);
+  const stale = readClaimRecord(recordPath).record!;
+  stale.holder.pid = 2_147_483_000;
+  stale.holder.processGuid = 'stale-holder';
+  delete stale.holder.startTimeTicks;
+  delete stale.holder.bootIdHash;
+  stale.acquiredAtUtc = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  atomicWriteJson(recordPath, stale);
+  const lock = claimLockDir(root, 948, sha);
+  mkdirSync(lock, { recursive: true, mode: 0o700 });
+  writeFileSync(path.join(lock, 'owner.json'), `${JSON.stringify({
+    pid: 2_147_483_000,
+    processGuid: 'stale-lock-owner',
+    acquiredAtUtc: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+  })}\n`);
+  return lock;
 }
 
 function verificationCommands(root: string, commit: string, tree: string): VerificationCommandEvidence[] {
@@ -673,29 +699,7 @@ describe('Issue #948 persisted TypeScript claim authority', () => {
     for (let round = 0; round < 4; round += 1) {
       const root = makeRoot(`pr2a-stale-takeover-${round}-`);
       const sha = 'c'.repeat(40);
-      const seed = acquireReviewStartClaim({
-        prNumber: 948,
-        headSha: sha,
-        surface: 'stale-seed',
-        namespace: root,
-        reviewRuns: [],
-      });
-      expect(seed.acquired).toBe(true);
-      const recordPath = claimPath(root, 948, sha);
-      const stale = readClaimRecord(recordPath).record!;
-      stale.holder.pid = 2_147_483_000;
-      stale.holder.processGuid = 'stale-holder';
-      delete stale.holder.startTimeTicks;
-      delete stale.holder.bootIdHash;
-      stale.acquiredAtUtc = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-      atomicWriteJson(recordPath, stale);
-      const lock = claimLockDir(root, 948, sha);
-      mkdirSync(lock, { recursive: true, mode: 0o700 });
-      writeFileSync(path.join(lock, 'owner.json'), `${JSON.stringify({
-        pid: 2_147_483_000,
-        processGuid: 'stale-lock-owner',
-        acquiredAtUtc: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
-      })}\n`);
+      seedStaleClaimAndLock(root, sha);
       const barrier = path.join(root, 'barrier');
       const release = path.join(root, 'release');
       const results = [path.join(root, 'recover-a.json'), path.join(root, 'recover-b.json')];
@@ -709,8 +713,51 @@ describe('Issue #948 persisted TypeScript claim authority', () => {
       expect(resultRows.filter((row) => !row.acquired), `round=${round} ${JSON.stringify(resultRows)}`).toHaveLength(1);
       const loser = resultRows.find((row) => !row.acquired);
       expect(loser?.reason, loser?.detail || `round=${round} ${JSON.stringify(resultRows)}`).toBe('claimed');
+      expect(mutexResidue(root), `round=${round}`).toEqual([]);
       writeFileSync(release, 'done');
     }
+  }, 60_000);
+
+  it('never lets a stale observation displace a newer live mutex lease', async () => {
+    const root = makeRoot('pr2a-stale-observer-');
+    const sha = 'c'.repeat(40); // spawnStaleRecoverer targets this head
+    const lock = seedStaleClaimAndLock(root, sha);
+    const recordPath = claimPath(root, 948, sha);
+    const staleRecord = readFileSync(recordPath, 'utf8');
+    const barrier = path.join(root, 'barrier');
+    const release = path.join(root, 'release');
+    // Recoverer B observes the dead owner, then parks at the barrier before acting on that observation.
+    mkdirSync(barrier, { recursive: true });
+    writeFileSync(path.join(barrier, 'peer.observed'), 'observed\n');
+    const observerResult = path.join(root, 'observer.json');
+    spawnStaleRecoverer(root, barrier, observerResult, release);
+    await waitForCondition(() => readdirSync(barrier).filter((name) => name.endsWith('.observed')).length === 2);
+    // Meanwhile holder A reclaims the stale instance and installs a live lease (this test process).
+    rmSync(lock, { recursive: true, force: true });
+    const liveGuid = 'a'.repeat(32);
+    const staging = `${lock}.test-live`;
+    mkdirSync(staging, { mode: 0o700 });
+    writeFileSync(path.join(staging, `owner-${liveGuid}.json`), `${JSON.stringify({
+      pid: process.pid,
+      host: hostname() || 'unknown-host',
+      processGuid: liveGuid,
+      acquiredAtUtc: new Date().toISOString(),
+      lockDir: lock,
+    })}\n`);
+    renameSync(staging, lock);
+    const liveInode = statSync(lock).ino;
+    // B acts on its stale observation while contender C arrives without any barrier.
+    writeFileSync(path.join(barrier, 'go'), 'go\n');
+    const contenderResult = path.join(root, 'contender.json');
+    spawnStaleRecoverer(root, null, contenderResult, release);
+    await waitForFiles([observerResult, contenderResult]);
+    const rows = [observerResult, contenderResult].map((fileName) => JSON.parse(readFileSync(fileName, 'utf8')) as { acquired: boolean; reason: string });
+    expect(rows).toEqual([{ acquired: false, reason: 'claimed' }, { acquired: false, reason: 'claimed' }]);
+    expect(statSync(lock).ino).toBe(liveInode);
+    expect(readdirSync(lock)).toEqual([`owner-${liveGuid}.json`]);
+    expect(readFileSync(recordPath, 'utf8')).toBe(staleRecord);
+    expect(mutexResidue(root)).toEqual([]);
+    writeFileSync(release, 'done');
   }, 60_000);
 
   it('generation-fences completion from a superseded holder', () => {
