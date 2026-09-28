@@ -18,6 +18,7 @@ const DEFAULT_TIMEOUT_MS = 1_800_000;
 const EXECUTION_RECOVERY_CAUSES = new Set<ExecutionRecoveryProductCause>([
   'message_delivery_timed_out',
   'product_network_error',
+  'stream_recovery_polling_timed_out',
 ]);
 
 function projectExecutionRecoveryTerminal(value: unknown): unknown {
