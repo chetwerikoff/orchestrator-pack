@@ -389,7 +389,7 @@ describe('execute-Issue manager boundary', () => {
     expect(projected.nextAction.binding.stage).toBe('execute:independent-smoke');
     expect(projected.nextAction.argv.join(' ')).toContain(context.headSha);
     expect(projected.nextAction.argv).toContain(String(context.prNumber));
-    expect(projected.nextAction.argv.join(' ')).toContain('#' + context.issueNumber);
+    expect(projected.nextAction.argv).toContain(String(context.issueNumber));
   });
 
   it('observes recoverable worker-smoke state with the full exact-target binding', () => {
