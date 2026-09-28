@@ -175,7 +175,7 @@ recovery path is exhausted and the remaining condition is a genuine external
 permission/capability failure, impossibility, unresolved target ambiguity, or the
 fail-closed possible-send identity gap described above. The visible report name
 and trigger meaning stay unchanged, but the manager-side effect is the shared
-#2078 escalation with `resume_when: { operator: true }`; the parent Task and
+#2078 escalation with canonical `resume_when: { coordinator: true }`; legacy `{ operator: true }` pause records are input compatibility only and normalize to coordinator ownership without rewriting history. The parent Task and
 manager Dispatch remain non-terminal and no `worker_done --outcome failed` is
 sent.
 
