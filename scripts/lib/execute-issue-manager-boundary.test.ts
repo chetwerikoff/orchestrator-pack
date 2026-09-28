@@ -19,6 +19,7 @@ const context: ExecuteIssueManagerBoundaryContext = {
   repository: 'chetwerikoff/orchestrator-pack', issueNumber: 2081, sourceRevision: 'r03', phase: 'implementation',
   productionArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'],
   cdp: 'http://127.0.0.1:9222', conversationUrl: 'https://chatgpt.com/c/owned-2081', prNumber: 2083,
+  headSha: 'a'.repeat(40),
 };
 function turn(state: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return { schema: 'turn-result/v1', state, scope: 'invocation', cause: state, invocation_id: 'invocation-2081', configured_profile_key: 'profile-2081', conversation_id: 'owned-2081', ...overrides };
@@ -26,6 +27,28 @@ function turn(state: string, overrides: Record<string, unknown> = {}): Record<st
 function probe(status: ProbeStatus, overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return { schema: 'browser-gpt-page-probe/v1', operation: 'inspect', status, diagnostic_only: true, workflow_authority: 'none', target_id: 'target-2081', ...overrides };
 }
+function smoke(
+  result: 'PASS' | 'FAIL' | 'BLOCKED',
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    schema: 'pack-worker-smoke-report/v1',
+    producer: 'orchestrator-pack/worker-smoke-run/v1',
+    result,
+    issueNumber: context.issueNumber,
+    prNumber: context.prNumber,
+    headSha: context.headSha,
+    trackedFilesUnmodified: result === 'PASS',
+    scenarios: [{
+      action: 'exercise smoke fixture',
+      expected: 'fixture expectation',
+      observed: 'fixture observation',
+      outcome: result === 'PASS' ? 'pass' : result === 'FAIL' ? 'fail' : 'blocked',
+    }],
+    ...overrides,
+  };
+}
+
 function actionOf(evaluated: ReturnType<typeof classifyExecuteIssueManagerRecord>) {
   return evaluated.result.ok === false && 'nextAction' in evaluated.result ? evaluated.result.nextAction : null;
 }
@@ -74,7 +97,7 @@ describe('execute-Issue manager boundary', () => {
     expect(evaluated.exitCode).toBe(4);
     expect(evaluated.result).toMatchObject({
       cause: 'external:chrome_not_running',
-      pause: { resume_when: { operator: true } },
+      pause: { resume_when: { coordinator: true } },
       nextAction: null,
     });
   });
@@ -82,7 +105,7 @@ describe('execute-Issue manager boundary', () => {
   it('projects typed external pauses and retains producer evidence', () => {
     const turnPause = classifyExecuteIssueManagerRecord(turn('chrome_not_running', { scope: 'machine' }), context);
     expect(turnPause.exitCode).toBe(4);
-    expect(turnPause.result).toMatchObject({ cause: 'external:chrome_not_running', pause: { resume_when: { operator: true } }, nextAction: null });
+    expect(turnPause.result).toMatchObject({ cause: 'external:chrome_not_running', pause: { resume_when: { coordinator: true } }, nextAction: null });
     const envelope = probe('ambiguous', { reason: 'owned marker conflict', evidence_token: 'evidence-2081' });
     const probePause = classifyExecuteIssueManagerRecord(envelope, context);
     expect(probePause.exitCode).toBe(4);
@@ -118,6 +141,122 @@ describe('execute-Issue manager boundary', () => {
     const send = classifyExecuteIssueManagerRecord({ ok: false, nextAction: { schema: 'create-issue-next-action/v1', kind: 'retry-start-cycle', binding: { ...context, stage: 'execute:review' }, argv: ['node', 'scripts/chatgpt-browser-turn.ts', '--new-chat'] } }, { ...context, phase: 'review' });
     expect(expectReadOnly(send).kind).toBe('execute-review-runner-read-only');
     expect(classifyExecuteIssueManagerRecord({ ok: false, outcome: 'review_target_unavailable', reason: 'GitHub HTTP 503', prNumber: 2083 }, { ...context, phase: 'review' })).toMatchObject({ exitCode: 4, result: { cause: 'external:github_unavailable' } });
+  });
+
+  it('projects worker-smoke through the four manager outcomes without prose inference', () => {
+    expect(classifyExecuteIssueManagerRecord(smoke('PASS'), context)).toMatchObject({
+      exitCode: 0,
+      result: { ok: true, verdict: 'PASS', cause: 'execute_worker_smoke_pass', nextAction: null },
+    });
+
+    const assertionFailure = smoke('FAIL', {
+      causeFamily: 'scenario_assertion_failed',
+      nonPassCause: 'executed_scenario_failure',
+      scenarios: [{
+        action: 'assert behavior',
+        expected: 'expected behavior',
+        observed: 'actual mismatch',
+        outcome: 'fail',
+        causeFamily: 'scenario_assertion_failed',
+      }],
+    });
+    expect(classifyExecuteIssueManagerRecord(assertionFailure, context)).toMatchObject({
+      exitCode: 0,
+      result: { ok: true, verdict: 'FAIL', cause: 'execute_worker_smoke_assertion_failed', nextAction: null },
+    });
+
+    for (const nonPassCause of ['trusted_target_stale', 'tier_order_input_stale', 'smoke_same_head_in_progress']) {
+      const projected = classifyExecuteIssueManagerRecord(smoke('BLOCKED', {
+        causeFamily: 'harness_admission_refused',
+        nonPassCause,
+      }), context);
+      expect(projected.exitCode).toBe(3);
+      const action = expectReadOnly(projected);
+      expect(action.argv).toContain(context.headSha);
+      expect(action.argv).toContain(String(context.prNumber));
+    }
+
+    const externalCases = [
+      ['browser_cdp_unavailable', 'external:chrome_not_running'],
+      ['profile_mismatch', 'external:profile_mismatch'],
+      ['login_required', 'external:login_required'],
+      ['quota_exhausted', 'external:quota_exhausted'],
+      ['product_challenge', 'external:product_challenge'],
+    ] as const;
+    for (const [nonPassCause, cause] of externalCases) {
+      const projected = classifyExecuteIssueManagerRecord(smoke('BLOCKED', {
+        causeFamily: 'scenario_precondition_unavailable',
+        nonPassCause,
+      }), context);
+      expect(projected).toMatchObject({
+        exitCode: 4,
+        result: { cause, pause: { resume_when: { coordinator: true }, remedy: expect.any(String) }, nextAction: null },
+      });
+      if (projected.result.ok !== false || !('pause' in projected.result)) throw new Error('expected worker-smoke pause');
+      const structured = JSON.parse(projected.result.pause.evidence);
+      expect(structured).toMatchObject({
+        marker: 'pack-worker-smoke-report/v1',
+        issueNumber: context.issueNumber,
+        prNumber: context.prNumber,
+        headSha: context.headSha,
+        nonPassCause,
+      });
+      expect(JSON.stringify(structured)).not.toContain('fixture observation');
+    }
+
+    for (const nonPassCause of [
+      'invalid_adapter_arguments',
+      'missing_required_flag',
+      'unsupported_executor_capability',
+      'malformed_producer_output',
+      'unknown_new_code',
+    ]) {
+      expect(classifyExecuteIssueManagerRecord(smoke('BLOCKED', {
+        causeFamily: 'harness_admission_refused',
+        nonPassCause,
+      }), context)).toMatchObject({
+        exitCode: 5,
+        result: { cause: 'producer_contract_defect', nextAction: null },
+      });
+    }
+
+    const proseOnly = smoke('BLOCKED', {
+      causeFamily: 'scenario_precondition_unavailable',
+      scenarios: [{
+        action: 'open browser',
+        expected: 'authenticated browser',
+        observed: 'login quota challenge chrome unavailable',
+        outcome: 'blocked',
+        causeFamily: 'scenario_precondition_unavailable',
+      }],
+    });
+    expect(classifyExecuteIssueManagerRecord(proseOnly, context)).toMatchObject({
+      exitCode: 5,
+      result: { cause: 'producer_contract_defect' },
+    });
+
+    expect(classifyExecuteIssueManagerRecord(smoke('FAIL', {
+      causeFamily: 'scenario_assertion_failed',
+      nonPassCause: 'login_required',
+      scenarios: [{
+        action: 'assert behavior',
+        expected: 'expected',
+        observed: 'mismatch',
+        outcome: 'fail',
+        causeFamily: 'scenario_assertion_failed',
+      }],
+    }), context)).toMatchObject({ exitCode: 5, result: { cause: 'producer_contract_defect' } });
+  });
+
+  it('rejects worker-smoke binding drift before classification', () => {
+    expect(classifyExecuteIssueManagerRecord(smoke('PASS', { headSha: 'b'.repeat(40) }), context)).toMatchObject({
+      exitCode: 5,
+      result: { cause: 'producer_contract_defect' },
+    });
+    expect(classifyExecuteIssueManagerRecord(smoke('PASS', { prNumber: 9999 }), context)).toMatchObject({
+      exitCode: 5,
+      result: { cause: 'producer_contract_defect' },
+    });
   });
 
   it('accepts only exact read-only argv and rejects send-capable wrappers', () => {
