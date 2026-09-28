@@ -65,6 +65,8 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // Issue #1122 focused read-only page-probe tests are fast light-lane coverage;
   // keep the pre-topology producer bounded until CI runtime history harvests them.
   'scripts/browser-gpt-page-probe.test.ts': 120,
+  // Issue #2220 manager-boundary cause coverage is deterministic; keep its new test within the existing pre-topology bound.
+  'scripts/lib/execute-issue-manager-boundary.test.ts': 120,
   // Issue #1164 flow-manager long-running child launcher tests are fast fixture
   // coverage; fixed estimate keeps verify-pack topology guard within the 32-file bound.
   'scripts/flow-manager-long-running-child.test.ts': 120,
@@ -139,9 +141,6 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // Issue #2094 injector regression is fixed-time light-lane coverage; retain its
   // declared estimate until runtime history records a content-bound measurement.
   'scripts/smoke-fixtures/inject-message-stream-error.test.ts': 120,
-  // Keep the bootstrap real-entrypoint refusal test in its required light lane;
-  // its isolated pre-topology environment cannot resolve workspace dependencies.
-  'scripts/command-runtime-bootstrap.test.ts': 120,
   // Issue #1498: restore #1418 fixed estimates without changing 32-file bound.
   ...ISSUE_1498_PRE_TOPOLOGY_MEASUREMENT_ESTIMATES,
 });

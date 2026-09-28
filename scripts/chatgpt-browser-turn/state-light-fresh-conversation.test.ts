@@ -527,6 +527,7 @@ describe('state-light fresh conversation collision recovery', () => {
     reply: string,
     renderAfterReload: boolean,
     ambiguousAssistant = false,
+    streamRecoveryAlert = false,
   ) {
     const state = { sent: false, url: PROJECT_URL, reloads: 0, reads: 0 };
     const working = readyTurnObservationFrames(prompt, reply)[0]!;
@@ -575,7 +576,7 @@ describe('state-light fresh conversation collision recovery', () => {
             active = final;
             generating = false;
           } else {
-            active = assistantOnly;
+            active = streamRecoveryAlert ? [] : assistantOnly;
             generating = false;
           }
           return collectionLocator(active, generating);
@@ -592,6 +593,13 @@ describe('state-light fresh conversation collision recovery', () => {
           );
         }
         if (selector.includes(STOP_BUTTON_TESTID)) return scalarLocator();
+        if (selector === '[role="alert"]') {
+          return scalarLocator({
+            allInnerTexts: vi.fn(async () => (
+              streamRecoveryAlert && state.reads > 2 ? ['ChatGPT stream recovery polling timed out\nRetry'] : []
+            )),
+          });
+        }
         return scalarLocator();
       }),
     };
@@ -611,6 +619,24 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
     expect(state.reloads).toBe(0);
     expect(readFileSync(output, 'utf8')).toBe(reply);
+  });
+
+  it('returns conversation-scoped stream recovery timeout without reload when the owner is unrendered', async () => {
+    const prompt = 'PROMPT-STREAM-RECOVERY';
+    const reply = 'NEVER-FINISHED';
+    const output = join(stateDir, 'stream-recovery-unrendered.txt');
+    const { page, state } = unrenderedOwnedMessagePage(prompt, reply, false, false, true);
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output);
+
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({
+      state: 'recovery_required',
+      scope: 'conversation',
+      cause: 'stream_recovery_polling_timed_out',
+      send_count: 1,
+    });
+    expect(state.reloads).toBe(0);
   });
 
   it('reloads the owned conversation once when a finished answer renders without the owned user message (#2197)', async () => {

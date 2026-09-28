@@ -2286,11 +2286,12 @@ describe('Issue #2094 execute-Issue product-error continuation contract', () => 
   const executeSkill = readFileSync(new URL('../.cursor/skills/execute-issue-with-gpt/SKILL.md', import.meta.url), 'utf8');
   const executionRunbook = readFileSync(new URL('../docs/chatgpt-task-execution-runbook.md', import.meta.url), 'utf8');
 
-  it('recognizes all three reserved causes and continues in the same owned chat before fallback', () => {
+  it('recognizes all four reserved causes and continues in the same owned chat before fallback', () => {
     expect(executeSkill).toContain('docs/chatgpt-task-execution-runbook.md');
     expect(executionRunbook).toContain('message_delivery_timed_out');
     expect(executionRunbook).toContain('product_network_error');
     expect(executionRunbook).toContain('message_stream_error');
+    expect(executionRunbook).toContain('stream_recovery_polling_timed_out');
     expect(executionRunbook).toContain('same exact owned ChatGPT conversation');
     expect(executionRunbook).toContain('Error in message stream');
     expect(executionRunbook).toContain('Never press the product `Retry` control.');

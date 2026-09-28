@@ -83,13 +83,14 @@ Never open a fresh conversation merely because the previous manager process is
 gone.
 
 A fresh execution conversation or a new initial send is legal only when the
-owning Browser-GPT contract positively proves that no prior send/session must
-be preserved and independently authorizes that send. The narrow post-send
-exception owned by this runbook is execute-Issue product-error recovery: after
-GitHub-first reconciliation, it first attempts one tracked continuation in the
-same exact owned conversation. That episode is available only for
-`message_delivery_timed_out`, `product_network_error`, or `message_stream_error`
-after exact owned-turn proof.
+owning Browser-GPT contract positively proves that no prior send/session must be
+preserved and independently authorizes that send. The narrow post-send exception
+owned by this runbook is the exact execute-Issue product-error recovery below.
+It starts with GitHub-first reconciliation and is available only for the reserved
+causes `message_delivery_timed_out`, `product_network_error`,
+`message_stream_error`, and `stream_recovery_polling_timed_out` after exact
+owned-turn proof.
+
 
 If a possible send occurred but the exact authoritative
 conversation/invocation/profile/CDP identity required by the owning recovery
@@ -133,13 +134,15 @@ Missing or malformed status does not prove success or failure.
 `EXECUTION_STATUS: complete` never bypasses independent current-state
 verification.
 
-The three execute-Issue product errors stay on the existing `turn-result/v1`
-contract. An authoritative exact-owned result of this form:
+The four execute-Issue product errors stay on the existing `turn-result/v1`
+contract. The `stream_recovery_polling_timed_out` cause is reserved for the
+exact rendered banner `ChatGPT stream recovery polling timed out`. An
+authoritative exact-owned result of this form:
 
 ```text
 state: recovery_required
 scope: conversation
-cause: message_delivery_timed_out | product_network_error | message_stream_error
+cause: message_delivery_timed_out | product_network_error | message_stream_error | stream_recovery_polling_timed_out
 ```
 
 is terminal evidence for that Browser-GPT turn and enters **Product-error
@@ -215,7 +218,7 @@ For every submitted execution turn:
    contract;
 2. when an authoritative completed turn result arrives before 30 minutes,
    process it normally; an exact-owned `recovery_required` result with one of
-   the three reserved product causes enters the GitHub-first recovery section immediately;
+   the four reserved product causes enters the GitHub-first recovery section immediately;
 3. when 30 minutes elapse after submission without an authoritative completed
    turn result, perform a **fresh identity-bound observation of the actual owned
    ChatGPT conversation** with the caller-retained binding:
@@ -292,9 +295,9 @@ Enter this section only after one of these proofs for the exact owned turn:
 
 1. an authoritative immediate `turn-result/v1` reports `state:
    recovery_required`, `scope: conversation`, and cause
-   `message_delivery_timed_out`, `product_network_error`, or
-   `message_stream_error`; or
-2. the mandatory 30-minute checkpoint independently observes one of those three
+   `message_delivery_timed_out`, `product_network_error`,
+   `message_stream_error`, or `stream_recovery_polling_timed_out`; or
+2. the mandatory 30-minute checkpoint independently observes one of those four
    product causes **and** the manager also has exact current owned-prompt proof,
    no attributable completed reply, and no active generation.
 
@@ -591,7 +594,7 @@ local worker: that worker fixes to a new head and runs fresh independent smoke;
 the completed pack-review stage does not reopen. A red required CI check,
 missing scoped file, unresolved material review finding, stale exact-head smoke,
 or another live Issue acceptance gap remains non-completion evidence. If an
-implementation conversation ended with one of the three exact product-error
+implementation conversation ended with one of the supported exact product-error
 proofs, use the GitHub-first same-conversation continuation and settled,
 identity-preserving fresh-chat fallback above.
 

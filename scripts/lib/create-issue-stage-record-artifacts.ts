@@ -36,7 +36,7 @@ import {
 } from './stage-completeness-core.ts';
 import { canonicalPredecessorStage, canonicalStagePlan, stagesForPhase } from './create-issue-stage-topology.ts';
 import { evaluateStageCredentialingSettlement } from './create-issue-stage-lifecycle-acceptance.ts';
-import { readEvidenceWaiverProducerEvidence } from './create-issue-stage-record-receipt.ts';
+import { parseConsumableStageReceipt, readEvidenceWaiverProducerEvidence } from './create-issue-stage-record-receipt.ts';
 import { extractMarker, resolveRecoveredInvalidPublicActorPoisonWitness } from './create-issue-stage-record-marker.ts';
 import { buildCanonicalLineage, deriveCanonicalCycleLineage } from './create-issue-stage-record-lineage.ts';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
@@ -1997,7 +1997,7 @@ export interface ReconcileCreateIssueStageOptions {
 export interface ReconcileCreateIssueStageResult {
   ok: boolean;
   stageAttemptId?: string;
-  stage?: Exclude<ReviewStage, 'architectural-lens'>;
+  stage?: ReviewStage;
   sourceRevision?: string;
   capturePaths: string[];
   alreadySettled?: boolean;
@@ -2014,6 +2014,104 @@ function rollbackNewReconciliationCaptures(
     if (preExisting.has(path) || !existsSync(path)) continue;
     try { unlinkSync(path); } catch {}
   }
+}
+
+function reconcileArchitecturalLensStage(
+  options: ReconcileCreateIssueStageOptions,
+  raw: JsonRecord,
+  stageAttemptId: string,
+  sourceRevision: string,
+  stageSequence: number,
+): ReconcileCreateIssueStageResult {
+  const fail = (error: string): ReconcileCreateIssueStageResult => ({
+    ok: false,
+    stage: 'architectural-lens',
+    stageAttemptId,
+    sourceRevision,
+    capturePaths: [],
+    errors: [error],
+  });
+  const receiptPath = join(options.reviewDir, stageCompletenessReceiptFileName(stageAttemptId));
+  let value: unknown;
+  try { value = JSON.parse(readFileSync(receiptPath, 'utf8')) as unknown; } catch {
+    return fail('missing or unreadable settled architectural-lens receipt: ' + receiptPath);
+  }
+  if (!isRecord(value) || value.schema !== 'stage-completeness-receipt/v1'
+    || value.taskIdentity !== 'issue:' + options.issueNumber) {
+    return fail('architectural-lens receipt does not bind the expected Issue');
+  }
+  const parsed = parseConsumableStageReceipt(value);
+  if (parsed.errors.length > 0 || !parsed.receipt
+    || parsed.receipt.stage !== 'architectural-lens'
+    || parsed.receipt.stageAttemptId !== stageAttemptId
+    || parsed.receipt.sourceRevision !== sourceRevision
+    || parsed.receipt.producerEvidence !== 'verified'
+    || parsed.receipt.outcome !== 'complete') {
+    return fail('architectural-lens receipt is not a matching settled capture: ' + parsed.errors.join('; '));
+  }
+  const evidenceCycleBinding = isRecord(raw.cycleBinding) ? raw.cycleBinding : null;
+  if (Number(value.stageSequence) !== stageSequence
+    || raw.stage !== 'architectural-lens'
+    || raw.cycleId !== parsed.receipt.cycleId
+    || evidenceCycleBinding?.cycleId !== parsed.receipt.cycleId
+    || evidenceCycleBinding.sourceRevision !== sourceRevision
+    || evidenceCycleBinding.boundBeforeLaunch !== true) {
+    return fail('architectural-lens receipt does not match the stage evidence cycle binding');
+  }
+  const claude = isRecord(value.claude) ? value.claude : null;
+  const capture = claude && claude.kind === 'capture' && isRecord(claude.capture) ? claude.capture : null;
+  const captureName = capture && typeof capture.name === 'string' ? capture.name : '';
+  const captureSha256 = capture && typeof capture.sha256 === 'string' ? capture.sha256 : '';
+  const captureByteLength = Number(capture?.byteLength);
+  const materialFindingCount = Number(capture?.rawFindingCount);
+  const captureIdentity = `sha256:${captureSha256}:${captureName}`;
+  const settlement = isRecord(value.settlement) ? value.settlement : null;
+  const revisionChecks = isRecord(value.revisionChecks) ? value.revisionChecks : null;
+  const captureMatches = (candidate: unknown) => isRecord(candidate)
+    && candidate.captureIdentity === captureIdentity
+    && candidate.name === captureName
+    && candidate.sha256 === captureSha256
+    && Number(candidate.byteLength) === captureByteLength
+    && Number(candidate.rawFindingCount) === materialFindingCount;
+  const credentialingCaptures = Array.isArray(value.credentialingCaptures) ? value.credentialingCaptures : [];
+  const relayEligibleCaptures = Array.isArray(value.relayEligibleCaptures) ? value.relayEligibleCaptures : [];
+  if (claude?.provider !== 'claude-cli' || claude.terminal !== true
+    || claude.terminalClassification !== 'complete' || claude.exitCode !== 0
+    || typeof claude.invocationId !== 'string' || claude.invocationId.trim() === ''
+    || typeof claude.producingRunIdentity !== 'string' || claude.producingRunIdentity.trim() === ''
+    || typeof claude.terminalResultIdentity !== 'string' || claude.terminalResultIdentity.trim() === ''
+    || typeof claude.producerEvidenceIdentity !== 'string' || claude.producerEvidenceIdentity.trim() === ''
+    || claude.m3Status !== 'recorded'
+    || !/^pass-\d+-architectural-lens\.capture\.txt$/i.test(captureName)
+    || basename(captureName) !== captureName
+    || !/^[a-f0-9]{64}$/.test(captureSha256)
+    || !Number.isInteger(captureByteLength) || captureByteLength < 0
+    || !Number.isInteger(materialFindingCount) || materialFindingCount < 0
+    || settlement?.allLaunchedTerminal !== true || settlement.finalRevisionMatched !== true
+    || settlement.retryState === 'eligible' || revisionChecks?.settlement !== 'matched'
+    || credentialingCaptures.length !== 1 || !captureMatches(credentialingCaptures[0])
+    || relayEligibleCaptures.length !== 1 || !captureMatches(relayEligibleCaptures[0])) {
+    return fail('architectural-lens receipt has invalid Claude capture evidence');
+  }
+  const capturePath = join(options.reviewDir, captureName);
+  let captureBytes: Buffer;
+  try { captureBytes = readFileSync(capturePath); } catch {
+    return fail('architectural-lens capture is missing: ' + capturePath);
+  }
+  if (captureBytes.length !== captureByteLength
+    || createHash('sha256').update(captureBytes).digest('hex') !== captureSha256) {
+    return fail('architectural-lens capture bytes disagree with the settled receipt');
+  }
+  return {
+    ok: true,
+    stage: 'architectural-lens',
+    stageAttemptId,
+    sourceRevision,
+    capturePaths: [capturePath],
+    alreadySettled: true,
+    materialFindingCount,
+    errors: [],
+  };
 }
 
 const ROUTED_SOURCE_VERDICTS_DISAGREE = 'routed review record sourceVerdicts disagree with producer evidence';
@@ -2130,22 +2228,33 @@ export function reconcileCreateIssueStage(
   }
   const raw: JsonRecord = structuredClone(rawValue);
   const stage = reviewerStage(raw.stage);
+  const lensStage = raw.stage === 'architectural-lens';
   const stageAttemptId = requiredString(raw.stageAttemptId, 'stage evidence.stageAttemptId', errors);
   const sourceRevision = requiredString(raw.sourceRevision, 'stage evidence.sourceRevision', errors);
   const stageSequence = Number(raw.stageSequence);
-  if (!stage) errors.push('stage reconciliation is only valid for Browser-GPT reviewer stages');
+  if (!stage && !lensStage) errors.push('stage reconciliation is only valid for Browser-GPT reviewer stages');
   if (!Number.isInteger(stageSequence) || stageSequence < 1) errors.push('stage evidence.stageSequence must be positive');
   if (typeof raw.taskIdentity === 'string' && raw.taskIdentity.trim() !== 'issue:' + options.issueNumber) {
     errors.push('stage evidence taskIdentity ' + raw.taskIdentity + ' does not bind Issue #' + options.issueNumber);
   }
-  if (!stage || !stageAttemptId || !sourceRevision || errors.length > 0) {
+  if (!stageAttemptId || !sourceRevision || errors.length > 0) {
     return {
       ok: false,
       ...(stageAttemptId ? { stageAttemptId } : {}),
-      ...(stage ? { stage } : {}),
+      ...(stage ? { stage } : lensStage ? { stage: 'architectural-lens' as const } : {}),
       ...(sourceRevision ? { sourceRevision } : {}),
       capturePaths: [],
       errors: [...new Set(errors)],
+    };
+  }
+  if (lensStage) return reconcileArchitecturalLensStage(options, raw, stageAttemptId, sourceRevision, stageSequence);
+  if (!stage) {
+    return {
+      ok: false,
+      stageAttemptId,
+      sourceRevision,
+      capturePaths: [],
+      errors: ['stage reconciliation is only valid for Browser-GPT reviewer stages'],
     };
   }
 

@@ -102,6 +102,7 @@
     "scripts/lib/worker-degraded-ci-handoff.test.ts": "light",
     "scripts/lib/worker-report-store.test.ts": "light",
     "scripts/lib/worker-smoke-bounded-create.test.ts": "light",
+    "scripts/lib/worker-smoke-selective-carry.test.ts": "light",
     "scripts/merge-adoption-effect.test.ts": "heavy",
     "scripts/merge-triage-evidence.test.ts": "light",
     "scripts/operator-primary-binding.test.ts": "light",
