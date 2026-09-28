@@ -1,3 +1,5 @@
+// @vitest-pre-topology-seconds 1
+// @vitest-ci-lane light
 import { describe, expect, it } from 'vitest';
 import {
   evaluateWorkerSmokeMainMergeCarry,
