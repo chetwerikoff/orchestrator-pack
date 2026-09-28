@@ -1212,14 +1212,39 @@ function failureReason(failure: RuntimeOperationFailure): string {
   return `${failure.operation}:${failure.status}:${failure.reason}`;
 }
 
+function structuredHarnessReasonFromError(error: unknown): string | undefined {
+  if (record(error)) {
+    const code = typeof error.code === 'string' ? error.code.trim() : '';
+    if (code) return code;
+  }
+  if (error instanceof Error) {
+    const message = error.message.trim();
+    if (/^[a-z0-9_]+(?::.*)?$/u.test(message)) return message;
+  }
+  return undefined;
+}
+
 function operationalReport(
   causeFamily: WorkerSmokeCauseFamily | 'pass', options: CliOptions,
-  input: { action: string; expected: string; observed: string; terminalCleanup?: string; limitations?: string[]; environmentNotes?: string[]; worker?: RuntimeWorkerIdentity; adapterId?: string },
+  input: {
+    action: string;
+    expected: string;
+    observed: string;
+    structuredHarnessReason?: string;
+    terminalCleanup?: string;
+    limitations?: string[];
+    environmentNotes?: string[];
+    worker?: RuntimeWorkerIdentity;
+    adapterId?: string;
+  },
 ): SmokeReport {
   const result = causeFamily === 'pass' ? 'PASS' : smokeResultForWorkerSmokeCauseFamily(causeFamily);
   const scenarioCauseFamily = causeFamily !== 'pass' && isWorkerSmokeScenarioCauseFamily(causeFamily)
     ? causeFamily
     : undefined;
+  const managerNonPassCause = causeFamily === 'pass'
+    ? undefined
+    : workerSmokeManagerNonPassCauseForHarnessReason(input.structuredHarnessReason);
   return {
     result, issueNumber: options.issueNumber, prNumber: options.prNumber, headSha: options.headSha,
     scenarios: [{
@@ -1234,9 +1259,7 @@ function operationalReport(
     producer: SMOKE_REPORT_PRODUCER, orcaExecutable: input.adapterId ?? 'runtime-adapter', terminalHandle: input.worker?.id,
     ...(causeFamily === 'pass' ? {} : {
       causeFamily,
-      ...(workerSmokeManagerNonPassCauseForHarnessReason(input.observed)
-        ? { nonPassCause: workerSmokeManagerNonPassCauseForHarnessReason(input.observed) }
-        : {}),
+      ...(managerNonPassCause ? { nonPassCause: managerNonPassCause } : {}),
     }),
   };
 }
@@ -2091,7 +2114,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     emit({ ok: true, skipped: true, reason: plan.requirement }, options.json); return 0;
   }
   if (plan.scenarios.length === 0) {
-    const report = operationalReport('unknown', options, { action: 'parse smoke-test-plan', expected: 'at least one scenario', observed: 'zero_parsed_scenarios' });
+    const report = operationalReport('unknown', options, { action: 'parse smoke-test-plan', expected: 'at least one scenario', observed: 'zero_parsed_scenarios', structuredHarnessReason: 'zero_parsed_scenarios' });
     publishSmokeReport(report, options, undefined, publishComment); emit({ ok: false, report }, options.json); return 1;
   }
 
@@ -2124,6 +2147,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       action: 'bind smoke to trusted live Issue and PR',
       expected: 'supplied body, open Issue/PR, and exact live PR head match',
       observed: trustedTargetHeadMismatch,
+      structuredHarnessReason: trustedTargetHeadMismatch,
     });
     publishSmokeReport(report, options, preAttempt, publishComment);
     emit({ ok: false, report, attemptId }, options.json);
@@ -2142,6 +2166,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       action: violation.action,
       expected: violation.expected,
       observed: violation.observed,
+      structuredHarnessReason: violation.reason,
       terminalCleanup: 'not_started',
     });
     publishSmokeReport(report, options, preAttempt, publishComment);
@@ -2186,9 +2211,11 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       : resolveLiveSmokeExecutorProfile(options.smokeComplexity, profileEnv,
         (args, env) => runSmokeProfileChild(args, options.cwd, profileEnv, env), options.cwd, proveOpenCodeNoWrite);
   } catch (error) {
+    const structuredHarnessReason = structuredHarnessReasonFromError(error);
     const report = operationalReport('harness_admission_refused', options, {
       action: 'resolve smoke executor profile', expected: 'one supported smoke profile applied before child creation',
       observed: scrubSmokeOutput(error instanceof Error ? error.message : String(error)),
+      ...(structuredHarnessReason ? { structuredHarnessReason } : {}),
     });
     publishSmokeReport(report, options, preAttempt, publishComment); emit({ ok: false, report }, options.json); return 1;
   }
@@ -2201,7 +2228,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   }
   const headBinding = verifySmokeHeadBinding({ requestedHeadSha: options.headSha, orcaHeadSha: readiness.value.headSha, gitHeadSha: gitHead(options.cwd) });
   if (!headBinding.ok) {
-    const report = operationalReport('harness_head_mismatch', options, { action: 'bind smoke to current head', expected: options.headSha, observed: `${headBinding.reason}:${headBinding.observed}`, adapterId: adapter.id });
+    const report = operationalReport('harness_head_mismatch', options, { action: 'bind smoke to current head', expected: options.headSha, observed: `${headBinding.reason}:${headBinding.observed}`, structuredHarnessReason: headBinding.reason, adapterId: adapter.id });
     publishSmokeReport(report, options, preAttempt, publishComment); emit({ ok: false, report }, options.json); return 1;
   }
 
@@ -2331,10 +2358,12 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       }, ...(postSmoke ? { postSmoke } : {}) }, options.json);
       return report.result === 'PASS' ? 0 : 1;
     } catch (error) {
+      const structuredHarnessReason = structuredHarnessReasonFromError(error);
       const observed = scrubSmokeOutput(error instanceof Error ? error.message : String(error));
-      const report = operationalReport(workerSmokeCauseFamilyForHarnessReason(observed), options, {
+      const report = operationalReport(workerSmokeCauseFamilyForHarnessReason(structuredHarnessReason), options, {
         action: 'publish carry-only selective smoke', expected: 'fresh current-head report without runtime lifecycle',
         observed,
+        ...(structuredHarnessReason ? { structuredHarnessReason } : {}),
         terminalCleanup: 'not_started_no_execution', adapterId: adapter.id,
       });
       publishSmokeReport(report, options, carryPublication, publishComment, () => { recordPublishedOrdering(report, true); });
@@ -2377,7 +2406,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   try {
     const admission = preflightSmokeLifecycle({ repoRoot: options.cwd, runId, closeBoundHandle: (handle) => runtimeCloseBoundHandle(adapter, handle, options) });
     if (!admission.admitted) {
-      const report = operationalReport('harness_admission_refused', options, { action: 'acquire smoke spawn admission', expected: 'exclusive admission before spawn', observed: admission.reason ?? 'admission_refused', adapterId: adapter.id });
+      const report = operationalReport('harness_admission_refused', options, { action: 'acquire smoke spawn admission', expected: 'exclusive admission before spawn', observed: admission.reason ?? 'admission_refused', structuredHarnessReason: admission.reason ?? 'admission_refused', adapterId: adapter.id });
       publishSmokeReport(report, options, preAttempt, publishComment); emit({ ok: false, report, lifecycle: admission, attemptId }, options.json); return 1;
     }
 
@@ -2422,6 +2451,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
         : 'lifecycle_cleanup_failed';
       const report = operationalReport(family, options, {
         action: 'dispatch smoke prompt once', expected: 'one dispatch attempt plus child-sealed delivery evidence', observed: delivery.reason ?? 'prompt_delivery_unconfirmed',
+        structuredHarnessReason: delivery.reason ?? 'prompt_delivery_unconfirmed',
         terminalCleanup, environmentNotes: [`submit-count=${delivery.submitCount}`, `lifecycle-clean=${lifecycleCleanup.clean}`], worker, adapterId: adapter.id,
       });
       publishSmokeReport(report, options, runPublication, publishComment, () => { recordPublishedOrdering(report, true); });
@@ -2440,6 +2470,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
         : 'lifecycle_cleanup_failed';
       const report = operationalReport(family, options, {
         action: 'wait for sealed smoke completion', expected: 'legal progress and one sealed report', observed: completion.reason ?? 'agent_report_timeout',
+        structuredHarnessReason: completion.reason ?? 'agent_report_timeout',
         terminalCleanup, limitations: completion.progress?.invalidEvents.slice(0, 10),
         environmentNotes: [`lifecycle-clean=${lifecycleCleanup.clean}`, ...completionObservationNotes(completion)], worker, adapterId: adapter.id,
       });
@@ -2512,14 +2543,16 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     }, ...(postSmoke ? { postSmoke } : {}) }, options.json);
     return report.result === 'PASS' ? 0 : 1;
   } catch (error) {
+    const structuredHarnessReason = structuredHarnessReasonFromError(error);
     const observed = scrubSmokeOutput(error instanceof Error ? error.message : 'handled_exception');
     if (worker && !cleanupFinished) cleanup('handled_exception', true);
     else if (!worker && startedAtMs > 0) { try { markSmokeCreateAmbiguous(artifactDir, observed); } catch { /* fail closed */ } releaseSmokeAdmission(options.cwd, runId); }
     const family: WorkerSmokeCauseFamily = cleanupFinished && terminalCleanup.startsWith('close_failed')
       ? 'lifecycle_cleanup_failed'
-      : workerSmokeCauseFamilyForHarnessReason(observed);
+      : workerSmokeCauseFamilyForHarnessReason(structuredHarnessReason);
     const report = operationalReport(family, options, {
       action: 'run runtime-neutral worker smoke', expected: 'bounded terminal lifecycle', observed,
+      ...(structuredHarnessReason ? { structuredHarnessReason } : {}),
       terminalCleanup: worker ? terminalCleanup : startedAtMs > 0 ? 'ambiguous_unbound' : 'not_started', worker, adapterId: adapter.id,
     });
     const publication = startedAtMs > 0 ? runPublication : preAttempt;

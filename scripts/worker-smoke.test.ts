@@ -923,8 +923,14 @@ describe('smoke executor profiles', () => {
       });
       expect(code).toBe(1);
       expect(spawn).not.toHaveBeenCalled();
-      expect(output.mock.calls.map((entry) => String(entry[0])).join(''))
-        .toContain('executor_effort_channel_unavailable');
+      const rendered = output.mock.calls.map((entry) => String(entry[0])).join('');
+      expect(rendered).toContain('executor_effort_channel_unavailable');
+      expect(JSON.parse(rendered)).toMatchObject({
+        report: {
+          causeFamily: 'harness_admission_refused',
+          nonPassCause: 'unsupported_executor_capability',
+        },
+      });
     } finally {
       output.mockRestore();
       rmSync(root, { recursive: true, force: true });
@@ -1023,6 +1029,47 @@ describe('runtime-neutral worker smoke', () => {
       expect(historyCalls).toBe(0);
       expect(rendered).toContain('trusted_target');
       expect(rendered).not.toContain('no_prior_canonical_observation');
+    } finally {
+      output.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not promote diagnostic observed prose into manager non-pass authority', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-observed-prose-'));
+    const issueBodyFile = join(root, 'issue.md');
+    writeFileSync(issueBodyFile, issueBody, 'utf8');
+    const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      const code = await runSmokeAttempt({
+        command: 'run',
+        issueNumber: 1968,
+        prNumber: 2002,
+        headSha: HEAD_ONE,
+        issueBodyFile,
+        smokeComplexity: 'routine',
+        repoRoot: root,
+        cwd: root,
+        dryRun: true,
+        json: true,
+      }, {
+        resolveTarget: () => {
+          throw new Error('login_required: diagnostic-only prose');
+        },
+        fetchHistoryComments: () => [],
+      });
+      expect(code).toBe(1);
+      const rendered = output.mock.calls.map((entry) => String(entry[0])).join('');
+      const parsed = JSON.parse(rendered) as {
+        report?: {
+          causeFamily?: string;
+          nonPassCause?: string;
+          scenarios?: Array<{ observed?: string }>;
+        };
+      };
+      expect(parsed.report?.causeFamily).toBe('harness_admission_refused');
+      expect(parsed.report?.nonPassCause).toBeUndefined();
+      expect(parsed.report?.scenarios?.[0]?.observed).toContain('login_required');
     } finally {
       output.mockRestore();
       rmSync(root, { recursive: true, force: true });

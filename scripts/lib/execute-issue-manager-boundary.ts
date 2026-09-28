@@ -21,6 +21,7 @@ import {
   SMOKE_REPORT_MARKER,
   SMOKE_REPORT_PRODUCER,
   isWorkerSmokeCauseFamily,
+  isWorkerSmokeScenarioCauseFamily,
   normalizeSmokeReport,
   smokeResultForWorkerSmokeCauseFamily,
   type SmokeReport,
@@ -232,6 +233,16 @@ export function isExecuteIssueReadOnlyArgv(argv: readonly string[]): boolean {
     const operation = normalized[probePrefix.length];
     return (operation === 'inspect' || operation === 'list')
       && !normalized.includes('--open-if-missing');
+  }
+
+  const smokeObserverPrefix = [
+    'node',
+    '--experimental-strip-types',
+    'scripts/execute-issue-manager-boundary.ts',
+    'observe-worker-smoke-recoverable',
+  ];
+  if (smokeObserverPrefix.every((part, index) => normalized[index] === part)) {
+    return true;
   }
 
   if (normalized[0] === 'scripts/gh') {
@@ -570,38 +581,21 @@ function workerSmokeObservationAction(
     || !/^[0-9a-f]{40}$/u.test(headSha)
     || text(context.headSha).toLowerCase() !== headSha) return null;
 
-  if (nonPassCause === 'tier_order_input_stale') {
-    const revisionMarker = '<!-- source-revision: ' + context.sourceRevision + ' -->';
-    return createIssueNextAction({
-      kind: 'execute-review-runner-read-only',
-      binding: actionBinding(context),
-      argv: [
-        'scripts/gh', 'issue', 'view', String(context.issueNumber), '--repo', context.repository,
-        '--json', 'number,body,labels',
-        '--jq', 'select(.number == ' + context.issueNumber + ' and (.body | contains(' + JSON.stringify(revisionMarker) + '))) | {number, body, labels}',
-      ],
-    });
-  }
-
-  if (nonPassCause === 'smoke_same_head_in_progress') {
-    return createIssueNextAction({
-      kind: 'execute-review-runner-read-only',
-      binding: actionBinding(context),
-      argv: [
-        'scripts/gh', 'pr', 'view', String(prNumber), '--repo', context.repository,
-        '--json', 'number,headRefOid,comments',
-        '--jq', 'select(.number == ' + prNumber + ' and .headRefOid == "' + headSha + '") | {number, headRefOid, smokeReports: [.comments[] | select((.body | contains("<!-- pack-worker-smoke-report/v1 -->")) and (.body | contains("' + headSha + '"))) | {body, createdAt}]}',
-      ],
-    });
-  }
-
   return createIssueNextAction({
     kind: 'execute-review-runner-read-only',
     binding: actionBinding(context),
     argv: [
-      'scripts/gh', 'pr', 'view', String(prNumber), '--repo', context.repository,
-      '--json', 'number,headRefOid,body',
-      '--jq', '.number == ' + prNumber + ' and .headRefOid == "' + headSha + '" and (.body | test("(?im)^\\s*(closes|fixes|resolves)\\s+#' + context.issueNumber + '\\b"))',
+      'node',
+      '--experimental-strip-types',
+      'scripts/execute-issue-manager-boundary.ts',
+      'observe-worker-smoke-recoverable',
+      '--repo', context.repository,
+      '--issue-number', String(context.issueNumber),
+      '--pr-number', String(prNumber),
+      '--head-sha', headSha,
+      '--source-revision', context.sourceRevision,
+      '--phase', context.phase,
+      '--cause', nonPassCause,
     ],
   });
 }
@@ -663,6 +657,10 @@ function classifyWorkerSmoke(
     return defect(context, producer, 'worker-smoke result contradicts causeFamily');
   }
 
+  if (result !== 'PASS' && !causeFamily) {
+    return defect(context, producer, 'worker-smoke non-PASS lacks a closed causeFamily');
+  }
+
   if (result === 'PASS') {
     const normalized = normalizeSmokeReport(
       value as unknown as Partial<SmokeReport>,
@@ -680,17 +678,35 @@ function classifyWorkerSmoke(
     return completed(context, producer, 'execute_worker_smoke_pass', 'PASS');
   }
 
-  const scenarios = value.scenarios as JsonRecord[];
+  const normalizedNonPass = normalizeSmokeReport(
+    value as unknown as Partial<SmokeReport>,
+    { issueNumber, prNumber, headSha },
+  );
+  if (!normalizedNonPass.ok) {
+    return defect(context, producer, 'worker-smoke non-PASS failed canonical normalization: ' + normalizedNonPass.reason);
+  }
+  const normalizedTerminalRows = normalizedNonPass.report.scenarios.filter(
+    (scenario) => scenario.outcome === 'fail' || scenario.outcome === 'blocked',
+  );
+  if (normalizedTerminalRows.length !== 1) {
+    return defect(context, producer, 'worker-smoke non-PASS must contain exactly one terminal non-PASS scenario');
+  }
+  const normalizedScenarioFamily = normalizedTerminalRows[0]?.causeFamily;
+  if (isWorkerSmokeScenarioCauseFamily(causeFamily)) {
+    if (normalizedNonPass.report.result !== result
+      || normalizedNonPass.report.causeFamily !== causeFamily
+      || normalizedScenarioFamily !== causeFamily) {
+      return defect(context, producer, 'worker-smoke non-PASS contradicts canonical scenario evidence');
+    }
+  } else if (normalizedScenarioFamily && normalizedScenarioFamily !== 'unknown') {
+    return defect(context, producer, 'worker-smoke harness non-PASS contradicts scenario evidence');
+  }
+
   const provedAssertionFailure = result === 'FAIL'
     && causeFamily === 'scenario_assertion_failed'
-    && scenarios.some((scenario) => {
-      const row = record(scenario);
-      return row?.outcome === 'fail' && row?.causeFamily === 'scenario_assertion_failed';
-    });
+    && nonPassCause === 'executed_scenario_failure'
+    && normalizedScenarioFamily === 'scenario_assertion_failed';
   if (provedAssertionFailure) {
-    if (nonPassCause && nonPassCause !== 'executed_scenario_failure') {
-      return defect(context, producer, 'worker-smoke assertion failure contradicts nonPassCause');
-    }
     return completed(context, producer, 'execute_worker_smoke_assertion_failed', 'FAIL');
   }
 
