@@ -2178,6 +2178,60 @@ describe('orchestration mail reconciliation', () => {
     expect(saved.settledTargets).toEqual({});
   });
 
+  it('resolves a Run coordinator by its remembered pane key after handle rotation', () => {
+    const live = worker('term_before_restart');
+    const rotated = worker('term_after_restart');
+    const message = { id: 'msg_rotated', runId: 'run_rotated', recipient: 'run:run_rotated', consumed: false };
+    const paneKeyPath = join(tmpdir(), `opk-run-pane-keys-${process.pid}-${Date.now()}.json`);
+    let coordinatorLive = true;
+    const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => {
+      if (args[1] === 'run-show') {
+        return { ok: true, result: { run: { id: message.runId, coordinator_handle: live.identity.id } } as T };
+      }
+      if (args[0] === 'terminal' && args[1] === 'show') {
+        return { ok: true, result: { terminal: { tabId: 'tab-1', leafId: 'leaf-1' } } as T };
+      }
+      return { ok: true, result: {} as T };
+    };
+    const paneKeys: string[] = [];
+    const adapter = {
+      findWorkerById: () => coordinatorLive
+        ? { status: 'ok' as const, value: live }
+        : { status: 'failed' as const, operation: 'find_worker_by_id', reason: 'terminal_handle_stale' },
+      findWorkerByPaneKey: (key: string) => {
+        paneKeys.push(key);
+        return { status: 'ok' as const, value: rotated };
+      },
+    } as unknown as RuntimeAdapter;
+    const deps = createOrcaMessageSubmitDeps(adapter, undefined, runJson, paneKeyPath);
+
+    expect(deps.resolveWorker(message)).toMatchObject({ ok: true, worker: live });
+    coordinatorLive = false;
+    expect(deps.resolveWorker(message)).toMatchObject({ ok: true, worker: rotated });
+    expect(paneKeys).toEqual(['tab-1:leaf-1']);
+  });
+
+  it('keeps a stale Run coordinator unresolved without a remembered pane key', () => {
+    const message = { id: 'msg_unknown', runId: 'run_unknown', recipient: 'run:run_unknown', consumed: false };
+    const runJson = <T>(args: readonly string[]): OrcaJsonResponse<T> => args[1] === 'run-show'
+      ? { ok: true, result: { run: { id: message.runId, coordinator_handle: 'term_gone' } } as T }
+      : { ok: true, result: {} as T };
+    const findWorkerByPaneKey = vi.fn();
+    const adapter = {
+      findWorkerById: () => ({ status: 'failed' as const, operation: 'find_worker_by_id', reason: 'terminal_handle_stale' }),
+      findWorkerByPaneKey,
+    } as unknown as RuntimeAdapter;
+    const deps = createOrcaMessageSubmitDeps(
+      adapter,
+      undefined,
+      runJson,
+      join(tmpdir(), `opk-run-pane-keys-empty-${process.pid}-${Date.now()}.json`),
+    );
+
+    expect(deps.resolveWorker(message)).toEqual({ ok: false, reason: 'terminal_handle_stale' });
+    expect(findWorkerByPaneKey).not.toHaveBeenCalled();
+  });
+
   it('falls back to exact terminal peek when a Run consumer is fenced', () => {
     const target = worker('term_fenced_run');
     const message = {

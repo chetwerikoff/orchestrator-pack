@@ -8,7 +8,9 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  rmdirSync,
   statSync,
+  unlinkSync,
   writeFileSync,
   fsyncSync,
 } from 'node:fs';
@@ -350,8 +352,19 @@ function newHolder(surface: string, context: UnknownRecord = {}): ClaimHolder {
   return holder;
 }
 
-function ownerPath(lockDir: string): string {
-  return join(lockDir, 'owner.json');
+const MUTEX_OWNER_FILE = /^owner-[0-9a-f]{32}\.json$/;
+const LEGACY_MUTEX_OWNER_FILE = 'owner.json';
+
+function mutexOwnerFile(processGuid: string): string {
+  return `owner-${processGuid}.json`;
+}
+
+function isMutexOwnerFile(name: string): boolean {
+  return MUTEX_OWNER_FILE.test(name) || name === LEGACY_MUTEX_OWNER_FILE;
+}
+
+function errorCode(error: unknown): string {
+  return asString((error as NodeJS.ErrnoException | null | undefined)?.code);
 }
 
 function processIdentityAlive(owner: UnknownRecord): boolean {
@@ -366,62 +379,162 @@ function processIdentityAlive(owner: UnknownRecord): boolean {
   return true;
 }
 
-function readMutexOwner(lockDir: string): UnknownRecord | null {
+interface MutexObservation {
+  entries: string[];
+  owners: UnknownRecord[];
+  unreadableOwners: number;
+  mtimeMs: number;
+}
+
+/**
+ * Persisted mutex protocol (one lock instance = one `.locks/<key>` directory):
+ * - Acquire installs a fully written private staging directory holding a unique
+ *   `owner-<processGuid>.json` with one atomic rename. rename(2) refuses a
+ *   non-empty target, so a held instance is never replaced and never ownerless.
+ * - Stale reclamation never renames or recursively deletes the canonical path.
+ *   It unlinks the exact owner file names it observed as dead (unique per lease,
+ *   so a stale observation cannot remove a newer lease), then rmdir(2), which
+ *   only removes an instance that is already empty.
+ * - Release unlinks only the lease's own owner file, then rmdir(2).
+ * Legacy `owner.json` instances (older writers, seeded fixtures) are read and
+ * reclaimed the same way; this version never writes that name.
+ */
+function observeMutex(lockDir: string): MutexObservation | null {
   try {
-    const value = JSON.parse(readFileSync(ownerPath(lockDir), 'utf8'));
-    return asRecord(value);
-  } catch {
-    return null;
+    const mtimeMs = statSync(lockDir).mtimeMs;
+    const entries = readdirSync(lockDir);
+    const owners: UnknownRecord[] = [];
+    let unreadableOwners = 0;
+    for (const name of entries.filter(isMutexOwnerFile)) {
+      try {
+        owners.push(asRecord(JSON.parse(readFileSync(join(lockDir, name), 'utf8'))));
+      } catch {
+        unreadableOwners += 1;
+      }
+    }
+    return { entries, owners, unreadableOwners, mtimeMs };
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return null;
+    throw error;
   }
 }
 
-function mutexAbandoned(lockDir: string): boolean {
-  if (!existsSync(lockDir)) return false;
-  const owner = readMutexOwner(lockDir);
-  if (owner) return !processIdentityAlive(owner);
-  try {
-    const ageSeconds = (Date.now() - statSync(lockDir).mtimeMs) / 1000;
-    return ageSeconds >= positiveInteger(process.env.OPK_REVIEW_CLAIM_MUTEX_STALE_SECONDS, DEFAULT_MUTEX_STALE_SECONDS);
-  } catch {
-    return false;
+function mutexReclaimable(observed: MutexObservation): boolean {
+  if (observed.owners.some((owner) => processIdentityAlive(owner))) return false;
+  if (observed.owners.length > 0 && observed.unreadableOwners === 0) return true;
+  const ageSeconds = (Date.now() - observed.mtimeMs) / 1000;
+  return ageSeconds >= positiveInteger(process.env.OPK_REVIEW_CLAIM_MUTEX_STALE_SECONDS, DEFAULT_MUTEX_STALE_SECONDS);
+}
+
+function waitAtStaleTakeoverBarrier(): void {
+  if (process.env.OPK_VITEST_HARNESS !== '1') return;
+  const barrierDir = asString(process.env.OPK_REVIEW_CLAIM_TEST_STALE_BARRIER_DIR);
+  if (!barrierDir) return;
+  mkdirSync(barrierDir, { recursive: true, mode: 0o700 });
+  writeFileSync(join(barrierDir, `${process.pid}.observed`), 'observed\n', 'utf8');
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const observed = readdirSync(barrierDir).filter((name) => name.endsWith('.observed')).length;
+    if (observed >= 2 && existsSync(join(barrierDir, 'go'))) return;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
   }
+  throw new Error('claim_stale_takeover_test_barrier_timeout');
+}
+
+/** Returns false only when the instance holds entries this protocol cannot remove. */
+function reclaimStaleMutex(lockDir: string, observed: MutexObservation): boolean {
+  waitAtStaleTakeoverBarrier();
+  // Owner files first: their unique names are the compare-and-swap point.
+  const ordered = [...observed.entries.filter(isMutexOwnerFile), ...observed.entries.filter((name) => !isMutexOwnerFile(name))];
+  for (const name of ordered) {
+    try {
+      unlinkSync(join(lockDir, name));
+    } catch (error) {
+      // ENOENT: the observed instance already changed; re-observe instead of acting on it.
+      if (errorCode(error) === 'ENOENT') return true;
+      if (['EISDIR', 'EPERM'].includes(errorCode(error))) return false;
+      throw error;
+    }
+  }
+  try {
+    rmdirSync(lockDir);
+  } catch (error) {
+    if (['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(errorCode(error))) return true;
+    throw error;
+  }
+  syncDirectory(dirname(lockDir));
+  return true;
+}
+
+function releaseMutexInstance(lockDir: string, processGuid: string): void {
+  try {
+    unlinkSync(join(lockDir, mutexOwnerFile(processGuid)));
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return;
+    throw error;
+  }
+  try {
+    rmdirSync(lockDir);
+  } catch (error) {
+    if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(errorCode(error))) throw error;
+  }
+  syncDirectory(dirname(lockDir));
+}
+
+function tryInstallMutex(lockDir: string, processGuid: string): boolean {
+  const staging = `${lockDir}.acquire-${process.pid}-${processGuid}`;
+  mkdirSync(staging, { recursive: false, mode: 0o700 });
+  try {
+    const owner: UnknownRecord = {
+      pid: process.pid,
+      host: hostname() || 'unknown-host',
+      processGuid,
+      acquiredAtUtc: nowIso(),
+      lockDir,
+    };
+    const startTimeTicks = readLinuxProcessStartTicks(process.pid);
+    const bootIdHash = readBootIdHash();
+    if (startTimeTicks) owner.startTimeTicks = startTimeTicks;
+    if (bootIdHash) owner.bootIdHash = bootIdHash;
+    atomicWriteJson(join(staging, mutexOwnerFile(processGuid)), owner);
+    try {
+      renameSync(staging, lockDir);
+    } catch (error) {
+      if (['EEXIST', 'ENOTEMPTY'].includes(errorCode(error))) return false;
+      throw error;
+    }
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+  }
+  try {
+    syncDirectory(dirname(lockDir));
+  } catch (error) {
+    releaseMutexInstance(lockDir, processGuid);
+    throw error;
+  }
+  return true;
 }
 
 function enterMutex(lockDir: string, maxAttempts = 120, sleepMs = 25): MutexLease | null {
+  // One lease identity for every attempt: ownership is proven only by this exact guid.
+  const processGuid = randomUUID().replace(/-/g, '');
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const processGuid = randomUUID().replace(/-/g, '');
     try {
-      mkdirSync(lockDir, { recursive: false, mode: 0o700 });
-      const owner: UnknownRecord = {
-        pid: process.pid,
-        host: hostname() || 'unknown-host',
-        processGuid,
-        acquiredAtUtc: nowIso(),
-        lockDir,
-      };
-      const startTimeTicks = readLinuxProcessStartTicks(process.pid);
-      const bootIdHash = readBootIdHash();
-      if (startTimeTicks) owner.startTimeTicks = startTimeTicks;
-      if (bootIdHash) owner.bootIdHash = bootIdHash;
-      atomicWriteJson(ownerPath(lockDir), owner);
-      return { lockDir, processGuid };
+      if (tryInstallMutex(lockDir, processGuid)) return { lockDir, processGuid };
+      const observed = observeMutex(lockDir);
+      if (!observed) continue;
+      if (mutexReclaimable(observed) && reclaimStaleMutex(lockDir, observed)) continue;
     } catch {
-      if (mutexAbandoned(lockDir)) {
-        rmSync(lockDir, { recursive: true, force: true });
-        continue;
-      }
-      if (attempt + 1 < maxAttempts) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, sleepMs);
+      // Storage errors keep the historical bounded-retry semantics and end as busy.
     }
+    if (attempt + 1 < maxAttempts) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, sleepMs);
   }
   return null;
 }
 
 function exitMutex(lease: MutexLease | null): void {
-  if (!lease || !existsSync(lease.lockDir)) return;
-  const owner = readMutexOwner(lease.lockDir);
-  if (owner && asString(owner.processGuid) !== lease.processGuid) return;
-  rmSync(lease.lockDir, { recursive: true, force: true });
-  syncDirectory(dirname(lease.lockDir));
+  if (!lease) return;
+  releaseMutexInstance(lease.lockDir, lease.processGuid);
 }
 
 function withMutex<T>(lockDir: string, operation: () => T, attempts = 120): T | { ok: false; reason: 'busy' } {

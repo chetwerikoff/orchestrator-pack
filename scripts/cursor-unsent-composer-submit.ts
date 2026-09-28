@@ -47,6 +47,10 @@ export const ORCHESTRATION_RECONCILE_LOCK_PATH = join(
   resolveWakeSupervisorStateRoot(),
   'orchestration-mail-reconcile.lock',
 );
+export const ORCHESTRATION_RUN_PANE_KEY_PATH = join(
+  resolveWakeSupervisorStateRoot(),
+  'orchestration-run-pane-keys.json',
+);
 const ORCHESTRATION_RECONCILE_WINDOW_MS = 60_000;
 const ORCHESTRATION_RECONCILE_MAX_BACKOFF_MS = 30 * 60_000;
 export const ORCHESTRATION_POINTER_ABSENT_BACKOFF_MS = 5_000;
@@ -595,6 +599,25 @@ function loadReconcileState(path: string): PersistedReconcileState {
     return { messages, episodes, staleObservations, submittedFingerprint, unresolvedTargets, settledTargets };
   } catch {
     return { messages: {}, episodes: {}, staleObservations: {}, submittedFingerprint: {}, unresolvedTargets: {}, settledTargets: {} };
+  }
+}
+
+type RunPaneKeys = Record<string, { readonly handle: string; readonly paneKey: string }>;
+
+function loadRunPaneKeys(path: string): RunPaneKeys {
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const keys: RunPaneKeys = {};
+    for (const [runId, value] of Object.entries(parsed)) {
+      const entry = value as { handle?: unknown; paneKey?: unknown };
+      if (typeof entry?.handle === 'string' && typeof entry.paneKey === 'string') {
+        keys[runId] = { handle: entry.handle, paneKey: entry.paneKey };
+      }
+    }
+    return keys;
+  } catch {
+    return {};
   }
 }
 
@@ -1514,7 +1537,22 @@ export function createOrcaMessageSubmitDeps(
   adapter: RuntimeAdapter,
   submitDeps = createAdapterSubmitDeps(adapter),
   runJson: typeof runOrcaJson = runOrcaJson,
+  runPaneKeyPath = ORCHESTRATION_RUN_PANE_KEY_PATH,
 ): DeliveryMessageSubmitDeps {
+  const rememberRunPaneKey = (runId: string, handle: string): void => {
+    const keys = loadRunPaneKeys(runPaneKeyPath);
+    if (keys[runId]?.handle === handle) return;
+    const shown = runJson<{ readonly terminal?: { readonly tabId?: string; readonly leafId?: string } }>(
+      ['terminal', 'show', '--terminal', handle],
+      { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS },
+    );
+    const tabId = shown.ok ? shown.result?.terminal?.tabId?.trim() ?? '' : '';
+    const leafId = shown.ok ? shown.result?.terminal?.leafId?.trim() ?? '' : '';
+    if (!tabId || !leafId) return;
+    keys[runId] = { handle, paneKey: `${tabId}:${leafId}` };
+    mkdirSync(dirname(runPaneKeyPath), { recursive: true });
+    writeFileSync(runPaneKeyPath, JSON.stringify(keys) + '\n');
+  };
   const readInbox = () => runJson<OrcaInboxFullResult>(
     ['orchestration', 'inbox', '--full', '--limit', String(ORCHESTRATION_INBOX_LIMIT)],
     { timeoutMs: RECONCILE_COMMAND_TIMEOUT_MS },
@@ -1553,6 +1591,20 @@ export function createOrcaMessageSubmitDeps(
           return { ok: true, worker: resolved.value };
         }
         handle = response.result?.run?.coordinator_handle?.trim() ?? '';
+        if (!handle.startsWith('term_')) return { ok: false, reason: 'orchestration_recipient_unresolved' };
+        const resolved = adapter.findWorkerById(handle);
+        if (resolved.status === 'ok') {
+          if (resolved.value) rememberRunPaneKey(runId, handle);
+          return { ok: true, worker: resolved.value };
+        }
+        // An Orca app restart rotates terminal handles, and the Run keeps the
+        // dead one until run-use. The remembered tabId:leafId survives restart.
+        const remembered = loadRunPaneKeys(runPaneKeyPath)[runId];
+        if (remembered && adapter.findWorkerByPaneKey) {
+          const byPane = adapter.findWorkerByPaneKey(remembered.paneKey);
+          if (byPane.status === 'ok' && byPane.value) return { ok: true, worker: byPane.value };
+        }
+        return { ok: false, reason: resolved.reason };
       }
       if (!handle.startsWith('term_')) return { ok: false, reason: 'orchestration_recipient_unresolved' };
       const resolved = adapter.findWorkerById(handle);
