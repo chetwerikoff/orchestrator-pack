@@ -1,6 +1,3 @@
-// @vitest-ci-lane light
-// @vitest-pre-topology-seconds 120
-
 import { describe, expect, it, vi } from 'vitest';
 import { parseSmokeTestPlan } from './draft-discipline.mjs';
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
