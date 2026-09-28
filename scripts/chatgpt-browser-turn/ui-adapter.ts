@@ -243,9 +243,13 @@ export function classifyExecutionRecoveryProductError(
   ].some((text) => executionRecoveryCauseFromText(text) === 'stream_recovery_polling_timed_out');
 
   if (streamBannerPresent) {
+    const messageCardinality = recoveryMarkerCardinality(evidence.messages, evidence.marker);
+    const fallbackMarkerCandidates = messageCardinality.exactMarkerTokenCount === 0
+      ? (evidence.markerCandidates ?? [])
+      : [];
     const ownershipMessages: ExecutionRecoveryMessage[] = [
       ...evidence.messages,
-      ...(evidence.markerCandidates ?? []).map((candidate) => ({
+      ...fallbackMarkerCandidates.map((candidate) => ({
         role: 'user' as const,
         text: candidate.text,
         ...(candidate.turnKey ? { turnKey: candidate.turnKey } : {}),
@@ -432,7 +436,6 @@ async function readOwnedTurnSnapshot(
         chromeSelector: string;
         timeoutText: string;
         networkText: string;
-        messageSelector: string;
         productSelector: string;
       }) => {
         const normalize = (value: string): string => value.replace(/\s+/g, ' ').replace(/help\.openai\.com \.$/u, 'help.openai.com.').trim();
@@ -484,11 +487,9 @@ async function readOwnedTurnSnapshot(
           for (const section of Array.from(document.querySelectorAll(args.turnSelector))) {
             const turnKey = section.getAttribute('data-turn-key');
             if (turnKey) conversationTurnKeys.push(turnKey);
-            if (!section.querySelector(args.messageSelector)) {
-              const text = (section as HTMLElement).innerText;
-              if (typeof text === 'string' && text.includes('OPKTURNV1')) {
-                markerCandidates.push({ text, ...(turnKey ? { turnKey } : {}) });
-              }
+            const text = (section as HTMLElement).innerText;
+            if (typeof text === 'string' && text.includes('OPKTURNV1')) {
+              markerCandidates.push({ text, ...(turnKey ? { turnKey } : {}) });
             }
           }
         } catch {
@@ -582,7 +583,6 @@ async function readOwnedTurnSnapshot(
         chromeSelector: ASSISTANT_TURN_ACTION_SELECTOR,
         timeoutText: MESSAGE_DELIVERY_TIMED_OUT_TEXT,
         networkText: PRODUCT_NETWORK_ERROR_TEXT,
-        messageSelector: MESSAGE_NODE_SELECTOR,
         productSelector: PRODUCT_STATUS_PROBE_SELECTORS.join(', '),
       }),
       waitMs,
