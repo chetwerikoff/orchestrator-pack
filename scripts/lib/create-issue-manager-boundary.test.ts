@@ -60,7 +60,7 @@ describe('create-Issue manager boundary', () => {
         value: createIssueExternalPauseResult({
           cause: 'external:github_unavailable',
           remedy: 'restore GitHub',
-          resumeWhen: { operator: true },
+          resumeWhen: { coordinator: true },
           evidence: 'HTTP 503',
         }),
       },
@@ -257,7 +257,7 @@ describe('create-Issue manager boundary', () => {
           produce: () => createIssueExternalPauseResult({
             cause: 'external:github_unavailable',
             remedy: 'restore GitHub',
-            resumeWhen: { operator: true },
+            resumeWhen: { coordinator: true },
             evidence: 'HTTP 503',
           }),
         },
