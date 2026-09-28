@@ -1861,6 +1861,9 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
       headSha,
       result: 'PASS',
       trackedFilesUnmodified: true,
+      terminalCleanup: 'closed_owned_handle',
+      orcaExecutable: 'orca',
+      terminalHandle: 'term_fixture',
       scenarios: [{
         action: 'exercise current behavior',
         expected: 'acceptance assertion holds',
