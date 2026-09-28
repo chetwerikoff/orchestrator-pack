@@ -212,7 +212,7 @@ describe('Issue #2213 actor-sensitive selective smoke carry', () => {
         scenarios: [{
           action: ACTION,
           expected: EXPECTED,
-          observed: `carried PASS from head ${originalHead}; not freshly executed on ${sourceHead}`,
+          observed: `carried PASS from head ${originalHead} comment 8; not freshly executed on ${sourceHead}`,
           outcome: 'pass',
         }],
         limitations: [],
