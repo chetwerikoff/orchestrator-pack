@@ -96,6 +96,34 @@ describe('create-Issue manager boundary', () => {
     );
   });
 
+  it('normalizes legacy operator pause input to coordinator without mutating historical bytes', () => {
+    const legacy = {
+      ok: false,
+      cause: 'external:github_unavailable',
+      pause: {
+        remedy: 'restore GitHub',
+        resume_when: { operator: true },
+        evidence: 'historical HTTP 503',
+      },
+      nextAction: null,
+    };
+    const historicalBytes = JSON.stringify(legacy);
+    const evaluated = evaluateCreateIssueManagerBoundary({
+      producer: 'legacy-pause-fixture',
+      currentArgv: ['current'],
+      produce: () => legacy,
+    });
+    expect(evaluated).toMatchObject({
+      exitCode: 4,
+      result: {
+        cause: 'external:github_unavailable',
+        pause: { resume_when: { coordinator: true } },
+        nextAction: null,
+      },
+    });
+    expect(JSON.stringify(legacy)).toBe(historicalBytes);
+  });
+
   it('rejects a producer-constructed contract_defect and reconstructs it at the boundary', () => {
     const evaluated = evaluateCreateIssueManagerBoundary({
       producer: 'producer-that-tried-to-forge-defect',
