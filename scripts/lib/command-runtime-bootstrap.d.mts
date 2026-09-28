@@ -13,13 +13,13 @@ export function evaluateCommandRuntimePreflight(input?: Record<string, unknown>)
   tools?: Record<string, string>;
 };
 export function resolveManagerBrowserOperatorConfig(input?: Record<string, unknown>):
-  | { ok: true; config: { projectUrl: string; chromeUserDataDir: string; source: string; operatorConfigPath?: string } }
+  | { ok: true; config: { projectUrl: string; chromeUserDataDir: string; source: string; cardPath: string; operatorConfigPath?: string } }
   | { ok: false; probe: string; reason: string; evidence: string; remedy: string };
 export function evaluateManagerBrowserEnvironmentPreflight(input?: Record<string, unknown>):
   | {
       ok: true;
       runtime: Record<string, unknown>;
-      config: { projectUrl: string; chromeUserDataDir: string; source: string; operatorConfigPath?: string };
+      config: { projectUrl: string; chromeUserDataDir: string; source: string; cardPath: string; operatorConfigPath?: string };
       sharedModulePath: string;
     }
   | {
