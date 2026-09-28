@@ -1,10 +1,22 @@
 // @vitest-pre-topology-seconds 1
 // @vitest-ci-lane light
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { buildSmokeProgressWriterCommand } from '../worker-smoke-run.ts';
+import {
+  bindSmokeTerminalHandle,
+  createSmokeLifecycleReservation,
+  markSmokeCreateInProgress,
+  smokeProgressPath,
+} from './worker-smoke-lifecycle.ts';
 import {
   evaluateWorkerSmokeMainMergeCarry,
   formatSmokeReportComment,
   planWorkerSmokeSelectiveRetry,
+  resolveSmokeRunArtifactDir,
   SMOKE_REPORT_PRODUCER,
   type SmokeReport,
   type WorkerSmokeCommentRecord,
@@ -149,5 +161,35 @@ describe('Issue #2213 actor-sensitive selective smoke carry', () => {
       allowed: true,
       mainPaths: ['docs/main-only-change.md'],
     });
+  });
+});
+
+describe('Issue #2213 bound smoke progress writer', () => {
+  it('writes progress only to the active run artifact without a caller-supplied path', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'issue-2213-progress-writer-'));
+    const runId = 'a1b2c3d4-e5f6-4789-abcd-0123456789ab';
+    const artifactDir = resolveSmokeRunArtifactDir(cwd, runId);
+    try {
+      createSmokeLifecycleReservation({
+        runId, artifactDir, issueNumber: ISSUE, prNumber: PR, headSha: CURRENT_HEAD, scenarioCount: 1,
+      });
+      markSmokeCreateInProgress(artifactDir);
+      bindSmokeTerminalHandle(artifactDir, 'smoke-terminal');
+      const writer = buildSmokeProgressWriterCommand(runId, artifactDir);
+      expect(writer).not.toContain('progress.ndjson');
+      for (const args of ['1 started', '1 terminal pass']) {
+        const result = spawnSync('/bin/sh', ['-c', `${writer} ${args}`], { cwd, encoding: 'utf8' });
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      }
+      const progressPath = smokeProgressPath(artifactDir);
+      const events = readFileSync(progressPath, 'utf8').trim().split(/\r?\n/u).map((line) => JSON.parse(line));
+      expect(events).toEqual([
+        { runId, scenarioOrdinal: 1, phase: 'started' },
+        { runId, scenarioOrdinal: 1, phase: 'terminal', outcome: 'pass' },
+      ]);
+      expect(existsSync(join(cwd, '.orca-worker-smo'))).toBe(false);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 });

@@ -7,7 +7,7 @@ import { overlayExecutorProfileEnv } from './executor-profile-store.ts';
 import { resolveRealGhBinary, resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from './pr-scope-contract.ts';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1317,6 +1317,74 @@ export function runtimeCloseBoundHandle(adapter: RuntimeAdapter, handle: string,
   return runtimeClose(adapter, resolved.value.identity, options);
 }
 
+const SMOKE_PROGRESS_RUN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+const SMOKE_PROGRESS_OUTCOMES = ['pass', 'fail', 'blocked', 'skipped'] as const;
+
+function shellSingleQuoted(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+export function buildSmokeProgressWriterCommand(runId: string, artifactDir: string): string {
+  if (!SMOKE_PROGRESS_RUN_ID_PATTERN.test(runId)) throw new Error('progress_writer:invalid_run_id');
+  const runIdToken = Buffer.from(runId, 'utf8').toString('base64');
+  const progressPathToken = Buffer.from(smokeProgressPath(artifactDir), 'utf8').toString('base64');
+  return `${shellSingleQuoted(process.execPath)} --experimental-strip-types ${shellSingleQuoted(fileURLToPath(import.meta.url))} progress ${runIdToken} ${progressPathToken}`;
+}
+
+export function appendBoundSmokeProgressEvent(input: {
+  cwd: string;
+  runId: string;
+  scenarioOrdinal: number;
+  phase: 'started' | 'terminal';
+  outcome?: 'pass' | 'fail' | 'blocked' | 'skipped';
+}): void {
+  const runId = input.runId.trim();
+  const ordinal = input.scenarioOrdinal;
+  if (!SMOKE_PROGRESS_RUN_ID_PATTERN.test(runId)) throw new Error('progress_writer:invalid_run_id');
+  if (!Number.isSafeInteger(ordinal) || ordinal < 1) throw new Error('progress_writer:invalid_scenario_ordinal');
+  if (input.phase === 'started' && input.outcome !== undefined) throw new Error('progress_writer:started_outcome_forbidden');
+  if (input.phase === 'terminal' && !SMOKE_PROGRESS_OUTCOMES.includes(input.outcome as (typeof SMOKE_PROGRESS_OUTCOMES)[number])) {
+    throw new Error('progress_writer:terminal_outcome_required');
+  }
+  const cwd = resolve(input.cwd);
+  const artifactDir = resolveSmokeRunArtifactDir(cwd, runId);
+  const file = smokeProgressPath(artifactDir);
+  const previous = existsSync(file)
+    ? readFileSync(file, 'utf8').split(/\r?\n/u).filter(Boolean).map((line) => { try { return JSON.parse(line) as Record<string, unknown>; } catch { return null; } })
+    : [];
+  const skipped = previous.find((entry) => entry?.runId === runId && entry.phase === 'terminal' && entry.outcome === 'skipped');
+  if (skipped && ordinal > Number(skipped.scenarioOrdinal)) throw new Error('progress_protocol_failure:progress_after_skipped_terminal');
+  const registry = readSmokeLifecycleRegistry(artifactDir);
+  if (!registry || registry.runId !== runId || registry.spawnState !== 'bound' || ordinal > registry.scenarioCount) {
+    throw new Error('progress_writer:run_not_bound_to_active_workspace');
+  }
+  const event = { runId, scenarioOrdinal: ordinal, phase: input.phase, ...(input.outcome ? { outcome: input.outcome } : {}) };
+  appendFileSync(file, `${JSON.stringify(event)}\n`, 'utf8');
+}
+
+function runSmokeProgressWriter(argv: readonly string[]): number {
+  const [runIdToken, progressPathToken, ordinalText, phaseText, outcomeText, ...extra] = argv;
+  if (!runIdToken || !progressPathToken || !ordinalText || !phaseText || extra.length > 0) throw new Error('progress_writer:usage');
+  const runId = Buffer.from(runIdToken, 'base64').toString('utf8');
+  if (Buffer.from(runId, 'utf8').toString('base64') !== runIdToken) throw new Error('progress_writer:invalid_run_id_token');
+  const suppliedProgressPath = Buffer.from(progressPathToken, 'base64').toString('utf8');
+  if (Buffer.from(suppliedProgressPath, 'utf8').toString('base64') !== progressPathToken) throw new Error('progress_writer:invalid_progress_path_token');
+  const artifactDir = resolveSmokeRunArtifactDir(process.cwd(), runId);
+  if (resolve(suppliedProgressPath) !== resolve(smokeProgressPath(artifactDir))) throw new Error('progress_writer:progress_path_mismatch');
+  const scenarioOrdinal = Number(ordinalText);
+  if (phaseText !== 'started' && phaseText !== 'terminal') throw new Error('progress_writer:invalid_phase');
+  const outcome = outcomeText === undefined ? undefined : outcomeText;
+  if (outcome !== undefined && !SMOKE_PROGRESS_OUTCOMES.includes(outcome as (typeof SMOKE_PROGRESS_OUTCOMES)[number])) {
+    throw new Error('progress_writer:invalid_outcome');
+  }
+  appendBoundSmokeProgressEvent({
+    cwd: process.cwd(), runId, scenarioOrdinal, phase: phaseText,
+    ...(outcome ? { outcome: outcome as (typeof SMOKE_PROGRESS_OUTCOMES)[number] } : {}),
+  });
+  return 0;
+}
+
+
 function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scenarioCount: number): string {
   const prompt = scenarioCount === 0
     ? basePrompt.replace(
@@ -1324,13 +1392,7 @@ function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scen
         '(none — execute no smoke scenarios; emit PASS using the carry-only bookkeeping row required below)',
       )
     : basePrompt;
-  const progressPath = smokeProgressPath(binding.artifactDir);
-  const progressPathToken = Buffer.from(progressPath, 'utf8').toString('base64');
-  const runIdToken = Buffer.from(binding.runId, 'utf8').toString('base64');
-  const writer = [
-    'node -e',
-    "'const fs=require(\"node:fs\");const [p64,r64,ordinalText,phase,outcome]=process.argv.slice(1);const file=Buffer.from(p64,\"base64\").toString(\"utf8\");const runId=Buffer.from(r64,\"base64\").toString(\"utf8\");const ordinal=Number(ordinalText);const previous=fs.existsSync(file)?fs.readFileSync(file,\"utf8\").split(/\\r?\\n/u).filter(Boolean).map((line)=>{try{return JSON.parse(line)}catch{return null}}):[];const skipped=previous.find((entry)=>entry?.runId===runId&&entry.phase===\"terminal\"&&entry.outcome===\"skipped\");if(skipped&&ordinal>Number(skipped.scenarioOrdinal)){process.stderr.write(\"progress_protocol_failure:progress_after_skipped_terminal\\n\");process.exit(1)}const event={runId,scenarioOrdinal:ordinal,phase};if(outcome)event.outcome=outcome;fs.appendFileSync(file,JSON.stringify(event)+\"\\n\",\"utf8\")'",
-    ].join(' ');
+  const writer = buildSmokeProgressWriterCommand(binding.runId, binding.artifactDir);
   const progressEventProtocol = [
     'Canonical progress serialization (mandatory):',
     ...(scenarioCount === 0
@@ -1338,8 +1400,10 @@ function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scen
       : [
         '- Never write, append, or edit progress JSON manually; use only the generated writer commands below.',
         '- Do not type, reconstruct, or reuse a run id; the encoded writer argument binds this exact run.',
-        `- Before scenario 1, run exactly: ${writer} ${progressPathToken} ${runIdToken} 1 started`,
+        '- The progress command derives and validates its bound progress path from the active worktree.',
+        `- Before scenario 1, run exactly: ${writer} 1 started`,
         `- The first non-empty progress line must parse exactly as: ${JSON.stringify({ runId: binding.runId, scenarioOrdinal: 1, phase: 'started' })}`,
+        '- The progress writer serializes each event with JSON.stringify(event) and appends one newline.',
         '- For later started events, reuse the command with the declared ordinal and phase started, omitting outcome.',
         '- For terminal events, reuse the command with the same ordinal, phase terminal, and one outcome: pass|fail|blocked|skipped.',
         '- Never append a terminal event before its matching started event.',
@@ -1358,7 +1422,7 @@ function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scen
     prompt,
     '',
     'Lifecycle protocol (child-produced evidence only):',
-    `- Progress file: ${progressPath}`,
+    `- Progress file: ${smokeProgressPath(binding.artifactDir)}`,
     `- Cancel request: ${smokeCancelRequestPath(binding.artifactDir)}`,
     `- Cancel acknowledgement: ${smokeCancelAcknowledgementPath(binding.artifactDir)}`,
     `- Declared scenario count: ${scenarioCount}`,
@@ -2793,6 +2857,7 @@ export async function runSmokeWait(options: CliOptions): Promise<number> {
 }
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
+  if (argv[0] === 'progress') return runSmokeProgressWriter(argv.slice(1));
   const options = parseArgs(argv);
   switch (options.command) {
     case 'validate-plan': return runValidatePlan(options);
@@ -2807,7 +2872,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       return runSmokeWait(options);
     case 'reconcile-direct-review': return runDirectReviewReconciliation(options);
     case 'delegated-readiness': return runDelegatedReadiness(options);
-    default: throw new Error('usage: worker-smoke-run.ts <validate-plan|gate-check|run|wait|reconcile-direct-review|delegated-readiness> [options] (run accepts --detach, --operator-override <reason>, and --smoke-actor worker-owned|independent; wait requires --run <id>)');
+    default: throw new Error('usage: worker-smoke-run.ts <validate-plan|gate-check|run|wait|progress|reconcile-direct-review|delegated-readiness> [options] (run accepts --detach, --operator-override <reason>, and --smoke-actor worker-owned|independent; wait requires --run <id>)');
   }
 }
 
