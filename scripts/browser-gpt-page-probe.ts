@@ -30,6 +30,7 @@ import {
   transitionStateLightTurnObservation,
   type StateLightTurnObservationPhase,
 } from './chatgpt-browser-turn/state-light-turn-observation.ts';
+import { recoveryMarkerCardinality } from './chatgpt-browser-turn/state-light-turn-recovery.ts';
 import {
   classifyBrowserGptPageTurnStatus,
   ownedPromptMatches,
