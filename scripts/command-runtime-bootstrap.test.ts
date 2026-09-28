@@ -120,12 +120,23 @@ describe('Issue #1998 manager environment preflight', () => {
     });
   });
 
-  it('returns the npm ci remedy when the active worktree cannot resolve the shared export', () => {
+  it('returns the npm ci remedy before resolving native gh when the active worktree lacks the shared export', () => {
     const fakeWorktree = tempDir('opk-1998-worktree-');
     const profile = tempDir('opk-1998-profile-');
     mkdirSync(join(fakeWorktree, 'scripts'), { recursive: true });
     mkdirSync(join(fakeWorktree, 'plugins', '_shared'), { recursive: true });
     const packGh = join(fakeWorktree, 'scripts', 'gh');
+    let nativeGhResolutionAttempted = false;
+    const tools = {
+      node: process.execPath,
+      packGh,
+      firstGh: packGh,
+      get nativeGh() {
+        nativeGhResolutionAttempted = true;
+        return null;
+      },
+      nativeGhError: 'no native gh executable found',
+    };
     const result = evaluateManagerBrowserEnvironmentPreflight({
       packRoot: fakeWorktree,
       effectivePath: process.env.PATH ?? '',
@@ -133,19 +144,14 @@ describe('Issue #1998 manager environment preflight', () => {
         DISCUSS_WITH_GPT_PROJECT_URL: 'https://chatgpt.com/g/project',
         DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR: profile,
       },
-      tools: {
-        node: process.execPath,
-        packGh,
-        firstGh: packGh,
-        nativeGh: null,
-        nativeGhError: 'no native gh executable found',
-      },
+      tools,
     });
     expect(result).toMatchObject({
       ok: false,
       probe: 'workspace_shared_module',
       reason: 'workspace_dependencies_unavailable',
     });
+    expect(nativeGhResolutionAttempted).toBe(false);
     if (!result.ok) {
       expect(result.evidence).toContain('@orchestrator-pack/shared/lib/normalize.js');
       expect(result.remedy).toContain('npm ci --include=dev');
