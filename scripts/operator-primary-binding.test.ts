@@ -1,10 +1,10 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { runProcessSync } from './kernel/subprocess.ts';
 import type { RuntimeAdapter } from './runtime/contracts.ts';
 import {
   currentWorkerAssignmentByDeliverable,
@@ -40,8 +40,13 @@ function fixture() {
   const writeCard = (projectId: string, repository: string) => {
     const primaryRoot = path.join(root, projectId, 'same-primary-basename');
     mkdirSync(primaryRoot, { recursive: true });
-    execFileSync('git', ['init'], { cwd: primaryRoot, stdio: 'ignore' });
-    execFileSync('git', ['remote', 'add', 'origin', `https://github.com/${repository}.git`], { cwd: primaryRoot, stdio: 'ignore' });
+    const initialized = runProcessSync({ command: 'git', args: ['init'], cwd: primaryRoot, inheritParentEnv: true });
+    if (!initialized.ok) throw new Error(initialized.stderr || initialized.error || 'git init failed');
+    const remote = runProcessSync({
+      command: 'git', args: ['remote', 'add', 'origin', `https://github.com/${repository}.git`],
+      cwd: primaryRoot, inheritParentEnv: true,
+    });
+    if (!remote.ok) throw new Error(remote.stderr || remote.error || 'git remote add failed');
     const card = projectCardPath(projectId, env);
     mkdirSync(path.dirname(card), { recursive: true });
     writeFileSync(card, JSON.stringify({
