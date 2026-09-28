@@ -14,6 +14,7 @@ import { parseCodexOutput } from '../../plugins/codex-pr-reviewer/lib/parse_outp
 import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
 import { buildGptReviewPrompt, resolvePackRepoRoot } from './pack-pr-review-contract.ts';
 import { packReviewLogsDir, resolvePackReviewRunStoreRoot } from './pack-review-run-store.ts';
+import { resolveTargetContext } from './target-context.ts';
 import { resolveNameWithOwner } from './gh-repo-resolve.mjs';
 import { resolveTrackedGhWrapper } from './gh-resolve-real-binary.mjs';
 import {
@@ -263,17 +264,17 @@ export function resolveGptBrowserConfig(env: NodeJS.ProcessEnv = process.env): G
   const profile = trim(env.PACK_GPT_BROWSER_PROFILE);
   const cdpUrl = trim(env.PACK_GPT_BROWSER_CDP) || 'http://127.0.0.1:9222';
   const chatUrl = trim(env.PACK_GPT_BROWSER_CHAT_URL);
-  const projectUrl = trim(env.PACK_GPT_BROWSER_PROJECT_URL);
   if (!profile) {
     throw new Error('PACK_GPT_BROWSER_PROFILE is required for PACK_REVIEWER=gpt');
   }
+  if (trim(env.PACK_GPT_BROWSER_PROJECT_URL)) {
+    throw new Error('PACK_GPT_BROWSER_PROJECT_URL is retired as target authority; select a project card with --project or OPK_PROJECT_ID');
+  }
+  const target = resolveTargetContext({ env });
   if (chatUrl) {
     return { profile, cdpUrl, chatUrl };
   }
-  if (projectUrl) {
-    return { profile, cdpUrl, projectUrl, newChat: true };
-  }
-  throw new Error('PACK_GPT_BROWSER_CHAT_URL or PACK_GPT_BROWSER_PROJECT_URL is required for PACK_REVIEWER=gpt');
+  return { profile, cdpUrl, projectUrl: target.browserGpt.projectUrl, newChat: true };
 }
 
 export function defaultResolvePrUrl(repoSlug: string, prNumber: number): string {
