@@ -1,6 +1,6 @@
 // @vitest-pre-topology-seconds 1
 // @vitest-ci-lane light
-import { spawnSync } from 'node:child_process';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -178,8 +178,8 @@ describe('Issue #2213 bound smoke progress writer', () => {
       const writer = buildSmokeProgressWriterCommand(runId, artifactDir);
       expect(writer).not.toContain('progress.ndjson');
       for (const args of ['1 started', '1 terminal pass']) {
-        const result = spawnSync('/bin/sh', ['-c', `${writer} ${args}`], { cwd, encoding: 'utf8' });
-        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+        const result = runProcessSync({ command: '/bin/sh', args: ['-c', `${writer} ${args}`], cwd });
+        expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
       }
       const progressPath = smokeProgressPath(artifactDir);
       const events = readFileSync(progressPath, 'utf8').trim().split(/\r?\n/u).map((line) => JSON.parse(line));
