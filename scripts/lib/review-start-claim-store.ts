@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import fs, {
   closeSync,
   existsSync,
@@ -13,7 +13,7 @@ import fs, {
 } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { hostname, platform } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export type {
@@ -27,25 +27,12 @@ export type {
 } from './review-start-claim-cli.ts';
 import type { ClaimResult, UnknownRecord } from './review-start-claim-cli.ts';
 
-interface MutexSnapshot {
-  dev: number;
-  ino: number;
-  mtimeMs: number;
-  owner: UnknownRecord | null;
-}
-
-const originalRmSync = fs.rmSync.bind(fs);
 const originalRenameSync = fs.renameSync.bind(fs);
-const originalStatSync = fs.statSync.bind(fs);
 const originalReadFileSync = fs.readFileSync.bind(fs);
-const originalExistsSync = fs.existsSync.bind(fs);
-const originalMkdirSync = fs.mkdirSync.bind(fs);
 const originalWriteFileSync = fs.writeFileSync.bind(fs);
 const originalOpenSync = fs.openSync.bind(fs);
 const originalCloseSync = fs.closeSync.bind(fs);
 const originalFsyncSync = fs.fsyncSync.bind(fs);
-const originalReaddirSync = fs.readdirSync.bind(fs);
-const DEFAULT_MUTEX_STALE_SECONDS = 120;
 const SUPPORTED_CLAIM_SCHEMA_VERSION = 1;
 const FULL_SHA = /^[0-9a-f]{40}$/;
 const CLAIM_FILE = /^pr-(\d+)-([0-9a-f]{40})\.json(?:\.|$)/;
@@ -70,10 +57,6 @@ function positiveInteger(value: unknown, fallback = 0): number {
 function sleep(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(1, ms));
 }
-function syncDirectory(path: string): void {
-  const fd = originalOpenSync(path, 'r');
-  try { originalFsyncSync(fd); } finally { originalCloseSync(fd); }
-}
 function processStartTicks(pid: number): string {
   if (platform() !== 'linux' || pid <= 0) return '';
   try {
@@ -92,13 +75,6 @@ function fullBootIdHash(): string {
 function bootIdHash(): string {
   return fullBootIdHash().slice(0, 16);
 }
-function ownerPath(lockDir: string): string {
-  return join(lockDir, 'owner.json');
-}
-function readMutexOwner(lockDir: string): UnknownRecord | null {
-  try { return asRecord(JSON.parse(originalReadFileSync(ownerPath(lockDir), 'utf8'))); }
-  catch { return null; }
-}
 function processIdentityAlive(owner: UnknownRecord): boolean {
   const pid = Math.trunc(asNumber(owner.pid));
   if (pid <= 0) return false;
@@ -110,26 +86,6 @@ function processIdentityAlive(owner: UnknownRecord): boolean {
   const boot = asString(owner.bootIdHash);
   return !boot || bootIdHash() === boot;
 }
-function mutexSnapshot(lockDir: string): MutexSnapshot | null {
-  try {
-    const stat = originalStatSync(lockDir);
-    return { dev: stat.dev, ino: stat.ino, mtimeMs: stat.mtimeMs, owner: readMutexOwner(lockDir) };
-  } catch { return null; }
-}
-function sameSnapshot(left: MutexSnapshot, right: MutexSnapshot): boolean {
-  const leftGuid = asString(left.owner?.processGuid);
-  const rightGuid = asString(right.owner?.processGuid);
-  if (leftGuid || rightGuid) return Boolean(leftGuid && leftGuid === rightGuid);
-  return left.dev === right.dev && left.ino === right.ino;
-}
-function staleSeconds(): number {
-  const parsed = Number(process.env.OPK_REVIEW_CLAIM_MUTEX_STALE_SECONDS ?? DEFAULT_MUTEX_STALE_SECONDS);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MUTEX_STALE_SECONDS;
-}
-function isClaimMutexDirectory(pathValue: fs.PathLike, options?: fs.RmDirOptions | fs.RmOptions): pathValue is string {
-  if (typeof pathValue !== 'string' || !options || options.recursive !== true) return false;
-  return basename(dirname(pathValue)) === '.locks' && /^pr-/.test(basename(pathValue));
-}
 function claimIdentityFromPath(pathValue: fs.PathOrFileDescriptor): { prNumber: number; headSha: string } | null {
   if (typeof pathValue !== 'string') return null;
   const match = CLAIM_FILE.exec(basename(pathValue));
@@ -137,7 +93,8 @@ function claimIdentityFromPath(pathValue: fs.PathOrFileDescriptor): { prNumber: 
 }
 function persistedIdentityTarget(pathValue: fs.PathLike): boolean {
   if (typeof pathValue !== 'string') return false;
-  return Boolean(claimIdentityFromPath(pathValue)) || basename(pathValue) === 'owner.json';
+  const name = basename(pathValue);
+  return Boolean(claimIdentityFromPath(pathValue)) || name === 'owner.json' || /^owner-[0-9a-f]{32}\.json$/.test(name);
 }
 function truncatePersistedBootHash(value: unknown): unknown {
   const record = asRecord(value);
@@ -237,78 +194,6 @@ function withClaimReadValidation<T>(operation: () => T): T {
     syncBuiltinESMExports();
   }
 }
-function restoreQuarantine(lockDir: string, quarantine: string): void {
-  if (!originalExistsSync(quarantine) || originalExistsSync(lockDir)) return;
-  try {
-    originalRenameSync(quarantine, lockDir);
-    syncDirectory(dirname(lockDir));
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT' || code === 'EEXIST' || code === 'ENOTEMPTY') return;
-    throw error;
-  }
-}
-function waitAtStaleTakeoverBarrier(): void {
-  if (process.env.OPK_VITEST_HARNESS !== '1') return;
-  const barrierDir = asString(process.env.OPK_REVIEW_CLAIM_TEST_STALE_BARRIER_DIR);
-  if (!barrierDir) return;
-  originalMkdirSync(barrierDir, { recursive: true, mode: 0o700 });
-  originalWriteFileSync(join(barrierDir, `${process.pid}.observed`), 'observed\n', 'utf8');
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    const observed = originalReaddirSync(barrierDir).filter((name) => name.endsWith('.observed')).length;
-    if (observed >= 2 && originalExistsSync(join(barrierDir, 'go'))) return;
-    sleep(10);
-  }
-  throw new Error('claim_stale_takeover_test_barrier_timeout');
-}
-
-/**
- * Owner-bound removal for the canonical persisted mutex.
- * The legacy implementation calls rmSync after a separate stale check; this hook
- * re-reads the owner, atomically moves the exact observed directory, verifies the
- * moved identity, and only then deletes the quarantine. A replacement live lease
- * is therefore never removed by an earlier stale decision.
- */
-function safeRmSync(pathValue: fs.PathLike, options?: fs.RmDirOptions | fs.RmOptions): void {
-  if (!isClaimMutexDirectory(pathValue, options)) {
-    originalRmSync(pathValue, options as fs.RmOptions);
-    return;
-  }
-
-  const lockDir = pathValue;
-  const observed = mutexSnapshot(lockDir);
-  if (!observed) return;
-  const owner = observed.owner;
-  if (owner && processIdentityAlive(owner)) {
-    if (positiveInteger(owner.pid) === process.pid) {
-      originalRmSync(lockDir, options as fs.RmOptions);
-      syncDirectory(dirname(lockDir));
-    }
-    return;
-  }
-  if (!owner && (Date.now() - observed.mtimeMs) / 1000 < staleSeconds()) return;
-
-  waitAtStaleTakeoverBarrier();
-  const quarantine = `${lockDir}.stale-${process.pid}-${randomUUID()}`;
-  try {
-    originalRenameSync(lockDir, quarantine);
-    syncDirectory(dirname(lockDir));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw error;
-  }
-
-  const moved = mutexSnapshot(quarantine);
-  if (!moved || !sameSnapshot(observed, moved) || (moved.owner && processIdentityAlive(moved.owner))) {
-    restoreQuarantine(lockDir, quarantine);
-    return;
-  }
-  originalRmSync(quarantine, { recursive: true, force: true });
-  syncDirectory(dirname(lockDir));
-}
-
-fs.rmSync = safeRmSync as typeof fs.rmSync;
 fs.renameSync = safeRenameSync as typeof fs.renameSync;
 syncBuiltinESMExports();
 const impl = await import('./review-start-claim-cli.ts');
