@@ -753,10 +753,11 @@ must not re-dispatch the same argv into it. On each existing coordinator wake or
 restart, re-read only the typed `resume_when` condition through tracked
 `scripts/gh`: `issue_closed` is satisfied only by the named Issue
 `state=closed`; `pr_merged` only by the named PR `merged=true`; and
-`{ operator: true }` waits for an operator message. When satisfied, send the
-continuation to the same Dispatch. Until a separate coordinator sweep/wake
-change lands, this resumption occurs only on those existing wakes or operator
-messages; that is a latency limitation, not permission to settle the Task.
+`{ coordinator: true }` means the existing coordinator owns clearing the named dependency and sending the
+continuation to the same Dispatch. Legacy `{ operator: true }` is input compatibility only and is normalized
+in memory to `{ coordinator: true }`; `issue_closed` and `pr_merged` are unchanged. Until a separate coordinator
+sweep/wake change lands, resumption occurs only on existing coordinator wakes; that is a latency limitation,
+not permission to settle the Task.
 
 Dispatch/re-dispatch payloads contain role plus task invariants only. Procedure
 comes from the current CLI `--help` and returned `nextAction`; do not re-paste
