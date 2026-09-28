@@ -69,8 +69,8 @@ function withPreservedDefaultTimeout(argv: readonly string[]): readonly string[]
 }
 
 /**
- * Preserve the existing state-light engine while projecting the two new causes
- * onto the already-existing conversation-scoped recovery_required result axis.
+ * Preserve the existing state-light engine while projecting reserved execution
+ * recovery causes onto the already-existing conversation-scoped recovery_required result axis.
  * This does not create a new TurnState, retry path, store, or monitor.
  */
 export async function runStateLightTurn(
