@@ -167,15 +167,21 @@ export function buildInjectionExpression() {
 }
 
 
-function isOrchestratorPackProjectTarget(target) {
-  if (typeof target.url !== 'string') return false;
+function orchestratorPackTargetKind(target) {
+  if (typeof target.url !== 'string') return null;
   try {
     const url = new URL(target.url);
-    return url.hostname === 'chatgpt.com'
-      && /\/g\/g-p-[^/]*orchestrator-pack\/project(?:\/|$)/u.test(url.pathname);
+    if (url.hostname !== 'chatgpt.com') return null;
+    if (/\/g\/g-p-[^/]*orchestrator-pack\/c\/[^/]+(?:\/|$)/u.test(url.pathname)) return 'conversation';
+    if (/\/g\/g-p-[^/]*orchestrator-pack\/project(?:\/|$)/u.test(url.pathname)) return 'project';
+    return null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+function isOrchestratorPackProjectTarget(target) {
+  return orchestratorPackTargetKind(target) !== null;
 }
 function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -190,14 +196,19 @@ export async function injectMessageStreamError({
   wait = sleep,
 } = {}) {
   const deadline = Date.now() + timeoutMs;
-  let lastWaitingStatus = 'waiting_for_project_page';
+  let lastTargetStatuses = [];
 
   while (Date.now() < deadline) {
     const targets = await list(cdp);
-    for (const target of targets) {
-      if (target.type !== 'page' || typeof target.id !== 'string'
-        || !isOrchestratorPackProjectTarget(target)
-        || typeof target.webSocketDebuggerUrl !== 'string') continue;
+    const projectTargets = targets
+      .filter((target) => target.type === 'page' && typeof target.id === 'string'
+        && isOrchestratorPackProjectTarget(target)
+        && typeof target.webSocketDebuggerUrl === 'string')
+      .sort((left, right) => Number(orchestratorPackTargetKind(right) === 'conversation')
+        - Number(orchestratorPackTargetKind(left) === 'conversation'));
+    const currentTargetStatuses = [];
+
+    for (const target of projectTargets) {
       let channel;
       try {
         channel = await connect(target);
@@ -213,14 +224,22 @@ export async function injectMessageStreamError({
             preserved_turn_node: result.preserved_turn_node,
           };
         }
-        lastWaitingStatus = result?.status ?? 'page_result_unavailable';
+        currentTargetStatuses.push({
+          target_id: target.id,
+          status: result?.status ?? 'page_result_unavailable',
+        });
       } finally {
         channel?.close();
       }
     }
+    lastTargetStatuses = currentTargetStatuses;
     await wait(Math.min(intervalMs, Math.max(0, deadline - Date.now())));
   }
-  throw new Error(`injection_timeout:${lastWaitingStatus}`);
+
+  const waitingDetails = lastTargetStatuses.length > 0
+    ? JSON.stringify(lastTargetStatuses)
+    : 'waiting_for_project_page';
+  throw new Error(`injection_timeout:${waitingDetails}`);
 }
 
 function parseArgs(argv) {

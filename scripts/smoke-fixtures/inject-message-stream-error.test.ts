@@ -217,6 +217,14 @@ async function probePage(document: FixtureDocument) {
   return await runProbe({ operation: 'inspect', cdp: 'http://127.0.0.1:9237', targetId: target.id }, dependencies);
 }
 
+function expectInjectionTimeout(targetStatuses: readonly { target_id: string; status: string }[]) {
+  return (error: unknown): boolean => {
+    assert.ok(error instanceof Error);
+    assert.equal(error.message, `injection_timeout:${JSON.stringify(targetStatuses)}`);
+    return true;
+  };
+}
+
 test('attaches to an existing project tab and injects into the active assistant turn before markdown appears', async () => {
   assert.equal(STOP_BUTTON_SELECTOR, PRODUCT_STOP_BUTTON_SELECTOR);
   const fake = fakeTurnPage({
@@ -301,4 +309,103 @@ test('injection refuses when the Stop control or assistant turn is absent', asyn
   assert.equal(waitingForTurn.status, 'waiting_for_assistant_turn');
   assert.equal(document.retryClicks, 0);
   assert.equal(stop.connected, true);
+});
+
+test('attaches to the recorded orchestrator-pack conversation route after skipping an idle project tab', async () => {
+  const { document, assistantTurn } = makeFixturePage();
+  const emptyProjectPage = new FixtureDocument([], new FixtureElement('button', { 'data-testid': 'stop-button' }, 'Stop'));
+  const projectTarget = {
+    id: 'idle-project-tab',
+    type: 'page',
+    url: 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/project',
+    webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/page/idle-project-tab',
+  };
+  const conversationTarget = {
+    id: 'recorded-conversation',
+    type: 'page',
+    url: 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/c/6ab99792-ff18-83ec-8cb6-49d560ece5d1',
+    webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/page/recorded-conversation',
+  };
+  const foreignTarget = {
+    ...conversationTarget,
+    id: 'foreign-conversation',
+    url: 'https://chatgpt.com/c/foreign',
+  };
+  const connectedTargets: string[] = [];
+  const injected = await injectMessageStreamError({
+    cdp: 'http://127.0.0.1:9237',
+    timeoutMs: 1_000,
+    list: async () => [foreignTarget, projectTarget, conversationTarget],
+    connect: async (target) => {
+      connectedTargets.push(target.id);
+      const page = target.id === 'recorded-conversation' ? document : emptyProjectPage;
+      return {
+        evaluate: async (expression: string) => await runInNewContext(expression, { document: page }),
+        close: () => undefined,
+      };
+    },
+    wait: async () => undefined,
+  });
+
+  assert.equal(injected.target_id, 'recorded-conversation');
+  assert.equal(injected.conversation_url, conversationTarget.url);
+  assert.deepEqual(connectedTargets, ['recorded-conversation']);
+  assert.equal(injected.stop_clicked, true);
+  assert.equal(injected.retry_clicked, false);
+  assert.equal(document.stopActive, false);
+  assert.equal(assistantTurn.getAttribute('data-turn-key'), `${CONVERSATION_TURN_ID_PREFIX}assistant`);
+});
+
+test('reports the project-home waiting status when no conversation target is available', async () => {
+  const emptyProjectPage = new FixtureDocument([], new FixtureElement('button', { 'data-testid': 'stop-button' }, 'Stop'));
+  const projectTarget = {
+    id: 'idle-project-tab',
+    type: 'page',
+    url: 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/project',
+    webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/page/idle-project-tab',
+  };
+  await assert.rejects(injectMessageStreamError({
+    cdp: 'http://127.0.0.1:9237',
+    timeoutMs: 1,
+    list: async () => [projectTarget],
+    connect: async () => ({
+      evaluate: async (expression: string) => await runInNewContext(expression, { document: emptyProjectPage }),
+      close: () => undefined,
+    }),
+    wait: async () => undefined,
+  }), expectInjectionTimeout([{ target_id: 'idle-project-tab', status: 'waiting_for_user_turn' }]));
+});
+
+test('reports waiting statuses for every project target instead of the last evaluated tab', async () => {
+  const { document } = makeFixturePage();
+  document.stopActive = false;
+  const emptyProjectPage = new FixtureDocument([], new FixtureElement('button', { 'data-testid': 'stop-button' }, 'Stop'));
+  const projectTarget = {
+    id: 'idle-project-tab',
+    type: 'page',
+    url: 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/project',
+    webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/page/idle-project-tab',
+  };
+  const conversationTarget = {
+    id: 'recorded-conversation',
+    type: 'page',
+    url: 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/c/6ab99792-ff18-83ec-8cb6-49d560ece5d1',
+    webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/page/recorded-conversation',
+  };
+  await assert.rejects(injectMessageStreamError({
+    cdp: 'http://127.0.0.1:9237',
+    timeoutMs: 1,
+    list: async () => [projectTarget, conversationTarget],
+    connect: async (target) => {
+      const page = target.id === 'recorded-conversation' ? document : emptyProjectPage;
+      return {
+        evaluate: async (expression: string) => await runInNewContext(expression, { document: page }),
+        close: () => undefined,
+      };
+    },
+    wait: async () => undefined,
+  }), expectInjectionTimeout([
+    { target_id: 'recorded-conversation', status: 'waiting_for_stop' },
+    { target_id: 'idle-project-tab', status: 'waiting_for_user_turn' },
+  ]));
 });
