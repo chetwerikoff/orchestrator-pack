@@ -87,7 +87,7 @@ owning Browser-GPT contract positively proves that no prior send/session must be
 preserved and independently authorizes that send. The narrow post-send exception
 owned by this runbook is the exact execute-Issue product-error recovery below.
 It starts with GitHub-first reconciliation and is available only for the reserved
-causes `message_delivery_timed_out` and `product_network_error` after exact
+causes `message_delivery_timed_out`, `product_network_error`, and `stream_recovery_polling_timed_out` after exact
 owned-turn proof.
 
 If a possible send occurred but the exact authoritative
@@ -132,13 +132,14 @@ Missing or malformed status does not prove success or failure.
 `EXECUTION_STATUS: complete` never bypasses independent current-state
 verification.
 
-The two execute-Issue product errors stay on the existing `turn-result/v1`
-contract. An authoritative exact-owned result of this form:
+The three execute-Issue product errors stay on the existing `turn-result/v1`
+contract. The `stream_recovery_polling_timed_out` cause is reserved for the
+exact rendered banner `ChatGPT stream recovery polling timed out`. An authoritative exact-owned result of this form:
 
 ```text
 state: recovery_required
 scope: conversation
-cause: message_delivery_timed_out | product_network_error
+cause: message_delivery_timed_out | product_network_error | stream_recovery_polling_timed_out
 ```
 
 is terminal evidence for that Browser-GPT turn and enters **Product-error

@@ -18,6 +18,7 @@ const DEFAULT_TIMEOUT_MS = 1_800_000;
 const EXECUTION_RECOVERY_CAUSES = new Set<ExecutionRecoveryProductCause>([
   'message_delivery_timed_out',
   'product_network_error',
+  'stream_recovery_polling_timed_out',
 ]);
 
 function projectExecutionRecoveryTerminal(value: unknown): unknown {
@@ -68,8 +69,8 @@ function withPreservedDefaultTimeout(argv: readonly string[]): readonly string[]
 }
 
 /**
- * Preserve the existing state-light engine while projecting the two new causes
- * onto the already-existing conversation-scoped recovery_required result axis.
+ * Preserve the existing state-light engine while projecting reserved execution
+ * recovery causes onto the already-existing conversation-scoped recovery_required result axis.
  * This does not create a new TurnState, retry path, store, or monitor.
  */
 export async function runStateLightTurn(

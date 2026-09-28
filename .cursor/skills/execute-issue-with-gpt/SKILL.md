@@ -104,11 +104,13 @@ The shared Browser-GPT runbook remains the sole owner of one-turn launch,
 observation, attribution, recovery, retry/no-resend, publication, and tab
 mechanics.
 
-For execute-Issue recovery, the two reserved product causes are
-`message_delivery_timed_out` and `product_network_error`. They stay on the
+For execute-Issue recovery, the three reserved product causes are
+`message_delivery_timed_out`, `product_network_error`, and
+`stream_recovery_polling_timed_out`. The last cause is reserved for the exact
+rendered banner `ChatGPT stream recovery polling timed out`. They stay on the
 existing `turn-result/v1` axis as `state: recovery_required` with
 `scope: conversation`; they do not introduce a new turn state. An authoritative
-owned result with either cause enters the execution runbook's GitHub-first
+owned result with any reserved cause enters the execution runbook's GitHub-first
 reconciliation immediately. At the existing 30-minute checkpoint, use
 `browser-gpt-page-probe inspect` only as observation: its normalized
 `execution_recovery_cause` must be combined with exact owned-turn, reply, and
