@@ -1,7 +1,7 @@
 // Issue #1937 keeps the existing UI adapter implementation isolated below and
 // adds one narrow execute-Issue recovery classifier at the public adapter edge.
 // All ordinary Browser-GPT behavior continues to delegate to the existing
-// implementation; this file owns only the two exact product-error literals and
+// implementation; this file owns the reserved exact product-error literals and
 // their bounded owned-turn confirmation.
 export * from './ui-adapter-base.ts';
 
@@ -214,13 +214,12 @@ function emptyClassification(
 }
 
 /**
- * Sole matcher/owned-turn classifier for the two execute-Issue product errors.
- * Product text alone is never recovery authority: the exact owned prompt must
- * be unique, the banner must be a bounded descendant of the assistant carrier
- * in the structural successor conversation-turn, that same carrier must hold
- * regenerate-thread-error-button, generation must be positively stopped unless
- * the exact evidence is confirmed by two stable reads, and no later user turn or
- * extra assistant carrier may be present.
+ * Sole matcher/owned-turn classifier for the reserved execute-Issue product
+ * errors. Product text alone is never recovery authority: every cause requires
+ * a unique exact owned prompt and stopped generation. Delivery/network causes
+ * retain the successor-assistant-carrier and same-carrier Retry gates. The
+ * stream-recovery timeout additionally accepts the exact product-status banner
+ * with the same unique owned marker when role-bearing message nodes disappeared.
  */
 export function classifyExecutionRecoveryProductError(
   evidence: ExecutionRecoveryProductErrorEvidence,
