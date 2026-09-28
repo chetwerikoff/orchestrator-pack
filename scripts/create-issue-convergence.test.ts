@@ -1155,7 +1155,7 @@ describe('create-Issue send-boundary adoption', () => {
         pause: {
           remedy: 'restore tracked GitHub access, then resume this Dispatch',
           evidence: 'gh api returned HTTP 503',
-          resume_when: { operator: true },
+          resume_when: { coordinator: true },
         },
         nextAction: null,
       });
@@ -1672,7 +1672,7 @@ describe('zero-send manager result is action or structured reason (Issue #1999)'
       ok: false,
       cause: 'external:github_unavailable',
       pause: {
-        resume_when: { operator: true },
+        resume_when: { coordinator: true },
         evidence: 'GitHub HTTP 503 unavailable',
       },
       nextAction: null,
