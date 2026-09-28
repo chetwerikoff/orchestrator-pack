@@ -219,18 +219,32 @@ describe('Vitest CI runner actual fail-closed control flow', () => {
     expect(subprocess.run.mock.calls.filter(([input]) => input.args?.[0] === 'test')).toHaveLength(2);
   });
 
-  it('cleans every heavy-shard report and metadata file before returning', async () => {
+  it('keeps the aggregate heavy-shard report for workflow upload and cleans per-invocation reports', async () => {
     const shard = 2159;
     const file = 'scripts/control-heavy-hygiene.test.ts';
     scenario.heavyPlan = { shard, files: [file], totalRuntimeMs: 1 };
     scenario.filePlans[file] = { mode: 'file', pool: 'threads' };
     scenario.npm.push({ ok: true, writeReport: true });
     const statusBefore = await worktreeStatus();
-    const reportPrefix = `.vitest-runtime-report-heavy-${shard}`;
+    const aggregateReport = `.vitest-runtime-report-heavy-${shard}.json`;
+    const aggregateMeta = `${aggregateReport}.meta.json`;
+    const partialReport = `.vitest-runtime-report-heavy-${shard}-1-${file.replace(/[^\w.-]+/gu, '_')}.json`;
+    touched.add(aggregateMeta);
+
+    expect(existsSync(aggregateReport)).toBe(false);
+    expect(existsSync(aggregateMeta)).toBe(false);
 
     await expect(main(['heavy', '--shard', String(shard)])).resolves.toBe(0);
 
-    expect(readdirSync(process.cwd()).filter((name) => name.startsWith(reportPrefix))).toEqual([]);
+    expect(existsSync(aggregateReport)).toBe(true);
+    expect(existsSync(aggregateMeta)).toBe(true);
+    expect(existsSync(partialReport)).toBe(false);
+    const mergeCall = subprocess.run.mock.calls.find(([input]) => (
+      input.args?.[0]?.endsWith('vitest-json-report.mjs') && input.args?.[1] === 'merge'
+    ));
+    expect(mergeCall?.[0].args).toContain(path.join(process.cwd(), partialReport));
+    rmSync(aggregateReport, { force: true });
+    rmSync(aggregateMeta, { force: true });
     const statusAfter = await worktreeStatus();
     if (statusBefore === '') expect(statusAfter).toBe('');
     else expect(statusAfter).toBe(statusBefore);
