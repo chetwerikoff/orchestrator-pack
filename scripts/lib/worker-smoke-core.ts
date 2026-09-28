@@ -811,11 +811,12 @@ function admitHistoryComment(
     const partial = base.parseSmokeAgentReport(reportBlocks[0]?.[0] ?? '');
     if (!partial) candidate.invalidReason = 'canonical_report_parse_failed';
     else {
+      const carryOnly = isCarryOnlySelectivePass(partial, candidate.headSha);
       const normalized = normalizeSmokeReport(partial, {
         issueNumber: target.issueNumber,
         prNumber: target.prNumber,
         headSha: candidate.headSha,
-      });
+      }, carryOnly ? { executionMode: 'carry-only' } : {});
       if (!normalized.ok) candidate.invalidReason = normalized.reason;
       else {
         const strictReason = strictReportReason(normalized.report);
