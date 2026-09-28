@@ -5,8 +5,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { runProcessSync } from '../../../scripts/kernel/subprocess.ts';
 
 const SKILL_DIR = dirname(fileURLToPath(import.meta.url));
 const LOCAL_CONFIG = join(SKILL_DIR, 'local.config.json');
@@ -39,8 +39,13 @@ function cardDirectory() {
 function resolveTarget(projectId) {
   const args = ['--experimental-strip-types', TARGET_CONTEXT, 'check'];
   if (projectId) args.push('--project', projectId);
-  const child = spawnSync(process.execPath, args, { encoding: 'utf8', env: process.env, windowsHide: true });
-  if (child.status !== 0) {
+  const child = runProcessSync({
+    command: process.execPath,
+    args,
+    env: process.env,
+    inheritParentEnv: true,
+  });
+  if (!child.ok) {
     let detail = String(child.stderr || child.error || '').trim();
     try { const parsed = JSON.parse(detail); detail = parsed.message || detail; } catch { /* exact resolver diagnostic */ }
     throw new Error(
