@@ -50,12 +50,19 @@ The supervisor owns **completion continuity**, not substantive implementation.
    no duplicate prompt, and no guessed identity.
 7. Never take over the substantive Issue implementation merely because manager
    recovery is required.
-8. For a manager-controlled Browser-GPT implementation, consume the manager's
-   settled pack-review handoff instead of treating manager completion as overall
-   completion. Launch or reuse the existing supervised local worker as the
-   independent-smoke parent for the exact handed-off PR/head. The parent execute
-   workflow stays alive until that exact-head independent smoke passes and a
-   fresh final current-state verification succeeds.
+8. For a manager-controlled Browser-GPT implementation, treat settled pack
+   review as a nonterminal handoff, not manager-role completion. Keep the same
+   manager Dispatch alive while the supervisor launches or reuses the existing
+   supervised local worker as the independent-smoke parent for the exact
+   handed-off PR/head. When the canonical durable exact-head
+   `pack-worker-smoke-report/v1` is observable, continue that same manager
+   Dispatch through the existing continuation channel; the manager re-reads the
+   authoritative smoke record and projects it through the shared boundary.
+   PASS may then complete the manager role. A proved
+   `scenario_assertion_failed` completed/FAIL returns to the existing
+   fixer/local-worker owner for a new head and fresh independent smoke; settled
+   pack review stays complete. The parent execute workflow stays alive until
+   exact-head independent smoke passes and fresh final verification succeeds.
 
 Supervisor launch and recovery remain governed by
 [`docs/orchestration-runbook.md`](../../../docs/orchestration-runbook.md) and the
