@@ -6,6 +6,7 @@ import { runProcessSync } from '../kernel/subprocess.ts';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveTargetContext } from '../lib/target-context.ts';
 
 export type FleetPaneState = 'busy' | 'STOPPED' | 'POLLING' | 'PARKED';
 
@@ -36,6 +37,7 @@ export interface FleetPollingStore {
 }
 
 export interface FleetSweepOptions {
+  readonly projectId?: string;
   readonly primary: string;
   readonly workspaceRe?: RegExp;
   readonly coordinatorHandle?: string;
@@ -148,10 +150,11 @@ export class FleetScreenReadError extends Error {
 export class FileFleetStateStore implements FleetPollingStore {
   readonly root: string;
 
-  constructor(primary: string, env: NodeJS.ProcessEnv = process.env) {
+  constructor(projectId: string, env: NodeJS.ProcessEnv = process.env) {
     const runtime = env.XDG_RUNTIME_DIR?.trim();
     if (!runtime) throw new Error('XDG_RUNTIME_DIR is required for fleet-sweep state');
-    this.root = join(runtime, 'fleet-sweep', basename(resolve(primary)));
+    if (!projectId.trim()) throw new Error('projectId is required for fleet-sweep state');
+    this.root = join(runtime, 'fleet-sweep', projectId.trim());
   }
 
   private pollingPath(handle: string): string {
@@ -295,7 +298,7 @@ export function classifyFleetPane(
 
 export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[] {
   const executor = options.executor ?? defaultOrcaExecutor;
-  const store = options.store ?? new FileFleetStateStore(options.primary);
+  const store = options.store ?? new FileFleetStateStore(options.projectId ?? '');
   const terminals = options.terminals ?? listFleetTerminals(executor);
   const selected = selectAgentTerminals(
     terminals,
@@ -334,29 +337,30 @@ export function formatFleetSweep(observations: readonly FleetPaneObservation[]):
 }
 
 interface SweepCliOptions {
+  projectId: string;
   primary: string;
-  workspaceRe?: RegExp;
+  workspaceRe: RegExp;
+  coordinatorTitleRe: RegExp;
   busyRe?: RegExp;
   lines: number;
   json: boolean;
 }
 
-export function parseSweepCli(argv: readonly string[], cwd = process.cwd()): SweepCliOptions {
-  let primary = cwd;
-  let workspaceRaw: string | undefined;
+export function parseSweepCli(
+  argv: readonly string[],
+  _cwd = process.cwd(),
+  env: NodeJS.ProcessEnv = process.env,
+): SweepCliOptions {
+  let projectId: string | undefined;
   let busyRaw: string | undefined;
   let lines = 4;
   let json = false;
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
-    if (token === '--primary') {
+    if (token === '--project') {
       const value = argv[++index];
-      if (!value) throw new Error('--primary requires a path');
-      primary = value;
-    } else if (token === '--workspace-re') {
-      const value = argv[++index];
-      if (!value) throw new Error('--workspace-re requires a pattern');
-      workspaceRaw = value;
+      if (!value) throw new Error('--project requires an id');
+      projectId = value;
     } else if (token === '--busy-re') {
       const value = argv[++index];
       if (!value) throw new Error('--busy-re requires a pattern');
@@ -368,14 +372,17 @@ export function parseSweepCli(argv: readonly string[], cwd = process.cwd()): Swe
     } else if (token === '--json') {
       json = true;
     } else if (token === '--help' || token === '-h') {
-      throw new Error('Usage: fleet-sweep [--primary <path>] [--workspace-re <regex>] [--busy-re <regex>] [--lines <n>] [--json]');
+      throw new Error('Usage: fleet-sweep [--project <id>] [--busy-re <regex>] [--lines <n>] [--json]');
     } else {
       throw new Error(`unknown argument: ${token}`);
     }
   }
+  const target = resolveTargetContext({ projectId, env });
   return {
-    primary,
-    ...(workspaceRaw ? { workspaceRe: compileRegex(workspaceRaw, defaultWorkspaceRegex(primary)) } : {}),
+    projectId: target.projectId,
+    primary: target.primaryRoot,
+    workspaceRe: compileRegex(target.orcaWorkspacePattern, defaultWorkspaceRegex(target.primaryRoot)),
+    coordinatorTitleRe: compileRegex(target.orchestratorTitlePattern, DEFAULT_ORCHESTRATOR_TITLE_RE),
     ...(busyRaw ? { busyRe: compileRegex(busyRaw, DEFAULT_BUSY_RE) } : {}),
     lines,
     json,
