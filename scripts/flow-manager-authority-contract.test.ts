@@ -51,6 +51,10 @@ import {
   createIssueEscalationThreadId,
   evaluateCreateIssueManagerBoundary,
 } from './lib/create-issue-manager-boundary.ts';
+import {
+  classifyExecuteIssueManagerRecord,
+  type ExecuteIssueManagerBoundaryContext,
+} from './lib/execute-issue-manager-boundary.ts';
 
 const contract = readFileSync(new URL('../.cursor/skills/create-issue-draft/SKILL.md', import.meta.url), 'utf8');
 const defaultGhTransportSlot = vi.hoisted(() => ({
@@ -1786,6 +1790,99 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     expect(orchestrationRunbook).toContain(
       'does not wait for scheduler\n`ready_for_review`',
     );
+  });
+
+  it('keeps the same manager Dispatch live through settled review, independent smoke, and fixer return', () => {
+    const headSha = 'a'.repeat(40);
+    const managerContext: ExecuteIssueManagerBoundaryContext = {
+      repository: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 2182,
+      sourceRevision: 'r03',
+      phase: 'implementation',
+      productionArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'],
+      prNumber: 2219,
+      headSha,
+    };
+    const dispatch = {
+      id: 'dispatch-2182',
+      reviewStageComplete: true,
+      terminal: false,
+      continuations: [] as string[],
+      localFixes: 0,
+    };
+    const continueSmoke = (record: Record<string, unknown>) => {
+      expect(dispatch.terminal).toBe(false);
+      dispatch.continuations.push(dispatch.id);
+      return classifyExecuteIssueManagerRecord(record, managerContext);
+    };
+
+    const fail = continueSmoke({
+      schema: 'pack-worker-smoke-report/v1',
+      producer: 'orchestrator-pack/worker-smoke-run/v1',
+      issueNumber: 2182,
+      prNumber: 2219,
+      headSha,
+      result: 'FAIL',
+      trackedFilesUnmodified: false,
+      causeFamily: 'scenario_assertion_failed',
+      nonPassCause: 'executed_scenario_failure',
+      scenarios: [{
+        action: 'exercise current behavior',
+        expected: 'acceptance assertion holds',
+        observed: 'assertion mismatch',
+        outcome: 'fail',
+        causeFamily: 'scenario_assertion_failed',
+      }],
+    });
+    expect(fail).toMatchObject({
+      exitCode: 0,
+      result: {
+        ok: true,
+        verdict: 'FAIL',
+        cause: 'execute_worker_smoke_assertion_failed',
+        nextAction: null,
+      },
+    });
+    if (fail.result.ok && fail.result.verdict === 'FAIL') dispatch.localFixes += 1;
+    expect(dispatch).toMatchObject({
+      reviewStageComplete: true,
+      terminal: false,
+      localFixes: 1,
+    });
+
+    const pass = continueSmoke({
+      schema: 'pack-worker-smoke-report/v1',
+      producer: 'orchestrator-pack/worker-smoke-run/v1',
+      issueNumber: 2182,
+      prNumber: 2219,
+      headSha,
+      result: 'PASS',
+      trackedFilesUnmodified: true,
+      scenarios: [{
+        action: 'exercise current behavior',
+        expected: 'acceptance assertion holds',
+        observed: 'acceptance assertion holds',
+        outcome: 'pass',
+      }],
+    });
+    expect(pass).toMatchObject({
+      exitCode: 0,
+      result: {
+        ok: true,
+        verdict: 'PASS',
+        cause: 'execute_worker_smoke_pass',
+        nextAction: null,
+      },
+    });
+    expect(dispatch.continuations).toEqual(['dispatch-2182', 'dispatch-2182']);
+    expect(dispatch.reviewStageComplete).toBe(true);
+    expect(dispatch.terminal).toBe(false);
+
+    expect(executeSkill).toContain('Keep the same\n   manager Dispatch alive');
+    expect(executionRunbook).toContain('the same manager Dispatch remains alive');
+    expect(executionRunbook).toContain('classifyExecuteIssueManagerRecord');
+    expect(orchestrationRunbook).toContain('the same manager Dispatch remains nonterminal');
+    expect(smokeRunbook).toContain('does not reopen a completed pack-review stage');
   });
 
   it('keeps ordinary worker smoke-before-review while exempting only the manager-controlled Browser-GPT path', () => {
