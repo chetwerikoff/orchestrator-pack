@@ -1,0 +1,27 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2221,
+  "declared_paths": [
+    "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/pack-review-ordering.test.ts",
+    "scripts/pack-review-state.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/lib/worker-smoke-core.ts",
+    "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/lib/worker-smoke-selective-carry.test.ts",
+    "scripts/pack-review-ordering.test.ts",
+    "scripts/pack-review-state.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "source_revision": "a5211880c3258b8a5b3b0c8be9a33bdb32b3c60a"
+}
