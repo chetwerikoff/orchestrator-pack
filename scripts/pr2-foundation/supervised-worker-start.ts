@@ -24,6 +24,7 @@ import {
 import { withCurrentWorkerAssignmentFence } from '../lib/worker-assignment-store.ts';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
 import type { RuntimeAdapter } from '../runtime/contracts.ts';
+import { resolveTargetContext } from '../lib/target-context.ts';
 
 export interface SupervisedWorkerStartReceipt {
   readonly runId?: string;
@@ -759,29 +760,33 @@ function countFlag(args: readonly string[], name: string): number {
   return args.filter((arg) => arg === name).length;
 }
 
-function parseStartCli(argv: readonly string[]): {
+function parseStartCli(argv: readonly string[], env: NodeJS.ProcessEnv = process.env): {
   mode?: WorkerStartMode;
   issueNumber?: number;
   repository: string;
-  projectId?: string;
+  projectId: string;
   role?: string;
   delegatedIntegration?: DelegatedIntegrationMarker;
   orcaArgs: string[];
 } {
   const separator = argv.indexOf('--');
-  if (separator < 0) throw new Error('usage: supervised-worker-start [--issue-number N] --repository owner/repo [--project-id id] --role worker|orchestrator [--delegated-integration JSON] -- --task task_id --terminal handle --worktree selector ...');
+  if (separator < 0) throw new Error('usage: supervised-worker-start [--project id] [--repository owner/repo] [--issue-number N] --role worker|orchestrator [--delegated-integration JSON] -- --task task_id --terminal handle --worktree selector ...');
   const own = argv.slice(0, separator);
   const orcaArgs = argv.slice(separator + 1);
-  if (countFlag(own, '--role') !== 1) {
-    throw new Error('exactly one --role worker|orchestrator is required');
-  }
+  if (countFlag(own, '--role') !== 1) throw new Error('exactly one --role worker|orchestrator is required');
+  if (countFlag(own, '--project') > 1) throw new Error('at most one --project is allowed');
+  if (countFlag(own, '--repository') > 1) throw new Error('at most one --repository is allowed');
   if (countFlag(own, '--mode') > 1) throw new Error('at most one --mode is allowed');
-  if (countFlag(own, '--delegated-integration') > 1) {
-    throw new Error('at most one --delegated-integration is allowed');
-  }
+  if (countFlag(own, '--delegated-integration') > 1) throw new Error('at most one --delegated-integration is allowed');
+  if (own.includes('--project-id')) throw new Error('--project-id is not a target selector; use --project <id>');
   const modeRaw = optionValue(own, '--mode');
   if (modeRaw && modeRaw !== 'exact_terminal_worktree' && modeRaw !== 'provider_new_top_level') {
     throw new Error('--mode must be exact_terminal_worktree|provider_new_top_level');
+  }
+  const target = resolveTargetContext({ projectId: optionValue(own, '--project'), env });
+  const explicitRepository = optionValue(own, '--repository').toLowerCase();
+  if (explicitRepository && explicitRepository !== target.repository) {
+    throw new Error(`--repository ${explicitRepository} disagrees with selected project card repository ${target.repository}`);
   }
   const issueNumberRaw = optionValue(own, '--issue-number');
   const delegatedIntegrationRaw = optionValue(own, '--delegated-integration');
@@ -796,33 +801,37 @@ function parseStartCli(argv: readonly string[]): {
     }
   }
   return {
-    ...(optionValue(own, '--mode') ? { mode: optionValue(own, '--mode') as WorkerStartMode } : {}),
+    ...(modeRaw ? { mode: modeRaw as WorkerStartMode } : {}),
     ...(issueNumberRaw ? { issueNumber: Number(issueNumberRaw) } : {}),
-    repository: optionValue(own, '--repository'),
-    ...(optionValue(own, '--project-id') ? { projectId: optionValue(own, '--project-id') } : {}),
+    repository: target.repository,
+    projectId: target.projectId,
     role: optionValue(own, '--role'),
     ...(delegatedIntegration ? { delegatedIntegration } : {}),
     orcaArgs,
   };
 }
 
-function parseAttachCli(argv: readonly string[]): Parameters<typeof attachSupervisedWorkerIssue>[0] {
-  const projectId = optionValue(argv, '--project-id');
+function parseAttachCli(argv: readonly string[], env: NodeJS.ProcessEnv = process.env): Parameters<typeof attachSupervisedWorkerIssue>[0] {
+  const target = resolveTargetContext({ projectId: optionValue(argv, '--project'), env });
+  const explicitRepository = optionValue(argv, '--repository').toLowerCase();
+  if (explicitRepository && explicitRepository !== target.repository) {
+    throw new Error(`--repository ${explicitRepository} disagrees with selected project card repository ${target.repository}`);
+  }
   return {
-    repository: optionValue(argv, '--repository'),
+    repository: target.repository,
     issueNumber: Number(optionValue(argv, '--issue-number')),
     taskId: optionValue(argv, '--task-id'),
     dispatchId: optionValue(argv, '--dispatch-id'),
     assignmentId: optionValue(argv, '--assignment-id'),
     generation: Number(optionValue(argv, '--generation')),
-    ...(projectId ? { projectId } : {}),
+    projectId: target.projectId,
   };
 }
 
 async function main(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
   const result = argv[0] === 'attach-issue'
-    ? await attachSupervisedWorkerIssue(parseAttachCli(argv.slice(1)))
-    : await runSupervisedWorkerStart(parseStartCli(argv));
+    ? await attachSupervisedWorkerIssue(parseAttachCli(argv.slice(1), process.env))
+    : await runSupervisedWorkerStart(parseStartCli(argv, process.env));
   process.stdout.write(`${JSON.stringify(result)}\n`);
   if (!result.ok) process.exitCode = 1;
 }
