@@ -1362,7 +1362,15 @@ describe('supervised Task launch assistant', () => {
   });
 
   it('CLI requires explicit work class and preserves manager argument shapes', () => {
-    expect(parseLaunchAssistantCli(['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 'manager', '--run', 'run-1', '--task', 'task-1', '--worktree', 'id:w'])).toMatchObject({
+    expect(parseLaunchAssistantCli(
+      ['--project', 'orchestrator-pack', '--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 'manager', '--run', 'run-1', '--task', 'task-1', '--worktree', 'id:w'],
+      process.env,
+      (_input: unknown) => ({
+      projectId: 'orchestrator-pack',
+      repository: 'chetwerikoff/orchestrator-pack',
+    } as ReturnType<typeof import('../lib/target-context.ts').resolveTargetContext>),
+    )).toMatchObject({
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
       workClass: 'manager', runId: 'run-1', taskId: 'task-1', worktreeSelector: 'id:w',
     });
     expect(() => parseLaunchAssistantCli(['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 'smoke'])).toThrow(/work-class/u);
@@ -1400,7 +1408,7 @@ describe('supervised Task launch assistant', () => {
     expect(execution.ok).toBe(false);
     expect(execution.exitCode).toBe(1);
     expect(execution.stdout).toBe('');
-    expect(execution.stderr).toMatch(/worktree/u);
+    expect(execution.stderr).toMatch(/target project|worktree/u);
   });
 
   it.each([
