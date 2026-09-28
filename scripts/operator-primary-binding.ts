@@ -8,12 +8,14 @@ import {
   retireOperatorPrimary,
   type OperatorPrimaryBindingV1,
 } from './lib/worker-assignment-store.ts';
+import { resolveTargetContext } from './lib/target-context.ts';
 
 type Command = 'show' | 'bind' | 'replace' | 'retire';
 
 interface ParsedCli {
   readonly command: Command;
   readonly projectId?: string;
+  readonly repository?: string;
   readonly taskId?: string;
   readonly bindingKey?: string;
   readonly expectedCurrent?: OperatorPrimaryBindingV1;
@@ -57,7 +59,8 @@ export function parseOperatorPrimaryBindingArgs(argv: readonly string[]): Parsed
   }
 
   const knownValueFlags = new Set([
-    '--project-id',
+    '--project',
+    '--repository',
     '--task-id',
     '--binding-key',
     '--expected-task-id',
@@ -78,16 +81,17 @@ export function parseOperatorPrimaryBindingArgs(argv: readonly string[]): Parsed
     throw new Error(`unknown argument: ${arg}`);
   }
 
-  const projectId = value(args, '--project-id');
+  const projectId = value(args, '--project');
+  const repository = value(args, '--repository').toLowerCase();
   const operatorAttested = args.includes('--operator-attested');
   if (command === 'show') {
     if (operatorAttested) throw new Error('show does not accept --operator-attested');
     if (value(args, '--task-id') || value(args, '--binding-key')
       || value(args, '--expected-task-id') || value(args, '--expected-binding-key')
       || value(args, '--expected-assignment-id') || value(args, '--expected-assignment-generation')) {
-      throw new Error('show accepts only --project-id');
+      throw new Error('show accepts only --project and optional --repository assertion');
     }
-    return { command, ...(projectId ? { projectId } : {}), operatorAttested: false };
+    return { command, ...(projectId ? { projectId } : {}), ...(repository ? { repository } : {}), operatorAttested: false };
   }
 
   if (!operatorAttested) throw new Error('mutations require --operator-attested');
@@ -102,6 +106,7 @@ export function parseOperatorPrimaryBindingArgs(argv: readonly string[]): Parsed
     return {
       command,
       ...(projectId ? { projectId } : {}),
+      ...(repository ? { repository } : {}),
       taskId,
       bindingKey,
       operatorAttested: true,
@@ -116,6 +121,7 @@ export function parseOperatorPrimaryBindingArgs(argv: readonly string[]): Parsed
     return {
       command,
       ...(projectId ? { projectId } : {}),
+      ...(repository ? { repository } : {}),
       expectedCurrent,
       operatorAttested: true,
     };
@@ -138,7 +144,17 @@ export async function runOperatorPrimaryBindingCommand(
   parsed: ParsedCli,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<Record<string, unknown>> {
-  const file = resolveWorkerAssignmentStorePath(parsed.projectId, env);
+  const target = resolveTargetContext({ projectId: parsed.projectId, env });
+  if (parsed.repository && parsed.repository !== target.repository) {
+    return {
+      ok: false,
+      reason: 'repository_project_mismatch',
+      repository: parsed.repository,
+      expectedRepository: target.repository,
+      cardPath: target.cardPath,
+    };
+  }
+  const file = resolveWorkerAssignmentStorePath(target.projectId, env);
   if (parsed.command === 'show') {
     const current = readOperatorPrimaryBinding(file);
     if (!current.ok) {
