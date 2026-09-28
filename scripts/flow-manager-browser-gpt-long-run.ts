@@ -63,6 +63,7 @@ const FLOW_MANAGER_BROWSER_GPT_CLI = {
     { flag: '--stage-attempt-id', value: 'id' },
     { flag: '--terminal-input-bundle', value: 'path' },
     { flag: '--review-dir', value: 'path' },
+    { flag: '--project', value: 'id' },
     { flag: '--project-url', value: 'url' },
     { flag: '--operator-browser-config', value: 'absolute-path' },
     { flag: '--timeout-ms', value: 'ms' },
@@ -442,6 +443,7 @@ export async function runBrowserAdapter(
       repository: binding.repository,
       cwd,
       operatorBrowserConfig,
+      projectId: typeof options.get('project') === 'string' ? options.get('project') as string : undefined,
       binding,
       retryArgv,
     });
@@ -449,6 +451,12 @@ export async function runBrowserAdapter(
       return projectPreflightFailure(argv, preflight);
     }
     browserChildEnv = preflight.childEnv;
+    if (resolvedProjectUrl && resolvedProjectUrl !== preflight.config.projectUrl) {
+      return refuse(argv, 'project_url_target_context_mismatch', {
+        cardPath: preflight.config.cardPath,
+        projectId: preflight.config.projectId,
+      });
+    }
     resolvedProjectUrl = preflight.config.projectUrl;
 
     let liveRevision = '';
