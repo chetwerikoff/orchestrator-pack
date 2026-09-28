@@ -449,8 +449,10 @@ observation** exactly.
 ### Settled-review manager handoff
 
 After required review obligations settle, the manager performs fresh exact-state
-reads and completes its own role through the existing manager -> supervisor
-Task/Dispatch handoff. The handoff carries at least:
+reads and emits the existing manager -> supervisor Task/Dispatch handoff **without
+completing the manager role**. This settled-review handoff is nonterminal: the same
+manager Dispatch remains alive while the supervisor owns independent-smoke launch
+or reuse. The handoff carries at least:
 
 - Issue number and URL;
 - PR number and URL;
@@ -461,18 +463,24 @@ Task/Dispatch handoff. The handoff carries at least:
   existing authority;
 - next legal action: **launch local independent-smoke worker**.
 
-This is not a new durable terminal state. Manager whole-role completion ends only
-the manager role; the parent execute-Issue workflow remains alive. The manager
-does not run independent smoke itself.
+This is not a new durable terminal state and it is not manager whole-role
+completion. The manager does not run independent smoke itself.
 
 The supervisor then follows `docs/orchestration-runbook.md`: launch or reuse the
 existing supervised local worker as the independent-smoke parent for the exact
 handed-off PR/head. That worker prepares current prerequisites and invokes the
-existing `worker-smoke-run ... --smoke-actor independent` path. A smoke finding
-is fixed by that local worker on a new head and followed by fresh independent
-smoke; settled pack review does not reopen. Overall `VERIFIED_COMPLETE` is
-possible only after independent smoke passes on the final exact head and the
-fresh final verification below succeeds.
+existing `worker-smoke-run ... --smoke-actor independent` path. When the
+canonical durable exact-head `pack-worker-smoke-report/v1` becomes observable,
+the supervisor continues the **same manager Dispatch** through the existing
+Task/Dispatch continuation channel. The manager re-reads that authoritative
+record and projects it through `classifyExecuteIssueManagerRecord`: exact-head
+PASS may complete the manager role; a proved
+`scenario_assertion_failed` completed/FAIL returns to the existing
+fixer/local-worker owner for a new head and fresh independent smoke; recoverable,
+external_pause, and contract_defect retain the shared boundary semantics.
+Settled pack review does not reopen. Overall `VERIFIED_COMPLETE` is possible
+only after independent smoke passes on the final exact head and the fresh final
+verification below succeeds.
 
 ## Independent GitHub Definition-of-Done verification
 
@@ -501,7 +509,8 @@ is not completion evidence.
 Before the manager's settled-review handoff, a concrete implementation or fixer
 gap returns to the owning implementation/fixer conversation as defined above.
 After the handoff, independent-smoke findings belong to the supervisor-launched
-local worker: that worker fixes to a new head and runs fresh independent smoke;
+local worker: that worker fixes to a new head and runs fresh independent smoke,
+whose canonical durable report is continued back to the same manager Dispatch;
 the completed pack-review stage does not reopen. A red required CI check,
 missing scoped file, unresolved material review finding, stale exact-head smoke,
 or another live Issue acceptance gap remains non-completion evidence. If an
