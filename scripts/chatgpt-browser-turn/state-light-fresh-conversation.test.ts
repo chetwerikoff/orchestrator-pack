@@ -2223,7 +2223,7 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
     ]);
   }
 
-  function recoveryPage(sequence: ReadonlyArray<'generating' | 'banner'>) {
+  function recoveryPage(sequence: ReadonlyArray<'generating' | 'banner'>, bannerText = timeoutText) {
     let sent = false;
     let filled = '';
     let observationIndex = 0;
@@ -2265,7 +2265,7 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
           selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]` ? { getAttribute: () => 'user-message' } : null
         ),
       };
-      const assistantInner = phase === 'banner' ? `${timeoutText}\n\nRetry` : 'working';
+      const assistantInner = phase === 'banner' ? `${bannerText}\n\nRetry` : 'working';
       const assistant = {
         getAttribute: (name: string) => (name === MESSAGE_AUTHOR_ROLE_ATTR ? 'assistant-message' : null),
         innerText: assistantInner,
@@ -2275,7 +2275,7 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
             : null
         ),
         querySelectorAll: (selector: string) => (
-          selector === 'p' && phase === 'banner' ? [{ innerText: timeoutText }] : []
+          selector === 'p' && phase === 'banner' ? [{ innerText: bannerText }] : []
         ),
         querySelector: (selector: string) => (
           selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
@@ -2410,6 +2410,25 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
     expect(fake.retryClicks).not.toHaveBeenCalled();
     expect(fake.close).not.toHaveBeenCalled();
     expect(outcome.result.cleanup).not.toBe('confirmed');
+  });
+
+  it('projects exact message stream errors through the existing conversation recovery result', async () => {
+    const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
+    vi.mocked(uiAdapter.productStatusText).mockImplementation(actual.productStatusText);
+    vi.mocked(uiAdapter.classifyProductWall).mockImplementation(actual.classifyProductWall);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-STREAM-ERROR'));
+    const fake = recoveryPage(['generating', 'banner'], 'Error in message stream');
+    const outcome = await runExistingChat(fake.page, join(integrationStateDir, 'stream-error.txt'));
+    expect(outcome.result).toMatchObject({
+      schema: 'turn-result/v1',
+      state: 'recovery_required',
+      scope: 'conversation',
+      cause: 'message_stream_error',
+      send_count: 1,
+    });
+    expect(fake.getSends()).toBe(1);
+    expect(fake.retryClicks).not.toHaveBeenCalled();
+    expect(fake.close).not.toHaveBeenCalled();
   });
 
   it('keeps polling with no wall while generation stays active and the banner is absent', async () => {
