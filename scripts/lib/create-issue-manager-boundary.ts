@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import {
   createIssueExternalPauseResult,
   createIssueRecoverableResult,
-  normalizeLegacyResumePredicateInManagerResult,
   validateCreateIssueManagerResult,
   type CreateIssueActionBinding,
   type CreateIssueContractDefectResult,
@@ -150,21 +149,17 @@ function classifyThrown(input: CreateIssueManagerBoundaryInput, error: unknown):
   return defect(input.producer, 'producer_contract_defect', [message]);
 }
 
-function evaluateCreateIssueManagerBoundaryCandidate(
+export function evaluateCreateIssueManagerBoundary(
   input: CreateIssueManagerBoundaryInput,
-  legacyRead: boolean,
 ): CreateIssueManagerBoundaryEvaluation {
   let candidate: CreateIssueManagerResult;
   try {
     const value = input.produce();
-    const readableValue = legacyRead
-      ? normalizeLegacyResumePredicateInManagerResult(value)
-      : value;
-    const errors = validateCreateIssueManagerResult(readableValue);
+    const errors = validateCreateIssueManagerResult(value);
     if (errors.length > 0) {
       candidate = defect(input.producer, 'producer_contract_defect', errors);
     } else {
-      candidate = readableValue as CreateIssueManagerResult;
+      candidate = value as CreateIssueManagerResult;
     }
   } catch (error) {
     candidate = classifyThrown(input, error);
@@ -183,17 +178,7 @@ function evaluateCreateIssueManagerBoundaryCandidate(
   };
 }
 
-export function evaluateCreateIssueManagerBoundary(
-  input: CreateIssueManagerBoundaryInput,
-): CreateIssueManagerBoundaryEvaluation {
-  return evaluateCreateIssueManagerBoundaryCandidate(input, false);
-}
-
-export function evaluateLegacyCreateIssueManagerBoundaryRead(
-  input: CreateIssueManagerBoundaryInput,
-): CreateIssueManagerBoundaryEvaluation {
-  return evaluateCreateIssueManagerBoundaryCandidate(input, true);
-}
+export { evaluateLegacyCreateIssueManagerBoundaryRead } from './create-issue-next-action.ts';
 
 export function createIssueManagerExitCode(result: CreateIssueManagerResult): 0 | 3 | 4 | 5 {
   if (result.ok === true) return 0;
