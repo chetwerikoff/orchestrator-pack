@@ -1878,8 +1878,8 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     expect(dispatch.reviewStageComplete).toBe(true);
     expect(dispatch.terminal).toBe(false);
 
-    expect(executeSkill).toContain('Keep the same\n   manager Dispatch alive');
-    expect(executionRunbook).toContain('the same manager Dispatch remains alive');
+    expect(executeSkill).toMatch(/Keep the same\s+manager Dispatch alive/);
+    expect(executionRunbook).toMatch(/the same\s+manager Dispatch remains alive/);
     expect(executionRunbook).toContain('classifyExecuteIssueManagerRecord');
     expect(orchestrationRunbook).toContain('the same manager Dispatch remains nonterminal');
     expect(smokeRunbook).toContain('does not reopen a completed pack-review stage');
