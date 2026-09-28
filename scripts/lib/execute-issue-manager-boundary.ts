@@ -630,7 +630,7 @@ function classifyWorkerSmoke(
   if (causeFamily && !isWorkerSmokeCauseFamily(causeFamily)) {
     return defect(context, producer, 'worker-smoke causeFamily is outside the closed vocabulary');
   }
-  if (causeFamily && smokeResultForWorkerSmokeCauseFamily(causeFamily) !== result) {
+  if (isWorkerSmokeCauseFamily(causeFamily) && smokeResultForWorkerSmokeCauseFamily(causeFamily) !== result) {
     return defect(context, producer, 'worker-smoke result contradicts causeFamily');
   }
 
