@@ -27,6 +27,7 @@
     "docs/chatgpt-task-execution-runbook.md",
     "scripts/browser-gpt-page-probe.test.ts",
     "scripts/browser-gpt-page-probe.ts",
+    "scripts/chatgpt-browser-turn/fixtures/fake-turn-page.ts",
     "scripts/chatgpt-browser-turn/product-page-selectors.ts",
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.ts",
@@ -36,5 +37,5 @@
     "scripts/smoke-fixtures/inject-message-stream-error.test.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "e037f9fc537b182a70162e6d598b3bb67744255d"
+  "source_revision": "b37bfbbc4cde59add0a5eaf8acbcb715d5935294"
 }
