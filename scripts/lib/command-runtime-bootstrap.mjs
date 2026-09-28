@@ -358,7 +358,7 @@ export function evaluateManagerBrowserEnvironmentPreflight(input = {}) {
     effectivePath,
     ...(input.tools ? { tools: input.tools } : {}),
   });
-  if (!runtime.ok || !runtime.tools?.packGh) {
+  const trackedGhPathFailure = () => {
     const firstGh = input.tools?.firstGh ?? resolveExecutableOnPath(effectivePath, 'gh');
     return {
       ok: false,
@@ -370,6 +370,9 @@ export function evaluateManagerBrowserEnvironmentPreflight(input = {}) {
       remedy: `put ${join(packRoot, 'scripts')} first on PATH so tracked scripts/gh is the first gh`,
       runtime,
     };
+  };
+  if ((!runtime.ok || !runtime.tools?.packGh) && runtime.reason !== 'native_gh_unresolved') {
+    return trackedGhPathFailure();
   }
 
   const config = resolveManagerBrowserOperatorConfig({
@@ -405,6 +408,11 @@ export function evaluateManagerBrowserEnvironmentPreflight(input = {}) {
       runtime,
     };
   }
+
+  // Missing workspace dependencies are a local repairable refusal. Resolve them
+  // before surfacing an unrelated missing native gh binary, while the pack
+  // wrapper and PATH ordering have already been validated above.
+  if (!runtime.ok || !runtime.tools?.packGh) return trackedGhPathFailure();
 
   return {
     ok: true,

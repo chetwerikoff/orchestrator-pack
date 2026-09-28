@@ -8,10 +8,12 @@
     "docs/chatgpt-task-execution-runbook.md",
     "docs/orchestration-runbook.md",
     "docs/worker-smoke-testing.md",
+    "scripts/command-runtime-bootstrap.test.ts",
     "scripts/create-issue-convergence.test.ts",
     "scripts/execute-issue-manager-boundary.ts",
     "scripts/flow-manager-authority-contract.test.ts",
     "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/lib/command-runtime-bootstrap.mjs",
     "scripts/lib/create-issue-manager-boundary.test.ts",
     "scripts/lib/create-issue-manager-boundary.ts",
     "scripts/lib/create-issue-next-action.ts",
@@ -42,10 +44,12 @@
     "docs/chatgpt-task-execution-runbook.md",
     "docs/orchestration-runbook.md",
     "docs/worker-smoke-testing.md",
+    "scripts/command-runtime-bootstrap.test.ts",
     "scripts/create-issue-convergence.test.ts",
     "scripts/execute-issue-manager-boundary.ts",
     "scripts/flow-manager-authority-contract.test.ts",
     "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/lib/command-runtime-bootstrap.mjs",
     "scripts/lib/create-issue-manager-boundary.test.ts",
     "scripts/lib/create-issue-manager-boundary.ts",
     "scripts/lib/create-issue-next-action.ts",
@@ -58,5 +62,5 @@
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "8b7441dcd0357a5684c4b67c1967f5b8b07835f0"
+  "source_revision": "ec993d6708b7b6b3c2c5382364ad0e2dadfaaa9f"
 }
