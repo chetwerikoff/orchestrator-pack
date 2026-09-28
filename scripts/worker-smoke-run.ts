@@ -60,6 +60,7 @@ import {
   trackedPorcelainPaths,
   verifySmokeHeadBinding,
   workerSmokeCauseFamilyForHarnessReason,
+  workerSmokeManagerNonPassCauseForHarnessReason,
   writeSmokeCancelRequest,
   type SmokeReport,
   type SmokeRunBinding,
@@ -1231,7 +1232,12 @@ function operationalReport(
     limitations: input.limitations ?? [], trackedFilesUnmodified: true,
     terminalCleanup: input.terminalCleanup ?? 'not_started', environmentNotes: input.environmentNotes ?? [],
     producer: SMOKE_REPORT_PRODUCER, orcaExecutable: input.adapterId ?? 'runtime-adapter', terminalHandle: input.worker?.id,
-    ...(causeFamily === 'pass' ? {} : { causeFamily }),
+    ...(causeFamily === 'pass' ? {} : {
+      causeFamily,
+      ...(workerSmokeManagerNonPassCauseForHarnessReason(input.observed)
+        ? { nonPassCause: workerSmokeManagerNonPassCauseForHarnessReason(input.observed) }
+        : {}),
+    }),
   };
 }
 
