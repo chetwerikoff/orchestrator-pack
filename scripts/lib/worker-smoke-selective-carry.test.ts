@@ -168,34 +168,41 @@ describe('Issue #2213 actor-sensitive selective smoke carry', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-main-merge-carry-only-source-'));
     const previousReceipts = process.env.WORKER_SMOKE_RECEIPT_ROOT;
     process.env.WORKER_SMOKE_RECEIPT_ROOT = join(root, 'receipts');
-    const git = (...args: string[]): string => {
-      const result = runProcessSync({ command: 'git', args, cwd: root });
-      if (!result.ok) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
-      return result.stdout.trim();
+    const invokeGit = (...args: string[]): string => {
+      const processResult = runProcessSync({ command: 'git', args, cwd: root });
+      if (!processResult.ok) {
+        throw new Error(`fixture git command failed (${args.join(' ')}): ${processResult.stderr}`);
+      }
+      return processResult.stdout.trim();
     };
     try {
-      git('init', '--quiet', '-b', 'main');
-      git('config', 'user.name', 'Smoke test');
-      git('config', 'user.email', 'smoke-test@example.invalid');
+      for (const args of [
+        ['init', '--quiet', '-b', 'main'],
+        ['config', 'user.name', 'Smoke test'],
+        ['config', 'user.email', 'smoke-test@example.invalid'],
+      ]) invokeGit(...args);
       mkdirSync(join(root, 'src'), { recursive: true });
       writeFileSync(join(root, 'src', 'pr-change.txt'), 'base\n', 'utf8');
-      git('add', 'src/pr-change.txt');
-      git('commit', '--quiet', '-m', 'base');
-      const originalHead = git('rev-parse', 'HEAD');
-      git('checkout', '-b', 'feature');
+      invokeGit('add', 'src/pr-change.txt');
+      invokeGit('commit', '--quiet', '-m', 'base');
+      const originalHead = invokeGit('rev-parse', 'HEAD');
+
+      invokeGit('checkout', '-b', 'feature');
       writeFileSync(join(root, 'src', 'pr-change.txt'), 'feature\n', 'utf8');
-      git('commit', '--quiet', '-am', 'PR change');
-      const sourceHead = git('rev-parse', 'HEAD');
-      git('checkout', 'main');
+      invokeGit('commit', '--quiet', '-am', 'PR change');
+      const sourceHead = invokeGit('rev-parse', 'HEAD');
+
+      invokeGit('checkout', 'main');
       mkdirSync(join(root, 'docs'), { recursive: true });
       writeFileSync(join(root, 'docs', 'main-change.md'), 'main\n', 'utf8');
-      git('add', 'docs/main-change.md');
-      git('commit', '--quiet', '-m', 'main change');
-      const mainHead = git('rev-parse', 'HEAD');
-      git('update-ref', 'refs/remotes/origin/main', mainHead);
-      git('checkout', 'feature');
-      git('merge', '--no-ff', '--no-edit', 'main');
-      const destinationHead = git('rev-parse', 'HEAD');
+      invokeGit('add', 'docs/main-change.md');
+      invokeGit('commit', '--quiet', '-m', 'main change');
+      const mainHead = invokeGit('rev-parse', 'HEAD');
+      invokeGit('update-ref', 'refs/remotes/origin/main', mainHead);
+
+      invokeGit('checkout', 'feature');
+      invokeGit('merge', '--no-ff', '--no-edit', 'main');
+      const destinationHead = invokeGit('rev-parse', 'HEAD');
 
       const sourceReport: SmokeReport = {
         result: 'PASS',
