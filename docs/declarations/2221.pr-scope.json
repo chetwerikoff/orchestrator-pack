@@ -3,6 +3,7 @@
   "issue_number": 2221,
   "declared_paths": [
     "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/lib/worker-smoke-selective-carry.test.ts",
     "scripts/pack-review-ordering.test.ts",
     "scripts/pack-review-state.ts",
     "scripts/worker-smoke-run.ts",
@@ -23,5 +24,5 @@
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "a5211880c3258b8a5b3b0c8be9a33bdb32b3c60a"
+  "source_revision": "d3807e68694b7d2540a77b75edf0ca44d58a643f"
 }

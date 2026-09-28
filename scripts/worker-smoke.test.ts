@@ -65,7 +65,6 @@ import {
   reviewIndependentRequiredCiContexts,
   resolveLiveSmokeExecutorProfile,
   resolveSmokeTarget,
-  selectSmokeAttempt,
   runDelegatedReadiness,
   runGateCheck,
   runSmokeAttempt,
@@ -329,93 +328,7 @@ describe('Issue #2161 Git main-merge carry derivation', () => {
     }
   });
 
-  it('refuses a carry-only independent PASS as the source of a later main-merge carry', () => {
-    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-main-merge-carry-only-source-'));
-    const previousReceipts = process.env.WORKER_SMOKE_RECEIPT_ROOT;
-    process.env.WORKER_SMOKE_RECEIPT_ROOT = join(root, 'receipts');
-    const git = (...args: string[]): string => {
-      const result = runProcessSync({ command: 'git', args, cwd: root });
-      if (!result.ok) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
-      return result.stdout.trim();
-    };
-    try {
-      git('init', '--quiet', '-b', 'main');
-      git('config', 'user.name', 'Smoke test');
-      git('config', 'user.email', 'smoke-test@example.invalid');
-      mkdirSync(join(root, 'src'), { recursive: true });
-      writeFileSync(join(root, 'src', 'pr-change.txt'), 'base\n', 'utf8');
-      git('add', 'src/pr-change.txt');
-      git('commit', '--quiet', '-m', 'base');
-      const originalHead = git('rev-parse', 'HEAD');
-      git('checkout', '-b', 'feature');
-      writeFileSync(join(root, 'src', 'pr-change.txt'), 'feature\n', 'utf8');
-      git('commit', '--quiet', '-am', 'PR change');
-      const sourceHead = git('rev-parse', 'HEAD');
-      git('checkout', 'main');
-      mkdirSync(join(root, 'docs'), { recursive: true });
-      writeFileSync(join(root, 'docs', 'main-change.md'), 'main\n', 'utf8');
-      git('add', 'docs/main-change.md');
-      git('commit', '--quiet', '-m', 'main change');
-      const mainHead = git('rev-parse', 'HEAD');
-      git('update-ref', 'refs/remotes/origin/main', mainHead);
-      git('checkout', 'feature');
-      git('merge', '--no-ff', '--no-edit', 'main');
-      const destinationHead = git('rev-parse', 'HEAD');
-      const body = planBody([{ action: 'inspect docs/smoke-fixture.json', expected: 'fixture unchanged' }]);
-      const sourceReport: SmokeReport = {
-        ...report('PASS', [{
-          action: 'inspect docs/smoke-fixture.json',
-          expected: 'fixture unchanged',
-          observed: `carried PASS from head ${originalHead} comment 7; not freshly executed on ${sourceHead}`,
-          outcome: 'pass',
-        }], sourceHead),
-        terminalHandle: undefined,
-        terminalCleanup: 'not_started_no_execution',
-        environmentNotes: ['smoke-execution=carry-only'],
-      };
-      writeWorkerSmokeReceipt(sourceReport, { attemptId: 'source-carry-only', executionMode: 'carry-only' });
-      const selection = selectSmokeAttempt({
-        command: 'run',
-        issueNumber: 1343,
-        prNumber: 2001,
-        headSha: destinationHead,
-        issueBodyFile: join(root, 'issue.md'),
-        smokeComplexity: 'routine',
-        smokeActor: 'independent',
-        repoRoot: root,
-        cwd: root,
-        dryRun: true,
-        json: true,
-        reviewId: '',
-        reviewHeadSha: '',
-      }, body, {
-        repositorySlug: REPOSITORY,
-        issueNumber: 1343,
-        prNumber: 2001,
-        headSha: destinationHead,
-        issueBody: body,
-        prBody: 'Closes #1343',
-        issueBodyMatchesTarget: true,
-        trustedPublisherLogin: TRUSTED_ACTOR,
-        prOpen: true,
-        baseRef: 'main',
-        expectedTargetRef: 'main',
-        expectedTarget: true,
-      }, {
-        fetchHistoryComments: () => [comment(8, sourceReport)],
-        isHistoryAncestor: (ancestorSha, descendantSha) =>
-          runProcessSync({ command: 'git', args: ['merge-base', '--is-ancestor', ancestorSha, descendantSha], cwd: root }).ok,
-      });
-      expect(selection.fallbackReason).toBe('main_merge_carry_refused');
-      expect(selection.carried).toEqual([]);
-      expect(selection.attemptPlan.scenarios).toEqual(selection.fullPlan.scenarios);
-      expect(selection.attemptPlan.scenarios).toHaveLength(1);
-    } finally {
-      if (previousReceipts === undefined) delete process.env.WORKER_SMOKE_RECEIPT_ROOT;
-      else process.env.WORKER_SMOKE_RECEIPT_ROOT = previousReceipts;
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
+
 });
 
 describe('Issue #2161 durable main-merge carry receipt', () => {
