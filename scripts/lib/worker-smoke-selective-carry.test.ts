@@ -167,7 +167,7 @@ describe('Issue #2213 actor-sensitive selective smoke carry', () => {
 describe('Issue #2213 bound smoke progress writer', () => {
   it('writes progress only to the active run artifact without a caller-supplied path', () => {
     const cwd = mkdtempSync(join(tmpdir(), 'issue-2213-progress-writer-'));
-    const runId = 'a1b2c3d4-e5f6-4789-abcd-0123456789ab';
+    const runId = 'run-207115';
     const artifactDir = resolveSmokeRunArtifactDir(cwd, runId);
     try {
       createSmokeLifecycleReservation({
