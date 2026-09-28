@@ -91,13 +91,8 @@ describe('execute-Issue manager boundary', () => {
     expect(JSON.parse(probePause.result.pause.evidence)).toEqual(envelope);
   });
 
-  it('uses GitHub-first reconciliation for all four supported conversation causes', () => {
-    for (const cause of [
-      'message_delivery_timed_out',
-      'product_network_error',
-      'message_stream_error',
-      'stream_recovery_polling_timed_out',
-    ]) {
+  it('uses GitHub-first reconciliation for the two supported conversation causes', () => {
+    for (const cause of ['message_delivery_timed_out', 'product_network_error']) {
       const evaluated = classifyExecuteIssueManagerRecord(turn('recovery_required', { scope: 'conversation', cause }), context);
       expect(evaluated.exitCode).toBe(3);
       const action = expectReadOnly(evaluated);
@@ -109,9 +104,7 @@ describe('execute-Issue manager boundary', () => {
   it('keeps probe observation read-only until stopped recovery is proven', () => {
     expect(expectReadOnly(classifyExecuteIssueManagerRecord(probe('not_found'), context)).kind).toBe('execute-observe-owned-turn');
     expect(expectReadOnly(classifyExecuteIssueManagerRecord(probe('ok', { execution_recovery_inspect: { cause: null, generation_in_progress: true } }), context)).kind).toBe('execute-observe-owned-turn');
-    for (const cause of ['product_network_error', 'message_stream_error', 'stream_recovery_polling_timed_out']) {
-      expect(expectReadOnly(classifyExecuteIssueManagerRecord(probe('ok', { execution_recovery_inspect: { cause, generation_in_progress: false } }), context)).kind).toBe('execute-github-first-read-only');
-    }
+    expect(expectReadOnly(classifyExecuteIssueManagerRecord(probe('ok', { execution_recovery_inspect: { cause: 'product_network_error', generation_in_progress: false } }), context)).kind).toBe('execute-github-first-read-only');
     expect(classifyExecuteIssueManagerRecord(probe('ok', { execution_recovery_inspect: { reason: 'ambiguous_marker' } }), context)).toMatchObject({ exitCode: 4, result: { cause: 'external:content_authority_conflict' } });
     const unsafe = classifyExecuteIssueManagerRecord(probe('unsafe_output', { reason: 'unsafe-evidence-2081' }), context);
     expect(unsafe.exitCode).toBe(5);

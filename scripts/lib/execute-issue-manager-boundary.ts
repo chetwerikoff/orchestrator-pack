@@ -394,10 +394,7 @@ function classifyTurn(
     case 'recovery_required':
       if (
         turn.scope === 'conversation'
-        && (turn.cause === 'message_delivery_timed_out'
-          || turn.cause === 'product_network_error'
-          || turn.cause === 'message_stream_error'
-          || turn.cause === 'stream_recovery_polling_timed_out')
+        && (turn.cause === 'message_delivery_timed_out' || turn.cause === 'product_network_error')
       ) {
         return recoverable(
           context,
@@ -467,10 +464,7 @@ function classifyProbe(
         );
       }
       if (
-        (inspect?.cause === 'message_delivery_timed_out'
-          || inspect?.cause === 'product_network_error'
-          || inspect?.cause === 'message_stream_error'
-          || inspect?.cause === 'stream_recovery_polling_timed_out')
+        (inspect?.cause === 'message_delivery_timed_out' || inspect?.cause === 'product_network_error')
         && inspect.generation_in_progress === false
       ) {
         return recoverable(context, producer, 'execute_github_first_reconciliation', githubFirstAction(context));
