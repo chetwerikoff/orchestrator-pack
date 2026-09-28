@@ -142,6 +142,7 @@ describe('fleet sweep on real OpenCode screens', () => {
   it('prints content lines, not TUI frame, model line or status bar', () => {
     const terminals = [pane('p1', 'OC | worker')];
     const [observation] = runFleetSweep({
+      projectId: 'orchestrator-pack',
       primary,
       terminals,
       lines: 4,
@@ -231,6 +232,7 @@ describe('fleet sweep pane selection and reads', () => {
 
   it('returns no pane lines when --lines is zero', () => {
     const observed = runFleetSweep({
+      projectId: 'orchestrator-pack',
       primary,
       executor: fakeExecutor([pane('a', 'OpenCode worker')], { a: 'done\nline-a' }),
       store: new MemoryPollingStore(),
