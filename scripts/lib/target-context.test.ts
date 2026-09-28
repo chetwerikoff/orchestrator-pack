@@ -1,10 +1,10 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
-import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import {
   TargetContextError,
   projectCardPath,
@@ -14,7 +14,8 @@ import {
 const roots: string[] = [];
 
 function git(root: string, ...args: string[]): void {
-  execFileSync('git', args, { cwd: root, stdio: 'ignore' });
+  const result = runProcessSync({ command: 'git', args, cwd: root, inheritParentEnv: true });
+  if (!result.ok) throw new Error(`git fixture failed: ${result.stderr || result.error || result.exitCode}`);
 }
 
 function fixture(input: {
