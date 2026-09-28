@@ -17,6 +17,11 @@ import {
   evaluateCreateIssueManagerBoundary,
   type CreateIssueManagerBoundaryEvaluation,
 } from './create-issue-next-action.ts';
+import {
+  SMOKE_REPORT_MARKER,
+  SMOKE_REPORT_PRODUCER,
+  isWorkerSmokeCauseFamily,
+} from './worker-smoke-core-base.ts';
 
 export const EXECUTE_ISSUE_PHASES = ['implementation', 'review', 'fixer'] as const;
 export type ExecuteIssuePhase = typeof EXECUTE_ISSUE_PHASES[number];
@@ -72,6 +77,7 @@ export interface ExecuteIssueManagerBoundaryContext {
   profile?: string;
   invocationId?: string;
   prNumber?: number;
+  headSha?: string;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -248,8 +254,13 @@ function completed(
   context: ExecuteIssueManagerBoundaryContext,
   producer: string,
   cause: string,
+  verdict?: 'PASS' | 'FAIL',
  ): CreateIssueManagerBoundaryEvaluation {
-  return boundary(context, producer, () => createIssueTerminalResult({ ok: true, cause }));
+  return boundary(context, producer, () => createIssueTerminalResult({
+    ok: true,
+    cause,
+    ...(verdict ? { verdict } : {}),
+  }));
 }
 
 function recoverable(
@@ -276,7 +287,7 @@ function pause(
   return boundary(context, producer, () => createIssueExternalPauseResult({
     cause,
     remedy,
-    resumeWhen: { operator: true },
+    resumeWhen: { coordinator: true },
     evidence: evidence(producerRecord),
   }));
 }
@@ -516,6 +527,160 @@ function structuredNextAction(value: unknown): CreateIssueNextAction | null {
   return (CREATE_ISSUE_NEXT_ACTION_KINDS as readonly string[]).includes(action.kind) ? action : null;
 }
 
+const WORKER_SMOKE_RECOVERABLE_CAUSES = new Set([
+  'trusted_target_stale',
+  'tier_order_input_stale',
+  'smoke_same_head_in_progress',
+] as const);
+
+const WORKER_SMOKE_EXTERNAL_CAUSES: Readonly<Record<string, CreateIssueExternalPauseCause>> = {
+  browser_cdp_unavailable: 'external:chrome_not_running',
+  profile_mismatch: 'external:profile_mismatch',
+  login_required: 'external:login_required',
+  quota_exhausted: 'external:quota_exhausted',
+  product_challenge: 'external:product_challenge',
+};
+
+const WORKER_SMOKE_CONTRACT_CAUSES = new Set([
+  'invalid_adapter_arguments',
+  'missing_required_flag',
+  'unsupported_executor_capability',
+  'malformed_producer_output',
+] as const);
+
+function isWorkerSmokeRecord(value: JsonRecord): boolean {
+  return value.schema === SMOKE_REPORT_MARKER
+    || value.marker === SMOKE_REPORT_MARKER
+    || value.producer === SMOKE_REPORT_PRODUCER;
+}
+
+function workerSmokeObservationAction(
+  context: ExecuteIssueManagerBoundaryContext,
+  value: JsonRecord,
+): CreateIssueNextAction | null {
+  const prNumber = context.prNumber ?? Number(value.prNumber);
+  const headSha = text(value.headSha).toLowerCase();
+  if (!Number.isSafeInteger(prNumber) || Number(prNumber) < 1 || !/^[0-9a-f]{40}$/u.test(headSha)) return null;
+  return createIssueNextAction({
+    kind: 'execute-review-runner-read-only',
+    binding: actionBinding(context),
+    argv: [
+      'scripts/gh',
+      'pr',
+      'view',
+      String(prNumber),
+      '--json',
+      'number,headRefOid,state',
+      '--jq',
+      '.headRefOid == "' + headSha + '"',
+    ],
+  });
+}
+
+function workerSmokeStructuredEvidence(value: JsonRecord): JsonRecord {
+  return {
+    marker: SMOKE_REPORT_MARKER,
+    producer: value.producer,
+    issueNumber: value.issueNumber,
+    prNumber: value.prNumber,
+    headSha: value.headSha,
+    result: value.result,
+    causeFamily: value.causeFamily,
+    nonPassCause: value.nonPassCause,
+  };
+}
+
+function classifyWorkerSmoke(
+  value: JsonRecord,
+  context: ExecuteIssueManagerBoundaryContext,
+): CreateIssueManagerBoundaryEvaluation {
+  const producer = SMOKE_REPORT_PRODUCER;
+  if (value.producer !== SMOKE_REPORT_PRODUCER) {
+    return defect(context, producer, 'worker-smoke record has an invalid producer');
+  }
+
+  const issueNumber = Number(value.issueNumber);
+  const prNumber = Number(value.prNumber);
+  const headSha = text(value.headSha).toLowerCase();
+  const expectedHead = text(context.headSha).toLowerCase();
+  if (issueNumber !== context.issueNumber) {
+    return defect(context, producer, 'worker-smoke issue binding does not match the manager target');
+  }
+  if (!Number.isSafeInteger(context.prNumber) || context.prNumber! < 1 || prNumber !== context.prNumber) {
+    return defect(context, producer, 'worker-smoke PR binding does not match the manager target');
+  }
+  if (!/^[0-9a-f]{40}$/u.test(headSha)) {
+    return defect(context, producer, 'worker-smoke head binding is missing or invalid');
+  }
+  if (expectedHead && headSha !== expectedHead) {
+    return defect(context, producer, 'worker-smoke head binding does not match the manager target');
+  }
+  if (!Array.isArray(value.scenarios) || value.scenarios.length === 0) {
+    return defect(context, producer, 'worker-smoke scenarios are missing');
+  }
+
+  const result = text(value.result).toUpperCase();
+  const causeFamily = text(value.causeFamily);
+  const nonPassCause = text(value.nonPassCause);
+  if (result !== 'PASS' && result !== 'FAIL' && result !== 'BLOCKED') {
+    return defect(context, producer, 'worker-smoke result is outside PASS|FAIL|BLOCKED');
+  }
+  if (causeFamily && !isWorkerSmokeCauseFamily(causeFamily)) {
+    return defect(context, producer, 'worker-smoke causeFamily is outside the closed vocabulary');
+  }
+
+  if (result === 'PASS') {
+    if (value.trackedFilesUnmodified !== true || causeFamily || nonPassCause) {
+      return defect(context, producer, 'worker-smoke PASS contradicts its structured evidence');
+    }
+    return completed(context, producer, 'execute_worker_smoke_pass', 'PASS');
+  }
+
+  const scenarios = value.scenarios as JsonRecord[];
+  const provedAssertionFailure = result === 'FAIL'
+    && causeFamily === 'scenario_assertion_failed'
+    && scenarios.some((scenario) => {
+      const row = record(scenario);
+      return row?.outcome === 'fail' && row?.causeFamily === 'scenario_assertion_failed';
+    });
+  if (provedAssertionFailure) {
+    if (nonPassCause && nonPassCause !== 'executed_scenario_failure') {
+      return defect(context, producer, 'worker-smoke assertion failure contradicts nonPassCause');
+    }
+    return completed(context, producer, 'execute_worker_smoke_assertion_failed', 'FAIL');
+  }
+
+  if (!nonPassCause) {
+    return defect(context, producer, 'worker-smoke non-PASS lacks a closed structured nonPassCause');
+  }
+  if (causeFamily === 'scenario_assertion_failed') {
+    return defect(context, producer, 'worker-smoke assertion causeFamily is not a proved FAIL');
+  }
+
+  if (WORKER_SMOKE_RECOVERABLE_CAUSES.has(nonPassCause as never)) {
+    const nextAction = workerSmokeObservationAction(context, value);
+    return nextAction
+      ? recoverable(context, producer, 'execute_worker_smoke_reconcile', nextAction)
+      : defect(context, producer, 'worker-smoke recoverable state lacks an exact read-only reconciliation action');
+  }
+
+  const externalCause = WORKER_SMOKE_EXTERNAL_CAUSES[nonPassCause];
+  if (externalCause) {
+    return pause(
+      context,
+      producer,
+      externalCause,
+      workerSmokeStructuredEvidence(value),
+      'restore the structured worker-smoke external dependency, then resume the same execute-Issue Dispatch',
+    );
+  }
+
+  if (WORKER_SMOKE_CONTRACT_CAUSES.has(nonPassCause as never)) {
+    return defect(context, producer, 'worker-smoke producer contract defect: ' + nonPassCause);
+  }
+
+  return defect(context, producer, 'worker-smoke structured nonPassCause is unrecognized: ' + nonPassCause);
+}
 function classifyReviewRunner(
   value: JsonRecord,
   context: ExecuteIssueManagerBoundaryContext,
@@ -557,5 +722,6 @@ export function classifyExecuteIssueManagerRecord(
   if (!value) return defect(context, 'execute-issue-manager-boundary', 'input record must be a JSON object');
   if (value.schema === 'turn-result/v1') return classifyTurn(value, context);
   if (value.schema === 'browser-gpt-page-probe/v1') return classifyProbe(value, context);
+  if (isWorkerSmokeRecord(value)) return classifyWorkerSmoke(value, context);
   return classifyReviewRunner(value, context);
 }
