@@ -156,7 +156,7 @@ export type DispatchObservation = { readonly kind: 'absent' }
 
 export interface LaunchInput {
   readonly repository: string;
-  readonly projectId: string;
+  readonly projectId?: string;
   readonly workClass: LaunchWorkClass;
   readonly issueNumber?: number;
   readonly runId?: string;
@@ -509,7 +509,7 @@ export async function runSupervisedTaskLaunchAssistant(
   const startAt = deps.now();
   const supervised = await deps.runSupervisedStart({
     repository: resources.repository,
-    projectId: input.projectId,
+    ...(input.projectId ? { projectId: input.projectId } : {}),
     ...(input.issueNumber ? { issueNumber: input.issueNumber } : {}),
     ...(input.env ? { env: { ...input.env } } : {}),
     cwd: input.cwd,
@@ -540,7 +540,7 @@ export async function runSupervisedTaskLaunchAssistant(
     const retry = requestId ? [
       'node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/pr2-foundation/supervised-worker-start.ts --',
       ...(input.issueNumber ? ['--issue-number', String(input.issueNumber)] : []),
-      '--project', quote(input.projectId), '--repository', quote(resources.repository), '--role', input.workClass === 'manager' ? 'orchestrator' : 'worker',
+      ...(input.projectId ? ['--project', quote(input.projectId)] : []), '--repository', quote(resources.repository), '--role', input.workClass === 'manager' ? 'orchestrator' : 'worker',
       ...(providerMode ? ['--mode', 'provider_new_top_level'] : []), '--', '--task', quote(taskId),
       ...(providerMode
         ? (input.worktreeSelector
@@ -1347,11 +1347,15 @@ function launchCliOptions(argv: readonly string[]): ReadonlyMap<string, string> 
   return parsed;
 }
 
-export function parseLaunchAssistantCli(argv: readonly string[], env: NodeJS.ProcessEnv = process.env): LaunchInput {
+export function parseLaunchAssistantCli(
+  argv: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+  resolveTarget: typeof resolveTargetContext = resolveTargetContext,
+): LaunchInput {
   const options = launchCliOptions(argv);
   const workClass = (options.get('--work-class') ?? '').trim();
   if (!LAUNCH_WORK_CLASSES.includes(workClass as LaunchWorkClass)) throw new Error('--work-class must be exactly manager|t1|t2|t3');
-  const target = resolveTargetContext({ projectId: (options.get('--project') ?? '').trim(), env });
+  const target = resolveTarget({ projectId: (options.get('--project') ?? '').trim(), env });
   const explicitRepository = (options.get('--repository') ?? '').trim().toLowerCase();
   if (explicitRepository && !/^[^/\s]+\/[^/\s]+$/u.test(explicitRepository)) throw new Error('--repository must be owner/repo');
   if (explicitRepository && explicitRepository !== target.repository) {
