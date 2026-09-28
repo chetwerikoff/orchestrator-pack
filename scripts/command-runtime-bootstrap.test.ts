@@ -25,9 +25,10 @@ describe('Issue #1998 manager environment preflight', () => {
     const profile = tempDir('opk-1998-profile-');
     const result = resolveManagerBrowserOperatorConfig({
       env: {
-        DISCUSS_WITH_GPT_PROJECT_URL: 'https://chatgpt.com/g/project',
         DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR: profile,
       },
+      targetProjectUrl: 'https://chatgpt.com/g/project',
+      targetCardPath: '/operator/projects/orchestrator-pack.json',
     });
     expect(result).toEqual({
       ok: true,
@@ -35,6 +36,7 @@ describe('Issue #1998 manager environment preflight', () => {
         projectUrl: 'https://chatgpt.com/g/project',
         chromeUserDataDir: profile,
         source: 'environment',
+        cardPath: '/operator/projects/orchestrator-pack.json',
       },
     });
   });
@@ -47,9 +49,10 @@ describe('Issue #1998 manager environment preflight', () => {
       packRoot,
       effectivePath: process.env.PATH ?? '',
       env: {
-        DISCUSS_WITH_GPT_PROJECT_URL: 'https://chatgpt.com/g/project',
         DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR: profile,
       },
+      targetProjectUrl: 'https://chatgpt.com/g/project',
+      targetCardPath: '/operator/projects/orchestrator-pack.json',
       tools: {
         node: process.execPath,
         packGh: join(packRoot, 'scripts', 'gh'),
@@ -77,9 +80,10 @@ describe('Issue #1998 manager environment preflight', () => {
       packRoot,
       effectivePath: process.env.PATH ?? '',
       env: {
-        DISCUSS_WITH_GPT_PROJECT_URL: 'https://chatgpt.com/g/project',
         DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR: profile,
       },
+      targetProjectUrl: 'https://chatgpt.com/g/project',
+      targetCardPath: '/operator/projects/orchestrator-pack.json',
       tools: {
         node: process.execPath,
         packGh,
@@ -104,9 +108,10 @@ describe('Issue #1998 manager environment preflight', () => {
       packRoot: fakeWorktree,
       effectivePath: process.env.PATH ?? '',
       env: {
-        DISCUSS_WITH_GPT_PROJECT_URL: 'https://chatgpt.com/g/project',
         DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR: profile,
       },
+      targetProjectUrl: 'https://chatgpt.com/g/project',
+      targetCardPath: '/operator/projects/orchestrator-pack.json',
       tools: {
         node: process.execPath,
         packGh,
@@ -177,7 +182,6 @@ describe('Issue #1998 manager environment preflight', () => {
       cwd: process.cwd(),
       env: {
         PATH: [scriptsDir, process.env.PATH ?? ''].filter(Boolean).join(':'),
-        DISCUSS_WITH_GPT_PROJECT_URL: 'https://chatgpt.com/g/project',
         DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR: profile,
         OPK_CREATE_ISSUE_DRAFT_STATE_ROOT: lifecycleState,
       },
