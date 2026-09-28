@@ -208,6 +208,21 @@ describe('execute-Issue manager boundary', () => {
       expect(JSON.stringify(structured)).not.toContain('fixture observation');
     }
 
+    expect(classifyExecuteIssueManagerRecord(smoke('FAIL', {
+      causeFamily: 'harness_admission_refused',
+      nonPassCause: 'profile_mismatch',
+    }), context)).toMatchObject({
+      exitCode: 5,
+      result: { cause: 'producer_contract_defect', nextAction: null },
+    });
+    expect(classifyExecuteIssueManagerRecord(smoke('BLOCKED', {
+      causeFamily: 'harness_admission_refused',
+      nonPassCause: 'profile_mismatch',
+    }), context)).toMatchObject({
+      exitCode: 5,
+      result: { cause: 'producer_contract_defect', nextAction: null },
+    });
+
     for (const nonPassCause of [
       'invalid_adapter_arguments',
       'missing_required_flag',

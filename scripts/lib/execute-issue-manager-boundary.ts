@@ -21,6 +21,7 @@ import {
   SMOKE_REPORT_MARKER,
   SMOKE_REPORT_PRODUCER,
   isWorkerSmokeCauseFamily,
+  smokeResultForWorkerSmokeCauseFamily,
 } from './worker-smoke-core-base.ts';
 
 export const EXECUTE_ISSUE_PHASES = ['implementation', 'review', 'fixer', 'independent-smoke'] as const;
@@ -629,6 +630,9 @@ function classifyWorkerSmoke(
   if (causeFamily && !isWorkerSmokeCauseFamily(causeFamily)) {
     return defect(context, producer, 'worker-smoke causeFamily is outside the closed vocabulary');
   }
+  if (causeFamily && smokeResultForWorkerSmokeCauseFamily(causeFamily) !== result) {
+    return defect(context, producer, 'worker-smoke result contradicts causeFamily');
+  }
 
   if (result === 'PASS') {
     if (value.trackedFilesUnmodified !== true || causeFamily || nonPassCause) {
@@ -667,6 +671,9 @@ function classifyWorkerSmoke(
 
   const externalCause = WORKER_SMOKE_EXTERNAL_CAUSES[nonPassCause];
   if (externalCause) {
+    if (causeFamily !== 'scenario_precondition_unavailable') {
+      return defect(context, producer, 'worker-smoke external nonPassCause contradicts causeFamily');
+    }
     return pause(
       context,
       producer,
