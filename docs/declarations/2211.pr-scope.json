@@ -5,7 +5,8 @@
     "docs/declarations/2211.pr-scope.json",
     "scripts/lib/create-issue-stage-record-artifacts.test.ts",
     "scripts/lib/create-issue-stage-record-artifacts.ts",
-    "scripts/lib/create-issue-stage-record-cli.ts"
+    "scripts/lib/create-issue-stage-record-cli.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs"
   ],
   "denylist": [
     "credentials/",
