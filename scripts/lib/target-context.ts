@@ -4,8 +4,8 @@ import '../toolchain/native-entrypoint-preflight.ts';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { runProcessSync } from '../kernel/subprocess.ts';
 
 export type TargetContextErrorCode =
   | 'missing-selection'
@@ -107,19 +107,20 @@ function canonicalGitHubRepository(remote: string): string | null {
 }
 
 function readOrigin(primaryRoot: string): string {
-  const result = spawnSync('git', ['remote', 'get-url', 'origin'], {
+  const result = runProcessSync({
+    command: 'git',
+    args: ['remote', 'get-url', 'origin'],
     cwd: primaryRoot,
-    encoding: 'utf8',
-    windowsHide: true,
+    inheritParentEnv: true,
   });
-  if (result.status !== 0) {
+  if (!result.ok) {
     const detail = String(result.stderr || result.error || '').trim();
     throw new TargetContextError(
       'origin-unavailable',
       `cannot read git origin for target primaryRoot ${primaryRoot}${detail ? `: ${detail}` : ''}`,
     );
   }
-  return String(result.stdout ?? '').trim();
+  return result.stdout.trim();
 }
 
 function parseVerification(value: unknown, cardPath: string): TargetVerification | undefined {
