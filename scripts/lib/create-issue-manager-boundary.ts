@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   createIssueExternalPauseResult,
   createIssueRecoverableResult,
+  normalizeLegacyResumePredicateInManagerResult,
   validateCreateIssueManagerResult,
   type CreateIssueActionBinding,
   type CreateIssueContractDefectResult,
@@ -149,17 +150,21 @@ function classifyThrown(input: CreateIssueManagerBoundaryInput, error: unknown):
   return defect(input.producer, 'producer_contract_defect', [message]);
 }
 
-export function evaluateCreateIssueManagerBoundary(
+function evaluateCreateIssueManagerBoundaryCandidate(
   input: CreateIssueManagerBoundaryInput,
+  legacyRead: boolean,
 ): CreateIssueManagerBoundaryEvaluation {
   let candidate: CreateIssueManagerResult;
   try {
     const value = input.produce();
-    const errors = validateCreateIssueManagerResult(value);
+    const readableValue = legacyRead
+      ? normalizeLegacyResumePredicateInManagerResult(value)
+      : value;
+    const errors = validateCreateIssueManagerResult(readableValue);
     if (errors.length > 0) {
       candidate = defect(input.producer, 'producer_contract_defect', errors);
     } else {
-      candidate = value as CreateIssueManagerResult;
+      candidate = readableValue as CreateIssueManagerResult;
     }
   } catch (error) {
     candidate = classifyThrown(input, error);
@@ -176,6 +181,18 @@ export function evaluateCreateIssueManagerBoundary(
     result: candidate,
     exitCode: createIssueManagerExitCode(candidate),
   };
+}
+
+export function evaluateCreateIssueManagerBoundary(
+  input: CreateIssueManagerBoundaryInput,
+): CreateIssueManagerBoundaryEvaluation {
+  return evaluateCreateIssueManagerBoundaryCandidate(input, false);
+}
+
+export function evaluateLegacyCreateIssueManagerBoundaryRead(
+  input: CreateIssueManagerBoundaryInput,
+): CreateIssueManagerBoundaryEvaluation {
+  return evaluateCreateIssueManagerBoundaryCandidate(input, true);
 }
 
 export function createIssueManagerExitCode(result: CreateIssueManagerResult): 0 | 3 | 4 | 5 {

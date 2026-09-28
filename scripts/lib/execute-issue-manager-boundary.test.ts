@@ -41,6 +41,9 @@ function smoke(
     prNumber: context.prNumber,
     headSha: context.headSha,
     trackedFilesUnmodified: result === 'PASS',
+    terminalCleanup: result === 'PASS' ? 'closed_owned_handle' : 'not_recorded',
+    orcaExecutable: result === 'PASS' ? 'orca' : undefined,
+    terminalHandle: result === 'PASS' ? 'term_fixture' : undefined,
     scenarios: [{
       action: 'exercise smoke fixture',
       expected: 'fixture expectation',
@@ -150,6 +153,24 @@ describe('execute-Issue manager boundary', () => {
       exitCode: 0,
       result: { ok: true, verdict: 'PASS', cause: 'execute_worker_smoke_pass', nextAction: null },
     });
+    expect(classifyExecuteIssueManagerRecord(smoke('PASS', {
+      scenarios: [{
+        action: 'exercise smoke fixture',
+        expected: 'fixture expectation',
+        observed: 'blocked despite PASS',
+        outcome: 'blocked',
+      }],
+    }), context)).toMatchObject({
+      exitCode: 5,
+      result: { ok: false, cause: 'producer_contract_defect', nextAction: null },
+    });
+    expect(classifyExecuteIssueManagerRecord(smoke('PASS', {
+      terminalCleanup: 'not_recorded',
+      terminalHandle: undefined,
+    }), context)).toMatchObject({
+      exitCode: 5,
+      result: { ok: false, cause: 'producer_contract_defect', nextAction: null },
+    });
 
     const assertionFailure = smoke('FAIL', {
       causeFamily: 'scenario_assertion_failed',
@@ -174,10 +195,25 @@ describe('execute-Issue manager boundary', () => {
       }), context);
       expect(projected.exitCode).toBe(3);
       const action = expectReadOnly(projected);
-      expect(action.argv.join(' ')).toContain(context.headSha);
-      expect(action.argv).toContain(String(context.prNumber));
-      expect(action.argv.join(' ')).toContain('#' + context.issueNumber);
       expect(action.binding.stage).toBe('execute:independent-smoke');
+      const argv = action.argv.join(' ');
+      if (nonPassCause === 'tier_order_input_stale') {
+        expect(action.argv.slice(0, 3)).toEqual(['scripts/gh', 'issue', 'view']);
+        expect(action.argv).toContain(String(context.issueNumber));
+        expect(argv).toContain(context.sourceRevision);
+        expect(argv).toContain('body');
+      } else if (nonPassCause === 'smoke_same_head_in_progress') {
+        expect(action.argv.slice(0, 3)).toEqual(['scripts/gh', 'pr', 'view']);
+        expect(action.argv).toContain(String(context.prNumber));
+        expect(argv).toContain(context.headSha);
+        expect(argv).toContain('comments');
+        expect(argv).toContain('pack-worker-smoke-report/v1');
+      } else {
+        expect(action.argv.slice(0, 3)).toEqual(['scripts/gh', 'pr', 'view']);
+        expect(action.argv).toContain(String(context.prNumber));
+        expect(argv).toContain(context.headSha);
+        expect(argv).toContain('#' + context.issueNumber);
+      }
     }
 
     const externalCases = [

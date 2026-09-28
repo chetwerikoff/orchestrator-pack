@@ -7,6 +7,7 @@ import {
   createIssueEscalationThreadId,
   emitCreateIssueManagerResult,
   evaluateCreateIssueManagerBoundary,
+  evaluateLegacyCreateIssueManagerBoundaryRead,
 } from './create-issue-manager-boundary.ts';
 import {
   CREATE_ISSUE_NEXT_ACTION_KINDS,
@@ -14,6 +15,8 @@ import {
   createIssueNextAction,
   createIssueRecoverableResult,
   createIssueTerminalResult,
+  evaluateCreateIssueManagerBoundary as evaluateNextActionManagerBoundary,
+  evaluateLegacyCreateIssueManagerBoundaryRead as evaluateLegacyNextActionManagerBoundaryRead,
   validateCreateIssueManagerResult,
   normalizeLegacyResumePredicateInManagerResult,
   type CreateIssueActionBinding,
@@ -97,7 +100,7 @@ describe('create-Issue manager boundary', () => {
     );
   });
 
-  it('normalizes legacy operator pause input to coordinator without mutating historical bytes', () => {
+  it('consumes legacy operator pause input only through the historical-read adapter without mutating bytes', () => {
     const legacy = {
       ok: false,
       cause: 'external:github_unavailable',
@@ -116,15 +119,32 @@ describe('create-Issue manager boundary', () => {
     expect(validateCreateIssueManagerResult(legacy)).toContain(
       'external_pause result.pause.resume_when must be issue_closed, pr_merged, or coordinator',
     );
-    const evaluated = evaluateCreateIssueManagerBoundary({
-      producer: 'legacy-pause-must-not-be-emitted',
-      currentArgv: ['current'],
-      produce: () => legacy,
-    });
-    expect(evaluated).toMatchObject({
-      exitCode: 5,
-      result: { cause: 'producer_contract_defect', nextAction: null },
-    });
+
+    for (const strictProduced of [evaluateCreateIssueManagerBoundary, evaluateNextActionManagerBoundary]) {
+      expect(strictProduced({
+        producer: 'legacy-pause-must-not-be-emitted',
+        currentArgv: ['current'],
+        produce: () => legacy,
+      })).toMatchObject({
+        exitCode: 5,
+        result: { cause: 'producer_contract_defect', nextAction: null },
+      });
+    }
+
+    for (const historicalRead of [evaluateLegacyCreateIssueManagerBoundaryRead, evaluateLegacyNextActionManagerBoundaryRead]) {
+      expect(historicalRead({
+        producer: 'persisted-live-manager-result',
+        currentArgv: ['current'],
+        produce: () => legacy,
+      })).toMatchObject({
+        exitCode: 4,
+        result: {
+          cause: 'external:github_unavailable',
+          pause: { resume_when: { coordinator: true } },
+          nextAction: null,
+        },
+      });
+    }
     expect(JSON.stringify(legacy)).toBe(historicalBytes);
   });
 

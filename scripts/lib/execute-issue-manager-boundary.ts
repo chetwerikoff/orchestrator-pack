@@ -21,7 +21,9 @@ import {
   SMOKE_REPORT_MARKER,
   SMOKE_REPORT_PRODUCER,
   isWorkerSmokeCauseFamily,
+  normalizeSmokeReport,
   smokeResultForWorkerSmokeCauseFamily,
+  type SmokeReport,
 } from './worker-smoke-core-base.ts';
 
 export const EXECUTE_ISSUE_PHASES = ['implementation', 'review', 'fixer', 'independent-smoke'] as const;
@@ -558,6 +560,7 @@ function isWorkerSmokeRecord(value: JsonRecord): boolean {
 function workerSmokeObservationAction(
   context: ExecuteIssueManagerBoundaryContext,
   value: JsonRecord,
+  nonPassCause: string,
 ): CreateIssueNextAction | null {
   const prNumber = context.prNumber ?? Number(value.prNumber);
   const headSha = text(value.headSha).toLowerCase();
@@ -566,6 +569,32 @@ function workerSmokeObservationAction(
     || Number(prNumber) < 1
     || !/^[0-9a-f]{40}$/u.test(headSha)
     || text(context.headSha).toLowerCase() !== headSha) return null;
+
+  if (nonPassCause === 'tier_order_input_stale') {
+    const revisionMarker = '<!-- source-revision: ' + context.sourceRevision + ' -->';
+    return createIssueNextAction({
+      kind: 'execute-review-runner-read-only',
+      binding: actionBinding(context),
+      argv: [
+        'scripts/gh', 'issue', 'view', String(context.issueNumber), '--repo', context.repository,
+        '--json', 'number,body,labels',
+        '--jq', 'select(.number == ' + context.issueNumber + ' and (.body | contains(' + JSON.stringify(revisionMarker) + '))) | {number, body, labels}',
+      ],
+    });
+  }
+
+  if (nonPassCause === 'smoke_same_head_in_progress') {
+    return createIssueNextAction({
+      kind: 'execute-review-runner-read-only',
+      binding: actionBinding(context),
+      argv: [
+        'scripts/gh', 'pr', 'view', String(prNumber), '--repo', context.repository,
+        '--json', 'number,headRefOid,comments',
+        '--jq', 'select(.number == ' + prNumber + ' and .headRefOid == "' + headSha + '") | {number, headRefOid, smokeReports: [.comments[] | select((.body | contains("<!-- pack-worker-smoke-report/v1 -->")) and (.body | contains("' + headSha + '"))) | {body, createdAt}]}',
+      ],
+    });
+  }
+
   return createIssueNextAction({
     kind: 'execute-review-runner-read-only',
     binding: actionBinding(context),
@@ -635,8 +664,18 @@ function classifyWorkerSmoke(
   }
 
   if (result === 'PASS') {
-    if (value.trackedFilesUnmodified !== true || causeFamily || nonPassCause) {
-      return defect(context, producer, 'worker-smoke PASS contradicts its structured evidence');
+    const normalized = normalizeSmokeReport(
+      value as unknown as Partial<SmokeReport>,
+      { issueNumber, prNumber, headSha },
+    );
+    if (!normalized.ok) {
+      return defect(context, producer, 'worker-smoke PASS failed canonical normalization: ' + normalized.reason);
+    }
+    if (normalized.report.result !== 'PASS'
+      || normalized.report.trackedFilesUnmodified !== true
+      || normalized.report.causeFamily
+      || normalized.report.nonPassCause) {
+      return defect(context, producer, 'worker-smoke PASS contradicts its canonical structured evidence');
     }
     return completed(context, producer, 'execute_worker_smoke_pass', 'PASS');
   }
@@ -663,7 +702,7 @@ function classifyWorkerSmoke(
   }
 
   if (WORKER_SMOKE_RECOVERABLE_CAUSES.has(nonPassCause as never)) {
-    const nextAction = workerSmokeObservationAction(context, value);
+    const nextAction = workerSmokeObservationAction(context, value, nonPassCause);
     return nextAction
       ? recoverable(context, producer, 'execute_worker_smoke_reconcile', nextAction)
       : defect(context, producer, 'worker-smoke recoverable state lacks an exact read-only reconciliation action');

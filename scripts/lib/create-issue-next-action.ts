@@ -764,11 +764,16 @@ function sameArgv(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-export function evaluateCreateIssueManagerBoundary(input: {
+type CreateIssueManagerBoundaryInput = {
   producer: string;
   currentArgv: readonly string[];
   produce: () => unknown;
-}): CreateIssueManagerBoundaryEvaluation {
+};
+
+function evaluateCreateIssueManagerBoundaryCandidate(
+  input: CreateIssueManagerBoundaryInput,
+  legacyRead: boolean,
+): CreateIssueManagerBoundaryEvaluation {
   let candidate: unknown;
   try {
     candidate = input.produce();
@@ -777,12 +782,15 @@ export function evaluateCreateIssueManagerBoundary(input: {
     const result = createIssueManagerContractDefect(input.producer, [detail]);
     return { result, exitCode: 5 };
   }
-  const errors = validateCreateIssueManagerResult(candidate);
+  const readableCandidate = legacyRead
+    ? normalizeLegacyResumePredicateInManagerResult(candidate)
+    : candidate;
+  const errors = validateCreateIssueManagerResult(readableCandidate);
   if (errors.length > 0) {
     const result = createIssueManagerContractDefect(input.producer, errors);
     return { result, exitCode: 5 };
   }
-  const result = normalizeLegacyResumePredicateInManagerResult(candidate) as CreateIssueManagerResult;
+  const result = readableCandidate as CreateIssueManagerResult;
   if (!result.ok && result.nextAction !== null && sameArgv(result.nextAction.argv, input.currentArgv)) {
     const defect = createIssueManagerContractDefect(input.producer, [
       'recoverable nextAction.argv must not be byte-identical to currentArgv',
@@ -804,4 +812,16 @@ export function evaluateCreateIssueManagerBoundary(input: {
     return { result: defect, exitCode: 5 };
   }
   return { result, exitCode: 3 };
+}
+
+export function evaluateCreateIssueManagerBoundary(
+  input: CreateIssueManagerBoundaryInput,
+): CreateIssueManagerBoundaryEvaluation {
+  return evaluateCreateIssueManagerBoundaryCandidate(input, false);
+}
+
+export function evaluateLegacyCreateIssueManagerBoundaryRead(
+  input: CreateIssueManagerBoundaryInput,
+): CreateIssueManagerBoundaryEvaluation {
+  return evaluateCreateIssueManagerBoundaryCandidate(input, true);
 }
