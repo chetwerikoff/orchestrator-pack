@@ -1262,7 +1262,6 @@ function inspectionExpression(): string {
   const assistantSelector = JSON.stringify(ASSISTANT_MESSAGE_SELECTOR);
   const retrySelector = JSON.stringify(REGENERATE_THREAD_ERROR_BUTTON_SELECTOR);
   const stopSelector = JSON.stringify(STOP_BUTTON_SELECTOR);
-  const messageSelector = JSON.stringify(MESSAGE_NODE_SELECTOR);
   return `(async () => {
     const MAX_NODES = ${MAX_MESSAGE_SUMMARIES};
     const MAX_TEXT = ${MAX_TEXT_CODE_POINTS};
@@ -1274,7 +1273,6 @@ function inspectionExpression(): string {
     const ASSISTANT_SELECTOR = ${assistantSelector};
     const RETRY_SELECTOR = ${retrySelector};
     const STOP_SELECTOR = ${stopSelector};
-    const MESSAGE_SELECTOR = ${messageSelector};
     const CHROME_SELECTOR = ${JSON.stringify(`${ASSISTANT_TURN_ACTION_SELECTOR}, .sr-only, [role="alert"]`)};
     const TIMEOUT_TEXT = ${JSON.stringify('Message delivery timed out. Please try again.')};
     const NETWORK_TEXT = ${JSON.stringify('A network error occurred. Please check your connection and try again. If this issue persists please contact us through our help center at help.openai.com.')};
@@ -1399,12 +1397,10 @@ function inspectionExpression(): string {
       for (const section of Array.from(document.querySelectorAll(TURN_SELECTOR))) {
         const turnKey = section.getAttribute('data-turn-key');
         if (typeof turnKey === 'string' && turnKey) conversationTurnKeys.push(turnKey);
-        if (!section.querySelector(MESSAGE_SELECTOR)) {
-          const text = typeof section.innerText === 'string' ? section.innerText : '';
-          if (text.includes('OPKTURNV1')) {
-            const boundedText = points(text).slice(0, MAX_RECOVERY_TEXT).join('');
-            markerCandidates.push({ text: boundedText, ...(turnKey ? { turn_key: turnKey } : {}) });
-          }
+        const text = typeof section.innerText === 'string' ? section.innerText : '';
+        if (text.includes('OPKTURNV1')) {
+          const boundedText = points(text).slice(0, MAX_RECOVERY_TEXT).join('');
+          markerCandidates.push({ text: boundedText, ...(turnKey ? { turn_key: turnKey } : {}) });
         }
       }
       if (conversationTurnKeys.length > MAX_RECOVERY_TURNS) {
