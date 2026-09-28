@@ -1541,7 +1541,7 @@ export const HARVEST_EXPRESSION = `(async () => {
   if (rows.length === 0) return { status: 'surface_unknown', reason: 'message_nodes_missing', page_url: location.href };
   let generation_in_progress = 'unknown';
   try {
-    generation_in_progress = Boolean(document.querySelector("[data-testid=\"stop-button\"], button[aria-label*=\"Stop\"]"));
+    generation_in_progress = Boolean(document.querySelector('[data-testid="stop-button"], button[aria-label*="Stop"]'));
   } catch {
     generation_in_progress = 'unknown';
   }
