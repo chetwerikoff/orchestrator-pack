@@ -228,7 +228,7 @@ describe('Vitest CI runner actual fail-closed control flow', () => {
     const statusBefore = await worktreeStatus();
     const aggregateReport = `.vitest-runtime-report-heavy-${shard}.json`;
     const aggregateMeta = `${aggregateReport}.meta.json`;
-    const partialReport = `.vitest-runtime-report-heavy-${shard}-1-${file.replace(/[^\\w.-]+/gu, '_')}.json`;
+    const partialReport = `.vitest-runtime-report-heavy-${shard}-1-${file.replace(/[^\w.-]+/gu, '_')}.json`;
     touched.add(aggregateMeta);
 
     expect(existsSync(aggregateReport)).toBe(false);
