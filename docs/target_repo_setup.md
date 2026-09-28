@@ -49,7 +49,7 @@ green; the automation Chrome is logged into ChatGPT; and Orca is running.
    remotes do not participate in the binding. Validate the card:
 
    ```bash
-   node --experimental-strip-types "$PACK_ROOT/scripts/lib/target-context.ts" check --project <projectId>
+   node --experimental-strip-types "$PACK_ROOT/scripts/lib/Invoke-TypeScriptCli.ts" --repo-root "$PACK_ROOT" --script "$PACK_ROOT/scripts/lib/target-context.ts" -- check --project <projectId>
    ```
 
    A successful check prints the resolved repository, primary root, default
@@ -59,7 +59,7 @@ green; the automation Chrome is logged into ChatGPT; and Orca is running.
 3. **Pack policy in the target.** Run:
 
    ```bash
-   node --experimental-strip-types "$PACK_ROOT/scripts/bootstrap.ts" --target-repo <primaryRoot>
+   node --experimental-strip-types "$PACK_ROOT/scripts/lib/Invoke-TypeScriptCli.ts" --repo-root "$PACK_ROOT" --script "$PACK_ROOT/scripts/bootstrap.ts" -- --target-repo <primaryRoot>
    ```
 
    Keep the managed `orchestrator-pack` policy block intact. Add target-owned
