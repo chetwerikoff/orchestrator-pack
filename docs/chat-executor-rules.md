@@ -134,6 +134,8 @@ same typed `resume_when` predicate and supplied evidence. Never manufacture
 the dependency from `cause`, `blocker`, prose, the managed Issue number,
 repository search, reverse lookup, or guessed PR linkage.
 
+Operator decision 2026-09-27: the existing coordinator owns clearing every manager blocker and external_pause. Treat legacy resume_when { operator: true } as { coordinator: true }; emit only { coordinator: true } for new owner-driven pauses. issue_closed and pr_merged remain unchanged. The coordinator may restore the named external dependency, reuse an already-authenticated browser/login session, wait out quota where time is the remedy, restore CDP or smoke-owned Chrome, accept the current Issue revision, route disputed findings to their existing substantive owner, continue after that owner resolves them, and send continuation to the same Dispatch. This delegation does not give coordinator broader direct-user precedence, authority to widen the Issue, or authority to choose defect/remedy/finding dispositions. Coordinator must never turn FAIL into PASS, invent missing evidence, enter credentials/passwords, or solve CAPTCHA. If credentials or CAPTCHA are the remaining wall, reduce it to the narrowest residual human action and keep the Task/Dispatch owned and nonterminal.
+
 A live Dispatch whose most recent manager message is an `escalation` carrying
 an `external_pause` or `contract_defect` payload is a **paused unit** when
 `worker-show` still reports it non-terminal. Identify that state from the Run
@@ -141,9 +143,10 @@ inbox plus `worker-show` alone; do not re-dispatch the same argv into it. On
 every existing coordinator wake or restart, re-read only its `resume_when`
 predicate through tracked `scripts/gh`: `issue_closed` requires the named
 Issue `state=closed`, `pr_merged` requires the named PR `merged=true`, and
-`{ operator: true }` waits for an operator message. When satisfied, send the
-continuation to that same Dispatch. No event is required for an already-satisfied
-GitHub predicate.
+`{ coordinator: true }` means the existing coordinator owns the remedy and continuation. Legacy
+`{ operator: true }` is accepted only as a historical input spelling and is normalized in memory
+to `{ coordinator: true }`; do not rewrite historical artifacts. When the predicate is satisfied,
+send the continuation to that same Dispatch. No event is required for an already-satisfied GitHub predicate.
 
 The manager sends one escalation with a deterministic thread id derived from
 `(issue, stage, cause, resume_when)`; the receiver treats repeated use of that
@@ -156,7 +159,7 @@ coordinator/operator cancellation message, never for `recoverable`,
 `external_pause`, or `contract_defect`.
 
 Until a separate coordinator sweep timer/durable wake lands, paused-unit
-resumption occurs only on existing coordinator wakes and operator messages.
+resumption occurs only on existing coordinator wakes; legacy operator predicates do not require a new operator message.
 Do not add a watcher, polling daemon, queue, lease, parking store,
 acknowledgement protocol, prose parser, reverse dependency lookup, or another
 persistent coordination mechanism.
