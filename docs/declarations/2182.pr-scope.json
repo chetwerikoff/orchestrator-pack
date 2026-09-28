@@ -24,14 +24,14 @@
   ],
   "denylist": [
     ".cursor/skills/create-issue-draft/SKILL.md",
-    ".github/workflows/**",
+    ".github/workflows/",
     "AGENTS.md",
-    "credentials/**",
+    "credentials/",
     "docs/tiering.md",
-    "packages/core/**",
+    "packages/core/",
     "scripts/lib/worker-smoke-receipt.ts",
-    "secrets/**",
-    "vendor/**"
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
     ".cursor/skills/execute-issue-with-gpt/SKILL.md",
