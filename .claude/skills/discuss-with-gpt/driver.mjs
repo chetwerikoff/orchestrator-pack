@@ -27,9 +27,10 @@
 //   Adversarial passes must NOT use it — each pass requires a cold fresh chat.
 //   Default (and --new-chat) opens a new page on the project URL as before.
 //
-// Operator config (required): DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR env var or
-// local.config.json (see local.config.example.json). Project URL from
-// DISCUSS_WITH_GPT_PROJECT_URL / local config, or --project-url on the CLI.
+// Operator browser config is machine-wide: DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR
+// or local.config.json. Target/project URL comes only from the selected project
+// card (--project <id> or OPK_PROJECT_ID). --project-url is forwarding-only and
+// must equal that card-resolved URL.
 // Before CDP connect, verifies the listener's --user-data-dir matches config.
 //
 // --source-url: when the draft is a study/adoption proposal about an external
@@ -108,16 +109,16 @@ function exitConfigMissing(note) {
 
 let PROJECT_URL;
 let chromeUserDataDir;
-const hasCliProjectUrl = a.includes('--project-url');
 try {
-  const cfg = resolveDiscussWithGptConfig({ requireProjectUrl: !hasCliProjectUrl });
-  PROJECT_URL = get('--project-url', cfg.projectUrl);
+  const cfg = resolveDiscussWithGptConfig({ projectId: get('--project') });
+  PROJECT_URL = cfg.projectUrl;
   chromeUserDataDir = cfg.chromeUserDataDir;
+  const forwardedProjectUrl = get('--project-url');
+  if (forwardedProjectUrl && forwardedProjectUrl !== PROJECT_URL) {
+    exitConfigMissing('discuss-with-gpt: --project-url does not match the selected project card');
+  }
 } catch (e) {
   exitConfigMissing((e && e.message) || e);
-}
-if (!PROJECT_URL) {
-  exitConfigMissing('discuss-with-gpt: project URL not set. Set DISCUSS_WITH_GPT_PROJECT_URL or use --project-url.');
 }
 // 900000 ms: large drafts routinely take 10-15+ minutes of GPT reasoning, and a
 // shorter deadline throws away a real answer as stream_timeout.
