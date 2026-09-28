@@ -9,6 +9,7 @@
     "docs/orchestration-runbook.md",
     "docs/worker-smoke-testing.md",
     "scripts/create-issue-convergence.test.ts",
+    "scripts/execute-issue-manager-boundary.ts",
     "scripts/flow-manager-authority-contract.test.ts",
     "scripts/flow-manager-browser-gpt-long-run.ts",
     "scripts/lib/create-issue-manager-boundary.test.ts",
@@ -19,6 +20,7 @@
     "scripts/lib/execute-issue-manager-boundary.test.ts",
     "scripts/lib/execute-issue-manager-boundary.ts",
     "scripts/lib/worker-smoke-core-base.ts",
+    "scripts/lib/worker-smoke-core.ts",
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
   ],
@@ -41,6 +43,7 @@
     "docs/orchestration-runbook.md",
     "docs/worker-smoke-testing.md",
     "scripts/create-issue-convergence.test.ts",
+    "scripts/execute-issue-manager-boundary.ts",
     "scripts/flow-manager-authority-contract.test.ts",
     "scripts/flow-manager-browser-gpt-long-run.ts",
     "scripts/lib/create-issue-manager-boundary.test.ts",
@@ -55,5 +58,5 @@
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "d651bae6ed8b2cb41466f5e43122171308e8c4e9"
+  "source_revision": "8b7441dcd0357a5684c4b67c1967f5b8b07835f0"
 }

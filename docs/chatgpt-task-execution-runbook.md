@@ -574,14 +574,7 @@ not sufficient. This is the normal top-level terminal outcome.
 
 ### `OPERATOR_ACTION_REQUIRED`
 
-Use only after legal recovery is exhausted and the remaining obstacle is a
-genuine external permission/capability requirement, impossibility, unresolved
-target ambiguity, or the possible-send active-turn identity gap for which the
-shared Browser-GPT authority forbids guessing. The supervisor-visible name and
-trigger meaning stay unchanged, but its manager-side effect is the #2078
-escalation with canonical `resume_when: { coordinator: true }`; legacy `{ operator: true }` pause records are normalized on read without rewriting history. The parent Task and manager
-Dispatch remain non-terminal, and the manager does not emit
-`worker_done --outcome failed`.
+Use only for the credential/CAPTCHA residual after legal recovery is exhausted. Name exactly one remaining human action in the remedy, selected from the observed wall (for example, authenticate the already-open session or complete the displayed CAPTCHA); never combine them into a broad request. The supervisor-visible name and trigger meaning stay unchanged. Its manager-side effect is the #2078 escalation with canonical `resume_when: { coordinator: true }`; legacy `{ operator: true }` pause records are normalized on read without rewriting history. The coordinator waits for authoritative evidence that the named action is complete, then resumes the same Dispatch. The parent Task and manager Dispatch remain non-terminal, and the manager does not emit `worker_done --outcome failed`.
 
 Do not use `OPERATOR_ACTION_REQUIRED` merely because a manager/helper/browser
 attempt failed, CI is red, GPT left work incomplete, or a recoverable runtime

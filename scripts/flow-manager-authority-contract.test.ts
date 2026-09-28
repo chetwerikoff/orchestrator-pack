@@ -1778,8 +1778,8 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     expect(executionRunbook).toMatch(
       /The manager\s+does not run independent smoke itself/,
     );
-    expect(executionRunbook).toMatch(
-      /Overall `VERIFIED_COMPLETE` is\s+possible only after independent smoke passes on the final exact head/,
+    expect(executionRunbook).toContain(
+      'independent smoke has passed on the final exact head',
     );
     expect(orchestrationRunbook).toContain(
       'manager whole-role Task/Dispatch handoff',
@@ -1797,8 +1797,8 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     const managerContext: ExecuteIssueManagerBoundaryContext = {
       repository: 'chetwerikoff/orchestrator-pack',
       issueNumber: 2182,
-      sourceRevision: 'r03',
-      phase: 'implementation',
+      sourceRevision: 'r04',
+      phase: 'independent-smoke',
       productionArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'],
       prNumber: 2219,
       headSha,
@@ -1849,6 +1849,9 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
       terminal: false,
       localFixes: 1,
     });
+    expect(fail.exitCode).toBe(0);
+    expect(fail.result.ok && fail.result.verdict).toBe('FAIL');
+    expect(dispatch.terminal).toBe(false);
 
     const pass = continueSmoke({
       schema: 'pack-worker-smoke-report/v1',
@@ -1882,7 +1885,10 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     expect(executionRunbook).toMatch(/the same\s+manager Dispatch remains alive/);
     expect(executionRunbook).toContain('classifyExecuteIssueManagerRecord');
     expect(orchestrationRunbook).toContain('the same manager Dispatch remains nonterminal');
-    expect(smokeRunbook).toContain('does not reopen a completed pack-review stage');
+    expect(executeSkill).toContain('The supervisor consumes the validated `verdict` before role completion');
+    expect(executeSkill).toContain('supervisor-launched local worker owns');
+    expect(smokeRunbook).toContain('does not add or claim local-worker launch');
+    expect(smokeRunbook).toMatch(/does not\s+reopen a completed pack-review stage/);
   });
 
   it('keeps ordinary worker smoke-before-review while exempting only the manager-controlled Browser-GPT path', () => {
@@ -2091,7 +2097,7 @@ describe('Issue #2004 derived external-dependency parking contract', () => {
       'If the escalation send\nitself fails, retry it exactly once',
       'A live Dispatch whose most recent manager message is that escalation is a\n**paused unit**',
       'must not re-dispatch the same argv into it',
-      'Until a separate coordinator sweep/wake\nchange lands',
+      'Until a separate coordinator\nsweep/wake change lands',
       'Browser-GPT\n`TerminalEnvelope` remains a separate transport and is unchanged',
     ]) {
       expect(orchestrationRunbook).toContain(required);

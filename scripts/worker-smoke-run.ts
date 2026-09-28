@@ -2039,6 +2039,14 @@ function preAttemptPublication(
   };
 }
 
+export function validateCoordinatorSmokeOverrideReason(value: string | undefined): string | undefined {
+  const normalized = validateWorkerSmokeOperatorOverrideReason(value);
+  if (normalized && !/^pause-cause=\S[^;]*;\s*repair-evidence=\S.*$/u.test(normalized)) {
+    throw new Error('worker_smoke_coordinator_override_requires_pause_cause_and_repair_evidence');
+  }
+  return normalized;
+}
+
 export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAttemptDependencies = {}): Promise<number> {
   const publishComment = dependencies.publishComment ?? publishPrComment;
   const suppliedIssueBody = readIssueBody(options.issueBodyFile);
@@ -2091,7 +2099,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   const attemptPlan = selection.attemptPlan;
   let overrideReason: string | undefined;
   try {
-    overrideReason = validateWorkerSmokeOperatorOverrideReason(options.operatorOverrideReason);
+    overrideReason = validateCoordinatorSmokeOverrideReason(options.operatorOverrideReason);
   } catch (error) {
     emit({ ok: false, reason: scrubSmokeOutput(error instanceof Error ? error.message : String(error)) }, options.json);
     return 1;

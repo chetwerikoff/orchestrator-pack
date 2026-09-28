@@ -127,11 +127,13 @@ For the manager-controlled Browser-GPT path, the durable `pack-worker-smoke-repo
 record returns through the existing continuation to the same manager Dispatch. The manager
 re-reads the exact Issue/PR/head binding and projects the smoke result through the single
 #2078 four-outcome boundary; it does not send `worker_done --outcome failed` and it does not
-reopen a completed pack-review stage.
+reopen a completed pack-review stage. The supervisor-launched local worker owns any fix
+after handoff; the manager remains nonterminal while that owner works.
 
 - exact-head PASS projects to `completed` with machine-readable verdict `PASS`;
-- only a proved `scenario_assertion_failed` projects to `completed` with verdict `FAIL`
-  and enters the existing fixer/local-worker cycle;
+- only a proved `scenario_assertion_failed` projects to `completed` with verdict `FAIL`;
+  the supervisor routes it to the existing local worker, which fixes and requests fresh
+  independent smoke on the new exact head; it is not sent to the GPT fixer conversation;
 - stale trusted-body/tier/order or same-head in-progress states may be `recoverable` only
   with a validated executable read-only reconciliation action;
 - browser/CDP, profile, login, quota, or product-challenge pauses require a closed structured
@@ -139,8 +141,15 @@ reopen a completed pack-review stage.
 - malformed, missing, contradictory, unsupported, or unknown structured smoke evidence is
   `contract_defect`.
 
+After coordinator repair of an external pause, the existing smoke parent may make its one
+same-head retry with `--operator-override`; its bounded reason must cite both facts in the
+form `pause-cause=<cause>; repair-evidence=<evidence>`. This consumes the existing retry
+fence only and introduces no retry counter or manager re-run action.
+
 Readiness remains PASS-only, scenario order and stop-on-first-nonpass stay unchanged, and the
-same-head BLOCKED retry fence remains the sole retry authority.
+same-head BLOCKED retry fence remains the sole retry authority. The r04 manager-boundary
+change tests result projection with fixtures; it does not add or claim local-worker launch,
+smoke execution, or smoke-result delivery orchestration beyond the existing ownership path.
 
 ## Pre-smoke prerequisite preparation (parent worker)
 

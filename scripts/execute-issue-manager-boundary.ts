@@ -26,8 +26,8 @@ function usage(): string {
     'Execute-Issue manager result boundary', '', 'Usage:',
     '  node --experimental-strip-types scripts/execute-issue-manager-boundary.ts classify',
     '    --record <path> --repo <owner/repo> --issue-number <n> --source-revision <rNN>',
-    '    --phase <implementation|review|fixer> --production-argv-json <json> [--cdp <url>]',
-    '    [--target-id <id> | --conversation-url <url>] [--profile <key> --invocation-id <id>] [--pr-number <n>]',
+    '    --phase <implementation|review|fixer|independent-smoke> --production-argv-json <json> [--cdp <url>]',
+    '    [--target-id <id> | --conversation-url <url>] [--profile <key> --invocation-id <id>] [--pr-number <n> --head-sha <40-hex>]',
     'This classifier emits only the shared four-outcome manager result contract.',
     'Every nextAction.argv introduced here is read-only observation/reconciliation.',
   ].join('\n');
@@ -65,7 +65,7 @@ function parseCli(argv: readonly string[]): ParsedCli {
     if (values.has(key)) throw new Error('duplicate option ' + key);
     values.set(key, value);
   }
-  const allowed = new Set(['--record', '--repo', '--issue-number', '--source-revision', '--phase', '--production-argv-json', '--cdp', '--target-id', '--conversation-url', '--profile', '--invocation-id', '--pr-number']);
+  const allowed = new Set(['--record', '--repo', '--issue-number', '--source-revision', '--phase', '--production-argv-json', '--cdp', '--target-id', '--conversation-url', '--profile', '--invocation-id', '--pr-number', '--head-sha']);
   for (const key of values.keys()) if (!allowed.has(key)) throw new Error('unknown option ' + key);
   const recordPath = values.get('--record');
   const repository = values.get('--repo');
@@ -83,13 +83,17 @@ function parseCli(argv: readonly string[]): ParsedCli {
   if (hasProfile !== hasInvocationId) throw new Error('--profile and --invocation-id must be supplied together');
   if (hasProfile && (!profile || !invocationId)) throw new Error('--profile and --invocation-id must be non-empty when supplied');
   const prRaw = values.get('--pr-number');
+  const phase = parsePhase(values.get('--phase'));
+  const headSha = values.get('--head-sha')?.toLowerCase();
+  if (headSha !== undefined && !/^[0-9a-f]{40}$/u.test(headSha)) throw new Error('--head-sha must be a 40-character hexadecimal SHA');
+  if (phase === 'independent-smoke' && (!prRaw || !headSha)) throw new Error('--phase independent-smoke requires --pr-number and --head-sha');
   return {
     recordPath,
     context: {
       repository,
       issueNumber: positiveInteger(values.get('--issue-number'), '--issue-number'),
       sourceRevision,
-      phase: parsePhase(values.get('--phase')),
+      phase,
       productionArgv: parseProductionArgv(values.get('--production-argv-json')),
       ...(values.get('--cdp') ? { cdp: values.get('--cdp') } : {}),
       ...(targetId ? { targetId } : {}),
@@ -97,6 +101,7 @@ function parseCli(argv: readonly string[]): ParsedCli {
       ...(profile !== undefined ? { profile } : {}),
       ...(invocationId !== undefined ? { invocationId } : {}),
       ...(prRaw ? { prNumber: positiveInteger(prRaw, '--pr-number') } : {}),
+      ...(headSha ? { headSha } : {}),
     },
   };
 }

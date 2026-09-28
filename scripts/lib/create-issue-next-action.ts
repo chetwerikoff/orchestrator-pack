@@ -16,7 +16,7 @@ export const CREATE_ISSUE_NEXT_ACTION_KINDS = [
 
 export type CreateIssueNextActionKind = typeof CREATE_ISSUE_NEXT_ACTION_KINDS[number];
 
-export type ExecuteIssueManagerPhase = 'implementation' | 'review' | 'fixer';
+export type ExecuteIssueManagerPhase = 'implementation' | 'review' | 'fixer' | 'independent-smoke';
 export type ExecuteIssueManagerStage = `execute:${ExecuteIssueManagerPhase}`;
 
 export const CREATE_ISSUE_RECONCILIATION_KINDS = [
@@ -203,12 +203,13 @@ export function validateCreateIssueManagerResult(
     if (hasPause) errors.push('completed manager result must not carry pause');
     if (hasDefect) errors.push('completed manager result must not carry defect');
     if (!nonEmpty(result.cause)) errors.push('completed manager result.cause must be non-empty');
-    if (
-      Object.prototype.hasOwnProperty.call(result, 'verdict')
-      && result.verdict !== 'PASS'
-      && result.verdict !== 'FAIL'
-    ) {
-      errors.push('completed manager result.verdict must be PASS or FAIL when present');
+    const smokeVerdict = result.cause === 'execute_worker_smoke_pass'
+      ? 'PASS'
+      : result.cause === 'execute_worker_smoke_assertion_failed' ? 'FAIL' : null;
+    if (smokeVerdict && result.verdict !== smokeVerdict) {
+      errors.push('completed worker-smoke result.verdict must match its cause');
+    } else if (!smokeVerdict && Object.prototype.hasOwnProperty.call(result, 'verdict')) {
+      errors.push('completed non-smoke result must not carry verdict');
     }
   } else if (result.ok === false) {
     if (!nonEmpty(result.cause)) errors.push('manager non-success result.cause must be non-empty');
@@ -293,13 +294,25 @@ function validateContractDefect(result: Record<string, unknown>): string[] {
   return errors;
 }
 
-function validateResumePredicate(value: unknown): string[] {
-  return normalizeCreateIssueResumePredicate(value)
-    ? []
-    : ['external_pause result.pause.resume_when must be issue_closed, pr_merged, coordinator, or legacy operator'];
+function isCanonicalCreateIssueResumePredicate(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const predicate = value as Record<string, unknown>;
+  const keys = Object.keys(predicate);
+  if (keys.length === 1 && predicate.coordinator === true) return true;
+  return (
+    keys.length === 2
+    && ((Number.isSafeInteger(predicate.issue) && Number(predicate.issue) > 0 && predicate.condition === 'issue_closed')
+      || (Number.isSafeInteger(predicate.pr) && Number(predicate.pr) > 0 && predicate.condition === 'pr_merged'))
+  );
 }
 
-function normalizeLegacyResumePredicateInManagerResult(value: unknown): unknown {
+function validateResumePredicate(value: unknown): string[] {
+  return isCanonicalCreateIssueResumePredicate(value)
+    ? []
+    : ['external_pause result.pause.resume_when must be issue_closed, pr_merged, or coordinator'];
+}
+
+export function normalizeLegacyResumePredicateInManagerResult(value: unknown): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   const result = value as Record<string, unknown>;
   if (!result.pause || typeof result.pause !== 'object' || Array.isArray(result.pause)) return value;
@@ -385,7 +398,8 @@ export function isCreateIssueSemanticStage(value: unknown): value is CreateIssue
     || value === 'acceptance'
     || value === 'execute:implementation'
     || value === 'execute:review'
-    || value === 'execute:fixer';
+    || value === 'execute:fixer'
+    || value === 'execute:independent-smoke';
 }
 
 export function validateCreateIssueActionBinding(value: unknown): string[] {

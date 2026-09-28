@@ -15,6 +15,7 @@ import {
   createIssueRecoverableResult,
   createIssueTerminalResult,
   validateCreateIssueManagerResult,
+  normalizeLegacyResumePredicateInManagerResult,
   type CreateIssueActionBinding,
 } from './create-issue-next-action.ts';
 
@@ -108,18 +109,21 @@ describe('create-Issue manager boundary', () => {
       nextAction: null,
     };
     const historicalBytes = JSON.stringify(legacy);
+    const normalized = normalizeLegacyResumePredicateInManagerResult(legacy);
+    expect(normalized).toMatchObject({
+      pause: { resume_when: { coordinator: true } },
+    });
+    expect(validateCreateIssueManagerResult(legacy)).toContain(
+      'external_pause result.pause.resume_when must be issue_closed, pr_merged, or coordinator',
+    );
     const evaluated = evaluateCreateIssueManagerBoundary({
-      producer: 'legacy-pause-fixture',
+      producer: 'legacy-pause-must-not-be-emitted',
       currentArgv: ['current'],
       produce: () => legacy,
     });
     expect(evaluated).toMatchObject({
-      exitCode: 4,
-      result: {
-        cause: 'external:github_unavailable',
-        pause: { resume_when: { coordinator: true } },
-        nextAction: null,
-      },
+      exitCode: 5,
+      result: { cause: 'producer_contract_defect', nextAction: null },
     });
     expect(JSON.stringify(legacy)).toBe(historicalBytes);
   });

@@ -18,7 +18,7 @@ import {
 import { runExecuteIssueManagerBoundaryCli } from '../execute-issue-manager-boundary.ts';
 
 const context: ExecuteIssueManagerBoundaryContext = {
-  repository: 'chetwerikoff/orchestrator-pack', issueNumber: 2081, sourceRevision: 'r03', phase: 'implementation',
+  repository: 'chetwerikoff/orchestrator-pack', issueNumber: 2081, sourceRevision: 'r03', phase: 'independent-smoke',
   productionArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'],
   cdp: 'http://127.0.0.1:9222', conversationUrl: 'https://chatgpt.com/c/owned-2081', prNumber: 2083,
   headSha: 'a'.repeat(40),
@@ -174,8 +174,10 @@ describe('execute-Issue manager boundary', () => {
       }), context);
       expect(projected.exitCode).toBe(3);
       const action = expectReadOnly(projected);
-      expect(action.argv).toContain(context.headSha);
+      expect(action.argv.join(' ')).toContain(context.headSha);
       expect(action.argv).toContain(String(context.prNumber));
+      expect(action.argv.join(' ')).toContain('#' + context.issueNumber);
+      expect(action.binding.stage).toBe('execute:independent-smoke');
     }
 
     const externalCases = [
@@ -259,6 +261,43 @@ describe('execute-Issue manager boundary', () => {
       exitCode: 5,
       result: { cause: 'producer_contract_defect' },
     });
+  });
+
+  it('requires independent-smoke PR/head context and recognizes the retry fence by structured reason only', () => {
+    expect(classifyExecuteIssueManagerRecord(smoke('PASS'), { ...context, phase: 'implementation' })).toMatchObject({
+      exitCode: 5, result: { cause: 'producer_contract_defect' },
+    });
+    expect(classifyExecuteIssueManagerRecord({
+      schema: 'worker-smoke-run-result/v1',
+      ok: false,
+      attempted: false,
+      reason: 'smoke_blocked_precondition_unchanged',
+      diagnostic: 'ordinary prose must not select a classification',
+    }, context)).toMatchObject({
+      exitCode: 5,
+      result: { cause: 'producer_contract_defect', defect: { producer: 'worker-smoke-retry-fence/v1' } },
+    });
+
+    const output: string[] = [];
+    const errors: string[] = [];
+    const code = runExecuteIssueManagerBoundaryCli([
+      'classify', '--record', '/fixture/smoke.json', '--repo', context.repository,
+      '--issue-number', String(context.issueNumber), '--source-revision', context.sourceRevision,
+      '--phase', 'independent-smoke', '--production-argv-json', JSON.stringify(context.productionArgv),
+      '--pr-number', String(context.prNumber), '--head-sha', context.headSha,
+    ], {
+      readFile: () => JSON.stringify(smoke('BLOCKED', { causeFamily: 'harness_admission_refused', nonPassCause: 'trusted_target_stale' })),
+      stdout: { write: (value) => output.push(value) },
+      stderr: { write: (value) => errors.push(value) },
+      currentArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'],
+    });
+    expect(code).toBe(3);
+    expect(errors).toEqual([]);
+    const projected = JSON.parse(output[0]!) as { nextAction: { binding: { stage: string }; argv: string[] } };
+    expect(projected.nextAction.binding.stage).toBe('execute:independent-smoke');
+    expect(projected.nextAction.argv.join(' ')).toContain(context.headSha);
+    expect(projected.nextAction.argv).toContain(String(context.prNumber));
+    expect(projected.nextAction.argv.join(' ')).toContain('#' + context.issueNumber);
   });
 
   it('accepts only exact read-only argv and rejects send-capable wrappers', () => {

@@ -77,6 +77,7 @@ import {
   smokeReportHasScenarioFinding,
   stabilizeSmokeCommentCensus,
   waitForRuntimeSmokeCompletion,
+  validateCoordinatorSmokeOverrideReason,
   type CliOptions,
   type GateCheckDependencies,
   type ResolvedSmokeTarget,
@@ -569,6 +570,21 @@ describe('Issue #1936 truthful smoke evidence', () => {
     }
   });
 
+  it('requires coordinator retry overrides to cite the pause cause and repair evidence', () => {
+    expect(validateCoordinatorSmokeOverrideReason(
+      'pause-cause=profile_mismatch; repair-evidence=restored authenticated profile',
+    )).toBe('pause-cause=profile_mismatch; repair-evidence=restored authenticated profile');
+    expect(() => validateCoordinatorSmokeOverrideReason('operator confirmed one diagnostic retry'))
+      .toThrow('worker_smoke_coordinator_override_requires_pause_cause_and_repair_evidence');
+    for (const emptyField of [
+      'pause-cause= ; repair-evidence=restored profile',
+      'pause-cause=profile_mismatch; repair-evidence= ',
+    ]) {
+      expect(() => validateCoordinatorSmokeOverrideReason(emptyField))
+        .toThrow('worker_smoke_coordinator_override_requires_pause_cause_and_repair_evidence');
+    }
+  });
+
   it('keeps a blocked tuple sticky across unrelated later attempts and makes override one-shot', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-retry-1936-'));
     const previous = process.env.WORKER_SMOKE_RECEIPT_ROOT;
@@ -593,11 +609,11 @@ describe('Issue #1936 truthful smoke evidence', () => {
       expect(evaluateSameHeadBlockedRetryAdmission({ receipts, selectedScenarios: [tuple] }))
         .toMatchObject({ allowed: false, reason: 'smoke_blocked_precondition_unchanged' });
       expect(evaluateSameHeadBlockedRetryAdmission({
-        receipts, selectedScenarios: [tuple], operatorOverrideReason: 'operator confirmed one diagnostic retry',
+        receipts, selectedScenarios: [tuple], operatorOverrideReason: 'pause-cause=profile_mismatch; repair-evidence=restored authenticated profile',
       })).toMatchObject({ allowed: true });
       writeWorkerSmokeReceipt(harnessFailure, {
         attemptId: 'override-harness-c', executionMode: 'carry-only', attemptObservations: [],
-        operatorOverrideReason: 'operator confirmed one diagnostic retry', publishedAt: '2026-09-18T00:02:00.000Z',
+        operatorOverrideReason: 'pause-cause=profile_mismatch; repair-evidence=restored authenticated profile', publishedAt: '2026-09-18T00:02:00.000Z',
       });
       receipts = listWorkerSmokeReceipts(2001, HEAD_ONE);
       expect(evaluateSameHeadBlockedRetryAdmission({ receipts, selectedScenarios: [tuple] }))

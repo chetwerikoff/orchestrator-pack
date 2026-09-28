@@ -23,7 +23,7 @@ import {
   isWorkerSmokeCauseFamily,
 } from './worker-smoke-core-base.ts';
 
-export const EXECUTE_ISSUE_PHASES = ['implementation', 'review', 'fixer'] as const;
+export const EXECUTE_ISSUE_PHASES = ['implementation', 'review', 'fixer', 'independent-smoke'] as const;
 export type ExecuteIssuePhase = typeof EXECUTE_ISSUE_PHASES[number];
 
 type ClassificationClass = 'completed' | 'recoverable' | 'external_pause' | 'contract_defect' | 'conditional';
@@ -560,19 +560,18 @@ function workerSmokeObservationAction(
 ): CreateIssueNextAction | null {
   const prNumber = context.prNumber ?? Number(value.prNumber);
   const headSha = text(value.headSha).toLowerCase();
-  if (!Number.isSafeInteger(prNumber) || Number(prNumber) < 1 || !/^[0-9a-f]{40}$/u.test(headSha)) return null;
+  if (context.phase !== 'independent-smoke'
+    || !Number.isSafeInteger(prNumber)
+    || Number(prNumber) < 1
+    || !/^[0-9a-f]{40}$/u.test(headSha)
+    || text(context.headSha).toLowerCase() !== headSha) return null;
   return createIssueNextAction({
     kind: 'execute-review-runner-read-only',
     binding: actionBinding(context),
     argv: [
-      'scripts/gh',
-      'pr',
-      'view',
-      String(prNumber),
-      '--json',
-      'number,headRefOid,state',
-      '--jq',
-      '.headRefOid == "' + headSha + '"',
+      'scripts/gh', 'pr', 'view', String(prNumber), '--repo', context.repository,
+      '--json', 'number,headRefOid,body',
+      '--jq', '.number == ' + prNumber + ' and .headRefOid == "' + headSha + '" and (.body | test("(?im)^\\s*(closes|fixes|resolves)\\s+#' + context.issueNumber + '\\b"))',
     ],
   });
 }
@@ -595,10 +594,12 @@ function classifyWorkerSmoke(
   context: ExecuteIssueManagerBoundaryContext,
 ): CreateIssueManagerBoundaryEvaluation {
   const producer = SMOKE_REPORT_PRODUCER;
+  if (context.phase !== 'independent-smoke') {
+    return defect(context, producer, 'worker-smoke report requires the independent-smoke manager phase');
+  }
   if (value.producer !== SMOKE_REPORT_PRODUCER) {
     return defect(context, producer, 'worker-smoke record has an invalid producer');
   }
-
   const issueNumber = Number(value.issueNumber);
   const prNumber = Number(value.prNumber);
   const headSha = text(value.headSha).toLowerCase();
@@ -717,9 +718,12 @@ function classifyReviewRunner(
 export function classifyExecuteIssueManagerRecord(
   input: unknown,
   context: ExecuteIssueManagerBoundaryContext,
- ): CreateIssueManagerBoundaryEvaluation {
+): CreateIssueManagerBoundaryEvaluation {
   const value = record(input);
   if (!value) return defect(context, 'execute-issue-manager-boundary', 'input record must be a JSON object');
+  if (value.reason === 'smoke_blocked_precondition_unchanged') {
+    return defect(context, 'worker-smoke-retry-fence/v1', 'same-head retry fence refused this attempt; coordinator recovery and smoke-parent override evidence are required');
+  }
   if (value.schema === 'turn-result/v1') return classifyTurn(value, context);
   if (value.schema === 'browser-gpt-page-probe/v1') return classifyProbe(value, context);
   if (isWorkerSmokeRecord(value)) return classifyWorkerSmoke(value, context);
