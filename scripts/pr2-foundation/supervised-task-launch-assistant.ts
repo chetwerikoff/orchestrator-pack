@@ -7,6 +7,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
 import { evaluateCommandRuntimePreflight } from '../lib/command-runtime-bootstrap.mjs';
+import { resolveTargetContext } from '../lib/target-context.ts';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
 import type { RuntimeAdapter, RuntimeWorker, RuntimeWorkerIdentity } from '../runtime/contracts.ts';
 import { overlayExecutorProfileEnv } from '../executor-profile-store.ts';
@@ -155,6 +156,7 @@ export type DispatchObservation = { readonly kind: 'absent' }
 
 export interface LaunchInput {
   readonly repository: string;
+  readonly projectId: string;
   readonly workClass: LaunchWorkClass;
   readonly issueNumber?: number;
   readonly runId?: string;
@@ -507,6 +509,7 @@ export async function runSupervisedTaskLaunchAssistant(
   const startAt = deps.now();
   const supervised = await deps.runSupervisedStart({
     repository: resources.repository,
+    projectId: input.projectId,
     ...(input.issueNumber ? { issueNumber: input.issueNumber } : {}),
     ...(input.env ? { env: { ...input.env } } : {}),
     cwd: input.cwd,
@@ -537,7 +540,7 @@ export async function runSupervisedTaskLaunchAssistant(
     const retry = requestId ? [
       'node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/pr2-foundation/supervised-worker-start.ts --',
       ...(input.issueNumber ? ['--issue-number', String(input.issueNumber)] : []),
-      '--repository', quote(resources.repository), '--role', input.workClass === 'manager' ? 'orchestrator' : 'worker',
+      '--project', quote(input.projectId), '--repository', quote(resources.repository), '--role', input.workClass === 'manager' ? 'orchestrator' : 'worker',
       ...(providerMode ? ['--mode', 'provider_new_top_level'] : []), '--', '--task', quote(taskId),
       ...(providerMode
         ? (input.worktreeSelector
@@ -1319,6 +1322,7 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
 }
 
 const LAUNCH_CLI_OPTIONS = new Set([
+  '--project',
   '--repository',
   '--work-class',
   '--issue-number',
@@ -1343,12 +1347,17 @@ function launchCliOptions(argv: readonly string[]): ReadonlyMap<string, string> 
   return parsed;
 }
 
-export function parseLaunchAssistantCli(argv: readonly string[]): LaunchInput {
+export function parseLaunchAssistantCli(argv: readonly string[], env: NodeJS.ProcessEnv = process.env): LaunchInput {
   const options = launchCliOptions(argv);
   const workClass = (options.get('--work-class') ?? '').trim();
   if (!LAUNCH_WORK_CLASSES.includes(workClass as LaunchWorkClass)) throw new Error('--work-class must be exactly manager|t1|t2|t3');
-  const repository = (options.get('--repository') ?? '').trim().toLowerCase();
-  if (!/^[^/\s]+\/[^/\s]+$/u.test(repository)) throw new Error('--repository owner/repo is required');
+  const target = resolveTargetContext({ projectId: (options.get('--project') ?? '').trim(), env });
+  const explicitRepository = (options.get('--repository') ?? '').trim().toLowerCase();
+  if (explicitRepository && !/^[^/\s]+\/[^/\s]+$/u.test(explicitRepository)) throw new Error('--repository must be owner/repo');
+  if (explicitRepository && explicitRepository !== target.repository) {
+    throw new Error(`--repository ${explicitRepository} disagrees with selected project card repository ${target.repository}`);
+  }
+  const repository = target.repository;
   const issueText = (options.get('--issue-number') ?? '').trim();
   let issueNumber: number | undefined;
   if (issueText) {
@@ -1380,6 +1389,7 @@ export function parseLaunchAssistantCli(argv: readonly string[]): LaunchInput {
 
   return {
     repository,
+    projectId: target.projectId,
     workClass: workClass as LaunchWorkClass,
     ...(issueNumber ? { issueNumber } : {}),
     ...(runId ? { runId } : {}),
@@ -1392,7 +1402,7 @@ export function parseLaunchAssistantCli(argv: readonly string[]): LaunchInput {
 }
 
 async function main(argv = process.argv.slice(2)): Promise<void> {
-  const input = parseLaunchAssistantCli(argv);
+  const input = parseLaunchAssistantCli(argv, process.env);
   const result = await runSupervisedTaskLaunchAssistant(input, await createProductionLaunchDependencies(input));
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
