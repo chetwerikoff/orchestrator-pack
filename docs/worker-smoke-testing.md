@@ -121,6 +121,27 @@ only from that verified handoff. After that handoff, independent-smoke findings
 are fixed by the local worker and followed by fresh independent smoke; the already
 completed review stage is not reopened.
 
+## Manager projection of durable worker-smoke evidence
+
+For the manager-controlled Browser-GPT path, the durable `pack-worker-smoke-report/v1`
+record returns through the existing continuation to the same manager Dispatch. The manager
+re-reads the exact Issue/PR/head binding and projects the smoke result through the single
+#2078 four-outcome boundary; it does not send `worker_done --outcome failed` and it does not
+reopen a completed pack-review stage.
+
+- exact-head PASS projects to `completed` with machine-readable verdict `PASS`;
+- only a proved `scenario_assertion_failed` projects to `completed` with verdict `FAIL`
+  and enters the existing fixer/local-worker cycle;
+- stale trusted-body/tier/order or same-head in-progress states may be `recoverable` only
+  with a validated executable read-only reconciliation action;
+- browser/CDP, profile, login, quota, or product-challenge pauses require a closed structured
+  `non-pass-cause`; observed scenario prose is never classification evidence;
+- malformed, missing, contradictory, unsupported, or unknown structured smoke evidence is
+  `contract_defect`.
+
+Readiness remains PASS-only, scenario order and stop-on-first-nonpass stay unchanged, and the
+same-head BLOCKED retry fence remains the sole retry authority.
+
 ## Pre-smoke prerequisite preparation (parent worker)
 
 Before invoking `worker-smoke-run run`, the parent worker MUST make the environment capable of
