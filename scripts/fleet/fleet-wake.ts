@@ -4,6 +4,7 @@ import '../toolchain/native-entrypoint-preflight.ts';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveTargetContext } from '../lib/target-context.ts';
 import {
   DEFAULT_BUSY_RE,
   DEFAULT_ORCHESTRATOR_TITLE_RE,
@@ -23,6 +24,7 @@ import {
 } from './fleet-sweep.ts';
 
 export interface FleetWakeConfig {
+  readonly projectId: string;
   readonly primary: string;
   readonly workspaceRe: RegExp;
   readonly orchestratorTitleRe: RegExp;
@@ -141,7 +143,7 @@ function submitCoordinator(executor: OrcaExecutor, handle: string): boolean {
 export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise<FleetAlarmTickResult> {
   const { config } = options;
   const executor = options.executor ?? defaultOrcaExecutor;
-  const store = options.store ?? new FileFleetWakeStateStore(config.primary);
+  const store = options.store ?? new FileFleetWakeStateStore(config.projectId);
   const sleepMs = options.sleepMs ?? defaultSleep;
   const log = options.log ?? ((line: string) => process.stdout.write(`${line}\n`));
 
@@ -225,17 +227,31 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
   };
 }
 
-export function fleetWakeConfigFromEnv(env: NodeJS.ProcessEnv = process.env): FleetWakeConfig {
-  const primary = env.PRIMARY?.trim();
-  if (!primary) throw new Error('PRIMARY is required');
+export function fleetWakeConfigFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  argv: readonly string[] = [],
+): FleetWakeConfig {
+  let projectId: string | undefined;
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (token === '--project') {
+      const value = argv[++index];
+      if (!value) throw new Error('--project requires an id');
+      projectId = value;
+      continue;
+    }
+    throw new Error(`unknown argument: ${token}`);
+  }
+  const target = resolveTargetContext({ projectId, env });
   const intervalSeconds = env.FLEET_WAKE_INTERVAL?.trim() ? Number(env.FLEET_WAKE_INTERVAL) : 300;
   if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
     throw new Error('FLEET_WAKE_INTERVAL must be a positive number of seconds');
   }
   return {
-    primary,
-    workspaceRe: compileRegex(env.WORKSPACE_RE, defaultWorkspaceRegex(primary)),
-    orchestratorTitleRe: compileRegex(env.ORCH_TITLE_RE, DEFAULT_ORCHESTRATOR_TITLE_RE),
+    projectId: target.projectId,
+    primary: target.primaryRoot,
+    workspaceRe: compileRegex(target.orcaWorkspacePattern, defaultWorkspaceRegex(target.primaryRoot)),
+    orchestratorTitleRe: compileRegex(target.orchestratorTitlePattern, DEFAULT_ORCHESTRATOR_TITLE_RE),
     ...(env.ORCH_HANDLE?.trim() ? { orchestratorHandle: env.ORCH_HANDLE.trim() } : {}),
     busyRe: compileRegex(env.BUSY_RE, DEFAULT_BUSY_RE),
     intervalSeconds,
@@ -248,7 +264,7 @@ export async function runFleetWakeLoop(
 ): Promise<never> {
   const sleepMs = dependencies.sleepMs ?? defaultSleep;
   const log = dependencies.log ?? ((line: string) => process.stdout.write(`${line}\n`));
-  log(`start ${basename(resolve(config.primary))} interval=${config.intervalSeconds}s`);
+  log(`start ${config.projectId} interval=${config.intervalSeconds}s`);
   while (true) {
     try {
       await runFleetAlarmTick({ ...dependencies, config, sleepMs, log });
@@ -264,7 +280,7 @@ function isDirectExecution(): boolean {
 }
 
 if (isDirectExecution()) {
-  runFleetWakeLoop(fleetWakeConfigFromEnv()).catch((error: unknown) => {
+  runFleetWakeLoop(fleetWakeConfigFromEnv(process.env, process.argv.slice(2))).catch((error: unknown) => {
     process.stderr.write(`fleet-wake: ${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;
   });
