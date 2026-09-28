@@ -252,17 +252,27 @@ interface SmokeChildResult {
 
 type SmokeChildExecutor = (args: readonly string[], env?: Readonly<NodeJS.ProcessEnv>) => SmokeChildResult;
 
+class WorkerSmokeHarnessError extends Error {
+  readonly code: string;
+
+  constructor(code: string, diagnostic: string = code) {
+    super(diagnostic);
+    this.name = 'WorkerSmokeHarnessError';
+    this.code = code;
+  }
+}
+
 function smokeSemanticProfile(
   complexity: SmokeComplexity | string,
   env: Readonly<NodeJS.ProcessEnv>,
 ): SemanticExecutorProfile {
-  if (complexity !== 'routine' && complexity !== 'complex') throw new Error('smoke_complexity_unsupported');
+  if (complexity !== 'routine' && complexity !== 'complex') throw new WorkerSmokeHarnessError('smoke_complexity_unsupported');
   const names = profileNamesForSmoke(complexity);
   const resolved = resolveSemanticExecutorProfile({ surface: 'smoke', names, env });
   if (resolved.ok) return resolved.profile;
-  if (resolved.code === 'executor_profile_missing') throw new Error(`smoke_profile_missing:${resolved.variables.join(',')}`);
-  if (resolved.code === 'executor_profile_malformed') throw new Error(`smoke_profile_malformed:${resolved.variables.join(',')}`);
-  throw new Error(`smoke_profile_unsupported_agent:${resolved.variables[0]}`);
+  if (resolved.code === 'executor_profile_missing') throw new WorkerSmokeHarnessError('smoke_profile_missing', `smoke_profile_missing:${resolved.variables.join(',')}`);
+  if (resolved.code === 'executor_profile_malformed') throw new WorkerSmokeHarnessError('smoke_profile_malformed', `smoke_profile_malformed:${resolved.variables.join(',')}`);
+  throw new WorkerSmokeHarnessError('smoke_profile_unsupported_agent', `smoke_profile_unsupported_agent:${resolved.variables[0]}`);
 }
 
 function smokeProfileFromSemantic(
@@ -288,7 +298,7 @@ export function resolveSmokeExecutorProfile(
     ? CURSOR_SMOKE_CAPABILITY
     : { available: false, supportsModel: false, supportsEffort: false };
   const verdict = evaluateExecutorSpawnApplicability(capability);
-  if (!verdict.ok) throw new Error(verdict.refusal);
+  if (!verdict.ok) throw new WorkerSmokeHarnessError(verdict.refusal);
   return smokeProfileFromSemantic(complexity as SmokeComplexity, profile);
 }
 
@@ -302,8 +312,8 @@ export function resolveLiveSmokeExecutorProfile(
   const profile = smokeSemanticProfile(complexity, env);
   const descriptor = EXECUTOR_FAMILY_DESCRIPTORS[profile.family];
   const catalog = execute(descriptor.catalogCommand);
-  if (!catalog.ok) throw new Error('executor_profile_applicability_unproven');
-  if (!executorCatalogContains(profile, catalog.stdout)) throw new Error('executor_profile_model_unavailable');
+  if (!catalog.ok) throw new WorkerSmokeHarnessError('executor_profile_applicability_unproven');
+  if (!executorCatalogContains(profile, catalog.stdout)) throw new WorkerSmokeHarnessError('executor_profile_model_unavailable');
 
   let capability = CURSOR_SMOKE_CAPABILITY;
   if (profile.family === 'opencode') {
@@ -312,7 +322,7 @@ export function resolveLiveSmokeExecutorProfile(
     for (const probe of descriptor.capabilityProbeCommands) {
       const isDebugProbe = probe[0] === 'opencode' && probe[1] === 'debug';
       const result = isDebugProbe ? execute(probe, { OPENCODE_CONFIG_CONTENT: inlineConfig }) : execute(probe);
-      if (!result.ok) throw new Error('executor_route_unavailable');
+      if (!result.ok) throw new WorkerSmokeHarnessError('executor_route_unavailable');
       observations.push(`${result.stdout}\n${result.stderr ?? ''}`);
     }
     const edgeCapabilities = openCodeEdgeCapabilities(observations, profile);
@@ -321,11 +331,11 @@ export function resolveLiveSmokeExecutorProfile(
       startMode: 'exact_terminal_worktree',
       edgeCapabilities,
     });
-    if (!routeVerdict.ok) throw new Error(routeVerdict.refusal);
+    if (!routeVerdict.ok) throw new WorkerSmokeHarnessError(routeVerdict.refusal);
     capability = edgeCapabilities.exactTerminal;
   }
   const verdict = evaluateExecutorSpawnApplicability(capability);
-  if (!verdict.ok) throw new Error(verdict.refusal);
+  if (!verdict.ok) throw new WorkerSmokeHarnessError(verdict.refusal);
 
   let finalProfile = profile;
   let finalCommand: string | undefined;
@@ -342,7 +352,7 @@ export function resolveLiveSmokeExecutorProfile(
     'const n=process.argv.slice(1);process.exit(n.every((k)=>typeof process.env[k]==="string"&&process.env[k].trim())?0:1)',
     ...profile.names,
   ]);
-  if (!inherited.ok) throw new Error('executor_profile_child_inheritance_unproven');
+  if (!inherited.ok) throw new WorkerSmokeHarnessError('executor_profile_child_inheritance_unproven');
   const smokeProfile = smokeProfileFromSemantic(complexity as SmokeComplexity, finalProfile);
   return finalCommand ? { ...smokeProfile, command: finalCommand } : smokeProfile;
 }
@@ -369,34 +379,34 @@ function proveOpenCodeNoWrite(cwd: string): boolean {
 type OpenCodeNoWriteProof = (cwd: string) => boolean;
 
 function smokeFinalizeOpenCode(profile: SemanticExecutorProfile, cwd: string, execute: SmokeChildExecutor, proveNoWrite?: OpenCodeNoWriteProof): { profile: SemanticExecutorProfile; command: string } {
-  if (!proveNoWrite || !proveNoWrite(cwd)) throw new Error('executor_effort_channel_unavailable');
+  if (!proveNoWrite || !proveNoWrite(cwd)) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
   const before = smokeConfigState(cwd);
   const stateRoot = join(tmpdir(), `opk-opencode-state-${randomUUID()}`);
   const isolatedEnv = { XDG_STATE_HOME: stateRoot };
   const config = execute(['opencode', 'debug', 'config'], isolatedEnv);
-  if (!config.ok || before !== smokeConfigState(cwd)) throw new Error('executor_effort_channel_unavailable');
+  if (!config.ok || before !== smokeConfigState(cwd)) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
   let parsed: Record<string, unknown>;
-  try { const value: unknown = JSON.parse(config.stdout); if (!record(value)) throw new Error(); parsed = value; } catch { throw new Error('executor_effort_channel_unavailable'); }
+  try { const value: unknown = JSON.parse(config.stdout); if (!record(value)) throw new Error(); parsed = value; } catch { throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable'); }
   const defaultAgent = typeof parsed.default_agent === 'string' ? parsed.default_agent.trim() : '';
-  if (!defaultAgent) throw new Error('executor_effort_channel_unavailable');
+  if (!defaultAgent) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
   const baseline = execute(['opencode', 'debug', 'agent', defaultAgent], isolatedEnv);
-  if (!baseline.ok || before !== smokeConfigState(cwd)) throw new Error('executor_effort_channel_unavailable');
+  if (!baseline.ok || before !== smokeConfigState(cwd)) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
   let baselineValue: Record<string, unknown>;
-  try { const value: unknown = JSON.parse(baseline.stdout); if (!record(value)) throw new Error(); baselineValue = value; } catch { throw new Error('executor_effort_channel_unavailable'); }
+  try { const value: unknown = JSON.parse(baseline.stdout); if (!record(value)) throw new Error(); baselineValue = value; } catch { throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable'); }
   const model = profile.model;
   const effort = profile.effort;
-  if (!model || !effort) throw new Error('executor_effort_channel_unavailable');
+  if (!model || !effort) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
   const agentName = `pack-opk-${randomUUID().replaceAll('-', '')}`;
   const overlay = buildOpenCodeAgentOverlay({ agentName, baseline: baselineValue, model, effort, stateRoot });
   const resolved = execute(['opencode', 'debug', 'agent', agentName], { ...isolatedEnv, OPENCODE_CONFIG_CONTENT: overlay.inlineConfigJson! });
-  if (!resolved.ok || before !== smokeConfigState(cwd)) throw new Error('executor_effort_channel_unavailable');
+  if (!resolved.ok || before !== smokeConfigState(cwd)) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
   let resolvedValue: Record<string, unknown>;
-  try { const value: unknown = JSON.parse(resolved.stdout); if (!record(value)) throw new Error(); resolvedValue = value; } catch { throw new Error('executor_effort_channel_unavailable'); }
+  try { const value: unknown = JSON.parse(resolved.stdout); if (!record(value)) throw new Error(); resolvedValue = value; } catch { throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable'); }
   const resolvedModel = record(resolvedValue.model) ? resolvedValue.model : null;
   if (!resolvedModel || resolvedModel.modelID !== model.split('/').at(-1) || resolvedValue.variant !== effort
-    || openCodeAgentSemantics(baselineValue) !== openCodeAgentSemantics(resolvedValue)) throw new Error('executor_effort_channel_unavailable');
+    || openCodeAgentSemantics(baselineValue) !== openCodeAgentSemantics(resolvedValue)) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
   const paths = execute(['opencode', 'debug', 'paths'], isolatedEnv);
-  if (!paths.ok || !paths.stdout.includes(stateRoot)) throw new Error('executor_effort_channel_unavailable');
+  if (!paths.ok || !paths.stdout.includes(stateRoot)) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
   return { profile: { ...profile, model, effort }, command: overlay.command };
 }
 
@@ -1213,15 +1223,9 @@ function failureReason(failure: RuntimeOperationFailure): string {
 }
 
 function structuredHarnessReasonFromError(error: unknown): string | undefined {
-  if (record(error)) {
-    const code = typeof error.code === 'string' ? error.code.trim() : '';
-    if (code) return code;
-  }
-  if (error instanceof Error) {
-    const message = error.message.trim();
-    if (/^[a-z0-9_]+(?::.*)?$/u.test(message)) return message;
-  }
-  return undefined;
+  if (!(error instanceof Error) || !('code' in error)) return undefined;
+  const code = (error as Error & { readonly code?: unknown }).code;
+  return typeof code === 'string' && code.trim() ? code.trim() : undefined;
 }
 
 function operationalReport(
@@ -1969,14 +1973,14 @@ export function beginSmokeOrdering(
   owner: SmokeOrderingAttemptOwner,
 ): SmokeOrderingBinding | null {
   const actor = options.smokeActor ?? 'worker-owned';
-  if (actor !== 'worker-owned' && actor !== 'independent') throw new Error('smoke_actor_unsupported');
+  if (actor !== 'worker-owned' && actor !== 'independent') throw new WorkerSmokeHarnessError('smoke_actor_unsupported');
   const required = smokeOrderingRequired(issueBody);
   const plan = resolveSmokeRequirement(issueBody);
   if (!required && (actor !== 'worker-owned' || plan.requirement !== 'not-applicable')) return null;
   const fence = parseComplexityTierFence(issueBody);
   if (fence.kind !== 'tier-fence') {
     if (actor === 'worker-owned' && plan.requirement !== 'not-applicable') return null;
-    if (actor !== 'worker-owned') throw new Error('smoke_ordering_tier_missing');
+    if (actor !== 'worker-owned') throw new WorkerSmokeHarnessError('smoke_ordering_tier_missing');
   }
   const projectId = 'orchestrator-pack';
   const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: process.env.PACK_REVIEW_RUN_STORE_ROOT });
@@ -2007,7 +2011,7 @@ export function beginSmokeOrdering(
 function finishSmokeOrdering(binding: SmokeOrderingBinding | null, status: 'passed' | 'failed', failureKind: SmokeOrderingFailureKind = 'retryable'): void {
   if (!binding) return;
   const authority = readPackReviewAuthority(binding.prNumber, binding.options);
-  if (!authority) throw new Error('smoke_ordering_authority_missing_at_terminal');
+  if (!authority) throw new WorkerSmokeHarnessError('smoke_ordering_authority_missing_at_terminal');
   commitSmokeOrderingTransition({
     prNumber: binding.prNumber, expectedTransitionSeq: authority.transitionSeq, actor: binding.actor,
     headSha: binding.headSha, status, attemptId: binding.attemptId, supervisorPid: binding.supervisorPid,
@@ -2429,7 +2433,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
 
     if (!start.ok) {
       if (!start.actionEntered) { releaseSmokeAdmission(options.cwd, runId); emit({ ok: true, skipped: true, attempted: false, reason: start.reason }, options.json); return 0; }
-      throw new Error(`smoke_start_fence_post_entry:${start.reason}`);
+      throw new WorkerSmokeHarnessError('smoke_start_fence_post_entry', `smoke_start_fence_post_entry:${start.reason}`);
     }
     if (start.value.kind === 'spawn_failed') {
       const report = operationalReport('harness_observation_interrupted', options, { action: 'spawn runtime smoke worker', expected: 'composite worker identity', observed: start.value.reason, terminalCleanup: 'ambiguous_unbound', adapterId: adapter.id });
@@ -2437,7 +2441,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       deferDetachedTerminalization(runId, artifactDir, 'runtime', report);
       emit({ ok: false, report, attemptId }, options.json); return 1;
     }
-    if (!worker || startedAtMs <= 0) throw new Error('smoke_start_prefix_incomplete');
+    if (!worker || startedAtMs <= 0) throw new WorkerSmokeHarnessError('smoke_start_prefix_incomplete');
 
     const binding = { runId, artifactDir };
     const prompt = buildLifecyclePrompt(buildSmokeAgentPrompt({

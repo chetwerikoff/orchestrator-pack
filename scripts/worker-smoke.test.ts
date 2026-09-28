@@ -1035,10 +1035,11 @@ describe('runtime-neutral worker smoke', () => {
     }
   });
 
-  it('does not promote diagnostic observed prose into manager non-pass authority', async () => {
+  it('does not promote a caught diagnostic Error.message into manager non-pass authority', async () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-observed-prose-'));
     const issueBodyFile = join(root, 'issue.md');
     writeFileSync(issueBodyFile, issueBody, 'utf8');
+    expect(runProcessSync({ command: 'git', args: ['init', '--quiet'], cwd: root }).ok).toBe(true);
     const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     try {
       const code = await runSmokeAttempt({
@@ -1053,10 +1054,24 @@ describe('runtime-neutral worker smoke', () => {
         dryRun: true,
         json: true,
       }, {
-        resolveTarget: () => {
+        resolveTarget: () => ({
+          repositorySlug: REPOSITORY,
+          issueNumber: 1968,
+          prNumber: 2002,
+          headSha: HEAD_ONE,
+          issueBody,
+          prBody: 'Closes #1968',
+          issueBodyMatchesTarget: true,
+          trustedPublisherLogin: TRUSTED_ACTOR,
+          prOpen: true,
+          baseRef: 'main',
+          expectedTargetRef: 'main',
+          expectedTarget: true,
+        }),
+        fetchHistoryComments: () => [],
+        resolveProfile: () => {
           throw new Error('login_required: diagnostic-only prose');
         },
-        fetchHistoryComments: () => [],
       });
       expect(code).toBe(1);
       const rendered = output.mock.calls.map((entry) => String(entry[0])).join('');
@@ -1070,6 +1085,66 @@ describe('runtime-neutral worker smoke', () => {
       expect(parsed.report?.causeFamily).toBe('harness_admission_refused');
       expect(parsed.report?.nonPassCause).toBeUndefined();
       expect(parsed.report?.scenarios?.[0]?.observed).toContain('login_required');
+    } finally {
+      output.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves a caught typed error code independently of diagnostic message text', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-typed-reason-'));
+    const issueBodyFile = join(root, 'issue.md');
+    writeFileSync(issueBodyFile, issueBody, 'utf8');
+    expect(runProcessSync({ command: 'git', args: ['init', '--quiet'], cwd: root }).ok).toBe(true);
+    const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      const code = await runSmokeAttempt({
+        command: 'run',
+        issueNumber: 1968,
+        prNumber: 2002,
+        headSha: HEAD_ONE,
+        issueBodyFile,
+        smokeComplexity: 'routine',
+        repoRoot: root,
+        cwd: root,
+        dryRun: true,
+        json: true,
+      }, {
+        resolveTarget: () => ({
+          repositorySlug: REPOSITORY,
+          issueNumber: 1968,
+          prNumber: 2002,
+          headSha: HEAD_ONE,
+          issueBody,
+          prBody: 'Closes #1968',
+          issueBodyMatchesTarget: true,
+          trustedPublisherLogin: TRUSTED_ACTOR,
+          prOpen: true,
+          baseRef: 'main',
+          expectedTargetRef: 'main',
+          expectedTarget: true,
+        }),
+        fetchHistoryComments: () => [],
+        resolveProfile: () => {
+          const error = new Error('diagnostic text without a classification token') as Error & { code: string };
+          error.code = 'executor_effort_channel_unavailable';
+          throw error;
+        },
+      });
+      expect(code).toBe(1);
+      const rendered = output.mock.calls.map((entry) => String(entry[0])).join('');
+      const parsed = JSON.parse(rendered) as {
+        report?: {
+          causeFamily?: string;
+          nonPassCause?: string;
+          scenarios?: Array<{ observed?: string }>;
+        };
+      };
+      expect(parsed.report).toMatchObject({
+        causeFamily: 'harness_admission_refused',
+        nonPassCause: 'unsupported_executor_capability',
+      });
+      expect(parsed.report?.scenarios?.[0]?.observed).toContain('diagnostic text without a classification token');
     } finally {
       output.mockRestore();
       rmSync(root, { recursive: true, force: true });
