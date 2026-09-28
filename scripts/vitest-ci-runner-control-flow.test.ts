@@ -243,6 +243,8 @@ describe('Vitest CI runner actual fail-closed control flow', () => {
       input.args?.[0]?.endsWith('vitest-json-report.mjs') && input.args?.[1] === 'merge'
     ));
     expect(mergeCall?.[0].args).toContain(path.join(process.cwd(), partialReport));
+    rmSync(aggregateReport, { force: true });
+    rmSync(aggregateMeta, { force: true });
     const statusAfter = await worktreeStatus();
     if (statusBefore === '') expect(statusAfter).toBe('');
     else expect(statusAfter).toBe(statusBefore);
