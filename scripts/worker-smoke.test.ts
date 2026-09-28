@@ -38,6 +38,7 @@ import {
   WORKER_SMOKE_CAUSE_FAMILIES,
   smokeResultForWorkerSmokeCauseFamily,
   workerSmokeCauseFamilyForHarnessReason,
+  workerSmokeManagerNonPassCauseForHarnessReason,
 } from './lib/worker-smoke-core-base.ts';
 import { inspectSmokeProgress, readSmokeLifecycleRegistry } from './lib/worker-smoke-lifecycle-base.ts';
 import { evaluateSmokeLifecycleCleanliness, SMOKE_LIFECYCLE_POLL_MS } from './lib/worker-smoke-lifecycle.ts';
@@ -400,6 +401,11 @@ describe('Issue #1936 truthful smoke evidence', () => {
       expect(workerSmokeCauseFamilyForHarnessReason(reason)).toBe(family);
     }
     expect(workerSmokeCauseFamilyForHarnessReason('future prose-shaped reason')).toBe('unknown');
+    expect(workerSmokeManagerNonPassCauseForHarnessReason('trusted_target_head_mismatch:abc')).toBe('trusted_target_stale');
+    expect(workerSmokeManagerNonPassCauseForHarnessReason('smoke_ordering_independent_in_progress')).toBe('smoke_same_head_in_progress');
+    expect(workerSmokeManagerNonPassCauseForHarnessReason('smoke_profile_malformed:PACK_EXECUTOR_SMOKE_AGENT')).toBe('invalid_adapter_arguments');
+    expect(workerSmokeManagerNonPassCauseForHarnessReason('executor_profile_model_unavailable')).toBe('unsupported_executor_capability');
+    expect(workerSmokeManagerNonPassCauseForHarnessReason('future prose-shaped reason')).toBeUndefined();
     expect(smokeResultForWorkerSmokeCauseFamily('scenario_precondition_unavailable')).toBe('BLOCKED');
     expect(smokeResultForWorkerSmokeCauseFamily('scenario_assertion_failed')).toBe('FAIL');
     expect(smokeResultForWorkerSmokeCauseFamily('unknown')).toBe('FAIL');
@@ -3087,6 +3093,9 @@ describe('buildSmokeAgentPrompt selected declaration artifact', () => {
 
     expect(prompt).toContain('When waiting for executor work, use only a completion or session identifier actually returned by the selected executor; never invent a shell_id or a transcript path.');
     expect(prompt).toContain('Continue to follow the existing lifecycle progress and cancellation protocol.');
+    expect(prompt).toContain('non-pass-cause: executed_scenario_failure');
+    expect(prompt).toContain('browser_cdp_unavailable, profile_mismatch, login_required, quota_exhausted, or product_challenge');
+    expect(prompt).toContain('non-pass-cause: <closed structured cause when required above>');
     expect(prompt).not.toContain('~/.cursor/projects/');
     expect(prompt).not.toContain('Never await a shell that has already ended');
     expect(prompt).toContain('Cap any single block_until_ms at 300000; re-check and re-await instead of one long block.');
