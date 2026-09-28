@@ -89,7 +89,7 @@ function classifyThrown(input: CreateIssueManagerBoundaryInput, error: unknown):
       cause: input.externalEvidence.cause,
       evidence: input.externalEvidence.evidence,
       remedy: input.externalEvidence.remedy,
-      resumeWhen: { operator: true },
+      resumeWhen: { coordinator: true },
       blocker: message,
     });
   }
@@ -99,7 +99,7 @@ function classifyThrown(input: CreateIssueManagerBoundaryInput, error: unknown):
       cause: 'external:content_authority_conflict',
       evidence: message,
       remedy: 'resolve the authoritative GitHub content/principal conflict, then resume this same live Dispatch',
-      resumeWhen: { operator: true },
+      resumeWhen: { coordinator: true },
       blocker: message,
     });
   }
@@ -112,7 +112,7 @@ function classifyThrown(input: CreateIssueManagerBoundaryInput, error: unknown):
         cause,
         evidence: evidence.externalCauses.join('; '),
         remedy: 'restore the external reviewer transport condition, then resume this same live Dispatch',
-        resumeWhen: { operator: true },
+        resumeWhen: { coordinator: true },
         blocker: message,
       });
     }
