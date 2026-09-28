@@ -71,7 +71,7 @@ the exact card `projectId`, not by a target-root basename.
    fleet result and its polling/last-sent state is isolated under that exact
    project id.
 7. Validate both the pack card and every adopted target card with
-   `node --experimental-strip-types "$PACK_ROOT/scripts/lib/target-context.ts" check --project <projectId>`.
+   `node --experimental-strip-types "$PACK_ROOT/scripts/lib/Invoke-TypeScriptCli.ts" --repo-root "$PACK_ROOT" --script "$PACK_ROOT/scripts/lib/target-context.ts" -- check --project <projectId>`.
 
 For a non-pack target, do not adopt the supervisor/first-task steps until #2186
 and #2187 have landed as described in
