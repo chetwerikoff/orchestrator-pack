@@ -55,7 +55,7 @@ export interface ResolveTargetContextInput {
 
 const PACK_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PROJECT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
-const REPOSITORY_RE = /^[^/\\s]+\/[^/\\s]+$/u;
+const REPOSITORY_RE = /^[^/\s]+\/[^/\s]+$/u;
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
