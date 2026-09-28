@@ -21,6 +21,114 @@ pack-relative authority pointers, see the canonical [`AGENTS.md`
 target-repository policy](../AGENTS.md#target-repository-embedding-and-coexistence).
 This document is setup guidance only and does not restate that policy.
 
+## Deploy the pack into a target project
+
+This procedure has two distinct roots and one selected target binding:
+
+- `$PACK_ROOT` is the stable machine-wide checkout that owns pack scripts,
+  skills, and runbooks. It is never target identity.
+- `primaryRoot` comes from the selected project card and is the target
+  repository's primary checkout.
+- Select exactly one project with `--project <projectId>` or
+  `OPK_PROJECT_ID`. If both are present they must match. There is no cwd,
+  git-remote, `--repo-root`, machine-wide project-URL, or pack-project fallback.
+
+Prerequisites: `$PACK_ROOT` is on current `main` with
+`npm ci --include=dev` complete; Node 22 is active; `gh auth status` is
+green; the automation Chrome is logged into ChatGPT; and Orca is running.
+
+1. **ChatGPT project.** Create a ChatGPT project for the target and copy its
+   project URL (for example `https://chatgpt.com/g/<slug>/project`).
+2. **Project card.** Create
+   `~/.config/orchestrator-pack/projects/<projectId>.json` (or the equivalent
+   under `$XDG_CONFIG_HOME`) with `projectId`, `repository`,
+   `primaryRoot`, `defaultBranch`, `orcaWorkspacePattern`,
+   `orchestratorTitlePattern`, `browserGpt.projectUrl`, and
+   `verification`. `projectId` must equal the filename. `repository` must
+   match `git remote get-url origin` in `primaryRoot`; unrelated additional
+   remotes do not participate in the binding. Validate the card:
+
+   ```bash
+   node --experimental-strip-types "$PACK_ROOT/scripts/lib/target-context.ts" check --project <projectId>
+   ```
+
+   A successful check prints the resolved repository, primary root, default
+   branch, and project URL. Target verification semantics are owned by #2187;
+   populate the card field for that dependency rather than inventing a pack
+   verification fallback here.
+3. **Pack policy in the target.** Run:
+
+   ```bash
+   node --experimental-strip-types "$PACK_ROOT/scripts/bootstrap.ts" --target-repo <primaryRoot>
+   ```
+
+   Keep the managed `orchestrator-pack` policy block intact. Add target-owned
+   rules outside the markers with the project-card path, shared orchestrator
+   prompt path, shared templates path, and target verification commands.
+4. **Agent rules.** Symlink the global Cursor rules into
+   `<primaryRoot>/.cursor/rules/` as described by `~/agent-rules/README.md`.
+5. **Scope guard and CI.** Install `.github/workflows/scope-guard.yml` and the
+   reusable policy workflows. Run
+   `$PACK_ROOT/scripts/install-git-hooks.ts --install-scope-guard` for the
+   target, add required Actions secrets to the target repository, and configure
+   branch protection/rulesets. #2187 owns the target verification/check
+   expectations; this runbook does not replace that authority.
+6. **Orca.** Register `<primaryRoot>` as an Orca repository using its supported
+   setup path and confirm new worktrees match `orcaWorkspacePattern`.
+7. **Supervisor — non-pack targets require #2186.** Do not execute this step for
+   a non-pack target until #2186 has landed and been adopted. Then run
+   `opk-wake-supervisor <projectId> start`, followed by `status`. Expect
+   supervisor state under
+   `.../orchestrator-pack-wake-supervisor/<projectId>/` and scheduler
+   `repository=<card repository>`. #2186 owns removing scheduler target
+   inference from cwd/`--repo-root`.
+8. **Fleet wake.** Remove the retired
+   `~/.config/orchestrator-fleet/<projectId>.env` if it exists. Render/install
+   `scripts/fleet/fleet-wake@.service` from the stable `$PACK_ROOT`
+   checkout, replacing `{PACK_ROOT}` with that absolute pack checkout path.
+   Its `ExecStart` must execute the in-pack entrypoint and pass
+   `--project %i`; it must never locate pack code under target
+   `primaryRoot`. Then run:
+
+   ```bash
+   systemctl --user daemon-reload
+   systemctl --user enable --now fleet-wake@<projectId>
+   ```
+
+   Smoke this with a target whose `primaryRoot` contains no pack scripts.
+   After one interval,
+   `tail -3 ~/.local/state/orchestrator-fleet/<projectId>.fleet-wake.log`
+   must show a normal result such as `orchestrator busy`, `nothing stopped`,
+   or `woke`, not `no orchestrator pane found`.
+9. **Orchestrator.** Open the agent terminal in `<primaryRoot>` and run
+   `opk-orch-primary <projectId> <terminal-handle>`. Verify
+   `operator-primary-binding show --project <projectId>` names the intended
+   assignment and that
+   `operator-primary-binding show --project orchestrator-pack` is unchanged.
+10. **Browser-GPT smoke.** Run one standalone
+    `driver.mjs --project <projectId> --new-chat` pass on a trivial artifact.
+    The chat must open under the selected card's ChatGPT project URL. Machine
+    browser/profile settings remain in `local.config.json`; `projectUrl`
+    does not.
+11. **First task — non-pack targets require #2186 and #2187.** Do not run the
+    end-to-end target task until both dependencies have landed and been adopted.
+    Then create one small target Issue and drive it to a PR through the normal
+    flow. Verify every GitHub effect lands in `<repository>`, every
+    per-project state namespace uses `<projectId>`, and verification runs the
+    target-owned commands.
+12. **Rollback.** Disable fleet wake with
+    `systemctl --user disable --now fleet-wake@<projectId>`. If #2186 has
+    landed and step 7 started the per-project supervisor, run
+    `opk-wake-supervisor <projectId> stop`. Remove that project card. Other
+    target cards and the pack project remain untouched.
+
+Operator-local `~/.local/bin/opk-*` launchers and the shared prompts/templates
+are deliberately not tracked by this repository. They must read the selected
+card and pass `--project <id>`; pack scripts are invoked from `{PACK_ROOT}`,
+never "from this worktree". The shared prompt/template placeholders are
+`{PROJECT_ID}`, `{REPOSITORY}`, `{PRIMARY_ROOT}`, `{PACK_ROOT}`,
+`{DEFAULT_BRANCH}`, and `{VERIFY}`.
+
 ## Managed AGENTS.md block
 
 Target-project rules live outside one marker pair. Pack rules live inside that
