@@ -220,7 +220,9 @@ async function probePage(document: FixtureDocument) {
 function expectInjectionTimeout(targetStatuses: readonly { target_id: string; status: string }[]) {
   return (error: unknown): boolean => {
     assert.ok(error instanceof Error);
-    assert.equal(error.message, `injection_timeout:${JSON.stringify(targetStatuses)}`);
+    assert.equal(error.message, targetStatuses.length
+      ? `injection_timeout:${JSON.stringify(targetStatuses)}`
+      : 'injection_timeout:waiting_for_conversation');
     return true;
   };
 }
@@ -239,18 +241,19 @@ test('attaches to an existing project tab and injects into the active assistant 
   const target = {
     id: 'existing-project-tab',
     type: 'page',
-    url: 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/project',
+    url: 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/c/6ab99792-ff18-83ec-8cb6-49d560ece5d1',
     webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/page/existing-project-tab',
   };
   const foreignTarget = {
     ...target,
     id: 'foreign-chat',
-    url: 'https://chatgpt.com/c/foreign',
+    url: 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/c/foreign',
     webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/page/foreign-chat',
   };
   let listCalls = 0;
   const connectedTargets: string[] = [];
   const injected = await injectMessageStreamError({
+    conversation: '6ab99792-ff18-83ec-8cb6-49d560ece5d1',
     cdp: 'http://127.0.0.1:9237',
     timeoutMs: 1_000,
     list: async () => {
@@ -311,8 +314,9 @@ test('injection refuses when the Stop control or assistant turn is absent', asyn
   assert.equal(stop.connected, true);
 });
 
-test('attaches to the recorded orchestrator-pack conversation route after skipping an idle project tab', async () => {
+test('evaluates only the supplied conversation and ignores other orchestrator-pack tabs', async () => {
   const { document, assistantTurn } = makeFixturePage();
+  const foreignConversationPage = makeFixturePage().document;
   const emptyProjectPage = new FixtureDocument([], new FixtureElement('button', { 'data-testid': 'stop-button' }, 'Stop'));
   const projectTarget = {
     id: 'idle-project-tab',
@@ -329,16 +333,18 @@ test('attaches to the recorded orchestrator-pack conversation route after skippi
   const foreignTarget = {
     ...conversationTarget,
     id: 'foreign-conversation',
-    url: 'https://chatgpt.com/c/foreign',
+    url: 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/c/foreign',
   };
   const connectedTargets: string[] = [];
   const injected = await injectMessageStreamError({
+    conversation: '6ab99792-ff18-83ec-8cb6-49d560ece5d1',
     cdp: 'http://127.0.0.1:9237',
     timeoutMs: 1_000,
     list: async () => [foreignTarget, projectTarget, conversationTarget],
     connect: async (target) => {
       connectedTargets.push(target.id);
-      const page = target.id === 'recorded-conversation' ? document : emptyProjectPage;
+      const page = target.id === 'recorded-conversation' ? document
+        : target.id === 'foreign-conversation' ? foreignConversationPage : emptyProjectPage;
       return {
         evaluate: async (expression: string) => await runInNewContext(expression, { document: page }),
         close: () => undefined,
@@ -353,10 +359,20 @@ test('attaches to the recorded orchestrator-pack conversation route after skippi
   assert.equal(injected.stop_clicked, true);
   assert.equal(injected.retry_clicked, false);
   assert.equal(document.stopActive, false);
+  assert.equal(foreignConversationPage.stopActive, true);
+  assert.equal(foreignConversationPage.retryClicks, 0);
   assert.equal(assistantTurn.getAttribute('data-turn-key'), `${CONVERSATION_TURN_ID_PREFIX}assistant`);
 });
 
-test('reports the project-home waiting status when no conversation target is available', async () => {
+test('requires a valid conversation id before reading CDP targets', async () => {
+  let listCalls = 0;
+  await assert.rejects(injectMessageStreamError({
+    list: async () => { listCalls += 1; return []; },
+  }), /conversation_required/u);
+  assert.equal(listCalls, 0);
+});
+
+test('ignores the orchestrator-pack project home when a conversation id is required', async () => {
   const emptyProjectPage = new FixtureDocument([], new FixtureElement('button', { 'data-testid': 'stop-button' }, 'Stop'));
   const projectTarget = {
     id: 'idle-project-tab',
@@ -365,6 +381,7 @@ test('reports the project-home waiting status when no conversation target is ava
     webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/page/idle-project-tab',
   };
   await assert.rejects(injectMessageStreamError({
+    conversation: '6ab99792-ff18-83ec-8cb6-49d560ece5d1',
     cdp: 'http://127.0.0.1:9237',
     timeoutMs: 1,
     list: async () => [projectTarget],
@@ -373,10 +390,10 @@ test('reports the project-home waiting status when no conversation target is ava
       close: () => undefined,
     }),
     wait: async () => undefined,
-  }), expectInjectionTimeout([{ target_id: 'idle-project-tab', status: 'waiting_for_user_turn' }]));
+  }), expectInjectionTimeout([]));
 });
 
-test('reports waiting statuses for every project target instead of the last evaluated tab', async () => {
+test('reports waiting status for only the requested conversation', async () => {
   const { document } = makeFixturePage();
   document.stopActive = false;
   const emptyProjectPage = new FixtureDocument([], new FixtureElement('button', { 'data-testid': 'stop-button' }, 'Stop'));
@@ -393,6 +410,7 @@ test('reports waiting statuses for every project target instead of the last eval
     webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/page/recorded-conversation',
   };
   await assert.rejects(injectMessageStreamError({
+    conversation: '6ab99792-ff18-83ec-8cb6-49d560ece5d1',
     cdp: 'http://127.0.0.1:9237',
     timeoutMs: 1,
     list: async () => [projectTarget, conversationTarget],
@@ -406,6 +424,5 @@ test('reports waiting statuses for every project target instead of the last eval
     wait: async () => undefined,
   }), expectInjectionTimeout([
     { target_id: 'recorded-conversation', status: 'waiting_for_stop' },
-    { target_id: 'idle-project-tab', status: 'waiting_for_user_turn' },
   ]));
 });

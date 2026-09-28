@@ -180,35 +180,54 @@ function orchestratorPackTargetKind(target) {
   }
 }
 
-function isOrchestratorPackProjectTarget(target) {
-  return orchestratorPackTargetKind(target) !== null;
+function isConversationTarget(target, conversation) {
+  if (orchestratorPackTargetKind(target) !== 'conversation'
+    || typeof conversation !== 'string' || !/^[A-Za-z0-9_-]+$/u.test(conversation)) return false;
+  try {
+    return new URL(target.url).pathname.endsWith(`/c/${conversation}`);
+  } catch {
+    return false;
+  }
 }
 function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+/**
+ * @param {{
+ *   cdp?: string,
+ *   conversation?: string,
+ *   intervalMs?: number,
+ *   timeoutMs?: number,
+ *   list?: (cdp: string) => Promise<any[]>,
+ *   connect?: (target: any) => Promise<{ evaluate: (expression: string) => Promise<any>, close: () => void }>,
+ *   wait?: (milliseconds: number) => Promise<void>,
+ * }} options
+ */
 export async function injectMessageStreamError({
   cdp = DEFAULT_CDP,
+  conversation,
   intervalMs = POLL_INTERVAL_MS,
   timeoutMs = POLL_TIMEOUT_MS,
   list = listTargets,
   connect = openTarget,
   wait = sleep,
 } = {}) {
+  if (typeof conversation !== 'string' || !/^[A-Za-z0-9_-]+$/u.test(conversation)) {
+    throw new Error('conversation_required');
+  }
   const deadline = Date.now() + timeoutMs;
   let lastTargetStatuses = [];
 
   while (Date.now() < deadline) {
     const targets = await list(cdp);
-    const projectTargets = targets
-      .filter((target) => target.type === 'page' && typeof target.id === 'string'
-        && isOrchestratorPackProjectTarget(target)
-        && typeof target.webSocketDebuggerUrl === 'string')
-      .sort((left, right) => Number(orchestratorPackTargetKind(right) === 'conversation')
-        - Number(orchestratorPackTargetKind(left) === 'conversation'));
+    const conversationTarget = targets.find((target) => target.type === 'page' && typeof target.id === 'string'
+      && isConversationTarget(target, conversation)
+      && typeof target.webSocketDebuggerUrl === 'string');
+    const conversationTargets = conversationTarget ? [conversationTarget] : [];
     const currentTargetStatuses = [];
 
-    for (const target of projectTargets) {
+    for (const target of conversationTargets) {
       let channel;
       try {
         channel = await connect(target);
@@ -238,7 +257,7 @@ export async function injectMessageStreamError({
 
   const waitingDetails = lastTargetStatuses.length > 0
     ? JSON.stringify(lastTargetStatuses)
-    : 'waiting_for_project_page';
+    : 'waiting_for_conversation';
   throw new Error(`injection_timeout:${waitingDetails}`);
 }
 
@@ -252,10 +271,14 @@ function parseArgs(argv) {
     }
     args.set(key, value);
   }
-  for (const key of args.keys()) if (key !== '--cdp') throw new Error(`unknown_option:${key}`);
+  for (const key of args.keys()) if (key !== '--cdp' && key !== '--conversation') throw new Error(`unknown_option:${key}`);
   const cdp = args.get('--cdp') ?? DEFAULT_CDP;
+  const conversation = args.get('--conversation');
+  if (typeof conversation !== 'string' || !/^[A-Za-z0-9_-]+$/u.test(conversation)) {
+    throw new Error('conversation_required');
+  }
   cdpBase(cdp);
-  return { cdp };
+  return { cdp, conversation };
 }
 
 async function main(argv) {
