@@ -37,5 +37,5 @@
     "scripts/smoke-fixtures/inject-message-stream-error.test.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "92a36c48e4c11be41cb17882e6cc19dc97b31cba"
+  "source_revision": "7f678424a946526a298cd5787d627845523c39f3"
 }
