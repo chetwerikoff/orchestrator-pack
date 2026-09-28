@@ -570,7 +570,7 @@ genuine external permission/capability requirement, impossibility, unresolved
 target ambiguity, or the possible-send active-turn identity gap for which the
 shared Browser-GPT authority forbids guessing. The supervisor-visible name and
 trigger meaning stay unchanged, but its manager-side effect is the #2078
-escalation with `resume_when: { operator: true }`; the parent Task and manager
+escalation with canonical `resume_when: { coordinator: true }`; legacy `{ operator: true }` pause records are normalized on read without rewriting history. The parent Task and manager
 Dispatch remain non-terminal, and the manager does not emit
 `worker_done --outcome failed`.
 
