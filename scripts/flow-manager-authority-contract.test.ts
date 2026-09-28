@@ -2239,7 +2239,7 @@ describe('Issue #2078 smoke scenarios 3 and 5 fixture manager', () => {
     const result = createIssueExternalPauseResult({
       cause: 'external:github_unavailable',
       remedy: 'resume after the fixture transport becomes available',
-      resumeWhen: { operator: true },
+      resumeWhen: { coordinator: true },
       evidence: 'fixture HTTP 503',
     });
     const sentThreadIds: string[] = [];
@@ -2263,7 +2263,7 @@ describe('Issue #2078 smoke scenarios 3 and 5 fixture manager', () => {
       issueNumber: 2078,
       stage: 'architectural-review',
       cause: 'external:github_unavailable',
-      resumeWhen: { operator: true },
+      resumeWhen: { coordinator: true },
     });
 
     expect(sendAttempts).toBe(2);
