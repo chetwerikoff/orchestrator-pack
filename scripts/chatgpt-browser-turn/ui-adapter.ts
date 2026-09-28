@@ -155,6 +155,13 @@ function matchesExecutionRecoveryProductText(value: string, exact: string): bool
     || withoutCollapseLabel === `${exact}...`;
 }
 
+/** Exact live `[role="alert"]` stream-recovery banner, with or without its Retry label. */
+export function isStreamRecoveryPollingTimeoutSurfaceText(value: string): boolean {
+  const normalized = normalizeExecutionRecoveryProductText(value);
+  return normalized === STREAM_RECOVERY_POLLING_TIMED_OUT_TEXT
+    || normalized === `${STREAM_RECOVERY_POLLING_TIMED_OUT_TEXT} Retry`;
+}
+
 function executionRecoveryCauseFromText(value: string): ExecutionRecoveryProductCause | undefined {
   if (matchesExecutionRecoveryProductText(value, MESSAGE_DELIVERY_TIMED_OUT_TEXT)) {
     return 'message_delivery_timed_out';
