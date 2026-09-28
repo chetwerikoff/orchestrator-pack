@@ -3496,7 +3496,11 @@ describe('independent pass is stored only after publication', () => {
       publishComment: (_prNumber, body) => {
         calls += 1;
         bodies.push(body);
-        if (calls === 1) throw new Error('admission_refused: publication failed');
+        if (calls === 1) {
+          const error = new Error('publication failed') as Error & { code: string };
+          error.code = 'admission_refused';
+          throw error;
+        }
       },
     });
     try {
