@@ -130,7 +130,7 @@ describe('Issue #1998 manager environment preflight', () => {
     }
   });
 
-  it('reaches manager preflight in the real entrypoint when the active worktree cannot resolve shared', () => {
+  it('fails closed on missing target selection before checking shared-workspace dependencies', () => {
     const worktree = tempDir('opk-1998-entrypoint-worktree-');
     const scriptsDir = join(worktree, 'scripts');
     mkdirSync(scriptsDir, { recursive: true });
@@ -202,11 +202,11 @@ describe('Issue #1998 manager environment preflight', () => {
     expect(managerResult).toMatchObject({
       schema: 'flow-manager-browser-gpt-long-run-refusal/v1',
       reason: 'create_issue_browser_preflight_failed',
-      cause: 'workspace_dependencies_unavailable',
+      cause: 'target_context_invalid',
       nextAction: null,
     });
-    expect(managerResult.evidence).toContain('workspace_shared_module');
-    expect(managerResult.remedy).toContain('npm ci --include=dev');
+    expect(managerResult.evidence).toContain('target_context: target project is not selected');
+    expect(managerResult.remedy).toContain('select --project <id> or OPK_PROJECT_ID');
     expect(result.stderr).not.toContain('ERR_MODULE_NOT_FOUND');
     expect(existsSync(output)).toBe(false);
     expect(existsSync(handoff)).toBe(false);

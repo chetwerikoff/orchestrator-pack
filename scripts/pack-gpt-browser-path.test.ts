@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { cpSync, chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -92,6 +92,32 @@ function successfulReviewDeps(reply: string): GptReviewDependencies {
 }
 
 const originalEnv = { ...process.env };
+const targetFixtureRoots: string[] = [];
+
+function selectedProjectEnv(): NodeJS.ProcessEnv {
+  const root = mkdtempSync(join(tmpdir(), 'opk-browser-project-card-'));
+  targetFixtureRoots.push(root);
+  const configHome = join(root, 'config');
+  const projects = join(configHome, 'orchestrator-pack', 'projects');
+  mkdirSync(projects, { recursive: true });
+  writeFileSync(join(projects, 'orchestrator-pack.json'), JSON.stringify({
+    projectId: 'orchestrator-pack',
+    repository: 'chetwerikoff/orchestrator-pack',
+    primaryRoot: repoRoot,
+    defaultBranch: 'main',
+    orcaWorkspacePattern: 'orca/workspaces/orchestrator-pack/',
+    orchestratorTitlePattern: 'orchestrator-pack',
+    browserGpt: { projectUrl: 'https://chatgpt.com/g/orchestrator-pack/project' },
+  }), 'utf8');
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: root,
+    XDG_CONFIG_HOME: configHome,
+    OPK_PROJECT_ID: 'orchestrator-pack',
+  };
+  delete env.PACK_GPT_BROWSER_PROJECT_URL;
+  return env;
+}
 
 function sha256File(relativePath: string): string {
   const bytes = readFileSync(join(repoRoot, relativePath));
@@ -99,6 +125,7 @@ function sha256File(relativePath: string): string {
 }
 
 afterEach(() => {
+  for (const root of targetFixtureRoots.splice(0)) rmSync(root, { recursive: true, force: true });
   process.env = { ...originalEnv };
   vi.restoreAllMocks();
 });
@@ -266,9 +293,9 @@ describe('GPT browser transport path (Issue #1031 AC3/AC12)', () => {
         prNumber: 1050,
         headSha: harnessSmokeRecord.headSha,
       }, {}, {
+        ...selectedProjectEnv(),
         PACK_GPT_BROWSER_PROFILE: '/tmp/opk-harness-profile',
         PACK_GPT_BROWSER_CDP: 'http://127.0.0.1:9222',
-        PACK_GPT_BROWSER_CHAT_URL: 'https://chatgpt.com/c/harness-smoke',
       });
     } finally {
       if (priorPath === undefined) delete process.env.PATH;
@@ -340,9 +367,9 @@ describe('GPT browser transport path (Issue #1031 AC3/AC12)', () => {
         prNumber: 42,
         headSha: 'f'.repeat(40),
       }, {}, {
+        ...selectedProjectEnv(),
         PACK_GPT_BROWSER_PROFILE: '/tmp/profile',
         PACK_GPT_BROWSER_CDP: 'http://127.0.0.1:9222',
-        PACK_GPT_BROWSER_CHAT_URL: 'https://chatgpt.com/c/test',
       });
 
       expect(result.exitCode).toBe(0);

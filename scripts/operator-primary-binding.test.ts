@@ -347,7 +347,7 @@ describe('operator-primary binding CLI', () => {
 
   it('rejects malformed/duplicate CLI flags instead of guessing', () => {
     expect(() => parseOperatorPrimaryBindingArgs(['show', '--project-id']))
-      .toThrow('missing value for --project-id');
+      .toThrow('unknown argument: --project-id');
     expect(() => parseOperatorPrimaryBindingArgs([
       'bind', '--task-id', 'task-1', '--task-id', 'task-2', '--binding-key', 'dispatch', '--operator-attested',
     ])).toThrow('duplicate argument: --task-id');

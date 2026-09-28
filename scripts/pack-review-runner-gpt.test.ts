@@ -1,6 +1,7 @@
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -72,6 +73,24 @@ function harnessEnv(storeRoot: string, capture: string): void {
     'orchestrator-pack',
     'review-start-claims',
   );
+}
+
+function selectProjectCard(storeRoot: string): void {
+  const configHome = path.join(storeRoot, 'config');
+  const projects = path.join(configHome, 'orchestrator-pack', 'projects');
+  mkdirSync(projects, { recursive: true });
+  writeFileSync(path.join(projects, 'orchestrator-pack.json'), JSON.stringify({
+    projectId: 'orchestrator-pack',
+    repository: 'chetwerikoff/orchestrator-pack',
+    primaryRoot: repoRoot,
+    defaultBranch: 'main',
+    orcaWorkspacePattern: 'orca/workspaces/orchestrator-pack/',
+    orchestratorTitlePattern: 'orchestrator-pack',
+    browserGpt: { projectUrl: 'https://chatgpt.com/g/orchestrator-pack/project' },
+  }), 'utf8');
+  process.env.HOME = storeRoot;
+  process.env.XDG_CONFIG_HOME = configHome;
+  process.env.OPK_PROJECT_ID = 'orchestrator-pack';
 }
 
 function cleanTerminalPayload(): string {
@@ -1274,7 +1293,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
 
     const result = await startPackReview(pluralStart(storeRoot, capture));
     expect(result).toMatchObject({ ok: false, created: false, reused: false });
-    expect(String(result.reason)).toMatch(/plural GPT review requires/);
+    expect(String(result.reason)).toMatch(/plural GPT review forbids a fixed chat URL/);
     expect(engagementCount(invocationLog)).toBe(0);
     expect(() => readFileSync(capture, 'utf8')).toThrow();
   });
@@ -1675,8 +1694,8 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     const storeRoot = tempRoot('opk-gpt-possible-delivery-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
-    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
-    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    selectProjectCard(storeRoot);
+    delete process.env.PACK_GPT_BROWSER_PROJECT_URL;
     process.env.PACK_GPT_BROWSER_PROFILE = path.join(storeRoot, 'browser-profile');
     process.env.PACK_GPT_BROWSER_CDP = 'http://127.0.0.1:9222';
 

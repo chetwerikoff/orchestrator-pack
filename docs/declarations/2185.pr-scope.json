@@ -25,12 +25,16 @@
     "scripts/lib/pack-gpt-reviewer.ts",
     "scripts/lib/target-context.test.ts",
     "scripts/lib/target-context.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/operator-primary-binding.test.ts",
     "scripts/operator-primary-binding.ts",
+    "scripts/pack-gpt-browser-path.test.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
-    "scripts/pr2-foundation/supervised-worker-start.ts"
+    "scripts/pr2-foundation/supervised-worker-start.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
     "credentials/",
@@ -57,12 +61,16 @@
     "scripts/lib/pack-gpt-reviewer.ts",
     "scripts/lib/target-context.test.ts",
     "scripts/lib/target-context.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/operator-primary-binding.test.ts",
     "scripts/operator-primary-binding.ts",
+    "scripts/pack-gpt-browser-path.test.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
-    "scripts/pr2-foundation/supervised-worker-start.ts"
+    "scripts/pr2-foundation/supervised-worker-start.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "be01f08e971c194680eeec71db4c43c92f655663"
+  "source_revision": "510d42b1a75c1f4914716c4f106cb5a28fab78c1"
 }
