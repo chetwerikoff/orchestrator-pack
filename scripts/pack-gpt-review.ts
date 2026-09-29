@@ -4,6 +4,7 @@ import './toolchain/native-entrypoint-preflight.ts';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveReviewerBudgetDecision } from '../plugins/codex-pr-reviewer/lib/reviewer_budget.ts';
+import { resolveTargetContext } from './lib/target-context.ts';
 import { startPackReview } from './pack-review-runner.ts';
 import { packReviewRunStaleMinutes } from './lib/pack-review-run-store.ts';
 import { PACK_REVIEW_BOUND_REVIEWER_ENV } from './lib/resolve-pack-reviewer.ts';
@@ -16,6 +17,7 @@ type TextWriter = {
 
 export interface PackGptReviewOptions {
   prNumber: number;
+  projectId?: string;
   timeoutSeconds?: number;
 }
 
@@ -58,9 +60,10 @@ export function packGptReviewUsage(): string {
     'Canonical Browser-GPT pack review (Issue #1111)',
     '',
     'Usage:',
-    '  npm run --silent pack-gpt-review -- --pr-number <n> [--timeout-seconds <n>]',
+    '  npm run --silent pack-gpt-review -- [--project <id>] --pr-number <n> [--timeout-seconds <n>]',
+    '  or select the card with OPK_PROJECT_ID for this invocation.',
     '',
-    'The command resolves the live OPEN PR head, binds GPT for this invocation,',
+    'The command resolves the selected project card and live OPEN PR head, binds GPT for this invocation,',
     'stays foregrounded until the existing pack-review runner returns, and leaves',
     'GitHub publication to that runner. It does not accept a caller-supplied head SHA.',
   ].join('\n');
@@ -68,11 +71,15 @@ export function packGptReviewUsage(): string {
 
 export function parsePackGptReviewArgs(argv: readonly string[]): PackGptReviewOptions {
   let prNumber: number | undefined;
+  let projectId: string | undefined;
   let timeoutSeconds: number | undefined;
-
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index]!;
     switch (flag) {
+      case '--project':
+        projectId = trim(argv[++index]);
+        if (!projectId) throw new Error('--project requires a value');
+        break;
       case '--pr-number':
         prNumber = positiveInteger(argv[++index], '--pr-number');
         break;
@@ -87,7 +94,7 @@ export function parsePackGptReviewArgs(argv: readonly string[]): PackGptReviewOp
   if (!prNumber) {
     throw new Error(`--pr-number is required\n${packGptReviewUsage()}`);
   }
-  return { prNumber, timeoutSeconds };
+  return { prNumber, ...(projectId ? { projectId } : {}), timeoutSeconds };
 }
 
 export async function runPackGptReviewCommand(
@@ -101,8 +108,12 @@ export async function runPackGptReviewCommand(
   env[PACK_REVIEW_BOUND_REVIEWER_ENV] = 'gpt';
 
   try {
+    const target = dependencies.startReview && !options.projectId && !trim(env.OPK_PROJECT_ID)
+      ? undefined
+      : resolveTargetContext({ projectId: options.projectId, env });
     const result = await startReview({
       prNumber: positiveInteger(options.prNumber, 'prNumber'),
+      ...(target ? { projectId: target.projectId, sourceRepoRoot: target.primaryRoot } : {}),
       timeoutSeconds: options.timeoutSeconds ?? resolvePackGptReviewTimeoutSeconds(),
       startReason: 'manual-browser-gpt',
       surface: 'pack-gpt-review',

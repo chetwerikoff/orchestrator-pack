@@ -15,20 +15,23 @@ launcher internals.
 ## Local-only configuration
 
 Do not put operator values in tracked documentation. Use the existing
-gitignored `local.config.json` surface and environment variables consumed by
-the current launcher. The names below are placeholders for local substitution,
-not a new runtime configuration contract.
+gitignored `local.config.json` surface and environment variables only for
+machine-wide browser settings. Select the target project card per invocation
+with `--project <PROJECT_ID>` when the caller supports it, or set
+`OPK_PROJECT_ID` for the invocation. The selected card is the sole source of
+the Browser-GPT project URL; do not set or store a separate project URL.
+
 
 | Value | Existing local input or shell placeholder |
 | --- | --- |
 | workflow identities and invocation | `<REPOSITORY>`, `<ISSUE_NUMBER>`, `<EXPECTED_REVISION>`, `<STAGE>`, and `<SLOT>` only when the owning workflow defines them; every tracked turn retains `<INVOCATION_ID>` |
-| project URL | `${GPT_PROJECT_URL}` shell placeholder; `DISCUSS_WITH_GPT_PROJECT_URL` environment variable or `projectUrl` in gitignored `local.config.json` |
+| target selection | `--project <PROJECT_ID>` or `OPK_PROJECT_ID` |
 | conversation URL | `${CHAT_URL}` shell-only placeholder passed to `--chat-url` |
 | browser profile | `${BROWSER_PROFILE}` shell placeholder; `DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR` or `chromeUserDataDir` |
 | Chrome executable | `${CHROME_PATH}` shell placeholder; `DISCUSS_WITH_GPT_CHROME_PATH` or `chromePath` |
 | CDP endpoint | `${CDP_ENDPOINT}` shell-only placeholder passed to `--cdp` |
 | prompt and outputs | `${INPUT_FILE}`, `${OUTPUT_FILE}`, `${HANDOFF_RECEIPT}`, `${TERMINAL_ENVELOPE}` |
-| local config | existing `local.config.json` keys and supported environment variables |
+| local config | machine-wide browser/profile/executable settings only |
 
 Use new no-clobber paths inside an existing local directory. Never commit a
 real project or conversation URL, browser path, CDP endpoint, home/worktree
@@ -57,12 +60,15 @@ path, prompt/output path, receipt, envelope, cookie, token, or credential.
    `contract_defect`. A generic Browser-GPT shift without this manager
    binding emits no manager-refresh git command, and an already-running turn or
    frozen create-Issue stage attempt is never refreshed mid-turn.
-3. Resolve Browser-GPT configuration without copying operator files into the
-   worktree. Existing supported environment values remain valid. A governed
-   create-Issue send may instead pass
-   `--operator-browser-config <absolute-path>`; the inline send-boundary
-   preflight reads that exact operator-local file in place and never copies it
-   into the repository. For a governed create-Issue caller, a legal retry is
+3. Select the target project card for this invocation with `--project
+   <PROJECT_ID>` when the owning caller supports that option, or set
+   `OPK_PROJECT_ID` for the invocation. The selected card supplies the
+   Browser-GPT project URL; do not set a separate URL in environment or
+   local configuration. Resolve other Browser-GPT configuration without
+   copying operator files into the worktree. A governed create-Issue send may
+   pass `--operator-browser-config <absolute-path>`; the inline
+   send-boundary preflight reads that exact operator-local file in place.
+   For a governed create-Issue caller, a legal retry is
    `recoverable(retry-create-issue-browser-preflight)`; operator-owned
    configuration that must change outside the repository is an
    `external_pause` with the exact remedy/evidence, never a terminal manager
@@ -161,8 +167,9 @@ work and refuses a mismatch with an existing `turn-result/v1` carrying
 cause. A byte-mismatch cause includes expected/observed unmarked prompt hashes
 and current `path@blobSha` diagnostics, never prompt bytes.
 
-For a fresh project launch, use the same command with
-`--new-chat --project-url "${GPT_PROJECT_URL}"` instead of `--chat-url`.
+For a fresh project launch, use the owning caller's `--new-chat` path with the
+selected project card. The caller resolves the card's project URL and forwards
+it to the transport; do not supply a separate project URL.
 
 For governed create-Issue manager calls, the long-running adapter emits exactly
 one manager-result JSON object on stdout: `completed` with exit 0,
