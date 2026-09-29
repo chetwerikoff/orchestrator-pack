@@ -157,7 +157,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
 
   const coordinator = resolveCoordinatorPane(terminals, config);
   if (!coordinator) {
-    log('no orchestrator pane found');
+    log('normal fleet result: no orchestrator pane found');
     return { state: 'no_orchestrator' };
   }
 

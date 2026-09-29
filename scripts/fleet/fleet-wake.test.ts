@@ -223,7 +223,8 @@ describe('fleet alarm', () => {
     });
     expect(missing.result.state).toBe('no_orchestrator');
     expect(sends(missing.calls)).toHaveLength(0);
-    expect(missing.logs).toContain('no orchestrator pane found');
+    expect(missing.logs).toContain('normal fleet result: no orchestrator pane found');
+    expect(missing.logs).not.toContain('nothing stopped');
 
     const unreadable = await tick({ screens: { coord: 'idle', two: 'working\nesc to interrupt' } });
     expect(unreadable.result).toEqual({ state: 'unreadable', handle: 'one' });
