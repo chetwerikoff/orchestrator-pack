@@ -50,12 +50,20 @@ The supervisor owns **completion continuity**, not substantive implementation.
    no duplicate prompt, and no guessed identity.
 7. Never take over the substantive Issue implementation merely because manager
    recovery is required.
-8. For a manager-controlled Browser-GPT implementation, consume the manager's
-   settled pack-review handoff instead of treating manager completion as overall
-   completion. Launch or reuse the existing supervised local worker as the
-   independent-smoke parent for the exact handed-off PR/head. The parent execute
-   workflow stays alive until that exact-head independent smoke passes and a
-   fresh final current-state verification succeeds.
+8. For a manager-controlled Browser-GPT implementation, treat settled pack
+   review as a nonterminal handoff, not manager-role completion. Keep the same
+   manager Dispatch alive while the supervisor launches or reuses the existing
+   supervised local worker as the independent-smoke parent for the exact
+   handed-off PR/head. When the canonical durable exact-head
+   `pack-worker-smoke-report/v1` is observable, continue that same manager
+   Dispatch through the existing continuation channel; the manager re-reads the
+   authoritative smoke record and projects it through the shared boundary.
+   The supervisor consumes the validated `verdict` before role completion:
+   `PASS` may complete the manager role; proved `FAIL` returns to the same
+   nonterminal parent workflow and the supervisor-launched local worker owns
+   the fix and fresh exact-head independent smoke. Settled pack review stays
+   complete. This scoped manager-boundary change does not claim the broader
+   local-worker incident/consumption loop is implemented or closed.
 
 Supervisor launch and recovery remain governed by
 [`docs/orchestration-runbook.md`](../../../docs/orchestration-runbook.md) and the
@@ -104,61 +112,7 @@ The shared Browser-GPT runbook remains the sole owner of one-turn launch,
 observation, attribution, recovery, retry/no-resend, publication, and tab
 mechanics.
 
-For execute-Issue recovery, the three reserved product causes are
-`message_delivery_timed_out`, `product_network_error`, and
-`stream_recovery_polling_timed_out`. The last cause is reserved for the exact
-rendered banner `ChatGPT stream recovery polling timed out`. They stay on the
-existing `turn-result/v1` axis as `state: recovery_required` with
-`scope: conversation`; they do not introduce a new turn state. An authoritative
-owned result with any reserved cause enters the execution runbook's GitHub-first
-reconciliation immediately. At the existing 30-minute checkpoint, use
-`browser-gpt-page-probe inspect` only as observation: its normalized
-`execution_recovery_cause` must be combined with exact owned-turn, reply, and
-generation evidence before it can authorize that same recovery branch. Elapsed
-time, missing output, helper silence, `stream_timeout`, or `no_reply` alone never
-authorize a replacement conversation.
-
-For execute-Issue recovery, the 30-minute checkpoint uses the exact durable
-invocation identity already retained by the manager. Invoke the existing probe
-in identity-bound form with the exact retained CDP/profile/invocation plus the
-already-owned page locator:
-
-```text
-browser-gpt-page-probe inspect
-  --cdp <exact retained endpoint>
-  --profile <exact retained configured profile>
-  --invocation-id <exact retained invocation id>
-  (--url <exact owned conversation url> | --target-id <exact owned target id>)
-```
-
-The probe resolves only the matching `state-light-turn-observation/v1` record
-for `{configured profile key, invocation id}`; it does not scan sibling records,
-alternate profiles, or page-wide markers to recover identity. A bounded
-observer/wait slice is not the lifetime of the Browser-GPT turn. Slice expiry
-without authoritative settlement preserves the exact run identity, attempt
-identity, invocation id, profile, CDP endpoint, and conversation binding and
-permits only continued observation of that same invocation.
-
-When the identity-bound 30-minute read says the exact owned turn is still
-generating, send zero new user messages and continue bounded observation of the
-same invocation. The first post-checkpoint continuation starts one
-recovery-observation episode with the existing
-`DEFAULT_TIMEOUT_MS = 1_800_000 ms` ceiling; later observation slices consume
-the remaining budget and never reset or extend it. If the exact turn is still
-unsettled/generating when that ceiling is exhausted, automatic re-observation
-stops and the exact fail-closed condition is handed to the existing supervisor
-boundary. Exhaustion creates no resend, replacement-invocation, or fresh-chat
-authority.
-
-A replacement/resumed manager does not create a new conversation merely because
-it is a new process. It first follows the execution runbook's recovery branch and
-the shared Browser-GPT evidence requirements. Before any replacement send after
-one of the two supported product-error proofs, it must re-observe the exact old
-owned conversation and re-read live GitHub continuation/completion state. If the
-product cause is no longer present, a completed reply appeared, generation is
-active, ownership is ambiguous, or the continuation head/completion state is no
-longer current, the fresh send is blocked and ordinary observation/recovery
-resumes.
+Execute-Issue product-error recovery—including its reserved causes, GitHub-first reconciliation, same-conversation continuation, checkpoint, grace period, and fallback gates—is owned by the [execution runbook](../../../docs/chatgpt-task-execution-runbook.md). Follow that runbook; this skill does not restate those mechanics.
 
 ## Terminal outcomes
 
@@ -172,14 +126,14 @@ a fresh current-state verification under `docs/chat-executor-rules.md` and the
 live Issue succeeds. GPT self-report and manager completion are advisory rather
 than overall completion authority.
 
-`OPERATOR_ACTION_REQUIRED` is exceptional. Use it only after the legal existing
-recovery path is exhausted and the remaining condition is a genuine external
-permission/capability failure, impossibility, unresolved target ambiguity, or the
-fail-closed possible-send identity gap described above. The visible report name
-and trigger meaning stay unchanged, but the manager-side effect is the shared
-#2078 escalation with `resume_when: { operator: true }`; the parent Task and
-manager Dispatch remain non-terminal and no `worker_done --outcome failed` is
-sent.
+`OPERATOR_ACTION_REQUIRED` is exceptional and names only a remaining
+credential/CAPTCHA human action after legal recovery is exhausted. The remedy
+identifies exactly one action from observed evidence; the coordinator resumes the
+same Dispatch after observing its completion. Manager-side effect is the shared
+#2078 escalation with canonical `resume_when: { coordinator: true }`; legacy
+`{ operator: true }` pause records are input compatibility only and normalize
+to coordinator ownership without rewriting history. The parent Task and manager
+Dispatch remain non-terminal and no `worker_done --outcome failed` is sent.
 
 Merge is never implicit. Stop at the verified repository completion/readiness
 state unless the direct top-level operator separately orders merge.

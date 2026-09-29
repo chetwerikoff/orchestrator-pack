@@ -38,6 +38,7 @@ import {
   WORKER_SMOKE_CAUSE_FAMILIES,
   smokeResultForWorkerSmokeCauseFamily,
   workerSmokeCauseFamilyForHarnessReason,
+  workerSmokeManagerNonPassCauseForHarnessReason,
 } from './lib/worker-smoke-core-base.ts';
 import { inspectSmokeProgress, readSmokeLifecycleRegistry } from './lib/worker-smoke-lifecycle-base.ts';
 import { evaluateSmokeLifecycleCleanliness, SMOKE_LIFECYCLE_POLL_MS } from './lib/worker-smoke-lifecycle.ts';
@@ -76,6 +77,7 @@ import {
   smokeReportHasScenarioFinding,
   stabilizeSmokeCommentCensus,
   waitForRuntimeSmokeCompletion,
+  validateCoordinatorSmokeOverrideReason,
   type CliOptions,
   type GateCheckDependencies,
   type ResolvedSmokeTarget,
@@ -400,6 +402,11 @@ describe('Issue #1936 truthful smoke evidence', () => {
       expect(workerSmokeCauseFamilyForHarnessReason(reason)).toBe(family);
     }
     expect(workerSmokeCauseFamilyForHarnessReason('future prose-shaped reason')).toBe('unknown');
+    expect(workerSmokeManagerNonPassCauseForHarnessReason('trusted_target_head_mismatch:abc')).toBe('trusted_target_stale');
+    expect(workerSmokeManagerNonPassCauseForHarnessReason('smoke_ordering_independent_in_progress')).toBe('smoke_same_head_in_progress');
+    expect(workerSmokeManagerNonPassCauseForHarnessReason('smoke_profile_malformed:PACK_EXECUTOR_SMOKE_AGENT')).toBe('invalid_adapter_arguments');
+    expect(workerSmokeManagerNonPassCauseForHarnessReason('executor_profile_model_unavailable')).toBe('unsupported_executor_capability');
+    expect(workerSmokeManagerNonPassCauseForHarnessReason('future prose-shaped reason')).toBeUndefined();
     expect(smokeResultForWorkerSmokeCauseFamily('scenario_precondition_unavailable')).toBe('BLOCKED');
     expect(smokeResultForWorkerSmokeCauseFamily('scenario_assertion_failed')).toBe('FAIL');
     expect(smokeResultForWorkerSmokeCauseFamily('unknown')).toBe('FAIL');
@@ -563,6 +570,21 @@ describe('Issue #1936 truthful smoke evidence', () => {
     }
   });
 
+  it('requires coordinator retry overrides to cite the pause cause and repair evidence', () => {
+    expect(validateCoordinatorSmokeOverrideReason(
+      'pause-cause=profile_mismatch; repair-evidence=restored authenticated profile',
+    )).toBe('pause-cause=profile_mismatch; repair-evidence=restored authenticated profile');
+    expect(() => validateCoordinatorSmokeOverrideReason('operator confirmed one diagnostic retry'))
+      .toThrow('worker_smoke_coordinator_override_requires_pause_cause_and_repair_evidence');
+    for (const emptyField of [
+      'pause-cause= ; repair-evidence=restored profile',
+      'pause-cause=profile_mismatch; repair-evidence= ',
+    ]) {
+      expect(() => validateCoordinatorSmokeOverrideReason(emptyField))
+        .toThrow('worker_smoke_coordinator_override_requires_pause_cause_and_repair_evidence');
+    }
+  });
+
   it('keeps a blocked tuple sticky across unrelated later attempts and makes override one-shot', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-retry-1936-'));
     const previous = process.env.WORKER_SMOKE_RECEIPT_ROOT;
@@ -587,11 +609,11 @@ describe('Issue #1936 truthful smoke evidence', () => {
       expect(evaluateSameHeadBlockedRetryAdmission({ receipts, selectedScenarios: [tuple] }))
         .toMatchObject({ allowed: false, reason: 'smoke_blocked_precondition_unchanged' });
       expect(evaluateSameHeadBlockedRetryAdmission({
-        receipts, selectedScenarios: [tuple], operatorOverrideReason: 'operator confirmed one diagnostic retry',
+        receipts, selectedScenarios: [tuple], operatorOverrideReason: 'pause-cause=profile_mismatch; repair-evidence=restored authenticated profile',
       })).toMatchObject({ allowed: true });
       writeWorkerSmokeReceipt(harnessFailure, {
         attemptId: 'override-harness-c', executionMode: 'carry-only', attemptObservations: [],
-        operatorOverrideReason: 'operator confirmed one diagnostic retry', publishedAt: '2026-09-18T00:02:00.000Z',
+        operatorOverrideReason: 'pause-cause=profile_mismatch; repair-evidence=restored authenticated profile', publishedAt: '2026-09-18T00:02:00.000Z',
       });
       receipts = listWorkerSmokeReceipts(2001, HEAD_ONE);
       expect(evaluateSameHeadBlockedRetryAdmission({ receipts, selectedScenarios: [tuple] }))
@@ -901,8 +923,14 @@ describe('smoke executor profiles', () => {
       });
       expect(code).toBe(1);
       expect(spawn).not.toHaveBeenCalled();
-      expect(output.mock.calls.map((entry) => String(entry[0])).join(''))
-        .toContain('executor_effort_channel_unavailable');
+      const rendered = output.mock.calls.map((entry) => String(entry[0])).join('');
+      expect(rendered).toContain('executor_effort_channel_unavailable');
+      expect(JSON.parse(rendered)).toMatchObject({
+        report: {
+          causeFamily: 'harness_admission_refused',
+          nonPassCause: 'unsupported_executor_capability',
+        },
+      });
     } finally {
       output.mockRestore();
       rmSync(root, { recursive: true, force: true });
@@ -1001,6 +1029,122 @@ describe('runtime-neutral worker smoke', () => {
       expect(historyCalls).toBe(0);
       expect(rendered).toContain('trusted_target');
       expect(rendered).not.toContain('no_prior_canonical_observation');
+    } finally {
+      output.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not promote a caught diagnostic Error.message into manager non-pass authority', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-observed-prose-'));
+    const issueBodyFile = join(root, 'issue.md');
+    writeFileSync(issueBodyFile, issueBody, 'utf8');
+    expect(runProcessSync({ command: 'git', args: ['init', '--quiet'], cwd: root }).ok).toBe(true);
+    const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      const code = await runSmokeAttempt({
+        command: 'run',
+        issueNumber: 1968,
+        prNumber: 2002,
+        headSha: HEAD_ONE,
+        issueBodyFile,
+        smokeComplexity: 'routine',
+        repoRoot: root,
+        cwd: root,
+        dryRun: true,
+        json: true,
+      }, {
+        resolveTarget: () => ({
+          repositorySlug: REPOSITORY,
+          issueNumber: 1968,
+          prNumber: 2002,
+          headSha: HEAD_ONE,
+          issueBody,
+          prBody: 'Closes #1968',
+          issueBodyMatchesTarget: true,
+          trustedPublisherLogin: TRUSTED_ACTOR,
+          prOpen: true,
+          baseRef: 'main',
+          expectedTargetRef: 'main',
+          expectedTarget: true,
+        }),
+        fetchHistoryComments: () => [],
+        resolveProfile: () => {
+          throw new Error('login_required: diagnostic-only prose');
+        },
+      });
+      expect(code).toBe(1);
+      const rendered = output.mock.calls.map((entry) => String(entry[0])).join('');
+      const parsed = JSON.parse(rendered) as {
+        report?: {
+          causeFamily?: string;
+          nonPassCause?: string;
+          scenarios?: Array<{ observed?: string }>;
+        };
+      };
+      expect(parsed.report?.causeFamily).toBe('harness_admission_refused');
+      expect(parsed.report?.nonPassCause).toBeUndefined();
+      expect(parsed.report?.scenarios?.[0]?.observed).toContain('login_required');
+    } finally {
+      output.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves a caught typed error code independently of diagnostic message text', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-typed-reason-'));
+    const issueBodyFile = join(root, 'issue.md');
+    writeFileSync(issueBodyFile, issueBody, 'utf8');
+    expect(runProcessSync({ command: 'git', args: ['init', '--quiet'], cwd: root }).ok).toBe(true);
+    const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      const code = await runSmokeAttempt({
+        command: 'run',
+        issueNumber: 1968,
+        prNumber: 2002,
+        headSha: HEAD_ONE,
+        issueBodyFile,
+        smokeComplexity: 'routine',
+        repoRoot: root,
+        cwd: root,
+        dryRun: true,
+        json: true,
+      }, {
+        resolveTarget: () => ({
+          repositorySlug: REPOSITORY,
+          issueNumber: 1968,
+          prNumber: 2002,
+          headSha: HEAD_ONE,
+          issueBody,
+          prBody: 'Closes #1968',
+          issueBodyMatchesTarget: true,
+          trustedPublisherLogin: TRUSTED_ACTOR,
+          prOpen: true,
+          baseRef: 'main',
+          expectedTargetRef: 'main',
+          expectedTarget: true,
+        }),
+        fetchHistoryComments: () => [],
+        resolveProfile: () => {
+          const error = new Error('diagnostic text without a classification token') as Error & { code: string };
+          error.code = 'executor_effort_channel_unavailable';
+          throw error;
+        },
+      });
+      expect(code).toBe(1);
+      const rendered = output.mock.calls.map((entry) => String(entry[0])).join('');
+      const parsed = JSON.parse(rendered) as {
+        report?: {
+          causeFamily?: string;
+          nonPassCause?: string;
+          scenarios?: Array<{ observed?: string }>;
+        };
+      };
+      expect(parsed.report).toMatchObject({
+        causeFamily: 'harness_admission_refused',
+        nonPassCause: 'unsupported_executor_capability',
+      });
+      expect(parsed.report?.scenarios?.[0]?.observed).toContain('diagnostic text without a classification token');
     } finally {
       output.mockRestore();
       rmSync(root, { recursive: true, force: true });
@@ -3087,6 +3231,9 @@ describe('buildSmokeAgentPrompt selected declaration artifact', () => {
 
     expect(prompt).toContain('When waiting for executor work, use only a completion or session identifier actually returned by the selected executor; never invent a shell_id or a transcript path.');
     expect(prompt).toContain('Continue to follow the existing lifecycle progress and cancellation protocol.');
+    expect(prompt).toContain('non-pass-cause: executed_scenario_failure');
+    expect(prompt).toContain('browser_cdp_unavailable, profile_mismatch, login_required, quota_exhausted, or product_challenge');
+    expect(prompt).toContain('non-pass-cause: <closed structured cause when required above>');
     expect(prompt).not.toContain('~/.cursor/projects/');
     expect(prompt).not.toContain('Never await a shell that has already ended');
     expect(prompt).toContain('Cap any single block_until_ms at 300000; re-check and re-await instead of one long block.');
@@ -3349,7 +3496,11 @@ describe('independent pass is stored only after publication', () => {
       publishComment: (_prNumber, body) => {
         calls += 1;
         bodies.push(body);
-        if (calls === 1) throw new Error('admission_refused: publication failed');
+        if (calls === 1) {
+          const error = new Error('publication failed') as Error & { code: string };
+          error.code = 'admission_refused';
+          throw error;
+        }
       },
     });
     try {

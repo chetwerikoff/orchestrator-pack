@@ -1,7 +1,7 @@
 // Issue #1937 keeps the existing UI adapter implementation isolated below and
 // adds one narrow execute-Issue recovery classifier at the public adapter edge.
 // All ordinary Browser-GPT behavior continues to delegate to the existing
-// implementation; this file owns the reserved exact product-error literals and
+// implementation; this file owns only the reserved exact product-error literals and
 // their bounded owned-turn confirmation.
 export * from './ui-adapter-base.ts';
 
@@ -29,6 +29,7 @@ import { recoveryMarkerCardinality } from './state-light-turn-recovery.ts';
 export type ExecutionRecoveryProductCause =
   | 'message_delivery_timed_out'
   | 'product_network_error'
+  | 'message_stream_error'
   | 'stream_recovery_polling_timed_out';
 
 export interface ExecutionRecoveryMessage {
@@ -91,6 +92,7 @@ const EXECUTION_RECOVERY_CONFIRM_DELAY_MS = 100;
 const EXECUTION_RECOVERY_EVIDENCE_READ_CAP_MS = 300;
 const MESSAGE_DELIVERY_TIMED_OUT_TEXT = 'Message delivery timed out. Please try again.';
 const PRODUCT_NETWORK_ERROR_TEXT = 'A network error occurred. Please check your connection and try again. If this issue persists please contact us through our help center at help.openai.com.';
+const MESSAGE_STREAM_ERROR_TEXT = 'Error in message stream';
 const STREAM_RECOVERY_POLLING_TIMED_OUT_TEXT = 'ChatGPT stream recovery polling timed out';
 const OWNED_TURN_GENERATION_SELECTOR = STOP_BUTTON_SELECTOR;
 
@@ -169,6 +171,9 @@ function executionRecoveryCauseFromText(value: string): ExecutionRecoveryProduct
   if (matchesExecutionRecoveryProductText(value, PRODUCT_NETWORK_ERROR_TEXT)) {
     return 'product_network_error';
   }
+  if (matchesExecutionRecoveryProductText(value, MESSAGE_STREAM_ERROR_TEXT)) {
+    return 'message_stream_error';
+  }
   if (normalizeExecutionRecoveryProductText(value) === STREAM_RECOVERY_POLLING_TIMED_OUT_TEXT) {
     return 'stream_recovery_polling_timed_out';
   }
@@ -223,10 +228,11 @@ function emptyClassification(
 /**
  * Sole matcher/owned-turn classifier for the reserved execute-Issue product
  * errors. Product text alone is never recovery authority: every cause requires
- * a unique exact owned prompt and stopped generation. Delivery/network causes
- * retain the successor-assistant-carrier and same-carrier Retry gates. The
- * stream-recovery timeout additionally accepts the exact product-status banner
- * with the same unique owned marker when role-bearing message nodes disappeared.
+ * a unique exact owned prompt and stopped generation. Delivery, network, and
+ * message-stream causes retain the successor-assistant-carrier and same-carrier
+ * Retry gates. The stream-recovery timeout additionally accepts the exact
+ * product-status banner with the same unique owned marker when role-bearing
+ * message nodes disappeared.
  */
 export function classifyExecutionRecoveryProductError(
   evidence: ExecutionRecoveryProductErrorEvidence,
@@ -442,20 +448,24 @@ async function readOwnedTurnSnapshot(
         chromeSelector: string;
         timeoutText: string;
         networkText: string;
+        streamText: string;
         productSelector: string;
       }) => {
         const normalize = (value: string): string => value.replace(/\s+/g, ' ').replace(/help\.openai\.com \.$/u, 'help.openai.com.').trim();
         const collapseRe = /(?:\s*(?:show more|read more|see more|view more|continue reading)\s*)+$/iu;
         const isReservedBanner = (value: string): boolean => {
           const normalized = normalize(value);
-          if (normalized === args.timeoutText || normalized === args.networkText) return true;
+          if (normalized === args.timeoutText || normalized === args.networkText || normalized === args.streamText) return true;
           const stripped = normalized.replace(collapseRe, '').trim();
           return stripped === args.timeoutText
             || stripped === args.networkText
+            || stripped === args.streamText
             || stripped === `${args.timeoutText}…`
             || stripped === `${args.timeoutText}...`
             || stripped === `${args.networkText}…`
-            || stripped === `${args.networkText}...`;
+            || stripped === `${args.networkText}...`
+            || stripped === `${args.streamText}…`
+            || stripped === `${args.streamText}...`;
         };
         const hasNonBannerVisibleText = (assistant: Element): boolean => {
           let remaining = normalize((assistant as HTMLElement).innerText || '');
@@ -589,6 +599,7 @@ async function readOwnedTurnSnapshot(
         chromeSelector: ASSISTANT_TURN_ACTION_SELECTOR,
         timeoutText: MESSAGE_DELIVERY_TIMED_OUT_TEXT,
         networkText: PRODUCT_NETWORK_ERROR_TEXT,
+        streamText: MESSAGE_STREAM_ERROR_TEXT,
         productSelector: PRODUCT_STATUS_PROBE_SELECTORS.join(', '),
       }),
       waitMs,

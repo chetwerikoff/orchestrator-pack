@@ -30,3 +30,7 @@ A dispatched flow-manager does not hold user precedence, but its own repository-
 7. **The instruction defines scope.** A narrow instruction applies narrowly; a
    broad instruction applies broadly. A legacy gate must not silently narrow the
    user's stated action to its ordinary target model.
+
+## Coordinator-owned manager pauses
+
+Operator decision 2026-09-27: the existing coordinator owns clearing every manager blocker and external_pause. Treat legacy resume_when { operator: true } as { coordinator: true }; emit only { coordinator: true } for new owner-driven pauses. issue_closed and pr_merged remain unchanged. The coordinator may restore the named external dependency, reuse an already-authenticated browser/login session, wait out quota where time is the remedy, restore CDP or smoke-owned Chrome, accept the current Issue revision, route disputed findings to their existing substantive owner, continue after that owner resolves them, and send continuation to the same Dispatch. This delegation does not give coordinator broader direct-user precedence, authority to widen the Issue, or authority to choose defect/remedy/finding dispositions. Coordinator must never turn FAIL into PASS, invent missing evidence, enter credentials/passwords, or solve CAPTCHA. If credentials or CAPTCHA are the remaining wall, reduce it to the narrowest residual human action and keep the Task/Dispatch owned and nonterminal.

@@ -158,9 +158,9 @@ function resolveNativeGh(effectivePath, packGh) {
  * @param {string} [input.packScriptsDir]
  * @param {string} [input.inheritedPath]
  * @param {string} [input.effectivePath]
- * @param {{ node?: string | null, packGh?: string | null, firstGh?: string | null, nativeGh?: string | null, nativeGhError?: string | null }} [input.tools]
+ * @param {{ node?: string | null, packGh?: string | null, firstGh?: string | null }} [input.tools]
  */
-export function evaluateCommandRuntimePreflight(input = {}) {
+function evaluateTrackedGhPathPreflight(input = {}) {
   const packRoot = resolve(input.packRoot ?? DEFAULT_PACK_ROOT);
   const packScriptsDir = resolve(input.packScriptsDir ?? join(packRoot, 'scripts'));
   const effectivePath =
@@ -170,8 +170,6 @@ export function evaluateCommandRuntimePreflight(input = {}) {
   const tools = input.tools ?? {
     node: resolveNode(effectivePath),
     ...resolvePackGh(effectivePath, packScriptsDir),
-    nativeGh: null,
-    nativeGhError: null,
   };
 
   if (!tools.node) {
@@ -196,17 +194,38 @@ export function evaluateCommandRuntimePreflight(input = {}) {
     };
   }
 
+  return {
+    ok: true,
+    reason: 'tracked_gh_path_preflight_ok',
+    pathClass,
+    effectivePath,
+    tools: { node: tools.node, packGh: tools.packGh },
+  };
+}
+
+/**
+ * @param {object} input
+ * @param {string} [input.packRoot]
+ * @param {string} [input.packScriptsDir]
+ * @param {string} [input.inheritedPath]
+ * @param {string} [input.effectivePath]
+ * @param {{ node?: string | null, packGh?: string | null, firstGh?: string | null, nativeGh?: string | null, nativeGhError?: string | null }} [input.tools]
+ */
+export function evaluateCommandRuntimePreflight(input = {}) {
+  const tracked = evaluateTrackedGhPathPreflight(input);
+  if (!tracked.ok) return tracked;
+
   const native =
     input.tools?.nativeGh !== undefined
       ? { nativeGh: input.tools.nativeGh, error: input.tools.nativeGhError ?? null }
-      : resolveNativeGh(effectivePath, tools.packGh);
+      : resolveNativeGh(tracked.effectivePath, tracked.tools.packGh);
 
   if (!native.nativeGh) {
     return {
       ok: false,
       reason: 'native_gh_unresolved',
-      diagnostic: `command-runtime-bootstrap: ${native.error ?? 'no native gh executable found'} (path-class=${pathClass})`,
-      pathClass,
+      diagnostic: `command-runtime-bootstrap: ${native.error ?? 'no native gh executable found'} (path-class=${tracked.pathClass})`,
+      pathClass: tracked.pathClass,
       missingTool: 'native-gh',
     };
   }
@@ -214,10 +233,10 @@ export function evaluateCommandRuntimePreflight(input = {}) {
   return {
     ok: true,
     reason: 'command_runtime_preflight_ok',
-    pathClass,
+    pathClass: tracked.pathClass,
     tools: {
-      node: tools.node,
-      packGh: tools.packGh,
+      node: tracked.tools.node,
+      packGh: tracked.tools.packGh,
       nativeGh: native.nativeGh,
     },
   };
@@ -332,12 +351,12 @@ export function evaluateManagerBrowserEnvironmentPreflight(input = {}) {
   const packRoot = resolve(input.packRoot ?? DEFAULT_PACK_ROOT);
   const env = input.env ?? process.env;
   const effectivePath = input.effectivePath ?? env.PATH ?? '';
-  const runtime = evaluateCommandRuntimePreflight({
+  const pathRuntime = evaluateTrackedGhPathPreflight({
     packRoot,
     effectivePath,
     ...(input.tools ? { tools: input.tools } : {}),
   });
-  if (!runtime.ok || !runtime.tools?.packGh) {
+  const trackedGhPathFailure = (runtime) => {
     const firstGh = input.tools?.firstGh ?? resolveExecutableOnPath(effectivePath, 'gh');
     return {
       ok: false,
@@ -349,6 +368,9 @@ export function evaluateManagerBrowserEnvironmentPreflight(input = {}) {
       remedy: `put ${join(packRoot, 'scripts')} first on PATH so tracked scripts/gh is the first gh`,
       runtime,
     };
+  };
+  if (!pathRuntime.ok || !pathRuntime.tools?.packGh) {
+    return trackedGhPathFailure(pathRuntime);
   }
 
   const config = resolveManagerBrowserOperatorConfig({
@@ -357,7 +379,7 @@ export function evaluateManagerBrowserEnvironmentPreflight(input = {}) {
     targetProjectUrl: input.targetProjectUrl,
     targetCardPath: input.targetCardPath,
   });
-  if (!config.ok) return { ...config, runtime };
+  if (!config.ok) return { ...config, runtime: pathRuntime };
 
   const sharedModuleSpecifier = input.sharedModuleSpecifier ?? '@orchestrator-pack/shared/lib/normalize.js';
   let sharedModulePath;
@@ -371,7 +393,7 @@ export function evaluateManagerBrowserEnvironmentPreflight(input = {}) {
       reason: 'workspace_dependencies_unavailable',
       evidence: `${sharedModuleSpecifier}: ${error instanceof Error ? error.message : String(error)}`,
       remedy: 'run npm ci --include=dev in this worktree, then resume the same manager Dispatch',
-      runtime,
+      runtime: pathRuntime,
     };
   }
   const sharedRoot = realpathSync(join(packRoot, 'plugins', '_shared'));
@@ -383,9 +405,17 @@ export function evaluateManagerBrowserEnvironmentPreflight(input = {}) {
       reason: 'workspace_dependency_resolved_outside_worktree',
       evidence: `${sharedModuleSpecifier} resolved to ${sharedModulePath}; expected under ${sharedRoot}`,
       remedy: 'run npm ci --include=dev in this worktree and remove any foreign workspace resolution before resuming',
-      runtime,
+      runtime: pathRuntime,
     };
   }
+
+  // Resolve native gh only after workspace dependencies are proven available.
+  const runtime = evaluateCommandRuntimePreflight({
+    packRoot,
+    effectivePath,
+    ...(input.tools ? { tools: input.tools } : {}),
+  });
+  if (!runtime.ok || !runtime.tools?.packGh) return trackedGhPathFailure(runtime);
 
   return {
     ok: true,

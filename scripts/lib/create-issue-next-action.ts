@@ -16,7 +16,7 @@ export const CREATE_ISSUE_NEXT_ACTION_KINDS = [
 
 export type CreateIssueNextActionKind = typeof CREATE_ISSUE_NEXT_ACTION_KINDS[number];
 
-export type ExecuteIssueManagerPhase = 'implementation' | 'review' | 'fixer';
+export type ExecuteIssueManagerPhase = 'implementation' | 'review' | 'fixer' | 'independent-smoke';
 export type ExecuteIssueManagerStage = `execute:${ExecuteIssueManagerPhase}`;
 
 export const CREATE_ISSUE_RECONCILIATION_KINDS = [
@@ -34,7 +34,9 @@ export const CREATE_ISSUE_CONTINUATION_KINDS = [
 
 export const CREATE_ISSUE_EXTERNAL_PAUSE_CAUSES = [
   'external:chrome_not_running',
+  'external:profile_mismatch',
   'external:login_required',
+  'external:product_challenge',
   'external:github_unavailable',
   'external:permission_denied',
   'external:quota_exhausted',
@@ -48,7 +50,38 @@ export type CreateIssueExternalPauseCause = typeof CREATE_ISSUE_EXTERNAL_PAUSE_C
 export type CreateIssueResumePredicate =
   | { issue: number; condition: 'issue_closed' }
   | { pr: number; condition: 'pr_merged' }
-  | { operator: true };
+  | { coordinator: true };
+
+export type CreateIssueLegacyResumePredicate = { operator: true };
+
+export function normalizeCreateIssueResumePredicate(value: unknown): CreateIssueResumePredicate | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const predicate = value as Record<string, unknown>;
+  const keys = Object.keys(predicate);
+  if (
+    keys.length === 2
+    && Object.prototype.hasOwnProperty.call(predicate, 'issue')
+    && Object.prototype.hasOwnProperty.call(predicate, 'condition')
+    && Number.isSafeInteger(predicate.issue)
+    && Number(predicate.issue) > 0
+    && predicate.condition === 'issue_closed'
+  ) {
+    return { issue: Number(predicate.issue), condition: 'issue_closed' };
+  }
+  if (
+    keys.length === 2
+    && Object.prototype.hasOwnProperty.call(predicate, 'pr')
+    && Object.prototype.hasOwnProperty.call(predicate, 'condition')
+    && Number.isSafeInteger(predicate.pr)
+    && Number(predicate.pr) > 0
+    && predicate.condition === 'pr_merged'
+  ) {
+    return { pr: Number(predicate.pr), condition: 'pr_merged' };
+  }
+  if (keys.length === 1 && predicate.coordinator === true) return { coordinator: true };
+  if (keys.length === 1 && predicate.operator === true) return { coordinator: true };
+  return null;
+}
 
 export type CreateIssueSemanticStage =
   | 'competitive'
@@ -102,6 +135,7 @@ export interface CreateIssueTerminalResult {
   ok: true;
   cause: string;
   blocker?: string;
+  verdict?: 'PASS' | 'FAIL';
   nextAction: null;
 }
 export type CreateIssueManagerContractDefectResult = CreateIssueContractDefectResult;
@@ -169,6 +203,14 @@ export function validateCreateIssueManagerResult(
     if (hasPause) errors.push('completed manager result must not carry pause');
     if (hasDefect) errors.push('completed manager result must not carry defect');
     if (!nonEmpty(result.cause)) errors.push('completed manager result.cause must be non-empty');
+    const smokeVerdict = result.cause === 'execute_worker_smoke_pass'
+      ? 'PASS'
+      : result.cause === 'execute_worker_smoke_assertion_failed' ? 'FAIL' : null;
+    if (smokeVerdict && result.verdict !== smokeVerdict) {
+      errors.push('completed worker-smoke result.verdict must match its cause');
+    } else if (!smokeVerdict && Object.prototype.hasOwnProperty.call(result, 'verdict')) {
+      errors.push('completed non-smoke result must not carry verdict');
+    }
   } else if (result.ok === false) {
     if (!nonEmpty(result.cause)) errors.push('manager non-success result.cause must be non-empty');
     if (hasPause && hasDefect) errors.push('manager non-success result cannot carry both pause and defect');
@@ -221,17 +263,17 @@ function validateExternalPause(result: Record<string, unknown>): string[] {
   if (!nonEmpty(pause.remedy)) errors.push('external_pause result.pause.remedy must be non-empty');
   if (!nonEmpty(pause.evidence)) errors.push('external_pause result.pause.evidence must be non-empty');
   errors.push(...validateResumePredicate(pause.resume_when));
-  const resume = pause.resume_when as Record<string, unknown> | undefined;
+  const resume = normalizeCreateIssueResumePredicate(pause.resume_when);
   if (result.cause === 'external:waiting_on_issue') {
-    if (!resume || resume.condition !== 'issue_closed' || !Number.isSafeInteger(resume.issue)) {
+    if (!resume || !('issue' in resume) || resume.condition !== 'issue_closed') {
       errors.push('external:waiting_on_issue requires issue_closed resume_when');
     }
   } else if (result.cause === 'external:waiting_on_pr') {
-    if (!resume || resume.condition !== 'pr_merged' || !Number.isSafeInteger(resume.pr)) {
+    if (!resume || !('pr' in resume) || resume.condition !== 'pr_merged') {
       errors.push('external:waiting_on_pr requires pr_merged resume_when');
     }
-  } else if (!resume || resume.operator !== true) {
-    errors.push('non-waiting external_pause cause requires resume_when { operator: true }');
+  } else if (!resume || !('coordinator' in resume) || resume.coordinator !== true) {
+    errors.push('non-waiting external_pause cause requires coordinator-owned resume_when');
   }
   return errors;
 }
@@ -252,34 +294,38 @@ function validateContractDefect(result: Record<string, unknown>): string[] {
   return errors;
 }
 
-function validateResumePredicate(value: unknown): string[] {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return ['external_pause result.pause.resume_when must be a typed predicate'];
-  }
+function isCanonicalCreateIssueResumePredicate(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const predicate = value as Record<string, unknown>;
-  const hasIssue = Object.prototype.hasOwnProperty.call(predicate, 'issue');
-  const hasPr = Object.prototype.hasOwnProperty.call(predicate, 'pr');
-  const hasOperator = Object.prototype.hasOwnProperty.call(predicate, 'operator');
-  if (Number(hasIssue) + Number(hasPr) + Number(hasOperator) !== 1) {
-    return ['external_pause result.pause.resume_when must have exactly one predicate selector'];
-  }
-  if (hasIssue) {
-    return Number.isSafeInteger(predicate.issue)
-      && Number(predicate.issue) > 0
-      && predicate.condition === 'issue_closed'
-      ? []
-      : ['external_pause issue resume_when is invalid'];
-  }
-  if (hasPr) {
-    return Number.isSafeInteger(predicate.pr)
-      && Number(predicate.pr) > 0
-      && predicate.condition === 'pr_merged'
-      ? []
-      : ['external_pause pr resume_when is invalid'];
-  }
-  return predicate.operator === true
+  const keys = Object.keys(predicate);
+  if (keys.length === 1 && predicate.coordinator === true) return true;
+  return (
+    keys.length === 2
+    && ((Number.isSafeInteger(predicate.issue) && Number(predicate.issue) > 0 && predicate.condition === 'issue_closed')
+      || (Number.isSafeInteger(predicate.pr) && Number(predicate.pr) > 0 && predicate.condition === 'pr_merged'))
+  );
+}
+
+function validateResumePredicate(value: unknown): string[] {
+  return isCanonicalCreateIssueResumePredicate(value)
     ? []
-    : ['external_pause operator resume_when is invalid'];
+    : ['external_pause result.pause.resume_when must be issue_closed, pr_merged, or coordinator'];
+}
+
+export function normalizeLegacyResumePredicateInManagerResult(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const result = value as Record<string, unknown>;
+  if (!result.pause || typeof result.pause !== 'object' || Array.isArray(result.pause)) return value;
+  const pause = result.pause as Record<string, unknown>;
+  const normalized = normalizeCreateIssueResumePredicate(pause.resume_when);
+  if (!normalized) return value;
+  return {
+    ...result,
+    pause: {
+      ...pause,
+      resume_when: normalized,
+    },
+  };
 }
 
 export function validateCreateIssueBlockedOn(value: unknown): string[] {
@@ -352,7 +398,8 @@ export function isCreateIssueSemanticStage(value: unknown): value is CreateIssue
     || value === 'acceptance'
     || value === 'execute:implementation'
     || value === 'execute:review'
-    || value === 'execute:fixer';
+    || value === 'execute:fixer'
+    || value === 'execute:independent-smoke';
 }
 
 export function validateCreateIssueActionBinding(value: unknown): string[] {
@@ -411,12 +458,14 @@ export function createIssueTerminalResult(input: {
   ok: true;
   cause: string;
   blocker?: string;
+  verdict?: 'PASS' | 'FAIL';
 }): CreateIssueTerminalResult {
   if (!nonEmpty(input.cause)) throw new Error('completed create-Issue result cause must be non-empty');
   const result: CreateIssueTerminalResult = {
     ok: true,
     cause: input.cause,
     ...(input.blocker ? { blocker: input.blocker } : {}),
+    ...(input.verdict ? { verdict: input.verdict } : {}),
     nextAction: null,
   };
   const errors = validateCreateIssueManagerResult(result);
@@ -674,7 +723,7 @@ export function projectZeroSendManagerResult(input: {
   return createIssueExternalPauseResult({
     cause: externalCause,
     remedy: 'restore the named external dependency, then resume this same live Dispatch',
-    resumeWhen: { operator: true },
+    resumeWhen: { coordinator: true },
     evidence: input.policy.rawCause,
     blocker: input.policy.rawCause,
     reason,
@@ -715,11 +764,16 @@ function sameArgv(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-export function evaluateCreateIssueManagerBoundary(input: {
+type CreateIssueManagerBoundaryInput = {
   producer: string;
   currentArgv: readonly string[];
   produce: () => unknown;
-}): CreateIssueManagerBoundaryEvaluation {
+};
+
+function evaluateCreateIssueManagerBoundaryCandidate(
+  input: CreateIssueManagerBoundaryInput,
+  legacyRead: boolean,
+): CreateIssueManagerBoundaryEvaluation {
   let candidate: unknown;
   try {
     candidate = input.produce();
@@ -728,12 +782,15 @@ export function evaluateCreateIssueManagerBoundary(input: {
     const result = createIssueManagerContractDefect(input.producer, [detail]);
     return { result, exitCode: 5 };
   }
-  const errors = validateCreateIssueManagerResult(candidate);
+  const readableCandidate = legacyRead
+    ? normalizeLegacyResumePredicateInManagerResult(candidate)
+    : candidate;
+  const errors = validateCreateIssueManagerResult(readableCandidate);
   if (errors.length > 0) {
     const result = createIssueManagerContractDefect(input.producer, errors);
     return { result, exitCode: 5 };
   }
-  const result = candidate as CreateIssueManagerResult;
+  const result = readableCandidate as CreateIssueManagerResult;
   if (!result.ok && result.nextAction !== null && sameArgv(result.nextAction.argv, input.currentArgv)) {
     const defect = createIssueManagerContractDefect(input.producer, [
       'recoverable nextAction.argv must not be byte-identical to currentArgv',
@@ -755,4 +812,16 @@ export function evaluateCreateIssueManagerBoundary(input: {
     return { result: defect, exitCode: 5 };
   }
   return { result, exitCode: 3 };
+}
+
+export function evaluateCreateIssueManagerBoundary(
+  input: CreateIssueManagerBoundaryInput,
+): CreateIssueManagerBoundaryEvaluation {
+  return evaluateCreateIssueManagerBoundaryCandidate(input, false);
+}
+
+export function evaluateLegacyCreateIssueManagerBoundaryRead(
+  input: CreateIssueManagerBoundaryInput,
+): CreateIssueManagerBoundaryEvaluation {
+  return evaluateCreateIssueManagerBoundaryCandidate(input, true);
 }

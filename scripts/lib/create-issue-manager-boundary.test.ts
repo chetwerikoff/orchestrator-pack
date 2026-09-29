@@ -7,6 +7,7 @@ import {
   createIssueEscalationThreadId,
   emitCreateIssueManagerResult,
   evaluateCreateIssueManagerBoundary,
+  evaluateLegacyCreateIssueManagerBoundaryRead,
 } from './create-issue-manager-boundary.ts';
 import {
   CREATE_ISSUE_NEXT_ACTION_KINDS,
@@ -14,7 +15,10 @@ import {
   createIssueNextAction,
   createIssueRecoverableResult,
   createIssueTerminalResult,
+  evaluateCreateIssueManagerBoundary as evaluateNextActionManagerBoundary,
+  evaluateLegacyCreateIssueManagerBoundaryRead as evaluateLegacyNextActionManagerBoundaryRead,
   validateCreateIssueManagerResult,
+  normalizeLegacyResumePredicateInManagerResult,
   type CreateIssueActionBinding,
 } from './create-issue-next-action.ts';
 
@@ -60,7 +64,7 @@ describe('create-Issue manager boundary', () => {
         value: createIssueExternalPauseResult({
           cause: 'external:github_unavailable',
           remedy: 'restore GitHub',
-          resumeWhen: { operator: true },
+          resumeWhen: { coordinator: true },
           evidence: 'HTTP 503',
         }),
       },
@@ -94,6 +98,54 @@ describe('create-Issue manager boundary', () => {
     expect(validateCreateIssueManagerResult(defect.result)).toContain(
       'contract_defect may only be constructed by the manager boundary',
     );
+  });
+
+  it('consumes legacy operator pause input only through the historical-read adapter without mutating bytes', () => {
+    const legacy = {
+      ok: false,
+      cause: 'external:github_unavailable',
+      pause: {
+        remedy: 'restore GitHub',
+        resume_when: { operator: true },
+        evidence: 'historical HTTP 503',
+      },
+      nextAction: null,
+    };
+    const historicalBytes = JSON.stringify(legacy);
+    const normalized = normalizeLegacyResumePredicateInManagerResult(legacy);
+    expect(normalized).toMatchObject({
+      pause: { resume_when: { coordinator: true } },
+    });
+    expect(validateCreateIssueManagerResult(legacy)).toContain(
+      'external_pause result.pause.resume_when must be issue_closed, pr_merged, or coordinator',
+    );
+
+    for (const strictProduced of [evaluateCreateIssueManagerBoundary, evaluateNextActionManagerBoundary]) {
+      expect(strictProduced({
+        producer: 'legacy-pause-must-not-be-emitted',
+        currentArgv: ['current'],
+        produce: () => legacy,
+      })).toMatchObject({
+        exitCode: 5,
+        result: { cause: 'producer_contract_defect', nextAction: null },
+      });
+    }
+
+    for (const historicalRead of [evaluateLegacyCreateIssueManagerBoundaryRead, evaluateLegacyNextActionManagerBoundaryRead]) {
+      expect(historicalRead({
+        producer: 'persisted-live-manager-result',
+        currentArgv: ['current'],
+        produce: () => legacy,
+      })).toMatchObject({
+        exitCode: 4,
+        result: {
+          cause: 'external:github_unavailable',
+          pause: { resume_when: { coordinator: true } },
+          nextAction: null,
+        },
+      });
+    }
+    expect(JSON.stringify(legacy)).toBe(historicalBytes);
   });
 
   it('rejects a producer-constructed contract_defect and reconstructs it at the boundary', () => {
@@ -257,7 +309,7 @@ describe('create-Issue manager boundary', () => {
           produce: () => createIssueExternalPauseResult({
             cause: 'external:github_unavailable',
             remedy: 'restore GitHub',
-            resumeWhen: { operator: true },
+            resumeWhen: { coordinator: true },
             evidence: 'HTTP 503',
           }),
         },

@@ -60,6 +60,7 @@ import {
   trackedPorcelainPaths,
   verifySmokeHeadBinding,
   workerSmokeCauseFamilyForHarnessReason,
+  workerSmokeManagerNonPassCauseForHarnessReason,
   writeSmokeCancelRequest,
   type SmokeReport,
   type SmokeRunBinding,
@@ -251,17 +252,27 @@ interface SmokeChildResult {
 
 type SmokeChildExecutor = (args: readonly string[], env?: Readonly<NodeJS.ProcessEnv>) => SmokeChildResult;
 
+class WorkerSmokeHarnessError extends Error {
+  readonly code: string;
+
+  constructor(code: string, diagnostic: string = code) {
+    super(diagnostic);
+    this.name = 'WorkerSmokeHarnessError';
+    this.code = code;
+  }
+}
+
 function smokeSemanticProfile(
   complexity: SmokeComplexity | string,
   env: Readonly<NodeJS.ProcessEnv>,
 ): SemanticExecutorProfile {
-  if (complexity !== 'routine' && complexity !== 'complex') throw new Error('smoke_complexity_unsupported');
+  if (complexity !== 'routine' && complexity !== 'complex') throw new WorkerSmokeHarnessError('smoke_complexity_unsupported');
   const names = profileNamesForSmoke(complexity);
   const resolved = resolveSemanticExecutorProfile({ surface: 'smoke', names, env });
   if (resolved.ok) return resolved.profile;
-  if (resolved.code === 'executor_profile_missing') throw new Error(`smoke_profile_missing:${resolved.variables.join(',')}`);
-  if (resolved.code === 'executor_profile_malformed') throw new Error(`smoke_profile_malformed:${resolved.variables.join(',')}`);
-  throw new Error(`smoke_profile_unsupported_agent:${resolved.variables[0]}`);
+  if (resolved.code === 'executor_profile_missing') throw new WorkerSmokeHarnessError('smoke_profile_missing', `smoke_profile_missing:${resolved.variables.join(',')}`);
+  if (resolved.code === 'executor_profile_malformed') throw new WorkerSmokeHarnessError('smoke_profile_malformed', `smoke_profile_malformed:${resolved.variables.join(',')}`);
+  throw new WorkerSmokeHarnessError('smoke_profile_unsupported_agent', `smoke_profile_unsupported_agent:${resolved.variables[0]}`);
 }
 
 function smokeProfileFromSemantic(
@@ -287,7 +298,7 @@ export function resolveSmokeExecutorProfile(
     ? CURSOR_SMOKE_CAPABILITY
     : { available: false, supportsModel: false, supportsEffort: false };
   const verdict = evaluateExecutorSpawnApplicability(capability);
-  if (!verdict.ok) throw new Error(verdict.refusal);
+  if (!verdict.ok) throw new WorkerSmokeHarnessError(verdict.refusal);
   return smokeProfileFromSemantic(complexity as SmokeComplexity, profile);
 }
 
@@ -301,8 +312,8 @@ export function resolveLiveSmokeExecutorProfile(
   const profile = smokeSemanticProfile(complexity, env);
   const descriptor = EXECUTOR_FAMILY_DESCRIPTORS[profile.family];
   const catalog = execute(descriptor.catalogCommand);
-  if (!catalog.ok) throw new Error('executor_profile_applicability_unproven');
-  if (!executorCatalogContains(profile, catalog.stdout)) throw new Error('executor_profile_model_unavailable');
+  if (!catalog.ok) throw new WorkerSmokeHarnessError('executor_profile_applicability_unproven');
+  if (!executorCatalogContains(profile, catalog.stdout)) throw new WorkerSmokeHarnessError('executor_profile_model_unavailable');
 
   let capability = CURSOR_SMOKE_CAPABILITY;
   if (profile.family === 'opencode') {
@@ -311,7 +322,7 @@ export function resolveLiveSmokeExecutorProfile(
     for (const probe of descriptor.capabilityProbeCommands) {
       const isDebugProbe = probe[0] === 'opencode' && probe[1] === 'debug';
       const result = isDebugProbe ? execute(probe, { OPENCODE_CONFIG_CONTENT: inlineConfig }) : execute(probe);
-      if (!result.ok) throw new Error('executor_route_unavailable');
+      if (!result.ok) throw new WorkerSmokeHarnessError('executor_route_unavailable');
       observations.push(`${result.stdout}\n${result.stderr ?? ''}`);
     }
     const edgeCapabilities = openCodeEdgeCapabilities(observations, profile);
@@ -320,11 +331,11 @@ export function resolveLiveSmokeExecutorProfile(
       startMode: 'exact_terminal_worktree',
       edgeCapabilities,
     });
-    if (!routeVerdict.ok) throw new Error(routeVerdict.refusal);
+    if (!routeVerdict.ok) throw new WorkerSmokeHarnessError(routeVerdict.refusal);
     capability = edgeCapabilities.exactTerminal;
   }
   const verdict = evaluateExecutorSpawnApplicability(capability);
-  if (!verdict.ok) throw new Error(verdict.refusal);
+  if (!verdict.ok) throw new WorkerSmokeHarnessError(verdict.refusal);
 
   let finalProfile = profile;
   let finalCommand: string | undefined;
@@ -341,7 +352,7 @@ export function resolveLiveSmokeExecutorProfile(
     'const n=process.argv.slice(1);process.exit(n.every((k)=>typeof process.env[k]==="string"&&process.env[k].trim())?0:1)',
     ...profile.names,
   ]);
-  if (!inherited.ok) throw new Error('executor_profile_child_inheritance_unproven');
+  if (!inherited.ok) throw new WorkerSmokeHarnessError('executor_profile_child_inheritance_unproven');
   const smokeProfile = smokeProfileFromSemantic(complexity as SmokeComplexity, finalProfile);
   return finalCommand ? { ...smokeProfile, command: finalCommand } : smokeProfile;
 }
@@ -368,34 +379,34 @@ function proveOpenCodeNoWrite(cwd: string): boolean {
 type OpenCodeNoWriteProof = (cwd: string) => boolean;
 
 function smokeFinalizeOpenCode(profile: SemanticExecutorProfile, cwd: string, execute: SmokeChildExecutor, proveNoWrite?: OpenCodeNoWriteProof): { profile: SemanticExecutorProfile; command: string } {
-  if (!proveNoWrite || !proveNoWrite(cwd)) throw new Error('executor_effort_channel_unavailable');
+  if (!proveNoWrite || !proveNoWrite(cwd)) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
   const before = smokeConfigState(cwd);
   const stateRoot = join(tmpdir(), `opk-opencode-state-${randomUUID()}`);
   const isolatedEnv = { XDG_STATE_HOME: stateRoot };
   const config = execute(['opencode', 'debug', 'config'], isolatedEnv);
-  if (!config.ok || before !== smokeConfigState(cwd)) throw new Error('executor_effort_channel_unavailable');
+  if (!config.ok || before !== smokeConfigState(cwd)) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
   let parsed: Record<string, unknown>;
-  try { const value: unknown = JSON.parse(config.stdout); if (!record(value)) throw new Error(); parsed = value; } catch { throw new Error('executor_effort_channel_unavailable'); }
+  try { const value: unknown = JSON.parse(config.stdout); if (!record(value)) throw new Error(); parsed = value; } catch { throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable'); }
   const defaultAgent = typeof parsed.default_agent === 'string' ? parsed.default_agent.trim() : '';
-  if (!defaultAgent) throw new Error('executor_effort_channel_unavailable');
+  if (!defaultAgent) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
   const baseline = execute(['opencode', 'debug', 'agent', defaultAgent], isolatedEnv);
-  if (!baseline.ok || before !== smokeConfigState(cwd)) throw new Error('executor_effort_channel_unavailable');
+  if (!baseline.ok || before !== smokeConfigState(cwd)) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
   let baselineValue: Record<string, unknown>;
-  try { const value: unknown = JSON.parse(baseline.stdout); if (!record(value)) throw new Error(); baselineValue = value; } catch { throw new Error('executor_effort_channel_unavailable'); }
+  try { const value: unknown = JSON.parse(baseline.stdout); if (!record(value)) throw new Error(); baselineValue = value; } catch { throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable'); }
   const model = profile.model;
   const effort = profile.effort;
-  if (!model || !effort) throw new Error('executor_effort_channel_unavailable');
+  if (!model || !effort) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
   const agentName = `pack-opk-${randomUUID().replaceAll('-', '')}`;
   const overlay = buildOpenCodeAgentOverlay({ agentName, baseline: baselineValue, model, effort, stateRoot });
   const resolved = execute(['opencode', 'debug', 'agent', agentName], { ...isolatedEnv, OPENCODE_CONFIG_CONTENT: overlay.inlineConfigJson! });
-  if (!resolved.ok || before !== smokeConfigState(cwd)) throw new Error('executor_effort_channel_unavailable');
+  if (!resolved.ok || before !== smokeConfigState(cwd)) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
   let resolvedValue: Record<string, unknown>;
-  try { const value: unknown = JSON.parse(resolved.stdout); if (!record(value)) throw new Error(); resolvedValue = value; } catch { throw new Error('executor_effort_channel_unavailable'); }
+  try { const value: unknown = JSON.parse(resolved.stdout); if (!record(value)) throw new Error(); resolvedValue = value; } catch { throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable'); }
   const resolvedModel = record(resolvedValue.model) ? resolvedValue.model : null;
   if (!resolvedModel || resolvedModel.modelID !== model.split('/').at(-1) || resolvedValue.variant !== effort
-    || openCodeAgentSemantics(baselineValue) !== openCodeAgentSemantics(resolvedValue)) throw new Error('executor_effort_channel_unavailable');
+    || openCodeAgentSemantics(baselineValue) !== openCodeAgentSemantics(resolvedValue)) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
   const paths = execute(['opencode', 'debug', 'paths'], isolatedEnv);
-  if (!paths.ok || !paths.stdout.includes(stateRoot)) throw new Error('executor_effort_channel_unavailable');
+  if (!paths.ok || !paths.stdout.includes(stateRoot)) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
   return { profile: { ...profile, model, effort }, command: overlay.command };
 }
 
@@ -1211,14 +1222,33 @@ function failureReason(failure: RuntimeOperationFailure): string {
   return `${failure.operation}:${failure.status}:${failure.reason}`;
 }
 
+function structuredHarnessReasonFromError(error: unknown): string | undefined {
+  if (!(error instanceof Error) || !('code' in error)) return undefined;
+  const code = (error as Error & { readonly code?: unknown }).code;
+  return typeof code === 'string' && code.trim() ? code.trim() : undefined;
+}
+
 function operationalReport(
   causeFamily: WorkerSmokeCauseFamily | 'pass', options: CliOptions,
-  input: { action: string; expected: string; observed: string; terminalCleanup?: string; limitations?: string[]; environmentNotes?: string[]; worker?: RuntimeWorkerIdentity; adapterId?: string },
+  input: {
+    action: string;
+    expected: string;
+    observed: string;
+    structuredHarnessReason?: string;
+    terminalCleanup?: string;
+    limitations?: string[];
+    environmentNotes?: string[];
+    worker?: RuntimeWorkerIdentity;
+    adapterId?: string;
+  },
 ): SmokeReport {
   const result = causeFamily === 'pass' ? 'PASS' : smokeResultForWorkerSmokeCauseFamily(causeFamily);
   const scenarioCauseFamily = causeFamily !== 'pass' && isWorkerSmokeScenarioCauseFamily(causeFamily)
     ? causeFamily
     : undefined;
+  const managerNonPassCause = causeFamily === 'pass'
+    ? undefined
+    : workerSmokeManagerNonPassCauseForHarnessReason(input.structuredHarnessReason);
   return {
     result, issueNumber: options.issueNumber, prNumber: options.prNumber, headSha: options.headSha,
     scenarios: [{
@@ -1231,7 +1261,10 @@ function operationalReport(
     limitations: input.limitations ?? [], trackedFilesUnmodified: true,
     terminalCleanup: input.terminalCleanup ?? 'not_started', environmentNotes: input.environmentNotes ?? [],
     producer: SMOKE_REPORT_PRODUCER, orcaExecutable: input.adapterId ?? 'runtime-adapter', terminalHandle: input.worker?.id,
-    ...(causeFamily === 'pass' ? {} : { causeFamily }),
+    ...(causeFamily === 'pass' ? {} : {
+      causeFamily,
+      ...(managerNonPassCause ? { nonPassCause: managerNonPassCause } : {}),
+    }),
   };
 }
 
@@ -2019,14 +2052,14 @@ export function beginSmokeOrdering(
   owner: SmokeOrderingAttemptOwner,
 ): SmokeOrderingBinding | null {
   const actor = options.smokeActor ?? 'worker-owned';
-  if (actor !== 'worker-owned' && actor !== 'independent') throw new Error('smoke_actor_unsupported');
+  if (actor !== 'worker-owned' && actor !== 'independent') throw new WorkerSmokeHarnessError('smoke_actor_unsupported');
   const required = smokeOrderingRequired(issueBody);
   const plan = resolveSmokeRequirement(issueBody);
   if (!required && (actor !== 'worker-owned' || plan.requirement !== 'not-applicable')) return null;
   const fence = parseComplexityTierFence(issueBody);
   if (fence.kind !== 'tier-fence') {
     if (actor === 'worker-owned' && plan.requirement !== 'not-applicable') return null;
-    if (actor !== 'worker-owned') throw new Error('smoke_ordering_tier_missing');
+    if (actor !== 'worker-owned') throw new WorkerSmokeHarnessError('smoke_ordering_tier_missing');
   }
   const projectId = 'orchestrator-pack';
   const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: process.env.PACK_REVIEW_RUN_STORE_ROOT });
@@ -2057,7 +2090,7 @@ export function beginSmokeOrdering(
 function finishSmokeOrdering(binding: SmokeOrderingBinding | null, status: 'passed' | 'failed', failureKind: SmokeOrderingFailureKind = 'retryable'): void {
   if (!binding) return;
   const authority = readPackReviewAuthority(binding.prNumber, binding.options);
-  if (!authority) throw new Error('smoke_ordering_authority_missing_at_terminal');
+  if (!authority) throw new WorkerSmokeHarnessError('smoke_ordering_authority_missing_at_terminal');
   commitSmokeOrderingTransition({
     prNumber: binding.prNumber, expectedTransitionSeq: authority.transitionSeq, actor: binding.actor,
     headSha: binding.headSha, status, attemptId: binding.attemptId, supervisorPid: binding.supervisorPid,
@@ -2112,6 +2145,14 @@ function preAttemptPublication(
   };
 }
 
+export function validateCoordinatorSmokeOverrideReason(value: string | undefined): string | undefined {
+  const normalized = validateWorkerSmokeOperatorOverrideReason(value);
+  if (normalized && !/^pause-cause=\S[^;]*;\s*repair-evidence=\S.*$/u.test(normalized)) {
+    throw new Error('worker_smoke_coordinator_override_requires_pause_cause_and_repair_evidence');
+  }
+  return normalized;
+}
+
 export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAttemptDependencies = {}): Promise<number> {
   const publishComment = dependencies.publishComment ?? publishPrComment;
   const suppliedIssueBody = readIssueBody(options.issueBodyFile);
@@ -2156,7 +2197,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     emit({ ok: true, skipped: true, reason: plan.requirement }, options.json); return 0;
   }
   if (plan.scenarios.length === 0) {
-    const report = operationalReport('unknown', options, { action: 'parse smoke-test-plan', expected: 'at least one scenario', observed: 'zero_parsed_scenarios' });
+    const report = operationalReport('unknown', options, { action: 'parse smoke-test-plan', expected: 'at least one scenario', observed: 'zero_parsed_scenarios', structuredHarnessReason: 'zero_parsed_scenarios' });
     publishSmokeReport(report, options, undefined, publishComment); emit({ ok: false, report }, options.json); return 1;
   }
 
@@ -2164,7 +2205,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   const attemptPlan = selection.attemptPlan;
   let overrideReason: string | undefined;
   try {
-    overrideReason = validateWorkerSmokeOperatorOverrideReason(options.operatorOverrideReason);
+    overrideReason = validateCoordinatorSmokeOverrideReason(options.operatorOverrideReason);
   } catch (error) {
     emit({ ok: false, reason: scrubSmokeOutput(error instanceof Error ? error.message : String(error)) }, options.json);
     return 1;
@@ -2189,6 +2230,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       action: 'bind smoke to trusted live Issue and PR',
       expected: 'supplied body, open Issue/PR, and exact live PR head match',
       observed: trustedTargetHeadMismatch,
+      structuredHarnessReason: trustedTargetHeadMismatch,
     });
     publishSmokeReport(report, options, preAttempt, publishComment);
     emit({ ok: false, report, attemptId }, options.json);
@@ -2207,6 +2249,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       action: violation.action,
       expected: violation.expected,
       observed: violation.observed,
+      structuredHarnessReason: violation.reason,
       terminalCleanup: 'not_started',
     });
     publishSmokeReport(report, options, preAttempt, publishComment);
@@ -2251,9 +2294,11 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       : resolveLiveSmokeExecutorProfile(options.smokeComplexity, profileEnv,
         (args, env) => runSmokeProfileChild(args, options.cwd, profileEnv, env), options.cwd, proveOpenCodeNoWrite);
   } catch (error) {
+    const structuredHarnessReason = structuredHarnessReasonFromError(error);
     const report = operationalReport('harness_admission_refused', options, {
       action: 'resolve smoke executor profile', expected: 'one supported smoke profile applied before child creation',
       observed: scrubSmokeOutput(error instanceof Error ? error.message : String(error)),
+      ...(structuredHarnessReason ? { structuredHarnessReason } : {}),
     });
     publishSmokeReport(report, options, preAttempt, publishComment); emit({ ok: false, report }, options.json); return 1;
   }
@@ -2266,7 +2311,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   }
   const headBinding = verifySmokeHeadBinding({ requestedHeadSha: options.headSha, orcaHeadSha: readiness.value.headSha, gitHeadSha: gitHead(options.cwd) });
   if (!headBinding.ok) {
-    const report = operationalReport('harness_head_mismatch', options, { action: 'bind smoke to current head', expected: options.headSha, observed: `${headBinding.reason}:${headBinding.observed}`, adapterId: adapter.id });
+    const report = operationalReport('harness_head_mismatch', options, { action: 'bind smoke to current head', expected: options.headSha, observed: `${headBinding.reason}:${headBinding.observed}`, structuredHarnessReason: headBinding.reason, adapterId: adapter.id });
     publishSmokeReport(report, options, preAttempt, publishComment); emit({ ok: false, report }, options.json); return 1;
   }
 
@@ -2396,10 +2441,12 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       }, ...(postSmoke ? { postSmoke } : {}) }, options.json);
       return report.result === 'PASS' ? 0 : 1;
     } catch (error) {
+      const structuredHarnessReason = structuredHarnessReasonFromError(error);
       const observed = scrubSmokeOutput(error instanceof Error ? error.message : String(error));
-      const report = operationalReport(workerSmokeCauseFamilyForHarnessReason(observed), options, {
+      const report = operationalReport(workerSmokeCauseFamilyForHarnessReason(structuredHarnessReason), options, {
         action: 'publish carry-only selective smoke', expected: 'fresh current-head report without runtime lifecycle',
         observed,
+        ...(structuredHarnessReason ? { structuredHarnessReason } : {}),
         terminalCleanup: 'not_started_no_execution', adapterId: adapter.id,
       });
       publishSmokeReport(report, options, carryPublication, publishComment, () => { recordPublishedOrdering(report, true); });
@@ -2442,7 +2489,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   try {
     const admission = preflightSmokeLifecycle({ repoRoot: options.cwd, runId, closeBoundHandle: (handle) => runtimeCloseBoundHandle(adapter, handle, options) });
     if (!admission.admitted) {
-      const report = operationalReport('harness_admission_refused', options, { action: 'acquire smoke spawn admission', expected: 'exclusive admission before spawn', observed: admission.reason ?? 'admission_refused', adapterId: adapter.id });
+      const report = operationalReport('harness_admission_refused', options, { action: 'acquire smoke spawn admission', expected: 'exclusive admission before spawn', observed: admission.reason ?? 'admission_refused', structuredHarnessReason: admission.reason ?? 'admission_refused', adapterId: adapter.id });
       publishSmokeReport(report, options, preAttempt, publishComment); emit({ ok: false, report, lifecycle: admission, attemptId }, options.json); return 1;
     }
 
@@ -2465,7 +2512,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
 
     if (!start.ok) {
       if (!start.actionEntered) { releaseSmokeAdmission(options.cwd, runId); emit({ ok: true, skipped: true, attempted: false, reason: start.reason }, options.json); return 0; }
-      throw new Error(`smoke_start_fence_post_entry:${start.reason}`);
+      throw new WorkerSmokeHarnessError('smoke_start_fence_post_entry', `smoke_start_fence_post_entry:${start.reason}`);
     }
     if (start.value.kind === 'spawn_failed') {
       const report = operationalReport('harness_observation_interrupted', options, { action: 'spawn runtime smoke worker', expected: 'composite worker identity', observed: start.value.reason, terminalCleanup: 'ambiguous_unbound', adapterId: adapter.id });
@@ -2473,7 +2520,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       deferDetachedTerminalization(runId, artifactDir, 'runtime', report);
       emit({ ok: false, report, attemptId }, options.json); return 1;
     }
-    if (!worker || startedAtMs <= 0) throw new Error('smoke_start_prefix_incomplete');
+    if (!worker || startedAtMs <= 0) throw new WorkerSmokeHarnessError('smoke_start_prefix_incomplete');
 
     const binding = { runId, artifactDir };
     const prompt = buildLifecyclePrompt(buildSmokeAgentPrompt({
@@ -2487,6 +2534,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
         : 'lifecycle_cleanup_failed';
       const report = operationalReport(family, options, {
         action: 'dispatch smoke prompt once', expected: 'one dispatch attempt plus child-sealed delivery evidence', observed: delivery.reason ?? 'prompt_delivery_unconfirmed',
+        structuredHarnessReason: delivery.reason ?? 'prompt_delivery_unconfirmed',
         terminalCleanup, environmentNotes: [`submit-count=${delivery.submitCount}`, `lifecycle-clean=${lifecycleCleanup.clean}`], worker, adapterId: adapter.id,
       });
       publishSmokeReport(report, options, runPublication, publishComment, () => { recordPublishedOrdering(report, true); });
@@ -2505,6 +2553,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
         : 'lifecycle_cleanup_failed';
       const report = operationalReport(family, options, {
         action: 'wait for sealed smoke completion', expected: 'legal progress and one sealed report', observed: completion.reason ?? 'agent_report_timeout',
+        structuredHarnessReason: completion.reason ?? 'agent_report_timeout',
         terminalCleanup, limitations: completion.progress?.invalidEvents.slice(0, 10),
         environmentNotes: [`lifecycle-clean=${lifecycleCleanup.clean}`, ...completionObservationNotes(completion)], worker, adapterId: adapter.id,
       });
@@ -2577,14 +2626,16 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     }, ...(postSmoke ? { postSmoke } : {}) }, options.json);
     return report.result === 'PASS' ? 0 : 1;
   } catch (error) {
+    const structuredHarnessReason = structuredHarnessReasonFromError(error);
     const observed = scrubSmokeOutput(error instanceof Error ? error.message : 'handled_exception');
     if (worker && !cleanupFinished) cleanup('handled_exception', true);
     else if (!worker && startedAtMs > 0) { try { markSmokeCreateAmbiguous(artifactDir, observed); } catch { /* fail closed */ } releaseSmokeAdmission(options.cwd, runId); }
     const family: WorkerSmokeCauseFamily = cleanupFinished && terminalCleanup.startsWith('close_failed')
       ? 'lifecycle_cleanup_failed'
-      : workerSmokeCauseFamilyForHarnessReason(observed);
+      : workerSmokeCauseFamilyForHarnessReason(structuredHarnessReason);
     const report = operationalReport(family, options, {
       action: 'run runtime-neutral worker smoke', expected: 'bounded terminal lifecycle', observed,
+      ...(structuredHarnessReason ? { structuredHarnessReason } : {}),
       terminalCleanup: worker ? terminalCleanup : startedAtMs > 0 ? 'ambiguous_unbound' : 'not_started', worker, adapterId: adapter.id,
     });
     const publication = startedAtMs > 0 ? runPublication : preAttempt;

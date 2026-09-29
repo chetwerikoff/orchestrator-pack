@@ -1,3 +1,5 @@
+// @vitest-ci-lane light
+// @vitest-pre-topology-seconds 120
 import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -98,14 +100,12 @@ describe('Issue #1998 manager environment preflight', () => {
     }
   });
 
-  it('returns the npm ci remedy when the active worktree cannot resolve the shared export', () => {
-    const fakeWorktree = tempDir('opk-1998-worktree-');
+  it('keeps native gh refusal when the shared export resolves in the worktree', () => {
+    const packRoot = resolve(process.cwd());
     const profile = tempDir('opk-1998-profile-');
-    mkdirSync(join(fakeWorktree, 'scripts'), { recursive: true });
-    mkdirSync(join(fakeWorktree, 'plugins', '_shared'), { recursive: true });
-    const packGh = join(fakeWorktree, 'scripts', 'gh');
+    const packGh = join(packRoot, 'scripts', 'gh');
     const result = evaluateManagerBrowserEnvironmentPreflight({
-      packRoot: fakeWorktree,
+      packRoot,
       effectivePath: process.env.PATH ?? '',
       env: {
         DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR: profile,
@@ -116,14 +116,50 @@ describe('Issue #1998 manager environment preflight', () => {
         node: process.execPath,
         packGh,
         firstGh: packGh,
-        nativeGh: '/usr/bin/gh',
+        nativeGh: null,
+        nativeGhError: 'no native gh executable found',
       },
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      probe: 'tracked_gh_path',
+      reason: 'native_gh_unresolved',
+    });
+  });
+
+  it('returns the npm ci remedy before resolving native gh when the active worktree lacks the shared export', () => {
+    const fakeWorktree = tempDir('opk-1998-worktree-');
+    const profile = tempDir('opk-1998-profile-');
+    mkdirSync(join(fakeWorktree, 'scripts'), { recursive: true });
+    mkdirSync(join(fakeWorktree, 'plugins', '_shared'), { recursive: true });
+    const packGh = join(fakeWorktree, 'scripts', 'gh');
+    let nativeGhResolutionAttempted = false;
+    const tools = {
+      node: process.execPath,
+      packGh,
+      firstGh: packGh,
+      get nativeGh() {
+        nativeGhResolutionAttempted = true;
+        return null;
+      },
+      nativeGhError: 'no native gh executable found',
+    };
+    const result = evaluateManagerBrowserEnvironmentPreflight({
+      packRoot: fakeWorktree,
+      effectivePath: process.env.PATH ?? '',
+      env: {
+        DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR: profile,
+      },
+      targetProjectUrl: 'https://chatgpt.com/g/project',
+      targetCardPath: '/operator/projects/orchestrator-pack.json',
+      tools,
     });
     expect(result).toMatchObject({
       ok: false,
       probe: 'workspace_shared_module',
       reason: 'workspace_dependencies_unavailable',
     });
+    expect(nativeGhResolutionAttempted).toBe(false);
     if (!result.ok) {
       expect(result.evidence).toContain('@orchestrator-pack/shared/lib/normalize.js');
       expect(result.remedy).toContain('npm ci --include=dev');

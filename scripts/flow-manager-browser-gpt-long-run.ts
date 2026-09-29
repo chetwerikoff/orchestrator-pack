@@ -154,7 +154,7 @@ function projectPreflightFailure(
     return emitBrowserManagerResult(argv, createIssueExternalPauseResult({
       cause: 'external:github_unavailable',
       remedy: result.remedy,
-      resumeWhen: { operator: true },
+      resumeWhen: { coordinator: true },
       evidence: result.evidence,
       blocker: result.blocker,
     }));

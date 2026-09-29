@@ -51,6 +51,10 @@ import {
   createIssueEscalationThreadId,
   evaluateCreateIssueManagerBoundary,
 } from './lib/create-issue-manager-boundary.ts';
+import {
+  classifyExecuteIssueManagerRecord,
+  type ExecuteIssueManagerBoundaryContext,
+} from './lib/execute-issue-manager-boundary.ts';
 
 const contract = readFileSync(new URL('../.cursor/skills/create-issue-draft/SKILL.md', import.meta.url), 'utf8');
 const defaultGhTransportSlot = vi.hoisted(() => ({
@@ -1774,8 +1778,8 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     expect(executionRunbook).toMatch(
       /The manager\s+does not run independent smoke itself/,
     );
-    expect(executionRunbook).toMatch(
-      /Overall `VERIFIED_COMPLETE` is\s+possible only after independent smoke passes on the final exact head/,
+    expect(executionRunbook).toContain(
+      'independent smoke has passed on the final exact head',
     );
     expect(orchestrationRunbook).toContain(
       'manager whole-role Task/Dispatch handoff',
@@ -1786,6 +1790,108 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     expect(orchestrationRunbook).toContain(
       'does not wait for scheduler\n`ready_for_review`',
     );
+  });
+
+  it('keeps the same manager Dispatch live through settled review, independent smoke, and fixer return', () => {
+    const headSha = 'a'.repeat(40);
+    const managerContext: ExecuteIssueManagerBoundaryContext = {
+      repository: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 2182,
+      sourceRevision: 'r04',
+      phase: 'independent-smoke',
+      productionArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'],
+      prNumber: 2219,
+      headSha,
+    };
+    const dispatch = {
+      id: 'dispatch-2182',
+      reviewStageComplete: true,
+      terminal: false,
+      continuations: [] as string[],
+      localFixes: 0,
+    };
+    const continueSmoke = (record: Record<string, unknown>) => {
+      expect(dispatch.terminal).toBe(false);
+      dispatch.continuations.push(dispatch.id);
+      return classifyExecuteIssueManagerRecord(record, managerContext);
+    };
+
+    const fail = continueSmoke({
+      schema: 'pack-worker-smoke-report/v1',
+      producer: 'orchestrator-pack/worker-smoke-run/v1',
+      issueNumber: 2182,
+      prNumber: 2219,
+      headSha,
+      result: 'FAIL',
+      trackedFilesUnmodified: false,
+      causeFamily: 'scenario_assertion_failed',
+      nonPassCause: 'executed_scenario_failure',
+      scenarios: [{
+        action: 'exercise current behavior',
+        expected: 'acceptance assertion holds',
+        observed: 'assertion mismatch',
+        outcome: 'fail',
+        causeFamily: 'scenario_assertion_failed',
+      }],
+    });
+    expect(fail).toMatchObject({
+      exitCode: 0,
+      result: {
+        ok: true,
+        verdict: 'FAIL',
+        cause: 'execute_worker_smoke_assertion_failed',
+        nextAction: null,
+      },
+    });
+    if (fail.result.ok && fail.result.verdict === 'FAIL') dispatch.localFixes += 1;
+    expect(dispatch).toMatchObject({
+      reviewStageComplete: true,
+      terminal: false,
+      localFixes: 1,
+    });
+    expect(fail.exitCode).toBe(0);
+    expect(fail.result.ok && fail.result.verdict).toBe('FAIL');
+    expect(dispatch.terminal).toBe(false);
+
+    const pass = continueSmoke({
+      schema: 'pack-worker-smoke-report/v1',
+      producer: 'orchestrator-pack/worker-smoke-run/v1',
+      issueNumber: 2182,
+      prNumber: 2219,
+      headSha,
+      result: 'PASS',
+      trackedFilesUnmodified: true,
+      terminalCleanup: 'closed_owned_handle',
+      orcaExecutable: 'orca',
+      terminalHandle: 'term_fixture',
+      scenarios: [{
+        action: 'exercise current behavior',
+        expected: 'acceptance assertion holds',
+        observed: 'acceptance assertion holds',
+        outcome: 'pass',
+      }],
+    });
+    expect(pass).toMatchObject({
+      exitCode: 0,
+      result: {
+        ok: true,
+        verdict: 'PASS',
+        cause: 'execute_worker_smoke_pass',
+        nextAction: null,
+      },
+    });
+    expect(dispatch.continuations).toEqual(['dispatch-2182', 'dispatch-2182']);
+    expect(dispatch.reviewStageComplete).toBe(true);
+    expect(dispatch.terminal).toBe(false);
+
+    expect(executeSkill).toMatch(/Keep the same\s+manager Dispatch alive/);
+    expect(executionRunbook).toMatch(/the same\s+manager Dispatch remains alive/);
+    expect(executionRunbook).toContain('classifyExecuteIssueManagerRecord');
+    expect(orchestrationRunbook).toContain('the same manager Dispatch remains nonterminal');
+    expect(executeSkill).toContain('The supervisor consumes the validated `verdict` before role completion');
+    expect(executeSkill).toContain('supervisor-launched local worker owns');
+    expect(smokeRunbook).toContain('does not add or claim local-worker launch');
+    expect(smokeRunbook).toMatch(/does not\s+reopen a completed pack-review stage/);
   });
 
   it('keeps ordinary worker smoke-before-review while exempting only the manager-controlled Browser-GPT path', () => {
@@ -1828,9 +1934,7 @@ describe('Issue #2050 execute-Issue identity-bound re-observation contract', () 
     const shared = compact(browserRunbook);
     const transport = compact(transportReadme);
 
-    expect(skill).toContain(
-      'browser-gpt-page-probe inspect --cdp <exact retained endpoint> --profile <exact retained configured profile> --invocation-id <exact retained invocation id>',
-    );
+    expect(skill).toContain('docs/chatgpt-task-execution-runbook.md');
     expect(execution).toContain(
       'browser-gpt-page-probe inspect --cdp <exact retained endpoint> --profile <exact retained configured profile> --invocation-id <exact retained invocation id>',
     );
@@ -1861,10 +1965,11 @@ describe('Issue #2050 execute-Issue identity-bound re-observation contract', () 
     const skill = compact(executeSkill);
     const execution = compact(executionRunbook);
 
-    expect(skill).toContain(
+    expect(skill).toContain('Follow that runbook; this skill does not restate those mechanics.');
+    expect(execution).toContain(
       'A bounded observer/wait slice is not the lifetime of the Browser-GPT turn.',
     );
-    expect(skill).toContain(
+    expect(execution).toContain(
       'preserves the exact run identity, attempt identity, invocation id, profile, CDP endpoint, and conversation binding',
     );
     expect(execution).toContain(
@@ -1873,7 +1978,7 @@ describe('Issue #2050 execute-Issue identity-bound re-observation contract', () 
     expect(execution).toContain(
       'Preserve the exact run identity, attempt identity, invocation id, profile, CDP endpoint, and conversation binding',
     );
-    expect(skill).toContain(
+    expect(execution).toContain(
       'The first post-checkpoint continuation starts one recovery-observation episode with the existing `DEFAULT_TIMEOUT_MS = 1_800_000 ms` ceiling',
     );
     expect(execution).toContain(
@@ -1891,9 +1996,8 @@ describe('Issue #2050 execute-Issue identity-bound re-observation contract', () 
   });
 
   it('keeps D2 as manager contract evidence rather than a new executable recovery state machine', () => {
-    const skill = compact(executeSkill);
     const execution = compact(executionRunbook);
-    expect(skill).toContain(
+    expect(execution).toContain(
       'Exhaustion creates no resend, replacement-invocation, or fresh-chat authority.',
     );
     expect(execution).toContain(
@@ -1994,7 +2098,7 @@ describe('Issue #2004 derived external-dependency parking contract', () => {
       'If the escalation send\nitself fails, retry it exactly once',
       'A live Dispatch whose most recent manager message is that escalation is a\n**paused unit**',
       'must not re-dispatch the same argv into it',
-      'Until a separate coordinator sweep/wake\nchange lands',
+      'Until a separate coordinator\nsweep/wake change lands',
       'Browser-GPT\n`TerminalEnvelope` remains a separate transport and is unchanged',
     ]) {
       expect(orchestrationRunbook).toContain(required);
@@ -2239,7 +2343,7 @@ describe('Issue #2078 smoke scenarios 3 and 5 fixture manager', () => {
     const result = createIssueExternalPauseResult({
       cause: 'external:github_unavailable',
       remedy: 'resume after the fixture transport becomes available',
-      resumeWhen: { operator: true },
+      resumeWhen: { coordinator: true },
       evidence: 'fixture HTTP 503',
     });
     const sentThreadIds: string[] = [];
@@ -2263,7 +2367,7 @@ describe('Issue #2078 smoke scenarios 3 and 5 fixture manager', () => {
       issueNumber: 2078,
       stage: 'architectural-review',
       cause: 'external:github_unavailable',
-      resumeWhen: { operator: true },
+      resumeWhen: { coordinator: true },
     });
 
     expect(sendAttempts).toBe(2);
@@ -2281,6 +2385,40 @@ describe('Issue #2078 smoke scenarios 3 and 5 fixture manager', () => {
       taskTerminal: false,
       dispatchTerminal: false,
     });
+  });
+});
+
+describe('Issue #2094 execute-Issue product-error continuation contract', () => {
+  const executeSkill = readFileSync(new URL('../.cursor/skills/execute-issue-with-gpt/SKILL.md', import.meta.url), 'utf8');
+  const executionRunbook = readFileSync(new URL('../docs/chatgpt-task-execution-runbook.md', import.meta.url), 'utf8');
+
+  it('recognizes all four reserved causes and continues in the same owned chat before fallback', () => {
+    expect(executeSkill).toContain('docs/chatgpt-task-execution-runbook.md');
+    expect(executionRunbook).toContain('message_delivery_timed_out');
+    expect(executionRunbook).toContain('product_network_error');
+    expect(executionRunbook).toContain('message_stream_error');
+    expect(executionRunbook).toContain('stream_recovery_polling_timed_out');
+    expect(executionRunbook).toContain('same exact owned ChatGPT conversation');
+    expect(executionRunbook).toContain('Error in message stream');
+    expect(executionRunbook).toContain('Never press the product `Retry` control.');
+    expect(executionRunbook).toContain('minimum **10-minute grace window**');
+  });
+
+  it('requires settlement and unchanged PR, branch, or no-work baseline before replacement', () => {
+    expect(executionRunbook).toContain('The 10-minute grace is not turn-settlement');
+    expect(executionRunbook).toContain('authoritatively');
+    expect(executionRunbook).toContain('**No observed Issue-bound work:** still no Issue-bound PR');
+    expect(executionRunbook).toContain('Do not create a replacement branch or PR');
+    expect(executionRunbook).toContain('close only the exact old owned');
+    expect(executionRunbook).toContain('candidate-complete');
+  });
+
+  it('keeps message-stream classification exact and preserves page-probe gates', () => {
+    const pageProbe = readFileSync(new URL('./browser-gpt-page-probe.ts', import.meta.url), 'utf8');
+    expect(pageProbe).toContain("${JSON.stringify('Error in message stream')}");
+    expect(pageProbe).toContain("stripped === STREAM_TEXT + '…'");
+    expect(pageProbe).toContain("stripped === STREAM_TEXT + '...'");
+    expect(pageProbe).toContain('classifyExecutionRecoveryProductError(');
   });
 });
 
