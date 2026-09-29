@@ -220,6 +220,7 @@ describe('Issue #1998 manager environment preflight', () => {
         PATH: [scriptsDir, process.env.PATH ?? ''].filter(Boolean).join(':'),
         DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR: profile,
         OPK_CREATE_ISSUE_DRAFT_STATE_ROOT: lifecycleState,
+        OPK_PROJECT_ID: '',
       },
       inheritParentEnv: true,
       encoding: 'utf8',
