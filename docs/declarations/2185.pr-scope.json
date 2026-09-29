@@ -82,5 +82,5 @@
     "scripts/pr2-foundation/supervised-worker-start.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "444c230af6decd4df3184939080927d9e1575928"
+  "source_revision": "30f5b33da60bedb18101207e3a571bd94b743de1"
 }
