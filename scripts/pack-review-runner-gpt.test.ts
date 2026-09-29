@@ -16,7 +16,9 @@ import {
   runPackGptReviewCommand,
 } from './pack-gpt-review.js';
 import {
+  applyCliTargetProject,
   isRetryablePackReviewZeroSendCollision,
+  parseArgs,
   reconcileStalePackReviewRuns,
   resolveCurrentPrHead,
   startPackReview,
@@ -876,6 +878,19 @@ describe('GPT crash/browser ambiguity (Issue #1031 AC12)', () => {
 
     expect(result.ok).toBe(false);
     expect(() => readFileSync(capture, 'utf8')).toThrow();
+  });
+});
+
+describe('pack-review runner target selection CLI', () => {
+  it('accepts --project, validates its card, and propagates it to reviewer child environment', () => {
+    const storeRoot = tempRoot('opk-runner-project-flag-');
+    selectProjectCard(storeRoot);
+
+    const input = parseArgs(['--project', 'orchestrator-pack']);
+    applyCliTargetProject(input as { targetProjectId?: string; projectId?: string });
+
+    expect(input).toMatchObject({ targetProjectId: 'orchestrator-pack', projectId: 'orchestrator-pack' });
+    expect(process.env.OPK_PROJECT_ID).toBe('orchestrator-pack');
   });
 });
 

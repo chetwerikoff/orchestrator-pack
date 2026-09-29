@@ -135,6 +135,7 @@ import {
   type PackReviewerLayerOverrides,
 } from './lib/resolve-pack-reviewer.ts';
 import { resolveGptBrowserConfig, resolveRepositorySlug } from './lib/pack-gpt-reviewer.ts';
+import { resolveTargetContext } from './lib/target-context.ts';
 import {
   createPackGptSourceCommentTransport,
   resolvePackGptSourceComment,
@@ -169,6 +170,7 @@ type FixtureReviewBySourceSlot = Partial<Record<string, readonly FixtureReviewOu
 
 interface StartInput {
   projectId?: string;
+  targetProjectId?: string;
   sessionId?: string;
   linkedSessionId?: string;
   prNumber?: number;
@@ -5552,7 +5554,7 @@ function usage(): string {
     'Pack-owned review runner (Issue #839)',
     '',
     'Manual trigger:',
-    '  node --experimental-strip-types scripts/pack-review-runner.ts start --pr-number <n>',
+    '  node --experimental-strip-types scripts/pack-review-runner.ts start --pr-number <n> [--project <id>]',
     '  node --experimental-strip-types scripts/pack-review-runner.ts start --pr-number <n> --session-id <worker-session-id>',
     '  node --experimental-strip-types scripts/pack-review-runner.ts start --pr-number <n> --head-sha <40-hex>',
     '  node --experimental-strip-types scripts/pack-review-runner.ts start --pr-number <n> --operator-reason <text> [--operator-issue-number <n>] [--operator-repository <owner/name>] [--operator-bound-snapshot <sha256:64-hex>]',
@@ -5570,9 +5572,10 @@ function usage(): string {
   ].join('\n');
 }
 
-function parseArgs(argv: string[]): Record<string, unknown> {
+export function parseArgs(argv: string[]): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   const keyByFlag: Record<string, string> = {
+    '--project': 'targetProjectId',
     '--project-id': 'projectId',
     '--session-id': 'sessionId',
     '--pr-number': 'prNumber',
@@ -5615,6 +5618,21 @@ function parseArgs(argv: string[]): Record<string, unknown> {
     result[key] = key === 'prNumber' || key === 'operatorIssueNumber' ? Number(value) : value;
   }
   return result;
+}
+
+export function applyCliTargetProject(
+  input: Pick<StartInput, 'targetProjectId' | 'projectId'>,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const requestedProjectId = trim(input.targetProjectId);
+  if (!requestedProjectId) return;
+  const target = resolveTargetContext({ projectId: requestedProjectId, env });
+  const stateProjectId = trim(input.projectId);
+  if (stateProjectId && stateProjectId !== target.projectId) {
+    throw new Error(`--project ${target.projectId} conflicts with --project-id ${stateProjectId}`);
+  }
+  input.projectId = target.projectId;
+  env.OPK_PROJECT_ID = target.projectId;
 }
 
 function readStdinPayload(): Record<string, unknown> {
@@ -5691,6 +5709,7 @@ async function main(): Promise<void> {
   }
   if (subcommand === 'start') {
     const startInput = input as DirectCliStartInput;
+    applyCliTargetProject(startInput);
     const operatorStart = resolveOperatorPackReviewStart(startInput);
     if (operatorStart) directCliOperatorStarts.set(startInput, operatorStart);
     const result = await startPackReview(startInput);

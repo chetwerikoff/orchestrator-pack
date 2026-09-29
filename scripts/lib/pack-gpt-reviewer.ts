@@ -270,10 +270,10 @@ export function resolveGptBrowserConfig(env: NodeJS.ProcessEnv = process.env): G
   if (trim(env.PACK_GPT_BROWSER_PROJECT_URL)) {
     throw new Error('PACK_GPT_BROWSER_PROJECT_URL is retired as target authority; select a project card with --project or OPK_PROJECT_ID');
   }
-  const target = resolveTargetContext({ env });
   if (chatUrl) {
-    return { profile, cdpUrl, chatUrl };
+    throw new Error('PACK_GPT_BROWSER_CHAT_URL is not supported for pack review; use the selected project card URL');
   }
+  const target = resolveTargetContext({ env });
   return { profile, cdpUrl, projectUrl: target.browserGpt.projectUrl, newChat: true };
 }
 

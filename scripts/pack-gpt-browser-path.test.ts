@@ -10,6 +10,7 @@ import './lib/pack-gpt-source-comment-runner.cases.ts';
 import {
   defaultRunBrowserTurn,
   mapGptReplyToTerminalStdout,
+  resolveGptBrowserConfig,
   runGptPackReview,
   type GptReviewDependencies,
 } from './lib/pack-gpt-reviewer.ts';
@@ -128,6 +129,16 @@ afterEach(() => {
   for (const root of targetFixtureRoots.splice(0)) rmSync(root, { recursive: true, force: true });
   process.env = { ...originalEnv };
   vi.restoreAllMocks();
+});
+
+describe('selected Browser-GPT target', () => {
+  it('rejects a fixed chat URL for single-source pack review', () => {
+    const env = selectedProjectEnv();
+    env.PACK_GPT_BROWSER_PROFILE = '/tmp/profile';
+    env.PACK_GPT_BROWSER_CHAT_URL = 'https://chatgpt.com/c/fixed';
+
+    expect(() => resolveGptBrowserConfig(env)).toThrow(/PACK_GPT_BROWSER_CHAT_URL is not supported for pack review/);
+  });
 });
 
 describe('GPT browser transport path (Issue #1031 AC3/AC12)', () => {

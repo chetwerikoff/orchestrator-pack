@@ -19,12 +19,12 @@ Run from the pack checkout with Node 22:
 ```bash
 node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
   --repo-root "$PWD" --script "$PWD/scripts/fleet/fleet-sweep.ts" -- \
-  --primary "$PWD"
+  --project my-project
 ```
 
-Use `--json` for machine-readable output, `--lines <n>` to change the displayed
-tail, and `--workspace-re` / `--busy-re` only when the project needs different
-matching rules. The sweep itself makes no Orca mutation.
+The selected project card supplies the primary checkout and matching rules. Use
+`--json` for machine-readable output and `--lines <n>` to change the displayed
+tail. The sweep itself makes no Orca mutation.
 
 ## Install one project instance
 
