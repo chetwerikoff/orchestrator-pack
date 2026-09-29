@@ -1,6 +1,6 @@
 // Issue #1937 keeps the established state-light implementation unchanged in
 // state-light-turn-base.ts and narrows only the public terminal projection for
-// the two execute-Issue product-error causes. The underlying observation loop,
+// the four execute-Issue product-error causes. The underlying observation loop,
 // send-once authority, recovery logic, publication, and cleanup remain owned by
 // the existing implementation.
 export * from './state-light-turn-base.ts';
@@ -18,6 +18,8 @@ const DEFAULT_TIMEOUT_MS = 1_800_000;
 const EXECUTION_RECOVERY_CAUSES = new Set<ExecutionRecoveryProductCause>([
   'message_delivery_timed_out',
   'product_network_error',
+  'message_stream_error',
+  'stream_recovery_polling_timed_out',
 ]);
 
 function projectExecutionRecoveryTerminal(value: unknown): unknown {
@@ -68,8 +70,8 @@ function withPreservedDefaultTimeout(argv: readonly string[]): readonly string[]
 }
 
 /**
- * Preserve the existing state-light engine while projecting the two new causes
- * onto the already-existing conversation-scoped recovery_required result axis.
+ * Preserve the existing state-light engine while projecting all reserved execution
+ * recovery causes onto the already-existing conversation-scoped recovery_required result axis.
  * This does not create a new TurnState, retry path, store, or monitor.
  */
 export async function runStateLightTurn(

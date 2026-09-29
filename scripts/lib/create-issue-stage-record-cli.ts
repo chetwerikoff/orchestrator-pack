@@ -495,7 +495,9 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
         break;
       }
       case '--after-lifecycle-validation-failure':
-        if (command !== 'reconcile-stage') throw new Error('--after-lifecycle-validation-failure is only valid with reconcile-stage');
+        if (command !== 'reconcile-stage' && command !== 'author-round') {
+          throw new Error('--after-lifecycle-validation-failure is only valid with reconcile-stage or author-round');
+        }
         opts.afterLifecycleValidationFailure = true;
         break;
       case '--blocked-on-json':
@@ -1153,6 +1155,7 @@ function canonicalAuthorRoundDirectory(issueNumber: number): string {
 function preMintAuthorRoundAction(
   binding: CreateIssueActionBinding,
   reviewDir: string,
+  afterLifecycleValidationFailure = false,
  ): CreateIssueNextAction {
   const argv = [
     'node', '--experimental-strip-types', 'scripts/create-issue-stage-finalize.ts',
@@ -1164,6 +1167,7 @@ function preMintAuthorRoundAction(
     '--expected-stage', binding.stage,
   ];
   if (binding.stageAttemptId) argv.push('--expected-stage-attempt-id', binding.stageAttemptId);
+  if (afterLifecycleValidationFailure) argv.push('--after-lifecycle-validation-failure');
   argv.push('--json');
   return createIssueNextAction({ kind: 'author-round', binding, argv });
 }
@@ -1902,10 +1906,10 @@ export function runStageFinalizeCli(
         const retryableRead = reconcileStageReadIsRetryable(result);
         if (result.ok) {
           nextAction = opts.afterLifecycleValidationFailure
-            && !result.alreadySettled
+            && (!result.alreadySettled || result.stage === 'architectural-lens')
             && result.stage !== 'architectural'
             && (result.materialFindingCount ?? 0) > 0
-            ? preMintAuthorRoundAction(binding, reviewDir)
+            ? preMintAuthorRoundAction(binding, reviewDir, true)
             : createIssueNextAction({
                 kind: 'produce-acceptance-artifacts',
                 binding,
@@ -1916,8 +1920,7 @@ export function runStageFinalizeCli(
                   '--issue-number', String(issueNumber),
                   '--review-dir', reviewDir,
                   '--stage-evidence', stageEvidencePath,
-                  '--phase', result.stage === 'architectural' ? 'final-acceptance' : 'pre-lens',
-                  '--expected-source-revision', result.sourceRevision,
+                  '--phase', result.stage === 'architectural' ? 'final-acceptance' : result.stage === 'architectural-lens' ? 'post-lens' : 'pre-lens',
                   '--expected-stage', result.stage,
                   '--expected-stage-attempt-id', result.stageAttemptId,
                   '--json',
@@ -2051,7 +2054,7 @@ export function runStageFinalizeCli(
                 issueNumber,
                 binding,
                 reviewDir,
-                undefined,
+                evidencePathForBinding(reviewDir, binding),
                 true,
               ),
             }),

@@ -526,10 +526,14 @@ test('inspect projects only exact current-owned execute-Issue product errors wit
   const marker = `OPKTURNV1${'ab'.repeat(16)}`;
   const timeoutText = 'Message delivery timed out. Please try again.';
   const networkText = 'A network error occurred. Please check your connection and try again. If this issue persists please contact us through our help center at help.openai.com.';
+  const streamText = 'Error in message stream';
 
   for (const [text, expectedCause] of [
     [timeoutText, 'message_delivery_timed_out'],
     [networkText, 'product_network_error'],
+    [streamText, 'message_stream_error'],
+    [`${streamText}…`, 'message_stream_error'],
+    [`${streamText}...`, 'message_stream_error'],
   ] as const) {
     const fixture = productionRecoveryFixture({ marker, literal: text });
     const raw = await evaluateExpression(
@@ -571,8 +575,75 @@ test('inspect projects only exact current-owned execute-Issue product errors wit
   assert.deepEqual(classifyProductWall({
     text: 'transport fallback',
     composer: true,
-    execution_recovery_cause_stable: 'product_network_error',
-  }), { state: 'recovery_required', cause: 'product_network_error' });
+    execution_recovery_cause_stable: 'message_stream_error',
+  }), { state: 'recovery_required', cause: 'message_stream_error' });
+});
+
+test('Issue #2220 recognizes a roleless stream-recovery timeout as a stopped owned conversation', async () => {
+  const marker = 'OPKTURNV1d02791195ba341bc1d556b737505e7d7';
+  const streamRecoveryText = 'ChatGPT stream recovery polling timed out';
+  const markerText = `${marker}\n\nTASK`;
+  const ownedTurn = new FakeNode('', markerText, markerText, {
+    'data-testid': 'conversation-turn-1',
+  }, 'SECTION');
+  const banner = new FakeNode('', streamRecoveryText, streamRecoveryText, {
+    role: 'alert',
+  });
+
+  const raw = await evaluateExpression(
+    INSPECTION_EXPRESSION,
+    [ownedTurn],
+    false,
+    'https://chatgpt.com/c/test',
+    'complete',
+    [banner],
+  );
+
+  assert.equal(raw.status, 'ok');
+  assert.equal(raw.observed_user_nodes, 0);
+  assert.equal(raw.observed_assistant_nodes, 0);
+  assert.equal(raw.observed_message_nodes, 0);
+  assert.equal(raw.generation_in_progress, false);
+  assert.equal(raw.execution_recovery_evidence.marker_candidates.length, 1);
+
+  assert.deepEqual(projectExecutionRecoveryInspect(raw, marker), {
+    cause: 'stream_recovery_polling_timed_out',
+    owned_user_turn_key: 'conversation-turn-1',
+    candidate_assistant_turn_key: null,
+    retry_control_present: false,
+    generation_in_progress: false,
+  });
+  assert.equal(projectExecutionRecoveryCause(raw), 'stream_recovery_polling_timed_out');
+
+  const nearMiss = await evaluateExpression(
+    INSPECTION_EXPRESSION,
+    [ownedTurn],
+    false,
+    'https://chatgpt.com/c/test',
+    'complete',
+    [new FakeNode('', `${streamRecoveryText}.`, `${streamRecoveryText}.`, { role: 'alert' })],
+  );
+  assert.equal(nearMiss.status, 'surface_unknown');
+
+  const generating = await evaluateExpression(
+    INSPECTION_EXPRESSION,
+    [ownedTurn],
+    true,
+    'https://chatgpt.com/c/test',
+    'complete',
+    [banner],
+  );
+  assert.equal(generating.generation_in_progress, true);
+  assert.equal(projectExecutionRecoveryInspect(generating, marker)?.reason, 'generation_active');
+
+  assert.deepEqual(classifyProductWall({
+    text: streamRecoveryText,
+    composer: true,
+    execution_recovery_cause_stable: 'stream_recovery_polling_timed_out',
+  }), {
+    state: 'recovery_required',
+    cause: 'stream_recovery_polling_timed_out',
+  });
 });
 
 test('execute-Issue recovery projection fails closed for near matches, stale turns, replies, generation, and ambiguity', async () => {
@@ -590,6 +661,11 @@ test('execute-Issue recovery projection fails closed for near matches, stale tur
       name: 'near-miss literal',
       reason: 'literal_not_found',
       fixture: { marker, literal: `prefix ${timeoutText} suffix` },
+    },
+    {
+      name: 'near-miss message stream literal',
+      reason: 'literal_not_found',
+      fixture: { marker, literal: 'An error occurred in the message stream' },
     },
     {
       name: 'generic network failure',
@@ -2357,7 +2433,11 @@ test('the probe keeps browser-control and polling authority closed while harvest
 test('state-light terminal result propagates execute-Issue product recovery as conversation-scoped', async () => {
   const { runStateLightTurn } = await import('./chatgpt-browser-turn/state-light-turn.ts');
 
-  for (const cause of ['message_delivery_timed_out', 'product_network_error'] as const) {
+  for (const cause of [
+    'message_delivery_timed_out',
+    'product_network_error',
+    'stream_recovery_polling_timed_out',
+  ] as const) {
     const writes: string[] = [];
     const originalWrite = process.stdout.write;
     process.stdout.write = ((chunk: string | Uint8Array) => {

@@ -16,6 +16,7 @@ import {
   MESSAGE_UNIT_KEY_ATTR,
   PRODUCT_STATUS_PROBE_SELECTORS,
   REGENERATE_THREAD_ERROR_BUTTON_SELECTOR,
+  STOP_BUTTON_SELECTOR,
   USER_MESSAGE_STYLE,
 } from './chatgpt-browser-turn/product-page-selectors.ts';
 import {
@@ -155,6 +156,7 @@ interface ExecutionRecoveryProbeEvidence {
   readonly transcript_complete: boolean;
   readonly generation_in_progress: boolean | 'unknown';
   readonly messages: readonly ExecutionRecoveryMessage[];
+  readonly marker_candidates: readonly ExecutionRecoveryProbeSurface[];
   readonly product_surfaces: readonly ExecutionRecoveryProbeSurface[];
   readonly conversation_turn_keys: readonly string[];
   readonly banner_candidates: readonly ExecutionRecoveryProbeBannerCandidate[];
@@ -525,6 +527,8 @@ function validateExecutionRecoveryEvidence(value: unknown): ExecutionRecoveryPro
     || (typeof value.generation_in_progress !== 'boolean' && value.generation_in_progress !== 'unknown')
     || !Array.isArray(value.messages)
     || value.messages.length > MAX_MESSAGE_SUMMARIES
+    || !Array.isArray(value.marker_candidates)
+    || value.marker_candidates.length > MAX_MESSAGE_SUMMARIES
     || !Array.isArray(value.product_surfaces)
     || value.product_surfaces.length > EXECUTION_RECOVERY_MAX_PRODUCT_SURFACES
     || !Array.isArray(value.conversation_turn_keys)
@@ -545,6 +549,18 @@ function validateExecutionRecoveryEvidence(value: unknown): ExecutionRecoveryPro
       role: rawMessage.role,
       text: rawMessage.text,
       ...(typeof rawMessage.turn_key === 'string' && rawMessage.turn_key ? { turnKey: rawMessage.turn_key } : {}),
+    });
+  }
+  const markerCandidates: ExecutionRecoveryProbeSurface[] = [];
+  for (const rawCandidate of value.marker_candidates) {
+    if (!isRecord(rawCandidate)
+      || !isBoundedString(rawCandidate.text, EXECUTION_RECOVERY_MAX_TEXT_CODE_POINTS)
+      || (rawCandidate.turn_key !== undefined && !isBoundedString(rawCandidate.turn_key, MAX_TEXT_CODE_POINTS))) {
+      return undefined;
+    }
+    markerCandidates.push({
+      text: rawCandidate.text,
+      ...(typeof rawCandidate.turn_key === 'string' && rawCandidate.turn_key ? { turn_key: rawCandidate.turn_key } : {}),
     });
   }
   const productSurfaces: ExecutionRecoveryProbeSurface[] = [];
@@ -574,6 +590,7 @@ function validateExecutionRecoveryEvidence(value: unknown): ExecutionRecoveryPro
     transcript_complete: value.transcript_complete,
     generation_in_progress: value.generation_in_progress,
     messages,
+    marker_candidates: markerCandidates,
     product_surfaces: productSurfaces,
     conversation_turn_keys: conversationTurnKeys,
     banner_candidates: bannerCandidates,
@@ -625,18 +642,15 @@ export function projectExecutionRecoveryInspect(
   }
 
   const bannerCandidates = toClassifierBannerCandidates(evidence.banner_candidates);
+  const markerCandidates = evidence.marker_candidates.map((candidate) => ({
+    text: candidate.text,
+    ...(candidate.turn_key ? { turnKey: candidate.turn_key } : {}),
+  }));
+  const productSurfaces = evidence.product_surfaces.map((surface) => ({
+    text: surface.text,
+    ...(surface.turn_key ? { turnKey: surface.turn_key } : {}),
+  }));
   if (expectedMarker !== undefined) {
-    const cardinality = recoveryMarkerCardinality(evidence.messages, expectedMarker);
-    if (cardinality.matchingUserCarrierCount !== 1 || cardinality.exactMarkerTokenCount !== 1) {
-      return {
-        cause: null,
-        owned_user_turn_key: null,
-        candidate_assistant_turn_key: null,
-        retry_control_present: evidence.banner_candidates.some((candidate) => candidate.retry_control_present),
-        generation_in_progress: evidence.generation_in_progress,
-        reason: cardinality.exactMarkerTokenCount === 0 ? 'no_owned_prompt' : 'ambiguous_marker',
-      };
-    }
     const classified = classifyExecutionRecoveryProductError({
       marker: expectedMarker,
       transcriptComplete: evidence.transcript_complete,
@@ -644,6 +658,8 @@ export function projectExecutionRecoveryInspect(
       messages: evidence.messages,
       conversationTurnKeys: evidence.conversation_turn_keys,
       bannerCandidates,
+      markerCandidates,
+      productSurfaces,
     });
     return inspectEvidenceFromClassification(evidence.generation_in_progress, classified);
   }
@@ -652,6 +668,10 @@ export function projectExecutionRecoveryInspect(
   for (const message of evidence.messages) {
     if (message.role !== 'user') continue;
     const marker = extractOwnedPromptMarkerToken(message.text);
+    if (isOwnedPromptMarker(marker)) markers.add(marker);
+  }
+  for (const candidate of markerCandidates) {
+    const marker = extractOwnedPromptMarkerToken(candidate.text);
     if (isOwnedPromptMarker(marker)) markers.add(marker);
   }
 
@@ -673,6 +693,8 @@ export function projectExecutionRecoveryInspect(
     messages: evidence.messages,
     conversationTurnKeys: evidence.conversation_turn_keys,
     bannerCandidates,
+    markerCandidates,
+    productSurfaces,
   });
   return inspectEvidenceFromClassification(evidence.generation_in_progress, classified);
 }
@@ -1239,6 +1261,7 @@ function inspectionExpression(): string {
   const turnSelector = JSON.stringify(CONVERSATION_TURN_SECTION_SELECTOR);
   const assistantSelector = JSON.stringify(ASSISTANT_MESSAGE_SELECTOR);
   const retrySelector = JSON.stringify(REGENERATE_THREAD_ERROR_BUTTON_SELECTOR);
+  const stopSelector = JSON.stringify(STOP_BUTTON_SELECTOR);
   return `(async () => {
     const MAX_NODES = ${MAX_MESSAGE_SUMMARIES};
     const MAX_TEXT = ${MAX_TEXT_CODE_POINTS};
@@ -1249,9 +1272,12 @@ function inspectionExpression(): string {
     const TURN_SELECTOR = ${turnSelector};
     const ASSISTANT_SELECTOR = ${assistantSelector};
     const RETRY_SELECTOR = ${retrySelector};
+    const STOP_SELECTOR = ${stopSelector};
     const CHROME_SELECTOR = ${JSON.stringify(`${ASSISTANT_TURN_ACTION_SELECTOR}, .sr-only, [role="alert"]`)};
     const TIMEOUT_TEXT = ${JSON.stringify('Message delivery timed out. Please try again.')};
     const NETWORK_TEXT = ${JSON.stringify('A network error occurred. Please check your connection and try again. If this issue persists please contact us through our help center at help.openai.com.')};
+    const STREAM_TEXT = ${JSON.stringify('Error in message stream')};
+    const STREAM_TIMEOUT_TEXT = ${JSON.stringify('ChatGPT stream recovery polling timed out')};
     const MAX_RECOVERY_TURNS = ${MAX_MESSAGE_SUMMARIES};
     const points = (value) => Array.from(value);
     const head = (value) => points(value).slice(0, MAX_TEXT).join('');
@@ -1275,16 +1301,32 @@ function inspectionExpression(): string {
       observed.push({ node, styleNode, style, documentOrdinal, role, ordinal, rawMessageId: node.getAttribute(${JSON.stringify(MESSAGE_ID_ATTR)}) });
     }
     if (observed.length === 0) {
-      // A fresh agentic turn renders no user unit and no final assistant node
-      // until it finishes; a live generation control means "still working",
-      // not a missing surface.
+      // A fresh turn is active only while the live Stop control exists. The
+      // stream-recovery timeout surface is a settled recovery witness even
+      // when ChatGPT has dropped all role-bearing message nodes.
       let generatingWithoutNodes = false;
+      let rolelessRecoveryHint = false;
       try {
-        generatingWithoutNodes = Boolean(document.querySelector('[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]'));
+        generatingWithoutNodes = Boolean(document.querySelector(STOP_SELECTOR));
       } catch {
         generatingWithoutNodes = false;
       }
-      if (!generatingWithoutNodes) return { status: 'surface_unknown', reason: 'message_nodes_missing', page_url: location.href, ready_state: document.readyState };
+      try {
+        const markerVisible = Array.from(document.querySelectorAll(TURN_SELECTOR)).some((section) => {
+          const text = typeof section.innerText === 'string' ? section.innerText : '';
+          return text.includes('OPKTURNV1');
+        });
+        const streamTimeoutVisible = Array.from(document.querySelectorAll(PRODUCT_SELECTOR)).some((surface) => {
+          const text = typeof surface.innerText === 'string' ? surface.innerText : '';
+          return text.replace(/\\s+/g, ' ').trim() === STREAM_TIMEOUT_TEXT;
+        });
+        rolelessRecoveryHint = markerVisible && streamTimeoutVisible;
+      } catch {
+        rolelessRecoveryHint = false;
+      }
+      if (!generatingWithoutNodes && !rolelessRecoveryHint) {
+        return { status: 'surface_unknown', reason: 'message_nodes_missing', page_url: location.href, ready_state: document.readyState };
+      }
     }
     const messageIdCounts = new Map();
     for (const entry of observed) if (entry.rawMessageId) messageIdCounts.set(entry.rawMessageId, (messageIdCounts.get(entry.rawMessageId) || 0) + 1);
@@ -1330,9 +1372,7 @@ function inspectionExpression(): string {
     }
     let generating = 'unknown';
     try {
-      generating = Boolean(
-        document.querySelector('[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]')
-      );
+      generating = Boolean(document.querySelector(STOP_SELECTOR));
     } catch {
       generating = 'unknown';
     }
@@ -1353,10 +1393,16 @@ function inspectionExpression(): string {
       recoveryComplete = false;
     }
     const conversationTurnKeys = [];
+    const markerCandidates = [];
     try {
       for (const section of Array.from(document.querySelectorAll(TURN_SELECTOR))) {
         const turnKey = section.getAttribute('data-turn-key');
         if (typeof turnKey === 'string' && turnKey) conversationTurnKeys.push(turnKey);
+        const text = typeof section.innerText === 'string' ? section.innerText : '';
+        if (text.includes('OPKTURNV1')) {
+          const boundedText = points(text).slice(0, MAX_RECOVERY_TEXT).join('');
+          markerCandidates.push({ text: boundedText, ...(turnKey ? { turn_key: turnKey } : {}) });
+        }
       }
       if (conversationTurnKeys.length > MAX_RECOVERY_TURNS) {
         conversationTurnKeys.splice(0, conversationTurnKeys.length - MAX_RECOVERY_TURNS);
@@ -1372,11 +1418,12 @@ function inspectionExpression(): string {
       const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').replace(/help\\.openai\\.com \\.$/u, 'help.openai.com.').trim();
       const isReservedBanner = (value) => {
         const normalized = normalize(value);
-        if (normalized === TIMEOUT_TEXT || normalized === NETWORK_TEXT) return true;
+        if (normalized === TIMEOUT_TEXT || normalized === NETWORK_TEXT || normalized === STREAM_TEXT) return true;
         const stripped = normalized.replace(collapseRe, '').trim();
-        return stripped === TIMEOUT_TEXT || stripped === NETWORK_TEXT
+        return stripped === TIMEOUT_TEXT || stripped === NETWORK_TEXT || stripped === STREAM_TEXT
           || stripped === TIMEOUT_TEXT + '…' || stripped === TIMEOUT_TEXT + '...'
-          || stripped === NETWORK_TEXT + '…' || stripped === NETWORK_TEXT + '...';
+          || stripped === NETWORK_TEXT + '…' || stripped === NETWORK_TEXT + '...'
+          || stripped === STREAM_TEXT + '…' || stripped === STREAM_TEXT + '...';
       };
       const hasNonBannerVisibleText = (assistant) => {
         let remaining = normalize(assistant.innerText || '');
@@ -1441,6 +1488,7 @@ function inspectionExpression(): string {
         transcript_complete: recoveryComplete,
         generation_in_progress: generating,
         messages: recoveryMessages,
+        marker_candidates: markerCandidates,
         product_surfaces: productSurfaces,
         conversation_turn_keys: conversationTurnKeys,
         banner_candidates: bannerCandidates,
@@ -1495,7 +1543,7 @@ export const HARVEST_EXPRESSION = `(async () => {
   if (rows.length === 0) return { status: 'surface_unknown', reason: 'message_nodes_missing', page_url: location.href };
   let generation_in_progress = 'unknown';
   try {
-    generation_in_progress = Boolean(document.querySelector('[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]'));
+    generation_in_progress = Boolean(document.querySelector('[data-testid="stop-button"], button[aria-label*="Stop"]'));
   } catch {
     generation_in_progress = 'unknown';
   }

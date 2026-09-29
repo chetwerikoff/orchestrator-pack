@@ -527,6 +527,7 @@ describe('state-light fresh conversation collision recovery', () => {
     reply: string,
     renderAfterReload: boolean,
     ambiguousAssistant = false,
+    streamRecoveryAlert = false,
   ) {
     const state = { sent: false, url: PROJECT_URL, reloads: 0, reads: 0 };
     const working = readyTurnObservationFrames(prompt, reply)[0]!;
@@ -575,7 +576,7 @@ describe('state-light fresh conversation collision recovery', () => {
             active = final;
             generating = false;
           } else {
-            active = assistantOnly;
+            active = streamRecoveryAlert ? [] : assistantOnly;
             generating = false;
           }
           return collectionLocator(active, generating);
@@ -592,6 +593,13 @@ describe('state-light fresh conversation collision recovery', () => {
           );
         }
         if (selector.includes(STOP_BUTTON_TESTID)) return scalarLocator();
+        if (selector === '[role="alert"]') {
+          return scalarLocator({
+            allInnerTexts: vi.fn(async () => (
+              streamRecoveryAlert && state.reads > 2 ? ['ChatGPT stream recovery polling timed out\nRetry'] : []
+            )),
+          });
+        }
         return scalarLocator();
       }),
     };
@@ -611,6 +619,24 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
     expect(state.reloads).toBe(0);
     expect(readFileSync(output, 'utf8')).toBe(reply);
+  });
+
+  it('returns conversation-scoped stream recovery timeout without reload when the owner is unrendered', async () => {
+    const prompt = 'PROMPT-STREAM-RECOVERY';
+    const reply = 'NEVER-FINISHED';
+    const output = join(stateDir, 'stream-recovery-unrendered.txt');
+    const { page, state } = unrenderedOwnedMessagePage(prompt, reply, false, false, true);
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output);
+
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({
+      state: 'recovery_required',
+      scope: 'conversation',
+      cause: 'stream_recovery_polling_timed_out',
+      send_count: 1,
+    });
+    expect(state.reloads).toBe(0);
   });
 
   it('reloads the owned conversation once when a finished answer renders without the owned user message (#2197)', async () => {
@@ -2197,7 +2223,7 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
     ]);
   }
 
-  function recoveryPage(sequence: ReadonlyArray<'generating' | 'banner'>) {
+  function recoveryPage(sequence: ReadonlyArray<'generating' | 'banner'>, bannerText = timeoutText) {
     let sent = false;
     let filled = '';
     let observationIndex = 0;
@@ -2239,7 +2265,7 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
           selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]` ? { getAttribute: () => 'user-message' } : null
         ),
       };
-      const assistantInner = phase === 'banner' ? `${timeoutText}\n\nRetry` : 'working';
+      const assistantInner = phase === 'banner' ? `${bannerText}\n\nRetry` : 'working';
       const assistant = {
         getAttribute: (name: string) => (name === MESSAGE_AUTHOR_ROLE_ATTR ? 'assistant-message' : null),
         innerText: assistantInner,
@@ -2249,7 +2275,7 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
             : null
         ),
         querySelectorAll: (selector: string) => (
-          selector === 'p' && phase === 'banner' ? [{ innerText: timeoutText }] : []
+          selector === 'p' && phase === 'banner' ? [{ innerText: bannerText }] : []
         ),
         querySelector: (selector: string) => (
           selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
@@ -2384,6 +2410,25 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
     expect(fake.retryClicks).not.toHaveBeenCalled();
     expect(fake.close).not.toHaveBeenCalled();
     expect(outcome.result.cleanup).not.toBe('confirmed');
+  });
+
+  it('projects exact message stream errors through the existing conversation recovery result', async () => {
+    const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
+    vi.mocked(uiAdapter.productStatusText).mockImplementation(actual.productStatusText);
+    vi.mocked(uiAdapter.classifyProductWall).mockImplementation(actual.classifyProductWall);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-STREAM-ERROR'));
+    const fake = recoveryPage(['generating', 'banner'], 'Error in message stream');
+    const outcome = await runExistingChat(fake.page, join(integrationStateDir, 'stream-error.txt'));
+    expect(outcome.result).toMatchObject({
+      schema: 'turn-result/v1',
+      state: 'recovery_required',
+      scope: 'conversation',
+      cause: 'message_stream_error',
+      send_count: 1,
+    });
+    expect(fake.getSends()).toBe(1);
+    expect(fake.retryClicks).not.toHaveBeenCalled();
+    expect(fake.close).not.toHaveBeenCalled();
   });
 
   it('keeps polling with no wall while generation stays active and the banner is absent', async () => {
