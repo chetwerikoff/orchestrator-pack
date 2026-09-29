@@ -1409,7 +1409,7 @@ export function runStageFinalizeCli(
         const output = createIssueExternalPauseResult({
           cause: 'external:github_unavailable',
           remedy: 'restore GitHub Issue reads, then resume this same Dispatch',
-          resumeWhen: { operator: true },
+          resumeWhen: { coordinator: true },
           evidence,
           blocker: evidence,
         });
@@ -1554,7 +1554,7 @@ export function runStageFinalizeCli(
         const output = createIssueExternalPauseResult({
           cause: 'external:chrome_not_running',
           remedy: 'restore the Browser-GPT transport, then resume this same Dispatch',
-          resumeWhen: { operator: true },
+          resumeWhen: { coordinator: true },
           evidence,
           blocker: evidence,
         });
@@ -1705,7 +1705,7 @@ export function runStageFinalizeCli(
           const paused = createIssueExternalPauseResult({
             cause: 'external:content_authority_conflict',
             remedy: 'restore the canonical source-revision marker on the live Issue, then resume this same Dispatch',
-            resumeWhen: { operator: true },
+            resumeWhen: { coordinator: true },
             evidence: 'live Issue has no canonical source-revision marker',
           });
           return emitManagerBoundary('create-issue-stage-record-cli.ts:main', argv, paused);
@@ -1963,7 +1963,7 @@ export function runStageFinalizeCli(
             ? createIssueExternalPauseResult({
                 cause: 'external:content_authority_conflict',
                 remedy: 'resolve the authoritative GitHub publication conflict, then resume this same Dispatch',
-                resumeWhen: { operator: true },
+                resumeWhen: { coordinator: true },
                 evidence: result.errors.join('; '),
                 blocker: result.errors.join('; '),
               })
@@ -2096,7 +2096,7 @@ export function runStageFinalizeCli(
         ? createIssueExternalPauseResult({
             cause: 'external:content_authority_conflict',
             remedy: 'resolve the authoritative author/operator content conflict, then resume this same Dispatch',
-            resumeWhen: { operator: true },
+            resumeWhen: { coordinator: true },
             evidence: messages.join('; '),
           })
         : validatedManagerSurfaceOutput(
@@ -2159,7 +2159,7 @@ export function runStageFinalizeCli(
         const output = createIssueExternalPauseResult({
           cause: 'external:github_unavailable',
           remedy: 'restore GitHub Issue reads, then resume this same Dispatch',
-          resumeWhen: { operator: true },
+          resumeWhen: { coordinator: true },
           evidence,
           blocker: evidence,
         });
@@ -2535,7 +2535,7 @@ function acceptanceAuthorityPause(evidence: string) {
   return createIssueExternalPauseResult({
     cause: 'external:content_authority_conflict',
     remedy: 'resolve the canonical acceptance authority conflict, then resume this same Dispatch',
-    resumeWhen: { operator: true },
+    resumeWhen: { coordinator: true },
     evidence,
     blocker: evidence,
   });
@@ -2578,7 +2578,7 @@ export function runFinalAcceptanceCli(argv: string[], acceptanceTransport?: GhTr
         : createIssueExternalPauseResult({
             cause: 'external:github_unavailable',
             remedy: 'restore GitHub Issue reads, then resume this same Dispatch',
-            resumeWhen: { operator: true },
+            resumeWhen: { coordinator: true },
             evidence,
             blocker: evidence,
           });

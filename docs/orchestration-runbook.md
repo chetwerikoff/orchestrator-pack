@@ -705,7 +705,7 @@ authoritative Task/role/assignment facts
 - active/new progress -> `noop`;
 - trusted new idle/livelock episode + exact current local assignment/runtime binding + role-owned work remains -> `continue` through existing S2;
 - unresolved/stale/ambiguous target, untrusted observer/assignment state, unsupported local effect, or uncertain dispatch requiring reasoning -> `orchestrator_required` plus durable handoff;
-- manager whole-role completion or worker truthful `ready_for_review` handoff -> `noop`, then that role may complete according to its own contract. For the manager-controlled Browser-GPT execute-Issue path, a settled-review manager handoff makes `independent smoke` the orchestrator's next legal action; it is not overall `VERIFIED_COMPLETE` and does not wait for scheduler `ready_for_review`.
+- ordinary manager whole-role completion or worker truthful `ready_for_review` handoff -> `noop`, then the role may complete. In the manager-controlled Browser-GPT execute-Issue path, settled review is not completion: the same manager Dispatch remains nonterminal while the supervisor launches/reuses the local independent-smoke worker for the exact PR/head. On the canonical durable exact-head report, continue that Dispatch through the existing Task/Dispatch channel; the manager re-reads it through the shared execute-Issue boundary. PASS completes the manager role; proved assertion FAIL returns to local fixer ownership and fresh smoke, without reopening pack review. Independent smoke follows settled review; it is not overall `VERIFIED_COMPLETE` and does not wait for scheduler `ready_for_review`.
 
 ## Structured external-dependency parking
 
@@ -753,10 +753,11 @@ must not re-dispatch the same argv into it. On each existing coordinator wake or
 restart, re-read only the typed `resume_when` condition through tracked
 `scripts/gh`: `issue_closed` is satisfied only by the named Issue
 `state=closed`; `pr_merged` only by the named PR `merged=true`; and
-`{ operator: true }` waits for an operator message. When satisfied, send the
-continuation to the same Dispatch. Until a separate coordinator sweep/wake
-change lands, this resumption occurs only on those existing wakes or operator
-messages; that is a latency limitation, not permission to settle the Task.
+`{ coordinator: true }` means the existing coordinator owns clearing the named dependency and sending the
+continuation to the same Dispatch. Legacy `{ operator: true }` is input compatibility only and is normalized
+in memory to `{ coordinator: true }`; `issue_closed` and `pr_merged` are unchanged. Until a separate coordinator
+sweep/wake change lands, resumption occurs only on existing coordinator wakes; that is a latency limitation,
+not permission to settle the Task.
 
 Dispatch/re-dispatch payloads contain role plus task invariants only. Procedure
 comes from the current CLI `--help` and returned `nextAction`; do not re-paste

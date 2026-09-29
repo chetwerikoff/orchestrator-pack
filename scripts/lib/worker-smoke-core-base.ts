@@ -415,6 +415,7 @@ export function buildSmokeAgentPrompt(input: {
     'Cap any single block_until_ms at 300000; re-check and re-await instead of one long block.',
     'Invoke pack review only when a listed smoke scenario explicitly requires one live pack-review manager turn; do not start any other review.',
     'For each non-PASS scenario row, include exactly one cause-family from: scenario_precondition_unavailable, scenario_assertion_failed, scenario_evidence_missing. PASS rows omit cause-family.',
+    'For scenario_assertion_failed, also emit top-level non-pass-cause: executed_scenario_failure. For scenario_precondition_unavailable, emit a top-level non-pass-cause only when the structured condition is directly one of browser_cdp_unavailable, profile_mismatch, login_required, quota_exhausted, or product_challenge; otherwise omit it so the manager fails closed instead of guessing from observed prose.',
     'When finished, emit exactly one fenced block:',
     '',
     '```worker-smoke-report',
@@ -422,6 +423,7 @@ export function buildSmokeAgentPrompt(input: {
     'tracked-files-unmodified: true|false',
     'environment-notes: <optional>',
     'limitations: <optional comma-separated>',
+    'non-pass-cause: <closed structured cause when required above>',
     'scenarios:',
     '  - action: <what you ran> | expected: <from plan> | observed: <what happened> | outcome: pass|fail|skipped|blocked | cause-family: <required for non-PASS only>',
     '```',
@@ -1633,10 +1635,25 @@ export function preserveSmokeControlPlaneCause(
   return code && isSmokeControlPlaneCause(code) ? code : undefined;
 }
 
+export type SmokeManagerProjectionNonPassCause =
+  | 'trusted_target_stale'
+  | 'tier_order_input_stale'
+  | 'smoke_same_head_in_progress'
+  | 'browser_cdp_unavailable'
+  | 'profile_mismatch'
+  | 'login_required'
+  | 'quota_exhausted'
+  | 'product_challenge'
+  | 'invalid_adapter_arguments'
+  | 'missing_required_flag'
+  | 'unsupported_executor_capability'
+  | 'malformed_producer_output';
+
 export type SmokeNonPassCause =
   | 'zero_parsed_scenarios'
   | 'missing_agent_report'
   | 'executed_scenario_failure'
+  | SmokeManagerProjectionNonPassCause
   | SmokeChildWaitNonPassCause
   | SmokeControlPlaneCause
   | SmokePhaseControlPlaneCause;
@@ -1645,6 +1662,18 @@ export function isSmokeNonPassCause(value: string): value is SmokeNonPassCause {
   return value === 'zero_parsed_scenarios'
     || value === 'missing_agent_report'
     || value === 'executed_scenario_failure'
+    || value === 'trusted_target_stale'
+    || value === 'tier_order_input_stale'
+    || value === 'smoke_same_head_in_progress'
+    || value === 'browser_cdp_unavailable'
+    || value === 'profile_mismatch'
+    || value === 'login_required'
+    || value === 'quota_exhausted'
+    || value === 'product_challenge'
+    || value === 'invalid_adapter_arguments'
+    || value === 'missing_required_flag'
+    || value === 'unsupported_executor_capability'
+    || value === 'malformed_producer_output'
     || value === 'prompt_delivery_unconfirmed'
     || value === 'agent_report_unfenced'
     || value === 'agent_report_timeout'
@@ -1655,6 +1684,34 @@ export function isSmokeNonPassCause(value: string): value is SmokeNonPassCause {
     || value === 'agent_wait_unowned_handle'
     || isSmokeControlPlaneCause(value)
     || isSmokePhaseControlPlaneCause(value);
+}
+
+export function workerSmokeManagerNonPassCauseForHarnessReason(
+  reason: string | undefined,
+): SmokeManagerProjectionNonPassCause | SmokeNonPassCause | undefined {
+  const token = String(reason ?? '').trim().split(':', 1)[0]?.trim() ?? '';
+  const mapped: Readonly<Record<string, SmokeManagerProjectionNonPassCause | SmokeNonPassCause>> = {
+    trusted_target_head_mismatch: 'trusted_target_stale',
+    smoke_ordering_tier_missing: 'tier_order_input_stale',
+    smoke_ordering_worker_owned_in_progress: 'smoke_same_head_in_progress',
+    smoke_ordering_independent_in_progress: 'smoke_same_head_in_progress',
+    chrome_not_running: 'browser_cdp_unavailable',
+    browser_not_running: 'browser_cdp_unavailable',
+    cdp_unavailable: 'browser_cdp_unavailable',
+    profile_mismatch: 'profile_mismatch',
+    login_required: 'login_required',
+    quota_exhausted: 'quota_exhausted',
+    product_challenge: 'product_challenge',
+    smoke_profile_missing: 'missing_required_flag',
+    smoke_profile_malformed: 'invalid_adapter_arguments',
+    smoke_profile_unsupported_agent: 'unsupported_executor_capability',
+    executor_profile_applicability_unproven: 'unsupported_executor_capability',
+    executor_profile_model_unavailable: 'unsupported_executor_capability',
+    executor_route_unavailable: 'unsupported_executor_capability',
+    executor_effort_channel_unavailable: 'unsupported_executor_capability',
+    zero_parsed_scenarios: 'zero_parsed_scenarios',
+  };
+  return mapped[token];
 }
 
 export const SMOKE_HARNESS_TERMINAL_CLOSE_ACTION = 'close owned Orca terminal handle';

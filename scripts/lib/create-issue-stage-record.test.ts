@@ -1872,7 +1872,7 @@ describe('final acceptance CLI manager boundary', () => {
       issueNumber: scenarioIssueNumber,
       stage: 'architectural' as const,
       cause: 'external:github_unavailable',
-      resumeWhen: { operator: true } as const,
+      resumeWhen: { coordinator: true } as const,
     };
     const escalationThreadIds: string[] = [];
     const recordedEscalationIds = new Set<string>();
@@ -1915,7 +1915,7 @@ describe('final acceptance CLI manager boundary', () => {
           pause: {
             evidence: expect.stringContaining('HTTP 503'),
             remedy: expect.any(String),
-            resume_when: { operator: true },
+            resume_when: { coordinator: true },
           },
           nextAction: null,
         });

@@ -50,12 +50,20 @@ The supervisor owns **completion continuity**, not substantive implementation.
    no duplicate prompt, and no guessed identity.
 7. Never take over the substantive Issue implementation merely because manager
    recovery is required.
-8. For a manager-controlled Browser-GPT implementation, consume the manager's
-   settled pack-review handoff instead of treating manager completion as overall
-   completion. Launch or reuse the existing supervised local worker as the
-   independent-smoke parent for the exact handed-off PR/head. The parent execute
-   workflow stays alive until that exact-head independent smoke passes and a
-   fresh final current-state verification succeeds.
+8. For a manager-controlled Browser-GPT implementation, treat settled pack
+   review as a nonterminal handoff, not manager-role completion. Keep the same
+   manager Dispatch alive while the supervisor launches or reuses the existing
+   supervised local worker as the independent-smoke parent for the exact
+   handed-off PR/head. When the canonical durable exact-head
+   `pack-worker-smoke-report/v1` is observable, continue that same manager
+   Dispatch through the existing continuation channel; the manager re-reads the
+   authoritative smoke record and projects it through the shared boundary.
+   The supervisor consumes the validated `verdict` before role completion:
+   `PASS` may complete the manager role; proved `FAIL` returns to the same
+   nonterminal parent workflow and the supervisor-launched local worker owns
+   the fix and fresh exact-head independent smoke. Settled pack review stays
+   complete. This scoped manager-boundary change does not claim the broader
+   local-worker incident/consumption loop is implemented or closed.
 
 Supervisor launch and recovery remain governed by
 [`docs/orchestration-runbook.md`](../../../docs/orchestration-runbook.md) and the
@@ -118,14 +126,14 @@ a fresh current-state verification under `docs/chat-executor-rules.md` and the
 live Issue succeeds. GPT self-report and manager completion are advisory rather
 than overall completion authority.
 
-`OPERATOR_ACTION_REQUIRED` is exceptional. Use it only after the legal existing
-recovery path is exhausted and the remaining condition is a genuine external
-permission/capability failure, impossibility, unresolved target ambiguity, or the
-fail-closed possible-send identity gap described above. The visible report name
-and trigger meaning stay unchanged, but the manager-side effect is the shared
-#2078 escalation with `resume_when: { operator: true }`; the parent Task and
-manager Dispatch remain non-terminal and no `worker_done --outcome failed` is
-sent.
+`OPERATOR_ACTION_REQUIRED` is exceptional and names only a remaining
+credential/CAPTCHA human action after legal recovery is exhausted. The remedy
+identifies exactly one action from observed evidence; the coordinator resumes the
+same Dispatch after observing its completion. Manager-side effect is the shared
+#2078 escalation with canonical `resume_when: { coordinator: true }`; legacy
+`{ operator: true }` pause records are input compatibility only and normalize
+to coordinator ownership without rewriting history. The parent Task and manager
+Dispatch remain non-terminal and no `worker_done --outcome failed` is sent.
 
 Merge is never implicit. Stop at the verified repository completion/readiness
 state unless the direct top-level operator separately orders merge.
