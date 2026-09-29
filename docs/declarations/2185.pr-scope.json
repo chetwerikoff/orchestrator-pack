@@ -6,6 +6,9 @@
     ".claude/skills/discuss-with-gpt/driver.mjs",
     ".claude/skills/discuss-with-gpt/launch-chrome.sh",
     ".claude/skills/discuss-with-gpt/local.config.example.json",
+    ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
+    "docs/browser-gpt-turn-runbook.md",
+    "docs/chatgpt-task-execution-runbook.md",
     "docs/fleet-alarm.md",
     "docs/migration_notes.md",
     "docs/target_repo_setup.md",
@@ -30,6 +33,7 @@
     "scripts/operator-primary-binding.test.ts",
     "scripts/operator-primary-binding.ts",
     "scripts/pack-gpt-browser-path.test.ts",
+    "scripts/pack-gpt-review.ts",
     "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
@@ -45,7 +49,10 @@
   ],
   "allowed_roots": [
     ".claude/skills/discuss-with-gpt/",
+    ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
     ".cursor/skills/discuss-with-gpt/",
+    "docs/browser-gpt-turn-runbook.md",
+    "docs/chatgpt-task-execution-runbook.md",
     "docs/fleet-alarm.md",
     "docs/migration_notes.md",
     "docs/target_repo_setup.md",
@@ -67,6 +74,7 @@
     "scripts/operator-primary-binding.test.ts",
     "scripts/operator-primary-binding.ts",
     "scripts/pack-gpt-browser-path.test.ts",
+    "scripts/pack-gpt-review.ts",
     "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
@@ -74,5 +82,5 @@
     "scripts/pr2-foundation/supervised-worker-start.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "1db49deb1dd6fa38a57f75e78b3bb0eb030b20a0"
+  "source_revision": "444c230af6decd4df3184939080927d9e1575928"
 }
