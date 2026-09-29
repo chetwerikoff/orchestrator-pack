@@ -1366,11 +1366,12 @@ describe('supervised Task launch assistant', () => {
       ['--project', 'orchestrator-pack', '--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 'manager', '--run', 'run-1', '--task', 'task-1', '--worktree', 'id:w'],
       process.env,
       (_input: unknown) => ({
-      projectId: 'orchestrator-pack',
-      repository: 'chetwerikoff/orchestrator-pack',
-    } as ReturnType<typeof import('../lib/target-context.ts').resolveTargetContext>),
+        projectId: 'orchestrator-pack',
+        repository: 'chetwerikoff/orchestrator-pack',
+        primaryRoot: '/fixture/target-root',
+      } as ReturnType<typeof import('../lib/target-context.ts').resolveTargetContext>),
     )).toMatchObject({
-      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack', primaryRoot: '/fixture/target-root',
       workClass: 'manager', runId: 'run-1', taskId: 'task-1', worktreeSelector: 'id:w',
     });
     expect(() => parseLaunchAssistantCli(['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 'smoke'])).toThrow(/work-class/u);

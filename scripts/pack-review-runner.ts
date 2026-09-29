@@ -1836,6 +1836,13 @@ export function observeNativePackReviewAttempt(
   };
 }
 
+export function bindReviewerProjectSelection(
+  environment: NodeJS.ProcessEnv,
+  projectId: string,
+ ): NodeJS.ProcessEnv {
+  return { ...environment, OPK_PROJECT_ID: projectId };
+}
+
 async function invokeReviewer(options: {
   reviewerPath: string;
   trustedPackRoot: string;
@@ -1941,7 +1948,7 @@ async function invokeReviewer(options: {
       .filter(([key]) => !retiredRuntimePrefixes.some((prefix) => key.startsWith(prefix))),
   ) as NodeJS.ProcessEnv;
   const env: NodeJS.ProcessEnv = {
-    ...sanitizedParentEnv,
+    ...bindReviewerProjectSelection(sanitizedParentEnv, options.projectId),
     ...buildReviewerBudgetSpawnEnv(options.budgetLedger, {}),
     OPK_REVIEW_RUN_ID: options.runId,
     PACK_REVIEW_RUN_ID: options.runId,

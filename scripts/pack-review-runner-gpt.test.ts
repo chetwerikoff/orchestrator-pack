@@ -17,6 +17,7 @@ import {
 } from './pack-gpt-review.js';
 import {
   applyCliTargetProject,
+  bindReviewerProjectSelection,
   isRetryablePackReviewZeroSendCollision,
   parseArgs,
   reconcileStalePackReviewRuns,
@@ -891,6 +892,14 @@ describe('pack-review runner target selection CLI', () => {
 
     expect(input).toMatchObject({ targetProjectId: 'orchestrator-pack', projectId: 'orchestrator-pack' });
     expect(process.env.OPK_PROJECT_ID).toBe('orchestrator-pack');
+  });
+});
+
+describe('programmatic pack-review project binding', () => {
+  it('overrides absent or stale ambient selection with the runner project id', () => {
+    expect(bindReviewerProjectSelection({}, 'leopoker')).toEqual({ OPK_PROJECT_ID: 'leopoker' });
+    expect(bindReviewerProjectSelection({ OPK_PROJECT_ID: 'orchestrator-pack', PATH: '/bin' }, 'leopoker'))
+      .toEqual({ OPK_PROJECT_ID: 'leopoker', PATH: '/bin' });
   });
 });
 

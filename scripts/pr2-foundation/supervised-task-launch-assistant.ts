@@ -158,6 +158,7 @@ export interface LaunchInput {
   readonly repository: string;
   readonly projectId?: string;
   readonly workClass: LaunchWorkClass;
+  readonly primaryRoot?: string;
   readonly issueNumber?: number;
   readonly runId?: string;
   readonly taskId?: string;
@@ -1245,6 +1246,7 @@ function dispatchEdge(value: Record<string, unknown> | null): EdgeResult<Dispatc
 export async function createProductionLaunchDependencies(input: LaunchInput): Promise<LaunchDependencies> {
   const cwd = input.cwd ?? process.cwd();
   const env = input.env ?? overlayExecutorProfileEnv(process.env);
+  const target = resolveTargetContext({ projectId: input.projectId, env });
   const adapter = await selectRuntimeAdapter({ env: { ...env } }, { cwd, transport: { env: { ...env } } });
   return {
     now: Date.now,
@@ -1262,10 +1264,10 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       };
     },
     repositoryPreflight: async (repository) => {
-      const remote = await child(['git', 'remote', 'get-url', 'origin'], cwd, env);
+      const remote = await child(['git', 'remote', 'get-url', 'origin'], target.primaryRoot, env);
       if (!remote.ok || repoCanonicalKey(remote.stdout) !== `github.com/${repository}`) return {
         status: 'continue', cause: 'repository_preflight_mismatch', actor: 'operator', evidence: { repository },
-        nextAction: { kind: 'repair_preflight', note: 'run from the checkout whose origin is github.com and exactly matches --repository' },
+        nextAction: { kind: 'repair_preflight', note: 'repair the selected project card primaryRoot checkout origin before continuing' },
       };
       return { status: 'ok', value: true };
     },
@@ -1394,6 +1396,7 @@ export function parseLaunchAssistantCli(
   return {
     repository,
     projectId: target.projectId,
+    primaryRoot: target.primaryRoot,
     workClass: workClass as LaunchWorkClass,
     ...(issueNumber ? { issueNumber } : {}),
     ...(runId ? { runId } : {}),
