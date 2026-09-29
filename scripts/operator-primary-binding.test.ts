@@ -24,6 +24,7 @@ import {
   parseOperatorPrimaryBindingArgs,
   runOperatorPrimaryBindingCommand,
 } from './operator-primary-binding.ts';
+import { runSupervisedWorkerStart } from './pr2-foundation/supervised-worker-start.ts';
 
 const roots: string[] = [];
 
@@ -84,6 +85,55 @@ async function publish(file: string, taskId: string, bindingKey: string, issueNu
   return result.assignment;
 }
 
+async function startLeoAssignment(env: NodeJS.ProcessEnv) {
+  const taskId = 'task-leo-supervised';
+  const dispatchId = 'dispatch-leo-supervised';
+  const worktreeId = 'repo-leo::/tmp/leopoker-operator-primary-smoke';
+  const terminalHandle = 'term-leopoker-operator-primary-smoke';
+  const model = 'model-medium';
+  const result = await runSupervisedWorkerStart({
+    mode: 'provider_new_top_level',
+    role: 'worker',
+    projectId: 'leopoker',
+    repository: 'chetwerikoff/LeoPoker',
+    env,
+    orcaArgs: [
+      '--task', taskId,
+      '--worktree', 'new-top-level',
+      '--repo', 'id:repo-leo',
+      '--name', 'leopoker-operator-primary-smoke',
+      '--agent', 'cursor',
+      '--model', model,
+      '--setup', 'run',
+    ],
+    execute: async () => ({
+      ok: true,
+      stdout: JSON.stringify({
+        ok: true,
+        result: {
+          taskId,
+          dispatchId,
+          state: 'ready',
+          worktree: { id: worktreeId, path: '/tmp/leopoker-operator-primary-smoke' },
+          terminal: { handle: terminalHandle, runtime: 'orca', generation: 'pty-leopoker-smoke' },
+          setup: { requested: 'run', effective: 'run', state: 'succeeded' },
+          launch: {
+            requested: { agent: 'cursor', model },
+            effective: { agent: 'cursor', model },
+          },
+          effects: [
+            { kind: 'worktree', action: 'created_top_level', id: worktreeId },
+            { kind: 'terminal', role: 'agent', action: 'reused_agent_terminal', id: terminalHandle },
+            { kind: 'dispatch_input', role: 'agent', state: 'accepted', id: terminalHandle },
+          ],
+        },
+      }),
+    }),
+  });
+  if (!result.ok || !result.assignment) throw new Error(result.reason);
+  return result.assignment;
+}
+
 /**
  * Minimal pre-#1532 v1 parser/writer fixture. The historical writer knew only
  * schema/revision/assignments at the store level, so its rewrite deliberately
@@ -134,29 +184,43 @@ afterEach(() => {
 });
 
 describe('operator-primary binding CLI', () => {
-  it('keeps operator-primary routes isolated across two selected project cards', async () => {
+  it('keeps operator-primary routes isolated using a supervised LeoPoker assignment', async () => {
     const { env, file, leoFile } = fixture();
     const pack = await publish(file, 'task-pack', 'dispatch-pack', 2185);
-    const leo = await publish(leoFile, 'task-leo', 'dispatch-leo', 134);
     await runOperatorPrimaryBindingCommand(parseOperatorPrimaryBindingArgs([
       'bind', '--task-id', pack.taskId, '--binding-key', pack.bindingKey, '--operator-attested',
     ]), env);
     const before = await runOperatorPrimaryBindingCommand(parseOperatorPrimaryBindingArgs(['show']), env);
-
     const leoEnv = { ...env, OPK_PROJECT_ID: 'leopoker' };
+    const leo = await startLeoAssignment(leoEnv);
+
     await runOperatorPrimaryBindingCommand(parseOperatorPrimaryBindingArgs([
       'bind', '--project', 'leopoker', '--task-id', leo.taskId, '--binding-key', leo.bindingKey, '--operator-attested',
     ]), leoEnv);
-    const after = await runOperatorPrimaryBindingCommand(parseOperatorPrimaryBindingArgs(['show']), env);
+    const afterBind = await runOperatorPrimaryBindingCommand(parseOperatorPrimaryBindingArgs(['show']), env);
     const leoShown = await runOperatorPrimaryBindingCommand(parseOperatorPrimaryBindingArgs([
       'show', '--project', 'leopoker',
     ]), leoEnv);
 
-    expect(after).toEqual(before);
-    expect(JSON.stringify(leoShown)).toContain('task-leo');
-    expect(JSON.stringify(after)).toContain('task-pack');
-  });
+    expect(afterBind).toEqual(before);
+    expect(JSON.stringify(leoShown)).toContain('task-leo-supervised');
+    expect(JSON.stringify(leoShown)).toContain('dispatch-leo-supervised');
+    expect(JSON.stringify(afterBind)).toContain('task-pack');
 
+    const currentLeo = readOperatorPrimaryBinding(leoFile);
+    if (!currentLeo.ok || currentLeo.status !== 'binding_current') throw new Error('expected current LeoPoker binding');
+    const retired = await runOperatorPrimaryBindingCommand(parseOperatorPrimaryBindingArgs([
+      'retire',
+      '--project', 'leopoker',
+      '--expected-task-id', currentLeo.binding.taskId,
+      '--expected-binding-key', currentLeo.binding.bindingKey,
+      '--expected-assignment-id', currentLeo.binding.assignmentId,
+      '--expected-assignment-generation', String(currentLeo.binding.assignmentGeneration),
+      '--operator-attested',
+    ]), leoEnv);
+    expect(retired).toEqual({ ok: true, binding: null });
+    expect(await runOperatorPrimaryBindingCommand(parseOperatorPrimaryBindingArgs(['show']), env)).toEqual(before);
+  });
   it('rejects an explicit repository that disagrees with the selected card', async () => {
     const { env } = fixture();
     const result = await runOperatorPrimaryBindingCommand(parseOperatorPrimaryBindingArgs([
