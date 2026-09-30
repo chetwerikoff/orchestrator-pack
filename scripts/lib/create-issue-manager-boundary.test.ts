@@ -1,7 +1,8 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   CREATE_ISSUE_MANAGER_ENTRYPOINTS,
   createIssueEscalationThreadId,
@@ -21,6 +22,8 @@ import {
   normalizeLegacyResumePredicateInManagerResult,
   type CreateIssueActionBinding,
 } from './create-issue-next-action.ts';
+import { runBrowserAdapter } from '../flow-manager-browser-gpt-long-run.ts';
+import { HANDOFF_SCHEMA } from '../flow-manager-long-running-child.ts';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -67,7 +70,7 @@ describe('create-Issue manager boundary', () => {
     expect(CREATE_ISSUE_MANAGER_ENTRYPOINTS).toContain('flow-manager-browser-gpt-long-run.ts:main');
   });
 
-  it('documents Issue #2256 published-comment acceptance and real brief text in the active owners', () => {
+  it('documents comment-based acceptance and non-direct review launch in active owners', () => {
     const skill = readFileSync(join(repoRoot, '.cursor/skills/create-issue-draft/SKILL.md'), 'utf8');
     const tiering = readFileSync(join(repoRoot, 'docs/tiering.md'), 'utf8');
     const carrier = readFileSync(join(repoRoot, '.cursor/rules/flow-manager-browser-turn-monitoring.mdc'), 'utf8');
@@ -76,12 +79,76 @@ describe('create-Issue manager boundary', () => {
     expect(skill).toContain('without awaiting its envelope');
     expect(skill).toContain('single permitted post-terminal correction');
     expect(skill).toContain('one required Claude architectural-lens');
+    expect(skill).toContain('**non-direct** form in a fresh project chat');
+    expect(skill).toContain('Do not invoke `scripts/lib/manager-review-brief.ts`');
     expect(tiering).toContain('No T3 competitive stage');
-    expect(carrier).toContain('Already-published review');
-    expect(carrier).toContain('create-Issue label/review authority');
+    expect(carrier).toContain('ordinary **non-direct** form');
+    expect(carrier).toContain('Do not pass direct-publication-only identity/context');
     expect(authorPrompt).toContain('<BRIEF_TEXT>');
     expect(authorPrompt).not.toContain('<BRIEF_REFERENCE>');
     expect(authorPrompt).toContain('never pass a local path');
+  });
+
+  it('launches comment-based create-Issue review through non-direct long-run without stage artifacts', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-create-issue-non-direct-review-'));
+    const handoffReceipt = join(root, 'handoff.json');
+    const runIdentity = 'run-comment-review';
+    const attemptIdentity = 'attempt-comment-review';
+    const projectUrl = 'https://chatgpt.com/g/g-test/project';
+    const spawnLauncher = vi.fn(async (launcherArgs: readonly string[]) => {
+      const valueAfter = (flag: string): string => {
+        const index = launcherArgs.indexOf(flag);
+        const value = index >= 0 ? launcherArgs[index + 1] : undefined;
+        if (typeof value !== 'string') throw new Error(`fixture launcher missing ${flag}`);
+        return value;
+      };
+      writeFileSync(valueAfter('--handoff-receipt'), JSON.stringify({
+        schema: HANDOFF_SCHEMA,
+        run_identity: valueAfter('--run-identity'),
+        attempt_identity: valueAfter('--attempt-identity'),
+        launcher_started_at: '2026-09-30T00:00:00.000Z',
+        handoff_committed_at: '2026-09-30T00:00:00.001Z',
+        completion_mode: 'browser-turn-result-v1',
+      }));
+      return 2256001;
+    });
+    const stdout = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const code = await runBrowserAdapter([
+        '--run-identity', runIdentity,
+        '--attempt-identity', attemptIdentity,
+        '--handoff-receipt', handoffReceipt,
+        '--invocation-id', 'ba2eee75-4daf-4d43-bb81-9cac51ba9ff6',
+        '--terminal-envelope', join(root, 'terminal.json'),
+        '--output', join(root, 'output.txt'),
+        '--profile', 'test-profile',
+        '--cdp', 'http://127.0.0.1:9222',
+        '--input', join(root, 'reviewer-prompt.txt'),
+        '--new-chat',
+        '--project-url', projectUrl,
+      ], { spawnLauncher });
+      expect(code).toBe(0);
+      expect(spawnLauncher).toHaveBeenCalledTimes(1);
+      const launcherArgs = spawnLauncher.mock.calls[0]![0];
+      expect(launcherArgs).toContain('--new-chat');
+      expect(launcherArgs).toContain('--project-url');
+      expect(launcherArgs).toContain(projectUrl);
+      for (const directOnly of [
+        '--reviewer-source-output', '--reviewer-source', '--repository', '--issue-number',
+        '--source-revision', '--stage', '--source-slot', '--stage-attempt-id',
+        '--terminal-input-bundle', '--review-dir',
+      ]) expect(launcherArgs).not.toContain(directOnly);
+      const result = JSON.parse(String(stdout.mock.calls[0]?.[0] ?? '')) as Record<string, unknown>;
+      expect(result).toMatchObject({
+        ok: true,
+        schema: 'flow-manager-browser-gpt-long-run-accepted/v1',
+        completion_mode: 'browser-turn-result-v1',
+      });
+      expect(result).not.toHaveProperty('publication_expectation');
+    } finally {
+      stdout.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('maps the four outcomes to one JSON object and exit codes 0/3/4/5', () => {

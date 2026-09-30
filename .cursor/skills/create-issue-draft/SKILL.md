@@ -81,12 +81,33 @@ Each reviewer evaluates contradictions, feasibility, overengineering / cheaper s
 
 A create-Issue review turn is **complete when the revision-named reviewer Issue comment is published**, even while the shared sender's terminal envelope is pending. If there is neither such a comment nor a reply in the chat, inspect the *unchanged* sender's invocation/retry contract and use only an already-permitted recovery/resend. Mere absence is not send authority. A reply recovered through a permitted path can be published as an Issue comment; duplicated published comments are harmless and do not create separate independent sources.
 
-## Manager review brief canon
+## Reviewer prompt preparation
 
-This declaration selects the existing tracked sender's exact unmarked reviewer-prompt
-sections. This is **sender input compatibility only**, not create-Issue review,
-stage-record, terminal-envelope, or label acceptance authority. The shared sender
-still validates its own input under its unchanged transport contract.
+For each review turn, the manager prepares one ordinary reviewer prompt from the
+live Issue and the applicable role in the fixed per-tier pipeline below. Include
+the repository and Issue URL, the reviewer role, and an instruction to read the
+live Issue/comments and publish the complete verdict as a top-level Issue comment
+whose first line names the revision actually read. The role and revision belong
+in prompt content; they are not transport selectors or stage authority.
+
+Run comment-based create-Issue review turns through the existing
+`flow-manager-browser-gpt-long-run` **non-direct** form in a fresh project chat.
+Resolve the target project card and pass its URL with `--project-url` and
+`--new-chat`. Do not invoke `scripts/lib/manager-review-brief.ts` or
+`scripts/manager-review-terminal-bundle.ts` for this workflow, or pass the
+direct-publication arguments `--reviewer-source-output`, `--reviewer-source`,
+`--repository`, `--issue-number`, `--source-revision`, `--stage`,
+`--source-slot`, `--stage-attempt-id`, `--terminal-input-bundle`, or
+`--review-dir`. Those legacy inputs select stage/lifecycle admission that does not
+authorize create-Issue review or acceptance. The existing ordinary transport still
+owns invocation identity, send-once, observation, and its permitted recovery; only
+the published revision-named Issue comment completes this review turn.
+
+## Retained non-authoritative prompt declaration
+
+The block below is retained as historical source text only. Active comment-based
+create-Issue reviews use only the non-direct path above; the block is not selected,
+does not authorize legacy admission, and is not review or acceptance authority.
 
 ```manager-review-brief-canon
 .cursor/skills/create-issue-draft/SKILL.md :: ### Generated independent reviewer binding frame

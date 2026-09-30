@@ -59,12 +59,13 @@ identity; they must not mint, replace, or reinterpret it. Presence of
 never selects direct mode by itself; direct mode requires its direct-only
 arguments.
 
-For a create-Issue review, prepare a reviewer prompt using the current live
-Issue revision and the skill's comment topology. If the shared sender still
-requires `--stage`, `--source-slot`, source-revision or invocation identity,
-provide those **only** as sender transport inputs; they do not create a stage
-record, prove reviewer independence, or gate Issue-comment review/acceptance.
-Keep its direct-publication admission and transport unchanged.
+For a create-Issue review, prepare the role-specific prompt from the live Issue
+and the skill's comment topology. Use the existing long-running adapter's
+ordinary **non-direct** form, with a fresh project chat whose URL comes from the
+selected target card. Do not pass direct-publication-only identity/context or
+terminal-bundle arguments; the create-Issue skill owns that exclusion list and
+prompt content. This keeps comment-based review independent of retired stage
+admission while leaving the shared sender unchanged.
 
 After any non-success, admission remains incomplete until the caller follows
 the runbook's [durable observation recovery](../../docs/browser-gpt-turn-runbook.md#durable-observation-recovery)
