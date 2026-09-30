@@ -222,7 +222,7 @@ export async function runStateLightEntry(
 ): Promise<number> {
   const [command, ...turnArgs] = argv;
   const runTurn = dependencies.runTurn ?? ((turnArgv: readonly string[]) =>
-    runStateLightTurn(turnArgv, { entryLivenessHeartbeat: true }));
+    runStateLightTurn(turnArgv, { entryLivenessHeartbeat: true, recordChatBinding: true }));
   const buildTerminalBundle = dependencies.buildTerminalBundle ?? buildManagerReviewTerminalBundle;
 
   if (command === 'turn') {

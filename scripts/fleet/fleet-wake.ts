@@ -23,6 +23,7 @@ import {
   type OrcaExecutor,
 } from './fleet-sweep.ts';
 import { DEFAULT_CHAT_CDP_URL, readChatErrorBanners, type ChatErrorBanner } from './chat-error-banners.ts';
+import { readChatBinding } from './chat-bindings.ts';
 
 export interface FleetWakeConfig {
   readonly projectId: string;
@@ -137,15 +138,33 @@ export function stoppedSignature(observations: readonly FleetPaneObservation[]):
     .join('\n');
 }
 
+function isWorkerPane(terminal: FleetTerminal, config: FleetWakeConfig): boolean {
+  if (!terminal.worktreePath || samePath(terminal.worktreePath, config.primary)) return false;
+  config.workspaceRe.lastIndex = 0;
+  return config.workspaceRe.test(terminal.worktreePath.replaceAll('\\', '/'));
+}
+
 /**
- * The execution prompt opens with the Issue URL, and manager workspaces end in
- * `-<issue>`; only a single unambiguous pane is addressed directly.
+ * The chat binding written by the turn entry names the launching worktree;
+ * without one, fall back to the execution prompt's Issue URL against
+ * workspaces ending in `-<issue>`. Only a single unambiguous pane is addressed.
  */
 export function bannerOwnerPane(
   banner: ChatErrorBanner,
   terminals: readonly FleetTerminal[],
   config: FleetWakeConfig,
+  readBinding: typeof readChatBinding = readChatBinding,
 ): FleetTerminal | undefined {
+  const binding = readBinding(banner.url);
+  if (binding) {
+    const bound = resolve(binding.worktree).replaceAll('\\', '/');
+    const owners = terminals.filter((terminal) => {
+      if (!isWorkerPane(terminal, config)) return false;
+      const worktree = resolve(terminal.worktreePath).replaceAll('\\', '/');
+      return bound === worktree || bound.startsWith(`${worktree}/`);
+    });
+    if (owners.length === 1) return owners[0];
+  }
   if (!banner.issue) return undefined;
   const name = new RegExp(`^[a-z][a-z0-9]*-${banner.issue}$`, 'i');
   const matches = terminals.filter((terminal) => {

@@ -13,6 +13,7 @@ import {
   enterExecutionRecoveryProductWallScope,
   type ExecutionRecoveryProductCause,
 } from './ui-adapter.ts';
+import { writeChatBinding } from '../fleet/chat-bindings.ts';
 
 const DEFAULT_TIMEOUT_MS = 1_800_000;
 const EXECUTION_RECOVERY_CAUSES = new Set<ExecutionRecoveryProductCause>([
@@ -63,6 +64,26 @@ function projectStdoutChunk(chunk: unknown): unknown {
   return `${projected.join('\n')}${trailingNewline ? '\n' : ''}`;
 }
 
+function recordChatBindings(chunk: unknown): void {
+  const text = typeof chunk === 'string'
+    ? chunk
+    : chunk instanceof Uint8Array
+      ? Buffer.from(chunk).toString('utf8')
+      : undefined;
+  if (text === undefined) return;
+  for (const line of text.split('\n')) {
+    if (!line) continue;
+    try {
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      if (parsed?.schema === 'turn-result/v1' && typeof parsed.conversation_id === 'string') {
+        writeChatBinding(parsed.conversation_id, process.cwd());
+      }
+    } catch {
+      // Routing data is best-effort and never alters the turn result.
+    }
+  }
+}
+
 function withPreservedDefaultTimeout(argv: readonly string[]): readonly string[] {
   return argv.includes('--timeout-ms')
     ? argv
@@ -76,18 +97,20 @@ function withPreservedDefaultTimeout(argv: readonly string[]): readonly string[]
  */
 export async function runStateLightTurn(
   argv: readonly string[],
-  dependencies: StateLightTurnDependencies = {},
+  dependencies: StateLightTurnDependencies & { readonly recordChatBinding?: boolean } = {},
 ): Promise<number> {
+  const { recordChatBinding = false, ...baseDependencies } = dependencies;
   const leaveRecoveryScope = enterExecutionRecoveryProductWallScope();
   const originalWrite = process.stdout.write;
   try {
     (process.stdout as unknown as { write: (...args: any[]) => boolean }).write = ((
       chunk: unknown,
       ...args: any[]
-    ): boolean => (
-      originalWrite.call(process.stdout, projectStdoutChunk(chunk) as any, ...args as any)
-    )) as (...args: any[]) => boolean;
-    return await runBaseStateLightTurn(withPreservedDefaultTimeout(argv), dependencies);
+    ): boolean => {
+      if (recordChatBinding) recordChatBindings(chunk);
+      return originalWrite.call(process.stdout, projectStdoutChunk(chunk) as any, ...args as any);
+    }) as (...args: any[]) => boolean;
+    return await runBaseStateLightTurn(withPreservedDefaultTimeout(argv), baseDependencies);
   } finally {
     (process.stdout as unknown as { write: typeof process.stdout.write }).write = originalWrite;
     leaveRecoveryScope();
