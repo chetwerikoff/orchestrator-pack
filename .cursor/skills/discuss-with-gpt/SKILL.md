@@ -153,8 +153,9 @@ observation is needed, inspect the standalone chat page rather than claiming
 liveness from PID/log state. Hand-copied page text cannot become
 `completed_valid` because it lacks PASS_ID/SHA validation and the durable driver
 record.
-Before reporting any standalone terminal state, resolve the same explicitly
-selected project card with `resolveTargetContext` and verify the **persisted**
+Before reporting any standalone terminal state, re-read the newest artifact
+only after resolving the same explicitly selected project card with
+`resolveTargetContext` and verifying the **persisted**
 `project-binding.json` on `~/.local/state/discuss-with-gpt/<projectId>/` using
 `assertProjectStateBinding` from the pack's `scripts/lib/project-state-binding.ts`.
 The expected identity is the selected card's exact `projectId` and `repository`;
