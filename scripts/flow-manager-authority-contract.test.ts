@@ -1890,8 +1890,8 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     expect(orchestrationRunbook).toContain('the same manager Dispatch remains nonterminal');
     expect(executeSkill).toContain('The supervisor consumes the validated `verdict` before role completion');
     expect(executeSkill).toContain('supervisor-launched local worker owns');
-    expect(smokeRunbook).toContain('does not add or claim local-worker launch');
-    expect(smokeRunbook).toMatch(/does not\s+reopen a completed pack-review stage/);
+    expect(smokeRunbook).toContain('The manager does not run independent smoke itself');
+    expect(smokeRunbook).toContain('the settled review stage\nis not reopened after a worker fix');
   });
 
   it('uses one post-review independent smoke handoff for ordinary and manager-controlled PRs', () => {
@@ -1904,11 +1904,12 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
 
     const ordinary = smokeRunbook.slice(ordinaryStart, managerStart);
     const manager = smokeRunbook.slice(managerStart, nextSection);
-    expect(ordinary).toContain('implementation\n  -> pack-review cycle');
+    expect(ordinary).toContain('implementation\n  -> PR created with current-head CI green');
+    expect(ordinary).toContain('-> pack-review cycle');
     expect(manager).toContain('manager-owned canonical pack-review cycle');
     expect(manager).toContain('There is no synthetic pre-review worker-owned smoke on this path');
     expect(manager).toContain('supervisor launches local independent-smoke parent');
-    expect(manager).toContain('independent finding: local worker fix + fresh independent smoke');
+    expect(manager).toContain('first FAIL/BLOCKED: local worker fix + explicit independent smoke');
     expect(ordinary).not.toContain('-> worker-owned smoke PASS');
     expect(manager).not.toContain('-> worker-owned smoke PASS');
   });
