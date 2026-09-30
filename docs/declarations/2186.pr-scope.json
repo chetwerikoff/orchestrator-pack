@@ -25,6 +25,7 @@
     "scripts/lib/project-state-binding.ts",
     "scripts/lib/worker-smoke-receipt.ts",
     "scripts/lib/worker-status-store.mjs",
+    "scripts/merge-adoption-effect.test.ts",
     "scripts/orchestrator-cutover-activate.ts",
     "scripts/orchestrator-wake-supervisor.ts",
     "scripts/pack-review-runner.ts",
@@ -57,6 +58,7 @@
     "scripts/chatgpt-browser-turn/",
     "scripts/cutover/",
     "scripts/lib/",
+    "scripts/merge-adoption-effect.test.ts",
     "scripts/operator-primary-binding.ts",
     "scripts/orchestrator-cutover-activate.ts",
     "scripts/orchestrator-wake-supervisor.ts",
@@ -65,5 +67,5 @@
     "scripts/pr2-foundation/",
     "scripts/toolchain/create-issue-authoring-contract.test.ts"
   ],
-  "source_revision": "03a766ff29fcb5aa9d8c9d410623d13aad48abce"
+  "source_revision": "3dee500aacab8b3f438d6c2819b5fe2117551740"
 }
