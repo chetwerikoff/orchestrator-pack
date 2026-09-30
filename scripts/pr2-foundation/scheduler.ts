@@ -263,7 +263,7 @@ async function ghJson(repoRoot: string, args: string[]): Promise<unknown> {
 }
 
 export function productionSchedulerBoundary(input: {
-  repoRoot: string; projectId?: string; env?: NodeJS.ProcessEnv; fleetObserver?: SchedulerFleetObserver;
+  repoRoot: string; sourceRepoRoot?: string; projectId?: string; env?: NodeJS.ProcessEnv; fleetObserver?: SchedulerFleetObserver;
   fleetNudgeActuator?: SchedulerFleetNudgeActuator; fleetEscalation?: SchedulerFleetEscalation;
   schedulerIntervalMs?: number; activationLineage?: string;
   repository?: string; unresolvedReason?: FleetReconciliationReason; assignmentReconciliation?: SchedulerAssignmentReconciliation;
@@ -279,7 +279,8 @@ export function productionSchedulerBoundary(input: {
     listCandidates: () => liveCandidates(env, input.repository),
     readCurrentPr: async (candidate) => ghJson(input.repoRoot, ['pr', 'view', String(candidate.prNumber), '--repo', candidate.repoSlug, '--json', 'number,headRefOid,state,isDraft,body']) as Promise<SchedulerCurrentPr>,
     readChecks: async (candidate) => ghJson(input.repoRoot, ['pr', 'checks', String(candidate.prNumber), '--repo', candidate.repoSlug, '--json', 'name,state,conclusion,status']) as Promise<Array<{ name?: string; state?: string; conclusion?: string; status?: string }>>,
-    listReviewRuns: () => listPackReviewRuns({ projectId }),
+    listReviewRuns: () => listPackReviewRuns({ projectId }).filter((run) =>
+      !input.repository || run.canonicalRepository === input.repository),
     fleetNudgeActuator: input.fleetNudgeActuator ?? createTargetUnresolvedFleetNudgeActuator(),
     projectId,
     ...(input.fleetObserver ? { fleetObserver: input.fleetObserver } : {}),
@@ -296,7 +297,7 @@ export function productionSchedulerBoundary(input: {
     ...(input.dispatchTerminalMailPulse ? { dispatchTerminalMailPulse: input.dispatchTerminalMailPulse } : {}),
     ...(input.publishHandoff ? { publishHandoff: input.publishHandoff } : {}),
     start: async (candidate, freshHeadSha) => {
-      const result = await startPackReview({ projectId, linkedSessionId: candidate.sessionId, prNumber: candidate.prNumber, headSha: freshHeadSha, sourceRepoRoot: input.repoRoot, startReason: 'scheduler', surface: 'pr2-scheduler', claimMode: 'acquire' });
+      const result = await startPackReview({ projectId, linkedSessionId: candidate.sessionId, prNumber: candidate.prNumber, headSha: freshHeadSha, sourceRepoRoot: input.sourceRepoRoot ?? input.repoRoot, startReason: 'scheduler', surface: 'pr2-scheduler', claimMode: 'acquire' });
       return { ok: result.ok === true, ...(typeof result.reason === 'string' ? { reason: result.reason } : {}) };
     },
   };
@@ -650,7 +651,8 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   const target = resolveTargetContext({ projectId: selectedProjectId, env });
   const projectId = target.projectId;
   const repository = target.repository;
-  const repoRoot = target.packRoot;
+  const packRoot = target.packRoot;
+  const sourceRepoRoot = target.primaryRoot;
   const forwardedRepository = String(env.OPK_REPOSITORY ?? '').trim().toLowerCase();
   if (forwardedRepository && forwardedRepository !== repository) throw new Error('scheduler_repository_binding_mismatch');
   assertProjectStateBinding(resolveWakeSupervisorStateRoot({ env, projectId }), { projectId, repository });
@@ -789,13 +791,14 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
     await executeOrchestrationMailReconcile();
   const postReviewSmoke = createProductionPostReviewSmokeReconciler({
     projectId,
-    repoRoot,
+    repoRoot: sourceRepoRoot,
     assignmentStorePath,
     env,
   });
   return {
     boundary: productionSchedulerBoundary({
-      repoRoot,
+      repoRoot: packRoot,
+      sourceRepoRoot,
       projectId,
       env,
       fleetObserver: productionObserverBoundary(fleetObserver),
