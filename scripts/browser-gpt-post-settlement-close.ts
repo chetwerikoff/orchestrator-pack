@@ -1038,7 +1038,7 @@ async function capturePreservedPage(state: CaptureState, tracked: TrackedPage): 
     readonly maximumNodes: number;
     readonly selectors: BrowserGuardSelectors;
   }) => {
-    const raw = Array.from(document.querySelectorAll(selectors.messageNode));
+    const raw = Array.from(document.querySelectorAll(selectors.messageNode)).filter((node) => node.getBoundingClientRect().height > 0);
     const counts = { user: 0, assistant: 0 };
     const nodes: Array<{
       readonly node: Element;

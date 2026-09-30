@@ -345,6 +345,7 @@ describe('DOM observation boundary', () => {
         ? { getAttribute: () => message.role === 'user' ? 'user-message' : 'assistant-message' }
         : null,
       querySelectorAll: () => [],
+      getBoundingClientRect: () => ({ height: 1 }),
       innerText: message.text,
     }));
     const querySelector = vi.fn(generationQuery);
