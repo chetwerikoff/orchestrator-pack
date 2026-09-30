@@ -579,7 +579,7 @@ describe('Issue #1436 smoke/review ordering', () => {
     const finalAuthority = readPackReviewAuthority(1436, options)!;
     expect(finalAuthority.cycle?.reviewStageComplete).toBe(true);
     expect(finalAuthority.smokeOrdering?.independent).toBeUndefined();
-    expect(() => assertIndependentSmokeAdmission({ authority: finalAuthority, headSha: HEAD, reviewRuns: [] })).not.toThrow();
+    expect(finalAuthority.cycle?.reviewStageComplete).toBe(true);
   });
 
   it('settles a production non-blocking review for independent-smoke admission', async () => {
@@ -636,7 +636,7 @@ describe('Issue #1436 smoke/review ordering', () => {
     expect(result.ok, JSON.stringify(result)).toBe(true);
     const finalAuthority = readPackReviewAuthority(1436, options)!;
     expect(finalAuthority.terminal?.reviewStatus).toBe('commented');
-    expect(() => assertIndependentSmokeAdmission({ authority: finalAuthority, headSha: HEAD, reviewRuns: [] })).not.toThrow();
+    expect(finalAuthority.terminal?.reviewStatus).toBe('commented');
   });
 
   it('does not gate review admission on worker-owned smoke state', () => {
@@ -688,132 +688,11 @@ describe('Issue #1436 smoke/review ordering', () => {
     expect(() => assertPackReviewSmokeAdmission({ authority: passed, headSha: HEAD })).not.toThrow();
   });
 
-  it('refuses independent smoke before settled review and forbids later review', () => {
-    const { options, authority } = authorityFixture();
-    const started = commitSmokeOrderingTransition({
-      prNumber: 1436,
-      expectedTransitionSeq: authority.transitionSeq,
-      actor: 'worker-owned',
-      headSha: HEAD,
-      status: 'started',
-      options,
-    });
-    const workerPassed = commitSmokeOrderingTransition({
-      prNumber: 1436,
-      expectedTransitionSeq: started.transitionSeq,
-      actor: 'worker-owned',
-      headSha: HEAD,
-      status: 'passed',
-      options,
-    });
-    expect(() => assertIndependentSmokeAdmission({ authority: workerPassed, headSha: HEAD, reviewRuns: [] }))
-      .toThrow('smoke_ordering_review_unsettled');
+  // Retired by Issue #2250: the smoke-ordering admission contract no longer applies.
 
-    const terminal = commitPackReviewTerminal({
-      prNumber: 1436,
-      expectedTransitionSeq: workerPassed.transitionSeq,
-      terminal: {
-        schemaVersion: 1,
-        terminalContractVersion: 2,
-        terminalSource: 'normal',
-        runId: 'review-run',
-        targetSha: HEAD,
-        reviewVerdict: 'clean',
-        findingCount: 0,
-        findingsDigest: 'findings-digest',
-      },
-      status: 'clean',
-      findingCount: 0,
-      options,
-    });
-    const settled = recordPackReviewPublication({
-      prNumber: 1436,
-      expectedTransitionSeq: terminal.transitionSeq,
-      publication: {
-        headSha: HEAD,
-        terminalRunId: 'review-run',
-        status: 'succeeded',
-        publicationDigest: 'publication-digest',
-        recordedAtUtc: new Date().toISOString(),
-      },
-      options,
-    });
-    expect(() => assertIndependentSmokeAdmission({ authority: settled, headSha: HEAD, reviewRuns: [] })).not.toThrow();
 
-    const independentStarted = commitSmokeOrderingTransition({
-      prNumber: 1436,
-      expectedTransitionSeq: settled.transitionSeq,
-      actor: 'independent',
-      headSha: HEAD,
-      status: 'started',
-      options,
-    });
-    expect(() => assertPackReviewSmokeAdmission({
-      authority: independentStarted,
-      headSha: HEAD,
-    })).toThrow('smoke_ordering_review_forbidden');
+  // Retired by Issue #2250: the smoke-ordering admission contract no longer applies.
 
-    const independentFailed = commitSmokeOrderingTransition({
-      prNumber: 1436,
-      expectedTransitionSeq: independentStarted.transitionSeq,
-      actor: 'independent',
-      headSha: HEAD,
-      status: 'failed',
-      options,
-    });
-    const nextHead = observePackReviewHead({
-      prNumber: 1436,
-      expectedTransitionSeq: independentFailed.transitionSeq,
-      headSha: NEXT_HEAD,
-      options,
-    });
-    expect(() => assertIndependentSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD, reviewRuns: [] })).not.toThrow();
-    expect(() => assertPackReviewSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD }))
-      .toThrow('smoke_ordering_review_forbidden');
-  });
-
-  it('invalidates a settled review marker when the head changes before independent smoke', () => {
-    const { options, authority } = authorityFixture();
-    const terminal = commitPackReviewTerminal({
-      prNumber: 1436,
-      expectedTransitionSeq: authority.transitionSeq,
-      terminal: {
-        schemaVersion: 1,
-        terminalContractVersion: 2,
-        terminalSource: 'normal',
-        runId: 'clean-before-head-shift',
-        targetSha: HEAD,
-        reviewVerdict: 'clean',
-        findingCount: 0,
-        findingsDigest: 'findings-digest',
-      },
-      status: 'up_to_date',
-      findingCount: 0,
-      options,
-    });
-    const settled = recordPackReviewPublication({
-      prNumber: 1436,
-      expectedTransitionSeq: terminal.transitionSeq,
-      publication: {
-        headSha: HEAD,
-        terminalRunId: 'clean-before-head-shift',
-        status: 'succeeded',
-        publicationDigest: 'publication-digest',
-        recordedAtUtc: new Date().toISOString(),
-      },
-      options,
-    });
-    expect(settled.smokeOrdering?.reviewSettledHeadSha).toBe(HEAD);
-    const nextHead = observePackReviewHead({
-      prNumber: 1436,
-      expectedTransitionSeq: settled.transitionSeq,
-      headSha: NEXT_HEAD,
-      options,
-    });
-    expect(nextHead.smokeOrdering?.reviewSettledHeadSha).toBeUndefined();
-    expect(() => assertIndependentSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD, reviewRuns: [] }))
-      .toThrow('smoke_ordering_review_unsettled');
-  });
 
   it('admits independent smoke when a consumed failed start survives only in the run store', () => {
     const { options, authority } = authorityFixture('T2');
@@ -890,7 +769,7 @@ describe('Issue #1436 smoke/review ordering', () => {
         },
         options,
       });
-      expect(() => assertIndependentSmokeAdmission({ authority: settled, headSha: HEAD, reviewRuns: [] })).not.toThrow();
+      expect(settled.terminal?.reviewStatus).toBe(status);
     },
   );
 
@@ -1066,7 +945,7 @@ describe('Issue #1436 smoke/review ordering', () => {
       reviewStageComplete: true,
     });
     expect(settled.triage).toBeUndefined();
-    expect(settled.smokeOrdering?.reviewSettledHeadSha).toBe(NEXT_HEAD);
+    expect(settled.cycle?.reviewStageComplete).toBe(true);
   });
 
   it('derives smoke ordering applicability from the canonical smoke requirement', () => {
@@ -1092,215 +971,8 @@ describe('Issue #1436 smoke/review ordering', () => {
     expect(reconciled.cycle).toMatchObject({ state: 'open', frozenTier: 'T3', frozenCap: 4 });
   });
 
-  it('drops a previous-head independent pass on head change and keeps a current-head start', () => {
-    const settleWorkerAndReview = (options: PackReviewAuthorityOptions, authority: ReturnType<typeof initializePackReviewAuthority>) => {
-      const started = commitSmokeOrderingTransition({
-        prNumber: 1436,
-        expectedTransitionSeq: authority.transitionSeq,
-        actor: 'worker-owned',
-        headSha: HEAD,
-        status: 'started',
-        options,
-      });
-      const passed = commitSmokeOrderingTransition({
-        prNumber: 1436,
-        expectedTransitionSeq: started.transitionSeq,
-        actor: 'worker-owned',
-        headSha: HEAD,
-        status: 'passed',
-        options,
-      });
-      const terminal = commitPackReviewTerminal({
-        prNumber: 1436,
-        expectedTransitionSeq: passed.transitionSeq,
-        terminal: {
-          schemaVersion: 1,
-          terminalContractVersion: 2,
-          terminalSource: 'normal',
-          runId: 'settle-review',
-          targetSha: HEAD,
-          reviewVerdict: 'clean',
-          findingCount: 0,
-          findingsDigest: 'findings-digest',
-        },
-        status: 'up_to_date',
-        findingCount: 0,
-        options,
-      });
-      return recordPackReviewPublication({
-        prNumber: 1436,
-        expectedTransitionSeq: terminal.transitionSeq,
-        publication: {
-          headSha: HEAD,
-          terminalRunId: 'settle-review',
-          status: 'succeeded',
-          publicationDigest: 'publication-digest',
-          recordedAtUtc: new Date().toISOString(),
-        },
-        options,
-      });
-    };
+  // Retired by Issue #2250: the smoke-ordering admission contract no longer applies.
 
-    {
-      const { options, authority } = authorityFixture();
-      const settled = settleWorkerAndReview(options, authority);
-      const independentStarted = commitSmokeOrderingTransition({
-        prNumber: 1436,
-        expectedTransitionSeq: settled.transitionSeq,
-        actor: 'independent',
-        headSha: HEAD,
-        status: 'started',
-        options,
-      });
-      const stillCurrent = observePackReviewHead({
-        prNumber: 1436,
-        expectedTransitionSeq: independentStarted.transitionSeq,
-        headSha: HEAD,
-        options,
-      });
-      expect(stillCurrent.smokeOrdering?.independent).toMatchObject({
-        headSha: HEAD,
-        status: 'started',
-      });
-      const independentPassed = commitSmokeOrderingTransition({
-        prNumber: 1436,
-        expectedTransitionSeq: stillCurrent.transitionSeq,
-        actor: 'independent',
-        headSha: HEAD,
-        status: 'passed',
-        options,
-      });
-      expect(() => assertIndependentSmokeAdmission({ authority: independentPassed, headSha: HEAD, reviewRuns: [] }))
-        .toThrow('smoke_ordering_independent_already_passed');
-      expect(() => commitSmokeOrderingTransition({
-        prNumber: 1436,
-        expectedTransitionSeq: independentPassed.transitionSeq,
-        actor: 'worker-owned',
-        headSha: HEAD,
-        status: 'started',
-        options,
-      })).toThrow('smoke_ordering_worker_owned_already_passed');
-      const nextHead = observePackReviewHead({
-        prNumber: 1436,
-        expectedTransitionSeq: independentPassed.transitionSeq,
-        headSha: NEXT_HEAD,
-        options,
-      });
-      expect(nextHead.smokeOrdering?.independent).toBeUndefined();
-      expect(() => assertIndependentSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD, reviewRuns: [] }))
-        .toThrow('smoke_ordering_review_unsettled');
-      expect(() => commitSmokeOrderingTransition({
-        prNumber: 1436,
-        expectedTransitionSeq: nextHead.transitionSeq,
-        actor: 'worker-owned',
-        headSha: NEXT_HEAD,
-        status: 'started',
-        options,
-      })).not.toThrow();
-    }
-
-    {
-      const { options, authority } = authorityFixture();
-      const settled = settleWorkerAndReview(options, authority);
-      const independentStarted = commitSmokeOrderingTransition({
-        prNumber: 1436,
-        expectedTransitionSeq: settled.transitionSeq,
-        actor: 'independent',
-        headSha: HEAD,
-        status: 'started',
-        options,
-      });
-      const independentFailed = commitSmokeOrderingTransition({
-        prNumber: 1436,
-        expectedTransitionSeq: independentStarted.transitionSeq,
-        actor: 'independent',
-        headSha: HEAD,
-        status: 'failed',
-        failureKind: 'finding',
-        options,
-      });
-      expect(() => assertIndependentSmokeAdmission({ authority: independentFailed, headSha: HEAD, reviewRuns: [] }))
-        .toThrow('smoke_ordering_independent_same_head_forbidden');
-      const nextHead = observePackReviewHead({
-        prNumber: 1436,
-        expectedTransitionSeq: independentFailed.transitionSeq,
-        headSha: NEXT_HEAD,
-        options,
-      });
-      expect(nextHead.smokeOrdering?.independent).toMatchObject({
-        headSha: NEXT_HEAD,
-        status: 'failed',
-        failureKind: 'finding',
-        failureHeadSha: HEAD,
-      });
-      expect(() => assertIndependentSmokeAdmission({ authority: nextHead, headSha: NEXT_HEAD, reviewRuns: [] })).not.toThrow();
-      expect(() => commitSmokeOrderingTransition({
-        prNumber: 1436,
-        expectedTransitionSeq: nextHead.transitionSeq,
-        actor: 'worker-owned',
-        headSha: NEXT_HEAD,
-        status: 'started',
-        options,
-      })).not.toThrow();
-    }
-
-    {
-      const { options, authority } = authorityFixture();
-      const terminal = commitPackReviewTerminal({
-        prNumber: 1436,
-        expectedTransitionSeq: authority.transitionSeq,
-        terminal: {
-          schemaVersion: 1,
-          terminalContractVersion: 2,
-          terminalSource: 'normal',
-          runId: 'settle-review-only',
-          targetSha: HEAD,
-          reviewVerdict: 'clean',
-          findingCount: 0,
-          findingsDigest: 'findings-digest',
-        },
-        status: 'up_to_date',
-        findingCount: 0,
-        options,
-      });
-      const settled = recordPackReviewPublication({
-        prNumber: 1436,
-        expectedTransitionSeq: terminal.transitionSeq,
-        publication: {
-          headSha: HEAD,
-          terminalRunId: 'settle-review-only',
-          status: 'succeeded',
-          publicationDigest: 'publication-digest',
-          recordedAtUtc: new Date().toISOString(),
-        },
-        options,
-      });
-      const independentStarted = commitSmokeOrderingTransition({
-        prNumber: 1436,
-        expectedTransitionSeq: settled.transitionSeq,
-        actor: 'independent',
-        headSha: HEAD,
-        status: 'started',
-        options,
-      });
-      const independentPassed = commitSmokeOrderingTransition({
-        prNumber: 1436,
-        expectedTransitionSeq: independentStarted.transitionSeq,
-        actor: 'independent',
-        headSha: HEAD,
-        status: 'passed',
-        options,
-      });
-      expect(() => commitSmokeOrderingTransition({
-        prNumber: 1436,
-        expectedTransitionSeq: independentPassed.transitionSeq,
-        actor: 'worker-owned',
-        headSha: HEAD,
-        status: 'started',
-        options,
-      })).toThrow('smoke_ordering_worker_smoke_forbidden');
-    }
-  });
 
   describe('Issue #1777 canonical independent-smoke admission matrix', () => {
     const OBSERVED_PR = 1740;
@@ -1858,6 +1530,15 @@ describe('Issue #1436 smoke/review ordering', () => {
         status: 'passed',
       });
     });
+  });
+
+  it('keeps active smoke execution and pack-review free of the retired ordering gate', () => {
+    const runner = readFileSync('scripts/pack-review-runner.ts', 'utf8');
+    expect(runner).not.toContain('assertPackReviewSmokeAdmission(');
+    const smoke = readFileSync('scripts/worker-smoke-run.ts', 'utf8');
+    const run = smoke.slice(smoke.indexOf('export async function runSmokeAttempt('), smoke.indexOf('export type DetachedSmokeAttemptObservation'));
+    expect(run).not.toContain('beginSmokeOrdering(');
+    expect(run).not.toContain('finishSmokeOrdering(');
   });
 
 });
