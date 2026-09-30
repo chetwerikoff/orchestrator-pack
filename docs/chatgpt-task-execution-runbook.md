@@ -154,7 +154,11 @@ authority.
 
 `message_stream_error` is the existing classifier's exact mapping for the
 rendered literal `Error in message stream`; the same structural/ownership gates
-and stable two-read confirmation apply.
+and stable two-read confirmation apply. Like `stream_recovery_polling_timed_out`,
+it is also recognized as an exact roleless `[role="alert"]` banner (with or
+without its Retry label) when no assistant carrier follows the unique owned
+marker; the manager then enters the same GitHub-first recovery and
+same-conversation continuation, never the product `Retry` control.
 
 ## Mandatory 30-minute live-chat checkpoint
 

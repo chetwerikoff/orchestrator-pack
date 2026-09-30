@@ -157,11 +157,21 @@ function matchesExecutionRecoveryProductText(value: string, exact: string): bool
     || withoutCollapseLabel === `${exact}...`;
 }
 
-/** Exact live `[role="alert"]` stream-recovery banner, with or without its Retry label. */
-export function isStreamRecoveryPollingTimeoutSurfaceText(value: string): boolean {
+const ROLELESS_SURFACE_CAUSES: readonly (readonly [string, ExecutionRecoveryProductCause])[] = [
+  [STREAM_RECOVERY_POLLING_TIMED_OUT_TEXT, 'stream_recovery_polling_timed_out'],
+  [MESSAGE_STREAM_ERROR_TEXT, 'message_stream_error'],
+];
+
+/**
+ * Exact live `[role="alert"]` banner that ChatGPT can render outside every
+ * message node, with or without its Retry label.
+ */
+export function rolelessRecoverySurfaceCause(value: string): ExecutionRecoveryProductCause | undefined {
   const normalized = normalizeExecutionRecoveryProductText(value);
-  return normalized === STREAM_RECOVERY_POLLING_TIMED_OUT_TEXT
-    || normalized === `${STREAM_RECOVERY_POLLING_TIMED_OUT_TEXT} Retry`;
+  for (const [text, cause] of ROLELESS_SURFACE_CAUSES) {
+    if (normalized === text || normalized === `${text} Retry`) return cause;
+  }
+  return undefined;
 }
 
 function executionRecoveryCauseFromText(value: string): ExecutionRecoveryProductCause | undefined {
@@ -225,14 +235,94 @@ function emptyClassification(
   };
 }
 
+function rolelessBannerCause(
+  evidence: ExecutionRecoveryProductErrorEvidence,
+): ExecutionRecoveryProductCause | undefined {
+  const causes = new Set<ExecutionRecoveryProductCause>();
+  for (const surface of evidence.productSurfaces ?? []) {
+    const cause = rolelessRecoverySurfaceCause(surface.text);
+    if (cause) causes.add(cause);
+  }
+  for (const text of evidence.bannerCandidates.flatMap((candidate) => candidate.paragraphTexts)) {
+    if (executionRecoveryCauseFromText(text) === 'stream_recovery_polling_timed_out') {
+      causes.add('stream_recovery_polling_timed_out');
+    }
+  }
+  return causes.size === 1 ? [...causes][0] : undefined;
+}
+
+/**
+ * Roleless banner path: ownership comes from the unique owned marker, even when
+ * ChatGPT dropped role-bearing message nodes. `message_stream_error` takes this
+ * path only while no assistant carrier follows the owned prompt; otherwise the
+ * carrier gates below stay authoritative. Returns undefined to fall through.
+ */
+function classifyRolelessBanner(
+  evidence: ExecutionRecoveryProductErrorEvidence,
+  cause: ExecutionRecoveryProductCause,
+  turnKeys: readonly string[],
+  retryPresentAnywhere: boolean,
+): ExecutionRecoveryClassification | undefined {
+  const messageCardinality = recoveryMarkerCardinality(evidence.messages, evidence.marker);
+  const fallbackMarkerCandidates = messageCardinality.exactMarkerTokenCount === 0
+    ? (evidence.markerCandidates ?? [])
+    : [];
+  const ownershipMessages: ExecutionRecoveryMessage[] = [
+    ...evidence.messages,
+    ...fallbackMarkerCandidates.map((candidate) => ({
+      role: 'user' as const,
+      text: candidate.text,
+      ...(candidate.turnKey ? { turnKey: candidate.turnKey } : {}),
+    })),
+  ];
+  const cardinality = recoveryMarkerCardinality(ownershipMessages, evidence.marker);
+  if (cardinality.matchingUserCarrierCount === 0 || cardinality.exactMarkerTokenCount === 0) {
+    return emptyClassification('no_owned_prompt', { retry_control_present: retryPresentAnywhere });
+  }
+  if (cardinality.matchingUserCarrierCount !== 1 || cardinality.exactMarkerTokenCount !== 1) {
+    return emptyClassification('ambiguous_marker', { retry_control_present: retryPresentAnywhere });
+  }
+  const owned = ownershipMessages.filter((message) => (
+    message.role === 'user' && ownedPromptMarkerMatches(message.text, evidence.marker)
+  ));
+  if (owned.length !== 1) {
+    return emptyClassification('ambiguous_marker', { retry_control_present: retryPresentAnywhere });
+  }
+  if (cause === 'message_stream_error') {
+    const ownedIndex = evidence.messages.indexOf(owned[0]!);
+    const followers = ownedIndex >= 0 ? evidence.messages.slice(ownedIndex + 1) : evidence.messages;
+    if (followers.some((message) => message.role === 'assistant')) return undefined;
+  }
+  const ownedTurnKey = owned[0]!.turnKey;
+  if (ownedTurnKey) {
+    const ownedTurnIndex = turnKeys.indexOf(ownedTurnKey);
+    const hasLaterUserTurn = ownedTurnIndex >= 0 && evidence.messages.some((message) => {
+      if (message.role !== 'user' || !message.turnKey) return false;
+      const index = turnKeys.indexOf(message.turnKey);
+      return index > ownedTurnIndex;
+    });
+    if (hasLaterUserTurn) {
+      return emptyClassification('later_user_turn', {
+        retry_control_present: retryPresentAnywhere,
+        owned_user_turn_key: ownedTurnKey,
+      });
+    }
+  }
+  return {
+    cause,
+    ...(ownedTurnKey ? { owned_user_turn_key: ownedTurnKey } : {}),
+    retry_control_present: retryPresentAnywhere,
+  };
+}
+
 /**
  * Sole matcher/owned-turn classifier for the reserved execute-Issue product
  * errors. Product text alone is never recovery authority: every cause requires
  * a unique exact owned prompt and stopped generation. Delivery, network, and
  * message-stream causes retain the successor-assistant-carrier and same-carrier
- * Retry gates. The stream-recovery timeout additionally accepts the exact
- * product-status banner with the same unique owned marker when role-bearing
- * message nodes disappeared.
+ * Retry gates. The stream-recovery timeout and message-stream error
+ * additionally accept the exact roleless `[role="alert"]` banner with the same
+ * unique owned marker when no assistant carrier was rendered.
  */
 export function classifyExecutionRecoveryProductError(
   evidence: ExecutionRecoveryProductErrorEvidence,
@@ -249,57 +339,10 @@ export function classifyExecutionRecoveryProductError(
     return emptyClassification('generation_active', { retry_control_present: retryPresentAnywhere });
   }
 
-  const streamBannerPresent = [
-    ...(evidence.productSurfaces ?? []).map((surface) => surface.text),
-    ...evidence.bannerCandidates.flatMap((candidate) => candidate.paragraphTexts),
-  ].some((text) => executionRecoveryCauseFromText(text) === 'stream_recovery_polling_timed_out');
-
-  if (streamBannerPresent) {
-    const messageCardinality = recoveryMarkerCardinality(evidence.messages, evidence.marker);
-    const fallbackMarkerCandidates = messageCardinality.exactMarkerTokenCount === 0
-      ? (evidence.markerCandidates ?? [])
-      : [];
-    const ownershipMessages: ExecutionRecoveryMessage[] = [
-      ...evidence.messages,
-      ...fallbackMarkerCandidates.map((candidate) => ({
-        role: 'user' as const,
-        text: candidate.text,
-        ...(candidate.turnKey ? { turnKey: candidate.turnKey } : {}),
-      })),
-    ];
-    const cardinality = recoveryMarkerCardinality(ownershipMessages, evidence.marker);
-    if (cardinality.matchingUserCarrierCount === 0 || cardinality.exactMarkerTokenCount === 0) {
-      return emptyClassification('no_owned_prompt', { retry_control_present: retryPresentAnywhere });
-    }
-    if (cardinality.matchingUserCarrierCount !== 1 || cardinality.exactMarkerTokenCount !== 1) {
-      return emptyClassification('ambiguous_marker', { retry_control_present: retryPresentAnywhere });
-    }
-    const owned = ownershipMessages.filter((message) => (
-      message.role === 'user' && ownedPromptMarkerMatches(message.text, evidence.marker)
-    ));
-    if (owned.length !== 1) {
-      return emptyClassification('ambiguous_marker', { retry_control_present: retryPresentAnywhere });
-    }
-    const ownedTurnKey = owned[0]!.turnKey;
-    if (ownedTurnKey) {
-      const ownedTurnIndex = turnKeys.indexOf(ownedTurnKey);
-      const hasLaterUserTurn = ownedTurnIndex >= 0 && evidence.messages.some((message) => {
-        if (message.role !== 'user' || !message.turnKey) return false;
-        const index = turnKeys.indexOf(message.turnKey);
-        return index > ownedTurnIndex;
-      });
-      if (hasLaterUserTurn) {
-        return emptyClassification('later_user_turn', {
-          retry_control_present: retryPresentAnywhere,
-          owned_user_turn_key: ownedTurnKey,
-        });
-      }
-    }
-    return {
-      cause: 'stream_recovery_polling_timed_out',
-      ...(ownedTurnKey ? { owned_user_turn_key: ownedTurnKey } : {}),
-      retry_control_present: retryPresentAnywhere,
-    };
+  const rolelessCause = rolelessBannerCause(evidence);
+  if (rolelessCause) {
+    const roleless = classifyRolelessBanner(evidence, rolelessCause, turnKeys, retryPresentAnywhere);
+    if (roleless) return roleless;
   }
 
   const cardinality = recoveryMarkerCardinality(evidence.messages, evidence.marker);
