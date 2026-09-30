@@ -682,6 +682,62 @@ resolution, dual-send, a fallback runtime selector, or a second scheduler/store.
 Previously written bounded state is evidence only and never authorizes an effect
 when it no longer matches the active code/epoch/assignment contract.
 
+## Per-project supervisor and durable-state migration (Issue #2186)
+
+This section is the pre-change durable-store inventory required before the #2186
+store owners are changed. `projectId` is a namespace selector only; every
+project-scoped namespace must persist its resolved `repository` binding and
+validate that binding against the current project card before resume, claim,
+review pickup, or another state-consuming effect.
+
+| Store / owner | Classification | Before #2186 | Target layout / identity |
+| --- | --- | --- | --- |
+| Wake-supervisor runtime, scheduler side-process state, cordon/foundation state; `scripts/pr2-foundation/wake-supervisor-state-root.ts` and `scripts/lib/cutover/**` | project-scoped | `$XDG_STATE_HOME/orchestrator-pack-wake-supervisor/` | `$XDG_STATE_HOME/orchestrator-pack-wake-supervisor/<projectId>/` plus a persisted repository binding |
+| WorkerAssignment and operator-primary; `scripts/lib/worker-assignment-store.ts` / `scripts/operator-primary-binding.ts` | project-scoped, already partitioned | `~/.orchestrator-pack/projects/<projectId>/worker-assignments.json`; assignment records already carry projectId/repository | same path; consumers additionally validate current card repository before using persisted records |
+| Create-Issue work state and canonical review authority; `scripts/lib/canonical-review-directory.ts` plus create-Issue stage owners | project-scoped | `~/.local/state/create-issue-draft/<Issue>/` and `~/.local/state/create-issue-draft/.review/<Issue>/` | `~/.local/state/create-issue-draft/<projectId>/<Issue>/` and `~/.local/state/create-issue-draft/<projectId>/.review/<Issue>/` with repository binding |
+| Standalone discuss-with-gpt durable pass artifacts; `.claude/skills/discuss-with-gpt/driver.mjs` and `.cursor/skills/discuss-with-gpt/SKILL.md` | project-scoped | `~/.local/state/discuss-with-gpt/<draft-slug>/` | `~/.local/state/discuss-with-gpt/<projectId>/<draft-slug>/` with repository binding |
+| discuss-with-gpt CDP/profile owner; `.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs` | host-global | `~/.local/state/discuss-with-gpt/cdp-<port>-owner.json` | unchanged host-global path |
+| Worker status/report stores; `scripts/lib/worker-status-store.mjs` / `docs/worker-report-store.mjs` | project-scoped | files directly under the flat wake-supervisor root | same file names under `orchestrator-pack-wake-supervisor/<projectId>/` |
+| Worker smoke receipts; `scripts/lib/worker-smoke-receipt.ts` | project-scoped | `.../orchestrator-pack-wake-supervisor/worker-smoke-receipts/` | `.../orchestrator-pack-wake-supervisor/<projectId>/worker-smoke-receipts/` |
+| PR-session binding cache; `scripts/pack-review-runner.ts` / `docs/pr-session-binding-cache.mjs` | project-scoped | `.../orchestrator-pack-wake-supervisor/pr-session-binding-cache.json` | same file under the selected project wake root |
+| Pack-review run state; `scripts/lib/pack-review-run-store.ts` | project/repository-scoped, already partitioned | `~/.orchestrator-pack/review-runs/<projectId>/`; run records carry projectId and canonical repository when known | same root; consuming paths require current card repository binding |
+| Worker-message dispatch journal and dispatch-terminal mail ledger; `scripts/pr2-foundation/wake-supervisor-state-root.ts` | project-scoped | files directly under the flat wake-supervisor root | same file names under the selected project wake root |
+| Browser-GPT recurrence plus create-Issue handoff/terminal/output records; `scripts/chatgpt-browser-turn/**` and create-Issue stage owners | project-scoped | recurrence at `~/.local/state/create-issue-draft/browser-turn-recurrence.jsonl`; governed handoff artifacts live under the canonical create-Issue review/work tree | recurrence and governed handoff records live under the selected project's create-Issue namespace |
+| Mechanical transport scratch / machine browser profile and executable configuration | host-global or invocation-local | existing machine-global/scratch locations | unchanged; these are not repository/task durable authority |
+
+Migration is one store-generic cutover rule, not a new migration subsystem. Before
+publishing a project destination, stop or fence every writer to the source and
+prove the source stable. The destination must be absent or empty. Copy/move must
+preserve authoritative bytes and identity and must be read back before the
+existing cutover commit boundary is crossed. Before that durable boundary, only
+the source is authoritative and an incomplete destination is not consumable.
+After it is crossed, only the destination is authoritative and recovery may only
+finish source retirement/cleanup. Source and destination both containing live
+authority, a repository-binding mismatch, a live writer, or an unprovable
+commit-boundary state fails closed; never merge or overwrite the stores.
+
+The existing pack flat wake-supervisor state is migrated once to the
+`orchestrator-pack` project namespace. The canonical create-Issue
+`.review/<Issue>` authority follows the same rule and remains distinct from the
+work directory. The `cdp-<port>-owner.json` record is excluded because it owns
+one machine/profile, not one repository.
+
+The old ad-hoc LeoPoker create-Issue directory is operator-owned. After all
+writers to that directory are stopped, and only when the destination is absent,
+the optional move is:
+
+```bash
+state_home="${XDG_STATE_HOME:-$HOME/.local/state}"
+test -d "$state_home/leopoker-create-issue-draft"
+test ! -e "$state_home/create-issue-draft/leopoker"
+mkdir -p "$state_home/create-issue-draft"
+mv "$state_home/leopoker-create-issue-draft" "$state_home/create-issue-draft/leopoker"
+```
+
+After the code-side #2186 cutover is installed, read back the selected LeoPoker
+card/repository binding before consuming the moved state. Do not use the move
+when the destination already contains live state.
+
 ## Ongoing adoption rule
 
 Keep this file limited to currently actionable operator changes. Historical
