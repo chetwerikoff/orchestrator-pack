@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import {
   applyListedJq,
   ghApiJson,
@@ -504,14 +504,15 @@ function routeActionsJobLog(realGh, repo, jobId, cwd) {
   }
   const args = ['api', `repos/${repo.slug}/actions/jobs/${jobId}/logs`];
   if (repo.host) args.unshift('--hostname', repo.host);
-  const result = spawnSync(realGh, args, {
+  const result = runProcessSync({
+    command: realGh,
+    args,
     cwd,
-    encoding: 'utf8',
-    env: { ...process.env, GH_WRAPPER_ACTIVE: '1' },
-    maxBuffer: 50 * 1024 * 1024,
+    inheritParentEnv: true,
+    env: { GH_WRAPPER_ACTIVE: '1' },
   });
-  if (result.status !== 0) {
-    throw new Error(`${REST_ERROR_MARKER}: ${result.stderr?.trim() || result.error?.message || 'Actions job log read failed'}`);
+  if (!result.ok) {
+    throw new Error(`${REST_ERROR_MARKER}: ${result.stderr.trim() || result.error || 'Actions job log read failed'}`);
   }
   return result.stdout;
 }
