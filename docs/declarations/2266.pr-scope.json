@@ -1,0 +1,22 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2266,
+  "declared_paths": [
+    "docs/declarations/2266.pr-scope.json",
+    "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/chatgpt-browser-turn/product-page-selectors.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/browser-gpt-page-probe.ts",
+    "scripts/chatgpt-browser-turn/"
+  ],
+  "source_revision": "d1db65164484ac3ec98082dfb527b1bf1e80010e"
+}
