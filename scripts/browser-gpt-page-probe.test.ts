@@ -646,6 +646,87 @@ test('Issue #2220 recognizes a roleless stream-recovery timeout as a stopped own
   });
 });
 
+test('Issue #2235 recognizes a roleless "Error in message stream" alert as a stopped owned conversation', async () => {
+  const marker = `OPKTURNV1${'ef'.repeat(16)}`;
+  const streamText = 'Error in message stream';
+  const userText = `${marker}\n\nTASK`;
+  const alertWithRetry = new FakeNode('', `${streamText}\nRetry`, `${streamText}Retry`, { role: 'alert' }, 'ASIDE');
+  alertWithRetry.appendChild(new FakeNode('', 'Retry', 'Retry', {}, 'BUTTON'));
+  const alertOnly = new FakeNode('', streamText, streamText, { role: 'alert' }, 'ASIDE');
+
+  for (const alert of [alertWithRetry, alertOnly]) {
+    const ownedSection = new FakeNode('', userText, userText, { 'data-testid': 'conversation-turn-1' }, 'SECTION');
+    ownedSection.appendChild(new FakeNode('user', userText, userText, { 'data-message-id': 'u-owned' }));
+    const withUser = await evaluateExpression(
+      INSPECTION_EXPRESSION,
+      [ownedSection],
+      false,
+      'https://chatgpt.com/c/test',
+      'complete',
+      [alert],
+    );
+    assert.equal(withUser.status, 'ok');
+    assert.equal(withUser.observed_user_nodes, 1);
+    assert.equal(withUser.observed_assistant_nodes, 0);
+    assert.deepEqual(projectExecutionRecoveryInspect(withUser, marker), {
+      cause: 'message_stream_error',
+      owned_user_turn_key: 'conversation-turn-1',
+      candidate_assistant_turn_key: null,
+      retry_control_present: false,
+      generation_in_progress: false,
+    });
+    assert.equal(projectExecutionRecoveryCause(withUser), 'message_stream_error');
+
+    const markerOnlyTurn = new FakeNode('', userText, userText, { 'data-testid': 'conversation-turn-1' }, 'SECTION');
+    const roleless = await evaluateExpression(
+      INSPECTION_EXPRESSION,
+      [markerOnlyTurn],
+      false,
+      'https://chatgpt.com/c/test',
+      'complete',
+      [alert],
+    );
+    assert.equal(roleless.status, 'ok');
+    assert.equal(roleless.observed_message_nodes, 0);
+    assert.equal(projectExecutionRecoveryInspect(roleless, marker)?.cause, 'message_stream_error');
+
+    const generating = await evaluateExpression(
+      INSPECTION_EXPRESSION,
+      [ownedSection],
+      true,
+      'https://chatgpt.com/c/test',
+      'complete',
+      [alert],
+    );
+    assert.equal(projectExecutionRecoveryInspect(generating, marker)?.reason, 'generation_active');
+  }
+
+  const nearMiss = new FakeNode('', `${streamText}.`, `${streamText}.`, { role: 'alert' }, 'ASIDE');
+  const ownedSection = new FakeNode('', userText, userText, { 'data-testid': 'conversation-turn-1' }, 'SECTION');
+  ownedSection.appendChild(new FakeNode('user', userText, userText, { 'data-message-id': 'u-owned' }));
+  const nearMissRaw = await evaluateExpression(
+    INSPECTION_EXPRESSION,
+    [ownedSection],
+    false,
+    'https://chatgpt.com/c/test',
+    'complete',
+    [nearMiss],
+  );
+  assert.equal(projectExecutionRecoveryInspect(nearMissRaw, marker)?.cause, null);
+
+  const later = new FakeNode('', 'later foreign prompt', 'later foreign prompt', { 'data-testid': 'conversation-turn-2' }, 'SECTION');
+  later.appendChild(new FakeNode('user', 'later foreign prompt', 'later foreign prompt'));
+  const laterRaw = await evaluateExpression(
+    INSPECTION_EXPRESSION,
+    [ownedSection, later],
+    false,
+    'https://chatgpt.com/c/test',
+    'complete',
+    [alertOnly],
+  );
+  assert.equal(projectExecutionRecoveryInspect(laterRaw, marker)?.reason, 'later_user_turn');
+});
+
 test('execute-Issue recovery projection fails closed for near matches, stale turns, replies, generation, and ambiguity', async () => {
   const marker = `OPKTURNV1${'cd'.repeat(16)}`;
   const timeoutText = 'Message delivery timed out. Please try again.';

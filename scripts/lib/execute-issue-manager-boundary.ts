@@ -32,6 +32,14 @@ export type ExecuteIssuePhase = typeof EXECUTE_ISSUE_PHASES[number];
 
 type ClassificationClass = 'completed' | 'recoverable' | 'external_pause' | 'contract_defect' | 'conditional';
 
+/** Reserved execute-Issue product causes that enter Product-error recovery (GitHub-first). */
+const GITHUB_FIRST_RECOVERY_CAUSES: ReadonlySet<string> = new Set([
+  'message_delivery_timed_out',
+  'product_network_error',
+  'message_stream_error',
+  'stream_recovery_polling_timed_out',
+]);
+
 export const EXECUTE_ISSUE_TURN_CLASSIFICATION = {
   ok: 'completed',
   input_invalid: 'conditional',
@@ -419,7 +427,7 @@ function classifyTurn(
     case 'recovery_required':
       if (
         turn.scope === 'conversation'
-        && (turn.cause === 'message_delivery_timed_out' || turn.cause === 'product_network_error' || turn.cause === 'stream_recovery_polling_timed_out')
+        && GITHUB_FIRST_RECOVERY_CAUSES.has(String(turn.cause))
       ) {
         return recoverable(
           context,
@@ -489,8 +497,8 @@ function classifyProbe(
         );
       }
       if (
-        (inspect?.cause === 'message_delivery_timed_out' || inspect?.cause === 'product_network_error' || inspect?.cause === 'stream_recovery_polling_timed_out')
-        && inspect.generation_in_progress === false
+        GITHUB_FIRST_RECOVERY_CAUSES.has(String(inspect?.cause))
+        && inspect?.generation_in_progress === false
       ) {
         return recoverable(context, producer, 'execute_github_first_reconciliation', githubFirstAction(context));
       }

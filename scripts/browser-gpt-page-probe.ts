@@ -1316,11 +1316,11 @@ function inspectionExpression(): string {
           const text = typeof section.innerText === 'string' ? section.innerText : '';
           return text.includes('OPKTURNV1');
         });
-        const streamTimeoutVisible = Array.from(document.querySelectorAll(PRODUCT_SELECTOR)).some((surface) => {
-          const text = typeof surface.innerText === 'string' ? surface.innerText : '';
-          return text.replace(/\\s+/g, ' ').trim() === STREAM_TIMEOUT_TEXT;
+        const rolelessBannerVisible = Array.from(document.querySelectorAll(PRODUCT_SELECTOR)).some((surface) => {
+          const text = typeof surface.innerText === 'string' ? surface.innerText.replace(/\\s+/g, ' ').trim() : '';
+          return [STREAM_TIMEOUT_TEXT, STREAM_TEXT].some((banner) => text === banner || text === banner + ' Retry');
         });
-        rolelessRecoveryHint = markerVisible && streamTimeoutVisible;
+        rolelessRecoveryHint = markerVisible && rolelessBannerVisible;
       } catch {
         rolelessRecoveryHint = false;
       }
