@@ -44,6 +44,27 @@ npm run --silent flow-manager-browser-gpt-long-run -- \
   --project-url <configured-project-url>
 ```
 
+## Tooling source
+
+Run Browser-GPT tooling from the trusted pack checkout (the operator's
+`orchestrator-pack` checkout on the default branch), never from a worker
+branch under change. That covers this adapter and launcher, the turn entry, and
+`browser-gpt-page-probe.ts`. Pass the worker worktree as `--cwd`; the child
+runs there, and the chat binding records it as the owning worktree:
+
+```bash
+npm --prefix <pack-checkout> run --silent flow-manager-browser-gpt-long-run -- \
+  ... \
+  --cwd <worker-worktree>
+```
+
+The page probe likewise runs as `<pack-checkout>/scripts/browser-gpt-page-probe.ts`.
+
+The adapter resolves the launcher and turn entry next to itself, so the checkout
+that supplies the adapter supplies the engine. A relative `scripts/...` path run
+inside a worker worktree executes that branch's copy, which may lack current
+engine fixes; it is not the trusted engine.
+
 ## Launcher mechanics
 
 `flow-manager-long-running-child.ts launch` is the sole terminal-envelope writer.

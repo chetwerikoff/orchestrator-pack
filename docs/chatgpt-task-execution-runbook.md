@@ -211,13 +211,20 @@ under the existing Browser-GPT lifecycle and the final chat/GitHub checks below
 must still permit fallback. If any required identity or settlement evidence is
 unavailable, fail closed without a fresh chat.
 
+Every Browser-GPT command in this workflow runs from the trusted pack checkout
+with the worker worktree as `--cwd`
+([Tooling source](flow-manager-long-running-child-runbook.md#tooling-source)).
+
 This section owns the 30-minute live-chat checkpoint and the one additional
 execution timing rule: a 10-minute minimum grace after a confirmed product-error
 continuation send. Neither is a universal Browser-GPT timeout; do not add a
 second monitor, watcher, daemon, polling loop, durable timer, or recovery store.
 The existing fleet alarm (`scripts/fleet/fleet-wake.ts`) also reports ChatGPT
-chats that show a red product-error banner with generation stopped: directly to
-the single manager pane bound to that chat, otherwise to the orchestrator. The
+chats that show a red product-error banner with generation stopped, or that
+stopped without a final reply (no Stop control and no finished-reply actions on
+two ticks about a minute apart), asking for `Доделай задачу и сообщи статус`:
+directly to the single manager pane bound to that chat, otherwise to the
+orchestrator. The
 binding (`scripts/chatgpt-browser-turn/chat-bindings.ts`, one file per
 conversation under `~/.local/state/orchestrator-fleet/chat-bindings/`) is
 written by the turn entry from the launching worktree; without one, the chat's opening Issue URL is

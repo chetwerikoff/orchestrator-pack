@@ -48,6 +48,8 @@ export interface FleetWakeStateStore extends FleetPollingStore {
   clearLastSentSignature(): void;
   readBannerSignature?(): string | null;
   writeBannerSignature?(signature: string): void;
+  readStalledSeen?(): string | null;
+  writeStalledSeen?(urls: string): void;
 }
 
 export class FileFleetWakeStateStore extends FileFleetStateStore implements FleetWakeStateStore {
@@ -87,6 +89,23 @@ export class FileFleetWakeStateStore extends FileFleetStateStore implements Flee
   writeBannerSignature(signature: string): void {
     mkdirSync(this.root, { recursive: true });
     writeFileSync(this.bannerSignaturePath(), `${signature}\n`, 'utf8');
+  }
+
+  private stalledSeenPath(): string {
+    return join(this.root, 'stalled-seen.list');
+  }
+
+  readStalledSeen(): string | null {
+    try {
+      return existsSync(this.stalledSeenPath()) ? readFileSync(this.stalledSeenPath(), 'utf8').trim() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  writeStalledSeen(urls: string): void {
+    mkdirSync(this.root, { recursive: true });
+    writeFileSync(this.stalledSeenPath(), `${urls}\n`, 'utf8');
   }
 }
 
@@ -150,6 +169,13 @@ function isWorkerPane(terminal: FleetTerminal, config: FleetWakeConfig): boolean
   return config.workspaceRe.test(terminal.worktreePath.replaceAll('\\', '/'));
 }
 
+// A worktree may also host plain shell panes; the agent pane is the manager.
+function singleOwner(candidates: readonly FleetTerminal[]): FleetTerminal | undefined {
+  if (candidates.length === 1) return candidates[0];
+  const agents = candidates.filter((terminal) => terminal.agentIdentity);
+  return agents.length === 1 ? agents[0] : undefined;
+}
+
 /**
  * The chat binding written by the turn entry names the launching worktree;
  * without one, fall back to the execution prompt's Issue URL against
@@ -169,7 +195,8 @@ export function bannerOwnerPane(
       const worktree = resolve(terminal.worktreePath).replaceAll('\\', '/');
       return bound === worktree || bound.startsWith(`${worktree}/`);
     });
-    if (owners.length === 1) return owners[0];
+    const owner = singleOwner(owners);
+    if (owner) return owner;
   }
   if (!banner.issue) return undefined;
   const name = new RegExp(`^[a-z][a-z0-9]*-${banner.issue}$`, 'i');
@@ -181,10 +208,13 @@ export function bannerOwnerPane(
       && config.workspaceRe.test(worktree)
       && name.test(basename(worktree));
   });
-  return matches.length === 1 ? matches[0] : undefined;
+  return singleOwner(matches);
 }
 
 export function managerBannerMessage(banner: ChatErrorBanner): string {
+  if (banner.kind === 'stalled') {
+    return `GPT stopped without a final reply in your execution chat ${banner.url}: no Stop control, no error banner, no finished-reply actions for over a minute. Run GitHub-first reconciliation, then send "Доделай задачу и сообщи статус" in this same chat (runbook: Repeated product-error streak - up to two repeats; on the third continuation failure open a fresh chat). Never press Retry.`;
+  }
   return `GPT chat error in your execution chat ${banner.url}: red banner "${banner.text}"${banner.retry ? ' (Retry shown)' : ''}, generation stopped. Run GitHub-first reconciliation, then send "Доделай задачу" in this same chat (runbook: Repeated product-error streak - up to two repeats; on the third continuation failure open a fresh chat). Never press Retry.`;
 }
 
@@ -206,7 +236,7 @@ export function fleetAlarmMessage(
     ? ` ${stopped.length} pane(s) need a step: ${panes} Run your full fleet sweep now (mail, then fleet-sweep) and give every STOPPED/POLLING pane its step this turn. A question a unit typed in its own pane is addressed to you: answer it.`
     : '';
   const bannerText = banners.length > 0
-    ? ` ${banners.length} ChatGPT chat(s) show a red error banner with generation stopped: ${banners.map((banner) => `${banner.url} "${banner.text}"${banner.retry ? ' (Retry shown)' : ''}`).join('; ')}. Tell the manager that owns each chat to run GitHub-first reconciliation and send "Доделай задачу" in that same chat (runbook: Repeated product-error streak - two repeats, a fresh chat on the third continuation failure). Never press Retry.`
+    ? ` ${banners.length} ChatGPT chat(s) need a continuation (generation stopped): ${banners.map((banner) => `${banner.url} "${banner.text}"${banner.retry ? ' (Retry shown)' : ''}`).join('; ')}. Tell the manager that owns each chat to run GitHub-first reconciliation and send "Доделай задачу и сообщи статус" in that same chat (runbook: Repeated product-error streak - two repeats, a fresh chat on the third continuation failure). Never press Retry.`
     : '';
   return `Fleet alarm (${coordinatorState}):${paneText}${bannerText}`;
 }
@@ -269,9 +299,15 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     return { state: 'unreadable', handle: 'fleet-sweep' };
   }
 
-  const banners = config.chatCdpUrl && config.chatScope
+  const observed = config.chatCdpUrl && config.chatScope
     ? await (options.readChatBanners ?? readChatErrorBanners)(config.chatCdpUrl, config.chatScope).catch(() => [])
     : [];
+  // A stalled chat must be seen on two consecutive ticks; page loads and turn
+  // starts briefly show neither Stop nor finished-reply actions.
+  const stalledNow = observed.filter((banner) => banner.kind === 'stalled').map((banner) => banner.url).sort();
+  const stalledBefore = new Set((store.readStalledSeen?.() ?? '').split('\n').filter(Boolean));
+  store.writeStalledSeen?.(stalledNow.join('\n'));
+  const banners = observed.filter((banner) => banner.kind !== 'stalled' || stalledBefore.has(banner.url));
   const direct: Array<readonly [FleetTerminal, ChatErrorBanner]> = [];
   const routed: ChatErrorBanner[] = [];
   for (const banner of banners) {
