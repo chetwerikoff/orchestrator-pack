@@ -23,6 +23,16 @@ export interface ChatErrorBanner {
 
 export const REVIEW_PROMPT_HEADING = '# Browser GPT pack PR review';
 
+export interface ProjectChat {
+  readonly targetId: string;
+  readonly url: string;
+  readonly issue?: number;
+  readonly pull?: number;
+  readonly review?: boolean;
+  readonly generating: boolean;
+  readonly banners: readonly ChatErrorBanner[];
+}
+
 export const DEFAULT_CHAT_CDP_URL = 'http://127.0.0.1:9222';
 
 export interface ChatBannerScope {
@@ -44,7 +54,7 @@ const TARGET_EVAL_TIMEOUT_MS = 3_000;
 const redBannerExpression = (repository: string): string => `(() => {
   const visible = (e) => e.getClientRects().length > 0;
   const rendered = (element) => element.getBoundingClientRect().height > 0;
-  if ([...document.querySelectorAll(${JSON.stringify(STOP_BUTTON_SELECTOR)})].some(rendered)) return [];
+  const generating = [...document.querySelectorAll(${JSON.stringify(STOP_BUTTON_SELECTOR)})].some(rendered);
   const first = document.querySelector('[data-markdown-text-style="user-message"],[data-chatgpt-search-unit-key$=":user"]');
   const issuePrefix = ${JSON.stringify(`github.com/${repository.toLowerCase()}/issues/`)};
   const firstText = ((first && first.innerText) || '').toLowerCase();
@@ -56,6 +66,8 @@ const redBannerExpression = (repository: string): string => `(() => {
   const pullDigits = pullAt < 0 ? '' : (firstText.slice(pullAt + pullPrefix.length).match(/^\\d+/) || [''])[0];
   const pull = pullDigits ? Number(pullDigits) : undefined;
   const review = firstText.includes(${JSON.stringify(REVIEW_PROMPT_HEADING.toLowerCase())});
+  const chat = (rows) => ({ issue, pull, review, generating, rows });
+  if (generating) return chat([]);
   const red = (c) => {
     let m = c.match(/oklab\\(\\s*[\\d.]+%?\\s+([-\\d.]+)\\s+([-\\d.]+)/);
     if (m) return Number(m[1]) > 0.1;
@@ -70,45 +82,44 @@ const redBannerExpression = (repository: string): string => `(() => {
       kind: 'error_banner',
       text: (e.innerText || '').split('\\n')[0].trim().slice(0, 160),
       retry: [...e.querySelectorAll('button')].some((b) => /^retry$/i.test((b.innerText || b.getAttribute('aria-label') || '').trim())),
-      issue,
-      pull,
-      review,
     }));
-  if (alerts.length > 0) return alerts;
+  if (alerts.length > 0) return chat(alerts);
   const lastTurn = [...document.querySelectorAll(${JSON.stringify(CONVERSATION_TURN_SECTION_SELECTOR)})].filter(rendered).at(-1);
-  if (!lastTurn) return [];
+  if (!lastTurn) return chat([]);
   if (!lastTurn.querySelector(${JSON.stringify(ASSISTANT_TURN_ACTION_SELECTOR)})) {
-    return [{ kind: 'stalled', text: ${JSON.stringify(STALLED_CHAT_TEXT)}, retry: false, issue, pull, review }];
+    return chat([{ kind: 'stalled', text: ${JSON.stringify(STALLED_CHAT_TEXT)}, retry: false }]);
   }
   const reply = [...lastTurn.querySelectorAll(${JSON.stringify(`[data-markdown-text-style="${ASSISTANT_MESSAGE_STYLE}"]`)})].at(-1);
-  if (reply && (reply.innerText || '').trim()) return [];
-  return [{ kind: 'stalled', text: ${JSON.stringify(EMPTY_REPLY_CHAT_TEXT)}, retry: false, issue, pull, review }];
+  if (reply && (reply.innerText || '').trim()) return chat([]);
+  return chat([{ kind: 'stalled', text: ${JSON.stringify(EMPTY_REPLY_CHAT_TEXT)}, retry: false }]);
 })()`;
 
 interface CdpTarget {
+  readonly id?: string;
   readonly type?: string;
   readonly url?: string;
   readonly webSocketDebuggerUrl?: string;
 }
 
-type BannerRow = { kind: ChatAttentionKind; text: string; retry: boolean; issue?: number; pull?: number; review?: boolean };
+type BannerRow = { kind: ChatAttentionKind; text: string; retry: boolean };
+type ChatRow = { issue?: number; pull?: number; review?: boolean; generating?: boolean; rows?: unknown };
 
-function evaluateTarget(wsUrl: string, expression: string): Promise<BannerRow[]> {
+function evaluateTarget(wsUrl: string, expression: string): Promise<ChatRow | undefined> {
   return new Promise((resolvePromise) => {
     let settled = false;
     let socket: WebSocket;
-    const finish = (value: BannerRow[]) => {
+    const finish = (value: ChatRow | undefined) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       try { socket.close(); } catch { /* already closed */ }
       resolvePromise(value);
     };
-    const timer = setTimeout(() => finish([]), TARGET_EVAL_TIMEOUT_MS);
+    const timer = setTimeout(() => finish(undefined), TARGET_EVAL_TIMEOUT_MS);
     try {
       socket = new WebSocket(wsUrl);
     } catch {
-      finish([]);
+      finish(undefined);
       return;
     }
     socket.onopen = () => socket.send(JSON.stringify({
@@ -121,19 +132,17 @@ function evaluateTarget(wsUrl: string, expression: string): Promise<BannerRow[]>
         const data = JSON.parse(String(event.data)) as { id?: number; result?: { result?: { value?: unknown } } };
         if (data.id !== 1) return;
         const value = data.result?.result?.value;
-        finish(Array.isArray(value)
-          ? value.filter((row) => row && typeof row.text === 'string' && (row.kind === 'error_banner' || row.kind === 'stalled'))
-          : []);
+        finish(value && typeof value === 'object' ? value as ChatRow : undefined);
       } catch {
-        finish([]);
+        finish(undefined);
       }
     };
-    socket.onerror = () => finish([]);
-    socket.onclose = () => finish([]);
+    socket.onerror = () => finish(undefined);
+    socket.onclose = () => finish(undefined);
   });
 }
 
-export async function readChatErrorBanners(cdpUrl: string, scope: ChatBannerScope): Promise<ChatErrorBanner[]> {
+export async function readProjectChats(cdpUrl: string, scope: ChatBannerScope): Promise<ProjectChat[]> {
   const prefix = projectConversationPrefix(scope.projectUrl);
   const expression = redBannerExpression(scope.repository);
   let targets: CdpTarget[];
@@ -147,22 +156,50 @@ export async function readChatErrorBanners(cdpUrl: string, scope: ChatBannerScop
     return [];
   }
   const conversations = targets.filter((target) => target.type === 'page'
+    && typeof target.id === 'string'
     && typeof target.url === 'string'
     && target.url.startsWith(prefix)
     && typeof target.webSocketDebuggerUrl === 'string');
-  const banners: ChatErrorBanner[] = [];
+  const chats: ProjectChat[] = [];
   for (const target of conversations) {
-    for (const row of await evaluateTarget(target.webSocketDebuggerUrl!, expression)) {
-      banners.push({
-        kind: row.kind,
-        url: target.url!.split(/[?#]/)[0]!,
-        text: row.text,
-        retry: Boolean(row.retry),
-        ...(Number.isSafeInteger(row.issue) && row.issue! > 0 ? { issue: row.issue } : {}),
-        ...(Number.isSafeInteger(row.pull) && row.pull! > 0 ? { pull: row.pull } : {}),
-        ...(row.review === true ? { review: true } : {}),
-      });
-    }
+    const observed = await evaluateTarget(target.webSocketDebuggerUrl!, expression);
+    if (!observed) continue;
+    const url = target.url!.split(/[?#]/)[0]!;
+    const task = {
+      ...(Number.isSafeInteger(observed.issue) && observed.issue! > 0 ? { issue: observed.issue } : {}),
+      ...(Number.isSafeInteger(observed.pull) && observed.pull! > 0 ? { pull: observed.pull } : {}),
+      ...(observed.review === true ? { review: true } : {}),
+    };
+    const rows = Array.isArray(observed.rows) ? observed.rows as BannerRow[] : [];
+    chats.push({
+      targetId: target.id!,
+      url,
+      ...task,
+      generating: observed.generating === true,
+      banners: rows
+        .filter((row) => row && typeof row.text === 'string' && (row.kind === 'error_banner' || row.kind === 'stalled'))
+        .map((row) => ({ kind: row.kind, url, text: row.text, retry: Boolean(row.retry), ...task })),
+    });
   }
-  return banners;
+  return chats;
+}
+
+// Conversation ids start with their creation time in hex seconds; a chat that
+// is still local (`local-chatgpt:`) has not been saved yet and is the newest.
+export function conversationCreatedAt(url: string): number {
+  const id = url.split('/c/')[1] ?? '';
+  if (id.startsWith('local-chatgpt:')) return Number.POSITIVE_INFINITY;
+  const seconds = Number.parseInt(id.slice(0, 8), 16);
+  return Number.isFinite(seconds) ? seconds : 0;
+}
+
+export async function closeChatTarget(cdpUrl: string, targetId: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${cdpUrl.replace(/\/+$/, '')}/json/close/${encodeURIComponent(targetId)}`, {
+      signal: AbortSignal.timeout(TARGET_LIST_TIMEOUT_MS),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }

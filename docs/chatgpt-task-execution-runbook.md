@@ -231,7 +231,10 @@ binding (`scripts/chatgpt-browser-turn/chat-bindings.ts`, one file per
 conversation under `~/.local/state/orchestrator-fleet/chat-bindings/`) is
 written by the turn entry from the launching worktree; without one, the chat's opening Issue URL is
 matched to a workspace ending in `-<Issue>`. The binding is routing data only
-and carries no send, retry, or completion authority. The alarm is
+and carries no send, retry, or completion authority. When a task moves to a
+fresh chat, only its newest chat is current: earlier chats of the same owner
+pane (else the same Issue or PR) raise no alarm, and fleet-wake closes their
+tabs unless GPT is still generating there. The alarm is otherwise
 notification-only, and the continuation still follows this section.
 
 For every submitted execution turn:
