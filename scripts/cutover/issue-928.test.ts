@@ -1805,12 +1805,14 @@ describe('Issue 1422 first-time activation', () => {
 
     const previousPath = process.env.PATH;
     const previousStateRoot = process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+    const previousXdgStateHome = process.env.XDG_STATE_HOME;
     const previousRuntimeAdapter = process.env.OPK_RUNTIME_ADAPTER;
     const previousRuntimeCli = process.env.OPK_RUNTIME_CLI_COMMAND;
     const previousProcessCensusToggle = activationCordonTestState.disableGreenfieldProcessCensus;
     const user = os.userInfo();
     vi.spyOn(os, 'userInfo').mockReturnValue({ ...user, homedir: homeDir });
     process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ''}`;
+    delete process.env.XDG_STATE_HOME;
     delete process.env.OPK_RUNTIME_ADAPTER;
     process.env.OPK_RUNTIME_CLI_COMMAND = runtimeCli;
     delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
@@ -1850,6 +1852,8 @@ describe('Issue 1422 first-time activation', () => {
       else process.env.PATH = previousPath;
       if (previousStateRoot === undefined) delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
       else process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = previousStateRoot;
+      if (previousXdgStateHome === undefined) delete process.env.XDG_STATE_HOME;
+      else process.env.XDG_STATE_HOME = previousXdgStateHome;
       if (previousRuntimeAdapter === undefined) delete process.env.OPK_RUNTIME_ADAPTER;
       else process.env.OPK_RUNTIME_ADAPTER = previousRuntimeAdapter;
       if (previousRuntimeCli === undefined) delete process.env.OPK_RUNTIME_CLI_COMMAND;

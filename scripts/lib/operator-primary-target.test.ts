@@ -23,6 +23,7 @@ import {
   type OperatorPrimarySyncActionResult,
   withCurrentOperatorPrimaryTarget,
 } from './operator-primary-target.ts';
+import { canonicalReviewStateRoot, resolveCanonicalReviewDirectory } from './canonical-review-directory.ts';
 
 const selectedCard = vi.hoisted(() => ({ repository: 'chetwerikoff/orchestrator-pack' }));
 vi.mock('./target-context.ts', () => ({
@@ -147,6 +148,38 @@ describe('operator-primary binding authority', () => {
     expect(result).toEqual({ ok: false, actionEntered: false, reason: 'assignment_untrusted' });
     expect(entered).toBe(0);
     expect(adapter.resolveAssignmentWorker).not.toHaveBeenCalled();
+  });
+
+  it('requires project selection and binds canonical review state to the selected repository', () => {
+    const { root } = fixture();
+    const original = {
+      HOME: process.env.HOME,
+      OPK_PROJECT_ID: process.env.OPK_PROJECT_ID,
+      OPK_CREATE_ISSUE_DRAFT_STATE_ROOT: process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT,
+      VITEST: process.env.VITEST,
+    };
+    try {
+      process.env.HOME = root;
+      delete process.env.OPK_PROJECT_ID;
+      delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      delete process.env.VITEST;
+      expect(() => canonicalReviewStateRoot()).toThrow('create_issue_project_selection_required');
+
+      process.env.OPK_PROJECT_ID = 'orchestrator-pack';
+      const canonical = resolveCanonicalReviewDirectory({ taskIdentity: 'issue:2186' });
+      expect(canonical.directory).toBe(path.join(root, '.local', 'state', 'create-issue-draft', 'orchestrator-pack', '.review', '2186'));
+      selectedCard.repository = 'chetwerikoff/other';
+      expect(() => resolveCanonicalReviewDirectory({ taskIdentity: 'issue:2186' }))
+        .toThrow('project_state_binding_mismatch');
+
+      process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = path.join(root, '.local', 'state', 'create-issue-draft');
+      expect(() => canonicalReviewStateRoot()).toThrow('create_issue_state_root_override_untrusted');
+    } finally {
+      for (const [key, value] of Object.entries(original)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   it('binds exactly one current local assignment and persists only logical identity', async () => {
