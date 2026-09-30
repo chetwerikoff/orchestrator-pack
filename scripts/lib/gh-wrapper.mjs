@@ -28,6 +28,9 @@ function formatStdout(result, parsed, route) {
   if (route?.id === 'pr-diff-name-only') {
     return `${result.join('\n')}\n`;
   }
+  if (route?.id === 'run-view-log-failed' || route?.id === 'actions-job-log') {
+    return result.endsWith('\n') ? result : `${result}\n`;
+  }
 
   if (parsed.jq && (
     parsed.jq === '.baseRefName'
