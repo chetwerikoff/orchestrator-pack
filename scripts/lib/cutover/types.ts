@@ -24,6 +24,8 @@ export interface SnapshotRecord {
   storeId: CutoverStoreId;
   snapshotPath: string;
   snapshotDigest: string;
+  /** Byte/tree identity of the source before publication; required for opaque stores. */
+  sourceDigest?: string;
   sourceVersion: number;
   writerWatermark: string;
   sourceState: 'present' | 'absent';
