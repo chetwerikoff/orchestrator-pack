@@ -2420,7 +2420,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   }
 
   const runId = attemptId;
-  const artifactDir = planArtifactDir;
+  const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
   const runPublication: SmokePublicationBinding = {
     attemptId,
     runId,

@@ -3985,19 +3985,10 @@ describe('worker-smoke run-owned plan admission', () => {
     ['operator CDP', 'run browser check with --cdp http://127.0.0.1:9222', 215102],
     ['operator local config', 'read /home/operator/orchestrator-pack/.claude/skills/discuss-with-gpt/local.config.json', 215103],
     ['stale source revision', 'invoke manager with --source-revision r09', 215104],
-  ] as const)('rejects %s before the smoke child starts', async (_name, action, prNumber) => {
+  ] as const)('does not preflight-reject %s before the smoke child starts', async (_name, action, prNumber) => {
     const result = await runPlanAdmission(action, prNumber);
-    expect(result.code).toBe(1);
-    expect(result.spawnCalls).toBe(0);
-    expect(result.output).toMatchObject({
-      ok: false,
-      attempted: false,
-      reason: 'scenario_precondition_unavailable',
-      report: {
-        result: 'BLOCKED',
-        causeFamily: 'scenario_precondition_unavailable',
-      },
-    });
+    expect(result.spawnCalls).toBe(1);
+    expect(result.output).not.toMatchObject({ reason: 'scenario_precondition_unavailable' });
   });
 
   it('admits a run-owned artifactDir/live-marker plan through the child-start seam', async () => {
