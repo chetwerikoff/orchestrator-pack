@@ -24,9 +24,12 @@ import {
 } from './fleet-sweep.ts';
 import {
   DEFAULT_CHAT_CDP_URL,
-  readChatErrorBanners,
+  closeChatTarget,
+  conversationCreatedAt,
+  readProjectChats,
   type ChatBannerScope,
   type ChatErrorBanner,
+  type ProjectChat,
 } from './chat-error-banners.ts';
 import { readChatBinding } from '../chatgpt-browser-turn/chat-bindings.ts';
 
@@ -115,7 +118,8 @@ export interface FleetAlarmTickOptions {
   readonly store?: FleetWakeStateStore;
   readonly sleepMs?: (milliseconds: number) => void | Promise<void>;
   readonly log?: (line: string) => void;
-  readonly readChatBanners?: (cdpUrl: string, scope: ChatBannerScope) => Promise<ChatErrorBanner[]>;
+  readonly readChats?: (cdpUrl: string, scope: ChatBannerScope) => Promise<ProjectChat[]>;
+  readonly closeChat?: (cdpUrl: string, targetId: string) => Promise<boolean>;
 }
 
 export type FleetAlarmTickResult =
@@ -202,7 +206,7 @@ export function readPrHeadRef(repository: string, pull: number): string | undefi
  * unambiguous pane is addressed.
  */
 export function bannerOwnerPane(
-  banner: ChatErrorBanner,
+  banner: Pick<ChatErrorBanner, 'url' | 'issue' | 'pull'>,
   terminals: readonly FleetTerminal[],
   config: FleetWakeConfig,
   readBinding: typeof readChatBinding = readChatBinding,
@@ -236,6 +240,26 @@ export function bannerOwnerPane(
       && name.test(basename(worktree));
   });
   return singleOwner(matches);
+}
+
+/**
+ * A task that moved to a fresh chat leaves its earlier chats behind; only the
+ * newest chat per owner pane (else per Issue, else per PR) stays current.
+ */
+export function supersededChats(
+  chats: readonly ProjectChat[],
+  taskKey: (chat: ProjectChat) => string | undefined,
+): ProjectChat[] {
+  const newest = new Map<string, number>();
+  const keys = chats.map((chat) => taskKey(chat));
+  chats.forEach((chat, index) => {
+    const key = keys[index];
+    if (key) newest.set(key, Math.max(newest.get(key) ?? 0, conversationCreatedAt(chat.url)));
+  });
+  return chats.filter((chat, index) => {
+    const key = keys[index];
+    return key !== undefined && conversationCreatedAt(chat.url) < newest.get(key)!;
+  });
 }
 
 export const REVIEW_CONTINUATION_TEXT = 'Заверши ревью: выдай итоговый вердикт строго в формате из первого сообщения (NO_FINDINGS или JSON с findings). Ничего не исправляй и не меняй код.';
@@ -332,9 +356,21 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     return { state: 'unreadable', handle: 'fleet-sweep' };
   }
 
-  const observed = config.chatCdpUrl && config.chatScope
-    ? await (options.readChatBanners ?? readChatErrorBanners)(config.chatCdpUrl, config.chatScope).catch(() => [])
+  const chats = config.chatCdpUrl && config.chatScope
+    ? await (options.readChats ?? readProjectChats)(config.chatCdpUrl, config.chatScope).catch(() => [])
     : [];
+  const superseded = new Set(supersededChats(chats, (chat) => {
+    const owner = bannerOwnerPane(chat, terminals, config);
+    if (owner) return `pane ${owner.handle}`;
+    if (chat.issue) return `issue ${chat.issue}`;
+    return chat.pull ? `pull ${chat.pull}` : undefined;
+  }));
+  for (const chat of superseded) {
+    if (chat.generating) continue;
+    const closed = await (options.closeChat ?? closeChatTarget)(config.chatCdpUrl!, chat.targetId);
+    log(`${closed ? 'closed' : 'close failed for'} superseded chat ${chat.url}`);
+  }
+  const observed = chats.filter((chat) => !superseded.has(chat)).flatMap((chat) => chat.banners);
   // A stalled chat must be seen on two consecutive ticks; page loads and turn
   // starts briefly show neither Stop nor finished-reply actions.
   const stalledNow = observed.filter((banner) => banner.kind === 'stalled').map((banner) => banner.url).sort();

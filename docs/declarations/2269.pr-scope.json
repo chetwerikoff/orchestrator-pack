@@ -1,0 +1,22 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2269,
+  "declared_paths": [
+    "docs/chatgpt-task-execution-runbook.md",
+    "docs/declarations/2269.pr-scope.json",
+    "scripts/fleet/chat-error-banners.ts",
+    "scripts/fleet/fleet-wake.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/chatgpt-task-execution-runbook.md",
+    "docs/declarations/",
+    "scripts/fleet/"
+  ],
+  "source_revision": "82b823561049e9420606397b15f244f9d3d9c133"
+}
