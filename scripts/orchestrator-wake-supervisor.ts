@@ -92,8 +92,10 @@ async function main(): Promise<void> {
   const [command = 'help', ...argv] = process.argv.slice(2);
   const args = parse(argv);
   if (command === 'status') {
-    const resolved = targetOptions(args);
-    const status = readSupervisorStatus({ stateDir: resolved.stateDir });
+    const stateDir = args.project
+      ? targetOptions(args).stateDir
+      : path.resolve(required(args, 'state-dir'));
+    const status = readSupervisorStatus({ stateDir });
     process.stdout.write(`${JSON.stringify({ status })}\n`);
     process.exitCode = isSchedulerOperational(status) ? 0 : 1;
     return;
