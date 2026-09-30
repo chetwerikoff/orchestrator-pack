@@ -316,7 +316,7 @@ describe('Issue #2186 pack migration roster', () => {
     expect([...byId.values()].some((store) => store.sourcePath === path.join(discussRoot, 'old-draft'))).toBe(true);
     expect([...byId.values()].some((store) => store.sourcePath === path.join(discussRoot, 'cdp-9222-owner.json'))).toBe(false);
     expect([...byId.values()].some((store) => store.sourcePath === path.join(discussRoot, 'leopoker'))).toBe(false);
-    expect(withPackProjectStateMigration(request, 'leopoker')).toBe(request;
+    expect(withPackProjectStateMigration(request, 'leopoker')).toBe(request);
   });
 
   it('uses HOME-based create/discuss owners even when the wake root is under XDG_STATE_HOME', () => {
