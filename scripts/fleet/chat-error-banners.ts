@@ -1,4 +1,15 @@
+import {
+  ASSISTANT_TURN_ACTION_SELECTOR,
+  CONVERSATION_TURN_SECTION_SELECTOR,
+  STOP_BUTTON_SELECTOR,
+} from '../chatgpt-browser-turn/product-page-selectors.ts';
+
+export type ChatAttentionKind = 'error_banner' | 'stalled';
+
+export const STALLED_CHAT_TEXT = 'GPT stopped without a final reply';
+
 export interface ChatErrorBanner {
+  readonly kind: ChatAttentionKind;
   readonly url: string;
   readonly text: string;
   readonly retry: boolean;
@@ -21,8 +32,11 @@ const TARGET_LIST_TIMEOUT_MS = 3_000;
 const TARGET_EVAL_TIMEOUT_MS = 3_000;
 
 // Read-only: the expression never clicks, types, or presses Retry.
+// A chat needs attention when generation is not running and either a red
+// product-error alert is shown or the last turn lacks the finished-reply actions.
 const redBannerExpression = (repository: string): string => `(() => {
-  if (document.querySelector('[data-testid="stop-button"]')) return [];
+  const visible = (e) => e.getClientRects().length > 0;
+  if (document.querySelector(${JSON.stringify(STOP_BUTTON_SELECTOR)})) return [];
   const first = document.querySelector('[data-markdown-text-style="user-message"],[data-chatgpt-search-unit-key$=":user"]');
   const issuePrefix = ${JSON.stringify(`github.com/${repository.toLowerCase()}/issues/`)};
   const firstText = ((first && first.innerText) || '').toLowerCase();
@@ -37,13 +51,18 @@ const redBannerExpression = (repository: string): string => `(() => {
     m = c.match(/rgba?\\(\\s*(\\d+)[,\\s]+(\\d+)[,\\s]+(\\d+)/);
     return !!m && m[1] - m[2] > 60 && m[1] - m[3] > 60;
   };
-  return [...document.querySelectorAll('main [role="alert"]')]
-    .filter((e) => e.getClientRects().length > 0 && red(getComputedStyle(e).borderTopColor))
+  const alerts = [...document.querySelectorAll('main [role="alert"]')]
+    .filter((e) => visible(e) && red(getComputedStyle(e).borderTopColor))
     .map((e) => ({
+      kind: 'error_banner',
       text: (e.innerText || '').split('\\n')[0].trim().slice(0, 160),
       retry: [...e.querySelectorAll('button')].some((b) => /^retry$/i.test((b.innerText || b.getAttribute('aria-label') || '').trim())),
       issue,
     }));
+  if (alerts.length > 0) return alerts;
+  const lastTurn = [...document.querySelectorAll(${JSON.stringify(CONVERSATION_TURN_SECTION_SELECTOR)})].at(-1);
+  if (!lastTurn || lastTurn.querySelector(${JSON.stringify(ASSISTANT_TURN_ACTION_SELECTOR)})) return [];
+  return [{ kind: 'stalled', text: ${JSON.stringify(STALLED_CHAT_TEXT)}, retry: false, issue }];
 })()`;
 
 interface CdpTarget {
@@ -52,7 +71,7 @@ interface CdpTarget {
   readonly webSocketDebuggerUrl?: string;
 }
 
-type BannerRow = { text: string; retry: boolean; issue?: number };
+type BannerRow = { kind: ChatAttentionKind; text: string; retry: boolean; issue?: number };
 
 function evaluateTarget(wsUrl: string, expression: string): Promise<BannerRow[]> {
   return new Promise((resolvePromise) => {
@@ -82,7 +101,9 @@ function evaluateTarget(wsUrl: string, expression: string): Promise<BannerRow[]>
         const data = JSON.parse(String(event.data)) as { id?: number; result?: { result?: { value?: unknown } } };
         if (data.id !== 1) return;
         const value = data.result?.result?.value;
-        finish(Array.isArray(value) ? value.filter((row) => row && typeof row.text === 'string') : []);
+        finish(Array.isArray(value)
+          ? value.filter((row) => row && typeof row.text === 'string' && (row.kind === 'error_banner' || row.kind === 'stalled'))
+          : []);
       } catch {
         finish([]);
       }
@@ -113,6 +134,7 @@ export async function readChatErrorBanners(cdpUrl: string, scope: ChatBannerScop
   for (const target of conversations) {
     for (const row of await evaluateTarget(target.webSocketDebuggerUrl!, expression)) {
       banners.push({
+        kind: row.kind,
         url: target.url!.split(/[?#]/)[0]!,
         text: row.text,
         retry: Boolean(row.retry),

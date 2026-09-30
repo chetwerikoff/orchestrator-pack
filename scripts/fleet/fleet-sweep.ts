@@ -14,6 +14,8 @@ export interface FleetTerminal {
   readonly handle: string;
   readonly title: string;
   readonly worktreePath: string;
+  // Set by Orca only for panes that run an agent CLI, not for plain shells.
+  readonly agentIdentity?: string;
 }
 
 export interface FleetPaneObservation extends FleetTerminal {
@@ -225,6 +227,7 @@ function terminalCensus(payload: unknown): FleetTerminal[] {
       handle,
       title: typeof item.title === 'string' ? item.title : '',
       worktreePath,
+      ...(typeof item.agentIdentity === 'string' && item.agentIdentity ? { agentIdentity: item.agentIdentity } : {}),
     };
   });
 }
