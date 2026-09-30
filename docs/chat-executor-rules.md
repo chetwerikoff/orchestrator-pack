@@ -215,7 +215,7 @@ If the required evidence is absent, do not demand it as though it exists. Use we
 
 A blocking finding that depends on an impossible or unproven witness must be withdrawn or explicitly adjudicated; it must not generate another implementation round whose only purpose is to manufacture evidence the production path does not supply.
 
-## 8. CI, smoke, and review authority
+## 8. CI, smoke, and review authority stay current-head bound
 
 Required CI conclusions apply only to the exact PR head they evaluated.
 For smoke/CI readiness, the newest existing `pack-worker-smoke-report/v1`
