@@ -344,6 +344,18 @@ function waitForDispatches(file: string, count: number, timeoutMs = 30_000): Pro
 function processEnv(root: string, fixturePath: string, epochPath: string, configPath: string, epochId: string, nonce: string): NodeJS.ProcessEnv {
   const runtimeCli = installOrcaFixture(root);
   const wakeState = path.join(root, 'wake-supervisor');
+  const configHome = path.join(root, 'config');
+  const projectCards = path.join(configHome, 'orchestrator-pack', 'projects');
+  mkdirSync(projectCards, { recursive: true });
+  writeFileSync(path.join(projectCards, 'orchestrator-pack.json'), JSON.stringify({
+    projectId: 'orchestrator-pack',
+    repository: 'chetwerikoff/orchestrator-pack',
+    primaryRoot: process.cwd(),
+    defaultBranch: 'main',
+    orcaWorkspacePattern: '.*',
+    orchestratorTitlePattern: '.*',
+    browserGpt: { projectUrl: 'http://127.0.0.1/' },
+  }));
   ensureProjectStateBinding(wakeState, {
     projectId: 'orchestrator-pack',
     repository: 'chetwerikoff/orchestrator-pack',
@@ -354,6 +366,7 @@ function processEnv(root: string, fixturePath: string, epochPath: string, config
     OPK_RUNTIME_CLI_COMMAND: runtimeCli,
     OPK_PROCESS_FIXTURE_PATH: fixturePath,
     OPK_PROJECT_ID: 'orchestrator-pack',
+    XDG_CONFIG_HOME: configHome,
     OPK_BASE_DIR: path.join(root, 'opk'),
     OPK_SIDE_PROCESS_STATE_DIR: path.join(root, 'side-state'),
     OPK_WAKE_SUPERVISOR_STATE_DIR: wakeState,

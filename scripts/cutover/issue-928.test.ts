@@ -678,7 +678,7 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
     expect(new FileEpochAuthority(request.paths.epochAuthorityPath).read().currentEpochId).toBe(request.epochId);
     const steps = JSON.parse(readFileSync(request.paths.followupPath, 'utf8')).map((row: any) => row.step);
     expect(steps).toEqual([
-      'committed-registry-reprojected','typescript-supervisor-started','scheduler-owned','machine-local-completion-fsync-confirmed','final-step-timestamp-recorded',
+      'project-state-sources-retired','committed-registry-reprojected','typescript-supervisor-started','scheduler-owned','machine-local-completion-fsync-confirmed','final-step-timestamp-recorded',
     ]);
     expect(steps).not.toContain('final-health-delivery-observed');
     expect(steps).not.toContain('activation-complete');
@@ -1705,6 +1705,8 @@ describe('Issue 1422 first-time activation', () => {
     issue1422FirstTimeRoots.push(homeDir);
     const user = os.userInfo();
     const userInfoSpy = vi.spyOn(os, 'userInfo').mockReturnValue({ ...user, homedir: homeDir });
+    const previousXdgStateHome = process.env.XDG_STATE_HOME;
+    process.env.XDG_STATE_HOME = path.join(homeDir, '.local', 'state');
     const canonical = canonicalFoundationPaths(request.repoRoot);
     const previousStateRoot = process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
     delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
@@ -1718,6 +1720,8 @@ describe('Issue 1422 first-time activation', () => {
       })).rejects.toThrow(/unobservable/);
     } finally {
       userInfoSpy.mockRestore();
+      if (previousXdgStateHome === undefined) delete process.env.XDG_STATE_HOME;
+      else process.env.XDG_STATE_HOME = previousXdgStateHome;
       if (previousStateRoot === undefined) delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
       else process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = previousStateRoot;
     }

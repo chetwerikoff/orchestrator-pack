@@ -2,17 +2,18 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   appendFileSync,
   closeSync,
+  existsSync,
   fsyncSync,
   linkSync,
   mkdirSync,
   openSync,
+  readFileSync,
+  readdirSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
-import { resolveTargetContext } from '../lib/target-context.ts';
-import { ensureProjectStateBinding } from '../lib/project-state-binding.ts';
 import {
   abandonLatePageHandle,
   boundedResourceCleanup,
@@ -162,12 +163,102 @@ const MESSAGE_NODE_READ_ATTEMPTS = 2;
 const BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR = '[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]';
 /** Post-send wall probes must not block transcript reads or the confirm loop. */
 const POST_SEND_PRODUCT_WALL_PROBE_MS = 2_000;
+const BROWSER_TURN_PROJECT_BINDING_SCHEMA = 'orchestrator-pack/project-state-binding/v1';
+
 function browserTurnRecurrencePath(env: Readonly<NodeJS.ProcessEnv> = process.env): string {
-  const root = join(homedir(), '.local', 'state', 'create-issue-draft');
+  const home = String(env.HOME ?? '').trim() || homedir();
+  const root = join(home, '.local', 'state', 'create-issue-draft');
   const projectId = String(env.OPK_PROJECT_ID ?? '').trim();
   return projectId
     ? join(root, projectId, 'browser-turn-recurrence.jsonl')
     : join(root, 'browser-turn-recurrence.jsonl');
+}
+
+function readBrowserTurnProjectIdentity(
+  env: Readonly<NodeJS.ProcessEnv>,
+  recurrencePath: string,
+): { projectId: string; repository: string } | null {
+  const projectId = String(env.OPK_PROJECT_ID ?? '').trim();
+  if (!projectId) return null;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(projectId)) {
+    throw new Error('browser_turn_project_id_invalid');
+  }
+
+  const home = String(env.HOME ?? '').trim() || homedir();
+  const configHome = String(env.XDG_CONFIG_HOME ?? '').trim() || join(home, '.config');
+  const cardPath = join(configHome, 'orchestrator-pack', 'projects', `${projectId}.json`);
+  let card: unknown;
+  try {
+    card = JSON.parse(readFileSync(cardPath, 'utf8')) as unknown;
+  } catch {
+    throw new Error('browser_turn_project_card_unobservable');
+  }
+  if (!card || typeof card !== 'object' || Array.isArray(card)) {
+    throw new Error('browser_turn_project_card_invalid');
+  }
+  const record = card as Record<string, unknown>;
+  const cardProjectId = typeof record.projectId === 'string' ? record.projectId.trim() : '';
+  const repository = typeof record.repository === 'string' ? record.repository.trim().toLowerCase() : '';
+  if (cardProjectId !== projectId || !/^[^/\s]+\/[^/\s]+$/u.test(repository)) {
+    throw new Error('browser_turn_project_card_invalid');
+  }
+
+  const namespaceRoot = dirname(recurrencePath);
+  const bindingPath = join(namespaceRoot, 'project-binding.json');
+  const expected = {
+    schema: BROWSER_TURN_PROJECT_BINDING_SCHEMA,
+    projectId,
+    repository,
+  };
+  const readBinding = (): typeof expected | null => {
+    if (!existsSync(bindingPath)) return null;
+    let value: unknown;
+    try {
+      value = JSON.parse(readFileSync(bindingPath, 'utf8')) as unknown;
+    } catch {
+      throw new Error('project_state_binding_unreadable');
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error('project_state_binding_invalid');
+    }
+    const binding = value as Record<string, unknown>;
+    if (
+      binding.schema !== expected.schema
+      || binding.projectId !== expected.projectId
+      || String(binding.repository ?? '').trim().toLowerCase() !== expected.repository
+    ) {
+      throw new Error('project_state_binding_mismatch');
+    }
+    return expected;
+  };
+
+  const observed = readBinding();
+  if (observed) return observed;
+  mkdirSync(namespaceRoot, { recursive: true });
+  if (readdirSync(namespaceRoot).some((name) => name !== 'project-binding.json')) {
+    throw new Error('project_state_binding_missing_for_nonempty_namespace');
+  }
+
+  const temporary = join(namespaceRoot, `.project-binding.json.${process.pid}.${randomUUID()}.tmp`);
+  const fd = openSync(temporary, 'wx', 0o600);
+  try {
+    writeFileSync(fd, `${JSON.stringify(expected, null, 2)}\n`);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  try {
+    linkSync(temporary, bindingPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  } finally {
+    unlinkSync(temporary);
+  }
+  const dirFd = openSync(namespaceRoot, 'r');
+  try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
+  const persisted = readBinding();
+  if (!persisted) throw new Error('project_state_binding_missing');
+  return persisted;
 }
 
 export const BROWSER_TURN_RECURRENCE_PATH = browserTurnRecurrencePath();
@@ -1273,19 +1364,9 @@ function appendIncident(
   navigationCount?: number,
 ): boolean {
   try {
-    const selectedProjectId = String(env.OPK_PROJECT_ID ?? '').trim();
-    const target = selectedProjectId
-      ? resolveTargetContext({ projectId: selectedProjectId, env })
-      : null;
     const recurrencePath = browserTurnRecurrencePath(env);
-    if (target) {
-      ensureProjectStateBinding(dirname(recurrencePath), {
-        projectId: target.projectId,
-        repository: target.repository,
-      });
-    } else {
-      mkdirSync(dirname(recurrencePath), { recursive: true });
-    }
+    const target = readBrowserTurnProjectIdentity(env, recurrencePath);
+    if (!target) mkdirSync(dirname(recurrencePath), { recursive: true });
     const issue = String(env.CREATE_ISSUE_DRAFT_ISSUE ?? '').trim();
     const pr = String(env.PACK_REVIEW_PR_NUMBER ?? '').trim();
     const agent = String(env.OPK_AGENT ?? env.PACK_FLOW_MANAGER ?? process.title ?? 'node').trim();
