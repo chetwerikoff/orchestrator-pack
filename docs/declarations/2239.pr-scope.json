@@ -1,0 +1,18 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2239,
+  "declared_paths": [
+    "docs/chatgpt-task-execution-runbook.md"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/chatgpt-task-execution-runbook.md",
+    "docs/declarations/"
+  ],
+  "source_revision": "d889631d98cbb8e8d7af1558e7e6efc74138d5fa"
+}
