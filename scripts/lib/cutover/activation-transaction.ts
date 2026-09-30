@@ -753,12 +753,7 @@ export async function activateCutover(
       throw new Error('greenfield_typescript_supervisor_present');
     }
   }
-  const drain = legacySupervisor
-    ? await (async () => {
-      const drain = await boundary.drainLegacyWriters(request, legacyWriters);
-      return drain;
-    })()
-    : { writerWatermark: foundation.writerWatermark ?? '', drainedAt: new Date().toISOString() };
+  const drain = await boundary.drainLegacyWriters(request, legacyWriters);
   if (!drain.writerWatermark) throw new Error('writer_watermark_missing');
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'writer-drain', { writers: legacyWriters, ...drain });
 
