@@ -511,7 +511,9 @@ function parseSmokeScenarioBlock(block: string): SmokeScenario[] {
       continue;
     }
     if (current && /^\s{2,}/.test(rawLine)) {
-      parseScenarioFieldToken(trimmed, current);
+      for (const part of trimmed.split('|')) {
+        parseScenarioFieldToken(part.trim(), current);
+      }
     }
   }
 
