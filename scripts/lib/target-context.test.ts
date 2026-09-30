@@ -122,7 +122,7 @@ describe('target context', () => {
   it('runs exactly card verification.local commands through sh -lc in the explicit target worktree', () => {
     const target = fixture({ projectId: 'fixture-target', repository: 'example/fixture-target' });
     const commands = [
-      'printf "one:%s\\n" "$PWD" >> verification.log',
+      '  printf "one:%s\\n" "$PWD" >> verification.log  ',
       'printf "two:%s\\n" "$PWD" >> verification.log',
     ];
     writeFileSync(target.cardPath, JSON.stringify({
