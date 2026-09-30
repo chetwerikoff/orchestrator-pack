@@ -19,7 +19,6 @@ import {
 import {
   commitPackReviewTerminal,
   commitPackReviewTriage,
-  commitSmokeOrderingTransition,
   initializePackReviewAuthority,
   observePackReviewHead,
   readPackReviewAuthority,
@@ -855,7 +854,6 @@ interface SeedFinding {
 
 function seedFinalCapContinuation(
   storeRoot: string,
-  smoke: 'passed' | 'failed' = 'passed',
   findingPath: string | null = 'scripts/pack-review-runner.ts',
   extraFindings: SeedFinding[] = [],
 ) {
@@ -910,23 +908,6 @@ function seedFinalCapContinuation(
     prNumber: 1591,
     expectedTransitionSeq: authority.transitionSeq,
     headSha: HEAD_B,
-    options: opts,
-  });
-  authority = commitSmokeOrderingTransition({
-    prNumber: 1591,
-    expectedTransitionSeq: authority.transitionSeq,
-    actor: 'worker-owned',
-    headSha: HEAD_B,
-    status: 'started',
-    options: opts,
-  });
-  authority = commitSmokeOrderingTransition({
-    prNumber: 1591,
-    expectedTransitionSeq: authority.transitionSeq,
-    actor: 'worker-owned',
-    headSha: HEAD_B,
-    status: smoke,
-    ...(smoke === 'failed' ? { failureKind: 'finding' as const } : {}),
     options: opts,
   });
   return { authority, opts, run };
@@ -1030,7 +1011,7 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
   it('does not make legacy worker-owned smoke a final-cap admission gate', async () => {
     const storeRoot = tempRoot();
     harness(storeRoot);
-    seedFinalCapContinuation(storeRoot, 'failed');
+    seedFinalCapContinuation(storeRoot);
 
     const result = await reconcileStalePackReviewRuns({
       repoSlug: REPO,
@@ -1056,7 +1037,7 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
   it('keeps a valid pathless blocker incomplete until semantic resolution evidence exists', async () => {
     const storeRoot = tempRoot();
     harness(storeRoot);
-    seedFinalCapContinuation(storeRoot, 'passed', null);
+    seedFinalCapContinuation(storeRoot, null);
 
     const result = await reconcileStalePackReviewRuns({
       repoSlug: REPO,
@@ -1114,7 +1095,7 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
 
   it('accepts explicit current-head resolution for a pathless blocking finding', () => {
     const storeRoot = tempRoot();
-    const seeded = seedFinalCapContinuation(storeRoot, 'passed', null);
+    const seeded = seedFinalCapContinuation(storeRoot, null);
     let authority = selectNoIntersectionEvidence(storeRoot, seeded.authority, {
       findingCount: 1,
       blockingFindingCount: 1,
@@ -1138,7 +1119,6 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
     const storeRoot = tempRoot();
     const seeded = seedFinalCapContinuation(
       storeRoot,
-      'passed',
       'scripts/pack-review-runner.ts',
       [{ title: 'informational note', severity: 'warning', filePath: 'docs/orchestration-runbook.md' }],
     );
@@ -1163,7 +1143,7 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
 
   it('does not make legacy worker smoke a final-cap gate', () => {
     const storeRoot = tempRoot();
-    const seeded = seedFinalCapContinuation(storeRoot, 'failed');
+    const seeded = seedFinalCapContinuation(storeRoot);
     const authority = selectNoIntersectionEvidence(storeRoot, seeded.authority);
     expect(() => commitPackReviewTriage({
       prNumber: 1591,
