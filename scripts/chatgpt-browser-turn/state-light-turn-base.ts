@@ -11,6 +11,8 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
+import { resolveTargetContext } from '../lib/target-context.ts';
+import { ensureProjectStateBinding } from '../lib/project-state-binding.mjs';
 import {
   abandonLatePageHandle,
   boundedResourceCleanup,
@@ -1266,12 +1268,24 @@ function appendIncident(
   navigationCount?: number,
 ): boolean {
   try {
-    mkdirSync(dirname(BROWSER_TURN_RECURRENCE_PATH), { recursive: true });
+    const selectedProjectId = String(env.OPK_PROJECT_ID ?? '').trim();
+    const target = selectedProjectId
+      ? resolveTargetContext({ projectId: selectedProjectId, env })
+      : null;
+    if (target) {
+      ensureProjectStateBinding(dirname(BROWSER_TURN_RECURRENCE_PATH), {
+        projectId: target.projectId,
+        repository: target.repository,
+      });
+    } else {
+      mkdirSync(dirname(BROWSER_TURN_RECURRENCE_PATH), { recursive: true });
+    }
     const issue = String(env.CREATE_ISSUE_DRAFT_ISSUE ?? '').trim();
     const pr = String(env.PACK_REVIEW_PR_NUMBER ?? '').trim();
     const agent = String(env.OPK_AGENT ?? env.PACK_FLOW_MANAGER ?? process.title ?? 'node').trim();
     appendFileSync(BROWSER_TURN_RECURRENCE_PATH, `${JSON.stringify({
       timestamp: new Date().toISOString(),
+      ...(target ? { projectId: target.projectId, repository: target.repository } : {}),
       ...(issue ? { issue } : {}),
       ...(pr ? { pr } : {}),
       surface: 'browser-gpt-helper',
