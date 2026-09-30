@@ -138,8 +138,10 @@ const DIAGNOSTIC_HEAD_CHARS = 300;
 export const MAX_LOCAL_READ_WAIT_MS = 5_000;
 /** Long existing conversations can need well over 30 s to reach domcontentloaded. */
 const EXISTING_CONVERSATION_NAVIGATION_TIMEOUT_MS = 120_000;
-const EXISTING_GENERATION_READS = 3;
-const EXISTING_GENERATION_READ_INTERVAL_MS = 700;
+const EXISTING_GENERATION_RESUME_WINDOW_MS = 25_000;
+const EXISTING_GENERATION_MAX_WAIT_MS = 10 * 60_000;
+const EXISTING_GENERATION_READ_INTERVAL_MS = 1_000;
+const EXISTING_GENERATION_IDLE_READS = 2;
 export const COMPOSER_READINESS_WAIT_MS = 12_000;
 /** Minimum insertion allowance for a one-line payload. */
 export const COMPOSER_INSERTION_WAIT_MS = 3_000;
@@ -1318,19 +1320,36 @@ export function isPostSendTargetCrash(error: unknown): boolean {
 }
 
 /**
- * ChatGPT resumes a still-running reply shortly after the page loads, so the
- * Stop control is sampled over a short window rather than read once.
+ * After a load ChatGPT may take ~20 s to resume a still-running reply or to
+ * start stream-recovery polling, and then shows Stop until that ends. Watch the
+ * resume window; when Stop appears, wait (bounded) for it to go away instead of
+ * giving up, so the continuation is sent once the page is idle again.
  */
-async function existingConversationGenerating(page: any, deadlineMs: number): Promise<boolean> {
-  for (let read = 0; read < EXISTING_GENERATION_READS; read += 1) {
+async function waitForExistingGeneration(
+  page: any,
+  deadlineMs: number,
+): Promise<'idle' | 'settled' | 'busy'> {
+  const startedAt = Date.now();
+  const waitUntil = Math.min(startedAt + EXISTING_GENERATION_MAX_WAIT_MS, deadlineMs);
+  let sawStop = false;
+  let idleReads = 0;
+  for (let read = 0; ; read += 1) {
     if (read > 0) {
-      if (deadlineMs - Date.now() <= EXISTING_GENERATION_READ_INTERVAL_MS + MAX_LOCAL_READ_WAIT_MS * 2) return false;
+      if (waitUntil - Date.now() <= EXISTING_GENERATION_READ_INTERVAL_MS + MAX_LOCAL_READ_WAIT_MS * 2) {
+        return sawStop && idleReads === 0 ? 'busy' : sawStop ? 'settled' : 'idle';
+      }
       await sleep(page, EXISTING_GENERATION_READ_INTERVAL_MS);
     }
-    if (Date.now() >= deadlineMs) return false;
-    if (await locatorCount(page.locator(STOP_BUTTON_SELECTOR), deadlineMs) > 0) return true;
+    if (Date.now() >= deadlineMs) return sawStop && idleReads === 0 ? 'busy' : sawStop ? 'settled' : 'idle';
+    if (await locatorCount(page.locator(STOP_BUTTON_SELECTOR), deadlineMs) > 0) {
+      sawStop = true;
+      idleReads = 0;
+      continue;
+    }
+    idleReads += 1;
+    if (sawStop && idleReads >= EXISTING_GENERATION_IDLE_READS) return 'settled';
+    if (!sawStop && Date.now() - startedAt >= EXISTING_GENERATION_RESUME_WINDOW_MS) return 'idle';
   }
-  return false;
 }
 
 async function locatorCount(
@@ -2921,7 +2940,12 @@ async function runTurn(
 
       const baselineFailure = await captureBaseline();
       if (baselineFailure) return baselineFailure;
-      if (await existingConversationGenerating(page, invocationDeadlineMs)) {
+      const existingGeneration = await waitForExistingGeneration(page, invocationDeadlineMs);
+      if (existingGeneration === 'settled') {
+        const settledBaselineFailure = await captureBaseline();
+        if (settledBaselineFailure) return settledBaselineFailure;
+      }
+      if (existingGeneration === 'busy') {
         incident('invocation_blocker', 'existing_generation_active', 'return_local_error');
         return {
           page,
