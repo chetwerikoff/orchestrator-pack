@@ -266,7 +266,7 @@ an existing worker/fixer correction may be followed by an explicit smoke run.
 Once a PASS is on the PR, it remains sufficient on later heads subject to
 current-head CI.
 
-## Report and readiness semantics
+## Report and control-plane semantics
 
 Readiness selects the newest existing `pack-worker-smoke-report/v1`
 **PASS** comment on the same PR at **any report head**, regardless of
