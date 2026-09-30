@@ -55,6 +55,36 @@ function action(argv: readonly string[]) {
 }
 
 describe('create-Issue manager boundary', () => {
+  it('retains legacy manager helpers only as non-acceptance compatibility after Issue #2256 cutover', () => {
+    const boundary = readFileSync(join(repoRoot, 'scripts/lib/create-issue-manager-boundary.ts'), 'utf8');
+    const actions = readFileSync(join(repoRoot, 'scripts/lib/create-issue-next-action.ts'), 'utf8');
+    for (const source of [boundary, actions]) {
+      expect(source).toContain('NOT create-Issue review-completion or');
+      expect(source).toContain('per-round author dispositions');
+      expect(source).toContain('Historical cleanup of unreachable producers is deliberately deferred');
+    }
+    // Preserve the existing execute-Issue and sender compatibility contracts:
+    expect(CREATE_ISSUE_NEXT_ACTION_KINDS).toContain('execute-github-first-read-only');
+    expect(CREATE_ISSUE_MANAGER_ENTRYPOINTS).toContain('flow-manager-browser-gpt-long-run.ts:main');
+  });
+
+  it('documents Issue #2256 published-comment acceptance and real brief text in the active owners', () => {
+    const skill = readFileSync(join(repoRoot, '.cursor/skills/create-issue-draft/SKILL.md'), 'utf8');
+    const tiering = readFileSync(join(repoRoot, 'docs/tiering.md'), 'utf8');
+    const carrier = readFileSync(join(repoRoot, '.cursor/rules/flow-manager-browser-turn-monitoring.mdc'), 'utf8');
+    const authorPrompt = readFileSync(join(repoRoot, 'docs/browser-gpt-turn-runbook.md'), 'utf8');
+    expect(skill).toContain('**every required round**');
+    expect(skill).toContain('without awaiting its envelope');
+    expect(skill).toContain('single permitted post-terminal correction');
+    expect(skill).toContain('one required Claude architectural-lens');
+    expect(tiering).toContain('No T3 competitive stage');
+    expect(carrier).toContain('Already-published review');
+    expect(carrier).toContain('not create-Issue label/review authority');
+    expect(authorPrompt).toContain('<BRIEF_TEXT>');
+    expect(authorPrompt).not.toContain('<BRIEF_REFERENCE>');
+    expect(authorPrompt).toContain('never pass a local path');
+  });
+
   it('maps the four outcomes to one JSON object and exit codes 0/3/4/5', () => {
     const fixtures = [
       { expected: 0, value: createIssueTerminalResult({ ok: true, cause: 'completed' }) },
