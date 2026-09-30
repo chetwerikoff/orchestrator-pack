@@ -11,7 +11,7 @@ import {
 } from './lib/worker-assignment-store.ts';
 import { withCrashRecoverableFileLock } from './pr2-foundation/journal-lock.ts';
 import { resolveTargetContext } from './lib/target-context.ts';
-import { assertProjectStateBinding } from './lib/project-state-binding.mjs';
+import { assertProjectStateBinding } from './lib/project-state-binding.ts';
 import { resolveWakeSupervisorStateRoot } from './pr2-foundation/wake-supervisor-state-root.ts';
 import {
   buildWorkerReportRecordKey,
