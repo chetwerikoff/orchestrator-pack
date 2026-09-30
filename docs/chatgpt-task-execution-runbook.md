@@ -224,7 +224,9 @@ chats that show a red product-error banner with generation stopped, or that
 stopped without a final reply (no Stop control, and either no finished-reply
 actions or an empty last reply, on two ticks about a minute apart), asking for `Доделай задачу и сообщи статус`:
 directly to the single manager pane bound to that chat, otherwise to the
-orchestrator. The
+orchestrator. A PR-review chat (prompt heading `# Browser GPT pack PR review`)
+is routed to the pane on the PR head branch and gets a review-completion text
+instead (final verdict in the prompt format, no code changes). The
 binding (`scripts/chatgpt-browser-turn/chat-bindings.ts`, one file per
 conversation under `~/.local/state/orchestrator-fleet/chat-bindings/`) is
 written by the turn entry from the launching worktree; without one, the chat's opening Issue URL is
