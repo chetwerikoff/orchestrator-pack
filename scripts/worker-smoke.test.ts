@@ -2760,7 +2760,7 @@ describe('delegated readiness consumes the production post-smoke owner', () => {
       expect(result.ok).toBe(false);
       expect(result.smokeEvidence).toEqual({ state: 'missing', headSha: HEAD_ONE });
       expect(result.readiness.state).toBe('NOT_READY');
-      expect(result.readiness.failedPredicates).toContain('exact_head_smoke_not_passed');
+      expect(result.readiness.failedPredicates).toContain('pr_smoke_not_passed');
     } finally {
       output.mockRestore();
       if (previousBase === undefined) delete process.env.OPK_BASE_DIR;
@@ -2805,9 +2805,9 @@ describe('delegated readiness consumes the production post-smoke owner', () => {
         expect(result.smokeEvidence.state, testCase.name).toBe(testCase.expected);
         if (testCase.expected === 'missing') {
           expect(code, testCase.name).toBe(1);
-          expect(result.readiness.failedPredicates, testCase.name).toContain('exact_head_smoke_not_passed');
+          expect(result.readiness.failedPredicates, testCase.name).toContain('pr_smoke_not_passed');
         } else {
-          expect(result.readiness.failedPredicates, testCase.name).not.toContain('exact_head_smoke_not_passed');
+          expect(result.readiness.failedPredicates, testCase.name).not.toContain('pr_smoke_not_passed');
         }
       } finally {
         if (previousBase === undefined) delete process.env.OPK_BASE_DIR;

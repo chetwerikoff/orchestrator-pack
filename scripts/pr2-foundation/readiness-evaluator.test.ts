@@ -64,6 +64,20 @@ describe('ReadinessEvaluator', () => {
     expect(result.lifecycle?.state).toBe('ready_for_review');
   });
 
+  it('reuses same-PR smoke PASS from an earlier head, while requiring current-head CI', () => {
+    const base = readyInput();
+    const oldSmoke = { ...base, smoke: { headSha: 'b'.repeat(40), state: 'pass' as const } };
+    expect(evaluateReadiness(oldSmoke).ready).toBe(true);
+    expect(evaluateReadiness({
+      ...oldSmoke,
+      requiredCi: { headSha: head, state: 'pending' },
+    }).failedPredicates).toContain('required_ci_not_green_for_current_head');
+    expect(evaluateReadiness({
+      ...oldSmoke,
+      smoke: { headSha: 'b'.repeat(40), state: 'fail' },
+    }).failedPredicates).toContain('pr_smoke_not_passed');
+  });
+
   it('accepts the landed remote WorkerStatus projection without inventing lifecycle state', () => {
     const input = readyInput('remote');
     expect(input.workerStatuses[0]?.derivedStatus).toBe('unknown');
@@ -170,7 +184,7 @@ describe('ReadinessEvaluator', () => {
     expect(failures).toContain('unresolved_required_review_finding');
     expect(failures).toContain('at_cap_open_findings');
     expect(failures).toContain('at_cap_continuation_required');
-    expect(failures).toContain('exact_head_smoke_not_passed');
+    expect(failures).toContain('pr_smoke_not_passed');
   });
 
   it('does not require optional direct-review finding ids or correlation metadata', () => {
