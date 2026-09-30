@@ -5,9 +5,28 @@ alwaysApply: false
 
 # Flow-manager browser-turn monitoring
 
-This non-always-loaded carrier retains only the two manager-review canon sections
-that `create-issue-draft` selects literally. Portable Browser-GPT manager mechanics
-are owned by the runbook sections for
+The [create-Issue skill](../skills/create-issue-draft/SKILL.md) is the
+create-Issue review/comment/disposition/label authority. Its fixed T1/T2/T3
+review topology, first-line `Read revision: #N rNN` Issue comments and
+one-author-disposition-comment-per-round policy supersede historical stage
+records, stage receipts, finding-ledger tokens, source-slot cardinality receipts,
+competitive stages, and manager nextAction acceptance reconciliation.
+
+The manager starts three independent GPT architectural reviewers in parallel
+for T2/T3, obtains the one required Claude architectural-lens Issue comment for
+T3, and obtains the terminal GPT Issue comment. Already-published review
+comments on in-flight Issues count. A published revision-named Issue review
+comment completes the create-Issue review turn without awaiting the sender
+terminal envelope. If both an Issue comment and chat reply are absent, follow
+only the existing sender's legal recovery/resend contract; missing output is not
+fresh-send authority. Duplicate publication does not block acceptance. Findings
+from every required round require substantive author disposition; only the
+reviewed terminal revision or one author findings/floor correction may be labeled
+`spec-review:accepted` after the existing substantive floor passes. No gate,
+receipt, snapshot, freeze record, or second acceptance mechanism is introduced.
+
+Shared Browser-GPT transport and pack-review turns retain the independent
+procedures in [the one-turn runbook](../../docs/browser-gpt-turn-runbook.md):
 [start-of-shift preflight](../../docs/browser-gpt-turn-runbook.md#start-of-shift-preflight),
 [turn preparation](../../docs/browser-gpt-turn-runbook.md#prepare-one-turn),
 [launch](../../docs/browser-gpt-turn-runbook.md#launch),
@@ -16,13 +35,15 @@ are owned by the runbook sections for
 [incident handling](../../docs/browser-gpt-turn-runbook.md#incident-handling),
 [one-shot diagnosis](../../docs/browser-gpt-turn-runbook.md#one-shot-diagnosis), and
 [handoff/close](../../docs/browser-gpt-turn-runbook.md#shift-handoffclose).
-Long-running child mechanics remain owned by
-[`docs/flow-manager-long-running-child-runbook.md`](../../docs/flow-manager-long-running-child-runbook.md).
+Their invitation markers, admission, ownership, observation, and lawful retry
+rules are transport facts, **not** create-Issue label/review authority.
+The detached child lifecycle remains owned by [flow-manager-long-running-child-runbook.md](../../docs/flow-manager-long-running-child-runbook.md).
 
-Governed create-Issue author-output fields, enums, ownership classification, and
-the author-visible schema fragment are owned only by
-`scripts/lib/create-issue-author-dispositions-schema.ts`. This carrier does not
-mirror that field contract.
+Existing governed author-output producer fields remain owned by
+`scripts/lib/create-issue-author-dispositions-schema.ts`; this carrier
+contains only a pointer, not duplicate schema fields, and the old structured
+transport representation does not gate the published author disposition
+comments or label acceptance.
 
 ## Launch and observation
 
@@ -38,14 +59,15 @@ identity; they must not mint, replace, or reinterpret it. Presence of
 never selects direct mode by itself; direct mode requires its direct-only
 arguments.
 
-For governed create-Issue `direct-publication/v1` reviewer turns, the reviewer
-input is not hand-written. `.cursor/skills/create-issue-draft/SKILL.md` owns the
-ordered manager-review canon declaration and `scripts/lib/manager-review-brief.ts`
-renders the exact **unmarked** transport input. Both ordinary and long-running
-launches carry the bound `--stage` and `--source-slot` in addition to the
-existing repository, Issue, source-revision, reviewer-source, and invocation
-identity. The long-running adapter rejects missing direct-publication context
-before child spawn.
+For a create-Issue GPT review, prepare the role-specific prompt from the live
+Issue and the skill's comment topology. Use the existing long-running adapter's
+ordinary **non-direct** form only for GPT reviewers, with a fresh project chat
+whose URL comes from the selected target card. Do not pass
+direct-publication-only identity/context or terminal-bundle arguments;
+the create-Issue skill owns that exclusion list and
+prompt content. For the required T3 Claude lens, follow the skill's separate
+invocation and comment-publication path; do not route it through this GPT-only
+adapter.
 
 After any non-success, admission remains incomplete until the caller follows
 the runbook's [durable observation recovery](../../docs/browser-gpt-turn-runbook.md#durable-observation-recovery)
