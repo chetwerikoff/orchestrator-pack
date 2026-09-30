@@ -73,7 +73,6 @@ import {
   smokePlanDependencyPaths,
   type WorkerSmokeMainMergeCarryProof,
 } from './lib/worker-smoke-core.ts';
-import { evaluateSmokePlanPreflight } from './lib/smoke-plan-preflight.ts';
 import {
   bindSmokeTerminalHandle,
   cleanupSmokeLifecycle,
@@ -2234,33 +2233,6 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     });
     publishSmokeReport(report, options, preAttempt, publishComment);
     emit({ ok: false, report, attemptId }, options.json);
-    return 1;
-  }
-
-  const planArtifactDir = resolveSmokeRunArtifactDir(options.cwd, attemptId);
-  const planPreflight = evaluateSmokePlanPreflight({
-    issueBody,
-    scenarios: plan.scenarios,
-    artifactDir: planArtifactDir,
-  });
-  if (!planPreflight.ok) {
-    const { violation } = planPreflight;
-    const report = operationalReport('scenario_precondition_unavailable', options, {
-      action: violation.action,
-      expected: violation.expected,
-      observed: violation.observed,
-      structuredHarnessReason: violation.reason,
-      terminalCleanup: 'not_started',
-    });
-    publishSmokeReport(report, options, preAttempt, publishComment);
-    emit({
-      ok: false,
-      attempted: false,
-      reason: 'scenario_precondition_unavailable',
-      report,
-      attemptId,
-      preflight: { reason: violation.reason, scenarioOrdinal: violation.scenarioOrdinal },
-    }, options.json);
     return 1;
   }
 
