@@ -5,6 +5,7 @@ import { sha256Stable, stableStringify } from './stable-stringify.ts';
 import type { FollowupRecord, FoundationAdmissionEvidence, PhaseOneEnvelope, PhaseRecord } from './types.ts';
 
 export const REQUIRED_FOLLOWUP_STEPS = [
+  'project-state-sources-retired',
   'committed-registry-reprojected',
   'typescript-supervisor-started',
   'scheduler-owned',
@@ -208,7 +209,8 @@ export function appendFollowup(pathName: string, epochId: string, step: string, 
   if (existing.length > requestedIndex) throw new Error(`followup_duplicate_step:${step}`);
 
   if (step === 'activation-complete') {
-    if (existing.length < 3) throw new Error('followup_completion_before_scheduler_ownership');
+    const schedulerOwnedIndex = REQUIRED_FOLLOWUP_STEPS.indexOf('scheduler-owned');
+    if (existing.length <= schedulerOwnedIndex) throw new Error('followup_completion_before_scheduler_ownership');
     while (existing.length < requestedIndex) {
       const nextStep = REQUIRED_FOLLOWUP_STEPS[existing.length];
       if (!nextStep || nextStep === 'activation-complete') throw new Error('followup_completion_gap');

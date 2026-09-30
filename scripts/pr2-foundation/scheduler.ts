@@ -650,12 +650,12 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   if (!selectedProjectId) throw new Error('scheduler_project_required');
   const target = resolveTargetContext({ projectId: selectedProjectId, env });
   const projectId = target.projectId;
-  const repository = target.repository;
+  const targetRepository = target.repository;
   const packRoot = target.packRoot;
   const sourceRepoRoot = target.primaryRoot;
   const forwardedRepository = String(env.OPK_REPOSITORY ?? '').trim().toLowerCase();
-  if (forwardedRepository && forwardedRepository !== repository) throw new Error('scheduler_repository_binding_mismatch');
-  assertProjectStateBinding(resolveWakeSupervisorStateRoot({ env, projectId }), { projectId, repository });
+  if (forwardedRepository && forwardedRepository !== targetRepository) throw new Error('scheduler_repository_binding_mismatch');
+  assertProjectStateBinding(resolveWakeSupervisorStateRoot({ env, projectId }), { projectId, repository: targetRepository });
   const epoch = assertSchedulerEpoch(env); const activationLineage = schedulerActivationLineage(epoch);
   const assignmentStorePath = resolveWorkerAssignmentStorePath(projectId, env); const storedAssignments = listCurrentWorkerAssignments(assignmentStorePath);
   let mailWorkers: readonly RuntimeWorker[] = [];
@@ -664,6 +664,8 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
     const deps = createAdapterSubmitDeps(runtime);
     return await runOrchestrationMailReconcileTick(createOrcaMessageSubmitDeps(runtime, deps), { workerRoster: mailWorkers });
   };
+  const repository = await resolveRepositoryFromRepoRoot(sourceRepoRoot);
+  if (repository !== targetRepository) throw new Error('scheduler_repository_binding_mismatch');
   const runSerializedMailTurn = async (): Promise<void> => {
     try {
       await executeOrchestrationMailReconcile();

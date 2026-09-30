@@ -162,15 +162,15 @@ const MESSAGE_NODE_READ_ATTEMPTS = 2;
 const BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR = '[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]';
 /** Post-send wall probes must not block transcript reads or the confirm loop. */
 const POST_SEND_PRODUCT_WALL_PROBE_MS = 2_000;
-const BROWSER_TURN_PROJECT_ID = String(process.env.OPK_PROJECT_ID ?? 'orchestrator-pack').trim() || 'orchestrator-pack';
-export const BROWSER_TURN_RECURRENCE_PATH = join(
-  homedir(),
-  '.local',
-  'state',
-  'create-issue-draft',
-  BROWSER_TURN_PROJECT_ID,
-  'browser-turn-recurrence.jsonl',
-);
+function browserTurnRecurrencePath(env: Readonly<NodeJS.ProcessEnv> = process.env): string {
+  const root = join(homedir(), '.local', 'state', 'create-issue-draft');
+  const projectId = String(env.OPK_PROJECT_ID ?? '').trim();
+  return projectId
+    ? join(root, projectId, 'browser-turn-recurrence.jsonl')
+    : join(root, 'browser-turn-recurrence.jsonl');
+}
+
+export const BROWSER_TURN_RECURRENCE_PATH = browserTurnRecurrencePath();
 
 export interface ParsedTurnArgs {
   readonly options: Map<string, string | true>;
@@ -1277,18 +1277,19 @@ function appendIncident(
     const target = selectedProjectId
       ? resolveTargetContext({ projectId: selectedProjectId, env })
       : null;
+    const recurrencePath = browserTurnRecurrencePath(env);
     if (target) {
-      ensureProjectStateBinding(dirname(BROWSER_TURN_RECURRENCE_PATH), {
+      ensureProjectStateBinding(dirname(recurrencePath), {
         projectId: target.projectId,
         repository: target.repository,
       });
     } else {
-      mkdirSync(dirname(BROWSER_TURN_RECURRENCE_PATH), { recursive: true });
+      mkdirSync(dirname(recurrencePath), { recursive: true });
     }
     const issue = String(env.CREATE_ISSUE_DRAFT_ISSUE ?? '').trim();
     const pr = String(env.PACK_REVIEW_PR_NUMBER ?? '').trim();
     const agent = String(env.OPK_AGENT ?? env.PACK_FLOW_MANAGER ?? process.title ?? 'node').trim();
-    appendFileSync(BROWSER_TURN_RECURRENCE_PATH, `${JSON.stringify({
+    appendFileSync(recurrencePath, `${JSON.stringify({
       timestamp: new Date().toISOString(),
       ...(target ? { projectId: target.projectId, repository: target.repository } : {}),
       ...(issue ? { issue } : {}),

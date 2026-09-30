@@ -10,6 +10,7 @@ import {
   publishCurrentWorkerAssignment,
   resolveWorkerAssignmentStorePath,
 } from '../lib/worker-assignment-store.ts';
+import { ensureProjectStateBinding } from '../lib/project-state-binding.ts';
 import {
   readFleetReconciliationHandoff,
   resolveFleetReconciliationHandoffPath,
@@ -343,11 +344,16 @@ function waitForDispatches(file: string, count: number, timeoutMs = 30_000): Pro
 function processEnv(root: string, fixturePath: string, epochPath: string, configPath: string, epochId: string, nonce: string): NodeJS.ProcessEnv {
   const runtimeCli = installOrcaFixture(root);
   const wakeState = path.join(root, 'wake-supervisor');
+  ensureProjectStateBinding(wakeState, {
+    projectId: 'orchestrator-pack',
+    repository: 'chetwerikoff/orchestrator-pack',
+  });
   return {
     ...process.env,
     PATH: `${root}${path.delimiter}${process.env.PATH ?? ''}`,
     OPK_RUNTIME_CLI_COMMAND: runtimeCli,
     OPK_PROCESS_FIXTURE_PATH: fixturePath,
+    OPK_PROJECT_ID: 'orchestrator-pack',
     OPK_BASE_DIR: path.join(root, 'opk'),
     OPK_SIDE_PROCESS_STATE_DIR: path.join(root, 'side-state'),
     OPK_WAKE_SUPERVISOR_STATE_DIR: wakeState,

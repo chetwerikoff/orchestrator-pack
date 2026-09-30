@@ -31,9 +31,11 @@ export function canonicalReviewStateRoot(override?: string): string {
   if (override) return resolve(override);
   const explicit = String(process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT ?? '').trim();
   if (explicit) return resolve(explicit);
-  const projectId = String(process.env.OPK_PROJECT_ID ?? 'orchestrator-pack').trim() || 'orchestrator-pack';
+  const root = resolve(join(process.env.HOME ?? homedir(), '.local', 'state', 'create-issue-draft'));
+  const projectId = String(process.env.OPK_PROJECT_ID ?? '').trim();
+  if (!projectId) return root;
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(projectId)) throw new Error('create_issue_project_id_invalid');
-  return resolve(join(process.env.HOME ?? homedir(), '.local', 'state', 'create-issue-draft', projectId));
+  return resolve(join(root, projectId));
 }
 
 export function resolveCanonicalReviewDirectory(

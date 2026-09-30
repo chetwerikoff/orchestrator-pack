@@ -348,7 +348,9 @@ function assertGreenfieldAbsence(
   if (writers.length !== 0) throw new Error('greenfield_legacy_writer_present');
   const legacyCandidates = findLegacySupervisorIdentities(request.oldInstalledRevisionRoot);
   if (legacyCandidates.length !== 0) throw new Error('greenfield_legacy_supervisor_present');
-  const typescriptCandidates = findTypeScriptSupervisorIdentities();
+  const typescriptCandidates = findTypeScriptSupervisorIdentities({
+    projectId: request.projectId?.trim() || 'orchestrator-pack',
+  });
   if (typescriptCandidates.length !== 0) throw new Error('greenfield_typescript_supervisor_present');
   return {
     writerWatermark: sha256Stable({
@@ -415,6 +417,7 @@ async function proveFoundationAdoption(request: ActivationRequest): Promise<Foun
       observedGreenfield = observeGreenfieldFoundationObservation({
         repoRoot: request.repoRoot,
         paths: canonical,
+        projectId: request.projectId?.trim() || 'orchestrator-pack',
       });
     } catch {
       throw new Error('foundation_evidence_observation_mismatch:greenfield_inputs');
@@ -754,7 +757,9 @@ export async function activateCutover(
       throw new Error('greenfield_typescript_supervisor_present');
     }
   }
-  const drain = await boundary.drainLegacyWriters(request, legacyWriters);
+  const drain = greenfield
+    ? { writerWatermark: foundation.writerWatermark ?? '' }
+    : await boundary.drainLegacyWriters(request, legacyWriters);
   if (!drain.writerWatermark) throw new Error('writer_watermark_missing');
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'writer-drain', { writers: legacyWriters, ...drain });
 

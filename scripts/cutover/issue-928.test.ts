@@ -665,7 +665,7 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
       'commitAt','epochId','hostId','importDigests','installedCommitSha','nonce','preCommitLogDigest','registryHash','repoRoot','snapshotDigests',
     ].sort());
     expect(JSON.parse(readFileSync(request.paths.followupPath, 'utf8')).map((row: any) => row.step)).toEqual([
-      'committed-registry-reprojected','typescript-supervisor-started','scheduler-owned','machine-local-completion-fsync-confirmed','final-step-timestamp-recorded','final-health-delivery-observed','activation-complete',
+      'project-state-sources-retired','committed-registry-reprojected','typescript-supervisor-started','scheduler-owned','machine-local-completion-fsync-confirmed','final-step-timestamp-recorded','final-health-delivery-observed','activation-complete',
     ]);
     await expect(recoverCommittedCutover(request, recoveryBoundary())).resolves.toMatchObject({ result: 'forward-repair-ready', supervisorPid: 43210, childGeneration: 1 });
     expect(() => provePreImportRollbackSafe(request)).toThrow(/forward_only/);
