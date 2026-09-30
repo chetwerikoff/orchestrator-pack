@@ -3,6 +3,8 @@ import { homedir } from 'node:os';
 import { resolveTargetContext } from './target-context.ts';
 import { ensureProjectStateBinding } from './project-state-binding.ts';
 import { join, resolve } from 'node:path';
+import { resolveWakeSupervisorStateRoot } from '../pr2-foundation/wake-supervisor-state-root.ts';
+import { legacyBarrierActive } from './cutover/activation-cordon.ts';
 
 const STAGE_COMPLETENESS_RECEIPT_SCHEMA = 'stage-completeness-receipt/v1';
 
@@ -38,6 +40,9 @@ export function canonicalReviewStateRoot(override?: string): string {
   if (!projectId) throw new Error('create_issue_project_selection_required');
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(projectId)) throw new Error('create_issue_project_id_invalid');
   const target = resolveTargetContext({ projectId, env: process.env });
+  if (legacyBarrierActive(join(resolveWakeSupervisorStateRoot({ env: process.env, projectId: target.projectId }), 'supervisor'))) {
+    throw new Error('legacy_writer_barrier_active');
+  }
   const root = resolve(join(process.env.HOME ?? homedir(), '.local', 'state', 'create-issue-draft', target.projectId));
   if (fixtureRoot && resolve(fixtureRoot) !== root) {
     throw new Error('create_issue_state_root_override_untrusted');

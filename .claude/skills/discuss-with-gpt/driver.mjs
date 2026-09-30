@@ -44,6 +44,7 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { resolveDiscussWithGptConfig } from './config.mjs';
 import { isCdpReachable, verifyCdpProfile } from './verify-cdp-owner.mjs';
+import { legacyBarrierActive } from '../../../scripts/lib/cutover/activation-cordon.ts';
 
 const require = createRequire(import.meta.url);
 function loadChromium() {
@@ -91,6 +92,15 @@ const stamp = new Date().toISOString().replace(/[:.]/g, '-');
 let sha = '', promptText = '';
 const DISCUSS_BINDING_SCHEMA = 'orchestrator-pack/project-state-binding/v1';
 let namespaceTrusted = false;
+function assertDiscussWriterOpen() {
+  const home = String(process.env.HOME ?? '').trim() || homedir();
+  const stateBase = String(process.env.XDG_STATE_HOME ?? '').trim()
+    || String(process.env.LOCALAPPDATA ?? '').trim()
+    || join(home, '.local', 'state');
+  const root = String(process.env.OPK_WAKE_SUPERVISOR_STATE_DIR ?? '').trim()
+    || join(stateBase, 'orchestrator-pack-wake-supervisor', projectId);
+  if (legacyBarrierActive(join(root, 'supervisor'))) throw new Error('legacy_writer_barrier_active');
+}
 function assertDiscussProjectBinding() {
   const root = join(homedir(), '.local/state/discuss-with-gpt', projectId);
   const file = join(root, 'project-binding.json');
@@ -98,6 +108,7 @@ function assertDiscussProjectBinding() {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(projectId) || !/^[^/\s]+\/[^/\s]+$/u.test(repository)) {
     throw new Error('discuss_project_binding_invalid');
   }
+  assertDiscussWriterOpen();
   if (!existsSync(file)) {
     mkdirSync(root, { recursive: true });
     if (readdirSync(root).some((name) => name !== 'project-binding.json')) {
@@ -125,6 +136,7 @@ function recordFile(state, { reply = '', validation = '', url = '', note = '', p
   if (!namespaceTrusted) throw new Error('discuss_project_binding_untrusted');
   assertDiscussProjectBinding();
   const path = join(dir, `${stamp}-${PASS_ID.slice(0, 8)}-${state}.md`);
+  assertDiscussWriterOpen();
   mkdirSync(dir, { recursive: true });
   writeFileSync(path,
     `# pass ${PASS_ID}\nstate: ${state}\nurl: ${url}\ndraft: ${draftPath}\n` +
@@ -462,6 +474,12 @@ END-OF-DRAFT TOKEN (echo as "SPEC_RECEIVED: ..."): ${END_NONCE}`;
   await closeAll();
   process.exit(validation === 'ok' ? 0 : 7);
 } catch (e) {  // (#2) unexpected exception → durable driver_error record, never a bare stack trace
+  if (e?.message === 'legacy_writer_barrier_active') {
+    console.error('LEGACY_WRITER_BARRIER_ACTIVE');
+    console.log('STATE=blocked');
+    await closeAll();
+    process.exit(12);
+  }
   const rec = recordFile('driver_error',
     { note: String((e && e.stack) || e).slice(0, 2000), url: page ? page.url() : '' });
   console.log('DRIVER_ERROR ' + ((e && e.message) || e));

@@ -23,6 +23,9 @@ import {
   quarantineUnsupportedHistoricalSmokeRuns,
   smokeRunCwdFromArgv,
 } from './worker-smoke-bounded-create.ts';
+import { assertProjectStateBinding } from './project-state-binding.ts';
+import { resolveTargetContext } from './target-context.ts';
+import { resolveWakeSupervisorStateRoot } from '../pr2-foundation/wake-supervisor-state-root.ts';
 
 export const WORKER_SMOKE_RECEIPT_SCHEMA = 'worker-smoke-receipt/v1';
 export const WORKER_SMOKE_RUN_FINAL_SCHEMA = 'worker-smoke-run-final/v1';
@@ -372,8 +375,12 @@ export function recordCloseReceipt(input: {
 
 function receiptRoot(): string {
   const projectId = String(process.env.OPK_PROJECT_ID ?? 'orchestrator-pack').trim() || 'orchestrator-pack';
-  return process.env.WORKER_SMOKE_RECEIPT_ROOT
-    ?? join(homedir(), '.local', 'state', 'orchestrator-pack-wake-supervisor', projectId, 'worker-smoke-receipts');
+  const stateRoot = resolveWakeSupervisorStateRoot({ projectId });
+  if (process.env.OPK_VITEST_HARNESS !== '1') {
+    const target = resolveTargetContext({ projectId, env: process.env });
+    assertProjectStateBinding(stateRoot, { projectId: target.projectId, repository: target.repository });
+  }
+  return process.env.WORKER_SMOKE_RECEIPT_ROOT ?? join(stateRoot, 'worker-smoke-receipts');
 }
 
 function receiptKey(prNumber: number, headSha: string): string {

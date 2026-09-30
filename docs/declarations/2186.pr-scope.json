@@ -4,6 +4,7 @@
   "declared_paths": [
     ".claude/skills/discuss-with-gpt/config.mjs",
     ".claude/skills/discuss-with-gpt/driver.mjs",
+    ".cursor/skills/create-issue-draft/SKILL.md",
     ".cursor/skills/discuss-with-gpt/SKILL.md",
     "docs/migration_notes.md",
     "docs/pr-session-binding-cache.mjs",
@@ -25,6 +26,7 @@
     "scripts/lib/operator-primary-target.ts",
     "scripts/lib/orchestrator-side-process-supervisor.ts",
     "scripts/lib/project-state-binding.ts",
+    "scripts/lib/target-context.test.ts",
     "scripts/lib/worker-assignment-store.ts",
     "scripts/lib/worker-smoke-receipt.ts",
     "scripts/lib/worker-status-store.mjs",
@@ -77,5 +79,5 @@
     "scripts/pr2-foundation/",
     "scripts/toolchain/create-issue-authoring-contract.test.ts"
   ],
-  "source_revision": "d96c0e8893e6cc7bf92087fa2c5daa5cc51d9f34"
+  "source_revision": "6cf81fba51a35cf88ec58808f44886c3ca82bf47"
 }

@@ -14,6 +14,8 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
+import { resolveWakeSupervisorStateRoot } from '../pr2-foundation/wake-supervisor-state-root.ts';
+import { legacyBarrierActive } from '../lib/cutover/activation-cordon.ts';
 import {
   abandonLatePageHandle,
   boundedResourceCleanup,
@@ -1372,6 +1374,10 @@ function appendIncident(
 ): boolean {
   try {
     const recurrencePath = browserTurnRecurrencePath(env);
+    const projectId = String(env.OPK_PROJECT_ID ?? '').trim() || 'orchestrator-pack';
+    if (legacyBarrierActive(join(resolveWakeSupervisorStateRoot({ env, projectId }), 'supervisor'))) {
+      throw new Error('legacy_writer_barrier_active');
+    }
     const target = readBrowserTurnProjectIdentity(env, recurrencePath);
     if (!target) mkdirSync(dirname(recurrencePath), { recursive: true });
     const issue = String(env.CREATE_ISSUE_DRAFT_ISSUE ?? '').trim();

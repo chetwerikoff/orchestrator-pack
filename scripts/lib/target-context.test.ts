@@ -5,6 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runProcess, runProcessSync } from '../kernel/subprocess.ts';
+import { resolvePackWorkerReportRequest, type ReportDeps } from '../pack-worker-report.ts';
+import { resolveWakeSupervisorStateRoot } from '../pr2-foundation/wake-supervisor-state-root.ts';
+import { publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath } from './worker-assignment-store.ts';
+import { ensureProjectStateBinding } from './project-state-binding.ts';
+import { readWorkerSmokeReceipt } from './worker-smoke-receipt.ts';
+import { resolveCanonicalReviewDirectory } from './canonical-review-directory.ts';
 import {
   TargetContextError,
   TargetVerificationError,
@@ -480,5 +486,129 @@ describe('target context', () => {
     const leo = resolveTargetContext({ projectId: 'leopoker', env });
     expect(pack.repository).not.toBe(leo.repository);
     expect(pack.browserGpt.projectUrl).not.toBe(leo.browserGpt.projectUrl);
+  });
+
+  it('binds automatic worker reports to the selected project repository but reads the PR head from its worktree', async () => {
+    const target = fixture();
+    const env = {
+      ...target.env,
+      OPK_PROJECT_ID: 'orchestrator-pack',
+      OPK_BASE_DIR: target.root,
+      XDG_STATE_HOME: join(target.root, 'state'),
+    };
+    const stateRoot = resolveWakeSupervisorStateRoot({ env, projectId: 'orchestrator-pack' });
+    ensureProjectStateBinding(stateRoot, { projectId: 'orchestrator-pack', repository: target.card.repository });
+    const assignmentStore = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
+    const assignment = await publishCurrentWorkerAssignment({
+      file: assignmentStore,
+      repository: target.card.repository,
+      issueNumber: 2186,
+      taskId: 'task-report-2186',
+      kind: 'remote',
+      provider: 'browser-gpt',
+      bindingKey: 'remote-report-2186',
+      role: 'worker',
+    });
+    if (!assignment.ok) throw new Error(assignment.reason);
+    const worktree = join(target.root, 'implementation-worktree');
+    mkdirSync(worktree, { recursive: true });
+    git(worktree, 'init');
+    git(worktree, 'remote', 'add', 'origin', `https://github.com/${target.card.repository}.git`);
+    const calls: string[] = [];
+    const run: NonNullable<ReportDeps['run']> = async (command, args, cwd) => {
+      calls.push(`${command} ${args.join(' ')} @ ${cwd}`);
+      if (command === 'git' && args.join(' ') === 'rev-parse --show-toplevel') {
+        return { ok: true, stdout: `${worktree}\n` };
+      }
+      if (command === 'git' && args.join(' ') === 'rev-parse HEAD') {
+        return { ok: true, stdout: `${'a'.repeat(40)}\n` };
+      }
+      if (command === 'gh' && args[0] === 'pr') {
+        return { ok: true, stdout: JSON.stringify({
+          number: 2234,
+          state: 'OPEN',
+          headRefOid: 'a'.repeat(40),
+          body: 'Closes #2186',
+        }) };
+      }
+      return { ok: false, stdout: '', stderr: 'unexpected child' };
+    };
+    const resolved = await resolvePackWorkerReportRequest(
+      ['ready_for_review', '--repo-root', worktree],
+      env,
+      { run },
+    );
+    expect(resolved).toMatchObject({
+      kind: 'ok',
+      value: {
+        repository: target.card.repository,
+        repoRoot: worktree,
+        issueNumber: 2186,
+        prNumber: 2234,
+        headSha: 'a'.repeat(40),
+      },
+    });
+    expect(calls).toContain(`gh pr view --json number,state,headRefOid,body @ ${worktree}`);
+    git(worktree, 'remote', 'set-url', 'origin', 'https://github.com/owner/other.git');
+    await expect(resolvePackWorkerReportRequest(
+      ['ready_for_review', '--repo-root', worktree], env, { run },
+    )).resolves.toMatchObject({ kind: 'continue_work', reason: 'worktree_repository_mismatch' });
+  });
+
+  it('refuses smoke receipts after the selected project repository is retargeted', () => {
+    const target = fixture();
+    const env = {
+      ...target.env,
+      OPK_PROJECT_ID: 'orchestrator-pack',
+      XDG_STATE_HOME: join(target.root, 'state'),
+      WORKER_SMOKE_RECEIPT_ROOT: join(target.root, 'receipts'),
+      OPK_VITEST_HARNESS: '',
+    };
+    const stateRoot = resolveWakeSupervisorStateRoot({ env, projectId: 'orchestrator-pack' });
+    ensureProjectStateBinding(stateRoot, { projectId: 'orchestrator-pack', repository: target.card.repository });
+    const keys = ['HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'OPK_PROJECT_ID', 'WORKER_SMOKE_RECEIPT_ROOT', 'OPK_VITEST_HARNESS'] as const;
+    const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    try {
+      for (const key of keys) process.env[key] = env[key] ?? '';
+      expect(readWorkerSmokeReceipt(2234, 'b'.repeat(40))).toBeNull();
+      git(target.primaryRoot, 'remote', 'set-url', 'origin', 'https://github.com/owner/other.git');
+      writeFileSync(target.cardPath, JSON.stringify({ ...target.card, repository: 'owner/other' }), 'utf8');
+      expect(() => readWorkerSmokeReceipt(2234, 'b'.repeat(40)))
+        .toThrow('project_state_binding_mismatch');
+    } finally {
+      for (const key of keys) {
+        const value = previous[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it('blocks create-Issue durable state resolution while the existing project activation barrier is active', () => {
+    const target = fixture();
+    const root = join(target.root, 'state');
+    const env = { HOME: target.root, XDG_STATE_HOME: root, OPK_PROJECT_ID: 'orchestrator-pack' };
+    const supervisorRoot = resolveWakeSupervisorStateRoot({ env, projectId: 'orchestrator-pack' });
+    const barrier = join(supervisorRoot, 'supervisor', 'stopping');
+    mkdirSync(join(supervisorRoot, 'supervisor'), { recursive: true });
+    writeFileSync(barrier, 'cutover in progress\n', 'utf8');
+    const keys = ['HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'OPK_PROJECT_ID', 'OPK_WAKE_SUPERVISOR_STATE_DIR', 'OPK_CREATE_ISSUE_DRAFT_STATE_ROOT'] as const;
+    const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    try {
+      process.env.HOME = target.root;
+      process.env.XDG_CONFIG_HOME = join(target.root, 'config');
+      process.env.XDG_STATE_HOME = root;
+      process.env.OPK_PROJECT_ID = 'orchestrator-pack';
+      delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+      delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      expect(() => resolveCanonicalReviewDirectory({ taskIdentity: 'issue:2186' }))
+        .toThrow('legacy_writer_barrier_active');
+    } finally {
+      for (const key of keys) {
+        const value = previous[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 });
