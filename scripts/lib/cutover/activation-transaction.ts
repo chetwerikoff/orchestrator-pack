@@ -27,7 +27,15 @@ import {
   type LegacyWriterRecord,
 } from './activation-cordon.ts';
 import { buildEpochCommitCore, FileEpochAuthority, mapCutoverStoreDigests } from './activation-epoch-authority.ts';
-import { importSnapshot, snapshotStores } from './activation-import.ts';
+import {
+  assertSnapshotSourceStable,
+  cutoverPathDigest,
+  cutoverPathEmpty,
+  cutoverStoreKind,
+  importSnapshot,
+  retireImportedSource,
+  snapshotStores,
+} from './activation-import.ts';
 import { localHostId, runActivationPlatformPreflight, type PlatformPreflightResult } from './activation-platform-preflight.ts';
 import { projectRegistry } from './activation-registry-projection.ts';
 import { observeSchedulerHealthAndDelivery, type SchedulerHealthDeliveryObservation } from './activation-recovery.ts';
@@ -680,7 +688,24 @@ export async function activateCutover(
 ): Promise<Record<string, unknown>> {
   const preflight = boundary.preflight(request);
   const foundation = await boundary.proveFoundationAdoption(request);
-  if (request.stores.length !== 3 || new Set(request.stores.map((row) => row.id)).size !== 3) throw new Error('store_roster_invalid');
+  const storeIds = new Set(request.stores.map((row) => row.id));
+  if (
+    request.stores.length < 3
+    || storeIds.size !== request.stores.length
+    || !['reconcile', 'reevaluation', 'reportStateSeed'].every((id) => storeIds.has(id))
+  ) throw new Error('store_roster_invalid');
+  const targetPaths = new Set<string>();
+  for (const store of request.stores) {
+    const kind = cutoverStoreKind(store);
+    const sourcePath = path.resolve(store.sourcePath);
+    const targetPath = path.resolve(store.targetPath);
+    if (sourcePath === targetPath || targetPaths.has(targetPath)) throw new Error(`store_layout_invalid:${store.id}`);
+    targetPaths.add(targetPath);
+    if (kind !== 'legacy-json') {
+      if (store.coveredFields.length !== 0) throw new Error(`opaque_store_covered_fields_invalid:${store.id}`);
+      if (!cutoverPathEmpty(targetPath)) throw new Error(`migration_destination_not_empty:${store.id}`);
+    }
+  }
   const { baseRef, closure } = await boundary.resolveBaseAndClosure(request);
   const legacySupervisorPid = request.legacySupervisorPid;
   const greenfield = foundation.activationMode === 'greenfield';
@@ -693,6 +718,8 @@ export async function activateCutover(
 
   const cordon = createCordon({
     path: request.paths.cordonPath,
+    projectId: request.projectId,
+    repository: request.repository,
     epochId: request.epochId,
     expectedOldEpochId: request.expectedOldEpochId,
     hostId: request.hostId,
@@ -751,9 +778,22 @@ export async function activateCutover(
     reenumeratedEmpty: true,
   });
 
+  for (const store of request.stores) {
+    if (cutoverStoreKind(store) === 'legacy-json') continue;
+    const expected = cordon.preImportSourceDigests?.[store.id];
+    if (expected === undefined || cutoverPathDigest(store.sourcePath) !== expected) {
+      throw new Error(`source_changed_after_cordon:${store.id}`);
+    }
+  }
   const snapshots = snapshotStores(request.stores, request.paths.snapshotDir, drain.writerWatermark, {
-    allowMissingSourceIds: greenfield ? request.stores.map((store) => store.id) : [],
+    allowMissingSourceIds: request.stores
+      .filter((store) => greenfield || cutoverStoreKind(store) !== 'legacy-json')
+      .map((store) => store.id),
   });
+  for (const store of request.stores) {
+    const snapshot = snapshots.find((row) => row.storeId === store.id)!;
+    assertSnapshotSourceStable(store, snapshot);
+  }
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'snapshots', snapshots);
 
   const importBoundary = markImportBegun(request.paths.cordonPath);
@@ -764,6 +804,10 @@ export async function activateCutover(
     spec,
     snapshot: snapshots.find((row) => row.storeId === spec.id)!,
   }));
+  for (const store of request.stores) {
+    const snapshot = snapshots.find((row) => row.storeId === store.id)!;
+    assertSnapshotSourceStable(store, snapshot);
+  }
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'imports', imports);
 
   const projection = projectRegistry(request.paths.targetRegistryPath, request.paths.projectedRegistryPath);
@@ -785,6 +829,14 @@ export async function activateCutover(
   authority.commit(request.expectedOldEpochId, core);
   const committed = authority.verify(request.epochId, cordon.nonce);
   verifyPhaseOneDigest(request.paths.phaseOnePath, request.epochId, cordon.nonce, committed.preCommitLogDigest);
+
+  const retiredSources = request.stores.flatMap((store) => {
+    const snapshot = snapshots.find((row) => row.storeId === store.id)!;
+    return retireImportedSource(store, snapshot) ? [store.id] : [];
+  });
+  appendFollowup(request.paths.followupPath, request.epochId, 'project-state-sources-retired', {
+    storeIds: retiredSources,
+  });
 
   const committedProjection = projectRegistry(request.paths.targetRegistryPath, request.paths.projectedRegistryPath);
   if (committedProjection.registryHash !== committed.registryHash) throw new Error('committed_registry_hash_mismatch');
