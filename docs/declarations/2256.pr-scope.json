@@ -1,0 +1,34 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2256,
+  "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    "docs/browser-gpt-turn-runbook.md",
+    "docs/tiering.md",
+    "scripts/lib/create-issue-manager-boundary.test.ts",
+    "scripts/lib/create-issue-manager-boundary.ts",
+    "scripts/lib/create-issue-next-action.ts"
+  ],
+  "denylist": [
+    ".github/workflows/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    "docs/browser-gpt-turn-runbook.md",
+    "docs/declarations/2256.pr-scope.json",
+    "docs/tiering.md",
+    "scripts/flow-manager-authority-contract.test.ts",
+    "scripts/lib/create-issue-manager-boundary.test.ts",
+    "scripts/lib/create-issue-manager-boundary.ts",
+    "scripts/lib/create-issue-next-action.ts"
+  ],
+  "source_revision": "599ecce9b82fffb9dbb7aa55aeee77be0a2299b4"
+}

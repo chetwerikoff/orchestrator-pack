@@ -37,6 +37,7 @@ procedures in [the one-turn runbook](../../docs/browser-gpt-turn-runbook.md):
 [handoff/close](../../docs/browser-gpt-turn-runbook.md#shift-handoffclose).
 Their invitation markers, admission, ownership, observation, and lawful retry
 rules are transport facts, **not** create-Issue label/review authority.
+The detached child lifecycle remains owned by [flow-manager-long-running-child-runbook.md](../../docs/flow-manager-long-running-child-runbook.md).
 
 Existing governed author-output producer fields remain owned by
 `scripts/lib/create-issue-author-dispositions-schema.ts`; this carrier

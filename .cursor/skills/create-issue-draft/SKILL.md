@@ -7,6 +7,8 @@ description: Author or continue GPT-authored orchestrator-pack Issue specificati
 
 The live GitHub Issue is the only task specification and queue entry. This skill owns the create-Issue author, independent reviewer, and manager process. It does not own Browser-GPT transport. Use [the current shared turn runbook](../../../docs/browser-gpt-turn-runbook.md) for its existing sender, observation, and legal recovery contract. Do not alter that sender, add a new gate or receipt, or promote sender envelopes to task-review authority.
 
+The shared transport command `flow-manager-browser-gpt-long-run` emits `browser-turn-result-v1` for sender settlement; both remain transport-only and do not replace a published revision-named Issue comment as create-Issue review authority.
+
 ## Inputs and routing
 
 ### Existing-Issue manager shorthand — Issue #1938

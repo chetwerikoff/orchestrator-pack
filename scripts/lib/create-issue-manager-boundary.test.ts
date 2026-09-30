@@ -58,11 +58,10 @@ describe('create-Issue manager boundary', () => {
   it('retains legacy manager helpers only as non-acceptance compatibility after Issue #2256 cutover', () => {
     const boundary = readFileSync(join(repoRoot, 'scripts/lib/create-issue-manager-boundary.ts'), 'utf8');
     const actions = readFileSync(join(repoRoot, 'scripts/lib/create-issue-next-action.ts'), 'utf8');
-    for (const source of [boundary, actions]) {
-      expect(source).toContain('NOT create-Issue review-completion or');
-      expect(source).toContain('per-round author dispositions');
-      expect(source).toContain('Historical cleanup of unreachable producers is deliberately deferred');
-    }
+    expect(boundary).toContain('NOT create-Issue review-completion or');
+    expect(boundary).toContain('per-round author dispositions');
+    expect(boundary).toContain('Historical cleanup of unreachable producers is deliberately deferred');
+    expect(actions).toContain('not a source of create-Issue review or label authority');
     // Preserve the existing execute-Issue and sender compatibility contracts:
     expect(CREATE_ISSUE_NEXT_ACTION_KINDS).toContain('execute-github-first-read-only');
     expect(CREATE_ISSUE_MANAGER_ENTRYPOINTS).toContain('flow-manager-browser-gpt-long-run.ts:main');

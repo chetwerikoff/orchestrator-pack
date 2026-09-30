@@ -1,15 +1,7 @@
 /**
- * Create-Issue cutover (#2256): these legacy stage-record / nextAction
- * projection helpers remain callable by pre-existing transport and execute-Issue
- * consumers, but their results are NOT create-Issue review-completion or
- * spec-review:accepted authority. For create-Issue, the live Issue's published
- * revision-named reviewer comments, per-round author dispositions, and existing
- * substantive floor govern the already-existing acceptance label.
- *
- * Do not use this boundary to require stage attempts, terminal bundles,
- * receipt inventories, producer reconciliation, or acceptance artifacts.
- * Actual shared-sender admission/observation/retry semantics are unchanged.
- * Historical cleanup of unreachable producers is deliberately deferred.
+ * Issue #2256: retain legacy action schemas for transport and execute consumers;
+ * they are not a source of create-Issue review or label authority. See
+ * create-issue-manager-boundary.ts for the current acceptance boundary.
  */
 export const CREATE_ISSUE_NEXT_ACTION_SCHEMA = 'create-issue-next-action/v1' as const;
 export const CREATE_ISSUE_STALE_ACTION_SCHEMA = 'create-issue-stale-next-action/v1' as const;
