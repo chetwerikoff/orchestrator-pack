@@ -341,20 +341,19 @@ export function importSnapshot(input: {
     return record;
   }
 
-  // After an atomic directory rename but before marker publication, the
-  // complete target may exist. Accept only its exact snapshot-derived digest.
-  const alreadyPublishedDirectory = kind === 'opaque-directory'
-    && !cutoverPathEmpty(input.spec.targetPath)
+  // An atomic opaque publication can finish before its marker. Replay only exact snapshot-derived bytes.
+  const alreadyPublishedOpaque = kind !== 'legacy-json'
+    && existsSync(input.spec.targetPath)
     && cutoverPathDigest(input.spec.targetPath) === importTargetDigest;
-  if (kind !== 'legacy-json' && !alreadyPublishedDirectory && !cutoverPathEmpty(input.spec.targetPath)) {
+  if (kind !== 'legacy-json' && !alreadyPublishedOpaque && !cutoverPathEmpty(input.spec.targetPath)) {
     throw new Error(`import_target_not_empty:${input.spec.id}`);
   }
   if (kind === 'legacy-json') {
     const normalized = normalizedPayload(input.spec, raw);
     writeDurableFile(input.spec.targetPath, `${JSON.stringify(normalized, null, 2)}\n`);
-  } else if (kind === 'opaque-file') {
+  } else if (kind === 'opaque-file' && !alreadyPublishedOpaque) {
     writeDurableFile(input.spec.targetPath, raw);
-  } else if (!alreadyPublishedDirectory) {
+  } else if (kind === 'opaque-directory' && !alreadyPublishedOpaque) {
     restoreDirectory(input.spec.targetPath, parseDirectoryArchive(input.spec, raw), importIdentity);
   }
 
@@ -376,6 +375,45 @@ export function importSnapshot(input: {
   return record;
 }
 
+/** Read-only post-CAS guard: never retire the source on a missing or altered import. */
+export function assertCommittedImportedDestination(
+  spec: CutoverStoreSpec,
+  snapshot: SnapshotRecord,
+  committedDigest: string | undefined,
+): void {
+  const markerPath = `${spec.targetPath}.cutover-import.json`;
+  if (!committedDigest || !existsSync(markerPath)) {
+    throw new Error(`committed_import_marker_missing:${spec.id}`);
+  }
+  let marker: Partial<ImportRecord>;
+  try {
+    marker = JSON.parse(readFileSync(markerPath, 'utf8')) as Partial<ImportRecord>;
+  } catch {
+    throw new Error(`committed_import_marker_invalid:${spec.id}`);
+  }
+  if (
+    marker.storeId !== spec.id
+    || marker.markerPath !== markerPath
+    || marker.snapshotDigest !== snapshot.snapshotDigest
+    || marker.sourceState !== snapshot.sourceState
+    || marker.importTargetDigest !== committedDigest
+    || typeof marker.importIdentity !== 'string'
+    || !marker.importIdentity.startsWith('sha256:')
+  ) {
+    throw new Error(`committed_import_marker_mismatch:${spec.id}`);
+  }
+  if (snapshot.sourceState === 'absent') {
+    if (committedDigest !== 'sha256:absent' || existsSync(spec.targetPath)) {
+      throw new Error(`committed_import_target_mismatch:${spec.id}`);
+    }
+    return;
+  }
+  if (!existsSync(spec.targetPath)) throw new Error(`committed_import_target_missing:${spec.id}`);
+  const digest = cutoverStoreKind(spec) === 'legacy-json'
+    ? sha256Stable(normalizedPayload(spec, readFileSync(spec.targetPath)))
+    : cutoverPathDigest(spec.targetPath);
+  if (digest !== committedDigest) throw new Error(`committed_import_target_mismatch:${spec.id}`);
+}
 export function assertSnapshotSourceStable(spec: CutoverStoreSpec, snapshot: SnapshotRecord): void {
   if (cutoverStoreKind(spec) === 'legacy-json') return;
   const expected = snapshot.sourceState === 'absent' ? 'absent' : snapshot.sourceDigest;

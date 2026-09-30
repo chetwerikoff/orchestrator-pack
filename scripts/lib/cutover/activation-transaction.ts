@@ -29,6 +29,7 @@ import {
 import { buildEpochCommitCore, FileEpochAuthority, mapCutoverStoreDigests } from './activation-epoch-authority.ts';
 import {
   assertSnapshotSourceStable,
+  assertCommittedImportedDestination,
   cutoverPathDigest,
   cutoverPathEmpty,
   cutoverStoreKind,
@@ -718,7 +719,6 @@ export async function activateCutover(
     && Number.isInteger(legacySupervisorPid)
     && legacySupervisorPid > 1;
   const legacySupervisor = legacyClaimed ? boundary.readLegacySupervisor(request) : null;
-  const legacyWriters = legacySupervisor ? boundary.captureLegacyWriters(request) : [];
 
   const cordon = createCordon({
     path: request.paths.cordonPath,
@@ -737,10 +737,10 @@ export async function activateCutover(
   });
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'admission', { preflight, foundation, closure, baseRef });
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'cordon', { writersClosed: true, noRespawn: true, noTypeScriptStart: true });
+  const legacyWriters = boundary.captureLegacyWriters(request);
 
   if (greenfield) {
-    const writers = boundary.captureLegacyWriters(request);
-    if (writers.length !== 0) throw new Error('greenfield_legacy_writer_present');
+    if (legacyWriters.length !== 0) throw new Error('greenfield_legacy_writer_present');
     const selectedProjectId = request.projectId?.trim() || 'orchestrator-pack';
     const legacyCandidates = selectedProjectId === 'orchestrator-pack'
       ? (boundary.findLegacySupervisorIdentities
@@ -767,12 +767,16 @@ export async function activateCutover(
   if (!drain.writerWatermark) throw new Error('writer_watermark_missing');
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'writer-drain', { writers: legacyWriters, ...drain });
 
-  const terminated = legacySupervisor
-    ? await boundary.terminateLegacyProcesses([...legacyWriters.map((row) => row.identity), legacySupervisor])
+  const processesToTerminate = [
+    ...legacyWriters.map((row) => row.identity),
+    ...(legacySupervisor ? [legacySupervisor] : []),
+  ];
+  const terminated = processesToTerminate.length
+    ? await boundary.terminateLegacyProcesses(processesToTerminate)
     : [];
   const survivors = legacySupervisor
     ? boundary.verifyLegacyProcessesGone(request, legacySupervisor)
-    : { supervisorAlive: false, writers: [] };
+    : { supervisorAlive: false, writers: boundary.captureLegacyWriters(request) };
   if (survivors.supervisorAlive || survivors.writers.length !== 0) {
     throw new Error(`legacy_process_survivor:supervisor=${survivors.supervisorAlive};writers=${survivors.writers.map((row) => row.childId).join(',')}`);
   }
@@ -834,13 +838,19 @@ export async function activateCutover(
   authority.commit(request.expectedOldEpochId, core);
   const committed = authority.verify(request.epochId, cordon.nonce);
   verifyPhaseOneDigest(request.paths.phaseOnePath, request.epochId, cordon.nonce, committed.preCommitLogDigest);
+  for (const store of request.stores) {
+    assertCommittedImportedDestination(
+      store,
+      snapshots.find((row) => row.storeId === store.id)!,
+      committed.importDigests[store.id],
+    );
+  }
   publishCommittedProjectNamespaceBindings(request);
 
   for (const store of request.stores) {
     const snapshot = snapshots.find((row) => row.storeId === store.id)!;
     retireImportedSource(store, snapshot);
   }
-
   const committedProjection = projectRegistry(request.paths.targetRegistryPath, request.paths.projectedRegistryPath);
   if (committedProjection.registryHash !== committed.registryHash) throw new Error('committed_registry_hash_mismatch');
   appendFollowup(request.paths.followupPath, request.epochId, 'committed-registry-reprojected', committedProjection);

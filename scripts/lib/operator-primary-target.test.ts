@@ -24,6 +24,13 @@ import {
   withCurrentOperatorPrimaryTarget,
 } from './operator-primary-target.ts';
 
+const selectedCard = vi.hoisted(() => ({ repository: 'chetwerikoff/orchestrator-pack' }));
+vi.mock('./target-context.ts', () => ({
+  resolveTargetContext: ({ projectId }: { projectId: string }) => ({
+    projectId, repository: selectedCard.repository,
+  }),
+}));
+
 const roots: string[] = [];
 
 function fixture() {
@@ -109,6 +116,7 @@ async function boundFixture() {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  selectedCard.repository = 'chetwerikoff/orchestrator-pack';
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -125,6 +133,20 @@ describe('operator-primary binding authority', () => {
     );
     expect(result).toEqual({ ok: false, actionEntered: false, reason: 'binding_absent' });
     expect(calls).toBe(0);
+  });
+
+  it('rejects a retargeted project card before entering the fenced action', async () => {
+    const { file } = await boundFixture();
+    selectedCard.repository = 'chetwerikoff/other';
+    const adapter = runtime();
+    let entered = 0;
+    const result = await withCurrentOperatorPrimaryTarget(
+      { file, adapter, timeoutMs: 250 },
+      () => { entered += 1; return operatorPrimarySyncResult('unexpected'); },
+    );
+    expect(result).toEqual({ ok: false, actionEntered: false, reason: 'assignment_untrusted' });
+    expect(entered).toBe(0);
+    expect(adapter.resolveAssignmentWorker).not.toHaveBeenCalled();
   });
 
   it('binds exactly one current local assignment and persists only logical identity', async () => {

@@ -69,10 +69,18 @@ function fixture() {
   };
 }
 
-async function publish(file: string, taskId: string, bindingKey: string, issueNumber: number) {
+async function publish(
+  file: string,
+  taskId: string,
+  bindingKey: string,
+  issueNumber: number,
+  projectId = 'orchestrator-pack',
+  repository = 'chetwerikoff/orchestrator-pack',
+) {
   const result = await publishCurrentWorkerAssignment({
     file,
-    repository: 'chetwerikoff/orchestrator-pack',
+    projectId,
+    repository,
     issueNumber,
     taskId,
     kind: 'local',
@@ -137,7 +145,7 @@ describe('operator-primary binding CLI', () => {
   it('keeps operator-primary routes isolated across two selected project cards', async () => {
     const { env, file, leoFile } = fixture();
     const pack = await publish(file, 'task-pack', 'dispatch-pack', 2185);
-    const leo = await publish(leoFile, 'task-leo', 'dispatch-leo', 134);
+    const leo = await publish(leoFile, 'task-leo', 'dispatch-leo', 134, 'leopoker', 'chetwerikoff/LeoPoker');
     await runOperatorPrimaryBindingCommand(parseOperatorPrimaryBindingArgs([
       'bind', '--task-id', pack.taskId, '--binding-key', pack.bindingKey, '--operator-attested',
     ]), env);

@@ -12,6 +12,7 @@ import { waitForStartedSupervisor } from '../lib/cutover/activation-transaction.
 import { abandonPreImportCordon } from '../lib/cutover/activation-transaction.ts';
 import { isExecutableLegacyReference } from '../lib/cutover/activation-transaction.ts';
 import {
+  legacyBarrierActive,
   createCordon,
   findLegacySupervisorIdentities,
   findTypeScriptSupervisorIdentities,
@@ -29,6 +30,7 @@ import {
 } from '../lib/cutover/foundation-observation.ts';
 import {
   appendPhaseOne,
+  readPhaseOneDetail,
   foundationEvidenceDigest,
   writeDurableJson,
   verifyFoundationEvidenceDigest,
@@ -36,6 +38,7 @@ import {
 } from '../lib/cutover/activation-evidence.ts';
 import {
   assertSnapshotSourceStable,
+  assertCommittedImportedDestination,
   importSnapshot,
   retireImportedSource,
   snapshotStores,
@@ -228,7 +231,10 @@ function activationFixture(): { request: ActivationRequest; boundary: Activation
     proveFoundationAdoption: () => ({ result: 'foundation-evidence-verified', evidencePath: request.paths.foundationEvidencePath, localHostId: request.hostId, oldInstalledCommitSha: '9'.repeat(40), heartbeatObservedAt: new Date().toISOString(), migrationJournalCount: 1, preflightSanitizerId: 'sha256:test' }),
     resolveBaseAndClosure: () => ({ baseRef: 'post-948-base', closure: { inputTree: 'tree-948', referenceCount: 2 } }),
     readLegacySupervisor: () => identity,
-    captureLegacyWriters: () => [],
+    captureLegacyWriters: () => {
+      if (!legacyBarrierActive(request.paths.supervisorStateDir)) throw new Error('writer_enumeration_before_cordon');
+      return [];
+    },
     drainLegacyWriters: async () => {
       if (!existsSync(request.paths.cordonPath)) throw new Error('cordon_not_first');
       return { writerWatermark: 'drained-test-watermark', drainedAt: new Date().toISOString() };
@@ -397,6 +403,49 @@ describe('Issue #2186 opaque project-state migration', () => {
     expect(readFileSync(path.join(target, 'receipt.json'), 'utf8')).toBe('{"ok":true}\n');
   });
 
+
+  it('replays an opaque JSONL destination written before its import marker', () => {
+    const root = tempRoot();
+    const sourcePath = path.join(root, 'source.jsonl');
+    const targetPath = path.join(root, 'project', 'target.jsonl');
+    const bytes = '{"one":1}\n{"two":2}\n';
+    writeFileSync(sourcePath, bytes);
+    const spec = { id: 'project-browser-turn-recurrence', kind: 'opaque-file' as const,
+      sourcePath, targetPath, coveredFields: [] as const };
+    const [snapshot] = snapshotStores([spec], path.join(root, 'snapshots'), 'writers-quiesced');
+    const input = { epochId: 'epoch-jsonl', nonce: 'nonce-jsonl', spec, snapshot: snapshot! };
+    const first = importSnapshot(input);
+    rmSync(first.markerPath);
+    const replay = importSnapshot(input);
+    expect(replay.importIdentity).toBe(first.importIdentity);
+    expect(readFileSync(targetPath, 'utf8')).toBe(bytes);
+    expect(() => assertCommittedImportedDestination(spec, snapshot!, replay.importTargetDigest)).not.toThrow();
+    rmSync(replay.markerPath);
+    writeFileSync(targetPath, '{"tampered":true}\n');
+    expect(() => importSnapshot(input)).toThrow('import_target_not_empty');
+    expect(existsSync(sourcePath)).toBe(true);
+  });
+
+  it('refuses committed source retirement when an imported destination is missing or altered', () => {
+    const root = tempRoot();
+    const sourcePath = path.join(root, 'flat', 'status.json');
+    const targetPath = path.join(root, 'project', 'status.json');
+    mkdirSync(path.dirname(sourcePath), { recursive: true });
+    writeFileSync(sourcePath, '{"state":"present"}\n');
+    const spec = { id: 'project-worker-status-store', kind: 'opaque-file' as const,
+      sourcePath, targetPath, coveredFields: [] as const };
+    const [snapshot] = snapshotStores([spec], path.join(root, 'snapshots'), 'writers-quiesced');
+    const record = importSnapshot({ epochId: 'epoch-status', nonce: 'nonce-status', spec, snapshot: snapshot! });
+    expect(() => assertCommittedImportedDestination(spec, snapshot!, record.importTargetDigest)).not.toThrow();
+    writeFileSync(targetPath, '{"state":"corrupt"}\n');
+    expect(() => assertCommittedImportedDestination(spec, snapshot!, record.importTargetDigest))
+      .toThrow('committed_import_target_mismatch');
+    expect(existsSync(sourcePath)).toBe(true);
+    rmSync(targetPath);
+    expect(() => assertCommittedImportedDestination(spec, snapshot!, record.importTargetDigest))
+      .toThrow('committed_import_target_missing');
+    expect(existsSync(sourcePath)).toBe(true);
+  });
   it('fails closed on destination conflict and source drift after quiescence snapshot', () => {
     const root = tempRoot();
     const source = path.join(root, 'flat');
@@ -738,6 +787,27 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
     expect(() => provePreImportRollbackSafe(request)).toThrow(/forward_only/);
   });
 
+
+  it('retains an opaque source when committed recovery detects a damaged destination', async () => {
+    const { request, boundary, root } = activationFixture();
+    const sourcePath = path.join(root, 'receipt.jsonl');
+    const targetPath = path.join(root, 'scoped', 'receipt.jsonl');
+    writeFileSync(sourcePath, '{"valid":1}\n');
+    request.stores.push({ id: 'project-receipt', kind: 'opaque-file', sourcePath, targetPath, coveredFields: [] });
+    const interrupted = vi.spyOn(FileEpochAuthority.prototype, 'verify')
+      .mockImplementationOnce(() => { throw new Error('injected_post_cas_interruption'); });
+    try {
+      await expect(activateCutover(request, boundary)).rejects.toThrow('injected_post_cas_interruption');
+    } finally {
+      interrupted.mockRestore();
+    }
+    expect(new FileEpochAuthority(request.paths.epochAuthorityPath).read().currentEpochId).toBe(request.epochId);
+    expect(existsSync(sourcePath)).toBe(true);
+    writeFileSync(targetPath, '{"corrupt":1}\n');
+    await expect(recoverCommittedCutover(request, recoveryBoundary()))
+      .rejects.toThrow('committed_import_target_mismatch');
+    expect(existsSync(sourcePath)).toBe(true);
+  });
   it('does not fabricate final health/delivery evidence when observation fails', async () => {
     const { request, boundary } = activationFixture();
     boundary.observeFinalHealthAndDelivery = async () => { throw new Error('health_delivery_not_observed'); };
@@ -844,6 +914,71 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
     expect(existsSync(survivor.request.paths.snapshotDir)).toBe(false);
   });
 
+  it('cordons before capturing and draining the cutover-launched source writers', async () => {
+    const { request, boundary } = activationFixture();
+    const writer = {
+      childId: 'pr2-scheduler',
+      identity: { pid: 23456, startTicks: '77', cmdline: ['legacy-scheduler-writer'] },
+      sideEffectLockPath: path.join(request.paths.supervisorStateDir, 'pr2-scheduler.side-effect.lock'),
+    };
+    let terminated: Array<{ pid: number; startTicks: string; cmdline: string[] }> = [];
+    boundary.captureLegacyWriters = () => {
+      expect(legacyBarrierActive(request.paths.supervisorStateDir)).toBe(true);
+      return [writer];
+    };
+    boundary.drainLegacyWriters = async (_request, writers) => {
+      expect(writers).toEqual([writer]);
+      expect(existsSync(request.paths.snapshotDir)).toBe(false);
+      return { writerWatermark: 'drained-source-writer', drainedAt: new Date().toISOString() };
+    };
+    boundary.terminateLegacyProcesses = async (identities) => {
+      terminated = identities;
+      return identities.map((identity) => identity.pid);
+    };
+
+    await activateCutover(request, boundary);
+
+    expect(terminated).toContainEqual(writer.identity);
+    const records = JSON.parse(readFileSync(request.paths.phaseOnePath, 'utf8')).records;
+    expect(records.map((row: { step: string }) => row.step).indexOf('writer-drain'))
+      .toBeLessThan(records.map((row: { step: string }) => row.step).indexOf('snapshots'));
+    const cordon = readCordonState(request.paths.cordonPath);
+    const writerDrain = readPhaseOneDetail(
+      request.paths.phaseOnePath, request.epochId, cordon.nonce, 'writer-drain',
+    ) as { writers: unknown[] };
+    expect(writerDrain.writers).toEqual([writer]);
+  });
+
+  it('drains and terminates a standalone source writer when no legacy supervisor remains', async () => {
+    const { request, boundary } = activationFixture();
+    request.legacySupervisorPid = undefined;
+    const writer = {
+      childId: 'pr2-scheduler',
+      identity: { pid: 23457, startTicks: '78', cmdline: ['legacy-scheduler-writer'] },
+      sideEffectLockPath: path.join(request.paths.supervisorStateDir, 'pr2-scheduler.side-effect.lock'),
+    };
+    let writerAlive = true;
+    let terminated: Array<{ pid: number; startTicks: string; cmdline: string[] }> = [];
+    boundary.captureLegacyWriters = () => {
+      expect(legacyBarrierActive(request.paths.supervisorStateDir)).toBe(true);
+      return writerAlive ? [writer] : [];
+    };
+    boundary.drainLegacyWriters = async (_request, writers) => {
+      expect(writers).toEqual([writer]);
+      expect(existsSync(request.paths.snapshotDir)).toBe(false);
+      return { writerWatermark: 'drained-standalone-source-writer', drainedAt: new Date().toISOString() };
+    };
+    boundary.terminateLegacyProcesses = async (identities) => {
+      terminated = identities;
+      writerAlive = false;
+      return identities.map((identity) => identity.pid);
+    };
+
+    await activateCutover(request, boundary);
+
+    expect(terminated).toEqual([writer.identity]);
+  });
+
   it('allows rollback only before import mutation and binds it to the original targets', () => {
     const { request, boundary } = activationFixture();
     const identity = boundary.readLegacySupervisor(request);
@@ -860,6 +995,7 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
     const body = activation.slice(activation.indexOf('export async function activateCutover'));
     const ordered = [
       'const cordon = createCordon(',
+      'const legacyWriters = boundary.captureLegacyWriters(request)',
       'boundary.drainLegacyWriters(request, legacyWriters)',
       'boundary.terminateLegacyProcesses(',
       'snapshotStores(request.stores',

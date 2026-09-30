@@ -11,6 +11,7 @@ import {
 import { appendFollowup, appendPhaseOne, finalizePhaseOne, readPhaseOneDetail, verifyPhaseOneDetails, verifyPhaseOneDigest } from './activation-evidence.ts';
 import {
   assertSnapshotSourceStable,
+  assertCommittedImportedDestination,
   cutoverStoreKind,
   importSnapshot,
   retireImportedSource,
@@ -449,8 +450,15 @@ export async function recoverCommittedCutover(
   }
   assertCommittedContext(request, cordon, core);
   verifyPhaseOneDigest(request.paths.phaseOnePath, request.epochId, cordon.nonce, core.preCommitLogDigest);
-  publishCommittedProjectNamespaceBindings(request);
   const snapshots = recoverySnapshots(request, cordon.nonce);
+  for (const store of request.stores) {
+    assertCommittedImportedDestination(
+      store,
+      snapshots.find((row) => row.storeId === store.id)!,
+      core.importDigests[store.id],
+    );
+  }
+  publishCommittedProjectNamespaceBindings(request);
   for (const store of request.stores) {
     const snapshot = snapshots.find((row) => row.storeId === store.id)!;
     retireImportedSource(store, snapshot);
