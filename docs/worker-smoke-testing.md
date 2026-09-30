@@ -1,12 +1,11 @@
 # Worker smoke testing (Issues #1061, #1138, and #1343)
 
-Workers prove operator-visible behavior with a **head-bound Orca smoke run** before
-`ready_for_review`. CI remains mandatory and separate. Issue #1436 distinguishes the
-implementing worker's smoke from the later independent smoke. Issue #1138 adds progress-aware
-deadlines, durable spawn state, cooperative cancellation, deterministic recovery, and an
-orthogonal lifecycle-cleanliness gate without changing Browser-GPT transport. Issue #1343
-changes readiness evidence from one latest all-covering report to a trusted point-in-time fold of
-canonical reports on one exact PR head.
+Issue #2250 uses the existing supervised **independent** smoke worker after
+pack-review settlement for both ordinary coding-worker PRs and the separate
+manager-controlled Browser-GPT handoff. One successful independent PASS is
+sufficient for that PR even after later commits; required CI stays green on
+the current PR head. Initial FAIL/BLOCKED calls for a substantive worker fix
+and an explicit subsequent smoke execution, never a harness automatic retry.
 
 ## When smoke is required
 
@@ -15,7 +14,7 @@ canonical reports on one exact PR head.
 | No `smoke-test-plan` fence + `smoke-plan-floor` grandfather marker | Smoke not required (legacy queue only) |
 | No `smoke-test-plan` fence on an action-producing Issue without grandfather marker | Smoke required; missing plan blocks handoff |
 | `smoke-test-plan` with `not-applicable: true` + reason | Smoke skipped |
-| `smoke-test-plan` with scenarios | Smoke required for the current PR head |
+| `smoke-test-plan` with scenarios | One successful independent smoke PASS per PR, reusable on later heads |
 
 New action-producing tasks must declare a plan during authoring:
 
@@ -57,99 +56,75 @@ policy.
 
 ## Actor ordering
 
-The two smoke actors are separate. Ordinary local coding workers and
-manager-controlled Browser-GPT implementation intentionally enter the shared
-review/smoke authorities at different points.
-
 ### Ordinary local coding-worker path
 
-**Worker-owned smoke** is the implementing local worker's exact-head gate. It
-runs after implementation and before pack-review, and the worker fixes and
-repeats it until that exact head passes. **Independent smoke** is the separate
-post-review actor and runs only after every tier/cap-governed pack-review
-obligation has settled.
-
-The ordinary local-worker order remains:
+The ordinary worker/orchestrator review-settled handoff, not the scheduler,
+launches the existing supervised local independent smoke worker. Worker-owned
+pre-review smoke is removed; pack-review admission does not depend on smoke.
 
 ```text
 implementation
-  -> worker-owned smoke PASS
+  -> PR created with current-head CI green
   -> pack-review cycle
-  -> review finding: fix + worker-owned smoke PASS + next review cycle
+  -> review finding: existing worker fixes; complete remaining review rounds
   -> review obligations settled
-  -> independent smoke
-  -> independent finding: fix + fresh independent smoke
+  -> existing supervised local independent-smoke worker
+  -> smoke worker checks out PR head and runs Issue-declared scenarios
+  -> PASS comment on PR -> readiness with current-head CI
+  -> first FAIL/BLOCKED -> existing worker/fixer corrects -> explicit smoke execution
   -> completion
 ```
 
-The ordinary worker `ready_for_review` admission therefore still requires
-passing worker-owned smoke for the exact current head.
+A new head after PASS does not require another smoke run; the PASS comment
+remains on that PR. No scheduler start-or-observe reconciler or replacement
+queue, registry, lease, watcher, retry engine, or new worker category is added.
 
 ### Manager-controlled Browser-GPT path
 
 A Browser-GPT implementation owned by an `execute-issue-with-gpt` manager does
-**not** fabricate a local coding worker, `ready_for_review`, or worker-owned
-smoke before review. After the manager proves the live Issue-bound PR/current
-head and required CI green, it directly runs the canonical logical-cap
-pack-review phase described in `docs/chatgpt-task-execution-runbook.md`.
+not fabricate a local coding worker, `ready_for_review`, or worker-owned
+pre-review smoke. The manager runs canonical pack review after current-head
+CI is green. After review settles, its existing separate manager-to-supervisor
+handoff launches the same supervised independent smoke worker.
 
 ```text
 manager-controlled Browser-GPT implementation
   -> current PR/head + required CI green
   -> manager-owned canonical pack-review cycle
-  -> review finding: fresh GPT fixer + strict-descendant head + required CI green
   -> review obligations settled
   -> manager whole-role handoff: next action = independent smoke
   -> supervisor launches local independent-smoke parent
-  -> independent smoke on the exact handed-off/current head
-  -> independent finding: local worker fix + fresh independent smoke
+  -> independent smoke on the checked-out PR head
+  -> PASS comment on PR
+  -> first FAIL/BLOCKED: local worker fix + explicit independent smoke
   -> completion
 ```
 
 There is no synthetic pre-review worker-owned smoke on this path. The
 post-manager local worker is the **independent-smoke parent**, not a retroactive
-coding-worker admission shim: it prepares the exact current worktree and external
-prerequisites, then invokes the existing
-`worker-smoke-run ... --smoke-actor independent` authority.
-
-For logical-round accounting, `worker-smoke-run` admission does not mechanically
-prove that review obligations are settled and does not serialize review against
-independent smoke. The required ordering on this manager-controlled path is owned
-by the manager handoff and supervisor sequencing: the manager hands off only
-after review obligations settle, and the supervisor launches independent smoke
-only from that verified handoff. After that handoff, independent-smoke findings
-are fixed by the local worker and followed by fresh independent smoke; the already
-completed review stage is not reopened.
+coding-worker admission shim; it prepares the current worktree and prerequisites,
+then invokes `worker-smoke-run ... --smoke-actor independent`.
+The manager does not run independent smoke itself and the settled review stage
+is not reopened after a worker fix.
 
 ## Manager projection of durable worker-smoke evidence
 
-For the manager-controlled Browser-GPT path, the durable `pack-worker-smoke-report/v1`
-record returns through the existing continuation to the same manager Dispatch. The manager
-re-reads the exact Issue/PR/head binding and projects the smoke result through the single
-#2078 four-outcome boundary; it does not send `worker_done --outcome failed` and it does not
-reopen a completed pack-review stage. The supervisor-launched local worker owns any fix
-after handoff; the manager remains nonterminal while that owner works.
+For manager-controlled Browser-GPT work, the existing
+`pack-worker-smoke-report/v1` returns through continuation to the same
+manager Dispatch. The supervisor uses the existing local worker as independent
+smoke parent. The manager re-reads the Issue/PR/head binding and projects
+the result through the single #2078 four-outcome boundary; it does not send
+`worker_done --outcome failed` or reopen settled review.
 
-- exact-head PASS projects to `completed` with machine-readable verdict `PASS`;
-- only a proved `scenario_assertion_failed` projects to `completed` with verdict `FAIL`;
-  the supervisor routes it to the existing local worker, which fixes and requests fresh
-  independent smoke on the new exact head; it is not sent to the GPT fixer conversation;
-- stale trusted-body/tier/order or same-head in-progress states may be `recoverable` only
-  with a validated executable read-only reconciliation action;
-- browser/CDP, profile, login, quota, or product-challenge pauses require a closed structured
-  `non-pass-cause`; observed scenario prose is never classification evidence;
-- malformed, missing, contradictory, unsupported, or unknown structured smoke evidence is
-  `contract_defect`.
-
-After coordinator repair of an external pause, the existing smoke parent may make its one
-same-head retry with `--operator-override`; its bounded reason must cite both facts in the
-form `pause-cause=<cause>; repair-evidence=<evidence>`. This consumes the existing retry
-fence only and introduces no retry counter or manager re-run action.
-
-Readiness remains PASS-only, scenario order and stop-on-first-nonpass stay unchanged, and the
-same-head BLOCKED retry fence remains the sole retry authority. The r04 manager-boundary
-change tests result projection with fixtures; it does not add or claim local-worker launch,
-smoke execution, or smoke-result delivery orchestration beyond the existing ownership path.
+- A same-PR PASS projects `completed` with verdict `PASS`; it remains
+  sufficient on later heads while current-head CI is green.
+- A proven `scenario_assertion_failed` projects `completed` with verdict
+  `FAIL`; the existing local worker fixes and explicitly executes smoke on
+  the corrected PR. It is not sent to a fresh GPT fixer conversation.
+- External credential/product pauses and malformed structured results keep
+  the existing `external_pause`/`contract_defect` boundary semantics.
+- No retry fence, override receipt, smoke-ordering admission rule, or
+  smoke-role/assignment witness is added.
 
 ## Pre-smoke prerequisite preparation (parent worker)
 
@@ -199,7 +174,7 @@ worker-smoke-run run \
   --pr <PR> \
   --head-sha <40-hex> \
   --smoke-complexity <routine-or-complex> \
-  --smoke-actor worker-owned \
+  --smoke-actor independent \
   --issue-body-file <issue-body-file> \
   --repo-root "$PWD" \
   --cwd "$PWD"
@@ -224,8 +199,7 @@ The parent worker must:
 6. refuse to launch smoke and report the concrete blocker when any prerequisite is absent,
    ambiguous, unhealthy, or expected to expire before the lifecycle can finish.
 
-For resources with a TTL, select a lifetime that covers at least the four-hour absolute lifecycle
-ceiling plus the two-minute cooperative shutdown bound and a practical setup/teardown margin. An
+For resources with a TTL, select a lifetime that covers at least the runtime work and its normal cleanup plus a practical setup/teardown margin. An
 approved non-disruptive retention mechanism may be used instead, but it must not execute a smoke
 scenario, change the behavior under test, or write child-owned progress/completion evidence.
 
@@ -237,42 +211,27 @@ command and owned lifecycle cleanup have finished.
 
 Preparation supplies capability, not the expected result: it must not perform the declared scenario,
 pre-satisfy the assertion being tested, fabricate smoke evidence, or mutate child-owned
-`progress.ndjson`, completion bodies, or seals.
+the eventual GitHub smoke report.
 
 Responsibility remains split as follows:
 
 - the parent worker provisions, verifies, retains, and later releases external prerequisites;
-- `worker-smoke-run` owns profile admission, child creation, prompt delivery, observation, lifecycle
-  state, report publication, cancellation, and owned-terminal cleanup; and
-- the smoke child executes the declared scenarios and produces progress/completion evidence.
+- `worker-smoke-run` invokes the selected existing worker and publishes the existing report; and
+- the smoke child runs the declared scenarios and supplies actual result observations.
 
 ## Supported worker path
 
-For every `required` smoke plan, the launcher resolves the existing trusted Issue/PR/exact-head target before selective selection even when the Issue has no `complexity-tier` fence. No-tier/firefighter required smoke uses the same canonical PR-comment census and the same ancestor/current-lineage selective planner as tiered required smoke. `no_prior_canonical_observation` means that the trusted lineage census completed successfully and contained zero canonical candidates; target-resolution failure remains the existing harness admission failure. Readable non-descendant history remains fail-closed with `history_non_descendant` and the ordinary full plan, with no cross-rebase PASS carry.
-
-Issue #2161 branch-update sequencing follows the canonical rule in the [orchestration runbook](orchestration-runbook.md#issue-2161-main-update-sequencing).
+The selected project card is the repository authority. The existing worker
+checks out the live PR head and executes all `smoke-test-plan` scenarios.
+The publishing GitHub comment contains the unchanged
+`pack-worker-smoke-report/v1` marker, head, per-scenario outcomes,
+`tracked-files-unmodified`, and unchanged machine block with **no actor field**.
+The GitHub comment author is publisher metadata, not a smoke worker-role
+attestation. Existing secret scrubbing redacts secrets in output and continues;
+redaction itself never refuses smoke.
 
 ```bash
 export PATH="$PWD/scripts:$PATH"
-worker-smoke-run run \
-  --issue <N> \
-  --pr <PR> \
-  --head-sha <40-hex> \
-  --smoke-complexity <routine-or-complex> \
-  --smoke-actor worker-owned \
-  --issue-body-file /tmp/issue-body.md \
-  --repo-root "$PWD" \
-  --cwd "$PWD"
-```
-
-The post-review actor uses the same bounded launcher and exact target binding,
-with `--smoke-complexity` set to exactly `routine` or `complex`, but must opt
-in explicitly with `--smoke-actor independent`. On the manager-controlled
-Browser-GPT path, the supervisor-launched local worker is this actor's parent and
-must use the manager handoff's exact PR/head rather than creating a
-`ready_for_review` bridge:
-
-```bash
 worker-smoke-run run \
   --issue <N> \
   --pr <PR> \
@@ -284,273 +243,27 @@ worker-smoke-run run \
   --cwd "$PWD"
 ```
 
-For logical-round accounting, launcher admission itself is not the settled-review
-ordering gate. The supervisor must invoke this actor only after verifying the
-manager's settled-review handoff. The launcher still records a started independent
-attempt before child creation and binds the final PASS to that attempt's exact
-head.
+## Report and readiness semantics
 
-The supported lifecycle is:
+Readiness selects the newest existing `pack-worker-smoke-report/v1`
+**PASS** comment on the same PR at **any report head**, regardless of
+publishing author. A first FAIL/BLOCKED cannot satisfy readiness; an
+explicit smoke execution after a fix may later produce PASS. A later FAIL
+or a later head does not revoke an already-published PASS. Required CI must
+still be green on the **current** PR head, and existing review, assignment,
+and merge conditions remain separate.
 
-1. `orca worktree current --json` positively binds the supplied cwd to the existing
-   Orca-managed worktree.
-2. A smoke-only admission lock is acquired. Deterministic preflight classifies and safely
-   cleans prior worker-smoke state before any new child is created.
-3. The run id, run directory, and `lifecycle.json` reservation are durably written before
-   terminal creation. The create subprocess has a finite timeout.
-4. A successful create response must return a terminal handle. That handle is written to the
-   same registry before prompt delivery; no title/list/recency heuristic may replace it.
-5. Publish-complete delivery and sealed current-run completion retain the Issue #1115 contract.
-6. After delivery, only legal child-produced declared-scenario transitions refresh the stall
-   deadline. A separate absolute safety ceiling is never reset.
-7. Every terminal path converges on the same cancellation/cleanup routine. Only the recorded
-   handle may be closed. Operator-action files are tombstoned and `terminal.json` records the
-   result even when no PR smoke report is published.
-8. The PR comment is published only after owned-terminal cleanup. `gate-check` independently
-   requires exact-target smoke evidence, current-head CI, and clean lifecycle state.
+No smoke-head equality, role/assignment check, publisher filter, edited-comment
+rejection, census stabilization, FAIL precedence, ancestry/patch equivalence,
+carry-only, selective retry, repeated-head admission check, lifecycle receipt,
+cleanup-settlement, scheduler starter, or smoke-plan preflight refusal is
+a readiness requirement. The `smoke-test-plan` fence remains an authoring
+source; guidance not to touch live machine configuration is prose only.
 
-## Report admission and trust boundary
-
-`gate-check` first resolves one trusted target: canonical repository slug, positive exact Issue and
-PR numbers, full requested head SHA, the fetched exact Issue body, the PR-to-Issue closing relation,
-and the live PR head. The repository view, origin remote, Issue URL, and PR URL must agree. Missing,
-ambient-only, multiple, stale, or mismatched identity is non-accepting before any report contributes.
-
-The report census comes from the exact PR issue-comment endpoint. `gh api --paginate --slurp`
-exhausts and flattens every page; malformed pages, duplicate comment ids, missing metadata, parse
-failure, or inability to stabilize the snapshot fail closed. The gate compares bounded repeated
-complete censuses. It evaluates only after two consecutive canonical snapshot digests agree and
-revalidates the live PR head before returning allow.
-
-A comment is eligible only when GitHub actor metadata matches the authenticated principal used by
-the current publication path. Body fields such as `producer`, `terminal-handle`, and
-`orca-executable` remain mandatory report invariants, not authentication. A matching body from
-another actor is a non-candidate. A trusted report comment with `updated_at != created_at` is
-invalid. Privileged deletion and trusted-account forgery remain outside this evidence model; the
-current census cannot prove deleted history.
-
-A canonical current-target candidate has exactly one `pack-worker-smoke-report/v1` marker, one
-`worker-smoke-report` machine block, and one non-conflicting Issue/PR/head binding. Duplicate or
-mixed markers, blocks, target lines, or scenario tuples invalidate the whole candidate. PASS,
-FAIL, and BLOCKED use the same admission floor: expected producer, non-empty executable and terminal
-handle, unmodified tracked files, accepted owned-terminal cleanup, and complete rows with action,
-expected, observed, and a supported outcome. Top-level PASS additionally requires every included
-row to pass. An invalid candidate contributes no row observation.
-
-The singular local receipt remains the current-publication witness used at the final gate. It is
-not historical authority for earlier aggregate contributors and does not order comments.
-
-## Exact-head point-in-time coverage
-
-The current Issue plan is folded by the exact trimmed `(action, expected)` tuple. Canonical
-candidates are ordered by GitHub `created_at`, then numeric comment id. Report-local timestamps,
-run start order, terminal order, receipt write order, API array order, and local clocks are not
-authority.
-
-For each current tuple, the latest admitted-valid row wins:
-
-- `pass` covers the tuple;
-- `fail`, `blocked`, or `skipped` leaves it uncovered;
-- a later `pass` restores coverage; and
-- omission preserves the prior latest row.
-
-PASS observations may accumulate across several canonical comments on the exact same head. A
-single ordinary all-PASS report is still sufficient. A valid top-level FAIL or BLOCKED applies its
-valid matching rows and sets a global non-accepting block even when it contains zero current-plan
-tuples. An admitted-invalid current-target candidate also sets that block without changing row
-state. A later admitted top-level PASS clears the global block; omitted tuples retain their prior
-row state.
-
-A different full head SHA starts from zero. Old-head reports cannot contribute, revoke, restore,
-quarantine, or appear in current-head candidate diagnostics. On a same-head Issue edit, unchanged
-exact tuples retain observations, changed and added tuples start uncovered, and removed tuples
-disappear. This is tuple-local reuse, not a hidden whole-plan revision claim.
-
-The semantic authority point is the final stabilized census used by one gate invocation. A relevant
-publication observed while stabilization is in progress forces a complete re-evaluation or bounded
-denial. A comment published after the final stable observation belongs to the next invocation and
-does not retroactively rewrite an already-emitted `ready_for_review` record.
-
-Partial coverage is never autonomous-ready. Machine-readable diagnostics include the target,
-scenario count, covered tuples, missing tuples, latest non-PASS tuples, invalid/rejected candidate
-reasons, global block, and complete/partial state. Each collection emits at most 50 items with the
-complete total and explicit truncation/overflow flags. Tuple previews and free-form reasons are at
-most 256 UTF-8 bytes per item, and the serialized diagnostic payload is at most 64 KiB. These caps
-never truncate the internal census or tuple fold.
-
-This evidence gate applies to autonomous `ready_for_review` admission. It does not create a waiver,
-approval token, second authorization service, or unavoidable veto over a direct top-level operator
-command. Evidence and diagnostics remain truthful in every path.
-
-## Report and control-plane semantics
-
-Top-level `PASS | FAIL | BLOCKED`, pack-generated non-PASS causes, and control-plane diagnostics
-remain unchanged for each individual run. Pack-generated non-PASS causes continue to include zero
-parsed scenarios, missing/invalid agent reports, and executed scenario failures. The aggregate does
-not claim that separate comments prove distinct fresh agents or retain a per-run attestation; fresh
-disposable-agent creation and cleanup remain lifecycle responsibilities.
-
-Issue #1125 control-plane classification also remains unchanged:
-
-| Phase | Stable cause |
-|---|---|
-| `worktree current` or terminal create cannot launch, returns empty stdout, or returns malformed JSON before a handle is acquired | `orca_control_plane_unavailable_preflight` |
-| send/read/submit/close returns a recognized channel code after a handle is acquired | `orca_control_plane_lost_mid_smoke` |
-
-`orca worktree current` is still the only positive worktree authority. The harness does not
-restart Orca, reconnect, discover sockets, select another worktree, or promote arbitrary valid
-JSON errors into a control-plane cause.
-
-## Delivery and completion authority
-
-Each attempt has one run identity. Delivery requires `delivery.sealed.json` bound to that run;
-`terminal send` success alone is not proof. Ambiguous delivery never authorizes a full-prompt
-resend. The existing visible-bracketed-paste recovery may submit Enter without re-sending text.
-Delivery establishment is separately bounded to **10 minutes** and cannot be extended by scenario
-progress that has not begun.
-
-Completion is accepted only from one publish-complete current-run pair:
-
-```text
-completion-<sha256>.body
-completion-<sha256>.sealed.json
-```
-
-The seal must bind the current run and exact body digest. Partial bytes, PTY text, in-memory
-lookalikes, wrong-run artifacts, malformed reports, and duplicate terminalizations do not become a
-PASS. PTY reads remain secondary liveness/diagnostic evidence only.
-
-## Finite scenario progress and deadlines
-
-After delivery, the child appends progress events to `progress.ndjson`. For each Issue-declared
-scenario ordinal, the only accepted sequence is:
-
-```text
-not_started -> started -> terminal(pass|fail|blocked|skipped)
-```
-
-An event advances progress only when it is durable, binds the current run, names the next declared
-ordinal, and is the next legal transition. The following never refresh stall age:
-
-- wrong-run or stale bytes;
-- unknown ordinals;
-- duplicate or backward transitions;
-- terminal-before-start, post-terminal, or non-monotonic transitions;
-- free-form milestones, heartbeats, mtime/byte growth, PTY chatter, or process liveness;
-- anything written by the supervisor.
-
-Production defaults:
-
-| Bound | Default | Meaning |
-|---|---:|---|
-| terminal create | 60 seconds | `spawnSync` cannot block the parent indefinitely |
-| delivery | 10 minutes | delivery must seal before scenario waiting starts |
-| progress stall | 25 minutes | no accepted declared-scenario transition during this interval terminates as `progress_stall` |
-| absolute lifecycle ceiling | 4 hours | terminates as `absolute_safety_ceiling`; progress never resets it |
-| cooperative shutdown | 2 minutes | bounded wait for child acknowledgement or sealed completion before handle close |
-
-The absolute ceiling starts with lifecycle reservation/create and is not granted again after
-another phase. A legal slow plan may therefore run beyond the former 30-minute wall, while true
-stall and absolute-ceiling outcomes remain mechanically distinct.
-
-## Child-only progress and cancellation protocol
-
-The smoke prompt names the run-local progress, cancel-request, and acknowledgement paths. The
-registered child must:
-
-1. append `started` before each declared scenario;
-2. append one terminal outcome after that scenario;
-3. check `cancel-request.json` between scenarios, before each new Browser-GPT turn, and immediately
-   after an already-started turn returns;
-4. after cancellation, start no new scenario or turn and write current-run cancellation
-   acknowledgement or ordinary sealed completion.
-
-The supervisor may create the run, deliver/nudge the prompt, observe durable artifacts, write the
-cancel request, wait, and clean the bound child. It has no production path that writes accepted
-progress or completion. Browser-GPT send-once, owned-tab, sibling-independence, and final-capture
-behavior remain owned by Issues #1120 and #1140 and are not reimplemented here.
-
-## Durable spawn state and ambiguity recovery
-
-`lifecycle.json` records a finite per-run state such as reservation, create in progress, bound,
-ambiguous unbound, cleanup pending, clean, or cleanup failed. It is not a lease, daemon, heartbeat,
-global process database, or general scheduler.
-
-When create times out, is cancelled, returns no output, returns malformed output, or otherwise
-cannot prove a handle, the reservation becomes `ambiguous_unbound`. On a later supported preflight
-it may become `abandoned_unbound` only when all current-run evidence says execution never began:
-
-- no handle was durably bound;
-- no delivery seal exists;
-- no accepted progress exists;
-- no completion seal or cancellation acknowledgement exists.
-
-The original ambiguity diagnostic remains durable. Any unattributable terminal is left alone:
-without a bound handle the parent never delivered the prompt, so it neither adopts nor kills that
-terminal. Any delivery/execution evidence forbids abandonment and keeps the state blocking.
-
-## Cancellation, cleanup, and restart recovery
-
-Cancellation, operator stop, supported termination signal, delivery exhaustion, progress stall,
-absolute ceiling, child verdict, handled exception, and restart recovery use one ownership-scoped
-cleanup contract:
-
-1. stop admitting new scenario work;
-2. write an idempotent current-run cancel request when an active child is being stopped;
-3. wait at most the shutdown bound for child acknowledgement/completion;
-4. close only handles durably recorded in that run registry;
-5. tombstone `live/OPERATOR-ACTION-*.txt` before declaring the run clean;
-6. write `terminal.json` with reason, acknowledgement observation, close outcome, and cleanup
-   result;
-7. remain idempotent on retry: a clean/abandoned entry is not closed or terminalized again.
-
-No terminal-list lookup, title matching, process scan, or recency heuristic is cleanup authority.
-Unrelated or unattributable Browser-GPT work is never killed, adopted, or made blocking merely
-because it exists.
-
-## Deterministic preflight and concurrent starts
-
-Before create, preflight performs one bounded classify/clean/re-evaluate pass:
-
-- stale smoke admission owned by a dead supervisor may be removed;
-- safely removable operator files are tombstoned;
-- expired unbound create reservations are classified and abandoned only under the evidence rules
-  above;
-- bound/incomplete prior runs are closed by their recorded handle only;
-- corrupt state, failed close, executable ambiguous state, or unsafe routing state remains blocking.
-
-Admission uses a worker-smoke-only create-once lock. At most one concurrent `worker-smoke-run run`
-may cross the spawn boundary. The loser refuses without touching the winner. This is not a global
-Browser-GPT lock and does not serialize unrelated browser work.
-
-## Readiness gate
-
-`pack-worker-report --state ready_for_review` invokes `worker-smoke-run gate-check`. Handoff is
-allowed only when all independent predicates hold:
-
-- the exact target and complete comment census stabilize on the requested live PR head;
-- every current tuple's latest admitted observation is PASS and the global block is clear;
-- required CI is green for the same head;
-- the current clearing publication's terminal cleanup and singular receipt/provenance validate; and
-- there is no active admission, live bound worker-smoke child, incomplete teardown, executable
-  ambiguous state, corrupt registry, or unsafe smoke operator-routing file.
-
-This handoff is the **ordinary local coding-worker** worker-owned-smoke
-boundary. It does not authorize independent smoke. The manager-controlled
-Browser-GPT path does not pass through this `ready_for_review` gate before
-review; its manager enters pack review directly, then the supervisor launches
-the independent-smoke parent after the settled-review handoff.
-
-For the manager-controlled Browser-GPT path, settled-review ordering is established
-by the manager handoff and supervisor sequencing, not by `worker-smoke-run`
-admission. Its PASS on the final head is the smoke completion evidence. Later
-independent-smoke fixes remain on the smoke path and do not reopen the already
-completed review stage; this workflow does not launch another pack-review round.
-
-Accumulated historical comments supply tuple evidence only; they are not authenticated or ordered
-by the singular receipt. A same-head aggregate PASS cannot bypass unclean lifecycle state. Operator
-cancellation may omit a new FAIL comment, but it still must produce clean durable lifecycle state
-before admission or handoff.
+The ordinary worker/orchestrator handoff and manager-controlled supervised
+handoff retain their distinct existing owners. The production scheduler no
+longer starts or observes smoke. After a fix, the existing worker/fixer
+explicitly invokes the smoke worker; no automatic retry machinery is added.
 
 ## Runtime verification and rollback
 
