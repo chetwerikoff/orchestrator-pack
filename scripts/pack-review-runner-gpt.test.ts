@@ -1509,6 +1509,58 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       .map((slot) => ({ slotId: slot.slotId, invocationId: slot.invocationId, payload: slot.payload })))
       .toEqual(completedBefore);
   });
+  it('does not let an unverdicted same-round GPT run on an older head block a run on the current head', async () => {
+    const storeRoot = tempRoot('opk-gpt-same-round-other-head-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+
+    const first = await startPackReview(pluralStart(storeRoot, capture, {
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: successfulCleanReviewPayload('inv-source-01') }],
+        'source-02': [
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy' }), exitCode: 13 },
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy' }), exitCode: 13 },
+        ],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
+      },
+    }));
+    expect(first).toMatchObject({ ok: true, status: 'reviewing' });
+    const firstRunId = String(first.runId);
+    const recoveryObserver = async () => ({
+      state: 'reply_recovery_required' as const,
+      replacementEligible: false,
+    });
+
+    const sameHead = await startPackReview(pluralStart(storeRoot, capture, {
+      fixtureGptAttemptObserver: recoveryObserver,
+    }));
+    expect(sameHead).toMatchObject({
+      ok: false,
+      reused: true,
+      reason: 'reply_recovery_required',
+      runId: firstRunId,
+    });
+
+    const newHead = await startPackReview(pluralStart(storeRoot, capture, {
+      headSha: HEAD_B,
+      fixtureCurrentPrHeadSha: HEAD_B,
+      fixturePostReviewHeadSha: HEAD_B,
+      fixtureGptAttemptObserver: recoveryObserver,
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: successfulCleanReviewPayload('inv-b-source-01') }],
+        'source-02': [{ stdout: successfulCleanReviewPayload('inv-b-source-02') }],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-b-source-03') }],
+      },
+    }));
+    expect(newHead.reason).not.toBe('reply_recovery_required');
+    expect(newHead.created).toBe(true);
+    expect(newHead.runId).not.toBe(firstRunId);
+    expect(getPackReviewRun(String(newHead.runId), { projectId: 'orchestrator-pack', storeRoot })?.targetSha)
+      .toBe(HEAD_B);
+  });
+
   it('does not relaunch an unresolved GPT sibling whose own replacement gate is still closed', async () => {
     const storeRoot = tempRoot('opk-gpt-slot-scoped-replacement-');
     const capture = path.join(storeRoot, 'github-review.json');
