@@ -169,6 +169,13 @@ function isWorkerPane(terminal: FleetTerminal, config: FleetWakeConfig): boolean
   return config.workspaceRe.test(terminal.worktreePath.replaceAll('\\', '/'));
 }
 
+// A worktree may also host plain shell panes; the agent pane is the manager.
+function singleOwner(candidates: readonly FleetTerminal[]): FleetTerminal | undefined {
+  if (candidates.length === 1) return candidates[0];
+  const agents = candidates.filter((terminal) => terminal.agentIdentity);
+  return agents.length === 1 ? agents[0] : undefined;
+}
+
 /**
  * The chat binding written by the turn entry names the launching worktree;
  * without one, fall back to the execution prompt's Issue URL against
@@ -188,7 +195,8 @@ export function bannerOwnerPane(
       const worktree = resolve(terminal.worktreePath).replaceAll('\\', '/');
       return bound === worktree || bound.startsWith(`${worktree}/`);
     });
-    if (owners.length === 1) return owners[0];
+    const owner = singleOwner(owners);
+    if (owner) return owner;
   }
   if (!banner.issue) return undefined;
   const name = new RegExp(`^[a-z][a-z0-9]*-${banner.issue}$`, 'i');
@@ -200,7 +208,7 @@ export function bannerOwnerPane(
       && config.workspaceRe.test(worktree)
       && name.test(basename(worktree));
   });
-  return matches.length === 1 ? matches[0] : undefined;
+  return singleOwner(matches);
 }
 
 export function managerBannerMessage(banner: ChatErrorBanner): string {

@@ -5,6 +5,7 @@
     "docs/chatgpt-task-execution-runbook.md",
     "docs/declarations/2253.pr-scope.json",
     "scripts/fleet/chat-error-banners.ts",
+    "scripts/fleet/fleet-sweep.ts",
     "scripts/fleet/fleet-wake.ts"
   ],
   "denylist": [
@@ -18,5 +19,5 @@
     "docs/declarations/",
     "scripts/fleet/"
   ],
-  "source_revision": "52e5919773f6bf983a55a0713864242fa4e38221"
+  "source_revision": "c65e6ced6e4d512231c3a95b613b78b7222d90a4"
 }
