@@ -105,6 +105,10 @@ class FakeNode {
     return this;
   }
 
+  getBoundingClientRect(): { height: number } {
+    return { height: 1 };
+  }
+
   querySelector(selector: string): FakeNode | object | null {
     if (selector.includes('copy-turn-action-button')
       || selector.includes('good-response-turn-action-button')
@@ -195,6 +199,7 @@ async function evaluateExpression(
     title: 'Fixture title',
     readyState,
     querySelectorAll(selector: string) {
+      if (/stop-button/.test(selector)) return generating ? [{ getBoundingClientRect: () => ({ height: 1 }) }] : [];
       const roots = [...nodes, ...productSurfaces];
       if (selector === '[data-message-author-role]') {
         const matched = collectMatching(roots, selector);
@@ -1600,7 +1605,10 @@ test('legacy inspection preserves readable loading snapshots outside acquired re
 test('generation observation degrades to unknown when the fixed marker query cannot be interpreted', async () => {
   const document = {
     title: 'Fixture title',
-    querySelectorAll: () => [new FakeNode('assistant', 'Answer', 'Answer')],
+    querySelectorAll: (selector: string) => {
+      if (/stop-button/.test(selector)) throw new Error('changed surface');
+      return [new FakeNode('assistant', 'Answer', 'Answer')];
+    },
     querySelector : () => { throw new Error('changed surface'); },
   };
   const value = await runInNewContext(INSPECTION_EXPRESSION, {

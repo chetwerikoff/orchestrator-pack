@@ -1,6 +1,6 @@
 #!/usr/bin/env -S node --experimental-strip-types
 import '../toolchain/native-entrypoint-preflight.ts';
-
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -176,16 +176,37 @@ function singleOwner(candidates: readonly FleetTerminal[]): FleetTerminal | unde
   return agents.length === 1 ? agents[0] : undefined;
 }
 
+const prHeadRefs = new Map<string, string>();
+
+// PR head refs do not change, so one tracked-transport read per PR is enough.
+export function readPrHeadRef(repository: string, pull: number): string | undefined {
+  const key = `${repository}#${pull}`;
+  const cached = prHeadRefs.get(key);
+  if (cached) return cached;
+  const result = runProcessSync({
+    command: fileURLToPath(new URL('../gh', import.meta.url)),
+    args: ['api', `repos/${repository}/pulls/${pull}`, '--jq', '.head.ref'],
+    timeoutMs: 15_000,
+    inheritParentEnv: true,
+  });
+  const ref = result.ok ? result.stdout.trim() : '';
+  if (!ref) return undefined;
+  prHeadRefs.set(key, ref);
+  return ref;
+}
+
 /**
  * The chat binding written by the turn entry names the launching worktree;
- * without one, fall back to the execution prompt's Issue URL against
- * workspaces ending in `-<issue>`. Only a single unambiguous pane is addressed.
+ * without one, a PR-review chat is owned by the pane on the PR head branch, and
+ * an execution chat by the workspace ending in `-<issue>`. Only a single
+ * unambiguous pane is addressed.
  */
 export function bannerOwnerPane(
   banner: ChatErrorBanner,
   terminals: readonly FleetTerminal[],
   config: FleetWakeConfig,
   readBinding: typeof readChatBinding = readChatBinding,
+  headRef: typeof readPrHeadRef = readPrHeadRef,
 ): FleetTerminal | undefined {
   const binding = readBinding(banner.url);
   if (binding) {
@@ -196,6 +217,12 @@ export function bannerOwnerPane(
       return bound === worktree || bound.startsWith(`${worktree}/`);
     });
     const owner = singleOwner(owners);
+    if (owner) return owner;
+  }
+  const ref = banner.pull && config.chatScope ? headRef(config.chatScope.repository, banner.pull) : undefined;
+  if (ref) {
+    const owner = singleOwner(terminals.filter((terminal) => isWorkerPane(terminal, config)
+      && terminal.branch === `refs/heads/${ref}`));
     if (owner) return owner;
   }
   if (!banner.issue) return undefined;
@@ -211,7 +238,13 @@ export function bannerOwnerPane(
   return singleOwner(matches);
 }
 
+export const REVIEW_CONTINUATION_TEXT = 'Заверши ревью: выдай итоговый вердикт строго в формате из первого сообщения (NO_FINDINGS или JSON с findings). Ничего не исправляй и не меняй код.';
+
 export function managerBannerMessage(banner: ChatErrorBanner): string {
+  if (banner.review) {
+    const reason = banner.kind === 'stalled' ? banner.text : `red banner "${banner.text}"${banner.retry ? ' (Retry shown)' : ''}`;
+    return `Your GPT PR-review chat ${banner.url} ended without a verdict (${reason}). This is a review chat: do not ask it to fix code or continue the task. Send exactly this in the same chat: "${REVIEW_CONTINUATION_TEXT}" Then collect the verdict through your review tool as usual. Never press Retry.`;
+  }
   if (banner.kind === 'stalled') {
     return `${banner.text} in your GPT chat ${banner.url} (no Stop control and no error banner for over a minute). Run GitHub-first reconciliation, then send "Доделай задачу и сообщи статус" in this same chat (runbook: Repeated product-error streak - up to two repeats; on the third continuation failure open a fresh chat). Never press Retry.`;
   }
@@ -236,7 +269,7 @@ export function fleetAlarmMessage(
     ? ` ${stopped.length} pane(s) need a step: ${panes} Run your full fleet sweep now (mail, then fleet-sweep) and give every STOPPED/POLLING pane its step this turn. A question a unit typed in its own pane is addressed to you: answer it.`
     : '';
   const bannerText = banners.length > 0
-    ? ` ${banners.length} ChatGPT chat(s) need a continuation (generation stopped): ${banners.map((banner) => `${banner.url} "${banner.text}"${banner.retry ? ' (Retry shown)' : ''}`).join('; ')}. Tell the manager that owns each chat to run GitHub-first reconciliation and send "Доделай задачу и сообщи статус" in that same chat (runbook: Repeated product-error streak - two repeats, a fresh chat on the third continuation failure). Never press Retry.`
+    ? ` ${banners.length} ChatGPT chat(s) need a continuation (generation stopped): ${banners.map((banner) => `${banner.url} "${banner.text}"${banner.retry ? ' (Retry shown)' : ''}${banner.review ? ' (PR-review chat)' : ''}`).join('; ')}. Tell the manager that owns each chat to run GitHub-first reconciliation and send "Доделай задачу и сообщи статус" in that same chat (runbook: Repeated product-error streak - two repeats, a fresh chat on the third continuation failure); for a PR-review chat send "${REVIEW_CONTINUATION_TEXT}" instead. Never press Retry.`
     : '';
   return `Fleet alarm (${coordinatorState}):${paneText}${bannerText}`;
 }
@@ -307,7 +340,9 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
   const stalledNow = observed.filter((banner) => banner.kind === 'stalled').map((banner) => banner.url).sort();
   const stalledBefore = new Set((store.readStalledSeen?.() ?? '').split('\n').filter(Boolean));
   store.writeStalledSeen?.(stalledNow.join('\n'));
-  const banners = observed.filter((banner) => banner.kind !== 'stalled' || stalledBefore.has(banner.url));
+  const seenUrls = new Set<string>();
+  const banners = observed.filter((banner) => (banner.kind !== 'stalled' || stalledBefore.has(banner.url))
+    && !seenUrls.has(banner.url) && Boolean(seenUrls.add(banner.url)));
   const direct: Array<readonly [FleetTerminal, ChatErrorBanner]> = [];
   const routed: ChatErrorBanner[] = [];
   for (const banner of banners) {

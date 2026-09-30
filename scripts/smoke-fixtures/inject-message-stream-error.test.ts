@@ -63,6 +63,7 @@ class FixtureElement {
 
   setAttribute(name: string, value: string): void { this.attrs[name] = value; }
   getAttribute(name: string): string | null { return this.attrs[name] ?? null; }
+  getBoundingClientRect(): { height: number } { return { height: 1 }; }
 
   remove(): void {
     this.connected = false;
@@ -152,6 +153,7 @@ class FixtureDocument {
   }
 
   querySelectorAll(selector: string): FixtureElement[] {
+    if (selector.includes('stop-button')) return this.stopActive ? [this.stop] : [];
     const all = this.roots.flatMap((root) => [root, ...root.querySelectorAll('*')]);
     if (selector === CONVERSATION_TURN_SECTION_SELECTOR) {
       return all.filter((node) => node.tagName === 'DIV' && node.attrs['data-turn-key'] !== undefined);

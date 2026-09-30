@@ -1,0 +1,33 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2263,
+  "declared_paths": [
+    "docs/declarations/2263.pr-scope.json",
+    "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/browser-gpt-page-probe.ts",
+    "scripts/browser-gpt-post-settlement-close.ts",
+    "scripts/chatgpt-browser-turn/product-page-selectors.ts",
+    "scripts/chatgpt-browser-turn/state-light-cancellation.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter-base.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter.ts",
+    "scripts/fleet/chat-error-banners.ts",
+    "scripts/smoke-fixtures/inject-message-stream-error.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/browser-gpt-page-probe.ts",
+    "scripts/browser-gpt-post-settlement-close.ts",
+    "scripts/chatgpt-browser-turn/",
+    "scripts/fleet/",
+    "scripts/smoke-fixtures/inject-message-stream-error.test.ts"
+  ],
+  "source_revision": "69f64a887f513d69396cad3e3fda5f1c62f7906b"
+}
