@@ -1,5 +1,7 @@
 import { existsSync, lstatSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import { homedir } from 'node:os';
+import { publishCommittedProjectStateBinding } from '../project-state-binding.ts';
 import type { ActivationRequest, CutoverStoreKind, CutoverStoreSpec } from './types.ts';
 
 const PROJECT_BINDING_FILE = 'project-binding.json';
@@ -94,6 +96,8 @@ function addCreateIssueStores(stores: CutoverStoreSpec[], localStateRoot: string
     && name !== '.review'
     && name !== 'browser-turn-recurrence.jsonl'
     && name !== PROJECT_BINDING_FILE
+    && !name.endsWith('.cutover-import.json')
+    && !name.includes('.cutover-staging-')
     && /^\d+(?:-|$)/u.test(name));
   names.forEach((name, index) => {
     const sourcePath = path.join(sourceRoot, name);
@@ -110,6 +114,8 @@ function addDiscussStores(stores: CutoverStoreSpec[], localStateRoot: string, pr
   const names = unionEntryNames(sourceRoot, targetRoot, (name) =>
     name !== projectId
     && name !== PROJECT_BINDING_FILE
+    && !name.endsWith('.cutover-import.json')
+    && !name.includes('.cutover-staging-')
     && !/^cdp-\d+-owner\.json$/u.test(name)
     && !existsSync(path.join(sourceRoot, name, PROJECT_BINDING_FILE)));
   names.forEach((name, index) => {
@@ -129,11 +135,12 @@ function addDiscussStores(stores: CutoverStoreSpec[], localStateRoot: string, pr
 export function withPackProjectStateMigration(
   request: ActivationRequest,
   projectId: string,
+  options: { localStateRoot?: string } = {},
 ): ActivationRequest {
   if (projectId !== 'orchestrator-pack') return request;
   const projectRoot = path.resolve(request.paths.stateDir);
   const flatWakeRoot = path.dirname(projectRoot);
-  const localStateRoot = path.dirname(flatWakeRoot);
+  const localStateRoot = path.resolve(options.localStateRoot ?? path.join(process.env.HOME || homedir(), '.local', 'state'));
   const stores = request.stores.map((store) => ({ ...store, coveredFields: [...store.coveredFields] }));
 
   addFixedWakeStores(stores, flatWakeRoot, projectRoot);
@@ -141,4 +148,21 @@ export function withPackProjectStateMigration(
   addDiscussStores(stores, localStateRoot, projectId);
 
   return { ...request, stores };
+}
+
+/** Bind all committed project namespaces using the existing epoch-CAS authority. */
+export function publishCommittedProjectNamespaceBindings(request: ActivationRequest): void {
+  if (!request.projectId || !request.repository) return;
+  const namespaces = new Set<string>([path.resolve(request.paths.stateDir)]);
+  for (const store of request.stores) {
+    if (store.id === 'project-create-issue-review'
+      || store.id === 'project-browser-turn-recurrence'
+      || store.id.startsWith('project-create-issue-work-')
+      || store.id.startsWith('project-discuss-artifact-')) {
+      namespaces.add(path.resolve(path.dirname(store.targetPath)));
+    }
+  }
+  for (const root of namespaces) {
+    publishCommittedProjectStateBinding(root, { projectId: request.projectId, repository: request.repository });
+  }
 }

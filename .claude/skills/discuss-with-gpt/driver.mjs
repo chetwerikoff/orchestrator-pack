@@ -38,7 +38,7 @@
 //   to also probe the proposal's FIDELITY to that source.
 
 import { createRequire } from 'node:module';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, openSync, fsyncSync, closeSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -89,9 +89,41 @@ let repository = '';
 let dir = join(homedir(), '.local/state/discuss-with-gpt', projectId, slug);
 const stamp = new Date().toISOString().replace(/[:.]/g, '-');
 let sha = '', promptText = '';
+const DISCUSS_BINDING_SCHEMA = 'orchestrator-pack/project-state-binding/v1';
+let namespaceTrusted = false;
+function assertDiscussProjectBinding() {
+  const root = join(homedir(), '.local/state/discuss-with-gpt', projectId);
+  const file = join(root, 'project-binding.json');
+  const expected = { schema: DISCUSS_BINDING_SCHEMA, projectId, repository };
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(projectId) || !/^[^/\s]+\/[^/\s]+$/u.test(repository)) {
+    throw new Error('discuss_project_binding_invalid');
+  }
+  if (!existsSync(file)) {
+    mkdirSync(root, { recursive: true });
+    if (readdirSync(root).some((name) => name !== 'project-binding.json')) {
+      throw new Error('project_state_binding_missing_for_nonempty_namespace');
+    }
+    try {
+      const fd = openSync(file, 'wx', 0o600);
+      try { writeFileSync(fd, `${JSON.stringify(expected, null, 2)}\n`); fsyncSync(fd); }
+      finally { closeSync(fd); }
+      const parentFd = openSync(root, 'r');
+      try { fsyncSync(parentFd); } finally { closeSync(parentFd); }
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+    }
+  }
+  const observed = JSON.parse(readFileSync(file, 'utf8'));
+  if (!observed || Array.isArray(observed)
+    || JSON.stringify(Object.keys(observed).sort()) !== JSON.stringify(['projectId', 'repository', 'schema'])
+    || observed.schema !== expected.schema || observed.projectId !== projectId
+    || observed.repository !== repository) throw new Error('project_state_binding_mismatch');
+}
 
 // durable record on EVERY exit path — success or failure
 function recordFile(state, { reply = '', validation = '', url = '', note = '', parsed = '' } = {}) {
+  if (!namespaceTrusted) throw new Error('discuss_project_binding_untrusted');
+  assertDiscussProjectBinding();
   const path = join(dir, `${stamp}-${PASS_ID.slice(0, 8)}-${state}.md`);
   mkdirSync(dir, { recursive: true });
   writeFileSync(path,
@@ -103,10 +135,11 @@ function recordFile(state, { reply = '', validation = '', url = '', note = '', p
 }
 
 function exitConfigMissing(note) {
-  const rec = recordFile('config_missing', { note });
+  // Never write even a refusal artifact into an unbound or retargeted namespace.
+  const rec = namespaceTrusted ? recordFile('config_missing', { note }) : '';
   console.log('CONFIG_ERROR ' + note);
   console.log('STATE=config_missing');
-  console.log('ARTIFACT=' + rec);
+  if (rec) console.log('ARTIFACT=' + rec);
   process.exit(12);
 }
 
@@ -118,6 +151,8 @@ try {
   repository = String(cfg.repository || '').toLowerCase();
   if (!projectId || !repository) throw new Error('discuss-with-gpt: selected project repository binding unavailable');
   dir = join(homedir(), '.local/state/discuss-with-gpt', projectId, slug);
+  assertDiscussProjectBinding();
+  namespaceTrusted = true;
   PROJECT_URL = cfg.projectUrl;
   chromeUserDataDir = cfg.chromeUserDataDir;
   const forwardedProjectUrl = get('--project-url');

@@ -1,10 +1,14 @@
 import {
   chmodSync,
+  closeSync,
   existsSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -244,19 +248,32 @@ function parseDirectoryArchive(spec: CutoverStoreSpec, raw: Buffer): DirectoryAr
   return archive;
 }
 
-function restoreDirectory(target: string, archive: DirectoryArchiveV1): void {
+function restoreDirectory(target: string, archive: DirectoryArchiveV1, importIdentity: string): void {
   if (existsSync(target) && !cutoverPathEmpty(target)) throw new Error(`import_target_not_empty:${archive.storeId}`);
-  mkdirSync(target, { recursive: true });
+  // A crash while building the sibling staging tree never exposes partial
+  // authoritative state at target. The existing epoch/cordon remains the only
+  // recovery authority; staging is disposable before the atomic publication.
+  const staging = `${target}.cutover-staging-${importIdentity.slice(7, 23)}`;
+  if (existsSync(staging)) {
+    if (!lstatSync(staging).isDirectory()) throw new Error(`import_staging_conflict:${archive.storeId}`);
+    rmSync(staging, { recursive: true, force: true });
+  }
+  mkdirSync(staging, { recursive: true });
   for (const entry of archive.entries.filter((row) => row.type === 'directory')) {
-    const destination = path.join(target, ...entry.path.split('/'));
+    const destination = path.join(staging, ...entry.path.split('/'));
     mkdirSync(destination, { recursive: true });
     chmodSync(destination, entry.mode);
   }
   for (const entry of archive.entries.filter((row): row is Extract<DirectoryArchiveEntry, { type: 'file' }> => row.type === 'file')) {
-    const destination = path.join(target, ...entry.path.split('/'));
+    const destination = path.join(staging, ...entry.path.split('/'));
     writeDurableFile(destination, Buffer.from(entry.contentBase64, 'base64'));
     chmodSync(destination, entry.mode);
   }
+  const stageFd = openSync(staging, 'r');
+  try { fsyncSync(stageFd); } finally { closeSync(stageFd); }
+  renameSync(staging, target);
+  const parentFd = openSync(path.dirname(target), 'r');
+  try { fsyncSync(parentFd); } finally { closeSync(parentFd); }
 }
 
 export function importSnapshot(input: {
@@ -324,7 +341,12 @@ export function importSnapshot(input: {
     return record;
   }
 
-  if (kind !== 'legacy-json' && !cutoverPathEmpty(input.spec.targetPath)) {
+  // After an atomic directory rename but before marker publication, the
+  // complete target may exist. Accept only its exact snapshot-derived digest.
+  const alreadyPublishedDirectory = kind === 'opaque-directory'
+    && !cutoverPathEmpty(input.spec.targetPath)
+    && cutoverPathDigest(input.spec.targetPath) === importTargetDigest;
+  if (kind !== 'legacy-json' && !alreadyPublishedDirectory && !cutoverPathEmpty(input.spec.targetPath)) {
     throw new Error(`import_target_not_empty:${input.spec.id}`);
   }
   if (kind === 'legacy-json') {
@@ -332,8 +354,8 @@ export function importSnapshot(input: {
     writeDurableFile(input.spec.targetPath, `${JSON.stringify(normalized, null, 2)}\n`);
   } else if (kind === 'opaque-file') {
     writeDurableFile(input.spec.targetPath, raw);
-  } else {
-    restoreDirectory(input.spec.targetPath, parseDirectoryArchive(input.spec, raw));
+  } else if (!alreadyPublishedDirectory) {
+    restoreDirectory(input.spec.targetPath, parseDirectoryArchive(input.spec, raw), importIdentity);
   }
 
   if (kind === 'legacy-json') {

@@ -18,7 +18,7 @@ import {
 } from './activation-import.ts';
 import { projectRegistry } from './activation-registry-projection.ts';
 import { sha256Bytes, sha256Stable } from './stable-stringify.ts';
-import { publishCommittedProjectStateBinding } from '../project-state-binding.ts';
+import { publishCommittedProjectNamespaceBindings } from './project-state-migration.ts';
 import type { CordonRecord, FollowupRecord, ActivationRequest, EpochCommitCore, ImportRecord, PhaseOneEnvelope, SnapshotRecord } from './types.ts';
 import {
   hasSchedulerChildFailureEvidence,
@@ -365,8 +365,14 @@ function recoverySnapshots(request: ActivationRequest, nonce: string): SnapshotR
     if (!existsSync(snapshotPath)) throw new Error(`precas_snapshot_missing:${spec.id}`);
     const bytes = readFileSync(snapshotPath);
     if (sha256Bytes(bytes) !== row.snapshotDigest) throw new Error(`precas_snapshot_digest_mismatch:${spec.id}`);
-    const parsed = JSON.parse(bytes.toString('utf8')) as { schemaVersion?: unknown };
-    const sourceVersion = Number(parsed.schemaVersion ?? 1);
+    // Opaque files may contain JSONL or arbitrary bytes; only legacy JSON and
+    // durable absence records carry a JSON document with a schemaVersion.
+    const kind = cutoverStoreKind(spec);
+    let sourceVersion = row.sourceVersion;
+    if (kind === 'legacy-json' || row.sourceState === 'absent') {
+      const parsed = JSON.parse(bytes.toString('utf8')) as { schemaVersion?: unknown };
+      sourceVersion = Number(parsed.schemaVersion ?? 1);
+    }
     if (!Number.isInteger(sourceVersion) || sourceVersion <= 0 || sourceVersion !== row.sourceVersion) {
       throw new Error(`precas_snapshot_version_mismatch:${spec.id}`);
     }
@@ -380,6 +386,7 @@ function recoverySnapshots(request: ActivationRequest, nonce: string): SnapshotR
       storeId: spec.id,
       snapshotPath,
       snapshotDigest: row.snapshotDigest,
+      ...(row.sourceDigest ? { sourceDigest: row.sourceDigest } : {}),
       sourceVersion,
       writerWatermark: row.writerWatermark,
       sourceState: row.sourceState,
@@ -442,12 +449,7 @@ export async function recoverCommittedCutover(
   }
   assertCommittedContext(request, cordon, core);
   verifyPhaseOneDigest(request.paths.phaseOnePath, request.epochId, cordon.nonce, core.preCommitLogDigest);
-  if (request.projectId && request.repository) {
-    publishCommittedProjectStateBinding(request.paths.stateDir, {
-      projectId: request.projectId,
-      repository: request.repository,
-    });
-  }
+  publishCommittedProjectNamespaceBindings(request);
   const snapshots = recoverySnapshots(request, cordon.nonce);
   for (const store of request.stores) {
     const snapshot = snapshots.find((row) => row.storeId === store.id)!;
