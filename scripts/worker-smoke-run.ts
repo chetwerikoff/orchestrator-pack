@@ -4,6 +4,7 @@ import './toolchain/native-entrypoint-preflight.ts';
 import { classifyRequiredCiLevel } from '../docs/review-ready-stuck-guard.mjs';
 import { runProcess, runProcessSync } from './kernel/subprocess.ts';
 import { overlayExecutorProfileEnv } from './executor-profile-store.ts';
+import { resolveTargetContext } from './lib/target-context.ts';
 import { resolveRealGhBinary, resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from './pr-scope-contract.ts';
 import { createHash, randomUUID } from 'node:crypto';
@@ -669,7 +670,9 @@ function canonicalRepositorySlug(value: unknown): string {
   return slug;
 }
 
-const TRUSTED_REPOSITORY_SLUG = 'chetwerikoff/orchestrator-pack';
+function selectedSmokeRepositorySlug(): string {
+  return canonicalRepositorySlug(resolveTargetContext().repository);
+}
 
 function repositoryFromGithubUrl(value: unknown): string {
   const match = String(value ?? '').trim().match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/(?:issues|pull)\/\d+(?:$|[?#])/iu);
@@ -715,7 +718,7 @@ function suppliedIssueBodyMatches(fetched: string, supplied: string): boolean {
 }
 
 export function resolveSmokeTarget(options: CliOptions, suppliedIssueBody: string): ResolvedSmokeTarget {
-  const repositorySlug = canonicalRepositorySlug(TRUSTED_REPOSITORY_SLUG);
+  const repositorySlug = canonicalRepositorySlug(selectedSmokeRepositorySlug());
   const originSlug = gitOriginRepositorySlug(options.repoRoot);
   if (originSlug.toLowerCase() !== repositorySlug.toLowerCase()) throw new Error('trusted_target: trusted repository and origin mismatch');
 
@@ -831,7 +834,7 @@ export function publishPrComment(prNumber: number, body: string, repoRoot: strin
     let result: ReturnType<typeof runProcessSync>;
     try {
       result = runSmokeGhWriteSync(
-        ['api', `repos/${TRUSTED_REPOSITORY_SLUG}/issues/${String(prNumber)}/comments`, '--method', 'POST', '--input', bodyFile], repoRoot, {}, timeoutMs,
+        ['api', `repos/${selectedSmokeRepositorySlug()}/issues/${String(prNumber)}/comments`, '--method', 'POST', '--input', bodyFile], repoRoot, {}, timeoutMs,
       );
     } catch (error) {
       const detail = scrubSmokeOutput(scrubForwardedGhSecrets(error instanceof Error ? error.message : String(error), buildSmokeGhChildEnv()));
@@ -1178,30 +1181,30 @@ export async function runDirectReviewReconciliation(options: CliOptions): Promis
       || !options.reviewId || !/^[0-9a-f]{40}$/u.test(options.reviewHeadSha.trim().toLowerCase())) {
     emit({ ok: false, reason: 'direct_review_binding_invalid' }, options.json); return 1;
   }
-  const currentHead = fetchLivePrHead(options.prNumber, TRUSTED_REPOSITORY_SLUG, options.repoRoot);
+  const currentHead = fetchLivePrHead(options.prNumber, selectedSmokeRepositorySlug(), options.repoRoot);
   const eventHead = options.headSha.trim().toLowerCase();
   const reviewHead = options.reviewHeadSha.trim().toLowerCase();
   if (currentHead !== eventHead || reviewHead !== eventHead) {
     emit({ ok: true, skipped: true, reason: 'direct_review_stale_publication_head', reviewHead, eventHead, currentHead }, options.json); return 0;
   }
-  const transport = createGithubReviewTransport({ repoRoot: options.repoRoot, repoSlug: TRUSTED_REPOSITORY_SLUG, prNumber: options.prNumber });
+  const transport = createGithubReviewTransport({ repoRoot: options.repoRoot, repoSlug: selectedSmokeRepositorySlug(), prNumber: options.prNumber });
   const reviews = await transport.listReviews();
   const submitted = reviews.find((review) => sameReviewIdentifier(review.id, options.reviewId));
-  const owner = TRUSTED_REPOSITORY_SLUG.split('/')[0] ?? '';
+  const owner = selectedSmokeRepositorySlug().split('/')[0] ?? '';
   if (!submitted || !parseDirectPackReviewEvidence(submitted, owner)) {
     emit({ ok: true, skipped: true, reason: 'review_not_canonical_direct_pack_review' }, options.json); return 0;
   }
   const direct = projectDirectPackReviewState({
     reviews, repositoryOwnerLogin: owner, currentHeadSha: currentHead, workerLifecycle: '', requiredCiGreen: false,
     exactHeadSmokePassed: false,
-    isAncestor: (ancestorSha, descendantSha) => githubCommitIsAncestor(TRUSTED_REPOSITORY_SLUG, ancestorSha, descendantSha, options.repoRoot),
+    isAncestor: (ancestorSha, descendantSha) => githubCommitIsAncestor(selectedSmokeRepositorySlug(), ancestorSha, descendantSha, options.repoRoot),
   });
   const projection = projectPackReviewSemanticStatus({
-    runner: currentPackReviewStatusFact(TRUSTED_REPOSITORY_SLUG, currentHead, options.repoRoot),
+    runner: currentPackReviewStatusFact(selectedSmokeRepositorySlug(), currentHead, options.repoRoot),
     direct: { hasLegitimateReview: direct.hasLegitimateReview, unresolvedBlockingFinding: direct.state === 'blocked' },
   });
   if (!options.dryRun) await publishPackReviewRequiredStatus({
-    repoRoot: options.repoRoot, repoSlug: TRUSTED_REPOSITORY_SLUG, headSha: currentHead,
+    repoRoot: options.repoRoot, repoSlug: selectedSmokeRepositorySlug(), headSha: currentHead,
     request: semanticPackReviewRequiredStatusRequest({ headSha: currentHead, projection }),
   });
   emit({ ok: true, projection, direct }, options.json); return 0;

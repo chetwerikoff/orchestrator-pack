@@ -2847,6 +2847,31 @@ function runChild(
   };
 }
 
+function selectSmokeProjectForTest(configRoot: string, primaryRoot: string): () => void {
+  const oldXdg = process.env.XDG_CONFIG_HOME;
+  const oldProject = process.env.OPK_PROJECT_ID;
+  const xdg = join(configRoot, 'project-config');
+  const cards = join(xdg, 'orchestrator-pack', 'projects');
+  mkdirSync(cards, { recursive: true });
+  writeFileSync(join(cards, 'smoke-fixture.json'), JSON.stringify({
+    projectId: 'smoke-fixture',
+    repository: REPOSITORY,
+    primaryRoot,
+    defaultBranch: 'main',
+    orcaWorkspacePattern: '.*',
+    orchestratorTitlePattern: '.*',
+    browserGpt: { projectUrl: 'https://chatgpt.com/' },
+  }), 'utf8');
+  process.env.XDG_CONFIG_HOME = xdg;
+  process.env.OPK_PROJECT_ID = 'smoke-fixture';
+  return () => {
+    if (oldXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = oldXdg;
+    if (oldProject === undefined) delete process.env.OPK_PROJECT_ID;
+    else process.env.OPK_PROJECT_ID = oldProject;
+  };
+}
+
 describe('publishPrComment', () => {
   it('executes gh writes through scripts/gh under the minimal smoke child environment, not a PATH wrapper', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-publish-native-'));
@@ -2892,10 +2917,12 @@ describe('publishPrComment', () => {
 
   it('reports publication_unconfirmed when the native gh command fails', () => {
     const previousRealBinary = process.env.GH_REAL_BINARY;
+    const restoreProject = selectSmokeProjectForTest(root, process.cwd());
     process.env.GH_REAL_BINARY = process.execPath;
     try {
       expect(() => publishPrComment(1586, 'hello', process.cwd(), 25)).toThrow(/publication_unconfirmed/u);
     } finally {
+      restoreProject();
       if (previousRealBinary === undefined) delete process.env.GH_REAL_BINARY;
       else process.env.GH_REAL_BINARY = previousRealBinary;
     }
@@ -2967,6 +2994,7 @@ if (endpoint === 'user') {
 
     const previousPath = process.env.PATH;
     const previousReceiptRoot = process.env.WORKER_SMOKE_RECEIPT_ROOT;
+    const restoreProject = selectSmokeProjectForTest(root, root);
     process.env.PATH = `${bin}:${previousPath ?? ''}`;
     process.env.WORKER_SMOKE_RECEIPT_ROOT = root;
     try {
@@ -2995,6 +3023,7 @@ if (endpoint === 'user') {
       else process.env.PATH = previousPath;
       if (previousReceiptRoot === undefined) delete process.env.WORKER_SMOKE_RECEIPT_ROOT;
       else process.env.WORKER_SMOKE_RECEIPT_ROOT = previousReceiptRoot;
+      restoreProject();
       rmSync(root, { recursive: true, force: true });
     }
   });
