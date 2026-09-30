@@ -2513,21 +2513,15 @@ function resolvedTarget(body: string): ResolvedSmokeTarget {
 
 function gateDependencies(
   body: string,
-  snapshots: readonly WorkerSmokeCommentRecord[][],
-  root: string,
+  _historicalComments: readonly WorkerSmokeCommentRecord[][],
+  _root: string,
   resolveTargetOverride: GateCheckDependencies['resolveTarget'] = () => resolvedTarget(body),
 ): GateCheckDependencies {
-  let snapshotIndex = 0;
+  // The pre-review handoff no longer receives lifecycle, receipt, comment-census,
+  // or runtime-adapter admission dependencies. CI and the PR head stay current.
   return {
-    evaluateLifecycle: () => evaluateSmokeLifecycleCleanliness(root),
     resolveTarget: resolveTargetOverride,
-    fetchComments: () => {
-      const selected = snapshots[Math.min(snapshotIndex, snapshots.length - 1)] ?? [];
-      snapshotIndex += 1;
-      return [...selected];
-    },
     fetchHead: () => HEAD_ONE,
-    selectAdapter: async () => new DeterministicRuntimeAdapter(),
     ciGreen: () => true,
   };
 }

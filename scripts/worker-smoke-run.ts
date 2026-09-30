@@ -1894,17 +1894,13 @@ function runValidatePlan(options: CliOptions): number {
 }
 
 export interface GateCheckDependencies {
-  evaluateLifecycle: (cwd: string) => ReturnType<typeof evaluateSmokeLifecycleCleanliness>;
   resolveTarget: (options: CliOptions, suppliedIssueBody: string) => ResolvedSmokeTarget;
-  fetchComments: (prNumber: number, repositorySlug: string, repoRoot: string) => WorkerSmokeCommentRecord[];
   fetchHead: (prNumber: number, repositorySlug: string, repoRoot: string) => string;
-  selectAdapter: (cwd: string) => Promise<RuntimeAdapter>;
   ciGreen: (prNumber: number, headSha: string, repositorySlug: string, repoRoot: string) => boolean;
 }
 
 const DEFAULT_GATE_DEPENDENCIES: GateCheckDependencies = {
-  evaluateLifecycle: evaluateSmokeLifecycleCleanliness, resolveTarget: resolveSmokeTarget, fetchComments: fetchPrComments,
-  fetchHead: fetchLivePrHead, selectAdapter: async (cwd) => selectRuntimeAdapter({}, { cwd }), ciGreen: resolveCiGreen,
+  resolveTarget: resolveSmokeTarget, fetchHead: fetchLivePrHead, ciGreen: resolveCiGreen,
 };
 
 export async function runGateCheck(options: CliOptions, dependencies: GateCheckDependencies = DEFAULT_GATE_DEPENDENCIES): Promise<number> {
