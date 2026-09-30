@@ -361,6 +361,7 @@ export function assertSnapshotSourceStable(spec: CutoverStoreSpec, snapshot: Sna
 
 export function retireImportedSource(spec: CutoverStoreSpec, snapshot: SnapshotRecord): boolean {
   if (cutoverStoreKind(spec) === 'legacy-json' || snapshot.sourceState === 'absent') return false;
+  if (!existsSync(spec.sourcePath)) return false;
   assertSnapshotSourceStable(spec, snapshot);
   rmSync(spec.sourcePath, { recursive: true, force: true });
   if (existsSync(spec.sourcePath)) throw new Error(`cutover_source_retirement_failed:${spec.id}`);
