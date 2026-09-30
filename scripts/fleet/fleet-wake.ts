@@ -22,6 +22,7 @@ import {
   type FleetTerminal,
   type OrcaExecutor,
 } from './fleet-sweep.ts';
+import { DEFAULT_CHAT_CDP_URL, readChatErrorBanners, type ChatErrorBanner } from './chat-error-banners.ts';
 
 export interface FleetWakeConfig {
   readonly projectId: string;
@@ -31,6 +32,7 @@ export interface FleetWakeConfig {
   readonly orchestratorHandle?: string;
   readonly busyRe: RegExp;
   readonly intervalSeconds: number;
+  readonly chatCdpUrl?: string;
 }
 
 export interface FleetWakeStateStore extends FleetPollingStore {
@@ -68,6 +70,7 @@ export interface FleetAlarmTickOptions {
   readonly store?: FleetWakeStateStore;
   readonly sleepMs?: (milliseconds: number) => void | Promise<void>;
   readonly log?: (line: string) => void;
+  readonly readChatBanners?: (cdpUrl: string) => Promise<ChatErrorBanner[]>;
 }
 
 export type FleetAlarmTickResult =
@@ -115,13 +118,27 @@ export function stoppedSignature(observations: readonly FleetPaneObservation[]):
     .join('\n');
 }
 
+export function chatBannerSignature(banners: readonly ChatErrorBanner[]): string {
+  return banners
+    .map((banner) => `BANNER ${banner.url} ${banner.text}`)
+    .sort((left, right) => left.localeCompare(right))
+    .join('\n');
+}
+
 export function fleetAlarmMessage(
   coordinatorState: 'idle' | 'busy',
   observations: readonly FleetPaneObservation[],
+  banners: readonly ChatErrorBanner[] = [],
 ): string {
   const stopped = actionablePanes(observations);
   const panes = stopped.map((pane) => `${pane.state} ${pane.handle} ${pane.title}`).join('; ');
-  return `Fleet alarm (${coordinatorState}): ${stopped.length} pane(s) need a step: ${panes} Run your full fleet sweep now (mail, then fleet-sweep) and give every STOPPED/POLLING pane its step this turn. A question a unit typed in its own pane is addressed to you: answer it.`;
+  const paneText = stopped.length > 0
+    ? ` ${stopped.length} pane(s) need a step: ${panes} Run your full fleet sweep now (mail, then fleet-sweep) and give every STOPPED/POLLING pane its step this turn. A question a unit typed in its own pane is addressed to you: answer it.`
+    : '';
+  const bannerText = banners.length > 0
+    ? ` ${banners.length} ChatGPT chat(s) show a red error banner with generation stopped: ${banners.map((banner) => `${banner.url} "${banner.text}"${banner.retry ? ' (Retry shown)' : ''}`).join('; ')}. Tell the manager that owns each chat to run GitHub-first reconciliation and send "Доделай задачу" in that same chat (runbook: Repeated product-error streak - two repeats, a fresh chat on the third continuation failure). Never press Retry.`
+    : '';
+  return `Fleet alarm (${coordinatorState}):${paneText}${bannerText}`;
 }
 
 function defaultSleep(milliseconds: number): Promise<void> {
@@ -182,8 +199,11 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     return { state: 'unreadable', handle: 'fleet-sweep' };
   }
 
+  const banners = config.chatCdpUrl
+    ? await (options.readChatBanners ?? readChatErrorBanners)(config.chatCdpUrl).catch(() => [])
+    : [];
   const stopped = actionablePanes(observations);
-  if (stopped.length === 0) {
+  if (stopped.length === 0 && banners.length === 0) {
     store.clearLastSentSignature();
     log('nothing stopped');
     return { state: 'nothing_stopped' };
@@ -198,14 +218,14 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
   }
 
   const coordinatorState: 'idle' | 'busy' = isBusyScreen(coordinatorScreen, config.busyRe) ? 'busy' : 'idle';
-  const signature = stoppedSignature(observations);
+  const signature = [stoppedSignature(observations), chatBannerSignature(banners)].filter(Boolean).join('\n');
   const deliverySignature = `${coordinator.handle}\n${signature}`;
   if (coordinatorState === 'busy' && store.readLastSentSignature() === deliverySignature) {
     log(`${coordinator.handle} same stopped set already queued`);
     return { state: 'same_stopped_set', coordinator: coordinator.handle, signature };
   }
 
-  const message = fleetAlarmMessage(coordinatorState, observations);
+  const message = fleetAlarmMessage(coordinatorState, observations, banners);
   if (!sendCoordinator(executor, coordinator.handle, message)) {
     log(`${coordinator.handle} send failed`);
     return { state: 'send_failed', coordinator: coordinator.handle };
@@ -217,7 +237,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
   }
 
   store.writeLastSentSignature(deliverySignature);
-  log(`sent to ${coordinator.handle} (${coordinatorState}): ${stopped.length} need a step`);
+  log(`sent to ${coordinator.handle} (${coordinatorState}): ${stopped.length} need a step, ${banners.length} chat banner(s)`);
   return {
     state: 'sent',
     coordinator: coordinator.handle,
@@ -255,6 +275,7 @@ export function fleetWakeConfigFromEnv(
     ...(env.ORCH_HANDLE?.trim() ? { orchestratorHandle: env.ORCH_HANDLE.trim() } : {}),
     busyRe: compileRegex(env.BUSY_RE, DEFAULT_BUSY_RE),
     intervalSeconds,
+    chatCdpUrl: env.PACK_GPT_BROWSER_CDP?.trim() || DEFAULT_CHAT_CDP_URL,
   };
 }
 
