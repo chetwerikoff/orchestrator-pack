@@ -31,7 +31,7 @@ function required(args: Record<string, string | boolean>, key: string): string {
   return value;
 }
 
-function options(args: Record<string, string | boolean>): SupervisorOptions {
+function targetOptions(args: Record<string, string | boolean>): Pick<SupervisorOptions, 'stateDir' | 'repoRoot' | 'projectId' | 'repository'> {
   const projectId = required(args, 'project');
   const target = resolveTargetContext({ projectId });
   const stateDir = path.resolve(required(args, 'state-dir'));
@@ -44,6 +44,12 @@ function options(args: Record<string, string | boolean>): SupervisorOptions {
     repoRoot,
     projectId: target.projectId,
     repository: target.repository,
+  };
+}
+
+function options(args: Record<string, string | boolean>): SupervisorOptions {
+  return {
+    ...targetOptions(args),
     epochAuthorityPath: required(args, 'epoch-authority'),
     epochId: required(args, 'epoch-id'),
     nonce: required(args, 'nonce'),
@@ -82,7 +88,7 @@ async function main(): Promise<void> {
   const [command = 'help', ...argv] = process.argv.slice(2);
   const args = parse(argv);
   if (command === 'status') {
-    const resolved = options(args);
+    const resolved = targetOptions(args);
     const status = readSupervisorStatus({ stateDir: resolved.stateDir });
     process.stdout.write(`${JSON.stringify({ status })}\n`);
     process.exitCode = isSchedulerOperational(status) ? 0 : 1;
