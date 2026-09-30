@@ -65,9 +65,7 @@ function normalizedPayload(spec: CutoverStoreSpec, raw: Buffer): Record<string, 
   const value = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`store_shape_invalid:${spec.id}`);
   const required = REQUIRED_FIELDS[spec.id];
-  if (!required || JSON.stringify([...spec.coveredFields]) !== JSON.stringify(required)) {
-    throw new Error(`store_covered_fields_invalid:${spec.id}`);
-  }
+  if (!required || JSON.stringify([...spec.coveredFields]) !== JSON.stringify(required)) throw new Error(`store_covered_fields_invalid:${spec.id}`);
   const allowed = new Set([...required, '_recovery']);
   const unknown = Object.keys(value).filter((key) => !allowed.has(key));
   if (unknown.length) throw new Error(`store_unknown_field:${spec.id}:${unknown.join(',')}`);
