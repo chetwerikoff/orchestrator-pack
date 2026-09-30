@@ -10,7 +10,8 @@
     "scripts/flow-manager-authority-contract.test.ts",
     "scripts/lib/create-issue-manager-boundary.test.ts",
     "scripts/lib/create-issue-manager-boundary.ts",
-    "scripts/lib/create-issue-next-action.ts"
+    "scripts/lib/create-issue-next-action.ts",
+    "scripts/vitest-ci-runner-control-flow.test.ts"
   ],
   "denylist": [
     ".github/workflows/",
@@ -29,7 +30,8 @@
     "scripts/flow-manager-authority-contract.test.ts",
     "scripts/lib/create-issue-manager-boundary.test.ts",
     "scripts/lib/create-issue-manager-boundary.ts",
-    "scripts/lib/create-issue-next-action.ts"
+    "scripts/lib/create-issue-next-action.ts",
+    "scripts/vitest-ci-runner-control-flow.test.ts"
   ],
-  "source_revision": "0a8d1aeeebff3937c05ddc25410317ff20da648b"
+  "source_revision": "fe63ca6646d2a6262ffcc9f01d747015d82c25b4"
 }
