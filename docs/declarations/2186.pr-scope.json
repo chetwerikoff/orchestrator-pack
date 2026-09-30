@@ -22,11 +22,9 @@
     "scripts/lib/cutover/types.ts",
     "scripts/lib/orchestrator-side-process-supervisor.ts",
     "scripts/lib/project-state-binding.mjs",
-    "scripts/lib/project-state-binding.test.ts",
     "scripts/lib/worker-smoke-receipt.ts",
     "scripts/lib/worker-status-store.mjs",
     "scripts/orchestrator-cutover-activate.ts",
-    "scripts/orchestrator-wake-supervisor.test.ts",
     "scripts/orchestrator-wake-supervisor.ts",
     "scripts/pack-review-runner.ts",
     "scripts/pr2-foundation/scheduler.ts",
@@ -61,5 +59,5 @@
     "scripts/pack-worker-report.ts",
     "scripts/pr2-foundation/**"
   ],
-  "source_revision": "4e1561533f07a18da13bc528814bda25dbcd0c1d"
+  "source_revision": "916e238952c5aa30404382d85c932ac7153c1e45"
 }
