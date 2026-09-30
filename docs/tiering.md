@@ -87,6 +87,11 @@ GitHub Issue is the only live spec. The [canonical create-Issue skill](../.curso
 owns launch/disposition/acceptance procedure; the shared Browser-GPT sender
 retains its own separate unchanged transport and legal-retry authority.
 
+### Per-tier pipeline (ceilings, not quotas)
+
+The following table counts required published reviews, not staged receipts or
+model-call quotas. No T3 competitive stage or waived Claude lens exists.
+
 | Tier | Published Issue-comment reviews | Disposition and acceptance |
 | --- | --- | --- |
 | T1 | One GPT terminal architectural reviewer | Author dispositions any findings; existing substantive floor and label rules apply. |
