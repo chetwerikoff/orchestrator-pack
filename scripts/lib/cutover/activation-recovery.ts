@@ -9,7 +9,13 @@ import {
   readCordonState,
 } from './activation-cordon.ts';
 import { appendFollowup, appendPhaseOne, finalizePhaseOne, readPhaseOneDetail, verifyPhaseOneDetails, verifyPhaseOneDigest } from './activation-evidence.ts';
-import { importSnapshot } from './activation-import.ts';
+import {
+  assertSnapshotSourceStable,
+  cutoverStoreKind,
+  importSnapshot,
+  retireImportedSource,
+  snapshotArtifactPath,
+} from './activation-import.ts';
 import { projectRegistry } from './activation-registry-projection.ts';
 import { sha256Bytes, sha256Stable } from './stable-stringify.ts';
 import type { CordonRecord, FollowupRecord, ActivationRequest, EpochCommitCore, ImportRecord, PhaseOneEnvelope, SnapshotRecord } from './types.ts';
@@ -110,7 +116,12 @@ function liveSupervisorStatus(request: ActivationRequest, nonce: string): Superv
   if (!status) return null;
   if (status.schemaVersion !== 2) throw new Error('recovery_supervisor_status_v1_unsupported');
   if (!isLiveSupervisorStatus(status)) return null;
-  if (status.epochId !== request.epochId || status.nonce !== nonce) throw new Error('recovery_supervisor_context_conflict');
+  if (
+    status.epochId !== request.epochId
+    || status.nonce !== nonce
+    || (request.projectId && status.projectId !== request.projectId)
+    || (request.repository && status.repository !== request.repository)
+  ) throw new Error('recovery_supervisor_context_conflict');
   if (status.restartState === 'refused') throw new Error(`recovery_supervisor_refused:${status.refusalReason ?? 'unknown'}`);
   if (status.restartState === 'stopping') throw new Error('recovery_supervisor_stopping');
   return status;
@@ -335,7 +346,7 @@ function recoverySnapshots(request: ActivationRequest, nonce: string): SnapshotR
     const matches = rows.filter((row) => row.storeId === spec.id);
     if (matches.length !== 1) throw new Error(`precas_snapshot_evidence_invalid:${spec.id}`);
     const row = matches[0]!;
-    const snapshotPath = path.join(request.paths.snapshotDir, `${spec.id}.snapshot.json`);
+    const snapshotPath = snapshotArtifactPath(spec, request.paths.snapshotDir);
     if (
       row.snapshotPath !== snapshotPath
       || typeof row.snapshotDigest !== 'string'
@@ -344,6 +355,8 @@ function recoverySnapshots(request: ActivationRequest, nonce: string): SnapshotR
       || Number(row.sourceVersion) <= 0
       || typeof row.writerWatermark !== 'string'
       || !row.writerWatermark.trim()
+      || (cutoverStoreKind(spec) !== 'legacy-json'
+        && (typeof row.sourceDigest !== 'string' || !row.sourceDigest.trim()))
       || (row.sourceState !== 'present' && row.sourceState !== 'absent')
     ) {
       throw new Error(`precas_snapshot_evidence_invalid:${spec.id}`);
@@ -378,6 +391,10 @@ function completePreCasRecovery(request: ActivationRequest, cordon: CordonRecord
   assertForwardRecoveryPrefix(request.paths.phaseOnePath, request.epochId, nonce);
   verifyPhaseOneDetails(request.paths.phaseOnePath, request.epochId, nonce);
   const snapshots = recoverySnapshots(request, nonce);
+  for (const store of request.stores) {
+    const snapshot = snapshots.find((row) => row.storeId === store.id)!;
+    assertSnapshotSourceStable(store, snapshot);
+  }
   const imports: ImportRecord[] = request.stores.map((spec) => importSnapshot({
     epochId: request.epochId,
     nonce,
@@ -424,6 +441,14 @@ export async function recoverCommittedCutover(
   }
   assertCommittedContext(request, cordon, core);
   verifyPhaseOneDigest(request.paths.phaseOnePath, request.epochId, cordon.nonce, core.preCommitLogDigest);
+  const snapshots = recoverySnapshots(request, cordon.nonce);
+  const retiredSources = request.stores.flatMap((store) => {
+    const snapshot = snapshots.find((row) => row.storeId === store.id)!;
+    return retireImportedSource(store, snapshot) ? [store.id] : [];
+  });
+  appendIfMissing(request.paths.followupPath, request.epochId, 'project-state-sources-retired', {
+    storeIds: retiredSources,
+  });
   const projection = projectRegistry(request.paths.targetRegistryPath, request.paths.projectedRegistryPath);
   if (projection.registryHash !== core.registryHash) throw new Error('recovery_registry_hash_mismatch');
   appendIfMissing(request.paths.followupPath, request.epochId, 'committed-registry-reprojected', projection);
