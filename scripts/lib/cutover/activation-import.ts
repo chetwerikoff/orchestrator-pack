@@ -58,7 +58,8 @@ export function cutoverStoreKind(spec: CutoverStoreSpec): CutoverStoreKind {
 }
 
 function writeAbsentImportMarker(markerPath: string, record: ImportRecord): void {
-  writeDurableJson(markerPath, record);
+  // Absence and present-source publication retain independent durable marker writes.
+  writeDurableFile(markerPath, `${JSON.stringify(record, null, 2)}\n`);
 }
 
 function normalizedPayload(spec: CutoverStoreSpec, raw: Buffer): Record<string, unknown> {
