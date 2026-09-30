@@ -53,6 +53,11 @@ import { packReviewDeliveryNeedsResume } from '../lib/pack-review-delivery.ts';
 import { startPackReview } from '../pack-review-runner.ts';
 import { produceFoundationAdoptionEvidence } from './foundation-adoption-producer.ts';
 import { DEFAULT_FOUNDATION_CONFIG } from '../pr2-foundation/config.ts';
+import {
+  assertProjectStateBinding,
+  ensureProjectStateBinding,
+  publishCommittedProjectStateBinding,
+} from '../lib/project-state-binding.mjs';
 
 const activationCordonTestState = vi.hoisted(() => ({
   disableGreenfieldProcessCensus: false,
@@ -264,6 +269,51 @@ function committedEpoch(file: string, epochId = 'epoch-scheduler', nonce = 'nonc
   new FileEpochAuthority(file).commit(null, core);
   return core;
 }
+
+describe('Issue #2186 project-state binding', () => {
+  it('isolates same-number task namespaces and rejects project-card retargeting', () => {
+    const root = tempRoot();
+    const alpha = path.join(root, 'alpha');
+    const beta = path.join(root, 'beta');
+    ensureProjectStateBinding(alpha, { projectId: 'alpha', repository: 'owner/alpha' });
+    ensureProjectStateBinding(beta, { projectId: 'beta', repository: 'owner/beta' });
+    writeFileSync(path.join(alpha, 'issue-7.json'), '{}\n', 'utf8');
+    writeFileSync(path.join(beta, 'issue-7.json'), '{}\n', 'utf8');
+
+    expect(assertProjectStateBinding(alpha, {
+      projectId: 'alpha',
+      repository: 'owner/alpha',
+    })).toMatchObject({ projectId: 'alpha', repository: 'owner/alpha' });
+    expect(assertProjectStateBinding(beta, {
+      projectId: 'beta',
+      repository: 'owner/beta',
+    })).toMatchObject({ projectId: 'beta', repository: 'owner/beta' });
+    expect(() => assertProjectStateBinding(alpha, {
+      projectId: 'alpha',
+      repository: 'owner/retargeted',
+    })).toThrow('project_state_binding_mismatch');
+  });
+
+  it('refuses unbound non-empty state and permits binding only through the post-CAS helper', () => {
+    const root = tempRoot();
+    const namespace = path.join(root, 'state');
+    mkdirSync(namespace, { recursive: true });
+    writeFileSync(path.join(namespace, 'durable.json'), '{}\n', 'utf8');
+    expect(() => ensureProjectStateBinding(namespace, {
+      projectId: 'leopoker',
+      repository: 'owner/leopoker',
+    })).toThrow('project_state_binding_missing_for_nonempty_namespace');
+
+    publishCommittedProjectStateBinding(namespace, {
+      projectId: 'leopoker',
+      repository: 'owner/leopoker',
+    });
+    expect(assertProjectStateBinding(namespace, {
+      projectId: 'leopoker',
+      repository: 'owner/leopoker',
+    })).toMatchObject({ projectId: 'leopoker', repository: 'owner/leopoker' });
+  });
+});
 
 describe('Issue #1880 activation epoch current-pointer integrity', () => {
   function authorityReadError(authority: FileEpochAuthority): string | null {
