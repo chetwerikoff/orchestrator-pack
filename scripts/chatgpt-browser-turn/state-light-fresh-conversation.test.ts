@@ -2471,6 +2471,22 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
     expect(fake.retryClicks).not.toHaveBeenCalled();
   });
 
+  it('ends a turn on a recovery banner once the Stop grace after the send runs out', async () => {
+    const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
+    vi.mocked(uiAdapter.productStatusText).mockImplementation(actual.productStatusText);
+    vi.mocked(uiAdapter.classifyProductWall).mockImplementation(actual.classifyProductWall);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-GRACE-BANNER'));
+    const fake = recoveryPage(['banner', 'banner', 'banner'], 'Error in message stream');
+    const outcome = await runExistingChat(fake.page, join(integrationStateDir, 'grace-banner.txt'), '600000');
+    expect(outcome.result).toMatchObject({
+      state: 'recovery_required',
+      scope: 'conversation',
+      cause: 'message_stream_error',
+      send_count: 1,
+    });
+    expect(fake.retryClicks).not.toHaveBeenCalled();
+  });
+
   it('keeps polling with no wall while generation stays active and the banner is absent', async () => {
     const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
     vi.mocked(uiAdapter.productStatusText).mockImplementation(actual.productStatusText);

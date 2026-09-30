@@ -144,6 +144,8 @@ const EXISTING_GENERATION_WAIT_ROUND_MS = 10 * 60_000;
 const EXISTING_GENERATION_WAIT_ROUNDS = 2;
 const EXISTING_GENERATION_READ_INTERVAL_MS = 1_000;
 const EXISTING_GENERATION_IDLE_READS = 2;
+/** How long after the send a recovery banner waits for this turn's Stop to appear. */
+const RECOVERY_BANNER_STOP_GRACE_MS = 60_000;
 export const COMPOSER_READINESS_WAIT_MS = 12_000;
 /** Minimum insertion allowance for a one-line payload. */
 export const COMPOSER_INSERTION_WAIT_MS = 3_000;
@@ -3042,9 +3044,10 @@ async function runTurn(
     let freshMarkerlessReply = '';
     let streamRecoveryBannerReads = 0;
     let streamRecoveryBannerCause: string | undefined;
-    // Roleless recovery banners outlive the turn that raised them; only a turn
-    // that has generated since its send can be ended by one.
+    // Roleless recovery banners outlive the turn that raised them; one ends this
+    // turn only after its own Stop was seen or the Stop grace since the send ran out.
     let ownedGenerationSeen = false;
+    let firstSentPollAt: number | undefined;
     let sendObservationDeferredLogged = false;
     const updateHeartbeatForPoll = (decision: PageObservationDecision): void => {
       heartbeatDecision = decision;
@@ -3379,6 +3382,7 @@ async function runTurn(
         transcriptIncomplete,
         snapshot: transcriptSnapshot,
       } = observation;
+      if (sendCount >= 1 && firstSentPollAt === undefined) firstSentPollAt = Date.now();
       if (!ownedGenerationSeen) {
         try {
           ownedGenerationSeen = await locatorCount(page.locator(RENDERED_STOP_BUTTON_SELECTOR), hardExhaustionDeadline) > 0;
@@ -3386,6 +3390,8 @@ async function runTurn(
           if (isPostSendTargetCrash(error)) throw error;
         }
       }
+      const recoveryBannerTrusted = ownedGenerationSeen
+        || (firstSentPollAt !== undefined && Date.now() - firstSentPollAt >= RECOVERY_BANNER_STOP_GRACE_MS);
       if (
         config.newChat
         && ownedConversationUrl
@@ -3406,7 +3412,7 @@ async function runTurn(
           incident,
         );
       }
-      if (wall.state && (ownedGenerationSeen || !(
+      if (wall.state && (recoveryBannerTrusted || !(
         wall.state === 'recovery_required'
         && (wall.cause === 'stream_recovery_polling_timed_out' || wall.cause === 'message_stream_error')
       ))) {
@@ -3682,7 +3688,7 @@ async function runTurn(
       // prove ownership then, and a reload would hide the alert while the turn
       // stays dead. Return the reserved conversation-scoped recovery cause for
       // this invocation's own bound conversation instead, without reload or resend.
-      if (!markerVisible && durableConversationUrl && sendCount >= 1 && ownedGenerationSeen && pageTurnEvidence?.generationInProgress !== true) {
+      if (!markerVisible && durableConversationUrl && sendCount >= 1 && recoveryBannerTrusted && pageTurnEvidence?.generationInProgress !== true) {
         let bannerCause: string | undefined;
         try {
           const alertTexts = await boundedBrowserRead(
