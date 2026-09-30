@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --experimental-strip-types
 import '../toolchain/native-entrypoint-preflight.ts';
 
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +30,26 @@ export class TargetContextError extends Error {
   }
 }
 
+export type TargetVerificationErrorCode =
+  | 'verification-local-required'
+  | 'target-worktree-required'
+  | 'target-worktree-invalid'
+  | 'target-worktree-repository-mismatch'
+  | 'verification-command-spawn-failed'
+  | 'verification-command-failed';
+
+export class TargetVerificationError extends Error {
+  readonly code: TargetVerificationErrorCode;
+  readonly commandIndex?: number;
+
+  constructor(code: TargetVerificationErrorCode, message: string, commandIndex?: number) {
+    super(message);
+    this.name = 'TargetVerificationError';
+    this.code = code;
+    this.commandIndex = commandIndex;
+  }
+}
+
 export interface TargetVerification {
   readonly local?: readonly string[];
   readonly focused?: string;
@@ -51,6 +71,19 @@ export interface TargetContext {
 export interface ResolveTargetContextInput {
   readonly projectId?: string;
   readonly env?: Readonly<NodeJS.ProcessEnv>;
+}
+
+export interface RunTargetVerificationInput {
+  readonly context: TargetContext;
+  readonly targetWorktreeRoot: string;
+  readonly commandRunner?: typeof runProcessSync;
+}
+
+export interface TargetVerificationResult {
+  readonly projectId: string;
+  readonly repository: string;
+  readonly targetWorktreeRoot: string;
+  readonly commandCount: number;
 }
 
 const PACK_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -111,7 +144,7 @@ function readOrigin(primaryRoot: string): string {
     command: 'git',
     args: ['remote', 'get-url', 'origin'],
     cwd: primaryRoot,
-    inheritParentEnv: true,
+    inheritParentEnv: false,
   });
   if (!result.ok) {
     const detail = String(result.stderr || result.error || '').trim();
@@ -131,12 +164,16 @@ function parseVerification(value: unknown, cardPath: string): TargetVerification
   const record = value as Record<string, unknown>;
   let local: readonly string[] | undefined;
   if (record.local !== undefined) {
-    if (!Array.isArray(record.local) || record.local.some((item) => !text(item))) {
+    if (!Array.isArray(record.local) || record.local.some((item) => typeof item !== 'string' || !item.trim())) {
       throw new TargetContextError('card-invalid', `verification.local must be an array of non-empty commands in ${cardPath}`, cardPath);
     }
-    local = Object.freeze(record.local.map((item) => text(item)));
+    local = Object.freeze(record.local.map((item) => String(item)));
   }
-  const focused = record.focused === undefined ? undefined : text(record.focused);
+  const focused = record.focused === undefined
+    ? undefined
+    : typeof record.focused === 'string' && record.focused.trim()
+      ? record.focused
+      : '';
   if (record.focused !== undefined && !focused) {
     throw new TargetContextError('card-invalid', `verification.focused must be a non-empty string in ${cardPath}`, cardPath);
   }
@@ -237,6 +274,133 @@ export function resolveTargetContext(input: ResolveTargetContextInput = {}): Tar
   });
 }
 
+function targetVerificationCommands(context: TargetContext): readonly string[] {
+  const commands = context.verification?.local;
+  if (!commands || commands.length === 0 || commands.some((command) => !text(command))) {
+    throw new TargetVerificationError(
+      'verification-local-required',
+      `target project ${context.projectId} requires a non-empty verification.local command list in ${context.cardPath}`,
+    );
+  }
+  return commands;
+}
+
+function validatedTargetWorktreeRoot(context: TargetContext, value: string): string {
+  const requested = text(value);
+  if (!requested) {
+    throw new TargetVerificationError(
+      'target-worktree-required',
+      'target verification requires an explicit current target worktree root',
+    );
+  }
+
+  let root: string;
+  try {
+    root = realpathSync(resolve(requested));
+    if (!statSync(root).isDirectory()) throw new Error('not a directory');
+  } catch {
+    throw new TargetVerificationError(
+      'target-worktree-invalid',
+      `target verification worktree is not a readable directory: ${requested}`,
+    );
+  }
+
+  const topLevel = runProcessSync({
+    command: 'git',
+    args: ['rev-parse', '--show-toplevel'],
+    cwd: root,
+    inheritParentEnv: false,
+  });
+  if (!topLevel.ok || !text(topLevel.stdout)) {
+    throw new TargetVerificationError(
+      'target-worktree-invalid',
+      `target verification root is not a readable Git worktree: ${root}`,
+    );
+  }
+
+  let canonicalTopLevel: string;
+  try {
+    canonicalTopLevel = realpathSync(resolve(text(topLevel.stdout)));
+  } catch {
+    throw new TargetVerificationError(
+      'target-worktree-invalid',
+      `target verification Git top level is unreadable: ${text(topLevel.stdout) || '<empty>'}`,
+    );
+  }
+  if (canonicalTopLevel !== root) {
+    throw new TargetVerificationError(
+      'target-worktree-invalid',
+      `target verification root must be the Git worktree top level: ${root}`,
+    );
+  }
+
+  const origin = runProcessSync({
+    command: 'git',
+    args: ['remote', 'get-url', 'origin'],
+    cwd: root,
+    inheritParentEnv: false,
+  });
+  const observedRepository = origin.ok ? canonicalGitHubRepository(origin.stdout) : null;
+  if (!observedRepository || observedRepository !== context.repository.toLowerCase()) {
+    throw new TargetVerificationError(
+      'target-worktree-repository-mismatch',
+      `target verification worktree origin does not match selected card repository ${context.repository}: ${root}`,
+    );
+  }
+  return root;
+}
+
+export function runTargetVerification(input: RunTargetVerificationInput): TargetVerificationResult {
+  const commands = targetVerificationCommands(input.context);
+  const targetWorktreeRoot = validatedTargetWorktreeRoot(input.context, input.targetWorktreeRoot);
+  const commandRunner = input.commandRunner ?? runProcessSync;
+
+  for (const [index, command] of commands.entries()) {
+    let result: ReturnType<typeof runProcessSync>;
+    try {
+      result = commandRunner({
+        command: 'sh',
+        args: ['-lc', command],
+        cwd: targetWorktreeRoot,
+        inheritParentEnv: true,
+        forwardOutputToStderr: true,
+      });
+    } catch (error) {
+      throw new TargetVerificationError(
+        'verification-command-spawn-failed',
+        `target verification command ${index + 1} could not spawn: ${error instanceof Error ? error.message : String(error)}`,
+        index,
+      );
+    }
+    if (result.outcome === 'spawn-failure') {
+      throw new TargetVerificationError(
+        'verification-command-spawn-failed',
+        `target verification command ${index + 1} could not spawn`,
+        index,
+      );
+    }
+    if (!result.ok) {
+      const terminal = result.exitCode !== null
+        ? `exit ${result.exitCode}`
+        : result.signal
+          ? `signal ${result.signal}`
+          : result.outcome;
+      throw new TargetVerificationError(
+        'verification-command-failed',
+        `target verification command ${index + 1} failed with ${terminal}`,
+        index,
+      );
+    }
+  }
+
+  return Object.freeze({
+    projectId: input.context.projectId,
+    repository: input.context.repository,
+    targetWorktreeRoot,
+    commandCount: commands.length,
+  });
+}
+
 function option(argv: readonly string[], name: string): string {
   const indexes = argv.flatMap((value, index) => value === name ? [index] : []);
   if (indexes.length > 1) throw new Error(`duplicate argument: ${name}`);
@@ -250,15 +414,37 @@ export function runTargetContextCli(
   argv: readonly string[] = process.argv.slice(2),
   env: NodeJS.ProcessEnv = process.env,
 ): number {
-  if (argv[0] !== 'check') {
-    process.stderr.write('Usage: target-context.ts check [--project <id>]\n');
+  const action = argv[0];
+  if (action !== 'check' && action !== 'verify') {
+    process.stderr.write('Usage: target-context.ts <check|verify> [--project <id>] [--target-worktree <root>]\n');
     return 2;
   }
   try {
-    const unknown = argv.slice(1).filter((value, index, rest) =>
-      index % 2 === 0 && value !== '--project');
+    const args = argv.slice(1);
+    if (action === 'verify') {
+      const worktreeIndex = args.indexOf('--target-worktree');
+      const worktreeValue = worktreeIndex < 0 ? undefined : args[worktreeIndex + 1];
+      if (worktreeIndex >= 0 && (!worktreeValue?.trim() || worktreeValue.startsWith('--'))) {
+        throw new TargetVerificationError(
+          'target-worktree-required',
+          'target verification requires an explicit current target worktree root',
+        );
+      }
+    }
+    const allowed = action === 'verify'
+      ? new Set(['--project', '--target-worktree'])
+      : new Set(['--project']);
+    const unknown = args.filter((value, index) => index % 2 === 0 && !allowed.has(value));
     if (unknown.length > 0) throw new Error(`unknown argument: ${unknown[0]}`);
-    const context = resolveTargetContext({ projectId: option(argv.slice(1), '--project'), env });
+    const context = resolveTargetContext({ projectId: option(args, '--project'), env });
+    if (action === 'verify') {
+      const result = runTargetVerification({
+        context,
+        targetWorktreeRoot: option(args, '--target-worktree'),
+      });
+      process.stdout.write(`${JSON.stringify({ ok: true, ...result })}\n`);
+      return 0;
+    }
     process.stdout.write(`${JSON.stringify({
       projectId: context.projectId,
       repository: context.repository,
@@ -269,7 +455,9 @@ export function runTargetContextCli(
     })}\n`);
     return 0;
   } catch (error) {
-    const code = error instanceof TargetContextError ? error.code : 'card-invalid';
+    const code = error instanceof TargetContextError || error instanceof TargetVerificationError
+      ? error.code
+      : 'card-invalid';
     process.stderr.write(`${JSON.stringify({
       ok: false,
       code,
