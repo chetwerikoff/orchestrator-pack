@@ -1741,6 +1741,42 @@ describe('Issue #1901 native Linux supervisor census', () => {
     }
   });
 
+  it('attributes the pre-#2186 unqualified TypeScript supervisor only to orchestrator-pack', () => {
+    const identity: ProcessIdentity = {
+      pid: livePid,
+      startTicks: '1901',
+      cmdline: ['/fixture/scripts/orchestrator-wake-supervisor.ts'],
+    };
+    const options = {
+      entries: () => [String(livePid)],
+      readStat: () => stat(),
+      readIdentity: () => identity,
+    };
+    expect(findTypeScriptSupervisorIdentities({
+      ...options,
+      projectId: 'orchestrator-pack',
+    })).toEqual([identity]);
+    expect(findTypeScriptSupervisorIdentities({
+      ...options,
+      projectId: 'leopoker',
+    })).toEqual([]);
+
+    const qualified = {
+      ...identity,
+      cmdline: [...identity.cmdline, '--project', 'leopoker'],
+    };
+    expect(findTypeScriptSupervisorIdentities({
+      ...options,
+      readIdentity: () => qualified,
+      projectId: 'leopoker',
+    })).toEqual([qualified]);
+    expect(findTypeScriptSupervisorIdentities({
+      ...options,
+      readIdentity: () => qualified,
+      projectId: 'orchestrator-pack',
+    })).toEqual([]);
+  });
+
   it('keeps EACCES fail-closed and returns matching userspace supervisors', () => {
     for (const row of census) {
       expect(() => row.run({
