@@ -35,6 +35,7 @@ import {
 import { publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath } from './lib/worker-assignment-store.ts';
 import {
   computeSmokeCompletionBodyDigest,
+  scrubSmokeOutput,
   WORKER_SMOKE_CAUSE_FAMILIES,
   smokeResultForWorkerSmokeCauseFamily,
   workerSmokeCauseFamilyForHarnessReason,
@@ -103,6 +104,20 @@ const HEAD_ONE = '1'.repeat(40);
 const HEAD_TWO = '2'.repeat(40);
 const TRUSTED_ACTOR = 'pack-publisher';
 const REPOSITORY = 'chetwerikoff/orchestrator-pack';
+
+describe('Issue #2250 scrubbed report output is redaction-only', () => {
+  it('retains a PASS machine report while redacting secret-shaped scenario output', () => {
+    const dangerous = 'Authorization: Bearer example-smoke-secret';
+    const reportBody = formatSmokeReportComment(report('PASS', [{
+      ...scenario('inspect smoke logs', 'credentials are not exposed'),
+      observed: dangerous,
+    }]));
+    const published = scrubSmokeOutput(reportBody);
+    expect(published).toContain('result: PASS');
+    expect(published).toContain('Authorization: Bearer [redacted]');
+    expect(published).not.toContain('example-smoke-secret');
+  });
+});
 
 function planBody(scenarios: readonly { action: string; expected: string }[]): string {
   return [
