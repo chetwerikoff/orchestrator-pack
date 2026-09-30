@@ -22,8 +22,13 @@ import {
   type FleetTerminal,
   type OrcaExecutor,
 } from './fleet-sweep.ts';
-import { DEFAULT_CHAT_CDP_URL, readChatErrorBanners, type ChatErrorBanner } from './chat-error-banners.ts';
-import { readChatBinding } from './chat-bindings.ts';
+import {
+  DEFAULT_CHAT_CDP_URL,
+  readChatErrorBanners,
+  type ChatBannerScope,
+  type ChatErrorBanner,
+} from './chat-error-banners.ts';
+import { readChatBinding } from '../chatgpt-browser-turn/chat-bindings.ts';
 
 export interface FleetWakeConfig {
   readonly projectId: string;
@@ -34,6 +39,7 @@ export interface FleetWakeConfig {
   readonly busyRe: RegExp;
   readonly intervalSeconds: number;
   readonly chatCdpUrl?: string;
+  readonly chatScope?: ChatBannerScope;
 }
 
 export interface FleetWakeStateStore extends FleetPollingStore {
@@ -90,7 +96,7 @@ export interface FleetAlarmTickOptions {
   readonly store?: FleetWakeStateStore;
   readonly sleepMs?: (milliseconds: number) => void | Promise<void>;
   readonly log?: (line: string) => void;
-  readonly readChatBanners?: (cdpUrl: string) => Promise<ChatErrorBanner[]>;
+  readonly readChatBanners?: (cdpUrl: string, scope: ChatBannerScope) => Promise<ChatErrorBanner[]>;
 }
 
 export type FleetAlarmTickResult =
@@ -263,8 +269,8 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     return { state: 'unreadable', handle: 'fleet-sweep' };
   }
 
-  const banners = config.chatCdpUrl
-    ? await (options.readChatBanners ?? readChatErrorBanners)(config.chatCdpUrl).catch(() => [])
+  const banners = config.chatCdpUrl && config.chatScope
+    ? await (options.readChatBanners ?? readChatErrorBanners)(config.chatCdpUrl, config.chatScope).catch(() => [])
     : [];
   const direct: Array<readonly [FleetTerminal, ChatErrorBanner]> = [];
   const routed: ChatErrorBanner[] = [];
@@ -361,6 +367,7 @@ export function fleetWakeConfigFromEnv(
     busyRe: compileRegex(env.BUSY_RE, DEFAULT_BUSY_RE),
     intervalSeconds,
     chatCdpUrl: env.PACK_GPT_BROWSER_CDP?.trim() || DEFAULT_CHAT_CDP_URL,
+    chatScope: { projectUrl: target.browserGpt.projectUrl, repository: target.repository },
   };
 }
 

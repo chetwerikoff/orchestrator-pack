@@ -7,16 +7,28 @@ export interface ChatErrorBanner {
 
 export const DEFAULT_CHAT_CDP_URL = 'http://127.0.0.1:9222';
 
-const CONVERSATION_URL_RE = /^https:\/\/chatgpt\.com\/(?:.*\/)?c\/[0-9a-f-]{8,}/i;
+export interface ChatBannerScope {
+  // Project URL from the target card, e.g. https://chatgpt.com/g/g-p-<id>-<slug>/project.
+  readonly projectUrl: string;
+  // owner/name; only Issue links of this repository identify an owner.
+  readonly repository: string;
+}
+
+export function projectConversationPrefix(projectUrl: string): string {
+  return `${projectUrl.split(/[?#]/)[0]!.replace(/\/+$/, '').replace(/\/project$/, '')}/c/`;
+}
 const TARGET_LIST_TIMEOUT_MS = 3_000;
 const TARGET_EVAL_TIMEOUT_MS = 3_000;
 
 // Read-only: the expression never clicks, types, or presses Retry.
-const RED_BANNER_EXPRESSION = `(() => {
+const redBannerExpression = (repository: string): string => `(() => {
   if (document.querySelector('[data-testid="stop-button"]')) return [];
   const first = document.querySelector('[data-markdown-text-style="user-message"],[data-chatgpt-search-unit-key$=":user"]');
-  const issueMatch = ((first && first.innerText) || '').match(/github\\.com\\/[^\\s/]+\\/[^\\s/]+\\/issues\\/(\\d+)/);
-  const issue = issueMatch ? Number(issueMatch[1]) : undefined;
+  const issuePrefix = ${JSON.stringify(`github.com/${repository.toLowerCase()}/issues/`)};
+  const firstText = ((first && first.innerText) || '').toLowerCase();
+  const at = firstText.indexOf(issuePrefix);
+  const digits = at < 0 ? '' : (firstText.slice(at + issuePrefix.length).match(/^\\d+/) || [''])[0];
+  const issue = digits ? Number(digits) : undefined;
   const red = (c) => {
     let m = c.match(/oklab\\(\\s*[\\d.]+%?\\s+([-\\d.]+)\\s+([-\\d.]+)/);
     if (m) return Number(m[1]) > 0.1;
@@ -42,7 +54,7 @@ interface CdpTarget {
 
 type BannerRow = { text: string; retry: boolean; issue?: number };
 
-function evaluateTarget(wsUrl: string): Promise<BannerRow[]> {
+function evaluateTarget(wsUrl: string, expression: string): Promise<BannerRow[]> {
   return new Promise((resolvePromise) => {
     let settled = false;
     let socket: WebSocket;
@@ -63,7 +75,7 @@ function evaluateTarget(wsUrl: string): Promise<BannerRow[]> {
     socket.onopen = () => socket.send(JSON.stringify({
       id: 1,
       method: 'Runtime.evaluate',
-      params: { expression: RED_BANNER_EXPRESSION, returnByValue: true },
+      params: { expression, returnByValue: true },
     }));
     socket.onmessage = (event) => {
       try {
@@ -80,7 +92,9 @@ function evaluateTarget(wsUrl: string): Promise<BannerRow[]> {
   });
 }
 
-export async function readChatErrorBanners(cdpUrl: string): Promise<ChatErrorBanner[]> {
+export async function readChatErrorBanners(cdpUrl: string, scope: ChatBannerScope): Promise<ChatErrorBanner[]> {
+  const prefix = projectConversationPrefix(scope.projectUrl);
+  const expression = redBannerExpression(scope.repository);
   let targets: CdpTarget[];
   try {
     const response = await fetch(`${cdpUrl.replace(/\/+$/, '')}/json/list`, {
@@ -93,11 +107,11 @@ export async function readChatErrorBanners(cdpUrl: string): Promise<ChatErrorBan
   }
   const conversations = targets.filter((target) => target.type === 'page'
     && typeof target.url === 'string'
-    && CONVERSATION_URL_RE.test(target.url)
+    && target.url.startsWith(prefix)
     && typeof target.webSocketDebuggerUrl === 'string');
   const banners: ChatErrorBanner[] = [];
   for (const target of conversations) {
-    for (const row of await evaluateTarget(target.webSocketDebuggerUrl!)) {
+    for (const row of await evaluateTarget(target.webSocketDebuggerUrl!, expression)) {
       banners.push({
         url: target.url!.split(/[?#]/)[0]!,
         text: row.text,

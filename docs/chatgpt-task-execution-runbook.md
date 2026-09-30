@@ -218,9 +218,9 @@ second monitor, watcher, daemon, polling loop, durable timer, or recovery store.
 The existing fleet alarm (`scripts/fleet/fleet-wake.ts`) also reports ChatGPT
 chats that show a red product-error banner with generation stopped: directly to
 the single manager pane bound to that chat, otherwise to the orchestrator. The
-binding (`scripts/fleet/chat-bindings.ts`, one file per conversation under
-`~/.local/state/orchestrator-fleet/chat-bindings/`) is written by the turn entry
-from the launching worktree; without one, the chat's opening Issue URL is
+binding (`scripts/chatgpt-browser-turn/chat-bindings.ts`, one file per
+conversation under `~/.local/state/orchestrator-fleet/chat-bindings/`) is
+written by the turn entry from the launching worktree; without one, the chat's opening Issue URL is
 matched to a workspace ending in `-<Issue>`. The binding is routing data only
 and carries no send, retry, or completion authority. The alarm is
 notification-only, and the continuation still follows this section.

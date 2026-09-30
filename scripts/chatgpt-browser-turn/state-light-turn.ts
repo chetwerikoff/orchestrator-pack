@@ -13,7 +13,7 @@ import {
   enterExecutionRecoveryProductWallScope,
   type ExecutionRecoveryProductCause,
 } from './ui-adapter.ts';
-import { writeChatBinding } from '../fleet/chat-bindings.ts';
+import { writeChatBinding } from './chat-bindings.ts';
 
 const DEFAULT_TIMEOUT_MS = 1_800_000;
 const EXECUTION_RECOVERY_CAUSES = new Set<ExecutionRecoveryProductCause>([
