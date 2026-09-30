@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolveTargetContext } from './target-context.ts';
-import { ensureProjectStateBinding } from './project-state-binding.mjs';
+import { ensureProjectStateBinding } from './project-state-binding.ts';
 import { join, resolve } from 'node:path';
 
 const STAGE_COMPLETENESS_RECEIPT_SCHEMA = 'stage-completeness-receipt/v1';
