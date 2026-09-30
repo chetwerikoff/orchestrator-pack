@@ -368,7 +368,7 @@ function recoverySnapshots(request: ActivationRequest, nonce: string): SnapshotR
     // Opaque files may contain JSONL or arbitrary bytes; only legacy JSON and
     // durable absence records carry a JSON document with a schemaVersion.
     const kind = cutoverStoreKind(spec);
-    let sourceVersion = row.sourceVersion;
+    let sourceVersion = Number(row.sourceVersion);
     if (kind === 'legacy-json' || row.sourceState === 'absent') {
       const parsed = JSON.parse(bytes.toString('utf8')) as { schemaVersion?: unknown };
       sourceVersion = Number(parsed.schemaVersion ?? 1);
