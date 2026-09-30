@@ -164,12 +164,16 @@ function parseVerification(value: unknown, cardPath: string): TargetVerification
   const record = value as Record<string, unknown>;
   let local: readonly string[] | undefined;
   if (record.local !== undefined) {
-    if (!Array.isArray(record.local) || record.local.some((item) => !text(item))) {
+    if (!Array.isArray(record.local) || record.local.some((item) => typeof item !== 'string' || !item.trim())) {
       throw new TargetContextError('card-invalid', `verification.local must be an array of non-empty commands in ${cardPath}`, cardPath);
     }
-    local = Object.freeze(record.local.map((item) => text(item)));
+    local = Object.freeze(record.local.map((item) => String(item)));
   }
-  const focused = record.focused === undefined ? undefined : text(record.focused);
+  const focused = record.focused === undefined
+    ? undefined
+    : typeof record.focused === 'string' && record.focused.trim()
+      ? record.focused
+      : '';
   if (record.focused !== undefined && !focused) {
     throw new TargetContextError('card-invalid', `verification.focused must be a non-empty string in ${cardPath}`, cardPath);
   }
