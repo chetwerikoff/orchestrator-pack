@@ -29,5 +29,5 @@
     "scripts/fleet/",
     "scripts/smoke-fixtures/inject-message-stream-error.test.ts"
   ],
-  "source_revision": "5cc915ea0b0087e4b0aaefc3d184faff3d026312"
+  "source_revision": "69f64a887f513d69396cad3e3fda5f1c62f7906b"
 }
