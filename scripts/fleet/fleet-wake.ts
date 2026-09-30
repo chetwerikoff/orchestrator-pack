@@ -22,7 +22,13 @@ import {
   type FleetTerminal,
   type OrcaExecutor,
 } from './fleet-sweep.ts';
-import { DEFAULT_CHAT_CDP_URL, readChatErrorBanners, type ChatErrorBanner } from './chat-error-banners.ts';
+import {
+  DEFAULT_CHAT_CDP_URL,
+  readChatErrorBanners,
+  type ChatBannerScope,
+  type ChatErrorBanner,
+} from './chat-error-banners.ts';
+import { readChatBinding } from '../chatgpt-browser-turn/chat-bindings.ts';
 
 export interface FleetWakeConfig {
   readonly projectId: string;
@@ -33,6 +39,7 @@ export interface FleetWakeConfig {
   readonly busyRe: RegExp;
   readonly intervalSeconds: number;
   readonly chatCdpUrl?: string;
+  readonly chatScope?: ChatBannerScope;
 }
 
 export interface FleetWakeStateStore extends FleetPollingStore {
@@ -89,7 +96,7 @@ export interface FleetAlarmTickOptions {
   readonly store?: FleetWakeStateStore;
   readonly sleepMs?: (milliseconds: number) => void | Promise<void>;
   readonly log?: (line: string) => void;
-  readonly readChatBanners?: (cdpUrl: string) => Promise<ChatErrorBanner[]>;
+  readonly readChatBanners?: (cdpUrl: string, scope: ChatBannerScope) => Promise<ChatErrorBanner[]>;
 }
 
 export type FleetAlarmTickResult =
@@ -137,15 +144,33 @@ export function stoppedSignature(observations: readonly FleetPaneObservation[]):
     .join('\n');
 }
 
+function isWorkerPane(terminal: FleetTerminal, config: FleetWakeConfig): boolean {
+  if (!terminal.worktreePath || samePath(terminal.worktreePath, config.primary)) return false;
+  config.workspaceRe.lastIndex = 0;
+  return config.workspaceRe.test(terminal.worktreePath.replaceAll('\\', '/'));
+}
+
 /**
- * The execution prompt opens with the Issue URL, and manager workspaces end in
- * `-<issue>`; only a single unambiguous pane is addressed directly.
+ * The chat binding written by the turn entry names the launching worktree;
+ * without one, fall back to the execution prompt's Issue URL against
+ * workspaces ending in `-<issue>`. Only a single unambiguous pane is addressed.
  */
 export function bannerOwnerPane(
   banner: ChatErrorBanner,
   terminals: readonly FleetTerminal[],
   config: FleetWakeConfig,
+  readBinding: typeof readChatBinding = readChatBinding,
 ): FleetTerminal | undefined {
+  const binding = readBinding(banner.url);
+  if (binding) {
+    const bound = resolve(binding.worktree).replaceAll('\\', '/');
+    const owners = terminals.filter((terminal) => {
+      if (!isWorkerPane(terminal, config)) return false;
+      const worktree = resolve(terminal.worktreePath).replaceAll('\\', '/');
+      return bound === worktree || bound.startsWith(`${worktree}/`);
+    });
+    if (owners.length === 1) return owners[0];
+  }
   if (!banner.issue) return undefined;
   const name = new RegExp(`^[a-z][a-z0-9]*-${banner.issue}$`, 'i');
   const matches = terminals.filter((terminal) => {
@@ -244,8 +269,8 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     return { state: 'unreadable', handle: 'fleet-sweep' };
   }
 
-  const banners = config.chatCdpUrl
-    ? await (options.readChatBanners ?? readChatErrorBanners)(config.chatCdpUrl).catch(() => [])
+  const banners = config.chatCdpUrl && config.chatScope
+    ? await (options.readChatBanners ?? readChatErrorBanners)(config.chatCdpUrl, config.chatScope).catch(() => [])
     : [];
   const direct: Array<readonly [FleetTerminal, ChatErrorBanner]> = [];
   const routed: ChatErrorBanner[] = [];
@@ -342,6 +367,7 @@ export function fleetWakeConfigFromEnv(
     busyRe: compileRegex(env.BUSY_RE, DEFAULT_BUSY_RE),
     intervalSeconds,
     chatCdpUrl: env.PACK_GPT_BROWSER_CDP?.trim() || DEFAULT_CHAT_CDP_URL,
+    chatScope: { projectUrl: target.browserGpt.projectUrl, repository: target.repository },
   };
 }
 
