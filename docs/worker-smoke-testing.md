@@ -288,6 +288,47 @@ handoff retain their distinct existing owners. The production scheduler no
 longer starts or observes smoke. After a fix, the existing worker/fixer
 explicitly invokes the smoke worker; no automatic retry machinery is added.
 
+## Delivery and completion authority
+
+*Retired by Issue #2250.* Smoke results are published as the existing
+`pack-worker-smoke-report/v1` PR comment. No delivery seal, completion receipt,
+progress record, or new completion authority is required for readiness.
+
+## Finite scenario progress and deadlines
+
+*Retired harness contract.* The independent smoke worker executes the Issue
+scenarios and produces the existing per-scenario report; no durable
+per-scenario progress protocol governs the result.
+
+## Child-only progress and cancellation protocol
+
+*Retired by Issue #2250.* No child progress file or cancellation acknowledgement
+is consumed by the active smoke/CI readiness path.
+
+## Durable spawn state and ambiguity recovery
+
+*Retired by Issue #2250.* No run registry, admission lock, or bounded-create
+recovery mechanism grants smoke authority. A failed run leaves no PASS; the
+existing worker/fixer may explicitly run smoke after correcting the PR.
+
+## Cancellation, cleanup, and restart recovery
+
+*Retired by Issue #2250.* No cleanup receipt, quarantine, reconcile, or
+restart-recovery settlement is a prerequisite for consuming a PR smoke PASS.
+
+## Deterministic preflight and concurrent starts
+
+*Retired by Issue #2250.* The smoke-plan fence remains the Issue authoring
+source; no smoke-plan preflight refusal, run admission lock, or scheduler
+post-review starter is introduced.
+
+## Readiness gate
+
+The newest existing `pack-worker-smoke-report/v1` PASS comment on the same PR,
+regardless of its report HEAD or publishing author, satisfies the smoke
+portion of readiness. Required CI must still be green on the current PR HEAD;
+review, assignment, and other merge conditions remain unchanged.
+
 ## Runtime verification and rollback
 
 Run the focused current-head suite before marking the PR ready:
