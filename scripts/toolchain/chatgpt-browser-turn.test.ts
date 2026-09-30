@@ -161,15 +161,16 @@ function assertTimingBudgetConsumed(
 
 describe('Issue #2171 live ChatGPT message and turn selectors', () => {
   it('selects message containers and identifies roles from markdown style markers', () => {
-    const selectionNode = '[data-chatgpt-selection-message-id]:not([data-chatgpt-search-unit-key$=":user"] *)';
-    expect(MESSAGE_NODE_SELECTOR).toBe(`[data-chatgpt-search-unit-key$=":user"], ${selectionNode}`);
+    const assistantUnit = '[data-chatgpt-search-unit-key$=":assistant"]:has([data-markdown-text-style="assistant-message"])';
+    const selectionNode = `[data-chatgpt-selection-message-id]:not([data-chatgpt-search-unit-key$=":user"] *):not(${assistantUnit} *)`;
+    expect(MESSAGE_NODE_SELECTOR).toBe(`[data-chatgpt-search-unit-key$=":user"], ${assistantUnit}, ${selectionNode}`);
     expect(MESSAGE_ID_ATTR).toBe('data-chatgpt-selection-message-id');
     expect(MESSAGE_AUTHOR_ROLE_ATTR).toBe('data-markdown-text-style');
     expect(USER_MESSAGE_SELECTOR).toBe(
       `[data-chatgpt-search-unit-key$=":user"], ${selectionNode}:has([data-markdown-text-style="user-message"])`,
     );
     expect(ASSISTANT_MESSAGE_SELECTOR).toBe(
-      `${selectionNode}:has([data-markdown-text-style="assistant-message"])`,
+      `${assistantUnit}, ${selectionNode}:has([data-markdown-text-style="assistant-message"])`,
     );
     expect(normalizeMessageRoleStyle('user-message')).toBe('user');
     expect(normalizeMessageRoleStyle('assistant-message')).toBe('assistant');

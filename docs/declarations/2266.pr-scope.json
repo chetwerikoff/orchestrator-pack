@@ -4,7 +4,8 @@
   "declared_paths": [
     "docs/declarations/2266.pr-scope.json",
     "scripts/browser-gpt-page-probe.test.ts",
-    "scripts/chatgpt-browser-turn/product-page-selectors.ts"
+    "scripts/chatgpt-browser-turn/product-page-selectors.ts",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts"
   ],
   "denylist": [
     "credentials/",
@@ -16,7 +17,8 @@
     "docs/declarations/",
     "scripts/browser-gpt-page-probe.test.ts",
     "scripts/browser-gpt-page-probe.ts",
-    "scripts/chatgpt-browser-turn/"
+    "scripts/chatgpt-browser-turn/",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts"
   ],
-  "source_revision": "d1db65164484ac3ec98082dfb527b1bf1e80010e"
+  "source_revision": "51b0fd4c2cf9d7ade721fca691523c28dc257ca4"
 }
