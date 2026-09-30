@@ -255,6 +255,7 @@ function readFoundationEvidence(request: ActivationRequest): { evidence: Foundat
       observedGreenfield = observeGreenfieldFoundationObservation({
         repoRoot: request.repoRoot,
         paths: canonical,
+        projectId: request.projectId?.trim() || 'orchestrator-pack',
       });
     } catch {
       throw new Error('foundation_evidence_observation_mismatch:greenfield_inputs');
