@@ -116,25 +116,14 @@ import {
   type WorkerSmokeMainMergeCarryRecord,
 } from './lib/worker-smoke-receipt.ts';
 import {
-  commitSmokeOrderingTransition,
-  initializePackReviewAuthority,
-  observePackReviewHead,
   packReviewFindingsSatisfiedByStrictDescendant,
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
   readPackReviewAuthority,
   settleLogicalPackReviewFindingsByStrictDescendant,
-  smokeOrderingRequired,
-  type PackReviewAuthorityOptions,
-  type PackReviewTier,
-  type SmokeOrderingActor,
-  type SmokeOrderingOwnerEvidence,
 } from './pack-review-state.ts';
 import {
-  listPackReviewRuns,
   resolvePackReviewRunStoreRoot,
 } from './lib/pack-review-run-store.ts';
-import { parseComplexityTierFence } from './lib/tier-gate-core.ts';
-import { resolveTierAndCap } from '../docs/review-cycle-cap.mjs';
 import { selectRuntimeAdapter } from './runtime/registry.ts';
 import {
   currentWorkerAssignment,
@@ -193,7 +182,7 @@ export interface CliOptions {
   headSha: string;
   issueBodyFile: string;
   smokeComplexity: SmokeComplexity | '';
-  smokeActor?: SmokeOrderingActor;
+  smokeActor?: 'worker-owned' | 'independent';
   operatorSmokeOnly?: boolean;
   operatorOverrideReason?: string;
   repoRoot: string;
@@ -473,7 +462,7 @@ function parseArgs(argv: readonly string[]): CliOptions {
       case '--head-sha': options.headSha = args[++index] ?? ''; break;
       case '--issue-body-file': options.issueBodyFile = args[++index] ?? ''; break;
       case '--smoke-complexity': options.smokeComplexity = (args[++index] ?? '') as SmokeComplexity; break;
-      case '--smoke-actor': options.smokeActor = (args[++index] ?? '') as SmokeOrderingActor; break;
+      case '--smoke-actor': options.smokeActor = (args[++index] ?? '') as CliOptions['smokeActor']; break;
       case '--operator-smoke-only': options.operatorSmokeOnly = true; break;
       case '--repo-root': options.repoRoot = args[++index] ?? options.repoRoot; break;
       case '--cwd': options.cwd = args[++index] ?? options.cwd; break;
@@ -1924,20 +1913,6 @@ export async function runGateCheck(options: CliOptions, dependencies: GateCheckD
   }
 }
 
-interface SmokeOrderingAttemptOwner {
-  attemptId: string;
-  supervisorPid: number;
-  runId?: string;
-}
-
-interface SmokeOrderingBinding extends SmokeOrderingAttemptOwner {
-  actor: SmokeOrderingActor;
-  prNumber: number;
-  headSha: string;
-  options: PackReviewAuthorityOptions;
-}
-type SmokeOrderingFailureKind = 'finding' | 'retryable';
-
 function processIsAlive(pid: number): boolean {
   if (!Number.isSafeInteger(pid) || pid < 1) return false;
   try {
@@ -1949,127 +1924,6 @@ function processIsAlive(pid: number): boolean {
     return code === 'EPERM';
   }
   return true;
-}
-
-function zeroExecutionCarryOnlyPass(report: SmokeReport, headSha: string): boolean {
-  return (report.environmentNotes ?? []).includes('smoke-execution=carry-only')
-    || isProvenCarryOnlySmokeReport(report, headSha);
-}
-
-export function smokeReportHasScenarioFinding(report: SmokeReport): boolean {
-  return report.result === 'FAIL'
-    && report.scenarios.some((scenario) => scenario.outcome === 'fail');
-}
-
-function orderingOwnerEvidence(
-  marker: { attemptId?: string; supervisorPid?: number; runId?: string } | undefined,
-  options: CliOptions,
-): SmokeOrderingOwnerEvidence | undefined {
-  const attemptId = marker?.attemptId?.trim();
-  const supervisorPid = Number(marker?.supervisorPid);
-  if (!attemptId || !Number.isInteger(supervisorPid) || supervisorPid <= 0) return undefined;
-  const runId = marker?.runId?.trim() || undefined;
-  let authoritativeResult: SmokeReport['result'] | undefined;
-  let scenarioFinding: boolean | undefined;
-  let executionMode: 'executed' | 'carry-only' | undefined;
-  let cleanupSafe: boolean | undefined;
-  if (runId) {
-    const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
-    const runtime = readWorkerSmokeRunFinalEvidence({
-      artifactDir, runId, issueNumber: options.issueNumber, prNumber: options.prNumber, headSha: options.headSha, mode: 'runtime',
-    });
-    const noExecution = runtime ? null : readWorkerSmokeRunFinalEvidence({
-      artifactDir, runId, issueNumber: options.issueNumber, prNumber: options.prNumber, headSha: options.headSha, mode: 'no_execution',
-    });
-    const selected = runtime ?? noExecution;
-    authoritativeResult = selected?.result;
-    scenarioFinding = selected ? smokeReportHasScenarioFinding(selected.report) : undefined;
-    if (selected?.result === 'PASS' && selected.mode === 'no_execution' && zeroExecutionCarryOnlyPass(selected.report, options.headSha)) {
-      executionMode = 'carry-only';
-    } else if (runtime?.result === 'PASS') {
-      executionMode = 'executed';
-    }
-    const registry = readSmokeLifecycleRegistry(artifactDir);
-    cleanupSafe = Boolean(
-      registry
-      && registry.runId === runId
-      && (
-        !registry.terminalHandle
-        || (registry.spawnState === 'clean' && hasValidSmokeCloseReceipt(artifactDir))
-      )
-    );
-  }
-  return {
-    attemptId,
-    supervisorPid,
-    ...(runId ? { runId } : {}),
-    supervisorAlive: processIsAlive(supervisorPid),
-    ...(cleanupSafe !== undefined ? { cleanupSafe } : {}),
-    ...(authoritativeResult ? { authoritativeResult } : {}),
-    ...(scenarioFinding !== undefined ? { scenarioFinding } : {}),
-    ...(executionMode ? { executionMode } : {}),
-  };
-}
-
-export function beginSmokeOrdering(
-  options: CliOptions,
-  issueBody: string,
-  owner: SmokeOrderingAttemptOwner,
-): SmokeOrderingBinding | null {
-  const actor = options.smokeActor ?? 'worker-owned';
-  if (actor !== 'worker-owned' && actor !== 'independent') throw new WorkerSmokeHarnessError('smoke_actor_unsupported');
-  const required = smokeOrderingRequired(issueBody);
-  const plan = resolveSmokeRequirement(issueBody);
-  if (!required && (actor !== 'worker-owned' || plan.requirement !== 'not-applicable')) return null;
-  const fence = parseComplexityTierFence(issueBody);
-  if (fence.kind !== 'tier-fence') {
-    if (actor === 'worker-owned' && plan.requirement !== 'not-applicable') return null;
-    if (actor !== 'worker-owned') throw new WorkerSmokeHarnessError('smoke_ordering_tier_missing');
-  }
-  const projectId = 'orchestrator-pack';
-  const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: process.env.PACK_REVIEW_RUN_STORE_ROOT });
-  const authorityOptions: PackReviewAuthorityOptions = { storeRoot };
-  const reviewRuns = listPackReviewRuns({ projectId, storeRoot });
-  let authority = initializePackReviewAuthority({
-    prNumber: options.prNumber, headSha: options.headSha,
-    tier: (fence.kind === 'tier-fence' ? fence.tier : resolveTierAndCap({ issueBody }).tier) as PackReviewTier,
-    options: authorityOptions,
-  });
-  if (actor === 'worker-owned' && authority.currentHeadSha !== options.headSha.toLowerCase()) {
-    authority = observePackReviewHead({ prNumber: options.prNumber, expectedTransitionSeq: authority.transitionSeq, headSha: options.headSha, options: authorityOptions, reviewRuns });
-  }
-  const existingOwner = actor === 'worker-owned'
-    ? authority.smokeOrdering?.workerOwned
-    : authority.smokeOrdering?.independent;
-  commitSmokeOrderingTransition({
-    prNumber: options.prNumber, expectedTransitionSeq: authority.transitionSeq, actor, headSha: options.headSha, status: 'started',
-    ...owner,
-    ...(existingOwner?.status === 'started'
-      ? { ownerStateEvidence: orderingOwnerEvidence(existingOwner, options) }
-      : {}),
-    ...(actor === 'independent' ? { reviewRuns, operatorSmokeOnly: options.operatorSmokeOnly } : {}), options: authorityOptions,
-  });
-  return { actor, prNumber: options.prNumber, headSha: options.headSha, options: authorityOptions, ...owner };
-}
-
-function finishSmokeOrdering(binding: SmokeOrderingBinding | null, status: 'passed' | 'failed', failureKind: SmokeOrderingFailureKind = 'retryable'): void {
-  if (!binding) return;
-  const authority = readPackReviewAuthority(binding.prNumber, binding.options);
-  if (!authority) throw new WorkerSmokeHarnessError('smoke_ordering_authority_missing_at_terminal');
-  commitSmokeOrderingTransition({
-    prNumber: binding.prNumber, expectedTransitionSeq: authority.transitionSeq, actor: binding.actor,
-    headSha: binding.headSha, status, attemptId: binding.attemptId, supervisorPid: binding.supervisorPid,
-    ...(binding.runId ? { runId: binding.runId } : {}),
-    ...(status === 'failed' ? { failureKind } : {}), options: binding.options,
-  });
-}
-
-export function finishSmokeOrderingBeforeDetachedTerminalization(
-  finishOrdering: () => void,
-  terminalizeDetached?: () => void,
-): void {
-  finishOrdering();
-  terminalizeDetached?.();
 }
 
 async function directSmokeStartFence<T>(action: () => T | Promise<T>): Promise<SmokeStartFenceResult<T>> { return { ok: true, value: await action() }; }
