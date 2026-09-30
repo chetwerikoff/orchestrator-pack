@@ -49,7 +49,7 @@ import {
   NEW_CHAT_CONTROL_SELECTORS,
   PRODUCT_STATUS_PROBE_SELECTORS,
   SEND_BUTTON_SELECTOR,
-  STOP_BUTTON_SELECTOR,
+  RENDERED_STOP_BUTTON_SELECTOR,
   TURN_START_MESSAGE_ATTR,
   normalizeMessageRoleStyle,
   resolveMessageRoleStyle,
@@ -1597,7 +1597,7 @@ export async function readAssistantTurnGenerating(
   waitMs = MAX_BROWSER_OPERATION_WAIT_MS,
 ): Promise<boolean> {
   try {
-    if (await boundedLocatorCount(page.locator(STOP_BUTTON_SELECTOR).first(), waitMs) > 0) {
+    if (await boundedLocatorCount(page.locator(RENDERED_STOP_BUTTON_SELECTOR).first(), waitMs) > 0) {
       return true;
     }
   } catch {
@@ -1723,7 +1723,7 @@ async function assistantIsActivelyGenerating(page: any, locator: any, waitSource
   const waitMs = resolveOperationWaitMs(waitSource);
   if (waitMs <= 0) return true;
   try {
-    const pageStop = page.locator(STOP_BUTTON_SELECTOR).first();
+    const pageStop = page.locator(RENDERED_STOP_BUTTON_SELECTOR).first();
     if (typeof pageStop?.count === 'function' && (await boundedLocatorCount(pageStop, waitMs)) > 0) {
       return true;
     }
@@ -1735,7 +1735,7 @@ async function assistantIsActivelyGenerating(page: any, locator: any, waitSource
   const busy = await readLocatorAttribute(locator, 'aria-busy', waitSource);
   if (busy === 'true') return true;
   try {
-    const stopButton = locator.locator(STOP_BUTTON_SELECTOR).first();
+    const stopButton = locator.locator(RENDERED_STOP_BUTTON_SELECTOR).first();
     if (typeof stopButton?.count === 'function') {
       return (await boundedLocatorCount(stopButton, waitMs)) > 0;
     }

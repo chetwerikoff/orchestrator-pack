@@ -1086,7 +1086,7 @@ async function capturePreservedPage(state: CaptureState, tracked: TrackedPage): 
       ));
       continuationAvailable = continueByTestId || continueByName;
       generationInProgress = Boolean(
-        document.querySelector(selectors.stop)
+        Array.from(document.querySelectorAll(selectors.stop)).some((element) => element.getBoundingClientRect().height > 0)
         || turn.querySelector(selectors.inProgress),
       );
       completionReady = Boolean(turn.querySelector(selectors.actions));

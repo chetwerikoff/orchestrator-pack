@@ -91,7 +91,8 @@ import {
   readAssistantNodeCompletionReady,
   readAssistantTurnCompletionReady,
   SEND_BUTTON_SELECTOR,
-  STOP_BUTTON_SELECTOR,
+  RENDERED_CONVERSATION_TURN_SECTION_SELECTOR,
+  RENDERED_STOP_BUTTON_SELECTOR,
   stripUiCollapseAffixes,
   USER_MESSAGE_STYLE,
   verifyProfile,
@@ -1445,7 +1446,7 @@ async function waitForExistingGeneration(
       await sleep(page, EXISTING_GENERATION_READ_INTERVAL_MS);
     }
     if (Date.now() >= deadlineMs) return sawStop && idleReads === 0 ? 'busy' : sawStop ? 'settled' : 'idle';
-    if (await locatorCount(page.locator(STOP_BUTTON_SELECTOR), deadlineMs) > 0) {
+    if (await locatorCount(page.locator(RENDERED_STOP_BUTTON_SELECTOR), deadlineMs) > 0) {
       sawStop = true;
       idleReads = 0;
       continue;
@@ -1459,7 +1460,7 @@ async function waitForExistingGeneration(
 async function existingTurnHasNothingToResume(page: any, deadlineMs: number): Promise<boolean> {
   try {
     if (await locatorCount(page.locator('main [role="alert"]'), deadlineMs) > 0) return true;
-    const lastTurn = page.locator(CONVERSATION_TURN_SECTION_SELECTOR).last();
+    const lastTurn = page.locator(RENDERED_CONVERSATION_TURN_SECTION_SELECTOR).last();
     return await locatorCount(lastTurn.locator(ASSISTANT_TURN_ACTION_SELECTOR), deadlineMs) > 0;
   } catch {
     return false;

@@ -16,7 +16,12 @@ export interface ChatErrorBanner {
   readonly text: string;
   readonly retry: boolean;
   readonly issue?: number;
+  // PR-review chats must be asked for the verdict, never for task work.
+  readonly review?: boolean;
+  readonly pull?: number;
 }
+
+export const REVIEW_PROMPT_HEADING = '# Browser GPT pack PR review';
 
 export const DEFAULT_CHAT_CDP_URL = 'http://127.0.0.1:9222';
 
@@ -38,13 +43,19 @@ const TARGET_EVAL_TIMEOUT_MS = 3_000;
 // product-error alert is shown or the last turn lacks the finished-reply actions.
 const redBannerExpression = (repository: string): string => `(() => {
   const visible = (e) => e.getClientRects().length > 0;
-  if (document.querySelector(${JSON.stringify(STOP_BUTTON_SELECTOR)})) return [];
+  const rendered = (element) => element.getBoundingClientRect().height > 0;
+  if ([...document.querySelectorAll(${JSON.stringify(STOP_BUTTON_SELECTOR)})].some(rendered)) return [];
   const first = document.querySelector('[data-markdown-text-style="user-message"],[data-chatgpt-search-unit-key$=":user"]');
   const issuePrefix = ${JSON.stringify(`github.com/${repository.toLowerCase()}/issues/`)};
   const firstText = ((first && first.innerText) || '').toLowerCase();
   const at = firstText.indexOf(issuePrefix);
   const digits = at < 0 ? '' : (firstText.slice(at + issuePrefix.length).match(/^\\d+/) || [''])[0];
   const issue = digits ? Number(digits) : undefined;
+  const pullPrefix = ${JSON.stringify(`github.com/${repository.toLowerCase()}/pull/`)};
+  const pullAt = firstText.indexOf(pullPrefix);
+  const pullDigits = pullAt < 0 ? '' : (firstText.slice(pullAt + pullPrefix.length).match(/^\\d+/) || [''])[0];
+  const pull = pullDigits ? Number(pullDigits) : undefined;
+  const review = firstText.includes(${JSON.stringify(REVIEW_PROMPT_HEADING.toLowerCase())});
   const red = (c) => {
     let m = c.match(/oklab\\(\\s*[\\d.]+%?\\s+([-\\d.]+)\\s+([-\\d.]+)/);
     if (m) return Number(m[1]) > 0.1;
@@ -60,16 +71,18 @@ const redBannerExpression = (repository: string): string => `(() => {
       text: (e.innerText || '').split('\\n')[0].trim().slice(0, 160),
       retry: [...e.querySelectorAll('button')].some((b) => /^retry$/i.test((b.innerText || b.getAttribute('aria-label') || '').trim())),
       issue,
+      pull,
+      review,
     }));
   if (alerts.length > 0) return alerts;
-  const lastTurn = [...document.querySelectorAll(${JSON.stringify(CONVERSATION_TURN_SECTION_SELECTOR)})].at(-1);
+  const lastTurn = [...document.querySelectorAll(${JSON.stringify(CONVERSATION_TURN_SECTION_SELECTOR)})].filter(rendered).at(-1);
   if (!lastTurn) return [];
   if (!lastTurn.querySelector(${JSON.stringify(ASSISTANT_TURN_ACTION_SELECTOR)})) {
-    return [{ kind: 'stalled', text: ${JSON.stringify(STALLED_CHAT_TEXT)}, retry: false, issue }];
+    return [{ kind: 'stalled', text: ${JSON.stringify(STALLED_CHAT_TEXT)}, retry: false, issue, pull, review }];
   }
   const reply = [...lastTurn.querySelectorAll(${JSON.stringify(`[data-markdown-text-style="${ASSISTANT_MESSAGE_STYLE}"]`)})].at(-1);
   if (reply && (reply.innerText || '').trim()) return [];
-  return [{ kind: 'stalled', text: ${JSON.stringify(EMPTY_REPLY_CHAT_TEXT)}, retry: false, issue }];
+  return [{ kind: 'stalled', text: ${JSON.stringify(EMPTY_REPLY_CHAT_TEXT)}, retry: false, issue, pull, review }];
 })()`;
 
 interface CdpTarget {
@@ -78,7 +91,7 @@ interface CdpTarget {
   readonly webSocketDebuggerUrl?: string;
 }
 
-type BannerRow = { kind: ChatAttentionKind; text: string; retry: boolean; issue?: number };
+type BannerRow = { kind: ChatAttentionKind; text: string; retry: boolean; issue?: number; pull?: number; review?: boolean };
 
 function evaluateTarget(wsUrl: string, expression: string): Promise<BannerRow[]> {
   return new Promise((resolvePromise) => {
@@ -146,6 +159,8 @@ export async function readChatErrorBanners(cdpUrl: string, scope: ChatBannerScop
         text: row.text,
         retry: Boolean(row.retry),
         ...(Number.isSafeInteger(row.issue) && row.issue! > 0 ? { issue: row.issue } : {}),
+        ...(Number.isSafeInteger(row.pull) && row.pull! > 0 ? { pull: row.pull } : {}),
+        ...(row.review === true ? { review: true } : {}),
       });
     }
   }

@@ -1,7 +1,7 @@
 import { releaseCdpBrowser } from './browser-session.ts';
 import { isOwnedPromptMarker } from './owned-prompt-marker.ts';
 import { conversationUuidFromUrl } from './state-light-fresh-conversation.ts';
-import { STOP_BUTTON_SELECTOR, USER_MESSAGE_SELECTOR } from './product-page-selectors.ts';
+import { RENDERED_STOP_BUTTON_SELECTOR, USER_MESSAGE_SELECTOR } from './product-page-selectors.ts';
 import { loadChromium, normalizeConversationUrl } from './ui-adapter.ts';
 import {
   recoveryMarkerCardinality,
@@ -166,7 +166,7 @@ export async function stopOwnedGeneration(
   let controls: any;
   let count: number;
   try {
-    controls = page.locator(STOP_BUTTON_SELECTOR);
+    controls = page.locator(RENDERED_STOP_BUTTON_SELECTOR);
     count = Number(await controls.count());
   } catch {
     return 'not_attempted_control_absent_or_ambiguous';
