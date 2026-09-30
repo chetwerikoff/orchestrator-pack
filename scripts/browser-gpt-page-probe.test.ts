@@ -140,12 +140,19 @@ function nodeMatchesOneSelector(node: FakeNode, selector: string): boolean {
     if (node.tagName !== tagMatch[1]!.toUpperCase()) return false;
     rest = rest.slice(tagMatch[1]!.length);
   }
-  const notDescendantMatch = rest.match(/:not\(([^()]+) \*\)/u);
-  if (notDescendantMatch) {
-    for (let ancestor = node.parent; ancestor; ancestor = ancestor.parent) {
-      if (nodeMatchesOneSelector(ancestor, notDescendantMatch[1]!)) return false;
+  for (let start = rest.indexOf(':not('); start >= 0; start = rest.indexOf(':not(')) {
+    let depth = 0;
+    let end = start + 4;
+    for (; end < rest.length; end++) {
+      if (rest[end] === '(') depth += 1;
+      else if (rest[end] === ')' && --depth === 0) break;
     }
-    rest = rest.replace(notDescendantMatch[0], '');
+    const inner = rest.slice(start + 5, end);
+    if (!inner.endsWith(' *')) break;
+    for (let ancestor = node.parent; ancestor; ancestor = ancestor.parent) {
+      if (nodeMatchesOneSelector(ancestor, inner.slice(0, -2))) return false;
+    }
+    rest = rest.slice(0, start) + rest.slice(end + 1);
   }
   const hasMatch = rest.match(/:has\((\[[^)]+\])\)/u);
   if (hasMatch) {

@@ -11,12 +11,16 @@ export const MESSAGE_ID_ATTR = 'data-chatgpt-selection-message-id';
 export const MESSAGE_UNIT_KEY_ATTR = 'data-chatgpt-search-unit-key';
 export const MESSAGE_UNIT_IDS_ATTR = 'data-chatgpt-search-message-ids';
 export const USER_MESSAGE_UNIT_SELECTOR = `[${MESSAGE_UNIT_KEY_ATTR}$=":user"]`;
-const SELECTION_MESSAGE_NODE_SELECTOR = `[${MESSAGE_ID_ATTR}]:not(${USER_MESSAGE_UNIT_SELECTOR} *)`;
-export const MESSAGE_NODE_SELECTOR = `${USER_MESSAGE_UNIT_SELECTOR}, ${SELECTION_MESSAGE_NODE_SELECTOR}`;
 export const USER_MESSAGE_STYLE = 'user-message';
 export const ASSISTANT_MESSAGE_STYLE = 'assistant-message';
+// Replies in a server-saved conversation can lose the selection id; their
+// search unit (`<turn>:<n>:assistant`) then carries the reply and its ids.
+const ASSISTANT_MESSAGE_UNIT_SELECTOR = `[${MESSAGE_UNIT_KEY_ATTR}$=":assistant"]`;
+const ASSISTANT_REPLY_UNIT_SELECTOR = `${ASSISTANT_MESSAGE_UNIT_SELECTOR}:has([${MESSAGE_AUTHOR_ROLE_ATTR}="${ASSISTANT_MESSAGE_STYLE}"])`;
+const SELECTION_MESSAGE_NODE_SELECTOR = `[${MESSAGE_ID_ATTR}]:not(${USER_MESSAGE_UNIT_SELECTOR} *):not(${ASSISTANT_REPLY_UNIT_SELECTOR} *)`;
+export const MESSAGE_NODE_SELECTOR = `${USER_MESSAGE_UNIT_SELECTOR}, ${ASSISTANT_REPLY_UNIT_SELECTOR}, ${SELECTION_MESSAGE_NODE_SELECTOR}`;
 export const USER_MESSAGE_SELECTOR = `${USER_MESSAGE_UNIT_SELECTOR}, ${SELECTION_MESSAGE_NODE_SELECTOR}:has([${MESSAGE_AUTHOR_ROLE_ATTR}="${USER_MESSAGE_STYLE}"])`;
-export const ASSISTANT_MESSAGE_SELECTOR = `${SELECTION_MESSAGE_NODE_SELECTOR}:has([${MESSAGE_AUTHOR_ROLE_ATTR}="${ASSISTANT_MESSAGE_STYLE}"])`;
+export const ASSISTANT_MESSAGE_SELECTOR = `${ASSISTANT_REPLY_UNIT_SELECTOR}, ${SELECTION_MESSAGE_NODE_SELECTOR}:has([${MESSAGE_AUTHOR_ROLE_ATTR}="${ASSISTANT_MESSAGE_STYLE}"])`;
 export const TURN_START_MESSAGE_ATTR = 'data-turn-key';
 export const STOP_BUTTON_TESTID = 'stop-button';
 export const STOP_BUTTON_SELECTOR = `[data-testid="${STOP_BUTTON_TESTID}"], button[aria-label*="Stop"]`;
