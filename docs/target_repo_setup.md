@@ -145,12 +145,14 @@ never "from this worktree". The shared prompt/template placeholders are
 
 For each target task, render `{VERIFY}` from the selected card as the tracked
 target-verification invocation below, passing the task's **explicit current
-worktree root** rather than cwd or card `primaryRoot`:
+worktree root** rather than cwd or card `primaryRoot`. The operator-owned
+renderer must shell-quote/escape substituted arguments safely (including paths
+with spaces or shell metacharacters), rather than interpolating raw text:
 
 ```bash
 node --experimental-strip-types "$PACK_ROOT/scripts/lib/Invoke-TypeScriptCli.ts" \
   --repo-root "$PACK_ROOT" --script "$PACK_ROOT/scripts/lib/target-context.ts" -- \
-  verify --project <projectId> --target-worktree <current-target-worktree-root>
+  verify --project "$PROJECT_ID" --target-worktree "$TARGET_WORKTREE_ROOT"
 ```
 
 The verifier first requires non-empty `verification.local`, canonicalizes

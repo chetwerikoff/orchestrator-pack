@@ -144,7 +144,7 @@ function readOrigin(primaryRoot: string): string {
     command: 'git',
     args: ['remote', 'get-url', 'origin'],
     cwd: primaryRoot,
-    inheritParentEnv: true,
+    inheritParentEnv: false,
   });
   if (!result.ok) {
     const detail = String(result.stderr || result.error || '').trim();
@@ -309,7 +309,7 @@ function validatedTargetWorktreeRoot(context: TargetContext, value: string): str
     command: 'git',
     args: ['rev-parse', '--show-toplevel'],
     cwd: root,
-    inheritParentEnv: true,
+    inheritParentEnv: false,
   });
   if (!topLevel.ok || !text(topLevel.stdout)) {
     throw new TargetVerificationError(
@@ -338,7 +338,7 @@ function validatedTargetWorktreeRoot(context: TargetContext, value: string): str
     command: 'git',
     args: ['remote', 'get-url', 'origin'],
     cwd: root,
-    inheritParentEnv: true,
+    inheritParentEnv: false,
   });
   const observedRepository = origin.ok ? canonicalGitHubRepository(origin.stdout) : null;
   if (!observedRepository || observedRepository !== context.repository.toLowerCase()) {
@@ -363,6 +363,7 @@ export function runTargetVerification(input: RunTargetVerificationInput): Target
         args: ['-lc', command],
         cwd: targetWorktreeRoot,
         inheritParentEnv: true,
+        forwardOutputToStderr: true,
       });
     } catch (error) {
       throw new TargetVerificationError(
@@ -420,6 +421,16 @@ export function runTargetContextCli(
   }
   try {
     const args = argv.slice(1);
+    if (action === 'verify') {
+      const worktreeIndex = args.indexOf('--target-worktree');
+      const worktreeValue = worktreeIndex < 0 ? undefined : args[worktreeIndex + 1];
+      if (worktreeIndex >= 0 && (!worktreeValue?.trim() || worktreeValue.startsWith('--'))) {
+        throw new TargetVerificationError(
+          'target-worktree-required',
+          'target verification requires an explicit current target worktree root',
+        );
+      }
+    }
     const allowed = action === 'verify'
       ? new Set(['--project', '--target-worktree'])
       : new Set(['--project']);
