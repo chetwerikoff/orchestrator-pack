@@ -76,11 +76,20 @@ function machineHomeDir(): string {
   return homeDir;
 }
 
-export function canonicalFoundationPaths(_repoRoot: string, homeDir = machineHomeDir()): CanonicalFoundationPaths {
+export function canonicalFoundationPaths(
+  _repoRoot: string,
+  homeDir = machineHomeDir(),
+  projectId = 'orchestrator-pack',
+  env: Readonly<NodeJS.ProcessEnv> = process.env,
+): CanonicalFoundationPaths {
+  const canonicalEnv: NodeJS.ProcessEnv = { HOME: homeDir };
+  if (String(env.XDG_STATE_HOME ?? '').trim()) canonicalEnv.XDG_STATE_HOME = env.XDG_STATE_HOME;
+  if (String(env.LOCALAPPDATA ?? '').trim()) canonicalEnv.LOCALAPPDATA = env.LOCALAPPDATA;
   const stateRoot = path.resolve(resolveWakeSupervisorStateRoot({
-    env: {},
+    env: canonicalEnv,
     homeDir,
     platform: process.platform,
+    projectId,
   }));
   const supervisorStateDir = path.join(stateRoot, 'supervisor');
   return {
@@ -104,7 +113,7 @@ export function assertCanonicalActivationPaths(
   if (String(process.env.OPK_WAKE_SUPERVISOR_STATE_DIR ?? '').trim()) {
     throw new Error('foundation_state_root_override_forbidden');
   }
-  const canonical = canonicalFoundationPaths(request.repoRoot);
+  const canonical = canonicalFoundationPaths(request.repoRoot, machineHomeDir(), request.projectId?.trim() || 'orchestrator-pack');
   requirePath(request.paths.stateDir, canonical.stateRoot, 'state_root');
   requirePath(request.paths.supervisorStateDir, canonical.supervisorStateDir, 'supervisor_state_root');
   requirePath(request.paths.epochAuthorityPath, canonical.epochAuthorityPath, 'epoch_authority');
@@ -357,6 +366,7 @@ export function observeGreenfieldMigrationJournalAbsence(stateRoot: string): voi
 export function observeGreenfieldControlPlane(input: {
   repoRoot: string;
   paths: CanonicalFoundationPaths;
+  projectId?: string;
 }): GreenfieldFoundationObservation['controlPlane'] {
   const observedHostId = localObservedHostId();
   const authority = new FileEpochAuthority(input.paths.epochAuthorityPath).read();
@@ -386,9 +396,12 @@ export function observeGreenfieldControlPlane(input: {
 
     const writers = captureLegacyWriters(input.repoRoot, input.paths.supervisorStateDir);
     if (writers.length !== 0) throw new Error('greenfield_legacy_writer_present');
-    const legacySupervisors = findLegacySupervisorIdentities(input.repoRoot);
+    const projectId = input.projectId?.trim() || 'orchestrator-pack';
+    const legacySupervisors = projectId === 'orchestrator-pack'
+      ? findLegacySupervisorIdentities(input.repoRoot)
+      : [];
     if (legacySupervisors.length !== 0) throw new Error('greenfield_legacy_supervisor_present');
-    const typescriptSupervisors = findTypeScriptSupervisorIdentities();
+    const typescriptSupervisors = findTypeScriptSupervisorIdentities({ projectId });
     if (typescriptSupervisors.length !== 0) throw new Error('greenfield_typescript_supervisor_present');
     return {
       epochAuthorityPath: input.paths.epochAuthorityPath,
@@ -415,6 +428,7 @@ export function observeGreenfieldControlPlane(input: {
 export function observeGreenfieldFoundationObservation(input: {
   repoRoot: string;
   paths: CanonicalFoundationPaths;
+  projectId?: string;
 }): GreenfieldFoundationObservation {
   const configPresent = observeCanonicalFilePresence(input.paths.configPath, 'config');
   const appStatePresent = observeCanonicalFilePresence(input.paths.appStatePath, 'app_state');

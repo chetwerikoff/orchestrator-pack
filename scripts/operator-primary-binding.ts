@@ -156,7 +156,7 @@ export async function runOperatorPrimaryBindingCommand(
   }
   const file = resolveWorkerAssignmentStorePath(target.projectId, env);
   if (parsed.command === 'show') {
-    const current = readOperatorPrimaryBinding(file);
+    const current = readOperatorPrimaryBinding(file, target);
     if (!current.ok) {
       return { ok: false, reason: 'assignment_untrusted', cause: current.cause };
     }
@@ -168,10 +168,11 @@ export async function runOperatorPrimaryBindingCommand(
 
   if (!parsed.operatorAttested) return { ok: false, reason: 'operator_attestation_required' };
   if (parsed.command === 'retire') {
-    return retireOperatorPrimary({ file, expectedCurrent: parsed.expectedCurrent! });
+    return retireOperatorPrimary({ file, expectedCurrent: parsed.expectedCurrent!, expectedProject: target });
   }
   return bindOperatorPrimary({
     file,
+    expectedProject: target,
     taskId: parsed.taskId!,
     bindingKey: parsed.bindingKey!,
     ...(parsed.expectedCurrent ? { expectedCurrent: parsed.expectedCurrent } : {}),

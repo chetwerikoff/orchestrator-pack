@@ -227,11 +227,13 @@ export function resolvePrSessionBindingCachePath(env = process.env) {
     const seedPath = String(env.OPK_REPORT_STATE_SEED_STATE);
     return join(dirname(seedPath), 'pr-session-binding-cache.json');
   }
+  const projectId = String(env.OPK_PROJECT_ID ?? 'orchestrator-pack').trim() || 'orchestrator-pack';
   return join(
     homedir(),
     '.local',
     'state',
     'orchestrator-pack-wake-supervisor',
+    projectId,
     'pr-session-binding-cache.json',
   );
 }

@@ -4,6 +4,9 @@ import path from 'node:path';
 import { abandonPreImportCordon, activateCutover } from './lib/cutover/activation-transaction.ts';
 import { provePreImportRollbackSafe, recoverCommittedCutover } from './lib/cutover/activation-recovery.ts';
 import type { ActivationRequest } from './lib/cutover/types.ts';
+import { resolveTargetContext } from './lib/target-context.ts';
+import { withPackProjectStateMigration } from './lib/cutover/project-state-migration.ts';
+import { assertProjectStateBinding, readProjectStateBinding } from './lib/project-state-binding.ts';
 
 function loadRequest(file: string): ActivationRequest {
   const raw = JSON.parse(readFileSync(path.resolve(file), 'utf8')) as ActivationRequest;
@@ -11,10 +14,34 @@ function loadRequest(file: string): ActivationRequest {
   return raw;
 }
 
+function option(argv: readonly string[], name: string): string {
+  const indexes = argv.flatMap((value, index) => value === name ? [index] : []);
+  if (indexes.length !== 1) throw new Error(`${name} is required exactly once`);
+  const value = String(argv[indexes[0]! + 1] ?? '').trim();
+  if (!value || value.startsWith('--')) throw new Error(`${name} requires a value`);
+  return value;
+}
+
 async function main(): Promise<void> {
-  const [command, requestFile] = process.argv.slice(2);
-  if (!command || !requestFile) throw new Error('usage: orchestrator-cutover-activate.ts activate|recover|prove-rollback|rollback-preimport <request.json>');
-  const request = loadRequest(requestFile);
+  const [command, requestFile, ...argv] = process.argv.slice(2);
+  if (!command || !requestFile) throw new Error('usage: orchestrator-cutover-activate.ts activate|recover|prove-rollback|rollback-preimport <request.json> --project <id>');
+  const projectId = option(argv, '--project');
+  if (argv.length !== 2) throw new Error('unknown activation argument');
+  const target = resolveTargetContext({ projectId });
+  const loaded = loadRequest(requestFile);
+  if (loaded.projectId && loaded.projectId !== target.projectId) throw new Error('activation_project_binding_mismatch');
+  if (loaded.repository && loaded.repository.toLowerCase() !== target.repository) throw new Error('activation_repository_binding_mismatch');
+  const request: ActivationRequest = withPackProjectStateMigration(
+    { ...loaded, projectId: target.projectId, repository: target.repository },
+    target.projectId,
+  );
+  const existingBinding = readProjectStateBinding(request.paths.stateDir);
+  if (existingBinding) {
+    assertProjectStateBinding(request.paths.stateDir, {
+      projectId: target.projectId,
+      repository: target.repository,
+    });
+  }
   if (command === 'activate') {
     process.stdout.write(`${JSON.stringify(await activateCutover(request))}\n`);
     return;

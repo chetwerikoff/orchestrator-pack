@@ -1,20 +1,69 @@
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+} from 'node:fs';
 import path from 'node:path';
 import { sha256Bytes, sha256Stable } from './stable-stringify.ts';
 import { writeDurableFile, writeDurableJson } from './activation-evidence.ts';
-import type { CutoverStoreId, CutoverStoreSpec, ImportRecord, SnapshotRecord } from './types.ts';
+import type {
+  CutoverStoreId,
+  CutoverStoreKind,
+  CutoverStoreSpec,
+  ImportRecord,
+  SnapshotRecord,
+} from './types.ts';
 
 const REQUIRED_FIELDS: Record<string, readonly string[]> = {
   reconcile: ['lastTickMs', 'degradedCi', 'cycleState'],
   reevaluation: ['watchEntries', 'terminalTombstones', 'lastUpdatedMs'],
   reportStateSeed: ['bindingByKey', 'seededKeys', 'deferredScanKeys', 'githubSnapshot', 'lastUpdatedMs'],
 };
+const LEGACY_STORE_IDS = new Set(Object.keys(REQUIRED_FIELDS));
+
+type DirectoryArchiveEntry =
+  | { path: string; type: 'directory'; mode: number }
+  | { path: string; type: 'file'; mode: number; contentBase64: string };
+
+interface DirectoryArchiveV1 {
+  schemaVersion: 1;
+  storeId: string;
+  kind: 'opaque-directory';
+  entries: DirectoryArchiveEntry[];
+}
+
+function validateStoreId(id: string): string {
+  const value = String(id ?? '').trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(value)) throw new Error(`cutover_store_id_invalid:${id}`);
+  return value;
+}
+
+export function cutoverStoreKind(spec: CutoverStoreSpec): CutoverStoreKind {
+  validateStoreId(spec.id);
+  if (spec.kind) {
+    if (!['legacy-json', 'opaque-file', 'opaque-directory'].includes(spec.kind)) {
+      throw new Error(`cutover_store_kind_invalid:${spec.id}`);
+    }
+    if (spec.kind === 'legacy-json' && !LEGACY_STORE_IDS.has(spec.id)) {
+      throw new Error(`cutover_legacy_store_id_invalid:${spec.id}`);
+    }
+    return spec.kind;
+  }
+  if (LEGACY_STORE_IDS.has(spec.id)) return 'legacy-json';
+  throw new Error(`cutover_store_kind_missing:${spec.id}`);
+}
 
 function writeAbsentImportMarker(markerPath: string, record: ImportRecord): void {
-  writeDurableJson(
-    markerPath,
-    record,
-  );
+  // Absence and present-source publication retain independent durable marker writes.
+  writeDurableFile(markerPath, `${JSON.stringify(record, null, 2)}\n`);
 }
 
 function normalizedPayload(spec: CutoverStoreSpec, raw: Buffer): Record<string, unknown> {
@@ -29,6 +78,104 @@ function normalizedPayload(spec: CutoverStoreSpec, raw: Buffer): Record<string, 
   return Object.fromEntries(required.map((key) => [key, value[key]]));
 }
 
+function directoryEntries(root: string): DirectoryArchiveEntry[] {
+  const output: DirectoryArchiveEntry[] = [];
+  const visit = (directory: string, relativeRoot: string): void => {
+    const entries = readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      const full = path.join(directory, entry.name);
+      const relative = relativeRoot ? path.posix.join(relativeRoot, entry.name) : entry.name;
+      const stat = lstatSync(full);
+      const mode = stat.mode & 0o777;
+      if (entry.isDirectory()) {
+        output.push({ path: relative, type: 'directory', mode });
+        visit(full, relative);
+      } else if (entry.isFile()) {
+        output.push({
+          path: relative,
+          type: 'file',
+          mode,
+          contentBase64: readFileSync(full).toString('base64'),
+        });
+      } else {
+        throw new Error(`cutover_store_unsupported_entry:${relative}`);
+      }
+    }
+  };
+  visit(root, '');
+  return output;
+}
+
+function archiveDirectory(spec: CutoverStoreSpec): DirectoryArchiveV1 {
+  return {
+    schemaVersion: 1,
+    storeId: spec.id,
+    kind: 'opaque-directory',
+    entries: directoryEntries(spec.sourcePath),
+  };
+}
+
+function archiveDigest(archive: DirectoryArchiveV1): string {
+  return sha256Stable({
+    kind: archive.kind,
+    entries: archive.entries.map((entry) => entry.type === 'directory'
+      ? { path: entry.path, type: entry.type, mode: entry.mode }
+      : {
+          path: entry.path,
+          type: entry.type,
+          mode: entry.mode,
+          contentDigest: sha256Bytes(Buffer.from(entry.contentBase64, 'base64')),
+        }),
+  });
+}
+
+export function cutoverPathDigest(pathName: string): string {
+  if (!existsSync(pathName)) return 'absent';
+  const stat = lstatSync(pathName);
+  if (stat.isFile()) return sha256Bytes(readFileSync(pathName));
+  if (stat.isDirectory()) {
+    const archive: DirectoryArchiveV1 = {
+      schemaVersion: 1,
+      storeId: 'digest-only',
+      kind: 'opaque-directory',
+      entries: directoryEntries(pathName),
+    };
+    return archiveDigest(archive);
+  }
+  throw new Error(`cutover_path_type_unsupported:${pathName}`);
+}
+
+export function cutoverPathEmpty(pathName: string): boolean {
+  if (!existsSync(pathName)) return true;
+  const stat = lstatSync(pathName);
+  if (stat.isFile()) return stat.size === 0;
+  if (stat.isDirectory()) return readdirSync(pathName).length === 0;
+  return false;
+}
+
+export function snapshotArtifactPath(spec: CutoverStoreSpec, snapshotDir: string): string {
+  validateStoreId(spec.id);
+  return path.join(snapshotDir, `${spec.id}.snapshot.json`);
+}
+
+function snapshotBytes(store: CutoverStoreSpec): { bytes: Buffer; sourceVersion: number; sourceDigest: string } {
+  const kind = cutoverStoreKind(store);
+  if (kind === 'legacy-json') {
+    const bytes = readFileSync(store.sourcePath);
+    const parsed = JSON.parse(bytes.toString('utf8')) as { schemaVersion?: unknown };
+    const sourceVersion = Number(parsed.schemaVersion ?? 1);
+    if (!Number.isInteger(sourceVersion) || sourceVersion <= 0) throw new Error(`snapshot_version_missing:${store.id}`);
+    return { bytes, sourceVersion, sourceDigest: sha256Bytes(bytes) };
+  }
+  if (kind === 'opaque-file') {
+    const bytes = readFileSync(store.sourcePath);
+    return { bytes, sourceVersion: 1, sourceDigest: sha256Bytes(bytes) };
+  }
+  const archive = archiveDirectory(store);
+  const bytes = Buffer.from(`${JSON.stringify(archive, null, 2)}\n`, 'utf8');
+  return { bytes, sourceVersion: 1, sourceDigest: archiveDigest(archive) };
+}
+
 export function snapshotStores(
   stores: CutoverStoreSpec[],
   snapshotDir: string,
@@ -39,10 +186,16 @@ export function snapshotStores(
   mkdirSync(snapshotDir, { recursive: true });
   const allowMissingSourceIds = new Set(options.allowMissingSourceIds ?? []);
   return stores.map((store) => {
+    cutoverStoreKind(store);
     let bytes: Buffer;
+    let sourceVersion = 1;
+    let sourceDigest = 'absent';
     let sourceState: SnapshotRecord['sourceState'] = 'present';
     try {
-      bytes = readFileSync(store.sourcePath);
+      const captured = snapshotBytes(store);
+      bytes = captured.bytes;
+      sourceVersion = captured.sourceVersion;
+      sourceDigest = captured.sourceDigest;
     } catch (error) {
       const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
       if (code !== 'ENOENT' || !allowMissingSourceIds.has(store.id)) {
@@ -51,13 +204,76 @@ export function snapshotStores(
       sourceState = 'absent';
       bytes = Buffer.from(`${JSON.stringify({ schemaVersion: 1, storeId: store.id, sourceState })}\n`, 'utf8');
     }
-    const parsed = JSON.parse(bytes.toString('utf8')) as { schemaVersion?: unknown };
-    const sourceVersion = Number(parsed.schemaVersion ?? 1);
-    if (!Number.isInteger(sourceVersion) || sourceVersion <= 0) throw new Error(`snapshot_version_missing:${store.id}`);
-    const snapshotPath = path.join(snapshotDir, `${store.id}.snapshot.json`);
+    const snapshotPath = snapshotArtifactPath(store, snapshotDir);
     writeDurableFile(snapshotPath, bytes);
-    return { storeId: store.id, snapshotPath, snapshotDigest: sha256Bytes(bytes), sourceVersion, writerWatermark, sourceState };
+    return {
+      storeId: store.id,
+      snapshotPath,
+      snapshotDigest: sha256Bytes(bytes),
+      sourceDigest,
+      sourceVersion,
+      writerWatermark,
+      sourceState,
+    };
   });
+}
+
+function parseDirectoryArchive(spec: CutoverStoreSpec, raw: Buffer): DirectoryArchiveV1 {
+  const archive = JSON.parse(raw.toString('utf8')) as DirectoryArchiveV1;
+  if (
+    archive?.schemaVersion !== 1
+    || archive.storeId !== spec.id
+    || archive.kind !== 'opaque-directory'
+    || !Array.isArray(archive.entries)
+  ) {
+    throw new Error(`snapshot_directory_archive_invalid:${spec.id}`);
+  }
+  const seen = new Set<string>();
+  for (const entry of archive.entries) {
+    if (
+      !entry
+      || typeof entry.path !== 'string'
+      || !entry.path
+      || path.posix.isAbsolute(entry.path)
+      || entry.path.split('/').includes('..')
+      || seen.has(entry.path)
+      || (entry.type !== 'directory' && entry.type !== 'file')
+      || !Number.isInteger(entry.mode)
+    ) throw new Error(`snapshot_directory_archive_invalid:${spec.id}`);
+    if (entry.type === 'file' && typeof entry.contentBase64 !== 'string') {
+      throw new Error(`snapshot_directory_archive_invalid:${spec.id}`);
+    }
+    seen.add(entry.path);
+  }
+  return archive;
+}
+
+function restoreDirectory(target: string, archive: DirectoryArchiveV1, importIdentity: string): void {
+  if (existsSync(target) && !cutoverPathEmpty(target)) throw new Error(`import_target_not_empty:${archive.storeId}`);
+  // A crash while building the sibling staging tree never exposes partial
+  // authoritative state at target. The existing epoch/cordon remains the only
+  // recovery authority; staging is disposable before the atomic publication.
+  const staging = `${target}.cutover-staging-${importIdentity.slice(7, 23)}`;
+  if (existsSync(staging)) {
+    if (!lstatSync(staging).isDirectory()) throw new Error(`import_staging_conflict:${archive.storeId}`);
+    rmSync(staging, { recursive: true, force: true });
+  }
+  mkdirSync(staging, { recursive: true });
+  for (const entry of archive.entries.filter((row) => row.type === 'directory')) {
+    const destination = path.join(staging, ...entry.path.split('/'));
+    mkdirSync(destination, { recursive: true });
+    chmodSync(destination, entry.mode);
+  }
+  for (const entry of archive.entries.filter((row): row is Extract<DirectoryArchiveEntry, { type: 'file' }> => row.type === 'file')) {
+    const destination = path.join(staging, ...entry.path.split('/'));
+    writeDurableFile(destination, Buffer.from(entry.contentBase64, 'base64'));
+    chmodSync(destination, entry.mode);
+  }
+  const stageFd = openSync(staging, 'r');
+  try { fsyncSync(stageFd); } finally { closeSync(stageFd); }
+  renameSync(staging, target);
+  const parentFd = openSync(path.dirname(target), 'r');
+  try { fsyncSync(parentFd); } finally { closeSync(parentFd); }
 }
 
 export function importSnapshot(input: {
@@ -66,6 +282,7 @@ export function importSnapshot(input: {
   spec: CutoverStoreSpec;
   snapshot: SnapshotRecord;
 }): ImportRecord {
+  const kind = cutoverStoreKind(input.spec);
   if (input.snapshot.storeId !== input.spec.id) throw new Error(`snapshot_store_mismatch:${input.spec.id}`);
   const raw = readFileSync(input.snapshot.snapshotPath);
   if (sha256Bytes(raw) !== input.snapshot.snapshotDigest) throw new Error(`snapshot_digest_mismatch:${input.spec.id}`);
@@ -80,9 +297,15 @@ export function importSnapshot(input: {
     nonce: input.nonce,
     storeId: input.spec.id,
     snapshotDigest: input.snapshot.snapshotDigest,
+    sourceDigest: input.snapshot.sourceDigest ?? input.snapshot.snapshotDigest,
     sourceState: input.snapshot.sourceState,
   });
-  const importTargetDigest = input.snapshot.sourceState === 'absent' ? 'sha256:absent' : sha256Stable(normalizedPayload(input.spec, raw));
+  let importTargetDigest = 'sha256:absent';
+  if (input.snapshot.sourceState === 'present') {
+    if (kind === 'legacy-json') importTargetDigest = sha256Stable(normalizedPayload(input.spec, raw));
+    else if (kind === 'opaque-file') importTargetDigest = input.snapshot.sourceDigest ?? input.snapshot.snapshotDigest;
+    else importTargetDigest = archiveDigest(parseDirectoryArchive(input.spec, raw));
+  }
   const markerPath = `${input.spec.targetPath}.cutover-import.json`;
   if (existsSync(markerPath)) {
     const marker = JSON.parse(readFileSync(markerPath, 'utf8')) as ImportRecord;
@@ -96,8 +319,12 @@ export function importSnapshot(input: {
       if (existsSync(input.spec.targetPath)) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
       return marker;
     }
-    const existing = normalizedPayload(input.spec, readFileSync(input.spec.targetPath));
-    if (sha256Stable(existing) !== importTargetDigest) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
+    if (kind === 'legacy-json') {
+      const existing = normalizedPayload(input.spec, readFileSync(input.spec.targetPath));
+      if (sha256Stable(existing) !== importTargetDigest) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
+    } else if (cutoverPathDigest(input.spec.targetPath) !== importTargetDigest) {
+      throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
+    }
     return marker;
   }
   if (input.snapshot.sourceState === 'absent') {
@@ -113,10 +340,29 @@ export function importSnapshot(input: {
     writeAbsentImportMarker(markerPath, record);
     return record;
   }
-  const normalized = normalizedPayload(input.spec, raw);
-  writeDurableFile(input.spec.targetPath, `${JSON.stringify(normalized, null, 2)}\n`);
-  const readBack = normalizedPayload(input.spec, readFileSync(input.spec.targetPath));
-  if (sha256Stable(readBack) !== importTargetDigest) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
+
+  // An atomic opaque publication can finish before its marker. Replay only exact snapshot-derived bytes.
+  const alreadyPublishedOpaque = kind !== 'legacy-json'
+    && existsSync(input.spec.targetPath)
+    && cutoverPathDigest(input.spec.targetPath) === importTargetDigest;
+  if (kind !== 'legacy-json' && !alreadyPublishedOpaque && !cutoverPathEmpty(input.spec.targetPath)) {
+    throw new Error(`import_target_not_empty:${input.spec.id}`);
+  }
+  if (kind === 'legacy-json') {
+    const normalized = normalizedPayload(input.spec, raw);
+    writeDurableFile(input.spec.targetPath, `${JSON.stringify(normalized, null, 2)}\n`);
+  } else if (kind === 'opaque-file' && !alreadyPublishedOpaque) {
+    writeDurableFile(input.spec.targetPath, raw);
+  } else if (kind === 'opaque-directory' && !alreadyPublishedOpaque) {
+    restoreDirectory(input.spec.targetPath, parseDirectoryArchive(input.spec, raw), importIdentity);
+  }
+
+  if (kind === 'legacy-json') {
+    const readBack = normalizedPayload(input.spec, readFileSync(input.spec.targetPath));
+    if (sha256Stable(readBack) !== importTargetDigest) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
+  } else if (cutoverPathDigest(input.spec.targetPath) !== importTargetDigest) {
+    throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
+  }
   const record: ImportRecord = {
     storeId: input.snapshot.storeId,
     importIdentity,
@@ -127,4 +373,60 @@ export function importSnapshot(input: {
   };
   writeDurableJson(markerPath, record);
   return record;
+}
+
+/** Read-only post-CAS guard: never retire the source on a missing or altered import. */
+export function assertCommittedImportedDestination(
+  spec: CutoverStoreSpec,
+  snapshot: SnapshotRecord,
+  committedDigest: string | undefined,
+): void {
+  const markerPath = `${spec.targetPath}.cutover-import.json`;
+  if (!committedDigest || !existsSync(markerPath)) {
+    throw new Error(`committed_import_marker_missing:${spec.id}`);
+  }
+  let marker: Partial<ImportRecord>;
+  try {
+    marker = JSON.parse(readFileSync(markerPath, 'utf8')) as Partial<ImportRecord>;
+  } catch {
+    throw new Error(`committed_import_marker_invalid:${spec.id}`);
+  }
+  if (
+    marker.storeId !== spec.id
+    || marker.markerPath !== markerPath
+    || marker.snapshotDigest !== snapshot.snapshotDigest
+    || marker.sourceState !== snapshot.sourceState
+    || marker.importTargetDigest !== committedDigest
+    || typeof marker.importIdentity !== 'string'
+    || !marker.importIdentity.startsWith('sha256:')
+  ) {
+    throw new Error(`committed_import_marker_mismatch:${spec.id}`);
+  }
+  if (snapshot.sourceState === 'absent') {
+    if (committedDigest !== 'sha256:absent' || existsSync(spec.targetPath)) {
+      throw new Error(`committed_import_target_mismatch:${spec.id}`);
+    }
+    return;
+  }
+  if (!existsSync(spec.targetPath)) throw new Error(`committed_import_target_missing:${spec.id}`);
+  const digest = cutoverStoreKind(spec) === 'legacy-json'
+    ? sha256Stable(normalizedPayload(spec, readFileSync(spec.targetPath)))
+    : cutoverPathDigest(spec.targetPath);
+  if (digest !== committedDigest) throw new Error(`committed_import_target_mismatch:${spec.id}`);
+}
+export function assertSnapshotSourceStable(spec: CutoverStoreSpec, snapshot: SnapshotRecord): void {
+  if (cutoverStoreKind(spec) === 'legacy-json') return;
+  const expected = snapshot.sourceState === 'absent' ? 'absent' : snapshot.sourceDigest;
+  if (!expected || cutoverPathDigest(spec.sourcePath) !== expected) {
+    throw new Error(`cutover_source_changed:${spec.id}`);
+  }
+}
+
+export function retireImportedSource(spec: CutoverStoreSpec, snapshot: SnapshotRecord): boolean {
+  if (cutoverStoreKind(spec) === 'legacy-json' || snapshot.sourceState === 'absent') return false;
+  if (!existsSync(spec.sourcePath)) return false;
+  assertSnapshotSourceStable(spec, snapshot);
+  rmSync(spec.sourcePath, { recursive: true, force: true });
+  if (existsSync(spec.sourcePath)) throw new Error(`cutover_source_retirement_failed:${spec.id}`);
+  return true;
 }

@@ -1,3 +1,5 @@
+// @vitest-ci-lane light
+// @vitest-pre-topology-seconds 120
 import {
   existsSync,
   readFileSync,
@@ -229,17 +231,17 @@ describe('[AC4] TypeScript notification compatibility', () => {
       env: { XDG_STATE_HOME: '/state' },
       platform: 'linux',
       homeDir: '/home/test',
-    })).toBe('/state/orchestrator-pack-wake-supervisor/worker-message-dispatch-journal.json');
+    })).toBe('/state/orchestrator-pack-wake-supervisor/orchestrator-pack/worker-message-dispatch-journal.json');
     expect(resolveWorkerMessageDispatchJournalPath({
       env: { LOCALAPPDATA: 'C:\\Users\\test\\AppData\\Local' },
       platform: 'win32',
       homeDir: 'C:\\Users\\test',
-    })).toBe('C:\\Users\\test\\AppData\\Local\\orchestrator-pack-wake-supervisor\\worker-message-dispatch-journal.json');
+    })).toBe('C:\\Users\\test\\AppData\\Local\\orchestrator-pack-wake-supervisor\\orchestrator-pack\\worker-message-dispatch-journal.json');
     expect(resolveWakeSupervisorStateRoot({
       env: {},
       platform: 'linux',
       homeDir: '/home/test',
-    })).toBe('/home/test/.local/state/orchestrator-pack-wake-supervisor');
+    })).toBe('/home/test/.local/state/orchestrator-pack-wake-supervisor/orchestrator-pack');
   });
 
   it('fails closed when live AO version provenance is not exactly 0.10.3', async () => {

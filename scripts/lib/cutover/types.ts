@@ -1,4 +1,5 @@
-export type CutoverStoreId = 'reconcile' | 'reevaluation' | 'reportStateSeed';
+export type CutoverStoreId = string;
+export type CutoverStoreKind = 'legacy-json' | 'opaque-file' | 'opaque-directory';
 
 export interface ProcessIdentity {
   pid: number;
@@ -11,12 +12,20 @@ export interface CutoverStoreSpec {
   sourcePath: string;
   targetPath: string;
   coveredFields: readonly string[];
+  /**
+   * The original three cutover stores omit kind and retain their exact
+   * schema-aware JSON import contract. New layout-migration stores must
+   * declare an opaque byte-preserving file or directory kind explicitly.
+   */
+  kind?: CutoverStoreKind;
 }
 
 export interface SnapshotRecord {
   storeId: CutoverStoreId;
   snapshotPath: string;
   snapshotDigest: string;
+  /** Byte/tree identity of the source before publication; required for opaque stores. */
+  sourceDigest?: string;
   sourceVersion: number;
   writerWatermark: string;
   sourceState: 'present' | 'absent';
@@ -90,6 +99,8 @@ export interface CutoverRecoveryBindings {
 export interface CordonPreparedRecord {
   schemaVersion: 1;
   state: 'preparing';
+  projectId: string | null;
+  repository: string | null;
   epochId: string;
   nonce: string;
   hostId: string;
@@ -101,12 +112,15 @@ export interface CordonPreparedRecord {
   typescriptSupervisorInert: TypeScriptSupervisorInertProof;
   importBegunAt: null;
   preImportTargetDigests: Partial<Record<CutoverStoreId, string>>;
+  preImportSourceDigests: Partial<Record<CutoverStoreId, string>>;
   recoveryBindings: CutoverRecoveryBindings;
 }
 
 export interface CordonRecord {
   schemaVersion: 1;
   state: 'active';
+  projectId: string | null;
+  repository: string | null;
   epochId: string;
   nonce: string;
   hostId: string;
@@ -121,6 +135,7 @@ export interface CordonRecord {
   typescriptSupervisorInert: TypeScriptSupervisorInertProof;
   importBegunAt: string | null;
   preImportTargetDigests: Partial<Record<CutoverStoreId, string>>;
+  preImportSourceDigests: Partial<Record<CutoverStoreId, string>>;
   recoveryBindings: CutoverRecoveryBindings;
 }
 
@@ -229,6 +244,8 @@ export interface ActivationPaths {
 }
 
 export interface ActivationRequest {
+  projectId?: string;
+  repository?: string;
   epochId: string;
   expectedOldEpochId: string | null;
   hostId: string;

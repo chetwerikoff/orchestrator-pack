@@ -1,3 +1,5 @@
+// @vitest-ci-lane light
+// @vitest-pre-topology-seconds 120
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
@@ -187,7 +189,7 @@ describe('standalone discuss-with-gpt terminal read-back contract', () => {
       'Before reporting any standalone terminal state, re-read the newest artifact',
     );
     expect(normalizedStandaloneSkill).toContain(
-      '`~/.local/state/discuss-with-gpt/<draft-slug>/`',
+      '`~/.local/state/discuss-with-gpt/<projectId>/<draft-slug>/`',
     );
     expect(normalizedStandaloneSkill).toContain(
       'The on-disk record outranks agent recollection and any earlier tool refusal',

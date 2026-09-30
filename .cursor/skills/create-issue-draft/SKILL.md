@@ -412,6 +412,8 @@ Record the author chat, every reviewer chat/source slot, Claude run, terminal
 chat, manager handoffs, episode/attempt identities, and adoption timestamp in
 existing audit surfaces. Producer identity is an audit label, not an allowlist.
 
+Before any write to these durable work, review, or recurrence paths, resolve the selected project's root with `resolveWakeSupervisorStateRoot({ projectId })` and consult the existing `legacyBarrierActive()` from `scripts/lib/cutover/activation-cordon.ts` at `<root>/supervisor`. If active, stop writing; do not append to or recreate either layout. Resume only after the existing activation/recovery path releases that barrier.
+
 ## Tier provenance and intake correction
 
 Record `tier-intake/v1` before the first tier decision. Each immutable revision

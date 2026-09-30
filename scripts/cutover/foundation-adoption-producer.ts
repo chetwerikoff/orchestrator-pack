@@ -33,9 +33,13 @@ import type { FoundationAdmissionEvidence } from '../lib/cutover/types.ts';
 import { parseFoundationConfig, type FoundationConfig } from '../pr2-foundation/config.ts';
 import { FOUNDATION_RUNTIME_CATALOG, validateRuntimeCatalog } from '../pr2-foundation/runtime-catalog.ts';
 import { FOUNDATION_COMMIT } from '../pr2a/contracts.ts';
+import { resolveTargetContext } from '../lib/target-context.ts';
+import { readProjectStateBinding, assertProjectStateBinding } from '../lib/project-state-binding.ts';
 
 export interface FoundationAdoptionProducerInput {
   repoRoot: string;
+  projectId?: string;
+  repository?: string;
   stateDir: string;
   configPath: string;
   appStatePath: string;
@@ -83,8 +87,14 @@ export async function produceFoundationAdoptionEvidence(
   if (String(process.env.OPK_WAKE_SUPERVISOR_STATE_DIR ?? '').trim()) {
     throw new Error('foundation_state_root_override_forbidden');
   }
-  const canonical = canonicalFoundationPaths(repoRoot);
+  const projectId = input.projectId?.trim() || 'orchestrator-pack';
+  const canonical = canonicalFoundationPaths(repoRoot, undefined, projectId);
   if (path.resolve(input.stateDir) !== canonical.stateRoot) throw new Error('foundation_state_root_unobservable');
+  const existingBinding = readProjectStateBinding(canonical.stateRoot);
+  if (existingBinding) {
+    if (!input.repository) throw new Error('foundation_repository_binding_unobservable');
+    assertProjectStateBinding(canonical.stateRoot, { projectId, repository: input.repository });
+  }
   if (path.resolve(input.configPath) !== canonical.configPath) throw new Error('foundation_config_unobservable');
   if (path.resolve(input.appStatePath) !== canonical.appStatePath) {
     throw new Error('foundation_preflight_version_unobservable');
@@ -120,6 +130,7 @@ export async function produceFoundationAdoptionEvidence(
     greenfieldObservation = observeGreenfieldFoundationObservation({
       repoRoot,
       paths: canonical,
+      projectId,
     });
     preflight = await observeRuntimeAdapterPreflight(
       repoRoot,
@@ -151,8 +162,10 @@ export async function produceFoundationAdoptionEvidence(
     if (captureLegacyWriters(repoRoot, supervisorStateDir).length !== 0) {
       throw new Error('greenfield_legacy_writer_present');
     }
-    if (findLegacySupervisorIdentities(repoRoot).length !== 0) throw new Error('greenfield_legacy_supervisor_present');
-    if (findTypeScriptSupervisorIdentities().length !== 0) throw new Error('greenfield_typescript_supervisor_present');
+    if (projectId === 'orchestrator-pack' && findLegacySupervisorIdentities(repoRoot).length !== 0) {
+      throw new Error('greenfield_legacy_supervisor_present');
+    }
+    if (findTypeScriptSupervisorIdentities({ projectId }).length !== 0) throw new Error('greenfield_typescript_supervisor_present');
     const observedJournals = discoverCommittedMigrationJournals(canonical.stateRoot);
     if (input.migrationJournalPaths !== undefined) {
       const supplied = [...new Set(input.migrationJournalPaths.map((value) => path.resolve(value)))].sort();
@@ -216,10 +229,16 @@ function parseArgs(argv: string[]): FoundationAdoptionProducerInput {
     if (!value || value.startsWith('--')) throw new Error(`missing_value:${flag}`);
     values.set(flag.slice(2), value);
   }
-  const repoRoot = values.get('repo-root') ?? process.cwd();
-  const canonical = canonicalFoundationPaths(repoRoot);
+  const selectedProject = values.get('project');
+  if (!selectedProject) throw new Error('missing_value:--project');
+  const target = resolveTargetContext({ projectId: selectedProject });
+  const repoRoot = values.get('repo-root') ?? target.packRoot;
+  if (path.resolve(repoRoot) !== path.resolve(target.packRoot)) throw new Error('foundation_pack_root_mismatch');
+  const canonical = canonicalFoundationPaths(repoRoot, undefined, target.projectId);
   return {
     repoRoot,
+    projectId: target.projectId,
+    repository: target.repository,
     stateDir: values.get('state-dir') ?? canonical.stateRoot,
     configPath: values.get('config') ?? canonical.configPath,
     appStatePath: values.get('app-state') ?? canonical.appStatePath,

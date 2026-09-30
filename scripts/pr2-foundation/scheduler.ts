@@ -4,6 +4,9 @@ import path from 'node:path';
 import type { FoundationConfig } from './config.ts';
 import { parseFoundationConfig } from './config.ts';
 import { FileEpochAuthority } from '../lib/cutover/activation-epoch-authority.ts';
+import { resolveTargetContext } from '../lib/target-context.ts';
+import { assertProjectStateBinding } from '../lib/project-state-binding.ts';
+import { resolveWakeSupervisorStateRoot } from './wake-supervisor-state-root.ts';
 import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
 import { originSlugFromGitConfig } from '../lib/git-origin-slug.mjs';
 import { evaluateHeadReadyForReview } from './review-head-ready.ts';
@@ -257,7 +260,7 @@ async function ghJson(repoRoot: string, args: string[]): Promise<unknown> {
 }
 
 export function productionSchedulerBoundary(input: {
-  repoRoot: string; projectId?: string; env?: NodeJS.ProcessEnv; fleetObserver?: SchedulerFleetObserver;
+  repoRoot: string; sourceRepoRoot?: string; projectId?: string; env?: NodeJS.ProcessEnv; fleetObserver?: SchedulerFleetObserver;
   fleetNudgeActuator?: SchedulerFleetNudgeActuator; fleetEscalation?: SchedulerFleetEscalation;
   schedulerIntervalMs?: number; activationLineage?: string;
   repository?: string; unresolvedReason?: FleetReconciliationReason; assignmentReconciliation?: SchedulerAssignmentReconciliation;
@@ -272,7 +275,8 @@ export function productionSchedulerBoundary(input: {
     listCandidates: () => liveCandidates(env, input.repository),
     readCurrentPr: async (candidate) => ghJson(input.repoRoot, ['pr', 'view', String(candidate.prNumber), '--repo', candidate.repoSlug, '--json', 'number,headRefOid,state,isDraft,body']) as Promise<SchedulerCurrentPr>,
     readChecks: async (candidate) => ghJson(input.repoRoot, ['pr', 'checks', String(candidate.prNumber), '--repo', candidate.repoSlug, '--json', 'name,state,conclusion,status']) as Promise<Array<{ name?: string; state?: string; conclusion?: string; status?: string }>>,
-    listReviewRuns: () => listPackReviewRuns({ projectId }),
+    listReviewRuns: () => listPackReviewRuns({ projectId }).filter((run) =>
+      !input.repository || run.canonicalRepository === input.repository),
     fleetNudgeActuator: input.fleetNudgeActuator ?? createTargetUnresolvedFleetNudgeActuator(),
     projectId,
     ...(input.fleetObserver ? { fleetObserver: input.fleetObserver } : {}),
@@ -288,7 +292,7 @@ export function productionSchedulerBoundary(input: {
     ...(input.dispatchTerminalMailPulse ? { dispatchTerminalMailPulse: input.dispatchTerminalMailPulse } : {}),
     ...(input.publishHandoff ? { publishHandoff: input.publishHandoff } : {}),
     start: async (candidate, freshHeadSha) => {
-      const result = await startPackReview({ projectId, linkedSessionId: candidate.sessionId, prNumber: candidate.prNumber, headSha: freshHeadSha, sourceRepoRoot: input.repoRoot, startReason: 'scheduler', surface: 'pr2-scheduler', claimMode: 'acquire' });
+      const result = await startPackReview({ projectId, linkedSessionId: candidate.sessionId, prNumber: candidate.prNumber, headSha: freshHeadSha, sourceRepoRoot: input.sourceRepoRoot ?? input.repoRoot, startReason: 'scheduler', surface: 'pr2-scheduler', claimMode: 'acquire' });
       return { ok: result.ok === true, ...(typeof result.reason === 'string' ? { reason: result.reason } : {}) };
     },
   };
@@ -597,7 +601,17 @@ function productionFleetObserverSnapshotPath(env: NodeJS.ProcessEnv): string {
 
 async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; cadence: number }> {
   const parsed = parseFoundationConfig({}); if (!parsed.ok) throw new Error(`${parsed.reason}:${parsed.path}`);
-  const repoRoot = process.cwd(); const cadence = parsed.config.scheduler.pollIntervalMs; const env = process.env; const projectId = 'orchestrator-pack';
+  const cadence = parsed.config.scheduler.pollIntervalMs; const env = process.env;
+  const selectedProjectId = String(env.OPK_PROJECT_ID ?? '').trim();
+  if (!selectedProjectId) throw new Error('scheduler_project_required');
+  const target = resolveTargetContext({ projectId: selectedProjectId, env });
+  const projectId = target.projectId;
+  const targetRepository = target.repository;
+  const packRoot = target.packRoot;
+  const sourceRepoRoot = target.primaryRoot;
+  const forwardedRepository = String(env.OPK_REPOSITORY ?? '').trim().toLowerCase();
+  if (forwardedRepository && forwardedRepository !== targetRepository) throw new Error('scheduler_repository_binding_mismatch');
+  assertProjectStateBinding(resolveWakeSupervisorStateRoot({ env, projectId }), { projectId, repository: targetRepository });
   const epoch = assertSchedulerEpoch(env); const activationLineage = schedulerActivationLineage(epoch);
   const assignmentStorePath = resolveWorkerAssignmentStorePath(projectId, env); const storedAssignments = listCurrentWorkerAssignments(assignmentStorePath);
   let mailWorkers: readonly RuntimeWorker[] = [];
@@ -606,6 +620,8 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
     const deps = createAdapterSubmitDeps(runtime);
     return await runOrchestrationMailReconcileTick(createOrcaMessageSubmitDeps(runtime, deps), { workerRoster: mailWorkers });
   };
+  const repository = await resolveRepositoryFromRepoRoot(sourceRepoRoot);
+  if (repository !== targetRepository) throw new Error('scheduler_repository_binding_mismatch');
   const runSerializedMailTurn = async (): Promise<void> => {
     try {
       await executeOrchestrationMailReconcile();
@@ -614,7 +630,9 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       // tick mail reconcile below remains the visible failure surface/retry.
     }
   };
-  const repository = await resolveRepositoryFromRepoRoot(repoRoot);
+  const mismatchedAssignment = storedAssignments?.find((assignment) =>
+    assignment.projectId !== projectId || assignment.repository !== repository);
+  if (mismatchedAssignment) throw new Error('scheduler_assignment_repository_binding_mismatch');
   const scopedAssignment = storedAssignments?.find((assignment) => assignment.repository === repository);
   let fleetObserver: FleetObserver; let fleetNudgeActuator: SchedulerFleetNudgeActuator = createTargetUnresolvedFleetNudgeActuator();
   let unresolvedReason: FleetReconciliationReason = storedAssignments === null ? 'assignment_untrusted' : 'target_unresolved';
@@ -731,7 +749,8 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
     await executeOrchestrationMailReconcile();
   return {
     boundary: productionSchedulerBoundary({
-      repoRoot,
+      repoRoot: packRoot,
+      sourceRepoRoot,
       projectId,
       env,
       fleetObserver: productionObserverBoundary(fleetObserver),
