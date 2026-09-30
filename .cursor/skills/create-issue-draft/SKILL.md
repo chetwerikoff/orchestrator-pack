@@ -47,7 +47,8 @@ ordinary prose mentioning manager without an Issue target -> no shorthand activa
 ```
 
 
-- Existing Issue / `manager` / `менеджер` / `continue review`: read its current title, body, labels and all published review/disposition comments. Continue from the current revision; already-published comments count. Do not restart stages, replay a competitive review, or grandfather the Issue onto the old receipt-based mechanism.
+- Existing Issue / `manager` / `менеджер` / `continue review`: read its current title, body, labels and published review/disposition comments. Continue from the current revision; already-published comments count only if their publisher metadata satisfies the attribution rule below. Do not restart stages, replay a competitive review, or grandfather the Issue onto the old receipt-based mechanism.
+  During the live GitHub comment census, count a comment as reviewer output or author disposition only when its `user.login` or `author_association` metadata identifies the trusted principal already used for that workflow. Exclude comments with missing, conflicting, or other-principal metadata; body text and revision markers do not establish publisher trust.
 - Brief-only task: paste the brief text into the author chat using the [universal author prompt](../../../docs/browser-gpt-turn-runbook.md#universal-author-prompt-template). Never send an operator-local file path to Browser GPT as the brief; use content or a GitHub URL. `discuss-with-gpt` brief-only starts at T2 unless the current rubric raises it.
 - Explicit `execute` / `выполни задачу` for an existing Issue routes to `execute-issue-with-gpt`, even if `manager` appears in the same request. `adversarial-draft-review` remains a separate Codex consultation, not a required source.
 - GPT author owns substantive Issue edits and all finding dispositions; independent GPT reviewers / Claude lens own their own findings; manager/orchestrator schedules the reviews, checks published comments and dispositions, applies the existing acceptance label, and owns same-Task continuation. The manager never invents author resolutions, calls an unanswered finding clean, or simulates Claude.
@@ -90,7 +91,7 @@ live Issue/comments and publish the complete verdict as a top-level Issue commen
 whose first line names the revision actually read. The role and revision belong
 in prompt content; they are not transport selectors or stage authority.
 
-Run comment-based create-Issue review turns through the existing
+Run GPT reviewer turns through the existing
 `flow-manager-browser-gpt-long-run` **non-direct** form in a fresh project chat.
 Resolve the target project card and pass its URL with `--project-url` and
 `--new-chat`. Do not invoke `scripts/lib/manager-review-brief.ts` or
@@ -102,6 +103,11 @@ direct-publication arguments `--reviewer-source-output`, `--reviewer-source`,
 authorize create-Issue review or acceptance. The existing ordinary transport still
 owns invocation identity, send-once, observation, and its permitted recovery; only
 the published revision-named Issue comment completes this review turn.
+
+The Browser-GPT adapter is for GPT reviewers only. The required T3 Claude
+architectural-lens review is a separate Claude invocation. Publish its
+substantive result as one top-level Issue comment whose first line names the
+revision actually read.
 
 ## Retained non-authoritative prompt declaration
 
@@ -166,7 +172,19 @@ only and are never create-Issue review or acceptance authority.
 
 After **each** required review round, the GPT author publishes **one Issue disposition comment** resolving every finding from that round. A finding is either **accepted**, with a correction in the next Issue-body revision, or **rejected**, with a substantive reason. A clean round needs no synthetic Issue-body edit. Reviewers' clean comments and prior-round disposition comments remain valid across continuation; do not demand a historical receipt or an author-body change for clean closure. The Issue comment is the finding disposition record.
 
-Keep every required existing Issue-body floor and its meaning. Apply the **existing** `draft-discipline` / tier-gate substantive check on the Issue-body revision the terminal reviewer will read, **before** sending that terminal review. Fix known floor failures first. If a substantive floor failure is discovered only *after* the terminal review (even a clean one), treat it as a finding of that terminal round. The author may use the **single permitted post-terminal correction**, pass the same floor on the corrected revision, and publish the corresponding terminal-round disposition. Do not request a second terminal review, new check, or new acceptance artifact.
+Keep every required existing Issue-body floor and its meaning. Immediately before
+sending the terminal review, read the current live Issue body into
+`LIVE_ISSUE_BODY` and run the existing content-only invocation:
+`node --experimental-strip-types scripts/tier-gate-guard.ts --text "$LIVE_ISSUE_BODY"`.
+Pass the body as `--text`; omit both `--text-file` and `--draft-path`. This runs
+the existing worker-safety, behavior-kind/positive-outcome, contract-evidence and
+substantive draft-discipline checks without loading retired receipt or finding-ledger
+artifacts. Fix known floor failures first. If a substantive floor failure is discovered
+only *after* the terminal review (even a clean one), treat it as a finding of that
+terminal round. The author may use the **single permitted post-terminal correction**,
+pass the same floor on the corrected revision, and publish the corresponding
+terminal-round disposition. Do not request a second terminal review, new check, or
+new acceptance artifact.
 
 The manager/orchestrator applies the existing `spec-review:accepted` Issue label only after:
 - all tier-required **published reviewer comments** exist, including Claude for T3, each naming the revision read on its first line;

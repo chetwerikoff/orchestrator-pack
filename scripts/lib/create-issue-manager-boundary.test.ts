@@ -23,6 +23,7 @@ import {
   type CreateIssueActionBinding,
 } from './create-issue-next-action.ts';
 import { runBrowserAdapter } from '../flow-manager-browser-gpt-long-run.ts';
+import { runCli as runTierGateGuardCli } from '../tier-gate-guard.ts';
 import { HANDOFF_SCHEMA } from '../flow-manager-long-running-child.ts';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -81,12 +82,78 @@ describe('create-Issue manager boundary', () => {
     expect(skill).toContain('one required Claude architectural-lens');
     expect(skill).toContain('**non-direct** form in a fresh project chat');
     expect(skill).toContain('Do not invoke `scripts/lib/manager-review-brief.ts`');
+    expect(skill).toContain('tier-gate-guard.ts --text "$LIVE_ISSUE_BODY"');
+    expect(skill).toContain('omit both `--text-file` and `--draft-path`');
+    expect(skill).toContain('Browser-GPT adapter is for GPT reviewers only');
+    expect(skill).toContain('separate Claude invocation');
+    expect(skill).toContain('`user.login` or `author_association` metadata');
+    expect(skill).toContain('trusted principal already used for that workflow');
+    expect(carrier).toContain('non-direct** form only for GPT reviewers');
+    expect(carrier).toContain('invocation and comment-publication path');
     expect(tiering).toContain('No T3 competitive stage');
     expect(carrier).toContain('ordinary **non-direct** form');
-    expect(carrier).toContain('Do not pass direct-publication-only identity/context');
+    expect(carrier).toContain('direct-publication-only identity/context or terminal-bundle arguments');
     expect(authorPrompt).toContain('<BRIEF_TEXT>');
     expect(authorPrompt).not.toContain('<BRIEF_REFERENCE>');
     expect(authorPrompt).toContain('never pass a local path');
+  });
+
+  it('runs the existing substantive floor on Issue text without draft artifacts', () => {
+    const liveIssueBody = [
+      '# Content-only tier gate fixture',
+      '',
+      '## Goal',
+      'Publish a revision-ready result.',
+      '',
+      '```behavior-kind',
+      'action-producing',
+      '```',
+      '',
+      '```positive-outcome',
+      'asserts: publishes an unambiguous decision',
+      'input: realistic',
+      '```',
+      '',
+      '```complexity-tier',
+      'tier: T2',
+      'advisory-prior: T2',
+      '```',
+      '',
+      '```denylist',
+      'vendor/**',
+      'packages/core/**',
+      '```',
+      '',
+      '```allowed-roots',
+      'docs/reviewable-target.md',
+      '```',
+      '',
+      '## Acceptance criteria',
+      '1. The terminal reviewer can assess this revision.',
+      '',
+      '## Verification',
+      'Run the focused boundary test.',
+      '',
+      '```contract-evidence',
+      'none',
+      '```',
+    ].join('\n');
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(
+      ((chunk: unknown) => { stdout.push(String(chunk)); return true; }) as typeof process.stdout.write,
+    );
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(
+      ((chunk: unknown) => { stderr.push(String(chunk)); return true; }) as typeof process.stderr.write,
+    );
+    try {
+      expect(runTierGateGuardCli(['node', 'tier-gate-guard.ts', '--text', liveIssueBody])).toBe(0);
+      expect(stdout.join('')).toContain('tier-gate guard: PASS');
+      expect(stderr).toEqual([]);
+    } finally {
+      stdoutSpy.mockRestore();
+      stderrSpy.mockRestore();
+    }
   });
 
   it('launches comment-based create-Issue review through non-direct long-run without stage artifacts', async () => {
