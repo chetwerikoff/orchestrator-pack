@@ -3599,7 +3599,7 @@ describe('Issue #2250 independent smoke publication without ordering receipts', 
     }
   });
 
-  it('drops a previous-head independent pass when the head changes', () => {
+  it('preserves a previous-head independent pass as historical state on head change', () => {
     const root = mkdtempSync(join(tmpdir(), 'ordering-previous-head-'));
     const storeRoot = join(root, 'review-store');
     const previousStore = process.env.PACK_REVIEW_RUN_STORE_ROOT;
@@ -3641,7 +3641,7 @@ describe('Issue #2250 independent smoke publication without ordering receipts', 
         headSha: HEAD_TWO,
         options: authorityOptions,
       });
-      expect(nextHead.smokeOrdering?.independent).toBeUndefined();
+      expect(nextHead.smokeOrdering).toEqual(passed.smokeOrdering);
     } finally {
       if (previousStore === undefined) delete process.env.PACK_REVIEW_RUN_STORE_ROOT;
       else process.env.PACK_REVIEW_RUN_STORE_ROOT = previousStore;
