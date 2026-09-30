@@ -1,0 +1,31 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2235,
+  "declared_paths": [
+    "docs/chatgpt-task-execution-runbook.md",
+    "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/browser-gpt-page-probe.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter.ts",
+    "scripts/lib/execute-issue-manager-boundary.test.ts",
+    "scripts/lib/execute-issue-manager-boundary.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/chatgpt-task-execution-runbook.md",
+    "docs/declarations/",
+    "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/browser-gpt-page-probe.ts",
+    "scripts/chatgpt-browser-turn/",
+    "scripts/lib/execute-issue-manager-boundary.test.ts",
+    "scripts/lib/execute-issue-manager-boundary.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs"
+  ],
+  "source_revision": "4a9dad8f13758ec82df051b036f5469beb4c1ac6"
+}
