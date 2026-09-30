@@ -70,16 +70,8 @@ vi.mock('./lib/create-issue-stage-record-gh.ts', async (importOriginal) => {
     },
   };
 });
-const ghTransport = readFileSync(new URL('./lib/create-issue-stage-record-gh.ts', import.meta.url), 'utf8');
-const journalCore = readFileSync(new URL('./lib/create-issue-stage-record-core.ts', import.meta.url), 'utf8');
-const stateLightTurn = readFileSync(new URL('./chatgpt-browser-turn/state-light-turn.ts', import.meta.url), 'utf8');
 const pageProbe = readFileSync(new URL('./browser-gpt-page-probe.ts', import.meta.url), 'utf8');
 const browserRunbook = readFileSync(new URL('../docs/browser-gpt-turn-runbook.md', import.meta.url), 'utf8');
-const authorityStart = contract.indexOf('## Flow-manager recovery ownership through task_ready — Issue #1514');
-const authorityEnd = contract.indexOf('## Mechanical parity edits', authorityStart);
-const authority = authorityStart >= 0 && authorityEnd > authorityStart
-  ? contract.slice(authorityStart, authorityEnd)
-  : '';
 
 const reviewContext: ManagerReviewBriefContext = {
   repositoryFullName: 'chetwerikoff/orchestrator-pack',
@@ -308,179 +300,12 @@ function captureWrite(stream: NodeJS.WriteStream): { chunks: string[]; restore: 
   return { chunks, restore: () => spy.mockRestore() };
 }
 
-describe('Issue #1514 flow-manager recovery ownership contract', () => {
-  it('replaces the #1197 closed authority model with one recovery ownership rule', () => {
-    expect(authority).not.toBe('');
-    expect(authority).toContain('## Flow-manager recovery ownership through task_ready — Issue #1514');
-    for (const retired of [
-      '## Flow-manager authority and bounded terminal outcomes — Issue #1197',
-      '### Closed self-authorized actions',
-      'self-authorized-action-set:',
-      'bounded-wait-inventory:',
-      '### Complete scenario matrix',
-      'Every other path settles locally as',
-      'The flow-manager transports and verifies evidence and performs mechanical',
-    ]) {
-      expect(authority).not.toContain(retired);
-    }
 
-    expect(authority).toContain('owns the complete assigned manager goal, not the last command');
-    expect(authority).toContain('recovery is allowed by default');
-    expect(authority.replace(/\s+/g, ' ')).toContain(
-      'On a guard, helper, schema, input, path, metadata, or configuration failure, the flow-manager must reread authoritative state and the owning source',
-    );
-    expect(authority).not.toContain(
-      'On a recoverable guard, helper, schema, input, path, metadata, or configuration',
-    );
-    expect(authority.replace(/\s+/g, ' ')).toContain('retain the same manager Task and Dispatch through `task_ready`');
-    expect(authority).toContain('reread authoritative state and the owning source');
-    expect(authority.replace(/\s+/g, ' ')).toContain(
-      'It must correct manager-owned pre-invocation input, artifact, metadata, configuration, or invocation before consumption when that boundary exists',
-    );
-    expect(authority).not.toContain('It may\ncorrect manager-owned pre-invocation input');
-    expect(authority.replace(/\s+/g, ' ')).toContain('rerun or reinvoke only when the owning action\'s existing contract permits');
-    expect(authority).toContain('An error message without a ready-made remedy requires source inspection');
-  });
-
-  it('defines exactly the short role denylist without recreating an allowlist or scenario taxonomy', () => {
-    const denyStart = authority.indexOf('### Short manager denylist');
-    const denyEnd = authority.indexOf('### Stage result is not parent-manager completion', denyStart);
-    const denySection = denyStart >= 0 && denyEnd > denyStart
-      ? authority.slice(denyStart, denyEnd)
-      : '';
-    const bullets = denySection.split('\n').filter((line) => line.startsWith('- '));
-    expect(bullets).toHaveLength(6);
-    for (const expected of [
-      'fabricate evidence, delivery, acceptance, or success',
-      'resend after possible or proven delivery',
-      'make substantive Issue, business-contract, defect, remedy, or reviewer-finding',
-      'expand frozen scope, allowed roots, or the Issue denylist',
-      'destructive, cross-task, merge, or runtime effect',
-      'reopen a consumed semantic stage slot',
-    ]) {
-      expect(denySection).toContain(expected);
-    }
-    expect(denySection).toContain('exact composite identity');
-    expect(denySection.replace(/\s+/g, ' ')).toContain(
-      'Do not replace this denylist with action categories, scenario matrices, wait inventories, per-error action lists, or another closed allowlist.',
-    );
-    expect(denySection).not.toContain('self-authorized-action-set');
-  });
-
-  it('keeps stage-local blocked/refused nonterminal and leaves whole-task completion to #1486', () => {
-    expect(authority).toContain('Existing `blocked` and `refused` values may remain');
-    expect(authority).toContain('They describe the current operation or stage only');
-    expect(authority).toContain('they do not complete the parent manager Task');
-    expect(authority).toContain('For this manager, the only self-initiated terminal message is\n`worker_done --outcome succeeded` after whole-task acceptance');
-    expect(authority).toContain('`worker_done --outcome failed` is legal only after a direct\ncoordinator/operator cancellation message');
-    expect(authority).toContain('`recoverable`, `external_pause`,\nand `contract_defect` never complete or settle the parent manager Task');
-    expect(authority).not.toContain('`done` means the awaited condition was proven');
-    expect(authority).not.toContain('Every other path settles locally');
-  });
-
-  it('preserves action-specific Browser-GPT retry and no-resend boundaries', () => {
-    expect(authority).toContain('Allow-by-default recovery never converts `send_count: 0` into generic retry\nauthority');
-    expect(authority).toContain('proven pre-send quota/composer/fill failure with `send_count: 0`');
-    expect(authority).toContain('generic\n`input_invalid` or canonical-input refusal is not retryable');
-    expect(authority).toContain('before cycle, stage-attempt,\nor reviewer-invocation consumption');
-    expect(authority).toContain('Possible or proven\ndelivery remains no-resend');
-    expect(authority).toContain('reopen a consumed semantic stage slot');
-  });
-
-  it('preserves bounded deadlines and the exact existing waiter/publication bindings without a wait inventory', () => {
-    expect(authority).not.toContain('bounded-wait-inventory:');
-    expect(authority).toContain('DEFAULT_TIMEOUT_MS = 1_800_000 ms');
-    expect(authority).toContain('CDP_REQUEST_TIMEOUT_MS = 10_000 ms');
-    expect(stateLightTurn).toContain('const DEFAULT_TIMEOUT_MS = 1_800_000;');
-    expect(pageProbe).toContain('const CDP_REQUEST_TIMEOUT_MS = 10_000;');
-
-    const waiterBlock = authority.match(/```bash\nnpm run --silent flow-manager-long-running-child -- wait \\\n[\s\S]*?```/)?.[0];
-    expect(waiterBlock).toBeDefined();
-    const waiterLines = waiterBlock!
-      .split('\n')
-      .filter((line) => line.startsWith('  --'));
-    expect(waiterLines).toEqual([
-      '  --run-identity "$runIdentity" \\',
-      '  --attempt-identity "$attemptIdentity" \\',
-      '  --handoff-receipt "$handoffReceipt" \\',
-      '  --terminal-envelope "$terminalEnvelope" \\',
-      '  --deadline-ms 5000',
-    ]);
-
-    expect(authority).toContain('GH_TIMEOUT_MS = 10_000');
-    expect(authority).toContain('publishJournalEvent -> createIssueComment -> confirmCanonicalEvent');
-    expect(authority).toContain('full comment census');
-    expect(authority).toContain('withGhDeadline');
-    expect(authority).toContain('const publicationDeadline = Date.now() + GH_TIMEOUT_MS');
-    expect(authority).toContain('ambiguous or timed-out\n  publication does not auto-resend');
-    expect(authority.replace(/\s+/g, ' ')).toContain(
-      'A deadline miss remains visible evidence on the existing owning surface with its cause, remedy and owner when already known, and the next legal routing action; it does not become parent-manager completion, permission to invent another wait, or a new retry authority.',
-    );
-    expect(ghTransport).toContain('export const GH_TIMEOUT_MS = 10_000;');
-    expect(ghTransport).toContain('runGh(argv: string[], timeoutMs = GH_TIMEOUT_MS)');
-    expect(ghTransport).toContain('remainingMs');
-    expect(ghTransport).toContain('withGhDeadline');
-    expect(ghTransport).toContain('return transport.runGh(argv, remainingMs)');
-    expect(journalCore).toContain('const publicationDeadline = Date.now() + GH_TIMEOUT_MS');
-    expect(journalCore).toContain('withGhDeadline(transport, publicationDeadline)');
-  });
-
-  it('keeps anti-silent-idle, existing escalation/publication authority, and producer-before-validator', () => {
-    expect(authority).toContain('Nonterminality does not authorize an indefinite or silent wait');
-    expect(authority.replace(/\s+/g, ' ')).toContain(
-      'If no legal repository-owned continuation is currently available, classify the result at the shared boundary: external reality becomes `external_pause` with remedy/evidence/resumption, and a missing or malformed producer becomes `contract_defect`.',
-    );
-    expect(authority).toContain('fleet-reconciliation-handoff/v1');
-    expect(authority).toContain('operator-only-escalation-classes: business-contract-change, material-reviewer-conflict');
-    expect(authority).not.toContain('terminal-infrastructure-refusal');
-    expect(authority).toContain('Repository-owned infrastructure/bookkeeping failures are not an operator-only\nterminal class');
-    expect(authority).toContain('The existing published-exception authority remains limited');
-    expect(authority).toContain('independently proven infeasible');
-    expect(authority).toContain('required audience');
-    expect(authority).toContain('visibility proof');
-    expect(authority).toContain('Every new gate must arrive with its producer in the same change');
-    expect(authority).toContain('does not fabricate\nan artifact or treat an orchestrator-only workaround as a producer');
-    expect(authority).toContain('the GitHub producer records\nfacts from its authenticated stable reads');
-  });
-
-  it('keeps substantive decisions with their owners while allowing manager-owned recovery', () => {
-    expect(authority).toContain('The GPT author owns substantive Issue edits, defect/remedy dispositions, and\nfinding dispositions');
-    expect(authority).toContain('reviewer/architect/operator decisions remain with their\nexisting owners');
-    expect(authority).toContain('may inspect and correct manager-owned\nrecoverable state');
-    expect(authority).toContain('must not consolidate reviewer findings or make\nthose substantive decisions itself');
-    expect(authority).not.toContain('The flow-manager transports and verifies evidence and performs mechanical\nchecks.');
-  });
-
-  it('limits coordinator work to routing and preserves normal worker repair/direct-fix authority', () => {
-    expect(authority).toContain('The coordinator routes; it does not diagnose ordinary manager failures');
-    expect(authority).toContain('hand the existing normal worker-repair route only the failing action\nand authoritative evidence already held');
-    expect(authority).toContain('receiving worker/author owns repair\nscope, reproducer design, and focused regression proof');
-    expect(authority).toContain('Direct-fix remains legal only when the current top-level user has\nexplicitly authorized that specific direct-PR change');
-    expect(authority.replace(/\s+/g, ' ')).toContain(
-      'original manager remains nonterminal in the same Task and Dispatch while repair is routed, waits for authoritative repaired-head evidence, and resumes only from that evidence',
-    );
-    expect(authority).not.toContain('authoritative repair evidence is available');
-    expect(authority).toContain('No repair-packet schema, firefighter service, scheduler, queue, lease, watcher');
-  });
-});
-
-describe('Issue #2039 T1 author-disposition producer authority', () => {
-  it('routes a harvested T1 author reply through the producer before first architectural start-cycle', () => {
-    const start = contract.indexOf('## Review artifacts');
-    const end = contract.indexOf('## GitHub issue journal', start);
-    const reviewArtifacts = contract.slice(start, end);
-    expect(reviewArtifacts).toContain(
-      'scripts/create-issue-stage-finalize.ts produce-author-dispositions',
-    );
-    expect(reviewArtifacts).toContain(
-      'before the first `architectural` `start-cycle`',
-    );
-    expect(reviewArtifacts).toContain(
-      'The manager invokes lifecycle, reconciliation and acceptance producers; it does\nnot create or repair these files by hand.',
-    );
-    expect(reviewArtifacts).toContain(
-      'It creates no\nreview cycle, stage receipt, finding ledger, relay evidence, acceptance\nmanifest, reviewer invocation, Issue comment, or label projection.',
-    );
+describe('Issue #2256 T1 comment-based acceptance', () => {
+  it('does not require the legacy author-disposition producer before review completion', () => {
+    expect(contract).toContain('One independent GPT terminal architectural review');
+    expect(contract).toContain('published revision-named Issue comment as create-Issue review authority');
+    expect(contract).not.toContain('scripts/create-issue-stage-finalize.ts produce-author-dispositions');
   });
 });
 

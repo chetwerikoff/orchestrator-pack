@@ -343,3 +343,74 @@ format tokens or occurrence accounting.
 The same manager Task/Dispatch remains active until the required comments, dispositions, substantive floor and acceptance label are read back. Recovery of a shared Browser-GPT send follows only its own runbook; never resend after possible delivery, manufacture a clean verdict, or treat a transport/manager error as a substantive resolution. External pauses remain nonterminal under [the shared chat boundary](../../../docs/chat-executor-rules.md#structured-external-dependency-parking). The existing coordinator owns any paused-unit remedy.
 
 Update the existing operator-local flow-manager/orchestrator prompt carriers as operator-owned adoption, not as repository files in a PR. Do not claim adoption succeeded without a local read-back. This cutover deliberately leaves unrelated shared sender, PR-code review, and unreachable historical implementation/test cleanup to their own scope.
+
+## Review artifacts
+
+This legacy inventory is retained only for compatibility tests and historical
+producer interfaces. None of these artifacts or commands is required or consulted
+for current create-Issue review completion or the `spec-review:accepted` label;
+the current comment/disposition/floor contract above is authoritative.
+
+### Legacy producer inputs (compatibility only)
+
+- `tier-intake.json`: historical intake/topology input.
+- `attempt-NNN.json`: historical invocation/transport facts.
+- `round-NN-author-reply.md|txt`: historical author payload.
+- `issue-rNN-body.json`: historical Issue snapshot.
+- `author-dispositions.json`: historical derived producer output.
+
+The legacy finding-ledger CLI syntax remains pinned for its regression tests;
+do not use it as current create-Issue review or label acceptance authority:
+
+```bash
+node scripts/finding-ledger-guard.mjs \
+  --ledger "$REVIEW_DIR/finding-disposition-ledger.json" \
+  --captures-dir "$REVIEW_DIR" \
+  --phase pre-lens \
+  --adoption-timestamp "$ADOPTION_TS" \
+  --issue-revision "$ISSUE_REVISION" \
+  --stage-terminal \
+  --receipt-directory "$REVIEW_DIR" \
+  --tier-intake "$REVIEW_DIR/tier-intake.json" \
+  --stage-receipt "$REVIEW_DIR/<competitive-receipt>.json" \
+  --stage-receipt "$REVIEW_DIR/<architectural-review-receipt>.json" \
+  --verified-relay-evidence "$REVIEW_DIR/verified-relay-evidence.json"
+```
+
+### Legacy producer outputs (compatibility only)
+
+- `stage-completeness-receipt-<stageAttemptId>.json` (`stage-completeness-receipt/v1`)
+- `verified-relay-evidence.json`
+- `finding-disposition-ledger.json`
+- `review-episode-inventory.json`
+- `acceptance-artifacts.json`
+
+### Legacy conditional transport artifacts (compatibility only)
+
+- `reviewer-invocation-envelope-<stage>-<slot>-<attempt>.json`
+- `turn-result-<invocation>.json` (`turn-result/v1`), required for transport-classified `complete` browser invocations
+- `pass-NN-competitive-SS.capture.txt`
+- `pass-NN-architectural-review-SS.capture.txt`
+- `pass-NN-architectural-lens.capture.txt`
+- `pass-NN-architectural.capture.txt`
+- `claude-producer-evidence.json`
+- `claude-unavailable-waiver.json`
+
+Artifact-backed non-`complete` `send_count: 1` invocations retain their observed
+transport fields and may have no successful turn-result. Proven retryable
+`send_count: 0` attempts require neither a GitHub artifact nor a successful
+turn-result.
+
+### Legacy audit-only records
+
+- `chats.md`
+- `rNN/tier-gate-receipt.json`
+
+Do not persist a legacy episode receipt or consolidated reviewer output.
+
+## GitHub issue journal (Issue #1152)
+
+The historical workflow-journal transport and producer code remain outside the
+current review/acceptance authority. For this cutover, published revision-named
+review comments, author dispositions, the existing substantive floor, and the
+existing `spec-review:accepted` label are the only review/acceptance model.
