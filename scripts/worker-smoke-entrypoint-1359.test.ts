@@ -120,6 +120,17 @@ function installTrustedTargetFixture(
     'utf8',
   );
   symlinkSync('/bin/sh', join(bin, 'gh'));
+  const cards = join(root, 'project-config', 'orchestrator-pack', 'projects');
+  mkdirSync(cards, { recursive: true });
+  writeFileSync(join(cards, 'smoke-fixture.json'), JSON.stringify({
+    projectId: 'smoke-fixture',
+    repository: 'chetwerikoff/orchestrator-pack',
+    primaryRoot: root,
+    defaultBranch: 'main',
+    orcaWorkspacePattern: '.*',
+    orchestratorTitlePattern: '.*',
+    browserGpt: { projectUrl: 'https://chatgpt.com/' },
+  }), 'utf8');
 }
 
 describe('Issue #1359 real worker-smoke entrypoint', () => {
@@ -299,6 +310,8 @@ if (args[0] === 'worktree' && args[1] === 'current') {
 
       const wrapper = resolve('scripts/worker-smoke-run');
       const runtimeEnv = {
+        OPK_PROJECT_ID: 'smoke-fixture',
+        XDG_CONFIG_HOME: join(root, 'project-config'),
         PATH: `${bin}:${process.env.PATH ?? ''}`,
         OPK_RUNTIME_CLI_COMMAND: fakeOrca,
         FAKE_ORCA_CALLS: callsPath,
@@ -550,6 +563,8 @@ process.exitCode = 2;
       ], {
         cwd: root,
         env: {
+          OPK_PROJECT_ID: 'smoke-fixture',
+          XDG_CONFIG_HOME: join(root, 'project-config'),
           PATH: `${bin}:${process.env.PATH ?? ''}`,
           OPK_RUNTIME_CLI_COMMAND: fakeOrca,
           PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'opencode',

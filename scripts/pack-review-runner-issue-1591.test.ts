@@ -1029,7 +1029,7 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
     expect(authority?.cycle?.reviewStageComplete).not.toBe(true);
   });
 
-  it('does not settle when worker smoke failed', async () => {
+  it('does not make legacy worker-owned smoke a final-cap admission gate', async () => {
     const storeRoot = tempRoot();
     harness(storeRoot);
     seedFinalCapContinuation(storeRoot, 'failed');
@@ -1050,9 +1050,9 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
       expect.objectContaining({
         finalCapSettlement: true,
         settled: false,
-        reason: 'final_cap_settlement_worker_smoke_required',
       }),
     ]));
+    expect(result.results.some((entry) => entry.reason === 'final_cap_settlement_worker_smoke_required')).toBe(false);
   });
 
   it('keeps a valid pathless blocker incomplete until semantic resolution evidence exists', async () => {
