@@ -127,6 +127,22 @@ revision is not accepted; operator amendments are accepted by definition.
 The author/operator does not demote a tier after review begins without operator
 direction; no freeze receipt is added.
 
+### L4 within-T3 graduation
+
+L4 applies only after the task independently satisfies T3. Complete classes are:
+
+- fail-closed/fail-open behavior;
+- single-winner, lease, or claim correctness;
+- recovery semantics;
+- required-check / merge-contract correctness;
+- self-certifying-test or test-harness correctness risk;
+- live-state mutation;
+- external side effects;
+- migration or backward-compatibility behavior.
+
+Each active floor names its class. T1/T2 use `not-applicable`; T3 cannot use
+`not-applicable`.
+
 ## Review economics (M1–M5)
 
 Maintain substantive reviewer scrutiny, without the deleted accounting gate:
