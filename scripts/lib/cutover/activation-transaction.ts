@@ -72,6 +72,7 @@ import { readMigrationJournal } from '../../pr2-foundation/migration-journal.ts'
 import { FOUNDATION_RUNTIME_CATALOG, validateRuntimeCatalog, type RuntimeSurface } from '../../pr2-foundation/runtime-catalog.ts';
 import { readLiveSingleInstanceLease } from '../../runtime/single-instance-lease.ts';
 import { sha256Stable, stableStringify } from './stable-stringify.ts';
+import { publishCommittedProjectStateBinding } from '../project-state-binding.ts';
 
 const FOUNDATION_LANDING_COMMIT = 'b967dfe156838039e1d6d137e7064dc9d1b10b4d';
 const PR2A_LANDING_COMMIT = '17ac39d725ba9ae7c881816405d5225e541177c7';
@@ -753,12 +754,7 @@ export async function activateCutover(
       throw new Error('greenfield_typescript_supervisor_present');
     }
   }
-  const drain = legacySupervisor
-    ? await (async () => {
-      const drain = await boundary.drainLegacyWriters(request, legacyWriters);
-      return drain;
-    })()
-    : { writerWatermark: foundation.writerWatermark ?? '', drainedAt: new Date().toISOString() };
+  const drain = await boundary.drainLegacyWriters(request, legacyWriters);
   if (!drain.writerWatermark) throw new Error('writer_watermark_missing');
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'writer-drain', { writers: legacyWriters, ...drain });
 
@@ -829,6 +825,12 @@ export async function activateCutover(
   authority.commit(request.expectedOldEpochId, core);
   const committed = authority.verify(request.epochId, cordon.nonce);
   verifyPhaseOneDigest(request.paths.phaseOnePath, request.epochId, cordon.nonce, committed.preCommitLogDigest);
+  if (request.projectId && request.repository) {
+    publishCommittedProjectStateBinding(request.paths.stateDir, {
+      projectId: request.projectId,
+      repository: request.repository,
+    });
+  }
 
   const retiredSources = request.stores.flatMap((store) => {
     const snapshot = snapshots.find((row) => row.storeId === store.id)!;

@@ -76,11 +76,20 @@ green; the automation Chrome is logged into ChatGPT; and Orca is running.
 6. **Orca.** Register `<primaryRoot>` as an Orca repository using its supported
    setup path and confirm new worktrees match `orcaWorkspacePattern`.
 7. **Supervisor — non-pack targets require #2186.** Do not execute this step for
-   a non-pack target until #2186 has landed and been adopted. Then run
-   `opk-wake-supervisor <projectId> start`, followed by `status`. Expect
-   supervisor state under
-   `.../orchestrator-pack-wake-supervisor/<projectId>/` and scheduler
-   `repository=<card repository>`. #2186 owns removing scheduler target
+   a non-pack target until #2186 has landed and been adopted. The operator
+   launcher requires the project id on every action; an omitted id is an error
+   and there is no implicit `orchestrator-pack` default:
+   ```bash
+   opk-wake-supervisor <projectId> start
+   opk-wake-supervisor <projectId> status
+   opk-wake-supervisor <projectId> stop
+   ```
+   After `start`, `status` must identify the selected `projectId`, the
+   exact `repository` from that #2185 project card, and one
+   `pr2-scheduler` child. Expect supervisor state under
+   `.../orchestrator-pack-wake-supervisor/<projectId>/`. A repository-binding
+   mismatch or an unbound non-empty namespace is a stop condition, not
+   permission to reuse the state. #2186 owns removing scheduler target
    inference from cwd/`--repo-root`.
 8. **Fleet wake.** Remove the retired
    `~/.config/orchestrator-fleet/<projectId>.env` if it exists. Render/install

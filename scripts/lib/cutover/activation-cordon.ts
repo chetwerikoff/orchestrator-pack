@@ -172,7 +172,11 @@ export function findTypeScriptSupervisorIdentities(
         const projectId = String(options.projectId ?? '').trim();
         if (projectId) {
           const projectFlag = identity.cmdline.findIndex((argument) => argument === '--project');
-          if (projectFlag < 0 || identity.cmdline[projectFlag + 1] !== projectId) continue;
+          if (projectFlag < 0) {
+            if (projectId !== 'orchestrator-pack') continue;
+          } else if (identity.cmdline[projectFlag + 1] !== projectId) {
+            continue;
+          }
         }
         identities.push(identity);
       }

@@ -717,10 +717,30 @@ authority, a repository-binding mismatch, a live writer, or an unprovable
 commit-boundary state fails closed; never merge or overwrite the stores.
 
 The existing pack flat wake-supervisor state is migrated once to the
-`orchestrator-pack` project namespace. The canonical create-Issue
-`.review/<Issue>` authority follows the same rule and remains distinct from the
-work directory. The `cdp-<port>-owner.json` record is excluded because it owns
-one machine/profile, not one repository.
+`orchestrator-pack` project namespace. Before producing foundation evidence,
+stop the pre-#2186 pack supervisor through the supported old-revision
+stop/recycle path and quiesce one-shot writers; the process census deliberately
+attributes an unqualified legacy TypeScript supervisor to `orchestrator-pack`
+and refuses migration while it remains live. Do not kill processes by title or
+substring.
+
+For `--project orchestrator-pack`, the cutover CLI automatically adds the
+known flat wake payload stores plus legacy create-Issue `.review`, numeric work
+directories, Browser-GPT recurrence state, and unscoped standalone
+discuss-with-gpt artifacts to the existing activation transaction. It does not
+byte-copy cordon/epoch/supervisor control-plane files: that same transaction
+recreates those under the project root and remains their sole commit/recovery
+authority. The canonical create-Issue `.review/<Issue>` authority therefore
+uses the same absent/empty-destination, source-digest, read-back, CAS and
+post-commit source-retirement sequence as the wake payload stores. If execution
+stops after publication, rerun the same activation/recovery request with the
+same `--project orchestrator-pack`; the persisted cordon/epoch authority, not
+directory presence, decides whether recovery finishes forward or refuses an
+unprovable state.
+
+The `cdp-<port>-owner.json` record is excluded because it owns one
+machine/profile, not one repository. Existing discuss-with-gpt directories that
+already contain a project binding are also excluded from the legacy pack move.
 
 The old ad-hoc LeoPoker create-Issue directory is operator-owned. After all
 writers to that directory are stopped, and only when the destination is absent,

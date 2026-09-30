@@ -1,5 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { resolveTargetContext } from './target-context.ts';
+import { ensureProjectStateBinding } from './project-state-binding.ts';
 import { join, resolve } from 'node:path';
 
 const STAGE_COMPLETENESS_RECEIPT_SCHEMA = 'stage-completeness-receipt/v1';
@@ -41,6 +43,14 @@ export function resolveCanonicalReviewDirectory(
   const issueNumber = numericIssueFromTaskIdentity(intake.taskIdentity);
   if (!issueNumber) throw new Error('tier-intake/v1 taskIdentity must bind a numeric Issue identity');
   const stateRoot = canonicalReviewStateRoot(stateRootOverride);
+  const selectedProjectId = String(process.env.OPK_PROJECT_ID ?? '').trim();
+  if (selectedProjectId) {
+    const target = resolveTargetContext({ projectId: selectedProjectId, env: process.env });
+    ensureProjectStateBinding(stateRoot, {
+      projectId: target.projectId,
+      repository: target.repository,
+    });
+  }
   const directory = resolve(stateRoot, '.review', issueNumber);
   return { stateRoot, issueNumber, directory, intakePath: join(directory, 'tier-intake.json') };
 }

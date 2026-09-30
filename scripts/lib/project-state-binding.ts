@@ -13,10 +13,19 @@ import {
 import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-export const PROJECT_STATE_BINDING_FILE = 'project-binding.json';
-export const PROJECT_STATE_BINDING_SCHEMA = 'orchestrator-pack/project-state-binding/v1';
+export const PROJECT_STATE_BINDING_FILE = 'project-binding.json' as const;
+export const PROJECT_STATE_BINDING_SCHEMA = 'orchestrator-pack/project-state-binding/v1' as const;
 
-function normalizedExpected(input) {
+export interface ProjectStateIdentity {
+  readonly projectId: string;
+  readonly repository: string;
+}
+
+export interface ProjectStateBindingV1 extends ProjectStateIdentity {
+  readonly schema: typeof PROJECT_STATE_BINDING_SCHEMA;
+}
+
+function normalizedExpected(input: ProjectStateIdentity): ProjectStateBindingV1 {
   const projectId = String(input?.projectId ?? '').trim();
   const repository = String(input?.repository ?? '').trim().toLowerCase();
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(projectId)) throw new Error('project_state_binding_project_invalid');
@@ -28,12 +37,12 @@ function normalizedExpected(input) {
   };
 }
 
-function syncDirectory(directory) {
+function syncDirectory(directory: string): void {
   const fd = openSync(directory, 'r');
   try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 
-function durableJson(target, value) {
+function durableJson(target: string, value: ProjectStateBindingV1): void {
   const directory = dirname(target);
   mkdirSync(directory, { recursive: true });
   const temporary = join(directory, `.${PROJECT_STATE_BINDING_FILE}.${process.pid}.${randomUUID()}.tmp`);
@@ -48,16 +57,16 @@ function durableJson(target, value) {
   syncDirectory(directory);
 }
 
-export function projectStateBindingPath(namespaceRoot) {
+export function projectStateBindingPath(namespaceRoot: string): string {
   return join(resolve(namespaceRoot), PROJECT_STATE_BINDING_FILE);
 }
 
-export function readProjectStateBinding(namespaceRoot) {
+export function readProjectStateBinding(namespaceRoot: string): ProjectStateBindingV1 | null {
   const file = projectStateBindingPath(namespaceRoot);
   if (!existsSync(file)) return null;
-  let value;
+  let value: unknown;
   try {
-    value = JSON.parse(readFileSync(file, 'utf8'));
+    value = JSON.parse(readFileSync(file, 'utf8')) as unknown;
   } catch {
     throw new Error('project_state_binding_unreadable');
   }
@@ -67,12 +76,19 @@ export function readProjectStateBinding(namespaceRoot) {
     || typeof value !== 'object'
     || Array.isArray(value)
     || JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(expectedKeys)
-    || value.schema !== PROJECT_STATE_BINDING_SCHEMA
   ) throw new Error('project_state_binding_invalid');
-  return normalizedExpected(value);
+  const record = value as Record<string, unknown>;
+  if (record.schema !== PROJECT_STATE_BINDING_SCHEMA) throw new Error('project_state_binding_invalid');
+  if (typeof record.projectId !== 'string' || typeof record.repository !== 'string') {
+    throw new Error('project_state_binding_invalid');
+  }
+  return normalizedExpected({ projectId: record.projectId, repository: record.repository });
 }
 
-export function assertProjectStateBinding(namespaceRoot, expectedInput) {
+export function assertProjectStateBinding(
+  namespaceRoot: string,
+  expectedInput: ProjectStateIdentity,
+): ProjectStateBindingV1 {
   const expected = normalizedExpected(expectedInput);
   const observed = readProjectStateBinding(namespaceRoot);
   if (!observed) throw new Error('project_state_binding_missing');
@@ -82,12 +98,15 @@ export function assertProjectStateBinding(namespaceRoot, expectedInput) {
   return observed;
 }
 
-function namespacePayloadEntries(namespaceRoot) {
+function namespacePayloadEntries(namespaceRoot: string): string[] {
   if (!existsSync(namespaceRoot)) return [];
   return readdirSync(namespaceRoot).filter((name) => name !== PROJECT_STATE_BINDING_FILE);
 }
 
-export function ensureProjectStateBinding(namespaceRoot, expectedInput) {
+export function ensureProjectStateBinding(
+  namespaceRoot: string,
+  expectedInput: ProjectStateIdentity,
+): ProjectStateBindingV1 {
   const expected = normalizedExpected(expectedInput);
   const observed = readProjectStateBinding(namespaceRoot);
   if (observed) {
@@ -108,7 +127,10 @@ export function ensureProjectStateBinding(namespaceRoot, expectedInput) {
  * A non-empty namespace can be bound here because the commit already made its
  * imported destination authoritative. Replays are idempotent.
  */
-export function publishCommittedProjectStateBinding(namespaceRoot, expectedInput) {
+export function publishCommittedProjectStateBinding(
+  namespaceRoot: string,
+  expectedInput: ProjectStateIdentity,
+): ProjectStateBindingV1 {
   const expected = normalizedExpected(expectedInput);
   const observed = readProjectStateBinding(namespaceRoot);
   if (observed) {
@@ -121,7 +143,7 @@ export function publishCommittedProjectStateBinding(namespaceRoot, expectedInput
   return assertProjectStateBinding(namespaceRoot, expected);
 }
 
-export function removeProjectStateBindingIfEmpty(namespaceRoot) {
+export function removeProjectStateBindingIfEmpty(namespaceRoot: string): boolean {
   if (namespacePayloadEntries(namespaceRoot).length !== 0) return false;
   rmSync(projectStateBindingPath(namespaceRoot), { force: true });
   return true;

@@ -10,6 +10,9 @@ import {
   type WorkerAssignment,
 } from './lib/worker-assignment-store.ts';
 import { withCrashRecoverableFileLock } from './pr2-foundation/journal-lock.ts';
+import { resolveTargetContext } from './lib/target-context.ts';
+import { assertProjectStateBinding } from './lib/project-state-binding.ts';
+import { resolveWakeSupervisorStateRoot } from './pr2-foundation/wake-supervisor-state-root.ts';
 import {
   buildWorkerReportRecordKey,
   readWorkerReportStoreFile,
@@ -65,18 +68,27 @@ export async function resolvePackWorkerReportRequest(argv:readonly string[],env:
   const args=[...argv];
   let state:string;
   try{state=stateFromArgs(args);validateArgs(args,state,AUTO_ARGS)}catch(e){return{kind:'command_error',reason:e instanceof Error?e.message:'invalid_cli_usage'}}
-  const projectId=bounded(arg(args,'--project-id')||'orchestrator-pack',80);
-  const repoRoot=resolve(arg(args,'--repo-root')||process.cwd());
+  const projectId=bounded(arg(args,'--project-id')||env.OPK_PROJECT_ID||'orchestrator-pack',80);
   if(!projectId)return{kind:'command_error',reason:'report_binding_arguments_invalid'};
+  let target;
+  try{
+    target=resolveTargetContext({projectId,env});
+    assertProjectStateBinding(resolveWakeSupervisorStateRoot({env,projectId}),{
+      projectId:target.projectId,
+      repository:target.repository,
+    });
+  }catch(e){
+    return{kind:'continue_work',reason:safe(e,'project_binding_untrusted')};
+  }
+  const repository=target.repository;
+  const repoRoot=target.primaryRoot;
+  const requestedRepoRoot=arg(args,'--repo-root');
+  if(requestedRepoRoot&&resolve(requestedRepoRoot)!==resolve(repoRoot))return{kind:'continue_work',reason:'report_repo_root_project_mismatch'};
   const run=deps.run??defaultRun;
   const gitHead=await run('git',['rev-parse','HEAD'],repoRoot,10_000);
   if(!gitHead.ok)return{kind:'continue_work',reason:'worktree_head_unavailable'};
   const headSha=sha(gitHead.stdout);
   if(!headSha)return{kind:'command_error',reason:'worktree_head_malformed'};
-  const repo=await jsonChildAt<{nameWithOwner?:unknown}>(run,repoRoot,['repo','view','--json','nameWithOwner'],'github_repository_binding_unavailable');
-  if(repo.kind!=='ok')return repo;
-  const repository=bounded(repo.value.nameWithOwner,240).toLowerCase();
-  if(!repository)return{kind:'command_error',reason:'github_repository_binding_malformed'};
   const pr=await jsonChildAt<{number?:unknown;state?:unknown;headRefOid?:unknown;body?:unknown}>(run,repoRoot,['pr','view','--json','number,state,headRefOid,body'],'github_pr_binding_unavailable');
   if(pr.kind!=='ok')return pr;
   const prNumber=Number(pr.value.number??0);
@@ -101,5 +113,5 @@ export async function resolvePackWorkerReportRequest(argv:readonly string[],env:
   return{kind:'ok',value:{state,repository,issueNumber:assignment.issueNumber,taskId:assignment.taskId,assignmentId:assignment.assignmentId,assignmentGeneration:assignment.generation,prNumber,headSha,deliveryRunId,projectId,repoRoot,dryRun:args.includes('--dry-run')}};
 }
 
-export async function main(argv:readonly string[]=process.argv.slice(2)):Promise<number>{let r:ReportRequest;if(hasExplicitBindingArgs(argv)){try{r=parsePackWorkerReportArgs(argv)}catch(e){process.stdout.write(`${JSON.stringify(outcome('command_error','',e instanceof Error?e.message:'invalid_cli_usage'))}\n`);return 2}}else{const resolved=await resolvePackWorkerReportRequest(argv);if(resolved.kind!=='ok'){let state='';try{state=stateFromArgs(argv)}catch{}const o=outcome(resolved.kind,state,resolved.reason);process.stdout.write(`${JSON.stringify(o)}\n`);return resolved.kind==='command_error'?2:0}r=resolved.value}let o:ReportOutcome;try{o=await evaluatePackWorkerReport(r)}catch(e){o=outcome('command_error',r.state,safe(e,'worker_report_internal_error'))}process.stdout.write(`${JSON.stringify(o)}\n`);return o.disposition==='command_error'?2:0}
+export async function main(argv:readonly string[]=process.argv.slice(2)):Promise<number>{let r:ReportRequest;if(hasExplicitBindingArgs(argv)){try{r=parsePackWorkerReportArgs(argv)}catch(e){process.stdout.write(`${JSON.stringify(outcome('command_error','',e instanceof Error?e.message:'invalid_cli_usage'))}\n`);return 2}}else{const resolved=await resolvePackWorkerReportRequest(argv);if(resolved.kind!=='ok'){let state='';try{state=stateFromArgs(argv)}catch{}const o=outcome(resolved.kind,state,resolved.reason);process.stdout.write(`${JSON.stringify(o)}\n`);return resolved.kind==='command_error'?2:0}r=resolved.value}let o:ReportOutcome;try{const target=resolveTargetContext({projectId:r.projectId});if(target.repository!==r.repository||resolve(target.primaryRoot)!==resolve(r.repoRoot))throw new Error('report_project_repository_binding_mismatch');assertProjectStateBinding(resolveWakeSupervisorStateRoot({projectId:r.projectId}),{projectId:target.projectId,repository:target.repository});o=await evaluatePackWorkerReport(r)}catch(e){o=outcome('command_error',r.state,safe(e,'worker_report_internal_error'))}process.stdout.write(`${JSON.stringify(o)}\n`);return o.disposition==='command_error'?2:0}
 if(process.argv[1]?.endsWith('pack-worker-report.ts'))main().then(c=>{process.exitCode=c}).catch(e=>{process.stdout.write(`${JSON.stringify(outcome('command_error','',safe(e,'worker_report_internal_error')))}\n`);process.exitCode=2});

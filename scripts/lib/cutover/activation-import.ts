@@ -65,9 +65,7 @@ function normalizedPayload(spec: CutoverStoreSpec, raw: Buffer): Record<string, 
   const value = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`store_shape_invalid:${spec.id}`);
   const required = REQUIRED_FIELDS[spec.id];
-  if (!required || JSON.stringify([...spec.coveredFields]) !== JSON.stringify(required)) {
-    throw new Error(`store_covered_fields_invalid:${spec.id}`);
-  }
+  if (!required || JSON.stringify([...spec.coveredFields]) !== JSON.stringify(required)) throw new Error(`store_covered_fields_invalid:${spec.id}`);
   const allowed = new Set([...required, '_recovery']);
   const unknown = Object.keys(value).filter((key) => !allowed.has(key));
   if (unknown.length) throw new Error(`store_unknown_field:${spec.id}:${unknown.join(',')}`);
@@ -303,10 +301,12 @@ export function importSnapshot(input: {
       if (existsSync(input.spec.targetPath)) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
       return marker;
     }
-    const existingDigest = kind === 'legacy-json'
-      ? sha256Stable(normalizedPayload(input.spec, readFileSync(input.spec.targetPath)))
-      : cutoverPathDigest(input.spec.targetPath);
-    if (existingDigest !== importTargetDigest) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
+    if (kind === 'legacy-json') {
+      const existing = normalizedPayload(input.spec, readFileSync(input.spec.targetPath));
+      if (sha256Stable(existing) !== importTargetDigest) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
+    } else if (cutoverPathDigest(input.spec.targetPath) !== importTargetDigest) {
+      throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
+    }
     return marker;
   }
   if (input.snapshot.sourceState === 'absent') {
@@ -335,10 +335,12 @@ export function importSnapshot(input: {
     restoreDirectory(input.spec.targetPath, parseDirectoryArchive(input.spec, raw));
   }
 
-  const readBackDigest = kind === 'legacy-json'
-    ? sha256Stable(normalizedPayload(input.spec, readFileSync(input.spec.targetPath)))
-    : cutoverPathDigest(input.spec.targetPath);
-  if (readBackDigest !== importTargetDigest) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
+  if (kind === 'legacy-json') {
+    const readBack = normalizedPayload(input.spec, readFileSync(input.spec.targetPath));
+    if (sha256Stable(readBack) !== importTargetDigest) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
+  } else if (cutoverPathDigest(input.spec.targetPath) !== importTargetDigest) {
+    throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
+  }
   const record: ImportRecord = {
     storeId: input.snapshot.storeId,
     importIdentity,

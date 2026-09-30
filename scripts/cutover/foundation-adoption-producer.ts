@@ -34,6 +34,7 @@ import { parseFoundationConfig, type FoundationConfig } from '../pr2-foundation/
 import { FOUNDATION_RUNTIME_CATALOG, validateRuntimeCatalog } from '../pr2-foundation/runtime-catalog.ts';
 import { FOUNDATION_COMMIT } from '../pr2a/contracts.ts';
 import { resolveTargetContext } from '../lib/target-context.ts';
+import { readProjectStateBinding, assertProjectStateBinding } from '../lib/project-state-binding.ts';
 
 export interface FoundationAdoptionProducerInput {
   repoRoot: string;
@@ -89,6 +90,11 @@ export async function produceFoundationAdoptionEvidence(
   const projectId = input.projectId?.trim() || 'orchestrator-pack';
   const canonical = canonicalFoundationPaths(repoRoot, undefined, projectId);
   if (path.resolve(input.stateDir) !== canonical.stateRoot) throw new Error('foundation_state_root_unobservable');
+  const existingBinding = readProjectStateBinding(canonical.stateRoot);
+  if (existingBinding) {
+    if (!input.repository) throw new Error('foundation_repository_binding_unobservable');
+    assertProjectStateBinding(canonical.stateRoot, { projectId, repository: input.repository });
+  }
   if (path.resolve(input.configPath) !== canonical.configPath) throw new Error('foundation_config_unobservable');
   if (path.resolve(input.appStatePath) !== canonical.appStatePath) {
     throw new Error('foundation_preflight_version_unobservable');
