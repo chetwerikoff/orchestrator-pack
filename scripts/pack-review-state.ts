@@ -1570,10 +1570,6 @@ export function settleLogicalPackReviewFindingsByStrictDescendant(input: {
         cycle.closedAtUtc = nowIso(input.options);
         cycle.atCapHash = undefined;
         markReviewStageComplete(current, cycle.closedAtUtc);
-        current.smokeOrdering = {
-          ...current.smokeOrdering,
-          reviewSettledHeadSha: currentHeadSha,
-        };
       } else {
         throw new PackReviewAuthorityError(
           'findings_settlement_invalid',
@@ -1675,7 +1671,6 @@ export function commitPackReviewTriage(input: {
             ? resolution as Record<string, unknown>
             : undefined;
         }
-        const workerOwned = current.smokeOrdering?.workerOwned;
         const resolution = automaticFindingResolution;
         const findingCount = Number(resolution?.findingCount);
         const blockingFindingCount = Number(resolution?.blockingFindingCount);
@@ -1700,8 +1695,6 @@ export function commitPackReviewTriage(input: {
           && cycleConsumedCount(current.cycle) === current.cycle.frozenCap
           && current.terminal?.reviewVerdict === 'findings'
           && current.terminal.targetSha !== current.currentHeadSha
-          && (isLogicalRoundCycle(current.cycle)
-            || (workerOwned?.headSha === current.currentHeadSha && workerOwned.status === 'passed'))
           && automaticEvidencePredicate === 'no_intersection'
           && finalFixResolutionBound;
         const priorRoundFindingSettlement = input.triage.verdict === 'DEFER'
@@ -1716,7 +1709,7 @@ export function commitPackReviewTriage(input: {
             'triage_invalid',
             isLogicalRoundCycle(current.cycle!)
               ? 'automatic DEFER requires a bounded logical-round finding checkpoint or final-cap continuation with no-intersection scope evidence and exact finding-resolution evidence'
-              : 'automatic DEFER requires final-cap continuation, exact-head worker smoke PASS, no-intersection scope evidence, and exact finding-resolution evidence',
+              : 'automatic DEFER requires final-cap continuation, no-intersection scope evidence, and exact finding-resolution evidence',
           );
         }
       } else if (!['BLOCK', 'DEFER'].includes(input.triage.verdict)) {
@@ -1731,10 +1724,6 @@ export function commitPackReviewTriage(input: {
       if (automaticFinalFixSettlement
           || (current.publication?.status === 'succeeded' && reviewObligationsSettled(current))) {
         markReviewStageComplete(current, input.triage.committedAtUtc);
-        current.smokeOrdering = {
-          ...current.smokeOrdering,
-          reviewSettledHeadSha: current.currentHeadSha,
-        };
       }
       return current;
     },
@@ -1761,10 +1750,6 @@ export function recordPackReviewPublication(input: {
       current.publication = { ...input.publication };
       if (input.publication.status === 'succeeded' && reviewObligationsSettled(current)) {
         markReviewStageComplete(current, input.publication.recordedAtUtc);
-        current.smokeOrdering = {
-          ...current.smokeOrdering,
-          reviewSettledHeadSha: current.currentHeadSha,
-        };
       }
       return current;
     },

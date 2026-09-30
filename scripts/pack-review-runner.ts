@@ -3306,7 +3306,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       nextAction: 'fix the reported blocker, then rerun scoped reconcile',
     };
   }
-  const settled = authority.smokeOrdering?.reviewSettledHeadSha === authority.currentHeadSha;
+  const settled = authority.cycle?.reviewStageComplete === true;
   return {
     prNumber,
     headSha: authority.currentHeadSha,
