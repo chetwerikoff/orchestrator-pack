@@ -338,17 +338,16 @@ node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 scripts/worker-smoke
 node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 scripts/worker-smoke-entrypoint-1359.test.ts
 ```
 
-The suite covers the existing send-once and lifecycle boundaries plus shared
-routine/complex executor-policy admission, the OpenCode pre-spawn external effort
-gate, exact-target admission, canonical actor/envelope validation, edited and
-malformed evidence, cross-run accumulation, quarantine clearing, row
-revocation/restoration, page crossing, high-water stabilization, head reset,
-same-head Issue edits, publication-order ties, bounded diagnostics, and one-run
-compatibility. A real Orca smoke run remains required when the binding Issue's smoke
-plan requires it.
+The focused current behavior checks exercise full-plan independent smoke execution,
+the unchanged v1 report marker and per-scenario facts, secret redaction,
+same-PR PASS reuse across heads, and current-head CI enforcement. Historical
+ordering, progress, carry, receipt and detached-reconcile tests do not govern
+the new smoke readiness path. A real smoke run remains necessary when the Issue
+plan requires operator-visible execution beyond automated test fixtures.
 
-Rollback is allowed only after current lifecycle state is clean. No aggregate state cleanup is
-needed because the fold creates no cache, ledger, service, watcher, or second durable store.
+Rollback of a deployed change follows the ordinary supervisor-adoption procedure;
+no retired registry, receipt, admission lock or cleanup settlement is required
+to approve readiness.
 
 ## Orca executable selection
 

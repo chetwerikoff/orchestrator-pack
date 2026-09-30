@@ -377,6 +377,6 @@ Merge is part of completion only when the user explicitly requested it and repos
 >
 > Treat real conflicts and ambiguity as exceptions when they actually occur.
 >
-> Use current-head CI, smoke, and review authority.
+> Require current-head CI and review authority, plus an existing same-PR smoke PASS.
 >
 > Report truthfully, or merge only when explicitly authorized and allowed.

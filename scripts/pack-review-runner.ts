@@ -3321,7 +3321,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       nextAction: authority.triage?.verdict === 'BLOCK'
         ? (logicalAccounting
           ? 'resolve the blocking current-head evidence, then rerun scoped reconcile'
-          : 'resolve the blocking current-head evidence, rerun worker-owned smoke, then rerun scoped reconcile')
+          : 'resolve the blocking current-head evidence, then rerun scoped reconcile')
         : 'complete the current-head finding-resolution evidence, then rerun scoped reconcile',
     }),
   };
@@ -4436,7 +4436,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         reason: 'at_cap_continuation_required',
         nextAction: logicalAccounting
           ? 'advance the PR to a proven strict descendant of the reviewed findings head, then rerun scoped reconcile --immediate'
-          : 'fix the final findings, run worker-owned smoke on the exact current head, then run scoped reconcile --immediate',
+          : 'fix the final findings, then run scoped reconcile --immediate',
         prNumber: target.prNumber,
         headSha: target.headSha,
         cycleId: authority.cycle.cycleId,
