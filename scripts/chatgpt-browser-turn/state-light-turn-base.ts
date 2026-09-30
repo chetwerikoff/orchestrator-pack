@@ -77,6 +77,7 @@ import {
   COMPOSER_SELECTOR,
   CONVERSATION_TURN_SECTION_SELECTOR,
   loadChromium,
+  markPreSendAlerts,
   MESSAGE_AUTHOR_ROLE_ATTR,
   MESSAGE_UNIT_KEY_ATTR,
   rolelessRecoverySurfaceCause,
@@ -91,6 +92,7 @@ import {
   RENDERED_CONVERSATION_TURN_SECTION_SELECTOR,
   RENDERED_STOP_BUTTON_SELECTOR,
   stripUiCollapseAffixes,
+  UNMARKED_ALERT_SELECTOR,
   USER_MESSAGE_STYLE,
   verifyProfile,
   BrowserOperationTimeoutError,
@@ -144,6 +146,8 @@ const EXISTING_GENERATION_WAIT_ROUND_MS = 10 * 60_000;
 const EXISTING_GENERATION_WAIT_ROUNDS = 2;
 const EXISTING_GENERATION_READ_INTERVAL_MS = 1_000;
 const EXISTING_GENERATION_IDLE_READS = 2;
+/** How long after the send a recovery banner waits for this turn's Stop to appear. */
+const RECOVERY_BANNER_STOP_GRACE_MS = 60_000;
 export const COMPOSER_READINESS_WAIT_MS = 12_000;
 /** Minimum insertion allowance for a one-line payload. */
 export const COMPOSER_INSERTION_WAIT_MS = 3_000;
@@ -1861,6 +1865,7 @@ async function dispatchStateLightSendAndObserveDelivery(input: {
   readonly invocationDeadlineMs: number;
   readonly deliveryProofWaitMs?: number;
 }): Promise<{ sendCount: 0 | 1; witness: StateLightSendDeliveryWitness }> {
+  await markPreSendAlerts(input.page, Math.min(MAX_LOCAL_READ_WAIT_MS, input.sendWaitMs));
   if (input.hasSendButton) {
     await input.sendButton.click({ timeout: Math.min(MAX_LOCAL_READ_WAIT_MS, input.sendWaitMs) });
   } else {
@@ -1997,6 +2002,37 @@ async function createDedicatedTurnPage(
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+/**
+ * Reloading a conversation whose last reply ended on a recovery banner makes
+ * ChatGPT show Stop for ~10 minutes without generating, so an existing-chat
+ * turn continues in a tab already open on that conversation. Direct publication
+ * keeps the fresh load: its observer cannot see a page websocket opened before attach.
+ */
+async function findOpenConversationPage(browser: any, config: BrowserConfig): Promise<any | undefined> {
+  if (config.newChat || config.directPublication || !config.chatUrl) return undefined;
+  const target = normalizeConversationUrl(config.chatUrl);
+  const contexts = browser.contexts();
+  if (contexts.length !== 1 || typeof contexts[0].pages !== 'function') return undefined;
+  const candidates = (contexts[0].pages() as any[]).filter((candidate) => {
+    try {
+      return !candidate.isClosed?.() && ownedConversationIdentityMatches(String(candidate.url()), target);
+    } catch {
+      return false;
+    }
+  });
+  const page = candidates.at(-1);
+  if (!page) return undefined;
+  try {
+    if (await locatorCount(page.locator(RENDERED_STOP_BUTTON_SELECTOR), Date.now() + MAX_LOCAL_READ_WAIT_MS) > 0) {
+      return undefined;
+    }
+    await boundedBrowserRead(Promise.resolve(page.bringToFront?.()), MAX_LOCAL_READ_WAIT_MS, 'bring_to_front_timeout');
+  } catch {
+    return undefined;
+  }
+  return page;
 }
 
 async function navigateOwnedTurnPage(
@@ -2336,8 +2372,11 @@ async function runTurn(
     const connectWaitMs = invocationBudget.clampOperationWaitMs();
     if (connectWaitMs <= 0) throw new BrowserOperationTimeoutError('connect_over_cdp');
     browser = await chromium.connectOverCDP(config.cdp, { timeout: Math.min(30_000, connectWaitMs) });
-    page = await createDedicatedTurnPage(browser, invocationBudget);
-    await navigateOwnedTurnPage(page, config, navigation);
+    page = await findOpenConversationPage(browser, config);
+    if (!page) {
+      page = await createDedicatedTurnPage(browser, invocationBudget);
+      await navigateOwnedTurnPage(page, config, navigation);
+    }
     const directObservation = createDirectPublicationObservationState();
     if (config.directPublication) installDirectPublicationObserver(page, directObservation);
 
@@ -3042,6 +3081,10 @@ async function runTurn(
     let freshMarkerlessReply = '';
     let streamRecoveryBannerReads = 0;
     let streamRecoveryBannerCause: string | undefined;
+    // Roleless recovery banners outlive the turn that raised them; one ends this
+    // turn only after its own Stop was seen or the Stop grace since the send ran out.
+    let ownedGenerationSeen = false;
+    let firstSentPollAt: number | undefined;
     let sendObservationDeferredLogged = false;
     const updateHeartbeatForPoll = (decision: PageObservationDecision): void => {
       heartbeatDecision = decision;
@@ -3376,6 +3419,16 @@ async function runTurn(
         transcriptIncomplete,
         snapshot: transcriptSnapshot,
       } = observation;
+      if (sendCount >= 1 && firstSentPollAt === undefined) firstSentPollAt = Date.now();
+      if (!ownedGenerationSeen) {
+        try {
+          ownedGenerationSeen = await locatorCount(page.locator(RENDERED_STOP_BUTTON_SELECTOR), hardExhaustionDeadline) > 0;
+        } catch (error) {
+          if (isPostSendTargetCrash(error)) throw error;
+        }
+      }
+      const recoveryBannerTrusted = ownedGenerationSeen
+        || (firstSentPollAt !== undefined && Date.now() - firstSentPollAt >= RECOVERY_BANNER_STOP_GRACE_MS);
       if (
         config.newChat
         && ownedConversationUrl
@@ -3396,7 +3449,10 @@ async function runTurn(
           incident,
         );
       }
-      if (wall.state) {
+      if (wall.state && (recoveryBannerTrusted || !(
+        wall.state === 'recovery_required'
+        && (wall.cause === 'stream_recovery_polling_timed_out' || wall.cause === 'message_stream_error')
+      ))) {
         const cause = wall.cause ?? `${wall.state}_detected`;
         recordProductWallAdvisory(profileKey, wall.state, cause, invocationId);
         incident('invocation_blocker', cause, 'return_local_error');
@@ -3669,11 +3725,11 @@ async function runTurn(
       // prove ownership then, and a reload would hide the alert while the turn
       // stays dead. Return the reserved conversation-scoped recovery cause for
       // this invocation's own bound conversation instead, without reload or resend.
-      if (!markerVisible && durableConversationUrl && sendCount >= 1 && pageTurnEvidence?.generationInProgress !== true) {
+      if (!markerVisible && durableConversationUrl && sendCount >= 1 && recoveryBannerTrusted && pageTurnEvidence?.generationInProgress !== true) {
         let bannerCause: string | undefined;
         try {
           const alertTexts = await boundedBrowserRead(
-            page.locator('[role="alert"]').allInnerTexts(),
+            page.locator(UNMARKED_ALERT_SELECTOR).allInnerTexts(),
             Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, hardExhaustionDeadline - Date.now())),
             'stream_recovery_banner_read_timeout',
           ) as string[];

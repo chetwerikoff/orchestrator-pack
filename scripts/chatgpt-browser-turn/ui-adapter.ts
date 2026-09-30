@@ -14,6 +14,8 @@ import {
   MESSAGE_AUTHOR_ROLE_ATTR,
   MESSAGE_UNIT_KEY_ATTR,
   MESSAGE_NODE_SELECTOR,
+  PRE_SEND_ALERT_ATTR,
+  PRE_SEND_ALERT_SELECTOR,
   PRODUCT_STATUS_PROBE_SELECTORS,
   REGENERATE_THREAD_ERROR_BUTTON_SELECTOR,
   STOP_BUTTON_SELECTOR,
@@ -493,6 +495,7 @@ async function readOwnedTurnSnapshot(
         networkText: string;
         streamText: string;
         productSelector: string;
+        preSendAlertAttr: string;
       }) => {
         const elements = allElements.filter((element) => element.getBoundingClientRect().height > 0);
         const normalize = (value: string): string => value.replace(/\s+/g, ' ').replace(/help\.openai\.com \.$/u, 'help.openai.com.').trim();
@@ -557,6 +560,7 @@ async function readOwnedTurnSnapshot(
         }
         try {
           for (const surface of Array.from(document.querySelectorAll(args.productSelector)).slice(-20)) {
+            if (surface.hasAttribute(args.preSendAlertAttr)) continue;
             const text = (surface as HTMLElement).innerText;
             if (typeof text !== 'string') {
               complete = false;
@@ -646,6 +650,7 @@ async function readOwnedTurnSnapshot(
         networkText: PRODUCT_NETWORK_ERROR_TEXT,
         streamText: MESSAGE_STREAM_ERROR_TEXT,
         productSelector: PRODUCT_STATUS_PROBE_SELECTORS.join(', '),
+        preSendAlertAttr: PRE_SEND_ALERT_ATTR,
       }),
       waitMs,
     ) as OwnedTurnSnapshot;
@@ -653,6 +658,24 @@ async function readOwnedTurnSnapshot(
     return undefined;
   }
 }
+
+/** Alerts visible right before a send belong to an earlier turn; recovery readers skip them. */
+export async function markPreSendAlerts(page: any, waitMs: number): Promise<void> {
+  if (typeof page?.evaluate !== 'function' || waitMs <= 0) return;
+  try {
+    await boundedRead(
+      page.evaluate((args: { selector: string; attr: string }) => {
+        for (const alert of Array.from(document.querySelectorAll(args.selector))) alert.setAttribute(args.attr, '');
+      }, { selector: PRE_SEND_ALERT_SELECTOR, attr: PRE_SEND_ALERT_ATTR }),
+      waitMs,
+    );
+  } catch {
+    // An unmarked earlier alert is still gated by the post-send Stop grace.
+  }
+}
+
+/** Live recovery alerts, excluding those marked before this turn's send. */
+export const UNMARKED_ALERT_SELECTOR = `${PRE_SEND_ALERT_SELECTOR}:not([${PRE_SEND_ALERT_ATTR}])`;
 
 function recoveryCauseFromSnapshot(
   snapshot: OwnedTurnSnapshot | undefined,

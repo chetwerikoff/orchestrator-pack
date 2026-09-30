@@ -81,6 +81,10 @@ export const PRODUCT_STATUS_PROBE_SELECTORS = [
   'a[href*="/auth/signup"]',
 ] as const;
 
+/** Set right before a send on every alert already visible; such an alert belongs to an earlier turn. */
+export const PRE_SEND_ALERT_ATTR = 'data-opk-pre-send-alert';
+export const PRE_SEND_ALERT_SELECTOR = '[role="alert"]';
+
 export const NEW_CHAT_CONTROL_SELECTORS = [
   '[data-testid="create-new-chat-button"]',
   'a:has-text("New chat")',

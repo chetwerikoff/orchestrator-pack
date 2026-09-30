@@ -592,8 +592,10 @@ describe('state-light fresh conversation collision recovery', () => {
             generating,
           );
         }
-        if (selector.includes(STOP_BUTTON_TESTID)) return scalarLocator();
-        if (selector === '[role="alert"]') {
+        if (selector.includes(STOP_BUTTON_TESTID)) {
+          return scalarLocator({ count: vi.fn(async () => (generating ? 1 : 0)) });
+        }
+        if (selector.startsWith('[role="alert"]')) {
           return scalarLocator({
             allInnerTexts: vi.fn(async () => (
               streamRecoveryAlert && state.reads > 2 ? [streamRecoveryAlert] : []
@@ -2438,12 +2440,33 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
     expect(outcome.result.cleanup).not.toBe('confirmed');
   });
 
+  it('continues in an already-open tab of the conversation instead of reloading it', async () => {
+    const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
+    vi.mocked(uiAdapter.productStatusText).mockImplementation(actual.productStatusText);
+    vi.mocked(uiAdapter.classifyProductWall).mockImplementation(actual.classifyProductWall);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-OPEN-TAB'));
+    const fake = recoveryPage(['generating', 'banner']);
+    const harness = enqueueBrowserForTurn(mocks, fake.page);
+    Object.assign(harness.context, { pages: vi.fn(() => [fake.page]) });
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(),
+      '--output', join(integrationStateDir, 'open-tab.txt'),
+      '--chat-url', SHARED_CONV,
+      '--timeout-ms', '5000',
+      '--poll-ms', '1',
+    ]);
+    expect(harness.context.newPage).not.toHaveBeenCalled();
+    expect(fake.page.goto).not.toHaveBeenCalled();
+    expect(outcome.result).toMatchObject({ goto_count: 0, send_count: 1 });
+  });
+
   it('projects exact message stream errors through the existing conversation recovery result', async () => {
     const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
     vi.mocked(uiAdapter.productStatusText).mockImplementation(actual.productStatusText);
     vi.mocked(uiAdapter.classifyProductWall).mockImplementation(actual.classifyProductWall);
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-STREAM-ERROR'));
-    const fake = recoveryPage(['generating', 'banner'], 'Error in message stream');
+    const fake = recoveryPage(['generating', 'generating', 'generating', 'generating', 'generating', 'generating', 'banner'], 'Error in message stream');
     const outcome = await runExistingChat(fake.page, join(integrationStateDir, 'stream-error.txt'));
     expect(outcome.result).toMatchObject({
       schema: 'turn-result/v1',
@@ -2455,6 +2478,34 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
     expect(fake.getSends()).toBe(1);
     expect(fake.retryClicks).not.toHaveBeenCalled();
     expect(fake.close).not.toHaveBeenCalled();
+  });
+
+  it('does not end a turn on a recovery banner before its generation was ever observed', async () => {
+    const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
+    vi.mocked(uiAdapter.productStatusText).mockImplementation(actual.productStatusText);
+    vi.mocked(uiAdapter.classifyProductWall).mockImplementation(actual.classifyProductWall);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-STALE-BANNER'));
+    const fake = recoveryPage(['banner', 'banner', 'banner'], 'Error in message stream');
+    const outcome = await runExistingChat(fake.page, join(integrationStateDir, 'stale-banner.txt'));
+    expect(outcome.result.state).not.toBe('recovery_required');
+    expect(fake.getSends()).toBe(1);
+    expect(fake.retryClicks).not.toHaveBeenCalled();
+  });
+
+  it('ends a turn on a recovery banner once the Stop grace after the send runs out', async () => {
+    const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
+    vi.mocked(uiAdapter.productStatusText).mockImplementation(actual.productStatusText);
+    vi.mocked(uiAdapter.classifyProductWall).mockImplementation(actual.classifyProductWall);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-GRACE-BANNER'));
+    const fake = recoveryPage(['banner', 'banner', 'banner'], 'Error in message stream');
+    const outcome = await runExistingChat(fake.page, join(integrationStateDir, 'grace-banner.txt'), '600000');
+    expect(outcome.result).toMatchObject({
+      state: 'recovery_required',
+      scope: 'conversation',
+      cause: 'message_stream_error',
+      send_count: 1,
+    });
+    expect(fake.retryClicks).not.toHaveBeenCalled();
   });
 
   it('keeps polling with no wall while generation stays active and the banner is absent', async () => {
