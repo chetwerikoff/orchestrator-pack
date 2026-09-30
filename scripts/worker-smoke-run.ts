@@ -2240,16 +2240,6 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     publishSmokeReport(report, options, preAttempt, publishComment); emit({ ok: false, report }, options.json); return 1;
   }
 
-  let orderingBinding: SmokeOrderingBinding | null = null;
-  let orderingOutcome: 'passed' | 'failed' = 'failed';
-  let orderingFailureKind: SmokeOrderingFailureKind = 'retryable';
-  let publishedPassRecorded = false;
-  const recordPublishedOrdering = (report: SmokeReport, published: boolean): void => {
-    if (!published || publishedPassRecorded) return;
-    orderingOutcome = report.result === 'PASS' ? 'passed' : 'failed';
-    orderingFailureKind = smokeReportHasScenarioFinding(report) ? 'finding' : 'retryable';
-    if (report.result === 'PASS') publishedPassRecorded = true;
-  };
   let pendingDetachedTerminalization: DetachedTerminalizationRequest | undefined;
   const deferDetachedTerminalization = (
     runId: string,
@@ -2260,12 +2250,9 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     if (!options.detachedOwner) return;
     pendingDetachedTerminalization = { runId, artifactDir, mode, report };
   };
-  const settleSmokeOrderingAndDetachedTerminalization = (): void => {
+  const terminalizeDetachedIfNeeded = (): void => {
     const pending = pendingDetachedTerminalization;
-    finishSmokeOrderingBeforeDetachedTerminalization(
-      () => finishSmokeOrdering(orderingBinding, orderingOutcome, orderingFailureKind),
-      pending ? () => terminalizeDetachedRun(options, pending.runId, pending.artifactDir, pending.mode, pending.report) : undefined,
-    );
+    if (pending) terminalizeDetachedRun(options, pending.runId, pending.artifactDir, pending.mode, pending.report);
     pendingDetachedTerminalization = undefined;
   };
   const beforeStatus = gitPorcelain(options.cwd);
@@ -2320,7 +2307,6 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
         nowMs: startedAtMs, createTimeoutMs: SMOKE_CREATE_TIMEOUT_MS, scenarioCount: attemptPlan.scenarios.length,
       });
       markSmokeCreateInProgress(artifactDir);
-      orderingBinding = beginSmokeOrdering(options, issueBody, { attemptId, supervisorPid: process.pid, runId });
       const spawned = adapter.spawnWorker({ title: `smoke-${options.issueNumber}`, command: smokeProfile.command, workspace: 'active' }, { cwd: options.cwd, timeoutMs: SMOKE_CREATE_TIMEOUT_MS });
       if (spawned.status !== 'ok') {
         const reason = failureReason(spawned); markSmokeCreateAmbiguous(artifactDir, reason); releaseSmokeAdmission(options.cwd, runId);
@@ -2335,7 +2321,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     }
     if (start.value.kind === 'spawn_failed') {
       const report = operationalReport('harness_observation_interrupted', options, { action: 'spawn runtime smoke worker', expected: 'composite worker identity', observed: start.value.reason, terminalCleanup: 'ambiguous_unbound', adapterId: adapter.id });
-      publishSmokeReport(report, options, runPublication, publishComment, () => { recordPublishedOrdering(report, true); });
+      publishSmokeReport(report, options, runPublication, publishComment);
       deferDetachedTerminalization(runId, artifactDir, 'runtime', report);
       emit({ ok: false, report, attemptId }, options.json); return 1;
     }
@@ -2356,7 +2342,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
         structuredHarnessReason: delivery.reason ?? 'prompt_delivery_unconfirmed',
         terminalCleanup, environmentNotes: [`submit-count=${delivery.submitCount}`, `lifecycle-clean=${lifecycleCleanup.clean}`], worker, adapterId: adapter.id,
       });
-      publishSmokeReport(report, options, runPublication, publishComment, () => { recordPublishedOrdering(report, true); });
+      publishSmokeReport(report, options, runPublication, publishComment);
       deferDetachedTerminalization(runId, artifactDir, 'runtime', report);
       emit({ ok: false, report, lifecycleCleanup, attemptId }, options.json); return 1;
     }
@@ -2376,7 +2362,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
         terminalCleanup, limitations: completion.progress?.invalidEvents.slice(0, 10),
         environmentNotes: [`lifecycle-clean=${lifecycleCleanup.clean}`, ...completionObservationNotes(completion)], worker, adapterId: adapter.id,
       });
-      publishSmokeReport(report, options, runPublication, publishComment, () => { recordPublishedOrdering(report, true); });
+      publishSmokeReport(report, options, runPublication, publishComment);
       deferDetachedTerminalization(runId, artifactDir, 'runtime', report);
       emit({ ok: false, report, lifecycleCleanup, attemptId }, options.json); return 1;
     }
@@ -2404,7 +2390,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     if (!lifecycleCleanup.clean) report.causeFamily = 'lifecycle_cleanup_failed';
     let published = false;
     try {
-      published = publishSmokeReport(report, options, { ...runPublication, attemptObservations: freshAttemptObservations }, publishComment, () => { recordPublishedOrdering(report, true); });
+      published = publishSmokeReport(report, options, { ...runPublication, attemptObservations: freshAttemptObservations }, publishComment);
     } catch (error) {
       const observed = scrubSmokeOutput(error instanceof Error ? error.message : String(error));
       if (!observed.startsWith('publication_unconfirmed:')) throw error;
@@ -2449,13 +2435,13 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     if (observed.startsWith('publication_unconfirmed:')) {
       report.limitations.push(observed);
     } else {
-      const published = publishSmokeReport(report, options, publication, publishComment, () => { recordPublishedOrdering(report, true); });
+      const published = publishSmokeReport(report, options, publication, publishComment);
       if (!published && !options.dryRun) report.limitations.push('publication_unconfirmed: publication did not complete');
     }
     if (options.detachedOwner && cleanupFinished) deferDetachedTerminalization(runId, artifactDir, 'runtime', report);
     emit({ ok: false, report, attemptId }, options.json); return 1;
   } finally {
-    try { settleSmokeOrderingAndDetachedTerminalization(); } catch { /* missing ordering/final evidence remains fail-closed */ }
+    try { terminalizeDetachedIfNeeded(); } catch { /* missing ordering/final evidence remains fail-closed */ }
     process.off('SIGINT', onSigint); process.off('SIGTERM', onSigterm);
     if (worker && !cleanupFinished) { try { cleanup('finally_cleanup', true); } catch { /* lifecycle remains blocking */ } }
     releaseSmokeAdmission(options.cwd, runId);
