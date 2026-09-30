@@ -216,8 +216,10 @@ execution timing rule: a 10-minute minimum grace after a confirmed product-error
 continuation send. Neither is a universal Browser-GPT timeout; do not add a
 second monitor, watcher, daemon, polling loop, durable timer, or recovery store.
 The existing fleet alarm (`scripts/fleet/fleet-wake.ts`) also reports ChatGPT
-chats that show a red product-error banner with generation stopped; it is
-notification-only, and the continuation still follows this section.
+chats that show a red product-error banner with generation stopped: directly to
+the single manager pane whose workspace ends in `-<Issue>` from the chat's
+opening Issue URL, otherwise to the orchestrator. It is notification-only, and
+the continuation still follows this section.
 
 For every submitted execution turn:
 

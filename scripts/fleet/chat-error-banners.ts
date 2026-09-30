@@ -2,6 +2,7 @@ export interface ChatErrorBanner {
   readonly url: string;
   readonly text: string;
   readonly retry: boolean;
+  readonly issue?: number;
 }
 
 export const DEFAULT_CHAT_CDP_URL = 'http://127.0.0.1:9222';
@@ -13,6 +14,9 @@ const TARGET_EVAL_TIMEOUT_MS = 3_000;
 // Read-only: the expression never clicks, types, or presses Retry.
 const RED_BANNER_EXPRESSION = `(() => {
   if (document.querySelector('[data-testid="stop-button"]')) return [];
+  const first = document.querySelector('[data-markdown-text-style="user-message"],[data-chatgpt-search-unit-key$=":user"]');
+  const issueMatch = ((first && first.innerText) || '').match(/github\\.com\\/[^\\s/]+\\/[^\\s/]+\\/issues\\/(\\d+)/);
+  const issue = issueMatch ? Number(issueMatch[1]) : undefined;
   const red = (c) => {
     let m = c.match(/oklab\\(\\s*[\\d.]+%?\\s+([-\\d.]+)\\s+([-\\d.]+)/);
     if (m) return Number(m[1]) > 0.1;
@@ -26,6 +30,7 @@ const RED_BANNER_EXPRESSION = `(() => {
     .map((e) => ({
       text: (e.innerText || '').split('\\n')[0].trim().slice(0, 160),
       retry: [...e.querySelectorAll('button')].some((b) => /^retry$/i.test((b.innerText || b.getAttribute('aria-label') || '').trim())),
+      issue,
     }));
 })()`;
 
@@ -35,11 +40,13 @@ interface CdpTarget {
   readonly webSocketDebuggerUrl?: string;
 }
 
-function evaluateTarget(wsUrl: string): Promise<Array<{ text: string; retry: boolean }>> {
+type BannerRow = { text: string; retry: boolean; issue?: number };
+
+function evaluateTarget(wsUrl: string): Promise<BannerRow[]> {
   return new Promise((resolvePromise) => {
     let settled = false;
     let socket: WebSocket;
-    const finish = (value: Array<{ text: string; retry: boolean }>) => {
+    const finish = (value: BannerRow[]) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -91,7 +98,12 @@ export async function readChatErrorBanners(cdpUrl: string): Promise<ChatErrorBan
   const banners: ChatErrorBanner[] = [];
   for (const target of conversations) {
     for (const row of await evaluateTarget(target.webSocketDebuggerUrl!)) {
-      banners.push({ url: target.url!.split(/[?#]/)[0]!, text: row.text, retry: Boolean(row.retry) });
+      banners.push({
+        url: target.url!.split(/[?#]/)[0]!,
+        text: row.text,
+        retry: Boolean(row.retry),
+        ...(Number.isSafeInteger(row.issue) && row.issue! > 0 ? { issue: row.issue } : {}),
+      });
     }
   }
   return banners;

@@ -2,7 +2,7 @@
 import '../toolchain/native-entrypoint-preflight.ts';
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTargetContext } from '../lib/target-context.ts';
 import {
@@ -39,6 +39,8 @@ export interface FleetWakeStateStore extends FleetPollingStore {
   readLastSentSignature(): string | null;
   writeLastSentSignature(signature: string): void;
   clearLastSentSignature(): void;
+  readBannerSignature?(): string | null;
+  writeBannerSignature?(signature: string): void;
 }
 
 export class FileFleetWakeStateStore extends FileFleetStateStore implements FleetWakeStateStore {
@@ -61,6 +63,23 @@ export class FileFleetWakeStateStore extends FileFleetStateStore implements Flee
 
   clearLastSentSignature(): void {
     rmSync(this.signaturePath(), { force: true });
+  }
+
+  private bannerSignaturePath(): string {
+    return join(this.root, 'banner-sent.signature');
+  }
+
+  readBannerSignature(): string | null {
+    try {
+      return existsSync(this.bannerSignaturePath()) ? readFileSync(this.bannerSignaturePath(), 'utf8').trim() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  writeBannerSignature(signature: string): void {
+    mkdirSync(this.root, { recursive: true });
+    writeFileSync(this.bannerSignaturePath(), `${signature}\n`, 'utf8');
   }
 }
 
@@ -116,6 +135,32 @@ export function stoppedSignature(observations: readonly FleetPaneObservation[]):
     .map((pane) => `${pane.state} ${pane.handle}`)
     .sort((left, right) => left.localeCompare(right))
     .join('\n');
+}
+
+/**
+ * The execution prompt opens with the Issue URL, and manager workspaces end in
+ * `-<issue>`; only a single unambiguous pane is addressed directly.
+ */
+export function bannerOwnerPane(
+  banner: ChatErrorBanner,
+  terminals: readonly FleetTerminal[],
+  config: FleetWakeConfig,
+): FleetTerminal | undefined {
+  if (!banner.issue) return undefined;
+  const name = new RegExp(`^[a-z][a-z0-9]*-${banner.issue}$`, 'i');
+  const matches = terminals.filter((terminal) => {
+    if (!terminal.worktreePath) return false;
+    const worktree = terminal.worktreePath.replaceAll('\\', '/');
+    config.workspaceRe.lastIndex = 0;
+    return !samePath(terminal.worktreePath, config.primary)
+      && config.workspaceRe.test(worktree)
+      && name.test(basename(worktree));
+  });
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+export function managerBannerMessage(banner: ChatErrorBanner): string {
+  return `GPT chat error in your execution chat ${banner.url}: red banner "${banner.text}"${banner.retry ? ' (Retry shown)' : ''}, generation stopped. Run GitHub-first reconciliation, then send "Доделай задачу" in this same chat (runbook: Repeated product-error streak - up to two repeats; on the third continuation failure open a fresh chat). Never press Retry.`;
 }
 
 export function chatBannerSignature(banners: readonly ChatErrorBanner[]): string {
@@ -202,8 +247,29 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
   const banners = config.chatCdpUrl
     ? await (options.readChatBanners ?? readChatErrorBanners)(config.chatCdpUrl).catch(() => [])
     : [];
+  const direct: Array<readonly [FleetTerminal, ChatErrorBanner]> = [];
+  const routed: ChatErrorBanner[] = [];
+  for (const banner of banners) {
+    const owner = bannerOwnerPane(banner, terminals, config);
+    if (owner) direct.push([owner, banner]);
+    else routed.push(banner);
+  }
+  const directSignature = direct
+    .map(([owner, banner]) => `${owner.handle} ${banner.url} ${banner.text}`)
+    .sort((left, right) => left.localeCompare(right))
+    .join('\n');
+  if (store.readBannerSignature?.() !== directSignature) {
+    for (const [owner, banner] of direct) {
+      const delivered = sendCoordinator(executor, owner.handle, managerBannerMessage(banner))
+        && (await sleepMs(4_000), submitCoordinator(executor, owner.handle));
+      log(`${delivered ? 'sent' : 'send failed'} chat banner to ${owner.handle}: ${banner.url}`);
+      if (!delivered) routed.push(banner);
+    }
+    store.writeBannerSignature?.(directSignature);
+  }
+
   const stopped = actionablePanes(observations);
-  if (stopped.length === 0 && banners.length === 0) {
+  if (stopped.length === 0 && routed.length === 0) {
     store.clearLastSentSignature();
     log('nothing stopped');
     return { state: 'nothing_stopped' };
@@ -218,14 +284,14 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
   }
 
   const coordinatorState: 'idle' | 'busy' = isBusyScreen(coordinatorScreen, config.busyRe) ? 'busy' : 'idle';
-  const signature = [stoppedSignature(observations), chatBannerSignature(banners)].filter(Boolean).join('\n');
+  const signature = [stoppedSignature(observations), chatBannerSignature(routed)].filter(Boolean).join('\n');
   const deliverySignature = `${coordinator.handle}\n${signature}`;
   if (coordinatorState === 'busy' && store.readLastSentSignature() === deliverySignature) {
     log(`${coordinator.handle} same stopped set already queued`);
     return { state: 'same_stopped_set', coordinator: coordinator.handle, signature };
   }
 
-  const message = fleetAlarmMessage(coordinatorState, observations, banners);
+  const message = fleetAlarmMessage(coordinatorState, observations, routed);
   if (!sendCoordinator(executor, coordinator.handle, message)) {
     log(`${coordinator.handle} send failed`);
     return { state: 'send_failed', coordinator: coordinator.handle };
@@ -237,7 +303,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
   }
 
   store.writeLastSentSignature(deliverySignature);
-  log(`sent to ${coordinator.handle} (${coordinatorState}): ${stopped.length} need a step, ${banners.length} chat banner(s)`);
+  log(`sent to ${coordinator.handle} (${coordinatorState}): ${stopped.length} need a step, ${routed.length} chat banner(s)`);
   return {
     state: 'sent',
     coordinator: coordinator.handle,
