@@ -3,9 +3,10 @@
   "issue_number": 2246,
   "declared_paths": [
     "docs/chatgpt-task-execution-runbook.md",
+    "scripts/chatgpt-browser-turn/chat-bindings.ts",
     "scripts/chatgpt-browser-turn/state-light-entry.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.ts",
-    "scripts/fleet/chat-bindings.ts",
+    "scripts/fleet/chat-error-banners.ts",
     "scripts/fleet/fleet-wake.ts"
   ],
   "denylist": [
@@ -17,9 +18,10 @@
   "allowed_roots": [
     "docs/chatgpt-task-execution-runbook.md",
     "docs/declarations/",
+    "scripts/chatgpt-browser-turn/chat-bindings.ts",
     "scripts/chatgpt-browser-turn/state-light-entry.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.ts",
     "scripts/fleet/"
   ],
-  "source_revision": "3e2bbc1e07c4ab7519113c028c3755ed0742e925"
+  "source_revision": "cccc43c208d1f6cf558e0d3c6da6b7da3e594f1b"
 }
