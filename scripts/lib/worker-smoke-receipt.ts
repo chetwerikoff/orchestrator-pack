@@ -371,8 +371,9 @@ export function recordCloseReceipt(input: {
 }
 
 function receiptRoot(): string {
+  const projectId = String(process.env.OPK_PROJECT_ID ?? 'orchestrator-pack').trim() || 'orchestrator-pack';
   return process.env.WORKER_SMOKE_RECEIPT_ROOT
-    ?? join(homedir(), '.local', 'state', 'orchestrator-pack-wake-supervisor', 'worker-smoke-receipts');
+    ?? join(homedir(), '.local', 'state', 'orchestrator-pack-wake-supervisor', projectId, 'worker-smoke-receipts');
 }
 
 function receiptKey(prNumber: number, headSha: string): string {
