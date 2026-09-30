@@ -243,6 +243,29 @@ worker-smoke-run run \
   --cwd "$PWD"
 ```
 
+## Report admission and trust boundary
+
+For Issue #2250 the accepted smoke evidence is the newest existing
+`pack-worker-smoke-report/v1` PASS **comment on the same PR** at any head.
+The report's head, per-scenario outcome and tracked-files-unmodified facts are
+retained unchanged. The GitHub author is publishing metadata only; no
+publisher/producer identity filter, worker-role attestation, edited-comment
+rejection, or new provenance admission is performed by readiness. The
+supervised independent smoke-worker handoff establishes operational
+independence. The PR and required CI must still match the current PR head
+for their own separate readiness predicates.
+
+## Exact-head point-in-time coverage
+
+*Retired by Issue #2250.* Earlier-head reports do not require a fresh
+current-head coverage fold, ancestor/patch equivalence proof or selective
+retry. Historical per-tuple FAIL/BLOCKED precedence, receipt binding,
+stable-census and head-equality reconstruction are no longer active smoke
+readiness authority. A first non-PASS alone does not satisfy readiness;
+an existing worker/fixer correction may be followed by an explicit smoke run.
+Once a PASS is on the PR, it remains sufficient on later heads subject to
+current-head CI.
+
 ## Report and readiness semantics
 
 Readiness selects the newest existing `pack-worker-smoke-report/v1`
