@@ -59,6 +59,7 @@ function recoveryPage(options: { generationActive: boolean; laterUser?: boolean;
       if (selector === MESSAGE_NODE_SELECTOR) return {
         evaluateAll: (callback: (nodes: Element[], args: unknown) => unknown, args: unknown) => {
           reads++;
+          for (const element of elements) Object.assign(element, { getBoundingClientRect: () => ({ height: 1 }) });
           const prior = (globalThis as { document?: unknown }).document;
           (globalThis as { document?: unknown }).document = {
             querySelectorAll: (query: string) => {

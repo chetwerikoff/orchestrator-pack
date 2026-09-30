@@ -598,7 +598,7 @@ export async function revalidateKeyedHarvest(
     const nodes = page.locator(MESSAGE_NODE_SELECTOR);
     if (typeof nodes?.evaluateAll !== 'function') return { state: 'continuity-unproven' };
     const observed = await boundedBrowserRead(
-      nodes.evaluateAll((elements: Element[], args: {
+      nodes.evaluateAll((allElements: Element[], args: {
         roleAttribute: string;
         userMessageStyle: string;
         unitKeyAttribute: string;
@@ -608,6 +608,7 @@ export async function revalidateKeyedHarvest(
         inProgressSelector: string;
         actionSelector: string;
       }) => {
+        const elements = allElements.filter((element) => element.getBoundingClientRect().height > 0);
         const valid = (value: string | null): value is string => Boolean(value && value.length >= 8);
         const canonicalKey = (element: Element): string | undefined => {
           for (const attribute of ['data-chatgpt-selection-message-id', 'data-message-id', 'data-turn-id', 'data-chatgpt-search-message-ids']) {
@@ -1562,13 +1563,14 @@ export async function readPageObservation(
         Math.max(0, deadlineMs - Date.now()),
       );
       const observed = await boundedBrowserRead(
-        evaluateAll.call(nodes, (elements: Element[], args: {
+        evaluateAll.call(nodes, (allElements: Element[], args: {
           roleAttribute: string;
           userMessageStyle: string;
           unitKeyAttribute: string;
           assistantMessageStyle: string;
           generationSelector: string;
         }) => {
+          const elements = allElements.filter((element) => element.getBoundingClientRect().height > 0);
           const valid = (value: string | null): value is string => Boolean(value && value.length >= 8);
           const canonicalKey = (element: Element): string | undefined => {
             for (const attribute of ['data-chatgpt-selection-message-id', 'data-message-id', 'data-turn-id', 'data-chatgpt-search-message-ids']) {
