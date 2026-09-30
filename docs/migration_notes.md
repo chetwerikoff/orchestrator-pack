@@ -742,21 +742,58 @@ The `cdp-<port>-owner.json` record is excluded because it owns one
 machine/profile, not one repository. Existing discuss-with-gpt directories that
 already contain a project binding are also excluded from the legacy pack move.
 
-The old ad-hoc LeoPoker create-Issue directory is operator-owned. After all
-writers to that directory are stopped, and only when the destination is absent,
-the optional move is:
+The old ad-hoc LeoPoker create-Issue directory is operator-owned. Run this
+one-time move only after stopping its writers and consumers, from the trusted
+pack checkout. The source and destination must be on the same filesystem.
+The project binding is durably written to the quiesced *source* before the
+atomic directory rename, so no partially copied/unbound destination is exposed.
+The command accepts a completed earlier move only if its binding matches the
+current card; it never combines two populated layouts.
 
 ```bash
-state_home="${XDG_STATE_HOME:-$HOME/.local/state}"
-test -d "$state_home/leopoker-create-issue-draft"
-test ! -e "$state_home/create-issue-draft/leopoker"
-mkdir -p "$state_home/create-issue-draft"
-mv "$state_home/leopoker-create-issue-draft" "$state_home/create-issue-draft/leopoker"
+node --experimental-strip-types --input-type=module <<'NODE'
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, renameSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import path from 'node:path';
+import { resolveTargetContext } from './scripts/lib/target-context.ts';
+import { assertProjectStateBinding } from './scripts/lib/project-state-binding.ts';
+
+const selected = resolveTargetContext({ projectId: 'leopoker' });
+const identity = { projectId: selected.projectId, repository: selected.repository };
+// Create-Issue's current canonical owner is HOME-based, independent of XDG_STATE_HOME.
+const root = path.join(process.env.HOME || homedir(), '.local', 'state');
+const source = path.join(root, 'leopoker-create-issue-draft');
+const destination = path.join(root, 'create-issue-draft', 'leopoker');
+if (!existsSync(source)) {
+  if (!existsSync(destination)) throw new Error('leopoker_migration_source_missing');
+  assertProjectStateBinding(destination, identity);
+  console.log('leopoker_already_migrated_and_bound');
+} else {
+  if (existsSync(destination)) throw new Error('leopoker_migration_both_layouts_present');
+  const bindingPath = path.join(source, 'project-binding.json');
+  if (!existsSync(bindingPath)) {
+    const fd = openSync(bindingPath, 'wx', 0o600);
+    try {
+      writeFileSync(fd, `${JSON.stringify({ schema: 'orchestrator-pack/project-state-binding/v1', ...identity }, null, 2)}\n`);
+      fsyncSync(fd);
+    } finally { closeSync(fd); }
+    const dirFd = openSync(source, 'r');
+    try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
+  }
+  assertProjectStateBinding(source, identity);
+  mkdirSync(path.dirname(destination), { recursive: true });
+  renameSync(source, destination); // atomic: EXDEV fails instead of cross-filesystem copy
+  const dirFd = openSync(path.dirname(destination), 'r');
+  try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
+  assertProjectStateBinding(destination, identity);
+  console.log('leopoker_migrated_and_bound');
+}
+NODE
 ```
 
-After the code-side #2186 cutover is installed, read back the selected LeoPoker
-card/repository binding before consuming the moved state. Do not use the move
-when the destination already contains live state.
+Never start a consumer between stopping the old writers and the final
+repository-binding read-back. A retargeted card, unbound existing destination,
+or dual live layouts fail closed without overwriting state.
 
 ## Ongoing adoption rule
 
