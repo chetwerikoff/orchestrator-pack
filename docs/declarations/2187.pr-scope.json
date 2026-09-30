@@ -1,0 +1,24 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2187,
+  "declared_paths": [
+    "docs/migration_notes.md",
+    "docs/target_repo_setup.md",
+    "scripts/kernel/subprocess.ts",
+    "scripts/lib/target-context.test.ts",
+    "scripts/lib/target-context.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/migration_notes.md",
+    "docs/target_repo_setup.md",
+    "plugins/",
+    "scripts/"
+  ],
+  "source_revision": "f71be1ad1e2df8d3de7fdf35134537f38fda5d1f"
+}

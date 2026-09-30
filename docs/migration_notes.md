@@ -23,6 +23,58 @@ is introduced.
 
 # Migration notes
 
+## Target-owned verification adoption (Issue #2187)
+
+### What changed
+
+Target-repository verification now comes only from the selected project card.
+`verification.local` is mandatory for target work; it is an ordered non-empty
+list of non-empty command strings. `verification.focused` is optional and
+does not replace the local list. The tracked verifier requires an explicit current
+target worktree root, proves that root is the Git top level whose canonical
+`origin` matches the card repository, then runs only the declared local
+commands as `sh -lc <command>` in order with that root as cwd. Invalid card
+verification, invalid/mismatched worktree binding, spawn failure, or non-zero
+exit fails closed; there is no pack-command fallback.
+
+This change does not make target required-check readiness, live branch policy,
+pack-review requirements, PR/base/comparison/merge authority, or non-test
+`main` literals project-card-owned. Those remain separate work.
+
+### Operator adoption
+
+1. In every adopted target card, set `verification.local` to the target's
+   real local verification commands in execution order. Keep at least one
+   non-blank command. Add `verification.focused` only when the target has a
+   useful non-empty scoped verification template; focused-only cards are invalid.
+2. Keep the pack's own `orchestrator-pack` card populated with the pack's
+   own verification commands. Do not replace either pack or target commands with
+   a cross-project default.
+3. Update the single operator-owned shared worker preamble and
+   firefighter/flow-manager templates so `{VERIFY}` expands to:
+
+   ```bash
+   node --experimental-strip-types "{PACK_ROOT}/scripts/lib/Invoke-TypeScriptCli.ts" \
+     --repo-root "{PACK_ROOT}" --script "{PACK_ROOT}/scripts/lib/target-context.ts" -- \
+     verify --project "{PROJECT_ID}" --target-worktree "<explicit-current-target-worktree-root>"
+   ```
+
+   The current target worktree root must come from the active task/worktree
+   binding. Do not fill it from cwd and do not substitute card `primaryRoot`.
+4. Remove concrete pack verification commands such as `scripts/verify.ts`,
+   `ci:preflight`, or pack Vitest shards from target-work template paths.
+   Pack changes continue to verify from the pack card.
+5. Exercise one target with two local commands and one fail-fast case before
+   enabling target task execution. Separately maintain required-check/live-policy
+   and base/merge configuration; #2187 does not change those authorities.
+
+### Rollback
+
+A source rollback must be accompanied by reverting the operator template
+adoption for `{VERIFY}`. Do not restore implicit pack verification for target
+work as a compatibility fallback; stop target execution until the selected
+revision's explicit verification contract is satisfied.
+
 ## Per-project target context adoption (Issue #2185)
 
 ### What changed
