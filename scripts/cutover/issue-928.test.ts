@@ -12,6 +12,7 @@ import { waitForStartedSupervisor } from '../lib/cutover/activation-transaction.
 import { abandonPreImportCordon } from '../lib/cutover/activation-transaction.ts';
 import { isExecutableLegacyReference } from '../lib/cutover/activation-transaction.ts';
 import {
+  legacyBarrierActive,
   createCordon,
   findLegacySupervisorIdentities,
   findTypeScriptSupervisorIdentities,
@@ -29,12 +30,19 @@ import {
 } from '../lib/cutover/foundation-observation.ts';
 import {
   appendPhaseOne,
+  readPhaseOneDetail,
   foundationEvidenceDigest,
   writeDurableJson,
   verifyFoundationEvidenceDigest,
   verifyFoundationEvidenceObservation,
 } from '../lib/cutover/activation-evidence.ts';
-import { snapshotStores } from '../lib/cutover/activation-import.ts';
+import {
+  assertSnapshotSourceStable,
+  assertCommittedImportedDestination,
+  importSnapshot,
+  retireImportedSource,
+  snapshotStores,
+} from '../lib/cutover/activation-import.ts';
 import {
   findCompletedSchedulerDelivery,
   provePreImportRollbackSafe,
@@ -53,6 +61,12 @@ import { packReviewDeliveryNeedsResume } from '../lib/pack-review-delivery.ts';
 import { startPackReview } from '../pack-review-runner.ts';
 import { produceFoundationAdoptionEvidence } from './foundation-adoption-producer.ts';
 import { DEFAULT_FOUNDATION_CONFIG } from '../pr2-foundation/config.ts';
+import { withPackProjectStateMigration, publishCommittedProjectNamespaceBindings } from '../lib/cutover/project-state-migration.ts';
+import {
+  assertProjectStateBinding,
+  ensureProjectStateBinding,
+  publishCommittedProjectStateBinding,
+} from '../lib/project-state-binding.ts';
 
 const activationCordonTestState = vi.hoisted(() => ({
   disableGreenfieldProcessCensus: false,
@@ -217,7 +231,10 @@ function activationFixture(): { request: ActivationRequest; boundary: Activation
     proveFoundationAdoption: () => ({ result: 'foundation-evidence-verified', evidencePath: request.paths.foundationEvidencePath, localHostId: request.hostId, oldInstalledCommitSha: '9'.repeat(40), heartbeatObservedAt: new Date().toISOString(), migrationJournalCount: 1, preflightSanitizerId: 'sha256:test' }),
     resolveBaseAndClosure: () => ({ baseRef: 'post-948-base', closure: { inputTree: 'tree-948', referenceCount: 2 } }),
     readLegacySupervisor: () => identity,
-    captureLegacyWriters: () => [],
+    captureLegacyWriters: () => {
+      if (!legacyBarrierActive(request.paths.supervisorStateDir)) throw new Error('writer_enumeration_before_cordon');
+      return [];
+    },
     drainLegacyWriters: async () => {
       if (!existsSync(request.paths.cordonPath)) throw new Error('cordon_not_first');
       return { writerWatermark: 'drained-test-watermark', drainedAt: new Date().toISOString() };
@@ -264,6 +281,263 @@ function committedEpoch(file: string, epochId = 'epoch-scheduler', nonce = 'nonc
   new FileEpochAuthority(file).commit(null, core);
   return core;
 }
+
+describe('Issue #2186 pack migration roster', () => {
+  it('maps legacy pack payload stores while excluding host-global and already scoped discuss state', () => {
+    const { request, root } = activationFixture();
+    const localState = path.join(root, 'local-state');
+    const flatWake = path.join(localState, 'orchestrator-pack-wake-supervisor');
+    const projectRoot = path.join(flatWake, 'orchestrator-pack');
+    request.paths.stateDir = projectRoot;
+
+    mkdirSync(flatWake, { recursive: true });
+    writeFileSync(path.join(flatWake, 'worker-status-store.json'), '{"records":{}}\n', 'utf8');
+    const createRoot = path.join(localState, 'create-issue-draft');
+    mkdirSync(path.join(createRoot, '.review', '7'), { recursive: true });
+    writeFileSync(path.join(createRoot, '.review', '7', 'tier-intake.json'), '{}\n', 'utf8');
+    mkdirSync(path.join(createRoot, '7-work'), { recursive: true });
+    const discussRoot = path.join(localState, 'discuss-with-gpt');
+    mkdirSync(path.join(discussRoot, 'old-draft'), { recursive: true });
+    writeFileSync(path.join(discussRoot, 'old-draft', 'pass.md'), 'legacy\n', 'utf8');
+    writeFileSync(path.join(discussRoot, 'cdp-9222-owner.json'), '{}\n', 'utf8');
+    mkdirSync(path.join(discussRoot, 'leopoker'), { recursive: true });
+    writeFileSync(path.join(discussRoot, 'leopoker', 'project-binding.json'), JSON.stringify({
+      schema: 'orchestrator-pack/project-state-binding/v1',
+      projectId: 'leopoker',
+      repository: 'owner/leopoker',
+    }) + '\n', 'utf8');
+
+    const migrated = withPackProjectStateMigration(request, 'orchestrator-pack', { localStateRoot: localState });
+    const byId = new Map(migrated.stores.map((store) => [store.id, store]));
+    expect(byId.get('project-worker-status-store')).toMatchObject({
+      sourcePath: path.join(flatWake, 'worker-status-store.json'),
+      targetPath: path.join(projectRoot, 'worker-status-store.json'),
+      kind: 'opaque-file',
+    });
+    expect(byId.get('project-create-issue-review')).toMatchObject({
+      sourcePath: path.join(createRoot, '.review'),
+      targetPath: path.join(createRoot, 'orchestrator-pack', '.review'),
+      kind: 'opaque-directory',
+    });
+    expect([...byId.values()].some((store) => store.sourcePath === path.join(discussRoot, 'old-draft'))).toBe(true);
+    expect([...byId.values()].some((store) => store.sourcePath === path.join(discussRoot, 'cdp-9222-owner.json'))).toBe(false);
+    expect([...byId.values()].some((store) => store.sourcePath === path.join(discussRoot, 'leopoker'))).toBe(false);
+    expect(withPackProjectStateMigration(request, 'leopoker')).toBe(request);
+  });
+
+  it('uses HOME-based create/discuss owners even when the wake root is under XDG_STATE_HOME', () => {
+    const { request } = activationFixture();
+    const home = tempRoot();
+    const localState = path.join(home, '.local', 'state');
+    const wakeRoot = path.join(tempRoot(), 'xdg', 'orchestrator-pack-wake-supervisor', 'orchestrator-pack');
+    request.paths.stateDir = wakeRoot;
+    const createReview = path.join(localState, 'create-issue-draft', '.review');
+    mkdirSync(createReview, { recursive: true });
+    writeFileSync(path.join(createReview, 'receipt.json'), '{}\n');
+    const discussDraft = path.join(localState, 'discuss-with-gpt', 'draft-7');
+    mkdirSync(discussDraft, { recursive: true });
+    writeFileSync(path.join(discussDraft, 'pass.md'), 'pass\n');
+    const oldHome = process.env.HOME;
+    let migrated: ActivationRequest;
+    try {
+      process.env.HOME = home;
+      migrated = withPackProjectStateMigration(request, 'orchestrator-pack');
+    } finally {
+      if (oldHome === undefined) delete process.env.HOME;
+      else process.env.HOME = oldHome;
+    }
+    expect(migrated!.stores.find((store) => store.id === 'project-create-issue-review')?.sourcePath).toBe(createReview);
+    expect(migrated!.stores.some((store) => store.sourcePath === discussDraft)).toBe(true);
+  });
+});
+
+describe('Issue #2186 opaque project-state migration', () => {
+  it('preserves canonical create-Issue review bytes and makes publication replay idempotent', () => {
+    const root = tempRoot();
+    const source = path.join(root, 'create-issue-draft', '.review', '7');
+    const target = path.join(root, 'create-issue-draft', 'leopoker', '.review', '7');
+    mkdirSync(source, { recursive: true });
+    const payload = Buffer.from([0, 1, 2, 3, 0xff, 0x0a]);
+    writeFileSync(path.join(source, 'terminal.bin'), payload);
+    const spec = {
+      id: 'create-issue-review-7',
+      kind: 'opaque-directory' as const,
+      sourcePath: source,
+      targetPath: target,
+      coveredFields: [] as const,
+    };
+    const [snapshot] = snapshotStores([spec], path.join(root, 'snapshots'), 'writers-quiesced');
+    assertSnapshotSourceStable(spec, snapshot!);
+    const first = importSnapshot({ epochId: 'epoch-2186', nonce: 'nonce-2186', spec, snapshot: snapshot! });
+    const replay = importSnapshot({ epochId: 'epoch-2186', nonce: 'nonce-2186', spec, snapshot: snapshot! });
+    expect(replay.importIdentity).toBe(first.importIdentity);
+    expect(readFileSync(path.join(target, 'terminal.bin'))).toEqual(payload);
+    expect(existsSync(source)).toBe(true);
+    expect(retireImportedSource(spec, snapshot!)).toBe(true);
+    expect(existsSync(source)).toBe(false);
+    expect(retireImportedSource(spec, snapshot!)).toBe(false);
+    expect(readFileSync(path.join(target, 'terminal.bin'))).toEqual(payload);
+  });
+
+  it('replays an atomically published directory without its marker and discards orphan staging', () => {
+    const root = tempRoot();
+    const source = path.join(root, 'source');
+    const target = path.join(root, 'project', '.review');
+    mkdirSync(source, { recursive: true });
+    writeFileSync(path.join(source, 'receipt.json'), '{"ok":true}\n');
+    const spec = { id: 'project-create-issue-review', kind: 'opaque-directory' as const,
+      sourcePath: source, targetPath: target, coveredFields: [] as const };
+    const [snapshot] = snapshotStores([spec], path.join(root, 'snapshots'), 'writers-quiesced');
+    const first = importSnapshot({ epochId: 'epoch-7', nonce: 'nonce-7', spec, snapshot: snapshot! });
+    rmSync(first.markerPath);
+    const replay = importSnapshot({ epochId: 'epoch-7', nonce: 'nonce-7', spec, snapshot: snapshot! });
+    expect(replay.importIdentity).toBe(first.importIdentity);
+    rmSync(target, { recursive: true, force: true });
+    rmSync(replay.markerPath);
+    const staging = `${target}.cutover-staging-${first.importIdentity.slice(7, 23)}`;
+    mkdirSync(staging, { recursive: true });
+    writeFileSync(path.join(staging, 'partial.txt'), 'not-authoritative');
+    const recovered = importSnapshot({ epochId: 'epoch-7', nonce: 'nonce-7', spec, snapshot: snapshot! });
+    expect(recovered.importIdentity).toBe(first.importIdentity);
+    expect(existsSync(staging)).toBe(false);
+    expect(readFileSync(path.join(target, 'receipt.json'), 'utf8')).toBe('{"ok":true}\n');
+  });
+
+
+  it('replays an opaque JSONL destination written before its import marker', () => {
+    const root = tempRoot();
+    const sourcePath = path.join(root, 'source.jsonl');
+    const targetPath = path.join(root, 'project', 'target.jsonl');
+    const bytes = '{"one":1}\n{"two":2}\n';
+    writeFileSync(sourcePath, bytes);
+    const spec = { id: 'project-browser-turn-recurrence', kind: 'opaque-file' as const,
+      sourcePath, targetPath, coveredFields: [] as const };
+    const [snapshot] = snapshotStores([spec], path.join(root, 'snapshots'), 'writers-quiesced');
+    const input = { epochId: 'epoch-jsonl', nonce: 'nonce-jsonl', spec, snapshot: snapshot! };
+    const first = importSnapshot(input);
+    rmSync(first.markerPath);
+    const replay = importSnapshot(input);
+    expect(replay.importIdentity).toBe(first.importIdentity);
+    expect(readFileSync(targetPath, 'utf8')).toBe(bytes);
+    expect(() => assertCommittedImportedDestination(spec, snapshot!, replay.importTargetDigest)).not.toThrow();
+    rmSync(replay.markerPath);
+    writeFileSync(targetPath, '{"tampered":true}\n');
+    expect(() => importSnapshot(input)).toThrow('import_target_not_empty');
+    expect(existsSync(sourcePath)).toBe(true);
+  });
+
+  it('refuses committed source retirement when an imported destination is missing or altered', () => {
+    const root = tempRoot();
+    const sourcePath = path.join(root, 'flat', 'status.json');
+    const targetPath = path.join(root, 'project', 'status.json');
+    mkdirSync(path.dirname(sourcePath), { recursive: true });
+    writeFileSync(sourcePath, '{"state":"present"}\n');
+    const spec = { id: 'project-worker-status-store', kind: 'opaque-file' as const,
+      sourcePath, targetPath, coveredFields: [] as const };
+    const [snapshot] = snapshotStores([spec], path.join(root, 'snapshots'), 'writers-quiesced');
+    const record = importSnapshot({ epochId: 'epoch-status', nonce: 'nonce-status', spec, snapshot: snapshot! });
+    expect(() => assertCommittedImportedDestination(spec, snapshot!, record.importTargetDigest)).not.toThrow();
+    writeFileSync(targetPath, '{"state":"corrupt"}\n');
+    expect(() => assertCommittedImportedDestination(spec, snapshot!, record.importTargetDigest))
+      .toThrow('committed_import_target_mismatch');
+    expect(existsSync(sourcePath)).toBe(true);
+    rmSync(targetPath);
+    expect(() => assertCommittedImportedDestination(spec, snapshot!, record.importTargetDigest))
+      .toThrow('committed_import_target_missing');
+    expect(existsSync(sourcePath)).toBe(true);
+  });
+  it('fails closed on destination conflict and source drift after quiescence snapshot', () => {
+    const root = tempRoot();
+    const source = path.join(root, 'flat');
+    const target = path.join(root, 'scoped');
+    mkdirSync(source, { recursive: true });
+    writeFileSync(path.join(source, 'receipt.json'), '{"v":1}\n', 'utf8');
+    const spec = {
+      id: 'review-state',
+      kind: 'opaque-directory' as const,
+      sourcePath: source,
+      targetPath: target,
+      coveredFields: [] as const,
+    };
+    const [snapshot] = snapshotStores([spec], path.join(root, 'snapshots'), 'writers-quiesced');
+
+    mkdirSync(target, { recursive: true });
+    writeFileSync(path.join(target, 'foreign.json'), '{}\n', 'utf8');
+    expect(() => importSnapshot({
+      epochId: 'epoch-2186',
+      nonce: 'nonce-conflict',
+      spec,
+      snapshot: snapshot!,
+    })).toThrow('import_target_not_empty');
+
+    rmSync(target, { recursive: true, force: true });
+    writeFileSync(path.join(source, 'receipt.json'), '{"v":2}\n', 'utf8');
+    expect(() => assertSnapshotSourceStable(spec, snapshot!)).toThrow('cutover_source_changed');
+  });
+});
+
+describe('Issue #2186 project-state binding', () => {
+  it('publishes migrated create-Issue and discuss namespaces only after the existing commit boundary', () => {
+    const root = tempRoot();
+    const wake = path.join(root, 'wake', 'orchestrator-pack');
+    const createRoot = path.join(root, 'create-issue-draft', 'orchestrator-pack');
+    const discussRoot = path.join(root, 'discuss-with-gpt', 'orchestrator-pack');
+    mkdirSync(path.join(createRoot, '.review', '7'), { recursive: true });
+    mkdirSync(path.join(discussRoot, 'draft'), { recursive: true });
+    writeFileSync(path.join(createRoot, '.review', '7', 'receipt.json'), '{}\n');
+    const request = { projectId: 'orchestrator-pack', repository: 'owner/pack', paths: { stateDir: wake },
+      stores: [
+        { id: 'project-create-issue-review', targetPath: path.join(createRoot, '.review') },
+        { id: 'project-discuss-artifact-1', targetPath: path.join(discussRoot, 'draft') },
+      ] } as ActivationRequest;
+    publishCommittedProjectNamespaceBindings(request);
+    expect(assertProjectStateBinding(createRoot, { projectId: 'orchestrator-pack', repository: 'owner/pack' }).repository).toBe('owner/pack');
+    expect(assertProjectStateBinding(discussRoot, { projectId: 'orchestrator-pack', repository: 'owner/pack' }).repository).toBe('owner/pack');
+    expect(() => publishCommittedProjectNamespaceBindings({ ...request, repository: 'owner/other' })).toThrow('project_state_binding_mismatch');
+  });
+  it('isolates same-number task namespaces and rejects project-card retargeting', () => {
+    const root = tempRoot();
+    const alpha = path.join(root, 'alpha');
+    const beta = path.join(root, 'beta');
+    ensureProjectStateBinding(alpha, { projectId: 'alpha', repository: 'owner/alpha' });
+    ensureProjectStateBinding(beta, { projectId: 'beta', repository: 'owner/beta' });
+    writeFileSync(path.join(alpha, 'issue-7.json'), '{}\n', 'utf8');
+    writeFileSync(path.join(beta, 'issue-7.json'), '{}\n', 'utf8');
+
+    expect(assertProjectStateBinding(alpha, {
+      projectId: 'alpha',
+      repository: 'owner/alpha',
+    })).toMatchObject({ projectId: 'alpha', repository: 'owner/alpha' });
+    expect(assertProjectStateBinding(beta, {
+      projectId: 'beta',
+      repository: 'owner/beta',
+    })).toMatchObject({ projectId: 'beta', repository: 'owner/beta' });
+    expect(() => assertProjectStateBinding(alpha, {
+      projectId: 'alpha',
+      repository: 'owner/retargeted',
+    })).toThrow('project_state_binding_mismatch');
+  });
+
+  it('refuses unbound non-empty state and permits binding only through the post-CAS helper', () => {
+    const root = tempRoot();
+    const namespace = path.join(root, 'state');
+    mkdirSync(namespace, { recursive: true });
+    writeFileSync(path.join(namespace, 'durable.json'), '{}\n', 'utf8');
+    expect(() => ensureProjectStateBinding(namespace, {
+      projectId: 'leopoker',
+      repository: 'owner/leopoker',
+    })).toThrow('project_state_binding_missing_for_nonempty_namespace');
+
+    publishCommittedProjectStateBinding(namespace, {
+      projectId: 'leopoker',
+      repository: 'owner/leopoker',
+    });
+    expect(assertProjectStateBinding(namespace, {
+      projectId: 'leopoker',
+      repository: 'owner/leopoker',
+    })).toMatchObject({ projectId: 'leopoker', repository: 'owner/leopoker' });
+  });
+});
 
 describe('Issue #1880 activation epoch current-pointer integrity', () => {
   function authorityReadError(authority: FileEpochAuthority): string | null {
@@ -513,6 +787,27 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
     expect(() => provePreImportRollbackSafe(request)).toThrow(/forward_only/);
   });
 
+
+  it('retains an opaque source when committed recovery detects a damaged destination', async () => {
+    const { request, boundary, root } = activationFixture();
+    const sourcePath = path.join(root, 'receipt.jsonl');
+    const targetPath = path.join(root, 'scoped', 'receipt.jsonl');
+    writeFileSync(sourcePath, '{"valid":1}\n');
+    request.stores.push({ id: 'project-receipt', kind: 'opaque-file', sourcePath, targetPath, coveredFields: [] });
+    const interrupted = vi.spyOn(FileEpochAuthority.prototype, 'verify')
+      .mockImplementationOnce(() => { throw new Error('injected_post_cas_interruption'); });
+    try {
+      await expect(activateCutover(request, boundary)).rejects.toThrow('injected_post_cas_interruption');
+    } finally {
+      interrupted.mockRestore();
+    }
+    expect(new FileEpochAuthority(request.paths.epochAuthorityPath).read().currentEpochId).toBe(request.epochId);
+    expect(existsSync(sourcePath)).toBe(true);
+    writeFileSync(targetPath, '{"corrupt":1}\n');
+    await expect(recoverCommittedCutover(request, recoveryBoundary()))
+      .rejects.toThrow('committed_import_target_mismatch');
+    expect(existsSync(sourcePath)).toBe(true);
+  });
   it('does not fabricate final health/delivery evidence when observation fails', async () => {
     const { request, boundary } = activationFixture();
     boundary.observeFinalHealthAndDelivery = async () => { throw new Error('health_delivery_not_observed'); };
@@ -542,6 +837,45 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
     expect(resumed.nonce).toBe(first.nonce);
     expect(resumed.state).toBe('active');
     expect(existsSync(path.join(request.paths.supervisorStateDir, 'maintenance.epoch'))).toBe(true);
+  });
+
+  it('durably binds cordon to its project, repository and each pre-import source digest', () => {
+    const { request, boundary } = activationFixture();
+    const identity = boundary.readLegacySupervisor(request);
+    const bound: ActivationRequest = {
+      ...request,
+      projectId: 'orchestrator-pack',
+      repository: 'chetwerikoff/orchestrator-pack',
+    };
+    const record = createCordon({
+      path: bound.paths.cordonPath,
+      projectId: bound.projectId,
+      repository: bound.repository,
+      epochId: bound.epochId,
+      expectedOldEpochId: bound.expectedOldEpochId,
+      hostId: bound.hostId,
+      repoRoot: bound.repoRoot,
+      installedCommitSha: bound.installedCommitSha,
+      oldInstalledRevisionRoot: bound.oldInstalledRevisionRoot,
+      legacyStateRoot: bound.paths.supervisorStateDir,
+      legacySupervisor: identity,
+      stores: bound.stores,
+      paths: bound.paths,
+    });
+    expect(record).toMatchObject({ projectId: bound.projectId, repository: bound.repository });
+    expect(Object.keys(record.preImportSourceDigests).sort()).toEqual(bound.stores.map((store) => store.id).sort());
+    expect(provePreImportRollbackSafe(bound).safe).toBe(true);
+    expect(() => provePreImportRollbackSafe({ ...bound, repository: 'owner/other' }))
+      .toThrow('recovery_request_binding_mismatch');
+    const saved = JSON.parse(readFileSync(bound.paths.cordonPath, 'utf8'));
+    for (const key of ['projectId', 'repository', 'preImportSourceDigests']) {
+      const malformed = { ...saved };
+      delete malformed[key];
+      writeJson(bound.paths.cordonPath, malformed);
+      expect(() => readCordonState(bound.paths.cordonPath)).toThrow('cordon_invalid');
+    }
+    writeJson(bound.paths.cordonPath, saved);
+    expect(readCordonState(bound.paths.cordonPath)).toMatchObject({ projectId: bound.projectId, repository: bound.repository });
   });
 
   it('resumes forward from import boundary before CAS and rejects a changed recovery tuple', async () => {
@@ -580,6 +914,71 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
     expect(existsSync(survivor.request.paths.snapshotDir)).toBe(false);
   });
 
+  it('cordons before capturing and draining the cutover-launched source writers', async () => {
+    const { request, boundary } = activationFixture();
+    const writer = {
+      childId: 'pr2-scheduler',
+      identity: { pid: 23456, startTicks: '77', cmdline: ['legacy-scheduler-writer'] },
+      sideEffectLockPath: path.join(request.paths.supervisorStateDir, 'pr2-scheduler.side-effect.lock'),
+    };
+    let terminated: Array<{ pid: number; startTicks: string; cmdline: string[] }> = [];
+    boundary.captureLegacyWriters = () => {
+      expect(legacyBarrierActive(request.paths.supervisorStateDir)).toBe(true);
+      return [writer];
+    };
+    boundary.drainLegacyWriters = async (_request, writers) => {
+      expect(writers).toEqual([writer]);
+      expect(existsSync(request.paths.snapshotDir)).toBe(false);
+      return { writerWatermark: 'drained-source-writer', drainedAt: new Date().toISOString() };
+    };
+    boundary.terminateLegacyProcesses = async (identities) => {
+      terminated = identities;
+      return identities.map((identity) => identity.pid);
+    };
+
+    await activateCutover(request, boundary);
+
+    expect(terminated).toContainEqual(writer.identity);
+    const records = JSON.parse(readFileSync(request.paths.phaseOnePath, 'utf8')).records;
+    expect(records.map((row: { step: string }) => row.step).indexOf('writer-drain'))
+      .toBeLessThan(records.map((row: { step: string }) => row.step).indexOf('snapshots'));
+    const cordon = readCordonState(request.paths.cordonPath);
+    const writerDrain = readPhaseOneDetail(
+      request.paths.phaseOnePath, request.epochId, cordon.nonce, 'writer-drain',
+    ) as { writers: unknown[] };
+    expect(writerDrain.writers).toEqual([writer]);
+  });
+
+  it('drains and terminates a standalone source writer when no legacy supervisor remains', async () => {
+    const { request, boundary } = activationFixture();
+    request.legacySupervisorPid = undefined;
+    const writer = {
+      childId: 'pr2-scheduler',
+      identity: { pid: 23457, startTicks: '78', cmdline: ['legacy-scheduler-writer'] },
+      sideEffectLockPath: path.join(request.paths.supervisorStateDir, 'pr2-scheduler.side-effect.lock'),
+    };
+    let writerAlive = true;
+    let terminated: Array<{ pid: number; startTicks: string; cmdline: string[] }> = [];
+    boundary.captureLegacyWriters = () => {
+      expect(legacyBarrierActive(request.paths.supervisorStateDir)).toBe(true);
+      return writerAlive ? [writer] : [];
+    };
+    boundary.drainLegacyWriters = async (_request, writers) => {
+      expect(writers).toEqual([writer]);
+      expect(existsSync(request.paths.snapshotDir)).toBe(false);
+      return { writerWatermark: 'drained-standalone-source-writer', drainedAt: new Date().toISOString() };
+    };
+    boundary.terminateLegacyProcesses = async (identities) => {
+      terminated = identities;
+      writerAlive = false;
+      return identities.map((identity) => identity.pid);
+    };
+
+    await activateCutover(request, boundary);
+
+    expect(terminated).toEqual([writer.identity]);
+  });
+
   it('allows rollback only before import mutation and binds it to the original targets', () => {
     const { request, boundary } = activationFixture();
     const identity = boundary.readLegacySupervisor(request);
@@ -596,6 +995,7 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
     const body = activation.slice(activation.indexOf('export async function activateCutover'));
     const ordered = [
       'const cordon = createCordon(',
+      'const legacyWriters = boundary.captureLegacyWriters(request)',
       'boundary.drainLegacyWriters(request, legacyWriters)',
       'boundary.terminateLegacyProcesses(',
       'snapshotStores(request.stores',
@@ -1405,12 +1805,14 @@ describe('Issue 1422 first-time activation', () => {
 
     const previousPath = process.env.PATH;
     const previousStateRoot = process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+    const previousXdgStateHome = process.env.XDG_STATE_HOME;
     const previousRuntimeAdapter = process.env.OPK_RUNTIME_ADAPTER;
     const previousRuntimeCli = process.env.OPK_RUNTIME_CLI_COMMAND;
     const previousProcessCensusToggle = activationCordonTestState.disableGreenfieldProcessCensus;
     const user = os.userInfo();
     vi.spyOn(os, 'userInfo').mockReturnValue({ ...user, homedir: homeDir });
     process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ''}`;
+    delete process.env.XDG_STATE_HOME;
     delete process.env.OPK_RUNTIME_ADAPTER;
     process.env.OPK_RUNTIME_CLI_COMMAND = runtimeCli;
     delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
@@ -1450,6 +1852,8 @@ describe('Issue 1422 first-time activation', () => {
       else process.env.PATH = previousPath;
       if (previousStateRoot === undefined) delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
       else process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = previousStateRoot;
+      if (previousXdgStateHome === undefined) delete process.env.XDG_STATE_HOME;
+      else process.env.XDG_STATE_HOME = previousXdgStateHome;
       if (previousRuntimeAdapter === undefined) delete process.env.OPK_RUNTIME_ADAPTER;
       else process.env.OPK_RUNTIME_ADAPTER = previousRuntimeAdapter;
       if (previousRuntimeCli === undefined) delete process.env.OPK_RUNTIME_CLI_COMMAND;
@@ -1547,6 +1951,8 @@ describe('Issue 1422 first-time activation', () => {
     issue1422FirstTimeRoots.push(homeDir);
     const user = os.userInfo();
     const userInfoSpy = vi.spyOn(os, 'userInfo').mockReturnValue({ ...user, homedir: homeDir });
+    const previousXdgStateHome = process.env.XDG_STATE_HOME;
+    process.env.XDG_STATE_HOME = path.join(homeDir, '.local', 'state');
     const canonical = canonicalFoundationPaths(request.repoRoot);
     const previousStateRoot = process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
     delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
@@ -1560,6 +1966,8 @@ describe('Issue 1422 first-time activation', () => {
       })).rejects.toThrow(/unobservable/);
     } finally {
       userInfoSpy.mockRestore();
+      if (previousXdgStateHome === undefined) delete process.env.XDG_STATE_HOME;
+      else process.env.XDG_STATE_HOME = previousXdgStateHome;
       if (previousStateRoot === undefined) delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
       else process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = previousStateRoot;
     }
@@ -1689,6 +2097,42 @@ describe('Issue #1901 native Linux supervisor census', () => {
         readIdentity: identityUnreadable,
       }), row.name).toThrow(/process_stat_invalid/);
     }
+  });
+
+  it('attributes the pre-#2186 unqualified TypeScript supervisor only to orchestrator-pack', () => {
+    const identity: ProcessIdentity = {
+      pid: livePid,
+      startTicks: '1901',
+      cmdline: ['/fixture/scripts/orchestrator-wake-supervisor.ts'],
+    };
+    const options = {
+      entries: () => [String(livePid)],
+      readStat: () => stat(),
+      readIdentity: () => identity,
+    };
+    expect(findTypeScriptSupervisorIdentities({
+      ...options,
+      projectId: 'orchestrator-pack',
+    })).toEqual([identity]);
+    expect(findTypeScriptSupervisorIdentities({
+      ...options,
+      projectId: 'leopoker',
+    })).toEqual([]);
+
+    const qualified = {
+      ...identity,
+      cmdline: [...identity.cmdline, '--project', 'leopoker'],
+    };
+    expect(findTypeScriptSupervisorIdentities({
+      ...options,
+      readIdentity: () => qualified,
+      projectId: 'leopoker',
+    })).toEqual([qualified]);
+    expect(findTypeScriptSupervisorIdentities({
+      ...options,
+      readIdentity: () => qualified,
+      projectId: 'orchestrator-pack',
+    })).toEqual([]);
   });
 
   it('keeps EACCES fail-closed and returns matching userspace supervisors', () => {

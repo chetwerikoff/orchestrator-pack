@@ -1,6 +1,10 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { resolveTargetContext } from './target-context.ts';
+import { ensureProjectStateBinding } from './project-state-binding.ts';
 import { join, resolve } from 'node:path';
+import { resolveWakeSupervisorStateRoot } from '../pr2-foundation/wake-supervisor-state-root.ts';
+import { legacyBarrierActive } from './cutover/activation-cordon.ts';
 
 const STAGE_COMPLETENESS_RECEIPT_SCHEMA = 'stage-completeness-receipt/v1';
 
@@ -26,8 +30,24 @@ function numericIssueFromTaskIdentity(taskIdentity: string): string | null {
 }
 
 export function canonicalReviewStateRoot(override?: string): string {
-  return resolve(override ?? process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT
-    ?? join(process.env.HOME ?? homedir(), '.local', 'state', 'create-issue-draft'));
+  const explicit = String(process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT ?? '').trim();
+  const fixtureRoot = override || explicit;
+  if (fixtureRoot && process.env.VITEST) return resolve(fixtureRoot);
+  const projectId = String(process.env.OPK_PROJECT_ID ?? '').trim();
+  if (!projectId && process.env.VITEST) {
+    return resolve(join(process.env.HOME ?? homedir(), '.local', 'state', 'create-issue-draft'));
+  }
+  if (!projectId) throw new Error('create_issue_project_selection_required');
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(projectId)) throw new Error('create_issue_project_id_invalid');
+  const target = resolveTargetContext({ projectId, env: process.env });
+  if (legacyBarrierActive(join(resolveWakeSupervisorStateRoot({ env: process.env, projectId: target.projectId }), 'supervisor'))) {
+    throw new Error('legacy_writer_barrier_active');
+  }
+  const root = resolve(join(process.env.HOME ?? homedir(), '.local', 'state', 'create-issue-draft', target.projectId));
+  if (fixtureRoot && resolve(fixtureRoot) !== root) {
+    throw new Error('create_issue_state_root_override_untrusted');
+  }
+  return root;
 }
 
 export function resolveCanonicalReviewDirectory(
@@ -37,6 +57,17 @@ export function resolveCanonicalReviewDirectory(
   const issueNumber = numericIssueFromTaskIdentity(intake.taskIdentity);
   if (!issueNumber) throw new Error('tier-intake/v1 taskIdentity must bind a numeric Issue identity');
   const stateRoot = canonicalReviewStateRoot(stateRootOverride);
+  const selectedProjectId = String(process.env.OPK_PROJECT_ID ?? '').trim();
+  const syntheticFixture = Boolean(process.env.VITEST
+    && (!selectedProjectId || stateRootOverride || String(process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT ?? '').trim()));
+  if (!syntheticFixture) {
+    if (!selectedProjectId) throw new Error('create_issue_project_selection_required');
+    const target = resolveTargetContext({ projectId: selectedProjectId, env: process.env });
+    ensureProjectStateBinding(stateRoot, {
+      projectId: target.projectId,
+      repository: target.repository,
+    });
+  }
   const directory = resolve(stateRoot, '.review', issueNumber);
   return { stateRoot, issueNumber, directory, intakePath: join(directory, 'tier-intake.json') };
 }

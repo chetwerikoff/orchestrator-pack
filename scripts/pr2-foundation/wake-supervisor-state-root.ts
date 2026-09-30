@@ -5,6 +5,7 @@ export interface WakeSupervisorStateRootOptions {
   env?: Readonly<NodeJS.ProcessEnv>;
   platform?: NodeJS.Platform;
   homeDir?: string;
+  projectId?: string;
 }
 
 function trimmed(value: string | undefined): string {
@@ -35,7 +36,11 @@ export function resolveWakeSupervisorStateRoot(
   const stateBase = trimmed(env.XDG_STATE_HOME)
     || trimmed(env.LOCALAPPDATA)
     || paths.join(userHome, '.local', 'state');
-  return paths.join(stateBase, 'orchestrator-pack-wake-supervisor');
+  const projectId = trimmed(options.projectId) || trimmed(env.OPK_PROJECT_ID) || 'orchestrator-pack';
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(projectId)) {
+    throw new Error('wake_supervisor_project_id_invalid');
+  }
+  return paths.join(stateBase, 'orchestrator-pack-wake-supervisor', projectId);
 }
 
 export function resolveWorkerMessageDispatchJournalPath(

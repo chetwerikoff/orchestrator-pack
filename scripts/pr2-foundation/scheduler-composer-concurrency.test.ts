@@ -74,6 +74,7 @@ describe('event-driven composer submission', () => {
     expect(source.indexOf('const executeOrchestrationMailReconcile')).toBeLessThan(
       source.indexOf('const repository = await resolveRepositoryFromRepoRoot'),
     );
+    expect(source).toContain("if (repository !== targetRepository) throw new Error('scheduler_repository_binding_mismatch');");
     expect(source).toContain('const runSerializedMailTurn');
     expect(source).toContain('reconcileWorkerAssignments({');
     expect(source).toContain('betweenBatches: runSerializedMailTurn');

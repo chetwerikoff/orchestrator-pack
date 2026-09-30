@@ -38,12 +38,13 @@
 //   to also probe the proposal's FIDELITY to that source.
 
 import { createRequire } from 'node:module';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, openSync, fsyncSync, closeSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { resolveDiscussWithGptConfig } from './config.mjs';
 import { isCdpReachable, verifyCdpProfile } from './verify-cdp-owner.mjs';
+import { legacyBarrierActive } from '../../../scripts/lib/cutover/activation-cordon.ts';
 
 const require = createRequire(import.meta.url);
 function loadChromium() {
@@ -84,26 +85,73 @@ const cdp = get('--cdp', 'http://localhost:9222');
 
 const PASS_ID = randomUUID();
 const slug = basename(draftPath).replace(/\.md$/, '');
-const dir = join(homedir(), '.local/state/discuss-with-gpt', slug);
+let projectId = String(get('--project', process.env.OPK_PROJECT_ID || 'unresolved')).trim() || 'unresolved';
+let repository = '';
+let dir = join(homedir(), '.local/state/discuss-with-gpt', projectId, slug);
 const stamp = new Date().toISOString().replace(/[:.]/g, '-');
 let sha = '', promptText = '';
+const DISCUSS_BINDING_SCHEMA = 'orchestrator-pack/project-state-binding/v1';
+let namespaceTrusted = false;
+function assertDiscussWriterOpen() {
+  const home = String(process.env.HOME ?? '').trim() || homedir();
+  const stateBase = String(process.env.XDG_STATE_HOME ?? '').trim()
+    || String(process.env.LOCALAPPDATA ?? '').trim()
+    || join(home, '.local', 'state');
+  const root = String(process.env.OPK_WAKE_SUPERVISOR_STATE_DIR ?? '').trim()
+    || join(stateBase, 'orchestrator-pack-wake-supervisor', projectId);
+  if (legacyBarrierActive(join(root, 'supervisor'))) throw new Error('legacy_writer_barrier_active');
+}
+function assertDiscussProjectBinding() {
+  const root = join(homedir(), '.local/state/discuss-with-gpt', projectId);
+  const file = join(root, 'project-binding.json');
+  const expected = { schema: DISCUSS_BINDING_SCHEMA, projectId, repository };
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(projectId) || !/^[^/\s]+\/[^/\s]+$/u.test(repository)) {
+    throw new Error('discuss_project_binding_invalid');
+  }
+  assertDiscussWriterOpen();
+  if (!existsSync(file)) {
+    mkdirSync(root, { recursive: true });
+    if (readdirSync(root).some((name) => name !== 'project-binding.json')) {
+      throw new Error('project_state_binding_missing_for_nonempty_namespace');
+    }
+    try {
+      const fd = openSync(file, 'wx', 0o600);
+      try { writeFileSync(fd, `${JSON.stringify(expected, null, 2)}\n`); fsyncSync(fd); }
+      finally { closeSync(fd); }
+      const parentFd = openSync(root, 'r');
+      try { fsyncSync(parentFd); } finally { closeSync(parentFd); }
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+    }
+  }
+  const observed = JSON.parse(readFileSync(file, 'utf8'));
+  if (!observed || Array.isArray(observed)
+    || JSON.stringify(Object.keys(observed).sort()) !== JSON.stringify(['projectId', 'repository', 'schema'])
+    || observed.schema !== expected.schema || observed.projectId !== projectId
+    || observed.repository !== repository) throw new Error('project_state_binding_mismatch');
+}
 
 // durable record on EVERY exit path — success or failure
 function recordFile(state, { reply = '', validation = '', url = '', note = '', parsed = '' } = {}) {
+  if (!namespaceTrusted) throw new Error('discuss_project_binding_untrusted');
+  assertDiscussProjectBinding();
   const path = join(dir, `${stamp}-${PASS_ID.slice(0, 8)}-${state}.md`);
+  assertDiscussWriterOpen();
   mkdirSync(dir, { recursive: true });
   writeFileSync(path,
     `# pass ${PASS_ID}\nstate: ${state}\nurl: ${url}\ndraft: ${draftPath}\n` +
+    `projectId: ${projectId}\nrepository: ${repository}\n` +
     `sha256: ${sha}\nvalidation: ${validation}\nparsed: ${parsed}\nnote: ${note}\n` +
     `ts: ${stamp}\n\n## prompt\n\n${promptText || '(prompt not built)'}\n\n## reply\n\n${reply || '(none)'}\n`);
   return path;
 }
 
 function exitConfigMissing(note) {
-  const rec = recordFile('config_missing', { note });
+  // Never write even a refusal artifact into an unbound or retargeted namespace.
+  const rec = namespaceTrusted ? recordFile('config_missing', { note }) : '';
   console.log('CONFIG_ERROR ' + note);
   console.log('STATE=config_missing');
-  console.log('ARTIFACT=' + rec);
+  if (rec) console.log('ARTIFACT=' + rec);
   process.exit(12);
 }
 
@@ -111,6 +159,12 @@ let PROJECT_URL;
 let chromeUserDataDir;
 try {
   const cfg = resolveDiscussWithGptConfig({ projectId: get('--project') });
+  projectId = cfg.projectId;
+  repository = String(cfg.repository || '').toLowerCase();
+  if (!projectId || !repository) throw new Error('discuss-with-gpt: selected project repository binding unavailable');
+  dir = join(homedir(), '.local/state/discuss-with-gpt', projectId, slug);
+  assertDiscussProjectBinding();
+  namespaceTrusted = true;
   PROJECT_URL = cfg.projectUrl;
   chromeUserDataDir = cfg.chromeUserDataDir;
   const forwardedProjectUrl = get('--project-url');
@@ -420,6 +474,12 @@ END-OF-DRAFT TOKEN (echo as "SPEC_RECEIVED: ..."): ${END_NONCE}`;
   await closeAll();
   process.exit(validation === 'ok' ? 0 : 7);
 } catch (e) {  // (#2) unexpected exception → durable driver_error record, never a bare stack trace
+  if (e?.message === 'legacy_writer_barrier_active') {
+    console.error('LEGACY_WRITER_BARRIER_ACTIVE');
+    console.log('STATE=blocked');
+    await closeAll();
+    process.exit(12);
+  }
   const rec = recordFile('driver_error',
     { note: String((e && e.stack) || e).slice(0, 2000), url: page ? page.url() : '' });
   console.log('DRIVER_ERROR ' + ((e && e.message) || e));

@@ -69,10 +69,18 @@ function fixture() {
   };
 }
 
-async function publish(file: string, taskId: string, bindingKey: string, issueNumber: number) {
+async function publish(
+  file: string,
+  taskId: string,
+  bindingKey: string,
+  issueNumber: number,
+  projectId = 'orchestrator-pack',
+  repository = 'chetwerikoff/orchestrator-pack',
+) {
   const result = await publishCurrentWorkerAssignment({
     file,
-    repository: 'chetwerikoff/orchestrator-pack',
+    projectId,
+    repository,
     issueNumber,
     taskId,
     kind: 'local',
@@ -137,7 +145,7 @@ describe('operator-primary binding CLI', () => {
   it('keeps operator-primary routes isolated across two selected project cards', async () => {
     const { env, file, leoFile } = fixture();
     const pack = await publish(file, 'task-pack', 'dispatch-pack', 2185);
-    const leo = await publish(leoFile, 'task-leo', 'dispatch-leo', 134);
+    const leo = await publish(leoFile, 'task-leo', 'dispatch-leo', 134, 'leopoker', 'chetwerikoff/LeoPoker');
     await runOperatorPrimaryBindingCommand(parseOperatorPrimaryBindingArgs([
       'bind', '--task-id', pack.taskId, '--binding-key', pack.bindingKey, '--operator-attested',
     ]), env);
@@ -167,6 +175,42 @@ describe('operator-primary binding CLI', () => {
       reason: 'repository_project_mismatch',
       expectedRepository: 'chetwerikoff/orchestrator-pack',
     });
+  });
+
+  it('rejects operator-primary reads and mutations after project repository retarget', async () => {
+    const { env, file } = fixture();
+    const assignment = await publish(file, 'task-retarget', 'dispatch-retarget', 2186);
+    const bound = await runOperatorPrimaryBindingCommand(parseOperatorPrimaryBindingArgs([
+      'bind', '--task-id', assignment.taskId, '--binding-key', assignment.bindingKey, '--operator-attested',
+    ]), env);
+    expect(bound.ok).toBe(true);
+    const original = readFileSync(file, 'utf8');
+    const cardPath = projectCardPath('orchestrator-pack', env);
+    const card = JSON.parse(readFileSync(cardPath, 'utf8')) as Record<string, unknown> & { primaryRoot: string };
+    const remote = runProcessSync({
+      command: 'git',
+      args: ['remote', 'set-url', 'origin', 'https://github.com/owner/other.git'],
+      cwd: card.primaryRoot,
+      inheritParentEnv: true,
+    });
+    if (!remote.ok) throw new Error(remote.stderr || remote.error || 'git remote update failed');
+    writeFileSync(cardPath, JSON.stringify({ ...card, repository: 'owner/other' }), 'utf8');
+
+    const stale = await runOperatorPrimaryBindingCommand(parseOperatorPrimaryBindingArgs(['show']), env);
+    expect(stale).toMatchObject({
+      ok: false, reason: 'assignment_untrusted', cause: 'project_repository_mismatch',
+    });
+    const deniedRetire = await runOperatorPrimaryBindingCommand(parseOperatorPrimaryBindingArgs([
+      'retire', '--operator-attested',
+      '--expected-task-id', assignment.taskId,
+      '--expected-binding-key', assignment.bindingKey,
+      '--expected-assignment-id', assignment.assignmentId,
+      '--expected-assignment-generation', String(assignment.generation),
+    ]), env);
+    expect(deniedRetire).toMatchObject({
+      ok: false, reason: 'assignment_store_untrusted', cause: 'project_repository_mismatch',
+    });
+    expect(readFileSync(file, 'utf8')).toBe(original);
   });
 
   it('requires explicit operator attestation for mutation commands', () => {

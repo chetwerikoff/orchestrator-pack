@@ -1,7 +1,9 @@
 import '../toolchain/native-entrypoint-preflight.ts';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { runProcessSync } from '../kernel/subprocess.ts';
+import { projectCardPath } from '../lib/target-context.ts';
 import {
   FileEpochAuthority,
   buildEpochCommitCore,
@@ -66,9 +68,47 @@ function sameIdentity(left: RuntimeWorkerIdentity, right: RuntimeWorkerIdentity)
 
 export async function runFleetEscalationProof(): Promise<FleetEscalationProofV1> {
   const root = mkdtempSync(path.join(tmpdir(), 'opk-1260-proof-'));
+  const targetEnvironmentKeys = ['HOME', 'XDG_CONFIG_HOME', 'OPK_BASE_DIR', 'OPK_PROJECT_ID'] as const;
+  const originalTargetEnvironment = Object.fromEntries(
+    targetEnvironmentKeys.map((key) => [key, process.env[key]]),
+  ) as Record<typeof targetEnvironmentKeys[number], string | undefined>;
   let forbiddenActuatorCalls = 0;
   let publicationCalls = 0;
   try {
+    const repository = 'chetwerikoff/orchestrator-pack';
+    const projectId = 'orchestrator-pack';
+    const primaryRoot = path.join(root, 'primary');
+    mkdirSync(primaryRoot, { recursive: true });
+    const initialized = runProcessSync({
+      command: 'git',
+      args: ['init'],
+      cwd: primaryRoot,
+      inheritParentEnv: false,
+    });
+    if (!initialized.ok) throw new Error(`proof_target_git_init_failed:${initialized.stderr}`);
+    const origin = runProcessSync({
+      command: 'git',
+      args: ['remote', 'add', 'origin', `https://github.com/${repository}.git`],
+      cwd: primaryRoot,
+      inheritParentEnv: false,
+    });
+    if (!origin.ok) throw new Error(`proof_target_origin_failed:${origin.stderr}`);
+    const configHome = path.join(root, 'config');
+    process.env.HOME = root;
+    process.env.XDG_CONFIG_HOME = configHome;
+    process.env.OPK_BASE_DIR = root;
+    process.env.OPK_PROJECT_ID = projectId;
+    const cardPath = projectCardPath(projectId);
+    mkdirSync(path.dirname(cardPath), { recursive: true });
+    writeFileSync(cardPath, JSON.stringify({
+      projectId,
+      repository,
+      primaryRoot,
+      defaultBranch: 'main',
+      orcaWorkspacePattern: '.*',
+      orchestratorTitlePattern: '.*',
+      browserGpt: { projectUrl: 'https://chatgpt.com/g/orchestrator-pack' },
+    }));
     const epochAuthorityPath = path.join(root, 'epoch-authority.json');
     const epochId = 'epoch-1260-proof';
     const nonce = 'nonce-1260-proof';
@@ -100,9 +140,7 @@ export async function runFleetEscalationProof(): Promise<FleetEscalationProofV1>
       ORCHESTRATOR_CUTOVER_NONCE: nonce,
     };
     const activationLineage = schedulerActivationLineage({ epochId, nonce });
-    const repository = 'chetwerikoff/orchestrator-pack';
-    const projectId = 'orchestrator-pack';
-    const assignmentStorePath = path.join(root, 'worker-assignments.json');
+    const assignmentStorePath = path.join(root, projectId, 'worker-assignments.json');
     const assignment = await publishCurrentWorkerAssignment({
       file: assignmentStorePath,
       projectId,
@@ -274,6 +312,11 @@ export async function runFleetEscalationProof(): Promise<FleetEscalationProofV1>
     };
   } finally {
     rmSync(root, { recursive: true, force: true });
+    for (const key of targetEnvironmentKeys) {
+      const value = originalTargetEnvironment[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 }
 

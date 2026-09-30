@@ -9,6 +9,7 @@ supervisor roster is defined only by
 ```bash
 cd <orchestrator-pack-root>
 node --experimental-strip-types scripts/orchestrator-wake-supervisor.ts run \
+  --project <projectId> \
   --state-dir <state-dir> \
   --repo-root <orchestrator-pack-root> \
   --epoch-authority <state-dir>/epoch-authority.json \
@@ -18,21 +19,26 @@ node --experimental-strip-types scripts/orchestrator-wake-supervisor.ts run \
   --projected-registry <state-dir>/projected-registry.json \
   --detach
 node --experimental-strip-types scripts/orchestrator-wake-supervisor.ts status \
-  --state-dir <state-dir>
+  --project <projectId> \
+  --state-dir <state-dir> \
+  --repo-root <orchestrator-pack-root>
 ```
 
-Default Linux state root: `$XDG_STATE_HOME/orchestrator-pack-wake-supervisor/`
-or `~/.local/state/orchestrator-pack-wake-supervisor/`.
+Linux project state root: `$XDG_STATE_HOME/orchestrator-pack-wake-supervisor/<projectId>/`
+or `~/.local/state/orchestrator-pack-wake-supervisor/<projectId>/`. The selected
+project card binds that namespace to one canonical GitHub repository. A
+repository retarget or non-empty namespace without its binding fails closed.
 
 For a machine with no prior activation, first produce observed foundation
 evidence and then invoke the existing activation transaction:
 
 ```bash
 node --experimental-strip-types scripts/cutover/foundation-adoption-producer.ts \
+  --project <projectId> \
   --repo-root <orchestrator-pack-root> \
   --state-dir <state-dir>
 node --experimental-strip-types scripts/orchestrator-cutover-activate.ts \
-  activate <greenfield-activation-request.json>
+  activate <greenfield-activation-request.json> --project <projectId>
 ```
 
 For greenfield activation, the machine-canonical state root must not contain
@@ -71,10 +77,11 @@ phases, and after that tick it submits an exact stable Orca poke left unsent in
 a headed Cursor composer. It is not a second scheduler, registry child, or
 composer daemon. Quiet/fingerprint state persists so a restarted tick does not
 lose the 5-second window or resend.
-The child derives the canonical repository slug from the `origin` remote under
-its checked-out repository root; it does not require `OPK_REPOSITORY` or
-`GITHUB_REPOSITORY`. Its observer census is scoped to that exact worktree,
-rather than the process owner's unrelated active-worktree selector.
+The child receives `projectId` from its supervisor, resolves the #2185 project
+card, and uses that card's canonical `repository`. The supervisor's
+`--repo-root` remains the stable pack checkout used only to locate pack code;
+cwd, the pack checkout's `origin`, `GITHUB_REPOSITORY`, and an unrelated
+active-worktree selector do not choose the target repository.
 
 ## Liveness model
 
@@ -90,7 +97,9 @@ The authoritative fleet check is:
 
 ```bash
 node --experimental-strip-types scripts/orchestrator-wake-supervisor.ts status \
-  --state-dir <state-dir>
+  --project <projectId> \
+  --state-dir <state-dir> \
+  --repo-root <orchestrator-pack-root>
 ```
 
 A healthy status reports one `pr2-scheduler` registry child. Any other child

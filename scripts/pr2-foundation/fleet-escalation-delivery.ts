@@ -416,6 +416,7 @@ export async function runFleetEscalationDelivery(
     {
       file: input.assignmentStorePath,
       adapter,
+      expectedProject: input.expected,
       timeoutMs: input.targetTimeoutMs ?? DEFAULT_FLEET_ESCALATION_TARGET_TIMEOUT_MS,
     },
     (target) => {
