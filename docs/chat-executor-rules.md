@@ -217,43 +217,81 @@ A blocking finding that depends on an impossible or unproven witness must be wit
 
 ## 8. CI, smoke, and review authority
 
-Required CI conclusions remain bound to the exact current PR head they evaluated.
-For the smoke/CI portion of readiness, select the newest existing
-`pack-worker-smoke-report/v1` **PASS comment on the same PR**, regardless of
-the report head or GitHub publishing author. A PASS from an earlier head remains
-sufficient for that PR on later heads; no PASS, including only FAIL/BLOCKED
-reports, leaves smoke readiness unsatisfied. The unchanged machine report has
-head, per-scenario outcomes, and `tracked-files-unmodified`, but no smoke actor
-role field. Independent execution is owned by the supervised smoke-worker
-handoff after settled pack review; readiness does not invent a role/assignment
-witness or a head-equality, edited-comment, census-stabilization, FAIL-precedence,
-patch-id, ancestry, carry, selective-retry, or preflight-refusal gate.
+Required CI conclusions apply only to the exact PR head they evaluated.
+For smoke/CI readiness, the newest existing `pack-worker-smoke-report/v1`
+PASS comment on the same PR is sufficient regardless of its report head or
+GitHub author. An earlier-head PASS remains sufficient on later commits; no
+PASS leaves smoke readiness unsatisfied. Independence is provided by the
+post-review supervised smoke-worker handoff, not a durable actor-role witness.
+The existing v1 report schema, including head and scenario observations,
+remains unchanged. Review authority remains current-head bound, but reviewer
+invocation and review authority are not the same event: the pack-owned runner
+may establish current-head authority through exact authority-selected
+conflict-free carry-over from an authorized clean source head without another
+model invocation.
 
-The selected project card supplies the smoke repository. The existing
-`smoke-test-plan` fence supplies scenarios; guidance not to touch live
-machine configuration is authoring prose only. Existing secret scrubbing
-redacts without refusing to run or report. An initial FAIL/BLOCKED is fixed by
-the existing worker/fixer and may be followed by one explicit smoke execution;
-there is no harness retry or scheduler start-or-observe reconciler.
+For a pack-review start, the PR number is the canonical target. The live PR
+supplies the current head and its closing reference supplies the Issue.
+Session-binding cache state is advisory correlation only; missing, corrupt,
+stale, or disagreeing cache data cannot veto a valid PR-led start or replace
+the linked Issue. If the exact bound Issue snapshot is missing, the runner
+freezes it only after acquiring its existing start claim.
 
-For pack-review start, the PR number remains the canonical target; the live PR
-supplies the current head and closing Issue. The pack-review cycle keeps logical
-PR/task rounds and caps T1=1, T2=1, T3=2. A clean terminal for the exact same
-head may suppress a redundant model invocation, and an authority-selected
-conflict-free carry-over can project review on a later head without another
-model call. After `reviewStageComplete=true`, later heads project
-`orchestrator-pack/pack-review=success` without reopening a required round.
-Smoke is not a pre-review admission gate and does not reopen settled review.
+After every new commit or history rewrite:
+
+- earlier-head CI is stale and must be revalidated for the current PR head;
+- a same-PR smoke PASS at any report head remains sufficient; no head
+  equality, ancestry, patch-id, carry-only, selective retry, author/role
+  filter, census stabilization, edited-comment refusal, or FAIL precedence
+  is imposed on that PASS;
+- an in-progress required review round remains bound to the head it reviewed;
+- for a new pack-review cycle, required rounds are logical PR/task-cycle units
+  with caps T1=1, T2=1, T3=2; T3 round 2 may review the same head as round 1;
+- once the required stage has durably reached `reviewStageComplete=true`,
+  later heads do not reopen or consume another required round. Instead the
+  pack-owned status projection writes
+  `orchestrator-pack/pack-review=success` on the current head with
+  `Required pack-review stage completed; no additional review round required.`;
+- direct connected-GitHub reviews remain exact-commit evidence and do not
+  themselves create or rewrite the runner's durable stage-completion latch.
+
+The supervised independent smoke worker checks out the PR head, runs every
+Issue-declared `smoke-test-plan` scenario, and publishes the existing v1
+report. A first FAIL/BLOCKED requires the existing worker/fixer to correct
+the defect and explicitly invoke smoke again, not a harness retry or
+scheduler reconciler. Existing secret scrubbing redacts forwarded/report
+material and does not refuse the smoke run because content was scrubbed.
+The selected project card supplies the smoke repository. Guidance that
+smoke scenarios should not touch live machine configuration is authoring
+prose only, not a runtime parser, validator, or refusal mechanism.
 
 Issue #2161 branch-update sequencing follows the canonical rule in the
 [orchestration runbook](orchestration-runbook.md#issue-2161-main-update-sequencing).
 
-Missing, pending, cancelled, failed, or earlier-head required CI checks are
-not green for the current head. Before ready-for-review or merge, no known
-material review finding may remain unresolved; explicitly fixed, rejected, or
-superseded findings are handled under current GitHub review/Issue evidence.
-Use the standard GitHub Actions run -> jobs -> decoded job-log path for actual
-CI failures rather than inferring a passing test from source inspection.
+A persisted clean terminal for the exact same head suppresses a redundant
+automatic/common reviewer-model invocation. A cycle already at cap also
+suppresses further automatic/common model calls. Neither case weakens
+current-head CI or the requirement that some same-PR smoke PASS exists; smoke
+is not a pack-review admission gate.
+
+Missing, pending, cancelled, failed, or earlier-head required checks are not
+green for the current head.
+
+For GitHub Actions diagnostics, the available GitHub transport can fetch
+decoded job logs directly by job ID. A practical path is
+`run -> jobs -> failed job ID -> decoded job log`; the returned log includes
+step stdout/stderr. This is one available way to inspect the exact CI failure
+without first creating a separate artifact solely to capture command output.
+
+Before ready-for-review or merge, there must be no known current material
+blocker/major finding left unresolved. A fixed finding may be closed. A
+rejected finding may be explicitly adjudicated. A finding made irrelevant
+by a later operator-approved contract change or by removal of the affected
+code/text does not remain permanent administrative debt.
+
+Use GitHub review/thread state and explicit reviewer/operator decisions
+directly; do not maintain a separate finding-state ledger merely to restate
+them.
 
 ## 9. Merge
 
