@@ -2769,7 +2769,7 @@ describe('delegated readiness consumes the production post-smoke owner', () => {
     }
   });
 
-  it('requires the full exact-head census to end in a provenance-valid PASS', async () => {
+  it('accepts an earlier-head PR PASS without author, receipt, or latest-FAIL precedence', async () => {
     const failing = {
       ...report('FAIL', [{ ...scenario('run runtime lifecycle', 'PASS', 'fail'), causeFamily: 'scenario_assertion_failed' }]),
       terminalHandle: 'terminal-fail',
@@ -2785,9 +2785,12 @@ describe('delegated readiness consumes the production post-smoke owner', () => {
     const cases = [
       { name: 'FAIL only', reports: [failing], expected: 'missing' },
       { name: 'BLOCKED only', reports: [blocked], expected: 'missing' },
-      { name: 'PASS then FAIL', reports: [passing, failing], expected: 'missing' },
-      { name: 'PASS then BLOCKED', reports: [passing, blocked], expected: 'missing' },
+      { name: 'PASS then FAIL', reports: [passing, failing], expected: 'verified' },
+      { name: 'PASS then BLOCKED', reports: [passing, blocked], expected: 'verified' },
       { name: 'PASS only', reports: [passing], expected: 'verified' },
+      { name: 'PASS on earlier head', reports: [{ ...passing, headSha: HEAD_TWO }], expected: 'verified' },
+      { name: 'PASS from other author', reports: [passing], expected: 'verified', actor: 'other-publisher' },
+      { name: 'edited PASS', reports: [passing], expected: 'verified', edited: true },
     ] as const;
 
     for (const testCase of cases) {
@@ -2799,8 +2802,10 @@ describe('delegated readiness consumes the production post-smoke owner', () => {
       process.env.OPK_BASE_DIR = root;
       process.env.WORKER_SMOKE_RECEIPT_ROOT = join(root, 'smoke-receipts');
       try {
-        for (const smokeReport of testCase.reports) writeWorkerSmokeReceipt(smokeReport);
-        const comments = testCase.reports.map((smokeReport, index) => comment(index + 1, smokeReport));
+        const comments = testCase.reports.map((smokeReport, index) => comment(index + 1, smokeReport, {
+          ...('actor' in testCase ? { actor: testCase.actor } : {}),
+          ...('edited' in testCase && testCase.edited ? { updatedAt: new Date(Date.UTC(2026, 7, 6)).toISOString() } : {}),
+        }));
         const { code, result } = await runDelegatedReadinessForComments(root, issueBodyFile, comments);
         expect(result.smokeEvidence.state, testCase.name).toBe(testCase.expected);
         if (testCase.expected === 'missing') {

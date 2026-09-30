@@ -1022,23 +1022,24 @@ export async function evaluatePostSmokeReadiness(
   const fetchSmokeComments = dependencies.fetchSmokeComments ?? fetchPrComments;
   const fetchCurrentHead = dependencies.fetchCurrentHead ?? fetchLivePrHead;
   let initialSmokeHead = '';
-  let initialSmokeComments: WorkerSmokeCommentRecord[] = [];
-  let smokeWitness: SmokeReport | undefined;
+  let smokeWitnessHead = '';
+  let smokePassObserved = false;
   let smokeObservationAvailable = true;
   try {
     initialSmokeHead = fetchCurrentHead(target.prNumber, target.repositorySlug, options.repoRoot);
-    initialSmokeComments = stabilizeSmokeCommentCensus(() =>
-      fetchSmokeComments(target.prNumber, target.repositorySlug, options.repoRoot));
-    if (initialSmokeHead === target.headSha) {
-      const initialSmokeCoverage = evaluateWorkerSmokeCoverage({
-        issueBody: target.issueBody,
-        comments: initialSmokeComments,
-        target: coverageTarget(target, initialSmokeHead),
+    // The PR's own PASS comments suffice independently of publisher or smoke head.
+    const comments = fetchSmokeComments(target.prNumber, target.repositorySlug, options.repoRoot);
+    const newestPass = [...comments]
+      .sort((left, right) => Number(right.id ?? 0) - Number(left.id ?? 0))
+      .find((comment) => {
+        const body = String(comment.body ?? '');
+        return body.includes('<!-- pack-worker-smoke-report/v1 -->')
+          && Number(body.match(/^\s*-\s*pr:\s*#(\d+)/imu)?.[1] ?? 0) === target.prNumber
+          && parseSmokeAgentReport(body)?.result === 'PASS';
       });
-      const clearingPass = initialSmokeCoverage.latestClearingPass;
-      if (initialSmokeCoverage.accepting && clearingPass?.result === 'PASS' && verifyPublishedSmokeProvenance(clearingPass)) {
-        smokeWitness = clearingPass;
-      }
+    if (newestPass) {
+      smokePassObserved = true;
+      smokeWitnessHead = String(newestPass.body ?? '').match(/^\s*-\s*head-sha:\s*`?([0-9a-f]{40})`?/imu)?.[1] ?? '';
     }
   } catch {
     smokeObservationAvailable = false;
@@ -1051,7 +1052,7 @@ export async function evaluatePostSmokeReadiness(
   const reviews = dependencies.listDirectReviews
     ? await dependencies.listDirectReviews(options.repoRoot, target.repositorySlug, target.prNumber)
     : await transport.listReviews();
-  const initialSmokePassed = initialSmokeHead === target.headSha && Boolean(smokeWitness);
+  const initialSmokePassed = smokePassObserved;
   const direct = projectDirectPackReviewState({
     reviews, repositoryOwnerLogin: target.repositorySlug.split('/')[0] ?? '',
     currentHeadSha: target.headSha, workerLifecycle: lifecycle, requiredCiGreen: ciGreen, exactHeadSmokePassed: initialSmokePassed,
@@ -1077,20 +1078,9 @@ export async function evaluatePostSmokeReadiness(
     });
   }
   const atCap = currentAtCapFacts(target.prNumber);
-  let smokeEvidenceState: PostSmokeReadinessResult['smokeEvidence']['state'] = smokeObservationAvailable ? 'missing' : 'unavailable';
-  if (smokeObservationAvailable && smokeWitness) {
-    try {
-      const finalHead = fetchCurrentHead(target.prNumber, target.repositorySlug, options.repoRoot);
-      const finalComments = stabilizeSmokeCommentCensus(() =>
-        fetchSmokeComments(target.prNumber, target.repositorySlug, options.repoRoot));
-      smokeEvidenceState = finalHead === target.headSha
-        && finalSmokeCommentSnapshotMatches(initialSmokeComments, finalComments)
-        ? 'verified'
-        : 'changed';
-    } catch {
-      smokeEvidenceState = 'unavailable';
-    }
-  }
+  const smokeEvidenceState: PostSmokeReadinessResult['smokeEvidence']['state'] = !smokeObservationAvailable
+    ? 'unavailable'
+    : initialSmokeHead !== target.headSha ? 'changed' : smokePassObserved ? 'verified' : 'missing';
   const readiness = evaluateReadiness({
     target: readinessTarget,
     pr: { open: target.prOpen, expectedTarget: target.expectedTarget, prNumber: target.prNumber, headSha: target.headSha },
@@ -1101,11 +1091,11 @@ export async function evaluatePostSmokeReadiness(
       unresolvedRequiredFinding: postSmokeReview.unresolvedRequiredFinding, ...atCap,
     },
     smoke: {
-      headSha: target.headSha,
+      headSha: smokeWitnessHead || target.headSha,
       state: smokeEvidenceState === 'verified' ? 'pass' : smokeEvidenceState === 'unavailable' ? 'unknown' : 'missing',
     },
   });
-  return { readiness, reviewProjection, smokeEvidence: { state: smokeEvidenceState, headSha: target.headSha } };
+  return { readiness, reviewProjection, smokeEvidence: { state: smokeEvidenceState, headSha: smokeWitnessHead || target.headSha } };
 }
 
 export interface DelegatedReadinessDependencies {
