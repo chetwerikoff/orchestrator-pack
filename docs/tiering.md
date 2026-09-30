@@ -49,30 +49,21 @@ blast radius.
 - **T1** — small, obvious, self-contained work with little design judgment.
 - **T2** — one coherent component that requires real design judgment.
 
-The create-flow topology is fixed by tier:
+The create-flow review topology is fixed by tier: **T1** has one GPT terminal
+review; **T2** has three independently and concurrently launched GPT
+architectural reviews and one GPT terminal review; **T3** has the same three GPT
+architectural reviews, one required Claude architectural lens, and one GPT
+terminal review. Every required review is published as an Issue comment whose
+first line names the revision read. T3 has no competitive stage and no Claude
+waiver. The three GPT reviews are an independently launched parallel batch;
+published comment count alone cannot prove source independence.
 
-- **T1:** one GPT `architectural` lens.
-- **T2:** three GPT `architectural-review` sources launched concurrently, then
-  one GPT `architectural` lens.
-- **T3:** three GPT `competitive` sources when directly required by the
-  operator, selected by the architect, or judged necessary by the
-  flow-manager because the task has fundamentally different plausible
-  solution designs, then three GPT
-  `architectural-review` sources concurrently, one Claude
-  `architectural-lens`, and one GPT `architectural` lens.
-
-“Concurrently” means the slots are launched as one parallel batch, with browser
-starts staggered by 10–15 seconds. The T3 competitive decision is recorded in
-the journal. The flow-manager makes this decision from the substance of the
-task, without checklists, thresholds, scores, or formal scales. Skipping is
-legal only with an explicit journal rationale explaining why the solution
-space is narrow; missing rationale is a process defect. Between stages, the
-author must run a fix-round:
-close or substantively reject every finding, update the Issue body, and
-increment its revision before the next stage starts. No stage may start from a
-stale revision; reviewers read the latest revision.
-These fixed counts replace older single-source and configurable-cardinality
-wording.
+The author dispositions findings from each round in one Issue comment, either
+accepting with a corrected Issue revision or rejecting with a reason. Clean
+rounds require no synthetic Issue-body edit. No stage receipts or replay are
+needed to progress an in-flight Issue. The author/operator must not lower the
+tier after review begins absent an operator decision; the current tier fence
+alone does not prove historical tier.
 
 Numeric magnitude may disqualify a task from a lower tier but never qualifies a
 task into T1. Smallness is necessary, not sufficient. Stable receipt rubric
@@ -91,366 +82,68 @@ taxonomy, or floor.
 
 ## Per-tier draft-review flow
 
-Governs **create-issue-draft task-spec review** only. Worker **PR-code** review
-(`prompts/codex_review_prompt.md`, pack review runner) is unchanged.
-
-For newly authored tasks, the GitHub Issue is the sole live task specification
-and queue entry. The mirrorless flow creates no tracked or in-repository draft or
-queue-index artifact. Its working anchor, immutable pulled revisions, reviewer
-captures, chat references, stage receipts, relay evidence, the finding ledger,
-and related audit state remain outside the repository. `.cursor/skills/create-issue-draft/SKILL.md`
-owns the exact procedure and layout.
-
-### Guard-alignment and activation ordering
-
-Stage completeness and finding-ledger behavior must match the fixed topology
-below. Issue #1150 owns source-preserving cardinality inside T3 pre-terminal
-rounds; Issue #1171 owns the Issue-lifetime cap: one settled `stageAttemptId` per
-required stage, canonical Issue-root receipt authority, and fail-closed
-non-reopening.
-
-Therefore:
-
-- exact `triple-source/v1` pre-lens admission may be produced and validated by
-  #1150;
-- one three-capture `stageAttemptId` is one full stage and one logical round,
-  never three rounds;
-- flow-manager consolidation is forbidden;
-- live T3 final acceptance accepts the fixed three-source rounds once the
-  substantive topology, relay, ledger/disposition, body, and terminal binding
-  are valid. Historical producer/cycle/receipt/source-revision equality is
-  audit metadata at final completion, not a second authority; `triple-source/v1`
-  alone is not a blocker.
-
-### Per-tier pipeline (ceilings, not quotas)
-
-| Tier | Review sequence | Pre-lens #975 | Terminal lens |
-|------|-----------------|---------------|---------------|
-| **T1** | One GPT `architectural` lens → mandatory author fix-round → acceptance | **No** | GPT lens owns aggregate cut + M5 |
-| **T2** | Three concurrent GPT `architectural-review` sources → mandatory author fix-round → one GPT `architectural` lens → mandatory author fix-round → acceptance | **No** | GPT lens owns aggregate cut + M5 |
-| **T3** | Three concurrent GPT `competitive` sources when operator/architect/flow-manager judgment requires them → mandatory author fix-round → three concurrent GPT `architectural-review` sources → mandatory author fix-round → one Claude `architectural-lens` (or valid waiver) → mandatory author fix-round → one GPT `architectural` lens → mandatory author fix-round → acceptance after #1171 checks | **Yes** | GPT lens owns final aggregate cut + M5 |
-
-The canonical T3 order is:
-
-```text
-competitive[01..03] (when triggered) → author fix-round → architectural-review[01..03] → author fix-round → Claude architectural-lens → author fix-round → GPT architectural → author fix-round → acceptance
-```
-
-Every author fix-round is mandatory before the next stage, including after the
-Claude lens and after the final GPT lens. If a review returns `NO_FINDINGS`, the
-fix-round is a journaled statement “no findings, no changes required”; the next
-stage cannot start until that record exists.
-
-The author fix-round after the terminal GPT lens is mandatory for every tier,
-even when that lens returns `NO_FINDINGS`. In that case it is a journaled
-disposition stating “no findings, no changes required”; the terminal stage is
-still recorded before acceptance.
-
-Competitive review runs when the operator requires it, the architect selects
-it, or the flow-manager judges that the task has fundamentally different
-plausible solution designs and records that substantive rationale. A skipped
-competitive stage requires an equally explicit journal rationale explaining
-why the solution space is narrow. No checklist, threshold, score, or formal
-scale may decide this; missing rationale is a process defect.
-
-The stage receipts freeze the required cardinality: T1 has one GPT lens; T2 has
-three architectural-review sources followed by one GPT lens; T3 has three
-competitive sources when a trigger is journaled, three
-architectural-review sources, one Claude lens, and one GPT lens. There is no
-configurable cardinality override.
-
-There is no `architectural-final` stage. Historical captures with that name are
-audit-only.
-
-### Source-preserving review episode (#1150)
-
-One create-flow review episode begins when the first required reviewer-stage
-attempt is created after intake correction closes. Its root is the immutable
-`tier-intake/v1` task identity plus first frozen revision. Its `reviewEpisodeId`
-spans all pre-terminal stages, Claude, author-fix revisions, terminal review,
-relay, and author disposition. It does not reset at a lens, revision change,
-continuation chat, replay, or workdir change.
-
-Each stage attempt:
-
-- has one `stageAttemptId`, one stage, one policy, one frozen `sourceRevision`,
-  and the selected cardinality snapshot;
-- records revision checks at attempt creation, before launch, and settlement;
-- forbids author edits while unsettled;
-- settles only after every launched invocation is terminal, no retry runs or
-  remains eligible, and final revision checks match;
-- emits one authoritative persisted `stage-completeness-receipt/v1` in a
-  no-overwrite sequence and cumulative receipt census.
-
-No `review-episode-receipt` or equivalent persisted episode snapshot exists.
-Both guards call the same pure derivation over the complete canonical receipt
-directory, immutable `tier-intake/v1`, independently produced Claude evidence,
-and verified relay evidence to obtain episode-wide credentialing sets,
-governed/relayed unions, raw counts, and logical-round identities. A caller
-cannot prove a later episode root by passing only a self-consistent subset.
-
-### T3 plural source stages
-
-T2 `architectural-review` and T3 `architectural-review` use policy
-`triple-source/v1` and exact independent reviewer slots `01..03` in one
-staggered concurrent batch. T3 `competitive` uses the same three-slot policy
-when the operator, architect, or flow-manager's substantive judgment selects
-it, with the decision and rationale recorded in the journal. A skip likewise
-requires an explicit rationale for why the solution space is narrow.
-
-- All three launches begin before harvesting/adjudicating siblings.
-- Preserve 10–15 second spacing and bounded prior-slot observation.
-- After each logical review round, the author closes or substantively rejects
-  every finding, updates the Issue body, and increments its revision before
-  the next stage. No later stage starts on a stale revision; every reviewer
-  reads the latest revision.
-- There is no account-wide hard cap or synthetic pre-attempt capacity outcome.
-- Every invocation emits immutable `reviewer-invocation-envelope/v1` evidence,
-  including episode/attempt/policy/stage/revision identities, cardinality and
-  config identity, reviewer slot and independent source identity, invocation
-  and terminal-result identities, observable capacity result, revision check,
-  `send_count`, retry-attempt state, retry class, and terminal classification.
-- Successful siblings remain separate immutable files:
-  `pass-NN-competitive-SS.capture.txt` and
-  `pass-NN-architectural-review-SS.capture.txt`.
-- Exact slots `01..03` credential the stage together. Missing, duplicate, extra,
-  consolidated, mislabeled, mixed-revision, or non-terminal source sets fail
-  closed.
-
-T1, Claude `architectural-lens`, and GPT `architectural` use one source.
-T2's three-source architectural review precedes its one GPT lens.
-
-### Retry and observable capacity
-
-One paced retry under the same slot and `stageAttemptId` is permitted only after
-an invocation-local terminal result proves a pre-send quota/composer/fill failure
-with `send_count: 0`. It uses `attemptOrdinal: 2`, records
-`retryAttempt: true`, and consumes the only retry. A failed retry may settle as
-blocked/exhausted; it never creates another retry opportunity.
-
-Possible/post-send failure, ambiguous delivery, output conflict, missing terminal
-result, or any `send_count: 1` failure forbids resend and remains incident/blocking
-evidence. A zero-send result with unused eligibility keeps the attempt unsettled
-until retry or explicit abandonment to a blocked settlement.
-
-### Governance, relay, and occurrence accounting
-
-Every relay-eligible capture from every stage receipt in the episode remains in
-`governedCaptureUnion`, including settled incomplete-attempt evidence. Claude
-capture evidence is governed only when a separately produced immutable Claude
-CLI result matches invocation, run, terminal-result, revision, bytes, hash, and
-M3 facts. A valid Claude-unavailable waiver contributes no capture or synthetic
-occurrence.
-
-Before author adjudication or final acceptance:
-
-```text
-relayedCaptureUnion == governedCaptureUnion
-```
-
-Relay evidence must preserve immutable capture identity, bytes, hash, source
-labels, and multipart cardinality. Empty/truncated wrappers, author
-acknowledgement, or transport success without embedded source bytes are not
-delivery. Corrected relays retain one linear supersession chain and exactly one
-verified latest head.
-
-Raw finding occurrence identity is capture identity plus source-local ordinal.
-Every occurrence maps exactly once to one author-owned distinct defect. Stable
-reviewer-local finding IDs are not cross-source identity. Receipt-backed ledger
-validation re-reads every governed capture text and checks its exact name, byte
-length, SHA-256, and raw occurrence count before accepting:
-
-- `rawFindingCount` for governed source occurrences;
-- `distinctFindingCount` for author-owned distinct defects;
-- `processedDistinctCount` for `addressed` plus `rejected-as-false` defects.
-
-The `counts` object contains exactly those three non-negative integer fields.
-Defect disposition is exactly one of `addressed`, `rejected-as-false`, or
-`unresolved`. Remedy disposition is independently exactly one of `accepted`,
-`replaced-by-cheaper-sufficient`, or `rejected-as-overengineering`. Any unresolved
-defect blocks progression.
-
-### Roles
-
-- **Browser GPT author.** Owns authoring, content fixes, direct Issue edits,
-  defect and remedy dispositions, M3 author activation, and M4 inventory.
-- **Flow-manager.** Owns live pulls, tier/guard application, stage order,
-  immutable source capture, envelopes, receipts, relay verification, occurrence
-  bookkeeping, and one pre-capture adjacent correction. It does not author
-  content, merge sibling findings, judge defects, or simulate Claude.
-- **Claude architectural-lens (T3 only).** Owns pre-terminal M3 when required and
-  pre-terminal aggregate cut. It remains singular.
-- **Browser GPT reviewers.** Own independent review findings and terminal M5.
-  They never edit the Issue or authorize post-capture tier transition.
-
-**Browser outage.** Required GPT work stays incomplete. No engine substitution.
-
-### Tier provenance and one free intake correction
-
-Before the first tier decision, record one `tier-intake/v1` record with exact
-producer, Issue identity, `kind: fresh`, intake prior, and first immutable
-revision. Every revision receives one `tier-gate-decision/v1` receipt.
-
-The Issue identity owns one free correction window. It closes when the first
-immutable selected-stage capture exists. Before closure only, one adjacent
-`T3→T2` or `T2→T1` correction may be recorded with `correctedFrom` and non-empty
-reason. Direct `T3→T1`, a second correction, branching, reuse after upstep, or
-correction after capture fails closed. Restart/replay never reopens it. Worker
-pre-flight remains upward-only.
-
-### Retired demotion compatibility
-
-Fresh tasks do not produce or authorize `tier-demotion-event/v1`,
-`tier-demotion-revalidation/v1`, terminal narrow revalidation, `demotion-from`, or
-`demotion-event`. Post-capture over-tier observations are advisory. A tier change
-then requires a new Issue/task contract.
-
-### L4 within-T3 graduation
-
-L4 applies only after the task independently satisfies T3. Complete classes are:
-
-- fail-closed/fail-open behavior;
-- single-winner, lease, or claim correctness;
-- recovery semantics;
-- required-check / merge-contract correctness;
-- self-certifying-test or test-harness correctness risk;
-- live-state mutation;
-- external side effects;
-- migration or backward-compatibility behavior.
-
-Each active floor names its class. T1/T2 use `not-applicable`; T3 cannot use
-`not-applicable`.
-
-## Review economics (M1–M5) — #975
-
-Every governed Browser-GPT and Claude capture carries exact
-`review-economics-contract: v1`, stable finding blocks, persistent-machinery
-pricing when proposed, and truthful simplification tokens.
-
-### M1 — defect versus remedy
-
-Reviewer findings are proposals. The author disposes the defect separately from
-the suggested remedy and may choose a cheaper sufficient correction.
-
-### M2 — persistent machinery pricing
-
-`persistent-machinery: yes` requires `cheapest-sufficient-alternative`,
-`stakes-price`, and `trade-in`. Malformed pricing blocks; it cannot be hidden by
-merging sources. Receipt-backed validation applies this to every raw occurrence,
-not merely one representative row.
-
-### M3 — protected nominations
-
-`type: security` and `type: scope-violation` are nominations, not automatically
-addressed-only authority.
-
-- T1/T2 terminal GPT has full current-revision authority under existing evidence
-  and why-now rules.
-- T3 pre-Claude may leave occurrence-local `architectPending`; Claude capture may
-  adjudicate that exact occurrence.
-- A valid Claude-unavailable waiver has no M3 authority.
-- Terminal GPT has full current-revision authority and may supersede earlier
-  Claude state for the same occurrence, including same-capture adjudication of a
-  newly emitted protected nomination.
-- Stale, malformed, duplicate-conflicting, row-ID substitution, or unresolved
-  contest state fails closed.
-
-Protected occurrence type cannot be silently reclassified when multiple sources
-map into a distinct defect. Every receipt-backed ledger row must map at least one
-real occurrence; an empty decoy row cannot satisfy the protected-type floor.
-
-### M4 — author mechanism inventory
-
-After each logical review round, not each sibling capture, the author updates one
-inventory of review-added mechanisms as `keep`, `simplify`, `defer`, or `cut`.
-One three-capture `stageAttemptId` consumes one round.
-
-### M5 — truthful simplification verdict
-
-GPT `architectural` remains the sole final M5 anchor for all tiers. The
-three-source pre-lens aggregation is a progression gate only:
-
-- union every `simplification-cut-candidate: yes` occurrence across all three
-  `architectural-review` sources, independent of file order;
-- aggregate `SIMPLIFICATION_CLEAN` only when all three sources carry it and no
-  source emits a candidate;
-- aggregate `NO_FINDINGS` only when all three are locally no-findings;
-- never let one clean source erase another source's finding or candidate.
-
-### Two-phase finding-ledger guard
-
-- **`pre-lens`** — T3 only, after the selected three-source `competitive`
-  stage (if journaled as needed) and three-source `architectural-review` stage
-  are settled, fully relayed, and occurrence-accounted.
-- **`final-acceptance`** — all tiers, requiring terminal GPT M5 and all
-  applicable substantive M2/M3/relay/count evidence. Required stage slots and
-  one-shot terminal content remain authoritative; producer/reviewer-source/run/
-  terminal-result identity and historical cycle/receipt lineage are audit-only
-  at this boundary.
-
-The production CLI reads `--receipt-directory`, immutable `--tier-intake`, all
-`--stage-receipt` files, optional `--claude-producer-evidence`, and
-`--verified-relay-evidence`; it never derives authority from filenames alone or
-from a caller-selected receipt subset. Independent Claude producer evidence is
-mandatory for live stage-time credentialing of a counted capture; at final
-acceptance the substantive Claude capture/result remains required while its
-producer/run identity is audit-only.
-
-### Final completion identity boundary
-
-Stage-time launch and settlement keep their existing terminal/send/retry/
-no-resend, revision, stage-order, slot-consumption, and repository-trust checks.
-Final completion is narrower: it decides from the stable current Issue plus the
-required substantive stage results, slot cardinality, governed/relayed captures,
-finding dispositions, and one-shot terminal contract. Producer, publisher,
-reviewer-source, invocation/run/terminal-result, receipt-writer, historical
-cycle/source-revision, and journal/projection identities remain auditable but
-cannot independently veto or credential completion.
-
-Multiple trusted materializations for the same semantic stage/source slot are
-duplicate observations only when their canonical UTF-8 substantive result bytes
-are identical; conflicting bytes fail. One recorded artifact cannot satisfy two
-required slots. Public reviewer artifacts continue to require an unedited target
-Issue comment with GitHub `author_association` OWNER/MEMBER/COLLABORATOR and the
-artifact's own `Read revision` equal to its frozen invocation revision.
-
-The terminal non-equal body exception is exactly `rN -> rN+1`; later drift fails.
-Journal/projection publication after successful content acceptance is truthful
-audit/projection work: failure is surfaced without manufacturing replacement
-history and without reversing the already-established content result. A failed
-or unstable final Issue read-back remains blocking.
-### Claude lens and unavailable skip
-
-Claude remains exactly one pre-terminal source. A counted capture requires a
-separate Claude invocation and its substantive Claude result/capture. Independently
-supplied producing-result evidence remains mandatory for live stage-time
-credentialing when that running path requires it; at final acceptance it is
-audit-only, so absence or identity disagreement cannot disqualify an otherwise
-valid substantive Claude result.
-Only observable `quota`, `rate-limit`, `provider-unavailable`, or
-`cli-unavailable` may produce a `claude-unavailable` waiver. The waiver is
-topology evidence only and creates no capture, finding, M3 authority, or tier
-authority. Terminal GPT remains required.
+This governs **create-issue-draft** review, not implementation PR review. The
+GitHub Issue is the only live spec. The [canonical create-Issue skill](../.cursor/skills/create-issue-draft/SKILL.md)
+owns launch/disposition/acceptance procedure; the shared Browser-GPT sender
+retains its own separate unchanged transport and legal-retry authority.
+
+| Tier | Published Issue-comment reviews | Disposition and acceptance |
+| --- | --- | --- |
+| T1 | One GPT terminal architectural reviewer | Author dispositions any findings; existing substantive floor and label rules apply. |
+| T2 | Three GPT architectural reviews, then one GPT terminal review | One author disposition comment per round; earlier findings remain binding. |
+| T3 | Three GPT architectural reviews, one required Claude architectural-lens comment, then one GPT terminal review | One author disposition comment per round; no competitive stage or Claude waiver. |
+
+For T2/T3 the manager starts the three GPT reviewers independently and in
+parallel. Each reviewer's **first Issue-comment line** names the actual revision
+read (for example `Read revision: #123 r04`). The Claude comment does the same.
+Existing published reviewer comments on an in-flight Issue count. Duplicate
+publication does not block review progression or prove independent launches.
+The separate shared sender terminal envelope is **not** create-Issue review
+completion; the matching published Issue review comment completes the review
+turn. With neither a chat reply nor a matching Issue comment, use only the
+sender's already-authorized recovery/resend path; no new send follows from
+absence alone.
+
+The author records one Issue disposition comment per review round addressing
+**every** finding from that round: accepted and corrected in the next revision,
+or rejected with a reason. A clean review requires no synthetic body revision.
+Earlier-round unresolved findings still prevent label acceptance. The existing
+`spec-review:accepted` label and those Issue comments are the only acceptance
+record; never consult cycle/stage records, receipts, relay maps, a finding-ledger
+format, reviewer-invocation envelope, Claude producer evidence, a Claude waiver,
+or `create-issue-final-acceptance/v1` as review/label authority.
+
+Run the **existing** draft-discipline/tier-gate substantive floor on the Issue
+revision **before** its terminal GPT reviewer reads it. Fix known failures
+before that review. A late-discovered substantive floor failure (including
+one discovered after a clean terminal review) is a terminal-round finding:
+use the **one permitted author correction** and pass the same existing floor
+on the corrected revision. Do not rerun terminal review, introduce an extra
+stage or new check, or synthesize an acceptance artifact. Label acceptance
+requires every tier-required review comment, dispositions for findings in
+**every** required round, and the named terminal-reviewed revision or its
+**single** allowed findings/floor correction. An ordinary later unreviewed body
+revision is not accepted; operator amendments are accepted by definition.
+The author/operator does not demote a tier after review begins without operator
+direction; no freeze receipt is added.
+
+## Review economics (M1–M5)
+
+Maintain substantive reviewer scrutiny, without the deleted accounting gate:
+identify the defect separately from the preferred remedy (M1); price proposed
+persistent machinery and look for cheaper sufficient alternatives (M2);
+escalate substantive security/scope disagreements to the existing owner rather
+than invent protected-nomination/occurrence records (M3); examine review-added
+mechanisms for keep/simplify/defer/cut (M4); and provide a truthful terminal
+simplification assessment (M5). No `SIMPLIFICATION_CLEAN` token, M1–M5 row map,
+receipt-backed occurrence counter, or independent acceptance gate is required.
 
 ### Architectural-stage goals
 
-`architectural-review`, Claude lens, and terminal GPT use, in order:
-
-1. contradiction check;
-2. feasibility check;
-3. forced cut of all overengineering;
-4. missed-gap search.
-
-Competitive retains the shared economics and four-question simplification lens
-without gaining architectural/M5 authority.
-
-### Terminal GPT architectural lens
-
-Runs once in an independent fresh chat. T1 uses it as the only reviewer. T2
-uses it after three architectural-review sources. T3 uses it after the
-conditional three-source competitive stage, three architectural-review
-sources, Claude/waiver, and author fixes. It remains singular and cannot be
-replaced by consolidation or a second Claude pass.
+The GPT architectural reviewers, required Claude lens and terminal GPT check:
+(1) contradictions, (2) feasibility, (3) unnecessary complexity and less
+costly solutions, and (4) missed gaps. Reviewers publish their own evidence and
+findings directly to the Issue; the manager does not replace their comments.
 
 ### Explicit wrappers
 
