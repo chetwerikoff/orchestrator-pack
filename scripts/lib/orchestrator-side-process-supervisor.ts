@@ -22,6 +22,8 @@ import {
 export interface SupervisorOptions {
   stateDir: string;
   repoRoot: string;
+  projectId?: string;
+  repository?: string;
   epochAuthorityPath: string;
   epochId: string;
   nonce: string;
@@ -33,6 +35,8 @@ export interface SupervisorOptions {
 interface SupervisorStatusBase {
   epochId: string;
   nonce: string;
+  projectId?: string;
+  repository?: string;
   supervisorPid: number;
   supervisorStartTicks: string;
   registryHash: string | null;
@@ -252,6 +256,8 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
     schemaVersion: 2,
     epochId: options.epochId,
     nonce: options.nonce,
+    ...(options.projectId ? { projectId: options.projectId } : {}),
+    ...(options.repository ? { repository: options.repository } : {}),
     supervisorPid: process.pid,
     supervisorStartTicks: self.startTicks,
     registryHash: null,
@@ -340,6 +346,10 @@ export async function runSupervisor(options: SupervisorOptions): Promise<never> 
           ORCHESTRATOR_CUTOVER_EPOCH_ID: options.epochId,
           ORCHESTRATOR_CUTOVER_NONCE: options.nonce,
           ORCHESTRATOR_CUTOVER_STATE_DIR: options.stateDir,
+          OPK_WAKE_SUPERVISOR_STATE_DIR: path.dirname(options.stateDir),
+          OPK_SIDE_PROCESS_STATE_DIR: path.dirname(options.stateDir),
+          ...(options.projectId ? { OPK_PROJECT_ID: options.projectId } : {}),
+          ...(options.repository ? { OPK_REPOSITORY: options.repository } : {}),
         },
         signal: currentAbort.signal,
         allowEmptyStdout: true,
