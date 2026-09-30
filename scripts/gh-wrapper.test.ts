@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { classifyArgv, hasOnlyAllowedFlags, PR_INFO_FROM_VIEW_FIELDS } from './lib/gh-inventory-match.mjs';
+import { classifyArgv, hasOnlyAllowedFlags, isUnsupportedHighLevelRead, PR_INFO_FROM_VIEW_FIELDS } from './lib/gh-inventory-match.mjs';
 import {
   aggregateChecks,
   bucketForState,
@@ -201,6 +201,81 @@ describe('gh inventory matcher', () => {
     expect(route?.prNumber).toBe(431);
   });
 
+});
+
+describe('Issue #2285 failed Actions job logs inventory', () => {
+  const runArgv = ['run', 'view', '36730183562', '--log-failed'];
+  const jobArgv = ['api', 'repos/o/r/actions/jobs/17001/logs'];
+
+  it('covers the canonical run and job log reads, rejecting unsupported variants', () => {
+    expect(classifyArgv(runArgv).route).toMatchObject({
+      id: 'run-view-log-failed', runId: 36730183562,
+    });
+    expect(classifyArgv(jobArgv).route).toMatchObject({
+      id: 'actions-job-log', repoSlug: 'o/r', jobId: 17001,
+    });
+    for (const argv of [
+      ['run', 'view', '36730183562'],
+      ['run', 'view', '36730183562', '--log-failed=false'],
+      ['run', 'view', '36730183562', '--log-failed', '--watch'],
+      ['run', 'view', 'not-a-run', '--log-failed'],
+      ['api', 'repos/o/r/actions/jobs/not-an-id/logs'],
+    ]) {
+      expect(classifyArgv(argv).route).toBeNull();
+    }
+    const unknown = classifyArgv(['run', 'view', '36730183562', '--watch']);
+    expect(isUnsupportedHighLevelRead(unknown.parsed)).toBe(true);
+  });
+
+  it('reads only failed jobs and supports the direct job-log route without uncovered-read failure', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gh-2285-failed-logs-'));
+    const fakeGh = join(root, 'fake-gh');
+    const previousRepo = process.env.GH_REPO;
+    const previousHost = process.env.GH_HOST;
+    try {
+      writeExecutable(fakeGh, `#!/usr/bin/env bash
+set -euo pipefail
+for arg in "$@"; do
+  case "$arg" in
+    *"/actions/runs/36730183562/jobs?"*)
+      printf '%s\\n' '{"total_count":2,"jobs":[{"id":17001,"name":"failed-build","conclusion":"failure"},{"id":17002,"name":"passed-build","conclusion":"success"}]}'
+      exit 0
+      ;;
+    *"/actions/jobs/17001/logs")
+      printf '%s\\n' 'build step failed' 'stack trace'
+      exit 0
+      ;;
+  esac
+done
+printf '%s\\n' "unexpected API args: $*" >&2
+exit 3
+`);
+      process.env.GH_REPO = 'o/r';
+      process.env.GH_HOST = 'github.com';
+      const classified = classifyArgv(runArgv);
+      expect(classified.route).not.toBeNull();
+      expect(isUnsupportedHighLevelRead(classified.parsed)).toBe(false);
+      const result = executeRestRoute(classified.route!.id, {
+        realGh: fakeGh, parsed: classified.parsed, route: classified.route!, cwd: root,
+      });
+      expect(result).toContain('failed-build (job 17001)');
+      expect(result).toContain('build step failed');
+      expect(result).toContain('stack trace');
+      expect(result).not.toContain('passed-build');
+
+      const direct = classifyArgv(jobArgv);
+      expect(direct.route).not.toBeNull();
+      expect(executeRestRoute(direct.route!.id, {
+        realGh: fakeGh, parsed: direct.parsed, route: direct.route!, cwd: root,
+      })).toContain('build step failed');
+    } finally {
+      if (previousRepo === undefined) delete process.env.GH_REPO;
+      else process.env.GH_REPO = previousRepo;
+      if (previousHost === undefined) delete process.env.GH_HOST;
+      else process.env.GH_HOST = previousHost;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('gh pr checks dedupe (gh v2.93.0 parity)', () => {

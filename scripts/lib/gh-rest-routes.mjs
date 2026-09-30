@@ -1,3 +1,4 @@
+import { runProcessSync } from '../kernel/subprocess.ts';
 import {
   applyListedJq,
   ghApiJson,
@@ -494,6 +495,64 @@ export function routeRuntimeHistoryStatusHistory(realGh, repo, headSha, cwd) {
 }
 
 /**
+ * Read the downloaded plain-text Actions job log, not JSON. Native gh api
+ * follows the GitHub redirect to the log download URL.
+ */
+function routeActionsJobLog(realGh, repo, jobId, cwd) {
+  if (!Number.isSafeInteger(jobId) || jobId <= 0) {
+    throw new Error(`${REST_ERROR_MARKER}: invalid Actions job id`);
+  }
+  const args = ['api', `repos/${repo.slug}/actions/jobs/${jobId}/logs`];
+  if (repo.host) args.unshift('--hostname', repo.host);
+  const result = runProcessSync({
+    command: realGh,
+    args,
+    cwd,
+    inheritParentEnv: true,
+    env: { GH_WRAPPER_ACTIVE: '1' },
+  });
+  if (!result.ok) {
+    throw new Error(`${REST_ERROR_MARKER}: ${result.stderr.trim() || result.error || 'Actions job log read failed'}`);
+  }
+  return result.stdout;
+}
+
+function routeRunViewLogFailed(realGh, repo, runId, cwd) {
+  if (!Number.isSafeInteger(runId) || runId <= 0) {
+    throw new Error(`${REST_ERROR_MARKER}: invalid Actions run id`);
+  }
+  const jobs = [];
+  let total = null;
+  for (let page = 1; page <= 20; page += 1) {
+    const response = ghApiJson(realGh,
+      `repos/${repo.slug}/actions/runs/${runId}/jobs?per_page=100&page=${page}`,
+      { hostname: repo.host, cwd });
+    if (!Number.isSafeInteger(response.total_count) || response.total_count < 0
+      || !Array.isArray(response.jobs) || (total !== null && total !== response.total_count)) {
+      throw new Error(`${REST_ERROR_MARKER}: malformed Actions run jobs listing`);
+    }
+    total = response.total_count;
+    jobs.push(...response.jobs);
+    if (jobs.length > total) {
+      throw new Error(`${REST_ERROR_MARKER}: Actions run jobs count mismatch`);
+    }
+    if (jobs.length === total) {
+      const failed = jobs.filter((job) => job?.conclusion === 'failure');
+      if (failed.length === 0) return `No failed jobs found for run ${runId}.\n`;
+      return failed.map((job) => {
+        const id = Number(job.id);
+        const log = routeActionsJobLog(realGh, repo, id, cwd);
+        return `==> ${String(job.name ?? 'job')} (job ${id}) <==\n${log.trimEnd()}`;
+      }).join('\n') + '\n';
+    }
+    if (response.jobs.length === 0) {
+      throw new Error(`${REST_ERROR_MARKER}: incomplete Actions run jobs listing`);
+    }
+  }
+  throw new Error(`${REST_ERROR_MARKER}: Actions run jobs pagination limit reached`);
+}
+
+/**
  * @param {import('./gh-inventory-match.mjs').InventoryRouteId} routeId
  * @param {object} ctx
  */
@@ -505,15 +564,21 @@ export function executeRestRoute(routeId, ctx) {
     cwd = process.cwd(),
   } = ctx;
 
-  const repo = resolveRepoContext({
-    cwd,
-    repoFlag: parsed.repo,
-    realGh,
-    hostname: parsed.hostname,
-  });
+  const repo = routeId === 'actions-job-log'
+    ? { slug: route.repoSlug, host: parsed.hostname ?? process.env.GH_HOST ?? 'github.com' }
+    : resolveRepoContext({
+      cwd,
+      repoFlag: parsed.repo,
+      realGh,
+      hostname: parsed.hostname,
+    });
 
   try {
     switch (routeId) {
+      case 'run-view-log-failed':
+        return routeRunViewLogFailed(realGh, repo, route.runId, cwd);
+      case 'actions-job-log':
+        return routeActionsJobLog(realGh, repo, route.jobId, cwd);
       case 'pr-list-open': {
         const limit = Number(parsed.flags['--limit'] ?? 200);
         const fields = parsed.jsonFields ?? [];

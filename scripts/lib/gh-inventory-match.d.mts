@@ -7,6 +7,10 @@ export type InventoryRoute = {
   prNumber?: number;
   prRef?: string;
   branch?: string;
+  repoSlug?: string;
+  runId?: number;
+  jobId?: number;
+  headSha?: string;
   includeAppId?: boolean;
 };
 
@@ -18,3 +22,5 @@ export function classifyArgv(argv: string[]): {
 export function matchInventoryRoute(parsed: ParsedGhArgv): InventoryRoute | null;
 
 export function hasOnlyAllowedFlags(parsed: ParsedGhArgv, allowed: string[]): boolean;
+
+export function isUnsupportedHighLevelRead(parsed: ParsedGhArgv): boolean;

@@ -156,6 +156,20 @@
       "ownerIssue": 431
     },
     {
+      "id": "run-view-log-failed",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh run view N --log-failed",
+      "routeId": "run-view-log-failed",
+      "ownerIssue": 2285
+    },
+    {
+      "id": "actions-job-log",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh api repos/OWNER/REPO/actions/jobs/JOB_ID/logs",
+      "routeId": "actions-job-log",
+      "ownerIssue": 2285
+    },
+    {
       "id": "issue-view-body",
       "ownerClass": "rest_inventory",
       "canonical": "gh issue view N --json body",
