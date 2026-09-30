@@ -536,6 +536,8 @@ export function isActivationReadySupervisorStatus(
     status.epochId !== request.epochId
     || status.nonce !== nonce
     || status.supervisorPid !== expectedPid
+    || (request.projectId && status.projectId !== request.projectId)
+    || (request.repository && status.repository !== request.repository)
     || status.registryHash !== committed.registryHash
     || path.resolve(status.registrySource) !== path.resolve(request.paths.targetRegistryPath)
     || status.childGeneration < 1
@@ -592,6 +594,7 @@ async function startSupervisor(request: ActivationRequest, nonce: string): Promi
     command: process.execPath,
     args: [
       '--experimental-strip-types', entry, 'run',
+      '--project', request.projectId?.trim() || 'orchestrator-pack',
       '--state-dir', request.paths.supervisorStateDir,
       '--epoch-authority', request.paths.epochAuthorityPath,
       '--epoch-id', request.epochId,
@@ -706,15 +709,18 @@ export async function activateCutover(
   if (greenfield) {
     const writers = boundary.captureLegacyWriters(request);
     if (writers.length !== 0) throw new Error('greenfield_legacy_writer_present');
-    const legacyCandidates = boundary.findLegacySupervisorIdentities
-      ? boundary.findLegacySupervisorIdentities(request)
-      : findLegacySupervisorIdentities(request.oldInstalledRevisionRoot);
+    const selectedProjectId = request.projectId?.trim() || 'orchestrator-pack';
+    const legacyCandidates = selectedProjectId === 'orchestrator-pack'
+      ? (boundary.findLegacySupervisorIdentities
+          ? boundary.findLegacySupervisorIdentities(request)
+          : findLegacySupervisorIdentities(request.oldInstalledRevisionRoot))
+      : [];
     if (legacyCandidates.length !== 0) {
       throw new Error('greenfield_legacy_supervisor_present');
     }
     const typescriptCandidates = boundary.findTypeScriptSupervisorIdentities
       ? boundary.findTypeScriptSupervisorIdentities(request)
-      : findTypeScriptSupervisorIdentities();
+      : findTypeScriptSupervisorIdentities({ projectId: selectedProjectId });
     if (typescriptCandidates.length !== 0) {
       throw new Error('greenfield_typescript_supervisor_present');
     }
