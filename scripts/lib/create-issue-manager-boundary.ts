@@ -1,3 +1,16 @@
+/**
+ * Create-Issue cutover (#2256): these legacy stage-record / nextAction
+ * projection helpers remain callable by pre-existing transport and execute-Issue
+ * consumers, but their results are NOT create-Issue review-completion or
+ * spec-review:accepted authority. For create-Issue, the live Issue's published
+ * revision-named reviewer comments, per-round author dispositions, and existing
+ * substantive floor govern the already-existing acceptance label.
+ *
+ * Do not use this boundary to require stage attempts, terminal bundles,
+ * receipt inventories, producer reconciliation, or acceptance artifacts.
+ * Actual shared-sender admission/observation/retry semantics are unchanged.
+ * Historical cleanup of unreachable producers is deliberately deferred.
+ */
 import { createHash } from 'node:crypto';
 import {
   createIssueExternalPauseResult,
