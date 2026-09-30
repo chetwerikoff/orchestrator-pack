@@ -1926,6 +1926,11 @@ function processIsAlive(pid: number): boolean {
   return true;
 }
 
+export function smokeReportHasScenarioFinding(report: SmokeReport): boolean {
+  return report.result === 'FAIL'
+    && report.scenarios.some((scenario) => scenario.outcome === 'fail');
+}
+
 async function directSmokeStartFence<T>(action: () => T | Promise<T>): Promise<SmokeStartFenceResult<T>> { return { ok: true, value: await action() }; }
 
 function terminalizeDetachedRun(options: CliOptions, runId: string, artifactDir: string, mode: 'runtime' | 'no_execution', report: SmokeReport): void {
