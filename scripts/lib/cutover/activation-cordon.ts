@@ -96,6 +96,7 @@ type CensusOptions = {
   entries?: () => string[];
   readIdentity?: (pid: number) => ProcessIdentity;
   readStat?: (pid: number) => ProcessStat;
+  projectId?: string;
 };
 
 function censusIdentity(
@@ -167,6 +168,11 @@ export function findTypeScriptSupervisorIdentities(
       if (identity.cmdline.some((argument) =>
         /(?:orchestrator-side-process-supervisor|orchestrator-wake-supervisor)\.(?:ts|mjs)$/u.test(argument)
         || argument.endsWith('supervisor.ts'))) {
+        const projectId = String(options.projectId ?? '').trim();
+        if (projectId) {
+          const projectFlag = identity.cmdline.findIndex((argument) => argument === '--project');
+          if (projectFlag < 0 || identity.cmdline[projectFlag + 1] !== projectId) continue;
+        }
         identities.push(identity);
       }
     } catch (error) {
