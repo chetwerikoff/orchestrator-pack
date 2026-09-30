@@ -76,11 +76,16 @@ function machineHomeDir(): string {
   return homeDir;
 }
 
-export function canonicalFoundationPaths(_repoRoot: string, homeDir = machineHomeDir()): CanonicalFoundationPaths {
+export function canonicalFoundationPaths(
+  _repoRoot: string,
+  homeDir = machineHomeDir(),
+  projectId = 'orchestrator-pack',
+): CanonicalFoundationPaths {
   const stateRoot = path.resolve(resolveWakeSupervisorStateRoot({
     env: {},
     homeDir,
     platform: process.platform,
+    projectId,
   }));
   const supervisorStateDir = path.join(stateRoot, 'supervisor');
   return {
@@ -104,7 +109,7 @@ export function assertCanonicalActivationPaths(
   if (String(process.env.OPK_WAKE_SUPERVISOR_STATE_DIR ?? '').trim()) {
     throw new Error('foundation_state_root_override_forbidden');
   }
-  const canonical = canonicalFoundationPaths(request.repoRoot);
+  const canonical = canonicalFoundationPaths(request.repoRoot, machineHomeDir(), request.projectId?.trim() || 'orchestrator-pack');
   requirePath(request.paths.stateDir, canonical.stateRoot, 'state_root');
   requirePath(request.paths.supervisorStateDir, canonical.supervisorStateDir, 'supervisor_state_root');
   requirePath(request.paths.epochAuthorityPath, canonical.epochAuthorityPath, 'epoch_authority');
