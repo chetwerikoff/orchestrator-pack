@@ -211,6 +211,10 @@ under the existing Browser-GPT lifecycle and the final chat/GitHub checks below
 must still permit fallback. If any required identity or settlement evidence is
 unavailable, fail closed without a fresh chat.
 
+Every Browser-GPT command in this workflow runs from the trusted pack checkout
+with the worker worktree as `--cwd`
+([Tooling source](flow-manager-long-running-child-runbook.md#tooling-source)).
+
 This section owns the 30-minute live-chat checkpoint and the one additional
 execution timing rule: a 10-minute minimum grace after a confirmed product-error
 continuation send. Neither is a universal Browser-GPT timeout; do not add a
