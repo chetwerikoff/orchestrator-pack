@@ -18,7 +18,7 @@ import {
 } from './activation-import.ts';
 import { projectRegistry } from './activation-registry-projection.ts';
 import { sha256Bytes, sha256Stable } from './stable-stringify.ts';
-import { publishCommittedProjectStateBinding } from '../project-state-binding.mjs';
+import { publishCommittedProjectStateBinding } from '../project-state-binding.ts';
 import type { CordonRecord, FollowupRecord, ActivationRequest, EpochCommitCore, ImportRecord, PhaseOneEnvelope, SnapshotRecord } from './types.ts';
 import {
   hasSchedulerChildFailureEvidence,
