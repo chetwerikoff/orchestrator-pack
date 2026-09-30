@@ -1,7 +1,6 @@
 #!/usr/bin/env -S node --experimental-strip-types
 import '../toolchain/native-entrypoint-preflight.ts';
-
-import { execFileSync } from 'node:child_process';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -184,18 +183,16 @@ export function readPrHeadRef(repository: string, pull: number): string | undefi
   const key = `${repository}#${pull}`;
   const cached = prHeadRefs.get(key);
   if (cached) return cached;
-  try {
-    const ref = execFileSync(
-      fileURLToPath(new URL('../gh', import.meta.url)),
-      ['api', `repos/${repository}/pulls/${pull}`, '--jq', '.head.ref'],
-      { encoding: 'utf8', timeout: 15_000, stdio: ['ignore', 'pipe', 'ignore'] },
-    ).trim();
-    if (!ref) return undefined;
-    prHeadRefs.set(key, ref);
-    return ref;
-  } catch {
-    return undefined;
-  }
+  const result = runProcessSync({
+    command: fileURLToPath(new URL('../gh', import.meta.url)),
+    args: ['api', `repos/${repository}/pulls/${pull}`, '--jq', '.head.ref'],
+    timeoutMs: 15_000,
+    inheritParentEnv: true,
+  });
+  const ref = result.ok ? result.stdout.trim() : '';
+  if (!ref) return undefined;
+  prHeadRefs.set(key, ref);
+  return ref;
 }
 
 /**
