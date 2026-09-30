@@ -1913,41 +1913,23 @@ const DEFAULT_GATE_DEPENDENCIES: GateCheckDependencies = {
 };
 
 export async function runGateCheck(options: CliOptions, dependencies: GateCheckDependencies = DEFAULT_GATE_DEPENDENCIES): Promise<number> {
-  const lifecycle = dependencies.evaluateLifecycle(options.cwd);
-  if (!lifecycle.clean) { emit({ ok: false, allowed: false, reason: `smoke_lifecycle_unclean:${lifecycle.reasons[0]}`, lifecycle }, options.json); return 1; }
+  // Ready-for-review is a review handoff, not worker-owned smoke admission.
+  // The existing supervisor starts independent smoke after settled pack review.
   try {
-    const suppliedIssueBody = readIssueBody(options.issueBodyFile);
-    const target = dependencies.resolveTarget(options, suppliedIssueBody);
-    const issueBody = target.issueBody;
-    const comments = stabilizeSmokeCommentCensus(() => dependencies.fetchComments(options.prNumber, target.repositorySlug, options.repoRoot));
-    const liveHeadSha = dependencies.fetchHead(options.prNumber, target.repositorySlug, options.repoRoot);
-    const trustedTarget = coverageTarget(target, liveHeadSha);
-    const receiptWitness = findVerifiedSmokeReceiptWitness({ issueBody, comments, target: trustedTarget });
-    const adapter = await dependencies.selectAdapter(options.cwd);
-    const readiness = adapter.readiness({ cwd: options.cwd });
-    let decision = evaluateWorkerSmokeGate({
-      issueBody, issueNumber: target.issueNumber, prNumber: target.prNumber, headSha: target.headSha, prComments: comments,
-      ciGreen: dependencies.ciGreen(options.prNumber, options.headSha, target.repositorySlug, options.repoRoot),
-      orcaWorktreeOk: readiness.status === 'ok', ownedTerminalClosed: Boolean(receiptWitness), terminalProvenanceOk: Boolean(receiptWitness),
-      repositorySlug: target.repositorySlug, resolvedIssueNumber: target.issueNumber, resolvedPrNumber: target.prNumber, liveHeadSha,
-      issueBodyMatchesTarget: target.issueBodyMatchesTarget, trustedPublisherLogin: target.trustedPublisherLogin,
-      commentCensusComplete: true, commentSnapshotStable: true,
-    });
-    if (decision.allowed) {
-      const finalHeadSha = dependencies.fetchHead(options.prNumber, target.repositorySlug, options.repoRoot);
-      if (finalHeadSha !== target.headSha) {
-        decision = { allowed: false, reason: 'live_pr_head_changed_during_evaluation', smokeRequired: true, diagnostics: decision.diagnostics };
-      } else {
-        const finalComments = dependencies.fetchComments(options.prNumber, target.repositorySlug, options.repoRoot);
-        if (!finalSmokeCommentSnapshotMatches(comments, finalComments)) {
-          decision = { allowed: false, reason: 'comment_snapshot_changed_before_allow', smokeRequired: true, diagnostics: decision.diagnostics };
-        }
-      }
-    }
-    emit({ ok: decision.allowed, ...decision, lifecycle }, options.json); return decision.allowed ? 0 : 1;
+    const target = dependencies.resolveTarget(options, readIssueBody(options.issueBodyFile));
+    const liveHead = dependencies.fetchHead(target.prNumber, target.repositorySlug, options.repoRoot);
+    const ciGreen = dependencies.ciGreen(target.prNumber, target.headSha, target.repositorySlug, options.repoRoot);
+    const allowed = liveHead === target.headSha && ciGreen;
+    emit({
+      ok: allowed, allowed, smokeRequired: false,
+      reason: allowed ? 'review_handoff_ci_ready' : 'required_ci_or_pr_head_not_current',
+    }, options.json);
+    return allowed ? 0 : 1;
   } catch (error) {
-    const reason = scrubSmokeOutput(error instanceof Error ? error.message : String(error));
-    emit({ ok: false, allowed: false, reason, smokeRequired: true, lifecycle }, options.json); return 1;
+    emit({ ok: false, allowed: false, smokeRequired: false, reason: scrubSmokeOutput(
+      error instanceof Error ? error.message : String(error),
+    ) }, options.json);
+    return 1;
   }
 }
 

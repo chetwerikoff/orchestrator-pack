@@ -3109,7 +3109,7 @@ if (endpoint === 'user') {
     }
   });
 
-  it('denies allow when the immediate final census contains a same-head FAIL or BLOCKED', async () => {
+  it('does not let legacy smoke census or subsequent non-PASS block pre-review CI handoff', async () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-final-census-'));
     const body = planBody([{ action: 'A', expected: 'A passes' }]);
     const issueBodyFile = join(root, 'issue.md');
@@ -3128,9 +3128,9 @@ if (endpoint === 'user') {
           gateOptions(root, issueBodyFile),
           gateDependencies(body, [[pass], [pass], [pass, blocked]], root),
         );
-        expect(code).toBe(1);
+        expect(code).toBe(0);
         expect(output.mock.calls.map((entry) => String(entry[0])).join(''))
-          .toContain('comment_snapshot_changed_before_allow');
+          .toContain('review_handoff_ci_ready');
       } finally {
         output.mockRestore();
       }
