@@ -446,6 +446,18 @@ duplicating this lifecycle.
 The manager starts or resumes pack review only through:
 
 ```bash
+npm run --silent pack-gpt-review -- --project <PROJECT_ID> --pr-number <PR_NUMBER>
+```
+
+Select the target project card for this invocation with `--project <PROJECT_ID>`;
+`OPK_PROJECT_ID` may select the card when invoking a path without a `--project`
+option. The review wrapper resolves the selected card and forwards its exact
+`projectId` and `primaryRoot` to the reviewer child. The card supplies the
+Browser-GPT project URL; do not configure a separate project URL.
+
+With `OPK_PROJECT_ID` selected, the equivalent invocation may omit the flag:
+
+```bash
 npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>
 ```
 
@@ -456,9 +468,8 @@ does not call the low-level Browser-GPT turn helper three times itself.
 
 For every required logical round:
 
-- use the runner's plural Browser-GPT configuration:
-  `PACK_GPT_BROWSER_PROJECT_URL` is present and
-  `PACK_GPT_BROWSER_CHAT_URL` is absent;
+- the former requirement “`PACK_GPT_BROWSER_PROJECT_URL` is present” is retired;
+  the selected card supplies the project URL and `PACK_GPT_BROWSER_CHAT_URL` is absent;
 - the runner launches source slots `source-01..03` as independent fresh
   ChatGPT project chats, with its existing admission spacing and invocation
   identities; the implementation conversation, fixer conversations, and sibling

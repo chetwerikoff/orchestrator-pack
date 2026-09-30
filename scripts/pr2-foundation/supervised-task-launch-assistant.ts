@@ -7,6 +7,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
 import { evaluateCommandRuntimePreflight } from '../lib/command-runtime-bootstrap.mjs';
+import { resolveTargetContext } from '../lib/target-context.ts';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
 import type { RuntimeAdapter, RuntimeWorker, RuntimeWorkerIdentity } from '../runtime/contracts.ts';
 import { overlayExecutorProfileEnv } from '../executor-profile-store.ts';
@@ -155,7 +156,9 @@ export type DispatchObservation = { readonly kind: 'absent' }
 
 export interface LaunchInput {
   readonly repository: string;
+  readonly projectId?: string;
   readonly workClass: LaunchWorkClass;
+  readonly primaryRoot?: string;
   readonly issueNumber?: number;
   readonly runId?: string;
   readonly taskId?: string;
@@ -507,6 +510,7 @@ export async function runSupervisedTaskLaunchAssistant(
   const startAt = deps.now();
   const supervised = await deps.runSupervisedStart({
     repository: resources.repository,
+    ...(input.projectId ? { projectId: input.projectId } : {}),
     ...(input.issueNumber ? { issueNumber: input.issueNumber } : {}),
     ...(input.env ? { env: { ...input.env } } : {}),
     cwd: input.cwd,
@@ -537,7 +541,7 @@ export async function runSupervisedTaskLaunchAssistant(
     const retry = requestId ? [
       'node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/pr2-foundation/supervised-worker-start.ts --',
       ...(input.issueNumber ? ['--issue-number', String(input.issueNumber)] : []),
-      '--repository', quote(resources.repository), '--role', input.workClass === 'manager' ? 'orchestrator' : 'worker',
+      ...(input.projectId ? ['--project', quote(input.projectId)] : []), '--repository', quote(resources.repository), '--role', input.workClass === 'manager' ? 'orchestrator' : 'worker',
       ...(providerMode ? ['--mode', 'provider_new_top_level'] : []), '--', '--task', quote(taskId),
       ...(providerMode
         ? (input.worktreeSelector
@@ -1242,6 +1246,7 @@ function dispatchEdge(value: Record<string, unknown> | null): EdgeResult<Dispatc
 export async function createProductionLaunchDependencies(input: LaunchInput): Promise<LaunchDependencies> {
   const cwd = input.cwd ?? process.cwd();
   const env = input.env ?? overlayExecutorProfileEnv(process.env);
+  const target = resolveTargetContext({ projectId: input.projectId, env });
   const adapter = await selectRuntimeAdapter({ env: { ...env } }, { cwd, transport: { env: { ...env } } });
   return {
     now: Date.now,
@@ -1259,10 +1264,10 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       };
     },
     repositoryPreflight: async (repository) => {
-      const remote = await child(['git', 'remote', 'get-url', 'origin'], cwd, env);
+      const remote = await child(['git', 'remote', 'get-url', 'origin'], target.primaryRoot, env);
       if (!remote.ok || repoCanonicalKey(remote.stdout) !== `github.com/${repository}`) return {
         status: 'continue', cause: 'repository_preflight_mismatch', actor: 'operator', evidence: { repository },
-        nextAction: { kind: 'repair_preflight', note: 'run from the checkout whose origin is github.com and exactly matches --repository' },
+        nextAction: { kind: 'repair_preflight', note: 'repair the selected project card primaryRoot checkout origin before continuing' },
       };
       return { status: 'ok', value: true };
     },
@@ -1319,6 +1324,7 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
 }
 
 const LAUNCH_CLI_OPTIONS = new Set([
+  '--project',
   '--repository',
   '--work-class',
   '--issue-number',
@@ -1343,12 +1349,21 @@ function launchCliOptions(argv: readonly string[]): ReadonlyMap<string, string> 
   return parsed;
 }
 
-export function parseLaunchAssistantCli(argv: readonly string[]): LaunchInput {
+export function parseLaunchAssistantCli(
+  argv: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+  resolveTarget: typeof resolveTargetContext = resolveTargetContext,
+): LaunchInput {
   const options = launchCliOptions(argv);
   const workClass = (options.get('--work-class') ?? '').trim();
   if (!LAUNCH_WORK_CLASSES.includes(workClass as LaunchWorkClass)) throw new Error('--work-class must be exactly manager|t1|t2|t3');
-  const repository = (options.get('--repository') ?? '').trim().toLowerCase();
-  if (!/^[^/\s]+\/[^/\s]+$/u.test(repository)) throw new Error('--repository owner/repo is required');
+  const target = resolveTarget({ projectId: (options.get('--project') ?? '').trim(), env });
+  const explicitRepository = (options.get('--repository') ?? '').trim().toLowerCase();
+  if (explicitRepository && !/^[^/\s]+\/[^/\s]+$/u.test(explicitRepository)) throw new Error('--repository must be owner/repo');
+  if (explicitRepository && explicitRepository !== target.repository) {
+    throw new Error(`--repository ${explicitRepository} disagrees with selected project card repository ${target.repository}`);
+  }
+  const repository = target.repository;
   const issueText = (options.get('--issue-number') ?? '').trim();
   let issueNumber: number | undefined;
   if (issueText) {
@@ -1380,6 +1395,8 @@ export function parseLaunchAssistantCli(argv: readonly string[]): LaunchInput {
 
   return {
     repository,
+    projectId: target.projectId,
+    primaryRoot: target.primaryRoot,
     workClass: workClass as LaunchWorkClass,
     ...(issueNumber ? { issueNumber } : {}),
     ...(runId ? { runId } : {}),
@@ -1392,7 +1409,7 @@ export function parseLaunchAssistantCli(argv: readonly string[]): LaunchInput {
 }
 
 async function main(argv = process.argv.slice(2)): Promise<void> {
-  const input = parseLaunchAssistantCli(argv);
+  const input = parseLaunchAssistantCli(argv, process.env);
   const result = await runSupervisedTaskLaunchAssistant(input, await createProductionLaunchDependencies(input));
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }

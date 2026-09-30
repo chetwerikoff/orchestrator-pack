@@ -116,6 +116,7 @@ See:
 - [`docs/repository_policy.md`](docs/repository_policy.md) for reusable content;
 - [`docs/chat-executor-rules.md`](docs/chat-executor-rules.md) for connected executor
   behavior;
+- [`docs/target_repo_setup.md`](docs/target_repo_setup.md) for deploying the pack into a target project;
 - [`docs/migration_notes.md`](docs/migration_notes.md) for current operator adoption.
 
 ## Security and state

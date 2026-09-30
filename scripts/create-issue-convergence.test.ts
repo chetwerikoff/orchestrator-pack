@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { runProcessSync } from './kernel/subprocess.ts';
+import { projectCardPath } from './lib/target-context.ts';
 import {
   CREATE_ISSUE_NEXT_ACTION_KINDS,
   assertCreateIssueActionCurrent,
@@ -48,6 +50,46 @@ function tempRoot(): string {
   const root = mkdtempSync(join(tmpdir(), 'opk-create-issue-convergence-'));
   roots.push(root);
   return root;
+}
+
+function targetCardFixture(): {
+  env: NodeJS.ProcessEnv;
+  profile: string;
+  cardPath: string;
+  projectUrl: string;
+} {
+  const root = tempRoot();
+  const profile = join(root, 'chrome-profile');
+  const primaryRoot = join(root, 'target');
+  const projectUrl = 'https://chatgpt.com/g/g-test/project';
+  mkdirSync(profile);
+  mkdirSync(primaryRoot);
+  for (const args of [
+    ['init'],
+    ['remote', 'add', 'origin', 'https://github.com/chetwerikoff/orchestrator-pack.git'],
+  ]) {
+    const result = runProcessSync({ command: 'git', args, cwd: primaryRoot, inheritParentEnv: true });
+    if (!result.ok) throw new Error(result.stderr || result.error || 'git target fixture failed');
+  }
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: root,
+    XDG_CONFIG_HOME: join(root, 'config'),
+    OPK_PROJECT_ID: 'orchestrator-pack',
+  };
+  const cardPath = projectCardPath('orchestrator-pack', env);
+  mkdirSync(join(root, 'config', 'orchestrator-pack', 'projects'), { recursive: true });
+  writeFileSync(cardPath, JSON.stringify({
+    projectId: 'orchestrator-pack',
+    repository: 'chetwerikoff/orchestrator-pack',
+    primaryRoot,
+    defaultBranch: 'main',
+    orcaWorkspacePattern: 'orca/workspaces/orchestrator-pack/',
+    orchestratorTitlePattern: 'orchestrator-pack.*orchestrator',
+    browserGpt: { projectUrl },
+    verification: { local: ['npm test'] },
+  }));
+  return { env, profile, cardPath, projectUrl };
 }
 
 function productionTsFiles(root: string): string[] {
@@ -1041,55 +1083,74 @@ describe('principal-owned reviewer artifact authority', () => {
 });
 
 describe('create-Issue Browser-GPT operator config', () => {
-  it('accepts the two required environment values without a local config copy', () => {
-    const root = tempRoot();
-    const profile = join(root, 'chrome-profile');
-    mkdirSync(profile);
+  it('takes project URL from the selected card and Chrome profile from machine-wide env', () => {
+    const fixture = targetCardFixture();
     const result = resolveCreateIssueBrowserOperatorConfig({
       env: {
-        DISCUSS_WITH_GPT_PROJECT_URL: 'https://chatgpt.com/g/g-test/project',
-        DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR: profile,
+        ...fixture.env,
+        DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR: fixture.profile,
       },
     });
     expect(result).toEqual({
       ok: true,
       config: {
-        projectUrl: 'https://chatgpt.com/g/g-test/project',
-        chromeUserDataDir: profile,
+        projectId: 'orchestrator-pack',
+        projectUrl: fixture.projectUrl,
+        cardPath: fixture.cardPath,
+        chromeUserDataDir: fixture.profile,
         source: 'environment',
       },
     });
   });
 
-  it('requires one explicit absolute operator-owned config locator when the env pair is incomplete', () => {
-    const result = resolveCreateIssueBrowserOperatorConfig({
-      env: { DISCUSS_WITH_GPT_PROJECT_URL: 'https://chatgpt.com/g/g-test/project' },
-    });
+  it('requires machine-wide Chrome profile config after the target card resolves', () => {
+    const fixture = targetCardFixture();
+    const result = resolveCreateIssueBrowserOperatorConfig({ env: fixture.env });
     expect(result).toMatchObject({
       ok: false,
       cause: 'operator_browser_config_required',
     });
   });
 
-  it('reads only the exact caller-supplied operator config path', () => {
-    const root = tempRoot();
-    const profile = join(root, 'chrome-profile');
-    mkdirSync(profile);
-    const configPath = join(root, 'operator-local.config.json');
+  it('reads only browser/profile settings from the exact operator config path', () => {
+    const fixture = targetCardFixture();
+    const configPath = join(tempRoot(), 'operator-local.config.json');
     writeFileSync(configPath, JSON.stringify({
-      projectUrl: 'https://chatgpt.com/g/g-test/project',
-      chromeUserDataDir: profile,
+      chromeUserDataDir: fixture.profile,
     }));
-    const result = resolveCreateIssueBrowserOperatorConfig({ env: {}, operatorBrowserConfig: configPath });
+    const result = resolveCreateIssueBrowserOperatorConfig({
+      env: fixture.env,
+      operatorBrowserConfig: configPath,
+    });
     expect(result).toEqual({
       ok: true,
       config: {
-        projectUrl: 'https://chatgpt.com/g/g-test/project',
-        chromeUserDataDir: profile,
+        projectId: 'orchestrator-pack',
+        projectUrl: fixture.projectUrl,
+        cardPath: fixture.cardPath,
+        chromeUserDataDir: fixture.profile,
         source: 'operator-config',
         operatorConfigPath: configPath,
       },
     });
+  });
+
+  it('refuses legacy projectUrl in machine-wide operator config', () => {
+    const fixture = targetCardFixture();
+    const configPath = join(tempRoot(), 'legacy-local.config.json');
+    writeFileSync(configPath, JSON.stringify({
+      projectUrl: 'https://chatgpt.com/g/legacy/project',
+      chromeUserDataDir: fixture.profile,
+    }));
+    const result = resolveCreateIssueBrowserOperatorConfig({
+      env: fixture.env,
+      operatorBrowserConfig: configPath,
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      cause: 'operator_browser_config_invalid',
+    });
+    if (!result.ok) expect(result.remedy).toContain(fixture.cardPath);
   });
 });
 

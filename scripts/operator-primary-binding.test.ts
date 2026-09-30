@@ -1,9 +1,10 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { runProcessSync } from './kernel/subprocess.ts';
 import type { RuntimeAdapter } from './runtime/contracts.ts';
 import {
   currentWorkerAssignmentByDeliverable,
@@ -14,6 +15,7 @@ import {
   WORKER_ASSIGNMENT_SCHEMA,
   WORKER_ASSIGNMENT_STORE_SCHEMA,
 } from './lib/worker-assignment-store.ts';
+import { projectCardPath } from './lib/target-context.ts';
 import {
   operatorPrimarySyncResult,
   withCurrentOperatorPrimaryTarget,
@@ -28,10 +30,42 @@ const roots: string[] = [];
 function fixture() {
   const root = mkdtempSync(path.join(tmpdir(), 'opk-1532-primary-cli-'));
   roots.push(root);
-  const env = { ...process.env, OPK_BASE_DIR: root };
+  const env = {
+    ...process.env,
+    OPK_BASE_DIR: root,
+    XDG_CONFIG_HOME: path.join(root, 'config'),
+    HOME: root,
+    OPK_PROJECT_ID: 'orchestrator-pack',
+  };
+  const writeCard = (projectId: string, repository: string) => {
+    const primaryRoot = path.join(root, projectId, 'same-primary-basename');
+    mkdirSync(primaryRoot, { recursive: true });
+    const initialized = runProcessSync({ command: 'git', args: ['init'], cwd: primaryRoot, inheritParentEnv: true });
+    if (!initialized.ok) throw new Error(initialized.stderr || initialized.error || 'git init failed');
+    const remote = runProcessSync({
+      command: 'git', args: ['remote', 'add', 'origin', `https://github.com/${repository}.git`],
+      cwd: primaryRoot, inheritParentEnv: true,
+    });
+    if (!remote.ok) throw new Error(remote.stderr || remote.error || 'git remote add failed');
+    const card = projectCardPath(projectId, env);
+    mkdirSync(path.dirname(card), { recursive: true });
+    writeFileSync(card, JSON.stringify({
+      projectId,
+      repository,
+      primaryRoot,
+      defaultBranch: 'main',
+      orcaWorkspacePattern: `orca/workspaces/${projectId}/`,
+      orchestratorTitlePattern: projectId,
+      browserGpt: { projectUrl: `https://chatgpt.com/g/${projectId}/project` },
+      verification: { local: ['npm test'] },
+    }), 'utf8');
+  };
+  writeCard('orchestrator-pack', 'chetwerikoff/orchestrator-pack');
+  writeCard('leopoker', 'chetwerikoff/LeoPoker');
   return {
     env,
     file: resolveWorkerAssignmentStorePath('orchestrator-pack', env),
+    leoFile: resolveWorkerAssignmentStorePath('leopoker', env),
   };
 }
 
@@ -100,6 +134,41 @@ afterEach(() => {
 });
 
 describe('operator-primary binding CLI', () => {
+  it('keeps operator-primary routes isolated across two selected project cards', async () => {
+    const { env, file, leoFile } = fixture();
+    const pack = await publish(file, 'task-pack', 'dispatch-pack', 2185);
+    const leo = await publish(leoFile, 'task-leo', 'dispatch-leo', 134);
+    await runOperatorPrimaryBindingCommand(parseOperatorPrimaryBindingArgs([
+      'bind', '--task-id', pack.taskId, '--binding-key', pack.bindingKey, '--operator-attested',
+    ]), env);
+    const before = await runOperatorPrimaryBindingCommand(parseOperatorPrimaryBindingArgs(['show']), env);
+
+    const leoEnv = { ...env, OPK_PROJECT_ID: 'leopoker' };
+    await runOperatorPrimaryBindingCommand(parseOperatorPrimaryBindingArgs([
+      'bind', '--project', 'leopoker', '--task-id', leo.taskId, '--binding-key', leo.bindingKey, '--operator-attested',
+    ]), leoEnv);
+    const after = await runOperatorPrimaryBindingCommand(parseOperatorPrimaryBindingArgs(['show']), env);
+    const leoShown = await runOperatorPrimaryBindingCommand(parseOperatorPrimaryBindingArgs([
+      'show', '--project', 'leopoker',
+    ]), leoEnv);
+
+    expect(after).toEqual(before);
+    expect(JSON.stringify(leoShown)).toContain('task-leo');
+    expect(JSON.stringify(after)).toContain('task-pack');
+  });
+
+  it('rejects an explicit repository that disagrees with the selected card', async () => {
+    const { env } = fixture();
+    const result = await runOperatorPrimaryBindingCommand(parseOperatorPrimaryBindingArgs([
+      'show', '--repository', 'chetwerikoff/LeoPoker',
+    ]), env);
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'repository_project_mismatch',
+      expectedRepository: 'chetwerikoff/orchestrator-pack',
+    });
+  });
+
   it('requires explicit operator attestation for mutation commands', () => {
     expect(() => parseOperatorPrimaryBindingArgs(['bind', '--task-id', 'task-1', '--binding-key', 'dispatch-1']))
       .toThrow('mutations require --operator-attested');
@@ -278,7 +347,7 @@ describe('operator-primary binding CLI', () => {
 
   it('rejects malformed/duplicate CLI flags instead of guessing', () => {
     expect(() => parseOperatorPrimaryBindingArgs(['show', '--project-id']))
-      .toThrow('missing value for --project-id');
+      .toThrow('unknown argument: --project-id');
     expect(() => parseOperatorPrimaryBindingArgs([
       'bind', '--task-id', 'task-1', '--task-id', 'task-2', '--binding-key', 'dispatch', '--operator-attested',
     ])).toThrow('duplicate argument: --task-id');

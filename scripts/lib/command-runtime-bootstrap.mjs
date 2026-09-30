@@ -268,34 +268,40 @@ function validateManagerProfileDirectory(value) {
 
 export function resolveManagerBrowserOperatorConfig(input = {}) {
   const env = input.env ?? process.env;
-  const envProjectUrl = env.DISCUSS_WITH_GPT_PROJECT_URL?.trim();
-  const envChromeUserDataDir = env.DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR?.trim();
-  let projectUrl;
-  let chromeUserDataDir;
-  let source;
-  let operatorConfigPath;
+  const projectUrl = String(input.targetProjectUrl ?? '').trim();
+  const cardPath = String(input.targetCardPath ?? '').trim();
+  if (!projectUrl || !cardPath) {
+    return {
+      ok: false, probe: 'target_context', reason: 'target_context_required',
+      evidence: 'Browser-GPT target context was not resolved from a selected project card',
+      remedy: 'select --project <id> or OPK_PROJECT_ID and resolve the project card before Browser-GPT configuration',
+    };
+  }
+  if (env.DISCUSS_WITH_GPT_PROJECT_URL?.trim()) {
+    return {
+      ok: false, probe: 'operator_browser_config', reason: 'operator_browser_config_invalid',
+      evidence: 'DISCUSS_WITH_GPT_PROJECT_URL is retired as target authority',
+      remedy: 'remove DISCUSS_WITH_GPT_PROJECT_URL; browserGpt.projectUrl comes only from ' + cardPath,
+    };
+  }
 
-  if (envProjectUrl && envChromeUserDataDir) {
-    projectUrl = envProjectUrl;
-    chromeUserDataDir = envChromeUserDataDir;
-    source = 'environment';
-  } else {
-    const locator = input.operatorBrowserConfig?.trim();
+  const envChromeUserDataDir = env.DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR?.trim();
+  let chromeUserDataDir = envChromeUserDataDir;
+  let source = envChromeUserDataDir ? 'environment' : 'operator-config';
+  let operatorConfigPath;
+  const locator = input.operatorBrowserConfig?.trim();
+  if (!chromeUserDataDir) {
     if (!locator) {
       return {
-        ok: false,
-        probe: 'operator_browser_config',
-        reason: 'operator_browser_config_required',
-        evidence: 'Browser-GPT operator configuration is unresolved',
-        remedy: 'set DISCUSS_WITH_GPT_PROJECT_URL and DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR together or pass --operator-browser-config with the exact operator-owned local.config.json path',
+        ok: false, probe: 'operator_browser_config', reason: 'operator_browser_config_required',
+        evidence: 'Browser-GPT machine-wide Chrome profile is unresolved',
+        remedy: 'set DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR or pass --operator-browser-config with the machine-wide local.config.json; projectUrl stays in ' + cardPath,
       };
     }
     if (!isAbsolute(locator) && !/^[A-Za-z]:[\\/]/.test(locator)) {
       return {
-        ok: false,
-        probe: 'operator_browser_config',
-        reason: 'operator_browser_config_invalid',
-        evidence: `operator config path is not absolute: ${locator}`,
+        ok: false, probe: 'operator_browser_config', reason: 'operator_browser_config_invalid',
+        evidence: 'operator config path is not absolute: ' + locator,
         remedy: 'pass the absolute path to the operator-owned local.config.json; do not copy or discover it from another checkout',
       };
     }
@@ -305,69 +311,42 @@ export function resolveManagerBrowserOperatorConfig(input = {}) {
       raw = JSON.parse(readFileSync(locator, 'utf8'));
     } catch (error) {
       return {
-        ok: false,
-        probe: 'operator_browser_config',
-        reason: 'operator_browser_config_invalid',
-        evidence: `unable to read operator Browser-GPT config at ${locator}: ${error instanceof Error ? error.message : String(error)}`,
-        remedy: `fix the operator-owned local.config.json at ${locator}; do not copy it into the worktree`,
+        ok: false, probe: 'operator_browser_config', reason: 'operator_browser_config_invalid',
+        evidence: 'unable to read operator Browser-GPT config at ' + locator + ': ' + (error instanceof Error ? error.message : String(error)),
+        remedy: 'fix the operator-owned local.config.json at ' + locator + '; do not copy it into the worktree',
       };
     }
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return { ok: false, probe: 'operator_browser_config', reason: 'operator_browser_config_invalid', evidence: 'operator Browser-GPT config at ' + locator + ' must be a JSON object', remedy: 'provide machine-wide browser/profile settings in ' + locator };
+    }
+    if (nonEmptyString(raw.projectUrl)) {
       return {
-        ok: false,
-        probe: 'operator_browser_config',
-        reason: 'operator_browser_config_invalid',
-        evidence: `operator Browser-GPT config at ${locator} must be a JSON object`,
-        remedy: `provide projectUrl and chromeUserDataDir in ${locator}`,
+        ok: false, probe: 'operator_browser_config', reason: 'operator_browser_config_invalid',
+        evidence: 'legacy projectUrl in ' + locator + ' is not target authority',
+        remedy: 'remove projectUrl from ' + locator + '; browserGpt.projectUrl comes only from ' + cardPath,
       };
     }
-    if (!nonEmptyString(raw.projectUrl) || !nonEmptyString(raw.chromeUserDataDir)) {
-      return {
-        ok: false,
-        probe: 'operator_browser_config',
-        reason: 'operator_browser_config_invalid',
-        evidence: `operator Browser-GPT config at ${locator} requires non-empty projectUrl and chromeUserDataDir`,
-        remedy: `populate projectUrl and chromeUserDataDir in ${locator}`,
-      };
+    if (!nonEmptyString(raw.chromeUserDataDir)) {
+      return { ok: false, probe: 'operator_browser_config', reason: 'operator_browser_config_invalid', evidence: 'operator Browser-GPT config at ' + locator + ' requires non-empty chromeUserDataDir', remedy: 'populate chromeUserDataDir in ' + locator };
     }
-    projectUrl = raw.projectUrl.trim();
     chromeUserDataDir = raw.chromeUserDataDir.trim();
-    source = 'operator-config';
     operatorConfigPath = locator;
+  } else if (locator) {
+    try {
+      const raw = JSON.parse(readFileSync(locator, 'utf8'));
+      if (raw && typeof raw === 'object' && !Array.isArray(raw) && nonEmptyString(raw.projectUrl)) {
+        return { ok: false, probe: 'operator_browser_config', reason: 'operator_browser_config_invalid', evidence: 'legacy projectUrl in ' + locator + ' is not target authority', remedy: 'remove projectUrl from ' + locator + '; browserGpt.projectUrl comes only from ' + cardPath };
+      }
+    } catch { /* profile is already provided by environment; invalid unused file is not selected */ }
   }
 
   const projectUrlError = validateManagerProjectUrl(projectUrl);
-  if (projectUrlError) {
-    return {
-      ok: false,
-      probe: 'operator_browser_config',
-      reason: 'operator_browser_config_invalid',
-      evidence: projectUrlError,
-      remedy: 'provide a valid absolute Browser-GPT projectUrl in the selected operator configuration source',
-    };
-  }
+  if (projectUrlError) return { ok: false, probe: 'target_context', reason: 'operator_browser_config_invalid', evidence: projectUrlError, remedy: 'fix browserGpt.projectUrl in ' + cardPath };
   const profileError = validateManagerProfileDirectory(chromeUserDataDir);
-  if (profileError) {
-    return {
-      ok: false,
-      probe: 'chrome_user_data_dir',
-      reason: 'operator_browser_config_invalid',
-      evidence: `${profileError}: ${chromeUserDataDir}`,
-      remedy: 'provide an existing absolute Chrome user-data directory in the selected operator configuration source',
-    };
-  }
+  if (profileError) return { ok: false, probe: 'chrome_user_data_dir', reason: 'operator_browser_config_invalid', evidence: profileError + ': ' + chromeUserDataDir, remedy: 'provide an existing absolute Chrome user-data directory in the selected machine-wide browser configuration' };
 
-  return {
-    ok: true,
-    config: {
-      projectUrl,
-      chromeUserDataDir,
-      source,
-      ...(operatorConfigPath ? { operatorConfigPath } : {}),
-    },
-  };
+  return { ok: true, config: { projectUrl, chromeUserDataDir, source, cardPath, ...(operatorConfigPath ? { operatorConfigPath } : {}) } };
 }
-
 export function evaluateManagerBrowserEnvironmentPreflight(input = {}) {
   const packRoot = resolve(input.packRoot ?? DEFAULT_PACK_ROOT);
   const env = input.env ?? process.env;
@@ -397,6 +376,8 @@ export function evaluateManagerBrowserEnvironmentPreflight(input = {}) {
   const config = resolveManagerBrowserOperatorConfig({
     env,
     operatorBrowserConfig: input.operatorBrowserConfig,
+    targetProjectUrl: input.targetProjectUrl,
+    targetCardPath: input.targetCardPath,
   });
   if (!config.ok) return { ...config, runtime: pathRuntime };
 

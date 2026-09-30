@@ -19,12 +19,12 @@ Run from the pack checkout with Node 22:
 ```bash
 node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
   --repo-root "$PWD" --script "$PWD/scripts/fleet/fleet-sweep.ts" -- \
-  --primary "$PWD"
+  --project my-project
 ```
 
-Use `--json` for machine-readable output, `--lines <n>` to change the displayed
-tail, and `--workspace-re` / `--busy-re` only when the project needs different
-matching rules. The sweep itself makes no Orca mutation.
+The selected project card supplies the primary checkout and matching rules. Use
+`--json` for machine-readable output and `--lines <n>` to change the displayed
+tail. The sweep itself makes no Orca mutation.
 
 ## Install one project instance
 
@@ -54,12 +54,15 @@ systemctl --user status fleet-wake@my-project
 tail -f ~/.local/state/orchestrator-fleet/my-project.fleet-wake.log
 ```
 
-A healthy tick logs `nothing stopped` when there is no actionable pane. When an
-agent pane is `STOPPED` or `POLLING`, the coordinator receives a `Fleet alarm
-(idle|busy)` message naming all actionable panes. An idle coordinator receives the
-alarm each interval; a busy coordinator receives a queued follow-up only when the
-stopped/polling set changed since the last send. A failed terminal read skips that
-tick rather than acting on incomplete evidence.
+A healthy tick logs `nothing stopped` when there is no actionable pane. If the
+project has no matching coordinator pane, it logs `normal fleet result: no
+orchestrator pane found` and returns without sending a wake. This is a normal
+result for projects without a coordinator pane; it does not log `nothing stopped`
+for that tick. When an agent pane is `STOPPED` or `POLLING`, the coordinator
+receives a `Fleet alarm (idle|busy)` message naming all actionable panes. An idle
+coordinator receives the alarm each interval; a busy coordinator receives a
+queued follow-up only when the stopped/polling set changed since the last send. A
+failed terminal read skips that tick rather than acting on incomplete evidence.
 
 ## Coordinator prompt snippet
 

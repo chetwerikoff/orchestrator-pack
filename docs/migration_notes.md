@@ -23,6 +23,69 @@ is introduced.
 
 # Migration notes
 
+## Per-project target context adoption (Issue #2185)
+
+### What changed
+
+Target identity is now selected only by the operator-owned card at
+`$XDG_CONFIG_HOME/orchestrator-pack/projects/<projectId>.json` (default
+`~/.config/orchestrator-pack/projects/<projectId>.json`). The selected card
+owns `repository`, `primaryRoot`, `defaultBranch`, Orca workspace/title
+patterns, and `browserGpt.projectUrl`. Machine-wide Browser-GPT config keeps
+only browser/profile/executable settings. Fleet runtime state is namespaced by
+the exact card `projectId`, not by a target-root basename.
+
+### Operator adoption
+
+1. Create `~/.config/orchestrator-pack/projects/orchestrator-pack.json` for the
+   pack itself. Point `primaryRoot` at the pack primary checkout, set
+   `repository` to `chetwerikoff/orchestrator-pack`, fill the current base
+   branch/patterns, move the existing ChatGPT project URL into
+   `browserGpt.projectUrl`, and retain the pack's verification declaration for
+   #2187.
+2. Remove `projectUrl` from
+   `.claude/skills/discuss-with-gpt/local.config.json` and stop exporting
+   `DISCUSS_WITH_GPT_PROJECT_URL` or `PACK_GPT_BROWSER_PROJECT_URL`.
+   Keep only machine-wide Chrome/profile/CDP/executable settings.
+3. Update operator-local launchers without committing them:
+   `opk-orch-start attach <project> <terminal-handle>` and
+   `opk-orch-primary <project> <terminal-handle>` read the selected card and
+   pass `--project <id>` to supervised start/operator-primary binding.
+   `opk-wake-supervisor <project> ...` selects that project's supervisor as
+   defined by #2186. Binding one project must not alter another project's
+   operator-primary route.
+4. Keep one shared orchestrator prompt and one shared manager/worker/flow-manager
+   template set outside git. Replace project literals with
+   `{PROJECT_ID}`, `{REPOSITORY}`, `{PRIMARY_ROOT}`, `{PACK_ROOT}`,
+   `{DEFAULT_BRANCH}`, and `{VERIFY}`. Start specs name the card path.
+   Invoke pack scripts from `{PACK_ROOT}` with `--project {PROJECT_ID}`,
+   never "from this worktree".
+5. Remove the retired
+   `~/.config/orchestrator-fleet/<projectId>.env`. Render the tracked
+   `scripts/fleet/fleet-wake@.service` from the selected stable pack checkout
+   by replacing `{PACK_ROOT}` with its absolute path; do not render it from a
+   target `primaryRoot`.
+6. Run `systemctl --user daemon-reload`, enable/restart the relevant
+   `fleet-wake@<projectId>` instance, and smoke a project whose
+   `primaryRoot` contains no pack scripts. Confirm its log reports a normal
+   fleet result and its polling/last-sent state is isolated under that exact
+   project id.
+7. Validate both the pack card and every adopted target card with
+   `node --experimental-strip-types "$PACK_ROOT/scripts/lib/Invoke-TypeScriptCli.ts" --repo-root "$PACK_ROOT" --script "$PACK_ROOT/scripts/lib/target-context.ts" -- check --project <projectId>`.
+
+For a non-pack target, do not adopt the supervisor/first-task steps until #2186
+and #2187 have landed as described in
+[the target deployment runbook](target_repo_setup.md#deploy-the-pack-into-a-target-project).
+
+### Rollback
+
+Disable the affected `fleet-wake@<projectId>` unit, stop the per-project
+supervisor only when #2186 is present and that supervisor was started, and remove
+only the target card being rolled back. Reverting repository code is separate
+from operator-machine cleanup. Do not restore the retired per-project fleet env
+file or ambient Browser-GPT project URL as a fallback.
+
+
 ## Multi-agent live executor profiles (Issue #1610)
 
 ### What changed

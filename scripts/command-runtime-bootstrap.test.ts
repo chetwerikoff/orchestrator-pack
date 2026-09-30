@@ -27,9 +27,10 @@ describe('Issue #1998 manager environment preflight', () => {
     const profile = tempDir('opk-1998-profile-');
     const result = resolveManagerBrowserOperatorConfig({
       env: {
-        DISCUSS_WITH_GPT_PROJECT_URL: 'https://chatgpt.com/g/project',
         DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR: profile,
       },
+      targetProjectUrl: 'https://chatgpt.com/g/project',
+      targetCardPath: '/operator/projects/orchestrator-pack.json',
     });
     expect(result).toEqual({
       ok: true,
@@ -37,6 +38,7 @@ describe('Issue #1998 manager environment preflight', () => {
         projectUrl: 'https://chatgpt.com/g/project',
         chromeUserDataDir: profile,
         source: 'environment',
+        cardPath: '/operator/projects/orchestrator-pack.json',
       },
     });
   });
@@ -49,9 +51,10 @@ describe('Issue #1998 manager environment preflight', () => {
       packRoot,
       effectivePath: process.env.PATH ?? '',
       env: {
-        DISCUSS_WITH_GPT_PROJECT_URL: 'https://chatgpt.com/g/project',
         DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR: profile,
       },
+      targetProjectUrl: 'https://chatgpt.com/g/project',
+      targetCardPath: '/operator/projects/orchestrator-pack.json',
       tools: {
         node: process.execPath,
         packGh: join(packRoot, 'scripts', 'gh'),
@@ -79,9 +82,10 @@ describe('Issue #1998 manager environment preflight', () => {
       packRoot,
       effectivePath: process.env.PATH ?? '',
       env: {
-        DISCUSS_WITH_GPT_PROJECT_URL: 'https://chatgpt.com/g/project',
         DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR: profile,
       },
+      targetProjectUrl: 'https://chatgpt.com/g/project',
+      targetCardPath: '/operator/projects/orchestrator-pack.json',
       tools: {
         node: process.execPath,
         packGh,
@@ -104,9 +108,10 @@ describe('Issue #1998 manager environment preflight', () => {
       packRoot,
       effectivePath: process.env.PATH ?? '',
       env: {
-        DISCUSS_WITH_GPT_PROJECT_URL: 'https://chatgpt.com/g/project',
         DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR: profile,
       },
+      targetProjectUrl: 'https://chatgpt.com/g/project',
+      targetCardPath: '/operator/projects/orchestrator-pack.json',
       tools: {
         node: process.execPath,
         packGh,
@@ -143,9 +148,10 @@ describe('Issue #1998 manager environment preflight', () => {
       packRoot: fakeWorktree,
       effectivePath: process.env.PATH ?? '',
       env: {
-        DISCUSS_WITH_GPT_PROJECT_URL: 'https://chatgpt.com/g/project',
         DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR: profile,
       },
+      targetProjectUrl: 'https://chatgpt.com/g/project',
+      targetCardPath: '/operator/projects/orchestrator-pack.json',
       tools,
     });
     expect(result).toMatchObject({
@@ -160,7 +166,7 @@ describe('Issue #1998 manager environment preflight', () => {
     }
   });
 
-  it('keeps the shared-module refusal ahead of unavailable native gh in the real entrypoint', () => {
+  it('fails closed on missing target selection before checking shared-workspace dependencies', () => {
     const worktree = tempDir('opk-1998-entrypoint-worktree-');
     const scriptsDir = join(worktree, 'scripts');
     mkdirSync(scriptsDir, { recursive: true });
@@ -212,11 +218,9 @@ describe('Issue #1998 manager environment preflight', () => {
       cwd: process.cwd(),
       env: {
         PATH: [scriptsDir, process.env.PATH ?? ''].filter(Boolean).join(':'),
-        GH_REAL_BINARY: '',
-        GH_RESOLVE_MAX_NON_NATIVE: '1',
-        DISCUSS_WITH_GPT_PROJECT_URL: 'https://chatgpt.com/g/project',
         DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR: profile,
         OPK_CREATE_ISSUE_DRAFT_STATE_ROOT: lifecycleState,
+        OPK_PROJECT_ID: '',
       },
       inheritParentEnv: true,
       encoding: 'utf8',
@@ -235,11 +239,11 @@ describe('Issue #1998 manager environment preflight', () => {
     expect(managerResult).toMatchObject({
       schema: 'flow-manager-browser-gpt-long-run-refusal/v1',
       reason: 'create_issue_browser_preflight_failed',
-      cause: 'workspace_dependencies_unavailable',
+      cause: 'target_context_invalid',
       nextAction: null,
     });
-    expect(managerResult.evidence).toContain('workspace_shared_module');
-    expect(managerResult.remedy).toContain('npm ci --include=dev');
+    expect(managerResult.evidence).toContain('target_context: target project is not selected');
+    expect(managerResult.remedy).toContain('select --project <id> or OPK_PROJECT_ID');
     expect(result.stderr).not.toContain('ERR_MODULE_NOT_FOUND');
     expect(existsSync(output)).toBe(false);
     expect(existsSync(handoff)).toBe(false);

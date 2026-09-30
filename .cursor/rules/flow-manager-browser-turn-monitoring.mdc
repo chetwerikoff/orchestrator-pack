@@ -73,16 +73,18 @@ Page/DOM completion is sufficient once the final assistant reply is stable and
 no longer generating; PID, shell state, silence, log growth, service-terminal
 witnesses, and heartbeats are not completion authority.
 Resolve Browser-GPT configuration without moving operator-owned state into the
-worktree. Set both supported environment values before launch:
-`export DISCUSS_WITH_GPT_PROJECT_URL="<PROJECT_URL>"` and
+worktree. Select the target project card for this invocation with `--project
+<PROJECT_ID>` when the caller supports it, or set `OPK_PROJECT_ID` for the
+invocation. The selected card supplies the Browser-GPT project URL. Set the
+machine-wide browser profile separately:
 `export DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR="<CHROME_USER_DATA_DIR>"`.
 For governed create-Issue sends, the long-running adapter may instead receive
 `--operator-browser-config <absolute-path>` and read that exact operator-local
 file in place. Never copy `local.config.json`, browser profiles, cookies,
 sessions, or credentials into a worker worktree. The
-`discuss-with-gpt: operator configuration missing` signature means the
-mandatory configuration is unresolved; verify both environment values or the
-explicit read-only operator config path.
+`discuss-with-gpt: operator configuration missing` signature means the selected
+card or mandatory browser profile configuration is unresolved; verify the card
+selection and browser profile value or the explicit read-only operator config path.
 
 The canonical prompt comparison covers only the unmarked reviewer input. After
 successful admission, the transport-owned `OPKTURNV1...` marker is inserted per

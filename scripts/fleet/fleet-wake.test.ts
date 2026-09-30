@@ -1,6 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -10,7 +10,7 @@ import {
   type FleetWakeConfig,
   type FleetWakeStateStore,
 } from './fleet-wake.ts';
-import type { FleetTerminal, OrcaCommandResult, OrcaExecutor } from './fleet-sweep.ts';
+import { FileFleetStateStore, type FleetTerminal, type OrcaCommandResult, type OrcaExecutor } from './fleet-sweep.ts';
 
 class MemoryWakeStore implements FleetWakeStateStore {
   readonly root = '/xdg/fleet-sweep/project';
@@ -39,6 +39,7 @@ const terminals: FleetTerminal[] = [
 
 function config(overrides: Partial<FleetWakeConfig> = {}): FleetWakeConfig {
   return {
+    projectId: 'orchestrator-pack',
     primary,
     workspaceRe: /orca\/workspaces\/project\//u,
     orchestratorTitleRe: /Cursor/iu,
@@ -222,7 +223,8 @@ describe('fleet alarm', () => {
     });
     expect(missing.result.state).toBe('no_orchestrator');
     expect(sends(missing.calls)).toHaveLength(0);
-    expect(missing.logs).toContain('no orchestrator pane found');
+    expect(missing.logs).toContain('normal fleet result: no orchestrator pane found');
+    expect(missing.logs).not.toContain('nothing stopped');
 
     const unreadable = await tick({ screens: { coord: 'idle', two: 'working\nesc to interrupt' } });
     expect(unreadable.result).toEqual({ state: 'unreadable', handle: 'one' });
@@ -233,14 +235,42 @@ describe('fleet alarm', () => {
   it('keeps polling marks and the last-sent signature under XDG_RUNTIME_DIR only', () => {
     const xdg = mkdtempSync(join(tmpdir(), 'fleet-wake-xdg-'));
     try {
-      const store = new FileFleetWakeStateStore(primary, { ...process.env, XDG_RUNTIME_DIR: xdg });
+      const store = new FileFleetWakeStateStore('orchestrator-pack', { ...process.env, XDG_RUNTIME_DIR: xdg });
       store.setPollingMark('one');
       store.writeLastSentSignature('STOPPED one');
-      expect(store.root.startsWith(`${xdg}/fleet-sweep/project`)).toBe(true);
+      expect(store.root).toBe(join(xdg, 'fleet-sweep', 'orchestrator-pack'));
       expect(readdirSync(store.root).sort()).toEqual(expect.arrayContaining(['last-sent.signature']));
     } finally {
       rmSync(xdg, { recursive: true, force: true });
     }
+  });
+
+
+  it('keeps polling and last-sent state disjoint by projectId even for equal target basenames', () => {
+    const xdg = mkdtempSync(join(tmpdir(), 'fleet-wake-project-id-'));
+    const env = { ...process.env, XDG_RUNTIME_DIR: xdg };
+    try {
+      const packPolling = new FileFleetStateStore('orchestrator-pack', env);
+      const leoPolling = new FileFleetStateStore('leopoker', env);
+      packPolling.setPollingMark('same-handle');
+      expect(leoPolling.hasPollingMark('same-handle')).toBe(false);
+
+      const packWake = new FileFleetWakeStateStore('orchestrator-pack', env);
+      const leoWake = new FileFleetWakeStateStore('leopoker', env);
+      packWake.writeLastSentSignature('same-target-basename');
+      expect(leoWake.readLastSentSignature()).toBeNull();
+      expect(packWake.root).not.toBe(leoWake.root);
+    } finally {
+      rmSync(xdg, { recursive: true, force: true });
+    }
+  });
+
+  it('renders the fleet user unit from stable PACK_ROOT with --project %i and no per-project env file', () => {
+    const unit = readFileSync(new URL('./fleet-wake@.service', import.meta.url), 'utf8');
+    expect(unit).toContain('{PACK_ROOT}/scripts/fleet/fleet-wake.ts');
+    expect(unit).toContain('--project %i');
+    expect(unit).not.toContain('EnvironmentFile=');
+    expect(unit).not.toContain('${PRIMARY}');
   });
 
   it('never invokes orchestration, git, or gh and mutates Orca only through terminal send to the resolved coordinator', async () => {

@@ -3,8 +3,7 @@ Description=orchestrator-pack fleet alarm (%i)
 
 [Service]
 Type=simple
-EnvironmentFile=%h/.config/orchestrator-fleet/%i.env
-ExecStart=/usr/bin/env node --experimental-strip-types ${PRIMARY}/scripts/lib/Invoke-TypeScriptCli.ts --repo-root ${PRIMARY} --script ${PRIMARY}/scripts/fleet/fleet-wake.ts --
+ExecStart=/usr/bin/env node --experimental-strip-types {PACK_ROOT}/scripts/lib/Invoke-TypeScriptCli.ts --repo-root {PACK_ROOT} --script {PACK_ROOT}/scripts/fleet/fleet-wake.ts -- --project %i
 Restart=always
 RestartSec=5
 StandardOutput=append:%h/.local/state/orchestrator-fleet/%i.fleet-wake.log

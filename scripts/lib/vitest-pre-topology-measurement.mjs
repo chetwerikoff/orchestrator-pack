@@ -27,6 +27,11 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // measurement, so timing it inside the pre-topology pass can create manifest
   // drift that the real light lane correctly owns.
   'scripts/reachability-purge.test.ts': 120,
+  // Issue #2185 adds fast target-selection regressions to existing light coverage;
+  // fixed estimates keep the existing 32-file pre-topology bound unchanged.
+  'scripts/command-runtime-bootstrap.test.ts': 60,
+  'scripts/operator-primary-binding.test.ts': 60,
+  'scripts/lib/target-context.test.ts': 60,
   // Issue #1489: fast composer-submit unit coverage; keep the 32-file bound.
   'scripts/cursor-unsent-composer-submit.test.ts': 1,
   'scripts/pr2-foundation/scheduler-composer-concurrency.test.ts': 1,

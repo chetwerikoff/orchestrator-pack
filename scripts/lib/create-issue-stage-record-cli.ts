@@ -54,6 +54,7 @@ import {
   type LifecycleReviewStage,
 } from './create-issue-stage-lifecycle.ts';
 import { checkTierGateGuard } from './tier-gate-core.ts';
+import { resolveTargetContext } from './target-context.ts';
 import { checkContractEvidence } from '../contract-evidence-validator.mjs';
 import {
   classifyAuthorDispositionFailure,
@@ -1255,12 +1256,23 @@ function authorRoundPrompt(input: {
 
 function defaultAuthorRoundRunner(input: AuthorRoundRunnerInput): AuthorRoundRunnerResult {
   const profile = process.env.DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR?.trim() ?? '';
-  const projectUrl = process.env.DISCUSS_WITH_GPT_PROJECT_URL?.trim() ?? '';
   const cdp = process.env.CDP_ENDPOINT?.trim() ?? '';
-  if (!profile || !projectUrl || !cdp) {
+  let projectUrl = '';
+  let projectId = '';
+  try {
+    const target = resolveTargetContext({ env: process.env });
+    projectUrl = target.browserGpt.projectUrl;
+    projectId = target.projectId;
+  } catch (error) {
     return {
       ok: false,
-      blocker: 'Browser-GPT author-round requires DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR, DISCUSS_WITH_GPT_PROJECT_URL, and the existing CDP_ENDPOINT shell binding',
+      blocker: `Browser-GPT author-round target context is invalid: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  if (!profile || !cdp) {
+    return {
+      ok: false,
+      blocker: 'Browser-GPT author-round requires DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR and the existing CDP_ENDPOINT shell binding; projectUrl comes from the selected project card',
     };
   }
   mkdirSync(input.reviewDir, { recursive: true });
@@ -1285,6 +1297,7 @@ function defaultAuthorRoundRunner(input: AuthorRoundRunnerInput): AuthorRoundRun
       '--cdp', cdp,
       '--input', input.promptPath,
       '--new-chat',
+      '--project', projectId,
       '--project-url', projectUrl,
     ],
     cwd: process.cwd(),

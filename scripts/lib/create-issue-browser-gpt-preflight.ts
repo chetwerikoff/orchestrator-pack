@@ -1,4 +1,5 @@
 import { runProcessSync } from '../kernel/subprocess.ts';
+import { resolveTargetContext, TargetContextError } from './target-context.ts';
 import {
   evaluateManagerBrowserEnvironmentPreflight,
   resolveManagerBrowserOperatorConfig,
@@ -12,7 +13,9 @@ import { createIssueNextAction } from './create-issue-next-action.ts';
 export const CREATE_ISSUE_BROWSER_PREFLIGHT_SCHEMA = 'create-issue-browser-gpt-preflight/v1' as const;
 
 export interface CreateIssueBrowserOperatorConfig {
+  projectId: string;
   projectUrl: string;
+  cardPath: string;
   chromeUserDataDir: string;
   source: 'environment' | 'operator-config';
   operatorConfigPath?: string;
@@ -38,7 +41,8 @@ export interface CreateIssueBrowserPreflightFailure {
     | 'target_repository_unavailable'
     | 'authenticated_principal_unresolved'
     | 'operator_browser_config_required'
-    | 'operator_browser_config_invalid';
+    | 'operator_browser_config_invalid'
+    | 'target_context_invalid';
   blocker: string;
   remedy: string;
   evidence: string;
@@ -53,6 +57,7 @@ export interface CreateIssueBrowserPreflightInput {
   repository: string;
   cwd: string;
   operatorBrowserConfig?: string;
+  projectId?: string;
   env?: NodeJS.ProcessEnv;
   binding?: CreateIssueActionBinding;
   retryArgv?: readonly string[];
@@ -88,8 +93,28 @@ function failure(
 export function resolveCreateIssueBrowserOperatorConfig(input: {
   env: NodeJS.ProcessEnv;
   operatorBrowserConfig?: string;
+  projectId?: string;
 }): { ok: true; config: CreateIssueBrowserOperatorConfig } | { ok: false; cause: CreateIssueBrowserPreflightFailure['cause']; blocker: string; remedy: string } {
-  const resolved = resolveManagerBrowserOperatorConfig(input);
+  let target;
+  try {
+    target = resolveTargetContext({ projectId: input.projectId, env: input.env });
+  } catch (error) {
+    const cardPath = error instanceof TargetContextError ? error.cardPath : undefined;
+    return {
+      ok: false,
+      cause: 'target_context_invalid',
+      blocker: error instanceof Error ? error.message : String(error),
+      remedy: cardPath
+        ? `fix the selected project card at ${cardPath}`
+        : 'select --project <id> or OPK_PROJECT_ID and provide a valid project card',
+    };
+  }
+  const resolved = resolveManagerBrowserOperatorConfig({
+    env: input.env,
+    operatorBrowserConfig: input.operatorBrowserConfig,
+    targetProjectUrl: target.browserGpt.projectUrl,
+    targetCardPath: target.cardPath,
+  });
   if (!resolved.ok) {
     return {
       ok: false,
@@ -102,17 +127,46 @@ export function resolveCreateIssueBrowserOperatorConfig(input: {
   }
   return {
     ok: true,
-    config: resolved.config as CreateIssueBrowserOperatorConfig,
+    config: {
+      ...(resolved.config as Omit<CreateIssueBrowserOperatorConfig, 'projectId'>),
+      projectId: target.projectId,
+    },
   };
 }
 
 export function runCreateIssueBrowserPreflight(input: CreateIssueBrowserPreflightInput): CreateIssueBrowserPreflightResult {
   const env = input.env ?? process.env;
+  let targetContext;
+  try {
+    targetContext = resolveTargetContext({ projectId: input.projectId, env });
+  } catch (error) {
+    const cardPath = error instanceof TargetContextError ? error.cardPath : undefined;
+    return failure(
+      'target_context_invalid',
+      error instanceof Error ? error.message : String(error),
+      cardPath ? `fix the selected project card at ${cardPath}` : 'select --project <id> or OPK_PROJECT_ID and provide a valid project card',
+      input,
+      false,
+      `target_context: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (input.repository.trim().toLowerCase() !== targetContext.repository.toLowerCase()) {
+    return failure(
+      'target_repository_unavailable',
+      `explicit repository ${input.repository} disagrees with selected project card repository ${targetContext.repository}`,
+      `use repository ${targetContext.repository} from ${targetContext.cardPath}`,
+      input,
+      false,
+    );
+  }
+
   const environment = evaluateManagerBrowserEnvironmentPreflight({
-    packRoot: input.cwd,
+    packRoot: targetContext.packRoot,
     env,
     effectivePath: env.PATH ?? '',
     operatorBrowserConfig: input.operatorBrowserConfig,
+    targetProjectUrl: targetContext.browserGpt.projectUrl,
+    targetCardPath: targetContext.cardPath,
   });
 
   if (!environment.ok) {
@@ -125,7 +179,9 @@ export function runCreateIssueBrowserPreflight(input: CreateIssueBrowserPrefligh
             ? 'operator_browser_config_required'
             : environment.reason === 'operator_browser_config_invalid'
               ? 'operator_browser_config_invalid'
-              : 'tracked_github_unavailable';
+              : environment.reason === 'target_context_required'
+                ? 'target_context_invalid'
+                : 'tracked_github_unavailable';
     return failure(
       cause,
       environment.evidence,
@@ -153,18 +209,18 @@ export function runCreateIssueBrowserPreflight(input: CreateIssueBrowserPrefligh
 
   const target = runProcessSync({
     command: packGh,
-    args: ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'],
+    args: ['repo', 'view', targetContext.repository, '--json', 'nameWithOwner', '--jq', '.nameWithOwner'],
     cwd: input.cwd,
     env,
     inheritParentEnv: true,
     timeoutMs: 10_000,
   });
   const observedRepository = target.stdout.trim();
-  if (!target.ok || observedRepository.toLowerCase() !== input.repository.toLowerCase()) {
+  if (!target.ok || observedRepository.toLowerCase() !== targetContext.repository.toLowerCase()) {
     return failure(
       'target_repository_unavailable',
-      `tracked GitHub transport did not prove target repository ${input.repository} from ${input.cwd}${observedRepository ? `; observed ${observedRepository}` : ''}`,
-      'run from the intended target-repository worktree with the tracked scripts/gh transport usable',
+      `tracked GitHub transport did not prove selected target repository ${targetContext.repository}${observedRepository ? `; observed ${observedRepository}` : ''}`,
+      'restore tracked scripts/gh access for the explicit card repository; cwd is not target authority',
       input,
       true,
     );
@@ -194,10 +250,13 @@ export function runCreateIssueBrowserPreflight(input: CreateIssueBrowserPrefligh
     ok: true,
     schema: CREATE_ISSUE_BROWSER_PREFLIGHT_SCHEMA,
     principalLogin,
-    repository: observedRepository,
-    config: environment.config as CreateIssueBrowserOperatorConfig,
+    repository: targetContext.repository,
+    config: {
+      ...(environment.config as Omit<CreateIssueBrowserOperatorConfig, 'projectId'>),
+      projectId: targetContext.projectId,
+    },
     childEnv: {
-      DISCUSS_WITH_GPT_PROJECT_URL: environment.config.projectUrl,
+      OPK_PROJECT_ID: targetContext.projectId,
       DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR: environment.config.chromeUserDataDir,
     },
     nextAction: null,

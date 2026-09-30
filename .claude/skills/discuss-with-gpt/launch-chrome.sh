@@ -2,17 +2,16 @@
 # Ensure the automation Chrome for discuss-with-gpt is up on CDP :9222 with the
 # operator's dedicated profile. Idempotent: reuses an already-running instance.
 #
-# Operator config (required): DISCUSS_WITH_GPT_PROJECT_URL and
-# DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR, or local.config.json in this directory
-# (see local.config.example.json).
+# Target project is selected by --project <id> or OPK_PROJECT_ID. Browser profile
+# and executable remain machine-wide in env/local.config.json.
 #
-# Usage: .claude/skills/discuss-with-gpt/launch-chrome.sh
+# Usage: .claude/skills/discuss-with-gpt/launch-chrome.sh [--project <id>]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CDP="http://localhost:9222"
 
-config_out="$(node "$SCRIPT_DIR/config.mjs" --shell)" || exit 1
+config_out="$(node "$SCRIPT_DIR/config.mjs" --shell "$@")" || exit 1
 # shellcheck disable=SC1090
 eval "$config_out"
 
