@@ -4,6 +4,7 @@
   "declared_paths": [
     "docs/migration_notes.md",
     "docs/target_repo_setup.md",
+    "scripts/kernel/subprocess.ts",
     "scripts/lib/target-context.test.ts",
     "scripts/lib/target-context.ts"
   ],
@@ -19,5 +20,5 @@
     "plugins/",
     "scripts/"
   ],
-  "source_revision": "672b231ed343e5c6835387f2adf214234441d79e"
+  "source_revision": "f71be1ad1e2df8d3de7fdf35134537f38fda5d1f"
 }
