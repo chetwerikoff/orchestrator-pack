@@ -221,8 +221,8 @@ continuation send. Neither is a universal Browser-GPT timeout; do not add a
 second monitor, watcher, daemon, polling loop, durable timer, or recovery store.
 The existing fleet alarm (`scripts/fleet/fleet-wake.ts`) also reports ChatGPT
 chats that show a red product-error banner with generation stopped, or that
-stopped without a final reply (no Stop control and no finished-reply actions on
-two ticks about a minute apart), asking for `Доделай задачу и сообщи статус`:
+stopped without a final reply (no Stop control, and either no finished-reply
+actions or an empty last reply, on two ticks about a minute apart), asking for `Доделай задачу и сообщи статус`:
 directly to the single manager pane bound to that chat, otherwise to the
 orchestrator. The
 binding (`scripts/chatgpt-browser-turn/chat-bindings.ts`, one file per

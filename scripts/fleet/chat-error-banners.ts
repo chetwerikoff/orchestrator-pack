@@ -1,4 +1,5 @@
 import {
+  ASSISTANT_MESSAGE_STYLE,
   ASSISTANT_TURN_ACTION_SELECTOR,
   CONVERSATION_TURN_SECTION_SELECTOR,
   STOP_BUTTON_SELECTOR,
@@ -7,6 +8,7 @@ import {
 export type ChatAttentionKind = 'error_banner' | 'stalled';
 
 export const STALLED_CHAT_TEXT = 'GPT stopped without a final reply';
+export const EMPTY_REPLY_CHAT_TEXT = 'GPT finished with an empty reply';
 
 export interface ChatErrorBanner {
   readonly kind: ChatAttentionKind;
@@ -61,8 +63,13 @@ const redBannerExpression = (repository: string): string => `(() => {
     }));
   if (alerts.length > 0) return alerts;
   const lastTurn = [...document.querySelectorAll(${JSON.stringify(CONVERSATION_TURN_SECTION_SELECTOR)})].at(-1);
-  if (!lastTurn || lastTurn.querySelector(${JSON.stringify(ASSISTANT_TURN_ACTION_SELECTOR)})) return [];
-  return [{ kind: 'stalled', text: ${JSON.stringify(STALLED_CHAT_TEXT)}, retry: false, issue }];
+  if (!lastTurn) return [];
+  if (!lastTurn.querySelector(${JSON.stringify(ASSISTANT_TURN_ACTION_SELECTOR)})) {
+    return [{ kind: 'stalled', text: ${JSON.stringify(STALLED_CHAT_TEXT)}, retry: false, issue }];
+  }
+  const reply = [...lastTurn.querySelectorAll(${JSON.stringify(`[data-markdown-text-style="${ASSISTANT_MESSAGE_STYLE}"]`)})].at(-1);
+  if (reply && (reply.innerText || '').trim()) return [];
+  return [{ kind: 'stalled', text: ${JSON.stringify(EMPTY_REPLY_CHAT_TEXT)}, retry: false, issue }];
 })()`;
 
 interface CdpTarget {
