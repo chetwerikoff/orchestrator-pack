@@ -110,7 +110,8 @@ function addDiscussStores(stores: CutoverStoreSpec[], localStateRoot: string, pr
   const names = unionEntryNames(sourceRoot, targetRoot, (name) =>
     name !== projectId
     && name !== PROJECT_BINDING_FILE
-    && !/^cdp-\d+-owner\.json$/u.test(name));
+    && !/^cdp-\d+-owner\.json$/u.test(name)
+    && !existsSync(path.join(sourceRoot, name, PROJECT_BINDING_FILE)));
   names.forEach((name, index) => {
     const sourcePath = path.join(sourceRoot, name);
     const targetPath = path.join(targetRoot, name);
