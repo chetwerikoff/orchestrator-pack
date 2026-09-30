@@ -9,12 +9,59 @@ The live GitHub Issue is the only task specification and queue entry. This skill
 
 ## Inputs and routing
 
+### Existing-Issue manager shorthand — Issue #1938
+
+For an existing `orchestrator-pack` Issue target, the standalone selector
+`manager` / `менеджер` selects this existing `create-issue-draft` lifecycle.
+Explicit task-authoring or review-continuation wording such as `continue review`
+or `продолжи ревью` selects the same lifecycle. The selector launches or resumes
+the existing supervised `work-class=manager` path and existing
+`--manager-brief` / Task continuation mechanics; it does not create another
+skill, manager class, launcher, transport, state machine, or lifecycle authority.
+
+The manager assignment for this shorthand is: read the live Issue and the current Issue comments and label, continue only unfinished task-authoring, review, and acceptance
+stages. Preserve already consumed semantic stage slots as historical sender
+inputs, but use published review comments and author dispositions for current
+acceptance; no stage attempt or receipt creates review authority. If the create-Issue lifecycle is already
+terminal or accepted, report that truthful terminal state and perform no
+implementation fallback.
+
+Explicit implementation wording has precedence over the manager noun. Requests
+such as `<Issue> execute`, `<Issue> выполни задачу`, `<Issue> выполни Issue`, or
+`<Issue> доделай Issue` select `execute-issue-with-gpt`, including when
+`manager` / `менеджер` also appears in the same direct request. The noun by
+itself is not an implementation verb. Ordinary prose that mentions
+`manager` / `менеджер` without an existing Issue target does not activate this
+shorthand.
+
+Binding examples:
+
+```text
+https://github.com/chetwerikoff/orchestrator-pack/issues/1453 менеджер -> create-issue-draft
+https://github.com/chetwerikoff/orchestrator-pack/issues/1453 manager -> create-issue-draft
+https://github.com/chetwerikoff/orchestrator-pack/issues/1453 выполни -> execute-issue-with-gpt
+https://github.com/chetwerikoff/orchestrator-pack/issues/1453 manager выполни задачу -> execute-issue-with-gpt
+ordinary prose mentioning manager without an Issue target -> no shorthand activation
+```
+
+
 - Existing Issue / `manager` / `менеджер` / `continue review`: read its current title, body, labels and all published review/disposition comments. Continue from the current revision; already-published comments count. Do not restart stages, replay a competitive review, or grandfather the Issue onto the old receipt-based mechanism.
 - Brief-only task: paste the brief text into the author chat using the [universal author prompt](../../../docs/browser-gpt-turn-runbook.md#universal-author-prompt-template). Never send an operator-local file path to Browser GPT as the brief; use content or a GitHub URL. `discuss-with-gpt` brief-only starts at T2 unless the current rubric raises it.
 - Explicit `execute` / `выполни задачу` for an existing Issue routes to `execute-issue-with-gpt`, even if `manager` appears in the same request. `adversarial-draft-review` remains a separate Codex consultation, not a required source.
 - GPT author owns substantive Issue edits and all finding dispositions; independent GPT reviewers / Claude lens own their own findings; manager/orchestrator schedules the reviews, checks published comments and dispositions, applies the existing acceptance label, and owns same-Task continuation. The manager never invents author resolutions, calls an unanswered finding clean, or simulates Claude.
 
 Before initiating review, classify the task under [the current tier rubric](../../../docs/tiering.md#task-complexity-tier-rubric). A tier may not decrease after the first review starts unless the operator decides; this is author/operator procedure, not a new freeze record. The present tier fence does not prove a historical tier. A no-tier small fix follows the rubric's below-the-ladder path.
+
+## Roles
+
+The existing GPT author owns Issue-body changes and substantive finding
+dispositions. Independent GPT reviewers and the required T3 Claude lens own
+their own review comments. The flow-manager/orchestrator owns the existing
+supervised work-class=manager Task, independent review launches, comment census,
+substantive floor and the existing acceptance-label mutation. No role may
+substitute stage receipts, transport envelopes, or synthetic findings for
+published review comments and author decisions. Shared Browser-GPT transport
+remains separate.
 
 ## Review comments and topology
 
@@ -107,6 +154,17 @@ The manager/orchestrator applies the existing `spec-review:accepted` Issue label
 Use the Issue and its comments and label as the only acceptance record. No `stageAttemptId`, stage cycles/receipts, `attempt-*.json`, `reviewLane`, `finalRequiredSlots`, invocation envelope, terminal bundle, legacy `produce-artifacts`, finding-ledger format tokens, `tier-intake/v1`, `tier-gate-decision/v1`, `claude-producer-evidence/v1`, `claude-unavailable` waiver, `create-issue-final-acceptance/v1`, author-round lifecycle validation, or stage-record / nextAction reconciliation authorizes the **create-Issue review or acceptance decision**. The shared sender may retain its own independent transport/observation semantics; those are not substituted for Issue-comment acceptance authority.
 
 Only three limits to inference apply: comment counts cannot prove independent reviewer launches, `rNN` is not a byte-identity guarantee, and the current tier fence does not prove historical tier. Do not compensate with new slot identities, snapshots, provenance gates or freeze records. If acceptance prerequisites do not hold, continue work within the existing Task and ownership rather than apply the label.
+
+## Final acceptance
+
+The sole acceptance projection is the existing `spec-review:accepted` Issue
+label. Required published reviewer comments and author disposition comments
+from **every required round** and the existing substantive Issue-body floor are
+its inputs. Apply the label only to the terminal review's named revision or
+the single permitted author finding/floor correction; operator amendments
+remain accepted by definition. Do not consult stage-cycle, finding-ledger,
+terminal bundle, competitive, waiver, final-acceptance receipts, or
+manager-reconciliation codes for the label decision.
 
 ## Authoring and downstream worker floors
 
@@ -262,6 +320,21 @@ after reconciliation.
 The producer wording comes before any validator that checks it. A focused
 validator may be added or updated in the same change, but it must validate this
 static floor rather than invent a helper or deterministic generation protocol.
+
+## Mechanical commands
+
+For shared Browser-GPT transport invocation, use only the existing runbook
+commands; there is no create-Issue review/acceptance `produce-artifacts`,
+`start-cycle`, stage-finalize or final-acceptance command. Run the existing
+substantive `draft-discipline` / tier-gate floor on the terminal-reviewed
+revision as described above.
+
+The already-tracked `scripts/lib/create-issue-author-dispositions-schema.ts`
+and `renderAuthorDispositionPromptFragment()` remain executable producer
+interfaces for existing transport only, not new create-Issue review or label
+authority. Author dispositions required for acceptance are published directly
+as ordinary Issue comments and contain substantive finding decisions, without
+format tokens or occurrence accounting.
 
 ## Manager continuity and operator-owned adoption
 
