@@ -702,6 +702,45 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
     expect(existsSync(path.join(request.paths.supervisorStateDir, 'maintenance.epoch'))).toBe(true);
   });
 
+  it('durably binds cordon to its project, repository and each pre-import source digest', () => {
+    const { request, boundary } = activationFixture();
+    const identity = boundary.readLegacySupervisor(request);
+    const bound: ActivationRequest = {
+      ...request,
+      projectId: 'orchestrator-pack',
+      repository: 'chetwerikoff/orchestrator-pack',
+    };
+    const record = createCordon({
+      path: bound.paths.cordonPath,
+      projectId: bound.projectId,
+      repository: bound.repository,
+      epochId: bound.epochId,
+      expectedOldEpochId: bound.expectedOldEpochId,
+      hostId: bound.hostId,
+      repoRoot: bound.repoRoot,
+      installedCommitSha: bound.installedCommitSha,
+      oldInstalledRevisionRoot: bound.oldInstalledRevisionRoot,
+      legacyStateRoot: bound.paths.supervisorStateDir,
+      legacySupervisor: identity,
+      stores: bound.stores,
+      paths: bound.paths,
+    });
+    expect(record).toMatchObject({ projectId: bound.projectId, repository: bound.repository });
+    expect(Object.keys(record.preImportSourceDigests).sort()).toEqual(bound.stores.map((store) => store.id).sort());
+    expect(provePreImportRollbackSafe(bound).safe).toBe(true);
+    expect(() => provePreImportRollbackSafe({ ...bound, repository: 'owner/other' }))
+      .toThrow('recovery_request_binding_mismatch');
+    const saved = JSON.parse(readFileSync(bound.paths.cordonPath, 'utf8'));
+    for (const key of ['projectId', 'repository', 'preImportSourceDigests']) {
+      const malformed = { ...saved };
+      delete malformed[key];
+      writeJson(bound.paths.cordonPath, malformed);
+      expect(() => readCordonState(bound.paths.cordonPath)).toThrow('cordon_invalid');
+    }
+    writeJson(bound.paths.cordonPath, saved);
+    expect(readCordonState(bound.paths.cordonPath)).toMatchObject({ projectId: bound.projectId, repository: bound.repository });
+  });
+
   it('resumes forward from import boundary before CAS and rejects a changed recovery tuple', async () => {
     const { request, boundary } = activationFixture();
     const identity = boundary.readLegacySupervisor(request);

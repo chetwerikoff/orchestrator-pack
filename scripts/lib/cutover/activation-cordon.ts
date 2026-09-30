@@ -496,6 +496,24 @@ export function readCordonState(pathName: string): CordonState {
     || !record.repoRoot
     || !record.installedCommitSha
     || !record.oldInstalledRevisionRoot
+    || !Object.hasOwn(record, 'projectId')
+    || !Object.hasOwn(record, 'repository')
+    || !Object.hasOwn(record, 'preImportSourceDigests')
+    || !((record.projectId === null && record.repository === null)
+      || (typeof record.projectId === 'string'
+        && /^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(record.projectId)
+        && typeof record.repository === 'string'
+        && /^[^\\/\\s]+\\/[^\\/\\s]+$/u.test(record.repository)))
+    || !record.preImportSourceDigests
+    || typeof record.preImportSourceDigests !== 'object'
+    || Array.isArray(record.preImportSourceDigests)
+    || !record.preImportTargetDigests
+    || typeof record.preImportTargetDigests !== 'object'
+    || Array.isArray(record.preImportTargetDigests)
+    || !Array.isArray(record.recoveryBindings?.stores)
+    || record.recoveryBindings.stores.some((store) =>
+      typeof record.preImportSourceDigests[store.id] !== 'string'
+      || typeof record.preImportTargetDigests[store.id] !== 'string')
     || !record.recoveryBindings
     || !('expectedOldEpochId' in record.recoveryBindings)
     || record.typescriptSupervisorInert?.result !== 'typescript-supervisor-inert'
@@ -522,6 +540,13 @@ export function createCordon(input: {
   stores: CutoverStoreSpec[];
   paths: ActivationPaths;
 }): CordonRecord {
+  const projectId = input.projectId?.trim() || null;
+  const repository = input.repository?.trim().toLowerCase() || null;
+  if ((projectId === null) !== (repository === null)
+    || (projectId !== null && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(projectId))
+    || (repository !== null && !/^[^\\/\\s]+\\/[^\\/\\s]+$/u.test(repository))) {
+    throw new Error('cordon_project_repository_invalid');
+  }
   let prepared: CordonPreparedRecord;
   if (existsSync(input.path)) {
     const existing = readCordonState(input.path);
@@ -544,8 +569,8 @@ export function createCordon(input: {
     prepared = {
       schemaVersion: 1,
       state: 'preparing',
-      ...(input.projectId ? { projectId: input.projectId } : {}),
-      ...(input.repository ? { repository: input.repository } : {}),
+      projectId,
+      repository,
       epochId: input.epochId,
       nonce: randomBytes(32).toString('hex'),
       hostId: input.hostId,

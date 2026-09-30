@@ -153,20 +153,20 @@ export function snapshotArtifactPath(spec: CutoverStoreSpec, snapshotDir: string
   return path.join(snapshotDir, `${spec.id}.snapshot.json`);
 }
 
-function snapshotBytes(spec: CutoverStoreSpec): { bytes: Buffer; sourceVersion: number; sourceDigest: string } {
-  const kind = cutoverStoreKind(spec);
+function snapshotBytes(store: CutoverStoreSpec): { bytes: Buffer; sourceVersion: number; sourceDigest: string } {
+  const kind = cutoverStoreKind(store);
   if (kind === 'legacy-json') {
-    const bytes = readFileSync(spec.sourcePath);
+    const bytes = readFileSync(store.sourcePath);
     const parsed = JSON.parse(bytes.toString('utf8')) as { schemaVersion?: unknown };
     const sourceVersion = Number(parsed.schemaVersion ?? 1);
-    if (!Number.isInteger(sourceVersion) || sourceVersion <= 0) throw new Error(`snapshot_version_missing:${spec.id}`);
+    if (!Number.isInteger(sourceVersion) || sourceVersion <= 0) throw new Error(`snapshot_version_missing:${store.id}`);
     return { bytes, sourceVersion, sourceDigest: sha256Bytes(bytes) };
   }
   if (kind === 'opaque-file') {
-    const bytes = readFileSync(spec.sourcePath);
+    const bytes = readFileSync(store.sourcePath);
     return { bytes, sourceVersion: 1, sourceDigest: sha256Bytes(bytes) };
   }
-  const archive = archiveDirectory(spec);
+  const archive = archiveDirectory(store);
   const bytes = Buffer.from(`${JSON.stringify(archive, null, 2)}\n`, 'utf8');
   return { bytes, sourceVersion: 1, sourceDigest: archiveDigest(archive) };
 }
