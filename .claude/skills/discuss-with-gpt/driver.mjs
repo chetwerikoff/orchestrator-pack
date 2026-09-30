@@ -84,7 +84,9 @@ const cdp = get('--cdp', 'http://localhost:9222');
 
 const PASS_ID = randomUUID();
 const slug = basename(draftPath).replace(/\.md$/, '');
-const dir = join(homedir(), '.local/state/discuss-with-gpt', slug);
+let projectId = String(get('--project', process.env.OPK_PROJECT_ID || 'unresolved')).trim() || 'unresolved';
+let repository = '';
+let dir = join(homedir(), '.local/state/discuss-with-gpt', projectId, slug);
 const stamp = new Date().toISOString().replace(/[:.]/g, '-');
 let sha = '', promptText = '';
 
@@ -94,6 +96,7 @@ function recordFile(state, { reply = '', validation = '', url = '', note = '', p
   mkdirSync(dir, { recursive: true });
   writeFileSync(path,
     `# pass ${PASS_ID}\nstate: ${state}\nurl: ${url}\ndraft: ${draftPath}\n` +
+    `projectId: ${projectId}\nrepository: ${repository}\n` +
     `sha256: ${sha}\nvalidation: ${validation}\nparsed: ${parsed}\nnote: ${note}\n` +
     `ts: ${stamp}\n\n## prompt\n\n${promptText || '(prompt not built)'}\n\n## reply\n\n${reply || '(none)'}\n`);
   return path;
@@ -111,6 +114,10 @@ let PROJECT_URL;
 let chromeUserDataDir;
 try {
   const cfg = resolveDiscussWithGptConfig({ projectId: get('--project') });
+  projectId = cfg.projectId;
+  repository = String(cfg.repository || '').toLowerCase();
+  if (!projectId || !repository) throw new Error('discuss-with-gpt: selected project repository binding unavailable');
+  dir = join(homedir(), '.local/state/discuss-with-gpt', projectId, slug);
   PROJECT_URL = cfg.projectUrl;
   chromeUserDataDir = cfg.chromeUserDataDir;
   const forwardedProjectUrl = get('--project-url');
