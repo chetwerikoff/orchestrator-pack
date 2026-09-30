@@ -95,21 +95,26 @@ describe('create-Issue manager boundary', () => {
     const runIdentity = 'run-comment-review';
     const attemptIdentity = 'attempt-comment-review';
     const projectUrl = 'https://chatgpt.com/g/g-test/project';
-    const spawnLauncher = vi.fn(async (launcherArgs: readonly string[]) => {
-      const valueAfter = (flag: string): string => {
-        const index = launcherArgs.indexOf(flag);
-        const value = index >= 0 ? launcherArgs[index + 1] : undefined;
-        if (typeof value !== 'string') throw new Error(`fixture launcher missing ${flag}`);
+    const spawnLauncher = vi.fn(async (args: readonly string[]) => {
+      const flagValues = new Map<string, string>();
+      for (const [index, token] of args.entries()) {
+        const value = args[index + 1];
+        if (token.startsWith('--') && value && !value.startsWith('--')) flagValues.set(token, value);
+      }
+      const requiredValue = (flag: string): string => {
+        const value = flagValues.get(flag);
+        if (!value) throw new Error(`fixture launcher missing ${flag}`);
         return value;
       };
-      writeFileSync(valueAfter('--handoff-receipt'), JSON.stringify({
+      const handoff = {
         schema: HANDOFF_SCHEMA,
-        run_identity: valueAfter('--run-identity'),
-        attempt_identity: valueAfter('--attempt-identity'),
+        run_identity: requiredValue('--run-identity'),
+        attempt_identity: requiredValue('--attempt-identity'),
         launcher_started_at: '2026-09-30T00:00:00.000Z',
         handoff_committed_at: '2026-09-30T00:00:00.001Z',
         completion_mode: 'browser-turn-result-v1',
-      }));
+      };
+      writeFileSync(requiredValue('--handoff-receipt'), JSON.stringify(handoff));
       return 2256001;
     });
     const stdout = vi.spyOn(console, 'log').mockImplementation(() => undefined);
