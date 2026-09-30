@@ -154,7 +154,7 @@ liveness from PID/log state. Hand-copied page text cannot become
 `completed_valid` because it lacks PASS_ID/SHA validation and the durable driver
 record.
 Before reporting any standalone terminal state, re-read the newest artifact in
-`~/.local/state/discuss-with-gpt/<draft-slug>/`. The on-disk record outranks
+`~/.local/state/discuss-with-gpt/<projectId>/<draft-slug>/`. The on-disk record outranks
 agent recollection and any earlier tool refusal. A preflight refusal on one
 invocation path is not a terminal state while a `completed_valid` artifact
 exists for that PASS_ID.
