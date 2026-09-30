@@ -727,8 +727,7 @@ export function reconcilePackReviewTier(input: {
     && !current.terminal
     && !current.evidence
     && !current.triage
-    && !current.publication
-    && !current.smokeOrdering?.independent?.startedEver;
+    && !current.publication;
   if (!safelyReplaceable) {
     throw new PackReviewAuthorityError(
       'tier_change_requires_reset',
@@ -836,24 +835,6 @@ export function observePackReviewHead(input: {
       current.evidence = undefined;
       current.triage = undefined;
       current.publication = undefined;
-      if (current.smokeOrdering) {
-        const independent = current.smokeOrdering.independent;
-        const failedIndependent = independent?.status === 'failed';
-        const stalePassedIndependent = independentPassedOnPreviousHead(independent, headSha);
-        current.smokeOrdering = {
-          ...current.smokeOrdering,
-          workerOwned: current.cycle && isLogicalRoundCycle(current.cycle)
-            ? current.smokeOrdering.workerOwned
-            : undefined,
-          ...(independent && !stalePassedIndependent
-            ? { independent: failedIndependent
-              ? { ...independent, headSha, status: 'failed' }
-              : { ...independent } }
-            : {}),
-          ...(independent?.startedEver ? {} : { reviewSettledHeadSha: undefined }),
-        };
-        if (stalePassedIndependent) delete current.smokeOrdering.independent;
-      }
       if (current.cycle?.reviewStageComplete === true) return current;
       if (current.cycle?.state === 'closed') {
         current.cycle = createNewPackReviewCycle(current.cycle.frozenTier, {
