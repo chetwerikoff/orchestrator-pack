@@ -155,11 +155,15 @@ async function waitForSupervisor(request: ActivationRequest, nonce: string): Pro
   throw new Error('recovery_supervisor_not_ready');
 }
 
-export function findCompletedSchedulerDelivery(core: EpochCommitCore, storeRoot?: string): PackReviewRunRecord | null {
+export function findCompletedSchedulerDelivery(
+  core: EpochCommitCore,
+  storeRoot?: string,
+  projectId = 'orchestrator-pack',
+): PackReviewRunRecord | null {
   const committedAt = Date.parse(core.commitAt);
   if (!Number.isFinite(committedAt)) throw new Error('recovery_commit_timestamp_invalid');
   const runs = listPackReviewRuns({
-    projectId: 'orchestrator-pack',
+    projectId,
     ...(storeRoot ? { storeRoot } : {}),
   });
   return runs.find((run) =>
@@ -207,7 +211,7 @@ export async function observeSchedulerHealthAndDelivery(
   let delivered: PackReviewRunRecord | null = null;
   do {
     lastStatus = observedSupervisorStatus(request, core, supervisor);
-    delivered = findCompletedSchedulerDelivery(core, storeRoot);
+    delivered = findCompletedSchedulerDelivery(core, storeRoot, request.projectId?.trim() || 'orchestrator-pack');
     if (lastStatus && delivered) break;
     await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, Math.max(1, deadline - Date.now()))));
   } while (Date.now() < deadline);
@@ -249,6 +253,7 @@ export const productionRecoveryBoundary: RecoveryBoundary = {
       command: process.execPath,
       args: [
         '--experimental-strip-types', entry, 'run', '--detach',
+        '--project', request.projectId?.trim() || 'orchestrator-pack',
         '--state-dir', request.paths.supervisorStateDir,
         '--repo-root', request.repoRoot,
         '--epoch-authority', request.paths.epochAuthorityPath,
