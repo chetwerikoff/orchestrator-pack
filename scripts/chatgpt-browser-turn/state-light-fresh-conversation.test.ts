@@ -2278,6 +2278,7 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
       phase = currentPhase();
       const user = {
         getAttribute: (name: string) => (name === MESSAGE_AUTHOR_ROLE_ATTR ? 'user-message' : null),
+        getBoundingClientRect: () => ({ height: 1 }),
         innerText: filled || `${TEST_OWNED_MARKER}\n\nPROMPT`,
         closest: (selector: string) => (
           selector.includes('data-turn-key')
@@ -2292,6 +2293,7 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
       const assistantInner = phase === 'banner' ? `${bannerText}\n\nRetry` : 'working';
       const assistant = {
         getAttribute: (name: string) => (name === MESSAGE_AUTHOR_ROLE_ATTR ? 'assistant-message' : null),
+        getBoundingClientRect: () => ({ height: 1 }),
         innerText: assistantInner,
         closest: (selector: string) => (
           selector.includes('data-turn-key')
