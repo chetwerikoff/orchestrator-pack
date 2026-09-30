@@ -27,5 +27,5 @@
     "scripts/lib/execute-issue-manager-boundary.ts",
     "scripts/lib/vitest-pre-topology-measurement.mjs"
   ],
-  "source_revision": "4a9dad8f13758ec82df051b036f5469beb4c1ac6"
+  "source_revision": "4bea1dcaab937cfc0d2e442d361e630bfea046e2"
 }
