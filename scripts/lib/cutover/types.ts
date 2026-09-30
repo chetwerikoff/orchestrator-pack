@@ -1,4 +1,5 @@
-export type CutoverStoreId = 'reconcile' | 'reevaluation' | 'reportStateSeed';
+export type CutoverStoreId = string;
+export type CutoverStoreKind = 'legacy-json' | 'opaque-file' | 'opaque-directory';
 
 export interface ProcessIdentity {
   pid: number;
@@ -11,6 +12,12 @@ export interface CutoverStoreSpec {
   sourcePath: string;
   targetPath: string;
   coveredFields: readonly string[];
+  /**
+   * The original three cutover stores omit kind and retain their exact
+   * schema-aware JSON import contract. New layout-migration stores must
+   * declare an opaque byte-preserving file or directory kind explicitly.
+   */
+  kind?: CutoverStoreKind;
 }
 
 export interface SnapshotRecord {
