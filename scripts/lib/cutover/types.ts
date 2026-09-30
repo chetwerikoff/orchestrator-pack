@@ -119,6 +119,8 @@ export interface CordonPreparedRecord {
 export interface CordonRecord {
   schemaVersion: 1;
   state: 'active';
+  projectId?: string;
+  repository?: string;
   epochId: string;
   nonce: string;
   hostId: string;
@@ -133,6 +135,7 @@ export interface CordonRecord {
   typescriptSupervisorInert: TypeScriptSupervisorInertProof;
   importBegunAt: string | null;
   preImportTargetDigests: Partial<Record<CutoverStoreId, string>>;
+  preImportSourceDigests?: Partial<Record<CutoverStoreId, string>>;
   recoveryBindings: CutoverRecoveryBindings;
 }
 
