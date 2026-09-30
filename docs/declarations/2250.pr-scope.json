@@ -18,6 +18,7 @@
     "scripts/lib/smoke-plan-preflight.ts",
     "scripts/lib/worker-smoke-core-base.ts",
     "scripts/lib/worker-smoke-selective-carry.test.ts",
+    "scripts/orca-runtime/adapter.ts",
     "scripts/pack-review-ordering.test.ts",
     "scripts/pack-review-runner-issue-1591.test.ts",
     "scripts/pack-review-runner.test.ts",
@@ -62,6 +63,7 @@
     "scripts/lib/smoke-plan-preflight.ts",
     "scripts/lib/worker-smoke-core-base.ts",
     "scripts/lib/worker-smoke-selective-carry.test.ts",
+    "scripts/orca-runtime/adapter.ts",
     "scripts/pack-review-ordering.test.ts",
     "scripts/pack-review-runner-issue-1591.test.ts",
     "scripts/pack-review-runner.test.ts",
@@ -82,5 +84,6 @@
     "scripts/worker-smoke-entrypoint-1359.test.ts",
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
-  ]
+  ],
+  "source_revision": "ca401fe79e46ebf7a409cd63b7c4fbf347414fd8"
 }
