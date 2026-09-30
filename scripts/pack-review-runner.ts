@@ -4542,6 +4542,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         .filter((candidate) => candidate.prNumber === target.prNumber
           && candidate.reviewCycleId === authority.cycle!.cycleId
           && candidate.logicalRoundOrdinal === roundOrdinal
+          && candidate.targetSha.toLowerCase() === target.headSha.toLowerCase()
           && candidate.reviewRound?.reviewer === 'gpt'
           && !hasPersistedPackReviewVerdict(candidate))
         .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
@@ -4600,6 +4601,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         .filter((candidate) => candidate.prNumber === target.prNumber
           && candidate.reviewCycleId === authority.cycle!.cycleId
           && candidate.logicalRoundOrdinal === roundOrdinal
+          && candidate.targetSha.toLowerCase() === target.headSha.toLowerCase()
           && candidate.resolvedReviewer === reviewer
           && !hasPersistedPackReviewVerdict(candidate))
         .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
