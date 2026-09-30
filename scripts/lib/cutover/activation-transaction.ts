@@ -757,9 +757,13 @@ export async function activateCutover(
       throw new Error('greenfield_typescript_supervisor_present');
     }
   }
+  const drainLegacyWriters = async () => {
+    const drain = await boundary.drainLegacyWriters(request, legacyWriters);
+    return drain;
+  };
   const drain = greenfield
     ? { writerWatermark: foundation.writerWatermark ?? '' }
-    : await boundary.drainLegacyWriters(request, legacyWriters);
+    : await drainLegacyWriters();
   if (!drain.writerWatermark) throw new Error('writer_watermark_missing');
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'writer-drain', { writers: legacyWriters, ...drain });
 
@@ -837,13 +841,10 @@ export async function activateCutover(
     });
   }
 
-  const retiredSources = request.stores.flatMap((store) => {
+  for (const store of request.stores) {
     const snapshot = snapshots.find((row) => row.storeId === store.id)!;
-    return retireImportedSource(store, snapshot) ? [store.id] : [];
-  });
-  appendFollowup(request.paths.followupPath, request.epochId, 'project-state-sources-retired', {
-    storeIds: retiredSources,
-  });
+    retireImportedSource(store, snapshot);
+  }
 
   const committedProjection = projectRegistry(request.paths.targetRegistryPath, request.paths.projectedRegistryPath);
   if (committedProjection.registryHash !== committed.registryHash) throw new Error('committed_registry_hash_mismatch');

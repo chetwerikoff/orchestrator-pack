@@ -449,13 +449,10 @@ export async function recoverCommittedCutover(
     });
   }
   const snapshots = recoverySnapshots(request, cordon.nonce);
-  const retiredSources = request.stores.flatMap((store) => {
+  for (const store of request.stores) {
     const snapshot = snapshots.find((row) => row.storeId === store.id)!;
-    return retireImportedSource(store, snapshot) ? [store.id] : [];
-  });
-  appendIfMissing(request.paths.followupPath, request.epochId, 'project-state-sources-retired', {
-    storeIds: retiredSources,
-  });
+    retireImportedSource(store, snapshot);
+  }
   const projection = projectRegistry(request.paths.targetRegistryPath, request.paths.projectedRegistryPath);
   if (projection.registryHash !== core.registryHash) throw new Error('recovery_registry_hash_mismatch');
   appendIfMissing(request.paths.followupPath, request.epochId, 'committed-registry-reprojected', projection);
