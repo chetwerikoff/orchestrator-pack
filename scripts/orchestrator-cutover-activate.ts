@@ -6,6 +6,7 @@ import { provePreImportRollbackSafe, recoverCommittedCutover } from './lib/cutov
 import type { ActivationRequest } from './lib/cutover/types.ts';
 import { resolveTargetContext } from './lib/target-context.ts';
 import { withPackProjectStateMigration } from './lib/cutover/project-state-migration.ts';
+import { assertProjectStateBinding, readProjectStateBinding } from './lib/project-state-binding.ts';
 
 function loadRequest(file: string): ActivationRequest {
   const raw = JSON.parse(readFileSync(path.resolve(file), 'utf8')) as ActivationRequest;
@@ -34,6 +35,13 @@ async function main(): Promise<void> {
     { ...loaded, projectId: target.projectId, repository: target.repository },
     target.projectId,
   );
+  const existingBinding = readProjectStateBinding(request.paths.stateDir);
+  if (existingBinding) {
+    assertProjectStateBinding(request.paths.stateDir, {
+      projectId: target.projectId,
+      repository: target.repository,
+    });
+  }
   if (command === 'activate') {
     process.stdout.write(`${JSON.stringify(await activateCutover(request))}\n`);
     return;
