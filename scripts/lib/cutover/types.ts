@@ -99,6 +99,8 @@ export interface CutoverRecoveryBindings {
 export interface CordonPreparedRecord {
   schemaVersion: 1;
   state: 'preparing';
+  projectId?: string;
+  repository?: string;
   epochId: string;
   nonce: string;
   hostId: string;
@@ -110,6 +112,7 @@ export interface CordonPreparedRecord {
   typescriptSupervisorInert: TypeScriptSupervisorInertProof;
   importBegunAt: null;
   preImportTargetDigests: Partial<Record<CutoverStoreId, string>>;
+  preImportSourceDigests?: Partial<Record<CutoverStoreId, string>>;
   recoveryBindings: CutoverRecoveryBindings;
 }
 
