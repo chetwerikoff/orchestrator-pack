@@ -211,10 +211,23 @@ under the existing Browser-GPT lifecycle and the final chat/GitHub checks below
 must still permit fallback. If any required identity or settlement evidence is
 unavailable, fail closed without a fresh chat.
 
+Every Browser-GPT command in this workflow runs from the trusted pack checkout
+with the worker worktree as `--cwd`
+([Tooling source](flow-manager-long-running-child-runbook.md#tooling-source)).
+
 This section owns the 30-minute live-chat checkpoint and the one additional
 execution timing rule: a 10-minute minimum grace after a confirmed product-error
 continuation send. Neither is a universal Browser-GPT timeout; do not add a
 second monitor, watcher, daemon, polling loop, durable timer, or recovery store.
+The existing fleet alarm (`scripts/fleet/fleet-wake.ts`) also reports ChatGPT
+chats that show a red product-error banner with generation stopped: directly to
+the single manager pane bound to that chat, otherwise to the orchestrator. The
+binding (`scripts/chatgpt-browser-turn/chat-bindings.ts`, one file per
+conversation under `~/.local/state/orchestrator-fleet/chat-bindings/`) is
+written by the turn entry from the launching worktree; without one, the chat's opening Issue URL is
+matched to a workspace ending in `-<Issue>`. The binding is routing data only
+and carries no send, retry, or completion authority. The alarm is
+notification-only, and the continuation still follows this section.
 
 For every submitted execution turn:
 
@@ -390,7 +403,7 @@ ambiguous, or implementation is candidate-complete, do not send a prepared
 fallback. Return to same-conversation observation/current-state evaluation or
 enter review convergence when its preconditions hold.
 
-Only after all fallback gates pass, or at streak 3 of **Repeated product-error
+Only after all fallback gates pass, or at streak 4 of **Repeated product-error
 streak** below, may the manager open exactly one fresh execution conversation:
 
 - **Existing PR:** Issue URL + same PR URL + exact unchanged baseline head;
@@ -416,17 +429,18 @@ reply resets the streak to zero. A fresh execution conversation starts at zero.
 
 - **Streak 1** — the original owned turn failed: GitHub-first reconciliation,
   then one same-conversation continuation as above.
-- **Streak 2** — that continuation also ended with a reserved product error:
-  repeat. Run a fresh GitHub-first reconciliation, then send one more tracked
-  continuation in the same exact owned conversation. The 10-minute grace does
-  not apply, because the product error is the continuation's terminal result.
-- **Streak 3** — the second continuation also ended with a reserved product
-  error: send no third continuation. Run a fresh GitHub-first reconciliation
-  and open exactly one fresh execution conversation with the fresh-conversation
-  prompt above (same PR and head, same branch and head, or Issue-only
-  `выполни задачу`), using the baseline just reconciled. The 10-minute grace and
-  unchanged-baseline gate do not apply to this step. Close only the exact old
-  owned conversation under tab-lifecycle authority.
+- **Streak 2 and 3** — the continuation also ended with a reserved product
+  error: repeat, at most twice. Each time, run a fresh GitHub-first
+  reconciliation, then send one more tracked continuation in the same exact
+  owned conversation. The 10-minute grace does not apply, because the product
+  error is the continuation's terminal result.
+- **Streak 4** — the continuation failed a third time: send no further
+  continuation. Run a fresh GitHub-first reconciliation and open exactly one
+  fresh execution conversation with the fresh-conversation prompt above (same
+  PR and head, same branch and head, or Issue-only `выполни задачу`), using the
+  baseline just reconciled. The 10-minute grace and unchanged-baseline gate do
+  not apply to this step. Close only the exact old owned conversation under
+  tab-lifecycle authority.
 
 Every streak step still needs exact owned-turn proof of the reserved cause and
 stopped generation, and still takes the candidate-complete short-circuit into
@@ -447,9 +461,9 @@ submitted GPT turn
             -> no implementation continuation chat
             -> manager-owned PR-review convergence
        -> otherwise send one tracked continuation in same exact owned conversation
-       -> continuation ends with a reserved product error again (streak 2)
+       -> continuation ends with a reserved product error again (streak 2 or 3)
             -> GitHub-first again, one more continuation in the same conversation
-       -> that one also ends with a reserved product error (streak 3)
+       -> continuation fails a third time (streak 4)
             -> GitHub-first again, one fresh chat with the reconciled baseline
        -> positive chat/repository progress: stay in same conversation
        -> confirmed send: observe same continuation for at least 10 minutes
