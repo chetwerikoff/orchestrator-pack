@@ -138,8 +138,9 @@ const DIAGNOSTIC_HEAD_CHARS = 300;
 export const MAX_LOCAL_READ_WAIT_MS = 5_000;
 /** Long existing conversations can need well over 30 s to reach domcontentloaded. */
 const EXISTING_CONVERSATION_NAVIGATION_TIMEOUT_MS = 120_000;
-const EXISTING_GENERATION_RESUME_WINDOW_MS = 60_000;
-const EXISTING_GENERATION_MAX_WAIT_MS = 20 * 60_000;
+const EXISTING_GENERATION_RESUME_WINDOW_MS = 40_000;
+const EXISTING_GENERATION_WAIT_ROUND_MS = 10 * 60_000;
+const EXISTING_GENERATION_WAIT_ROUNDS = 2;
 const EXISTING_GENERATION_READ_INTERVAL_MS = 1_000;
 const EXISTING_GENERATION_IDLE_READS = 2;
 export const COMPOSER_READINESS_WAIT_MS = 12_000;
@@ -1322,15 +1323,15 @@ export function isPostSendTargetCrash(error: unknown): boolean {
 /**
  * After a load ChatGPT may take ~20 s or more to resume a still-running reply or to
  * start stream-recovery polling, and then shows Stop until that ends. Watch the
- * resume window; when Stop appears, wait (bounded) for it to go away instead of
- * giving up, so the continuation is sent once the page is idle again.
+ * resume window; when Stop appears, wait up to two 10-minute rounds for it to go
+ * away, and continue as soon as it does instead of finishing the round.
  */
 async function waitForExistingGeneration(
   page: any,
   deadlineMs: number,
 ): Promise<'idle' | 'settled' | 'busy'> {
   const startedAt = Date.now();
-  const waitUntil = Math.min(startedAt + EXISTING_GENERATION_MAX_WAIT_MS, deadlineMs);
+  const waitUntil = Math.min(startedAt + EXISTING_GENERATION_WAIT_ROUND_MS * EXISTING_GENERATION_WAIT_ROUNDS, deadlineMs);
   let sawStop = false;
   let idleReads = 0;
   for (let read = 0; ; read += 1) {
