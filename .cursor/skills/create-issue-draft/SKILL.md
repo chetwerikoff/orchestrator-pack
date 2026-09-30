@@ -7,7 +7,7 @@ description: Author or continue GPT-authored orchestrator-pack Issue specificati
 
 The live GitHub Issue is the only task specification and queue entry. This skill owns the create-Issue author, independent reviewer, and manager process. It does not own Browser-GPT transport. Use [the current shared turn runbook](../../../docs/browser-gpt-turn-runbook.md) for its existing sender, observation, and legal recovery contract. Do not alter that sender, add a new gate or receipt, or promote sender envelopes to task-review authority.
 
-## Inputs, routing and roles
+## Inputs and routing
 
 - Existing Issue / `manager` / `менеджер` / `continue review`: read its current title, body, labels and all published review/disposition comments. Continue from the current revision; already-published comments count. Do not restart stages, replay a competitive review, or grandfather the Issue onto the old receipt-based mechanism.
 - Brief-only task: paste the brief text into the author chat using the [universal author prompt](../../../docs/browser-gpt-turn-runbook.md#universal-author-prompt-template). Never send an operator-local file path to Browser GPT as the brief; use content or a GitHub URL. `discuss-with-gpt` brief-only starts at T2 unless the current rubric raises it.
