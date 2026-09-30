@@ -12,7 +12,7 @@ import {
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { resolveTargetContext } from '../lib/target-context.ts';
-import { ensureProjectStateBinding } from '../lib/project-state-binding.mjs';
+import { ensureProjectStateBinding } from '../lib/project-state-binding.ts';
 import {
   abandonLatePageHandle,
   boundedResourceCleanup,
