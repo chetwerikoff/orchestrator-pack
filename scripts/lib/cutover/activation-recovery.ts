@@ -18,6 +18,7 @@ import {
 } from './activation-import.ts';
 import { projectRegistry } from './activation-registry-projection.ts';
 import { sha256Bytes, sha256Stable } from './stable-stringify.ts';
+import { publishCommittedProjectStateBinding } from '../project-state-binding.mjs';
 import type { CordonRecord, FollowupRecord, ActivationRequest, EpochCommitCore, ImportRecord, PhaseOneEnvelope, SnapshotRecord } from './types.ts';
 import {
   hasSchedulerChildFailureEvidence,
@@ -441,6 +442,12 @@ export async function recoverCommittedCutover(
   }
   assertCommittedContext(request, cordon, core);
   verifyPhaseOneDigest(request.paths.phaseOnePath, request.epochId, cordon.nonce, core.preCommitLogDigest);
+  if (request.projectId && request.repository) {
+    publishCommittedProjectStateBinding(request.paths.stateDir, {
+      projectId: request.projectId,
+      repository: request.repository,
+    });
+  }
   const snapshots = recoverySnapshots(request, cordon.nonce);
   const retiredSources = request.stores.flatMap((store) => {
     const snapshot = snapshots.find((row) => row.storeId === store.id)!;
