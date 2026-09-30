@@ -213,7 +213,7 @@ export function bannerOwnerPane(
 
 export function managerBannerMessage(banner: ChatErrorBanner): string {
   if (banner.kind === 'stalled') {
-    return `GPT stopped without a final reply in your execution chat ${banner.url}: no Stop control, no error banner, no finished-reply actions for over a minute. Run GitHub-first reconciliation, then send "Доделай задачу и сообщи статус" in this same chat (runbook: Repeated product-error streak - up to two repeats; on the third continuation failure open a fresh chat). Never press Retry.`;
+    return `${banner.text} in your GPT chat ${banner.url} (no Stop control and no error banner for over a minute). Run GitHub-first reconciliation, then send "Доделай задачу и сообщи статус" in this same chat (runbook: Repeated product-error streak - up to two repeats; on the third continuation failure open a fresh chat). Never press Retry.`;
   }
   return `GPT chat error in your execution chat ${banner.url}: red banner "${banner.text}"${banner.retry ? ' (Retry shown)' : ''}, generation stopped. Run GitHub-first reconciliation, then send "Доделай задачу" in this same chat (runbook: Repeated product-error streak - up to two repeats; on the third continuation failure open a fresh chat). Never press Retry.`;
 }
