@@ -461,7 +461,7 @@ export function projectExpectedPrTarget(
 
 function parseArgs(argv: readonly string[]): CliOptions {
   const options: CliOptions = {
-    command: '', issueNumber: 0, prNumber: 0, headSha: '', issueBodyFile: '', smokeComplexity: '', smokeActor: 'worker-owned', operatorSmokeOnly: false,
+    command: '', issueNumber: 0, prNumber: 0, headSha: '', issueBodyFile: '', smokeComplexity: '', smokeActor: 'independent', operatorSmokeOnly: false,
     repoRoot: process.cwd(), cwd: process.cwd(), dryRun: false, json: false, reviewId: '', reviewHeadSha: '', detach: false, detachedOwner: false, runId: '',
   };
   const args = [...argv];
@@ -475,16 +475,12 @@ function parseArgs(argv: readonly string[]): CliOptions {
       case '--smoke-complexity': options.smokeComplexity = (args[++index] ?? '') as SmokeComplexity; break;
       case '--smoke-actor': options.smokeActor = (args[++index] ?? '') as SmokeOrderingActor; break;
       case '--operator-smoke-only': options.operatorSmokeOnly = true; break;
-      case '--operator-override': options.operatorOverrideReason = args[++index] ?? ''; break;
       case '--repo-root': options.repoRoot = args[++index] ?? options.repoRoot; break;
       case '--cwd': options.cwd = args[++index] ?? options.cwd; break;
       case '--dry-run': options.dryRun = true; break;
       case '--json': options.json = true; break;
       case '--review-id': options.reviewId = args[++index] ?? ''; break;
       case '--review-head-sha': options.reviewHeadSha = args[++index] ?? ''; break;
-      case '--detach': options.detach = true; break;
-      case '--detached-owner': options.detachedOwner = true; break;
-      case '--run': options.runId = args[++index] ?? ''; break;
       default: throw new Error(`unknown argument: ${args[index]}`);
     }
   }
@@ -2574,22 +2570,14 @@ export async function runSmokeWait(options: CliOptions): Promise<number> {
 }
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
-  if (argv[0] === 'progress') return runSmokeProgressWriter(argv.slice(1));
   const options = parseArgs(argv);
   switch (options.command) {
     case 'validate-plan': return runValidatePlan(options);
     case 'gate-check': return runGateCheck(options);
-    case 'run':
-      if (options.detach) return runDetachedBootstrap(argv, options);
-      if (options.detachedOwner && !(options.runId ?? '').trim()) throw new Error('detached owner requires --run <id>');
-      if (!options.detachedOwner && (options.runId ?? '').trim()) throw new Error('--run is reserved for detached ownership or wait');
-      return runSmokeAttempt(options);
-    case 'wait':
-      if (options.detach || options.detachedOwner) throw new Error('wait is read-only and does not accept detach ownership flags');
-      return runSmokeWait(options);
+    case 'run': return runSmokeAttempt(options);
     case 'reconcile-direct-review': return runDirectReviewReconciliation(options);
     case 'delegated-readiness': return runDelegatedReadiness(options);
-    default: throw new Error('usage: worker-smoke-run.ts <validate-plan|gate-check|run|wait|progress|reconcile-direct-review|delegated-readiness> [options] (run accepts --detach, --operator-override <reason>, and --smoke-actor worker-owned|independent; wait requires --run <id>)');
+    default: throw new Error('usage: worker-smoke-run.ts <validate-plan|gate-check|run|reconcile-direct-review|delegated-readiness> [options]');
   }
 }
 
