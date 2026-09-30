@@ -80,9 +80,13 @@ export function canonicalFoundationPaths(
   _repoRoot: string,
   homeDir = machineHomeDir(),
   projectId = 'orchestrator-pack',
+  env: Readonly<NodeJS.ProcessEnv> = process.env,
 ): CanonicalFoundationPaths {
+  const canonicalEnv: NodeJS.ProcessEnv = { HOME: homeDir };
+  if (String(env.XDG_STATE_HOME ?? '').trim()) canonicalEnv.XDG_STATE_HOME = env.XDG_STATE_HOME;
+  if (String(env.LOCALAPPDATA ?? '').trim()) canonicalEnv.LOCALAPPDATA = env.LOCALAPPDATA;
   const stateRoot = path.resolve(resolveWakeSupervisorStateRoot({
-    env: {},
+    env: canonicalEnv,
     homeDir,
     platform: process.platform,
     projectId,
