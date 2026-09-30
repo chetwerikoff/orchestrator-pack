@@ -1272,14 +1272,13 @@ interface SmokePublicationBinding {
 function publishSmokeReport(
   report: SmokeReport,
   options: CliOptions,
-  binding?: SmokePublicationBinding,
+  _binding?: SmokePublicationBinding,
   publishComment: (prNumber: number, body: string, repoRoot: string) => void = publishPrComment,
   afterComment?: () => void,
 ): boolean {
   if (options.dryRun) return false;
   publishComment(options.prNumber, formatSmokeReportComment(report), options.repoRoot);
   afterComment?.();
-  if (binding) writeWorkerSmokeReceipt(report, binding);
   return true;
 }
 
@@ -2277,46 +2276,27 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   const onSigterm = (): void => { signalReason = 'SIGTERM'; };
   process.once('SIGINT', onSigint); process.once('SIGTERM', onSigterm);
 
-  const cleanup = (reason: string, requestCancellation: boolean) => {
-    let acknowledged = false;
-    if (worker && requestCancellation) {
-      if (writeSmokeCancelRequest({ artifactDir, runId, reason })) acknowledged = waitForCooperativeShutdown({ adapter, worker, binding: { runId, artifactDir }, cwd: options.cwd });
-    }
-    const result = cleanupSmokeLifecycle({
-      artifactDir, runId, reason, requestCancellation, cooperativeAcknowledgementObserved: acknowledged,
-      closeBoundHandle: (handle) => {
-        if (!worker || handle !== worker.id) return 'close_failed:identity_binding_mismatch';
-        return runtimeClose(adapter, worker, options);
-      },
-    });
-    terminalCleanup = result.closeOutcome; cleanupFinished = true; releaseSmokeAdmission(options.cwd, runId); return result;
+  const cleanup = (_reason: string, _requestCancellation: boolean) => {
+    const closeOutcome = worker ? runtimeClose(adapter, worker, options) : 'not_started';
+    terminalCleanup = closeOutcome;
+    cleanupFinished = true;
+    return { clean: closeOutcome.startsWith('closed_owned_handle'), closeOutcome };
   };
 
   try {
-    const admission = preflightSmokeLifecycle({ repoRoot: options.cwd, runId, closeBoundHandle: (handle) => runtimeCloseBoundHandle(adapter, handle, options) });
-    if (!admission.admitted) {
-      const report = operationalReport('harness_admission_refused', options, { action: 'acquire smoke spawn admission', expected: 'exclusive admission before spawn', observed: admission.reason ?? 'admission_refused', structuredHarnessReason: admission.reason ?? 'admission_refused', adapterId: adapter.id });
-      publishSmokeReport(report, options, preAttempt, publishComment); emit({ ok: false, report, lifecycle: admission, attemptId }, options.json); return 1;
-    }
-
     const startFence = dependencies.startFence ?? directSmokeStartFence;
     const start = await startFence(async () => {
       startedAtMs = Date.now(); ensureSmokeRunArtifactDir(artifactDir);
-      createSmokeLifecycleReservation({
-        runId, artifactDir, issueNumber: options.issueNumber, prNumber: options.prNumber, headSha: options.headSha,
-        nowMs: startedAtMs, createTimeoutMs: SMOKE_CREATE_TIMEOUT_MS, scenarioCount: attemptPlan.scenarios.length,
-      });
-      markSmokeCreateInProgress(artifactDir);
       const spawned = adapter.spawnWorker({ title: `smoke-${options.issueNumber}`, command: smokeProfile.command, workspace: 'active' }, { cwd: options.cwd, timeoutMs: SMOKE_CREATE_TIMEOUT_MS });
       if (spawned.status !== 'ok') {
-        const reason = failureReason(spawned); markSmokeCreateAmbiguous(artifactDir, reason); releaseSmokeAdmission(options.cwd, runId);
+        const reason = failureReason(spawned);
         return { kind: 'spawn_failed' as const, reason };
       }
-      worker = spawned.value.identity; bindSmokeTerminalHandle(artifactDir, worker.id); return { kind: 'started' as const };
+      worker = spawned.value.identity; return { kind: 'started' as const };
     });
 
     if (!start.ok) {
-      if (!start.actionEntered) { releaseSmokeAdmission(options.cwd, runId); emit({ ok: true, skipped: true, attempted: false, reason: start.reason }, options.json); return 0; }
+      if (!start.actionEntered) { emit({ ok: true, skipped: true, attempted: false, reason: start.reason }, options.json); return 0; }
       throw new WorkerSmokeHarnessError('smoke_start_fence_post_entry', `smoke_start_fence_post_entry:${start.reason}`);
     }
     if (start.value.kind === 'spawn_failed') {
@@ -2422,7 +2402,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     const structuredHarnessReason = structuredHarnessReasonFromError(error);
     const observed = scrubSmokeOutput(error instanceof Error ? error.message : 'handled_exception');
     if (worker && !cleanupFinished) cleanup('handled_exception', true);
-    else if (!worker && startedAtMs > 0) { try { markSmokeCreateAmbiguous(artifactDir, observed); } catch { /* fail closed */ } releaseSmokeAdmission(options.cwd, runId); }
+
     const family: WorkerSmokeCauseFamily = cleanupFinished && terminalCleanup.startsWith('close_failed')
       ? 'lifecycle_cleanup_failed'
       : workerSmokeCauseFamilyForHarnessReason(structuredHarnessReason);
@@ -2444,7 +2424,6 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     try { terminalizeDetachedIfNeeded(); } catch { /* missing ordering/final evidence remains fail-closed */ }
     process.off('SIGINT', onSigint); process.off('SIGTERM', onSigterm);
     if (worker && !cleanupFinished) { try { cleanup('finally_cleanup', true); } catch { /* lifecycle remains blocking */ } }
-    releaseSmokeAdmission(options.cwd, runId);
   }
 }
 
