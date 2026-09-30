@@ -75,7 +75,8 @@ function assignmentKey(assignment) {
 export function resolveWorkerReportStorePath(env = process.env) {
   if (env.OPK_WORKER_REPORT_STORE) return String(env.OPK_WORKER_REPORT_STORE);
   if (env.OPK_REPORT_STATE_SEED_STATE) return join(dirname(String(env.OPK_REPORT_STATE_SEED_STATE)), 'worker-report-store.json');
-  return join(homedir(), '.local', 'state', 'orchestrator-pack-wake-supervisor', 'worker-report-store.json');
+  const projectId = String(env.OPK_PROJECT_ID ?? 'orchestrator-pack').trim() || 'orchestrator-pack';
+  return join(homedir(), '.local', 'state', 'orchestrator-pack-wake-supervisor', projectId, 'worker-report-store.json');
 }
 
 export function buildWorkerReportRecordKey(record) {
