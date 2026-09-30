@@ -11,6 +11,7 @@
     "docs/orchestrator-delegated-integration.md",
     "docs/worker-smoke-testing.md",
     "scripts/delegated-integration-contract.test.ts",
+    "scripts/draft-discipline.mjs",
     "scripts/execute-issue-manager-boundary.ts",
     "scripts/flow-manager-authority-contract.test.ts",
     "scripts/lib/execute-issue-manager-boundary.test.ts",
@@ -56,6 +57,7 @@
     "docs/orchestrator-delegated-integration.md",
     "docs/worker-smoke-testing.md",
     "scripts/delegated-integration-contract.test.ts",
+    "scripts/draft-discipline.mjs",
     "scripts/execute-issue-manager-boundary.ts",
     "scripts/flow-manager-authority-contract.test.ts",
     "scripts/lib/execute-issue-manager-boundary.test.ts",
@@ -85,5 +87,5 @@
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "ca401fe79e46ebf7a409cd63b7c4fbf347414fd8"
+  "source_revision": "2ee6019f0b91c1cd472471662c896ec4dee4204c"
 }
