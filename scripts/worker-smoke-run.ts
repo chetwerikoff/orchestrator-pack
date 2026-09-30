@@ -2573,11 +2573,10 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   const options = parseArgs(argv);
   switch (options.command) {
     case 'validate-plan': return runValidatePlan(options);
-    case 'gate-check': return runGateCheck(options);
     case 'run': return runSmokeAttempt(options);
     case 'reconcile-direct-review': return runDirectReviewReconciliation(options);
     case 'delegated-readiness': return runDelegatedReadiness(options);
-    default: throw new Error('usage: worker-smoke-run.ts <validate-plan|gate-check|run|reconcile-direct-review|delegated-readiness> [options]');
+    default: throw new Error('usage: worker-smoke-run.ts <validate-plan|run|reconcile-direct-review|delegated-readiness> [options]');
   }
 }
 
