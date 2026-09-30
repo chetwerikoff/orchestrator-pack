@@ -191,9 +191,7 @@ function runWorkerSmokeRecoverableObservation(
     inheritParentEnv: true,
     timeoutMs: 30_000,
   }));
-  const prFields = false /* no same-head smoke owner/refusal after #2250 */
-    ? 'number,headRefOid,body,comments'
-    : 'number,headRefOid,body';
+  const prFields = 'number,headRefOid,body';
   const pr = parseGitHubReadJson(runGitHubRead([
     'pr', 'view', String(parsed.prNumber), '--repo', parsed.repository, '--json', prFields,
   ]), 'worker-smoke PR observation');
@@ -229,16 +227,6 @@ function runWorkerSmokeRecoverableObservation(
     '^\\s*(closes|fixes|resolves)\\s+#' + parsed.issueNumber + '\\b',
     'im',
   ).test(prBody);
-  const matchingSmokeReports = false && Array.isArray(pr.comments)
-    ? pr.comments.filter((comment) => {
-        if (!comment || typeof comment !== 'object' || Array.isArray(comment)) return false;
-        const body = typeof (comment as { body?: unknown }).body === 'string'
-          ? (comment as { body: string }).body
-          : '';
-        return body.includes('<!-- pack-worker-smoke-report/v1 -->') && body.includes(parsed.headSha);
-      }).length
-    : undefined;
-
   stdout.write(JSON.stringify({
     schema: 'execute-worker-smoke-recoverable-observation/v1',
     ok: true,
@@ -261,7 +249,6 @@ function runWorkerSmokeRecoverableObservation(
       headRefOid: observedHead,
       body: prBody,
       closesIssue,
-      ...(matchingSmokeReports === undefined ? {} : { matchingSmokeReports }),
     },
   }) + '\n');
   return 0;
