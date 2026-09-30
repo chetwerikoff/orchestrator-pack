@@ -28,6 +28,7 @@
     "scripts/orchestrator-cutover-activate.ts",
     "scripts/orchestrator-wake-supervisor.ts",
     "scripts/pack-review-runner.ts",
+    "scripts/pack-worker-report.ts",
     "scripts/pr2-foundation/scheduler.ts",
     "scripts/pr2-foundation/wake-supervisor-state-root.ts",
     "scripts/pr2-foundation/worker-notification-compat.test.ts",
@@ -60,5 +61,5 @@
     "scripts/pack-worker-report.ts",
     "scripts/pr2-foundation/**"
   ],
-  "source_revision": "74d4f596b0d48bcfa516eb9da58bf2d6186aa996"
+  "source_revision": "81beef1c8a03fca9ea6946c78e271d296fe3dba5"
 }
