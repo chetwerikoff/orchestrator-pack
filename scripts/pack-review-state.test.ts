@@ -845,7 +845,6 @@ describe('Issue #1887 strict-descendant findings settlement', () => {
       reviewStageComplete: true,
     });
     expect(state.triage).toBeUndefined();
-    expect(state.smokeOrdering?.reviewSettledHeadSha).toBe(current);
   });
 
   it('latches a clean T2 terminal without publication evidence', () => {

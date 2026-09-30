@@ -195,10 +195,10 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     expect(source).toContain('open: target.prOpen');
     expect(source).toContain('expectedTarget: target.expectedTarget');
     expect(source).toContain('evaluateReadiness({');
-    const terminalPass = source.indexOf("if (!lifecycleCleanup.clean && report.result === 'PASS') report.result = 'FAIL';");
-    const postSmokeCall = source.indexOf('evaluatePostSmokeReadiness(options, target, adapter)', terminalPass);
-    expect(terminalPass).toBeGreaterThanOrEqual(0);
-    expect(postSmokeCall).toBeGreaterThan(terminalPass);
+    const settledReport = source.indexOf("if (report.result === 'PASS' && !options.dryRun && resolvedTarget)");
+    const postSmokeCall = source.indexOf('evaluatePostSmokeReadiness(options, resolvedTarget, adapter)', settledReport);
+    expect(settledReport).toBeGreaterThanOrEqual(0);
+    expect(postSmokeCall).toBeGreaterThan(settledReport);
 
     expect(existsSync(path.resolve('scripts/direct-pack-review-status.ts'))).toBe(true);
     const workflow = readFileSync(path.resolve('.github/workflows/direct-pack-review-status.yml'), 'utf8');

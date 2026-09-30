@@ -1245,7 +1245,5 @@ describe('Issue #1887 immediate final-cap descendant reconciliation', () => {
       consumedRoundOrdinals: [1],
       reviewStageComplete: true,
     });
-    expect(settled?.smokeOrdering?.workerOwned).toBeUndefined();
-    expect(settled?.smokeOrdering?.reviewSettledHeadSha).toBe(current);
   });
 });

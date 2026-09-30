@@ -575,7 +575,6 @@ describe('Issue #1591 GitHub-first 3/3-or-timed-2/3 recovery', () => {
     expect(capture.body).toContain('Sources: 2/3 (degraded after timeout)');
     const authority = readPackReviewAuthority(1591, { storeRoot });
     expect(authority?.cycle?.consumedHeadShas).toEqual([HEAD_A]);
-    expect(authority?.smokeOrdering?.reviewSettledHeadSha).toBe(HEAD_A);
     expect(authority?.publication?.status).toBe('succeeded');
   });
 
@@ -1025,7 +1024,6 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
     expect(listPackReviewRuns({ projectId: PROJECT, storeRoot })).toHaveLength(runCount);
     const authority = readPackReviewAuthority(1591, { storeRoot });
     expect(authority?.triage?.verdict).toBe('PENDING_ARCHITECT');
-    expect(authority?.smokeOrdering?.reviewSettledHeadSha).not.toBe(HEAD_B);
     expect(authority?.cycle?.reviewStageComplete).not.toBe(true);
   });
 
@@ -1085,7 +1083,6 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
     ]));
     const authority = readPackReviewAuthority(1591, { storeRoot });
     expect(authority?.triage?.verdict).toBe('PENDING_ARCHITECT');
-    expect(authority?.smokeOrdering?.reviewSettledHeadSha).not.toBe(HEAD_B);
     expect(authority?.cycle?.reviewStageComplete).not.toBe(true);
   });
 
@@ -1104,7 +1101,6 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
       },
       options: seeded.opts,
     });
-    expect(authority.smokeOrdering?.reviewSettledHeadSha).toBe(HEAD_B);
 
     authority = observePackReviewHead({
       prNumber: 1591,
@@ -1114,7 +1110,6 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
     });
     expect(authority.currentHeadSha).toBe(HEAD_C);
     expect(authority.cycle?.state).toBe('at_cap_continuation_required');
-    expect(authority.smokeOrdering?.reviewSettledHeadSha).not.toBe(HEAD_C);
   });
 
   it('accepts explicit current-head resolution for a pathless blocking finding', () => {
@@ -1136,7 +1131,6 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
       },
       options: seeded.opts,
     });
-    expect(authority.smokeOrdering?.reviewSettledHeadSha).toBe(HEAD_B);
     expect(authority.cycle?.reviewStageComplete).toBe(true);
   });
 
@@ -1164,11 +1158,10 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
       },
       options: seeded.opts,
     });
-    expect(authority.smokeOrdering?.reviewSettledHeadSha).toBe(HEAD_B);
     expect(authority.cycle?.reviewStageComplete).toBe(true);
   });
 
-  it('rejects automatic DEFER when exact-head worker smoke failed', () => {
+  it('does not make legacy worker smoke a final-cap gate', () => {
     const storeRoot = tempRoot();
     const seeded = seedFinalCapContinuation(storeRoot, 'failed');
     const authority = selectNoIntersectionEvidence(storeRoot, seeded.authority);
@@ -1182,7 +1175,8 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
         committedAtUtc: '2026-08-24T00:01:00.000Z',
       },
       options: seeded.opts,
-    })).toThrow(/automatic DEFER requires final-cap continuation.*exact finding-resolution evidence/);
+    })).not.toThrow();
+    expect(readPackReviewAuthority(1591, seeded.opts)?.cycle?.reviewStageComplete).toBe(true);
   });
 
   it('rejects automatic DEFER when explicit resolution still reports a blocking finding', () => {
