@@ -2,7 +2,6 @@ import './toolchain/native-entrypoint-preflight.ts';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { runProcess } from './kernel/subprocess.ts';
-import path from 'node:path';
 import {
   isSchedulerOperational,
   readSupervisorStatus,
@@ -11,6 +10,7 @@ import {
 } from './lib/orchestrator-side-process-supervisor.ts';
 import { resolveTargetContext } from './lib/target-context.ts';
 import { resolveWakeSupervisorStateRoot } from './pr2-foundation/wake-supervisor-state-root.ts';
+import { assertProjectStateBinding } from './lib/project-state-binding.mjs';
 
 function parse(argv: string[]): Record<string, string | boolean> {
   const output: Record<string, string | boolean> = {};
@@ -39,6 +39,10 @@ function targetOptions(args: Record<string, string | boolean>): Pick<SupervisorO
   if (stateDir !== expectedStateDir) throw new Error('wake_supervisor_state_dir_project_mismatch');
   const repoRoot = path.resolve(required(args, 'repo-root'));
   if (repoRoot !== path.resolve(target.packRoot)) throw new Error('wake_supervisor_pack_root_mismatch');
+  assertProjectStateBinding(path.dirname(stateDir), {
+    projectId: target.projectId,
+    repository: target.repository,
+  });
   return {
     stateDir,
     repoRoot,
