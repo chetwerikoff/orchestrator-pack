@@ -34,7 +34,12 @@ import {
   verifyFoundationEvidenceDigest,
   verifyFoundationEvidenceObservation,
 } from '../lib/cutover/activation-evidence.ts';
-import { snapshotStores } from '../lib/cutover/activation-import.ts';
+import {
+  assertSnapshotSourceStable,
+  importSnapshot,
+  retireImportedSource,
+  snapshotStores,
+} from '../lib/cutover/activation-import.ts';
 import {
   findCompletedSchedulerDelivery,
   provePreImportRollbackSafe,
@@ -269,6 +274,64 @@ function committedEpoch(file: string, epochId = 'epoch-scheduler', nonce = 'nonc
   new FileEpochAuthority(file).commit(null, core);
   return core;
 }
+
+describe('Issue #2186 opaque project-state migration', () => {
+  it('preserves canonical create-Issue review bytes and makes publication replay idempotent', () => {
+    const root = tempRoot();
+    const source = path.join(root, 'create-issue-draft', '.review', '7');
+    const target = path.join(root, 'create-issue-draft', 'leopoker', '.review', '7');
+    mkdirSync(source, { recursive: true });
+    const payload = Buffer.from([0, 1, 2, 3, 0xff, 0x0a]);
+    writeFileSync(path.join(source, 'terminal.bin'), payload);
+    const spec = {
+      id: 'create-issue-review-7',
+      kind: 'opaque-directory' as const,
+      sourcePath: source,
+      targetPath: target,
+      coveredFields: [] as const,
+    };
+    const [snapshot] = snapshotStores([spec], path.join(root, 'snapshots'), 'writers-quiesced');
+    assertSnapshotSourceStable(spec, snapshot!);
+    const first = importSnapshot({ epochId: 'epoch-2186', nonce: 'nonce-2186', spec, snapshot: snapshot! });
+    const replay = importSnapshot({ epochId: 'epoch-2186', nonce: 'nonce-2186', spec, snapshot: snapshot! });
+    expect(replay.importIdentity).toBe(first.importIdentity);
+    expect(readFileSync(path.join(target, 'terminal.bin'))).toEqual(payload);
+    expect(existsSync(source)).toBe(true);
+    expect(retireImportedSource(spec, snapshot!)).toBe(true);
+    expect(existsSync(source)).toBe(false);
+    expect(retireImportedSource(spec, snapshot!)).toBe(false);
+    expect(readFileSync(path.join(target, 'terminal.bin'))).toEqual(payload);
+  });
+
+  it('fails closed on destination conflict and source drift after quiescence snapshot', () => {
+    const root = tempRoot();
+    const source = path.join(root, 'flat');
+    const target = path.join(root, 'scoped');
+    mkdirSync(source, { recursive: true });
+    writeFileSync(path.join(source, 'receipt.json'), '{"v":1}\n', 'utf8');
+    const spec = {
+      id: 'review-state',
+      kind: 'opaque-directory' as const,
+      sourcePath: source,
+      targetPath: target,
+      coveredFields: [] as const,
+    };
+    const [snapshot] = snapshotStores([spec], path.join(root, 'snapshots'), 'writers-quiesced');
+
+    mkdirSync(target, { recursive: true });
+    writeFileSync(path.join(target, 'foreign.json'), '{}\n', 'utf8');
+    expect(() => importSnapshot({
+      epochId: 'epoch-2186',
+      nonce: 'nonce-conflict',
+      spec,
+      snapshot: snapshot!,
+    })).toThrow('import_target_not_empty');
+
+    rmSync(target, { recursive: true, force: true });
+    writeFileSync(path.join(source, 'receipt.json'), '{"v":2}\n', 'utf8');
+    expect(() => assertSnapshotSourceStable(spec, snapshot!)).toThrow('cutover_source_changed');
+  });
+});
 
 describe('Issue #2186 project-state binding', () => {
   it('isolates same-number task namespaces and rejects project-card retargeting', () => {
