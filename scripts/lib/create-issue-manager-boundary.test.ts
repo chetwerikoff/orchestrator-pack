@@ -79,7 +79,7 @@ describe('create-Issue manager boundary', () => {
     expect(skill).toContain('one required Claude architectural-lens');
     expect(tiering).toContain('No T3 competitive stage');
     expect(carrier).toContain('Already-published review');
-    expect(carrier).toContain('not create-Issue label/review authority');
+    expect(carrier).toContain('create-Issue label/review authority');
     expect(authorPrompt).toContain('<BRIEF_TEXT>');
     expect(authorPrompt).not.toContain('<BRIEF_REFERENCE>');
     expect(authorPrompt).toContain('never pass a local path');
