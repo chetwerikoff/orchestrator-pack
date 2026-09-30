@@ -229,6 +229,8 @@ export interface ActivationPaths {
 }
 
 export interface ActivationRequest {
+  projectId?: string;
+  repository?: string;
   epochId: string;
   expectedOldEpochId: string | null;
   hostId: string;
