@@ -79,7 +79,7 @@ import {
   loadChromium,
   MESSAGE_AUTHOR_ROLE_ATTR,
   MESSAGE_UNIT_KEY_ATTR,
-  isStreamRecoveryPollingTimeoutSurfaceText,
+  rolelessRecoverySurfaceCause,
   resolveMessageRoleStyle,
   MESSAGE_NODE_SELECTOR,
   normalizeConversationUrl,
@@ -2998,6 +2998,7 @@ async function runTurn(
     let markerlessReloadUsed = false;
     let freshMarkerlessReply = '';
     let streamRecoveryBannerReads = 0;
+    let streamRecoveryBannerCause: string | undefined;
     let sendObservationDeferredLogged = false;
     const updateHeartbeatForPoll = (decision: PageObservationDecision): void => {
       heartbeatDecision = decision;
@@ -3619,27 +3620,35 @@ async function runTurn(
         lastMarkerlessSnapshotSignature = '';
       }
 
-      // Issue #2226: ChatGPT can stop an unrendered-owner turn with the exact
-      // "stream recovery polling timed out" alert. The marker-based execution
-      // recovery classifier cannot prove ownership then, and a reload would hide
-      // the alert while the turn stays dead. Return the reserved
-      // conversation-scoped recovery cause for this invocation's own bound
-      // conversation instead, without reload or resend.
+      // Issue #2226/#2235: ChatGPT can stop an unrendered-owner turn with an
+      // exact roleless alert ("stream recovery polling timed out" or "Error in
+      // message stream"). The marker-based execution recovery classifier cannot
+      // prove ownership then, and a reload would hide the alert while the turn
+      // stays dead. Return the reserved conversation-scoped recovery cause for
+      // this invocation's own bound conversation instead, without reload or resend.
       if (!markerVisible && durableConversationUrl && sendCount >= 1 && pageTurnEvidence?.generationInProgress !== true) {
-        let bannerPresent = false;
+        let bannerCause: string | undefined;
         try {
           const alertTexts = await boundedBrowserRead(
             page.locator('[role="alert"]').allInnerTexts(),
             Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, hardExhaustionDeadline - Date.now())),
             'stream_recovery_banner_read_timeout',
           ) as string[];
-          bannerPresent = Array.isArray(alertTexts) && alertTexts.some((text) => isStreamRecoveryPollingTimeoutSurfaceText(String(text)));
+          const causes = new Set(
+            (Array.isArray(alertTexts) ? alertTexts : [])
+              .map((text) => rolelessRecoverySurfaceCause(String(text)))
+              .filter((cause): cause is NonNullable<typeof cause> => cause !== undefined),
+          );
+          bannerCause = causes.size === 1 ? [...causes][0] : undefined;
         } catch (error) {
           if (isPostSendTargetCrash(error)) throw error;
         }
-        streamRecoveryBannerReads = bannerPresent ? streamRecoveryBannerReads + 1 : 0;
-        if (streamRecoveryBannerReads >= 2) {
-          incident('invocation_blocker', 'stream_recovery_polling_timed_out', 'retain_owned_page_no_resend');
+        streamRecoveryBannerReads = bannerCause && bannerCause === streamRecoveryBannerCause
+          ? streamRecoveryBannerReads + 1
+          : bannerCause ? 1 : 0;
+        streamRecoveryBannerCause = bannerCause;
+        if (bannerCause && streamRecoveryBannerReads >= 2) {
+          incident('invocation_blocker', bannerCause, 'retain_owned_page_no_resend');
           return {
             page,
             browser,
@@ -3647,7 +3656,7 @@ async function runTurn(
             result: compactResult(
               'recovery_required',
               'conversation',
-              'stream_recovery_polling_timed_out',
+              bannerCause,
               invocationId,
               profileKey,
               sendCount,
@@ -3661,6 +3670,7 @@ async function runTurn(
         }
       } else {
         streamRecoveryBannerReads = 0;
+        streamRecoveryBannerCause = undefined;
       }
 
       // A fresh conversation this invocation created and still owns cannot hold

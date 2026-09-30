@@ -527,7 +527,7 @@ describe('state-light fresh conversation collision recovery', () => {
     reply: string,
     renderAfterReload: boolean,
     ambiguousAssistant = false,
-    streamRecoveryAlert = false,
+    streamRecoveryAlert: string | false = false,
   ) {
     const state = { sent: false, url: PROJECT_URL, reloads: 0, reads: 0 };
     const working = readyTurnObservationFrames(prompt, reply)[0]!;
@@ -596,7 +596,7 @@ describe('state-light fresh conversation collision recovery', () => {
         if (selector === '[role="alert"]') {
           return scalarLocator({
             allInnerTexts: vi.fn(async () => (
-              streamRecoveryAlert && state.reads > 2 ? ['ChatGPT stream recovery polling timed out\nRetry'] : []
+              streamRecoveryAlert && state.reads > 2 ? [streamRecoveryAlert] : []
             )),
           });
         }
@@ -625,7 +625,13 @@ describe('state-light fresh conversation collision recovery', () => {
     const prompt = 'PROMPT-STREAM-RECOVERY';
     const reply = 'NEVER-FINISHED';
     const output = join(stateDir, 'stream-recovery-unrendered.txt');
-    const { page, state } = unrenderedOwnedMessagePage(prompt, reply, false, false, true);
+    const { page, state } = unrenderedOwnedMessagePage(
+      prompt,
+      reply,
+      false,
+      false,
+      'ChatGPT stream recovery polling timed out\nRetry',
+    );
 
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const outcome = await runNewChatTurn(page, output);
@@ -634,6 +640,24 @@ describe('state-light fresh conversation collision recovery', () => {
       state: 'recovery_required',
       scope: 'conversation',
       cause: 'stream_recovery_polling_timed_out',
+      send_count: 1,
+    });
+    expect(state.reloads).toBe(0);
+  });
+
+  it('returns conversation-scoped message stream error without reload when the owner is unrendered (#2235)', async () => {
+    const prompt = 'PROMPT-MESSAGE-STREAM';
+    const reply = 'NEVER-FINISHED';
+    const output = join(stateDir, 'message-stream-unrendered.txt');
+    const { page, state } = unrenderedOwnedMessagePage(prompt, reply, false, false, 'Error in message stream');
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output);
+
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({
+      state: 'recovery_required',
+      scope: 'conversation',
+      cause: 'message_stream_error',
       send_count: 1,
     });
     expect(state.reloads).toBe(0);
