@@ -370,9 +370,9 @@ window expires, open no fresh chat and close no tab; continue the existing
 same-invocation observation/recovery path or use its existing supervisor
 boundary. The exact continuation invocation must be authoritatively
 settled/recovered under the shared Browser-GPT lifecycle before fallback can be
-considered. A repeated supported product error on that exact continuation does
-not bypass the full grace; its authoritative terminal result may satisfy
-settlement only after the grace and final checks.
+considered. A repeated supported product error on that exact continuation is
+not a no-progress case: it follows **Repeated product-error streak** below
+instead of this grace.
 
 At or after the full grace, perform fresh final reads of both the exact owned
 conversation and live repository state. A no-progress fallback is permitted
@@ -390,8 +390,8 @@ ambiguous, or implementation is candidate-complete, do not send a prepared
 fallback. Return to same-conversation observation/current-state evaluation or
 enter review convergence when its preconditions hold.
 
-Only after all fallback gates pass may the manager open exactly one fresh
-execution conversation:
+Only after all fallback gates pass, or at streak 3 of **Repeated product-error
+streak** below, may the manager open exactly one fresh execution conversation:
 
 - **Existing PR:** Issue URL + same PR URL + exact unchanged baseline head;
   instruct GPT to continue that implementation.
@@ -406,6 +406,36 @@ conversation after fallback is authorized and the continuation is settled;
 never close foreign/sibling conversations. Closing a tab is cleanup, not proof
 of repository or server-side state.
 
+### Repeated product-error streak
+
+The streak counts consecutive owned turns in one owned execution conversation
+whose authoritative terminal evidence is a reserved product cause (any of the
+four, through either proof that enters this section), with no attributable
+completed assistant reply between them. An attributable completed assistant
+reply resets the streak to zero. A fresh execution conversation starts at zero.
+
+- **Streak 1** — the original owned turn failed: GitHub-first reconciliation,
+  then one same-conversation continuation as above.
+- **Streak 2** — that continuation also ended with a reserved product error:
+  repeat. Run a fresh GitHub-first reconciliation, then send one more tracked
+  continuation in the same exact owned conversation. The 10-minute grace does
+  not apply, because the product error is the continuation's terminal result.
+- **Streak 3** — the second continuation also ended with a reserved product
+  error: send no third continuation. Run a fresh GitHub-first reconciliation
+  and open exactly one fresh execution conversation with the fresh-conversation
+  prompt above (same PR and head, same branch and head, or Issue-only
+  `выполни задачу`), using the baseline just reconciled. The 10-minute grace and
+  unchanged-baseline gate do not apply to this step. Close only the exact old
+  owned conversation under tab-lifecycle authority.
+
+Every streak step still needs exact owned-turn proof of the reserved cause and
+stopped generation, and still takes the candidate-complete short-circuit into
+review convergence instead of sending. Transport-only failures
+(`stream_timeout`, `no_reply`, helper timeout, browser loss, missing envelope)
+never count toward the streak. Derive the streak from the manager's retained
+authoritative turn results for that conversation; when they cannot be
+reconstructed after a restart or replacement, treat the streak as 1.
+
 ## Multi-turn completion loop
 
 ```text
@@ -417,6 +447,10 @@ submitted GPT turn
             -> no implementation continuation chat
             -> manager-owned PR-review convergence
        -> otherwise send one tracked continuation in same exact owned conversation
+       -> continuation ends with a reserved product error again (streak 2)
+            -> GitHub-first again, one more continuation in the same conversation
+       -> that one also ends with a reserved product error (streak 3)
+            -> GitHub-first again, one fresh chat with the reconciled baseline
        -> positive chat/repository progress: stay in same conversation
        -> confirmed send: observe same continuation for at least 10 minutes
        -> unsettled at grace expiry: no fresh chat; continue existing settlement/recovery
