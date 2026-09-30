@@ -56,8 +56,9 @@ runs there, and the chat binding records it as the owning worktree:
 npm --prefix <pack-checkout> run --silent flow-manager-browser-gpt-long-run -- \
   ... \
   --cwd <worker-worktree>
-node --experimental-strip-types <pack-checkout>/scripts/browser-gpt-page-probe.ts inspect ...
 ```
+
+The page probe likewise runs as `<pack-checkout>/scripts/browser-gpt-page-probe.ts`.
 
 The adapter resolves the launcher and turn entry next to itself, so the checkout
 that supplies the adapter supplies the engine. A relative `scripts/...` path run
