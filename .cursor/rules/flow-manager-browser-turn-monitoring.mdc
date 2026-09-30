@@ -26,7 +26,15 @@ reviewed terminal revision or one author findings/floor correction may be labele
 receipt, snapshot, freeze record, or second acceptance mechanism is introduced.
 
 Shared Browser-GPT transport and pack-review turns retain the independent
-procedures in [the one-turn runbook](../../docs/browser-gpt-turn-runbook.md).
+procedures in [the one-turn runbook](../../docs/browser-gpt-turn-runbook.md):
+[start-of-shift preflight](../../docs/browser-gpt-turn-runbook.md#start-of-shift-preflight),
+[turn preparation](../../docs/browser-gpt-turn-runbook.md#prepare-one-turn),
+[launch](../../docs/browser-gpt-turn-runbook.md#launch),
+[observation and settlement](../../docs/browser-gpt-turn-runbook.md#observe-and-settle),
+[publication and cleanup](../../docs/browser-gpt-turn-runbook.md#publication-and-tab-lifecycle),
+[incident handling](../../docs/browser-gpt-turn-runbook.md#incident-handling),
+[one-shot diagnosis](../../docs/browser-gpt-turn-runbook.md#one-shot-diagnosis), and
+[handoff/close](../../docs/browser-gpt-turn-runbook.md#shift-handoffclose).
 Their invitation markers, admission, ownership, observation, and lawful retry
 rules are transport facts, **not** create-Issue label/review authority.
 
