@@ -71,9 +71,9 @@ manager-controlled Browser-GPT implementation
 -> manager whole-role Task/Dispatch handoff
    (exact Issue/PR/head/CI/review facts; next action = independent smoke)
 -> orchestrator launches/reuses a local supervised worker as independent-smoke parent
--> local worker runs worker-smoke-run --smoke-actor independent on the exact head
+-> local worker runs worker-smoke-run --smoke-actor independent on the checked-out PR head
 -> independent finding: local worker fixes to a new head + fresh independent smoke
--> final exact-head independent-smoke PASS + current completion verification
+-> same-PR independent-smoke PASS + current-head CI/completion verification
 -> VERIFIED_COMPLETE
 ```
 
@@ -90,7 +90,7 @@ After the settled-review handoff, the orchestrator does not wait for scheduler
 the independent-smoke parent; no new work class or smoke supervisor is created.
 That worker prepares the exact current worktree and prerequisites and uses the
 existing independent-smoke authority. If independent smoke finds a defect, the
-local worker owns the fix and a fresh exact-head independent smoke. The completed
+local worker owns the fix and an explicit smoke execution on the corrected head. The completed
 pack-review stage remains completed and is not reopened.
 
 ### Worker
@@ -102,57 +102,42 @@ read live Issue/rules
 -> implement scoped work
 -> required local verification
 -> create/update PR and exact head
--> worker-owned smoke (exact head; fix and repeat until PASS)
 -> required pack-review stage (logical rounds: T1=1, T2=1, T3=2)
 -> review finding: worker fixes or explicitly resolves/rejects findings
 -> if T3 round 1 settled: required round 2 (same head is allowed)
 -> durable reviewStageComplete
--> later heads: no new required pack-review round; project pack-review success status only
--> independent smoke / ordinary exact-head validation as separately required
--> independent-smoke finding: worker fix + fresh independent smoke
+-> existing worker/orchestrator PR review-settled handoff launches supervised local independent smoke
+-> smoke worker checks out the PR head, runs the Issue-declared scenarios, publishes v1 report
+-> first FAIL/BLOCKED: worker fix + explicit independent smoke execution
+-> one PASS covers subsequent PR heads; required CI remains current-head bound
 -> completion
 -> worker_done
 ```
 
-Worker-owned smoke and independent smoke are different actors and different
-gates. The workflow above for a manager-controlled Browser-GPT implementation is
-the narrow exception to ordinary coding-worker pre-review smoke ordering: it has
-no synthetic worker-owned smoke before the manager's direct canonical pack
-review, and the supervisor launches the local independent-smoke parent only
-after the manager's settled-review handoff. For ordinary local coding workers,
-the lifecycle shown in this Worker section remains unchanged: worker-owned smoke
-passes before pack-review admission.
+Ordinary coding workers no longer run a redundant worker-owned pre-review
+smoke. The existing PR-created/review-complete worker/orchestrator handoff
+launches the supervised local independent smoke worker after pack-review
+settlement. The manager-controlled Browser-GPT path retains its separate
+manager-to-supervisor handoff and the same existing independent worker.
+Neither handoff adds a scheduler smoke starter, watcher, queue, registry,
+retry protocol, or new worker category.
 
-Ordinary smoke and CI remain exact-current-head evidence. The required
-pack-review stage is a PR/task-cycle obligation, not a per-commit retry loop:
-new cycles use logical-round caps T1=1, T2=1, T3=2, and every required GPT
-round uses three concurrent sources. A T3 clean first round does not complete
-the stage; round 2 remains required and may review the same head. Once the
-required rounds and any findings are settled, durable `reviewStageComplete`
-prevents later commits, smoke fixes, or CI-only changes from reopening or
-consuming another required review round.
+Required CI remains exact-current-head evidence. One successful
+`pack-worker-smoke-report/v1` PASS on the PR is sufficient across later
+heads, irrespective of the PASS report head or publisher. A first
+FAIL/BLOCKED leaves readiness unsatisfied; a substantive worker/fixer
+correction can lead to an **explicit** subsequent smoke run, not an
+automatic retry. The independent worker runs the Issue's scenarios against
+its checked-out PR head and retains the unchanged report schema and
+secret redaction. Independence belongs to that handoff, not an actor
+field or readiness filter.
 
-After a current-head smoke returns a gap or fail, the next legal coordinator step is a worker fix that produces a new SHA, then a fresh smoke of that exact SHA:
-
-```text
-worker-owned smoke (current SHA)
-  |-- PASS --> pack-review eligible
-  |-- FAIL/BLOCKED --> fix (new SHA) --> worker-owned smoke that SHA
-
-pack-review logical round
-  |-- T1/T2 settled --> reviewStageComplete
-  |-- T3 round 1 settled --> round 2 (same or later SHA)
-  |-- final findings --> fix/resolve findings --> reviewStageComplete (no worker-smoke prerequisite)
-```
-
-Old-head smoke and CI proofs do not count for a new head. Review-stage
-completion is different: after `reviewStageComplete=true`, a later head receives
-`orchestrator-pack/pack-review=success` with the description
-`Required pack-review stage completed; no additional review round required.`
-without launching another required reviewer. An independent-smoke finding still
-requires a worker fix and fresh independent smoke; it does not reopen the
-completed pack-review stage. Exact smoke folding and SHA-binding stay in
-`docs/worker-smoke-testing.md`.
+Pack-review is a PR/task-cycle obligation with logical-round caps T1=1,
+T2=1, T3=2, and three independent sources per required GPT round. A T3
+clean first round does not complete the stage. Once required rounds and
+findings settle, `reviewStageComplete` prevents later commits, smoke
+fixes, or CI-only changes from reopening required review. Later heads
+need current-head CI but not another smoke PASS.
 
 ### Reconciler
 
@@ -660,7 +645,7 @@ The registered production owner remains `scripts/lib/orchestrator-side-process-s
 
 The coordinator fleet alarm in `docs/fleet-alarm.md` is an operator-installed per-project user service. It is advisory only and separate from scheduler tick, supervisor ownership, and the side-process registry; its sole Orca mutation is a plain-text terminal send to the resolved coordinator pane, never a unit or orchestration-state mutation and never effect authority.
 
-Post-review worker smoke is not owned by the scheduler child. The scheduler performs one exact task `(Issue, PR, head)` start-or-observe operation against the existing detached `worker-smoke-run.ts run --detach` lifecycle and then returns; an active matching run suppresses duplicate start, while terminal lifecycle plus final evidence is consumed without rerunning the same head. The detached process remains the smoke lifecycle owner across scheduler replacement.
+Post-review independent smoke is not owned or started by the scheduler child. The ordinary review-settled worker/orchestrator handoff, and separately the manager-controlled supervisor handoff, use the existing supervised local smoke worker. Scheduler ticks do not start, observe, or reconcile smoke; no replacement poller or queue exists.
 
 The side-process supervisor derives one generation deadline from the canonical child registry: `cadenceSeconds * stallGraceMultiplier` (currently `5 * 14 = 70s`). A generation still running at that observed-child-start deadline is terminated through its exact child process, the supervisor waits for that process to close, then waits the full normal cadence before starting a replacement and re-verifying epoch/registry authority. Stall terminations are recorded separately from crash `rapidExits`; consecutive stalls use the existing `terminalRapidExits` cap and refuse as `scheduler_child_stall_loop`. The bound is therefore `70s + exact close + normal cadence`, never a synthetic 75-second child timeout.
 
@@ -912,14 +897,13 @@ review is the authoritative verdict; the pack run store is operational state.
 - an at-cap cycle suppresses further automatic/common reviewer-model calls;
 - reviewer invocation and current-head review authority are different facts.
 
-Review-call suppression never carries unrelated evidence across heads. Required CI
-and declared smoke stay exact-current-head. On a new head, smoke admission is checked
-before an at-cap automatic refusal; conflict-free carry-over may remove the model
-call but not the current-head smoke or CI obligation.
+Review-call suppression never carries unrelated review or CI facts across heads.
+Required CI stays current-head bound; a prior-head smoke PASS on the same PR
+remains sufficient, and smoke is not an at-cap or review admission gate.
 
 ### Issue #2161 main-update sequencing
 
-The merge agent performs the sole branch update from `origin/main` immediately before merge, after smoke PASS or a valid clean-main-merge PASS carry and after required CI is green on that exact head. Workers and coordinators must not merge main to clear BEHIND during smoke or review; exact-head smoke, CI, and review authority remain unchanged.
+The merge agent performs the sole branch update from `origin/main` immediately before merge, after a same-PR smoke PASS (at any report head) and after required CI is green on the current head. Workers and coordinators must not merge main to clear BEHIND during smoke or review; current-head CI and review authority remain unchanged.
 
 #### Pack-review recovery recipe
 
@@ -997,51 +981,21 @@ reviewer-model call.
 
 ### Worker smoke
 
-Run the task's declared smoke plan against the current head. Smoke evidence
-must be bound to the exact code, configuration, identity, and lifecycle under
-test. A harness failure is investigated; it is not overwritten with a synthetic
-pass. Review carry-over, same-head clean suppression, and cap exhaustion do not
-carry smoke evidence to another head.
+The supervised independent smoke worker checks out the current PR head,
+executes the Issue's `smoke-test-plan` scenarios, and publishes the
+unchanged `pack-worker-smoke-report/v1` comment after the attempt.
+The selected project card provides repository identity; the GitHub
+comment author is publisher metadata, not proof of an independent role.
+Existing secret scrubbing redacts output and does not refuse a run
+because scrubbing occurred. Neither scheduler ticks nor a harness
+registry, lock, lifecycle/close receipt, progress/cancel, carry-only,
+selective retry, or smoke-plan preflight authorizes the run.
 
-When the smoke launcher is started from a tool whose own timeout or process-group
-lifetime may end before the smoke run, use the tracked detached handoff instead of
-leaving the run owned by that parent process:
-
-```text
-scripts/worker-smoke-run run --detach <ordinary run arguments>
-scripts/worker-smoke-run wait --run <run-id> --cwd <worktree> [--json]
-```
-
-`run --detach` returns the exact run id only after that detached launcher's
-`lifecycle.json` is visible. The detached launcher remains the sole owner of
-admission, runtime execution, cancellation, cleanup, publication, and final
-evidence. An interrupted Orca CLI observation child is reported as
-`runtime_cli_interrupted:<SIGNAME>`; when the launcher itself receives SIGINT or
-SIGTERM, the launcher result is `operator_cancelled:<SIGNAME>`. Neither condition
-is rewritten as `runtime_response_invalid`.
-
-`wait --run` is read-only. It does not acquire admission, reserve or repair
-lifecycle state, create or close terminals, publish GitHub state, or retry child
-observations. It may report PASS only from launcher-terminalized final evidence
-bound to that exact run id after cleanup and final report determination (or the
-terminal no-execution determination for a detached carry-only run). A child sealed
-completion pair by itself is never sufficient for PASS.
-
-For an unchanged exact `(action, expected)` tuple whose latest fresh same-head
-observation is BLOCKED because a scenario precondition or required evidence is
-unavailable, the launcher refuses another automatic attempt with
-`smoke_blocked_precondition_unchanged`. An operator may authorize exactly one
-otherwise-refused attempt with `--operator-override <reason>`; the bounded reason
-is recorded on that attempt's receipt and is not a standing waiver. A later
-harness failure that never freshly observes the tuple does not clear the older
-BLOCKED observation.
-
-Smoke-ordering ownership is exact-attempt bound. Exact launcher-terminalized
-evidence reconciles a stale `started` owner to its real PASS/FAIL/BLOCKED verdict
-before another start is considered. A dead owner without final evidence becomes
-`failed/aborted` only when runtime cleanup is already proven safe; a bound
-terminal or unresolved cleanup stays fail-closed and continues to refuse a new
-owner until the existing lifecycle/close authority proves cleanup.
+Readiness uses the newest PASS comment on the same PR at any head,
+without filtering by actor, reconstructing ancestry, or requiring a
+new PASS on later heads. Required CI remains green on the current head.
+A first FAIL/BLOCKED is handled by an existing worker/fixer correction
+and an explicit subsequent smoke run, never an automatic harness retry.
 
 ### Orchestrator-delegated integration
 

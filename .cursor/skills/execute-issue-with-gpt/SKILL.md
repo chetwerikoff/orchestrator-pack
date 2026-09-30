@@ -54,14 +54,14 @@ The supervisor owns **completion continuity**, not substantive implementation.
    review as a nonterminal handoff, not manager-role completion. Keep the same
    manager Dispatch alive while the supervisor launches or reuses the existing
    supervised local worker as the independent-smoke parent for the exact
-   handed-off PR/head. When the canonical durable exact-head
+   handed-off PR/head. When the canonical same-PR
    `pack-worker-smoke-report/v1` is observable, continue that same manager
    Dispatch through the existing continuation channel; the manager re-reads the
    authoritative smoke record and projects it through the shared boundary.
    The supervisor consumes the validated `verdict` before role completion:
    `PASS` may complete the manager role; proved `FAIL` returns to the same
    nonterminal parent workflow and the supervisor-launched local worker owns
-   the fix and fresh exact-head independent smoke. Settled pack review stays
+   the fix and an explicit independent smoke execution on the corrected head. Settled pack review stays
    complete. This scoped manager-boundary change does not claim the broader
    local-worker incident/consumption loop is implemented or closed.
 
@@ -121,7 +121,7 @@ manager-controlled Browser-GPT implementation, the manager may complete its own
 role only after the canonical pack-review obligations settle and it hands the
 supervisor the exact Issue/PR/head/CI/review facts with `independent smoke` as
 the next legal action. Overall `VERIFIED_COMPLETE` is legal only after the
-supervisor-owned local independent-smoke worker passes on the final exact head and
+supervisor-owned local independent-smoke worker publishes a same-PR PASS, with current-head required CI green and
 a fresh current-state verification under `docs/chat-executor-rules.md` and the
 live Issue succeeds. GPT self-report and manager completion are advisory rather
 than overall completion authority.

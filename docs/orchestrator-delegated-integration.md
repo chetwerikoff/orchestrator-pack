@@ -7,7 +7,7 @@ credential boundary.
 
 ## Sequence and serialize
 
-After implementation, required review, CI, and current-head smoke are complete,
+After implementation, required review, current-head CI, and a same-PR smoke PASS are complete,
 the orchestrator re-reads the live Issue, PR/head/base, `main`, and each concrete
 explicit dependency named by the task. Resolve only explicit relationships into
 `merge_now` or `wait_for_dependency`. A `wait_for_dependency` decision launches no
@@ -69,7 +69,7 @@ Canonical readiness remains `evaluatePostSmokeReadiness()` in
 `scripts/worker-smoke-run.ts`. It binds the live current WorkerAssignment into
 the existing `evaluateReadiness()` target and supplies current PR
 identity/head, review-independent required CI, required review/finding/cap
-facts, exact-head smoke, and one accepted corroborated current-worker lifecycle.
+facts, the newest same-PR PASS at any report head, and one accepted corroborated current-worker lifecycle.
 The integration worker therefore establishes its ordinary corroborated current
 worker lifecycle and consumes that production result for its own exact
 assignment/PR/head. Delegated integration proceeds only when the result is
@@ -78,8 +78,7 @@ exactly `READY_TO_MERGE`.
 The existing `worker-smoke-run.ts delegated-readiness` command is the supported
 current-assignment invocation for this revalidation. It binds the supplied Issue,
 PR and head to the current WorkerAssignment and its delegated marker, calls
-`evaluatePostSmokeReadiness()` with publication disabled, verifies the PASS smoke
-report against a stable exact-head PR-comment census, then re-reads the same
+`evaluatePostSmokeReadiness()` with publication disabled, reads the newest same-PR smoke PASS at any report head, without an author filter or census-stabilization gate, then re-reads the same
 assignment/marker and PR head before returning. Missing, changed, or unavailable
 smoke evidence is `NOT_READY`; the command does not execute or carry smoke itself.
 Invoke it through the canonical TypeScript CLI wrapper with `--issue`, `--pr`,

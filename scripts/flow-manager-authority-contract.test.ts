@@ -1779,7 +1779,7 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
       /The manager\s+does not run independent smoke itself/,
     );
     expect(executionRunbook).toContain(
-      'independent smoke has passed on the final exact head',
+      'a same-PR independent smoke PASS exists with current-head CI green',
     );
     expect(orchestrationRunbook).toContain(
       'manager whole-role Task/Dispatch handoff',
@@ -1894,7 +1894,7 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     expect(smokeRunbook).toMatch(/does not\s+reopen a completed pack-review stage/);
   });
 
-  it('keeps ordinary worker smoke-before-review while exempting only the manager-controlled Browser-GPT path', () => {
+  it('uses one post-review independent smoke handoff for ordinary and manager-controlled PRs', () => {
     const ordinaryStart = smokeRunbook.indexOf('### Ordinary local coding-worker path');
     const managerStart = smokeRunbook.indexOf('### Manager-controlled Browser-GPT path');
     const nextSection = smokeRunbook.indexOf('## Pre-smoke prerequisite preparation', managerStart);
@@ -1904,11 +1904,12 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
 
     const ordinary = smokeRunbook.slice(ordinaryStart, managerStart);
     const manager = smokeRunbook.slice(managerStart, nextSection);
-    expect(ordinary).toContain('implementation\n  -> worker-owned smoke PASS\n  -> pack-review cycle');
+    expect(ordinary).toContain('implementation\n  -> pack-review cycle');
     expect(manager).toContain('manager-owned canonical pack-review cycle');
     expect(manager).toContain('There is no synthetic pre-review worker-owned smoke on this path');
     expect(manager).toContain('supervisor launches local independent-smoke parent');
     expect(manager).toContain('independent finding: local worker fix + fresh independent smoke');
+    expect(ordinary).not.toContain('-> worker-owned smoke PASS');
     expect(manager).not.toContain('-> worker-owned smoke PASS');
   });
 });
