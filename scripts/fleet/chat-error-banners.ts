@@ -43,7 +43,8 @@ const TARGET_EVAL_TIMEOUT_MS = 3_000;
 // product-error alert is shown or the last turn lacks the finished-reply actions.
 const redBannerExpression = (repository: string): string => `(() => {
   const visible = (e) => e.getClientRects().length > 0;
-  if (document.querySelector(${JSON.stringify(STOP_BUTTON_SELECTOR)})) return [];
+  const rendered = (element) => element.getBoundingClientRect().height > 0;
+  if ([...document.querySelectorAll(${JSON.stringify(STOP_BUTTON_SELECTOR)})].some(rendered)) return [];
   const first = document.querySelector('[data-markdown-text-style="user-message"],[data-chatgpt-search-unit-key$=":user"]');
   const issuePrefix = ${JSON.stringify(`github.com/${repository.toLowerCase()}/issues/`)};
   const firstText = ((first && first.innerText) || '').toLowerCase();
@@ -74,7 +75,7 @@ const redBannerExpression = (repository: string): string => `(() => {
       review,
     }));
   if (alerts.length > 0) return alerts;
-  const lastTurn = [...document.querySelectorAll(${JSON.stringify(CONVERSATION_TURN_SECTION_SELECTOR)})].at(-1);
+  const lastTurn = [...document.querySelectorAll(${JSON.stringify(CONVERSATION_TURN_SECTION_SELECTOR)})].filter(rendered).at(-1);
   if (!lastTurn) return [];
   if (!lastTurn.querySelector(${JSON.stringify(ASSISTANT_TURN_ACTION_SELECTOR)})) {
     return [{ kind: 'stalled', text: ${JSON.stringify(STALLED_CHAT_TEXT)}, retry: false, issue, pull, review }];

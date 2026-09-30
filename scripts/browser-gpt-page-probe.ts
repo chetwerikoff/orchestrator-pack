@@ -1307,7 +1307,7 @@ function inspectionExpression(): string {
       let generatingWithoutNodes = false;
       let rolelessRecoveryHint = false;
       try {
-        generatingWithoutNodes = Boolean(document.querySelector(STOP_SELECTOR));
+        generatingWithoutNodes = Array.from(document.querySelectorAll(STOP_SELECTOR)).some((element) => element.getBoundingClientRect().height > 0);
       } catch {
         generatingWithoutNodes = false;
       }
@@ -1372,7 +1372,7 @@ function inspectionExpression(): string {
     }
     let generating = 'unknown';
     try {
-      generating = Boolean(document.querySelector(STOP_SELECTOR));
+      generating = Array.from(document.querySelectorAll(STOP_SELECTOR)).some((element) => element.getBoundingClientRect().height > 0);
     } catch {
       generating = 'unknown';
     }
@@ -1396,6 +1396,7 @@ function inspectionExpression(): string {
     const markerCandidates = [];
     try {
       for (const section of Array.from(document.querySelectorAll(TURN_SELECTOR))) {
+        if (section.getBoundingClientRect().height === 0) continue;
         const turnKey = section.getAttribute('data-turn-key');
         if (typeof turnKey === 'string' && turnKey) conversationTurnKeys.push(turnKey);
         const text = typeof section.innerText === 'string' ? section.innerText : '';

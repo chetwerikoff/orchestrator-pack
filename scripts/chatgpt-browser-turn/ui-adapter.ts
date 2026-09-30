@@ -16,7 +16,7 @@ import {
   MESSAGE_NODE_SELECTOR,
   PRODUCT_STATUS_PROBE_SELECTORS,
   REGENERATE_THREAD_ERROR_BUTTON_SELECTOR,
-  STOP_BUTTON_SELECTOR,
+  RENDERED_STOP_BUTTON_SELECTOR,
   UI_COLLAPSE_AFFIX_RE,
   USER_MESSAGE_STYLE,
 } from './product-page-selectors.ts';
@@ -94,7 +94,7 @@ const MESSAGE_DELIVERY_TIMED_OUT_TEXT = 'Message delivery timed out. Please try 
 const PRODUCT_NETWORK_ERROR_TEXT = 'A network error occurred. Please check your connection and try again. If this issue persists please contact us through our help center at help.openai.com.';
 const MESSAGE_STREAM_ERROR_TEXT = 'Error in message stream';
 const STREAM_RECOVERY_POLLING_TIMED_OUT_TEXT = 'ChatGPT stream recovery polling timed out';
-const OWNED_TURN_GENERATION_SELECTOR = STOP_BUTTON_SELECTOR;
+const OWNED_TURN_GENERATION_SELECTOR = RENDERED_STOP_BUTTON_SELECTOR;
 
 // The execute-Issue recovery projection is intentionally narrower than the
 // shared product-status helper. Other state-light consumers (notably session
