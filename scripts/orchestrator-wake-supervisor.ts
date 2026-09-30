@@ -2,12 +2,15 @@ import './toolchain/native-entrypoint-preflight.ts';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { runProcess } from './kernel/subprocess.ts';
+import path from 'node:path';
 import {
   isSchedulerOperational,
   readSupervisorStatus,
   runSupervisor,
   type SupervisorOptions,
 } from './lib/orchestrator-side-process-supervisor.ts';
+import { resolveTargetContext } from './lib/target-context.ts';
+import { resolveWakeSupervisorStateRoot } from './pr2-foundation/wake-supervisor-state-root.ts';
 
 function parse(argv: string[]): Record<string, string | boolean> {
   const output: Record<string, string | boolean> = {};
@@ -29,9 +32,18 @@ function required(args: Record<string, string | boolean>, key: string): string {
 }
 
 function options(args: Record<string, string | boolean>): SupervisorOptions {
+  const projectId = required(args, 'project');
+  const target = resolveTargetContext({ projectId });
+  const stateDir = path.resolve(required(args, 'state-dir'));
+  const expectedStateDir = path.join(path.resolve(resolveWakeSupervisorStateRoot({ projectId: target.projectId })), 'supervisor');
+  if (stateDir !== expectedStateDir) throw new Error('wake_supervisor_state_dir_project_mismatch');
+  const repoRoot = path.resolve(required(args, 'repo-root'));
+  if (repoRoot !== path.resolve(target.packRoot)) throw new Error('wake_supervisor_pack_root_mismatch');
   return {
-    stateDir: required(args, 'state-dir'),
-    repoRoot: required(args, 'repo-root'),
+    stateDir,
+    repoRoot,
+    projectId: target.projectId,
+    repository: target.repository,
     epochAuthorityPath: required(args, 'epoch-authority'),
     epochId: required(args, 'epoch-id'),
     nonce: required(args, 'nonce'),
@@ -70,7 +82,8 @@ async function main(): Promise<void> {
   const [command = 'help', ...argv] = process.argv.slice(2);
   const args = parse(argv);
   if (command === 'status') {
-    const status = readSupervisorStatus({ stateDir: required(args, 'state-dir') });
+    const resolved = options(args);
+    const status = readSupervisorStatus({ stateDir: resolved.stateDir });
     process.stdout.write(`${JSON.stringify({ status })}\n`);
     process.exitCode = isSchedulerOperational(status) ? 0 : 1;
     return;
