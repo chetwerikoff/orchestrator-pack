@@ -87,7 +87,8 @@ export function resolveWorkerStatusStorePath(env = process.env) {
   if (env.OPK_REPORT_STATE_SEED_STATE) {
     return join(dirname(String(env.OPK_REPORT_STATE_SEED_STATE)), 'worker-status-store.json');
   }
-  return join(homedir(), '.local', 'state', 'orchestrator-pack-wake-supervisor', 'worker-status-store.json');
+  const projectId = String(env.OPK_PROJECT_ID ?? 'orchestrator-pack').trim() || 'orchestrator-pack';
+  return join(homedir(), '.local', 'state', 'orchestrator-pack-wake-supervisor', projectId, 'worker-status-store.json');
 }
 
 function workerStatusStoreHasRecords(raw = {}) {

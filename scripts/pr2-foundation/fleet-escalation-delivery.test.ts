@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
+import { projectCardPath } from '../lib/target-context.ts';
 import {
   OPERATOR_PRIMARY_PRE_ACTION_FAILURES,
   type OperatorPrimaryTargetFenceResult,
@@ -34,6 +35,10 @@ import { runFleetEscalationProof } from './fleet-escalation-proof.ts';
 import { runSchedulerTick, schedulerFleetPhaseFailure, writeSchedulerTickResult, type SchedulerBoundary } from './scheduler.ts';
 
 const roots: string[] = [];
+const targetEnvironmentKeys = ['HOME', 'XDG_CONFIG_HOME', 'OPK_BASE_DIR', 'OPK_PROJECT_ID'] as const;
+const originalTargetEnvironment = Object.fromEntries(
+  targetEnvironmentKeys.map((key) => [key, process.env[key]]),
+ ) as Record<typeof targetEnvironmentKeys[number], string | undefined>;
 const projectId = 'orchestrator-pack';
 const repository = 'chetwerikoff/orchestrator-pack';
 const activationLineage = 'al-1260-test';
@@ -57,6 +62,11 @@ function tempRoot(): string {
 
 afterEach(() => {
   while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true });
+  for (const key of targetEnvironmentKeys) {
+    const value = originalTargetEnvironment[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
 });
 
 function expected(tickSequence: number): FleetEscalationSchedulerIdentityV1 {
@@ -236,8 +246,50 @@ function adapterFixture(input: {
   return { adapter, calls };
 }
 
+async function configureProjectContext(root: string): Promise<void> {
+  const primaryRoot = path.join(root, 'primary');
+  mkdirSync(primaryRoot, { recursive: true });
+  const initialized = await runProcess({
+    command: 'git',
+    args: ['init'],
+    cwd: primaryRoot,
+    inheritParentEnv: false,
+    allowEmptyStdout: true,
+    timeoutMs: 10_000,
+  });
+  if (!initialized.ok) throw new Error(`git init failed: ${initialized.stderr}`);
+  const origin = await runProcess({
+    command: 'git',
+    args: ['remote', 'add', 'origin', `https://github.com/${repository}.git`],
+    cwd: primaryRoot,
+    inheritParentEnv: false,
+    allowEmptyStdout: true,
+    timeoutMs: 10_000,
+  });
+  if (!origin.ok) throw new Error(`git remote add failed: ${origin.stderr}`);
+
+  const configHome = path.join(root, 'config');
+  const env = { ...process.env, HOME: root, XDG_CONFIG_HOME: configHome, OPK_BASE_DIR: root, OPK_PROJECT_ID: projectId };
+  process.env.HOME = root;
+  process.env.XDG_CONFIG_HOME = configHome;
+  process.env.OPK_BASE_DIR = root;
+  process.env.OPK_PROJECT_ID = projectId;
+  const card = projectCardPath(projectId, env);
+  mkdirSync(path.dirname(card), { recursive: true });
+  writeFileSync(card, JSON.stringify({
+    projectId,
+    repository,
+    primaryRoot,
+    defaultBranch: 'main',
+    orcaWorkspacePattern: '.*',
+    orchestratorTitlePattern: '.*',
+    browserGpt: { projectUrl: 'https://chatgpt.com/g/orchestrator-pack' },
+  }));
+}
+
 async function operatorAssignment(root: string): Promise<string> {
-  const file = path.join(root, 'worker-assignments.json');
+  await configureProjectContext(root);
+  const file = path.join(root, projectId, 'worker-assignments.json');
   const published = await publishCurrentWorkerAssignment({
     file,
     projectId,
@@ -496,10 +548,11 @@ describe('fleet escalation delivery', () => {
 
   it('uses the real target producer to refuse an absent binding before publication', async () => {
     const root = tempRoot();
+    await configureProjectContext(root);
     const fixture = adapterFixture();
     const result = await runFleetEscalationDelivery(invocation(
       handoff(root),
-      path.join(root, 'absent-worker-assignments.json'),
+      path.join(root, projectId, 'absent-worker-assignments.json'),
       fixture.adapter,
     ));
     expect(result.decision).toBe('invalid_target');

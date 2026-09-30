@@ -9,9 +9,17 @@ import {
   readCordonState,
 } from './activation-cordon.ts';
 import { appendFollowup, appendPhaseOne, finalizePhaseOne, readPhaseOneDetail, verifyPhaseOneDetails, verifyPhaseOneDigest } from './activation-evidence.ts';
-import { importSnapshot } from './activation-import.ts';
+import {
+  assertSnapshotSourceStable,
+  assertCommittedImportedDestination,
+  cutoverStoreKind,
+  importSnapshot,
+  retireImportedSource,
+  snapshotArtifactPath,
+} from './activation-import.ts';
 import { projectRegistry } from './activation-registry-projection.ts';
 import { sha256Bytes, sha256Stable } from './stable-stringify.ts';
+import { publishCommittedProjectNamespaceBindings } from './project-state-migration.ts';
 import type { CordonRecord, FollowupRecord, ActivationRequest, EpochCommitCore, ImportRecord, PhaseOneEnvelope, SnapshotRecord } from './types.ts';
 import {
   hasSchedulerChildFailureEvidence,
@@ -110,7 +118,12 @@ function liveSupervisorStatus(request: ActivationRequest, nonce: string): Superv
   if (!status) return null;
   if (status.schemaVersion !== 2) throw new Error('recovery_supervisor_status_v1_unsupported');
   if (!isLiveSupervisorStatus(status)) return null;
-  if (status.epochId !== request.epochId || status.nonce !== nonce) throw new Error('recovery_supervisor_context_conflict');
+  if (
+    status.epochId !== request.epochId
+    || status.nonce !== nonce
+    || (request.projectId && status.projectId !== request.projectId)
+    || (request.repository && status.repository !== request.repository)
+  ) throw new Error('recovery_supervisor_context_conflict');
   if (status.restartState === 'refused') throw new Error(`recovery_supervisor_refused:${status.refusalReason ?? 'unknown'}`);
   if (status.restartState === 'stopping') throw new Error('recovery_supervisor_stopping');
   return status;
@@ -155,11 +168,15 @@ async function waitForSupervisor(request: ActivationRequest, nonce: string): Pro
   throw new Error('recovery_supervisor_not_ready');
 }
 
-export function findCompletedSchedulerDelivery(core: EpochCommitCore, storeRoot?: string): PackReviewRunRecord | null {
+export function findCompletedSchedulerDelivery(
+  core: EpochCommitCore,
+  storeRoot?: string,
+  projectId = 'orchestrator-pack',
+): PackReviewRunRecord | null {
   const committedAt = Date.parse(core.commitAt);
   if (!Number.isFinite(committedAt)) throw new Error('recovery_commit_timestamp_invalid');
   const runs = listPackReviewRuns({
-    projectId: 'orchestrator-pack',
+    projectId,
     ...(storeRoot ? { storeRoot } : {}),
   });
   return runs.find((run) =>
@@ -207,7 +224,7 @@ export async function observeSchedulerHealthAndDelivery(
   let delivered: PackReviewRunRecord | null = null;
   do {
     lastStatus = observedSupervisorStatus(request, core, supervisor);
-    delivered = findCompletedSchedulerDelivery(core, storeRoot);
+    delivered = findCompletedSchedulerDelivery(core, storeRoot, request.projectId?.trim() || 'orchestrator-pack');
     if (lastStatus && delivered) break;
     await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, Math.max(1, deadline - Date.now()))));
   } while (Date.now() < deadline);
@@ -249,6 +266,7 @@ export const productionRecoveryBoundary: RecoveryBoundary = {
       command: process.execPath,
       args: [
         '--experimental-strip-types', entry, 'run', '--detach',
+        '--project', request.projectId?.trim() || 'orchestrator-pack',
         '--state-dir', request.paths.supervisorStateDir,
         '--repo-root', request.repoRoot,
         '--epoch-authority', request.paths.epochAuthorityPath,
@@ -330,7 +348,7 @@ function recoverySnapshots(request: ActivationRequest, nonce: string): SnapshotR
     const matches = rows.filter((row) => row.storeId === spec.id);
     if (matches.length !== 1) throw new Error(`precas_snapshot_evidence_invalid:${spec.id}`);
     const row = matches[0]!;
-    const snapshotPath = path.join(request.paths.snapshotDir, `${spec.id}.snapshot.json`);
+    const snapshotPath = snapshotArtifactPath(spec, request.paths.snapshotDir);
     if (
       row.snapshotPath !== snapshotPath
       || typeof row.snapshotDigest !== 'string'
@@ -339,6 +357,8 @@ function recoverySnapshots(request: ActivationRequest, nonce: string): SnapshotR
       || Number(row.sourceVersion) <= 0
       || typeof row.writerWatermark !== 'string'
       || !row.writerWatermark.trim()
+      || (cutoverStoreKind(spec) !== 'legacy-json'
+        && (typeof row.sourceDigest !== 'string' || !row.sourceDigest.trim()))
       || (row.sourceState !== 'present' && row.sourceState !== 'absent')
     ) {
       throw new Error(`precas_snapshot_evidence_invalid:${spec.id}`);
@@ -346,8 +366,14 @@ function recoverySnapshots(request: ActivationRequest, nonce: string): SnapshotR
     if (!existsSync(snapshotPath)) throw new Error(`precas_snapshot_missing:${spec.id}`);
     const bytes = readFileSync(snapshotPath);
     if (sha256Bytes(bytes) !== row.snapshotDigest) throw new Error(`precas_snapshot_digest_mismatch:${spec.id}`);
-    const parsed = JSON.parse(bytes.toString('utf8')) as { schemaVersion?: unknown };
-    const sourceVersion = Number(parsed.schemaVersion ?? 1);
+    // Opaque files may contain JSONL or arbitrary bytes; only legacy JSON and
+    // durable absence records carry a JSON document with a schemaVersion.
+    const kind = cutoverStoreKind(spec);
+    let sourceVersion = Number(row.sourceVersion);
+    if (kind === 'legacy-json' || row.sourceState === 'absent') {
+      const parsed = JSON.parse(bytes.toString('utf8')) as { schemaVersion?: unknown };
+      sourceVersion = Number(parsed.schemaVersion ?? 1);
+    }
     if (!Number.isInteger(sourceVersion) || sourceVersion <= 0 || sourceVersion !== row.sourceVersion) {
       throw new Error(`precas_snapshot_version_mismatch:${spec.id}`);
     }
@@ -361,6 +387,7 @@ function recoverySnapshots(request: ActivationRequest, nonce: string): SnapshotR
       storeId: spec.id,
       snapshotPath,
       snapshotDigest: row.snapshotDigest,
+      ...(row.sourceDigest ? { sourceDigest: row.sourceDigest } : {}),
       sourceVersion,
       writerWatermark: row.writerWatermark,
       sourceState: row.sourceState,
@@ -373,6 +400,10 @@ function completePreCasRecovery(request: ActivationRequest, cordon: CordonRecord
   assertForwardRecoveryPrefix(request.paths.phaseOnePath, request.epochId, nonce);
   verifyPhaseOneDetails(request.paths.phaseOnePath, request.epochId, nonce);
   const snapshots = recoverySnapshots(request, nonce);
+  for (const store of request.stores) {
+    const snapshot = snapshots.find((row) => row.storeId === store.id)!;
+    assertSnapshotSourceStable(store, snapshot);
+  }
   const imports: ImportRecord[] = request.stores.map((spec) => importSnapshot({
     epochId: request.epochId,
     nonce,
@@ -419,6 +450,19 @@ export async function recoverCommittedCutover(
   }
   assertCommittedContext(request, cordon, core);
   verifyPhaseOneDigest(request.paths.phaseOnePath, request.epochId, cordon.nonce, core.preCommitLogDigest);
+  const snapshots = recoverySnapshots(request, cordon.nonce);
+  for (const store of request.stores) {
+    assertCommittedImportedDestination(
+      store,
+      snapshots.find((row) => row.storeId === store.id)!,
+      core.importDigests[store.id],
+    );
+  }
+  publishCommittedProjectNamespaceBindings(request);
+  for (const store of request.stores) {
+    const snapshot = snapshots.find((row) => row.storeId === store.id)!;
+    retireImportedSource(store, snapshot);
+  }
   const projection = projectRegistry(request.paths.targetRegistryPath, request.paths.projectedRegistryPath);
   if (projection.registryHash !== core.registryHash) throw new Error('recovery_registry_hash_mismatch');
   appendIfMissing(request.paths.followupPath, request.epochId, 'committed-registry-reprojected', projection);

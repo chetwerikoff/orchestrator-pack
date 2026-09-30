@@ -153,11 +153,22 @@ observation is needed, inspect the standalone chat page rather than claiming
 liveness from PID/log state. Hand-copied page text cannot become
 `completed_valid` because it lacks PASS_ID/SHA validation and the durable driver
 record.
-Before reporting any standalone terminal state, re-read the newest artifact in
-`~/.local/state/discuss-with-gpt/<draft-slug>/`. The on-disk record outranks
-agent recollection and any earlier tool refusal. A preflight refusal on one
-invocation path is not a terminal state while a `completed_valid` artifact
-exists for that PASS_ID.
+Before reporting any standalone terminal state, re-read the newest artifact
+only after resolving the same explicitly selected project card with
+`resolveTargetContext` and verifying the **persisted**
+`project-binding.json` on `~/.local/state/discuss-with-gpt/<projectId>/` using
+`assertProjectStateBinding` from the pack's `scripts/lib/project-state-binding.ts`.
+The expected identity is the selected card's exact `projectId` and `repository`;
+the pathname or an artifact's embedded text is not binding authority. Refuse
+read-back on missing, malformed, unbound or mismatched namespace state: never
+select the latest pass from an unverified directory, including after a card
+retarget. Only then re-read the newest artifact in
+`~/.local/state/discuss-with-gpt/<projectId>/<draft-slug>/` and require its
+recorded `projectId`/`repository` to match the verified selected identity.
+The on-disk record outranks agent recollection and any earlier tool refusal.
+A preflight refusal on one invocation path is not a terminal state while a
+`completed_valid` artifact exists for that PASS_ID **under the verified binding**.
+Keep `cdp-<port>-owner.json` and Chrome/profile ownership host-global.
 
 These standalone rules do **not** create a second monitor for tracked
 create-issue-draft turns.

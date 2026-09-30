@@ -27,7 +27,16 @@ import {
   type LegacyWriterRecord,
 } from './activation-cordon.ts';
 import { buildEpochCommitCore, FileEpochAuthority, mapCutoverStoreDigests } from './activation-epoch-authority.ts';
-import { importSnapshot, snapshotStores } from './activation-import.ts';
+import {
+  assertSnapshotSourceStable,
+  assertCommittedImportedDestination,
+  cutoverPathDigest,
+  cutoverPathEmpty,
+  cutoverStoreKind,
+  importSnapshot,
+  retireImportedSource,
+  snapshotStores,
+} from './activation-import.ts';
 import { localHostId, runActivationPlatformPreflight, type PlatformPreflightResult } from './activation-platform-preflight.ts';
 import { projectRegistry } from './activation-registry-projection.ts';
 import { observeSchedulerHealthAndDelivery, type SchedulerHealthDeliveryObservation } from './activation-recovery.ts';
@@ -64,6 +73,7 @@ import { readMigrationJournal } from '../../pr2-foundation/migration-journal.ts'
 import { FOUNDATION_RUNTIME_CATALOG, validateRuntimeCatalog, type RuntimeSurface } from '../../pr2-foundation/runtime-catalog.ts';
 import { readLiveSingleInstanceLease } from '../../runtime/single-instance-lease.ts';
 import { sha256Stable, stableStringify } from './stable-stringify.ts';
+import { publishCommittedProjectNamespaceBindings } from './project-state-migration.ts';
 
 const FOUNDATION_LANDING_COMMIT = 'b967dfe156838039e1d6d137e7064dc9d1b10b4d';
 const PR2A_LANDING_COMMIT = '17ac39d725ba9ae7c881816405d5225e541177c7';
@@ -255,6 +265,7 @@ function readFoundationEvidence(request: ActivationRequest): { evidence: Foundat
       observedGreenfield = observeGreenfieldFoundationObservation({
         repoRoot: request.repoRoot,
         paths: canonical,
+        projectId: request.projectId?.trim() || 'orchestrator-pack',
       });
     } catch {
       throw new Error('foundation_evidence_observation_mismatch:greenfield_inputs');
@@ -338,7 +349,9 @@ function assertGreenfieldAbsence(
   if (writers.length !== 0) throw new Error('greenfield_legacy_writer_present');
   const legacyCandidates = findLegacySupervisorIdentities(request.oldInstalledRevisionRoot);
   if (legacyCandidates.length !== 0) throw new Error('greenfield_legacy_supervisor_present');
-  const typescriptCandidates = findTypeScriptSupervisorIdentities();
+  const typescriptCandidates = findTypeScriptSupervisorIdentities({
+    projectId: request.projectId?.trim() || 'orchestrator-pack',
+  });
   if (typescriptCandidates.length !== 0) throw new Error('greenfield_typescript_supervisor_present');
   return {
     writerWatermark: sha256Stable({
@@ -405,6 +418,7 @@ async function proveFoundationAdoption(request: ActivationRequest): Promise<Foun
       observedGreenfield = observeGreenfieldFoundationObservation({
         repoRoot: request.repoRoot,
         paths: canonical,
+        projectId: request.projectId?.trim() || 'orchestrator-pack',
       });
     } catch {
       throw new Error('foundation_evidence_observation_mismatch:greenfield_inputs');
@@ -536,6 +550,8 @@ export function isActivationReadySupervisorStatus(
     status.epochId !== request.epochId
     || status.nonce !== nonce
     || status.supervisorPid !== expectedPid
+    || (request.projectId && status.projectId !== request.projectId)
+    || (request.repository && status.repository !== request.repository)
     || status.registryHash !== committed.registryHash
     || path.resolve(status.registrySource) !== path.resolve(request.paths.targetRegistryPath)
     || status.childGeneration < 1
@@ -592,6 +608,7 @@ async function startSupervisor(request: ActivationRequest, nonce: string): Promi
     command: process.execPath,
     args: [
       '--experimental-strip-types', entry, 'run',
+      '--project', request.projectId?.trim() || 'orchestrator-pack',
       '--state-dir', request.paths.supervisorStateDir,
       '--epoch-authority', request.paths.epochAuthorityPath,
       '--epoch-id', request.epochId,
@@ -676,7 +693,24 @@ export async function activateCutover(
 ): Promise<Record<string, unknown>> {
   const preflight = boundary.preflight(request);
   const foundation = await boundary.proveFoundationAdoption(request);
-  if (request.stores.length !== 3 || new Set(request.stores.map((row) => row.id)).size !== 3) throw new Error('store_roster_invalid');
+  const storeIds = new Set(request.stores.map((row) => row.id));
+  if (
+    request.stores.length < 3
+    || storeIds.size !== request.stores.length
+    || !['reconcile', 'reevaluation', 'reportStateSeed'].every((id) => storeIds.has(id))
+  ) throw new Error('store_roster_invalid');
+  const targetPaths = new Set<string>();
+  for (const store of request.stores) {
+    const kind = cutoverStoreKind(store);
+    const sourcePath = path.resolve(store.sourcePath);
+    const targetPath = path.resolve(store.targetPath);
+    if (sourcePath === targetPath || targetPaths.has(targetPath)) throw new Error(`store_layout_invalid:${store.id}`);
+    targetPaths.add(targetPath);
+    if (kind !== 'legacy-json') {
+      if (store.coveredFields.length !== 0) throw new Error(`opaque_store_covered_fields_invalid:${store.id}`);
+      if (!cutoverPathEmpty(targetPath)) throw new Error(`migration_destination_not_empty:${store.id}`);
+    }
+  }
   const { baseRef, closure } = await boundary.resolveBaseAndClosure(request);
   const legacySupervisorPid = request.legacySupervisorPid;
   const greenfield = foundation.activationMode === 'greenfield';
@@ -685,10 +719,11 @@ export async function activateCutover(
     && Number.isInteger(legacySupervisorPid)
     && legacySupervisorPid > 1;
   const legacySupervisor = legacyClaimed ? boundary.readLegacySupervisor(request) : null;
-  const legacyWriters = legacySupervisor ? boundary.captureLegacyWriters(request) : [];
 
   const cordon = createCordon({
     path: request.paths.cordonPath,
+    projectId: request.projectId,
+    repository: request.repository,
     epochId: request.epochId,
     expectedOldEpochId: request.expectedOldEpochId,
     hostId: request.hostId,
@@ -702,38 +737,46 @@ export async function activateCutover(
   });
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'admission', { preflight, foundation, closure, baseRef });
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'cordon', { writersClosed: true, noRespawn: true, noTypeScriptStart: true });
+  const legacyWriters = boundary.captureLegacyWriters(request);
 
   if (greenfield) {
-    const writers = boundary.captureLegacyWriters(request);
-    if (writers.length !== 0) throw new Error('greenfield_legacy_writer_present');
-    const legacyCandidates = boundary.findLegacySupervisorIdentities
-      ? boundary.findLegacySupervisorIdentities(request)
-      : findLegacySupervisorIdentities(request.oldInstalledRevisionRoot);
+    if (legacyWriters.length !== 0) throw new Error('greenfield_legacy_writer_present');
+    const selectedProjectId = request.projectId?.trim() || 'orchestrator-pack';
+    const legacyCandidates = selectedProjectId === 'orchestrator-pack'
+      ? (boundary.findLegacySupervisorIdentities
+          ? boundary.findLegacySupervisorIdentities(request)
+          : findLegacySupervisorIdentities(request.oldInstalledRevisionRoot))
+      : [];
     if (legacyCandidates.length !== 0) {
       throw new Error('greenfield_legacy_supervisor_present');
     }
     const typescriptCandidates = boundary.findTypeScriptSupervisorIdentities
       ? boundary.findTypeScriptSupervisorIdentities(request)
-      : findTypeScriptSupervisorIdentities();
+      : findTypeScriptSupervisorIdentities({ projectId: selectedProjectId });
     if (typescriptCandidates.length !== 0) {
       throw new Error('greenfield_typescript_supervisor_present');
     }
   }
-  const drain = legacySupervisor
-    ? await (async () => {
-      const drain = await boundary.drainLegacyWriters(request, legacyWriters);
-      return drain;
-    })()
-    : { writerWatermark: foundation.writerWatermark ?? '', drainedAt: new Date().toISOString() };
+  const drainLegacyWriters = async () => {
+    const drain = await boundary.drainLegacyWriters(request, legacyWriters);
+    return drain;
+  };
+  const drain = greenfield
+    ? { writerWatermark: foundation.writerWatermark ?? '' }
+    : await drainLegacyWriters();
   if (!drain.writerWatermark) throw new Error('writer_watermark_missing');
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'writer-drain', { writers: legacyWriters, ...drain });
 
-  const terminated = legacySupervisor
-    ? await boundary.terminateLegacyProcesses([...legacyWriters.map((row) => row.identity), legacySupervisor])
+  const processesToTerminate = [
+    ...legacyWriters.map((row) => row.identity),
+    ...(legacySupervisor ? [legacySupervisor] : []),
+  ];
+  const terminated = processesToTerminate.length
+    ? await boundary.terminateLegacyProcesses(processesToTerminate)
     : [];
   const survivors = legacySupervisor
     ? boundary.verifyLegacyProcessesGone(request, legacySupervisor)
-    : { supervisorAlive: false, writers: [] };
+    : { supervisorAlive: false, writers: boundary.captureLegacyWriters(request) };
   if (survivors.supervisorAlive || survivors.writers.length !== 0) {
     throw new Error(`legacy_process_survivor:supervisor=${survivors.supervisorAlive};writers=${survivors.writers.map((row) => row.childId).join(',')}`);
   }
@@ -744,9 +787,22 @@ export async function activateCutover(
     reenumeratedEmpty: true,
   });
 
+  for (const store of request.stores) {
+    if (cutoverStoreKind(store) === 'legacy-json') continue;
+    const expected = cordon.preImportSourceDigests?.[store.id];
+    if (expected === undefined || cutoverPathDigest(store.sourcePath) !== expected) {
+      throw new Error(`source_changed_after_cordon:${store.id}`);
+    }
+  }
   const snapshots = snapshotStores(request.stores, request.paths.snapshotDir, drain.writerWatermark, {
-    allowMissingSourceIds: greenfield ? request.stores.map((store) => store.id) : [],
+    allowMissingSourceIds: request.stores
+      .filter((store) => greenfield || cutoverStoreKind(store) !== 'legacy-json')
+      .map((store) => store.id),
   });
+  for (const store of request.stores) {
+    const snapshot = snapshots.find((row) => row.storeId === store.id)!;
+    assertSnapshotSourceStable(store, snapshot);
+  }
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'snapshots', snapshots);
 
   const importBoundary = markImportBegun(request.paths.cordonPath);
@@ -757,6 +813,10 @@ export async function activateCutover(
     spec,
     snapshot: snapshots.find((row) => row.storeId === spec.id)!,
   }));
+  for (const store of request.stores) {
+    const snapshot = snapshots.find((row) => row.storeId === store.id)!;
+    assertSnapshotSourceStable(store, snapshot);
+  }
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'imports', imports);
 
   const projection = projectRegistry(request.paths.targetRegistryPath, request.paths.projectedRegistryPath);
@@ -778,7 +838,19 @@ export async function activateCutover(
   authority.commit(request.expectedOldEpochId, core);
   const committed = authority.verify(request.epochId, cordon.nonce);
   verifyPhaseOneDigest(request.paths.phaseOnePath, request.epochId, cordon.nonce, committed.preCommitLogDigest);
+  for (const store of request.stores) {
+    assertCommittedImportedDestination(
+      store,
+      snapshots.find((row) => row.storeId === store.id)!,
+      committed.importDigests[store.id],
+    );
+  }
+  publishCommittedProjectNamespaceBindings(request);
 
+  for (const store of request.stores) {
+    const snapshot = snapshots.find((row) => row.storeId === store.id)!;
+    retireImportedSource(store, snapshot);
+  }
   const committedProjection = projectRegistry(request.paths.targetRegistryPath, request.paths.projectedRegistryPath);
   if (committedProjection.registryHash !== committed.registryHash) throw new Error('committed_registry_hash_mismatch');
   appendFollowup(request.paths.followupPath, request.epochId, 'committed-registry-reprojected', committedProjection);

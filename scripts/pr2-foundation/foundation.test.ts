@@ -548,6 +548,8 @@ describe('[AC2] production foundation admission', () => {
     const user = os.userInfo();
     vi.spyOn(os, 'userInfo').mockReturnValue({ ...user, homedir: home });
     const previousPath = process.env.PATH;
+    const previousStateHome = process.env.XDG_STATE_HOME;
+    process.env.XDG_STATE_HOME = path.join(home, '.local', 'state');
     const bin = path.join(home, 'bin');
     mkdirSync(bin, { recursive: true });
     const ao = path.join(bin, 'ao');
@@ -645,6 +647,8 @@ describe('[AC2] production foundation admission', () => {
         .rejects.toThrow('foundation_evidence_observation_mismatch:preflight');
       expect(new FileEpochAuthority(canonical.epochAuthorityPath).read().currentEpochId).toBeNull();
     } finally {
+      if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+      else process.env.XDG_STATE_HOME = previousStateHome;
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;
       if (previousOverride === undefined) delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;

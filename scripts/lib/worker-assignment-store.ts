@@ -14,6 +14,7 @@ import {
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { withCrashRecoverableFileLock } from '../pr2-foundation/journal-lock.ts';
+import { resolveTargetContext } from './target-context.ts';
 
 export const WORKER_ASSIGNMENT_SCHEMA = 'orchestrator-pack/worker-assignment/v1' as const;
 export const WORKER_ASSIGNMENT_STORE_SCHEMA = 'orchestrator-pack/worker-assignment-store/v1' as const;
@@ -37,6 +38,7 @@ export type WorkerAssignmentStoreTrustCause =
   | 'store_shape_invalid'
   | 'assignment_count_exceeded'
   | 'assignment_row_invalid'
+  | 'project_repository_mismatch'
   | 'legacy_identity_missing'
   | 'legacy_key_mismatch'
   | 'canonical_key_mismatch'
@@ -505,6 +507,21 @@ export function emptyWorkerAssignmentStore(): WorkerAssignmentStore {
   return { schema: WORKER_ASSIGNMENT_STORE_SCHEMA, revision: 0, assignments: {} };
 }
 
+export interface OperatorPrimaryProjectIdentity {
+  readonly projectId: string;
+  readonly repository: string;
+}
+
+function operatorPrimaryStoreMatchesProject(
+  store: WorkerAssignmentStore,
+  selected: OperatorPrimaryProjectIdentity,
+): boolean {
+  return Boolean(selected.projectId && selected.repository)
+    && Object.values(store.assignments).every((assignment) =>
+      assignment.projectId === selected.projectId
+      && assignment.repository.toLowerCase() === selected.repository.toLowerCase());
+}
+
 export function parseWorkerAssignmentStore(raw: string): WorkerAssignmentStore | null {
   const inspected = inspectWorkerAssignmentStore(raw);
   return inspected.ok ? inspected.store : null;
@@ -523,9 +540,15 @@ function untrustedStoreResult(cause: WorkerAssignmentStoreTrustCause): {
   return { ok: false, reason: 'assignment_store_untrusted', cause };
 }
 
-export function readOperatorPrimaryBinding(file: string): OperatorPrimaryBindingReadResult {
+export function readOperatorPrimaryBinding(
+  file: string,
+  selected?: OperatorPrimaryProjectIdentity,
+): OperatorPrimaryBindingReadResult {
   const inspected = inspectWorkerAssignmentStoreFile(file);
   if (!inspected.ok) return untrustedStoreResult(inspected.cause);
+  if (selected && !operatorPrimaryStoreMatchesProject(inspected.store, selected)) {
+    return untrustedStoreResult('project_repository_mismatch');
+  }
   const binding = inspected.store.operatorPrimary;
   if (!binding) return { ok: true, status: 'binding_absent', binding: null };
   const assignment = assignmentForOperatorPrimaryBinding(inspected.store, binding);
@@ -1105,6 +1128,7 @@ export async function bindOperatorPrimary(input: {
   readonly file: string;
   readonly taskId: string;
   readonly bindingKey: string;
+  readonly expectedProject?: OperatorPrimaryProjectIdentity;
   /** Omit for initial bind; provide the exact observed pointer for CAS replacement. */
   readonly expectedCurrent?: OperatorPrimaryBindingV1;
 }): Promise<OperatorPrimaryBindingMutationResult> {
@@ -1122,6 +1146,9 @@ export async function bindOperatorPrimary(input: {
         return { ok: false, reason: 'assignment_store_untrusted', cause: migrated.cause } as const;
       }
       const store = migrated.store;
+      if (input.expectedProject && !operatorPrimaryStoreMatchesProject(store, input.expectedProject)) {
+        return { ok: false, reason: 'assignment_store_untrusted', cause: 'project_repository_mismatch' } as const;
+      }
       if (expectedCurrent === undefined) {
         if (store.operatorPrimary) return { ok: false, reason: 'binding_conflict' } as const;
       } else if (!sameOperatorPrimaryBinding(store.operatorPrimary, expectedCurrent)) {
@@ -1157,6 +1184,7 @@ export async function bindOperatorPrimary(input: {
 export async function retireOperatorPrimary(input: {
   readonly file: string;
   readonly expectedCurrent: OperatorPrimaryBindingV1;
+  readonly expectedProject?: OperatorPrimaryProjectIdentity;
 }): Promise<OperatorPrimaryBindingMutationResult> {
   const expectedCurrent = normalizeOperatorPrimaryBinding(input.expectedCurrent);
   if (!expectedCurrent) return { ok: false, reason: 'binding_input_invalid' };
@@ -1170,6 +1198,9 @@ export async function retireOperatorPrimary(input: {
       if (!store.operatorPrimary) return { ok: false, reason: 'binding_absent' } as const;
       if (!sameOperatorPrimaryBinding(store.operatorPrimary, expectedCurrent)) {
         return { ok: false, reason: 'binding_conflict' } as const;
+      }
+      if (input.expectedProject && !operatorPrimaryStoreMatchesProject(store, input.expectedProject)) {
+        return { ok: false, reason: 'assignment_store_untrusted', cause: 'project_repository_mismatch' } as const;
       }
       const next: WorkerAssignmentStore = {
         schema: WORKER_ASSIGNMENT_STORE_SCHEMA,
@@ -1198,11 +1229,27 @@ export async function retireOperatorPrimary(input: {
 export async function withCurrentOperatorPrimaryAssignment<T>(
   file: string,
   action: (assignment: WorkerAssignmentRecord) => OperatorPrimaryLockedResult<T>,
-): Promise<CurrentOperatorPrimaryAssignmentFenceResult<T>> {
+  expectedProject?: OperatorPrimaryProjectIdentity,
+ ): Promise<CurrentOperatorPrimaryAssignmentFenceResult<T>> {
   try {
     return await withCrashRecoverableFileLock(`${file}.lock`, 1, () => {
       const inspected = inspectWorkerAssignmentStoreFile(file);
       if (!inspected.ok) return { ok: false, reason: 'assignment_untrusted' } as const;
+      const projectId = expectedProject?.projectId ?? path.basename(path.dirname(file));
+      if (projectId !== path.basename(path.dirname(file))) {
+        return { ok: false, reason: 'assignment_untrusted' } as const;
+      }
+      let current: OperatorPrimaryProjectIdentity;
+      try {
+        current = resolveTargetContext({ projectId });
+      } catch {
+        return { ok: false, reason: 'assignment_untrusted' } as const;
+      }
+      if ((expectedProject && (current.projectId !== expectedProject.projectId
+        || current.repository.toLowerCase() !== expectedProject.repository.toLowerCase()))
+        || !operatorPrimaryStoreMatchesProject(inspected.store, current)) {
+        return { ok: false, reason: 'assignment_untrusted' } as const;
+      }
       const binding = inspected.store.operatorPrimary;
       if (!binding) return { ok: false, reason: 'binding_absent' } as const;
       const assignment = assignmentForOperatorPrimaryBinding(inspected.store, binding);

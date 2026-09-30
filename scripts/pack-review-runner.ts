@@ -439,7 +439,8 @@ function bindingCachePath(env: NodeJS.ProcessEnv = process.env): string {
   if (explicit) return resolve(explicit);
   const seed = trim(env.OPK_REPORT_STATE_SEED_STATE);
   if (seed) return join(dirname(resolve(seed)), 'pr-session-binding-cache.json');
-  return join(homedir(), '.local', 'state', 'orchestrator-pack-wake-supervisor', 'pr-session-binding-cache.json');
+  const projectId = trim(env.OPK_PROJECT_ID) || DEFAULT_PROJECT_ID;
+  return join(homedir(), '.local', 'state', 'orchestrator-pack-wake-supervisor', projectId, 'pr-session-binding-cache.json');
 }
 
 export function resolveBindingFromCache(sessionId: string, env: NodeJS.ProcessEnv = process.env): BindingRecord {

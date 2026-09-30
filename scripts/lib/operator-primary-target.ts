@@ -113,6 +113,7 @@ export async function withCurrentOperatorPrimaryTarget<T>(
     readonly file: string;
     readonly adapter: RuntimeAdapter;
     readonly timeoutMs: number;
+    readonly expectedProject?: { readonly projectId: string; readonly repository: string };
   },
   action: (target: RuntimeWorkerIdentity) => OperatorPrimarySyncActionResult<T>,
 ): Promise<OperatorPrimaryTargetFenceResult<T>> {
@@ -200,7 +201,7 @@ export async function withCurrentOperatorPrimaryTarget<T>(
       actionEntered: true,
       value: actionResult.value,
     });
-  });
+  }, input.expectedProject);
 
   if (!fenced.ok) {
     return preActionFailure(fenced.reason);

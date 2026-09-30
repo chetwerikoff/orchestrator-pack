@@ -734,6 +734,119 @@ resolution, dual-send, a fallback runtime selector, or a second scheduler/store.
 Previously written bounded state is evidence only and never authorizes an effect
 when it no longer matches the active code/epoch/assignment contract.
 
+## Per-project supervisor and durable-state migration (Issue #2186)
+
+This section is the pre-change durable-store inventory required before the #2186
+store owners are changed. `projectId` is a namespace selector only; every
+project-scoped namespace must persist its resolved `repository` binding and
+validate that binding against the current project card before resume, claim,
+review pickup, or another state-consuming effect.
+
+| Store / owner | Classification | Before #2186 | Target layout / identity |
+| --- | --- | --- | --- |
+| Wake-supervisor runtime, scheduler side-process state, cordon/foundation state; `scripts/pr2-foundation/wake-supervisor-state-root.ts` and `scripts/lib/cutover/**` | project-scoped | `$XDG_STATE_HOME/orchestrator-pack-wake-supervisor/` | `$XDG_STATE_HOME/orchestrator-pack-wake-supervisor/<projectId>/` plus a persisted repository binding |
+| WorkerAssignment and operator-primary; `scripts/lib/worker-assignment-store.ts` / `scripts/operator-primary-binding.ts` | project-scoped, already partitioned | `~/.orchestrator-pack/projects/<projectId>/worker-assignments.json`; assignment records already carry projectId/repository | same path; consumers additionally validate current card repository before using persisted records |
+| Create-Issue work state and canonical review authority; `scripts/lib/canonical-review-directory.ts` plus create-Issue stage owners | project-scoped | `~/.local/state/create-issue-draft/<Issue>/` and `~/.local/state/create-issue-draft/.review/<Issue>/` | `~/.local/state/create-issue-draft/<projectId>/<Issue>/` and `~/.local/state/create-issue-draft/<projectId>/.review/<Issue>/` with repository binding |
+| Standalone discuss-with-gpt durable pass artifacts; `.claude/skills/discuss-with-gpt/driver.mjs` and `.cursor/skills/discuss-with-gpt/SKILL.md` | project-scoped | `~/.local/state/discuss-with-gpt/<draft-slug>/` | `~/.local/state/discuss-with-gpt/<projectId>/<draft-slug>/` with repository binding |
+| discuss-with-gpt CDP/profile owner; `.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs` | host-global | `~/.local/state/discuss-with-gpt/cdp-<port>-owner.json` | unchanged host-global path |
+| Worker status/report stores; `scripts/lib/worker-status-store.mjs` / `docs/worker-report-store.mjs` | project-scoped | files directly under the flat wake-supervisor root | same file names under `orchestrator-pack-wake-supervisor/<projectId>/` |
+| Worker smoke receipts; `scripts/lib/worker-smoke-receipt.ts` | project-scoped | `.../orchestrator-pack-wake-supervisor/worker-smoke-receipts/` | `.../orchestrator-pack-wake-supervisor/<projectId>/worker-smoke-receipts/` |
+| PR-session binding cache; `scripts/pack-review-runner.ts` / `docs/pr-session-binding-cache.mjs` | project-scoped | `.../orchestrator-pack-wake-supervisor/pr-session-binding-cache.json` | same file under the selected project wake root |
+| Pack-review run state; `scripts/lib/pack-review-run-store.ts` | project/repository-scoped, already partitioned | `~/.orchestrator-pack/review-runs/<projectId>/`; run records carry projectId and canonical repository when known | same root; consuming paths require current card repository binding |
+| Worker-message dispatch journal and dispatch-terminal mail ledger; `scripts/pr2-foundation/wake-supervisor-state-root.ts` | project-scoped | files directly under the flat wake-supervisor root | same file names under the selected project wake root |
+| Browser-GPT recurrence plus create-Issue handoff/terminal/output records; `scripts/chatgpt-browser-turn/**` and create-Issue stage owners | project-scoped | recurrence at `~/.local/state/create-issue-draft/browser-turn-recurrence.jsonl`; governed handoff artifacts live under the canonical create-Issue review/work tree | recurrence and governed handoff records live under the selected project's create-Issue namespace |
+| Mechanical transport scratch / machine browser profile and executable configuration | host-global or invocation-local | existing machine-global/scratch locations | unchanged; these are not repository/task durable authority |
+
+Migration is one store-generic cutover rule, not a new migration subsystem. Before
+publishing a project destination, stop or fence every writer to the source and
+prove the source stable. The destination must be absent or empty. Copy/move must
+preserve authoritative bytes and identity and must be read back before the
+existing cutover commit boundary is crossed. Before that durable boundary, only
+the source is authoritative and an incomplete destination is not consumable.
+After it is crossed, only the destination is authoritative and recovery may only
+finish source retirement/cleanup. Source and destination both containing live
+authority, a repository-binding mismatch, a live writer, or an unprovable
+commit-boundary state fails closed; never merge or overwrite the stores.
+
+The existing pack flat wake-supervisor state is migrated once to the
+`orchestrator-pack` project namespace. Before producing foundation evidence,
+stop the pre-#2186 pack supervisor through the supported old-revision
+stop/recycle path and quiesce one-shot writers; the process census deliberately
+attributes an unqualified legacy TypeScript supervisor to `orchestrator-pack`
+and refuses migration while it remains live. Do not kill processes by title or
+substring.
+
+For `--project orchestrator-pack`, the cutover CLI automatically adds the
+known flat wake payload stores plus legacy create-Issue `.review`, numeric work
+directories, Browser-GPT recurrence state, and unscoped standalone
+discuss-with-gpt artifacts to the existing activation transaction. It does not
+byte-copy cordon/epoch/supervisor control-plane files: that same transaction
+recreates those under the project root and remains their sole commit/recovery
+authority. The canonical create-Issue `.review/<Issue>` authority therefore
+uses the same absent/empty-destination, source-digest, read-back, CAS and
+post-commit source-retirement sequence as the wake payload stores. If execution
+stops after publication, rerun the same activation/recovery request with the
+same `--project orchestrator-pack`; the persisted cordon/epoch authority, not
+directory presence, decides whether recovery finishes forward or refuses an
+unprovable state.
+
+The `cdp-<port>-owner.json` record is excluded because it owns one
+machine/profile, not one repository. Existing discuss-with-gpt directories that
+already contain a project binding are also excluded from the legacy pack move.
+
+The old ad-hoc LeoPoker create-Issue directory is operator-owned. Run this
+one-time move only after stopping its writers and consumers, from the trusted
+pack checkout. The source and destination must be on the same filesystem.
+The project binding is durably written to the quiesced *source* before the
+atomic directory rename, so no partially copied/unbound destination is exposed.
+The command accepts a completed earlier move only if its binding matches the
+current card; it never combines two populated layouts.
+
+```bash
+node --experimental-strip-types --input-type=module <<'NODE'
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, renameSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import path from 'node:path';
+import { resolveTargetContext } from './scripts/lib/target-context.ts';
+import { assertProjectStateBinding } from './scripts/lib/project-state-binding.ts';
+
+const selected = resolveTargetContext({ projectId: 'leopoker' });
+const identity = { projectId: selected.projectId, repository: selected.repository };
+// Create-Issue's current canonical owner is HOME-based, independent of XDG_STATE_HOME.
+const root = path.join(process.env.HOME || homedir(), '.local', 'state');
+const source = path.join(root, 'leopoker-create-issue-draft');
+const destination = path.join(root, 'create-issue-draft', 'leopoker');
+if (!existsSync(source)) {
+  if (!existsSync(destination)) throw new Error('leopoker_migration_source_missing');
+  assertProjectStateBinding(destination, identity);
+  console.log('leopoker_already_migrated_and_bound');
+} else {
+  if (existsSync(destination)) throw new Error('leopoker_migration_both_layouts_present');
+  const bindingPath = path.join(source, 'project-binding.json');
+  if (!existsSync(bindingPath)) {
+    const fd = openSync(bindingPath, 'wx', 0o600);
+    try {
+      writeFileSync(fd, `${JSON.stringify({ schema: 'orchestrator-pack/project-state-binding/v1', ...identity }, null, 2)}\n`);
+      fsyncSync(fd);
+    } finally { closeSync(fd); }
+    const dirFd = openSync(source, 'r');
+    try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
+  }
+  assertProjectStateBinding(source, identity);
+  mkdirSync(path.dirname(destination), { recursive: true });
+  renameSync(source, destination); // atomic: EXDEV fails instead of cross-filesystem copy
+  const dirFd = openSync(path.dirname(destination), 'r');
+  try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
+  assertProjectStateBinding(destination, identity);
+  console.log('leopoker_migrated_and_bound');
+}
+NODE
+```
+
+Never start a consumer between stopping the old writers and the final
+repository-binding read-back. A retargeted card, unbound existing destination,
+or dual live layouts fail closed without overwriting state.
+
 ## Ongoing adoption rule
 
 Keep this file limited to currently actionable operator changes. Historical

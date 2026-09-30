@@ -86,6 +86,7 @@ export function resolveDiscussWithGptConfig({ projectId, requireProjectUrl = tru
   }
   return {
     projectId: target?.projectId,
+    repository: target?.repository,
     projectUrl: target?.projectUrl,
     cardPath: target?.cardPath,
     chromeUserDataDir, chromePath, localConfigPath: LOCAL_CONFIG,
