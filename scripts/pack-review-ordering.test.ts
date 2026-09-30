@@ -431,8 +431,9 @@ describe('Issue #1436 smoke/review ordering', () => {
       headSha: NEXT_HEAD,
       options,
     });
+    // Historical smoke-ordering evidence is no longer mutated during pack-review head observation.
     expect(observedNewHead.smokeOrdering?.independent).toMatchObject({
-      headSha: NEXT_HEAD,
+      headSha: HEAD,
       status: 'failed',
       failureKind: 'finding',
       failureHeadSha: HEAD,
