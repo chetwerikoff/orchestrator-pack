@@ -479,7 +479,7 @@ async function readOwnedTurnSnapshot(
     const nodes = page.locator(MESSAGE_NODE_SELECTOR);
     if (typeof nodes?.evaluateAll !== 'function') return undefined;
     return await boundedRead(
-      nodes.evaluateAll((elements: Element[], args: {
+      nodes.evaluateAll((allElements: Element[], args: {
         roleAttribute: string;
         userMessageStyle: string;
         unitKeyAttribute: string;
@@ -494,6 +494,7 @@ async function readOwnedTurnSnapshot(
         streamText: string;
         productSelector: string;
       }) => {
+        const elements = allElements.filter((element) => element.getBoundingClientRect().height > 0);
         const normalize = (value: string): string => value.replace(/\s+/g, ' ').replace(/help\.openai\.com \.$/u, 'help.openai.com.').trim();
         const collapseRe = /(?:\s*(?:show more|read more|see more|view more|continue reading)\s*)+$/iu;
         const isReservedBanner = (value: string): boolean => {
@@ -586,7 +587,7 @@ async function readOwnedTurnSnapshot(
           }
         }
         try {
-          for (const assistant of Array.from(document.querySelectorAll(args.assistantSelector))) {
+          for (const assistant of Array.from(document.querySelectorAll(args.assistantSelector)).filter((node) => node.getBoundingClientRect().height > 0)) {
             const turnKey = assistant.closest(args.turnSelector)?.getAttribute('data-turn-key') ?? undefined;
             const paragraphTexts: string[] = [];
             for (const paragraph of Array.from(assistant.querySelectorAll('p'))) {

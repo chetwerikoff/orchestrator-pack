@@ -1287,7 +1287,7 @@ function inspectionExpression(): string {
       const hash = await crypto.subtle.digest('SHA-256', bytes);
       return { byte_length: bytes.byteLength, code_point_length: points(value).length, sha256: Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, '0')).join(''), head: head(value), tail: tail(value) };
     };
-    const raw = Array.from(document.querySelectorAll(${JSON.stringify(MESSAGE_NODE_SELECTOR)}));
+    const raw = Array.from(document.querySelectorAll(${JSON.stringify(MESSAGE_NODE_SELECTOR)})).filter((node) => node.getBoundingClientRect().height > 0);
     const roleCounts = { user: 0, assistant: 0 };
     const observed = [];
     for (let documentOrdinal = 0; documentOrdinal < raw.length; documentOrdinal++) {
@@ -1507,7 +1507,7 @@ export const LIVENESS_EXPRESSION = `(() => ({
 }))()`;
 
 export const HARVEST_EXPRESSION = `(async () => {
-  const raw = Array.from(document.querySelectorAll(${JSON.stringify(MESSAGE_NODE_SELECTOR)}));
+  const raw = Array.from(document.querySelectorAll(${JSON.stringify(MESSAGE_NODE_SELECTOR)})).filter((node) => node.getBoundingClientRect().height > 0);
   const roleCounts = { user: 0, assistant: 0 };
   const rows = [];
   for (let documentOrdinal = 0; documentOrdinal < raw.length; documentOrdinal++) {
@@ -1908,7 +1908,7 @@ export function buildExportExpression(witness: ExportWitness): string {
   const encoded = Buffer.from(JSON.stringify(witness), 'utf8').toString('base64');
   return `(async () => {
     const witness = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('${encoded}'), (c) => c.charCodeAt(0))));
-    const raw = Array.from(document.querySelectorAll(${JSON.stringify(MESSAGE_NODE_SELECTOR)}));
+    const raw = Array.from(document.querySelectorAll(${JSON.stringify(MESSAGE_NODE_SELECTOR)})).filter((node) => node.getBoundingClientRect().height > 0);
     const roleCounts = { user: 0, assistant: 0 };
     const nodes = raw.map((node, documentOrdinal) => {
       const rawStyle = node.querySelector(${JSON.stringify(`[${MESSAGE_AUTHOR_ROLE_ATTR}]`)})?.getAttribute(${JSON.stringify(MESSAGE_AUTHOR_ROLE_ATTR)});
