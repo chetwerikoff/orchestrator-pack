@@ -5,6 +5,7 @@ import { abandonPreImportCordon, activateCutover } from './lib/cutover/activatio
 import { provePreImportRollbackSafe, recoverCommittedCutover } from './lib/cutover/activation-recovery.ts';
 import type { ActivationRequest } from './lib/cutover/types.ts';
 import { resolveTargetContext } from './lib/target-context.ts';
+import { withPackProjectStateMigration } from './lib/cutover/project-state-migration.ts';
 
 function loadRequest(file: string): ActivationRequest {
   const raw = JSON.parse(readFileSync(path.resolve(file), 'utf8')) as ActivationRequest;
@@ -29,7 +30,10 @@ async function main(): Promise<void> {
   const loaded = loadRequest(requestFile);
   if (loaded.projectId && loaded.projectId !== target.projectId) throw new Error('activation_project_binding_mismatch');
   if (loaded.repository && loaded.repository.toLowerCase() !== target.repository) throw new Error('activation_repository_binding_mismatch');
-  const request: ActivationRequest = { ...loaded, projectId: target.projectId, repository: target.repository };
+  const request: ActivationRequest = withPackProjectStateMigration(
+    { ...loaded, projectId: target.projectId, repository: target.repository },
+    target.projectId,
+  );
   if (command === 'activate') {
     process.stdout.write(`${JSON.stringify(await activateCutover(request))}\n`);
     return;
