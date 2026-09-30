@@ -38,6 +38,12 @@ procedures in [the one-turn runbook](../../docs/browser-gpt-turn-runbook.md):
 Their invitation markers, admission, ownership, observation, and lawful retry
 rules are transport facts, **not** create-Issue label/review authority.
 
+Existing governed author-output producer fields remain owned by
+`scripts/lib/create-issue-author-dispositions-schema.ts`; this carrier
+contains only a pointer, not duplicate schema fields, and the old structured
+transport representation does not gate the published author disposition
+comments or label acceptance.
+
 ## Launch and observation
 
 For tracked create-issue and pack-review turns, use
