@@ -411,7 +411,7 @@ describe('execute-Issue manager boundary', () => {
       '--head-sha', context.headSha!,
       '--source-revision', context.sourceRevision,
       '--phase', 'independent-smoke',
-      '--cause', 'tier_order_input_stale',
+      '--cause', 'trusted_target_stale',
     ], {
       stdout: { write: (value) => output.push(value) },
       stderr: { write: () => undefined },
@@ -437,7 +437,7 @@ describe('execute-Issue manager boundary', () => {
     expect(JSON.parse(output[0]!)).toMatchObject({
       ok: true,
       phase: 'independent-smoke',
-      cause: 'tier_order_input_stale',
+      cause: 'trusted_target_stale',
       issueNumber: context.issueNumber,
       prNumber: context.prNumber,
       headSha: context.headSha,
