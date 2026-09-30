@@ -5,7 +5,7 @@ import type { FoundationConfig } from './config.ts';
 import { parseFoundationConfig } from './config.ts';
 import { FileEpochAuthority } from '../lib/cutover/activation-epoch-authority.ts';
 import { resolveTargetContext } from '../lib/target-context.ts';
-import { assertProjectStateBinding } from '../lib/project-state-binding.mjs';
+import { assertProjectStateBinding } from '../lib/project-state-binding.ts';
 import { resolveWakeSupervisorStateRoot } from './wake-supervisor-state-root.ts';
 import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
 import { originSlugFromGitConfig } from '../lib/git-origin-slug.mjs';
