@@ -25,6 +25,11 @@ export const REGENERATE_THREAD_ERROR_BUTTON_SELECTOR = `[data-testid="${REGENERA
 export const CONTINUE_GENERATING_BUTTON_NAME = /continue generating/i;
 export const CONTINUE_GENERATING_TESTID_SELECTOR = '[data-testid*="continue-generating"], [data-testid*="continue_generating"]';
 export const CONVERSATION_TURN_SECTION_SELECTOR = 'div[data-turn-key]';
+// After a new-chat URL redirect ChatGPT can keep the previous thread mounted as
+// a zero-size copy frozen mid-generation, with its own Stop control and turn
+// sections. Only rendered elements describe the live conversation.
+export const RENDERED_STOP_BUTTON_SELECTOR = STOP_BUTTON_SELECTOR.split(', ').map((part) => `${part}:visible`).join(', ');
+export const RENDERED_CONVERSATION_TURN_SECTION_SELECTOR = `${CONVERSATION_TURN_SECTION_SELECTOR}:visible`;
 export const ASSISTANT_TURN_ANCESTOR_XPATH = 'xpath=ancestor-or-self::div[@data-turn-key][1]';
 export const CONVERSATION_TURN_ID_PREFIX = 'conversation-turn-';
 
