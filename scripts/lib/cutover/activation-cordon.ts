@@ -15,6 +15,7 @@ import type {
   TypeScriptSupervisorInertProof,
 } from './types.ts';
 import { D928 } from '../../pr2a/contracts.ts';
+import { cutoverPathDigest } from './activation-import.ts';
 
 interface LegacyRegistryChild {
   id: string;
@@ -356,7 +357,7 @@ export async function waitForLegacyWriterDrain(
 }
 
 export function fileDigestOrAbsent(pathName: string): string {
-  return existsSync(pathName) ? sha256Bytes(readFileSync(pathName)) : 'absent';
+  return cutoverPathDigest(pathName);
 }
 
 interface TypeScriptSupervisorStatusSnapshot {
@@ -407,6 +408,8 @@ export function recoveryBindings(
 
 function stateBindingShape(state: CordonState): unknown {
   return {
+    projectId: state.projectId ?? null,
+    repository: state.repository ?? null,
     epochId: state.epochId,
     hostId: state.hostId,
     repoRoot: state.repoRoot,
@@ -418,6 +421,8 @@ function stateBindingShape(state: CordonState): unknown {
 
 function requestBindingShape(request: ActivationRequest): unknown {
   return {
+    projectId: request.projectId ?? null,
+    repository: request.repository ?? null,
     epochId: request.epochId,
     hostId: request.hostId,
     repoRoot: request.repoRoot,
@@ -434,6 +439,8 @@ export function assertCordonRequestBinding(request: ActivationRequest, state: Co
 }
 
 function assertPreparedInput(input: {
+  projectId?: string;
+  repository?: string;
   epochId: string;
   expectedOldEpochId?: string | null;
   hostId: string;
@@ -445,6 +452,8 @@ function assertPreparedInput(input: {
   paths: ActivationPaths;
 }, prepared: CordonPreparedRecord): void {
   const expected = {
+    projectId: input.projectId ?? null,
+    repository: input.repository ?? null,
     epochId: input.epochId,
     hostId: input.hostId,
     repoRoot: input.repoRoot,
@@ -454,6 +463,8 @@ function assertPreparedInput(input: {
     recoveryBindings: recoveryBindings(input.paths, input.stores, input.expectedOldEpochId ?? null),
   };
   const observed = {
+    projectId: prepared.projectId ?? null,
+    repository: prepared.repository ?? null,
     epochId: prepared.epochId,
     hostId: prepared.hostId,
     repoRoot: prepared.repoRoot,
@@ -494,6 +505,8 @@ export function readCordonState(pathName: string): CordonState {
 
 export function createCordon(input: {
   path: string;
+  projectId?: string;
+  repository?: string;
   epochId: string;
   expectedOldEpochId?: string | null;
   hostId: string;
@@ -519,10 +532,16 @@ export function createCordon(input: {
     if (legacyBarrierActive(input.legacyStateRoot)) throw new Error('recovery_required_existing_legacy_barrier');
     const typescriptSupervisorInert = proveTypeScriptSupervisorInert(input.legacyStateRoot);
     const preImportTargetDigests: CordonRecord['preImportTargetDigests'] = {};
-    for (const store of input.stores) preImportTargetDigests[store.id] = fileDigestOrAbsent(store.targetPath);
+    const preImportSourceDigests: NonNullable<CordonRecord['preImportSourceDigests']> = {};
+    for (const store of input.stores) {
+      preImportTargetDigests[store.id] = fileDigestOrAbsent(store.targetPath);
+      preImportSourceDigests[store.id] = fileDigestOrAbsent(store.sourcePath);
+    }
     prepared = {
       schemaVersion: 1,
       state: 'preparing',
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+      ...(input.repository ? { repository: input.repository } : {}),
       epochId: input.epochId,
       nonce: randomBytes(32).toString('hex'),
       hostId: input.hostId,
@@ -534,6 +553,7 @@ export function createCordon(input: {
       typescriptSupervisorInert,
       importBegunAt: null,
       preImportTargetDigests,
+      preImportSourceDigests,
       recoveryBindings: recoveryBindings(input.paths, input.stores, input.expectedOldEpochId ?? null),
     };
     // Recovery-authoritative intent is durable before the first barrier byte. A crash at any
