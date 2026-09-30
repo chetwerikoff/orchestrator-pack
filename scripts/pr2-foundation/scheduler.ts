@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { FoundationConfig } from './config.ts';
 import { parseFoundationConfig } from './config.ts';
 import { FileEpochAuthority } from '../lib/cutover/activation-epoch-authority.ts';
+import { resolveTargetContext } from '../lib/target-context.ts';
 import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
 import { originSlugFromGitConfig } from '../lib/git-origin-slug.mjs';
 import { evaluateHeadReadyForReview } from './review-head-ready.ts';
@@ -641,7 +642,15 @@ export function createProductionPostReviewSmokeReconciler(input: {
 
 async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; cadence: number }> {
   const parsed = parseFoundationConfig({}); if (!parsed.ok) throw new Error(`${parsed.reason}:${parsed.path}`);
-  const repoRoot = process.cwd(); const cadence = parsed.config.scheduler.pollIntervalMs; const env = process.env; const projectId = 'orchestrator-pack';
+  const cadence = parsed.config.scheduler.pollIntervalMs; const env = process.env;
+  const selectedProjectId = String(env.OPK_PROJECT_ID ?? '').trim();
+  if (!selectedProjectId) throw new Error('scheduler_project_required');
+  const target = resolveTargetContext({ projectId: selectedProjectId, env });
+  const projectId = target.projectId;
+  const repository = target.repository;
+  const repoRoot = target.packRoot;
+  const forwardedRepository = String(env.OPK_REPOSITORY ?? '').trim().toLowerCase();
+  if (forwardedRepository && forwardedRepository !== repository) throw new Error('scheduler_repository_binding_mismatch');
   const epoch = assertSchedulerEpoch(env); const activationLineage = schedulerActivationLineage(epoch);
   const assignmentStorePath = resolveWorkerAssignmentStorePath(projectId, env); const storedAssignments = listCurrentWorkerAssignments(assignmentStorePath);
   let mailWorkers: readonly RuntimeWorker[] = [];
@@ -658,7 +667,9 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       // tick mail reconcile below remains the visible failure surface/retry.
     }
   };
-  const repository = await resolveRepositoryFromRepoRoot(repoRoot);
+  const mismatchedAssignment = storedAssignments?.find((assignment) =>
+    assignment.projectId !== projectId || assignment.repository !== repository);
+  if (mismatchedAssignment) throw new Error('scheduler_assignment_repository_binding_mismatch');
   const scopedAssignment = storedAssignments?.find((assignment) => assignment.repository === repository);
   let fleetObserver: FleetObserver; let fleetNudgeActuator: SchedulerFleetNudgeActuator = createTargetUnresolvedFleetNudgeActuator();
   let unresolvedReason: FleetReconciliationReason = storedAssignments === null ? 'assignment_untrusted' : 'target_unresolved';
