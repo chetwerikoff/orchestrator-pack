@@ -380,7 +380,7 @@ export function buildSmokeAgentPrompt(input: {
   runBinding?: SmokeRunBinding;
 }): string {
   const scenarioLines = input.plan.scenarios
-    .map((scenario, index) => `${index + 1}. action: ${scenario.action}\n   expected: ${scenario.expected}`)
+    .map((scenario, index) => `${index + 1}. action: ${scenario.action} | expected: ${scenario.expected} | observed: ${scenario.observed ?? ''} | outcome: ${scenario.outcome ?? ''}${scenario.causeFamily ? ` | cause-family: ${scenario.causeFamily}` : ''}`)
     .join('\n');
 
   const durableLines = input.runBinding
