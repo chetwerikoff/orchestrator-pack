@@ -595,7 +595,7 @@ describe('state-light fresh conversation collision recovery', () => {
         if (selector.includes(STOP_BUTTON_TESTID)) {
           return scalarLocator({ count: vi.fn(async () => (generating ? 1 : 0)) });
         }
-        if (selector === '[role="alert"]') {
+        if (selector.startsWith('[role="alert"]')) {
           return scalarLocator({
             allInnerTexts: vi.fn(async () => (
               streamRecoveryAlert && state.reads > 2 ? [streamRecoveryAlert] : []
@@ -2438,6 +2438,27 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
     expect(fake.retryClicks).not.toHaveBeenCalled();
     expect(fake.close).not.toHaveBeenCalled();
     expect(outcome.result.cleanup).not.toBe('confirmed');
+  });
+
+  it('continues in an already-open tab of the conversation instead of reloading it', async () => {
+    const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
+    vi.mocked(uiAdapter.productStatusText).mockImplementation(actual.productStatusText);
+    vi.mocked(uiAdapter.classifyProductWall).mockImplementation(actual.classifyProductWall);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-OPEN-TAB'));
+    const fake = recoveryPage(['generating', 'banner']);
+    const harness = enqueueBrowserForTurn(mocks, fake.page);
+    Object.assign(harness.context, { pages: vi.fn(() => [fake.page]) });
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(),
+      '--output', join(integrationStateDir, 'open-tab.txt'),
+      '--chat-url', SHARED_CONV,
+      '--timeout-ms', '5000',
+      '--poll-ms', '1',
+    ]);
+    expect(harness.context.newPage).not.toHaveBeenCalled();
+    expect(fake.page.goto).not.toHaveBeenCalled();
+    expect(outcome.result).toMatchObject({ goto_count: 0, send_count: 1 });
   });
 
   it('projects exact message stream errors through the existing conversation recovery result', async () => {

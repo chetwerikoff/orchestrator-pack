@@ -82,6 +82,7 @@ import {
   COMPOSER_SELECTOR,
   CONVERSATION_TURN_SECTION_SELECTOR,
   loadChromium,
+  markPreSendAlerts,
   MESSAGE_AUTHOR_ROLE_ATTR,
   MESSAGE_UNIT_KEY_ATTR,
   rolelessRecoverySurfaceCause,
@@ -96,6 +97,7 @@ import {
   RENDERED_CONVERSATION_TURN_SECTION_SELECTOR,
   RENDERED_STOP_BUTTON_SELECTOR,
   stripUiCollapseAffixes,
+  UNMARKED_ALERT_SELECTOR,
   USER_MESSAGE_STYLE,
   verifyProfile,
   BrowserOperationTimeoutError,
@@ -1967,6 +1969,7 @@ async function dispatchStateLightSendAndObserveDelivery(input: {
   readonly invocationDeadlineMs: number;
   readonly deliveryProofWaitMs?: number;
 }): Promise<{ sendCount: 0 | 1; witness: StateLightSendDeliveryWitness }> {
+  await markPreSendAlerts(input.page, Math.min(MAX_LOCAL_READ_WAIT_MS, input.sendWaitMs));
   if (input.hasSendButton) {
     await input.sendButton.click({ timeout: Math.min(MAX_LOCAL_READ_WAIT_MS, input.sendWaitMs) });
   } else {
@@ -2103,6 +2106,37 @@ async function createDedicatedTurnPage(
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+/**
+ * Reloading a conversation whose last reply ended on a recovery banner makes
+ * ChatGPT show Stop for ~10 minutes without generating, so an existing-chat
+ * turn continues in a tab already open on that conversation. Direct publication
+ * keeps the fresh load: its observer cannot see a page websocket opened before attach.
+ */
+async function findOpenConversationPage(browser: any, config: BrowserConfig): Promise<any | undefined> {
+  if (config.newChat || config.directPublication || !config.chatUrl) return undefined;
+  const target = normalizeConversationUrl(config.chatUrl);
+  const contexts = browser.contexts();
+  if (contexts.length !== 1 || typeof contexts[0].pages !== 'function') return undefined;
+  const candidates = (contexts[0].pages() as any[]).filter((candidate) => {
+    try {
+      return !candidate.isClosed?.() && ownedConversationIdentityMatches(String(candidate.url()), target);
+    } catch {
+      return false;
+    }
+  });
+  const page = candidates.at(-1);
+  if (!page) return undefined;
+  try {
+    if (await locatorCount(page.locator(RENDERED_STOP_BUTTON_SELECTOR), Date.now() + MAX_LOCAL_READ_WAIT_MS) > 0) {
+      return undefined;
+    }
+    await boundedBrowserRead(Promise.resolve(page.bringToFront?.()), MAX_LOCAL_READ_WAIT_MS, 'bring_to_front_timeout');
+  } catch {
+    return undefined;
+  }
+  return page;
 }
 
 async function navigateOwnedTurnPage(
@@ -2442,8 +2476,11 @@ async function runTurn(
     const connectWaitMs = invocationBudget.clampOperationWaitMs();
     if (connectWaitMs <= 0) throw new BrowserOperationTimeoutError('connect_over_cdp');
     browser = await chromium.connectOverCDP(config.cdp, { timeout: Math.min(30_000, connectWaitMs) });
-    page = await createDedicatedTurnPage(browser, invocationBudget);
-    await navigateOwnedTurnPage(page, config, navigation);
+    page = await findOpenConversationPage(browser, config);
+    if (!page) {
+      page = await createDedicatedTurnPage(browser, invocationBudget);
+      await navigateOwnedTurnPage(page, config, navigation);
+    }
     const directObservation = createDirectPublicationObservationState();
     if (config.directPublication) installDirectPublicationObserver(page, directObservation);
 
@@ -3796,7 +3833,7 @@ async function runTurn(
         let bannerCause: string | undefined;
         try {
           const alertTexts = await boundedBrowserRead(
-            page.locator('[role="alert"]').allInnerTexts(),
+            page.locator(UNMARKED_ALERT_SELECTOR).allInnerTexts(),
             Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, hardExhaustionDeadline - Date.now())),
             'stream_recovery_banner_read_timeout',
           ) as string[];
