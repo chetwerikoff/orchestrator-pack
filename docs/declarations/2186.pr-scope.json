@@ -35,12 +35,13 @@
     "scripts/toolchain/create-issue-authoring-contract.test.ts"
   ],
   "denylist": [
-    "credentials/**",
-    "packages/core/**",
-    "secrets/**",
-    "vendor/**"
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
+    ".claude/skills/discuss-with-gpt/config.mjs",
     ".claude/skills/discuss-with-gpt/driver.mjs",
     ".claude/skills/discuss-with-gpt/verify-cdp-owner.mjs",
     ".cursor/skills/create-issue-draft/SKILL.md",
@@ -50,16 +51,16 @@
     "docs/target_repo_setup.md",
     "docs/wake-supervisor-fleet-operator-reference.md",
     "docs/worker-report-store.mjs",
-    "scripts/**/*.test.ts",
-    "scripts/chatgpt-browser-turn/**",
-    "scripts/cutover/**",
-    "scripts/lib/**",
+    "scripts/chatgpt-browser-turn/",
+    "scripts/cutover/",
+    "scripts/lib/",
     "scripts/operator-primary-binding.ts",
     "scripts/orchestrator-cutover-activate.ts",
     "scripts/orchestrator-wake-supervisor.ts",
     "scripts/pack-review-runner.ts",
     "scripts/pack-worker-report.ts",
-    "scripts/pr2-foundation/**"
+    "scripts/pr2-foundation/",
+    "scripts/toolchain/create-issue-authoring-contract.test.ts"
   ],
-  "source_revision": "dab6e87d0c133a9c8797a15c64918560bcedecd7"
+  "source_revision": "28747b3dafea98b0db261d6b70d7e3a29b944589"
 }
