@@ -10,7 +10,7 @@ import {
 } from './lib/orchestrator-side-process-supervisor.ts';
 import { resolveTargetContext } from './lib/target-context.ts';
 import { resolveWakeSupervisorStateRoot } from './pr2-foundation/wake-supervisor-state-root.ts';
-import { assertProjectStateBinding } from './lib/project-state-binding.mjs';
+import { assertProjectStateBinding } from './lib/project-state-binding.ts';
 
 function parse(argv: string[]): Record<string, string | boolean> {
   const output: Record<string, string | boolean> = {};
