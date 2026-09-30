@@ -303,10 +303,12 @@ export function importSnapshot(input: {
       if (existsSync(input.spec.targetPath)) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
       return marker;
     }
-    const existingDigest = kind === 'legacy-json'
-      ? sha256Stable(normalizedPayload(input.spec, readFileSync(input.spec.targetPath)))
-      : cutoverPathDigest(input.spec.targetPath);
-    if (existingDigest !== importTargetDigest) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
+    if (kind === 'legacy-json') {
+      const existing = normalizedPayload(input.spec, readFileSync(input.spec.targetPath));
+      if (sha256Stable(existing) !== importTargetDigest) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
+    } else if (cutoverPathDigest(input.spec.targetPath) !== importTargetDigest) {
+      throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
+    }
     return marker;
   }
   if (input.snapshot.sourceState === 'absent') {
@@ -335,10 +337,12 @@ export function importSnapshot(input: {
     restoreDirectory(input.spec.targetPath, parseDirectoryArchive(input.spec, raw));
   }
 
-  const readBackDigest = kind === 'legacy-json'
-    ? sha256Stable(normalizedPayload(input.spec, readFileSync(input.spec.targetPath)))
-    : cutoverPathDigest(input.spec.targetPath);
-  if (readBackDigest !== importTargetDigest) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
+  if (kind === 'legacy-json') {
+    const readBack = normalizedPayload(input.spec, readFileSync(input.spec.targetPath));
+    if (sha256Stable(readBack) !== importTargetDigest) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
+  } else if (cutoverPathDigest(input.spec.targetPath) !== importTargetDigest) {
+    throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
+  }
   const record: ImportRecord = {
     storeId: input.snapshot.storeId,
     importIdentity,
