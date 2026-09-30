@@ -63,7 +63,7 @@ import {
   assertProjectStateBinding,
   ensureProjectStateBinding,
   publishCommittedProjectStateBinding,
-} from '../lib/project-state-binding.mjs';
+} from '../lib/project-state-binding.ts';
 
 const activationCordonTestState = vi.hoisted(() => ({
   disableGreenfieldProcessCensus: false,
