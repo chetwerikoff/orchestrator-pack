@@ -138,7 +138,7 @@ const DIAGNOSTIC_HEAD_CHARS = 300;
 export const MAX_LOCAL_READ_WAIT_MS = 5_000;
 /** Long existing conversations can need well over 30 s to reach domcontentloaded. */
 const EXISTING_CONVERSATION_NAVIGATION_TIMEOUT_MS = 120_000;
-const EXISTING_GENERATION_RESUME_WINDOW_MS = 40_000;
+const EXISTING_GENERATION_RESUME_WINDOW_MS = 30_000;
 const EXISTING_GENERATION_WAIT_ROUND_MS = 10 * 60_000;
 const EXISTING_GENERATION_WAIT_ROUNDS = 2;
 const EXISTING_GENERATION_READ_INTERVAL_MS = 1_000;
@@ -1324,13 +1324,18 @@ export function isPostSendTargetCrash(error: unknown): boolean {
  * After a load ChatGPT may take ~20 s or more to resume a still-running reply or to
  * start stream-recovery polling, and then shows Stop until that ends. Watch the
  * resume window; when Stop appears, wait up to two 10-minute rounds for it to go
- * away, and continue as soon as it does instead of finishing the round.
+ * away, and continue as soon as it does instead of finishing the round. The
+ * window is skipped when there is nothing to resume: a product-error alert is
+ * already shown, or the last turn carries the finished-reply actions.
  */
 async function waitForExistingGeneration(
   page: any,
   deadlineMs: number,
 ): Promise<'idle' | 'settled' | 'busy'> {
   const startedAt = Date.now();
+  const resumeWindowMs = await existingTurnHasNothingToResume(page, deadlineMs)
+    ? 0
+    : EXISTING_GENERATION_RESUME_WINDOW_MS;
   const waitUntil = Math.min(startedAt + EXISTING_GENERATION_WAIT_ROUND_MS * EXISTING_GENERATION_WAIT_ROUNDS, deadlineMs);
   let sawStop = false;
   let idleReads = 0;
@@ -1349,7 +1354,17 @@ async function waitForExistingGeneration(
     }
     idleReads += 1;
     if (sawStop && idleReads >= EXISTING_GENERATION_IDLE_READS) return 'settled';
-    if (!sawStop && Date.now() - startedAt >= EXISTING_GENERATION_RESUME_WINDOW_MS) return 'idle';
+    if (!sawStop && Date.now() - startedAt >= resumeWindowMs) return 'idle';
+  }
+}
+
+async function existingTurnHasNothingToResume(page: any, deadlineMs: number): Promise<boolean> {
+  try {
+    if (await locatorCount(page.locator('main [role="alert"]'), deadlineMs) > 0) return true;
+    const lastTurn = page.locator(CONVERSATION_TURN_SECTION_SELECTOR).last();
+    return await locatorCount(lastTurn.locator(ASSISTANT_TURN_ACTION_SELECTOR), deadlineMs) > 0;
+  } catch {
+    return false;
   }
 }
 
