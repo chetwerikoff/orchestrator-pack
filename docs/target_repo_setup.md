@@ -53,9 +53,22 @@ green; the automation Chrome is logged into ChatGPT; and Orca is running.
    ```
 
    A successful check prints the resolved repository, primary root, default
-   branch, and project URL. Target verification semantics are owned by #2187;
-   populate the card field for that dependency rather than inventing a pack
-   verification fallback here.
+   branch, and project URL. `verification.local` is required for target
+   work and must be a non-empty ordered list of non-empty shell command strings.
+   `verification.focused` is optional and may hold one non-empty scoped
+   verification template, but it never replaces `verification.local`. For example:
+
+   ```json
+   {
+     "verification": {
+       "local": ["npm test", "npm run typecheck"],
+       "focused": "npm test -- {path}"
+     }
+   }
+   ```
+
+   Missing/empty/focused-only verification and blank local commands are invalid
+   for target verification. There is no fallback to pack verification commands.
 3. **Pack policy in the target.** Run:
 
    ```bash
@@ -70,9 +83,10 @@ green; the automation Chrome is logged into ChatGPT; and Orca is running.
 5. **Scope guard and CI.** Install `.github/workflows/scope-guard.yml` and the
    reusable policy workflows. Run
    `$PACK_ROOT/scripts/install-git-hooks.ts --install-scope-guard` for the
-   target, add required Actions secrets to the target repository, and configure
-   branch protection/rulesets. #2187 owns the target verification/check
-   expectations; this runbook does not replace that authority.
+   target and add required Actions secrets to the target repository. Configure
+   branch protection/rulesets separately. #2187 owns only target-local command
+   verification; required-check readiness, live policy, pack-review requirement
+   semantics, and PR/base/comparison/merge authority remain outside this Issue.
 6. **Orca.** Register `<primaryRoot>` as an Orca repository using its supported
    setup path and confirm new worktrees match `orcaWorkspacePattern`.
 7. **Supervisor — non-pack targets require #2186.** Do not execute this step for
@@ -128,6 +142,30 @@ card and pass `--project <id>`; pack scripts are invoked from `{PACK_ROOT}`,
 never "from this worktree". The shared prompt/template placeholders are
 `{PROJECT_ID}`, `{REPOSITORY}`, `{PRIMARY_ROOT}`, `{PACK_ROOT}`,
 `{DEFAULT_BRANCH}`, and `{VERIFY}`.
+
+For each target task, render `{VERIFY}` from the selected card as the tracked
+target-verification invocation below, passing the task's **explicit current
+worktree root** rather than cwd or card `primaryRoot`:
+
+```bash
+node --experimental-strip-types "$PACK_ROOT/scripts/lib/Invoke-TypeScriptCli.ts" \
+  --repo-root "$PACK_ROOT" --script "$PACK_ROOT/scripts/lib/target-context.ts" -- \
+  verify --project <projectId> --target-worktree <current-target-worktree-root>
+```
+
+The verifier first requires non-empty `verification.local`, canonicalizes
+the supplied root, requires that root itself to be the Git worktree top level,
+and requires its canonical `origin` repository to equal the selected card's
+`repository`. Only then does it run each local command, in declaration
+order, as `sh -lc <command>` with cwd set to that worktree and the inherited
+environment. Spawn failure or non-zero exit stops immediately. It never infers a
+worktree from cwd, substitutes `primaryRoot`, or runs pack verification as a
+fallback. `verification.focused` is optional metadata for scoped paths that
+explicitly support it; ordinary target verification still runs the full local list.
+
+Updating the shared worker preamble and firefighter/flow-manager templates to
+supply this rendered `{VERIFY}` is an operator adoption step outside tracked
+repository acceptance.
 
 ## Managed AGENTS.md block
 
