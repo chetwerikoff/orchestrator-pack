@@ -45,6 +45,8 @@ export interface RunProcessSyncOptions {
   readonly cwd?: string;
   readonly env?: Readonly<NodeJS.ProcessEnv>;
   readonly inheritParentEnv?: boolean;
+  /** Forward child stdout and stderr to the parent's stderr without buffering. */
+  readonly forwardOutputToStderr?: boolean;
   readonly encoding?: BufferEncoding;
   readonly input?: string | Uint8Array;
   readonly timeoutMs?: number;
@@ -392,7 +394,9 @@ export function runProcessSync(options: RunProcessSyncOptions): ProcessResult {
       encoding,
       input: options.input,
       timeout: options.timeoutMs,
-      stdio: inheritedSyncStdio(options.inheritedFileDescriptors),
+      stdio: options.forwardOutputToStderr
+        ? (['pipe', 2, 2] as Array<'pipe' | 'ignore' | number>)
+        : inheritedSyncStdio(options.inheritedFileDescriptors),
     });
   } catch (error) {
     const timedOut = error instanceof Error
