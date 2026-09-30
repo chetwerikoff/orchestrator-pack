@@ -265,6 +265,9 @@ describe('Issue #2250 retire smoke ordering without removing pack-review cycle a
       'export function smokeOrderingRequired',
     ]) expect(state).not.toContain(forbidden);
     for (const forbidden of [
+      'selectSmokeAttempt', 'preAttemptPublication', 'planWorkerSmokeSelectiveRetry',
+    ]) expect(worker).not.toContain(forbidden);
+    for (const forbidden of [
       'beginSmokeOrdering', 'finishSmokeOrdering',
       'commitSmokeOrderingTransition', 'smokeOrderingRequired',
     ]) expect(worker).not.toContain(forbidden);
