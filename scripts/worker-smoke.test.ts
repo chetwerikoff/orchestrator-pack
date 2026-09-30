@@ -1151,7 +1151,7 @@ describe('runtime-neutral worker smoke', () => {
     }
   });
 
-  it('records lawful not-applicable worker smoke as passed ordering evidence', async () => {
+  it('skips not-applicable smoke without creating an ordering authority', async () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-not-applicable-'));
     const issueBodyFile = join(root, 'issue.md');
     const reviewStoreRoot = join(root, 'review-store');
@@ -1185,16 +1185,13 @@ describe('runtime-neutral worker smoke', () => {
         },
       });
       expect(code).toBe(0);
-      expect(resolverCalls).toBe(1);
+      expect(resolverCalls).toBe(0);
       expect(JSON.parse(String(output.mock.calls.at(-1)?.[0]))).toEqual({
         ok: true,
         skipped: true,
         reason: 'not-applicable',
       });
-      expect(readPackReviewAuthority(1721, { storeRoot: reviewStoreRoot })?.smokeOrdering?.workerOwned).toMatchObject({
-        headSha: HEAD_ONE,
-        status: 'passed',
-      });
+      expect(readPackReviewAuthority(1721, { storeRoot: reviewStoreRoot })).toBeNull();
     } finally {
       output.mockRestore();
       if (previousStoreRoot === undefined) delete process.env.PACK_REVIEW_RUN_STORE_ROOT;
@@ -1882,90 +1879,9 @@ describe('runtime-neutral worker smoke', () => {
   });
 });
 
-describe('worker-smoke-run wait for expired unbound lifecycle', () => {
-  it('returns the observed create diagnostic instead of waiting on a dead supervisor', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-wait-unbound-'));
-    const runId = 'c1222134-9261-485e-ad14-c1eae6e48c43';
-    const artifactDir = resolveSmokeRunArtifactDir(root, runId);
-    mkdirSync(artifactDir, { recursive: true });
-    let supervisorPid = 0;
-    const supervisor = await runProcess({
-      command: process.execPath,
-      args: ['-e', 'process.exit(0)'],
-      allowEmptyStdout: true,
-      onSpawn: (pid) => { supervisorPid = pid; },
-    });
-    const createDiagnostic = 'smoke_ordering_head_mismatch: expected 8136cb39a2508baee944c38270aec5c444894b4d, got 6407de3b54c94ca83eab625990254c5a371f15d4';
-    try {
-      expect(supervisor.ok).toBe(true);
-      expect(supervisorPid).toBeGreaterThan(0);
-      writeFileSync(join(artifactDir, 'lifecycle.json'), `${JSON.stringify({
-        version: 1,
-        runId,
-        issueNumber: 2078,
-        prNumber: 2079,
-        headSha: '6407de3b54c94ca83eab625990254c5a371f15d4',
-        artifactDir,
-        supervisorPid,
-        createdAtMs: 1790242313822,
-        updatedAtMs: 1790242313834,
-        spawnState: 'ambiguous_unbound',
-        createDeadlineMs: Date.now() - 1,
-        scenarioCount: 7,
-        createDiagnostic,
-      })}\n`, 'utf8');
-      const result = await runProcess({
-        command: process.execPath,
-        args: [
-          '--experimental-strip-types',
-          join(process.cwd(), 'scripts/worker-smoke-run.ts'),
-          'wait', '--run', runId, '--cwd', root, '--json',
-        ],
-        cwd: root,
-        inheritParentEnv: true,
-        allowEmptyStdout: true,
-        timeoutMs: 2_000,
-      });
-      expect(result.timedOut).toBe(false);
-      expect(result.exitCode).toBe(1);
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        ok: false,
-        runId,
-        result: 'FAIL',
-        reason: createDiagnostic,
-        createDiagnostic,
-      });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  }, 10_000);
-});
 
-describe('worker-smoke-run wait for a missing run', () => {
-  it('fails immediately with run_not_found for the observed id without an artifact directory', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-wait-missing-'));
-    const runId = 'd66e1692-df5b-4ac0-94f1-90f81264f895';
-    try {
-      const result = await runProcess({
-        command: process.execPath,
-        args: [
-          '--experimental-strip-types',
-          join(process.cwd(), 'scripts/worker-smoke-run.ts'),
-          'wait', '--run', runId, '--cwd', root, '--json',
-        ],
-        cwd: root,
-        inheritParentEnv: true,
-        allowEmptyStdout: true,
-        timeoutMs: 2_000,
-      });
-      expect(result.timedOut).toBe(false);
-      expect(result.exitCode).toBe(1);
-      expect(JSON.parse(result.stdout)).toEqual({ ok: false, runId, reason: 'run_not_found' });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  }, 10_000);
-});
+
+
 
 
 describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
@@ -2917,6 +2833,7 @@ describe('publishPrComment', () => {
 
   it('reports publication_unconfirmed when the native gh command fails', () => {
     const previousRealBinary = process.env.GH_REAL_BINARY;
+    const root = mkdtempSync(join(tmpdir(), 'smoke-publication-failure-'));
     const restoreProject = selectSmokeProjectForTest(root, process.cwd());
     process.env.GH_REAL_BINARY = process.execPath;
     try {
@@ -2925,6 +2842,7 @@ describe('publishPrComment', () => {
       restoreProject();
       if (previousRealBinary === undefined) delete process.env.GH_REAL_BINARY;
       else process.env.GH_REAL_BINARY = previousRealBinary;
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });
@@ -3264,7 +3182,7 @@ describe('buildSmokeAgentPrompt selected declaration artifact', () => {
     });
 
     expect(prompt).toContain('When waiting for executor work, use only a completion or session identifier actually returned by the selected executor; never invent a shell_id or a transcript path.');
-    expect(prompt).toContain('Continue to follow the existing lifecycle progress and cancellation protocol.');
+    expect(prompt).not.toContain('Durable smoke-run binding');
     expect(prompt).toContain('non-pass-cause: executed_scenario_failure');
     expect(prompt).toContain('browser_cdp_unavailable, profile_mismatch, login_required, quota_exhausted, or product_challenge');
     expect(prompt).toContain('non-pass-cause: <closed structured cause when required above>');
