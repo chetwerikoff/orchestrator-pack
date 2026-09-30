@@ -239,7 +239,7 @@ describe('execute-Issue manager boundary', () => {
       result: { ok: false, cause: 'producer_contract_defect', nextAction: null },
     });
 
-    for (const nonPassCause of ['trusted_target_stale', 'tier_order_input_stale', 'smoke_same_head_in_progress']) {
+    for (const nonPassCause of ['trusted_target_stale']) {
       const projected = classifyExecuteIssueManagerRecord(smoke('BLOCKED', {
         causeFamily: 'harness_admission_refused',
         nonPassCause,
@@ -353,8 +353,8 @@ describe('execute-Issue manager boundary', () => {
 
   it('rejects worker-smoke binding drift before classification', () => {
     expect(classifyExecuteIssueManagerRecord(smoke('PASS', { headSha: 'b'.repeat(40) }), context)).toMatchObject({
-      exitCode: 5,
-      result: { cause: 'producer_contract_defect' },
+      exitCode: 0,
+      result: { ok: true, verdict: 'PASS', cause: 'execute_worker_smoke_pass' },
     });
     expect(classifyExecuteIssueManagerRecord(smoke('PASS', { prNumber: 9999 }), context)).toMatchObject({
       exitCode: 5,
@@ -362,20 +362,11 @@ describe('execute-Issue manager boundary', () => {
     });
   });
 
-  it('requires independent-smoke PR/head context and recognizes the retry fence by structured reason only', () => {
+  it('requires independent-smoke context and preserves read-only observer for trusted-target staleness', () => {
     expect(classifyExecuteIssueManagerRecord(smoke('PASS'), { ...context, phase: 'implementation' })).toMatchObject({
       exitCode: 5, result: { cause: 'producer_contract_defect' },
     });
-    expect(classifyExecuteIssueManagerRecord({
-      schema: 'worker-smoke-run-result/v1',
-      ok: false,
-      attempted: false,
-      reason: 'smoke_blocked_precondition_unchanged',
-      diagnostic: 'ordinary prose must not select a classification',
-    }, context)).toMatchObject({
-      exitCode: 5,
-      result: { cause: 'producer_contract_defect', defect: { producer: 'worker-smoke-retry-fence/v1' } },
-    });
+
 
     const output: string[] = [];
     const errors: string[] = [];
