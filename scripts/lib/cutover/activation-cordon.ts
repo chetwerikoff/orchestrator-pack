@@ -503,7 +503,7 @@ export function readCordonState(pathName: string): CordonState {
       || (typeof record.projectId === 'string'
         && /^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(record.projectId)
         && typeof record.repository === 'string'
-        && /^[^\\/\\s]+\\/[^\\/\\s]+$/u.test(record.repository)))
+        && /^[^\/\s]+\/[^\/\s]+$/u.test(record.repository)))
     || !record.preImportSourceDigests
     || typeof record.preImportSourceDigests !== 'object'
     || Array.isArray(record.preImportSourceDigests)
@@ -544,7 +544,7 @@ export function createCordon(input: {
   const repository = input.repository?.trim().toLowerCase() || null;
   if ((projectId === null) !== (repository === null)
     || (projectId !== null && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(projectId))
-    || (repository !== null && !/^[^\\/\\s]+\\/[^\\/\\s]+$/u.test(repository))) {
+    || (repository !== null && !/^[^\/\s]+\/[^\/\s]+$/u.test(repository))) {
     throw new Error('cordon_project_repository_invalid');
   }
   let prepared: CordonPreparedRecord;
