@@ -15,6 +15,7 @@
     "scripts/cutover/issue-928.test.ts",
     "scripts/lib/canonical-review-directory.ts",
     "scripts/lib/cutover/activation-cordon.ts",
+    "scripts/lib/cutover/activation-evidence.ts",
     "scripts/lib/cutover/activation-import.ts",
     "scripts/lib/cutover/activation-recovery.ts",
     "scripts/lib/cutover/activation-transaction.ts",
@@ -29,6 +30,8 @@
     "scripts/orchestrator-wake-supervisor.ts",
     "scripts/pack-review-runner.ts",
     "scripts/pack-worker-report.ts",
+    "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts",
+    "scripts/pr2-foundation/scheduler-process-integration.test.ts",
     "scripts/pr2-foundation/scheduler.ts",
     "scripts/pr2-foundation/wake-supervisor-state-root.ts",
     "scripts/pr2-foundation/worker-notification-compat.test.ts",
@@ -62,5 +65,5 @@
     "scripts/pr2-foundation/",
     "scripts/toolchain/create-issue-authoring-contract.test.ts"
   ],
-  "source_revision": "28747b3dafea98b0db261d6b70d7e3a29b944589"
+  "source_revision": "de61d46c6f9638f1b03e0bcfceb8fbe6aca89bd7"
 }
