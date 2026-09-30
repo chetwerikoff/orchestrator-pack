@@ -3042,6 +3042,9 @@ async function runTurn(
     let freshMarkerlessReply = '';
     let streamRecoveryBannerReads = 0;
     let streamRecoveryBannerCause: string | undefined;
+    // Roleless recovery banners outlive the turn that raised them; only a turn
+    // that has generated since its send can be ended by one.
+    let ownedGenerationSeen = false;
     let sendObservationDeferredLogged = false;
     const updateHeartbeatForPoll = (decision: PageObservationDecision): void => {
       heartbeatDecision = decision;
@@ -3376,6 +3379,13 @@ async function runTurn(
         transcriptIncomplete,
         snapshot: transcriptSnapshot,
       } = observation;
+      if (!ownedGenerationSeen) {
+        try {
+          ownedGenerationSeen = await locatorCount(page.locator(RENDERED_STOP_BUTTON_SELECTOR), hardExhaustionDeadline) > 0;
+        } catch (error) {
+          if (isPostSendTargetCrash(error)) throw error;
+        }
+      }
       if (
         config.newChat
         && ownedConversationUrl
@@ -3396,7 +3406,10 @@ async function runTurn(
           incident,
         );
       }
-      if (wall.state) {
+      if (wall.state && (ownedGenerationSeen || !(
+        wall.state === 'recovery_required'
+        && (wall.cause === 'stream_recovery_polling_timed_out' || wall.cause === 'message_stream_error')
+      ))) {
         const cause = wall.cause ?? `${wall.state}_detected`;
         recordProductWallAdvisory(profileKey, wall.state, cause, invocationId);
         incident('invocation_blocker', cause, 'return_local_error');
@@ -3669,7 +3682,7 @@ async function runTurn(
       // prove ownership then, and a reload would hide the alert while the turn
       // stays dead. Return the reserved conversation-scoped recovery cause for
       // this invocation's own bound conversation instead, without reload or resend.
-      if (!markerVisible && durableConversationUrl && sendCount >= 1 && pageTurnEvidence?.generationInProgress !== true) {
+      if (!markerVisible && durableConversationUrl && sendCount >= 1 && ownedGenerationSeen && pageTurnEvidence?.generationInProgress !== true) {
         let bannerCause: string | undefined;
         try {
           const alertTexts = await boundedBrowserRead(

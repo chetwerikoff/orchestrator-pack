@@ -592,7 +592,9 @@ describe('state-light fresh conversation collision recovery', () => {
             generating,
           );
         }
-        if (selector.includes(STOP_BUTTON_TESTID)) return scalarLocator();
+        if (selector.includes(STOP_BUTTON_TESTID)) {
+          return scalarLocator({ count: vi.fn(async () => (generating ? 1 : 0)) });
+        }
         if (selector === '[role="alert"]') {
           return scalarLocator({
             allInnerTexts: vi.fn(async () => (
@@ -2443,7 +2445,7 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
     vi.mocked(uiAdapter.productStatusText).mockImplementation(actual.productStatusText);
     vi.mocked(uiAdapter.classifyProductWall).mockImplementation(actual.classifyProductWall);
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-STREAM-ERROR'));
-    const fake = recoveryPage(['generating', 'banner'], 'Error in message stream');
+    const fake = recoveryPage(['generating', 'generating', 'generating', 'generating', 'generating', 'generating', 'banner'], 'Error in message stream');
     const outcome = await runExistingChat(fake.page, join(integrationStateDir, 'stream-error.txt'));
     expect(outcome.result).toMatchObject({
       schema: 'turn-result/v1',
@@ -2455,6 +2457,18 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
     expect(fake.getSends()).toBe(1);
     expect(fake.retryClicks).not.toHaveBeenCalled();
     expect(fake.close).not.toHaveBeenCalled();
+  });
+
+  it('does not end a turn on a recovery banner before its generation was ever observed', async () => {
+    const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
+    vi.mocked(uiAdapter.productStatusText).mockImplementation(actual.productStatusText);
+    vi.mocked(uiAdapter.classifyProductWall).mockImplementation(actual.classifyProductWall);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-STALE-BANNER'));
+    const fake = recoveryPage(['banner', 'banner', 'banner'], 'Error in message stream');
+    const outcome = await runExistingChat(fake.page, join(integrationStateDir, 'stale-banner.txt'));
+    expect(outcome.result.state).not.toBe('recovery_required');
+    expect(fake.getSends()).toBe(1);
+    expect(fake.retryClicks).not.toHaveBeenCalled();
   });
 
   it('keeps polling with no wall while generation stays active and the banner is absent', async () => {
