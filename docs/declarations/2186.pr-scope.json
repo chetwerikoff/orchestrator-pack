@@ -29,6 +29,7 @@
     "scripts/orchestrator-wake-supervisor.ts",
     "scripts/pack-review-runner.ts",
     "scripts/pack-worker-report.ts",
+    "scripts/pr2-foundation/foundation.test.ts",
     "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts",
     "scripts/pr2-foundation/scheduler-process-integration.test.ts",
     "scripts/pr2-foundation/scheduler.ts",
@@ -64,5 +65,5 @@
     "scripts/pr2-foundation/",
     "scripts/toolchain/create-issue-authoring-contract.test.ts"
   ],
-  "source_revision": "5aa2d8375fcc2f3004b9b99edfcfa66a268fe126"
+  "source_revision": "03a766ff29fcb5aa9d8c9d410623d13aad48abce"
 }
