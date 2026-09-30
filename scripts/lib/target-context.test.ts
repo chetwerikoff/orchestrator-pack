@@ -493,6 +493,7 @@ describe('target context', () => {
     const env = {
       ...target.env,
       OPK_PROJECT_ID: 'orchestrator-pack',
+      OPK_WAKE_SUPERVISOR_STATE_DIR: '',
       OPK_BASE_DIR: target.root,
       XDG_STATE_HOME: join(target.root, 'state'),
     };
@@ -560,13 +561,14 @@ describe('target context', () => {
     const env = {
       ...target.env,
       OPK_PROJECT_ID: 'orchestrator-pack',
+      OPK_WAKE_SUPERVISOR_STATE_DIR: '',
       XDG_STATE_HOME: join(target.root, 'state'),
       WORKER_SMOKE_RECEIPT_ROOT: join(target.root, 'receipts'),
       OPK_VITEST_HARNESS: '',
     };
     const stateRoot = resolveWakeSupervisorStateRoot({ env, projectId: 'orchestrator-pack' });
     ensureProjectStateBinding(stateRoot, { projectId: 'orchestrator-pack', repository: target.card.repository });
-    const keys = ['HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'OPK_PROJECT_ID', 'WORKER_SMOKE_RECEIPT_ROOT', 'OPK_VITEST_HARNESS'] as const;
+    const keys = ['HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'OPK_PROJECT_ID', 'OPK_WAKE_SUPERVISOR_STATE_DIR', 'WORKER_SMOKE_RECEIPT_ROOT', 'OPK_VITEST_HARNESS'] as const;
     const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
     try {
       for (const key of keys) process.env[key] = env[key] ?? '';
