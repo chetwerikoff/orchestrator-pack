@@ -418,7 +418,9 @@ function runSmokeProfileChild(
 }
 
 export interface ResolvedSmokeTarget {
+  projectId: string;
   repositorySlug: string;
+  defaultBranch: string;
   issueNumber: number;
   prNumber: number;
   headSha: string;
@@ -586,10 +588,11 @@ export function deriveMainMergeCarryProof(
   sourceHeadSha: string,
   destinationHeadSha: string,
   issueBody: string,
+  defaultBranch = selectedSmokeProject().defaultBranch,
 ): WorkerSmokeMainMergeCarryRecord | undefined {
   const source = sourceHeadSha.trim().toLowerCase();
   const destination = destinationHeadSha.trim().toLowerCase();
-  const main = gitRead(cwd, ['rev-parse', '--verify', 'refs/remotes/origin/main^{commit}']);
+  const main = gitRead(cwd, ['rev-parse', '--verify', `refs/remotes/origin/${defaultBranch}^{commit}`]);
   if (!main || !/^[0-9a-f]{40}$/u.test(source) || !/^[0-9a-f]{40}$/u.test(destination)) return undefined;
   const mergeCommits = gitRead(cwd, ['rev-list', '--merges', `${source}..${destination}`])?.split(/\r?\n/u).filter(Boolean) ?? [];
   const mainMerges = mergeCommits.flatMap((merge) => {
@@ -657,8 +660,16 @@ function canonicalRepositorySlug(value: unknown): string {
   return slug;
 }
 
+function selectedSmokeProject(): { projectId: string; repository: string; defaultBranch: string } {
+  if (process.env.VITEST && !String(process.env.OPK_PROJECT_ID ?? '').trim()) {
+    return { projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack', defaultBranch: 'main' };
+  }
+  const target = resolveTargetContext({ env: process.env });
+  return { projectId: target.projectId, repository: target.repository, defaultBranch: target.defaultBranch };
+}
+
 function selectedSmokeRepositorySlug(): string {
-  return canonicalRepositorySlug(resolveTargetContext().repository);
+  return canonicalRepositorySlug(selectedSmokeProject().repository);
 }
 
 function repositoryFromGithubUrl(value: unknown): string {
@@ -705,9 +716,10 @@ function suppliedIssueBodyMatches(fetched: string, supplied: string): boolean {
 }
 
 export function resolveSmokeTarget(options: CliOptions, suppliedIssueBody: string): ResolvedSmokeTarget {
-  const repositorySlug = canonicalRepositorySlug(selectedSmokeRepositorySlug());
+  const selected = selectedSmokeProject();
+  const repositorySlug = canonicalRepositorySlug(selected.repository);
   const originSlug = gitOriginRepositorySlug(options.repoRoot);
-  if (originSlug.toLowerCase() !== repositorySlug.toLowerCase()) throw new Error('trusted_target: trusted repository and origin mismatch');
+  if (originSlug.toLowerCase() !== repositorySlug.toLowerCase()) throw new Error('trusted_target: selected repository and origin mismatch');
 
   const principal = githubApiObject('authenticated-principal', 'user', options.repoRoot);
   const trustedPublisherLogin = String(principal.login ?? '').trim();
@@ -717,6 +729,9 @@ export function resolveSmokeTarget(options: CliOptions, suppliedIssueBody: strin
   const pr = githubApiObject('pr-view-binding', `repos/${repositorySlug}/pulls/${options.prNumber}`, options.repoRoot);
   const repository = githubApiObject('repository-view-binding', `repos/${repositorySlug}`, options.repoRoot);
   const targetFact = projectExpectedPrTarget(pr, repository);
+  if (targetFact.expectedTargetRef !== selected.defaultBranch) {
+    throw new Error(`trusted_target: repository default branch ${targetFact.expectedTargetRef || '<empty>'} does not match selected target ${selected.defaultBranch}`);
+  }
 
   const issueNumber = positiveInteger(issue.number);
   const prNumber = positiveInteger(pr.number);
@@ -740,7 +755,10 @@ export function resolveSmokeTarget(options: CliOptions, suppliedIssueBody: strin
   if (exactClosingIssue(prBody) !== issueNumber) throw new Error('trusted_target: PR-to-Issue resolution is missing, multiple, or mismatched');
 
   return {
-    repositorySlug, issueNumber, prNumber, headSha, issueBody, prBody,
+    projectId: selected.projectId,
+    repositorySlug,
+    defaultBranch: selected.defaultBranch,
+    issueNumber, prNumber, headSha, issueBody, prBody,
     issueBodyMatchesTarget: true, trustedPublisherLogin, ...targetFact,
   };
 }
@@ -874,9 +892,9 @@ export function currentPackReviewStatusFact(repositorySlug: string, headSha: str
   ));
 }
 
-function currentAtCapFacts(prNumber: number): Pick<Parameters<typeof evaluateReadiness>[0]['review'], 'atCapOpenFindings' | 'atCapContinuationRequired'> {
+function currentAtCapFacts(prNumber: number, projectId: string): Pick<Parameters<typeof evaluateReadiness>[0]['review'], 'atCapOpenFindings' | 'atCapContinuationRequired'> {
   try {
-    const storeRoot = resolvePackReviewRunStoreRoot({ projectId: 'orchestrator-pack', storeRoot: process.env.PACK_REVIEW_RUN_STORE_ROOT });
+    const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: process.env.PACK_REVIEW_RUN_STORE_ROOT });
     const authority = readPackReviewAuthority(prNumber, { storeRoot });
     return {
       atCapOpenFindings: authority?.cycle?.state === 'at_cap_open_findings',
@@ -894,10 +912,11 @@ interface PostSmokePackReviewAuthorityCycle {
 function currentPackReviewCompletionCycle(
   prNumber: number,
   currentHeadSha: string,
+  projectId: string,
   isAncestor: (ancestorSha: string, descendantSha: string) => boolean,
 ): PostSmokePackReviewAuthorityCycle | null {
   try {
-    const storeRoot = resolvePackReviewRunStoreRoot({ projectId: 'orchestrator-pack', storeRoot: process.env.PACK_REVIEW_RUN_STORE_ROOT });
+    const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: process.env.PACK_REVIEW_RUN_STORE_ROOT });
     let authority = readPackReviewAuthority(prNumber, { storeRoot });
     if (!authority?.cycle) return null;
     const reviewedHeadSha = authority.terminal?.reviewVerdict === 'findings' ? authority.terminal.targetSha : '';
@@ -970,7 +989,7 @@ export async function evaluatePostSmokeReadiness(
   adapter: RuntimeAdapter,
   dependencies: PostSmokeReadinessDependencies = {},
 ): Promise<PostSmokeReadinessResult> {
-  const assignmentFile = resolveWorkerAssignmentStorePath('orchestrator-pack', process.env);
+  const assignmentFile = resolveWorkerAssignmentStorePath(target.projectId, process.env);
   const assignment = currentWorkerAssignment(assignmentFile, target.issueNumber);
   const readinessTarget = {
     repository: target.repositorySlug, issueNumber: target.issueNumber, taskId: assignment?.taskId ?? '',
@@ -997,7 +1016,7 @@ export async function evaluatePostSmokeReadiness(
         assignments: [assignment],
         bindings: resolved.bindings.filter((binding) => binding.assignment.assignmentId === assignment.assignmentId),
         reconciliations: resolved.reconciliations.filter((row) => row.assignment.assignmentId === assignment.assignmentId),
-        project: 'orchestrator-pack',
+        project: target.projectId,
       });
       const killSwitch = evaluateWorkerStatusKillSwitch(process.env);
       const sibling = testSiblingReadiness(process.env);
@@ -1053,7 +1072,7 @@ export async function evaluatePostSmokeReadiness(
   const runner = (dependencies.currentPackReviewStatusFact ?? currentPackReviewStatusFact)(target.repositorySlug, target.headSha, options.repoRoot);
   const postSmokeReview = projectPostSmokePackReview({
     runner, direct,
-    authorityCycle: currentPackReviewCompletionCycle(target.prNumber, target.headSha, (ancestorSha, descendantSha) =>
+    authorityCycle: currentPackReviewCompletionCycle(target.prNumber, target.headSha, target.projectId, (ancestorSha, descendantSha) =>
       (dependencies.isAncestor ?? githubCommitIsAncestor)(target.repositorySlug, ancestorSha, descendantSha, options.repoRoot)),
   });
   const reviewProjection = postSmokeReview.reviewProjection;
@@ -1067,7 +1086,7 @@ export async function evaluatePostSmokeReadiness(
       } : semanticPackReviewRequiredStatusRequest({ headSha: target.headSha, projection: reviewProjection }),
     });
   }
-  const atCap = currentAtCapFacts(target.prNumber);
+  const atCap = currentAtCapFacts(target.prNumber, target.projectId);
   const smokeEvidenceState: PostSmokeReadinessResult['smokeEvidence']['state'] = !smokeObservationAvailable
     ? 'unavailable'
     : initialSmokeHead !== target.headSha ? 'changed' : smokePassObserved ? 'verified' : 'missing';
@@ -1122,7 +1141,7 @@ export async function runDelegatedReadiness(
     return report('delegated_readiness_target_mismatch');
   }
 
-  const assignmentFile = resolveWorkerAssignmentStorePath('orchestrator-pack', process.env);
+  const assignmentFile = resolveWorkerAssignmentStorePath(target.projectId, process.env);
   const readAssignment = dependencies.readAssignment ?? currentWorkerAssignment;
   const assignment = readAssignment(assignmentFile, target.issueNumber);
   const marker = assignment?.delegatedIntegration;
@@ -1434,7 +1453,7 @@ function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scen
       '- Emit PASS with one bookkeeping row: action: record empty attempt-local execution set | expected: no selected smoke scenario executes | observed: no attempt-local scenarios selected | outcome: pass.',
     ] : []),
     '- Emit each declared progress event exactly once; never repeat a started or terminal event.',
-    '- For PR scope accounting, compare HEAD to the verified PR base merge-base (git diff "$(git merge-base HEAD origin/main)" HEAD), never to a local branch named main.',
+    `- For PR scope accounting, compare HEAD to the verified PR base merge-base (git diff "$(git merge-base HEAD origin/${selectedSmokeProject().defaultBranch})" HEAD), never to a local branch named ${selectedSmokeProject().defaultBranch}.`,
     '- Use declared order only and check cancel-request.json before each new scenario.',
     '- For each scenario N, append and durably flush N started, execute only N, then append and durably flush N terminal before doing any work or writing progress for N+1.',
     '- Never run scenarios in parallel, start a later ordinal early, or skip an ordinal. After a fail/blocked/skipped terminal, stop without starting another scenario or writing any later-scenario progress; a refused later-start command is terminal, and progress after skipped is a protocol failure.',
@@ -1990,8 +2009,12 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     if (spawned.status !== 'ok') throw new WorkerSmokeHarnessError('smoke_spawn_failed', failureReason(spawned));
     worker = spawned.value.identity;
     const prompt = buildSmokeAgentPrompt({
-      issueNumber: options.issueNumber, issueBody, prNumber: options.prNumber,
-      headSha: options.headSha, plan: attemptPlan,
+      issueNumber: options.issueNumber,
+      issueBody,
+      prNumber: options.prNumber,
+      headSha: options.headSha,
+      projectId: selectedSmokeProject().projectId,
+      plan: attemptPlan,
     });
     const dispatched = adapter.dispatchInput(
       { worker, text: prompt }, { cwd: options.cwd, timeoutMs: SMOKE_DELIVERY_TIMEOUT_MS },

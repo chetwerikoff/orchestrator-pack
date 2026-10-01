@@ -2,11 +2,13 @@ import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync }
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
+import { DEFAULT_WAKE_SUPERVISOR_PROJECT_ID } from './pr2-foundation/wake-supervisor-state-constants.mjs';
 
 import { repoRoot } from './lib/vitest-live-store-harness.mjs';
 import {
   isExternalJournalSnapshotOnlyChange,
   isExternalWakeSupervisorSnapshotOnlyChange,
+  startParentLiveStoreGuard,
 } from './lib/vitest-live-store-parent-guard.mjs';
 import { runProcess } from './kernel/subprocess.ts';
 
@@ -155,17 +157,65 @@ describe('parent live-store guard', () => {
     expect(child.exitCode, child.stderr).toBe(0);
   });
 
-  it('settles the files a running supervisor writes in the live cutover layout', () => {
+  it('settles only known wake-state paths for the explicit or default project', () => {
+    const projectId = DEFAULT_WAKE_SUPERVISOR_PROJECT_ID;
     expect(isExternalWakeSupervisorSnapshotOnlyChange([
       'supervisor/typescript-supervisor-status.json',
       'supervisor/projected-registry.json',
       'orchestration-mail-reconcile.json',
       'orchestration-mail-reconcile.lock',
+      `${projectId}/orchestration-mail-reconcile.json`,
+      `${projectId}/orchestration-mail-reconcile.lock`,
+      `${projectId}/supervisor/typescript-supervisor-status.json`,
+      `${projectId}/supervisor/projected-registry.json`,
+      `${projectId}/fleet-observer-snapshot.json`,
+      `${projectId}/.tmp-1234-1700000000000-deadbeef`,
+      `${projectId}/supervisor/.typescript-supervisor-status.json.1234.00000000-0000-4000-8000-000000000000.tmp`,
     ])).toBe(true);
     expect(isExternalWakeSupervisorSnapshotOnlyChange([
-      'supervisor/typescript-supervisor-status.json',
-      'supervisor/unrelated-live-store-leak.json',
-    ])).toBe(false);
+      `${projectId}/fleet-observer-snapshot.json`,
+    ], 'another-project')).toBe(false);
+    expect(isExternalWakeSupervisorSnapshotOnlyChange([
+      'another-project/fleet-observer-snapshot.json',
+    ], projectId)).toBe(false);
+    expect(isExternalWakeSupervisorSnapshotOnlyChange([
+      `${projectId}/unrelated-live-store-leak.json`,
+    ], projectId)).toBe(false);
+  });
+  it('settles an external selected-project worker report-store transaction', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-worker-report-'));
+    temporaryRoots.push(root);
+    const projectId = 'orchestrator-pack';
+    const changedPaths = [
+      projectId,
+      `${projectId}/worker-report-store.json`,
+      `${projectId}/worker-report-store.lock`,
+      `${projectId}/worker-report-store.json.tmp`,
+    ];
+    expect(isExternalWakeSupervisorSnapshotOnlyChange(changedPaths, projectId)).toBe(true);
+    expect(isExternalWakeSupervisorSnapshotOnlyChange([
+      'another-project/worker-report-store.json',
+    ], projectId)).toBe(false);
+    expect(isExternalWakeSupervisorSnapshotOnlyChange([
+      `${projectId}/unrelated-live-store-leak.json`,
+    ], projectId)).toBe(false);
+
+    const env = productionEnvironment(join(root, 'production'));
+    env.OPK_PROJECT_ID = projectId;
+    const wakeRoot = env.OPK_VITEST_PRODUCTION_WAKE_ROOT!;
+    const projectRoot = join(wakeRoot, projectId);
+    const reportStore = join(projectRoot, 'worker-report-store.json');
+    const reportLock = join(projectRoot, 'worker-report-store.lock');
+    const reportTemp = `${reportStore}.tmp`;
+    const guard = startParentLiveStoreGuard(env);
+    mkdirSync(projectRoot, { recursive: true });
+    writeFileSync(reportLock, 'lock', 'utf8');
+    writeFileSync(reportStore, '{"generation":1}', 'utf8');
+    writeFileSync(reportTemp, '{"generation":2}', 'utf8');
+    renameSync(reportTemp, reportStore);
+    rmSync(reportLock, { force: true });
+
+    expect(() => guard.stop()).not.toThrow();
   });
 
   it('ignores a live supervisor tick under supervisor/ around a passing harness child', async () => {
@@ -189,9 +239,13 @@ describe('parent live-store guard', () => {
       'utf8',
     );
     const childEnvironment = productionEnvironment(join(root, 'child-production'));
+    const projectId = DEFAULT_WAKE_SUPERVISOR_PROJECT_ID;
+    delete childEnvironment.OPK_PROJECT_ID;
     const wakeRoot = childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!;
-    const supervisorDir = join(wakeRoot, 'supervisor');
+    const projectStateDir = join(wakeRoot, projectId);
+    const supervisorDir = join(projectStateDir, 'supervisor');
     mkdirSync(supervisorDir, { recursive: true });
+    mkdirSync(projectStateDir, { recursive: true });
     const durableWrite = (target: string, name: string, content: string): void => {
       const temporary = join(supervisorDir, `.${name}.1234.00000000-0000-4000-8000-000000000000.tmp`);
       writeFileSync(temporary, content, 'utf8');
@@ -199,12 +253,14 @@ describe('parent live-store guard', () => {
     };
     const status = join(supervisorDir, 'typescript-supervisor-status.json');
     const projected = join(supervisorDir, 'projected-registry.json');
-    const reconcile = join(wakeRoot, 'orchestration-mail-reconcile.json');
-    const reconcileLock = join(wakeRoot, 'orchestration-mail-reconcile.lock');
+    const reconcile = join(projectStateDir, 'orchestration-mail-reconcile.json');
+    const reconcileLock = join(projectStateDir, 'orchestration-mail-reconcile.lock');
+    const fleetSnapshot = join(projectStateDir, 'fleet-observer-snapshot.json');
     writeFileSync(status, '{"restartState":"waiting-restart"}\n', 'utf8');
     writeFileSync(projected, '{"children":[]}\n', 'utf8');
     writeFileSync(reconcile, '{"messages":{}}\n', 'utf8');
     writeFileSync(reconcileLock, '1\n', 'utf8');
+    writeFileSync(fleetSnapshot, '{"snapshot":"before"}\n', 'utf8');
 
     const childPromise = runHarnessedVitest(fixture, childEnvironment);
     await waitForFile(readyFile);
@@ -212,6 +268,9 @@ describe('parent live-store guard', () => {
     durableWrite(projected, 'projected-registry.json', '{"children":[{"id":"pr2-scheduler"}]}\n');
     writeFileSync(reconcileLock, '2\n', 'utf8');
     writeFileSync(reconcile, '{"messages":{"msg":1}}\n', 'utf8');
+    const fleetTemporary = join(projectStateDir, '.tmp-1234-1700000000000-deadbeef');
+    writeFileSync(fleetTemporary, '{"snapshot":"after"}\n', 'utf8');
+    renameSync(fleetTemporary, fleetSnapshot);
     const child = await childPromise;
 
     expect(child.exitCode, child.stderr).toBe(0);
@@ -288,6 +347,7 @@ describe('parent live-store guard', () => {
 
     expect(child.exitCode).not.toBe(0);
     expect(child.stderr).toContain('OPK_VITEST_LIVE_STORE_GUARD_FAILED');
+    expect(child.stderr).toContain('unrelated-live-store-leak.json');
   });
 
   it('retains a child-originated live-store mutation when the watcher observes it', async () => {

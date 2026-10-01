@@ -1269,7 +1269,7 @@ describe('supervised Task launch assistant', () => {
     expect(fixture.calls.some((args) => args[0] === 'orca' && args[1] === 'worktree' && args[2] === 'create')).toBe(false);
   });
 
-  it('requires origin/main when creating a fresh manager worktree', async () => {
+  it('requires the selected default branch when creating a fresh manager worktree', async () => {
     const calls: string[][] = [];
     const result = await prepareWorktreeWithOrca({
       repository: 'chetwerikoff/orchestrator-pack',
@@ -1281,7 +1281,7 @@ describe('supervised Task launch assistant', () => {
       calls.push([...args]);
       return { ok: false, stdout: '', stderr: '' };
     });
-    expect(result).toMatchObject({ status: 'continue', cause: 'manager_worktree_origin_main_base_required' });
+    expect(result).toMatchObject({ status: 'continue', cause: 'manager_worktree_selected_base_required' });
     expect(calls).toEqual([]);
   });
 

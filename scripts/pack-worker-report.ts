@@ -64,24 +64,25 @@ function arg(args:readonly string[],name:string):string{const i=args.indexOf(nam
 function stateFromArgs(args:readonly string[]):string{let state=arg(args,'--state');if(!state&&args[0]&&!args[0].startsWith('-'))state=args[0];state=bounded(state,80).toLowerCase();if(!STATES.has(state))throw new Error('invalid_or_missing_state');return state}
 function validateArgs(args:readonly string[],state:string,allowed:Set<string>):void{let positional=false;for(let i=0;i<args.length;i+=1){const a=args[i]!;if(allowed.has(a)){if(i+1>=args.length)throw new Error(`missing_value:${a}`);i+=1;continue}if(a==='--dry-run')continue;if(!a.startsWith('-')&&!positional&&a.toLowerCase()===state){positional=true;continue}throw new Error(`unknown_argument:${a}`)}}
 function hasExplicitBindingArgs(args:readonly string[]):boolean{return args.some((value)=>BINDING_ARGS.has(value))}
-export function parsePackWorkerReportArgs(argv:readonly string[],env:NodeJS.ProcessEnv=process.env):ReportRequest{const args=[...argv];const state=stateFromArgs(args);const repository=bounded(arg(args,'--repository')||env.GITHUB_REPOSITORY,240).toLowerCase();const issueNumber=Number(arg(args,'--issue-number'));const taskId=bounded(arg(args,'--task-id'),160);const assignmentId=bounded(arg(args,'--assignment-id'),160);const assignmentGeneration=Number(arg(args,'--assignment-generation'));const prNumber=Number(arg(args,'--pr-number'));const headSha=sha(arg(args,'--head-sha')||env.GITHUB_SHA);const deliveryRunId=bounded(arg(args,'--delivery-run-id')||env.OPK_DELIVERY_RUN_ID||env.OPK_REVIEW_RUN_ID||env.OPK_REVIEW_START_RUN_ID,160);const projectId=bounded(arg(args,'--project-id')||'orchestrator-pack',80);const repoRoot=resolve(arg(args,'--repo-root')||process.cwd());if(!repository||!Number.isInteger(issueNumber)||issueNumber<=0||!taskId||!assignmentId||!Number.isInteger(assignmentGeneration)||assignmentGeneration<=0||!Number.isInteger(prNumber)||prNumber<=0||!headSha||!projectId)throw new Error('report_binding_arguments_invalid');validateArgs(args,state,new Set([...AUTO_ARGS,...BINDING_ARGS]));return{state,repository,issueNumber,taskId,assignmentId,assignmentGeneration,prNumber,headSha,deliveryRunId,projectId,repoRoot,dryRun:args.includes('--dry-run')}}
+export function parsePackWorkerReportArgs(argv:readonly string[],env:NodeJS.ProcessEnv=process.env):ReportRequest{const args=[...argv];const state=stateFromArgs(args);const requestedProjectId=bounded(arg(args,'--project-id')||env.OPK_PROJECT_ID,80);const target=resolveTargetContext({projectId:requestedProjectId||undefined,env});const projectId=target.projectId;const repository=bounded(arg(args,'--repository')||env.GITHUB_REPOSITORY,240).toLowerCase();const issueNumber=Number(arg(args,'--issue-number'));const taskId=bounded(arg(args,'--task-id'),160);const assignmentId=bounded(arg(args,'--assignment-id'),160);const assignmentGeneration=Number(arg(args,'--assignment-generation'));const prNumber=Number(arg(args,'--pr-number'));const headSha=sha(arg(args,'--head-sha')||env.GITHUB_SHA);const deliveryRunId=bounded(arg(args,'--delivery-run-id')||env.OPK_DELIVERY_RUN_ID||env.OPK_REVIEW_RUN_ID||env.OPK_REVIEW_START_RUN_ID,160);const repoRoot=resolve(arg(args,'--repo-root')||process.cwd());if(!repository||repository!==target.repository.toLowerCase()||!Number.isInteger(issueNumber)||issueNumber<=0||!taskId||!assignmentId||!Number.isInteger(assignmentGeneration)||assignmentGeneration<=0||!Number.isInteger(prNumber)||prNumber<=0||!headSha)throw new Error('report_binding_arguments_invalid');validateArgs(args,state,new Set([...AUTO_ARGS,...BINDING_ARGS]));return{state,repository,issueNumber,taskId,assignmentId,assignmentGeneration,prNumber,headSha,deliveryRunId,projectId,repoRoot,dryRun:args.includes('--dry-run')}}
 
 export async function resolvePackWorkerReportRequest(argv:readonly string[],env:NodeJS.ProcessEnv=process.env,deps:Pick<ReportDeps,'run'>={}):Promise<Predicate<ReportRequest>>{
   const args=[...argv];
   let state:string;
   try{state=stateFromArgs(args);validateArgs(args,state,AUTO_ARGS)}catch(e){return{kind:'command_error',reason:e instanceof Error?e.message:'invalid_cli_usage'}}
-  const projectId=bounded(arg(args,'--project-id')||env.OPK_PROJECT_ID||'orchestrator-pack',80);
-  if(!projectId)return{kind:'command_error',reason:'report_binding_arguments_invalid'};
+  const requestedProjectId=bounded(arg(args,'--project-id')||env.OPK_PROJECT_ID,80);
   let target;
   try{
-    target=resolveTargetContext({projectId,env});
-    assertProjectStateBinding(resolveWakeSupervisorStateRoot({env,projectId}),{
+    target=resolveTargetContext({projectId:requestedProjectId||undefined,env});
+    assertProjectStateBinding(resolveWakeSupervisorStateRoot({env,projectId:target.projectId}),{
       projectId:target.projectId,
       repository:target.repository,
     });
   }catch(e){
-    return{kind:'continue_work',reason:safe(e,'project_binding_untrusted')};
+    const code=typeof e==='object'&&e!==null&&'code' in e?String((e as {code?:unknown}).code??''):'';
+    return{kind:code==='missing-selection'||code==='selector-mismatch'?'command_error':'continue_work',reason:code||safe(e,'project_binding_untrusted')};
   }
+  const projectId=target.projectId;
   const repository=target.repository;
   const run=deps.run??defaultRun;
   const requestedRepoRoot=resolve(arg(args,'--repo-root')||process.cwd());

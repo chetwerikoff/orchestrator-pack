@@ -549,7 +549,7 @@
       "role": "operator",
       "aliases": ["adopt merged main", "HEAD after adoption", "wiki-ops sync"],
       "sections": [
-        { "heading": "## Step 6 — Adopt merged main" },
+        { "heading": "## Step 6 — Adopt the merged selected default branch" },
         { "heading": "## Step 7 — Apply local adoption" },
         { "heading": "## Step 8 — Sibling advisory" }
       ],

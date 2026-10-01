@@ -429,13 +429,6 @@
       "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
     },
     {
-      "path": "scripts/draft-discipline.mjs",
-      "api": "execFileSync",
-      "fingerprint": "8c4d631bacd188823883",
-      "ordinal": 1,
-      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
-    },
-    {
       "path": "scripts/generate-capture-manifest.mjs",
       "api": "execFileSync",
       "fingerprint": "75e68d98002ecc515c3d",

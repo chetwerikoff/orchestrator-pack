@@ -23,6 +23,45 @@ is introduced.
 
 # Migration notes
 
+## Target portability sink closure (Issue #2188)
+
+### What changed
+
+Target-running GitHub repository, project namespace, default-branch, worktree,
+review, and create-Issue journal selectors now consume the selected project card
+instead of pack literals, cwd/origin inference, ambient repository variables, or
+an Issue-number-only state path. In target mode (`OPK_PROJECT_ID` non-empty),
+tracked `scripts/gh` authorizes `github.com` plus exactly the selected card
+repository before native/network execution and rejects conflicting repository or
+host ingress and arbitrary GraphQL.
+
+Create-Issue stage-record state now uses
+`~/.local/state/create-issue-draft/<projectId>/<issueNumber>/journal/`, including
+`pending/` and `active-cycle-id.txt`. Existing #2186 project-state migration
+remains the migration authority; this change prevents the producer from
+recreating the retired flat Issue-number-only path.
+
+### Operator adoption
+
+1. Ensure every local target-running invocation exports the selected
+   `OPK_PROJECT_ID`; do not use `GH_REPO`, cwd, or a remote as a target selector.
+2. Keep each project card's `repository` and `defaultBranch` current and let
+   `resolveTargetContext` validate `primaryRoot` origin.
+3. Do not set a target-mode `GH_HOST` other than `github.com`; do not route
+   target work through arbitrary `gh api graphql`.
+4. Before resuming an interrupted create-Issue cycle, verify any surviving
+   journal state is under the selected project's namespace. Do not copy a flat
+   legacy `create-issue-draft/<issue>/journal` directory into another project.
+5. No live GitHub mutation or operator-local state migration is performed by
+   this source change.
+
+### Rollback
+
+A source rollback reintroduces the possibility of target selection from
+pack/default/cwd ingress and can recreate flat create-Issue journal state. Stop
+multi-project target execution before rollback; do not merge journal directories
+between projects as a compatibility workaround.
+
 ## Target-owned verification adoption (Issue #2187)
 
 ### What changed
