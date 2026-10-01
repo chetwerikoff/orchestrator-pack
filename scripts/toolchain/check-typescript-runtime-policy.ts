@@ -6,10 +6,11 @@ import {
   assertNodeRuntimeContract,
   NODE_VERSION_FILE,
   SUPPORTED_NODE_MAJOR,
+  SUPPORTED_NPM_MAJOR,
 } from './node-runtime-contract.mjs';
 
 export type LaunchClassification =
-  | 'native-node-22'
+  | 'native-node'
   | 'powershell-bridge'
   | 'test-framework-owned'
   | 'historical-fixture-only'
@@ -36,7 +37,8 @@ export interface RuntimePolicyViolation {
     | 'inventory-contract'
     | 'compiler-contract'
     | 'non-erasable-syntax'
-    | 'agent-runtime-contract';
+    | 'agent-runtime-contract'
+    | 'runtime-major-restatement';
   readonly message: string;
 }
 
@@ -49,7 +51,6 @@ interface InventoryContract {
   readonly schemaVersion: number;
   readonly issue: string;
   readonly canonicalRuntime: {
-    readonly nodeMajor: number;
     readonly versionFile: string;
     readonly nativeArgvPrefix: readonly string[];
   };
@@ -79,10 +80,11 @@ interface WorkspacePackage {
 
 const INVENTORY_PATH = 'scripts/toolchain/typescript-launch-inventory.json';
 const AGENTS_PATH = 'AGENTS.md';
-const AGENTS_NODE_22_RULE = '**Node 22-only TypeScript runtime:**';
+const AGENTS_RUNTIME_RULE = '**Single-major TypeScript runtime:**';
 const POLICY_PATH = 'scripts/toolchain/check-typescript-runtime-policy.ts';
-const POLICY_TEST_PATH = 'scripts/toolchain/node22-runtime-policy.spec.ts';
+const POLICY_TEST_PATH = 'scripts/toolchain/typescript-runtime-policy.spec.ts';
 const ROOTS = ['package.json', '.github', 'docs', 'plugins', 'scripts', 'tests'] as const;
+const RESTATEMENT_ROOTS = ['AGENTS.md', 'README.md', '.cursor', '.claude', '.github', 'docs', 'plugins', 'prompts', 'scripts', 'tests'] as const;
 const SKIP_DIRS = new Set(['.git', '.orchestrator-pack', 'node_modules', 'vendor']);
 const TEXT_EXTENSIONS = new Set(['.cjs', '.cts', '.js', '.json', '.md', '.mjs', '.mts', '.ps1', '.sh', '.ts', '.txt', '.yaml', '.yml']);
 const FORBIDDEN_RUNTIME_PACKAGES = ['tsx', 'ts-node'] as const;
@@ -123,6 +125,16 @@ function repositoryFiles(repoRoot: string): string[] {
       const path = normalizePath(relative(repoRoot, absolute));
       return path === 'scripts/gh'
         || TEXT_EXTENSIONS.has(extname(path));
+    })
+    .sort();
+}
+
+function restatementFiles(repoRoot: string): string[] {
+  return RESTATEMENT_ROOTS
+    .flatMap((entry) => walk(repoRoot, resolve(repoRoot, entry)))
+    .filter((absolute) => {
+      const path = normalizePath(relative(repoRoot, absolute));
+      return TEXT_EXTENSIONS.has(extname(path)) || path === 'AGENTS.md' || path === 'README.md';
     })
     .sort();
 }
@@ -778,7 +790,7 @@ function scanWorkflowNodeVersions(
       inventory.push({
         path,
         line: step.line,
-        classification: valid ? 'native-node-22' : 'invalid',
+        classification: valid ? 'native-node' : 'invalid',
         evidence: step.evidence,
       });
 
@@ -875,7 +887,7 @@ function scanLaunches(
       path: RETIRED_LOADER,
       line: 1,
       rule: 'runtime-loader',
-      message: 'Node-below-22 TypeScript compatibility loader must not exist.',
+      message: 'unsupported-major TypeScript compatibility loader must not exist.',
     });
   }
   if (existsSync(resolve(repoRoot, RETIRED_POWERSHELL_BRIDGE))) {
@@ -934,7 +946,7 @@ function scanLaunches(
           || path === 'package.json'
           || path.endsWith('/package.json')
           || (target !== undefined && hasCanonicalEntrypointPreflight(repoRoot, target));
-        const classification: LaunchClassification = oldClass ?? (native && preflighted ? 'native-node-22' : 'invalid');
+        const classification: LaunchClassification = oldClass ?? (native && preflighted ? 'native-node' : 'invalid');
         inventory.push({ path, line: lineNo, classification, evidence });
         if (classification === 'invalid') {
           violations.push({
@@ -943,7 +955,7 @@ function scanLaunches(
             rule: native ? 'node-contract' : 'direct-typescript-launch',
             message: native
               ? 'direct native TypeScript entrypoints must run the canonical declaration preflight before importing business modules.'
-              : 'direct TypeScript launches must use native Node 22 type stripping or the canonical TypeScript launcher.',
+              : 'direct TypeScript launches must use native Node type stripping or the canonical TypeScript launcher.',
           });
         }
       }
@@ -954,7 +966,7 @@ function scanLaunches(
             path,
             line: lineNo,
             rule: 'runtime-loader',
-            message: 'custom loaders, tsx, and ts-node launchers are forbidden; use native Node 22 type stripping.',
+            message: 'custom loaders, tsx, and ts-node launchers are forbidden; use native Node type stripping.',
           });
         }
       }
@@ -1004,7 +1016,7 @@ function scanPackageScripts(
       inventory.push({
         path,
         line: 1,
-        classification: native && preflighted ? 'native-node-22' : 'invalid',
+        classification: native && preflighted ? 'native-node' : 'invalid',
         evidence: `${name}: ${command}`,
       });
       if (!native) {
@@ -1012,7 +1024,7 @@ function scanPackageScripts(
           path,
           line: 1,
           rule: 'direct-typescript-launch',
-          message: `npm script ${name} must use native Node 22 type stripping or the canonical TypeScript launcher.`,
+          message: `npm script ${name} must use native Node type stripping or the canonical TypeScript launcher.`,
         });
       } else if (!preflighted) {
         violations.push({
@@ -1034,10 +1046,9 @@ function agentsRuntimeViolations(repoRoot: string): RuntimePolicyViolation[] {
   }
   const source = readFileSync(path, 'utf8');
   const required = [
-    AGENTS_NODE_22_RULE,
+    AGENTS_RUNTIME_RULE,
     'scripts/toolchain/node-version.json',
     'package.json.engines.node',
-    'Node 20',
     'actions/setup-node',
   ];
   const missing = required.filter((marker) => !source.includes(marker));
@@ -1047,8 +1058,83 @@ function agentsRuntimeViolations(repoRoot: string): RuntimePolicyViolation[] {
       path: AGENTS_PATH,
       line: 1,
       rule: 'agent-runtime-contract',
-      message: `AGENTS.md must state the Node 22-only worker contract; missing markers: ${missing.join(', ')}.`,
+      message: `AGENTS.md must state the single-major worker contract; missing markers: ${missing.join(', ')}.`,
     }];
+}
+
+function mirrorViolations(repoRoot: string): RuntimePolicyViolation[] {
+  const path = '.mise.toml';
+  const absolute = resolve(repoRoot, path);
+  if (!existsSync(absolute)) {
+    return [{ path, line: 1, rule: 'node-contract', message: 'mise runtime mirror is missing.' }];
+  }
+  const source = readFileSync(absolute, 'utf8');
+  const match = /^\s*node\s*=\s*["'](\d+)["']\s*$/mu.exec(source);
+  if (!match?.[1] || Number(match[1]) !== SUPPORTED_NODE_MAJOR) {
+    return [{
+      path,
+      line: match ? source.slice(0, match.index).split(/\r?\n/u).length : 1,
+      rule: 'node-contract',
+      message: `mise Node mirror must match ${NODE_VERSION_FILE} (declared major ${SUPPORTED_NODE_MAJOR}).`,
+    }];
+  }
+  return [];
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\function packageViolations(repoRoot: string, allFiles: readonly string[]): RuntimePolicyViolation[] {');
+}
+
+function nonLiveRestatementPath(path: string, contract: InventoryContract): boolean {
+  const prefixes = [
+    ...contract.historicalPathPrefixes,
+    'docs/investigations',
+    'tests/external-output-references',
+    'scripts/gate-runner/census',
+    'scripts/gate-runner/goldens',
+    'scripts/json-producers',
+  ];
+  return prefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
+function supportedMajorRestatementViolations(
+  repoRoot: string,
+  files: readonly string[],
+  contract: InventoryContract,
+): RuntimePolicyViolation[] {
+  const violations: RuntimePolicyViolation[] = [];
+  const node = escapeRegExp(String(SUPPORTED_NODE_MAJOR));
+  const npm = escapeRegExp(String(SUPPORTED_NPM_MAJOR));
+  const nodePatterns = [
+    new RegExp(`\\bNode(?:\\.js)?(?:[\\s_-]+)${node}(?:\\.x|\\b)`, 'iu'),
+    new RegExp(`\\bnode(?:Major|_major)?\\b[^\\n]{0,48}(?:===|!==|==|!=|:|=)\\s*['"]?${node}\\b`, 'iu'),
+    new RegExp(`process\\.versions\\.node[^\\n]{0,72}(?:===|!==|==|!=)\\s*['"]?${node}\\b`, 'iu'),
+    new RegExp(`\\brequiredMajor\\s*:\\s*${node}\\b`, 'iu'),
+  ];
+  const npmPatterns = [
+    new RegExp(`\\bnpm(?:[\\s_-]+)${npm}(?:\\.x|\\b)`, 'iu'),
+    new RegExp(`\\bnpmMajor\\b[^\\n]{0,48}(?:===|!==|==|!=|:|=)\\s*['"]?${npm}\\b`, 'iu'),
+  ];
+  for (const absolute of files) {
+    const path = normalizePath(relative(repoRoot, absolute));
+    if (path === NODE_VERSION_FILE || path === 'package.json' || path === 'package-lock.json' || path === '.mise.toml') continue;
+    if (nonLiveRestatementPath(path, contract)) continue;
+    const lines = readFileSync(absolute, 'utf8').split(/\r?\n/u);
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index] ?? '';
+      if (/^\s*node-version\s*:\s*['"]?\d+(?:\.x)?['"]?\s*(?:#.*)?$/u.test(line)
+        && /^\.github\/workflows\/[^/]+\.ya?ml$/u.test(path)) continue;
+      if (nodePatterns.some((pattern) => pattern.test(line)) || npmPatterns.some((pattern) => pattern.test(line))) {
+        violations.push({
+          path,
+          line: index + 1,
+          rule: 'runtime-major-restatement',
+          message: `live runtime contract must derive supported Node/npm majors from ${NODE_VERSION_FILE}; found independent current-major restatement.`,
+        });
+      }
+    }
+  }
+  return violations;
 }
 
 function packageViolations(repoRoot: string, allFiles: readonly string[]): RuntimePolicyViolation[] {
@@ -1336,14 +1422,13 @@ function inventoryViolations(
   inventory: readonly LaunchInventoryEntry[],
 ): RuntimePolicyViolation[] {
   const violations: RuntimePolicyViolation[] = [];
-  if (contract.canonicalRuntime.nodeMajor !== SUPPORTED_NODE_MAJOR
-    || contract.canonicalRuntime.versionFile !== NODE_VERSION_FILE
+  if (contract.canonicalRuntime.versionFile !== NODE_VERSION_FILE
     || contract.canonicalRuntime.nativeArgvPrefix.join(' ') !== '--experimental-strip-types') {
     violations.push({
       path: INVENTORY_PATH,
       line: 1,
       rule: 'inventory-contract',
-      message: 'launch inventory canonical runtime does not match the toolchain-owned Node 22 contract.',
+      message: 'launch inventory canonical runtime does not match the toolchain-owned runtime contract.',
     });
   }
   for (const required of contract.requiredLiveSurfaces) {
@@ -1386,6 +1471,8 @@ export function checkTypeScriptRuntimePolicy(repoRoot = resolve('.')): RuntimePo
     ...launches.violations,
     ...packageScripts.violations,
     ...packageViolations(root, allFiles),
+    ...mirrorViolations(root),
+    ...supportedMajorRestatementViolations(root, restatementFiles(root), contract),
     ...agentsRuntimeViolations(root),
     ...compilerViolations(root),
     ...syntaxViolations(root, allFiles, contract),
@@ -1413,6 +1500,6 @@ if (isDirectExecution(import.meta.url, process.argv[1])) {
     }
     process.exitCode = 1;
   } else if (!process.argv.includes('--inventory')) {
-    process.stdout.write('Node 22 TypeScript runtime policy checks passed.\n');
+    process.stdout.write('TypeScript runtime policy checks passed.\n');
   }
 }
