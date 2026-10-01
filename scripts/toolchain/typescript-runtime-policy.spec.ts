@@ -340,15 +340,17 @@ describe('launch inventory and fail-closed policy', () => {
     write(join(root, path), [
       'const requiredNodeMajor = ' + SUPPORTED_NODE_MAJOR + ';',
       'const requiredNpmMajor = ' + SUPPORTED_NPM_MAJOR + ';',
+      'const requiredRuntimeMajor = ' + SUPPORTED_NODE_MAJOR + ';',
       'const version = process.version;',
       "const major = Number(version.slice(1).split('.')[0]);",
       'if (major !== ' + SUPPORTED_NODE_MAJOR + ') throw new Error(String(requiredNodeMajor));',
       'void requiredNpmMajor;',
+      'void requiredRuntimeMajor;',
       '',
     ].join('\n'));
     const violations = checkTypeScriptRuntimePolicy(root).violations.filter((violation) =>
       violation.rule === 'runtime-major-restatement' && violation.path === path);
-    expect(new Set(violations.map((violation) => violation.line))).toEqual(new Set([1, 2, 5]));
+    expect(new Set(violations.map((violation) => violation.line))).toEqual(new Set([1, 2, 3, 6]));
   });
 
   it('rejects a supported npm-major comparison in a root package script without rejecting engine mirrors', () => {

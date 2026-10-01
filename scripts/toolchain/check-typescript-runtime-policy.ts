@@ -1123,6 +1123,7 @@ function runtimeMajorIdentifierKind(name: string): RuntimeMajorKind | undefined 
   if (!compact.includes('major')) return undefined;
   if (compact.includes('npm')) return 'npm';
   if (compact.includes('node')) return 'node';
+  if (compact.includes('runtime')) return 'either';
   if (compact === 'requiredmajor') return 'either';
   return undefined;
 }
