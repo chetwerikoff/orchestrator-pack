@@ -99,19 +99,24 @@ import {
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 import { markTrackedSmokeWorkerDeliveryConfirmed } from './lib/worker-smoke-bounded-create.ts';
-import {
-  evaluateSameHeadBlockedRetryAdmission,
-  listWorkerSmokeReceipts,
-  readWorkerSmokeRunFinalEvidence,
-  smokeRunFinalEvidencePath,
-  validateWorkerSmokeOperatorOverrideReason,
-  verifySmokeReportReceiptProvenance,
-  verifySmokeRunReceipt,
-  writeWorkerSmokeReceipt,
-  writeWorkerSmokeRunFinalEvidence,
-  type WorkerSmokeAttemptObservation,
-  type WorkerSmokeMainMergeCarryRecord,
+import type {
+  WorkerSmokeAttemptObservation,
+  WorkerSmokeMainMergeCarryRecord,
 } from './lib/worker-smoke-receipt.ts';
+
+type WorkerSmokeReceiptModule = typeof import('./lib/worker-smoke-receipt.ts');
+const directWorkerSmokeRunCommand = process.argv[2] === 'run'
+  && resolve(process.argv[1] ?? '') === resolve(fileURLToPath(import.meta.url));
+const workerSmokeReceiptModule: WorkerSmokeReceiptModule | undefined = directWorkerSmokeRunCommand
+  ? undefined
+  : await import('./lib/worker-smoke-receipt.ts');
+
+function workerSmokeReceiptApi(): WorkerSmokeReceiptModule {
+  if (!workerSmokeReceiptModule) {
+    throw new Error('worker_smoke_legacy_receipt_api_unavailable_on_run_path');
+  }
+  return workerSmokeReceiptModule;
+}
 import {
   packReviewFindingsSatisfiedByStrictDescendant,
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
@@ -1753,7 +1758,7 @@ function waitForCooperativeShutdown(input: { adapter: RuntimeAdapter; worker: Ru
 }
 
 function verifyPublishedSmokeProvenance(report: SmokeReport): boolean {
-  return smokeReportHasPackProducer(report) && verifySmokeReportReceiptProvenance(report);
+  return smokeReportHasPackProducer(report) && workerSmokeReceiptApi().verifySmokeReportReceiptProvenance(report);
 }
 
 export function findVerifiedSmokeReceiptWitness(input: { issueBody: string; comments: readonly WorkerSmokeCommentRecord[]; target: WorkerSmokeTrustedTarget }): SmokeReport | undefined {
@@ -1837,11 +1842,11 @@ async function directSmokeStartFence<T>(action: () => T | Promise<T>): Promise<S
 
 function terminalizeDetachedRun(options: CliOptions, runId: string, artifactDir: string, mode: 'runtime' | 'no_execution', report: SmokeReport): void {
   if (!options.detachedOwner) return;
-  const final = writeWorkerSmokeRunFinalEvidence({ artifactDir, runId, mode, report });
+  const final = workerSmokeReceiptApi().writeWorkerSmokeRunFinalEvidence({ artifactDir, runId, mode, report });
   markSmokeLauncherTerminalized({
     artifactDir,
     runId,
-    finalEvidencePath: smokeRunFinalEvidencePath(artifactDir),
+    finalEvidencePath: workerSmokeReceiptApi().smokeRunFinalEvidencePath(artifactDir),
     nowMs: final.recordedAtMs,
   });
 }
@@ -1858,7 +1863,7 @@ function completionObservationNotes(completion: RuntimeSmokeCompletionResult): s
 }
 
 export function validateCoordinatorSmokeOverrideReason(value: string | undefined): string | undefined {
-  const normalized = validateWorkerSmokeOperatorOverrideReason(value);
+  const normalized = workerSmokeReceiptApi().validateWorkerSmokeOperatorOverrideReason(value);
   if (normalized && !/^pause-cause=\S[^;]*;\s*repair-evidence=\S.*$/u.test(normalized)) {
     throw new Error('worker_smoke_coordinator_override_requires_pause_cause_and_repair_evidence');
   }
@@ -2132,10 +2137,10 @@ export function observeDetachedSmokeAttempt(input: {
     : lifecycle.spawnState === 'clean' || lifecycle.spawnState === 'cleanup_failed';
   if (!expectedTerminalState
       || !lifecycle.finalEvidencePath
-      || resolve(lifecycle.finalEvidencePath) !== resolve(smokeRunFinalEvidencePath(artifactDir))) {
+      || resolve(lifecycle.finalEvidencePath) !== resolve(workerSmokeReceiptApi().smokeRunFinalEvidencePath(artifactDir))) {
     return { kind: 'untrusted', reason: 'detached_smoke_terminal_state_invalid' };
   }
-  const evidence = readWorkerSmokeRunFinalEvidence({
+  const evidence = workerSmokeReceiptApi().readWorkerSmokeRunFinalEvidence({
     artifactDir,
     runId: lifecycle.runId,
     issueNumber: input.issueNumber,
@@ -2146,7 +2151,7 @@ export function observeDetachedSmokeAttempt(input: {
   if (!evidence
       || evidence.runId !== lifecycle.runId
       || evidence.report.result !== evidence.result
-      || !verifySmokeRunReceipt(evidence.report, lifecycle.runId, lifecycle.runId)) {
+      || !workerSmokeReceiptApi().verifySmokeRunReceipt(evidence.report, lifecycle.runId, lifecycle.runId)) {
     return { kind: 'untrusted', reason: 'detached_smoke_final_evidence_invalid' };
   }
   return { kind: 'terminal', runId: lifecycle.runId, artifactDir, result: evidence.result };
@@ -2278,11 +2283,11 @@ export async function runSmokeWait(options: CliOptions): Promise<number> {
         const expectedTerminalState = mode === 'no_execution'
           ? lifecycle.spawnState === 'no_execution_terminal'
           : lifecycle.spawnState === 'clean' || lifecycle.spawnState === 'cleanup_failed';
-        if (!expectedTerminalState || resolve(lifecycle.finalEvidencePath) !== resolve(smokeRunFinalEvidencePath(artifactDir))) {
+        if (!expectedTerminalState || resolve(lifecycle.finalEvidencePath) !== resolve(workerSmokeReceiptApi().smokeRunFinalEvidencePath(artifactDir))) {
           process.stderr.write('worker_smoke_wait_terminal_state_invalid\n');
           return 1;
         }
-        const evidence = readWorkerSmokeRunFinalEvidence({
+        const evidence = workerSmokeReceiptApi().readWorkerSmokeRunFinalEvidence({
           artifactDir,
           runId,
           issueNumber: lifecycle.issueNumber,
@@ -2290,7 +2295,7 @@ export async function runSmokeWait(options: CliOptions): Promise<number> {
           headSha: lifecycle.headSha,
           mode,
         });
-        if (!evidence || evidence.report.result !== evidence.result || !verifySmokeRunReceipt(evidence.report, runId, runId)) {
+        if (!evidence || evidence.report.result !== evidence.result || !workerSmokeReceiptApi().verifySmokeRunReceipt(evidence.report, runId, runId)) {
           if (options.json) emit({ ok: false, runId, reason: 'terminal_evidence_invalid' }, true);
           else process.stderr.write('worker_smoke_wait_final_evidence_invalid\n');
           return 1;

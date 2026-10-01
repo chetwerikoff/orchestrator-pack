@@ -18,6 +18,11 @@ import {
   type WorkerSmokeCauseFamily,
 } from './worker-smoke-core.ts';
 import type { SmokeLifecycleRegistry } from './worker-smoke-lifecycle-base.ts';
+import {
+  installStableWorkerSmokeSpawnPatch,
+  quarantineUnsupportedHistoricalSmokeRuns,
+  smokeRunCwdFromArgv,
+} from './worker-smoke-bounded-create.ts';
 import { assertProjectStateBinding } from './project-state-binding.ts';
 import { resolveTargetContext } from './target-context.ts';
 import { resolveWakeSupervisorStateRoot } from '../pr2-foundation/wake-supervisor-state-root.ts';
@@ -124,6 +129,16 @@ type JsonRecord = Record<string, unknown>;
 
 const isRecord = (value: unknown): value is JsonRecord =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const workerSmokeEntrypoint = basename(process.argv[1] ?? '') === 'worker-smoke-run.ts';
+if (workerSmokeEntrypoint && process.argv[2] === 'run') {
+  const argv = process.argv.slice(2);
+  const detachedBootstrap = argv.includes('--detach') && !argv.includes('--detached-owner');
+  if (!detachedBootstrap) {
+    quarantineUnsupportedHistoricalSmokeRuns(smokeRunCwdFromArgv(argv));
+    installStableWorkerSmokeSpawnPatch();
+  }
+}
 
 export function buildSmokeCloseSettlementIdentity(runId: string): SmokeCloseSettlementIdentity {
   const normalizedRunId = runId.trim();
