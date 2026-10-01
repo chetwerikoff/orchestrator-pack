@@ -769,12 +769,13 @@ function authorityBoundNodeVersionFile(path: string, value: string): boolean {
     || (trimmed.startsWith('"') && trimmed.endsWith('"')))
     ? trimmed.slice(1, -1)
     : trimmed;
-  const expected = path === '.github/workflows/codex-pr-review.yml'
-    ? 'orchestrator-pack/package.json'
-    : path === '.github/workflows/scope-guard.yml'
-      ? 'trusted-scope-guard/package.json'
-      : 'package.json';
-  return unquoted === expected;
+  if (path === '.github/workflows/codex-pr-review.yml') {
+    return unquoted === 'orchestrator-pack/package.json';
+  }
+  if (path === '.github/workflows/scope-guard.yml' && unquoted === 'trusted-scope-guard/package.json') {
+    return true;
+  }
+  return unquoted === 'package.json';
 }
 
 function scanWorkflowNodeVersions(
