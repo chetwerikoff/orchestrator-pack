@@ -770,11 +770,16 @@ function reviewIndependentRequiredCheckNames(policy: Record<string, unknown>): {
   };
 }
 
+export function requiredStatusChecksEndpoint(repoSlug: string, baseRef: string): string {
+  const branch = trim(baseRef);
+  if (!branch) throw new Error('required status checks branch is empty');
+  return `repos/${repoSlug}/branches/${encodeURIComponent(branch)}/protection/required_status_checks`;
+}
+
 async function manualPackReviewRequiredCiGreen(input: {
   startInput: StartInput;
   target: { prNumber: number; headSha: string; repoSlug: string; sourceRepoRoot: string; prBaseRef: string };
 }): Promise<boolean> {
-  if (input.target.prBaseRef !== 'main') return false;
   const harness = process.env.OPK_VITEST_HARNESS === '1';
   let policy: Record<string, unknown>;
   let checks: ManualPackReviewCiCheck[];
@@ -788,7 +793,7 @@ async function manualPackReviewRequiredCiGreen(input: {
   } else {
     const policyResult = await runProcess({
       command: resolveTrackedGhWrapper(),
-      args: ['api', `repos/${input.target.repoSlug}/branches/main/protection/required_status_checks`],
+      args: ['api', requiredStatusChecksEndpoint(input.target.repoSlug, input.target.prBaseRef)],
       cwd: input.target.sourceRepoRoot,
       inheritParentEnv: true,
       allowEmptyStdout: false,
