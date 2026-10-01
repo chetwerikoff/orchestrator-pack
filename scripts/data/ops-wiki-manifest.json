@@ -145,7 +145,6 @@
       "edges": [
         { "type": "related", "target": "runbook-roles" },
         { "type": "related", "target": "runbook-launch-assistant" },
-        { "type": "related", "target": "smoke-when-policy" },
         { "type": "related", "target": "tiering" }
       ]
     },
@@ -296,17 +295,16 @@
     },
     {
       "episode_id": "smoke-when-policy",
-      "title": "When smoke is required and executor policy",
+      "title": "When smoke is required",
       "path": "docs/worker-smoke-testing.md",
       "topic": "smoke",
       "role": "worker",
-      "aliases": ["smoke-test-plan", "firefighter", "routine smoke", "complex smoke"],
+      "aliases": ["smoke-test-plan"],
       "sections": [
         { "heading": "## When smoke is required" }
       ],
-      "referenced_paths": ["scripts/worker-smoke-run.ts", "scripts/executor-profile-policy.ts"],
+      "referenced_paths": ["scripts/worker-smoke-run.ts"],
       "edges": [
-        { "type": "related", "target": "runbook-executor-profiles" },
         { "type": "related", "target": "smoke-pre-path" },
         { "type": "related", "target": "smoke-readiness-runtime" },
         { "type": "related", "target": "runbook-worker-lifecycle" }

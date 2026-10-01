@@ -220,12 +220,14 @@ smoke, and durable handoff. `pack-worker-report` may record lifecycle state only
 after proving repository, worker, PR, and head binding. If that binding cannot be
 proved, the report write is skipped without weakening the remaining obligations.
 
-Required CI remains bound to the current PR head. One same-PR smoke PASS at any
-report head satisfies smoke readiness across later heads.
+Required CI, review findings, and handoff remain bound to the current PR head.
+A previous-head CI pass, missing current-head check, stale review, or
+unverifiable handoff receipt does not satisfy those obligations. One same-PR
+smoke PASS at any report head satisfies smoke readiness across later heads.
 Readiness is derived from current facts rather than persisted as a second lifecycle
-state: PR/target/head identity, required CI, review obligation and unresolved blockers,
-at-cap facts, same-PR smoke PASS, and the accepted current WorkerReport corroborated
-by WorkerStatus must all be acceptable.
+state: PR/target/head identity, current-head required CI, current review obligation
+and unresolved blockers, at-cap facts, same-PR smoke PASS, and the accepted current
+WorkerReport and handoff corroborated by WorkerStatus must all be acceptable.
 
 ## TypeScript and shell policy
 
