@@ -116,6 +116,7 @@
     "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/lib/vitest-runtime-history-merge.fixture.mjs",
     "scripts/manager-review-terminal-bundle.ts",
+    "scripts/pr2-foundation/mutation-catalog.test.ts",
     "scripts/publish-issue-body-sync.ts",
     "scripts/rca-spec-discipline-surfaces.json",
     "scripts/replay-fixture-import.test.ts",
@@ -149,5 +150,5 @@
     "prompts/",
     "scripts/"
   ],
-  "source_revision": "c268bda5cc4306069f56d97d7b2e939a92facf13"
+  "source_revision": "4eb796272a6b63dce5b29d7f7f6c77d09082bf3b"
 }
