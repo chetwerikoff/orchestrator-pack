@@ -42,6 +42,7 @@ import {
   type OrcaWorktreeCurrent,
   type OrcaWorktreeShow,
 } from './native.ts';
+import { openCodeComposerContentLines, openCodeComposerMatchesText } from './opencode-composer.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -114,40 +115,8 @@ function openCodeHttpFailure(error: unknown): string {
 
 /** The TUI composer is empty only when its rendered box has no text rows. */
 export function isOpenCodeComposerEmpty(lines: readonly string[]): boolean {
-  let bottomEdge = -1;
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    if (/╹▀▀▀/u.test(lines[index] ?? '')) {
-      bottomEdge = index;
-      break;
-    }
-  }
-  if (bottomEdge < 0) return false;
-
-  let sawLeftEdge = false;
-  for (let index = bottomEdge - 1; index >= 0; index -= 1) {
-    const trimmed = (lines[index] ?? '').replace(/\u001B\[[0-?]*[ -/]*[@-~]/gu, '').trim();
-    if (!trimmed) {
-      if (sawLeftEdge) continue;
-      continue;
-    }
-    const askBody = trimmed.replace(/^[┃│]\s*/u, '');
-    // A quoted suggestion after the placeholder is product chrome. Unquoted text is human input.
-    if (/^Ask anything(?:\.\.\.|…)(?:\s+"[^"]*")?$/u.test(askBody)) {
-      sawLeftEdge = true;
-      continue;
-    }
-    if (/^┃\s+TeamoRouter 钱包余额不足，请前往 https:\/\/teamorouter\.cn\/dashboard\?buy=1 充值后继续使用$/u.test(trimmed)) {
-      sawLeftEdge = true;
-      continue;
-    }
-    if (!trimmed.startsWith('┃')) break;
-    sawLeftEdge = true;
-    // The pack launches OpenCode either with a per-run `Pack-Opk-<hash>` agent or with the
-    // plain `pack` agent from buildExecutorCommand, which renders `Pack · <model> · <effort>`.
-    if (/^┃\s+(?:Pack-Opk-|Pack\s+·\s|[0-9a-f]{16,}(?:\s|$))/iu.test(trimmed)) continue;
-    if (trimmed !== '┃') return false;
-  }
-  return sawLeftEdge;
+  const content = openCodeComposerContentLines(lines);
+  return content !== undefined && content.length === 0;
 }
 
 type AsyncExecError = Error & {
@@ -658,12 +627,32 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       limit: 200,
       screen: true,
     }, screenOptions);
+    let exactExistingPrompt = false;
     if (screen.status === 'ok') {
-      if (!isOpenCodeComposerEmpty(screen.value.lines)) {
+      const composerEmpty = isOpenCodeComposerEmpty(screen.value.lines);
+      exactExistingPrompt = request.action === 'submit-prompt'
+        && openCodeComposerMatchesText(screen.value.lines, request.text);
+      if (!composerEmpty && !exactExistingPrompt) {
         return { status: 'send_failed', reason: 'opencode_composer_not_empty' };
       }
     } else if (screen.reason !== 'runtime_output_source_unobservable') {
       return { status: 'send_failed', reason: `opencode_composer_screen_unavailable:${screen.reason}` };
+    }
+
+    if (exactExistingPrompt) {
+      const cleared = requestWithDeadline({
+        url: `${urlRecord.url}/tui/clear-prompt`,
+        method: 'POST',
+      });
+      if ('error' in cleared) return { status: 'send_failed', reason: cleared.error };
+      if (cleared.status !== 200) {
+        return { status: 'send_failed', reason: `opencode_http_status_${cleared.status}` };
+      }
+      try {
+        if (JSON.parse(cleared.body) !== true) throw new Error();
+      } catch {
+        return { status: 'send_failed', reason: 'opencode_tui_response_schema_mismatch' };
+      }
     }
 
     const append = requestWithDeadline({

@@ -29,6 +29,7 @@ import {
   workerKey,
   type UnsentComposerSubmitDeps,
 } from './cursor-unsent-composer-submit.ts';
+import { OrcaTaskRuntimeAdapter } from './orca-runtime/task-adapter.ts';
 import { OrcaRuntimeAdapter } from './orca-runtime/adapter.ts';
 import type { OrcaJsonResponse } from './orca-runtime/native.ts';
 import type { RuntimeAdapter, RuntimeComposerControlRequest, RuntimeWorker, RuntimeWorkerIdentity } from './runtime/contracts.ts';
@@ -1015,7 +1016,7 @@ describe('delivery-triggered composer submission', () => {
     expect(submits).toBe(0);
   });
 
-  it('delivers through the visible OpenCode panel and proves the render', async () => {
+  it('queues through the visible OpenCode panel while the worker is busy', async () => {
     const target = worker('term_opencode_http');
     const actions: string[] = [];
     const requests: RuntimeComposerControlRequest[] = [];
@@ -1028,9 +1029,10 @@ describe('delivery-triggered composer submission', () => {
       }),
       resolveWorker: () => ({ ok: true as const, worker: target }),
       submitDeps: depsFor({}, {
+        liveness: () => 'busy' as const,
         read: () => {
           reads += 1;
-          return { ok: true as const, lines: reads === 1 ? ['idle splash'] : ['rendered pointer'], source: 'screen' as const };
+          return { ok: true as const, lines: ['rendered OpenCode panel'], source: 'screen' as const };
         },
         composerControl: () => ({
           kind: 'opencode-http' as const,
@@ -1049,7 +1051,7 @@ describe('delivery-triggered composer submission', () => {
       text: expect.stringContaining('orca orchestration check'),
     });
     expect(requests[0]?.text).not.toContain(humanComposerText);
-    expect(reads).toBe(2);
+    expect(reads).toBe(1);
     expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
   });
 
@@ -1576,6 +1578,89 @@ describe('delivery-triggered composer submission', () => {
     expect(humanResult.terminals[0]?.reason).toBe('composer_not_orchestration_pointer');
     expect(mixedResult.terminals[0]?.reason).toBe('composer_not_orchestration_pointer');
     expect(submitted).toHaveLength(0);
+  });
+
+  it('submits the actual OpenCode pointer with append then submit while busy', async () => {
+    const terminal = {
+      handle: 'term_opencode_busy_pointer',
+      incarnationId: 'generation-opencode-busy-pointer',
+      worktreePath: process.cwd(),
+      title: 'opencode',
+      command: 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture',
+      status: 'running' as const,
+    };
+    let reads = 0;
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      if (operation === 'terminal create' || operation === 'terminal show') {
+        return { ok: true, result: { terminal } };
+      }
+      if (operation === 'terminal list') {
+        return { ok: true, result: { totalCount: 1, truncated: false, terminals: [terminal] } };
+      }
+      if (operation === 'terminal read') {
+        reads += 1;
+        return {
+          ok: true,
+          result: {
+            terminal: {
+              ...terminal,
+              tail: [
+                'OpenCode',
+                `┃  ${POKE}`,
+                '┃  Pack-Opk-fixture · GPT-5.6 Luna OpenAI',
+                '╹▀▀▀▀▀▀',
+              ],
+              nextCursor: null,
+              source: 'screen',
+            },
+          },
+        };
+      }
+      if (operation === 'worktree current') {
+        return { ok: false, error: { code: 'not_available', message: 'fixture' } };
+      }
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    const requests: Array<{ url: string; method: 'GET' | 'POST'; body?: string }> = [];
+    const adapter = new OrcaTaskRuntimeAdapter({
+      runJson: runJson as never,
+      openCodeHttpRequest: (input) => {
+        requests.push({ url: input.url, method: input.method, ...(input.body === undefined ? {} : { body: input.body }) });
+        return { status: 200, body: 'true' };
+      },
+    });
+    const spawned = adapter.spawnWorker({
+      title: 'opencode',
+      command: terminal.command,
+    });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+
+    const submitDeps = createAdapterSubmitDeps(adapter, () => ({ ok: true, result: {} }));
+    const result = await submitUnsentCursorComposerOnceForWorker(spawned.value, {
+      ...submitDeps,
+      readAsync: async (worker) => submitDeps.read(worker),
+      liveness: () => 'busy',
+      sentStorePath: undefined,
+    });
+
+    expect(requests).toEqual([
+      {
+        method: 'POST',
+        url: 'http://127.0.0.1:18891/tui/clear-prompt',
+      },
+      {
+        method: 'POST',
+        url: 'http://127.0.0.1:18891/tui/append-prompt',
+        body: JSON.stringify({ text: POKE }),
+      },
+      {
+        method: 'POST',
+        url: 'http://127.0.0.1:18891/tui/submit-prompt',
+      },
+    ]);
+    expect(result.terminals[0]).toMatchObject({ reason: 'enter_sent', enter: true });
   });
 
   it('reads and submits immediately while the target is Running', async () => {
