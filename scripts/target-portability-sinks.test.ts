@@ -1,12 +1,16 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runProcessSync } from './kernel/subprocess.ts';
 import { bindPublishIssueTarget } from './publish-issue-body-sync.ts';
-import { resolvePackReviewSelectedRepository } from './pack-review-runner.ts';
+import { syncPublishIssueBody } from './lib/publish-issue-body-sync.ts';
+import { requiredStatusChecksEndpoint, resolveCurrentPrHead } from './pack-review-runner.ts';
+import { parseArgs as parseRunPackReviewArgs } from './run-pack-review-gpt.ts';
+import { parseReviewArgs } from '../plugins/codex-pr-reviewer/lib/review_cli.ts';
+import { parsePackWorkerReportArgs } from './pack-worker-report.ts';
 import {
   defaultWorkdir,
   listPendingEvents,
@@ -23,7 +27,7 @@ import { projectCardPath, resolveTargetContext } from './lib/target-context.ts';
 
 const roots: string[] = [];
 const savedEnv = new Map<string, string | undefined>();
-const ENV_KEYS = ['HOME', 'XDG_CONFIG_HOME', 'OPK_PROJECT_ID', 'OPK_CREATE_ISSUE_DRAFT_STATE_ROOT'] as const;
+const ENV_KEYS = ['HOME', 'XDG_CONFIG_HOME', 'OPK_PROJECT_ID', 'OPK_CREATE_ISSUE_DRAFT_STATE_ROOT', 'OPK_VITEST_HARNESS', 'VITEST'] as const;
 
 function rememberEnv(): void {
   for (const key of ENV_KEYS) if (!savedEnv.has(key)) savedEnv.set(key, process.env[key]);
@@ -77,8 +81,10 @@ afterEach(() => {
 });
 
 describe('Issue #2188 target portability sinks', () => {
-  it('routes production publication and pack-review repository binding through either selected card', async () => {
+  it('drives the real publication and canonical PR-read seams through either selected card', async () => {
     const fixture = twoTargetFixture();
+    const issuePrNumber = 77;
+    const draftContent = '# Target routing\n\ncard-routed body';
     for (const spec of fixture.specs) {
       const env = { ...fixture.env, OPK_PROJECT_ID: spec.projectId };
       const publish = { mode: 'edit' as const, draftPath: 'draft.md', repo: '', json: false };
@@ -87,19 +93,62 @@ describe('Issue #2188 target portability sinks', () => {
         repository: spec.repository,
         defaultBranch: spec.defaultBranch,
       });
-      expect(publish.repo).toBe(spec.repository);
-
       const selected = resolveTargetContext({ projectId: spec.projectId, env });
-      const observed: string[] = [];
-      await expect(resolvePackReviewSelectedRepository({
-        sourceRepoRoot: selected.primaryRoot,
-        selectedTarget: selected,
-        resolveRepository: async (root) => {
-          observed.push(root);
-          return spec.repository;
+      expect(publish.repo).toBe(selected.repository);
+
+      const bodyFilePath = join(fixture.root, `${spec.projectId}-issue-body.md`);
+      const ghCalls: string[][] = [];
+      const publication = syncPublishIssueBody({
+        runGh(argv) {
+          ghCalls.push([...argv]);
+          if (argv[1] === 'issue' && argv[2] === 'edit') return { exitCode: 0, stdout: '', stderr: '' };
+          if (argv[1] === 'api') return { exitCode: 0, stdout: 'card-routed body', stderr: '' };
+          return { exitCode: 1, stdout: '', stderr: `unexpected argv: ${argv.join(' ')}` };
         },
-      })).resolves.toBe(spec.repository);
-      expect(observed).toEqual([selected.primaryRoot]);
+        writeBodyFile() { return bodyFilePath; },
+        emitAudit() {},
+        validateTierGateGuard: () => ({ ok: true, message: 'fixture' }),
+        validateStageCompletenessGuard: () => ({ ok: true, message: 'fixture' }),
+        validateFindingLedgerGuard: () => ({ ok: true, message: 'fixture' }),
+      }, {
+        mode: 'edit',
+        draftPath: publish.draftPath,
+        draftContent,
+        repo: publish.repo,
+        issueNumber: issuePrNumber,
+      });
+      expect(publication).toMatchObject({ ok: true, issueNumber: issuePrNumber });
+      expect(ghCalls).toEqual([
+        ['gh', 'issue', 'edit', '--repo', selected.repository, '--body-file', bodyFilePath, String(issuePrNumber)],
+        ['gh', 'api', `repos/${selected.repository}/issues/${issuePrNumber}`, '--jq', '.body'],
+      ]);
+
+      const prCalls: Array<{ args?: readonly string[]; cwd?: string }> = [];
+      const expectedHead = spec.projectId === 'alpha' ? 'a'.repeat(40) : 'b'.repeat(40);
+      const resolvedHead = await resolveCurrentPrHead(
+        selected.primaryRoot,
+        selected.repository,
+        issuePrNumber,
+        async (request) => {
+          prCalls.push(request);
+          return {
+            outcome: 'exit',
+            ok: true,
+            exitCode: 0,
+            signal: null,
+            stdout: JSON.stringify({ state: 'OPEN', head: { sha: expectedHead } }),
+            stderr: '',
+            timedOut: false,
+            cancelled: false,
+          };
+        },
+      );
+      expect(resolvedHead).toBe(expectedHead);
+      expect(prCalls).toHaveLength(1);
+      expect(prCalls[0]).toMatchObject({
+        cwd: selected.primaryRoot,
+        args: ['api', `repos/${selected.repository}/pulls/${issuePrNumber}`],
+      });
     }
   });
 
@@ -156,6 +205,10 @@ describe('Issue #2188 target portability sinks', () => {
         env: { OPK_PROJECT_ID: 'alpha' },
       },
       {
+        argv: ['issue', 'comment', '12', '--repo', 'example/alpha', '--body', 'https://example.com'],
+        env: { OPK_PROJECT_ID: 'alpha' },
+      },
+      {
         argv: ['api', 'repos/example/alpha/issues/12', '-X', 'PATCH', '-f', 'title=ok'],
         env: { OPK_PROJECT_ID: 'alpha' },
       },
@@ -166,6 +219,11 @@ describe('Issue #2188 target portability sinks', () => {
         env: input.env,
       })).toEqual({ repository: 'example/alpha', host: 'github.com' });
     }
+    expect(authorizeTargetGhInvocation({
+      context: { repository: 'chetwerikoff/orchestrator-pack' },
+      argv: ['pr', 'view', '12', '--repo', 'chetwerikoff/orchestrator-pack'],
+      env: { OPK_PROJECT_ID: 'pack' },
+    })).toEqual({ repository: 'chetwerikoff/orchestrator-pack', host: 'github.com' });
   });
 
   it('rejects every audited cross-target repo/host ingress before gh transport', () => {
@@ -224,6 +282,71 @@ describe('Issue #2188 target portability sinks', () => {
       argv: ['api', 'graphql', '-f', 'query={viewer{login}}'],
       env: { OPK_PROJECT_ID: 'alpha' },
     }), 'target-gh-graphql-unsupported');
+
+    rejectCode(() => authorizeTargetGhInvocation({
+      context: { repository: 'example/bad slug' },
+      argv: ['pr', 'view', '12'],
+      env: { OPK_PROJECT_ID: 'alpha' },
+    }), 'target-gh-repository-invalid');
+  });
+
+  it('uses the live target base for required-CI policy lookup, including non-main branches', () => {
+    expect(requiredStatusChecksEndpoint('example/alpha', 'trunk'))
+      .toBe('repos/example/alpha/branches/trunk/protection/required_status_checks');
+    expect(requiredStatusChecksEndpoint('example/alpha', 'release/2026'))
+      .toBe('repos/example/alpha/branches/release%2F2026/protection/required_status_checks');
+  });
+
+  it('keeps the target-mode operator-unblock PR read on the authorized repository', () => {
+    if (process.platform === 'win32') return;
+    const fixture = twoTargetFixture();
+    const bin = join(fixture.root, 'fake-bin');
+    mkdirSync(bin, { recursive: true });
+    const audit = join(fixture.root, 'native-gh.log');
+    const fakeGh = join(bin, 'gh-native');
+    const fakeNode = join(bin, 'node');
+    writeFileSync(fakeGh, `#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' "$*" >>"${OPK_GH_AUDIT}"\nprintf '%s\\n' '{"number":12,"head":{"ref":"topic"},"base":{"ref":"trunk"},"draft":false}'\n`, 'utf8');
+    writeFileSync(fakeNode, `#!/usr/bin/env bash\nset -euo pipefail\njoined="$*"\ncase "$joined" in\n  *gh-target-authorization.ts*) printf '%s\\n' "${OPK_EXPECTED_TARGET_REPO}" ;;\n  *gh-resolve-real-binary.mjs*) printf '%s\\n' "${OPK_FAKE_GH}" ;;\n  *) exec "${OPK_REAL_NODE}" "$@" ;;\nesac\n`, 'utf8');
+    chmodSync(fakeGh, 0o755);
+    chmodSync(fakeNode, 0o755);
+    const result = runProcessSync({
+      command: join(process.cwd(), 'scripts', 'gh'),
+      args: ['pr', 'view', '12', '--json', 'number,headRefName,isDraft'],
+      cwd: fixture.root,
+      env: {
+        ...process.env,
+        PATH: `${bin}:/usr/bin:/bin`,
+        OPK_PROJECT_ID: 'alpha',
+        OPK_EXPECTED_TARGET_REPO: 'example/alpha',
+        OPK_FAKE_GH: fakeGh,
+        OPK_GH_AUDIT: audit,
+        OPK_REAL_NODE: process.execPath,
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(readFileSync(audit, 'utf8')).toContain('api repos/example/alpha/pulls/12');
+  });
+
+  it('requires selected context on target-classified review and report entrypoints outside test harnesses', () => {
+    const fixture = twoTargetFixture();
+    process.env.HOME = fixture.env.HOME;
+    process.env.XDG_CONFIG_HOME = fixture.env.XDG_CONFIG_HOME;
+    delete process.env.OPK_PROJECT_ID;
+    delete process.env.OPK_VITEST_HARNESS;
+    delete process.env.VITEST;
+    const codeOf = (run: () => unknown) => {
+      try {
+        run();
+        return 'no-error';
+      } catch (error) {
+        return typeof error === 'object' && error !== null && 'code' in error
+          ? String((error as { code?: unknown }).code ?? '')
+          : '';
+      }
+    };
+    expect(codeOf(() => parseRunPackReviewArgs([]))).toBe('missing-selection');
+    expect(codeOf(() => parseReviewArgs([]))).toBe('missing-selection');
+    expect(codeOf(() => parsePackWorkerReportArgs(['ready_for_review'], fixture.env))).toBe('missing-selection');
   });
 
   it('fails the production publication target binding with typed missing-selection before transport', () => {
