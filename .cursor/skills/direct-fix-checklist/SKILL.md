@@ -170,13 +170,15 @@ reviewer child by the runner. To change it, use the `switch-pack-reviewer` skill
 do not invoke a reviewer plugin directly; the runner owns claim, cap, head
 binding, and is the sole GitHub publisher.
 
-Reviewer invocation and review authority are distinct. A persisted clean terminal
-for the exact same head suppresses a redundant automatic/common model call; an
-exact authority-selected conflict-free carry-over may establish current-head review
-authority with zero model calls; and an at-cap cycle suppresses another
-automatic/common model call. None of these cases carries CI or smoke to a new
-head. Required CI and declared smoke remain exact-current-head, and new-head smoke
-is checked before an at-cap automatic refusal.
+Reviewer invocation and review authority are distinct. A persisted clean terminal for
+the exact same head suppresses a redundant automatic/common model call; an exact
+authority-selected conflict-free carry-over may establish current-head review
+authority with zero model calls; and an at-cap cycle suppresses another automatic/
+common model call.
+
+Required CI remains bound to the current PR head. One same-PR smoke PASS at any
+report head remains sufficient after later commits; no new smoke is needed solely
+because the PR head changed. Smoke is not a review-admission condition.
 
 Merging requires an operator-requested pack review authority at the **current
 head** under the configured runner contract, with material findings fixed or

@@ -38,7 +38,7 @@ A reviewer-model process having run is not itself review authority, and valid cu
 - An explicit operator extra review is recorded as `non_consuming_explicit`, so it does not consume an automatic cap slot. Its exact clean terminal can still be a valid clean source for later authority decisions.
 - A conflicted merge below cap still requires the focused resolution review, and genuinely new content below cap follows the normal review path.
 
-These are invocation-economy rules, not evidence carry-over for unrelated gates. Required CI and declared smoke remain exact-current-head evidence. A new head must obtain its own smoke result even when review authority is established by conflict-free carry-over or when the cycle is already at cap. Smoke admission is evaluated before an at-cap automatic refusal so a cap cannot hide missing or failed current-head smoke.
+These are invocation-economy rules, not evidence carry-over for unrelated gates. Required CI remains exact-current-head evidence, while one same-PR `pack-worker-smoke-report/v1` PASS from any report head continues to satisfy smoke on later heads. Smoke readiness is not a review-admission condition and is not evaluated before an at-cap automatic refusal.
 
 ## Conflict-only clean carry-over
 

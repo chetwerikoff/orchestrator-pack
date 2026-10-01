@@ -302,9 +302,7 @@
       "role": "worker",
       "aliases": ["smoke-test-plan", "firefighter", "routine smoke", "complex smoke"],
       "sections": [
-        { "heading": "## When smoke is required" },
-        { "heading": "## Multi-agent smoke executor policy" },
-        { "heading": "## Actor ordering" }
+        { "heading": "## When smoke is required" }
       ],
       "referenced_paths": ["scripts/worker-smoke-run.ts", "scripts/executor-profile-policy.ts"],
       "edges": [
@@ -316,14 +314,14 @@
     },
     {
       "episode_id": "smoke-pre-path",
-      "title": "Smoke parent bootstrap and supported worker path",
+      "title": "Smoke PR-owner execution",
       "path": "docs/worker-smoke-testing.md",
       "topic": "smoke",
       "role": "worker",
-      "aliases": ["smoke parent", "supported worker path"],
+      "aliases": ["PR-owner execution", "ordinary worker smoke"],
       "sections": [
-        { "heading": "## Pre-smoke prerequisite preparation (parent worker)" },
-        { "heading": "## Supported worker path" }
+        { "heading": "## PR-owner execution" },
+        { "heading": "### Ordinary worker or firefighter" }
       ],
       "edges": [
         { "type": "prerequisite", "target": "smoke-when-policy" },
@@ -333,14 +331,13 @@
     },
     {
       "episode_id": "smoke-admission-coverage",
-      "title": "Smoke report admission and exact-head coverage",
+      "title": "Smoke report publication and trust boundary",
       "path": "docs/worker-smoke-testing.md",
       "topic": "smoke",
       "role": "worker",
-      "aliases": ["report admission", "point-in-time coverage"],
+      "aliases": ["report publication", "report trust boundary"],
       "sections": [
-        { "heading": "## Report admission and trust boundary" },
-        { "heading": "## Exact-head point-in-time coverage" }
+        { "heading": "## Publish" }
       ],
       "edges": [
         { "type": "related", "target": "smoke-pre-path" },
@@ -349,54 +346,30 @@
     },
     {
       "episode_id": "smoke-control-delivery",
-      "title": "Smoke control-plane, delivery, and deadlines",
+      "title": "Smoke manager classification and readiness",
       "path": "docs/worker-smoke-testing.md",
       "topic": "smoke",
       "role": "worker",
-      "aliases": ["delivery authority", "scenario deadlines"],
+      "aliases": ["manager classification", "readiness semantics"],
       "sections": [
-        { "heading": "## Report and control-plane semantics" },
-        { "heading": "## Delivery and completion authority" },
-        { "heading": "## Finite scenario progress and deadlines" }
+        { "heading": "## Manager classification" },
+        { "heading": "## Readiness semantics" }
       ],
       "edges": [
-        { "type": "related", "target": "smoke-admission-coverage" },
-        { "type": "related", "target": "smoke-recovery" }
-      ]
-    },
-    {
-      "episode_id": "smoke-recovery",
-      "title": "Smoke cancellation, spawn state, and recovery",
-      "path": "docs/worker-smoke-testing.md",
-      "topic": "smoke",
-      "role": "worker",
-      "aliases": ["cancellation", "durable spawn", "preflight"],
-      "sections": [
-        { "heading": "## Child-only progress and cancellation protocol" },
-        { "heading": "## Durable spawn state and ambiguity recovery" },
-        { "heading": "## Cancellation, cleanup, and restart recovery" },
-        { "heading": "## Deterministic preflight and concurrent starts" }
-      ],
-      "edges": [
-        { "type": "related", "target": "smoke-control-delivery" },
-        { "type": "related", "target": "smoke-readiness-runtime" },
-        { "type": "related", "target": "orchestrator-recovery-runbook" }
+        { "type": "related", "target": "smoke-admission-coverage" }
       ]
     },
     {
       "episode_id": "smoke-readiness-runtime",
-      "title": "Smoke readiness gate and runtime verification",
+      "title": "Smoke readiness semantics",
       "path": "docs/worker-smoke-testing.md",
       "topic": "smoke",
       "role": "worker",
-      "aliases": ["readiness gate", "rollback", "orca executable"],
+      "aliases": ["readiness semantics"],
       "sections": [
-        { "heading": "## Readiness gate" },
-        { "heading": "## Runtime verification and rollback" },
-        { "heading": "## Orca executable selection" }
+        { "heading": "## Readiness semantics" }
       ],
       "edges": [
-        { "type": "related", "target": "smoke-recovery" },
         { "type": "related", "target": "smoke-when-policy" }
       ]
     },
@@ -453,13 +426,13 @@
     },
     {
       "episode_id": "chat-current-head",
-      "title": "CI, smoke, and review stay current-head bound",
+      "title": "Current-head CI/review authority and PR-scoped smoke PASS",
       "path": "docs/chat-executor-rules.md",
       "topic": "review",
       "role": "all",
       "aliases": ["current-head", "pack review"],
       "sections": [
-        { "heading": "## 8. CI, smoke, and review authority stay current-head bound" }
+        { "heading": "## 8. Current-head CI and review authority; PR-scoped smoke PASS" }
       ],
       "edges": [
         { "type": "related", "target": "chat-checkpoints-review" },
@@ -869,8 +842,7 @@
         { "heading": "## Completion evidence" }
       ],
       "edges": [
-        { "type": "related", "target": "runbook-worker-lifecycle" },
-        { "type": "related", "target": "smoke-recovery" }
+        { "type": "related", "target": "runbook-worker-lifecycle" }
       ]
     },
     {

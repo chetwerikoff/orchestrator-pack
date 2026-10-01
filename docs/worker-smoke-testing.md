@@ -1,11 +1,9 @@
 # Worker smoke testing
 
-The active smoke path is deliberately thin. The PR owner executes the live
-Issue's declared `smoke-test-plan` after review has converged and required CI
-is green, writes a report file, and publishes that report with
-`worker-smoke-run publish`. There is no nested smoke agent, smoke terminal,
-independent-smoke actor, scheduler starter, receipt, watcher, retry engine, lock,
-or persisted smoke lifecycle.
+The PR owner executes the live Issue's required smoke scenarios after review has
+converged and required CI is green, then publishes the report with
+`worker-smoke-run publish`. A same-PR PASS remains sufficient across later PR
+heads; required CI stays current-head bound.
 
 ## When smoke is required
 
@@ -16,22 +14,13 @@ Read the live Issue and resolve its existing `smoke-test-plan` requirement.
 - `not-applicable`: no smoke checkout and no `publish`.
 - supported `legacy-exempt`: preserve the existing no-smoke path.
 
-Documentation-, policy-, or prompt-only Issues should declare
-`not-applicable: true` with a reason when runtime smoke cannot provide
-meaningful evidence.
-
-## Multi-agent smoke executor policy
-
-There is no multi-agent smoke executor on the active path. This heading remains
-as the stable operational-wiki selector for the former policy surface: required
-smoke is now executed directly by the PR owner, and `worker-smoke-run publish`
-does not select or launch an executor profile.
-
-## Actor ordering
-
-Smoke starts only after review convergence (when review applies) and green
-required CI. The PR owner stays the smoke owner; there is no independent smoke
-actor.
+An Issue limited to documentation, policy, prompt, or skill text declares
+`smoke-test-plan` with `not-applicable: true` and a one-line reason. Smoke
+scenarios describe executable behavior only. A stale-content search belongs in
+an acceptance criterion with the exact task-specific `rg` command and expected
+empty result. The PR owner runs it before review and quotes the command and result
+in the PR body; it is never a smoke scenario. See the task-authoring skill for
+the exact Issue-authoring requirements.
 
 ## PR-owner execution
 
@@ -138,19 +127,12 @@ GitHub comment to construct another record.
   pause behavior.
 - Malformed or unsupported structured causes are contract defects.
 
-There is no `trusted_target_stale` smoke recovery observer, expected-head
-witness, or replacement classifier.
-
 ## Readiness semantics
 
-Readiness is unchanged by this producer simplification. The newest existing
-same-PR `pack-worker-smoke-report/v1` PASS at any report head satisfies the
-smoke predicate. Required CI remains bound to the current PR head. A later head
-or later FAIL does not revoke an already-published same-PR PASS.
-
-No smoke-head equality, actor/publisher filter, ancestry reconstruction,
-receipt, cleanup proof, historical-state gate, or scheduler-owned smoke state is
-added to readiness.
+The newest existing same-PR `pack-worker-smoke-report/v1` PASS at any report
+head satisfies smoke readiness across later PR heads. Required CI remains bound
+to the current PR head. A later head or later same-PR FAIL does not revoke an
+already-published PASS.
 
 ## Verification
 
@@ -162,84 +144,3 @@ temporary detached-worktree sequence.
 
 Run the affected smoke/manager tests plus the repository verification commands
 required by policy, including `npm run typecheck` and `npm run lint`.
-
-
-## Pre-smoke prerequisite preparation (parent worker)
-
-There is no parent smoke worker on the active path. The PR owner confirms the
-existing review/CI prerequisites and, for the managed path, prepares only the
-bounded temporary detached PR checkout described above.
-
-## Supported worker path
-
-The supported path is the PR-owner path in this document. No secondary worker
-or executor is launched for smoke.
-
-## Report admission and trust boundary
-
-Admission is the `publish` validation boundary: exact plan/report
-correspondence, clean tracked files, canonical repository origin, and the exact
-PR-to-Issue closing binding. These checks do not add head freshness, CI,
-publisher identity, or cleanup as readiness predicates.
-
-## Exact-head point-in-time coverage
-
-The managed manager selects exact H only to choose the temporary checkout it
-executes. `publish` independently stamps its local HEAD and does not compare it
-with the live PR head. Readiness continues to accept a same-PR PASS from any
-report head.
-
-## Report and control-plane semantics
-
-The active report is the terminal-free `pack-worker-smoke-report/v1` record.
-The old smoke-agent control plane, terminal handle, and cleanup receipt are not
-part of active smoke execution.
-
-## Delivery and completion authority
-
-The PR owner directly calls `publish`. A confirmed comment POST plus canonical
-stdout record is the publication result; managed manager completion additionally
-waits for exact temporary-worktree cleanup before consuming that record.
-
-## Finite scenario progress and deadlines
-
-There is no child scenario-progress protocol. The owner executes the finite
-Issue-declared scenario list directly and reports the executed ordered result.
-
-## Child-only progress and cancellation protocol
-
-Retired for active smoke. No child smoke process is created, so no child-only
-progress or cancellation channel participates in smoke completion.
-
-## Durable spawn state and ambiguity recovery
-
-Retired for active smoke. There is no smoke spawn state or ambiguity-recovery
-registry; checkout/setup failure occurs before publication and is surfaced as a
-normal local execution failure.
-
-## Cancellation, cleanup, and restart recovery
-
-Managed cleanup is limited to removing the exact temporary detached worktree.
-A cleanup failure does not authorize a republish or PASS consumption. A later
-whole `publish` invocation is the only publication retry boundary.
-
-## Deterministic preflight and concurrent starts
-
-The old smoke preflight/start coordinator is retired. The existing
-review/required-CI prerequisites and the owner-local checkout sequence are the
-only active ordering rules.
-
-## Readiness gate
-
-Readiness semantics are unchanged: any same-PR PASS at any report head
-satisfies smoke, even if a later same-PR report is non-PASS; required CI remains current-head bound.
-
-## Runtime verification and rollback
-
-Smoke publication does not depend on a runtime adapter or Orca child. Verify the
-PR-owner checkout, publisher result, and unchanged readiness behavior instead.
-
-## Orca executable selection
-
-Retired for active smoke. `worker-smoke-run publish` does not select or invoke
-an Orca executable.
