@@ -886,9 +886,13 @@ export async function runDirectReviewReconciliation(options: CliOptions): Promis
 
 export interface PublishSmokeDependencies {
   publishComment?: (prNumber: number, body: string, repoRoot: string) => string;
+  resolveTarget?: (options: CliOptions) => PublishSmokeTarget;
+  readReportFile?: (path: string) => string;
+  gitStatus?: (repoRoot: string) => string[];
+  gitHead?: (repoRoot: string) => string;
 }
 
-interface PublishSmokeTarget {
+export interface PublishSmokeTarget {
   repositorySlug: string;
   issueNumber: number;
   prNumber: number;
@@ -986,20 +990,21 @@ export async function runPublishSmoke(
 ): Promise<number> {
   if (!options.reportFile) throw new Error('--report-file is required');
   if (options.dryRun) throw new Error('publish does not support --dry-run');
-  const target = resolvePublishSmokeTarget(options);
+  const target = (dependencies.resolveTarget ?? resolvePublishSmokeTarget)(options);
   const plan = resolveSmokeRequirement(target.issueBody);
   if (plan.requirement !== 'required' || plan.scenarios.length === 0) {
     throw new Error('publish requires a required scenario-bearing smoke-test-plan');
   }
-  const partial = parseSmokeAgentReport(readFileSync(resolve(options.reportFile), 'utf8'));
+  const readReportFile = dependencies.readReportFile ?? ((path: string) => readFileSync(resolve(path), 'utf8'));
+  const partial = parseSmokeAgentReport(readReportFile(options.reportFile));
   if (!partial) throw new Error('report_file_invalid: worker-smoke-report grammar not found');
   const correspondence = reportCorrespondenceReason(partial, plan);
   if (correspondence) throw new Error(`report_plan_mismatch: ${correspondence}`);
-  const status = gitPorcelain(options.repoRoot);
+  const status = (dependencies.gitStatus ?? gitPorcelain)(options.repoRoot);
   if (hasPreexistingTrackedDirtiness(status)) {
     throw new Error(`tracked_worktree_dirty: ${trackedPorcelainPaths(status).join(', ')}`);
   }
-  const headSha = gitHead(options.repoRoot);
+  const headSha = (dependencies.gitHead ?? gitHead)(options.repoRoot);
   const normalized = normalizeSmokeReport({
     ...partial,
     producer: SMOKE_REPORT_PRODUCER,
