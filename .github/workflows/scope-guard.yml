@@ -94,6 +94,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
       - name: Run read-only pack verifier
         run: node --experimental-strip-types scripts/verify.ts --repo-root "$GITHUB_WORKSPACE"
 
@@ -105,12 +111,6 @@ jobs:
 
       - name: Enforce verify runtime refactor policy
         run: node --experimental-strip-types scripts/ci-policy-guards.ts verify-runtime
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: npm
 
       - name: Install npm dependencies
         run: npm ci --include=dev
