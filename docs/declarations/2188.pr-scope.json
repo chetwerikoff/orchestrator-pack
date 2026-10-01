@@ -27,6 +27,7 @@
     "scripts/publish-issue-body-sync.ts",
     "scripts/run-pack-review-gpt.ts",
     "scripts/target-portability-sinks.test.ts",
+    "scripts/toolchain/create-issue-authoring-contract.test.ts",
     "scripts/toolchain/raw-child-process-baseline.json",
     "scripts/vitest-ci-lanes.config.json",
     "scripts/worker-smoke-run.ts",
@@ -50,5 +51,5 @@
     "prompts/",
     "scripts/"
   ],
-  "source_revision": "4d6c1d83dd96d98b34bc544284740f5cecf2e11d"
+  "source_revision": "ffea25f9458188ce7fc2e6f21bc399468ccc00bd"
 }
