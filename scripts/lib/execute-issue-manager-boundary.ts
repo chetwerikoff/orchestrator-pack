@@ -38,6 +38,7 @@ const GITHUB_FIRST_RECOVERY_CAUSES: ReadonlySet<string> = new Set([
   'product_network_error',
   'message_stream_error',
   'stream_recovery_polling_timed_out',
+  'product_error_banner',
 ]);
 
 export const EXECUTE_ISSUE_TURN_CLASSIFICATION = {

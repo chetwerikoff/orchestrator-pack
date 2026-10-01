@@ -109,6 +109,8 @@ export interface TurnResultV1 {
   legacy_configured_profile_key?: string;
   legacy_namespace_root?: string;
   conversation_id?: string;
+  /** Heading of the product alert behind a conversation-scoped recovery result. */
+  product_banner_text?: string;
   provisional_id?: string;
   incident_id?: string;
   generation?: number;

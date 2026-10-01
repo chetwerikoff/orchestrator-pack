@@ -84,6 +84,7 @@ import {
   MESSAGE_AUTHOR_ROLE_ATTR,
   MESSAGE_UNIT_KEY_ATTR,
   unrenderedOwnerAlertCause,
+  alertHeading,
   resolveMessageRoleStyle,
   MESSAGE_NODE_SELECTOR,
   normalizeConversationUrl,
@@ -3818,26 +3819,29 @@ async function runTurn(
         lastMarkerlessSnapshotSignature = '';
       }
 
-      // Issue #2226/#2235: ChatGPT can stop an unrendered-owner turn with an
-      // exact roleless alert carrying any reserved recovery banner text (#2303).
-      // The marker-based execution recovery classifier cannot
+      // Issue #2226/#2235: ChatGPT can stop an unrendered-owner turn with a
+      // roleless alert; any post-send alert counts, unknown texts as
+      // product_error_banner. The marker-based execution recovery classifier cannot
       // prove ownership then, and a reload would hide the alert while the turn
       // stays dead. Return the reserved conversation-scoped recovery cause for
       // this invocation's own bound conversation instead, without reload or resend.
       if (!markerVisible && durableConversationUrl && sendCount >= 1 && recoveryBannerTrusted && pageTurnEvidence?.generationInProgress !== true) {
         let bannerCause: string | undefined;
+        let bannerText: string | undefined;
         try {
           const alertTexts = await boundedBrowserRead(
             page.locator(UNMARKED_ALERT_SELECTOR).allInnerTexts(),
             Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, hardExhaustionDeadline - Date.now())),
             'stream_recovery_banner_read_timeout',
           ) as string[];
+          const texts = (Array.isArray(alertTexts) ? alertTexts : []).map(String);
           const causes = new Set(
-            (Array.isArray(alertTexts) ? alertTexts : [])
-              .map((text) => unrenderedOwnerAlertCause(String(text)))
+            texts
+              .map((text) => unrenderedOwnerAlertCause(text))
               .filter((cause): cause is NonNullable<typeof cause> => cause !== undefined),
           );
-          bannerCause = causes.size === 1 ? [...causes][0] : undefined;
+          bannerCause = causes.size === 1 ? [...causes][0] : causes.size > 1 ? 'product_error_banner' : undefined;
+          bannerText = texts.map(alertHeading).find(Boolean)?.slice(0, 160);
         } catch (error) {
           if (isPostSendTargetCrash(error)) throw error;
         }
@@ -3861,7 +3865,7 @@ async function runTurn(
               pollCount,
               navigation,
               incidents,
-              { conversation_id: durableConversationUrl },
+              { conversation_id: durableConversationUrl, ...(bannerText ? { product_banner_text: bannerText } : {}) },
               journalWriteFailed,
             ),
           };
