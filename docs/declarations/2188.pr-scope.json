@@ -19,6 +19,7 @@
     "scripts/lib/create-issue-stage-record-core.ts",
     "scripts/lib/create-issue-stage-record-gh.ts",
     "scripts/lib/gh-target-authorization.ts",
+    "scripts/lib/vitest-live-store-parent-guard.mjs",
     "scripts/lib/worker-status-store.mjs",
     "scripts/manager-review-terminal-bundle.ts",
     "scripts/pack-review-runner.ts",
@@ -31,6 +32,7 @@
     "scripts/toolchain/create-issue-authoring-contract.test.ts",
     "scripts/toolchain/raw-child-process-baseline.json",
     "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-live-store-parent-guard.test.ts",
     "scripts/worker-smoke-run.ts",
     "scripts/worktree-lifecycle/operations.ts",
     "scripts/worktree-teardown.ts"
