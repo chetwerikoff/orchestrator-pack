@@ -1,0 +1,23 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2321,
+  "declared_paths": [
+    ".github/workflows/vitest-runtime-history-refresh.yml",
+    "docs/ci-pipeline-split.md",
+    "docs/declarations/2321.pr-scope.json",
+    "scripts/merge-blind-ci-gates.audit.json"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".github/workflows/vitest-runtime-history-refresh.yml",
+    "docs/ci-pipeline-split.md",
+    "docs/declarations/2321.pr-scope.json",
+    "scripts/merge-blind-ci-gates.audit.json"
+  ],
+  "source_revision": "32e9e803d79a24f10b2aff8a837acb787eda9b28"
+}
