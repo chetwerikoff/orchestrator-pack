@@ -86,6 +86,11 @@ function repositoryCandidates(argv: readonly string[], env: Readonly<NodeJS.Proc
       candidates.push({ source: '--repo', value: arg.slice('--repo='.length) });
       continue;
     }
+    if (arg.startsWith('-R') && arg.length > 2) {
+      const value = arg.slice(2).replace(/^=/u, '');
+      candidates.push({ source: '-R', value });
+      continue;
+    }
     if (arg === '--hostname') {
       requireGithubCom(argv[index + 1], '--hostname');
       index += 1;
@@ -117,6 +122,21 @@ function repositoryCandidates(argv: readonly string[], env: Readonly<NodeJS.Proc
     const positional = String(argv[2] ?? '').trim();
     if (positional && REPOSITORY_RE.test(positional)) {
       candidates.push({ source: 'repo-positional', value: positional });
+    }
+  }
+  if (argv[0] === 'issue' && argv[1] === 'transfer') {
+    const positionals: string[] = [];
+    for (let index = 2; index < argv.length; index += 1) {
+      const arg = String(argv[index] ?? '');
+      if (arg === '--repo' || arg === '-R' || arg === '--hostname' || NON_ROUTING_VALUE_OPTIONS.has(arg)) {
+        index += 1;
+      } else if (!arg.startsWith('-')) {
+        positionals.push(arg);
+      }
+    }
+    const destination = positionals[1]?.trim();
+    if (destination) {
+      candidates.push({ source: 'issue-transfer-destination', value: destination });
     }
   }
   return candidates;

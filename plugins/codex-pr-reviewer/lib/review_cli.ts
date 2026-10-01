@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { executeReview, type ReviewOptions } from './review_core.ts';
 import type { ReviewSource } from './types.ts';
+import { originSlugFromGitConfig } from '../../../scripts/lib/git-origin-slug.mjs';
 import { resolveTargetContext } from '../../../scripts/lib/target-context.ts';
 
 function usage(): string {
@@ -40,6 +41,7 @@ export function parseReviewArgs(argv: string[]): ReviewOptions & { promptOnly?: 
   let repoRoot = process.cwd();
   const selected = resolveSelectedReviewTarget();
   let baseRef = selected ? `origin/${selected.defaultBranch}` : 'origin/main';
+  let explicitBaseRef = false;
   let issueNumber: number | undefined;
   let prNumber: number | undefined;
   let prBodyFile: string | undefined;
@@ -57,6 +59,7 @@ export function parseReviewArgs(argv: string[]): ReviewOptions & { promptOnly?: 
         break;
       case '--base':
         baseRef = argv[++index] ?? baseRef;
+        explicitBaseRef = true;
         break;
       case '--issue': {
         const raw = Number(argv[++index]);
@@ -100,6 +103,19 @@ export function parseReviewArgs(argv: string[]): ReviewOptions & { promptOnly?: 
     }
   }
 
+  if (selected) {
+    const observedRepository = originSlugFromGitConfig(repoRoot);
+    if (!observedRepository || observedRepository.toLowerCase() !== selected.repository.toLowerCase()) {
+      throw new Error(
+        `Codex review repository ${observedRepository ?? '<unavailable>'} does not match selected target ${selected.repository}`,
+      );
+    }
+    const selectedBaseRef = `origin/${selected.defaultBranch}`;
+    if (explicitBaseRef && baseRef !== selectedBaseRef) {
+      throw new Error(`Codex review base ${baseRef} does not match selected target base ${selectedBaseRef}`);
+    }
+    baseRef = selectedBaseRef;
+  }
   return {
     repoRoot,
     baseRef,

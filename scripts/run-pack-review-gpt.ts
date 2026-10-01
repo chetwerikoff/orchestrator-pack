@@ -85,6 +85,7 @@ export function parseArgs(argv: string[]): {
   let repoRoot = process.cwd();
   const selected = resolveSelectedReviewTarget();
   let baseRef = selected ? `origin/${selected.defaultBranch}` : 'origin/main';
+  let explicitBaseRef = false;
   let prNumber: number | undefined;
   let issueNumber: number | undefined;
   let headSha: string | undefined;
@@ -97,6 +98,7 @@ export function parseArgs(argv: string[]): {
         break;
       case '--base':
         baseRef = argv[++index] ?? baseRef;
+        explicitBaseRef = true;
         break;
       case '--pr-number':
         prNumber = Number(argv[++index]);
@@ -121,7 +123,13 @@ export function parseArgs(argv: string[]): {
     }
   }
 
-  void baseRef;
+  if (selected) {
+    const selectedBaseRef = `origin/${selected.defaultBranch}`;
+    if (explicitBaseRef && baseRef !== selectedBaseRef) {
+      throw new Error(`pack review base ${baseRef} does not match selected target base ${selectedBaseRef}`);
+    }
+    baseRef = selectedBaseRef;
+  }
   return { repoRoot, baseRef, prNumber, issueNumber, headSha };
 }
 

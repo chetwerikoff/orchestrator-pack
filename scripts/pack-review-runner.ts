@@ -4078,14 +4078,18 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
   const timeoutSeconds = budgetLedger.runnerTimeoutSeconds;
   const trusted = resolveTrustedRunnerPaths();
   const projectId = selectedTarget?.projectId ?? (trim(input.projectId) || DEFAULT_PROJECT_ID);
+  const selectedBaseRef = selectedTarget ? `origin/${selectedTarget.defaultBranch}` : DEFAULT_BASE_REF;
+  const requestedBaseRef = trim(input.baseRef);
+  if (selectedTarget && requestedBaseRef && requestedBaseRef !== selectedBaseRef) {
+    throw new Error(`pack review base ${requestedBaseRef} does not match selected target base ${selectedBaseRef}`);
+  }
+  const baseRef = selectedTarget ? selectedBaseRef : (requestedBaseRef || DEFAULT_BASE_REF);
   const target = await resolveTarget(input, trusted.trustedPackRoot, operatorStart, selectedTarget);
   if (selectedTarget && target.prBaseRef !== selectedTarget.defaultBranch) {
     throw new Error(
       `pack review PR base ${target.prBaseRef} does not match selected target default branch ${selectedTarget.defaultBranch}`,
     );
   }
-  const baseRef = trim(input.baseRef)
-    || (selectedTarget ? `origin/${selectedTarget.defaultBranch}` : DEFAULT_BASE_REF);
   if (trim(input.surface) === 'pack-gpt-review') {
     const requiredCiGreen = await manualPackReviewRequiredCiGreen({
       startInput: input,
@@ -5699,6 +5703,12 @@ async function main(): Promise<void> {
     const harnessUnbound = process.env.OPK_VITEST_HARNESS === '1' && !trim(process.env.OPK_PROJECT_ID);
     const selectedTarget = harnessUnbound ? null : resolveTargetContext({ env: process.env });
     const projectId = selectedTarget?.projectId ?? (trim(input.projectId) || DEFAULT_PROJECT_ID);
+    const selectedBaseRef = selectedTarget ? `origin/${selectedTarget.defaultBranch}` : DEFAULT_BASE_REF;
+    const requestedBaseRef = trim(input.baseRef);
+    if (selectedTarget && requestedBaseRef && requestedBaseRef !== selectedBaseRef) {
+      throw new Error(`pack review base ${requestedBaseRef} does not match selected target base ${selectedBaseRef}`);
+    }
+    const baseRef = selectedTarget ? selectedBaseRef : (requestedBaseRef || DEFAULT_BASE_REF);
     const sourceRepoRoot = resolve(trim(input.sourceRepoRoot || input.repoRoot) || trusted.trustedPackRoot);
     const harnessExplicit = process.env.OPK_VITEST_HARNESS === '1' && Boolean(trim(input.fixtureRepoSlug));
     const observedRepository = harnessExplicit ? '' : await resolveRepositorySlug(sourceRepoRoot);
@@ -5718,8 +5728,7 @@ async function main(): Promise<void> {
       prNumber: positiveInteger(input.prNumber, 'prNumber'),
       immediate: input.immediate === true,
       settlePartialAfterGrace: input.immediate === true,
-      baseRef: trim(input.baseRef)
-        || (selectedTarget ? `origin/${selectedTarget.defaultBranch}` : DEFAULT_BASE_REF),
+      baseRef,
       fixtureCurrentPrHeadSha: (input as StartInput).fixtureCurrentPrHeadSha,
       fixtureGptSourceCommentTransport: (input as StartInput).fixtureGptSourceCommentTransport,
       fixtureGithubReviewId: (input as StartInput).fixtureGithubReviewId,

@@ -1,13 +1,13 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runProcessSync } from './kernel/subprocess.ts';
 import { bindPublishIssueTarget } from './publish-issue-body-sync.ts';
 import { syncPublishIssueBody } from './lib/publish-issue-body-sync.ts';
-import { manualPackReviewRequiredCiGreen, requiredStatusChecksEndpoint, resolveCurrentPrHead } from './pack-review-runner.ts';
+import { manualPackReviewRequiredCiGreen, requiredStatusChecksEndpoint, resolveCurrentPrHead, startPackReview } from './pack-review-runner.ts';
 import { parseArgs as parseRunPackReviewArgs } from './run-pack-review-gpt.ts';
 import { parseReviewArgs } from '../plugins/codex-pr-reviewer/lib/review_cli.ts';
 import { parsePackWorkerReportArgs } from './pack-worker-report.ts';
@@ -51,7 +51,7 @@ function twoTargetFixture() {
   rememberEnv();
   const root = mkdtempSync(join(tmpdir(), 'opk-target-sinks-'));
   roots.push(root);
-  const env = { ...process.env, HOME: root, XDG_CONFIG_HOME: join(root, 'config') };
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: root, XDG_CONFIG_HOME: join(root, 'config') };
   const specs = [
     { projectId: 'alpha', repository: 'example/alpha', defaultBranch: 'trunk' },
     { projectId: 'beta', repository: 'example/beta', defaultBranch: 'stable' },
@@ -152,6 +152,24 @@ describe('Issue #2188 target portability sinks', () => {
     }
   });
 
+  it('binds target review checkouts and comparison bases to the selected card', async () => {
+    const fixture = twoTargetFixture();
+    process.env.HOME = fixture.env.HOME;
+    process.env.XDG_CONFIG_HOME = fixture.env.XDG_CONFIG_HOME;
+    process.env.OPK_PROJECT_ID = 'alpha';
+    process.env.OPK_VITEST_HARNESS = '1';
+    const alphaRoot = join(fixture.root, 'alpha');
+    expect(parseReviewArgs(['--repo-root', alphaRoot]).baseRef).toBe('origin/trunk');
+    expect(() => parseReviewArgs(['--repo-root', join(fixture.root, 'beta')]))
+      .toThrow(/does not match selected target example\/alpha/u);
+    expect(() => parseReviewArgs(['--repo-root', alphaRoot, '--base', 'origin/main']))
+      .toThrow(/does not match selected target base origin\/trunk/u);
+    expect(() => parseRunPackReviewArgs(['--base', 'origin/main']))
+      .toThrow(/does not match selected target base origin\/trunk/u);
+    await expect(startPackReview({ baseRef: 'origin/main' }))
+      .rejects.toThrow(/does not match selected target base origin\/trunk/u);
+  });
+
   it('keeps same-number create-Issue journals project-disjoint and rejects cross-project replay', () => {
     const fixture = twoTargetFixture();
     process.env.HOME = fixture.env.HOME;
@@ -209,6 +227,18 @@ describe('Issue #2188 target portability sinks', () => {
         env: { OPK_PROJECT_ID: 'alpha' },
       },
       {
+        argv: ['issue', 'comment', '12', '-Rexample/alpha', '--body', 'ok'],
+        env: { OPK_PROJECT_ID: 'alpha' },
+      },
+      {
+        argv: ['issue', 'comment', '12', '-R=example/alpha', '--body', 'ok'],
+        env: { OPK_PROJECT_ID: 'alpha' },
+      },
+      {
+        argv: ['issue', 'transfer', '12', 'example/alpha'],
+        env: { OPK_PROJECT_ID: 'alpha' },
+      },
+      {
         argv: ['api', 'repos/example/alpha/issues/12', '-X', 'PATCH', '-f', 'title=ok'],
         env: { OPK_PROJECT_ID: 'alpha' },
       },
@@ -241,6 +271,10 @@ describe('Issue #2188 target portability sinks', () => {
     for (const argv of [
       ['pr', 'view', '12', '--repo', 'example/beta'],
       ['pr', 'view', '12', '-R', 'example/beta'],
+      ['pr', 'view', '12', '-Rexample/beta'],
+      ['pr', 'view', '12', '-R=example/beta'],
+      ['issue', 'transfer', '12', 'example/beta'],
+      ['issue', 'transfer', '12', '--repo', 'example/alpha', 'example/beta'],
       ['api', 'repos/example/beta/pulls/12'],
       ['pr', 'view', 'https://github.com/example/beta/pull/12'],
       ['issue', 'view', 'https://github.com/example/beta/issues/12'],
@@ -288,6 +322,42 @@ describe('Issue #2188 target portability sinks', () => {
       argv: ['pr', 'view', '12'],
       env: { OPK_PROJECT_ID: 'alpha' },
     }), 'target-gh-repository-invalid');
+  });
+
+  it('stops mismatched attached repo and issue-transfer selectors before native gh', () => {
+    if (process.platform === 'win32') return;
+    const fixture = twoTargetFixture();
+    const bin = join(fixture.root, 'native-bin');
+    const audit = join(fixture.root, 'native-gh.log');
+    mkdirSync(bin, { recursive: true });
+    const fakeGh = join(bin, 'gh');
+    writeFileSync(fakeGh, '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >>"$OPK_NATIVE_GH_AUDIT"\n', 'utf8');
+    chmodSync(fakeGh, 0o755);
+    for (const args of [
+      ['issue', 'comment', '12', '-Rexample/beta', '--body', 'x'],
+      ['issue', 'comment', '12', '-R=example/beta', '--body', 'x'],
+      ['issue', 'transfer', '12', 'example/beta'],
+      ['issue', 'transfer', '12', '--repo', 'example/alpha', 'example/beta'],
+    ]) {
+      const result = runProcessSync({
+        command: join(process.cwd(), 'scripts', 'gh'),
+        args,
+        cwd: join(fixture.root, 'alpha'),
+        env: {
+          ...process.env,
+          PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin`,
+          HOME: fixture.env.HOME,
+          XDG_CONFIG_HOME: fixture.env.XDG_CONFIG_HOME,
+          OPK_PROJECT_ID: 'alpha',
+          OPK_NATIVE_GH_AUDIT: audit,
+          GH_REAL_BINARY: fakeGh,
+          GH_WRAPPER_ACTIVE: '',
+        },
+      });
+      expect(result.ok).toBe(false);
+      expect(result.stderr).toContain('target-gh-repository-mismatch');
+    }
+    expect(existsSync(audit)).toBe(false);
   });
 
   it('uses the live target base for required-CI policy lookup, including non-main branches', async () => {
