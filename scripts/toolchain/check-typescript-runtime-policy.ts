@@ -1082,9 +1082,7 @@ function mirrorViolations(repoRoot: string): RuntimePolicyViolation[] {
 }
 
 function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\function packageViolations(repoRoot: string, allFiles: readonly string[]): RuntimePolicyViolation[] {');
-}');
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 }
 
 function nonLiveRestatementPath(path: string, contract: InventoryContract): boolean {
