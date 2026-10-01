@@ -140,7 +140,7 @@
       "dimensions": ["workflow-trigger-divergence"],
       "classification": "intentional-by-design",
       "reason": "Runtime history is a post-merge/scheduled measurement producer; PR-required correctness remains in scope-guard.",
-      "triggers": ["push:main", "schedule", "workflow_dispatch"]
+      "triggers": ["schedule", "workflow_dispatch"]
     },
     {
       "id": "workflow-wallclock-e2e",
