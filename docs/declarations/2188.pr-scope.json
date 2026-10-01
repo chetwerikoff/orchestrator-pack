@@ -22,6 +22,7 @@
     "scripts/lib/vitest-live-store-parent-guard.mjs",
     "scripts/lib/worker-status-store.mjs",
     "scripts/manager-review-terminal-bundle.ts",
+    "scripts/orchestrator-wake-supervisor.test.ts",
     "scripts/pack-review-runner.ts",
     "scripts/pack-worker-report.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
@@ -57,5 +58,5 @@
     "prompts/",
     "scripts/"
   ],
-  "source_revision": "01709698c51f06ffbd8ac389e6a68c70c5e4873c"
+  "source_revision": "f5423158d8f0b3b63c3f5070c3187746e0d5e568"
 }
