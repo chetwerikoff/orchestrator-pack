@@ -814,6 +814,16 @@ export async function runDirectReviewReconciliation(options: CliOptions): Promis
 }
 
 
+function runValidatePlan(options: CliOptions): number {
+  const result = checkSmokeTestPlan(readIssueBody(options.issueBodyFile));
+  if (!result.ok) {
+    for (const error of result.errors) process.stderr.write(`worker-smoke-run: ${error}\n`);
+    return 1;
+  }
+  emit({ ok: true, plan: result.plan }, options.json);
+  return 0;
+}
+
 export interface PublishSmokeDependencies {
   publishComment?: (prNumber: number, body: string, repoRoot: string) => string;
   resolveTarget?: (options: CliOptions) => PublishSmokeTarget;
