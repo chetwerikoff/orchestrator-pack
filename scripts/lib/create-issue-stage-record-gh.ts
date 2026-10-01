@@ -517,7 +517,7 @@ export function resolveJournalWorkdir(issueNumber: number, override?: string): s
   const canonical = defaultWorkdir(issueNumber);
   if (!override) return canonical;
   const requested = resolve(override);
-  if (process.env.VITEST) return requested;
+  if (process.env.VITEST && !String(process.env.OPK_PROJECT_ID ?? '').trim()) return requested;
   if (requested !== resolve(canonical)) {
     throw new Error(`create_issue_journal_workdir_override_untrusted:${requested}`);
   }
