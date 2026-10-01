@@ -321,9 +321,8 @@ Issue/PR predicate is the exact active blocker. Keep the supplied
 `issue_closed | pr_merged` predicate and evidence unchanged; never infer dependency
 identity from prose, cause, blocker text, reverse lookup, or the managed Issue.
 `{ coordinator: true }` means the existing coordinator owns the remedy and
-continuation to the same Dispatch. Legacy `{ operator: true }` is historical input
-only and normalizes in memory to `{ coordinator: true }`; `issue_closed` and
-`pr_merged` remain unchanged.
+continuation to the same Dispatch. The prior boolean input is normalized in memory
+to `{ coordinator: true }`; `issue_closed` and `pr_merged` remain unchanged.
 
 For `external_pause` or `contract_defect`, send one escalation with a deterministic
 thread id derived from `(issue, stage, cause, resume_when)`. Retry a failed
