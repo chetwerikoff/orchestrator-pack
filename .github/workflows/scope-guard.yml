@@ -386,6 +386,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node.js for regression aggregate
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+
       - name: Fail-closed full-regression aggregate
         env:
           TYPECHECK_RESULT: ${{ needs.test-typecheck.result }}
