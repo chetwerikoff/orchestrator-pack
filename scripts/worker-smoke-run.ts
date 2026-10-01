@@ -2009,8 +2009,12 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     if (spawned.status !== 'ok') throw new WorkerSmokeHarnessError('smoke_spawn_failed', failureReason(spawned));
     worker = spawned.value.identity;
     const prompt = buildSmokeAgentPrompt({
-      issueNumber: options.issueNumber, issueBody, prNumber: options.prNumber,
-      headSha: options.headSha, plan: attemptPlan,
+      issueNumber: options.issueNumber,
+      issueBody,
+      prNumber: options.prNumber,
+      headSha: options.headSha,
+      projectId: selectedSmokeProject().projectId,
+      plan: attemptPlan,
     });
     const dispatched = adapter.dispatchInput(
       { worker, text: prompt }, { cwd: options.cwd, timeoutMs: SMOKE_DELIVERY_TIMEOUT_MS },

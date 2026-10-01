@@ -377,6 +377,7 @@ export function buildSmokeAgentPrompt(input: {
   prNumber: number;
   headSha: string;
   plan: SmokeTestPlan;
+  projectId?: string;
   runBinding?: SmokeRunBinding;
 }): string {
   const scenarioLines = input.plan.scenarios
@@ -407,6 +408,7 @@ export function buildSmokeAgentPrompt(input: {
   return [
     'You are an independent smoke verifier for orchestrator-pack.',
     'Execute only the smoke scenarios below against the current worktree.',
+    ...(input.projectId ? [`Before executing any smoke-plan command, set OPK_PROJECT_ID=${input.projectId} in the executor session and keep it inherited by every test process; use this same selected project for all commands.`] : []),
     `Selected CI scope artifact: docs/declarations/${input.issueNumber}.pr-scope.json is generated evidence. It is skipped from product changed-path accounting (same rule as scripts/pr-scope-check.ts selectedArtifactPath). Do not FAIL an exact-scope or allowed-path scenario solely because that file appears in git diff when every other changed path matches the Issue allowed-roots / declared implementation set.`,
     'Do not edit tracked implementation files, commit, push, merge, alter the Issue, or call pack-worker-report.',
     'When waiting for executor work, use only a completion or session identifier actually returned by the selected executor; never invent a shell_id or a transcript path.',

@@ -3141,6 +3141,21 @@ describe('buildSmokeAgentPrompt selected declaration artifact', () => {
     expect(prompt).toMatch(/Do not FAIL an exact-scope or allowed-path scenario solely because that file appears in git diff/u);
   });
 
+  it('binds smoke plan commands to the selected project state', () => {
+    const prompt = buildSmokeAgentPrompt({
+      issueNumber: 1260,
+      issueBody: '',
+      prNumber: 1609,
+      headSha: 'a'.repeat(40),
+      projectId: 'smoke-fixture',
+      plan: { requirement: 'required', scenarios: [{ action: 'run focused tests', expected: 'passing assertions' }] },
+    });
+
+    expect(prompt).toContain(
+      'Before executing any smoke-plan command, set OPK_PROJECT_ID=smoke-fixture in the executor session and keep it inherited by every test process; use this same selected project for all commands.',
+    );
+  });
+
   it('keeps the #2193 Stop/injection fixture in flight before synthetic recovery injection', () => {
     const failedScenario = [
       'Start the long-run command immediately.',
