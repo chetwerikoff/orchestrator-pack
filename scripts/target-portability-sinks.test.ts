@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { runProcessSync } from './kernel/subprocess.ts';
 import { bindPublishIssueTarget } from './publish-issue-body-sync.ts';
 import { syncPublishIssueBody } from './lib/publish-issue-body-sync.ts';
-import { requiredStatusChecksEndpoint, resolveCurrentPrHead } from './pack-review-runner.ts';
+import { manualPackReviewRequiredCiGreen, requiredStatusChecksEndpoint, resolveCurrentPrHead } from './pack-review-runner.ts';
 import { parseArgs as parseRunPackReviewArgs } from './run-pack-review-gpt.ts';
 import { parseReviewArgs } from '../plugins/codex-pr-reviewer/lib/review_cli.ts';
 import { parsePackWorkerReportArgs } from './pack-worker-report.ts';
@@ -290,11 +290,29 @@ describe('Issue #2188 target portability sinks', () => {
     }), 'target-gh-repository-invalid');
   });
 
-  it('uses the live target base for required-CI policy lookup, including non-main branches', () => {
+  it('uses the live target base for required-CI policy lookup, including non-main branches', async () => {
     expect(requiredStatusChecksEndpoint('example/alpha', 'trunk'))
       .toBe('repos/example/alpha/branches/trunk/protection/required_status_checks');
     expect(requiredStatusChecksEndpoint('example/alpha', 'release/2026'))
       .toBe('repos/example/alpha/branches/release%2F2026/protection/required_status_checks');
+
+    const fixture = twoTargetFixture();
+    process.env.OPK_VITEST_HARNESS = '1';
+    const headSha = 'c'.repeat(40);
+    await expect(manualPackReviewRequiredCiGreen({
+      startInput: {
+        fixtureRequiredCiPolicy: { contexts: ['orchestrator-pack/pack-review'] },
+        fixtureRequiredCiChecks: [],
+        fixtureRequiredCiHeadAfterGate: headSha,
+      },
+      target: {
+        prNumber: 77,
+        headSha,
+        repoSlug: 'example/alpha',
+        sourceRepoRoot: join(fixture.root, 'alpha'),
+        prBaseRef: 'trunk',
+      },
+    })).resolves.toBe(true);
   });
 
   it('keeps the target-mode operator-unblock PR read on the authorized repository', () => {
