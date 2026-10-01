@@ -75,39 +75,6 @@ function addFixedWakeStores(stores: CutoverStoreSpec[], flatRoot: string, projec
   }
 }
 
-function addCreateIssueStores(stores: CutoverStoreSpec[], localStateRoot: string, projectId: string): void {
-  const sourceRoot = path.join(localStateRoot, 'create-issue-draft');
-  const targetRoot = path.join(sourceRoot, projectId);
-  addStore(stores, migrationSpec(
-    'project-create-issue-review',
-    path.join(sourceRoot, '.review'),
-    path.join(targetRoot, '.review'),
-    'opaque-directory',
-  ));
-  addStore(stores, migrationSpec(
-    'project-browser-turn-recurrence',
-    path.join(sourceRoot, 'browser-turn-recurrence.jsonl'),
-    path.join(targetRoot, 'browser-turn-recurrence.jsonl'),
-    'opaque-file',
-  ));
-
-  const names = unionEntryNames(sourceRoot, targetRoot, (name) =>
-    name !== projectId
-    && name !== '.review'
-    && name !== 'browser-turn-recurrence.jsonl'
-    && name !== PROJECT_BINDING_FILE
-    && !name.endsWith('.cutover-import.json')
-    && !name.includes('.cutover-staging-')
-    && /^\d+(?:-|$)/u.test(name));
-  names.forEach((name, index) => {
-    const sourcePath = path.join(sourceRoot, name);
-    const targetPath = path.join(targetRoot, name);
-    const kind = observedKind(sourcePath, targetPath);
-    if (!kind) return;
-    addStore(stores, migrationSpec(`project-create-issue-work-${index + 1}`, sourcePath, targetPath, kind));
-  });
-}
-
 function addDiscussStores(stores: CutoverStoreSpec[], localStateRoot: string, projectId: string): void {
   const sourceRoot = path.join(localStateRoot, 'discuss-with-gpt');
   const targetRoot = path.join(sourceRoot, projectId);
@@ -144,7 +111,6 @@ export function withPackProjectStateMigration(
   const stores = request.stores.map((store) => ({ ...store, coveredFields: [...store.coveredFields] }));
 
   addFixedWakeStores(stores, flatWakeRoot, projectRoot);
-  addCreateIssueStores(stores, localStateRoot, projectId);
   addDiscussStores(stores, localStateRoot, projectId);
 
   return { ...request, stores };
