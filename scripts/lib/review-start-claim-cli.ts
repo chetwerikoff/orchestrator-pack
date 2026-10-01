@@ -31,6 +31,7 @@ import {
   evaluateAutomatedLaunchClaimGate,
   resolveBindingProjectNamespace,
 } from '../../docs/review-start-claim-run-binding.mjs';
+import { SUPPORTED_NODE_MAJOR } from '../toolchain/node-runtime-contract.mjs';
 import {
   beginInfraPauseSegment,
   closeInfraPauseSegment,
@@ -188,7 +189,7 @@ function mountInfoForPath(target: string): { mount: string; fsType: string } | n
 }
 
 export function assertSupportedClaimPlatform(namespace: string): void {
-  if (Number(process.versions.node.split('.')[0]) !== 22) throw new Error('unsupported_node_major');
+  if (Number(process.versions.node.split('.')[0]) !== SUPPORTED_NODE_MAJOR) throw new Error('unsupported_node_major');
   if (platform() !== 'linux') throw new Error('unsupported_claim_platform');
   const canonical = resolve(namespace);
   if (/^\/mnt\/[a-z](?:\/|$)/i.test(canonical)) throw new Error('unsupported_windows_mounted_filesystem');

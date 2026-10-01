@@ -35,6 +35,9 @@ export interface GuardResult {
 
 const CANONICAL_PATTERN_SOURCE = 'scripts/json-producers/retired-runtime-surfaces.json';
 export const HISTORICAL_DISPOSITION_SOURCE = 'docs/investigations/runtime-hard-cut/historical-dispositions.json';
+const CURRENT_RETIREMENT_POLICY_FIXTURES = new Set([
+  'scripts/toolchain/typescript-runtime-policy.spec.ts',
+]);
 const SELF_AUTHORITY_PATHS = new Set([
   CANONICAL_PATTERN_SOURCE,
   HISTORICAL_DISPOSITION_SOURCE,
@@ -117,10 +120,15 @@ export function loadHistoricalDispositionPaths(repoRoot: string): ReadonlySet<st
   return new Set(loadHistoricalDispositions(repoRoot).map((record) => record.path));
 }
 
+export function isCurrentRetiredSurfacePolicyFixturePath(path: string): boolean {
+  return CURRENT_RETIREMENT_POLICY_FIXTURES.has(normalizePath(path));
+}
+
 export function isHistoricalOrDeniedPath(path: string, historicalExact: ReadonlySet<string> = EXCLUDED_EXACT): boolean {
   const normalized = normalizePath(path);
   return historicalExact.has(normalized)
     || EXCLUDED_EXACT.has(normalized)
+    || CURRENT_RETIREMENT_POLICY_FIXTURES.has(normalized)
     || SELF_AUTHORITY_PATHS.has(normalized)
     || EXCLUDED_PREFIXES.some((prefix) => normalized.startsWith(prefix))
     || GENERATED_VITEST_RUNTIME_REPORT.test(normalized);

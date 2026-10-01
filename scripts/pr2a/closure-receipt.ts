@@ -6,6 +6,7 @@ import path from 'node:path';
 import { runProcessSync } from '../kernel/subprocess.ts';
 import { D928, sha256, stableJson, type PlanningManifest } from './contracts.ts';
 import { buildConformanceReport } from './final-conformance.ts';
+import { SUPPORTED_NODE_MAJOR } from '../toolchain/node-runtime-contract.mjs';
 
 const repoRoot = path.resolve(process.cwd());
 export const REQUIRED_OVERLAP_CLASSES = [
@@ -369,7 +370,7 @@ function validateVerificationEnvironment(
   if (process.platform !== 'linux' || !['linux', 'wsl2'].includes(platformClaim)) {
     findings.push(`${prefix}-platform-unsupported`);
   }
-  if (major(process.version) !== 22 || major(verification.nodeVersion) !== 22
+  if (major(process.version) !== SUPPORTED_NODE_MAJOR || major(verification.nodeVersion) !== SUPPORTED_NODE_MAJOR
     || verification.nodeVersion.replace(/^v/u, '') !== process.version.replace(/^v/u, '')) {
     findings.push(`${prefix}-node-version-mismatch`);
   }

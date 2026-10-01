@@ -340,7 +340,7 @@ Not a merge gate. After drafting the memo, you may run Codex CLI on the memo tex
 `scripts/review-architect-artifact.ts --kind rca-memo` only — never `codex exec`.
 Do not pipe stdout through `tail` or `head`.
 
-**Preferred (Node 22 / Linux / WSL2):**
+**Preferred (declared Node runtime / Linux / WSL2):**
 
 ```bash
 node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \

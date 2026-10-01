@@ -36,13 +36,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
+      - name: Setup Node.js for runtime-history topology
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version-file: package.json
           cache: npm
 
-      - name: Install npm dependencies
+      - name: Install runtime-history topology dependencies
         run: npm ci --include=dev
 
       - name: Emit derived heavy topology
@@ -81,13 +81,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Setup Node.js
+      - name: Setup Node.js for runtime-history refresh
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version-file: package.json
           cache: npm
 
-      - name: Install npm dependencies
+      - name: Install runtime-history shard dependencies
         run: npm ci --include=dev
 
       - name: Download heavy topology artifact
@@ -265,10 +265,10 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           persist-credentials: false
 
-      - name: Setup Node.js
+      - name: Setup Node.js for runtime-history aggregate
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version-file: package.json
           cache: npm
 
       - name: Verify Node.js major

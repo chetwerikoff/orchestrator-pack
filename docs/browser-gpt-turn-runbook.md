@@ -12,17 +12,49 @@ tracked file.
 
 ## Start-of-shift preflight
 
-Before a send-capable turn:
-
-1. run from the trusted pack checkout with the intended worktree as `--cwd`;
-2. use the tracked Node 22 entrypoint and current Browser-GPT scripts;
-3. prove the intended browser profile/CDP endpoint is reachable;
-4. resolve the intended ChatGPT project card/URL when a fresh project chat is required;
-5. prepare stable input bytes and one invocation id;
-6. ensure output/launcher-owned artifact paths are distinct and unoccupied.
-
-A failed preflight performs no send. Do not repair credentials, solve CAPTCHA,
-or silently substitute another profile/project.
+1. Enter a trusted current checkout and read the live `AGENTS.md` and
+   `docs/chat-executor-rules.md`.
+2. Verify the repository's declared Node-runtime requirement and the exact task/turn
+   identities supplied by the owning workflow. For governed create-Issue
+   reviewer turns, this includes the current tier, role, stage, source slot,
+   and frozen revision. A workflow that does not define create-review
+   `stage`, `slot`, or frozen revision must not invent values for them.
+   When this shift is the next turn of an already-admitted manager workflow,
+   the owning workflow must also supply that exact Run/Task context and the
+   exact caller-held manager worktree selector. Before Browser-GPT reads new
+   tracked turn inputs, apply the same manager refresh boundary owned by the
+   supervised Task launch assistant: resolve the selector through Orca, prove
+   repository/path identity with only bounded read-only git queries, fetch
+   `origin/main`, then require already-equal or a clean ancestor-only
+   fast-forward on the distinct manager-local branch. For a manager-bound
+   create-Issue shift, a repository-owned mismatch returns
+   `recoverable(reconcile-stage-read-only)`; external reality returns
+   `external_pause`; malformed producer output is a boundary
+   `contract_defect`. A generic Browser-GPT shift without this manager
+   binding emits no manager-refresh git command, and an already-running turn or
+   frozen create-Issue stage attempt is never refreshed mid-turn.
+3. Select the target project card for this invocation with `--project
+   <PROJECT_ID>` when the owning caller supports that option, or set
+   `OPK_PROJECT_ID` for the invocation. The selected card supplies the
+   Browser-GPT project URL; do not set a separate URL in environment or
+   local configuration. Resolve other Browser-GPT configuration without
+   copying operator files into the worktree. A governed create-Issue send may
+   pass `--operator-browser-config <absolute-path>`; the inline
+   send-boundary preflight reads that exact operator-local file in place.
+   For a governed create-Issue caller, a legal retry is
+   `recoverable(retry-create-issue-browser-preflight)`; operator-owned
+   configuration that must change outside the repository is an
+   `external_pause` with the exact remedy/evidence, never a terminal manager
+   refusal.
+4. Confirm the configured headed automation Chrome is running and logged in.
+   Never type credentials. Create-Issue callers do not run a separate mandatory
+   preflight command: the declared Node runtime, tracked GitHub transport and Browser-GPT
+   configuration are revalidated inline before the first launcher/browser/send
+   side effect.
+5. Start or verify the configured browser through the existing launcher:
+   `.claude/skills/discuss-with-gpt/launch-chrome.sh`. Select the applicable
+   canonical workflow; stage cardinality and topology belong to that workflow,
+   not this runbook.
 
 ## Prepare one turn
 

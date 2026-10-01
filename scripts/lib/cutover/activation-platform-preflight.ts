@@ -2,6 +2,7 @@ import { closeSync, existsSync, fsyncSync, mkdtempSync, openSync, realpathSync, 
 import os from 'node:os';
 import path from 'node:path';
 import { runProcessSync } from '../../kernel/subprocess.ts';
+import { SUPPORTED_NODE_MAJOR } from '../../toolchain/node-runtime-contract.mjs';
 
 export interface PlatformPreflightInput {
   repoRoot: string;
@@ -18,7 +19,7 @@ export interface PlatformPreflightResult {
   repoRoot: string;
   oldInstalledRevisionRoot: string;
   platform: 'linux';
-  nodeMajor: 22;
+  nodeMajor: number;
 }
 
 function requireCanonicalExistingDirectory(value: string, label: 'repo_root' | 'old_installed_revision_root'): string {
@@ -34,7 +35,7 @@ export function runActivationPlatformPreflight(input: PlatformPreflightInput): P
   if (platform !== 'linux') throw new Error('unsupported_platform');
   const version = input.nodeVersion ?? process.versions.node;
   const major = Number(version.split('.')[0]);
-  if (major !== 22) throw new Error('node22_required');
+  if (major !== SUPPORTED_NODE_MAJOR) throw new Error('node22_required');
   if (!existsSync(input.repoRoot) || !existsSync(input.oldInstalledRevisionRoot)) throw new Error('installed_revision_missing');
   const repoRoot = requireCanonicalExistingDirectory(input.repoRoot, 'repo_root');
   const oldInstalledRevisionRoot = requireCanonicalExistingDirectory(input.oldInstalledRevisionRoot, 'old_installed_revision_root');
@@ -65,7 +66,7 @@ export function runActivationPlatformPreflight(input: PlatformPreflightInput): P
     rmSync(probeRoot, { recursive: true, force: true });
   }
 
-  return { result: 'node22-linux-wsl2-preflight-pass', repoRoot, oldInstalledRevisionRoot, platform: 'linux', nodeMajor: 22 };
+  return { result: 'node22-linux-wsl2-preflight-pass', repoRoot, oldInstalledRevisionRoot, platform: 'linux', nodeMajor: SUPPORTED_NODE_MAJOR };
 }
 
 export function localHostId(): string {

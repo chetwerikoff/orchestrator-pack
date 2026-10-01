@@ -45,9 +45,9 @@ gh auth status
 Do not place tokens in repository files, shell history, tracked configuration, or
 Issue/PR text.
 
-## Node.js 22 and npm 10
+## Declared Node/npm runtime
 
-Use a Linux-native Node.js 22.x installation. Verify both tools before installing
+Use Linux-native Node and npm majors matching `scripts/toolchain/node-version.json`. Verify both tools before installing
 workspace dependencies:
 
 ```bash
@@ -55,7 +55,7 @@ node --version
 npm --version
 ```
 
-The repository contract is Node 22.x and npm 10.x. From the pack root:
+The repository runtime-major contract is declared in `scripts/toolchain/node-version.json`. From the pack root:
 
 ```bash
 npm ci --include=dev

@@ -1,4 +1,5 @@
 {
   "schemaVersion": 1,
-  "nodeMajor": 22
+  "nodeMajor": 24,
+  "npmMajor": 11
 }

@@ -17,7 +17,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { runProcess } from '#opk-kernel/subprocess';
 import {
   evaluateNodeRuntimeContract,
+  evaluateNpmRuntimeContract,
+  NODE_ENGINE_DECLARATION,
+  NPM_ENGINE_DECLARATION,
   parseNodeVersionMajor,
+  SUPPORTED_NODE_MAJOR,
+  SUPPORTED_NPM_MAJOR,
 } from './node-runtime-contract.mjs';
 import { checkTypeScriptRuntimePolicy } from './check-typescript-runtime-policy.ts';
 
@@ -40,7 +45,6 @@ function fixtureInventory(workflowFiles: readonly string[] = []): string {
     schemaVersion: 1,
     issue: '#900',
     canonicalRuntime: {
-      nodeMajor: 22,
       versionFile: 'scripts/toolchain/node-version.json',
       nativeArgvPrefix: ['--experimental-strip-types'],
     },
@@ -52,7 +56,7 @@ function fixtureInventory(workflowFiles: readonly string[] = []): string {
 }
 
 function makePolicyFixture(): string {
-  const root = tempRoot('opk-node22-policy-');
+  const root = tempRoot('opk-node-runtime-policy-');
   write(join(root, 'package.json'), `${JSON.stringify({
     type: 'module',
     scripts: {
@@ -60,15 +64,16 @@ function makePolicyFixture(): string {
       smoke: 'npm run check:node-major --silent && node --experimental-strip-types scripts/example.ts',
       test: 'vitest run scripts/example.test.ts',
     },
-    engines: { node: '22.x' },
+    engines: { node: NODE_ENGINE_DECLARATION, npm: NPM_ENGINE_DECLARATION },
   }, null, 2)}\n`);
-  write(join(root, 'scripts/toolchain/node-version.json'), '{"schemaVersion":1,"nodeMajor":22}\n');
+  write(join(root, 'scripts/toolchain/node-version.json'), `${JSON.stringify({ schemaVersion: 1, nodeMajor: SUPPORTED_NODE_MAJOR, npmMajor: SUPPORTED_NPM_MAJOR })}\n`);
   write(join(root, 'AGENTS.md'), [
     '# Worker rules',
-    '**Node 22-only TypeScript runtime:** use scripts/toolchain/node-version.json and package.json.engines.node.',
-    'Do not add Node 20 actions/setup-node declarations.',
+    '**Single-major TypeScript runtime:** use scripts/toolchain/node-version.json and package.json.engines.node.',
+    'Every actions/setup-node declaration must mirror the canonical runtime authority.',
     '',
   ].join('\n'));
+  write(join(root, '.mise.toml'), `[tools]\nnode = "${SUPPORTED_NODE_MAJOR}"\n`);
   write(join(root, 'scripts/toolchain/native-entrypoint-preflight.ts'), "export const ready: boolean = true;\n");
   write(join(root, 'tsconfig.base.json'), `${JSON.stringify({
     compilerOptions: {
@@ -153,35 +158,70 @@ afterEach(() => {
   for (const root of temporaryRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe('Node 22 runtime contract', () => {
-  it('parses semantic versions and rejects unsupported runtimes before effects', () => {
-    expect(parseNodeVersionMajor('v22.16.0')).toBe(22);
-    expect(() => parseNodeVersionMajor('twenty-two')).toThrow('OPK_NODE_RUNTIME_VERSION_MALFORMED');
+describe('single-major runtime contract', () => {
+  const nodeInput = (overrides: Partial<Parameters<typeof evaluateNodeRuntimeContract>[0]> = {}) => ({
+    versionFileMajor: SUPPORTED_NODE_MAJOR,
+    versionFileNpmMajor: SUPPORTED_NPM_MAJOR,
+    engineText: NODE_ENGINE_DECLARATION,
+    npmEngineText: NPM_ENGINE_DECLARATION,
+    actualVersion: `v${SUPPORTED_NODE_MAJOR}.0.0`,
+    ...overrides,
+  });
+
+  it('parses semantic versions and rejects unsupported Node runtimes before effects', () => {
+    expect(parseNodeVersionMajor(`v${SUPPORTED_NODE_MAJOR}.16.0`)).toBe(SUPPORTED_NODE_MAJOR);
+    expect(() => parseNodeVersionMajor('not-a-version')).toThrow('OPK_NODE_RUNTIME_VERSION_MALFORMED');
 
     let businessEffect = false;
     expect(() => {
-      evaluateNodeRuntimeContract({ versionFileMajor: 22, engineText: '22.x', actualVersion: 'v20.19.0' });
+      evaluateNodeRuntimeContract(nodeInput({ actualVersion: `v${SUPPORTED_NODE_MAJOR + 1}.0.0` }));
       businessEffect = true;
     }).toThrow('OPK_NODE_RUNTIME_UNSUPPORTED');
     expect(businessEffect).toBe(false);
   });
 
-  it('rejects malformed, non-22, and drifted declarations', () => {
-    expect(() => evaluateNodeRuntimeContract({
-      versionFileMajor: 22,
-      engineText: '>=22',
-      actualVersion: 'v22.16.0',
-    })).toThrow('OPK_NODE_RUNTIME_ENGINE_DECLARATION_MALFORMED');
-    expect(() => evaluateNodeRuntimeContract({
-      versionFileMajor: 24,
-      engineText: '24.x',
-      actualVersion: 'v24.1.0',
-    })).toThrow('OPK_NODE_RUNTIME_DECLARATION_UNSUPPORTED');
-    expect(() => evaluateNodeRuntimeContract({
-      versionFileMajor: 22,
-      engineText: '24.x',
-      actualVersion: 'v22.16.0',
-    })).toThrow('OPK_NODE_RUNTIME_DECLARATION_DRIFT');
+  it('rejects malformed, unsupported, and drifted declarations', () => {
+    expect(() => evaluateNodeRuntimeContract(nodeInput({ engineText: `>=${SUPPORTED_NODE_MAJOR}` })))
+      .toThrow('OPK_NODE_RUNTIME_ENGINE_DECLARATION_MALFORMED');
+    expect(() => evaluateNodeRuntimeContract(nodeInput({
+      versionFileMajor: SUPPORTED_NODE_MAJOR + 1,
+      engineText: `${SUPPORTED_NODE_MAJOR + 1}.x`,
+    }))).toThrow('OPK_NODE_RUNTIME_DECLARATION_UNSUPPORTED');
+    expect(() => evaluateNodeRuntimeContract(nodeInput({
+      engineText: `${SUPPORTED_NODE_MAJOR + 1}.x`,
+    }))).toThrow('OPK_NODE_RUNTIME_DECLARATION_DRIFT');
+    expect(() => evaluateNodeRuntimeContract(nodeInput({
+      npmEngineText: `>=${SUPPORTED_NPM_MAJOR}`,
+    }))).toThrow(
+      `package.json engines.npm must use an exact major contract such as "${NPM_ENGINE_DECLARATION}"`,
+    );
+  });
+
+  it('uses the npm authority in runtime diagnostics', () => {
+    expect(evaluateNpmRuntimeContract({
+      versionFileNpmMajor: SUPPORTED_NPM_MAJOR,
+      npmEngineText: NPM_ENGINE_DECLARATION,
+      actualVersion: `${SUPPORTED_NPM_MAJOR}.0.0`,
+    }).actualMajor).toBe(SUPPORTED_NPM_MAJOR);
+    expect(() => evaluateNpmRuntimeContract({
+      versionFileNpmMajor: SUPPORTED_NPM_MAJOR,
+      npmEngineText: NPM_ENGINE_DECLARATION,
+      actualVersion: `${SUPPORTED_NPM_MAJOR + 1}.0.0`,
+    })).toThrow('OPK_NPM_RUNTIME_UNSUPPORTED');
+    expect(() => evaluateNpmRuntimeContract({
+      versionFileNpmMajor: SUPPORTED_NPM_MAJOR,
+      npmEngineText: NPM_ENGINE_DECLARATION,
+      actualVersion: 'not-a-version',
+    })).toThrow(
+      `installed npm version must be a semantic version such as v${SUPPORTED_NPM_MAJOR}.0.0`,
+    );
+    expect(() => evaluateNpmRuntimeContract({
+      versionFileNpmMajor: SUPPORTED_NPM_MAJOR,
+      npmEngineText: `>=${SUPPORTED_NPM_MAJOR}`,
+      actualVersion: `${SUPPORTED_NPM_MAJOR}.0.0`,
+    })).toThrow(
+      `package.json engines.npm must use an exact major contract such as "${NPM_ENGINE_DECLARATION}"`,
+    );
   });
 });
 
@@ -205,7 +245,7 @@ describe('launch inventory and fail-closed policy', () => {
     const report = checkTypeScriptRuntimePolicy(makePolicyFixture());
     expect(report.violations).toEqual([]);
     expect(new Set(report.inventory.map((entry) => entry.classification))).toEqual(new Set([
-      'native-node-22',
+      'native-node',
       'powershell-bridge',
       'test-framework-owned',
     ]));
@@ -288,13 +328,96 @@ describe('launch inventory and fail-closed policy', () => {
       && violation.message.includes('preflight'))).toBe(true);
   });
 
-  it('requires the tracked worker rulebook to state the Node 22-only contract', () => {
+  it('requires the tracked worker rulebook to state the single-major runtime contract', () => {
     const root = makePolicyFixture();
     write(join(root, 'AGENTS.md'), '# Worker rules\n');
     const violations = checkTypeScriptRuntimePolicy(root).violations;
     expect(violations.some((violation) =>
       violation.rule === 'agent-runtime-contract'
       && violation.path === 'AGENTS.md')).toBe(true);
+  });
+
+  it('rejects a live supported-major restatement while accepting authority-driven prose', () => {
+    const root = makePolicyFixture();
+    write(join(root, 'scripts/live-runtime-policy.ts'), `export const nodeMajor = ${SUPPORTED_NODE_MAJOR};\n`);
+    let violations = checkTypeScriptRuntimePolicy(root).violations;
+    expect(violations.some((violation) =>
+      violation.rule === 'runtime-major-restatement'
+      && violation.path === 'scripts/live-runtime-policy.ts')).toBe(true);
+
+    write(join(root, 'scripts/live-runtime-policy.ts'),
+      "export const runtimeAuthority = 'scripts/toolchain/node-version.json';\n");
+    violations = checkTypeScriptRuntimePolicy(root).violations;
+    expect(violations.some((violation) =>
+      violation.rule === 'runtime-major-restatement'
+      && violation.path === 'scripts/live-runtime-policy.ts')).toBe(false);
+  });
+
+  it('includes extensionless shebang scripts under live plugin roots and retains exclusions', () => {
+    const root = makePolicyFixture();
+    const pluginPath = 'plugins/scope-guard/hooks/pre-commit';
+    const nonShebangPath = 'plugins/scope-guard/hooks/runtime-note';
+    const historicalPath = 'scripts/fixtures/historical-runtime-check';
+    write(join(root, pluginPath), `#!/usr/bin/env sh\n# Node ${SUPPORTED_NODE_MAJOR}\n`);
+    write(join(root, nonShebangPath), `# Node ${SUPPORTED_NODE_MAJOR}\n`);
+    write(join(root, historicalPath), `#!/usr/bin/env sh\n# Node ${SUPPORTED_NODE_MAJOR}\n`);
+    const violations = checkTypeScriptRuntimePolicy(root).violations.filter((violation) =>
+      violation.rule === 'runtime-major-restatement');
+    expect(violations.filter((violation) => violation.path === pluginPath)).toHaveLength(1);
+    expect(violations.some((violation) => violation.path === nonShebangPath)).toBe(false);
+    expect(violations.some((violation) => violation.path === historicalPath)).toBe(false);
+  });
+
+  it('rejects alias-bound and runtime-derived plain major restatements', () => {
+    const root = makePolicyFixture();
+    const path = 'scripts/live-runtime-gate.ts';
+    write(join(root, path), [
+      'const requiredNodeMajor = ' + SUPPORTED_NODE_MAJOR + ';',
+      'const requiredNpmMajor = ' + SUPPORTED_NPM_MAJOR + ';',
+      'const requiredRuntimeMajor = ' + SUPPORTED_NODE_MAJOR + ';',
+      'const version = process.version;',
+      "const major = Number(version.slice(1).split('.')[0]);",
+      'if (major !== ' + SUPPORTED_NODE_MAJOR + ') throw new Error(String(requiredNodeMajor));',
+      'void requiredNpmMajor;',
+      'void requiredRuntimeMajor;',
+      '',
+    ].join('\n'));
+    const violations = checkTypeScriptRuntimePolicy(root).violations.filter((violation) =>
+      violation.rule === 'runtime-major-restatement' && violation.path === path);
+    expect(new Set(violations.map((violation) => violation.line))).toEqual(new Set([1, 2, 3, 6]));
+  });
+
+  it('rejects a supported npm-major comparison in a root package script without rejecting engine mirrors', () => {
+    const root = makePolicyFixture();
+    const manifestPath = join(root, 'package.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
+    const scripts = (manifest.scripts ?? {}) as Record<string, string>;
+    manifest.scripts = {
+      ...scripts,
+      'check:npm-major': "npm --version | awk -F. '$1 == " + SUPPORTED_NPM_MAJOR
+        + " { ok = 1 } END { exit ok ? 0 : 1 }'",
+    };
+    write(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+    const violations = checkTypeScriptRuntimePolicy(root).violations.filter((violation) =>
+      violation.rule === 'runtime-major-restatement' && violation.path === 'package.json');
+    expect(violations).toHaveLength(1);
+
+    manifest.scripts = {
+      ...(manifest.scripts as Record<string, string>),
+      'check:npm-major': 'node scripts/toolchain/check-npm-major.mjs --quiet',
+    };
+    write(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+    expect(checkTypeScriptRuntimePolicy(root).violations.filter((violation) =>
+      violation.rule === 'runtime-major-restatement' && violation.path === 'package.json')).toEqual([]);
+  });
+
+  it('rejects supported-major restatements in live json producers', () => {
+    const root = makePolicyFixture();
+    write(join(root, 'scripts/json-producers/live-producer.ts'), `export const nodeMajor = ${SUPPORTED_NODE_MAJOR};\n`);
+    const violations = checkTypeScriptRuntimePolicy(root).violations;
+    expect(violations.some((violation) =>
+      violation.rule === 'runtime-major-restatement'
+      && violation.path === 'scripts/json-producers/live-producer.ts')).toBe(true);
   });
 
   it('rejects a direct workspace runtime dependency', () => {
@@ -308,7 +431,7 @@ describe('launch inventory and fail-closed policy', () => {
   it.each([
     ['missing', undefined],
     ['malformed', '{not-json}\n'],
-    ['drifted', '{"schemaVersion":1,"nodeMajor":24}\n'],
+    ['drifted', `${JSON.stringify({ schemaVersion: 1, nodeMajor: SUPPORTED_NODE_MAJOR + 1, npmMajor: SUPPORTED_NPM_MAJOR })}\n`],
   ])('rejects a %s canonical version file', (_label, content) => {
     const root = makePolicyFixture();
     const path = join(root, 'scripts/toolchain/node-version.json');
@@ -395,8 +518,7 @@ describe('launch inventory and fail-closed policy', () => {
     const violations = checkTypeScriptRuntimePolicy(root).violations;
     expect(violations.some((violation) =>
       violation.rule === 'workflow-node-version'
-      && violation.path === workflow
-      && violation.message.includes('with.node-version'))).toBe(true);
+      && violation.path === workflow)).toBe(true);
   });
 
   it.each([
@@ -435,11 +557,96 @@ describe('launch inventory and fail-closed policy', () => {
       && violation.message.includes('received 20'))).toBe(true);
   });
 
-  it('rejects node-version-file even when it points at the canonical declaration', () => {
+  it('accepts package.json as the authority-bound workflow version file', () => {
     const root = makePolicyFixture();
     const workflow = '.github/workflows/version-file.yml';
     write(join(root, workflow), [
       'name: version-file',
+      'jobs:',
+      '  test:',
+      '    steps:',
+      '      - uses: actions/setup-node@v4',
+      '        with:',
+      '          node-version-file: package.json',
+      '',
+    ].join('\n'));
+    const violations = checkTypeScriptRuntimePolicy(root).violations;
+    expect(violations.filter((violation) =>
+      violation.rule === 'workflow-node-version'
+      && violation.path === workflow)).toEqual([]);
+  });
+
+  it('binds the reusable Codex workflow to the orchestrator-pack checkout mirror', () => {
+    const root = makePolicyFixture();
+    const workflow = '.github/workflows/codex-pr-review.yml';
+    const writeWorkflow = (versionFile: string): void => {
+      write(join(root, workflow), [
+        'name: codex-pr-review',
+        'jobs:',
+        '  review:',
+        '    steps:',
+        '      - uses: actions/setup-node@v4',
+        '        with:',
+        `          node-version-file: ${versionFile}`,
+        '',
+      ].join('\n'));
+    };
+
+    writeWorkflow('package.json');
+    let violations = checkTypeScriptRuntimePolicy(root).violations;
+    expect(violations.some((violation) =>
+      violation.rule === 'workflow-node-version'
+      && violation.path === workflow)).toBe(true);
+
+    writeWorkflow('orchestrator-pack/package.json');
+    violations = checkTypeScriptRuntimePolicy(root).violations;
+    expect(violations.filter((violation) =>
+      violation.rule === 'workflow-node-version'
+      && violation.path === workflow)).toEqual([]);
+  });
+
+  it('rejects a current-major workflow literal as an independent live restatement', () => {
+    const root = makePolicyFixture();
+    const workflow = '.github/workflows/current-major.yml';
+    write(join(root, workflow), [
+      'name: current-major',
+      'jobs:',
+      '  test:',
+      '    steps:',
+      '      - uses: actions/setup-node@v4',
+      '        with:',
+      `          node-version: '${SUPPORTED_NODE_MAJOR}'`,
+      '',
+    ].join('\n'));
+    const violations = checkTypeScriptRuntimePolicy(root).violations;
+    expect(violations.some((violation) =>
+      violation.rule === 'workflow-node-version'
+      && violation.path === workflow)).toBe(true);
+    expect(violations.some((violation) =>
+      violation.rule === 'runtime-major-restatement'
+      && violation.path === workflow)).toBe(true);
+  });
+
+  it('accepts the trusted base package mirror and rejects arbitrary version files', () => {
+    const root = makePolicyFixture();
+    const trusted = '.github/workflows/scope-guard.yml';
+    write(join(root, trusted), [
+      'name: trusted',
+      'jobs:',
+      '  test:',
+      '    steps:',
+      '      - uses: actions/setup-node@v4',
+      '        with:',
+      '          node-version-file: trusted-scope-guard/package.json',
+      '',
+    ].join('\n'));
+    expect(checkTypeScriptRuntimePolicy(root).violations.filter((violation) =>
+      violation.rule === 'workflow-node-version'
+      && violation.path === trusted)).toEqual([]);
+
+    const bad = '.github/workflows/bad-version-file.yml';
+    write(join(root, bad), [
+      'name: bad-version-file',
       'jobs:',
       '  test:',
       '    steps:',
@@ -451,7 +658,7 @@ describe('launch inventory and fail-closed policy', () => {
     const violations = checkTypeScriptRuntimePolicy(root).violations;
     expect(violations.some((violation) =>
       violation.rule === 'workflow-node-version'
-      && violation.path === workflow
+      && violation.path === bad
       && violation.message.includes('node-version-file'))).toBe(true);
   });
 
@@ -480,7 +687,7 @@ describe('launch inventory and fail-closed policy', () => {
 
   it.skipIf(process.platform === 'win32').each([
     ['missing', undefined, 'OPK_NODE_RUNTIME_VERSION_FILE_MISSING'],
-    ['drifted', '{"schemaVersion":1,"nodeMajor":24}\n', 'OPK_NODE_RUNTIME_DECLARATION_DRIFT'],
+    ['drifted', `${JSON.stringify({ schemaVersion: 1, nodeMajor: SUPPORTED_NODE_MAJOR + 1, npmMajor: SUPPORTED_NPM_MAJOR })}\n`, 'OPK_NODE_RUNTIME_DECLARATION_DRIFT'],
   ])('fails a real plugin bin before effects when the canonical version file is %s', async (_label, content, code) => {
     const root = makeRealDeclareBinFixture();
     const versionFile = join(root, 'scripts/toolchain/node-version.json');
@@ -514,15 +721,15 @@ describe('launch inventory and fail-closed policy', () => {
   });
 
 describe('representative real entrypoints', () => {
-  it('executes toolchain, gate, supervised-child, and plugin-bin paths under Node 22', async () => {
+  it('executes toolchain, gate, supervised-child, and plugin-bin paths under the declared Node runtime', async () => {
     const nodeCheck = await runNode(['scripts/toolchain/check-node-major.mjs']);
     expect(nodeCheck.ok, nodeCheck.stderr).toBe(true);
-    expect(nodeCheck.stdout).toContain('Node.js 22.');
+    expect(nodeCheck.stdout).toContain(`Node.js ${SUPPORTED_NODE_MAJOR}.`);
 
     const smoke = await runNode(['--experimental-strip-types', 'scripts/typescript-smoke.ts']);
     expect(smoke.ok, smoke.stderr).toBe(true);
 
-    const gateRoot = tempRoot('opk-node22-gate-');
+    const gateRoot = tempRoot('opk-node-runtime-gate-');
     write(join(gateRoot, 'scripts/check-example.ps1'), "Write-Output 'ok'\n");
     write(join(gateRoot, 'scripts/example.ps1'), "Write-Output 'example'\n");
     write(join(gateRoot, 'scripts/verify.ps1'), [
@@ -586,8 +793,8 @@ describe('representative real entrypoints', () => {
     expect(plugin.stderr).not.toContain('tsx');
   }, 60_000);
 
-  it('executes the sanctioned-worker-kill TypeScript producer through Node 22', async () => {
-    const outputRoot = tempRoot('opk-node22-kill-record-');
+  it('executes the sanctioned-worker-kill TypeScript producer through the declared Node runtime', async () => {
+    const outputRoot = tempRoot('opk-node-runtime-kill-record-');
     const artifact = join(outputRoot, 'sanctioned-worker-kills.json');
     const result = await runNode([
       '--experimental-strip-types',

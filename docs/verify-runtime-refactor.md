@@ -1,6 +1,6 @@
 # Verify runtime refactor (Issue #488)
 
-This document now records the terminal Node 22 verification state. The historical
+This document now records the terminal native-Node verification state. The historical
 PowerShell/Pester migration is complete; the removed wrappers are not active
 verification or compatibility entrypoints.
 

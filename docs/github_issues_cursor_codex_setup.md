@@ -47,7 +47,7 @@ codex --version
 gh auth status
 ```
 
-Node.js 22.x and npm 10.x are required. Install workspace dependencies from the
+Use the Node/npm majors declared in `scripts/toolchain/node-version.json`. Install workspace dependencies from the
 frozen lockfile:
 
 ```bash
