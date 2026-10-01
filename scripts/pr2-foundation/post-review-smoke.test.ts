@@ -14,10 +14,11 @@ describe('Issue #2250 retire scheduler post-review smoke reconciliation', () => 
     expect(scheduler).toContain('evaluateHeadReadyForReview({');
   });
 
-  it('keeps the separate manager-controlled independent-smoke handoff without a scheduler starter', () => {
+  it('keeps required post-review smoke in the same manager without a scheduler starter', () => {
     const skill = readFileSync(path.resolve('.cursor/skills/execute-issue-with-gpt/SKILL.md'), 'utf8');
-    expect(skill).toContain('independent-smoke');
-    expect(skill).toContain('supervised local worker');
+    expect(skill).toContain('execute:smoke');
+    expect(skill).toContain('temporary detached Git worktree');
+    expect(skill).not.toContain('independent-smoke');
     expect(skill).not.toContain('scheduler post-review smoke');
   });
 });
