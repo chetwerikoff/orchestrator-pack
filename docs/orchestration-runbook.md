@@ -1,569 +1,204 @@
 # Orchestration runbook
 
-This is the shared, model-neutral operating guide for supervised task creation and implementation in `orchestrator-pack`. Claude, Codex, or another compliant executor uses the same lifecycle; model-private memory, historical Gists, terminal layout and local helper scripts are not lifecycle authority.
-
-The live GitHub Issue remains the task specification. `AGENTS.md`, current repository state, current GitHub state, the installed version-matched Orca orchestration guide, and the landed PACK runtime/lifecycle authorities remain authoritative where this runbook points to them.
+This is the shared, model-neutral operating guide for supervised work in
+`orchestrator-pack`. The live GitHub Issue is the task specification. `AGENTS.md`,
+current repository/GitHub state, installed version-matched Orca guidance, and the
+owners named below remain authoritative.
 
 ## Mandatory read order
 
-Before acting as an **orchestrator** or **manager**:
+Before acting as an orchestrator or manager:
 
-1. read live `AGENTS.md`;
-2. read this runbook;
-3. read the binding live Issue/task;
-4. read task-authoring/tiering policy when creating or revising an Issue;
-5. when Orca is involved, read the installed version-matched Orca orchestration guide;
-6. re-read current assignment/runtime/PR/CI/review facts immediately before effects.
+1. Read live `AGENTS.md`.
+2. Read this runbook.
+3. Read the binding live Issue/task.
+4. Read task-authoring/tiering policy when creating or revising an Issue.
+5. When Orca is involved, read the installed version-matched Orca orchestration guide.
+6. Re-read the exact current assignment/runtime/PR/CI/review facts immediately before effects.
+
+Workers follow the `## Worker lifecycle` section before their first side effect.
 
 ## Roles and completion
 
 ### Orchestrator
 
-The orchestrator is the top-level coordinator. It owns ambiguity, recovery, reassignment, termination, and architect/operator escalation. It observes authoritative state and does not infer completion from worker prose or terminal appearance.
+The orchestrator owns top-level ambiguity, recovery, reassignment, termination, and
+architect/operator escalation. It acts from authoritative state and never infers
+completion from prose, terminal appearance, process existence, or silence.
 
 ### Manager
 
-A manager owns the complete task-authoring workflow. For create-Issue work, the
-single procedural authority is
-`.cursor/skills/create-issue-draft/SKILL.md`: read the live Issue/comments,
-apply the universal tier rubric from `docs/tiering.md`, launch the required
-review comments, obtain author dispositions for findings, run the existing
-content floor, apply `spec-review:accepted` only when its prerequisites hold,
-and read the accepted GitHub state back before completing the manager role.
+A manager owns the complete manager workflow, not one LLM turn. Child
+author/reviewer/lens completion never settles the parent manager Task.
 
-Child author/reviewer/lens completion never settles the parent manager Task. A
-single LLM turn is never a Dispatch, and Browser-GPT transport output/envelopes
-are never substitutes for the GitHub comments/body/label owned by the
-create-Issue skill.
+Create-Issue procedure is owned by `.cursor/skills/create-issue-draft/SKILL.md`.
+Execute-Issue multi-turn procedure is owned by
+`docs/chatgpt-task-execution-runbook.md`; one-turn Browser-GPT mechanics are owned by
+`docs/browser-gpt-turn-runbook.md`.
 
-Under the explicit `execute-issue-with-gpt` workflow, a manager may instead own
-one resumable external GPT Issue-execution session through verified handoff. The
-manager still does **not** supervise pack coding workers: the supervisor remains
-the top-level lifecycle/recovery owner and restores execution continuity when a
-manager cannot continue. Work returns to a manager only when the existing
-authoritative Browser-GPT evidence is sufficient to identify the owned
-session/turn without guessing. The multi-turn execution loop and reusable
-manager-owned PR-review convergence phase are owned by
-`docs/chatgpt-task-execution-runbook.md`; one-turn browser mechanics remain owned
-by `docs/browser-gpt-turn-runbook.md` and are not duplicated here.
+For manager-controlled Browser-GPT implementation, settled review produces a
+manager whole-role Task/Dispatch handoff with the exact Issue/PR/head/CI/review facts.
+The same manager Dispatch remains nonterminal through settled review, independent
+smoke, and fixer return. The orchestrator launches/reuses a local supervised worker
+as independent-smoke parent. The orchestrator does not wait for scheduler
+`ready_for_review`; it uses the existing supervised local-worker path. A proved
+smoke failure returns to that local worker for a fix and explicit smoke run without
+reopening the settled pack-review stage.
 
-For a manager-controlled Browser-GPT implementation, manager completion is an
-intermediate whole-role handoff, not overall task completion. The required path
-is:
-
-```text
-manager-controlled Browser-GPT implementation
--> current Issue-bound PR/head + required CI green
--> manager runs canonical GPT pack-review convergence
--> manager whole-role Task/Dispatch handoff
-   (exact Issue/PR/head/CI/review facts; next action = independent smoke)
--> orchestrator launches/reuses a local supervised worker as independent-smoke parent
--> local worker runs worker-smoke-run --smoke-actor independent on the checked-out PR head
--> independent finding: local worker fixes to a new head + fresh independent smoke
--> same-PR independent-smoke PASS + current-head CI/completion verification
--> VERIFIED_COMPLETE
-```
-
-The manager starts pack review directly through
-`npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>` and the existing
-runner authority. It does not manufacture `ready_for_review`, WorkerStatus,
-WorkerReport, PR/session scheduler correlation, or a scheduler candidate, and it
-does not run synthetic worker-owned smoke merely to satisfy ordinary
-coding-worker admission. The scheduler's ordinary `liveCandidates()` path
-remains unchanged.
-
-After the settled-review handoff, the orchestrator does not wait for scheduler
-`ready_for_review`. It uses the existing supervised local-worker mechanism for
-the independent-smoke parent; no new work class or smoke supervisor is created.
-That worker prepares the exact current worktree and prerequisites and uses the
-existing independent-smoke authority. If independent smoke finds a defect, the
-local worker owns the fix and an explicit smoke execution on the corrected head. The completed
-pack-review stage remains completed and is not reopened.
+The manager starts pack review with
+`npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>` and never manufactures
+scheduler, WorkerStatus, WorkerReport, or review-candidate state.
 
 ### Worker
 
-A worker owns the bounded implementation workflow:
-
-```text
-read live Issue/rules
--> implement scoped work
--> required local verification
--> create/update PR and exact head
--> required pack-review stage (logical rounds: T1=1, T2=1, T3=2)
--> review finding: worker fixes or explicitly resolves/rejects findings
--> if T3 round 1 settled: required round 2 (same head is allowed)
--> durable reviewStageComplete
--> existing worker/orchestrator PR review-settled handoff launches supervised local independent smoke
--> smoke worker checks out the PR head, runs the Issue-declared scenarios, publishes v1 report
--> first FAIL/BLOCKED: worker fix + explicit independent smoke execution
--> one PASS covers subsequent PR heads; required CI remains current-head bound
--> completion
--> worker_done
-```
-
-Ordinary coding workers no longer run a redundant worker-owned pre-review
-smoke. The existing PR-created/review-complete worker/orchestrator handoff
-launches the supervised local independent smoke worker after pack-review
-settlement. The manager-controlled Browser-GPT path retains its separate
-manager-to-supervisor handoff and the same existing independent worker.
-Neither handoff adds a scheduler smoke starter, watcher, queue, registry,
-retry protocol, or new worker category.
-
-Required CI remains exact-current-head evidence. One successful
-`pack-worker-smoke-report/v1` PASS on the PR is sufficient across later
-heads, irrespective of the PASS report head or publisher. A first
-FAIL/BLOCKED leaves readiness unsatisfied; a substantive worker/fixer
-correction can lead to an **explicit** subsequent smoke run, not an
-automatic retry. The independent worker runs the Issue's scenarios against
-its checked-out PR head and retains the unchanged report schema and
-secret redaction. Independence belongs to that handoff, not an actor
-field or readiness filter.
-
-Pack-review is a PR/task-cycle obligation with logical-round caps T1=1,
-T2=1, T3=2, and three independent sources per required GPT round. A T3
-clean first round does not complete the stage. Once required rounds and
-findings settle, `reviewStageComplete` prevents later commits, smoke
-fixes, or CI-only changes from reopening required review. Later heads
-need current-head CI but not another smoke PASS.
+A worker owns one bounded implementation through scoped changes, local verification,
+PR/head publication, required CI, required pack review, review fixes, the existing
+review-settled smoke handoff, and truthful completion. Detailed obligations live in
+`## Worker lifecycle`; do not restate them elsewhere.
 
 ### Reconciler
 
-The reconciler is deterministic policy/code and returns only:
+The reconciler returns only:
 
 ```text
 noop | continue | orchestrator_required
 ```
 
-It never sends `worker_done`, never terminates a live attempt, and never becomes a second sender.
+It never sends `worker_done`, never terminates a live attempt, and never becomes a
+second sender.
 
 ### Architect
 
-The architect is an expensive one-shot architecture/specification role, not a fleet monitor, scheduler, retry service, or recovery daemon.
+The architect is a one-shot architecture/specification role. It is not a fleet
+observer, scheduler, retry service, or recovery daemon.
 
 ## Executor profiles by role, tier, and smoke complexity
 
-Executor selection for new manager/worker work and smoke work is a stable work-class-to-profile rule. It does not change tier classification, WorkerAssignment, RuntimeAdapter, browser-chat lifecycle, scheduler, recovery, review, or smoke authorities.
-
-Immediately before starting new work, resolve exactly one executor profile from the work class:
-
-```text
-manager work         -> manager executor profile
-T1 worker            -> T1 executor profile
-T2 worker            -> T2 executor profile
-T3 worker            -> T3 executor profile
-routine smoke work   -> routine-smoke executor profile
-complex smoke work   -> complex-smoke executor profile
-```
-
-Each profile keeps the existing operator-local `agent`, `model`, and `effort` values under these stable tracked names:
+`scripts/executor-profile-policy.ts` is the sole semantic owner of executor
+selection, validation, translation, route admission, and refusal semantics. Resolve
+one profile immediately before new work:
 
 ```text
-PACK_EXECUTOR_MANAGER_AGENT
-PACK_EXECUTOR_MANAGER_MODEL
-PACK_EXECUTOR_MANAGER_EFFORT
-
-PACK_EXECUTOR_T1_AGENT
-PACK_EXECUTOR_T1_MODEL
-PACK_EXECUTOR_T1_EFFORT
-
-PACK_EXECUTOR_T2_AGENT
-PACK_EXECUTOR_T2_MODEL
-PACK_EXECUTOR_T2_EFFORT
-
-PACK_EXECUTOR_T3_AGENT
-PACK_EXECUTOR_T3_MODEL
-PACK_EXECUTOR_T3_EFFORT
-
-PACK_EXECUTOR_SMOKE_ROUTINE_AGENT
-PACK_EXECUTOR_SMOKE_ROUTINE_MODEL
-PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT
-
-PACK_EXECUTOR_SMOKE_COMPLEX_AGENT
-PACK_EXECUTOR_SMOKE_COMPLEX_MODEL
-PACK_EXECUTOR_SMOKE_COMPLEX_EFFORT
+manager -> manager profile
+T1 worker -> T1 profile
+T2 worker -> T2 profile
+T3 worker -> T3 profile
+routine smoke -> routine-smoke profile
+complex smoke -> complex-smoke profile
 ```
 
-`scripts/executor-profile-policy.ts` is the single tracked semantic owner for those
-six triples. Do not duplicate its descriptor table, validation rules, translation,
-or refusal semantics in another launcher. The policy has exactly two logical
-executor families for these live profiles:
+Tracked profile names follow one pattern:
+`PACK_EXECUTOR_{MANAGER|T1|T2|T3|SMOKE_ROUTINE|SMOKE_COMPLEX}_{AGENT|MODEL|EFFORT}`.
+Concrete model/effort values remain operator-local and never enter tracked task or
+PR metadata.
 
-```text
-task agent token   cursor-agent -> Cursor
-smoke agent token  cursor       -> Cursor
-smoke executable                -> existing agent surface
-
-task agent token   opencode     -> OpenCode
-smoke agent token  opencode     -> OpenCode
-```
-
-Concrete model and effort values remain machine/operator-local and must stay out of
-tracked documentation, Task metadata, launch output, and PR metadata. The launching
-process may provide live defaults; the task assistant and smoke launcher overlay
-the machine-local executor profile store, with stored fenced keys winning over
-live values. The lower-level
-`supervised-worker-start` boundary remains profile-neutral. Missing, empty,
-malformed, unsupported, unavailable, or non-admissible profile state fails closed
-before the first governed effect. Do not load `.env` from a worktree or
-repository root, add a second registry, compatibility token, fallback family, or
-heuristic selector.
-
-Model applicability and route admission are separate checks. Cursor catalog
-applicability comes from `cursor-agent --list-models`; Cursor catalog identity and
-spawn `--model` are different strings: admission continues to use the opaque
-`model-effort` identity, while the translator emits a parameterized model with
-`context`, `reasoning`, and `fast=false` when the operator sets
-`PACK_EXECUTOR_CURSOR_CONTEXT`, and preserves the legacy spawn composition when it
-is unset. The context window is operator-selected and never inherited from host
-CLI state. OpenCode catalog applicability comes from `opencode models`; the
-selected model and effort are carried together through an invocation-local agent
-definition in `OPENCODE_CONFIG_CONTENT`. The top-level spawned command uses
-`--agent` only, never `--model` or `--variant`.
-
-For OpenCode exact-terminal work, early `resolveProfile` proves only selector,
-top-level `--agent` syntax, and catalog route evidence. After worktree preparation,
-contextual finalization runs in that exact path before terminal/Dispatch/start effects.
-It requires a no-write-qualified `debug config`/`debug agent` observation, a
-non-empty explicit `default_agent`, preservation of baseline agent semantics under
-the selected model/variant overlay, and an isolated child-local XDG state root.
-Missing proof returns `executor_effort_channel_unavailable`; launcher-cwd evidence
-and implicit default ordering are never substitutes.
-
-Cursor route admissibility is a static code-owned compatibility fact and therefore
-must not gain a fresh route-capability probe. OpenCode is semantically recognized,
-but a task or smoke child is admitted only after fresh non-mutating evidence from the
-spawned top-level surface proves the route carries both values: top-level `opencode --help`
-(proving `--agent` support on stdout+stderr), `opencode models --verbose` (proving the effort is an available variant), and `opencode debug agent <pack-agent-name>` run with the inline definition (proving the resolved agent carries both). Probe surface must equal spawn surface; probing a subcommand the pack does not spawn is never route evidence. Package installation alone is not route evidence. When no such route is proven, the selected OpenCode profile remains a truthful external gate rather than falling back to Cursor, dropping effort, or inventing an unsupported form.
-
-Both edges capture stdout and stderr for every capability probe; a tool that prints capability output to stderr is not read as absent capability. The model-catalog read continues to consume stdout only, matching the observed `opencode models` stream split.
-
-The shared pre-effect route vocabulary is closed:
+Supported executor families are Cursor and OpenCode. Admission must prove the
+selected model/effort route through the policy owner and fail closed with the closed
+vocabulary:
 
 ```text
 executor_route_unavailable
 executor_effort_channel_unavailable
-executor_route_mismatch        # task caller selected a conflicting startMode
+executor_route_mismatch
 ```
 
-`executor_route_mismatch` is task-only. Task route admission is owned by the
-production `LaunchDependencies.resolveProfile` edge inside the assistant's
-`executor_profile` checkpoint. That edge receives caller `startMode`, validates the
-catalog/capability route, and returns one admitted route before manager Task
-creation, worktree creation, terminal spawn, or supervised start. The outer
-assistant consumes that decision and does not re-decide it. Caller intent is never
-a bypass.
-
-Smoke uses the same semantic policy and the first two refusal codes for both
-routine and complex profiles before child spawn. Firefighter work keeps the
-existing mapping to a routine or complex smoke profile; there is no
-`PACK_EXECUTOR_FIREFIGHTER_*` namespace.
-
-A structured child environment may be added to the RuntimeAdapter spawn contract
-only when fresh installed evidence proves an admitted executor route actually needs
-it. Likewise, an OpenCode provider form may be added to the lower-level supervised
-start only when fresh installed Orca/OpenCode evidence proves the exact request.
-Without that evidence those conditional surfaces remain unchanged; docs do not
-invent capability for them. The current OpenCode inline agent definition is carried as an `OPENCODE_CONFIG_CONTENT` prefix in the composed `opencode --agent <pack-agent-name>` command string on the governed spawn path, so the four conditional runtime files (`scripts/runtime/contracts.ts`, `scripts/orca-runtime/adapter.ts`, `scripts/orca-runtime/task-adapter.ts`, `scripts/orca-runtime/task-adapter.test.ts`) remain byte-for-byte unchanged.
+`executor_route_mismatch` is task-only. Do not add a fallback family, compatibility
+token, second registry, heuristic selector, or silently drop effort. Firefighter
+work reuses the routine/complex smoke profiles.
 
 ### Supervised Task launch assistant
 
-For new **manager, T1, T2, and T3** work that uses the supervised local lifecycle,
-the canonical composition point is:
+The canonical composition point for supervised manager/T1/T2/T3 starts is
+`scripts/pr2-foundation/supervised-task-launch-assistant.ts`. It owns internal
+double-null timing, selector resolution, ff-only refresh steps, structured envelopes,
+and provider-recovery internals. Agents preserve only the obligations below.
 
-```text
-scripts/pr2-foundation/supervised-task-launch-assistant.ts
-```
+Before effects, pass the assistant's repository/runtime/profile preflight. A fresh
+worktree must have supported setup proof; a reused worktree must have supported
+reuse proof. For manager continuation, the exact Run/Task and caller-supplied
+worktree selector must identify one clean manager-local non-main branch; after those
+identity checks, refresh it from `origin/main` only with the assistant's ff-only
+path. Never reset, rebase, merge, force-repair, replace the worktree, or mutate the
+shared primary checkout as recovery.
 
-It is a continuation-safe launch assistant, not a lifecycle authority. It owns
-only the shared mechanical sequence: Node/repository preflight; the production
-profile/route admission edge; manager Run/Task admission; supported worktree
-setup/reuse proof; at most one fresh RuntimeAdapter-created internal terminal;
-two fresh-start Dispatch absence witnesses; launch timing/diagnostics; and the
-call to the existing supervised-start boundary. It creates no durable retry
-state, queue, lease, WorkerReport/WorkerStatus, scheduler, or second assignment
-store.
-
-The calling shell first exports the matching stable profile names. The profile
-checkpoint validates the closed executor family, executor-specific model catalog,
-model/effort request channel, caller `startMode` when present, and child inheritance
-before any manager Task or runtime effect. The returned admitted route is attempt
-state: later recovery reuses it and never re-reads mutable live profile values.
-
-Invoke through the canonical Node 22 wrapper. Exactly one of `--worktree` (a
-supported proven-reuse target) or `--worktree-name` (a fresh setup path) is
-required by the assistant.
-
-T1:
+Canonical worker launch:
 
 ```bash
 node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
   --script scripts/pr2-foundation/supervised-task-launch-assistant.ts -- \
-  --repository <owner/repo> --work-class t1 --issue-number <N> \
+  --repository <owner/repo> --work-class <t1|t2|t3> --issue-number <N> \
   --task <task-id> --worktree-name <worktree-name> --base-branch <base-ref>
 ```
 
-T2:
+Manager with an existing Task uses `--work-class manager --run <run-id> --task
+<task-id> --worktree <worktree-selector>`. Manager creation uses `--work-class
+manager --run <run-id> --manager-brief <caller-serialized-brief> --worktree-name
+<name> --base-branch origin/main`.
 
-```bash
-node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
-  --script scripts/pr2-foundation/supervised-task-launch-assistant.ts -- \
-  --repository <owner/repo> --work-class t2 --issue-number <N> \
-  --task <task-id> --worktree-name <worktree-name> --base-branch <base-ref>
-```
-
-T3:
-
-```bash
-node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
-  --script scripts/pr2-foundation/supervised-task-launch-assistant.ts -- \
-  --repository <owner/repo> --work-class t3 --issue-number <N> \
-  --task <task-id> --worktree-name <worktree-name> --base-branch <base-ref>
-```
-
-Manager with an existing Task:
-
-```bash
-node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
-  --script scripts/pr2-foundation/supervised-task-launch-assistant.ts -- \
-  --repository <owner/repo> --work-class manager --run <run-id> \
-  [--issue-number <N>] --task <task-id> --worktree <worktree-selector>
-```
-
-Manager with one caller-serialized brief:
-
-```bash
-manager_brief='<caller-serialized manager Task spec>'
-node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
-  --script scripts/pr2-foundation/supervised-task-launch-assistant.ts -- \
-  --repository <owner/repo> --work-class manager --run <run-id> \
-  [--issue-number <N>] --manager-brief "$manager_brief" \
-  --worktree-name <worktree-name> --base-branch origin/main
-```
-
-Every manager invocation supplies the exact current `--run`. Before effects, the
-assistant requires the installed read-only Run authority to agree with that id.
-For `--task`, it also requires exactly one membership witness for that Task in
-that exact Run. For `--manager-brief`, exactly one Orca Task-create mutation is
-allowed and success requires a non-empty authoritative Task id/status. A
-provider outcome-unknown Task-create carrying a request id returns
-`outcome=continue` with the legal same-mutation replay identity; it does not
-authorize a second fresh brief.
-
-For every genuinely fresh known Task, `dispatch-show --task <task-id> --json`
-must prove exact `dispatch === null` **twice**: once before worktree/terminal
-effects and again immediately before supervised-start. Any present, malformed,
-unknown, or competing Dispatch is a continuation/reconciliation result, never
-permission for another start. Provider-identified recovery of an already attempted
-worker-start is different from a fresh start: execute only the PACK-composed
-`nextAction.command`, using the same attempt-bound route/profile resources and exact
-provider request id. The assistant drops provider-authored recovery commands and
-does not re-read mutable profile state. Do not create a new terminal or re-run the
-fresh double-null admission while that mutation remains unresolved.
-
-Worktree path/head existence is not setup readiness. A fresh worktree proceeds
-only from the supported same-invocation setup-complete witness; reuse proceeds
-only from a supported proven-reuse witness. Missing or unknown setup evidence is
-`outcome=continue`.
-
-For manager work, the next-turn boundary is stricter. A fresh manager worktree
-uses a distinct manager-local branch initialized from `origin/main`; the
-manager `--worktree-name` path therefore supplies `--base-branch origin/main`.
-For an existing manager Task, the already-admitted exact Run/Task plus the exact
-caller-supplied `--worktree` selector form the workflow binding. The assistant
-first resolves that selector through `orca worktree show`; missing or
-mismatched id/path performs zero git commands. After that observation, only
-read-only repository/path identity queries may run before fetch: the exact
-worktree root, `origin` repository identity, and linked-worktree/branch
-registry must identify one non-`main`, non-shared local branch at that exact
-path.
-
-Only after those checks does the manager boundary fetch `origin/main`, resolve
-one exact fetched commit, check clean status and ancestry, and fast-forward that
-local branch with an ff-only update. Already-equal is success with no local
-branch/index/worktree update after fetch. Dirty, divergent/local-commit,
-identity, fetch/ref-resolution, or fast-forward failure returns
-`outcome=continue` before terminal/manager start; no reset, rebase, merge
-commit, force repair, replacement worktree, or shared-primary mutation is
-attempted. Near-simultaneous resumes need no new coordinator: ordinary git
-serialization allows one required fast-forward while the peer observes equality
-or fails closed safely. The primary checkout and implementation PR worktree are
-never refresh targets.
-
-This refresh is a next-turn operation only. A manager turn that has already
-started, including a Browser-GPT execution turn or an already-started create-Issue review
-turn, keeps its loaded files until its next admitted boundary and is never
-refreshed mid-turn.
-
-The exact-terminal boundary remains machine-enforced through structured contracts:
-one RuntimeAdapter-created worker with provenance `internal`, exact
-`{runtime,id,generation}`, exact target workspace, and `idle` RuntimeAdapter
-liveness. The assistant does **not** scrape raw screen/title/preview/composer text.
-OpenCode admission must therefore come from the fresh installed capability
-surfaces named by the policy, not a guessed screen/TUI state. Config/Agent loading
-is not presumed read-only: exact-worktree before/after no-write evidence is required
-before those observations can block or admit a route. A known contrary observation
-is still blocking.
-
-The assistant emits one structured result. `outcome=ready` means only that the
-existing `runSupervisedWorkerStart` returned `ready_and_assignment_bound`; the
-assistant projects a small PACK-owned success summary rather than returning the raw
-provider receipt. `outcome=continue` reports the first failed/absent checkpoint,
-known safe resource identities, responsible actor, bounded evidence, exact legal
-`nextAction`, and assistant-entry/per-stage timings. Raw provider receipts,
-residual-resource payloads, free-form provider messages/next steps, and provider
-recovery commands are internal-only and are not serialized outward. Concrete
-model/effort values may appear only where they are required inside the sole
-attempt-bound retry command. Both ready and handled continue exit zero; malformed
-invocation or an internal failure that cannot emit the structured envelope exits
-non-zero. The helper never claims to measure time before its own entry.
+Launch/status/`nextAction` handling is owned once in `## Deterministic reconciliation`.
 
 ## Supervised initial delivery and WorkerAssignment
 
-This section applies only to executor paths that use the existing Orca-managed supervised worker lifecycle. Standalone GPT/Browser-GPT implementation work follows `docs/chat-executor-rules.md` and `docs/browser-gpt-turn-runbook.md` instead and does not create an Orca WorkerAssignment.
+Supervised starts finish through
+`scripts/pr2-foundation/supervised-worker-start.ts::runSupervisedWorkerStart`.
+Publish a local WorkerAssignment only after Orca returns a proven `ready` receipt
+with both Task and Dispatch identity. Failed, malformed, or outcome-unknown startup
+does not publish a successful assignment.
 
-For new manager/T1/T2/T3 supervised starts, operators invoke the supervised Task
-launch assistant above rather than hand-compose terminal/start sequencing. The
-assistant's successful final edge is still the existing PACK boundary:
+When a manager starts before an Issue exists, store the assignment by its canonical
+Task/Dispatch deliverable identity and attach the positive Issue later to that same
+record. Recognized `issue-<N>` stores migrate only through the existing assignment
+store path; never create an alias, dual lookup, or second writer.
 
-```text
-scripts/pr2-foundation/supervised-worker-start.ts::runSupervisedWorkerStart
-```
-
-That lower-level boundary calls supported Orca `orchestration worker-start` with structured JSON output. It publishes a current local WorkerAssignment only after Orca returns a proven `ready` receipt with both `taskId` and `dispatchId`. Failed, malformed, or outcome-unknown startup does not create a successful assignment. A structurally valid Orca error envelope with a non-empty `error.code` remains non-success. Structured provider mutation-recovery data may be retained internally by this lower-level boundary, but the launch assistant exports only safe request/Dispatch identity and its own attempt-bound retry command; provider-authored recovery commands and raw receipts do not become caller authority.
-
-`--issue-number` may be omitted when the GitHub Issue is not yet available for manager authoring. The assignment is then stored under the one canonical deliverable key derived from `(taskId, dispatchId)` with no Issue metadata. After publication, attach the positive Issue number to that same record; the canonical key, assignment id, and generation do not change. Local supervised start and remote registration require exactly one explicit `--role worker|orchestrator` before any Orca or store mutation. Recognized pre-cutover `issue-<N>` stores are migrated once through the existing assignment lock and atomic replace path after an exact sibling backup; unknown keys remain untrusted. Do not invent an `issue-<N>` alias, dual lookup, or second writer.
-
-The assistant consumes `PACK_EXECUTOR_*` only during pre-effect profile/route validation.
-`supervised-worker-start` itself remains executor-profile neutral unless a later
-freshly evidenced conditional provider extension explicitly changes that boundary;
-it owns successful Orca receipt/placement/assignment publication semantics only.
-
-The minimum current assignment authority is:
-
-```text
-scripts/lib/worker-assignment-store.ts
-```
-
-A durable assignment contains only persistence-safe logical facts: project/repository, optional published Issue metadata, Task, assignment id, monotonically advancing assignment generation, `kind`, `provider`, provider lifecycle `bindingKey`, optional registration `role` (`worker` or `orchestrator`), and timestamp. For current local Orca workers the binding key is the Orca **Dispatch id**. The sole live assignment-store key is derived from the stable `(taskId, dispatchId)` deliverable identity. A recognized pre-#1441 `issue-<N>` store is read as the canonical key census and migrated once on the next mutation after an exact backup; it is not dual-resolved and not repaired if keys are unknown or rows are corrupt. New publications persist the caller-supplied role; migrated pre-role rows keep `role` absent.
-
-For unresolved **exact terminal or producer-backed gone** observations, the existing assignment row may carry a bounded consecutive `deadObservationTicks` count. After three such ticks without terminal-mail settlement, reconciliation gives up and retires the exact-current assignment through `retireCurrentWorkerAssignment`; a still-observable terminal gets its existing at-most-once notification attempt before the give-up decision. Successful or duplicate ledger proof still permits immediate retirement. Exact active evidence clears the count; generic unknown, malformed, contradictory, stale, unsupported, or transport-failed evidence never advances it. Bounded give-up is reported separately from settled mail, and operator-primary protection remains in force.
-
-It must never contain raw `RuntimeWorkerIdentity`, runtime id/generation, terminal handle, `RuntimeObservationToken`, output, prompt/reply, workspace path, title, PID, or adapter-private fields.
-
-This minimum authority lands in #1420 so production supervision does not wait for the rest of #1416. #1416 remains the owner of the broader local/remote WorkerReport/WorkerStatus lifecycle, remote ownership, ownership switching/history and associated semantics. It must consume/extend this assignment authority rather than introduce another store.
+`scripts/lib/worker-assignment-store.ts` owns durable record fields and
+dead-observation mechanics. Agent-facing publication, migration, and exact-binding
+rules stay here; the field inventory does not.
 
 ## Exact local runtime binding
 
-Runtime effects remain behind `RuntimeAdapter`.
+Runtime effects require the registered RuntimeAdapter to resolve the current
+assignment to an exact adapter-produced `{runtime,id,generation}` identity in
+memory. Missing, stale, ambiguous, remote/not-applicable, unsupported, reused, or
+mismatched evidence fails closed and performs no routine effect.
 
-For Orca, the assignment `dispatchId` is resolved through the adapter's `resolveAssignmentWorker` seam. The Orca adapter calls `orchestration worker-show --dispatch <dispatchId>`, requires Orca's exact-worker observation, and only then resolves the current terminal to an exact adapter-produced `RuntimeWorkerIdentity` **in memory**.
-
-The effect mapping is therefore:
-
-```text
-current WorkerAssignment generation
-+ provider lifecycle binding (Orca Dispatch id)
-+ current RuntimeAdapter exact-worker resolution
-+ current S1 unit
--> exact S2 target
-```
-
-Missing, stale, ambiguous, remote/not-applicable, unsupported, or mismatched evidence is fail-closed and performs no routine effect. Never replace this with PR/session/title/path/pane/PID heuristics. Orca's installed production observation does not provide a stable `pane_key` witness together with the current handle/incarnation, so a remap that cannot be proven through the existing Dispatch exact-worker binding takes the #1441 fence outcome. Do not synthesize a pane key or rebind by handle/title/path/PID/first match.
+Never authorize effects from PR/session/title/path/pane/PID heuristics or a stale
+handle. Re-read the exact current runtime identity before each effect.
 
 ## S1 — single observation authority
 
-Observation is owned by:
+`scripts/pr2-foundation/fleet-observer.ts` is the only S1 observer. Do not add
+another observer, idle detector, pane debounce, or monitor. The only exception is
+the advisory fleet alarm in `docs/fleet-alarm.md`, which may wake the coordinator
+but never authorizes unit effects.
 
-```text
-scripts/pr2-foundation/fleet-observer.ts
-```
-
-S1 owns `busy | livelock | idle | exempt | unknown`.
-
-- `busy` requires positive bounded-output movement after a trusted baseline;
-- `idle` requires current exact liveness=`idle` plus valid bounded output;
-- busy liveness without positive output is no-progress evidence, not healthy progress;
-- failed, timed-out, stale, contradictory, unsupported or wrong-generation evidence is `unknown`;
-- process/pane/spinner/heartbeat existence alone is not progress or completion evidence.
-
-Do not add a second observer, pane debounce, idle detector, or resident monitor, except the operator-installed advisory coordinator fleet alarm defined in `docs/fleet-alarm.md`. That alarm may read project agent panes and send only a plain-text wake to the coordinator; it never acts on units, reads or mutates Task/Dispatch/assignment/PR/GitHub state, joins scheduler/supervisor ownership, or authorizes any effect. All other observers and every effect-authorizing observer remain forbidden.
+Process, pane, spinner, heartbeat, or process existence is not progress or completion
+evidence.
 
 ## S1 continuity across bounded scheduler children
 
-Production cadence remains:
-
-```text
-runSupervisor
--> spawn scheduler.ts tick child
--> child exits
--> registered cadence
--> spawn next scheduler.ts tick child
-```
-
-Normal cadence-child exit is not a supervision-lineage restart. In production, `schedulerGeneration` belongs to the trusted activation lineage, not the OS process lifetime.
-
-The current activation epoch is reduced to a persistence-safe activation-lineage digest. When the existing atomic S1 snapshot contains the same accepted lineage, the next child reuses its `schedulerGeneration` and advances `tickSequence`. A real epoch change, corrupt/untrusted continuity, or explicit reset starts a fresh generation/baseline.
-
-The existing S1 snapshot remains the only observer persistence authority. Its bounded continuity extension may persist only:
-
-- activation lineage digest;
-- `schedulerGeneration` and `tickSequence`;
-- assignment id/generation -> stable `unitRef` correspondence;
-- previous S1 class;
-- livelock streak;
-- `hasBaseline`;
-- SHA-256 digest of prior bounded-output bytes.
-
-Raw runtime identity/token/output never enters the snapshot. On every child, current assignments and current RuntimeAdapter workers are re-read. Continuity is restored only when the current assignment generation resolves to the current exact in-memory runtime identity. Otherwise the unit is fresh/fail-closed.
-
-Digest difference is positive movement evidence. Digest equality alone is not proof of health or completion.
+`scripts/pr2-foundation/fleet-observer.ts` and `scheduler.ts` own S1 snapshot,
+activation-lineage, classification, and continuity mechanics. Agents do not
+reconstruct or persist those mechanics elsewhere. Each bounded child still re-reads
+current assignments and current adapter identities before any effect.
 
 ## S2 — single routine continuation actuator
 
-Routine continuation is owned by:
+`scripts/pr2-foundation/fleet-nudge-actuator.ts` is the only routine continuation
+sender. Its stores own episode, budget, claim, gate, and journal mechanics.
 
-```text
-scripts/pr2-foundation/fleet-nudge-actuator.ts
-```
-
-with the existing authorities:
-
-```text
-worker-nudge-claim-store.ts
-worker-nudge-gate.ts
-worker-dispatch-journal.ts
-```
-
-Preserve:
-
-- `s2-one-shot-v1`;
-- only a new eligible `idle`/`livelock` class-change episode may start an attempt;
-- `not_new_episode` suppression;
-- exact episode/epoch fencing;
-- budgets;
-- claim/gate/journal accounting;
-- `dispatched | send_failed | dispatch_unknown` outcomes.
-
-Routine S2 dispatch stays on RuntimeAdapter. For executor paths using Orca-managed workers, initial delivery stays Orca-owned. Standalone Browser-GPT chat execution is outside this WorkerAssignment/S2 path. Do not dual-send through Orca mail or another transport. `dispatch_unknown` is uncertain and never authorizes automatic resend or an alternate transport.
+Do not dual-send through Orca mail or another transport. `dispatch_unknown` is
+uncertain and never authorizes automatic resend or alternate transport.
 
 ## Bound-run inbox drain and acknowledgement
 
-For an Orca-bound Run, all roles use the single runtime-neutral `RuntimeAdapter.checkInbox` seam. The Orca adapter maps that seam to `orca orchestration check [--ack <delivery_id>] --run <run_id>` without `--wait`. One check returns either authoritative empty or one oldest unacknowledged Delivery. A Delivery is the atomic replay-and-ack unit even when it contains many messages.
+At each guarded lifecycle boundary, drain the exact bound Run through
+`RuntimeAdapter.checkInbox` until authoritative empty or the existing deadline.
+Process every message in one Delivery before acknowledging it. If any message
+fails, do not acknowledge the Delivery and do not advance.
 
-At one lifecycle boundary, process the inbox serially:
-
-```text
-check current bound run
--> empty: boundary may advance
--> Delivery: surface and process every message
--> any message fails: do not ack; boundary is blocked/degraded
--> all messages succeed: carry that exact delivery_id on the next check
--> repeat until authoritative empty or the existing lifecycle deadline expires
-```
-
-Exactly one acknowledgement is issued per Delivery, never per message. Missing, malformed, foreign/sibling-run, unsupported, ambiguous, duplicate/concurrent-ack, or deadline-exhausted evidence is not empty and does not authorize resend. `read`, `delivered_at`, process state, pane state, heartbeat existence, and terminal-send exit status never prove that mail was surfaced.
-
-The provider does not expose a reliable snapshot of “Deliveries present when the boundary began”. Do not invent one. The existing lifecycle/turn deadline bounds the drain. If continuous arrivals prevent an authoritative empty result before that deadline, report an explicit busy/degraded boundary and do not advance. Do not turn the drain into a watcher, poller, subscription, daemon, retry service, queue, or second observer.
+Exactly one acknowledgement is issued per Delivery, never per message. Missing,
+malformed, foreign, unsupported, ambiguous, duplicate/concurrent-ack, or
+deadline-exhausted evidence is not empty and never authorizes resend.
 
 Role obligations are mandatory:
 
@@ -571,9 +206,12 @@ Role obligations are mandatory:
 - **Worker:** drain immediately before worker `worker_done` and before emitting a blocker/escalation that hands control upward.
 - **Coordinator / flow-manager / orchestrator acting on the bound Run:** drain before issuing a reply, ruling, escalation decision, or dispatch, and again before reporting its own turn complete.
 
-Every message returned by the drain is surfaced and processed in the same role turn before the guarded action. An unreachable/unsupported/ambiguous drain is reported as degraded/blocking evidence and is never silently skipped.
-
-Supervised agents do not emit `type: heartbeat` / `subject: alive` control chatter merely to assert liveness. A supervised agent with no actionable report sends nothing. A supervised manager emits `worker_done --outcome succeeded` exactly once, and only after acceptance satisfies its existing whole-task completion contract. `recoverable`, `external_pause`, and `contract_defect` never complete or settle the parent task. A manager sends `worker_done --outcome failed` only after a direct coordinator/operator cancellation message, never because a repository-owned check refused or paused work. S1 remains the sole liveness observer; existing observer heartbeat/process-liveness artifacts remain observation evidence, not agent assertions.
+Supervised agents do not emit `type: heartbeat` / `subject: alive` control chatter merely to assert liveness.
+A supervised agent with no actionable report sends nothing.
+A supervised manager emits `worker_done --outcome succeeded` exactly once, and only after acceptance satisfies its existing whole-task completion contract.
+`recoverable`, `external_pause`, and `contract_defect` never complete or settle the parent task.
+A manager sends `worker_done --outcome failed` only after a direct coordinator/operator cancellation message, never because a repository-owned check refused or paused work.
+S1 remains the sole liveness observer.
 
 ## Create-Issue GitHub completion
 
@@ -590,289 +228,71 @@ and same-invocation recovery contract in `docs/browser-gpt-turn-runbook.md`.
 
 ## Scheduler inbox reconciliation
 
-The existing scheduler tick performs an inbox-gated orchestration-mail reconcile after fleet supervision and before review processing. The same tick also runs a dispatch-terminal-mail pulse over persisted Orca worker assignments: for each bound `dispatchId` it re-reads `orchestration worker-show`, and when the lifecycle is terminal it sends exactly one `type: dispatch_terminal` message to the bound Run with `{ dispatch_id, state, stage, last_error }`, deduped by a durable ledger. The Orca task adapter applies the same notify-on-terminal decision when assignment resolution first classifies a Dispatch as inactive, so worker death observed during fleet supervision and the scheduled pulse share one sender rather than the dead-worker reconciler. It reads unread Orca messages by exact `message_id`, resolves only each message's exact recipient, and reuses the delivery pointer behavior; an exact pointer-only composer receives submit-only Enter while idle or two while busy whether the pointer was just written or already present. Each resolved worker-generation/run recipient identity owns one atomically claimed notification episode; continuous unread recipient episodes re-arm at 1, 2, 4, ... minutes capped at 30 minutes, while an episode is released only after that recipient has no unread mail left. It never performs global composer polling or groups a terminal-peek result into a Delivery. The existing local-state ledger persists episode claims, schedule, message stamping, and ambiguous outcomes; Orca read state remains authoritative across process restarts. A successful exact-message pointer/Enter is reported only as per-message `delivery: delivered-looking` with `terminalReceipt: unproven`, bound to current worker generation plus exact `runId` and `messageId`. Local dispatch acceptance, Enter success, wrapper exit, pointer/composer state, liveness, `read`, `delivered_at`, terminal title, or timing never upgrades that record to terminal receipt; positive recipient receipt remains outside this path until a separate task binds a real recipient-side producer and observation surface. Manual smoke may invoke `node --experimental-strip-types scripts/cursor-unsent-composer-submit.ts --reconcile`.
+The existing scheduler tick owns orchestration-mail reconciliation and
+dispatch-terminal mail. `scripts/cursor-unsent-composer-submit.ts` owns composer
+classification, pointer submission, render timing, and unread-episode mechanics;
+agents do not reproduce them.
+
+After each successful or ambiguous repository-governed `orchestration send` or
+`reply`, run exactly one companion action:
+
+```text
+node --experimental-strip-types scripts/cursor-unsent-composer-submit.ts \
+  --delivery --message-id <exact-message-id>
+```
+
+For blocking `ask`, run the companion action after the bounded initial wait returns
+the committed message id, then resume the same ask through Orca's returned recovery
+action. If the sender cannot prove one exact message and recipient, leave the
+composer untouched and report the delivery for orchestrator handling. Do not create
+a second question, alternate transport, or blind resend.
 
 ## Scheduler phases
 
-The existing `runSchedulerTick` remains two phases.
+Phase 1 is `S1 observation -> deterministic reconciliation -> existing S2 when
+admitted -> durable orchestrator_required handoff when reasoning is required`.
 
-### Phase 1 — fleet supervision
+Phase 2 starts review only from the existing `liveCandidates()` path for
+`ready_for_review` workers with PR/head binding. Managers and pre-handoff workers are
+not widened into that candidate set.
 
-```text
-S1 observation
--> deterministic reconciliation
--> existing S2 when exactly admitted
--> durable orchestrator_required handoff when reasoning is required
-```
+`scripts/lib/orchestrator-side-process-supervisor.ts` owns bounded scheduler-child
+cadence and stall/restart mechanics. Do not replace it with another daemon, timer,
+watcher, or watchdog.
 
-### Phase 2 — review start
-
-The existing `liveCandidates()` path remains limited to `ready_for_review` workers with PR/head binding. Do not widen it to managers or pre-handoff workers.
-
-The registered production owner remains `scripts/lib/orchestrator-side-process-supervisor.ts::runSupervisor` with the existing `pr2-scheduler` child. Do not replace bounded `scheduler.ts tick` children with `runLoop()`, another daemon, timer, watcher, or watchdog. The periodic scheduler tick owns fleet supervision only; it does not read Cursor composer screens.
-
-The coordinator fleet alarm in `docs/fleet-alarm.md` is an operator-installed per-project user service. It is advisory only and separate from scheduler tick, supervisor ownership, and the side-process registry; its sole Orca mutation is a plain-text terminal send to the resolved coordinator pane, never a unit or orchestration-state mutation and never effect authority.
-
-Post-review independent smoke is not owned or started by the scheduler child. The ordinary review-settled worker/orchestrator handoff, and separately the manager-controlled supervisor handoff, use the existing supervised local smoke worker. Scheduler ticks do not start, observe, or reconcile smoke; no replacement poller or queue exists.
-
-The side-process supervisor derives one generation deadline from the canonical child registry: `cadenceSeconds * stallGraceMultiplier` (currently `5 * 14 = 70s`). A generation still running at that observed-child-start deadline is terminated through its exact child process, the supervisor waits for that process to close, then waits the full normal cadence before starting a replacement and re-verifying epoch/registry authority. Stall terminations are recorded separately from crash `rapidExits`; consecutive stalls use the existing `terminalRapidExits` cap and refuse as `scheduler_child_stall_loop`. The bound is therefore `70s + exact close + normal cadence`, never a synthetic 75-second child timeout.
-
-Before orchestration-mail delivery or stale-pointer reconciliation reads Cursor-shaped screen content, the runtime adapter must classify the exact current composer family from the same-identity Orca `terminal show` command metadata. A standalone `opencode` command token routes to the existing OpenCode HTTP control path; positive OpenCode evidence with no bound control fails as `opencode_control_unbound`. Missing/stale command evidence and OpenCode-like non-token command evidence fail closed with no Cursor read, write, or Enter. Trustworthy non-OpenCode command evidence preserves the existing Cursor path.
-
-After the existing pack-side worker-notification delivery event settles successfully or ambiguously, that delivery path performs one immediate exact-target screen read, including while the worker is Running. An empty first read receives one awaited 250 ms render grace and exactly one final read; no delivery receives a third read or a long-lived retry. Exact Orca mailbox-pointer lines receive one submit-only Enter while idle or two while busy so Cursor uses its follow-up queue. Gone or unknown liveness and human or mixed text have no effect. The bounded reaction is awaited, and delivery-journal/claim identity owns duplicate suppression so a later distinct delivery may contain the same pointer text. A `dispatch_unknown` result remains ambiguous until runtime evidence and later same-agent processing are established. A delivery-event failure does not create a composer side effect. A crashed scheduler is restarted by the existing supervisor crash-backoff; do not add a second registry child, daemon, timer, watcher, global screen poll, or long-lived CLI watcher beside a live supervisor. Manual/smoke CLI remains `node --experimental-strip-types scripts/cursor-unsent-composer-submit.ts` (`--once` for one immediate scan).
-
-Ordinary Orca orchestration mail does not pass through the pack worker-notification hook. A repository-governed sender therefore owns one immediate message-bound companion action after each successful or ambiguous `orchestration send` or `reply`: `node --experimental-strip-types scripts/cursor-unsent-composer-submit.ts --delivery --message-id <exact-message-id>`. The command looks up exactly that unread message, resolves its current composite recipient identity, counts unread mail for that recipient and Run, proves exact-message retrievability with landed terminal `--peek`, reads that composer once, refuses human or mixed text, and atomically claims the worker-generation/Run recipient episode shared by all currently unread messages for that recipient. The first eligible action writes one truthful recipient-appropriate directive pointer through `RuntimeAdapter` when composer is empty, then submits Enter through the same bounded delivery reaction; an already present exact pointer skips duplicate write but still receives Enter, and new mail in an already-unread mailbox does not create another pointer. Producer identity remains unproven by `unread` or `delivered_at` alone. A Dispatch recipient receives bare `orca orchestration check`; a coordinator recipient receives `orca orchestration check --run <run-id>`. The claim is released only after the recipient has no unread mail left, and a second invocation after that message's consumption still produces no write or Enter while any unread sibling remains. For blocking `ask`, use its bounded initial wait to obtain committed message id, run this companion action immediately, then resume same ask using Orca's returned recovery action; do not create a second question or wait for answer before nudging. If sender cannot prove one exact message and recipient identity, it leaves composer untouched and reports delivery as requiring operator/orchestrator handling.
+The scheduler does not start, observe, or reconcile smoke. Smoke starts from the
+review-settled handoff through the existing supervised local worker.
 
 ## Durable `orchestrator_required` handoff
 
-The named carrier is:
+`scripts/pr2-foundation/fleet-reconciliation-handoff.ts` owns
+`fleet-reconciliation-handoff/v1` shape and persistence mechanics. It is latest-state
+evidence, not a queue or lifecycle authority.
 
-```text
-fleet-reconciliation-handoff/v1
-```
-
-Implementation:
-
-```text
-scripts/pr2-foundation/fleet-reconciliation-handoff.ts
-```
-
-It is one bounded atomic **latest-state** artifact under the PACK local state root. It is evidence delivery only, not a queue, mailbox, retry system, ACK protocol, lease, claim, dedup store, or lifecycle authority.
-
-Safe fields include project/repository, activation lineage, `schedulerGeneration`, `tickSequence`, decision, closed reason code, role and persistence-safe Task/Issue/assignment identifiers when known, timestamp and integrity digest.
-
-Forbidden fields include raw runtime identity/token, terminal output, prompt/reply, credentials and adapter-private data.
-
-The scheduler must atomically commit and read back a required handoff. If this fails, the scheduler tick is non-success so the existing supervisor status exposes the failure. There is no fallback notification transport.
-
-The top-level orchestrator/operator reads the latest handoff before treating fleet silence as healthy.
+The orchestrator/operator reads the latest handoff before treating fleet silence as
+healthy. A required handoff commit/read-back failure makes the scheduler tick
+non-success; there is no fallback notification transport.
 
 ## Deterministic reconciliation
 
-```text
-authoritative Task/role/assignment facts
-+ trusted S1 continuity
--> noop | continue | orchestrator_required
-```
+Reconciliation returns only `noop | continue | orchestrator_required`. `continue`
+goes only through the existing S2; unresolved or ambiguous effects go to
+`orchestrator_required`.
 
-- active/new progress -> `noop`;
-- trusted new idle/livelock episode + exact current local assignment/runtime binding + role-owned work remains -> `continue` through existing S2;
-- unresolved/stale/ambiguous target, untrusted observer/assignment state, unsupported local effect, or uncertain dispatch requiring reasoning -> `orchestrator_required` plus durable handoff;
-- ordinary manager whole-role completion or worker truthful `ready_for_review` handoff -> `noop`, then the role may complete. In the manager-controlled Browser-GPT execute-Issue path, settled review is not completion: the same manager Dispatch remains nonterminal while the supervisor launches/reuses the local independent-smoke worker for the exact PR/head. On the canonical durable exact-head report, continue that Dispatch through the existing Task/Dispatch channel; the manager re-reads it through the shared execute-Issue boundary. PASS completes the manager role; proved assertion FAIL returns to local fixer ownership and fresh smoke, without reopening pack review. Independent smoke follows settled review; it is not overall `VERIFIED_COMPLETE` and does not wait for scheduler `ready_for_review`.
+Only the merge agent updates a branch from `origin/main`, once, immediately before
+merge. Workers and coordinators never merge `main` merely to clear BEHIND.
 
-## Structured external-dependency parking
+A new manual review
+`npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>` starts only when
+review-independent required CI is green on the exact current head;
+`orchestrator-pack/pack-review` itself is excluded from that check.
 
-The execute-Issue manager boundary emits exactly one JSON result on stdout and
-uses four closed outcomes: `completed` (exit 0), `recoverable` (exit 3 with
-an executable non-null `nextAction.argv`), `external_pause` (exit 4 with
-typed `pause.remedy`, `pause.resume_when`, and `pause.evidence`), or the
-boundary-only `contract_defect` (exit 5). Diagnostics remain on stderr.
+For a frozen three-source review round, 3/3 settles normally. After the existing
+stale/grace threshold, 2/3 may settle once as
+`Sources: 2/3 (degraded after timeout)`; fewer than two usable sources stays
+incomplete.
 
-The coordinator/task dispatch may supply `--blocked-on-json <json>` only when
-it authoritatively asserts that the named external dependency predicate is the
-active unsatisfied blocker for that exact manager invocation. The supplied
-object is a task invariant, not manager-discovered state. It is exactly one of
-`{ issue: <positive integer>, condition: "issue_closed", evidence: <non-empty> }`
-or `{ pr: <positive integer>, condition: "pr_merged", evidence: <non-empty> }`.
-Manager code validates this input and projects it to
-`external_pause(external:waiting_on_issue|external:waiting_on_pr)`; the
-`pause.resume_when` predicate keeps the same selector and condition and
-`pause.evidence` keeps the supplied evidence. Never manufacture that dependency
-identity, predicate, evidence, or causality from `cause`, `blocker`, prose,
-the managed Issue number, reverse search, guessed PR linkage, or a null action.
-
-On `recoverable` execute the returned `nextAction.argv` once. If the next
-result recommends a byte-identical argv, do not execute it again: send one
-`escalation` naming the producer and continue independent plan items. On
-`contract_defect` send one `escalation` naming the producer and continue
-independent plan items. On `external_pause` send one `escalation` with its
-`remedy` and continue independent plan items. Before ending a turn without
-`worker_done`, drain the inbox. Never send `worker_done --outcome failed` for
-any of these. Do not synthesize the refused effect through another tool.
-
-For `external_pause` and `contract_defect`, use
-`orca orchestration send --type escalation --thread-id <escalation-id>`.
-Derive `escalation-id` deterministically from
-`(issue, stage, cause, resume_when)`; the receiver treats the same thread id as
-the same escalation. Keep no sender-side send record. If the escalation send
-itself fails, retry it exactly once, then continue every independent plan item
-and perform the required non-blocking inbox drain before ending the turn without
-`worker_done`.
-
-A live Dispatch whose most recent manager message is that escalation is a
-**paused unit** while `worker-show` remains non-terminal. The coordinator
-identifies it from the Run inbox plus that non-terminal `worker-show` state and
-must not re-dispatch the same argv into it. On each existing coordinator wake or
-restart, re-read only the typed `resume_when` condition through tracked
-`scripts/gh`: `issue_closed` is satisfied only by the named Issue
-`state=closed`; `pr_merged` only by the named PR `merged=true`; and
-`{ coordinator: true }` means the existing coordinator owns clearing the named dependency and sending the
-continuation to the same Dispatch. Legacy `{ operator: true }` is input compatibility only and is normalized
-in memory to `{ coordinator: true }`; `issue_closed` and `pr_merged` are unchanged. Until a separate coordinator
-sweep/wake change lands, resumption occurs only on existing coordinator wakes; that is a latency limitation,
-not permission to settle the Task.
-
-Dispatch/re-dispatch payloads contain role plus task invariants only. Procedure
-comes from the current CLI `--help` and returned `nextAction`; do not re-paste
-workflow skills or runbooks into repeated dispatches. Browser-GPT
-`TerminalEnvelope` remains a separate transport and is unchanged. This
-contract adds no watcher, polling daemon, queue, lease, parking store,
-acknowledgement protocol, prose parser, reverse dependency lookup, epoch,
-fingerprint record, or second persistent coordinator mechanism.
-
-## Core operating laws
-
-1. Watch objective state: live Issue/Task, assignment generation, S1, S2, PR/head, CI/review/smoke and accepted reports. Worker prose is context only.
-2. Completion follows the canonical heartbeat/`worker_done` rule above; end-of-turn, substep, wait, helper failure, question, escalation, timer expiry, `recoverable`, `external_pause`, and `contract_defect` never satisfy it.
-3. Keep one Dispatch across recoverable substeps. Create a fresh Dispatch only for a real Task/subtask/reviewer/correction/reassignment/retry boundary.
-4. Re-read authoritative state before retry. Timeout or helper loss does not prove the operation failed.
-5. Helper failure is recovery first. Escalate only for missing capability/permission, ownership/spec conflict, destructive choice, or exhausted legitimate recovery.
-6. External waits are non-blocking lifecycle state; do not hold the orchestrator foreground in sleep/poll loops.
-7. Exact identity before effects. Never authorize effects from display name, terminal title, branch, path, PID, stale handle, or first match.
-8. At most one active attempt per exact stage artifact. Retry/reassignment requires prior attempt terminal/lost/replaced evidence.
-9. Downstream stages open on authoritative producer handoff, not PR existence, CI green, idle state, or another proxy.
-10. Child results must reach the Task's named authoritative delivery surface; conversation-only output is non-delivery when a durable carrier is required.
-11. Prompt references must be resolvable in the receiver's address space and use the correct carrier class.
-12. Preserve failure diagnostics until orchestrator read-back.
-13. Observer/reconciler/nudge/recovery code does not own termination of a live attempt.
-14. Alarms must use designated authority, current repository/task scope and self-echo filtering.
-
-## Production verification
-
-### Browser-GPT modal capability
-
-Before starting Browser-GPT work, the orchestrator must verify that the
-pack-owned rate-limit modal capability is running against the configured
-automation browser. Verification is a capability check: its startup/attached
-page evidence must be visible, and a recent scan must be observable; a shell
-PID, an old log line, or a waiting turn alone is not proof. If the capability
-is absent, start the repository's documented modal-watcher entrypoint with the
-same browser debugging endpoint, then re-check its startup and page-attachment
-evidence before launching or retrying browser turns. Stop it only through its
-documented signal path, which releases its own CDP sockets and no other tabs.
-
-This is a browser-page overlay watcher, not an agent observer, idle detector,
-terminal monitor, scheduler, retry service, or send authority. The modal is
-usually an ordinary `div` without `role="dialog"`; detection therefore uses
-short rendered text matching the known temporary-limit messages plus an exact
-`Got it` or `OK` button. While it remains visible, the composer is unavailable,
-so browser turns sit in `waiting` with `last_reply_length: 0`, which looks in
-logs like profile overload; five managers were blocked this way before the
-operator inspected the screen. Dismissing the overlay does not clear the
-server-side limit or prove delivery: preserve Browser-GPT `send_count`
-semantics (`0` may be repeated safely; `1` or more requires harvesting and
-must not be resent).
-
-For #1420, same-process component tests are supplementary. Production composition must include real separate Node processes invoking `scheduler.ts tick` against shared production-equivalent state paths and prove at least:
-
-- child N creates trusted baseline;
-- child N+1 restores the same activation lineage/generation and advances tick sequence;
-- enough separate children cross a positive livelock threshold;
-- exact current assignment + exact RuntimeAdapter identity admits one existing S2 continuation;
-- later children do not duplicate the same episode;
-- epoch change starts a fresh generation/baseline;
-- stale/unresolved identity and `dispatch_unknown` remain fail-closed;
-- a required handoff remains readable after the producer child exits;
-- handoff commit/read-back failure makes the tick non-success.
-
-Also run current-head repository verification, Node 22 typecheck/lint, affected tests, scope guard, runtime-retirement scan, required CI and current-revision review/lens obligations.
-
-## Orca grounding
-
-At #1420 r14 implementation time, the Orca orchestration guide already defines `worker_done` as completion of the active Dispatch/Task rather than completion of one conversational turn, and the supported initial supervised startup path is `worker-start` / `dispatch --inject`. Therefore PACK does not patch Orca core or hardcode PACK role stages upstream.
-
-For named Orca conditions, keep recovery on existing pack-side paths without
-changing Orca runtime behavior:
-
-- `nested_worker_depth_exceeded` -> use the existing pane-launch path instead of nesting another worker;
-- `dispatch_capability_invalid` -> use the existing orchestration mailbox fallback/path instead of re-dispatching the revoked capability;
-- `consumer_fenced` -> re-read the exact current runtime/terminal handle before any effect;
-- `stable_pane_required` -> re-read the exact current runtime/terminal handle before any effect.
-
-For `consumer_fenced` and `stable_pane_required`, exact composite identity
-remains mandatory: never act on a stale, reused, or guessed handle.
-
-Repository evidence used during implementation: Orca orchestration guide blob `d43a59d7b33e50126efb268184c1a1af38dd4f8a`. The operator must still use/read the installed version-matched guide on the target machine; this repository evidence is not a claim about the installed machine version.
-
-## Operator adoption
-
-Repository merge does not prove machine activation.
-
-After landing the production implementation:
-
-1. adopt the merged PACK revision through the existing supported operator deployment path;
-2. preserve the registered side-process supervisor and `pr2-scheduler` child shape;
-3. let the first mutating WorkerAssignment path migrate a recognized pre-#1441 `issue-<N>` store (exact `*.pre-task-dispatch-migration` backup, then one canonical rewrite); do not hand-convert, alias, or dual-resolve records; pass explicit `--role worker|orchestrator` on registration;
-4. start new supervised manager/T1/T2/T3 work through the supervised Task launch assistant; treat only `outcome=ready`/`ready_and_assignment_bound` as started, and execute only the exact `nextAction` for handled continuations or provider recovery;
-5. for one manager authoring launch without an Issue, confirm the assignment is task/Dispatch-keyed with absent Issue metadata, then attach the Issue only after publication without changing the deliverable key/id/generation;
-6. verify one stale/remapped runtime identity fences without a stale-handle effect and one Orca error envelope preserves its exact non-empty `error.code` while any provider mutation recovery remains attempt-bound and safely projected by the assistant;
-7. perform one controlled selected-profile adoption smoke for every executor family actually admitted on the installed machine; an OpenCode external gate is a valid fail-closed result, not permission to invent a provider/TUI form;
-8. before restarting/adopting the supervisor revision, verify the scheduler no longer starts or observes post-review smoke and that one epoch-authorized `scheduler.ts tick` still processes review/CI candidates. The ordinary review-settled worker/orchestrator handoff launches independent smoke; the manager-controlled handoff remains separately supervised. Do not treat a historical pre-cutover smoke lifecycle as a new admission gate.
-9. verify later bounded children retain the same trusted S1 lineage and advancing tick sequence;
-10. verify one exact REST-visible author/reviewer artifact settles its manager turn even when the helper child is silent/gone, and one published sibling makes a silent concurrent slot possible-or-actual/no-resend without claiming that its payload was proven delivered;
-11. verify the latest `fleet-reconciliation-handoff/v1` is readable before treating silence as healthy.
-
-Do not claim live machine supervision before this read-back.
-
-## Worker lifecycle
-
-Workers, orchestrators, and managers read this section before the first side
-effect. Direct user authority may override a repository stop rule, but a tier
-mismatch remains reportable evidence.
-
-### Worker pre-flight
-
-Before implementation, re-read the live task and apply the T1/T2/T3
-failure-type rubric. When reality exceeds the assigned tier, stop and escalate
-upward; never silently proceed.
-
-### Runtime identity
-
-Runtime effects require an adapter-produced `{ runtime, id, generation }`
-identity. Resolve the exact target through the registered runtime adapter.
-Missing, stale, malformed, reused, or mismatched identity performs no effect.
-Never reinterpret a session-like string, title, branch, path, or process ID as
-authority.
-
-### Review / CI / handoff contract
-
-Local Codex PR review is active through the pack-owned review runner. GitHub PR
-review is the authoritative verdict; the pack run store is operational state.
-
-- automatic and common starts use `scripts/pack-review-runner.ts` and name the PR;
-- the live PR supplies the current head and its closing reference supplies the Issue;
-- session-binding cache data is advisory correlation only and cannot veto a valid
-  PR-led start or substitute a different repository, head, or Issue;
-- a missing exact bound Issue snapshot is captured only after the existing start
-  claim is acquired, so concurrent first starts freeze one durable Issue body;
-- manual Browser-GPT review uses
-  `npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>`; a new manual
-  review starts only when review-independent required CI is green for the exact
-  current PR head, with `orchestrator-pack/pack-review` itself excluded from
-  that precondition;
-- review start/list/status use the pack runner, run store, and claim authority;
-- no concrete runtime transport is a fallback review path;
-- terminal review JSON on stdout must be non-empty and valid;
-- one clean terminal result for the exact same PR head suppresses a redundant
-  automatic/common reviewer-model invocation;
-- exact authority-selected conflict-free carry-over may establish current-head
-  review authority without another reviewer-model invocation;
-- an at-cap cycle suppresses further automatic/common reviewer-model calls;
-- reviewer invocation and current-head review authority are different facts.
-
-Review-call suppression never carries unrelated review or CI facts across heads.
-Required CI stays current-head bound; a prior-head smoke PASS on the same PR
-remains sufficient, and smoke is not an at-cap or review admission gate.
-
-### Issue #2161 main-update sequencing
-
-The merge agent performs the sole branch update from `origin/main` immediately before merge, after a same-PR smoke PASS (at any report head) and after required CI is green on the current head. Workers and coordinators must not merge main to clear BEHIND during smoke or review; current-head CI and review authority remain unchanged.
-
-#### Pack-review recovery recipe
-
-Recover an interrupted or stale GPT review through the existing scoped runner; do
-not start a replacement same-head review merely because a browser/runner child
-stopped:
+Recover an interrupted or stale review through:
 
 ```text
 node --experimental-strip-types scripts/pack-review-runner.ts reconcile \
@@ -880,102 +300,209 @@ node --experimental-strip-types scripts/pack-review-runner.ts reconcile \
   --pr-number <PR_NUMBER> --immediate
 ```
 
-For operator no-review waiver evidence and exact-head receipt staleness, use only `docs/pack-review-waiver-merge-runbook.md`.
+Never start a replacement review on the same head merely because a runner/browser
+child stopped.
 
-The reconciler first re-reads credentialed GitHub source comments. For a frozen
-three-source round, 3/3 settles normally; blocking findings affect the verdict
-but never shorten the pre-grace 3/3 census. A 2/3 census remains waiting before
-the existing shared stale/grace threshold and may settle once after that threshold
-as `Sources: 2/3 (degraded after timeout)`. Fewer than two usable sources after the
-threshold remains incomplete and reports the missing-source action. A late third
-source does not reopen an already settled 2/3 round or consume another cap unit.
-Every ordinary manual/chat/automatic start uses the same consuming review budget;
-there is no launcher-specific same-head extra-review bypass. Under logical-round
-accounting, a findings-bearing required round is mechanically settled only when
-GitHub ancestry proves that the current PR head is a strict descendant of the
-reviewed head. At final cap, advance the PR with the fix commit and rerun scoped
-`reconcile --immediate`; no semantic finding-resolution evidence or cap+1 full
-review is required. Exact-head CI and declared smoke remain separate merge gates
-and do not participate in this review-settlement predicate.
+A launch counts as started only on `outcome=ready` /
+`ready_and_assignment_bound`. Provider recovery runs only through the returned
+`nextAction`; handled continuation never authorizes a fresh start.
+
+## Structured external-dependency parking
+
+The manager boundary uses the existing closed outcomes `completed`, `recoverable`,
+`external_pause`, and boundary-only `contract_defect`. On `recoverable`, execute the
+returned non-null `nextAction.argv` once. A byte-identical consecutive action is not
+executed again; escalate it as a producer defect.
+
+Supply `--blocked-on-json` only when the coordinator authoritatively knows the named
+Issue/PR predicate is the exact active blocker. Keep the supplied
+`issue_closed | pr_merged` predicate and evidence unchanged; never infer dependency
+identity from prose, cause, blocker text, reverse lookup, or the managed Issue.
+`{ coordinator: true }` means the existing coordinator owns the remedy and
+continuation to the same Dispatch. The prior boolean input is normalized in memory
+to `{ coordinator: true }`; `issue_closed` and `pr_merged` remain unchanged.
+
+For `external_pause` or `contract_defect`, send one escalation with a deterministic
+thread id derived from `(issue, stage, cause, resume_when)`. Retry a failed
+escalation send exactly once. The unit stays paused and nonterminal; never
+re-dispatch the same argv into a live paused Dispatch. Resume only through the
+existing coordinator wake when the typed predicate is satisfied.
+
+Inbox drain and `worker_done` obligations are owned by
+`## Bound-run inbox drain and acknowledgement`; parking does not redefine them.
+Browser-GPT `TerminalEnvelope` remains a separate transport and is unchanged.
+Do not add a parking store, watcher, poller, reverse-dependency service, or second
+persistent coordination mechanism.
+
+## Core operating laws
+
+1. Objective state is authoritative; prose and terminal appearance are context only.
+2. Keep one Dispatch across recoverable substeps; create a fresh one only for a real
+   task/subtask/reviewer/correction/reassignment/retry boundary.
+3. Re-read authoritative state before retry; timeout or helper loss does not prove
+   failure.
+4. Helper failure is recovery first; escalate only for missing capability/permission,
+   ownership/spec conflict, destructive choice, or exhausted legitimate recovery.
+5. External waits do not hold the orchestrator foreground in sleep/poll loops.
+6. Exact composite identity is mandatory before effects; first-match heuristics never
+   authorize effects.
+7. At most one active attempt exists per exact stage artifact; retry/reassignment
+   requires prior terminal/lost/replaced evidence.
+8. Downstream stages open on authoritative producer handoff, not proxy signals such as
+   PR existence, CI green, or idle state.
+9. Durable delivery uses the Task's named authoritative surface; conversation-only
+   output is not delivery when a durable carrier is required.
+10. Prompt references must resolve in the receiver's address space and use the correct
+    carrier class.
+11. Preserve failure diagnostics until orchestrator read-back.
+12. Observer/reconciler/nudge/recovery code never owns termination of a live attempt.
+13. Alarms use designated authority, current scope, and self-echo filtering.
+
+## Production verification
+
+### Browser-GPT modal capability
+
+Before Browser-GPT turns, verify that the pack-owned rate-limit modal capability is
+running against the configured automation browser. Require visible startup/attached
+page evidence and a recent scan; a PID, old log line, or waiting turn is not proof.
+If absent, start the documented modal-watcher entrypoint against the same browser
+debugging endpoint and re-check before launch or retry.
+
+The watcher is not an agent observer, scheduler, retry service, or send authority.
+Dismissing a modal does not prove delivery or clear a server-side limit; preserve
+the Browser-GPT send/no-resend contract.
+
+Run current-head repository verification, required CI, and applicable review
+obligations for the work being completed.
+
+## Orca grounding
+
+`worker_done` means completion of the active Dispatch/Task, not one conversational
+turn. Use existing pack-side recovery for named Orca conditions:
+
+- `nested_worker_depth_exceeded` -> use the existing pane-launch path instead of nesting another worker;
+- `dispatch_capability_invalid` -> use the existing orchestration mailbox fallback/path instead of re-dispatching the revoked capability;
+- `consumer_fenced` -> re-read the exact current runtime/terminal handle before any effect;
+- `stable_pane_required` -> re-read the exact current runtime/terminal handle before any effect.
+
+For the last two cases, never act on a stale, reused, or guessed handle. Do not patch
+Orca core to encode PACK role stages.
+
+## Operator adoption
+
+Repository merge does not prove machine activation. When a change affects
+operator-facing runtime/configuration/process behavior, adopt it through the
+existing supported operator path and prove the intended live state through a
+target-specific supported read-back before claiming activation.
+
+The implementation PR carries the reusable operator handoff rule in
+`### Operator adoption handoff`; one-time rollout history does not belong in this
+runbook.
+
+## Worker lifecycle
+
+Workers, orchestrators, and managers read this section before the first side effect.
+Direct user authority may override a repository stop rule, but a tier mismatch
+remains reportable evidence.
+
+### Worker pre-flight
+
+Before implementation, re-read the live task and apply the T1/T2/T3 failure-type
+rubric. When reality exceeds the assigned tier, stop and escalate upward; never
+silently proceed.
+
+### Runtime identity
+
+Runtime effects require an adapter-produced `{runtime,id,generation}` identity.
+Resolve the exact target through the registered runtime adapter. Missing, stale,
+malformed, reused, or mismatched identity performs no effect.
+
+### Review / CI / handoff contract
+
+Required CI is exact-current-head evidence. Missing, pending, cancelled, failed, or
+earlier-head required checks are not green. Green CI alone is not exit: complete
+review and handoff obligations for the same current head.
+
+Pack review is a PR/task-cycle obligation with logical-round caps T1=1, T2=1, T3=2.
+A T3 clean round 1 still requires round 2. Once required rounds and findings settle,
+the durable `reviewStageComplete` state prevents later commits, smoke fixes, or
+CI-only changes from reopening the required stage. A cap never converts findings
+into approval.
+
+Manual start, degraded-source settlement, and interrupted-review recovery follow
+`## Deterministic reconciliation`; do not duplicate those rules here.
+
+### Main-update sequencing
+
+The merge agent performs the sole branch update from `origin/main` once,
+immediately before merge, after same-PR smoke readiness and current-head required CI
+are satisfied. Workers and coordinators never merge `main` merely to clear BEHIND.
+
+#### Pack-review recovery recipe
+
+Use the `reconcile --immediate` recipe in `## Deterministic reconciliation`.
+Exact-head CI and declared smoke remain separate gates from review settlement.
 
 ### Required CI
 
-Use protected-branch required checks when configured. Otherwise require every
-pack merge-contract check for the current PR head. CI is not green while a
-required check is failed, pending, cancelled, or missing.
-
-**Self-fix is primary.** Do **not** run `pack-worker-report --state ready_for_review`
-while required CI is not green. A red head remains `fixing_ci`; a pending head
-stays engaged until green, red, or an evidence-backed degraded-CI handoff.
-
-Green CI alone is not exit. The worker must finish review and handoff
-obligations for the same head.
+Use protected-branch required checks when configured; otherwise require every pack
+merge-contract check for the current head. Do not report `ready_for_review` while
+required CI is non-green. Fix red CI; a pending head stays engaged until green, red,
+or an evidence-backed degraded-CI handoff through
+`scripts/lib/worker-degraded-ci-handoff.ts`. Never turn failure, cancellation,
+timeout, ambiguity, or missing evidence into success.
 
 ### Worker report store
 
-Report lifecycle state through the pack-owned command:
+Report lifecycle state through:
 
 ```text
 pack-worker-report --state <ready_for_review|fixing_ci|addressing_reviews|completed|blocked>
 ```
 
-If the report command cannot prove the current repository, worker, PR, and head
-binding, **skip silently** for the report write only and continue the required
-task. Do not substitute comments for durable report state.
+If the command cannot prove current repository, worker, PR, and head binding, skip
+only that report write and continue the required task. Do not substitute comments
+for durable report state.
 
 ### PR-created handoff
 
-Worker self-drive is primary. After PR creation, continue through current-head
-CI, review feedback, smoke, and handoff. Do not idle in a transient state. On
-delivered findings use `addressing_reviews`, then `fixing_ci` as needed, and
-return to `ready_for_review` only after required checks are green.
-
-Failure, timeout, cancellation, ambiguity, or missing evidence never becomes
-clean or successful. **Must not** idle with open findings or silently disengage
-without a current-head handoff.
+After PR creation, self-drive through current-head CI, review findings, smoke, and
+handoff. Use `addressing_reviews` while fixing delivered findings, then `fixing_ci`
+as needed, and return to `ready_for_review` only when required CI is green. Do not
+idle with open findings or disengage without a truthful current-head handoff.
 
 ### Review-cycle cap
 
-Use the tracked review-cycle authority. First clean head yields
-`clean_early_stop`; reaching the tier cap with open findings yields
-`at_cap_open_findings` for architect/operator triage. A cap never converts
-findings into approval and never authorizes another automatic/common
-reviewer-model call.
+The tracked review-cycle authority owns `clean_early_stop` and
+`at_cap_open_findings`. First clean eligible head may early-stop; open findings at
+cap require architect/operator triage. Cap exhaustion never approves findings and
+never authorizes another automatic/common reviewer-model call.
 
 ### Worker smoke
 
-The supervised independent smoke worker checks out the current PR head,
-executes the Issue's `smoke-test-plan` scenarios, and publishes the
-unchanged `pack-worker-smoke-report/v1` comment after the attempt.
-The selected project card provides repository identity; the GitHub
-comment author is publisher metadata, not proof of an independent role.
-Existing secret scrubbing redacts output and does not refuse a run
-because scrubbing occurred. Neither scheduler ticks nor a harness
-registry, lock, lifecycle/close receipt, progress/cancel, carry-only,
-selective retry, or smoke-plan preflight authorizes the run.
+After review settlement, the supervised independent smoke worker checks out the PR
+head, executes every Issue-declared `smoke-test-plan` scenario, and publishes the
+existing `pack-worker-smoke-report/v1` report. Detail is owned by
+`docs/worker-smoke-testing.md`.
 
-Readiness uses the newest PASS comment on the same PR at any head,
-without filtering by actor, reconstructing ancestry, or requiring a
-new PASS on later heads. Required CI remains green on the current head.
-A first FAIL/BLOCKED is handled by an existing worker/fixer correction
-and an explicit subsequent smoke run, never an automatic harness retry.
+The newest same-PR PASS remains reusable across later heads; required CI remains
+separately bound to the current head. A first FAIL/BLOCKED leaves readiness
+unsatisfied and requires the existing worker/fixer to correct the defect and invoke
+smoke explicitly again. Review settles before smoke; scheduler reconciliation does
+not start or retry smoke.
 
 ### Orchestrator-delegated integration
 
-After current-head implementation/review/CI/smoke readiness, delegated
-merge/adoption/cleanup uses one separate supervised local integration assignment.
-The bounded carrier, sequencing, exact-current fencing, production-readiness
-reuse, projection-repair, adoption, verification, and report contract lives in
-[the orchestrator-delegated integration runbook](orchestrator-delegated-integration.md).
-Do not replace it with another role, store, queue, lock, evaluator, or outcome ledger.
+After implementation/review/CI/smoke readiness, delegated merge/adoption/cleanup is
+owned by the [orchestrator-delegated integration runbook](orchestrator-delegated-integration.md).
+Do not replace it with another role, store, queue, lock, evaluator, or outcome
+ledger.
 
 ### Operator adoption handoff
 
 When work changes operator-facing configuration, runtime selection, supervised
 processes, environment variables, or tracked policy delivery, add a precise
-`## Operator adoption` section to the PR body and update the active migration
-notes. Workers document adoption but do not mutate the operator's machine
-unless the direct user orders it.
+`## Operator adoption` section to the PR body. Workers document adoption but do not
+mutate the operator's machine unless the direct user orders it.
 
 A cosmetic documentation-only change may state `No operator adoption required`.
-Do not describe a removed compatibility route as rollback or adoption.

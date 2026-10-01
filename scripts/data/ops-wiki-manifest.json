@@ -693,9 +693,9 @@
       "role": "manager",
       "aliases": ["issue authoring", "создание задачи", "task specification"],
       "sections": [
-        { "heading": "## Routing" },
+        { "heading": "## Inputs and routing" },
         { "heading": "## Roles" },
-        { "heading": "## Acceptance" }
+        { "heading": "## Final acceptance" }
       ],
       "edges": [
         { "type": "related", "target": "execute-issue-with-gpt" },

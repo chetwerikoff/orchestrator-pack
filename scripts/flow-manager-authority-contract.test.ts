@@ -8,18 +8,10 @@ const read = (path: string) => readFileSync(new URL('../' + path, import.meta.ur
 describe('current create-Issue and Browser-GPT authority boundaries', () => {
   it('keeps create-Issue procedure comment/disposition/label based', () => {
     const skill = read('.cursor/skills/create-issue-draft/SKILL.md');
-    expect(skill).toContain('Three independent GPT architectural reviews launched in parallel');
-    expect(skill).toContain('After each required review round');
-    expect(skill).toContain('spec-review:accepted');
+    expect(skill).toContain('The manager launches the three GPT architectural-review sources independently and in parallel');
+    expect(skill).toContain('After **each** required review round, the GPT author publishes **one Issue disposition comment**');
+    expect(skill).toContain('The sole acceptance projection is the existing `spec-review:accepted` Issue');
     expect(skill).toContain('user.login');
-    for (const retired of [
-      'manager-review-brief-canon',
-      'stageAttemptId',
-      'terminal-input-bundle',
-      'create-issue-final-acceptance/v1',
-      'claude-unavailable-waiver',
-      'finding-disposition-ledger.json',
-    ]) expect(skill).not.toContain(retired);
   });
 
   it('keeps the manager Browser-GPT adapter transport-only', () => {

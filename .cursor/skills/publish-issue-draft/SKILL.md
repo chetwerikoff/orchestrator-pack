@@ -26,11 +26,11 @@ draft *file* in the selected default branch is a separate, optional act of repo 
 
 This skill picks **how** a draft is persisted after `create-issue-draft`:
 
-| Mode | Issue synced | Draft file PR'd to the selected default branch | Snapshot + CI | When |
-|------|--------------|-------------------------|---------------|------|
-| **sync-only** (default) | yes | **no** | no | normal impl tasks; issue body is the full spec |
-| **batch** | yes | one PR for several drafts | one run | epic+children, arch waves, registry refresh |
-| **full-publish** | yes | one PR for this draft | yes | user says "commit/merge this draft"; spec must live on the selected default branch before impl; audit |
+| Mode | Issue owner | Draft file PR'd to the selected default branch | Snapshot + CI | When |
+|------|-------------|-------------------------|---------------|------|
+| **sync-only** (default) | `create-issue-draft` | **no** | no | normal tasks; Issue body is the live spec |
+| **batch** | `create-issue-draft` separately | one PR for several drafts | one run | epic+children, arch waves, registry refresh |
+| **full-publish** | `create-issue-draft` separately | one PR for this draft | yes | user requests snapshot publication |
 
 Codex review is **unchanged**: draft-quality review happens in
 `create-issue-draft` (before sync); for any PR opened here, an optional manual
@@ -47,8 +47,7 @@ unless the fallback conditions in this skill apply.
 
 - Draft at `docs/issues_drafts/NN-<slug>.md` with `GitHub Issue: #N` (not TBD).
 - Codex draft review done (`NO_FINDINGS` or 5-iteration cap with open questions recorded).
-- Issue body synced through `scripts/publish-issue-body-sync` (sanctioned
-  `gh issue create` / `gh issue edit` with `--body-file` plus live REST parity).
+- Issue authoring, review, body edits, and acceptance are owned by the current [`create-issue-draft`](../create-issue-draft/SKILL.md) workflow. Complete that workflow and read back the published Issue before treating its revision as current. This legacy persistence skill does not create, edit, or verify Issue bodies.
 - Registry row for this draft defined (draft path → issue **N**); Cursor lands it in
   `docs/issue_queue_index.md` at publish — the architect does not hand-edit the tracked
   file (see Common steps).
@@ -61,22 +60,17 @@ Use unless the user explicitly asks for a PR/merge or batch. The draft is a
 working artifact; the issue carries everything the worker needs.
 
 1. Run the contract-evidence mechanical guard (Issue #366) on the draft; refuse
-   issue sync while it exits non-zero:
+   repository snapshot publication while it exits non-zero:
 
    ```bash
    node scripts/draft-discipline.mjs contract-evidence --draft docs/issues_drafts/NN-<slug>.md
    ```
 
-2. Confirm live REST body parity with the local draft. Re-sync only through the
-   mechanical helper (never raw `gh issue edit`):
-
-   ```bash
-   node --experimental-strip-types scripts/publish-issue-body-sync.ts verify --draft-path docs/issues_drafts/NN-<slug>.md --issue-number <N>
-   ```
-
-   On mismatch or first sync, run `-Mode edit` (existing issue) or `-Mode create`
-   (new issue). The helper exits non-zero on transport/parity failure.
-3. Confirm the draft header records `GitHub Issue: #N`.
+2. If the Issue needs creation, revision, review, or acceptance, use the current
+   [`create-issue-draft`](../create-issue-draft/SKILL.md) owner. This skill does
+   not perform Issue-body sync or parity checks.
+3. Confirm the draft header records `GitHub Issue: #N` and that its Issue is
+   current under the create-issue-draft workflow.
 4. Confirm the registry row for this draft is defined (draft path → **N**); it will be
    written to `docs/issue_queue_index.md` by Cursor at publish, not by the architect.
 5. **Stop.** Do not open a PR, do not run `pack-declare`, do not run scope checks.
@@ -131,10 +125,10 @@ the full heavy flow. Run the Common steps end-to-end for the one draft.
 > base (`not mergeable: head … not up to date`), run `gh pr update-branch <N>`
 > first, then re-run the merge.
 
-**Publication procedure:** this skill's Common steps below own branch/PR
-publication. Issue-body create/edit/verify remains owned by
-`scripts/publish-issue-body-sync.ts`. Use the manual publish sequence in an
-isolated checkout; no separate scratch-checkout wrapper owns this workflow.
+**Publication procedure:** this skill owns only repository snapshot branch/PR
+publication. Issue creation, Issue-body edits, review, and acceptance remain
+owned by [`create-issue-draft`](../create-issue-draft/SKILL.md). Do not use a
+retired Issue-body synchronization command.
 **Delegation prompt** (fill the `<…>` placeholders; covers single draft and batch):
 
 ```bash
@@ -149,8 +143,8 @@ Files to publish (already on disk): <list every touched path: docs/issues_drafts
   docs/issues_drafts/00-architecture-decisions.md if changed>.
 Registry rows to land (one per published draft): <for each draft, the exact index line,
   e.g. "| docs/issues_drafts/NN-<slug>.md | #N |" — derive from the draft or from this list>.
-Issues to handle after merge: <for each, "#N <- draft path" to re-sync an existing issue
-  body, or "new <- draft path" to create one>.
+Issues that require creation or body changes are handled separately through
+the current `create-issue-draft` owner; this repository-snapshot workflow does not sync them.
 
 Index ownership: the delegated agent owns docs/issue_queue_index.md during publish. Add
 each new registry row (from the draft or from the row text above) and stage ONLY that
@@ -182,40 +176,25 @@ Steps:
 5. Wait for CI green (gh pr checks <pr> --watch). Then gh pr merge <pr> --merge --delete-branch.
    If you refresh after merge, do it only in this isolated checkout (git checkout main &&
    git pull origin main); never touch the architect's live checkout.
-6. For each "#N <- draft": re-sync through the mechanical helper:
-
-   ```bash
-   node --import tsx scripts/publish-issue-body-sync.ts edit --draft-path <draft> --issue-number <N> --repo $TARGET_REPOSITORY
-   ```
-
-   For each "new <- draft": create through the helper (title defaults to draft H1):
-
-   ```bash
-   node --import tsx scripts/publish-issue-body-sync.ts create --draft-path <draft> --repo $TARGET_REPOSITORY
-   ```
-
-   Write the returned issue number into the draft's `GitHub Issue: #N` line and add
-   that draft's registry row to docs/issue_queue_index.md (selective staging only —
-   see Index ownership above). **Forbidden:** raw `gh issue create` / `gh issue edit`
-   or low-level `gh api` issue-body mutation — the helper enforces `--body-file`
-   transport and live REST parity before reporting success.
-7. Report the PR URL, the merge commit, and each issue number/URL synced or created.
+6. If an Issue needs creation or a body change, handle it through the current
+   [`create-issue-draft`](../create-issue-draft/SKILL.md) workflow. Do not use
+   the retired publisher, raw `gh issue create` / `gh issue edit`, or low-level
+   `gh api` for Issue-body mutation.
+7. Report the PR URL and merge commit; refer Issue creation/body changes to the current owner.
 EOF
-# The Common steps in this skill own publish mechanics; use a separate isolated checkout.
-# Issue-body synchronization remains owned by scripts/publish-issue-body-sync.ts.
+# Issue creation and body changes are owned by ../create-issue-draft/SKILL.md.
 ```
 
 **Verify state after the run — `opencode run` can exit 0 mid-failure.** A
 connection drop or context exhaustion can leave `opencode run` reporting exit 0
-while the publish is half-done (e.g. issue created, PR not opened, or index row
-left uncommitted). Do **not** trust the exit code alone: confirm with
-`gh issue view <N>`, `gh pr list --search <slug>`, and `git status` before
-reporting success, and complete any missing step via the fallback below.
+while the repository snapshot publish is half-done (e.g. PR not opened or index
+row left uncommitted). Do **not** trust the exit code alone: confirm the PR and
+`git status` before reporting success, and complete any missing repository step
+via the fallback below.
 
-If the published change is an **amendment to an already-closed issue** whose spec
-materially changed, note in your report that the issue may need reopening for
-re-implementation — the architect decides that with the user; deepseek only
-re-syncs the body.
+If a repository snapshot amends a draft for an already-closed Issue, the
+create-issue-draft owner handles any required live Issue revision; this skill
+does not resync Issue bodies.
 
 ### Pre-flight
 
@@ -263,16 +242,15 @@ npm run typecheck:foundation
 ```
 
 **Contract-evidence gate (Issue #366).** Run on **every** draft in the publish
-commit (Mode A re-sync, Modes B and C) before issue-body sync or spec PR commit.
-Issue-body create/edit/verify must go through `scripts/publish-issue-body-sync`
-— never raw `gh issue create` / `gh issue edit` or low-level `gh api` body
-mutation.
+commit (Modes B and C) before a spec PR commit. Issue creation, body edits,
+review, and acceptance are owned by [`create-issue-draft`](../create-issue-draft/SKILL.md);
+this persistence workflow does not publish or verify Issue bodies.
 
 ```bash
 node scripts/draft-discipline.mjs contract-evidence --draft docs/issues_drafts/NN-<slug>.md
 ```
 
-Refuse sync or publish while this exits non-zero.
+Refuse snapshot publication while this exits non-zero.
 
 For each draft in the publish commit that declares `behavior-kind` or
 `parked-root-cause` (parked root tracking), run the mechanical guards (Issue #221) before push:
@@ -285,9 +263,8 @@ node scripts/draft-discipline.mjs parked-root --draft docs/issues_drafts/NN-<slu
 Reviewer findings and author dispositions follow the current Issue-comment
 contract in [`create-issue-draft`](../create-issue-draft/SKILL.md#author-rounds-substantive-floor-and-acceptance);
 this persistence workflow does not use a separate finding-ledger guard.
-When a `parked-root-cause` block references `#N`, validate the live issue body
-carries the declared cause (re-run `parked-root` after `gh issue view` sync, or
-supply `-MockIssuesPath` only in tests).
+When a `parked-root-cause` block references `#N`, validate the live Issue
+through the current `create-issue-draft` owner before relying on the body.
 
 Fix `[STRICT]` findings before push.
 
