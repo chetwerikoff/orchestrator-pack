@@ -1683,7 +1683,7 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     expect(smokeRunbook).toContain('There is no `trusted_target_stale` smoke recovery observer');
   });
 
-  it('publishes from the bounded detached worktree and consumes the canonical report in the same manager', async () => {
+  it('publishes from the bounded detached worktree and consumes the canonical report only after cleanup', async () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-2319-manager-smoke-'));
     const canonical = join(root, 'repo');
     const tempWorktree = join(root, 'smoke');
@@ -1697,6 +1697,7 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
       writes.push(String(chunk));
       return true;
     }) as typeof process.stdout.write);
+    const comments: string[] = [];
     try {
       expect(git(['init', '--initial-branch=main']).ok).toBe(true);
       expect(git(['config', 'user.email', 'fixture@example.invalid']).ok).toBe(true);
@@ -1708,9 +1709,6 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
       const beforeHead = git(['rev-parse', 'HEAD']).stdout.trim();
       const beforeBranch = git(['branch', '--show-current']).stdout.trim();
       const beforeStatus = git(['status', '--porcelain=v1', '--untracked-files=all']).stdout;
-
-      expect(git(['worktree', 'add', '--detach', tempWorktree, beforeHead]).ok).toBe(true);
-      worktreeAdded = true;
       const issueBody = [
         '```behavior-kind',
         'action-producing',
@@ -1721,9 +1719,7 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
         '  - action: exercise current behavior | expected: acceptance assertion holds',
         '```',
       ].join('\n');
-      const stdoutBeforePublish = writes.length;
-      const comments: string[] = [];
-      const code = await runPublishSmoke({
+      const options = {
         command: 'publish',
         issueNumber: 2182,
         prNumber: 2219,
@@ -1736,7 +1732,8 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
         reviewId: '',
         reviewHeadSha: '',
         reportFile: join(tempWorktree, 'report.md'),
-      }, {
+      };
+      const dependencies = {
         resolveTarget: () => ({
           repositorySlug: 'chetwerikoff/orchestrator-pack',
           issueNumber: 2182,
@@ -1748,17 +1745,12 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
           'scenarios:',
           '  - action: exercise current behavior | expected: acceptance assertion holds | observed: acceptance assertion holds | outcome: pass',
         ].join('\n'),
-        publishComment: (_pr, body) => {
+        publishComment: (_pr: number, body: string) => {
           comments.push(body);
           return 'https://github.com/chetwerikoff/orchestrator-pack/issues/2219#issuecomment-1';
         },
-      });
-      expect(code).toBe(0);
-      expect(comments).toHaveLength(1);
-      expect(git(['-C', tempWorktree, 'rev-parse', 'HEAD']).stdout.trim()).toBe(beforeHead);
-      expect(git(['-C', tempWorktree, 'status', '--porcelain=v1', '--untracked-files=all']).stdout).toBe('');
-
-      const publishedRecord = JSON.parse(writes.slice(stdoutBeforePublish).join('').trim()) as Record<string, unknown>;
+      };
+      const publish = vi.fn(() => runPublishSmoke(options, dependencies));
       const managerContext: ExecuteIssueManagerBoundaryContext = {
         repository: 'chetwerikoff/orchestrator-pack',
         issueNumber: 2182,
@@ -1767,17 +1759,29 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
         productionArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'],
         prNumber: 2219,
       };
-      expect(classifyExecuteIssueManagerRecord(publishedRecord, managerContext)).toMatchObject({
-        exitCode: 0,
-        result: { ok: true, verdict: 'PASS', cause: 'execute_worker_smoke_pass', nextAction: null },
-      });
-      expect(publishedRecord).toMatchObject({
-        schema: 'pack-worker-smoke-report/v1',
-        issueNumber: 2182,
-        prNumber: 2219,
-        headSha: beforeHead,
-        result: 'PASS',
-      });
+      const classify = vi.fn((record: Record<string, unknown>) =>
+        classifyExecuteIssueManagerRecord(record, managerContext));
+
+      const setupFailure = git(['worktree', 'add', '--detach', join(root, 'bad'), '0'.repeat(40)]);
+      expect(setupFailure.ok).toBe(false);
+      expect(publish).not.toHaveBeenCalled();
+      expect(comments).toHaveLength(0);
+
+      expect(git(['worktree', 'add', '--detach', tempWorktree, beforeHead]).ok).toBe(true);
+      worktreeAdded = true;
+      const stdoutBeforePublish = writes.length;
+      expect(await publish()).toBe(0);
+      expect(publish).toHaveBeenCalledTimes(1);
+      expect(comments).toHaveLength(1);
+      expect(git(['-C', tempWorktree, 'rev-parse', 'HEAD']).stdout.trim()).toBe(beforeHead);
+      expect(git(['-C', tempWorktree, 'status', '--porcelain=v1', '--untracked-files=all']).stdout).toBe('');
+
+      const publishedRecord = JSON.parse(writes.slice(stdoutBeforePublish).join('').trim()) as Record<string, unknown>;
+      const cleanupFailure = git(['worktree', 'remove', '--force', join(root, 'not-the-owned-worktree')]);
+      expect(cleanupFailure.ok).toBe(false);
+      expect(publish).toHaveBeenCalledTimes(1);
+      expect(comments).toHaveLength(1);
+      expect(classify).not.toHaveBeenCalled();
 
       expect(git(['worktree', 'remove', '--force', tempWorktree]).ok).toBe(true);
       worktreeAdded = false;
@@ -1785,6 +1789,19 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
       expect(git(['branch', '--show-current']).stdout.trim()).toBe(beforeBranch);
       expect(git(['status', '--porcelain=v1', '--untracked-files=all']).stdout).toBe(beforeStatus);
       expect(git(['worktree', 'list', '--porcelain']).stdout).not.toContain(tempWorktree);
+
+      expect(classify(publishedRecord)).toMatchObject({
+        exitCode: 0,
+        result: { ok: true, verdict: 'PASS', cause: 'execute_worker_smoke_pass', nextAction: null },
+      });
+      expect(classify).toHaveBeenCalledTimes(1);
+      expect(publishedRecord).toMatchObject({
+        schema: 'pack-worker-smoke-report/v1',
+        issueNumber: 2182,
+        prNumber: 2219,
+        headSha: beforeHead,
+        result: 'PASS',
+      });
     } finally {
       stdout.mockRestore();
       if (worktreeAdded) git(['worktree', 'remove', '--force', tempWorktree]);
