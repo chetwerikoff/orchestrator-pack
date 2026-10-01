@@ -1,0 +1,52 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2188,
+  "declared_paths": [
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    ".cursor/skills/direct-fix-checklist/SKILL.md",
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    ".cursor/skills/publish-issue-draft/SKILL.md",
+    "docs/migration_notes.md",
+    "docs/target_repo_setup.md",
+    "docs/target-portability-sinks.md",
+    "plugins/codex-pr-reviewer/lib/review_cli.ts",
+    "prompts/investigate_root_cause.md",
+    "scripts/draft-discipline.mjs",
+    "scripts/gh",
+    "scripts/lib/create-issue-final-acceptance.ts",
+    "scripts/lib/create-issue-stage-record-cli.ts",
+    "scripts/lib/create-issue-stage-record-core.ts",
+    "scripts/lib/create-issue-stage-record-gh.ts",
+    "scripts/lib/gh-target-authorization.test.ts",
+    "scripts/lib/gh-target-authorization.ts",
+    "scripts/lib/worker-status-store.mjs",
+    "scripts/manager-review-terminal-bundle.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-worker-report.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
+    "scripts/publish-issue-body-sync.ts",
+    "scripts/run-pack-review-gpt.ts",
+    "scripts/target-portability-sinks.test.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worktree-lifecycle/operations.ts",
+    "scripts/worktree-teardown.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/",
+    ".cursor/skills/",
+    ".github/workflows/",
+    "docs/migration_notes.md",
+    "docs/target_repo_setup.md",
+    "docs/target-portability-sinks.md",
+    "plugins/",
+    "prompts/",
+    "scripts/"
+  ],
+  "source_revision": "aa356165b71d41b52bfc0fbb3eeee719a070d797"
+}
