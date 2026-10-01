@@ -47,7 +47,7 @@ jobs:
           node-version-file: package.json
           cache: npm
 
-      - name: Install npm dependencies
+      - name: Install runtime-history topology dependencies
         run: npm ci --include=dev
 
       - name: Emit derived heavy topology
@@ -92,7 +92,7 @@ jobs:
           node-version-file: package.json
           cache: npm
 
-      - name: Install npm dependencies
+      - name: Install runtime-history shard dependencies
         run: npm ci --include=dev
 
       - name: Download heavy topology artifact
