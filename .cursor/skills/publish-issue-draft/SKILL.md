@@ -29,7 +29,7 @@ This skill picks **how** a draft is persisted after `create-issue-draft`:
 | Mode | Issue owner | Draft file PR'd to the selected default branch | Snapshot + CI | When |
 |------|-------------|-------------------------|---------------|------|
 | **sync-only** (default) | `create-issue-draft` | **no** | no | normal tasks; Issue body is the live spec |
-| **batch** | `create-issue-draft` separately | one PR for several drafts | one run | epic+children, arch waves, registry refresh |
+| **batch** | `create-issue-draft` separately | one PR for several drafts | one run | epics + related Issues, multi-draft waves, index refresh |
 | **full-publish** | `create-issue-draft` separately | one PR for this draft | yes | user requests snapshot publication |
 
 Codex review is **unchanged**: draft-quality review happens in
