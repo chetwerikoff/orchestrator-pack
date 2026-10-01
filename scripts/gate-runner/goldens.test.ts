@@ -45,7 +45,6 @@ const movedClean = {
     '[discuss-with-gpt](.cursor/skills/discuss-with-gpt/SKILL.md)',
     '[create-issue-draft](.cursor/skills/create-issue-draft/SKILL.md)',
     '[study-external-source](.cursor/skills/study-external-source/SKILL.md)',
-    '[publish-issue-draft](.cursor/skills/publish-issue-draft/SKILL.md)',
     '[switch-pack-reviewer](.cursor/skills/switch-pack-reviewer/SKILL.md)',
   ].join('\n'),
   'CLAUDE.md': [
@@ -71,7 +70,6 @@ const movedClean = {
   '.cursor/skills/discuss-with-gpt/SKILL.md': '## Draft-author relocation',
   '.cursor/skills/create-issue-draft/SKILL.md': '# create-issue-draft',
   '.cursor/skills/study-external-source/SKILL.md': '# study-external-source',
-  '.cursor/skills/publish-issue-draft/SKILL.md': '# publish-issue-draft',
   '.cursor/skills/switch-pack-reviewer/SKILL.md': '# switch-pack-reviewer',
   '.cursor/skills/direct-fix-checklist/SKILL.md': '## Architect role contract',
   '.cursor/rules/draft-author-relocation.mdc': '[Draft-author relocation](../skills/discuss-with-gpt/SKILL.md#draft-author-relocation)',
