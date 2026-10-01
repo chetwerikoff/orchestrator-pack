@@ -1,168 +1,35 @@
 ---
-description: Flow-manager Browser-GPT canon fragments for tracked review prompts
+description: Shared flow-manager Browser-GPT transport monitoring
 alwaysApply: false
 ---
 
 # Flow-manager browser-turn monitoring
 
-The [create-Issue skill](../skills/create-issue-draft/SKILL.md) is the
-create-Issue review/comment/disposition/label authority. Its fixed T1/T2/T3
-review topology, first-line `Read revision: #N rNN` Issue comments and
-one-author-disposition-comment-per-round policy supersede historical stage
-records, stage receipts, finding-ledger tokens, source-slot cardinality receipts,
-competitive stages, and manager nextAction acceptance reconciliation.
-
-The manager starts three independent GPT architectural reviewers in parallel
-for T2/T3, obtains the one required Claude architectural-lens Issue comment for
-T3, and obtains the terminal GPT Issue comment. Already-published review
-comments on in-flight Issues count. A published revision-named Issue review
-comment completes the create-Issue review turn without awaiting the sender
-terminal envelope. If both an Issue comment and chat reply are absent, follow
-only the existing sender's legal recovery/resend contract; missing output is not
-fresh-send authority. Duplicate publication does not block acceptance. Findings
-from every required round require substantive author disposition; only the
-reviewed terminal revision or one author findings/floor correction may be labeled
-`spec-review:accepted` after the existing substantive floor passes. No gate,
-receipt, snapshot, freeze record, or second acceptance mechanism is introduced.
-
-Shared Browser-GPT transport and pack-review turns retain the independent
-procedures in [the one-turn runbook](../../docs/browser-gpt-turn-runbook.md):
-[start-of-shift preflight](../../docs/browser-gpt-turn-runbook.md#start-of-shift-preflight),
-[turn preparation](../../docs/browser-gpt-turn-runbook.md#prepare-one-turn),
-[launch](../../docs/browser-gpt-turn-runbook.md#launch),
-[observation and settlement](../../docs/browser-gpt-turn-runbook.md#observe-and-settle),
-[publication and cleanup](../../docs/browser-gpt-turn-runbook.md#publication-and-tab-lifecycle),
-[incident handling](../../docs/browser-gpt-turn-runbook.md#incident-handling),
-[one-shot diagnosis](../../docs/browser-gpt-turn-runbook.md#one-shot-diagnosis), and
-[handoff/close](../../docs/browser-gpt-turn-runbook.md#shift-handoffclose).
-Their invitation markers, admission, ownership, observation, and lawful retry
-rules are transport facts, **not** create-Issue label/review authority.
-The detached child lifecycle remains owned by [flow-manager-long-running-child-runbook.md](../../docs/flow-manager-long-running-child-runbook.md).
-
-Existing governed author-output producer fields remain owned by
-`scripts/lib/create-issue-author-dispositions-schema.ts`; this carrier
-contains only a pointer, not duplicate schema fields, and the old structured
-transport representation does not gate the published author disposition
-comments or label acceptance.
+This rule carries only shared Browser-GPT transport guidance. Workflow-specific
+authoring, review, disposition, acceptance, PR readiness, and merge authority
+remain with their owning skills/runbooks.
 
 ## Launch and observation
 
-For tracked create-issue and pack-review turns, use
-`npm run chatgpt-browser-turn -- turn ...`. Applicable long-running manager
-turns use `npm run flow-manager-browser-gpt-long-run -- ...` and its handoff
-receipt. Before every tracked turn, the caller/orchestrator mints and retains one
-non-empty `--invocation-id` and passes that exact value through the ordinary
-transport or long-running adapter and every later harvest/finalization action
-for the same attempt. Transport and adapter layers validate and forward this
-identity; they must not mint, replace, or reinterpret it. Presence of
-`--invocation-id` is common to ordinary and direct-publication-capable flows and
-never selects direct mode by itself; direct mode requires its direct-only
-arguments.
+Use the shared one-turn runbook:
+[Preflight](../../docs/browser-gpt-turn-runbook.md#start-of-shift-preflight),
+[Prepare](../../docs/browser-gpt-turn-runbook.md#prepare-one-turn),
+[Launch](../../docs/browser-gpt-turn-runbook.md#launch), and
+[Observe](../../docs/browser-gpt-turn-runbook.md#observe-and-settle).
 
-For a create-Issue GPT review, prepare the role-specific prompt from the live
-Issue and the skill's comment topology. Use the existing long-running adapter's
-ordinary **non-direct** form only for GPT reviewers, with a fresh project chat
-whose URL comes from the selected target card. Do not pass
-direct-publication-only identity/context or terminal-bundle arguments;
-the create-Issue skill owns that exclusion list and
-prompt content. For the required T3 Claude lens, follow the skill's separate
-invocation and comment-publication path; do not route it through this GPT-only
-adapter.
+One invocation has one stable input and one send-capable transport owner.
+Possible/proven delivery never authorizes a blind resend. Timeout, child exit,
+missing local output, or missing terminal envelope is not proof of non-delivery.
+Recover only the same owned invocation/conversation.
 
-After any non-success, admission remains incomplete until the caller follows
-the runbook's [durable observation recovery](../../docs/browser-gpt-turn-runbook.md#durable-observation-recovery)
-procedure. That procedure is the sole owner of exact durable-record identity,
-phase evidence, prepared/not-sent zero-send boundaries, and the
-same-invocation no-resend decision; this carrier does not duplicate its phase
-matrix.
+## Diagnostic probe
 
-Immediately before any profile verification, CDP connection, tab creation, or
-send, the canonical state-light entry reads the stable input and independently
-regenerates the expected reviewer bytes from the current tracked canon plus the
-bound invocation context. Exact byte equality is admission authority. Caller-
-carried source identities, hashes, manifests, or previously generated bytes are
-not proof of origin. Missing/malformed context, unreadable/ambiguous canon, or a
-byte mismatch settles through the existing `turn-result/v1` as
-`state: input_invalid`, `scope: invocation`, `send_count: 0`, with a concrete
-`canonical_prompt_*` cause and non-zero exit. A mismatch cause carries only the
-expected/observed unmarked prompt SHA-256 values plus the ordered current
-`path@blobSha` diagnostics; it never contains prompt bytes.
-
-Before launch, use a trusted current checkout, the configured local headed
-automation browser, and the applicable workflow/role. One invocation opens one
-dedicated owned tab, sends one exact user payload, and observes that same tab.
-Page/DOM completion is sufficient once the final assistant reply is stable and
-no longer generating; PID, shell state, silence, log growth, service-terminal
-witnesses, and heartbeats are not completion authority.
-Resolve Browser-GPT configuration without moving operator-owned state into the
-worktree. Select the target project card for this invocation with `--project
-<PROJECT_ID>` when the caller supports it, or set `OPK_PROJECT_ID` for the
-invocation. The selected card supplies the Browser-GPT project URL. Set the
-machine-wide browser profile separately:
-`export DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR="<CHROME_USER_DATA_DIR>"`.
-For governed create-Issue sends, the long-running adapter may instead receive
-`--operator-browser-config <absolute-path>` and read that exact operator-local
-file in place. Never copy `local.config.json`, browser profiles, cookies,
-sessions, or credentials into a worker worktree. The
-`discuss-with-gpt: operator configuration missing` signature means the selected
-card or mandatory browser profile configuration is unresolved; verify the card
-selection and browser profile value or the explicit read-only operator config path.
-
-The canonical prompt comparison covers only the unmarked reviewer input. After
-successful admission, the transport-owned `OPKTURNV1...` marker is inserted per
-payload exactly as before. Exactly one current user node with that marker proves
-ownership and page-path delivery; zero or multiple matches fail closed. Product
-ids and prompt-text matching are diagnostic only. Do not fabricate the marker in
-a prompt or use a second monitor. No caller-authored bytes may be inserted
-between canonical admission and the existing marker-wrap/send path. The helper
-emits `turn-result/v1`; the long-running adapter additionally owns the terminal
-envelope and handoff receipt. A direct event is invocation-local, must be
-retained and reported, and must not gate siblings or the account.
-
-## Legacy state and diagnostic probe
-
-The legacy `scripts/chatgpt-browser-turn.ts` prompt-bearing `turn` is not a
-second governed direct-publication sender. If that legacy CLI receives
-`--reviewer-source-output` or any governed direct-publication identity/context
-key, it refuses before browser configuration, profile verification, CDP, page,
-or send with `input_invalid:legacy_direct_publication_turn_refused`. Existing
-non-direct legacy diagnostics/control compatibility remains unchanged; the
-canonical state-light path is the sole governed direct-publication sender.
-
-`status/list`, `clear`, capability/Gate-B, `possible_delivery`, profile walls,
-stale recovery/orphan records, locks, queues, leases, and shell liveness are
-not admission or completion authority. Unexpected events are appended
-best-effort to the local recurrence journal and included in the current report;
-do not use that journal to authorize work.
-
-When direct diagnosis is genuinely needed, run the sanctioned one-shot page
-probe with local variables such as `${CDP_ENDPOINT}` and an exact target
-identity. `list`, `inspect`, `export`, and `liveness` are diagnostic-only and
-always carry `workflow_authority: none`; they never publish a recovered turn or
-progress a workflow. `harvest` is the sole action-producing probe
-(`diagnostic_only: false`) and also carries `workflow_authority: none`; it may
-recover/publish only the exact owned turn for the supplied invocation identity.
-The explicit `inspect --url ... --open-if-missing true` acquisition path may
-create one owned page, observe it until readiness, and close exactly that owned
-page before returning. Do not replace these paths with raw CDP, Playwright,
-salvage scripts, selectors, JavaScript, or a watch loop.
-
-For contract-evidence authoring, `binding-id` uses
-`producer:datum:expected`, for example
-`orchestrator-pack:$.status:closed`. The producer must be listed in the closed
-`scripts/contract-evidence-producer-registry.json`; repo-owned examples include
-`orchestrator-pack` and `orchestrator-pack-scripts`. This is authoring
-guidance, not validator documentation.
-
+The page probe is read-only diagnostic evidence. It may classify the exact owned
+conversation when ordinary observation is insufficient, but never sends,
+retries, mutates workflow state, or grants acceptance authority.
 
 ## Pack-review retry observation
 
-For Browser-GPT pack-review work, never relaunch a failed/lost source solely
-because its wrapper exited or local output is missing. Reconcile exact GitHub
-source publication first, then use the persisted exact `OPKTURNV1...` marker
-and direct read-only CDP observation across all compatible tabs. A live owned
-generation below 15 minutes remains active; at 15 minutes it may be replaced.
-A finished owned reply is recovery work under the original invocation, not a
-replacement. Ambiguous or unavailable observation grants no resend authority
-but must not block unrelated productive work. Do not create an unlock flag,
-watcher, retry queue, or durable replacement-eligibility state.
+Pack-review retains its own runner/review authority. Browser-GPT transport may
+observe or recover an exact reviewer conversation, but it does not create an
+extra review round, bypass a review cap, or rewrite current-head review state.

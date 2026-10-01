@@ -7,7 +7,7 @@ description: >-
   (create-issue-draft produces no local draft file and never chains here —
   there is nothing to persist). DEFAULT is sync-only: the GitHub Issue is the
   queue; a legacy draft file stays local and is NOT committed or PR'd. Only
-  open a PR to main on explicit request (batch a series, or full publish of
+  open a PR to the selected default branch on explicit request (batch a series, or full publish of
   one legacy draft). Use when the user asks to publish, commit, batch, or
   ship a legacy draft.
 ---

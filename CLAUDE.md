@@ -12,8 +12,6 @@ tracked implementation files.
 
 - Architect role:
   [`.cursor/skills/direct-fix-checklist/SKILL.md#architect-role-contract`](.cursor/skills/direct-fix-checklist/SKILL.md#architect-role-contract).
-- Draft-author role:
-  [`.cursor/skills/discuss-with-gpt/SKILL.md#draft-author-relocation`](.cursor/skills/discuss-with-gpt/SKILL.md#draft-author-relocation).
 - RCA / failure response:
   [`.cursor/skills/investigate-root-cause/SKILL.md`](.cursor/skills/investigate-root-cause/SKILL.md).
 - Direct tracked fixes and operator-requested review routing:

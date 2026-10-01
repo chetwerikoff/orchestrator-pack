@@ -292,10 +292,6 @@ describe('Issue #2186 pack migration roster', () => {
 
     mkdirSync(flatWake, { recursive: true });
     writeFileSync(path.join(flatWake, 'worker-status-store.json'), '{"records":{}}\n', 'utf8');
-    const createRoot = path.join(localState, 'create-issue-draft');
-    mkdirSync(path.join(createRoot, '.review', '7'), { recursive: true });
-    writeFileSync(path.join(createRoot, '.review', '7', 'tier-intake.json'), '{}\n', 'utf8');
-    mkdirSync(path.join(createRoot, '7-work'), { recursive: true });
     const discussRoot = path.join(localState, 'discuss-with-gpt');
     mkdirSync(path.join(discussRoot, 'old-draft'), { recursive: true });
     writeFileSync(path.join(discussRoot, 'old-draft', 'pass.md'), 'legacy\n', 'utf8');
@@ -314,26 +310,18 @@ describe('Issue #2186 pack migration roster', () => {
       targetPath: path.join(projectRoot, 'worker-status-store.json'),
       kind: 'opaque-file',
     });
-    expect(byId.get('project-create-issue-review')).toMatchObject({
-      sourcePath: path.join(createRoot, '.review'),
-      targetPath: path.join(createRoot, 'orchestrator-pack', '.review'),
-      kind: 'opaque-directory',
-    });
     expect([...byId.values()].some((store) => store.sourcePath === path.join(discussRoot, 'old-draft'))).toBe(true);
     expect([...byId.values()].some((store) => store.sourcePath === path.join(discussRoot, 'cdp-9222-owner.json'))).toBe(false);
     expect([...byId.values()].some((store) => store.sourcePath === path.join(discussRoot, 'leopoker'))).toBe(false);
     expect(withPackProjectStateMigration(request, 'leopoker')).toBe(request);
   });
 
-  it('uses HOME-based create/discuss owners even when the wake root is under XDG_STATE_HOME', () => {
+  it('uses the HOME-based discuss owner even when the wake root is under XDG_STATE_HOME', () => {
     const { request } = activationFixture();
     const home = tempRoot();
     const localState = path.join(home, '.local', 'state');
     const wakeRoot = path.join(tempRoot(), 'xdg', 'orchestrator-pack-wake-supervisor', 'orchestrator-pack');
     request.paths.stateDir = wakeRoot;
-    const createReview = path.join(localState, 'create-issue-draft', '.review');
-    mkdirSync(createReview, { recursive: true });
-    writeFileSync(path.join(createReview, 'receipt.json'), '{}\n');
     const discussDraft = path.join(localState, 'discuss-with-gpt', 'draft-7');
     mkdirSync(discussDraft, { recursive: true });
     writeFileSync(path.join(discussDraft, 'pass.md'), 'pass\n');
@@ -346,46 +334,18 @@ describe('Issue #2186 pack migration roster', () => {
       if (oldHome === undefined) delete process.env.HOME;
       else process.env.HOME = oldHome;
     }
-    expect(migrated!.stores.find((store) => store.id === 'project-create-issue-review')?.sourcePath).toBe(createReview);
     expect(migrated!.stores.some((store) => store.sourcePath === discussDraft)).toBe(true);
   });
 });
 
 describe('Issue #2186 opaque project-state migration', () => {
-  it('preserves canonical create-Issue review bytes and makes publication replay idempotent', () => {
-    const root = tempRoot();
-    const source = path.join(root, 'create-issue-draft', '.review', '7');
-    const target = path.join(root, 'create-issue-draft', 'leopoker', '.review', '7');
-    mkdirSync(source, { recursive: true });
-    const payload = Buffer.from([0, 1, 2, 3, 0xff, 0x0a]);
-    writeFileSync(path.join(source, 'terminal.bin'), payload);
-    const spec = {
-      id: 'create-issue-review-7',
-      kind: 'opaque-directory' as const,
-      sourcePath: source,
-      targetPath: target,
-      coveredFields: [] as const,
-    };
-    const [snapshot] = snapshotStores([spec], path.join(root, 'snapshots'), 'writers-quiesced');
-    assertSnapshotSourceStable(spec, snapshot!);
-    const first = importSnapshot({ epochId: 'epoch-2186', nonce: 'nonce-2186', spec, snapshot: snapshot! });
-    const replay = importSnapshot({ epochId: 'epoch-2186', nonce: 'nonce-2186', spec, snapshot: snapshot! });
-    expect(replay.importIdentity).toBe(first.importIdentity);
-    expect(readFileSync(path.join(target, 'terminal.bin'))).toEqual(payload);
-    expect(existsSync(source)).toBe(true);
-    expect(retireImportedSource(spec, snapshot!)).toBe(true);
-    expect(existsSync(source)).toBe(false);
-    expect(retireImportedSource(spec, snapshot!)).toBe(false);
-    expect(readFileSync(path.join(target, 'terminal.bin'))).toEqual(payload);
-  });
-
   it('replays an atomically published directory without its marker and discards orphan staging', () => {
     const root = tempRoot();
     const source = path.join(root, 'source');
-    const target = path.join(root, 'project', '.review');
+    const target = path.join(root, 'project', 'opaque-state');
     mkdirSync(source, { recursive: true });
     writeFileSync(path.join(source, 'receipt.json'), '{"ok":true}\n');
-    const spec = { id: 'project-create-issue-review', kind: 'opaque-directory' as const,
+    const spec = { id: 'project-opaque-directory', kind: 'opaque-directory' as const,
       sourcePath: source, targetPath: target, coveredFields: [] as const };
     const [snapshot] = snapshotStores([spec], path.join(root, 'snapshots'), 'writers-quiesced');
     const first = importSnapshot({ epochId: 'epoch-7', nonce: 'nonce-7', spec, snapshot: snapshot! });
@@ -477,21 +437,16 @@ describe('Issue #2186 opaque project-state migration', () => {
 });
 
 describe('Issue #2186 project-state binding', () => {
-  it('publishes migrated create-Issue and discuss namespaces only after the existing commit boundary', () => {
+  it('publishes migrated discuss namespaces only after the existing commit boundary', () => {
     const root = tempRoot();
     const wake = path.join(root, 'wake', 'orchestrator-pack');
-    const createRoot = path.join(root, 'create-issue-draft', 'orchestrator-pack');
     const discussRoot = path.join(root, 'discuss-with-gpt', 'orchestrator-pack');
-    mkdirSync(path.join(createRoot, '.review', '7'), { recursive: true });
     mkdirSync(path.join(discussRoot, 'draft'), { recursive: true });
-    writeFileSync(path.join(createRoot, '.review', '7', 'receipt.json'), '{}\n');
     const request = { projectId: 'orchestrator-pack', repository: 'owner/pack', paths: { stateDir: wake },
       stores: [
-        { id: 'project-create-issue-review', targetPath: path.join(createRoot, '.review') },
         { id: 'project-discuss-artifact-1', targetPath: path.join(discussRoot, 'draft') },
       ] } as ActivationRequest;
     publishCommittedProjectNamespaceBindings(request);
-    expect(assertProjectStateBinding(createRoot, { projectId: 'orchestrator-pack', repository: 'owner/pack' }).repository).toBe('owner/pack');
     expect(assertProjectStateBinding(discussRoot, { projectId: 'orchestrator-pack', repository: 'owner/pack' }).repository).toBe('owner/pack');
     expect(() => publishCommittedProjectNamespaceBindings({ ...request, repository: 'owner/other' })).toThrow('project_state_binding_mismatch');
   });

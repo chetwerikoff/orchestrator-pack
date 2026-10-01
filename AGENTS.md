@@ -287,7 +287,6 @@ invocation detail.
 | [`execute-issue-with-gpt`](.cursor/skills/execute-issue-with-gpt/SKILL.md) | explicitly execute or continue implementation of an existing Issue through GPT; explicit implementation wording wins over a `manager` / `менеджер` noun in the same request |
 | [`review-pr-with-gpt`](.cursor/skills/review-pr-with-gpt/SKILL.md) | when acting as orchestrator/supervisor, route an explicit operator request to review an existing implementation PR, or an exact Issue whose unique open closing PR must be resolved by the manager before review effects; standalone connected-GitHub chat review stays on the direct-review procedure above |
 | [`study-external-source`](.cursor/skills/study-external-source/SKILL.md) | study an external repository or URL |
-| [`publish-issue-draft`](.cursor/skills/publish-issue-draft/SKILL.md) | publish an existing tracked draft |
 | [`switch-pack-reviewer`](.cursor/skills/switch-pack-reviewer/SKILL.md) | change the configured reviewer |
 
 For an existing `orchestrator-pack` Issue, `<Issue> manager`, `<Issue> менеджер`,

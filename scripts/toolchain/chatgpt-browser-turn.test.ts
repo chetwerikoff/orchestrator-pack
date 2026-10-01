@@ -2482,16 +2482,16 @@ describe('issue 1025 Half A proven non-delivery', () => {
 
 
 
-describe('issue 1025 gate-B characterization notes', () => {
-  it('documents live boundary probes required on supported Chromium/Playwright runtime', () => {
+describe('issue 1025 dispatch observation contract', () => {
+  it('documents current shared transport and diagnostic ownership', () => {
     const notes = readFileSync(
       join(issue1025RepoRoot, 'scripts/chatgpt-browser-turn/README.md'),
       'utf8',
     );
-    expect(notes).toContain('service-worker-owned HTTP');
-    expect(notes).toContain('worker/secondary-target outbound WebSocket');
-    expect(notes).toContain('dispatch_request_not_issued');
-    expect(notes).toContain('gate-b-characterization');
+    expect(notes).toContain('Shared Browser-GPT state-light transport');
+    expect(notes).toContain('Possible/proven delivery');
+    expect(notes).toContain('browser-gpt-page-probe');
+    expect(notes).not.toContain('workflow-specific review/acceptance rules');
   });
 
   it('ships the Gate-B live characterization probe module', async () => {

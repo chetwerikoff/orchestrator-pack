@@ -152,11 +152,7 @@ green; the automation Chrome is logged into ChatGPT; and Orca is running.
     end-to-end target task until both dependencies have landed and been adopted.
     Then create one small target Issue and drive it to a PR through the normal
     flow. Verify every GitHub effect lands in `<repository>`, every
-    per-project state namespace uses `<projectId>`, and verification runs the
-    target-owned commands. Create-Issue stage-record state must appear under
-    `~/.local/state/create-issue-draft/<projectId>/<issueNumber>/journal/`;
-    its `pending/` events and `active-cycle-id.txt` must never share an
-    Issue-number-only directory with another project.
+    per-project state namespace uses `<projectId>`, and verification runs the target-owned commands.
 13. **Rollback.** Disable fleet wake with
     `systemctl --user disable --now fleet-wake@<projectId>`. If #2186 has
     landed and step 7 started the per-project supervisor, run

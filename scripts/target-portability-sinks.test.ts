@@ -5,20 +5,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runProcessSync } from './kernel/subprocess.ts';
-import { bindPublishIssueTarget } from './publish-issue-body-sync.ts';
-import { syncPublishIssueBody } from './lib/publish-issue-body-sync.ts';
 import { manualPackReviewRequiredCiGreen, requiredStatusChecksEndpoint, resolveCurrentPrHead, startPackReview } from './pack-review-runner.ts';
 import { parseArgs as parseRunPackReviewArgs } from './run-pack-review-gpt.ts';
 import { parseReviewArgs } from '../plugins/codex-pr-reviewer/lib/review_cli.ts';
 import { parsePackWorkerReportArgs } from './pack-worker-report.ts';
-import {
-  defaultWorkdir,
-  listPendingEvents,
-  persistCycleId,
-  readPersistedCycleId,
-  resolveJournalWorkdir,
-  writePendingEvent,
-} from './lib/create-issue-stage-record-gh.ts';
 import {
   TargetGhAuthorizationError,
   authorizeTargetGhInvocation,
@@ -27,7 +17,7 @@ import { projectCardPath, resolveTargetContext } from './lib/target-context.ts';
 
 const roots: string[] = [];
 const savedEnv = new Map<string, string | undefined>();
-const ENV_KEYS = ['HOME', 'XDG_CONFIG_HOME', 'OPK_PROJECT_ID', 'OPK_CREATE_ISSUE_DRAFT_STATE_ROOT', 'OPK_VITEST_HARNESS', 'VITEST'] as const;
+const ENV_KEYS = ['HOME', 'XDG_CONFIG_HOME', 'OPK_PROJECT_ID', 'OPK_VITEST_HARNESS', 'VITEST'] as const;
 
 function rememberEnv(): void {
   for (const key of ENV_KEYS) if (!savedEnv.has(key)) savedEnv.set(key, process.env[key]);
@@ -102,48 +92,11 @@ describe('Issue #2188 target portability sinks', () => {
     })).toEqual({ PATH: '/bin' });
   });
 
-  it('drives the real publication and canonical PR-read seams through either selected card', async () => {
+  it('binds canonical PR reads to either selected card', async () => {
     const fixture = twoTargetFixture();
     const issuePrNumber = 77;
-    const draftContent = '# Target routing\n\ncard-routed body';
     for (const spec of fixture.specs) {
-      const env = { ...fixture.env, OPK_PROJECT_ID: spec.projectId };
-      const publish = { mode: 'edit' as const, draftPath: 'draft.md', repo: '', json: false };
-      expect(bindPublishIssueTarget(publish, env)).toEqual({
-        projectId: spec.projectId,
-        repository: spec.repository,
-        defaultBranch: spec.defaultBranch,
-      });
-      const selected = resolveTargetContext({ projectId: spec.projectId, env });
-      expect(publish.repo).toBe(selected.repository);
-
-      const bodyFilePath = join(fixture.root, `${spec.projectId}-issue-body.md`);
-      const ghCalls: string[][] = [];
-      const publication = syncPublishIssueBody({
-        runGh(argv) {
-          ghCalls.push([...argv]);
-          if (argv[1] === 'issue' && argv[2] === 'edit') return { exitCode: 0, stdout: '', stderr: '' };
-          if (argv[1] === 'api') return { exitCode: 0, stdout: 'card-routed body', stderr: '' };
-          return { exitCode: 1, stdout: '', stderr: `unexpected argv: ${argv.join(' ')}` };
-        },
-        writeBodyFile() { return bodyFilePath; },
-        emitAudit() {},
-        validateTierGateGuard: () => ({ ok: true, message: 'fixture' }),
-        validateStageCompletenessGuard: () => ({ ok: true, message: 'fixture' }),
-        validateFindingLedgerGuard: () => ({ ok: true, message: 'fixture' }),
-      }, {
-        mode: 'edit',
-        draftPath: publish.draftPath,
-        draftContent,
-        repo: publish.repo,
-        issueNumber: issuePrNumber,
-      });
-      expect(publication).toMatchObject({ ok: true, issueNumber: issuePrNumber });
-      expect(ghCalls).toEqual([
-        ['gh', 'issue', 'edit', '--repo', selected.repository, '--body-file', bodyFilePath, String(issuePrNumber)],
-        ['gh', 'api', `repos/${selected.repository}/issues/${issuePrNumber}`, '--jq', '.body'],
-      ]);
-
+      const selected = resolveTargetContext({ projectId: spec.projectId, env: fixture.env });
       const prCalls: Array<{ args?: readonly string[]; cwd?: string }> = [];
       const expectedHead = spec.projectId === 'alpha' ? 'a'.repeat(40) : 'b'.repeat(40);
       const resolvedHead = await resolveCurrentPrHead(
@@ -191,46 +144,6 @@ describe('Issue #2188 target portability sinks', () => {
       .rejects.toThrow(/does not match selected target base origin\/trunk/u);
   });
 
-  it('keeps same-number create-Issue journals project-disjoint and rejects cross-project replay', () => {
-    const fixture = twoTargetFixture();
-    process.env.HOME = fixture.env.HOME;
-    process.env.XDG_CONFIG_HOME = fixture.env.XDG_CONFIG_HOME;
-
-    process.env.OPK_PROJECT_ID = 'alpha';
-    const alpha = defaultWorkdir(77);
-    expect(alpha).toBe(join(fixture.root, '.local', 'state', 'create-issue-draft', 'alpha', '77', 'journal'));
-    writePendingEvent(alpha, {
-      schema: 'create-issue-pending/v1',
-      eventKey: 'same-event',
-      body: 'alpha-only',
-      createdAt: '2026-10-01T00:00:00.000Z',
-    });
-    persistCycleId(alpha, 'alpha-cycle');
-
-    process.env.OPK_PROJECT_ID = 'beta';
-    const beta = defaultWorkdir(77);
-    expect(beta).toBe(join(fixture.root, '.local', 'state', 'create-issue-draft', 'beta', '77', 'journal'));
-    expect(beta).not.toBe(alpha);
-    expect(listPendingEvents(beta)).toEqual([]);
-    expect(readPersistedCycleId(beta)).toBeNull();
-    writePendingEvent(beta, {
-      schema: 'create-issue-pending/v1',
-      eventKey: 'same-event',
-      body: 'beta-only',
-      createdAt: '2026-10-01T00:00:00.000Z',
-    });
-    persistCycleId(beta, 'beta-cycle');
-    expect(listPendingEvents(beta).map((event) => event.body)).toEqual(['beta-only']);
-    expect(readPersistedCycleId(beta)).toBe('beta-cycle');
-
-    process.env.OPK_PROJECT_ID = 'alpha';
-    expect(listPendingEvents(alpha).map((event) => event.body)).toEqual(['alpha-only']);
-    expect(readPersistedCycleId(alpha)).toBe('alpha-cycle');
-
-    process.env.OPK_PROJECT_ID = 'beta';
-    expect(() => resolveJournalWorkdir(77, alpha))
-      .toThrow(/create_issue_journal_workdir_override_untrusted/u);
-  });
 
   it('authorizes selected target reads and supported mutations before gh transport', () => {
     const alpha = { repository: 'example/alpha' };
@@ -459,16 +372,4 @@ describe('Issue #2188 target portability sinks', () => {
     expect(codeOf(() => parsePackWorkerReportArgs(['ready_for_review'], fixture.env))).toBe('missing-selection');
   });
 
-  it('fails the production publication target binding with typed missing-selection before transport', () => {
-    const fixture = twoTargetFixture();
-    const env = { ...fixture.env };
-    delete env.OPK_PROJECT_ID;
-    const publish = { mode: 'edit' as const, draftPath: 'draft.md', repo: '', json: false };
-    try {
-      bindPublishIssueTarget(publish, env);
-      throw new Error('expected missing-selection');
-    } catch (error) {
-      expect(error).toMatchObject({ code: 'missing-selection' });
-    }
-  });
 });

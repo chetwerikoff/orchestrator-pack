@@ -210,7 +210,7 @@
       "aliases": ["completion authority", "publication", "inbox drain"],
       "sections": [
         { "heading": "## Bound-run inbox drain and acknowledgement" },
-        { "heading": "## Published GitHub artifact completion and batch attribution" }
+        { "heading": "## Create-Issue GitHub completion" }
       ],
       "edges": [
         { "type": "related", "target": "runbook-s1-s2" },
@@ -701,7 +701,6 @@
         { "type": "related", "target": "execute-issue-with-gpt" },
         { "type": "related", "target": "adversarial-draft-review" },
         { "type": "related", "target": "discuss-with-gpt" },
-        { "type": "related", "target": "publish-issue-draft" },
         { "type": "related", "target": "tiering" }
       ]
     },
@@ -752,20 +751,6 @@
       "edges": [
         { "type": "related", "target": "create-issue-draft" },
         { "type": "related", "target": "browser-gpt-turn-runbook" }
-      ]
-    },
-    {
-      "episode_id": "publish-issue-draft",
-      "title": "Publish a legacy Issue draft",
-      "path": ".cursor/skills/publish-issue-draft/SKILL.md",
-      "topic": "publishing",
-      "role": "operator",
-      "aliases": ["legacy draft persistence", "публикация драфта", "publish legacy draft"],
-      "sections": [
-        { "heading": "## Mode A — sync-only (DEFAULT)" }
-      ],
-      "edges": [
-        { "type": "related", "target": "create-issue-draft" }
       ]
     },
     {

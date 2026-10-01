@@ -1,625 +1,115 @@
 # Browser-GPT turn runbook
 
-This runbook owns the portable manager procedure and operational mechanics for a
-tracked Browser-GPT turn. The non-always-loaded
-[flow-manager carrier](../.cursor/rules/flow-manager-browser-turn-monitoring.mdc)
-retains only the manager-review canon fragments selected literally by the
-create-issue workflow: **Launch and observation** and **Legacy state and
-diagnostic probe**. The canonical create-issue skills own workflow, roles,
-stages, receipts, and review policy. The transport
-[README](../scripts/chatgpt-browser-turn/README.md) owns CLI arguments,
-result fields, and implementation-local boundaries. The existing
-[long-running-child runbook](flow-manager-long-running-child-runbook.md) owns
-launcher internals.
+This is the shared transport/recovery authority for one tracked Browser-GPT
+turn. It is workflow-neutral: Issue authoring, execute-Issue, pack-review, and
+other callers keep their own substantive lifecycle and acceptance authority.
 
 ## Local-only configuration
 
-Do not put operator values in tracked documentation. Use the existing
-gitignored `local.config.json` surface and environment variables only for
-machine-wide browser settings. Select the target project card per invocation
-with `--project <PROJECT_ID>` when the caller supports it, or set
-`OPK_PROJECT_ID` for the invocation. The selected card is the sole source of
-the Browser-GPT project URL; do not set or store a separate project URL.
-
-
-| Value | Existing local input or shell placeholder |
-| --- | --- |
-| workflow identities and invocation | `<REPOSITORY>`, `<ISSUE_NUMBER>`, `<EXPECTED_REVISION>`, `<STAGE>`, and `<SLOT>` only when the owning workflow defines them; every tracked turn retains `<INVOCATION_ID>` |
-| target selection | `--project <PROJECT_ID>` or `OPK_PROJECT_ID` |
-| conversation URL | `${CHAT_URL}` shell-only placeholder passed to `--chat-url` |
-| browser profile | `${BROWSER_PROFILE}` shell placeholder; `DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR` or `chromeUserDataDir` |
-| Chrome executable | `${CHROME_PATH}` shell placeholder; `DISCUSS_WITH_GPT_CHROME_PATH` or `chromePath` |
-| CDP endpoint | `${CDP_ENDPOINT}` shell-only placeholder passed to `--cdp` |
-| prompt and outputs | `${INPUT_FILE}`, `${OUTPUT_FILE}`, `${HANDOFF_RECEIPT}`, `${TERMINAL_ENVELOPE}` |
-| local config | machine-wide browser/profile/executable settings only |
-
-Use new no-clobber paths inside an existing local directory. Never commit a
-real project or conversation URL, browser path, CDP endpoint, home/worktree
-path, prompt/output path, receipt, envelope, cookie, token, or credential.
+Use operator-provided ChatGPT project/profile/CDP configuration. Never copy
+cookies, browser profiles, credentials, or session state into a worktree or
+tracked file.
 
 ## Start-of-shift preflight
 
-1. Enter a trusted current checkout and read the live `AGENTS.md` and
-   `docs/chat-executor-rules.md`.
-2. Verify the repository's Node 22 requirement and the exact task/turn
-   identities supplied by the owning workflow. For governed create-Issue
-   reviewer turns, this includes the current tier, role, stage, source slot,
-   and frozen revision. A workflow that does not define create-review
-   `stage`, `slot`, or frozen revision must not invent values for them.
-   When this shift is the next turn of an already-admitted manager workflow,
-   the owning workflow must also supply that exact Run/Task context and the
-   exact caller-held manager worktree selector. Before Browser-GPT reads new
-   tracked turn inputs, apply the same manager refresh boundary owned by the
-   supervised Task launch assistant: resolve the selector through Orca, prove
-   repository/path identity with only bounded read-only git queries, fetch
-   `origin/main`, then require already-equal or a clean ancestor-only
-   fast-forward on the distinct manager-local branch. For a manager-bound
-   create-Issue shift, a repository-owned mismatch returns
-   `recoverable(reconcile-stage-read-only)`; external reality returns
-   `external_pause`; malformed producer output is a boundary
-   `contract_defect`. A generic Browser-GPT shift without this manager
-   binding emits no manager-refresh git command, and an already-running turn or
-   frozen create-Issue stage attempt is never refreshed mid-turn.
-3. Select the target project card for this invocation with `--project
-   <PROJECT_ID>` when the owning caller supports that option, or set
-   `OPK_PROJECT_ID` for the invocation. The selected card supplies the
-   Browser-GPT project URL; do not set a separate URL in environment or
-   local configuration. Resolve other Browser-GPT configuration without
-   copying operator files into the worktree. A governed create-Issue send may
-   pass `--operator-browser-config <absolute-path>`; the inline
-   send-boundary preflight reads that exact operator-local file in place.
-   For a governed create-Issue caller, a legal retry is
-   `recoverable(retry-create-issue-browser-preflight)`; operator-owned
-   configuration that must change outside the repository is an
-   `external_pause` with the exact remedy/evidence, never a terminal manager
-   refusal.
-4. Confirm the configured headed automation Chrome is running and logged in.
-   Never type credentials. Create-Issue callers do not run a separate mandatory
-   preflight command: Node 22, tracked GitHub transport and Browser-GPT
-   configuration are revalidated inline before the first launcher/browser/send
-   side effect.
-5. Start or verify the configured browser through the existing launcher:
-   `.claude/skills/discuss-with-gpt/launch-chrome.sh`. Select the applicable
-   canonical workflow; stage cardinality and topology belong to that workflow,
-   not this runbook.
+Before a send-capable turn:
+
+1. run from the trusted pack checkout with the intended worktree as `--cwd`;
+2. use the tracked Node 22 entrypoint and current Browser-GPT scripts;
+3. prove the intended browser profile/CDP endpoint is reachable;
+4. resolve the intended ChatGPT project card/URL when a fresh project chat is required;
+5. prepare stable input bytes and one invocation id;
+6. ensure output/launcher-owned artifact paths are distinct and unoccupied.
+
+A failed preflight performs no send. Do not repair credentials, solve CAPTCHA,
+or silently substitute another profile/project.
 
 ## Prepare one turn
 
-Write the complete prompt to `${INPUT_FILE}`. Allocate fresh, distinct,
-attempt-isolated `${OUTPUT_FILE}`, `${HANDOFF_RECEIPT}`, and
-`${TERMINAL_ENVELOPE}` destinations. Before every tracked turn, the
-caller/orchestrator must mint and retain one non-empty `${INVOCATION_ID}` and
-pass that exact value through the ordinary turn or long-running adapter and any
-later harvest/finalization action for the same attempt. Transport/adapter code
-validates and forwards this identity; it must not mint, replace, or reinterpret
-it. Choose an existing conversation or a fresh project using local values;
-tracked content must not contain either URL.
+Each turn has one input snapshot, one invocation id, one destination output,
+and either `--new-chat --project-url <url>` or `--chat-url <url>`.
 
-For governed create-Issue reviewers, do **not** hand-author `${INPUT_FILE}`.
-`.cursor/skills/create-issue-draft/SKILL.md` owns the manager-review canon
-section list and `scripts/lib/manager-review-brief.ts` renders the exact
-unmarked reviewer input from that tracked canon plus repository, Issue,
-revision, stage, slot, and invocation context. For one plural `stageAttemptId`,
-render all sibling input files from one ephemeral canon read before launching
-the first sibling. Do not re-prepare a later sibling from newer canon after the
-batch has started. The input files are transport inputs only, not provenance
-manifests or persisted canon snapshots.
-
-For the terminal `architectural` reviewer, the create-Issue workflow first
-materializes the current governed prior-state bundle with
-`scripts/manager-review-terminal-bundle.ts` and renders `${INPUT_FILE}` with
-that exact bundle. T1 uses the current-bound zero-state form; T2 uses
-pre-lens acceptance artifacts, and T3 uses post-lens acceptance artifacts.
-Keep the bundle as a separate local transport input and pass its path through
-the launch below.
+Do not pass workflow-specific review-stage, slot, acceptance, or publication
+authority through transport. Prompt content carries the substantive role/task.
 
 ## Launch
 
-For applicable long turns, use the tracked adapter:
+Normal manager adapter:
 
-```bash
-npm run --silent flow-manager-browser-gpt-long-run -- \
-  --run-identity <RUN_ID> \
-  --attempt-identity <ATTEMPT_ID> \
-  --invocation-id "${INVOCATION_ID}" \
-  --handoff-receipt "${HANDOFF_RECEIPT}" \
-  --terminal-envelope "${TERMINAL_ENVELOPE}" \
-  --output "${OUTPUT_FILE}" \
-  --profile "${BROWSER_PROFILE}" \
-  --cdp "${CDP_ENDPOINT}" \
-  --input "${INPUT_FILE}" \
-  --chat-url "${CHAT_URL}"
+```text
+npm run --silent flow-manager-browser-gpt-long-run --   --run-identity <run>   --attempt-identity <attempt>   --handoff-receipt <path>   --invocation-id <id>   --terminal-envelope <path>   --output <path>   --profile <profile>   --cdp <url>   --input <prompt-file>   --cwd <worktree>   [--project-url <url> --new-chat | --chat-url <url>]
 ```
 
-For a governed create-Issue direct-publication reviewer, add the existing
-direct-publication identity/output arguments and the required canon context:
-
-```bash
-  --reviewer-source-output "${REVIEWER_SOURCE_OUTPUT}" \
-  --reviewer-source slot-01#capture=direct-publication/v1 \
-  --repository "${REPOSITORY}" \
-  --issue-number "${ISSUE_NUMBER}" \
-  --source-revision "${EXPECTED_REVISION}" \
-  --stage "${STAGE}" \
-  --source-slot "${SLOT}" \
-  --stage-attempt-id "${STAGE_ATTEMPT_ID}"
-```
-
-When `${STAGE}` is `architectural`, also add:
-
-```bash
-  --terminal-input-bundle "${TERMINAL_INPUT_BUNDLE}"
-```
-
-Do not pass that option to `competitive` or `architectural-review`.
-
-The left-hand source token (`slot-01`) is the independent per-slot identity.
-Concurrent slots must use distinct left-hand ids (`slot-01`, `slot-02`,
-`slot-03`). A retry of the same slot must reuse that slot's exact
-`reviewerSource` identity, including the same left-hand id; do not mint a new
-source identity for the retry.
-
-The long-running adapter refuses missing direct-publication context before it
-spawns the detached child. State-light independently regenerates current
-canonical reviewer bytes from the stable unmarked input before profile/CDP/tab
-work and refuses a mismatch with an existing `turn-result/v1` carrying
-`state: input_invalid`, `send_count: 0`, and a concrete `canonical_prompt_*`
-cause. A byte-mismatch cause includes expected/observed unmarked prompt hashes
-and current `path@blobSha` diagnostics, never prompt bytes.
-
-For a fresh project launch, use the owning caller's `--new-chat` path with the
-selected project card. The caller resolves the card's project URL and forwards
-it to the transport; do not supply a separate project URL.
-
-For governed create-Issue manager calls, the long-running adapter emits exactly
-one manager-result JSON object on stdout: `completed` with exit 0,
-`recoverable` with exit 3 and executable `nextAction.argv`,
-`external_pause` with exit 4 and typed external evidence/resumption, or
-boundary-only `contract_defect` with exit 5. Diagnostics go to stderr. Source
-revision, stage-attempt, lifecycle-binding, wrong-Issue, wrong-conversation, and
-stale-handoff mismatches first return a read-only reconciliation action; they do
-not settle the manager Task.
-
-
-For an ordinary tracked turn, the underlying reference is
-`npm run chatgpt-browser-turn -- turn --invocation-id "${INVOCATION_ID}" ...`
-with the current local CLI values. A governed create-Issue direct-publication
-turn carries the same `--stage` and `--source-slot` values as the long-running
-path. The presence of `--invocation-id` is normal for both ordinary and direct-
-publication-capable flows and never selects direct mode by itself; direct mode
-requires its direct-only arguments. Use the existing launcher contract and
-bounded observation; do not invent a shell-backgrounding workaround or a
-second monitor.
+The adapter returns after launcher handoff is proven; that is not proof of a
+model reply or workflow-level completion.
 
 ## Observe and settle
 
-The valid child `turn-result/v1` is the turn authority; for long turns the
-launcher terminal envelope represents that settled child result. The handoff
-receipt only acknowledges accepted detached launch and is not completion
-authority. A stable final page reply is sufficient; PID, shell state, silence,
-log growth, and observation heartbeats are not completion authority. Follow the
-current workflow for stage/revision policy and this runbook for invocation-local
-ownership, marker attribution, retry/no-resend, publication, and cleanup.
+The authoritative transport result is one `turn-result/v1`. The long-running
+child projects it into its terminal envelope and records delivery as
+`not-sent`, `POSSIBLY_DELIVERED`, or `landed`.
 
-If a result, page, or conversation binding is lost after a possible send, do
-not infer non-delivery. Re-resolve the current target from `${CHAT_URL}`,
-continue sanctioned observation, and harvest the answer with the same
-`${INVOCATION_ID}`. The saved target id may be stale.
+- Proven pre-send failure with `send_count: 0` may be retried only when the
+  calling workflow already authorizes retry.
+- Possible/proven delivery forbids a blind resend.
+- Timeout, child exit, missing envelope, or absent output does not prove no send.
+- Recovered reply bytes belong to the same invocation/conversation.
 
 ### Non-success observation gate
 
-The sole bypass is `lifecycle_outcome: success` with `turn-result/v1
-state: ok`. Every other outcome—including `driver_error`, `input_invalid`,
-refusal, ambiguous harvest, missing result or envelope, timeout, and incident—
-must complete the applicable observation branch before any resend, replacement
-invocation identity, stage progression, or blocker exit.
+Read exact state/cause, send count, owned conversation identity, and current
+page/browser liveness before the owning workflow chooses a next action.
+Product/login/quota/network walls are evidence, not send authority.
 
-First classify the outcome from authoritative transport evidence:
+### Same-invocation recovery
 
-- **no-page-by-construction** applies only when the result proves
-  `send_count: 0` and proves failure before profile verification, CDP
-  connection, page/tab creation, and send. Canonical-input `input_invalid` is
-  an existing example. Do not infer this class from an incident envelope, an
-  absent URL, or generic “pre-send” wording.
-- **page-capable-or-uncertain** is every other non-success outcome.
-
-For page-capable-or-uncertain outcomes, first complete the
-[durable observation recovery](#durable-observation-recovery) read and
-classification below, then before any next workflow action complete the
-applicable page and Issue observations:
-
-1. Apply page observation according to the durable phase and available URL:
-   - With a bound conversation URL, run
-     `npm run browser-gpt-page-probe -- inspect --cdp "<endpoint>" --url
-     "<chat-url>"`. “Owned prompt present” is true only when exactly one
-     current user node carries the retained transport-owned
-     `OPKTURNV1...` invocation marker. URL presence, prompt text, product ids,
-     message counts, and older turns do not prove ownership.
-   - For `dispatching` or `sent_unbound` with no persisted conversation URL,
-     use the same-invocation harvest in [Unbound same-invocation
-     harvest](#unbound-same-invocation-harvest), which resolves ownership only
-     from the persisted exact marker.
-   - For an exact, well-formed producer-terminal `not_sent` with numeric
-     `send_count: 0`, or a `prepared` record whose stronger authoritative
-     zero-send evidence proves the child cannot advance, page observation is
-     not applicable when no conversation URL exists. Do not invent or
-     reconstruct a URL or marker harvest for either proven-zero case; retain
-     the existing retry/correction authority and complete the applicable
-     Issue-side observation below.
-   - Missing, unreadable, malformed, identity-mismatched, or otherwise
-     unresolved page evidence remains observation uncertainty and cannot
-     authorize resend or progression.
-2. For a governed create-Issue/direct-publication turn, check observable
-   Issue-side publication evidence using the canonical Issue-root review
-   evidence already recorded for the current admitted work. Select only
-   `reviewer-invocation-envelope/v1` records matching the current
-   `stageAttemptId`, `stage`, `reviewerSlot`, and `sourceRevision`, then use
-   only their recorded `invocationId` values with the existing complete,
-   authenticated Issue-comment census owned by `produce-artifacts`; consume
-   that already-recorded census rather than invoking a settlement producer as
-   part of recovery. For an ordinary tracked turn without that governed
-   publication surface, record the Issue-side check as not applicable and
-   preserve its existing invocation/retry contract.
-
-There is no invented Issue-lifetime stage/slot-to-invocation index. For a
-governed turn, if envelope correlation or the already-recorded authenticated
-census is unavailable or incomplete, comment absence is unknown, not proven.
-
-For no-page-by-construction, record the exact transport result/cause proving
-zero send and no browser/page side effect; the page probe is not applicable
-because no owned conversation page exists. Still perform the available
-Issue-side check for the recorded invocation. This branch creates no generic
-retry authority: correction, retry, or reinvocation remains legal only under
-the existing owning contract, including the existing manager-owned
-pre-consumption correction seam.
-
-Until the applicable observation completes, do not relaunch or resend, mint a
-replacement invocation identity, advance or settle the stage on an assumption
-of non-delivery, or declare a blocker/stop. An incident or launcher envelope
-is never proof of non-delivery.
-
-The observation determines the next action: an exact owned marker with a reply
-is harvested under the original invocation id; an owned marker without a reply
-gets bounded wait and re-probe; proven no-page uses only existing correction or
-retry authority; and, for a governed turn, marker absence permits
-resend/relaunch only when complete known-invocation publication absence is
-proven and the existing invocation/retry contract independently authorizes it.
-For an ordinary tracked turn, page evidence is reconciled under its existing
-invocation/retry contract without inventing Issue publication artifacts.
-Ambiguous ownership or incomplete applicable evidence permits no resend. A
-manager-facing observation result is projected through the shared #2078/#2081
-boundary: repository-owned observation with a safe read path becomes the
-read-only `execute-observe-owned-turn` prerequisite, while a proven external
-surface or unresolved content-authority conflict becomes typed
-`external_pause`. Neither projection authorizes resend, a fresh conversation,
-or manager `worker_done --outcome failed`.
-
-### Pack-review same-round replacement observation
-
-For a failed or lost Browser-GPT pack-review source, timeout, missing local output,
-or a failed launcher alone never authorizes replacement. First reconcile the
-exact GitHub source comment for that run/source identity.
-
-When that reconciliation proves there is no exact usable publication, a terminal
-source slot that satisfies the single `authoritativePreSend(...)` predicate owned
-by `scripts/pack-review-no-review-reconcile.ts` and has no stronger contradictory
-send/publication evidence is eligible for pack-review same-logical-round
-replacement immediately. This pack-review-specific authority does not require a
-direct CDP census and remains usable when CDP observation is unavailable. It does
-not create generic Browser-GPT retry/resend authority: the generic non-success
-gate and durable phase table remain unchanged.
-
-When authoritative pre-send proof is absent, read the persisted state-light
-observation to obtain the exact transport-owned marker and CDP/profile binding,
-then perform the existing direct read-only CDP census across compatible ChatGPT
-conversation tabs. Replacement on this fallback path is allowed only when that
-census is unambiguous and one of these is true:
-
-- the exact owned marker is absent from the complete conversation-tab census;
-- the owned turn is present, has no attributable assistant reply, and is no
-  longer generating; or
-- the exact owned turn is still generating at or beyond 15 minutes from its
-  admitted start.
-
-Non-conversation ChatGPT surfaces never participate in owned-turn DOM inspection.
-A readable foreign conversation is skipped. A retained owned conversation locator
-may classify another conversation as foreign when that foreign target cannot be
-inspected; without a retained locator, an unreadable conversation has unknown
-ownership and fails closed. A positive duplicate exact owned marker remains
-ambiguous even when one copy is at the retained locator.
-
-A generating owned turn below 15 minutes is still active and must not be
-replaced. An owned finished turn with an attributable reply must be recovered
-under the original invocation identity instead of relaunched. Multiple owned
-markers, an ownership-unknown conversation, truncated/incomplete owned
-observation, unknown owned generation state, unreadable state-light identity, or
-unavailable CDP on the non-zero-send fallback path remain
-`observation_unavailable`/ambiguous and never grant replacement authority.
-
-Another exact owner generating in a foreign conversation is diagnostic only; it
-does not occupy this source slot, create a retry state, or prevent the runner from
-using its own fresh project chat. There is no durable `replacementEligible`
-latch, unlock bit, retry queue, lease, ownership registry, or second monitor;
-eligibility is recomputed from current evidence.
-### Durable observation recovery
-
-The existing `state-light-turn-observation/v1` record is the first durable
-delivery classifier for every page-capable-or-uncertain non-success. Resolve it
-by the exact pair `{profile_key, invocation_id}` for the caller-retained
-invocation; never scan a profile root, search the recurrence journal, match
-prompt text, or infer an invocation id from a URL, target, process, or result
-field that is not bound to this invocation.
-
-Resolve the configured profile key in this order:
-
-1. When a valid `turn-result/v1` is available, use its
-   `configured_profile_key`.
-2. When that result is absent or unreadable, derive
-   `configuredProfileKey(profile, cdp)` only from the same invocation's
-   caller-retained bound `--profile` and `--cdp` launch inputs.
-3. If either bound input is missing, malformed, or ambiguous, the durable
-   identity is unavailable. Fail closed through the existing non-success
-   observation/routing path; do not try an alternate profile or reconstruct the
-   key from local state.
-
-Read and validate the exact record before any resend, replacement invocation
-identity, stage progression, or blocker exit. Apply the phase-specific
-evidence below:
-
-| Durable phase and evidence | Delivery classification | Required next action |
-| --- | --- | --- |
-| `dispatching` | Possible delivery. The record is committed before click/Enter and may survive before the numeric send count increments. | Do not resend or mint a replacement identity; use the same-invocation harvest/reconciliation path. |
-| `sent_unbound` | Sent / delivery-positive. | Do not resend or mint a replacement identity; harvest using the same invocation id. |
-| `sent_unharvested` | Sent / delivery-positive. | Do not resend or mint a replacement identity; harvest using the same invocation id. |
-| `harvested` | Delivery/publication-positive. | Do not resend or mint a replacement identity; reconcile or harvest only under the same invocation and existing publication binding. |
-| `prepared` | Unknown / possible delivery unless stronger authoritative terminal or process-completion evidence proves the child can no longer advance it and no stronger contradictory send/publication evidence exists. | Without that stronger evidence, remain fail-closed in the existing observation/routing path. If zero-send is proven, this record only clears the possible-delivery prohibition; it creates no generic retry authority. |
-| `not_sent` | Zero-send when the exact record is well-formed, has `send_witness: numeric_send_count`, and has numeric `send_count: 0`, unless stronger contradictory send/publication evidence exists. | This producer-terminal state only clears the possible-delivery prohibition; it creates no generic retry authority. Any correction, retry, or reinvocation still requires its existing owning contract. |
-| Missing, unreadable, malformed, identity-mismatched, or contradicted record | Unknown / possible delivery. | No resend, replacement identity, stage progression, or blocker exit; report the exact unavailable or contradictory observation surface and follow existing routing. |
-
-The producer invariants above are binding: `not_sent` is terminal, is emitted
-only after `runTurn` returns with numeric `send_count: 0` from `prepared`, and
-does not overwrite `dispatching`, because submit may already have delivered.
-Therefore exact producer-terminal `not_sent` does not need a separate managed
-process-stop witness. `prepared` is different and remains fail-closed without
-stronger authoritative terminal/process-completion evidence.
-
-Stronger contradictory evidence wins over a lower-strength phase, including an
-authoritative positive numeric send witness, an exact owned-marker witness, a
-committed primary publication, or governed publication evidence for the same
-invocation. A coarse incident envelope such as
-`delivery: POSSIBLY_DELIVERED` is conservative context, not itself a
-contradiction to valid phase-specific durable evidence and not a managed
-process-stop witness. Launcher PID, shell state, silence, observation
-heartbeats, and the diagnostic recurrence journal are likewise not generic
-stop evidence.
-
-### Unbound same-invocation harvest
-
-For `sent_unbound` or `dispatching` records with no persisted conversation URL,
-run the existing `browser-gpt-page-probe harvest` with all retained
-same-invocation inputs:
-
-```bash
-npm run browser-gpt-page-probe -- harvest \
-  --cdp "${CDP_ENDPOINT}" \
-  --profile "${BROWSER_PROFILE}" \
-  --invocation-id "${INVOCATION_ID}" \
-  --output "${OUTPUT_FILE}"
-```
-
-`${CDP_ENDPOINT}`, `${BROWSER_PROFILE}`, `${INVOCATION_ID}`, and
-`${OUTPUT_FILE}` must be the already-bound CDP endpoint, browser profile,
-caller-retained invocation id, and existing primary output identity for this
-invocation; do not guess or substitute any of them. The probe may locate the
-owned page only through the persisted exact `OPKTURNV1...` marker and must
-settle the record under that original invocation. Exactly one current user node
-with that marker is ownership; zero is not proof of non-delivery, and multiple
-matches are ambiguous. A marker with a stable reply is harvested; a marker
-without a reply receives the existing bounded wait and re-probe. Never
-substitute a prompt-text match, product id, URL alone, or a newly minted
-invocation.
-
-For governed create-Issue/direct-publication turns, also consume the existing
-complete authenticated Issue-comment census and only
-`reviewer-invocation-envelope/v1` records matching the current
-`stageAttemptId`, `stage`, `reviewerSlot`, and `sourceRevision`. An unavailable
-or incomplete envelope correlation or census makes publication absence unknown,
-not proven. For an ordinary tracked turn, the Issue-side check is not
-applicable; preserve its existing invocation/retry contract and do not invent
-publication artifacts.
+When delivery may have happened: retain invocation/conversation identity,
+re-observe the owned conversation, harvest only an attributable reply, and
+publish output once. If attribution remains uncertain, report uncertainty and
+preserve no-resend semantics.
 
 ### Diagnostic recurrence journal
 
-The recurrence journal remains best-effort diagnostic state. Append unexpected
-events when the existing writer permits, and include them in the current
-report, but never use journal presence, absence, ordering, or freshness to
-authorize a resend, classify zero-send, prove child stop, progress a stage, or
-complete a task.
-
-### #1752 boundary
-
-Issue #1752 remains separate, non-prerequisite, and untouched. Its launcher
-liveness, heartbeat, watchdog/EOF, and terminal work does not make an incident
-envelope a generic post-stop witness for this procedure. This task adds no PID
-poll, watcher, liveness loop, stop witness, queue, lease, or retry subsystem.
+Transport incident/observation records are diagnostic evidence only. They are
+not task acceptance, review authority, or a retry budget.
 
 ## Publication and tab lifecycle
 
-Canonical reviewer admission compares **unmarked** input bytes. Only after a
-successful match may the existing transport prepend its owned
-`OPKTURNV1...` marker; callers and generated prompts never include or fabricate
-that marker. The workflow owns direct target-Issue publication and receipt-only
-manager output. The reviewer publishes its own complete verdict/findings
-comment; the manager consumes the receipt and later owns disposition/workflow
-actions.
-
-For direct publication, the one top-level reviewer comment must use exactly
-these as its first two non-empty lines:
-
-```text
-Read revision: #<ISSUE_NUMBER> <EXPECTED_REVISION>
-INVOCATION_ID_TO_ECHO: <INVOCATION_ID>
-```
-
-Leading blank lines are ignored for this grammar. The invocation marker must
-occur exactly once in that comment and equal the caller-minted invocation id.
-Settlement uses that exact comment marker to choose the invocation; same
-repository/Issue, candidate order, parent position, titles, URLs, or product
-message ids do not substitute for it. Zero exact owned-marker matches and
-multiple exact owned-marker matches remain fail-closed, while
-missing/conflicting results or post-send uncertainty retain their existing
-possible-delivery/no-resend semantics.
-
-Publish final bytes before closing the exact retained invocation page. Preserve
-a reachable page after post-send failure or no publication; release only the
-invocation's browser client. Never close a foreign, sibling, or orphan tab by
-URL, target id, age, focus, metadata, or liveness.
+Successful state-light completion atomically publishes the harvested assistant
+reply. Publication conflict is a transport failure; do not overwrite conflicting
+output. Post-send non-success pages remain available for recovery; close only
+resources with proven ownership and never close sibling tabs as collateral.
 
 ## Incident handling
 
-Only a proven pre-send zero-send quota/composer/fill result with
-`send_count: 0` is eligible for the single paced retry. Possible or confirmed
-delivery, ambiguous post-send loss, output conflict, missing terminal result,
-observation uncertainty, or cleanup failure never permits resend. Missing
-`turn-result/v1`, post-send page/browser loss, landing mismatch, and
-owned-conversation identity mismatch are observation uncertainty, not proof of
-non-delivery. A sanctioned observation showing no owned prompt alone is not
-escalation authority: escalation or blocker exit is legal only after all
-applicable page and (for governed turns) Issue-publication observations
-complete, or when a required observation surface is unavailable and no other
-legal manager action exists. A blocker report names the exact unavailable
-surface or probe and its observed result.
+Keep the smallest truthful state: exact invocation/profile/conversation identity
+when known, delivery status, observed state/cause, and any legal same-invocation
+observation action. Never synthesize success from liveness, spinner state,
+timeout, or another workflow's artifact.
 
 ## One-shot diagnosis
 
-Each invocation of the sanctioned diagnostic utility is one-shot and uses local
-values:
-
-```bash
-npm run browser-gpt-page-probe -- inspect --cdp "${CDP_ENDPOINT}" --url "${CHAT_URL}"
-```
-
-When the caller already owns an exact durable state-light invocation, use the
-identity-bound diagnostic form rather than page-wide marker discovery:
-
-```bash
-npm run browser-gpt-page-probe -- inspect \
-  --cdp "${CDP_ENDPOINT}" \
-  --profile "${BROWSER_PROFILE}" \
-  --invocation-id "${INVOCATION_ID}" \
-  --url "${CHAT_URL}"
-```
-
-`--profile` and `--invocation-id` are a pair. Identity-bound inspect derives
-the configured profile key and reads exactly that
-`state-light-turn-observation/v1` record. Missing, malformed, wrong-profile, or
-wrong-invocation state fails closed; there is no sibling-record,
-alternate-profile, or page-wide marker fallback. A non-null durable
-`conversation_url` must match the inspected conversation.
-
-Durable phase semantics are applied before marker projection. `not_sent` and
-`prepared` project no marker and therefore no recovery cause. `dispatching`,
-`sent_unbound`, `sent_unharvested`, and `harvested` may project only the
-persisted exact marker for read-only classification. Exactly one user carrier
-with exactly one occurrence of that expected marker is required; different
-historical transport markers elsewhere on the page are irrelevant, while zero
-or duplicate expected-marker occurrences fail closed. This diagnostic result
-does not alter the underlying delivery classification and creates no resend,
-replacement, or fresh-chat authority. Identity-bound inspect does not support
-`--open-if-missing` and redacts prompt/marker text witnesses from its returned
-snapshot.
-
-`list`, `inspect`, `export`, and `liveness` are diagnostic-only and always have
-`workflow_authority: none`. `harvest` is the sole action-producing probe
-(`diagnostic_only: false`), and it also has `workflow_authority: none`; it may
-recover/publish only the exact owned turn for the caller-supplied invocation.
-The non-acquisition diagnostic probes are read-only and exit once. The
-non-success gate may perform its bounded wait and re-probe; this is not a
-watcher or an indefinite diagnostic loop. The probes cannot retry, resend,
-progress a stage, create, or close a tab. The explicit
-`--open-if-missing true` acquisition path is the sole opt-in exception: it may
-create one owned page, wait for bounded readiness, and close exactly that
-owned page. Resolve the current target from the conversation URL instead of
-trusting a saved target id. Probe mechanics remain owned by Issues #1272 and
-#1122; do not replace this utility with raw CDP, selectors, JavaScript, a watch
-loop, or a transcript dump.
+The page probe is read-only diagnostic evidence. It may inspect the exact owned
+conversation, but never sends, retries, changes workflow state, or grants
+acceptance authority.
 
 ## Shift handoff/close
 
-Record the exact task/workflow identities supplied by the owning workflow. For
-governed create-Issue reviewer turns, this includes the current
-`<ISSUE_NUMBER>`, `<EXPECTED_REVISION>`, role, stage, and slot. Other tracked
-turns retain only the identities their owning workflow defines and must not
-invent create-review `stage`, `slot`, or frozen-revision values. In every case,
-record `<INVOCATION_ID>`, the owned chat locator when available, and the
-identities of `${INPUT_FILE}`, `${OUTPUT_FILE}`, `${HANDOFF_RECEIPT}`, and
-`${TERMINAL_ENVELOPE}`. Include the direct publication URL when applicable,
-the terminal result or unresolved incident, and the next legal action. Never
-hand off only “background job running”.
-
-## Universal author prompt template
-
-Copy this prompt and substitute placeholders. Browser GPT sees only this chat and GitHub; never pass a local path (`~/.local/state/**`, `/tmp/**`, a worktree) as input — paste the content or give a GitHub link:
-
-```text
-Role: author for <REPOSITORY>.
-Mode: <brief-only-create|revise-existing-issue>.
-Authoritative input for brief-only-create (paste binding sections, or the whole brief with background sections marked):
-<BRIEF_TEXT>
-[paste actual brief content here]
-</BRIEF_TEXT>
-For revise-existing-issue, authoritative input is live Issue <ISSUE_URL>; expected revision: <EXPECTED_REVISION>.
-
-Read the live target through GitHub when an Issue exists. Follow the canonical
-create-issue-draft procedure and current tier, floor, and scope rules.
-For brief-only-create, author from the supplied brief. For revise-existing-issue,
-preserve the source revision marker and increment it for a substantive body
-revision. Apply these requirements: <AUTHORING_REQUIREMENTS>.
-
-Only mutate the target Issue title/body. Do not create a PR, label, milestone,
-merge, or unrelated GitHub authority. Re-read the final body for consistency.
-After a successful mutation return only this receipt, at most 15 lines:
-Issue URL/number, revision marker, and changed sections.
-Use the existing audited genuine-write-failure fallback only when the direct
-GitHub mutation actually fails.
-Never include or fabricate an OPKTURNV1... transport marker; the tracked
-transport owns marker insertion.
-```
-
-## Generated independent reviewer prompt
-
-This runbook no longer owns a normative reviewer template. The ordered owning
-sections and binding frame live only in
-`.cursor/skills/create-issue-draft/SKILL.md` under **Manager review brief canon**.
-Use `scripts/lib/manager-review-brief.ts` to render exact unmarked reviewer
-bytes from those sections and bound invocation context. For plural stages,
-render all siblings from one canon snapshot before the first launch. Pass
-`--stage` and `--source-slot` on both ordinary and long-running governed direct-
-publication launches. Do not add an `OPKTURNV1...` marker to generated bytes;
-state-light validates the unmarked input and the transport owns marker insertion
-after admission.
-
-Terminal `architectural` additionally renders the validated governed prior-state
-bundle into the unmarked prompt and passes the same local bundle file as
-`--terminal-input-bundle`. State-light re-reads both before browser effects;
-non-terminal prompts retain their prior exact-byte form.
-
-If the selected canon changes after a plural batch starts, do not regenerate a
-later sibling's input. Its already-materialized old bytes reach state-light,
-current-source regeneration disagrees, and that invocation settles pre-browser
-as `input_invalid` rather than mixing canon revisions inside one
-`stageAttemptId`.
+Handoff exact invocation/profile/project identity, owned conversation URL when
+known, current transport result/uncertainty, and output/envelope paths. Continue
+the same invocation when recovery remains legal. Workflow completion is decided
+by the calling workflow.
 
 ## Maintenance matrix
 
-| Changed contract in a PR | Same-PR documentation obligation |
-| --- | --- |
-| browser launch, observation, attribution, retry/no-resend, publication, cleanup, probe, handoff | update this runbook; update the flow-manager carrier only when one of its two selected canon fragments changes |
-| CLI option, result field, or component boundary | update the transport README; update this runbook when operator behavior changes |
-| author role or author invocation | update the owning skill and author template when needed |
-| reviewer role, direct publication, receipt, or invocation identity | update the owning skill/canon; update a selected carrier fragment only when its canonical reviewer input must change; do not copy a normative reviewer prompt into this runbook |
-| local configuration, launcher prerequisite, or setup procedure | update this runbook and the owning reference |
-| link or Issue authority supersession | repair all in-scope pointers and present-tense authority wording |
+Shared implementation owners:
 
-A PR may say “no operator-documentation impact” only when every row is
-unchanged. This is a documentation rule, not a new guard or service.
+- `scripts/chatgpt-browser-turn/state-light-entry.ts` — turn/session entry;
+- `scripts/chatgpt-browser-turn/state-light-turn.ts` and `state-light-*` — send,
+  observation, recovery, output;
+- `scripts/flow-manager-long-running-child.ts` — child survival/envelope;
+- `scripts/flow-manager-browser-gpt-long-run.ts` — ordinary manager adapter;
+- `scripts/browser-gpt-page-probe.ts` — read-only diagnostic probe.
+
+Workflow-specific review stages, dispositions, labels, PR readiness, and merge
+authority stay outside these transport owners.

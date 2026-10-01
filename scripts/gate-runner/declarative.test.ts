@@ -42,12 +42,10 @@ const movedClean = {
     'See [GPT](.cursor/skills/discuss-with-gpt/SKILL.md).',
     'See [author](.cursor/skills/create-issue-draft/SKILL.md).',
     'See [external](.cursor/skills/study-external-source/SKILL.md).',
-    'See [publish](.cursor/skills/publish-issue-draft/SKILL.md).',
     'See [reviewer](.cursor/skills/switch-pack-reviewer/SKILL.md).',
   ].join('\n'),
   'CLAUDE.md': [
     'See [architect](.cursor/skills/direct-fix-checklist/SKILL.md#architect-role-contract).',
-    'See [author](.cursor/skills/discuss-with-gpt/SKILL.md#draft-author-relocation).',
     'See [RCA](.cursor/skills/investigate-root-cause/SKILL.md).',
   ].join('\n'),
   'docs/browser-gpt-turn-runbook.md': [
@@ -61,7 +59,7 @@ const movedClean = {
     '## Shift handoff/close',
   ].join('\n'),
   'docs/coworker-delegation.md': 'PR diff recipe\ngit diff <base-ref>...HEAD > /tmp/review.diff\nRoot-cause work must read ~900 lines',
-  'docs/tiering.md': '## Task complexity tier rubric\n### Failure-type lens (apply first)\n## Per-tier draft-review flow\n### Per-tier pipeline (ceilings, not quotas)',
+  'docs/tiering.md': '## Task complexity tier rubric\n### Binding T3 test — both prongs required\n### T1/T2 split\n### L4 within T3',
   'docs/script-owned-review-pipeline.md': '## Event-driven review trigger\n## Orchestrator review-run coverage\n## Head ready for review\nevent-driven review trigger',
   'docs/orchestration-runbook.md': '## Worker lifecycle\n',
   'docs/repository_policy.md': [
@@ -74,24 +72,18 @@ const movedClean = {
   '.cursor/skills/investigate-root-cause/SKILL.md': '# investigate-root-cause\n',
   '.cursor/skills/merge-with-local-adoption/SKILL.md': '# merge-with-local-adoption\n',
   '.cursor/skills/adversarial-draft-review/SKILL.md': '# adversarial-draft-review\n',
-  '.cursor/skills/discuss-with-gpt/SKILL.md': '## Draft-author relocation\n',
+  '.cursor/skills/discuss-with-gpt/SKILL.md': '## Browser preconditions and tracked-turn pointer\n',
   '.cursor/skills/create-issue-draft/SKILL.md': '# create-issue-draft\n',
   '.cursor/skills/study-external-source/SKILL.md': '# study-external-source\n',
-  '.cursor/skills/publish-issue-draft/SKILL.md': '# publish-issue-draft\n',
   '.cursor/skills/switch-pack-reviewer/SKILL.md': '# switch-pack-reviewer\n',
   '.cursor/skills/direct-fix-checklist/SKILL.md': '## Architect role contract\n',
-  '.cursor/rules/draft-author-relocation.mdc': 'See [author](../skills/discuss-with-gpt/SKILL.md#draft-author-relocation).\n',
   '.cursor/rules/flow-manager-browser-turn-monitoring.mdc': [
     'See [preflight](../../docs/browser-gpt-turn-runbook.md#start-of-shift-preflight).',
     'See [prepare](../../docs/browser-gpt-turn-runbook.md#prepare-one-turn).',
     'See [launch](../../docs/browser-gpt-turn-runbook.md#launch).',
     'See [observe](../../docs/browser-gpt-turn-runbook.md#observe-and-settle).',
-    'See [publication](../../docs/browser-gpt-turn-runbook.md#publication-and-tab-lifecycle).',
-    'See [incident](../../docs/browser-gpt-turn-runbook.md#incident-handling).',
-    'See [diagnosis](../../docs/browser-gpt-turn-runbook.md#one-shot-diagnosis).',
-    'See [handoff](../../docs/browser-gpt-turn-runbook.md#shift-handoffclose).',
     '## Launch and observation',
-    '## Legacy state and diagnostic probe',
+    '## Diagnostic probe',
   ].join('\n'),
 };
 
@@ -245,9 +237,6 @@ describe('real representative declarative ports', () => {
     }));
     expect(renamed.status).toBe('FAIL');
     expect(renamed.details).toContain('docs/browser-gpt-turn-runbook.md missing required content: ## Incident handling');
-    expect(renamed.details).toContain(
-      '.cursor/rules/flow-manager-browser-turn-monitoring.mdc unresolved section link: ../../docs/browser-gpt-turn-runbook.md#incident-handling',
-    );
 
     const marker = '(../../docs/browser-gpt-turn-runbook.md#launch)';
     const duplicate = evaluateDeclarativeGate(agentRulesMovedContentGate, memorySnapshot({

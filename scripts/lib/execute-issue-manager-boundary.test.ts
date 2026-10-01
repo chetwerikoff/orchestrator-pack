@@ -4,10 +4,10 @@ import { describe, expect, it } from 'vitest';
 import { TURN_STATES } from '../chatgpt-browser-turn/contracts.ts';
 import type { ProbeStatus } from '../browser-gpt-page-probe.ts';
 import {
-  CREATE_ISSUE_NEXT_ACTION_KINDS,
-  createIssueNextAction,
-  validateCreateIssueManagerResult,
-} from './create-issue-next-action.ts';
+  MANAGER_NEXT_ACTION_KINDS,
+  managerNextAction,
+  validateManagerResult,
+} from './manager-boundary-result.ts';
 import {
   EXECUTE_ISSUE_PROBE_CLASSIFICATION,
   EXECUTE_ISSUE_TURN_CLASSIFICATION,
@@ -76,12 +76,12 @@ describe('execute-Issue manager boundary', () => {
   });
 
   it('keeps execute next actions closed and read-only', () => {
-    expect(CREATE_ISSUE_NEXT_ACTION_KINDS.filter((kind) => kind.startsWith('execute-'))).toEqual([
+    expect(MANAGER_NEXT_ACTION_KINDS.filter((kind) => kind.startsWith('execute-'))).toEqual([
       'execute-observe-owned-turn', 'execute-github-first-read-only', 'execute-review-runner-read-only',
     ]);
-    expect(validateCreateIssueManagerResult({
+    expect(validateManagerResult({
       ok: false, cause: 'invalid', nextAction: {
-        schema: 'create-issue-next-action/v1', kind: 'execute-send-replacement', binding: {
+        schema: 'manager-next-action/v1', kind: 'execute-send-replacement', binding: {
           repository: context.repository, issueNumber: context.issueNumber, sourceRevision: context.sourceRevision, stage: 'execute:implementation',
         }, argv: ['send'],
       },
@@ -151,9 +151,9 @@ describe('execute-Issue manager boundary', () => {
 
   it('projects review runner success, read-only pass-through, and external failure', () => {
     expect(classifyExecuteIssueManagerRecord({ ok: true, prNumber: 2083 }, { ...context, phase: 'review' })).toMatchObject({ exitCode: 0 });
-    const action = createIssueNextAction({ kind: 'execute-review-runner-read-only', binding: { ...context, stage: 'execute:review' }, argv: ['scripts/gh', 'pr', 'view', '2083', '--json', 'state'] });
+    const action = managerNextAction({ kind: 'execute-review-runner-read-only', binding: { ...context, stage: 'execute:review' }, argv: ['scripts/gh', 'pr', 'view', '2083', '--json', 'state'] });
     expect(classifyExecuteIssueManagerRecord({ ok: false, nextAction: action }, { ...context, phase: 'review' })).toMatchObject({ exitCode: 3, result: { nextAction: action } });
-    const send = classifyExecuteIssueManagerRecord({ ok: false, nextAction: { schema: 'create-issue-next-action/v1', kind: 'retry-start-cycle', binding: { ...context, stage: 'execute:review' }, argv: ['node', 'scripts/chatgpt-browser-turn.ts', '--new-chat'] } }, { ...context, phase: 'review' });
+    const send = classifyExecuteIssueManagerRecord({ ok: false, nextAction: { schema: 'manager-next-action/v1', kind: 'execute-send-replacement', binding: { ...context, stage: 'execute:review' }, argv: ['node', 'scripts/chatgpt-browser-turn.ts', '--new-chat'] } }, { ...context, phase: 'review' });
     expect(expectReadOnly(send).kind).toBe('execute-review-runner-read-only');
     expect(classifyExecuteIssueManagerRecord({ ok: false, outcome: 'review_target_unavailable', reason: 'GitHub HTTP 503', prNumber: 2083 }, { ...context, phase: 'review' })).toMatchObject({ exitCode: 4, result: { cause: 'external:github_unavailable' } });
   });
