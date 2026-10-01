@@ -49,6 +49,7 @@ function git(root: string, ...args: string[]): void {
 
 function twoTargetFixture() {
   rememberEnv();
+  delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
   const root = mkdtempSync(join(tmpdir(), 'opk-target-sinks-'));
   roots.push(root);
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: root, XDG_CONFIG_HOME: join(root, 'config') };
@@ -177,7 +178,7 @@ describe('Issue #2188 target portability sinks', () => {
 
     process.env.OPK_PROJECT_ID = 'alpha';
     const alpha = defaultWorkdir(77);
-    expect(alpha).toContain('/create-issue-draft/alpha/77/journal');
+    expect(alpha).toBe(join(fixture.root, '.local', 'state', 'create-issue-draft', 'alpha', '77', 'journal'));
     writePendingEvent(alpha, {
       schema: 'create-issue-pending/v1',
       eventKey: 'same-event',
@@ -188,7 +189,7 @@ describe('Issue #2188 target portability sinks', () => {
 
     process.env.OPK_PROJECT_ID = 'beta';
     const beta = defaultWorkdir(77);
-    expect(beta).toContain('/create-issue-draft/beta/77/journal');
+    expect(beta).toBe(join(fixture.root, '.local', 'state', 'create-issue-draft', 'beta', '77', 'journal'));
     expect(beta).not.toBe(alpha);
     expect(listPendingEvents(beta)).toEqual([]);
     expect(readPersistedCycleId(beta)).toBeNull();
