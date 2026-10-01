@@ -26,7 +26,6 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // The topology emitter rewrites scripts/vitest-heavy-topology.plan.json before
   // measurement, so timing it inside the pre-topology pass can create manifest
   // drift that the real light lane correctly owns.
-  'scripts/reachability-purge.test.ts': 120,
   // Issue #2185 adds fast target-selection regressions to existing light coverage;
   // fixed estimates keep the existing 32-file pre-topology bound unchanged.
   'scripts/command-runtime-bootstrap.test.ts': 60,
@@ -45,10 +44,7 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   'scripts/pack-pr-review-contract.test.ts': 120,
   'scripts/pack-review-ordering.test.ts': 120,
   'scripts/pack-review-runner-gpt.test.ts': 120,
-  'scripts/lib/protected-signal-receipt.test.ts': 120,
   // Issue #1201 review-lane routing is a deterministic light-lane contract suite.
-  'scripts/lib/review-lane-routing.test.ts': 120,
-  'scripts/lib/create-issue-stage-record-review-lane.test.ts': 120,
   'scripts/worker-smoke.test.ts': 120,
   // Issue #1359 adds deterministic worker-smoke lifecycle and real-entrypoint fixtures.
   // Fixed estimates keep pre-topology bounded; both suites still run in the light lanes.
@@ -78,14 +74,10 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // Issue #1197 flow-manager authority contract is a fast static contract suite.
   'scripts/flow-manager-authority-contract.test.ts': 120,
   // Issue #1202 revision-aware acceptance tests are fast pure contract coverage.
-  'scripts/lib/create-issue-final-acceptance-revision.test.ts': 120,
   // Issue #1198 launch/watch contract tests are fast deterministic coverage.
-  'scripts/launch-watch/launch-watch.test.ts': 120,
   'scripts/launch-watch/watch.test.ts': 120,
   // Issue #1250 proof wrappers execute deterministic local fixtures. Fixed
   // estimates preserve the existing 32-file pre-topology measurement bound.
-  'scripts/ao-retirement/retired-surface-guard.test.ts': 120,
-  'scripts/runtime/ao-absent-two-lifecycle-proof.test.ts': 120,
   // Issue #1248 adds fast runtime-boundary contract suites. Fixed estimates keep
   // the bounded topology producer stable until runtime history is refreshed.
   'scripts/invoke-gated-worker-nudge.test.ts': 120,
@@ -140,9 +132,6 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   'scripts/vitest-live-store-parent-guard.test.ts': 120,
   // Issue #1439 adds deterministic light lifecycle/admission contract suites.
   // Fixed estimates preserve the bounded pre-topology producer until runtime-history harvest records them.
-  'scripts/lib/create-issue-stage-lifecycle-acceptance.test.ts': 120,
-  'scripts/lib/create-issue-stage-lifecycle.test.ts': 120,
-  'scripts/stage-slot-consumed.test.ts': 120,
   // Issue #2094 injector regression is fixed-time light-lane coverage; retain its
   // declared estimate until runtime history records a content-bound measurement.
   'scripts/smoke-fixtures/inject-message-stream-error.test.ts': 120,
