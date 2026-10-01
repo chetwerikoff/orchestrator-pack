@@ -175,11 +175,12 @@ describe('execute-Issue manager boundary', () => {
       result: { ok: false, cause: 'producer_contract_defect', nextAction: null },
     });
     expect(classifyExecuteIssueManagerRecord(smoke('PASS', {
-      terminalCleanup: 'not_recorded',
-      terminalHandle: undefined,
+      terminalCleanup: 'closed_owned_handle',
+      terminalHandle: 'legacy-smoke-terminal',
+      orcaExecutable: 'legacy-runtime-adapter',
     }), context)).toMatchObject({
-      exitCode: 5,
-      result: { ok: false, cause: 'producer_contract_defect', nextAction: null },
+      exitCode: 0,
+      result: { ok: true, verdict: 'PASS', cause: 'execute_worker_smoke_pass', nextAction: null },
     });
 
     const assertionFailure = smoke('FAIL', {

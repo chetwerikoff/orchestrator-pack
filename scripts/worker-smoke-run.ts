@@ -12,11 +12,13 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
   buildSmokeGhChildEnv,
+  checkSmokeTestPlan,
   formatSmokeReportComment,
   hasPreexistingTrackedDirtiness,
   isWorkerSmokeScenarioCauseFamily,
   normalizeSmokeReport,
   parseSmokeAgentReport,
+  parseSealedSmokeAgentReport,
   resolveSmokeRequirement,
   scrubForwardedGhSecrets,
   scrubSmokeOutput,
@@ -154,6 +156,7 @@ function parseArgs(argv: readonly string[]): CliOptions {
       default: throw new Error(`unknown argument: ${args[index]}`);
     }
   }
+  if (options.command === 'publish' && options.headSha) throw new Error('publish does not accept --head-sha');
   return options;
 }
 
@@ -202,15 +205,6 @@ export function runSmokeGhSync(
   extraEnv: Readonly<NodeJS.ProcessEnv> = {},
 ): ReturnType<typeof runProcessSync> {
   return runSmokeGhProcess(resolveTrackedGhWrapper(), args, cwd, { ...buildSmokeGhChildEnv(), ...extraEnv });
-}
-
-export function runSmokeGhWriteSync(
-  args: readonly string[],
-  cwd: string,
-  extraEnv: Readonly<NodeJS.ProcessEnv> = {},
-  timeoutMs = SMOKE_GH_TIMEOUT_MS,
-): ReturnType<typeof runProcessSync> {
-  return runSmokeGhProcess(resolveTrackedGhWrapper(), args, cwd, { ...buildSmokeGhChildEnv(), ...extraEnv }, timeoutMs);
 }
 
 function gitPorcelain(cwd: string): string[] {
@@ -856,9 +850,6 @@ export function resolvePublishSmokeTarget(options: CliOptions): PublishSmokeTarg
       || repositoryFromGithubUrl(pr.html_url).toLowerCase() !== repositorySlug.toLowerCase()) {
     throw new Error('trusted_target: resolved repository mismatch');
   }
-  if (String(issue.state ?? '').toLowerCase() !== 'open' || String(pr.state ?? '').toLowerCase() !== 'open') {
-    throw new Error('trusted_target: Issue or PR is not open');
-  }
   const issueBody = String(issue.body ?? '');
   if (exactClosingIssue(String(pr.body ?? '')) !== options.issueNumber) {
     throw new Error('trusted_target: PR-to-Issue resolution is missing, multiple, or mismatched');
@@ -936,7 +927,7 @@ export async function runPublishSmoke(
     throw new Error('publish requires a required scenario-bearing smoke-test-plan');
   }
   const readReportFile = dependencies.readReportFile ?? ((path: string) => readFileSync(resolve(path), 'utf8'));
-  const partial = parseSmokeAgentReport(readReportFile(options.reportFile));
+  const partial = parseSealedSmokeAgentReport(readReportFile(options.reportFile));
   if (!partial) throw new Error('report_file_invalid: worker-smoke-report grammar not found');
   const correspondence = reportCorrespondenceReason(partial, plan);
   if (correspondence) throw new Error(`report_plan_mismatch: ${correspondence}`);

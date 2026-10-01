@@ -944,7 +944,7 @@ export function formatSmokeReportComment(report: SmokeReport): string {
     '### Scenarios',
     ...scenarioLines,
     '',
-    'The smoke agent did not modify tracked implementation files through the supported protocol.',
+    'The PR-owner smoke execution did not modify tracked implementation files through the supported protocol.',
     '',
     machineBlock,
   ].filter(Boolean).join('\n');

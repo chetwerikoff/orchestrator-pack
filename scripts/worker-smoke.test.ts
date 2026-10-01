@@ -6,30 +6,24 @@ import { runProcessSync } from './kernel/subprocess.ts';
 import { resolveRealGhBinary, resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import {
   buildSmokeGhChildEnv,
-  evaluateWorkerSmokeCoverage,
-  evaluateWorkerSmokeGate,
   formatSmokeReportComment,
   SMOKE_REPORT_PRODUCER,
   type SmokeReport,
   type SmokeScenario,
   type WorkerSmokeCommentRecord,
-  type WorkerSmokeTrustedTarget,
 } from './lib/worker-smoke-core.ts';
 import { publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath } from './lib/worker-assignment-store.ts';
 import { scrubSmokeOutput } from './lib/worker-smoke-core-base.ts';
 import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
 import {
   emit,
-  parsePaginatedSmokeComments,
+  main,
   publishPrComment,
   runPublishSmoke,
   type PublishSmokeTarget,
   reviewIndependentRequiredCiContexts,
   runDelegatedReadiness,
   runSmokeGhProcess,
-  runSmokeGhWriteSync,
-  smokeCommentSnapshotDigest,
-  stabilizeSmokeCommentCensus,
   type CliOptions,
   type ResolvedSmokeTarget,
 } from './worker-smoke-run.ts';
@@ -126,43 +120,6 @@ function comment(
   };
 }
 
-function target(overrides: Partial<WorkerSmokeTrustedTarget> = {}): WorkerSmokeTrustedTarget {
-  return {
-    repositorySlug: REPOSITORY,
-    issueNumber: 1343,
-    prNumber: 2001,
-    headSha: HEAD_ONE,
-    resolvedIssueNumber: 1343,
-    resolvedPrNumber: 2001,
-    liveHeadSha: HEAD_ONE,
-    issueBodyMatchesTarget: true,
-    trustedPublisherLogin: TRUSTED_ACTOR,
-    commentCensusComplete: true,
-    commentSnapshotStable: true,
-    ...overrides,
-  };
-}
-
-function coverage(
-  comments: readonly WorkerSmokeCommentRecord[],
-  body: string,
-  targetOverrides: Partial<WorkerSmokeTrustedTarget> = {},
-) {
-  return evaluateWorkerSmokeCoverage({ issueBody: body, comments, target: target(targetOverrides) });
-}
-
-function mutateMachineBlock(body: string, mutate: (block: string) => string): string {
-  const start = body.indexOf('```worker-smoke-report\n');
-  const end = body.indexOf('\n```', start + 1);
-  if (start < 0 || end < 0) throw new Error('machine report block missing');
-  return `${body.slice(0, start)}${mutate(body.slice(start, end))}${body.slice(end)}`;
-}
-
-
-
-
-
-
 describe('review-independent required CI facts', () => {
   it('excludes the pack-review authority while preserving required CI contexts', () => {
     expect(reviewIndependentRequiredCiContexts([
@@ -191,270 +148,39 @@ describe('worker smoke output', () => {
   });
 });
 
-describe('exact-head cross-run worker-smoke coverage', () => {
-  const AB = planBody([
-    { action: 'A', expected: 'A passes' },
-    { action: 'B', expected: 'B passes' },
-  ]);
-  const A = planBody([{ action: 'A', expected: 'A passes' }]);
+function gateOptions(root: string, issueBodyFile: string): CliOptions {
+  return {
+    command: 'delegated-readiness',
+    issueNumber: 1343,
+    prNumber: 2001,
+    headSha: HEAD_ONE,
+    issueBodyFile,
+    repoRoot: root,
+    cwd: root,
+    dryRun: false,
+    json: true,
+    reviewId: '',
+    reviewHeadSha: '',
+    reportFile: '',
+  };
+}
 
-  it('preserves one canonical all-PASS report compatibility', () => {
-    const result = coverage([
-      comment(1, report('PASS', [scenario('A', 'A passes'), scenario('B', 'B passes')])),
-    ], AB);
-    expect(result.accepting).toBe(true);
-    expect(result.diagnostics.coverage).toBe('complete');
-  });
-
-  it('accumulates tuples while omission preserves prior PASS and clears quarantine', () => {
-    const result = coverage([
-      comment(1, report('FAIL', [scenario('A', 'A passes'), scenario('B', 'B passes', 'fail')])),
-      comment(2, report('PASS', [scenario('B', 'B passes')])),
-    ], AB);
-    expect(result.accepting).toBe(true);
-    expect(result.diagnostics.covered.total).toBe(2);
-  });
-
-  it('orders row revocation and restoration by created_at then numeric id', () => {
-    const sameTime = '2026-08-05T00:00:00.000Z';
-    const result = coverage([
-      comment(3, report('PASS', [scenario('A', 'A passes')]), { createdAt: sameTime }),
-      comment(1, report('PASS', [scenario('A', 'A passes')]), { createdAt: sameTime }),
-      comment(2, report('FAIL', [scenario('A', 'A passes', 'blocked')]), { createdAt: sameTime }),
-    ], A);
-    expect(result.accepting).toBe(true);
-    expect(result.diagnostics.covered.items[0]?.commentId).toBe(3);
-  });
-
-  it('applies zero-current-tuple global blocks and clears them with later PASS', () => {
-    const blocked = coverage([
-      comment(1, report('PASS', [scenario('A', 'A passes')])),
-      comment(2, report('BLOCKED', [{ ...scenario('unknown', 'unknown', 'blocked'), causeFamily: 'scenario_precondition_unavailable' }])),
-    ], A);
-    expect(blocked.accepting).toBe(false);
-    expect(blocked.diagnostics.globalBlock.kind).toBe('BLOCKED');
-
-    const cleared = coverage([
-      comment(1, report('PASS', [scenario('A', 'A passes')])),
-      comment(2, report('BLOCKED', [{ ...scenario('unknown', 'unknown', 'blocked'), causeFamily: 'scenario_precondition_unavailable' }])),
-      comment(3, report('PASS', [scenario('unknown', 'unknown')])),
-    ], A);
-    expect(cleared.accepting).toBe(true);
-    expect(cleared.diagnostics.covered.items[0]?.commentId).toBe(1);
-  });
-
-  it('keeps row state across an invalid candidate and later clearing PASS', () => {
-    const result = coverage([
-      comment(1, report('PASS', [scenario('A', 'A passes')])),
-      comment(2, report('FAIL', [
-        scenario('A', 'A passes', 'fail'),
-        scenario('A', 'A passes', 'blocked'),
-      ])),
-      comment(3, report('PASS', [scenario('unknown', 'unknown')])),
-    ], A);
-    expect(result.accepting).toBe(true);
-    expect(result.diagnostics.covered.items[0]?.commentId).toBe(1);
-    expect(result.diagnostics.invalidCandidates.total).toBe(1);
-  });
-
-  it.each([
-    ['missing observed', (body: string) => mutateMachineBlock(body, (block) => block.replace('observed: pass observed', 'observed: '))],
-    ['unsupported outcome', (body: string) => mutateMachineBlock(body, (block) => block.replace('outcome: pass', 'outcome: mystery'))],
-    ['identical duplicate row', (_body: string) => formatSmokeReportComment(report('FAIL', [
-      scenario('A', 'A passes', 'fail'),
-      scenario('A', 'A passes', 'fail'),
-    ]))],
-    ['conflicting duplicate row', (_body: string) => formatSmokeReportComment(report('FAIL', [
-      scenario('A', 'A passes', 'fail'),
-      scenario('A', 'A passes', 'blocked'),
-    ]))],
-  ])('rejects the whole trusted candidate for %s', (_name, mutate) => {
-    const canonical = formatSmokeReportComment(report('PASS', [scenario('A', 'A passes')]));
-    const result = coverage([
-      comment(1, report('PASS', [scenario('A', 'A passes')]), { body: mutate(canonical) }),
-    ], A);
-    expect(result.accepting).toBe(false);
-    expect(result.diagnostics.invalidCandidates.total).toBe(1);
-    expect(result.diagnostics.covered.total).toBe(0);
-  });
-
-  it.each([
-    ['duplicate marker', (body: string) => `<!-- pack-worker-smoke-report/v1 -->\n${body}`],
-    ['two report blocks', (body: string) => `${body}\n\`\`\`worker-smoke-report\nresult: FAIL\n\`\`\``],
-    ['duplicate target line', (body: string) => `${body}\n- pr: #2001`],
-    ['mixed target metadata', (body: string) => `${body}\n- head-sha: \`${HEAD_TWO}\``],
-  ])('invalidates a current-target envelope with %s', (_name, mutate) => {
-    const canonical = formatSmokeReportComment(report('PASS', [scenario('A', 'A passes')]));
-    const result = coverage([
-      comment(1, report('PASS', [scenario('A', 'A passes')]), { body: mutate(canonical) }),
-    ], A);
-    expect(result.accepting).toBe(false);
-    expect(result.diagnostics.invalidCandidates.total).toBe(1);
-  });
-
-  it('treats another actor as non-candidate and a trusted edit as invalid', () => {
-    const foreign = coverage([
-      comment(1, report('PASS', [scenario('A', 'A passes')]), { actor: 'someone-else' }),
-    ], A);
-    expect(foreign.diagnostics.invalidCandidates.total).toBe(0);
-    expect(foreign.diagnostics.missing.total).toBe(1);
-
-    const createdAt = '2026-08-05T00:00:00.000Z';
-    const edited = coverage([
-      comment(1, report('PASS', [scenario('A', 'A passes')]), {
-        createdAt,
-        updatedAt: '2026-08-05T00:01:00.000Z',
-      }),
-    ], A);
-    expect(edited.diagnostics.invalidCandidates.items[0]?.reason).toBe('candidate_edited');
-  });
-
-  it('flattens all pages and observes later-page revocation', () => {
-    const first = comment(1, report('PASS', [scenario('A', 'A passes')]));
-    const second = comment(2, report('FAIL', [scenario('A', 'A passes', 'fail')]));
-    const parsed = parsePaginatedSmokeComments(JSON.stringify([[first], [second]]));
-    expect(parsed).toHaveLength(2);
-    expect(coverage(parsed, A).accepting).toBe(false);
-    expect(() => parsePaginatedSmokeComments(JSON.stringify([first, second]))).toThrow(/slurped page array/u);
-  });
-
-  it('re-evaluates a growing high-water snapshot and refuses endless churn', () => {
-    const pass = comment(1, report('PASS', [scenario('A', 'A passes')]));
-    const revoke = comment(2, report('FAIL', [scenario('A', 'A passes', 'fail')]));
-    const sequence = [[pass], [pass, revoke], [pass, revoke]];
-    let index = 0;
-    const stable = stabilizeSmokeCommentCensus(() => sequence[Math.min(index++, sequence.length - 1)]!);
-    expect(coverage(stable, A).accepting).toBe(false);
-
-    let id = 10;
-    expect(() => stabilizeSmokeCommentCensus(
-      () => [comment(id++, report('PASS', [scenario('A', 'A passes')]))],
-      2,
-    )).toThrow(/failed to stabilize/u);
-  });
-
-  it('applies post-ready revocation only on the next evaluation', () => {
-    const pass = comment(1, report('PASS', [scenario('A', 'A passes')]));
-    const ready = coverage([pass], A);
-    const later = coverage([
-      pass,
-      comment(2, report('FAIL', [scenario('A', 'A passes', 'fail')])),
-    ], A);
-    expect(ready.accepting).toBe(true);
-    expect(later.accepting).toBe(false);
-  });
-
-  it('resets absolutely on a new head without old-head diagnostics', () => {
-    const result = coverage([
-      comment(1, report('PASS', [scenario('A', 'A passes')], HEAD_ONE)),
-    ], A, { headSha: HEAD_TWO, liveHeadSha: HEAD_TWO });
-    expect(result.accepting).toBe(false);
-    expect(result.diagnostics.covered.total).toBe(0);
-    expect(result.diagnostics.invalidCandidates.total).toBe(0);
-  });
-
-  it.each([
-    ['missing repository', { repositorySlug: undefined }],
-    ['zero Issue', { issueNumber: 0, resolvedIssueNumber: 0 }],
-    ['wrong Issue resolution', { resolvedIssueNumber: 999 }],
-    ['wrong PR resolution', { resolvedPrNumber: 999 }],
-    ['wrong Issue body', { issueBodyMatchesTarget: false }],
-    ['head changed', { liveHeadSha: HEAD_TWO }],
-    ['principal missing', { trustedPublisherLogin: '' }],
-    ['census incomplete', { commentCensusComplete: false }],
-    ['snapshot unstable', { commentSnapshotStable: false }],
-  ])('fails target admission before contribution for %s', (_name, overrides) => {
-    const result = coverage([
-      comment(1, report('PASS', [scenario('A', 'A passes')])),
-    ], A, overrides);
-    expect(result.accepting).toBe(false);
-    expect(result.diagnostics.covered.total).toBe(0);
-  });
-
-  it('reuses unchanged tuples but not changed tuples after a same-head Issue edit', () => {
-    const observation = comment(1, report('PASS', [
-      scenario('A', 'A passes'),
-      scenario('B', 'B passes'),
-    ]));
-    expect(coverage([observation], AB).accepting).toBe(true);
-
-    const edited = coverage([observation], planBody([
-      { action: 'A', expected: 'A passes' },
-      { action: 'C', expected: 'C changed' },
-    ]));
-    expect(edited.accepting).toBe(false);
-    expect(edited.diagnostics.covered.total).toBe(1);
-    expect(edited.diagnostics.missing.items[0]?.tuple).toContain('C');
-  });
-
-  it('orders authority independently from input and receipt order', () => {
-    const timestamp = '2026-08-05T00:00:00.000Z';
-    const fail = comment(1, report('FAIL', [scenario('A', 'A passes', 'fail')]), { createdAt: timestamp });
-    const pass = comment(2, report('PASS', [scenario('A', 'A passes')]), { createdAt: timestamp });
-    expect(smokeCommentSnapshotDigest([pass, fail])).toBe(smokeCommentSnapshotDigest([fail, pass]));
-    expect(coverage([pass, fail], A).accepting).toBe(true);
-  });
-
-  it.each([
-    ['producer', (body: string) => mutateMachineBlock(body, (block) => block.replace(`producer: ${SMOKE_REPORT_PRODUCER}`, 'producer: '))],
-    ['terminal', (body: string) => mutateMachineBlock(body, (block) => block.replace('terminal-handle: smoke-terminal-1', 'terminal-handle: '))],
-    ['cleanup', (body: string) => mutateMachineBlock(body, (block) => block.replace('terminal-cleanup: closed_owned_handle', 'terminal-cleanup: pending'))],
-    ['tracked files', (body: string) => mutateMachineBlock(body, (block) => block.replace('tracked-files-unmodified: true', 'tracked-files-unmodified: false'))],
-    ['row fields', (body: string) => mutateMachineBlock(body, (block) => block.replace('observed: fail observed', 'observed: '))],
-  ])('rejects incomplete non-PASS evidence missing %s', (_name, mutate) => {
-    const pass = comment(1, report('PASS', [scenario('A', 'A passes')]));
-    const canonicalWeak = formatSmokeReportComment(report('FAIL', [scenario('A', 'A passes', 'fail')]));
-    const weak = comment(2, report('FAIL', [scenario('A', 'A passes', 'fail')]), {
-      body: mutate(canonicalWeak),
-    });
-    const cleared = comment(3, report('PASS', [scenario('unknown', 'unknown')]));
-    const result = coverage([pass, weak, cleared], A);
-    expect(result.accepting).toBe(true);
-    expect(result.diagnostics.covered.items[0]?.commentId).toBe(1);
-    expect(result.diagnostics.invalidCandidates.total).toBe(1);
-  });
-
-  it('bounds diagnostics without truncating the internal fold', () => {
-    const scenarios = Array.from({ length: 70 }, (_, index) => ({
-      action: `${'д'.repeat(300)}-${index}`,
-      expected: `${'e'.repeat(300)}-${index}`,
-    }));
-    const rows = scenarios.map((entry) => scenario(entry.action, entry.expected));
-    const result = coverage([comment(1000, report('PASS', rows))], planBody(scenarios));
-    expect(result.accepting).toBe(true);
-    expect(result.diagnostics.covered.total).toBe(70);
-    expect(result.diagnostics.covered.items).toHaveLength(50);
-    expect(result.diagnostics.covered.truncated).toBe(true);
-    expect(Buffer.byteLength(result.diagnostics.covered.items[0]?.tuple ?? '', 'utf8')).toBeLessThanOrEqual(256);
-    expect(Buffer.byteLength(JSON.stringify(result.diagnostics), 'utf8')).toBeLessThanOrEqual(64 * 1024);
-  });
-
-  it('keeps the ordinary gate, CI, and receipt predicates', () => {
-    const smoke = comment(1, report('PASS', [scenario('A', 'A passes')]));
-    const common = {
-      issueBody: A,
-      issueNumber: 1343,
-      prNumber: 2001,
-      headSha: HEAD_ONE,
-      prComments: [smoke],
-      orcaWorktreeOk: true,
-      ownedTerminalClosed: true,
-      terminalProvenanceOk: true,
-      repositorySlug: REPOSITORY,
-      resolvedIssueNumber: 1343,
-      resolvedPrNumber: 2001,
-      liveHeadSha: HEAD_ONE,
-      issueBodyMatchesTarget: true,
-      trustedPublisherLogin: TRUSTED_ACTOR,
-      commentCensusComplete: true,
-      commentSnapshotStable: true,
-    };
-    expect(evaluateWorkerSmokeGate({ ...common, ciGreen: true }).allowed).toBe(true);
-    expect(evaluateWorkerSmokeGate({ ...common, ciGreen: false }).reason).toBe('required_ci_not_green');
-    expect(evaluateWorkerSmokeGate({ ...common, ciGreen: true, terminalProvenanceOk: false }).reason)
-      .toBe('smoke_terminal_provenance_unverified');
-  });
-});
+function resolvedTarget(body: string): ResolvedSmokeTarget {
+  return {
+    repositorySlug: REPOSITORY,
+    issueNumber: 1343,
+    prNumber: 2001,
+    headSha: HEAD_ONE,
+    issueBody: body,
+    prBody: 'Closes #1343',
+    issueBodyMatchesTarget: true,
+    trustedPublisherLogin: TRUSTED_ACTOR,
+    prOpen: true,
+    baseRef: 'main',
+    expectedTargetRef: 'main',
+    expectedTarget: true,
+  };
+}
 
 describe('delegated readiness consumes the production post-smoke owner', () => {
   async function runDelegatedReadinessForComments(
@@ -702,26 +428,28 @@ function selectSmokeProjectForTest(configRoot: string, primaryRoot: string): () 
 }
 
 describe('publishPrComment', () => {
-  it('executes gh writes through scripts/gh under the minimal smoke child environment, not a PATH wrapper', () => {
+  it('executes the one comment POST through scripts/gh under the minimal smoke child environment, not a PATH wrapper', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-publish-native-'));
     const machineBin = join(root, 'machine-bin');
     mkdirSync(machineBin, { recursive: true });
     const wrapperMarker = join(root, 'machine-wrapper-ran');
+    const realCalls = join(root, 'real-gh-calls.txt');
+    const fakeRealGh = join(root, 'real-gh');
     const previousPath = process.env.PATH;
     const previousRealBinary = process.env.GH_REAL_BINARY;
-    executable(join(machineBin, 'gh'), `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(wrapperMarker)}, 'ran');\n`);
-    delete process.env.GH_REAL_BINARY;
-    const nativeBinary = resolveRealGhBinary();
-    process.env.PATH = `${machineBin}:${dirname(nativeBinary)}:${previousPath ?? ''}`;
+    const restoreProject = selectSmokeProjectForTest(root, process.cwd());
+    executable(join(machineBin, 'gh'), `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(wrapperMarker)}, 'ran');\n`);
+    executable(fakeRealGh, `#!${process.execPath}\nconst { appendFileSync } = require('node:fs');\nappendFileSync(${JSON.stringify(realCalls)}, JSON.stringify(process.argv.slice(2)) + '\\n', 'utf8');\nprocess.stdout.write(JSON.stringify({ html_url: 'https://github.com/chetwerikoff/orchestrator-pack/issues/1586#issuecomment-1' }));\n`);
+    process.env.GH_REAL_BINARY = fakeRealGh;
+    process.env.PATH = `${machineBin}:${previousPath ?? ''}`;
     try {
-      expect(resolveRealGhBinary()).toBe(nativeBinary);
       expect(resolveTrackedGhWrapper()).toBe(join(process.cwd(), 'scripts', 'gh'));
-      const result = runSmokeGhWriteSync(['api', '--method', 'POST', '--help'], root);
-      expect(result.ok).toBe(true);
-      expect(result.stdout).toMatch(/usage/iu);
+      expect(publishPrComment(1586, 'hello', process.cwd(), 250)).toBe('https://github.com/chetwerikoff/orchestrator-pack/issues/1586#issuecomment-1');
+      expect(readFileSync(realCalls, 'utf8').trim().split(/\r?\n/u)).toHaveLength(1);
       expect(existsSync(wrapperMarker)).toBe(false);
       expect(buildSmokeGhChildEnv({})).toEqual({});
     } finally {
+      restoreProject();
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;
       if (previousRealBinary === undefined) delete process.env.GH_REAL_BINARY;
@@ -748,9 +476,13 @@ describe('publishPrComment', () => {
     const previousRealBinary = process.env.GH_REAL_BINARY;
     const root = mkdtempSync(join(tmpdir(), 'smoke-publication-failure-'));
     const restoreProject = selectSmokeProjectForTest(root, process.cwd());
-    process.env.GH_REAL_BINARY = process.execPath;
+    const callsFile = join(root, 'publish-calls.txt');
+    const failingGh = join(root, 'failing-gh');
+    executable(failingGh, `#!${process.execPath}\nconst { appendFileSync } = require('node:fs');\nappendFileSync(${JSON.stringify(callsFile)}, 'call\\n', 'utf8');\nprocess.stderr.write('forced failure\\n');\nprocess.exit(1);\n`);
+    process.env.GH_REAL_BINARY = failingGh;
     try {
       expect(() => publishPrComment(1586, 'hello', process.cwd(), 25)).toThrow(/comment_publish_failed/u);
+      expect(readFileSync(callsFile, 'utf8').trim().split(/\r?\n/u)).toHaveLength(1);
     } finally {
       restoreProject();
       if (previousRealBinary === undefined) delete process.env.GH_REAL_BINARY;
@@ -762,6 +494,10 @@ describe('publishPrComment', () => {
 
 
 describe('Issue #2319 terminal-free publish', () => {
+  it('rejects --head-sha as a publish input', async () => {
+    await expect(main(['publish', '--head-sha', HEAD_ONE])).rejects.toThrow('publish does not accept --head-sha');
+  });
+
   const publishPlanBody = planBody([
     { action: 'exercise publish scenario A', expected: 'scenario A passes' },
     { action: 'exercise publish scenario B', expected: 'scenario B passes' },

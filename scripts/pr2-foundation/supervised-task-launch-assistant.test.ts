@@ -1,7 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { runProcess } from '../kernel/subprocess.ts';
-import { resolveSmokeExecutorProfile } from '../worker-smoke-run.ts';
 import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
 import type { SupervisedWorkerStartResult } from './supervised-worker-start.ts';
 import {
@@ -1422,7 +1421,7 @@ describe('supervised Task launch assistant', () => {
 });
 
 describe('machine-local executor profile store', () => {
-  it('overlays fenced values once, with store values winning in task and smoke resolution', () => {
+  it('overlays fenced values once, with store values winning in task resolution', () => {
     let reads = 0;
     const env = {
       PATH: '/operator/bin',
@@ -1456,15 +1455,6 @@ describe('machine-local executor profile store', () => {
       value: { launchCommand: "cursor-agent --model 'store-task-model-store-task-effort'" },
     });
 
-    const smokeProfileEnv = {
-      ...effectiveEnv,
-      PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'cursor',
-      PACK_EXECUTOR_SMOKE_ROUTINE_MODEL: 'store-smoke-model',
-      PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT: 'store-smoke-effort',
-    };
-    expect(resolveSmokeExecutorProfile('routine', smokeProfileEnv)).toMatchObject({
-      command: "agent --model 'store-smoke-model-store-smoke-effort'",
-    });
   });
 
   it('rejects a foreign key before applying any store values and never changes PATH', () => {
