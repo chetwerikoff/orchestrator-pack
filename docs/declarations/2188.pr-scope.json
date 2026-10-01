@@ -20,6 +20,7 @@
     "scripts/lib/create-issue-stage-record-gh.ts",
     "scripts/lib/gh-target-authorization.ts",
     "scripts/lib/vitest-live-store-parent-guard.mjs",
+    "scripts/lib/worker-smoke-core-base.ts",
     "scripts/lib/worker-status-store.mjs",
     "scripts/manager-review-terminal-bundle.ts",
     "scripts/orchestrator-wake-supervisor.test.ts",
@@ -38,6 +39,7 @@
     "scripts/vitest-ci-lanes.config.json",
     "scripts/vitest-live-store-parent-guard.test.ts",
     "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts",
     "scripts/worktree-lifecycle/operations.ts",
     "scripts/worktree-teardown.ts"
   ],
@@ -58,5 +60,5 @@
     "prompts/",
     "scripts/"
   ],
-  "source_revision": "f5423158d8f0b3b63c3f5070c3187746e0d5e568"
+  "source_revision": "b88cb962451a342c0ca92369c5fac9a6aa1d6f8e"
 }
