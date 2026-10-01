@@ -314,7 +314,7 @@ a freshly resolved/revalidated snapshot; PACK does not claim to fence a provider
 1. Adopt the merged #1532 PACK revision through the normal supported deployment or
    recycle path. Do not hand-edit `worker-assignments.json` and do not create a
    second role/target file.
-2. Read the current persistence-safe designation through the canonical Node 22
+2. Read the current persistence-safe designation through the canonical declared-runtime
    wrapper:
 
    ```bash
@@ -442,7 +442,7 @@ does not scrape raw screen/title/preview/composer text to create a route witness
    names into the launching process before invoking the assistant. The helper
    reads the live environment; it does not source or persist an operator-local
    profile file.
-3. Invoke the canonical Node 22 TypeScript wrapper for
+3. Invoke the canonical declared-runtime TypeScript wrapper for
    `supervised-task-launch-assistant.ts`. T1/T2/T3 use an exact Task and intended
    worktree input; every manager supplies `--run` and exactly one of `--task` or
    caller-serialized `--manager-brief`. A GitHub Issue is optional for manager
@@ -533,7 +533,7 @@ drain wait, or rollback execution path was introduced.
 
 1. Pull the merged pack into each checkout or managed session that must execute the
    updated tracked policy and scripts.
-2. Use Node.js 22.x and install the frozen workspace dependencies with
+2. Use the Node/npm majors declared in `scripts/toolchain/node-version.json` and install the frozen workspace dependencies with
    `npm ci --include=dev`.
 3. Recycle only affected managed sessions or supervised pack processes so they load
    the new `AGENTS.md`, scripts, plugin paths, and package identities. Do not add a
