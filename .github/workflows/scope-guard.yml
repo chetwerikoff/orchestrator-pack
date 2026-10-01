@@ -97,7 +97,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version-file: package.json
           cache: npm
 
       - name: Run read-only pack verifier
@@ -149,7 +149,7 @@ jobs:
       - name: Setup Node.js (trusted scope guard deps)
         uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version-file: trusted-scope-guard/package.json
           cache: npm
           cache-dependency-path: trusted-scope-guard/package-lock.json
 
@@ -201,7 +201,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version-file: package.json
           cache: npm
 
       - name: Install npm dependencies
@@ -237,7 +237,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version-file: package.json
           cache: npm
 
       - name: Install npm dependencies
@@ -272,7 +272,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version-file: package.json
           cache: npm
 
       - name: Install npm dependencies
@@ -324,7 +324,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version-file: package.json
           cache: npm
 
       - name: Install npm dependencies
@@ -362,7 +362,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version-file: package.json
           cache: npm
 
       - name: Install npm dependencies
@@ -413,6 +413,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
 
       - name: Run self-architect lint (strict)
         env:
