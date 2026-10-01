@@ -1609,8 +1609,8 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     expect(orchestrationRunbook).toContain(
       'manager whole-role Task/Dispatch handoff',
     );
-    expect(orchestrationRunbook).toContain(
-      'orchestrator launches/reuses a local supervised worker as independent-smoke parent',
+    expect(orchestrationRunbook).toMatch(
+      /orchestrator launches\/reuses a local supervised worker\s+as independent-smoke parent/,
     );
     expect(orchestrationRunbook).toContain(
       'does not wait for scheduler\n`ready_for_review`',
@@ -1712,7 +1712,7 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     expect(executeSkill).toMatch(/Keep the same\s+manager Dispatch alive/);
     expect(executionRunbook).toMatch(/the same\s+manager Dispatch remains alive/);
     expect(executionRunbook).toContain('classifyExecuteIssueManagerRecord');
-    expect(orchestrationRunbook).toContain('the same manager Dispatch remains nonterminal');
+    expect(orchestrationRunbook).toMatch(/The same\s+manager Dispatch remains nonterminal/);
     expect(executeSkill).toContain('The supervisor consumes the validated `verdict` before role completion');
     expect(executeSkill).toContain('supervisor-launched local worker owns');
     expect(smokeRunbook).toContain('The manager does not run independent smoke itself');
