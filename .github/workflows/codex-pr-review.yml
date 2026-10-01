@@ -97,7 +97,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version-file: orchestrator-pack/package.json
           cache: npm
           cache-dependency-path: orchestrator-pack/package-lock.json
 

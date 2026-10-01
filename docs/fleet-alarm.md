@@ -14,7 +14,7 @@ wake the coordinator.
 
 ## One-off sweep
 
-Run from the pack checkout with Node 22:
+Run from the pack checkout with the Node major declared in `scripts/toolchain/node-version.json`:
 
 ```bash
 node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \

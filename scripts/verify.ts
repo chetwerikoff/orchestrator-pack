@@ -9,6 +9,7 @@ import { runNodeVerificationPorts } from './gate-runner/node-verifier-ports.ts';
 import { scanRetiredRuntimeSurfaces } from './runtime-retirement/retired-surface-guard.ts';
 import { checkRepositoryMode } from './sync-ops-wiki.ts';
 import { runReplayFixturePolicyCheck } from './replay-fixture-import.ts';
+import { SUPPORTED_NODE_MAJOR } from './toolchain/node-runtime-contract.mjs';
 
 export interface VerifyLine {
   readonly name: string;
@@ -178,8 +179,8 @@ export async function runVerification(repoRoot: string, options: { readonly stri
   const lines: VerifyLine[] = [];
   const failures: string[] = [];
   const warnings: string[] = [];
-  if (process.versions.node.split('.')[0] !== '22') {
-    const message = `Node.js 22.x is required; detected ${process.version}`;
+  if (Number(process.versions.node.split('.')[0]) !== SUPPORTED_NODE_MAJOR) {
+    const message = `Node.js ${SUPPORTED_NODE_MAJOR}.x is required by scripts/toolchain/node-version.json; detected ${process.version}`;
     (options.strictPrereqs ? failures : warnings).push(message);
     lines.push({ name: 'node', status: options.strictPrereqs ? 'FAIL' : 'WARN', detail: message });
   } else lines.push({ name: 'node', status: 'PASS', detail: process.version });

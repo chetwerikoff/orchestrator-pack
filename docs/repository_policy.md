@@ -80,7 +80,7 @@ runtime-neutral public contract and scope.
 
 ## Local verification
 
-From the repository root with Node 22:
+From the repository root with the Node major declared in `scripts/toolchain/node-version.json`:
 
 ```powershell
 node --experimental-strip-types scripts/verify.ts
@@ -96,7 +96,7 @@ Run affected plugin and focused tests as well. Require the current-head scope gu
 all protected-branch or pack-required CI, and current-head review where applicable.
 A previous-head success does not prove the current head.
 
-New or changed TypeScript must use Node 22 and the repository's native execution
+New or changed TypeScript must use the declared Node runtime and the repository's native execution
 policy. Do not introduce Node 20, emitted build artifacts, `tsx`, `ts-node`, or
 loader fallbacks. Optional Git hooks may run the same checks before push, but hooks
 never replace server-side CI.

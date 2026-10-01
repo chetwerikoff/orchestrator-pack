@@ -94,6 +94,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Node.js for pack verification
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+
       - name: Run read-only pack verifier
         run: node --experimental-strip-types scripts/verify.ts --repo-root "$GITHUB_WORKSPACE"
 
@@ -105,12 +111,6 @@ jobs:
 
       - name: Enforce verify runtime refactor policy
         run: node --experimental-strip-types scripts/ci-policy-guards.ts verify-runtime
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
 
       - name: Install npm dependencies
         run: npm ci --include=dev
@@ -149,7 +149,7 @@ jobs:
       - name: Setup Node.js (trusted scope guard deps)
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version-file: trusted-scope-guard/package.json
           cache: npm
           cache-dependency-path: trusted-scope-guard/package-lock.json
 
@@ -198,10 +198,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js for source typecheck
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version-file: package.json
           cache: npm
 
       - name: Install npm dependencies
@@ -234,10 +234,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
+      - name: Setup Node.js for Vitest light lane
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version-file: package.json
           cache: npm
 
       - name: Install npm dependencies
@@ -269,10 +269,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
+      - name: Setup Node.js for Vitest topology planning
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version-file: package.json
           cache: npm
 
       - name: Install npm dependencies
@@ -321,10 +321,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
+      - name: Setup Node.js for Vitest heavy shard
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version-file: package.json
           cache: npm
 
       - name: Install npm dependencies
@@ -359,10 +359,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
+      - name: Setup Node.js for Vitest contract lane
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version-file: package.json
           cache: npm
 
       - name: Install npm dependencies
@@ -385,6 +385,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Node.js for regression aggregate
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
 
       - name: Fail-closed full-regression aggregate
         env:
@@ -413,6 +418,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Setup Node.js for self-architect lint
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
 
       - name: Run self-architect lint (strict)
         env:

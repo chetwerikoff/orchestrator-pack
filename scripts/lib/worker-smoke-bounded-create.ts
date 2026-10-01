@@ -882,7 +882,7 @@ function failureCode(input: {
   if (input.wrapperLaunchFailure === 'permission_denied') return 'wrapper_not_executable';
   if (/unknown argument|usage:/iu.test(input.detail)) return 'invalid_cli';
   if (/issue-body-file/iu.test(input.detail)) return 'issue_body_unavailable';
-  if (/native-entrypoint-preflight|node 22|unsupported node/iu.test(input.detail)) {
+  if (/"code"\s*:\s*"OPK_NODE_RUNTIME_UNSUPPORTED"/u.test(input.detail)) {
     return 'node_preflight_failed';
   }
   if (/ERR_MODULE_NOT_FOUND|cannot find module|module not found|SyntaxError/iu.test(input.detail)) {

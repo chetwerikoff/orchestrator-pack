@@ -1,6 +1,6 @@
 # Watch wrapper
 
-The pack-owned Node 22 watch entrypoint is an observation-only surface. Worker
+The pack-owned watch entrypoint under the declared Node runtime is an observation-only surface. Worker
 start is **not** routed through this directory: the governed start path is
 `scripts/pr2-foundation/supervised-worker-start.ts`, which invokes Orca
 `orchestration worker-start` for an already selected Task, terminal, and

@@ -48,7 +48,7 @@ The pack is designed to survive runtime upgrades and replacements:
 - The pack review store and claim authority preserve active, terminal, duplicate,
   concurrent, stale-head, malformed-state, and launch-failure outcomes.
 - [`scripts/pack-worker-report`](scripts/pack-worker-report) is the public worker
-  lifecycle report command and executes the native Node 22 TypeScript implementation
+  lifecycle report command and executes the native TypeScript implementation under the declared Node runtime
   in [`scripts/pack-worker-report.ts`](scripts/pack-worker-report.ts). The retired
   legacy shell implementation is not a compatibility or fallback path.
 - Required CI, smoke, findings, and handoff must all bind to the current PR head.
@@ -67,8 +67,7 @@ The pack is designed to survive runtime upgrades and replacements:
 
 ## Requirements
 
-- Node.js 22.x
-- npm 10.x
+- Node/npm majors declared in `scripts/toolchain/node-version.json`
 - Git 2.25+
 - authenticated GitHub transport for repository operations
 - the configured agent and reviewer CLIs required by the selected workflow

@@ -36,7 +36,7 @@ implementation, its registered selection, or a named operator-owned input.
    semantics.
 4. Edit only declared paths. Keep operator-owned inputs explicit and validated.
 5. Run focused adapter tests, deterministic lifecycle proofs, runtime-retirement
-   scan, Node 22 typecheck and lint, repository verification, and required CI for
+   scan, declared-runtime typecheck and lint, repository verification, and required CI for
    the current head.
 6. Update `docs/migration_notes.md` and the PR `## Operator adoption` section when
    an operator must recycle a process, update an explicit input, or verify a live
