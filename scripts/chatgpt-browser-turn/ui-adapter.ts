@@ -164,16 +164,37 @@ const ROLELESS_SURFACE_CAUSES: readonly (readonly [string, ExecutionRecoveryProd
   [MESSAGE_STREAM_ERROR_TEXT, 'message_stream_error'],
 ];
 
+const UNRENDERED_OWNER_ALERT_CAUSES: readonly (readonly [string, ExecutionRecoveryProductCause])[] = [
+  ...ROLELESS_SURFACE_CAUSES,
+  [MESSAGE_DELIVERY_TIMED_OUT_TEXT, 'message_delivery_timed_out'],
+  [PRODUCT_NETWORK_ERROR_TEXT, 'product_network_error'],
+];
+
+function exactAlertCause(
+  value: string,
+  causes: readonly (readonly [string, ExecutionRecoveryProductCause])[],
+): ExecutionRecoveryProductCause | undefined {
+  const normalized = normalizeExecutionRecoveryProductText(value);
+  for (const [text, cause] of causes) {
+    if (normalized === text || normalized === `${text} Retry`) return cause;
+  }
+  return undefined;
+}
+
 /**
  * Exact live `[role="alert"]` banner that ChatGPT can render outside every
  * message node, with or without its Retry label.
  */
 export function rolelessRecoverySurfaceCause(value: string): ExecutionRecoveryProductCause | undefined {
-  const normalized = normalizeExecutionRecoveryProductText(value);
-  for (const [text, cause] of ROLELESS_SURFACE_CAUSES) {
-    if (normalized === text || normalized === `${text} Retry`) return cause;
-  }
-  return undefined;
+  return exactAlertCause(value, ROLELESS_SURFACE_CAUSES);
+}
+
+/**
+ * Exact `[role="alert"]` banner of a fresh conversation whose owned messages
+ * never rendered; only the caller's bound-conversation gate makes it attributable.
+ */
+export function unrenderedOwnerAlertCause(value: string): ExecutionRecoveryProductCause | undefined {
+  return exactAlertCause(value, UNRENDERED_OWNER_ALERT_CAUSES);
 }
 
 function executionRecoveryCauseFromText(value: string): ExecutionRecoveryProductCause | undefined {

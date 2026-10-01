@@ -665,6 +665,23 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(state.reloads).toBe(0);
   });
 
+  it('returns conversation-scoped message delivery timeout without reload when the owner is unrendered (#2303)', async () => {
+    const prompt = 'PROMPT-DELIVERY-TIMEOUT';
+    const output = join(stateDir, 'delivery-timeout-unrendered.txt');
+    const { page, state } = unrenderedOwnedMessagePage(prompt, 'NEVER-FINISHED', false, false, 'Message delivery timed out. Please try again.');
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output);
+
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({
+      state: 'recovery_required',
+      scope: 'conversation',
+      cause: 'message_delivery_timed_out',
+      send_count: 1,
+    });
+    expect(state.reloads).toBe(0);
+  });
+
   it('reloads the owned conversation once when a finished answer renders without the owned user message (#2197)', async () => {
     const prompt = 'PROMPT-UNRENDERED';
     const reply = 'UNRENDERED-OK';
