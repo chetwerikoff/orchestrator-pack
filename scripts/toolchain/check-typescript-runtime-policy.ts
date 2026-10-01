@@ -1082,7 +1082,9 @@ function mirrorViolations(repoRoot: string): RuntimePolicyViolation[] {
 }
 
 function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\function packageViolations(repoRoot: string, allFiles: readonly string[]): RuntimePolicyViolation[] {');
+}');
 }
 
 function nonLiveRestatementPath(path: string, contract: InventoryContract): boolean {
@@ -1181,7 +1183,7 @@ function packageViolations(repoRoot: string, allFiles: readonly string[]): Runti
             path,
             line: 1,
             rule: 'direct-typescript-launch',
-            message: `TypeScript bin ${bin} must use the native Node 22 shebang.`,
+            message: `TypeScript bin ${bin} must use the native Node type-stripping shebang.`,
           });
         }
         if (!hasCanonicalEntrypointPreflight(repoRoot, absoluteBin)) {
