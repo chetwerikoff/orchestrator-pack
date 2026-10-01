@@ -55,6 +55,7 @@ import {
   classifyExecuteIssueManagerRecord,
   type ExecuteIssueManagerBoundaryContext,
 } from './lib/execute-issue-manager-boundary.ts';
+import { runPublishSmoke } from './worker-smoke-run.ts';
 
 const contract = readFileSync(new URL('../.cursor/skills/create-issue-draft/SKILL.md', import.meta.url), 'utf8');
 const defaultGhTransportSlot = vi.hoisted(() => ({
@@ -1597,36 +1598,26 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     expect(executionRunbook).not.toContain('16-minute');
   });
 
-  it('ends manager work at an exact settled-review handoff and keeps overall completion supervisor-owned', () => {
+  it('continues settled review into the same manager smoke phase', () => {
     expect(executionRunbook).toContain('### Settled-review manager handoff');
-    expect(executionRunbook).toContain('next legal action: **launch local independent-smoke worker**');
-    expect(executionRunbook).toMatch(
-      /The manager\s+does not run independent smoke itself/,
-    );
-    expect(executionRunbook).toContain(
-      'a same-PR independent smoke PASS exists with current-head CI green',
-    );
-    expect(orchestrationRunbook).toContain(
-      'manager whole-role Task/Dispatch handoff',
-    );
-    expect(orchestrationRunbook).toMatch(
-      /orchestrator launches\/reuses a local supervised worker\s+as independent-smoke parent/,
-    );
-    expect(orchestrationRunbook).toContain(
-      'does not wait for scheduler\n`ready_for_review`',
-    );
+    expect(executionRunbook).toContain('the same manager enters `execute:smoke`');
+    expect(executionRunbook).toContain('git worktree add --detach <T> <H>');
+    expect(executionRunbook).toContain('git worktree remove --force <T>');
+    expect(orchestrationRunbook).toContain('the same manager Dispatch remains nonterminal');
+    expect(orchestrationRunbook).toContain('temporary detached Git worktree');
+    expect(orchestrationRunbook).not.toContain('independent-smoke');
+    expect(executeSkill).toContain('temporary detached Git worktree');
   });
 
-  it('keeps the same manager Dispatch live through settled review, independent smoke, and fixer return', () => {
+  it('keeps the same manager Dispatch live through smoke FAIL/fixer return and terminal-free PASS', () => {
     const headSha = 'a'.repeat(40);
     const managerContext: ExecuteIssueManagerBoundaryContext = {
       repository: 'chetwerikoff/orchestrator-pack',
       issueNumber: 2182,
       sourceRevision: 'r04',
-      phase: 'independent-smoke',
+      phase: 'smoke',
       productionArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'],
       prNumber: 2219,
-      headSha,
     };
     const dispatch = {
       id: 'dispatch-2182',
@@ -1661,22 +1652,10 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     });
     expect(fail).toMatchObject({
       exitCode: 0,
-      result: {
-        ok: true,
-        verdict: 'FAIL',
-        cause: 'execute_worker_smoke_assertion_failed',
-        nextAction: null,
-      },
+      result: { ok: true, verdict: 'FAIL', cause: 'execute_worker_smoke_assertion_failed', nextAction: null },
     });
     if (fail.result.ok && fail.result.verdict === 'FAIL') dispatch.localFixes += 1;
-    expect(dispatch).toMatchObject({
-      reviewStageComplete: true,
-      terminal: false,
-      localFixes: 1,
-    });
-    expect(fail.exitCode).toBe(0);
-    expect(fail.result.ok && fail.result.verdict).toBe('FAIL');
-    expect(dispatch.terminal).toBe(false);
+    expect(dispatch).toMatchObject({ reviewStageComplete: true, terminal: false, localFixes: 1 });
 
     const pass = continueSmoke({
       schema: 'pack-worker-smoke-report/v1',
@@ -1686,9 +1665,6 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
       headSha,
       result: 'PASS',
       trackedFilesUnmodified: true,
-      terminalCleanup: 'closed_owned_handle',
-      orcaExecutable: 'orca',
-      terminalHandle: 'term_fixture',
       scenarios: [{
         action: 'exercise current behavior',
         expected: 'acceptance assertion holds',
@@ -1698,46 +1674,141 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     });
     expect(pass).toMatchObject({
       exitCode: 0,
-      result: {
-        ok: true,
-        verdict: 'PASS',
-        cause: 'execute_worker_smoke_pass',
-        nextAction: null,
-      },
+      result: { ok: true, verdict: 'PASS', cause: 'execute_worker_smoke_pass', nextAction: null },
     });
     expect(dispatch.continuations).toEqual(['dispatch-2182', 'dispatch-2182']);
     expect(dispatch.reviewStageComplete).toBe(true);
     expect(dispatch.terminal).toBe(false);
-
-    expect(executeSkill).toMatch(/Keep the same\s+manager Dispatch alive/);
-    expect(executionRunbook).toMatch(/the same\s+manager Dispatch remains alive/);
     expect(executionRunbook).toContain('classifyExecuteIssueManagerRecord');
-    expect(orchestrationRunbook).toMatch(/The same\s+manager Dispatch remains nonterminal/);
-    expect(executeSkill).toContain('The supervisor consumes the validated `verdict` before role completion');
-    expect(executeSkill).toContain('supervisor-launched local worker owns');
-    expect(smokeRunbook).toContain('The manager does not run independent smoke itself');
-    expect(smokeRunbook).toContain('the settled review stage\nis not reopened after a worker fix');
+    expect(smokeRunbook).toContain('There is no `trusted_target_stale` smoke recovery observer');
   });
 
-  it('uses one post-review independent smoke handoff for ordinary and manager-controlled PRs', () => {
-    const ordinaryStart = smokeRunbook.indexOf('### Ordinary local coding-worker path');
-    const managerStart = smokeRunbook.indexOf('### Manager-controlled Browser-GPT path');
-    const nextSection = smokeRunbook.indexOf('## Pre-smoke prerequisite preparation', managerStart);
-    expect(ordinaryStart).toBeGreaterThanOrEqual(0);
-    expect(managerStart).toBeGreaterThan(ordinaryStart);
-    expect(nextSection).toBeGreaterThan(managerStart);
+  it('publishes from the bounded detached worktree and consumes the canonical report only after cleanup', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2319-manager-smoke-'));
+    const canonical = join(root, 'repo');
+    const tempWorktree = join(root, 'smoke');
+    mkdirSync(canonical, { recursive: true });
+    const git = (args: readonly string[], cwd = canonical) => runProcessSync({
+      command: 'git', args, cwd, inheritParentEnv: true,
+    });
+    let worktreeAdded = false;
+    const writes: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    const comments: string[] = [];
+    try {
+      expect(git(['init', '--initial-branch=main']).ok).toBe(true);
+      expect(git(['config', 'user.email', 'fixture@example.invalid']).ok).toBe(true);
+      expect(git(['config', 'user.name', 'Issue 2319 Fixture']).ok).toBe(true);
+      writeFileSync(join(canonical, 'fixture.txt'), 'base\n', 'utf8');
+      expect(git(['add', 'fixture.txt']).ok).toBe(true);
+      expect(git(['commit', '-m', 'base']).ok).toBe(true);
+      expect(git(['checkout', '-b', 'manager']).ok).toBe(true);
+      const beforeHead = git(['rev-parse', 'HEAD']).stdout.trim();
+      const beforeBranch = git(['branch', '--show-current']).stdout.trim();
+      const beforeStatus = git(['status', '--porcelain=v1', '--untracked-files=all']).stdout;
+      const issueBody = [
+        '```behavior-kind',
+        'action-producing',
+        '```',
+        '',
+        '```smoke-test-plan',
+        'scenarios:',
+        '  - action: exercise current behavior | expected: acceptance assertion holds',
+        '```',
+      ].join('\n');
+      const options = {
+        command: 'publish',
+        issueNumber: 2182,
+        prNumber: 2219,
+        headSha: '',
+        issueBodyFile: '',
+        repoRoot: tempWorktree,
+        cwd: tempWorktree,
+        dryRun: false,
+        json: true,
+        reviewId: '',
+        reviewHeadSha: '',
+        reportFile: join(tempWorktree, 'report.md'),
+      };
+      const dependencies = {
+        resolveTarget: () => ({
+          repositorySlug: 'chetwerikoff/orchestrator-pack',
+          issueNumber: 2182,
+          prNumber: 2219,
+          issueBody,
+        }),
+        readReportFile: () => [
+          'result: PASS',
+          'scenarios:',
+          '  - action: exercise current behavior | expected: acceptance assertion holds | observed: acceptance assertion holds | outcome: pass',
+        ].join('\n'),
+        publishComment: (_pr: number, body: string) => {
+          comments.push(body);
+          return 'https://github.com/chetwerikoff/orchestrator-pack/issues/2219#issuecomment-1';
+        },
+      };
+      const publish = vi.fn(() => runPublishSmoke(options, dependencies));
+      const managerContext: ExecuteIssueManagerBoundaryContext = {
+        repository: 'chetwerikoff/orchestrator-pack',
+        issueNumber: 2182,
+        sourceRevision: 'r04',
+        phase: 'smoke',
+        productionArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'],
+        prNumber: 2219,
+      };
+      const classify = vi.fn((record: Record<string, unknown>) =>
+        classifyExecuteIssueManagerRecord(record, managerContext));
 
-    const ordinary = smokeRunbook.slice(ordinaryStart, managerStart);
-    const manager = smokeRunbook.slice(managerStart, nextSection);
-    expect(ordinary).toContain('implementation\n  -> PR created with current-head CI green');
-    expect(ordinary).toContain('-> pack-review cycle');
-    expect(manager).toContain('manager-owned canonical pack-review cycle');
-    expect(manager).toContain('There is no synthetic pre-review worker-owned smoke on this path');
-    expect(manager).toContain('supervisor launches local independent-smoke parent');
-    expect(manager).toContain('first FAIL/BLOCKED: local worker fix + explicit independent smoke');
-    expect(ordinary).not.toContain('-> worker-owned smoke PASS');
-    expect(manager).not.toContain('-> worker-owned smoke PASS');
+      const setupFailure = git(['worktree', 'add', '--detach', join(root, 'bad'), '0'.repeat(40)]);
+      expect(setupFailure.ok).toBe(false);
+      expect(publish).not.toHaveBeenCalled();
+      expect(comments).toHaveLength(0);
+
+      expect(git(['worktree', 'add', '--detach', tempWorktree, beforeHead]).ok).toBe(true);
+      worktreeAdded = true;
+      const stdoutBeforePublish = writes.length;
+      expect(await publish()).toBe(0);
+      expect(publish).toHaveBeenCalledTimes(1);
+      expect(comments).toHaveLength(1);
+      expect(git(['-C', tempWorktree, 'rev-parse', 'HEAD']).stdout.trim()).toBe(beforeHead);
+      expect(git(['-C', tempWorktree, 'status', '--porcelain=v1', '--untracked-files=all']).stdout).toBe('');
+
+      const publishedRecord = JSON.parse(writes.slice(stdoutBeforePublish).join('').trim()) as Record<string, unknown>;
+      const cleanupFailure = git(['worktree', 'remove', '--force', join(root, 'not-the-owned-worktree')]);
+      expect(cleanupFailure.ok).toBe(false);
+      expect(publish).toHaveBeenCalledTimes(1);
+      expect(comments).toHaveLength(1);
+      expect(classify).not.toHaveBeenCalled();
+
+      expect(git(['worktree', 'remove', '--force', tempWorktree]).ok).toBe(true);
+      worktreeAdded = false;
+      expect(git(['rev-parse', 'HEAD']).stdout.trim()).toBe(beforeHead);
+      expect(git(['branch', '--show-current']).stdout.trim()).toBe(beforeBranch);
+      expect(git(['status', '--porcelain=v1', '--untracked-files=all']).stdout).toBe(beforeStatus);
+      expect(git(['worktree', 'list', '--porcelain']).stdout).not.toContain(tempWorktree);
+
+      expect(classify(publishedRecord)).toMatchObject({
+        exitCode: 0,
+        result: { ok: true, verdict: 'PASS', cause: 'execute_worker_smoke_pass', nextAction: null },
+      });
+      expect(classify).toHaveBeenCalledTimes(1);
+      expect(publishedRecord).toMatchObject({
+        schema: 'pack-worker-smoke-report/v1',
+        issueNumber: 2182,
+        prNumber: 2219,
+        headSha: beforeHead,
+        result: 'PASS',
+      });
+    } finally {
+      stdout.mockRestore();
+      if (worktreeAdded) git(['worktree', 'remove', '--force', tempWorktree]);
+      rmSync(root, { recursive: true, force: true });
+    }
   });
+
 });
 
 describe('Issue #2050 execute-Issue identity-bound re-observation contract', () => {
@@ -2034,8 +2105,8 @@ describe('Issue #1954 standalone GPT PR-review manager entry contract', () => {
     expect(executeSkill).not.toContain('shared_cdp_busy');
   });
 
-  it('keeps completion supervisor-owned and maintains generated Claude pointer parity', () => {
-    expect(reviewSkill).toContain('local supervised\nindependent-smoke worker');
+  it('keeps settled review nonterminal and maintains generated Claude pointer parity', () => {
+    expect(reviewSkill).toContain('same manager\'s `execute:smoke`');
     expect(reviewSkill).toContain('Review settlement by\nitself is not overall `VERIFIED_COMPLETE`');
     expect(reviewPointer).toContain('name: review-pr-with-gpt');
     expect(reviewPointer).toContain(

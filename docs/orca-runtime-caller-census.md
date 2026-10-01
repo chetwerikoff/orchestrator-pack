@@ -15,7 +15,7 @@ Worktree lifecycle remains the deliberate narrower exception documented in `docs
 | Surface | Operations | Disposition | Result |
 |---|---|---|---|
 | `scripts/launch-watch/watch.ts` | runtime composition, readiness, list/find, read, liveness | `already-runtime-neutral` | Reference observation caller from #1245. |
-| `scripts/worker-smoke-run.ts` | runtime composition, readiness, spawn, send, read, liveness, stop, find | `use-runtime-interface` | Selected adapter, exact composite identity, one delivery path, and exact post-close presence proof. |
+| `scripts/worker-smoke-run.ts` | runtime composition, readiness, liveness | `use-runtime-interface` | Runtime use survives only for delegated-readiness assignment/liveness projection; smoke publication itself has no runtime worker lifecycle. |
 | `scripts/lib/worker-smoke-bounded-create.ts` | spawn, send, read, liveness, stop, find | `use-runtime-interface` | Current generation-establishment support; #1399 owns the exact Orca observation edge while worker-smoke orchestration remains RuntimeAdapter-based. |
 | `scripts/runtime/task-lifecycle.ts` | spawn, send, read, liveness, stop | `already-runtime-neutral` | Direct lifecycle caller retains exact spawned identity after ambiguous dispatch and never resends. |
 | `scripts/pr2-foundation/fleet-observer.ts` | list/find, read, liveness | `already-runtime-neutral` | Observer-only fleet census through `RuntimeAdapter`; no actuation or compatibility bridge. |

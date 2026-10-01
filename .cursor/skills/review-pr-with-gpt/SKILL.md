@@ -48,10 +48,11 @@ PR/Issue identity plus the standalone implementation-review assignment. Do not
 add a manager class, launcher, scheduler route, queue, watcher, or durable review
 state.
 
-The manager's settled-review result is the same whole-role handoff used by the
-shared Issue #1953 phase. After that handoff, the supervisor follows the existing
-post-manager path and launches or reuses the local supervised
-independent-smoke worker for the exact handed-off PR/head. Review settlement by
+The manager's settled-review result is the same nonterminal review settlement
+used by the shared Issue #1953 phase. After settlement, a required
+scenario-bearing smoke plan continues in that same manager's `execute:smoke`
+phase; the manager uses the bounded temporary detached-PR-worktree procedure
+owned by the execution runbook. Review settlement by
 itself is not overall `VERIFIED_COMPLETE`.
 
 ## Manager target resolution
@@ -85,8 +86,7 @@ If review authority is already active, partially published, or settled,
 resume/reconcile that existing authority. Do not create a duplicate same-head
 round merely because this standalone entrypoint was invoked later. If the
 required review stage is already complete, perform no redundant reviewer-model
-call and continue to the shared settled-review handoff/independent-smoke
-decision.
+call and continue to the shared settled-review smoke/no-smoke decision.
 
 Review findings may be fixed only on the resolved existing implementation PR
 through the shared fresh-fixer path. The absence of a valid implementation PR
