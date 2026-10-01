@@ -348,9 +348,12 @@ describe('DOM observation boundary', () => {
       getBoundingClientRect: () => ({ height: 1 }),
       innerText: message.text,
     }));
-    const querySelector = vi.fn(generationQuery);
+    const querySelectorAll = vi.fn((_selector: string) => {
+      const match = generationQuery();
+      return match ? [match] : [];
+    });
     const priorDocument = (globalThis as { document?: unknown }).document;
-    (globalThis as { document?: unknown }).document = { querySelector };
+    (globalThis as { document?: unknown }).document = { querySelectorAll };
     const nodes = scalarLocator({
       evaluateAll: vi.fn(async (callback: (items: Element[], args: unknown) => unknown, args: unknown) => (
         callback(elements as unknown as Element[], args)
@@ -362,7 +365,7 @@ describe('DOM observation boundary', () => {
         : scalarLocator()),
     };
     try {
-      return { result: await readPageObservation(page), querySelector };
+      return { result: await readPageObservation(page), querySelectorAll };
     } finally {
       if (priorDocument === undefined) delete (globalThis as { document?: unknown }).document;
       else (globalThis as { document?: unknown }).document = priorDocument;
@@ -377,7 +380,10 @@ describe('DOM observation boundary', () => {
       dead.result.pageTurnEvidence!.observedAssistantNodes,
     )).toBe('dead');
 
-    const live = await readAtomicEvidence([{ role: 'user', text: markedPrompt }], () => ({}));
+    const live = await readAtomicEvidence(
+      [{ role: 'user', text: markedPrompt }],
+      () => ({ getBoundingClientRect: () => ({ height: 1 }) }),
+    );
     expect(live.result.pageTurnEvidence).toEqual({ generationInProgress: true, observedAssistantNodes: 0 });
     expect(classifyBrowserGptPageTurnStatus(
       live.result.pageTurnEvidence!.generationInProgress,
@@ -393,9 +399,16 @@ describe('DOM observation boundary', () => {
       completed.result.pageTurnEvidence!.generationInProgress,
       completed.result.pageTurnEvidence!.observedAssistantNodes,
     )).toBe('completed');
-    expect(completed.querySelector).toHaveBeenCalledWith(
+    expect(completed.querySelectorAll).toHaveBeenCalledWith(
       '[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]',
     );
+  });
+
+  it('does not count an unrendered Stop as generation in progress', async () => {
+    const finished = await readAtomicEvidence([
+      { role: 'assistant', text: 'finished reply' },
+    ], () => ({ getBoundingClientRect: () => ({ height: 0 }) }));
+    expect(finished.result.pageTurnEvidence).toEqual({ generationInProgress: false, observedAssistantNodes: 1 });
   });
 
   it('preserves a valid transcript and fails closed when generation reading throws', async () => {

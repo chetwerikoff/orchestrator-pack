@@ -1610,7 +1610,8 @@ export async function readPageObservation(
           }
           let generationInProgress: boolean | 'unknown' = 'unknown';
           try {
-            generationInProgress = Boolean(document.querySelector(args.generationSelector));
+            generationInProgress = Array.from(document.querySelectorAll(args.generationSelector))
+              .some((node) => node.getBoundingClientRect().height > 0);
           } catch {
             generationInProgress = 'unknown';
           }
