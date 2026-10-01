@@ -41,7 +41,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
+      - name: Setup Node.js for runtime-history topology
         uses: actions/setup-node@v4
         with:
           node-version-file: package.json
@@ -86,7 +86,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Setup Node.js
+      - name: Setup Node.js for runtime-history refresh
         uses: actions/setup-node@v4
         with:
           node-version-file: package.json
@@ -270,7 +270,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           persist-credentials: false
 
-      - name: Setup Node.js
+      - name: Setup Node.js for runtime-history aggregate
         uses: actions/setup-node@v4
         with:
           node-version-file: package.json
