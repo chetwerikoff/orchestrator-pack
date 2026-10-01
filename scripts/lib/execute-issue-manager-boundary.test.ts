@@ -84,7 +84,7 @@ describe('execute-Issue manager boundary', () => {
     ]);
     expect(validateManagerResult({
       ok: false, cause: 'invalid', nextAction: {
-        schema: 'create-issue-next-action/v1', kind: 'execute-send-replacement', binding: {
+        schema: 'manager-next-action/v1', kind: 'execute-send-replacement', binding: {
           repository: context.repository, issueNumber: context.issueNumber, sourceRevision: context.sourceRevision, stage: 'execute:implementation',
         }, argv: ['send'],
       },
@@ -156,7 +156,7 @@ describe('execute-Issue manager boundary', () => {
     expect(classifyExecuteIssueManagerRecord({ ok: true, prNumber: 2083 }, { ...context, phase: 'review' })).toMatchObject({ exitCode: 0 });
     const action = managerNextAction({ kind: 'execute-review-runner-read-only', binding: { ...context, stage: 'execute:review' }, argv: ['scripts/gh', 'pr', 'view', '2083', '--json', 'state'] });
     expect(classifyExecuteIssueManagerRecord({ ok: false, nextAction: action }, { ...context, phase: 'review' })).toMatchObject({ exitCode: 3, result: { nextAction: action } });
-    const send = classifyExecuteIssueManagerRecord({ ok: false, nextAction: { schema: 'create-issue-next-action/v1', kind: 'retry-start-cycle', binding: { ...context, stage: 'execute:review' }, argv: ['node', 'scripts/chatgpt-browser-turn.ts', '--new-chat'] } }, { ...context, phase: 'review' });
+    const send = classifyExecuteIssueManagerRecord({ ok: false, nextAction: { schema: 'manager-next-action/v1', kind: 'execute-send-replacement', binding: { ...context, stage: 'execute:review' }, argv: ['node', 'scripts/chatgpt-browser-turn.ts', '--new-chat'] } }, { ...context, phase: 'review' });
     expect(expectReadOnly(send).kind).toBe('execute-review-runner-read-only');
     expect(classifyExecuteIssueManagerRecord({ ok: false, outcome: 'review_target_unavailable', reason: 'GitHub HTTP 503', prNumber: 2083 }, { ...context, phase: 'review' })).toMatchObject({ exitCode: 4, result: { cause: 'external:github_unavailable' } });
   });
