@@ -27,7 +27,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js for wall-clock stage
         uses: actions/setup-node@v4
         with:
           node-version-file: package.json
@@ -76,7 +76,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js for wall-clock aggregate
         uses: actions/setup-node@v4
         with:
           node-version-file: package.json
