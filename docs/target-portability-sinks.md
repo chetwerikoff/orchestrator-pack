@@ -60,11 +60,11 @@ with target identity.
 | T03 | `scripts/publish-issue-body-sync.ts` → `scripts/lib/publish-issue-body-sync.ts::syncPublishIssueBody` | Issue create/edit repository | `target` | Production caller now resolves the selected card, rejects disagreeing `--repo`, sets `OPK_PROJECT_ID`, and supplies `context.repository` to the existing application seam. |
 | T04 | `scripts/lib/create-issue-stage-record-cli.ts`, `create-issue-stage-record-artifacts.ts`, `create-issue-stage-record-gh.ts`, `create-issue-stage-record-core.ts`, `create-issue-final-acceptance.ts` | Issue repository + create-Issue journal state | `target` | CLI repository is card-selected. The journal default now derives from existing `canonicalReviewStateRoot()`, producing `create-issue-draft/<projectId>/<issue>/journal`; production workdir overrides cannot cross the selected project. Pending-event and active-cycle files therefore share that project fence. |
 | T05 | `scripts/pack-review-runner.ts::resolveTarget`, production callers of `resolveCurrentPrHead` / `resolveCurrentPrTarget` | canonical PR repository, base ref, project namespace | `target` | The selected context supplies repository/project/default branch. The checkout remote is validation only. A selected repo mismatch or PR-base/default-branch mismatch fails; base ref derives from `context.defaultBranch`. |
-| T06 | `scripts/run-pack-review-gpt.ts`; `plugins/codex-pr-reviewer/lib/review_cli.ts` | review repository/base | `target` | When `OPK_PROJECT_ID` is present, Browser-GPT validates the observed checkout against the selected repository and both review entrypoints derive the base from the selected default branch. No-selector behavior remains the pack/non-target compatibility path. |
+| T06 | `scripts/run-pack-review-gpt.ts`; `plugins/codex-pr-reviewer/lib/review_cli.ts` | review repository/base | `target` | Production review entrypoints require the selected target, validate the observed checkout against the selected repository, and derive the base from the selected default branch. Missing selection fails through the typed target-context `missing-selection` path before repository/base effects; only explicit Vitest/`OPK_VITEST_HARNESS` fixture execution may remain unbound. |
 | T07 | `scripts/worker-smoke-run.ts` | smoke repo/project/default branch, pack-review store | `target` | Production smoke now requires the selected target, validates origin and live repository default branch, uses selected project state, and derives merge/base proof from `context.defaultBranch`. Vitest-only pack defaults remain fixture behavior. |
 | T08 | `scripts/manager-review-terminal-bundle.ts` | review bundle repo | `target` | Repository comes from selected context; explicit `--repo` may only corroborate it. |
 | T09 | `scripts/draft-discipline.mjs` | live Issue repository, `GITHUB_REPOSITORY`/pack fallback | `target` | Live reads resolve the selected card before tracked gh. Target-mode ambient repository disagreement fails; Vitest-only no-selector fallback remains fixture behavior. |
-| T10 | `scripts/pack-worker-report.ts` | worker report project/repository | `target` | Explicit binding now honors `OPK_PROJECT_ID`; main report path already resolves `resolveTargetContext` and validates repository/state binding. |
+| T10 | `scripts/pack-worker-report.ts` | worker report project/repository | `target` | Both explicit-binding and automatic report paths require a selected project through `resolveTargetContext`; there is no `orchestrator-pack` selector fallback. Explicit repository input must corroborate the selected card before report/state effects. |
 | T11 | `scripts/lib/worker-status-store.mjs::resolveWorkerStatusBindingRepoSlug` | `GITHUB_REPOSITORY` fallback | `target` | In target mode the ambient Actions variable is no longer a fallback. The selected supervisor/session/input binding must already provide the repository; otherwise the store fails closed with `selected_target_repo_required`. |
 | T12 | `scripts/pr2-foundation/supervised-task-launch-assistant.ts` | manager worktree repo/default branch | `target` | Production CLI already resolves the selected card. Manager refresh/create now carries `context.defaultBranch`, requires `origin/<selected-default>`, and validates the local branch is distinct from that branch instead of hard-coding `main`. |
 | T13 | `scripts/worktree-teardown.ts`; `scripts/worktree-lifecycle/operations.ts` | merged PR base/adopted default branch | `target` | Post-merge proof resolves the selected default branch in production and checks/fetches/ancestry-proves that branch. Vitest-only no-selector fallback is `main`. |
@@ -122,22 +122,25 @@ introduced.
 
 Focused test `scripts/target-portability-sinks.test.ts` creates two realistic
 project cards with different repositories/default branches and uses the same
-Issue number under both. It verifies:
+Issue/PR number under both. It verifies:
 
-- the production Issue-publication caller binding supplies
-  `context.repository` to the existing `syncPublishIssueBody` path;
-- the production pack-review repository binding that feeds canonical PR lookup
-  supplies the selected repository and validates the checkout observation;
+- the selected card is bound by the production `scripts/publish-issue-body-sync.ts`
+  caller and the test then drives the real `syncPublishIssueBody` seam, recording
+  the Issue edit mutation plus parity-read repository/endpoint/Issue identity;
+- the test drives the real `resolveCurrentPrHead` seam with its injected runner
+  and records the canonical `repos/<selected>/pulls/<same-number>` request;
 - identical Issue 77 journal paths are disjoint by project id;
 - a pending event written under project alpha is not visible under project beta;
 - `active-cycle-id.txt` is independently persisted/read per project;
 - an alpha journal path cannot be supplied as beta’s production workdir;
-- wrapper authorization accepts a selected-card recursion-shaped call and rejects
-  cross-repository REST ingress, non-GitHub host ingress, and target-mode GraphQL.
+- wrapper authorization covers matching and mismatching repository/host ingress,
+  URL-valued mutation payloads, repository slugs containing `s`, recursion-shaped
+  calls, GraphQL fail-closed behavior, and the operator-unblock no-`--repo` branch;
+- required-CI policy path construction covers non-`main` selected branches, and
+  target-classified review/report entrypoints prove selector-absent typed failure
+  outside explicit test harnesses.
 
-`scripts/lib/gh-target-authorization.test.ts` adds focused coverage for matching
-and mismatching `--repo`, `GH_REPO`, REST paths, full URLs, and hostname
-ingress. No test performs a live remote write.
+No test performs a live remote write.
 
 ## Final-head reconciliation
 
