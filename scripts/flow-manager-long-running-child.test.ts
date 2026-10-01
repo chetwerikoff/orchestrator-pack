@@ -201,7 +201,7 @@ describe('flow-manager long-running child (#1164)', () => {
     const skill = readFileSync(skillPath, 'utf8');
     expect(skill).toContain('docs/browser-gpt-turn-runbook.md');
     expect(skill).toContain('ordinary shared transport path');
-    expect(readFileSync(rulePath, 'utf8')).toContain('flow-manager-long-running-child-runbook.md');
+    expect(readFileSync(rulePath, 'utf8')).toContain('docs/browser-gpt-turn-runbook.md');
     expect(readFileSync(runbookPath, 'utf8')).toContain(ADAPTER_PACKAGE_COMMAND);
     expect(readFileSync(runbookPath, 'utf8')).toContain(LAUNCHER_PACKAGE_COMMAND);
     expect(readFileSync(browserReadmePath, 'utf8')).toContain('flow-manager-browser-gpt-long-run');
