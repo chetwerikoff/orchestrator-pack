@@ -60,6 +60,7 @@ import {
   finalSmokeCommentSnapshotMatches,
   findVerifiedSmokeReceiptWitness,
   gitTrackedSmokeRuntimePaths,
+  parseLatestSmokeReport,
   parsePaginatedSmokeComments,
   publishPrComment,
   reviewIndependentRequiredCiContexts,
@@ -3233,6 +3234,7 @@ describe('Issue #2250 independent smoke publication without ordering receipts', 
     publishComment: (prNumber: number, body: string, repoRoot: string) => void;
     spawnFails?: boolean;
     executePass?: boolean;
+    chunkedReport?: boolean;
     cleanupFails?: boolean;
   }): Promise<{ code?: number; error?: unknown; headSha: string; storeRoot: string; root: string; outputText?: string }> {
     const fixture = gitFixture(input.prefix);
@@ -3253,7 +3255,36 @@ describe('Issue #2250 independent smoke publication without ordering receipts', 
       `  - action: ${action} | expected: ${expected} | observed: independent worker executed plan | outcome: pass`,
       '```',
     ];
-    if (input.executePass) {
+    const templateEcho = [
+      '```worker-smoke-report',
+      'result: PASS|FAIL|BLOCKED',
+      'tracked-files-unmodified: true|false',
+      'scenarios:',
+      '  - action: <what you ran> | expected: <from plan> | observed: <what happened> | outcome: pass|fail|skipped|blocked',
+      '```',
+    ];
+    const chunks = [[...templateEcho, ...reportBody.slice(0, 3)], reportBody.slice(3)];
+    let chunkIndex = 0;
+    if (input.executePass && input.chunkedReport) {
+      Object.defineProperty(adapter, 'readBoundedOutput', {
+        configurable: true,
+        value: (readInput: { readonly worker: RuntimeWorkerIdentity }) => {
+          const index = Math.min(chunkIndex, chunks.length - 1);
+          chunkIndex += 1;
+          return {
+            status: 'ok',
+            value: {
+              worker: readInput.worker,
+              lines: chunkIndex > chunks.length ? [] : chunks[index],
+              observationToken: { opaque: `fixture-chunk-${chunkIndex}` },
+              changed: true,
+              terminalState: chunkIndex >= chunks.length ? 'exited' : 'running',
+              source: 'stream',
+            },
+          };
+        },
+      });
+    } else if (input.executePass) {
       Object.defineProperty(adapter, 'readBoundedOutput', {
         configurable: true,
         value: (readInput: { readonly worker: RuntimeWorkerIdentity }) => ({
@@ -3378,6 +3409,36 @@ describe('Issue #2250 independent smoke publication without ordering receipts', 
       expect(result.code, result.outputText).toBe(0);
       expect(bodies.some((body) => body.includes('result: PASS'))).toBe(true);
     } finally { rmSync(result.root, { recursive: true, force: true }); }
+  });
+
+  it('assembles a report that spans output reads after the echoed prompt template', async () => {
+    const bodies: string[] = [];
+    const result = await runIndependentSmokeFixture({
+      prefix: 'smoke-2250-chunked-report-',
+      prNumber: 206806,
+      executePass: true,
+      chunkedReport: true,
+      publishComment: (_pr, body) => { bodies.push(body); },
+    });
+    try {
+      expect(result.error, result.outputText).toBeUndefined();
+      expect(result.code, result.outputText).toBe(0);
+      expect(bodies.some((body) => body.includes('result: PASS'))).toBe(true);
+    } finally { rmSync(result.root, { recursive: true, force: true }); }
+  });
+
+  it('parses only the last report block and waits while it is still open', () => {
+    const template = ['```worker-smoke-report', 'result: PASS|FAIL|BLOCKED', '```'];
+    const report = [
+      '```worker-smoke-report',
+      'result: FAIL',
+      'tracked-files-unmodified: true',
+      'scenarios:',
+      '  - action: run | expected: ok | observed: broke | outcome: fail | cause-family: scenario_assertion_failed',
+      '```',
+    ];
+    expect(parseLatestSmokeReport([...template, ...report.slice(0, 4)].join('\n'))).toBeNull();
+    expect(parseLatestSmokeReport([...template, ...report].join('\n'))?.result).toBe('FAIL');
   });
 
   it('keeps terminal cleanup informational instead of gating PASS', async () => {

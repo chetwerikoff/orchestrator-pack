@@ -2002,6 +2002,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     const deadline = Date.now() + SMOKE_ABSOLUTE_CEILING_MS;
     let previousToken: RuntimeObservationToken | undefined;
     let partial: Partial<SmokeReport> | null = null;
+    const transcript: string[] = [];
     while (Date.now() < deadline) {
       const readInput = { worker, previousToken, limit: 200 };
       const output = adapter.readBoundedOutputAsync
@@ -2009,7 +2010,9 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
         : adapter.readBoundedOutput(readInput, { cwd: options.cwd, timeoutMs: SMOKE_ORCA_OPERATION_TIMEOUT_MS });
       if (output.status !== 'ok') throw new WorkerSmokeHarnessError('smoke_output_unavailable', failureReason(output));
       previousToken = output.value.observationToken;
-      partial = parseSmokeAgentReport(output.value.lines.join('\n'));
+      transcript.push(...output.value.lines);
+      if (transcript.length > SMOKE_TRANSCRIPT_MAX_LINES) transcript.splice(0, transcript.length - SMOKE_TRANSCRIPT_MAX_LINES);
+      partial = parseLatestSmokeReport(transcript.join('\n'));
       if (partial) break;
       if (output.value.terminalState === 'exited') break;
       await sleepAsync(SMOKE_LIFECYCLE_POLL_MS);
@@ -2056,6 +2059,20 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   } finally {
     closeWorker();
   }
+}
+
+const SMOKE_TRANSCRIPT_MAX_LINES = 20_000;
+const SMOKE_REPORT_OPENING = '```worker-smoke-report';
+
+// Cursor reads return only the lines after the previous token, so a report can span reads; the
+// prompt also carries a template report block that the worker pane echoes, so only the last
+// opened block can be the worker's report.
+export function parseLatestSmokeReport(transcript: string): Partial<SmokeReport> | null {
+  const start = transcript.lastIndexOf(SMOKE_REPORT_OPENING);
+  if (start < 0) return parseSmokeAgentReport(transcript);
+  const block = transcript.slice(start);
+  if (!block.slice(SMOKE_REPORT_OPENING.length).includes('```')) return null;
+  return parseSmokeAgentReport(block);
 }
 
 export type DetachedSmokeAttemptObservation =
