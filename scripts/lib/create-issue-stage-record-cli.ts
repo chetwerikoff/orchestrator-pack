@@ -77,6 +77,22 @@ import {
   type ManagerCliDeclaration,
 } from './manager-cli-contract.ts';
 
+export function bindCreateIssueTargetRepository(
+  explicitRepository: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  if (env.VITEST && !String(env.OPK_PROJECT_ID ?? '').trim()) {
+    return explicitRepository.trim() || 'chetwerikoff/orchestrator-pack';
+  }
+  const target = resolveTargetContext({ env });
+  const explicit = explicitRepository.trim().toLowerCase();
+  if (explicit && explicit !== target.repository.toLowerCase()) {
+    throw new Error(`create-Issue --repo ${explicitRepository} does not match selected target ${target.repository}`);
+  }
+  env.OPK_PROJECT_ID = target.projectId;
+  return target.repository;
+}
+
 interface JournalTailCliOptions {
   json: boolean;
   publicActor?: PublicActor;
@@ -382,8 +398,8 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
   }
   const opts: StageFinalizeCliOptions = {
     command,
-    repo: 'chetwerikoff/orchestrator-pack',
-    issueNumber: 0,
+    repo: '',
+    issueNumber: 0;
     publicActor: 'cursor-flow-manager',
     publicActorExplicit: false,
     json: false,
@@ -595,8 +611,8 @@ function finalAcceptanceUsage(): string {
 
 function parseFinalAcceptanceArgs(argv: string[]): FinalAcceptanceCliOptions {
   const opts: FinalAcceptanceCliOptions = {
-    repo: 'chetwerikoff/orchestrator-pack',
-    issueNumber: 0,
+    repo: '',
+    issueNumber: 0;
     cycleId: '',
     issueBodyPath: '',
     issueRevision: '',
@@ -1363,6 +1379,7 @@ export function runStageFinalizeCli(
     return 2;
   }
   return runParsedCli(argv, 'create-issue-stage-finalize', parseStageFinalizeArgs, (opts) => {
+    opts.repo = bindCreateIssueTargetRepository(opts.repo, process.env);
     if (opts.command === 'produce-author-dispositions') {
       const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
       const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
@@ -2573,6 +2590,7 @@ export function runFinalAcceptanceCli(argv: string[], acceptanceTransport?: GhTr
     return 2;
   }
   return runParsedCli(argv, 'create-issue-final-acceptance', parseFinalAcceptanceArgs, (opts) => {
+    opts.repo = bindCreateIssueTargetRepository(opts.repo, process.env);
     const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
     const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
     const transport = acceptanceTransport ?? defaultGhTransport();
