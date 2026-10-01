@@ -682,6 +682,26 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(state.reloads).toBe(0);
   });
 
+  it.each([
+    ['Network error\nSomething went wrong while sending.\nRetry', 'product_network_error'],
+    ['Resume stream unavailable\nRetry', 'stream_recovery_polling_timed_out'],
+  ])('returns conversation-scoped recovery for the %j alert heading when the owner is unrendered (#2307)', async (alert, cause) => {
+    const prompt = `PROMPT-HEADING-${cause}`;
+    const output = join(stateDir, `heading-${cause}.txt`);
+    const { page, state } = unrenderedOwnedMessagePage(prompt, 'NEVER-FINISHED', false, false, alert);
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output);
+
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({
+      state: 'recovery_required',
+      scope: 'conversation',
+      cause,
+      send_count: 1,
+    });
+    expect(state.reloads).toBe(0);
+  });
+
   it('reloads the owned conversation once when a finished answer renders without the owned user message (#2197)', async () => {
     const prompt = 'PROMPT-UNRENDERED';
     const reply = 'UNRENDERED-OK';
