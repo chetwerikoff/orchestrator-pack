@@ -9,7 +9,7 @@ describe('current create-Issue and Browser-GPT authority boundaries', () => {
   it('keeps create-Issue procedure comment/disposition/label based', () => {
     const skill = read('.cursor/skills/create-issue-draft/SKILL.md');
     expect(skill).toContain('The manager launches the three GPT architectural-review sources independently and in parallel');
-    expect(skill).toContain('After **each** required review round, the GPT author publishes **one Issue disposition comment**');
+    expect(skill).toContain('After each required review round, the GPT author publishes one Issue disposition comment');
     expect(skill).toContain('The sole acceptance projection is the existing `spec-review:accepted` Issue');
     expect(skill).toContain('user.login');
   });
