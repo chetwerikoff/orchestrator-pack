@@ -2,7 +2,7 @@
 
 import './toolchain/native-entrypoint-preflight.ts';
 import { classifyRequiredCiLevel } from '../docs/review-ready-stuck-guard.mjs';
-import { runProcess, runProcessSync } from './kernel/subprocess.ts';
+import { runProcessSync } from './kernel/subprocess.ts';
 import { resolveTargetContext } from './lib/target-context.ts';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from './pr-scope-contract.ts';
@@ -10,7 +10,6 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   buildSmokeGhChildEnv,
   formatSmokeReportComment,
@@ -26,7 +25,6 @@ import {
   type SmokeReport,
   type SmokeTestPlan,
   type WorkerSmokeCommentRecord,
-  type WorkerSmokeTrustedTarget,
 } from './lib/worker-smoke-core.ts';
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
