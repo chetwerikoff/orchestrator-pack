@@ -1,10 +1,10 @@
-import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { normalizeLine, parseKeyValueBlock } from './markdown-key-value.mjs';
 import { checkContractEvidence } from './contract-evidence-validator.mjs';
+import { runProcessSync } from './kernel/subprocess.ts';
 
 const require = createRequire(import.meta.url);
 const taxonomy = require('./draft-discipline-action-taxonomy.json');
@@ -52,12 +52,16 @@ function resolveDraftTargetRepository(explicitRepository) {
   if (process.env.VITEST && !String(process.env.OPK_PROJECT_ID ?? '').trim()) {
     return explicitRepository || process.env.GITHUB_REPOSITORY || VITEST_DEFAULT_ISSUE_REPO;
   }
-  const output = execFileSync(
-    process.execPath,
-    ['--experimental-strip-types', TARGET_CONTEXT_ENTRYPOINT, 'check'],
-    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], cwd: PACK_ROOT, env: process.env },
-  );
-  const parsed = JSON.parse(output);
+  const result = runProcessSync({
+    command: process.execPath,
+    args: ['--experimental-strip-types', TARGET_CONTEXT_ENTRYPOINT, 'check'],
+    cwd: PACK_ROOT,
+    env: process.env,
+  });
+  if (!result.ok) {
+    throw new Error(result.stderr || result.error || 'draft-discipline target context failed');
+  }
+  const parsed = JSON.parse(result.stdout);
   const selected = String(parsed.repository ?? '').trim();
   if (!selected) throw new Error('draft-discipline target repository unresolved');
   const ingress = String(explicitRepository || process.env.GITHUB_REPOSITORY || '').trim();
@@ -445,9 +449,9 @@ export function normalizeLiveIssue(parsed) {
 export function fetchLiveIssue(issueNumber, repo) {
   try {
     const selectedRepository = resolveDraftTargetRepository(repo);
-    const output = execFileSync(
-      TRACKED_GH,
-      [
+    const result = runProcessSync({
+      command: TRACKED_GH,
+      args: [
         'issue',
         'view',
         String(issueNumber),
@@ -456,9 +460,11 @@ export function fetchLiveIssue(issueNumber, repo) {
         '--json',
         'state,stateReason,title,body,closedByPullRequestsReferences',
       ],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
-    );
-    return normalizeLiveIssue(JSON.parse(output));
+      cwd: PACK_ROOT,
+      inheritParentEnv: true,
+    });
+    if (!result.ok) throw new Error(result.stderr || result.error || 'draft-discipline Issue read failed');
+    return normalizeLiveIssue(JSON.parse(result.stdout));
   } catch {
     return null;
   }
