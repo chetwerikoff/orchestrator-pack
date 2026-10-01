@@ -15,36 +15,16 @@
       "path": "AGENTS.md",
       "topic": "governance",
       "role": "all",
-      "aliases": [
-        "precedence",
-        "edit boundaries",
-        "allowed surfaces",
-        "запрещённые поверхности"
-      ],
+      "aliases": ["precedence", "edit boundaries", "allowed surfaces", "запрещённые поверхности"],
       "sections": [
-        {
-          "heading": "## Project purpose"
-        },
-        {
-          "heading": "## Precedence"
-        },
-        {
-          "heading": "## Edit boundaries"
-        }
+        { "heading": "## Project purpose" },
+        { "heading": "## Precedence" },
+        { "heading": "## Edit boundaries" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "policy-publishing"
-        },
-        {
-          "type": "related",
-          "target": "agents-portable-plan"
-        },
-        {
-          "type": "related",
-          "target": "direct-fix-handoff"
-        }
+        { "type": "related", "target": "policy-publishing" },
+        { "type": "related", "target": "agents-portable-plan" },
+        { "type": "related", "target": "direct-fix-handoff" }
       ]
     },
     {
@@ -53,48 +33,19 @@
       "path": "AGENTS.md",
       "topic": "governance",
       "role": "all",
-      "aliases": [
-        "runtime adapter",
-        "node 22",
-        "plan-first"
-      ],
+      "aliases": ["runtime adapter", "node 22", "plan-first"],
       "sections": [
-        {
-          "heading": "## Portable contracts"
-        },
-        {
-          "heading": "## Plan, scope, and verification"
-        }
+        { "heading": "## Portable contracts" },
+        { "heading": "## Plan, scope, and verification" }
       ],
       "edges": [
-        {
-          "type": "prerequisite",
-          "target": "agents-precedence-boundaries"
-        },
-        {
-          "type": "related",
-          "target": "agents-precedence-boundaries"
-        },
-        {
-          "type": "related",
-          "target": "policy-publishing"
-        },
-        {
-          "type": "related",
-          "target": "agents-coworker-rtk"
-        },
-        {
-          "type": "related",
-          "target": "runbook-worker-lifecycle"
-        },
-        {
-          "type": "related",
-          "target": "rca-failure-response"
-        },
-        {
-          "type": "related",
-          "target": "change-orchestrator-runtime"
-        }
+        { "type": "prerequisite", "target": "agents-precedence-boundaries" },
+        { "type": "related", "target": "agents-precedence-boundaries" },
+        { "type": "related", "target": "policy-publishing" },
+        { "type": "related", "target": "agents-coworker-rtk" },
+        { "type": "related", "target": "runbook-worker-lifecycle" },
+        { "type": "related", "target": "rca-failure-response" },
+        { "type": "related", "target": "change-orchestrator-runtime" }
       ]
     },
     {
@@ -103,39 +54,17 @@
       "path": "AGENTS.md",
       "topic": "delegation",
       "role": "all",
-      "aliases": [
-        "coworker ask",
-        "delegate I/O",
-        "RTK"
-      ],
+      "aliases": ["coworker ask", "delegate I/O", "RTK"],
       "sections": [
-        {
-          "heading": "## Coworker CLI delegation"
-        },
-        {
-          "heading": "## RTK read-exploration"
-        }
+        { "heading": "## Coworker CLI delegation" },
+        { "heading": "## RTK read-exploration" }
       ],
-      "referenced_paths": [
-        "docs/coworker-delegation.md"
-      ],
+      "referenced_paths": ["docs/coworker-delegation.md"],
       "edges": [
-        {
-          "type": "related",
-          "target": "agents-portable-plan"
-        },
-        {
-          "type": "related",
-          "target": "coworker-deep-dive"
-        },
-        {
-          "type": "related",
-          "target": "agents-wiki-ops"
-        },
-        {
-          "type": "related",
-          "target": "agents-github-runtime"
-        }
+        { "type": "related", "target": "agents-portable-plan" },
+        { "type": "related", "target": "coworker-deep-dive" },
+        { "type": "related", "target": "agents-wiki-ops" },
+        { "type": "related", "target": "agents-github-runtime" }
       ]
     },
     {
@@ -144,46 +73,19 @@
       "path": "AGENTS.md",
       "topic": "transport",
       "role": "all",
-      "aliases": [
-        "scripts/gh",
-        "command-runtime preflight",
-        "must not merge"
-      ],
+      "aliases": ["scripts/gh", "command-runtime preflight", "must not merge"],
       "sections": [
-        {
-          "heading": "## GitHub transport"
-        },
-        {
-          "heading": "## Command-runtime bootstrap"
-        },
-        {
-          "heading": "## Operator-only merge and failed runs"
-        }
+        { "heading": "## GitHub transport" },
+        { "heading": "## Command-runtime bootstrap" },
+        { "heading": "## Operator-only merge and failed runs" }
       ],
-      "referenced_paths": [
-        "scripts/gh"
-      ],
+      "referenced_paths": ["scripts/gh"],
       "edges": [
-        {
-          "type": "related",
-          "target": "agents-wiki-ops"
-        },
-        {
-          "type": "related",
-          "target": "agents-worker-skills"
-        },
-        {
-          "type": "related",
-          "target": "agents-coworker-rtk"
-        },
-        {
-          "type": "related",
-          "target": "chat-current-head"
-        },
-        {
-          "type": "related",
-          "target": "chat-checkpoints-review"
-        }
+        { "type": "related", "target": "agents-wiki-ops" },
+        { "type": "related", "target": "agents-worker-skills" },
+        { "type": "related", "target": "agents-coworker-rtk" },
+        { "type": "related", "target": "chat-current-head" },
+        { "type": "related", "target": "chat-checkpoints-review" }
       ]
     },
     {
@@ -192,53 +94,21 @@
       "path": "AGENTS.md",
       "topic": "worker",
       "role": "worker",
-      "aliases": [
-        "named skills"
-      ],
+      "aliases": ["named skills"],
       "sections": [
-        {
-          "heading": "## Worker lifecycle"
-        },
-        {
-          "heading": "## Auto-invoked skills"
-        }
+        { "heading": "## Worker lifecycle" },
+        { "heading": "## Auto-invoked skills" }
       ],
-      "referenced_paths": [
-        "docs/orchestration-runbook.md"
-      ],
+      "referenced_paths": ["docs/orchestration-runbook.md"],
       "edges": [
-        {
-          "type": "related",
-          "target": "runbook-worker-lifecycle"
-        },
-        {
-          "type": "related",
-          "target": "direct-fix-handoff"
-        },
-        {
-          "type": "related",
-          "target": "runbook-roles"
-        },
-        {
-          "type": "related",
-          "target": "rca-failure-response"
-        },
-        {
-          "type": "related",
-          "target": "merge-safety-resolve"
-        },
-        {
-          "type": "related",
-          "target": "study-external-source"
-        },
-        {
-          "type": "related",
-          "target": "agents-github-runtime"
-        },
-        {
-          "type": "related",
-          "target": "switch-pack-reviewer"
-        }
+        { "type": "related", "target": "runbook-worker-lifecycle" },
+        { "type": "related", "target": "direct-fix-handoff" },
+        { "type": "related", "target": "runbook-roles" },
+        { "type": "related", "target": "rca-failure-response" },
+        { "type": "related", "target": "merge-safety-resolve" },
+        { "type": "related", "target": "study-external-source" },
+        { "type": "related", "target": "agents-github-runtime" },
+        { "type": "related", "target": "switch-pack-reviewer" }
       ]
     },
     {
@@ -247,33 +117,15 @@
       "path": "docs/orchestration-runbook.md",
       "topic": "orchestration",
       "role": "all",
-      "aliases": [
-        "orchestrator",
-        "manager",
-        "worker role",
-        "architect"
-      ],
+      "aliases": ["orchestrator", "manager", "worker role", "architect"],
       "sections": [
-        {
-          "heading": "## Mandatory read order"
-        },
-        {
-          "heading": "## Roles and completion"
-        }
+        { "heading": "## Mandatory read order" },
+        { "heading": "## Roles and completion" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "runbook-executor-profiles"
-        },
-        {
-          "type": "related",
-          "target": "agents-worker-skills"
-        },
-        {
-          "type": "related",
-          "target": "chat-start"
-        }
+        { "type": "related", "target": "runbook-executor-profiles" },
+        { "type": "related", "target": "agents-worker-skills" },
+        { "type": "related", "target": "chat-start" }
       ]
     },
     {
@@ -282,38 +134,19 @@
       "path": "docs/orchestration-runbook.md",
       "topic": "executor",
       "role": "manager",
-      "aliases": [
-        "PACK_EXECUTOR",
-        "model effort",
-        "firefighter smoke profile"
-      ],
+      "aliases": ["PACK_EXECUTOR", "model effort", "firefighter smoke profile"],
       "sections": [
-        {
-          "heading": "## Executor profiles by role, tier, and smoke complexity",
-          "include_subsections": false
-        }
+        { "heading": "## Executor profiles by role, tier, and smoke complexity", "include_subsections": false }
       ],
       "referenced_paths": [
         "scripts/executor-profile-policy.ts",
         "scripts/executor-profile-store.ts"
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "runbook-roles"
-        },
-        {
-          "type": "related",
-          "target": "runbook-launch-assistant"
-        },
-        {
-          "type": "related",
-          "target": "smoke-when-policy"
-        },
-        {
-          "type": "related",
-          "target": "tiering"
-        }
+        { "type": "related", "target": "runbook-roles" },
+        { "type": "related", "target": "runbook-launch-assistant" },
+        { "type": "related", "target": "smoke-when-policy" },
+        { "type": "related", "target": "tiering" }
       ]
     },
     {
@@ -322,31 +155,15 @@
       "path": "docs/orchestration-runbook.md",
       "topic": "executor",
       "role": "manager",
-      "aliases": [
-        "work-class",
-        "supervised-task-launch-assistant"
-      ],
+      "aliases": ["work-class", "supervised-task-launch-assistant"],
       "sections": [
-        {
-          "heading": "### Supervised Task launch assistant"
-        }
+        { "heading": "### Supervised Task launch assistant" }
       ],
-      "referenced_paths": [
-        "scripts/pr2-foundation/supervised-task-launch-assistant.ts"
-      ],
+      "referenced_paths": ["scripts/pr2-foundation/supervised-task-launch-assistant.ts"],
       "edges": [
-        {
-          "type": "prerequisite",
-          "target": "runbook-executor-profiles"
-        },
-        {
-          "type": "related",
-          "target": "runbook-executor-profiles"
-        },
-        {
-          "type": "related",
-          "target": "runbook-assignment-binding"
-        }
+        { "type": "prerequisite", "target": "runbook-executor-profiles" },
+        { "type": "related", "target": "runbook-executor-profiles" },
+        { "type": "related", "target": "runbook-assignment-binding" }
       ]
     },
     {
@@ -355,31 +172,15 @@
       "path": "docs/orchestration-runbook.md",
       "topic": "identity",
       "role": "manager",
-      "aliases": [
-        "WorkerAssignment",
-        "runtime identity"
-      ],
+      "aliases": ["WorkerAssignment", "runtime identity"],
       "sections": [
-        {
-          "heading": "## Supervised initial delivery and WorkerAssignment"
-        },
-        {
-          "heading": "## Exact local runtime binding"
-        }
+        { "heading": "## Supervised initial delivery and WorkerAssignment" },
+        { "heading": "## Exact local runtime binding" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "runbook-launch-assistant"
-        },
-        {
-          "type": "related",
-          "target": "runbook-worker-lifecycle"
-        },
-        {
-          "type": "related",
-          "target": "runbook-s1-s2"
-        }
+        { "type": "related", "target": "runbook-launch-assistant" },
+        { "type": "related", "target": "runbook-worker-lifecycle" },
+        { "type": "related", "target": "runbook-s1-s2" }
       ]
     },
     {
@@ -388,35 +189,16 @@
       "path": "docs/orchestration-runbook.md",
       "topic": "scheduler",
       "role": "orchestrator",
-      "aliases": [
-        "S1",
-        "S2",
-        "single observation"
-      ],
+      "aliases": ["S1", "S2", "single observation"],
       "sections": [
-        {
-          "heading": "## S1 — single observation authority"
-        },
-        {
-          "heading": "## S1 continuity across bounded scheduler children"
-        },
-        {
-          "heading": "## S2 — single routine continuation actuator"
-        }
+        { "heading": "## S1 — single observation authority" },
+        { "heading": "## S1 continuity across bounded scheduler children" },
+        { "heading": "## S2 — single routine continuation actuator" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "runbook-assignment-binding"
-        },
-        {
-          "type": "related",
-          "target": "runbook-scheduler"
-        },
-        {
-          "type": "related",
-          "target": "runbook-inbox-publication"
-        }
+        { "type": "related", "target": "runbook-assignment-binding" },
+        { "type": "related", "target": "runbook-scheduler" },
+        { "type": "related", "target": "runbook-inbox-publication" }
       ]
     },
     {
@@ -425,36 +207,16 @@
       "path": "docs/orchestration-runbook.md",
       "topic": "completion",
       "role": "orchestrator",
-      "aliases": [
-        "completion authority",
-        "publication",
-        "inbox drain"
-      ],
+      "aliases": ["completion authority", "publication", "inbox drain"],
       "sections": [
-        {
-          "heading": "## Bound-run inbox drain and acknowledgement"
-        },
-        {
-          "heading": "## Create-Issue GitHub completion"
-        }
+        { "heading": "## Bound-run inbox drain and acknowledgement" },
+        { "heading": "## Create-Issue GitHub completion" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "runbook-s1-s2"
-        },
-        {
-          "type": "related",
-          "target": "chat-done"
-        },
-        {
-          "type": "related",
-          "target": "runbook-scheduler"
-        },
-        {
-          "type": "related",
-          "target": "chat-publication"
-        }
+        { "type": "related", "target": "runbook-s1-s2" },
+        { "type": "related", "target": "chat-done" },
+        { "type": "related", "target": "runbook-scheduler" },
+        { "type": "related", "target": "chat-publication" }
       ]
     },
     {
@@ -463,37 +225,17 @@
       "path": "docs/orchestration-runbook.md",
       "topic": "scheduler",
       "role": "orchestrator",
-      "aliases": [
-        "scheduler phases",
-        "orchestrator_required"
-      ],
+      "aliases": ["scheduler phases", "orchestrator_required"],
       "sections": [
-        {
-          "heading": "## Scheduler inbox reconciliation"
-        },
-        {
-          "heading": "## Scheduler phases"
-        },
-        {
-          "heading": "## Durable `orchestrator_required` handoff"
-        },
-        {
-          "heading": "## Deterministic reconciliation"
-        }
+        { "heading": "## Scheduler inbox reconciliation" },
+        { "heading": "## Scheduler phases" },
+        { "heading": "## Durable `orchestrator_required` handoff" },
+        { "heading": "## Deterministic reconciliation" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "runbook-s1-s2"
-        },
-        {
-          "type": "related",
-          "target": "runbook-inbox-publication"
-        },
-        {
-          "type": "related",
-          "target": "runbook-laws-verification"
-        }
+        { "type": "related", "target": "runbook-s1-s2" },
+        { "type": "related", "target": "runbook-inbox-publication" },
+        { "type": "related", "target": "runbook-laws-verification" }
       ]
     },
     {
@@ -502,34 +244,16 @@
       "path": "docs/orchestration-runbook.md",
       "topic": "verification",
       "role": "all",
-      "aliases": [
-        "operating laws",
-        "Browser-GPT",
-        "operator adoption"
-      ],
+      "aliases": ["operating laws", "Browser-GPT", "operator adoption"],
       "sections": [
-        {
-          "heading": "## Core operating laws"
-        },
-        {
-          "heading": "## Production verification"
-        },
-        {
-          "heading": "## Orca grounding"
-        },
-        {
-          "heading": "## Operator adoption"
-        }
+        { "heading": "## Core operating laws" },
+        { "heading": "## Production verification" },
+        { "heading": "## Orca grounding" },
+        { "heading": "## Operator adoption" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "runbook-scheduler"
-        },
-        {
-          "type": "related",
-          "target": "runbook-worker-lifecycle"
-        }
+        { "type": "related", "target": "runbook-scheduler" },
+        { "type": "related", "target": "runbook-worker-lifecycle" }
       ]
     },
     {
@@ -538,53 +262,20 @@
       "path": "docs/orchestration-runbook.md",
       "topic": "worker",
       "role": "worker",
-      "aliases": [
-        "required CI",
-        "pack-worker-report",
-        "worker smoke"
-      ],
+      "aliases": ["required CI", "pack-worker-report", "worker smoke"],
       "sections": [
-        {
-          "heading": "## Worker lifecycle"
-        }
+        { "heading": "## Worker lifecycle" }
       ],
-      "referenced_paths": [
-        "scripts/pack-worker-report.ts",
-        "scripts/worker-smoke-run.ts"
-      ],
+      "referenced_paths": ["scripts/pack-worker-report.ts", "scripts/worker-smoke-run.ts"],
       "edges": [
-        {
-          "type": "prerequisite",
-          "target": "agents-worker-skills"
-        },
-        {
-          "type": "related",
-          "target": "agents-worker-skills"
-        },
-        {
-          "type": "related",
-          "target": "agents-portable-plan"
-        },
-        {
-          "type": "related",
-          "target": "runbook-assignment-binding"
-        },
-        {
-          "type": "related",
-          "target": "runbook-laws-verification"
-        },
-        {
-          "type": "related",
-          "target": "direct-fix-handoff"
-        },
-        {
-          "type": "related",
-          "target": "smoke-when-policy"
-        },
-        {
-          "type": "related",
-          "target": "orchestrator-recovery-runbook"
-        }
+        { "type": "prerequisite", "target": "agents-worker-skills" },
+        { "type": "related", "target": "agents-worker-skills" },
+        { "type": "related", "target": "agents-portable-plan" },
+        { "type": "related", "target": "runbook-assignment-binding" },
+        { "type": "related", "target": "runbook-laws-verification" },
+        { "type": "related", "target": "direct-fix-handoff" },
+        { "type": "related", "target": "smoke-when-policy" },
+        { "type": "related", "target": "orchestrator-recovery-runbook" }
       ]
     },
     {
@@ -593,30 +284,14 @@
       "path": "docs/repository_policy.md",
       "topic": "governance",
       "role": "all",
-      "aliases": [
-        "allowed tracked content",
-        "forbidden tracked content",
-        "scope discipline",
-        "build the minimum"
-      ],
+      "aliases": ["allowed tracked content", "forbidden tracked content", "scope discipline", "build the minimum"],
       "sections": [
-        {
-          "heading": "# Repository publishing policy"
-        }
+        { "heading": "# Repository publishing policy" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "agents-precedence-boundaries"
-        },
-        {
-          "type": "related",
-          "target": "agents-portable-plan"
-        },
-        {
-          "type": "related",
-          "target": "direct-fix-spine"
-        }
+        { "type": "related", "target": "agents-precedence-boundaries" },
+        { "type": "related", "target": "agents-portable-plan" },
+        { "type": "related", "target": "direct-fix-spine" }
       ]
     },
     {
@@ -625,44 +300,18 @@
       "path": "docs/worker-smoke-testing.md",
       "topic": "smoke",
       "role": "worker",
-      "aliases": [
-        "smoke-test-plan",
-        "firefighter",
-        "routine smoke",
-        "complex smoke"
-      ],
+      "aliases": ["smoke-test-plan", "firefighter", "routine smoke", "complex smoke"],
       "sections": [
-        {
-          "heading": "## When smoke is required"
-        },
-        {
-          "heading": "## Multi-agent smoke executor policy"
-        },
-        {
-          "heading": "## Actor ordering"
-        }
+        { "heading": "## When smoke is required" },
+        { "heading": "## Multi-agent smoke executor policy" },
+        { "heading": "## Actor ordering" }
       ],
-      "referenced_paths": [
-        "scripts/worker-smoke-run.ts",
-        "scripts/executor-profile-policy.ts"
-      ],
+      "referenced_paths": ["scripts/worker-smoke-run.ts", "scripts/executor-profile-policy.ts"],
       "edges": [
-        {
-          "type": "related",
-          "target": "runbook-executor-profiles"
-        },
-        {
-          "type": "related",
-          "target": "smoke-pre-path"
-        },
-        {
-          "type": "related",
-          "target": "smoke-readiness-runtime"
-        },
-        {
-          "type": "related",
-          "target": "runbook-worker-lifecycle"
-        }
+        { "type": "related", "target": "runbook-executor-profiles" },
+        { "type": "related", "target": "smoke-pre-path" },
+        { "type": "related", "target": "smoke-readiness-runtime" },
+        { "type": "related", "target": "runbook-worker-lifecycle" }
       ]
     },
     {
@@ -671,31 +320,15 @@
       "path": "docs/worker-smoke-testing.md",
       "topic": "smoke",
       "role": "worker",
-      "aliases": [
-        "smoke parent",
-        "supported worker path"
-      ],
+      "aliases": ["smoke parent", "supported worker path"],
       "sections": [
-        {
-          "heading": "## Pre-smoke prerequisite preparation (parent worker)"
-        },
-        {
-          "heading": "## Supported worker path"
-        }
+        { "heading": "## Pre-smoke prerequisite preparation (parent worker)" },
+        { "heading": "## Supported worker path" }
       ],
       "edges": [
-        {
-          "type": "prerequisite",
-          "target": "smoke-when-policy"
-        },
-        {
-          "type": "related",
-          "target": "smoke-when-policy"
-        },
-        {
-          "type": "related",
-          "target": "smoke-admission-coverage"
-        }
+        { "type": "prerequisite", "target": "smoke-when-policy" },
+        { "type": "related", "target": "smoke-when-policy" },
+        { "type": "related", "target": "smoke-admission-coverage" }
       ]
     },
     {
@@ -704,27 +337,14 @@
       "path": "docs/worker-smoke-testing.md",
       "topic": "smoke",
       "role": "worker",
-      "aliases": [
-        "report admission",
-        "point-in-time coverage"
-      ],
+      "aliases": ["report admission", "point-in-time coverage"],
       "sections": [
-        {
-          "heading": "## Report admission and trust boundary"
-        },
-        {
-          "heading": "## Exact-head point-in-time coverage"
-        }
+        { "heading": "## Report admission and trust boundary" },
+        { "heading": "## Exact-head point-in-time coverage" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "smoke-pre-path"
-        },
-        {
-          "type": "related",
-          "target": "smoke-control-delivery"
-        }
+        { "type": "related", "target": "smoke-pre-path" },
+        { "type": "related", "target": "smoke-control-delivery" }
       ]
     },
     {
@@ -733,30 +353,15 @@
       "path": "docs/worker-smoke-testing.md",
       "topic": "smoke",
       "role": "worker",
-      "aliases": [
-        "delivery authority",
-        "scenario deadlines"
-      ],
+      "aliases": ["delivery authority", "scenario deadlines"],
       "sections": [
-        {
-          "heading": "## Report and control-plane semantics"
-        },
-        {
-          "heading": "## Delivery and completion authority"
-        },
-        {
-          "heading": "## Finite scenario progress and deadlines"
-        }
+        { "heading": "## Report and control-plane semantics" },
+        { "heading": "## Delivery and completion authority" },
+        { "heading": "## Finite scenario progress and deadlines" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "smoke-admission-coverage"
-        },
-        {
-          "type": "related",
-          "target": "smoke-recovery"
-        }
+        { "type": "related", "target": "smoke-admission-coverage" },
+        { "type": "related", "target": "smoke-recovery" }
       ]
     },
     {
@@ -765,38 +370,17 @@
       "path": "docs/worker-smoke-testing.md",
       "topic": "smoke",
       "role": "worker",
-      "aliases": [
-        "cancellation",
-        "durable spawn",
-        "preflight"
-      ],
+      "aliases": ["cancellation", "durable spawn", "preflight"],
       "sections": [
-        {
-          "heading": "## Child-only progress and cancellation protocol"
-        },
-        {
-          "heading": "## Durable spawn state and ambiguity recovery"
-        },
-        {
-          "heading": "## Cancellation, cleanup, and restart recovery"
-        },
-        {
-          "heading": "## Deterministic preflight and concurrent starts"
-        }
+        { "heading": "## Child-only progress and cancellation protocol" },
+        { "heading": "## Durable spawn state and ambiguity recovery" },
+        { "heading": "## Cancellation, cleanup, and restart recovery" },
+        { "heading": "## Deterministic preflight and concurrent starts" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "smoke-control-delivery"
-        },
-        {
-          "type": "related",
-          "target": "smoke-readiness-runtime"
-        },
-        {
-          "type": "related",
-          "target": "orchestrator-recovery-runbook"
-        }
+        { "type": "related", "target": "smoke-control-delivery" },
+        { "type": "related", "target": "smoke-readiness-runtime" },
+        { "type": "related", "target": "orchestrator-recovery-runbook" }
       ]
     },
     {
@@ -805,31 +389,15 @@
       "path": "docs/worker-smoke-testing.md",
       "topic": "smoke",
       "role": "worker",
-      "aliases": [
-        "readiness gate",
-        "rollback",
-        "orca executable"
-      ],
+      "aliases": ["readiness gate", "rollback", "orca executable"],
       "sections": [
-        {
-          "heading": "## Readiness gate"
-        },
-        {
-          "heading": "## Runtime verification and rollback"
-        },
-        {
-          "heading": "## Orca executable selection"
-        }
+        { "heading": "## Readiness gate" },
+        { "heading": "## Runtime verification and rollback" },
+        { "heading": "## Orca executable selection" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "smoke-recovery"
-        },
-        {
-          "type": "related",
-          "target": "smoke-when-policy"
-        }
+        { "type": "related", "target": "smoke-recovery" },
+        { "type": "related", "target": "smoke-when-policy" }
       ]
     },
     {
@@ -838,31 +406,15 @@
       "path": "docs/chat-executor-rules.md",
       "topic": "chat-executor",
       "role": "all",
-      "aliases": [
-        "live sources",
-        "task contract",
-        "chat executor scope"
-      ],
+      "aliases": ["live sources", "task contract", "chat executor scope"],
       "sections": [
-        {
-          "heading": "## 1. Scope"
-        },
-        {
-          "heading": "## 2. Start with live sources"
-        },
-        {
-          "heading": "## 3. Task contract"
-        }
+        { "heading": "## 1. Scope" },
+        { "heading": "## 2. Start with live sources" },
+        { "heading": "## 3. Task contract" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "chat-publication"
-        },
-        {
-          "type": "related",
-          "target": "runbook-roles"
-        }
+        { "type": "related", "target": "chat-publication" },
+        { "type": "related", "target": "runbook-roles" }
       ]
     },
     {
@@ -871,32 +423,15 @@
       "path": "docs/chat-executor-rules.md",
       "topic": "publication",
       "role": "all",
-      "aliases": [
-        "publication path",
-        "Contents API",
-        "read-back"
-      ],
+      "aliases": ["publication path", "Contents API", "read-back"],
       "sections": [
-        {
-          "heading": "## 4. Normal publication path"
-        },
-        {
-          "heading": "## 5. Read-back proportional to the artifact"
-        }
+        { "heading": "## 4. Normal publication path" },
+        { "heading": "## 5. Read-back proportional to the artifact" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "chat-start"
-        },
-        {
-          "type": "related",
-          "target": "chat-checkpoints-review"
-        },
-        {
-          "type": "related",
-          "target": "runbook-inbox-publication"
-        }
+        { "type": "related", "target": "chat-start" },
+        { "type": "related", "target": "chat-checkpoints-review" },
+        { "type": "related", "target": "runbook-inbox-publication" }
       ]
     },
     {
@@ -905,31 +440,15 @@
       "path": "docs/chat-executor-rules.md",
       "topic": "review",
       "role": "reviewer",
-      "aliases": [
-        "checkpoints",
-        "direct connected-GitHub pack review"
-      ],
+      "aliases": ["checkpoints", "direct connected-GitHub pack review"],
       "sections": [
-        {
-          "heading": "## 6. Checkpoints and long-running commands"
-        },
-        {
-          "heading": "## 7. Independent review role"
-        }
+        { "heading": "## 6. Checkpoints and long-running commands" },
+        { "heading": "## 7. Independent review role" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "chat-publication"
-        },
-        {
-          "type": "related",
-          "target": "chat-current-head"
-        },
-        {
-          "type": "related",
-          "target": "agents-github-runtime"
-        }
+        { "type": "related", "target": "chat-publication" },
+        { "type": "related", "target": "chat-current-head" },
+        { "type": "related", "target": "agents-github-runtime" }
       ]
     },
     {
@@ -938,28 +457,14 @@
       "path": "docs/chat-executor-rules.md",
       "topic": "review",
       "role": "all",
-      "aliases": [
-        "current-head",
-        "pack review"
-      ],
+      "aliases": ["current-head", "pack review"],
       "sections": [
-        {
-          "heading": "## 8. CI, smoke, and review authority stay current-head bound"
-        }
+        { "heading": "## 8. CI, smoke, and review authority stay current-head bound" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "chat-checkpoints-review"
-        },
-        {
-          "type": "related",
-          "target": "chat-done"
-        },
-        {
-          "type": "related",
-          "target": "agents-github-runtime"
-        }
+        { "type": "related", "target": "chat-checkpoints-review" },
+        { "type": "related", "target": "chat-done" },
+        { "type": "related", "target": "agents-github-runtime" }
       ]
     },
     {
@@ -968,39 +473,17 @@
       "path": "docs/chat-executor-rules.md",
       "topic": "completion",
       "role": "all",
-      "aliases": [
-        "Definition of Done",
-        "merge",
-        "secrets",
-        "operating formula"
-      ],
+      "aliases": ["Definition of Done", "merge", "secrets", "operating formula"],
       "sections": [
-        {
-          "heading": "## 9. Merge"
-        },
-        {
-          "heading": "## 10. Secrets and truthful reporting"
-        },
-        {
-          "heading": "## 11. Definition of Done"
-        },
-        {
-          "heading": "## 12. Operating formula"
-        }
+        { "heading": "## 9. Merge" },
+        { "heading": "## 10. Secrets and truthful reporting" },
+        { "heading": "## 11. Definition of Done" },
+        { "heading": "## 12. Operating formula" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "chat-current-head"
-        },
-        {
-          "type": "related",
-          "target": "merge-ready-merge"
-        },
-        {
-          "type": "related",
-          "target": "runbook-inbox-publication"
-        }
+        { "type": "related", "target": "chat-current-head" },
+        { "type": "related", "target": "merge-ready-merge" },
+        { "type": "related", "target": "runbook-inbox-publication" }
       ]
     },
     {
@@ -1009,28 +492,14 @@
       "path": "docs/coworker-delegation.md",
       "topic": "delegation",
       "role": "all",
-      "aliases": [
-        "coworker profiles",
-        "delegation ladder"
-      ],
+      "aliases": ["coworker profiles", "delegation ladder"],
       "sections": [
-        {
-          "heading": "# Coworker CLI delegation (deep-dive)"
-        }
+        { "heading": "# Coworker CLI delegation (deep-dive)" }
       ],
       "edges": [
-        {
-          "type": "prerequisite",
-          "target": "agents-coworker-rtk"
-        },
-        {
-          "type": "related",
-          "target": "agents-coworker-rtk"
-        },
-        {
-          "type": "related",
-          "target": "first-principles-framework"
-        }
+        { "type": "prerequisite", "target": "agents-coworker-rtk" },
+        { "type": "related", "target": "agents-coworker-rtk" },
+        { "type": "related", "target": "first-principles-framework" }
       ]
     },
     {
@@ -1039,38 +508,17 @@
       "path": ".cursor/skills/merge-with-local-adoption/SKILL.md",
       "topic": "merge",
       "role": "operator",
-      "aliases": [
-        "merge with local adoption",
-        "orca worktree",
-        "safety and truth"
-      ],
+      "aliases": ["merge with local adoption", "orca worktree", "safety and truth"],
       "sections": [
-        {
-          "heading": "## Runtime profile"
-        },
-        {
-          "heading": "## Safety and truth rules"
-        },
-        {
-          "heading": "## Step 1 — Snapshot the operator checkout"
-        },
-        {
-          "heading": "## Step 2 — Resolve the PR and target"
-        }
+        { "heading": "## Runtime profile" },
+        { "heading": "## Safety and truth rules" },
+        { "heading": "## Step 1 — Snapshot the operator checkout" },
+        { "heading": "## Step 2 — Resolve the PR and target" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "merge-ready-merge"
-        },
-        {
-          "type": "related",
-          "target": "agents-worker-skills"
-        },
-        {
-          "type": "related",
-          "target": "rca-failure-response"
-        }
+        { "type": "related", "target": "merge-ready-merge" },
+        { "type": "related", "target": "agents-worker-skills" },
+        { "type": "related", "target": "rca-failure-response" }
       ]
     },
     {
@@ -1079,42 +527,18 @@
       "path": ".cursor/skills/merge-with-local-adoption/SKILL.md",
       "topic": "merge",
       "role": "operator",
-      "aliases": [
-        "pack-review waiver",
-        "gh pr merge"
-      ],
+      "aliases": ["pack-review waiver", "gh pr merge"],
       "sections": [
-        {
-          "heading": "## Step 3 — Inspect readiness"
-        },
-        {
-          "heading": "## Step 4 — Collect local adoption instructions"
-        },
-        {
-          "heading": "## Step 5 — Merge"
-        }
+        { "heading": "## Step 3 — Inspect readiness" },
+        { "heading": "## Step 4 — Collect local adoption instructions" },
+        { "heading": "## Step 5 — Merge" }
       ],
       "edges": [
-        {
-          "type": "prerequisite",
-          "target": "merge-safety-resolve"
-        },
-        {
-          "type": "related",
-          "target": "merge-safety-resolve"
-        },
-        {
-          "type": "related",
-          "target": "merge-adopt-local"
-        },
-        {
-          "type": "related",
-          "target": "chat-done"
-        },
-        {
-          "type": "related",
-          "target": "pack-review-waiver-merge-runbook"
-        }
+        { "type": "prerequisite", "target": "merge-safety-resolve" },
+        { "type": "related", "target": "merge-safety-resolve" },
+        { "type": "related", "target": "merge-adopt-local" },
+        { "type": "related", "target": "chat-done" },
+        { "type": "related", "target": "pack-review-waiver-merge-runbook" }
       ]
     },
     {
@@ -1123,38 +547,17 @@
       "path": ".cursor/skills/merge-with-local-adoption/SKILL.md",
       "topic": "merge",
       "role": "operator",
-      "aliases": [
-        "adopt merged main",
-        "HEAD after adoption",
-        "wiki-ops sync"
-      ],
+      "aliases": ["adopt merged main", "HEAD after adoption", "wiki-ops sync"],
       "sections": [
-        {
-          "heading": "## Step 6 — Adopt merged main"
-        },
-        {
-          "heading": "## Step 7 — Apply local adoption"
-        },
-        {
-          "heading": "## Step 8 — Sibling advisory"
-        }
+        { "heading": "## Step 6 — Adopt merged main" },
+        { "heading": "## Step 7 — Apply local adoption" },
+        { "heading": "## Step 8 — Sibling advisory" }
       ],
-      "referenced_paths": [
-        "scripts/sync-ops-wiki.ts"
-      ],
+      "referenced_paths": ["scripts/sync-ops-wiki.ts"],
       "edges": [
-        {
-          "type": "related",
-          "target": "merge-ready-merge"
-        },
-        {
-          "type": "related",
-          "target": "ops-wiki-sync"
-        },
-        {
-          "type": "related",
-          "target": "merge-cleanup-report"
-        }
+        { "type": "related", "target": "merge-ready-merge" },
+        { "type": "related", "target": "ops-wiki-sync" },
+        { "type": "related", "target": "merge-cleanup-report" }
       ]
     },
     {
@@ -1163,27 +566,14 @@
       "path": ".cursor/skills/merge-with-local-adoption/SKILL.md",
       "topic": "merge",
       "role": "operator",
-      "aliases": [
-        "post-merge cleanup",
-        "worktree rm"
-      ],
+      "aliases": ["post-merge cleanup", "worktree rm"],
       "sections": [
-        {
-          "heading": "## Step 9 — Complete merged-worktree cleanup"
-        },
-        {
-          "heading": "## Step 10 — Report"
-        }
+        { "heading": "## Step 9 — Complete merged-worktree cleanup" },
+        { "heading": "## Step 10 — Report" }
       ],
       "edges": [
-        {
-          "type": "prerequisite",
-          "target": "merge-adopt-local"
-        },
-        {
-          "type": "related",
-          "target": "merge-adopt-local"
-        }
+        { "type": "prerequisite", "target": "merge-adopt-local" },
+        { "type": "related", "target": "merge-adopt-local" }
       ]
     },
     {
@@ -1192,48 +582,20 @@
       "path": ".cursor/skills/direct-fix-checklist/SKILL.md",
       "topic": "direct-fix",
       "role": "architect",
-      "aliases": [
-        "direct PR",
-        "declaration snapshot",
-        "pr-scope"
-      ],
+      "aliases": ["direct PR", "declaration snapshot", "pr-scope"],
       "sections": [
-        {
-          "heading": "## When to invoke"
-        },
-        {
-          "heading": "## When to skip"
-        },
-        {
-          "heading": "## The direct-PR spine"
-        },
-        {
-          "heading": "## Declaration snapshot"
-        },
-        {
-          "heading": "## PR body issue reference"
-        }
+        { "heading": "## When to invoke" },
+        { "heading": "## When to skip" },
+        { "heading": "## The direct-PR spine" },
+        { "heading": "## Declaration snapshot" },
+        { "heading": "## PR body issue reference" }
       ],
-      "referenced_paths": [
-        "scripts/pr-scope-declaration.ts"
-      ],
+      "referenced_paths": ["scripts/pr-scope-declaration.ts"],
       "edges": [
-        {
-          "type": "related",
-          "target": "direct-fix-ci-review"
-        },
-        {
-          "type": "related",
-          "target": "policy-publishing"
-        },
-        {
-          "type": "related",
-          "target": "rca-failure-response"
-        },
-        {
-          "type": "related",
-          "target": "pr-scope-declaration"
-        }
+        { "type": "related", "target": "direct-fix-ci-review" },
+        { "type": "related", "target": "policy-publishing" },
+        { "type": "related", "target": "rca-failure-response" },
+        { "type": "related", "target": "pr-scope-declaration" }
       ]
     },
     {
@@ -1242,38 +604,17 @@
       "path": ".cursor/skills/direct-fix-checklist/SKILL.md",
       "topic": "direct-fix",
       "role": "architect",
-      "aliases": [
-        "pre-push",
-        "pack-review-runner"
-      ],
+      "aliases": ["pre-push", "pack-review-runner"],
       "sections": [
-        {
-          "heading": "## Pre-push local self-check"
-        },
-        {
-          "heading": "## CI checks the PR must pass"
-        },
-        {
-          "heading": "## PR review (operator-initiated only)"
-        }
+        { "heading": "## Pre-push local self-check" },
+        { "heading": "## CI checks the PR must pass" },
+        { "heading": "## PR review (operator-initiated only)" }
       ],
-      "referenced_paths": [
-        "scripts/pack-review-runner.ts",
-        "scripts/verify.ts"
-      ],
+      "referenced_paths": ["scripts/pack-review-runner.ts", "scripts/verify.ts"],
       "edges": [
-        {
-          "type": "prerequisite",
-          "target": "direct-fix-spine"
-        },
-        {
-          "type": "related",
-          "target": "direct-fix-spine"
-        },
-        {
-          "type": "related",
-          "target": "direct-fix-handoff"
-        }
+        { "type": "prerequisite", "target": "direct-fix-spine" },
+        { "type": "related", "target": "direct-fix-spine" },
+        { "type": "related", "target": "direct-fix-handoff" }
       ]
     },
     {
@@ -1282,38 +623,17 @@
       "path": ".cursor/skills/direct-fix-checklist/SKILL.md",
       "topic": "direct-fix",
       "role": "architect",
-      "aliases": [
-        "hand off to a worker",
-        "architect role"
-      ],
+      "aliases": ["hand off to a worker", "architect role"],
       "sections": [
-        {
-          "heading": "## Hand off to a worker"
-        },
-        {
-          "heading": "## Don't"
-        },
-        {
-          "heading": "## Architect role contract"
-        }
+        { "heading": "## Hand off to a worker" },
+        { "heading": "## Don't" },
+        { "heading": "## Architect role contract" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "runbook-worker-lifecycle"
-        },
-        {
-          "type": "related",
-          "target": "direct-fix-ci-review"
-        },
-        {
-          "type": "related",
-          "target": "agents-precedence-boundaries"
-        },
-        {
-          "type": "related",
-          "target": "agents-worker-skills"
-        }
+        { "type": "related", "target": "runbook-worker-lifecycle" },
+        { "type": "related", "target": "direct-fix-ci-review" },
+        { "type": "related", "target": "agents-precedence-boundaries" },
+        { "type": "related", "target": "agents-worker-skills" }
       ]
     },
     {
@@ -1322,33 +642,15 @@
       "path": ".cursor/skills/investigate-root-cause/SKILL.md",
       "topic": "rca",
       "role": "architect",
-      "aliases": [
-        "root cause",
-        "разобраться с причиной",
-        "failure response"
-      ],
+      "aliases": ["root cause", "разобраться с причиной", "failure response"],
       "sections": [
-        {
-          "heading": "## Failure response"
-        }
+        { "heading": "## Failure response" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "agents-portable-plan"
-        },
-        {
-          "type": "related",
-          "target": "agents-worker-skills"
-        },
-        {
-          "type": "related",
-          "target": "direct-fix-spine"
-        },
-        {
-          "type": "related",
-          "target": "merge-safety-resolve"
-        }
+        { "type": "related", "target": "agents-portable-plan" },
+        { "type": "related", "target": "agents-worker-skills" },
+        { "type": "related", "target": "direct-fix-spine" },
+        { "type": "related", "target": "merge-safety-resolve" }
       ]
     },
     {
@@ -1357,30 +659,14 @@
       "path": "docs/ops-wiki-sync.md",
       "topic": "wiki-ops",
       "role": "operator",
-      "aliases": [
-        "wiki-ops",
-        "checked_through_commit",
-        "apply_in_progress",
-        "sync-ops-wiki"
-      ],
+      "aliases": ["wiki-ops", "checked_through_commit", "apply_in_progress", "sync-ops-wiki"],
       "sections": [
-        {
-          "heading": "# Operational wiki sync"
-        }
+        { "heading": "# Operational wiki sync" }
       ],
-      "referenced_paths": [
-        "scripts/sync-ops-wiki.ts",
-        "scripts/data/ops-wiki-manifest.json"
-      ],
+      "referenced_paths": ["scripts/sync-ops-wiki.ts", "scripts/data/ops-wiki-manifest.json"],
       "edges": [
-        {
-          "type": "related",
-          "target": "merge-adopt-local"
-        },
-        {
-          "type": "related",
-          "target": "agents-wiki-ops"
-        }
+        { "type": "related", "target": "merge-adopt-local" },
+        { "type": "related", "target": "agents-wiki-ops" }
       ]
     },
     {
@@ -1389,29 +675,14 @@
       "path": "AGENTS.md",
       "topic": "wiki-ops",
       "role": "all",
-      "aliases": [
-        "wiki-ops.search",
-        "canonical files fallback",
-        "synto"
-      ],
+      "aliases": ["wiki-ops.search", "canonical files fallback", "synto"],
       "sections": [
-        {
-          "heading": "## Operational wiki consultation"
-        }
+        { "heading": "## Operational wiki consultation" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "ops-wiki-sync"
-        },
-        {
-          "type": "related",
-          "target": "agents-coworker-rtk"
-        },
-        {
-          "type": "related",
-          "target": "agents-github-runtime"
-        }
+        { "type": "related", "target": "ops-wiki-sync" },
+        { "type": "related", "target": "agents-coworker-rtk" },
+        { "type": "related", "target": "agents-github-runtime" }
       ]
     },
     {
@@ -1420,39 +691,17 @@
       "path": ".cursor/skills/create-issue-draft/SKILL.md",
       "topic": "task-authoring",
       "role": "manager",
-      "aliases": [
-        "issue authoring",
-        "создание задачи",
-        "task specification"
-      ],
+      "aliases": ["issue authoring", "создание задачи", "task specification"],
       "sections": [
-        {
-          "heading": "## Routing"
-        },
-        {
-          "heading": "## Roles"
-        },
-        {
-          "heading": "## Acceptance"
-        }
+        { "heading": "## Routing" },
+        { "heading": "## Roles" },
+        { "heading": "## Acceptance" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "execute-issue-with-gpt"
-        },
-        {
-          "type": "related",
-          "target": "adversarial-draft-review"
-        },
-        {
-          "type": "related",
-          "target": "discuss-with-gpt"
-        },
-        {
-          "type": "related",
-          "target": "tiering"
-        }
+        { "type": "related", "target": "execute-issue-with-gpt" },
+        { "type": "related", "target": "adversarial-draft-review" },
+        { "type": "related", "target": "discuss-with-gpt" },
+        { "type": "related", "target": "tiering" }
       ]
     },
     {
@@ -1461,31 +710,15 @@
       "path": ".cursor/skills/execute-issue-with-gpt/SKILL.md",
       "topic": "task-execution",
       "role": "manager",
-      "aliases": [
-        "issue execution",
-        "выполнить Issue",
-        "verified complete"
-      ],
+      "aliases": ["issue execution", "выполнить Issue", "verified complete"],
       "sections": [
-        {
-          "heading": "## Trigger and boundaries"
-        },
-        {
-          "heading": "## Supervisor contract"
-        },
-        {
-          "heading": "## Terminal outcomes"
-        }
+        { "heading": "## Trigger and boundaries" },
+        { "heading": "## Supervisor contract" },
+        { "heading": "## Terminal outcomes" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "create-issue-draft"
-        },
-        {
-          "type": "related",
-          "target": "chatgpt-task-execution-runbook"
-        }
+        { "type": "related", "target": "create-issue-draft" },
+        { "type": "related", "target": "chatgpt-task-execution-runbook" }
       ]
     },
     {
@@ -1494,27 +727,14 @@
       "path": ".cursor/skills/adversarial-draft-review/SKILL.md",
       "topic": "review",
       "role": "reviewer",
-      "aliases": [
-        "adversarial draft",
-        "оспорить драфт",
-        "Codex challenge"
-      ],
+      "aliases": ["adversarial draft", "оспорить драфт", "Codex challenge"],
       "sections": [
-        {
-          "heading": "## When to invoke"
-        },
-        {
-          "heading": "## Flow"
-        },
-        {
-          "heading": "## Don't"
-        }
+        { "heading": "## When to invoke" },
+        { "heading": "## Flow" },
+        { "heading": "## Don't" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "create-issue-draft"
-        }
+        { "type": "related", "target": "create-issue-draft" }
       ]
     },
     {
@@ -1523,28 +743,14 @@
       "path": ".cursor/skills/discuss-with-gpt/SKILL.md",
       "topic": "review",
       "role": "manager",
-      "aliases": [
-        "GPT consultation",
-        "обсудить с GPT",
-        "browser GPT discussion"
-      ],
+      "aliases": ["GPT consultation", "обсудить с GPT", "browser GPT discussion"],
       "sections": [
-        {
-          "heading": "## Routing"
-        },
-        {
-          "heading": "## Browser preconditions and tracked-turn pointer"
-        }
+        { "heading": "## Routing" },
+        { "heading": "## Browser preconditions and tracked-turn pointer" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "create-issue-draft"
-        },
-        {
-          "type": "related",
-          "target": "browser-gpt-turn-runbook"
-        }
+        { "type": "related", "target": "create-issue-draft" },
+        { "type": "related", "target": "browser-gpt-turn-runbook" }
       ]
     },
     {
@@ -1553,27 +759,14 @@
       "path": ".cursor/skills/study-external-source/SKILL.md",
       "topic": "research",
       "role": "architect",
-      "aliases": [
-        "external source",
-        "изучить репозиторий",
-        "adoption triage"
-      ],
+      "aliases": ["external source", "изучить репозиторий", "adoption triage"],
       "sections": [
-        {
-          "heading": "## When to invoke"
-        },
-        {
-          "heading": "## Research step — delegate the reading to `coworker` (mandatory)"
-        },
-        {
-          "heading": "## Triage buckets"
-        }
+        { "heading": "## When to invoke" },
+        { "heading": "## Research step — delegate the reading to `coworker` (mandatory)" },
+        { "heading": "## Triage buckets" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "agents-worker-skills"
-        }
+        { "type": "related", "target": "agents-worker-skills" }
       ]
     },
     {
@@ -1582,31 +775,15 @@
       "path": ".cursor/skills/switch-pack-reviewer/SKILL.md",
       "topic": "review",
       "role": "operator",
-      "aliases": [
-        "switch reviewer",
-        "сменить ревьюера",
-        "PACK_REVIEWER selection"
-      ],
+      "aliases": ["switch reviewer", "сменить ревьюера", "PACK_REVIEWER selection"],
       "sections": [
-        {
-          "heading": "## Reviewer authority"
-        },
-        {
-          "heading": "## Triggers"
-        },
-        {
-          "heading": "## Procedure"
-        }
+        { "heading": "## Reviewer authority" },
+        { "heading": "## Triggers" },
+        { "heading": "## Procedure" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "reviewer-switch-runbook"
-        },
-        {
-          "type": "related",
-          "target": "agents-worker-skills"
-        }
+        { "type": "related", "target": "reviewer-switch-runbook" },
+        { "type": "related", "target": "agents-worker-skills" }
       ]
     },
     {
@@ -1615,24 +792,13 @@
       "path": ".cursor/skills/change-orchestrator-runtime/SKILL.md",
       "topic": "runtime",
       "role": "architect",
-      "aliases": [
-        "runtime adapter change",
-        "смена runtime",
-        "registered adapter"
-      ],
+      "aliases": ["runtime adapter change", "смена runtime", "registered adapter"],
       "sections": [
-        {
-          "heading": "## Contract"
-        },
-        {
-          "heading": "## Procedure"
-        }
+        { "heading": "## Contract" },
+        { "heading": "## Procedure" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "agents-portable-plan"
-        }
+        { "type": "related", "target": "agents-portable-plan" }
       ]
     },
     {
@@ -1641,38 +807,17 @@
       "path": "docs/chatgpt-task-execution-runbook.md",
       "topic": "task-execution",
       "role": "manager",
-      "aliases": [
-        "task execution runbook",
-        "исполнение задачи",
-        "manager execution"
-      ],
+      "aliases": ["task execution runbook", "исполнение задачи", "manager execution"],
       "sections": [
-        {
-          "heading": "## Scope and role split"
-        },
-        {
-          "heading": "## Preconditions"
-        },
-        {
-          "heading": "## Multi-turn completion loop"
-        },
-        {
-          "heading": "## Independent GitHub Definition-of-Done verification"
-        }
+        { "heading": "## Scope and role split" },
+        { "heading": "## Preconditions" },
+        { "heading": "## Multi-turn completion loop" },
+        { "heading": "## Independent GitHub Definition-of-Done verification" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "execute-issue-with-gpt"
-        },
-        {
-          "type": "related",
-          "target": "browser-gpt-turn-runbook"
-        },
-        {
-          "type": "related",
-          "target": "flow-manager-long-running-child-runbook"
-        }
+        { "type": "related", "target": "execute-issue-with-gpt" },
+        { "type": "related", "target": "browser-gpt-turn-runbook" },
+        { "type": "related", "target": "flow-manager-long-running-child-runbook" }
       ]
     },
     {
@@ -1681,34 +826,16 @@
       "path": "docs/browser-gpt-turn-runbook.md",
       "topic": "chat-executor",
       "role": "manager",
-      "aliases": [
-        "browser GPT turn",
-        "браузерный GPT поворот",
-        "tracked browser turn"
-      ],
+      "aliases": ["browser GPT turn", "браузерный GPT поворот", "tracked browser turn"],
       "sections": [
-        {
-          "heading": "## Local-only configuration"
-        },
-        {
-          "heading": "## Start-of-shift preflight"
-        },
-        {
-          "heading": "## Prepare one turn"
-        },
-        {
-          "heading": "## Publication and tab lifecycle"
-        }
+        { "heading": "## Local-only configuration" },
+        { "heading": "## Start-of-shift preflight" },
+        { "heading": "## Prepare one turn" },
+        { "heading": "## Publication and tab lifecycle" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "chatgpt-task-execution-runbook"
-        },
-        {
-          "type": "related",
-          "target": "discuss-with-gpt"
-        }
+        { "type": "related", "target": "chatgpt-task-execution-runbook" },
+        { "type": "related", "target": "discuss-with-gpt" }
       ]
     },
     {
@@ -1717,30 +844,15 @@
       "path": "docs/pack-review-waiver-merge-runbook.md",
       "topic": "merge",
       "role": "operator",
-      "aliases": [
-        "operator waiver merge",
-        "waiver procedure",
-        "разрешение merge"
-      ],
+      "aliases": ["operator waiver merge", "waiver procedure", "разрешение merge"],
       "sections": [
-        {
-          "heading": "## When this applies"
-        },
-        {
-          "heading": "## Prerequisites (read-only)"
-        },
-        {
-          "heading": "## Waiver procedure (failed review or missing status)"
-        },
-        {
-          "heading": "## Alternatives (preferred)"
-        }
+        { "heading": "## When this applies" },
+        { "heading": "## Prerequisites (read-only)" },
+        { "heading": "## Waiver procedure (failed review or missing status)" },
+        { "heading": "## Alternatives (preferred)" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "merge-ready-merge"
-        }
+        { "type": "related", "target": "merge-ready-merge" }
       ]
     },
     {
@@ -1749,34 +861,16 @@
       "path": "docs/orchestrator-recovery-runbook.md",
       "topic": "recovery",
       "role": "orchestrator",
-      "aliases": [
-        "orchestrator recovery",
-        "восстановление оркестратора",
-        "CI recovery"
-      ],
+      "aliases": ["orchestrator recovery", "восстановление оркестратора", "CI recovery"],
       "sections": [
-        {
-          "heading": "## Start with exact evidence"
-        },
-        {
-          "heading": "## Required CI recovery"
-        },
-        {
-          "heading": "## Review recovery"
-        },
-        {
-          "heading": "## Completion evidence"
-        }
+        { "heading": "## Start with exact evidence" },
+        { "heading": "## Required CI recovery" },
+        { "heading": "## Review recovery" },
+        { "heading": "## Completion evidence" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "runbook-worker-lifecycle"
-        },
-        {
-          "type": "related",
-          "target": "smoke-recovery"
-        }
+        { "type": "related", "target": "runbook-worker-lifecycle" },
+        { "type": "related", "target": "smoke-recovery" }
       ]
     },
     {
@@ -1785,25 +879,13 @@
       "path": "docs/tiering.md",
       "topic": "task-authoring",
       "role": "manager",
-      "aliases": [
-        "task tiering",
-        "уровни задачи",
-        "T1 T2 T3"
-      ],
+      "aliases": ["task tiering", "уровни задачи", "T1 T2 T3"],
       "sections": [
-        {
-          "heading": "## Task complexity tier rubric"
-        }
+        { "heading": "## Task complexity tier rubric" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "runbook-executor-profiles"
-        },
-        {
-          "type": "related",
-          "target": "create-issue-draft"
-        }
+        { "type": "related", "target": "runbook-executor-profiles" },
+        { "type": "related", "target": "create-issue-draft" }
       ]
     },
     {
@@ -1812,27 +894,14 @@
       "path": "docs/flow-manager-long-running-child-runbook.md",
       "topic": "chat-executor",
       "role": "manager",
-      "aliases": [
-        "long-running child",
-        "долгий дочерний процесс",
-        "flow-manager child"
-      ],
+      "aliases": ["long-running child", "долгий дочерний процесс", "flow-manager child"],
       "sections": [
-        {
-          "heading": "## Package commands"
-        },
-        {
-          "heading": "## Launcher mechanics"
-        },
-        {
-          "heading": "## Rollback"
-        }
+        { "heading": "## Package commands" },
+        { "heading": "## Launcher mechanics" },
+        { "heading": "## Rollback" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "chatgpt-task-execution-runbook"
-        }
+        { "type": "related", "target": "chatgpt-task-execution-runbook" }
       ]
     },
     {
@@ -1841,33 +910,16 @@
       "path": "docs/reviewer-switch-runbook.md",
       "topic": "review",
       "role": "operator",
-      "aliases": [
-        "reviewer selection",
-        "переключение ревьюера",
-        "reviewer preference"
-      ],
+      "aliases": ["reviewer selection", "переключение ревьюера", "reviewer preference"],
       "sections": [
-        {
-          "heading": "# Switching the pack reviewer (GPT, Codex, or Claude)"
-        },
-        {
-          "heading": "## Authority and precedence"
-        },
-        {
-          "heading": "## Reviewer adapters"
-        },
-        {
-          "heading": "## Inspect the current selection"
-        },
-        {
-          "heading": "## Persist a reviewer"
-        }
+        { "heading": "# Switching the pack reviewer (GPT, Codex, or Claude)" },
+        { "heading": "## Authority and precedence" },
+        { "heading": "## Reviewer adapters" },
+        { "heading": "## Inspect the current selection" },
+        { "heading": "## Persist a reviewer" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "switch-pack-reviewer"
-        }
+        { "type": "related", "target": "switch-pack-reviewer" }
       ]
     },
     {
@@ -1876,21 +928,12 @@
       "path": "docs/pr-scope-declaration.md",
       "topic": "scope",
       "role": "worker",
-      "aliases": [
-        "scope declaration",
-        "декларация scope",
-        "AO-free declaration"
-      ],
+      "aliases": ["scope declaration", "декларация scope", "AO-free declaration"],
       "sections": [
-        {
-          "heading": "# AO-free PR scope declarations"
-        }
+        { "heading": "# AO-free PR scope declarations" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "direct-fix-spine"
-        }
+        { "type": "related", "target": "direct-fix-spine" }
       ]
     },
     {
@@ -1899,21 +942,12 @@
       "path": "docs/first_principles_5_operational_framework.md",
       "topic": "reasoning",
       "role": "all",
-      "aliases": [
-        "first principles",
-        "первые принципы",
-        "problem framing"
-      ],
+      "aliases": ["first principles", "первые принципы", "problem framing"],
       "sections": [
-        {
-          "heading": "# First Principles Framework — 5 режимов для регулярной инженерной работы"
-        }
+        { "heading": "# First Principles Framework — 5 режимов для регулярной инженерной работы" }
       ],
       "edges": [
-        {
-          "type": "related",
-          "target": "coworker-deep-dive"
-        }
+        { "type": "related", "target": "coworker-deep-dive" }
       ]
     }
   ]
