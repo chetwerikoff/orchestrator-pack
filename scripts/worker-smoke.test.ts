@@ -707,11 +707,11 @@ describe('Issue #1936 truthful smoke evidence', () => {
 describe('review-independent required CI facts', () => {
   it('excludes the pack-review authority while preserving required CI contexts', () => {
     expect(reviewIndependentRequiredCiContexts([
-      'TypeScript runtime (Node 22)',
+      'TypeScript runtime',
       'orchestrator-pack/pack-review',
       'TypeScript strict typecheck',
     ])).toEqual([
-      'TypeScript runtime (Node 22)',
+      'TypeScript runtime',
       'TypeScript strict typecheck',
     ]);
   });
