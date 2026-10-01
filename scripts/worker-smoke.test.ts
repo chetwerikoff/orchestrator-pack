@@ -1,25 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
-import { parseSmokeTestPlan } from './draft-discipline.mjs';
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
-import { runProcess, runProcessSync } from './kernel/subprocess.ts';
+import { dirname, join } from 'node:path';
+import { runProcessSync } from './kernel/subprocess.ts';
 import { resolveRealGhBinary, resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import {
   buildSmokeGhChildEnv,
-  checkSmokeTestPlan,
-  evaluateReadyForReviewCombinations,
   evaluateWorkerSmokeCoverage,
   evaluateWorkerSmokeGate,
-  extractSmokeReportsFromComments,
   formatSmokeReportComment,
-  type WorkerSmokeMainMergeCarryProof,
-  normalizeSmokeReport,
-  resolveSmokeRequirement,
-  smokeCompletionBodyPath,
-  smokeCompletionPendingBodyPath,
-  smokeCompletionSealPath,
-  smokeDeliverySealedPath,
   SMOKE_REPORT_PRODUCER,
   type SmokeReport,
   type SmokeScenario,
@@ -27,45 +16,23 @@ import {
   type WorkerSmokeTrustedTarget,
 } from './lib/worker-smoke-core.ts';
 import { publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath } from './lib/worker-assignment-store.ts';
-import {
-  computeSmokeCompletionBodyDigest,
-  scrubSmokeOutput,
-  WORKER_SMOKE_CAUSE_FAMILIES,
-  smokeResultForWorkerSmokeCauseFamily,
-  workerSmokeCauseFamilyForHarnessReason,
-  workerSmokeManagerNonPassCauseForHarnessReason,
-} from './lib/worker-smoke-core-base.ts';
-import { inspectSmokeProgress, readSmokeLifecycleRegistry } from './lib/worker-smoke-lifecycle-base.ts';
-import { evaluateSmokeLifecycleCleanliness, SMOKE_LIFECYCLE_POLL_MS } from './lib/worker-smoke-lifecycle.ts';
-import {
-  verifySmokeRunReceipt,
-} from './lib/worker-smoke-receipt.ts';
+import { scrubSmokeOutput } from './lib/worker-smoke-core-base.ts';
 import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
-import type { RuntimeAdapter, RuntimeDispatchResult, RuntimeWorkerIdentity } from './runtime/contracts.ts';
 import {
   emit,
-  exactClosingIssue,
-  finalSmokeCommentSnapshotMatches,
-  findVerifiedSmokeReceiptWitness,
-  gitTrackedSmokeRuntimePaths,
   parsePaginatedSmokeComments,
   publishPrComment,
   runPublishSmoke,
   type PublishSmokeTarget,
   reviewIndependentRequiredCiContexts,
-  resolveSmokeTarget,
   runDelegatedReadiness,
   runSmokeGhProcess,
   runSmokeGhWriteSync,
   smokeCommentSnapshotDigest,
-  smokeReportHasScenarioFinding,
   stabilizeSmokeCommentCensus,
   type CliOptions,
   type ResolvedSmokeTarget,
 } from './worker-smoke-run.ts';
-import {
-  readPackReviewAuthority,
-} from './pack-review-state.ts';
 
 const issueBody = `
 \`\`\`behavior-kind
