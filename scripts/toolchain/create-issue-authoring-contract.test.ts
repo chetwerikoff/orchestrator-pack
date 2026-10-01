@@ -34,7 +34,7 @@ describe('current create-Issue authoring contract', () => {
 
   it('keeps Browser-GPT transport workflow-neutral', () => {
     expect(browser).toContain('workflow-neutral');
-    expect(browser).toContain('Possible/proven delivery forbids blind resend');
+    expect(browser).toContain('Possible/proven delivery forbids a blind resend');
     expect(browser).not.toContain('source-slot');
     expect(browser).not.toContain('terminal-bundle');
   });
