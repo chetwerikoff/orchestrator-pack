@@ -136,15 +136,14 @@
     "vendor/"
   ],
   "allowed_roots": [
-    ".claude/",
-    ".cursor/",
-    ".github/workflows/",
+    ".claude/skills/",
+    ".cursor/rules/",
+    ".cursor/skills/",
     "AGENTS.md",
     "docs/",
     "package.json",
     "prompts/",
-    "scripts/",
-    "tests/"
+    "scripts/"
   ],
-  "source_revision": "aff4737150c3cba10fa628ef4d4d8c2da5c16b62"
+  "source_revision": "6cd4144d17414fb1afdce52cd1df92560b8b1c3a"
 }
