@@ -13,7 +13,6 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   buildSmokeGhChildEnv,
-  evaluateWorkerSmokeMainMergeCarry,
   formatSmokeReportComment,
   hasPreexistingTrackedDirtiness,
   isWorkerSmokeScenarioCauseFamily,
@@ -22,18 +21,14 @@ import {
   resolveSmokeRequirement,
   scrubForwardedGhSecrets,
   scrubSmokeOutput,
-  smokePlanDependencyPaths,
   SMOKE_REPORT_PRODUCER,
   trackedPorcelainPaths,
   type SmokeReport,
   type SmokeTestPlan,
   type WorkerSmokeCommentRecord,
   type WorkerSmokeTrustedTarget,
-  type WorkerSmokeMainMergeCarryProof,
 } from './lib/worker-smoke-core.ts';
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
-
-import type { WorkerSmokeMainMergeCarryRecord } from './lib/worker-smoke-receipt.ts';
 
 import {
   packReviewFindingsSatisfiedByStrictDescendant,
@@ -233,69 +228,6 @@ export function gitTrackedSmokeRuntimePaths(cwd: string): string[] {
     .split(/\r?\n/u)
     .map((line) => line.trim())
     .filter((line) => line === '.orca-worker-smoke' || line.startsWith('.orca-worker-smoke/'));
-}
-
-function gitRead(cwd: string, args: readonly string[], input?: string): string | undefined {
-  const result = runProcessSync({ command: 'git', args: [...args], cwd, ...(input === undefined ? {} : { input }) });
-  return result.ok ? result.stdout.trim() : undefined;
-}
-
-function gitNames(cwd: string, range: string): string[] | undefined {
-  const result = runProcessSync({ command: 'git', args: ['diff', '--name-only', '-z', range], cwd });
-  return result.ok ? result.stdout.split('\0').filter(Boolean) : undefined;
-}
-
-function patchId(cwd: string, baseSha: string, headSha: string): string | undefined {
-  const diff = runProcessSync({ command: 'git', args: ['diff', `${baseSha}..${headSha}`], cwd });
-  if (!diff.ok) return undefined;
-  const result = runProcessSync({ command: 'git', args: ['patch-id', '--stable'], cwd, input: diff.stdout });
-  const match = result.ok ? result.stdout.trim().match(/^([0-9a-f]{40})\s/u) : null;
-  return match?.[1];
-}
-
-export function deriveMainMergeCarryProof(
-  cwd: string,
-  sourceHeadSha: string,
-  destinationHeadSha: string,
-  issueBody: string,
-): WorkerSmokeMainMergeCarryRecord | undefined {
-  const source = sourceHeadSha.trim().toLowerCase();
-  const destination = destinationHeadSha.trim().toLowerCase();
-  const main = gitRead(cwd, ['rev-parse', '--verify', 'refs/remotes/origin/main^{commit}']);
-  if (!main || !/^[0-9a-f]{40}$/u.test(source) || !/^[0-9a-f]{40}$/u.test(destination)) return undefined;
-  const mergeCommits = gitRead(cwd, ['rev-list', '--merges', `${source}..${destination}`])?.split(/\r?\n/u).filter(Boolean) ?? [];
-  const mainMerges = mergeCommits.flatMap((merge) => {
-    const parents = gitRead(cwd, ['show', '-s', '--format=%P', merge])?.split(/\s+/u) ?? [];
-    return parents.length === 2
-      && gitRead(cwd, ['merge-base', '--is-ancestor', source, parents[0]!]) !== undefined
-      && gitRead(cwd, ['merge-base', '--is-ancestor', parents[1]!, main]) !== undefined
-      ? [{ merge, parents }] : [];
-  });
-  if (mainMerges.length !== 1) return undefined;
-  const { merge, parents } = mainMerges[0]!;
-  const mergeBase = gitRead(cwd, ['merge-base', source, parents[1]!]);
-  const destinationBase = parents[1]!;
-  if (!mergeBase) return undefined;
-  const sourcePatchId = patchId(cwd, mergeBase, source);
-  const destinationPatchId = patchId(cwd, destinationBase, destination);
-  const mainPaths = gitNames(cwd, `${mergeBase}..${destinationBase}`);
-  const prPaths = gitNames(cwd, `${mergeBase}..${source}`);
-  if (!sourcePatchId || !destinationPatchId || !mainPaths || !prPaths) return undefined;
-  const planPaths = smokePlanDependencyPaths(issueBody);
-  const automatic = runProcessSync({ command: 'git', args: ['merge-tree', '--write-tree', parents[0]!, parents[1]!], cwd });
-  const automaticTree = automatic.ok ? automatic.stdout.trim().split(/\r?\n/u)[0] : '';
-  const mergeTree = gitRead(cwd, ['rev-parse', `${merge}^{tree}`]);
-  const cleanMainMerge = Boolean(automaticTree && automaticTree === mergeTree);
-  const descendant = gitRead(cwd, ['merge-base', '--is-ancestor', source, destination]) !== undefined;
-  const proof: WorkerSmokeMainMergeCarryProof = {
-    sourceHeadSha: source, destinationHeadSha: destination, mergeBaseSha: mergeBase, destinationBaseSha: destinationBase,
-    sourcePatchId, destinationPatchId, mainPaths, protectedPaths: [...new Set([...prPaths, ...planPaths])],
-    cleanMainMerge, descendant,
-    hasConflictResolution: !cleanMainMerge,
-  };
-  const decision = evaluateWorkerSmokeMainMergeCarry(proof, destination, source);
-  if (!decision.allowed) return undefined;
-  return { sourceHeadSha: source, destinationHeadSha: destination, equalityProof: decision.equalityProof, mainPaths: [...decision.mainPaths] };
 }
 
 function gitHead(cwd: string): string {
