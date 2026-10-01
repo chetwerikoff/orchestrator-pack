@@ -20,6 +20,19 @@ Documentation-, policy-, or prompt-only Issues should declare
 `not-applicable: true` with a reason when runtime smoke cannot provide
 meaningful evidence.
 
+## Multi-agent smoke executor policy
+
+There is no multi-agent smoke executor on the active path. This heading remains
+as the stable operational-wiki selector for the former policy surface: required
+smoke is now executed directly by the PR owner, and `worker-smoke-run publish`
+does not select or launch an executor profile.
+
+## Actor ordering
+
+Smoke starts only after review convergence (when review applies) and green
+required CI. The PR owner stays the smoke owner; there is no independent smoke
+actor.
+
 ## PR-owner execution
 
 ### Ordinary worker or firefighter
