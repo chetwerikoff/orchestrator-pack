@@ -18,7 +18,6 @@
     "scripts/lib/create-issue-stage-record-cli.ts",
     "scripts/lib/create-issue-stage-record-core.ts",
     "scripts/lib/create-issue-stage-record-gh.ts",
-    "scripts/lib/gh-target-authorization.test.ts",
     "scripts/lib/gh-target-authorization.ts",
     "scripts/lib/worker-status-store.mjs",
     "scripts/manager-review-terminal-bundle.ts",
@@ -28,6 +27,7 @@
     "scripts/publish-issue-body-sync.ts",
     "scripts/run-pack-review-gpt.ts",
     "scripts/target-portability-sinks.test.ts",
+    "scripts/toolchain/raw-child-process-baseline.json",
     "scripts/vitest-ci-lanes.config.json",
     "scripts/worker-smoke-run.ts",
     "scripts/worktree-lifecycle/operations.ts",
@@ -50,5 +50,5 @@
     "prompts/",
     "scripts/"
   ],
-  "source_revision": "d2d0ede592ac91675966d9dbfc028bbdb8c13d89"
+  "source_revision": "d477658d67a5e6c96632e2f7303ca129f665ceb2"
 }
