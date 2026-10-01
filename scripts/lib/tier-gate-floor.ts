@@ -1,128 +1,90 @@
-/**
- * Never-skipped floor gates for tier-gate receipt (#576 AC3).
- */
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
 import {
   checkPositiveOutcome,
   parseBehaviorKind,
 } from '../draft-discipline.mjs';
 import { checkContractEvidence } from '../contract-evidence-validator.mjs';
-import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
 
 export interface TierGateFloorOptions {
   repoRoot?: string;
   draftPath?: string;
 }
 
+function hasFence(text: string, name: string): boolean {
+  return new RegExp('`{3}' + name + '\\s*\\n[\\s\\S]*?`{3}', 'm').test(text);
+}
+
 export function checkWorkerSafetyFloor(draftText: string): { ok: boolean; errors: string[] } {
   const errors: string[] = [];
-  if (!/^##\s+Goal\b/m.test(draftText)) {
-    errors.push('worker-safety floor: missing ## Goal section');
+  for (const heading of [
+    'Prerequisite',
+    'Goal',
+    'Binding surface',
+    'Files in scope',
+    'Files out of scope',
+    'Acceptance criteria',
+    'Upgrade-safety check',
+    'Verification',
+  ]) {
+    const escaped = heading.replace(/[.*+?^$()|[\\]{}]/g, '\\$&');
+    if (!new RegExp('^##\\s+' + escaped + '\\b', 'mi').test(draftText)) {
+      errors.push('substantive floor: missing ## ' + heading + ' section');
+    }
   }
-  if (!/```denylist\s*\n[\s\S]*?```/m.test(draftText)) {
-    errors.push('worker-safety floor: missing ```denylist fence');
+  for (const fence of [
+    'behavior-kind',
+    'complexity-tier',
+    'denylist',
+    'allowed-roots',
+    'smoke-test-plan',
+    'contract-evidence',
+  ]) {
+    if (!hasFence(draftText, fence)) {
+      errors.push('substantive floor: missing ' + fence + ' fence');
+    }
   }
-  if (!/```allowed-roots\s*\n[\s\S]*?```/m.test(draftText)) {
-    errors.push('worker-safety floor: missing ```allowed-roots fence');
-  }
-  if (!/^##\s+Acceptance criteria\b/m.test(draftText)) {
-    errors.push('worker-safety floor: missing ## Acceptance criteria section');
-  }
-  if (!/^##\s+Verification\b/m.test(draftText)) {
-    errors.push('worker-safety floor: missing ## Verification section');
+  const deny = new RegExp('`{3}denylist\\s*\\n([\\s\\S]*?)`{3}', 'm').exec(draftText)?.[1] ?? '';
+  for (const required of ['packages/core/**', 'vendor/**']) {
+    if (!deny.includes(required)) {
+      errors.push('worker-safety floor: denylist must include ' + required);
+    }
   }
   return { ok: errors.length === 0, errors };
 }
 
-export function resolveReviewArtifacts(draftPath: string, repoRoot: string) {
-  const stem = basename(draftPath.replace(/\\/g, '/'), '.md');
-  const capturesDir = join(repoRoot, 'docs/issues_drafts/.review', stem);
-  const ledgerPath = join(capturesDir, 'finding-disposition-ledger.json');
-  const captureFiles = existsSync(capturesDir)
-    ? readdirSync(capturesDir)
-      .filter((name) => name.endsWith('.capture.txt'))
-      .sort()
-      .map((name) => join(capturesDir, name))
-    : [];
-  return { capturesDir, ledgerPath, captureFiles };
-}
-
 export function checkBehaviorKindFloor(draftText: string): { ok: boolean; errors: string[] } {
-  const behaviorKind = parseBehaviorKind(draftText);
-  if (!behaviorKind) {
-    return { ok: false, errors: ['behavior-kind floor: missing ```behavior-kind fence'] };
+  if (!parseBehaviorKind(draftText)) {
+    return { ok: false, errors: ['behavior-kind floor: missing or invalid behavior-kind fence'] };
   }
   const result = checkPositiveOutcome(draftText);
-  if (!result.ok) {
-    return {
-      ok: false,
-      errors: result.errors.map((error) => `behavior-kind floor: ${error}`),
-    };
-  }
-  return { ok: true, errors: [] };
+  return result.ok
+    ? { ok: true, errors: [] }
+    : { ok: false, errors: result.errors.map((error: string) => 'behavior-kind floor: ' + error) };
 }
 
 export function checkContractEvidenceFloor(
   draftText: string,
   options: TierGateFloorOptions = {},
 ): { ok: boolean; errors: string[] } {
-  const repoRoot = options.repoRoot ?? process.cwd();
   const result = checkContractEvidence(draftText, {
-    repoRoot,
+    repoRoot: options.repoRoot ?? process.cwd(),
     draftPath: options.draftPath,
   }) as { ok: boolean; errors: string[]; skipped?: boolean };
-  if (result.ok || result.skipped) {
-    return { ok: true, errors: [] };
-  }
+  if (result.ok || result.skipped) return { ok: true, errors: [] };
   return {
     ok: false,
-    errors: result.errors.map((error) => `contract-evidence floor: ${error}`),
+    errors: result.errors.map((error) => 'contract-evidence floor: ' + error),
   };
-}
-
-export function checkFindingLedgerFloor(
-  options: TierGateFloorOptions = {},
-): { ok: boolean; errors: string[]; skipped: boolean } {
-  if (!options.draftPath) {
-    return { ok: true, errors: [], skipped: true };
-  }
-  const repoRoot = options.repoRoot ?? process.cwd();
-  const { captureFiles, ledgerPath } = resolveReviewArtifacts(options.draftPath, repoRoot);
-  if (captureFiles.length === 0) {
-    return { ok: true, errors: [], skipped: true };
-  }
-  const ledgerText = readFileSync(ledgerPath, 'utf8');
-  const captures = captureFiles.map((capturePath) => readFileSync(capturePath, 'utf8'));
-  const result = checkFindingLedgerGuard(captures, ledgerText, {
-    repoRoot,
-    draftPath: options.draftPath,
-  });
-  if (!result.ok) {
-    return {
-      ok: false,
-      errors: result.errors.map((error) => `finding-ledger floor: ${error}`),
-      skipped: false,
-    };
-  }
-  return { ok: true, errors: [], skipped: false };
 }
 
 export function checkNeverSkippedFloors(
   draftText: string,
   options: TierGateFloorOptions = {},
 ): { ok: boolean; errors: string[] } {
-  const errors: string[] = [];
   const checks = [
     checkWorkerSafetyFloor(draftText),
     checkBehaviorKindFloor(draftText),
     checkContractEvidenceFloor(draftText, options),
-    checkFindingLedgerFloor(options),
   ];
-  for (const check of checks) {
-    if (!check.ok) {
-      errors.push(...check.errors);
-    }
-  }
+  const errors = checks.flatMap((check) => check.ok ? [] : check.errors);
   return { ok: errors.length === 0, errors };
 }

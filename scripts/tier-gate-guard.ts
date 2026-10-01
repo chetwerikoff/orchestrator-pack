@@ -1,139 +1,43 @@
 #!/usr/bin/env node
-/**
- * Tier-gate guard CLI (Issue #576).
- */
 import { readFileSync } from 'node:fs';
-import {
-  checkTierGateGuard,
-  formatCaptureRevisionHeader,
-  formatTierGatePassMessage,
-  selectAuthoringReviewStages,
-} from './lib/tier-gate-core.ts';
-import {
-  createDraftTextGuardBaseOptions,
-  parseDraftTextGuardArgv,
-  type DraftTextGuardBaseOptions,
-} from './lib/draft-text-guard-cli.ts';
-import {
-  isDirectCliExecution,
-  runReviewerTsCli,
-} from './lib/reviewer-ts-cli.ts';
+import { checkTierGateGuard, formatTierGatePassMessage } from './lib/tier-gate-core.ts';
+import { isDirectCliExecution, runReviewerTsCli } from './lib/reviewer-ts-cli.ts';
 
-interface CliOptions extends DraftTextGuardBaseOptions {
-  tier: string | null;
-  skipLine: boolean;
-  explicitAdversarialWrapper: boolean;
-  emitStagesJson: boolean;
-  captureRevision: string | null;
-}
-
-function parseArgs(argv: string[]): CliOptions {
-  const opts: CliOptions = {
-    ...createDraftTextGuardBaseOptions(),
-    tier: null,
-    skipLine: false,
-    explicitAdversarialWrapper: false,
-    emitStagesJson: false,
-    captureRevision: null,
-  };
-
-  parseDraftTextGuardArgv(argv, opts, (arg, args, index) => {
-    switch (arg) {
-      case '--tier':
-        opts.tier = String(args[++index] ?? '').toUpperCase();
-        return index;
-      case '--skip-line':
-        opts.skipLine = true;
-        return 'handled';
-      case '--explicit-adversarial-wrapper':
-        opts.explicitAdversarialWrapper = true;
-        return 'handled';
-      case '--emit-stages-json':
-        opts.emitStagesJson = true;
-        return 'handled';
-      case '--capture-revision':
-        opts.captureRevision = String(args[++index] ?? '');
-        return index;
-      default:
-        return 'unknown';
-    }
-  });
-
-  return opts;
+function parseArgs(argv: string[]): { text: string | null; textFile: string | null; repoRoot?: string } {
+  let text: string | null = null;
+  let textFile: string | null = null;
+  let repoRoot: string | undefined;
+  for (let index = 2; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--text') text = String(argv[++index] ?? '');
+    else if (arg === '--text-file') textFile = String(argv[++index] ?? '');
+    else if (arg === '--repo-root') repoRoot = String(argv[++index] ?? '');
+    else throw new Error('unknown argument: ' + arg);
+  }
+  if ((text === null) === (textFile === null)) {
+    throw new Error('exactly one of --text or --text-file is required');
+  }
+  return { text, textFile, ...(repoRoot ? { repoRoot } : {}) };
 }
 
 export function runCli(argv: string[]): number {
-  let opts: CliOptions;
+  let options: ReturnType<typeof parseArgs>;
   try {
-    opts = parseArgs(argv);
+    options = parseArgs(argv);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`tier-gate guard: ${message}\n`);
+    process.stderr.write('tier-gate guard: ' + (error instanceof Error ? error.message : String(error)) + '\n');
     return 2;
   }
-
-  if (opts.captureRevision !== null) {
-    if (
-      opts.textPath
-      || opts.text !== null
-      || opts.draftPath
-      || opts.tier
-      || opts.skipLine
-      || opts.explicitAdversarialWrapper
-      || opts.emitStagesJson
-    ) {
-      process.stderr.write('tier-gate guard: --capture-revision cannot be combined with guard options\n');
-      return 2;
-    }
-    try {
-      process.stdout.write(formatCaptureRevisionHeader(opts.captureRevision));
-      return 0;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      process.stderr.write(`tier-gate guard: ${message}\n`);
-      return 2;
-    }
-  }
-
-  if (!opts.textPath && opts.text == null) {
-    process.stderr.write('tier-gate guard: --text-file <path>, --text <string>, or --capture-revision <rNN> is required\n');
-    return 2;
-  }
-
-  const text = opts.textPath ? readFileSync(opts.textPath, 'utf8') : String(opts.text);
-
-  let result;
-  try {
-    result = checkTierGateGuard(text, {
-      tier: opts.tier,
-      skipLine: opts.skipLine,
-      explicitAdversarialWrapper: opts.explicitAdversarialWrapper,
-      repoRoot: opts.repoRoot,
-      draftPath: opts.draftPath ?? opts.textPath ?? undefined,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`tier-gate guard: ${message}\n`);
-    return 1;
-  }
-
-  if (opts.emitStagesJson) {
-    const stages = selectAuthoringReviewStages({
-      tier: result.receipt?.kind === 'tier-fence' ? result.receipt.tier : opts.tier,
-      skipLine: opts.skipLine || result.fence.kind === 'no-tier',
-      explicitAdversarialWrapper: opts.explicitAdversarialWrapper,
-    });
-    process.stdout.write(`${JSON.stringify(stages)}\n`);
-  }
-
+  const text = options.textFile ? readFileSync(options.textFile, 'utf8') : String(options.text);
+  const result = checkTierGateGuard(text, {
+    ...(options.repoRoot ? { repoRoot: options.repoRoot } : {}),
+    ...(options.textFile ? { draftPath: options.textFile } : {}),
+  });
   if (!result.ok) {
-    for (const error of result.errors) {
-      process.stderr.write(`tier-gate guard: ${error}\n`);
-    }
+    for (const error of result.errors) process.stderr.write('tier-gate guard: ' + error + '\n');
     return 1;
   }
-
-  process.stdout.write(`${formatTierGatePassMessage(result)}\n`);
+  process.stdout.write(formatTierGatePassMessage(result) + '\n');
   return 0;
 }
 
@@ -141,6 +45,4 @@ function main(): void {
   process.exit(runCli(process.argv));
 }
 
-if (isDirectCliExecution(import.meta.url, process.argv[1])) {
-  runReviewerTsCli(main);
-}
+if (isDirectCliExecution(import.meta.url, process.argv[1])) runReviewerTsCli(main);
