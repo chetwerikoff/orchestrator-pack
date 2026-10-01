@@ -6,6 +6,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# In target mode, authorize the selected project card before any native/network gh path.
+# The helper reuses resolveTargetContext, rejects mismatched repo/host ingress, and prints
+# the exact repository that all implicit gh routing must use.
+if [[ -n "${OPK_PROJECT_ID:-}" ]]; then
+  target_repo="$(node --no-warnings --experimental-strip-types "${SCRIPT_DIR}/lib/gh-target-authorization.ts" -- "$@")"
+  export OPK_TARGET_REPOSITORY="$target_repo"
+  export GH_REPO="$target_repo"
+  export GH_HOST="github.com"
+fi
+
 if [[ "${GH_WRAPPER_ACTIVE:-}" == "1" ]]; then
   # Terminal delegation: resolve native gh, not next wrapper on PATH (Issue #442).
   real_gh="$(node "${SCRIPT_DIR}/lib/gh-resolve-real-binary.mjs")"
