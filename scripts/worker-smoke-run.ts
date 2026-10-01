@@ -2062,17 +2062,12 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
 }
 
 const SMOKE_TRANSCRIPT_MAX_LINES = 20_000;
-const SMOKE_REPORT_OPENING = '```worker-smoke-report';
 
-// Cursor reads return only the lines after the previous token, so a report can span reads; the
-// prompt also carries a template report block that the worker pane echoes, so only the last
-// opened block can be the worker's report.
+// Rendered terminal output may omit Markdown fences; select the last complete report result line,
+// which also excludes the echoed prompt template's result: PASS|FAIL|BLOCKED placeholder.
 export function parseLatestSmokeReport(transcript: string): Partial<SmokeReport> | null {
-  const start = transcript.lastIndexOf(SMOKE_REPORT_OPENING);
-  if (start < 0) return parseSmokeAgentReport(transcript);
-  const block = transcript.slice(start);
-  if (!block.slice(SMOKE_REPORT_OPENING.length).includes('```')) return null;
-  return parseSmokeAgentReport(block);
+  const parsed = parseSmokeAgentReport(transcript);
+  return parsed?.scenarios?.length ? parsed : null;
 }
 
 export type DetachedSmokeAttemptObservation =

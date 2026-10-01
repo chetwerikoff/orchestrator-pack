@@ -3441,6 +3441,29 @@ describe('Issue #2250 independent smoke publication without ordering receipts', 
     expect(parseLatestSmokeReport([...template, ...report].join('\n'))?.result).toBe('FAIL');
   });
 
+  it('parses a real report from rendered output without accepting the template echo', () => {
+    const template = [
+      'prompt template:',
+      'result: PASS|FAIL|BLOCKED',
+      'tracked-files-unmodified: true',
+      'scenarios:',
+      '- action: template | expected: not a report',
+    ].join('\n');
+    const renderedReport = [
+      template,
+      'result: PASS',
+      'tracked-files-unmodified: true',
+      'scenarios:',
+      '- action: run | expected: ok | observed: passed | outcome: pass',
+    ].join('\n');
+
+    expect(parseLatestSmokeReport(template)).toBeNull();
+    expect(parseLatestSmokeReport(renderedReport)).toMatchObject({
+      result: 'PASS',
+      scenarios: [{ action: 'run', outcome: 'pass' }],
+    });
+  });
+
   it('keeps terminal cleanup informational instead of gating PASS', async () => {
     const bodies: string[] = [];
     const result = await runIndependentSmokeFixture({
