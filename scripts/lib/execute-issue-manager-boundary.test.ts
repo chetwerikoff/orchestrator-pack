@@ -18,7 +18,7 @@ import {
 import { runExecuteIssueManagerBoundaryCli } from '../execute-issue-manager-boundary.ts';
 
 const context: ExecuteIssueManagerBoundaryContext = {
-  repository: 'chetwerikoff/orchestrator-pack', issueNumber: 2081, sourceRevision: 'r03', phase: 'independent-smoke',
+  repository: 'chetwerikoff/orchestrator-pack', issueNumber: 2081, sourceRevision: 'r03', phase: 'smoke',
   productionArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'],
   cdp: 'http://127.0.0.1:9222', conversationUrl: 'https://chatgpt.com/c/owned-2081', prNumber: 2083,
   headSha: 'a'.repeat(40),
@@ -45,9 +45,6 @@ function smoke(
     prNumber: context.prNumber,
     headSha: context.headSha,
     trackedFilesUnmodified: result === 'PASS',
-    terminalCleanup: result === 'PASS' ? 'closed_owned_handle' : 'not_recorded',
-    orcaExecutable: result === 'PASS' ? 'orca' : undefined,
-    terminalHandle: result === 'PASS' ? 'term_fixture' : undefined,
     scenarios: [{
       action: 'exercise smoke fixture',
       expected: 'fixture expectation',
@@ -178,11 +175,12 @@ describe('execute-Issue manager boundary', () => {
       result: { ok: false, cause: 'producer_contract_defect', nextAction: null },
     });
     expect(classifyExecuteIssueManagerRecord(smoke('PASS', {
-      terminalCleanup: 'not_recorded',
-      terminalHandle: undefined,
+      terminalCleanup: 'closed_owned_handle',
+      terminalHandle: 'legacy-smoke-terminal',
+      orcaExecutable: 'legacy-runtime-adapter',
     }), context)).toMatchObject({
-      exitCode: 5,
-      result: { ok: false, cause: 'producer_contract_defect', nextAction: null },
+      exitCode: 0,
+      result: { ok: true, verdict: 'PASS', cause: 'execute_worker_smoke_pass', nextAction: null },
     });
 
     const assertionFailure = smoke('FAIL', {
@@ -240,30 +238,13 @@ describe('execute-Issue manager boundary', () => {
       result: { ok: false, cause: 'producer_contract_defect', nextAction: null },
     });
 
-    for (const nonPassCause of ['trusted_target_stale']) {
-      const projected = classifyExecuteIssueManagerRecord(smoke('BLOCKED', {
-        causeFamily: 'harness_admission_refused',
-        nonPassCause,
-      }), context);
-      expect(projected.exitCode).toBe(3);
-      const action = expectReadOnly(projected);
-      expect(action.binding.stage).toBe('execute:independent-smoke');
-      expect(action.argv.slice(0, 4)).toEqual([
-        'node',
-        '--experimental-strip-types',
-        'scripts/execute-issue-manager-boundary.ts',
-        'observe-worker-smoke-recoverable',
-      ]);
-      expect(action.argv).toEqual(expect.arrayContaining([
-        '--repo', context.repository,
-        '--issue-number', String(context.issueNumber),
-        '--pr-number', String(context.prNumber),
-        '--head-sha', context.headSha!,
-        '--source-revision', context.sourceRevision,
-        '--phase', 'independent-smoke',
-        '--cause', nonPassCause,
-      ]));
-    }
+    expect(classifyExecuteIssueManagerRecord(smoke('BLOCKED', {
+      causeFamily: 'harness_admission_refused',
+      nonPassCause: 'trusted_target_stale',
+    }), context)).toMatchObject({
+      exitCode: 5,
+      result: { ok: false, cause: 'producer_contract_defect', nextAction: null },
+    });
 
     const externalCases = [
       ['browser_cdp_unavailable', 'external:chrome_not_running'],
@@ -363,127 +344,37 @@ describe('execute-Issue manager boundary', () => {
     });
   });
 
-  it('requires independent-smoke context and preserves read-only observer for trusted-target staleness', () => {
+  it('requires smoke context and consumes the publish record directly without an expected-head witness', () => {
     expect(classifyExecuteIssueManagerRecord(smoke('PASS'), { ...context, phase: 'implementation' })).toMatchObject({
       exitCode: 5, result: { cause: 'producer_contract_defect' },
     });
-
 
     const output: string[] = [];
     const errors: string[] = [];
     const code = runExecuteIssueManagerBoundaryCli([
       'classify', '--record', '/fixture/smoke.json', '--repo', context.repository,
       '--issue-number', String(context.issueNumber), '--source-revision', context.sourceRevision,
-      '--phase', 'independent-smoke', '--production-argv-json', JSON.stringify(context.productionArgv),
-      '--pr-number', String(context.prNumber), '--head-sha', context.headSha,
+      '--phase', 'smoke', '--production-argv-json', JSON.stringify(context.productionArgv),
+      '--pr-number', String(context.prNumber),
     ], {
-      readFile: () => JSON.stringify(smoke('BLOCKED', { causeFamily: 'harness_admission_refused', nonPassCause: 'trusted_target_stale' })),
+      readFile: () => JSON.stringify(smoke('PASS', { headSha: 'b'.repeat(40) })),
       stdout: { write: (value) => output.push(value) },
       stderr: { write: (value) => errors.push(value) },
       currentArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'],
     });
-    expect(code).toBe(3);
-    expect(errors).toEqual([]);
-    const projected = JSON.parse(output[0]!) as { nextAction: { binding: { stage: string }; argv: string[] } };
-    expect(projected.nextAction.binding.stage).toBe('execute:independent-smoke');
-    expect(projected.nextAction.argv.join(' ')).toContain(context.headSha);
-    expect(projected.nextAction.argv).toContain(String(context.prNumber));
-    expect(projected.nextAction.argv).toContain(String(context.issueNumber));
-  });
-
-  it('observes recoverable worker-smoke state with the full exact-target binding', () => {
-    const output: string[] = [];
-    const calls: string[][] = [];
-    const okResult = (stdout: string) => ({
-      outcome: 'exit' as const,
-      ok: true,
-      exitCode: 0,
-      signal: null,
-      stdout,
-      stderr: '',
-      timedOut: false,
-      cancelled: false,
-    });
-    const code = runExecuteIssueManagerBoundaryCli([
-      'observe-worker-smoke-recoverable',
-      '--repo', context.repository,
-      '--issue-number', String(context.issueNumber),
-      '--pr-number', String(context.prNumber),
-      '--head-sha', context.headSha!,
-      '--source-revision', context.sourceRevision,
-      '--phase', 'independent-smoke',
-      '--cause', 'trusted_target_stale',
-    ], {
-      stdout: { write: (value) => output.push(value) },
-      stderr: { write: () => undefined },
-      runGitHubRead: (args) => {
-        calls.push([...args]);
-        if (args[0] === 'pr') {
-          return okResult(JSON.stringify({
-            number: context.prNumber,
-            headRefOid: context.headSha,
-            body: 'Closes #' + context.issueNumber,
-          }));
-        }
-        return okResult(JSON.stringify({
-          number: context.issueNumber,
-          state: 'OPEN',
-          body: '<!-- source-revision: ' + context.sourceRevision + ' -->',
-          labels: [{ name: 'spec-review:accepted' }],
-        }));
-      },
-    });
     expect(code).toBe(0);
-    expect(calls).toHaveLength(2);
+    expect(errors).toEqual([]);
     expect(JSON.parse(output[0]!)).toMatchObject({
       ok: true,
-      phase: 'independent-smoke',
-      cause: 'trusted_target_stale',
-      issueNumber: context.issueNumber,
-      prNumber: context.prNumber,
-      headSha: context.headSha,
-      issue: { sourceRevisionPresent: true },
-      pr: { headRefOid: context.headSha, closesIssue: true },
-    });
-
-    output.length = 0;
-    const driftCode = runExecuteIssueManagerBoundaryCli([
-      'observe-worker-smoke-recoverable',
-      '--repo', context.repository,
-      '--issue-number', String(context.issueNumber),
-      '--pr-number', String(context.prNumber),
-      '--head-sha', context.headSha!,
-      '--source-revision', context.sourceRevision,
-      '--phase', 'independent-smoke',
-      '--cause', 'trusted_target_stale',
-    ], {
-      stdout: { write: (value) => output.push(value) },
-      stderr: { write: () => undefined },
-      runGitHubRead: () => okResult(JSON.stringify({
-        number: context.prNumber,
-        headRefOid: 'b'.repeat(40),
-        body: 'Closes #' + context.issueNumber,
-      })),
-    });
-    expect(driftCode).toBe(1);
-    expect(JSON.parse(output[0]!)).toMatchObject({
-      ok: false,
-      reason: 'worker_smoke_observation_target_drift',
-      expectedHeadSha: context.headSha,
-      observedHeadSha: 'b'.repeat(40),
+      cause: 'execute_worker_smoke_pass',
+      verdict: 'PASS',
+      nextAction: null,
     });
   });
 
   it('accepts only exact read-only argv and rejects send-capable wrappers', () => {
     expect(isExecuteIssueReadOnlyArgv(['node', '--experimental-strip-types', 'scripts/browser-gpt-page-probe.ts', 'inspect', '--cdp', context.cdp!])).toBe(true);
     expect(isExecuteIssueReadOnlyArgv(['scripts/gh', 'pr', 'view', '2083', '--json', 'state'])).toBe(true);
-    expect(isExecuteIssueReadOnlyArgv([
-      'node', '--experimental-strip-types', 'scripts/execute-issue-manager-boundary.ts',
-      'observe-worker-smoke-recoverable', '--repo', context.repository,
-      '--issue-number', String(context.issueNumber), '--pr-number', String(context.prNumber),
-      '--head-sha', context.headSha!, '--source-revision', context.sourceRevision,
-      '--phase', 'independent-smoke', '--cause', 'tier_order_input_stale',
-    ])).toBe(true);
     expect(isExecuteIssueReadOnlyArgv(['node', 'scripts/wrapper.ts', 'scripts/gh', 'pr', 'view', '2083'])).toBe(false);
     expect(isExecuteIssueReadOnlyArgv(['node', '--experimental-strip-types', 'scripts/browser-gpt-page-probe.ts', 'inspect', '--open-if-missing'])).toBe(false);
     expect(isExecuteIssueReadOnlyArgv(['node', 'scripts/chatgpt-browser-turn.ts', '--new-chat'])).toBe(false);

@@ -195,10 +195,10 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     expect(source).toContain('open: target.prOpen');
     expect(source).toContain('expectedTarget: target.expectedTarget');
     expect(source).toContain('evaluateReadiness({');
-    const settledReport = source.indexOf("if (report.result === 'PASS' && !options.dryRun && resolvedTarget)");
-    const postSmokeCall = source.indexOf('evaluatePostSmokeReadiness(options, resolvedTarget, adapter)', settledReport);
-    expect(settledReport).toBeGreaterThanOrEqual(0);
-    expect(postSmokeCall).toBeGreaterThan(settledReport);
+    expect(source).toContain("case 'publish': return runPublishSmoke(options);");
+    expect(source).toContain('export async function runPublishSmoke(');
+    expect(source).not.toContain('runSmokeAttempt');
+    expect(source).not.toContain('parseLatestSmokeReport');
 
     expect(existsSync(path.resolve('scripts/direct-pack-review-status.ts'))).toBe(true);
     const workflow = readFileSync(path.resolve('.github/workflows/direct-pack-review-status.yml'), 'utf8');
@@ -532,7 +532,9 @@ describe('Issue #1867 post-smoke readiness wiring regression', () => {
 
   function target(): ResolvedSmokeTarget {
     return {
+      projectId: 'orchestrator-pack',
       repositorySlug: repository,
+      defaultBranch: 'main',
       issueNumber,
       prNumber,
       headSha: currentHead,

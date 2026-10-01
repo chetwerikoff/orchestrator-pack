@@ -21,7 +21,7 @@ export const CREATE_ISSUE_NEXT_ACTION_KINDS = [
 
 export type CreateIssueNextActionKind = typeof CREATE_ISSUE_NEXT_ACTION_KINDS[number];
 
-export type ExecuteIssueManagerPhase = 'implementation' | 'review' | 'fixer' | 'independent-smoke';
+export type ExecuteIssueManagerPhase = 'implementation' | 'review' | 'fixer' | 'smoke';
 export type ExecuteIssueManagerStage = `execute:${ExecuteIssueManagerPhase}`;
 
 export const CREATE_ISSUE_RECONCILIATION_KINDS = [
@@ -404,7 +404,7 @@ export function isCreateIssueSemanticStage(value: unknown): value is CreateIssue
     || value === 'execute:implementation'
     || value === 'execute:review'
     || value === 'execute:fixer'
-    || value === 'execute:independent-smoke';
+    || value === 'execute:smoke';
 }
 
 export function validateCreateIssueActionBinding(value: unknown): string[] {

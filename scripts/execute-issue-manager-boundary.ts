@@ -4,7 +4,6 @@ import './toolchain/native-entrypoint-preflight.ts';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runProcessSync, type ProcessResult } from './kernel/subprocess.ts';
 import { evaluateCreateIssueManagerBoundary } from './lib/create-issue-next-action.ts';
 import {
   EXECUTE_ISSUE_PHASES,
@@ -19,31 +18,16 @@ interface CliDependencies {
   stderr?: Writer;
   readFile?: (path: string) => string;
   currentArgv?: readonly string[];
-  runGitHubRead?: (args: readonly string[]) => ProcessResult;
 }
 interface ParsedCli { recordPath: string; context: ExecuteIssueManagerBoundaryContext; }
-interface ParsedWorkerSmokeObservationCli {
-  repository: string;
-  issueNumber: number;
-  prNumber: number;
-  headSha: string;
-  sourceRevision: string;
-  phase: 'independent-smoke';
-  cause: 'trusted_target_stale';
-}
-
 function usage(): string {
   return [
     'Execute-Issue manager result boundary', '', 'Usage:',
     '  node --experimental-strip-types scripts/execute-issue-manager-boundary.ts classify',
     '    --record <path> --repo <owner/repo> --issue-number <n> --source-revision <rNN>',
-    '    --phase <implementation|review|fixer|independent-smoke> --production-argv-json <json> [--cdp <url>]',
-    '    [--target-id <id> | --conversation-url <url>] [--profile <key> --invocation-id <id>] [--pr-number <n> --head-sha <40-hex>]',
-    '  node --experimental-strip-types scripts/execute-issue-manager-boundary.ts observe-worker-smoke-recoverable',
-    '    --repo <owner/repo> --issue-number <n> --pr-number <n> --head-sha <40-hex>',
-    '    --source-revision <rNN> --phase independent-smoke --cause <recoverable-cause>',
+    '    --phase <implementation|review|fixer|smoke> --production-argv-json <json> [--cdp <url>]',
+    '    [--target-id <id> | --conversation-url <url>] [--profile <key> --invocation-id <id>] [--pr-number <n>] [--head-sha <40-hex>]',
     'This classifier emits only the shared four-outcome manager result contract.',
-    'The recoverable observer performs only exact-target GitHub reads.',
     'Every nextAction.argv introduced here is read-only observation/reconciliation.',
   ].join('\n');
 }
@@ -70,48 +54,6 @@ function parseProductionArgv(value: string | undefined): readonly string[] {
   }
   return parsed;
 }
-function parseWorkerSmokeObservationCli(argv: readonly string[]): ParsedWorkerSmokeObservationCli {
-  if (argv[0] !== 'observe-worker-smoke-recoverable') {
-    throw new Error('expected observe-worker-smoke-recoverable subcommand\n' + usage());
-  }
-  const values = new Map<string, string>();
-  for (let index = 1; index < argv.length; index += 2) {
-    const key = argv[index];
-    const value = argv[index + 1];
-    if (!key?.startsWith('--') || value === undefined || value.startsWith('--')) {
-      throw new Error('invalid observer option shape\n' + usage());
-    }
-    if (values.has(key)) throw new Error('duplicate option ' + key);
-    values.set(key, value);
-  }
-  const allowed = new Set([
-    '--repo', '--issue-number', '--pr-number', '--head-sha',
-    '--source-revision', '--phase', '--cause',
-  ]);
-  for (const key of values.keys()) if (!allowed.has(key)) throw new Error('unknown option ' + key);
-  const repository = values.get('--repo');
-  const sourceRevision = values.get('--source-revision');
-  const headSha = values.get('--head-sha')?.toLowerCase();
-  const phase = values.get('--phase');
-  const cause = values.get('--cause');
-  if (!repository || !/^[^/\s]+\/[^/\s]+$/u.test(repository)) throw new Error('--repo must be owner/name');
-  if (!sourceRevision || !/^r[0-9]+$/iu.test(sourceRevision)) throw new Error('--source-revision must be rNN');
-  if (!headSha || !/^[0-9a-f]{40}$/u.test(headSha)) throw new Error('--head-sha must be a 40-character hexadecimal SHA');
-  if (phase !== 'independent-smoke') throw new Error('--phase must be independent-smoke for worker-smoke recovery observation');
-  if (cause !== 'trusted_target_stale') {
-    throw new Error('--cause is outside the closed recoverable worker-smoke vocabulary');
-  }
-  return {
-    repository,
-    issueNumber: positiveInteger(values.get('--issue-number'), '--issue-number'),
-    prNumber: positiveInteger(values.get('--pr-number'), '--pr-number'),
-    headSha,
-    sourceRevision,
-    phase,
-    cause,
-  };
-}
-
 function parseCli(argv: readonly string[]): ParsedCli {
   if (argv[0] !== 'classify') throw new Error('expected classify subcommand\n' + usage());
   const values = new Map<string, string>();
@@ -143,7 +85,7 @@ function parseCli(argv: readonly string[]): ParsedCli {
   const phase = parsePhase(values.get('--phase'));
   const headSha = values.get('--head-sha')?.toLowerCase();
   if (headSha !== undefined && !/^[0-9a-f]{40}$/u.test(headSha)) throw new Error('--head-sha must be a 40-character hexadecimal SHA');
-  if (phase === 'independent-smoke' && (!prRaw || !headSha)) throw new Error('--phase independent-smoke requires --pr-number and --head-sha');
+  if (phase === 'smoke' && !prRaw) throw new Error('--phase smoke requires --pr-number');
   return {
     recordPath,
     context: {
@@ -168,101 +110,12 @@ function defectFromCliError(error: unknown, currentArgv: readonly string[]) {
     produce: () => { throw error instanceof Error ? error : new Error(String(error)); },
   });
 }
-function parseGitHubReadJson(result: ProcessResult, label: string): Record<string, unknown> {
-  if (!result.ok) {
-    throw new Error(label + ' failed: ' + (result.stderr || result.error || String(result.exitCode ?? 'unknown')));
-  }
-  const parsed: unknown = JSON.parse(result.stdout);
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(label + ' returned a non-object JSON payload');
-  }
-  return parsed as Record<string, unknown>;
-}
-
-function runWorkerSmokeRecoverableObservation(
-  parsed: ParsedWorkerSmokeObservationCli,
-  dependencies: CliDependencies,
-): number {
-  const stdout = dependencies.stdout ?? process.stdout;
-  const runGitHubRead = dependencies.runGitHubRead ?? ((args: readonly string[]) => runProcessSync({
-    command: 'scripts/gh',
-    args,
-    cwd: process.cwd(),
-    inheritParentEnv: true,
-    timeoutMs: 30_000,
-  }));
-  const prFields = 'number,headRefOid,body';
-  const pr = parseGitHubReadJson(runGitHubRead([
-    'pr', 'view', String(parsed.prNumber), '--repo', parsed.repository, '--json', prFields,
-  ]), 'worker-smoke PR observation');
-  const observedPrNumber = Number(pr.number);
-  const observedHead = typeof pr.headRefOid === 'string' ? pr.headRefOid.trim().toLowerCase() : '';
-  if (observedPrNumber !== parsed.prNumber || observedHead !== parsed.headSha) {
-    stdout.write(JSON.stringify({
-      schema: 'execute-worker-smoke-recoverable-observation/v1',
-      ok: false,
-      reason: 'worker_smoke_observation_target_drift',
-      phase: parsed.phase,
-      cause: parsed.cause,
-      issueNumber: parsed.issueNumber,
-      prNumber: parsed.prNumber,
-      expectedHeadSha: parsed.headSha,
-      observedHeadSha: observedHead || null,
-    }) + '\n');
-    return 1;
-  }
-
-  const issue = parseGitHubReadJson(runGitHubRead([
-    'issue', 'view', String(parsed.issueNumber), '--repo', parsed.repository,
-    '--json', 'number,state,body,labels',
-  ]), 'worker-smoke Issue observation');
-  if (Number(issue.number) !== parsed.issueNumber) {
-    throw new Error('worker-smoke Issue observation returned the wrong Issue');
-  }
-
-  const issueBody = typeof issue.body === 'string' ? issue.body : '';
-  const prBody = typeof pr.body === 'string' ? pr.body : '';
-  const revisionMarker = '<!-- source-revision: ' + parsed.sourceRevision + ' -->';
-  const closesIssue = new RegExp(
-    '^\\s*(closes|fixes|resolves)\\s+#' + parsed.issueNumber + '\\b',
-    'im',
-  ).test(prBody);
-  stdout.write(JSON.stringify({
-    schema: 'execute-worker-smoke-recoverable-observation/v1',
-    ok: true,
-    repository: parsed.repository,
-    phase: parsed.phase,
-    cause: parsed.cause,
-    issueNumber: parsed.issueNumber,
-    prNumber: parsed.prNumber,
-    headSha: parsed.headSha,
-    sourceRevision: parsed.sourceRevision,
-    issue: {
-      number: parsed.issueNumber,
-      state: issue.state,
-      body: issueBody,
-      labels: issue.labels,
-      sourceRevisionPresent: issueBody.includes(revisionMarker),
-    },
-    pr: {
-      number: parsed.prNumber,
-      headRefOid: observedHead,
-      body: prBody,
-      closesIssue,
-    },
-  }) + '\n');
-  return 0;
-}
-
 export function runExecuteIssueManagerBoundaryCli(argv: readonly string[], dependencies: CliDependencies = {}): number {
   const stdout = dependencies.stdout ?? process.stdout;
   const stderr = dependencies.stderr ?? process.stderr;
   const currentArgv = dependencies.currentArgv ?? process.argv;
   try {
     if (argv.includes('--help') || argv.includes('-h')) { stdout.write(usage() + '\n'); return 0; }
-    if (argv[0] === 'observe-worker-smoke-recoverable') {
-      return runWorkerSmokeRecoverableObservation(parseWorkerSmokeObservationCli(argv), dependencies);
-    }
     const parsed = parseCli(argv);
     const readFile = dependencies.readFile ?? ((path: string) => readFileSync(path, 'utf8'));
     const input = JSON.parse(readFile(parsed.recordPath)) as unknown;
