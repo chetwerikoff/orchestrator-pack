@@ -118,6 +118,7 @@
     "scripts/manager-review-terminal-bundle.ts",
     "scripts/publish-issue-body-sync.ts",
     "scripts/rca-spec-discipline-surfaces.json",
+    "scripts/replay-fixture-import.test.ts",
     "scripts/skill-pointer-targets.json",
     "scripts/stage-completeness-guard.test.ts",
     "scripts/stage-completeness-guard.ts",
@@ -148,5 +149,5 @@
     "prompts/",
     "scripts/"
   ],
-  "source_revision": "4621793950cfbc8d798bdd94914aee86cf5f7fa3"
+  "source_revision": "1c2a2d938609fe933d8cd28c1640374dd9ab5c35"
 }
