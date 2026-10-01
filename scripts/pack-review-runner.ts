@@ -776,7 +776,7 @@ export function requiredStatusChecksEndpoint(repoSlug: string, baseRef: string):
   return `repos/${repoSlug}/branches/${encodeURIComponent(branch)}/protection/required_status_checks`;
 }
 
-async function manualPackReviewRequiredCiGreen(input: {
+export async function manualPackReviewRequiredCiGreen(input: {
   startInput: StartInput;
   target: { prNumber: number; headSha: string; repoSlug: string; sourceRepoRoot: string; prBaseRef: string };
 }): Promise<boolean> {
