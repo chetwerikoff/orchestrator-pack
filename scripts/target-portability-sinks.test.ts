@@ -144,14 +144,32 @@ describe('Issue #2188 target portability sinks', () => {
       .toThrow(/create_issue_journal_workdir_override_untrusted/u);
   });
 
-  it('rejects cross-target repo and host ingress before gh transport, including recursion-shaped invocations', () => {
+  it('authorizes selected target reads and supported mutations before gh transport', () => {
     const alpha = { repository: 'example/alpha' };
-    expect(authorizeTargetGhInvocation({
-      context: alpha,
-      argv: ['pr', 'view', '12'],
-      env: { OPK_PROJECT_ID: 'alpha', GH_WRAPPER_ACTIVE: '1' },
-    })).toEqual({ repository: 'example/alpha', host: 'github.com' });
+    for (const input of [
+      {
+        argv: ['pr', 'view', '12'],
+        env: { OPK_PROJECT_ID: 'alpha', GH_WRAPPER_ACTIVE: '1' },
+      },
+      {
+        argv: ['issue', 'comment', '12', '--repo', 'example/alpha', '--body', 'ok'],
+        env: { OPK_PROJECT_ID: 'alpha' },
+      },
+      {
+        argv: ['api', 'repos/example/alpha/issues/12', '-X', 'PATCH', '-f', 'title=ok'],
+        env: { OPK_PROJECT_ID: 'alpha' },
+      },
+    ]) {
+      expect(authorizeTargetGhInvocation({
+        context: alpha,
+        argv: input.argv,
+        env: input.env,
+      })).toEqual({ repository: 'example/alpha', host: 'github.com' });
+    }
+  });
 
+  it('rejects every audited cross-target repo/host ingress before gh transport', () => {
+    const alpha = { repository: 'example/alpha' };
     const rejectCode = (run: () => unknown, code: string) => {
       try {
         run();
@@ -161,20 +179,63 @@ describe('Issue #2188 target portability sinks', () => {
         expect((error as TargetGhAuthorizationError).code).toBe(code);
       }
     };
+
+    for (const argv of [
+      ['pr', 'view', '12', '--repo', 'example/beta'],
+      ['pr', 'view', '12', '-R', 'example/beta'],
+      ['api', 'repos/example/beta/pulls/12'],
+      ['pr', 'view', 'https://github.com/example/beta/pull/12'],
+      ['issue', 'view', 'https://github.com/example/beta/issues/12'],
+      ['api', 'repos/example/beta/issues/12', '-X', 'PATCH', '-f', 'title=nope'],
+    ]) {
+      rejectCode(() => authorizeTargetGhInvocation({
+        context: alpha,
+        argv,
+        env: { OPK_PROJECT_ID: 'alpha', GH_WRAPPER_ACTIVE: '1' },
+      }), 'target-gh-repository-mismatch');
+    }
+
     rejectCode(() => authorizeTargetGhInvocation({
       context: alpha,
-      argv: ['api', 'repos/example/beta/pulls/12'],
-      env: { OPK_PROJECT_ID: 'alpha', GH_WRAPPER_ACTIVE: '1' },
+      argv: ['pr', 'view', '12'],
+      env: { OPK_PROJECT_ID: 'alpha', GH_REPO: 'example/beta' },
     }), 'target-gh-repository-mismatch');
+
+    rejectCode(() => authorizeTargetGhInvocation({
+      context: alpha,
+      argv: ['pr', 'view', '12'],
+      env: { OPK_PROJECT_ID: 'alpha', GH_HOST: 'ghe.example.test' },
+    }), 'target-gh-host-mismatch');
+
+    rejectCode(() => authorizeTargetGhInvocation({
+      context: alpha,
+      argv: ['pr', 'view', '12', '--hostname', 'ghe.example.test'],
+      env: { OPK_PROJECT_ID: 'alpha' },
+    }), 'target-gh-host-mismatch');
+
     rejectCode(() => authorizeTargetGhInvocation({
       context: alpha,
       argv: ['pr', 'view', 'https://ghe.example.test/example/alpha/pull/12'],
       env: { OPK_PROJECT_ID: 'alpha' },
     }), 'target-gh-host-mismatch');
+
     rejectCode(() => authorizeTargetGhInvocation({
       context: alpha,
       argv: ['api', 'graphql', '-f', 'query={viewer{login}}'],
       env: { OPK_PROJECT_ID: 'alpha' },
     }), 'target-gh-graphql-unsupported');
+  });
+
+  it('fails the production publication target binding with typed missing-selection before transport', () => {
+    const fixture = twoTargetFixture();
+    const env = { ...fixture.env };
+    delete env.OPK_PROJECT_ID;
+    const publish = { mode: 'edit' as const, draftPath: 'draft.md', repo: '', json: false };
+    try {
+      bindPublishIssueTarget(publish, env);
+      throw new Error('expected missing-selection');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'missing-selection' });
+    }
   });
 });
