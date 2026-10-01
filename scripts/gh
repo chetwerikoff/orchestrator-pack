@@ -53,7 +53,11 @@ case "${1:-} ${2:-} ${*:--json}" in
     done
     if [[ -n "$pr_num" && "$json_fields" == *headRefName* && "$json_fields" == *isDraft* ]]; then
       if [[ -z "$repo" ]]; then
-        repo="$(git -C "${SCRIPT_DIR}/.." remote get-url origin | sed -E 's#.*github.com[:/]([^/]+/[^/.]+).*#\1#')"
+        if [[ -n "${OPK_TARGET_REPOSITORY:-}" ]]; then
+          repo="$OPK_TARGET_REPOSITORY"
+        else
+          repo="$(git -C "${SCRIPT_DIR}/.." remote get-url origin | sed -E 's#.*github.com[:/]([^/]+/[^/.]+).*#\1#')"
+        fi
       fi
       real_gh="$(node "${SCRIPT_DIR}/lib/gh-resolve-real-binary.mjs")"
       exec /usr/bin/env -u GH_WRAPPER_ACTIVE "$real_gh" api "repos/${repo}/pulls/${pr_num}" \
