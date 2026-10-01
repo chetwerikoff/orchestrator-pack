@@ -558,7 +558,7 @@ Browser-GPT `TerminalEnvelope` remains a separate transport and is unchanged.
 Do not add a parking store, watcher, poller, reverse-dependency service, or second
 persistent coordination mechanism.
 
-## Core operating laws
+## Core operating laws (concise reference)
 
 1. Objective state is authoritative; prose and terminal appearance are context only.
 2. Keep one Dispatch across recoverable substeps; create a fresh one only for a real
@@ -582,7 +582,7 @@ persistent coordination mechanism.
 12. Observer/reconciler/nudge/recovery code never owns termination of a live attempt.
 13. Alarms use designated authority, current scope, and self-echo filtering.
 
-## Production verification
+## Production verification (concise reference)
 
 ### Browser-GPT modal capability
 
@@ -599,7 +599,7 @@ the Browser-GPT send/no-resend contract.
 Run current-head repository verification, required CI, and applicable review
 obligations for the work being completed.
 
-## Orca grounding
+## Orca grounding (concise reference)
 
 `worker_done` means completion of the active Dispatch/Task, not one conversational
 turn. Use existing pack-side recovery for named Orca conditions:
@@ -612,7 +612,7 @@ turn. Use existing pack-side recovery for named Orca conditions:
 For the last two cases, never act on a stale, reused, or guessed handle. Do not patch
 Orca core to encode PACK role stages.
 
-## Operator adoption
+## Operator adoption (concise reference)
 
 Repository merge does not prove machine activation. When a change affects
 operator-facing runtime/configuration/process behavior, adopt it through the
@@ -623,7 +623,7 @@ The implementation PR carries the reusable operator handoff rule in
 `### Operator adoption handoff`; one-time rollout history does not belong in this
 runbook.
 
-## Worker lifecycle
+## Worker lifecycle (concise reference)
 
 Workers, orchestrators, and managers read this section before the first side effect.
 Direct user authority may override a repository stop rule, but a tier mismatch
