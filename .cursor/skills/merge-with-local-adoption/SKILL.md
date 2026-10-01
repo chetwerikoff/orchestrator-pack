@@ -62,7 +62,7 @@ primary-checkout adoption mutation, or task-owned recovery mutation:
    terminal or proven-inactive predecessor, recompute sequencing, readiness, mergeability,
    head, and base rather than preserving a lock/store decision.
 5. Consume the existing production `evaluatePostSmokeReadiness()` result from
-   `scripts/worker-smoke-run.ts` for the exact repo/Issue/current-assignment/PR/head. Proceed
+   `scripts/worker-smoke-run.ts` for the exact repo/Issue/current-assignment/PR/head, using the newest PASS report comment on the same PR at any report head. Proceed
    only when `readiness.state === READY_TO_MERGE`. Do not reconstruct readiness from commit
    status, review-cap state, `reviewStageComplete`, strict-descendant settlement, comments,
    or prose.
@@ -80,7 +80,7 @@ repair section of
 [`docs/pack-review-waiver-merge-runbook.md`](../../../docs/pack-review-waiver-merge-runbook.md).
 That repair is not the operator waiver path. Re-read all delegated facts before its status
 write and again before merge. SUCCESS needs no repair; NOT_READY or unknown
-authority, non-review CI/smoke failure, unresolved finding, dependency wait, draft/conflict,
+authority, non-review current-head CI failure or absence of any same-PR smoke PASS, unresolved finding, dependency wait, draft/conflict,
 head/base drift, or assignment/marker drift remains blocked.
 
 After merge, use the ordinary adoption and exact-target cleanup path, but delegated mode never

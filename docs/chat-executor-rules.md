@@ -217,36 +217,81 @@ A blocking finding that depends on an impossible or unproven witness must be wit
 
 ## 8. CI, smoke, and review authority stay current-head bound
 
-Required CI conclusions apply only to the exact PR head they evaluated. Final smoke authority is also current-head bound: raw earlier-head reports remain historical and never directly satisfy the current-head gate. The pack-owned selective-retry path may, however, reuse an exact unchanged prior `PASS` tuple from trusted canonical current/ancestor history and project it explicitly into a fresh current-head smoke report. Review authority is current-head bound too, but reviewer invocation and review authority are not the same event: the pack-owned runner may establish current-head authority through an exact authority-selected conflict-free carry-over from an authorized clean source head without invoking the reviewer model again.
+Required CI conclusions apply only to the exact PR head they evaluated.
+For smoke/CI readiness, the newest existing `pack-worker-smoke-report/v1`
+PASS comment on the same PR is sufficient regardless of its report head or
+GitHub author. An earlier-head PASS remains sufficient on later commits; no
+PASS leaves smoke readiness unsatisfied. Independence is provided by the
+post-review supervised smoke-worker handoff, not a durable actor-role witness.
+The existing v1 report schema, including head and scenario observations,
+remains unchanged. Review authority remains current-head bound, but reviewer
+invocation and review authority are not the same event: the pack-owned runner
+may establish current-head authority through exact authority-selected
+conflict-free carry-over from an authorized clean source head without another
+model invocation.
 
-For a pack-review start, the PR number is the canonical target. The live PR supplies the current head and its closing reference supplies the Issue. Session-binding cache state is advisory correlation only; missing, corrupt, stale, or disagreeing cache data cannot veto a valid PR-led start or replace the linked Issue. If the exact bound Issue snapshot is missing, the runner freezes it only after acquiring its existing start claim.
+For a pack-review start, the PR number is the canonical target. The live PR
+supplies the current head and its closing reference supplies the Issue.
+Session-binding cache state is advisory correlation only; missing, corrupt,
+stale, or disagreeing cache data cannot veto a valid PR-led start or replace
+the linked Issue. If the exact bound Issue snapshot is missing, the runner
+freezes it only after acquiring its existing start claim.
 
 After every new commit or history rewrite:
 
-- earlier-head CI is stale;
-- raw earlier-head smoke reports remain historical; selective retry carries only exact unchanged prior `PASS` tuples into a fresh current-head attempt, while prior non-PASS/unexecuted, new or changed, explicitly current-head-affected, or individually unusable tuples execute again;
-- an in-progress required review round remains bound to the head it actually reviewed;
-- for a new pack-review cycle, required rounds are logical PR/task-cycle units with caps T1=1, T2=1, T3=2; T3 round 2 may review the same head as round 1;
-- once the required stage has durably reached `reviewStageComplete=true`, later heads do not reopen or consume another required round. Instead the pack-owned status projection writes `orchestrator-pack/pack-review=success` on the current head with `Required pack-review stage completed; no additional review round required.`;
-- direct connected-GitHub reviews remain exact-commit evidence and do not themselves create or rewrite the runner's durable stage-completion latch.
+- earlier-head CI is stale and must be revalidated for the current PR head;
+- a same-PR smoke PASS at any report head remains sufficient; no head
+  equality, ancestry, patch-id, carry-only, selective retry, author/role
+  filter, census stabilization, edited-comment refusal, or FAIL precedence
+  is imposed on that PASS;
+- an in-progress required review round remains bound to the head it reviewed;
+- for a new pack-review cycle, required rounds are logical PR/task-cycle units
+  with caps T1=1, T2=1, T3=2; T3 round 2 may review the same head as round 1;
+- once the required stage has durably reached `reviewStageComplete=true`,
+  later heads do not reopen or consume another required round. Instead the
+  pack-owned status projection writes
+  `orchestrator-pack/pack-review=success` on the current head with
+  `Required pack-review stage completed; no additional review round required.`;
+- direct connected-GitHub reviews remain exact-commit evidence and do not
+  themselves create or rewrite the runner's durable stage-completion latch.
 
-Every required smoke plan resolves the existing trusted Issue/PR/exact-head target before selective selection, including Issues without a `complexity-tier` fence. The canonical PR-comment history census is then read for that trusted lineage. `no_prior_canonical_observation` is valid only when that census completes successfully and yields zero canonical candidates; a missing or untrusted target remains a target/admission failure rather than a history fallback.
+The supervised independent smoke worker checks out the PR head, runs every
+Issue-declared `smoke-test-plan` scenario, and publishes the existing v1
+report. A first FAIL/BLOCKED requires the existing worker/fixer to correct
+the defect and explicitly invoke smoke again, not a harness retry or
+scheduler reconciler. Existing secret scrubbing redacts forwarded/report
+material and does not refuse the smoke run because content was scrubbed.
+The selected project card supplies the smoke repository. Guidance that
+smoke scenarios should not touch live machine configuration is authoring
+prose only, not a runtime parser, validator, or refusal mechanism.
 
-Selective smoke retry uses the existing live PR body as its only affected-scenario handoff. An optional current-head `worker-smoke-affected` block selects exact `(action, expected)` tuples whose older PASS must be rerun; omission, an empty selection, a stale block, malformed individual entries, or general uncertainty does not select a full rerun. A fresh same-head observation supersedes the older-head affected invalidation under the existing same-head last-observation ordering. Descendant observations supersede ancestor observations per tuple, and a descendant non-PASS never resurrects an older PASS.
+Issue #2161 branch-update sequencing follows the canonical rule in the
+[orchestration runbook](orchestration-runbook.md#issue-2161-main-update-sequencing).
 
-Ordinary full-plan smoke is reserved for the narrow whole-attempt cases where selective reconstruction is mechanically unavailable: a successfully read canonical census contains no prior canonical observation for the Issue/PR lineage, the required canonical history cannot be read or parsed at all, the current head cannot be established as a descendant continuation of reusable history, or trusted task binding cannot establish that the prior observations belong to the exact lineage. Readable non-descendant history uses `history_non_descendant` and the ordinary full plan; PASS is never carried across that rewrite. An unusable or ancestry-ambiguous individual tuple reruns only that tuple. This mechanism adds no reviewer, proof/attestation step, test-result admission, materialized coverage ledger, required status/check, or separate workflow before smoke.
+A persisted clean terminal for the exact same head suppresses a redundant
+automatic/common reviewer-model invocation. A cycle already at cap also
+suppresses further automatic/common model calls. Neither case weakens
+current-head CI or the requirement that some same-PR smoke PASS exists; smoke
+is not a pack-review admission gate.
 
-Issue #2161 branch-update sequencing follows the canonical rule in the [orchestration runbook](orchestration-runbook.md#issue-2161-main-update-sequencing).
+Missing, pending, cancelled, failed, or earlier-head required checks are not
+green for the current head.
 
-A persisted clean terminal for the exact same head suppresses a redundant automatic/common reviewer-model invocation. A cycle already at cap also suppresses further automatic/common model calls. Neither case weakens current-head CI or smoke. Smoke admission remains required for a new head before an at-cap refusal, so cap exhaustion cannot hide absent or failed current-head smoke authority.
+For GitHub Actions diagnostics, the available GitHub transport can fetch
+decoded job logs directly by job ID. A practical path is
+`run -> jobs -> failed job ID -> decoded job log`; the returned log includes
+step stdout/stderr. This is one available way to inspect the exact CI failure
+without first creating a separate artifact solely to capture command output.
 
-Missing, pending, cancelled, failed, or earlier-head required checks are not green for the current head.
+Before ready-for-review or merge, there must be no known current material
+blocker/major finding left unresolved. A fixed finding may be closed. A
+rejected finding may be explicitly adjudicated. A finding made irrelevant
+by a later operator-approved contract change or by removal of the affected
+code/text does not remain permanent administrative debt.
 
-For GitHub Actions diagnostics, the available GitHub transport can fetch decoded job logs directly by job ID. A practical path is `run -> jobs -> failed job ID -> decoded job log`; the returned log includes step stdout/stderr. This is one available way to inspect the exact CI failure without first creating a separate artifact solely to capture command output.
-
-Before ready-for-review or merge, there must be no known current material blocker/major finding left unresolved. A fixed finding may be closed. A rejected finding may be explicitly adjudicated. A finding made irrelevant by a later operator-approved contract change or by removal of the affected code/text does not remain permanent administrative debt.
-
-Use GitHub review/thread state and explicit reviewer/operator decisions directly; do not maintain a separate finding-state ledger merely to restate them.
+Use GitHub review/thread state and explicit reviewer/operator decisions
+directly; do not maintain a separate finding-state ledger merely to restate
+them.
 
 ## 9. Merge
 
@@ -312,7 +357,7 @@ For a normal standalone implementation, completion means:
 [ ] PR diff/changed files match the task scope
 [ ] important published results were read back
 [ ] required CI is green for the current PR head
-[ ] required smoke is current-head bound when the task declares it
+[ ] a same-PR smoke PASS exists at any report head when the task declares smoke
 [ ] no known current material review finding remains unresolved
 [ ] current-head review authority is acceptable
 [ ] the user is told the PR/head/CI/review state and any concrete limitation
@@ -332,6 +377,6 @@ Merge is part of completion only when the user explicitly requested it and repos
 >
 > Treat real conflicts and ambiguity as exceptions when they actually occur.
 >
-> Use current-head CI, smoke, and review authority.
+> Require current-head CI and review authority, plus an existing same-PR smoke PASS.
 >
 > Report truthfully, or merge only when explicitly authorized and allowed.

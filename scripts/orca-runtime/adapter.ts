@@ -658,11 +658,12 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       limit: 200,
       screen: true,
     }, screenOptions);
-    if (screen.status !== 'ok') {
+    if (screen.status === 'ok') {
+      if (!isOpenCodeComposerEmpty(screen.value.lines)) {
+        return { status: 'send_failed', reason: 'opencode_composer_not_empty' };
+      }
+    } else if (screen.reason !== 'runtime_output_source_unobservable') {
       return { status: 'send_failed', reason: `opencode_composer_screen_unavailable:${screen.reason}` };
-    }
-    if (!isOpenCodeComposerEmpty(screen.value.lines)) {
-      return { status: 'send_failed', reason: 'opencode_composer_not_empty' };
     }
 
     const append = requestWithDeadline({

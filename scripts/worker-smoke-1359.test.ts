@@ -1086,131 +1086,11 @@ describe('Issue #1933 interrupt and detached wait fences', () => {
     }
   });
 
-  it('wait refuses same-target evidence from another run and leaves lifecycle files byte-identical', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-wait-exact-run-'));
-    const runA = 'run-a';
-    const runB = 'run-b';
-    const artifactA = join(root, '.orca-worker-smoke', 'runs', runA);
-    const artifactB = join(root, '.orca-worker-smoke', 'runs', runB);
-    const {
-      createSmokeNoExecutionLifecycle,
-      markSmokeLauncherTerminalized,
-      smokeAdmissionLockPath,
-      smokeLifecycleRegistryPath,
-    } = await import('./lib/worker-smoke-lifecycle.ts');
-    const {
-      smokeRunFinalEvidencePath,
-      writeWorkerSmokeRunFinalEvidence,
-    } = await import('./lib/worker-smoke-receipt.ts');
-    const report = {
-      result: 'PASS',
-      issueNumber: 1933,
-      prNumber: 1941,
-      headSha: HEAD,
-      scenarios: [],
-      trackedFilesUnmodified: true,
-      limitations: [],
-      environmentNotes: [],
-      producer: 'worker-smoke-run',
-      terminalCleanup: 'not_started_no_execution',
-      orcaExecutable: 'not_applicable',
-    } as never;
 
-    try {
-      createSmokeNoExecutionLifecycle({
-        runId: runA,
-        artifactDir: artifactA,
-        issueNumber: 1933,
-        prNumber: 1941,
-        headSha: HEAD,
-        nowMs: 1,
-      });
-      createSmokeNoExecutionLifecycle({
-        runId: runB,
-        artifactDir: artifactB,
-        issueNumber: 1933,
-        prNumber: 1941,
-        headSha: HEAD,
-        nowMs: 1,
-      });
-      writeWorkerSmokeRunFinalEvidence({
-        artifactDir: artifactB,
-        runId: runB,
-        mode: 'no_execution',
-        report,
-        nowMs: 2,
-      });
-      writeFileSync(
-        smokeRunFinalEvidencePath(artifactA),
-        readFileSync(smokeRunFinalEvidencePath(artifactB), 'utf8'),
-        'utf8',
-      );
-      markSmokeLauncherTerminalized({
-        artifactDir: artifactA,
-        runId: runA,
-        finalEvidencePath: smokeRunFinalEvidencePath(artifactA),
-        nowMs: 3,
-      });
-
-      const lifecycleBefore = readFileSync(smokeLifecycleRegistryPath(artifactA), 'utf8');
-      const evidenceBefore = readFileSync(smokeRunFinalEvidencePath(artifactA), 'utf8');
-      expect(existsSync(smokeAdmissionLockPath(root))).toBe(false);
-
-      const wait = run(resolve('scripts/worker-smoke-run'), [
-        'wait', '--run', runA, '--cwd', root, '--json',
-      ], { cwd: root });
-      expect(wait.ok).toBe(false);
-      expect(wait.stdout).toContain('terminal_evidence_invalid');
-      expect(readFileSync(smokeLifecycleRegistryPath(artifactA), 'utf8')).toBe(lifecycleBefore);
-      expect(readFileSync(smokeRunFinalEvidencePath(artifactA), 'utf8')).toBe(evidenceBefore);
-      expect(existsSync(smokeAdmissionLockPath(root))).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
 });
 
 describe('Issue #1933 detached bootstrap and no-execution regressions', () => {
-  it('times out after a detached owner exits before reservation without bootstrap-owned lifecycle state', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-detach-timeout-'));
-    const { vi } = await import('vitest');
-    const { main } = await import('./worker-smoke-run.ts');
-    const { smokeAdmissionLockPath } = await import('./lib/worker-smoke-lifecycle.ts');
-    let clock = 0;
-    const now = vi.spyOn(Date, 'now').mockImplementation(() => {
-      clock += 70_000;
-      return clock;
-    });
-    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
 
-    try {
-      const code = await main([
-        'run', '--detach',
-        '--issue', '1933',
-        '--pr', '1941',
-        '--head-sha', HEAD,
-        '--issue-body-file', join(root, 'missing-issue.md'),
-        '--smoke-complexity', 'complex',
-        '--repo-root', root,
-        '--cwd', root,
-        '--dry-run',
-        '--json',
-      ]);
-      expect(code).toBe(1);
-      expect(stderr.mock.calls.map(([chunk]) => String(chunk)).join(''))
-        .toContain('worker_smoke_detach_lifecycle_timeout\n');
-      expect(stdout.mock.calls.map(([chunk]) => String(chunk)).join(''))
-        .not.toMatch(/[0-9a-f]{8}-[0-9a-f-]{27,}/iu);
-      expect(existsSync(smokeAdmissionLockPath(root))).toBe(false);
-      expect(existsSync(join(root, '.orca-worker-smoke', 'runs'))).toBe(false);
-    } finally {
-      stderr.mockRestore();
-      stdout.mockRestore();
-      now.mockRestore();
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
 
   it('recovers a detached-owner crash after reservation before terminal binding', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-detached-reservation-crash-'));
@@ -1281,103 +1161,18 @@ describe('Issue #1933 detached bootstrap and no-execution regressions', () => {
     }
   });
 
-  it('terminalizes detached carry-only as exact-run no_execution evidence without an admission lock', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-detached-carry-only-'));
-    const runId = 'detached-carry-only';
-    const artifactDir = join(root, '.orca-worker-smoke', 'runs', runId);
-    const {
-      createSmokeNoExecutionLifecycle,
-      evaluateSmokeLifecycleCleanliness,
-      markSmokeLauncherTerminalized,
-      smokeAdmissionLockPath,
-    } = await import('./lib/worker-smoke-lifecycle.ts');
-    const {
-      smokeRunFinalEvidencePath,
-      writeWorkerSmokeReceipt,
-      writeWorkerSmokeRunFinalEvidence,
-    } = await import('./lib/worker-smoke-receipt.ts');
-    const report = {
-      result: 'PASS',
-      issueNumber: 1933,
-      prNumber: 1941,
-      headSha: HEAD,
-      scenarios: [{
-        action: 'carry prior PASS',
-        expected: 'no runtime execution',
-        observed: `carried PASS from head ${HEAD} comment 1; not freshly executed on ${HEAD}`,
-        outcome: 'pass',
-      }],
-      trackedFilesUnmodified: true,
-      limitations: [],
-      environmentNotes: ['smoke-execution=carry-only'],
-      producer: SMOKE_REPORT_PRODUCER,
-      terminalCleanup: 'not_started_no_execution',
-      orcaExecutable: 'test',
-    } as never;
 
-    const previousReceiptRoot = process.env.WORKER_SMOKE_RECEIPT_ROOT;
-    process.env.WORKER_SMOKE_RECEIPT_ROOT = root;
-    try {
-      createSmokeNoExecutionLifecycle({
-        runId,
-        artifactDir,
-        issueNumber: 1933,
-        prNumber: 1941,
-        headSha: HEAD,
-        nowMs: 1,
-      });
-      expect(readSmokeLifecycleRegistry(artifactDir)).toMatchObject({
-        runId,
-        mode: 'no_execution',
-        spawnState: 'no_execution_pending',
-        scenarioCount: 0,
-      });
-      expect(evaluateSmokeLifecycleCleanliness(root).clean).toBe(false);
-      expect(existsSync(smokeAdmissionLockPath(root))).toBe(false);
+});
 
-      writeWorkerSmokeReceipt(report, {
-        attemptId: runId,
-        runId,
-        executionMode: 'carry-only',
-        publishedAt: '2026-09-18T00:00:00.000Z',
-      });
-      const final = writeWorkerSmokeRunFinalEvidence({
-        artifactDir,
-        runId,
-        mode: 'no_execution',
-        report,
-        nowMs: 2,
-      });
-      markSmokeLauncherTerminalized({
-        artifactDir,
-        runId,
-        finalEvidencePath: smokeRunFinalEvidencePath(artifactDir),
-        nowMs: final.recordedAtMs,
-      });
-      expect(readSmokeLifecycleRegistry(artifactDir)).toMatchObject({
-        runId,
-        mode: 'no_execution',
-        spawnState: 'no_execution_terminal',
-        finalEvidencePath: smokeRunFinalEvidencePath(artifactDir),
-      });
-      expect(evaluateSmokeLifecycleCleanliness(root).clean).toBe(true);
-      expect(existsSync(smokeAdmissionLockPath(root))).toBe(false);
-
-      const wait = run(resolve('scripts/worker-smoke-run'), [
-        'wait', '--run', runId, '--cwd', root, '--json',
-      ], { cwd: root });
-      expect(wait.ok).toBe(true);
-      expect(JSON.parse(wait.stdout)).toMatchObject({
-        ok: true,
-        runId,
-        result: 'PASS',
-        report: { result: 'PASS', issueNumber: 1933, prNumber: 1941, headSha: HEAD },
-      });
-      expect(existsSync(smokeAdmissionLockPath(root))).toBe(false);
-    } finally {
-      if (previousReceiptRoot === undefined) delete process.env.WORKER_SMOKE_RECEIPT_ROOT;
-      else process.env.WORKER_SMOKE_RECEIPT_ROOT = previousReceiptRoot;
-      rmSync(root, { recursive: true, force: true });
-    }
+describe('Issue #2250 removed detached worker-smoke harness callers', () => {
+  it('has no detached lifecycle command or selective retry in the active CLI', () => {
+    const source = readFileSync('scripts/worker-smoke-run.ts', 'utf8');
+    const main = source.slice(source.indexOf('export async function main('));
+    expect(main).not.toContain("case 'wait':");
+    expect(main).not.toContain("case 'reconcile':");
+    const active = source.slice(source.indexOf('export async function runSmokeAttempt('), source.indexOf('export type DetachedSmokeAttemptObservation'));
+    expect(active).not.toContain('startDetachedSmokeAttempt(');
+    expect(active).not.toContain('writeWorkerSmokeReceipt(');
+    expect(active).not.toContain('preflightSmokeLifecycle(');
   });
 });

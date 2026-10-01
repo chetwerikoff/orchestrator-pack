@@ -2,7 +2,6 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { resolveSmokeRequirement } from './draft-discipline.mjs';
 
 export const PACK_REVIEW_AUTHORITY_SCHEMA_VERSION = 1;
 export const PACK_REVIEW_TERMINAL_CONTRACT_VERSION = 2;
@@ -27,22 +26,8 @@ export const PACK_REVIEW_AUTHORITY_PHASES = Object.freeze([
 export type PackReviewTier = keyof typeof PACK_REVIEW_CAPS;
 export type PackReviewAuthorityPhase = (typeof PACK_REVIEW_AUTHORITY_PHASES)[number];
 export type PackReviewAutomaticBudgetDisposition = 'consume' | 'non_consuming_explicit';
-export type SmokeOrderingActor = 'worker-owned' | 'independent';
 export type SmokeOrderingStatus = 'started' | 'passed' | 'failed';
 export type SmokeOrderingFailureKind = 'finding' | 'retryable' | 'aborted';
-
-export interface SmokeOrderingOwnerEvidence {
-  attemptId: string;
-  supervisorPid: number;
-  runId?: string;
-  supervisorAlive: boolean;
-  cleanupSafe?: boolean;
-  authoritativeResult?: 'PASS' | 'FAIL' | 'BLOCKED';
-  /** True only when the sealed FAIL report names a scenario failure. */
-  scenarioFinding?: boolean;
-  /** Transient admission fact. Not stored on the authority document. */
-  executionMode?: 'executed' | 'carry-only';
-}
 
 interface SmokeOrderingOwnerFields {
   attemptId?: string;
@@ -727,8 +712,7 @@ export function reconcilePackReviewTier(input: {
     && !current.terminal
     && !current.evidence
     && !current.triage
-    && !current.publication
-    && !current.smokeOrdering?.independent?.startedEver;
+    && !current.publication;
   if (!safelyReplaceable) {
     throw new PackReviewAuthorityError(
       'tier_change_requires_reset',
@@ -836,24 +820,6 @@ export function observePackReviewHead(input: {
       current.evidence = undefined;
       current.triage = undefined;
       current.publication = undefined;
-      if (current.smokeOrdering) {
-        const independent = current.smokeOrdering.independent;
-        const failedIndependent = independent?.status === 'failed';
-        const stalePassedIndependent = independentPassedOnPreviousHead(independent, headSha);
-        current.smokeOrdering = {
-          ...current.smokeOrdering,
-          workerOwned: current.cycle && isLogicalRoundCycle(current.cycle)
-            ? current.smokeOrdering.workerOwned
-            : undefined,
-          ...(independent && !stalePassedIndependent
-            ? { independent: failedIndependent
-              ? { ...independent, headSha, status: 'failed' }
-              : { ...independent } }
-            : {}),
-          ...(independent?.startedEver ? {} : { reviewSettledHeadSha: undefined }),
-        };
-        if (stalePassedIndependent) delete current.smokeOrdering.independent;
-      }
       if (current.cycle?.reviewStageComplete === true) return current;
       if (current.cycle?.state === 'closed') {
         current.cycle = createNewPackReviewCycle(current.cycle.frozenTier, {
@@ -1131,335 +1097,6 @@ export function commitPackReviewTerminal(input: {
   });
 }
 
-export function smokeOrderingRequired(issueBody: string | undefined): boolean {
-  const resolved = resolveSmokeRequirement(String(issueBody ?? ''));
-  return resolved.requirement !== 'not-applicable' && resolved.requirement !== 'legacy-exempt';
-}
-
-export function assertPackReviewSmokeAdmission(input: {
-  authority: PackReviewAuthorityDocument;
-  headSha: string;
-}): void {
-  const headSha = normalizeSha(input.headSha, 'headSha');
-  if (input.authority.currentHeadSha !== headSha) {
-    throw new PackReviewAuthorityError('smoke_ordering_head_mismatch', `expected ${input.authority.currentHeadSha}, got ${headSha}`);
-  }
-  if (input.authority.cycle?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION) return;
-  if (input.authority.smokeOrdering?.independent) {
-    throw new PackReviewAuthorityError(
-      'smoke_ordering_review_forbidden',
-      'pack-review is forbidden after independent smoke has started',
-    );
-  }
-}
-
-function independentPassedOnPreviousHead(
-  independent: { headSha: string; status: SmokeOrderingStatus } | undefined,
-  headSha: string,
-): boolean {
-  return independent?.status === 'passed' && independent.headSha !== headSha;
-}
-
-export function assertIndependentSmokeAdmission(input: {
-  authority: PackReviewAuthorityDocument;
-  headSha: string;
-  reviewRuns: readonly PackReviewStartConsumptionRecord[];
-  operatorSmokeOnly?: boolean;
-}): void {
-  const headSha = normalizeSha(input.headSha, 'headSha');
-  if (input.authority.currentHeadSha !== headSha) {
-    throw new PackReviewAuthorityError('smoke_ordering_head_mismatch', `expected ${input.authority.currentHeadSha}, got ${headSha}`);
-  }
-  const ordering = input.authority.smokeOrdering;
-  const independent = ordering?.independent;
-  if (independent?.startedEver && !independentPassedOnPreviousHead(independent, headSha)) {
-    if (independent.status === 'failed'
-        && independent.failureKind === 'finding'
-        && independent.failureHeadSha === headSha) {
-      throw new PackReviewAuthorityError(
-        'smoke_ordering_independent_same_head_forbidden',
-        'an independent smoke finding requires a worker fix and a new head',
-      );
-    }
-    if (independent.headSha !== headSha && independent.status !== 'failed') {
-      throw new PackReviewAuthorityError(
-        'smoke_ordering_independent_head_forbidden',
-        'a started independent smoke cannot continue on a new head',
-      );
-    }
-    if (independent.headSha === headSha && independent.status === 'started') {
-      throw new PackReviewAuthorityError(
-        'smoke_ordering_independent_in_progress',
-        'independent smoke is already started for the exact head',
-      );
-    }
-    if (independent.headSha === headSha && independent.status === 'passed') {
-      throw new PackReviewAuthorityError(
-        'smoke_ordering_independent_already_passed',
-        'independent smoke already passed for the exact head',
-      );
-    }
-    return;
-  }
-  if (input.authority.cycle?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION) return;
-  if (['BLOCK', 'PENDING_ARCHITECT', 'PENDING_OPERATOR'].includes(input.authority.triage?.verdict ?? '')) {
-    throw new PackReviewAuthorityError(
-      'smoke_ordering_review_unsettled',
-      'independent smoke is blocked while pack-review triage is unresolved',
-    );
-  }
-  const workerOwnedPassed = input.operatorSmokeOnly === true
-    && ordering?.workerOwned?.status === 'passed'
-    && normalizeSha(ordering.workerOwned.headSha, 'smokeOrdering.workerOwned.headSha') === headSha;
-  if (ordering?.reviewSettledHeadSha !== headSha
-      && !reviewStartConsumedEvidence(input.authority, input.reviewRuns)
-      && !workerOwnedPassed) {
-    throw new PackReviewAuthorityError(
-      'smoke_ordering_review_unsettled',
-      'independent smoke requires settled pack-review obligations or a consumed review start',
-    );
-  }
-}
-
-function workerOwnedCarryOnlyPass(
-  evidence: SmokeOrderingOwnerEvidence | undefined,
-  actor: SmokeOrderingActor,
-): boolean {
-  return actor === 'worker-owned'
-    && evidence?.authoritativeResult === 'PASS'
-    && evidence.executionMode === 'carry-only';
-}
-
-function reconcileStartedSmokeOwner<T extends SmokeOrderingOwnerFields & {
-  headSha: string;
-  status: SmokeOrderingStatus;
-  updatedAtUtc: string;
-  failureKind?: SmokeOrderingFailureKind;
-  failureHeadSha?: string;
-}>(input: {
-  marker: T;
-  evidence?: SmokeOrderingOwnerEvidence;
-  headSha: string;
-  actor: SmokeOrderingActor;
-  now: string;
-}): T {
-  if (input.marker.headSha !== input.headSha || input.marker.status !== 'started' || !input.evidence) {
-    return input.marker;
-  }
-  const evidenceOwner = smokeOrderingOwnerFields(input.evidence);
-  if (!input.marker.attemptId || !input.marker.supervisorPid) return input.marker;
-  if (input.marker.attemptId !== evidenceOwner.attemptId
-      || input.marker.supervisorPid !== evidenceOwner.supervisorPid
-      || (input.marker.runId ?? '') !== (evidenceOwner.runId ?? '')) {
-    throw new PackReviewAuthorityError(
-      `smoke_ordering_${input.actor === 'worker-owned' ? 'worker_owned' : 'independent'}_owner_evidence_mismatch`,
-      'owner-state evidence does not match the persisted started marker',
-    );
-  }
-  if (input.evidence.authoritativeResult && !workerOwnedCarryOnlyPass(input.evidence, input.actor)) {
-    const result = input.evidence.authoritativeResult;
-    const scenarioFinding = result === 'FAIL' && input.evidence.scenarioFinding === true;
-    return {
-      ...input.marker,
-      status: result === 'PASS' ? 'passed' : 'failed',
-      updatedAtUtc: input.now,
-      ...(result === 'PASS'
-        ? { failureKind: undefined }
-        : { failureKind: scenarioFinding ? 'finding' as const : 'retryable' as const }),
-      failureHeadSha: scenarioFinding && input.actor === 'independent' ? input.headSha : undefined,
-    };
-  }
-  if (!input.evidence.supervisorAlive) {
-    if (input.evidence.runId && input.evidence.cleanupSafe !== true) return input.marker;
-    return {
-      ...input.marker,
-      status: 'failed',
-      failureKind: 'aborted',
-      updatedAtUtc: input.now,
-    };
-  }
-  return input.marker;
-}
-
-function assertCurrentSmokeOwner(input: {
-  marker: SmokeOrderingOwnerFields;
-  attemptId?: string;
-  supervisorPid?: number;
-  runId?: string;
-  actor: SmokeOrderingActor;
-}): void {
-  if (!input.marker.attemptId) return;
-  const supplied = smokeOrderingOwnerFields(input);
-  if (supplied.attemptId !== input.marker.attemptId
-      || supplied.supervisorPid !== input.marker.supervisorPid
-      || (supplied.runId ?? '') !== (input.marker.runId ?? '')) {
-    throw new PackReviewAuthorityError(
-      `smoke_ordering_${input.actor === 'worker-owned' ? 'worker_owned' : 'independent'}_owner_mismatch`,
-      'terminal smoke transition must be committed by the current attempt owner',
-    );
-  }
-}
-
-export function commitSmokeOrderingTransition(input: {
-  prNumber: number;
-  expectedTransitionSeq: number;
-  actor: SmokeOrderingActor;
-  headSha: string;
-  status: SmokeOrderingStatus;
-  failureKind?: SmokeOrderingFailureKind;
-  attemptId?: string;
-  supervisorPid?: number;
-  runId?: string;
-  ownerStateEvidence?: SmokeOrderingOwnerEvidence;
-  reviewRuns?: readonly PackReviewStartConsumptionRecord[];
-  operatorSmokeOnly?: boolean;
-  options: PackReviewAuthorityOptions;
-}): PackReviewAuthorityDocument {
-  const headSha = normalizeSha(input.headSha, 'headSha');
-  const owner = smokeOrderingOwnerFields(input);
-  if (input.ownerStateEvidence) smokeOrderingOwnerFields(input.ownerStateEvidence);
-  const current = readPackReviewAuthority(input.prNumber, input.options);
-  if (!current) throw new PackReviewAuthorityError('authority_missing', `PR ${input.prNumber}`);
-  let deferredRefusal: PackReviewAuthorityError | undefined;
-  const committed = commitPackReviewAuthorityTransition({
-    prNumber: input.prNumber,
-    expectedTransitionSeq: input.expectedTransitionSeq,
-    nextPhase: current.phase,
-    mutate(authority) {
-      if (authority.currentHeadSha !== headSha) {
-        throw new PackReviewAuthorityError('smoke_ordering_head_mismatch', `expected ${authority.currentHeadSha}, got ${headSha}`);
-      }
-      const now = nowIso(input.options);
-      if (input.actor === 'worker-owned') {
-        const existing = authority.smokeOrdering?.workerOwned;
-        if (input.status === 'started' && existing) {
-          const reconciled = reconcileStartedSmokeOwner({
-            marker: existing,
-            evidence: input.ownerStateEvidence,
-            headSha,
-            actor: input.actor,
-            now,
-          });
-          authority.smokeOrdering = { ...authority.smokeOrdering, workerOwned: reconciled };
-          if (reconciled.headSha === headSha && reconciled.status === 'started') {
-            throw new PackReviewAuthorityError(
-              'smoke_ordering_worker_owned_in_progress',
-              'worker-owned smoke is already started for the exact head',
-            );
-          }
-          if (reconciled.headSha === headSha
-              && reconciled.status === 'passed'
-              && !workerOwnedCarryOnlyPass(input.ownerStateEvidence, input.actor)) {
-            const refusal = new PackReviewAuthorityError(
-              'smoke_ordering_worker_owned_already_passed',
-              'worker-owned smoke already passed for the exact head',
-            );
-            if (existing.status === 'started') {
-              deferredRefusal = refusal;
-              return authority;
-            }
-            throw refusal;
-          }
-        }
-        const workerMarker = authority.smokeOrdering?.workerOwned;
-        if (input.status !== 'started') {
-          if (workerMarker?.status !== 'started') {
-            throw new PackReviewAuthorityError(
-              'smoke_ordering_worker_smoke_not_started',
-              'worker-owned smoke result requires a started dispatch',
-            );
-          }
-          assertCurrentSmokeOwner({ marker: workerMarker, ...input });
-        }
-        const independent = authority.smokeOrdering?.independent;
-        const workerFixOnNewHead = independent?.status === 'failed'
-          && independent.failureKind === 'finding'
-          && independent.failureHeadSha !== headSha;
-        if (independent && !workerFixOnNewHead && !independentPassedOnPreviousHead(independent, headSha)) {
-          throw new PackReviewAuthorityError(
-            'smoke_ordering_worker_smoke_forbidden',
-            'worker-owned smoke is forbidden after independent smoke has started',
-          );
-        }
-        authority.smokeOrdering = {
-          ...authority.smokeOrdering,
-          workerOwned: {
-            headSha,
-            status: input.status,
-            updatedAtUtc: now,
-            ...(input.status === 'started' ? owner : smokeOrderingOwnerFields(workerMarker ?? owner)),
-            ...(input.status === 'failed' && input.failureKind ? { failureKind: input.failureKind } : {}),
-          },
-        };
-      } else {
-        const existing = authority.smokeOrdering?.independent;
-        if (input.status === 'started' && existing) {
-          const reconciled = reconcileStartedSmokeOwner({
-            marker: existing,
-            evidence: input.ownerStateEvidence,
-            headSha,
-            actor: input.actor,
-            now,
-          });
-          authority.smokeOrdering = { ...authority.smokeOrdering, independent: reconciled };
-          if (existing.status === 'started' && reconciled.headSha === headSha && reconciled.status === 'passed') {
-            deferredRefusal = new PackReviewAuthorityError(
-              'smoke_ordering_independent_already_passed',
-              'independent smoke already passed for the exact head',
-            );
-            return authority;
-          }
-        }
-        if (input.status === 'started') {
-          const reviewRuns = input.reviewRuns
-            ?? (authority.smokeOrdering?.reviewSettledHeadSha === headSha ? [] : undefined);
-          if (!reviewRuns) {
-            throw new PackReviewAuthorityError(
-              'authority_input_invalid',
-              'reviewRuns are required for independent-smoke admission when exact-head review settlement is absent',
-            );
-          }
-          assertIndependentSmokeAdmission({
-            authority,
-            headSha,
-            reviewRuns,
-            operatorSmokeOnly: input.operatorSmokeOnly,
-          });
-        } else if (!authority.smokeOrdering?.independent?.startedEver
-            || authority.smokeOrdering.independent.status !== 'started') {
-          throw new PackReviewAuthorityError(
-            'smoke_ordering_independent_not_started',
-            'independent smoke result requires a started dispatch',
-          );
-        } else {
-          assertCurrentSmokeOwner({ marker: authority.smokeOrdering.independent, ...input });
-        }
-        const independentMarker = authority.smokeOrdering?.independent;
-        authority.smokeOrdering = {
-          ...authority.smokeOrdering,
-          independent: {
-            startedEver: true,
-            headSha,
-            status: input.status,
-            updatedAtUtc: now,
-            ...(input.status === 'started' ? owner : smokeOrderingOwnerFields(independentMarker ?? owner)),
-            ...(input.status === 'failed' && input.failureKind
-              ? {
-                failureKind: input.failureKind,
-                ...(input.failureKind === 'finding' ? { failureHeadSha: headSha } : {}),
-              }
-              : {}),
-          },
-        };
-      }
-      return authority;
-    },
-    options: input.options,
-  });
-  if (deferredRefusal) throw deferredRefusal;
-  return committed;
-}
-
 export function selectPackReviewEvidence(input: {
   prNumber: number;
   expectedTransitionSeq: number;
@@ -1570,10 +1207,6 @@ export function settleLogicalPackReviewFindingsByStrictDescendant(input: {
         cycle.closedAtUtc = nowIso(input.options);
         cycle.atCapHash = undefined;
         markReviewStageComplete(current, cycle.closedAtUtc);
-        current.smokeOrdering = {
-          ...current.smokeOrdering,
-          reviewSettledHeadSha: currentHeadSha,
-        };
       } else {
         throw new PackReviewAuthorityError(
           'findings_settlement_invalid',
@@ -1675,7 +1308,6 @@ export function commitPackReviewTriage(input: {
             ? resolution as Record<string, unknown>
             : undefined;
         }
-        const workerOwned = current.smokeOrdering?.workerOwned;
         const resolution = automaticFindingResolution;
         const findingCount = Number(resolution?.findingCount);
         const blockingFindingCount = Number(resolution?.blockingFindingCount);
@@ -1700,8 +1332,6 @@ export function commitPackReviewTriage(input: {
           && cycleConsumedCount(current.cycle) === current.cycle.frozenCap
           && current.terminal?.reviewVerdict === 'findings'
           && current.terminal.targetSha !== current.currentHeadSha
-          && (isLogicalRoundCycle(current.cycle)
-            || (workerOwned?.headSha === current.currentHeadSha && workerOwned.status === 'passed'))
           && automaticEvidencePredicate === 'no_intersection'
           && finalFixResolutionBound;
         const priorRoundFindingSettlement = input.triage.verdict === 'DEFER'
@@ -1716,7 +1346,7 @@ export function commitPackReviewTriage(input: {
             'triage_invalid',
             isLogicalRoundCycle(current.cycle!)
               ? 'automatic DEFER requires a bounded logical-round finding checkpoint or final-cap continuation with no-intersection scope evidence and exact finding-resolution evidence'
-              : 'automatic DEFER requires final-cap continuation, exact-head worker smoke PASS, no-intersection scope evidence, and exact finding-resolution evidence',
+              : 'automatic DEFER requires final-cap continuation, no-intersection scope evidence, and exact finding-resolution evidence',
           );
         }
       } else if (!['BLOCK', 'DEFER'].includes(input.triage.verdict)) {
@@ -1731,10 +1361,6 @@ export function commitPackReviewTriage(input: {
       if (automaticFinalFixSettlement
           || (current.publication?.status === 'succeeded' && reviewObligationsSettled(current))) {
         markReviewStageComplete(current, input.triage.committedAtUtc);
-        current.smokeOrdering = {
-          ...current.smokeOrdering,
-          reviewSettledHeadSha: current.currentHeadSha,
-        };
       }
       return current;
     },
@@ -1761,10 +1387,6 @@ export function recordPackReviewPublication(input: {
       current.publication = { ...input.publication };
       if (input.publication.status === 'succeeded' && reviewObligationsSettled(current)) {
         markReviewStageComplete(current, input.publication.recordedAtUtc);
-        current.smokeOrdering = {
-          ...current.smokeOrdering,
-          reviewSettledHeadSha: current.currentHeadSha,
-        };
       }
       return current;
     },

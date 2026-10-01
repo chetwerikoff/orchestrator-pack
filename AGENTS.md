@@ -237,7 +237,8 @@ described by Issue #926 and the delegated branch of
 The delegated branch is narrower than direct-user authority: its closed
 WorkerAssignment marker must match the exact PR/head and predecessor assignment,
 live dependency sequencing must be `merge_now`, and the existing production
-post-smoke readiness authority must return `READY_TO_MERGE`. It never inherits
+post-smoke readiness authority must return `READY_TO_MERGE` with required CI
+on the current PR head and a same-PR smoke PASS at any report head. It never inherits
 the direct-user override for CI, smoke, findings, dependency order, draft/conflict,
 head/base drift, or cleanup refusal.
 
@@ -252,7 +253,10 @@ completion, review-cap exhaustion, or a status write into merge readiness.
 Workers as well as orchestrator/manager MUST read the **Worker lifecycle**
 section linked above before the first side effect. That runbook owns pre-flight,
 runtime identity, review/CI/handoff, required CI, `pack-worker-report`,
-PR-created handoff, review-cycle cap, and worker smoke.
+PR-created handoff, review-cycle cap, and one post-review independent
+smoke worker per PR. There is no worker-owned pre-review smoke obligation;
+one same-PR PASS remains sufficient after later head changes while required
+CI stays bound to the current head.
 
 ### Worker pre-flight
 
