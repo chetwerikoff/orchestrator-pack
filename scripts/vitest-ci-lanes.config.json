@@ -93,7 +93,6 @@
     "scripts/lib/create-issue-stage-record.test.ts": "light",
     "scripts/lib/create-issue-stage-topology.test.ts": "light",
     "scripts/lib/execute-issue-manager-boundary.test.ts": "light",
-    "scripts/lib/gh-target-authorization.test.ts": "light",
     "scripts/lib/operator-primary-target.test.ts": "light",
     "scripts/lib/operator-publication.test.ts": "light",
     "scripts/lib/protected-signal-receipt.test.ts": "light",
