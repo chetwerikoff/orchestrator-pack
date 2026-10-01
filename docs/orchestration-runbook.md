@@ -23,31 +23,18 @@ The orchestrator is the top-level coordinator. It owns ambiguity, recovery, reas
 
 ### Manager
 
-A manager owns the complete task-authoring workflow:
+A manager owns the complete task-authoring workflow. For create-Issue work, the
+single procedural authority is
+`.cursor/skills/create-issue-draft/SKILL.md`: read the live Issue/comments,
+apply the universal tier rubric from `docs/tiering.md`, launch the required
+review comments, obtain author dispositions for findings, run the existing
+content floor, apply `spec-review:accepted` only when its prerequisites hold,
+and read the accepted GitHub state back before completing the manager role.
 
-```text
-understand goal / tier / prerequisites
--> create or revise Issue
--> read back current Issue revision
--> required independent review
--> findings -> fix -> read back -> rerun invalidated review
--> architectural lens
--> lens finding/change -> fix -> rerun invalidated gates
--> prove CURRENT revision passed applicable gates
--> task_ready
--> worker_done
-```
-
-Child author/reviewer/lens `worker_done` never settles the parent manager Task. A single LLM turn is never a Dispatch.
-
-For create-Issue independent review, the reviewer publishes its own complete
-verdict/findings as the governed top-level Issue comment. The manager consumes
-the reviewer receipt and owns later workflow/disposition actions; it does not
-normally relay or summarize a review into a replacement comment. The canonical
-reviewer publication and prompt policy remains in
-`.cursor/skills/create-issue-draft/SKILL.md`; this runbook does not copy that
-prompt. Any genuine-write-failure exception remains limited to the fallback
-already defined by that owning skill.
+Child author/reviewer/lens completion never settles the parent manager Task. A
+single LLM turn is never a Dispatch, and Browser-GPT transport output/envelopes
+are never substitutes for the GitHub comments/body/label owned by the
+create-Issue skill.
 
 Under the explicit `execute-issue-with-gpt` workflow, a manager may instead own
 one resumable external GPT Issue-execution session through verified handoff. The
@@ -403,8 +390,8 @@ or fails closed safely. The primary checkout and implementation PR worktree are
 never refresh targets.
 
 This refresh is a next-turn operation only. A manager turn that has already
-started, including a Browser-GPT execution turn or a frozen create-Issue stage
-attempt, keeps its loaded files until its next admitted boundary and is never
+started, including a Browser-GPT execution turn or an already-started create-Issue review
+turn, keeps its loaded files until its next admitted boundary and is never
 refreshed mid-turn.
 
 The exact-terminal boundary remains machine-enforced through structured contracts:
@@ -580,7 +567,7 @@ The provider does not expose a reliable snapshot of “Deliveries present when t
 
 Role obligations are mandatory:
 
-- **Manager:** drain before starting or claiming the next authoring/review stage, immediately before manager `worker_done`, and immediately before ending a turn without `worker_done`.
+- **Manager:** drain before starting the next authoring/review round, immediately before manager `worker_done`, and immediately before ending a turn without `worker_done`.
 - **Worker:** drain immediately before worker `worker_done` and before emitting a blocker/escalation that hands control upward.
 - **Coordinator / flow-manager / orchestrator acting on the bound Run:** drain before issuing a reply, ruling, escalation decision, or dispatch, and again before reporting its own turn complete.
 
@@ -588,37 +575,19 @@ Every message returned by the drain is surfaced and processed in the same role t
 
 Supervised agents do not emit `type: heartbeat` / `subject: alive` control chatter merely to assert liveness. A supervised agent with no actionable report sends nothing. A supervised manager emits `worker_done --outcome succeeded` exactly once, and only after acceptance satisfies its existing whole-task completion contract. `recoverable`, `external_pause`, and `contract_defect` never complete or settle the parent task. A manager sends `worker_done --outcome failed` only after a direct coordinator/operator cancellation message, never because a repository-owned check refused or paused work. S1 remains the sole liveness observer; existing observer heartbeat/process-liveness artifacts remain observation evidence, not agent assertions.
 
-## Published GitHub artifact completion and batch attribution
+## Create-Issue GitHub completion
 
-For create-Issue author/reviewer/lens work, the manager's completion and delivery authority is the fresh GitHub REST-visible artifact, not the launcher child or its terminal envelope. The existing long-running child envelope, PID, pane, spinner, log growth, silence, and heartbeat remain timeout/diagnostic hints only.
+For create-Issue author/reviewer/lens work, workflow completion is determined
+from the live GitHub Issue state defined by
+`.cursor/skills/create-issue-draft/SKILL.md`. A published revision-named
+review comment can complete its review turn even while a Browser-GPT transport
+envelope is still pending; conversely a terminal child/envelope without the
+required GitHub comment does not satisfy create-Issue review or acceptance.
 
-For an author turn, completion requires the exact tuple `(repository, issue_number, source_revision, exact_body_sha256)` from a fresh Issue read-back. GitHub editor/principal provenance is not invented when the Issue read surface does not expose it as a turn witness. A matching revision with a different exact body hash is a blocking mismatch; a stale/missing revision is non-terminal.
-
-For a reviewer/lens turn, completion requires exactly one unedited top-level comment from the currently authenticated principal whose first two non-empty lines bind the expected Issue/revision and exact invocation marker. The manager-held `stage` and `source-slot` must also match that publication. A foreign, edited, stale, missing-invocation, duplicate, ambiguous, or wrong-stage/slot publication cannot settle the current turn. A possible or confirmed send is never resent merely because the child is silent or gone.
-
-The long-running `wait` command may carry the publication expectation directly:
-
-```text
-# reviewer/lens
-... flow-manager-long-running-child.ts wait \
-  --run-identity <run> --attempt-identity <attempt> \
-  --terminal-envelope <path> --handoff-receipt <path> --deadline-ms <ms> \
-  --publication-kind reviewer --repository <owner/repo> --issue-number <N> \
-  --source-revision <rNN> --invocation-id <id> --stage <stage> --source-slot <slot>
-
-# author
-... flow-manager-long-running-child.ts wait \
-  --run-identity <run> --attempt-identity <attempt> \
-  --terminal-envelope <path> --handoff-receipt <path> --deadline-ms <ms> \
-  --publication-kind author --repository <owner/repo> --issue-number <N> \
-  --source-revision <rNN> --body-sha256 <exact-body-sha256>
-```
-
-When a publication expectation is present, an incident envelope such as `child_stdout_eof_timeout` does not end the wait as success or failure before the publication read-back settles or blocks. `completion_authority: published_artifact` is emitted only for the exact authoritative publication; the child envelope, when present, is retained alongside it as diagnostics. Missing/unavailable REST evidence stays non-terminal until the bounded deadline.
-
-For one concurrent plural batch, classify each slot from the REST publication census. A slot with its own authoritative artifact is `actual` and no-resend. If at least one sibling in the same batch is REST-visible while another slot is silent/missing, the silent slot is `possible-or-actual`, resend is forbidden, and it settles as an incident retaining that invocation identity. The sibling publication proves that the batch transport worked; it does **not** prove that the silent payload crossed the composer. With zero published siblings, no slot is classified as delivered. The stage-level `partial` rule for a short capture set remains the separate #1439 authority.
-
-Do not add a second observer, completion store, delivery-status store, reconciliation pass, retry service, or fallback transport around this rule.
+Do not add source-slot receipts, publication expectations, batch-attribution
+records, terminal bundles, acceptance manifests, or a second completion store.
+Transport uncertainty still follows the shared no-blind-resend and
+same-invocation recovery contract in `docs/browser-gpt-turn-runbook.md`.
 
 ## Scheduler inbox reconciliation
 
@@ -694,7 +663,7 @@ authoritative Task/role/assignment facts
 
 ## Structured external-dependency parking
 
-The create-Issue manager boundary emits exactly one JSON result on stdout and
+The execute-Issue manager boundary emits exactly one JSON result on stdout and
 uses four closed outcomes: `completed` (exit 0), `recoverable` (exit 3 with
 an executable non-null `nextAction.argv`), `external_pause` (exit 4 with
 typed `pause.remedy`, `pause.resume_when`, and `pause.evidence`), or the
@@ -746,7 +715,7 @@ not permission to settle the Task.
 
 Dispatch/re-dispatch payloads contain role plus task invariants only. Procedure
 comes from the current CLI `--help` and returned `nextAction`; do not re-paste
-the create-Issue skill or runbooks into repeated dispatches. Browser-GPT
+workflow skills or runbooks into repeated dispatches. Browser-GPT
 `TerminalEnvelope` remains a separate transport and is unchanged. This
 contract adds no watcher, polling daemon, queue, lease, parking store,
 acknowledgement protocol, prose parser, reverse dependency lookup, epoch,

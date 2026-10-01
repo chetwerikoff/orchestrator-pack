@@ -13,13 +13,13 @@ roles and their contracts must not be mixed:
   `../../.claude/skills/discuss-with-gpt/driver.mjs`, PASS_ID/SHA validation,
   and standalone durable pass states.
 - **Tracked create/review transport** — `create-issue-draft` author/reviewer turns
-  follow the canonical carrier, runbook, and workflow-owned stage contracts. They
+  follow the canonical carrier, runbook, and workflow-owned review/comment contract. They
   are not the standalone driver and do not inherit its retry/validation state
   machine.
 
-Issue-body floors, tiering, finding-ledger normalization, chat-role separation,
+Issue-body floors, tier selection, review comments, author dispositions,
 and acceptance remain owned by `create-issue-draft`. Claude runs only the T3
-`architectural-lens` stage defined there. Flow-manager runtime selection follows
+architectural-lens review defined there. Flow-manager runtime selection follows
 that canonical skill: **OpenCode** is the default only when no runtime is selected;
 a capable operator-selected runtime such as **Cursor or Codex** may manage the flow.
 Codex manager selection does not let Codex replace Browser-GPT reviewer stages or
@@ -36,13 +36,13 @@ the required T3 Claude lens.
 | explicit request to create or manage a task with Codex | `create-issue-draft` with Codex selected as flow-manager |
 | bug/root-cause consult | `investigate-root-cause` / `codex:rescue` |
 
-Do not impose the standalone adversarial loop on normal create-issue-draft stages.
+Do not impose the standalone adversarial loop on normal create-issue-draft review rounds.
 
 ## Draft-author relocation
 
 When Issue #579 relocation is active, the draft-author is a delegated role rather
 than the architect's live-session authoring mode. The owning create-issue workflow
-still defines tiering, stage order, review-loop acceptance, and publication gates;
+still defines tiering, review order, comment/disposition acceptance, and publication rules;
 this section owns only the relocated author-session contract.
 
 ### Role split
