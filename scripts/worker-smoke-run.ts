@@ -6,28 +6,11 @@ import { runProcess, runProcessSync } from './kernel/subprocess.ts';
 import { resolveTargetContext } from './lib/target-context.ts';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from './pr-scope-contract.ts';
-import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  buildExecutorCommand,
-  buildOpenCodeAgentOverlay,
-  openCodeAgentSemantics,
-  openCodeConfigPaths,
-  CURSOR_SMOKE_CAPABILITY,
-  evaluateExecutorRouteAdmission,
-  evaluateExecutorSpawnApplicability,
-  EXECUTOR_FAMILY_DESCRIPTORS,
-  executorCatalogContains,
-  OPENCODE_PACK_AGENT,
-  openCodeEdgeCapabilities,
-  profileNamesForSmoke,
-  resolveSemanticExecutorProfile,
-  type ExecutorFamily,
-  type SemanticExecutorProfile,
-} from './executor-profile-policy.ts';
 import {
   buildSmokeGhChildEnv,
   evaluateWorkerSmokeMainMergeCarry,
@@ -47,13 +30,10 @@ import {
   type WorkerSmokeCommentRecord,
   type WorkerSmokeTrustedTarget,
   type WorkerSmokeMainMergeCarryProof,
-} from './lib/worker-smoke-core.ts';;
+} from './lib/worker-smoke-core.ts';
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
-import type {
-  WorkerSmokeAttemptObservation,
-  WorkerSmokeMainMergeCarryRecord,
-} from './lib/worker-smoke-receipt.ts';
+import type { WorkerSmokeMainMergeCarryRecord } from './lib/worker-smoke-receipt.ts';
 
 import {
   packReviewFindingsSatisfiedByStrictDescendant,
@@ -108,12 +88,7 @@ import {
   type PackReviewSemanticSourceState,
   type PackReviewSemanticProjection,
 } from './lib/pack-review-delivery.ts';
-import type {
-  RuntimeAdapter,
-  RuntimeObservationToken,
-  RuntimeOperationFailure,
-  RuntimeWorkerIdentity,
-} from './runtime/contracts.ts';
+import type { RuntimeAdapter } from './runtime/contracts.ts';
 
 export interface CliOptions {
   command: string;
@@ -121,10 +96,6 @@ export interface CliOptions {
   prNumber: number;
   headSha: string;
   issueBodyFile: string;
-  smokeComplexity: SmokeComplexity | '';
-  smokeActor?: 'worker-owned' | 'independent';
-  operatorSmokeOnly?: boolean;
-  operatorOverrideReason?: string;
   repoRoot: string;
   cwd: string;
   dryRun: boolean;
@@ -132,225 +103,6 @@ export interface CliOptions {
   reviewId: string;
   reviewHeadSha: string;
   reportFile: string;
-}
-
-export type SmokeComplexity = 'routine' | 'complex';
-
-export interface SmokeExecutorProfile {
-  readonly complexity: SmokeComplexity;
-  readonly family: ExecutorFamily;
-  readonly agent: string;
-  readonly command: string;
-  readonly names: readonly [string, string, string];
-}
-
-export type SmokeStartFenceResult<T> =
-  | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly reason: string; readonly actionEntered: boolean };
-
-export interface SmokeAttemptDependencies {
-  readonly adapter?: RuntimeAdapter;
-  readonly startFence?: <T>(action: () => T | Promise<T>) => Promise<SmokeStartFenceResult<T>>;
-  readonly resolveProfile?: (
-    complexity: SmokeComplexity | string,
-    env: Readonly<NodeJS.ProcessEnv>,
-  ) => SmokeExecutorProfile;
-  readonly resolveIssueBody?: (options: CliOptions, suppliedIssueBody: string) => string;
-  readonly resolveTarget?: (options: CliOptions, suppliedIssueBody: string) => ResolvedSmokeTarget;
-  readonly fetchHistoryComments?: (
-    prNumber: number,
-    repositorySlug: string,
-    repoRoot: string,
-  ) => WorkerSmokeCommentRecord[];
-  readonly isHistoryAncestor?: (
-    ancestorSha: string,
-    descendantSha: string,
-    target: ResolvedSmokeTarget,
-    options: CliOptions,
-  ) => boolean;
-  readonly publishComment?: (prNumber: number, body: string, repoRoot: string) => void;
-}
-
-interface SmokeChildResult {
-  readonly ok: boolean;
-  readonly stdout: string;
-  readonly stderr?: string;
-}
-
-type SmokeChildExecutor = (args: readonly string[], env?: Readonly<NodeJS.ProcessEnv>) => SmokeChildResult;
-
-class WorkerSmokeHarnessError extends Error {
-  readonly code: string;
-
-  constructor(code: string, diagnostic: string = code) {
-    super(diagnostic);
-    this.name = 'WorkerSmokeHarnessError';
-    this.code = code;
-  }
-}
-
-function smokeSemanticProfile(
-  complexity: SmokeComplexity | string,
-  env: Readonly<NodeJS.ProcessEnv>,
-): SemanticExecutorProfile {
-  if (complexity !== 'routine' && complexity !== 'complex') throw new WorkerSmokeHarnessError('smoke_complexity_unsupported');
-  const names = profileNamesForSmoke(complexity);
-  const resolved = resolveSemanticExecutorProfile({ surface: 'smoke', names, env });
-  if (resolved.ok) return resolved.profile;
-  if (resolved.code === 'executor_profile_missing') throw new WorkerSmokeHarnessError('smoke_profile_missing', `smoke_profile_missing:${resolved.variables.join(',')}`);
-  if (resolved.code === 'executor_profile_malformed') throw new WorkerSmokeHarnessError('smoke_profile_malformed', `smoke_profile_malformed:${resolved.variables.join(',')}`);
-  throw new WorkerSmokeHarnessError('smoke_profile_unsupported_agent', `smoke_profile_unsupported_agent:${resolved.variables[0]}`);
-}
-
-function smokeProfileFromSemantic(
-  complexity: SmokeComplexity,
-  profile: SemanticExecutorProfile,
-): SmokeExecutorProfile {
-  const invocation = buildExecutorCommand(profile);
-  return {
-    complexity,
-    family: profile.family,
-    agent: invocation.executable,
-    command: invocation.command,
-    names: profile.names,
-  };
-}
-
-export function resolveSmokeExecutorProfile(
-  complexity: SmokeComplexity | string,
-  env: Readonly<NodeJS.ProcessEnv> = process.env,
-): SmokeExecutorProfile {
-  const profile = smokeSemanticProfile(complexity, env);
-  const capability = profile.family === 'cursor'
-    ? CURSOR_SMOKE_CAPABILITY
-    : { available: false, supportsModel: false, supportsEffort: false };
-  const verdict = evaluateExecutorSpawnApplicability(capability);
-  if (!verdict.ok) throw new WorkerSmokeHarnessError(verdict.refusal);
-  return smokeProfileFromSemantic(complexity as SmokeComplexity, profile);
-}
-
-export function resolveLiveSmokeExecutorProfile(
-  complexity: SmokeComplexity | string,
-  env: Readonly<NodeJS.ProcessEnv>,
-  execute: SmokeChildExecutor,
-  cwd = process.cwd(),
-  proveNoWrite?: OpenCodeNoWriteProof,
-): SmokeExecutorProfile {
-  const profile = smokeSemanticProfile(complexity, env);
-  const descriptor = EXECUTOR_FAMILY_DESCRIPTORS[profile.family];
-  const catalog = execute(descriptor.catalogCommand);
-  if (!catalog.ok) throw new WorkerSmokeHarnessError('executor_profile_applicability_unproven');
-  if (!executorCatalogContains(profile, catalog.stdout)) throw new WorkerSmokeHarnessError('executor_profile_model_unavailable');
-
-  let capability = CURSOR_SMOKE_CAPABILITY;
-  if (profile.family === 'opencode') {
-    const observations: string[] = [];
-    const inlineConfig = JSON.stringify({ agent: { [OPENCODE_PACK_AGENT]: { model: profile.model, variant: profile.effort } } });
-    for (const probe of descriptor.capabilityProbeCommands) {
-      const isDebugProbe = probe[0] === 'opencode' && probe[1] === 'debug';
-      const result = isDebugProbe ? execute(probe, { OPENCODE_CONFIG_CONTENT: inlineConfig }) : execute(probe);
-      if (!result.ok) throw new WorkerSmokeHarnessError('executor_route_unavailable');
-      observations.push(`${result.stdout}\n${result.stderr ?? ''}`);
-    }
-    const edgeCapabilities = openCodeEdgeCapabilities(observations, profile);
-    const routeVerdict = evaluateExecutorRouteAdmission({
-      profile,
-      startMode: 'exact_terminal_worktree',
-      edgeCapabilities,
-    });
-    if (!routeVerdict.ok) throw new WorkerSmokeHarnessError(routeVerdict.refusal);
-    capability = edgeCapabilities.exactTerminal;
-  }
-  const verdict = evaluateExecutorSpawnApplicability(capability);
-  if (!verdict.ok) throw new WorkerSmokeHarnessError(verdict.refusal);
-
-  let finalProfile = profile;
-  let finalCommand: string | undefined;
-  if (profile.family === 'opencode') {
-    const finalized = smokeFinalizeOpenCode(profile, cwd, execute, proveNoWrite);
-    finalProfile = finalized.profile;
-    finalCommand = finalized.command;
-  }
-
-  const inherited = execute([
-    process.execPath,
-    '--input-type=module',
-    '-e',
-    'const n=process.argv.slice(1);process.exit(n.every((k)=>typeof process.env[k]==="string"&&process.env[k].trim())?0:1)',
-    ...profile.names,
-  ]);
-  if (!inherited.ok) throw new WorkerSmokeHarnessError('executor_profile_child_inheritance_unproven');
-  const smokeProfile = smokeProfileFromSemantic(complexity as SmokeComplexity, finalProfile);
-  return finalCommand ? { ...smokeProfile, command: finalCommand } : smokeProfile;
-}
-
-function smokeConfigState(cwd: string, env: Readonly<NodeJS.ProcessEnv> = process.env): string {
-  const configHome = env.XDG_CONFIG_HOME?.trim() || join(homedir(), '.config');
-  const roots = openCodeConfigPaths(cwd, configHome, env);
-  const rows: string[] = [];
-  const visit = (path: string): void => {
-    if (!existsSync(path)) { rows.push(`${path}:absent`); return; }
-    const stat = statSync(path);
-    if (stat.isDirectory()) { rows.push(`${path}:directory`); for (const child of readdirSync(path).sort()) visit(join(path, child)); }
-    else rows.push(`${path}:${stat.size}:${createHash('sha256').update(readFileSync(path)).digest('hex')}`);
-  };
-  for (const root of roots) visit(root);
-  return rows.join('\n');
-}
-
-function proveOpenCodeNoWrite(cwd: string): boolean {
-  const before = smokeConfigState(cwd);
-  return before === smokeConfigState(cwd);
-}
-
-type OpenCodeNoWriteProof = (cwd: string) => boolean;
-
-function smokeFinalizeOpenCode(profile: SemanticExecutorProfile, cwd: string, execute: SmokeChildExecutor, proveNoWrite?: OpenCodeNoWriteProof): { profile: SemanticExecutorProfile; command: string } {
-  if (!proveNoWrite || !proveNoWrite(cwd)) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
-  const before = smokeConfigState(cwd);
-  const stateRoot = join(tmpdir(), `opk-opencode-state-${randomUUID()}`);
-  const isolatedEnv = { XDG_STATE_HOME: stateRoot };
-  const config = execute(['opencode', 'debug', 'config'], isolatedEnv);
-  if (!config.ok || before !== smokeConfigState(cwd)) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
-  let parsed: Record<string, unknown>;
-  try { const value: unknown = JSON.parse(config.stdout); if (!record(value)) throw new Error(); parsed = value; } catch { throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable'); }
-  const defaultAgent = typeof parsed.default_agent === 'string' ? parsed.default_agent.trim() : '';
-  if (!defaultAgent) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
-  const baseline = execute(['opencode', 'debug', 'agent', defaultAgent], isolatedEnv);
-  if (!baseline.ok || before !== smokeConfigState(cwd)) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
-  let baselineValue: Record<string, unknown>;
-  try { const value: unknown = JSON.parse(baseline.stdout); if (!record(value)) throw new Error(); baselineValue = value; } catch { throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable'); }
-  const model = profile.model;
-  const effort = profile.effort;
-  if (!model || !effort) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
-  const agentName = `pack-opk-${randomUUID().replaceAll('-', '')}`;
-  const overlay = buildOpenCodeAgentOverlay({ agentName, baseline: baselineValue, model, effort, stateRoot });
-  const resolved = execute(['opencode', 'debug', 'agent', agentName], { ...isolatedEnv, OPENCODE_CONFIG_CONTENT: overlay.inlineConfigJson! });
-  if (!resolved.ok || before !== smokeConfigState(cwd)) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
-  let resolvedValue: Record<string, unknown>;
-  try { const value: unknown = JSON.parse(resolved.stdout); if (!record(value)) throw new Error(); resolvedValue = value; } catch { throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable'); }
-  const resolvedModel = record(resolvedValue.model) ? resolvedValue.model : null;
-  if (!resolvedModel || resolvedModel.modelID !== model.split('/').at(-1) || resolvedValue.variant !== effort
-    || openCodeAgentSemantics(baselineValue) !== openCodeAgentSemantics(resolvedValue)) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
-  const paths = execute(['opencode', 'debug', 'paths'], isolatedEnv);
-  if (!paths.ok || !paths.stdout.includes(stateRoot)) throw new WorkerSmokeHarnessError('executor_effort_channel_unavailable');
-  return { profile: { ...profile, model, effort }, command: overlay.command };
-}
-
-function runSmokeProfileChild(
-  args: readonly string[],
-  cwd: string,
-  env: Readonly<NodeJS.ProcessEnv>,
-  extraEnv?: Readonly<NodeJS.ProcessEnv>,
-): SmokeChildResult {
-  const result = runProcessSync({
-    command: args[0]!,
-    args: args.slice(1),
-    cwd,
-    env: extraEnv ? { ...env, ...extraEnv } : { ...env },
-    inheritParentEnv: true,
-  });
-  return { ok: result.ok, stdout: result.stdout, stderr: result.stderr ?? '' };
 }
 
 export interface ResolvedSmokeTarget {
@@ -388,7 +140,7 @@ export function projectExpectedPrTarget(
 
 function parseArgs(argv: readonly string[]): CliOptions {
   const options: CliOptions = {
-    command: '', issueNumber: 0, prNumber: 0, headSha: '', issueBodyFile: '', smokeComplexity: '', smokeActor: 'independent', operatorSmokeOnly: false,
+    command: '', issueNumber: 0, prNumber: 0, headSha: '', issueBodyFile: '',
     repoRoot: process.cwd(), cwd: process.cwd(), dryRun: false, json: false, reviewId: '', reviewHeadSha: '', reportFile: '',
   };
   const args = [...argv];
@@ -399,9 +151,6 @@ function parseArgs(argv: readonly string[]): CliOptions {
       case '--pr': options.prNumber = Number.parseInt(args[++index] ?? '', 10); break;
       case '--head-sha': options.headSha = args[++index] ?? ''; break;
       case '--issue-body-file': options.issueBodyFile = args[++index] ?? ''; break;
-      case '--smoke-complexity': options.smokeComplexity = (args[++index] ?? '') as SmokeComplexity; break;
-      case '--smoke-actor': options.smokeActor = (args[++index] ?? '') as CliOptions['smokeActor']; break;
-      case '--operator-smoke-only': options.operatorSmokeOnly = true; break;
       case '--repo-root': options.repoRoot = args[++index] ?? options.repoRoot; break;
       case '--cwd': options.cwd = args[++index] ?? options.cwd; break;
       case '--dry-run': options.dryRun = true; break;
@@ -423,20 +172,6 @@ export function emit(value: unknown, json: boolean): void {
 function readIssueBody(path: string): string {
   if (!path) throw new Error('--issue-body-file is required');
   return readFileSync(path, 'utf8');
-}
-
-function sleep(milliseconds: number): void {
-  if (milliseconds <= 0) return;
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
-}
-
-function sleepAsync(milliseconds: number): Promise<void> {
-  if (milliseconds <= 0) return Promise.resolve();
-  return new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds));
-}
-
-function yieldEventLoop(): Promise<void> {
-  return new Promise((resolveYield) => setImmediate(resolveYield));
 }
 
 function requireProcessOutput(label: string, result: ReturnType<typeof runProcessSync>): string {
