@@ -584,10 +584,9 @@ review comment can complete its review turn even while a Browser-GPT transport
 envelope is still pending; conversely a terminal child/envelope without the
 required GitHub comment does not satisfy create-Issue review or acceptance.
 
-Do not add source-slot receipts, publication expectations, batch-attribution
-records, terminal bundles, acceptance manifests, or a second completion store.
-Transport uncertainty still follows the shared no-blind-resend and
-same-invocation recovery contract in `docs/browser-gpt-turn-runbook.md`.
+Do not add a second create-Issue completion store or workflow-specific
+transport authority. Transport uncertainty follows the shared no-blind-resend
+and same-invocation recovery contract in `docs/browser-gpt-turn-runbook.md`.
 
 ## Scheduler inbox reconciliation
 
