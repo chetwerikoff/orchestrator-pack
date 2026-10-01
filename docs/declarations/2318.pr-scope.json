@@ -6,7 +6,8 @@
     "docs/chat-executor-rules.md",
     "docs/declarations/2318.pr-scope.json",
     "docs/orchestration-runbook.md",
-    "scripts/flow-manager-authority-contract.test.ts"
+    "scripts/flow-manager-authority-contract.test.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs"
   ],
   "denylist": [
     "credentials/",
@@ -19,7 +20,8 @@
     "docs/chat-executor-rules.md",
     "docs/declarations/2318.pr-scope.json",
     "docs/orchestration-runbook.md",
-    "scripts/flow-manager-authority-contract.test.ts"
+    "scripts/flow-manager-authority-contract.test.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs"
   ],
   "source_revision": "95522413291c8bb0809ca97a3c888b5bb5c07862"
 }
