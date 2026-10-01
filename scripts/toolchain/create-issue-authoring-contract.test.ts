@@ -47,13 +47,13 @@ describe('Issue #1938 existing-Issue manager routing contract', () => {
     );
   });
 
-  it('reuses the existing supervised manager lifecycle and canonical state', () => {
+  it('reuses the existing manager task and live Issue state', () => {
     for (const contract of [
       'existing supervised `work-class=manager` path',
       'existing `--manager-brief` / Task continuation mechanics',
-      'continue only unfinished task-authoring, review, and acceptance stages',
-      'Preserve already consumed semantic stage slots',
-      'terminal or accepted, report that truthful terminal state and perform no implementation fallback',
+      'The manager reads the live Issue title, body, label, and comments',
+      'continues unfinished authoring, review, and acceptance work',
+      'report its state without starting implementation',
     ]) {
       expect(normalizedSkill).toContain(contract);
     }
@@ -195,5 +195,46 @@ describe('standalone discuss-with-gpt terminal read-back contract', () => {
     expect(normalizedStandaloneSkill).toContain(
       '4. Validate PASS_ID/SHA and packet shape; record the durable state/artifact, then re-read the newest artifact before reporting any standalone terminal state.',
     );
+  });
+});
+
+describe('Issue #2315 comment-based review and acceptance contract', () => {
+  it('uses revision-named published comments from trusted reviewers', () => {
+    for (const contract of [
+      'All reviewer output is published directly as top-level comments on the same Issue',
+      'Every required reviewer comment starts on its first line with `Read revision: #<issue> rNN`',
+      'user.login` or `author_association` metadata identifies the trusted principal',
+    ]) {
+      expect(normalizedSkill).toContain(contract);
+    }
+  });
+
+  it('requires an author disposition for every finding in every review round', () => {
+    expect(normalizedSkill).toContain(
+      'After each required review round, the GPT author publishes one Issue disposition comment resolving every finding from that round',
+    );
+    expect(normalizedSkill).toContain('A finding is accepted with a correction in the next Issue-body revision');
+    expect(normalizedSkill).toContain('rejected with a substantive reason');
+  });
+
+  it('runs the substantive floor on the live body before terminal review', () => {
+    expect(normalizedSkill).toContain('Immediately before sending the terminal review');
+    expect(normalizedSkill).toContain('`LIVE_ISSUE_BODY`');
+    expect(normalizedSkill).toContain(
+      '`node --experimental-strip-types scripts/tier-gate-guard.ts --text "$LIVE_ISSUE_BODY"`',
+    );
+    expect(normalizedSkill).toContain('omit `--text-file` and `--draft-path`');
+  });
+
+  it('applies acceptance only after review, dispositions, floor, and revision match', () => {
+    for (const condition of [
+      'all tier-required **published reviewer comments** exist',
+      'all findings from every required round',
+      'the terminal review read a revision on which the existing substantive floor passed',
+      'the accepted body is the terminal review\'s named revision or that one permitted correction',
+      'The sole acceptance projection is the existing `spec-review:accepted` Issue',
+    ]) {
+      expect(normalizedSkill).toContain(condition);
+    }
   });
 });

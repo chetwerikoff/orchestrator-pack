@@ -27,19 +27,8 @@ is introduced.
 
 ### What changed
 
-Target-running GitHub repository, project namespace, default-branch, worktree,
-review, and create-Issue journal selectors now consume the selected project card
-instead of pack literals, cwd/origin inference, ambient repository variables, or
-an Issue-number-only state path. In target mode (`OPK_PROJECT_ID` non-empty),
-tracked `scripts/gh` authorizes `github.com` plus exactly the selected card
-repository before native/network execution and rejects conflicting repository or
-host ingress and arbitrary GraphQL.
+Target-running GitHub repository, project namespace, default-branch, worktree, and review selectors now consume the selected project card instead of pack literals, cwd/origin inference, or ambient repository variables. In target mode (`OPK_PROJECT_ID` non-empty), tracked `scripts/gh` authorizes `github.com` plus exactly the selected card repository before native/network execution and rejects conflicting repository or host ingress and arbitrary GraphQL.
 
-Create-Issue stage-record state now uses
-`~/.local/state/create-issue-draft/<projectId>/<issueNumber>/journal/`, including
-`pending/` and `active-cycle-id.txt`. Existing #2186 project-state migration
-remains the migration authority; this change prevents the producer from
-recreating the retired flat Issue-number-only path.
 
 ### Operator adoption
 

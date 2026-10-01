@@ -110,8 +110,7 @@ continuation, re-read the live Issue through the tracked GitHub read surface.
 Compare it with the manager's last authoritative Issue read. When the live
 title/body changed, the new bytes are delta scope for the **same** Issue-bound
 PR/branch: include or implement that delta through the ordinary continuation
-loop. The change does not require operator re-acceptance, a second implementation
-conversation, or reopening/re-arming create-Issue review stages.
+loop. The change does not require operator re-acceptance or a second implementation conversation.
 
 Every manager -> ChatGPT execution turn is one ordinary tracked Browser-GPT turn
 under `docs/browser-gpt-turn-runbook.md` plus the execution-only checkpoint in
