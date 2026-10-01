@@ -1,8 +1,9 @@
 import { runProcessSync } from '../kernel/subprocess.ts';
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
+import { canonicalReviewStateRoot } from './canonical-review-directory.ts';
 import {
   extractMarker,
   logicalFingerprint,
@@ -510,7 +511,18 @@ export function syncIssueProjectionLabels(
 }
 
 export function defaultWorkdir(issueNumber: number): string {
-  return join(homedir(), '.local', 'state', 'create-issue-draft', String(issueNumber), 'journal');
+  return join(canonicalReviewStateRoot(), String(issueNumber), 'journal');
+}
+
+export function resolveJournalWorkdir(issueNumber: number, override?: string): string {
+  const canonical = defaultWorkdir(issueNumber);
+  if (!override) return canonical;
+  const requested = resolve(override);
+  if (process.env.VITEST) return requested;
+  if (requested !== resolve(canonical)) {
+    throw new Error(`create_issue_journal_workdir_override_untrusted:${requested}`);
+  }
+  return canonical;
 }
 
 export function pendingPath(workdir: string, eventKey: string): string {
