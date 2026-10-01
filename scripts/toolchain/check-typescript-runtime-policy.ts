@@ -1112,6 +1112,163 @@ function nonLiveRestatementPath(path: string, contract: InventoryContract): bool
   return prefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 }
 
+type RuntimeMajorKind = 'node' | 'npm' | 'either';
+
+function runtimeMajorKindsOverlap(left: RuntimeMajorKind, right: RuntimeMajorKind): boolean {
+  return left === 'either' || right === 'either' || left === right;
+}
+
+function runtimeMajorIdentifierKind(name: string): RuntimeMajorKind | undefined {
+  const compact = name.replace(/[_-]/gu, '').toLowerCase();
+  if (!compact.includes('major')) return undefined;
+  if (compact.includes('npm')) return 'npm';
+  if (compact.includes('node')) return 'node';
+  if (compact === 'requiredmajor') return 'either';
+  return undefined;
+}
+
+function runtimeMajorLiteralKind(node: ts.Expression): RuntimeMajorKind | undefined {
+  const raw = ts.isNumericLiteral(node)
+    ? node.text
+    : ts.isStringLiteralLike(node)
+      ? node.text
+      : undefined;
+  if (raw === undefined || !/^\d+$/u.test(raw)) return undefined;
+  const value = Number(raw);
+  if (value === SUPPORTED_NODE_MAJOR && value === SUPPORTED_NPM_MAJOR) return 'either';
+  if (value === SUPPORTED_NODE_MAJOR) return 'node';
+  if (value === SUPPORTED_NPM_MAJOR) return 'npm';
+  return undefined;
+}
+
+function versionDerivedMajorKind(node: ts.Expression, sourceFile: ts.SourceFile): RuntimeMajorKind | undefined {
+  const text = node.getText(sourceFile);
+  if (!/\bversion(?:s)?\b|process\.version/iu.test(text)) return undefined;
+  if (!/\b(?:Number|parseInt)\s*\(|\.split\s*\(/u.test(text)) return undefined;
+  if (/\bnpm\b/iu.test(text)) return 'npm';
+  if (/process\.(?:versions\.node|version)|\bnode\b/iu.test(text)) return 'node';
+  return 'either';
+}
+
+function comparisonOperator(kind: ts.SyntaxKind): boolean {
+  return kind === ts.SyntaxKind.EqualsEqualsToken
+    || kind === ts.SyntaxKind.ExclamationEqualsToken
+    || kind === ts.SyntaxKind.EqualsEqualsEqualsToken
+    || kind === ts.SyntaxKind.ExclamationEqualsEqualsToken;
+}
+
+function sourceMajorRestatementViolations(path: string, source: string): RuntimePolicyViolation[] {
+  if (!/\.(?:[cm]?[jt]s)$/u.test(path)) return [];
+  const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
+  const aliases = new Map<string, RuntimeMajorKind>();
+  const violations: RuntimePolicyViolation[] = [];
+  const message = `live runtime contract must derive supported Node/npm majors from ${NODE_VERSION_FILE}; found independent current-major restatement.`;
+
+  const lineOf = (node: ts.Node): number =>
+    sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+
+  const record = (node: ts.Node): void => {
+    violations.push({
+      path,
+      line: lineOf(node),
+      rule: 'runtime-major-restatement',
+      message,
+    });
+  };
+
+  const collectAliases = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node)
+      && ts.isIdentifier(node.name)
+      && node.initializer
+      && /major$/iu.test(node.name.text)) {
+      const kind = runtimeMajorIdentifierKind(node.name.text)
+        ?? versionDerivedMajorKind(node.initializer, sourceFile);
+      if (kind) aliases.set(node.name.text, kind);
+    }
+    ts.forEachChild(node, collectAliases);
+  };
+  collectAliases(sourceFile);
+
+  const expressionKind = (node: ts.Expression): RuntimeMajorKind | undefined => {
+    if (!ts.isIdentifier(node)) return undefined;
+    return runtimeMajorIdentifierKind(node.text) ?? aliases.get(node.text);
+  };
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node)
+      && ts.isIdentifier(node.name)
+      && node.initializer) {
+      const declaredKind = runtimeMajorIdentifierKind(node.name.text);
+      const literalKind = runtimeMajorLiteralKind(node.initializer);
+      if (declaredKind && literalKind && runtimeMajorKindsOverlap(declaredKind, literalKind)) {
+        record(node.initializer);
+      }
+    } else if (ts.isPropertyAssignment(node)) {
+      const name = ts.isIdentifier(node.name) || ts.isStringLiteralLike(node.name)
+        ? node.name.text
+        : undefined;
+      const declaredKind = name ? runtimeMajorIdentifierKind(name) : undefined;
+      const literalKind = runtimeMajorLiteralKind(node.initializer);
+      if (declaredKind && literalKind && runtimeMajorKindsOverlap(declaredKind, literalKind)) {
+        record(node.initializer);
+      }
+    } else if (ts.isBinaryExpression(node) && comparisonOperator(node.operatorToken.kind)) {
+      const leftLiteral = runtimeMajorLiteralKind(node.left);
+      const rightLiteral = runtimeMajorLiteralKind(node.right);
+      const leftKind = expressionKind(node.left);
+      const rightKind = expressionKind(node.right);
+      if (leftLiteral && rightKind && runtimeMajorKindsOverlap(leftLiteral, rightKind)) {
+        record(node.left);
+      } else if (rightLiteral && leftKind && runtimeMajorKindsOverlap(rightLiteral, leftKind)) {
+        record(node.right);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return violations;
+}
+
+function shellScriptRestatesRuntimeMajor(
+  script: string,
+  kind: Exclude<RuntimeMajorKind, 'either'>,
+  major: number,
+): boolean {
+  const hasVersionSource = kind === 'node'
+    ? /\bnode(?:\.exe)?\s+--version\b|process\.(?:versions\.node|version)/iu.test(script)
+    : /\bnpm\s+--version\b/iu.test(script);
+  if (!hasVersionSource) return false;
+  const literal = escapeRegExp(String(major));
+  const comparator = '(?:===|!==|==|!=|-eq\\b|-ne\\b)';
+  return new RegExp(
+    comparator + '[^\\d\\n]{0,16}' + literal + '\\b'
+      + '|\\b' + literal + '\\b[^\\d\\n]{0,16}' + comparator,
+    'iu',
+  ).test(script);
+}
+
+function packageScriptMajorRestatementViolations(repoRoot: string): RuntimePolicyViolation[] {
+  const path = 'package.json';
+  const absolute = resolve(repoRoot, path);
+  if (!existsSync(absolute)) return [];
+  const source = readFileSync(absolute, 'utf8');
+  const manifest = JSON.parse(source) as PackageManifest;
+  const violations: RuntimePolicyViolation[] = [];
+  for (const [name, script] of Object.entries(manifest.scripts ?? {})) {
+    const restates = shellScriptRestatesRuntimeMajor(script, 'node', SUPPORTED_NODE_MAJOR)
+      || shellScriptRestatesRuntimeMajor(script, 'npm', SUPPORTED_NPM_MAJOR);
+    if (!restates) continue;
+    const propertyOffset = source.indexOf(JSON.stringify(name));
+    violations.push({
+      path,
+      line: propertyOffset >= 0 ? source.slice(0, propertyOffset).split(/\r?\n/u).length : 1,
+      rule: 'runtime-major-restatement',
+      message: `package scripts must derive supported Node/npm majors from ${NODE_VERSION_FILE}; found an independent current-major version check.`,
+    });
+  }
+  return violations;
+}
+
 function supportedMajorRestatementViolations(
   repoRoot: string,
   files: readonly string[],
@@ -1134,7 +1291,9 @@ function supportedMajorRestatementViolations(
     const path = normalizePath(relative(repoRoot, absolute));
     if (path === NODE_VERSION_FILE || path === 'package.json' || path === 'package-lock.json' || path === '.mise.toml') continue;
     if (nonLiveRestatementPath(path, contract)) continue;
-    const lines = readFileSync(absolute, 'utf8').split(/\r?\n/u);
+    const source = readFileSync(absolute, 'utf8');
+    violations.push(...sourceMajorRestatementViolations(path, source));
+    const lines = source.split(/\r?\n/u);
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index] ?? '';
       if (nodePatterns.some((pattern) => pattern.test(line)) || npmPatterns.some((pattern) => pattern.test(line))) {
@@ -1485,6 +1644,7 @@ export function checkTypeScriptRuntimePolicy(repoRoot = resolve('.')): RuntimePo
     ...packageScripts.violations,
     ...packageViolations(root, allFiles),
     ...mirrorViolations(root),
+    ...packageScriptMajorRestatementViolations(root),
     ...supportedMajorRestatementViolations(root, restatementFiles(root), contract),
     ...agentsRuntimeViolations(root),
     ...compilerViolations(root),

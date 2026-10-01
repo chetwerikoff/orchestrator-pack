@@ -334,6 +334,47 @@ describe('launch inventory and fail-closed policy', () => {
       && violation.path === 'scripts/live-runtime-policy.ts')).toBe(false);
   });
 
+  it('rejects alias-bound and runtime-derived plain major restatements', () => {
+    const root = makePolicyFixture();
+    const path = 'scripts/live-runtime-gate.ts';
+    write(join(root, path), [
+      'const requiredNodeMajor = ' + SUPPORTED_NODE_MAJOR + ';',
+      'const requiredNpmMajor = ' + SUPPORTED_NPM_MAJOR + ';',
+      'const version = process.version;',
+      "const major = Number(version.slice(1).split('.')[0]);",
+      'if (major !== ' + SUPPORTED_NODE_MAJOR + ') throw new Error(String(requiredNodeMajor));',
+      'void requiredNpmMajor;',
+      '',
+    ].join('\n'));
+    const violations = checkTypeScriptRuntimePolicy(root).violations.filter((violation) =>
+      violation.rule === 'runtime-major-restatement' && violation.path === path);
+    expect(new Set(violations.map((violation) => violation.line))).toEqual(new Set([1, 2, 5]));
+  });
+
+  it('rejects a supported npm-major comparison in a root package script without rejecting engine mirrors', () => {
+    const root = makePolicyFixture();
+    const manifestPath = join(root, 'package.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
+    const scripts = (manifest.scripts ?? {}) as Record<string, string>;
+    manifest.scripts = {
+      ...scripts,
+      'check:npm-major': "npm --version | awk -F. '$1 == " + SUPPORTED_NPM_MAJOR
+        + " { ok = 1 } END { exit ok ? 0 : 1 }'",
+    };
+    write(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+    const violations = checkTypeScriptRuntimePolicy(root).violations.filter((violation) =>
+      violation.rule === 'runtime-major-restatement' && violation.path === 'package.json');
+    expect(violations).toHaveLength(1);
+
+    manifest.scripts = {
+      ...(manifest.scripts as Record<string, string>),
+      'check:npm-major': 'node scripts/toolchain/check-npm-major.mjs --quiet',
+    };
+    write(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+    expect(checkTypeScriptRuntimePolicy(root).violations.filter((violation) =>
+      violation.rule === 'runtime-major-restatement' && violation.path === 'package.json')).toEqual([]);
+  });
+
   it('rejects supported-major restatements in live json producers', () => {
     const root = makePolicyFixture();
     write(join(root, 'scripts/json-producers/live-producer.ts'), `export const nodeMajor = ${SUPPORTED_NODE_MAJOR};\n`);
