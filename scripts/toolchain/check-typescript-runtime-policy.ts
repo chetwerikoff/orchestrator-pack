@@ -851,7 +851,6 @@ function scanWorkflowNodeVersions(
         });
         continue;
       }
-      const selector = selectors[0];
       if (!selector) continue;
       if (selector.kind === 'node-version-file') {
         if (!authorityBoundNodeVersionFile(selector.value)) {
