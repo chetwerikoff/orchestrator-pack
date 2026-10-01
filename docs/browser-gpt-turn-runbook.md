@@ -41,7 +41,7 @@ path, prompt/output path, receipt, envelope, cookie, token, or credential.
 
 1. Enter a trusted current checkout and read the live `AGENTS.md` and
    `docs/chat-executor-rules.md`.
-2. Verify the repository's Node 22 requirement and the exact task/turn
+2. Verify the repository's declared Node-runtime requirement and the exact task/turn
    identities supplied by the owning workflow. For governed create-Issue
    reviewer turns, this includes the current tier, role, stage, source slot,
    and frozen revision. A workflow that does not define create-review
@@ -75,7 +75,7 @@ path, prompt/output path, receipt, envelope, cookie, token, or credential.
    refusal.
 4. Confirm the configured headed automation Chrome is running and logged in.
    Never type credentials. Create-Issue callers do not run a separate mandatory
-   preflight command: Node 22, tracked GitHub transport and Browser-GPT
+   preflight command: the declared Node runtime, tracked GitHub transport and Browser-GPT
    configuration are revalidated inline before the first launcher/browser/send
    side effect.
 5. Start or verify the configured browser through the existing launcher:
