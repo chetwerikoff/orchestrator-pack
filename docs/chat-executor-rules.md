@@ -166,7 +166,7 @@ persistent coordination mechanism.
 
 For execute-Issue, render the already-owned manager phase into the existing
 stage component as `execute:<phase>`, where `phase` is exactly
-`implementation`, `review`, or `fixer`. This is a string projection for the
+`implementation`, `review`, `fixer`, or `smoke`. This is a string projection for the
 existing escalation key, not a new lifecycle state.
 
 Dispatch/re-dispatch payloads remain role plus task invariants; procedure
@@ -221,8 +221,8 @@ Required CI conclusions apply only to the exact PR head they evaluated.
 For smoke/CI readiness, the newest existing `pack-worker-smoke-report/v1`
 PASS comment on the same PR is sufficient regardless of its report head or
 GitHub author. An earlier-head PASS remains sufficient on later commits; no
-PASS leaves smoke readiness unsatisfied. Independence is provided by the
-post-review supervised smoke-worker handoff, not a durable actor-role witness.
+PASS leaves smoke readiness unsatisfied. After review, the same manager Dispatch
+continues into the smoke phase; no independent smoke-worker handoff is required.
 The existing v1 report schema, including head and scenario observations,
 remains unchanged. Review authority remains current-head bound, but reviewer
 invocation and review authority are not the same event: the pack-owned runner
@@ -255,15 +255,19 @@ After every new commit or history rewrite:
 - direct connected-GitHub reviews remain exact-commit evidence and do not
   themselves create or rewrite the runner's durable stage-completion latch.
 
-The supervised independent smoke worker checks out the PR head, runs every
-Issue-declared `smoke-test-plan` scenario, and publishes the existing v1
-report. A first FAIL/BLOCKED requires the existing worker/fixer to correct
-the defect and explicitly invoke smoke again, not a harness retry or
-scheduler reconciler. Existing secret scrubbing redacts forwarded/report
-material and does not refuse the smoke run because content was scrubbed.
-The selected project card supplies the smoke repository. Guidance that
-smoke scenarios should not touch live machine configuration is authoring
-prose only, not a runtime parser, validator, or refusal mechanism.
+After settled review and green required CI, a required scenario-bearing smoke
+plan is owned by the PR owner itself. A plain worker/firefighter runs it in its
+existing PR checkout. A managed execute-Issue manager reads the exact Issue-bound
+PR/current head with tracked `scripts/gh`, fetches that commit, creates one
+temporary detached Git worktree without switching its canonical `origin/main`
+manager worktree, runs the plan and `worker-smoke-run publish --repo-root` from
+that temporary checkout, removes only that checkout, and confirms the canonical
+manager worktree is unchanged before consuming the emitted smoke record. A first
+FAIL/BLOCKED requires the existing owner/fixer to correct the defect and
+explicitly execute smoke again, not a harness retry or scheduler reconciler.
+`not-applicable` and supported `legacy-exempt` plans require no smoke
+publication. Existing secret scrubbing redacts forwarded/report material and
+does not refuse publication because content was scrubbed.
 
 Branch-update sequencing follows the canonical rule in the
 [orchestration runbook](orchestration-runbook.md#main-update-sequencing).

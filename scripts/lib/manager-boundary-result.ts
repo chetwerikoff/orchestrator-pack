@@ -7,7 +7,7 @@ export const MANAGER_NEXT_ACTION_KINDS = [
 ] as const;
 
 export type ManagerNextActionKind = typeof MANAGER_NEXT_ACTION_KINDS[number];
-export type ExecuteIssueManagerPhase = 'implementation' | 'review' | 'fixer' | 'independent-smoke';
+export type ExecuteIssueManagerPhase = 'implementation' | 'review' | 'fixer' | 'smoke';
 export type ManagerStage = `execute:${ExecuteIssueManagerPhase}`;
 
 export const MANAGER_EXTERNAL_PAUSE_CAUSES = [
@@ -144,7 +144,7 @@ function validStage(value: unknown): value is ManagerStage {
   return value === 'execute:implementation'
     || value === 'execute:review'
     || value === 'execute:fixer'
-    || value === 'execute:independent-smoke';
+    || value === 'execute:smoke';
 }
 
 export function validateManagerActionBinding(value: unknown): string[] {

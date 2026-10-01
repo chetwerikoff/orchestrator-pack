@@ -51,19 +51,19 @@ The supervisor owns **completion continuity**, not substantive implementation.
 7. Never take over the substantive Issue implementation merely because manager
    recovery is required.
 8. For a manager-controlled Browser-GPT implementation, treat settled pack
-   review as a nonterminal handoff, not manager-role completion. Keep the same
-   manager Dispatch alive while the supervisor launches or reuses the existing
-   supervised local worker as the independent-smoke parent for the exact
-   handed-off PR/head. When the canonical same-PR
-   `pack-worker-smoke-report/v1` is observable, continue that same manager
-   Dispatch through the existing continuation channel; the manager re-reads the
-   authoritative smoke record and projects it through the shared boundary.
-   The supervisor consumes the validated `verdict` before role completion:
-   `PASS` may complete the manager role; proved `FAIL` returns to the same
-   nonterminal parent workflow and the supervisor-launched local worker owns
-   the fix and an explicit independent smoke execution on the corrected head. Settled pack review stays
-   complete. This scoped manager-boundary change does not claim the broader
-   local-worker incident/consumption loop is implemented or closed.
+   review as a nonterminal transition into the same manager's `execute:smoke`
+   phase. Keep that manager Dispatch alive. For a required scenario-bearing
+   plan, the manager re-reads the exact Issue-bound PR/current head with tracked
+   `scripts/gh`, creates one unique temporary detached Git worktree at that
+   commit without switching its canonical `origin/main` manager worktree,
+   executes the plan there, and runs `worker-smoke-run publish --repo-root`
+   from that checkout. Remove only that temporary worktree and prove the
+   canonical manager worktree HEAD/branch/status unchanged before consuming the
+   already-emitted publish JSON through the shared boundary. `PASS` may
+   complete the manager role; proved `FAIL` enters the existing fixer
+   continuation and smoke is explicitly executed again after the corrected
+   head is ready. Settled pack review stays complete. `not-applicable` and
+   supported `legacy-exempt` requirements keep the existing no-smoke path.
 
 Supervisor launch and recovery remain governed by
 [`docs/orchestration-runbook.md`](../../../docs/orchestration-runbook.md) and the
@@ -105,7 +105,7 @@ logical round gets one fresh GPT fixer conversation distinct from the
 implementation conversation and every reviewer conversation; after a
 strict-descendant fix and current CI green, the existing tier/cap review authority
 continues. The manager never manufactures scheduler `ready_for_review` state or
-acts as the independent-smoke actor.
+delegates required smoke to a separate smoke actor.
 
 The shared Browser-GPT runbook remains the sole owner of one-turn launch,
 observation, attribution, recovery, retry/no-resend, publication, and tab
@@ -116,14 +116,14 @@ Execute-Issue product-error recovery—including its reserved causes, GitHub-fir
 ## Terminal outcomes
 
 Normal operator-visible completion is `VERIFIED_COMPLETE`. For a
-manager-controlled Browser-GPT implementation, the manager may complete its own
-role only after the canonical pack-review obligations settle and it hands the
-supervisor the exact Issue/PR/head/CI/review facts with `independent smoke` as
-the next legal action. Overall `VERIFIED_COMPLETE` is legal only after the
-supervisor-owned local independent-smoke worker publishes a same-PR PASS, with current-head required CI green and
-a fresh current-state verification under `docs/chat-executor-rules.md` and the
-live Issue succeeds. GPT self-report and manager completion are advisory rather
-than overall completion authority.
+manager-controlled Browser-GPT implementation, the same manager may complete
+its own role only after canonical pack-review obligations settle and, when smoke
+is required, its `execute:smoke` path has published a same-PR PASS and
+successfully removed the temporary PR checkout while preserving the canonical
+manager worktree. Overall `VERIFIED_COMPLETE` additionally requires
+current-head required CI green and a fresh current-state verification under
+`docs/chat-executor-rules.md` and the live Issue. GPT self-report and manager
+completion are advisory rather than overall completion authority.
 
 `OPERATOR_ACTION_REQUIRED` is exceptional and names only a remaining
 credential/CAPTCHA human action after legal recovery is exhausted. The remedy

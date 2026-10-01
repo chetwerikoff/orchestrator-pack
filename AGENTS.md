@@ -253,8 +253,11 @@ completion, review-cap exhaustion, or a status write into merge readiness.
 Workers as well as orchestrator/manager MUST read the **Worker lifecycle**
 section linked above before the first side effect. That runbook owns pre-flight,
 runtime identity, review/CI/handoff, required CI, `pack-worker-report`,
-PR-created handoff, review-cycle cap, and one post-review independent
-smoke worker per PR. There is no worker-owned pre-review smoke obligation;
+PR-created handoff, review-cycle cap, and the post-review PR-owner smoke path.
+For a required scenario-bearing plan the PR owner executes the plan and publishes
+the v1 report itself; the managed execute-Issue manager uses a temporary detached
+checkout of the exact Issue-bound PR head without rebinding its canonical
+`origin/main` manager worktree. There is no pre-review smoke obligation;
 one same-PR PASS remains sufficient after later head changes while required
 CI stays bound to the current head.
 

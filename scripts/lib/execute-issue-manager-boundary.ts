@@ -27,7 +27,7 @@ import {
   type SmokeReport,
 } from './worker-smoke-core-base.ts';
 
-export const EXECUTE_ISSUE_PHASES = ['implementation', 'review', 'fixer', 'independent-smoke'] as const;
+export const EXECUTE_ISSUE_PHASES = ['implementation', 'review', 'fixer', 'smoke'] as const;
 export type ExecuteIssuePhase = typeof EXECUTE_ISSUE_PHASES[number];
 
 type ClassificationClass = 'completed' | 'recoverable' | 'external_pause' | 'contract_defect' | 'conditional';
@@ -242,16 +242,6 @@ export function isExecuteIssueReadOnlyArgv(argv: readonly string[]): boolean {
     const operation = normalized[probePrefix.length];
     return (operation === 'inspect' || operation === 'list')
       && !normalized.includes('--open-if-missing');
-  }
-
-  const smokeObserverPrefix = [
-    'node',
-    '--experimental-strip-types',
-    'scripts/execute-issue-manager-boundary.ts',
-    'observe-worker-smoke-recoverable',
-  ];
-  if (smokeObserverPrefix.every((part, index) => normalized[index] === part)) {
-    return true;
   }
 
   if (normalized[0] === 'scripts/gh') {
@@ -550,10 +540,6 @@ function structuredNextAction(value: unknown): ManagerNextAction | null {
   return (MANAGER_NEXT_ACTION_KINDS as readonly string[]).includes(action.kind) ? action : null;
 }
 
-const WORKER_SMOKE_RECOVERABLE_CAUSES = new Set([
-  'trusted_target_stale',
-] as const);
-
 const WORKER_SMOKE_EXTERNAL_CAUSES: Readonly<Record<string, ManagerExternalPauseCause>> = {
   browser_cdp_unavailable: 'external:chrome_not_running',
   profile_mismatch: 'external:profile_mismatch',
@@ -575,38 +561,6 @@ function isWorkerSmokeRecord(value: JsonRecord): boolean {
     || value.producer === SMOKE_REPORT_PRODUCER;
 }
 
-function workerSmokeObservationAction(
-  context: ExecuteIssueManagerBoundaryContext,
-  value: JsonRecord,
-  nonPassCause: string,
-): ManagerNextAction | null {
-  const prNumber = context.prNumber ?? Number(value.prNumber);
-  const headSha = text(value.headSha).toLowerCase();
-  if (context.phase !== 'independent-smoke'
-    || !Number.isSafeInteger(prNumber)
-    || Number(prNumber) < 1
-    || !/^[0-9a-f]{40}$/u.test(headSha)
-    || text(context.headSha).toLowerCase() !== headSha) return null;
-
-  return managerNextAction({
-    kind: 'execute-review-runner-read-only',
-    binding: actionBinding(context),
-    argv: [
-      'node',
-      '--experimental-strip-types',
-      'scripts/execute-issue-manager-boundary.ts',
-      'observe-worker-smoke-recoverable',
-      '--repo', context.repository,
-      '--issue-number', String(context.issueNumber),
-      '--pr-number', String(prNumber),
-      '--head-sha', headSha,
-      '--source-revision', context.sourceRevision,
-      '--phase', context.phase,
-      '--cause', nonPassCause,
-    ],
-  });
-}
-
 function workerSmokeStructuredEvidence(value: JsonRecord): JsonRecord {
   return {
     marker: SMOKE_REPORT_MARKER,
@@ -625,8 +579,8 @@ function classifyWorkerSmoke(
   context: ExecuteIssueManagerBoundaryContext,
 ): ManagerBoundaryEvaluation {
   const producer = SMOKE_REPORT_PRODUCER;
-  if (context.phase !== 'independent-smoke') {
-    return defect(context, producer, 'worker-smoke report requires the independent-smoke manager phase');
+  if (context.phase !== 'smoke') {
+    return defect(context, producer, 'worker-smoke report requires the smoke manager phase');
   }
   if (value.producer !== SMOKE_REPORT_PRODUCER) {
     return defect(context, producer, 'worker-smoke record has an invalid producer');
@@ -718,13 +672,6 @@ function classifyWorkerSmoke(
   }
   if (causeFamily === 'scenario_assertion_failed') {
     return defect(context, producer, 'worker-smoke assertion causeFamily is not a proved FAIL');
-  }
-
-  if (WORKER_SMOKE_RECOVERABLE_CAUSES.has(nonPassCause as never)) {
-    const nextAction = workerSmokeObservationAction(context, value, nonPassCause);
-    return nextAction
-      ? recoverable(context, producer, 'execute_worker_smoke_reconcile', nextAction)
-      : defect(context, producer, 'worker-smoke recoverable state lacks an exact read-only reconciliation action');
   }
 
   const externalCause = WORKER_SMOKE_EXTERNAL_CAUSES[nonPassCause];

@@ -21,7 +21,7 @@ This runbook is entered only from the explicit execute-existing-Issue workflow
 owned by `.cursor/skills/execute-issue-with-gpt/SKILL.md`.
 
 - **Supervisor:** owns whole-task continuity, recovery routing, and the
-  post-manager local independent-smoke launch. It does not become the Issue
+  post-review same-manager smoke continuation. It does not become the Issue
   implementer.
 - **Manager:** owns one resumable external GPT Issue-execution session through
   candidate implementation and the reusable manager-owned PR-review convergence
@@ -358,7 +358,7 @@ If current state already establishes a candidate-complete implementation, do
 Resolve the exact live Issue-bound PR/head and required CI state; when the
 review-entry preconditions below are satisfied, enter **Manager-owned PR-review
 convergence**. This manager path does not return overall `VERIFIED_COMPLETE`
-before the later supervisor-owned independent smoke.
+before required same-manager smoke completes.
 
 ### Same-conversation continuation first
 
@@ -577,7 +577,7 @@ node --experimental-strip-types scripts/pack-review-runner.ts reconcile \
   --pr-number <PR_NUMBER> --immediate
 ```
 
-A completed `reviewStageComplete` remains completed. A later independent-smoke
+A completed `reviewStageComplete` remains completed. A later smoke
 fix does not reopen pack review.
 
 ### Review observation and recovery
@@ -616,39 +616,47 @@ observation** exactly.
 
 ### Settled-review manager handoff
 
-After required review obligations settle, the manager performs fresh exact-state
-reads and emits the existing manager -> supervisor Task/Dispatch handoff **without
-completing the manager role**. This settled-review handoff is nonterminal: the same
-manager Dispatch remains alive while the supervisor owns independent-smoke launch
-or reuse. The handoff carries at least:
+After required review obligations settle, the same manager Dispatch remains
+nonterminal and fresh exact-state reads select the existing smoke/no-smoke
+procedure through `resolveSmokeRequirement`.
 
-- Issue number and URL;
-- PR number and URL;
-- exact current head;
-- current required-CI state;
-- pack-review cycle/stage completion and relevant runner id/result when present;
-- confirmation that no current material review finding remains open under the
-  existing authority;
-- next legal action: **launch local independent-smoke worker**.
+For `not-applicable` or supported `legacy-exempt`, no smoke checkout and no
+`publish` are required. For a required scenario-bearing plan, after required
+CI is green the same manager enters `execute:smoke` and performs this bounded
+local sequence:
 
-This is not a new durable terminal state and it is not manager whole-role
-completion. The manager does not run independent smoke itself.
+1. read the exact Issue-bound PR P and current head H through tracked
+   `scripts/gh`;
+2. record the canonical manager worktree HEAD, branch, and status;
+3. fetch H with ordinary Git;
+4. create one unique detached temporary worktree T at H with
+   `git worktree add --detach <T> <H>`, without switching, resetting, rebasing,
+   or merging the canonical `origin/main` manager worktree;
+5. verify T's local HEAD equals H, execute every declared scenario in T, and
+   write the report file there;
+6. run `worker-smoke-run publish --issue <N> --pr <P> --report-file <F> --repo-root <T>`;
+7. retain the emitted canonical JSON only in process memory, remove only T with
+   `git worktree remove --force <T>`, and prove the canonical manager
+   worktree HEAD/branch/status are unchanged;
+8. only then project that emitted JSON through
+   `classifyExecuteIssueManagerRecord` under phase `smoke`.
 
-The supervisor then follows `docs/orchestration-runbook.md`: launch or reuse the
-existing supervised local worker as the independent-smoke parent for the exact
-handed-off PR/head. That worker prepares current prerequisites and invokes the
-existing `worker-smoke-run ... --smoke-actor independent` path. When the
-canonical same-PR `pack-worker-smoke-report/v1` PASS or non-PASS report becomes observable,
-the supervisor continues the **same manager Dispatch** through the existing
-Task/Dispatch continuation channel. The manager re-reads that authoritative
-record and projects it through `classifyExecuteIssueManagerRecord`: same-PR
-PASS may complete the manager role; a proved
-`scenario_assertion_failed` completed/FAIL returns to the existing
-fixer/local-worker owner for a new head and fresh independent smoke; recoverable,
-external_pause, and contract_defect retain the shared boundary semantics.
-Settled pack review does not reopen. Overall `VERIFIED_COMPLETE` is possible
-only after a same-PR independent smoke PASS exists with current-head required CI green and the fresh final
-verification below succeeds.
+H selects what the manager executes; it is not an expected-head witness for the
+publisher. `publish` stamps local `git rev-parse HEAD`, does not compare that
+value to the live PR head, and does not inspect CI. A fetch/add/HEAD-identity
+failure occurs before publication and claims no PASS. If exact-T cleanup or the
+canonical-worktree unchanged check fails after a successful POST, do not
+republish and do not consume that record as manager smoke completion; surface
+the exact local cleanup defect through the existing parent/supervisor path. The
+already-posted v1 comment remains ordinary same-PR evidence under unchanged
+readiness semantics.
+
+A same-PR PASS projects completed/PASS. A proved
+`scenario_assertion_failed` + `executed_scenario_failure` projects the
+existing completed/FAIL fixer continuation; after the fix and required CI the
+same manager executes smoke again. Supported structured external BLOCKED values
+retain existing `external_pause` behavior, and malformed/unsupported evidence
+remains a contract defect. Settled pack review does not reopen.
 
 ## Independent GitHub Definition-of-Done verification
 
@@ -657,8 +665,8 @@ entry and the settled-review handoff, but manager-role completion is not overall
 completion. Before the **top-level workflow** returns `VERIFIED_COMPLETE`,
 perform a fresh current-state check under the live Issue and
 `docs/chat-executor-rules.md`. For a manager-controlled Browser-GPT
-implementation, this check occurs only after the supervisor-owned local
-a same-PR independent smoke PASS exists with current-head CI green. Where applicable, verify
+implementation, this check occurs only after a same-PR smoke PASS exists when
+required and current-head CI is green. Where applicable, verify
 at least:
 
 - the intended scoped implementation is published in the PR;
@@ -676,10 +684,9 @@ is not completion evidence.
 
 Before the manager's settled-review handoff, a concrete implementation or fixer
 gap returns to the owning implementation/fixer conversation as defined above.
-After the handoff, independent-smoke findings belong to the supervisor-launched
-local worker: that worker fixes to a new head and runs fresh independent smoke,
-whose canonical durable report is continued back to the same manager Dispatch;
-the completed pack-review stage does not reopen. A red required CI check,
+After settled review, a smoke assertion failure enters the existing fixer
+continuation; the corrected head returns to the same manager's `execute:smoke`
+procedure. The completed pack-review stage does not reopen. A red required CI check,
 missing scoped file, unresolved material review finding, missing same-PR smoke PASS,
 or another live Issue acceptance gap remains non-completion evidence. If an
 implementation conversation ended with one of the supported exact product-error
@@ -735,9 +742,10 @@ boundary.
 
 Use only after the fresh Definition-of-Done verification passes. For the
 manager-controlled Browser-GPT implementation path, this additionally requires
-settled canonical pack review and supervisor-owned local independent-smoke PASS for the same PR (with current-head required CI green). A manager handoff, implementation-chat completion,
-reviewer-chat completion, or `reviewStageComplete` without that final smoke is
-not sufficient. This is the normal top-level terminal outcome.
+settled canonical pack review and, when required by the live Issue, a same-PR
+smoke PASS produced through the same-manager path (with current-head required CI
+green). Implementation-chat completion, reviewer-chat completion, or
+`reviewStageComplete` without required smoke is not sufficient. This is the normal top-level terminal outcome.
 
 ### `OPERATOR_ACTION_REQUIRED`
 
