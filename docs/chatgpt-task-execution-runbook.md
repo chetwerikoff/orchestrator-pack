@@ -639,16 +639,16 @@ The supervisor then follows `docs/orchestration-runbook.md`: launch or reuse the
 existing supervised local worker as the independent-smoke parent for the exact
 handed-off PR/head. That worker prepares current prerequisites and invokes the
 existing `worker-smoke-run ... --smoke-actor independent` path. When the
-canonical durable exact-head `pack-worker-smoke-report/v1` becomes observable,
+canonical same-PR `pack-worker-smoke-report/v1` PASS or non-PASS report becomes observable,
 the supervisor continues the **same manager Dispatch** through the existing
 Task/Dispatch continuation channel. The manager re-reads that authoritative
-record and projects it through `classifyExecuteIssueManagerRecord`: exact-head
+record and projects it through `classifyExecuteIssueManagerRecord`: same-PR
 PASS may complete the manager role; a proved
 `scenario_assertion_failed` completed/FAIL returns to the existing
 fixer/local-worker owner for a new head and fresh independent smoke; recoverable,
 external_pause, and contract_defect retain the shared boundary semantics.
 Settled pack review does not reopen. Overall `VERIFIED_COMPLETE` is possible
-only after independent smoke passes on the final exact head and the fresh final
+only after a same-PR independent smoke PASS exists with current-head required CI green and the fresh final
 verification below succeeds.
 
 ## Independent GitHub Definition-of-Done verification
@@ -659,14 +659,14 @@ completion. Before the **top-level workflow** returns `VERIFIED_COMPLETE`,
 perform a fresh current-state check under the live Issue and
 `docs/chat-executor-rules.md`. For a manager-controlled Browser-GPT
 implementation, this check occurs only after the supervisor-owned local
-independent smoke has passed on the final exact head. Where applicable, verify
+a same-PR independent smoke PASS exists with current-head CI green. Where applicable, verify
 at least:
 
 - the intended scoped implementation is published in the PR;
 - changed paths/diff match the Issue scope;
 - important publication results were read back;
 - required CI is green for the exact current PR head;
-- required smoke is bound to that current head when the Issue declares smoke;
+- the same PR has a smoke PASS at any report head when the Issue declares smoke;
 - no known current material review finding remains unresolved;
 - current-head review authority is acceptable;
 - merge has **not** been performed unless the direct top-level operator
@@ -681,7 +681,7 @@ After the handoff, independent-smoke findings belong to the supervisor-launched
 local worker: that worker fixes to a new head and runs fresh independent smoke,
 whose canonical durable report is continued back to the same manager Dispatch;
 the completed pack-review stage does not reopen. A red required CI check,
-missing scoped file, unresolved material review finding, stale exact-head smoke,
+missing scoped file, unresolved material review finding, missing same-PR smoke PASS,
 or another live Issue acceptance gap remains non-completion evidence. If an
 implementation conversation ended with one of the supported exact product-error
 proofs, use the GitHub-first same-conversation continuation and settled,
@@ -736,8 +736,7 @@ boundary.
 
 Use only after the fresh Definition-of-Done verification passes. For the
 manager-controlled Browser-GPT implementation path, this additionally requires
-settled canonical pack review and supervisor-owned local independent-smoke PASS
-for the final exact head. A manager handoff, implementation-chat completion,
+settled canonical pack review and supervisor-owned local independent-smoke PASS for the same PR (with current-head required CI green). A manager handoff, implementation-chat completion,
 reviewer-chat completion, or `reviewStageComplete` without that final smoke is
 not sufficient. This is the normal top-level terminal outcome.
 

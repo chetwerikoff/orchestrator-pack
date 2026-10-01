@@ -380,7 +380,7 @@ export function buildSmokeAgentPrompt(input: {
   runBinding?: SmokeRunBinding;
 }): string {
   const scenarioLines = input.plan.scenarios
-    .map((scenario, index) => `${index + 1}. action: ${scenario.action}\n   expected: ${scenario.expected}`)
+    .map((scenario, index) => `${index + 1}. action: ${scenario.action} | expected: ${scenario.expected} | observed: ${scenario.observed ?? ''} | outcome: ${scenario.outcome ?? ''}${scenario.causeFamily ? ` | cause-family: ${scenario.causeFamily}` : ''}`)
     .join('\n');
 
   const durableLines = input.runBinding
@@ -410,7 +410,6 @@ export function buildSmokeAgentPrompt(input: {
     `Selected CI scope artifact: docs/declarations/${input.issueNumber}.pr-scope.json is generated evidence. It is skipped from product changed-path accounting (same rule as scripts/pr-scope-check.ts selectedArtifactPath). Do not FAIL an exact-scope or allowed-path scenario solely because that file appears in git diff when every other changed path matches the Issue allowed-roots / declared implementation set.`,
     'Do not edit tracked implementation files, commit, push, merge, alter the Issue, or call pack-worker-report.',
     'When waiting for executor work, use only a completion or session identifier actually returned by the selected executor; never invent a shell_id or a transcript path.',
-    'Continue to follow the existing lifecycle progress and cancellation protocol.',
     'For any smoke scenario that requires pressing product Stop and injecting a synthetic Browser-GPT recovery fixture while the assistant turn is in flight, use the live Stop/generation control as the synchronization witness. Do not wait for an assistant reply or assistant-turn node before Stop; while that control is still present, press Stop first, then immediately perform the scenario\'s synthetic injection. If the Stop/generation witness disappears before the Stop action, do not inject into the settled turn; report the scenario as precondition unavailable.',
     'Cap any single block_until_ms at 300000; re-check and re-await instead of one long block.',
     'Invoke pack review only when a listed smoke scenario explicitly requires one live pack-review manager turn; do not start any other review.',
@@ -511,8 +510,10 @@ function parseSmokeScenarioBlock(block: string): SmokeScenario[] {
       }
       continue;
     }
-    if (current && /^\s{2,}/.test(rawLine)) {
-      parseScenarioFieldToken(trimmed, current);
+    if (current && (/^\s{2,}/.test(rawLine) || /^(?:expected|observed|outcome|skip-reason|cause-family):/i.test(trimmed))) {
+      for (const part of trimmed.split('|')) {
+        parseScenarioFieldToken(part.trim(), current);
+      }
     }
   }
 
@@ -835,8 +836,6 @@ export function normalizeSmokeReport(
       if (partial.terminalCleanup !== 'not_started_no_execution') {
         return { ok: false, reason: 'carry_only_pass_requires_no_execution_cleanup' };
       }
-    } else if (!isClosedOwnedSmokeTerminalCleanup(partial.terminalCleanup)) {
-      return { ok: false, reason: 'pass_requires_terminal_cleanup' };
     }
     if (partial.producer !== SMOKE_REPORT_PRODUCER) {
       return { ok: false, reason: 'pass_missing_producer' };

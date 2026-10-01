@@ -10,6 +10,7 @@ import {
   PACK_REVIEW_LEGACY_CAP_MAP_VERSION,
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
   acknowledgePackReviewReset,
+  commitPackReviewAuthorityTransition,
   commitPackReviewTerminal,
   commitPackReviewTriage,
   createInitialPackReviewAuthority,
@@ -18,6 +19,7 @@ import {
   packReviewFindingsSatisfiedByStrictDescendant,
   PackReviewAuthorityError,
   readPackReviewAuthority,
+  reconcilePackReviewTier,
   recordPackReviewPublication,
   reopenPackReviewAuthorityForExplicitExtraReview,
   retainPersistedOpenCycle,
@@ -845,7 +847,6 @@ describe('Issue #1887 strict-descendant findings settlement', () => {
       reviewStageComplete: true,
     });
     expect(state.triage).toBeUndefined();
-    expect(state.smokeOrdering?.reviewSettledHeadSha).toBe(current);
   });
 
   it('latches a clean T2 terminal without publication evidence', () => {
@@ -1028,5 +1029,45 @@ describe('Issue #1887 logical triage is diagnostic only', () => {
     });
     expect(state.cycle?.state).toBe('open_findings');
     expect(state.cycle?.reviewStageComplete).not.toBe(true);
+  });
+});
+
+describe('Issue #2250 smoke-ordering no longer governs pack-review authority', () => {
+  it('preserves historical smoke facts without vetoing tier reconciliation or changing them on new heads', () => {
+    const storeOptions = options();
+    const oldHead = sha('a');
+    const nextHead = sha('b');
+    let authority = initializePackReviewAuthority({
+      prNumber: 2250, headSha: oldHead, tier: 'T1', options: storeOptions,
+    });
+    authority = commitPackReviewAuthorityTransition({
+      prNumber: 2250,
+      expectedTransitionSeq: authority.transitionSeq,
+      nextPhase: authority.phase,
+      options: storeOptions,
+      mutate(current) {
+        current.smokeOrdering = {
+          independent: {
+            startedEver: true,
+            headSha: oldHead,
+            status: 'started',
+            updatedAtUtc: '2026-09-30T00:00:00.000Z',
+          },
+        };
+        return current;
+      },
+    });
+    const oldOrdering = authority.smokeOrdering;
+    authority = reconcilePackReviewTier({ prNumber: 2250, tier: 'T2', options: storeOptions });
+    expect(authority.cycle?.frozenTier).toBe('T2');
+    expect(authority.smokeOrdering).toEqual(oldOrdering);
+    authority = observePackReviewHead({
+      prNumber: 2250,
+      expectedTransitionSeq: authority.transitionSeq,
+      headSha: nextHead,
+      options: storeOptions,
+    });
+    expect(authority.currentHeadSha).toBe(nextHead);
+    expect(authority.smokeOrdering).toEqual(oldOrdering);
   });
 });

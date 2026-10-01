@@ -233,8 +233,9 @@ export function evaluateReadiness(input: ReadinessInput): ReadinessResult {
   if (input.review.unresolvedRequiredFinding !== false) failures.push('unresolved_required_review_finding');
   if (input.review.atCapOpenFindings !== false) failures.push('at_cap_open_findings');
   if (input.review.atCapContinuationRequired !== false) failures.push('at_cap_continuation_required');
-  if (!targetHead || normalizedSha(input.smoke.headSha) !== targetHead || input.smoke.state !== 'pass') {
-    failures.push('exact_head_smoke_not_passed');
+  // The smoke fact belongs to this PR; unlike required CI, a recorded PASS is reusable across heads.
+  if (input.smoke.state !== 'pass') {
+    failures.push('pr_smoke_not_passed');
   }
 
   const lifecycle = deriveAcceptedWorkerLifecycle(input);

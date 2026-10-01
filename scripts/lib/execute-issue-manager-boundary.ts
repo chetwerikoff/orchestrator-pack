@@ -552,8 +552,6 @@ function structuredNextAction(value: unknown): CreateIssueNextAction | null {
 
 const WORKER_SMOKE_RECOVERABLE_CAUSES = new Set([
   'trusted_target_stale',
-  'tier_order_input_stale',
-  'smoke_same_head_in_progress',
 ] as const);
 
 const WORKER_SMOKE_EXTERNAL_CAUSES: Readonly<Record<string, CreateIssueExternalPauseCause>> = {
@@ -636,7 +634,6 @@ function classifyWorkerSmoke(
   const issueNumber = Number(value.issueNumber);
   const prNumber = Number(value.prNumber);
   const headSha = text(value.headSha).toLowerCase();
-  const expectedHead = text(context.headSha).toLowerCase();
   if (issueNumber !== context.issueNumber) {
     return defect(context, producer, 'worker-smoke issue binding does not match the manager target');
   }
@@ -645,9 +642,6 @@ function classifyWorkerSmoke(
   }
   if (!/^[0-9a-f]{40}$/u.test(headSha)) {
     return defect(context, producer, 'worker-smoke head binding is missing or invalid');
-  }
-  if (expectedHead && headSha !== expectedHead) {
-    return defect(context, producer, 'worker-smoke head binding does not match the manager target');
   }
   if (!Array.isArray(value.scenarios) || value.scenarios.length === 0) {
     return defect(context, producer, 'worker-smoke scenarios are missing');
@@ -792,9 +786,6 @@ export function classifyExecuteIssueManagerRecord(
 ): CreateIssueManagerBoundaryEvaluation {
   const value = record(input);
   if (!value) return defect(context, 'execute-issue-manager-boundary', 'input record must be a JSON object');
-  if (value.reason === 'smoke_blocked_precondition_unchanged') {
-    return defect(context, 'worker-smoke-retry-fence/v1', 'same-head retry fence refused this attempt; coordinator recovery and smoke-parent override evidence are required');
-  }
   if (value.schema === 'turn-result/v1') return classifyTurn(value, context);
   if (value.schema === 'browser-gpt-page-probe/v1') return classifyProbe(value, context);
   if (isWorkerSmokeRecord(value)) return classifyWorkerSmoke(value, context);

@@ -29,7 +29,7 @@ interface ParsedWorkerSmokeObservationCli {
   headSha: string;
   sourceRevision: string;
   phase: 'independent-smoke';
-  cause: 'trusted_target_stale' | 'tier_order_input_stale' | 'smoke_same_head_in_progress';
+  cause: 'trusted_target_stale';
 }
 
 function usage(): string {
@@ -98,7 +98,7 @@ function parseWorkerSmokeObservationCli(argv: readonly string[]): ParsedWorkerSm
   if (!sourceRevision || !/^r[0-9]+$/iu.test(sourceRevision)) throw new Error('--source-revision must be rNN');
   if (!headSha || !/^[0-9a-f]{40}$/u.test(headSha)) throw new Error('--head-sha must be a 40-character hexadecimal SHA');
   if (phase !== 'independent-smoke') throw new Error('--phase must be independent-smoke for worker-smoke recovery observation');
-  if (cause !== 'trusted_target_stale' && cause !== 'tier_order_input_stale' && cause !== 'smoke_same_head_in_progress') {
+  if (cause !== 'trusted_target_stale') {
     throw new Error('--cause is outside the closed recoverable worker-smoke vocabulary');
   }
   return {
@@ -191,9 +191,7 @@ function runWorkerSmokeRecoverableObservation(
     inheritParentEnv: true,
     timeoutMs: 30_000,
   }));
-  const prFields = parsed.cause === 'smoke_same_head_in_progress'
-    ? 'number,headRefOid,body,comments'
-    : 'number,headRefOid,body';
+  const prFields = 'number,headRefOid,body';
   const pr = parseGitHubReadJson(runGitHubRead([
     'pr', 'view', String(parsed.prNumber), '--repo', parsed.repository, '--json', prFields,
   ]), 'worker-smoke PR observation');
@@ -229,16 +227,6 @@ function runWorkerSmokeRecoverableObservation(
     '^\\s*(closes|fixes|resolves)\\s+#' + parsed.issueNumber + '\\b',
     'im',
   ).test(prBody);
-  const matchingSmokeReports = parsed.cause === 'smoke_same_head_in_progress' && Array.isArray(pr.comments)
-    ? pr.comments.filter((comment) => {
-        if (!comment || typeof comment !== 'object' || Array.isArray(comment)) return false;
-        const body = typeof (comment as { body?: unknown }).body === 'string'
-          ? (comment as { body: string }).body
-          : '';
-        return body.includes('<!-- pack-worker-smoke-report/v1 -->') && body.includes(parsed.headSha);
-      }).length
-    : undefined;
-
   stdout.write(JSON.stringify({
     schema: 'execute-worker-smoke-recoverable-observation/v1',
     ok: true,
@@ -261,7 +249,6 @@ function runWorkerSmokeRecoverableObservation(
       headRefOid: observedHead,
       body: prBody,
       closesIssue,
-      ...(matchingSmokeReports === undefined ? {} : { matchingSmokeReports }),
     },
   }) + '\n');
   return 0;
