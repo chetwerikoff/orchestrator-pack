@@ -15,14 +15,14 @@ concurrency:
 
 jobs:
   runtime:
-    name: TypeScript runtime (Node 22)
+    name: TypeScript runtime
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
       - name: Install from frozen lockfile
         run: npm ci --include=dev
@@ -30,7 +30,7 @@ jobs:
         run: npm run check:node-major
       - name: Execute TypeScript without a build artifact
         run: npm run ts:smoke
-      - name: Enforce retired runtime surfaces from Node 22
+      - name: Enforce retired runtime surfaces from the declared Node runtime
         run: node --experimental-strip-types scripts/runtime-retirement/retired-surface-selftest.ts
       - name: Checkout exact-head final proof
         if: github.event_name == 'pull_request'
@@ -63,7 +63,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
       - name: Install from frozen lockfile
         run: npm ci --include=dev
@@ -82,7 +82,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
       - name: Install from frozen lockfile
         run: npm ci --include=dev
@@ -97,7 +97,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
       - name: Install from frozen lockfile
         run: npm ci --include=dev
@@ -115,7 +115,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
       - name: Install from frozen lockfile
         run: npm ci --include=dev
