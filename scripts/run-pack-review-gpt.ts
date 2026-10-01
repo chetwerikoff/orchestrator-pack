@@ -10,6 +10,7 @@ import {
 } from './lib/pack-gpt-reviewer.ts';
 import type { ResolvedScopeContext } from '../plugins/codex-pr-reviewer/lib/scope_context.ts';
 import { runProcess } from './kernel/subprocess.ts';
+import { resolveTargetContext } from './lib/target-context.ts';
 
 function trim(value: unknown): string {
   return String(value ?? '').trim();
@@ -74,7 +75,8 @@ function parseArgs(argv: string[]): {
   headSha?: string;
 } {
   let repoRoot = process.cwd();
-  let baseRef = 'origin/main';
+  const selected = String(process.env.OPK_PROJECT_ID ?? '').trim() ? resolveTargetContext({ env: process.env }) : null;
+  let baseRef = selected ? `origin/${selected.defaultBranch}` : 'origin/main';
   let prNumber: number | undefined;
   let issueNumber: number | undefined;
   let headSha: string | undefined;
@@ -129,7 +131,16 @@ async function main(): Promise<void> {
   if (repoSlug || fixtureHead) {
     assertGptHarnessFixtureAllowed();
   }
-  const resolvedRepoSlug = repoSlug || await resolveRepositorySlug(options.repoRoot);
+  const observedRepoSlug = repoSlug || await resolveRepositorySlug(options.repoRoot);
+  const selectedTarget = String(process.env.OPK_PROJECT_ID ?? '').trim()
+    ? resolveTargetContext({ env: process.env })
+    : null;
+  if (selectedTarget && observedRepoSlug.toLowerCase() !== selectedTarget.repository.toLowerCase()) {
+    throw new Error(
+      `run-pack-review-gpt repository ${observedRepoSlug} does not match selected target ${selectedTarget.repository}`,
+    );
+  }
+  const resolvedRepoSlug = selectedTarget?.repository ?? observedRepoSlug;
   const boundHead = trim(process.env.PACK_REVIEW_TARGET_HEAD_SHA);
   let headSha = options.headSha || boundHead;
   if (!headSha) {
