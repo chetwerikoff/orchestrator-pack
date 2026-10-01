@@ -324,11 +324,15 @@ function normalizeRepoSlug(value) {
 }
 
 function resolveWorkerStatusBindingRepoSlug(input, session, openPrs, env) {
+  const targetMode = Boolean(String(env.OPK_PROJECT_ID ?? '').trim());
   const explicit = normalizeRepoSlug(
     input.repoSlug
       ?? session.repoSlug
-      ?? env.GITHUB_REPOSITORY,
+      ?? (targetMode ? '' : env.GITHUB_REPOSITORY),
   );
+  if (targetMode && !explicit) {
+    return { repoSlug: '', failureReason: 'selected_target_repo_required' };
+  }
   const openPrRepos = new Set(
     toArray(openPrs)
       .map((pr) => normalizeRepoSlug(pr?.repoSlug ?? pr?.repository))

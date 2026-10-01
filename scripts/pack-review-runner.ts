@@ -133,7 +133,7 @@ import {
   type PackReviewerLayerOverrides,
 } from './lib/resolve-pack-reviewer.ts';
 import { resolveGptBrowserConfig, resolveRepositorySlug } from './lib/pack-gpt-reviewer.ts';
-import { resolveTargetContext } from './lib/target-context.ts';
+import { resolveTargetContext, type TargetContext } from './lib/target-context.ts';
 import {
   createPackGptSourceCommentTransport,
   resolvePackGptSourceComment,
@@ -768,11 +768,16 @@ function reviewIndependentRequiredCheckNames(policy: Record<string, unknown>): {
   };
 }
 
-async function manualPackReviewRequiredCiGreen(input: {
+export function requiredStatusChecksEndpoint(repoSlug: string, baseRef: string): string {
+  const branch = trim(baseRef);
+  if (!branch) throw new Error('required status checks branch is empty');
+  return `repos/${repoSlug}/branches/${encodeURIComponent(branch)}/protection/required_status_checks`;
+}
+
+export async function manualPackReviewRequiredCiGreen(input: {
   startInput: StartInput;
   target: { prNumber: number; headSha: string; repoSlug: string; sourceRepoRoot: string; prBaseRef: string };
 }): Promise<boolean> {
-  if (input.target.prBaseRef !== 'main') return false;
   const harness = process.env.OPK_VITEST_HARNESS === '1';
   let policy: Record<string, unknown>;
   let checks: ManualPackReviewCiCheck[];
@@ -786,7 +791,7 @@ async function manualPackReviewRequiredCiGreen(input: {
   } else {
     const policyResult = await runProcess({
       command: resolveTrackedGhWrapper(),
-      args: ['api', `repos/${input.target.repoSlug}/branches/main/protection/required_status_checks`],
+      args: ['api', requiredStatusChecksEndpoint(input.target.repoSlug, input.target.prBaseRef)],
       cwd: input.target.sourceRepoRoot,
       inheritParentEnv: true,
       allowEmptyStdout: false,
@@ -868,10 +873,25 @@ async function resolveCurrentIssueBody(
   return body;
 }
 
+export async function resolvePackReviewSelectedRepository(input: {
+  sourceRepoRoot: string;
+  selectedTarget: Pick<TargetContext, 'repository'>;
+  resolveRepository?: (repoRoot: string) => Promise<string>;
+}): Promise<string> {
+  const observedRepository = await (input.resolveRepository ?? resolveRepositorySlug)(input.sourceRepoRoot);
+  if (observedRepository.toLowerCase() !== input.selectedTarget.repository.toLowerCase()) {
+    throw new Error(
+      `pack review source repository ${observedRepository} does not match selected target ${input.selectedTarget.repository}`,
+    );
+  }
+  return input.selectedTarget.repository;
+}
+
 async function resolveTarget(
   input: StartInput,
   trustedPackRoot: string,
   operatorStart?: OperatorPackReviewStart,
+  selectedTarget?: TargetContext | null,
 ): Promise<{
   prNumber: number;
   headSha: string;
@@ -909,7 +929,9 @@ async function resolveTarget(
   const requestedHead = trim(input.headSha).toLowerCase();
   const repoSlug = harnessExplicit
     ? trim(input.fixtureRepoSlug) || 'fixture/orchestrator-pack'
-    : await resolveRepositorySlug(sourceRepoRoot);
+    : selectedTarget
+      ? await resolvePackReviewSelectedRepository({ sourceRepoRoot, selectedTarget })
+      : await resolveRepositorySlug(sourceRepoRoot);
   if (harnessExplicit && trim(input.fixturePrState || 'OPEN').toUpperCase() !== 'OPEN') {
     throw new Error(`PR #${prNumber} is not open`);
   }
@@ -4026,6 +4048,20 @@ async function commitAtCapTriage(input: {
 
 export async function startPackReview(input: StartInput): Promise<Record<string, unknown>> {
   const operatorStart = directCliOperatorStarts.get(input);
+  const harnessWithoutSelectedProject = process.env.OPK_VITEST_HARNESS === '1'
+    && !trim(process.env.OPK_PROJECT_ID);
+  const selectedTarget = harnessWithoutSelectedProject
+    ? null
+    : resolveTargetContext({ env: process.env });
+  if (selectedTarget) {
+    const requestedProjectId = trim(input.projectId);
+    if (requestedProjectId && requestedProjectId !== selectedTarget.projectId) {
+      throw new Error(
+        `pack review project mismatch: requested ${requestedProjectId}, selected ${selectedTarget.projectId}`,
+      );
+    }
+    input.projectId = selectedTarget.projectId;
+  }
   if (!operatorStart && OPERATOR_START_FIELDS.some((field) => (
     Object.prototype.hasOwnProperty.call(input as Record<string, unknown>, field)
   ))) {
@@ -4041,9 +4077,19 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
   );
   const timeoutSeconds = budgetLedger.runnerTimeoutSeconds;
   const trusted = resolveTrustedRunnerPaths();
-  const projectId = trim(input.projectId) || DEFAULT_PROJECT_ID;
-  const target = await resolveTarget(input, trusted.trustedPackRoot, operatorStart);
-  const baseRef = trim(input.baseRef) || DEFAULT_BASE_REF;
+  const projectId = selectedTarget?.projectId ?? (trim(input.projectId) || DEFAULT_PROJECT_ID);
+  const selectedBaseRef = selectedTarget ? `origin/${selectedTarget.defaultBranch}` : DEFAULT_BASE_REF;
+  const requestedBaseRef = trim(input.baseRef);
+  if (selectedTarget && requestedBaseRef && requestedBaseRef !== selectedBaseRef) {
+    throw new Error(`pack review base ${requestedBaseRef} does not match selected target base ${selectedBaseRef}`);
+  }
+  const baseRef = selectedTarget ? selectedBaseRef : (requestedBaseRef || DEFAULT_BASE_REF);
+  const target = await resolveTarget(input, trusted.trustedPackRoot, operatorStart, selectedTarget);
+  if (selectedTarget && target.prBaseRef !== selectedTarget.defaultBranch) {
+    throw new Error(
+      `pack review PR base ${target.prBaseRef} does not match selected target default branch ${selectedTarget.defaultBranch}`,
+    );
+  }
   if (trim(input.surface) === 'pack-gpt-review') {
     const requiredCiGreen = await manualPackReviewRequiredCiGreen({
       startInput: input,
@@ -5596,8 +5642,11 @@ export function applyCliTargetProject(
   env: NodeJS.ProcessEnv = process.env,
 ): void {
   const requestedProjectId = trim(input.targetProjectId);
-  if (!requestedProjectId) return;
-  const target = resolveTargetContext({ projectId: requestedProjectId, env });
+  if (env.OPK_VITEST_HARNESS === '1' && !requestedProjectId && !trim(env.OPK_PROJECT_ID)) return;
+  const target = resolveTargetContext({
+    ...(requestedProjectId ? { projectId: requestedProjectId } : {}),
+    env,
+  });
   const stateProjectId = trim(input.projectId);
   if (stateProjectId && stateProjectId !== target.projectId) {
     throw new Error(`--project ${target.projectId} conflicts with --project-id ${stateProjectId}`);
@@ -5649,12 +5698,28 @@ async function main(): Promise<void> {
   }
   if (subcommand === 'reconcile') {
     const trusted = resolveTrustedRunnerPaths();
-    const projectId = trim(input.projectId) || DEFAULT_PROJECT_ID;
+    const reconcileInput = input as StartInput;
+    applyCliTargetProject(reconcileInput);
+    const harnessUnbound = process.env.OPK_VITEST_HARNESS === '1' && !trim(process.env.OPK_PROJECT_ID);
+    const selectedTarget = harnessUnbound ? null : resolveTargetContext({ env: process.env });
+    const projectId = selectedTarget?.projectId ?? (trim(input.projectId) || DEFAULT_PROJECT_ID);
+    const selectedBaseRef = selectedTarget ? `origin/${selectedTarget.defaultBranch}` : DEFAULT_BASE_REF;
+    const requestedBaseRef = trim(input.baseRef);
+    if (selectedTarget && requestedBaseRef && requestedBaseRef !== selectedBaseRef) {
+      throw new Error(`pack review base ${requestedBaseRef} does not match selected target base ${selectedBaseRef}`);
+    }
+    const baseRef = selectedTarget ? selectedBaseRef : (requestedBaseRef || DEFAULT_BASE_REF);
     const sourceRepoRoot = resolve(trim(input.sourceRepoRoot || input.repoRoot) || trusted.trustedPackRoot);
     const harnessExplicit = process.env.OPK_VITEST_HARNESS === '1' && Boolean(trim(input.fixtureRepoSlug));
+    const observedRepository = harnessExplicit ? '' : await resolveRepositorySlug(sourceRepoRoot);
     const repoSlug = harnessExplicit
       ? trim(input.fixtureRepoSlug)
-      : trim(input.fixtureRepoSlug) || await resolveRepositorySlug(sourceRepoRoot);
+      : selectedTarget?.repository ?? (trim(input.fixtureRepoSlug) || observedRepository);
+    if (selectedTarget && observedRepository.toLowerCase() !== selectedTarget.repository.toLowerCase()) {
+      throw new Error(
+        `pack review reconcile source repository ${observedRepository} does not match selected target ${selectedTarget.repository}`,
+      );
+    }
     const result = await reconcileStalePackReviewRuns({
       repoSlug,
       sourceRepoRoot,
@@ -5663,7 +5728,7 @@ async function main(): Promise<void> {
       prNumber: positiveInteger(input.prNumber, 'prNumber'),
       immediate: input.immediate === true,
       settlePartialAfterGrace: input.immediate === true,
-      baseRef: trim(input.baseRef) || DEFAULT_BASE_REF,
+      baseRef,
       fixtureCurrentPrHeadSha: (input as StartInput).fixtureCurrentPrHeadSha,
       fixtureGptSourceCommentTransport: (input as StartInput).fixtureGptSourceCommentTransport,
       fixtureGithubReviewId: (input as StartInput).fixtureGithubReviewId,

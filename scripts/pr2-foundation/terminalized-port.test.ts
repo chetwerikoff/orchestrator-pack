@@ -532,7 +532,9 @@ describe('Issue #1867 post-smoke readiness wiring regression', () => {
 
   function target(): ResolvedSmokeTarget {
     return {
+      projectId: 'orchestrator-pack',
       repositorySlug: repository,
+      defaultBranch: 'main',
       issueNumber,
       prNumber,
       headSha: currentHead,

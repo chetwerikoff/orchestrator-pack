@@ -7,7 +7,7 @@ description: >-
   (create-issue-draft produces no local draft file and never chains here —
   there is nothing to persist). DEFAULT is sync-only: the GitHub Issue is the
   queue; a legacy draft file stays local and is NOT committed or PR'd. Only
-  open a PR to main on explicit request (batch a series, or full publish of
+  open a PR to the selected default branch on explicit request (batch a series, or full publish of
   one legacy draft). Use when the user asks to publish, commit, batch, or
   ship a legacy draft.
 ---
@@ -22,15 +22,15 @@ description: >-
 
 The GitHub **Issue** is the live queue and the source of truth a worker reads
 (worker execution, scope guard, and planner all read the issue body). Landing the local
-draft *file* in `main` is a separate, optional act of repo snapshotting.
+draft *file* in the selected default branch is a separate, optional act of repo snapshotting.
 
 This skill picks **how** a draft is persisted after `create-issue-draft`:
 
-| Mode | Issue synced | Draft file PR'd to main | Snapshot + CI | When |
+| Mode | Issue synced | Draft file PR'd to the selected default branch | Snapshot + CI | When |
 |------|--------------|-------------------------|---------------|------|
 | **sync-only** (default) | yes | **no** | no | normal impl tasks; issue body is the full spec |
 | **batch** | yes | one PR for several drafts | one run | epic+children, arch waves, registry refresh |
-| **full-publish** | yes | one PR for this draft | yes | user says "commit/merge this draft"; spec must live in main before impl; audit |
+| **full-publish** | yes | one PR for this draft | yes | user says "commit/merge this draft"; spec must live on the selected default branch before impl; audit |
 
 Codex review is **unchanged**: draft-quality review happens in
 `create-issue-draft` (before sync); for any PR opened here, an optional manual
@@ -82,11 +82,11 @@ working artifact; the issue carries everything the worker needs.
 5. **Stop.** Do not open a PR, do not run `pack-declare`, do not run scope checks.
 6. Report to the user:
    - Issue URL and number **N** (open for worker execution).
-   - "Draft kept local — not committed. Say *batch* or *publish this draft* to land it in `main`."
+   - "Draft kept local — not committed. Say *batch* or *publish this draft* to land it in the selected default branch."
 
-**Accepted risk:** `main` will lag the local draft. If a *future* draft's
+**Accepted risk:** the selected default branch will lag the local draft. If a *future* draft's
 prerequisites reference this draft by its `docs/issues_drafts/...` path on
-`main`, that path won't resolve until a batch/full publish runs. Mitigate by
+the selected default branch, that path won't resolve until a batch/full publish runs. Mitigate by
 keeping the full spec in the issue body and a self-reference (draft path) inside it.
 
 ## Mode B — batch publish
@@ -95,7 +95,7 @@ Use when several related drafts have accumulated (epic + children, an
 architecture wave) or the registry needs to land. One PR, one CI run, one merge
 for the whole set.
 
-1. Pre-flight + branch from `main` (see Common steps).
+1. Pre-flight + branch from the selected default branch (see Common steps).
 2. Stage all drafts plus **only each published draft's registry row** in
    `docs/issue_queue_index.md` (selective staging — see Common steps; other drafts'
    pending index rows stay in the working tree uncommitted), and
@@ -107,7 +107,7 @@ Prefer batch over N single-draft PRs whenever drafts are related.
 ## Mode C — full-publish (single draft, on request)
 
 Use when the user explicitly says "commit / merge this draft", the spec must be
-in `main` before implementation, or there's an audit/compliance reason. This is
+in the selected default branch before implementation, or there's an audit/compliance reason. This is
 the full heavy flow. Run the Common steps end-to-end for the one draft.
 
 ---
@@ -170,8 +170,8 @@ Steps:
    plus positive-outcome / parked-root when the draft declares those blocks). Exit
    non-zero => STOP; do not sync, commit, or publish:
    node scripts/draft-discipline.mjs contract-evidence --draft <draft path>
-1. In this isolated checkout only: git fetch origin; update the local main base
-   (git checkout main && git pull origin main), then create the publish branch:
+1. In this isolated checkout only: git fetch origin; update the local selected-default-branch base
+   (git checkout "$TARGET_DEFAULT_BRANCH" && git pull origin "$TARGET_DEFAULT_BRANCH"), then create the publish branch:
    git checkout -b architect/draft-<NN>-<slug>.
 2. Stage ONLY the listed draft files (and 00-architecture-decisions.md if applicable).
    For docs/issue_queue_index.md: add or update ONLY each published draft's registry row,
@@ -193,13 +193,13 @@ Steps:
 6. For each "#N <- draft": re-sync through the mechanical helper:
 
    ```bash
-   node --import tsx scripts/publish-issue-body-sync.ts edit --draft-path <draft> --issue-number <N> --repo chetwerikoff/orchestrator-pack
+   node --import tsx scripts/publish-issue-body-sync.ts edit --draft-path <draft> --issue-number <N> --repo $TARGET_REPOSITORY
    ```
 
    For each "new <- draft": create through the helper (title defaults to draft H1):
 
    ```bash
-   node --import tsx scripts/publish-issue-body-sync.ts create --draft-path <draft> --repo chetwerikoff/orchestrator-pack
+   node --import tsx scripts/publish-issue-body-sync.ts create --draft-path <draft> --repo $TARGET_REPOSITORY
    ```
 
    Write the returned issue number into the draft's `GitHub Issue: #N` line and add
@@ -238,7 +238,7 @@ git fetch origin
 ```
 
 Fallback/manual branch work must happen in a separate checkout (not the architect's
-live working tree): update that checkout's `main` from origin, then create
+live working tree): update that checkout's selected default branch from origin, then create
 `architect/draft-NN-<slug>` there (or stay on a clean branch already cut for this
 draft). Record implementation issue number **N** from the draft header.
 
@@ -349,7 +349,7 @@ references in the body (the no-ceremony scope guard rejects them). If a CI run
 fails because a reference slipped in, strip it and `gh run rerun --failed`.
 
 ```bash
-gh pr create --repo chetwerikoff/orchestrator-pack \
+gh pr create --repo $TARGET_REPOSITORY \
   --title "docs: draft NN — <short title> (#N spec)" \
   --body-file "${TMPDIR:-/tmp}/publish-draft-pr-body.md"
 ```
@@ -362,13 +362,13 @@ if the user expects a Codex pass before merge.
 
 When the user asked to merge, follow
 [`merge-with-local-adoption`](../merge-with-local-adoption/SKILL.md): Cursor
-merges, pulls `main` in the live checkout when needed, and applies operator
+merges, pulls the selected default branch in the live checkout when needed, and applies operator
 adoption. Adoption is usually **none** for docs-only drafts unless the draft
 changed `.example` or runbooks.
 
 ### Report
 
-Tell the user: PR URL, merge commit, draft path(s) on `main`, and the synced/created
+Tell the user: PR URL, merge commit, draft path(s) on the selected default branch, and the synced/created
 issue number(s). The PR body carried no issue reference, so GitHub never auto-closed
 anything — if a closed issue's spec materially changed, flag that it may need reopening
 for re-implementation (architect + user decide).

@@ -69,7 +69,22 @@ green; the automation Chrome is logged into ChatGPT; and Orca is running.
 
    Missing/empty/focused-only verification and blank local commands are invalid
    for target verification. There is no fallback to pack verification commands.
-3. **Pack policy in the target.** Run:
+3. **Target-mode GitHub binding.** Export the same selected project id for every local target-running pack entrypoint:
+
+   ```bash
+   export OPK_PROJECT_ID=<projectId>
+   ```
+
+   Tracked `scripts/gh` authorizes this selection before any native/network
+   GitHub path. The effective host is `github.com` and the effective repository
+   is exactly the selected card's `repository`; an explicit `--repo`/`-R`,
+   `GH_REPO`, REST repository path, or full PR/Issue URL may only corroborate
+   that repository. Conflicting host/repository ingress fails before native
+   `gh`, and arbitrary `gh api graphql` is unsupported in target mode.
+   `GH_WRAPPER_ACTIVE` is an internal recursion marker and does not bypass this
+   check. Do not set `GH_REPO` as a target selector.
+
+4. **Pack policy in the target.** Run:
 
    ```bash
    node --experimental-strip-types "$PACK_ROOT/scripts/lib/Invoke-TypeScriptCli.ts" --repo-root "$PACK_ROOT" --script "$PACK_ROOT/scripts/bootstrap.ts" -- --target-repo <primaryRoot>
@@ -78,18 +93,18 @@ green; the automation Chrome is logged into ChatGPT; and Orca is running.
    Keep the managed `orchestrator-pack` policy block intact. Add target-owned
    rules outside the markers with the project-card path, shared orchestrator
    prompt path, shared templates path, and target verification commands.
-4. **Agent rules.** Symlink the global Cursor rules into
+5. **Agent rules.** Symlink the global Cursor rules into
    `<primaryRoot>/.cursor/rules/` as described by `~/agent-rules/README.md`.
-5. **Scope guard and CI.** Install `.github/workflows/scope-guard.yml` and the
+6. **Scope guard and CI.** Install `.github/workflows/scope-guard.yml` and the
    reusable policy workflows. Run
    `$PACK_ROOT/scripts/install-git-hooks.ts --install-scope-guard` for the
    target and add required Actions secrets to the target repository. Configure
    branch protection/rulesets separately. #2187 owns only target-local command
    verification; required-check readiness, live policy, pack-review requirement
    semantics, and PR/base/comparison/merge authority remain outside this Issue.
-6. **Orca.** Register `<primaryRoot>` as an Orca repository using its supported
+7. **Orca.** Register `<primaryRoot>` as an Orca repository using its supported
    setup path and confirm new worktrees match `orcaWorkspacePattern`.
-7. **Supervisor — non-pack targets require #2186.** Do not execute this step for
+8. **Supervisor — non-pack targets require #2186.** Do not execute this step for
    a non-pack target until #2186 has landed and been adopted. The operator
    launcher requires the project id on every action; an omitted id is an error
    and there is no implicit `orchestrator-pack` default:
@@ -105,7 +120,7 @@ green; the automation Chrome is logged into ChatGPT; and Orca is running.
    mismatch or an unbound non-empty namespace is a stop condition, not
    permission to reuse the state. #2186 owns removing scheduler target
    inference from cwd/`--repo-root`.
-8. **Fleet wake.** Remove the retired
+9. **Fleet wake.** Remove the retired
    `~/.config/orchestrator-fleet/<projectId>.env` if it exists. Render/install
    `scripts/fleet/fleet-wake@.service` from the stable `$PACK_ROOT`
    checkout, replacing `{PACK_ROOT}` with that absolute pack checkout path.
@@ -123,23 +138,26 @@ green; the automation Chrome is logged into ChatGPT; and Orca is running.
    `tail -3 ~/.local/state/orchestrator-fleet/<projectId>.fleet-wake.log`
    must show a normal result such as `orchestrator busy`, `nothing stopped`,
    or `woke`, not `no orchestrator pane found`.
-9. **Orchestrator.** Open the agent terminal in `<primaryRoot>` and run
+10. **Orchestrator.** Open the agent terminal in `<primaryRoot>` and run
    `opk-orch-primary <projectId> <terminal-handle>`. Verify
    `operator-primary-binding show --project <projectId>` names the intended
    assignment and that
    `operator-primary-binding show --project orchestrator-pack` is unchanged.
-10. **Browser-GPT smoke.** Run one standalone
+11. **Browser-GPT smoke.** Run one standalone
     `driver.mjs --project <projectId> --new-chat` pass on a trivial artifact.
     The chat must open under the selected card's ChatGPT project URL. Machine
     browser/profile settings remain in `local.config.json`; `projectUrl`
     does not.
-11. **First task — non-pack targets require #2186 and #2187.** Do not run the
+12. **First task — non-pack targets require #2186 and #2187.** Do not run the
     end-to-end target task until both dependencies have landed and been adopted.
     Then create one small target Issue and drive it to a PR through the normal
     flow. Verify every GitHub effect lands in `<repository>`, every
     per-project state namespace uses `<projectId>`, and verification runs the
-    target-owned commands.
-12. **Rollback.** Disable fleet wake with
+    target-owned commands. Create-Issue stage-record state must appear under
+    `~/.local/state/create-issue-draft/<projectId>/<issueNumber>/journal/`;
+    its `pending/` events and `active-cycle-id.txt` must never share an
+    Issue-number-only directory with another project.
+13. **Rollback.** Disable fleet wake with
     `systemctl --user disable --now fleet-wake@<projectId>`. If #2186 has
     landed and step 7 started the per-project supervisor, run
     `opk-wake-supervisor <projectId> stop`. Remove that project card. Other

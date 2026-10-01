@@ -167,7 +167,9 @@ function gateOptions(root: string, issueBodyFile: string): CliOptions {
 
 function resolvedTarget(body: string): ResolvedSmokeTarget {
   return {
+    projectId: 'orchestrator-pack',
     repositorySlug: REPOSITORY,
+    defaultBranch: 'main',
     issueNumber: 1343,
     prNumber: 2001,
     headSha: HEAD_ONE,
