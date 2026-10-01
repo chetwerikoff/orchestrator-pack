@@ -269,8 +269,8 @@ explicitly execute smoke again, not a harness retry or scheduler reconciler.
 publication. Existing secret scrubbing redacts forwarded/report material and
 does not refuse publication because content was scrubbed.
 
-Issue #2161 branch-update sequencing follows the canonical rule in the
-[orchestration runbook](orchestration-runbook.md#issue-2161-main-update-sequencing).
+Branch-update sequencing follows the canonical rule in the
+[orchestration runbook](orchestration-runbook.md#main-update-sequencing).
 
 A persisted clean terminal for the exact same head suppresses a redundant
 automatic/common reviewer-model invocation. A cycle already at cap also
