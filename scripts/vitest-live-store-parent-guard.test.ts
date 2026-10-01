@@ -7,6 +7,7 @@ import { repoRoot } from './lib/vitest-live-store-harness.mjs';
 import {
   isExternalJournalSnapshotOnlyChange,
   isExternalWakeSupervisorSnapshotOnlyChange,
+  startParentLiveStoreGuard,
 } from './lib/vitest-live-store-parent-guard.mjs';
 import { runProcess } from './kernel/subprocess.ts';
 
@@ -166,6 +167,41 @@ describe('parent live-store guard', () => {
       'supervisor/typescript-supervisor-status.json',
       'supervisor/unrelated-live-store-leak.json',
     ])).toBe(false);
+  });
+  it('settles an external selected-project worker report-store transaction', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-worker-report-'));
+    temporaryRoots.push(root);
+    const projectId = 'orchestrator-pack';
+    const changedPaths = [
+      projectId,
+      `${projectId}/worker-report-store.json`,
+      `${projectId}/worker-report-store.lock`,
+      `${projectId}/worker-report-store.json.tmp`,
+    ];
+    expect(isExternalWakeSupervisorSnapshotOnlyChange(changedPaths, projectId)).toBe(true);
+    expect(isExternalWakeSupervisorSnapshotOnlyChange([
+      'another-project/worker-report-store.json',
+    ], projectId)).toBe(false);
+    expect(isExternalWakeSupervisorSnapshotOnlyChange([
+      `${projectId}/unrelated-live-store-leak.json`,
+    ], projectId)).toBe(false);
+
+    const env = productionEnvironment(join(root, 'production'));
+    env.OPK_PROJECT_ID = projectId;
+    const wakeRoot = env.OPK_VITEST_PRODUCTION_WAKE_ROOT!;
+    const projectRoot = join(wakeRoot, projectId);
+    const reportStore = join(projectRoot, 'worker-report-store.json');
+    const reportLock = join(projectRoot, 'worker-report-store.lock');
+    const reportTemp = `${reportStore}.tmp`;
+    const guard = startParentLiveStoreGuard(env);
+    mkdirSync(projectRoot, { recursive: true });
+    writeFileSync(reportLock, 'lock', 'utf8');
+    writeFileSync(reportStore, '{"generation":1}', 'utf8');
+    writeFileSync(reportTemp, '{"generation":2}', 'utf8');
+    renameSync(reportTemp, reportStore);
+    rmSync(reportLock, { force: true });
+
+    expect(() => guard.stop()).not.toThrow();
   });
 
   it('ignores a live supervisor tick under supervisor/ around a passing harness child', async () => {
