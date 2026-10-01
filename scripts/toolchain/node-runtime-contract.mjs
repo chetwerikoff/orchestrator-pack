@@ -33,7 +33,10 @@ function readBundledRuntimeDeclaration() {
   try {
     return parseRuntimeVersionDeclaration(JSON.parse(readFileSync(new URL('./node-version.json', import.meta.url), 'utf8')));
   } catch (error) {
-    if (error?.code) throw error;
+    if (error?.code && String(error.code).startsWith('OPK_')) throw error;
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+      throw contractError('OPK_NODE_RUNTIME_VERSION_FILE_MISSING', `${NODE_VERSION_FILE} is missing beside the runtime contract`);
+    }
     throw contractError(
       'OPK_NODE_RUNTIME_VERSION_FILE_MALFORMED',
       `cannot read bundled ${NODE_VERSION_FILE}: ${error instanceof Error ? error.message : String(error)}`,
