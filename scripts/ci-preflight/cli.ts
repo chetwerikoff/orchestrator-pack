@@ -4,6 +4,7 @@ import { existsSync, readdirSync, readFileSync, statSync, unlinkSync, accessSync
 import { join, relative } from 'node:path';
 import { runProcess, runProcessSync, type ProcessResult } from '../kernel/subprocess.ts';
 import { TABLE, INVENTORY, RUNTIME_OUTPUTS, WORKFLOW_BLOB_SHA, WORKFLOW_CONTENT_SHA256, nativeOutput, workflowCoverage, workflowHashes, type Diagnostic, type NativeOutput, type Row, type RowId } from './contract.ts';
+import { SUPPORTED_NODE_MAJOR, SUPPORTED_NPM_MAJOR } from '../toolchain/node-runtime-contract.mjs';
 
 type Probe = Record<string, unknown>;
 type GateFailure = { reason: string; diagnostic: Diagnostic; probe?: Probe };
@@ -54,8 +55,8 @@ function checkRuntime(root = REPO): GateFailure | undefined {
   const nodeMajor = Number(process.versions.node.split('.')[0]);
   const npm = runProcessSync({ command: 'npm', args: ['--version'], cwd: root, inheritParentEnv: true });
   const npmMajor = Number(String(npm.stdout ?? '').trim().split('.')[0]);
-  if (process.platform !== 'linux' || process.arch !== 'x64' || nodeMajor !== 22 || !npm.ok || npmMajor !== 10) {
-    return globalFailure('unsupported_local_environment', 'node/npm runtime', { platform: 'linux', arch: 'x64', node_major: 22, npm_major: 10 }, { platform: process.platform, arch: process.arch, node_major: nodeMajor, npm_major: npmMajor }, 'Use Linux x86_64 with Node 22 and npm 10.');
+  if (process.platform !== 'linux' || process.arch !== 'x64' || nodeMajor !== SUPPORTED_NODE_MAJOR || !npm.ok || npmMajor !== SUPPORTED_NPM_MAJOR) {
+    return globalFailure('unsupported_local_environment', 'node/npm runtime', { platform: 'linux', arch: 'x64', node_major: SUPPORTED_NODE_MAJOR, npm_major: SUPPORTED_NPM_MAJOR }, { platform: process.platform, arch: process.arch, node_major: nodeMajor, npm_major: npmMajor }, `Use Linux x86_64 with the Node/npm majors declared in scripts/toolchain/node-version.json (Node ${SUPPORTED_NODE_MAJOR}, npm ${SUPPORTED_NPM_MAJOR}).`);
   }
   for (const command of ['git', 'bash']) {
     const found = runProcessSync({ command: 'bash', args: ['-lc', `command -v ${command}`], cwd: root, inheritParentEnv: true });

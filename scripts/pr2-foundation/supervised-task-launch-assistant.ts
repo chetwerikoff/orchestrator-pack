@@ -6,6 +6,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
+import { SUPPORTED_NODE_MAJOR } from '../toolchain/node-runtime-contract.mjs';
 import { evaluateCommandRuntimePreflight } from '../lib/command-runtime-bootstrap.mjs';
 import { resolveTargetContext } from '../lib/target-context.ts';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
@@ -1253,9 +1254,9 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
     adapter,
     runSupervisedStart: runSupervisedWorkerStart,
     commandPreflight: () => {
-      if (process.versions.node.split('.')[0] !== '22') return {
-        status: 'continue', cause: 'node_22_required', actor: 'operator', evidence: { requiredMajor: 22 },
-        nextAction: { kind: 'repair_preflight', note: 'run the canonical helper under Node.js 22' },
+      if (Number(process.versions.node.split('.')[0]) !== SUPPORTED_NODE_MAJOR) return {
+        status: 'continue', cause: 'unsupported_node_major', actor: 'operator', evidence: { requiredMajor: SUPPORTED_NODE_MAJOR },
+        nextAction: { kind: 'repair_preflight', note: 'run the canonical helper under the Node major declared in scripts/toolchain/node-version.json' },
       };
       const preflight = evaluateCommandRuntimePreflight({ inheritedPath: env.PATH ?? '' });
       return preflight.ok ? { status: 'ok', value: true } : {
