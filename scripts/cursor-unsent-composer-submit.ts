@@ -224,7 +224,7 @@ function exactOrchestrationPointer(preview: string): ExactOrchestrationPointer |
     if (command && !remainder && commands.every((candidateCommand) => candidateCommand === command)) {
       const observed = source.join(' ').match(/You have \d+ orchestration messages?\b.*?Run \x60[^\x60]+\x60\./iu)?.[0];
       const text = observed
-        ? observed.replace(/\s+/gu, ' ').replace(/\x60[^\x60]+\x60(?=\.$)/u, \`\${command}\`)
+        ? observed.replace(/\s+/gu, ' ').replace(/\x60[^\x60]+\x60(?=\.$)/u, '`' + command + '`')
         : matches[0]?.[0];
       if (text) return { command, text };
     }
