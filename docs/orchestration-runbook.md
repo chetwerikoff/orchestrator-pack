@@ -68,12 +68,13 @@ is:
 manager-controlled Browser-GPT implementation
 -> current Issue-bound PR/head + required CI green
 -> manager runs canonical GPT pack-review convergence
--> manager whole-role Task/Dispatch handoff
-   (exact Issue/PR/head/CI/review facts; next action = independent smoke)
--> orchestrator launches/reuses a local supervised worker as independent-smoke parent
--> local worker runs worker-smoke-run --smoke-actor independent on the checked-out PR head
--> independent finding: local worker fixes to a new head + fresh independent smoke
--> same-PR independent-smoke PASS + current-head CI/completion verification
+-> settled review keeps the same manager Dispatch nonterminal
+-> required smoke: manager resolves exact Issue-bound PR/current H with scripts/gh
+-> manager creates one temporary detached Git worktree T at H; canonical origin/main manager worktree stays unchanged
+-> manager runs the Issue plan + worker-smoke-run publish --repo-root T
+-> manager removes only T, proves canonical worktree unchanged, then consumes the publish record
+-> proved assertion FAIL: existing fixer continuation + explicit same-manager smoke on corrected head
+-> same-PR smoke PASS + current-head CI/completion verification
 -> VERIFIED_COMPLETE
 ```
 
@@ -85,13 +86,13 @@ does not run synthetic worker-owned smoke merely to satisfy ordinary
 coding-worker admission. The scheduler's ordinary `liveCandidates()` path
 remains unchanged.
 
-After the settled-review handoff, the orchestrator does not wait for scheduler
-`ready_for_review`. It uses the existing supervised local-worker mechanism for
-the independent-smoke parent; no new work class or smoke supervisor is created.
-That worker prepares the exact current worktree and prerequisites and uses the
-existing independent-smoke authority. If independent smoke finds a defect, the
-local worker owns the fix and an explicit smoke execution on the corrected head. The completed
-pack-review stage remains completed and is not reopened.
+After settled review, the orchestrator does not wait for scheduler
+`ready_for_review`. Required scenario-bearing smoke continues in the same
+execute-Issue manager Dispatch under phase `smoke`; no new work class, smoke
+worker, or smoke supervisor is created. The manager uses the bounded temporary
+detached-PR-worktree procedure below. A proved assertion failure enters the
+existing fixer continuation and is followed by explicit smoke on the corrected
+head. The completed pack-review stage remains completed and is not reopened.
 
 ### Worker
 
@@ -106,20 +107,22 @@ read live Issue/rules
 -> review finding: worker fixes or explicitly resolves/rejects findings
 -> if T3 round 1 settled: required round 2 (same head is allowed)
 -> durable reviewStageComplete
--> existing worker/orchestrator PR review-settled handoff launches supervised local independent smoke
--> smoke worker checks out the PR head, runs the Issue-declared scenarios, publishes v1 report
--> first FAIL/BLOCKED: worker fix + explicit independent smoke execution
+-> PR owner runs required smoke itself after current-head required CI is green
+-> ordinary worker/firefighter uses its PR checkout; managed manager uses temporary detached T at exact Issue-bound PR head
+-> PR owner runs Issue-declared scenarios and worker-smoke-run publish
+-> first proved assertion FAIL: existing fixer continuation + explicit smoke execution
 -> one PASS covers subsequent PR heads; required CI remains current-head bound
 -> completion
 -> worker_done
 ```
 
-Ordinary coding workers no longer run a redundant worker-owned pre-review
-smoke. The existing PR-created/review-complete worker/orchestrator handoff
-launches the supervised local independent smoke worker after pack-review
-settlement. The manager-controlled Browser-GPT path retains its separate
-manager-to-supervisor handoff and the same existing independent worker.
-Neither handoff adds a scheduler smoke starter, watcher, queue, registry,
+Ordinary coding workers no longer run a redundant pre-review smoke. After
+pack-review settlement and required CI, a required scenario-bearing plan is run
+by the PR owner itself. Ordinary workers/firefighters use their existing PR
+checkout. The manager-controlled Browser-GPT path keeps the same manager alive
+and uses one temporary detached PR checkout without rebinding the canonical
+manager worktree. Neither path adds a scheduler smoke starter, watcher, queue,
+registry,
 retry protocol, or new worker category.
 
 Required CI remains exact-current-head evidence. One successful
@@ -645,7 +648,7 @@ The registered production owner remains `scripts/lib/orchestrator-side-process-s
 
 The coordinator fleet alarm in `docs/fleet-alarm.md` is an operator-installed per-project user service. It is advisory only and separate from scheduler tick, supervisor ownership, and the side-process registry; its sole Orca mutation is a plain-text terminal send to the resolved coordinator pane, never a unit or orchestration-state mutation and never effect authority.
 
-Post-review independent smoke is not owned or started by the scheduler child. The ordinary review-settled worker/orchestrator handoff, and separately the manager-controlled supervisor handoff, use the existing supervised local smoke worker. Scheduler ticks do not start, observe, or reconcile smoke; no replacement poller or queue exists.
+Post-review smoke is not owned or started by the scheduler child. The PR owner executes a required scenario-bearing plan itself; the managed path keeps the same execute-Issue manager and uses its bounded temporary detached checkout. Scheduler ticks do not start, observe, or reconcile smoke; no replacement poller or queue exists.
 
 The side-process supervisor derives one generation deadline from the canonical child registry: `cadenceSeconds * stallGraceMultiplier` (currently `5 * 14 = 70s`). A generation still running at that observed-child-start deadline is terminated through its exact child process, the supervisor waits for that process to close, then waits the full normal cadence before starting a replacement and re-verifying epoch/registry authority. Stall terminations are recorded separately from crash `rapidExits`; consecutive stalls use the existing `terminalRapidExits` cap and refuse as `scheduler_child_stall_loop`. The bound is therefore `70s + exact close + normal cadence`, never a synthetic 75-second child timeout.
 
@@ -690,7 +693,7 @@ authoritative Task/role/assignment facts
 - active/new progress -> `noop`;
 - trusted new idle/livelock episode + exact current local assignment/runtime binding + role-owned work remains -> `continue` through existing S2;
 - unresolved/stale/ambiguous target, untrusted observer/assignment state, unsupported local effect, or uncertain dispatch requiring reasoning -> `orchestrator_required` plus durable handoff;
-- ordinary manager whole-role completion or worker truthful `ready_for_review` handoff -> `noop`, then the role may complete. In the manager-controlled Browser-GPT execute-Issue path, settled review is not completion: the same manager Dispatch remains nonterminal while the supervisor launches/reuses the local independent-smoke worker for the exact PR/head. On the canonical durable exact-head report, continue that Dispatch through the existing Task/Dispatch channel; the manager re-reads it through the shared execute-Issue boundary. PASS completes the manager role; proved assertion FAIL returns to local fixer ownership and fresh smoke, without reopening pack review. Independent smoke follows settled review; it is not overall `VERIFIED_COMPLETE` and does not wait for scheduler `ready_for_review`.
+- ordinary manager whole-role completion or worker truthful `ready_for_review` handoff -> `noop`, then the role may complete. In the manager-controlled Browser-GPT execute-Issue path, settled review is not completion: the same manager Dispatch remains nonterminal and required scenario-bearing smoke continues under `execute:smoke`. The manager reads exact P/H, uses one temporary detached Git worktree at H, runs the plan and publishes from it, removes only that worktree, verifies the canonical manager worktree unchanged, and then feeds the emitted record through the shared execute-Issue boundary. PASS completes the manager role; proved assertion FAIL returns to the existing fixer continuation and fresh smoke, without reopening pack review. Smoke follows settled review; it is not overall `VERIFIED_COMPLETE` and does not wait for scheduler `ready_for_review`.
 
 ## Structured external-dependency parking
 
@@ -839,7 +842,7 @@ After landing the production implementation:
 5. for one manager authoring launch without an Issue, confirm the assignment is task/Dispatch-keyed with absent Issue metadata, then attach the Issue only after publication without changing the deliverable key/id/generation;
 6. verify one stale/remapped runtime identity fences without a stale-handle effect and one Orca error envelope preserves its exact non-empty `error.code` while any provider mutation recovery remains attempt-bound and safely projected by the assistant;
 7. perform one controlled selected-profile adoption smoke for every executor family actually admitted on the installed machine; an OpenCode external gate is a valid fail-closed result, not permission to invent a provider/TUI form;
-8. before restarting/adopting the supervisor revision, verify the scheduler no longer starts or observes post-review smoke and that one epoch-authorized `scheduler.ts tick` still processes review/CI candidates. The ordinary review-settled worker/orchestrator handoff launches independent smoke; the manager-controlled handoff remains separately supervised. Do not treat a historical pre-cutover smoke lifecycle as a new admission gate.
+8. before restarting/adopting the supervisor revision, verify the scheduler no longer starts or observes post-review smoke and that one epoch-authorized `scheduler.ts tick` still processes review/CI candidates. The PR owner executes required smoke itself; the managed path remains in the same manager and uses the temporary detached checkout procedure. Do not treat a historical pre-cutover smoke lifecycle as a new admission gate.
 9. verify later bounded children retain the same trusted S1 lineage and advancing tick sequence;
 10. verify one exact REST-visible author/reviewer artifact settles its manager turn even when the helper child is silent/gone, and one published sibling makes a silent concurrent slot possible-or-actual/no-resend without claiming that its payload was proven delivered;
 11. verify the latest `fleet-reconciliation-handoff/v1` is readable before treating silence as healthy.
@@ -976,21 +979,29 @@ reviewer-model call.
 
 ### Worker smoke
 
-The supervised independent smoke worker checks out the current PR head,
-executes the Issue's `smoke-test-plan` scenarios, and publishes the
-unchanged `pack-worker-smoke-report/v1` comment after the attempt.
-The selected project card provides repository identity; the GitHub
-comment author is publisher metadata, not proof of an independent role.
-Existing secret scrubbing redacts output and does not refuse a run
-because scrubbing occurred. Neither scheduler ticks nor a harness
-registry, lock, lifecycle/close receipt, progress/cancel, carry-only,
-selective retry, or smoke-plan preflight authorizes the run.
+After review convergence and green required CI, the PR owner executes a
+required scenario-bearing `smoke-test-plan` itself and publishes the existing
+`pack-worker-smoke-report/v1` comment. A plain worker/firefighter uses its
+existing PR checkout. The managed execute-Issue manager reads exact Issue-bound
+P/current H through tracked `scripts/gh`, records its canonical manager
+worktree HEAD/branch/status, fetches H, creates one unique detached temporary
+worktree T at H, verifies T's HEAD, runs the plan and
+`worker-smoke-run publish --repo-root T`, removes only T, and confirms the
+canonical manager worktree is unchanged before consuming the publish record.
+This is ordinary local Git state, not a PACK worktree lifecycle; do not use
+global `git worktree prune` or alter the manager's `origin/main` refresh
+contract.
 
-Readiness uses the newest PASS comment on the same PR at any head,
-without filtering by actor, reconstructing ancestry, or requiring a
-new PASS on later heads. Required CI remains green on the current head.
-A first FAIL/BLOCKED is handled by an existing worker/fixer correction
-and an explicit subsequent smoke run, never an automatic harness retry.
+`publish` stamps local HEAD, has no expected-head input, and does not inspect
+live-head equality or CI. Setup failure occurs before publication and claims no
+PASS. Cleanup failure after a successful POST authorizes neither republish nor
+manager PASS-completion consumption; the exact local defect is surfaced through
+the existing parent/supervisor path. Readiness still uses the newest PASS
+comment on the same PR at any head, without filtering by actor, reconstructing
+ancestry, or requiring a new PASS on later heads. Required CI remains green on
+the current head. A proved assertion FAIL is handled by the existing fixer
+continuation and an explicit subsequent smoke execution, never an automatic
+harness retry.
 
 ### Orchestrator-delegated integration
 
