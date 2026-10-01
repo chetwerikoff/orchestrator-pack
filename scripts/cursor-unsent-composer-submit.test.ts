@@ -29,7 +29,7 @@ import {
   workerKey,
   type UnsentComposerSubmitDeps,
 } from './cursor-unsent-composer-submit.ts';
-import { OrcaRuntimeAdapter } from './orca-runtime/adapter.ts';
+import { OrcaTaskRuntimeAdapter } from './orca-runtime/task-adapter.ts';
 import type { OrcaJsonResponse } from './orca-runtime/native.ts';
 import type { RuntimeAdapter, RuntimeComposerControlRequest, RuntimeWorker, RuntimeWorkerIdentity } from './runtime/contracts.ts';
 
@@ -1617,7 +1617,7 @@ describe('delivery-triggered composer submission', () => {
       return { ok: false, error: { code: 'unexpected_operation', message: operation } };
     });
     const requests: Array<{ url: string; method: 'GET' | 'POST'; body?: string }> = [];
-    const adapter = new OrcaRuntimeAdapter({
+    const adapter = new OrcaTaskRuntimeAdapter({
       runJson: runJson as never,
       openCodeHttpRequest: (input) => {
         requests.push({ url: input.url, method: input.method, ...(input.body === undefined ? {} : { body: input.body }) });
@@ -1627,7 +1627,6 @@ describe('delivery-triggered composer submission', () => {
     const spawned = adapter.spawnWorker({
       title: 'opencode',
       command: terminal.command,
-      workspace: terminal.worktreePath,
     });
     expect(spawned.status).toBe('ok');
     if (spawned.status !== 'ok') return;
