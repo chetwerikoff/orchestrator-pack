@@ -74,7 +74,7 @@ export async function resolvePackWorkerReportRequest(argv:readonly string[],env:
   let target;
   try{
     target=resolveTargetContext({projectId:requestedProjectId||undefined,env});
-    assertProjectStateBinding(resolveWakeSupervisorStateRoot({env,projectId}),{
+    assertProjectStateBinding(resolveWakeSupervisorStateRoot({env,projectId:target.projectId}),{
       projectId:target.projectId,
       repository:target.repository,
     });
