@@ -165,7 +165,7 @@ const BROWSER_TURN_PROJECT_BINDING_SCHEMA = 'orchestrator-pack/project-state-bin
 
 function browserTurnRecurrencePath(env: Readonly<NodeJS.ProcessEnv> = process.env): string {
   const home = String(env.HOME ?? '').trim() || homedir();
-  const root = join(home, '.local', 'state', 'create-issue-draft');
+  const root = join(home, '.local', 'state', 'chatgpt-browser-turn');
   const projectId = String(env.OPK_PROJECT_ID ?? '').trim();
   return projectId
     ? join(root, projectId, 'browser-turn-recurrence.jsonl')
@@ -1313,13 +1313,11 @@ function appendIncident(
     const recurrencePath = browserTurnRecurrencePath(env);
     const target = readBrowserTurnProjectIdentity(env, recurrencePath);
     if (!target) mkdirSync(dirname(recurrencePath), { recursive: true });
-    const issue = String(env.CREATE_ISSUE_DRAFT_ISSUE ?? '').trim();
     const pr = String(env.PACK_REVIEW_PR_NUMBER ?? '').trim();
     const agent = String(env.OPK_AGENT ?? env.PACK_FLOW_MANAGER ?? process.title ?? 'node').trim();
     appendFileSync(recurrencePath, `${JSON.stringify({
       timestamp: new Date().toISOString(),
       ...(target ? { projectId: target.projectId, repository: target.repository } : {}),
-      ...(issue ? { issue } : {}),
       ...(pr ? { pr } : {}),
       surface: 'browser-gpt-helper',
       event_class: incident.eventClass,
@@ -2277,11 +2275,6 @@ async function runTurn(
     'timeout-ms',
     'poll-ms',
     'invocation-id',
-    'reviewer-source-output',
-    'reviewer-source',
-    'repository',
-    'issue-number',
-    'source-revision',
   ]);
   const invocationId = stringOption(args, 'invocation-id') ?? '';
   let profileKey = 'profile-unresolved';
@@ -3708,11 +3701,8 @@ async function runTurn(
           if (revalidated.state !== 'ready') {
             uncertainCause = 'transcript_continuity_unproven';
           } else {
-            // A direct-publication settlement already observed on the incumbent
-            // network path keeps its existing precedence. The final page census
-            // authorizes only page-only harvested bytes; it must not rewrite an
-            // already-observed GitHub success, definitive no-commit, or
-            // possible-delivery outcome.
+            // Revalidate the owned page before accepting markerless harvested bytes.
+            // Page loss remains a no-resend transport incident.
             {
               const liveness = await probePageLiveness(page, browser);
               if (liveness === 'lost') {
