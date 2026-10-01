@@ -317,7 +317,7 @@ model/effort request channel, caller `startMode` when present, and child inherit
 before any manager Task or runtime effect. The returned admitted route is attempt
 state: later recovery reuses it and never re-reads mutable live profile values.
 
-Invoke through the canonical Node 22 wrapper. Exactly one of `--worktree` (a
+Invoke through the canonical wrapper under the Node major declared in `scripts/toolchain/node-version.json`. Exactly one of `--worktree` (a
 supported proven-reuse target) or `--worktree-name` (a fresh setup path) is
 required by the assistant.
 
@@ -822,7 +822,7 @@ For #1420, same-process component tests are supplementary. Production compositio
 - a required handoff remains readable after the producer child exits;
 - handoff commit/read-back failure makes the tick non-success.
 
-Also run current-head repository verification, Node 22 typecheck/lint, affected tests, scope guard, runtime-retirement scan, required CI and current-revision review/lens obligations.
+Also run current-head repository verification, declared-runtime typecheck/lint, affected tests, scope guard, runtime-retirement scan, required CI and current-revision review/lens obligations.
 
 ## Orca grounding
 
