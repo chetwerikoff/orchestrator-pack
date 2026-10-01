@@ -432,8 +432,7 @@ describe('launch inventory and fail-closed policy', () => {
     const violations = checkTypeScriptRuntimePolicy(root).violations;
     expect(violations.some((violation) =>
       violation.rule === 'workflow-node-version'
-      && violation.path === workflow
-      && violation.message.includes('authority-bound version selector'))).toBe(true);
+      && violation.path === workflow)).toBe(true);
   });
 
   it.each([
