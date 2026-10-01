@@ -14,7 +14,7 @@ The target repository or trusted pack checkout must provide:
 - `scripts/pr-scope-runner.ts` and its TypeScript authority;
 - `.github/workflows/scope-guard.yml`;
 - `AGENTS.md` and the relevant prompts;
-- Node 22 workspace configuration.
+- workspace configuration bound to `scripts/toolchain/node-version.json`.
 
 For target-repository embedding, precedence, project-owned extensions, and
 pack-relative authority pointers, see the canonical [`AGENTS.md`
@@ -34,7 +34,7 @@ This procedure has two distinct roots and one selected target binding:
   git-remote, `--repo-root`, machine-wide project-URL, or pack-project fallback.
 
 Prerequisites: `$PACK_ROOT` is on current `main` with
-`npm ci --include=dev` complete; Node 22 is active; `gh auth status` is
+`npm ci --include=dev` complete; the declared Node runtime is active; `gh auth status` is
 green; the automation Chrome is logged into ChatGPT; and Orca is running.
 
 1. **ChatGPT project.** Create a ChatGPT project for the target and copy its
@@ -212,8 +212,7 @@ compatibility wrapper into the target repository.
 
 ## Prerequisites
 
-- Node.js 22.x;
-- npm 10.x;
+- Node/npm majors declared in `scripts/toolchain/node-version.json`;
 - Git 2.25+;
 - authenticated GitHub transport;
 - the selected agent and reviewer CLIs.
