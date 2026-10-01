@@ -840,12 +840,6 @@ export function normalizeSmokeReport(
     if (partial.producer !== SMOKE_REPORT_PRODUCER) {
       return { ok: false, reason: 'pass_missing_producer' };
     }
-    if (!carryOnlyPass && !partial.terminalHandle?.trim()) {
-      return { ok: false, reason: 'pass_missing_terminal_handle' };
-    }
-    if (!partial.orcaExecutable?.trim()) {
-      return { ok: false, reason: 'pass_missing_orca_executable' };
-    }
   }
 
   const scenarioCauseFamily = terminalNonPassRows.length === 1
@@ -926,10 +920,7 @@ export function formatSmokeReportComment(report: SmokeReport): string {
     '```worker-smoke-report',
     `result: ${report.result}`,
     `producer: ${report.producer ?? SMOKE_REPORT_PRODUCER}`,
-    `orca-executable: ${report.orcaExecutable ?? ''}`,
-    `terminal-handle: ${report.terminalHandle ?? ''}`,
     `tracked-files-unmodified: ${report.trackedFilesUnmodified ? 'true' : 'false'}`,
-    `terminal-cleanup: ${report.terminalCleanup}`,
     report.nonPassCause ? `non-pass-cause: ${String(report.nonPassCause)}` : '',
     report.causeFamily ? `cause-family: ${report.causeFamily}` : '',
     diagnostic ? `control-plane-cause: ${diagnostic.cause}` : '',
@@ -951,7 +942,6 @@ export function formatSmokeReportComment(report: SmokeReport): string {
     `- pr: #${report.prNumber}`,
     `- head-sha: \`${report.headSha}\``,
     `- tracked-implementation-files-unmodified: ${report.trackedFilesUnmodified ? 'yes' : 'no'}`,
-    `- orca-terminal-cleanup: ${report.terminalCleanup}`,
     report.causeFamily ? `- cause-family: \`${report.causeFamily}\`` : '',
     diagnostic ? `- control-plane-cause: \`${diagnostic.cause}\`` : '',
     diagnostic ? `- control-plane-evidence: ${diagnostic.evidence.map((entry) => `\`${entry}\``).join(', ')}` : '',
