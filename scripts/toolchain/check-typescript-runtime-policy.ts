@@ -763,6 +763,15 @@ function literalNodeMajor(value: string): number | undefined {
   return match?.[1] ? Number(match[1]) : undefined;
 }
 
+function authorityBoundNodeVersionFile(value: string): boolean {
+  const trimmed = value.trim();
+  const unquoted = ((trimmed.startsWith("'") && trimmed.endsWith("'"))
+    || (trimmed.startsWith('"') && trimmed.endsWith('"')))
+    ? trimmed.slice(1, -1)
+    : trimmed;
+  return unquoted === 'package.json' || unquoted === 'trusted-scope-guard/package.json';
+}
+
 function scanWorkflowNodeVersions(
   repoRoot: string,
   allFiles: readonly string[],
@@ -782,11 +791,14 @@ function scanWorkflowNodeVersions(
     for (const step of scan.steps) {
       setupNodeCounts.set(path, (setupNodeCounts.get(path) ?? 0) + 1);
       const selectors = step.selectors;
+      const selector = selectors[0];
       const valid = step.withMappings === 1
         && step.withIsMapping
         && selectors.length === 1
-        && selectors[0]?.kind === 'node-version'
-        && literalNodeMajor(selectors[0].value) === SUPPORTED_NODE_MAJOR;
+        && selector !== undefined
+        && (selector.kind === 'node-version'
+          ? literalNodeMajor(selector.value) === SUPPORTED_NODE_MAJOR
+          : authorityBoundNodeVersionFile(selector.value));
       inventory.push({
         path,
         line: step.line,
@@ -799,7 +811,7 @@ function scanWorkflowNodeVersions(
           path,
           line: step.line,
           rule: 'workflow-node-version',
-          message: `actions/setup-node must declare one literal with.node-version: '${SUPPORTED_NODE_MAJOR}'.`,
+          message: 'actions/setup-node must declare exactly one authority-bound node-version or node-version-file selector.',
         });
         continue;
       }
@@ -817,7 +829,7 @@ function scanWorkflowNodeVersions(
           path,
           line: step.line,
           rule: 'workflow-node-version',
-          message: 'actions/setup-node with must be a YAML mapping containing one literal node-version.',
+          message: 'actions/setup-node with must be a YAML mapping containing one authority-bound version selector.',
         });
         continue;
       }
@@ -826,7 +838,7 @@ function scanWorkflowNodeVersions(
           path,
           line: step.line,
           rule: 'workflow-node-version',
-          message: `actions/setup-node with mapping must declare one literal node-version: '${SUPPORTED_NODE_MAJOR}'.`,
+          message: 'actions/setup-node with mapping must declare one authority-bound version selector.',
         });
         continue;
       }
@@ -842,12 +854,14 @@ function scanWorkflowNodeVersions(
       const selector = selectors[0];
       if (!selector) continue;
       if (selector.kind === 'node-version-file') {
-        violations.push({
-          path,
-          line: selector.line,
-          rule: 'workflow-node-version',
-          message: `node-version-file is not allowed; select literal Node ${SUPPORTED_NODE_MAJOR}.`,
-        });
+        if (!authorityBoundNodeVersionFile(selector.value)) {
+          violations.push({
+            path,
+            line: selector.line,
+            rule: 'workflow-node-version',
+            message: `node-version-file must point to the authority-bound package.json mirror; received ${JSON.stringify(selector.value)}.`,
+          });
+        }
         continue;
       }
       const major = literalNodeMajor(selector.value);
