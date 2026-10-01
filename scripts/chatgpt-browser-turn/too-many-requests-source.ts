@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { runProcessSync } from '../kernel/subprocess.ts';
+import { resolveTrackedGhWrapper } from '../lib/gh-resolve-real-binary.mjs';
 
 const SOURCE_MARKER = '<!-- issue-1168-too-many-requests-production-shape:v2 -->';
 const SOURCE_SCHEMA = 'issue-1168-too-many-requests-production-shape/v2';
@@ -75,6 +77,27 @@ interface GhTransportLike {
     stdout: string;
     stderr: string;
     timedOut?: boolean;
+  };
+}
+
+function defaultGhTransport(): GhTransportLike {
+  const gh = resolveTrackedGhWrapper();
+  return {
+    runGh(argv: string[], timeoutMs = 30_000) {
+      const args = argv[0] === 'gh' ? argv.slice(1) : argv;
+      const result = runProcessSync({
+        command: gh,
+        args,
+        inheritParentEnv: true,
+        timeoutMs,
+      });
+      return {
+        exitCode: result.exitCode ?? 1,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        timedOut: result.timedOut,
+      };
+    },
   };
 }
 
@@ -455,7 +478,7 @@ export async function verifyLiveSource(
       throw new VerificationError('identity_mismatch');
     }
     const binding = parseBinding(readFileSync(input.bindingPath, 'utf8'));
-    const transport = dependencies.transport ?? ((await import('../lib/create-issue-stage-record-gh.ts')).defaultGhTransport() as unknown as GhTransportLike);
+    const transport = dependencies.transport ?? defaultGhTransport();
     const response = transport.runGh(['gh', 'api', `repos/${REPO}/issues/comments/${binding.comment_id}`]);
     if (response.exitCode !== 0) throw new VerificationError('identity_mismatch');
     const comment = parseLiveComment(response.stdout);

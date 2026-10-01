@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runProcessSync, type ProcessResult } from './kernel/subprocess.ts';
-import { evaluateManagerBoundary } from './lib/create-issue-next-action.ts';
+import { evaluateManagerBoundary } from './lib/manager-boundary-result.ts';
 import {
   EXECUTE_ISSUE_PHASES,
   classifyExecuteIssueManagerRecord,

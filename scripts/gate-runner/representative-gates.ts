@@ -133,15 +133,11 @@ export const agentRulesMovedContentGate: DeclarativeGateDefinition = {
           absent: ['## Stage and retry boundary', '## Publication and tab lifecycle', '## Session handoff'],
           exactOccurrences: [
             { marker: '## Launch and observation', count: 1 },
-            { marker: '## Legacy state and diagnostic probe', count: 1 },
+            { marker: '## Diagnostic probe', count: 1 },
             { marker: '(../../docs/browser-gpt-turn-runbook.md#start-of-shift-preflight)', count: 1 },
             { marker: '(../../docs/browser-gpt-turn-runbook.md#prepare-one-turn)', count: 1 },
             { marker: '(../../docs/browser-gpt-turn-runbook.md#launch)', count: 1 },
             { marker: '(../../docs/browser-gpt-turn-runbook.md#observe-and-settle)', count: 1 },
-            { marker: '(../../docs/browser-gpt-turn-runbook.md#publication-and-tab-lifecycle)', count: 1 },
-            { marker: '(../../docs/browser-gpt-turn-runbook.md#incident-handling)', count: 1 },
-            { marker: '(../../docs/browser-gpt-turn-runbook.md#one-shot-diagnosis)', count: 1 },
-            { marker: '(../../docs/browser-gpt-turn-runbook.md#shift-handoffclose)', count: 1 },
           ],
         },
         {
@@ -165,9 +161,9 @@ export const agentRulesMovedContentGate: DeclarativeGateDefinition = {
           path: 'docs/tiering.md',
           contains: [
             '## Task complexity tier rubric',
-            '### Failure-type lens (apply first)',
-            '## Per-tier draft-review flow',
-            '### Per-tier pipeline (ceilings, not quotas)',
+            '### Binding T3 test — both prongs required',
+            '### T1/T2 split',
+            '### L4 within T3',
           ],
         },
         {

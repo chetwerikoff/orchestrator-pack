@@ -4427,7 +4427,10 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
     pagePresent: cleanupAuthorityProven,
     pageLost,
   });
-  const pageAction = outcome.result.send_count >= 1 && outcome.result.state !== 'ok'\n    ? 'preserve'\n    : requestedPageAction;\n  if (pageAction === 'close') {
+  const pageAction = outcome.result.send_count >= 1 && outcome.result.state !== 'ok'
+    ? 'preserve'
+    : requestedPageAction;
+  if (pageAction === 'close') {
     cleanup = await boundedResourceCleanup(
       () => outcome.page.close(),
       RESOURCE_CLEANUP_BOUND_MS,

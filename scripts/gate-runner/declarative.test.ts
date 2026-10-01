@@ -60,7 +60,7 @@ const movedClean = {
     '## Shift handoff/close',
   ].join('\n'),
   'docs/coworker-delegation.md': 'PR diff recipe\ngit diff <base-ref>...HEAD > /tmp/review.diff\nRoot-cause work must read ~900 lines',
-  'docs/tiering.md': '## Task complexity tier rubric\n### Failure-type lens (apply first)\n## Per-tier draft-review flow\n### Per-tier pipeline (ceilings, not quotas)',
+  'docs/tiering.md': '## Task complexity tier rubric\n### Binding T3 test — both prongs required\n### T1/T2 split\n### L4 within T3',
   'docs/script-owned-review-pipeline.md': '## Event-driven review trigger\n## Orchestrator review-run coverage\n## Head ready for review\nevent-driven review trigger',
   'docs/orchestration-runbook.md': '## Worker lifecycle\n',
   'docs/repository_policy.md': [
@@ -84,12 +84,8 @@ const movedClean = {
     'See [prepare](../../docs/browser-gpt-turn-runbook.md#prepare-one-turn).',
     'See [launch](../../docs/browser-gpt-turn-runbook.md#launch).',
     'See [observe](../../docs/browser-gpt-turn-runbook.md#observe-and-settle).',
-    'See [publication](../../docs/browser-gpt-turn-runbook.md#publication-and-tab-lifecycle).',
-    'See [incident](../../docs/browser-gpt-turn-runbook.md#incident-handling).',
-    'See [diagnosis](../../docs/browser-gpt-turn-runbook.md#one-shot-diagnosis).',
-    'See [handoff](../../docs/browser-gpt-turn-runbook.md#shift-handoffclose).',
     '## Launch and observation',
-    '## Legacy state and diagnostic probe',
+    '## Diagnostic probe',
   ].join('\n'),
 };
 
