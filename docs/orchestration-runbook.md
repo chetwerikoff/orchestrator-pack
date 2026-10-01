@@ -320,6 +320,10 @@ Supply `--blocked-on-json` only when the coordinator authoritatively knows the n
 Issue/PR predicate is the exact active blocker. Keep the supplied
 `issue_closed | pr_merged` predicate and evidence unchanged; never infer dependency
 identity from prose, cause, blocker text, reverse lookup, or the managed Issue.
+`{ coordinator: true }` means the existing coordinator owns the remedy and
+continuation to the same Dispatch. Legacy `{ operator: true }` is historical input
+only and normalizes in memory to `{ coordinator: true }`; `issue_closed` and
+`pr_merged` remain unchanged.
 
 For `external_pause` or `contract_defect`, send one escalation with a deterministic
 thread id derived from `(issue, stage, cause, resume_when)`. Retry a failed
@@ -446,8 +450,10 @@ Exact-head CI and declared smoke remain separate gates from review settlement.
 
 Use protected-branch required checks when configured; otherwise require every pack
 merge-contract check for the current head. Do not report `ready_for_review` while
-required CI is non-green. Fix red CI; remain engaged while pending; never turn
-failure, cancellation, timeout, ambiguity, or missing evidence into success.
+required CI is non-green. Fix red CI; a pending head stays engaged until green, red,
+or an evidence-backed degraded-CI handoff through
+`scripts/lib/worker-degraded-ci-handoff.ts`. Never turn failure, cancellation,
+timeout, ambiguity, or missing evidence into success.
 
 ### Worker report store
 
