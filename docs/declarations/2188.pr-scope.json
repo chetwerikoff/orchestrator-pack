@@ -26,6 +26,9 @@
     "scripts/pack-worker-report.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
+    "scripts/pr2-foundation/wake-supervisor-state-constants.d.mts",
+    "scripts/pr2-foundation/wake-supervisor-state-constants.mjs",
+    "scripts/pr2-foundation/wake-supervisor-state-root.ts",
     "scripts/publish-issue-body-sync.ts",
     "scripts/run-pack-review-gpt.ts",
     "scripts/target-portability-sinks.test.ts",
@@ -54,5 +57,5 @@
     "prompts/",
     "scripts/"
   ],
-  "source_revision": "da6bc57461695f46c7472e0434df275b94c30743"
+  "source_revision": "01709698c51f06ffbd8ac389e6a68c70c5e4873c"
 }
