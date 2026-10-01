@@ -11,6 +11,7 @@
     "docs/target-portability-sinks.md",
     "plugins/codex-pr-reviewer/lib/review_cli.ts",
     "prompts/investigate_root_cause.md",
+    "scripts/data/ops-wiki-manifest.json",
     "scripts/draft-discipline.mjs",
     "scripts/gh",
     "scripts/lib/create-issue-final-acceptance.ts",
@@ -27,6 +28,7 @@
     "scripts/publish-issue-body-sync.ts",
     "scripts/run-pack-review-gpt.ts",
     "scripts/target-portability-sinks.test.ts",
+    "scripts/vitest-ci-lanes.config.json",
     "scripts/worker-smoke-run.ts",
     "scripts/worktree-lifecycle/operations.ts",
     "scripts/worktree-teardown.ts"
@@ -48,5 +50,5 @@
     "prompts/",
     "scripts/"
   ],
-  "source_revision": "aa356165b71d41b52bfc0fbb3eeee719a070d797"
+  "source_revision": "d2d0ede592ac91675966d9dbfc028bbdb8c13d89"
 }
