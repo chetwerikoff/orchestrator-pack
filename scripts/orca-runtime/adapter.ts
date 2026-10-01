@@ -42,6 +42,7 @@ import {
   type OrcaWorktreeCurrent,
   type OrcaWorktreeShow,
 } from './native.ts';
+import { openCodeComposerContentLines, openCodeComposerMatchesText } from './opencode-composer.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -112,82 +113,10 @@ function openCodeHttpFailure(error: unknown): string {
     : 'opencode_http_request_failed';
 }
 
-function openCodeComposerContent(lines: readonly string[]): string[] | undefined {
-  let bottomEdge = -1;
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    if (/╹▀▀▀/u.test(lines[index] ?? '')) {
-      bottomEdge = index;
-      break;
-    }
-  }
-  if (bottomEdge < 0) return undefined;
-
-  const content: string[] = [];
-  let sawLeftEdge = false;
-  for (let index = bottomEdge - 1; index >= 0; index -= 1) {
-    const trimmed = (lines[index] ?? '').replace(/\u001B\[[0-?]*[ -/]*[@-~]/gu, '').trim();
-    if (!trimmed) continue;
-    const askBody = trimmed.replace(/^[┃│]\s*/u, '');
-    if (/^Ask anything(?:\.\.\.|…)(?:\s+"[^"]*")?$/u.test(askBody)) {
-      sawLeftEdge = true;
-      continue;
-    }
-    if (/^┃\s+TeamoRouter 钱包余额不足，请前往 https:\/\/teamorouter\.cn\/dashboard\?buy=1 充值后继续使用$/u.test(trimmed)) {
-      sawLeftEdge = true;
-      continue;
-    }
-    if (!/^[┃│]/u.test(trimmed)) break;
-    sawLeftEdge = true;
-    if (/^┃\s+(?:Pack-Opk-|Pack\s+·\s|[0-9a-f]{16,}(?:\s|$))/iu.test(trimmed)) continue;
-    if (trimmed === '┃' || trimmed === '│') continue;
-    if (askBody) content.unshift(askBody);
-  }
-  return sawLeftEdge ? content : undefined;
-}
-
-function openCodeComposerMatchesText(lines: readonly string[], text: string): boolean {
-  const content = openCodeComposerContent(lines);
-  if (!content || content.length === 0) return false;
-  const normalize = (value: string): string => value.replace(/\s+/gu, ' ').trim();
-  return normalize(content.join(' ')) === normalize(text);
-}
-
 /** The TUI composer is empty only when its rendered box has no text rows. */
 export function isOpenCodeComposerEmpty(lines: readonly string[]): boolean {
-  let bottomEdge = -1;
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    if (/╹▀▀▀/u.test(lines[index] ?? '')) {
-      bottomEdge = index;
-      break;
-    }
-  }
-  if (bottomEdge < 0) return false;
-
-  let sawLeftEdge = false;
-  for (let index = bottomEdge - 1; index >= 0; index -= 1) {
-    const trimmed = (lines[index] ?? '').replace(/\u001B\[[0-?]*[ -/]*[@-~]/gu, '').trim();
-    if (!trimmed) {
-      if (sawLeftEdge) continue;
-      continue;
-    }
-    const askBody = trimmed.replace(/^[┃│]\s*/u, '');
-    // A quoted suggestion after the placeholder is product chrome. Unquoted text is human input.
-    if (/^Ask anything(?:\.\.\.|…)(?:\s+"[^"]*")?$/u.test(askBody)) {
-      sawLeftEdge = true;
-      continue;
-    }
-    if (/^┃\s+TeamoRouter 钱包余额不足，请前往 https:\/\/teamorouter\.cn\/dashboard\?buy=1 充值后继续使用$/u.test(trimmed)) {
-      sawLeftEdge = true;
-      continue;
-    }
-    if (!trimmed.startsWith('┃')) break;
-    sawLeftEdge = true;
-    // The pack launches OpenCode either with a per-run `Pack-Opk-<hash>` agent or with the
-    // plain `pack` agent from buildExecutorCommand, which renders `Pack · <model> · <effort>`.
-    if (/^┃\s+(?:Pack-Opk-|Pack\s+·\s|[0-9a-f]{16,}(?:\s|$))/iu.test(trimmed)) continue;
-    if (trimmed !== '┃') return false;
-  }
-  return sawLeftEdge;
+  const content = openCodeComposerContentLines(lines);
+  return content !== undefined && content.length === 0;
 }
 
 type AsyncExecError = Error & {

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runOrcaJson, type OrcaJsonResponse } from './orca-runtime/native.ts';
+import { openCodeComposerContentLines } from './orca-runtime/opencode-composer.ts';
 import {
   type RuntimeAdapter,
   type RuntimeComposerControl,
@@ -201,40 +202,6 @@ export function composerPokeFingerprint(preview: string): string {
   return source.join('\n');
 }
 
-function openCodeComposerContentLines(preview: string): string[] | undefined {
-  const lines = preview.split(/\r?\n/);
-  let bottomEdge = -1;
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    if (/╹▀▀▀/u.test(lines[index] ?? '')) {
-      bottomEdge = index;
-      break;
-    }
-  }
-  if (bottomEdge < 0) return undefined;
-
-  const content: string[] = [];
-  let sawComposer = false;
-  for (let index = bottomEdge - 1; index >= 0; index -= 1) {
-    const trimmed = (lines[index] ?? '').replace(/\u001B\[[0-?]*[ -/]*[@-~]/gu, '').trim();
-    if (!trimmed) continue;
-    const body = trimmed.replace(/^[┃│]\s*/u, '');
-    if (/^Ask anything(?:\.\.\.|…)(?:\s+"[^"]*")?$/u.test(body)) {
-      sawComposer = true;
-      continue;
-    }
-    if (/^┃\s+TeamoRouter 钱包余额不足，请前往 https:\/\/teamorouter\.cn\/dashboard\?buy=1 充值后继续使用$/u.test(trimmed)) {
-      sawComposer = true;
-      continue;
-    }
-    if (!/^[┃│]/u.test(trimmed)) break;
-    sawComposer = true;
-    if (/^┃\s+(?:Pack-Opk-|Pack\s+·\s|[0-9a-f]{16,}(?:\s|$))/iu.test(trimmed)) continue;
-    if (trimmed === '┃' || trimmed === '│') continue;
-    if (body) content.unshift(body);
-  }
-  return sawComposer ? content : undefined;
-}
-
 interface ExactOrchestrationPointer {
   readonly command: string;
   readonly text: string;
@@ -242,7 +209,9 @@ interface ExactOrchestrationPointer {
 
 function exactOrchestrationPointer(preview: string): ExactOrchestrationPointer | undefined {
   const interior = composerInterior(preview);
-  const openCodeContent = interior ? undefined : openCodeComposerContentLines(preview);
+  const openCodeContent = interior
+    ? undefined
+    : openCodeComposerContentLines(preview.split(/\r?\n/));
   const source = interior
     ? composerContentLines(interior, true)
     : openCodeContent ?? unboxedComposerLines(preview, true);

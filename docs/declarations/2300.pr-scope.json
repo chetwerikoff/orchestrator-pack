@@ -5,7 +5,8 @@
     "docs/declarations/2300.pr-scope.json",
     "scripts/cursor-unsent-composer-submit.test.ts",
     "scripts/cursor-unsent-composer-submit.ts",
-    "scripts/orca-runtime/adapter.ts"
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/opencode-composer.ts"
   ],
   "denylist": [
     "credentials/",
