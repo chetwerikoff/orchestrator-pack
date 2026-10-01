@@ -30,6 +30,7 @@ import {
   type UnsentComposerSubmitDeps,
 } from './cursor-unsent-composer-submit.ts';
 import { OrcaTaskRuntimeAdapter } from './orca-runtime/task-adapter.ts';
+import { OrcaRuntimeAdapter } from './orca-runtime/adapter.ts';
 import type { OrcaJsonResponse } from './orca-runtime/native.ts';
 import type { RuntimeAdapter, RuntimeComposerControlRequest, RuntimeWorker, RuntimeWorkerIdentity } from './runtime/contracts.ts';
 
