@@ -3,13 +3,11 @@ import { resolve } from 'node:path';
 import { assertNpmRuntimeContract, NODE_VERSION_FILE } from './node-runtime-contract.mjs';
 import { runProcessSync } from '../kernel/subprocess.ts';
 
-function argument(argv, name) {
-  const index = argv.indexOf(name);
-  return index >= 0 ? argv[index + 1] : undefined;
-}
-
-const repoRoot = resolve(argument(process.argv.slice(2), '--repo-root') ?? process.cwd());
-const quiet = process.argv.includes('--quiet');
+const argv = process.argv.slice(2);
+const repoRootFlag = argv.indexOf('--repo-root');
+const requestedRoot = repoRootFlag >= 0 ? argv[repoRootFlag + 1] : undefined;
+const repoRoot = resolve(requestedRoot ?? process.cwd());
+const quiet = argv.includes('--quiet');
 
 try {
   const npm = runProcessSync({ command: 'npm', args: ['--version'], cwd: repoRoot, inheritParentEnv: true });
