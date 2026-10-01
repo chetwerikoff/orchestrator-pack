@@ -166,11 +166,12 @@ function runCli(): number {
     return 0;
   } catch (error) {
     const code = error instanceof TargetGhAuthorizationError ? error.code : 'target-gh-repository-invalid';
-    process.stderr.write(`${JSON.stringify({
+    const failure = {
       ok: false,
       code,
       message: error instanceof Error ? error.message : String(error),
-    })}\n`);
+    };
+    process.stderr.write(`${JSON.stringify(failure)}\n`);
     return 1;
   }
 }
