@@ -1,6 +1,6 @@
 # ChatGPT browser-turn transport
 
-This directory contains the tracked Node 22 Browser-GPT transport. Issue #1120
+This directory contains the tracked Browser-GPT transport under the declared Node runtime. Issue #1120
 cuts the canonical create/review `turn` path over to a state-light, send-once
 helper while retaining the pre-cutover implementation files and control commands
 only for diagnostics/rollback compatibility.
@@ -566,7 +566,7 @@ selected-section versus whole-blob drift, frozen plural rendering, pre-browser
 hand-written/mutated prompt refusal, required long-run stage/slot context, and
 legacy direct-publication bypass refusal.
 
-Repository CI additionally runs Node 22 policy, strict TypeScript, foundation
+Repository CI additionally runs declared-runtime policy, strict TypeScript, foundation
 Vitest, scope/declaration checks, and current-head review gates. Real automation-
 Chrome smoke remains necessary for browser/UI behavior that cannot be proven by
 unit tests alone.
