@@ -2,6 +2,7 @@
 import './toolchain/native-entrypoint-preflight.ts';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveTargetContext } from './lib/target-context.ts';
 import {
   buildManagerReviewTerminalBundle,
   terminalBundleFileName,
@@ -45,7 +46,12 @@ export function runManagerReviewTerminalBundleCli(argv: readonly string[]): numb
     return 2;
   }
   try {
-    const repo = option(argv, 'repo') ?? 'chetwerikoff/orchestrator-pack';
+    const selected = resolveTargetContext({ env: process.env });
+    const explicitRepo = option(argv, 'repo');
+    if (explicitRepo && explicitRepo.toLowerCase() !== selected.repository.toLowerCase()) {
+      throw new Error(`--repo ${explicitRepo} does not match selected target ${selected.repository}`);
+    }
+    const repo = selected.repository;
     const issueRaw = option(argv, 'issue-number');
     const sourceRevision = option(argv, 'source-revision');
     const reviewDir = option(argv, 'review-dir');
