@@ -94,7 +94,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
+      - name: Setup Node.js for pack verification
         uses: actions/setup-node@v4
         with:
           node-version-file: package.json
@@ -198,7 +198,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js for source typecheck
         uses: actions/setup-node@v4
         with:
           node-version-file: package.json
@@ -234,7 +234,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
+      - name: Setup Node.js for Vitest light lane
         uses: actions/setup-node@v4
         with:
           node-version-file: package.json
@@ -269,7 +269,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
+      - name: Setup Node.js for Vitest topology planning
         uses: actions/setup-node@v4
         with:
           node-version-file: package.json
@@ -321,7 +321,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
+      - name: Setup Node.js for Vitest heavy shard
         uses: actions/setup-node@v4
         with:
           node-version-file: package.json
@@ -359,7 +359,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
+      - name: Setup Node.js for Vitest contract lane
         uses: actions/setup-node@v4
         with:
           node-version-file: package.json
@@ -414,7 +414,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
+      - name: Setup Node.js for self-architect lint
         uses: actions/setup-node@v4
         with:
           node-version-file: package.json
