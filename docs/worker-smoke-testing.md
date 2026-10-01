@@ -231,8 +231,8 @@ only active ordering rules.
 
 ## Readiness gate
 
-Readiness semantics are unchanged: newest same-PR PASS at any report head
-satisfies smoke; required CI remains current-head bound.
+Readiness semantics are unchanged: any same-PR PASS at any report head
+satisfies smoke, even if a later same-PR report is non-PASS; required CI remains current-head bound.
 
 ## Runtime verification and rollback
 
