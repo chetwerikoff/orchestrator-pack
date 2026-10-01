@@ -1,12 +1,13 @@
 import { resolve } from 'node:path';
 import { executeReview, type ReviewOptions } from './review_core.ts';
 import type { ReviewSource } from './types.ts';
+import { resolveTargetContext } from '../../../scripts/lib/target-context.ts';
 
 function usage(): string {
   return [
     'Usage: review [options]',
     '  --repo-root <path>       Repository root (default: cwd)',
-    '  --base <ref>             Base ref for codex exec review (default: origin/main)',
+    '  --base <ref>             Base ref for codex exec review (default: selected target branch in target mode; origin/main otherwise)',
     '  --issue <n>              GitHub issue number (else linked PR body)',
     '  --pr-number <n>          PR number to resolve linked issue via gh',
     '  --pr-body-file <path>    PR body file (GitHub Actions)',
@@ -30,7 +31,8 @@ function parseSource(value: string | undefined): ReviewSource | undefined {
 
 export function parseReviewArgs(argv: string[]): ReviewOptions & { promptOnly?: boolean } {
   let repoRoot = process.cwd();
-  let baseRef = 'origin/main';
+  const selected = String(process.env.OPK_PROJECT_ID ?? '').trim() ? resolveTargetContext({ env: process.env }) : null;
+  let baseRef = selected ? `origin/${selected.defaultBranch}` : 'origin/main';
   let issueNumber: number | undefined;
   let prNumber: number | undefined;
   let prBodyFile: string | undefined;
