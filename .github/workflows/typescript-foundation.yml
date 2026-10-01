@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version-file: package.json
           cache: npm
       - name: Install from frozen lockfile
         run: npm ci --include=dev
@@ -63,7 +63,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version-file: package.json
           cache: npm
       - name: Install from frozen lockfile
         run: npm ci --include=dev
@@ -82,7 +82,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version-file: package.json
           cache: npm
       - name: Install from frozen lockfile
         run: npm ci --include=dev
@@ -97,7 +97,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version-file: package.json
           cache: npm
       - name: Install from frozen lockfile
         run: npm ci --include=dev
@@ -115,7 +115,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version-file: package.json
           cache: npm
       - name: Install from frozen lockfile
         run: npm ci --include=dev
