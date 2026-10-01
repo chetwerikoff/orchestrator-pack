@@ -146,13 +146,15 @@ contract/guard.
 
 Before listing anything under **§3 Already done** or **§4 Planned**:
 
+0. Resolve the selected project card with `node --experimental-strip-types scripts/lib/target-context.ts check`. Treat its `repository` and `defaultBranch` as the only target repository/branch authority; do not infer either from cwd/origin or hard-code the pack repository.
+
 1. Consult [`docs/issue_queue_index.md`](../docs/issue_queue_index.md) to map each
    cited `docs/issues_drafts/NN-<slug>.md` path to its GitHub Issue number (never
    treat the draft filename prefix as the GitHub `#`).
 2. For each candidate issue, read live metadata (at minimum):
-   `gh issue view <N> --repo chetwerikoff/orchestrator-pack --json state,title,body,closedAt`
+   `gh issue view <N> --repo <selected-repository> --json state,title,body,closedAt`
    (or the same `--json` field set without `--repo` when the checkout is already
-   `chetwerikoff/orchestrator-pack`).
+   `<selected-repository>`).
 3. Do **not** infer open, closed, planned, or shipped from a draft file existing
    or from draft presence in the repo alone.
 
@@ -170,13 +172,13 @@ For **each** issue/draft you might put in §4:
 | Step | Check | If true → |
 |------|--------|-----------|
 | A | `gh issue view` → `state` is **closed** | **Exclude from §4.** If the outcome matters to the investigation, one line in **§3** (worked / partial / failed) with close reason or merged PR ref. |
-| B | Merged PR linked to the issue (`gh pr list --repo chetwerikoff/orchestrator-pack --state merged --search "closes #N" --json number,title,state,mergedAt --limit 10` or issue timeline / comments) | **Exclude from §4** unless the PR clearly did *not* implement the scoped acceptance criteria. |
-| C | Acceptance criteria from the issue body (or linked draft) already satisfied on **`main`** — files/paths exist, behavior present, `git log -n 5 -- <paths>` shows merge after issue open | **Exclude from §4**; record in **§3** as shipped (note **open issue, work on main** if `state` is still open). |
+| B | Merged PR linked to the issue (`gh pr list --repo <selected-repository> --state merged --search "closes #N" --json number,title,state,mergedAt --limit 10` or issue timeline / comments) | **Exclude from §4** unless the PR clearly did *not* implement the scoped acceptance criteria. |
+| C | Acceptance criteria from the issue body (or linked draft) already satisfied on **`selected default branch`** — files/paths exist, behavior present, `git log -n 5 -- <paths>` shows merge after issue open | **Exclude from §4**; record in **§3** as shipped (note **open issue, work on selected default branch** if `state` is still open). |
 | D | `docs/declarations/*.json` or merged worker PR scope matches the issue’s declared outcome for this topic | **Exclude from §4**; **§3** instead. |
-| E | Issue is **open** but only tracks spec/ops follow-up while implementation is already on `main` | **§3** for what shipped; **§4** only if you state the *remaining* gap in one line (not the whole original issue scope). |
-| F | Issue is **open**, no merged PR, and criteria are **not** on `main` | **May list in §4** — status only: `#N` open, one sentence on what would change when done. |
+| E | Issue is **open** but only tracks spec/ops follow-up while implementation is already on `selected default branch` | **§3** for what shipped; **§4** only if you state the *remaining* gap in one line (not the whole original issue scope). |
+| F | Issue is **open**, no merged PR, and criteria are **not** on `selected default branch` | **May list in §4** — status only: `#N` open, one sentence on what would change when done. |
 
-When in doubt, **spot-check `main`** (read files, run a narrow grep, or `git log`
+When in doubt, **spot-check `selected default branch`** (read files, run a narrow grep, or `git log`
 on paths named in the issue) rather than trusting the open issue or an old draft.
 
 **§4 may be empty.** Write explicitly that no open queue items remain for this
@@ -184,7 +186,7 @@ topic (e.g. «Нет открытых задач в очереди по этой
 over listing work that is already shipped.
 
 **Dedupe §3 ↔ §4:** the same outcome must not appear in both sections. If it is
-on `main` or in a merged PR, it belongs in **§3**, not **§4**, regardless of
+on `selected default branch` or in a merged PR, it belongs in **§3**, not **§4**, regardless of
 issue state.
 
 ### Search existing mitigations
@@ -205,7 +207,7 @@ Record what was tried, whether it worked, partially worked, or failed / was wron
   `docs/issues_drafts/`.
 - Run **Verify §4 (planned) — ship check** on every candidate before writing §4.
 - Include in §4 **only** survivors: open issues whose scoped work is **not** already
-  on `main`. One line each: `#N` + what remains outstanding (not the full issue
+  on `selected default branch`. One line each: `#N` + what remains outstanding (not the full issue
   essay).
 - Shipped or closed items discovered here belong in **§3**, not §4.
 
@@ -251,7 +253,7 @@ instead of a fabricated cause chain.
 | 1 | **Простыми словами** | **In plain terms** | 2–4 short paragraphs: what broke or misbehaved, what actually caused it (no jargon, or jargon explained in parentheses), and what it means for the user right now. Label claims as **Fact / Факт** or **Hypothesis / Гипотеза**. If evidence does not establish a cause, say "root cause not established" / «причина не установлена» plainly here. No file paths unless the user needs to open one. |
 | 2 | **Причины** | **Causes** | Evidence-backed root cause(s) for **another agent** or a follow-up task: **Fact / Факт** bullets with artifact refs (`gh` #, PR, log path), 5 Whys chain when evidence supports it, and **Hypothesis / Гипотеза** bullets with confirm/refute evidence when not confirmed. If multiple causes are possible, list ranked hypotheses with evidence for/against each. If the root cause is not established, state that and do **not** fabricate a 5-Whys chain; carry the missing evidence into §5/§6 next steps. Structured bullets; precise enough to implement from. |
 | 3 | **Что уже сделано** | **Already done** | Mitigations in the repo; label each: worked / partial / failed or wrong. |
-| 4 | **Что будет сделано** | **Planned** | **Only after ship check:** open GitHub Issues whose acceptance criteria are **not** already on `main`. One line per survivor: `#N` + what **remains** outstanding. **Status only** — no action steps. Empty §4 with an explicit “none” line is valid. Never list closed issues, merged PRs, or work already in **§3**. Do not repeat steps from §5–§6. |
+| 4 | **Что будет сделано** | **Planned** | **Only after ship check:** open GitHub Issues whose acceptance criteria are **not** already on `selected default branch`. One line per survivor: `#N` + what **remains** outstanding. **Status only** — no action steps. Empty §4 with an explicit “none” line is valid. Never list closed issues, merged PRs, or work already in **§3**. Do not repeat steps from §5–§6. |
 | 5 | **Что сделать сейчас** | **What to do now** | **Numbered steps** (1., 2., …): everything that should happen **soon** — fix, unblock, verify, operator steps (restart, env, local YAML), and **optional** near-term improvements that are not durable prevention. Skip items already fully covered by §4 unless you add a net-new step. One concrete action per step; say who/what executes (you, architect, worker implementation task, operator). |
 | 6 | **Чтобы не повторялось** / **Чтобы работало стабильно** | **So it does not recur** / **So it stays stable** | **Numbered steps** (1., 2., …): everything **durable** — spec/draft/issue, `AGENTS.md`, CI guard, config contract, follow-up drafts, ranked gaps not covered by §3 and §4; not one-off patches to merged code. Skip items already fully covered by §4 unless you add a net-new step. Pick the heading that matches the ask (recurrence vs steady-state correctness); use both headings only if both apply. |
 
@@ -364,10 +366,10 @@ Revise the memo for valid findings; stop after cycle 3 and list open questions.
   and list ranked surviving hypotheses plus missing evidence instead.
 - List work as planned or shipped from draft-file existence or draft filename
   prefix alone — use the registry, `gh issue view`, merged PR search, and
-  spot-checks on `main` first.
+  spot-checks on `selected default branch` first.
 - Put closed, merged, or already-shipped work in **§4 Planned** — that belongs
   in **§3 Already done** (see **Verify §4 — ship check**).
-- Pad **§4** with open issues you did not verify against `main` and linked PRs.
+- Pad **§4** with open issues you did not verify against `selected default branch` and linked PRs.
 - Skip queue, draft, or architecture search when the topic is in-repo behavior.
 - Duplicate **`study-external-source`** for external adoption asks.
 - Patch merged implementation code as the durable fix — fix spec, contract, or

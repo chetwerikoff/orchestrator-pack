@@ -1,12 +1,14 @@
 import { resolve } from 'node:path';
 import { executeReview, type ReviewOptions } from './review_core.ts';
 import type { ReviewSource } from './types.ts';
+import { originSlugFromGitConfig } from '../../../scripts/lib/git-origin-slug.mjs';
+import { resolveTargetContext } from '../../../scripts/lib/target-context.ts';
 
 function usage(): string {
   return [
     'Usage: review [options]',
     '  --repo-root <path>       Repository root (default: cwd)',
-    '  --base <ref>             Base ref for codex exec review (default: origin/main)',
+    '  --base <ref>             Base ref for codex exec review (default: selected target branch; target selection is required)',
     '  --issue <n>              GitHub issue number (else linked PR body)',
     '  --pr-number <n>          PR number to resolve linked issue via gh',
     '  --pr-body-file <path>    PR body file (GitHub Actions)',
@@ -16,6 +18,13 @@ function usage(): string {
     '  --github-comment-file <path>  Write PR comment markdown for Actions path',
     '  --prompt-only            Print assembled prompt and exit 0',
   ].join('\n');
+}
+
+function resolveSelectedReviewTarget() {
+  const hasSelector = Boolean(String(process.env.OPK_PROJECT_ID ?? '').trim());
+  const unboundTestHarness = !hasSelector
+    && (process.env.OPK_VITEST_HARNESS === '1' || process.env.VITEST === 'true');
+  return unboundTestHarness ? null : resolveTargetContext({ env: process.env });
 }
 
 function parseSource(value: string | undefined): ReviewSource | undefined {
@@ -30,7 +39,9 @@ function parseSource(value: string | undefined): ReviewSource | undefined {
 
 export function parseReviewArgs(argv: string[]): ReviewOptions & { promptOnly?: boolean } {
   let repoRoot = process.cwd();
-  let baseRef = 'origin/main';
+  const selected = resolveSelectedReviewTarget();
+  let baseRef = selected ? `origin/${selected.defaultBranch}` : 'origin/main';
+  let explicitBaseRef = false;
   let issueNumber: number | undefined;
   let prNumber: number | undefined;
   let prBodyFile: string | undefined;
@@ -48,6 +59,7 @@ export function parseReviewArgs(argv: string[]): ReviewOptions & { promptOnly?: 
         break;
       case '--base':
         baseRef = argv[++index] ?? baseRef;
+        explicitBaseRef = true;
         break;
       case '--issue': {
         const raw = Number(argv[++index]);
@@ -91,6 +103,19 @@ export function parseReviewArgs(argv: string[]): ReviewOptions & { promptOnly?: 
     }
   }
 
+  if (selected) {
+    const observedRepository = originSlugFromGitConfig(repoRoot);
+    if (!observedRepository || observedRepository.toLowerCase() !== selected.repository.toLowerCase()) {
+      throw new Error(
+        `Codex review repository ${observedRepository ?? '<unavailable>'} does not match selected target ${selected.repository}`,
+      );
+    }
+    const selectedBaseRef = `origin/${selected.defaultBranch}`;
+    if (explicitBaseRef && baseRef !== selectedBaseRef) {
+      throw new Error(`Codex review base ${baseRef} does not match selected target base ${selectedBaseRef}`);
+    }
+    baseRef = selectedBaseRef;
+  }
   return {
     repoRoot,
     baseRef,

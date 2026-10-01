@@ -9,7 +9,7 @@ import {
 import {
   clearPendingEvent,
   clearPersistedCycleId,
-  defaultWorkdir,
+  resolveJournalWorkdir,
   ensureProjectionLabels,
   fetchIssueRevision,
   loadIssueJournalCensus,
@@ -209,7 +209,7 @@ export function runFinalAcceptance(
       guardErrors: [`invalid public actor ${String(input.publicActor)}`],
     };
   }
-  const workdir = input.workdir ?? defaultWorkdir(input.issueNumber);
+  const workdir = resolveJournalWorkdir(input.issueNumber, input.workdir);
   const bootstrapDiagnostics = ensureProjectionLabels(transport, input.repo);
   diagnostics.push(...bootstrapDiagnostics);
   let projectionPendingRepair = bootstrapDiagnostics.length > 0;

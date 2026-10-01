@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { isAbsolute, join, resolve } from 'node:path';
 import { runProcessSync, type ProcessResult } from '../kernel/subprocess.ts';
 import { resolveOrcaExecutable } from '../orca-runtime/native.ts';
+import { resolveTargetContext } from '../lib/target-context.ts';
 import {
   classifyWorktree,
   decideContinuation,
@@ -502,11 +503,17 @@ function checkIgnored(expected: ExpectedWorktreeIdentity, runner: CommandRunner)
   });
 }
 
+function selectedLifecycleDefaultBranch(): string {
+  if (process.env.VITEST && !String(process.env.OPK_PROJECT_ID ?? '').trim()) return 'main';
+  return resolveTargetContext({ env: process.env }).defaultBranch;
+}
+
 function checkMerged(
   expected: NormalizedLifecycleExpected,
   pr: PrIdentity,
   runner: CommandRunner,
 ): boolean {
+  const defaultBranch = selectedLifecycleDefaultBranch();
   // Explicit recovery retains the original conservative ordinary-merge proof.
   // Post-merge H0/H1 cleanup must not require H0 to be an ancestor of current main.
   if (!expected.finalPrHeadSha) {
@@ -516,7 +523,7 @@ function checkMerged(
       'merge-base',
       '--is-ancestor',
       'HEAD',
-      'origin/main',
+      `origin/${defaultBranch}`,
     ]);
     if (ordinary.ok && ordinary.exitCode === 0) return true;
   }
@@ -527,11 +534,11 @@ function checkMerged(
     || pr.headRefOid !== finalHead
     || !pr.mergeCommitOid
     || (expected.mode === 'branch-bound' && pr.headRefName !== expected.branchName)
-    || (pr.baseRefName !== undefined && pr.baseRefName !== 'main')
+    || (pr.baseRefName !== undefined && pr.baseRefName !== defaultBranch)
   ) {
     return false;
   }
-  const fetched = gitResult(runner, ['-C', expected.repositoryRoot, 'fetch', 'origin', 'main']);
+  const fetched = gitResult(runner, ['-C', expected.repositoryRoot, 'fetch', 'origin', defaultBranch]);
   if (!fetched.ok) return false;
   const adopted = gitResult(runner, [
     '-C',
@@ -539,7 +546,7 @@ function checkMerged(
     'merge-base',
     '--is-ancestor',
     pr.mergeCommitOid,
-    'origin/main',
+    `origin/${defaultBranch}`,
   ]);
   return adopted.ok && adopted.exitCode === 0;
 }

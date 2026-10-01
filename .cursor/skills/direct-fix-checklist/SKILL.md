@@ -25,6 +25,8 @@ architect adapter for authorized tracked edits and the architect role contract.
 
 ## The direct-PR spine
 
+Before any repository/base/PR operation, resolve the selected project card with `node --experimental-strip-types scripts/lib/target-context.ts check`. Bind its exact `repository` as `TARGET_REPOSITORY` and exact `defaultBranch` as `TARGET_DEFAULT_BRANCH`. Missing selection or disagreement with an explicit repository/base is terminal; cwd/origin is validation, never target selection.
+
 The order that matters. Sections after it cover the steps that need detail;
 CI and review are separate concerns and have their own sections.
 
@@ -35,14 +37,14 @@ CI and review are separate concerns and have their own sections.
 3. **Work off a base you control.** Confirm the current branch and whether the
    checkout holds anyone's uncommitted work: `git branch --show-current` and
    `git status --porcelain=v1`. If it is shared, dirty, or not yours, create a
-   separate worktree from `origin/main` and do everything there.
-4. **Branch** from `origin/main` (fetch first — `origin/main` must be current).
+   separate worktree from `origin/$TARGET_DEFAULT_BRANCH` and do everything there.
+4. **Branch** from `origin/$TARGET_DEFAULT_BRANCH` (fetch first — `origin/$TARGET_DEFAULT_BRANCH` must be current).
 5. **Edit** only the paths you intend to declare.
 6. **Audit the pending change before committing.** The union of
    `git status --porcelain=v1` (staged, unstaged, untracked) and
-   `git diff --name-only origin/main` must equal exactly the paths you intend.
+   `git diff --name-only origin/$TARGET_DEFAULT_BRANCH` must equal exactly the paths you intend.
    Anything else present is someone else's work or a stray artifact — find out
-   which before you commit. Do **not** use `origin/main..HEAD` here: it compares
+   which before you commit. Do **not** use `origin/$TARGET_DEFAULT_BRANCH..HEAD` here: it compares
    committed trees and cannot see the edits you just made.
 7. **Commit the edits.** Do this before step 8 so the snapshot's
    `source_revision` pins the tree being reviewed.
@@ -51,8 +53,8 @@ CI and review are separate concerns and have their own sections.
 10. **Pre-push self-check** (§ Pre-push local self-check).
 11. **Push**, then **open the PR** with the right body contract (§ PR body issue
     reference).
-12. **Read the PR back** — it exists, targets `main`, and
-    `git diff --name-only origin/main...HEAD` lists exactly your paths plus the
+12. **Read the PR back** — it exists, targets `$TARGET_DEFAULT_BRANCH`, and
+    `git diff --name-only origin/$TARGET_DEFAULT_BRANCH...HEAD` lists exactly your paths plus the
     snapshot.
 
 ## Declaration snapshot
@@ -123,7 +125,7 @@ npm test
 ```
 
 **Fix only failures your diff caused.** When a failure looks unrelated, re-run
-the same check on a clean `origin/main` worktree. If it reproduces there it is
+the same check on a clean `origin/$TARGET_DEFAULT_BRANCH` worktree. If it reproduces there it is
 pre-existing: report it, and do not touch unrelated files to make it green —
 that is scope creep the guard will reject. Do not use CI as the first scope check.
 

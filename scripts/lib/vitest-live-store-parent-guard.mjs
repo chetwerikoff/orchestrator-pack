@@ -10,13 +10,12 @@ import {
   resolvedLiveStores,
   startLiveStoreGuard,
 } from './vitest-live-store-harness.mjs';
+import { DEFAULT_WAKE_SUPERVISOR_PROJECT_ID } from '../pr2-foundation/wake-supervisor-state-constants.mjs';
 
 const MAX_PARENT_WATCHERS = 512;
 // Residual: pathname-only exemption; fs.watch cannot prove writer provenance,
-// so same-path child bypass of these files is accepted. The list is what a
-// running wake supervisor writes on its own cadence: its status and projected
-// registry under `supervisor/` (the cutover layout; a state dir equal to the
-// root keeps the status at the top level) and the scheduler's mail reconcile.
+// so same-path child bypass of these files is accepted. The list covers live
+// supervisor cadence writes and selected-project report/reconcile/observer state.
 const EXTERNALLY_MUTABLE_STORE_PATHS = new Map([
   ['wake-supervisor-runtime-state', new Set([
     'worker-message-dispatch-journal.json',
@@ -32,6 +31,40 @@ const EXTERNALLY_MUTABLE_JOURNAL_PATH = 'worker-message-dispatch-journal.json';
 const JOURNAL_ATOMIC_TEMP_PATH = /^\.[0-9a-f]{32}\.tmp$/i;
 // writeDurableFile temp name: `.<basename>.<pid>.<uuid>.tmp` beside the target.
 const SUPERVISOR_STATUS_ATOMIC_TEMP_PATH = /^(?:supervisor\/)?\.(?:typescript-supervisor-status|projected-registry)\.json\.\d+\.[0-9a-f-]{36}\.tmp$/i;
+const FLEET_OBSERVER_ATOMIC_TEMP_PATH = /^\.(?:tmp|restore)-\d+-\d+-[0-9a-f]{8}$/i;
+function projectScopedRelativePath(projectId, basename) {
+  const selected = String(projectId ?? '').trim() || DEFAULT_WAKE_SUPERVISOR_PROJECT_ID;
+  if (selected.includes('/') || selected.includes('\\')) return '';
+  return `${selected}/${basename}`;
+}
+function isExternallyMutableWakePath(relativePath, projectId) {
+  const allowed = EXTERNALLY_MUTABLE_STORE_PATHS.get(EXTERNALLY_MUTABLE_JOURNAL_STORE_ID) ?? new Set();
+  const reportPrefix = projectScopedRelativePath(projectId, '');
+  return allowed.has(relativePath)
+    || (reportPrefix !== '' && relativePath === reportPrefix.slice(0, -1))
+    || relativePath === projectScopedRelativePath(projectId, 'worker-report-store.json')
+    || relativePath === projectScopedRelativePath(projectId, 'orchestration-mail-reconcile.json')
+    || relativePath === projectScopedRelativePath(projectId, 'orchestration-mail-reconcile.lock')
+    || relativePath === projectScopedRelativePath(projectId, 'supervisor/typescript-supervisor-status.json')
+    || relativePath === projectScopedRelativePath(projectId, 'supervisor/projected-registry.json')
+    || relativePath === projectScopedRelativePath(projectId, 'fleet-observer-snapshot.json');
+}
+function isExternallyMutableWakeSidecarPath(relativePath, projectId) {
+  const reportPrefix = projectScopedRelativePath(projectId, '');
+  const supervisorPrefix = projectScopedRelativePath(projectId, 'supervisor/');
+  return relativePath === `${EXTERNALLY_MUTABLE_JOURNAL_PATH}.lock`
+    || JOURNAL_ATOMIC_TEMP_PATH.test(relativePath)
+    || SUPERVISOR_STATUS_ATOMIC_TEMP_PATH.test(relativePath)
+    || (reportPrefix !== '' && (
+      relativePath === `${reportPrefix}worker-report-store.lock`
+      || relativePath === `${reportPrefix}worker-report-store.json.tmp`
+      || (relativePath.startsWith(reportPrefix)
+        && FLEET_OBSERVER_ATOMIC_TEMP_PATH.test(relativePath.slice(reportPrefix.length)))
+    ))
+    || (supervisorPrefix !== ''
+      && relativePath.startsWith(supervisorPrefix)
+      && SUPERVISOR_STATUS_ATOMIC_TEMP_PATH.test(relativePath.slice(supervisorPrefix.length)));
+}
 function pathIsSameOrWithin(candidate, root) {
   const rel = relative(root, candidate);
   return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
@@ -56,19 +89,16 @@ function storeRelativePath(store, candidate) {
   return relative(store.defaultPath, candidate).replaceAll('\\', '/');
 }
 
-function externallyMutablePath(match) {
-  if (!match?.store) return false;
-  const allowed = EXTERNALLY_MUTABLE_STORE_PATHS.get(match.storeId);
-  if (!allowed) return false;
-  return allowed.has(storeRelativePath(match.store, match.candidate));
-}
-
-function externallyMutableSidecarPath(match) {
+function externallyMutablePath(match, env) {
   if (match?.storeId !== EXTERNALLY_MUTABLE_JOURNAL_STORE_ID || !match.store) return false;
   const relativePath = storeRelativePath(match.store, match.candidate);
-  return relativePath === `${EXTERNALLY_MUTABLE_JOURNAL_PATH}.lock`
-    || JOURNAL_ATOMIC_TEMP_PATH.test(relativePath)
-    || SUPERVISOR_STATUS_ATOMIC_TEMP_PATH.test(relativePath);
+  return isExternallyMutableWakePath(relativePath, env.OPK_PROJECT_ID);
+}
+
+function externallyMutableSidecarPath(match, env) {
+  if (match?.storeId !== EXTERNALLY_MUTABLE_JOURNAL_STORE_ID || !match.store) return false;
+  const relativePath = storeRelativePath(match.store, match.candidate);
+  return isExternallyMutableWakeSidecarPath(relativePath, env.OPK_PROJECT_ID);
 }
 
 function snapshotTree(root) {
@@ -119,10 +149,12 @@ export function isExternalJournalSnapshotOnlyChange(changedPaths, observedPaths 
   return journalOnly && (observedPaths.has(EXTERNALLY_MUTABLE_JOURNAL_PATH) || changed.length > 0);
 }
 
-export function isExternalWakeSupervisorSnapshotOnlyChange(changedPaths) {
-  const allowed = EXTERNALLY_MUTABLE_STORE_PATHS.get(EXTERNALLY_MUTABLE_JOURNAL_STORE_ID) ?? new Set();
+export function isExternalWakeSupervisorSnapshotOnlyChange(changedPaths, projectId = '') {
   const changed = [...changedPaths].filter((path) => path !== '');
-  return changed.length > 0 && changed.every((path) => allowed.has(path));
+  return changed.length > 0 && changed.every((path) =>
+    isExternallyMutableWakePath(path, projectId)
+      || isExternallyMutableWakeSidecarPath(path, projectId),
+  );
 }
 
 export function startParentLiveStoreGuard(env = process.env) {
@@ -167,8 +199,8 @@ export function startParentLiveStoreGuard(env = process.env) {
         const match = classifyLiveStorePath(candidate, env);
         if (match) {
           const path = storeRelativePath(match.store, match.candidate);
-          if (externallyMutablePath(match)) addTouch(observedExternalTouches, match.storeId, path);
-          else if (externallyMutableSidecarPath(match)) {
+          if (externallyMutablePath(match, env)) addTouch(observedExternalTouches, match.storeId, path);
+          else if (externallyMutableSidecarPath(match, env)) {
             addTouch(observedJournalSidecars, match.storeId, path);
           } else addTouch(exactTouches, match.storeId, path);
         }
@@ -227,7 +259,7 @@ export function startParentLiveStoreGuard(env = process.env) {
         const changed = changedPathsByStore.get(store.id) ?? [];
         if (store.id === EXTERNALLY_MUTABLE_JOURNAL_STORE_ID
           && (isExternalJournalSnapshotOnlyChange(changed, observed ?? new Set())
-            || isExternalWakeSupervisorSnapshotOnlyChange(changed))) {
+            || isExternalWakeSupervisorSnapshotOnlyChange(changed, env.OPK_PROJECT_ID))) {
           externallySettledStores.add(store.id);
         }
       }
@@ -252,7 +284,12 @@ export function startParentLiveStoreGuard(env = process.env) {
         if (!retained.includes(failure)) retained.push(failure);
       }
       if (retained.length > 0) {
-        const error = new Error(`OPK_VITEST_LIVE_STORE_GUARD_FAILED ${retained.join(',')}`);
+        const changedPathDetails = [...changedPathsByStore.entries()]
+          .filter(([storeId, paths]) => paths.length > 0 && retained.includes(`${storeId}:snapshot_changed`))
+          .map(([storeId, paths]) => `${storeId}=${JSON.stringify(paths)}`)
+          .join(' ');
+        const detail = changedPathDetails ? ` changed_paths=${changedPathDetails}` : '';
+        const error = new Error(`OPK_VITEST_LIVE_STORE_GUARD_FAILED ${retained.join(',')}${detail}`);
         error.code = 'OPK_VITEST_LIVE_STORE_GUARD_FAILED';
         error.failures = retained;
         throw error;

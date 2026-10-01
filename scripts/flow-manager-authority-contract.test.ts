@@ -1609,8 +1609,8 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     expect(orchestrationRunbook).toContain(
       'manager whole-role Task/Dispatch handoff',
     );
-    expect(orchestrationRunbook).toContain(
-      'orchestrator launches/reuses a local supervised worker as independent-smoke parent',
+    expect(orchestrationRunbook).toMatch(
+      /orchestrator launches\/reuses a local supervised worker\s+as independent-smoke parent/,
     );
     expect(orchestrationRunbook).toContain(
       'does not wait for scheduler\n`ready_for_review`',
@@ -1712,7 +1712,7 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     expect(executeSkill).toMatch(/Keep the same\s+manager Dispatch alive/);
     expect(executionRunbook).toMatch(/the same\s+manager Dispatch remains alive/);
     expect(executionRunbook).toContain('classifyExecuteIssueManagerRecord');
-    expect(orchestrationRunbook).toContain('the same manager Dispatch remains nonterminal');
+    expect(orchestrationRunbook).toMatch(/The same\s+manager Dispatch remains nonterminal/);
     expect(executeSkill).toContain('The supervisor consumes the validated `verdict` before role completion');
     expect(executeSkill).toContain('supervisor-launched local worker owns');
     expect(smokeRunbook).toContain('The manager does not run independent smoke itself');
@@ -1916,17 +1916,14 @@ describe('Issue #2004 derived external-dependency parking contract', () => {
   it('guards the canonical authority boundary, derived parking, and compact dispatch payload', () => {
     for (const required of [
       '## Structured external-dependency parking',
-      'projects it to\n`external_pause(external:waiting_on_issue|external:waiting_on_pr)`',
-      'On `recoverable` execute the returned `nextAction.argv` once',
-      'If the next\nresult recommends a byte-identical argv, do not execute it again',
-      'Before ending a turn without\n`worker_done`, drain the inbox',
-      'Never send `worker_done --outcome failed` for\nany of these',
-      'Derive `escalation-id` deterministically from\n`(issue, stage, cause, resume_when)`',
-      'If the escalation send\nitself fails, retry it exactly once',
-      'A live Dispatch whose most recent manager message is that escalation is a\n**paused unit**',
-      'must not re-dispatch the same argv into it',
-      'Until a separate coordinator\nsweep/wake change lands',
-      'Browser-GPT\n`TerminalEnvelope` remains a separate transport and is unchanged',
+      'The manager boundary uses the existing closed outcomes `completed`, `recoverable`,',
+      'returned non-null `nextAction.argv` once.',
+      'Supply `--blocked-on-json` only when the coordinator authoritatively knows the named',
+      'thread id derived from `(issue, stage, cause, resume_when)`.',
+      'Retry a failed\nescalation send exactly once.',
+      're-dispatch the same argv into a live paused Dispatch.',
+      'Inbox drain and `worker_done` obligations are owned by',
+      'Browser-GPT `TerminalEnvelope` remains a separate transport and is unchanged.',
     ]) {
       expect(orchestrationRunbook).toContain(required);
     }

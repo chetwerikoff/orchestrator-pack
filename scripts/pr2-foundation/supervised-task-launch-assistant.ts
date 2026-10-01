@@ -148,6 +148,7 @@ export interface WorktreePreparationRequest {
   readonly worktreeSelector?: string;
   readonly worktreeName?: string;
   readonly baseBranch?: string;
+  readonly defaultBranch?: string;
   readonly providerTopLevel?: boolean;
   readonly managerRefresh?: boolean;
 }
@@ -167,6 +168,7 @@ export interface LaunchInput {
   readonly worktreeSelector?: string;
   readonly worktreeName?: string;
   readonly baseBranch?: string;
+  readonly defaultBranch?: string;
   readonly env?: Readonly<NodeJS.ProcessEnv>;
   readonly cwd?: string;
   readonly startMode?: WorkerStartMode;
@@ -437,6 +439,7 @@ export async function runSupervisedTaskLaunchAssistant(
     ...(input.worktreeSelector ? { worktreeSelector: input.worktreeSelector } : {}),
     ...(input.worktreeName ? { worktreeName: input.worktreeName } : {}),
     ...(input.baseBranch ? { baseBranch: input.baseBranch } : {}),
+    ...(input.defaultBranch ? { defaultBranch: input.defaultBranch } : {}),
     ...(providerMode ? { providerTopLevel: true } : {}),
     ...(input.workClass === 'manager' ? { managerRefresh: true } : {}),
   }));
@@ -913,6 +916,15 @@ function gitWorktreeEntries(output: string): readonly { readonly path: string; r
   return entries;
 }
 
+function managerDefaultBranch(request: Pick<WorktreePreparationRequest, 'defaultBranch' | 'baseBranch'>): string {
+  const explicit = text(request.defaultBranch);
+  if (explicit) return explicit;
+  const base = text(request.baseBranch);
+  if (base.startsWith('origin/') && base.length > 'origin/'.length) return base.slice('origin/'.length);
+  if (process.env.VITEST) return 'main';
+  return '';
+}
+
 function selectorMatchesObservedWorktree(selector: string, id: string, path: string): boolean {
   const value = selector.trim();
   if (value.startsWith('id:')) return value === `id:${id}`;
@@ -979,11 +991,19 @@ async function observeManagerWorktreeIdentity(
   }
   const branch = branchRef.slice('refs/heads/'.length);
   const owners = entries.filter((entry) => entry.branch === branchRef);
-  if (!branch || branch === 'main' || owners.length !== 1) {
+  const defaultBranch = managerDefaultBranch(request);
+  if (!defaultBranch) {
+    return worktreeContinue<ManagerWorktreeIdentity>(
+      'manager_worktree_default_branch_unresolved',
+      { worktreeId: id },
+      'resolve the selected project default branch before manager worktree refresh',
+    );
+  }
+  if (!branch || branch === defaultBranch || owners.length !== 1) {
     return worktreeContinue<ManagerWorktreeIdentity>(
       'manager_worktree_branch_not_distinct',
       { worktreeId: id, branch: branch || 'unknown', ownerCount: owners.length },
-      'manager worktrees require one non-main local branch owned by exactly one linked worktree',
+      `manager worktrees require one local branch distinct from ${defaultBranch} and owned by exactly one linked worktree`,
     );
   }
   return { status: 'ok', value: { branch }, evidence: { worktreeId: id, branch } };
@@ -998,26 +1018,34 @@ async function refreshManagerWorktree(
   const identity = await observeManagerWorktreeIdentity(request, id, path, execute);
   if (identity.status !== 'ok') return identity;
 
+  const defaultBranch = managerDefaultBranch(request);
+  if (!defaultBranch) {
+    return worktreeContinue(
+      'manager_worktree_default_branch_unresolved',
+      { worktreeId: id, branch: identity.value.branch },
+      'resolve the selected project default branch before manager worktree refresh',
+    );
+  }
   const fetched = await execute([
-    'git', 'fetch', '--no-tags', 'origin', 'main:refs/remotes/origin/main',
+    'git', 'fetch', '--no-tags', 'origin', `${defaultBranch}:refs/remotes/origin/${defaultBranch}`,
   ], 120_000, undefined, path);
   if (!fetched.ok) {
     return worktreeContinue(
       'manager_worktree_fetch_failed',
       { worktreeId: id, branch: identity.value.branch },
-      'fetch origin/main successfully before status, ancestry, fast-forward, or manager start',
+      `fetch origin/${defaultBranch} successfully before status, ancestry, fast-forward, or manager start`,
     );
   }
 
   const resolvedOrigin = await execute([
-    'git', 'rev-parse', '--verify', 'refs/remotes/origin/main^{commit}',
+    'git', 'rev-parse', '--verify', `refs/remotes/origin/${defaultBranch}^{commit}`,
   ], undefined, undefined, path);
   const originMain = text(resolvedOrigin.stdout);
   if (!resolvedOrigin.ok || !/^[0-9a-f]{40}$/iu.test(originMain)) {
     return worktreeContinue(
       'manager_worktree_origin_main_unresolved',
       { worktreeId: id, branch: identity.value.branch },
-      'require one exact fetched origin/main commit before examining or moving the manager worktree',
+      `require one exact fetched origin/${defaultBranch} commit before examining or moving the manager worktree`,
     );
   }
 
@@ -1125,11 +1153,12 @@ export async function prepareWorktreeWithOrca(
     return refreshManagerWorktree(request, id, path, execute);
   }
 
-  if (request.managerRefresh && request.baseBranch !== 'origin/main') {
+  const selectedDefaultBranch = managerDefaultBranch(request);
+  if (request.managerRefresh && (!selectedDefaultBranch || request.baseBranch !== `origin/${selectedDefaultBranch}`)) {
     return worktreeContinue(
-      'manager_worktree_origin_main_base_required',
-      { requestedBaseBranch: request.baseBranch ?? 'missing' },
-      'fresh manager worktrees must use a distinct manager-local branch initialized from origin/main',
+      'manager_worktree_selected_base_required',
+      { requestedBaseBranch: request.baseBranch ?? 'missing', defaultBranch: selectedDefaultBranch || 'missing' },
+      'fresh manager worktrees must use a distinct manager-local branch initialized from the selected default branch',
     );
   }
 
@@ -1377,7 +1406,12 @@ export function parseLaunchAssistantCli(
   const managerBrief = options.get('--manager-brief');
   const worktreeSelector = (options.get('--worktree') ?? '').trim();
   const worktreeName = (options.get('--worktree-name') ?? '').trim();
-  const baseBranch = (options.get('--base-branch') ?? '').trim();
+  const explicitBaseBranch = (options.get('--base-branch') ?? '').trim();
+  const selectedBaseBranch = `origin/${target.defaultBranch}`;
+  if (explicitBaseBranch && explicitBaseBranch !== selectedBaseBranch) {
+    throw new Error(`--base-branch ${explicitBaseBranch} disagrees with selected project default branch ${selectedBaseBranch}`);
+  }
+  const baseBranch = explicitBaseBranch || selectedBaseBranch;
   const hasTask = Boolean(taskId);
   const hasManagerBrief = managerBrief !== undefined;
   const hasWorktreeSelector = Boolean(worktreeSelector);
@@ -1405,7 +1439,8 @@ export function parseLaunchAssistantCli(
     ...(managerBrief !== undefined ? { managerBrief } : {}),
     ...(worktreeSelector ? { worktreeSelector } : {}),
     ...(worktreeName ? { worktreeName } : {}),
-    ...(baseBranch ? { baseBranch } : {}),
+    baseBranch,
+    defaultBranch: target.defaultBranch,
   };
 }
 

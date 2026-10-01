@@ -10,9 +10,18 @@ import {
 } from './lib/pack-gpt-reviewer.ts';
 import type { ResolvedScopeContext } from '../plugins/codex-pr-reviewer/lib/scope_context.ts';
 import { runProcess } from './kernel/subprocess.ts';
+import { resolveTargetContext } from './lib/target-context.ts';
+import { isDirectCliExecution } from './lib/reviewer-ts-cli.ts';
 
 function trim(value: unknown): string {
   return String(value ?? '').trim();
+}
+
+function resolveSelectedReviewTarget() {
+  const hasSelector = Boolean(trim(process.env.OPK_PROJECT_ID));
+  const unboundTestHarness = !hasSelector
+    && (process.env.OPK_VITEST_HARNESS === '1' || process.env.VITEST === 'true');
+  return unboundTestHarness ? null : resolveTargetContext({ env: process.env });
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -66,7 +75,7 @@ function usage(): string {
   ].join('\n');
 }
 
-function parseArgs(argv: string[]): {
+export function parseArgs(argv: string[]): {
   repoRoot: string;
   baseRef: string;
   prNumber?: number;
@@ -74,7 +83,9 @@ function parseArgs(argv: string[]): {
   headSha?: string;
 } {
   let repoRoot = process.cwd();
-  let baseRef = 'origin/main';
+  const selected = resolveSelectedReviewTarget();
+  let baseRef = selected ? `origin/${selected.defaultBranch}` : 'origin/main';
+  let explicitBaseRef = false;
   let prNumber: number | undefined;
   let issueNumber: number | undefined;
   let headSha: string | undefined;
@@ -87,6 +98,7 @@ function parseArgs(argv: string[]): {
         break;
       case '--base':
         baseRef = argv[++index] ?? baseRef;
+        explicitBaseRef = true;
         break;
       case '--pr-number':
         prNumber = Number(argv[++index]);
@@ -111,7 +123,13 @@ function parseArgs(argv: string[]): {
     }
   }
 
-  void baseRef;
+  if (selected) {
+    const selectedBaseRef = `origin/${selected.defaultBranch}`;
+    if (explicitBaseRef && baseRef !== selectedBaseRef) {
+      throw new Error(`pack review base ${baseRef} does not match selected target base ${selectedBaseRef}`);
+    }
+    baseRef = selectedBaseRef;
+  }
   return { repoRoot, baseRef, prNumber, issueNumber, headSha };
 }
 
@@ -129,7 +147,14 @@ async function main(): Promise<void> {
   if (repoSlug || fixtureHead) {
     assertGptHarnessFixtureAllowed();
   }
-  const resolvedRepoSlug = repoSlug || await resolveRepositorySlug(options.repoRoot);
+  const observedRepoSlug = repoSlug || await resolveRepositorySlug(options.repoRoot);
+  const selectedTarget = resolveSelectedReviewTarget();
+  if (selectedTarget && observedRepoSlug.toLowerCase() !== selectedTarget.repository.toLowerCase()) {
+    throw new Error(
+      `run-pack-review-gpt repository ${observedRepoSlug} does not match selected target ${selectedTarget.repository}`,
+    );
+  }
+  const resolvedRepoSlug = selectedTarget?.repository ?? observedRepoSlug;
   const boundHead = trim(process.env.PACK_REVIEW_TARGET_HEAD_SHA);
   let headSha = options.headSha || boundHead;
   if (!headSha) {
@@ -168,10 +193,10 @@ async function main(): Promise<void> {
   process.exit(result.exitCode);
 }
 
-try {
-  await main();
-} catch (error) {
-  const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`${message}\n`);
-  process.exit(1);
+if (isDirectCliExecution(import.meta.url, process.argv[1])) {
+  void main().catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`${message}\n`);
+    process.exit(1);
+  });
 }
