@@ -50,6 +50,7 @@ import {
   type SchedulerHealthDeliveryObservation,
 } from '../lib/cutover/activation-recovery.ts';
 import { runActivationPlatformPreflight } from '../lib/cutover/activation-platform-preflight.ts';
+import { SUPPORTED_NODE_MAJOR } from '../toolchain/node-runtime-contract.mjs';
 import { validateSchedulerRegistry } from '../lib/cutover/activation-registry-projection.ts';
 import type { ActivationRequest, EpochCommitCore, FoundationAdmissionEvidence, ProcessIdentity } from '../lib/cutover/types.ts';
 import { runSchedulerTick, type SchedulerBoundary } from '../pr2-foundation/scheduler.ts';
@@ -227,7 +228,7 @@ function activationFixture(): { request: ActivationRequest; boundary: Activation
   };
   const identity: ProcessIdentity = { pid: 12345, startTicks: '99', cmdline: [path.join(root, 'scripts', 'orchestrator-wake-supervisor.ps1')] };
   const boundary: ActivationBoundary = {
-    preflight: () => ({ result: 'node22-linux-wsl2-preflight-pass', repoRoot, oldInstalledRevisionRoot: root, platform: 'linux', nodeMajor: 22 }),
+    preflight: () => ({ result: 'node22-linux-wsl2-preflight-pass', repoRoot, oldInstalledRevisionRoot: root, platform: 'linux', nodeMajor: SUPPORTED_NODE_MAJOR }),
     proveFoundationAdoption: () => ({ result: 'foundation-evidence-verified', evidencePath: request.paths.foundationEvidencePath, localHostId: request.hostId, oldInstalledCommitSha: '9'.repeat(40), heartbeatObservedAt: new Date().toISOString(), migrationJournalCount: 1, preflightSanitizerId: 'sha256:test' }),
     resolveBaseAndClosure: () => ({ baseRef: 'post-948-base', closure: { inputTree: 'tree-948', referenceCount: 2 } }),
     readLegacySupervisor: () => identity,
@@ -746,7 +747,7 @@ describe('[AC1] admission and closure', () => {
     ]) expect(activation).toContain(token);
     for (const token of [
       "if (platform !== 'linux') throw new Error('unsupported_platform');",
-      "if (major !== 22) throw new Error('node22_required');",
+      "if (major !== SUPPORTED_NODE_MAJOR) throw new Error('node22_required');",
       "if (actualHead.toLowerCase() !== input.installedCommitSha.toLowerCase()) throw new Error('installed_commit_unbound');",
       "throw new Error(`${label}_not_canonical`);",
     ]) expect(preflight).toContain(token);
@@ -1047,14 +1048,14 @@ describe('[AC8] platform and canonical bytes', () => {
   it('fails unsupported Node and native Windows before cordon', () => {
     const { request } = activationFixture();
     expect(() => runActivationPlatformPreflight({ repoRoot, installedCommitSha: git(['rev-parse', 'HEAD']), oldInstalledRevisionRoot: repoRoot, targetRegistryPath: request.paths.targetRegistryPath, projectedRegistryPath: request.paths.projectedRegistryPath, nodeVersion: '20.19.0', platform: 'linux' })).toThrow(/node22_required/);
-    expect(() => runActivationPlatformPreflight({ repoRoot, installedCommitSha: git(['rev-parse', 'HEAD']), oldInstalledRevisionRoot: repoRoot, targetRegistryPath: request.paths.targetRegistryPath, projectedRegistryPath: request.paths.projectedRegistryPath, nodeVersion: '22.0.0', platform: 'win32' })).toThrow(/unsupported_platform/);
+    expect(() => runActivationPlatformPreflight({ repoRoot, installedCommitSha: git(['rev-parse', 'HEAD']), oldInstalledRevisionRoot: repoRoot, targetRegistryPath: request.paths.targetRegistryPath, projectedRegistryPath: request.paths.projectedRegistryPath, nodeVersion: `${SUPPORTED_NODE_MAJOR}.0.0`, platform: 'win32' })).toThrow(/unsupported_platform/);
   });
 
   it('rejects a non-canonical repository root', () => {
     const { request } = activationFixture();
     const nonCanonical = `${repoRoot}${path.sep}..${path.sep}${path.basename(repoRoot)}`;
     expect(path.normalize(nonCanonical)).toBe(repoRoot);
-    expect(() => runActivationPlatformPreflight({ repoRoot: nonCanonical, installedCommitSha: git(['rev-parse', 'HEAD']), oldInstalledRevisionRoot: repoRoot, targetRegistryPath: request.paths.targetRegistryPath, projectedRegistryPath: request.paths.projectedRegistryPath, nodeVersion: '22.0.0', platform: 'linux' })).toThrow(/repo_root_not_canonical/);
+    expect(() => runActivationPlatformPreflight({ repoRoot: nonCanonical, installedCommitSha: git(['rev-parse', 'HEAD']), oldInstalledRevisionRoot: repoRoot, targetRegistryPath: request.paths.targetRegistryPath, projectedRegistryPath: request.paths.projectedRegistryPath, nodeVersion: `${SUPPORTED_NODE_MAJOR}.0.0`, platform: 'linux' })).toThrow(/repo_root_not_canonical/);
   });
 
   it('retains durability, exclusion, process identity and central nonce primitives', () => {
@@ -1730,7 +1731,7 @@ function createIssue1422FirstTimeFixture(): { request: ActivationRequest; bounda
     },
   };
   const boundary: ActivationBoundary = {
-    preflight: () => ({ result: 'node22-linux-wsl2-preflight-pass', repoRoot: root, oldInstalledRevisionRoot: root, platform: 'linux', nodeMajor: 22 }),
+    preflight: () => ({ result: 'node22-linux-wsl2-preflight-pass', repoRoot: root, oldInstalledRevisionRoot: root, platform: 'linux', nodeMajor: SUPPORTED_NODE_MAJOR }),
     proveFoundationAdoption: () => ({
       result: 'foundation-evidence-verified',
       evidencePath: request.paths.foundationEvidencePath,
