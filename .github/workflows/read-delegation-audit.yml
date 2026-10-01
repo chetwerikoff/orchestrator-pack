@@ -28,7 +28,7 @@ jobs:
       - name: Setup Node.js (audit meta-check deps)
         uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version-file: package.json
           cache: npm
 
       - name: Enforce read-delegation policy pointer consistency
