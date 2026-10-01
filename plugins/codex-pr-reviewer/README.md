@@ -41,7 +41,7 @@ replace runner claims or publication authority.
 
 ## Codex wrapper
 
-The local Codex wrapper uses the repository's Node 22 TypeScript policy and
+The local Codex wrapper uses the repository's declared-runtime TypeScript policy and
 `codex exec review --json`. It loads the pack-owned prompt, explicit Issue fences,
 and the active declaration snapshot. Absolute code locations are normalized to
 repository-relative paths before signatures or publication.
