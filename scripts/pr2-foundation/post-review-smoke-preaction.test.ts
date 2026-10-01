@@ -29,12 +29,13 @@ describe('Issue #2250 independent smoke plan without retired preflight', () => {
     expect(prompt).not.toContain('artifact-dir:');
   });
 
-  it('does not run a smoke-plan preflight refusal or selective carry in active smoke execution', () => {
+  it('keeps publish free of retired preflight/selective-carry execution machinery', () => {
     const source = readFileSync(path.resolve('scripts/worker-smoke-run.ts'), 'utf8');
-    const active = source.slice(source.indexOf('export async function runSmokeAttempt('), source.indexOf('export type DetachedSmokeAttemptObservation'));
+    const active = source.slice(source.indexOf('export async function runPublishSmoke('));
     expect(active).not.toContain('evaluateSmokePlanPreflight');
     expect(active).not.toContain('selectSmokeAttempt(');
     expect(active).not.toContain('planWorkerSmokeSelectiveRetry(');
-    expect(active).toContain('const attemptPlan = plan;');
+    expect(source).not.toContain('runSmokeAttempt');
+    expect(source).not.toContain('DetachedSmokeAttemptObservation');
   });
 });
