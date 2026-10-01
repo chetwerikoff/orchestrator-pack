@@ -744,13 +744,13 @@ describe('publishPrComment', () => {
     }
   });
 
-  it('reports publication_unconfirmed when the native gh command fails', () => {
+  it('reports one failed publication attempt when tracked gh fails', () => {
     const previousRealBinary = process.env.GH_REAL_BINARY;
     const root = mkdtempSync(join(tmpdir(), 'smoke-publication-failure-'));
     const restoreProject = selectSmokeProjectForTest(root, process.cwd());
     process.env.GH_REAL_BINARY = process.execPath;
     try {
-      expect(() => publishPrComment(1586, 'hello', process.cwd(), 25)).toThrow(/publication_unconfirmed/u);
+      expect(() => publishPrComment(1586, 'hello', process.cwd(), 25)).toThrow(/comment_publish_failed/u);
     } finally {
       restoreProject();
       if (previousRealBinary === undefined) delete process.env.GH_REAL_BINARY;
