@@ -162,3 +162,84 @@ temporary detached-worktree sequence.
 
 Run the affected smoke/manager tests plus the repository verification commands
 required by policy, including `npm run typecheck` and `npm run lint`.
+
+
+## Pre-smoke prerequisite preparation (parent worker)
+
+There is no parent smoke worker on the active path. The PR owner confirms the
+existing review/CI prerequisites and, for the managed path, prepares only the
+bounded temporary detached PR checkout described above.
+
+## Supported worker path
+
+The supported path is the PR-owner path in this document. No secondary worker
+or executor is launched for smoke.
+
+## Report admission and trust boundary
+
+Admission is the `publish` validation boundary: exact plan/report
+correspondence, clean tracked files, canonical repository origin, and the exact
+PR-to-Issue closing binding. These checks do not add head freshness, CI,
+publisher identity, or cleanup as readiness predicates.
+
+## Exact-head point-in-time coverage
+
+The managed manager selects exact H only to choose the temporary checkout it
+executes. `publish` independently stamps its local HEAD and does not compare it
+with the live PR head. Readiness continues to accept a same-PR PASS from any
+report head.
+
+## Report and control-plane semantics
+
+The active report is the terminal-free `pack-worker-smoke-report/v1` record.
+The old smoke-agent control plane, terminal handle, and cleanup receipt are not
+part of active smoke execution.
+
+## Delivery and completion authority
+
+The PR owner directly calls `publish`. A confirmed comment POST plus canonical
+stdout record is the publication result; managed manager completion additionally
+waits for exact temporary-worktree cleanup before consuming that record.
+
+## Finite scenario progress and deadlines
+
+There is no child scenario-progress protocol. The owner executes the finite
+Issue-declared scenario list directly and reports the executed ordered result.
+
+## Child-only progress and cancellation protocol
+
+Retired for active smoke. No child smoke process is created, so no child-only
+progress or cancellation channel participates in smoke completion.
+
+## Durable spawn state and ambiguity recovery
+
+Retired for active smoke. There is no smoke spawn state or ambiguity-recovery
+registry; checkout/setup failure occurs before publication and is surfaced as a
+normal local execution failure.
+
+## Cancellation, cleanup, and restart recovery
+
+Managed cleanup is limited to removing the exact temporary detached worktree.
+A cleanup failure does not authorize a republish or PASS consumption. A later
+whole `publish` invocation is the only publication retry boundary.
+
+## Deterministic preflight and concurrent starts
+
+The old smoke preflight/start coordinator is retired. The existing
+review/required-CI prerequisites and the owner-local checkout sequence are the
+only active ordering rules.
+
+## Readiness gate
+
+Readiness semantics are unchanged: newest same-PR PASS at any report head
+satisfies smoke; required CI remains current-head bound.
+
+## Runtime verification and rollback
+
+Smoke publication does not depend on a runtime adapter or Orca child. Verify the
+PR-owner checkout, publisher result, and unchanged readiness behavior instead.
+
+## Orca executable selection
+
+Retired for active smoke. `worker-smoke-run publish` does not select or invoke
+an Orca executable.
