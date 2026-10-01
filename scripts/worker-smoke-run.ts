@@ -6,7 +6,6 @@ import { runProcessSync } from './kernel/subprocess.ts';
 import { resolveTargetContext } from './lib/target-context.ts';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from './pr-scope-contract.ts';
-import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -212,16 +211,6 @@ function gitPorcelain(cwd: string): string[] {
     .split(/\r?\n/u).filter(Boolean);
 }
 
-export function gitTrackedSmokeRuntimePaths(cwd: string): string[] {
-  return requireProcessOutput(
-    'git ls-files .orca-worker-smoke',
-    runProcessSync({ command: 'git', args: ['ls-files', '--cached', '--', '.orca-worker-smoke'], cwd }),
-  )
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter((line) => line === '.orca-worker-smoke' || line.startsWith('.orca-worker-smoke/'));
-}
-
 function gitHead(cwd: string): string {
   return requireProcessOutput('git rev-parse HEAD', runProcessSync({ command: 'git', args: ['rev-parse', 'HEAD'], cwd })).trim().toLowerCase();
 }
@@ -231,15 +220,6 @@ function gitOriginRepositorySlug(cwd: string): string {
   const match = remote.match(/(?:github\.com[/:])([^/]+)\/([^/]+?)(?:\.git)?$/iu);
   if (!match) throw new Error('trusted_target: origin repository slug unresolved');
   return `${match[1]}/${match[2]}`;
-}
-
-function hashTrackedPaths(cwd: string, paths: readonly string[]): Record<string, string> {
-  const hashes: Record<string, string> = {};
-  for (const path of paths) {
-    const result = runProcessSync({ command: 'git', args: ['hash-object', path], cwd });
-    if (result.ok) hashes[path] = result.stdout.trim();
-  }
-  return hashes;
 }
 
 function positiveInteger(value: unknown): number {
@@ -376,30 +356,6 @@ export function fetchPrComments(prNumber: number, repositorySlug: string, repoRo
     if (batch.length < perPage) return parsePaginatedSmokeComments(JSON.stringify(pages));
   }
   throw new Error('comment_census: pagination completeness unprovable');
-}
-
-export function smokeCommentSnapshotDigest(comments: readonly WorkerSmokeCommentRecord[]): string {
-  const canonical = comments.map((comment) => ({
-    id: positiveInteger(comment.id),
-    createdAt: String(comment.created_at ?? comment.createdAt ?? ''),
-    updatedAt: String(comment.updated_at ?? comment.updatedAt ?? ''),
-    actor: typeof comment.actor === 'string' ? comment.actor : String(comment.user?.login ?? comment.actor?.login ?? ''),
-    body: String(comment.body ?? ''),
-  })).sort((left, right) => left.id - right.id);
-  return createHash('sha256').update(JSON.stringify(canonical), 'utf8').digest('hex');
-}
-
-export function stabilizeSmokeCommentCensus(fetchCensus: () => WorkerSmokeCommentRecord[], maxTransitions = 3): WorkerSmokeCommentRecord[] {
-  let previous = fetchCensus();
-  let previousDigest = smokeCommentSnapshotDigest(previous);
-  for (let transition = 0; transition < maxTransitions; transition += 1) {
-    const next = fetchCensus();
-    const nextDigest = smokeCommentSnapshotDigest(next);
-    if (nextDigest === previousDigest) return next;
-    previous = next;
-    previousDigest = nextDigest;
-  }
-  throw new Error('comment_snapshot: failed to stabilize within bounded attempts');
 }
 
 export function fetchLivePrHead(prNumber: number, repositorySlug: string, repoRoot: string): string {
