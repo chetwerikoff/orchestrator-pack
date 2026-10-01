@@ -123,6 +123,7 @@
     "scripts/stage-slot-consumed.test.ts",
     "scripts/tier-gate-guard.test.ts",
     "scripts/tier-gate-guard.ts",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts",
     "scripts/toolchain/create-issue-authoring-contract.test.ts",
     "scripts/toolchain/create-issue-final-acceptance.test.ts",
     "scripts/toolchain/raw-child-process-baseline.json",
@@ -146,5 +147,5 @@
     "prompts/",
     "scripts/"
   ],
-  "source_revision": "4e827f06d893b89a9bdc75a58277027910d6ba58"
+  "source_revision": "756f61a65314ed62eae857d708b8422d6a2dcabc"
 }
