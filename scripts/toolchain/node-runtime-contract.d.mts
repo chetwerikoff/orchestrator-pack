@@ -57,4 +57,4 @@ export function readNodeRuntimeDeclaration(repoRoot: string): {
 };
 export function assertNodeRuntimeContract(repoRoot: string, actualVersion?: string): NodeRuntimeContractResult;
 export function evaluateNpmRuntimeContract(input: NpmRuntimeContractInput): NpmRuntimeContractResult;
-export function assertNpmRuntimeContract(repoRoot: string, actualVersion?: string): NpmRuntimeContractResult;
+export function assertNpmRuntimeContract(repoRoot: string, actualVersion: string): NpmRuntimeContractResult;
