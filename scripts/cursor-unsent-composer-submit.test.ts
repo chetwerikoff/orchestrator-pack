@@ -1604,7 +1604,9 @@ describe('delivery-triggered composer submission', () => {
           result: {
             terminal: {
               ...terminal,
-              tail: reads === 1 ? [POKE] : ['┃', '╹▀▀▀▀'],
+              tail: reads === 1
+                ? ['▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄', `→ ${POKE}`, '▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀']
+                : ['┃', '╹▀▀▀▀'],
               nextCursor: null,
               source: 'screen',
             },
