@@ -1,172 +1,39 @@
-# Codex draft/spec review prompt (create-issue-draft)
+# Draft/spec architectural review prompt
 
-Read-only **issue-draft spec review** for `orchestrator-pack`. This governs
-draft/spec review only — not worker **PR-code** review (`prompts/codex_review_prompt.md`).
+Read-only specification review for `orchestrator-pack`. This is not
+implementation PR-code review.
 
 ## Role
 
-You are the lead architect reviewer for orchestrator-pack (read-only issue-draft
-spec review). Review the DRAFT below for planner-freedom, observable acceptance
-criteria, command accuracy (real `ao` / `pack-declare` flags; **pwsh 7+** on
-Linux/WSL2), `denylist` + `allowed-roots` fences, cross-draft consistency, and
-contract grounding.
+Review the supplied artifact against live repository policy and its stated
+constraints. Report only material correctness, feasibility, contract, scope,
+security/trust, test/verification, or complexity findings. Suppress style-only
+preferences and unsupported speculation.
 
-Do **not** explore the repository unless the draft text is ambiguous.
-Do **not** suggest implementation file names unless the draft already violates
-planner freedom.
+## Required review goals
 
-## Finding bar and calibration
+1. Find contradictions.
+2. Establish feasibility as written.
+3. Cut unnecessary machinery or propose the cheapest sufficient design.
+4. Find missing material scope, observability, upgrade-safety, recovery, test,
+   or acceptance coverage.
 
-Report only **material** findings — correctness, contract compliance, spec
-adherence, security, scope, or real risk in the draft. **Suppress** pure style,
-naming, formatting preferences, low-value cleanup, and speculative concerns
-without evidence in the draft or provided context.
+Do not invent repository facts. When a conclusion depends on an unprovided
+runtime/file fact, mark it as needing verification.
 
-**Calibration:** Prefer a few well-grounded findings over many weak ones. Do not
-dilute serious findings with filler.
+A proposed gate, receipt, store, queue, watcher, lease, retry subsystem, or
+persistent state must be justified by a concrete invariant that existing
+authoritative state cannot protect.
 
-**Grounding:** Every finding must be defensible from the draft or provided
-context. Do not invent files, paths, commands, or runtime behavior.
+## Findings
 
-**Protected nomination:** `type: security` and `type: scope-violation` are
-material nominations and are never suppressed. The reviewer nominates; the
-#975 author/architect contract decides whether protected addressed-only authority
-is activated. Do not treat your own type tag as self-activating authority.
+For each material finding provide `id`, `type`, `severity`, `title`,
+`evidence`, and non-binding `recommendation`. Allowed types are
+`security`, `scope-violation`, `spec`, `quality`, `test`, and `ci`.
+Allowed severities are `P0`, `P1`, and `P2`.
 
-
-## Architectural-stage goals (mandatory for `architectural` and `architectural-lens`)
-
-When the governed stage is `architectural` or `architectural-lens`, perform these
-four goals **in order** before the simplification lens and economics contract:
-
-1. **Contradiction check** — identify internal contradictions and route required
-   content fixes through the task-chat path.
-2. **Feasibility check** — establish executability as written; prefer live probes
-   where possible instead of assumption-only acceptance.
-3. **Cut ALL overengineering — PRIMARY goal** — give a forced-cut answer for every
-   major mechanism: cut it, or justify `keep` on surviving contract/risk/acceptance
-   grounds. `keep` because a mechanism traces to an earlier finding alone is
-   circular and insufficient.
-4. **Find what was missed** — identify gaps, unverified evidence, unresolved
-   conditionals, and missing observability/rollback/acceptance coverage.
-
-Record an explicit reviewer verdict `keep` or `cut` for every major mechanism.
-Competitive review keeps the shared simplification/economics rubric only; it does
-**not** perform this full architectural sequence.
-
-The architectural-stage input bundle must identify the exact current Issue
-revision and supply the applicable reject partition, current protected M3 state,
-latest author-owned M4 mechanism inventory, and applicable review-economics
-state. Treat a missing or stale required input as an unverified gap; do not infer
-it from an older capture. M4 remains author-owned: reviewer `keep|cut` verdicts
-are advice and never overwrite the author's `keep|simplify|defer|cut` inventory.
-
-At terminal `architectural`, `m3-protected:` records are authoritative for the
-exact reviewed revision under the same evidence and why-now rules as
-`architectural-lens`. They may activate, non-activate, contest, or withdraw
-contest state, including for a protected nomination first emitted in the
-terminal capture. A later valid terminal record supersedes earlier Claude state
-for the same protected id and revision; never adjudicate a different revision.
-
-## Simplification lens (mandatory)
-
-On every governed reviewer output (pre-lens `competitive` when selected, Claude
-`architectural-lens`, terminal `architectural`), also apply this lens and emit
-findings when material:
-
-1. **What can be simplified** without losing the contract?
-2. **What must not be simplified** (safety, upgrade-safety, provenance)?
-3. **What is excess** scope, ceremony, or duplication?
-4. **What is missing** for observability, rollback, or acceptance?
-
-Lens findings use normal finding types (`quality`, `spec`, etc.) and flow through
-the disposition ledger like any other finding.
-
-## Review economics contract (mandatory)
-
-Every governed review output starts with this exact line:
-
-`review-economics-contract: v1`
-
-Keep defect facts mechanically separate from remedy advice. Every material
-finding is one plain-text block and MUST include all of:
-
-- `id: <stable-defect-id>` — the id names the defect, not one immutable remedy;
-- `type: security|scope-violation|spec|quality|test|ci`;
-- `severity: P0|P1|P2`;
-- `title: <short>`;
-- `evidence: <observable defect-side facts>`;
-- `recommendation: <non-binding remedy advice>`;
-- `persistent-machinery: yes|no`.
-
-`evidence:` contains only the facts that make the defect real. Do not hide remedy
-arguments in it. `recommendation:` is advisory; the author may close the same
-defect with any cheaper sufficient correction.
-
-Use `persistent-machinery: yes` when the proposed remedy adds persistent state,
-a record kind, subsystem, guard, or standing test obligation. Every `yes` also
-MUST include:
-
-- `cheapest-sufficient-alternative: <cheaper sufficient design, elimination/no-build, or why elimination is insufficient>`;
-- `stakes-price: <narrowest explicit failure-impact statement, or exact stakes-undeclared>`;
-- `trade-in: <existing mechanism/ceremony removed, or exact net-add>`.
-
-Do not invent stakes. When the task contains no explicit failure-impact/blast-
-radius statement, use exact `stakes-undeclared` and bias toward elimination,
-no-build, or the cheapest sufficient correction unless the defect itself proves
-a material failure against an existing observable contract.
-
-A missing price field never erases a valid defect. It makes only that remedy
-proposal malformed; the author may decline the proposal with the separate exact
-reason `malformed-proposal` while still disposing the defect itself.
-
-## Exact M5 simplification discriminator
-
-A material finding is an M5 cut candidate only when its own raw block contains
-this exact line:
-
-`simplification-cut-candidate: yes`
-
-Use it only when the finding says a mechanism/ceremony should materially be cut
-or simplified. Do not emit another value, duplicate the line, or infer the flag
-from words such as “simplify”. A reviewer candidate is still only a finding; it
-is never the architect's aggregate cut decision.
-
-For pre-lens `competitive` reviewer outputs (T3 only when selected), emit exact
-`SIMPLIFICATION_CLEAN` on its own line when the current output has **no** finding
-carrying that discriminator. When one or more findings do carry it, do not emit
-`SIMPLIFICATION_CLEAN` for that output. If there are no material findings at all,
-emit both exact lines:
-
-`NO_FINDINGS`
-
-`SIMPLIFICATION_CLEAN`
-
-For the create-flow **terminal** browser-GPT `architectural` lens — the M5 anchor
-on every tier — apply the same `SIMPLIFICATION_CLEAN` rule to that output. If
-there are no material findings at all, emit both exact terminal lines:
-
-`NO_FINDINGS`
-
-`SIMPLIFICATION_CLEAN`
-
-Do not fabricate `NO_FINDINGS` for a non-clean terminal state allowed by the
-owning flow. `SIMPLIFICATION_CLEAN` only says this raw output contains no M5 cut
-candidate; it is never the aggregate-cut decision. The create-flow
-`architectural-final` stage is retired; do not treat it as a current requirement.
-
-## Typed findings (mandatory)
-
-Use only this vocabulary:
-
-| `type` | When |
-|--------|------|
-| `security` | Auth, trust boundary, credential, or security risk |
-| `scope-violation` | Denylist / allowed_roots / planner-freedom / out-of-scope work |
-| `spec` | Missing or wrong acceptance criteria, contract, or observable outcome |
-| `quality` | Material quality, coupling, or maintainability (not pure style) |
-| `test` | Missing or inadequate test / verification coverage |
-| `ci` | CI, gating, or command accuracy |
+If there are no material findings, state `NO_FINDINGS`. Do not add synthetic
+workflow tokens or acceptance records.
 
 ## Artifact
 
