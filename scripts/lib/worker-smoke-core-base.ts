@@ -655,6 +655,9 @@ export function normalizeSmokeReport(
   if (partial.result === 'PASS' && partial.trackedFilesUnmodified !== true) {
     return { ok: false, reason: 'pass_requires_unmodified_tracked_files' };
   }
+  if (partial.result === 'PASS' && partial.nonPassCause) {
+    return { ok: false, reason: 'pass_cannot_have_non_pass_cause' };
+  }
   if (!Array.isArray(partial.scenarios) || partial.scenarios.length === 0) {
     return { ok: false, reason: 'missing_scenarios' };
   }
@@ -1783,7 +1786,9 @@ function scrubConfigHomeCredentialValues(text: string, childEnv: Readonly<NodeJS
   let scrubbed = text;
   for (const configDir of configDirs) {
     for (const credential of collectGhConfigHomeSecretValues(configDir)) {
-      scrubbed = scrubbed.split(credential).join('[redacted-secret]');
+      for (const candidate of new Set([credential, JSON.stringify(credential).slice(1, -1)])) {
+        scrubbed = scrubbed.split(candidate).join('[redacted-secret]');
+      }
     }
   }
   return scrubbed;
@@ -1799,7 +1804,9 @@ export function scrubForwardedGhSecrets(
     if (!value || value.length < 4) {
       continue;
     }
-    scrubbed = scrubbed.split(value).join('[redacted-secret]');
+    for (const candidate of new Set([value, JSON.stringify(value).slice(1, -1)])) {
+      scrubbed = scrubbed.split(candidate).join('[redacted-secret]');
+    }
   }
   return scrubbed;
 }

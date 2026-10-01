@@ -221,8 +221,8 @@ Required CI conclusions apply only to the exact PR head they evaluated.
 For smoke/CI readiness, the newest existing `pack-worker-smoke-report/v1`
 PASS comment on the same PR is sufficient regardless of its report head or
 GitHub author. An earlier-head PASS remains sufficient on later commits; no
-PASS leaves smoke readiness unsatisfied. Independence is provided by the
-post-review supervised smoke-worker handoff, not a durable actor-role witness.
+PASS leaves smoke readiness unsatisfied. After review, the same manager Dispatch
+continues into the smoke phase; no independent smoke-worker handoff is required.
 The existing v1 report schema, including head and scenario observations,
 remains unchanged. Review authority remains current-head bound, but reviewer
 invocation and review authority are not the same event: the pack-owned runner

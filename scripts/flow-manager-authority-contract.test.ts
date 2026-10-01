@@ -55,6 +55,7 @@ import {
   classifyExecuteIssueManagerRecord,
   type ExecuteIssueManagerBoundaryContext,
 } from './lib/execute-issue-manager-boundary.ts';
+import { runPublishSmoke } from './worker-smoke-run.ts';
 
 const contract = readFileSync(new URL('../.cursor/skills/create-issue-draft/SKILL.md', import.meta.url), 'utf8');
 const defaultGhTransportSlot = vi.hoisted(() => ({
@@ -1682,7 +1683,7 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     expect(smokeRunbook).toContain('There is no `trusted_target_stale` smoke recovery observer');
   });
 
-  it('proves the bounded same-manager detached worktree leaves the canonical worktree unchanged', () => {
+  it('publishes from the bounded detached worktree and consumes the canonical report in the same manager', async () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-2319-manager-smoke-'));
     const canonical = join(root, 'repo');
     const tempWorktree = join(root, 'smoke');
@@ -1690,6 +1691,12 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
     const git = (args: readonly string[], cwd = canonical) => runProcessSync({
       command: 'git', args, cwd, inheritParentEnv: true,
     });
+    let worktreeAdded = false;
+    const writes: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
     try {
       expect(git(['init', '--initial-branch=main']).ok).toBe(true);
       expect(git(['config', 'user.email', 'fixture@example.invalid']).ok).toBe(true);
@@ -1701,35 +1708,86 @@ describe('Issue #1953 manager-controlled Browser-GPT review convergence contract
       const beforeHead = git(['rev-parse', 'HEAD']).stdout.trim();
       const beforeBranch = git(['branch', '--show-current']).stdout.trim();
       const beforeStatus = git(['status', '--porcelain=v1', '--untracked-files=all']).stdout;
-      const tree = git(['rev-parse', 'HEAD^{tree}']).stdout.trim();
-      const commit = git(['commit-tree', tree, '-p', beforeHead, '-m', 'PR head']);
-      expect(commit.ok).toBe(true);
-      const selectedHead = commit.stdout.trim();
 
-      expect(git(['worktree', 'add', '--detach', tempWorktree, selectedHead]).ok).toBe(true);
-      expect(git(['-C', tempWorktree, 'rev-parse', 'HEAD']).stdout.trim()).toBe(selectedHead);
+      expect(git(['worktree', 'add', '--detach', tempWorktree, beforeHead]).ok).toBe(true);
+      worktreeAdded = true;
+      const issueBody = [
+        '```behavior-kind',
+        'action-producing',
+        '```',
+        '',
+        '```smoke-test-plan',
+        'scenarios:',
+        '  - action: exercise current behavior | expected: acceptance assertion holds',
+        '```',
+      ].join('\n');
+      const stdoutBeforePublish = writes.length;
+      const comments: string[] = [];
+      const code = await runPublishSmoke({
+        command: 'publish',
+        issueNumber: 2182,
+        prNumber: 2219,
+        headSha: '',
+        issueBodyFile: '',
+        repoRoot: tempWorktree,
+        cwd: tempWorktree,
+        dryRun: false,
+        json: true,
+        reviewId: '',
+        reviewHeadSha: '',
+        reportFile: join(tempWorktree, 'report.md'),
+      }, {
+        resolveTarget: () => ({
+          repositorySlug: 'chetwerikoff/orchestrator-pack',
+          issueNumber: 2182,
+          prNumber: 2219,
+          issueBody,
+        }),
+        readReportFile: () => [
+          'result: PASS',
+          'scenarios:',
+          '  - action: exercise current behavior | expected: acceptance assertion holds | observed: acceptance assertion holds | outcome: pass',
+        ].join('\n'),
+        publishComment: (_pr, body) => {
+          comments.push(body);
+          return 'https://github.com/chetwerikoff/orchestrator-pack/issues/2219#issuecomment-1';
+        },
+      });
+      expect(code).toBe(0);
+      expect(comments).toHaveLength(1);
+      expect(git(['-C', tempWorktree, 'rev-parse', 'HEAD']).stdout.trim()).toBe(beforeHead);
+      expect(git(['-C', tempWorktree, 'status', '--porcelain=v1', '--untracked-files=all']).stdout).toBe('');
+
+      const publishedRecord = JSON.parse(writes.slice(stdoutBeforePublish).join('').trim()) as Record<string, unknown>;
+      const managerContext: ExecuteIssueManagerBoundaryContext = {
+        repository: 'chetwerikoff/orchestrator-pack',
+        issueNumber: 2182,
+        sourceRevision: 'r04',
+        phase: 'smoke',
+        productionArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'],
+        prNumber: 2219,
+      };
+      expect(classifyExecuteIssueManagerRecord(publishedRecord, managerContext)).toMatchObject({
+        exitCode: 0,
+        result: { ok: true, verdict: 'PASS', cause: 'execute_worker_smoke_pass', nextAction: null },
+      });
+      expect(publishedRecord).toMatchObject({
+        schema: 'pack-worker-smoke-report/v1',
+        issueNumber: 2182,
+        prNumber: 2219,
+        headSha: beforeHead,
+        result: 'PASS',
+      });
+
       expect(git(['worktree', 'remove', '--force', tempWorktree]).ok).toBe(true);
+      worktreeAdded = false;
       expect(git(['rev-parse', 'HEAD']).stdout.trim()).toBe(beforeHead);
       expect(git(['branch', '--show-current']).stdout.trim()).toBe(beforeBranch);
       expect(git(['status', '--porcelain=v1', '--untracked-files=all']).stdout).toBe(beforeStatus);
       expect(git(['worktree', 'list', '--porcelain']).stdout).not.toContain(tempWorktree);
-
-      let publishAttempts = 0;
-      const setupFailure = git(['worktree', 'add', '--detach', join(root, 'bad'), '0'.repeat(40)]);
-      if (setupFailure.ok) publishAttempts += 1;
-      expect(setupFailure.ok).toBe(false);
-      expect(publishAttempts).toBe(0);
-
-      expect(git(['worktree', 'add', '--detach', tempWorktree, selectedHead]).ok).toBe(true);
-      publishAttempts += 1;
-      const cleanupFailure = git(['worktree', 'remove', '--force', join(root, 'not-the-owned-worktree')]);
-      let managerPassConsumed = false;
-      if (cleanupFailure.ok) managerPassConsumed = true;
-      expect(cleanupFailure.ok).toBe(false);
-      expect(publishAttempts).toBe(1);
-      expect(managerPassConsumed).toBe(false);
-      expect(git(['worktree', 'remove', '--force', tempWorktree]).ok).toBe(true);
     } finally {
+      stdout.mockRestore();
+      if (worktreeAdded) git(['worktree', 'remove', '--force', tempWorktree]);
       rmSync(root, { recursive: true, force: true });
     }
   });

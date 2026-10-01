@@ -609,31 +609,82 @@ describe('Issue #2319 terminal-free publish', () => {
     }
   });
 
-  it('refuses mismatched PASS tuples and tracked dirtiness before any POST', async () => {
+  it('redacts JSON-escaped forwarded and config-home credentials before publish output', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'smoke-publish-secret-'));
+    const configDir = join(root, '.config', 'gh');
+    mkdirSync(configDir, { recursive: true });
+    const configSecret = 'config-secret-"quoted"\\path';
+    const forwardedSecret = 'forwarded-secret-"quoted"\\path';
+    writeFileSync(join(configDir, 'hosts.yml'), `github.com:\n  oauth_token: ${configSecret}\n`, 'utf8');
+    vi.stubEnv('HOME', root);
+    vi.stubEnv('GH_TOKEN', forwardedSecret);
+    const writes: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    const comments: string[] = [];
+    try {
+      const code = await runPublishSmoke(publishOptions(), {
+        resolveTarget: () => publishTarget,
+        readReportFile: () => reportText('PASS', [
+          {
+            ...scenario('exercise publish scenario A', 'scenario A passes'),
+            observed: `${forwardedSecret} ${configSecret}`,
+          },
+          scenario('exercise publish scenario B', 'scenario B passes'),
+        ]),
+        gitStatus: () => [],
+        gitHead: () => HEAD_ONE,
+        publishComment: (_pr, body) => {
+          comments.push(body);
+          return 'https://github.com/comment';
+        },
+      });
+      expect(code).toBe(0);
+      const output = comments.join('\n') + writes.join('');
+      for (const secret of [forwardedSecret, configSecret]) {
+        expect(output).not.toContain(secret);
+        expect(output).not.toContain(JSON.stringify(secret).slice(1, -1));
+      }
+      expect(output).toContain('[redacted-secret]');
+    } finally {
+      stdout.mockRestore();
+      vi.unstubAllEnvs();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses mismatched PASS tuples, dirty worktrees, and PASS non-pass evidence before POST', async () => {
     let posts = 0;
     const deps = {
       resolveTarget: () => publishTarget,
       gitHead: () => HEAD_ONE,
       publishComment: () => { posts += 1; return 'https://github.com/comment'; },
     };
+    const validRows = [
+      scenario('exercise publish scenario A', 'scenario A passes'),
+      scenario('exercise publish scenario B', 'scenario B passes'),
+    ];
     await expect(runPublishSmoke(publishOptions(), {
       ...deps,
-      readReportFile: () => reportText('PASS', [
-        scenario('exercise publish scenario B', 'scenario B passes'),
-        scenario('exercise publish scenario A', 'scenario A passes'),
-      ]),
+      readReportFile: () => reportText('PASS', [...validRows].reverse()),
       gitStatus: () => [],
     })).rejects.toThrow(/report_plan_mismatch/);
     expect(posts).toBe(0);
 
     await expect(runPublishSmoke(publishOptions(), {
       ...deps,
-      readReportFile: () => reportText('PASS', [
-        scenario('exercise publish scenario A', 'scenario A passes'),
-        scenario('exercise publish scenario B', 'scenario B passes'),
-      ]),
+      readReportFile: () => reportText('PASS', validRows),
       gitStatus: () => [' M scripts/example.ts'],
     })).rejects.toThrow(/tracked_worktree_dirty/);
+    expect(posts).toBe(0);
+
+    await expect(runPublishSmoke(publishOptions(), {
+      ...deps,
+      readReportFile: () => reportText('PASS', validRows, 'executed_scenario_failure'),
+      gitStatus: () => [],
+    })).rejects.toThrow('report_normalization_failed: pass_cannot_have_non_pass_cause');
     expect(posts).toBe(0);
   });
 
