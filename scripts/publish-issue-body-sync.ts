@@ -11,6 +11,7 @@ import {
   parseRequiredPositiveInt,
   runReviewerTsCli,
 } from './lib/reviewer-ts-cli.ts';
+import { resolveTargetContext } from './lib/target-context.ts';
 import {
   readDraftFile,
   syncPublishIssueBody,
@@ -24,6 +25,7 @@ interface CliOptions {
   mode: Mode;
   draftPath: string;
   repo: string;
+  projectId?: string;
   issueNumber?: number;
   title?: string;
   json: boolean;
@@ -32,9 +34,9 @@ interface CliOptions {
 function usage(): string {
   return [
     'Usage:',
-    '  publish-issue-body-sync.ts create --draft-path <path> --repo <owner/name> [--title <title>] [--json]',
-    '  publish-issue-body-sync.ts edit --draft-path <path> --issue-number <n> --repo <owner/name> [--json]',
-    '  publish-issue-body-sync.ts verify --draft-path <path> --issue-number <n> --repo <owner/name> [--json]',
+    '  publish-issue-body-sync.ts create --draft-path <path> [--project <id>] [--repo <owner/name>] [--title <title>] [--json]',
+    '  publish-issue-body-sync.ts edit --draft-path <path> --issue-number <n> [--project <id>] [--repo <owner/name>] [--json]',
+    '  publish-issue-body-sync.ts verify --draft-path <path> --issue-number <n> [--project <id>] [--repo <owner/name>] [--json]',
   ].join('\n');
 }
 
@@ -47,7 +49,7 @@ function parseArgs(argv: string[]): CliOptions {
   const opts: CliOptions = {
     mode: modeToken,
     draftPath: '',
-    repo: 'chetwerikoff/orchestrator-pack',
+    repo: '',
     json: false,
   };
 
@@ -56,6 +58,9 @@ function parseArgs(argv: string[]): CliOptions {
     switch (arg) {
       case '--draft-path':
         opts.draftPath = String(argv[++i] ?? '');
+        break;
+      case '--project':
+        opts.projectId = String(argv[++i] ?? '');
         break;
       case '--repo':
         opts.repo = String(argv[++i] ?? opts.repo);
@@ -92,6 +97,24 @@ function runGh(argv: string[]) {
   };
 }
 
+export function bindPublishIssueTarget(
+  opts: CliOptions,
+  env: NodeJS.ProcessEnv = process.env,
+): { projectId: string; repository: string; defaultBranch: string } {
+  const target = resolveTargetContext({ projectId: opts.projectId, env });
+  const explicitRepo = opts.repo.trim().toLowerCase();
+  if (explicitRepo && explicitRepo !== target.repository.toLowerCase()) {
+    throw new Error(`publish-issue-body-sync: --repo ${opts.repo} does not match selected target ${target.repository}`);
+  }
+  env.OPK_PROJECT_ID = target.projectId;
+  opts.repo = target.repository;
+  return {
+    projectId: target.projectId,
+    repository: target.repository,
+    defaultBranch: target.defaultBranch,
+  };
+}
+
 function buildInput(opts: CliOptions, draftContent: string): PublishIssueBodySyncInput {
   if (opts.mode === 'create') {
     return {
@@ -125,6 +148,7 @@ function buildInput(opts: CliOptions, draftContent: string): PublishIssueBodySyn
 
 function main(): void {
   const opts = parseArgs(process.argv);
+  bindPublishIssueTarget(opts, process.env);
   const draftPath = parseRequiredNonEmptyString(opts.draftPath, '--draft-path');
   const draftContent = readDraftFile(draftPath);
   const input = buildInput(opts, draftContent);
