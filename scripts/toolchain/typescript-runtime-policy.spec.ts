@@ -334,6 +334,15 @@ describe('launch inventory and fail-closed policy', () => {
       && violation.path === 'scripts/live-runtime-policy.ts')).toBe(false);
   });
 
+  it('rejects runtime-major restatements in live extensionless scripts', () => {
+    const root = makePolicyFixture();
+    const path = 'scripts/worker-smoke-run';
+    write(join(root, path), `#!/usr/bin/env bash\necho 'Node ${SUPPORTED_NODE_MAJOR}'\n`);
+    const violations = checkTypeScriptRuntimePolicy(root).violations.filter((violation) =>
+      violation.rule === 'runtime-major-restatement' && violation.path === path);
+    expect(violations).toHaveLength(1);
+  });
+
   it('rejects alias-bound and runtime-derived plain major restatements', () => {
     const root = makePolicyFixture();
     const path = 'scripts/live-runtime-gate.ts';

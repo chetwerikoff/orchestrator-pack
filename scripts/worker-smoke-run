@@ -165,7 +165,7 @@ if [[ "$detail" =~ unknown\ argument|usage: ]]; then
   code='invalid_cli'
 elif [[ "$detail" =~ issue-body-file ]]; then
   code='issue_body_unavailable'
-elif [[ "$detail" =~ native-entrypoint-preflight|[Nn]ode\ 22|unsupported\ [Nn]ode ]]; then
+elif [[ "$detail" == *'"code":"OPK_NODE_RUNTIME_UNSUPPORTED"'* ]]; then
   code='node_preflight_failed'
 elif [[ "$detail" =~ ERR_MODULE_NOT_FOUND|cannot\ find\ module|[Mm]odule\ not\ found|SyntaxError ]]; then
   code='entrypoint_import_failed'

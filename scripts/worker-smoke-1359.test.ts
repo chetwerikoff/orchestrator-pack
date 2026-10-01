@@ -846,7 +846,7 @@ describe('Issue #1359 production worker-smoke reachability', () => {
     ],
     [
       'Node preflight failure',
-      'native-entrypoint-preflight: unsupported Node 21; Node 22 is required',
+      '{"code":"OPK_NODE_RUNTIME_UNSUPPORTED","message":"Node runtime contract rejected this version"}',
       'node_preflight_failed',
     ],
   ])('emits one wrapper receipt for %s before the entrypoint can report', (
@@ -882,6 +882,22 @@ describe('Issue #1359 production worker-smoke reachability', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it('classifies Node preflight failures by the stable runtime error code', () => {
+    const common = {
+      argv: ['run', '--issue', '1359', '--pr', '1365', '--head-sha', HEAD],
+      wrapperPath: 'scripts/worker-smoke-run',
+      wrapperExecutable: true,
+    } as const;
+    expect(buildWorkerSmokeRunFailureReceipt({
+      ...common,
+      detail: '{"code":"OPK_NODE_RUNTIME_UNSUPPORTED","message":"Node runtime rejected"}',
+    }).cause.code).toBe('node_preflight_failed');
+    expect(buildWorkerSmokeRunFailureReceipt({
+      ...common,
+      detail: 'unsupported Node runtime',
+    }).cause.code).toBe('entrypoint_exception');
   });
 
   it('uses wrapper_not_executable only for an observed permission-denied launch', () => {

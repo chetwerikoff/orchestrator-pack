@@ -134,7 +134,13 @@ function restatementFiles(repoRoot: string): string[] {
     .flatMap((entry) => walk(repoRoot, resolve(repoRoot, entry)))
     .filter((absolute) => {
       const path = normalizePath(relative(repoRoot, absolute));
-      return TEXT_EXTENSIONS.has(extname(path)) || path === 'AGENTS.md' || path === 'README.md';
+      const extensionlessScript = path.startsWith('scripts/')
+        && extname(path) === ''
+        && readFileSync(absolute, 'utf8').startsWith('#!');
+      return TEXT_EXTENSIONS.has(extname(path))
+        || path === 'AGENTS.md'
+        || path === 'README.md'
+        || extensionlessScript;
     })
     .sort();
 }

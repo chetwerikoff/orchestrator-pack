@@ -10,6 +10,7 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { SUPPORTED_NODE_MAJOR } from './toolchain/node-runtime-contract.mjs';
 import { runProcessSync } from './kernel/subprocess.ts';
 import { PR_SCOPE_DECLARATION_SCHEMA } from './pr-scope-declaration.ts';
 import {
@@ -179,6 +180,23 @@ afterEach(() => {
 });
 
 describe('trusted PR scope runner', () => {
+  it('executes the trusted scope runner under the declared Node runtime before external effects', () => {
+    const result = runProcessSync({
+      command: process.execPath,
+      args: ['--experimental-strip-types', join(SCRIPT_DIR, 'pr-scope-runner.ts')],
+      cwd: dirname(SCRIPT_DIR),
+      env: { PATH: process.env.PATH ?? '' },
+      inheritParentEnv: false,
+      timeoutMs: 30_000,
+    });
+    expect(Number(process.versions.node.split('.')[0])).toBe(SUPPORTED_NODE_MAJOR);
+    expect(result.ok).toBe(false);
+    expect(result.stdout).toContain(
+      'scope guard failed: PR_NUMBER and a valid owner/name GITHUB_REPOSITORY are required',
+    );
+    expect(result.stderr).not.toContain('OPK_NODE_RUNTIME_UNSUPPORTED');
+  });
+
   it('preserves declaration-backed and declaration-free implementation passes', () => {
     const declaredRoot = makeRepo(true);
     const declared = fakeDependencies({
