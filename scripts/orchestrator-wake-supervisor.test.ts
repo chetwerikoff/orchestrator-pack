@@ -24,6 +24,32 @@ import { EMPTY_CRASH_BACKOFF_STATE, type CrashBackoffPolicy } from './runtime/cr
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
 const supervisorScript = path.join(repoRoot, 'scripts/orchestrator-wake-supervisor.ts');
+const supervisorModuleUrl = pathToFileURL(path.join(repoRoot, 'scripts/lib/orchestrator-side-process-supervisor.ts')).href;
+const supervisorRunnerSource = [
+  `import { runSupervisor } from ${JSON.stringify(supervisorModuleUrl)};`,
+  'try { await runSupervisor(JSON.parse(process.argv[1])); } catch (error) {',
+  '  process.stderr.write(String(error?.message ?? error) + "\\n");',
+  '  process.exitCode = 1;',
+  '}',
+].join('\n');
+function supervisorRunnerArgs(options: Record<string, string>): string[] {
+  return ['--experimental-strip-types', '--input-type=module', '-e', supervisorRunnerSource, JSON.stringify(options)];
+}
+function supervisorProjectEnvironment(root: string, primaryRoot: string, projectId: string): Record<string, string> {
+  const configHome = path.join(root, 'config');
+  const projectsDir = path.join(configHome, 'orchestrator-pack', 'projects');
+  mkdirSync(projectsDir, { recursive: true });
+  writeFileSync(path.join(projectsDir, `${projectId}.json`), JSON.stringify({
+    projectId,
+    repository: 'chetwerikoff/orchestrator-pack',
+    primaryRoot,
+    defaultBranch: 'main',
+    orcaWorkspacePattern: `orca/workspaces/${projectId}/`,
+    orchestratorTitlePattern: `${projectId}.*orchestrator`,
+    browserGpt: { projectUrl: `https://chatgpt.com/g/${projectId}/project` },
+  }), 'utf8');
+  return { HOME: root, XDG_CONFIG_HOME: configHome, OPK_PROJECT_ID: projectId };
+}
 
 function runStatus(stateDir: string) {
   return runProcessSync({
@@ -365,18 +391,17 @@ describe('Issue #1484 truthful supervisor status', () => {
 
       const result = runProcessSync({
         command: process.execPath,
-        args: [
-          '--experimental-strip-types',
-          supervisorScript,
-          'run',
-          '--state-dir', stateDir,
-          '--repo-root', fakeRepo,
-          '--epoch-authority', epochAuthorityPath,
-          '--epoch-id', epochId,
-          '--nonce', nonce,
-          '--target-registry', targetRegistryPath,
-          '--projected-registry', projectedRegistryPath,
-        ],
+        args: supervisorRunnerArgs({
+            stateDir,
+            repoRoot: fakeRepo,
+            projectId: 'orchestrator-pack',
+            repository: 'chetwerikoff/orchestrator-pack',
+            epochAuthorityPath,
+            epochId,
+            nonce,
+            targetRegistryPath,
+            projectedRegistryPath,
+          }),
         cwd: repoRoot,
         inheritParentEnv: true,
         env: {
@@ -483,18 +508,17 @@ describe('Issue #1484 truthful supervisor status', () => {
 
       const result = runProcessSync({
         command: process.execPath,
-        args: [
-          '--experimental-strip-types',
-          supervisorScript,
-          'run',
-          '--state-dir', stateDir,
-          '--repo-root', fakeRepo,
-          '--epoch-authority', epochAuthorityPath,
-          '--epoch-id', epochId,
-          '--nonce', nonce,
-          '--target-registry', targetRegistryPath,
-          '--projected-registry', projectedRegistryPath,
-        ],
+        args: supervisorRunnerArgs({
+            stateDir,
+            repoRoot: fakeRepo,
+            projectId: 'orchestrator-pack',
+            repository: 'chetwerikoff/orchestrator-pack',
+            epochAuthorityPath,
+            epochId,
+            nonce,
+            targetRegistryPath,
+            projectedRegistryPath,
+          }),
         cwd: repoRoot,
         inheritParentEnv: true,
         env: {
@@ -591,12 +615,17 @@ describe('Issue #1484 truthful supervisor status', () => {
       const controller = new AbortController();
       const resultPromise = runProcess({
         command: process.execPath,
-        args: [
-          '--experimental-strip-types', supervisorScript, 'run',
-          '--state-dir', stateDir, '--repo-root', fakeRepo,
-          '--epoch-authority', epochAuthorityPath, '--epoch-id', epochId, '--nonce', nonce,
-          '--target-registry', targetRegistryPath, '--projected-registry', projectedRegistryPath,
-        ],
+        args: supervisorRunnerArgs({
+            stateDir,
+            repoRoot: fakeRepo,
+            projectId: 'orchestrator-pack',
+            repository: 'chetwerikoff/orchestrator-pack',
+            epochAuthorityPath,
+            epochId,
+            nonce,
+            targetRegistryPath,
+            projectedRegistryPath,
+          }),
         cwd: repoRoot, inheritParentEnv: true, signal: controller.signal, timeoutMs: 100_000, killGraceMs: 500,
         env: {
           OPK_SUPERVISOR_CRASH_TERMINAL_RAPID_EXITS: '2',
@@ -739,6 +768,7 @@ describe('Issue #1484 truthful supervisor status', () => {
       );
       writeFileSync(fakeGitPath, '#!/bin/sh\nexit 1\n', 'utf8');
       chmodSync(fakeGitPath, 0o755);
+      const targetEnvironment = supervisorProjectEnvironment(root, fakeRepo, 'supervisor-fixture');
       const schedulerModuleUrl = pathToFileURL(
         path.join(repoRoot, 'scripts', 'pr2-foundation', 'scheduler.ts'),
       ).href;
@@ -789,21 +819,21 @@ describe('Issue #1484 truthful supervisor status', () => {
       });
       const result = runProcessSync({
         command: process.execPath,
-        args: [
-          '--experimental-strip-types',
-          supervisorScript,
-          'run',
-          '--state-dir', stateDir,
-          '--repo-root', fakeRepo,
-          '--epoch-authority', epochAuthorityPath,
-          '--epoch-id', epochId,
-          '--nonce', nonce,
-          '--target-registry', targetRegistryPath,
-          '--projected-registry', projectedRegistryPath,
-        ],
+        args: supervisorRunnerArgs({
+            stateDir,
+            repoRoot: fakeRepo,
+            projectId: 'supervisor-fixture',
+            repository: 'chetwerikoff/orchestrator-pack',
+            epochAuthorityPath,
+            epochId,
+            nonce,
+            targetRegistryPath,
+            projectedRegistryPath,
+          }),
         cwd: repoRoot,
         inheritParentEnv: true,
         env: {
+          ...targetEnvironment,
           OPK_SUPERVISOR_CRASH_RAPID_EXIT_THRESHOLD_MS: '1000',
           OPK_SUPERVISOR_CRASH_MAX_RAPID_EXITS: '11',
           OPK_SUPERVISOR_CRASH_TERMINAL_RAPID_EXITS: '12',
@@ -1016,18 +1046,17 @@ describe('Issue #1880 supervisor epoch-authority admission', () => {
 
         const result = runProcessSync({
           command: process.execPath,
-          args: [
-            '--experimental-strip-types',
-            supervisorScript,
-            'run',
-            '--state-dir', stateDir,
-            '--repo-root', fakeRepo,
-            '--epoch-authority', epochAuthorityPath,
-            '--epoch-id', epochId,
-            '--nonce', nonce,
-            '--target-registry', targetRegistryPath,
-            '--projected-registry', projectedRegistryPath,
-          ],
+          args: supervisorRunnerArgs({
+            stateDir,
+            repoRoot: fakeRepo,
+            projectId: 'orchestrator-pack',
+            repository: 'chetwerikoff/orchestrator-pack',
+            epochAuthorityPath,
+            epochId,
+            nonce,
+            targetRegistryPath,
+            projectedRegistryPath,
+          }),
           cwd: repoRoot,
           inheritParentEnv: true,
         });

@@ -11,7 +11,7 @@ import {
 import {
   clearPendingEvent,
   createIssueComment,
-  defaultWorkdir,
+  resolveJournalWorkdir,
   GH_TIMEOUT_MS,
   GhTransportError,
   ensureProjectionLabels,
@@ -171,7 +171,7 @@ function localInvalidActorPoisonRecovery(
 }
 
 function resolveWorkdir(issueNumber: number, workdir?: string): string {
-  return workdir ?? defaultWorkdir(issueNumber);
+  return resolveJournalWorkdir(issueNumber, workdir);
 }
 
 export function semanticStageAttemptId(repo: string, issueNumber: number, stage: LifecycleReviewStage): string {

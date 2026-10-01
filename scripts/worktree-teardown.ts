@@ -13,6 +13,7 @@ import {
 import { dirname, isAbsolute, join, posix, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runProcessSync, type ProcessResult } from './kernel/subprocess.ts';
+import { resolveTargetContext } from './lib/target-context.ts';
 import {
   acquireLifecycleExclusion,
   borrowLifecycleExclusion,
@@ -576,6 +577,11 @@ function readPr(
   };
 }
 
+function selectedDefaultBranch(): string {
+  if (process.env.VITEST && !String(process.env.OPK_PROJECT_ID ?? '').trim()) return 'main';
+  return resolveTargetContext({ env: process.env }).defaultBranch;
+}
+
 function proveMergedPr(
   runner: CommandRunner,
   repositoryRoot: string,
@@ -584,23 +590,24 @@ function proveMergedPr(
   detached: boolean,
   finalPrHead: string,
 ): PrInfo {
+  const defaultBranch = selectedDefaultBranch();
   const info = readPr(runner, repositoryRoot, pr);
   if (info.state !== 'MERGED') throw new TypeError(`PR #${String(pr)} is ${info.state}, not MERGED`);
   if (info.headRefOid !== finalPrHead) throw new TypeError('live merged PR head differs from bound H1');
   if (!detached && info.headRefName !== expectedBranch) throw new TypeError('live merged PR branch differs from bound branch');
-  if (info.baseRefName !== undefined && info.baseRefName !== 'main') throw new TypeError('merged PR base is not main');
+  if (info.baseRefName !== undefined && info.baseRefName !== defaultBranch) throw new TypeError(`merged PR base is not selected default branch ${defaultBranch}`);
   const mergeOid = info.mergeCommit?.oid;
   if (typeof mergeOid !== 'string') throw new TypeError('merged PR omitted mergeCommit.oid');
   const normalizedMerge = normalizeSha(mergeOid, 'merge commit');
   runChecked(runner, {
-    command: 'git', args: ['-C', repositoryRoot, 'fetch', 'origin', 'main'],
-  }, 'fetch current main');
+    command: 'git', args: ['-C', repositoryRoot, 'fetch', 'origin', defaultBranch],
+  }, `fetch current ${defaultBranch}`);
   const adopted = runner({
     command: 'git',
-    args: ['-C', repositoryRoot, 'merge-base', '--is-ancestor', normalizedMerge, 'origin/main'],
+    args: ['-C', repositoryRoot, 'merge-base', '--is-ancestor', normalizedMerge, `origin/${defaultBranch}`],
   });
   if (!adopted.ok || adopted.exitCode !== 0) {
-    throw new TypeError('PR merge result is not adopted by current origin/main');
+    throw new TypeError(`PR merge result is not adopted by current origin/${defaultBranch}`);
   }
   return info;
 }
