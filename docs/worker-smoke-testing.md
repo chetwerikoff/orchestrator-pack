@@ -1,355 +1,151 @@
-# Worker smoke testing (Issues #1061, #1138, and #1343)
+# Worker smoke testing
 
-Issue #2250 uses the existing supervised **independent** smoke worker after
-pack-review settlement for both ordinary coding-worker PRs and the separate
-manager-controlled Browser-GPT handoff. One successful independent PASS is
-sufficient for that PR even after later commits; required CI stays green on
-the current PR head. Initial FAIL/BLOCKED calls for a substantive worker fix
-and an explicit subsequent smoke execution, never a harness automatic retry.
+The active smoke path is deliberately thin. The PR owner executes the live
+Issue's declared `smoke-test-plan` after review has converged and required CI
+is green, writes a report file, and publishes that report with
+`worker-smoke-run publish`. There is no nested smoke agent, smoke terminal,
+independent-smoke actor, scheduler starter, receipt, watcher, retry engine, lock,
+or persisted smoke lifecycle.
 
 ## When smoke is required
 
-| Issue body signal | Worker gate |
-|---|---|
-| No `smoke-test-plan` fence + `smoke-plan-floor` grandfather marker | Smoke not required (legacy queue only) |
-| No `smoke-test-plan` fence on an action-producing Issue without grandfather marker | Smoke required; missing plan blocks handoff |
-| `smoke-test-plan` with `not-applicable: true` + reason | Smoke skipped |
-| `smoke-test-plan` with scenarios | One successful independent smoke PASS per PR, reusable on later heads |
+Read the live Issue and resolve its existing `smoke-test-plan` requirement.
 
-New action-producing tasks must declare a plan during authoring:
+- `required` with one or more scenarios: execute every scenario in order and
+  publish the result.
+- `not-applicable`: no smoke checkout and no `publish`.
+- supported `legacy-exempt`: preserve the existing no-smoke path.
 
-```bash
-node scripts/draft-discipline.mjs smoke-test-plan --draft path/to/issue-body.md
-```
+Documentation-, policy-, or prompt-only Issues should declare
+`not-applicable: true` with a reason when runtime smoke cannot provide
+meaningful evidence.
 
-Routine and complex smoke profiles come from the machine-local executor profile store for the existing `PACK_EXECUTOR_SMOKE_*` names; stored fenced keys override live environment values, and absent keys retain live environment defaults. `worker-smoke-run` does not load `.env` from a worktree or repository root.
+## PR-owner execution
 
-## Multi-agent smoke executor policy
+### Ordinary worker or firefighter
 
-`scripts/executor-profile-policy.ts` is the single tracked semantic owner for both
-routine and complex smoke profiles. The smoke launcher consumes its descriptor,
-validation, translation, catalog, and refusal semantics; this runbook does not
-reimplement them.
+Use the already-owned PR checkout after review (when applicable) and required
+CI are green. Run the Issue scenarios directly in that checkout. Do not launch
+another worker or agent merely to repeat them.
 
-The existing smoke profile triples stay unchanged. On the smoke surface the closed
-agent-token set is `cursor` and `opencode`. Cursor continues through the existing
-`agent` executable surface and keeps its historical opaque model/effort translation
-inside the shared Cursor translator. OpenCode carries model and effort together through a pack-composed inline agent definition supplied via `OPENCODE_CONFIG_CONTENT` as `{"agent":{"<pack-agent-name>":{"model":"<model>","variant":"<effort>"}}}` and spawned as `opencode --agent <pack-agent-name>` on the top-level surface, with no `--model` or `--variant` flag. Model catalog checks are executor-specific: Cursor uses the Cursor model catalog; OpenCode uses `opencode models`.
+### Managed execute-Issue manager
 
-A semantically valid OpenCode profile is not automatically spawnable. Before child
-creation, `worker-smoke-run` obtains top-level syntax evidence from `opencode --help`
-(stdout+stderr, proving `--agent`) and catalog evidence from `opencode models --verbose`.
-In the exact smoke cwd it then requires no-write-qualified `debug config` and named
-`debug agent` observations, an explicit `default_agent`, preserved baseline semantics,
-and isolated child-local state-path evidence before applying the invocation-local
-model/effort overlay. Missing route support fails with `executor_route_unavailable`;
-missing exact-context effort proof fails with `executor_effort_channel_unavailable`.
-The launcher never infers an implicit default, falls back to Cursor, or drops effort.
+The same manager remains the smoke owner. Its canonical manager worktree stays
+on the existing `origin/main`-derived manager branch.
 
-Cursor smoke route compatibility remains code-owned and does not gain a fresh route
-probe. Both executor families still require the selected profile to be inherited by
-a child before spawn. The inline definition is carried as an `OPENCODE_CONFIG_CONTENT` prefix in the composed command string, so the conditional RuntimeAdapter env seam remains unchanged.
+1. Re-read the exact Issue-bound PR and current head H with tracked
+   `scripts/gh`.
+2. Record the canonical manager worktree HEAD, branch, and status.
+3. Fetch H with ordinary Git.
+4. Create one unique temporary detached worktree T at H:
+   `git worktree add --detach <T> <H>`.
+5. Verify `git -C <T> rev-parse HEAD` is H.
+6. Run the declared smoke scenarios in T and write the report file there.
+7. Run `worker-smoke-run publish ... --repo-root <T>`.
+8. Remove only T with `git worktree remove --force <T>`.
+9. Verify the canonical manager worktree HEAD, branch, and status are unchanged.
+10. Only after successful cleanup feed the already-emitted publish JSON record
+    directly to the execute-Issue manager boundary under phase `smoke`.
 
-Firefighter execution still chooses the existing routine or complex smoke profile.
-There is no separate `PACK_EXECUTOR_FIREFIGHTER_*` profile or bypass around this
-policy.
+Do not switch, reset, rebase, merge, or check out another commit in the
+canonical manager worktree. Do not use global `git worktree prune`. This
+temporary checkout is ordinary local Git state, not a new PACK-managed
+worktree lifecycle or persistent record.
 
-## Actor ordering
+A fetch/add/HEAD-identity failure occurs before publication and claims no PASS.
+If cleanup or the canonical-worktree unchanged check fails after a successful
+comment POST, do not republish and do not consume that record as manager
+smoke-phase PASS completion. Surface the exact local cleanup defect through the
+existing parent/supervisor path. The already-posted v1 comment remains ordinary
+same-PR smoke evidence; cleanup is not a readiness predicate.
 
-### Ordinary local coding-worker path
+## Report file
 
-The ordinary worker/orchestrator review-settled handoff, not the scheduler,
-launches the existing supervised local independent smoke worker. Worker-owned
-pre-review smoke is removed; pack-review admission does not depend on smoke.
-
-```text
-implementation
-  -> PR created with current-head CI green
-  -> pack-review cycle
-  -> review finding: existing worker fixes; complete remaining review rounds
-  -> review obligations settled
-  -> existing supervised local independent-smoke worker
-  -> smoke worker checks out PR head and runs Issue-declared scenarios
-  -> PASS comment on PR -> readiness with current-head CI
-  -> first FAIL/BLOCKED -> existing worker/fixer corrects -> explicit smoke execution
-  -> completion
-```
-
-A new head after PASS does not require another smoke run; the PASS comment
-remains on that PR. No scheduler start-or-observe reconciler or replacement
-queue, registry, lease, watcher, retry engine, or new worker category is added.
-
-### Manager-controlled Browser-GPT path
-
-A Browser-GPT implementation owned by an `execute-issue-with-gpt` manager does
-not fabricate a local coding worker, `ready_for_review`, or worker-owned
-pre-review smoke. The manager runs canonical pack review after current-head
-CI is green. After review settles, its existing separate manager-to-supervisor
-handoff launches the same supervised independent smoke worker.
+The report file uses the surviving `worker-smoke-report` grammar:
 
 ```text
-manager-controlled Browser-GPT implementation
-  -> current PR/head + required CI green
-  -> manager-owned canonical pack-review cycle
-  -> review obligations settled
-  -> manager whole-role handoff: next action = independent smoke
-  -> supervisor launches local independent-smoke parent
-  -> independent smoke on the checked-out PR head
-  -> PASS comment on PR
-  -> first FAIL/BLOCKED: local worker fix + explicit independent smoke
-  -> completion
+result: PASS
+scenarios:
+  - action: <exact Issue action> | expected: <exact Issue expected> | observed: <what happened> | outcome: pass
 ```
 
-There is no synthetic pre-review worker-owned smoke on this path. The
-post-manager local worker is the **independent-smoke parent**, not a retroactive
-coding-worker admission shim; it prepares the current worktree and prerequisites,
-then invokes `worker-smoke-run ... --smoke-actor independent`.
-The manager does not run independent smoke itself and the settled review stage
-is not reopened after a worker fix.
+For PASS, the report must contain every declared scenario in exact plan order,
+with identical `action | expected` tuples and no duplicate, added, omitted,
+wrong, or reordered row. For an early FAIL/BLOCKED, include only the executed
+ordered prefix and end on the terminal non-PASS row. That terminal row carries
+the existing closed `cause-family`; the report also carries the existing
+closed top-level `non-pass-cause`.
 
-## Manager projection of durable worker-smoke evidence
+Report authors must not place secrets or third-party private data in scenario
+text, environment notes, or limitations.
 
-For manager-controlled Browser-GPT work, the existing
-`pack-worker-smoke-report/v1` returns through continuation to the same
-manager Dispatch. The supervisor uses the existing local worker as independent
-smoke parent. The manager re-reads the Issue/PR/head binding and projects
-the result through the single #2078 four-outcome boundary; it does not send
-`worker_done --outcome failed` or reopen settled review.
+## Publish
 
-- A same-PR PASS projects `completed` with verdict `PASS`; it remains
-  sufficient on later heads while current-head CI is green.
-- A proven `scenario_assertion_failed` projects `completed` with verdict
-  `FAIL`; the existing local worker fixes and explicitly executes smoke on
-  the corrected PR. It is not sent to a fresh GPT fixer conversation.
-- External credential/product pauses and malformed structured results keep
-  the existing `external_pause`/`contract_defect` boundary semantics.
-- No retry fence, override receipt, smoke-ordering admission rule, or
-  smoke-role/assignment witness is added.
-
-## Pre-smoke prerequisite preparation (parent worker)
-
-Before invoking `worker-smoke-run run`, the parent worker MUST make the environment capable of
-executing the real Issue-declared scenarios. The smoke child is not responsible for discovering or
-creating missing external prerequisites after launch.
-
-### Smoke-parent first-attempt bootstrap
-
-The parent must pass two independent gates before the first smoke child is
-created: dependency/setup readiness and executor-profile readiness. A passing
-worker-profile proof does not prove the smoke profile, and a ready worktree
-does not prove that a child inherits the profile.
-
-For a fresh smoke worktree, use the existing Orca setup path and continue only
-after its successful setup/ready receipt:
+From the checkout that was actually exercised:
 
 ```bash
-orca worktree create \
-  --name <worktree-name> \
-  --repo <repo-selector> \
-  --base-branch <base-ref> \
-  --issue <N> \
-  --setup run \
-  --json
-```
-
-When the smoke parent is using an existing delivery worktree, positively bind it
-with `orca worktree current --json` and re-read the already-recorded setup-ready
-result; current-worktree binding alone is not setup readiness. A failed,
-incomplete, or unknown setup result blocks smoke before child creation.
-
-After setup and all Issue-declared external prerequisites are ready, ensure the
-machine-local store contains the selected routine or complex triple. The launcher
-loads that store once, overlays only fenced profile keys over live defaults, and
-validates the selected triple, executor-specific model catalog, fresh route
-capability where required, and child inheritance before any smoke spawn. A failure
-reports the first profile/capability blocker and creates no smoke child.
-
-Only after setup readiness and external-prerequisite readiness, invoke the existing
-smoke command; the launcher reads the store in that invocation:
-
-```bash
-export PATH="$PWD/scripts:$PATH"
-worker-smoke-run run \
+worker-smoke-run publish \
   --issue <N> \
   --pr <PR> \
-  --head-sha <40-hex> \
-  --smoke-complexity <routine-or-complex> \
-  --smoke-actor independent \
-  --issue-body-file <issue-body-file> \
-  --repo-root "$PWD" \
-  --cwd "$PWD"
+  --report-file <report-file> \
+  --repo-root "$PWD"
 ```
 
-Do not add a fallback, retry, second selector, or alternate executor when pre-launch
-admission fails. Fix the selected operator-local profile or the external installed
-capability and make a fresh attempt.
+`publish` refuses modified tracked files but ignores untracked files,
+including an untracked report file. Before its single comment POST it preserves
+only the existing target-identity checks: the checkout origin must resolve to
+the selected canonical repository and PR P must exactly close Issue N.
 
-The parent worker must:
+The publisher has no `--head-sha` input. It stamps `head-sha` from local
+`git rev-parse HEAD`; it does not compare that value with the live PR head and
+does not inspect CI. Each invocation makes zero write attempts until all
+pre-publication checks pass, then at most one comment POST. A confirmed response
+URL becomes `commentUrl` in the one canonical stdout JSON record. A transport
+failure after that one POST attempt exits non-zero; a later whole-command
+invocation is the only retry boundary.
 
-1. inspect the current Issue `smoke-test-plan`, every declared scenario, and any named
-   skill/runbook/tool contract;
-2. derive a concrete prerequisite inventory, including external services, fixtures, credentials or
-   account state, listeners, browser conversations, and other long-lived resources required by the
-   scenarios;
-3. provision each required prerequisite through the repository-approved skill or tool and retain
-   its ownership identity or handle so only that resource can be maintained and later cleaned;
-4. verify an observable readiness condition for every prerequisite before smoke admission;
-5. keep every prerequisite available from before the smoke command is invoked until that command
-   terminalizes and ownership-scoped smoke cleanup completes; and
-6. refuse to launch smoke and report the concrete blocker when any prerequisite is absent,
-   ambiguous, unhealthy, or expected to expire before the lifecycle can finish.
+New v1 comments contain no terminal handle, Orca executable, terminal-cleanup
+field, or `orca-terminal-cleanup` line. Existing legacy v1 comments carrying
+those fields remain readable. Both the comment and canonical stdout derive from
+the same normalized scrubbed report content.
 
-For resources with a TTL, select a lifetime that covers at least the runtime work and its normal cleanup plus a practical setup/teardown margin. An
-approved non-disruptive retention mechanism may be used instead, but it must not execute a smoke
-scenario, change the behavior under test, or write child-owned progress/completion evidence.
+A successfully published PASS, FAIL, or BLOCKED exits zero and carries the
+domain verdict in the comment and stdout record.
 
-Example: when a scenario requires a separate active browser conversation, use the approved browser
-skill or tool before smoke launch, create or select a dedicated owned chat, verify that it is usable,
-and keep that chat active for the full prerequisite lifetime. Do not reuse the smoke child’s owned
-tab or an unrelated user chat. Clean only the dedicated prerequisite resource after the smoke
-command and owned lifecycle cleanup have finished.
+## Manager classification
 
-Preparation supplies capability, not the expected result: it must not perform the declared scenario,
-pre-satisfy the assertion being tested, fabricate smoke evidence, or mutate child-owned
-the eventual GitHub smoke report.
+Feed the actual JSON record emitted by `publish` directly to
+`classifyExecuteIssueManagerRecord` under phase `smoke`; do not reread the
+GitHub comment to construct another record.
 
-Responsibility remains split as follows:
+- PASS completes smoke after managed temporary-worktree cleanup succeeds.
+- A proved `scenario_assertion_failed` /
+  `executed_scenario_failure` result enters the existing fixer continuation.
+- Supported structured external BLOCKED results retain the existing external
+  pause behavior.
+- Malformed or unsupported structured causes are contract defects.
 
-- the parent worker provisions, verifies, retains, and later releases external prerequisites;
-- `worker-smoke-run` invokes the selected existing worker and publishes the existing report; and
-- the smoke child runs the declared scenarios and supplies actual result observations.
+There is no `trusted_target_stale` smoke recovery observer, expected-head
+witness, or replacement classifier.
 
-## Supported worker path
+## Readiness semantics
 
-The selected project card is the repository authority. The existing worker
-checks out the live PR head and executes all `smoke-test-plan` scenarios.
-The publishing GitHub comment contains the unchanged
-`pack-worker-smoke-report/v1` marker, head, per-scenario outcomes,
-`tracked-files-unmodified`, and unchanged machine block with **no actor field**.
-The GitHub comment author is publisher metadata, not a smoke worker-role
-attestation. Existing secret scrubbing redacts secrets in output and continues;
-redaction itself never refuses smoke.
+Readiness is unchanged by this producer simplification. The newest existing
+same-PR `pack-worker-smoke-report/v1` PASS at any report head satisfies the
+smoke predicate. Required CI remains bound to the current PR head. A later head
+or later FAIL does not revoke an already-published same-PR PASS.
 
-```bash
-export PATH="$PWD/scripts:$PATH"
-worker-smoke-run run \
-  --issue <N> \
-  --pr <PR> \
-  --head-sha <40-hex> \
-  --smoke-complexity <routine-or-complex> \
-  --smoke-actor independent \
-  --issue-body-file /tmp/issue-body.md \
-  --repo-root "$PWD" \
-  --cwd "$PWD"
-```
+No smoke-head equality, actor/publisher filter, ancestry reconstruction,
+receipt, cleanup proof, historical-state gate, or scheduler-owned smoke state is
+added to readiness.
 
-## Report admission and trust boundary
+## Verification
 
-For Issue #2250 the accepted smoke evidence is the newest existing
-`pack-worker-smoke-report/v1` PASS **comment on the same PR** at any head.
-The report's head, per-scenario outcome and tracked-files-unmodified facts are
-retained unchanged. The GitHub author is publishing metadata only; no
-publisher/producer identity filter, worker-role attestation, edited-comment
-rejection, or new provenance admission is performed by readiness. The
-supervised independent smoke-worker handoff establishes operational
-independence. The PR and required CI must still match the current PR head
-for their own separate readiness predicates.
+Focused tests cover terminal-free v1 formatting/legacy reading, exact
+plan/report correspondence, untracked-only admission, dirty-tracked refusal,
+target identity, moved-live-head/non-green-CI non-gating, single-POST behavior,
+secret scrubbing, manager PASS/FAIL/BLOCKED classification, and the managed
+temporary detached-worktree sequence.
 
-## Exact-head point-in-time coverage
-
-*Retired by Issue #2250.* Earlier-head reports do not require a fresh
-current-head coverage fold, ancestor/patch equivalence proof or selective
-retry. Historical per-tuple FAIL/BLOCKED precedence, receipt binding,
-stable-census and head-equality reconstruction are no longer active smoke
-readiness authority. A first non-PASS alone does not satisfy readiness;
-an existing worker/fixer correction may be followed by an explicit smoke run.
-Once a PASS is on the PR, it remains sufficient on later heads subject to
-current-head CI.
-
-## Report and control-plane semantics
-
-Readiness selects the newest existing `pack-worker-smoke-report/v1`
-**PASS** comment on the same PR at **any report head**, regardless of
-publishing author. A first FAIL/BLOCKED cannot satisfy readiness; an
-explicit smoke execution after a fix may later produce PASS. A later FAIL
-or a later head does not revoke an already-published PASS. Required CI must
-still be green on the **current** PR head, and existing review, assignment,
-and merge conditions remain separate.
-
-No smoke-head equality, role/assignment check, publisher filter, edited-comment
-rejection, census stabilization, FAIL precedence, ancestry/patch equivalence,
-carry-only, selective retry, repeated-head admission check, lifecycle receipt,
-cleanup-settlement, scheduler starter, or smoke-plan preflight refusal is
-a readiness requirement. The `smoke-test-plan` fence remains an authoring
-source; guidance not to touch live machine configuration is prose only.
-
-The ordinary worker/orchestrator handoff and manager-controlled supervised
-handoff retain their distinct existing owners. The production scheduler no
-longer starts or observes smoke. After a fix, the existing worker/fixer
-explicitly invokes the smoke worker; no automatic retry machinery is added.
-
-## Delivery and completion authority
-
-*Retired by Issue #2250.* Smoke results are published as the existing
-`pack-worker-smoke-report/v1` PR comment. No delivery seal, completion receipt,
-progress record, or new completion authority is required for readiness.
-
-## Finite scenario progress and deadlines
-
-*Retired harness contract.* The independent smoke worker executes the Issue
-scenarios and produces the existing per-scenario report; no durable
-per-scenario progress protocol governs the result.
-
-## Child-only progress and cancellation protocol
-
-*Retired by Issue #2250.* No child progress file or cancellation acknowledgement
-is consumed by the active smoke/CI readiness path.
-
-## Durable spawn state and ambiguity recovery
-
-*Retired by Issue #2250.* No run registry, admission lock, or bounded-create
-recovery mechanism grants smoke authority. A failed run leaves no PASS; the
-existing worker/fixer may explicitly run smoke after correcting the PR.
-
-## Cancellation, cleanup, and restart recovery
-
-*Retired by Issue #2250.* No cleanup receipt, quarantine, reconcile, or
-restart-recovery settlement is a prerequisite for consuming a PR smoke PASS.
-
-## Deterministic preflight and concurrent starts
-
-*Retired by Issue #2250.* The smoke-plan fence remains the Issue authoring
-source; no smoke-plan preflight refusal, run admission lock, or scheduler
-post-review starter is introduced.
-
-## Readiness gate
-
-The newest existing `pack-worker-smoke-report/v1` PASS comment on the same PR,
-regardless of its report HEAD or publishing author, satisfies the smoke
-portion of readiness. Required CI must still be green on the current PR HEAD;
-review, assignment, and other merge conditions remain unchanged.
-
-## Runtime verification and rollback
-
-Run the focused current-head suite before marking the PR ready:
-
-```bash
-node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 scripts/worker-smoke.test.ts
-node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 scripts/worker-smoke-entrypoint-1359.test.ts
-```
-
-The focused current behavior checks exercise full-plan independent smoke execution,
-the unchanged v1 report marker and per-scenario facts, secret redaction,
-same-PR PASS reuse across heads, and current-head CI enforcement. Historical
-ordering, progress, carry, receipt and detached-reconcile tests do not govern
-the new smoke readiness path. A real smoke run remains necessary when the Issue
-plan requires operator-visible execution beyond automated test fixtures.
-
-Rollback of a deployed change follows the ordinary supervisor-adoption procedure;
-no retired registry, receipt, admission lock or cleanup settlement is required
-to approve readiness.
-
-## Orca executable selection
-
-Use `OPK_RUNTIME_CLI_COMMAND` when exported. Otherwise prefer `orca-dev`, then `orca-ide`, then `orca`.
-Do not assume `/usr/bin/orca` is the CLI on Linux.
+Run the affected smoke/manager tests plus the repository verification commands
+required by policy, including `npm run typecheck` and `npm run lint`.
