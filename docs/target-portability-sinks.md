@@ -2,8 +2,8 @@
 
 ## Provenance
 
-- Audited implementation-PR base: `c51d7b9e0b451a12e76a144bd8ef4e91122a8ff0`.
-- The implementation branch was created from `23adc0c4214d4d47cccc8728d7cb147d793ce678`; before handoff the live default branch advanced to `c51d7b9e0b451a12e76a144bd8ef4e91122a8ff0` via PR #2304. The bounded selector recipe was rerun at the new base. That advance changes only the #2303 Browser-turn alert path plus its declaration and introduces no new target selector row, so the dispositions below are unchanged.
+- Audited implementation-PR base: `23adc0c4214d4d47cccc8728d7cb147d793ce678`.
+- The PR's bound base SHA remains `23adc0c4214d4d47cccc8728d7cb147d793ce678`. The default branch later advanced to `c51d7b9e0b451a12e76a144bd8ef4e91122a8ff0` via PR #2304, leaving this PR `behind` but not changing its bound base; per Issue #2161 sequencing the worker does not merge the moving default branch merely to clear that state. The #2304 delta is limited to Browser-turn alert handling plus its declaration and does not introduce a selector into this PR diff.
 - Audit universe: tracked non-test production/instruction files under `scripts/**`, `plugins/**`, `prompts/**`, `.cursor/skills/**`, `.claude/skills/**`, `.github/workflows/**`, plus the three documentation paths allowed by Issue #2188.
 - Explicitly excluded by the Issue contract: `packages/core/**`, `vendor/**`, test-only files, fixture-only files, and files outside the allowed roots.
 - Test files are evidence only; they are not selector rows.
@@ -34,7 +34,7 @@ Search terms/classes:
 Reproducible local search:
 
 ```bash
-BASE=c51d7b9e0b451a12e76a144bd8ef4e91122a8ff0
+BASE=23adc0c4214d4d47cccc8728d7cb147d793ce678
 ROOTS=(
   scripts plugins prompts .cursor/skills .claude/skills .github/workflows
   docs/target-portability-sinks.md docs/target_repo_setup.md docs/migration_notes.md
