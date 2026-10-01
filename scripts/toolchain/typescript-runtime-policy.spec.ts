@@ -320,7 +320,7 @@ describe('launch inventory and fail-closed policy', () => {
 
   it('rejects a live supported-major restatement while accepting authority-driven prose', () => {
     const root = makePolicyFixture();
-    write(join(root, 'scripts/live-runtime-policy.ts'), `export const requiredMajor = ${SUPPORTED_NODE_MAJOR};\n`);
+    write(join(root, 'scripts/live-runtime-policy.ts'), `export const nodeMajor = ${SUPPORTED_NODE_MAJOR};\n`);
     let violations = checkTypeScriptRuntimePolicy(root).violations;
     expect(violations.some((violation) =>
       violation.rule === 'runtime-major-restatement'
@@ -433,7 +433,7 @@ describe('launch inventory and fail-closed policy', () => {
     expect(violations.some((violation) =>
       violation.rule === 'workflow-node-version'
       && violation.path === workflow
-      && violation.message.includes('with.node-version'))).toBe(true);
+      && violation.message.includes('authority-bound version selector'))).toBe(true);
   });
 
   it.each([
