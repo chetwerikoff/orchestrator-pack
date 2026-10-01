@@ -153,12 +153,14 @@ describe('Issue #2213 actor-sensitive selective smoke carry', () => {
   });
 });
 
-describe('Issue #2250 smoke progress/cancel caller removal', () => {
-  it('does not invoke smoke progress or cancellation machinery from the active worker', () => {
+describe('Issue #2319 retired smoke execution caller removal', () => {
+  it('does not invoke progress, cancellation, selective carry, or nested-run machinery from the active worker', () => {
     const source = readFileSync('scripts/worker-smoke-run.ts', 'utf8');
-    const active = source.slice(source.indexOf('export async function runSmokeAttempt('), source.indexOf('export type DetachedSmokeAttemptObservation'));
-    expect(active).not.toContain('buildSmokeProgressWriterCommand');
-    expect(active).not.toContain('writeSmokeCancelRequest');
-    expect(active).not.toContain('inspectSmokeProgress');
+    expect(source).not.toContain('runSmokeAttempt');
+    expect(source).not.toContain('buildSmokeProgressWriterCommand');
+    expect(source).not.toContain('writeSmokeCancelRequest');
+    expect(source).not.toContain('inspectSmokeProgress');
+    expect(source).not.toContain('planWorkerSmokeSelectiveRetry(');
+    expect(source).not.toContain('deriveMainMergeCarryProof');
   });
 });
