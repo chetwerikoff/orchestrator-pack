@@ -43,7 +43,29 @@ const PLACEHOLDER_ISSUE_TITLE_PATTERNS = [
 const REALISTIC_INPUT_VALUES = new Set(['realistic', 'production-representative']);
 const EXTERNAL_TOOL_INPUT = 'external-tool-output';
 const VALID_PROVENANCE = new Set(['capture-backed', 'sample-backed']);
-const DEFAULT_ISSUE_REPO = 'chetwerikoff/orchestrator-pack';
+const VITEST_DEFAULT_ISSUE_REPO = 'chetwerikoff/orchestrator-pack';
+const PACK_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const TRACKED_GH = path.join(PACK_ROOT, 'scripts', 'gh');
+const TARGET_CONTEXT_ENTRYPOINT = path.join(PACK_ROOT, 'scripts', 'lib', 'target-context.ts');
+
+function resolveDraftTargetRepository(explicitRepository) {
+  if (process.env.VITEST && !String(process.env.OPK_PROJECT_ID ?? '').trim()) {
+    return explicitRepository || process.env.GITHUB_REPOSITORY || VITEST_DEFAULT_ISSUE_REPO;
+  }
+  const output = execFileSync(
+    process.execPath,
+    ['--experimental-strip-types', TARGET_CONTEXT_ENTRYPOINT, 'check'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], cwd: PACK_ROOT, env: process.env },
+  );
+  const parsed = JSON.parse(output);
+  const selected = String(parsed.repository ?? '').trim();
+  if (!selected) throw new Error('draft-discipline target repository unresolved');
+  const ingress = String(explicitRepository || process.env.GITHUB_REPOSITORY || '').trim();
+  if (ingress && ingress.toLowerCase() !== selected.toLowerCase()) {
+    throw new Error(`draft-discipline repository ${ingress} does not match selected target ${selected}`);
+  }
+  return selected;
+}
 
 export function extractFencedBlocks(markdown) {
   const blocks = new Map();
@@ -420,16 +442,17 @@ export function normalizeLiveIssue(parsed) {
   };
 }
 
-export function fetchLiveIssue(issueNumber, repo = process.env.GITHUB_REPOSITORY || DEFAULT_ISSUE_REPO) {
+export function fetchLiveIssue(issueNumber, repo) {
   try {
+    const selectedRepository = resolveDraftTargetRepository(repo);
     const output = execFileSync(
-      'gh',
+      TRACKED_GH,
       [
         'issue',
         'view',
         String(issueNumber),
         '--repo',
-        repo,
+        selectedRepository,
         '--json',
         'state,stateReason,title,body,closedByPullRequestsReferences',
       ],
@@ -442,7 +465,7 @@ export function fetchLiveIssue(issueNumber, repo = process.env.GITHUB_REPOSITORY
 }
 
 const ANY_FENCE_PATTERN = /```([a-z0-9-]*)\s*\r?\n([\s\S]*?)```/gi;
-const DEFAULT_REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const DEFAULT_REPO_ROOT = PACK_ROOT;
 const MACHINE_PARSED_FENCE_LABELS = new Set([
   'denylist',
   'allowed-roots',
@@ -515,11 +538,11 @@ function stripActionTaxonomyExemptions(markdown, repoRoot = DEFAULT_REPO_ROOT) {
 
 export function resolveParkedRootIssueMap(blocks, mockIssues = {}, options = {}) {
   const fetchLive = options.fetchLive ?? false;
-  const repo = options.repo ?? process.env.GITHUB_REPOSITORY ?? DEFAULT_ISSUE_REPO;
   const map = { ...mockIssues };
   if (!fetchLive) {
     return map;
   }
+  const repo = resolveDraftTargetRepository(options.repo);
   for (const block of blocks) {
     const issueNumber = parseIssueNumber(block.followUpIssue);
     if (!issueNumber) {
