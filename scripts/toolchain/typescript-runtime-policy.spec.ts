@@ -472,11 +472,45 @@ describe('launch inventory and fail-closed policy', () => {
       && violation.message.includes('received 20'))).toBe(true);
   });
 
-  it('rejects node-version-file even when it points at the canonical declaration', () => {
+  it('accepts package.json as the authority-bound workflow version file', () => {
     const root = makePolicyFixture();
     const workflow = '.github/workflows/version-file.yml';
     write(join(root, workflow), [
       'name: version-file',
+      'jobs:',
+      '  test:',
+      '    steps:',
+      '      - uses: actions/setup-node@v4',
+      '        with:',
+      '          node-version-file: package.json',
+      '',
+    ].join('\n'));
+    const violations = checkTypeScriptRuntimePolicy(root).violations;
+    expect(violations.filter((violation) =>
+      violation.rule === 'workflow-node-version'
+      && violation.path === workflow)).toEqual([]);
+  });
+
+  it('accepts the trusted base package mirror and rejects arbitrary version files', () => {
+    const root = makePolicyFixture();
+    const trusted = '.github/workflows/trusted.yml';
+    write(join(root, trusted), [
+      'name: trusted',
+      'jobs:',
+      '  test:',
+      '    steps:',
+      '      - uses: actions/setup-node@v4',
+      '        with:',
+      '          node-version-file: trusted-scope-guard/package.json',
+      '',
+    ].join('\n'));
+    expect(checkTypeScriptRuntimePolicy(root).violations.filter((violation) =>
+      violation.rule === 'workflow-node-version'
+      && violation.path === trusted)).toEqual([]);
+
+    const bad = '.github/workflows/bad-version-file.yml';
+    write(join(root, bad), [
+      'name: bad-version-file',
       'jobs:',
       '  test:',
       '    steps:',
@@ -488,7 +522,7 @@ describe('launch inventory and fail-closed policy', () => {
     const violations = checkTypeScriptRuntimePolicy(root).violations;
     expect(violations.some((violation) =>
       violation.rule === 'workflow-node-version'
-      && violation.path === workflow
+      && violation.path === bad
       && violation.message.includes('node-version-file'))).toBe(true);
   });
 
