@@ -201,7 +201,12 @@ export function composerPokeFingerprint(preview: string): string {
   return source.join('\n');
 }
 
-export function exactOrchestrationPointerFingerprint(preview: string): string | undefined {
+interface ExactOrchestrationPointer {
+  readonly command: string;
+  readonly text: string;
+}
+
+function exactOrchestrationPointer(preview: string): ExactOrchestrationPointer | undefined {
   const interior = composerInterior(preview);
   const source = interior
     ? composerContentLines(interior, true)
@@ -215,11 +220,16 @@ export function exactOrchestrationPointerFingerprint(preview: string): string | 
     const matches = [...normalizedCandidate.matchAll(pointerPattern)];
     const commands = matches.map((match) => match[1] ?? '');
     const remainder = normalizedCandidate.replace(pointerPattern, '').replace(/\s+/gu, '');
-    if (commands.length > 0 && !remainder && commands.every((command) => command === commands[0])) {
-      return commands[0];
+    const text = matches[0]?.[0];
+    if (text && commands.length > 0 && !remainder && commands.every((command) => command === commands[0])) {
+      return { command: commands[0]!, text };
     }
   }
   return undefined;
+}
+
+export function exactOrchestrationPointerFingerprint(preview: string): string | undefined {
+  return exactOrchestrationPointer(preview)?.command;
 }
 
 export function workerKey(identity: RuntimeWorkerIdentity): string {
@@ -758,16 +768,11 @@ function settleComposerObservation(
       reason: family?.status === 'unbound' ? family.reason : 'composer_family_unbound',
     };
   }
-  if (family.family === 'opencode') {
-    return {
-      ...base,
-      ok: false,
-      unsent: true,
-      enter: false,
-      reason: deps.composerControl?.(identity)?.kind === 'opencode-http'
-        ? 'opencode_http_control_required'
-        : 'opencode_control_unbound',
-    };
+  const openCodeControl = family.family === 'opencode'
+    ? deps.composerControl?.(identity)
+    : undefined;
+  if (family.family === 'opencode' && openCodeControl?.kind !== 'opencode-http') {
+    return { ...base, ok: false, unsent: true, enter: false, reason: 'opencode_control_unbound' };
   }
   if (!shown.ok) {
     return { ...base, ok: false, unsent: false, enter: false, reason: shown.reason };
@@ -799,6 +804,37 @@ function settleComposerObservation(
   }
   if (input.dryRun) {
     return { ...base, ok: true, unsent: true, enter: false, reason: 'dry_run' };
+  }
+  if (family.family === 'opencode') {
+    const beforeLiveness = currentLiveness(deps, identity);
+    if (beforeLiveness === 'gone' || beforeLiveness === 'unknown') {
+      return livenessDeferral(identity, beforeLiveness);
+    }
+    const pointer = exactOrchestrationPointer(preview);
+    if (!pointer || !openCodeControl) {
+      return { ...base, ok: false, unsent: true, enter: false, reason: 'opencode_control_unbound' };
+    }
+    const submitted = openCodeControl.dispatch({
+      worker: identity,
+      action: 'submit-prompt',
+      text: pointer.text,
+    });
+    if (submitted.status === 'send_failed') {
+      state.submittedFingerprint.delete(key);
+      return { ...base, ok: false, unsent: true, enter: false, reason: submitted.reason, dispatchStatus: submitted.status };
+    }
+    if (submitted.status === 'dispatch_unknown') {
+      const fingerprints = state.ambiguousSubmittedFingerprints.get(key) ?? new Set<string>();
+      fingerprints.add(fingerprint);
+      state.ambiguousSubmittedFingerprints.set(key, fingerprints);
+      state.submittedFingerprint.set(key, fingerprint);
+      return { ...base, ok: true, unsent: true, enter: false, reason: submitted.reason, dispatchStatus: submitted.status };
+    }
+    state.submittedFingerprint.set(key, fingerprint);
+    const fingerprints = state.ambiguousSubmittedFingerprints.get(key);
+    fingerprints?.delete(fingerprint);
+    if (fingerprints?.size === 0) state.ambiguousSubmittedFingerprints.delete(key);
+    return { ...base, ok: true, unsent: true, enter: true, reason: 'enter_sent', dispatchStatus: submitted.status };
   }
   const beforeLiveness = currentLiveness(deps, identity);
   if (beforeLiveness !== 'idle' && !(allowNonIdle && beforeLiveness !== 'gone')) {
@@ -1280,7 +1316,9 @@ async function submitOrcaMessageDeliveryPointerForMessage(
       return deliveryNoEffect('opencode_control_unbound', worker, false);
     }
     const liveness = currentLiveness(deps.submitDeps, worker.identity);
-    if (liveness !== 'idle') return deliveryNoEffect(`worker_${liveness}`, worker);
+    if (liveness === 'gone' || liveness === 'unknown') {
+      return deliveryNoEffect(`worker_${liveness}`, worker);
+    }
 
     if (existing?.state === 'confirmed') return deliveryNoEffect('orchestration_episode_already_delivered', worker, false);
     if (existing && now < existing.nextEligibleAt) return deliveryNoEffect('orchestration_episode_backoff', worker, false);
@@ -1348,7 +1386,14 @@ async function submitOrcaMessageDeliveryPointerForMessage(
       if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state!);
       return { ok: false, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: false, ok: false, reason: 'submission_unconfirmed', dispatchStatus: submitted.status }] };
     }
-    // Transport acceptance is not submission evidence. Re-read the pane and
+    if (liveness === 'busy') {
+      if (state) {
+        state.episodes[key] = { ...state.episodes[key]!, state: 'confirmed' };
+        if (deps.episodeStatePath && !deps.episodeState) saveReconcileState(deps.episodeStatePath, state);
+      }
+      return { ok: true, dryRun: false, watch: false, terminals: [{ ...base, unsent: true, enter: true, ok: true, reason: 'enter_sent', dispatchStatus: submitted.status }] };
+    }
+    // Transport acceptance is not submission evidence for an idle worker. Re-read the pane and
     // require the observed idle-to-busy transition before recording confirmation.
     const afterShown = deps.submitDeps.liveness
       ? deps.submitDeps.read(worker.identity)
