@@ -170,6 +170,12 @@ const UNRENDERED_OWNER_ALERT_CAUSES: readonly (readonly [string, ExecutionRecove
   [PRODUCT_NETWORK_ERROR_TEXT, 'product_network_error'],
 ];
 
+// Current ChatGPT alerts whose detail lines vary; only the heading line is stable.
+const UNRENDERED_OWNER_ALERT_HEADING_CAUSES: readonly (readonly [string, ExecutionRecoveryProductCause])[] = [
+  ['Network error', 'product_network_error'],
+  ['Resume stream unavailable', 'stream_recovery_polling_timed_out'],
+];
+
 function exactAlertCause(
   value: string,
   causes: readonly (readonly [string, ExecutionRecoveryProductCause])[],
@@ -194,7 +200,10 @@ export function rolelessRecoverySurfaceCause(value: string): ExecutionRecoveryPr
  * never rendered; only the caller's bound-conversation gate makes it attributable.
  */
 export function unrenderedOwnerAlertCause(value: string): ExecutionRecoveryProductCause | undefined {
-  return exactAlertCause(value, UNRENDERED_OWNER_ALERT_CAUSES);
+  const exact = exactAlertCause(value, UNRENDERED_OWNER_ALERT_CAUSES);
+  if (exact) return exact;
+  const heading = normalizeExecutionRecoveryProductText(value.trim().split('\n')[0] ?? '');
+  return UNRENDERED_OWNER_ALERT_HEADING_CAUSES.find(([text]) => heading === text)?.[1];
 }
 
 function executionRecoveryCauseFromText(value: string): ExecutionRecoveryProductCause | undefined {
