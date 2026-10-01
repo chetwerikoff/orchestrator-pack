@@ -852,6 +852,7 @@ export function fetchLivePrHead(prNumber: number, repositorySlug: string, repoRo
 }
 
 export function publishPrComment(prNumber: number, body: string, repoRoot: string, timeoutMs = SMOKE_GH_TIMEOUT_MS): void {
+  const repositorySlug = selectedSmokeProject().repository;
   const tempDir = mkdtempSync(join(tmpdir(), 'worker-smoke-comment-'));
   const bodyFile = join(tempDir, 'body.md');
   try {
@@ -859,7 +860,7 @@ export function publishPrComment(prNumber: number, body: string, repoRoot: strin
     let result: ReturnType<typeof runProcessSync>;
     try {
       result = runSmokeGhWriteSync(
-        ['api', `repos/${TRUSTED_REPOSITORY_SLUG}/issues/${String(prNumber)}/comments`, '--method', 'POST', '--input', bodyFile], repoRoot, {}, timeoutMs,
+        ['api', `repos/${repositorySlug}/issues/${String(prNumber)}/comments`, '--method', 'POST', '--input', bodyFile], repoRoot, {}, timeoutMs,
       );
     } catch (error) {
       const detail = scrubSmokeOutput(scrubForwardedGhSecrets(error instanceof Error ? error.message : String(error), buildSmokeGhChildEnv()));
@@ -912,9 +913,12 @@ export function currentPackReviewStatusFact(repositorySlug: string, headSha: str
   ));
 }
 
-function currentAtCapFacts(prNumber: number): Pick<Parameters<typeof evaluateReadiness>[0]['review'], 'atCapOpenFindings' | 'atCapContinuationRequired'> {
+function currentAtCapFacts(
+  prNumber: number,
+  projectId: string,
+): Pick<Parameters<typeof evaluateReadiness>[0]['review'], 'atCapOpenFindings' | 'atCapContinuationRequired'> {
   try {
-    const storeRoot = resolvePackReviewRunStoreRoot({ projectId: 'orchestrator-pack', storeRoot: process.env.PACK_REVIEW_RUN_STORE_ROOT });
+    const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: process.env.PACK_REVIEW_RUN_STORE_ROOT });
     const authority = readPackReviewAuthority(prNumber, { storeRoot });
     return {
       atCapOpenFindings: authority?.cycle?.state === 'at_cap_open_findings',
@@ -932,10 +936,11 @@ interface PostSmokePackReviewAuthorityCycle {
 function currentPackReviewCompletionCycle(
   prNumber: number,
   currentHeadSha: string,
+  projectId: string,
   isAncestor: (ancestorSha: string, descendantSha: string) => boolean,
 ): PostSmokePackReviewAuthorityCycle | null {
   try {
-    const storeRoot = resolvePackReviewRunStoreRoot({ projectId: 'orchestrator-pack', storeRoot: process.env.PACK_REVIEW_RUN_STORE_ROOT });
+    const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: process.env.PACK_REVIEW_RUN_STORE_ROOT });
     let authority = readPackReviewAuthority(prNumber, { storeRoot });
     if (!authority?.cycle) return null;
     const reviewedHeadSha = authority.terminal?.reviewVerdict === 'findings' ? authority.terminal.targetSha : '';
@@ -1008,7 +1013,7 @@ export async function evaluatePostSmokeReadiness(
   adapter: RuntimeAdapter,
   dependencies: PostSmokeReadinessDependencies = {},
 ): Promise<PostSmokeReadinessResult> {
-  const assignmentFile = resolveWorkerAssignmentStorePath('orchestrator-pack', process.env);
+  const assignmentFile = resolveWorkerAssignmentStorePath(target.projectId, process.env);
   const assignment = currentWorkerAssignment(assignmentFile, target.issueNumber);
   const readinessTarget = {
     repository: target.repositorySlug, issueNumber: target.issueNumber, taskId: assignment?.taskId ?? '',
@@ -1035,7 +1040,7 @@ export async function evaluatePostSmokeReadiness(
         assignments: [assignment],
         bindings: resolved.bindings.filter((binding) => binding.assignment.assignmentId === assignment.assignmentId),
         reconciliations: resolved.reconciliations.filter((row) => row.assignment.assignmentId === assignment.assignmentId),
-        project: 'orchestrator-pack',
+        project: target.projectId,
       });
       const killSwitch = evaluateWorkerStatusKillSwitch(process.env);
       const sibling = testSiblingReadiness(process.env);
@@ -1090,7 +1095,7 @@ export async function evaluatePostSmokeReadiness(
   const runner = (dependencies.currentPackReviewStatusFact ?? currentPackReviewStatusFact)(target.repositorySlug, target.headSha, options.repoRoot);
   const postSmokeReview = projectPostSmokePackReview({
     runner, direct,
-    authorityCycle: currentPackReviewCompletionCycle(target.prNumber, target.headSha, (ancestorSha, descendantSha) =>
+    authorityCycle: currentPackReviewCompletionCycle(target.prNumber, target.headSha, target.projectId, (ancestorSha, descendantSha) =>
       (dependencies.isAncestor ?? githubCommitIsAncestor)(target.repositorySlug, ancestorSha, descendantSha, options.repoRoot)),
   });
   const reviewProjection = postSmokeReview.reviewProjection;
@@ -1104,7 +1109,7 @@ export async function evaluatePostSmokeReadiness(
       } : semanticPackReviewRequiredStatusRequest({ headSha: target.headSha, projection: reviewProjection }),
     });
   }
-  const atCap = currentAtCapFacts(target.prNumber);
+  const atCap = currentAtCapFacts(target.prNumber, target.projectId);
   let smokeEvidenceState: PostSmokeReadinessResult['smokeEvidence']['state'] = smokeObservationAvailable ? 'missing' : 'unavailable';
   if (smokeObservationAvailable && smokeWitness) {
     try {
@@ -1170,7 +1175,7 @@ export async function runDelegatedReadiness(
     return report('delegated_readiness_target_mismatch');
   }
 
-  const assignmentFile = resolveWorkerAssignmentStorePath('orchestrator-pack', process.env);
+  const assignmentFile = resolveWorkerAssignmentStorePath(target.projectId, process.env);
   const readAssignment = dependencies.readAssignment ?? currentWorkerAssignment;
   const assignment = readAssignment(assignmentFile, target.issueNumber);
   const marker = assignment?.delegatedIntegration;
@@ -1216,30 +1221,32 @@ export async function runDirectReviewReconciliation(options: CliOptions): Promis
       || !options.reviewId || !/^[0-9a-f]{40}$/u.test(options.reviewHeadSha.trim().toLowerCase())) {
     emit({ ok: false, reason: 'direct_review_binding_invalid' }, options.json); return 1;
   }
-  const currentHead = fetchLivePrHead(options.prNumber, TRUSTED_REPOSITORY_SLUG, options.repoRoot);
+  const selected = selectedSmokeProject();
+  const repositorySlug = selected.repository;
+  const currentHead = fetchLivePrHead(options.prNumber, repositorySlug, options.repoRoot);
   const eventHead = options.headSha.trim().toLowerCase();
   const reviewHead = options.reviewHeadSha.trim().toLowerCase();
   if (currentHead !== eventHead || reviewHead !== eventHead) {
     emit({ ok: true, skipped: true, reason: 'direct_review_stale_publication_head', reviewHead, eventHead, currentHead }, options.json); return 0;
   }
-  const transport = createGithubReviewTransport({ repoRoot: options.repoRoot, repoSlug: TRUSTED_REPOSITORY_SLUG, prNumber: options.prNumber });
+  const transport = createGithubReviewTransport({ repoRoot: options.repoRoot, repoSlug: repositorySlug, prNumber: options.prNumber });
   const reviews = await transport.listReviews();
   const submitted = reviews.find((review) => sameReviewIdentifier(review.id, options.reviewId));
-  const owner = TRUSTED_REPOSITORY_SLUG.split('/')[0] ?? '';
+  const owner = repositorySlug.split('/')[0] ?? '';
   if (!submitted || !parseDirectPackReviewEvidence(submitted, owner)) {
     emit({ ok: true, skipped: true, reason: 'review_not_canonical_direct_pack_review' }, options.json); return 0;
   }
   const direct = projectDirectPackReviewState({
     reviews, repositoryOwnerLogin: owner, currentHeadSha: currentHead, workerLifecycle: '', requiredCiGreen: false,
     exactHeadSmokePassed: false,
-    isAncestor: (ancestorSha, descendantSha) => githubCommitIsAncestor(TRUSTED_REPOSITORY_SLUG, ancestorSha, descendantSha, options.repoRoot),
+    isAncestor: (ancestorSha, descendantSha) => githubCommitIsAncestor(repositorySlug, ancestorSha, descendantSha, options.repoRoot),
   });
   const projection = projectPackReviewSemanticStatus({
-    runner: currentPackReviewStatusFact(TRUSTED_REPOSITORY_SLUG, currentHead, options.repoRoot),
+    runner: currentPackReviewStatusFact(repositorySlug, currentHead, options.repoRoot),
     direct: { hasLegitimateReview: direct.hasLegitimateReview, unresolvedBlockingFinding: direct.state === 'blocked' },
   });
   if (!options.dryRun) await publishPackReviewRequiredStatus({
-    repoRoot: options.repoRoot, repoSlug: TRUSTED_REPOSITORY_SLUG, headSha: currentHead,
+    repoRoot: options.repoRoot, repoSlug: repositorySlug, headSha: currentHead,
     request: semanticPackReviewRequiredStatusRequest({ headSha: currentHead, projection }),
   });
   emit({ ok: true, projection, direct }, options.json); return 0;
@@ -2089,7 +2096,7 @@ export function beginSmokeOrdering(
     if (actor === 'worker-owned' && plan.requirement !== 'not-applicable') return null;
     if (actor !== 'worker-owned') throw new WorkerSmokeHarnessError('smoke_ordering_tier_missing');
   }
-  const projectId = 'orchestrator-pack';
+  const projectId = selectedSmokeProject().projectId;
   const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: process.env.PACK_REVIEW_RUN_STORE_ROOT });
   const authorityOptions: PackReviewAuthorityOptions = { storeRoot };
   const reviewRuns = listPackReviewRuns({ projectId, storeRoot });
