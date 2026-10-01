@@ -702,6 +702,24 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(state.reloads).toBe(0);
   });
 
+  it('returns product_error_banner with the alert heading for an unknown red banner when the owner is unrendered', async () => {
+    const prompt = 'PROMPT-UNKNOWN-BANNER';
+    const output = join(stateDir, 'unknown-banner.txt');
+    const { page, state } = unrenderedOwnedMessagePage(prompt, 'NEVER-FINISHED', false, false, 'Something went wrong\nTry again later.\nRetry');
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output);
+
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({
+      state: 'recovery_required',
+      scope: 'conversation',
+      cause: 'product_error_banner',
+      product_banner_text: 'Something went wrong',
+      send_count: 1,
+    });
+    expect(state.reloads).toBe(0);
+  });
+
   it('reloads the owned conversation once when a finished answer renders without the owned user message (#2197)', async () => {
     const prompt = 'PROMPT-UNRENDERED';
     const reply = 'UNRENDERED-OK';

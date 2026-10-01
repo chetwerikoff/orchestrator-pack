@@ -124,12 +124,13 @@ describe('execute-Issue manager boundary', () => {
     expect(JSON.parse(probePause.result.pause.evidence)).toEqual(envelope);
   });
 
-  it('uses GitHub-first reconciliation for the four supported conversation causes', () => {
+  it('uses GitHub-first reconciliation for the supported conversation causes', () => {
     for (const cause of [
       'message_delivery_timed_out',
       'product_network_error',
       'message_stream_error',
       'stream_recovery_polling_timed_out',
+      'product_error_banner',
     ]) {
       const evaluated = classifyExecuteIssueManagerRecord(turn('recovery_required', { scope: 'conversation', cause }), context);
       expect(evaluated.exitCode).toBe(3);

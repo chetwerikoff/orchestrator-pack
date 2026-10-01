@@ -21,6 +21,7 @@ const EXECUTION_RECOVERY_CAUSES = new Set<ExecutionRecoveryProductCause>([
   'product_network_error',
   'message_stream_error',
   'stream_recovery_polling_timed_out',
+  'product_error_banner',
 ]);
 
 function projectExecutionRecoveryTerminal(value: unknown): unknown {
