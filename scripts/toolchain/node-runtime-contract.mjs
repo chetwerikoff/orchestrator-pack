@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -216,18 +215,13 @@ export function evaluateNpmRuntimeContract({
 }
 
 export function assertNpmRuntimeContract(repoRoot, actualVersion) {
-  const declaration = readNodeRuntimeDeclaration(repoRoot);
-  let version = actualVersion;
-  if (version === undefined) {
-    try {
-      version = execFileSync('npm', ['--version'], { cwd: resolve(repoRoot), encoding: 'utf8' }).trim();
-    } catch (error) {
-      throw contractError('OPK_NPM_RUNTIME_MISSING', `cannot execute npm: ${error instanceof Error ? error.message : String(error)}`);
-    }
+  if (typeof actualVersion !== 'string' || actualVersion.trim() === '') {
+    throw contractError('OPK_NPM_RUNTIME_VERSION_MISSING', 'installed npm version must be observed by the caller');
   }
+  const declaration = readNodeRuntimeDeclaration(repoRoot);
   return evaluateNpmRuntimeContract({
     versionFileNpmMajor: declaration.versionFileNpmMajor,
     npmEngineText: declaration.npmEngineText,
-    actualVersion: version,
+    actualVersion,
   });
 }
