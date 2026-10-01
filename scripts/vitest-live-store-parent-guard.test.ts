@@ -156,17 +156,24 @@ describe('parent live-store guard', () => {
     expect(child.exitCode, child.stderr).toBe(0);
   });
 
-  it('settles the files a running supervisor writes in the live cutover layout', () => {
+  it('settles project-scoped orchestration mail reconcile state only for the selected project', () => {
+    const projectId = 'orchestrator-pack';
     expect(isExternalWakeSupervisorSnapshotOnlyChange([
       'supervisor/typescript-supervisor-status.json',
       'supervisor/projected-registry.json',
       'orchestration-mail-reconcile.json',
       'orchestration-mail-reconcile.lock',
-    ])).toBe(true);
+      `${projectId}/orchestration-mail-reconcile.json`,
+      `${projectId}/orchestration-mail-reconcile.lock`,
+    ], projectId)).toBe(true);
+    expect(isExternalWakeSupervisorSnapshotOnlyChange([
+      'supervisor/typescript-supervisor-status.json',
+      'another-project/orchestration-mail-reconcile.json',
+    ], projectId)).toBe(false);
     expect(isExternalWakeSupervisorSnapshotOnlyChange([
       'supervisor/typescript-supervisor-status.json',
       'supervisor/unrelated-live-store-leak.json',
-    ])).toBe(false);
+    ], projectId)).toBe(false);
   });
   it('settles an external selected-project worker report-store transaction', () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-worker-report-'));
@@ -225,9 +232,13 @@ describe('parent live-store guard', () => {
       'utf8',
     );
     const childEnvironment = productionEnvironment(join(root, 'child-production'));
+    const projectId = 'orchestrator-pack';
+    childEnvironment.OPK_PROJECT_ID = projectId;
     const wakeRoot = childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!;
+    const projectStateDir = join(wakeRoot, projectId);
     const supervisorDir = join(wakeRoot, 'supervisor');
     mkdirSync(supervisorDir, { recursive: true });
+    mkdirSync(projectStateDir, { recursive: true });
     const durableWrite = (target: string, name: string, content: string): void => {
       const temporary = join(supervisorDir, `.${name}.1234.00000000-0000-4000-8000-000000000000.tmp`);
       writeFileSync(temporary, content, 'utf8');
@@ -235,8 +246,8 @@ describe('parent live-store guard', () => {
     };
     const status = join(supervisorDir, 'typescript-supervisor-status.json');
     const projected = join(supervisorDir, 'projected-registry.json');
-    const reconcile = join(wakeRoot, 'orchestration-mail-reconcile.json');
-    const reconcileLock = join(wakeRoot, 'orchestration-mail-reconcile.lock');
+    const reconcile = join(projectStateDir, 'orchestration-mail-reconcile.json');
+    const reconcileLock = join(projectStateDir, 'orchestration-mail-reconcile.lock');
     writeFileSync(status, '{"restartState":"waiting-restart"}\n', 'utf8');
     writeFileSync(projected, '{"children":[]}\n', 'utf8');
     writeFileSync(reconcile, '{"messages":{}}\n', 'utf8');

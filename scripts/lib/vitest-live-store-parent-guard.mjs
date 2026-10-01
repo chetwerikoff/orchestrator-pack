@@ -40,7 +40,9 @@ function isExternallyMutableWakePath(relativePath, projectId) {
   const reportPrefix = projectReportStoreRelativePath(projectId, '');
   return allowed.has(relativePath)
     || (reportPrefix !== '' && relativePath === reportPrefix.slice(0, -1))
-    || relativePath === projectReportStoreRelativePath(projectId, 'worker-report-store.json');
+    || relativePath === projectReportStoreRelativePath(projectId, 'worker-report-store.json')
+    || relativePath === projectReportStoreRelativePath(projectId, 'orchestration-mail-reconcile.json')
+    || relativePath === projectReportStoreRelativePath(projectId, 'orchestration-mail-reconcile.lock');
 }
 function isExternallyMutableWakeSidecarPath(relativePath, projectId) {
   const reportPrefix = projectReportStoreRelativePath(projectId, '');
