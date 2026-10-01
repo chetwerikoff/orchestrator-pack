@@ -84,7 +84,7 @@ green; the automation Chrome is logged into ChatGPT; and Orca is running.
    `GH_WRAPPER_ACTIVE` is an internal recursion marker and does not bypass this
    check. Do not set `GH_REPO` as a target selector.
 
-5. **Pack policy in the target.** Run:
+4. **Pack policy in the target.** Run:
 
    ```bash
    node --experimental-strip-types "$PACK_ROOT/scripts/lib/Invoke-TypeScriptCli.ts" --repo-root "$PACK_ROOT" --script "$PACK_ROOT/scripts/bootstrap.ts" -- --target-repo <primaryRoot>
