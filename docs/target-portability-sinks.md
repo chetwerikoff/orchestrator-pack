@@ -2,8 +2,9 @@
 
 ## Provenance
 
-- Audited implementation-PR base: `23adc0c4214d4d47cccc8728d7cb147d793ce678`.
-- The PR's bound base SHA remains `23adc0c4214d4d47cccc8728d7cb147d793ce678`. The default branch later advanced to `c51d7b9e0b451a12e76a144bd8ef4e91122a8ff0` via PR #2304, leaving this PR `behind` but not changing its bound base; per Issue #2161 sequencing the worker does not merge the moving default branch merely to clear that state. The #2304 delta is limited to Browser-turn alert handling plus its declaration and does not introduce a selector into this PR diff.
+- Audited implementation-PR base: `435683abea628c9dc185e45a84bda40cc9f5bb7b` (`main` at final reconciliation).
+- The first implementation lineage was cut from `23adc0c4214d4d47cccc8728d7cb147d793ce678`. While findings were being fixed, the live PR base advanced to `435683abea628c9dc185e45a84bda40cc9f5bb7b` and GitHub reported the PR non-mergeable. The existing branch was therefore synchronized with exactly that live base in merge-sync commit `6197ddca965fac376d78f09d3a8fab6b18e478c8`; no second branch or PR was created.
+- The base refresh contained 83 default-branch commits. Only four current-base paths overlapped #2188-owned changes: `.cursor/skills/merge-with-local-adoption/SKILL.md`, `scripts/draft-discipline.mjs`, `scripts/pack-review-runner.ts`, and `scripts/worker-smoke-run.ts`. The first three merged without semantic conflict. The worker-smoke refactor already carried selected-repository routing but still retained pack/default-branch literals; reconciliation kept the refactor and reapplied the #2188 project/default-branch bindings. GitHub read-back then reported the PR mergeable again.
 - Audit universe: tracked non-test production/instruction files under `scripts/**`, `plugins/**`, `prompts/**`, `.cursor/skills/**`, `.claude/skills/**`, `.github/workflows/**`, plus the three documentation paths allowed by Issue #2188.
 - Explicitly excluded by the Issue contract: `packages/core/**`, `vendor/**`, test-only files, fixture-only files, and files outside the allowed roots.
 - Test files are evidence only; they are not selector rows.
@@ -34,7 +35,7 @@ Search terms/classes:
 Reproducible local search:
 
 ```bash
-BASE=23adc0c4214d4d47cccc8728d7cb147d793ce678
+BASE=435683abea628c9dc185e45a84bda40cc9f5bb7b
 ROOTS=(
   scripts plugins prompts .cursor/skills .claude/skills .github/workflows
   docs/target-portability-sinks.md docs/target_repo_setup.md docs/migration_notes.md
@@ -71,6 +72,7 @@ with target identity.
 | T14 | `.cursor/skills/create-issue-draft/SKILL.md`, `publish-issue-draft/SKILL.md`, `merge-with-local-adoption/SKILL.md`, `direct-fix-checklist/SKILL.md`, `prompts/investigate_root_cause.md` | target-running instruction repo/base | `target` | Instructions now resolve the selected project card and bind target repository/default branch rather than naming the pack repo or `main` for target effects. |
 | D01 | `scripts/lib/target-context.ts`, project-card schema/binding, extra-remote behavior | project/repository/default branch/project URL | `done in #2185/#2186/#2187` | #2185 established card authority and origin validation while permitting unrelated extra remotes; #2187 owns target verification. This Issue reuses the resolver rather than introducing another selector. |
 | D02 | wake-supervisor/project state roots, worker assignment/smoke receipt state, cutover migration/bindings | project state namespace | `done in #2185/#2186/#2187` | #2186 moved target supervisor/control-plane state to project namespaces and bound repository identity. Residual pack defaults are library/non-target compatibility defaults; target launchers supply/require the selected project. T04 fixes the one known producer that could recreate flat create-Issue journal state. |
+| D03 | `scripts/chatgpt-browser-turn/state-light-turn-base.ts::browserTurnRecurrencePath/readBrowserTurnProjectIdentity` | Browser-turn recurrence project/repository state binding | `done on current base` | The refreshed base introduced/changed this state-only surface. When `OPK_PROJECT_ID` is present it namespaces recurrence state by project and validates the selected project card plus persisted project/repository binding before appending incident state; without a selector it uses the legacy non-target recurrence path. It does not choose a GitHub Issue/PR repository for target effects, so no new #2188 transport selector is introduced. |
 | P01 | `scripts/lib/gh-rest-routes.mjs` + `scripts/lib/gh-inventory-match.mjs` fixed runtime-history routes | fixed runtime-history repository/status policy | `pack-only` | The fixed slug is used only by route IDs named `runtime-history-*`, including the pack `main` protection/status-history endpoints. Generic PR/Issue routes accept the repo object supplied through T01 and are covered by T01/T02. |
 | P02 | `scripts/vitest-runtime-history-delivery.mjs`, `scripts/lib/vitest-runtime-history-merge.mjs`, matching runtime-history workflows | runtime-history delivery repo/base/status contexts | `pack-only` | These modules explicitly validate `TARGET_REPOSITORY = chetwerikoff/orchestrator-pack`, pack runtime-history contexts, and the dedicated runtime-history workflow path; they reject any other repository. This is pack CI history delivery, not target task routing. |
 | P03 | `scripts/pr2a/closure-receipt.ts`, `scripts/pr2a/closed-world-scanner.ts`, `scripts/pr2a/contracts.ts`, `scripts/pr2a/planning-manifest.json` and PR2A conformance/precutover helpers | PR2A evidence repository | `pack-only` | The closure receipt validates pack-specific PR2A evidence (including Issue 928 and exact pack repository). Issue #2188 explicitly keeps it audit-only and out of the target smoke. |
@@ -146,11 +148,11 @@ No test performs a live remote write.
 
 Immediately before handoff:
 
-1. verify the PR merge-base still equals
-   `23adc0c4214d4d47cccc8728d7cb147d793ce678`; if it does not, regenerate this
-   audit against the new base;
+1. verify the live PR base and PR merge-base still equal
+   `435683abea628c9dc185e45a84bda40cc9f5bb7b`; if either moves, regenerate this
+   audit against the new base before handoff;
 2. rerun the discovery recipe over the final checkout, with the same exclusions;
-3. inspect `git diff --name-only 23adc0c4214d4d47cccc8728d7cb147d793ce678...HEAD`;
+3. inspect `git diff --name-only 435683abea628c9dc185e45a84bda40cc9f5bb7b...HEAD` and separately prove the final head remains a strict descendant of the reviewed findings head `0be7a502ac5fae9958223c8b844870a0228ddeb0`;
 4. confirm every introduced/changed repository/project/base/state selector is
    already represented by a T/D/P/C row above;
 5. confirm no changed path is outside Issue #2188 allowed roots or inside its
