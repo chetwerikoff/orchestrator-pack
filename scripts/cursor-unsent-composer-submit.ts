@@ -220,9 +220,13 @@ function exactOrchestrationPointer(preview: string): ExactOrchestrationPointer |
     const matches = [...normalizedCandidate.matchAll(pointerPattern)];
     const commands = matches.map((match) => match[1] ?? '');
     const remainder = normalizedCandidate.replace(pointerPattern, '').replace(/\s+/gu, '');
-    const text = matches[0]?.[0];
-    if (text && commands.length > 0 && !remainder && commands.every((command) => command === commands[0])) {
-      return { command: commands[0]!, text };
+    const command = commands[0];
+    if (command && !remainder && commands.every((candidateCommand) => candidateCommand === command)) {
+      const observed = source.join(' ').match(/You have \\d+ orchestration messages?\\b.*?Run \\x60[^\\x60]+\\x60\\./iu)?.[0];
+      const text = observed
+        ? observed.replace(/\\s+/gu, ' ').replace(/\\x60[^\\x60]+\\x60(?=\\.$)/u, `\`${command}\``)
+        : matches[0]?.[0];
+      if (text) return { command, text };
     }
   }
   return undefined;

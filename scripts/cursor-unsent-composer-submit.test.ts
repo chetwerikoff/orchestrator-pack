@@ -1632,8 +1632,10 @@ describe('delivery-triggered composer submission', () => {
     expect(spawned.status).toBe('ok');
     if (spawned.status !== 'ok') return;
 
+    const submitDeps = createAdapterSubmitDeps(adapter, () => ({ ok: true, result: {} }));
     const result = await submitUnsentCursorComposerOnceForWorker(spawned.value, {
-      ...createAdapterSubmitDeps(adapter, () => ({ ok: true, result: {} })),
+      ...submitDeps,
+      readAsync: async (worker) => submitDeps.read(worker),
       liveness: () => 'busy',
       sentStorePath: undefined,
     });
