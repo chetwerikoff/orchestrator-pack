@@ -41,6 +41,16 @@ function restoreEnv(): void {
   }
   savedEnv.clear();
 }
+function isolatedChildEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = { ...base };
+  for (const key of [
+    'OPK_SIDE_PROCESS_CHILD_ID',
+    'OPK_SIDE_PROCESS_OWNER_PID',
+    'OPK_SIDE_PROCESS_PROGRESS_DIR',
+    'OPK_SIDE_PROCESS_LIVENESS_ACTIVE',
+  ]) delete env[key];
+  return env;
+}
 
 function git(root: string, ...args: string[]): void {
   const result = runProcessSync({ command: 'git', args, cwd: root, inheritParentEnv: true });
@@ -82,6 +92,16 @@ afterEach(() => {
 });
 
 describe('Issue #2188 target portability sinks', () => {
+  it('does not propagate supervisor liveness identity into fixture subprocesses', () => {
+    expect(isolatedChildEnv({
+      PATH: '/bin',
+      OPK_SIDE_PROCESS_CHILD_ID: 'fixture-child',
+      OPK_SIDE_PROCESS_OWNER_PID: '1234',
+      OPK_SIDE_PROCESS_PROGRESS_DIR: '/live/progress',
+      OPK_SIDE_PROCESS_LIVENESS_ACTIVE: '1',
+    })).toEqual({ PATH: '/bin' });
+  });
+
   it('drives the real publication and canonical PR-read seams through either selected card', async () => {
     const fixture = twoTargetFixture();
     const issuePrNumber = 77;
@@ -344,7 +364,7 @@ describe('Issue #2188 target portability sinks', () => {
         command: join(process.cwd(), 'scripts', 'gh'),
         args,
         cwd: join(fixture.root, 'alpha'),
-        env: {
+        env: isolatedChildEnv({
           ...process.env,
           PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin`,
           HOME: fixture.env.HOME,
@@ -353,7 +373,7 @@ describe('Issue #2188 target portability sinks', () => {
           OPK_NATIVE_GH_AUDIT: audit,
           GH_REAL_BINARY: fakeGh,
           GH_WRAPPER_ACTIVE: '',
-        },
+        }),
       });
       expect(result.ok).toBe(false);
       expect(result.stderr).toContain('target-gh-repository-mismatch');
@@ -402,7 +422,7 @@ describe('Issue #2188 target portability sinks', () => {
       command: join(process.cwd(), 'scripts', 'gh'),
       args: ['pr', 'view', '12', '--json', 'number,headRefName,isDraft'],
       cwd: fixture.root,
-      env: {
+      env: isolatedChildEnv({
         ...process.env,
         PATH: `${bin}:/usr/bin:/bin`,
         GH_WRAPPER_ACTIVE: '',
@@ -411,7 +431,7 @@ describe('Issue #2188 target portability sinks', () => {
         OPK_FAKE_GH: fakeGh,
         OPK_GH_AUDIT: audit,
         OPK_REAL_NODE: process.execPath,
-      },
+      }),
     });
     expect(result.ok, result.stderr || result.error).toBe(true);
     expect(readFileSync(audit, 'utf8')).toContain('api repos/example/alpha/pulls/12');

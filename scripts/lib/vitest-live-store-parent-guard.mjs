@@ -271,7 +271,12 @@ export function startParentLiveStoreGuard(env = process.env) {
         if (!retained.includes(failure)) retained.push(failure);
       }
       if (retained.length > 0) {
-        const error = new Error(`OPK_VITEST_LIVE_STORE_GUARD_FAILED ${retained.join(',')}`);
+        const changedPathDetails = [...changedPathsByStore.entries()]
+          .filter(([storeId, paths]) => paths.length > 0 && retained.includes(`${storeId}:snapshot_changed`))
+          .map(([storeId, paths]) => `${storeId}=${JSON.stringify(paths)}`)
+          .join(' ');
+        const detail = changedPathDetails ? ` changed_paths=${changedPathDetails}` : '';
+        const error = new Error(`OPK_VITEST_LIVE_STORE_GUARD_FAILED ${retained.join(',')}${detail}`);
         error.code = 'OPK_VITEST_LIVE_STORE_GUARD_FAILED';
         error.failures = retained;
         throw error;

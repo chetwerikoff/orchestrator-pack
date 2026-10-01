@@ -324,6 +324,7 @@ describe('parent live-store guard', () => {
 
     expect(child.exitCode).not.toBe(0);
     expect(child.stderr).toContain('OPK_VITEST_LIVE_STORE_GUARD_FAILED');
+    expect(child.stderr).toContain('unrelated-live-store-leak.json');
   });
 
   it('retains a child-originated live-store mutation when the watcher observes it', async () => {
