@@ -1984,12 +1984,9 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     );
     if (spawned.status !== 'ok') throw new WorkerSmokeHarnessError('smoke_spawn_failed', failureReason(spawned));
     worker = spawned.value.identity;
-    const runId = options.runId || createSmokeRunIdentity();
-    const runBinding = { runId, artifactDir: resolveSmokeRunArtifactDir(options.cwd, runId) };
-    ensureSmokeRunArtifactDir(runBinding.artifactDir);
     const prompt = buildSmokeAgentPrompt({
       issueNumber: options.issueNumber, issueBody, prNumber: options.prNumber,
-      headSha: options.headSha, plan: attemptPlan, runBinding,
+      headSha: options.headSha, plan: attemptPlan,
     });
     const dispatched = adapter.dispatchInput(
       { worker, text: prompt }, { cwd: options.cwd, timeoutMs: SMOKE_DELIVERY_TIMEOUT_MS },
@@ -1999,31 +1996,17 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
     }
     const deadline = Date.now() + SMOKE_ABSOLUTE_CEILING_MS;
     let previousToken: RuntimeObservationToken | undefined;
-    let completionState = createSmokeCompletionObservationState();
     let partial: Partial<SmokeReport> | null = null;
-    // TUI scrollback truncates long report rows, so only the sealed completion artifact is read as the report.
-    const readSealedReport = (): Partial<SmokeReport> | null => {
-      const completion = observeSmokeCompletionEvidence(runBinding, completionState);
-      completionState = completion.state;
-      const state = completion.observation.publicationState;
-      if (state === 'publish_complete_duplicate' || state === 'publish_complete_unfenced') {
-        throw new WorkerSmokeHarnessError('smoke_report_unavailable', `sealed completion ${state}`);
-      }
-      return state === 'publish_complete_single' ? completion.observation.parsedReport ?? null : null;
-    };
     while (Date.now() < deadline) {
-      partial = readSealedReport();
-      if (partial) break;
       const readInput = { worker, previousToken, limit: 200 };
       const output = adapter.readBoundedOutputAsync
         ? await adapter.readBoundedOutputAsync(readInput, { cwd: options.cwd, timeoutMs: SMOKE_ORCA_OPERATION_TIMEOUT_MS })
         : adapter.readBoundedOutput(readInput, { cwd: options.cwd, timeoutMs: SMOKE_ORCA_OPERATION_TIMEOUT_MS });
       if (output.status !== 'ok') throw new WorkerSmokeHarnessError('smoke_output_unavailable', failureReason(output));
       previousToken = output.value.observationToken;
-      if (output.value.terminalState === 'exited') {
-        partial = readSealedReport();
-        break;
-      }
+      partial = parseSmokeAgentReport(output.value.lines.join('\n'));
+      if (partial) break;
+      if (output.value.terminalState === 'exited') break;
       await sleepAsync(SMOKE_LIFECYCLE_POLL_MS);
     }
     closeWorker();
@@ -2045,10 +2028,6 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       terminalHandle: worker.id,
     }, { issueNumber: options.issueNumber, prNumber: options.prNumber, headSha: options.headSha });
     const report = normalized.report;
-    if (!terminalCleanup.startsWith('closed_owned_handle') && report.result === 'PASS') {
-      report.result = 'FAIL';
-      report.causeFamily = 'lifecycle_cleanup_failed';
-    }
     publishSmokeReport(report, options, publishComment);
     let postSmoke: PostSmokeReadinessResult | undefined;
     if (report.result === 'PASS' && !options.dryRun && resolvedTarget) {

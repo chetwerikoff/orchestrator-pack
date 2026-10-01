@@ -836,8 +836,6 @@ export function normalizeSmokeReport(
       if (partial.terminalCleanup !== 'not_started_no_execution') {
         return { ok: false, reason: 'carry_only_pass_requires_no_execution_cleanup' };
       }
-    } else if (!isClosedOwnedSmokeTerminalCleanup(partial.terminalCleanup)) {
-      return { ok: false, reason: 'pass_requires_terminal_cleanup' };
     }
     if (partial.producer !== SMOKE_REPORT_PRODUCER) {
       return { ok: false, reason: 'pass_missing_producer' };

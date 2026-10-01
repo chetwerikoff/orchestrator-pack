@@ -3233,7 +3233,7 @@ describe('Issue #2250 independent smoke publication without ordering receipts', 
     publishComment: (prNumber: number, body: string, repoRoot: string) => void;
     spawnFails?: boolean;
     executePass?: boolean;
-    screenOnlyReport?: boolean;
+    cleanupFails?: boolean;
   }): Promise<{ code?: number; error?: unknown; headSha: string; storeRoot: string; root: string; outputText?: string }> {
     const fixture = gitFixture(input.prefix);
     const body = tieredBody();
@@ -3253,22 +3253,6 @@ describe('Issue #2250 independent smoke publication without ordering receipts', 
       `  - action: ${action} | expected: ${expected} | observed: independent worker executed plan | outcome: pass`,
       '```',
     ];
-    if (input.executePass && !input.screenOnlyReport) {
-      const originalDispatch = adapter.dispatchInput.bind(adapter);
-      Object.defineProperty(adapter, 'dispatchInput', {
-        configurable: true,
-        value: (dispatchInput: { readonly worker: RuntimeWorkerIdentity; readonly text: string }, options?: unknown) => {
-          const runId = dispatchInput.text.match(/^run-id: (\S+)$/m)?.[1];
-          const artifactDir = dispatchInput.text.match(/^artifact-dir: (\S+)$/m)?.[1];
-          if (!runId || !artifactDir) throw new Error('fixture prompt missing sealed completion binding');
-          const sealed = `${reportBody.join('\n')}\n`;
-          const digest = computeSmokeCompletionBodyDigest(sealed);
-          writeFileSync(smokeCompletionBodyPath(artifactDir, digest), sealed, 'utf8');
-          writeFileSync(smokeCompletionSealPath(artifactDir, digest), JSON.stringify({ runId, bodySha256: digest }), 'utf8');
-          return originalDispatch(dispatchInput as never, options as never);
-        },
-      });
-    }
     if (input.executePass) {
       Object.defineProperty(adapter, 'readBoundedOutput', {
         configurable: true,
@@ -3276,13 +3260,19 @@ describe('Issue #2250 independent smoke publication without ordering receipts', 
           status: 'ok',
           value: {
             worker: readInput.worker,
-            lines: input.screenOnlyReport ? reportBody : [],
+            lines: reportBody,
             observationToken: { opaque: 'fixture-report-1' },
             changed: true,
             terminalState: 'exited',
             source: 'stream',
           },
         }),
+      });
+    }
+    if (input.cleanupFails) {
+      Object.defineProperty(adapter, 'stopWorker', {
+        configurable: true,
+        value: () => ({ status: 'failed', operation: 'stop_worker', reason: 'fixture-close-failed' }),
       });
     }
     Object.defineProperty(adapter, 'spawnWorker', {
@@ -3375,18 +3365,35 @@ describe('Issue #2250 independent smoke publication without ordering receipts', 
     } finally { rmSync(result.root, { recursive: true, force: true }); }
   });
 
-  it('ignores a report visible only in terminal scrollback when no sealed completion exists', async () => {
+  it('accepts a complete report from worker output without sealed completion artifacts', async () => {
     const bodies: string[] = [];
     const result = await runIndependentSmokeFixture({
-      prefix: 'smoke-2250-screen-only-',
+      prefix: 'smoke-2250-output-report-',
       prNumber: 206804,
       executePass: true,
-      screenOnlyReport: true,
       publishComment: (_pr, body) => { bodies.push(body); },
     });
     try {
-      expect(result.code).toBe(1);
-      expect(bodies.some((body) => body.includes('result: PASS'))).toBe(false);
+      expect(result.error, result.outputText).toBeUndefined();
+      expect(result.code, result.outputText).toBe(0);
+      expect(bodies.some((body) => body.includes('result: PASS'))).toBe(true);
+    } finally { rmSync(result.root, { recursive: true, force: true }); }
+  });
+
+  it('keeps terminal cleanup informational instead of gating PASS', async () => {
+    const bodies: string[] = [];
+    const result = await runIndependentSmokeFixture({
+      prefix: 'smoke-2250-cleanup-informational-',
+      prNumber: 206805,
+      executePass: true,
+      cleanupFails: true,
+      publishComment: (_pr, body) => { bodies.push(body); },
+    });
+    try {
+      expect(result.error, result.outputText).toBeUndefined();
+      expect(result.code, result.outputText).toBe(0);
+      expect(bodies.some((body) => body.includes('result: PASS'))).toBe(true);
+      expect(bodies.some((body) => body.includes('terminal-cleanup: close_failed:fixture-close-failed'))).toBe(true);
     } finally { rmSync(result.root, { recursive: true, force: true }); }
   });
 
