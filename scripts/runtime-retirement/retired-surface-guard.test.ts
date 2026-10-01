@@ -144,7 +144,7 @@ describe('runtime retirement closed-world scanner', () => {
     const path = 'scripts/toolchain/typescript-runtime-policy.spec.ts';
     const target = join(root, path);
     mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, 'pwsh -File scripts/verify.ps1\n');
+    writeFileSync(target, 'const value = process.env.AO_SESSION_ID;\n');
 
     const result = scanRetiredRuntimeSurfaces({ repoRoot: root, paths: [path] });
     expect(result.excludedPaths).toEqual([path]);
