@@ -39,10 +39,10 @@ shorthand.
 Binding examples:
 
 ```text
-https://github.com/chetwerikoff/orchestrator-pack/issues/1453 менеджер -> create-issue-draft
-https://github.com/chetwerikoff/orchestrator-pack/issues/1453 manager -> create-issue-draft
-https://github.com/chetwerikoff/orchestrator-pack/issues/1453 выполни -> execute-issue-with-gpt
-https://github.com/chetwerikoff/orchestrator-pack/issues/1453 manager выполни задачу -> execute-issue-with-gpt
+https://github.com/<owner>/<repo>/issues/1453 менеджер -> create-issue-draft
+https://github.com/<owner>/<repo>/issues/1453 manager -> create-issue-draft
+https://github.com/<owner>/<repo>/issues/1453 выполни -> execute-issue-with-gpt
+https://github.com/<owner>/<repo>/issues/1453 manager выполни задачу -> execute-issue-with-gpt
 ordinary prose mentioning manager without an Issue target -> no shorthand activation
 ```
 
