@@ -1,3 +1,8 @@
+/**
+ * Issue #2256: retain legacy action schemas for transport and execute consumers;
+ * they are not a source of create-Issue review or label authority. See
+ * create-issue-manager-boundary.ts for the current acceptance boundary.
+ */
 export const CREATE_ISSUE_NEXT_ACTION_SCHEMA = 'create-issue-next-action/v1' as const;
 export const CREATE_ISSUE_STALE_ACTION_SCHEMA = 'create-issue-stale-next-action/v1' as const;
 

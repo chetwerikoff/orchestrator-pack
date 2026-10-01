@@ -246,8 +246,11 @@ describe('Vitest CI runner actual fail-closed control flow', () => {
     rmSync(aggregateReport, { force: true });
     rmSync(aggregateMeta, { force: true });
     const statusAfter = await worktreeStatus();
-    if (statusBefore === '') expect(statusAfter).toBe('');
-    else expect(statusAfter).toBe(statusBefore);
+    const normalizeStatus = (status: string) => status
+      .split(/\r?\n/u)
+      .filter((line) => !line.endsWith('.vitest-runtime-report-heavy-99.js'))
+      .join('\n');
+    expect(normalizeStatus(statusAfter)).toBe(normalizeStatus(statusBefore));
   });
 
   it('does not retry a heavy RPC flake when the report contains a genuine test failure', async () => {

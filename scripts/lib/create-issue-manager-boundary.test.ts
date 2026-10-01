@@ -1,7 +1,8 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   CREATE_ISSUE_MANAGER_ENTRYPOINTS,
   createIssueEscalationThreadId,
@@ -21,6 +22,9 @@ import {
   normalizeLegacyResumePredicateInManagerResult,
   type CreateIssueActionBinding,
 } from './create-issue-next-action.ts';
+import { runBrowserAdapter } from '../flow-manager-browser-gpt-long-run.ts';
+import { runCli as runTierGateGuardCli } from '../tier-gate-guard.ts';
+import { HANDOFF_SCHEMA } from '../flow-manager-long-running-child.ts';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -55,6 +59,170 @@ function action(argv: readonly string[]) {
 }
 
 describe('create-Issue manager boundary', () => {
+  it('retains legacy manager helpers only as non-acceptance compatibility after Issue #2256 cutover', () => {
+    const boundary = readFileSync(join(repoRoot, 'scripts/lib/create-issue-manager-boundary.ts'), 'utf8');
+    const actions = readFileSync(join(repoRoot, 'scripts/lib/create-issue-next-action.ts'), 'utf8');
+    expect(boundary).toContain('NOT create-Issue review-completion or');
+    expect(boundary).toContain('per-round author dispositions');
+    expect(boundary).toContain('Historical cleanup of unreachable producers is deliberately deferred');
+    expect(actions).toContain('not a source of create-Issue review or label authority');
+    // Preserve the existing execute-Issue and sender compatibility contracts:
+    expect(CREATE_ISSUE_NEXT_ACTION_KINDS).toContain('execute-github-first-read-only');
+    expect(CREATE_ISSUE_MANAGER_ENTRYPOINTS).toContain('flow-manager-browser-gpt-long-run.ts:main');
+  });
+
+  it('documents comment-based acceptance and non-direct review launch in active owners', () => {
+    const skill = readFileSync(join(repoRoot, '.cursor/skills/create-issue-draft/SKILL.md'), 'utf8');
+    const tiering = readFileSync(join(repoRoot, 'docs/tiering.md'), 'utf8');
+    const carrier = readFileSync(join(repoRoot, '.cursor/rules/flow-manager-browser-turn-monitoring.mdc'), 'utf8');
+    const authorPrompt = readFileSync(join(repoRoot, 'docs/browser-gpt-turn-runbook.md'), 'utf8');
+    expect(skill).toContain('**every required round**');
+    expect(skill).toContain('without awaiting its envelope');
+    expect(skill).toContain('single permitted post-terminal correction');
+    expect(skill).toContain('one required Claude architectural-lens');
+    expect(skill).toContain('**non-direct** form in a fresh project chat');
+    expect(skill).toContain('Do not invoke `scripts/lib/manager-review-brief.ts`');
+    expect(skill).toContain('tier-gate-guard.ts --text "$LIVE_ISSUE_BODY"');
+    expect(skill).toContain('omit both `--text-file` and `--draft-path`');
+    expect(skill).toContain('Browser-GPT adapter is for GPT reviewers only');
+    expect(skill).toContain('separate Claude invocation');
+    expect(skill).toContain('`user.login` or `author_association` metadata');
+    expect(skill).toContain('trusted principal already used for that workflow');
+    expect(carrier).toContain('non-direct** form only for GPT reviewers');
+    expect(carrier).toContain('invocation and comment-publication path');
+    expect(tiering).toContain('No T3 competitive stage');
+    expect(carrier).toContain('ordinary **non-direct** form');
+    expect(carrier).toContain('direct-publication-only identity/context or terminal-bundle arguments');
+    expect(authorPrompt).toContain('<BRIEF_TEXT>');
+    expect(authorPrompt).not.toContain('<BRIEF_REFERENCE>');
+    expect(authorPrompt).toContain('never pass a local path');
+  });
+
+  it('runs the existing substantive floor on Issue text without draft artifacts', () => {
+    const liveIssueBody = [
+      '# Content-only tier gate fixture',
+      '',
+      '## Goal',
+      'Publish a revision-ready result.',
+      '',
+      '```behavior-kind',
+      'action-producing',
+      '```',
+      '',
+      '```positive-outcome',
+      'asserts: publishes an unambiguous decision',
+      'input: realistic',
+      '```',
+      '',
+      '```complexity-tier',
+      'tier: T2',
+      'advisory-prior: T2',
+      '```',
+      '',
+      '```denylist',
+      'vendor/**',
+      'packages/core/**',
+      '```',
+      '',
+      '```allowed-roots',
+      'docs/reviewable-target.md',
+      '```',
+      '',
+      '## Acceptance criteria',
+      '1. The terminal reviewer can assess this revision.',
+      '',
+      '## Verification',
+      'Run the focused boundary test.',
+      '',
+      '```contract-evidence',
+      'none',
+      '```',
+    ].join('\n');
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(
+      ((chunk: unknown) => { stdout.push(String(chunk)); return true; }) as typeof process.stdout.write,
+    );
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(
+      ((chunk: unknown) => { stderr.push(String(chunk)); return true; }) as typeof process.stderr.write,
+    );
+    try {
+      expect(runTierGateGuardCli(['node', 'tier-gate-guard.ts', '--text', liveIssueBody])).toBe(0);
+      expect(stdout.join('')).toContain('tier-gate guard: PASS');
+      expect(stderr).toEqual([]);
+    } finally {
+      stdoutSpy.mockRestore();
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it('launches comment-based create-Issue review through non-direct long-run without stage artifacts', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-create-issue-non-direct-review-'));
+    const handoffReceipt = join(root, 'handoff.json');
+    const runIdentity = 'run-comment-review';
+    const attemptIdentity = 'attempt-comment-review';
+    const projectUrl = 'https://chatgpt.com/g/g-test/project';
+    const spawnLauncher = vi.fn(async (args: readonly string[]) => {
+      const flagValues = new Map<string, string>();
+      for (const [index, token] of args.entries()) {
+        const value = args[index + 1];
+        if (token.startsWith('--') && value && !value.startsWith('--')) flagValues.set(token, value);
+      }
+      const requiredValue = (flag: string): string => {
+        const value = flagValues.get(flag);
+        if (!value) throw new Error(`fixture launcher missing ${flag}`);
+        return value;
+      };
+      const handoff = {
+        schema: HANDOFF_SCHEMA,
+        run_identity: requiredValue('--run-identity'),
+        attempt_identity: requiredValue('--attempt-identity'),
+        launcher_started_at: '2026-09-30T00:00:00.000Z',
+        handoff_committed_at: '2026-09-30T00:00:00.001Z',
+        completion_mode: 'browser-turn-result-v1',
+      };
+      writeFileSync(requiredValue('--handoff-receipt'), JSON.stringify(handoff));
+      return 2256001;
+    });
+    const stdout = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const code = await runBrowserAdapter([
+        '--run-identity', runIdentity,
+        '--attempt-identity', attemptIdentity,
+        '--handoff-receipt', handoffReceipt,
+        '--invocation-id', 'ba2eee75-4daf-4d43-bb81-9cac51ba9ff6',
+        '--terminal-envelope', join(root, 'terminal.json'),
+        '--output', join(root, 'output.txt'),
+        '--profile', 'test-profile',
+        '--cdp', 'http://127.0.0.1:9222',
+        '--input', join(root, 'reviewer-prompt.txt'),
+        '--new-chat',
+        '--project-url', projectUrl,
+      ], { spawnLauncher });
+      expect(code).toBe(0);
+      expect(spawnLauncher).toHaveBeenCalledTimes(1);
+      const launcherArgs = spawnLauncher.mock.calls[0]![0];
+      expect(launcherArgs).toContain('--new-chat');
+      expect(launcherArgs).toContain('--project-url');
+      expect(launcherArgs).toContain(projectUrl);
+      for (const directOnly of [
+        '--reviewer-source-output', '--reviewer-source', '--repository', '--issue-number',
+        '--source-revision', '--stage', '--source-slot', '--stage-attempt-id',
+        '--terminal-input-bundle', '--review-dir',
+      ]) expect(launcherArgs).not.toContain(directOnly);
+      const result = JSON.parse(String(stdout.mock.calls[0]?.[0] ?? '')) as Record<string, unknown>;
+      expect(result).toMatchObject({
+        ok: true,
+        schema: 'flow-manager-browser-gpt-long-run-accepted/v1',
+        completion_mode: 'browser-turn-result-v1',
+      });
+      expect(result).not.toHaveProperty('publication_expectation');
+    } finally {
+      stdout.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('maps the four outcomes to one JSON object and exit codes 0/3/4/5', () => {
     const fixtures = [
       { expected: 0, value: createIssueTerminalResult({ ok: true, cause: 'completed' }) },

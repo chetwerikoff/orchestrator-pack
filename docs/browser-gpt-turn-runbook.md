@@ -559,12 +559,16 @@ hand off only “background job running”.
 
 ## Universal author prompt template
 
-Copy this prompt and substitute placeholders:
+Copy this prompt and substitute placeholders. Browser GPT sees only this chat and GitHub; never pass a local path (`~/.local/state/**`, `/tmp/**`, a worktree) as input — paste the content or give a GitHub link:
 
 ```text
 Role: author for <REPOSITORY>.
 Mode: <brief-only-create|revise-existing-issue>.
-Authoritative input: <BRIEF_REFERENCE> or live Issue <ISSUE_URL>; expected revision: <EXPECTED_REVISION>.
+Authoritative input for brief-only-create (paste binding sections, or the whole brief with background sections marked):
+<BRIEF_TEXT>
+[paste actual brief content here]
+</BRIEF_TEXT>
+For revise-existing-issue, authoritative input is live Issue <ISSUE_URL>; expected revision: <EXPECTED_REVISION>.
 
 Read the live target through GitHub when an Issue exists. Follow the canonical
 create-issue-draft procedure and current tier, floor, and scope rules.
