@@ -160,9 +160,9 @@ A direct blocking review on an unchanged head remains blocking until an authoriz
 adjudication makes it irrelevant or the code changes. On a later descendant head,
 prior direct blockers are coarsely resolved when the accepted exact-current
 WorkerReport is `ready_for_review` or `completed`, required CI is green for that
-head, and exact-head smoke passes. No fresh clean re-review or per-finding mapping is
-required solely to close that completed fix cut. A later canonical blocking review
-reopens the gate.
+head, and a same-PR smoke PASS from any report head exists. No fresh clean re-review
+or per-finding mapping is required solely to close that completed fix cut. A later
+canonical blocking review reopens the gate.
 
 ### Optional GitHub Actions review
 
@@ -220,12 +220,14 @@ smoke, and durable handoff. `pack-worker-report` may record lifecycle state only
 after proving repository, worker, PR, and head binding. If that binding cannot be
 proved, the report write is skipped without weakening the remaining obligations.
 
-Required CI and smoke must bind to the same current head. A previous-head pass,
-missing check, stale review, or unverifiable receipt does not satisfy acceptance.
-After exact-head smoke PASS, readiness is derived from current facts rather than
-persisted as a second lifecycle state: PR/target/head identity, required CI, review
-obligation and unresolved blockers, at-cap facts, exact-head smoke, and the accepted
-current WorkerReport corroborated by WorkerStatus must all be acceptable.
+Required CI, review findings, and handoff remain bound to the current PR head.
+A previous-head CI pass, missing current-head check, stale review, or
+unverifiable handoff receipt does not satisfy those obligations. One same-PR
+smoke PASS at any report head satisfies smoke readiness across later heads.
+Readiness is derived from current facts rather than persisted as a second lifecycle
+state: PR/target/head identity, current-head required CI, current review obligation
+and unresolved blockers, at-cap facts, same-PR smoke PASS, and the accepted current
+WorkerReport and handoff corroborated by WorkerStatus must all be acceptable.
 
 ## TypeScript and shell policy
 

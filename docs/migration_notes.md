@@ -9,9 +9,9 @@ remain on their persisted distinct-head caps until their existing terminal/reset
 path completes. They are not reinterpreted in place.
 
 After the new mode records `reviewStageComplete=true`, later commits do not
-consume more required review rounds. CI and smoke remain exact-head checks; the
-pack-review status on a later current head is projected as success with the
-completed-stage description. Worker notification remains best-effort.
+consume more required review rounds. Required CI remains current-head bound; one same-PR
+smoke PASS from any report head remains sufficient on later commits. The pack-review status
+on a later current head is projected as success with the completed-stage description. Worker notification remains best-effort.
 
 Retry decisions are recomputed from current reviewer evidence rather than stored
 as an eligibility flag. Browser GPT uses GitHub publication reconciliation plus

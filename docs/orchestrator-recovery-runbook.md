@@ -41,8 +41,8 @@ Use the pack store only for operational state.
 | Review delivery pending | terminal findings exist but publication is not confirmed | let the single publication owner reconcile; do not create a second sender |
 | Supervisor child unhealthy | identity-bound child has explicit failed/stalled evidence | isolate the child, inspect state and command line, then restart under supervisor policy |
 | Runtime identity unresolved | missing, stale, reused, or mismatched `{ runtime, id, generation }` | perform no effect; refresh through the registered adapter |
-| Worker idle with obligations | open findings, red CI, pending smoke, or incomplete handoff on current head | resume the worker through its owned workflow; do not declare completion |
-| Legitimately idle | no active obligation and no pending current-head work | take no recovery action |
+| Worker idle with obligations | open findings, red current-head CI, or incomplete handoff | resume the worker through its owned workflow; do not declare completion |
+| Legitimately idle | no active obligation or pending current-head work | take no recovery action |
 
 ## Required CI recovery
 
@@ -52,7 +52,8 @@ Use the pack store only for operational state.
 3. Separate infrastructure failure from product failure.
 4. For product failure, fix the narrowest durable contract and push a new head.
 5. Re-run required checks on the new head.
-6. Keep the worker engaged until CI, review, smoke, and handoff all complete.
+6. Keep the worker engaged until current-head CI/review, applicable same-PR
+   smoke, and handoff obligations are complete.
 
 A previous-head pass or a missing check does not satisfy the current head.
 
@@ -148,7 +149,7 @@ Recovery is complete only when all applicable evidence is current and consistent
 - required CI green on the current head;
 - terminal review state on the current head;
 - findings addressed or explicitly dispositioned;
-- smoke passed on the current head;
+- same-PR smoke PASS at any report head;
 - durable worker handoff recorded when binding can be proved;
 - no unresolved runtime identity or hidden fallback.
 

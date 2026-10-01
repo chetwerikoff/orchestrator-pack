@@ -51,7 +51,8 @@ The pack is designed to survive runtime upgrades and replacements:
   lifecycle report command and executes the native TypeScript implementation under the declared Node runtime
   in [`scripts/pack-worker-report.ts`](scripts/pack-worker-report.ts). The retired
   legacy shell implementation is not a compatibility or fallback path.
-- Required CI, smoke, findings, and handoff must all bind to the current PR head.
+- Required CI, review findings, and handoff must bind to the current PR head;
+  a same-PR smoke PASS remains sufficient across later heads.
 
 ### Repository guards
 

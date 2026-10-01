@@ -215,14 +215,15 @@ If the required evidence is absent, do not demand it as though it exists. Use we
 
 A blocking finding that depends on an impossible or unproven witness must be withdrawn or explicitly adjudicated; it must not generate another implementation round whose only purpose is to manufacture evidence the production path does not supply.
 
-## 8. CI, smoke, and review authority stay current-head bound
+## 8. Current-head CI and review authority; PR-scoped smoke PASS
 
-Required CI conclusions apply only to the exact PR head they evaluated.
-For smoke/CI readiness, the newest existing `pack-worker-smoke-report/v1`
-PASS comment on the same PR is sufficient regardless of its report head or
-GitHub author. An earlier-head PASS remains sufficient on later commits; no
-PASS leaves smoke readiness unsatisfied. After review, the same manager Dispatch
-continues into the smoke phase; no independent smoke-worker handoff is required.
+Required CI conclusions apply only to the exact PR head. For an applicable
+scenario-bearing plan, the newest existing `pack-worker-smoke-report/v1`
+PASS comment on the same PR satisfies its smoke portion regardless of report
+head or GitHub author. Without one, that plan's smoke readiness remains
+unsatisfied; `not-applicable` plans require no smoke PASS or publication. After
+review, the same manager Dispatch proceeds to smoke only for applicable plans;
+no independent smoke-worker handoff is required.
 The existing v1 report schema, including head and scenario observations,
 remains unchanged. Review authority remains current-head bound, but reviewer
 invocation and review authority are not the same event: the pack-owned runner
@@ -240,10 +241,7 @@ freezes it only after acquiring its existing start claim.
 After every new commit or history rewrite:
 
 - earlier-head CI is stale and must be revalidated for the current PR head;
-- a same-PR smoke PASS at any report head remains sufficient; no head
-  equality, ancestry, patch-id, carry-only, selective retry, author/role
-  filter, census stabilization, edited-comment refusal, or FAIL precedence
-  is imposed on that PASS;
+- a same-PR smoke PASS at any report head remains sufficient on later PR heads; no rerun is needed solely because the PR head changed;
 - an in-progress required review round remains bound to the head it reviewed;
 - for a new pack-review cycle, required rounds are logical PR/task-cycle units
   with caps T1=1, T2=1, T3=2; T3 round 2 may review the same head as round 1;

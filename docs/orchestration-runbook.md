@@ -668,7 +668,7 @@ are satisfied. Workers and coordinators never merge `main` merely to clear BEHIN
 #### Pack-review recovery recipe
 
 Use the `reconcile --immediate` recipe in `## Deterministic reconciliation`.
-Exact-head CI and declared smoke remain separate gates from review settlement.
+Required CI remains bound to the current head; one same-PR smoke PASS at any report head satisfies smoke readiness and is not a review-settlement gate.
 
 ### Required CI
 

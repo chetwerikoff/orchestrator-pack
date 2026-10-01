@@ -138,6 +138,20 @@ The Issue body uses this order:
 13. **Verification** mapped to ACs;
 14. `contract-evidence` fence or accepted explicit none.
 
+### Smoke plan by change kind
+
+An Issue limited to documentation, policy, prompt, or skill text must declare its
+`smoke-test-plan` as `not-applicable: true` and include a one-line reason. Smoke
+scenarios are only for executable behavior.
+
+When an Issue's goal includes proving that no stale terms, removed commands, or
+old paths remain, write that check as a numbered acceptance criterion containing
+the exact task-specific `rg` command with concrete search terms and repository
+paths (no unresolved placeholders) and its expected empty result. The PR owner
+runs that command before review and quotes the command and result in the PR body.
+Never put a stale-content search in `smoke-test-plan`. Do not add a check, guard,
+or test to enforce this authoring rule.
+
 Action-producing tasks also include:
 
 ```positive-outcome
