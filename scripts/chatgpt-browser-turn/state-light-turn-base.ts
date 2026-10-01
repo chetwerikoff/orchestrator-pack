@@ -29,16 +29,6 @@ import {
   type TurnResultV1,
   type TurnState,
 } from './contracts.ts';
-import {
-  createDirectPublicationObservationState,
-  directPublicationReceipt,
-  observeDirectPublicationPayloadTree,
-  reviewerSourceMetadata,
-  settleDirectPublication,
-  validateDirectPublicationInputs,
-  type DirectPublicationConfig,
-  type DirectPublicationObservationState,
-} from './terminal-witness.ts';
 import { readStableInput } from './input.ts';
 import {
   generateOwnedPromptMarker,
@@ -67,7 +57,6 @@ import {
 import { configuredProfileKey } from './storage-common.ts';
 import {
   admitStateLightTurnObservation,
-  bindPrimaryPublication,
   finalizeStateLightPrimaryPublication,
   readStateLightTurnObservation,
   transitionStateLightTurnObservation,
@@ -1253,59 +1242,6 @@ function browserConfig(args: ParsedTurnArgs): BrowserConfig & { pollMs: number }
   };
 }
 
-function directPublicationConfig(
-  args: ParsedTurnArgs,
-  invocationId: string,
-  prompt: string,
-): DirectPublicationConfig | undefined {
-  const sourceOutput = stringOption(args, 'reviewer-source-output');
-  const directKeys = ['reviewer-source', 'repository', 'issue-number', 'source-revision'];
-  const hasDirectOptions = directKeys.some((key) => args.options.has(key));
-  if (!sourceOutput) {
-    if (hasDirectOptions) throw new Error('input_invalid:direct_publication_requires_source_output');
-    return undefined;
-  }
-  const repositoryFullName = requireOption(args, 'repository');
-  const issueNumber = parseInteger(requireOption(args, 'issue-number'), 1);
-  const sourceRevision = requireOption(args, 'source-revision');
-  const reviewerSource = requireOption(args, 'reviewer-source');
-  const validation = validateDirectPublicationInputs({
-    invocationId,
-    prompt,
-    reviewerSource,
-    repositoryFullName,
-    issueNumber,
-    sourceRevision,
-  });
-  if (validation) throw new Error(`input_invalid:${validation}`);
-  return {
-    target: { repositoryFullName, issueNumber, sourceRevision, invocationId },
-    reviewerSource,
-    reviewerSourceOutput: sourceOutput,
-  };
-}
-
-function installDirectPublicationObserver(
-  page: any,
-  state: DirectPublicationObservationState,
-): void {
-  const consume = (payload: string): void => {
-    if (!payload) return;
-    observeDirectPublicationPayloadTree(state, payload);
-  };
-  page.on?.('response', async (response: any) => {
-    try {
-      void response.url?.();
-      consume(await response.text());
-    } catch {
-      // Opaque or unavailable response bodies remain possible delivery.
-    }
-  });
-  page.on?.('websocket', (socket: any) => {
-    socket.on?.('framereceived', (frame: { payload?: string }) => consume(frame.payload ?? ''));
-  });
-}
-
 export function compactResult(
   state: TurnState,
   scope: FailureScope,
@@ -2107,11 +2043,10 @@ async function createDedicatedTurnPage(
 /**
  * Reloading a conversation whose last reply ended on a recovery banner makes
  * ChatGPT show Stop for ~10 minutes without generating, so an existing-chat
- * turn continues in a tab already open on that conversation. Direct publication
- * keeps the fresh load: its observer cannot see a page websocket opened before attach.
+ * turn continues in a tab already open on that conversation.
  */
 async function findOpenConversationPage(browser: any, config: BrowserConfig): Promise<any | undefined> {
-  if (config.newChat || config.directPublication || !config.chatUrl) return undefined;
+  if (config.newChat || !config.chatUrl) return undefined;
   const target = normalizeConversationUrl(config.chatUrl);
   const contexts = browser.contexts();
   if (contexts.length !== 1 || typeof contexts[0].pages !== 'function') return undefined;
@@ -2406,13 +2341,8 @@ async function runTurn(
     }
     profileKey = configuredProfileKey(baseConfig.profile, baseConfig.cdp);
     const snapshot = readStableInput(requireOption(args, 'input'));
-    const direct = directPublicationConfig(args, invocationId, snapshot.text);
     const destination = destinationIdentity(requireOption(args, 'output'));
-    const reviewerSourceDestination = direct ? destinationIdentity(direct.reviewerSourceOutput) : undefined;
-    if (direct && reviewerSourceDestination?.finalPath === destination.finalPath) {
-      throw new Error('input_invalid:direct_publication_artifact_alias');
-    }
-    const config = direct ? { ...baseConfig, directPublication: direct } : baseConfig;
+    const config = baseConfig;
     const marker = generateOwnedPromptMarker();
     admitStateLightTurnObservation({ profileKey, invocationId, marker });
     const invocationStartedAt = Date.now();
@@ -2477,8 +2407,6 @@ async function runTurn(
       page = await createDedicatedTurnPage(browser, invocationBudget);
       await navigateOwnedTurnPage(page, config, navigation);
     }
-    const directObservation = createDirectPublicationObservationState();
-    if (config.directPublication) installDirectPublicationObserver(page, directObservation);
 
     let baselineCount = 0;
     let baselineUserNodeCount = 0;
@@ -3385,7 +3313,6 @@ async function runTurn(
         cleanupAuthorityUnprovenPages.add(page);
       }
       recoveryState.immutableConversationUrl = recovered.conversationUrl;
-      if (config.directPublication) installDirectPublicationObserver(page, directObservation);
       // Issue #1283 owns recovered-page integration. Do not fabricate a new
       // pre-send baseline from a post-send successor; markerless harvest stays
       // disabled after recovery until that sibling path supplies its own proof.
@@ -3786,7 +3713,7 @@ async function runTurn(
             // authorizes only page-only harvested bytes; it must not rewrite an
             // already-observed GitHub success, definitive no-commit, or
             // possible-delivery outcome.
-            if (!config.directPublication) {
+            {
               const liveness = await probePageLiveness(page, browser);
               if (liveness === 'lost') {
                 incident('helper_failure_after_send', 'page_or_browser_lost_after_send', 'skip_lost_page_no_resend');
@@ -4136,81 +4063,7 @@ async function runTurn(
             }
           }
           const captureReply = bestReadyReply.length >= decision.reply.length ? bestReadyReply : decision.reply;
-          const ownedParentIds = new Set(
-            directObservation.invocations
-              .filter((item) => (
-                item.repositoryFullName === config.directPublication?.target.repositoryFullName
-                && item.issueNumber === config.directPublication?.target.issueNumber
-              ))
-              .map((item) => item.parentUserMessageId)
-              .filter((parent): parent is string => typeof parent === 'string' && parent.length > 0),
-          );
-          const ownedParentId = ownedParentIds.size === 1 ? [...ownedParentIds][0] : undefined;
-          const directSettlement = config.directPublication
-            ? settleDirectPublication(
-              directObservation,
-              { ...config.directPublication.target, userMessageId: ownedParentId },
-              captureReply,
-            )
-            : undefined;
-          let managerReply = captureReply;
-          let reviewerSource = null as ReturnType<typeof reviewerSourceMetadata>;
-          if (config.directPublication) {
-            if (!directSettlement || directSettlement.state === 'possible-delivery') {
-              incident('direct_publication_possible_delivery', directSettlement?.cause ?? 'direct_publication_observation_missing', 'retain_owned_page_no_resend');
-              return {
-                page,
-                browser,
-                cleanupAction: 'preserve',
-                result: compactResult('recovery_required', 'conversation', directSettlement?.cause ?? 'direct_publication_observation_missing', invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed),
-              };
-            }
-            reviewerSource = reviewerSourceMetadata(directSettlement, config.directPublication.target);
-            if (!reviewerSource) {
-              incident('direct_publication_source_invalid', 'direct_publication_source_revision_or_binding_invalid', 'retain_owned_page_no_resend');
-              return {
-                page,
-                browser,
-                cleanupAction: 'preserve',
-                result: compactResult('recovery_required', 'conversation', 'direct_publication_source_invalid', invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed),
-              };
-            }
-            managerReply = directSettlement.state === 'success'
-              ? directPublicationReceipt(directSettlement, config.directPublication.target) ?? ''
-              : captureReply;
-            if (!managerReply) {
-              incident('direct_publication_receipt_invalid', 'direct_publication_receipt_invalid', 'retain_owned_page_no_resend');
-              return {
-                page,
-                browser,
-                cleanupAction: 'preserve',
-                result: compactResult('recovery_required', 'conversation', 'direct_publication_receipt_invalid', invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed),
-              };
-            }
-            // The observation-managed primary binding must survive before an
-            // auxiliary reviewer-source artifact can outlive this process.
-            bindPrimaryPublication({
-              profileKey,
-              invocationId,
-              target: destination.finalPath,
-              bytes: managerReply,
-            });
-            const sourcePublication = publishStateLightReply(
-              config.directPublication.reviewerSourceOutput,
-              invocationId,
-              directSettlement.sourceBytes ?? captureReply,
-            );
-            if (sourcePublication.state !== 'committed_ok') {
-              incident('reviewer_source_publication_error', sourcePublication.cause ?? sourcePublication.state, 'retain_owned_page_no_resend');
-              return {
-                page,
-                browser,
-                publicationState: sourcePublication.state,
-                cleanupAction: 'close',
-                result: compactResult('recovery_required', 'conversation', sourcePublication.cause ?? sourcePublication.state, invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed),
-              };
-            }
-          }
+          const managerReply = captureReply;
           const publication = await finalizeStateLightPrimaryPublication({
             profileKey,
             invocationId,
@@ -4266,7 +4119,6 @@ async function runTurn(
                     byte_length: publication.output_bytes!,
                     sha256: publication.output_sha256!,
                   },
-                  ...(reviewerSource ? { reviewer_source: reviewerSource } : {}),
                 },
                 journalWriteFailed,
               ),
@@ -4585,18 +4437,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
     pagePresent: cleanupAuthorityProven,
     pageLost,
   });
-  // Direct-publication successes use the existing #1266 post-settlement
-  // exact-target close: emit the terminal result while the target is retained.
-  const postSettlementCloseEligible = outcome.result.state === 'ok'
-    && outcome.publicationState === 'committed_ok'
-    && outcome.result.reviewer_source !== undefined;
-  // Issue #1266 owns abandonment close. Local observation loss has no Stop
-  // authority, and every post-send non-ok tab remains preserved.
-  const pageAction = postSettlementCloseEligible
-    || (outcome.result.send_count >= 1 && outcome.result.state !== 'ok')
-    ? 'preserve'
-    : requestedPageAction;
-  if (pageAction === 'close') {
+  const pageAction = outcome.result.send_count >= 1 && outcome.result.state !== 'ok'\n    ? 'preserve'\n    : requestedPageAction;\n  if (pageAction === 'close') {
     cleanup = await boundedResourceCleanup(
       () => outcome.page.close(),
       RESOURCE_CLEANUP_BOUND_MS,
