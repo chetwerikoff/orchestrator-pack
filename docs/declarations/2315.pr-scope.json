@@ -24,6 +24,7 @@
     "scripts/browser-gpt-post-settlement-close-proof.ts",
     "scripts/browser-gpt-post-settlement-close.ts",
     "scripts/chatgpt-browser-turn.ts",
+    "scripts/chatgpt-browser-turn/cli-main.ts",
     "scripts/chatgpt-browser-turn/contracts.ts",
     "scripts/chatgpt-browser-turn/README.md",
     "scripts/chatgpt-browser-turn/state-light-entry.ts",
@@ -147,5 +148,5 @@
     "prompts/",
     "scripts/"
   ],
-  "source_revision": "756f61a65314ed62eae857d708b8422d6a2dcabc"
+  "source_revision": "6e5375f128b5878e9288351ffac366216155346c"
 }

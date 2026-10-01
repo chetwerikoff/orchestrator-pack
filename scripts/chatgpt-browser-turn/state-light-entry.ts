@@ -2,6 +2,7 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runStateLightTurn } from './state-light-turn.ts';
+import { settleCliMain } from './cli-main.ts';
 
 export type StateLightEntryDependencies = {
   readonly runTurn?: (argv: readonly string[]) => Promise<number>;
@@ -28,8 +29,5 @@ async function main(): Promise<void> {
 
 const entryPath = fileURLToPath(import.meta.url);
 if (process.argv[1] && resolve(process.argv[1]) === entryPath) {
-  main().catch((error) => {
-    process.stderr.write((error instanceof Error ? error.message : String(error)) + '\n');
-    process.exitCode = 1;
-  });
+  settleCliMain(main);
 }

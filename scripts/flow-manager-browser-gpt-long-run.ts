@@ -2,6 +2,7 @@
 import './toolchain/native-entrypoint-preflight.ts';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { settleCliMain } from './chatgpt-browser-turn/cli-main.ts';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { runProcess } from './kernel/subprocess.ts';
 import {
@@ -197,10 +198,7 @@ async function main(): Promise<void> {
 
 const entryPath = fileURLToPath(import.meta.url);
 if (process.argv[1] && resolve(process.argv[1]) === entryPath) {
-  main().catch((error) => {
-    process.stderr.write((error instanceof Error ? error.message : String(error)) + '\n');
-    process.exitCode = 1;
-  });
+  settleCliMain(main);
 }
 
 export const ADAPTER_PACKAGE_COMMAND = 'npm run --silent flow-manager-browser-gpt-long-run --';
