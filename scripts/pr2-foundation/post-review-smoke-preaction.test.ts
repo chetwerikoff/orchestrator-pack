@@ -4,9 +4,9 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { buildSmokeAgentPrompt, resolveSmokeRequirement } from '../lib/worker-smoke-core.ts';
+import { resolveSmokeRequirement } from '../lib/worker-smoke-core.ts';
 
-describe('Issue #2250 independent smoke plan without retired preflight', () => {
+describe('Issue #2319 PR-owner smoke plan without retired worker preflight', () => {
   const issueBody = [
     '```behavior-kind', 'action-producing', '```',
     '```smoke-test-plan', 'scenarios:',
@@ -14,19 +14,13 @@ describe('Issue #2250 independent smoke plan without retired preflight', () => {
     '```',
   ].join('\n');
 
-  it('passes the complete Issue plan to the existing smoke worker without a durable lifecycle binding', () => {
+  it('keeps the complete Issue plan as the owner-executed publication contract', () => {
     const plan = resolveSmokeRequirement(issueBody);
     expect(plan.requirement).toBe('required');
-    expect(plan.scenarios).toHaveLength(1);
-    const prompt = buildSmokeAgentPrompt({
-      issueNumber: 2250, issueBody, prNumber: 2280,
-      headSha: 'a'.repeat(40), plan,
-    });
-    expect(prompt).toContain('action: exercise a disposable fixture');
-    expect(prompt).toContain('expected: one observed passing outcome');
-    expect(prompt).toContain('```worker-smoke-report');
-    expect(prompt).not.toContain('Durable smoke-run binding');
-    expect(prompt).not.toContain('artifact-dir:');
+    expect(plan.scenarios).toEqual([{
+      action: 'exercise a disposable fixture',
+      expected: 'one observed passing outcome',
+    }]);
   });
 
   it('keeps publish free of retired preflight/selective-carry execution machinery', () => {

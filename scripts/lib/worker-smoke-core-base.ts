@@ -1,5 +1,5 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseKeyValueBlock } from '../markdown-key-value.mjs';
 import {
@@ -315,32 +315,6 @@ const EXACT_CONTROL_PLANE_REPORT_FIELDS = [
 
 type ExactControlPlaneReportField = (typeof EXACT_CONTROL_PLANE_REPORT_FIELDS)[number];
 
-const FORBIDDEN_SMOKE_AGENT_ACTIONS = [
-  /\bcommit\b/i,
-  /\bpush\b/i,
-  /\bmerge\b/i,
-  /\bpack-worker-report\b/i,
-  /\bready_for_review\b/i,
-  /\bREVIEW_COMMAND\b/i,
-  /\bPACK_REVIEWER\b/i,
-  /\bedit(?:ing)?\s+(?:the\s+)?(?:issue|task spec)\b/i,
-] as const;
-
-export interface SmokeRunBinding {
-  runId: string;
-  artifactDir: string;
-}
-
-export const SMOKE_RUN_ARTIFACT_ROOT = '.orca-worker-smoke/runs';
-
-export function createSmokeRunIdentity(): string {
-  return randomUUID();
-}
-
-export function resolveSmokeRunArtifactDir(repoRoot: string, runId: string): string {
-  return join(repoRoot, SMOKE_RUN_ARTIFACT_ROOT, runId);
-}
-
 export function smokeDeliverySealedPath(artifactDir: string): string {
   return join(artifactDir, 'delivery.sealed.json');
 }
@@ -357,89 +331,6 @@ export function smokeCompletionBodyPath(artifactDir: string, bodySha256: string)
 
 export function smokeCompletionSealPath(artifactDir: string, bodySha256: string): string {
   return join(artifactDir, `completion-${bodySha256}.sealed.json`);
-}
-
-export function ensureSmokeRunArtifactDir(artifactDir: string): void {
-  mkdirSync(artifactDir, { recursive: true });
-}
-
-export function buildSmokeAgentPrompt(input: {
-  issueNumber: number;
-  issueBody: string;
-  prNumber: number;
-  headSha: string;
-  plan: SmokeTestPlan;
-  runBinding?: SmokeRunBinding;
-}): string {
-  const scenarioLines = input.plan.scenarios
-    .map((scenario, index) => `${index + 1}. action: ${scenario.action} | expected: ${scenario.expected} | observed: ${scenario.observed ?? ''} | outcome: ${scenario.outcome ?? ''}${scenario.causeFamily ? ` | cause-family: ${scenario.causeFamily}` : ''}`)
-    .join('\n');
-
-  const durableLines = input.runBinding
-    ? [
-      '',
-      'Durable smoke-run binding (authoritative for delivery and completion):',
-      `run-id: ${input.runBinding.runId}`,
-      `artifact-dir: ${input.runBinding.artifactDir}`,
-      'After you accept this prompt, write delivery evidence:',
-      `  ${smokeDeliverySealedPath(input.runBinding.artifactDir)}`,
-      '  contents: {"runId":"<run-id>"}',
-      'Completion is accepted only after publish-complete sealing:',
-      `  1. optional in-progress bytes may go only to ${smokeCompletionPendingBodyPath(input.runBinding.artifactDir)}`,
-      '  2. the completion body file holds your report block above, copied from the opening ```worker-smoke-report line through the closing ``` line',
-      '  3. compute sha256 hex over exactly the bytes you write to completion-<sha256>.body, and over no other byte range',
-      '  4. create-only write completion-<sha256>.body (never overwrite an existing completion-*.body)',
-      '  5. create-only write completion-<sha256>.sealed.json with {"runId":"<run-id>","bodySha256":"<sha256>"}',
-      'Each new terminalization must use new content and therefore new completion-<sha256> filenames.',
-      'Never delete or overwrite any completion-* artifact in the run directory.',
-      'Terminal scrollback is not completion evidence; only the sealed artifact counts.',
-    ]
-    : [];
-
-  return [
-    'You are an independent smoke verifier for orchestrator-pack.',
-    'Execute only the smoke scenarios below against the current worktree.',
-    `Selected CI scope artifact: docs/declarations/${input.issueNumber}.pr-scope.json is generated evidence. It is skipped from product changed-path accounting (same rule as scripts/pr-scope-check.ts selectedArtifactPath). Do not FAIL an exact-scope or allowed-path scenario solely because that file appears in git diff when every other changed path matches the Issue allowed-roots / declared implementation set.`,
-    'Do not edit tracked implementation files, commit, push, merge, alter the Issue, or call pack-worker-report.',
-    'When waiting for executor work, use only a completion or session identifier actually returned by the selected executor; never invent a shell_id or a transcript path.',
-    'For any smoke scenario that requires pressing product Stop and injecting a synthetic Browser-GPT recovery fixture while the assistant turn is in flight, use the live Stop/generation control as the synchronization witness. Do not wait for an assistant reply or assistant-turn node before Stop; while that control is still present, press Stop first, then immediately perform the scenario\'s synthetic injection. If the Stop/generation witness disappears before the Stop action, do not inject into the settled turn; report the scenario as precondition unavailable.',
-    'Cap any single block_until_ms at 300000; re-check and re-await instead of one long block.',
-    'Invoke pack review only when a listed smoke scenario explicitly requires one live pack-review manager turn; do not start any other review.',
-    'For each non-PASS scenario row, include exactly one cause-family from: scenario_precondition_unavailable, scenario_assertion_failed, scenario_evidence_missing. PASS rows omit cause-family.',
-    'For scenario_assertion_failed, also emit top-level non-pass-cause: executed_scenario_failure. For scenario_precondition_unavailable, emit a top-level non-pass-cause only when the structured condition is directly one of browser_cdp_unavailable, profile_mismatch, login_required, quota_exhausted, or product_challenge; otherwise omit it so the manager fails closed instead of guessing from observed prose.',
-    'When finished, emit exactly one fenced block:',
-    '',
-    '```worker-smoke-report',
-    'result: PASS|FAIL|BLOCKED',
-    'tracked-files-unmodified: true|false',
-    'environment-notes: <optional>',
-    'limitations: <optional comma-separated>',
-    'non-pass-cause: <closed structured cause when required above>',
-    'scenarios:',
-    '  - action: <what you ran> | expected: <from plan> | observed: <what happened> | outcome: pass|fail|skipped|blocked | cause-family: <required for non-PASS only>',
-    '```',
-    ...durableLines,
-    '',
-    `Issue: #${input.issueNumber}`,
-    `PR: #${input.prNumber}`,
-    `Head SHA: ${input.headSha}`,
-    '',
-    'Smoke scenarios:',
-    scenarioLines || '(none — report BLOCKED with concrete reason)',
-    '',
-    'Issue body for context:',
-    input.issueBody,
-  ].join('\n');
-}
-
-export function smokePromptForbidsWorkerActions(prompt: string): string[] {
-  const violations: string[] = [];
-  for (const pattern of FORBIDDEN_SMOKE_AGENT_ACTIONS) {
-    if (pattern.test(prompt) && !/must not|do not|cannot/i.test(prompt)) {
-      violations.push(pattern.source);
-    }
-  }
-  return violations;
 }
 
 function applyScenarioField(scenario: SmokeScenario, key: string, value: string): void {
