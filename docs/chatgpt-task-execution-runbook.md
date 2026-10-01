@@ -88,8 +88,8 @@ preserved and independently authorizes that send. The narrow post-send exception
 owned by this runbook is the exact execute-Issue product-error recovery below.
 It starts with GitHub-first reconciliation and is available only for the reserved
 causes `message_delivery_timed_out`, `product_network_error`,
-`message_stream_error`, and `stream_recovery_polling_timed_out` after exact
-owned-turn proof.
+`message_stream_error`, `stream_recovery_polling_timed_out`, and
+`product_error_banner` after exact owned-turn proof.
 
 
 If a possible send occurred but the exact authoritative
@@ -134,7 +134,7 @@ Missing or malformed status does not prove success or failure.
 `EXECUTION_STATUS: complete` never bypasses independent current-state
 verification.
 
-The four execute-Issue product errors stay on the existing `turn-result/v1`
+The five execute-Issue product errors stay on the existing `turn-result/v1`
 contract. The `stream_recovery_polling_timed_out` cause is reserved for the
 exact rendered banner `ChatGPT stream recovery polling timed out`. An
 authoritative exact-owned result of this form:
@@ -142,7 +142,7 @@ authoritative exact-owned result of this form:
 ```text
 state: recovery_required
 scope: conversation
-cause: message_delivery_timed_out | product_network_error | message_stream_error | stream_recovery_polling_timed_out
+cause: message_delivery_timed_out | product_network_error | message_stream_error | stream_recovery_polling_timed_out | product_error_banner
 ```
 
 is terminal evidence for that Browser-GPT turn and enters **Product-error
@@ -159,6 +159,14 @@ it is also recognized as an exact roleless `[role="alert"]` banner (with or
 without its Retry label) when no assistant carrier follows the unique owned
 marker; the manager then enters the same GitHub-first recovery and
 same-conversation continuation, never the product `Retry` control.
+
+`product_error_banner` is returned only for a fresh conversation bound to the
+invocation whose owned messages never rendered, when a post-send `[role="alert"]`
+with a text not mapped to a specific cause stays visible for two reads with no
+active generation; product walls such as usage limits are classified first.
+The result carries the alert heading in `product_banner_text`. Alert headings
+`Network error` and `Resume stream unavailable` map to `product_network_error`
+and `stream_recovery_polling_timed_out`.
 
 ## Mandatory 30-minute live-chat checkpoint
 
@@ -321,7 +329,8 @@ Enter this section only after one of these proofs for the exact owned turn:
 1. an authoritative immediate `turn-result/v1` reports `state:
    recovery_required`, `scope: conversation`, and cause
    `message_delivery_timed_out`, `product_network_error`,
-   `message_stream_error`, or `stream_recovery_polling_timed_out`; or
+   `message_stream_error`, `stream_recovery_polling_timed_out`, or
+   `product_error_banner`; or
 2. the mandatory 30-minute checkpoint independently observes one of those four
    product causes **and** the manager also has exact current owned-prompt proof,
    no attributable completed reply, and no active generation.

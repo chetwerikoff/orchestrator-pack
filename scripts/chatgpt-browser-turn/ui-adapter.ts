@@ -32,7 +32,8 @@ export type ExecutionRecoveryProductCause =
   | 'message_delivery_timed_out'
   | 'product_network_error'
   | 'message_stream_error'
-  | 'stream_recovery_polling_timed_out';
+  | 'stream_recovery_polling_timed_out'
+  | 'product_error_banner';
 
 export interface ExecutionRecoveryMessage {
   readonly role: 'user' | 'assistant';
@@ -195,15 +196,23 @@ export function rolelessRecoverySurfaceCause(value: string): ExecutionRecoveryPr
   return exactAlertCause(value, ROLELESS_SURFACE_CAUSES);
 }
 
+/** First line of an alert, as the product renders its heading. */
+export function alertHeading(value: string): string {
+  return normalizeExecutionRecoveryProductText(value.trim().split('\n')[0] ?? '');
+}
+
 /**
- * Exact `[role="alert"]` banner of a fresh conversation whose owned messages
- * never rendered; only the caller's bound-conversation gate makes it attributable.
+ * Any non-empty `[role="alert"]` banner of a fresh conversation whose owned
+ * messages never rendered; known texts keep their specific cause. Only the
+ * caller's bound-conversation gate makes it attributable, and product walls
+ * (usage limits and the like) are classified before this point.
  */
 export function unrenderedOwnerAlertCause(value: string): ExecutionRecoveryProductCause | undefined {
   const exact = exactAlertCause(value, UNRENDERED_OWNER_ALERT_CAUSES);
   if (exact) return exact;
-  const heading = normalizeExecutionRecoveryProductText(value.trim().split('\n')[0] ?? '');
-  return UNRENDERED_OWNER_ALERT_HEADING_CAUSES.find(([text]) => heading === text)?.[1];
+  const heading = alertHeading(value);
+  if (!heading) return undefined;
+  return UNRENDERED_OWNER_ALERT_HEADING_CAUSES.find(([text]) => heading === text)?.[1] ?? 'product_error_banner';
 }
 
 function executionRecoveryCauseFromText(value: string): ExecutionRecoveryProductCause | undefined {
