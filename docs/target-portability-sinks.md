@@ -2,9 +2,9 @@
 
 ## Provenance
 
-- Audited implementation-PR base: `435683abea628c9dc185e45a84bda40cc9f5bb7b` (`main` at final reconciliation).
-- The first implementation lineage was cut from `23adc0c4214d4d47cccc8728d7cb147d793ce678`. While findings were being fixed, the live PR base advanced to `435683abea628c9dc185e45a84bda40cc9f5bb7b` and GitHub reported the PR non-mergeable. The existing branch was therefore synchronized with exactly that live base in merge-sync commit `6197ddca965fac376d78f09d3a8fab6b18e478c8`; no second branch or PR was created.
-- The base refresh contained 83 default-branch commits. Only four current-base paths overlapped #2188-owned changes: `.cursor/skills/merge-with-local-adoption/SKILL.md`, `scripts/draft-discipline.mjs`, `scripts/pack-review-runner.ts`, and `scripts/worker-smoke-run.ts`. The first three merged without semantic conflict. The worker-smoke refactor already carried selected-repository routing but still retained pack/default-branch literals; reconciliation kept the refactor and reapplied the #2188 project/default-branch bindings. GitHub read-back then reported the PR mergeable again.
+- Audited implementation-PR base: `e1f0c05358bea6b6987a9eb7b0adfb37c1c967dc` (requested exact base for this audit rerun).
+- This rerun reuses the existing Issue #2188 implementation PR and its branch; it does not create a second PR. The previous audit was bound to `435683abea628c9dc185e45a84bda40cc9f5bb7b` and is superseded by this base-bound inventory.
+- Base delta from the prior audited base: 83 default-branch commits. The exact-base changed-path review found seven relevant paths: the runtime-history refresh workflow, Cursor composer submitter and test, merge-blind gate audit, Orca runtime adapter and new OpenCode composer, and runtime-history manifest. These paths do not alter the previously traced Issue/PR repository, project-state, or default-branch selector implementations; `scripts/orca-runtime/opencode-composer.ts` is a runtime integration surface and was included in the selector-term scan.
 - Audit universe: tracked non-test production/instruction files under `scripts/**`, `plugins/**`, `prompts/**`, `.cursor/skills/**`, `.claude/skills/**`, `.github/workflows/**`, plus the three documentation paths allowed by Issue #2188.
 - Explicitly excluded by the Issue contract: `packages/core/**`, `vendor/**`, test-only files, fixture-only files, and files outside the allowed roots.
 - Test files are evidence only; they are not selector rows.
@@ -35,7 +35,7 @@ Search terms/classes:
 Reproducible local search:
 
 ```bash
-BASE=435683abea628c9dc185e45a84bda40cc9f5bb7b
+BASE=e1f0c05358bea6b6987a9eb7b0adfb37c1c967dc
 ROOTS=(
   scripts plugins prompts .cursor/skills .claude/skills .github/workflows
   docs/target-portability-sinks.md docs/target_repo_setup.md docs/migration_notes.md
@@ -70,6 +70,7 @@ with target identity.
 | T12 | `scripts/pr2-foundation/supervised-task-launch-assistant.ts` | manager worktree repo/default branch | `target` | Production CLI already resolves the selected card. Manager refresh/create now carries `context.defaultBranch`, requires `origin/<selected-default>`, and validates the local branch is distinct from that branch instead of hard-coding `main`. |
 | T13 | `scripts/worktree-teardown.ts`; `scripts/worktree-lifecycle/operations.ts` | merged PR base/adopted default branch | `target` | Post-merge proof resolves the selected default branch in production and checks/fetches/ancestry-proves that branch. Vitest-only no-selector fallback is `main`. |
 | T14 | `.cursor/skills/create-issue-draft/SKILL.md`, `publish-issue-draft/SKILL.md`, `merge-with-local-adoption/SKILL.md`, `direct-fix-checklist/SKILL.md`, `prompts/investigate_root_cause.md` | target-running instruction repo/base | `target` | Instructions now resolve the selected project card and bind target repository/default branch rather than naming the pack repo or `main` for target effects. |
+| T15 | `.claude/skills/discuss-with-gpt/config.mjs`, `driver.mjs`, `launch-chrome.sh`; `.cursor/skills/discuss-with-gpt/SKILL.md` | Browser-GPT project URL, per-project durable-state namespace and project/repository binding | `target` | Config resolves the selected card via `target-context.ts check`; `--project`/`OPK_PROJECT_ID` choose that card, and local config or `--project-url` cannot override its URL. The driver derives state namespace only after card resolution and requires persisted project/repository binding; launcher obtains URL from the same config. The Cursor instructions follow this binding for pass artifacts. This is Browser-GPT target identity/state selection, not GitHub issue/PR routing.
 | D01 | `scripts/lib/target-context.ts`, project-card schema/binding, extra-remote behavior | project/repository/default branch/project URL | `done in #2185/#2186/#2187` | #2185 established card authority and origin validation while permitting unrelated extra remotes; #2187 owns target verification. This Issue reuses the resolver rather than introducing another selector. |
 | D02 | wake-supervisor/project state roots, worker assignment/smoke receipt state, cutover migration/bindings | project state namespace | `done in #2185/#2186/#2187` | #2186 moved target supervisor/control-plane state to project namespaces and bound repository identity. Residual pack defaults are library/non-target compatibility defaults; target launchers supply/require the selected project. T04 fixes the one known producer that could recreate flat create-Issue journal state. |
 | D03 | `scripts/chatgpt-browser-turn/state-light-turn-base.ts::browserTurnRecurrencePath/readBrowserTurnProjectIdentity` | Browser-turn recurrence project/repository state binding | `done on current base` | The refreshed base introduced/changed this state-only surface. When `OPK_PROJECT_ID` is present it namespaces recurrence state by project and validates the selected project card plus persisted project/repository binding before appending incident state; without a selector it uses the legacy non-target recurrence path. It does not choose a GitHub Issue/PR repository for target effects, so no new #2188 transport selector is introduced. |
@@ -148,11 +149,11 @@ No test performs a live remote write.
 
 Immediately before handoff:
 
-1. verify the live PR base and PR merge-base still equal
-   `435683abea628c9dc185e45a84bda40cc9f5bb7b`; if either moves, regenerate this
+1. verify the live PR base and PR merge-base both equal
+   `e1f0c05358bea6b6987a9eb7b0adfb37c1c967dc`; if either moves, regenerate this
    audit against the new base before handoff;
 2. rerun the discovery recipe over the final checkout, with the same exclusions;
-3. inspect `git diff --name-only 435683abea628c9dc185e45a84bda40cc9f5bb7b...HEAD` and separately prove the final head remains a strict descendant of the reviewed findings head `0be7a502ac5fae9958223c8b844870a0228ddeb0`;
+3. inspect `git diff --name-only e1f0c05358bea6b6987a9eb7b0adfb37c1c967dc...HEAD` and separately prove the final head remains a strict descendant of the reviewed findings head `0be7a502ac5fae9958223c8b844870a0228ddeb0`;
 4. confirm every introduced/changed repository/project/base/state selector is
    already represented by a T/D/P/C row above;
 5. confirm no changed path is outside Issue #2188 allowed roots or inside its
