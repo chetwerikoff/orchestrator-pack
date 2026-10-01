@@ -5,6 +5,7 @@ import { classifyRequiredCiLevel } from '../docs/review-ready-stuck-guard.mjs';
 import { runProcess, runProcessSync } from './kernel/subprocess.ts';
 import { overlayExecutorProfileEnv } from './executor-profile-store.ts';
 import { resolveRealGhBinary, resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
+import { resolveTargetContext } from './lib/target-context.ts';
 import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from './pr-scope-contract.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -427,7 +428,9 @@ function runSmokeProfileChild(
 }
 
 export interface ResolvedSmokeTarget {
+  projectId: string;
   repositorySlug: string;
+  defaultBranch: string;
   issueNumber: number;
   prNumber: number;
   headSha: string;
@@ -599,10 +602,11 @@ export function deriveMainMergeCarryProof(
   sourceHeadSha: string,
   destinationHeadSha: string,
   issueBody: string,
+  defaultBranch = selectedSmokeProject().defaultBranch,
 ): WorkerSmokeMainMergeCarryRecord | undefined {
   const source = sourceHeadSha.trim().toLowerCase();
   const destination = destinationHeadSha.trim().toLowerCase();
-  const main = gitRead(cwd, ['rev-parse', '--verify', 'refs/remotes/origin/main^{commit}']);
+  const main = gitRead(cwd, ['rev-parse', '--verify', `refs/remotes/origin/${defaultBranch}^{commit}`]);
   if (!main || !/^[0-9a-f]{40}$/u.test(source) || !/^[0-9a-f]{40}$/u.test(destination)) return undefined;
   const mergeCommits = gitRead(cwd, ['rev-list', '--merges', `${source}..${destination}`])?.split(/\r?\n/u).filter(Boolean) ?? [];
   const mainMerges = mergeCommits.flatMap((merge) => {
@@ -643,6 +647,22 @@ function gitHead(cwd: string): string {
   return requireProcessOutput('git rev-parse HEAD', runProcessSync({ command: 'git', args: ['rev-parse', 'HEAD'], cwd })).trim().toLowerCase();
 }
 
+function selectedSmokeProject(): { projectId: string; repository: string; defaultBranch: string } {
+  if (process.env.VITEST && !String(process.env.OPK_PROJECT_ID ?? '').trim()) {
+    return {
+      projectId: 'orchestrator-pack',
+      repository: 'chetwerikoff/orchestrator-pack',
+      defaultBranch: 'main',
+    };
+  }
+  const target = resolveTargetContext({ env: process.env });
+  return {
+    projectId: target.projectId,
+    repository: target.repository,
+    defaultBranch: target.defaultBranch,
+  };
+}
+
 function gitOriginRepositorySlug(cwd: string): string {
   const remote = requireProcessOutput('git remote get-url origin', runProcessSync({ command: 'git', args: ['remote', 'get-url', 'origin'], cwd })).trim();
   const match = remote.match(/(?:github\.com[/:])([^/]+)\/([^/]+?)(?:\.git)?$/iu);
@@ -669,8 +689,6 @@ function canonicalRepositorySlug(value: unknown): string {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(slug)) throw new Error('trusted_target: canonical repository slug missing or invalid');
   return slug;
 }
-
-const TRUSTED_REPOSITORY_SLUG = 'chetwerikoff/orchestrator-pack';
 
 function repositoryFromGithubUrl(value: unknown): string {
   const match = String(value ?? '').trim().match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/(?:issues|pull)\/\d+(?:$|[?#])/iu);
@@ -716,9 +734,10 @@ function suppliedIssueBodyMatches(fetched: string, supplied: string): boolean {
 }
 
 export function resolveSmokeTarget(options: CliOptions, suppliedIssueBody: string): ResolvedSmokeTarget {
-  const repositorySlug = canonicalRepositorySlug(TRUSTED_REPOSITORY_SLUG);
+  const selected = selectedSmokeProject();
+  const repositorySlug = canonicalRepositorySlug(selected.repository);
   const originSlug = gitOriginRepositorySlug(options.repoRoot);
-  if (originSlug.toLowerCase() !== repositorySlug.toLowerCase()) throw new Error('trusted_target: trusted repository and origin mismatch');
+  if (originSlug.toLowerCase() !== repositorySlug.toLowerCase()) throw new Error('trusted_target: selected repository and origin mismatch');
 
   const principal = githubApiObject('authenticated-principal', 'user', options.repoRoot);
   const trustedPublisherLogin = String(principal.login ?? '').trim();
@@ -728,6 +747,11 @@ export function resolveSmokeTarget(options: CliOptions, suppliedIssueBody: strin
   const pr = githubApiObject('pr-view-binding', `repos/${repositorySlug}/pulls/${options.prNumber}`, options.repoRoot);
   const repository = githubApiObject('repository-view-binding', `repos/${repositorySlug}`, options.repoRoot);
   const targetFact = projectExpectedPrTarget(pr, repository);
+  if (targetFact.expectedTargetRef !== selected.defaultBranch) {
+    throw new Error(
+      `trusted_target: repository default branch ${targetFact.expectedTargetRef || '<empty>'} does not match selected target ${selected.defaultBranch}`,
+    );
+  }
 
   const issueNumber = positiveInteger(issue.number);
   const prNumber = positiveInteger(pr.number);
@@ -751,7 +775,10 @@ export function resolveSmokeTarget(options: CliOptions, suppliedIssueBody: strin
   if (exactClosingIssue(prBody) !== issueNumber) throw new Error('trusted_target: PR-to-Issue resolution is missing, multiple, or mismatched');
 
   return {
-    repositorySlug, issueNumber, prNumber, headSha, issueBody, prBody,
+    projectId: selected.projectId,
+    repositorySlug,
+    defaultBranch: selected.defaultBranch,
+    issueNumber, prNumber, headSha, issueBody, prBody,
     issueBodyMatchesTarget: true, trustedPublisherLogin, ...targetFact,
   };
 }
@@ -1419,6 +1446,7 @@ function runSmokeProgressWriter(argv: readonly string[]): number {
 
 
 function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scenarioCount: number): string {
+  const defaultBranch = selectedSmokeProject().defaultBranch;
   const prompt = scenarioCount === 0
     ? basePrompt.replace(
         '(none — report BLOCKED with concrete reason)',
@@ -1466,7 +1494,7 @@ function buildLifecyclePrompt(basePrompt: string, binding: SmokeRunBinding, scen
       '- Emit PASS with one bookkeeping row: action: record empty attempt-local execution set | expected: no selected smoke scenario executes | observed: no attempt-local scenarios selected | outcome: pass.',
     ] : []),
     '- Emit each declared progress event exactly once; never repeat a started or terminal event.',
-    '- For PR scope accounting, compare HEAD to the verified PR base merge-base (git diff "$(git merge-base HEAD origin/main)" HEAD), never to a local branch named main.',
+    `- For PR scope accounting, compare HEAD to the verified PR base merge-base (git diff "$(git merge-base HEAD origin/${defaultBranch})" HEAD), never to a local branch named ${defaultBranch}.`,
     '- Use declared order only and check cancel-request.json before each new scenario.',
     '- For each scenario N, append and durably flush N started, execute only N, then append and durably flush N terminal before doing any work or writing progress for N+1.',
     '- Never run scenarios in parallel, start a later ordinal early, or skip an ordinal. After a fail/blocked/skipped terminal, stop without starting another scenario or writing any later-scenario progress; a refused later-start command is terminal, and progress after skipped is a protocol failure.',
@@ -1834,7 +1862,7 @@ function selectSmokeAttempt(
   if ((options.smokeActor ?? 'worker-owned') === 'independent') {
     try {
       const storeRoot = resolvePackReviewRunStoreRoot({
-        projectId: 'orchestrator-pack',
+        projectId: selectedSmokeProject().projectId,
         storeRoot: process.env.PACK_REVIEW_RUN_STORE_ROOT,
       });
       const workerOwned = readPackReviewAuthority(target.prNumber, { storeRoot })?.smokeOrdering?.workerOwned;
@@ -1855,7 +1883,7 @@ function selectSmokeAttempt(
   );
   const mergeCommits = [...new Set(mergeCommitsBySource.flat())];
   if (mergeCommits.length === 0) return selection;
-  const mainRef = gitRead(options.repoRoot, ['rev-parse', '--verify', 'refs/remotes/origin/main^{commit}']);
+  const mainRef = gitRead(options.repoRoot, ['rev-parse', '--verify', `refs/remotes/origin/${selectedSmokeProject().defaultBranch}^{commit}`]);
   const hasMainMerge = Boolean(mainRef && mergeCommits.some((merge) => {
     const parents = gitRead(options.repoRoot, ['show', '-s', '--format=%P', merge])?.split(/\s+/u) ?? [];
     return parents.length === 2
@@ -1873,7 +1901,7 @@ function selectSmokeAttempt(
   const sourceHeadSha = sourceHeads[0]!;
   const sourceReport = selection.carried.find((entry) => entry.sourceHeadSha === sourceHeadSha)?.sourceReport;
   if (!sourceReport || sourceReport.result !== 'PASS' || !verifySmokeReportReceiptProvenance(sourceReport)) return refuseCarry();
-  const mainMergeCarry = deriveMainMergeCarryProof(options.repoRoot, sourceHeadSha, target.headSha, issueBody);
+  const mainMergeCarry = deriveMainMergeCarryProof(options.repoRoot, sourceHeadSha, target.headSha, issueBody, target.defaultBranch);
   if (!mainMergeCarry) return refuseCarry();
   return { ...selection, mainMergeCarry };
 }
