@@ -1,8 +1,7 @@
 import { runProcessSync } from '../kernel/subprocess.ts';
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolve } from 'node:path';
 import { canonicalReviewStateRoot } from './canonical-review-directory.ts';
 import {
   extractMarker,
