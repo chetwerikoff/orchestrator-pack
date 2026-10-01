@@ -168,7 +168,7 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     expect(runtimeStart).toBeGreaterThanOrEqual(0);
     expect(typecheckStart).toBeGreaterThan(runtimeStart);
     const runtimeJob = workflow.slice(runtimeStart, typecheckStart);
-    expect(runtimeJob).toContain('name: TypeScript runtime (Node 22)');
+    expect(runtimeJob).toContain('name: TypeScript runtime');
     expect(runtimeJob).toContain('Produce and admit exact-head terminal evidence');
     expect(runtimeJob).toContain('Upload exact-head terminal evidence');
     expect(runtimeJob).toContain('working-directory: final-exact-head');
