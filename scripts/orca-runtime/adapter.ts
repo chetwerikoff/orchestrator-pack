@@ -112,6 +112,46 @@ function openCodeHttpFailure(error: unknown): string {
     : 'opencode_http_request_failed';
 }
 
+function openCodeComposerContent(lines: readonly string[]): string[] | undefined {
+  let bottomEdge = -1;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (/╹▀▀▀/u.test(lines[index] ?? '')) {
+      bottomEdge = index;
+      break;
+    }
+  }
+  if (bottomEdge < 0) return undefined;
+
+  const content: string[] = [];
+  let sawLeftEdge = false;
+  for (let index = bottomEdge - 1; index >= 0; index -= 1) {
+    const trimmed = (lines[index] ?? '').replace(/\u001B\[[0-?]*[ -/]*[@-~]/gu, '').trim();
+    if (!trimmed) continue;
+    const askBody = trimmed.replace(/^[┃│]\s*/u, '');
+    if (/^Ask anything(?:\.\.\.|…)(?:\s+"[^"]*")?$/u.test(askBody)) {
+      sawLeftEdge = true;
+      continue;
+    }
+    if (/^┃\s+TeamoRouter 钱包余额不足，请前往 https:\/\/teamorouter\.cn\/dashboard\?buy=1 充值后继续使用$/u.test(trimmed)) {
+      sawLeftEdge = true;
+      continue;
+    }
+    if (!/^[┃│]/u.test(trimmed)) break;
+    sawLeftEdge = true;
+    if (/^┃\s+(?:Pack-Opk-|Pack\s+·\s|[0-9a-f]{16,}(?:\s|$))/iu.test(trimmed)) continue;
+    if (trimmed === '┃' || trimmed === '│') continue;
+    if (askBody) content.unshift(askBody);
+  }
+  return sawLeftEdge ? content : undefined;
+}
+
+function openCodeComposerMatchesText(lines: readonly string[], text: string): boolean {
+  const content = openCodeComposerContent(lines);
+  if (!content || content.length === 0) return false;
+  const normalize = (value: string): string => value.replace(/\s+/gu, ' ').trim();
+  return normalize(content.join(' ')) === normalize(text);
+}
+
 /** The TUI composer is empty only when its rendered box has no text rows. */
 export function isOpenCodeComposerEmpty(lines: readonly string[]): boolean {
   let bottomEdge = -1;
@@ -658,12 +698,32 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       limit: 200,
       screen: true,
     }, screenOptions);
+    let exactExistingPrompt = false;
     if (screen.status === 'ok') {
-      if (!isOpenCodeComposerEmpty(screen.value.lines)) {
+      const composerEmpty = isOpenCodeComposerEmpty(screen.value.lines);
+      exactExistingPrompt = request.action === 'submit-prompt'
+        && openCodeComposerMatchesText(screen.value.lines, request.text);
+      if (!composerEmpty && !exactExistingPrompt) {
         return { status: 'send_failed', reason: 'opencode_composer_not_empty' };
       }
     } else if (screen.reason !== 'runtime_output_source_unobservable') {
       return { status: 'send_failed', reason: `opencode_composer_screen_unavailable:${screen.reason}` };
+    }
+
+    if (exactExistingPrompt) {
+      const cleared = requestWithDeadline({
+        url: `${urlRecord.url}/tui/clear-prompt`,
+        method: 'POST',
+      });
+      if ('error' in cleared) return { status: 'send_failed', reason: cleared.error };
+      if (cleared.status !== 200) {
+        return { status: 'send_failed', reason: `opencode_http_status_${cleared.status}` };
+      }
+      try {
+        if (JSON.parse(cleared.body) !== true) throw new Error();
+      } catch {
+        return { status: 'send_failed', reason: 'opencode_tui_response_schema_mismatch' };
+      }
     }
 
     const append = requestWithDeadline({

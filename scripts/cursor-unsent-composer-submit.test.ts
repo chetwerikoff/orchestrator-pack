@@ -1605,9 +1605,12 @@ describe('delivery-triggered composer submission', () => {
           result: {
             terminal: {
               ...terminal,
-              tail: reads === 1
-                ? ['▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄', `→ ${POKE}`, '▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀']
-                : ['┃', '╹▀▀▀▀'],
+              tail: [
+                'OpenCode',
+                `┃  ${POKE}`,
+                '┃  Pack-Opk-fixture · GPT-5.6 Luna OpenAI',
+                '╹▀▀▀▀▀▀',
+              ],
               nextCursor: null,
               source: 'screen',
             },
@@ -1643,6 +1646,10 @@ describe('delivery-triggered composer submission', () => {
     });
 
     expect(requests).toEqual([
+      {
+        method: 'POST',
+        url: 'http://127.0.0.1:18891/tui/clear-prompt',
+      },
       {
         method: 'POST',
         url: 'http://127.0.0.1:18891/tui/append-prompt',
