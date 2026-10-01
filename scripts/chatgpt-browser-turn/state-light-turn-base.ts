@@ -83,7 +83,7 @@ import {
   markPreSendAlerts,
   MESSAGE_AUTHOR_ROLE_ATTR,
   MESSAGE_UNIT_KEY_ATTR,
-  rolelessRecoverySurfaceCause,
+  unrenderedOwnerAlertCause,
   resolveMessageRoleStyle,
   MESSAGE_NODE_SELECTOR,
   normalizeConversationUrl,
@@ -3819,8 +3819,8 @@ async function runTurn(
       }
 
       // Issue #2226/#2235: ChatGPT can stop an unrendered-owner turn with an
-      // exact roleless alert ("stream recovery polling timed out" or "Error in
-      // message stream"). The marker-based execution recovery classifier cannot
+      // exact roleless alert carrying any reserved recovery banner text (#2303).
+      // The marker-based execution recovery classifier cannot
       // prove ownership then, and a reload would hide the alert while the turn
       // stays dead. Return the reserved conversation-scoped recovery cause for
       // this invocation's own bound conversation instead, without reload or resend.
@@ -3834,7 +3834,7 @@ async function runTurn(
           ) as string[];
           const causes = new Set(
             (Array.isArray(alertTexts) ? alertTexts : [])
-              .map((text) => rolelessRecoverySurfaceCause(String(text)))
+              .map((text) => unrenderedOwnerAlertCause(String(text)))
               .filter((cause): cause is NonNullable<typeof cause> => cause !== undefined),
           );
           bannerCause = causes.size === 1 ? [...causes][0] : undefined;
