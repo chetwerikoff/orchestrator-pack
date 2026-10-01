@@ -418,7 +418,9 @@ function runSmokeProfileChild(
 }
 
 export interface ResolvedSmokeTarget {
+  projectId: string;
   repositorySlug: string;
+  defaultBranch: string;
   issueNumber: number;
   prNumber: number;
   headSha: string;
