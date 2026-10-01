@@ -5,8 +5,12 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTargetContext, type TargetContext } from './target-context.ts';
 
-const REPOSITORY_RE = /^[^/\\s]+\/[^/\\s]+$/u;
+const REPOSITORY_RE = /^[^/\s]+\/[^/\s]+$/u;
 const FULL_URL_RE = /^https?:\/\//iu;
+const NON_ROUTING_VALUE_OPTIONS = new Set([
+  '--body', '--body-file', '--title', '--jq', '--template', '--search', '--head', '--base',
+  '--state', '--json', '--field', '-f', '--raw-field', '-F', '--header', '-H', '--method', '-X', '--input',
+]);
 
 export type TargetGhAuthorizationErrorCode =
   | 'missing-selection'
@@ -89,6 +93,11 @@ function repositoryCandidates(argv: readonly string[], env: Readonly<NodeJS.Proc
     }
     if (arg.startsWith('--hostname=')) {
       requireGithubCom(arg.slice('--hostname='.length), '--hostname');
+      continue;
+    }
+    if (NON_ROUTING_VALUE_OPTIONS.has(arg)) {
+      const value = String(argv[index + 1] ?? '');
+      if (value && !value.startsWith('-')) index += 1;
       continue;
     }
 
