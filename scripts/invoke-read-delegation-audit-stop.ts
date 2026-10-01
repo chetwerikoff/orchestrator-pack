@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runProcessSync } from './kernel/subprocess.ts';
+import { SUPPORTED_NODE_MAJOR } from './toolchain/node-runtime-contract.mjs';
 
 const root = resolve(join(dirname(fileURLToPath(import.meta.url)), '..'));
 const launcher = join(root, 'scripts/lib/Invoke-TypeScriptCli.ts');
@@ -34,8 +35,8 @@ try {
     inheritParentEnv: true,
   });
   const version = nodeVersion.stdout.trim();
-  if (!/^v22\./u.test(version)) {
-    throw new Error(`Node.js 22.x is required; running ${version || 'unknown'}.`);
+  if (!new RegExp(`^v${SUPPORTED_NODE_MAJOR}\\.`, 'u').test(version)) {
+    throw new Error(`Node.js ${SUPPORTED_NODE_MAJOR}.x is required by scripts/toolchain/node-version.json; running ${version || 'unknown'}.`);
   }
 
   const stdin = readStdinFully();
