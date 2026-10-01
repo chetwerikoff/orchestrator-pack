@@ -44,9 +44,9 @@ export interface NpmRuntimeContractResult {
 }
 
 export function parseRuntimeVersionDeclaration(value: unknown): RuntimeVersionDeclaration;
-export function parseRuntimeVersionMajor(value: unknown, label?: string): number;
+export function parseRuntimeVersionMajor(value: unknown, label?: string, expectedMajor?: number): number;
 export function parseNodeVersionMajor(value: unknown, label?: string): number;
-export function parseEngineMajor(value: unknown, label?: string): number;
+export function parseEngineMajor(value: unknown, label?: string, expectedDeclaration?: string): number;
 export function parseNodeVersionDeclaration(value: unknown): number;
 export function evaluateNodeRuntimeContract(input: NodeRuntimeContractInput): NodeRuntimeContractResult;
 export function readNodeRuntimeDeclaration(repoRoot: string): {

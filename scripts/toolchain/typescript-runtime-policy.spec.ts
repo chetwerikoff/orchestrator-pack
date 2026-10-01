@@ -190,9 +190,14 @@ describe('single-major runtime contract', () => {
     expect(() => evaluateNodeRuntimeContract(nodeInput({
       engineText: `${SUPPORTED_NODE_MAJOR + 1}.x`,
     }))).toThrow('OPK_NODE_RUNTIME_DECLARATION_DRIFT');
+    expect(() => evaluateNodeRuntimeContract(nodeInput({
+      npmEngineText: `>=${SUPPORTED_NPM_MAJOR}`,
+    }))).toThrow(
+      `package.json engines.npm must use an exact major contract such as "${NPM_ENGINE_DECLARATION}"`,
+    );
   });
 
-  it('enforces the npm major from the same authority', () => {
+  it('uses the npm authority in runtime diagnostics', () => {
     expect(evaluateNpmRuntimeContract({
       versionFileNpmMajor: SUPPORTED_NPM_MAJOR,
       npmEngineText: NPM_ENGINE_DECLARATION,
@@ -203,6 +208,20 @@ describe('single-major runtime contract', () => {
       npmEngineText: NPM_ENGINE_DECLARATION,
       actualVersion: `${SUPPORTED_NPM_MAJOR + 1}.0.0`,
     })).toThrow('OPK_NPM_RUNTIME_UNSUPPORTED');
+    expect(() => evaluateNpmRuntimeContract({
+      versionFileNpmMajor: SUPPORTED_NPM_MAJOR,
+      npmEngineText: NPM_ENGINE_DECLARATION,
+      actualVersion: 'not-a-version',
+    })).toThrow(
+      `installed npm version must be a semantic version such as v${SUPPORTED_NPM_MAJOR}.0.0`,
+    );
+    expect(() => evaluateNpmRuntimeContract({
+      versionFileNpmMajor: SUPPORTED_NPM_MAJOR,
+      npmEngineText: `>=${SUPPORTED_NPM_MAJOR}`,
+      actualVersion: `${SUPPORTED_NPM_MAJOR}.0.0`,
+    })).toThrow(
+      `package.json engines.npm must use an exact major contract such as "${NPM_ENGINE_DECLARATION}"`,
+    );
   });
 });
 
@@ -334,13 +353,19 @@ describe('launch inventory and fail-closed policy', () => {
       && violation.path === 'scripts/live-runtime-policy.ts')).toBe(false);
   });
 
-  it('rejects runtime-major restatements in live extensionless scripts', () => {
+  it('includes extensionless shebang scripts under live plugin roots and retains exclusions', () => {
     const root = makePolicyFixture();
-    const path = 'scripts/worker-smoke-run';
-    write(join(root, path), `#!/usr/bin/env bash\necho 'Node ${SUPPORTED_NODE_MAJOR}'\n`);
+    const pluginPath = 'plugins/scope-guard/hooks/pre-commit';
+    const nonShebangPath = 'plugins/scope-guard/hooks/runtime-note';
+    const historicalPath = 'scripts/fixtures/historical-runtime-check';
+    write(join(root, pluginPath), `#!/usr/bin/env sh\n# Node ${SUPPORTED_NODE_MAJOR}\n`);
+    write(join(root, nonShebangPath), `# Node ${SUPPORTED_NODE_MAJOR}\n`);
+    write(join(root, historicalPath), `#!/usr/bin/env sh\n# Node ${SUPPORTED_NODE_MAJOR}\n`);
     const violations = checkTypeScriptRuntimePolicy(root).violations.filter((violation) =>
-      violation.rule === 'runtime-major-restatement' && violation.path === path);
-    expect(violations).toHaveLength(1);
+      violation.rule === 'runtime-major-restatement');
+    expect(violations.filter((violation) => violation.path === pluginPath)).toHaveLength(1);
+    expect(violations.some((violation) => violation.path === nonShebangPath)).toBe(false);
+    expect(violations.some((violation) => violation.path === historicalPath)).toBe(false);
   });
 
   it('rejects alias-bound and runtime-derived plain major restatements', () => {

@@ -50,13 +50,17 @@ export const SUPPORTED_NPM_MAJOR = BUNDLED_RUNTIME_DECLARATION.npmMajor;
 export const NODE_ENGINE_DECLARATION = `${SUPPORTED_NODE_MAJOR}.x`;
 export const NPM_ENGINE_DECLARATION = `${SUPPORTED_NPM_MAJOR}.x`;
 
-export function parseRuntimeVersionMajor(value, label = 'runtime version') {
+export function parseRuntimeVersionMajor(
+  value,
+  label = 'runtime version',
+  expectedMajor = SUPPORTED_NODE_MAJOR,
+) {
   const text = String(value ?? '').trim();
   const match = /^v?(\d+)\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.exec(text);
   if (!match?.[1]) {
     throw contractError(
       'OPK_NODE_RUNTIME_VERSION_MALFORMED',
-      `${label} must be a semantic version such as v${SUPPORTED_NODE_MAJOR}.0.0; received ${JSON.stringify(text)}`,
+      `${label} must be a semantic version such as v${expectedMajor}.0.0; received ${JSON.stringify(text)}`,
     );
   }
   return Number(match[1]);
@@ -66,13 +70,17 @@ export function parseNodeVersionMajor(value, label = 'Node.js version') {
   return parseRuntimeVersionMajor(value, label);
 }
 
-export function parseEngineMajor(value, label = 'package.json engines declaration') {
+export function parseEngineMajor(
+  value,
+  label = 'package.json engines declaration',
+  expectedDeclaration = NODE_ENGINE_DECLARATION,
+) {
   const text = String(value ?? '').trim();
   const match = /^(\d+)\.x$/u.exec(text);
   if (!match?.[1]) {
     throw contractError(
       'OPK_NODE_RUNTIME_ENGINE_DECLARATION_MALFORMED',
-      `${label} must use an exact major contract such as "${NODE_ENGINE_DECLARATION}"; received ${JSON.stringify(text)}`,
+      `${label} must use an exact major contract such as "${expectedDeclaration}"; received ${JSON.stringify(text)}`,
     );
   }
   return Number(match[1]);
@@ -97,8 +105,8 @@ export function evaluateNodeRuntimeContract({
       `${NODE_VERSION_FILE} nodeMajor and npmMajor must be integers`,
     );
   }
-  const engineMajor = parseEngineMajor(engineText, 'package.json engines.node');
-  const npmEngineMajor = parseEngineMajor(npmEngineText, 'package.json engines.npm');
+  const engineMajor = parseEngineMajor(engineText, 'package.json engines.node', NODE_ENGINE_DECLARATION);
+  const npmEngineMajor = parseEngineMajor(npmEngineText, 'package.json engines.npm', NPM_ENGINE_DECLARATION);
   const actualMajor = parseNodeVersionMajor(actualVersion, 'installed Node.js version');
 
   if (canonicalMajor !== engineMajor || canonicalNpmMajor !== npmEngineMajor) {
@@ -200,8 +208,8 @@ export function evaluateNpmRuntimeContract({
   if (!Number.isInteger(canonicalMajor)) {
     throw contractError('OPK_NPM_RUNTIME_VERSION_FILE_MALFORMED', `${NODE_VERSION_FILE} npmMajor must be an integer`);
   }
-  const engineMajor = parseEngineMajor(npmEngineText, 'package.json engines.npm');
-  const actualMajor = parseRuntimeVersionMajor(actualVersion, 'installed npm version');
+  const engineMajor = parseEngineMajor(npmEngineText, 'package.json engines.npm', NPM_ENGINE_DECLARATION);
+  const actualMajor = parseRuntimeVersionMajor(actualVersion, 'installed npm version', SUPPORTED_NPM_MAJOR);
   if (canonicalMajor !== engineMajor || canonicalMajor !== SUPPORTED_NPM_MAJOR) {
     throw contractError(
       'OPK_NPM_RUNTIME_DECLARATION_DRIFT',
