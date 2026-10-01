@@ -7,6 +7,7 @@ export type Tier = 'T1' | 'T2' | 'T3';
 
 export type ComplexityTierFence =
   | { kind: 'tier-fence'; tier: Tier; riskNote?: string }
+  | { kind: 'no-tier'; skipLine: true }
   | { kind: 'unparseable'; reason: string };
 
 const FENCE_RE = /`{3}complexity-tier\s*\n([\s\S]*?)`{3}/i;
@@ -23,6 +24,10 @@ export function parseComplexityTierFence(draftText: string): ComplexityTierFence
       return { kind: 'unparseable', reason: 'invalid complexity-tier line: ' + line };
     }
     fields.set(line.slice(0, separator).trim().toLowerCase(), line.slice(separator + 1).trim());
+  }
+  const skipLine = fields.get('skip-line');
+  if (skipLine && /^(true|yes|1)$/i.test(skipLine)) {
+    return { kind: 'no-tier', skipLine: true };
   }
   const tier = (fields.get('tier') ?? '').toUpperCase();
   if (!VALID_TIERS.has(tier)) {
@@ -53,8 +58,8 @@ export function checkTierGateGuard(
 }
 
 export function formatTierGatePassMessage(result: TierGateGuardResult): string {
-  if (!result.ok || result.fence.kind !== 'tier-fence') {
-    throw new Error('tier-gate result is not PASS');
-  }
+  if (!result.ok) throw new Error('tier-gate result is not PASS');
+  if (result.fence.kind === 'no-tier') return 'tier-gate guard: PASS (no-tier skip-line)';
+  if (result.fence.kind !== 'tier-fence') throw new Error('tier-gate result is not PASS');
   return 'tier-gate guard: PASS ' + result.fence.tier;
 }

@@ -13,6 +13,7 @@ import {
 } from './state-light-turn.ts';
 import { BEFORE_CDP_BROWSER_RELEASE, releaseCdpBrowser } from './browser-session.ts';
 import { runStateLightEntry } from './state-light-entry.ts';
+import { readChatBinding } from './chat-bindings.ts';
 import { TURN_STATES } from './contracts.ts';
 import { loadChromium } from './ui-adapter.ts';
 import {
@@ -282,6 +283,8 @@ describe('Issue #1238 publication boundary', () => {
     const input = join(root, 'prompt.txt');
     const output = join(root, 'reply.txt');
     const reply = 'production entrypoint publication';
+    const chatUrl = 'https://chatgpt.com/c/123e4567-e89b-12d3-a456-426614174003';
+    vi.stubEnv('XDG_STATE_HOME', join(root, 'state'));
     writeFileSync(input, 'prompt', 'utf8');
     let pageCloseCalls = 0;
     let browserCloseCalls = 0;
@@ -316,18 +319,22 @@ describe('Issue #1238 publication boundary', () => {
         '--cdp', 'http://127.0.0.1:9222',
         '--input', input,
         '--output', output,
-        '--chat-url', 'https://chatgpt.com/c/123e4567-e89b-12d3-a456-426614174003',
+        '--chat-url', chatUrl,
         '--timeout-ms', '1000',
         '--poll-ms', '1',
       ], {
-        runTurn: (argv) => runStateLightTurn(argv, {
-          runTurn: async () => ({
-            result: makeTurnResult({ send_count: 1 }),
-            page,
-            browser,
-            publicationState: publication.state,
-          }),
-        }),
+        runTurn: (argv, options) => {
+          expect(options).toMatchObject({ entryLivenessHeartbeat: true, recordChatBinding: true });
+          return runStateLightTurn(argv, {
+            ...options,
+            runTurn: async () => ({
+              result: makeTurnResult({ send_count: 1, conversation_id: chatUrl }),
+              page,
+              browser,
+              publicationState: publication.state,
+            }),
+          });
+        },
       });
       const result = JSON.parse(writes.at(-1) ?? '{}') as CompactTurnResult;
       expect(exitCode).toBe(0);
@@ -336,9 +343,11 @@ describe('Issue #1238 publication boundary', () => {
       expect(pageCloseCalls).toBe(1);
       expect(browserCloseCalls).toBe(1);
       expect(readFileSync(output, 'utf8')).toBe(reply);
+      expect(readChatBinding(chatUrl)?.worktree).toBe(process.cwd());
     } finally {
       foreignTargetOpen = true;
       stdout.mockRestore();
+      vi.unstubAllEnvs();
       rmSync(root, { recursive: true, force: true });
     }
   });

@@ -5,7 +5,7 @@ import { runStateLightTurn } from './state-light-turn.ts';
 import { settleCliMain } from './cli-main.ts';
 
 export type StateLightEntryDependencies = {
-  readonly runTurn?: (argv: readonly string[]) => Promise<number>;
+  readonly runTurn?: typeof runStateLightTurn;
 };
 
 export async function runStateLightEntry(
@@ -14,12 +14,13 @@ export async function runStateLightEntry(
 ): Promise<number> {
   const [command, ...turnArgs] = argv;
   const runTurn = deps.runTurn ?? runStateLightTurn;
-  if (command === 'turn') return runTurn(turnArgs);
+  const turnOptions = { entryLivenessHeartbeat: true, recordChatBinding: true } as const;
+  if (command === 'turn') return runTurn(turnArgs, turnOptions);
   if (command === 'session') {
     const { runStateLightSession } = await import('./state-light-session.ts');
     return runStateLightSession(turnArgs);
   }
-  if (command?.startsWith('--')) return runTurn(argv);
+  if (command?.startsWith('--')) return runTurn(argv, turnOptions);
   const { runCli } = await import('../chatgpt-browser-turn.ts');
   return runCli(argv);
 }

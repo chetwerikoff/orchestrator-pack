@@ -1,7 +1,7 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
 import { describe, expect, it } from 'vitest';
-import { checkTierGateGuard, parseComplexityTierFence } from './lib/tier-gate-core.ts';
+import { checkTierGateGuard, formatTierGatePassMessage, parseComplexityTierFence } from './lib/tier-gate-core.ts';
 
 const valid = `## Prerequisite
 None.
@@ -67,6 +67,20 @@ describe('current substantive Issue floor', () => {
     expect(result.ok).toBe(true);
     expect(result.errors).toEqual([]);
     expect(parseComplexityTierFence(valid)).toMatchObject({ kind: 'tier-fence', tier: 'T2' });
+  });
+
+  it('accepts below-the-ladder work without tier review while retaining substantive floors', () => {
+    const noTier = valid.replace(
+      'tier: T2\nfailure-type: local-behavior\nsize: single-component-design-judgment',
+      'skip-line: true',
+    );
+    const result = checkTierGateGuard(noTier);
+    expect(result.ok).toBe(true);
+    expect(parseComplexityTierFence(noTier)).toEqual({ kind: 'no-tier', skipLine: true });
+    expect(formatTierGatePassMessage(result)).toContain('PASS (no-tier skip-line)');
+    const missingWorkerSafety = checkTierGateGuard(noTier.replaceAll('vendor/**\n', ''));
+    expect(missingWorkerSafety.ok).toBe(false);
+    expect(missingWorkerSafety.errors.join('\n')).toContain('vendor/**');
   });
 
   it('fails closed on missing worker-safety and body floors', () => {

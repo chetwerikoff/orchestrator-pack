@@ -107,6 +107,12 @@ starts, do not lower the tier unless the operator explicitly decides to do so.
 | T2 | Three independent GPT architectural reviews launched in parallel, then one independent GPT terminal architectural review. |
 | T3 | The T2 GPT reviews, plus one separate Claude architectural-lens review before the GPT terminal review. |
 
+For below-the-ladder work, represent the classification with a
+`complexity-tier` fence containing `skip-line: true`. This is no tier, not T1,
+and it has no tier-required reviewer stages. Continue the authoring workflow and
+run the same substantive floor and acceptance checks; no-tier skips only the
+tier review topology.
+
 For every required review, the reviewer reads the live Issue and publishes one
 top-level Issue comment. The first line is
 `Read revision: #<issue> rNN`, using the revision actually read. The review
