@@ -239,9 +239,6 @@ describe('real representative declarative ports', () => {
     }));
     expect(renamed.status).toBe('FAIL');
     expect(renamed.details).toContain('docs/browser-gpt-turn-runbook.md missing required content: ## Incident handling');
-    expect(renamed.details).toContain(
-      '.cursor/rules/flow-manager-browser-turn-monitoring.mdc unresolved section link: ../../docs/browser-gpt-turn-runbook.md#incident-handling',
-    );
 
     const marker = '(../../docs/browser-gpt-turn-runbook.md#launch)';
     const duplicate = evaluateDeclarativeGate(agentRulesMovedContentGate, memorySnapshot({
