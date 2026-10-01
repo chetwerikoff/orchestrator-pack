@@ -399,7 +399,7 @@ export function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions 
   const opts: StageFinalizeCliOptions = {
     command,
     repo: '',
-    issueNumber: 0;
+    issueNumber: 0,
     publicActor: 'cursor-flow-manager',
     publicActorExplicit: false,
     json: false,
@@ -612,7 +612,7 @@ function finalAcceptanceUsage(): string {
 function parseFinalAcceptanceArgs(argv: string[]): FinalAcceptanceCliOptions {
   const opts: FinalAcceptanceCliOptions = {
     repo: '',
-    issueNumber: 0;
+    issueNumber: 0,
     cycleId: '',
     issueBodyPath: '',
     issueRevision: '',
