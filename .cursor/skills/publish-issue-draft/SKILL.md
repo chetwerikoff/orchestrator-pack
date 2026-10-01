@@ -30,7 +30,7 @@ This skill picks **how** a draft is persisted after `create-issue-draft`:
 |------|--------------|-------------------------|---------------|------|
 | **sync-only** (default) | yes | **no** | no | normal impl tasks; issue body is the full spec |
 | **batch** | yes | one PR for several drafts | one run | epic+children, arch waves, registry refresh |
-| **full-publish** | yes | one PR for this draft | yes | user says "commit/merge this draft"; spec must live in main before impl; audit |
+| **full-publish** | yes | one PR for this draft | yes | user says "commit/merge this draft"; spec must live on the selected default branch before impl; audit |
 
 Codex review is **unchanged**: draft-quality review happens in
 `create-issue-draft` (before sync); for any PR opened here, an optional manual
@@ -86,7 +86,7 @@ working artifact; the issue carries everything the worker needs.
 
 **Accepted risk:** the selected default branch will lag the local draft. If a *future* draft's
 prerequisites reference this draft by its `docs/issues_drafts/...` path on
-`main`, that path won't resolve until a batch/full publish runs. Mitigate by
+the selected default branch, that path won't resolve until a batch/full publish runs. Mitigate by
 keeping the full spec in the issue body and a self-reference (draft path) inside it.
 
 ## Mode B — batch publish
@@ -238,7 +238,7 @@ git fetch origin
 ```
 
 Fallback/manual branch work must happen in a separate checkout (not the architect's
-live working tree): update that checkout's `main` from origin, then create
+live working tree): update that checkout's selected default branch from origin, then create
 `architect/draft-NN-<slug>` there (or stay on a clean branch already cut for this
 draft). Record implementation issue number **N** from the draft header.
 
