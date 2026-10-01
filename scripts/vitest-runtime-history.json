@@ -10,7 +10,6 @@
     "plugins/_shared/tests/normalize.test.ts": 45000,
     "scripts/ci-green-wake-reconcile.test.ts": 173,
     "scripts/contract-evidence-legacy-list-guard.test.ts": 176,
-    "scripts/finding-ledger-guard.test.ts": 45000,
     "scripts/gh-wrapper.test.ts": 7490,
     "scripts/orchestrator-escalation.test.ts": 45000,
     "scripts/orchestrator-escalation-router.test.ts": 45000,
@@ -31,7 +30,6 @@
     "scripts/review-wake-trigger.test.ts": 58,
     "scripts/session-pr-binding-resolver.test.ts": 120000,
     "scripts/session-runtime-liveness.test.ts": 13,
-    "scripts/stage-completeness-guard.test.ts": 45000,
     "scripts/tier-gate-guard.test.ts": 45000,
     "scripts/worker-message-submit-reconcile.test.ts": 366,
     "scripts/pr-session-binding-cache.test.ts": 120000,
@@ -39,14 +37,7 @@
     "scripts/pr2-foundation/mutation-external-ci.test.ts": 492,
     "scripts/pr2-foundation/foundation.test.ts": 415,
     "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": 15279,
-    "scripts/lib/create-issue-stage-record.test.ts": 22,
-    "scripts/lib/create-issue-stage-record-artifacts.test.ts": 4308,
-    "scripts/toolchain/create-issue-final-acceptance.test.ts": 31,
     "scripts/toolchain/create-issue-authoring-contract.test.ts": 3,
-    "scripts/create-issue-parked-migration.test.ts": 120,
-    "scripts/lib/create-issue-comment-census.test.ts": 120,
-    "scripts/lib/create-issue-completed-result.test.ts": 120,
-    "scripts/lib/create-issue-stage-topology.test.ts": 120,
     "scripts/pr-scope-declaration.test.ts": 100,
     "scripts/ci-preflight/contract.test.ts": 167,
     "scripts/chatgpt-browser-turn/state-light-session.test.ts": 20,
@@ -130,7 +121,6 @@
     "plugins/_shared/tests/normalize.test.ts": "measured",
     "scripts/ci-green-wake-reconcile.test.ts": "measured",
     "scripts/contract-evidence-legacy-list-guard.test.ts": "measured",
-    "scripts/finding-ledger-guard.test.ts": "measured",
     "scripts/gh-wrapper.test.ts": "measured",
     "scripts/orchestrator-escalation.test.ts": "measured",
     "scripts/orchestrator-escalation-router.test.ts": "measured",
@@ -152,21 +142,13 @@
     "scripts/review-wake-trigger.test.ts": "measured",
     "scripts/session-pr-binding-resolver.test.ts": "measured",
     "scripts/session-runtime-liveness.test.ts": "measured",
-    "scripts/stage-completeness-guard.test.ts": "measured",
     "scripts/tier-gate-guard.test.ts": "measured",
     "scripts/worker-message-submit-reconcile.test.ts": "measured",
     "scripts/kernel/subprocess.test.ts": "measured",
     "scripts/pr2-foundation/mutation-external-ci.test.ts": "measured",
     "scripts/pr2-foundation/foundation.test.ts": "measured",
     "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": "measured",
-    "scripts/lib/create-issue-stage-record.test.ts": "measured",
-    "scripts/lib/create-issue-stage-record-artifacts.test.ts": "measured",
-    "scripts/toolchain/create-issue-final-acceptance.test.ts": "measured",
     "scripts/toolchain/create-issue-authoring-contract.test.ts": "measured",
-    "scripts/create-issue-parked-migration.test.ts": "measured",
-    "scripts/lib/create-issue-comment-census.test.ts": "measured",
-    "scripts/lib/create-issue-completed-result.test.ts": "measured",
-    "scripts/lib/create-issue-stage-topology.test.ts": "measured",
     "scripts/pr-scope-declaration.test.ts": "measured",
     "scripts/ci-preflight/contract.test.ts": "measured",
     "scripts/chatgpt-browser-turn/state-light-session.test.ts": "measured",
@@ -228,13 +210,7 @@
     "scripts/kernel/json-artifact.test.ts": "measured",
     "scripts/kernel/json-contract.test.ts": "measured",
     "scripts/launch-watch/watch.test.ts": "fallback",
-    "scripts/lib/create-issue-final-acceptance-revision.test.ts": "fallback",
-    "scripts/lib/create-issue-stage-lifecycle-acceptance.test.ts": "fallback",
-    "scripts/lib/create-issue-stage-lifecycle.test.ts": "fallback",
-    "scripts/lib/create-issue-stage-record-review-lane.test.ts": "fallback",
     "scripts/lib/operator-publication.test.ts": "measured",
-    "scripts/lib/protected-signal-receipt.test.ts": "fallback",
-    "scripts/lib/review-lane-routing.test.ts": "fallback",
     "scripts/lib/worker-degraded-ci-handoff.test.ts": "measured",
     "scripts/lib/worker-report-store.test.ts": "fallback",
     "scripts/orca-runtime/task-adapter.test.ts": "fallback",
@@ -272,7 +248,6 @@
     "scripts/runtime/single-instance-lease.test.ts": "fallback",
     "scripts/runtime/task-lifecycle.test.ts": "fallback",
     "scripts/runtime/worker-recovery.test.ts": "fallback",
-    "scripts/stage-slot-consumed.test.ts": "fallback",
     "scripts/tiering-calibration.test.ts": "fallback",
     "scripts/tiering-distribution-report.test.ts": "fallback",
     "scripts/toolchain/chatgpt-browser-turn.diagnostics.test.ts": "measured",
@@ -315,12 +290,10 @@
     "scripts/orca-runtime/dispatch-terminal-mail.test.ts": "fallback",
     "scripts/pr2-foundation/scheduler-assignment-lifecycle.test.ts": "fallback",
     "scripts/sync-ops-wiki.test.ts": "fallback",
-    "scripts/create-issue-convergence.test.ts": "fallback",
     "scripts/bootstrap.test.ts": "fallback",
     "scripts/lib/worker-smoke-bounded-create.test.ts": "fallback",
     "scripts/replay-fixture-import.test.ts": "fallback",
     "scripts/delegated-integration-contract.test.ts": "fallback",
-    "scripts/lib/create-issue-manager-boundary.test.ts": "fallback",
     "scripts/chatgpt-browser-turn/ui-adapter.test.ts": "fallback",
     "scripts/lib/execute-issue-manager-boundary.test.ts": "fallback",
     "scripts/fleet/fleet-sweep.test.ts": "fallback",
@@ -507,37 +480,8 @@
       51,
       52
     ],
-    "scripts/lib/create-issue-stage-record.test.ts": [
-      22
-    ],
-    "scripts/lib/create-issue-stage-record-artifacts.test.ts": [
-      4448,
-      4276,
-      2895,
-      4308,
-      4419
-    ],
-    "scripts/toolchain/create-issue-final-acceptance.test.ts": [
-      32,
-      31,
-      23,
-      31,
-      30
-    ],
     "scripts/toolchain/create-issue-authoring-contract.test.ts": [
       3
-    ],
-    "scripts/create-issue-parked-migration.test.ts": [
-      120
-    ],
-    "scripts/lib/create-issue-comment-census.test.ts": [
-      120
-    ],
-    "scripts/lib/create-issue-completed-result.test.ts": [
-      120
-    ],
-    "scripts/lib/create-issue-stage-topology.test.ts": [
-      120
     ],
     "scripts/pr-scope-declaration.test.ts": [
       100
@@ -790,14 +734,7 @@
     "scripts/review-wake-trigger.test.ts": "2026-10-01T18:13:05.679Z",
     "scripts/worker-message-submit-reconcile.test.ts": "2026-10-01T12:31:03.982Z",
     "scripts/review-cycle-cap.test.ts": "2026-10-01T18:13:05.679Z",
-    "scripts/lib/create-issue-stage-record.test.ts": "2026-08-01T16:58:55.741Z",
-    "scripts/lib/create-issue-stage-record-artifacts.test.ts": "2026-10-01T18:13:05.679Z",
-    "scripts/toolchain/create-issue-final-acceptance.test.ts": "2026-10-01T10:17:05.877Z",
     "scripts/toolchain/create-issue-authoring-contract.test.ts": "2026-08-02T14:14:16.197Z",
-    "scripts/create-issue-parked-migration.test.ts": "2026-08-02T14:30:00.000Z",
-    "scripts/lib/create-issue-comment-census.test.ts": "2026-08-02T14:30:00.000Z",
-    "scripts/lib/create-issue-completed-result.test.ts": "2026-08-02T14:30:00.000Z",
-    "scripts/lib/create-issue-stage-topology.test.ts": "2026-08-02T14:30:00.000Z",
     "scripts/pr-scope-declaration.test.ts": "2026-08-02T14:54:18.508Z",
     "scripts/ci-preflight/contract.test.ts": "2026-08-02T16:30:30.000Z",
     "scripts/chatgpt-browser-turn/state-light-session.test.ts": "2026-08-02T23:20:24.150Z",

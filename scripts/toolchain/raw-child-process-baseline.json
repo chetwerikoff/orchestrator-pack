@@ -793,13 +793,6 @@
       "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
     },
     {
-      "path": "scripts/publish-issue-body-sync.ts",
-      "api": "spawnSync",
-      "fingerprint": "35a6fa80ba22814d83a3",
-      "ordinal": 1,
-      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
-    },
-    {
       "path": "scripts/run-contract-evidence-legacy-list-guard.mjs",
       "api": "execFileSync",
       "fingerprint": "b7562b21ae84409883b7",

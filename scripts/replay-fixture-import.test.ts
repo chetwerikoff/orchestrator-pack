@@ -4,7 +4,6 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { classifyReconciliationTransport } from './lib/create-issue-stage-record-artifacts.ts';
 import {
   COVERED_REPLAY_FIXTURE_INVENTORY,
   importReplayFixture,
@@ -217,58 +216,5 @@ describe('replay fixture policy guard', () => {
 
     writeFileSync(`${first}.provenance.json`, syntheticSidecar(bytes, { synthetic: false }));
     expect(runReplayFixturePolicyCheck(root).failures.join('\n')).toMatch(/harvested provenance requires/u);
-  });
-});
-
-describe('committed transport-shape regression', () => {
-  it('keeps the committed Issue #926 terminal fixture valid after passing through the same scrubber', () => {
-    const path = resolve(import.meta.dirname, '..', 'tests/external-output-references/create-issue-926-terminal-competitive-01-final.json');
-    const scrubbed = scrubReplayFixtureBytes(readFileSync(path));
-    expect(scrubbed.scrubRules).toEqual([]);
-    const envelope = JSON.parse(scrubbed.bytes.toString('utf8')) as Record<string, unknown>;
-    expect(classifyReconciliationTransport(envelope, 1)).toMatchObject({
-      terminalClassification: 'incident',
-      sendCount: 0,
-      retryClass: 'retry-forbidden',
-    });
-  });
-});
-
-describe('operator-local AC2 evidence', () => {
-  const source = process.env.OPK_ISSUE_2005_AC2_SOURCE ?? resolve(process.env.HOME ?? '', '.local/state/create-issue-draft/.review/926/terminal-competitive-01-final.json');
-
-  it.skipIf(!existsSync(source))('imports the exact Issue #926 source and preserves its classified transport shape', () => {
-    const output = join(tempDir(), 'terminal-competitive-01-final.json');
-    const result = importReplayFixture({
-      inputPath: source,
-      outputPath: output,
-      sourceKind: 'browser-turn-recurrence',
-      issue: 2005,
-      stage: 'ac2-operator-local-evidence',
-      slot: 'source-artifact',
-      capturedAt: '2026-09-23T00:00:00.000Z',
-    });
-    const fixture = readFileSync(output);
-    const sidecar = JSON.parse(readFileSync(result.sidecarPath, 'utf8')) as Record<string, unknown>;
-
-    expect(result.sourceSha256).toBe('a318c3c17cd876ba4316984498f627e8de0af7b25a8293995ee963d362141124');
-    expect(result.scrubbedSha256).toBe('b245faac177a09a0328703e91c9f31e1ca110d23471d27521cced9e684433095');
-    expect(result.scrubRules).toEqual(['home-root']);
-    expect(scanReplayFixtureSensitivePatterns(fixture)).toEqual([]);
-    expect(sidecar).toMatchObject({
-      source_kind: 'browser-turn-recurrence',
-      issue: 2005,
-      stage: 'ac2-operator-local-evidence',
-      slot: 'source-artifact',
-      source_sha256: result.sourceSha256,
-      scrubbed_sha256: sha256ReplayFixtureBytes(fixture),
-      scrub_rules: ['home-root'],
-      synthetic: false,
-    });
-    expect(classifyReconciliationTransport(JSON.parse(fixture.toString('utf8')) as Record<string, unknown>, 1)).toMatchObject({
-      terminalClassification: 'incident',
-      sendCount: 0,
-      retryClass: 'eligible-zero-send',
-    });
   });
 });

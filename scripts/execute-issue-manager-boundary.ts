@@ -4,7 +4,7 @@ import './toolchain/native-entrypoint-preflight.ts';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { evaluateCreateIssueManagerBoundary } from './lib/create-issue-next-action.ts';
+import { evaluateManagerBoundary } from './lib/manager-boundary-result.ts';
 import {
   EXECUTE_ISSUE_PHASES,
   classifyExecuteIssueManagerRecord,
@@ -105,7 +105,7 @@ function parseCli(argv: readonly string[]): ParsedCli {
   };
 }
 function defectFromCliError(error: unknown, currentArgv: readonly string[]) {
-  return evaluateCreateIssueManagerBoundary({
+  return evaluateManagerBoundary({
     producer: 'execute-issue-manager-boundary.ts:cli', currentArgv,
     produce: () => { throw error instanceof Error ? error : new Error(String(error)); },
   });

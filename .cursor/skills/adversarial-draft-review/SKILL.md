@@ -34,7 +34,7 @@ unchanged.
 authoring. An explicit «создай задачу с кодексом» selects Codex as flow-manager;
 it does **not** add an in-flow Codex review stage. Run this skill **standalone**
 only when the operator separately asks for a Codex challenge before or beside
-create-issue-draft, and record that choice outside the create-flow stage ledger.
+`create-issue-draft`.
 
 ## Availability is a gate
 
@@ -93,9 +93,7 @@ open risks recorded. Never resume a previous Codex thread.
 
 ### 5. Hand back
 
-Return the reviewed artifact and decision log to the owning flow. Standalone runs
-do not write create-issue-draft workdir captures unless the operator explicitly
-bridges them.
+Return the reviewed artifact and decision log to the owning flow.
 
 ## Don't
 

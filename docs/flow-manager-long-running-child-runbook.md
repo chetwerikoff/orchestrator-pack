@@ -1,15 +1,17 @@
 # Flow-manager long-running Browser-GPT child runbook (Issue #1164)
 
-Canonical caller-side launcher and Browser-GPT adapter for create-issue-draft long
-turns. The adapter does not detach the Browser child independently; it starts the
-canonical launcher at the supported detached boundary and waits for a committed
-handoff receipt before acknowledging acceptance.
+Canonical caller-side launcher and Browser-GPT adapter for long-running tracked
+turns. The adapter is workflow-neutral: create-Issue, execute-Issue, pack-review,
+and other callers keep their own substantive completion authority. The adapter
+does not detach the Browser child independently; it starts the canonical launcher
+at the supported detached boundary and waits for a committed handoff receipt
+before acknowledging transport handoff.
 
 For every Browser-GPT attempt, the caller/orchestrator must mint and retain one
 non-empty invocation identity before invoking the adapter. The adapter validates
 `--invocation-id` before detached launch or handoff acceptance and forwards those
-exact bytes to the child. The same value is reused for supported recovery/harvest;
-its presence is common turn identity and does not select direct-publication mode.
+exact bytes to the child. The same value is reused for supported recovery/harvest; its presence is
+common turn identity only.
 
 ## Package commands
 

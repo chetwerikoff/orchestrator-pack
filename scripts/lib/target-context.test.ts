@@ -10,7 +10,6 @@ import { resolveWakeSupervisorStateRoot } from '../pr2-foundation/wake-superviso
 import { publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath } from './worker-assignment-store.ts';
 import { ensureProjectStateBinding } from './project-state-binding.ts';
 import { readWorkerSmokeReceipt } from './worker-smoke-receipt.ts';
-import { resolveCanonicalReviewDirectory } from './canonical-review-directory.ts';
 import {
   TargetContextError,
   TargetVerificationError,
@@ -577,34 +576,6 @@ describe('target context', () => {
       writeFileSync(target.cardPath, JSON.stringify({ ...target.card, repository: 'owner/other' }), 'utf8');
       expect(() => readWorkerSmokeReceipt(2234, 'b'.repeat(40)))
         .toThrow('project_state_binding_mismatch');
-    } finally {
-      for (const key of keys) {
-        const value = previous[key];
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-    }
-  });
-
-  it('blocks create-Issue durable state resolution while the existing project activation barrier is active', () => {
-    const target = fixture();
-    const root = join(target.root, 'state');
-    const env = { HOME: target.root, XDG_STATE_HOME: root, OPK_PROJECT_ID: 'orchestrator-pack' };
-    const supervisorRoot = resolveWakeSupervisorStateRoot({ env, projectId: 'orchestrator-pack' });
-    const barrier = join(supervisorRoot, 'supervisor', 'stopping');
-    mkdirSync(join(supervisorRoot, 'supervisor'), { recursive: true });
-    writeFileSync(barrier, 'cutover in progress\n', 'utf8');
-    const keys = ['HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'OPK_PROJECT_ID', 'OPK_WAKE_SUPERVISOR_STATE_DIR', 'OPK_CREATE_ISSUE_DRAFT_STATE_ROOT'] as const;
-    const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
-    try {
-      process.env.HOME = target.root;
-      process.env.XDG_CONFIG_HOME = join(target.root, 'config');
-      process.env.XDG_STATE_HOME = root;
-      process.env.OPK_PROJECT_ID = 'orchestrator-pack';
-      delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
-      delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
-      expect(() => resolveCanonicalReviewDirectory({ taskIdentity: 'issue:2186' }))
-        .toThrow('legacy_writer_barrier_active');
     } finally {
       for (const key of keys) {
         const value = previous[key];

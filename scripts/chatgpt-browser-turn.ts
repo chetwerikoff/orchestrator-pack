@@ -55,12 +55,6 @@ import { recordSwallowedDriverException } from './chatgpt-browser-turn/diagnosti
 import { readStableInput } from './chatgpt-browser-turn/input.ts';
 import { publishStateLightReply } from './chatgpt-browser-turn/state-light-turn.ts';
 import {
-  directPublicationReceipt,
-  reviewerSourceMetadata,
-  validateDirectPublicationInputs,
-  type DirectPublicationConfig,
-} from './chatgpt-browser-turn/terminal-witness.ts';
-import {
   BrowserOperationTimeoutError,
   browserOperationClassFromError,
   coerceBrowserOperationTimeout,
@@ -84,15 +78,6 @@ import { writeCapturedSource } from './chatgpt-browser-turn/too-many-requests-so
 const DEFAULT_TIMEOUT_MS = 1_800_000;
 const STALE_PRE_SEND_MS = 120_000;
 const BOOLEAN_OPTIONS = new Set(['new-chat', 'quarantine', 'adjudicate']);
-const LEGACY_DIRECT_PUBLICATION_KEYS = [
-  'reviewer-source-output',
-  'reviewer-source',
-  'repository',
-  'issue-number',
-  'source-revision',
-  'stage',
-  'source-slot',
-] as const;
 
 interface ParsedArgs {
   readonly command: string;
@@ -139,25 +124,8 @@ function assertAllowedOptions(args: ParsedArgs, allowed: readonly string[]): voi
   for (const key of args.options.keys()) if (!set.has(key)) throw new Error(`argument_unknown:${key}`);
 }
 
-function legacyDirectPublicationRequested(args: ParsedArgs): boolean {
-  return LEGACY_DIRECT_PUBLICATION_KEYS.some((key) => args.options.has(key));
-}
-
 function emit(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value)}\n`);
-}
-
-function refuseLegacyDirectPublication(args: ParsedArgs): number {
-  emit({
-    schema: 'turn-result/v1',
-    state: 'input_invalid',
-    scope: 'invocation',
-    cause: 'input_invalid:legacy_direct_publication_turn_refused',
-    invocation_id: option(args, 'invocation-id') ?? randomUUID(),
-    configured_profile_key: 'profile-unresolved',
-    send_count: 0,
-  });
-  return turnExitCode('input_invalid');
 }
 
 function turnResult(
@@ -386,30 +354,6 @@ function browserConfig(args: ParsedArgs): BrowserConfig {
   return { cdp, profile, newChat, timeoutMs, ...(chatUrl ? { chatUrl } : {}), ...(projectUrl ? { projectUrl } : {}) };
 }
 
-function directPublicationConfig(
-  args: ParsedArgs,
-  invocationId: string,
-  prompt: string,
-): DirectPublicationConfig | undefined {
-  const sourceOutput = option(args, 'reviewer-source-output');
-  const directKeys = ['invocation-id', 'reviewer-source', 'repository', 'issue-number', 'source-revision'];
-  if (!sourceOutput) {
-    if (directKeys.some((key) => args.options.has(key))) throw new Error('input_invalid:direct_publication_requires_source_output');
-    return undefined;
-  }
-  const repositoryFullName = required(args, 'repository');
-  const issueNumber = parseInteger(required(args, 'issue-number'), 1);
-  const sourceRevision = required(args, 'source-revision');
-  const reviewerSource = required(args, 'reviewer-source');
-  const validation = validateDirectPublicationInputs({ invocationId, prompt, reviewerSource, repositoryFullName, issueNumber, sourceRevision });
-  if (validation) throw new Error(`input_invalid:${validation}`);
-  return {
-    target: { repositoryFullName, issueNumber, sourceRevision, invocationId },
-    reviewerSource,
-    reviewerSourceOutput: sourceOutput,
-  };
-}
-
 function canonicalConversationFromOpenedPage(
   config: BrowserConfig,
   opened: { page: any } | undefined,
@@ -434,7 +378,7 @@ function emitTurnAndCode(result: TurnResultV1): number {
 async function runTurn(args: ParsedArgs): Promise<number> {
   assertAllowedOptions(args, [
     'profile', 'cdp', 'input', 'output', 'chat-url', 'new-chat', 'project-url', 'timeout-ms',
-    'invocation-id', 'reviewer-source-output', 'reviewer-source', 'repository', 'issue-number', 'source-revision',
+    'invocation-id',
   ]);
   const invocationId = option(args, 'invocation-id') ?? randomUUID();
   let profileKey = 'profile-unresolved';
@@ -456,9 +400,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
   try {
     const baseConfig = browserConfig(args);
     const snapshot = readStableInput(required(args, 'input'));
-    const direct = directPublicationConfig(args, invocationId, snapshot.text);
-    const directDestination = direct ? destinationIdentity(direct.reviewerSourceOutput) : undefined;
-    config = direct ? { ...baseConfig, directPublication: direct } : baseConfig;
+    config = baseConfig;
     profileKey = configuredProfileKey(config.profile, config.cdp);
     const startupCompatibility = profileStartupCompatibility(config.profile, config.cdp);
     if (startupCompatibility) {
@@ -475,9 +417,6 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       ));
     }
     const destination = destinationIdentity(required(args, 'output'));
-    if (direct && directDestination?.finalPath === destination.finalPath) {
-      throw new Error('input_invalid:direct_publication_artifact_alias');
-    }
     const conversationId = config.chatUrl ? normalizeConversationUrl(config.chatUrl) : undefined;
 
     reclaimSafePreSend(profileKey);
@@ -703,70 +642,39 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       service_assistant_id: result.assistantMessageId,
       cause: 'reply_complete',
     });
-    let publication: { state: string; cause?: string; output_bytes?: number; output_sha256?: string };
-    let directReviewerSource = null as ReturnType<typeof reviewerSourceMetadata>;
-    const finishPublicationFailure = async (cause: string): Promise<number> => {
+    const publication = publishReply(
+      profileKey,
+      invocationId,
+      reservation.finalPath,
+      reservation.identity,
+      result.reply,
+    );
+    if (publication.state !== 'committed_ok') {
       if (!incidentId || !opened) throw new Error('publication_cleanup_without_active_owner');
-      const activeIncidentId = incidentId;
-      const ownedTurn = opened;
-      const publicationIncident = updateIncident(profileKey, activeIncidentId, {
+      const publicationIncident = updateIncident(profileKey, incidentId, {
         kind: 'publication_incident',
         phase: 'publication_prepared',
-        cause,
+        cause: publication.cause ?? publication.state,
         owner: undefined,
       });
-      await closeOwnedTurnPage(ownedTurn, { retainPage: false });
+      await closeOwnedTurnPage(opened, { retainPage: false });
       safeRelease(scheduleLock);
       scheduleLock = null;
       safeReleaseDestination(reservation);
       reservation = null;
-      return emitTurnAndCode(turnResult('recovery_required', 'blocking_domain', cause, invocationId, profileKey, {
-        conversation_id: canonicalConversation,
-        ...(ownedTurn.provisionalId ? { provisional_id: ownedTurn.provisionalId } : {}),
-        incident_id: activeIncidentId,
-        generation: publicationIncident.generation,
-      }));
-    };
-    if (config.directPublication) {
-      const settlement = result.directPublication;
-      if (!settlement || settlement.state === 'possible-delivery') {
-        updateIncident(profileKey, incidentId, {
-          kind: 'conversation_incident',
-          phase: 'possible_delivery',
-          cause: settlement?.cause ?? 'direct_publication_observation_missing',
-          owner: undefined,
-        });
-        return emitTurnAndCode(turnResult('recovery_required', 'conversation', settlement?.cause ?? 'direct_publication_observation_missing', invocationId, profileKey, {
+      return emitTurnAndCode(turnResult(
+        'recovery_required',
+        'blocking_domain',
+        publication.cause ?? publication.state,
+        invocationId,
+        profileKey,
+        {
           conversation_id: canonicalConversation,
+          ...(opened.provisionalId ? { provisional_id: opened.provisionalId } : {}),
           incident_id: incidentId,
-        }));
-      }
-      directReviewerSource = reviewerSourceMetadata(settlement, config.directPublication.target);
-      const managerReply = settlement.state === 'success'
-        ? directPublicationReceipt(settlement, config.directPublication.target)
-        : result.reply;
-      if (!directReviewerSource || !managerReply || !settlement.sourceBytes) {
-        updateIncident(profileKey, incidentId, {
-          kind: 'conversation_incident',
-          phase: 'possible_delivery',
-          cause: 'direct_publication_source_or_receipt_invalid',
-          owner: undefined,
-        });
-        return emitTurnAndCode(turnResult('recovery_required', 'conversation', 'direct_publication_source_or_receipt_invalid', invocationId, profileKey, {
-          conversation_id: canonicalConversation,
-          incident_id: incidentId,
-        }));
-      }
-      const sourcePublication = publishStateLightReply(config.directPublication.reviewerSourceOutput, invocationId, settlement.sourceBytes);
-      if (sourcePublication.state !== 'committed_ok') {
-        return await finishPublicationFailure(sourcePublication.cause ?? sourcePublication.state);
-      }
-      publication = publishStateLightReply(reservation.finalPath, invocationId, managerReply);
-    } else {
-      publication = publishReply(profileKey, invocationId, reservation.finalPath, reservation.identity, result.reply);
-    }
-    if (publication.state !== 'committed_ok') {
-      return await finishPublicationFailure(publication.cause ?? publication.state);
+          generation: publicationIncident.generation,
+        },
+      ));
     }
 
     updateIncident(profileKey, incidentId, { phase: 'committed', cause: 'committed' });
@@ -809,7 +717,6 @@ async function runTurn(args: ParsedArgs): Promise<number> {
         relation: 'reply_to',
         source: 'service',
       },
-      ...(directReviewerSource ? { reviewer_source: directReviewerSource } : {}),
     }));
   } catch (error) {
     const message = error instanceof Error ? error.message : 'driver_error';
@@ -1218,9 +1125,6 @@ export async function runCli(argv: readonly string[]): Promise<number> {
     return 22;
   }
   try {
-    if (args.command === 'turn' && legacyDirectPublicationRequested(args)) {
-      return refuseLegacyDirectPublication(args);
-    }
     if (option(args, 'capture-too-many-requests-source')) {
       if (args.command !== 'turn') throw new Error('argument_invalid');
       return await runTooManyRequestsSourceCapture(args);

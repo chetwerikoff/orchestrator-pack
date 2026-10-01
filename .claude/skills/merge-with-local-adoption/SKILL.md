@@ -1,7 +1,7 @@
 ---
 name: merge-with-local-adoption
 description: >-
-  Merge a PR, safely adopt merged main in the operator checkout, apply documented
+  Merge a PR, safely adopt the merged selected default branch in the operator checkout, apply documented
   local adoption, then quiesce and remove the selected merged-PR worktree. Ordinary
   repository gates remain useful evidence; a direct top-level user instruction
   overrides repository-owned merge and cleanup refusals while preserving truthful

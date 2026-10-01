@@ -1,6 +1,6 @@
 ---
 name: discuss-with-gpt
-description: Use when the user asks to adversarially challenge a draft/artifact with GPT (the custom ChatGPT project) — triggers «с gpt», «с гпт», «обсуди с gpt», «обсуди с гпт», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt», «создай задачу с gpt», "draft with gpt", "discuss with gpt", "challenge with gpt". Brief-only creation routes through create-issue-draft. Standalone artifact challenge keeps driver.mjs. Tracked create/review turns follow the canonical Browser-GPT carrier and portable manager runbook; this skill retains routing, draft-author relocation policy, and standalone-driver policy. OpenCode is the default flow-manager when no runtime is selected; a capable operator-selected runtime such as Cursor or Codex may manage create-issue-draft without becoming a reviewer-engine substitute.
+description: Use when the user asks to adversarially challenge a draft/artifact with GPT (the custom ChatGPT project) — triggers «с gpt», «с гпт», «обсуди с gpt», «обсуди с гпт», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt», «создай задачу с gpt», "draft with gpt", "discuss with gpt", "challenge with gpt". Brief-only creation routes through create-issue-draft. Standalone artifact challenge keeps driver.mjs. Tracked create/review turns follow the canonical Browser-GPT carrier and portable manager runbook. OpenCode is the default flow-manager when no runtime is selected; a capable operator-selected runtime such as Cursor or Codex may manage create-issue-draft without becoming a reviewer-engine substitute.
 ---
 
 # discuss-with-gpt
@@ -13,13 +13,13 @@ roles and their contracts must not be mixed:
   `../../.claude/skills/discuss-with-gpt/driver.mjs`, PASS_ID/SHA validation,
   and standalone durable pass states.
 - **Tracked create/review transport** — `create-issue-draft` author/reviewer turns
-  follow the canonical carrier, runbook, and workflow-owned stage contracts. They
+  follow the canonical carrier, runbook, and workflow-owned review/comment contract. They
   are not the standalone driver and do not inherit its retry/validation state
   machine.
 
-Issue-body floors, tiering, finding-ledger normalization, chat-role separation,
+Issue-body floors, tier selection, review comments, author dispositions,
 and acceptance remain owned by `create-issue-draft`. Claude runs only the T3
-`architectural-lens` stage defined there. Flow-manager runtime selection follows
+architectural-lens review defined there. Flow-manager runtime selection follows
 that canonical skill: **OpenCode** is the default only when no runtime is selected;
 a capable operator-selected runtime such as **Cursor or Codex** may manage the flow.
 Codex manager selection does not let Codex replace Browser-GPT reviewer stages or
@@ -30,69 +30,13 @@ the required T3 Claude lens.
 | Trigger | Route |
 |---------|-------|
 | «с gpt» / «с гпт» / «обсуди с gpt» / "discuss with gpt" over an existing local artifact | standalone `driver.mjs` flow in this skill |
-| «создай задачу с gpt» / brief-only "draft with gpt" | `create-issue-draft` brief-only entry; effective tier floor T2 |
+| «создай задачу с gpt» / brief-only "draft with gpt" | `create-issue-draft` brief-only entry |
 | GPT-authored Issue task, with or without historical task-chat URL | `create-issue-draft`; tracked mechanics are supplied by the canonical carrier and runbook |
 | «с кодексом» / "with codex" over an existing artifact for challenge/review | `adversarial-draft-review` |
 | explicit request to create or manage a task with Codex | `create-issue-draft` with Codex selected as flow-manager |
 | bug/root-cause consult | `investigate-root-cause` / `codex:rescue` |
 
-Do not impose the standalone adversarial loop on normal create-issue-draft stages.
-
-## Draft-author relocation
-
-When Issue #579 relocation is active, the draft-author is a delegated role rather
-than the architect's live-session authoring mode. The owning create-issue workflow
-still defines tiering, stage order, review-loop acceptance, and publication gates;
-this section owns only the relocated author-session contract.
-
-### Role split
-
-- **Architect:** brief, advisory tier prior, T3 lens pass, tier-gate escalation,
-  contested protected findings, and **pre-sync review**. The architect does not
-  author the full spec in the live session while relocation is active.
-- **Draft-author session:** execute the full create-issue draft from the brief —
-  recon, decomposition, tier gate, design analysis when required, review loop,
-  disposition ledger, discipline checks, and Codex draft review — while obeying
-  the owning create-issue workflow.
-
-### Brief handoff
-
-The minimum handoff is problem/goal, advisory tier prior, constraints and
-out-of-scope, plus grounding pointers the architect verified. No prescribed brief
-file path is required.
-
-### Isolation
-
-Work in an **isolated checkout or scratch workspace**. Never perform authoring Git
-operations in the architect's live working tree. Shared-index authoring,
-dirty-tree delegation, force checkout/reset recovery, and force-push semantics are
-forbidden.
-
-### Engine selection
-
-- Default relocated draft-author engine: **Cursor**; never auto-switch it.
-- **Codex or Sonnet 5** require an explicit user request.
-- Completion evidence names `authoringEngine` and `selectionBasis`
-  (`default` | `explicit-request`). A non-Cursor draft-author with `default`
-  selection basis is invalid.
-- When the author engine equals the wrapper adversary engine, run the adversarial
-  pass as an independent instance so author and adversary remain distinct.
-
-### Completion proof
-
-Exit status is not completion proof. Complete only when the draft exists at the
-expected path, discipline checks pass, the review-loop outcome is recorded, and
-the completion record links the brief, draft path, engine, selection basis, tier,
-review outcome, disposition status, discipline results, and final status.
-
-Mechanical guard: `scripts/draft-author-relocation-contract.mjs`.
-
-### Fallback and sync boundary
-
-Until relocation is active, or when the delegate is unavailable or incomplete,
-use architect-as-author `create-issue-draft` in the architect session and record
-the fallback reason. The draft-author session must not sync or publish an Issue
-before architect pre-sync review and the existing workflow gates pass.
+Do not impose the standalone adversarial loop on normal create-issue-draft review rounds.
 
 ## Browser preconditions and tracked-turn pointer
 
@@ -111,15 +55,9 @@ owned by this procedure: `../../.claude/skills/discuss-with-gpt/config.mjs`,
 For tracked create/review turns, follow the canonical carrier
 [`.cursor/rules/flow-manager-browser-turn-monitoring.mdc`](../../../.cursor/rules/flow-manager-browser-turn-monitoring.mdc)
 and [`docs/browser-gpt-turn-runbook.md`](../../../docs/browser-gpt-turn-runbook.md).
-Those documents own launch order, observation, marker attribution, publication,
-retry/no-resend, tab lifecycle, probe, and handoff mechanics. This skill keeps
-routing, draft-author relocation policy, and the standalone `driver.mjs` contract
-here. The create-issue skill owns workflow, tier, stage, capture, receipt, and
-acceptance policy.
-
-Tracked stage cardinality, chat topology, and business order belong exclusively
-to [the canonical create-issue-draft skill](../create-issue-draft/SKILL.md);
-this routing skill does not restate them.
+Those documents own the tracked transport mechanics; the canonical
+`create-issue-draft` skill owns the tracked author/reviewer workflow. This skill
+retains routing and the standalone `driver.mjs` contract.
 
 ## Standalone adversarial driver
 

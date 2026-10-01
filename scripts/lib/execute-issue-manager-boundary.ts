@@ -5,18 +5,18 @@ import {
   type ProbeStatus,
 } from '../browser-gpt-page-probe.ts';
 import {
-  CREATE_ISSUE_NEXT_ACTION_KINDS,
-  createIssueExternalPauseResult,
-  createIssueNextAction,
-  createIssueRecoverableResult,
-  createIssueTerminalResult,
-  validateCreateIssueNextAction,
-  type CreateIssueActionBinding,
-  type CreateIssueExternalPauseCause,
-  type CreateIssueNextAction,
-  evaluateCreateIssueManagerBoundary,
-  type CreateIssueManagerBoundaryEvaluation,
-} from './create-issue-next-action.ts';
+  MANAGER_NEXT_ACTION_KINDS,
+  managerExternalPauseResult,
+  managerNextAction,
+  managerRecoverableResult,
+  managerTerminalResult,
+  validateManagerNextAction,
+  type ManagerActionBinding,
+  type ManagerExternalPauseCause,
+  type ManagerNextAction,
+  evaluateManagerBoundary,
+  type ManagerBoundaryEvaluation,
+} from './manager-boundary-result.ts';
 import {
   SMOKE_REPORT_MARKER,
   SMOKE_REPORT_PRODUCER,
@@ -114,12 +114,12 @@ function evidence(value: unknown): string {
   }
 }
 
-function actionBinding(context: ExecuteIssueManagerBoundaryContext): CreateIssueActionBinding {
+function actionBinding(context: ExecuteIssueManagerBoundaryContext): ManagerActionBinding {
   return {
     repository: context.repository,
     issueNumber: context.issueNumber,
     sourceRevision: context.sourceRevision,
-    stage: ('execute:' + context.phase) as CreateIssueActionBinding['stage'],
+    stage: ('execute:' + context.phase) as ManagerActionBinding['stage'],
   };
 }
 
@@ -140,7 +140,7 @@ function hasIdentity(context: ExecuteIssueManagerBoundaryContext): boolean {
 function observeAction(
   context: ExecuteIssueManagerBoundaryContext,
   producerRecord: JsonRecord,
- ): CreateIssueNextAction | null {
+ ): ManagerNextAction | null {
   const cdp = text(context.cdp);
   if (!cdp) return null;
   const profile = text(context.profile);
@@ -163,17 +163,17 @@ function observeAction(
     ...(targetId ? ['--target-id', targetId] : ['--url', conversationUrl]),
     ...(identityPresent ? ['--profile', profile, '--invocation-id', invocationId] : []),
   ];
-  return createIssueNextAction({
+  return managerNextAction({
     kind: 'execute-observe-owned-turn',
     binding: actionBinding(context),
     argv,
   });
 }
 
-function censusAction(context: ExecuteIssueManagerBoundaryContext): CreateIssueNextAction | null {
+function censusAction(context: ExecuteIssueManagerBoundaryContext): ManagerNextAction | null {
   const cdp = text(context.cdp);
   if (!cdp) return null;
-  return createIssueNextAction({
+  return managerNextAction({
     kind: 'execute-observe-owned-turn',
     binding: actionBinding(context),
     argv: [
@@ -187,8 +187,8 @@ function censusAction(context: ExecuteIssueManagerBoundaryContext): CreateIssueN
   });
 }
 
-function githubFirstAction(context: ExecuteIssueManagerBoundaryContext): CreateIssueNextAction {
-  return createIssueNextAction({
+function githubFirstAction(context: ExecuteIssueManagerBoundaryContext): ManagerNextAction {
+  return managerNextAction({
     kind: 'execute-github-first-read-only',
     binding: actionBinding(context),
     argv: [
@@ -205,10 +205,10 @@ function githubFirstAction(context: ExecuteIssueManagerBoundaryContext): CreateI
 function runnerReadOnlyAction(
   context: ExecuteIssueManagerBoundaryContext,
   producerRecord: JsonRecord,
- ): CreateIssueNextAction | null {
+ ): ManagerNextAction | null {
   const raw = context.prNumber ?? Number(producerRecord.prNumber);
   if (!Number.isSafeInteger(raw) || Number(raw) < 1) return null;
-  return createIssueNextAction({
+  return managerNextAction({
     kind: 'execute-review-runner-read-only',
     binding: actionBinding(context),
     argv: [
@@ -255,8 +255,8 @@ function boundary(
   context: ExecuteIssueManagerBoundaryContext,
   producer: string,
   produce: () => unknown,
- ): CreateIssueManagerBoundaryEvaluation {
-  return evaluateCreateIssueManagerBoundary({
+ ): ManagerBoundaryEvaluation {
+  return evaluateManagerBoundary({
     producer,
     currentArgv: context.productionArgv,
     produce,
@@ -268,8 +268,8 @@ function completed(
   producer: string,
   cause: string,
   verdict?: 'PASS' | 'FAIL',
- ): CreateIssueManagerBoundaryEvaluation {
-  return boundary(context, producer, () => createIssueTerminalResult({
+ ): ManagerBoundaryEvaluation {
+  return boundary(context, producer, () => managerTerminalResult({
     ok: true,
     cause,
     ...(verdict ? { verdict } : {}),
@@ -280,10 +280,10 @@ function recoverable(
   context: ExecuteIssueManagerBoundaryContext,
   producer: string,
   cause: string,
-  nextAction: CreateIssueNextAction,
+  nextAction: ManagerNextAction,
   blocker?: string,
- ): CreateIssueManagerBoundaryEvaluation {
-  return boundary(context, producer, () => createIssueRecoverableResult({
+ ): ManagerBoundaryEvaluation {
+  return boundary(context, producer, () => managerRecoverableResult({
     cause,
     ...(blocker ? { blocker } : {}),
     nextAction,
@@ -293,11 +293,11 @@ function recoverable(
 function pause(
   context: ExecuteIssueManagerBoundaryContext,
   producer: string,
-  cause: CreateIssueExternalPauseCause,
+  cause: ManagerExternalPauseCause,
   producerRecord: unknown,
   remedy: string,
- ): CreateIssueManagerBoundaryEvaluation {
-  return boundary(context, producer, () => createIssueExternalPauseResult({
+ ): ManagerBoundaryEvaluation {
+  return boundary(context, producer, () => managerExternalPauseResult({
     cause,
     remedy,
     resumeWhen: { coordinator: true },
@@ -309,7 +309,7 @@ function defect(
   context: ExecuteIssueManagerBoundaryContext,
   producer: string,
   detail: string,
- ): CreateIssueManagerBoundaryEvaluation {
+ ): ManagerBoundaryEvaluation {
   return boundary(context, producer, () => {
     throw new Error('execute-Issue producer contract defect: ' + detail);
   });
@@ -320,7 +320,7 @@ function recoverObservation(
   producer: string,
   producerRecord: JsonRecord,
   cause: string,
- ): CreateIssueManagerBoundaryEvaluation {
+ ): ManagerBoundaryEvaluation {
   const nextAction = observeAction(context, producerRecord);
   if (nextAction) return recoverable(context, producer, cause, nextAction);
   if (hasIdentity(context)) {
@@ -332,7 +332,7 @@ function recoverObservation(
     : defect(context, producer, 'read-only observation requires a retained CDP surface');
 }
 
-function externalCauseFromText(value: string): CreateIssueExternalPauseCause | null {
+function externalCauseFromText(value: string): ManagerExternalPauseCause | null {
   const lower = value.toLowerCase();
   if (/chrome|cdp|browser unavailable|browser_not_running/u.test(lower)) return 'external:chrome_not_running';
   if (/login|sign[- ]?in|challenge|authentication/u.test(lower)) return 'external:login_required';
@@ -349,7 +349,7 @@ function readOnlyCorrectionCause(value: string): boolean {
 function classifyTurn(
   value: JsonRecord,
   context: ExecuteIssueManagerBoundaryContext,
- ): CreateIssueManagerBoundaryEvaluation {
+ ): ManagerBoundaryEvaluation {
   const producer = 'chatgpt-browser-turn-record/v1';
   const state = value.state;
   if (!TURN_STATES.includes(state as TurnState)) {
@@ -468,7 +468,7 @@ function executionRecoveryInspect(value: JsonRecord): ExecutionRecoveryInspectEv
 function classifyProbe(
   value: JsonRecord,
   context: ExecuteIssueManagerBoundaryContext,
- ): CreateIssueManagerBoundaryEvaluation {
+ ): ManagerBoundaryEvaluation {
   const producer = 'browser-gpt-page-probe/v1';
   const status = value.status as ProbeStatus;
   if (!Object.prototype.hasOwnProperty.call(EXECUTE_ISSUE_PROBE_CLASSIFICATION, status)) {
@@ -534,13 +534,13 @@ function classifyProbe(
   }
 }
 
-function structuredNextAction(value: unknown): CreateIssueNextAction | null {
-  if (validateCreateIssueNextAction(value).length > 0) return null;
-  const action = value as CreateIssueNextAction;
-  return (CREATE_ISSUE_NEXT_ACTION_KINDS as readonly string[]).includes(action.kind) ? action : null;
+function structuredNextAction(value: unknown): ManagerNextAction | null {
+  if (validateManagerNextAction(value).length > 0) return null;
+  const action = value as ManagerNextAction;
+  return (MANAGER_NEXT_ACTION_KINDS as readonly string[]).includes(action.kind) ? action : null;
 }
 
-const WORKER_SMOKE_EXTERNAL_CAUSES: Readonly<Record<string, CreateIssueExternalPauseCause>> = {
+const WORKER_SMOKE_EXTERNAL_CAUSES: Readonly<Record<string, ManagerExternalPauseCause>> = {
   browser_cdp_unavailable: 'external:chrome_not_running',
   profile_mismatch: 'external:profile_mismatch',
   login_required: 'external:login_required',
@@ -577,7 +577,7 @@ function workerSmokeStructuredEvidence(value: JsonRecord): JsonRecord {
 function classifyWorkerSmoke(
   value: JsonRecord,
   context: ExecuteIssueManagerBoundaryContext,
-): CreateIssueManagerBoundaryEvaluation {
+): ManagerBoundaryEvaluation {
   const producer = SMOKE_REPORT_PRODUCER;
   if (context.phase !== 'smoke') {
     return defect(context, producer, 'worker-smoke report requires the smoke manager phase');
@@ -697,7 +697,7 @@ function classifyWorkerSmoke(
 function classifyReviewRunner(
   value: JsonRecord,
   context: ExecuteIssueManagerBoundaryContext,
- ): CreateIssueManagerBoundaryEvaluation {
+ ): ManagerBoundaryEvaluation {
   const producer = 'pack-gpt-review';
   if (value.ok === true) return completed(context, producer, 'execute_review_runner_completed');
 
@@ -730,7 +730,7 @@ function classifyReviewRunner(
 export function classifyExecuteIssueManagerRecord(
   input: unknown,
   context: ExecuteIssueManagerBoundaryContext,
-): CreateIssueManagerBoundaryEvaluation {
+): ManagerBoundaryEvaluation {
   const value = record(input);
   if (!value) return defect(context, 'execute-issue-manager-boundary', 'input record must be a JSON object');
   if (value.schema === 'turn-result/v1') return classifyTurn(value, context);

@@ -51,7 +51,7 @@ describe('[Issue 1440] orchestration escalation guarantees', () => {
     );
     for (const required of [
       '## Bound-run inbox drain and acknowledgement',
-      '**Manager:** drain before starting or claiming the next authoring/review stage, immediately before manager `worker_done`, and immediately before ending a turn without `worker_done`.',
+      '**Manager:** drain before starting or claiming the next authoring/review round, immediately before manager `worker_done`, and immediately before ending a turn without `worker_done`.',
       '**Worker:** drain immediately before worker `worker_done` and before emitting a blocker/escalation that hands control upward.',
       '**Coordinator / flow-manager / orchestrator acting on the bound Run:** drain before issuing a reply, ruling, escalation decision, or dispatch, and again before reporting its own turn complete.',
       'Exactly one acknowledgement is issued per Delivery, never per message.',

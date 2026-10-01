@@ -12,14 +12,6 @@ const standaloneSkill = readFileSync(
   new URL('../../.cursor/skills/discuss-with-gpt/SKILL.md', import.meta.url),
   'utf8',
 );
-const browserCarrier = readFileSync(
-  new URL('../../.cursor/rules/flow-manager-browser-turn-monitoring.mdc', import.meta.url),
-  'utf8',
-);
-const authorSchemaOwner = readFileSync(
-  new URL('../lib/create-issue-author-dispositions-schema.ts', import.meta.url),
-  'utf8',
-);
 const normalizedSkill = skill.replace(/\s+/g, ' ').trim();
 const normalizedAgents = agents.replace(/\s+/g, ' ').trim();
 const normalizedStandaloneSkill = standaloneSkill.replace(/\s+/g, ' ');
@@ -55,13 +47,13 @@ describe('Issue #1938 existing-Issue manager routing contract', () => {
     );
   });
 
-  it('reuses the existing supervised manager lifecycle and canonical state', () => {
+  it('reuses the existing manager task and live Issue state', () => {
     for (const contract of [
       'existing supervised `work-class=manager` path',
       'existing `--manager-brief` / Task continuation mechanics',
-      'continue only unfinished task-authoring, review, and acceptance stages',
-      'Preserve already consumed semantic stage slots',
-      'terminal or accepted, report that truthful terminal state and perform no implementation fallback',
+      'The manager reads the live Issue title, body, label, and comments',
+      'continues unfinished authoring, review, and acceptance work',
+      'report its state without starting implementation',
     ]) {
       expect(normalizedSkill).toContain(contract);
     }
@@ -206,16 +198,43 @@ describe('standalone discuss-with-gpt terminal read-back contract', () => {
   });
 });
 
+describe('Issue #2315 comment-based review and acceptance contract', () => {
+  it('uses revision-named published comments from trusted reviewers', () => {
+    for (const contract of [
+      'All reviewer output is published directly as top-level comments on the same Issue',
+      'Every required reviewer comment starts on its first line with `Read revision: #<issue> rNN`',
+      'user.login` or `author_association` metadata identifies the trusted principal',
+    ]) {
+      expect(normalizedSkill).toContain(contract);
+    }
+  });
 
-describe('Issue #1997 author-disposition contract ownership', () => {
-  it('keeps one executable schema owner and prose surfaces as pointers only', () => {
-    expect(authorSchemaOwner).toContain("AUTHOR_DISPOSITIONS_SCHEMA = 'create-issue-author-dispositions/v1'");
-    expect(authorSchemaOwner).toContain('renderAuthorDispositionPromptFragment');
-    expect(authorSchemaOwner).toContain('AUTHOR_DISPOSITION_FIELD_OWNERSHIP');
-    expect(skill).toContain('scripts/lib/create-issue-author-dispositions-schema.ts');
-    expect(skill).toContain('renderAuthorDispositionPromptFragment()');
-    expect(browserCarrier).toContain('scripts/lib/create-issue-author-dispositions-schema.ts');
-    expect(skill).not.toContain('```create-issue-author-dispositions/v1');
-    expect(browserCarrier).not.toContain('```create-issue-author-dispositions/v1');
+  it('requires an author disposition for every finding in every review round', () => {
+    expect(normalizedSkill).toContain(
+      'After each required review round, the GPT author publishes one Issue disposition comment resolving every finding from that round',
+    );
+    expect(normalizedSkill).toContain('A finding is accepted with a correction in the next Issue-body revision');
+    expect(normalizedSkill).toContain('rejected with a substantive reason');
+  });
+
+  it('runs the substantive floor on the live body before terminal review', () => {
+    expect(normalizedSkill).toContain('Immediately before sending the terminal review');
+    expect(normalizedSkill).toContain('`LIVE_ISSUE_BODY`');
+    expect(normalizedSkill).toContain(
+      '`node --experimental-strip-types scripts/tier-gate-guard.ts --text "$LIVE_ISSUE_BODY"`',
+    );
+    expect(normalizedSkill).toContain('omit `--text-file` and `--draft-path`');
+  });
+
+  it('applies acceptance only after review, dispositions, floor, and revision match', () => {
+    for (const condition of [
+      'all tier-required **published reviewer comments** exist',
+      'all findings from every required round',
+      'the terminal review read a revision on which the existing substantive floor passed',
+      'the accepted body is the terminal review\'s named revision or that one permitted correction',
+      'The sole acceptance projection is the existing `spec-review:accepted` Issue',
+    ]) {
+      expect(normalizedSkill).toContain(condition);
+    }
   });
 });

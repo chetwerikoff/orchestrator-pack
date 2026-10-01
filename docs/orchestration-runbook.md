@@ -224,7 +224,7 @@ deadline-exhausted evidence is not empty and never authorizes resend.
 
 Role obligations are mandatory:
 
-- **Manager:** drain before starting or claiming the next authoring/review stage, immediately before manager `worker_done`, and immediately before ending a turn without `worker_done`.
+- **Manager:** drain before starting or claiming the next authoring/review round, immediately before manager `worker_done`, and immediately before ending a turn without `worker_done`.
 - **Worker:** drain immediately before worker `worker_done` and before emitting a blocker/escalation that hands control upward.
 - **Coordinator / flow-manager / orchestrator acting on the bound Run:** drain before issuing a reply, ruling, escalation decision, or dispatch, and again before reporting its own turn complete.
 
@@ -235,20 +235,18 @@ A supervised manager emits `worker_done --outcome succeeded` exactly once, and o
 A manager sends `worker_done --outcome failed` only after a direct coordinator/operator cancellation message, never because a repository-owned check refused or paused work.
 S1 remains the sole liveness observer.
 
-## Published GitHub artifact completion and batch attribution
+## Create-Issue GitHub completion
 
-For create-Issue author/reviewer/lens work, fresh GitHub-visible publication is
-completion authority; child/process/terminal state is diagnostic only. An author
-turn must read back the exact expected Issue revision and body. A reviewer/lens turn
-must read back exactly one publication from the trusted current principal bound to
-the expected Issue/revision/invocation/stage/slot. Stale, edited, foreign, duplicate,
-ambiguous, or mismatched publication does not settle the turn.
+For create-Issue author/reviewer/lens work, workflow completion is determined
+from the live GitHub Issue state defined by
+`.cursor/skills/create-issue-draft/SKILL.md`. A published revision-named
+review comment can complete its review turn even while a Browser-GPT transport
+envelope is still pending; conversely a terminal child/envelope without the
+required GitHub comment does not satisfy create-Issue review or acceptance.
 
-A possible or confirmed send is never resent merely because its child is silent or
-gone. In one concurrent batch, a slot with its own authoritative artifact is
-`actual`; a silent sibling when another slot is published is
-`possible-or-actual` and no-resend. Zero published siblings proves no delivery.
-Batch transport success never proves a silent payload crossed the composer.
+Do not add a second create-Issue completion store or workflow-specific
+transport authority. Transport uncertainty follows the shared no-blind-resend
+and same-invocation recovery contract in `docs/browser-gpt-turn-runbook.md`.
 
 ## Scheduler inbox reconciliation
 

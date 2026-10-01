@@ -81,24 +81,6 @@ export interface PostSettlementTargetCaptureDiagnosticV1 {
   cause: 'timeout' | 'page_detached' | 'target_identity_unavailable' | 'reply_identity_unavailable' | 'surface_incomplete' | 'malformed';
 }
 
-export const REVIEWER_SOURCE_POLICIES = ['final-node/v1', 'issue-comment-api-harvest/v1', 'direct-publication/v1'] as const;
-export type ReviewerSourcePolicy = (typeof REVIEWER_SOURCE_POLICIES)[number];
-export const REVIEWER_SOURCE_KINDS = ['service-observed-issue-comment/v1', 'failed-write-final-assistant/v1'] as const;
-export type ReviewerSourceKind = (typeof REVIEWER_SOURCE_KINDS)[number];
-
-export interface ReviewerSourceV1 {
-  kind: ReviewerSourceKind;
-  byte_length: number;
-  sha256: string;
-  tool_call_id: string;
-  repository_full_name: string;
-  issue_number: number;
-  comment_id?: string;
-  comment_url?: string;
-  source_revision: string;
-  finding_count: number;
-}
-
 export interface TurnResultV1 {
   schema: 'turn-result/v1';
   state: TurnState;
@@ -116,7 +98,6 @@ export interface TurnResultV1 {
   generation?: number;
   driver_diagnostic_id?: string;
   output?: { byte_length: number; sha256: string };
-  reviewer_source?: ReviewerSourceV1;
   witness?: CausalWitnessV1;
   post_settlement_target?: PostSettlementTargetV1;
   post_settlement_target_capture?: PostSettlementTargetCaptureDiagnosticV1;
