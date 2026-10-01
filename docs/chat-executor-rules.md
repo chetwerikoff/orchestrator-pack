@@ -265,8 +265,8 @@ The selected project card supplies the smoke repository. Guidance that
 smoke scenarios should not touch live machine configuration is authoring
 prose only, not a runtime parser, validator, or refusal mechanism.
 
-Issue #2161 branch-update sequencing follows the canonical rule in the
-[orchestration runbook](orchestration-runbook.md#issue-2161-main-update-sequencing).
+Branch-update sequencing follows the canonical rule in the
+[orchestration runbook](orchestration-runbook.md#main-update-sequencing).
 
 A persisted clean terminal for the exact same head suppresses a redundant
 automatic/common reviewer-model invocation. A cycle already at cap also
