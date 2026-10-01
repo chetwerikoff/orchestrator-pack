@@ -1297,6 +1297,11 @@ function listCompletionSealDigests(artifactDir: string): string[] {
   return digests.sort();
 }
 
+export interface SmokeRunBinding {
+  runId: string;
+  artifactDir: string;
+}
+
 export function observeSmokeDeliveryEstablished(
   runBinding: SmokeRunBinding,
 ): boolean {

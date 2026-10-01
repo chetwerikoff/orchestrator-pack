@@ -382,14 +382,20 @@ export function fetchLivePrHead(prNumber: number, repositorySlug: string, repoRo
   return String(head.sha ?? '').trim().toLowerCase();
 }
 
-export function publishPrComment(prNumber: number, body: string, repoRoot: string, timeoutMs = SMOKE_GH_TIMEOUT_MS): string {
+export function publishPrComment(
+  prNumber: number,
+  body: string,
+  repoRoot: string,
+  timeoutMs = SMOKE_GH_TIMEOUT_MS,
+  runner: typeof runProcessSync = runProcessSync,
+): string {
   const tempDir = mkdtempSync(join(tmpdir(), 'worker-smoke-comment-'));
   const bodyFile = join(tempDir, 'body.md');
   try {
     writeFileSync(bodyFile, JSON.stringify({ body }), 'utf8');
     let result: ReturnType<typeof runProcessSync>;
     try {
-      result = runProcessSync({
+      result = runner({
         command: resolveTrackedGhWrapper(),
         args: ['api', `repos/${selectedSmokeRepositorySlug()}/issues/${String(prNumber)}/comments`, '--method', 'POST', '--input', bodyFile],
         cwd: repoRoot,

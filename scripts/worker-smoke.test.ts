@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { runProcessSync } from './kernel/subprocess.ts';
-import { resolveRealGhBinary, resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
+import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import {
   buildSmokeGhChildEnv,
   formatSmokeReportComment,
@@ -430,32 +430,47 @@ function selectSmokeProjectForTest(configRoot: string, primaryRoot: string): () 
 }
 
 describe('publishPrComment', () => {
-  it('executes the one comment POST through scripts/gh under the minimal smoke child environment, not a PATH wrapper', () => {
+  it('executes the one comment POST through tracked scripts/gh under the minimal smoke child environment', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-publish-native-'));
-    const machineBin = join(root, 'machine-bin');
-    mkdirSync(machineBin, { recursive: true });
-    const wrapperMarker = join(root, 'machine-wrapper-ran');
-    const realCalls = join(root, 'real-gh-calls.txt');
-    const fakeRealGh = join(root, 'real-gh');
-    const previousPath = process.env.PATH;
-    const previousRealBinary = process.env.GH_REAL_BINARY;
     const restoreProject = selectSmokeProjectForTest(root, process.cwd());
-    executable(join(machineBin, 'gh'), `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(wrapperMarker)}, 'ran');\n`);
-    executable(fakeRealGh, `#!${process.execPath}\nconst { appendFileSync } = require('node:fs');\nappendFileSync(${JSON.stringify(realCalls)}, JSON.stringify(process.argv.slice(2)) + '\\n', 'utf8');\nprocess.stdout.write(JSON.stringify({ html_url: 'https://github.com/chetwerikoff/orchestrator-pack/issues/1586#issuecomment-1' }));\n`);
-    process.env.GH_REAL_BINARY = fakeRealGh;
-    process.env.PATH = `${machineBin}:${previousPath ?? ''}`;
+    const calls: Parameters<typeof runProcessSync>[0][] = [];
+    const runner: typeof runProcessSync = (options) => {
+      calls.push(options);
+      return {
+        outcome: 'exit',
+        ok: true,
+        exitCode: 0,
+        signal: null,
+        stdout: JSON.stringify({
+          html_url: 'https://github.com/chetwerikoff/orchestrator-pack/issues/1586#issuecomment-1',
+        }),
+        stderr: '',
+        timedOut: false,
+        cancelled: false,
+      };
+    };
     try {
-      expect(resolveTrackedGhWrapper()).toBe(join(process.cwd(), 'scripts', 'gh'));
-      expect(publishPrComment(1586, 'hello', process.cwd(), 250)).toBe('https://github.com/chetwerikoff/orchestrator-pack/issues/1586#issuecomment-1');
-      expect(readFileSync(realCalls, 'utf8').trim().split(/\r?\n/u)).toHaveLength(1);
-      expect(existsSync(wrapperMarker)).toBe(false);
+      expect(publishPrComment(1586, 'hello', process.cwd(), 250, runner)).toBe(
+        'https://github.com/chetwerikoff/orchestrator-pack/issues/1586#issuecomment-1',
+      );
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        command: resolveTrackedGhWrapper(),
+        args: [
+          'api',
+          'repos/chetwerikoff/orchestrator-pack/issues/1586/comments',
+          '--method',
+          'POST',
+          '--input',
+          expect.any(String),
+        ],
+        cwd: process.cwd(),
+        env: {},
+        timeoutMs: 250,
+      });
       expect(buildSmokeGhChildEnv({})).toEqual({});
     } finally {
       restoreProject();
-      if (previousPath === undefined) delete process.env.PATH;
-      else process.env.PATH = previousPath;
-      if (previousRealBinary === undefined) delete process.env.GH_REAL_BINARY;
-      else process.env.GH_REAL_BINARY = previousRealBinary;
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -475,20 +490,27 @@ describe('publishPrComment', () => {
   });
 
   it('reports one failed publication attempt when tracked gh fails', () => {
-    const previousRealBinary = process.env.GH_REAL_BINARY;
     const root = mkdtempSync(join(tmpdir(), 'smoke-publication-failure-'));
     const restoreProject = selectSmokeProjectForTest(root, process.cwd());
-    const callsFile = join(root, 'publish-calls.txt');
-    const failingGh = join(root, 'failing-gh');
-    executable(failingGh, `#!${process.execPath}\nconst { appendFileSync } = require('node:fs');\nappendFileSync(${JSON.stringify(callsFile)}, 'call\\n', 'utf8');\nprocess.stderr.write('forced failure\\n');\nprocess.exit(1);\n`);
-    process.env.GH_REAL_BINARY = failingGh;
+    let calls = 0;
+    const runner: typeof runProcessSync = () => {
+      calls += 1;
+      return {
+        outcome: 'exit',
+        ok: false,
+        exitCode: 1,
+        signal: null,
+        stdout: '',
+        stderr: 'forced failure',
+        timedOut: false,
+        cancelled: false,
+      };
+    };
     try {
-      expect(() => publishPrComment(1586, 'hello', process.cwd(), 25)).toThrow(/comment_publish_failed/u);
-      expect(readFileSync(callsFile, 'utf8').trim().split(/\r?\n/u)).toHaveLength(1);
+      expect(() => publishPrComment(1586, 'hello', process.cwd(), 25, runner)).toThrow(/comment_publish_failed/u);
+      expect(calls).toBe(1);
     } finally {
       restoreProject();
-      if (previousRealBinary === undefined) delete process.env.GH_REAL_BINARY;
-      else process.env.GH_REAL_BINARY = previousRealBinary;
       rmSync(root, { recursive: true, force: true });
     }
   });

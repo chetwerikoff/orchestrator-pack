@@ -52,8 +52,8 @@ The manager's settled-review result is the same nonterminal review settlement
 used by the shared Issue #1953 phase. After settlement, a required
 scenario-bearing smoke plan continues in that same manager's `execute:smoke`
 phase; the manager uses the bounded temporary detached-PR-worktree procedure
-owned by the execution runbook. Review settlement by itself is not overall
-`VERIFIED_COMPLETE`.
+owned by the execution runbook. Review settlement by
+itself is not overall `VERIFIED_COMPLETE`.
 
 ## Manager target resolution
 
