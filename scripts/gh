@@ -43,7 +43,7 @@ case "${1:-} ${2:-} ${*:--json}" in
     repo=""
     json_fields=""
     args=("$@")
-    i=4
+    i=3
     while (( i < ${#args[@]} )); do
       case "${args[i]}" in
         --repo|-R) repo="${args[i+1]}"; ((i+=2));;

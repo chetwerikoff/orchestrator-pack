@@ -11,6 +11,7 @@ import {
 import type { ResolvedScopeContext } from '../plugins/codex-pr-reviewer/lib/scope_context.ts';
 import { runProcess } from './kernel/subprocess.ts';
 import { resolveTargetContext } from './lib/target-context.ts';
+import { isDirectCliExecution } from './lib/reviewer-ts-cli.ts';
 
 function trim(value: unknown): string {
   return String(value ?? '').trim();
@@ -184,10 +185,10 @@ async function main(): Promise<void> {
   process.exit(result.exitCode);
 }
 
-try {
-  await main();
-} catch (error) {
-  const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`${message}\n`);
-  process.exit(1);
+if (isDirectCliExecution(import.meta.url, process.argv[1])) {
+  void main().catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`${message}\n`);
+    process.exit(1);
+  });
 }

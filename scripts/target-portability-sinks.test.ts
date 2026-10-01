@@ -334,6 +334,7 @@ describe('Issue #2188 target portability sinks', () => {
       env: {
         ...process.env,
         PATH: `${bin}:/usr/bin:/bin`,
+        GH_WRAPPER_ACTIVE: '',
         OPK_PROJECT_ID: 'alpha',
         OPK_EXPECTED_TARGET_REPO: 'example/alpha',
         OPK_FAKE_GH: fakeGh,
@@ -341,7 +342,7 @@ describe('Issue #2188 target portability sinks', () => {
         OPK_REAL_NODE: process.execPath,
       },
     });
-    expect(result.ok).toBe(true);
+    expect(result.ok, result.stderr || result.error).toBe(true);
     expect(readFileSync(audit, 'utf8')).toContain('api repos/example/alpha/pulls/12');
   });
 
