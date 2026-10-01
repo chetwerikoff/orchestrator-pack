@@ -238,7 +238,7 @@ See Issue #487 rollback in git history — restore monolithic `tests` job with
 ## Runtime-history refresh (Issue #691)
 
 Measured per-file durations from heavy-shard Vitest JSON reports refresh
-`scripts/vitest-runtime-history.json` on **main push**, **weekly schedule**, and
+`scripts/vitest-runtime-history.json` on a **weekly schedule** and
 **workflow_dispatch** via `.github/workflows/vitest-runtime-history-refresh.yml`.
 The refresh does **not** run on ordinary PR events.
 
@@ -286,13 +286,12 @@ heavy runs that actually executed on those same heads.
 
 ## Protected-branch delivery (Issue #731)
 
-The refresh producer still runs on **main push**, **weekly schedule**, and
-**workflow_dispatch**, but delivery to `main` now goes through a fixed bot branch
-and a trusted PR merge path instead of a direct `git push origin HEAD:main`.
+The refresh producer runs on a **weekly schedule** and **workflow_dispatch**,
+but delivery to `main` now goes through a fixed bot branch and a trusted PR merge
+path instead of a direct `git push origin HEAD:main`.
 
-- Push recursion barrier: `.github/workflows/vitest-runtime-history-refresh.yml`
-  ignores `scripts/vitest-runtime-history.json`-only pushes on `main`, so the
-  generated delivery commit does not re-trigger a fresh measurement loop.
+- Runtime-history refresh is no longer triggered by pushes to `main`; its schedule
+  and manual `workflow_dispatch` trigger remain enabled.
 - Delivery branch: `ci/vitest-runtime-history-refresh`
 - PR open/update identity: `VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN`
 - Trusted merge owner: `.github/workflows/vitest-runtime-history-delivery.yml`
