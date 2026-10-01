@@ -35,6 +35,7 @@ import {
 import { publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath } from './lib/worker-assignment-store.ts';
 import {
   computeSmokeCompletionBodyDigest,
+  scrubSmokeOutput,
   WORKER_SMOKE_CAUSE_FAMILIES,
   smokeResultForWorkerSmokeCauseFamily,
   workerSmokeCauseFamilyForHarnessReason,
@@ -52,15 +53,14 @@ import {
 import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
 import type { RuntimeAdapter, RuntimeDispatchResult, RuntimeWorkerIdentity } from './runtime/contracts.ts';
 import {
-  beginSmokeOrdering,
   bindSmokeReportToPlan,
   establishRuntimeSmokeDelivery,
   emit,
   exactClosingIssue,
   finalSmokeCommentSnapshotMatches,
   findVerifiedSmokeReceiptWitness,
-  finishSmokeOrderingBeforeDetachedTerminalization,
   gitTrackedSmokeRuntimePaths,
+  parseLatestSmokeReport,
   parsePaginatedSmokeComments,
   publishPrComment,
   reviewIndependentRequiredCiContexts,
@@ -83,8 +83,6 @@ import {
   type ResolvedSmokeTarget,
 } from './worker-smoke-run.ts';
 import {
-  commitSmokeOrderingTransition,
-  observePackReviewHead,
   readPackReviewAuthority,
 } from './pack-review-state.ts';
 
@@ -103,6 +101,20 @@ const HEAD_ONE = '1'.repeat(40);
 const HEAD_TWO = '2'.repeat(40);
 const TRUSTED_ACTOR = 'pack-publisher';
 const REPOSITORY = 'chetwerikoff/orchestrator-pack';
+
+describe('Issue #2250 scrubbed report output is redaction-only', () => {
+  it('retains a PASS machine report while redacting secret-shaped scenario output', () => {
+    const dangerous = 'Authorization: Bearer example-smoke-secret';
+    const reportBody = formatSmokeReportComment(report('PASS', [{
+      ...scenario('inspect smoke logs', 'credentials are not exposed'),
+      observed: dangerous,
+    }]));
+    const published = scrubSmokeOutput(reportBody);
+    expect(published).toContain('result: PASS');
+    expect(published).toContain('Authorization: Bearer [redacted]');
+    expect(published).not.toContain('example-smoke-secret');
+  });
+});
 
 function planBody(scenarios: readonly { action: string; expected: string }[]): string {
   return [
@@ -695,14 +707,6 @@ describe('Issue #1936 truthful smoke evidence', () => {
     }
   });
 
-  it('finishes ordering before detached final evidence is terminalized', () => {
-    const calls: string[] = [];
-    finishSmokeOrderingBeforeDetachedTerminalization(
-      () => calls.push('ordering'),
-      () => calls.push('terminalize'),
-    );
-    expect(calls).toEqual(['ordering', 'terminalize']);
-  });
 });
 describe('review-independent required CI facts', () => {
   it('excludes the pack-review authority while preserving required CI contexts', () => {
@@ -1151,7 +1155,7 @@ describe('runtime-neutral worker smoke', () => {
     }
   });
 
-  it('records lawful not-applicable worker smoke as passed ordering evidence', async () => {
+  it('skips not-applicable smoke without creating an ordering authority', async () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-not-applicable-'));
     const issueBodyFile = join(root, 'issue.md');
     const reviewStoreRoot = join(root, 'review-store');
@@ -1185,16 +1189,13 @@ describe('runtime-neutral worker smoke', () => {
         },
       });
       expect(code).toBe(0);
-      expect(resolverCalls).toBe(1);
+      expect(resolverCalls).toBe(0);
       expect(JSON.parse(String(output.mock.calls.at(-1)?.[0]))).toEqual({
         ok: true,
         skipped: true,
         reason: 'not-applicable',
       });
-      expect(readPackReviewAuthority(1721, { storeRoot: reviewStoreRoot })?.smokeOrdering?.workerOwned).toMatchObject({
-        headSha: HEAD_ONE,
-        status: 'passed',
-      });
+      expect(readPackReviewAuthority(1721, { storeRoot: reviewStoreRoot })).toBeNull();
     } finally {
       output.mockRestore();
       if (previousStoreRoot === undefined) delete process.env.PACK_REVIEW_RUN_STORE_ROOT;
@@ -1882,90 +1883,9 @@ describe('runtime-neutral worker smoke', () => {
   });
 });
 
-describe('worker-smoke-run wait for expired unbound lifecycle', () => {
-  it('returns the observed create diagnostic instead of waiting on a dead supervisor', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-wait-unbound-'));
-    const runId = 'c1222134-9261-485e-ad14-c1eae6e48c43';
-    const artifactDir = resolveSmokeRunArtifactDir(root, runId);
-    mkdirSync(artifactDir, { recursive: true });
-    let supervisorPid = 0;
-    const supervisor = await runProcess({
-      command: process.execPath,
-      args: ['-e', 'process.exit(0)'],
-      allowEmptyStdout: true,
-      onSpawn: (pid) => { supervisorPid = pid; },
-    });
-    const createDiagnostic = 'smoke_ordering_head_mismatch: expected 8136cb39a2508baee944c38270aec5c444894b4d, got 6407de3b54c94ca83eab625990254c5a371f15d4';
-    try {
-      expect(supervisor.ok).toBe(true);
-      expect(supervisorPid).toBeGreaterThan(0);
-      writeFileSync(join(artifactDir, 'lifecycle.json'), `${JSON.stringify({
-        version: 1,
-        runId,
-        issueNumber: 2078,
-        prNumber: 2079,
-        headSha: '6407de3b54c94ca83eab625990254c5a371f15d4',
-        artifactDir,
-        supervisorPid,
-        createdAtMs: 1790242313822,
-        updatedAtMs: 1790242313834,
-        spawnState: 'ambiguous_unbound',
-        createDeadlineMs: Date.now() - 1,
-        scenarioCount: 7,
-        createDiagnostic,
-      })}\n`, 'utf8');
-      const result = await runProcess({
-        command: process.execPath,
-        args: [
-          '--experimental-strip-types',
-          join(process.cwd(), 'scripts/worker-smoke-run.ts'),
-          'wait', '--run', runId, '--cwd', root, '--json',
-        ],
-        cwd: root,
-        inheritParentEnv: true,
-        allowEmptyStdout: true,
-        timeoutMs: 2_000,
-      });
-      expect(result.timedOut).toBe(false);
-      expect(result.exitCode).toBe(1);
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        ok: false,
-        runId,
-        result: 'FAIL',
-        reason: createDiagnostic,
-        createDiagnostic,
-      });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  }, 10_000);
-});
 
-describe('worker-smoke-run wait for a missing run', () => {
-  it('fails immediately with run_not_found for the observed id without an artifact directory', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-wait-missing-'));
-    const runId = 'd66e1692-df5b-4ac0-94f1-90f81264f895';
-    try {
-      const result = await runProcess({
-        command: process.execPath,
-        args: [
-          '--experimental-strip-types',
-          join(process.cwd(), 'scripts/worker-smoke-run.ts'),
-          'wait', '--run', runId, '--cwd', root, '--json',
-        ],
-        cwd: root,
-        inheritParentEnv: true,
-        allowEmptyStdout: true,
-        timeoutMs: 2_000,
-      });
-      expect(result.timedOut).toBe(false);
-      expect(result.exitCode).toBe(1);
-      expect(JSON.parse(result.stdout)).toEqual({ ok: false, runId, reason: 'run_not_found' });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  }, 10_000);
-});
+
+
 
 
 describe('waitForRuntimeSmokeCompletion post-plan completion wait', () => {
@@ -2597,21 +2517,15 @@ function resolvedTarget(body: string): ResolvedSmokeTarget {
 
 function gateDependencies(
   body: string,
-  snapshots: readonly WorkerSmokeCommentRecord[][],
-  root: string,
+  _historicalComments: readonly WorkerSmokeCommentRecord[][],
+  _root: string,
   resolveTargetOverride: GateCheckDependencies['resolveTarget'] = () => resolvedTarget(body),
 ): GateCheckDependencies {
-  let snapshotIndex = 0;
+  // The pre-review handoff no longer receives lifecycle, receipt, comment-census,
+  // or runtime-adapter admission dependencies. CI and the PR head stay current.
   return {
-    evaluateLifecycle: () => evaluateSmokeLifecycleCleanliness(root),
     resolveTarget: resolveTargetOverride,
-    fetchComments: () => {
-      const selected = snapshots[Math.min(snapshotIndex, snapshots.length - 1)] ?? [];
-      snapshotIndex += 1;
-      return [...selected];
-    },
     fetchHead: () => HEAD_ONE,
-    selectAdapter: async () => new DeterministicRuntimeAdapter(),
     ciGreen: () => true,
   };
 }
@@ -2760,7 +2674,7 @@ describe('delegated readiness consumes the production post-smoke owner', () => {
       expect(result.ok).toBe(false);
       expect(result.smokeEvidence).toEqual({ state: 'missing', headSha: HEAD_ONE });
       expect(result.readiness.state).toBe('NOT_READY');
-      expect(result.readiness.failedPredicates).toContain('exact_head_smoke_not_passed');
+      expect(result.readiness.failedPredicates).toContain('pr_smoke_not_passed');
     } finally {
       output.mockRestore();
       if (previousBase === undefined) delete process.env.OPK_BASE_DIR;
@@ -2769,7 +2683,7 @@ describe('delegated readiness consumes the production post-smoke owner', () => {
     }
   });
 
-  it('requires the full exact-head census to end in a provenance-valid PASS', async () => {
+  it('accepts an earlier-head PR PASS without author, receipt, or latest-FAIL precedence', async () => {
     const failing = {
       ...report('FAIL', [{ ...scenario('run runtime lifecycle', 'PASS', 'fail'), causeFamily: 'scenario_assertion_failed' }]),
       terminalHandle: 'terminal-fail',
@@ -2785,9 +2699,12 @@ describe('delegated readiness consumes the production post-smoke owner', () => {
     const cases = [
       { name: 'FAIL only', reports: [failing], expected: 'missing' },
       { name: 'BLOCKED only', reports: [blocked], expected: 'missing' },
-      { name: 'PASS then FAIL', reports: [passing, failing], expected: 'missing' },
-      { name: 'PASS then BLOCKED', reports: [passing, blocked], expected: 'missing' },
+      { name: 'PASS then FAIL', reports: [passing, failing], expected: 'verified' },
+      { name: 'PASS then BLOCKED', reports: [passing, blocked], expected: 'verified' },
       { name: 'PASS only', reports: [passing], expected: 'verified' },
+      { name: 'PASS on earlier head', reports: [{ ...passing, headSha: HEAD_TWO }], expected: 'verified' },
+      { name: 'PASS from other author', reports: [passing], expected: 'verified', actor: 'other-publisher' },
+      { name: 'edited PASS', reports: [passing], expected: 'verified', edited: true },
     ] as const;
 
     for (const testCase of cases) {
@@ -2799,15 +2716,17 @@ describe('delegated readiness consumes the production post-smoke owner', () => {
       process.env.OPK_BASE_DIR = root;
       process.env.WORKER_SMOKE_RECEIPT_ROOT = join(root, 'smoke-receipts');
       try {
-        for (const smokeReport of testCase.reports) writeWorkerSmokeReceipt(smokeReport);
-        const comments = testCase.reports.map((smokeReport, index) => comment(index + 1, smokeReport));
+        const comments = testCase.reports.map((smokeReport, index) => comment(index + 1, smokeReport, {
+          ...('actor' in testCase ? { actor: testCase.actor } : {}),
+          ...('edited' in testCase && testCase.edited ? { updatedAt: new Date(Date.UTC(2026, 7, 6)).toISOString() } : {}),
+        }));
         const { code, result } = await runDelegatedReadinessForComments(root, issueBodyFile, comments);
         expect(result.smokeEvidence.state, testCase.name).toBe(testCase.expected);
         if (testCase.expected === 'missing') {
           expect(code, testCase.name).toBe(1);
-          expect(result.readiness.failedPredicates, testCase.name).toContain('exact_head_smoke_not_passed');
+          expect(result.readiness.failedPredicates, testCase.name).toContain('pr_smoke_not_passed');
         } else {
-          expect(result.readiness.failedPredicates, testCase.name).not.toContain('exact_head_smoke_not_passed');
+          expect(result.readiness.failedPredicates, testCase.name).not.toContain('pr_smoke_not_passed');
         }
       } finally {
         if (previousBase === undefined) delete process.env.OPK_BASE_DIR;
@@ -2839,6 +2758,31 @@ function runChild(
     status: result.exitCode ?? (result.ok ? 0 : 1),
     stdout: result.stdout,
     stderr: result.stderr,
+  };
+}
+
+function selectSmokeProjectForTest(configRoot: string, primaryRoot: string): () => void {
+  const oldXdg = process.env.XDG_CONFIG_HOME;
+  const oldProject = process.env.OPK_PROJECT_ID;
+  const xdg = join(configRoot, 'project-config');
+  const cards = join(xdg, 'orchestrator-pack', 'projects');
+  mkdirSync(cards, { recursive: true });
+  writeFileSync(join(cards, 'smoke-fixture.json'), JSON.stringify({
+    projectId: 'smoke-fixture',
+    repository: REPOSITORY,
+    primaryRoot,
+    defaultBranch: 'main',
+    orcaWorkspacePattern: '.*',
+    orchestratorTitlePattern: '.*',
+    browserGpt: { projectUrl: 'https://chatgpt.com/' },
+  }), 'utf8');
+  process.env.XDG_CONFIG_HOME = xdg;
+  process.env.OPK_PROJECT_ID = 'smoke-fixture';
+  return () => {
+    if (oldXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = oldXdg;
+    if (oldProject === undefined) delete process.env.OPK_PROJECT_ID;
+    else process.env.OPK_PROJECT_ID = oldProject;
   };
 }
 
@@ -2887,12 +2831,16 @@ describe('publishPrComment', () => {
 
   it('reports publication_unconfirmed when the native gh command fails', () => {
     const previousRealBinary = process.env.GH_REAL_BINARY;
+    const root = mkdtempSync(join(tmpdir(), 'smoke-publication-failure-'));
+    const restoreProject = selectSmokeProjectForTest(root, process.cwd());
     process.env.GH_REAL_BINARY = process.execPath;
     try {
       expect(() => publishPrComment(1586, 'hello', process.cwd(), 25)).toThrow(/publication_unconfirmed/u);
     } finally {
+      restoreProject();
       if (previousRealBinary === undefined) delete process.env.GH_REAL_BINARY;
       else process.env.GH_REAL_BINARY = previousRealBinary;
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });
@@ -2962,6 +2910,7 @@ if (endpoint === 'user') {
 
     const previousPath = process.env.PATH;
     const previousReceiptRoot = process.env.WORKER_SMOKE_RECEIPT_ROOT;
+    const restoreProject = selectSmokeProjectForTest(root, root);
     process.env.PATH = `${bin}:${previousPath ?? ''}`;
     process.env.WORKER_SMOKE_RECEIPT_ROOT = root;
     try {
@@ -2990,6 +2939,7 @@ if (endpoint === 'user') {
       else process.env.PATH = previousPath;
       if (previousReceiptRoot === undefined) delete process.env.WORKER_SMOKE_RECEIPT_ROOT;
       else process.env.WORKER_SMOKE_RECEIPT_ROOT = previousReceiptRoot;
+      restoreProject();
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -3075,7 +3025,7 @@ if (endpoint === 'user') {
     }
   });
 
-  it('denies allow when the immediate final census contains a same-head FAIL or BLOCKED', async () => {
+  it('does not let legacy smoke census or subsequent non-PASS block pre-review CI handoff', async () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-final-census-'));
     const body = planBody([{ action: 'A', expected: 'A passes' }]);
     const issueBodyFile = join(root, 'issue.md');
@@ -3094,9 +3044,9 @@ if (endpoint === 'user') {
           gateOptions(root, issueBodyFile),
           gateDependencies(body, [[pass], [pass], [pass, blocked]], root),
         );
-        expect(code).toBe(1);
+        expect(code).toBe(0);
         expect(output.mock.calls.map((entry) => String(entry[0])).join(''))
-          .toContain('comment_snapshot_changed_before_allow');
+          .toContain('review_handoff_ci_ready');
       } finally {
         output.mockRestore();
       }
@@ -3230,7 +3180,7 @@ describe('buildSmokeAgentPrompt selected declaration artifact', () => {
     });
 
     expect(prompt).toContain('When waiting for executor work, use only a completion or session identifier actually returned by the selected executor; never invent a shell_id or a transcript path.');
-    expect(prompt).toContain('Continue to follow the existing lifecycle progress and cancellation protocol.');
+    expect(prompt).not.toContain('Durable smoke-run binding');
     expect(prompt).toContain('non-pass-cause: executed_scenario_failure');
     expect(prompt).toContain('browser_cdp_unavailable, profile_mismatch, login_required, quota_exhausted, or product_challenge');
     expect(prompt).toContain('non-pass-cause: <closed structured cause when required above>');
@@ -3240,9 +3190,9 @@ describe('buildSmokeAgentPrompt selected declaration artifact', () => {
   });
 });
 
-describe('independent pass is stored only after publication', () => {
+describe('Issue #2250 independent smoke publication without ordering receipts', () => {
   const action = 'publish the independent report';
-  const expected = 'store passed only after the canonical comment exists';
+  const expected = 'publish the canonical PASS after independent execution';
 
   function tieredBody(): string {
     return [
@@ -3278,35 +3228,14 @@ describe('independent pass is stored only after publication', () => {
     return { root, headSha: git('rev-parse', 'HEAD').toLowerCase() };
   }
 
-  function sealWorkerOwnedExecutedPass(prompt: string): void {
-    const runId = prompt.match(/^run-id: (\S+)$/m)?.[1];
-    const artifactDir = prompt.match(/^artifact-dir: (\S+)$/m)?.[1];
-    if (!runId || !artifactDir) throw new Error('executed-pass fixture missing smoke binding');
-    writeFileSync(smokeDeliverySealedPath(artifactDir), JSON.stringify({ runId }), 'utf8');
-    const body = [
-      '```worker-smoke-report',
-      'result: PASS',
-      'tracked-files-unmodified: true',
-      'scenarios:',
-      `  - action: ${action} | expected: ${expected} | observed: published | outcome: pass`,
-      '```',
-      '',
-    ].join('\n');
-    const digest = computeSmokeCompletionBodyDigest(body);
-    writeFileSync(smokeCompletionBodyPath(artifactDir, digest), body, 'utf8');
-    writeFileSync(smokeCompletionSealPath(artifactDir, digest), JSON.stringify({ runId, bodySha256: digest }), 'utf8');
-  }
-
-  async function runOrdering(input: {
+  async function runIndependentSmokeFixture(input: {
     prefix: string;
     prNumber: number;
-    actor: 'independent' | 'worker-owned';
-    history: boolean;
     publishComment: (prNumber: number, body: string, repoRoot: string) => void;
-    detachedOwner?: boolean;
     spawnFails?: boolean;
-    receiptWriteFails?: boolean;
     executePass?: boolean;
+    chunkedReport?: boolean;
+    cleanupFails?: boolean;
   }): Promise<{ code?: number; error?: unknown; headSha: string; storeRoot: string; root: string; outputText?: string }> {
     const fixture = gitFixture(input.prefix);
     const body = tieredBody();
@@ -3314,18 +3243,67 @@ describe('independent pass is stored only after publication', () => {
     writeFileSync(issueBodyFile, body, 'utf8');
     const adapter = new DeterministicRuntimeAdapter();
     const originalSpawn = adapter.spawnWorker.bind(adapter);
-    const originalDispatch = adapter.dispatchInput.bind(adapter);
     Object.defineProperty(adapter, 'readiness', {
       configurable: true,
       value: () => ({ status: 'ok', value: { ready: true, workspacePath: fixture.root, headSha: fixture.headSha } }),
     });
-    if (input.executePass) {
-      Object.defineProperty(adapter, 'dispatchInput', {
+    const reportBody = [
+      '```worker-smoke-report',
+      'result: PASS',
+      'tracked-files-unmodified: true',
+      'scenarios:',
+      `  - action: ${action} | expected: ${expected} | observed: independent worker executed plan | outcome: pass`,
+      '```',
+    ];
+    const templateEcho = [
+      '```worker-smoke-report',
+      'result: PASS|FAIL|BLOCKED',
+      'tracked-files-unmodified: true|false',
+      'scenarios:',
+      '  - action: <what you ran> | expected: <from plan> | observed: <what happened> | outcome: pass|fail|skipped|blocked',
+      '```',
+    ];
+    const chunks = [[...templateEcho, ...reportBody.slice(0, 3)], reportBody.slice(3)];
+    let chunkIndex = 0;
+    if (input.executePass && input.chunkedReport) {
+      Object.defineProperty(adapter, 'readBoundedOutput', {
         configurable: true,
-        value: (dispatchInput: { readonly worker: RuntimeWorkerIdentity; readonly text?: string }) => {
-          sealWorkerOwnedExecutedPass(dispatchInput.text ?? '');
-          return originalDispatch(dispatchInput);
+        value: (readInput: { readonly worker: RuntimeWorkerIdentity }) => {
+          const index = Math.min(chunkIndex, chunks.length - 1);
+          chunkIndex += 1;
+          return {
+            status: 'ok',
+            value: {
+              worker: readInput.worker,
+              lines: chunkIndex > chunks.length ? [] : chunks[index],
+              observationToken: { opaque: `fixture-chunk-${chunkIndex}` },
+              changed: true,
+              terminalState: chunkIndex >= chunks.length ? 'exited' : 'running',
+              source: 'stream',
+            },
+          };
         },
+      });
+    } else if (input.executePass) {
+      Object.defineProperty(adapter, 'readBoundedOutput', {
+        configurable: true,
+        value: (readInput: { readonly worker: RuntimeWorkerIdentity }) => ({
+          status: 'ok',
+          value: {
+            worker: readInput.worker,
+            lines: reportBody,
+            observationToken: { opaque: 'fixture-report-1' },
+            changed: true,
+            terminalState: 'exited',
+            source: 'stream',
+          },
+        }),
+      });
+    }
+    if (input.cleanupFails) {
+      Object.defineProperty(adapter, 'stopWorker', {
+        configurable: true,
+        value: () => ({ status: 'failed', operation: 'stop_worker', reason: 'fixture-close-failed' }),
       });
     }
     Object.defineProperty(adapter, 'spawnWorker', {
@@ -3342,17 +3320,8 @@ describe('independent pass is stored only after publication', () => {
       return true;
     });
     const previousStore = process.env.PACK_REVIEW_RUN_STORE_ROOT;
-    const previousReceipts = process.env.WORKER_SMOKE_RECEIPT_ROOT;
     const storeRoot = join(fixture.root, 'review-store');
-    const receiptRoot = input.receiptWriteFails
-      ? join(dirname(fixture.root), `${basename(fixture.root)}-receipt-blocker`)
-      : join(fixture.root, 'receipts');
     process.env.PACK_REVIEW_RUN_STORE_ROOT = storeRoot;
-    if (input.receiptWriteFails) {
-      mkdirSync(receiptRoot);
-      chmodSync(receiptRoot, 0o555);
-    }
-    process.env.WORKER_SMOKE_RECEIPT_ROOT = receiptRoot;
     try {
       const code = await runSmokeAttempt({
         command: 'run',
@@ -3361,14 +3330,13 @@ describe('independent pass is stored only after publication', () => {
         headSha: fixture.headSha,
         issueBodyFile,
         smokeComplexity: 'routine',
-        smokeActor: input.actor,
+        smokeActor: 'independent',
         repoRoot: fixture.root,
         cwd: fixture.root,
         dryRun: false,
         json: true,
         reviewId: '',
         reviewHeadSha: '',
-        ...(input.detachedOwner ? { detachedOwner: true, runId: `run-${input.prNumber}` } : {}),
       }, {
         adapter,
         resolveProfile: () => ({
@@ -3396,13 +3364,6 @@ describe('independent pass is stored only after publication', () => {
           expectedTargetRef: 'main',
           expectedTarget: true,
         }),
-        fetchHistoryComments: () => input.history ? [comment(1, {
-          ...report('PASS', [scenario(action, expected)]),
-          issueNumber: 2068,
-          prNumber: input.prNumber,
-          headSha: fixture.headSha,
-        })] : [],
-        isHistoryAncestor: (ancestorSha, descendantSha) => ancestorSha === descendantSha,
         publishComment: input.publishComment,
       });
       return { code, headSha: fixture.headSha, storeRoot, root: fixture.root, outputText: rendered };
@@ -3412,442 +3373,122 @@ describe('independent pass is stored only after publication', () => {
       output.mockRestore();
       if (previousStore === undefined) delete process.env.PACK_REVIEW_RUN_STORE_ROOT;
       else process.env.PACK_REVIEW_RUN_STORE_ROOT = previousStore;
-      if (previousReceipts === undefined) delete process.env.WORKER_SMOKE_RECEIPT_ROOT;
-      else process.env.WORKER_SMOKE_RECEIPT_ROOT = previousReceipts;
-      if (input.receiptWriteFails) {
-        chmodSync(receiptRoot, 0o755);
-        rmSync(receiptRoot, { recursive: true, force: true });
-      }
     }
   }
 
-  function independentStatus(prNumber: number, storeRoot: string): string | undefined {
-    return readPackReviewAuthority(prNumber, { storeRoot })?.smokeOrdering?.independent?.status;
-  }
-
-  function workerOwnedStatus(prNumber: number, storeRoot: string): string | undefined {
-    return readPackReviewAuthority(prNumber, { storeRoot })?.smokeOrdering?.workerOwned?.status;
-  }
-
-  it('stores independent passed only after the exact-head PASS comment is published', async () => {
+  it('publishes an existing v1 PASS without an ordering receipt', async () => {
     const bodies: string[] = [];
-    const result = await runOrdering({
-      prefix: 'ordering-pass-published-',
+    const result = await runIndependentSmokeFixture({
+      prefix: 'smoke-2250-independent-pass-',
       prNumber: 206801,
-      actor: 'independent',
-      history: true,
-      publishComment: (_prNumber, body) => { bodies.push(body); },
+      executePass: true,
+      publishComment: (_pr, body) => { bodies.push(body); },
     });
     try {
-      expect(result.error).toBeUndefined();
-      expect(result.code).toBe(0);
+      expect(result.error, result.outputText).toBeUndefined();
+      expect(result.code, result.outputText).toBe(0);
       expect(bodies).toHaveLength(1);
+      expect(bodies[0]).toContain('<!-- pack-worker-smoke-report/v1 -->');
       expect(bodies[0]).toContain('result: PASS');
       expect(bodies[0]).toContain(result.headSha);
-      expect(independentStatus(206801, result.storeRoot)).toBe('passed');
-    } finally {
-      rmSync(result.root, { recursive: true, force: true });
-    }
+      expect(bodies[0]).toContain('tracked-files-unmodified: true');
+      expect(readPackReviewAuthority(206801, { storeRoot: result.storeRoot })).toBeNull();
+    } finally { rmSync(result.root, { recursive: true, force: true }); }
   });
 
-  it('keeps a published independent PASS when the later receipt write throws', async () => {
+  it('accepts a complete report from worker output without sealed completion artifacts', async () => {
     const bodies: string[] = [];
-    const result = await runOrdering({
-      prefix: 'ordering-pass-receipt-throws-',
-      prNumber: 206809,
-      actor: 'independent',
-      history: true,
-      receiptWriteFails: true,
-      publishComment: (_prNumber, body) => { bodies.push(body); },
-    });
-    try {
-      expect(result.code === 0 && result.error === undefined).toBe(false);
-      expect(bodies.some((body) => body.includes('result: PASS') && body.includes(result.headSha))).toBe(true);
-      expect(independentStatus(206809, result.storeRoot)).toBe('passed');
-    } finally {
-      rmSync(result.root, { recursive: true, force: true });
-    }
-  });
-
-  it('does not store independent passed when publication of the local PASS throws', async () => {
-    const result = await runOrdering({
-      prefix: 'ordering-pass-unpublished-',
-      prNumber: 206802,
-      actor: 'independent',
-      history: true,
-      publishComment: () => { throw new Error('scenario_precondition_unavailable: publication failed'); },
-    });
-    try {
-      expect(result.error).toBeInstanceOf(Error);
-      expect(independentStatus(206802, result.storeRoot)).not.toBe('passed');
-    } finally {
-      rmSync(result.root, { recursive: true, force: true });
-    }
-  });
-
-  it('does not store a published BLOCKED independent report as passed', async () => {
-    const bodies: string[] = [];
-    let calls = 0;
-    const result = await runOrdering({
-      prefix: 'ordering-blocked-published-',
-      prNumber: 206803,
-      actor: 'independent',
-      history: true,
-      publishComment: (_prNumber, body) => {
-        calls += 1;
-        bodies.push(body);
-        if (calls === 1) {
-          const error = new Error('publication failed') as Error & { code: string };
-          error.code = 'admission_refused';
-          throw error;
-        }
-      },
-    });
-    try {
-      expect(result.error).toBeUndefined();
-      expect(bodies.some((body) => body.includes('result: BLOCKED'))).toBe(true);
-      expect(independentStatus(206803, result.storeRoot)).toBe('failed');
-    } finally {
-      rmSync(result.root, { recursive: true, force: true });
-    }
-  });
-
-  it('stores a published independent FAIL as failed', async () => {
-    const bodies: string[] = [];
-    const result = await runOrdering({
-      prefix: 'ordering-fail-published-',
+    const result = await runIndependentSmokeFixture({
+      prefix: 'smoke-2250-output-report-',
       prNumber: 206804,
-      actor: 'independent',
-      history: false,
-      spawnFails: true,
-      publishComment: (_prNumber, body) => { bodies.push(body); },
-    });
-    try {
-      expect(result.error).toBeUndefined();
-      expect(result.code).toBe(1);
-      expect(bodies.some((body) => body.includes('result: FAIL'))).toBe(true);
-      expect(bodies.some((body) => body.includes('result: PASS'))).toBe(false);
-      expect(independentStatus(206804, result.storeRoot)).toBe('failed');
-    } finally {
-      rmSync(result.root, { recursive: true, force: true });
-    }
-  });
-
-  it('does not store a carry-only worker PASS as an independent pass', async () => {
-    const bodies: string[] = [];
-    const result = await runOrdering({
-      prefix: 'ordering-worker-carry-',
-      prNumber: 206805,
-      actor: 'worker-owned',
-      history: true,
-      publishComment: (_prNumber, body) => { bodies.push(body); },
-    });
-    try {
-      expect(result.error).toBeUndefined();
-      expect(result.code).toBe(0);
-      expect(bodies.some((body) => body.includes('result: PASS'))).toBe(true);
-      const ordering = readPackReviewAuthority(206805, { storeRoot: result.storeRoot })?.smokeOrdering;
-      expect(ordering?.independent?.status).not.toBe('passed');
-      expect(ordering?.workerOwned?.status).not.toBe('passed');
-      expect(ordering?.workerOwned?.status).not.toBe('started');
-    } finally {
-      rmSync(result.root, { recursive: true, force: true });
-    }
-  });
-
-  it('clears a worker-owned carry-only PASS without storing passed or blocking the next start', async () => {
-    const bodies: string[] = [];
-    const result = await runOrdering({
-      prefix: 'ordering-worker-carry-terminal-',
-      prNumber: 207111,
-      actor: 'worker-owned',
-      history: true,
-      publishComment: (_prNumber, body) => { bodies.push(body); },
-    });
-    const previousStore = process.env.PACK_REVIEW_RUN_STORE_ROOT;
-    process.env.PACK_REVIEW_RUN_STORE_ROOT = result.storeRoot;
-    try {
-      expect(result.error).toBeUndefined();
-      expect(result.code).toBe(0);
-      expect(bodies.some((body) => body.includes('result: PASS'))).toBe(true);
-      expect(workerOwnedStatus(207111, result.storeRoot)).toBe('failed');
-      const body = readFileSync(join(result.root, 'issue.md'), 'utf8');
-      expect(() => beginSmokeOrdering({
-        command: 'run',
-        issueNumber: 2068,
-        prNumber: 207111,
-        headSha: result.headSha,
-        issueBodyFile: join(result.root, 'issue.md'),
-        smokeComplexity: 'routine',
-        smokeActor: 'worker-owned',
-        repoRoot: result.root,
-        cwd: result.root,
-        dryRun: true,
-        json: true,
-        reviewId: '',
-        reviewHeadSha: '',
-      }, body, {
-        attemptId: 'later-executed-start',
-        supervisorPid: process.pid,
-        runId: 'later-executed-start',
-      })).not.toThrow();
-      expect(workerOwnedStatus(207111, result.storeRoot)).toBe('started');
-    } finally {
-      if (previousStore === undefined) delete process.env.PACK_REVIEW_RUN_STORE_ROOT;
-      else process.env.PACK_REVIEW_RUN_STORE_ROOT = previousStore;
-      rmSync(result.root, { recursive: true, force: true });
-    }
-  });
-
-  it('stores an executed worker-owned PASS only after its report is published', async () => {
-    const bodies: string[] = [];
-    const result = await runOrdering({
-      prefix: 'ordering-worker-executed-pass-',
-      prNumber: 207112,
-      actor: 'worker-owned',
-      history: false,
       executePass: true,
-      publishComment: (_prNumber, body) => { bodies.push(body); },
+      publishComment: (_pr, body) => { bodies.push(body); },
     });
     try {
       expect(result.error, result.outputText).toBeUndefined();
       expect(result.code, result.outputText).toBe(0);
-      expect(bodies.some((body) => body.includes('result: PASS') && body.includes(result.headSha))).toBe(true);
-      expect(workerOwnedStatus(207112, result.storeRoot)).toBe('passed');
-    } finally {
-      rmSync(result.root, { recursive: true, force: true });
-    }
-  }, 20_000);
+      expect(bodies.some((body) => body.includes('result: PASS'))).toBe(true);
+    } finally { rmSync(result.root, { recursive: true, force: true }); }
+  });
 
-  it('does not store an executed worker-owned PASS when publication throws', async () => {
-    const result = await runOrdering({
-      prefix: 'ordering-worker-executed-unpublished-',
-      prNumber: 207113,
-      actor: 'worker-owned',
-      history: false,
-      executePass: true,
-      publishComment: () => { throw new Error('scenario_precondition_unavailable: publication failed'); },
-    });
-    try {
-      expect(result.error).toBeInstanceOf(Error);
-      expect(workerOwnedStatus(207113, result.storeRoot)).not.toBe('passed');
-      expect(workerOwnedStatus(207113, result.storeRoot)).not.toBe('started');
-    } finally {
-      rmSync(result.root, { recursive: true, force: true });
-    }
-  }, 20_000);
-
-  it('terminalizes the smoke run with publication_unconfirmed without changing the scenario verdict', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-publish-terminal-'));
-    const previousRealBinary = process.env.GH_REAL_BINARY;
-    process.env.GH_REAL_BINARY = process.execPath;
-    const runId = 'run-207115';
-    const result = await runOrdering({
-      prefix: 'ordering-worker-publication-failure-',
-      prNumber: 207115,
-      actor: 'worker-owned',
-      history: false,
-      executePass: true,
-      detachedOwner: true,
-      publishComment: (prNumber, body, repoRoot) => publishPrComment(prNumber, body, repoRoot, 25),
-    });
-    try {
-      expect(result.error, result.outputText).toBeUndefined();
-      expect(result.code, result.outputText).toBe(0);
-      const output = JSON.parse(result.outputText ?? '') as { report: SmokeReport };
-      expect(output.report.result).toBe('PASS');
-      expect(output.report.scenarios[0]?.outcome).toBe('pass');
-      expect(output.report.limitations.join(' ')).toContain('publication_unconfirmed');
-      const lifecycle = readSmokeLifecycleRegistry(resolveSmokeRunArtifactDir(result.root, runId));
-      expect(lifecycle?.launcherTerminalizedAtMs).toEqual(expect.any(Number));
-    } finally {
-      if (previousRealBinary === undefined) delete process.env.GH_REAL_BINARY;
-      else process.env.GH_REAL_BINARY = previousRealBinary;
-      rmSync(root, { recursive: true, force: true });
-      if (result.root !== root) rmSync(result.root, { recursive: true, force: true });
-    }
-  }, 20_000);
-
-  async function deadPid(): Promise<number> {
-    let pid = 0;
-    const result = await runProcess({
-      command: process.execPath,
-      args: ['-e', 'process.exit(0)'],
-      allowEmptyStdout: true,
-      onSpawn: (spawned) => {
-        pid = spawned;
-      },
-    });
-    if (!result.ok || pid <= 0) {
-      throw new Error(`dead pid fixture failed: ${result.error ?? result.outcome}`);
-    }
-    return pid;
-  }
-
-  it('keeps a dead independent owner without a canonical result unpassed', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'ordering-dead-owner-'));
-    const storeRoot = join(root, 'review-store');
-    const previousStore = process.env.PACK_REVIEW_RUN_STORE_ROOT;
-    process.env.PACK_REVIEW_RUN_STORE_ROOT = storeRoot;
-    const body = tieredBody();
-    writeFileSync(join(root, 'issue.md'), body, 'utf8');
-    const headSha = 'a'.repeat(40);
-    const options = {
-      command: 'run',
-      issueNumber: 2068,
+  it('assembles a report that spans output reads after the echoed prompt template', async () => {
+    const bodies: string[] = [];
+    const result = await runIndependentSmokeFixture({
+      prefix: 'smoke-2250-chunked-report-',
       prNumber: 206806,
-      headSha,
-      issueBodyFile: join(root, 'issue.md'),
-      smokeComplexity: 'routine' as const,
-      smokeActor: 'independent' as const,
-      repoRoot: root,
-      cwd: root,
-      dryRun: true,
-      json: true,
-      reviewId: '',
-      reviewHeadSha: '',
-    };
+      executePass: true,
+      chunkedReport: true,
+      publishComment: (_pr, body) => { bodies.push(body); },
+    });
     try {
-      const pid = await deadPid();
-      beginSmokeOrdering(options, body, { attemptId: 'dead-owner-run', supervisorPid: pid, runId: 'dead-owner-run' });
-      expect(() => beginSmokeOrdering(options, body, {
-        attemptId: 'dead-owner-next',
-        supervisorPid: process.pid,
-        runId: 'dead-owner-next',
-      })).toThrow(/smoke_ordering_independent_in_progress/);
-      expect(readPackReviewAuthority(206806, { storeRoot })?.smokeOrdering?.independent?.status).not.toBe('passed');
-    } finally {
-      if (previousStore === undefined) delete process.env.PACK_REVIEW_RUN_STORE_ROOT;
-      else process.env.PACK_REVIEW_RUN_STORE_ROOT = previousStore;
-      rmSync(root, { recursive: true, force: true });
-    }
+      expect(result.error, result.outputText).toBeUndefined();
+      expect(result.code, result.outputText).toBe(0);
+      expect(bodies.some((body) => body.includes('result: PASS'))).toBe(true);
+    } finally { rmSync(result.root, { recursive: true, force: true }); }
   });
 
-  it('keeps a dead worker-owned owner without a canonical result unpassed', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'ordering-dead-worker-owner-'));
-    const storeRoot = join(root, 'review-store');
-    const previousStore = process.env.PACK_REVIEW_RUN_STORE_ROOT;
-    process.env.PACK_REVIEW_RUN_STORE_ROOT = storeRoot;
-    const body = tieredBody();
-    writeFileSync(join(root, 'issue.md'), body, 'utf8');
-    const headSha = 'b'.repeat(40);
-    const options = {
-      command: 'run',
-      issueNumber: 2068,
-      prNumber: 207114,
-      headSha,
-      issueBodyFile: join(root, 'issue.md'),
-      smokeComplexity: 'routine' as const,
-      smokeActor: 'worker-owned' as const,
-      repoRoot: root,
-      cwd: root,
-      dryRun: true,
-      json: true,
-      reviewId: '',
-      reviewHeadSha: '',
-    };
-    try {
-      const pid = await deadPid();
-      beginSmokeOrdering(options, body, { attemptId: 'dead-worker-run', supervisorPid: pid, runId: 'dead-worker-run' });
-      expect(() => beginSmokeOrdering(options, body, {
-        attemptId: 'dead-worker-next',
-        supervisorPid: process.pid,
-        runId: 'dead-worker-next',
-      })).toThrow(/smoke_ordering_worker_owned_in_progress/);
-      expect(readPackReviewAuthority(207114, { storeRoot })?.smokeOrdering?.workerOwned?.status).not.toBe('passed');
-    } finally {
-      if (previousStore === undefined) delete process.env.PACK_REVIEW_RUN_STORE_ROOT;
-      else process.env.PACK_REVIEW_RUN_STORE_ROOT = previousStore;
-      rmSync(root, { recursive: true, force: true });
-    }
+  it('parses only the last report block and waits while it is still open', () => {
+    const template = ['```worker-smoke-report', 'result: PASS|FAIL|BLOCKED', '```'];
+    const report = [
+      '```worker-smoke-report',
+      'result: FAIL',
+      'tracked-files-unmodified: true',
+      'scenarios:',
+      '  - action: run | expected: ok | observed: broke | outcome: fail | cause-family: scenario_assertion_failed',
+      '```',
+    ];
+    expect(parseLatestSmokeReport([...template, ...report.slice(0, 4)].join('\n'))).toBeNull();
+    expect(parseLatestSmokeReport([...template, ...report].join('\n'))?.result).toBe('FAIL');
   });
 
-  it('keeps a live independent owner without a terminal result started', () => {
-    const root = mkdtempSync(join(tmpdir(), 'ordering-live-owner-'));
-    const storeRoot = join(root, 'review-store');
-    const previousStore = process.env.PACK_REVIEW_RUN_STORE_ROOT;
-    process.env.PACK_REVIEW_RUN_STORE_ROOT = storeRoot;
-    const body = tieredBody();
-    writeFileSync(join(root, 'issue.md'), body, 'utf8');
-    const headSha = 'b'.repeat(40);
-    const options = {
-      command: 'run' as const,
-      issueNumber: 2068,
-      prNumber: 206808,
-      headSha,
-      issueBodyFile: join(root, 'issue.md'),
-      smokeComplexity: 'routine' as const,
-      smokeActor: 'independent' as const,
-      repoRoot: root,
-      cwd: root,
-      dryRun: true,
-      json: true,
-      reviewId: '',
-      reviewHeadSha: '',
-    };
+  it('keeps terminal cleanup informational instead of gating PASS', async () => {
+    const bodies: string[] = [];
+    const result = await runIndependentSmokeFixture({
+      prefix: 'smoke-2250-cleanup-informational-',
+      prNumber: 206805,
+      executePass: true,
+      cleanupFails: true,
+      publishComment: (_pr, body) => { bodies.push(body); },
+    });
     try {
-      beginSmokeOrdering(options, body, { attemptId: 'live-owner', supervisorPid: process.pid });
-      expect(() => beginSmokeOrdering(options, body, {
-        attemptId: 'live-owner-next',
-        supervisorPid: process.pid,
-      })).toThrow(/smoke_ordering_independent_in_progress/);
-      expect(readPackReviewAuthority(206808, { storeRoot })?.smokeOrdering?.independent?.status).toBe('started');
-    } finally {
-      if (previousStore === undefined) delete process.env.PACK_REVIEW_RUN_STORE_ROOT;
-      else process.env.PACK_REVIEW_RUN_STORE_ROOT = previousStore;
-      rmSync(root, { recursive: true, force: true });
-    }
+      expect(result.error, result.outputText).toBeUndefined();
+      expect(result.code, result.outputText).toBe(0);
+      expect(bodies.some((body) => body.includes('result: PASS'))).toBe(true);
+      expect(bodies.some((body) => body.includes('terminal-cleanup: close_failed:fixture-close-failed'))).toBe(true);
+    } finally { rmSync(result.root, { recursive: true, force: true }); }
   });
 
-  it('drops a previous-head independent pass when the head changes', () => {
-    const root = mkdtempSync(join(tmpdir(), 'ordering-previous-head-'));
-    const storeRoot = join(root, 'review-store');
-    const previousStore = process.env.PACK_REVIEW_RUN_STORE_ROOT;
-    process.env.PACK_REVIEW_RUN_STORE_ROOT = storeRoot;
-    const body = tieredBody();
-    writeFileSync(join(root, 'issue.md'), body, 'utf8');
-    const options = {
-      command: 'run' as const,
-      issueNumber: 2068,
-      prNumber: 206807,
-      headSha: HEAD_ONE,
-      issueBodyFile: join(root, 'issue.md'),
-      smokeComplexity: 'routine' as const,
-      smokeActor: 'independent' as const,
-      repoRoot: root,
-      cwd: root,
-      dryRun: true,
-      json: true,
-      reviewId: '',
-      reviewHeadSha: '',
-    };
-    const authorityOptions = { storeRoot };
+  it('worker spawn failure never publishes an accepting PASS', async () => {
+    const bodies: string[] = [];
+    const result = await runIndependentSmokeFixture({
+      prefix: 'smoke-2250-spawn-failure-',
+      prNumber: 206802,
+      spawnFails: true,
+      publishComment: (_pr, body) => { bodies.push(body); },
+    });
     try {
-      beginSmokeOrdering(options, body, { attemptId: 'previous-head-attempt', supervisorPid: process.pid });
-      const started = readPackReviewAuthority(206807, authorityOptions);
-      const passed = commitSmokeOrderingTransition({
-        prNumber: 206807,
-        expectedTransitionSeq: started?.transitionSeq ?? 0,
-        actor: 'independent',
-        headSha: HEAD_ONE,
-        status: 'passed',
-        attemptId: 'previous-head-attempt',
-        supervisorPid: process.pid,
-        options: authorityOptions,
-      });
-      const nextHead = observePackReviewHead({
-        prNumber: 206807,
-        expectedTransitionSeq: passed.transitionSeq,
-        headSha: HEAD_TWO,
-        options: authorityOptions,
-      });
-      expect(nextHead.smokeOrdering?.independent).toBeUndefined();
-    } finally {
-      if (previousStore === undefined) delete process.env.PACK_REVIEW_RUN_STORE_ROOT;
-      else process.env.PACK_REVIEW_RUN_STORE_ROOT = previousStore;
-      rmSync(root, { recursive: true, force: true });
-    }
+      expect(result.error, result.outputText).toBeUndefined();
+      expect(result.code).toBe(1);
+      expect(bodies.some((body) => body.includes('result: PASS'))).toBe(false);
+      expect(readPackReviewAuthority(206802, { storeRoot: result.storeRoot })).toBeNull();
+    } finally { rmSync(result.root, { recursive: true, force: true }); }
   });
+
+  it('failed comment publication does not report successful smoke', async () => {
+    const result = await runIndependentSmokeFixture({
+      prefix: 'smoke-2250-publication-failure-',
+      prNumber: 206803,
+      executePass: true,
+      publishComment: () => { throw new Error('fixture GitHub comment publication failed'); },
+    });
+    try {
+      expect(result.code).toBe(1);
+      expect(readPackReviewAuthority(206803, { storeRoot: result.storeRoot })).toBeNull();
+      expect(result.outputText).toContain('"ok":false');
+    } finally { rmSync(result.root, { recursive: true, force: true }); }
+  });
+
+
 });
 
 describe('worker-smoke run-owned plan admission', () => {
@@ -3980,19 +3621,10 @@ describe('worker-smoke run-owned plan admission', () => {
     ['operator CDP', 'run browser check with --cdp http://127.0.0.1:9222', 215102],
     ['operator local config', 'read /home/operator/orchestrator-pack/.claude/skills/discuss-with-gpt/local.config.json', 215103],
     ['stale source revision', 'invoke manager with --source-revision r09', 215104],
-  ] as const)('rejects %s before the smoke child starts', async (_name, action, prNumber) => {
+  ] as const)('does not preflight-reject %s before the smoke child starts', async (_name, action, prNumber) => {
     const result = await runPlanAdmission(action, prNumber);
-    expect(result.code).toBe(1);
-    expect(result.spawnCalls).toBe(0);
-    expect(result.output).toMatchObject({
-      ok: false,
-      attempted: false,
-      reason: 'scenario_precondition_unavailable',
-      report: {
-        result: 'BLOCKED',
-        causeFamily: 'scenario_precondition_unavailable',
-      },
-    });
+    expect(result.spawnCalls).toBe(1);
+    expect(result.output).not.toMatchObject({ reason: 'scenario_precondition_unavailable' });
   });
 
   it('admits a run-owned artifactDir/live-marker plan through the child-start seam', async () => {

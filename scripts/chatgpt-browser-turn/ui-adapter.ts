@@ -32,7 +32,8 @@ export type ExecutionRecoveryProductCause =
   | 'message_delivery_timed_out'
   | 'product_network_error'
   | 'message_stream_error'
-  | 'stream_recovery_polling_timed_out';
+  | 'stream_recovery_polling_timed_out'
+  | 'product_error_banner';
 
 export interface ExecutionRecoveryMessage {
   readonly role: 'user' | 'assistant';
@@ -164,16 +165,54 @@ const ROLELESS_SURFACE_CAUSES: readonly (readonly [string, ExecutionRecoveryProd
   [MESSAGE_STREAM_ERROR_TEXT, 'message_stream_error'],
 ];
 
+const UNRENDERED_OWNER_ALERT_CAUSES: readonly (readonly [string, ExecutionRecoveryProductCause])[] = [
+  ...ROLELESS_SURFACE_CAUSES,
+  [MESSAGE_DELIVERY_TIMED_OUT_TEXT, 'message_delivery_timed_out'],
+  [PRODUCT_NETWORK_ERROR_TEXT, 'product_network_error'],
+];
+
+// Current ChatGPT alerts whose detail lines vary; only the heading line is stable.
+const UNRENDERED_OWNER_ALERT_HEADING_CAUSES: readonly (readonly [string, ExecutionRecoveryProductCause])[] = [
+  ['Network error', 'product_network_error'],
+  ['Resume stream unavailable', 'stream_recovery_polling_timed_out'],
+];
+
+function exactAlertCause(
+  value: string,
+  causes: readonly (readonly [string, ExecutionRecoveryProductCause])[],
+): ExecutionRecoveryProductCause | undefined {
+  const normalized = normalizeExecutionRecoveryProductText(value);
+  for (const [text, cause] of causes) {
+    if (normalized === text || normalized === `${text} Retry`) return cause;
+  }
+  return undefined;
+}
+
 /**
  * Exact live `[role="alert"]` banner that ChatGPT can render outside every
  * message node, with or without its Retry label.
  */
 export function rolelessRecoverySurfaceCause(value: string): ExecutionRecoveryProductCause | undefined {
-  const normalized = normalizeExecutionRecoveryProductText(value);
-  for (const [text, cause] of ROLELESS_SURFACE_CAUSES) {
-    if (normalized === text || normalized === `${text} Retry`) return cause;
-  }
-  return undefined;
+  return exactAlertCause(value, ROLELESS_SURFACE_CAUSES);
+}
+
+/** First line of an alert, as the product renders its heading. */
+export function alertHeading(value: string): string {
+  return normalizeExecutionRecoveryProductText(value.trim().split('\n')[0] ?? '');
+}
+
+/**
+ * Any non-empty `[role="alert"]` banner of a fresh conversation whose owned
+ * messages never rendered; known texts keep their specific cause. Only the
+ * caller's bound-conversation gate makes it attributable, and product walls
+ * (usage limits and the like) are classified before this point.
+ */
+export function unrenderedOwnerAlertCause(value: string): ExecutionRecoveryProductCause | undefined {
+  const exact = exactAlertCause(value, UNRENDERED_OWNER_ALERT_CAUSES);
+  if (exact) return exact;
+  const heading = alertHeading(value);
+  if (!heading) return undefined;
+  return UNRENDERED_OWNER_ALERT_HEADING_CAUSES.find(([text]) => heading === text)?.[1] ?? 'product_error_banner';
 }
 
 function executionRecoveryCauseFromText(value: string): ExecutionRecoveryProductCause | undefined {

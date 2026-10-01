@@ -4,6 +4,7 @@ import './toolchain/native-entrypoint-preflight.ts';
 import { classifyRequiredCiLevel } from '../docs/review-ready-stuck-guard.mjs';
 import { runProcess, runProcessSync } from './kernel/subprocess.ts';
 import { overlayExecutorProfileEnv } from './executor-profile-store.ts';
+import { resolveTargetContext } from './lib/target-context.ts';
 import { resolveRealGhBinary, resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from './pr-scope-contract.ts';
 import { createHash, randomUUID } from 'node:crypto';
@@ -48,7 +49,6 @@ import {
   observeSmokeCompletionEvidence,
   observeSmokeDeliveryEstablished,
   parseSmokeAgentReport,
-  planWorkerSmokeSelectiveRetry,
   projectWorkerSmokeSelectiveReport,
   resolveSmokeRequirement,
   resolveSmokeRunArtifactDir,
@@ -67,13 +67,11 @@ import {
   type SmokeTestPlan,
   type WorkerSmokeCauseFamily,
   type WorkerSmokeCommentRecord,
-  type WorkerSmokeSelectiveRetryPlan,
   type WorkerSmokeTrustedTarget,
   evaluateWorkerSmokeMainMergeCarry,
   smokePlanDependencyPaths,
   type WorkerSmokeMainMergeCarryProof,
 } from './lib/worker-smoke-core.ts';
-import { evaluateSmokePlanPreflight } from './lib/smoke-plan-preflight.ts';
 import {
   bindSmokeTerminalHandle,
   cleanupSmokeLifecycle,
@@ -101,40 +99,33 @@ import {
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 import { markTrackedSmokeWorkerDeliveryConfirmed } from './lib/worker-smoke-bounded-create.ts';
-import {
-  evaluateSameHeadBlockedRetryAdmission,
-  listWorkerSmokeReceipts,
-  readWorkerSmokeRunFinalEvidence,
-  smokeRunFinalEvidencePath,
-  validateWorkerSmokeOperatorOverrideReason,
-  verifySmokeReportReceiptProvenance,
-  verifySmokeRunReceipt,
-  writeWorkerSmokeReceipt,
-  writeWorkerSmokeRunFinalEvidence,
-  type WorkerSmokeAttemptObservation,
-  type WorkerSmokeExecutionMode,
-  type WorkerSmokeMainMergeCarryRecord,
+import type {
+  WorkerSmokeAttemptObservation,
+  WorkerSmokeMainMergeCarryRecord,
 } from './lib/worker-smoke-receipt.ts';
+
+type WorkerSmokeReceiptModule = typeof import('./lib/worker-smoke-receipt.ts');
+const directWorkerSmokeRunCommand = process.argv[2] === 'run'
+  && resolve(process.argv[1] ?? '') === resolve(fileURLToPath(import.meta.url));
+const workerSmokeReceiptModule: WorkerSmokeReceiptModule | undefined = directWorkerSmokeRunCommand
+  ? undefined
+  : await import('./lib/worker-smoke-receipt.ts');
+
+function workerSmokeReceiptApi(): WorkerSmokeReceiptModule {
+  if (!workerSmokeReceiptModule) {
+    throw new Error('worker_smoke_legacy_receipt_api_unavailable_on_run_path');
+  }
+  return workerSmokeReceiptModule;
+}
 import {
-  commitSmokeOrderingTransition,
-  initializePackReviewAuthority,
-  observePackReviewHead,
   packReviewFindingsSatisfiedByStrictDescendant,
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
   readPackReviewAuthority,
   settleLogicalPackReviewFindingsByStrictDescendant,
-  smokeOrderingRequired,
-  type PackReviewAuthorityOptions,
-  type PackReviewTier,
-  type SmokeOrderingActor,
-  type SmokeOrderingOwnerEvidence,
 } from './pack-review-state.ts';
 import {
-  listPackReviewRuns,
   resolvePackReviewRunStoreRoot,
 } from './lib/pack-review-run-store.ts';
-import { parseComplexityTierFence } from './lib/tier-gate-core.ts';
-import { resolveTierAndCap } from '../docs/review-cycle-cap.mjs';
 import { selectRuntimeAdapter } from './runtime/registry.ts';
 import {
   currentWorkerAssignment,
@@ -193,7 +184,7 @@ export interface CliOptions {
   headSha: string;
   issueBodyFile: string;
   smokeComplexity: SmokeComplexity | '';
-  smokeActor?: SmokeOrderingActor;
+  smokeActor?: 'worker-owned' | 'independent';
   operatorSmokeOnly?: boolean;
   operatorOverrideReason?: string;
   repoRoot: string;
@@ -461,7 +452,7 @@ export function projectExpectedPrTarget(
 
 function parseArgs(argv: readonly string[]): CliOptions {
   const options: CliOptions = {
-    command: '', issueNumber: 0, prNumber: 0, headSha: '', issueBodyFile: '', smokeComplexity: '', smokeActor: 'worker-owned', operatorSmokeOnly: false,
+    command: '', issueNumber: 0, prNumber: 0, headSha: '', issueBodyFile: '', smokeComplexity: '', smokeActor: 'independent', operatorSmokeOnly: false,
     repoRoot: process.cwd(), cwd: process.cwd(), dryRun: false, json: false, reviewId: '', reviewHeadSha: '', detach: false, detachedOwner: false, runId: '',
   };
   const args = [...argv];
@@ -473,18 +464,14 @@ function parseArgs(argv: readonly string[]): CliOptions {
       case '--head-sha': options.headSha = args[++index] ?? ''; break;
       case '--issue-body-file': options.issueBodyFile = args[++index] ?? ''; break;
       case '--smoke-complexity': options.smokeComplexity = (args[++index] ?? '') as SmokeComplexity; break;
-      case '--smoke-actor': options.smokeActor = (args[++index] ?? '') as SmokeOrderingActor; break;
+      case '--smoke-actor': options.smokeActor = (args[++index] ?? '') as CliOptions['smokeActor']; break;
       case '--operator-smoke-only': options.operatorSmokeOnly = true; break;
-      case '--operator-override': options.operatorOverrideReason = args[++index] ?? ''; break;
       case '--repo-root': options.repoRoot = args[++index] ?? options.repoRoot; break;
       case '--cwd': options.cwd = args[++index] ?? options.cwd; break;
       case '--dry-run': options.dryRun = true; break;
       case '--json': options.json = true; break;
       case '--review-id': options.reviewId = args[++index] ?? ''; break;
       case '--review-head-sha': options.reviewHeadSha = args[++index] ?? ''; break;
-      case '--detach': options.detach = true; break;
-      case '--detached-owner': options.detachedOwner = true; break;
-      case '--run': options.runId = args[++index] ?? ''; break;
       default: throw new Error(`unknown argument: ${args[index]}`);
     }
   }
@@ -670,7 +657,9 @@ function canonicalRepositorySlug(value: unknown): string {
   return slug;
 }
 
-const TRUSTED_REPOSITORY_SLUG = 'chetwerikoff/orchestrator-pack';
+function selectedSmokeRepositorySlug(): string {
+  return canonicalRepositorySlug(resolveTargetContext().repository);
+}
 
 function repositoryFromGithubUrl(value: unknown): string {
   const match = String(value ?? '').trim().match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/(?:issues|pull)\/\d+(?:$|[?#])/iu);
@@ -716,7 +705,7 @@ function suppliedIssueBodyMatches(fetched: string, supplied: string): boolean {
 }
 
 export function resolveSmokeTarget(options: CliOptions, suppliedIssueBody: string): ResolvedSmokeTarget {
-  const repositorySlug = canonicalRepositorySlug(TRUSTED_REPOSITORY_SLUG);
+  const repositorySlug = canonicalRepositorySlug(selectedSmokeRepositorySlug());
   const originSlug = gitOriginRepositorySlug(options.repoRoot);
   if (originSlug.toLowerCase() !== repositorySlug.toLowerCase()) throw new Error('trusted_target: trusted repository and origin mismatch');
 
@@ -832,7 +821,7 @@ export function publishPrComment(prNumber: number, body: string, repoRoot: strin
     let result: ReturnType<typeof runProcessSync>;
     try {
       result = runSmokeGhWriteSync(
-        ['api', `repos/${TRUSTED_REPOSITORY_SLUG}/issues/${String(prNumber)}/comments`, '--method', 'POST', '--input', bodyFile], repoRoot, {}, timeoutMs,
+        ['api', `repos/${selectedSmokeRepositorySlug()}/issues/${String(prNumber)}/comments`, '--method', 'POST', '--input', bodyFile], repoRoot, {}, timeoutMs,
       );
     } catch (error) {
       const detail = scrubSmokeOutput(scrubForwardedGhSecrets(error instanceof Error ? error.message : String(error), buildSmokeGhChildEnv()));
@@ -1023,23 +1012,24 @@ export async function evaluatePostSmokeReadiness(
   const fetchSmokeComments = dependencies.fetchSmokeComments ?? fetchPrComments;
   const fetchCurrentHead = dependencies.fetchCurrentHead ?? fetchLivePrHead;
   let initialSmokeHead = '';
-  let initialSmokeComments: WorkerSmokeCommentRecord[] = [];
-  let smokeWitness: SmokeReport | undefined;
+  let smokeWitnessHead = '';
+  let smokePassObserved = false;
   let smokeObservationAvailable = true;
   try {
     initialSmokeHead = fetchCurrentHead(target.prNumber, target.repositorySlug, options.repoRoot);
-    initialSmokeComments = stabilizeSmokeCommentCensus(() =>
-      fetchSmokeComments(target.prNumber, target.repositorySlug, options.repoRoot));
-    if (initialSmokeHead === target.headSha) {
-      const initialSmokeCoverage = evaluateWorkerSmokeCoverage({
-        issueBody: target.issueBody,
-        comments: initialSmokeComments,
-        target: coverageTarget(target, initialSmokeHead),
+    // The PR's own PASS comments suffice independently of publisher or smoke head.
+    const comments = fetchSmokeComments(target.prNumber, target.repositorySlug, options.repoRoot);
+    const newestPass = [...comments]
+      .sort((left, right) => Number(right.id ?? 0) - Number(left.id ?? 0))
+      .find((comment) => {
+        const body = String(comment.body ?? '');
+        return body.includes('<!-- pack-worker-smoke-report/v1 -->')
+          && Number(body.match(/^\s*-\s*pr:\s*#(\d+)/imu)?.[1] ?? 0) === target.prNumber
+          && parseSmokeAgentReport(body)?.result === 'PASS';
       });
-      const clearingPass = initialSmokeCoverage.latestClearingPass;
-      if (initialSmokeCoverage.accepting && clearingPass?.result === 'PASS' && verifyPublishedSmokeProvenance(clearingPass)) {
-        smokeWitness = clearingPass;
-      }
+    if (newestPass) {
+      smokePassObserved = true;
+      smokeWitnessHead = String(newestPass.body ?? '').match(/^\s*-\s*head-sha:\s*`?([0-9a-f]{40})`?/imu)?.[1] ?? '';
     }
   } catch {
     smokeObservationAvailable = false;
@@ -1052,7 +1042,7 @@ export async function evaluatePostSmokeReadiness(
   const reviews = dependencies.listDirectReviews
     ? await dependencies.listDirectReviews(options.repoRoot, target.repositorySlug, target.prNumber)
     : await transport.listReviews();
-  const initialSmokePassed = initialSmokeHead === target.headSha && Boolean(smokeWitness);
+  const initialSmokePassed = smokePassObserved;
   const direct = projectDirectPackReviewState({
     reviews, repositoryOwnerLogin: target.repositorySlug.split('/')[0] ?? '',
     currentHeadSha: target.headSha, workerLifecycle: lifecycle, requiredCiGreen: ciGreen, exactHeadSmokePassed: initialSmokePassed,
@@ -1078,20 +1068,9 @@ export async function evaluatePostSmokeReadiness(
     });
   }
   const atCap = currentAtCapFacts(target.prNumber);
-  let smokeEvidenceState: PostSmokeReadinessResult['smokeEvidence']['state'] = smokeObservationAvailable ? 'missing' : 'unavailable';
-  if (smokeObservationAvailable && smokeWitness) {
-    try {
-      const finalHead = fetchCurrentHead(target.prNumber, target.repositorySlug, options.repoRoot);
-      const finalComments = stabilizeSmokeCommentCensus(() =>
-        fetchSmokeComments(target.prNumber, target.repositorySlug, options.repoRoot));
-      smokeEvidenceState = finalHead === target.headSha
-        && finalSmokeCommentSnapshotMatches(initialSmokeComments, finalComments)
-        ? 'verified'
-        : 'changed';
-    } catch {
-      smokeEvidenceState = 'unavailable';
-    }
-  }
+  const smokeEvidenceState: PostSmokeReadinessResult['smokeEvidence']['state'] = !smokeObservationAvailable
+    ? 'unavailable'
+    : initialSmokeHead !== target.headSha ? 'changed' : smokePassObserved ? 'verified' : 'missing';
   const readiness = evaluateReadiness({
     target: readinessTarget,
     pr: { open: target.prOpen, expectedTarget: target.expectedTarget, prNumber: target.prNumber, headSha: target.headSha },
@@ -1102,11 +1081,11 @@ export async function evaluatePostSmokeReadiness(
       unresolvedRequiredFinding: postSmokeReview.unresolvedRequiredFinding, ...atCap,
     },
     smoke: {
-      headSha: target.headSha,
+      headSha: smokeWitnessHead || target.headSha,
       state: smokeEvidenceState === 'verified' ? 'pass' : smokeEvidenceState === 'unavailable' ? 'unknown' : 'missing',
     },
   });
-  return { readiness, reviewProjection, smokeEvidence: { state: smokeEvidenceState, headSha: target.headSha } };
+  return { readiness, reviewProjection, smokeEvidence: { state: smokeEvidenceState, headSha: smokeWitnessHead || target.headSha } };
 }
 
 export interface DelegatedReadinessDependencies {
@@ -1189,30 +1168,30 @@ export async function runDirectReviewReconciliation(options: CliOptions): Promis
       || !options.reviewId || !/^[0-9a-f]{40}$/u.test(options.reviewHeadSha.trim().toLowerCase())) {
     emit({ ok: false, reason: 'direct_review_binding_invalid' }, options.json); return 1;
   }
-  const currentHead = fetchLivePrHead(options.prNumber, TRUSTED_REPOSITORY_SLUG, options.repoRoot);
+  const currentHead = fetchLivePrHead(options.prNumber, selectedSmokeRepositorySlug(), options.repoRoot);
   const eventHead = options.headSha.trim().toLowerCase();
   const reviewHead = options.reviewHeadSha.trim().toLowerCase();
   if (currentHead !== eventHead || reviewHead !== eventHead) {
     emit({ ok: true, skipped: true, reason: 'direct_review_stale_publication_head', reviewHead, eventHead, currentHead }, options.json); return 0;
   }
-  const transport = createGithubReviewTransport({ repoRoot: options.repoRoot, repoSlug: TRUSTED_REPOSITORY_SLUG, prNumber: options.prNumber });
+  const transport = createGithubReviewTransport({ repoRoot: options.repoRoot, repoSlug: selectedSmokeRepositorySlug(), prNumber: options.prNumber });
   const reviews = await transport.listReviews();
   const submitted = reviews.find((review) => sameReviewIdentifier(review.id, options.reviewId));
-  const owner = TRUSTED_REPOSITORY_SLUG.split('/')[0] ?? '';
+  const owner = selectedSmokeRepositorySlug().split('/')[0] ?? '';
   if (!submitted || !parseDirectPackReviewEvidence(submitted, owner)) {
     emit({ ok: true, skipped: true, reason: 'review_not_canonical_direct_pack_review' }, options.json); return 0;
   }
   const direct = projectDirectPackReviewState({
     reviews, repositoryOwnerLogin: owner, currentHeadSha: currentHead, workerLifecycle: '', requiredCiGreen: false,
     exactHeadSmokePassed: false,
-    isAncestor: (ancestorSha, descendantSha) => githubCommitIsAncestor(TRUSTED_REPOSITORY_SLUG, ancestorSha, descendantSha, options.repoRoot),
+    isAncestor: (ancestorSha, descendantSha) => githubCommitIsAncestor(selectedSmokeRepositorySlug(), ancestorSha, descendantSha, options.repoRoot),
   });
   const projection = projectPackReviewSemanticStatus({
-    runner: currentPackReviewStatusFact(TRUSTED_REPOSITORY_SLUG, currentHead, options.repoRoot),
+    runner: currentPackReviewStatusFact(selectedSmokeRepositorySlug(), currentHead, options.repoRoot),
     direct: { hasLegitimateReview: direct.hasLegitimateReview, unresolvedBlockingFinding: direct.state === 'blocked' },
   });
   if (!options.dryRun) await publishPackReviewRequiredStatus({
-    repoRoot: options.repoRoot, repoSlug: TRUSTED_REPOSITORY_SLUG, headSha: currentHead,
+    repoRoot: options.repoRoot, repoSlug: selectedSmokeRepositorySlug(), headSha: currentHead,
     request: semanticPackReviewRequiredStatusRequest({ headSha: currentHead, projection }),
   });
   emit({ ok: true, projection, direct }, options.json); return 0;
@@ -1268,26 +1247,15 @@ function operationalReport(
   };
 }
 
-interface SmokePublicationBinding {
-  attemptId: string;
-  runId?: string;
-  executionMode: WorkerSmokeExecutionMode;
-  attemptObservations?: readonly WorkerSmokeAttemptObservation[];
-  operatorOverrideReason?: string;
-  mainMergeCarry?: WorkerSmokeMainMergeCarryRecord;
-}
-
 function publishSmokeReport(
   report: SmokeReport,
   options: CliOptions,
-  binding?: SmokePublicationBinding,
   publishComment: (prNumber: number, body: string, repoRoot: string) => void = publishPrComment,
   afterComment?: () => void,
 ): boolean {
   if (options.dryRun) return false;
-  publishComment(options.prNumber, formatSmokeReportComment(report), options.repoRoot);
+  publishComment(options.prNumber, scrubSmokeOutput(formatSmokeReportComment(report)), options.repoRoot);
   afterComment?.();
-  if (binding) writeWorkerSmokeReceipt(report, binding);
   return true;
 }
 
@@ -1790,92 +1758,7 @@ function waitForCooperativeShutdown(input: { adapter: RuntimeAdapter; worker: Ru
 }
 
 function verifyPublishedSmokeProvenance(report: SmokeReport): boolean {
-  return smokeReportHasPackProducer(report) && verifySmokeReportReceiptProvenance(report);
-}
-
-function coverageTarget(target: ResolvedSmokeTarget, liveHeadSha: string): WorkerSmokeTrustedTarget {
-  return {
-    repositorySlug: target.repositorySlug, issueNumber: target.issueNumber, prNumber: target.prNumber, headSha: target.headSha,
-    resolvedIssueNumber: target.issueNumber, resolvedPrNumber: target.prNumber, liveHeadSha,
-    issueBodyMatchesTarget: target.issueBodyMatchesTarget, trustedPublisherLogin: target.trustedPublisherLogin,
-    commentCensusComplete: true, commentSnapshotStable: true,
-  };
-}
-
-function ordinaryFullAttemptSelection(plan: SmokeTestPlan): WorkerSmokeSelectiveRetryPlan {
-  return {
-    fullPlan: plan,
-    attemptPlan: { ...plan, scenarios: [...plan.scenarios] },
-    carried: [], affectedTupleKeys: [], affectedDiagnostics: [], tupleDiagnostics: [],
-  };
-}
-
-function selectSmokeAttempt(
-  options: CliOptions,
-  issueBody: string,
-  target: ResolvedSmokeTarget | undefined,
-  dependencies: SmokeAttemptDependencies,
-): WorkerSmokeSelectiveRetryPlan {
-  const fullPlan = resolveSmokeRequirement(issueBody);
-  if (!target || fullPlan.requirement !== 'required' || fullPlan.scenarios.length === 0) return ordinaryFullAttemptSelection(fullPlan);
-  const fetchHistory = dependencies.fetchHistoryComments ?? fetchPrComments;
-  let comments: WorkerSmokeCommentRecord[] = [];
-  let historyReadable = true;
-  try {
-    comments = stabilizeSmokeCommentCensus(() => fetchHistory(target.prNumber, target.repositorySlug, options.repoRoot));
-  } catch {
-    historyReadable = false;
-  }
-  const isAncestor = (ancestorSha: string, descendantSha: string): boolean =>
-    dependencies.isHistoryAncestor
-      ? dependencies.isHistoryAncestor(ancestorSha, descendantSha, target, options)
-      : githubCommitIsAncestor(target.repositorySlug, ancestorSha, descendantSha, options.repoRoot);
-  let workerOwnedPassHeadShas: string[] = [];
-  if ((options.smokeActor ?? 'worker-owned') === 'independent') {
-    try {
-      const storeRoot = resolvePackReviewRunStoreRoot({
-        projectId: 'orchestrator-pack',
-        storeRoot: process.env.PACK_REVIEW_RUN_STORE_ROOT,
-      });
-      const workerOwned = readPackReviewAuthority(target.prNumber, { storeRoot })?.smokeOrdering?.workerOwned;
-      if (workerOwned?.status === 'passed') workerOwnedPassHeadShas = [workerOwned.headSha];
-    } catch {
-      workerOwnedPassHeadShas = [];
-    }
-  }
-  const selection = planWorkerSmokeSelectiveRetry({
-    issueBody, prBody: target.prBody, comments, target: coverageTarget(target, target.headSha), isAncestor, historyReadable,
-    smokeActor: options.smokeActor ?? 'worker-owned',
-    workerOwnedPassHeadShas,
-  });
-  const sourceHeads = [...new Set(selection.carried.map((entry) => entry.sourceHeadSha))];
-  if (selection.carried.length === 0) return selection;
-  const mergeCommitsBySource = sourceHeads.map((sourceHead) =>
-    gitRead(options.repoRoot, ['rev-list', '--merges', `${sourceHead}..${target.headSha}`])?.split(/\r?\n/u).filter(Boolean) ?? [],
-  );
-  const mergeCommits = [...new Set(mergeCommitsBySource.flat())];
-  if (mergeCommits.length === 0) return selection;
-  const mainRef = gitRead(options.repoRoot, ['rev-parse', '--verify', 'refs/remotes/origin/main^{commit}']);
-  const hasMainMerge = Boolean(mainRef && mergeCommits.some((merge) => {
-    const parents = gitRead(options.repoRoot, ['show', '-s', '--format=%P', merge])?.split(/\s+/u) ?? [];
-    return parents.length === 2
-      && gitRead(options.repoRoot, ['merge-base', '--is-ancestor', parents[1]!, mainRef]) !== undefined;
-  }));
-  const refuseCarry = (): WorkerSmokeSelectiveRetryPlan => ({
-    ...selection,
-    attemptPlan: { ...selection.fullPlan, scenarios: [...selection.fullPlan.scenarios] },
-    carried: [],
-    fallbackReason: 'main_merge_carry_refused',
-  });
-  if (mergeCommits.length > 0 && !mainRef) return refuseCarry();
-  if (!hasMainMerge) return selection;
-  if (sourceHeads.length !== 1) return refuseCarry();
-  const sourceHeadSha = sourceHeads[0]!;
-  const sourceReport = selection.carried.find((entry) => entry.sourceHeadSha === sourceHeadSha)?.sourceReport;
-  if (!sourceReport || sourceReport.result !== 'PASS' || !verifySmokeReportReceiptProvenance(sourceReport)) return refuseCarry();
-  const mainMergeCarry = deriveMainMergeCarryProof(options.repoRoot, sourceHeadSha, target.headSha, issueBody);
-  if (!mainMergeCarry) return refuseCarry();
-  return { ...selection, mainMergeCarry };
+  return smokeReportHasPackProducer(report) && workerSmokeReceiptApi().verifySmokeReportReceiptProvenance(report);
 }
 
 export function findVerifiedSmokeReceiptWitness(input: { issueBody: string; comments: readonly WorkerSmokeCommentRecord[]; target: WorkerSmokeTrustedTarget }): SmokeReport | undefined {
@@ -1907,71 +1790,35 @@ function runValidatePlan(options: CliOptions): number {
 }
 
 export interface GateCheckDependencies {
-  evaluateLifecycle: (cwd: string) => ReturnType<typeof evaluateSmokeLifecycleCleanliness>;
   resolveTarget: (options: CliOptions, suppliedIssueBody: string) => ResolvedSmokeTarget;
-  fetchComments: (prNumber: number, repositorySlug: string, repoRoot: string) => WorkerSmokeCommentRecord[];
   fetchHead: (prNumber: number, repositorySlug: string, repoRoot: string) => string;
-  selectAdapter: (cwd: string) => Promise<RuntimeAdapter>;
   ciGreen: (prNumber: number, headSha: string, repositorySlug: string, repoRoot: string) => boolean;
 }
 
 const DEFAULT_GATE_DEPENDENCIES: GateCheckDependencies = {
-  evaluateLifecycle: evaluateSmokeLifecycleCleanliness, resolveTarget: resolveSmokeTarget, fetchComments: fetchPrComments,
-  fetchHead: fetchLivePrHead, selectAdapter: async (cwd) => selectRuntimeAdapter({}, { cwd }), ciGreen: resolveCiGreen,
+  resolveTarget: resolveSmokeTarget, fetchHead: fetchLivePrHead, ciGreen: resolveCiGreen,
 };
 
 export async function runGateCheck(options: CliOptions, dependencies: GateCheckDependencies = DEFAULT_GATE_DEPENDENCIES): Promise<number> {
-  const lifecycle = dependencies.evaluateLifecycle(options.cwd);
-  if (!lifecycle.clean) { emit({ ok: false, allowed: false, reason: `smoke_lifecycle_unclean:${lifecycle.reasons[0]}`, lifecycle }, options.json); return 1; }
+  // Ready-for-review is a review handoff, not worker-owned smoke admission.
+  // The existing supervisor starts independent smoke after settled pack review.
   try {
-    const suppliedIssueBody = readIssueBody(options.issueBodyFile);
-    const target = dependencies.resolveTarget(options, suppliedIssueBody);
-    const issueBody = target.issueBody;
-    const comments = stabilizeSmokeCommentCensus(() => dependencies.fetchComments(options.prNumber, target.repositorySlug, options.repoRoot));
-    const liveHeadSha = dependencies.fetchHead(options.prNumber, target.repositorySlug, options.repoRoot);
-    const trustedTarget = coverageTarget(target, liveHeadSha);
-    const receiptWitness = findVerifiedSmokeReceiptWitness({ issueBody, comments, target: trustedTarget });
-    const adapter = await dependencies.selectAdapter(options.cwd);
-    const readiness = adapter.readiness({ cwd: options.cwd });
-    let decision = evaluateWorkerSmokeGate({
-      issueBody, issueNumber: target.issueNumber, prNumber: target.prNumber, headSha: target.headSha, prComments: comments,
-      ciGreen: dependencies.ciGreen(options.prNumber, options.headSha, target.repositorySlug, options.repoRoot),
-      orcaWorktreeOk: readiness.status === 'ok', ownedTerminalClosed: Boolean(receiptWitness), terminalProvenanceOk: Boolean(receiptWitness),
-      repositorySlug: target.repositorySlug, resolvedIssueNumber: target.issueNumber, resolvedPrNumber: target.prNumber, liveHeadSha,
-      issueBodyMatchesTarget: target.issueBodyMatchesTarget, trustedPublisherLogin: target.trustedPublisherLogin,
-      commentCensusComplete: true, commentSnapshotStable: true,
-    });
-    if (decision.allowed) {
-      const finalHeadSha = dependencies.fetchHead(options.prNumber, target.repositorySlug, options.repoRoot);
-      if (finalHeadSha !== target.headSha) {
-        decision = { allowed: false, reason: 'live_pr_head_changed_during_evaluation', smokeRequired: true, diagnostics: decision.diagnostics };
-      } else {
-        const finalComments = dependencies.fetchComments(options.prNumber, target.repositorySlug, options.repoRoot);
-        if (!finalSmokeCommentSnapshotMatches(comments, finalComments)) {
-          decision = { allowed: false, reason: 'comment_snapshot_changed_before_allow', smokeRequired: true, diagnostics: decision.diagnostics };
-        }
-      }
-    }
-    emit({ ok: decision.allowed, ...decision, lifecycle }, options.json); return decision.allowed ? 0 : 1;
+    const target = dependencies.resolveTarget(options, readIssueBody(options.issueBodyFile));
+    const liveHead = dependencies.fetchHead(target.prNumber, target.repositorySlug, options.repoRoot);
+    const ciGreen = dependencies.ciGreen(target.prNumber, target.headSha, target.repositorySlug, options.repoRoot);
+    const allowed = liveHead === target.headSha && ciGreen;
+    emit({
+      ok: allowed, allowed, smokeRequired: false,
+      reason: allowed ? 'review_handoff_ci_ready' : 'required_ci_or_pr_head_not_current',
+    }, options.json);
+    return allowed ? 0 : 1;
   } catch (error) {
-    const reason = scrubSmokeOutput(error instanceof Error ? error.message : String(error));
-    emit({ ok: false, allowed: false, reason, smokeRequired: true, lifecycle }, options.json); return 1;
+    emit({ ok: false, allowed: false, smokeRequired: false, reason: scrubSmokeOutput(
+      error instanceof Error ? error.message : String(error),
+    ) }, options.json);
+    return 1;
   }
 }
-
-interface SmokeOrderingAttemptOwner {
-  attemptId: string;
-  supervisorPid: number;
-  runId?: string;
-}
-
-interface SmokeOrderingBinding extends SmokeOrderingAttemptOwner {
-  actor: SmokeOrderingActor;
-  prNumber: number;
-  headSha: string;
-  options: PackReviewAuthorityOptions;
-}
-type SmokeOrderingFailureKind = 'finding' | 'retryable';
 
 function processIsAlive(pid: number): boolean {
   if (!Number.isSafeInteger(pid) || pid < 1) return false;
@@ -1986,136 +1833,20 @@ function processIsAlive(pid: number): boolean {
   return true;
 }
 
-function zeroExecutionCarryOnlyPass(report: SmokeReport, headSha: string): boolean {
-  return (report.environmentNotes ?? []).includes('smoke-execution=carry-only')
-    || isProvenCarryOnlySmokeReport(report, headSha);
-}
-
 export function smokeReportHasScenarioFinding(report: SmokeReport): boolean {
   return report.result === 'FAIL'
     && report.scenarios.some((scenario) => scenario.outcome === 'fail');
-}
-
-function orderingOwnerEvidence(
-  marker: { attemptId?: string; supervisorPid?: number; runId?: string } | undefined,
-  options: CliOptions,
-): SmokeOrderingOwnerEvidence | undefined {
-  const attemptId = marker?.attemptId?.trim();
-  const supervisorPid = Number(marker?.supervisorPid);
-  if (!attemptId || !Number.isInteger(supervisorPid) || supervisorPid <= 0) return undefined;
-  const runId = marker?.runId?.trim() || undefined;
-  let authoritativeResult: SmokeReport['result'] | undefined;
-  let scenarioFinding: boolean | undefined;
-  let executionMode: 'executed' | 'carry-only' | undefined;
-  let cleanupSafe: boolean | undefined;
-  if (runId) {
-    const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
-    const runtime = readWorkerSmokeRunFinalEvidence({
-      artifactDir, runId, issueNumber: options.issueNumber, prNumber: options.prNumber, headSha: options.headSha, mode: 'runtime',
-    });
-    const noExecution = runtime ? null : readWorkerSmokeRunFinalEvidence({
-      artifactDir, runId, issueNumber: options.issueNumber, prNumber: options.prNumber, headSha: options.headSha, mode: 'no_execution',
-    });
-    const selected = runtime ?? noExecution;
-    authoritativeResult = selected?.result;
-    scenarioFinding = selected ? smokeReportHasScenarioFinding(selected.report) : undefined;
-    if (selected?.result === 'PASS' && selected.mode === 'no_execution' && zeroExecutionCarryOnlyPass(selected.report, options.headSha)) {
-      executionMode = 'carry-only';
-    } else if (runtime?.result === 'PASS') {
-      executionMode = 'executed';
-    }
-    const registry = readSmokeLifecycleRegistry(artifactDir);
-    cleanupSafe = Boolean(
-      registry
-      && registry.runId === runId
-      && (
-        !registry.terminalHandle
-        || (registry.spawnState === 'clean' && hasValidSmokeCloseReceipt(artifactDir))
-      )
-    );
-  }
-  return {
-    attemptId,
-    supervisorPid,
-    ...(runId ? { runId } : {}),
-    supervisorAlive: processIsAlive(supervisorPid),
-    ...(cleanupSafe !== undefined ? { cleanupSafe } : {}),
-    ...(authoritativeResult ? { authoritativeResult } : {}),
-    ...(scenarioFinding !== undefined ? { scenarioFinding } : {}),
-    ...(executionMode ? { executionMode } : {}),
-  };
-}
-
-export function beginSmokeOrdering(
-  options: CliOptions,
-  issueBody: string,
-  owner: SmokeOrderingAttemptOwner,
-): SmokeOrderingBinding | null {
-  const actor = options.smokeActor ?? 'worker-owned';
-  if (actor !== 'worker-owned' && actor !== 'independent') throw new WorkerSmokeHarnessError('smoke_actor_unsupported');
-  const required = smokeOrderingRequired(issueBody);
-  const plan = resolveSmokeRequirement(issueBody);
-  if (!required && (actor !== 'worker-owned' || plan.requirement !== 'not-applicable')) return null;
-  const fence = parseComplexityTierFence(issueBody);
-  if (fence.kind !== 'tier-fence') {
-    if (actor === 'worker-owned' && plan.requirement !== 'not-applicable') return null;
-    if (actor !== 'worker-owned') throw new WorkerSmokeHarnessError('smoke_ordering_tier_missing');
-  }
-  const projectId = 'orchestrator-pack';
-  const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: process.env.PACK_REVIEW_RUN_STORE_ROOT });
-  const authorityOptions: PackReviewAuthorityOptions = { storeRoot };
-  const reviewRuns = listPackReviewRuns({ projectId, storeRoot });
-  let authority = initializePackReviewAuthority({
-    prNumber: options.prNumber, headSha: options.headSha,
-    tier: (fence.kind === 'tier-fence' ? fence.tier : resolveTierAndCap({ issueBody }).tier) as PackReviewTier,
-    options: authorityOptions,
-  });
-  if (actor === 'worker-owned' && authority.currentHeadSha !== options.headSha.toLowerCase()) {
-    authority = observePackReviewHead({ prNumber: options.prNumber, expectedTransitionSeq: authority.transitionSeq, headSha: options.headSha, options: authorityOptions, reviewRuns });
-  }
-  const existingOwner = actor === 'worker-owned'
-    ? authority.smokeOrdering?.workerOwned
-    : authority.smokeOrdering?.independent;
-  commitSmokeOrderingTransition({
-    prNumber: options.prNumber, expectedTransitionSeq: authority.transitionSeq, actor, headSha: options.headSha, status: 'started',
-    ...owner,
-    ...(existingOwner?.status === 'started'
-      ? { ownerStateEvidence: orderingOwnerEvidence(existingOwner, options) }
-      : {}),
-    ...(actor === 'independent' ? { reviewRuns, operatorSmokeOnly: options.operatorSmokeOnly } : {}), options: authorityOptions,
-  });
-  return { actor, prNumber: options.prNumber, headSha: options.headSha, options: authorityOptions, ...owner };
-}
-
-function finishSmokeOrdering(binding: SmokeOrderingBinding | null, status: 'passed' | 'failed', failureKind: SmokeOrderingFailureKind = 'retryable'): void {
-  if (!binding) return;
-  const authority = readPackReviewAuthority(binding.prNumber, binding.options);
-  if (!authority) throw new WorkerSmokeHarnessError('smoke_ordering_authority_missing_at_terminal');
-  commitSmokeOrderingTransition({
-    prNumber: binding.prNumber, expectedTransitionSeq: authority.transitionSeq, actor: binding.actor,
-    headSha: binding.headSha, status, attemptId: binding.attemptId, supervisorPid: binding.supervisorPid,
-    ...(binding.runId ? { runId: binding.runId } : {}),
-    ...(status === 'failed' ? { failureKind } : {}), options: binding.options,
-  });
-}
-
-export function finishSmokeOrderingBeforeDetachedTerminalization(
-  finishOrdering: () => void,
-  terminalizeDetached?: () => void,
-): void {
-  finishOrdering();
-  terminalizeDetached?.();
 }
 
 async function directSmokeStartFence<T>(action: () => T | Promise<T>): Promise<SmokeStartFenceResult<T>> { return { ok: true, value: await action() }; }
 
 function terminalizeDetachedRun(options: CliOptions, runId: string, artifactDir: string, mode: 'runtime' | 'no_execution', report: SmokeReport): void {
   if (!options.detachedOwner) return;
-  const final = writeWorkerSmokeRunFinalEvidence({ artifactDir, runId, mode, report });
+  const final = workerSmokeReceiptApi().writeWorkerSmokeRunFinalEvidence({ artifactDir, runId, mode, report });
   markSmokeLauncherTerminalized({
     artifactDir,
     runId,
-    finalEvidencePath: smokeRunFinalEvidencePath(artifactDir),
+    finalEvidencePath: workerSmokeReceiptApi().smokeRunFinalEvidencePath(artifactDir),
     nowMs: final.recordedAtMs,
   });
 }
@@ -2131,22 +1862,8 @@ function completionObservationNotes(completion: RuntimeSmokeCompletionResult): s
   return (completion.observationFailures ?? []).map((reason) => `smoke-observation=${reason}`);
 }
 
-function preAttemptPublication(
-  attemptId: string,
-  operatorOverrideReason: string | undefined,
-  overrides: Partial<SmokePublicationBinding> = {},
-): SmokePublicationBinding {
-  return {
-    attemptId,
-    executionMode: 'carry-only',
-    attemptObservations: [],
-    ...(operatorOverrideReason ? { operatorOverrideReason } : {}),
-    ...overrides,
-  };
-}
-
 export function validateCoordinatorSmokeOverrideReason(value: string | undefined): string | undefined {
-  const normalized = validateWorkerSmokeOperatorOverrideReason(value);
+  const normalized = workerSmokeReceiptApi().validateWorkerSmokeOperatorOverrideReason(value);
   if (normalized && !/^pause-cause=\S[^;]*;\s*repair-evidence=\S.*$/u.test(normalized)) {
     throw new Error('worker_smoke_coordinator_override_requires_pause_cause_and_repair_evidence');
   }
@@ -2161,8 +1878,7 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
   let trustedTargetHeadMismatch: string | undefined;
   const suppliedPlan = resolveSmokeRequirement(suppliedIssueBody);
   const requiredPlan = suppliedPlan.requirement === 'required';
-  const workerOwnedNotApplicable = (options.smokeActor ?? 'worker-owned') === 'worker-owned' && suppliedPlan.requirement === 'not-applicable';
-  if (requiredPlan || workerOwnedNotApplicable) {
+  if (requiredPlan) {
     try {
       if (dependencies.resolveTarget) {
         resolvedTarget = dependencies.resolveTarget(options, suppliedIssueBody);
@@ -2183,47 +1899,24 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
           action: 'bind smoke to trusted live Issue and PR', expected: 'supplied body, open Issue/PR, and exact live PR head match',
           observed,
         });
-        publishSmokeReport(report, options, undefined, publishComment); emit({ ok: false, report }, options.json); return 1;
+        publishSmokeReport(report, options, publishComment); emit({ ok: false, report }, options.json); return 1;
       }
     }
   }
   const plan = resolveSmokeRequirement(issueBody);
   if (plan.requirement !== 'required') {
-    if (plan.requirement === 'not-applicable' && (options.smokeActor ?? 'worker-owned') === 'worker-owned') {
-      const attemptId = options.detachedOwner && (options.runId ?? '').trim() ? (options.runId ?? '').trim() : createSmokeRunIdentity();
-      const orderingBinding = beginSmokeOrdering(options, issueBody, { attemptId, supervisorPid: process.pid });
-      finishSmokeOrdering(orderingBinding, 'passed');
-    }
     emit({ ok: true, skipped: true, reason: plan.requirement }, options.json); return 0;
   }
   if (plan.scenarios.length === 0) {
     const report = operationalReport('unknown', options, { action: 'parse smoke-test-plan', expected: 'at least one scenario', observed: 'zero_parsed_scenarios', structuredHarnessReason: 'zero_parsed_scenarios' });
-    publishSmokeReport(report, options, undefined, publishComment); emit({ ok: false, report }, options.json); return 1;
+    publishSmokeReport(report, options, publishComment); emit({ ok: false, report }, options.json); return 1;
   }
 
-  const selection = selectSmokeAttempt(options, issueBody, resolvedTarget, dependencies);
-  const attemptPlan = selection.attemptPlan;
-  let overrideReason: string | undefined;
-  try {
-    overrideReason = validateCoordinatorSmokeOverrideReason(options.operatorOverrideReason);
-  } catch (error) {
-    emit({ ok: false, reason: scrubSmokeOutput(error instanceof Error ? error.message : String(error)) }, options.json);
-    return 1;
-  }
-  const retryAdmission = evaluateSameHeadBlockedRetryAdmission({
-    receipts: listWorkerSmokeReceipts(options.prNumber, options.headSha),
-    selectedScenarios: attemptPlan.scenarios,
-    ...(overrideReason ? { operatorOverrideReason: overrideReason } : {}),
-  });
-  if (!retryAdmission.allowed) {
-    emit({ ok: false, attempted: false, reason: 'smoke_blocked_precondition_unchanged', blockedTuples: retryAdmission.blockedTuples }, options.json);
-    return 1;
-  }
-  const appliedOverrideReason = retryAdmission.blockedTuples.length > 0 ? overrideReason : undefined;
+  // An explicit smoke execution always runs the full Issue-declared scenario plan.
+  const attemptPlan = plan;
   const attemptId = options.detachedOwner && (options.runId ?? '').trim()
     ? (options.runId ?? '').trim()
     : createSmokeRunIdentity();
-  const preAttempt = preAttemptPublication(attemptId, appliedOverrideReason);
 
   if (trustedTargetHeadMismatch) {
     const report = operationalReport(workerSmokeCauseFamilyForHarnessReason(trustedTargetHeadMismatch), options, {
@@ -2232,56 +1925,9 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       observed: trustedTargetHeadMismatch,
       structuredHarnessReason: trustedTargetHeadMismatch,
     });
-    publishSmokeReport(report, options, preAttempt, publishComment);
+    publishSmokeReport(report, options, publishComment);
     emit({ ok: false, report, attemptId }, options.json);
     return 1;
-  }
-
-  const planArtifactDir = resolveSmokeRunArtifactDir(options.cwd, attemptId);
-  const planPreflight = evaluateSmokePlanPreflight({
-    issueBody,
-    scenarios: plan.scenarios,
-    artifactDir: planArtifactDir,
-  });
-  if (!planPreflight.ok) {
-    const { violation } = planPreflight;
-    const report = operationalReport('scenario_precondition_unavailable', options, {
-      action: violation.action,
-      expected: violation.expected,
-      observed: violation.observed,
-      structuredHarnessReason: violation.reason,
-      terminalCleanup: 'not_started',
-    });
-    publishSmokeReport(report, options, preAttempt, publishComment);
-    emit({
-      ok: false,
-      attempted: false,
-      reason: 'scenario_precondition_unavailable',
-      report,
-      attemptId,
-      preflight: { reason: violation.reason, scenarioOrdinal: violation.scenarioOrdinal },
-    }, options.json);
-    return 1;
-  }
-
-  let trackedSmokeRuntimePaths: string[];
-  try {
-    trackedSmokeRuntimePaths = gitTrackedSmokeRuntimePaths(options.cwd);
-  } catch (error) {
-    const report = operationalReport('harness_admission_refused', options, {
-      action: 'verify worker-smoke harness tracking state',
-      expected: 'git index is readable before smoke execution',
-      observed: scrubSmokeOutput(error instanceof Error ? error.message : String(error)),
-    });
-    publishSmokeReport(report, options, preAttempt, publishComment); emit({ ok: false, report, attemptId }, options.json); return 1;
-  }
-  if (trackedSmokeRuntimePaths.length > 0) {
-    const report = operationalReport('harness_dirty_worktree', options, {
-      action: 'verify worker-smoke harness runtime state is untracked',
-      expected: 'no .orca-worker-smoke/** path is tracked or staged',
-      observed: trackedSmokeRuntimePaths.join(', '),
-    });
-    publishSmokeReport(report, options, preAttempt, publishComment); emit({ ok: false, report, attemptId }, options.json); return 1;
   }
 
   let smokeProfile: SmokeExecutorProfile;
@@ -2300,359 +1946,133 @@ export async function runSmokeAttempt(options: CliOptions, dependencies: SmokeAt
       observed: scrubSmokeOutput(error instanceof Error ? error.message : String(error)),
       ...(structuredHarnessReason ? { structuredHarnessReason } : {}),
     });
-    publishSmokeReport(report, options, preAttempt, publishComment); emit({ ok: false, report }, options.json); return 1;
+    publishSmokeReport(report, options, publishComment); emit({ ok: false, report }, options.json); return 1;
   }
 
   const adapter = dependencies.adapter ?? await selectRuntimeAdapter({}, { cwd: options.cwd, transport: { env: { ...profileEnv } } });
   const readiness = adapter.readiness({ cwd: options.cwd });
   if (readiness.status !== 'ok') {
     const report = operationalReport('harness_admission_refused', options, { action: 'resolve runtime worktree', expected: 'current worktree is runtime-managed', observed: failureReason(readiness), adapterId: adapter.id });
-    publishSmokeReport(report, options, preAttempt, publishComment); emit({ ok: false, report }, options.json); return 1;
+    publishSmokeReport(report, options, publishComment); emit({ ok: false, report }, options.json); return 1;
   }
   const headBinding = verifySmokeHeadBinding({ requestedHeadSha: options.headSha, orcaHeadSha: readiness.value.headSha, gitHeadSha: gitHead(options.cwd) });
   if (!headBinding.ok) {
     const report = operationalReport('harness_head_mismatch', options, { action: 'bind smoke to current head', expected: options.headSha, observed: `${headBinding.reason}:${headBinding.observed}`, structuredHarnessReason: headBinding.reason, adapterId: adapter.id });
-    publishSmokeReport(report, options, preAttempt, publishComment); emit({ ok: false, report }, options.json); return 1;
+    publishSmokeReport(report, options, publishComment); emit({ ok: false, report }, options.json); return 1;
   }
 
-  let orderingBinding: SmokeOrderingBinding | null = null;
-  let orderingOutcome: 'passed' | 'failed' = 'failed';
-  let orderingFailureKind: SmokeOrderingFailureKind = 'retryable';
-  let publishedPassRecorded = false;
-  const recordPublishedOrdering = (report: SmokeReport, published: boolean): void => {
-    if (!published || publishedPassRecorded) return;
-    orderingOutcome = report.result === 'PASS' ? 'passed' : 'failed';
-    orderingFailureKind = smokeReportHasScenarioFinding(report) ? 'finding' : 'retryable';
-    if (report.result === 'PASS') publishedPassRecorded = true;
-  };
-  let pendingDetachedTerminalization: DetachedTerminalizationRequest | undefined;
-  const deferDetachedTerminalization = (
-    runId: string,
-    artifactDir: string,
-    mode: DetachedTerminalizationRequest['mode'],
-    report: SmokeReport,
-  ): void => {
-    if (!options.detachedOwner) return;
-    pendingDetachedTerminalization = { runId, artifactDir, mode, report };
-  };
-  const settleSmokeOrderingAndDetachedTerminalization = (): void => {
-    const pending = pendingDetachedTerminalization;
-    finishSmokeOrderingBeforeDetachedTerminalization(
-      () => finishSmokeOrdering(orderingBinding, orderingOutcome, orderingFailureKind),
-      pending ? () => terminalizeDetachedRun(options, pending.runId, pending.artifactDir, pending.mode, pending.report) : undefined,
-    );
-    pendingDetachedTerminalization = undefined;
-  };
+
+  // The selected existing worker executes the full Issue plan; no harness ledger,
+  // receipt, admission lock, selective carry, progress, or cancellation authority.
   const beforeStatus = gitPorcelain(options.cwd);
   if (hasPreexistingTrackedDirtiness(beforeStatus)) {
     const report = operationalReport('harness_dirty_worktree', options, {
-      action: 'verify clean tracked worktree', expected: 'no tracked modifications', observed: trackedPorcelainPaths(beforeStatus).join(', '), adapterId: adapter.id,
+      action: 'verify clean tracked worktree', expected: 'no tracked modifications',
+      observed: trackedPorcelainPaths(beforeStatus).join(', '), adapterId: adapter.id,
     });
-    publishSmokeReport(report, options, preAttempt, publishComment); emit({ ok: false, report }, options.json); return 1;
+    publishSmokeReport(report, options, publishComment);
+    emit({ ok: false, report }, options.json); return 1;
   }
   const beforeHashes = hashTrackedPaths(options.cwd, trackedPorcelainPaths(beforeStatus));
-
-  if (attemptPlan.scenarios.length === 0 && !selection.fallbackReason) {
-    const lifecycle = evaluateSmokeLifecycleCleanliness(options.cwd);
-    const detachedRunId = options.detachedOwner ? (options.runId ?? '').trim() : '';
-    const detachedArtifactDir = detachedRunId ? resolveSmokeRunArtifactDir(options.cwd, detachedRunId) : '';
-    if (detachedRunId) {
-      createSmokeNoExecutionLifecycle({
-        runId: detachedRunId,
-        artifactDir: detachedArtifactDir,
-        issueNumber: options.issueNumber,
-        prNumber: options.prNumber,
-        headSha: options.headSha,
-      });
-    }
-    const carryPublication = preAttemptPublication(attemptId, appliedOverrideReason, {
-      ...(detachedRunId ? { runId: detachedRunId } : {}),
-      executionMode: 'carry-only',
-      ...(selection.mainMergeCarry ? { mainMergeCarry: selection.mainMergeCarry } : {}),
-    });
-    if (!lifecycle.clean) {
-      const report = operationalReport('harness_admission_refused', options, {
-        action: 'verify carry-only smoke lifecycle cleanliness', expected: 'no unresolved prior smoke lifecycle before carry-only publication',
-        observed: `smoke_lifecycle_unclean:${lifecycle.reasons[0] ?? 'unknown'}`, terminalCleanup: 'not_started_no_execution', adapterId: adapter.id,
-      });
-      publishSmokeReport(report, options, carryPublication, publishComment);
-      if (detachedRunId) terminalizeDetachedRun(options, detachedRunId, detachedArtifactDir, 'no_execution', report);
-      emit({ ok: false, report, lifecycle }, options.json); return 1;
-    }
-    try {
-      orderingBinding = beginSmokeOrdering(options, issueBody, {
-        attemptId,
-        supervisorPid: process.pid,
-        ...(detachedRunId ? { runId: detachedRunId } : {}),
-      });
-      const projected = projectWorkerSmokeSelectiveReport({
-        partial: {
-          result: 'PASS', scenarios: [], limitations: [], trackedFilesUnmodified: true,
-          terminalCleanup: 'not_started_no_execution',
-          environmentNotes: [
-            'smoke-execution=carry-only',
-            `smoke-attempt-scenarios=0/${plan.scenarios.length}`,
-          ],
-          producer: SMOKE_REPORT_PRODUCER, orcaExecutable: adapter.id,
-        },
-        selection,
-      });
-      const normalized = normalizeSmokeReport({
-        ...projected,
-        result: projected.result ?? 'FAIL',
-        scenarios: projected.scenarios ?? [],
-        limitations: projected.limitations ?? [],
-        trackedFilesUnmodified: projected.trackedFilesUnmodified ?? true,
-        terminalCleanup: 'not_started_no_execution',
-        environmentNotes: projected.environmentNotes ?? [],
-        producer: SMOKE_REPORT_PRODUCER, orcaExecutable: adapter.id,
-      }, { issueNumber: options.issueNumber, prNumber: options.prNumber, headSha: options.headSha }, { executionMode: 'carry-only' });
-      const report = normalized.report;
-      const workerOwnedCarryOnlyPass = report.result === 'PASS'
-        && (options.smokeActor ?? 'worker-owned') === 'worker-owned';
-      if (workerOwnedCarryOnlyPass) {
-        orderingOutcome = 'failed';
-        orderingFailureKind = 'retryable';
-      }
-      publishSmokeReport(
-        report,
-        options,
-        carryPublication,
-        publishComment,
-        workerOwnedCarryOnlyPass ? undefined : () => { recordPublishedOrdering(report, true); },
-      );
-      let postSmoke: PostSmokeReadinessResult | undefined;
-      if (report.result === 'PASS' && !options.dryRun) {
-        try {
-          const target = resolveSmokeTarget(options, issueBody);
-          postSmoke = await evaluatePostSmokeReadiness(options, target, adapter);
-        } catch (error) {
-          postSmoke = {
-            readiness: { state: 'NOT_READY', ready: false, failedPredicates: [`post_smoke_readiness_unavailable:${scrubSmokeOutput(error instanceof Error ? error.message : String(error))}`] },
-            reviewProjection: { state: 'error', description: 'post-smoke review reconciliation unavailable', reason: 'missing-review' },
-            smokeEvidence: { state: 'unavailable', headSha: options.headSha },
-          };
-        }
-      }
-      if (detachedRunId) deferDetachedTerminalization(detachedRunId, detachedArtifactDir, 'no_execution', report);
-      emit({ ok: report.result === 'PASS', report, lifecycle, attemptId, selection: {
-        attempted: 0, carried: selection.carried.length, fallbackReason: selection.fallbackReason,
-        affectedDiagnostics: selection.affectedDiagnostics.length, tupleDiagnostics: selection.tupleDiagnostics.length,
-      }, ...(postSmoke ? { postSmoke } : {}) }, options.json);
-      return report.result === 'PASS' ? 0 : 1;
-    } catch (error) {
-      const structuredHarnessReason = structuredHarnessReasonFromError(error);
-      const observed = scrubSmokeOutput(error instanceof Error ? error.message : String(error));
-      const report = operationalReport(workerSmokeCauseFamilyForHarnessReason(structuredHarnessReason), options, {
-        action: 'publish carry-only selective smoke', expected: 'fresh current-head report without runtime lifecycle',
-        observed,
-        ...(structuredHarnessReason ? { structuredHarnessReason } : {}),
-        terminalCleanup: 'not_started_no_execution', adapterId: adapter.id,
-      });
-      publishSmokeReport(report, options, carryPublication, publishComment, () => { recordPublishedOrdering(report, true); });
-      if (detachedRunId) deferDetachedTerminalization(detachedRunId, detachedArtifactDir, 'no_execution', report);
-      emit({ ok: false, report, lifecycle, attemptId }, options.json); return 1;
-    } finally {
-      try { settleSmokeOrderingAndDetachedTerminalization(); } catch { /* missing ordering/final evidence remains fail-closed */ }
-    }
-  }
-
-  const runId = attemptId;
-  const artifactDir = planArtifactDir;
-  const runPublication: SmokePublicationBinding = {
-    attemptId,
-    runId,
-    executionMode: 'executed',
-    attemptObservations: [],
-    ...(appliedOverrideReason ? { operatorOverrideReason: appliedOverrideReason } : {}),
+  let worker: RuntimeWorkerIdentity | undefined;
+  let terminalClosed = false;
+  let terminalCleanup = 'not_started';
+  const closeWorker = (): void => {
+    if (!worker || terminalClosed) return;
+    terminalCleanup = runtimeClose(adapter, worker, options);
+    terminalClosed = true;
   };
-  let startedAtMs = 0; let worker: RuntimeWorkerIdentity | undefined; let terminalCleanup = 'pending'; let cleanupFinished = false; let signalReason: string | undefined;
-  const onSigint = (): void => { signalReason = 'SIGINT'; };
-  const onSigterm = (): void => { signalReason = 'SIGTERM'; };
-  process.once('SIGINT', onSigint); process.once('SIGTERM', onSigterm);
-
-  const cleanup = (reason: string, requestCancellation: boolean) => {
-    let acknowledged = false;
-    if (worker && requestCancellation) {
-      if (writeSmokeCancelRequest({ artifactDir, runId, reason })) acknowledged = waitForCooperativeShutdown({ adapter, worker, binding: { runId, artifactDir }, cwd: options.cwd });
-    }
-    const result = cleanupSmokeLifecycle({
-      artifactDir, runId, reason, requestCancellation, cooperativeAcknowledgementObserved: acknowledged,
-      closeBoundHandle: (handle) => {
-        if (!worker || handle !== worker.id) return 'close_failed:identity_binding_mismatch';
-        return runtimeClose(adapter, worker, options);
-      },
-    });
-    terminalCleanup = result.closeOutcome; cleanupFinished = true; releaseSmokeAdmission(options.cwd, runId); return result;
-  };
-
   try {
-    const admission = preflightSmokeLifecycle({ repoRoot: options.cwd, runId, closeBoundHandle: (handle) => runtimeCloseBoundHandle(adapter, handle, options) });
-    if (!admission.admitted) {
-      const report = operationalReport('harness_admission_refused', options, { action: 'acquire smoke spawn admission', expected: 'exclusive admission before spawn', observed: admission.reason ?? 'admission_refused', structuredHarnessReason: admission.reason ?? 'admission_refused', adapterId: adapter.id });
-      publishSmokeReport(report, options, preAttempt, publishComment); emit({ ok: false, report, lifecycle: admission, attemptId }, options.json); return 1;
-    }
-
-    const startFence = dependencies.startFence ?? directSmokeStartFence;
-    const start = await startFence(async () => {
-      startedAtMs = Date.now(); ensureSmokeRunArtifactDir(artifactDir);
-      createSmokeLifecycleReservation({
-        runId, artifactDir, issueNumber: options.issueNumber, prNumber: options.prNumber, headSha: options.headSha,
-        nowMs: startedAtMs, createTimeoutMs: SMOKE_CREATE_TIMEOUT_MS, scenarioCount: attemptPlan.scenarios.length,
-      });
-      markSmokeCreateInProgress(artifactDir);
-      orderingBinding = beginSmokeOrdering(options, issueBody, { attemptId, supervisorPid: process.pid, runId });
-      const spawned = adapter.spawnWorker({ title: `smoke-${options.issueNumber}`, command: smokeProfile.command, workspace: 'active' }, { cwd: options.cwd, timeoutMs: SMOKE_CREATE_TIMEOUT_MS });
-      if (spawned.status !== 'ok') {
-        const reason = failureReason(spawned); markSmokeCreateAmbiguous(artifactDir, reason); releaseSmokeAdmission(options.cwd, runId);
-        return { kind: 'spawn_failed' as const, reason };
-      }
-      worker = spawned.value.identity; bindSmokeTerminalHandle(artifactDir, worker.id); return { kind: 'started' as const };
+    const spawned = adapter.spawnWorker(
+      { title: `smoke-${options.issueNumber}`, command: smokeProfile.command, workspace: 'active' },
+      { cwd: options.cwd, timeoutMs: SMOKE_CREATE_TIMEOUT_MS },
+    );
+    if (spawned.status !== 'ok') throw new WorkerSmokeHarnessError('smoke_spawn_failed', failureReason(spawned));
+    worker = spawned.value.identity;
+    const prompt = buildSmokeAgentPrompt({
+      issueNumber: options.issueNumber, issueBody, prNumber: options.prNumber,
+      headSha: options.headSha, plan: attemptPlan,
     });
-
-    if (!start.ok) {
-      if (!start.actionEntered) { releaseSmokeAdmission(options.cwd, runId); emit({ ok: true, skipped: true, attempted: false, reason: start.reason }, options.json); return 0; }
-      throw new WorkerSmokeHarnessError('smoke_start_fence_post_entry', `smoke_start_fence_post_entry:${start.reason}`);
+    const dispatched = adapter.dispatchInput(
+      { worker, text: prompt }, { cwd: options.cwd, timeoutMs: SMOKE_DELIVERY_TIMEOUT_MS },
+    );
+    if (dispatched.status === 'send_failed') {
+      throw new WorkerSmokeHarnessError('smoke_prompt_send_failed', dispatched.reason);
     }
-    if (start.value.kind === 'spawn_failed') {
-      const report = operationalReport('harness_observation_interrupted', options, { action: 'spawn runtime smoke worker', expected: 'composite worker identity', observed: start.value.reason, terminalCleanup: 'ambiguous_unbound', adapterId: adapter.id });
-      publishSmokeReport(report, options, runPublication, publishComment, () => { recordPublishedOrdering(report, true); });
-      deferDetachedTerminalization(runId, artifactDir, 'runtime', report);
-      emit({ ok: false, report, attemptId }, options.json); return 1;
+    const deadline = Date.now() + SMOKE_ABSOLUTE_CEILING_MS;
+    let previousToken: RuntimeObservationToken | undefined;
+    let partial: Partial<SmokeReport> | null = null;
+    const transcript: string[] = [];
+    while (Date.now() < deadline) {
+      const readInput = { worker, previousToken, limit: 200 };
+      const output = adapter.readBoundedOutputAsync
+        ? await adapter.readBoundedOutputAsync(readInput, { cwd: options.cwd, timeoutMs: SMOKE_ORCA_OPERATION_TIMEOUT_MS })
+        : adapter.readBoundedOutput(readInput, { cwd: options.cwd, timeoutMs: SMOKE_ORCA_OPERATION_TIMEOUT_MS });
+      if (output.status !== 'ok') throw new WorkerSmokeHarnessError('smoke_output_unavailable', failureReason(output));
+      previousToken = output.value.observationToken;
+      transcript.push(...output.value.lines);
+      if (transcript.length > SMOKE_TRANSCRIPT_MAX_LINES) transcript.splice(0, transcript.length - SMOKE_TRANSCRIPT_MAX_LINES);
+      partial = parseLatestSmokeReport(transcript.join('\n'));
+      if (partial) break;
+      if (output.value.terminalState === 'exited') break;
+      await sleepAsync(SMOKE_LIFECYCLE_POLL_MS);
     }
-    if (!worker || startedAtMs <= 0) throw new WorkerSmokeHarnessError('smoke_start_prefix_incomplete');
-
-    const binding = { runId, artifactDir };
-    const prompt = buildLifecyclePrompt(buildSmokeAgentPrompt({
-      issueNumber: options.issueNumber, issueBody, prNumber: options.prNumber, headSha: options.headSha, plan: attemptPlan, runBinding: binding,
-    }), binding, attemptPlan.scenarios.length);
-    const delivery = establishRuntimeSmokeDelivery({ adapter, worker, prompt, binding, cwd: options.cwd, deadlineMs: SMOKE_DELIVERY_TIMEOUT_MS });
-    if (!delivery.ok) {
-      const lifecycleCleanup = cleanup(delivery.reason ?? 'prompt_delivery_unconfirmed', true);
-      const family = lifecycleCleanup.clean
-        ? workerSmokeCauseFamilyForHarnessReason(delivery.reason ?? 'prompt_delivery_unconfirmed')
-        : 'lifecycle_cleanup_failed';
-      const report = operationalReport(family, options, {
-        action: 'dispatch smoke prompt once', expected: 'one dispatch attempt plus child-sealed delivery evidence', observed: delivery.reason ?? 'prompt_delivery_unconfirmed',
-        structuredHarnessReason: delivery.reason ?? 'prompt_delivery_unconfirmed',
-        terminalCleanup, environmentNotes: [`submit-count=${delivery.submitCount}`, `lifecycle-clean=${lifecycleCleanup.clean}`], worker, adapterId: adapter.id,
-      });
-      publishSmokeReport(report, options, runPublication, publishComment, () => { recordPublishedOrdering(report, true); });
-      deferDetachedTerminalization(runId, artifactDir, 'runtime', report);
-      emit({ ok: false, report, lifecycleCleanup, attemptId }, options.json); return 1;
-    }
-
-    const completion = await waitForRuntimeSmokeCompletion({
-      adapter, worker, binding, scenarioCount: attemptPlan.scenarios.length, cwd: options.cwd, startedAtMs,
-      previousToken: delivery.observationToken, abortReason: () => signalReason,
-    });
-    if (!completion.ok || !completion.partial) {
-      const lifecycleCleanup = cleanup(completion.reason ?? 'agent_report_timeout', true);
-      const family = lifecycleCleanup.clean
-        ? workerSmokeCauseFamilyForHarnessReason(completion.reason ?? 'agent_report_timeout')
-        : 'lifecycle_cleanup_failed';
-      const report = operationalReport(family, options, {
-        action: 'wait for sealed smoke completion', expected: 'legal progress and one sealed report', observed: completion.reason ?? 'agent_report_timeout',
-        structuredHarnessReason: completion.reason ?? 'agent_report_timeout',
-        terminalCleanup, limitations: completion.progress?.invalidEvents.slice(0, 10),
-        environmentNotes: [`lifecycle-clean=${lifecycleCleanup.clean}`, ...completionObservationNotes(completion)], worker, adapterId: adapter.id,
-      });
-      publishSmokeReport(report, options, runPublication, publishComment, () => { recordPublishedOrdering(report, true); });
-      deferDetachedTerminalization(runId, artifactDir, 'runtime', report);
-      emit({ ok: false, report, lifecycleCleanup, attemptId }, options.json); return 1;
-    }
-
+    closeWorker();
+    if (!partial?.result) throw new WorkerSmokeHarnessError('smoke_report_unavailable', 'smoke worker did not return a complete report');
     const afterStatus = gitPorcelain(options.cwd);
     const afterHashes = hashTrackedPaths(options.cwd, trackedPorcelainPaths(afterStatus));
     const mutated = detectTrackedImplementationMutation(beforeStatus, afterStatus, beforeHashes, afterHashes);
-    const attemptBound = attemptPlan.scenarios.length === 0
-      ? completion.partial
-      : bindSmokeReportToPlan(completion.partial, attemptPlan);
-    const freshAttemptObservations = attemptObservationsFromScenarios(attemptBound.scenarios);
-    const projected = projectWorkerSmokeSelectiveReport({ partial: attemptBound, selection });
-    const selectiveNotes = [
-      ...(projected.environmentNotes ?? []),
-      ...completionObservationNotes(completion),
-      `smoke-attempt-scenarios=${attemptPlan.scenarios.length}/${plan.scenarios.length}`,
-      ...(selection.fallbackReason ? [`smoke-selective-fallback=${selection.fallbackReason}`] : []),
-      ...(selection.affectedDiagnostics.length > 0 ? [`smoke-affected-diagnostics=${selection.affectedDiagnostics.length}`] : []),
-      ...(selection.tupleDiagnostics.length > 0 ? [`smoke-rerun-diagnostics=${selection.tupleDiagnostics.length}`] : []),
-    ];
+    const bound = bindSmokeReportToPlan(partial, attemptPlan);
     const normalized = normalizeSmokeReport({
-      ...projected,
-      result: mutated ? 'FAIL' : projected.result ?? 'FAIL',
-      scenarios: projected.scenarios ?? [],
-      limitations: projected.limitations ?? [],
-      trackedFilesUnmodified: !mutated && (projected.trackedFilesUnmodified ?? true),
-      terminalCleanup: 'pending', environmentNotes: selectiveNotes,
-      producer: SMOKE_REPORT_PRODUCER, orcaExecutable: adapter.id, terminalHandle: worker.id,
-      ...(mutated ? { causeFamily: 'harness_dirty_worktree' as const } : {}),
+      ...bound,
+      result: mutated ? 'FAIL' : bound.result,
+      scenarios: bound.scenarios ?? [],
+      limitations: bound.limitations ?? [],
+      trackedFilesUnmodified: !mutated && bound.trackedFilesUnmodified === true,
+      terminalCleanup,
+      environmentNotes: bound.environmentNotes ?? [],
+      producer: SMOKE_REPORT_PRODUCER,
+      orcaExecutable: adapter.id,
+      terminalHandle: worker.id,
     }, { issueNumber: options.issueNumber, prNumber: options.prNumber, headSha: options.headSha });
-    const lifecycleCleanup = cleanup('completed', false);
     const report = normalized.report;
-    report.terminalCleanup = terminalCleanup;
-    if (!lifecycleCleanup.clean && report.result === 'PASS') report.result = 'FAIL';
-    if (!lifecycleCleanup.clean) report.causeFamily = 'lifecycle_cleanup_failed';
-    let published = false;
-    try {
-      published = publishSmokeReport(report, options, { ...runPublication, attemptObservations: freshAttemptObservations }, publishComment, () => { recordPublishedOrdering(report, true); });
-    } catch (error) {
-      const observed = scrubSmokeOutput(error instanceof Error ? error.message : String(error));
-      if (!observed.startsWith('publication_unconfirmed:')) throw error;
-      report.limitations.push(`publication_unconfirmed: ${observed}`);
-    }
-    if (!published && !options.dryRun) {
-      deferDetachedTerminalization(runId, artifactDir, 'runtime', report);
-      emit({ ok: report.result === 'PASS', report, lifecycleCleanup, attemptId, runId }, options.json);
-      return report.result === 'PASS' ? 0 : 1;
-    }
+    publishSmokeReport(report, options, publishComment);
     let postSmoke: PostSmokeReadinessResult | undefined;
-    if (report.result === 'PASS' && !options.dryRun) {
-      try {
-        const target = resolveSmokeTarget(options, issueBody);
-        postSmoke = await evaluatePostSmokeReadiness(options, target, adapter);
-      } catch (error) {
-        postSmoke = {
-          readiness: { state: 'NOT_READY', ready: false, failedPredicates: [`post_smoke_readiness_unavailable:${scrubSmokeOutput(error instanceof Error ? error.message : String(error))}`] },
-          reviewProjection: { state: 'error', description: 'post-smoke review reconciliation unavailable', reason: 'missing-review' },
-          smokeEvidence: { state: 'unavailable', headSha: options.headSha },
-        };
-      }
+    if (report.result === 'PASS' && !options.dryRun && resolvedTarget) {
+      try { postSmoke = await evaluatePostSmokeReadiness(options, resolvedTarget, adapter); }
+      catch { /* Readiness CI and review remain independent. */ }
     }
-    deferDetachedTerminalization(runId, artifactDir, 'runtime', report);
-    emit({ ok: report.result === 'PASS', report, lifecycleCleanup, attemptId, runId, selection: {
-      attempted: attemptPlan.scenarios.length, carried: selection.carried.length, fallbackReason: selection.fallbackReason,
-      affectedDiagnostics: selection.affectedDiagnostics.length, tupleDiagnostics: selection.tupleDiagnostics.length,
-    }, ...(postSmoke ? { postSmoke } : {}) }, options.json);
+    emit({ ok: report.result === 'PASS', report, attempted: attemptPlan.scenarios.length,
+      ...(postSmoke ? { postSmoke } : {}) }, options.json);
     return report.result === 'PASS' ? 0 : 1;
   } catch (error) {
-    const structuredHarnessReason = structuredHarnessReasonFromError(error);
-    const observed = scrubSmokeOutput(error instanceof Error ? error.message : 'handled_exception');
-    if (worker && !cleanupFinished) cleanup('handled_exception', true);
-    else if (!worker && startedAtMs > 0) { try { markSmokeCreateAmbiguous(artifactDir, observed); } catch { /* fail closed */ } releaseSmokeAdmission(options.cwd, runId); }
-    const family: WorkerSmokeCauseFamily = cleanupFinished && terminalCleanup.startsWith('close_failed')
-      ? 'lifecycle_cleanup_failed'
-      : workerSmokeCauseFamilyForHarnessReason(structuredHarnessReason);
-    const report = operationalReport(family, options, {
-      action: 'run runtime-neutral worker smoke', expected: 'bounded terminal lifecycle', observed,
-      ...(structuredHarnessReason ? { structuredHarnessReason } : {}),
-      terminalCleanup: worker ? terminalCleanup : startedAtMs > 0 ? 'ambiguous_unbound' : 'not_started', worker, adapterId: adapter.id,
+    closeWorker();
+    const observed = scrubSmokeOutput(error instanceof Error ? error.message : String(error));
+    const report = operationalReport('harness_observation_interrupted', options, {
+      action: 'execute independent worker smoke', expected: 'one complete smoke report',
+      observed, terminalCleanup, worker, adapterId: adapter.id,
     });
-    const publication = startedAtMs > 0 ? runPublication : preAttempt;
-    if (observed.startsWith('publication_unconfirmed:')) {
-      report.limitations.push(observed);
-    } else {
-      const published = publishSmokeReport(report, options, publication, publishComment, () => { recordPublishedOrdering(report, true); });
-      if (!published && !options.dryRun) report.limitations.push('publication_unconfirmed: publication did not complete');
-    }
-    if (options.detachedOwner && cleanupFinished) deferDetachedTerminalization(runId, artifactDir, 'runtime', report);
-    emit({ ok: false, report, attemptId }, options.json); return 1;
+    try { publishSmokeReport(report, options, publishComment); }
+    catch { /* Failed publication cannot become PASS. */ }
+    emit({ ok: false, report }, options.json);
+    return 1;
   } finally {
-    try { settleSmokeOrderingAndDetachedTerminalization(); } catch { /* missing ordering/final evidence remains fail-closed */ }
-    process.off('SIGINT', onSigint); process.off('SIGTERM', onSigterm);
-    if (worker && !cleanupFinished) { try { cleanup('finally_cleanup', true); } catch { /* lifecycle remains blocking */ } }
-    releaseSmokeAdmission(options.cwd, runId);
+    closeWorker();
   }
+}
+
+const SMOKE_TRANSCRIPT_MAX_LINES = 20_000;
+const SMOKE_REPORT_OPENING = '```worker-smoke-report';
+
+// Cursor reads return only the lines after the previous token, so a report can span reads; the
+// prompt also carries a template report block that the worker pane echoes, so only the last
+// opened block can be the worker's report.
+export function parseLatestSmokeReport(transcript: string): Partial<SmokeReport> | null {
+  const start = transcript.lastIndexOf(SMOKE_REPORT_OPENING);
+  if (start < 0) return parseSmokeAgentReport(transcript);
+  const block = transcript.slice(start);
+  if (!block.slice(SMOKE_REPORT_OPENING.length).includes('```')) return null;
+  return parseSmokeAgentReport(block);
 }
 
 export type DetachedSmokeAttemptObservation =
@@ -2734,10 +2154,10 @@ export function observeDetachedSmokeAttempt(input: {
     : lifecycle.spawnState === 'clean' || lifecycle.spawnState === 'cleanup_failed';
   if (!expectedTerminalState
       || !lifecycle.finalEvidencePath
-      || resolve(lifecycle.finalEvidencePath) !== resolve(smokeRunFinalEvidencePath(artifactDir))) {
+      || resolve(lifecycle.finalEvidencePath) !== resolve(workerSmokeReceiptApi().smokeRunFinalEvidencePath(artifactDir))) {
     return { kind: 'untrusted', reason: 'detached_smoke_terminal_state_invalid' };
   }
-  const evidence = readWorkerSmokeRunFinalEvidence({
+  const evidence = workerSmokeReceiptApi().readWorkerSmokeRunFinalEvidence({
     artifactDir,
     runId: lifecycle.runId,
     issueNumber: input.issueNumber,
@@ -2748,7 +2168,7 @@ export function observeDetachedSmokeAttempt(input: {
   if (!evidence
       || evidence.runId !== lifecycle.runId
       || evidence.report.result !== evidence.result
-      || !verifySmokeRunReceipt(evidence.report, lifecycle.runId, lifecycle.runId)) {
+      || !workerSmokeReceiptApi().verifySmokeRunReceipt(evidence.report, lifecycle.runId, lifecycle.runId)) {
     return { kind: 'untrusted', reason: 'detached_smoke_final_evidence_invalid' };
   }
   return { kind: 'terminal', runId: lifecycle.runId, artifactDir, result: evidence.result };
@@ -2880,11 +2300,11 @@ export async function runSmokeWait(options: CliOptions): Promise<number> {
         const expectedTerminalState = mode === 'no_execution'
           ? lifecycle.spawnState === 'no_execution_terminal'
           : lifecycle.spawnState === 'clean' || lifecycle.spawnState === 'cleanup_failed';
-        if (!expectedTerminalState || resolve(lifecycle.finalEvidencePath) !== resolve(smokeRunFinalEvidencePath(artifactDir))) {
+        if (!expectedTerminalState || resolve(lifecycle.finalEvidencePath) !== resolve(workerSmokeReceiptApi().smokeRunFinalEvidencePath(artifactDir))) {
           process.stderr.write('worker_smoke_wait_terminal_state_invalid\n');
           return 1;
         }
-        const evidence = readWorkerSmokeRunFinalEvidence({
+        const evidence = workerSmokeReceiptApi().readWorkerSmokeRunFinalEvidence({
           artifactDir,
           runId,
           issueNumber: lifecycle.issueNumber,
@@ -2892,7 +2312,7 @@ export async function runSmokeWait(options: CliOptions): Promise<number> {
           headSha: lifecycle.headSha,
           mode,
         });
-        if (!evidence || evidence.report.result !== evidence.result || !verifySmokeRunReceipt(evidence.report, runId, runId)) {
+        if (!evidence || evidence.report.result !== evidence.result || !workerSmokeReceiptApi().verifySmokeRunReceipt(evidence.report, runId, runId)) {
           if (options.json) emit({ ok: false, runId, reason: 'terminal_evidence_invalid' }, true);
           else process.stderr.write('worker_smoke_wait_final_evidence_invalid\n');
           return 1;
@@ -2908,22 +2328,13 @@ export async function runSmokeWait(options: CliOptions): Promise<number> {
 }
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
-  if (argv[0] === 'progress') return runSmokeProgressWriter(argv.slice(1));
   const options = parseArgs(argv);
   switch (options.command) {
     case 'validate-plan': return runValidatePlan(options);
-    case 'gate-check': return runGateCheck(options);
-    case 'run':
-      if (options.detach) return runDetachedBootstrap(argv, options);
-      if (options.detachedOwner && !(options.runId ?? '').trim()) throw new Error('detached owner requires --run <id>');
-      if (!options.detachedOwner && (options.runId ?? '').trim()) throw new Error('--run is reserved for detached ownership or wait');
-      return runSmokeAttempt(options);
-    case 'wait':
-      if (options.detach || options.detachedOwner) throw new Error('wait is read-only and does not accept detach ownership flags');
-      return runSmokeWait(options);
+    case 'run': return runSmokeAttempt(options);
     case 'reconcile-direct-review': return runDirectReviewReconciliation(options);
     case 'delegated-readiness': return runDelegatedReadiness(options);
-    default: throw new Error('usage: worker-smoke-run.ts <validate-plan|gate-check|run|wait|progress|reconcile-direct-review|delegated-readiness> [options] (run accepts --detach, --operator-override <reason>, and --smoke-actor worker-owned|independent; wait requires --run <id>)');
+    default: throw new Error('usage: worker-smoke-run.ts <validate-plan|run|reconcile-direct-review|delegated-readiness> [options]');
   }
 }
 

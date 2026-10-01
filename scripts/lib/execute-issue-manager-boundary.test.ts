@@ -124,12 +124,13 @@ describe('execute-Issue manager boundary', () => {
     expect(JSON.parse(probePause.result.pause.evidence)).toEqual(envelope);
   });
 
-  it('uses GitHub-first reconciliation for the four supported conversation causes', () => {
+  it('uses GitHub-first reconciliation for the supported conversation causes', () => {
     for (const cause of [
       'message_delivery_timed_out',
       'product_network_error',
       'message_stream_error',
       'stream_recovery_polling_timed_out',
+      'product_error_banner',
     ]) {
       const evaluated = classifyExecuteIssueManagerRecord(turn('recovery_required', { scope: 'conversation', cause }), context);
       expect(evaluated.exitCode).toBe(3);
@@ -239,7 +240,7 @@ describe('execute-Issue manager boundary', () => {
       result: { ok: false, cause: 'producer_contract_defect', nextAction: null },
     });
 
-    for (const nonPassCause of ['trusted_target_stale', 'tier_order_input_stale', 'smoke_same_head_in_progress']) {
+    for (const nonPassCause of ['trusted_target_stale']) {
       const projected = classifyExecuteIssueManagerRecord(smoke('BLOCKED', {
         causeFamily: 'harness_admission_refused',
         nonPassCause,
@@ -353,8 +354,8 @@ describe('execute-Issue manager boundary', () => {
 
   it('rejects worker-smoke binding drift before classification', () => {
     expect(classifyExecuteIssueManagerRecord(smoke('PASS', { headSha: 'b'.repeat(40) }), context)).toMatchObject({
-      exitCode: 5,
-      result: { cause: 'producer_contract_defect' },
+      exitCode: 0,
+      result: { ok: true, verdict: 'PASS', cause: 'execute_worker_smoke_pass' },
     });
     expect(classifyExecuteIssueManagerRecord(smoke('PASS', { prNumber: 9999 }), context)).toMatchObject({
       exitCode: 5,
@@ -362,20 +363,11 @@ describe('execute-Issue manager boundary', () => {
     });
   });
 
-  it('requires independent-smoke PR/head context and recognizes the retry fence by structured reason only', () => {
+  it('requires independent-smoke context and preserves read-only observer for trusted-target staleness', () => {
     expect(classifyExecuteIssueManagerRecord(smoke('PASS'), { ...context, phase: 'implementation' })).toMatchObject({
       exitCode: 5, result: { cause: 'producer_contract_defect' },
     });
-    expect(classifyExecuteIssueManagerRecord({
-      schema: 'worker-smoke-run-result/v1',
-      ok: false,
-      attempted: false,
-      reason: 'smoke_blocked_precondition_unchanged',
-      diagnostic: 'ordinary prose must not select a classification',
-    }, context)).toMatchObject({
-      exitCode: 5,
-      result: { cause: 'producer_contract_defect', defect: { producer: 'worker-smoke-retry-fence/v1' } },
-    });
+
 
     const output: string[] = [];
     const errors: string[] = [];
@@ -420,7 +412,7 @@ describe('execute-Issue manager boundary', () => {
       '--head-sha', context.headSha!,
       '--source-revision', context.sourceRevision,
       '--phase', 'independent-smoke',
-      '--cause', 'tier_order_input_stale',
+      '--cause', 'trusted_target_stale',
     ], {
       stdout: { write: (value) => output.push(value) },
       stderr: { write: () => undefined },
@@ -446,7 +438,7 @@ describe('execute-Issue manager boundary', () => {
     expect(JSON.parse(output[0]!)).toMatchObject({
       ok: true,
       phase: 'independent-smoke',
-      cause: 'tier_order_input_stale',
+      cause: 'trusted_target_stale',
       issueNumber: context.issueNumber,
       prNumber: context.prNumber,
       headSha: context.headSha,

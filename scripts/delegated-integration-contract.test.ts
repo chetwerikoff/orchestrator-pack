@@ -98,10 +98,10 @@ describe('Issue #926 delegated integration readiness contract', () => {
       ...input,
       review: { ...input.review, atCapContinuationRequired: true },
     }), 'at_cap_continuation_required'],
-    ['exact-head smoke is missing', (input: ReadinessInput) => ({
+    ['PR smoke is missing', (input: ReadinessInput) => ({
       ...input,
       smoke: { ...input.smoke, state: 'missing' as const },
-    }), 'exact_head_smoke_not_passed'],
+    }), 'pr_smoke_not_passed'],
     ['the PR head drifts', (input: ReadinessInput) => ({
       ...input,
       pr: { ...input.pr, headSha: 'b'.repeat(40) },

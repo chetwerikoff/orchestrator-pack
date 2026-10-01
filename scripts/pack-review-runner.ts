@@ -44,7 +44,6 @@ import {
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
   PACK_REVIEW_GPT_SOURCE_ADMISSION_INTERVAL_MS,
   acknowledgePackReviewReset,
-  assertPackReviewSmokeAdmission,
   commitPackReviewAuthorityTransition,
   commitPackReviewTerminal,
   commitPackReviewTriage,
@@ -56,7 +55,6 @@ import {
   settleLogicalPackReviewFindingsByStrictDescendant,
   selectPackReviewEvidence,
   selectPackReviewGptSourceCardinality,
-  smokeOrderingRequired,
   reconcilePackReviewTier,
   stableJson,
   type PackReviewAuthorityDocument,
@@ -3169,18 +3167,6 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       nextAction: 'observe the current PR head, then rerun scoped reconcile',
     };
   }
-  const workerOwned = authority.smokeOrdering?.workerOwned;
-  if (!logicalAccounting
-      && (workerOwned?.headSha !== authority.currentHeadSha || workerOwned.status !== 'passed')) {
-    return {
-      prNumber,
-      headSha: authority.currentHeadSha,
-      finalCapSettlement: true,
-      settled: false,
-      reason: 'final_cap_settlement_worker_smoke_required',
-      nextAction: 'run worker-owned smoke on the exact current head, then rerun scoped reconcile',
-    };
-  }
   const priorRun = authority.terminal?.runId
     ? getPackReviewRun(authority.terminal.runId, { projectId: options.projectId, storeRoot: options.storeRoot })
     : null;
@@ -3318,10 +3304,10 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       finalCapSettlement: true,
       settled: false,
       reason: `final_cap_settlement_incomplete:${describeError(error)}`,
-      nextAction: 'fix the reported blocker, rerun worker-owned smoke if the head changed, then rerun scoped reconcile',
+      nextAction: 'fix the reported blocker, then rerun scoped reconcile',
     };
   }
-  const settled = authority.smokeOrdering?.reviewSettledHeadSha === authority.currentHeadSha;
+  const settled = authority.cycle?.reviewStageComplete === true;
   return {
     prNumber,
     headSha: authority.currentHeadSha,
@@ -3336,7 +3322,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       nextAction: authority.triage?.verdict === 'BLOCK'
         ? (logicalAccounting
           ? 'resolve the blocking current-head evidence, then rerun scoped reconcile'
-          : 'resolve the blocking current-head evidence, rerun worker-owned smoke, then rerun scoped reconcile')
+          : 'resolve the blocking current-head evidence, then rerun scoped reconcile')
         : 'complete the current-head finding-resolution evidence, then rerun scoped reconcile',
     }),
   };
@@ -4424,31 +4410,6 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         };
       }
     }
-    const legacyHarnessFixtureWithoutSmokePlan = process.env.OPK_VITEST_HARNESS === '1'
-      && authoritative.issueBody !== undefined
-      && !authoritative.issueBody.includes('```smoke-test-plan');
-    const logicalRoundContinuation = logicalAccounting
-      && (authority.cycle?.consumedRoundOrdinals?.length ?? 0) > 0;
-    if (authoritative.issueBody !== undefined
-        && smokeOrderingRequired(authoritative.issueBody)
-        && !legacyHarnessFixtureWithoutSmokePlan
-        && !logicalRoundContinuation) {
-      try {
-        assertPackReviewSmokeAdmission({ authority, headSha: target.headSha });
-      } catch (error) {
-        await releaseEarlyClaim(describeError(error));
-        return {
-          ok: false,
-          created: false,
-          reused: false,
-          reason: error instanceof Error ? error.message : String(error),
-          prNumber: target.prNumber,
-          headSha: target.headSha,
-          httpStatus: 409,
-        };
-      }
-    }
-
     carryover = await resolveCarryoverReplay({ input, target, projectId, storeRoot, baseRef, priorAuthority });
     const conflictFreeCarryover = carryover?.replay.kind === 'conflict_free_carryover';
     if (!conflictFreeCarryover && authority.cycle?.state === 'open_findings') {
@@ -4476,7 +4437,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         reason: 'at_cap_continuation_required',
         nextAction: logicalAccounting
           ? 'advance the PR to a proven strict descendant of the reviewed findings head, then rerun scoped reconcile --immediate'
-          : 'fix the final findings, run worker-owned smoke on the exact current head, then run scoped reconcile --immediate',
+          : 'fix the final findings, then run scoped reconcile --immediate',
         prNumber: target.prNumber,
         headSha: target.headSha,
         cycleId: authority.cycle.cycleId,

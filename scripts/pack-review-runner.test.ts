@@ -24,7 +24,6 @@ import { runProcess } from './kernel/subprocess.ts';
 import {
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
   commitPackReviewTerminal,
-  commitSmokeOrderingTransition,
   initializePackReviewAuthority,
   observePackReviewHead,
   readPackReviewAuthority,
@@ -795,27 +794,11 @@ describe('Issue #1826 logical-round smoke independence', () => {
       '```smoke-test-plan\nscenarios:\n  - action: exact head smoke | expected: PASS\n```',
     ].join('\n\n');
     const options = { storeRoot };
-    const initial = initializePackReviewAuthority({
+    initializePackReviewAuthority({
       prNumber,
       headSha: head1,
       tier: 'T3',
       capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
-      options,
-    });
-    const smokeStarted = commitSmokeOrderingTransition({
-      prNumber,
-      expectedTransitionSeq: initial.transitionSeq,
-      actor: 'worker-owned',
-      headSha: head1,
-      status: 'started',
-      options,
-    });
-    commitSmokeOrderingTransition({
-      prNumber,
-      expectedTransitionSeq: smokeStarted.transitionSeq,
-      actor: 'worker-owned',
-      headSha: head1,
-      status: 'passed',
       options,
     });
 
@@ -871,7 +854,7 @@ describe('Issue #1826 logical-round smoke independence', () => {
     const finalAuthority = readPackReviewAuthority(prNumber, options);
     expect(finalAuthority?.cycle?.consumedRoundOrdinals).toEqual([1, 2]);
     expect(finalAuthority?.cycle?.reviewStageComplete).toBe(true);
-    expect(finalAuthority?.smokeOrdering?.workerOwned?.headSha).toBe(head1);
+    expect(finalAuthority?.smokeOrdering).toBeUndefined();
   });
   it('blocks same-head T3 round 2 findings but admits round 2 after a strict descendant', async () => {
     const parent = mkdtempSync(join(tmpdir(), 'pack-review-1826-round1-findings-gate-'));
@@ -885,27 +868,11 @@ describe('Issue #1826 logical-round smoke independence', () => {
       '```smoke-test-plan\nscenarios:\n  - action: exact head smoke | expected: PASS\n```',
     ].join('\n\n');
     const options = { storeRoot };
-    const initial = initializePackReviewAuthority({
+    initializePackReviewAuthority({
       prNumber,
       headSha: head,
       tier: 'T3',
       capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
-      options,
-    });
-    const smokeStarted = commitSmokeOrderingTransition({
-      prNumber,
-      expectedTransitionSeq: initial.transitionSeq,
-      actor: 'worker-owned',
-      headSha: head,
-      status: 'started',
-      options,
-    });
-    commitSmokeOrderingTransition({
-      prNumber,
-      expectedTransitionSeq: smokeStarted.transitionSeq,
-      actor: 'worker-owned',
-      headSha: head,
-      status: 'passed',
       options,
     });
 
@@ -1245,7 +1212,5 @@ describe('Issue #1887 immediate final-cap descendant reconciliation', () => {
       consumedRoundOrdinals: [1],
       reviewStageComplete: true,
     });
-    expect(settled?.smokeOrdering?.workerOwned).toBeUndefined();
-    expect(settled?.smokeOrdering?.reviewSettledHeadSha).toBe(current);
   });
 });

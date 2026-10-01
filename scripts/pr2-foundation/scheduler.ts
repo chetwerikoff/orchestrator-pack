@@ -12,7 +12,6 @@ import { originSlugFromGitConfig } from '../lib/git-origin-slug.mjs';
 import { evaluateHeadReadyForReview } from './review-head-ready.ts';
 import { listPackReviewRuns } from '../lib/pack-review-run-store.ts';
 import { startPackReview } from '../pack-review-runner.ts';
-import { reconcilePostReviewSmoke, type PostReviewSmokeOutcome } from './post-review-smoke.ts';
 import {
   createUnavailableFleetObserver,
   FleetObserver,
@@ -102,7 +101,6 @@ export interface SchedulerBoundary {
   readChecks(candidate: ActivatedSchedulerCandidate): Promise<Array<{ name?: string; state?: string; conclusion?: string; status?: string }>>;
   listReviewRuns(): ReturnType<typeof listPackReviewRuns>;
   start(candidate: ActivatedSchedulerCandidate, freshHeadSha: string): Promise<{ ok: boolean; reason?: string }>;
-  reconcilePostReviewSmoke?: (candidate: ActivatedSchedulerCandidate, fresh: SchedulerCurrentPr) => Promise<PostReviewSmokeOutcome>;
   orchestrationMailReconcile?: () => Promise<import('../cursor-unsent-composer-submit.ts').OrchestrationMailReconcileResult>;
   /** Independent/test callers may still use the direct fallback pulse. Production scheduler lifecycle does not. */
   dispatchTerminalMailPulse?: () => DispatchTerminalMailPulseResult;
@@ -130,7 +128,6 @@ export const SCHEDULER_RUN_TICK_PHASE_INVENTORY = Object.freeze([
   { phase: 'fleet-nudge', scopedTimeoutMs: null, supervisorGenerationCapped: true },
   { phase: 'orchestration-mail-reconcile-loop-drain', scopedTimeoutMs: null, supervisorGenerationCapped: true },
   { phase: 'read-current-pr', scopedTimeoutMs: 30_000, supervisorGenerationCapped: true },
-  { phase: 'detached-post-review-smoke-start-or-observe', scopedTimeoutMs: null, supervisorGenerationCapped: true },
   { phase: 'read-checks', scopedTimeoutMs: 30_000, supervisorGenerationCapped: true },
   { phase: 'start-pack-review', scopedTimeoutMs: null, supervisorGenerationCapped: true },
 ] as const);
@@ -269,7 +266,6 @@ export function productionSchedulerBoundary(input: {
   repository?: string; unresolvedReason?: FleetReconciliationReason; assignmentReconciliation?: SchedulerAssignmentReconciliation;
   fleetBindings?: readonly FleetAssignmentBinding[];
   assignmentLifecycleSweep?: WorkerAssignmentLifecycleSweepResult;
-  reconcilePostReviewSmoke?: SchedulerBoundary['reconcilePostReviewSmoke'];
   orchestrationMailReconcile?: SchedulerBoundary['orchestrationMailReconcile'];
   dispatchTerminalMailPulse?: SchedulerBoundary['dispatchTerminalMailPulse'];
   publishHandoff?: SchedulerBoundary['publishHandoff'];
@@ -292,7 +288,6 @@ export function productionSchedulerBoundary(input: {
     ...(input.assignmentReconciliation ? { assignmentReconciliation: input.assignmentReconciliation } : {}),
     ...(input.fleetBindings ? { fleetBindings: input.fleetBindings } : {}),
     ...(input.assignmentLifecycleSweep ? { assignmentLifecycleSweep: input.assignmentLifecycleSweep } : {}),
-    ...(input.reconcilePostReviewSmoke ? { reconcilePostReviewSmoke: input.reconcilePostReviewSmoke } : {}),
     ...(input.orchestrationMailReconcile ? { orchestrationMailReconcile: input.orchestrationMailReconcile } : {}),
     ...(input.dispatchTerminalMailPulse ? { dispatchTerminalMailPulse: input.dispatchTerminalMailPulse } : {}),
     ...(input.publishHandoff ? { publishHandoff: input.publishHandoff } : {}),
@@ -513,11 +508,6 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
       attempted += 1; assertSchedulerEpoch(env); const fresh = await boundary.readCurrentPr(candidate); const freshHead = String(fresh.headRefOid ?? '').trim().toLowerCase();
       if (fresh.state !== 'OPEN' && String(fresh.state).toLowerCase() !== 'open') { skipped += 1; continue; }
       if (fresh.isDraft === true || freshHead !== candidate.boundHeadSha.toLowerCase()) { skipped += 1; continue; }
-      if (boundary.reconcilePostReviewSmoke) {
-        assertSchedulerEpoch(env);
-        const smoke = await boundary.reconcilePostReviewSmoke(candidate, fresh);
-        if (smoke.handled) { skipped += 1; continue; }
-      }
       const checks = await boundary.readChecks(candidate); const runs = boundary.listReviewRuns();
       const decision = evaluateHeadReadyForReview({ prNumber: candidate.prNumber, headSha: freshHead, session: { id: candidate.sessionId, role: 'worker', status: 'ready_for_review', ownedHeadSha: freshHead, reports: [{ reportState: 'ready_for_review', headRefOid: freshHead, accepted: true }] }, ciChecks: checks, reviewRuns: runs });
       if (!decision.eligible) { skipped += 1; continue; }
@@ -607,40 +597,6 @@ function productionFleetObserverSnapshotPath(env: NodeJS.ProcessEnv): string {
   return explicitRoot
     ? path.join(explicitRoot, 'fleet-observer-snapshot.json')
     : path.join(operatorHome(env), '.local', 'state', 'orchestrator-pack', 'fleet-observer', 'snapshot.json');
-}
-
-export function createProductionPostReviewSmokeReconciler(input: {
-  projectId: string;
-  repoRoot: string;
-  assignmentStorePath: string;
-  env: NodeJS.ProcessEnv;
-  selectAdapter?: () => Promise<RuntimeAdapter>;
-}): NonNullable<SchedulerBoundary['reconcilePostReviewSmoke']> {
-  const selectAdapter = input.selectAdapter ?? (() => selectRuntimeAdapter({ env: input.env }));
-  return async (candidate, fresh) => {
-    let adapter: RuntimeAdapter;
-    try {
-      adapter = await selectAdapter();
-    } catch (error) {
-      return {
-        handled: true,
-        attempted: false,
-        reason: `post_review_smoke_runtime_unavailable:${error instanceof Error ? error.message : String(error)}`,
-      };
-    }
-    return reconcilePostReviewSmoke({
-      repoSlug: candidate.repoSlug,
-      prNumber: candidate.prNumber,
-      headSha: String(fresh.headRefOid ?? '').trim().toLowerCase(),
-      prBody: String(fresh.body ?? ''),
-    }, {
-      projectId: input.projectId,
-      repoRoot: input.repoRoot,
-      assignmentStorePath: input.assignmentStorePath,
-      adapter,
-      env: input.env,
-    });
-  };
 }
 
 async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; cadence: number }> {
@@ -791,12 +747,6 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   });
   const orchestrationMailReconcile: NonNullable<SchedulerBoundary['orchestrationMailReconcile']> = async () =>
     await executeOrchestrationMailReconcile();
-  const postReviewSmoke = createProductionPostReviewSmokeReconciler({
-    projectId,
-    repoRoot: sourceRepoRoot,
-    assignmentStorePath,
-    env,
-  });
   return {
     boundary: productionSchedulerBoundary({
       repoRoot: packRoot,
@@ -813,7 +763,6 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       ...(assignmentReconciliation ? { assignmentReconciliation } : {}),
       ...(assignmentLifecycleSweep ? { assignmentLifecycleSweep } : {}),
       fleetBindings,
-      reconcilePostReviewSmoke: postReviewSmoke,
       orchestrationMailReconcile,
       publishHandoff,
     }),

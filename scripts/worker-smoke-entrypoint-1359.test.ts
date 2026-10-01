@@ -120,380 +120,45 @@ function installTrustedTargetFixture(
     'utf8',
   );
   symlinkSync('/bin/sh', join(bin, 'gh'));
+  const cards = join(root, 'project-config', 'orchestrator-pack', 'projects');
+  mkdirSync(cards, { recursive: true });
+  writeFileSync(join(cards, 'smoke-fixture.json'), JSON.stringify({
+    projectId: 'smoke-fixture',
+    repository: 'chetwerikoff/orchestrator-pack',
+    primaryRoot: root,
+    defaultBranch: 'main',
+    orcaWorkspacePattern: '.*',
+    orchestratorTitlePattern: '.*',
+    browserGpt: { projectUrl: 'https://chatgpt.com/' },
+  }), 'utf8');
 }
 
 describe('Issue #1359 real worker-smoke entrypoint', () => {
-  it('reports a detached child exit before lifecycle reservation separately from the deadline', () => {
-    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-detach-early-exit-'));
 
+  it('keeps the native smoke-test-plan CLI without detached lifecycle or progress artifacts', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-2250-cli-'));
     try {
-      const result = run(resolve('scripts/worker-smoke-run'), [
-        'run', '--detach',
-        '--issue', '1933',
-        '--pr', '1941',
-        '--head-sha', '1'.repeat(40),
-        '--issue-body-file', join(root, 'missing-issue.md'),
-        '--smoke-complexity', 'complex',
-        '--repo-root', root,
-        '--cwd', root,
-        '--dry-run',
-        '--json',
-      ], { cwd: root });
-
-      expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(1);
-      expect(result.stderr).toContain('worker_smoke_detach_child_exited_before_lifecycle');
-      expect(result.stderr).not.toContain('worker_smoke_detach_lifecycle_timeout');
-      expect(existsSync(join(root, '.orca-worker-smoke', 'runs'))).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it('submits one combined prompt actuation, confirms first-ordinal evidence, and closes the frozen owned handle', () => {
-    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-entrypoint-1359-'));
-    const bin = join(root, 'bin');
-    const callsPath = join(root, 'orca-calls.jsonl');
-    const promptPath = join(root, 'pasted-prompt.txt');
-    const issueBodyPath = join(root, 'issue.md');
-    mkdirSync(bin, { recursive: true });
-
-    try {
-      requireSuccess('git', ['init', '--quiet', '--initial-branch=main'], root);
-      requireSuccess('git', ['config', 'user.email', 'worker-smoke@example.invalid'], root);
-      requireSuccess('git', ['config', 'user.name', 'Worker Smoke Fixture'], root);
-      writeFileSync(join(root, '.gitignore'), '*\n!.gitignore\n', 'utf8');
-      requireSuccess('git', ['add', '.gitignore'], root);
-      requireSuccess('git', ['commit', '--quiet', '-m', 'fixture'], root);
-      const head = String(requireSuccess('git', ['rev-parse', 'HEAD'], root).stdout).trim();
-
+      const issueBodyPath = join(root, 'issue.md');
       writeFileSync(issueBodyPath, [
-        '```behavior-kind',
-        'action-producing',
+        '```behavior-kind', 'action-producing', '```',
+        '```smoke-test-plan', 'scenarios:',
+        '  - action: verify smoke scenario | expected: PASS',
         '```',
-        '',
-        '```smoke-test-plan',
-        'scenarios:',
-        '  - action: execute first scenario | expected: sealed first scenario report',
-        '  - action: perform first rollout/adoption while pre-change scheduler owns an active inline post-review smoke | expected: adoption waits for terminal or the in-branch fixture proves the deferral gate',
-        '```',
-        '',
       ].join('\n'), 'utf8');
-      installTrustedTargetFixture(root, bin, issueBodyPath, head);
-
-      const fakeCursorAgent = join(bin, 'cursor-agent');
-      writeFileSync(fakeCursorAgent, `#!/usr/bin/env node
-const args = process.argv.slice(2);
-if (args.length === 1 && args[0] === '--list-models') {
-  process.stdout.write('fixture-routine-model-fixture-routine-effort\\n');
-} else {
-  process.exitCode = 2;
-}
-`, 'utf8');
-      chmodSync(fakeCursorAgent, 0o755);
-
-      const fakeOrca = join(bin, 'orca');
-      writeFileSync(fakeOrca, `#!/usr/bin/env node
-const { createHash } = require('node:crypto');
-const { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs');
-const path = require('node:path');
-
-const args = process.argv.slice(2).filter((value) => value !== '--json');
-appendFileSync(process.env.FAKE_ORCA_CALLS, JSON.stringify(args) + '\\n', 'utf8');
-const root = process.env.FAKE_ORCA_ROOT;
-const startupPath = path.join(root, 'agent-started');
-const head = process.env.FAKE_ORCA_HEAD;
-const terminal = {
-  handle: 'terminal-1359',
-  title: 'smoke-1359-renamed',
-  incarnationId: 'stable-generation-1359',
-  worktreePath: root,
-  command: 'cursor-agent --model fixture-routine-model-fixture-routine-effort',
-  status: 'running',
-};
-const ok = (result) => process.stdout.write(JSON.stringify({ ok: true, result }));
-const fail = (code, message) => {
-  process.stdout.write(JSON.stringify({ ok: false, error: { code, message } }));
-  process.exitCode = 1;
-};
-
-if (args[0] === 'worktree' && args[1] === 'current') {
-  ok({ worktree: { path: root, head, linkedIssue: 1359 } });
-} else if (args[0] === 'terminal' && args[1] === 'create') {
-  ok({ terminal: { ...terminal, title: 'smoke-1359', incarnationId: 'create-generation-1359' } });
-} else if (args[0] === 'terminal' && args[1] === 'show') {
-  ok({ terminal });
-} else if (args[0] === 'terminal' && args[1] === 'list') {
-  ok({ terminals: [] });
-} else if (args[0] === 'terminal' && args[1] === 'send') {
-  const hasText = args.includes('--text');
-  const hasEnter = args.includes('--enter');
-  const text = hasText ? (args[args.indexOf('--text') + 1] || '') : '';
-  if (hasText) writeFileSync(process.env.FAKE_ORCA_PROMPT, text, 'utf8');
-
-  if (!hasEnter) {
-    ok({ sent: true });
-  } else if (!hasText && !existsSync(process.env.FAKE_ORCA_PROMPT)) {
-    writeFileSync(startupPath, 'started', 'utf8');
-    ok({ sent: true, startup: true });
-  } else {
-    const submittedText = hasText ? text : readFileSync(process.env.FAKE_ORCA_PROMPT, 'utf8');
-    const runId = /run-id:\\s*([^\\r\\n]+)/u.exec(submittedText)?.[1]?.trim();
-    const artifactDir = /artifact-dir:\\s*([^\\r\\n]+)/u.exec(submittedText)?.[1]?.trim();
-    const progressPath = /Progress file:\\s*([^\\r\\n]+)/u.exec(submittedText)?.[1]?.trim();
-    if (!runId || !artifactDir || !progressPath) {
-      fail('fixture_binding_missing', 'prompt binding not found');
-    } else {
-      mkdirSync(artifactDir, { recursive: true });
-      writeFileSync(path.join(artifactDir, 'delivery.sealed.json'), JSON.stringify({ runId }), 'utf8');
-      const progressEvents = process.env.FAKE_PROGRESS_AFTER_SKIPPED === '1'
-        ? [
-          { runId, scenarioOrdinal: 1, phase: 'started' },
-          { runId, scenarioOrdinal: 1, phase: 'terminal', outcome: 'skipped' },
-          { runId, scenarioOrdinal: 2, phase: 'started' },
-          { runId, scenarioOrdinal: 2, phase: 'terminal', outcome: 'pass' },
-        ]
-        : [
-          { runId, scenarioOrdinal: 1, phase: 'started' },
-          { runId, scenarioOrdinal: 1, phase: 'terminal', outcome: 'pass' },
-          { runId, scenarioOrdinal: 2, phase: 'started' },
-          { runId, scenarioOrdinal: 2, phase: 'terminal', outcome: 'pass' },
-        ];
-      writeFileSync(progressPath, [...progressEvents.map((event) => JSON.stringify(event)), ''].join('\\n'), 'utf8');
-      const fence = String.fromCharCode(96).repeat(3);
-      const body = [
-        fence + 'worker-smoke-report',
-        'result: PASS',
-        'tracked-files-unmodified: true',
-        'scenarios:',
-        '  - action: execute first scenario | expected: sealed first scenario report | observed: child evidence sealed | outcome: pass',
-        '  - action: perform first rollout/adoption while pre-change scheduler owns an active inline post-review smoke | expected: adoption waits for terminal or the in-branch fixture proves the deferral gate | observed: child evidence sealed | outcome: pass',
-        fence,
-      ].join('\\n');
-      const digest = createHash('sha256').update(body, 'utf8').digest('hex');
-      writeFileSync(path.join(artifactDir, 'completion-' + digest + '.body'), body, { flag: 'wx' });
-      writeFileSync(
-        path.join(artifactDir, 'completion-' + digest + '.sealed.json'),
-        JSON.stringify({ runId, bodySha256: digest }),
-        { flag: 'wx' },
-      );
-      ok({ sent: true });
-    }
-  }
-} else if (args[0] === 'terminal' && args[1] === 'close') {
-  ok({ closed: true });
-} else if (args[0] === 'terminal' && args[1] === 'read') {
-  const started = existsSync(startupPath);
-  ok({ terminal: {
-    handle: terminal.handle,
-    status: 'running',
-    tail: started ? ['Cursor Agent', 'v2026.08.04-test'] : ['$ cursor-agent'],
-    nextCursor: started ? '2' : '1',
-  } });
-} else if (args[0] === 'terminal' && args[1] === 'wait') {
-  ok({ wait: { handle: terminal.handle, condition: 'tui-idle', satisfied: true, status: 'running' } });
-} else {
-  fail('unexpected_fixture_operation', args.join(' '));
-}
-`, 'utf8');
-      chmodSync(fakeOrca, 0o755);
-
-      const wrapper = resolve('scripts/worker-smoke-run');
-      const runtimeEnv = {
-        PATH: `${bin}:${process.env.PATH ?? ''}`,
-        OPK_RUNTIME_CLI_COMMAND: fakeOrca,
-        FAKE_ORCA_CALLS: callsPath,
-        FAKE_ORCA_ROOT: root,
-        FAKE_ORCA_HEAD: head,
-        FAKE_ORCA_PROMPT: promptPath,
-        WORKER_SMOKE_SUBMIT_CONFIRMATION_TIMEOUT_MS: '20',
-        PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'cursor',
-        PACK_EXECUTOR_SMOKE_ROUTINE_MODEL: 'fixture-routine-model',
-        PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT: 'fixture-routine-effort',
-        FAKE_PROGRESS_AFTER_SKIPPED: '0',
-      };
-      const runArgs = [
-        'run',
-        '--issue', '1359',
-        '--pr', '1365',
-        '--head-sha', head,
-        '--issue-body-file', issueBodyPath,
-        '--smoke-complexity', 'routine',
-        '--repo-root', root,
-        '--cwd', root,
-        '--dry-run',
-        '--json',
-      ];
-      const result = run(wrapper, runArgs, { cwd: root, env: runtimeEnv });
-
-      expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
-      expect(result.signal).toBeNull();
-      const lines = String(result.stdout).split(/\r?\n/u).filter((line) => line.trim());
-      expect(lines).toHaveLength(1);
-      const emitted = JSON.parse(lines[0]!) as {
-        ok?: boolean;
-        report?: {
-          result?: string;
-          terminalCleanup?: string;
-          scenarios?: Array<{ action?: string; outcome?: string }>;
-        };
-        lifecycleCleanup?: { clean?: boolean; closeOutcome?: string };
-      };
-      expect(emitted).toMatchObject({
-        ok: true,
-        report: {
-          result: 'PASS',
-          terminalCleanup: 'closed_owned_handle',
-          scenarios: [
-            { action: 'execute first scenario', outcome: 'pass' },
-            { action: 'perform first rollout/adoption while pre-change scheduler owns an active inline post-review smoke', outcome: 'pass' },
-          ],
-        },
-        lifecycleCleanup: {
-          clean: true,
-          closeOutcome: 'closed_owned_handle',
-        },
-      });
-
-      const prompt = readFileSync(promptPath, 'utf8');
-      const runId = prompt.match(/^run-id:\s*(\S+)\s*$/mu)?.[1]?.trim();
-      const progressPath = prompt.match(/^- Progress file:\s*(.+?)\s*$/mu)?.[1]?.trim();
-      expect(runId).toBeTruthy();
-      expect(progressPath).toBeTruthy();
-      expect(prompt).toContain('Canonical progress serialization (mandatory):');
-      expect(prompt).toContain('Scenario-specific rollout fixture (mandatory):');
-      expect(prompt).toContain('npm test -- --maxWorkers=1 scripts/pr2-foundation/scheduler-post-review-smoke-production.test.ts');
-      expect(prompt).toContain('never use a scheduler process from another checkout as evidence or as the fixture.');
-      expect(prompt).toContain('JSON.stringify(event)');
-      const progressLines = readFileSync(progressPath!, 'utf8')
-        .split(/\r?\n/u)
-        .filter((line) => line.trim());
-      expect(progressLines).toHaveLength(4);
-      const firstProgress = JSON.parse(progressLines[0]!) as Record<string, unknown>;
-      expect(firstProgress).toEqual({ runId, scenarioOrdinal: 1, phase: 'started' });
-      expect(Object.keys(firstProgress)).toEqual(['runId', 'scenarioOrdinal', 'phase']);
-      expect(prompt.match(/Canonical progress serialization \(mandatory\):/gu)).toHaveLength(1);
-      const firstStartCommand = prompt.match(/^- Before scenario 1, run exactly: (.+)$/mu)?.[1];
-      expect(firstStartCommand).toBeTruthy();
-      expect(firstStartCommand).toContain(Buffer.from(progressPath!, 'utf8').toString('base64'));
-      expect(firstStartCommand).toContain(Buffer.from(runId!, 'utf8').toString('base64'));
-      expect(firstStartCommand).toMatch(/ 1 started$/u);
-      expect(prompt).toContain('- For later started events, reuse the command with the declared ordinal and phase started, omitting outcome.');
-      expect(prompt).toContain('- For terminal events, reuse the command with the same ordinal, phase terminal, and one outcome: pass|fail|blocked|skipped.');
-      expect(prompt).not.toContain('Before each scenario append one JSON line:');
-      expect(prompt).not.toContain('After each scenario append one JSON line:');
-      expect(prompt).toContain('Emit each declared progress event exactly once; never repeat a started or terminal event.');
-      expect(prompt).toContain(
-        '- For each scenario N, append and durably flush N started, execute only N, then append and durably flush N terminal before doing any work or writing progress for N+1.',
-      );
-      expect(prompt).toContain(
-        '- Never run scenarios in parallel, start a later ordinal early, or skip an ordinal. After a fail/blocked/skipped terminal, stop without starting another scenario or writing any later-scenario progress; a refused later-start command is terminal, and progress after skipped is a protocol failure.',
-      );
-      expect(prompt).toContain('git diff "$(git merge-base HEAD origin/main)" HEAD');
-      expect(prompt).not.toContain('git diff main HEAD');
-      expect(prompt).toContain(
-        `The first non-empty progress line must parse exactly as: ${JSON.stringify(firstProgress)}`,
-      );
-
-
-      writeFileSync(progressPath!, [
-        JSON.stringify({ runId, scenarioOrdinal: 1, phase: 'started' }),
-        JSON.stringify({ runId, scenarioOrdinal: 1, phase: 'terminal', outcome: 'skipped' }),
-        '',
-      ].join('\n'), 'utf8');
-      const laterStartCommand = firstStartCommand!.replace(/ 1 started$/u, ' 2 started');
-      const rejectedLaterStart = run('/bin/sh', ['-c', laterStartCommand], { cwd: root, env: runtimeEnv });
-      expect(rejectedLaterStart.exitCode, rejectedLaterStart.stderr).toBe(1);
-      expect(rejectedLaterStart.stderr).toContain('progress_protocol_failure:progress_after_skipped_terminal');
-      expect(readFileSync(progressPath!, 'utf8').split(/\r?\n/u).filter(Boolean)).toHaveLength(2);
-
-      rmSync(promptPath, { force: true });
-      rmSync(join(root, 'agent-started'), { force: true });
-      runtimeEnv.FAKE_PROGRESS_AFTER_SKIPPED = '1';
-      const skippedThenLater = run(wrapper, runArgs, { cwd: root, env: runtimeEnv });
-      expect(skippedThenLater.exitCode, `${skippedThenLater.stdout}\\n${skippedThenLater.stderr}`).toBe(1);
-      const skippedEnvelope = JSON.parse(String(skippedThenLater.stdout).trim()) as { ok?: boolean; report?: { result?: string; scenarios?: Array<{ observed?: string }> } };
-      expect(skippedEnvelope.ok).toBe(false);
-      expect(skippedEnvelope.report?.scenarios?.[0]?.observed).toContain('progress_protocol_failure:progress_after_skipped_terminal');
-      const calls = readFileSync(callsPath, 'utf8')
-        .trim()
-        .split(/\r?\n/u)
-        .map((line) => JSON.parse(line) as string[]);
-      const operation = (args: readonly string[]): string => `${args[0] ?? ''} ${args[1] ?? ''}`;
-      const operations = calls.map(operation);
-      const createIndex = operations.indexOf('terminal create');
-      const showIndexes = operations
-        .map((value, index) => value === 'terminal show' ? index : -1)
-        .filter((index) => index >= 0);
-      const sendIndexes = operations
-        .map((value, index) => value === 'terminal send' ? index : -1)
-        .filter((index) => index >= 0);
-      const readIndexes = operations
-        .map((value, index) => value === 'terminal read' ? index : -1)
-        .filter((index) => index >= 0);
-      expect(createIndex).toBeGreaterThanOrEqual(0);
-      const createArgs = calls[createIndex!] ?? [];
-      const commandIndex = createArgs.indexOf('--command');
-      expect(commandIndex).toBeGreaterThanOrEqual(0);
-      expect(createArgs[commandIndex! + 1]).toBe("agent --model 'fixture-routine-model-fixture-routine-effort'");
-      expect(showIndexes.length).toBeGreaterThanOrEqual(3);
-      expect(sendIndexes).toHaveLength(4);
-      expect(calls[sendIndexes[0]!] ?? []).not.toContain('--text');
-      expect(calls[sendIndexes[0]!] ?? []).toContain('--enter');
-      expect(calls[sendIndexes[1]!] ?? []).toContain('--text');
-      expect(calls[sendIndexes[1]!] ?? []).toContain('--enter');
-      expect(readIndexes.some((index) => index > createIndex && index < sendIndexes[0]!)).toBe(true);
-      expect(readIndexes.some((index) => index > sendIndexes[0]! && index < sendIndexes[1]!)).toBe(true);
-      expect(operations.filter((value) => value === 'terminal close')).toHaveLength(2);
-      expect(operations.filter((value) => value === 'terminal list')).toHaveLength(0);
-      expect(createHash('sha256').update(readFileSync(wrapper)).digest('hex')).toMatch(/^[0-9a-f]{64}$/u);
-
-      rmSync(promptPath, { force: true });
-      rmSync(join(root, 'agent-started'), { force: true });
-      const detached = run(wrapper, [...runArgs, '--detach'], { cwd: root, env: runtimeEnv });
-      expect(detached.exitCode, `${detached.stdout}\n${detached.stderr}`).toBe(0);
-      const detachedRunId = String(detached.stdout).trim();
-      expect(detachedRunId).toMatch(/^[0-9a-f-]{36}$/u);
-      const detachedArtifactDir = join(root, '.orca-worker-smoke', 'runs', detachedRunId);
-      const lifecyclePath = join(detachedArtifactDir, 'lifecycle.json');
-      const finalEvidencePath = join(detachedArtifactDir, 'final-evidence.json');
-      expect(existsSync(lifecyclePath)).toBe(true);
-
-      const wait = run(wrapper, ['wait', '--run', detachedRunId, '--cwd', root, '--json'], { cwd: root, env: runtimeEnv });
-      expect(wait.exitCode, `${wait.stdout}\n${wait.stderr}`).toBe(1);
-      const waited = JSON.parse(String(wait.stdout).trim()) as { ok?: boolean; runId?: string; reason?: string };
-      expect(waited).toMatchObject({ ok: false, runId: detachedRunId, reason: 'terminal_evidence_invalid' });
-      const detachedPrompt = readFileSync(promptPath, 'utf8');
-      const detachedPromptRunId = detachedPrompt.match(/^run-id:\s*(\S+)\s*$/mu)?.[1]?.trim();
-      const detachedProgressPath = detachedPrompt.match(/^- Progress file:\s*(.+?)\s*$/mu)?.[1]?.trim();
-      expect(detachedPromptRunId).toBe(detachedRunId);
-      expect(detachedProgressPath).toBeTruthy();
-      expect(detachedPrompt).toContain('Canonical progress serialization (mandatory):');
-      expect(detachedPrompt).toContain('Never write, append, or edit progress JSON manually; use only the generated writer commands below.');
-      expect(detachedPrompt).toContain('Do not type, reconstruct, or reuse a run id; the encoded writer argument binds this exact run.');
-      const detachedStartCommand = detachedPrompt.match(/^- Before scenario 1, run exactly: (.+)$/mu)?.[1];
-      expect(detachedStartCommand).toBeTruthy();
-      expect(detachedStartCommand).toContain(Buffer.from(detachedProgressPath!, 'utf8').toString('base64'));
-      expect(detachedStartCommand).toContain(Buffer.from(detachedRunId, 'utf8').toString('base64'));
-      expect(detachedStartCommand).toMatch(/ 1 started$/u);
-      expect(existsSync(finalEvidencePath)).toBe(true);
-      const lifecycleBefore = readFileSync(lifecyclePath, 'utf8');
-      const finalBefore = readFileSync(finalEvidencePath, 'utf8');
-      const lifecycle = JSON.parse(lifecycleBefore) as { runId?: string; launcherTerminalizedAtMs?: number; finalEvidencePath?: string };
-      expect(lifecycle.runId).toBe(detachedRunId);
-      expect(lifecycle.launcherTerminalizedAtMs).toEqual(expect.any(Number));
-      expect(resolve(lifecycle.finalEvidencePath ?? '')).toBe(resolve(finalEvidencePath));
-      expect(existsSync(join(detachedArtifactDir, 'launcher.log'))).toBe(false);
-
-      const repeatedWait = run(wrapper, ['wait', '--run', detachedRunId, '--cwd', root, '--json'], { cwd: root, env: runtimeEnv });
-      expect(repeatedWait.exitCode).toBe(1);
-      expect(JSON.parse(String(repeatedWait.stdout).trim())).toMatchObject({ ok: false, runId: detachedRunId, reason: 'terminal_evidence_invalid' });
-      expect(readFileSync(lifecyclePath, 'utf8')).toBe(lifecycleBefore);
-      expect(readFileSync(finalEvidencePath, 'utf8')).toBe(finalBefore);
-      expect(existsSync(join(root, '.orca-worker-smoke', 'admission.lock.json'))).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+      const result = run(resolve('scripts/worker-smoke-run'), [
+        'validate-plan', '--issue-body-file', issueBodyPath, '--json',
+      ], { cwd: root });
+      expect(result.exitCode, String(result.stderr)).toBe(0);
+      const parsed = JSON.parse(result.stdout.trim()) as { ok?: boolean; plan?: { scenarios?: unknown[] } };
+      expect(parsed.ok).toBe(true);
+      expect(parsed.plan?.scenarios).toHaveLength(1);
+      expect(existsSync(join(root, '.orca-worker-smoke', 'runs'))).toBe(false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
+
+
+
+
 
   it('gates OpenCode smoke without an effort channel before any runtime spawn', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-opencode-gate-'));
@@ -550,6 +215,8 @@ process.exitCode = 2;
       ], {
         cwd: root,
         env: {
+          OPK_PROJECT_ID: 'smoke-fixture',
+          XDG_CONFIG_HOME: join(root, 'project-config'),
           PATH: `${bin}:${process.env.PATH ?? ''}`,
           OPK_RUNTIME_CLI_COMMAND: fakeOrca,
           PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'opencode',

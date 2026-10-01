@@ -1,22 +1,11 @@
+import { readFileSync } from 'node:fs';
 // @vitest-pre-topology-seconds 1
 // @vitest-ci-lane light
-import { runProcessSync } from '../kernel/subprocess.ts';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { buildSmokeProgressWriterCommand } from '../worker-smoke-run.ts';
-import {
-  bindSmokeTerminalHandle,
-  createSmokeLifecycleReservation,
-  markSmokeCreateInProgress,
-  smokeProgressPath,
-} from './worker-smoke-lifecycle.ts';
 import {
   evaluateWorkerSmokeMainMergeCarry,
   formatSmokeReportComment,
   planWorkerSmokeSelectiveRetry,
-  resolveSmokeRunArtifactDir,
   SMOKE_REPORT_PRODUCER,
   type SmokeReport,
   type WorkerSmokeCommentRecord,
@@ -164,32 +153,12 @@ describe('Issue #2213 actor-sensitive selective smoke carry', () => {
   });
 });
 
-describe('Issue #2213 bound smoke progress writer', () => {
-  it('writes progress only to the active run artifact without a caller-supplied path', () => {
-    const cwd = mkdtempSync(join(tmpdir(), 'issue-2213-progress-writer-'));
-    const runId = 'run-207115';
-    const artifactDir = resolveSmokeRunArtifactDir(cwd, runId);
-    try {
-      createSmokeLifecycleReservation({
-        runId, artifactDir, issueNumber: ISSUE, prNumber: PR, headSha: CURRENT_HEAD, scenarioCount: 1,
-      });
-      markSmokeCreateInProgress(artifactDir);
-      bindSmokeTerminalHandle(artifactDir, 'smoke-terminal');
-      const writer = buildSmokeProgressWriterCommand(runId, artifactDir);
-      expect(writer).not.toContain('progress.ndjson');
-      for (const args of ['1 started', '1 terminal pass']) {
-        const result = runProcessSync({ command: '/bin/sh', args: ['-c', `${writer} ${args}`], cwd });
-        expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
-      }
-      const progressPath = smokeProgressPath(artifactDir);
-      const events = readFileSync(progressPath, 'utf8').trim().split(/\r?\n/u).map((line) => JSON.parse(line));
-      expect(events).toEqual([
-        { runId, scenarioOrdinal: 1, phase: 'started' },
-        { runId, scenarioOrdinal: 1, phase: 'terminal', outcome: 'pass' },
-      ]);
-      expect(existsSync(join(cwd, '.orca-worker-smo'))).toBe(false);
-    } finally {
-      rmSync(cwd, { recursive: true, force: true });
-    }
+describe('Issue #2250 smoke progress/cancel caller removal', () => {
+  it('does not invoke smoke progress or cancellation machinery from the active worker', () => {
+    const source = readFileSync('scripts/worker-smoke-run.ts', 'utf8');
+    const active = source.slice(source.indexOf('export async function runSmokeAttempt('), source.indexOf('export type DetachedSmokeAttemptObservation'));
+    expect(active).not.toContain('buildSmokeProgressWriterCommand');
+    expect(active).not.toContain('writeSmokeCancelRequest');
+    expect(active).not.toContain('inspectSmokeProgress');
   });
 });

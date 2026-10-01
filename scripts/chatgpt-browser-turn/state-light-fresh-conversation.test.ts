@@ -665,6 +665,61 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(state.reloads).toBe(0);
   });
 
+  it('returns conversation-scoped message delivery timeout without reload when the owner is unrendered (#2303)', async () => {
+    const prompt = 'PROMPT-DELIVERY-TIMEOUT';
+    const output = join(stateDir, 'delivery-timeout-unrendered.txt');
+    const { page, state } = unrenderedOwnedMessagePage(prompt, 'NEVER-FINISHED', false, false, 'Message delivery timed out. Please try again.');
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output);
+
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({
+      state: 'recovery_required',
+      scope: 'conversation',
+      cause: 'message_delivery_timed_out',
+      send_count: 1,
+    });
+    expect(state.reloads).toBe(0);
+  });
+
+  it.each([
+    ['Network error\nSomething went wrong while sending.\nRetry', 'product_network_error'],
+    ['Resume stream unavailable\nRetry', 'stream_recovery_polling_timed_out'],
+  ])('returns conversation-scoped recovery for the %j alert heading when the owner is unrendered (#2307)', async (alert, cause) => {
+    const prompt = `PROMPT-HEADING-${cause}`;
+    const output = join(stateDir, `heading-${cause}.txt`);
+    const { page, state } = unrenderedOwnedMessagePage(prompt, 'NEVER-FINISHED', false, false, alert);
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output);
+
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({
+      state: 'recovery_required',
+      scope: 'conversation',
+      cause,
+      send_count: 1,
+    });
+    expect(state.reloads).toBe(0);
+  });
+
+  it('returns product_error_banner with the alert heading for an unknown red banner when the owner is unrendered', async () => {
+    const prompt = 'PROMPT-UNKNOWN-BANNER';
+    const output = join(stateDir, 'unknown-banner.txt');
+    const { page, state } = unrenderedOwnedMessagePage(prompt, 'NEVER-FINISHED', false, false, 'Something went wrong\nTry again later.\nRetry');
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output);
+
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({
+      state: 'recovery_required',
+      scope: 'conversation',
+      cause: 'product_error_banner',
+      product_banner_text: 'Something went wrong',
+      send_count: 1,
+    });
+    expect(state.reloads).toBe(0);
+  });
+
   it('reloads the owned conversation once when a finished answer renders without the owned user message (#2197)', async () => {
     const prompt = 'PROMPT-UNRENDERED';
     const reply = 'UNRENDERED-OK';
