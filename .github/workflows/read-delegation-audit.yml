@@ -25,14 +25,14 @@ jobs:
       # Fixture suite (scripts/read-delegation-audit.test.ts) is owned by the
       # scope-guard Node contract lane. This workflow retains unique policy/meta checks only.
 
-      - name: Enforce read-delegation policy pointer consistency
-        run: node --experimental-strip-types scripts/ci-policy-guards.ts read-delegation-policy
-
       - name: Setup Node.js (audit meta-check deps)
         uses: actions/setup-node@v4
         with:
           node-version: '24'
           cache: npm
+
+      - name: Enforce read-delegation policy pointer consistency
+        run: node --experimental-strip-types scripts/ci-policy-guards.ts read-delegation-policy
 
       - name: Verify read-delegation audit CI gate (meta-check)
         run: node --experimental-strip-types scripts/ci-policy-guards.ts read-delegation-ci-gate
