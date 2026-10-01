@@ -85,7 +85,7 @@ overrides it.
 
 ## Portable contracts
 
-**Node 22-only TypeScript runtime:** direct native TypeScript entrypoints must
+**Single-major TypeScript runtime:** direct native TypeScript entrypoints must
 use the Node major declared in `scripts/toolchain/node-version.json`.
 `package.json.engines.node` and every `actions/setup-node` declaration must
 mirror that authority. Entrypoints must run the canonical declaration preflight
@@ -224,7 +224,7 @@ Before an autonomous command turn performs side effects, pass the tracked
 command-runtime preflight:
 `PATH="<pack>/scripts:$PATH" node "<pack>/scripts/lib/command-runtime-bootstrap.mjs" livePreflight --pack-root "<pack>"`.
 Pack `scripts/gh` must be the first `gh` on `PATH`, or the preflight fails with
-`pack scripts/gh must be first gh on PATH`. Missing required Node 22 or GitHub
+`pack scripts/gh must be first gh on PATH`. Missing the required declared Node runtime or GitHub
 transport must fail closed. Do not edit shell dotfiles or create temporary
 executable wrappers as recovery. Structured wrappers parse stdout JSON only.
 
