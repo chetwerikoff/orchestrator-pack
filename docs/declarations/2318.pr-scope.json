@@ -15,11 +15,11 @@
     "vendor/"
   ],
   "allowed_roots": [
-    ".claude/",
-    ".cursor/",
-    "AGENTS.md",
-    "docs/",
-    "scripts/"
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "docs/chat-executor-rules.md",
+    "docs/declarations/2318.pr-scope.json",
+    "docs/orchestration-runbook.md",
+    "scripts/flow-manager-authority-contract.test.ts"
   ],
-  "source_revision": "717576050d0d3adc6f57d2ba20768654b6dd4f27"
+  "source_revision": "95522413291c8bb0809ca97a3c888b5bb5c07862"
 }
