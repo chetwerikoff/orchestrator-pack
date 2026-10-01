@@ -204,7 +204,7 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(readFileSync(rulePath, 'utf8')).toContain('docs/browser-gpt-turn-runbook.md');
     expect(readFileSync(runbookPath, 'utf8')).toContain(ADAPTER_PACKAGE_COMMAND);
     expect(readFileSync(runbookPath, 'utf8')).toContain(LAUNCHER_PACKAGE_COMMAND);
-    expect(readFileSync(browserReadmePath, 'utf8')).toContain('flow-manager-browser-gpt-long-run');
+    expect(readFileSync(browserReadmePath, 'utf8')).toContain('docs/browser-gpt-turn-runbook.md');
     expect(readFileSync(adapterPath, 'utf8')).toContain('spawnDetachedLauncher');
     expect(readFileSync(adapterPath, 'utf8')).toContain('forbidden_authority_selector');
     expect(readFileSync(launcherPath, 'utf8')).toContain(COMPLETION_MODE);
