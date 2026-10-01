@@ -3233,6 +3233,7 @@ describe('Issue #2250 independent smoke publication without ordering receipts', 
     publishComment: (prNumber: number, body: string, repoRoot: string) => void;
     spawnFails?: boolean;
     executePass?: boolean;
+    screenOnlyReport?: boolean;
   }): Promise<{ code?: number; error?: unknown; headSha: string; storeRoot: string; root: string; outputText?: string }> {
     const fixture = gitFixture(input.prefix);
     const body = tieredBody();
@@ -3244,6 +3245,30 @@ describe('Issue #2250 independent smoke publication without ordering receipts', 
       configurable: true,
       value: () => ({ status: 'ok', value: { ready: true, workspacePath: fixture.root, headSha: fixture.headSha } }),
     });
+    const reportBody = [
+      '```worker-smoke-report',
+      'result: PASS',
+      'tracked-files-unmodified: true',
+      'scenarios:',
+      `  - action: ${action} | expected: ${expected} | observed: independent worker executed plan | outcome: pass`,
+      '```',
+    ];
+    if (input.executePass && !input.screenOnlyReport) {
+      const originalDispatch = adapter.dispatchInput.bind(adapter);
+      Object.defineProperty(adapter, 'dispatchInput', {
+        configurable: true,
+        value: (dispatchInput: { readonly worker: RuntimeWorkerIdentity; readonly text: string }, options?: unknown) => {
+          const runId = dispatchInput.text.match(/^run-id: (\S+)$/m)?.[1];
+          const artifactDir = dispatchInput.text.match(/^artifact-dir: (\S+)$/m)?.[1];
+          if (!runId || !artifactDir) throw new Error('fixture prompt missing sealed completion binding');
+          const sealed = `${reportBody.join('\n')}\n`;
+          const digest = computeSmokeCompletionBodyDigest(sealed);
+          writeFileSync(smokeCompletionBodyPath(artifactDir, digest), sealed, 'utf8');
+          writeFileSync(smokeCompletionSealPath(artifactDir, digest), JSON.stringify({ runId, bodySha256: digest }), 'utf8');
+          return originalDispatch(dispatchInput as never, options as never);
+        },
+      });
+    }
     if (input.executePass) {
       Object.defineProperty(adapter, 'readBoundedOutput', {
         configurable: true,
@@ -3251,14 +3276,7 @@ describe('Issue #2250 independent smoke publication without ordering receipts', 
           status: 'ok',
           value: {
             worker: readInput.worker,
-            lines: [
-              '```worker-smoke-report',
-              'result: PASS',
-              'tracked-files-unmodified: true',
-              'scenarios:',
-              `  - action: ${action} | expected: ${expected} | observed: independent worker executed plan | outcome: pass`,
-              '```',
-            ],
+            lines: input.screenOnlyReport ? reportBody : [],
             observationToken: { opaque: 'fixture-report-1' },
             changed: true,
             terminalState: 'exited',
@@ -3354,6 +3372,21 @@ describe('Issue #2250 independent smoke publication without ordering receipts', 
       expect(bodies[0]).toContain(result.headSha);
       expect(bodies[0]).toContain('tracked-files-unmodified: true');
       expect(readPackReviewAuthority(206801, { storeRoot: result.storeRoot })).toBeNull();
+    } finally { rmSync(result.root, { recursive: true, force: true }); }
+  });
+
+  it('ignores a report visible only in terminal scrollback when no sealed completion exists', async () => {
+    const bodies: string[] = [];
+    const result = await runIndependentSmokeFixture({
+      prefix: 'smoke-2250-screen-only-',
+      prNumber: 206804,
+      executePass: true,
+      screenOnlyReport: true,
+      publishComment: (_pr, body) => { bodies.push(body); },
+    });
+    try {
+      expect(result.code).toBe(1);
+      expect(bodies.some((body) => body.includes('result: PASS'))).toBe(false);
     } finally { rmSync(result.root, { recursive: true, force: true }); }
   });
 
