@@ -51,7 +51,7 @@ child projects it into its terminal envelope and records delivery as
 
 - Proven pre-send failure with `send_count: 0` may be retried only when the
   calling workflow already authorizes retry.
-- Possible/proven delivery forbids blind resend.
+- Possible/proven delivery forbids a blind resend.
 - Timeout, child exit, missing envelope, or absent output does not prove no send.
 - Recovered reply bytes belong to the same invocation/conversation.
 

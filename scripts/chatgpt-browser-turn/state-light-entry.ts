@@ -12,13 +12,14 @@ export async function runStateLightEntry(
   argv: readonly string[],
   deps: StateLightEntryDependencies = {},
 ): Promise<number> {
+  const [command, ...turnArgs] = argv;
   const runTurn = deps.runTurn ?? runStateLightTurn;
-  if (argv[0] === 'turn') return runTurn(argv);
-  if (argv[0] === 'session') {
+  if (command === 'turn') return runTurn(turnArgs);
+  if (command === 'session') {
     const { runStateLightSession } = await import('./state-light-session.ts');
-    return runStateLightSession(argv);
+    return runStateLightSession(turnArgs);
   }
-  if (argv[0]?.startsWith('--')) return runTurn(['turn', ...argv]);
+  if (command?.startsWith('--')) return runTurn(argv);
   const { runCli } = await import('../chatgpt-browser-turn.ts');
   return runCli(argv);
 }
