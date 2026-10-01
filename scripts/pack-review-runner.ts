@@ -870,6 +870,20 @@ async function resolveCurrentIssueBody(
   return body;
 }
 
+export async function resolvePackReviewSelectedRepository(input: {
+  sourceRepoRoot: string;
+  selectedTarget: Pick<TargetContext, 'repository'>;
+  resolveRepository?: (repoRoot: string) => Promise<string>;
+}): Promise<string> {
+  const observedRepository = await (input.resolveRepository ?? resolveRepositorySlug)(input.sourceRepoRoot);
+  if (observedRepository.toLowerCase() !== input.selectedTarget.repository.toLowerCase()) {
+    throw new Error(
+      `pack review source repository ${observedRepository} does not match selected target ${input.selectedTarget.repository}`,
+    );
+  }
+  return input.selectedTarget.repository;
+}
+
 async function resolveTarget(
   input: StartInput,
   trustedPackRoot: string,
@@ -910,15 +924,11 @@ async function resolveTarget(
     throw new Error(`source repository root is not a git checkout: ${sourceRepoRoot}`);
   }
   const requestedHead = trim(input.headSha).toLowerCase();
-  const observedRepository = harnessExplicit ? '' : await resolveRepositorySlug(sourceRepoRoot);
   const repoSlug = harnessExplicit
     ? trim(input.fixtureRepoSlug) || 'fixture/orchestrator-pack'
-    : selectedTarget?.repository ?? observedRepository;
-  if (selectedTarget && observedRepository.toLowerCase() !== selectedTarget.repository.toLowerCase()) {
-    throw new Error(
-      `pack review source repository ${observedRepository} does not match selected target ${selectedTarget.repository}`,
-    );
-  }
+    : selectedTarget
+      ? await resolvePackReviewSelectedRepository({ sourceRepoRoot, selectedTarget })
+      : await resolveRepositorySlug(sourceRepoRoot);
   if (harnessExplicit && trim(input.fixturePrState || 'OPEN').toUpperCase() !== 'OPEN') {
     throw new Error(`PR #${prNumber} is not open`);
   }
