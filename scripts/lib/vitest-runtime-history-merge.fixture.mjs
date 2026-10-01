@@ -48,9 +48,6 @@ const PR_1376_CHANGED_FILES = [
   '.cursor/rules/flow-manager-browser-turn-monitoring.mdc',
   'docs/declarations/1266.pr-scope.json',
   'package.json',
-  'scripts/browser-gpt-post-settlement-close-proof.ts',
-  'scripts/browser-gpt-post-settlement-close.ts',
-  'scripts/browser-gpt-post-settlement-close.test.ts',
   'scripts/chatgpt-browser-turn/contracts.ts',
   'scripts/vitest-ci-lanes.config.json',
 ].sort();
