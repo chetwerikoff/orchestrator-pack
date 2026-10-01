@@ -6,7 +6,7 @@ Issue #1245 extracts a runtime-neutral TypeScript contract around the already-wo
 
 | Current live caller | Operations consumed here | Disposition |
 |---|---|---|
-| `scripts/worker-smoke-run.ts` through the runtime adapter / native Orca edge | current-worktree readiness, terminal create, send/submit, bounded read, bounded wait, close | current behavior is owned by the runtime boundary; no compatibility facade remains |
+| `scripts/worker-smoke-run.ts` through the runtime adapter / native Orca edge | delegated-readiness runtime composition and worker liveness only | smoke publication no longer creates, sends to, reads, waits for, or closes a runtime worker; no compatibility facade is added |
 | `scripts/lib/worker-smoke-bounded-create.ts` through the runtime adapter / native Orca edge | bounded terminal creation | current behavior remains behind the same runtime boundary; no second parser or compatibility layer is introduced |
 | `scripts/launch-watch/watch.ts` | exact current-worker resolution by opaque id and bounded terminal output observation | production path uses the runtime-neutral adapter; explicit injected process runners remain only as a test seam |
 | observer fleet (#1258 and dependent tasks) | workspace-complete list/find, bounded liveness, identity/generation, provenance, bounded output | named consumer of this interface; no new monitoring operation or watcher service |
