@@ -230,7 +230,7 @@ second monitor, watcher, daemon, polling loop, durable timer, or recovery store.
 The existing fleet alarm (`scripts/fleet/fleet-wake.ts`) also reports ChatGPT
 chats that show a red product-error banner with generation stopped, or that
 stopped without a final reply (no Stop control, and either no finished-reply
-actions or an empty last reply, on two ticks about a minute apart), asking for `Доделай задачу и сообщи статус`:
+actions or an empty last reply, on two ticks about a minute apart), asking for `Доделай и сообщи статус`:
 directly to the single manager pane bound to that chat, otherwise to the
 orchestrator. A PR-review chat (prompt heading `# Browser GPT pack PR review`)
 is routed to the pane on the PR head branch and gets a review-completion text
@@ -355,7 +355,7 @@ the exact Issue before sending any continuation:
    do not send a continuation or open a fresh execution chat.
 
 If current state already establishes a candidate-complete implementation, do
-**not** send `Доделай задачу` and do not open an implementation conversation.
+**not** send `Доделай и сообщи статус` and do not open an implementation conversation.
 Resolve the exact live Issue-bound PR/head and required CI state; when the
 review-entry preconditions below are satisfied, enter **Manager-owned PR-review
 convergence**. This manager path does not return overall `VERIFIED_COMPLETE`
@@ -366,11 +366,11 @@ before required same-manager smoke completes.
 Otherwise save the exact selected baseline and send exactly one ordinary tracked
 continuation user turn in the **same exact owned ChatGPT conversation**:
 
-- **Existing PR:** concrete known gap, or `Доделай задачу` with the Issue URL, PR
+- **Existing PR:** concrete known gap, or `Доделай и сообщи статус` with the Issue URL, PR
   URL, and exact baseline head as needed to continue that same implementation;
 - **No PR, one unambiguous Issue-owned branch:** concrete known gap, or
-  `Доделай задачу` tied to the Issue, same branch, and exact baseline head;
-- **No observed Issue-bound work:** `Доделай задачу` (or a concrete known gap)
+  `Доделай и сообщи статус` tied to the Issue, same branch, and exact baseline head;
+- **No observed Issue-bound work:** `Доделай и сообщи статус` (or a concrete known gap)
   in the same conversation; do not synthesize a branch/head.
 
 This is a new tracked user turn after the exact product-error turn is settled,
@@ -492,7 +492,7 @@ submitted GPT turn
        -> invalidated baseline/candidate-complete: no stale fresh send; re-evaluate/review
   -> finished GPT reply
        -> continue / remaining work in same conversation
-            -> send `Доделай задачу` or a concrete gap in that same conversation
+            -> send `Доделай и сообщи статус` or a concrete gap in that same conversation
             -> shared one-turn mechanics and 30-minute execution checkpoint
             -> repeat
        -> claims complete
