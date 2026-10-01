@@ -9,7 +9,7 @@ alwaysApply: false
 
 # TypeScript script authoring
 
-- Author repository automation under `scripts/**` in TypeScript/Node 22.
+- Author repository automation under `scripts/**` in TypeScript under the Node major declared in `scripts/toolchain/node-version.json`.
 - The legacy shell estate is retired. Do not add `.ps1`, `.psm1`, `.psd1`, shell
   compatibility wrappers, executable probes, or fallback routes for removed behavior.
 - A future task that intentionally changes this terminal architecture must say so
