@@ -887,7 +887,7 @@
       "owningReference": "Issue #1419 r17; Issue #1415 C5"
     },
     {
-      "path": "scripts/toolchain/node22-runtime-policy.spec.ts",
+      "path": "scripts/toolchain/typescript-runtime-policy.spec.ts",
       "class": "precut-migration-classifier",
       "reason": "Migration/census/capture/foundation-proof source preserves or detects legacy PowerShell surface names as evidence; it is not a current production PowerShell caller.",
       "owningReference": "Issue #1419 r17; Issue #1415 C5"
