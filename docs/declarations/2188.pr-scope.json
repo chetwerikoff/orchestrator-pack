@@ -23,6 +23,7 @@
     "scripts/manager-review-terminal-bundle.ts",
     "scripts/pack-review-runner.ts",
     "scripts/pack-worker-report.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
     "scripts/publish-issue-body-sync.ts",
     "scripts/run-pack-review-gpt.ts",
@@ -51,5 +52,5 @@
     "prompts/",
     "scripts/"
   ],
-  "source_revision": "ffea25f9458188ce7fc2e6f21bc399468ccc00bd"
+  "source_revision": "9905fb93c5868ea353c33a1a546d7bdcbf041b60"
 }
