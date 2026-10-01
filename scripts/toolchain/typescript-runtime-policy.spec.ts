@@ -334,6 +334,15 @@ describe('launch inventory and fail-closed policy', () => {
       && violation.path === 'scripts/live-runtime-policy.ts')).toBe(false);
   });
 
+  it('rejects supported-major restatements in live json producers', () => {
+    const root = makePolicyFixture();
+    write(join(root, 'scripts/json-producers/live-producer.ts'), `export const nodeMajor = ${SUPPORTED_NODE_MAJOR};\n`);
+    const violations = checkTypeScriptRuntimePolicy(root).violations;
+    expect(violations.some((violation) =>
+      violation.rule === 'runtime-major-restatement'
+      && violation.path === 'scripts/json-producers/live-producer.ts')).toBe(true);
+  });
+
   it('rejects a direct workspace runtime dependency', () => {
     const root = makePolicyFixture();
     const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as Record<string, unknown>;
@@ -490,9 +499,60 @@ describe('launch inventory and fail-closed policy', () => {
       && violation.path === workflow)).toEqual([]);
   });
 
+  it('binds the reusable Codex workflow to the orchestrator-pack checkout mirror', () => {
+    const root = makePolicyFixture();
+    const workflow = '.github/workflows/codex-pr-review.yml';
+    const writeWorkflow = (versionFile: string): void => {
+      write(join(root, workflow), [
+        'name: codex-pr-review',
+        'jobs:',
+        '  review:',
+        '    steps:',
+        '      - uses: actions/setup-node@v4',
+        '        with:',
+        `          node-version-file: ${versionFile}`,
+        '',
+      ].join('\n'));
+    };
+
+    writeWorkflow('package.json');
+    let violations = checkTypeScriptRuntimePolicy(root).violations;
+    expect(violations.some((violation) =>
+      violation.rule === 'workflow-node-version'
+      && violation.path === workflow)).toBe(true);
+
+    writeWorkflow('orchestrator-pack/package.json');
+    violations = checkTypeScriptRuntimePolicy(root).violations;
+    expect(violations.filter((violation) =>
+      violation.rule === 'workflow-node-version'
+      && violation.path === workflow)).toEqual([]);
+  });
+
+  it('rejects a current-major workflow literal as an independent live restatement', () => {
+    const root = makePolicyFixture();
+    const workflow = '.github/workflows/current-major.yml';
+    write(join(root, workflow), [
+      'name: current-major',
+      'jobs:',
+      '  test:',
+      '    steps:',
+      '      - uses: actions/setup-node@v4',
+      '        with:',
+      `          node-version: '${SUPPORTED_NODE_MAJOR}'`,
+      '',
+    ].join('\n'));
+    const violations = checkTypeScriptRuntimePolicy(root).violations;
+    expect(violations.some((violation) =>
+      violation.rule === 'workflow-node-version'
+      && violation.path === workflow)).toBe(true);
+    expect(violations.some((violation) =>
+      violation.rule === 'runtime-major-restatement'
+      && violation.path === workflow)).toBe(true);
+  });
+
   it('accepts the trusted base package mirror and rejects arbitrary version files', () => {
     const root = makePolicyFixture();
-    const trusted = '.github/workflows/trusted.yml';
+    const trusted = '.github/workflows/scope-guard.yml';
     write(join(root, trusted), [
       'name: trusted',
       'jobs:',

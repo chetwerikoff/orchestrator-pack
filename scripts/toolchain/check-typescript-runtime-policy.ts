@@ -763,13 +763,18 @@ function literalNodeMajor(value: string): number | undefined {
   return match?.[1] ? Number(match[1]) : undefined;
 }
 
-function authorityBoundNodeVersionFile(value: string): boolean {
+function authorityBoundNodeVersionFile(path: string, value: string): boolean {
   const trimmed = value.trim();
   const unquoted = ((trimmed.startsWith("'") && trimmed.endsWith("'"))
     || (trimmed.startsWith('"') && trimmed.endsWith('"')))
     ? trimmed.slice(1, -1)
     : trimmed;
-  return unquoted === 'package.json' || unquoted === 'trusted-scope-guard/package.json';
+  const expected = path === '.github/workflows/codex-pr-review.yml'
+    ? 'orchestrator-pack/package.json'
+    : path === '.github/workflows/scope-guard.yml'
+      ? 'trusted-scope-guard/package.json'
+      : 'package.json';
+  return unquoted === expected;
 }
 
 function scanWorkflowNodeVersions(
@@ -796,9 +801,8 @@ function scanWorkflowNodeVersions(
         && step.withIsMapping
         && selectors.length === 1
         && selector !== undefined
-        && (selector.kind === 'node-version'
-          ? literalNodeMajor(selector.value) === SUPPORTED_NODE_MAJOR
-          : authorityBoundNodeVersionFile(selector.value));
+        && selector.kind === 'node-version-file'
+        && authorityBoundNodeVersionFile(path, selector.value);
       inventory.push({
         path,
         line: step.line,
@@ -853,7 +857,7 @@ function scanWorkflowNodeVersions(
       }
       if (!selector) continue;
       if (selector.kind === 'node-version-file') {
-        if (!authorityBoundNodeVersionFile(selector.value)) {
+        if (!authorityBoundNodeVersionFile(path, selector.value)) {
           violations.push({
             path,
             line: selector.line,
@@ -864,16 +868,14 @@ function scanWorkflowNodeVersions(
         continue;
       }
       const major = literalNodeMajor(selector.value);
-      if (major !== SUPPORTED_NODE_MAJOR) {
-        violations.push({
-          path,
-          line: selector.line,
-          rule: 'workflow-node-version',
-          message: major === undefined
-            ? `actions/setup-node version must be a literal ${SUPPORTED_NODE_MAJOR} or ${SUPPORTED_NODE_MAJOR}.x; received ${JSON.stringify(selector.value)}.`
-            : `every live workflow Node declaration must select ${SUPPORTED_NODE_MAJOR}; received ${major}.`,
-        });
-      }
+      violations.push({
+        path,
+        line: selector.line,
+        rule: 'workflow-node-version',
+        message: major === undefined
+          ? `actions/setup-node version must use an authority-bound node-version-file; received non-literal ${JSON.stringify(selector.value)}.`
+          : `actions/setup-node literal node-version received ${major}; use an authority-bound node-version-file instead.`,
+      });
     }
   }
 
@@ -1105,7 +1107,6 @@ function nonLiveRestatementPath(path: string, contract: InventoryContract): bool
     'tests/external-output-references',
     'scripts/gate-runner/census',
     'scripts/gate-runner/goldens',
-    'scripts/json-producers',
   ];
   return prefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 }
@@ -1135,8 +1136,6 @@ function supportedMajorRestatementViolations(
     const lines = readFileSync(absolute, 'utf8').split(/\r?\n/u);
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index] ?? '';
-      if (/^\s*node-version\s*:\s*['"]?\d+(?:\.x)?['"]?\s*(?:#.*)?$/u.test(line)
-        && /^\.github\/workflows\/[^/]+\.ya?ml$/u.test(path)) continue;
       if (nodePatterns.some((pattern) => pattern.test(line)) || npmPatterns.some((pattern) => pattern.test(line))) {
         violations.push({
           path,
