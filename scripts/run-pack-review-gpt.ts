@@ -16,6 +16,13 @@ function trim(value: unknown): string {
   return String(value ?? '').trim();
 }
 
+function resolveSelectedReviewTarget() {
+  const hasSelector = Boolean(trim(process.env.OPK_PROJECT_ID));
+  const unboundTestHarness = !hasSelector
+    && (process.env.OPK_VITEST_HARNESS === '1' || process.env.VITEST === 'true');
+  return unboundTestHarness ? null : resolveTargetContext({ env: process.env });
+}
+
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
@@ -67,7 +74,7 @@ function usage(): string {
   ].join('\n');
 }
 
-function parseArgs(argv: string[]): {
+export function parseArgs(argv: string[]): {
   repoRoot: string;
   baseRef: string;
   prNumber?: number;
@@ -75,7 +82,7 @@ function parseArgs(argv: string[]): {
   headSha?: string;
 } {
   let repoRoot = process.cwd();
-  const selected = String(process.env.OPK_PROJECT_ID ?? '').trim() ? resolveTargetContext({ env: process.env }) : null;
+  const selected = resolveSelectedReviewTarget();
   let baseRef = selected ? `origin/${selected.defaultBranch}` : 'origin/main';
   let prNumber: number | undefined;
   let issueNumber: number | undefined;
@@ -132,9 +139,7 @@ async function main(): Promise<void> {
     assertGptHarnessFixtureAllowed();
   }
   const observedRepoSlug = repoSlug || await resolveRepositorySlug(options.repoRoot);
-  const selectedTarget = String(process.env.OPK_PROJECT_ID ?? '').trim()
-    ? resolveTargetContext({ env: process.env })
-    : null;
+  const selectedTarget = resolveSelectedReviewTarget();
   if (selectedTarget && observedRepoSlug.toLowerCase() !== selectedTarget.repository.toLowerCase()) {
     throw new Error(
       `run-pack-review-gpt repository ${observedRepoSlug} does not match selected target ${selectedTarget.repository}`,
