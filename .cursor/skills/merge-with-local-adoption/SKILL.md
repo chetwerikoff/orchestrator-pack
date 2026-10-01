@@ -1,7 +1,7 @@
 ---
 name: merge-with-local-adoption
 description: >-
-  Merge a PR, safely adopt merged main in the operator checkout, apply documented
+  Merge a PR, safely adopt the merged selected default branch in the operator checkout, apply documented
   local adoption, then quiesce and remove the selected merged-PR worktree. Ordinary
   repository gates remain useful evidence; a direct top-level user instruction
   overrides repository-owned merge and cleanup refusals while preserving truthful
@@ -54,7 +54,7 @@ primary-checkout adoption mutation, or task-owned recovery mutation:
    `predecessorAssignmentId`, and `predecessorGeneration`. Missing, malformed, extra-key,
    or changed marker state performs no delegated effect. The integration assignment identity
    must differ from its predecessor and match the supervised launch/read-back.
-3. Re-read the live Issue, PR/head/base, `main`, and every concrete explicit dependency.
+3. Re-read the live Issue, PR/head/base, the selected default branch, and every concrete explicit dependency.
    Sequence only explicit task relationships into `merge_now` or `wait_for_dependency`; when
    sequencing returns `wait_for_dependency`, launch no integration worker and perform no delegated effect.
    Issue closure is not proof that a dependency landed; broad overlap is not a dependency.
@@ -162,6 +162,8 @@ lose it.
 
 ## Step 2 — Resolve the PR and target
 
+Before resolving any PR/Issue, resolve the selected project card with `node --experimental-strip-types scripts/lib/target-context.ts check`. Bind its exact `repository` as `TARGET_REPOSITORY` and its exact `defaultBranch` as `TARGET_DEFAULT_BRANCH`. Missing selection or any explicit repository/base mismatch is terminal; do not infer target identity from cwd/origin.
+
 Resolve the concrete PR with `gh pr view` or an exact `Closes/Fixes/Resolves #N` link. Zero or
 multiple plausible PRs is unresolved target ambiguity and requires the user to identify one;
 never guess.
@@ -169,7 +171,7 @@ never guess.
 Record the live PR and target facts:
 
 ```bash
-gh pr view P --repo chetwerikoff/orchestrator-pack \
+gh pr view P --repo $TARGET_REPOSITORY \
   --json state,isDraft,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus
 
 git -C REPO worktree list --porcelain
@@ -192,8 +194,8 @@ real ambiguity.
 Read required checks, review state, draft state, and current PR head:
 
 ```bash
-gh pr checks P --repo chetwerikoff/orchestrator-pack
-gh pr view P --repo chetwerikoff/orchestrator-pack \
+gh pr checks P --repo $TARGET_REPOSITORY
+gh pr view P --repo $TARGET_REPOSITORY \
   --json state,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,headRefOid
 ```
 
@@ -275,8 +277,8 @@ Use the requested supported strategy, otherwise the repository default:
 For branch-update sequencing, follow the canonical [orchestration runbook rule](../../../docs/orchestration-runbook.md#main-update-sequencing).
 
 ```bash
-gh pr merge P --repo chetwerikoff/orchestrator-pack --merge --delete-branch
-gh pr view P --repo chetwerikoff/orchestrator-pack \
+gh pr merge P --repo $TARGET_REPOSITORY --merge --delete-branch
+gh pr view P --repo $TARGET_REPOSITORY \
   --json state,mergedAt,mergeCommit,headRefName,headRefOid,baseRefName
 ```
 
@@ -284,7 +286,7 @@ Use expected-head protection when the available merge API supports it. Require r
 of `state=MERGED` before claiming success. Record `MERGE_SHA`, the pre-merge target facts, and
 the live merged PR head.
 
-## Step 6 — Adopt merged main
+## Step 6 — Adopt the merged selected default branch
 
 Immediately before updating the primary checkout, record the local adoption boundary:
 
@@ -301,11 +303,11 @@ git status --short
 git log -1 --oneline
 ```
 
-Current `main` may move beyond `MERGE_SHA`; equality is not required.
+The selected default branch may move beyond `MERGE_SHA`; equality is not required.
 
 After that adoption read-back, read the actual primary-checkout `HEAD` once as a
 40-hex value and pass that literal value to one bounded operational-wiki sync.
-Do not pass the PR merge SHA or a moving `main` name:
+Do not pass the PR merge SHA or a moving default-branch name:
 
 ```bash
 COMMIT=$(git rev-parse HEAD)
@@ -467,7 +469,7 @@ A later pack-owned refusal still falls back to Step 9b under the same direct ins
 
 Report in the user's language:
 
-- PR, Issue, merge SHA, saved and actual target head/branch, and current main;
+- PR, Issue, merge SHA, saved and actual target head/branch, and current selected default branch;
 - CI/review facts and whether they were overridden;
 - for any waiver, the source of the direct operator authorization (channel/reference only,
   with private data omitted), plus the waiver status description and POST/read-back result;

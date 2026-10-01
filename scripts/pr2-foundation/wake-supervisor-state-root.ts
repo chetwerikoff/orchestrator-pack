@@ -1,5 +1,6 @@
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { DEFAULT_WAKE_SUPERVISOR_PROJECT_ID } from './wake-supervisor-state-constants.mjs';
 
 export interface WakeSupervisorStateRootOptions {
   env?: Readonly<NodeJS.ProcessEnv>;
@@ -36,7 +37,7 @@ export function resolveWakeSupervisorStateRoot(
   const stateBase = trimmed(env.XDG_STATE_HOME)
     || trimmed(env.LOCALAPPDATA)
     || paths.join(userHome, '.local', 'state');
-  const projectId = trimmed(options.projectId) || trimmed(env.OPK_PROJECT_ID) || 'orchestrator-pack';
+  const projectId = trimmed(options.projectId) || trimmed(env.OPK_PROJECT_ID) || DEFAULT_WAKE_SUPERVISOR_PROJECT_ID;
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(projectId)) {
     throw new Error('wake_supervisor_project_id_invalid');
   }
