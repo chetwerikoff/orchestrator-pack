@@ -72,7 +72,6 @@ export const agentRulesMovedContentGate: DeclarativeGateDefinition = {
         '.cursor/skills/study-external-source/SKILL.md',
         '.cursor/skills/switch-pack-reviewer/SKILL.md',
         '.cursor/skills/direct-fix-checklist/SKILL.md',
-        '.cursor/rules/draft-author-relocation.mdc',
         '.cursor/rules/flow-manager-browser-turn-monitoring.mdc',
       ],
     },
@@ -118,14 +117,7 @@ export const agentRulesMovedContentGate: DeclarativeGateDefinition = {
           path: 'CLAUDE.md',
           exactOccurrences: [
             { marker: '(.cursor/skills/direct-fix-checklist/SKILL.md#architect-role-contract)', count: 1 },
-            { marker: '(.cursor/skills/discuss-with-gpt/SKILL.md#draft-author-relocation)', count: 1 },
             { marker: '(.cursor/skills/investigate-root-cause/SKILL.md)', count: 1 },
-          ],
-        },
-        {
-          path: '.cursor/rules/draft-author-relocation.mdc',
-          exactOccurrences: [
-            { marker: '(../skills/discuss-with-gpt/SKILL.md#draft-author-relocation)', count: 1 },
           ],
         },
         {

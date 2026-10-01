@@ -46,7 +46,6 @@ const movedClean = {
   ].join('\n'),
   'CLAUDE.md': [
     'See [architect](.cursor/skills/direct-fix-checklist/SKILL.md#architect-role-contract).',
-    'See [author](.cursor/skills/discuss-with-gpt/SKILL.md#draft-author-relocation).',
     'See [RCA](.cursor/skills/investigate-root-cause/SKILL.md).',
   ].join('\n'),
   'docs/browser-gpt-turn-runbook.md': [
@@ -73,12 +72,11 @@ const movedClean = {
   '.cursor/skills/investigate-root-cause/SKILL.md': '# investigate-root-cause\n',
   '.cursor/skills/merge-with-local-adoption/SKILL.md': '# merge-with-local-adoption\n',
   '.cursor/skills/adversarial-draft-review/SKILL.md': '# adversarial-draft-review\n',
-  '.cursor/skills/discuss-with-gpt/SKILL.md': '## Draft-author relocation\n',
+  '.cursor/skills/discuss-with-gpt/SKILL.md': '## Browser preconditions and tracked-turn pointer\n',
   '.cursor/skills/create-issue-draft/SKILL.md': '# create-issue-draft\n',
   '.cursor/skills/study-external-source/SKILL.md': '# study-external-source\n',
   '.cursor/skills/switch-pack-reviewer/SKILL.md': '# switch-pack-reviewer\n',
   '.cursor/skills/direct-fix-checklist/SKILL.md': '## Architect role contract\n',
-  '.cursor/rules/draft-author-relocation.mdc': 'See [author](../skills/discuss-with-gpt/SKILL.md#draft-author-relocation).\n',
   '.cursor/rules/flow-manager-browser-turn-monitoring.mdc': [
     'See [preflight](../../docs/browser-gpt-turn-runbook.md#start-of-shift-preflight).',
     'See [prepare](../../docs/browser-gpt-turn-runbook.md#prepare-one-turn).',
