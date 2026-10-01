@@ -9,7 +9,11 @@ import { bindPublishIssueTarget } from './publish-issue-body-sync.ts';
 import { resolvePackReviewSelectedRepository } from './pack-review-runner.ts';
 import {
   defaultWorkdir,
+  listPendingEvents,
+  persistCycleId,
+  readPersistedCycleId,
   resolveJournalWorkdir,
+  writePendingEvent,
 } from './lib/create-issue-stage-record-gh.ts';
 import {
   TargetGhAuthorizationError,
@@ -107,11 +111,35 @@ describe('Issue #2188 target portability sinks', () => {
     process.env.OPK_PROJECT_ID = 'alpha';
     const alpha = defaultWorkdir(77);
     expect(alpha).toContain('/create-issue-draft/alpha/77/journal');
+    writePendingEvent(alpha, {
+      schema: 'create-issue-pending/v1',
+      eventKey: 'same-event',
+      body: 'alpha-only',
+      createdAt: '2026-10-01T00:00:00.000Z',
+    });
+    persistCycleId(alpha, 'alpha-cycle');
 
     process.env.OPK_PROJECT_ID = 'beta';
     const beta = defaultWorkdir(77);
     expect(beta).toContain('/create-issue-draft/beta/77/journal');
     expect(beta).not.toBe(alpha);
+    expect(listPendingEvents(beta)).toEqual([]);
+    expect(readPersistedCycleId(beta)).toBeNull();
+    writePendingEvent(beta, {
+      schema: 'create-issue-pending/v1',
+      eventKey: 'same-event',
+      body: 'beta-only',
+      createdAt: '2026-10-01T00:00:00.000Z',
+    });
+    persistCycleId(beta, 'beta-cycle');
+    expect(listPendingEvents(beta).map((event) => event.body)).toEqual(['beta-only']);
+    expect(readPersistedCycleId(beta)).toBe('beta-cycle');
+
+    process.env.OPK_PROJECT_ID = 'alpha';
+    expect(listPendingEvents(alpha).map((event) => event.body)).toEqual(['alpha-only']);
+    expect(readPersistedCycleId(alpha)).toBe('alpha-cycle');
+
+    process.env.OPK_PROJECT_ID = 'beta';
     expect(() => resolveJournalWorkdir(77, alpha))
       .toThrow(/create_issue_journal_workdir_override_untrusted/u);
   });
