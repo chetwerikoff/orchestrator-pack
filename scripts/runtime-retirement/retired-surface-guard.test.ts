@@ -139,6 +139,18 @@ describe('runtime retirement closed-world scanner', () => {
     expect(result.violations).toEqual([]);
   });
 
+  it('classifies the major-neutral runtime-policy spec as current non-prescriptive policy evidence', () => {
+    const root = fixture('neutral');
+    const path = 'scripts/toolchain/typescript-runtime-policy.spec.ts';
+    const target = join(root, path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, 'pwsh -File scripts/verify.ps1\n');
+
+    const result = scanRetiredRuntimeSurfaces({ repoRoot: root, paths: [path] });
+    expect(result.excludedPaths).toEqual([path]);
+    expect(result.violations).toEqual([]);
+  });
+
   it('excludes generated Vitest runtime reports but continues scanning active files', () => {
     const reportPath = '.vitest-runtime-report-heavy-1-26-review-cycle.test.ts.json';
     const reportText = ' ao review\n ao status';

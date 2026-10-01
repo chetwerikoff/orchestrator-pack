@@ -1,7 +1,12 @@
 import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { parseHistoricalDispositions, HISTORICAL_DISPOSITION_SOURCE, type HistoricalDisposition } from '../runtime-retirement/retired-surface-guard.ts';
+import {
+  isCurrentRetiredSurfacePolicyFixturePath,
+  parseHistoricalDispositions,
+  HISTORICAL_DISPOSITION_SOURCE,
+  type HistoricalDisposition,
+} from '../runtime-retirement/retired-surface-guard.ts';
 import { generateCurrentHeadProjection, serializeCurrentHeadProjection } from '../gate-runner/census-generator.ts';
 import { assertUntrackedStagePath, loadMeasuredTree, type MeasuredTree, type MeasuredTreeFile } from './git-tree.ts';
 import { createScriptTargetResolver } from './target-resolver.ts';
@@ -321,7 +326,9 @@ export async function producePortStageEvidence(input: {
   const unresolved: EvidenceOccurrence[] = [];
   for (const file of tree.files) {
     const trackedPowerShellPath = TRACKED_POWERSHELL_PATH.test(file.path);
-    if (historical.has(file.path) && !(input.artifactRole === 'final' && trackedPowerShellPath)) continue;
+    const currentPolicyFixture = isCurrentRetiredSurfacePolicyFixturePath(file.path);
+    if ((historical.has(file.path) || currentPolicyFixture)
+      && !(input.artifactRole === 'final' && trackedPowerShellPath)) continue;
     const classified = isClassifiedRoot(file.path);
     const resolvesWholePath = (candidate: string): boolean => resolver.resolvesWholePath(file.path, candidate);
     if (!classified) {
