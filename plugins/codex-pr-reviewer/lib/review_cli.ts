@@ -7,7 +7,7 @@ function usage(): string {
   return [
     'Usage: review [options]',
     '  --repo-root <path>       Repository root (default: cwd)',
-    '  --base <ref>             Base ref for codex exec review (default: selected target branch in target mode; origin/main otherwise)',
+    '  --base <ref>             Base ref for codex exec review (default: selected target branch; target selection is required)',
     '  --issue <n>              GitHub issue number (else linked PR body)',
     '  --pr-number <n>          PR number to resolve linked issue via gh',
     '  --pr-body-file <path>    PR body file (GitHub Actions)',
@@ -17,6 +17,13 @@ function usage(): string {
     '  --github-comment-file <path>  Write PR comment markdown for Actions path',
     '  --prompt-only            Print assembled prompt and exit 0',
   ].join('\n');
+}
+
+function resolveSelectedReviewTarget() {
+  const hasSelector = Boolean(String(process.env.OPK_PROJECT_ID ?? '').trim());
+  const unboundTestHarness = !hasSelector
+    && (process.env.OPK_VITEST_HARNESS === '1' || process.env.VITEST === 'true');
+  return unboundTestHarness ? null : resolveTargetContext({ env: process.env });
 }
 
 function parseSource(value: string | undefined): ReviewSource | undefined {
@@ -31,7 +38,7 @@ function parseSource(value: string | undefined): ReviewSource | undefined {
 
 export function parseReviewArgs(argv: string[]): ReviewOptions & { promptOnly?: boolean } {
   let repoRoot = process.cwd();
-  const selected = String(process.env.OPK_PROJECT_ID ?? '').trim() ? resolveTargetContext({ env: process.env }) : null;
+  const selected = resolveSelectedReviewTarget();
   let baseRef = selected ? `origin/${selected.defaultBranch}` : 'origin/main';
   let issueNumber: number | undefined;
   let prNumber: number | undefined;
