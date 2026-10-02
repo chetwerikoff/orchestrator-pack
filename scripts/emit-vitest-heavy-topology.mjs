@@ -106,7 +106,7 @@ function resolveChangedPathManifest(repoRoot) {
   if (!baseSha || !headSha) {
     throw new Error('pull-request topology check cannot resolve exact base/head revisions');
   }
-  const manifest = buildChangedPathManifest(repoRoot, baseSha, headSha);
+  const manifest = buildChangedPathManifest(repoRoot, baseSha, headSha, { includeDeleted: false });
   if (!manifest.diffOk) {
     throw new Error(
       `pull-request topology check cannot compute changed paths: ${manifest.failureReason ?? 'unknown failure'}`,
