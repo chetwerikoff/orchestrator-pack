@@ -270,7 +270,7 @@ describe('fleet alarm', () => {
     }
   });
 
-  it('wakes the idle owner of a PR once per head after its CI finished', async () => {
+  it('wakes the idle owner of a PR once per finished CI run on its head', async () => {
     const store = new MemoryWakeStore();
     const now = Date.parse('2026-10-02T12:00:00Z');
     const headA = 'a'.repeat(40);
@@ -303,6 +303,12 @@ describe('fleet alarm', () => {
     expect(sendsTo(second.calls, 'one')).toHaveLength(0);
     expect(sendsTo(second.calls, 'mgr')[0]).toContain(`Wake: CI on ${headB} finished for PR #8`);
 
+    const rerun = await tick({
+      screens, store, config: wakeConfig, terminals: owned, listOpenPulls,
+      checkRunsFinishedAt: (_repository, sha) => sha === headA ? now : now - 60_000,
+    });
+    expect(sendsTo(rerun.calls, 'one')[0]).toContain(`Wake: CI on ${headA} finished for PR #7`);
+    expect(sendsTo(rerun.calls, 'mgr')).toHaveLength(0);
   });
 
   it('honors ORCH_HANDLE, reports no coordinator when unresolved, and skips a failed screen read without throwing', async () => {
