@@ -753,6 +753,9 @@ export function resolveVitestPrScopeSelection(input) {
         lowConfidence = true;
         continue;
       }
+      if (graph.bareImportTargets.has(entry.path)) {
+        lowConfidence = true;
+      }
       const closure = collectImpactedTests(entry.path, graph.reverse, graph.nodes, {
         allowMissingStart: true,
       });
