@@ -2058,11 +2058,20 @@ async function createDedicatedTurnPage(
  * ChatGPT show Stop for ~10 minutes without generating, so an existing-chat
  * turn continues in a tab already open on that conversation.
  */
-async function findOpenConversationPage(browser: any, config: BrowserConfig): Promise<any | undefined> {
-  if (config.newChat || !config.chatUrl) return undefined;
+type ConversationPageLookup = {
+  readonly page?: any;
+  readonly contextUsable: boolean;
+};
+
+async function findOpenConversationPage(
+  browser: any,
+  config: BrowserConfig,
+): Promise<ConversationPageLookup> {
+  if (config.newChat || !config.chatUrl) return { contextUsable: false };
   const target = normalizeConversationUrl(config.chatUrl);
   const contexts = browser.contexts();
-  if (contexts.length !== 1 || typeof contexts[0].pages !== 'function') return undefined;
+  const contextUsable = contexts.length === 1 && typeof contexts[0]?.newPage === 'function';
+  if (contexts.length !== 1 || typeof contexts[0].pages !== 'function') return { contextUsable };
   const candidates = (contexts[0].pages() as any[]).filter((candidate) => {
     try {
       return !candidate.isClosed?.() && ownedConversationIdentityMatches(String(candidate.url()), target);
@@ -2071,19 +2080,19 @@ async function findOpenConversationPage(browser: any, config: BrowserConfig): Pr
     }
   });
   const page = candidates.at(-1);
-  if (!page) return undefined;
+  if (!page) return { contextUsable };
   try {
     if (
       await locatorCount(page.locator(RENDERED_STOP_BUTTON_SELECTOR), Date.now() + MAX_LOCAL_READ_WAIT_MS) > 0
       && await locatorCount(page.locator(CONNECTION_RECOVERY_STATUS_SELECTOR), Date.now() + MAX_LOCAL_READ_WAIT_MS) === 0
     ) {
-      return undefined;
+      return { contextUsable };
     }
     await boundedBrowserRead(Promise.resolve(page.bringToFront?.()), MAX_LOCAL_READ_WAIT_MS, 'bring_to_front_timeout');
   } catch {
-    return undefined;
+    return { contextUsable };
   }
-  return page;
+  return { page, contextUsable };
 }
 
 async function selectConversationPage(
@@ -2093,8 +2102,10 @@ async function selectConversationPage(
   operationBudget: TurnOperationBudget,
 ): Promise<{ browser: any; page: any | undefined }> {
   let activeBrowser = browser;
-  let page = await findOpenConversationPage(activeBrowser, config);
+  let lookup = await findOpenConversationPage(activeBrowser, config);
+  let page = lookup.page;
   if (page || config.newChat || !config.chatUrl) return { browser: activeBrowser, page };
+  if (lookup.contextUsable) return { browser: activeBrowser, page };
 
   const openWaitMs = operationBudget.clampOperationWaitMs();
   if (openWaitMs <= 0) throw new BrowserOperationTimeoutError('open_conversation_page');
@@ -2115,7 +2126,8 @@ async function selectConversationPage(
   activeBrowser = await chromium.connectOverCDP(config.cdp, {
     timeout: Math.min(30_000, reconnectWaitMs),
   });
-  page = await findOpenConversationPage(activeBrowser, config);
+  lookup = await findOpenConversationPage(activeBrowser, config);
+  page = lookup.page;
   return { browser: activeBrowser, page };
 }
 
