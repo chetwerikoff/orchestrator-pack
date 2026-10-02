@@ -1,3 +1,6 @@
+// @vitest-ci-lane heavy
+// @vitest-pre-topology-seconds 5
+
 import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -11,15 +14,8 @@ import {
 const roots: string[] = [];
 
 function git(root: string, args: string[]): string {
-  const result = runProcessSync({
-    command: 'git',
-    args,
-    cwd: root,
-    inheritParentEnv: true,
-  });
-  if (!result.ok) {
-    throw new Error(result.stderr || result.error || `git ${args.join(' ')} failed`);
-  }
+  const result = runProcessSync({ command: 'git', args, cwd: root, inheritParentEnv: true });
+  if (!result.ok) throw new Error(`fixture git failed: ${result.stderr || result.error || args.join(' ')}`);
   return result.stdout.trim();
 }
 
