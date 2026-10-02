@@ -469,11 +469,13 @@ async function wakePanesOnEvents(
   if (repository && observations.some(idlePane)) {
     const finishedAt = options.checkRunsFinishedAt ?? checkRunsFinishedAt;
     for (const pull of (options.listOpenPulls ?? listOpenPullHeads)(repository)) {
-      const key = `ci:${pull.number}:${pull.sha}`;
       const pane = pullOwner(pull, observations);
-      if (!pane || !idlePane(pane) || store.hasParkedWakeEvent(key)) continue;
+      if (!pane || !idlePane(pane)) continue;
       const at = finishedAt(repository, pull.sha);
       if (at === undefined) continue;
+      // A re-run of failed checks on the same head is a new event.
+      const key = `ci:${pull.number}:${pull.sha}:${at}`;
+      if (store.hasParkedWakeEvent(key)) continue;
       wakes.push({ pane, key, message: `Wake: CI on ${pull.sha} finished for PR #${pull.number}` });
     }
   }
