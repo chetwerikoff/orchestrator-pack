@@ -2096,6 +2096,11 @@ async function selectConversationPage(
   let page = await findOpenConversationPage(activeBrowser, config);
   if (page || config.newChat || !config.chatUrl) return { browser: activeBrowser, page };
 
+  const contexts = activeBrowser.contexts();
+  if (contexts.length === 1 && typeof contexts[0]?.newPage === 'function') {
+    return { browser: activeBrowser, page };
+  }
+
   const openWaitMs = operationBudget.clampOperationWaitMs();
   if (openWaitMs <= 0) throw new BrowserOperationTimeoutError('open_conversation_page');
   await createCdpPageTarget(
