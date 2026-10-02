@@ -573,6 +573,8 @@ export interface PostSmokeReadinessResult {
 }
 export interface PostSmokeReadinessDependencies {
   readonly resolveRequiredCi?: typeof resolveRequiredCiForCurrentHead;
+  /** Legacy/test fixture seam only; production leaves this unset. */
+  readonly resolveCiGreen?: (prNumber: number, headSha: string, repositorySlug: string, repoRoot: string) => boolean;
   readonly currentPackReviewStatusFact?: typeof currentPackReviewStatusFact;
   readonly isAncestor?: typeof githubCommitIsAncestor;
   readonly fetchSmokeComments?: typeof fetchPrComments;
@@ -651,13 +653,14 @@ export async function evaluatePostSmokeReadiness(
     smokeObservationAvailable = false;
   }
 
-  const requiredCi = await (dependencies.resolveRequiredCi ?? resolveRequiredCiForCurrentHead)(
-    target.prNumber,
-    target.headSha,
-    target.repositorySlug,
-    options.repoRoot,
-  );
-  const ciGreen = requiredCi.green;
+  const ciGreen = dependencies.resolveCiGreen
+    ? dependencies.resolveCiGreen(target.prNumber, target.headSha, target.repositorySlug, options.repoRoot)
+    : (await (dependencies.resolveRequiredCi ?? resolveRequiredCiForCurrentHead)(
+        target.prNumber,
+        target.headSha,
+        target.repositorySlug,
+        options.repoRoot,
+      )).green;
   const acceptedReport = selectAcceptedCurrentWorkerReport(workerReports, readinessTarget);
   const lifecycle = String(acceptedReport?.reportState ?? '').trim().toLowerCase();
   const transport = createGithubReviewTransport({ repoRoot: options.repoRoot, repoSlug: target.repositorySlug, prNumber: target.prNumber });
