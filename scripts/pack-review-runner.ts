@@ -4079,10 +4079,19 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       `pack review PR base ${target.prBaseRef} does not match selected target default branch ${selectedTarget.defaultBranch}`,
     );
   }
+  const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: input.storeRoot });
   const productionRequiredCiStart = directCliStarts.has(input)
     || trim(input.surface) === 'pack-gpt-review'
     || trim(input.surface) === 'pr2-scheduler';
-  if (productionRequiredCiStart) {
+  const existingAuthorityBeforeCi = productionRequiredCiStart
+    ? readPackReviewAuthority(target.prNumber, { storeRoot })
+    : null;
+  const existingStateCannotStartReviewer = Boolean(
+    existingAuthorityBeforeCi?.cycle?.reviewStageComplete === true
+    || existingAuthorityBeforeCi?.cycle?.state === 'at_cap_open_findings'
+    || existingAuthorityBeforeCi?.cycle?.state === 'at_cap_continuation_required',
+  );
+  if (productionRequiredCiStart && !existingStateCannotStartReviewer) {
     const requiredCiGreen = await manualPackReviewRequiredCiGreen({
       startInput: input,
       targetContext: selectedTarget,
@@ -4105,7 +4114,6 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       };
     }
   }
-  const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: input.storeRoot });
   const resolveSlug = input.fixtureResolveRepositorySlug
     ?? (process.env.OPK_VITEST_HARNESS === '1'
       ? async () => target.repoSlug
