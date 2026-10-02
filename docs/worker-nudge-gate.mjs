@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { bootstrapLegacyNudgedCycle, buildOwnerCycleKey, getOwnerCycleRecord } from './worker-iteration-cycle.mjs';
+import { bootstrapLegacyNudgedCycle, buildOwnerCycleKey, getOwnerCycleRecord } from '../scripts/pr2-foundation/terminalized/worker-iteration-cycle.ts';
 import {
   evaluateAutonomousGatePreflight,
   loadAutonomousCapabilitiesInventory,
@@ -15,9 +15,9 @@ import {
 } from './autonomous-gate-preflight.mjs';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 import { evaluateCiFailureSuppressorDecision } from './ci-failure-notification.mjs';
-import { resolveHeadOwningWorkerSessionId, sessionMatchesPr } from './review-trigger-reconcile.mjs';
+import { resolveHeadOwningWorkerSessionId, sessionMatchesPr } from '../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts';
 import { resolvePrOwningWorkerSessionBinding } from './session-pr-binding-resolver.mjs';
-import { isSessionAlive } from './worker-message-dispatch-observe.mjs';
+import { isSessionAlive } from '../scripts/pr2-foundation/terminalized/worker-message-dispatch-observe.ts';
 export { validateCapabilityInventory };
 
 export const WORKER_NUDGE_GATE_VERSION = 'worker-nudge-gate/v1';
