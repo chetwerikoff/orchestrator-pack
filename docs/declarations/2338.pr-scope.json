@@ -3,7 +3,8 @@
   "issue_number": 2338,
   "declared_paths": [
     "scripts/lib/pack-gpt-source-comment.ts",
-    "scripts/lib/pack-gpt-source-comment.cases.ts"
+    "scripts/lib/pack-gpt-source-comment.cases.ts",
+    "docs/declarations/2338.pr-scope.json"
   ],
   "denylist": [
     "credentials/",
@@ -13,7 +14,8 @@
   ],
   "allowed_roots": [
     "scripts/lib/pack-gpt-source-comment.ts",
-    "scripts/lib/pack-gpt-source-comment.cases.ts"
+    "scripts/lib/pack-gpt-source-comment.cases.ts",
+    "docs/declarations/2338.pr-scope.json"
   ],
   "source_revision": "b3c2d924259f1f56b4fe03e82ac6950fd76049d7"
 }
