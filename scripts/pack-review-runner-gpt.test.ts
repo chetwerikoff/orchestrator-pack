@@ -947,6 +947,46 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
     expect(result.stdout).not.toContain('> npm run check:node-major');
   });
 
+  it('keeps canonical --project selection through the runner when ambient OPK_PROJECT_ID is absent', () => {
+    const fixtureRoot = tempRoot('opk-issue-2346-explicit-project-');
+    const commandRoot = tempRoot('opk-issue-2346-explicit-project-gh-');
+    writeClosedPrGhFixture(commandRoot);
+    const configHome = path.join(fixtureRoot, 'config');
+    const projects = path.join(configHome, 'orchestrator-pack', 'projects');
+    mkdirSync(projects, { recursive: true });
+    writeFileSync(path.join(projects, 'orchestrator-pack.json'), JSON.stringify({
+      projectId: 'orchestrator-pack',
+      repository: 'chetwerikoff/orchestrator-pack',
+      primaryRoot: repoRoot,
+      defaultBranch: 'main',
+      orcaWorkspacePattern: 'orca/workspaces/orchestrator-pack/',
+      orchestratorTitlePattern: 'orchestrator-pack',
+      browserGpt: { projectUrl: 'https://chatgpt.com/g/orchestrator-pack/project' },
+    }), 'utf8');
+    const childEnv = {
+      ...process.env,
+      XDG_CONFIG_HOME: configHome,
+      PATH: `${commandRoot}${path.delimiter}${process.env.PATH ?? ''}`,
+      npm_config_update_notifier: 'false',
+    };
+    delete childEnv.OPK_PROJECT_ID;
+    delete childEnv.OPK_VITEST_HARNESS;
+
+    const result = runProcessSync({
+      command: process.platform === 'win32' ? 'npm.cmd' : 'npm',
+      args: ['run', '--silent', 'pack-gpt-review', '--', '--project', 'orchestrator-pack', '--pr-number', '1111'],
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: childEnv,
+    });
+
+    expect(result.exitCode).toBe(1);
+    const payload = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+    expect(payload).toMatchObject({ ok: false, outcome: 'review_target_unavailable', prNumber: 1111 });
+    expect(String(payload.reason)).not.toContain('missing-selection');
+    expect(String(payload.reason)).toContain('not open');
+  });
+
   it('resolves a PR-only target, binds GPT above persistent layers, and emits one start indication', async () => {
     const storeRoot = tempRoot('opk-issue-1111-fresh-');
     const capture = path.join(storeRoot, 'github-review.json');
@@ -1167,6 +1207,21 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
       }),
     });
     expect(drifted.result).toMatchObject({
+      reason: 'review_not_started',
+      runnerReason: 'required_ci_not_green_for_current_head',
+    });
+
+    const retargeted = await runPackGptReviewCommand({ prNumber: 1111 }, {
+      env: process.env,
+      stderr: { write: () => undefined },
+      startReview: canonicalCommandRunner(storeRoot, {
+        fixtureRequiredCiPostProjectionHead: HEAD_A,
+        fixtureRequiredCiPostProjectionBase: 'main',
+        fixtureRequiredCiHeadAfterGate: HEAD_A,
+        fixtureRequiredCiBaseAfterGate: 'release',
+      }),
+    });
+    expect(retargeted.result).toMatchObject({
       reason: 'review_not_started',
       runnerReason: 'required_ci_not_green_for_current_head',
     });
