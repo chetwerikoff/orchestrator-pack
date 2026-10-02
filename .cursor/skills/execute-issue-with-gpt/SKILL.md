@@ -99,7 +99,7 @@ candidate-complete current PR/head with required CI green, the manager enters th
 shared review phase; it does not report overall `VERIFIED_COMPLETE`.
 
 The shared review phase invokes only the canonical
-`npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>` runner. Required
+`npm run --silent pack-gpt-review -- --project <PROJECT_ID> --pr-number <PR_NUMBER>` runner. Required
 reviewer sources are fresh project chats owned by that runner. A findings-bearing
 logical round gets one fresh GPT fixer conversation distinct from the
 implementation conversation and every reviewer conversation; after a

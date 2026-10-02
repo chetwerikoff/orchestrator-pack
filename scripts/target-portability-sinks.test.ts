@@ -146,7 +146,7 @@ describe('Issue #2188 target portability sinks', () => {
 
 
   it('authorizes selected target reads and supported mutations before gh transport', () => {
-    const alpha = { repository: 'example/alpha' };
+    const alpha = { repository: 'example/alpha', defaultBranch: 'trunk' };
     for (const input of [
       {
         argv: ['pr', 'view', '12'],
@@ -181,17 +181,17 @@ describe('Issue #2188 target portability sinks', () => {
         context: alpha,
         argv: input.argv,
         env: input.env,
-      })).toEqual({ repository: 'example/alpha', host: 'github.com' });
+      })).toEqual({ repository: 'example/alpha', defaultBranch: 'trunk', host: 'github.com' });
     }
     expect(authorizeTargetGhInvocation({
-      context: { repository: 'chetwerikoff/orchestrator-pack' },
+      context: { repository: 'chetwerikoff/orchestrator-pack', defaultBranch: 'main' },
       argv: ['pr', 'view', '12', '--repo', 'chetwerikoff/orchestrator-pack'],
       env: { OPK_PROJECT_ID: 'pack' },
-    })).toEqual({ repository: 'chetwerikoff/orchestrator-pack', host: 'github.com' });
+    })).toEqual({ repository: 'chetwerikoff/orchestrator-pack', defaultBranch: 'main', host: 'github.com' });
   });
 
   it('rejects every audited cross-target repo/host ingress before gh transport', () => {
-    const alpha = { repository: 'example/alpha' };
+    const alpha = { repository: 'example/alpha', defaultBranch: 'trunk' };
     const rejectCode = (run: () => unknown, code: string) => {
       try {
         run();
@@ -252,7 +252,7 @@ describe('Issue #2188 target portability sinks', () => {
     }), 'target-gh-graphql-unsupported');
 
     rejectCode(() => authorizeTargetGhInvocation({
-      context: { repository: 'example/bad slug' },
+      context: { repository: 'example/bad slug', defaultBranch: 'main' },
       argv: ['pr', 'view', '12'],
       env: { OPK_PROJECT_ID: 'alpha' },
     }), 'target-gh-repository-invalid');
@@ -328,7 +328,7 @@ describe('Issue #2188 target portability sinks', () => {
     const fakeGh = join(bin, 'gh-native');
     const fakeNode = join(bin, 'node');
     writeFileSync(fakeGh, `#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' "$*" >>"\${OPK_GH_AUDIT}"\nprintf '%s\\n' '{"number":12,"head":{"ref":"topic"},"base":{"ref":"trunk"},"draft":false}'\n`, 'utf8');
-    writeFileSync(fakeNode, `#!/usr/bin/env bash\nset -euo pipefail\njoined="$*"\ncase "$joined" in\n  *gh-target-authorization.ts*) printf '%s\\n' "\${OPK_EXPECTED_TARGET_REPO}" ;;\n  *gh-resolve-real-binary.mjs*) printf '%s\\n' "\${OPK_FAKE_GH}" ;;\n  *) exec "\${OPK_REAL_NODE}" "$@" ;;\nesac\n`, 'utf8');
+    writeFileSync(fakeNode, `#!/usr/bin/env bash\nset -euo pipefail\njoined="$*"\ncase "$joined" in\n  *gh-target-authorization.ts*) printf '%s\\t%s\\n' "\${OPK_EXPECTED_TARGET_REPO}" "trunk" ;;\n  *gh-resolve-real-binary.mjs*) printf '%s\\n' "\${OPK_FAKE_GH}" ;;\n  *) exec "\${OPK_REAL_NODE}" "$@" ;;\nesac\n`, 'utf8');
     chmodSync(fakeGh, 0o755);
     chmodSync(fakeNode, 0o755);
     const result = runProcessSync({

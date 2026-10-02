@@ -6,19 +6,13 @@ This document describes the current pack-owned review path. It is supporting doc
 
 Local Codex PR review is driven by the pack review runner. GitHub PR review is the authoritative verdict; the pack run store is operational state. Review start/list/status do not fall back to a concrete worker-runtime transport or a retired daemon API.
 
-Automatic and common starts use:
+The canonical prescriptive review entrypoint is:
 
 ```bash
-node --experimental-strip-types scripts/pack-review-runner.ts start \
-  --pr-number <PR_NUMBER> \
-  --head-sha <HEAD_SHA>
+npm run --silent pack-gpt-review -- --project <PROJECT_ID> --pr-number <PR_NUMBER>
 ```
 
-Use the runner's `list`/status surfaces for run observation. Manual Browser-GPT review uses:
-
-```bash
-npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>
-```
+The pack runner's internal start surface, including scheduler starts, remains an implementation detail. Use its `list`/status surfaces for run observation rather than prescribing the internal start command.
 
 The review-start claim authority and run store prevent duplicate starts for one PR/head. A terminal result from another head is stale evidence; a clean terminal result for the exact current head is not re-invoked.
 

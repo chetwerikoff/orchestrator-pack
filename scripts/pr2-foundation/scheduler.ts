@@ -4,7 +4,13 @@ import path from 'node:path';
 import type { FoundationConfig } from './config.ts';
 import { parseFoundationConfig } from './config.ts';
 import { FileEpochAuthority } from '../lib/cutover/activation-epoch-authority.ts';
-import { resolveTargetContext } from '../lib/target-context.ts';
+import { resolveTargetContext, type TargetContext } from '../lib/target-context.ts';
+import {
+  requiredStatusChecksEndpoint,
+  resolveRequiredCi,
+  type RequiredCiProtectionRead,
+  type RequiredCiResult,
+} from '../lib/required-ci.ts';
 import { assertProjectStateBinding } from '../lib/project-state-binding.ts';
 import { resolveWakeSupervisorStateRoot } from './wake-supervisor-state-root.ts';
 import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
@@ -73,7 +79,14 @@ export interface DormantSchedulerState {
 
 export interface DormantActuatorResult { ok: true; executed: false; reason: 'foundation_inert' }
 export interface ActivatedSchedulerCandidate { sessionId: string; repoSlug: string; prNumber: number; boundHeadSha: string }
-export interface SchedulerCurrentPr { number: number; headRefOid: string; state: string; isDraft: boolean; body?: string }
+export interface SchedulerCurrentPr {
+  number: number;
+  headRefOid: string;
+  state: string;
+  isDraft: boolean;
+  body?: string;
+  baseRefName?: string;
+}
 
 type SchedulerFleetObserver = Pick<FleetObserver, 'tick'> & Partial<Pick<FleetObserver, 'getEffectiveBudgetMs' | 'cancel' | 'schedulerGeneration' | 'snapshotPath'>>;
 type SchedulerFleetNudgeActuator = { tick(input: FleetNudgeTickInput): Promise<FleetNudgeResult> };
@@ -98,7 +111,12 @@ type SchedulerObserverFailure = 'observer_timeout' | 'observer_threw';
 export interface SchedulerBoundary {
   listCandidates(): ActivatedSchedulerCandidate[];
   readCurrentPr(candidate: ActivatedSchedulerCandidate): Promise<SchedulerCurrentPr>;
-  readChecks(candidate: ActivatedSchedulerCandidate): Promise<Array<{ name?: string; state?: string; conclusion?: string; status?: string }>>;
+  readChecks(candidate: ActivatedSchedulerCandidate): Promise<Array<{ name?: string; workflow?: string; state?: string; conclusion?: string; status?: string }>>;
+  resolveRequiredCi?: (
+    candidate: ActivatedSchedulerCandidate,
+    fresh: SchedulerCurrentPr,
+    expectedHeadSha: string,
+  ) => Promise<RequiredCiResult>;
   listReviewRuns(): ReturnType<typeof listPackReviewRuns>;
   start(candidate: ActivatedSchedulerCandidate, freshHeadSha: string): Promise<{ ok: boolean; reason?: string }>;
   orchestrationMailReconcile?: () => Promise<import('../cursor-unsent-composer-submit.ts').OrchestrationMailReconcileResult>;
@@ -253,9 +271,15 @@ function liveCandidates(env: NodeJS.ProcessEnv = process.env, repository?: strin
   return candidates;
 }
 
-async function ghJson(repoRoot: string, args: string[]): Promise<unknown> {
+async function ghJson(
+  repoRoot: string,
+  args: string[],
+  acceptedExitCodes: readonly number[] = [0],
+): Promise<unknown> {
   const result = await runProcess({ command: `${repoRoot}/scripts/gh`, args, cwd: repoRoot, inheritParentEnv: true, allowEmptyStdout: false, timeoutMs: 30_000 });
-  if (!result.ok) throw new Error(`scheduler_gh_failed:${args.join('_')}:${schedulerProcessFailureDiagnostic(result)}`);
+  const accepted = result.ok
+    || (result.outcome === 'exit' && acceptedExitCodes.includes(result.exitCode ?? -1));
+  if (!accepted) throw new Error(`scheduler_gh_failed:${args.join('_')}:${schedulerProcessFailureDiagnostic(result)}`);
   return JSON.parse(result.stdout);
 }
 
@@ -269,12 +293,60 @@ export function productionSchedulerBoundary(input: {
   orchestrationMailReconcile?: SchedulerBoundary['orchestrationMailReconcile'];
   dispatchTerminalMailPulse?: SchedulerBoundary['dispatchTerminalMailPulse'];
   publishHandoff?: SchedulerBoundary['publishHandoff'];
+  targetContext?: Pick<TargetContext, 'projectId' | 'repository' | 'defaultBranch' | 'requiredCi'>;
 }): SchedulerBoundary {
   const env = input.env ?? process.env; const projectId = input.projectId ?? 'orchestrator-pack';
+  const readCurrentPr: SchedulerBoundary['readCurrentPr'] = async (candidate) =>
+    ghJson(input.repoRoot, [
+      'pr', 'view', String(candidate.prNumber), '--repo', candidate.repoSlug,
+      '--json', 'number,headRefOid,state,isDraft,body,baseRefName',
+    ]) as Promise<SchedulerCurrentPr>;
+  const readChecks: SchedulerBoundary['readChecks'] = async (candidate) =>
+    ghJson(input.repoRoot, [
+      'pr', 'checks', String(candidate.prNumber), '--repo', candidate.repoSlug,
+      '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description',
+    ], [0, 1, 8]) as Promise<Array<{ name?: string; workflow?: string; state?: string; conclusion?: string; status?: string }>>;
+  const resolveSchedulerRequiredCi: SchedulerBoundary['resolveRequiredCi'] | undefined = input.targetContext
+    ? async (candidate, fresh, expectedHeadSha) => resolveRequiredCi({
+        target: input.targetContext!,
+        prNumber: candidate.prNumber,
+        expectedHeadSha,
+        prBaseRef: String(fresh.baseRefName ?? '').trim(),
+        readProtection: async (): Promise<RequiredCiProtectionRead> => {
+          const result = await runProcess({
+            command: `${input.repoRoot}/scripts/gh`,
+            args: ['api', requiredStatusChecksEndpoint(candidate.repoSlug, String(fresh.baseRefName ?? '').trim())],
+            cwd: input.repoRoot,
+            inheritParentEnv: true,
+            allowEmptyStdout: false,
+            timeoutMs: 30_000,
+          });
+          if (!result.ok) {
+            const match = `${result.stderr}\n${result.stdout}`.match(/\bHTTP\s+(403|404)\b/iu);
+            if (match) return { kind: 'unavailable', httpStatus: Number(match[1]) as 403 | 404 };
+            throw new Error('scheduler_required_ci_protection_lookup_failed');
+          }
+          const parsed = JSON.parse(result.stdout) as unknown;
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new Error('scheduler_required_ci_protection_lookup_invalid');
+          }
+          return { kind: 'ok', policy: parsed as Record<string, unknown> };
+        },
+        readChecks: () => readChecks(candidate),
+        readCurrentPr: async () => {
+          const current = await readCurrentPr(candidate);
+          return {
+            headSha: String(current.headRefOid ?? ''),
+            baseRef: String(current.baseRefName ?? ''),
+          };
+        },
+      })
+    : undefined;
   return {
     listCandidates: () => liveCandidates(env, input.repository),
-    readCurrentPr: async (candidate) => ghJson(input.repoRoot, ['pr', 'view', String(candidate.prNumber), '--repo', candidate.repoSlug, '--json', 'number,headRefOid,state,isDraft,body']) as Promise<SchedulerCurrentPr>,
-    readChecks: async (candidate) => ghJson(input.repoRoot, ['pr', 'checks', String(candidate.prNumber), '--repo', candidate.repoSlug, '--json', 'name,state,conclusion,status']) as Promise<Array<{ name?: string; state?: string; conclusion?: string; status?: string }>>,
+    readCurrentPr,
+    readChecks,
+    ...(resolveSchedulerRequiredCi ? { resolveRequiredCi: resolveSchedulerRequiredCi } : {}),
     listReviewRuns: () => listPackReviewRuns({ projectId }).filter((run) =>
       !input.repository || run.canonicalRepository === input.repository),
     fleetNudgeActuator: input.fleetNudgeActuator ?? createTargetUnresolvedFleetNudgeActuator(),
@@ -508,8 +580,27 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
       attempted += 1; assertSchedulerEpoch(env); const fresh = await boundary.readCurrentPr(candidate); const freshHead = String(fresh.headRefOid ?? '').trim().toLowerCase();
       if (fresh.state !== 'OPEN' && String(fresh.state).toLowerCase() !== 'open') { skipped += 1; continue; }
       if (fresh.isDraft === true || freshHead !== candidate.boundHeadSha.toLowerCase()) { skipped += 1; continue; }
-      const checks = await boundary.readChecks(candidate); const runs = boundary.listReviewRuns();
-      const decision = evaluateHeadReadyForReview({ prNumber: candidate.prNumber, headSha: freshHead, session: { id: candidate.sessionId, role: 'worker', status: 'ready_for_review', ownedHeadSha: freshHead, reports: [{ reportState: 'ready_for_review', headRefOid: freshHead, accepted: true }] }, ciChecks: checks, reviewRuns: runs });
+      let checks: Awaited<ReturnType<SchedulerBoundary['readChecks']>> = [];
+      let requiredCi: RequiredCiResult | undefined;
+      if (boundary.resolveRequiredCi) {
+        try {
+          requiredCi = await boundary.resolveRequiredCi(candidate, fresh, freshHead);
+        } catch {
+          skipped += 1;
+          continue;
+        }
+      } else {
+        checks = await boundary.readChecks(candidate);
+      }
+      const runs = boundary.listReviewRuns();
+      const decision = evaluateHeadReadyForReview({
+        prNumber: candidate.prNumber,
+        headSha: freshHead,
+        session: { id: candidate.sessionId, role: 'worker', status: 'ready_for_review', ownedHeadSha: freshHead, reports: [{ reportState: 'ready_for_review', headRefOid: freshHead, accepted: true }] },
+        ciChecks: checks,
+        ...(requiredCi ? { requiredCi } : {}),
+        reviewRuns: runs,
+      });
       if (!decision.eligible) { skipped += 1; continue; }
       assertSchedulerEpoch(env); const result = await boundary.start(candidate, freshHead); if (result.ok) started += 1; else skipped += 1;
     }
@@ -765,6 +856,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       fleetBindings,
       orchestrationMailReconcile,
       publishHandoff,
+      targetContext: target,
     }),
     cadence,
   };

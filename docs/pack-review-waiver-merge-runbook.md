@@ -360,8 +360,7 @@ Do not hand-edit review-run JSON on disk.
 
 1. **Fix and re-review** — push a fix, wait for CI, then:
    ```bash
-   node --experimental-strip-types scripts/pack-review-runner.ts start \
-     --pr-number "$P" --head-sha "$HEAD_SHA"
+   npm run --silent pack-gpt-review -- --project "$PROJECT_ID" --pr-number "$P"
    ```
 2. **Delegate to worker** — `merge-with-local-adoption` Step 3b when a worker session
    exists.

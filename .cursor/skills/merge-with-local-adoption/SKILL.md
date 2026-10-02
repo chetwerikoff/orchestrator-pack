@@ -63,9 +63,11 @@ primary-checkout adoption mutation, or task-owned recovery mutation:
    head, and base rather than preserving a lock/store decision.
 5. Consume the existing production `evaluatePostSmokeReadiness()` result from
    `scripts/worker-smoke-run.ts` for the exact repo/Issue/current-assignment/PR/head, using the newest PASS report comment on the same PR at any report head. Proceed
-   only when `readiness.state === READY_TO_MERGE`. Do not reconstruct readiness from commit
-   status, review-cap state, `reviewStageComplete`, strict-descendant settlement, comments,
-   or prose.
+   only when `readiness.state === READY_TO_MERGE`. That production result already
+   consumes the shared required-CI selector/source/base/head witness; this skill must not
+   reconstruct required CI independently from checks, protection, commit status, or prose.
+   Do not reconstruct readiness from review-cap state, `reviewStageComplete`,
+   strict-descendant settlement, comments, or prose.
 6. Independently require the PR to remain OPEN, non-draft, non-conflicting/mergeable, on the
    marker's exact head and expected base.
 

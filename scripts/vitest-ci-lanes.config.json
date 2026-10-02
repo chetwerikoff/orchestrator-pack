@@ -82,6 +82,7 @@
     "scripts/lib/execute-issue-manager-boundary.test.ts": "light",
     "scripts/lib/operator-primary-target.test.ts": "light",
     "scripts/lib/operator-publication.test.ts": "light",
+    "scripts/lib/required-ci.test.ts": "light",
     "scripts/lib/target-context.test.ts": "light",
     "scripts/lib/worker-assignment-runtime.test.ts": "light",
     "scripts/lib/worker-assignment-store.test.ts": "light",

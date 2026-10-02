@@ -72,6 +72,20 @@ async function verifyCli(target: ReturnType<typeof fixture>, args: string[]) {
   });
 }
 
+async function checkCli(target: ReturnType<typeof fixture>) {
+  return runProcess({
+    command: process.execPath,
+    args: [
+      '--experimental-strip-types',
+      join(import.meta.dirname, 'target-context.ts'),
+      'check', '--project', target.card.projectId,
+    ],
+    cwd: target.root,
+    env: target.env,
+    encoding: 'utf8',
+  });
+}
+
 function codeOf(run: () => unknown): string {
   try {
     run();
@@ -99,6 +113,38 @@ describe('target context', () => {
     });
     expect(Object.isFrozen(context)).toBe(true);
     expect(Object.isFrozen(context.browserGpt)).toBe(true);
+  });
+
+  it('normalizes requiredCi workflow/job selectors, rejects ambiguous grammar and normalized duplicates, and exposes check read-back', async () => {
+    const valid = fixture();
+    writeFileSync(valid.cardPath, JSON.stringify({
+      ...valid.card,
+      requiredCi: ['  CI  /  checks  ', 'Release / verify'],
+    }), 'utf8');
+    const context = resolveTargetContext({ projectId: 'orchestrator-pack', env: valid.env });
+    expect(context.requiredCi).toEqual(['CI / checks', 'Release / verify']);
+    expect(Object.isFrozen(context.requiredCi)).toBe(true);
+    const cli = await checkCli(valid);
+    expect(cli.ok).toBe(true);
+    expect(JSON.parse(cli.stdout)).toMatchObject({
+      requiredCi: ['CI / checks', 'Release / verify'],
+    });
+
+    const invalid = fixture();
+    for (const requiredCi of [
+      [],
+      ['CI/checks'],
+      ['CI / '],
+      ['CI / checks / extra'],
+      ['CI / checks', ' ci / CHECKS '],
+      ['CI / checks', 7],
+    ]) {
+      writeFileSync(invalid.cardPath, JSON.stringify({ ...invalid.card, requiredCi }), 'utf8');
+      expect(codeOf(() => resolveTargetContext({
+        projectId: 'orchestrator-pack',
+        env: invalid.env,
+      }))).toBe('card-invalid');
+    }
   });
 
   it('fails closed for missing card, id/file mismatch, origin mismatch, and missing selection', () => {

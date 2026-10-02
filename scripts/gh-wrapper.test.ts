@@ -109,6 +109,46 @@ describe('gh inventory matcher', () => {
     expect(route).toBeNull();
   });
 
+  it('routes required-status protection only for the explicitly supplied target repository/default-branch pair', () => {
+    const target = { targetAuthorization: { repository: 'example/alpha', defaultBranch: 'trunk' } };
+    const exact = ['api', 'repos/example/alpha/branches/trunk/protection/required_status_checks'];
+    expect(classifyArgv(exact).route).toBeNull();
+    expect(classifyArgv(exact, target).route).toMatchObject({
+      id: 'target-required-status-checks',
+      repoSlug: 'example/alpha',
+      branch: 'trunk',
+    });
+    expect(classifyArgv([
+      'api', 'repos/example/alpha/branches/main/protection/required_status_checks',
+    ], target).route).toBeNull();
+    expect(classifyArgv([
+      'api', 'repos/example/beta/branches/trunk/protection/required_status_checks',
+    ], target).route).toBeNull();
+
+    const beta = { targetAuthorization: { repository: 'example/beta', defaultBranch: 'stable' } };
+    expect(classifyArgv([
+      'api', 'repos/example/beta/branches/stable/protection/required_status_checks',
+    ], beta).route).toMatchObject({
+      id: 'target-required-status-checks',
+      repoSlug: 'example/beta',
+      branch: 'stable',
+    });
+    expect(classifyArgv([
+      'api', 'repos/example/beta/branches/trunk/protection/required_status_checks',
+    ], beta).route).toBeNull();
+    expect(classifyArgv([
+      'api', 'repos/example/alpha/branches/stable/protection/required_status_checks',
+    ], beta).route).toBeNull();
+
+    expect(classifyArgv([
+      'api', 'repos/chetwerikoff/orchestrator-pack/branches/main/protection/required_status_checks',
+    ]).route?.id).toBe('runtime-history-main-required-status-checks');
+    expect(classifyArgv([
+      'api', 'repos/example/alpha/branches/trunk/protection/required_status_checks',
+    ]).route).toBeNull();
+  });
+
+
   it('routes pr diff name-only', () => {
     const { route } = classifyArgv(['pr', 'diff', '9', '--name-only']);
     expect(route?.id).toBe('pr-diff-name-only');

@@ -22,6 +22,13 @@ export function routePrChecks(
   includeAppId?: boolean,
 ): unknown[];
 
+export function routeTargetRequiredStatusChecks(
+  realGh: string,
+  repo: { slug: string; host: string },
+  branch: string,
+  cwd: string,
+): unknown;
+
 export function executeRestRoute(
   routeId: string,
   ctx: {
