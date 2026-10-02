@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --experimental-strip-types
 import '../toolchain/native-entrypoint-preflight.ts';
 import { runProcessSync } from '../kernel/subprocess.ts';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTargetContext } from '../lib/target-context.ts';
@@ -53,6 +53,8 @@ export interface FleetWakeStateStore extends FleetPollingStore {
   writeBannerSignature?(signature: string): void;
   readStalledSeen?(): string | null;
   writeStalledSeen?(urls: string): void;
+  hasParkedWakeEvent(key: string): boolean;
+  writeParkedWakeEvent(key: string): void;
 }
 
 export class FileFleetWakeStateStore extends FileFleetStateStore implements FleetWakeStateStore {
@@ -110,6 +112,31 @@ export class FileFleetWakeStateStore extends FileFleetStateStore implements Flee
     mkdirSync(this.root, { recursive: true });
     writeFileSync(this.stalledSeenPath(), `${urls}\n`, 'utf8');
   }
+
+  private parkedWakeEventsPath(): string {
+    return join(this.root, 'parked-wake.events');
+  }
+
+  private readParkedWakeEvents(): Set<string> {
+    try {
+      const body = existsSync(this.parkedWakeEventsPath()) ? readFileSync(this.parkedWakeEventsPath(), 'utf8') : '';
+      return new Set(body.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean));
+    } catch {
+      return new Set();
+    }
+  }
+
+  hasParkedWakeEvent(key: string): boolean {
+    return this.readParkedWakeEvents().has(key);
+  }
+
+  writeParkedWakeEvent(key: string): void {
+    const events = this.readParkedWakeEvents();
+    if (events.has(key)) return;
+    events.add(key);
+    mkdirSync(this.root, { recursive: true });
+    writeFileSync(this.parkedWakeEventsPath(), `${[...events].sort().join('\n')}\n`, 'utf8');
+  }
 }
 
 export interface FleetAlarmTickOptions {
@@ -120,6 +147,8 @@ export interface FleetAlarmTickOptions {
   readonly log?: (line: string) => void;
   readonly readChats?: (cdpUrl: string, scope: ChatBannerScope) => Promise<ProjectChat[]>;
   readonly closeChat?: (cdpUrl: string, targetId: string) => Promise<boolean>;
+  readonly findTerminalEnvelope?: (invocationId: string) => string | undefined;
+  readonly checkRunsCompleted?: (repository: string, sha: string) => boolean;
 }
 
 export type FleetAlarmTickResult =
@@ -309,6 +338,103 @@ export function fleetAlarmMessage(
   return `Fleet alarm (${coordinatorState}):${paneText}${bannerText}${unloadableText}`;
 }
 
+export function findTerminalEnvelopeForInvocation(
+  invocationId: string,
+  root = '/tmp/opencode',
+): string | undefined {
+  const pending = [root];
+  const matches: string[] = [];
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    let entries;
+    try {
+      entries = readdirSync(directory, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(path);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith('terminal.json')) continue;
+      try {
+        const envelope = JSON.parse(readFileSync(path, 'utf8')) as { observed_invocation_id?: unknown };
+        if (envelope.observed_invocation_id === invocationId) matches.push(path);
+      } catch {
+        // A partial or unrelated terminal artifact is not completion evidence.
+      }
+    }
+  }
+  return matches.sort((left, right) => left.localeCompare(right))[0];
+}
+
+export function allCheckRunsCompleted(repository: string, sha: string): boolean {
+  const result = runProcessSync({
+    command: fileURLToPath(new URL('../gh', import.meta.url)),
+    args: ['api', `repos/${repository}/commits/${sha}/check-runs`, '--paginate', '--jq', '.check_runs[].status'],
+    timeoutMs: 15_000,
+    inheritParentEnv: true,
+  });
+  if (!result.ok) return false;
+  const statuses = result.stdout.split(/\r?\n/u).map((status) => status.trim()).filter(Boolean);
+  return statuses.length > 0 && statuses.every((status) => status === 'completed');
+}
+
+type ParkedWakeEvent =
+  | { readonly kind: 'gpt'; readonly key: string; readonly invocationId: string }
+  | { readonly kind: 'ci'; readonly key: string; readonly sha: string };
+
+function parkedWakeEvent(pane: FleetPaneObservation): ParkedWakeEvent | undefined {
+  if (pane.state !== 'PARKED') return undefined;
+  const line = pane.lines.at(-1)?.trim();
+  if (!line) return undefined;
+  const gpt = /^PARKED on GPT turn (\S+)$/u.exec(line);
+  if (gpt?.[1]) {
+    return { kind: 'gpt', key: `gpt:${gpt[1]}`, invocationId: gpt[1] };
+  }
+  const ci = /^PARKED on CI on ([0-9a-f]{7,40})$/iu.exec(line);
+  if (ci?.[1]) {
+    return { kind: 'ci', key: `ci:${ci[1].toLowerCase()}`, sha: ci[1] };
+  }
+  return undefined;
+}
+
+function wakeParkedPanes(
+  options: FleetAlarmTickOptions,
+  observations: readonly FleetPaneObservation[],
+  executor: OrcaExecutor,
+  store: FleetWakeStateStore,
+  log: (line: string) => void,
+): void {
+  const findTerminalEnvelope = options.findTerminalEnvelope ?? findTerminalEnvelopeForInvocation;
+  const checkRunsCompleted = options.checkRunsCompleted ?? allCheckRunsCompleted;
+  for (const pane of observations) {
+    const event = parkedWakeEvent(pane);
+    if (!event || store.hasParkedWakeEvent(event.key)) continue;
+
+    let message: string | undefined;
+    if (event.kind === 'gpt') {
+      const path = findTerminalEnvelope(event.invocationId);
+      if (path) message = `Wake: GPT turn ${event.invocationId} ended, read ${path}`;
+    } else {
+      const repository = options.config.chatScope?.repository;
+      if (repository && checkRunsCompleted(repository, event.sha)) {
+        message = `Wake: CI on ${event.sha} finished`;
+      }
+    }
+    if (!message) continue;
+
+    if (!sendCoordinator(executor, pane.handle, message)) {
+      log(`${pane.handle} parked wake send failed: ${event.key}`);
+      continue;
+    }
+    store.writeParkedWakeEvent(event.key);
+    log(`sent parked wake to ${pane.handle}: ${event.key}`);
+  }
+}
+
 function defaultSleep(milliseconds: number): Promise<void> {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
 }
@@ -366,6 +492,8 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     log('fleet sweep unreadable');
     return { state: 'unreadable', handle: 'fleet-sweep' };
   }
+
+  wakeParkedPanes(options, observations, executor, store, log);
 
   const chats = config.chatCdpUrl && config.chatScope
     ? await (options.readChats ?? readProjectChats)(config.chatCdpUrl, config.chatScope).catch(() => [])
