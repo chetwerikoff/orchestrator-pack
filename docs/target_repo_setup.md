@@ -53,7 +53,20 @@ green; the automation Chrome is logged into ChatGPT; and Orca is running.
    ```
 
    A successful check prints the resolved repository, primary root, default
-   branch, and project URL. `verification.local` is required for target
+   branch, configured `requiredCi` (when present), and project URL.
+   `requiredCi` is optional. When configured it must be a non-empty array of
+   GitHub Actions selectors in canonical `<workflow> / <job>` syntax: exactly
+   one literal ` / ` separator, non-empty trimmed components, and no duplicate
+   workflow/job tuple after case-insensitive normalization. Example:
+   `"requiredCi": ["CI / checks"]`.
+
+   A present `requiredCi` is authoritative for pack required-CI gate selector
+   discovery and replaces branch-protection lookup for that selected project.
+   Use it only for GitHub Actions workflow/job selectors. For classic commit
+   statuses or third-party contexts, omit `requiredCi` and configure readable,
+   non-empty required-status branch protection on the selected default branch.
+
+   `verification.local` is required for target
    work and must be a non-empty ordered list of non-empty shell command strings.
    `verification.focused` is optional and may hold one non-empty scoped
    verification template, but it never replaces `verification.local`. For example:
@@ -357,6 +370,14 @@ Protect the default branch and require the pack merge-contract checks, including
 - affected tests;
 - runtime-retirement scan;
 - any task-specific required check.
+
+Required-CI evaluation is owned by `scripts/lib/required-ci.ts`. It uses the
+tracked canonical `gh pr checks` projection, then immediately re-reads the live
+PR head before a green result can be used. A matching post-projection head is an
+inferred current-head binding; the projection itself is not claimed to have
+reported a SHA. Head movement makes the evidence stale/non-green. The known
+H1→H2→H1 ABA residual between the pre-bound expected head and post-projection
+read is intentionally documented rather than hidden with a second transport.
 
 A success from an earlier SHA does not satisfy the current head.
 
