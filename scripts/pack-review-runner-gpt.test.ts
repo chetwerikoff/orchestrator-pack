@@ -250,6 +250,8 @@ function writeClosedPrGhFixture(binRoot: string): void {
     "  process.stdout.write('chetwerikoff/orchestrator-pack\\n');",
     "} else if (args[0] === 'pr' && args[1] === 'view') {",
     `  process.stdout.write('${HEAD_A} CLOSED\\n');`,
+    "} else if (args[0] === 'api' && /\\/pulls\\/\\d+$/.test(args[1] ?? '')) {",
+    `  process.stdout.write(JSON.stringify({ number: 1111, state: 'closed', body: 'Closes #2346', head: { sha: '${HEAD_A}' }, base: { ref: 'main' } }));`,
     '} else {',
     '  process.exitCode = 2;',
     '}',
