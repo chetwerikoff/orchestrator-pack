@@ -1,0 +1,32 @@
+{
+  "issue_number": 711,
+  "iteration_id": "issue-711-fleet-hygiene-sentinel",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-09T08:10:00.000Z",
+  "baseline": {
+    "commit_sha": "9dc86b21e991674f957f10835635d25e6b3b12f3",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:711-fleet-hygiene-sentinel-scope-v1"
+  },
+  "declared_paths": [
+    "docs/examples/fleet-hygiene-sentinel.cron.example",
+    "docs/examples/fleet-hygiene-sentinel.systemd.timer.example",
+    "docs/fleet-hygiene-sentinel-runbook.md",
+    "docs/migration_notes.md",
+    "scripts/check-fleet-hygiene-sentinel.ps1",
+    "scripts/launch-argv-inventory.json",
+    "scripts/lib/Orchestrator-FleetHygiene.ps1",
+    "scripts/orchestrator-fleet-hygiene-sentinel.ps1",
+    "scripts/orchestrator-fleet-hygiene-sentinel.test.ts",
+    "scripts/verify.ps1",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json"
+  ],
+  "declared_globs": [
+    "scripts/**",
+    "docs/**",
+    "tests/**"
+  ],
+  "amendments": []
+}

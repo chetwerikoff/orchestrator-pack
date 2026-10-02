@@ -1,0 +1,23 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1938,
+  "declared_paths": [
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    "AGENTS.md",
+    "scripts/toolchain/create-issue-authoring-contract.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/create-issue-draft/",
+    ".cursor/skills/create-issue-draft/",
+    "AGENTS.md",
+    "docs/declarations/",
+    "scripts/"
+  ],
+  "source_revision": "e03c84ab5da5e1d60de784b507ea5a043386b8df"
+}

@@ -1,0 +1,51 @@
+{
+  "issue_number": 255,
+  "iteration_id": "opk-34",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-10T05:09:45.899Z",
+  "baseline": {
+    "commit_sha": "62c2ca6d368d4aa477403dfdc5a2e249f3c80b59",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:98a510373fad7f05f1a97092c5bad2217e92737cc22b5289de7b1f0d5a1354e9"
+  },
+  "declared_paths": [
+    "docs/coworker-read-delegation-audit.md",
+    "docs/declarations/255.opk-34.json",
+    "docs/migration_notes.md",
+    "docs/read-delegation-audit.d.mts",
+    "docs/read-delegation-audit.mjs",
+    "prompts/agent_rules.md",
+    "scripts/check-coworker-delegation-threshold-drift.ps1",
+    "scripts/invoke-read-delegation-audit-stop.ps1",
+    "scripts/read-delegation-audit.test.ts",
+    "scripts/verify.ps1"
+  ],
+  "declared_globs": [
+    "scripts/fixtures/read-delegation-audit/**"
+  ],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:98a510373fad7f05f1a97092c5bad2217e92737cc22b5289de7b1f0d5a1354e9",
+      "new_active_scope_hash": "sha256:pending",
+      "changed": {
+        "added": [
+          "docs/coworker-read-delegation-audit.md",
+          "docs/declarations/255.opk-34.json",
+          "docs/migration_notes.md",
+          "docs/read-delegation-audit.d.mts",
+          "docs/read-delegation-audit.mjs",
+          "prompts/agent_rules.md",
+          "scripts/check-coworker-delegation-threshold-drift.ps1",
+          "scripts/invoke-read-delegation-audit-stop.ps1",
+          "scripts/read-delegation-audit.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "align declaration with full PR scope",
+      "actor": "opk-34",
+      "timestamp": "2026-06-10T05:10:30.000Z",
+      "applied": true
+    }
+  ]
+}

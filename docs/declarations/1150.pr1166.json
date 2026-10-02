@@ -1,0 +1,25 @@
+{
+  "issue_number": 1150,
+  "iteration_id": "pr1166",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-08-01T05:39:46.511Z",
+  "baseline": {
+    "commit_sha": "801b8981f7c792e2b3c1b9aefdecb47cd38babeb",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:d97c169d14dbfc4c7a1f94135889fb90d1a30cfc14ac70bfc76ca904890388a4"
+  },
+  "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    "docs/tiering.md",
+    "scripts/finding-ledger-guard.d.mts",
+    "scripts/finding-ledger-guard.mjs",
+    "scripts/lib/stage-completeness-core.ts",
+    "scripts/stage-completeness-guard.test.ts",
+    "scripts/stage-completeness-guard.ts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

@@ -1,0 +1,17 @@
+{
+  "issue_number": 275,
+  "iteration_id": "arch-1",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-12T03:25:33.073Z",
+  "baseline": {
+    "commit_sha": "35efd63552da65d1e6f325ea15316e202824f149",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:2f40df9531b85ab66d103798506c59f88ee026af7e28150d7f966dead5ec4db7"
+  },
+  "declared_paths": [
+    "prompts/agent_rules.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

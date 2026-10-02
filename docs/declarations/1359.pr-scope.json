@@ -1,0 +1,45 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1359,
+  "declared_paths": [
+    "docs/orca-runtime-caller-census.md",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/lib/worker-smoke-bounded-create.ts",
+    "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/orca-runtime/task-adapter.ts",
+    "scripts/runtime/caller-census.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/worker-smoke-1359.test.ts",
+    "scripts/worker-smoke-entrypoint-1359.test.ts",
+    "scripts/worker-smoke-run",
+    "scripts/worker-smoke-run.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations",
+    "docs/orca-runtime-caller-census.md",
+    "docs/worker-smoke-testing.md",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/lib/worker-smoke-bounded-create.ts",
+    "scripts/lib/worker-smoke-core-base.ts",
+    "scripts/lib/worker-smoke-core.ts",
+    "scripts/lib/worker-smoke-lifecycle-base.ts",
+    "scripts/lib/worker-smoke-lifecycle-regressions-base.ts",
+    "scripts/lib/worker-smoke-lifecycle.ts",
+    "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/orca-runtime/task-adapter.ts",
+    "scripts/runtime/caller-census.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/worker-smoke-1359.test.ts",
+    "scripts/worker-smoke-entrypoint-1359.test.ts",
+    "scripts/worker-smoke-run",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "source_revision": "40d38597ea8ea0103e40c946269f6e6aece20126"
+}

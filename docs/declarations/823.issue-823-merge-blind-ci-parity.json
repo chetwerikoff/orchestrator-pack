@@ -1,0 +1,19 @@
+{
+  "issue_number": 823,
+  "iteration_id": "issue-823-merge-blind-ci-parity",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-15T03:35:00Z",
+  "baseline": {
+    "commit_sha": "225187b7d3507a0872fc1bf435089a7e3aa0c1d7",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:405c0f8edab5747b15bd330f1c25523914ad4e45e0ca73957496b2d47a7ffdfc"
+  },
+  "declared_paths": [],
+  "declared_globs": [
+    ".github/workflows/**",
+    "scripts/**",
+    "docs/**"
+  ],
+  "amendments": []
+}

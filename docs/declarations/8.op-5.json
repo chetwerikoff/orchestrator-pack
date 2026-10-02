@@ -1,0 +1,19 @@
+{
+  "issue_number": 8,
+  "iteration_id": "op-5",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-05-27T23:15:00.000Z",
+  "baseline": {
+    "commit_sha": "9298f519dbc91f3ed24ee6a329bea7bbe0c85164",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:86406e04b643f69ad2a1cba4a3bd28bcdcb62212573febebbe43306b5c2811fb"
+  },
+  "declared_paths": [
+    "package-lock.json"
+  ],
+  "declared_globs": [
+    "plugins/ao-token-chain-ledger/**"
+  ],
+  "amendments": []
+}

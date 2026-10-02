@@ -1,0 +1,31 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1850,
+  "declared_paths": [
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    "docs/browser-gpt-turn-runbook.md",
+    "docs/create-issue-draft-acceptance-artifacts.md",
+    "scripts/chatgpt-browser-turn/README.md",
+    "scripts/chatgpt-browser-turn/state-light-entry.ts",
+    "scripts/flow-manager-authority-contract.test.ts",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/lib/manager-review-brief.ts",
+    "scripts/lib/manager-review-terminal-bundle.ts",
+    "scripts/manager-review-terminal-bundle.ts"
+  ],
+  "denylist": [
+    ".orca/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "tests/external-output-references/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/rules/",
+    ".cursor/skills/",
+    "docs/",
+    "scripts/"
+  ],
+  "source_revision": "834814e5b8b10b05f66106058d5feb3b30413432"
+}

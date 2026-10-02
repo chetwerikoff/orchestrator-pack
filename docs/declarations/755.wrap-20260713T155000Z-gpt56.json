@@ -1,0 +1,46 @@
+{
+  "issue_number": 755,
+  "iteration_id": "wrap-20260713T155000Z-gpt56",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-13T15:50:00.000Z",
+  "baseline": {
+    "commit_sha": "21187f76450f7eee02b03aa1ad9f6a44a36e89e5",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:c0c1d770bcca1eb25e46c8c21dbb95ae5c769670e2ade85958646c4d47f6e9ab"
+  },
+  "declared_paths": [
+    "scripts/lib/ci-red-watchdog.mjs",
+    "scripts/lib/ci-red-watchdog-core.mjs",
+    "scripts/lib/ci-red-watchdog-ledger.mjs",
+    "scripts/lib/Ci-Red-Watchdog.ps1",
+    "scripts/lib/Ci-Red-Watchdog-GitHub.ps1",
+    "scripts/lib/Ci-Red-Watchdog-Worker.ps1",
+    "scripts/lib/Ci-Red-Watchdog-Boundary.ps1",
+    "scripts/lib/Ci-Red-Watchdog-Tick.ps1",
+    "scripts/lib/ci-red-watchdog-selftest.mjs",
+    "scripts/lib/Ci-Red-Watchdog.Tests.ps1",
+    "scripts/ci-failure-notification-reconcile.ps1",
+    "scripts/worker-message-submit-reconcile.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:96bb9f6ed0d80cf1db2e0dce9e8653c8060c19f2e38a97086873e769cad8e995",
+      "new_active_scope_hash": "sha256:c0c1d770bcca1eb25e46c8c21dbb95ae5c769670e2ade85958646c4d47f6e9ab",
+      "changed": {
+        "added": [
+          "scripts/lib/Ci-Red-Watchdog.Tests.ps1",
+          "scripts/lib/ci-red-watchdog-selftest.mjs"
+        ],
+        "removed": [
+          "scripts/ci-red-watchdog.test.ts"
+        ]
+      },
+      "reason": "Replace standalone Vitest lane registration with scope-contained deterministic Node and Pester acceptance coverage.",
+      "actor": "chatgpt-github-worker",
+      "timestamp": "2026-07-13T21:30:00.000Z",
+      "applied": true
+    }
+  ]
+}

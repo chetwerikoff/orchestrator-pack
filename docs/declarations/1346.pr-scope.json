@@ -1,0 +1,21 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1346,
+  "declared_paths": [
+    "docs/declarations/1346.pr-scope.json",
+    "scripts/lib/review-lane-routing.test.ts",
+    "scripts/lib/review-lane-routing.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/1346.pr-scope.json",
+    "scripts/lib/review-lane-routing.test.ts",
+    "scripts/lib/review-lane-routing.ts"
+  ],
+  "source_revision": "1181abfa89b7d11179cebbd3ef96ff2e29fe1b37"
+}

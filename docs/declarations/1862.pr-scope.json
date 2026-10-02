@@ -1,0 +1,26 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1862,
+  "declared_paths": [
+    "scripts/worker-smoke-1359.test.ts",
+    "scripts/worker-smoke-run.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "scripts/finding-ledger-guard.mjs",
+    "scripts/orca-runtime/",
+    "scripts/pr2-foundation/",
+    "scripts/runtime/contracts.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/worker-smoke-1359.test.ts",
+    "scripts/worker-smoke-entrypoint-1359.test.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "source_revision": "5b99ee52f481182d50912465be3b02a3eec91649"
+}

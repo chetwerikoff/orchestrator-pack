@@ -1,0 +1,34 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1744,
+  "declared_paths": [
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/create-issue-stage-record-marker.ts",
+    "scripts/lib/create-issue-stage-record-receipt.ts",
+    "scripts/lib/create-issue-stage-record-review-lane.test.ts",
+    "scripts/lib/review-lane-record.ts",
+    "scripts/lib/stage-completeness-core.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/1744.pr-scope.json",
+    "scripts/finding-ledger-guard.mjs",
+    "scripts/lib/create-issue-stage-lifecycle-acceptance.test.ts",
+    "scripts/lib/create-issue-stage-lifecycle-acceptance.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/create-issue-stage-record-marker.ts",
+    "scripts/lib/create-issue-stage-record-receipt.ts",
+    "scripts/lib/create-issue-stage-record-review-lane.test.ts",
+    "scripts/lib/review-lane-record.ts",
+    "scripts/lib/stage-completeness-core.ts",
+    "scripts/stage-completeness-guard.test.ts"
+  ],
+  "source_revision": "b5ed827ea810f459396eba6671ae8c6de004fe2c"
+}

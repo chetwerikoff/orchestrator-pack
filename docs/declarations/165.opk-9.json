@@ -1,0 +1,22 @@
+{
+  "issue_number": 165,
+  "iteration_id": "opk-9",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-04T07:50:00.000Z",
+  "baseline": {
+    "commit_sha": "7bf5f388331d5a87621a1d81bd0ef3275d77cd69",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:1235fd50acd92a2d261d767cc367e33414ce4da0cb48f29f87a1f48d3394485f"
+  },
+  "declared_paths": [
+    "scripts/pr-scope-contract.ts",
+    "scripts/pr-scope-check.ts",
+    "scripts/pr-scope-check.test.ts",
+    "docs/repository_policy.md",
+    "docs/issues_drafts/57-skill-only-pr-no-ceremony.md",
+    "docs/issues_drafts/59-spec-docs-only-pr-no-ceremony.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

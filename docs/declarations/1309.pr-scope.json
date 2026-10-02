@@ -1,0 +1,17 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1309,
+  "declared_paths": [
+    ".cursor/rules/kb-consult.mdc"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/rules/kb-consult.mdc"
+  ],
+  "source_revision": "3d7eb3464a32dc669d4f1bc13dc38a4894b381e0"
+}

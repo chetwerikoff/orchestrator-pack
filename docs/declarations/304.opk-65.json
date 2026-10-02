@@ -1,0 +1,20 @@
+{
+  "issue_number": 304,
+  "iteration_id": "opk-65",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-15T13:05:00.000Z",
+  "baseline": {
+    "commit_sha": "72ca4789854684764a92c24ab1a69f3491d3087c",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:814021211b280bc01821a105b58f3604f7c5fe2d13173491f347f67cd47c89a3"
+  },
+  "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    ".claude/skills/merge-with-local-adoption/SKILL.md",
+    ".claude/skills/publish-issue-draft/SKILL.md",
+    ".claude/skills/publish-issue-draft/opencode-publish.sh"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

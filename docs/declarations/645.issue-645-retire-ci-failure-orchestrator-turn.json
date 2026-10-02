@@ -1,0 +1,22 @@
+{
+  "issue_number": 645,
+  "iteration_id": "issue-645-retire-ci-failure-orchestrator-turn",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-07T20:18:20.822Z",
+  "baseline": {
+    "commit_sha": "437f0c673716f217de3aa8ba4ed21fd00f4c5edf",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:612f1cc152dd75701f3b212b814d7c79879c23924a5874e6f63d8b6a6fa79284"
+  },
+  "declared_paths": [
+    "docs/orchestrator-message-map.md",
+    "docs/orchestrator-message-registry.mjs",
+    "docs/submit-reconcile-delivery-source-audit.json",
+    "agent-orchestrator.yaml.example"
+  ],
+  "declared_globs": [
+    "scripts/**"
+  ],
+  "amendments": []
+}

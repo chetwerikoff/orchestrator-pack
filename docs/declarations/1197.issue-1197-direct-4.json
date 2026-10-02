@@ -1,0 +1,25 @@
+{
+  "issue_number": 1197,
+  "iteration_id": "issue-1197-direct-4",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": "issue-1197-direct-3",
+  "created_at": "2026-08-02T10:28:13.388Z",
+  "baseline": {
+    "commit_sha": "7a9a70a6ce5c16d98178f8e876b187ad5f392750",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:b1b5a2c9071ac3211ee96c21cc7aedd8b731c0252a8a50d596ffcfbee916130c"
+  },
+  "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/kernel/subprocess.ts",
+    "scripts/lib/create-issue-stage-record-core.ts",
+    "scripts/lib/create-issue-stage-record-gh.ts",
+    "scripts/lib/create-issue-stage-record-types.ts"
+  ],
+  "declared_globs": [
+    "scripts/**/*.test.ts"
+  ],
+  "amendments": []
+}

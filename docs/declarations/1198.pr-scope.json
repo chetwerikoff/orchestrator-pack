@@ -1,0 +1,39 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1198,
+  "declared_paths": [
+    "docs/declarations/1198.pr-scope.json",
+    "docs/launch-watch-wrappers.md",
+    "scripts/launch-watch/aggregate.ts",
+    "scripts/launch-watch/launch-watch.test.ts",
+    "scripts/launch-watch/launch.ts",
+    "scripts/launch-watch/watch.test.ts",
+    "scripts/launch-watch/watch.ts",
+    "scripts/lib/launch-watch/contract.ts",
+    "scripts/lib/launch-watch/emission.ts",
+    "scripts/lib/launch-watch/fixtures.ts",
+    "scripts/lib/launch-watch/process.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/vitest-ci-lanes.config.json",
+    "tests/external-output-references/launch-watch/producer-fixtures.json"
+  ],
+  "denylist": [
+    ".ao/",
+    "agent-orchestrator.yaml",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "docs/launch-watch-wrappers.md",
+    "scripts/launch-watch/",
+    "scripts/lib/launch-watch/",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json",
+    "tests/external-output-references/launch-watch/"
+  ],
+  "source_revision": "85cc518e1eb3da36a1a331abf9114478c65fc601"
+}

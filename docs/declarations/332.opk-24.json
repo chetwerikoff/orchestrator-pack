@@ -1,0 +1,68 @@
+{
+  "issue_number": 332,
+  "iteration_id": "opk-24",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-17T16:00:00.000Z",
+  "baseline": {
+    "commit_sha": "b706f5cf0d3636b0ec1c4b4d60995d0b54e88e74",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:67dd0bdcdc097de4d7b23c13f188bf893e018b2551e5405c10cefbc0130b16f0"
+  },
+  "declared_paths": [
+    "docs/ci-green-wake-reconcile.d.mts",
+    "docs/ci-green-wake-reconcile.mjs",
+    "docs/declarations/332.opk-24.json",
+    "docs/migration_notes.md",
+    "docs/orchestrator-message-registry.mjs",
+    "docs/review-head-ready.d.mts",
+    "docs/review-head-ready.mjs",
+    "docs/review-ready-stuck-guard.d.mts",
+    "docs/review-ready-stuck-guard.mjs",
+    "docs/review-reconcile-primitives.mjs",
+    "docs/review-trigger-reconcile.d.mts",
+    "docs/review-trigger-reconcile.mjs",
+    "docs/worker-iteration-cycle.d.mts",
+    "docs/worker-iteration-cycle.mjs",
+    "scripts/_test-worker-session-fixtures.ts",
+    "scripts/ci-green-wake-reconcile.ps1",
+    "scripts/ci-green-wake-reconcile.test.ts",
+    "scripts/external-output-shape-guard.test.ts",
+    "scripts/lib/MechanicalReconcileNode.ps1",
+    "scripts/orchestrator-message-catalog.json",
+    "scripts/orchestrator-message-registry.test.ts",
+    "scripts/review-head-ready.test.ts",
+    "scripts/review-trigger-reconcile.ps1",
+    "scripts/review-trigger-reconcile.test.ts",
+    "scripts/review-trigger-reeval.test.ts",
+    "scripts/review-wake-trigger.test.ts",
+    "scripts/worker-iteration-cycle.test.ts",
+    "tests/external-output-references/trigger-fixture-classification.json"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:0bb9f5b67d7325f5e0745bb20e0acaa0bee0c79157dc9eee99764254f3d88324",
+      "new_active_scope_hash": "sha256:67dd0bdcdc097de4d7b23c13f188bf893e018b2551e5405c10cefbc0130b16f0",
+      "changed": {
+        "added": [
+          "docs/review-head-ready.d.mts",
+          "docs/review-head-ready.mjs",
+          "docs/review-ready-stuck-guard.d.mts",
+          "docs/review-ready-stuck-guard.mjs",
+          "docs/review-reconcile-primitives.mjs",
+          "scripts/external-output-shape-guard.test.ts",
+          "scripts/lib/MechanicalReconcileNode.ps1",
+          "scripts/orchestrator-message-catalog.json",
+          "scripts/review-head-ready.test.ts",
+          "tests/external-output-references/trigger-fixture-classification.json"
+        ],
+        "removed": []
+      },
+      "reason": "Review fix: break ci-green ESM cycle via primitives/shared CI classifier; self-architect lint shared fixture delivery-field merge helper; registry hash refresh for pre-send active-work recheck",
+      "actor": "opk-30",
+      "timestamp": "2026-06-17T19:00:00.000Z",
+      "applied": true
+    }
+  ]
+}

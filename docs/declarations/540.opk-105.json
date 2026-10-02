@@ -1,0 +1,21 @@
+{
+  "issue_number": 540,
+  "iteration_id": "opk-105",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-30T07:36:31.166Z",
+  "baseline": {
+    "commit_sha": "50fa2e6c06b9c28109d3ee7a148b752973b2c797",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:7195936cfc653e3ec362b4a572826ccf8062276bc265d4fad673d9f927aa0db4"
+  },
+  "declared_paths": [
+    "scripts/lib/gh-graphql-degraded.mjs",
+    "scripts/lib/gh-graphql-degraded.d.mts",
+    "scripts/lib/gh-wrapper.mjs",
+    "scripts/gh-wrapper.test.ts",
+    "docs/migration_notes.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

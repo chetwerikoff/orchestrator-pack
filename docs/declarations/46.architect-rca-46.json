@@ -1,0 +1,26 @@
+{
+  "issue_number": 46,
+  "iteration_id": "architect-rca-46",
+  "iteration_id_source": "ao_session",
+  "supersedes": "op-17",
+  "created_at": "2026-05-30T23:46:23.607Z",
+  "baseline": {
+    "commit_sha": "830b622916df9bd852e789c08fc181ff006fd02f",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:9318e787c715b2a2befdaef3c64fbb61b799e4b72c13556e4b3cf171f312ae84"
+  },
+  "declared_paths": [
+    "prompts/investigate_root_cause.md",
+    "AGENTS.md",
+    "CLAUDE.md"
+  ],
+  "declared_globs": [
+    ".claude/skills/investigate-root-cause/**",
+    ".cursor/skills/investigate-root-cause/**",
+    ".claude/skills/merge-with-local-adoption/**",
+    ".cursor/skills/merge-with-local-adoption/**",
+    ".claude/skills/publish-issue-draft/**",
+    ".cursor/skills/publish-issue-draft/**"
+  ],
+  "amendments": []
+}

@@ -1,0 +1,26 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2108,
+  "declared_paths": [
+    "scripts/pack-review-ordering.test.ts",
+    "scripts/pack-review-state.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/2108.pr-scope.json",
+    "scripts/pack-review-ordering.test.ts",
+    "scripts/pack-review-runner-issue-1591.test.ts",
+    "scripts/pack-review-state.ts",
+    "scripts/pr2-foundation/post-review-smoke.test.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "source_revision": "e1a634d40f0efebf8e779e52c1416fd4663071d4"
+}

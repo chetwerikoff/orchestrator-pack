@@ -1,0 +1,26 @@
+{
+  "issue_number": 520,
+  "iteration_id": "opk-71",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-29T10:23:49.822Z",
+  "baseline": {
+    "commit_sha": "b89a50e50f8bc44f049c7f53a30009d30877eff7",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:07cade0a4666251f908d9746454c943bd199beba99969ea359cf9924d568b45e"
+  },
+  "declared_paths": [
+    "scripts/check-gh-inventory-static.ps1",
+    "scripts/gh-wrapper.test.ts",
+    "scripts/gh-inventory-static-guard.test.ts",
+    "prompts/investigate_root_cause.md",
+    "prompts/agent_rules.md",
+    "agent-orchestrator.yaml.example"
+  ],
+  "declared_globs": [
+    "scripts/lib/**",
+    "tests/external-output-references/**",
+    "docs/**"
+  ],
+  "amendments": []
+}

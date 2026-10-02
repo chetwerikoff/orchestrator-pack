@@ -1,0 +1,36 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1377,
+  "declared_paths": [
+    "scripts/chatgpt-browser-turn/state-light-cancellation.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts"
+  ],
+  "denylist": [
+    ".github/",
+    "credentials/",
+    "package-lock.json",
+    "package.json",
+    "packages/core/",
+    "scripts/browser-gpt-page-probe.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/toolchain/",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations",
+    "scripts/chatgpt-browser-turn/state-light-cancellation.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts"
+  ],
+  "source_revision": "eb51e8a649d2faa210bd1de5400821ad5d55650b"
+}

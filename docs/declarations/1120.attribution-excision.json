@@ -1,0 +1,60 @@
+{
+  "issue_number": 1120,
+  "iteration_id": "attribution-excision",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": "chat-executor-selector-consolidation",
+  "created_at": "2026-07-30T14:13:33.913Z",
+  "baseline": {
+    "commit_sha": "a719d5fb1dbb532725415345f2a9248c192158df",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:9527806d8b73dc34fa4c3df5de618438f9b9d5101b9f272c26e243267d154bcd"
+  },
+  "declared_paths": [
+    ".claude/skills/discuss-with-gpt/SKILL.md",
+    "docs/declarations/1120.attribution-excision.json",
+    "docs/declarations/1120.chat-executor-selector-consolidation.json",
+    "scripts/chatgpt-browser-turn/README.md",
+    "scripts/chatgpt-browser-turn/contracts.ts",
+    "scripts/chatgpt-browser-turn/dispatch-observation.ts",
+    "scripts/chatgpt-browser-turn/fixtures/browser-turn-recurrence-journal-symptoms.json",
+    "scripts/chatgpt-browser-turn/fixtures/browser-turn-recurrence-replay-kinds.ts",
+    "scripts/chatgpt-browser-turn/fixtures/fake-turn-page.ts",
+    "scripts/chatgpt-browser-turn/fixtures/issue-1023-timeout.ts",
+    "scripts/chatgpt-browser-turn/product-page-selectors.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.ts",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-fixtures.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter.ts",
+    "scripts/stage-completeness-guard.test.ts",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:76dd6073b66bf7efc8ce329fc0aa1d9ebd53a72e7d2b282b2f5ae48b139d8481",
+      "new_active_scope_hash": "sha256:9527806d8b73dc34fa4c3df5de618438f9b9d5101b9f272c26e243267d154bcd",
+      "changed": {
+        "added": [
+          "docs/declarations/1120.attribution-excision.json",
+          "docs/declarations/1120.chat-executor-selector-consolidation.json",
+          "scripts/chatgpt-browser-turn/dispatch-observation.ts",
+          "scripts/chatgpt-browser-turn/fixtures/browser-turn-recurrence-journal-symptoms.json",
+          "scripts/chatgpt-browser-turn/fixtures/fake-turn-page.ts",
+          "scripts/chatgpt-browser-turn/fixtures/issue-1023-timeout.ts",
+          "scripts/chatgpt-browser-turn/product-page-selectors.ts",
+          "scripts/chatgpt-browser-turn/state-light-fresh-conversation.ts",
+          "scripts/chatgpt-browser-turn/state-light-turn.test-fixtures.ts",
+          "scripts/chatgpt-browser-turn/ui-adapter.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Expand declared scope to cover stacked PR #1140 paths in main diff",
+      "actor": "local",
+      "timestamp": "2026-07-30T14:30:00.000Z",
+      "applied": true
+    }
+  ]
+}

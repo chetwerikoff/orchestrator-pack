@@ -1,0 +1,18 @@
+{
+  "issue_number": 784,
+  "iteration_id": "op-arch-784",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-13T13:06:49.655Z",
+  "baseline": {
+    "commit_sha": "9dbef65759c44ac55ae52a8b70605a6d894b485c",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:61843f1a344d169b3fb8d68f26e5a5ebae065cc032577784ed5fa5a3f1872c86"
+  },
+  "declared_paths": [
+    ".github/workflows/scope-guard.yml",
+    "scripts/check-ci-job-timeouts.mjs"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

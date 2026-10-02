@@ -1,0 +1,20 @@
+{
+  "issue_number": 101,
+  "iteration_id": "architect-draft-35",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-05-30T23:48:41.693Z",
+  "baseline": {
+    "commit_sha": "0969574e671e82d6a356a2e228e4bad2b217d056",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:60b4fc9228f0864aa5aede4a5b888290cb502558bc322fa0b5393cc4136bd04c"
+  },
+  "declared_paths": [
+    "docs/issues_drafts/35-operator-adoption-handoff-contract.md",
+    "docs/issue_queue_index.md",
+    "docs/issues_drafts/00-architecture-decisions.md",
+    ".claude/skills/create-issue-draft/SKILL.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

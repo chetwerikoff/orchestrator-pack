@@ -1,0 +1,23 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1891,
+  "declared_paths": [
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/create-issue-draft-acceptance-artifacts.md",
+    "docs/declarations/",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/stage-completeness-core.ts",
+    "scripts/stage-completeness-guard.test.ts"
+  ],
+  "source_revision": "d4aff7bacf53747b61122773abb56621c4fd4789"
+}

@@ -1,0 +1,22 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1284,
+  "declared_paths": [
+    ".claude/skills/direct-fix-checklist/SKILL.md",
+    ".cursor/skills/direct-fix-checklist/SKILL.md",
+    "CLAUDE.md"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/",
+    ".cursor/skills/",
+    "CLAUDE.md",
+    "docs/declarations/"
+  ],
+  "source_revision": "1ecf8f6e6e801a75465bb949b274f3a4fc1320b7"
+}

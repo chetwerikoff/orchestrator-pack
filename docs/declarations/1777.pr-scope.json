@@ -1,0 +1,51 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1777,
+  "declared_paths": [
+    "scripts/pack-review-ordering.test.ts",
+    "scripts/pack-review-state.ts",
+    "scripts/pr2-foundation/post-review-smoke.test.ts",
+    "scripts/pr2-foundation/post-review-smoke.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "denylist": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    ".github/",
+    "AGENTS.md",
+    "credentials/",
+    "docs/chat-executor-rules.md",
+    "docs/create-issue-draft-acceptance-artifacts.md",
+    "docs/tiering.md",
+    "packages/core/",
+    "scripts/chatgpt-browser-turn/",
+    "scripts/finding-ledger-guard.mjs",
+    "scripts/lib/create-issue-final-acceptance-contract.ts",
+    "scripts/lib/create-issue-final-acceptance-revision.test.ts",
+    "scripts/lib/create-issue-final-acceptance.ts",
+    "scripts/lib/create-issue-stage-lifecycle-acceptance.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/create-issue-stage-record-receipt.ts",
+    "scripts/lib/create-issue-stage-record.test.ts",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/lib/review-lane-record.ts",
+    "scripts/lib/review-lane-routing.ts",
+    "scripts/lib/stage-completeness-core.ts",
+    "scripts/orca-runtime/",
+    "scripts/review-architect-artifact.ts",
+    "scripts/runtime/",
+    "scripts/stage-completeness-guard.test.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/pack-review-ordering.test.ts",
+    "scripts/pack-review-state.ts",
+    "scripts/pr2-foundation/post-review-smoke.test.ts",
+    "scripts/pr2-foundation/post-review-smoke.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "source_revision": "125c01226864e4e2f5d1a235caf886c5c914e069"
+}

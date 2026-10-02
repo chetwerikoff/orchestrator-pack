@@ -1,0 +1,19 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1225,
+  "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    ".cursor/skills/create-issue-draft/SKILL.md"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/create-issue-draft/",
+    ".cursor/skills/create-issue-draft/"
+  ],
+  "source_revision": "f6fce3b35c1c330fce300673593299d6defe4e26"
+}

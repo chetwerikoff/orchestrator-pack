@@ -1,0 +1,41 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1793,
+  "declared_paths": [
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/create-issue-stage-topology.ts",
+    "scripts/lib/stage-completeness-core.ts",
+    "scripts/stage-completeness-guard.test.ts"
+  ],
+  "denylist": [
+    ".env",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/",
+    ".cursor/rules/",
+    ".cursor/skills/",
+    ".github/workflows/",
+    "agent-orchestrator.yaml.example",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/",
+    "docs/declarations/",
+    "package-lock.json",
+    "package.json",
+    "plugins/",
+    "prompts/",
+    "README.md",
+    "scripts/",
+    "tests/external-output-references/",
+    "tests/fixtures/pack-gpt-browser-turn-harness.mjs",
+    "tests/issue854-worker-status-binding-cache.mjs",
+    "tests/README.md",
+    "tests/worker-status-store-live-rca.ts"
+  ],
+  "source_revision": "77d1314c698e9fe2369806398cd04be4ee13d16d"
+}

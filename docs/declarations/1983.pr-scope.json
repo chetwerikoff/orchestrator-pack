@@ -1,0 +1,24 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1983,
+  "declared_paths": [
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "tests/external-output-references/create-issue-author-reply-fenceless-1978-r02.txt"
+  ],
+  "denylist": [
+    ".orchestrator-pack/",
+    "credentials/",
+    "packages/core/",
+    "prompts/",
+    "scripts/chatgpt-browser-turn/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "tests/external-output-references/create-issue-author-reply-fenceless-1978-r02.txt"
+  ],
+  "source_revision": "987b52be8eab2f19e73981635fa5b46f5ef15c5c"
+}

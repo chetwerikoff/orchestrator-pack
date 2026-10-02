@@ -1,0 +1,45 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1583,
+  "declared_paths": [
+    "scripts/lib/vitest-live-store-parent-guard.mjs",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-live-store-parent-guard.test.ts"
+  ],
+  "denylist": [
+    ".orchestrator-pack/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/",
+    ".cursor/rules/",
+    ".cursor/skills/",
+    ".github/workflows/",
+    "agent-orchestrator.yaml.example",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/",
+    "docs/declarations/",
+    "package-lock.json",
+    "package.json",
+    "plugins/",
+    "prompts/",
+    "README.md",
+    "scripts/",
+    "tests/external-output-references/",
+    "tests/fixtures/pack-gpt-browser-turn-harness.mjs",
+    "tests/issue854-worker-status-binding-cache.mjs",
+    "tests/powershell/Issue748.RefreshConcurrency.Tests.ps1",
+    "tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1",
+    "tests/powershell/Issue748.WorkerStatusPopulation.Tests.ps1",
+    "tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1",
+    "tests/powershell/Lint-SelfArchitect.Tests.ps1",
+    "tests/README.md",
+    "tests/worker-status-store-live-rca.ts"
+  ],
+  "source_revision": "7adef9fd925d9712cc0e7319e480f380f39a0266"
+}

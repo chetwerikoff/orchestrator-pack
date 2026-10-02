@@ -1,0 +1,32 @@
+{
+  "issue_number": 362,
+  "iteration_id": "opk-43",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-20T06:06:20.792Z",
+  "baseline": {
+    "commit_sha": "5d488379449bd7b86eb094db06d19e1ace4b2762",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:714ec031443c25a5ca8515d82c243bf978e5547130f9e7e1f0eea8c2f3855fb5"
+  },
+  "declared_paths": [
+    "docs/issues_drafts/00-architecture-decisions.md",
+    "docs/issues_drafts/115-reviewer-coworker-contract-mapping-pass.md",
+    "prompts/agent_rules.md",
+    "prompts/codex_review_prompt.md",
+    "scripts/check-reviewer-contract-mapping.ps1",
+    "scripts/fixtures/reviewer-contract-mapping/issue-child-901.md",
+    "scripts/fixtures/reviewer-contract-mapping/issue-parent-900.md",
+    "scripts/fixtures/reviewer-contract-mapping/issue-with-acceptance.md",
+    "scripts/fixtures/reviewer-contract-mapping/issue-without-acceptance.md",
+    "scripts/fixtures/reviewer-contract-mapping/large.diff",
+    "scripts/fixtures/reviewer-contract-mapping/small.diff",
+    "scripts/invoke-reviewer-contract-mapping.ps1",
+    "scripts/invoke-reviewer-contract-mapping.ts",
+    "scripts/lib/reviewer-contract-mapping.ts",
+    "scripts/reviewer-contract-mapping.test.ts",
+    "scripts/verify.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

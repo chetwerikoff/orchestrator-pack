@@ -1,0 +1,39 @@
+{
+  "issue_number": 235,
+  "iteration_id": "opk-28",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-07T01:35:00.000Z",
+  "baseline": {
+    "commit_sha": "ddcfe44",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:b14d6421e1671224fbc84128f3648ae2818f44b62756f4d14fc5a15de6367f2b"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "docs/declarations/235.opk-28.json",
+    "docs/migration_notes.md",
+    "docs/orchestrator-wake-runbook.md",
+    "docs/review-trigger-reeval.mjs",
+    "docs/review-trigger-reeval.d.mts",
+    "docs/review-trigger-reconcile.mjs",
+    "prompts/agent_rules.md",
+    "scripts/check-review-trigger-reeval.ps1",
+    "scripts/lib/Invoke-ReviewTriggerReeval.ps1",
+    "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
+    "scripts/lib/Record-ReviewTriggerReevalWatch.ps1",
+    "scripts/lib/Review-TriggerReeval-Common.ps1",
+    "scripts/orchestrator-side-process-registry.json",
+    "scripts/orchestrator-wake-listener.ps1",
+    "scripts/review-trigger-reeval.ps1",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/review-trigger-reeval.test.ts",
+    "scripts/verify.ps1",
+    "tests/external-output-references/trigger-fixture-classification.json"
+  ],
+  "declared_globs": [
+    "tests/external-output-references/captures/ao-webhook-notification/**",
+    "tests/fixtures/review-trigger-reeval/**"
+  ],
+  "amendments": []
+}

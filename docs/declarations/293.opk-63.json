@@ -1,0 +1,44 @@
+{
+  "issue_number": 293,
+  "iteration_id": "opk-63",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-13T13:28:56.500Z",
+  "baseline": {
+    "commit_sha": "58e8d4558ab79ecf8a860579c9e21290a4f7542c",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:f33c93c84dbd29f42ef6e52daa86e0ef1958f1e7877eb2d352b26e9858a0187f"
+  },
+  "declared_paths": [
+    "docs/declarations/293.opk-63.json",
+    "docs/issues_drafts/00-architecture-decisions.md",
+    "docs/migration_notes.md",
+    "docs/orchestrator-recovery-runbook.md",
+    "docs/worker-message-dispatch-observe.d.mts",
+    "docs/worker-message-dispatch-observe.mjs",
+    "docs/worker-message-submit-busy-dispatch-smoke-markers.json",
+    "docs/worker-message-submit-reconcile.d.mts",
+    "docs/worker-message-submit-reconcile.mjs",
+    "scripts/check-worker-message-submit-reconcile.ps1",
+    "scripts/session-runtime-liveness.test.ts",
+    "scripts/worker-message-submit-reconcile.ps1",
+    "scripts/worker-message-submit-reconcile.test.ts"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:bf4a2c648a961351b55209f583429f751a6ce6357393f7b189bfdebc79956335",
+      "new_active_scope_hash": "sha256:f33c93c84dbd29f42ef6e52daa86e0ef1958f1e7877eb2d352b26e9858a0187f",
+      "changed": {
+        "added": [
+          "scripts/session-runtime-liveness.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Add follow-up liveness regression test path",
+      "actor": "opk-63",
+      "timestamp": "2026-06-13T13:36:55.959Z",
+      "applied": true
+    }
+  ]
+}

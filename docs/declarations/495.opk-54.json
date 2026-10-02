@@ -1,0 +1,21 @@
+{
+  "issue_number": 495,
+  "iteration_id": "opk-54",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-28T11:26:45.496Z",
+  "baseline": {
+    "commit_sha": "0c48c71d63442223c2575546ea17b2fda7f7133b",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:f6cf50085c7217eb7951da6e7755452a6857762ea720e520e492535391ae486c"
+  },
+  "declared_paths": [
+    "scripts/ao",
+    "scripts/lib/Orchestrator-AutonomousBoundary.ps1",
+    "scripts/lib/Test-AutonomousCapabilityInventory.ps1",
+    "scripts/autonomous-orchestrator-boundary.test.ts",
+    "docs/migration_notes.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

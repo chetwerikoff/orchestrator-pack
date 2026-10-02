@@ -1,0 +1,31 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2005,
+  "declared_paths": [
+    "docs/repository_policy.md",
+    "scripts/replay-fixture-import.test.ts",
+    "scripts/replay-fixture-import.ts",
+    "scripts/verify.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "tests/external-output-references/create-issue-author-reply-fenceless-1978-r02.txt.provenance.json",
+    "tests/external-output-references/flow-manager-long-child-ok-retained-page.json.provenance.json"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "tests/external-output-references/create-issue-author-reply-fenceless-1978-r02.txt",
+    "tests/external-output-references/flow-manager-long-child-ok-retained-page.json",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/repository_policy.md",
+    "scripts/replay-fixture-import.test.ts",
+    "scripts/replay-fixture-import.ts",
+    "scripts/verify.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "tests/external-output-references/create-issue-author-reply-fenceless-1978-r02.txt.provenance.json",
+    "tests/external-output-references/flow-manager-long-child-ok-retained-page.json.provenance.json"
+  ],
+  "source_revision": "ba2c941860c77b2b70727136ea391ff128ace944"
+}

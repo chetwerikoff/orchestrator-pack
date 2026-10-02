@@ -1,0 +1,69 @@
+{
+  "issue_number": 324,
+  "iteration_id": "opk-2",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-17T02:32:47.325Z",
+  "baseline": {
+    "commit_sha": "71037b81de217a83e4026365ca2a9a5df4bc9ff4",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:dc25097b03882c0e04926bd836a669bda68af8cc7bad9b1c8c9b97a24cf02699"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "docs/autonomous-orchestrator-boundary.d.mts",
+    "docs/autonomous-orchestrator-boundary.mjs",
+    "docs/autonomous-real-binaries.example.json",
+    "docs/autonomous-review-start-capabilities.json",
+    "docs/declarations/324.opk-2.json",
+    "docs/migration_notes.md",
+    "docs/orchestrator-claimed-review-run.d.mts",
+    "docs/orchestrator-claimed-review-run.mjs",
+    "docs/orchestrator-message-registry.d.mts",
+    "docs/orchestrator-message-registry.mjs",
+    "scripts/_invoke-system-git.sh",
+    "scripts/_test-registry-fixture.ts",
+    "scripts/ao",
+    "scripts/ao-autonomous-guard.ps1",
+    "scripts/autonomous-bash-env.sh",
+    "scripts/autonomous-orchestrator-boundary.test.ts",
+    "scripts/check-autonomous-capabilities.ps1",
+    "scripts/check-autonomous-orchestrator-boundary.ps1",
+    "scripts/check-autonomous-review-start-capabilities.ps1",
+    "scripts/check-orchestrator-claimed-review-run.ps1",
+    "scripts/git",
+    "scripts/git-autonomous-guard.ps1",
+    "scripts/git-real-binary",
+    "scripts/lib/Get-AutonomousCapabilityInventoryContext.ps1",
+    "scripts/lib/Get-ProcessCommandLine.ps1",
+    "scripts/lib/Orchestrator-AutonomousBoundary.ps1",
+    "scripts/lib/Orchestrator-AutonomousReviewStartGate.ps1",
+    "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+    "scripts/lib/Test-AutonomousCapabilityInventory.ps1",
+    "scripts/orchestrator-claimed-review-run.test.ts",
+    "scripts/orchestrator-message-registry.test.ts",
+    "scripts/verify.ps1"
+  ],
+  "declared_globs": [
+    "tests/fixtures/**"
+  ],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:390f3f3ee47d96fc82ab14179ef19380e9adcc4570c3cb5695c1c6d41ee95526",
+      "new_active_scope_hash": "sha256:66d8a5aa6190011f004995ebbeae08399fdd524bddbbf0264d72363a75b5513e",
+      "changed": {
+        "added": [
+          "docs/declarations/324.opk-2.json",
+          "scripts/check-autonomous-capabilities.ps1",
+          "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+          "scripts/lib/Test-AutonomousCapabilityInventory.ps1"
+        ],
+        "removed": []
+      },
+      "reason": "add shared capability check helpers and declaration paths",
+      "actor": "opk-2",
+      "timestamp": "2026-06-17T02:37:00.183Z",
+      "applied": true
+    }
+  ]
+}

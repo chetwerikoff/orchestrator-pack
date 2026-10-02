@@ -1,0 +1,22 @@
+{
+  "issue_number": 623,
+  "iteration_id": "orchestrator-pack-10",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-06T09:00:40.794Z",
+  "baseline": {
+    "commit_sha": "fe157d2031252059585e7745d558060c896426f5",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:d1065ba3cb1ff31e9fdea947f8c3bb9ccbb42e99da0a39c8741549ff9df33cb8"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example"
+  ],
+  "declared_globs": [
+    "scripts/**",
+    "tests/**",
+    "tests/external-output-references/**",
+    "docs/**"
+  ],
+  "amendments": []
+}

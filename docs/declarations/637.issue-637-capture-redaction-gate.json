@@ -1,0 +1,19 @@
+{
+  "issue_number": 637,
+  "iteration_id": "issue-637-capture-redaction-gate",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-06T18:40:11.091Z",
+  "baseline": {
+    "commit_sha": "75e7f4375a65d4d4fd804fd5053654cf64efa053",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:2b18d817376b7870f0335585534374b496b6be9ef17ad2d4e654ef66234f6018"
+  },
+  "declared_paths": [],
+  "declared_globs": [
+    "scripts/**",
+    "tests/**",
+    "docs/**"
+  ],
+  "amendments": []
+}

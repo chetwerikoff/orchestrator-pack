@@ -1,0 +1,37 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2082,
+  "declared_paths": [
+    "docs/fleet-alarm.md",
+    "docs/orchestration-runbook.md",
+    "scripts/fleet/fleet-sweep.test.ts",
+    "scripts/fleet/fleet-sweep.ts",
+    "scripts/fleet/fleet-wake.env.example",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts",
+    "scripts/fleet/fleet-wake@.service",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/lib/orchestrator-side-process-supervisor.ts",
+    "scripts/orca-runtime/",
+    "scripts/orchestrator-side-process-registry.cutover-target.json",
+    "scripts/orchestrator-side-process-registry.json",
+    "scripts/orchestrator-wake-supervisor.ts",
+    "scripts/pr2-foundation/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "docs/fleet-alarm.md",
+    "docs/orchestration-runbook.md",
+    "package.json",
+    "scripts/fleet/",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "source_revision": "0b668a55cd5cb1e5d43c1bf01061211e960e9119"
+}

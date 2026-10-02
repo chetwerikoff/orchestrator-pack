@@ -1,0 +1,56 @@
+{
+  "issue_number": 900,
+  "iteration_id": "zz-chatgpt-node22-ts-launcher",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": "chatgpt-node22-runtime",
+  "created_at": "2026-07-20T01:18:33.794Z",
+  "baseline": {
+    "commit_sha": "ddc5d4add70d0d2c3f31fedf2cd2d081e247f1cf",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:6e1ed79dc9c26e00de45c50af6efb84ba074ef857b4ca271e8520238ed2954ec"
+  },
+  "declared_paths": [
+    "tsconfig.json",
+    "tsconfig.base.json",
+    "package.json",
+    "package-lock.json",
+    "docs/target_repo_setup.md",
+    "docs/orchestrator-wake-filter.mjs",
+    "docs/migration_notes.md",
+    "docs/launch-argv-registry.mjs",
+    "docs/issue_template_example.md",
+    "docs/issue-841-ci-compatibility.md",
+    "docs/ao-0-10-review-harness-adoption.md",
+    ".github/workflows/vitest-wallclock-e2e.yml",
+    ".github/workflows/vitest-runtime-history-refresh.yml",
+    ".github/workflows/scope-guard.yml",
+    ".github/workflows/read-delegation-audit.yml",
+    ".github/workflows/codex-pr-review.yml",
+    "AGENTS.md"
+  ],
+  "declared_globs": [
+    "tests/**",
+    "scripts/**",
+    "plugins/ao-token-chain-ledger/**",
+    "plugins/ao-task-declaration/**",
+    "plugins/ao-scope-guard/**",
+    "plugins/ao-codex-pr-reviewer/**",
+    "plugins/_shared/lib/**"
+  ],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:c68f7622ee7a37d6f6ae0beff0f5d47f9e7b4030c22e858a2fc73b785f931810",
+      "new_active_scope_hash": "sha256:6e1ed79dc9c26e00de45c50af6efb84ba074ef857b4ca271e8520238ed2954ec",
+      "changed": {
+        "added": [
+          "AGENTS.md"
+        ],
+        "removed": []
+      },
+      "reason": "Operator-authorized Node 22 worker rule and fail-closed policy hardening",
+      "actor": "operator",
+      "timestamp": "2026-07-20T05:06:34.962Z",
+      "applied": true
+    }
+  ]
+}

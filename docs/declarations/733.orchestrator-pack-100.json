@@ -1,0 +1,35 @@
+{
+  "issue_number": 733,
+  "iteration_id": "orchestrator-pack-100",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-11T06:36:30.894Z",
+  "baseline": {
+    "commit_sha": "c33e1f136b4e467841e001840178ff44eb330a03",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:5501538ae6cf3f2e5cdf831bbb5c6116116784a712c8423421c7129526868adc"
+  },
+  "declared_paths": [
+    "scripts/draft-discipline.mjs",
+    "scripts/draft-discipline.test.ts",
+    "scripts/vitest-runtime-history.json"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:6fceec762da9e313a5863a93f8f8e8ca57b859c079bbb851e551f638d83aea9a",
+      "new_active_scope_hash": "sha256:5501538ae6cf3f2e5cdf831bbb5c6116116784a712c8423421c7129526868adc",
+      "changed": {
+        "added": [
+          "scripts/draft-discipline.test.ts",
+          "scripts/vitest-runtime-history.json"
+        ],
+        "removed": []
+      },
+      "reason": "Restore issue-mandated taxonomy exemption tests and runtime-history artifact",
+      "actor": "orchestrator-pack-100",
+      "timestamp": "2026-07-11T07:01:52.362Z",
+      "applied": true
+    }
+  ]
+}

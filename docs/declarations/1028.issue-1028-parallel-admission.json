@@ -1,0 +1,40 @@
+{
+  "issue_number": 1028,
+  "iteration_id": "issue-1028-parallel-admission",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-27T22:56:36.240Z",
+  "baseline": {
+    "commit_sha": "1822f18e4060be78ec856cbab9497d87d20de366",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:5b56dd2f2bf536799b09385ea4dca9c8426c8bdc656f61fe16ff5d5cec8ccb95"
+  },
+  "declared_paths": [
+    "docs/migration_notes.md",
+    "scripts/chatgpt-browser-turn.ts",
+    "scripts/chatgpt-browser-turn/README.md",
+    "scripts/chatgpt-browser-turn/coordination.ts",
+    "scripts/chatgpt-browser-turn/state.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter.ts",
+    "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:b0d8dc64085073d8157943c0b48c52939623b9cb3f5eb25ef16a0747cfc005f1",
+      "new_active_scope_hash": "sha256:5b56dd2f2bf536799b09385ea4dca9c8426c8bdc656f61fe16ff5d5cec8ccb95",
+      "changed": {
+        "added": [
+          "scripts/chatgpt-browser-turn/coordination.ts",
+          "scripts/chatgpt-browser-turn/ui-adapter.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Add coordination.ts and ui-adapter dispatch-fence scope after pack review fixes",
+      "actor": "local",
+      "timestamp": "2026-07-28T02:40:00.000Z",
+      "applied": true
+    }
+  ]
+}

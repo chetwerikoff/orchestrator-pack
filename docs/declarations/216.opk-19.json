@@ -1,0 +1,33 @@
+{
+  "issue_number": 216,
+  "iteration_id": "opk-19",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-06T06:00:00.000Z",
+  "baseline": {
+    "commit_sha": "2bc4b01ebc56e86354852aa5e076fde4f3bba368",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:pending"
+  },
+  "declared_paths": [
+    "docs/declarations/216.opk-19.json",
+    "docs/issues_drafts/00-architecture-decisions.md",
+    "docs/orchestrator-recovery-runbook.md",
+    "docs/review-finding-delivery-confirm.d.mts",
+    "docs/review-finding-delivery-confirm.mjs",
+    "docs/review-mechanical-cli.mjs",
+    "docs/worker-input-draft-submit.d.mts",
+    "docs/worker-input-draft-submit.d.ts",
+    "docs/worker-input-draft-submit.mjs",
+    "scripts/check-review-finding-delivery-confirm.ps1",
+    "scripts/lib/Submit-WorkerInputDraft.ps1",
+    "scripts/review-finding-delivery-confirm.ps1",
+    "scripts/review-finding-delivery-confirm.test.ts",
+    "scripts/review-finding-delivery-submit.test.ts",
+    "scripts/submit-worker-input-draft.test.ts"
+  ],
+  "declared_globs": [
+    "scripts/fixtures/review-finding-delivery-submit/**"
+  ],
+  "amendments": []
+}

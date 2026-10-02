@@ -1,0 +1,38 @@
+{
+  "issue_number": 549,
+  "iteration_id": "opk-117",
+  "iteration_id_source": "ao_session",
+  "supersedes": "opk-108",
+  "created_at": "2026-06-30T14:00:37.692Z",
+  "baseline": {
+    "commit_sha": "bbc5764dcc59506f7dd6e94e06102efc9eebcb7c",
+    "worktree_dirty": true,
+    "active_scope_hash": "sha256:961422d6e3858d8d0537e286dfe0a6436e81aed7b6204bceb6193d64265853b0"
+  },
+  "declared_paths": [
+    "docs/declarations/549.opk-108.json",
+    "docs/declarations/549.opk-117.json",
+    "docs/issues_drafts/178-graphql-quota-recurrence-closure.md",
+    "docs/migration_notes.md",
+    "prompts/agent_rules.md",
+    "scripts/check-auto-review-pr-context.ps1",
+    "scripts/check-gh-inventory-static.ps1",
+    "scripts/gh-inventory-static-guard.test.ts",
+    "scripts/gh-wrapper.test.ts",
+    "scripts/lib/Get-AutoReviewPrContext.ps1",
+    "scripts/lib/gh-api-endpoint.d.mts",
+    "scripts/lib/gh-api-endpoint.mjs",
+    "scripts/lib/gh-graphql-degraded.d.mts",
+    "scripts/lib/gh-graphql-degraded.mjs",
+    "scripts/lib/gh-inventory-match.mjs",
+    "scripts/lib/gh-inventory-static-guard.d.mts",
+    "scripts/lib/gh-inventory-static-guard.mjs",
+    "scripts/lib/gh-wrapper.mjs",
+    "scripts/lib/graphql-quota-github-read-inventory.d.mts",
+    "scripts/lib/graphql-quota-github-read-inventory.json",
+    "scripts/lib/graphql-quota-github-read-inventory.mjs",
+    "scripts/review-start-envelope-external-io.test.ts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

@@ -1,0 +1,30 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1413,
+  "declared_paths": [
+    "docs/declarations/1413.pr-scope.json",
+    "scripts/pr-scope-check.ps1",
+    "scripts/pr-scope-check.ts",
+    "scripts/pr-scope-runner.test.ts",
+    "scripts/pr-scope-runner.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "denylist": [
+    ".github/workflows/",
+    ".orca/",
+    "credentials/",
+    "docs/issue_queue_index.md",
+    "docs/issues_drafts/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/1413.pr-scope.json",
+    "scripts/pr-scope-check.ps1",
+    "scripts/pr-scope-check.ts",
+    "scripts/pr-scope-runner.test.ts",
+    "scripts/pr-scope-runner.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ]
+}

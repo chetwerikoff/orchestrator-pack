@@ -1,0 +1,20 @@
+{
+  "issue_number": 28,
+  "iteration_id": "op-12",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-05-28T05:52:53.877Z",
+  "baseline": {
+    "commit_sha": "bc421bab6cb0b0cffbe03dd456b4592a2a469e35",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:0be74bc0540e2a0365109a1b518d88daea709461b1b9cd32c3c750e1ea704d0b"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example"
+  ],
+  "declared_globs": [
+    "prompts/**",
+    "docs/**"
+  ],
+  "amendments": []
+}

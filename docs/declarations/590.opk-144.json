@@ -1,0 +1,19 @@
+{
+  "issue_number": 590,
+  "iteration_id": "opk-144",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-05T08:12:51.625Z",
+  "baseline": {
+    "commit_sha": "4e60643a211ba50b09d80fceed200e51b34610f5",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:ee287ae553db7540a1eba5c30f2247234092763bd81dbe099494ee1bb93b8b96"
+  },
+  "declared_paths": [],
+  "declared_globs": [
+    "docs/**",
+    "README.md",
+    "scripts/**"
+  ],
+  "amendments": []
+}

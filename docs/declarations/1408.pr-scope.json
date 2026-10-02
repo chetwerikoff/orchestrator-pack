@@ -1,0 +1,27 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1408,
+  "declared_paths": [
+    "docs/declarations/1408.pr-scope.json",
+    "scripts/pr-scope-declaration.test.ts",
+    "scripts/pr-scope-declaration.ts"
+  ],
+  "denylist": [
+    ".github/workflows/",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "credentials/",
+    "packages/core/",
+    "plugins/",
+    "prompts/",
+    "secrets/",
+    "tests/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/pr-scope-declaration.test.ts",
+    "scripts/pr-scope-declaration.ts"
+  ],
+  "source_revision": "57ee988f5ccdc038dcebd175a16fa8f4f211c1d7"
+}

@@ -1,0 +1,19 @@
+{
+  "issue_number": 186,
+  "iteration_id": "opk-5",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-05T01:55:36.803Z",
+  "baseline": {
+    "commit_sha": "7b680fbbc0ed50de22d388c6245c35378376ebbf",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:8dca7892a7f13cd092523bcb8e40537051bd235d294799119b425720e26c7f82"
+  },
+  "declared_paths": [
+    "prompts/agent_rules.md"
+  ],
+  "declared_globs": [
+    "prompts/**"
+  ],
+  "amendments": []
+}

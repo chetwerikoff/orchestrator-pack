@@ -1,0 +1,25 @@
+{
+  "issue_number": 593,
+  "iteration_id": "opk-143",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-05T08:35:31.598Z",
+  "baseline": {
+    "commit_sha": "a7fb3ff7586eec470ca83f4c95ced8e651fe5205",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:35ceb0715f06b4e1d2ae3966f91afa33cee520b05728498b06d199d49aac2f59"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "scripts/verify.ps1",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [
+    "prompts/**",
+    "docs/**",
+    "scripts/**",
+    "tests/**",
+    "tests/external-output-references/**"
+  ],
+  "amendments": []
+}

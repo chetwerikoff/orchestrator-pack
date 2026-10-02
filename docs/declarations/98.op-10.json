@@ -1,0 +1,26 @@
+{
+  "issue_number": 98,
+  "iteration_id": "op-10",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-05-31T06:51:27.054Z",
+  "baseline": {
+    "commit_sha": "f9d41d25e9d5e81b68e282a569576711fcc3adf7",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:358cc67e0c4b6e29558fe28bee4a1226d960b42e5d63caff6c7c35aaad5d0f36"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "docs/orchestrator-recovery-runbook.md",
+    "docs/migration_notes.md",
+    "docs/issues_drafts/00-architecture-decisions.md",
+    "scripts/lib/Get-AutoReviewPrContext.ps1",
+    "scripts/verify.ps1",
+    "scripts/check-orchestrator-review-idempotency.ps1",
+    "scripts/check-auto-review-pr-context.ps1",
+    "scripts/check-reviewer-workspace-preflight.ps1",
+    "scripts/reviewer-workspace-preflight.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

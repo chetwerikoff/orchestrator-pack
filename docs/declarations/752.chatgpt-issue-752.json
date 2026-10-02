@@ -1,0 +1,52 @@
+{
+  "issue_number": 752,
+  "iteration_id": "chatgpt-issue-752",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-13T08:16:27.000Z",
+  "baseline": {
+    "commit_sha": "c19b139d20feb1d9edc45dec98766472dcaf4a96",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:afd56584c57f465d59040149e356d60ca0d12db73c46713bef4f32d71bfca149"
+  },
+  "declared_paths": [
+    "docs/vitest-live-store-audit.md",
+    "package.json",
+    "scripts/_test-pwsh-helpers.ts",
+    "scripts/check-vitest-live-store-isolation.mjs",
+    "scripts/escalation-state-test-isolation.test.ts",
+    "scripts/lib/Initialize-ReviewerPolicyCheck.ps1",
+    "scripts/lib/OpkVitestStoreIsolation.ps1",
+    "scripts/lib/Set-OpkVitestHarnessEnv.ps1",
+    "scripts/lib/vitest-live-store-harness.d.mts",
+    "scripts/lib/vitest-live-store-harness.mjs",
+    "scripts/lib/vitest-live-store-parent-guard.mjs",
+    "scripts/run-vitest-with-harness.mjs",
+    "scripts/test-harness-escalation-env.ts",
+    "scripts/vestigial-fleet-retirement.test.ts",
+    "scripts/vitest-global-setup.ts",
+    "scripts/vitest-live-store-inventory.json",
+    "scripts/vitest-live-store-preload.mjs",
+    "vitest.config.ts"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:be3978baf2568889c285e3304a7b068ccf997f3354e9232ee86d45338158e0e8",
+      "new_active_scope_hash": "sha256:afd56584c57f465d59040149e356d60ca0d12db73c46713bef4f32d71bfca149",
+      "changed": {
+        "added": [
+          "scripts/escalation-state-test-isolation.test.ts",
+          "scripts/lib/Initialize-ReviewerPolicyCheck.ps1",
+          "scripts/lib/vitest-live-store-parent-guard.mjs",
+          "scripts/vestigial-fleet-retirement.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "CI verification exposed four harness-integration seams. The reviewer-policy helper needed the supported launcher, read-only verifier subprocesses needed the preserved real PowerShell binary, parent transient monitoring required a shared wrapper, and the legacy escalation isolation fixture had to stop seeding the actual live-default file. The PowerShell transport now performs inventory-driven Node preflight before spawning unchanged argv and forwards stdio/signals without per-process resolver proxy overhead. These are test-path and harness-boundary corrections only; production schemas and default paths remain unchanged.",
+      "actor": "chatgpt-issue-752",
+      "timestamp": "2026-07-13T16:31:00.000Z",
+      "applied": true
+    }
+  ]
+}

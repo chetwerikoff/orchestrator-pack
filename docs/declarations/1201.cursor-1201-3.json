@@ -1,0 +1,47 @@
+{
+  "issue_number": 1201,
+  "iteration_id": "cursor-1201-3",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": "cursor-1201-2",
+  "created_at": "2026-08-02T11:25:54.957Z",
+  "baseline": {
+    "commit_sha": "8709dbc9c4615bc666c25eed864606722d1bd9be",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:dbf025f8dde2036cb8f0290c768db1130b3a2d1e00ddc46191360d1c2f757999"
+  },
+  "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    "docs/review-lanes.md",
+    "docs/tiering.md",
+    "scripts/lib/create-issue-stage-record-cli.ts",
+    "scripts/lib/create-issue-stage-record-core.ts",
+    "scripts/lib/create-issue-stage-record-marker.ts",
+    "scripts/lib/create-issue-stage-record-receipt.ts",
+    "scripts/lib/create-issue-stage-record-review-lane.test.ts",
+    "scripts/lib/create-issue-stage-record-review-lane.ts",
+    "scripts/lib/create-issue-stage-record-types.ts",
+    "scripts/lib/review-lane-input.ts",
+    "scripts/lib/review-lane-record.ts",
+    "scripts/lib/review-lane-routing.test.ts",
+    "scripts/lib/review-lane-routing.ts",
+    "scripts/lib/review-lane-selector.ts",
+    "scripts/lib/stage-completeness-core.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:dbf025f8dde2036cb8f0290c768db1130b3a2d1e00ddc46191360d1c2f757999",
+      "new_active_scope_hash": "sha256:dbf025f8dde2036cb8f0290c768db1130b3a2d1e00ddc46191360d1c2f757999",
+      "changed": {
+        "added": [],
+        "removed": []
+      },
+      "reason": "complete circle six routed integration against revision-aware main",
+      "actor": "local",
+      "timestamp": "2026-08-02T13:21:05.105Z",
+      "applied": true
+    }
+  ]
+}

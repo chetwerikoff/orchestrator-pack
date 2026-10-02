@@ -1,0 +1,21 @@
+{
+  "issue_number": 556,
+  "iteration_id": "opk-118",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-30T14:06:44.426Z",
+  "baseline": {
+    "commit_sha": "eb7fa843560d2d0f50a8ef24e0ed317dde01947e",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:437dad23351d325106c52a0b6de8e612e26a3aac2d9aa180e122af9efb78bce3"
+  },
+  "declared_paths": [
+    "vitest.config.ts"
+  ],
+  "declared_globs": [
+    ".github/workflows/**",
+    "scripts/**",
+    "docs/**"
+  ],
+  "amendments": []
+}

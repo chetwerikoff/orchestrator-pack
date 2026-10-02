@@ -1,0 +1,28 @@
+{
+  "issue_number": 659,
+  "iteration_id": "orchestrator-pack-30",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-07T14:58:00.000Z",
+  "baseline": {
+    "commit_sha": "d2e9c3549fabc1cafca2d93de4bf5ca8890532b6",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:5a1d3d437313a406051c52fec9056e79fcabd73835d645104aad500880b62560"
+  },
+  "declared_paths": [
+    "scripts/check-side-process-launch-contract.ps1",
+    "scripts/fixtures/side-process-launch-contract/mismatch-child.ps1",
+    "scripts/fixtures/side-process-launch-contract/pending-llm-orchestrator-escalation.json",
+    "scripts/fixtures/side-process-launch-contract/registry-mismatch.json",
+    "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+    "scripts/orchestrator-escalation-router.ps1",
+    "scripts/side-process-launch-contract.test.ts",
+    "scripts/verify.ps1",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [
+    "scripts/**",
+    "tests/**"
+  ],
+  "amendments": []
+}

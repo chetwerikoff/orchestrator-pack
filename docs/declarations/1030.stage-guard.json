@@ -1,0 +1,22 @@
+{
+  "issue_number": 1030,
+  "iteration_id": "stage-guard",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-27T22:00:00.000Z",
+  "baseline": {
+    "commit_sha": "ebc26303abbbc140ad92edcc7dc657fc348ab3c3",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:d2ff48e05d3bbee8af236d790f5a40387e45f134224f78cc92ef910ae319117e"
+  },
+  "declared_paths": [
+    "scripts/lib/stage-completeness-core.ts",
+    "scripts/stage-completeness-guard.ts",
+    "scripts/stage-completeness-guard.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [
+    "tests/fixtures/stage-completeness/**"
+  ],
+  "amendments": []
+}

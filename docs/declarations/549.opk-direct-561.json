@@ -1,0 +1,17 @@
+{
+  "issue_number": 549,
+  "iteration_id": "opk-direct-561",
+  "iteration_id_source": "ao_session",
+  "supersedes": "opk-117",
+  "created_at": "2026-07-01T02:30:06.004Z",
+  "baseline": {
+    "commit_sha": "b30e49d0c2fbfd12d4193e468e2671c8ffe5cbc3",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:831b3552ce5b751c5f6752070f70d39cbd016153c3c3e0aa55240af419f8788b"
+  },
+  "declared_paths": [
+    "scripts/gh-wrapper.test.ts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

@@ -1,0 +1,39 @@
+{
+  "issue_number": 1197,
+  "iteration_id": "issue-1197-direct-1",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-08-02T08:02:10.346Z",
+  "baseline": {
+    "commit_sha": "eed5f323031bdff955ba32c3866c8acd9460cfe0",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:2f0ce58ac0e1372d7abdf2ccbc88a0adfc53397ad3e1d37981ed39bafc3db48b"
+  },
+  "declared_paths": [
+    "scripts/kernel/subprocess.ts",
+    "scripts/lib/create-issue-stage-record-gh.ts"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:a209e7b771acf23acb18cdd5cb88426f5a4f284e0f5ca8f894219680adde367f",
+      "new_active_scope_hash": "sha256:2f0ce58ac0e1372d7abdf2ccbc88a0adfc53397ad3e1d37981ed39bafc3db48b",
+      "changed": {
+        "added": [
+          "scripts/kernel/subprocess.ts",
+          "scripts/lib/create-issue-stage-record-gh.ts"
+        ],
+        "removed": [
+          ".claude/skills/create-issue-draft/SKILL.md",
+          "scripts/**/*.test.ts",
+          "scripts/lib/vitest-pre-topology-measurement.mjs",
+          "scripts/vitest-ci-lanes.config.json"
+        ]
+      },
+      "reason": "Issue #1197 review follow-up: enforce the existing GH publication timeout through the shared synchronous subprocess transport and close the authority contract checks.",
+      "actor": "cursor",
+      "timestamp": "2026-08-02T09:41:40.366Z",
+      "applied": true
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1644,
+  "declared_paths": [
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts"
+  ],
+  "denylist": [
+    ".ao/",
+    ".github/",
+    "credentials/",
+    "docs/issues_drafts/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/finding-ledger-guard.mjs",
+    "scripts/finding-ledger-guard.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts"
+  ],
+  "source_revision": "6b25fa418ca157dee7f3463648f2e7afb5d302f5"
+}

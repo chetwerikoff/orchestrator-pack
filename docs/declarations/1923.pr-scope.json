@@ -1,0 +1,41 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1923,
+  "declared_paths": [
+    ".claude/skills/execute-issue-with-gpt/SKILL.md",
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    ".cursor/skills/execute-issue-with-gpt/SKILL.md",
+    "AGENTS.md",
+    "docs/chatgpt-task-execution-runbook.md",
+    "docs/orchestration-runbook.md"
+  ],
+  "denylist": [
+    ".claude/skills/create-issue-draft/",
+    ".cursor/rules/",
+    ".cursor/skills/discuss-with-gpt/",
+    ".github/",
+    "CLAUDE.md",
+    "credentials/",
+    "docs/browser-gpt-turn-runbook.md",
+    "docs/chat-executor-rules.md",
+    "docs/flow-manager-long-running-child-runbook.md",
+    "docs/tiering.md",
+    "packages/core/",
+    "plugins/",
+    "prompts/",
+    "README.md",
+    "scripts/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/execute-issue-with-gpt/SKILL.md",
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    ".cursor/skills/execute-issue-with-gpt/SKILL.md",
+    "AGENTS.md",
+    "docs/chatgpt-task-execution-runbook.md",
+    "docs/declarations/",
+    "docs/orchestration-runbook.md"
+  ],
+  "source_revision": "f29202a61d8600f49f261c6c7dd1eb9cae8bc788"
+}

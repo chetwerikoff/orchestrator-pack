@@ -1,0 +1,40 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2050,
+  "declared_paths": [
+    ".cursor/skills/execute-issue-with-gpt/SKILL.md",
+    "docs/browser-gpt-turn-runbook.md",
+    "docs/chatgpt-task-execution-runbook.md",
+    "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/browser-gpt-page-probe.ts",
+    "scripts/chatgpt-browser-turn/README.md",
+    "scripts/flow-manager-authority-contract.test.ts"
+  ],
+  "denylist": [
+    ".ao/",
+    ".env",
+    ".github/",
+    "credentials/",
+    "packages/core/",
+    "plugins/",
+    "scripts/chatgpt-browser-turn/state-light-turn-observation.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter.ts",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/vitest-ci-lanes.config.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/skills/execute-issue-with-gpt/SKILL.md",
+    "docs/browser-gpt-turn-runbook.md",
+    "docs/chatgpt-task-execution-runbook.md",
+    "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/browser-gpt-page-probe.ts",
+    "scripts/chatgpt-browser-turn/README.md",
+    "scripts/fixtures/execute-issue-timeout-reobservation/",
+    "scripts/flow-manager-authority-contract.test.ts"
+  ],
+  "source_revision": "5ff3e3568092d9444fe022291f62bb29bd769108"
+}

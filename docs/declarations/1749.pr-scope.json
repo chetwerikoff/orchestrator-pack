@@ -1,0 +1,27 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1749,
+  "declared_paths": [
+    "docs/declarations/1749.pr-scope.json",
+    "scripts/direct-pack-review-status.test.ts",
+    "scripts/direct-pack-review-status.ts",
+    "scripts/lib/github-review-reconciliation.ts",
+    "scripts/lib/pack-review-delivery.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "denylist": [
+    ".orca/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/1749.pr-scope.json",
+    "scripts/direct-pack-review-status.test.ts",
+    "scripts/direct-pack-review-status.ts",
+    "scripts/lib/github-review-reconciliation.ts",
+    "scripts/lib/pack-review-delivery.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ]
+}

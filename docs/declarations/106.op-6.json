@@ -1,0 +1,19 @@
+{
+  "issue_number": 106,
+  "iteration_id": "op-6",
+  "iteration_id_source": "ao_session",
+  "supersedes": "architect-draft-36",
+  "created_at": "2026-05-31T02:38:41.630Z",
+  "baseline": {
+    "commit_sha": "a2d6e5bccf252cb4ec07c639d798daca7b1a5013",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:0768555b699b1915f2d68e326a9c0f77d17c1133ac3514d1af9a1803263ae7b8"
+  },
+  "declared_paths": [],
+  "declared_globs": [
+    "scripts/**",
+    "tests/**",
+    "docs/**"
+  ],
+  "amendments": []
+}

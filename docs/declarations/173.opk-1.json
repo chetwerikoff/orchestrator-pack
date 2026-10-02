@@ -1,0 +1,29 @@
+{
+  "issue_number": 173,
+  "iteration_id": "opk-1",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-04T15:34:17.767Z",
+  "baseline": {
+    "commit_sha": "15aedf1cdf4f3cf6083e8a65314652814bdb7c32",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:abf93ba446c518699e590a4e9186b335b3a76d1f50499fddd08a6c6c1b005d72"
+  },
+  "declared_paths": [
+    "docs/declarations/173.opk-1.json",
+    "docs/terminal-flood-detect.mjs",
+    "docs/terminal-flood-detect.d.ts",
+    "docs/terminal-flood-detect.d.mts",
+    "docs/migration_notes.md",
+    "docs/orchestrator-autoloop-go-live.md",
+    "docs/orchestrator-recovery-runbook.md",
+    "scripts/terminal-flood-detect.ps1",
+    "scripts/terminal-flood-detect.test.ts",
+    "scripts/check-terminal-flood-detect.ps1",
+    "scripts/verify.ps1"
+  ],
+  "declared_globs": [
+    "scripts/fixtures/terminal-flood-detect/**"
+  ],
+  "amendments": []
+}

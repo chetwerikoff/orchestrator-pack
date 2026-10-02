@@ -1,0 +1,37 @@
+{
+  "issue_number": 973,
+  "iteration_id": "chat-fix-2",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": "chat-fix-1",
+  "created_at": "2026-07-25T08:50:00Z",
+  "baseline": {
+    "commit_sha": "4a2c6fdce8aba53d82ce23fa73cc94b0177d817f",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:dfbb311bc8e7514831b574099759d60400fde6a8c2c696cdf17c99d07f4a1624"
+  },
+  "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    "docs/tiering.md",
+    "scripts/lib/tier-gate-core.ts",
+    "scripts/pr2a/final-conformance.ts",
+    "scripts/tier-gate-guard.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:d084a02b42bab7b6c46eef056f473c549fe83fd15d270c16116989c8fed9f70d",
+      "new_active_scope_hash": "sha256:dfbb311bc8e7514831b574099759d60400fde6a8c2c696cdf17c99d07f4a1624",
+      "changed": {
+        "added": [
+          "scripts/pr2a/final-conformance.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Issue #973 binding scope amendment 5077776462 authorized the downstream #948 final-conformance compatibility correction; PR #994 subsequently landed that support fix on main, so PR #991 does not modify scripts/pr2a/final-conformance.ts.",
+      "actor": "operator",
+      "timestamp": "2026-07-25T08:50:00Z",
+      "applied": true
+    }
+  ]
+}

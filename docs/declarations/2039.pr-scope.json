@@ -1,0 +1,42 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2039,
+  "declared_paths": [
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    "scripts/create-issue-convergence.test.ts",
+    "scripts/flow-manager-authority-contract.test.ts",
+    "scripts/lib/create-issue-stage-lifecycle.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/create-issue-stage-record-cli.ts",
+    "scripts/lib/create-issue-stage-record.test.ts",
+    "scripts/lib/manager-review-terminal-bundle.ts",
+    "scripts/lib/worker-smoke-core-base.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "denylist": [
+    "AGENTS.md",
+    "credentials/",
+    "docs/browser-gpt-turn-runbook.md",
+    "docs/create-issue-draft-acceptance-artifacts.md",
+    "docs/tiering.md",
+    "packages/core/",
+    "scripts/chatgpt-browser-turn/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    "scripts/create-issue-convergence.test.ts",
+    "scripts/flow-manager-authority-contract.test.ts",
+    "scripts/lib/create-issue-stage-lifecycle.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/create-issue-stage-record-cli.ts",
+    "scripts/lib/create-issue-stage-record.test.ts",
+    "scripts/lib/manager-review-terminal-bundle.ts",
+    "scripts/lib/worker-smoke-core-base.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "source_revision": "ec37a4778e98dea00edf3e5262b00e2318c78871"
+}

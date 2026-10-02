@@ -1,0 +1,42 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1199,
+  "declared_paths": [
+    "package.json",
+    "scripts/ci-preflight/cli.ts",
+    "scripts/ci-preflight/contract.test.ts",
+    "scripts/ci-preflight/contract.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json",
+    "tests/external-output-references/ci-preflight/contract-fixture.json"
+  ],
+  "denylist": [
+    ".ao/",
+    ".github/workflows/",
+    "agent-orchestrator.yaml",
+    "credentials/",
+    "packages/core/",
+    "scripts/check-ci-cheap-wins.ps1",
+    "scripts/check-reusable.ps1",
+    "scripts/check-verify-runtime.ps1",
+    "scripts/emit-vitest-heavy-topology.mjs",
+    "scripts/install-pester-ci.ps1",
+    "scripts/kernel/subprocess.ts",
+    "scripts/run-vitest-heavy-shard.ps1",
+    "scripts/run-vitest-light-lane.ps1",
+    "scripts/test-all.ps1",
+    "scripts/verify.ps1",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "package.json",
+    "scripts/ci-preflight/",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json",
+    "tests/external-output-references/ci-preflight/"
+  ],
+  "source_revision": "3d8c04e42798a153726d5a8f503a9f16234eb80d"
+}

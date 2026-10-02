@@ -1,0 +1,23 @@
+{
+  "issue_number": 94,
+  "iteration_id": "architect-94",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-05-30T11:51:45.486Z",
+  "baseline": {
+    "commit_sha": "6cd501c08cd7afd48c11a01f9ebadb178aa52346",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:15cc14fd1846ac3c86723f497ac587d140a06daee6c84530386f17626b61bee6"
+  },
+  "declared_paths": [
+    "docs/migration_notes.md",
+    "docs/orchestrator-recovery-runbook.md",
+    "scripts/unlock-op-orchestrator-worktree.ps1",
+    "scripts/lib/Get-OrchestratorWorktreeHygiene.ps1",
+    "scripts/orchestrator-diagnose.ps1",
+    "scripts/orchestrator-worktree-preflight.ps1",
+    "scripts/wait-orchestrator-launch.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

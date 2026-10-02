@@ -1,0 +1,18 @@
+{
+  "issue_number": 1012,
+  "iteration_id": "chat-1012-push-auth-4",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": "chat-1012-app-proof-3",
+  "created_at": "2026-07-26T15:20:00Z",
+  "baseline": {
+    "commit_sha": "490fcaa6b9899ea676d4ae35a9352d5dc739b8f9",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:8e5a474c14418f04a552abc0403bbea00aa2a377348fb8d6f9178ca5a8d5ec46"
+  },
+  "declared_paths": [
+    ".github/workflows/vitest-runtime-history-refresh.yml",
+    "scripts/toolchain/vitest-runtime-history-delivery.issue-1012.spec.ts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

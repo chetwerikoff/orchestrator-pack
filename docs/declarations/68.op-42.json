@@ -1,0 +1,21 @@
+{
+  "issue_number": 68,
+  "iteration_id": "op-42",
+  "iteration_id_source": "ao_session",
+  "supersedes": "wrap-20260528T195912Z-023ef95b",
+  "created_at": "2026-05-29T03:25:09.003Z",
+  "baseline": {
+    "commit_sha": "ae939139a76ddd12bd5e806b2293caf1f1d090d8",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:7d15cdf8ca4858d9aa3f4a0d4dd625f1eab13f54e7793e01caf79eeaf0c978ed"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "docs/architecture.md",
+    "docs/migration_notes.md",
+    "docs/orchestrator-autoloop-go-live.md",
+    "docs/reviewer-switch-runbook.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

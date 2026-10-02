@@ -1,0 +1,20 @@
+{
+  "issue_number": 418,
+  "iteration_id": "opk-1",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-23T18:21:37.087Z",
+  "baseline": {
+    "commit_sha": "b0b0033cd7a19fe7fd80ed1c4ea99bdfd73b58f0",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:812c9bffd14d46c56d323a8c631b82fd71a9e6e4769618541067c2a94debb974"
+  },
+  "declared_paths": [],
+  "declared_globs": [
+    "scripts/**",
+    "docs/**",
+    "tests/external-output-references/**",
+    "tests/fixtures/**"
+  ],
+  "amendments": []
+}

@@ -1,0 +1,29 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2135,
+  "declared_paths": [
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    ".cursor/skills/execute-issue-with-gpt/SKILL.md",
+    "docs/chatgpt-task-execution-runbook.md",
+    "scripts/lib/create-issue-final-acceptance-contract.ts",
+    "scripts/lib/create-issue-final-acceptance-revision.test.ts",
+    "scripts/lib/create-issue-final-acceptance.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    ".cursor/skills/execute-issue-with-gpt/SKILL.md",
+    "docs/chatgpt-task-execution-runbook.md",
+    "docs/declarations/",
+    "scripts/lib/create-issue-final-acceptance-contract.ts",
+    "scripts/lib/create-issue-final-acceptance-revision.test.ts",
+    "scripts/lib/create-issue-final-acceptance.ts"
+  ],
+  "source_revision": "7b8354e3c437ec2f67df56b837e240363ab388f1"
+}

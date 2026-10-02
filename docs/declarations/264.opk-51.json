@@ -1,0 +1,30 @@
+{
+  "issue_number": 264,
+  "iteration_id": "opk-51",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-11T12:13:16.089Z",
+  "baseline": {
+    "commit_sha": "e64e033105e76531c663549f1a1f22b0ad3fa4d3",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:650aa8d1fe82649332ab622fa996a064f74a92633c5e8ef42b3e53fc0dd5e35a"
+  },
+  "declared_paths": [
+    "docs/read-delegation-audit.mjs",
+    "docs/read-delegation-audit.d.mts",
+    "docs/read-delegation-review-hook-capability.json",
+    "docs/coworker-read-delegation-audit.md",
+    "docs/migration_notes.md",
+    "scripts/invoke-read-delegation-audit-stop.ps1",
+    "scripts/read-delegation-audit.test.ts",
+    "scripts/fixtures/read-delegation-audit/code-class-excluded.json",
+    "scripts/fixtures/read-delegation-audit/no-edit-no-reason.json",
+    "scripts/fixtures/read-delegation-audit/reviewer-path-excluded.json",
+    "scripts/fixtures/read-delegation-audit/ambient-reviewer-env-ordinary.json",
+    "scripts/fixtures/read-delegation-audit/ambient-review-marker-ordinary.json",
+    "scripts/fixtures/read-delegation-audit/undecidable-review-marker.json",
+    "scripts/fixtures/read-delegation-audit/review-hook-capture-world-a.json"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

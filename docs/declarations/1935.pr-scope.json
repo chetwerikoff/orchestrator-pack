@@ -1,0 +1,46 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1935,
+  "declared_paths": [
+    ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    "docs/browser-gpt-turn-runbook.md",
+    "docs/create-issue-draft-acceptance-artifacts.md",
+    "scripts/create-issue-convergence.test.ts",
+    "scripts/flow-manager-authority-contract.test.ts",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/lib/create-issue-browser-gpt-preflight.ts",
+    "scripts/lib/create-issue-final-acceptance-contract.ts",
+    "scripts/lib/create-issue-final-acceptance.ts",
+    "scripts/lib/create-issue-github-artifact-authority.ts",
+    "scripts/lib/create-issue-next-action.ts",
+    "scripts/lib/create-issue-stage-lifecycle.test.ts",
+    "scripts/lib/create-issue-stage-lifecycle.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/create-issue-stage-record-cli.ts",
+    "scripts/lib/create-issue-stage-record-core.ts",
+    "scripts/lib/graphql-quota-github-read-inventory.json",
+    "scripts/lib/manager-review-terminal-bundle.ts",
+    "scripts/lib/stage-completeness-core.ts",
+    "scripts/stage-completeness-guard.test.ts",
+    "scripts/toolchain/create-issue-final-acceptance.test.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "tests/external-output-references/create-issue-1923-r02-convergence.json"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/rules/",
+    ".cursor/skills/create-issue-draft/",
+    "docs/",
+    "prompts/",
+    "scripts/",
+    "tests/external-output-references/"
+  ],
+  "source_revision": "b483a39d72bc2919b1acbcb3e054c4b34a616466"
+}

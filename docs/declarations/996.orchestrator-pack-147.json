@@ -1,0 +1,43 @@
+{
+  "issue_number": 996,
+  "iteration_id": "orchestrator-pack-147",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-26T00:35:30.879Z",
+  "baseline": {
+    "commit_sha": "3495151f88a1eefdc67b7b5b89d34461bdc3b8a9",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:e547d2196062ed3b8f82873cd0b4858e2f2c4b33f2b2b7f05f6276081190979e"
+  },
+  "declared_paths": [
+    "scripts/chatgpt-browser-turn.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter.ts",
+    "scripts/chatgpt-browser-turn/terminal-witness.ts",
+    "scripts/chatgpt-browser-turn/fixtures/fake-turn-page.ts",
+    "scripts/chatgpt-browser-turn/fixtures/live-terminal-frame-contract.ts",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts",
+    "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:6fc07f152c2265284a01e0bab157c09ea5b733fc9fe19227e8b976957d6e57d8",
+      "new_active_scope_hash": "sha256:e547d2196062ed3b8f82873cd0b4858e2f2c4b33f2b2b7f05f6276081190979e",
+      "changed": {
+        "added": [
+          "scripts/chatgpt-browser-turn/fixtures/fake-turn-page.ts",
+          "scripts/chatgpt-browser-turn/fixtures/live-terminal-frame-contract.ts",
+          "scripts/chatgpt-browser-turn/terminal-witness.ts",
+          "scripts/chatgpt-browser-turn/ui-adapter.ts"
+        ],
+        "removed": [
+          "scripts/chatgpt-browser-turn"
+        ]
+      },
+      "reason": "add explicit fixture paths for scope guard",
+      "actor": "orchestrator-pack-147",
+      "timestamp": "2026-07-26T00:42:40.088Z",
+      "applied": true
+    }
+  ]
+}

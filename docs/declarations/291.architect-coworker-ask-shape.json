@@ -1,0 +1,21 @@
+{
+  "issue_number": 291,
+  "iteration_id": "architect-coworker-ask-shape",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-06-13T08:56:48.601Z",
+  "baseline": {
+    "commit_sha": "c096a4b1c47c4286880e9247a3c83de0f121f8b5",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:5487cec6b17cb890b00cae8bb6a35f04648eccadafa82dbe281a9b2e21645dc6"
+  },
+  "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    ".claude/skills/publish-issue-draft/SKILL.md",
+    ".claude/skills/study-external-source/SKILL.md",
+    "AGENTS.md",
+    "prompts/agent_rules.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

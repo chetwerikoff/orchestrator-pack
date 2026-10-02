@@ -1,0 +1,17 @@
+{
+  "issue_number": 118,
+  "iteration_id": "op-14",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-02T12:01:54.115Z",
+  "baseline": {
+    "commit_sha": "edc595e15fab5779a0af81bff6522d5bf2e4270e",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:5cddab3f896f405602cca81d977f572d819c27279706063d75bf973b21e73897"
+  },
+  "declared_paths": [],
+  "declared_globs": [
+    "scripts/**"
+  ],
+  "amendments": []
+}

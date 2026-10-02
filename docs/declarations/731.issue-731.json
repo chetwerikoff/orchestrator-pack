@@ -1,0 +1,21 @@
+{
+  "issue_number": 731,
+  "iteration_id": "issue-731",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-11T05:58:00.000Z",
+  "baseline": {
+    "commit_sha": "84ba4cb12c7d5b868a3432807d7d3ab3e49d4c28",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:7317317317317317317317317317317317317317317317317317317317317317"
+  },
+  "declared_paths": [
+    "docs/declarations/731.issue-731.json"
+  ],
+  "declared_globs": [
+    ".github/workflows/**",
+    "docs/**",
+    "scripts/**"
+  ],
+  "amendments": []
+}

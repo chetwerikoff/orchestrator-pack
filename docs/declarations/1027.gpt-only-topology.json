@@ -1,0 +1,24 @@
+{
+  "issue_number": 1027,
+  "iteration_id": "gpt-only-topology",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-28T13:57:56.272Z",
+  "baseline": {
+    "commit_sha": "cb8be072d017146b356245ea9d790d39a46746f2",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:0d01c20bd67f60e194ed78b1c4d0b1283b024a01848698d1baeb889a0fc5610b"
+  },
+  "declared_paths": [
+    "AGENTS.md",
+    "docs/tiering.md",
+    ".claude/skills/create-issue-draft/SKILL.md",
+    ".claude/skills/adversarial-draft-review/SKILL.md",
+    ".claude/skills/discuss-with-gpt/SKILL.md",
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    ".cursor/skills/adversarial-draft-review/SKILL.md",
+    ".cursor/skills/discuss-with-gpt/SKILL.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

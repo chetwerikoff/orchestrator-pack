@@ -1,0 +1,33 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1256,
+  "declared_paths": [
+    "scripts/pr2-foundation/real-scope-proof.test.ts",
+    "scripts/pr2-foundation/real-scope-proof.ts"
+  ],
+  "denylist": [
+    ".ao/",
+    ".github/",
+    "credentials/",
+    "docs/",
+    "package.json",
+    "packages/core/",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/pr-scope-check.ts",
+    "scripts/pr2-foundation/contract-test-runner.ts",
+    "scripts/pr2-foundation/contracts.ts",
+    "scripts/pr2-foundation/mutation-behavior-policy-fixtures.ts",
+    "scripts/pr2-foundation/mutation-behavior-probes.ts",
+    "scripts/pr2-foundation/mutation-catalog.ts",
+    "scripts/pr2-foundation/mutation-semantic-gates.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/pr2-foundation/real-scope-proof.test.ts",
+    "scripts/pr2-foundation/real-scope-proof.ts"
+  ],
+  "source_revision": "23df951222f2f2bb2e52481837af49c52a75f559"
+}

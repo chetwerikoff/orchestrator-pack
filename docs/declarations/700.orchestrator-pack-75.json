@@ -1,0 +1,18 @@
+{
+  "issue_number": 700,
+  "iteration_id": "orchestrator-pack-75",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-09T04:08:20.306Z",
+  "baseline": {
+    "commit_sha": "af81f4661bb56c838a7d0272ef6844f42c51dfae",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:ae38b241870b2bf44f97eb9976243e3848abd4d8ca7dd2f393443c43ca14674f"
+  },
+  "declared_paths": [],
+  "declared_globs": [
+    "docs/**",
+    "scripts/**"
+  ],
+  "amendments": []
+}

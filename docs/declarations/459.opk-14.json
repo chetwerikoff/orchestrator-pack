@@ -1,0 +1,51 @@
+{
+  "issue_number": 459,
+  "iteration_id": "opk-14",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-25T04:40:00.000Z",
+  "baseline": {
+    "commit_sha": "HEAD",
+    "worktree_dirty": true,
+    "active_scope_hash": "sha256:14cf00537d8ccf340b5a428fa4b3c145a69cc0bc23854039a2794cb27de952d5"
+  },
+  "declared_paths": [
+    "docs/ci-failure-notification.d.mts",
+    "docs/ci-failure-notification.mjs",
+    "docs/declarations/459.opk-14.json",
+    "docs/worker-nudge-gate.d.mts",
+    "docs/worker-nudge-gate.mjs",
+    "scripts/ci-failure-fixing-stint-orchestrator-turn.test.ts",
+    "scripts/ci-failure-notification.ps1",
+    "scripts/ci-failure-notification.test.ts",
+    "scripts/contract-evidence-reverify-production-commands.json",
+    "scripts/fixtures/ci-failure-notification/live-worker-cross-head-h2-bridge.json",
+    "scripts/fixtures/ci-failure-notification/live-worker-cross-head-h3-bridge.json",
+    "scripts/fixtures/ci-failure-notification/live-worker-cross-head-stale-bridge.json",
+    "scripts/invoke-gated-worker-nudge.ps1",
+    "scripts/lib/ci-failure-capture-worker-state.mjs",
+    "scripts/lib/ci-failure-fixing-stint-proof.mjs",
+    "scripts/run-ci-failure-fixing-stint-proof.mjs",
+    "scripts/worker-nudge-gate.test.ts"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:issue-459-ci-failure-orchestrator-turn-fixing-stint-suppression",
+      "new_active_scope_hash": "sha256:14cf00537d8ccf340b5a428fa4b3c145a69cc0bc23854039a2794cb27de952d5",
+      "changed": {
+        "added": [
+          "docs/worker-nudge-gate.d.mts",
+          "scripts/ci-failure-notification.ps1",
+          "scripts/ci-failure-notification.test.ts",
+          "scripts/worker-nudge-gate.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Review opk-rev-974/978: evaluate-suppressor wrapper registration plus worker-nudge-gate regression tests for headSha resolution and PS 5.1 invoke wrapper",
+      "actor": "opk-19",
+      "timestamp": "2026-06-25T08:50:00.000Z",
+      "applied": true
+    }
+  ]
+}

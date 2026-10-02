@@ -1,0 +1,28 @@
+{
+  "issue_number": 146,
+  "iteration_id": "op-1",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-03T10:35:32.080Z",
+  "baseline": {
+    "commit_sha": "1ba9cfd2a19f77b32d60eba6d224bd6aaacb1f4c",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:50d19dc44003027c28acd7a6c68bb2a3d1f04a20ad8cd7839fccaa6a65d431fb"
+  },
+  "declared_paths": [
+    "scripts/review-architect-artifact.ps1",
+    "AGENTS.md",
+    "prompts/investigate_root_cause.md"
+  ],
+  "declared_globs": [
+    ".claude/skills/create-issue-draft/**",
+    ".claude/skills/direct-fix-checklist/**",
+    ".claude/skills/publish-issue-draft/**",
+    ".claude/skills/study-external-source/**",
+    ".claude/skills/switch-pack-reviewer/**",
+    ".cursor/skills/publish-issue-draft/**",
+    ".cursor/skills/create-issue-draft/**",
+    ".cursor/skills/study-external-source/**"
+  ],
+  "amendments": []
+}

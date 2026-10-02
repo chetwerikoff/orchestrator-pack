@@ -1,0 +1,21 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2055,
+  "declared_paths": [
+    "scripts/pack-review-ordering.test.ts",
+    "scripts/pack-review-state.ts"
+  ],
+  "denylist": [
+    ".env",
+    "credentials/",
+    "mining/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/pack-review-ordering.test.ts",
+    "scripts/pack-review-state.ts"
+  ],
+  "source_revision": "80bbd299969d382e95dd223a46fe12cd01bf13ef"
+}

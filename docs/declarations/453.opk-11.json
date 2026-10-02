@@ -1,0 +1,33 @@
+{
+  "issue_number": 453,
+  "iteration_id": "opk-11",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-25T02:48:39.382Z",
+  "baseline": {
+    "commit_sha": "bceae72fa0e41e16db15e17db9f08939fc8da009",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:9895f24e2d360e8d78dbe0d1bf2e92efc978e324f7c4c186269b73216e053ef3"
+  },
+  "declared_paths": [
+    "docs/github-fleet-cache-measurement.md",
+    "docs/migration_notes.md",
+    "scripts/check-gh-inventory-static.ps1",
+    "scripts/check-github-fleet-cache-bypass.ps1",
+    "scripts/fixtures/github-fleet-cache/fake-gh.sh",
+    "scripts/gh-pr-checks-open-pr-list-node-limit.test.ts",
+    "scripts/github-fleet-cache-bypass-guard.test.ts",
+    "scripts/github-fleet-cache-coalesce.test.ts",
+    "scripts/github-fleet-cache-memo.test.ts",
+    "scripts/github-fleet-cache-stale-snapshot.test.ts",
+    "scripts/github-fleet-cache-test-harness.ts",
+    "scripts/lib/Gh-FleetInventoryCache.ps1",
+    "scripts/lib/Gh-PrChecks.ps1",
+    "scripts/lib/Orchestrator-SideEffectFence.ps1",
+    "scripts/review-finding-delivery-confirm.ps1",
+    "scripts/verify.ps1",
+    "docs/declarations/453.opk-11.json"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

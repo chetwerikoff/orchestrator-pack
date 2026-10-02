@@ -1,0 +1,21 @@
+{
+  "issue_number": 159,
+  "iteration_id": "opk-6",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-04T03:55:26.020Z",
+  "baseline": {
+    "commit_sha": "f48c23d940f8e3d9f74e64b08822ab644f7235bc",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:4fcae01d58c18376ed8df1772b5c456a6e01976b42770e794a5b142f0fef6eb8"
+  },
+  "declared_paths": [
+    "scripts/pr-scope-contract.ts",
+    "scripts/pr-scope-check.ts",
+    "scripts/pr-scope-check.test.ts",
+    "docs/repository_policy.md",
+    "docs/issues_drafts/56-spec-only-allowlist-skills.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

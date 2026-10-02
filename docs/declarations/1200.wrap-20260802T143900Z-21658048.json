@@ -1,0 +1,37 @@
+{
+  "issue_number": 1200,
+  "iteration_id": "wrap-20260802T143900Z-21658048",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": "wrap-20260802T123857Z-94c70212",
+  "created_at": "2026-08-02T14:35:17.091Z",
+  "baseline": {
+    "commit_sha": "027ee7ace689a8e690da287d268c5e9abb4b4426",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:ac94f2b80372e8376147839424747142210293efc2fd0cacac7d0d35f98d6078"
+  },
+  "declared_paths": [
+    "docs/migration_notes.md",
+    "scripts/create-issue-final-acceptance.ts",
+    "scripts/create-issue-stage-finalize.ts",
+    "scripts/stage-completeness-guard.ts",
+    "scripts/finding-ledger-guard.mjs",
+    "scripts/lib/create-issue-stage-record.ts",
+    "scripts/lib/create-issue-stage-record-gh.ts",
+    "scripts/lib/create-issue-stage-topology.ts",
+    "scripts/lib/create-issue-stage-topology.test.ts",
+    "scripts/lib/create-issue-completed-result.ts",
+    "scripts/lib/create-issue-completed-result.test.ts",
+    "scripts/lib/create-issue-comment-census.ts",
+    "scripts/lib/create-issue-comment-census.test.ts",
+    "scripts/create-issue-parked-migration.ts",
+    "scripts/create-issue-parked-migration.test.ts",
+    "scripts/compile-create-issue-parked-migration.ts",
+    "scripts/fixtures/create-issue-parked-migration-1168.json",
+    "scripts/fixtures/create-issue-parked-migration-1173.json",
+    "scripts/fixtures/create-issue-parked-migration-1188.json",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

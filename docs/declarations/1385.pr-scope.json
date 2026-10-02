@@ -1,0 +1,39 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1385,
+  "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    "docs/create-issue-draft-acceptance-artifacts.md",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/stage-completeness-core.ts",
+    "scripts/stage-completeness-guard.test.ts"
+  ],
+  "denylist": [
+    ".github/",
+    "credentials/",
+    "package-lock.json",
+    "package.json",
+    "packages/core/",
+    "scripts/chatgpt-browser-turn.ts",
+    "scripts/chatgpt-browser-turn/",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    "docs/create-issue-draft-acceptance-artifacts.md",
+    "docs/declarations",
+    "scripts/create-issue-stage-finalize.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/stage-completeness-core.ts",
+    "scripts/stage-completeness-guard.test.ts"
+  ],
+  "source_revision": "30c02bd12678c1082338f01f7196e84176907b81"
+}

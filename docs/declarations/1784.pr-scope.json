@@ -1,0 +1,19 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1784,
+  "declared_paths": [
+    "scripts/lib/create-issue-final-acceptance-revision.test.ts",
+    "scripts/lib/create-issue-stage-record-receipt.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/lib/create-issue-final-acceptance-revision.test.ts",
+    "scripts/lib/create-issue-stage-record-receipt.ts"
+  ],
+  "source_revision": "909e6d27ccf68003a1cbf898295c760c83787ca7"
+}

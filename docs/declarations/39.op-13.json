@@ -1,0 +1,25 @@
+{
+  "issue_number": 39,
+  "iteration_id": "op-13",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-05-28T07:30:00.000Z",
+  "baseline": {
+    "commit_sha": "2847f88e9bcad9ffb70a4c9bfc1743ead3edd73e",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:6dea0ef8827b1c621c4af089e19cf46a1c7e452b2e0af7727a687abcc03a7043"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "docs/declarations/39.op-13.json",
+    "docs/migration_notes.md",
+    "docs/orchestrator-wake-filter.d.mts",
+    "docs/orchestrator-wake-filter.d.ts",
+    "docs/orchestrator-wake-filter.mjs",
+    "docs/orchestrator-wake-runbook.md",
+    "scripts/orchestrator-wake-listener.ps1",
+    "scripts/orchestrator-wake-listener.test.ts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

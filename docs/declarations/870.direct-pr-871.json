@@ -1,0 +1,18 @@
+{
+  "issue_number": 870,
+  "iteration_id": "direct-pr-871",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-16T12:58:20.974Z",
+  "baseline": {
+    "commit_sha": "ed4889808a9212b6149dc7db0c11f1ffe48a76ea",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:30bad028e665a512e039a28c9ae1cd7e3884e68161f74382addcd8d73821c999"
+  },
+  "declared_paths": [
+    ".github/workflows/scope-guard.yml",
+    "scripts/check-ci-pipeline-split.test.ts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

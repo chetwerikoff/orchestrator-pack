@@ -1,0 +1,35 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1341,
+  "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    "docs/create-issue-draft-acceptance-artifacts.md",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/create-issue-stage-record-cli.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "docs/pack-review-waiver-merge-runbook.md",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    "docs/create-issue-draft-acceptance-artifacts.md",
+    "scripts/create-issue-final-acceptance.ts",
+    "scripts/create-issue-stage-finalize.ts",
+    "scripts/lib/create-issue-final-acceptance-contract.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/create-issue-stage-record-cli.ts",
+    "scripts/lib/create-issue-stage-record.test.ts",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.ts"
+  ],
+  "source_revision": "b9fb3eb0aafa3ac34742bcfce99c24f850b5ae3f"
+}

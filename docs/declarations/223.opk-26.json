@@ -1,0 +1,32 @@
+{
+  "issue_number": 223,
+  "iteration_id": "opk-26",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-06T11:19:51.469Z",
+  "baseline": {
+    "commit_sha": "3570dabe91e0c518f3e85464b55e08f361b6c0b9",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:5995fb704ea2a31cf8824c548801a2c4fee36bd848a1943782685e46fc4f829b"
+  },
+  "declared_paths": [
+    "scripts/external-output-shape-guard.mjs",
+    "scripts/external-output-shape-guard.d.mts",
+    "scripts/external-output-shape-guard.test.ts",
+    "scripts/check-external-output-shape-guard.ps1",
+    "scripts/verify.ps1",
+    "docs/migration_notes.md"
+  ],
+  "declared_globs": [
+    "tests/external-output-references/**",
+    "tests/fixtures/external-output-shape-guard/**",
+    "scripts/fixtures/review-ready-stuck-guard/**",
+    "tests/fixtures/review-trigger-reconcile/**",
+    "tests/fixtures/review-wake-trigger/**",
+    "tests/fixtures/ci-green-wake-reconcile/**",
+    "scripts/review-head-ready.test.ts",
+    "scripts/review-trigger-reconcile.test.ts",
+    "scripts/ci-green-wake-reconcile.test.ts"
+  ],
+  "amendments": []
+}

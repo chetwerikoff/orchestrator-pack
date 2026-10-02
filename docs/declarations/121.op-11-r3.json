@@ -1,0 +1,28 @@
+{
+  "issue_number": 121,
+  "iteration_id": "op-11-r3",
+  "iteration_id_source": "ao_session",
+  "supersedes": "op-11",
+  "created_at": "2026-06-02T04:23:27.330Z",
+  "baseline": {
+    "commit_sha": "28da75a0864192b1901f88271dc0724ccbda1283",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:30e3a2e3bb5f64fa67a90ebe21d33ba20ac5b12fd190d6b1346062173c8497de"
+  },
+  "declared_paths": [
+    "scripts/pr-scope-contract.ts",
+    "scripts/pr-scope-check.ts",
+    "scripts/pr-scope-check.test.ts",
+    "scripts/pr-scope-check.ps1",
+    "scripts/run-pack-review.ps1",
+    "scripts/run-pack-review-claude.ps1",
+    "scripts/lib/Install-PackReviewDependencies.ps1"
+  ],
+  "declared_globs": [
+    "plugins/ao-scope-guard/**",
+    ".claude/skills/**",
+    ".cursor/skills/**",
+    "docs/**"
+  ],
+  "amendments": []
+}

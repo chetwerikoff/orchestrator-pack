@@ -1,0 +1,32 @@
+{
+  "issue_number": 661,
+  "iteration_id": "orchestrator-pack-35",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-07T20:10:00.000Z",
+  "baseline": {
+    "commit_sha": "7e1c00a3b1b6f2acaba5c6bf307f4b18ce29e7b4",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:7ff7173e603c5f7cde9b84a074f8ad8cbe69be922f6e99fe2ed8b1743c119b3f"
+  },
+  "declared_paths": [
+    "docs/launch-argv-registry.d.mts",
+    "docs/launch-argv-registry.mjs",
+    "scripts/check-launch-argv-inventory.ps1",
+    "scripts/launch-argv-inventory.json",
+    "scripts/launch-argv-inventory.test.ts",
+    "scripts/launch-argv-test-exclusions.manifest.json",
+    "scripts/launch-argv-validators.manifest.json",
+    "scripts/fixtures/launch-argv-inventory/side-process-mismatch/registry-mismatch.json",
+    "scripts/fixtures/launch-argv-inventory/side-process-mismatch/mismatch-child.ps1",
+    "scripts/verify.ps1",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [
+    "scripts/**",
+    "plugins/**",
+    "tests/external-output-references/**",
+    "docs/**"
+  ],
+  "amendments": []
+}

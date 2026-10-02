@@ -1,0 +1,35 @@
+{
+  "issue_number": 221,
+  "iteration_id": "opk-21",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-06T07:59:58.283Z",
+  "baseline": {
+    "commit_sha": "091d258e4387171df1093ae30b5e55b98e6fe5cc",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:337ddf2395a97d07278d393f184500a48de1d6e8b2b5be4900f7f0769d6c90fe"
+  },
+  "declared_paths": [
+    "prompts/agent_rules.md",
+    "prompts/investigate_root_cause.md",
+    "AGENTS.md",
+    "docs/migration_notes.md",
+    "docs/issues_drafts/00-architecture-decisions.md",
+    "scripts/draft-discipline.mjs",
+    "scripts/draft-discipline.d.mts",
+    "scripts/draft-discipline.test.ts",
+    "scripts/draft-discipline-action-taxonomy.json",
+    "scripts/rca-spec-discipline-surfaces.json",
+    "scripts/check-draft-discipline.ps1",
+    "scripts/verify.ps1"
+  ],
+  "declared_globs": [
+    ".claude/skills/create-issue-draft/**",
+    ".claude/skills/investigate-root-cause/**",
+    ".claude/skills/publish-issue-draft/**",
+    ".cursor/skills/**",
+    ".cursor/rules/**",
+    "tests/fixtures/draft-discipline/**"
+  ],
+  "amendments": []
+}

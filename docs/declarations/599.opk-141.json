@@ -1,0 +1,27 @@
+{
+  "issue_number": 599,
+  "iteration_id": "opk-141",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-04T18:40:00.000Z",
+  "baseline": {
+    "commit_sha": "9cc5f20a3a52279b2b31ce147c77226ae4b44df7",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:pending"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "scripts/autonomous-orchestrator-surface-bootstrap.sh",
+    "scripts/gh-repo-resolve.test.ts",
+    "scripts/lib/derive-gh-repo-from-checkout.mjs",
+    "scripts/lib/gh-repo-resolve.d.mts",
+    "scripts/lib/gh-repo-resolve.mjs",
+    "scripts/lib/git-origin-slug.d.mts",
+    "scripts/lib/git-origin-slug.mjs",
+    "scripts/review-start-preflight-shield.test.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/worker-message-submit-reconcile.test.ts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

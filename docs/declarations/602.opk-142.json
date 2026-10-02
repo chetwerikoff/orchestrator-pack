@@ -1,0 +1,24 @@
+{
+  "issue_number": 602,
+  "iteration_id": "opk-142",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-05T08:25:36.422Z",
+  "baseline": {
+    "commit_sha": "d96348a4bb89fc29c9718084b1da11c16287ef5a",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:eca3f4c24d9890e236aeb52d1b661e6d92ce93273b713a6ddb38ae20edc2c6bf"
+  },
+  "declared_paths": [
+    "docs/migration_notes.md",
+    "docs/worker-message-dispatch-observe.d.mts",
+    "docs/worker-message-dispatch-observe.mjs",
+    "docs/worker-message-submit-reconcile.d.mts",
+    "docs/worker-message-submit-reconcile.mjs",
+    "docs/submit-reconcile-delivery-source-audit.json",
+    "scripts/check-worker-message-submit-reconcile.ps1",
+    "scripts/worker-message-submit-reconcile.test.ts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

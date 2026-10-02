@@ -1,0 +1,35 @@
+{
+  "issue_number": 894,
+  "iteration_id": "wrapper-issue-894-journal-first-v4",
+  "iteration_id_source": "ao_session",
+  "supersedes": "wrapper-issue-894-journal-first-v3",
+  "created_at": "2026-07-17T20:07:25.000Z",
+  "baseline": {
+    "commit_sha": "9af9e23dcfdbc7957c6737546d6855d944640987",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:03070c211a7d6612c9a1a4cb83eac071cb5ddb91a13cf05fcb201fea98428c89"
+  },
+  "declared_paths": [
+    "docs/migration_notes.md",
+    "scripts/ao-0-10-review-trigger.test.ts",
+    "scripts/check-scripted-review-confirmed-delivery-gate.ps1",
+    "scripts/invoke-pack-review.ps1",
+    "scripts/lib/Invoke-ScriptedReviewPostSubmitDelivery.ps1",
+    "scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1",
+    "scripts/lib/github-review-reconciliation.ts",
+    "scripts/lib/graphql-quota-github-read-inventory.json",
+    "scripts/lib/pack-review-delivery.js",
+    "scripts/lib/pack-review-delivery.ts",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/lib/pack-review-worker-notification.ts",
+    "scripts/orchestrator-message-catalog.json",
+    "scripts/pack-review-delivery.cases.ts",
+    "scripts/pack-review-runner-severity.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-worker-notification.cases.ts",
+    "scripts/review-delivery.test.ts",
+    "scripts/scripted-review-confirmed-delivery-gate.test.ts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

@@ -1,0 +1,18 @@
+{
+  "issue_number": 145,
+  "iteration_id": "opk-3",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-04T02:12:06.019Z",
+  "baseline": {
+    "commit_sha": "d9ddfd0ac21a08d2cfec3fa45918587b20c0cbac",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:e39fdb9ea1454760f80ca33d0ebbf329707328497f301dc8fc56c2c3b07c9c67"
+  },
+  "declared_paths": [],
+  "declared_globs": [
+    "docs/**",
+    "scripts/**"
+  ],
+  "amendments": []
+}

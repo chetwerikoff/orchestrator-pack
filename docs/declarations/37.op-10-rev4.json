@@ -1,0 +1,30 @@
+{
+  "issue_number": 37,
+  "iteration_id": "op-10-rev4",
+  "iteration_id_source": "ao_session",
+  "supersedes": "op-10",
+  "created_at": "2026-05-28T04:00:31.456Z",
+  "baseline": {
+    "commit_sha": "d8e9671994194549658be987c47cba4afe35c9cf",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:858de7bb0b8e5ca803b79cbfe189dcd727b57e645603c8d2a2e5d8e489dc044b"
+  },
+  "declared_paths": [
+    "CLAUDE.md",
+    "AGENTS.md",
+    "scripts/verify.ps1",
+    "scripts/patch-codex-review4.ps1",
+    "scripts/pr-scope-check.ts"
+  ],
+  "declared_globs": [
+    ".claude/skills/**",
+    "docs/issues_drafts/**",
+    "plugins/ao-codex-pr-reviewer/**",
+    "plugins/_shared/**",
+    "plugins/ao-scope-guard/**",
+    "plugins/ao-task-declaration/bin/**",
+    "plugins/ao-token-chain-ledger/**",
+    "scripts/lib/**"
+  ],
+  "amendments": []
+}

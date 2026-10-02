@@ -1,0 +1,29 @@
+{
+  "issue_number": 664,
+  "iteration_id": "orchestrator-pack-38",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-07T21:35:01.561Z",
+  "baseline": {
+    "commit_sha": "65eb68a97faa37d3967d3e3c6d379162eb5b3732",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:9db8ee44b9f6edea8ca05d5786bafb73c034a86daaad51ad86486899ee448c49"
+  },
+  "declared_paths": [
+    "scripts/_test-pwsh-helpers.ts",
+    "scripts/escalation-state-test-isolation.test.ts",
+    "scripts/lib/Orchestrator-Escalation.ps1",
+    "scripts/lib/Set-OpkVitestHarnessEnv.ps1",
+    "scripts/run-vitest-heavy-shard.ps1",
+    "scripts/run-vitest-light-lane.ps1",
+    "scripts/run-vitest-shard.ps1",
+    "scripts/test-harness-escalation-env.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-global-setup.ts",
+    "vitest.config.ts"
+  ],
+  "declared_globs": [
+    "scripts/**"
+  ],
+  "amendments": []
+}

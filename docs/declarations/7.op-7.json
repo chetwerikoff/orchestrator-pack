@@ -1,0 +1,26 @@
+{
+  "issue_number": 7,
+  "iteration_id": "op-7",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-05-27T17:20:00.000Z",
+  "baseline": {
+    "commit_sha": "634b162625caf6d3621e381a0c0e0ea77ae43ddf",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:e3ee3389d22598d7e290ea7f5da192cf553e6d9edd9ac642564436fe40dafb6e"
+  },
+  "declared_paths": [
+    ".github/workflows/scope-guard.yml",
+    "README.md",
+    "prompts/self_architect_check.md",
+    "scripts/lint-self-architect.config.json",
+    "scripts/lint-self-architect.ps1",
+    "scripts/verify.ps1",
+    "tests/README.md",
+    "tests/powershell/Lint-SelfArchitect.Tests.ps1"
+  ],
+  "declared_globs": [
+    "tests/fixtures/lint-self-architect/**"
+  ],
+  "amendments": []
+}

@@ -1,0 +1,19 @@
+{
+  "issue_number": 106,
+  "iteration_id": "architect-draft-36",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-05-31T01:13:21.985Z",
+  "baseline": {
+    "commit_sha": "2ce8a8d2b7dd0d8a9c8cd4364b9d493a69646811",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:e52c42134870b8cecb990135ff6f661872c93bcca5ec1b778b823d83f9898e91"
+  },
+  "declared_paths": [
+    "docs/issues_drafts/36-pack-reviewer-env-at-review-spawn.md",
+    "docs/issue_queue_index.md",
+    "docs/issues_drafts/00-architecture-decisions.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

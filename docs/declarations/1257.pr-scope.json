@@ -1,0 +1,27 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1257,
+  "declared_paths": [
+    "scripts/lib/create-issue-stage-record-test-helpers.ts",
+    "scripts/lib/create-issue-stage-record.test.ts"
+  ],
+  "denylist": [
+    ".ao/",
+    ".github/workflows/",
+    "credentials/",
+    "package.json",
+    "packages/core/",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/lib/create-issue-stage-record-core.ts",
+    "scripts/lib/create-issue-stage-record-gh.ts",
+    "scripts/lib/create-issue-stage-record-test-helpers.ts",
+    "scripts/lib/create-issue-stage-record.test.ts"
+  ],
+  "source_revision": "9d7e095e833674ca0cca97cac64aa04e2714d70f"
+}

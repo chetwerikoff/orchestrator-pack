@@ -1,0 +1,23 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2151,
+  "declared_paths": [
+    "scripts/lib/smoke-plan-preflight.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/lib/smoke-plan-preflight.test.ts",
+    "scripts/lib/smoke-plan-preflight.ts",
+    "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "source_revision": "2cfaacde83dc8434f0ecdc4997e8caf06b5f9eda"
+}

@@ -1,0 +1,22 @@
+{
+  "issue_number": 443,
+  "iteration_id": "opk-5",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-24T20:05:00.000Z",
+  "baseline": {
+    "commit_sha": "5c017ebcb6135c30963153a2302aa9eb888c6793",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:efd936fe89c6c8aa7af289d7a2d9426f7cb87fb30c65ade90f770d734d9003f6"
+  },
+  "declared_paths": [
+    "docs/declarations/443.opk-5.json",
+    "scripts/check-gh-inventory-static.ps1",
+    "scripts/gh-wrapper.test.ts",
+    "scripts/lib/gh-inventory-match.mjs",
+    "scripts/lib/gh-repo-resolve.mjs",
+    "scripts/lib/gh-rest-routes.mjs"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

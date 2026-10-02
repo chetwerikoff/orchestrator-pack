@@ -1,0 +1,32 @@
+{
+  "issue_number": 347,
+  "iteration_id": "opk-37",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-19T01:45:00.000Z",
+  "baseline": {
+    "commit_sha": "30c92ed6bf51be60ed808a00b73d436e9c77c80e",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:5886697978aaeea1637cb9edddb8bfb6dcda4b3be654e23fd8636ae9805eef87"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "docs/declarations/347.opk-37.json",
+    "docs/mechanical-reconcile-bounds.mjs",
+    "docs/migration_notes.md",
+    "docs/orchestrator-message-registry.mjs",
+    "docs/worker-message-submit-reconcile.d.mts",
+    "docs/worker-message-submit-reconcile.mjs",
+    "scripts/check-worker-message-submit-reconcile.ps1",
+    "scripts/fixtures/mechanical-json-state/state-coverage-manifest.json",
+    "scripts/lib/Get-SubmitReconcileOpenPrList.ps1",
+    "scripts/lib/Get-WorkerMessageAdoptionBinding.ps1",
+    "scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1",
+    "scripts/worker-message-send-adoption-preflight.ps1",
+    "scripts/worker-message-submit-reconcile.ps1",
+    "scripts/worker-message-submit-reconcile.test.ts",
+    "vitest.config.ts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

@@ -1,0 +1,46 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1887,
+  "declared_paths": [
+    "docs/orchestration-runbook.md",
+    "scripts/direct-pack-review-status.test.ts",
+    "scripts/direct-pack-review-status.ts",
+    "scripts/lib/github-review-reconciliation.ts",
+    "scripts/pack-review-ordering.test.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.test.ts",
+    "scripts/pack-review-state.ts",
+    "scripts/pr2-foundation/terminalized-port.test.ts",
+    "scripts/review-delivery.test.ts",
+    "scripts/worker-smoke-run.ts"
+  ],
+  "denylist": [
+    ".orca/",
+    "credentials/",
+    "docs/chat-executor-rules.md",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "docs/orchestration-runbook.md",
+    "docs/review-cycle-cap.d.mts",
+    "docs/review-cycle-cap.mjs",
+    "scripts/direct-pack-review-status.test.ts",
+    "scripts/direct-pack-review-status.ts",
+    "scripts/lib/github-review-reconciliation.ts",
+    "scripts/pack-review-ordering.test.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.test.ts",
+    "scripts/pack-review-state.ts",
+    "scripts/pr2-foundation/post-review-smoke.test.ts",
+    "scripts/pr2-foundation/terminalized-port.test.ts",
+    "scripts/review-cycle-cap.test.ts",
+    "scripts/review-delivery.test.ts",
+    "scripts/worker-smoke-run.ts"
+  ],
+  "source_revision": "eee684154b8241a7921e9344009f3ec7779d3a92"
+}

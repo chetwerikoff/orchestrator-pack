@@ -1,0 +1,20 @@
+{
+  "issue_number": 640,
+  "iteration_id": "issue-640-journaled-send-0102-argv-cutover",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-06T18:52:25.637Z",
+  "baseline": {
+    "commit_sha": "edb9ee3fa66235a44f908786fc11b40a97d2d7b7",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:6d6583e6acb60e90d3358d3bbf7dd7a552d32f8d791e3b306000e3dff786de36"
+  },
+  "declared_paths": [
+    "docs/ao-send-transport-contract.txt"
+  ],
+  "declared_globs": [
+    "scripts/**",
+    "tests/**"
+  ],
+  "amendments": []
+}

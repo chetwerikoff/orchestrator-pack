@@ -1,0 +1,38 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1419,
+  "declared_paths": [
+    ".claude/skills/",
+    ".cursor/rules/",
+    ".cursor/skills/",
+    ".github/workflows/",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/",
+    "plugins/",
+    "prompts/",
+    "README.md",
+    "scripts/"
+  ],
+  "denylist": [
+    ".orca/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/",
+    ".cursor/rules/",
+    ".cursor/skills/",
+    ".github/workflows/",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/",
+    "plugins/",
+    "prompts/",
+    "README.md",
+    "scripts/"
+  ],
+  "source_revision": "23d12eb7ddc3f986ed96626fc59e37a1eda27eae"
+}

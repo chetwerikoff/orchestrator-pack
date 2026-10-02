@@ -1,0 +1,20 @@
+{
+  "issue_number": 626,
+  "iteration_id": "orchestrator-pack-13",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-06T10:19:16.541Z",
+  "baseline": {
+    "commit_sha": "60e21e663090c915fa6e4dd0ac4b1a5bc22e6e9c",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:ae49c37ced02cd56f1c3e0c7be028f69b9014e1e078bfb77de5853d9b7b8fc2a"
+  },
+  "declared_paths": [],
+  "declared_globs": [
+    "docs/**",
+    "scripts/**",
+    "tests/**",
+    "tests/external-output-references/**"
+  ],
+  "amendments": []
+}

@@ -1,0 +1,22 @@
+{
+  "issue_number": 54,
+  "iteration_id": "op-8",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-05-31T04:59:25.112Z",
+  "baseline": {
+    "commit_sha": "add9190269d59330b2bc9b0c0d2b5ee94ca0ed86",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:86ac37c193306f9768558ddb6fab24cd35d19ffa76149dae623d5525ceeb3d9c"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "docs/architecture.md",
+    "docs/issues_drafts/00-architecture-decisions.md",
+    "docs/migration_notes.md",
+    "docs/orchestrator-recovery-runbook.md",
+    "docs/orchestrator-wake-runbook.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

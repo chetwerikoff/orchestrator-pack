@@ -1,0 +1,27 @@
+{
+  "issue_number": 821,
+  "iteration_id": "issue-821-final-v10",
+  "iteration_id_source": "ao_session",
+  "supersedes": "issue-821-final-v9",
+  "created_at": "2026-07-15T05:32:00.000Z",
+  "baseline": {
+    "commit_sha": "bdfb2239aaadf434fe30e1c2ea105cac1709e5f1",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:39eb944e7a0bdfa312958c484bd9d924c8c5149eead04ebcf262563f0c716ecf"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example"
+  ],
+  "declared_globs": [
+    "docs/ao-spawn-shape.mjs",
+    "docs/autonomous-*",
+    "docs/orchestrator-claimed-review-run.mjs",
+    "docs/orchestrator-recovery-runbook.md",
+    "docs/spawn-worktree-grant.mjs",
+    "docs/worker-nudge-gate.mjs",
+    "docs/issues_drafts/00-architecture-decisions.md",
+    "scripts/**",
+    "tests/external-output-references/**"
+  ],
+  "amendments": []
+}

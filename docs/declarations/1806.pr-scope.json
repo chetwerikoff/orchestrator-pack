@@ -1,0 +1,41 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1806,
+  "declared_paths": [
+    "plugins/codex-pr-reviewer/lib/scope_context.ts",
+    "plugins/scope-guard/bin/agent-wrap.ts",
+    "plugins/scope-guard/lib/check.ts",
+    "plugins/scope-guard/lib/declaration_loader.ts",
+    "plugins/scope-guard/lib/diff_worktree.ts",
+    "plugins/scope-guard/tests/declaration_loader.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/",
+    ".cursor/rules/",
+    ".cursor/skills/",
+    ".github/workflows/",
+    "agent-orchestrator.yaml.example",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/",
+    "docs/declarations/",
+    "package-lock.json",
+    "package.json",
+    "plugins/",
+    "prompts/",
+    "README.md",
+    "scripts/",
+    "tests/external-output-references/",
+    "tests/fixtures/pack-gpt-browser-turn-harness.mjs",
+    "tests/issue854-worker-status-binding-cache.mjs",
+    "tests/README.md",
+    "tests/worker-status-store-live-rca.ts"
+  ],
+  "source_revision": "b7d75e6c34b16ffdbf411ad54c8241562c1e890c"
+}

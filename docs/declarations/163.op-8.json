@@ -1,0 +1,32 @@
+{
+  "issue_number": 163,
+  "iteration_id": "op-8",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-04T07:50:00.000Z",
+  "baseline": {
+    "commit_sha": "5ecabfadf6f5f186f6d02edb81e320d9f03243fc",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:pending"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "docs/declarations/163.op-8.json",
+    "docs/migration_notes.md",
+    "docs/orchestrator-autoloop-go-live.md",
+    "docs/orchestrator-recovery-runbook.md",
+    "docs/review-trigger-reconcile.d.mts",
+    "docs/review-trigger-reconcile.d.ts",
+    "docs/review-trigger-reconcile.mjs",
+    "scripts/lib/Invoke-AoCliJson.ps1",
+    "scripts/invoke-pack-review-strict-gate.ps1",
+    "scripts/check-review-trigger-reconcile.ps1",
+    "scripts/review-trigger-reconcile.ps1",
+    "scripts/review-trigger-reconcile.test.ts",
+    "scripts/verify.ps1"
+  ],
+  "declared_globs": [
+    "tests/fixtures/review-trigger-reconcile/**"
+  ],
+  "amendments": []
+}

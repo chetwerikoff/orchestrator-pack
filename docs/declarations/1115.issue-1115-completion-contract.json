@@ -1,0 +1,24 @@
+{
+  "issue_number": 1115,
+  "iteration_id": "issue-1115-completion-contract",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-29T16:11:25.594Z",
+  "baseline": {
+    "commit_sha": "ad63eceb43d9868f28c12589d911f2ea1140db4d",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:f39b9fa5a03e4d74572e86a22b20ff28c86af020393716b5cb11628fa0c2f2eb"
+  },
+  "declared_paths": [
+    "scripts/worker-smoke-run.ts",
+    "scripts/lib/worker-smoke-core.ts",
+    "scripts/lib/orca-cli.ts",
+    "scripts/worker-smoke.test.ts",
+    "docs/worker-smoke-testing.md"
+  ],
+  "declared_globs": [
+    "tests/fixtures/worker-smoke/**",
+    "tests/external-output-references/captures/orca-worker-smoke/**"
+  ],
+  "amendments": []
+}

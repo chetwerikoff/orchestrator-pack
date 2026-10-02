@@ -1,0 +1,40 @@
+{
+  "issue_number": 205,
+  "iteration_id": "opk-13",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-05T16:20:00.000Z",
+  "baseline": {
+    "commit_sha": "cc9a8dcdc8891ff5b1c76d6fa6eb3a435931bbce",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:pending"
+  },
+  "declared_paths": [
+    "docs/migration_notes.md",
+    "docs/orchestrator-autoloop-go-live.md",
+    "docs/orchestrator-recovery-runbook.md",
+    "scripts/check-review-finding-delivery-confirm.ps1",
+    "scripts/check-review-send-reconcile.ps1",
+    "scripts/check-review-wake-trigger.ps1",
+    "scripts/ci-green-wake-reconcile.ps1",
+    "scripts/gh-pr-checks-empty-openprs.test.ts",
+    "scripts/lib/Gh-PrChecks.ps1",
+    "scripts/lib/Orchestrator-ProcessAlive.ps1",
+    "scripts/lib/Orchestrator-SideEffectFence.ps1",
+    "scripts/lib/Orchestrator-SideProcessProgress.ps1",
+    "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+    "scripts/lib/Orchestrator-WakeSupervisor.ps1",
+    "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
+    "scripts/orchestrator-side-process-registry.json",
+    "scripts/orchestrator-wake-heartbeat.ps1",
+    "scripts/orchestrator-wake-listener.ps1",
+    "scripts/orchestrator-wake-supervisor-test-child.ps1",
+    "scripts/orchestrator-wake-supervisor.ps1",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/review-finding-delivery-confirm.ps1",
+    "scripts/review-send-reconcile.ps1",
+    "scripts/review-trigger-reconcile.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

@@ -1,0 +1,23 @@
+{
+  "issue_number": 149,
+  "iteration_id": "opk-2",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-04T01:36:12.426Z",
+  "baseline": {
+    "commit_sha": "4a277fd5219e3a1083e44866dfce49679c992e2e",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:c70b000f7a2ebfc0efc8e61e21131be1e7d92459e8c5acffc8af0fc50bfff913"
+  },
+  "declared_paths": [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/issues_drafts/00-architecture-decisions.md",
+    "docs/repository_policy.md",
+    "scripts/check-reusable.ps1"
+  ],
+  "declared_globs": [
+    ".cursor/rules/**"
+  ],
+  "amendments": []
+}

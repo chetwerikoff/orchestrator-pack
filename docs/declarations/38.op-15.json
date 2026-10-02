@@ -1,0 +1,22 @@
+{
+  "issue_number": 38,
+  "iteration_id": "op-15",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-05-28T08:26:00.727Z",
+  "baseline": {
+    "commit_sha": "fbe92340b1f62eae7fd9377b445ace4663158e28",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:66da9e554a1fd323e2408c6e304166cc2ed9dae632dd9ca9f545a08078cdc8ee"
+  },
+  "declared_paths": [
+    "README.md",
+    "CLAUDE.md",
+    "prompts/agent_rules.md",
+    "plugins/ao-codex-pr-reviewer/README.md"
+  ],
+  "declared_globs": [
+    "docs/**"
+  ],
+  "amendments": []
+}

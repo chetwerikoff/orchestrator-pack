@@ -1,0 +1,26 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1867,
+  "declared_paths": [
+    "scripts/pr2-foundation/terminalized-port.test.ts",
+    "scripts/worker-smoke-run.ts"
+  ],
+  "denylist": [
+    ".orca/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/direct-pack-review-status.test.ts",
+    "scripts/lib/github-review-reconciliation.ts",
+    "scripts/lib/pack-review-delivery.ts",
+    "scripts/pr2-foundation/post-review-smoke.test.ts",
+    "scripts/pr2-foundation/terminalized-port.test.ts",
+    "scripts/review-delivery.test.ts",
+    "scripts/worker-smoke-run.ts"
+  ],
+  "source_revision": "55d1ddfeba178f75bbce9eddd6ba8c69a0a4dcb5"
+}

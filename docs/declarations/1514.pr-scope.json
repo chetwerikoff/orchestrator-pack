@@ -1,0 +1,24 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1514,
+  "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    "scripts/flow-manager-authority-contract.test.ts"
+  ],
+  "denylist": [
+    ".ao/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/create-issue-draft/",
+    ".cursor/skills/create-issue-draft/",
+    "docs/orchestration-runbook.md",
+    "scripts/flow-manager-authority-contract.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "source_revision": "5f2091ece70787e980e2e78bfdddd855d255f1aa"
+}

@@ -1,0 +1,20 @@
+{
+  "issue_number": 386,
+  "iteration_id": "opk-163",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-21T13:43:48.915Z",
+  "baseline": {
+    "commit_sha": "721bdb7a25e603527d521f56f321dd45d0dd7f43",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:21562b28e8bc5dcd052e00534dc8f2128fa283f94da9cfeccbf531c6e78644d3"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "prompts/agent_rules.md"
+  ],
+  "declared_globs": [
+    "docs/**"
+  ],
+  "amendments": []
+}

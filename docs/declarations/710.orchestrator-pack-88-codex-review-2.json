@@ -1,0 +1,45 @@
+{
+  "issue_number": 710,
+  "iteration_id": "orchestrator-pack-88-codex-review-2",
+  "iteration_id_source": "ao_session",
+  "supersedes": "orchestrator-pack-88-light-lane-scope",
+  "created_at": "2026-07-09T18:02:00.000Z",
+  "baseline": {
+    "commit_sha": "b877202f40856603604b3f38f6b8b713947cf700",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:739909154b3ab2eff0fadb2c214ab0dc9c935b7db3fc68a465178881cee94493"
+  },
+  "declared_paths": [
+    "scripts/invoke-testmode-fleet-reaper.ps1",
+    "scripts/lib/Invoke-TestModeFleetReaper.ps1",
+    "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+    "scripts/lib/TestMode-FleetLease.ps1",
+    "scripts/orchestrator-wake-supervisor.ps1",
+    "scripts/run-vitest-heavy-shard.ps1",
+    "scripts/run-vitest-light-lane.ps1",
+    "scripts/testmode-fleet-harness.ts",
+    "scripts/testmode-fleet-reaper.test.ts",
+    "scripts/vitest-global-setup.ts",
+    "scripts/vitest-testmode-fleet-progress.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/launch-argv-inventory.json",
+    "scripts/launch-argv-test-exclusions.manifest.json",
+    "scripts/vitest-runtime-history.json",
+    "vitest.config.ts"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:739909154b3ab2eff0fadb2c214ab0dc9c935b7db3fc68a465178881cee94493",
+      "new_active_scope_hash": "sha256:739909154b3ab2eff0fadb2c214ab0dc9c935b7db3fc68a465178881cee94493",
+      "changed": {
+        "added": [],
+        "removed": []
+      },
+      "reason": "Codex review: heavy-shard hygiene on failed invocations; teardown fail-closed on survivors",
+      "actor": "orchestrator-pack-88",
+      "timestamp": "2026-07-09T18:02:00.000Z",
+      "applied": true
+    }
+  ]
+}

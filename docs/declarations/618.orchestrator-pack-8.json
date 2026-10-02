@@ -1,0 +1,37 @@
+{
+  "issue_number": 618,
+  "iteration_id": "orchestrator-pack-8",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-06T07:23:02.008Z",
+  "baseline": {
+    "commit_sha": "290f4f274f4e5cbf5bb57f856875d80c861ac05e",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:07fe43788a9098b43ce8ae210cab089647bd7b7e00f024759007861408bc1b3c"
+  },
+  "declared_paths": [
+    "scripts/guard-direct-edit.mjs",
+    "scripts/guard-direct-edit.d.mts",
+    "scripts/guard-direct-edit.test.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "docs/migration_notes.md",
+    "docs/issues_drafts/207-pack-owned-architect-edit-guard-draft-author-gate.md"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:a4bb58637d67503f30ba3e1c5cc95cefdff5a8519788b8a601b3b1a59a9596a6",
+      "new_active_scope_hash": "sha256:07fe43788a9098b43ce8ae210cab089647bd7b7e00f024759007861408bc1b3c",
+      "changed": {
+        "added": [
+          "scripts/guard-direct-edit.d.mts"
+        ],
+        "removed": []
+      },
+      "reason": "add guard-direct-edit TypeScript declarations",
+      "actor": "orchestrator-pack-8",
+      "timestamp": "2026-07-06T07:33:01.682Z",
+      "applied": true
+    }
+  ]
+}

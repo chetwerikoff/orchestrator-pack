@@ -1,0 +1,59 @@
+{
+  "issue_number": 391,
+  "iteration_id": "opk-169",
+  "iteration_id_source": "ao_session",
+  "created_at": "2026-06-22T05:30:00.000Z",
+  "baseline": {
+    "commit_sha": "cd3816888545df3b1fed41b8f23fa4f91de2124c",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:cb2f56af8e3bd98b4c5a4cc6e8f92c7a0c2f4f2caa5e635baad05baf6ebaed20"
+  },
+  "declared_paths": [
+    "docs/review-ready-report-state-seed.mjs",
+    "docs/review-ready-report-state-seed.d.mts",
+    "docs/review-trigger-reeval.mjs",
+    "docs/review-trigger-reeval.d.mts",
+    "docs/review-handoff-wake-admission.mjs",
+    "docs/review-handoff-wake-admission.d.mts",
+    "scripts/review-ready-report-state-seed.ps1",
+    "scripts/review-ready-report-state-seed.test.ts",
+    "scripts/check-review-ready-report-state-seed.ps1",
+    "scripts/lib/Record-ReviewReadyReportStateSeed.ps1",
+    "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
+    "scripts/lib/Invoke-ReviewTriggerReeval.ps1",
+    "scripts/lib/Invoke-AoCliJson.ps1",
+    "scripts/lib/Get-SupervisedRepoSlug.ps1",
+    "scripts/orchestrator-side-process-registry.json",
+    "scripts/orchestrator-message-audit-roots.manifest.json",
+    "scripts/orchestrator-wake-listener.ps1",
+    "scripts/fixtures/mechanical-json-state/clean-report-state-seed-maps.json",
+    "scripts/fixtures/mechanical-json-state/state-coverage-manifest.json",
+    "scripts/check-side-process-state-coverage.ps1",
+    "scripts/review-trigger-reeval.test.ts",
+    "scripts/verify.ps1",
+    "prompts/agent_rules.md",
+    "docs/migration_notes.md",
+    "docs/orchestrator-wake-runbook.md"
+  ],
+  "declared_globs": [
+    "tests/fixtures/review-ready-report-state-seed/**"
+  ],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:d55bdbef2ff85e7c5b77f7a239bf73058b8448ee11945fe508785f7f848b3e4e",
+      "new_active_scope_hash": "sha256:cb2f56af8e3bd98b4c5a4cc6e8f92c7a0c2f4f2caa5e635baad05baf6ebaed20",
+      "changed": {
+        "added": [
+          "scripts/lib/Get-SupervisedRepoSlug.ps1",
+          "scripts/orchestrator-wake-listener.ps1"
+        ],
+        "removed": []
+      },
+      "reason": "shared supervised repo slug helper for report-state seed",
+      "actor": "opk-169",
+      "timestamp": "2026-06-22T10:28:04.841Z",
+      "applied": true
+    }
+  ],
+  "supersedes": null
+}

@@ -1,0 +1,31 @@
+{
+  "issue_number": 283,
+  "iteration_id": "opk-57",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-13T06:37:00.000Z",
+  "baseline": {
+    "commit_sha": "f833761b6c80d428db86af812865be92f1ae92f7",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:issue-283-ci-failure-notification-dedup"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "docs/architecture.md",
+    "docs/ci-failure-notification.d.mts",
+    "docs/ci-failure-notification.d.ts",
+    "docs/ci-failure-notification.mjs",
+    "docs/issues_drafts/00-architecture-decisions.md",
+    "docs/migration_notes.md",
+    "docs/orchestrator-recovery-runbook.md",
+    "scripts/check-ci-failure-notification.ps1",
+    "scripts/ci-failure-notification.ps1",
+    "scripts/ci-failure-notification.test.ts",
+    "scripts/fixtures/ci-failure-notification/README.md",
+    "scripts/fixtures/ci-failure-notification/canonical-ci-red.json",
+    "scripts/fixtures/ci-failure-notification/reaction-action-succeeded.json",
+    "scripts/verify.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

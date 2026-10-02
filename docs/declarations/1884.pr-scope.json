@@ -1,0 +1,26 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1884,
+  "declared_paths": [
+    "scripts/cursor-unsent-composer-submit.test.ts",
+    "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/runtime/contracts.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/1884.pr-scope.json",
+    "scripts/cursor-unsent-composer-submit.test.ts",
+    "scripts/cursor-unsent-composer-submit.ts",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/runtime/contracts.ts"
+  ],
+  "source_revision": "2abe0a7cb936ddc73270671797bc46d6bc42fb99"
+}

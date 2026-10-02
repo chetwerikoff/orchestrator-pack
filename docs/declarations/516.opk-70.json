@@ -1,0 +1,49 @@
+{
+  "issue_number": 516,
+  "iteration_id": "opk-70",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-29T10:28:46.428Z",
+  "baseline": {
+    "commit_sha": "7fb1d470589b765ff509fd24a4bd09cac71e2b4f",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:0eb14bcfbeaa6318e31f0b32c8cf655f1c0f9aa3df0b76986c58af932b2ecb09"
+  },
+  "declared_paths": [
+    "docs/review-start-envelope-external-io.mjs",
+    "docs/review-start-envelope-ledger.d.mts",
+    "docs/review-start-envelope-ledger.mjs",
+    "scripts/check-review-start-envelope-ledger-starter-surfaces.ps1",
+    "scripts/lib/Get-ClaimedReviewStartSnapshot.ps1",
+    "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
+    "scripts/lib/Invoke-ReviewTriggerReeval.ps1",
+    "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
+    "scripts/lib/Review-StartClaim.ps1",
+    "scripts/lib/Review-StartClaimLifecycle.ps1",
+    "scripts/lib/Review-StartEnvelopeLedger.ps1",
+    "scripts/review-start-envelope-ledger-starter-surfaces.json",
+    "scripts/review-start-envelope-ledger.test.ts",
+    "scripts/review-trigger-reconcile.ps1",
+    "scripts/review-trigger-reeval.ps1",
+    "scripts/verify.ps1",
+    "docs/declarations/516.opk-70.json",
+    "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:8b1f9479fcc19e30289429f5fdd703ce3cbafa6627810d7e75852090ebb20e10",
+      "new_active_scope_hash": "sha256:0eb14bcfbeaa6318e31f0b32c8cf655f1c0f9aa3df0b76986c58af932b2ecb09",
+      "changed": {
+        "added": [
+          "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1"
+        ],
+        "removed": []
+      },
+      "reason": "Add orchestrator-turn pre-run recheck transport-failure handling (review opk-rev-1119)",
+      "actor": "opk-77",
+      "timestamp": "2026-06-29T13:55:54.842Z",
+      "applied": true
+    }
+  ]
+}

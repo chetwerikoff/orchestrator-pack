@@ -1,0 +1,46 @@
+{
+  "issue_number": 710,
+  "iteration_id": "orchestrator-pack-88-windows-env-pointer",
+  "iteration_id_source": "ao_session",
+  "supersedes": "orchestrator-pack-88-windows-env-markers",
+  "created_at": "2026-07-09T21:00:00.000Z",
+  "baseline": {
+    "commit_sha": "ed78f49f4be00aee37194f9e57bf474336eaa9e1",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:48dc0f30a49fa335214b26b10b08278dba1aa1ce694239cf870d3306002795dd"
+  },
+  "declared_paths": [
+    "scripts/check-review-status-consumers.ps1",
+    "scripts/invoke-testmode-fleet-reaper.ps1",
+    "scripts/lib/Invoke-TestModeFleetReaper.ps1",
+    "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+    "scripts/lib/TestMode-FleetLease.ps1",
+    "scripts/orchestrator-wake-supervisor.ps1",
+    "scripts/run-vitest-heavy-shard.ps1",
+    "scripts/run-vitest-light-lane.ps1",
+    "scripts/testmode-fleet-harness.ts",
+    "scripts/testmode-fleet-reaper.test.ts",
+    "scripts/vitest-global-setup.ts",
+    "scripts/vitest-testmode-fleet-progress.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/launch-argv-inventory.json",
+    "scripts/launch-argv-test-exclusions.manifest.json",
+    "scripts/vitest-runtime-history.json",
+    "vitest.config.ts"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:48dc0f30a49fa335214b26b10b08278dba1aa1ce694239cf870d3306002795dd",
+      "new_active_scope_hash": "sha256:48dc0f30a49fa335214b26b10b08278dba1aa1ce694239cf870d3306002795dd",
+      "changed": {
+        "added": [],
+        "removed": []
+      },
+      "reason": "fix Windows RTL_USER_PROCESS_PARAMETERS.Environment pointer read",
+      "actor": "orchestrator-pack-88",
+      "timestamp": "2026-07-09T21:00:00.000Z",
+      "applied": true
+    }
+  ]
+}

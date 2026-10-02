@@ -1,0 +1,61 @@
+{
+  "issue_number": 391,
+  "iteration_id": "opk-170",
+  "iteration_id_source": "ao_session",
+  "created_at": "2026-06-22T13:50:00.000Z",
+  "baseline": {
+    "commit_sha": "18461df4f556b9c6bad946f467dae681d882fd83",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:ef2d56fdf77adb65eca2b3f5c637dd14a5c6b5b9e7160c682d5a38e1ee706251"
+  },
+  "declared_paths": [
+    "docs/review-ready-report-state-seed.mjs",
+    "docs/review-ready-report-state-seed.d.mts",
+    "docs/review-trigger-reeval.mjs",
+    "docs/review-trigger-reeval.d.mts",
+    "docs/review-handoff-wake-admission.mjs",
+    "docs/review-handoff-wake-admission.d.mts",
+    "scripts/review-ready-report-state-seed.ps1",
+    "scripts/review-ready-report-state-seed.test.ts",
+    "scripts/check-review-ready-report-state-seed.ps1",
+    "scripts/lib/Record-ReviewReadyReportStateSeed.ps1",
+    "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
+    "scripts/lib/Invoke-ReviewTriggerReeval.ps1",
+    "scripts/lib/Invoke-AoCliJson.ps1",
+    "scripts/lib/Get-SupervisedRepoSlug.ps1",
+    "scripts/lib/Gh-PrChecks.ps1",
+    "scripts/gh-pr-checks-open-pr-list-node-limit.test.ts",
+    "scripts/orchestrator-side-process-registry.json",
+    "scripts/orchestrator-message-audit-roots.manifest.json",
+    "scripts/orchestrator-wake-listener.ps1",
+    "scripts/fixtures/mechanical-json-state/clean-report-state-seed-maps.json",
+    "scripts/fixtures/mechanical-json-state/state-coverage-manifest.json",
+    "scripts/check-side-process-state-coverage.ps1",
+    "scripts/review-trigger-reeval.test.ts",
+    "scripts/verify.ps1",
+    "prompts/agent_rules.md",
+    "docs/migration_notes.md",
+    "docs/orchestrator-wake-runbook.md"
+  ],
+  "declared_globs": [
+    "tests/fixtures/review-ready-report-state-seed/**"
+  ],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:cb2f56af8e3bd98b4c5a4cc6e8f92c7a0c2f4f2caa5e635baad05baf6ebaed20",
+      "new_active_scope_hash": "sha256:ef2d56fdf77adb65eca2b3f5c637dd14a5c6b5b9e7160c682d5a38e1ee706251",
+      "changed": {
+        "added": [
+          "scripts/lib/Gh-PrChecks.ps1",
+          "scripts/gh-pr-checks-open-pr-list-node-limit.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "scoped GitHub snapshot helper for report-state poll ticks",
+      "actor": "opk-170",
+      "timestamp": "2026-06-22T13:50:00.000Z",
+      "applied": true
+    }
+  ],
+  "supersedes": "opk-169"
+}

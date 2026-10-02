@@ -1,0 +1,40 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1999,
+  "declared_paths": [
+    "scripts/create-issue-convergence.test.ts",
+    "scripts/lib/create-issue-next-action.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/create-issue-stage-record-cli.ts",
+    "scripts/lib/create-issue-stage-record-core.ts",
+    "scripts/lib/create-issue-stage-record.test.ts",
+    "tests/external-output-references/create-issue-1977-poisoned-canonical-attempt.json",
+    "tests/external-output-references/create-issue-926-terminal-competitive-01-final.json",
+    "tests/external-output-references/create-issue-926-terminal-competitive-01.json",
+    "tests/external-output-references/create-issue-witness-conflict-existing-artifact.json"
+  ],
+  "denylist": [
+    ".orchestrator-pack/",
+    "credentials/",
+    "packages/core/",
+    "prompts/",
+    "scripts/chatgpt-browser-turn/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/create-issue-convergence.test.ts",
+    "scripts/lib/create-issue-next-action.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/create-issue-stage-record-cli.ts",
+    "scripts/lib/create-issue-stage-record-core.ts",
+    "scripts/lib/create-issue-stage-record.test.ts",
+    "tests/external-output-references/create-issue-1977-poisoned-canonical-attempt.json",
+    "tests/external-output-references/create-issue-926-terminal-competitive-01-final.json",
+    "tests/external-output-references/create-issue-926-terminal-competitive-01.json",
+    "tests/external-output-references/create-issue-witness-conflict-existing-artifact.json"
+  ],
+  "source_revision": "ceee2f75ac8ffb6b829e288a20d7180c73d8f0a4"
+}

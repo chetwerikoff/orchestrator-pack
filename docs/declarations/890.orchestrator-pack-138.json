@@ -1,0 +1,23 @@
+{
+  "issue_number": 890,
+  "iteration_id": "orchestrator-pack-138",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-17T08:48:32.977Z",
+  "baseline": {
+    "commit_sha": "9c729bb44728a92f42ca4334a17714f090e83aa7",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:7a2110b874228dfa4c2e0321c5732f3923f4bf7d99166a92bdfc4ac92797dfec"
+  },
+  "declared_paths": [
+    "docs/worker-message-submit-reconcile.mjs",
+    "docs/worker-message-submit-reconcile.d.mts",
+    "docs/worker-message-submit-reconcile.d.ts",
+    "scripts/worker-message-submit-reconcile.ps1",
+    "scripts/worker-message-submit-reconcile.test.ts"
+  ],
+  "declared_globs": [
+    "scripts/fixtures/worker-message-submit-reconcile/**"
+  ],
+  "amendments": []
+}

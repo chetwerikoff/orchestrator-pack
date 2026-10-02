@@ -1,0 +1,32 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1312,
+  "declared_paths": [
+    "scripts/vitest-runtime-history.json"
+  ],
+  "denylist": [
+    ".github/",
+    "credentials/",
+    "package-lock.json",
+    "package.json",
+    "packages/core/",
+    "scripts/export-pack-reviewer-resolution.ts",
+    "scripts/invoke-pack-review.ps1",
+    "scripts/lib/pack-reviewer-preference.ts",
+    "scripts/lib/resolve-pack-reviewer.ts",
+    "scripts/lib/vitest-json-report.mjs",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/lib/vitest-runtime-history-merge.mjs",
+    "scripts/pack-reviewer-config.ts",
+    "scripts/pack-reviewer-preference.test.ts",
+    "scripts/refresh-vitest-runtime-history.mjs",
+    "scripts/refresh-vitest-runtime-history.ps1",
+    "scripts/vitest-ci-lanes.config.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/vitest-runtime-history.json"
+  ],
+  "source_revision": "f702d621b60ea263ad4e036e892e83cd86ef2f41"
+}

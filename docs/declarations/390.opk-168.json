@@ -1,0 +1,21 @@
+{
+  "issue_number": 390,
+  "iteration_id": "opk-168",
+  "iteration_id_source": "ao_session",
+  "supersedes": "architect-gate-a-captures",
+  "created_at": "2026-06-22T04:08:23.784Z",
+  "baseline": {
+    "commit_sha": "7ca599c5966fc8b71a49d6518e242b5698c60d9a",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:ce9242bee4be4a195fb815fb4885598d633da1c6d952da9c3a5287c73537a8d9"
+  },
+  "declared_paths": [
+    "docs/review-handoff-wake-admission.mjs",
+    "docs/review-handoff-wake-admission.d.mts",
+    "scripts/check-review-wake-trigger.ps1",
+    "scripts/orchestrator-wake-listener.test.ts",
+    "scripts/review-handoff-wake-trigger.test.ts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

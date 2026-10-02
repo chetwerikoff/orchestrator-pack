@@ -1,0 +1,20 @@
+{
+  "issue_number": 19,
+  "iteration_id": "op-19",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-05-28T05:58:00.000Z",
+  "baseline": {
+    "commit_sha": "dd2abeebfd67d07f4d59d4fe63c850e7416ac6d1",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:2c88e05171514528addf6a4b7336e62827db3c7c56f070e61313b748aab6a954"
+  },
+  "declared_paths": [
+    "docs/declarations/19.op-19.json",
+    "docs/issues_drafts/09-auto-fix-loop-convergence.md"
+  ],
+  "declared_globs": [
+    "plugins/ao-token-chain-ledger/**"
+  ],
+  "amendments": []
+}

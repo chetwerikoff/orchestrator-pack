@@ -1,0 +1,33 @@
+{
+  "issue_number": 125,
+  "iteration_id": "wrap-20260602T045103Z-a9e954fd",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-06-02T04:51:03.763Z",
+  "baseline": {
+    "commit_sha": "d6efe3d7c60cb4a95b0498850f3a626747d2af40",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:46eea0dbdf01dd1528c81a261ad0be58e040d74e7e39f9460a80cae06aee82a3"
+  },
+  "declared_paths": [
+    ".cursor/skills/direct-fix-checklist/SKILL.md",
+    "scripts/lint-self-architect.config.json"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:c1e5b10bab59f4f021b36d306d3dda2250092acd21c1d87987f1c5663d41458c",
+      "new_active_scope_hash": "sha256:46eea0dbdf01dd1528c81a261ad0be58e040d74e7e39f9460a80cae06aee82a3",
+      "changed": {
+        "added": [
+          "scripts/lint-self-architect.config.json"
+        ],
+        "removed": []
+      },
+      "reason": "Include lint scanPaths for .cursor/skills",
+      "actor": "local",
+      "timestamp": "2026-06-02T04:56:47.750Z",
+      "applied": true
+    }
+  ]
+}
