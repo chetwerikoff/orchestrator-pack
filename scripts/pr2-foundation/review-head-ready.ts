@@ -1,5 +1,9 @@
+import { classifyRequiredCiLevel } from '../../docs/review-ready-stuck-guard.mjs';
+import type { RequiredCiResult } from '../lib/required-ci.ts';
+
 export interface HeadReadyCheck {
   name?: string;
+  workflow?: string;
   state?: string;
   conclusion?: string;
   status?: string;
@@ -38,21 +42,8 @@ export interface HeadReadyDecision {
   reason: string;
 }
 
-const REQUIRED_CHECKS = Object.freeze([
-  'verify orchestrator-pack structure',
-  'pr scope guard',
-  'run pack contract tests',
-  'self-architect lint',
-]);
-
 function normalized(value: unknown): string {
   return String(value ?? '').trim().toLowerCase();
-}
-
-function checkSuccessful(check: HeadReadyCheck): boolean {
-  return ['success', 'successful', 'completed'].includes(
-    normalized(check.state ?? check.conclusion ?? check.status),
-  );
 }
 
 function liveWorker(session: HeadReadySession | null | undefined): session is HeadReadySession {
@@ -88,6 +79,7 @@ export function evaluateHeadReadyForReview(input: {
   headSha: string;
   session?: HeadReadySession | null;
   ciChecks?: HeadReadyCheck[];
+  requiredCi?: RequiredCiResult;
 }): HeadReadyDecision {
   const headSha = normalized(input.headSha);
   if (!headSha || !Number.isInteger(input.prNumber) || input.prNumber <= 0) {
@@ -103,9 +95,15 @@ export function evaluateHeadReadyForReview(input: {
   if (!(input.session.reports ?? []).some((report) => reportCoversHead(report, headSha))) {
     return { eligible: false, route: 'defer', reason: 'ready_for_review_missing' };
   }
-  const checks = input.ciChecks ?? [];
-  const byName = new Map(checks.map((check) => [normalized(check.name), check]));
-  if (REQUIRED_CHECKS.some((name) => !byName.has(name) || !checkSuccessful(byName.get(name)!))) {
+  if (input.requiredCi) {
+    const boundHead = normalized(input.requiredCi.expectedHeadSha);
+    const witnessedHead = normalized(input.requiredCi.postProjectionHeadSha);
+    if (!input.requiredCi.green || boundHead !== headSha || witnessedHead !== headSha) {
+      return { eligible: false, route: 'defer', reason: 'required_ci_not_green' };
+    }
+  } else if (classifyRequiredCiLevel(input.ciChecks ?? []) !== 'green') {
+    // Compatibility for generic/vitest boundaries that have not opted into the
+    // production resolver. Production scheduler always supplies requiredCi.
     return { eligible: false, route: 'defer', reason: 'required_ci_not_green' };
   }
   if ((input.reviewRuns ?? []).some((run) => runCoversHead(run, headSha))) {
