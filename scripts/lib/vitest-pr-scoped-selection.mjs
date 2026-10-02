@@ -208,7 +208,10 @@ export function buildChangedPathManifest(repoRoot, baseSha, headSha, options = {
 
   let entries;
   try {
-    entries = parseRawDiffEntries(result.stdout ?? Buffer.from(''));
+    const parsedEntries = parseRawDiffEntries(result.stdout ?? Buffer.from(''));
+    entries = options.includeDeleted === false
+      ? parsedEntries.filter((entry) => entry.status !== 'D')
+      : parsedEntries;
   } catch (error) {
     return buildFailureManifest(normalizedBase, normalizedHead, 'malformed-raw-diff', {
       error: error instanceof Error ? error.message : String(error),

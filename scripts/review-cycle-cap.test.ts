@@ -2,9 +2,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { planReconcileActions } from '../docs/review-trigger-reconcile.mjs';
+import { planReconcileActions } from './pr2-foundation/terminalized/review-trigger-reconcile.ts';
 import { evaluateOrchestratorTurnGate } from '../docs/orchestrator-claimed-review-run.mjs';
-import { evaluateWakeReviewTrigger } from '../docs/review-wake-trigger.mjs';
+import { evaluateWakeReviewTrigger } from './pr2-foundation/terminalized/review-wake-trigger.ts';
 import { planDeferredWatchTick } from '../docs/review-trigger-reeval.mjs';
 import {
   buildReviewCycleCapCurrentHead,

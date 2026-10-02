@@ -2,7 +2,7 @@
   "jsExempt": [
     {
       "path": "/tmp/orchestrator-wake-dedup.json",
-      "owner": "docs/orchestrator-wake-filter.mjs",
+      "owner": "scripts/pr2-foundation/terminalized/orchestrator-wake-filter.ts",
       "reason": "JS-owned dedup state is outside the PowerShell hashtable reflection class"
     },
     {

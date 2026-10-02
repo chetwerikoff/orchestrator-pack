@@ -21,7 +21,7 @@ import {
   resolveWorkerReportTrustedBinding,
   upsertWorkerReportRecordInMemory,
   writeWorkerReportStoreFile,
-} from '../docs/worker-report-store.mjs';
+} from './pr2-foundation/terminalized/worker-report-store.ts';
 
 const STATES = new Set(['ready_for_review','fixing_ci','addressing_reviews','completed','blocked','pr_created','working','started']);
 const BINDING_ARGS = new Set(['--repository','--issue-number','--task-id','--assignment-id','--assignment-generation','--pr-number','--head-sha']);

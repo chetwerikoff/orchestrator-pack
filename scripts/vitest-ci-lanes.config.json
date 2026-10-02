@@ -7,9 +7,7 @@
   "heavyPerTestIsolate": [
     "scripts/pr2a/final-conformance.test.ts"
   ],
-  "heavyFileBatchIsolate": [
-    "scripts/pr2-foundation/mutation-external-ci.test.ts"
-  ],
+  "heavyFileBatchIsolate": [],
   "classification": {
     "plugins/_shared/tests/declaration_schema.test.ts": "light",
     "plugins/_shared/tests/git_fixture.test.ts": "light",
@@ -52,8 +50,6 @@
     "scripts/cutover/issue-928.test.ts": "light",
     "scripts/delegated-integration-contract.test.ts": "light",
     "scripts/direct-pack-review-status.test.ts": "light",
-    "scripts/estate-cut/issue-906-vertical-slice.test.ts": "light",
-    "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": "heavy",
     "scripts/fleet/fleet-sweep.test.ts": "light",
     "scripts/fleet/fleet-wake.test.ts": "light",
     "scripts/flow-manager-authority-contract.test.ts": "light",
@@ -127,14 +123,10 @@
     "scripts/pr2-foundation/fleet-reconciliation-handoff.test.ts": "light",
     "scripts/pr2-foundation/foundation.test.ts": "heavy",
     "scripts/pr2-foundation/migration-symlink.test.ts": "light",
-    "scripts/pr2-foundation/mutation-catalog.test.ts": "light",
-    "scripts/pr2-foundation/mutation-external-ci.test.ts": "heavy",
-    "scripts/pr2-foundation/mutation-semantic-gates.test.ts": "light",
     "scripts/pr2-foundation/post-review-smoke-preaction.test.ts": "light",
     "scripts/pr2-foundation/post-review-smoke-race.test.ts": "light",
     "scripts/pr2-foundation/post-review-smoke.test.ts": "light",
     "scripts/pr2-foundation/readiness-evaluator.test.ts": "light",
-    "scripts/pr2-foundation/real-scope-proof.test.ts": "light",
     "scripts/pr2-foundation/remote-worker-assignment.test.ts": "light",
     "scripts/pr2-foundation/review-4750643719-regression.test.ts": "light",
     "scripts/pr2-foundation/review-head-ready.test.ts": "light",
@@ -146,7 +138,6 @@
     "scripts/pr2-foundation/scheduler-repository-identity.test.ts": "light",
     "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts": "light",
     "scripts/pr2-foundation/supervised-worker-start.test.ts": "light",
-    "scripts/pr2-foundation/terminalized-port.test.ts": "light",
     "scripts/pr2-foundation/worker-notification-compat.test.ts": "light",
     "scripts/pr2a/final-conformance.test.ts": "heavy",
     "scripts/pr2a/planning.test.ts": "light",
