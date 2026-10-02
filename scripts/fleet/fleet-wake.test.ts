@@ -26,8 +26,11 @@ class MemoryWakeStore implements FleetWakeStateStore {
   readLastSentSignature(): string | null { return this.signature; }
   writeLastSentSignature(signature: string): void { this.signature = signature; }
   clearLastSentSignature(): void { this.signature = null; }
-  hasParkedWakeEvent(key: string): boolean { return this.parkedWakeEvents.has(key); }
-  writeParkedWakeEvent(key: string): void { this.parkedWakeEvents.add(key); }
+  claimParkedWakeEvent(key: string): boolean {
+    if (this.parkedWakeEvents.has(key)) return false;
+    this.parkedWakeEvents.add(key);
+    return true;
+  }
 }
 
 function commandResult(stdout = '', ok = true): OrcaCommandResult {
@@ -367,10 +370,12 @@ describe('fleet alarm', () => {
       const store = new FileFleetWakeStateStore('orchestrator-pack', { ...process.env, XDG_RUNTIME_DIR: xdg });
       store.setPollingMark('one');
       store.writeLastSentSignature('STOPPED one');
-      store.writeParkedWakeEvent('gpt:inv-2351');
-      expect(store.hasParkedWakeEvent('gpt:inv-2351')).toBe(true);
+      expect(store.claimParkedWakeEvent('gpt:inv-2351')).toBe(true);
+      expect(store.claimParkedWakeEvent('gpt:inv-2351')).toBe(false);
       expect(store.root).toBe(join(xdg, 'fleet-sweep', 'orchestrator-pack'));
-      expect(readdirSync(store.root).sort()).toEqual(expect.arrayContaining(['last-sent.signature', 'parked-wake.events']));
+      const files = readdirSync(store.root).sort();
+      expect(files).toContain('last-sent.signature');
+      expect(files.filter((name) => /^parked-wake-[0-9a-f]{32}\.mark$/u.test(name))).toHaveLength(1);
     } finally {
       rmSync(xdg, { recursive: true, force: true });
     }
