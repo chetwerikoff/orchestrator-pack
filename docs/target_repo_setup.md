@@ -92,7 +92,8 @@ green; the automation Chrome is logged into ChatGPT; and Orca is running.
 
    Keep the managed `orchestrator-pack` policy block intact. Add target-owned
    rules outside the markers with the project-card path, shared orchestrator
-   prompt path, shared templates path, and target verification commands.
+   prompt path, shared templates path, target verification commands, and the
+   target's orchestration rules (see "Shared prompt and templates" below).
 5. **Agent rules.** Symlink the global Cursor rules into
    `<primaryRoot>/.cursor/rules/` as described by `~/agent-rules/README.md`.
 6. **Scope guard and CI.** Install `.github/workflows/scope-guard.yml` and the
@@ -165,6 +166,26 @@ card and pass `--project <id>`; pack scripts are invoked from `{PACK_ROOT}`,
 never "from this worktree". The shared prompt/template placeholders are
 `{PROJECT_ID}`, `{REPOSITORY}`, `{PRIMARY_ROOT}`, `{PACK_ROOT}`,
 `{DEFAULT_BRANCH}`, and `{VERIFY}`.
+
+**Shared prompt and templates — one copy for every project.** A new target gets
+no per-project copy of any of them:
+
+| File | Used by | Target delivery |
+|---|---|---|
+| `~/.local/state/orchestrator-session/PROMPT.md` | the orchestrator of every project | `opk-orch-start`/`opk-orch-primary` start spec names the project id and card |
+| `~/.local/state/create-issue-draft/briefs/manager-preamble.md` | every manager | pasted first into each manager spec |
+| `.../briefs/worker-preamble.md` | every worker | pasted into each worker dispatch |
+| `.../briefs/fm-prompt-universal-existing-issue.md`, `fm-prompt-universal-brief-only.md` | authoring managers | by path, after the project line |
+| `.../briefs/ff-prompt-universal.md` | pack firefighter only | not used by a target seat |
+
+Before the first target task, check that each file still resolves project values
+from the spec's project line or the card and runs pack tools from `{PACK_ROOT}`
+with the project selected: no hard-coded pack repository, card path, ChatGPT
+project segment, `$PWD/scripts`, or "from this worktree" for pack tools. Target
+rules the orchestrator and units must follow (data safety, smoke environment,
+required CI name, merge-time local adoption, setup repair) go into a target-owned
+section of the target `AGENTS.md`, outside the managed markers; the shared prompt
+reads them from there.
 
 For each target task, render `{VERIFY}` from the selected card as the tracked
 target-verification invocation below, passing the task's **explicit current
