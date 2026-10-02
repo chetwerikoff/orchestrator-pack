@@ -79,6 +79,7 @@
     "scripts/draft-author-relocation-contract.d.mts",
     "scripts/draft-author-relocation-contract.mjs",
     "scripts/draft-author-relocation-surfaces.json",
+    "scripts/emit-vitest-heavy-topology.mjs",
     "scripts/estate-cut/**",
     "scripts/fixtures/mechanical-json-state/state-coverage-manifest.json",
     "scripts/gate-runner/declarative.test.ts",
@@ -131,5 +132,5 @@
     "scripts/**",
     "tests/external-output-references/**"
   ],
-  "source_revision": "201c86b4f63ac1b5ccba6ca51af6cd47c33c6efa"
+  "source_revision": "fb35a6641f398676cdd71b37b39237c17032fd7d"
 }
