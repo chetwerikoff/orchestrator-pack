@@ -20,6 +20,7 @@
     "docs/declarations/",
     "docs/events-optional-consumer-signal-recovery.d.mts",
     "docs/events-optional-consumer-signal-recovery.mjs",
+    "docs/investigations/runtime-hard-cut/historical-dispositions.json",
     "docs/issue_queue_index.md",
     "docs/issue-841-ci-compatibility.md",
     "docs/issue-841-post-rebase-ci.md",
@@ -103,6 +104,8 @@
     "scripts/gate-runner/representative-gates.ts",
     "scripts/guard-direct-edit.d.mts",
     "scripts/guard-direct-edit.mjs",
+    "scripts/json-producers/wave-b-inventory.json",
+    "scripts/json-producers/wave-b-reconciliation.ts",
     "scripts/lib/worker-report-store.test.ts",
     "scripts/lib/worker-status-store.mjs",
     "scripts/lint-self-architect.config.json",
@@ -151,5 +154,5 @@
     "scripts/",
     "tests/external-output-references/"
   ],
-  "source_revision": "def89ccd009ef021b67a3780fe168fc856e04571"
+  "source_revision": "c020cffecf647c301d0a08889144cf9f858ab100"
 }

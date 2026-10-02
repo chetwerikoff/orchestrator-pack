@@ -497,18 +497,6 @@
       "owningReference": "Issue #1419 r17; Issue #1415 C5"
     },
     {
-      "path": "scripts/json-producers/wave-b-inventory.json",
-      "class": "precut-migration-classifier",
-      "reason": "Migration/census/capture/foundation-proof source preserves or detects legacy PowerShell surface names as evidence; it is not a current production PowerShell caller.",
-      "owningReference": "Issue #1419 r17; Issue #1415 C5"
-    },
-    {
-      "path": "scripts/json-producers/wave-b-reconciliation.ts",
-      "class": "precut-migration-classifier",
-      "reason": "Migration/census/capture/foundation-proof source preserves or detects legacy PowerShell surface names as evidence; it is not a current production PowerShell caller.",
-      "owningReference": "Issue #1419 r17; Issue #1415 C5"
-    },
-    {
       "path": "scripts/launch-argv-test-exclusions.manifest.json",
       "class": "precut-migration-classifier",
       "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
