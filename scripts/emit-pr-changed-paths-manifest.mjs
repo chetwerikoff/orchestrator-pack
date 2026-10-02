@@ -30,5 +30,5 @@ function parseArgs(argv) {
 }
 
 const { repoRoot, baseSha, headSha } = parseArgs(process.argv);
-const manifest = buildChangedPathManifest(repoRoot, baseSha, headSha, { includeDeleted: false });
+const manifest = buildChangedPathManifest(repoRoot, baseSha, headSha);
 process.stdout.write(`${JSON.stringify(manifest)}\n`);

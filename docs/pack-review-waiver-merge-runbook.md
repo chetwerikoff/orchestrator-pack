@@ -383,5 +383,5 @@ Do not hand-edit review-run JSON on disk.
 
 - [`.claude/skills/merge-with-local-adoption/SKILL.md`](../.cursor/skills/merge-with-local-adoption/SKILL.md) — full merge + pull + 6e/8/9 flow
 - [`orchestrator-recovery-runbook.md`](orchestrator-recovery-runbook.md) — after manual PR merge
-- [`orchestration-runbook.md`](orchestration-runbook.md#worker-lifecycle) — current pack review and worker lifecycle
+- [`script-owned-review-pipeline.md`](script-owned-review-pipeline.md) — pack review runner
 - [`architecture.md`](architecture.md#review-paths) — review paths

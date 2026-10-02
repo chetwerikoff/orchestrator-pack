@@ -8,7 +8,7 @@ import {
   deriveMessageShape,
   DELIVERY_PATH_PENDING_DRAFT,
   DELIVERY_PATH_SELF_SUBMITTED,
-} from './pr2-foundation/terminalized/worker-message-dispatch-observe.ts';
+} from '../docs/worker-message-dispatch-observe.mjs';
 import { printJson, resolveMechanicalCliArg } from '../docs/review-mechanical-cli.mjs';
 
 export const REACTION_CONFIG_UNAVAILABLE = 'reaction_config_unavailable';

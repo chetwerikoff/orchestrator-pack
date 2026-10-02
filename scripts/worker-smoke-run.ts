@@ -50,7 +50,7 @@ import {
   listWorkerReportRecordsForAssignment,
   readWorkerReportStoreFile,
   resolveWorkerReportStorePath,
-} from './pr2-foundation/terminalized/worker-report-store.ts';
+} from '../docs/worker-report-store.mjs';
 import {
   evaluateWorkerStatusKillSwitch,
   readWorkerStatusStoreFile,

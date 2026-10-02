@@ -162,7 +162,7 @@ const declaredSourceInvariants: readonly DeclaredSourceInvariant[] = Object.free
   { ac: 'AC8', mutationId: 'receipt-and-final-verification-tree-differ', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'verification.finalTreeOid !== finalTreeOid || verification.checkoutTreeOid !== finalTreeOid' },
   { ac: 'AC8', mutationId: 'final-checks-on-dirty-worktree', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'if (!verification.cleanBefore || !verification.cleanAfter' },
   { ac: 'AC8', mutationId: 'evidence-tree-differs-from-executed-bytes', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'if (sha256(bytes) !== claimedDigest)' },
-  { ac: 'AC8', mutationId: 'implementation-change-reruns-tail-only', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'npm run typecheck:foundation && npm run lint:foundation && npm run test:issue-948' },
+  { ac: 'AC8', mutationId: 'implementation-change-reruns-tail-only', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'npm run typecheck:foundation && npm run lint:foundation && npm run test:contract-mutations && npm run test:issue-948' },
   { ac: 'AC8', mutationId: 'planning-change-preserves-stale-ac1', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: "planningManifestSha256: sha256(readAt(ref, 'scripts/pr2a/planning-manifest.json'))" },
   { ac: 'AC8', mutationId: 'same-tree-sha-change-rejected-as-tree-mismatch', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'return observedCommitSha === expectedCommitSha || gitTreeOid(observedCommitSha) === expectedTreeOid;' },
   { ac: 'AC8', mutationId: 'external-928-sync-evidence-missing', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: "if (external928.result !== 'pass'" },
@@ -259,6 +259,11 @@ function denylisted(file: string): boolean {
 function governanceReference(file: string): boolean {
   return (D928 as readonly string[]).includes(file)
     || file.startsWith('scripts/pr2a/')
+    || file.startsWith('scripts/estate-cut/')
+    || file === 'scripts/pr2-foundation/contracts.ts'
+    || file === 'scripts/pr2-foundation/mutation-catalog.ts'
+    || file === 'scripts/pr2-foundation/mutation-behavior-probes.ts'
+    || file === 'scripts/pr2-foundation/mutation-semantic-gates.ts'
     || file === 'scripts/lib/orchestrator-side-process-observer.ts'
     || file === 'docs/launch-argv-registry.mjs'
     || file === 'docs/orchestrator-message-registry.mjs'
@@ -390,8 +395,12 @@ export function validateMandatoryPackageScripts(source: string): ConformanceFind
   }
   const findings: ConformanceFinding[] = [];
   const issue948 = parsed.scripts?.['test:issue-948'] ?? '';
+  const mutations = parsed.scripts?.['test:contract-mutations'] ?? '';
   if (!issue948.includes('--maxWorkers=1') || !issue948.includes('scripts/pr2a/final-conformance.test.ts')) {
     findings.push({ code: 'issue948_mandatory_suite_weakened', path: 'package.json' });
+  }
+  if (!mutations.includes('scripts/pr2-foundation/contract-test-runner.ts')) {
+    findings.push({ code: 'contract_mutation_suite_removed', path: 'package.json' });
   }
   return findings;
 }
@@ -542,7 +551,7 @@ export function buildConformanceReport(ref = 'HEAD'): ConformanceReport {
     AC5: acResult(findings, ['bridge_', 'runner_', 'claim_store_', 'claim_internal_', 'closure_receipt_', 'd928_external_', 'mutation-contract:AC5:']),
     AC6: acResult(findings, ['retired_launch_', 'actionable_manifest_', 'mutation-contract:AC6:']),
     AC7: acResult(findings, ['path_outside_', 'denylisted_', 'new_powershell_', 'non_regular_', 'planned_', 'unreviewed_', 'mutation-contract:AC7:']),
-    AC8: acResult(findings, ['package_', 'issue948_', 'closure_receipt_', 'claim_store_', 'bridge_', 'runner_', 'claim_internal_', 'd928_', 'planning_', 'planned_', 'unreviewed_', 'path_outside_', 'denylisted_', 'new_powershell_', 'non_regular_', 'retired_launch_', 'actionable_manifest_', 'mutation-contract:AC8:']),
+    AC8: acResult(findings, ['package_', 'issue948_', 'contract_mutation_', 'closure_receipt_', 'claim_store_', 'bridge_', 'runner_', 'claim_internal_', 'd928_', 'planning_', 'planned_', 'unreviewed_', 'path_outside_', 'denylisted_', 'new_powershell_', 'non_regular_', 'retired_launch_', 'actionable_manifest_', 'mutation-contract:AC8:']),
   };
 
   return {

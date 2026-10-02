@@ -10,11 +10,11 @@ import { mkdirSync, openSync, writeFileSync, closeSync, readFileSync, rmSync, re
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { readStdinJson, runStdinJsonCli, resolveBoundedInt, evaluateMechanicalTickInterval } from './review-mechanical-cli.mjs';
-import { resolveHeadOwningWorkerSessionId, sessionOwnsRunHead, sessionMatchesPr, resolveHeadCommittedAtMs, getStoredReportHeadSha } from '../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts';
+import { resolveHeadOwningWorkerSessionId, sessionOwnsRunHead, sessionMatchesPr, resolveHeadCommittedAtMs, getStoredReportHeadSha } from './review-trigger-reconcile.mjs';
 import { resolveBindingRepoSlug, resolvePrSessionBindingForConsumer } from './pr-session-binding-cache.mjs';
 export { resolvePrSessionBindingForConsumer };
 import { normalizeSha, toArray, getSessionIdentifier } from './review-reconcile-primitives.mjs';
-import { isSessionAlive } from '../scripts/pr2-foundation/terminalized/worker-message-dispatch-observe.ts';
+import { isSessionAlive } from './worker-message-dispatch-observe.mjs';
 import {
   classifyRequiredCiLevel,
   normalizeCiChecksByPr,
@@ -22,9 +22,9 @@ import {
   normalizeRequiredCheckNamesByPr,
 } from './ci-green-wake-reconcile.mjs';
 import { findLatestReportForHead, isCiCheckFailure, normalizeCiState } from './review-ready-stuck-guard.mjs';
-import { getReportState } from '../scripts/pr2-foundation/terminalized/review-finding-delivery-confirm.ts';
-import { getReportTimestampMs } from '../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts';
-import { withDedupStateFileLock } from '../scripts/pr2-foundation/terminalized/orchestrator-wake-filter.ts';
+import { getReportState } from './review-finding-delivery-confirm.mjs';
+import { getReportTimestampMs } from './review-trigger-reconcile.mjs';
+import { withDedupStateFileLock } from './orchestrator-wake-filter.mjs';
 
 export const TERMINAL_ACTIONS = Object.freeze(['SEND', 'SUPPRESS']);
 export const DEFAULT_HELPER_ERROR_LIMIT = 3;
