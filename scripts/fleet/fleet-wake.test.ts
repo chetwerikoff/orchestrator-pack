@@ -1,11 +1,12 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   FileFleetWakeStateStore,
+  findTerminalEnvelopeForInvocation,
   fleetAlarmMessage,
   managerBannerMessage,
   runFleetAlarmTick,
@@ -17,6 +18,7 @@ import { FileFleetStateStore, type FleetTerminal, type OrcaCommandResult, type O
 class MemoryWakeStore implements FleetWakeStateStore {
   readonly root = '/xdg/fleet-sweep/project';
   readonly marks = new Set<string>();
+  readonly parkedWakeEvents = new Set<string>();
   signature: string | null = null;
   hasPollingMark(handle: string): boolean { return this.marks.has(handle); }
   setPollingMark(handle: string): void { this.marks.add(handle); }
@@ -24,6 +26,8 @@ class MemoryWakeStore implements FleetWakeStateStore {
   readLastSentSignature(): string | null { return this.signature; }
   writeLastSentSignature(signature: string): void { this.signature = signature; }
   clearLastSentSignature(): void { this.signature = null; }
+  hasParkedWakeEvent(key: string): boolean { return this.parkedWakeEvents.has(key); }
+  writeParkedWakeEvent(key: string): void { this.parkedWakeEvents.add(key); }
 }
 
 function commandResult(stdout = '', ok = true): OrcaCommandResult {
@@ -78,6 +82,8 @@ async function tick(input: {
   store?: MemoryWakeStore;
   config?: FleetWakeConfig;
   terminals?: readonly FleetTerminal[];
+  findTerminalEnvelope?: (invocationId: string) => string | undefined;
+  checkRunsCompleted?: (repository: string, sha: string) => boolean;
 }) {
   const calls: string[][] = [];
   const logs: string[] = [];
@@ -89,6 +95,8 @@ async function tick(input: {
     store,
     sleepMs: async (ms) => { sleeps.push(ms); },
     log: (line) => { logs.push(line); },
+    ...(input.findTerminalEnvelope ? { findTerminalEnvelope: input.findTerminalEnvelope } : {}),
+    ...(input.checkRunsCompleted ? { checkRunsCompleted: input.checkRunsCompleted } : {}),
   });
   return { result, calls, logs, sleeps, store };
 }
@@ -203,6 +211,125 @@ describe('fleet alarm', () => {
     expect(observed.logs).toContain('nothing stopped');
   });
 
+  it('wakes a PARKED GPT turn only with matching terminal evidence and never repeats an invocation', async () => {
+    const store = new MemoryWakeStore();
+    const invocationId = 'inv-2351';
+    const envelopePath = '/tmp/opencode/ff1-terminal.json';
+    const screens = {
+      coord: 'idle',
+      one: `PARKED on GPT turn ${invocationId}`,
+      two: 'working\nesc interrupt',
+    };
+
+    const missing = await tick({
+      screens,
+      store,
+      findTerminalEnvelope: () => undefined,
+    });
+    expect(sends(missing.calls)).toHaveLength(0);
+
+    const matched = await tick({
+      screens,
+      store,
+      findTerminalEnvelope: (observed) => observed === invocationId ? envelopePath : undefined,
+    });
+    expect(sends(matched.calls)).toEqual([[
+      'terminal', 'send', '--terminal', 'one',
+      '--text', `Wake: GPT turn ${invocationId} ended, read ${envelopePath}`,
+      '--enter',
+    ]]);
+
+    const repeated = await tick({
+      screens,
+      store,
+      findTerminalEnvelope: () => envelopePath,
+    });
+    expect(sends(repeated.calls)).toHaveLength(0);
+  });
+
+  it('matches GPT terminal evidence by observed_invocation_id under /tmp/opencode shape', () => {
+    const root = mkdtempSync(join(tmpdir(), 'fleet-wake-terminal-'));
+    try {
+      const nested = join(root, 'nested');
+      mkdirSync(nested, { recursive: true });
+      writeFileSync(join(root, 'wrong-terminal.json'), JSON.stringify({ observed_invocation_id: 'other' }), 'utf8');
+      const matching = join(nested, 'matching-terminal.json');
+      writeFileSync(matching, JSON.stringify({ observed_invocation_id: 'inv-2351' }), 'utf8');
+
+      expect(findTerminalEnvelopeForInvocation('inv-2351', root)).toBe(matching);
+      expect(findTerminalEnvelopeForInvocation('missing', root)).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('wakes PARKED CI only after every check-run is completed and never repeats a sha', async () => {
+    const store = new MemoryWakeStore();
+    const sha = 'a'.repeat(40);
+    const wakeConfig = config({
+      chatScope: {
+        projectUrl: 'https://chatgpt.com/g/g-p/project/test',
+        repository: 'chetwerikoff/orchestrator-pack',
+      },
+    });
+    const screens = {
+      coord: 'idle',
+      one: `PARKED on CI on ${sha}`,
+      two: 'working\nesc interrupt',
+    };
+
+    const incomplete = await tick({
+      screens,
+      store,
+      config: wakeConfig,
+      checkRunsCompleted: (repository, observedSha) => {
+        expect(repository).toBe('chetwerikoff/orchestrator-pack');
+        expect(observedSha).toBe(sha);
+        return false;
+      },
+    });
+    expect(sends(incomplete.calls)).toHaveLength(0);
+
+    const completed = await tick({
+      screens,
+      store,
+      config: wakeConfig,
+      checkRunsCompleted: () => true,
+    });
+    expect(sends(completed.calls)).toEqual([[
+      'terminal', 'send', '--terminal', 'one',
+      '--text', `Wake: CI on ${sha} finished`,
+      '--enter',
+    ]]);
+
+    const repeated = await tick({
+      screens,
+      store,
+      config: wakeConfig,
+      checkRunsCompleted: () => true,
+    });
+    expect(sends(repeated.calls)).toHaveLength(0);
+  });
+
+  it('does not wake merged-Issue or orchestrator-answer PARKED panes', async () => {
+    const observed = await tick({
+      config: config({
+        chatScope: {
+          projectUrl: 'https://chatgpt.com/g/g-p/project/test',
+          repository: 'chetwerikoff/orchestrator-pack',
+        },
+      }),
+      screens: {
+        coord: 'idle',
+        one: 'PARKED on #2351 merged',
+        two: 'PARKED on orchestrator answer',
+      },
+      findTerminalEnvelope: () => '/tmp/opencode/unrelated-terminal.json',
+      checkRunsCompleted: () => true,
+    });
+    expect(sends(observed.calls)).toHaveLength(0);
+  });
+
   it('honors ORCH_HANDLE, reports no coordinator when unresolved, and skips a failed screen read without throwing', async () => {
     const pinned = await tick({
       config: config({ orchestratorHandle: 'pinned' }),
@@ -240,8 +367,10 @@ describe('fleet alarm', () => {
       const store = new FileFleetWakeStateStore('orchestrator-pack', { ...process.env, XDG_RUNTIME_DIR: xdg });
       store.setPollingMark('one');
       store.writeLastSentSignature('STOPPED one');
+      store.writeParkedWakeEvent('gpt:inv-2351');
+      expect(store.hasParkedWakeEvent('gpt:inv-2351')).toBe(true);
       expect(store.root).toBe(join(xdg, 'fleet-sweep', 'orchestrator-pack'));
-      expect(readdirSync(store.root).sort()).toEqual(expect.arrayContaining(['last-sent.signature']));
+      expect(readdirSync(store.root).sort()).toEqual(expect.arrayContaining(['last-sent.signature', 'parked-wake.events']));
     } finally {
       rmSync(xdg, { recursive: true, force: true });
     }
