@@ -4091,7 +4091,18 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     || existingAuthorityBeforeCi?.cycle?.state === 'at_cap_open_findings'
     || existingAuthorityBeforeCi?.cycle?.state === 'at_cap_continuation_required',
   );
-  if (productionRequiredCiStart && !existingStateCannotStartReviewer) {
+  const harnessRequiredCiOptIn = process.env.OPK_VITEST_HARNESS === '1' && (
+    input.fixtureRequiredCi !== undefined
+    || input.fixtureRequiredCiChecks !== undefined
+    || input.fixtureRequiredCiPolicy !== undefined
+    || input.fixtureRequiredCiPolicyHttpStatus !== undefined
+    || input.fixtureRequiredCiPostProjectionHead !== undefined
+    || input.fixtureRequiredCiHeadAfterGate !== undefined
+  );
+  const requiredCiGateApplies = productionRequiredCiStart
+    && !existingStateCannotStartReviewer
+    && (process.env.OPK_VITEST_HARNESS !== '1' || harnessRequiredCiOptIn);
+  if (requiredCiGateApplies) {
     const requiredCiGreen = await manualPackReviewRequiredCiGreen({
       startInput: input,
       targetContext: selectedTarget,
