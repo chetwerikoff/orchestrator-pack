@@ -1,10 +1,10 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { runSchedulerTick, SCHEDULER_RUN_TICK_PHASE_INVENTORY, type SchedulerBoundary } from './scheduler.ts';
+import { productionSchedulerBoundary, runSchedulerTick, SCHEDULER_RUN_TICK_PHASE_INVENTORY, type SchedulerBoundary } from './scheduler.ts';
 
 function epochEnv(root: string): NodeJS.ProcessEnv {
   const authority = path.join(root, 'epoch.json');
@@ -52,6 +52,53 @@ function makeBoundary() {
   };
   return { boundary, start, readChecks };
 }
+
+describe('Issue #2346 scheduler required-CI transport', () => {
+  it.each([
+    ['pending', 8, 'PENDING', 'required_selector_pending'],
+    ['failed', 1, 'FAILURE', 'required_selector_failed'],
+  ] as const)('preserves %s pr-checks rows from canonical nonzero exit', async (_label, exitCode, state, reason) => {
+    const root = mkdtempSync(path.join(tmpdir(), 'scheduler-2346-pr-checks-'));
+    const scripts = path.join(root, 'scripts');
+    mkdirSync(scripts, { recursive: true });
+    const gh = path.join(scripts, 'gh');
+    const headSha = 'c'.repeat(40);
+    writeFileSync(gh, [
+      `#!${process.execPath}`,
+      'const args = process.argv.slice(2);',
+      `const head = '${headSha}';`,
+      "if (args[0] === 'pr' && args[1] === 'checks') {",
+      `  process.stdout.write(JSON.stringify([{ workflow: 'CI', name: 'checks', state: '${state}' }]));`,
+      `  process.exitCode = ${exitCode};`,
+      "} else if (args[0] === 'pr' && args[1] === 'view') {",
+      "  process.stdout.write(JSON.stringify({ number: 10, headRefOid: head, state: 'OPEN', isDraft: false, body: 'Closes #2346', baseRefName: 'main' }));",
+      '} else { process.exitCode = 2; }',
+      '',
+    ].join('\n'), 'utf8');
+    chmodSync(gh, 0o755);
+    try {
+      const candidate = { sessionId: 'session-2346', repoSlug: 'example/smoke', prNumber: 10, boundHeadSha: headSha };
+      const boundary = productionSchedulerBoundary({
+        repoRoot: root,
+        projectId: 'leopoker',
+        targetContext: {
+          projectId: 'leopoker',
+          repository: 'example/smoke',
+          defaultBranch: 'main',
+          requiredCi: ['CI / checks'],
+        },
+      });
+      const fresh = await boundary.readCurrentPr(candidate);
+      await expect(boundary.resolveRequiredCi!(candidate, fresh, headSha)).resolves.toMatchObject({
+        green: false,
+        reason,
+        postProjectionHeadSha: headSha,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('Issue #2250 scheduler post-review smoke starter retirement', () => {
   it('defers pending shared CI and starts exactly once when the same head becomes green', async () => {
