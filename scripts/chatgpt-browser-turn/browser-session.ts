@@ -81,6 +81,30 @@ export async function releaseCdpBrowser(
 
 export const CDP_CONNECT_TIMEOUT_MS = 120_000;
 
+function cdpBase(cdp: string): string {
+  const endpoint = new URL(cdp);
+  endpoint.hash = '';
+  endpoint.search = '';
+  return endpoint.toString().replace(/\/$/, '');
+}
+
+export async function createCdpPageTarget(
+  cdp: string,
+  url: string,
+  timeoutMs = CDP_CONNECT_TIMEOUT_MS,
+): Promise<void> {
+  const response = await fetch(`${cdpBase(cdp)}/json/new?${encodeURIComponent(url)}`, {
+    method: 'PUT',
+    signal: AbortSignal.timeout(timeoutMs),
+    headers: { accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(`cdp_create_http_${response.status}`);
+  const value: unknown = await response.json();
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('cdp_create_not_object');
+  }
+}
+
 export async function connectCdpBrowser(
   chromium: { connectOverCDP: (endpoint: string, options?: { timeout?: number }) => Promise<unknown> },
   cdp: string,
@@ -92,10 +116,7 @@ export async function trimExcessCdpPageTargets(
   cdp: string,
   options: { readonly urlIncludes?: string; readonly keep?: number } = {},
 ): Promise<number> {
-  const endpoint = new URL(cdp);
-  endpoint.hash = '';
-  endpoint.search = '';
-  const base = endpoint.toString().replace(/\/$/, '');
+  const base = cdpBase(cdp);
   const list = await fetch(`${base}/json/list`).then((response) => response.json()) as Array<{
     readonly id?: string;
     readonly type?: string;

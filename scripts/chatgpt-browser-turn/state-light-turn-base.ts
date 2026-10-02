@@ -17,6 +17,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import {
   abandonLatePageHandle,
   boundedResourceCleanup,
+  createCdpPageTarget,
   releaseCdpBrowser,
   RESOURCE_CLEANUP_BOUND_MS,
   type ResourceCleanupOutcome,
@@ -2085,6 +2086,39 @@ async function findOpenConversationPage(browser: any, config: BrowserConfig): Pr
   return page;
 }
 
+async function selectConversationPage(
+  browser: any,
+  chromium: { connectOverCDP: (endpoint: string, options?: { timeout?: number }) => Promise<any> },
+  config: BrowserConfig,
+  operationBudget: TurnOperationBudget,
+): Promise<{ browser: any; page: any | undefined }> {
+  let activeBrowser = browser;
+  let page = await findOpenConversationPage(activeBrowser, config);
+  if (page || config.newChat || !config.chatUrl) return { browser: activeBrowser, page };
+
+  const openWaitMs = operationBudget.clampOperationWaitMs();
+  if (openWaitMs <= 0) throw new BrowserOperationTimeoutError('open_conversation_page');
+  await createCdpPageTarget(
+    config.cdp,
+    normalizeConversationUrl(config.chatUrl),
+    openWaitMs,
+  );
+
+  const releaseWaitMs = operationBudget.clampOperationWaitMs();
+  await releaseCdpBrowser(
+    activeBrowser,
+    Math.max(0, Math.min(RESOURCE_CLEANUP_BOUND_MS, releaseWaitMs)),
+  );
+
+  const reconnectWaitMs = operationBudget.clampOperationWaitMs();
+  if (reconnectWaitMs <= 0) throw new BrowserOperationTimeoutError('connect_over_cdp');
+  activeBrowser = await chromium.connectOverCDP(config.cdp, {
+    timeout: Math.min(30_000, reconnectWaitMs),
+  });
+  page = await findOpenConversationPage(activeBrowser, config);
+  return { browser: activeBrowser, page };
+}
+
 async function navigateOwnedTurnPage(
   page: any,
   config: BrowserConfig,
@@ -2412,7 +2446,9 @@ async function runTurn(
     const connectWaitMs = invocationBudget.clampOperationWaitMs();
     if (connectWaitMs <= 0) throw new BrowserOperationTimeoutError('connect_over_cdp');
     browser = await chromium.connectOverCDP(config.cdp, { timeout: Math.min(30_000, connectWaitMs) });
-    page = await findOpenConversationPage(browser, config);
+    const selection = await selectConversationPage(browser, chromium, config, invocationBudget);
+    browser = selection.browser;
+    page = selection.page;
     if (!page) {
       page = await createDedicatedTurnPage(browser, invocationBudget);
       await navigateOwnedTurnPage(page, config, navigation);
@@ -4483,6 +4519,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
 export const __testFinalizeTurn = finalizeTurn;
 export const __testBrowserOrPageDefinitelyLost = browserOrPageDefinitelyLost;
 export const __testWaitForExistingGeneration = waitForExistingGeneration;
+export const __testConversationPageSelection = { selectConversationPage };
 
 export const __testComposerMutation = {
   remainingComposerMutationMs,

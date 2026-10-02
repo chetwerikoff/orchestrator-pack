@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { describe, expect, it, test, vi } from 'vitest';
 
 import {
+  __testConversationPageSelection,
   __testFinalizeTurn,
   __testPublishStateLightReply,
   type CompactTurnResult,
@@ -16,7 +17,8 @@ import { BEFORE_CDP_BROWSER_RELEASE, releaseCdpBrowser } from './browser-session
 import { runStateLightEntry } from './state-light-entry.ts';
 import { readChatBinding } from './chat-bindings.ts';
 import { TURN_STATES } from './contracts.ts';
-import { loadChromium } from './ui-adapter.ts';
+import { COMPOSER_SELECTOR, loadChromium, SEND_BUTTON_SELECTOR } from './ui-adapter.ts';
+import { fakeTurnPage } from './fixtures/fake-turn-page.ts';
 import {
   buildBrowserTurnCancellationReceipt,
   cancelOwnedGenerationFromReceipt,
@@ -130,6 +132,105 @@ async function observeFinalizer(testCase: FinalizerCase) {
   });
   return { result, pageCloseCalls, browserCloseCalls, foreignTargetOpen };
 }
+
+describe('Issue #2353 continuation tab bootstrap', () => {
+  const chatUrl = 'https://chatgpt.com/c/123e4567-e89b-12d3-a456-426614172353';
+  const config = {
+    cdp: 'http://127.0.0.1:9222',
+    profile: 'fixture-profile',
+    chatUrl,
+    newChat: false,
+    timeoutMs: 5_000,
+  } as const;
+  const operationBudget = { clampOperationWaitMs: () => 1_000 } as any;
+
+  it('opens a missing conversation target and the selected page can send', async () => {
+    const turnPage = fakeTurnPage();
+    turnPage.page.url = () => chatUrl;
+    const initialBrowser = {
+      contexts: () => [],
+      close: vi.fn(async () => undefined),
+    };
+    const reconnectedBrowser = {
+      contexts: () => [{ pages: () => [turnPage.page] }],
+      close: vi.fn(async () => undefined),
+    };
+    const chromium = {
+      connectOverCDP: vi.fn(async () => reconnectedBrowser),
+    };
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      expect(String(input)).toBe(`http://127.0.0.1:9222/json/new?${encodeURIComponent(chatUrl)}`);
+      expect(init?.method).toBe('PUT');
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ id: 'issue-2353-page', type: 'page', url: chatUrl }),
+      } as Response;
+    });
+
+    try {
+      const selected = await __testConversationPageSelection.selectConversationPage(
+        initialBrowser,
+        chromium,
+        config,
+        operationBudget,
+      );
+      expect(selected.page).toBe(turnPage.page);
+      expect(selected.browser).toBe(reconnectedBrowser);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(initialBrowser.close).toHaveBeenCalledTimes(1);
+      expect(chromium.connectOverCDP).toHaveBeenCalledTimes(1);
+
+      const delivery = await __testSendDelivery.dispatchStateLightSendAndObserveDelivery({
+        page: selected.page,
+        browser: selected.browser,
+        composer: selected.page.locator(COMPOSER_SELECTOR),
+        sendButton: selected.page.locator(SEND_BUTTON_SELECTOR),
+        hasSendButton: true,
+        marker: 'issue-2353-owned-prompt',
+        baselineUserNodeCount: 0,
+        sendWaitMs: 1_000,
+        invocationDeadlineMs: Date.now() + 5_000,
+        deliveryProofWaitMs: 0,
+      });
+      expect(delivery.sendCount).toBe(1);
+      expect(turnPage.getSendClicks()).toBe(1);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('reuses an already-open matching conversation without opening a second target', async () => {
+    const turnPage = fakeTurnPage();
+    turnPage.page.url = () => chatUrl;
+    const initialBrowser = {
+      contexts: () => [{ pages: () => [turnPage.page] }],
+      close: vi.fn(async () => undefined),
+    };
+    const chromium = {
+      connectOverCDP: vi.fn(async () => {
+        throw new Error('unexpected reconnect');
+      }),
+    };
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    try {
+      const selected = await __testConversationPageSelection.selectConversationPage(
+        initialBrowser,
+        chromium,
+        config,
+        operationBudget,
+      );
+      expect(selected.page).toBe(turnPage.page);
+      expect(selected.browser).toBe(initialBrowser);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(initialBrowser.close).not.toHaveBeenCalled();
+      expect(chromium.connectOverCDP).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});
 
 describe('Issue #1238 page cleanup equivalence', () => {
   it.each(cleanupCases)('$id observes the production finalizer', async (testCase) => {
