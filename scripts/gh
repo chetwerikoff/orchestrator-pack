@@ -10,8 +10,67 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The helper reuses resolveTargetContext, rejects mismatched repo/host ingress, and prints
 # the exact repository that all implicit gh routing must use.
 if [[ -n "${OPK_PROJECT_ID:-}" ]]; then
-  target_repo="$(node --no-warnings --experimental-strip-types "${SCRIPT_DIR}/lib/gh-target-authorization.ts" -- "$@")"
+  target_authorization="$(node --no-warnings --experimental-strip-types "${SCRIPT_DIR}/lib/gh-target-authorization.ts" -- "$@")"
+  IFS=
+
+if [[ "${GH_WRAPPER_ACTIVE:-}" == "1" ]]; then
+  # Terminal delegation: resolve native gh, not next wrapper on PATH (Issue #442).
+  real_gh="$(node "${SCRIPT_DIR}/lib/gh-resolve-real-binary.mjs")"
+  exec /usr/bin/env -u GH_WRAPPER_ACTIVE "$real_gh" "$@"
+fi
+
+if [[ -n "${OPK_SIDE_PROCESS_CHILD_ID:-}" && -n "${OPK_SIDE_PROCESS_PROGRESS_DIR:-}" && "${OPK_SIDE_PROCESS_LIVENESS_ACTIVE:-}" != "1" ]]; then
+  call_name="gh:${1:-command}:${2:-invoke}"
+  owner_pid="${OPK_SIDE_PROCESS_OWNER_PID:-$PPID}"
+  export OPK_SIDE_PROCESS_LIVENESS_ACTIVE=1
+  exec node --no-warnings --experimental-strip-types "${SCRIPT_DIR}/lib/Invoke-TypeScriptCli.ts" \
+    --repo-root "${SCRIPT_DIR}/.." \
+    --script "${SCRIPT_DIR}/kernel/side-process-liveness.ts" -- call \
+    --call-name "$call_name" \
+    --child-id "$OPK_SIDE_PROCESS_CHILD_ID" \
+    --owner-pid "$owner_pid" \
+    --progress-dir "$OPK_SIDE_PROCESS_PROGRESS_DIR" \
+    -- bash "${BASH_SOURCE[0]}" "$@"
+fi
+
+# Operator REST unblock: resolvePR argv (claim-pr) — Issue #443 gap for pr view field set
+case "${1:-} ${2:-} ${*:--json}" in
+  "pr view "*headRefName*isDraft*)
+    pr_num="${3:-}"
+    repo=""
+    json_fields=""
+    args=("$@")
+    i=3
+    while (( i < ${#args[@]} )); do
+      case "${args[i]}" in
+        --repo|-R) repo="${args[i+1]}"; ((i+=2));;
+        --json) json_fields="${args[i+1]}"; ((i+=2));;
+        *) ((i+=1));;
+      esac
+    done
+    if [[ -n "$pr_num" && "$json_fields" == *headRefName* && "$json_fields" == *isDraft* ]]; then
+      if [[ -z "$repo" ]]; then
+        if [[ -n "${OPK_TARGET_REPOSITORY:-}" ]]; then
+          repo="$OPK_TARGET_REPOSITORY"
+        else
+          repo="$(git -C "${SCRIPT_DIR}/.." remote get-url origin | sed -E 's#.*github.com[:/]([^/]+/[^/.]+).*#\1#')"
+        fi
+      fi
+      real_gh="$(node "${SCRIPT_DIR}/lib/gh-resolve-real-binary.mjs")"
+      exec /usr/bin/env -u GH_WRAPPER_ACTIVE "$real_gh" api "repos/${repo}/pulls/${pr_num}" \
+        --jq '{number, url: .html_url, title, headRefName: .head.ref, baseRefName: .base.ref, isDraft: .draft}'
+    fi
+    ;;
+esac
+
+exec node "${SCRIPT_DIR}/lib/gh-wrapper.mjs" "$@"
+\t' read -r target_repo target_default_branch <<< "$target_authorization"
+  if [[ -z "$target_repo" || -z "$target_default_branch" ]]; then
+    echo "target gh authorization returned incomplete repository/default-branch binding" >&2
+    exit 1
+  fi
   export OPK_TARGET_REPOSITORY="$target_repo"
+  export OPK_TARGET_DEFAULT_BRANCH="$target_default_branch"
   export GH_REPO="$target_repo"
   export GH_HOST="github.com"
 fi
