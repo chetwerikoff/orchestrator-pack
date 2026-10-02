@@ -1,3 +1,5 @@
+// @vitest-ci-lane light
+// @vitest-pre-topology-seconds 1
 import {
   existsSync,
   mkdirSync,
