@@ -1,7 +1,8 @@
 #!/usr/bin/env -S node --experimental-strip-types
 import '../toolchain/native-entrypoint-preflight.ts';
+import { createHash } from 'node:crypto';
 import { runProcessSync } from '../kernel/subprocess.ts';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTargetContext } from '../lib/target-context.ts';
@@ -53,6 +54,8 @@ export interface FleetWakeStateStore extends FleetPollingStore {
   writeBannerSignature?(signature: string): void;
   readStalledSeen?(): string | null;
   writeStalledSeen?(urls: string): void;
+  hasParkedWakeEvent(key: string): boolean;
+  markParkedWakeEvent(key: string): void;
 }
 
 export class FileFleetWakeStateStore extends FileFleetStateStore implements FleetWakeStateStore {
@@ -110,6 +113,20 @@ export class FileFleetWakeStateStore extends FileFleetStateStore implements Flee
     mkdirSync(this.root, { recursive: true });
     writeFileSync(this.stalledSeenPath(), `${urls}\n`, 'utf8');
   }
+
+  private parkedWakeEventPath(key: string): string {
+    const digest = createHash('sha256').update(key).digest('hex').slice(0, 32);
+    return join(this.root, `parked-wake-${digest}.mark`);
+  }
+
+  hasParkedWakeEvent(key: string): boolean {
+    return existsSync(this.parkedWakeEventPath(key));
+  }
+
+  markParkedWakeEvent(key: string): void {
+    mkdirSync(this.root, { recursive: true });
+    writeFileSync(this.parkedWakeEventPath(key), `${key}\n`, 'utf8');
+  }
 }
 
 export interface FleetAlarmTickOptions {
@@ -120,6 +137,9 @@ export interface FleetAlarmTickOptions {
   readonly log?: (line: string) => void;
   readonly readChats?: (cdpUrl: string, scope: ChatBannerScope) => Promise<ProjectChat[]>;
   readonly closeChat?: (cdpUrl: string, targetId: string) => Promise<boolean>;
+  readonly listTerminalEnvelopes?: () => readonly TerminalEnvelopeEvent[];
+  readonly listOpenPulls?: (repository: string) => readonly OpenPullHead[];
+  readonly checkRunsFinishedAt?: (repository: string, sha: string) => number | undefined;
 }
 
 export type FleetAlarmTickResult =
@@ -230,7 +250,7 @@ export function bannerOwnerPane(
     if (owner) return owner;
   }
   if (!banner.issue) return undefined;
-  const name = new RegExp(`^[a-z][a-z0-9]*-${banner.issue}$`, 'i');
+  const name = new RegExp(`^[a-z][a-z0-9-]*-${banner.issue}$`, 'i');
   const matches = terminals.filter((terminal) => {
     if (!terminal.worktreePath) return false;
     const worktree = terminal.worktreePath.replaceAll('\\', '/');
@@ -266,6 +286,11 @@ export const EXECUTION_CONTINUATION_TEXT = 'Доделай и сообщи ст�
 export const REVIEW_CONTINUATION_TEXT = 'Заверши ревью: выдай итоговый вердикт строго в формате из первого сообщения (NO_FINDINGS или JSON с findings). Ничего не исправляй и не меняй код.';
 
 export function managerBannerMessage(banner: ChatErrorBanner): string {
+  if (banner.kind === 'unloadable') {
+    return banner.review
+      ? `Your GPT PR-review chat ${banner.url} cannot be loaded ("${banner.text}", no composer), so nothing can be sent there. Restart the review in a new chat through your review tool. Never press Try again or Retry.`
+      : `Your GPT execution chat ${banner.url} cannot be loaded ("${banner.text}", no composer), so nothing can be sent there. Run GitHub-first reconciliation, then continue the task in a new chat with the reconciled baseline. Never press Try again or Retry.`;
+  }
   if (banner.review) {
     const reason = banner.kind === 'stalled' ? banner.text : `red banner "${banner.text}"${banner.retry ? ' (Retry shown)' : ''}`;
     return `Your GPT PR-review chat ${banner.url} ended without a verdict (${reason}). This is a review chat: do not ask it to fix code or continue the task. Send exactly this in the same chat: "${REVIEW_CONTINUATION_TEXT}" Then collect the verdict through your review tool as usual. Never press Retry.`;
@@ -293,10 +318,175 @@ export function fleetAlarmMessage(
   const paneText = stopped.length > 0
     ? ` ${stopped.length} pane(s) need a step: ${panes} Run your full fleet sweep now (mail, then fleet-sweep) and give every STOPPED/POLLING pane its step this turn. A question a unit typed in its own pane is addressed to you: answer it.`
     : '';
-  const bannerText = banners.length > 0
-    ? ` ${banners.length} ChatGPT chat(s) need a continuation (generation stopped): ${banners.map((banner) => `${banner.url} "${banner.text}"${banner.retry ? ' (Retry shown)' : ''}${banner.review ? ' (PR-review chat)' : ''}`).join('; ')}. Tell the manager that owns each chat to run GitHub-first reconciliation and send "${EXECUTION_CONTINUATION_TEXT}" in that same chat (runbook: Repeated product-error streak - two repeats, a fresh chat on the third continuation failure); for a PR-review chat send "${REVIEW_CONTINUATION_TEXT}" instead. Never press Retry.`
+  const unloadable = banners.filter((banner) => banner.kind === 'unloadable');
+  const continuable = banners.filter((banner) => banner.kind !== 'unloadable');
+  const unloadableText = unloadable.length > 0
+    ? ` ${unloadable.length} ChatGPT chat(s) cannot be loaded (no composer): ${unloadable.map((banner) => `${banner.url}${banner.review ? ' (PR-review chat)' : ''}`).join('; ')}. Tell the manager that owns each chat to run GitHub-first reconciliation and continue in a new chat with the reconciled baseline (a PR-review chat: restart the review in a new chat). Never press Try again or Retry.`
     : '';
-  return `Fleet alarm (${coordinatorState}):${paneText}${bannerText}`;
+  const bannerText = continuable.length > 0
+    ? ` ${continuable.length} ChatGPT chat(s) need a continuation (generation stopped): ${continuable.map((banner) => `${banner.url} "${banner.text}"${banner.retry ? ' (Retry shown)' : ''}${banner.review ? ' (PR-review chat)' : ''}`).join('; ')}. Tell the manager that owns each chat to run GitHub-first reconciliation and send "${EXECUTION_CONTINUATION_TEXT}" in that same chat (runbook: Repeated product-error streak - two repeats, a fresh chat on the third continuation failure); for a PR-review chat send "${REVIEW_CONTINUATION_TEXT}" instead. Never press Retry.`
+    : '';
+  return `Fleet alarm (${coordinatorState}):${paneText}${bannerText}${unloadableText}`;
+}
+
+const TERMINAL_ENVELOPE_SCHEMA = 'flow-manager-long-running-child-terminal/v1';
+
+export interface TerminalEnvelopeEvent {
+  readonly path: string;
+  readonly invocationId: string;
+  readonly cwd: string;
+}
+
+export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeEvent[] {
+  const pending = [root];
+  const events: TerminalEnvelopeEvent[] = [];
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    let entries;
+    try {
+      entries = readdirSync(directory, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(path);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith('terminal.json')) continue;
+      try {
+        const envelope = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+        if (envelope.schema !== TERMINAL_ENVELOPE_SCHEMA || typeof envelope.cwd !== 'string') continue;
+        const invocationId = typeof envelope.observed_invocation_id === 'string'
+          ? envelope.observed_invocation_id
+          : String(envelope.attempt_identity ?? basename(path));
+        events.push({ path, invocationId, cwd: envelope.cwd });
+      } catch {
+        // A partial or unrelated terminal artifact is not completion evidence.
+      }
+    }
+  }
+  return events.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+export interface OpenPullHead {
+  readonly number: number;
+  readonly ref: string;
+  readonly sha: string;
+  readonly issue?: number;
+}
+
+export function listOpenPullHeads(repository: string): OpenPullHead[] {
+  const result = runProcessSync({
+    command: fileURLToPath(new URL('../gh', import.meta.url)),
+    args: [
+      'api', `repos/${repository}/pulls?state=open&per_page=100`,
+      '--jq', '.[] | {number, ref: .head.ref, sha: .head.sha, body: (.body // "")} | @json',
+    ],
+    timeoutMs: 15_000,
+    inheritParentEnv: true,
+  });
+  if (!result.ok) return [];
+  const pulls: OpenPullHead[] = [];
+  for (const line of result.stdout.split(/\r?\n/u)) {
+    if (!line.trim()) continue;
+    try {
+      const pull = JSON.parse(line) as { number?: unknown; ref?: unknown; sha?: unknown; body?: unknown };
+      if (typeof pull.number !== 'number' || typeof pull.ref !== 'string' || typeof pull.sha !== 'string') continue;
+      const issue = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|refs?)\s+#(\d+)\b/iu
+        .exec(typeof pull.body === 'string' ? pull.body : '')?.[1];
+      pulls.push({ number: pull.number, ref: pull.ref, sha: pull.sha, ...(issue ? { issue: Number(issue) } : {}) });
+    } catch {
+      // Skip a malformed row.
+    }
+  }
+  return pulls;
+}
+
+// Latest completion time when every check-run on the sha is completed.
+export function checkRunsFinishedAt(repository: string, sha: string): number | undefined {
+  const result = runProcessSync({
+    command: fileURLToPath(new URL('../gh', import.meta.url)),
+    args: ['api', `repos/${repository}/commits/${sha}/check-runs`, '--paginate', '--jq', '.check_runs[] | [.status, (.completed_at // "")] | @tsv'],
+    timeoutMs: 15_000,
+    inheritParentEnv: true,
+  });
+  if (!result.ok) return undefined;
+  const rows = result.stdout.split(/\r?\n/u).map((row) => row.trim()).filter(Boolean).map((row) => row.split('\t'));
+  if (rows.length === 0 || rows.some(([status]) => status !== 'completed')) return undefined;
+  const times = rows.map(([, completedAt]) => Date.parse(completedAt ?? '')).filter(Number.isFinite);
+  return times.length > 0 ? Math.max(...times) : undefined;
+}
+
+function idlePane(pane: FleetPaneObservation): boolean {
+  return pane.state === 'STOPPED' || pane.state === 'PARKED';
+}
+
+function onlyPane(panes: readonly FleetPaneObservation[]): FleetPaneObservation | undefined {
+  if (panes.length === 1) return panes[0];
+  const agents = panes.filter((pane) => pane.agentIdentity);
+  return agents.length === 1 ? agents[0] : undefined;
+}
+
+function envelopeOwner(cwd: string, panes: readonly FleetPaneObservation[]): FleetPaneObservation | undefined {
+  const target = resolve(cwd).replaceAll('\\', '/');
+  return onlyPane(panes.filter((pane) => {
+    if (!pane.worktreePath) return false;
+    const worktree = resolve(pane.worktreePath).replaceAll('\\', '/');
+    return target === worktree || target.startsWith(`${worktree}/`);
+  }));
+}
+
+function pullOwner(pull: OpenPullHead, panes: readonly FleetPaneObservation[]): FleetPaneObservation | undefined {
+  const onBranch = onlyPane(panes.filter((pane) => pane.branch === `refs/heads/${pull.ref}`));
+  if (onBranch || !pull.issue) return onBranch;
+  const name = new RegExp(`^[a-z][a-z0-9-]*-${pull.issue}$`, 'iu');
+  return onlyPane(panes.filter((pane) => pane.worktreePath && name.test(basename(pane.worktreePath))));
+}
+
+/**
+ * Wakes an idle pane once per event of its own: a GPT turn launched from its
+ * worktree ended, or CI finished on the head of a PR it owns. The pane's own
+ * park-line wording is not consulted.
+ */
+async function wakePanesOnEvents(
+  options: FleetAlarmTickOptions,
+  observations: readonly FleetPaneObservation[],
+  executor: OrcaExecutor,
+  store: FleetWakeStateStore,
+  log: (line: string) => void,
+  sleepMs: (milliseconds: number) => void | Promise<void>,
+): Promise<void> {
+  const wakes: Array<{ pane: FleetPaneObservation; key: string; message: string }> = [];
+  for (const envelope of (options.listTerminalEnvelopes ?? listTerminalEnvelopes)()) {
+    const key = `gpt:${envelope.path}`;
+    const pane = envelopeOwner(envelope.cwd, observations);
+    if (!pane || !idlePane(pane) || store.hasParkedWakeEvent(key)) continue;
+    wakes.push({ pane, key, message: `Wake: GPT turn ${envelope.invocationId} ended, read ${envelope.path}` });
+  }
+  const repository = options.config.chatScope?.repository;
+  if (repository && observations.some(idlePane)) {
+    const finishedAt = options.checkRunsFinishedAt ?? checkRunsFinishedAt;
+    for (const pull of (options.listOpenPulls ?? listOpenPullHeads)(repository)) {
+      const key = `ci:${pull.number}:${pull.sha}`;
+      const pane = pullOwner(pull, observations);
+      if (!pane || !idlePane(pane) || store.hasParkedWakeEvent(key)) continue;
+      const at = finishedAt(repository, pull.sha);
+      if (at === undefined) continue;
+      wakes.push({ pane, key, message: `Wake: CI on ${pull.sha} finished for PR #${pull.number}` });
+    }
+  }
+  for (const { pane, key, message } of wakes) {
+    const delivered = sendCoordinator(executor, pane.handle, message)
+      && (await sleepMs(4_000), submitCoordinator(executor, pane.handle));
+    if (!delivered) {
+      log(`event wake send failed to ${pane.handle}: ${key}`);
+      continue;
+    }
+    store.markParkedWakeEvent(key);
+    log(`sent event wake to ${pane.handle}: ${key}`);
+  }
 }
 
 function defaultSleep(milliseconds: number): Promise<void> {
@@ -356,6 +546,8 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     log('fleet sweep unreadable');
     return { state: 'unreadable', handle: 'fleet-sweep' };
   }
+
+  await wakePanesOnEvents(options, observations, executor, store, log, sleepMs);
 
   const chats = config.chatCdpUrl && config.chatScope
     ? await (options.readChats ?? readProjectChats)(config.chatCdpUrl, config.chatScope).catch(() => [])

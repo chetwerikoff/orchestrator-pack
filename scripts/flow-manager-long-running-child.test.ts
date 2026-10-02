@@ -239,6 +239,7 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(code).toBe(0);
     expect(readHandoffReceipt(paths.receipt)?.schema).toBe(HANDOFF_SCHEMA);
     expect(readTerminalEnvelope(paths.envelope)?.lifecycle_outcome).toBe('success');
+    expect(readTerminalEnvelope(paths.envelope)?.cwd).toBe(repoRoot);
   });
 
   it('refuses before handoff when artifact paths alias', async () => {

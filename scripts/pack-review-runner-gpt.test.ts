@@ -250,6 +250,8 @@ function writeClosedPrGhFixture(binRoot: string): void {
     "  process.stdout.write('chetwerikoff/orchestrator-pack\\n');",
     "} else if (args[0] === 'pr' && args[1] === 'view') {",
     `  process.stdout.write('${HEAD_A} CLOSED\\n');`,
+    "} else if (args[0] === 'api' && /\\/pulls\\/\\d+$/.test(args[1] ?? '')) {",
+    `  process.stdout.write(JSON.stringify({ number: 1111, state: 'closed', body: 'Closes #2346', head: { sha: '${HEAD_A}' }, base: { ref: 'main' } }));`,
     '} else {',
     '  process.exitCode = 2;',
     '}',
@@ -947,6 +949,50 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
     expect(result.stdout).not.toContain('> npm run check:node-major');
   });
 
+  it('keeps canonical --project selection through the runner when ambient OPK_PROJECT_ID is absent', () => {
+    const fixtureRoot = tempRoot('opk-issue-2346-explicit-project-');
+    const commandRoot = tempRoot('opk-issue-2346-explicit-project-gh-');
+    writeClosedPrGhFixture(commandRoot);
+    const configHome = path.join(fixtureRoot, 'config');
+    const projects = path.join(configHome, 'orchestrator-pack', 'projects');
+    mkdirSync(projects, { recursive: true });
+    writeFileSync(path.join(projects, 'orchestrator-pack.json'), JSON.stringify({
+      projectId: 'orchestrator-pack',
+      repository: 'chetwerikoff/orchestrator-pack',
+      primaryRoot: repoRoot,
+      defaultBranch: 'main',
+      orcaWorkspacePattern: 'orca/workspaces/orchestrator-pack/',
+      orchestratorTitlePattern: 'orchestrator-pack',
+      browserGpt: { projectUrl: 'https://chatgpt.com/g/orchestrator-pack/project' },
+    }), 'utf8');
+    const childEnv = {
+      ...process.env,
+      XDG_CONFIG_HOME: configHome,
+      PATH: `${commandRoot}${path.delimiter}${process.env.PATH ?? ''}`,
+      GH_HOST: 'git.example.test',
+      npm_config_update_notifier: 'false',
+    };
+    delete childEnv.OPK_PROJECT_ID;
+    delete childEnv.OPK_VITEST_HARNESS;
+
+    const result = runProcessSync({
+      command: process.platform === 'win32' ? 'npm.cmd' : 'npm',
+      args: ['run', '--silent', 'pack-gpt-review', '--', '--project', 'orchestrator-pack', '--pr-number', '1111'],
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: childEnv,
+    });
+
+    expect(result.exitCode).toBe(1);
+    const payload = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+    expect(payload).toMatchObject({ ok: false, outcome: 'review_target_unavailable', prNumber: 1111 });
+    expect(String(payload.reason)).not.toContain('missing-selection');
+    expect(String(payload.reason)).toContain('gh api PR read 1111');
+    expect(String(payload.reason)).toContain(
+      'target gh host mismatch from GH_HOST: expected github.com, got git.example.test',
+    );
+  });
+
   it('resolves a PR-only target, binds GPT above persistent layers, and emits one start indication', async () => {
     const storeRoot = tempRoot('opk-issue-1111-fresh-');
     const capture = path.join(storeRoot, 'github-review.json');
@@ -974,6 +1020,120 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
     expect(readFileSync(engagement, 'utf8').trim().split('\n')).toHaveLength(1);
     expect(process.env.PACK_REVIEWER).toBe('codex');
     expect(process.env[PACK_REVIEW_BOUND_REVIEWER_ENV]).toBeUndefined();
+  });
+
+  it.each([403, 404] as const)(
+    'admits manual start on HTTP %i protection lookup only when project-card requiredCi proves the same head green',
+    async (policyStatus) => {
+      const storeRoot = tempRoot(`opk-issue-2346-card-${policyStatus}-green-`);
+      const capture = path.join(storeRoot, 'github-review.json');
+      harnessEnv(storeRoot, capture);
+
+      const execution = await runPackGptReviewCommand({ prNumber: 1111 }, {
+        env: process.env,
+        stderr: { write: () => undefined },
+        startReview: canonicalCommandRunner(storeRoot, {
+          fixtureRequiredCi: ['CI / checks'],
+          fixtureRequiredCiPolicy: null,
+          fixtureRequiredCiPolicyHttpStatus: policyStatus,
+          fixtureRequiredCiChecks: [
+            { workflow: 'CI', name: 'checks', state: 'SUCCESS' },
+          ],
+        }),
+      });
+
+      expect(execution.exitCode).toBe(0);
+      expect(execution.result).toMatchObject({
+        ok: true,
+        created: true,
+      });
+      expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toEqual([
+        expect.objectContaining({
+          prNumber: 1111,
+          headSha: HEAD_A,
+        }),
+      ]);
+    },
+  );
+
+  it('does not retain the Issue #2344 bare-check fallback when protection is unavailable and the card has no requiredCi', async () => {
+    const storeRoot = tempRoot('opk-issue-2346-no-card-403-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    const execution = await runPackGptReviewCommand({ prNumber: 1111 }, {
+      env: process.env,
+      stderr: { write: () => undefined },
+      startReview: canonicalCommandRunner(storeRoot, {
+        fixtureRequiredCiPolicy: null,
+        fixtureRequiredCiPolicyHttpStatus: 403,
+        fixtureRequiredCiChecks: [{ workflow: 'CI', name: 'checks', state: 'SUCCESS' }],
+      }),
+    });
+    expect(execution.exitCode).toBe(1);
+    expect(execution.result).toMatchObject({
+      runnerReason: 'required_ci_not_green_for_current_head',
+    });
+  });
+
+  it.each([
+    ['pending', 'PENDING'],
+    ['failed', 'FAILURE'],
+  ] as const)(
+    'refuses manual start on HTTP 403 policy lookup when checks is %s',
+    async (_label, state) => {
+      const storeRoot = tempRoot(`opk-issue-2344-policy-403-${state.toLowerCase()}-`);
+      const capture = path.join(storeRoot, 'github-review.json');
+      harnessEnv(storeRoot, capture);
+
+      const execution = await runPackGptReviewCommand({ prNumber: 1111 }, {
+        env: process.env,
+        stderr: { write: () => undefined },
+        startReview: canonicalCommandRunner(storeRoot, {
+          fixtureRequiredCi: ['CI / checks'],
+          fixtureRequiredCiPolicy: null,
+          fixtureRequiredCiPolicyHttpStatus: 403,
+          fixtureRequiredCiChecks: [
+            { workflow: 'CI', name: 'checks', state },
+          ],
+        }),
+      });
+
+      expect(execution.exitCode).toBe(1);
+      expect(execution.result).toMatchObject({
+        reason: 'review_not_started',
+        runnerReason: 'required_ci_not_green_for_current_head',
+        prNumber: 1111,
+        headSha: HEAD_A,
+      });
+      expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toHaveLength(0);
+    },
+  );
+
+  it('keeps unrelated required-status policy lookup failures fail-closed', async () => {
+    const storeRoot = tempRoot('opk-issue-2344-policy-500-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+
+    const execution = await runPackGptReviewCommand({ prNumber: 1111 }, {
+      env: process.env,
+      stderr: { write: () => undefined },
+      startReview: canonicalCommandRunner(storeRoot, {
+        fixtureRequiredCiPolicy: null,
+        fixtureRequiredCiPolicyHttpStatus: 500,
+        fixtureRequiredCiChecks: [
+          { name: 'checks', state: 'SUCCESS' },
+        ],
+      }),
+    });
+
+    expect(execution.exitCode).toBe(1);
+    expect(execution.result).toMatchObject({
+      reason: 'review_not_started',
+      runnerReason: 'required_ci_not_green_for_current_head',
+      prNumber: 1111,
+      headSha: HEAD_A,
+    });
+    expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toHaveLength(0);
   });
 
   it.each([
@@ -1048,10 +1208,26 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
       env: process.env,
       stderr: { write: () => undefined },
       startReview: canonicalCommandRunner(storeRoot, {
+        fixtureRequiredCiPostProjectionHead: HEAD_A,
         fixtureRequiredCiHeadAfterGate: HEAD_B,
       }),
     });
     expect(drifted.result).toMatchObject({
+      reason: 'review_not_started',
+      runnerReason: 'required_ci_not_green_for_current_head',
+    });
+
+    const retargeted = await runPackGptReviewCommand({ prNumber: 1111 }, {
+      env: process.env,
+      stderr: { write: () => undefined },
+      startReview: canonicalCommandRunner(storeRoot, {
+        fixtureRequiredCiPostProjectionHead: HEAD_A,
+        fixtureRequiredCiPostProjectionBase: 'main',
+        fixtureRequiredCiHeadAfterGate: HEAD_A,
+        fixtureRequiredCiBaseAfterGate: 'release',
+      }),
+    });
+    expect(retargeted.result).toMatchObject({
       reason: 'review_not_started',
       runnerReason: 'required_ci_not_green_for_current_head',
     });

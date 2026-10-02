@@ -44,6 +44,30 @@ const HEAD_TWO = '2'.repeat(40);
 const TRUSTED_ACTOR = 'pack-publisher';
 const REPOSITORY = 'chetwerikoff/orchestrator-pack';
 
+function sharedGreenRequiredCi(headSha = HEAD_ONE) {
+  return {
+    state: 'green',
+    green: true,
+    source: 'project_card',
+    reason: 'green',
+    expectedHeadSha: headSha,
+    postProjectionHeadSha: headSha,
+    headBinding: 'inferred_current',
+    selectors: [{ kind: 'actions', workflow: 'CI', job: 'checks' }],
+    diagnostics: [],
+  } as const;
+}
+
+describe('Issue #2346 shared required CI smoke integration', () => {
+  it('keeps production smoke on the shared resolver and post-projection head witness', () => {
+    const source = readFileSync(join(process.cwd(), 'scripts', 'worker-smoke-run.ts'), 'utf8');
+    expect(source).toContain('resolveRequiredCi({');
+    expect(source).toContain('readCurrentPr: async () => fetchLivePrBinding');
+    expect(source).toContain('requiredStatusChecksEndpoint(repositorySlug, baseRef)');
+    expect(source).not.toContain('classifyRequiredCiLevel(checks');
+  });
+});
+
 describe('Issue #2250 scrubbed report output is redaction-only', () => {
   it('retains a PASS machine report while redacting secret-shaped scenario output', () => {
     const dangerous = 'Authorization: Bearer example-smoke-secret';
@@ -221,7 +245,7 @@ describe('delegated readiness consumes the production post-smoke owner', () => {
         resolveTarget: () => smokeTarget, fetchCurrentHead: () => HEAD_ONE,
         selectAdapter: async () => new DeterministicRuntimeAdapter(),
         readiness: {
-          resolveCiGreen: () => true,
+          resolveRequiredCi: async () => sharedGreenRequiredCi(),
           currentPackReviewStatusFact: () => ({ hasLegitimateReview: true, unresolvedBlockingFinding: false }),
           fetchCurrentHead: () => HEAD_ONE,
           fetchSmokeComments: () => [...comments],
@@ -299,7 +323,7 @@ describe('delegated readiness consumes the production post-smoke owner', () => {
         fetchCurrentHead: () => HEAD_ONE,
         selectAdapter: async () => new DeterministicRuntimeAdapter(),
         readiness: {
-          resolveCiGreen: () => true,
+          resolveRequiredCi: async () => sharedGreenRequiredCi(),
           currentPackReviewStatusFact: () => ({ hasLegitimateReview: true, unresolvedBlockingFinding: false }),
           fetchCurrentHead: () => HEAD_ONE,
           fetchSmokeComments: () => [],
@@ -471,6 +495,33 @@ describe('publishPrComment', () => {
       expect(buildSmokeGhChildEnv({})).toEqual({});
     } finally {
       restoreProject();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['pending', 8],
+    ['failed', 1],
+  ] as const)('accepts canonical pr-checks %s exit without retrying transport', (_label, exitCode) => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-gh-pr-checks-'));
+    const gh = join(root, 'gh');
+    const callsFile = join(root, 'calls.txt');
+    executable(gh, `#!${process.execPath}\nconst { appendFileSync } = require('node:fs');\nappendFileSync(${JSON.stringify(callsFile)}, 'call\\n', 'utf8');\nprocess.stdout.write(JSON.stringify([{ workflow: 'CI', name: 'checks', state: '${exitCode === 8 ? 'PENDING' : 'FAILURE'}' }]));\nprocess.exitCode = ${exitCode};\n`);
+    try {
+      const result = runSmokeGhProcess(
+        gh,
+        ['pr', 'checks', '2001'],
+        root,
+        buildSmokeGhChildEnv({}),
+        500,
+        [0, 1, 8],
+      );
+      expect(result.exitCode).toBe(exitCode);
+      expect(JSON.parse(result.stdout)).toEqual([
+        expect.objectContaining({ workflow: 'CI', name: 'checks' }),
+      ]);
+      expect(readFileSync(callsFile, 'utf8').trim().split(/\r?\n/u)).toHaveLength(1);
+    } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });

@@ -1,9 +1,16 @@
 #!/usr/bin/env -S node --experimental-strip-types
 
 import './toolchain/native-entrypoint-preflight.ts';
-import { classifyRequiredCiLevel } from '../docs/review-ready-stuck-guard.mjs';
 import { runProcessSync } from './kernel/subprocess.ts';
-import { resolveTargetContext } from './lib/target-context.ts';
+import { resolveTargetContext, type TargetContext } from './lib/target-context.ts';
+import {
+  requiredStatusChecksEndpoint,
+  resolveRequiredCi,
+  reviewIndependentRequiredCiContexts,
+  type RequiredCiProtectionRead,
+  type RequiredCiResult,
+} from './lib/required-ci.ts';
+export { reviewIndependentRequiredCiContexts } from './lib/required-ci.ts';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from './pr-scope-contract.ts';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -171,8 +178,14 @@ function readIssueBody(path: string): string {
   return readFileSync(path, 'utf8');
 }
 
-function requireProcessOutput(label: string, result: ReturnType<typeof runProcessSync>): string {
-  if (!result.ok) {
+function requireProcessOutput(
+  label: string,
+  result: ReturnType<typeof runProcessSync>,
+  acceptedExitCodes: readonly number[] = [0],
+): string {
+  const accepted = result.ok
+    || (result.outcome === 'exit' && acceptedExitCodes.includes(result.exitCode ?? -1));
+  if (!accepted) {
     const detail = scrubSmokeOutput(scrubForwardedGhSecrets(
       result.stderr || result.error || 'non-zero exit',
       buildSmokeGhChildEnv(),
@@ -191,11 +204,14 @@ export function runSmokeGhProcess(
   cwd: string,
   env: Readonly<NodeJS.ProcessEnv>,
   timeoutMs = SMOKE_GH_TIMEOUT_MS,
+  acceptedExitCodes: readonly number[] = [0],
 ): ReturnType<typeof runProcessSync> {
   let result: ReturnType<typeof runProcessSync> | undefined;
   for (let attempt = 0; attempt <= SMOKE_GH_RETRY_COUNT; attempt += 1) {
     result = runProcessSync({ command, args: [...args], cwd, env, timeoutMs });
-    if (result.ok) return result;
+    if (result.ok || (result.outcome === 'exit' && acceptedExitCodes.includes(result.exitCode ?? -1))) {
+      return result;
+    }
   }
   return result!;
 }
@@ -204,8 +220,16 @@ export function runSmokeGhSync(
   args: readonly string[],
   cwd: string,
   extraEnv: Readonly<NodeJS.ProcessEnv> = {},
+  acceptedExitCodes: readonly number[] = [0],
 ): ReturnType<typeof runProcessSync> {
-  return runSmokeGhProcess(resolveTrackedGhWrapper(), args, cwd, { ...buildSmokeGhChildEnv(), ...extraEnv });
+  return runSmokeGhProcess(
+    resolveTrackedGhWrapper(),
+    args,
+    cwd,
+    { ...buildSmokeGhChildEnv(), ...extraEnv },
+    SMOKE_GH_TIMEOUT_MS,
+    acceptedExitCodes,
+  );
 }
 
 function gitPorcelain(cwd: string): string[] {
@@ -235,12 +259,11 @@ function canonicalRepositorySlug(value: unknown): string {
   return slug;
 }
 
-function selectedSmokeProject(): { projectId: string; repository: string; defaultBranch: string } {
+function selectedSmokeProject(): Pick<TargetContext, 'projectId' | 'repository' | 'defaultBranch' | 'requiredCi'> {
   if (process.env.VITEST && !String(process.env.OPK_PROJECT_ID ?? '').trim()) {
     return { projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack', defaultBranch: 'main' };
   }
-  const target = resolveTargetContext({ env: process.env });
-  return { projectId: target.projectId, repository: target.repository, defaultBranch: target.defaultBranch };
+  return resolveTargetContext({ env: process.env });
 }
 
 function selectedSmokeRepositorySlug(): string {
@@ -375,11 +398,23 @@ export function fetchPrComments(prNumber: number, repositorySlug: string, repoRo
   throw new Error('comment_census: pagination completeness unprovable');
 }
 
-export function fetchLivePrHead(prNumber: number, repositorySlug: string, repoRoot: string): string {
-  const pr = githubApiObject('pr-view-head', `repos/${repositorySlug}/pulls/${prNumber}`, repoRoot);
+export function fetchLivePrBinding(
+  prNumber: number,
+  repositorySlug: string,
+  repoRoot: string,
+): { headSha: string; baseRef: string } {
+  const pr = githubApiObject('pr-view-head-base', `repos/${repositorySlug}/pulls/${prNumber}`, repoRoot);
   const head = pr.head && typeof pr.head === 'object' && !Array.isArray(pr.head) ? pr.head as Record<string, unknown> : {};
+  const base = pr.base && typeof pr.base === 'object' && !Array.isArray(pr.base) ? pr.base as Record<string, unknown> : {};
   if (positiveInteger(pr.number) !== prNumber || String(pr.state ?? '').toLowerCase() !== 'open') throw new Error('trusted_target: live PR binding changed');
-  return String(head.sha ?? '').trim().toLowerCase();
+  return {
+    headSha: String(head.sha ?? '').trim().toLowerCase(),
+    baseRef: String(base.ref ?? '').trim(),
+  };
+}
+
+export function fetchLivePrHead(prNumber: number, repositorySlug: string, repoRoot: string): string {
+  return fetchLivePrBinding(prNumber, repositorySlug, repoRoot).headSha;
 }
 
 export function publishPrComment(
@@ -423,28 +458,55 @@ export function publishPrComment(
   }
 }
 
-export function reviewIndependentRequiredCiContexts(contexts: readonly unknown[]): string[] {
-  const reviewContext = PACK_REVIEW_REQUIRED_STATUS_CONTEXT.toLowerCase();
-  return contexts.map((value) => String(value ?? '').trim()).filter((value) => Boolean(value) && value.toLowerCase() !== reviewContext);
-}
-
-export function resolveCiGreen(prNumber: number, headSha: string, repositorySlug: string, repoRoot: string): boolean {
+export async function resolveRequiredCiForCurrentHead(
+  prNumber: number,
+  headSha: string,
+  repositorySlug: string,
+  repoRoot: string,
+): Promise<RequiredCiResult> {
   const pr = githubApiObject('pr-view-head-base', `repos/${repositorySlug}/pulls/${prNumber}`, repoRoot);
-  const head = pr.head && typeof pr.head === 'object' && !Array.isArray(pr.head) ? pr.head as Record<string, unknown> : {};
   const base = pr.base && typeof pr.base === 'object' && !Array.isArray(pr.base) ? pr.base as Record<string, unknown> : {};
-  if (positiveInteger(pr.number) !== prNumber || String(pr.state ?? '').toLowerCase() !== 'open'
-    || String(head.sha ?? '').trim().toLowerCase() !== headSha.trim().toLowerCase()) return false;
-  const checks = JSON.parse(requireProcessOutput('required-ci-checks', runSmokeGhSync(
-    ['pr', 'checks', String(prNumber), '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description'], repoRoot,
-  ))) as { name?: string; state?: string; bucket?: string }[];
-  const baseRef = String(base.ref ?? 'main').trim() || 'main';
-  let requiredCheckNames: string[] = [];
-  let requiredCheckLookupFailed = false;
-  try {
-    const protection = githubApiObject('required-status-checks', `repos/${repositorySlug}/branches/${baseRef}/protection/required_status_checks`, repoRoot);
-    requiredCheckNames = reviewIndependentRequiredCiContexts(Array.isArray(protection.contexts) ? protection.contexts : []);
-  } catch { requiredCheckLookupFailed = true; }
-  return classifyRequiredCiLevel(checks, { requiredCheckNames, requiredCheckLookupFailed }) === 'green';
+  if (positiveInteger(pr.number) !== prNumber || String(pr.state ?? '').toLowerCase() !== 'open') {
+    throw new Error('required_ci_target_unavailable');
+  }
+  const baseRef = String(base.ref ?? '').trim();
+  const selected = selectedSmokeProject();
+  if (selected.repository.toLowerCase() !== repositorySlug.toLowerCase()) {
+    throw new Error('required_ci_repository_binding_mismatch');
+  }
+
+  const readProtection = async (): Promise<RequiredCiProtectionRead> => {
+    const response = runSmokeGhSync(['api', requiredStatusChecksEndpoint(repositorySlug, baseRef)], repoRoot);
+    if (!response.ok) {
+      const match = `${response.stderr}\n${response.stdout}`.match(/\bHTTP\s+(403|404)\b/iu);
+      if (match) return { kind: 'unavailable', httpStatus: Number(match[1]) as 403 | 404 };
+      throw new Error('required_ci_protection_lookup_failed');
+    }
+    const parsed = JSON.parse(response.stdout) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('required_ci_protection_lookup_invalid');
+    }
+    return { kind: 'ok', policy: parsed as Record<string, unknown> };
+  };
+
+  return resolveRequiredCi({
+    target: selected,
+    prNumber,
+    expectedHeadSha: headSha,
+    prBaseRef: baseRef,
+    readProtection,
+    readChecks: async () => JSON.parse(requireProcessOutput(
+      'required-ci-checks',
+      runSmokeGhSync(
+        ['pr', 'checks', String(prNumber), '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description'],
+        repoRoot,
+        {},
+        [0, 1, 8],
+      ),
+      [0, 1, 8],
+    )) as Array<{ name?: string; workflow?: string; state?: string; conclusion?: string; status?: string; bucket?: string }>,
+    readCurrentPr: async () => fetchLivePrBinding(prNumber, repositorySlug, repoRoot),
+  });
 }
 
 function sameReviewIdentifier(left: unknown, right: unknown): boolean {
@@ -546,7 +608,9 @@ export interface PostSmokeReadinessResult {
   readonly smokeEvidence: { readonly state: 'verified' | 'missing' | 'unavailable' | 'changed'; readonly headSha: string };
 }
 export interface PostSmokeReadinessDependencies {
-  readonly resolveCiGreen?: typeof resolveCiGreen;
+  readonly resolveRequiredCi?: typeof resolveRequiredCiForCurrentHead;
+  /** Legacy/test fixture seam only; production leaves this unset. */
+  readonly resolveCiGreen?: (prNumber: number, headSha: string, repositorySlug: string, repoRoot: string) => boolean;
   readonly currentPackReviewStatusFact?: typeof currentPackReviewStatusFact;
   readonly isAncestor?: typeof githubCommitIsAncestor;
   readonly fetchSmokeComments?: typeof fetchPrComments;
@@ -625,7 +689,14 @@ export async function evaluatePostSmokeReadiness(
     smokeObservationAvailable = false;
   }
 
-  const ciGreen = (dependencies.resolveCiGreen ?? resolveCiGreen)(target.prNumber, target.headSha, target.repositorySlug, options.repoRoot);
+  const ciGreen = dependencies.resolveCiGreen
+    ? dependencies.resolveCiGreen(target.prNumber, target.headSha, target.repositorySlug, options.repoRoot)
+    : (await (dependencies.resolveRequiredCi ?? resolveRequiredCiForCurrentHead)(
+        target.prNumber,
+        target.headSha,
+        target.repositorySlug,
+        options.repoRoot,
+      )).green;
   const acceptedReport = selectAcceptedCurrentWorkerReport(workerReports, readinessTarget);
   const lifecycle = String(acceptedReport?.reportState ?? '').trim().toLowerCase();
   const transport = createGithubReviewTransport({ repoRoot: options.repoRoot, repoSlug: target.repositorySlug, prNumber: target.prNumber });

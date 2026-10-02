@@ -13,9 +13,11 @@ export interface ChatBinding {
 
 const CONVERSATION_ID_RE = /^https:\/\/chatgpt\.com\/(?:[^?#]*\/)?c\/([0-9a-f][0-9a-f-]{7,})(?:[/?#]|$)/i;
 
+// Read by the fleet-wake service; agents may run with an isolated
+// XDG_STATE_HOME, so the root follows HOME only.
 export function chatBindingsRoot(env: NodeJS.ProcessEnv = process.env): string {
-  const stateHome = env.XDG_STATE_HOME?.trim() || join(homedir(), '.local', 'state');
-  return join(stateHome, 'orchestrator-fleet', 'chat-bindings');
+  const home = env.HOME?.trim() || homedir();
+  return join(home, '.local', 'state', 'orchestrator-fleet', 'chat-bindings');
 }
 
 export function conversationIdFromUrl(url: string): string | undefined {

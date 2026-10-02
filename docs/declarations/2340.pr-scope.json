@@ -1,0 +1,20 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2340,
+  "declared_paths": [
+    "docs/declarations/2340.pr-scope.json",
+    "scripts/chatgpt-browser-turn/state-light-turn.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/chatgpt-browser-turn/"
+  ],
+  "source_revision": "b3c2d924259f1f56b4fe03e82ac6950fd76049d7"
+}

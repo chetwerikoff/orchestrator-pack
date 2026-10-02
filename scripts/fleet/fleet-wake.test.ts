@@ -1,20 +1,26 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   FileFleetWakeStateStore,
+  listTerminalEnvelopes,
+  fleetAlarmMessage,
+  managerBannerMessage,
   runFleetAlarmTick,
   type FleetWakeConfig,
   type FleetWakeStateStore,
+  type OpenPullHead,
+  type TerminalEnvelopeEvent,
 } from './fleet-wake.ts';
 import { FileFleetStateStore, type FleetTerminal, type OrcaCommandResult, type OrcaExecutor } from './fleet-sweep.ts';
 
 class MemoryWakeStore implements FleetWakeStateStore {
   readonly root = '/xdg/fleet-sweep/project';
   readonly marks = new Set<string>();
+  readonly parkedWakeEvents = new Set<string>();
   signature: string | null = null;
   hasPollingMark(handle: string): boolean { return this.marks.has(handle); }
   setPollingMark(handle: string): void { this.marks.add(handle); }
@@ -22,6 +28,8 @@ class MemoryWakeStore implements FleetWakeStateStore {
   readLastSentSignature(): string | null { return this.signature; }
   writeLastSentSignature(signature: string): void { this.signature = signature; }
   clearLastSentSignature(): void { this.signature = null; }
+  hasParkedWakeEvent(key: string): boolean { return this.parkedWakeEvents.has(key); }
+  markParkedWakeEvent(key: string): void { this.parkedWakeEvents.add(key); }
 }
 
 function commandResult(stdout = '', ok = true): OrcaCommandResult {
@@ -76,6 +84,9 @@ async function tick(input: {
   store?: MemoryWakeStore;
   config?: FleetWakeConfig;
   terminals?: readonly FleetTerminal[];
+  listTerminalEnvelopes?: () => readonly TerminalEnvelopeEvent[];
+  listOpenPulls?: (repository: string) => readonly OpenPullHead[];
+  checkRunsFinishedAt?: (repository: string, sha: string) => number | undefined;
 }) {
   const calls: string[][] = [];
   const logs: string[] = [];
@@ -87,12 +98,19 @@ async function tick(input: {
     store,
     sleepMs: async (ms) => { sleeps.push(ms); },
     log: (line) => { logs.push(line); },
+    listTerminalEnvelopes: input.listTerminalEnvelopes ?? (() => []),
+    ...(input.listOpenPulls ? { listOpenPulls: input.listOpenPulls } : {}),
+    ...(input.checkRunsFinishedAt ? { checkRunsFinishedAt: input.checkRunsFinishedAt } : {}),
   });
   return { result, calls, logs, sleeps, store };
 }
 
 function sends(calls: readonly string[][]): string[][] {
   return calls.filter((call) => call[0] === 'terminal' && call[1] === 'send');
+}
+
+function sendsTo(calls: readonly string[][], handle: string): string[][] {
+  return sends(calls).filter((call) => call[call.indexOf('--terminal') + 1] === handle);
 }
 
 describe('fleet alarm', () => {
@@ -201,6 +219,92 @@ describe('fleet alarm', () => {
     expect(observed.logs).toContain('nothing stopped');
   });
 
+  it('wakes the idle pane of the launching worktree once per GPT terminal envelope, whatever its park line says', async () => {
+    const store = new MemoryWakeStore();
+    const envelope = {
+      path: '/tmp/opencode/one-terminal.json',
+      invocationId: '887cc977-f28e-4ab1-b498-e4ebced05551',
+      cwd: `${workerBase}/one/scripts`,
+    };
+    const listTerminalEnvelopes = () => [envelope];
+    const busy = await tick({
+      screens: { coord: 'idle', one: 'working\nesc interrupt', two: 'working\nesc interrupt' },
+      store,
+      listTerminalEnvelopes,
+    });
+    expect(sendsTo(busy.calls, 'one')).toHaveLength(0);
+
+    const idle = await tick({
+      screens: { coord: 'idle', one: 'PARKED on whatever wording', two: 'working\nesc interrupt' },
+      store,
+      listTerminalEnvelopes,
+    });
+    expect(sendsTo(idle.calls, 'one')).toEqual([[
+      'terminal', 'send', '--terminal', 'one',
+      '--text', `Wake: GPT turn ${envelope.invocationId} ended, read ${envelope.path}`,
+      '--enter',
+    ], ['terminal', 'send', '--terminal', 'one', '--enter']]);
+
+    const repeated = await tick({
+      screens: { coord: 'idle', one: 'PARKED on whatever wording', two: 'working\nesc interrupt' },
+      store,
+      listTerminalEnvelopes,
+    });
+    expect(sendsTo(repeated.calls, 'one')).toHaveLength(0);
+  });
+
+  it('lists launcher terminal envelopes that name their worktree', () => {
+    const root = mkdtempSync(join(tmpdir(), 'fleet-wake-terminal-'));
+    try {
+      const nested = join(root, 'nested');
+      mkdirSync(nested, { recursive: true });
+      const schema = 'flow-manager-long-running-child-terminal/v1';
+      const routed = join(nested, 'routed-terminal.json');
+      writeFileSync(routed, JSON.stringify({ schema, observed_invocation_id: 'inv-a', cwd: '/w/one' }), 'utf8');
+      writeFileSync(join(root, 'unrouted-terminal.json'), JSON.stringify({ schema, observed_invocation_id: 'inv-b' }), 'utf8');
+      writeFileSync(join(root, 'other-terminal.json'), JSON.stringify({ schema: 'x/v1', cwd: '/w/one' }), 'utf8');
+
+      expect(listTerminalEnvelopes(root)).toEqual([{ path: routed, invocationId: 'inv-a', cwd: '/w/one' }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('wakes the idle owner of a PR once per head after its CI finished', async () => {
+    const store = new MemoryWakeStore();
+    const now = Date.parse('2026-10-02T12:00:00Z');
+    const headA = 'a'.repeat(40);
+    const headB = 'b'.repeat(40);
+    const owned: FleetTerminal[] = [
+      { handle: 'coord', title: 'Cursor coordinator', worktreePath: primary },
+      { handle: 'one', title: 'OpenCode manager one', worktreePath: `${workerBase}/one`, branch: 'refs/heads/fix/a' },
+      { handle: 'mgr', title: 'OpenCode manager', worktreePath: `${workerBase}/leopoker-mgr-2317`, branch: 'refs/heads/chetwerikoff/mgr-2317' },
+    ];
+    const wakeConfig = config({
+      chatScope: { projectUrl: 'https://chatgpt.com/g/g-p/project/test', repository: 'chetwerikoff/orchestrator-pack' },
+    });
+    const listOpenPulls = () => [
+      { number: 7, ref: 'fix/a', sha: headA },
+      { number: 8, ref: 'issue-2317-split', sha: headB, issue: 2317 },
+    ];
+    const screens = { coord: 'idle', one: 'PARKED on any text', mgr: 'done for now' };
+
+    const first = await tick({
+      screens, store, config: wakeConfig, terminals: owned, listOpenPulls,
+      checkRunsFinishedAt: (_repository, sha) => sha === headA ? now - 60_000 : undefined,
+    });
+    expect(sendsTo(first.calls, 'one')[0]).toContain(`Wake: CI on ${headA} finished for PR #7`);
+    expect(sendsTo(first.calls, 'mgr')).toHaveLength(0);
+
+    const second = await tick({
+      screens, store, config: wakeConfig, terminals: owned, listOpenPulls,
+      checkRunsFinishedAt: () => now - 60_000,
+    });
+    expect(sendsTo(second.calls, 'one')).toHaveLength(0);
+    expect(sendsTo(second.calls, 'mgr')[0]).toContain(`Wake: CI on ${headB} finished for PR #8`);
+
+  });
+
   it('honors ORCH_HANDLE, reports no coordinator when unresolved, and skips a failed screen read without throwing', async () => {
     const pinned = await tick({
       config: config({ orchestratorHandle: 'pinned' }),
@@ -238,8 +342,13 @@ describe('fleet alarm', () => {
       const store = new FileFleetWakeStateStore('orchestrator-pack', { ...process.env, XDG_RUNTIME_DIR: xdg });
       store.setPollingMark('one');
       store.writeLastSentSignature('STOPPED one');
+      expect(store.hasParkedWakeEvent('gpt:inv-2351')).toBe(false);
+      store.markParkedWakeEvent('gpt:inv-2351');
+      expect(store.hasParkedWakeEvent('gpt:inv-2351')).toBe(true);
       expect(store.root).toBe(join(xdg, 'fleet-sweep', 'orchestrator-pack'));
-      expect(readdirSync(store.root).sort()).toEqual(expect.arrayContaining(['last-sent.signature']));
+      const files = readdirSync(store.root).sort();
+      expect(files).toContain('last-sent.signature');
+      expect(files.filter((name) => /^parked-wake-[0-9a-f]{32}\.mark$/u.test(name))).toHaveLength(1);
     } finally {
       rmSync(xdg, { recursive: true, force: true });
     }
@@ -279,5 +388,22 @@ describe('fleet alarm', () => {
     const mutating = observed.calls.filter((call) => call[1] === 'send');
     expect(mutating).toHaveLength(2);
     expect(mutating.every((call) => call[0] === 'terminal' && call[call.indexOf('--terminal') + 1] === 'coord')).toBe(true);
+  });
+});
+
+describe('Issue #2342 unloadable chat', () => {
+  it('asks for a new chat instead of a same-chat continuation', () => {
+    const banner = {
+      kind: 'unloadable' as const,
+      url: 'https://chatgpt.com/c/123e4567-e89b-12d3-a456-426614174042',
+      text: 'Could not load this ChatGPT conversation',
+      retry: false,
+    };
+    expect(managerBannerMessage(banner)).toContain('continue the task in a new chat');
+    expect(managerBannerMessage(banner)).not.toContain('same chat');
+    expect(managerBannerMessage({ ...banner, review: true })).toContain('Restart the review in a new chat');
+    const alarm = fleetAlarmMessage('idle', [], [banner]);
+    expect(alarm).toContain('cannot be loaded');
+    expect(alarm).not.toContain('need a continuation');
   });
 });

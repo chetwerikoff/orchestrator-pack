@@ -49,7 +49,7 @@ A proved assertion FAIL enters the existing fixer continuation and an explicit s
 on the corrected head without reopening the settled pack-review stage.
 
 The manager starts pack review with
-`npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>` and never manufactures
+`npm run --silent pack-gpt-review -- --project <PROJECT_ID> --pr-number <PR_NUMBER>` and never manufactures
 scheduler, WorkerStatus, WorkerReport, or review-candidate state.
 
 ### Worker
@@ -307,7 +307,7 @@ Only the merge agent updates a branch from `origin/main`, once, immediately befo
 merge. Workers and coordinators never merge `main` merely to clear BEHIND.
 
 A new manual review
-`npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>` starts only when
+`npm run --silent pack-gpt-review -- --project <PROJECT_ID> --pr-number <PR_NUMBER>` starts only when
 review-independent required CI is green on the exact current head;
 `orchestrator-pack/pack-review` itself is excluded from that check.
 
@@ -487,14 +487,14 @@ authority.
 Local Codex PR review is active through the pack-owned review runner. GitHub PR
 review is the authoritative verdict; the pack run store is operational state.
 
-- automatic and common starts use `scripts/pack-review-runner.ts` and name the PR;
+- the canonical prescriptive review entrypoint is `npm run --silent pack-gpt-review -- --project <PROJECT_ID> --pr-number <PR_NUMBER>`; scheduler/internal starts remain implementation details;
 - the live PR supplies the current head and its closing reference supplies the Issue;
 - session-binding cache data is advisory correlation only and cannot veto a valid
   PR-led start or substitute a different repository, head, or Issue;
 - a missing exact bound Issue snapshot is captured only after the existing start
   claim is acquired, so concurrent first starts freeze one durable Issue body;
 - manual Browser-GPT review uses
-  `npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>`; a new manual
+  `npm run --silent pack-gpt-review -- --project <PROJECT_ID> --pr-number <PR_NUMBER>`; a new manual
   review starts only when review-independent required CI is green for the exact
   current PR head, with `orchestrator-pack/pack-review` itself excluded from
   that precondition;

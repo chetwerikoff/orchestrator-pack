@@ -53,7 +53,20 @@ green; the automation Chrome is logged into ChatGPT; and Orca is running.
    ```
 
    A successful check prints the resolved repository, primary root, default
-   branch, and project URL. `verification.local` is required for target
+   branch, configured `requiredCi` (when present), and project URL.
+   `requiredCi` is optional. When configured it must be a non-empty array of
+   GitHub Actions selectors in canonical `<workflow> / <job>` syntax: exactly
+   one literal ` / ` separator, non-empty trimmed components, and no duplicate
+   workflow/job tuple after case-insensitive normalization. Example:
+   `"requiredCi": ["CI / checks"]`.
+
+   A present `requiredCi` is authoritative for pack required-CI gate selector
+   discovery and replaces branch-protection lookup for that selected project.
+   Use it only for GitHub Actions workflow/job selectors. For classic commit
+   statuses or third-party contexts, omit `requiredCi` and configure readable,
+   non-empty required-status branch protection on the selected default branch.
+
+   `verification.local` is required for target
    work and must be a non-empty ordered list of non-empty shell command strings.
    `verification.focused` is optional and may hold one non-empty scoped
    verification template, but it never replaces `verification.local`. For example:
@@ -92,7 +105,8 @@ green; the automation Chrome is logged into ChatGPT; and Orca is running.
 
    Keep the managed `orchestrator-pack` policy block intact. Add target-owned
    rules outside the markers with the project-card path, shared orchestrator
-   prompt path, shared templates path, and target verification commands.
+   prompt path, shared templates path, target verification commands, and the
+   target's orchestration rules (see "Shared prompt and templates" below).
 5. **Agent rules.** Symlink the global Cursor rules into
    `<primaryRoot>/.cursor/rules/` as described by `~/agent-rules/README.md`.
 6. **Scope guard and CI.** Install `.github/workflows/scope-guard.yml` and the
@@ -165,6 +179,26 @@ card and pass `--project <id>`; pack scripts are invoked from `{PACK_ROOT}`,
 never "from this worktree". The shared prompt/template placeholders are
 `{PROJECT_ID}`, `{REPOSITORY}`, `{PRIMARY_ROOT}`, `{PACK_ROOT}`,
 `{DEFAULT_BRANCH}`, and `{VERIFY}`.
+
+**Shared prompt and templates — one copy for every project.** A new target gets
+no per-project copy of any of them:
+
+| File | Used by | Target delivery |
+|---|---|---|
+| `~/.local/state/orchestrator-session/PROMPT.md` | the orchestrator of every project | `opk-orch-start`/`opk-orch-primary` start spec names the project id and card |
+| `~/.local/state/create-issue-draft/briefs/manager-preamble.md` | every manager | pasted first into each manager spec |
+| `.../briefs/worker-preamble.md` | every worker | pasted into each worker dispatch |
+| `.../briefs/fm-prompt-universal-existing-issue.md`, `fm-prompt-universal-brief-only.md` | authoring managers | by path, after the project line |
+| `.../briefs/ff-prompt-universal.md` | every seat's firefighter (defect home: the pack or the seat's own project) | pasted after the manager preamble; the project line names the defect home |
+
+Before the first target task, check that each file still resolves project values
+from the spec's project line or the card and runs pack tools from `{PACK_ROOT}`
+with the project selected: no hard-coded pack repository, card path, ChatGPT
+project segment, `$PWD/scripts`, or "from this worktree" for pack tools. Target
+rules the orchestrator and units must follow (data safety, smoke environment,
+required CI name, merge-time local adoption, setup repair) go into a target-owned
+section of the target `AGENTS.md`, outside the managed markers; the shared prompt
+reads them from there.
 
 For each target task, render `{VERIFY}` from the selected card as the tracked
 target-verification invocation below, passing the task's **explicit current
@@ -336,6 +370,14 @@ Protect the default branch and require the pack merge-contract checks, including
 - affected tests;
 - runtime-retirement scan;
 - any task-specific required check.
+
+Required-CI evaluation is owned by `scripts/lib/required-ci.ts`. It uses the
+tracked canonical `gh pr checks` projection, then immediately re-reads the live
+PR head before a green result can be used. A matching post-projection head is an
+inferred current-head binding; the projection itself is not claimed to have
+reported a SHA. Head movement makes the evidence stale/non-green. The known
+H1→H2→H1 ABA residual between the pre-bound expected head and post-projection
+read is intentionally documented rather than hidden with a second transport.
 
 A success from an earlier SHA does not satisfy the current head.
 
