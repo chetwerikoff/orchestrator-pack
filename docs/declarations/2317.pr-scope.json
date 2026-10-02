@@ -108,6 +108,7 @@
     "scripts/json-producers/wave-b-inventory.json",
     "scripts/json-producers/wave-b-reconciliation.ts",
     "scripts/lib/cutover/activation-platform-preflight.ts",
+    "scripts/lib/vitest-ci-lanes.mjs",
     "scripts/lib/worker-report-store.test.ts",
     "scripts/lib/worker-status-store.mjs",
     "scripts/lint-self-architect.config.json",
@@ -169,5 +170,5 @@
     "scripts/",
     "tests/external-output-references/"
   ],
-  "source_revision": "c43cf23c2eff9aedc5858cf5bfd48a7eca9adfb8"
+  "source_revision": "4bb9c656d2b066555ef5f110b6d6eeb50f61b18a"
 }

@@ -28,7 +28,7 @@ function gitText(args: string[]): string {
 }
 function existsAt(ref:string,file:string):boolean { return gitOk(['cat-file','-e',`${ref}:${file}`]); }
 function readAt(ref:string,file:string):string {
-  const r=runProcessSync({command:'git',args:['show',`${ref}:${file}`],cwd:repoRoot,inheritParentEnv:true,allowEmptyStdout:true});
+  const r=runProcessSync({command:'git',args:['show',`${ref}:${file}`],cwd:repoRoot,inheritParentEnv:true});
   if(!r.ok) throw new Error(r.stderr||r.error||`git_show_failed:${file}`);
   return r.stdout;
 }
