@@ -934,6 +934,8 @@
     "scripts/draft-author-relocation-contract.d.mts",
     "scripts/draft-author-relocation-contract.mjs",
     "scripts/draft-author-relocation-surfaces.json",
+    "scripts/emit-pr-changed-paths-manifest.mjs",
+    "scripts/emit-vitest-heavy-topology.mjs",
     "scripts/estate-cut/capture-base-anchor.mjs",
     "scripts/estate-cut/issue-906-vertical-slice.test.ts",
     "scripts/estate-cut/issue-906.base-anchor.json",
@@ -957,6 +959,8 @@
     "scripts/json-producers/wave-b-reconciliation.ts",
     "scripts/lib/cutover/activation-platform-preflight.ts",
     "scripts/lib/vitest-ci-lanes.mjs",
+    "scripts/lib/vitest-pr-scoped-selection.d.mts",
+    "scripts/lib/vitest-pr-scoped-selection.mjs",
     "scripts/lib/worker-report-store.test.ts",
     "scripts/lib/worker-status-store.mjs",
     "scripts/lint-self-architect.config.json",
@@ -1039,5 +1043,5 @@
     "scripts/",
     "tests/external-output-references/"
   ],
-  "source_revision": "2171f365ac07829873490982573eb27ba6460894"
+  "source_revision": "b0a9079e0b2977cffbf9e066d52738dde28f9633"
 }
