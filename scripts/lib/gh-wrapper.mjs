@@ -339,7 +339,15 @@ function main() {
   const argv = process.argv.slice(2);
   writeWrapperAudit('entry', buildAuditFields(argv));
 
-  const { parsed, route } = classifyArgv(argv);
+  const targetRepository = String(process.env.OPK_TARGET_REPOSITORY ?? '').trim();
+  const targetDefaultBranch = String(process.env.OPK_TARGET_DEFAULT_BRANCH ?? '').trim();
+  const targetAuthorization = targetRepository && targetDefaultBranch
+    ? { repository: targetRepository, defaultBranch: targetDefaultBranch }
+    : undefined;
+  const { parsed, route } = classifyArgv(
+    argv,
+    targetAuthorization ? { targetAuthorization } : {},
+  );
   if (!route) {
     if (isUnsupportedHighLevelRead(parsed)) {
       failRest('uncovered high-level read form');
