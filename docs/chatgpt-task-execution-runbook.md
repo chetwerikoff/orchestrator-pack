@@ -241,7 +241,9 @@ new chat); never press `Try again`. The
 binding (`scripts/chatgpt-browser-turn/chat-bindings.ts`, one file per
 conversation under `$HOME/.local/state/orchestrator-fleet/chat-bindings/`,
 independent of `XDG_STATE_HOME`, which opencode agents run isolated) is
-written by the turn entry from the launching worktree; without one, the chat's opening Issue URL is
+written by the turn entry from the launching worktree (for pack-review chats,
+the worktree that started the review runner, passed down as
+`OPK_CHAT_BINDING_WORKTREE`); without one, the chat's opening Issue URL is
 matched to a workspace ending in `-<Issue>`. The binding is routing data only
 and carries no send, retry, or completion authority. When a task moves to a
 fresh chat, only its newest chat is current: earlier chats of the same owner

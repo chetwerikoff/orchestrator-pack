@@ -481,6 +481,23 @@ describe('Issue #2340 early chat binding', () => {
   });
 });
 
+describe('Issue #2359 review chat binding', () => {
+  it('binds to the worktree passed by the review runner instead of the pack-root cwd', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2359-binding-'));
+    const chatUrl = 'https://chatgpt.com/c/123e4567-e89b-12d3-a456-426614174059';
+    const manager = join(root, 'leopoker-mgr-134');
+    vi.stubEnv('HOME', join(root, 'home'));
+    vi.stubEnv('OPK_CHAT_BINDING_WORKTREE', manager);
+    try {
+      recordChatBindings(`${JSON.stringify({ schema: 'turn-result/v1', conversation_id: chatUrl })}\n`);
+      expect(readChatBinding(chatUrl)?.worktree).toBe(manager);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('Issue #1238 mechanically derived production graph', () => {
   it('resolves every reachable production source and enumerates lifecycle sinks', () => {
     const repoRoot = resolve(import.meta.dirname, '../..');

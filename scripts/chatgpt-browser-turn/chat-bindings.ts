@@ -20,6 +20,14 @@ export function chatBindingsRoot(env: NodeJS.ProcessEnv = process.env): string {
   return join(home, '.local', 'state', 'orchestrator-fleet', 'chat-bindings');
 }
 
+// Browser turns of a pack review run from the pack root; the review runner
+// passes the worktree of the agent that started it.
+export const CHAT_BINDING_WORKTREE_ENV = 'OPK_CHAT_BINDING_WORKTREE';
+
+export function chatBindingWorktree(env: NodeJS.ProcessEnv = process.env): string {
+  return env[CHAT_BINDING_WORKTREE_ENV]?.trim() || process.cwd();
+}
+
 export function conversationIdFromUrl(url: string): string | undefined {
   return CONVERSATION_ID_RE.exec(url)?.[1]?.toLowerCase();
 }

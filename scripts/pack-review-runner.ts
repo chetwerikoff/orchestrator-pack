@@ -142,6 +142,7 @@ import {
 } from './lib/pack-gpt-source-comment.ts';
 import type { PackGptSourceIdentity } from './lib/pack-gpt-source-comment-contract.ts';
 import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
+import { CHAT_BINDING_WORKTREE_ENV, chatBindingWorktree } from './chatgpt-browser-turn/chat-bindings.ts';
 import {
   captureBoundIssueSnapshot,
   computeBoundIssueSnapshotHash,
@@ -1978,6 +1979,7 @@ async function invokeReviewer(options: {
   const env: NodeJS.ProcessEnv = {
     ...bindReviewerProjectSelection(sanitizedParentEnv, options.projectId),
     ...buildReviewerBudgetSpawnEnv(options.budgetLedger, {}),
+    [CHAT_BINDING_WORKTREE_ENV]: chatBindingWorktree(),
     OPK_REVIEW_RUN_ID: options.runId,
     PACK_REVIEW_RUN_ID: options.runId,
     PACK_REVIEW_PROJECT_ID: options.projectId,
