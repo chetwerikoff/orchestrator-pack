@@ -969,6 +969,7 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
       ...process.env,
       XDG_CONFIG_HOME: configHome,
       PATH: `${commandRoot}${path.delimiter}${process.env.PATH ?? ''}`,
+      GH_HOST: 'git.example.test',
       npm_config_update_notifier: 'false',
     };
     delete childEnv.OPK_PROJECT_ID;
@@ -987,6 +988,9 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
     expect(payload).toMatchObject({ ok: false, outcome: 'review_target_unavailable', prNumber: 1111 });
     expect(String(payload.reason)).not.toContain('missing-selection');
     expect(String(payload.reason)).toContain('gh api PR read 1111');
+    expect(String(payload.reason)).toContain(
+      'target gh host mismatch from GH_HOST: expected github.com, got git.example.test',
+    );
   });
 
   it('resolves a PR-only target, binds GPT above persistent layers, and emits one start indication', async () => {
