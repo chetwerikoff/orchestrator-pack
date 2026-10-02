@@ -266,6 +266,11 @@ export const EXECUTION_CONTINUATION_TEXT = 'Доделай и сообщи ст�
 export const REVIEW_CONTINUATION_TEXT = 'Заверши ревью: выдай итоговый вердикт строго в формате из первого сообщения (NO_FINDINGS или JSON с findings). Ничего не исправляй и не меняй код.';
 
 export function managerBannerMessage(banner: ChatErrorBanner): string {
+  if (banner.kind === 'unloadable') {
+    return banner.review
+      ? `Your GPT PR-review chat ${banner.url} cannot be loaded ("${banner.text}", no composer), so nothing can be sent there. Restart the review in a new chat through your review tool. Never press Try again or Retry.`
+      : `Your GPT execution chat ${banner.url} cannot be loaded ("${banner.text}", no composer), so nothing can be sent there. Run GitHub-first reconciliation, then continue the task in a new chat with the reconciled baseline. Never press Try again or Retry.`;
+  }
   if (banner.review) {
     const reason = banner.kind === 'stalled' ? banner.text : `red banner "${banner.text}"${banner.retry ? ' (Retry shown)' : ''}`;
     return `Your GPT PR-review chat ${banner.url} ended without a verdict (${reason}). This is a review chat: do not ask it to fix code or continue the task. Send exactly this in the same chat: "${REVIEW_CONTINUATION_TEXT}" Then collect the verdict through your review tool as usual. Never press Retry.`;
@@ -293,10 +298,15 @@ export function fleetAlarmMessage(
   const paneText = stopped.length > 0
     ? ` ${stopped.length} pane(s) need a step: ${panes} Run your full fleet sweep now (mail, then fleet-sweep) and give every STOPPED/POLLING pane its step this turn. A question a unit typed in its own pane is addressed to you: answer it.`
     : '';
-  const bannerText = banners.length > 0
-    ? ` ${banners.length} ChatGPT chat(s) need a continuation (generation stopped): ${banners.map((banner) => `${banner.url} "${banner.text}"${banner.retry ? ' (Retry shown)' : ''}${banner.review ? ' (PR-review chat)' : ''}`).join('; ')}. Tell the manager that owns each chat to run GitHub-first reconciliation and send "${EXECUTION_CONTINUATION_TEXT}" in that same chat (runbook: Repeated product-error streak - two repeats, a fresh chat on the third continuation failure); for a PR-review chat send "${REVIEW_CONTINUATION_TEXT}" instead. Never press Retry.`
+  const unloadable = banners.filter((banner) => banner.kind === 'unloadable');
+  const continuable = banners.filter((banner) => banner.kind !== 'unloadable');
+  const unloadableText = unloadable.length > 0
+    ? ` ${unloadable.length} ChatGPT chat(s) cannot be loaded (no composer): ${unloadable.map((banner) => `${banner.url}${banner.review ? ' (PR-review chat)' : ''}`).join('; ')}. Tell the manager that owns each chat to run GitHub-first reconciliation and continue in a new chat with the reconciled baseline (a PR-review chat: restart the review in a new chat). Never press Try again or Retry.`
     : '';
-  return `Fleet alarm (${coordinatorState}):${paneText}${bannerText}`;
+  const bannerText = continuable.length > 0
+    ? ` ${continuable.length} ChatGPT chat(s) need a continuation (generation stopped): ${continuable.map((banner) => `${banner.url} "${banner.text}"${banner.retry ? ' (Retry shown)' : ''}${banner.review ? ' (PR-review chat)' : ''}`).join('; ')}. Tell the manager that owns each chat to run GitHub-first reconciliation and send "${EXECUTION_CONTINUATION_TEXT}" in that same chat (runbook: Repeated product-error streak - two repeats, a fresh chat on the third continuation failure); for a PR-review chat send "${REVIEW_CONTINUATION_TEXT}" instead. Never press Retry.`
+    : '';
+  return `Fleet alarm (${coordinatorState}):${paneText}${bannerText}${unloadableText}`;
 }
 
 function defaultSleep(milliseconds: number): Promise<void> {
