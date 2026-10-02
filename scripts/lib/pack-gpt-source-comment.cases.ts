@@ -77,6 +77,40 @@ describe('pack GPT source comment contract (Issue #1435)', () => {
     expect(result.receipt.bodySha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it('credentials the LeoPoker source comment when issue_url differs only by repository case', async () => {
+    const leopokerIdentity: PackGptSourceIdentity = {
+      ...identity,
+      repository: 'chetwerikoff/leopoker',
+      prNumber: 136,
+      headSha: 'e39c522dc15dc46bc6d3eb3010cd04d9fc801cf8',
+    };
+    const leoPokerComment = comment({
+      id: 5945196278,
+      body: formatPackGptSourceCommentEnvelope(leopokerIdentity, 'NO_FINDINGS'),
+      url: 'https://github.com/chetwerikoff/LeoPoker/pull/136#issuecomment-5945196278',
+      issueUrl: 'https://api.github.com/repos/chetwerikoff/LeoPoker/issues/136',
+    });
+    const result = await resolvePackGptSourceComment({
+      identity: leopokerIdentity,
+      transport: transport({ comments: [leoPokerComment] }),
+    });
+    expect(result.kind).toBe('credentialed');
+
+    const wrongRepository = {
+      ...leoPokerComment,
+      id: 5945196279,
+      issueUrl: 'https://api.github.com/repos/chetwerikoff/NotLeoPoker/issues/136',
+    };
+    const wrongRepositoryResult = await resolvePackGptSourceComment({
+      identity: leopokerIdentity,
+      transport: transport({ comments: [wrongRepository] }),
+    });
+    expect(wrongRepositoryResult).toEqual({
+      kind: 'conflict',
+      reason: 'source_comment_wrong_target',
+    });
+  });
+
   it('filters a foreign-principal marker copy before uniqueness', async () => {
     const foreign = comment({ id: 1002, actorLogin: 'foreign-user' });
     const result = await resolvePackGptSourceComment({
