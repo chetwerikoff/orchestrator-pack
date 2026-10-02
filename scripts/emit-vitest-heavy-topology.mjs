@@ -89,7 +89,21 @@ function gitHeadParents(repoRoot) {
 
 function resolveChangedPathManifest(repoRoot) {
   const fromEnv = parseChangedPathManifestFromEnv();
-  if (fromEnv) return fromEnv;
+  if (fromEnv) {
+    if (!fromEnv.diffOk) {
+      return fromEnv;
+    }
+    const fullManifest = buildChangedPathManifest(repoRoot, fromEnv.baseSha, fromEnv.headSha, {
+      includeDeleted: true,
+      maxBytes: Number.MAX_SAFE_INTEGER,
+    });
+    if (!fullManifest.diffOk) {
+      throw new Error(
+        `pull-request topology check cannot compute changed paths: ${fullManifest.failureReason ?? 'unknown failure'}`,
+      );
+    }
+    return fullManifest;
+  }
   if (process.env.GITHUB_EVENT_NAME !== 'pull_request') return null;
 
   const parents = gitHeadParents(repoRoot);
@@ -106,7 +120,10 @@ function resolveChangedPathManifest(repoRoot) {
   if (!baseSha || !headSha) {
     throw new Error('pull-request topology check cannot resolve exact base/head revisions');
   }
-  const manifest = buildChangedPathManifest(repoRoot, baseSha, headSha);
+  const manifest = buildChangedPathManifest(repoRoot, baseSha, headSha, {
+    includeDeleted: true,
+    maxBytes: Number.MAX_SAFE_INTEGER,
+  });
   if (!manifest.diffOk) {
     throw new Error(
       `pull-request topology check cannot compute changed paths: ${manifest.failureReason ?? 'unknown failure'}`,
@@ -164,15 +181,9 @@ async function withEphemeralChangedTestClassifications(repoRoot, changedFiles, a
 
 const { ghaOutput, failOnGuard, repoRoot } = parseArgs(process.argv);
 const artifactPath = resolveTopologyArtifactOutputPath(repoRoot, ghaOutput);
-const rawManifest = resolveChangedPathManifest(repoRoot);
-const changedPathManifest = rawManifest
-  ? {
-      ...rawManifest,
-      entries: (rawManifest.entries ?? []).filter((entry) => entry.status !== 'D'),
-      entryCount: (rawManifest.entries ?? []).filter((entry) => entry.status !== 'D').length,
-    }
-  : null;
+const changedPathManifest = resolveChangedPathManifest(repoRoot);
 const changedFiles = (changedPathManifest?.entries ?? [])
+  .filter((entry) => entry.status !== 'D')
   .map((entry) => entry.path)
   .filter((path) => path.endsWith('.test.ts'));
 const laneOptions = {
