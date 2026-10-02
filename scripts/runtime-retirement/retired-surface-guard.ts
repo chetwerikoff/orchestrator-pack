@@ -56,6 +56,7 @@ const EXCLUDED_PREFIXES = [
   'packages/core/',
   'tests/external-output-references/',
   'docs/declarations/',
+  'docs/issues_drafts/',
   'docs/archive/',
   'scripts/gate-runner/census/',
   'scripts/gate-runner/goldens/',

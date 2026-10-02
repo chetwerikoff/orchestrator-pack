@@ -14,6 +14,43 @@ import { normalizeSha, toArray } from '../../../docs/review-reconcile-primitives
 import { readStdinJson, runStdinJsonCli } from '../../../docs/review-mechanical-cli.mjs';
 import { isPendingWorkerDeliveryConfirmation } from './review-producer-contract.ts';
 
+export interface WorkerReportRuntimeIdentity {
+  readonly runtime: string;
+  readonly id: string;
+  readonly generation: string;
+}
+export interface WorkerReportAssignmentIdentity {
+  readonly assignmentId: string;
+  readonly generation: number;
+  readonly taskId: string;
+}
+export interface WorkerReportTrustedBinding {
+  readonly ok: boolean;
+  readonly reason?: string;
+  readonly prNumber?: number;
+  readonly headSha?: string;
+  readonly assignment?: WorkerReportAssignmentIdentity;
+  readonly worker?: WorkerReportRuntimeIdentity;
+  readonly bindingSource?: string;
+}
+export interface WorkerReportRecord extends Record<string, any> {
+  accepted?: boolean;
+  repoSlug?: string;
+  assignment?: WorkerReportAssignmentIdentity | null;
+  worker?: WorkerReportRuntimeIdentity | null;
+  prNumber?: number;
+  headSha?: string;
+  reportState?: string;
+  reportedAtMs?: number;
+  lastObservedMs?: number;
+}
+export interface WorkerReportStore extends Record<string, any> {
+  schemaVersion: number;
+  lastUpdatedMs: number | null;
+  generation: number;
+  sourceRecords: Record<string, WorkerReportRecord>;
+}
+
 export const WORKER_REPORT_STORE_SCHEMA_VERSION = 3;
 export const PACK_WORKER_REPORT_STORE_SURFACE = 'pack-worker-report-store';
 export const DEFAULT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -117,11 +154,13 @@ export function normalizeWorkerReportStore(raw) {
   return createDefaultWorkerReportStore(raw ?? {});
 }
 
+export function readWorkerReportStoreFile(path: string): WorkerReportStore; 
 export function readWorkerReportStoreFile(path) {
   if (!existsSync(path)) return createDefaultWorkerReportStore();
   return normalizeWorkerReportStore(JSON.parse(readFileSync(path, 'utf8')));
 }
 
+export function writeWorkerReportStoreFile(path: string, store: WorkerReportStore | Record<string, unknown>): void;
 export function writeWorkerReportStoreFile(path, store) {
   mkdirSync(dirname(path), { recursive: true });
   const tempPath = `${path}.tmp`;
@@ -156,6 +195,7 @@ export function upsertWorkerReportRecord(store, record, nowMs) {
   return { key, record: store.sourceRecords[key] };
 }
 
+export function listWorkerReportRecordsForWorker(store: WorkerReportStore | Record<string, any>, repoSlug: string, worker: WorkerReportRuntimeIdentity): WorkerReportRecord[];
 export function listWorkerReportRecordsForWorker(store, repoSlug, worker) {
   const repo = String(repoSlug ?? '').trim().toLowerCase();
   const exact = normalizeWorkerIdentity(worker);
@@ -166,6 +206,7 @@ export function listWorkerReportRecordsForWorker(store, repoSlug, worker) {
   ));
 }
 
+export function listWorkerReportRecordsForAssignment(store: WorkerReportStore | Record<string, any>, repoSlug: string, assignment: WorkerReportAssignmentIdentity): WorkerReportRecord[];
 export function listWorkerReportRecordsForAssignment(store, repoSlug, assignment) {
   const repo = String(repoSlug ?? '').trim().toLowerCase();
   const exact = normalizeWorkerReportAssignment(assignment);
@@ -229,6 +270,16 @@ export function mergePackWorkerReportsIntoWorkers(workers, store, repoSlug = '')
   });
 }
 
+export function evictWorkerReportRecords(input: {
+  store: WorkerReportStore | Record<string, any>;
+  openPrs?: Array<Record<string, any>>;
+  currentHeadByPr?: Record<string, string>;
+  nowMs: number;
+  maxAgeMs?: number;
+  nonterminalMaxAgeMs?: number;
+  openListAuthoritative?: boolean;
+  repoSlug?: string;
+}): { removed: number; recordCount: number };
 export function evictWorkerReportRecords({
   store,
   openPrs = [],
@@ -274,6 +325,13 @@ export function evictWorkerReportRecords({
   return { removed, recordCount: Object.keys(store.sourceRecords ?? {}).length };
 }
 
+export function resolveWorkerReportTrustedBinding(input: {
+  assignment?: WorkerReportAssignmentIdentity | null;
+  worker?: WorkerReportRuntimeIdentity | null;
+  openPrs?: Array<Record<string, any>>;
+  worktreeHeadSha?: string;
+  prNumber?: number;
+}): WorkerReportTrustedBinding;
 export function resolveWorkerReportTrustedBinding({
   assignment = null,
   worker = null,
@@ -326,6 +384,13 @@ export function workerHasPackWorkerReportReceiptSurface(worker) {
   return String(worker?.reportSnapshotKind ?? '') === PACK_WORKER_REPORT_STORE_SURFACE && toArray(worker?.reports).length > 0;
 }
 
+export function resolvePackWorkerReportDeliveryRunId(input: {
+  reportState?: string;
+  prNumber?: number;
+  headSha?: string;
+  deliveryRunId?: string;
+  reviewRuns?: Array<Record<string, any>>;
+}): string;
 export function resolvePackWorkerReportDeliveryRunId({ reportState = '', prNumber = 0, headSha = '', deliveryRunId = '', reviewRuns = [] }) {
   if (String(reportState ?? '').toLowerCase() !== 'addressing_reviews') return '';
   const explicit = String(deliveryRunId ?? '').trim();
@@ -360,6 +425,12 @@ export function findPackWorkerAckReportAfterDelivery(worker, run, sendObservedAt
   return null;
 }
 
+export function upsertWorkerReportRecordInMemory(input: {
+  store: WorkerReportStore | Record<string, any>;
+  record: WorkerReportRecord;
+  nowMs: number;
+  trustedBinding?: WorkerReportTrustedBinding | null;
+}): { ok: boolean; reason?: string; store?: WorkerReportStore; key?: string; record?: WorkerReportRecord; generation?: number };
 export function upsertWorkerReportRecordInMemory({ store, record, nowMs, trustedBinding = null }) {
   const trust = validateWorkerReportTrustBoundary({ record, trustedBinding });
   if (!trust.ok) return { ok: false, reason: trust.reason };
@@ -368,6 +439,13 @@ export function upsertWorkerReportRecordInMemory({ store, record, nowMs, trusted
   return { ok: true, store: normalized, key: result.key, record: result.record, generation: normalized.generation };
 }
 
+export function writeWorkerReportRecordWithCas(input: {
+  storePath: string;
+  record: WorkerReportRecord;
+  nowMs: number;
+  expectedGeneration: number;
+  trustedBinding?: WorkerReportTrustedBinding | null;
+}): { ok: boolean; reason?: string; key?: string; record?: WorkerReportRecord; generation?: number };
 export function writeWorkerReportRecordWithCas({ storePath, record, nowMs, expectedGeneration, trustedBinding = null }) {
   const trust = validateWorkerReportTrustBoundary({ record, trustedBinding });
   if (!trust.ok) return { ok: false, reason: trust.reason };
