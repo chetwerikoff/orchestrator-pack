@@ -328,7 +328,7 @@ describe('Issue #2188 target portability sinks', () => {
     const fakeGh = join(bin, 'gh-native');
     const fakeNode = join(bin, 'node');
     writeFileSync(fakeGh, `#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' "$*" >>"\${OPK_GH_AUDIT}"\nprintf '%s\\n' '{"number":12,"head":{"ref":"topic"},"base":{"ref":"trunk"},"draft":false}'\n`, 'utf8');
-    writeFileSync(fakeNode, `#!/usr/bin/env bash\nset -euo pipefail\njoined="$*"\ncase "$joined" in\n  *gh-target-authorization.ts*) printf '%s\\n' "\${OPK_EXPECTED_TARGET_REPO}" ;;\n  *gh-resolve-real-binary.mjs*) printf '%s\\n' "\${OPK_FAKE_GH}" ;;\n  *) exec "\${OPK_REAL_NODE}" "$@" ;;\nesac\n`, 'utf8');
+    writeFileSync(fakeNode, `#!/usr/bin/env bash\nset -euo pipefail\njoined="$*"\ncase "$joined" in\n  *gh-target-authorization.ts*) printf '%s\\t%s\\n' "\${OPK_EXPECTED_TARGET_REPO}" "trunk" ;;\n  *gh-resolve-real-binary.mjs*) printf '%s\\n' "\${OPK_FAKE_GH}" ;;\n  *) exec "\${OPK_REAL_NODE}" "$@" ;;\nesac\n`, 'utf8');
     chmodSync(fakeGh, 0o755);
     chmodSync(fakeNode, 0o755);
     const result = runProcessSync({
