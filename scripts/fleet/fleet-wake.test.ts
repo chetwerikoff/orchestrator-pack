@@ -6,12 +6,14 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   FileFleetWakeStateStore,
-  findTerminalEnvelopeForInvocation,
+  listTerminalEnvelopes,
   fleetAlarmMessage,
   managerBannerMessage,
   runFleetAlarmTick,
   type FleetWakeConfig,
   type FleetWakeStateStore,
+  type OpenPullHead,
+  type TerminalEnvelopeEvent,
 } from './fleet-wake.ts';
 import { FileFleetStateStore, type FleetTerminal, type OrcaCommandResult, type OrcaExecutor } from './fleet-sweep.ts';
 
@@ -82,8 +84,9 @@ async function tick(input: {
   store?: MemoryWakeStore;
   config?: FleetWakeConfig;
   terminals?: readonly FleetTerminal[];
-  findTerminalEnvelope?: (invocationId: string) => string | undefined;
-  checkRunsCompleted?: (repository: string, sha: string) => boolean;
+  listTerminalEnvelopes?: () => readonly TerminalEnvelopeEvent[];
+  listOpenPulls?: (repository: string) => readonly OpenPullHead[];
+  checkRunsFinishedAt?: (repository: string, sha: string) => number | undefined;
 }) {
   const calls: string[][] = [];
   const logs: string[] = [];
@@ -95,14 +98,19 @@ async function tick(input: {
     store,
     sleepMs: async (ms) => { sleeps.push(ms); },
     log: (line) => { logs.push(line); },
-    ...(input.findTerminalEnvelope ? { findTerminalEnvelope: input.findTerminalEnvelope } : {}),
-    ...(input.checkRunsCompleted ? { checkRunsCompleted: input.checkRunsCompleted } : {}),
+    listTerminalEnvelopes: input.listTerminalEnvelopes ?? (() => []),
+    ...(input.listOpenPulls ? { listOpenPulls: input.listOpenPulls } : {}),
+    ...(input.checkRunsFinishedAt ? { checkRunsFinishedAt: input.checkRunsFinishedAt } : {}),
   });
   return { result, calls, logs, sleeps, store };
 }
 
 function sends(calls: readonly string[][]): string[][] {
   return calls.filter((call) => call[0] === 'terminal' && call[1] === 'send');
+}
+
+function sendsTo(calls: readonly string[][], handle: string): string[][] {
+  return sends(calls).filter((call) => call[call.indexOf('--terminal') + 1] === handle);
 }
 
 describe('fleet alarm', () => {
@@ -211,124 +219,90 @@ describe('fleet alarm', () => {
     expect(observed.logs).toContain('nothing stopped');
   });
 
-  it('wakes a PARKED GPT turn only with matching terminal evidence and never repeats an invocation', async () => {
+  it('wakes the idle pane of the launching worktree once per GPT terminal envelope, whatever its park line says', async () => {
     const store = new MemoryWakeStore();
-    const invocationId = '887cc977-f28e-4ab1-b498-e4ebced05551';
-    const envelopePath = '/tmp/opencode/ff1-terminal.json';
-    const screens = {
-      coord: 'idle',
-      one: `PARKED on GPT turn ${invocationId} (self-wake armed).`,
-      two: 'working\nesc interrupt',
+    const envelope = {
+      path: '/tmp/opencode/one-terminal.json',
+      invocationId: '887cc977-f28e-4ab1-b498-e4ebced05551',
+      cwd: `${workerBase}/one/scripts`,
     };
-
-    const missing = await tick({
-      screens,
+    const listTerminalEnvelopes = () => [envelope];
+    const busy = await tick({
+      screens: { coord: 'idle', one: 'working\nesc interrupt', two: 'working\nesc interrupt' },
       store,
-      findTerminalEnvelope: () => undefined,
+      listTerminalEnvelopes,
     });
-    expect(sends(missing.calls)).toHaveLength(0);
+    expect(sendsTo(busy.calls, 'one')).toHaveLength(0);
 
-    const matched = await tick({
-      screens,
+    const idle = await tick({
+      screens: { coord: 'idle', one: 'PARKED on whatever wording', two: 'working\nesc interrupt' },
       store,
-      findTerminalEnvelope: (observed) => observed === invocationId ? envelopePath : undefined,
+      listTerminalEnvelopes,
     });
-    expect(sends(matched.calls)).toEqual([[
+    expect(sendsTo(idle.calls, 'one')).toEqual([[
       'terminal', 'send', '--terminal', 'one',
-      '--text', `Wake: GPT turn ${invocationId} ended, read ${envelopePath}`,
+      '--text', `Wake: GPT turn ${envelope.invocationId} ended, read ${envelope.path}`,
       '--enter',
     ], ['terminal', 'send', '--terminal', 'one', '--enter']]);
 
     const repeated = await tick({
-      screens,
+      screens: { coord: 'idle', one: 'PARKED on whatever wording', two: 'working\nesc interrupt' },
       store,
-      findTerminalEnvelope: () => envelopePath,
+      listTerminalEnvelopes,
     });
-    expect(sends(repeated.calls)).toHaveLength(0);
+    expect(sendsTo(repeated.calls, 'one')).toHaveLength(0);
   });
 
-  it('matches GPT terminal evidence by observed_invocation_id under /tmp/opencode shape', () => {
+  it('lists launcher terminal envelopes that name their worktree', () => {
     const root = mkdtempSync(join(tmpdir(), 'fleet-wake-terminal-'));
     try {
       const nested = join(root, 'nested');
       mkdirSync(nested, { recursive: true });
-      writeFileSync(join(root, 'wrong-terminal.json'), JSON.stringify({ observed_invocation_id: 'other' }), 'utf8');
-      const matching = join(nested, 'matching-terminal.json');
-      writeFileSync(matching, JSON.stringify({ observed_invocation_id: '887cc977-f28e-4ab1-b498-e4ebced05551' }), 'utf8');
+      const schema = 'flow-manager-long-running-child-terminal/v1';
+      const routed = join(nested, 'routed-terminal.json');
+      writeFileSync(routed, JSON.stringify({ schema, observed_invocation_id: 'inv-a', cwd: '/w/one' }), 'utf8');
+      writeFileSync(join(root, 'unrouted-terminal.json'), JSON.stringify({ schema, observed_invocation_id: 'inv-b' }), 'utf8');
+      writeFileSync(join(root, 'other-terminal.json'), JSON.stringify({ schema: 'x/v1', cwd: '/w/one' }), 'utf8');
 
-      expect(findTerminalEnvelopeForInvocation('887cc977-f28e-4ab1-b498-e4ebced05551', root)).toBe(matching);
-      expect(findTerminalEnvelopeForInvocation('887cc977', root)).toBe(matching);
-      expect(findTerminalEnvelopeForInvocation('missing', root)).toBeUndefined();
+      expect(listTerminalEnvelopes(root)).toEqual([{ path: routed, invocationId: 'inv-a', cwd: '/w/one' }]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it('wakes PARKED CI only after every check-run is completed and never repeats a sha', async () => {
+  it('wakes the idle owner of a PR once per head after its CI finished', async () => {
     const store = new MemoryWakeStore();
-    const sha = 'a'.repeat(40);
+    const now = Date.parse('2026-10-02T12:00:00Z');
+    const headA = 'a'.repeat(40);
+    const headB = 'b'.repeat(40);
+    const owned: FleetTerminal[] = [
+      { handle: 'coord', title: 'Cursor coordinator', worktreePath: primary },
+      { handle: 'one', title: 'OpenCode manager one', worktreePath: `${workerBase}/one`, branch: 'refs/heads/fix/a' },
+      { handle: 'mgr', title: 'OpenCode manager', worktreePath: `${workerBase}/leopoker-mgr-2317`, branch: 'refs/heads/chetwerikoff/mgr-2317' },
+    ];
     const wakeConfig = config({
-      chatScope: {
-        projectUrl: 'https://chatgpt.com/g/g-p/project/test',
-        repository: 'chetwerikoff/orchestrator-pack',
-      },
+      chatScope: { projectUrl: 'https://chatgpt.com/g/g-p/project/test', repository: 'chetwerikoff/orchestrator-pack' },
     });
-    const screens = {
-      coord: 'idle',
-      one: `PARKED on CI on ${sha}; resume step: smoke.`,
-      two: 'working\nesc interrupt',
-    };
+    const listOpenPulls = () => [
+      { number: 7, ref: 'fix/a', sha: headA },
+      { number: 8, ref: 'issue-2317-split', sha: headB, issue: 2317 },
+    ];
+    const screens = { coord: 'idle', one: 'PARKED on any text', mgr: 'done for now' };
 
-    const incomplete = await tick({
-      screens,
-      store,
-      config: wakeConfig,
-      checkRunsCompleted: (repository, observedSha) => {
-        expect(repository).toBe('chetwerikoff/orchestrator-pack');
-        expect(observedSha).toBe(sha);
-        return false;
-      },
+    const first = await tick({
+      screens, store, config: wakeConfig, terminals: owned, listOpenPulls,
+      checkRunsFinishedAt: (_repository, sha) => sha === headA ? now - 60_000 : undefined,
     });
-    expect(sends(incomplete.calls)).toHaveLength(0);
+    expect(sendsTo(first.calls, 'one')[0]).toContain(`Wake: CI on ${headA} finished for PR #7`);
+    expect(sendsTo(first.calls, 'mgr')).toHaveLength(0);
 
-    const completed = await tick({
-      screens,
-      store,
-      config: wakeConfig,
-      checkRunsCompleted: () => true,
+    const second = await tick({
+      screens, store, config: wakeConfig, terminals: owned, listOpenPulls,
+      checkRunsFinishedAt: () => now - 60_000,
     });
-    expect(sends(completed.calls)).toEqual([[
-      'terminal', 'send', '--terminal', 'one',
-      '--text', `Wake: CI on ${sha} finished`,
-      '--enter',
-    ], ['terminal', 'send', '--terminal', 'one', '--enter']]);
+    expect(sendsTo(second.calls, 'one')).toHaveLength(0);
+    expect(sendsTo(second.calls, 'mgr')[0]).toContain(`Wake: CI on ${headB} finished for PR #8`);
 
-    const repeated = await tick({
-      screens,
-      store,
-      config: wakeConfig,
-      checkRunsCompleted: () => true,
-    });
-    expect(sends(repeated.calls)).toHaveLength(0);
-  });
-
-  it('does not wake merged-Issue or orchestrator-answer PARKED panes', async () => {
-    const observed = await tick({
-      config: config({
-        chatScope: {
-          projectUrl: 'https://chatgpt.com/g/g-p/project/test',
-          repository: 'chetwerikoff/orchestrator-pack',
-        },
-      }),
-      screens: {
-        coord: 'idle',
-        one: 'PARKED on #2351 merged',
-        two: 'PARKED on orchestrator answer',
-      },
-      findTerminalEnvelope: () => '/tmp/opencode/unrelated-terminal.json',
-      checkRunsCompleted: () => true,
-    });
-    expect(sends(observed.calls)).toHaveLength(0);
   });
 
   it('honors ORCH_HANDLE, reports no coordinator when unresolved, and skips a failed screen read without throwing', async () => {
