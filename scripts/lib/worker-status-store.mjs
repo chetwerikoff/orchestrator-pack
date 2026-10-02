@@ -712,7 +712,7 @@ export function testSiblingReadiness(env = process.env) {
       : '');
   const workerReportStorePresent = reportStorePath
     ? existsSync(reportStorePath)
-    : existsSync(join(docsDir, '..', 'scripts', 'pr2-foundation', 'terminalized', 'worker-report-store.ts'));
+    : existsSync(join(docsDir, 'worker-report-store.mjs'));
   const sessionPrBindingResolverPresent = existsSync(join(docsDir, 'session-pr-binding-resolver.mjs'));
   return {
     ready: workerReportStorePresent && sessionPrBindingResolverPresent,

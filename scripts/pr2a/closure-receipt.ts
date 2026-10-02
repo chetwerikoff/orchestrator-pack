@@ -67,6 +67,7 @@ export const REQUIRED_ROLLBACK_ENTRYPOINT_CLASSES = [
 export const REQUIRED_FINAL_COMMANDS = [
   'npm run typecheck:foundation',
   'npm run lint:foundation',
+  'npm run test:contract-mutations',
   'npm run test:issue-948',
   'pwsh -NoProfile -File scripts/verify.ps1',
   'pwsh -NoProfile -File scripts/check-reusable.ps1',
@@ -736,7 +737,7 @@ export function buildCandidateBuildProvenance(ref = 'HEAD'): CandidateBuildProve
   ];
   const sourceDigests = Object.fromEntries(sourcePaths.map((file) => [file, sha256(readAt(ref, file))]));
   const provenanceWithoutDigest = {
-    command: 'npm ci --ignore-scripts && npm run typecheck:foundation && npm run lint:foundation && npm run test:issue-948',
+    command: 'npm ci --ignore-scripts && npm run typecheck:foundation && npm run lint:foundation && npm run test:contract-mutations && npm run test:issue-948',
     nodeVersionPolicySha256: sha256(readAt(ref, 'scripts/toolchain/node-version.json')),
     packageJsonSha256: sha256(readAt(ref, 'package.json')),
     packageLockSha256: sha256(readAt(ref, 'package-lock.json')),

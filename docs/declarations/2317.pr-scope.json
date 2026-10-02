@@ -84,6 +84,7 @@
     "docs/worker-report-store.d.mts",
     "docs/worker-report-store.mjs",
     "package.json",
+    "plugins/codex-pr-reviewer/tests/review.test.ts",
     "prompts/investigate_root_cause.md",
     "scripts/ci-green-wake-reconcile.test.ts",
     "scripts/ci-policy-guards.ts",

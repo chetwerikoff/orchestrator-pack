@@ -44,6 +44,11 @@ import {
 import type { ActivationRequest, FoundationAdmissionEvidence } from '../lib/cutover/types.ts';
 import { FOUNDATION_COMMIT } from '../pr2a/contracts.ts';
 import { produceFoundationAdoptionEvidence } from '../cutover/foundation-adoption-producer.ts';
+import {
+  CUTOVER_ROWS,
+  FOUNDATION_DOC_ROWS,
+  validateEstateSplit,
+} from './contracts.ts';
 import { DEFAULT_FOUNDATION_CONFIG, parseFoundationConfig } from './config.ts';
 import { runSyntheticMigration } from './migration-journal.ts';
 import {
@@ -398,6 +403,28 @@ describe('[AC6] trusted runtime catalog and platform guard', () => {
       platform: 'win32',
     })).toEqual({ ok: false, reason: 'unsupported_platform_cleanup_disabled' });
     expect(lstatSync(unsupported).isDirectory()).toBe(true);
+  });
+});
+
+describe('[AC7] estate split', () => {
+  it('validates the real manifest and filesystem denominator', () => {
+    const manifest = JSON.parse(
+      readFileSync(path.join(repoRoot, 'scripts/estate-cut/issue-906.manifest.json'), 'utf8'),
+    ) as { rows?: Array<{ path: string; terminalState: string; replacementOwner?: string }> };
+    const denominator = (manifest.rows ?? []).filter((row) =>
+      (FOUNDATION_DOC_ROWS as readonly string[]).includes(row.path)
+      || (CUTOVER_ROWS as readonly string[]).includes(row.path),
+    );
+    expect(validateEstateSplit(denominator)).toEqual({ ok: true, result: 'foundation-15-cutover-6' });
+    for (const file of FOUNDATION_DOC_ROWS) {
+  const source = path.join(repoRoot, file);
+  expect(existsSync(source), file).toBe(true);
+}
+    for (const file of CUTOVER_ROWS) {
+      const row = denominator.find((candidate) => candidate.path === file);
+      expect(row, file).toBeTruthy();
+      expect(row?.terminalState, file).toBe('cutover-terminalized');
+    }
   });
 });
 
