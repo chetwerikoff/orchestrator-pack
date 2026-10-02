@@ -298,7 +298,7 @@ export function productionSchedulerBoundary(input: {
   const readChecks: SchedulerBoundary['readChecks'] = async (candidate) =>
     ghJson(input.repoRoot, [
       'pr', 'checks', String(candidate.prNumber), '--repo', candidate.repoSlug,
-      '--json', 'name,workflow,state,conclusion,status',
+      '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description',
     ]) as Promise<Array<{ name?: string; workflow?: string; state?: string; conclusion?: string; status?: string }>>;
   const resolveSchedulerRequiredCi: SchedulerBoundary['resolveRequiredCi'] | undefined = input.targetContext
     ? async (candidate, fresh, expectedHeadSha) => resolveRequiredCi({
