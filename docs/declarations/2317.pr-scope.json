@@ -20,7 +20,6 @@
     "docs/declarations/",
     "docs/events-optional-consumer-signal-recovery.d.mts",
     "docs/events-optional-consumer-signal-recovery.mjs",
-    "docs/investigations/runtime-hard-cut/historical-dispositions.json",
     "docs/issue_queue_index.md",
     "docs/issue-841-ci-compatibility.md",
     "docs/issue-841-post-rebase-ci.md",
@@ -33,7 +32,6 @@
     "docs/orchestrator-wake-filter.d.ts",
     "docs/orchestrator-wake-filter.mjs",
     "docs/pack-review-issue-898.md",
-    "docs/pack-review-waiver-merge-runbook.md",
     "docs/phase0-audit-retention.md",
     "docs/repository_policy.md",
     "docs/review-bulk-send-diagnose.d.mts",
@@ -96,7 +94,6 @@
     "scripts/draft-author-relocation-contract.d.mts",
     "scripts/draft-author-relocation-contract.mjs",
     "scripts/draft-author-relocation-surfaces.json",
-    "scripts/emit-pr-changed-paths-manifest.mjs",
     "scripts/emit-vitest-heavy-topology.mjs",
     "scripts/estate-cut/",
     "scripts/fixtures/mechanical-json-state/state-coverage-manifest.json",
@@ -105,10 +102,6 @@
     "scripts/gate-runner/representative-gates.ts",
     "scripts/guard-direct-edit.d.mts",
     "scripts/guard-direct-edit.mjs",
-    "scripts/json-producers/wave-b-inventory.json",
-    "scripts/json-producers/wave-b-reconciliation.ts",
-    "scripts/lib/vitest-pr-scoped-selection.d.mts",
-    "scripts/lib/vitest-pr-scoped-selection.mjs",
     "scripts/lib/worker-report-store.test.ts",
     "scripts/lib/worker-status-store.mjs",
     "scripts/lint-self-architect.config.json",
@@ -157,5 +150,5 @@
     "scripts/",
     "tests/external-output-references/"
   ],
-  "source_revision": "3dce874933416654ee0c3a1b48b143e95105ce8d"
+  "source_revision": "def89ccd009ef021b67a3780fe168fc856e04571"
 }

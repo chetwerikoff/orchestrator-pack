@@ -34,7 +34,9 @@
     "scripts/worker-message-submit-reconcile.test.ts": 366,
     "scripts/pr-session-binding-cache.test.ts": 120000,
     "scripts/kernel/subprocess.test.ts": 2018,
+    "scripts/pr2-foundation/mutation-external-ci.test.ts": 492,
     "scripts/pr2-foundation/foundation.test.ts": 415,
+    "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": 15279,
     "scripts/toolchain/create-issue-authoring-contract.test.ts": 3,
     "scripts/pr-scope-declaration.test.ts": 100,
     "scripts/ci-preflight/contract.test.ts": 167,
@@ -77,6 +79,7 @@
     "plugins/token-chain-ledger/tests/session_cost.test.ts": 45000,
     "plugins/token-chain-ledger/tests/writer.test.ts": 45000,
     "scripts/pester-retirement.test.ts": 783,
+    "scripts/estate-cut/issue-906-vertical-slice.test.ts": 2,
     "scripts/gate-runner/census-generator.test.ts": 9,
     "scripts/gate-runner/contracts.test.ts": 2,
     "scripts/gate-runner/custom/bulk-static-gates.test.ts": 106,
@@ -94,8 +97,12 @@
     "scripts/pr-scope-runner.test.ts": 207,
     "scripts/pr2-foundation/binding-cache.test.ts": 4,
     "scripts/pr2-foundation/migration-symlink.test.ts": 12,
+    "scripts/pr2-foundation/mutation-catalog.test.ts": 10,
+    "scripts/pr2-foundation/mutation-semantic-gates.test.ts": 68,
+    "scripts/pr2-foundation/real-scope-proof.test.ts": 9554,
     "scripts/pr2-foundation/review-4750643719-regression.test.ts": 139,
     "scripts/pr2-foundation/review-head-ready.test.ts": 3,
+    "scripts/pr2-foundation/terminalized-port.test.ts": 11,
     "scripts/pr2-foundation/worker-notification-compat.test.ts": 231,
     "scripts/pr2a/final-conformance.test.ts": 3,
     "scripts/pr2a/planning.test.ts": 15081,
@@ -138,7 +145,9 @@
     "scripts/tier-gate-guard.test.ts": "measured",
     "scripts/worker-message-submit-reconcile.test.ts": "measured",
     "scripts/kernel/subprocess.test.ts": "measured",
+    "scripts/pr2-foundation/mutation-external-ci.test.ts": "measured",
     "scripts/pr2-foundation/foundation.test.ts": "measured",
+    "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": "measured",
     "scripts/toolchain/create-issue-authoring-contract.test.ts": "measured",
     "scripts/pr-scope-declaration.test.ts": "measured",
     "scripts/ci-preflight/contract.test.ts": "measured",
@@ -186,6 +195,7 @@
     "scripts/chatgpt-browser-turn/tab-lifecycle.subprocess.test.ts": "fallback",
     "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts": "fallback",
     "scripts/cutover/issue-928.test.ts": "fallback",
+    "scripts/estate-cut/issue-906-vertical-slice.test.ts": "measured",
     "scripts/flow-manager-authority-contract.test.ts": "fallback",
     "scripts/flow-manager-long-running-child.test.ts": "fallback",
     "scripts/gate-runner/census-generator.test.ts": "measured",
@@ -219,10 +229,14 @@
     "scripts/pr2-foundation/fleet-observer.test.ts": "fallback",
     "scripts/pr2-foundation/fleet-reconciliation-handoff.test.ts": "fallback",
     "scripts/pr2-foundation/migration-symlink.test.ts": "measured",
+    "scripts/pr2-foundation/mutation-catalog.test.ts": "measured",
+    "scripts/pr2-foundation/mutation-semantic-gates.test.ts": "measured",
+    "scripts/pr2-foundation/real-scope-proof.test.ts": "measured",
     "scripts/pr2-foundation/review-4750643719-regression.test.ts": "measured",
     "scripts/pr2-foundation/review-head-ready.test.ts": "measured",
     "scripts/pr2-foundation/scheduler-repository-identity.test.ts": "fallback",
     "scripts/pr2-foundation/supervised-worker-start.test.ts": "fallback",
+    "scripts/pr2-foundation/terminalized-port.test.ts": "measured",
     "scripts/pr2-foundation/worker-notification-compat.test.ts": "measured",
     "scripts/pr2a/final-conformance.test.ts": "measured",
     "scripts/pr2a/planning.test.ts": "measured",
@@ -298,6 +312,7 @@
     "scripts/json-producers/worker-status-report.test.ts": "fd01bb61e0d381fecf9e98ccac1dd1ea1da23670cef236aca751c7ba2fe507f8",
     "scripts/lib/worker-assignment-runtime.test.ts": "90b84faf38297a818ff11ae3a4da0c9b35214f8ab7411697f54eed7947565565",
     "scripts/pr2-foundation/remote-worker-assignment.test.ts": "59a30eb1b78d0cebe5a9251759c49043a275fc7866cc809304dd122485054962",
+    "scripts/estate-cut/issue-906-vertical-slice.test.ts": "ce36825b34023281bc48d56aa5b4854285e4c60ab6820670c5e910bd2ec3c56f",
     "scripts/gate-runner/census-generator.test.ts": "cc5fffe3e17f2600715d851975bcd772e2f6a66f3740ab325b49c8290e7177e9",
     "scripts/gate-runner/contracts.test.ts": "7aa357f5afb5f2a451761ada6d2095f4537c80fa00e55d1b230044ba8ff431fc",
     "scripts/gate-runner/custom/bulk-static-gates.test.ts": "e62322c9391e9ecfd676cee4adcd217e9f09f84a93101c2555c448f8256b8450",
@@ -315,8 +330,12 @@
     "scripts/pr-scope-runner.test.ts": "345d235c3f69f9a766ae31b1c90e26842e910c31682fd95cad6b2bc78c9d78f7",
     "scripts/pr2-foundation/binding-cache.test.ts": "e2aecea74aef4877bcc5f78524ce8b3289925173a63ea701ebeb95cc6e09b022",
     "scripts/pr2-foundation/migration-symlink.test.ts": "bb63051a68bf1a6eacdd4480b83bce5719fa0e224bb502010e9562b430dd7629",
+    "scripts/pr2-foundation/mutation-catalog.test.ts": "3727ebe0dbc35f4365d728ab847d5b977f881d5b4b9463db54e13739a42e83ca",
+    "scripts/pr2-foundation/mutation-semantic-gates.test.ts": "3c7665fcd4339150afb33199f3a99d5c3d0098c18e687dd0395ecc7428ed3a04",
+    "scripts/pr2-foundation/real-scope-proof.test.ts": "ee12316d4489eb8be935d155fb60129fbbb659980de0b4dc9d5b0048d58a3b96",
     "scripts/pr2-foundation/review-4750643719-regression.test.ts": "6949a30b509310c1d80fefea75a52e72eb70fa524986b81c06bcbeab6795f09e",
     "scripts/pr2-foundation/review-head-ready.test.ts": "0bb6478028d5d757e2be04c3efbb8be7d4e7f3fcb33a1fecdf61aedf71892ab4",
+    "scripts/pr2-foundation/terminalized-port.test.ts": "31c685bef10094474fe6130dff14c306712a55dd4ef56502c118fadeb7398ef1",
     "scripts/pr2-foundation/worker-notification-compat.test.ts": "31da91958390ab0a0b14a96abfaa57464767763beb7c6393f3e374cfdd25fa13",
     "scripts/pr2a/final-conformance.test.ts": "8baec3cd7aec756b64c25bd7c4c9672edd445cb57fa80f1b7dfc34f750db4702",
     "scripts/pr2a/planning.test.ts": "dfd549738fb62ca3cd82e3f6c4a2b447d37d811c5ad769bbf341d4974dce89f6",
@@ -355,6 +374,13 @@
       1944,
       2020,
       2039
+    ],
+    "scripts/pr2-foundation/mutation-external-ci.test.ts": [
+      492,
+      475,
+      385,
+      494,
+      520
     ],
     "scripts/review-start-claim-run-binding.test.ts": [
       63,
@@ -411,6 +437,13 @@
       376,
       479,
       521
+    ],
+    "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": [
+      16439,
+      15020,
+      15870,
+      14735,
+      15279
     ],
     "scripts/review-start-claim-budget-semantics.test.ts": [
       4,
@@ -570,6 +603,9 @@
       783,
       843
     ],
+    "scripts/estate-cut/issue-906-vertical-slice.test.ts": [
+      2
+    ],
     "scripts/gate-runner/census-generator.test.ts": [
       9
     ],
@@ -621,11 +657,23 @@
     "scripts/pr2-foundation/migration-symlink.test.ts": [
       12
     ],
+    "scripts/pr2-foundation/mutation-catalog.test.ts": [
+      10
+    ],
+    "scripts/pr2-foundation/mutation-semantic-gates.test.ts": [
+      68
+    ],
+    "scripts/pr2-foundation/real-scope-proof.test.ts": [
+      9554
+    ],
     "scripts/pr2-foundation/review-4750643719-regression.test.ts": [
       139
     ],
     "scripts/pr2-foundation/review-head-ready.test.ts": [
       3
+    ],
+    "scripts/pr2-foundation/terminalized-port.test.ts": [
+      11
     ],
     "scripts/pr2-foundation/worker-notification-compat.test.ts": [
       231
@@ -671,6 +719,7 @@
     "scripts/review-finding-delivery-submit.test.ts": "2026-10-01T18:13:05.679Z",
     "scripts/review-orchestrator-loop.test.ts": "2026-10-01T10:17:05.877Z",
     "scripts/kernel/subprocess.test.ts": "2026-10-01T18:13:05.679Z",
+    "scripts/pr2-foundation/mutation-external-ci.test.ts": "2026-10-01T18:13:05.679Z",
     "scripts/review-start-claim-run-binding.test.ts": "2026-10-01T18:13:05.679Z",
     "scripts/review-start-claim.test.ts": "2026-10-01T18:13:05.679Z",
     "scripts/review-trigger-reeval.test.ts": "2026-10-01T10:17:05.877Z",
@@ -679,6 +728,7 @@
     "scripts/gh-wrapper.test.ts": "2026-10-01T18:13:05.679Z",
     "scripts/review-head-ready.test.ts": "2026-09-30T13:56:48.673Z",
     "scripts/pr2-foundation/foundation.test.ts": "2026-10-01T18:13:05.679Z",
+    "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": "2026-10-01T18:13:05.679Z",
     "scripts/review-start-claim-budget-semantics.test.ts": "2026-09-30T13:56:48.673Z",
     "scripts/review-trigger-reconcile.test.ts": "2026-10-01T12:31:03.982Z",
     "scripts/review-wake-trigger.test.ts": "2026-10-01T18:13:05.679Z",
@@ -712,6 +762,7 @@
     "scripts/lib/worker-assignment-runtime.test.ts": "2026-08-18T06:29:07.033Z",
     "scripts/pr2-foundation/remote-worker-assignment.test.ts": "2026-08-24T15:13:45.402Z",
     "scripts/pester-retirement.test.ts": "2026-10-01T18:13:05.679Z",
+    "scripts/estate-cut/issue-906-vertical-slice.test.ts": "2026-08-24T15:13:45.400Z",
     "scripts/gate-runner/census-generator.test.ts": "2026-08-24T15:13:45.401Z",
     "scripts/gate-runner/contracts.test.ts": "2026-08-24T15:13:45.401Z",
     "scripts/gate-runner/custom/bulk-static-gates.test.ts": "2026-08-24T15:13:45.401Z",
@@ -729,8 +780,12 @@
     "scripts/pr-scope-runner.test.ts": "2026-08-24T15:13:45.401Z",
     "scripts/pr2-foundation/binding-cache.test.ts": "2026-08-24T15:13:45.402Z",
     "scripts/pr2-foundation/migration-symlink.test.ts": "2026-08-24T15:13:45.402Z",
+    "scripts/pr2-foundation/mutation-catalog.test.ts": "2026-08-24T15:13:45.402Z",
+    "scripts/pr2-foundation/mutation-semantic-gates.test.ts": "2026-08-24T15:13:45.402Z",
+    "scripts/pr2-foundation/real-scope-proof.test.ts": "2026-08-24T15:13:45.402Z",
     "scripts/pr2-foundation/review-4750643719-regression.test.ts": "2026-08-24T15:13:45.402Z",
     "scripts/pr2-foundation/review-head-ready.test.ts": "2026-08-24T15:13:45.402Z",
+    "scripts/pr2-foundation/terminalized-port.test.ts": "2026-08-24T15:13:45.402Z",
     "scripts/pr2-foundation/worker-notification-compat.test.ts": "2026-08-24T15:13:45.402Z",
     "scripts/pr2a/final-conformance.test.ts": "2026-10-01T12:31:03.982Z",
     "scripts/pr2a/planning.test.ts": "2026-08-24T15:13:45.402Z",

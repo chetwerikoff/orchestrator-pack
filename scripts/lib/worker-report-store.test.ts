@@ -9,7 +9,7 @@ import {
   resolvePackWorkerReportDeliveryRunId,
   resolveWorkerReportTrustedBinding,
   upsertWorkerReportRecordInMemory,
-} from '.././pr2-foundation/terminalized/worker-report-store.ts';
+} from '../../docs/worker-report-store.mjs';
 
 const worker = { runtime: 'orca', id: 'worker-1', generation: 'g-7' } as const;
 const assignment = { assignmentId: 'wa-1', generation: 3, taskId: 'task-1416' } as const;

@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 2,
+  "issue": 918,
+  "task": 311,
+  "repoSlug": "chetwerikoff/orchestrator-pack",
+  "capture": {
+    "path": "tests/external-output-references/captures/ao-0-10-cli/session-ls.raw.json",
+    "selectors": {
+      "sessionId": "$.data[0].id",
+      "projectId": "$.data[0].projectId",
+      "role": "$.data[0].role",
+      "status": "$.data[0].status",
+      "issueId": "$.data[0].issueId",
+      "harness": "$.data[0].harness",
+      "isTerminated": "$.data[0].isTerminated",
+      "lastActivityAt": "$.data[0].lastActivityAt",
+      "createdAt": "$.data[0].createdAt",
+      "updatedAt": "$.data[0].updatedAt"
+    },
+    "expected": {
+      "$.data[0].id": "orchestrator-pack-7",
+      "$.data[0].projectId": "orchestrator-pack",
+      "$.data[0].role": "worker",
+      "$.data[0].status": "needs_input",
+      "$.data[0].issueId": "619",
+      "$.data[0].harness": "cursor",
+      "$.data[0].isTerminated": false
+    }
+  },
+  "assembly": {
+    "prNumber": 619,
+    "reviewer": "codex",
+    "subjects": [
+      "preRunHeadReadyRecheck",
+      "bindingResolverCacheClosure",
+      "startPackReview:acquire"
+    ],
+    "runnerOrder": [
+      "atomic-claim",
+      "reviewer-wrapper",
+      "journal-verdict",
+      "github-comment",
+      "required-status",
+      "worker-message"
+    ],
+    "consumer": {
+      "source": "cache",
+      "reason": "cache_hit",
+      "failClosed": false
+    }
+  },
+  "mutationControls": {
+    "AC1": [
+      "real-subject-boundary-broken",
+      "reviewer-argv-broken",
+      "resolver-output-constant-substitution",
+      "subject-internals-reimplemented",
+      "runner-internal-hop-omitted",
+      "runner-internal-hop-reordered"
+    ],
+    "AC2": [
+      "invented-ao-field",
+      "identity-substitution",
+      "wrong-sha-status",
+      "non-comment-review",
+      "worker-message-cardinality"
+    ],
+    "AC3": [
+      "double-acquisition",
+      "live-claim-theft",
+      "cross-key-interference",
+      "stale-claim-not-recovered",
+      "ambiguous-ownership-recovered",
+      "duplicate-start-with-visible-run"
+    ],
+    "AC4": [
+      "pre-journal-delivery",
+      "reviewer-rerun-after-journal",
+      "blind-comment-replay",
+      "invalid-comment-recovery",
+      "changed-idempotency-or-head",
+      "j4-j5-attempt-evidence-lost",
+      "false-exactly-once",
+      "recoverable-orphan-left"
+    ],
+    "AC5": [
+      "advanced-head-run-emitted",
+      "advanced-head-delivery-emitted",
+      "current-head-not-reread",
+      "unchanged-head-wrongly-denied"
+    ],
+    "AC6": [
+      "unrelated-existing-path",
+      "lane-config-overreach",
+      "classification-missing-extra-or-nonheavy",
+      "production-or-core-edit",
+      "non-regular-artifact",
+      "intentional-external-egress",
+      "untraced-ao-field",
+      "capture-corpus-change"
+    ]
+  },
+  "scope": {
+    "lifetime": "one-time-pr-only",
+    "enforcedBy": "PR scope guard and pack review on PR #919",
+    "persistentValidatorInput": "immutable-synthetic-snapshot",
+    "root": "scripts/estate-cut/task-311-tests/",
+    "laneConfig": "scripts/vitest-ci-lanes.config.json",
+    "allowedSuffixes": [
+      ".test.ts",
+      ".test-support.ts",
+      ".fixture.json"
+    ],
+    "expectedAddedPaths": [
+      "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts",
+      "scripts/estate-cut/task-311-tests/task-311.fixture.json",
+      "scripts/estate-cut/task-311-tests/task-311-common.test-support.ts",
+      "scripts/estate-cut/task-311-tests/task-311-claim.test-support.ts",
+      "scripts/estate-cut/task-311-tests/task-311-delivery.test-support.ts",
+      "scripts/estate-cut/task-311-tests/task-311-scope.test-support.ts"
+    ],
+    "expectedHeavyTests": [
+      "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts"
+    ],
+    "regularModes": [
+      "100644",
+      "100755"
+    ]
+  }
+}

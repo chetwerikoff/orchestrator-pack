@@ -25,7 +25,7 @@ import {
   type CiGreenWakeAction,
   type PlanCiGreenWakeInput,
 } from '../docs/ci-green-wake-reconcile.mjs';
-import type { RuntimeWorker } from './pr2-foundation/terminalized/review-trigger-reconcile.ts';
+import type { RuntimeWorker } from '../docs/review-trigger-reconcile.d.mts';
 import { QUIESCENCE_DEBOUNCE_MS } from './pr2-foundation/terminalized/worker-iteration-cycle.ts';
 import { liveWorker, packGreenCiChecks, packRedCiChecks } from './_test-worker-session-fixtures.js';
 
