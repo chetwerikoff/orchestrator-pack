@@ -203,7 +203,9 @@ interface StartInput {
   } | null;
   fixtureRequiredCiPolicyHttpStatus?: number;
   fixtureRequiredCiPostProjectionHead?: string;
+  fixtureRequiredCiPostProjectionBase?: string;
   fixtureRequiredCiHeadAfterGate?: string;
+  fixtureRequiredCiBaseAfterGate?: string;
   fixturePrState?: string;
   fixturePrBody?: string;
   fixturePrBodyAfterClaim?: string;
@@ -815,22 +817,38 @@ export async function manualPackReviewRequiredCiGreen(input: {
     prBaseRef: input.target.prBaseRef,
     readProtection,
     readChecks,
-    readCurrentHead: async () => harness
-      ? trim(input.startInput.fixtureRequiredCiPostProjectionHead || input.target.headSha).toLowerCase()
-      : resolveCurrentPrHead(input.target.sourceRepoRoot, input.target.repoSlug, input.target.prNumber),
-  });
-  if (!resolution.green) return false;
-
-  // Keep the existing later guard in addition to the resolver's immediate
-  // post-projection witness. It catches movement after the shared gate itself.
-  const headAfterGate = harness
-    ? trim(input.startInput.fixtureRequiredCiHeadAfterGate || input.target.headSha).toLowerCase()
-    : await resolveCurrentPrHead(
+    readCurrentPr: async () => {
+      if (harness) {
+        return {
+          headSha: trim(input.startInput.fixtureRequiredCiPostProjectionHead || input.target.headSha).toLowerCase(),
+          baseRef: trim(input.startInput.fixtureRequiredCiPostProjectionBase || input.target.prBaseRef),
+        };
+      }
+      const current = await resolveCurrentPrTarget(
         input.target.sourceRepoRoot,
         input.target.repoSlug,
         input.target.prNumber,
       );
-  return headAfterGate === input.target.headSha;
+      return { headSha: current.headSha, baseRef: current.baseRef };
+    },
+  });
+  if (!resolution.green) return false;
+
+  // Keep the existing later guard in addition to the resolver's immediate
+  // post-projection witness. It catches head or base movement after the shared
+  // gate itself and before a production review can start.
+  const targetAfterGate = harness
+    ? {
+        headSha: trim(input.startInput.fixtureRequiredCiHeadAfterGate || input.target.headSha).toLowerCase(),
+        baseRef: trim(input.startInput.fixtureRequiredCiBaseAfterGate || input.target.prBaseRef),
+      }
+    : await resolveCurrentPrTarget(
+        input.target.sourceRepoRoot,
+        input.target.repoSlug,
+        input.target.prNumber,
+      );
+  return targetAfterGate.headSha === input.target.headSha
+    && targetAfterGate.baseRef === targetContext.defaultBranch;
 }
 
 async function resolveCurrentIssueBody(
@@ -4041,7 +4059,10 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     && !trim(process.env.OPK_PROJECT_ID);
   const selectedTarget = harnessWithoutSelectedProject
     ? null
-    : resolveTargetContext({ env: process.env });
+    : resolveTargetContext({
+        ...(trim(input.projectId) ? { projectId: trim(input.projectId) } : {}),
+        env: process.env,
+      });
   if (selectedTarget) {
     const requestedProjectId = trim(input.projectId);
     if (requestedProjectId && requestedProjectId !== selectedTarget.projectId) {
@@ -4097,7 +4118,9 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     || input.fixtureRequiredCiPolicy !== undefined
     || input.fixtureRequiredCiPolicyHttpStatus !== undefined
     || input.fixtureRequiredCiPostProjectionHead !== undefined
+    || input.fixtureRequiredCiPostProjectionBase !== undefined
     || input.fixtureRequiredCiHeadAfterGate !== undefined
+    || input.fixtureRequiredCiBaseAfterGate !== undefined
   );
   const requiredCiGateApplies = productionRequiredCiStart
     && !existingStateCannotStartReviewer
