@@ -1,8 +1,8 @@
-import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import {
   buildChangedPathManifest,
   resolveVitestPrScopeSelection,
@@ -11,7 +11,16 @@ import {
 const roots: string[] = [];
 
 function git(root: string, args: string[]): string {
-  return execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const result = runProcessSync({
+    command: 'git',
+    args,
+    cwd: root,
+    inheritParentEnv: true,
+  });
+  if (!result.ok) {
+    throw new Error(result.stderr || result.error || `git ${args.join(' ')} failed`);
+  }
+  return result.stdout.trim();
 }
 
 function write(root: string, path: string, content: string): void {
