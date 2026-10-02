@@ -9,9 +9,12 @@ import {
   ASSISTANT_MESSAGE_SELECTOR,
   ASSISTANT_TURN_ANCESTOR_XPATH,
   MESSAGE_AUTHOR_ROLE_ATTR,
+  CONNECTION_RECOVERY_STATUS_SELECTOR,
   MESSAGE_NODE_SELECTOR,
+  RENDERED_STOP_BUTTON_SELECTOR,
   matchesStopButtonSelector,
 } from './product-page-selectors.ts';
+import { __testWaitForExistingGeneration } from './state-light-turn-base.ts';
 import {
   buildObservationHeartbeat,
   classifyBrowserGptPageTurnStatus,
@@ -812,5 +815,35 @@ describe('Issue #1430 deterministic observation admission crash recovery', () =>
       vi.doUnmock('node:fs');
       vi.resetModules();
     }
+  });
+});
+
+describe('existing generation behind a connection-recovery status', () => {
+  function recoveryPage(recoveryShown: boolean) {
+    const state = { stopped: false, recovery: recoveryShown };
+    const click = vi.fn(async () => { state.stopped = true; state.recovery = false; });
+    const count = (value: () => number) => ({ count: vi.fn(async () => value()) });
+    const page = {
+      __fakeBrowserGptPage: true,
+      waitForTimeout: vi.fn(async () => undefined),
+      locator: vi.fn((selector: string) => {
+        if (selector === CONNECTION_RECOVERY_STATUS_SELECTOR) return count(() => (state.recovery ? 1 : 0));
+        if (selector === RENDERED_STOP_BUTTON_SELECTOR) return { ...count(() => (state.stopped ? 0 : 1)), first: () => ({ click }) };
+        return { ...count(() => 0), last: () => ({ locator: () => count(() => 0) }) };
+      }),
+    };
+    return { page, click };
+  }
+
+  it('presses Stop once and settles when the recovery status is shown', async () => {
+    const { page, click } = recoveryPage(true);
+    await expect(__testWaitForExistingGeneration(page, Date.now() + 60_000)).resolves.toBe('settled');
+    expect(click).toHaveBeenCalledTimes(1);
+  });
+
+  it('never presses Stop for an ordinary running generation', async () => {
+    const { page, click } = recoveryPage(false);
+    await expect(__testWaitForExistingGeneration(page, Date.now() + 200)).resolves.toBe('busy');
+    expect(click).not.toHaveBeenCalled();
   });
 });

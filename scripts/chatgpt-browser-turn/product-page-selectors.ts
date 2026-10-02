@@ -33,6 +33,9 @@ export const CONVERSATION_TURN_SECTION_SELECTOR = 'div[data-turn-key]';
 // a zero-size copy frozen mid-generation, with its own Stop control and turn
 // sections. Only rendered elements describe the live conversation.
 export const RENDERED_STOP_BUTTON_SELECTOR = STOP_BUTTON_SELECTOR.split(', ').map((part) => `${part}:visible`).join(', ');
+// "Connection interrupted. Waiting for the complete answer": the reply stream
+// is lost while Stop stays rendered; the operator treats it as a dead turn.
+export const CONNECTION_RECOVERY_STATUS_SELECTOR = 'main [role="status"] .text-chatgpt-recovery';
 export const RENDERED_CONVERSATION_TURN_SECTION_SELECTOR = `${CONVERSATION_TURN_SECTION_SELECTOR}:visible`;
 export const ASSISTANT_TURN_ANCESTOR_XPATH = 'xpath=ancestor-or-self::div[@data-turn-key][1]';
 export const CONVERSATION_TURN_ID_PREFIX = 'conversation-turn-';

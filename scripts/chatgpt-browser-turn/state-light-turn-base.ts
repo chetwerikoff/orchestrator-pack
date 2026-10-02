@@ -84,6 +84,7 @@ import {
   SEND_BUTTON_SELECTOR,
   RENDERED_CONVERSATION_TURN_SECTION_SELECTOR,
   RENDERED_STOP_BUTTON_SELECTOR,
+  CONNECTION_RECOVERY_STATUS_SELECTOR,
   stripUiCollapseAffixes,
   UNMARKED_ALERT_SELECTOR,
   USER_MESSAGE_STYLE,
@@ -1378,6 +1379,7 @@ async function waitForExistingGeneration(
   const waitUntil = Math.min(startedAt + EXISTING_GENERATION_WAIT_ROUND_MS * EXISTING_GENERATION_WAIT_ROUNDS, deadlineMs);
   let sawStop = false;
   let idleReads = 0;
+  let recoveryStopPressed = false;
   for (let read = 0; ; read += 1) {
     if (read > 0) {
       if (waitUntil - Date.now() <= EXISTING_GENERATION_READ_INTERVAL_MS + MAX_LOCAL_READ_WAIT_MS * 2) {
@@ -1389,6 +1391,18 @@ async function waitForExistingGeneration(
     if (await locatorCount(page.locator(RENDERED_STOP_BUTTON_SELECTOR), deadlineMs) > 0) {
       sawStop = true;
       idleReads = 0;
+      if (!recoveryStopPressed && await locatorCount(page.locator(CONNECTION_RECOVERY_STATUS_SELECTOR), deadlineMs) > 0) {
+        recoveryStopPressed = true;
+        try {
+          await boundedBrowserRead(
+            page.locator(RENDERED_STOP_BUTTON_SELECTOR).first().click({ timeout: MAX_LOCAL_READ_WAIT_MS }),
+            MAX_LOCAL_READ_WAIT_MS,
+            'connection_recovery_stop_timeout',
+          );
+        } catch {
+          // A Stop that does not respond leaves the conversation busy as before.
+        }
+      }
       continue;
     }
     idleReads += 1;
@@ -2058,7 +2072,10 @@ async function findOpenConversationPage(browser: any, config: BrowserConfig): Pr
   const page = candidates.at(-1);
   if (!page) return undefined;
   try {
-    if (await locatorCount(page.locator(RENDERED_STOP_BUTTON_SELECTOR), Date.now() + MAX_LOCAL_READ_WAIT_MS) > 0) {
+    if (
+      await locatorCount(page.locator(RENDERED_STOP_BUTTON_SELECTOR), Date.now() + MAX_LOCAL_READ_WAIT_MS) > 0
+      && await locatorCount(page.locator(CONNECTION_RECOVERY_STATUS_SELECTOR), Date.now() + MAX_LOCAL_READ_WAIT_MS) === 0
+    ) {
       return undefined;
     }
     await boundedBrowserRead(Promise.resolve(page.bringToFront?.()), MAX_LOCAL_READ_WAIT_MS, 'bring_to_front_timeout');
@@ -4465,6 +4482,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
 
 export const __testFinalizeTurn = finalizeTurn;
 export const __testBrowserOrPageDefinitelyLost = browserOrPageDefinitelyLost;
+export const __testWaitForExistingGeneration = waitForExistingGeneration;
 
 export const __testComposerMutation = {
   remainingComposerMutationMs,
