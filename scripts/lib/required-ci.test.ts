@@ -4,18 +4,21 @@ import {
   resolveRequiredCi,
   type RequiredCiCheckRow,
   type RequiredCiProtectionRead,
+  type ResolveRequiredCiInput,
 } from './required-ci.ts';
 
 const H1 = '1'.repeat(40);
 const H2 = '2'.repeat(40);
 
-function target(overrides: Record<string, unknown> = {}) {
+type RequiredCiTarget = ResolveRequiredCiInput['target'];
+
+function target(overrides: Partial<RequiredCiTarget> = {}): RequiredCiTarget {
   return {
     projectId: 'leopoker',
     repository: 'chetwerikoff/LeoPoker',
     defaultBranch: 'main',
     ...overrides,
-  } as const;
+  };
 }
 
 function deps(input: {
