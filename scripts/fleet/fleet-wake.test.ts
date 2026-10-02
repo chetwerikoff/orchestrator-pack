@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   FileFleetWakeStateStore,
+  fleetAlarmMessage,
+  managerBannerMessage,
   runFleetAlarmTick,
   type FleetWakeConfig,
   type FleetWakeStateStore,
@@ -279,5 +281,22 @@ describe('fleet alarm', () => {
     const mutating = observed.calls.filter((call) => call[1] === 'send');
     expect(mutating).toHaveLength(2);
     expect(mutating.every((call) => call[0] === 'terminal' && call[call.indexOf('--terminal') + 1] === 'coord')).toBe(true);
+  });
+});
+
+describe('Issue #2342 unloadable chat', () => {
+  it('asks for a new chat instead of a same-chat continuation', () => {
+    const banner = {
+      kind: 'unloadable' as const,
+      url: 'https://chatgpt.com/c/123e4567-e89b-12d3-a456-426614174042',
+      text: 'Could not load this ChatGPT conversation',
+      retry: false,
+    };
+    expect(managerBannerMessage(banner)).toContain('continue the task in a new chat');
+    expect(managerBannerMessage(banner)).not.toContain('same chat');
+    expect(managerBannerMessage({ ...banner, review: true })).toContain('Restart the review in a new chat');
+    const alarm = fleetAlarmMessage('idle', [], [banner]);
+    expect(alarm).toContain('cannot be loaded');
+    expect(alarm).not.toContain('need a continuation');
   });
 });

@@ -1,15 +1,17 @@
 import {
   ASSISTANT_MESSAGE_STYLE,
   ASSISTANT_TURN_ACTION_SELECTOR,
+  COMPOSER_SELECTOR,
   CONNECTION_RECOVERY_STATUS_SELECTOR,
   CONVERSATION_TURN_SECTION_SELECTOR,
   STOP_BUTTON_SELECTOR,
 } from '../chatgpt-browser-turn/product-page-selectors.ts';
 
-export type ChatAttentionKind = 'error_banner' | 'stalled';
+export type ChatAttentionKind = 'error_banner' | 'stalled' | 'unloadable';
 
 export const STALLED_CHAT_TEXT = 'GPT stopped without a final reply';
 export const EMPTY_REPLY_CHAT_TEXT = 'GPT finished with an empty reply';
+export const UNLOADABLE_CHAT_TEXT = 'Could not load this ChatGPT conversation';
 
 export interface ChatErrorBanner {
   readonly kind: ChatAttentionKind;
@@ -68,6 +70,12 @@ const redBannerExpression = (repository: string): string => `(() => {
   const pull = pullDigits ? Number(pullDigits) : undefined;
   const review = firstText.includes(${JSON.stringify(REVIEW_PROMPT_HEADING.toLowerCase())});
   const chat = (rows) => ({ issue, pull, review, generating, rows });
+  const composer = [...document.querySelectorAll(${JSON.stringify(COMPOSER_SELECTOR)})].some(rendered);
+  const unloadable = !composer && [...document.querySelectorAll('main div')].some((e) => rendered(e)
+    && [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim() === ${JSON.stringify(UNLOADABLE_CHAT_TEXT)}));
+  if (unloadable) {
+    return { issue, pull, review, generating: false, rows: [{ kind: 'unloadable', text: ${JSON.stringify(UNLOADABLE_CHAT_TEXT)}, retry: false }] };
+  }
   const recovery = [...document.querySelectorAll(${JSON.stringify(CONNECTION_RECOVERY_STATUS_SELECTOR)})].find(rendered);
   if (recovery) {
     return { issue, pull, review, generating: false, rows: [{ kind: 'error_banner', text: (recovery.innerText || '').trim().slice(0, 160), retry: false }] };
@@ -182,7 +190,7 @@ export async function readProjectChats(cdpUrl: string, scope: ChatBannerScope): 
       ...task,
       generating: observed.generating === true,
       banners: rows
-        .filter((row) => row && typeof row.text === 'string' && (row.kind === 'error_banner' || row.kind === 'stalled'))
+        .filter((row) => row && typeof row.text === 'string' && (row.kind === 'error_banner' || row.kind === 'stalled' || row.kind === 'unloadable'))
         .map((row) => ({ kind: row.kind, url, text: row.text, retry: Boolean(row.retry), ...task })),
     });
   }

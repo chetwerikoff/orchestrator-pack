@@ -233,7 +233,11 @@ actions or an empty last reply, on two ticks about a minute apart), asking for `
 directly to the single manager pane bound to that chat, otherwise to the
 orchestrator. A PR-review chat (prompt heading `# Browser GPT pack PR review`)
 is routed to the pane on the PR head branch and gets a review-completion text
-instead (final verdict in the prompt format, no code changes). The
+instead (final verdict in the prompt format, no code changes). A chat whose
+page shows `Could not load this ChatGPT conversation` with no composer cannot
+take a continuation: the hint asks for GitHub-first reconciliation and a new
+chat with the reconciled baseline (a PR-review chat restarts the review in a
+new chat); never press `Try again`. The
 binding (`scripts/chatgpt-browser-turn/chat-bindings.ts`, one file per
 conversation under `~/.local/state/orchestrator-fleet/chat-bindings/`) is
 written by the turn entry from the launching worktree; without one, the chat's opening Issue URL is
