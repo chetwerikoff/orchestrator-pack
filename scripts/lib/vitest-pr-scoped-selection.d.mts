@@ -8,7 +8,7 @@ export declare function buildChangedPathManifest(
   repoRoot: string,
   baseSha: string,
   headSha: string,
-  options?: { maxBytes?: number },
+  options?: { maxBytes?: number; includeDeleted?: boolean },
 ): ChangedPathManifest;
 
 export declare function parseChangedPathManifest(

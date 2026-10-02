@@ -96,6 +96,7 @@
     "scripts/draft-author-relocation-contract.d.mts",
     "scripts/draft-author-relocation-contract.mjs",
     "scripts/draft-author-relocation-surfaces.json",
+    "scripts/emit-pr-changed-paths-manifest.mjs",
     "scripts/emit-vitest-heavy-topology.mjs",
     "scripts/estate-cut/",
     "scripts/fixtures/mechanical-json-state/state-coverage-manifest.json",
@@ -106,6 +107,8 @@
     "scripts/guard-direct-edit.mjs",
     "scripts/json-producers/wave-b-inventory.json",
     "scripts/json-producers/wave-b-reconciliation.ts",
+    "scripts/lib/vitest-pr-scoped-selection.d.mts",
+    "scripts/lib/vitest-pr-scoped-selection.mjs",
     "scripts/lib/worker-report-store.test.ts",
     "scripts/lib/worker-status-store.mjs",
     "scripts/lint-self-architect.config.json",
@@ -154,5 +157,5 @@
     "scripts/",
     "tests/external-output-references/"
   ],
-  "source_revision": "c020cffecf647c301d0a08889144cf9f858ab100"
+  "source_revision": "3a8093136983d829fc8b8b8b9601b74fe0f40192"
 }
