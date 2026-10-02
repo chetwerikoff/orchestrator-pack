@@ -98,7 +98,6 @@
     "scripts/pr2-foundation/review-head-ready.test.ts": 3,
     "scripts/pr2-foundation/worker-notification-compat.test.ts": 231,
     "scripts/pr2a/final-conformance.test.ts": 3,
-    "scripts/pr2a/planning.test.ts": 15081,
     "scripts/runtime-retirement/retired-surface-guard.test.ts": 112,
     "scripts/runtime/runtime-independence-two-lifecycle-proof.test.ts": 334,
     "scripts/toolchain/chatgpt-browser-turn.diagnostics.test.ts": 829,
@@ -225,7 +224,6 @@
     "scripts/pr2-foundation/supervised-worker-start.test.ts": "fallback",
     "scripts/pr2-foundation/worker-notification-compat.test.ts": "measured",
     "scripts/pr2a/final-conformance.test.ts": "measured",
-    "scripts/pr2a/planning.test.ts": "measured",
     "scripts/runtime-retirement/retired-surface-guard.test.ts": "measured",
     "scripts/runtime/caller-census.test.ts": "fallback",
     "scripts/runtime/crash-backoff.test.ts": "fallback",
@@ -319,7 +317,6 @@
     "scripts/pr2-foundation/review-head-ready.test.ts": "0bb6478028d5d757e2be04c3efbb8be7d4e7f3fcb33a1fecdf61aedf71892ab4",
     "scripts/pr2-foundation/worker-notification-compat.test.ts": "31da91958390ab0a0b14a96abfaa57464767763beb7c6393f3e374cfdd25fa13",
     "scripts/pr2a/final-conformance.test.ts": "8baec3cd7aec756b64c25bd7c4c9672edd445cb57fa80f1b7dfc34f750db4702",
-    "scripts/pr2a/planning.test.ts": "dfd549738fb62ca3cd82e3f6c4a2b447d37d811c5ad769bbf341d4974dce89f6",
     "scripts/runtime-retirement/retired-surface-guard.test.ts": "c887360e30b23da50e9e499197963c22433b591d50b3b4ae9d94fca0521c7c98",
     "scripts/runtime/runtime-independence-two-lifecycle-proof.test.ts": "2d11b4356538b196616ec4d59ba4706b264c92147cf7e3fa4003491ff3ff06d3",
     "scripts/toolchain/chatgpt-browser-turn.diagnostics.test.ts": "277d7f3b4c731930a456a307e694bf2f7147aa9c65475436505bcd48e8d60a15",
@@ -637,9 +634,6 @@
       2,
       3
     ],
-    "scripts/pr2a/planning.test.ts": [
-      15081
-    ],
     "scripts/runtime-retirement/retired-surface-guard.test.ts": [
       112
     ],
@@ -733,7 +727,6 @@
     "scripts/pr2-foundation/review-head-ready.test.ts": "2026-08-24T15:13:45.402Z",
     "scripts/pr2-foundation/worker-notification-compat.test.ts": "2026-08-24T15:13:45.402Z",
     "scripts/pr2a/final-conformance.test.ts": "2026-10-01T12:31:03.982Z",
-    "scripts/pr2a/planning.test.ts": "2026-08-24T15:13:45.402Z",
     "scripts/runtime-retirement/retired-surface-guard.test.ts": "2026-08-24T15:13:45.402Z",
     "scripts/runtime/runtime-independence-two-lifecycle-proof.test.ts": "2026-08-24T15:13:45.402Z",
     "scripts/toolchain/chatgpt-browser-turn.diagnostics.test.ts": "2026-08-24T15:13:45.402Z",

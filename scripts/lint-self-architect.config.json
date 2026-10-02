@@ -22,7 +22,6 @@
     "scripts/contract-evidence-validator.mjs",
     "scripts/contract-evidence-validator.d.mts",
     "scripts/gate-runner/census/**",
-    "scripts/pr2a/planning-manifest.json",
     "scripts/vitest-live-store-inventory.json"
   ],
   "scriptExtensions": [

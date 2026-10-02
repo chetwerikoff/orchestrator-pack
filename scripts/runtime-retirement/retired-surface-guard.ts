@@ -66,7 +66,6 @@ const EXCLUDED_PREFIXES = [
 const EXCLUDED_EXACT = new Set([
   'docs/investigations/orca-pwsh-zero-estate/post-port.json',
   'docs/investigations/orca-pwsh-zero-estate/final.json',
-  'scripts/pr2a/planning-manifest.json',
   'scripts/fixtures/reaction-config/report_stale_message.live-capture.provenance.json',
   'scripts/fixtures/reaction-config/report_stale_message.live-capture.txt',
   'scripts/lib/vitest-pre-topology-measurement.mjs',

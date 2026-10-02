@@ -213,10 +213,6 @@
       "reason": "missing-per-file-weight"
     },
     {
-      "file": "scripts/pr2a/planning.test.ts",
-      "reason": "missing-per-file-weight"
-    },
-    {
       "file": "scripts/tiering-calibration.test.ts",
       "reason": "missing-per-file-weight"
     },
@@ -311,7 +307,6 @@
     "scripts/pr2-foundation/review-head-ready.test.ts",
     "scripts/pr2-foundation/worker-notification-compat.test.ts",
     "scripts/pr2a/final-conformance.test.ts",
-    "scripts/pr2a/planning.test.ts",
     "scripts/review-cycle-cap.test.ts",
     "scripts/review-delivery.test.ts",
     "scripts/review-finding-delivery-submit.test.ts",
@@ -404,7 +399,6 @@
     "scripts/pr2-foundation/review-head-ready.test.ts",
     "scripts/pr2-foundation/worker-notification-compat.test.ts",
     "scripts/pr2a/final-conformance.test.ts",
-    "scripts/pr2a/planning.test.ts",
     "scripts/review-cycle-cap.test.ts",
     "scripts/review-delivery.test.ts",
     "scripts/review-finding-delivery-submit.test.ts",
@@ -508,7 +502,6 @@
     "scripts/pr2-foundation/review-head-ready.test.ts",
     "scripts/pr2-foundation/worker-notification-compat.test.ts",
     "scripts/pr2a/final-conformance.test.ts",
-    "scripts/pr2a/planning.test.ts",
     "scripts/review-delivery.test.ts",
     "scripts/review-ready-stuck-guard.test.ts",
     "scripts/review-send-reconcile.test.ts",
@@ -602,7 +595,6 @@
         "scripts/pr2-foundation/binding-cache.test.ts",
         "scripts/pr2-foundation/review-head-ready.test.ts",
         "scripts/pr2-foundation/worker-notification-compat.test.ts",
-        "scripts/pr2a/planning.test.ts",
         "scripts/review-ready-stuck-guard.test.ts",
         "scripts/review-start-claim-lifecycle.test.ts",
         "scripts/tier-gate-guard.test.ts",

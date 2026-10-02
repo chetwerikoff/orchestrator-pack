@@ -140,7 +140,6 @@
     "scripts/pr2-foundation/supervised-worker-start.test.ts": "light",
     "scripts/pr2-foundation/worker-notification-compat.test.ts": "light",
     "scripts/pr2a/final-conformance.test.ts": "heavy",
-    "scripts/pr2a/planning.test.ts": "light",
     "scripts/replay-fixture-import.test.ts": "light",
     "scripts/review-cycle-cap.test.ts": "heavy",
     "scripts/review-delivery.test.ts": "light",
@@ -202,7 +201,7 @@
   "heavyVitestPerFilePool": "threads",
   "parkedWallclockE2e": {
     "trackingIssue": 694,
-    "trackingNote": "docs/issues_drafts/239-ci-vitest-wallclock-e2e-separate-stage.md (#694 wall-clock CI stage)",
+    "trackingNote": "Issue #694 wall-clock CI stage",
     "files": [
       "scripts/orchestrator-escalation-router.test.ts",
       "scripts/orchestrator-wake-supervisor.test.ts"
