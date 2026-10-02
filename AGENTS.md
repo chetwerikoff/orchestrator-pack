@@ -58,9 +58,10 @@ target-local facts, paths, commands, verification, or stricter/narrower constrai
 weaken, replace, contradict, or redefine universal pack policy; a conflict resolves in favor of
 pack policy unless a higher authority above changes the boundary. Pack-repository paths, edit
 boundaries, and allowed surfaces stay scoped to the trusted pack checkout that supplied the
-payload; pack scripts, skills, runbooks, and transports stay pack-owned and never become target
-path authority. Target path authority comes from the target task contract and project-owned rules.
-A relative pointer here denotes the pack checkout's file, never a same-named target path.
+payload; pack scripts, skills, runbooks, transports, and other explicitly pack-internal procedures
+stay pack-owned and never become target path authority. Target path authority comes from the target
+task contract and project-owned rules. A relative pointer here denotes the pack checkout's file,
+never a same-named target path; embedding does not duplicate or redefine referenced pack artifacts.
 
 ## Edit boundaries
 
@@ -115,13 +116,16 @@ Key rules (detail in the owning sections):
 - [`Task and scope authority`](docs/repository_policy.md#task-and-scope-authority): the Issue
   carries a mandatory `denylist` and optional `allowed-roots`; an implementation PR links exactly
   one Issue with `Closes #N` / `Fixes #N` / `Resolves #N` near the top; the generated
-  `docs/declarations/<issue-number>.pr-scope.json` is never hand-edited, copied, or broadened.
+  `docs/declarations/<issue-number>.pr-scope.json` is never hand-edited, copied from a stale
+  declaration, or broadened to make an unrelated diff pass.
 - [`Scope discipline`](docs/repository_policy.md#scope-discipline): touch nothing outside the
   declaration or Issue scope; inspect the complete status and diff before every commit; on a scope
   mismatch fix the artifact or the diff, never broaden scope to silence the check.
 - [`Build the minimum`](docs/repository_policy.md#build-the-minimum): the smallest implementation
-  that meets the acceptance criteria, no unrequested abstraction; validation, security, data-loss
-  prevention, identity checks, and required tests are never optional.
+  that meets the acceptance criteria, no unrequested abstraction unless a public boundary,
+  cross-platform contract, generated-drift prevention, risky-seam testability, or upgrade safety
+  requires it; validation, security, data-loss prevention, identity checks, and required tests are
+  never optional.
 - [`Local verification`](docs/repository_policy.md#local-verification): run the listed checks and
   affected tests before handoff; require current-head scope guard, required CI, and review where
   applicable — a previous-head success never proves the current head.
@@ -178,7 +182,7 @@ formulations and top-2/top-3 reads only when the first result is absent, has a m
 non-numeric score or top-1 below 0.5, has top-2 at least 0.5 within 0.05 of top-1, or the read is
 missing, empty, ownership/provenance-invalid, or lacks a source section its manifest merge group
 requires. Known paths/identifiers use repository/fulltext search; a known episode title uses
-`title`. After `wiki-ops` names the likely authority, re-read the current canonical repository file
+`title`; freshness uses index-served `wiki-ops.read`. After `wiki-ops` names the likely authority, re-read the current canonical repository file
 before any decision or effect. Operator procedure: [`docs/ops-wiki-sync.md`](docs/ops-wiki-sync.md).
 
 ## GitHub transport
