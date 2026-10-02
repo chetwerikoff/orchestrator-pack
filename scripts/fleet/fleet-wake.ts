@@ -404,7 +404,7 @@ async function wakeParkedPanes(
   executor: OrcaExecutor,
   store: FleetWakeStateStore,
   log: (line: string) => void,
-  sleepMs: (milliseconds: number) => Promise<void>,
+  sleepMs: (milliseconds: number) => void | Promise<void>,
 ): Promise<void> {
   const findTerminalEnvelope = options.findTerminalEnvelope ?? findTerminalEnvelopeForInvocation;
   const checkRunsCompleted = options.checkRunsCompleted ?? allCheckRunsCompleted;
