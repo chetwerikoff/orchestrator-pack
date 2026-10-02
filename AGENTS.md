@@ -32,6 +32,21 @@ impossibility, or unresolved target ambiguity can stop a direct user instruction
 and final read-back; never fabricate success. A new literal, prompt, path, policy, command, schema,
 or state transition gets one owning authority; point to it instead of copying it.
 
+Working principles for every project the pack drives, target repositories included:
+
+**No bureaucracy.** Do not add checks, confirmations, receipts, ledgers, attestations, refusal
+paths, or state machines whose only job is to certify process. A gate must protect substance
+(wrong code shipping, lost data, a false claim of success); proof that already exists — the
+Issue, its review comments, the PR head, CI, a published smoke report — is never re-certified by
+another artifact. When a bookkeeping gate costs more than it protects, remove it; do not build a
+workaround around it or a new gate on top of it.
+
+**No dead-end blockers.** Never stop at a bare "blocked", "refused", or "cannot". Every blocker
+is reported together with the next allowed steps — fix the input, retry, the manual equivalent,
+another legal route, or the exact decision needed and who makes it — and the unblocked work
+continues. Tools, prompts, and skills you write follow the same rule: a refusal names its next
+allowed action.
+
 ## Target-Repository Embedding and Coexistence
 
 The complete current `orchestrator-pack` `AGENTS.md` is the canonical pack-managed policy payload
@@ -110,17 +125,6 @@ Key rules (detail in the owning sections):
 - [`Local verification`](docs/repository_policy.md#local-verification): run the listed checks and
   affected tests before handoff; require current-head scope guard, required CI, and review where
   applicable — a previous-head success never proves the current head.
-- **No bureaucracy.** Do not add checks, confirmations, receipts, ledgers, attestations, refusal
-  paths, or state machines whose only job is to certify process. A gate must protect substance
-  (wrong code shipping, lost data, a false claim of success); proof that already exists — the
-  Issue, its review comments, the PR head, CI, a published smoke report — is never re-certified by
-  another artifact. When a bookkeeping gate costs more than it protects, remove it; do not build a
-  workaround around it or a new gate on top of it.
-- **No dead-end blockers.** Never stop at a bare "blocked", "refused", or "cannot". Every blocker
-  is reported together with the next allowed steps — fix the input, retry, the manual equivalent,
-  another legal route, or the exact decision needed and who makes it — and the unblocked work
-  continues. Tools, prompts, and skills you write follow the same rule: a refusal names its next
-  allowed action.
 
 ## Coworker CLI delegation
 
