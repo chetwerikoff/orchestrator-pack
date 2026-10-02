@@ -472,7 +472,6 @@
     "docs/declarations/2310.pr-scope.json",
     "docs/declarations/2315.pr-scope.json",
     "docs/declarations/2316.pr-scope.json",
-    "docs/declarations/2317.pr-scope.json",
     "docs/declarations/2318.pr-scope.json",
     "docs/declarations/2319.pr-scope.json",
     "docs/declarations/232.opk-27.json",
@@ -924,6 +923,7 @@
     "docs/worker-report-store.d.mts",
     "docs/worker-report-store.mjs",
     "package.json",
+    "plugins/codex-pr-reviewer/tests/review.test.ts",
     "prompts/investigate_root_cause.md",
     "scripts/ci-green-wake-reconcile.test.ts",
     "scripts/ci-policy-guards.ts",
@@ -1043,5 +1043,5 @@
     "scripts/",
     "tests/external-output-references/"
   ],
-  "source_revision": "b0a9079e0b2977cffbf9e066d52738dde28f9633"
+  "source_revision": "97452e6d11845ebb0c7c049604d3978cc5054dc4"
 }
