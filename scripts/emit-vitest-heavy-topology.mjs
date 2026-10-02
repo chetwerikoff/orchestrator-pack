@@ -89,24 +89,29 @@ function gitHeadParents(repoRoot) {
 
 function resolveChangedPathManifest(repoRoot) {
   const fromEnv = parseChangedPathManifestFromEnv();
-  if (fromEnv) return fromEnv;
+  if (fromEnv?.diffOk) return fromEnv;
+  if (fromEnv && fromEnv.failureReason !== 'changed-path-export-oversized') return fromEnv;
   if (process.env.GITHUB_EVENT_NAME !== 'pull_request') return null;
 
   const parents = gitHeadParents(repoRoot);
-  let baseSha;
-  let headSha;
-  if (parents.length === 2) {
-    [baseSha, headSha] = parents;
-  } else {
-    baseSha = process.env.GITHUB_BASE_REF
-      ? gitRevision(repoRoot, `origin/${process.env.GITHUB_BASE_REF}`)
-      : null;
-    headSha = gitRevision(repoRoot, 'HEAD');
+  let baseSha = fromEnv?.baseSha || null;
+  let headSha = fromEnv?.headSha || null;
+  if (!baseSha || !headSha) {
+    if (parents.length === 2) {
+      [baseSha, headSha] = parents;
+    } else {
+      baseSha = process.env.GITHUB_BASE_REF
+        ? gitRevision(repoRoot, `origin/${process.env.GITHUB_BASE_REF}`)
+        : null;
+      headSha = gitRevision(repoRoot, 'HEAD');
+    }
   }
   if (!baseSha || !headSha) {
     throw new Error('pull-request topology check cannot resolve exact base/head revisions');
   }
-  const manifest = buildChangedPathManifest(repoRoot, baseSha, headSha);
+  const manifest = buildChangedPathManifest(repoRoot, baseSha, headSha, {
+    maxBytes: 8 * 1024 * 1024,
+  });
   if (!manifest.diffOk) {
     throw new Error(
       `pull-request topology check cannot compute changed paths: ${manifest.failureReason ?? 'unknown failure'}`,
