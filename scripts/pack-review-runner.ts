@@ -4055,7 +4055,8 @@ async function commitAtCapTriage(input: {
 
 export async function startPackReview(input: StartInput): Promise<Record<string, unknown>> {
   const requestedProjectId = trim(input.projectId);
-  const bindCanonicalProject = trim(input.surface) === 'pack-gpt-review'
+  const bindCanonicalProject = process.env.OPK_VITEST_HARNESS !== '1'
+    && trim(input.surface) === 'pack-gpt-review'
     && Boolean(requestedProjectId)
     && !trim(process.env.OPK_PROJECT_ID);
   if (!bindCanonicalProject) return startPackReviewImpl(input);
