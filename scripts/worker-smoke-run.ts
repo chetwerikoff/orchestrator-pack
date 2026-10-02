@@ -2,7 +2,7 @@
 
 import './toolchain/native-entrypoint-preflight.ts';
 import { runProcessSync } from './kernel/subprocess.ts';
-import { resolveTargetContext } from './lib/target-context.ts';
+import { resolveTargetContext, type TargetContext } from './lib/target-context.ts';
 import {
   requiredStatusChecksEndpoint,
   resolveRequiredCi,
@@ -242,12 +242,11 @@ function canonicalRepositorySlug(value: unknown): string {
   return slug;
 }
 
-function selectedSmokeProject(): { projectId: string; repository: string; defaultBranch: string } {
+function selectedSmokeProject(): Pick<TargetContext, 'projectId' | 'repository' | 'defaultBranch' | 'requiredCi'> {
   if (process.env.VITEST && !String(process.env.OPK_PROJECT_ID ?? '').trim()) {
     return { projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack', defaultBranch: 'main' };
   }
-  const target = resolveTargetContext({ env: process.env });
-  return { projectId: target.projectId, repository: target.repository, defaultBranch: target.defaultBranch };
+  return resolveTargetContext({ env: process.env });
 }
 
 function selectedSmokeRepositorySlug(): string {
