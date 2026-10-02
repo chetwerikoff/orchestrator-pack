@@ -77,8 +77,8 @@ export interface TerminalEnvelope {
   readonly recovery_available: boolean;
   readonly conversation_locator?: string;
   readonly diagnostics?: Record<string, unknown>;
-  // Launching worktree; fleet-wake wakes that worktree's pane on this envelope.
-  readonly cwd?: string;
+  // Orca terminal of the launching agent; fleet-wake wakes it on this envelope.
+  readonly terminal_handle?: string;
 }
 
 const DEFAULT_CANDIDATE_GRACE_MS = 5_000;
@@ -638,7 +638,8 @@ function scanArtifactForCanaries(path: string, canaries: readonly string[]): str
 
 async function publishEnvelope(config: LaunchConfig, envelope: TerminalEnvelope): Promise<boolean> {
   try {
-    const routed: TerminalEnvelope = { ...envelope, cwd: resolve(config.cwd) };
+    const handle = process.env.ORCA_TERMINAL_HANDLE?.trim();
+    const routed: TerminalEnvelope = handle ? { ...envelope, terminal_handle: handle } : envelope;
     atomicCreateJson(config.terminalEnvelopePath, routed as unknown as Record<string, unknown>, 'envelope');
     return true;
   } catch {

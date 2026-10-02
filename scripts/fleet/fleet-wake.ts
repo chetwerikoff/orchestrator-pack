@@ -2,7 +2,7 @@
 import '../toolchain/native-entrypoint-preflight.ts';
 import { createHash } from 'node:crypto';
 import { runProcessSync } from '../kernel/subprocess.ts';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTargetContext } from '../lib/target-context.ts';
@@ -137,7 +137,6 @@ export interface FleetAlarmTickOptions {
   readonly log?: (line: string) => void;
   readonly readChats?: (cdpUrl: string, scope: ChatBannerScope) => Promise<ProjectChat[]>;
   readonly closeChat?: (cdpUrl: string, targetId: string) => Promise<boolean>;
-  readonly now?: () => number;
   readonly listTerminalEnvelopes?: () => readonly TerminalEnvelopeEvent[];
   readonly listOpenPulls?: (repository: string) => readonly OpenPullHead[];
   readonly checkRunsFinishedAt?: (repository: string, sha: string) => number | undefined;
@@ -251,7 +250,7 @@ export function bannerOwnerPane(
     if (owner) return owner;
   }
   if (!banner.issue) return undefined;
-  const name = new RegExp(`^[a-z][a-z0-9]*-${banner.issue}$`, 'i');
+  const name = new RegExp(`^[a-z][a-z0-9-]*-${banner.issue}$`, 'i');
   const matches = terminals.filter((terminal) => {
     if (!terminal.worktreePath) return false;
     const worktree = terminal.worktreePath.replaceAll('\\', '/');
@@ -330,19 +329,15 @@ export function fleetAlarmMessage(
   return `Fleet alarm (${coordinatorState}):${paneText}${bannerText}${unloadableText}`;
 }
 
-export const WAKE_EVENT_WINDOW_MS = 30 * 60_000;
 const TERMINAL_ENVELOPE_SCHEMA = 'flow-manager-long-running-child-terminal/v1';
 
 export interface TerminalEnvelopeEvent {
   readonly path: string;
   readonly invocationId: string;
-  readonly cwd: string;
+  readonly terminalHandle: string;
 }
 
-export function listRecentTerminalEnvelopes(
-  root = '/tmp/opencode',
-  nowMs = Date.now(),
-): TerminalEnvelopeEvent[] {
+export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeEvent[] {
   const pending = [root];
   const events: TerminalEnvelopeEvent[] = [];
   while (pending.length > 0) {
@@ -361,13 +356,12 @@ export function listRecentTerminalEnvelopes(
       }
       if (!entry.isFile() || !entry.name.endsWith('terminal.json')) continue;
       try {
-        if (nowMs - statSync(path).mtimeMs > WAKE_EVENT_WINDOW_MS) continue;
         const envelope = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
-        if (envelope.schema !== TERMINAL_ENVELOPE_SCHEMA || typeof envelope.cwd !== 'string') continue;
+        if (envelope.schema !== TERMINAL_ENVELOPE_SCHEMA || typeof envelope.terminal_handle !== 'string') continue;
         const invocationId = typeof envelope.observed_invocation_id === 'string'
           ? envelope.observed_invocation_id
           : String(envelope.attempt_identity ?? basename(path));
-        events.push({ path, invocationId, cwd: envelope.cwd });
+        events.push({ path, invocationId, terminalHandle: envelope.terminal_handle });
       } catch {
         // A partial or unrelated terminal artifact is not completion evidence.
       }
@@ -435,25 +429,15 @@ function onlyPane(panes: readonly FleetPaneObservation[]): FleetPaneObservation 
   return agents.length === 1 ? agents[0] : undefined;
 }
 
-function envelopeOwner(cwd: string, panes: readonly FleetPaneObservation[]): FleetPaneObservation | undefined {
-  const target = resolve(cwd).replaceAll('\\', '/');
-  return onlyPane(panes.filter((pane) => {
-    if (!pane.worktreePath) return false;
-    const worktree = resolve(pane.worktreePath).replaceAll('\\', '/');
-    return target === worktree || target.startsWith(`${worktree}/`);
-  }));
-}
-
 function pullOwner(pull: OpenPullHead, panes: readonly FleetPaneObservation[]): FleetPaneObservation | undefined {
   const onBranch = onlyPane(panes.filter((pane) => pane.branch === `refs/heads/${pull.ref}`));
   if (onBranch || !pull.issue) return onBranch;
-  const name = new RegExp(`^[a-z][a-z0-9]*-${pull.issue}$`, 'iu');
+  const name = new RegExp(`^[a-z][a-z0-9-]*-${pull.issue}$`, 'iu');
   return onlyPane(panes.filter((pane) => pane.worktreePath && name.test(basename(pane.worktreePath))));
 }
 
 /**
- * Wakes an idle pane once per event of its own: a GPT turn launched from its
- * worktree ended, or CI finished on the head of a PR it owns. The pane's own
+ * Wakes an idle pane once per event of its own: a GPT turn it launched ended, or CI finished on the head of a PR it owns. The pane's own
  * park-line wording is not consulted.
  */
 async function wakePanesOnEvents(
@@ -464,11 +448,10 @@ async function wakePanesOnEvents(
   log: (line: string) => void,
   sleepMs: (milliseconds: number) => void | Promise<void>,
 ): Promise<void> {
-  const nowMs = (options.now ?? Date.now)();
   const wakes: Array<{ pane: FleetPaneObservation; key: string; message: string }> = [];
-  for (const envelope of (options.listTerminalEnvelopes ?? listRecentTerminalEnvelopes)()) {
+  for (const envelope of (options.listTerminalEnvelopes ?? listTerminalEnvelopes)()) {
     const key = `gpt:${envelope.path}`;
-    const pane = envelopeOwner(envelope.cwd, observations);
+    const pane = observations.find((candidate) => candidate.handle === envelope.terminalHandle);
     if (!pane || !idlePane(pane) || store.hasParkedWakeEvent(key)) continue;
     wakes.push({ pane, key, message: `Wake: GPT turn ${envelope.invocationId} ended, read ${envelope.path}` });
   }
@@ -480,7 +463,7 @@ async function wakePanesOnEvents(
       const pane = pullOwner(pull, observations);
       if (!pane || !idlePane(pane) || store.hasParkedWakeEvent(key)) continue;
       const at = finishedAt(repository, pull.sha);
-      if (at === undefined || nowMs - at > WAKE_EVENT_WINDOW_MS) continue;
+      if (at === undefined) continue;
       wakes.push({ pane, key, message: `Wake: CI on ${pull.sha} finished for PR #${pull.number}` });
     }
   }

@@ -1,12 +1,12 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   FileFleetWakeStateStore,
-  listRecentTerminalEnvelopes,
+  listTerminalEnvelopes,
   fleetAlarmMessage,
   managerBannerMessage,
   runFleetAlarmTick,
@@ -84,7 +84,6 @@ async function tick(input: {
   store?: MemoryWakeStore;
   config?: FleetWakeConfig;
   terminals?: readonly FleetTerminal[];
-  now?: () => number;
   listTerminalEnvelopes?: () => readonly TerminalEnvelopeEvent[];
   listOpenPulls?: (repository: string) => readonly OpenPullHead[];
   checkRunsFinishedAt?: (repository: string, sha: string) => number | undefined;
@@ -100,7 +99,6 @@ async function tick(input: {
     sleepMs: async (ms) => { sleeps.push(ms); },
     log: (line) => { logs.push(line); },
     listTerminalEnvelopes: input.listTerminalEnvelopes ?? (() => []),
-    ...(input.now ? { now: input.now } : {}),
     ...(input.listOpenPulls ? { listOpenPulls: input.listOpenPulls } : {}),
     ...(input.checkRunsFinishedAt ? { checkRunsFinishedAt: input.checkRunsFinishedAt } : {}),
   });
@@ -221,12 +219,12 @@ describe('fleet alarm', () => {
     expect(observed.logs).toContain('nothing stopped');
   });
 
-  it('wakes the idle pane of the launching worktree once per GPT terminal envelope, whatever its park line says', async () => {
+  it('wakes the launching pane once per GPT terminal envelope, whatever its park line says', async () => {
     const store = new MemoryWakeStore();
     const envelope = {
       path: '/tmp/opencode/one-terminal.json',
       invocationId: '887cc977-f28e-4ab1-b498-e4ebced05551',
-      cwd: `${workerBase}/one/scripts`,
+      terminalHandle: 'one',
     };
     const listTerminalEnvelopes = () => [envelope];
     const busy = await tick({
@@ -255,21 +253,18 @@ describe('fleet alarm', () => {
     expect(sendsTo(repeated.calls, 'one')).toHaveLength(0);
   });
 
-  it('lists only recent launcher terminal envelopes that name their worktree', () => {
+  it('lists launcher terminal envelopes that name their terminal', () => {
     const root = mkdtempSync(join(tmpdir(), 'fleet-wake-terminal-'));
     try {
       const nested = join(root, 'nested');
       mkdirSync(nested, { recursive: true });
       const schema = 'flow-manager-long-running-child-terminal/v1';
       const routed = join(nested, 'routed-terminal.json');
-      writeFileSync(routed, JSON.stringify({ schema, observed_invocation_id: 'inv-a', cwd: '/w/one' }), 'utf8');
-      writeFileSync(join(root, 'no-cwd-terminal.json'), JSON.stringify({ schema, observed_invocation_id: 'inv-b' }), 'utf8');
-      const old = join(root, 'old-terminal.json');
-      writeFileSync(old, JSON.stringify({ schema, observed_invocation_id: 'inv-c', cwd: '/w/one' }), 'utf8');
-      const hourAgo = new Date(Date.now() - 60 * 60_000);
-      utimesSync(old, hourAgo, hourAgo);
+      writeFileSync(routed, JSON.stringify({ schema, observed_invocation_id: 'inv-a', terminal_handle: 'term_one' }), 'utf8');
+      writeFileSync(join(root, 'unrouted-terminal.json'), JSON.stringify({ schema, observed_invocation_id: 'inv-b' }), 'utf8');
+      writeFileSync(join(root, 'other-terminal.json'), JSON.stringify({ schema: 'x/v1', terminal_handle: 'term_one' }), 'utf8');
 
-      expect(listRecentTerminalEnvelopes(root)).toEqual([{ path: routed, invocationId: 'inv-a', cwd: '/w/one' }]);
+      expect(listTerminalEnvelopes(root)).toEqual([{ path: routed, invocationId: 'inv-a', terminalHandle: 'term_one' }]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -283,7 +278,7 @@ describe('fleet alarm', () => {
     const owned: FleetTerminal[] = [
       { handle: 'coord', title: 'Cursor coordinator', worktreePath: primary },
       { handle: 'one', title: 'OpenCode manager one', worktreePath: `${workerBase}/one`, branch: 'refs/heads/fix/a' },
-      { handle: 'mgr', title: 'OpenCode manager', worktreePath: `${workerBase}/mgr-2317`, branch: 'refs/heads/chetwerikoff/mgr-2317' },
+      { handle: 'mgr', title: 'OpenCode manager', worktreePath: `${workerBase}/leopoker-mgr-2317`, branch: 'refs/heads/chetwerikoff/mgr-2317' },
     ];
     const wakeConfig = config({
       chatScope: { projectUrl: 'https://chatgpt.com/g/g-p/project/test', repository: 'chetwerikoff/orchestrator-pack' },
@@ -295,25 +290,19 @@ describe('fleet alarm', () => {
     const screens = { coord: 'idle', one: 'PARKED on any text', mgr: 'done for now' };
 
     const first = await tick({
-      screens, store, config: wakeConfig, terminals: owned, now: () => now, listOpenPulls,
+      screens, store, config: wakeConfig, terminals: owned, listOpenPulls,
       checkRunsFinishedAt: (_repository, sha) => sha === headA ? now - 60_000 : undefined,
     });
     expect(sendsTo(first.calls, 'one')[0]).toContain(`Wake: CI on ${headA} finished for PR #7`);
     expect(sendsTo(first.calls, 'mgr')).toHaveLength(0);
 
     const second = await tick({
-      screens, store, config: wakeConfig, terminals: owned, now: () => now, listOpenPulls,
+      screens, store, config: wakeConfig, terminals: owned, listOpenPulls,
       checkRunsFinishedAt: () => now - 60_000,
     });
     expect(sendsTo(second.calls, 'one')).toHaveLength(0);
     expect(sendsTo(second.calls, 'mgr')[0]).toContain(`Wake: CI on ${headB} finished for PR #8`);
 
-    const stale = await tick({
-      screens, store: new MemoryWakeStore(), config: wakeConfig, terminals: owned, now: () => now, listOpenPulls,
-      checkRunsFinishedAt: () => now - 31 * 60_000,
-    });
-    expect(sendsTo(stale.calls, 'one')).toHaveLength(0);
-    expect(sendsTo(stale.calls, 'mgr')).toHaveLength(0);
   });
 
   it('honors ORCH_HANDLE, reports no coordinator when unresolved, and skips a failed screen read without throwing', async () => {
