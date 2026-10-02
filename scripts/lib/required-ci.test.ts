@@ -1,4 +1,5 @@
 // @vitest-ci-lane light
+// @vitest-pre-topology-seconds 60
 import { describe, expect, it, vi } from 'vitest';
 import {
   resolveRequiredCi,
