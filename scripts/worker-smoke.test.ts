@@ -44,6 +44,30 @@ const HEAD_TWO = '2'.repeat(40);
 const TRUSTED_ACTOR = 'pack-publisher';
 const REPOSITORY = 'chetwerikoff/orchestrator-pack';
 
+function sharedGreenRequiredCi(headSha = HEAD_ONE) {
+  return {
+    state: 'green',
+    green: true,
+    source: 'project_card',
+    reason: 'green',
+    expectedHeadSha: headSha,
+    postProjectionHeadSha: headSha,
+    headBinding: 'inferred_current',
+    selectors: [{ kind: 'actions', workflow: 'CI', job: 'checks' }],
+    diagnostics: [],
+  } as const;
+}
+
+describe('Issue #2346 shared required CI smoke integration', () => {
+  it('keeps production smoke on the shared resolver and post-projection head witness', () => {
+    const source = readFileSync(join(process.cwd(), 'scripts', 'worker-smoke-run.ts'), 'utf8');
+    expect(source).toContain('resolveRequiredCi({');
+    expect(source).toContain('readCurrentHead: async () => fetchLivePrHead');
+    expect(source).toContain('requiredStatusChecksEndpoint(repositorySlug, baseRef)');
+    expect(source).not.toContain('classifyRequiredCiLevel(checks');
+  });
+});
+
 describe('Issue #2250 scrubbed report output is redaction-only', () => {
   it('retains a PASS machine report while redacting secret-shaped scenario output', () => {
     const dangerous = 'Authorization: Bearer example-smoke-secret';
@@ -221,7 +245,7 @@ describe('delegated readiness consumes the production post-smoke owner', () => {
         resolveTarget: () => smokeTarget, fetchCurrentHead: () => HEAD_ONE,
         selectAdapter: async () => new DeterministicRuntimeAdapter(),
         readiness: {
-          resolveCiGreen: () => true,
+          resolveRequiredCi: async () => sharedGreenRequiredCi(),
           currentPackReviewStatusFact: () => ({ hasLegitimateReview: true, unresolvedBlockingFinding: false }),
           fetchCurrentHead: () => HEAD_ONE,
           fetchSmokeComments: () => [...comments],
@@ -299,7 +323,7 @@ describe('delegated readiness consumes the production post-smoke owner', () => {
         fetchCurrentHead: () => HEAD_ONE,
         selectAdapter: async () => new DeterministicRuntimeAdapter(),
         readiness: {
-          resolveCiGreen: () => true,
+          resolveRequiredCi: async () => sharedGreenRequiredCi(),
           currentPackReviewStatusFact: () => ({ hasLegitimateReview: true, unresolvedBlockingFinding: false }),
           fetchCurrentHead: () => HEAD_ONE,
           fetchSmokeComments: () => [],
