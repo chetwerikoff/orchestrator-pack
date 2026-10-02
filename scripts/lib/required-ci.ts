@@ -63,6 +63,11 @@ export interface RequiredCiResult {
   readonly diagnostics: readonly string[];
 }
 
+export interface RequiredCiPrWitness {
+  readonly headSha: string;
+  readonly baseRef: string;
+}
+
 export interface ResolveRequiredCiInput {
   readonly target: Pick<TargetContext, 'projectId' | 'repository' | 'defaultBranch' | 'requiredCi'>;
   readonly prNumber: number;
@@ -70,7 +75,7 @@ export interface ResolveRequiredCiInput {
   readonly prBaseRef: string;
   readonly readProtection: () => Promise<RequiredCiProtectionRead>;
   readonly readChecks: () => Promise<readonly RequiredCiCheckRow[]>;
-  readonly readCurrentHead: () => Promise<string>;
+  readonly readCurrentPr: () => Promise<RequiredCiPrWitness>;
 }
 
 const PACK_REPOSITORY = 'chetwerikoff/orchestrator-pack';
@@ -295,8 +300,11 @@ export async function resolveRequiredCi(input: ResolveRequiredCiInput): Promise<
   }
 
   let postProjectionHeadSha = '';
+  let postProjectionBaseRef = '';
   try {
-    postProjectionHeadSha = normalized(await input.readCurrentHead());
+    const postProjection = await input.readCurrentPr();
+    postProjectionHeadSha = normalized(postProjection.headSha);
+    postProjectionBaseRef = display(postProjection.baseRef);
   } catch {
     return result(input, {
       state: 'pending',
@@ -305,7 +313,7 @@ export async function resolveRequiredCi(input: ResolveRequiredCiInput): Promise<
       postProjectionHeadSha: '',
       headBinding: 'unavailable',
       selectors,
-      diagnostics: ['evidence_stale:post_projection_head_unavailable'],
+      diagnostics: ['evidence_stale:post_projection_pr_unavailable'],
     });
   }
   if (!postProjectionHeadSha || postProjectionHeadSha !== expectedHeadSha) {
@@ -322,11 +330,26 @@ export async function resolveRequiredCi(input: ResolveRequiredCiInput): Promise<
       ],
     });
   }
+  if (postProjectionBaseRef !== defaultBranch) {
+    return result(input, {
+      state: 'failure',
+      source,
+      reason: 'base_branch_mismatch',
+      postProjectionHeadSha,
+      headBinding: 'inferred_current',
+      selectors,
+      diagnostics: [
+        `base_branch_mismatch:expected=${defaultBranch}:observed=${postProjectionBaseRef || '<empty>'}`,
+        'evidence_stale',
+      ],
+    });
+  }
 
   // The canonical pr-checks projection does not expose the head it sampled. A
-  // matching pre-bound expected head and immediate post-projection live read
-  // therefore infer current-head binding. The H1 -> H2 -> H1 ABA residual is
-  // intentionally not hidden and this contract adds no second evidence transport.
+  // matching pre-bound expected head/base and immediate post-projection live
+  // PR read therefore infer current-head binding. The H1 -> H2 -> H1 ABA
+  // residual is intentionally not hidden and this contract adds no second
+  // evidence transport.
   const evaluated = evaluateSelectors(selectors, rows);
   return result(input, {
     ...evaluated,
