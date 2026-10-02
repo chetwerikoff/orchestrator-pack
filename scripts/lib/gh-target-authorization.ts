@@ -143,12 +143,19 @@ function repositoryCandidates(argv: readonly string[], env: Readonly<NodeJS.Proc
 }
 
 export function authorizeTargetGhInvocation(input: {
-  context: Pick<TargetContext, 'repository'>;
+  context: Pick<TargetContext, 'repository' | 'defaultBranch'>;
   argv: readonly string[];
   env?: Readonly<NodeJS.ProcessEnv>;
-}): { repository: string; host: 'github.com' } {
+}): { repository: string; defaultBranch: string; host: 'github.com' } {
   const env = input.env ?? process.env;
   const selected = normalizeRepository(input.context.repository);
+  const defaultBranch = String(input.context.defaultBranch ?? '').trim();
+  if (!defaultBranch) {
+    throw new TargetGhAuthorizationError(
+      'target-gh-repository-invalid',
+      'target gh default branch is empty',
+    );
+  }
   requireGithubCom(env.GH_HOST, 'GH_HOST');
 
   if (input.argv[0] === 'api' && input.argv.some((value, index) => index > 0 && value === 'graphql')) {
@@ -168,13 +175,13 @@ export function authorizeTargetGhInvocation(input: {
     }
   }
 
-  return { repository: input.context.repository, host: 'github.com' };
+  return { repository: input.context.repository, defaultBranch, host: 'github.com' };
 }
 
 export function requireTargetGhAuthorization(
   argv: readonly string[] = process.argv.slice(2),
   env: NodeJS.ProcessEnv = process.env,
-): { repository: string; host: 'github.com' } {
+): { repository: string; defaultBranch: string; host: 'github.com' } {
   const projectId = String(env.OPK_PROJECT_ID ?? '').trim();
   if (!projectId) {
     throw new TargetGhAuthorizationError(
@@ -191,7 +198,7 @@ function runCli(): number {
   const normalizedArgv = argv[0] === '--' ? argv.slice(1) : argv;
   try {
     const authorized = requireTargetGhAuthorization(normalizedArgv, process.env);
-    process.stdout.write(`${authorized.repository}\n`);
+    process.stdout.write(`${authorized.repository}\t${authorized.defaultBranch}\n`);
     return 0;
   } catch (error) {
     const code = error instanceof TargetGhAuthorizationError ? error.code : 'target-gh-repository-invalid';
