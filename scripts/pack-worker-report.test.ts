@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath } from './lib/worker-assignment-store.ts';
-import { readWorkerReportStoreFile } from '../docs/worker-report-store.mjs';
+import { readWorkerReportStoreFile } from './pr2-foundation/terminalized/worker-report-store.ts';
 import {
   evaluatePackWorkerReport,
   type ReportDeps,

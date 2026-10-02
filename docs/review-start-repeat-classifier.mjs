@@ -3,7 +3,7 @@
  * Composes with #332/#318 claim and cycle gates — diagnostic only, not a second state machine.
  * Vitest: scripts/review-start-repeat-classifier.test.ts
  */
-import { evaluateReviewCycleGate } from './worker-iteration-cycle.mjs';
+import { evaluateReviewCycleGate } from '../scripts/pr2-foundation/terminalized/worker-iteration-cycle.ts';
 import { evaluateCurrentHeadCoverage } from './orchestrator-claimed-review-run.mjs';
 import { normalizeLegacyReviewRunStatus } from './review-reconcile-primitives.mjs';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';

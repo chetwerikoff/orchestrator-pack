@@ -32,6 +32,7 @@
     "docs/orchestrator-wake-filter.d.ts",
     "docs/orchestrator-wake-filter.mjs",
     "docs/pack-review-issue-898.md",
+    "docs/pack-review-waiver-merge-runbook.md",
     "docs/phase0-audit-retention.md",
     "docs/repository_policy.md",
     "docs/review-bulk-send-diagnose.d.mts",

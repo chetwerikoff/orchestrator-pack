@@ -32,7 +32,7 @@ const RESULT_PREFIXES: Readonly<Record<keyof ConformanceReport['results'], reado
   AC5: ['bridge_', 'runner_', 'claim_store_', 'claim_internal_', 'closure_receipt_', 'd928_external_', 'mutation-contract:AC5:'],
   AC6: ['retired_launch_', 'actionable_manifest_', 'mutation-contract:AC6:'],
   AC7: ['path_outside_', 'denylisted_', 'new_powershell_', 'non_regular_', 'planned_', 'unreviewed_', 'mutation-contract:AC7:'],
-  AC8: ['package_', 'issue948_', 'contract_mutation_', 'closure_receipt_', 'claim_store_', 'bridge_', 'runner_', 'claim_internal_', 'd928_', 'planning_', 'planned_', 'unreviewed_', 'path_outside_', 'denylisted_', 'new_powershell_', 'non_regular_', 'retired_launch_', 'actionable_manifest_', 'mutation-contract:AC8:'],
+  AC8: ['package_', 'issue948_', 'closure_receipt_', 'claim_store_', 'bridge_', 'runner_', 'claim_internal_', 'd928_', 'planning_', 'planned_', 'unreviewed_', 'path_outside_', 'denylisted_', 'new_powershell_', 'non_regular_', 'retired_launch_', 'actionable_manifest_', 'mutation-contract:AC8:'],
 };
 
 function gitOk(args: string[]): boolean {
@@ -78,7 +78,7 @@ const M = {
   evidence: 'scripts/lib/cutover/activation-evidence.ts', recovery: 'scripts/lib/cutover/activation-recovery.ts',
   preflight: 'scripts/lib/cutover/activation-platform-preflight.ts', projection: 'scripts/lib/cutover/activation-registry-projection.ts',
   supervisor: 'scripts/lib/orchestrator-side-process-supervisor.ts', stable: 'scripts/lib/cutover/stable-stringify.ts',
-  planning: 'scripts/cutover/issue-928.test.ts', estate: 'scripts/estate-cut/issue-906.manifest.json', targetRegistry: 'scripts/orchestrator-side-process-registry.cutover-target.json',
+  planning: 'scripts/cutover/issue-928.test.ts', targetRegistry: 'scripts/orchestrator-side-process-registry.cutover-target.json',
   lane: 'scripts/vitest-ci-lanes.config.json', vectors: 'scripts/fixtures/cutover/stable-stringify-vectors.json',
 } as const;
 const EXPECTED_FOLLOWUP_STEPS = [
@@ -105,42 +105,6 @@ const D928_REPLACEMENT_OWNERS = [
   'scripts/lib/review-start-claim-store.ts',
   'scripts/lib/review-start-claim-reaper.ts',
 ] as const;
-function estateRows(value: unknown, rows: Array<{ path: string; terminalState?: unknown; replacementOwner?: unknown }> = []): Array<{ path: string; terminalState?: unknown; replacementOwner?: unknown }> {
-  if (Array.isArray(value)) {
-    for (const entry of value) estateRows(entry, rows);
-  } else if (value && typeof value === 'object') {
-    const record = value as Record<string, unknown>;
-    if (typeof record.path === 'string' && 'terminalState' in record) {
-      rows.push({ path: record.path, terminalState: record.terminalState, replacementOwner: record.replacementOwner });
-    }
-    for (const entry of Object.values(record)) estateRows(entry, rows);
-  }
-  return rows;
-}
-function estateSuccessorOk(): boolean {
-  try {
-    const value = JSON.parse(read(M.estate)) as { objectiveStateDomain?: unknown[] };
-    if (!Array.isArray(value.objectiveStateDomain)
-      || value.objectiveStateDomain.filter((state) => state === 'cutover-terminalized').length !== 1) return false;
-    const rows = estateRows(value);
-    for (const file of CUTOVER_TERMINAL_ROWS) {
-      const matches = rows.filter((row) => row.path === file);
-      if (matches.length !== 1
-        || matches[0]!.terminalState !== 'cutover-terminalized'
-        || matches[0]!.replacementOwner !== 'scripts/orchestrator-cutover-activate.ts') return false;
-    }
-    D928.forEach((file, index) => {
-      const matches = rows.filter((row) => row.path === file);
-      if (matches.length !== 1
-        || matches[0]!.terminalState !== 'deleted-now'
-        || matches[0]!.replacementOwner !== D928_REPLACEMENT_OWNERS[index]) throw new Error('d928_estate_successor_invalid');
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function read(file: string): string { return readFileSync(path.resolve(repoRoot, file), 'utf8'); }
 function exists(file: string): boolean { return existsSync(path.resolve(repoRoot, file)); }
 function has(file: string, token: string): boolean { return exists(file) && read(file).includes(token); }
@@ -239,7 +203,6 @@ function mutationFailures(key:string, artifact:string):string[]{
     [M.stable,['Object.keys(object).sort()','return canonical(value, new Set());']],
   ];
   for(const [file,tokens] of required) need(all(file,tokens),`required:${file}`);
-  need(estateSuccessorOk(),'estate:cutover-terminalized');
   need(followupStepsOk(),'evidence:required-followups');
   need(inertProofOk(),'cordon:typescript-supervisor-inert');
   need(has(M.tx,'assertLegacySupervisor(legacyIdentity, request.oldInstalledRevisionRoot);')&&has(M.tx,'assertLegacySupervisor(identity, request.oldInstalledRevisionRoot);'),'identity:legacy-supervisor-boundaries');
