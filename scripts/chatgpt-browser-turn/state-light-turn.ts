@@ -14,6 +14,7 @@ import {
   type ExecutionRecoveryProductCause,
 } from './ui-adapter.ts';
 import { writeChatBinding } from './chat-bindings.ts';
+import { BROWSER_TURN_CANCELLATION_RECEIPT_SCHEMA } from './state-light-cancellation.ts';
 
 const DEFAULT_TIMEOUT_MS = 1_800_000;
 const EXECUTION_RECOVERY_CAUSES = new Set<ExecutionRecoveryProductCause>([
@@ -65,7 +66,7 @@ function projectStdoutChunk(chunk: unknown): unknown {
   return `${projected.join('\n')}${trailingNewline ? '\n' : ''}`;
 }
 
-function recordChatBindings(chunk: unknown): void {
+export function recordChatBindings(chunk: unknown): void {
   const text = typeof chunk === 'string'
     ? chunk
     : chunk instanceof Uint8Array
@@ -78,6 +79,10 @@ function recordChatBindings(chunk: unknown): void {
       const parsed = JSON.parse(line) as Record<string, unknown>;
       if (parsed?.schema === 'turn-result/v1' && typeof parsed.conversation_id === 'string') {
         writeChatBinding(parsed.conversation_id, process.cwd());
+      } else if (parsed?.schema === BROWSER_TURN_CANCELLATION_RECEIPT_SCHEMA
+        && typeof parsed.conversation_url === 'string') {
+        // A fresh chat must be routable while its first turn is still running.
+        writeChatBinding(parsed.conversation_url, process.cwd());
       }
     } catch {
       // Routing data is best-effort and never alters the turn result.

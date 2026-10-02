@@ -9,6 +9,7 @@ import {
   __testFinalizeTurn,
   __testPublishStateLightReply,
   type CompactTurnResult,
+  recordChatBindings,
   runStateLightTurn,
 } from './state-light-turn.ts';
 import { BEFORE_CDP_BROWSER_RELEASE, releaseCdpBrowser } from './browser-session.ts';
@@ -347,6 +348,28 @@ describe('Issue #1238 publication boundary', () => {
     } finally {
       foreignTargetOpen = true;
       stdout.mockRestore();
+      vi.unstubAllEnvs();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Issue #2340 early chat binding', () => {
+  it('binds a fresh chat from the cancellation receipt before the turn result', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2340-binding-'));
+    const chatUrl = 'https://chatgpt.com/c/123e4567-e89b-12d3-a456-426614174040';
+    vi.stubEnv('XDG_STATE_HOME', join(root, 'state'));
+    try {
+      recordChatBindings(`${JSON.stringify({
+        schema: 'browser-turn-cancellation-receipt/v1',
+        invocation_id: 'inv-2340',
+        configured_profile_key: 'profile',
+        conversation_url: chatUrl,
+        marker: 'marker',
+        send_count: 1,
+      })}\n`);
+      expect(readChatBinding(chatUrl)?.worktree).toBe(process.cwd());
+    } finally {
       vi.unstubAllEnvs();
       rmSync(root, { recursive: true, force: true });
     }
