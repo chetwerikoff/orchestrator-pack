@@ -2,9 +2,8 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 2338,
   "declared_paths": [
-    "scripts/lib/pack-gpt-source-comment.ts",
     "scripts/lib/pack-gpt-source-comment.cases.ts",
-    "docs/declarations/2338.pr-scope.json"
+    "scripts/lib/pack-gpt-source-comment.ts"
   ],
   "denylist": [
     "credentials/",
@@ -13,9 +12,9 @@
     "vendor/"
   ],
   "allowed_roots": [
-    "scripts/lib/pack-gpt-source-comment.ts",
+    "scripts/lib/pack-gpt-source-comment-contract.ts",
     "scripts/lib/pack-gpt-source-comment.cases.ts",
-    "docs/declarations/2338.pr-scope.json"
+    "scripts/lib/pack-gpt-source-comment.ts"
   ],
-  "source_revision": "b3c2d924259f1f56b4fe03e82ac6950fd76049d7"
+  "source_revision": "ad05668a2461a6be91803d406307498a1cb2af83"
 }
