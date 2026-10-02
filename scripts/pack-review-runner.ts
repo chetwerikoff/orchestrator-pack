@@ -194,6 +194,7 @@ interface StartInput {
     contexts?: unknown[];
     checks?: Array<string | { context?: string }>;
   } | null;
+  fixtureRequiredCiPolicyHttpStatus?: number;
   fixtureRequiredCiHeadAfterGate?: string;
   fixturePrState?: string;
   fixturePrBody?: string;
@@ -779,14 +780,20 @@ export async function manualPackReviewRequiredCiGreen(input: {
   target: { prNumber: number; headSha: string; repoSlug: string; sourceRepoRoot: string; prBaseRef: string };
 }): Promise<boolean> {
   const harness = process.env.OPK_VITEST_HARNESS === '1';
-  let policy: Record<string, unknown>;
+  let policy: Record<string, unknown> | null = null;
   let checks: ManualPackReviewCiCheck[];
 
   if (harness) {
     const fixturePolicy = input.startInput.fixtureRequiredCiPolicy;
+    const fixturePolicyHttpStatus = input.startInput.fixtureRequiredCiPolicyHttpStatus;
     const fixtureChecks = input.startInput.fixtureRequiredCiChecks;
-    if (!fixturePolicy || !Array.isArray(fixtureChecks)) return false;
-    policy = fixturePolicy as Record<string, unknown>;
+    if (!Array.isArray(fixtureChecks)) return false;
+    if (fixturePolicyHttpStatus !== undefined) {
+      if (fixturePolicyHttpStatus !== 403 && fixturePolicyHttpStatus !== 404) return false;
+    } else {
+      if (!fixturePolicy) return false;
+      policy = fixturePolicy as Record<string, unknown>;
+    }
     checks = fixtureChecks;
   } else {
     const policyResult = await runProcess({
@@ -797,13 +804,17 @@ export async function manualPackReviewRequiredCiGreen(input: {
       allowEmptyStdout: false,
       timeoutMs: 30_000,
     });
-    if (!policyResult.ok) return false;
-    try {
-      const parsed = JSON.parse(policyResult.stdout) as unknown;
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
-      policy = parsed as Record<string, unknown>;
-    } catch {
-      return false;
+    if (!policyResult.ok) {
+      const policyFailure = `${policyResult.stderr}\n${policyResult.stdout}`;
+      if (!/\bHTTP\s+(?:403|404)\b/i.test(policyFailure)) return false;
+    } else {
+      try {
+        const parsed = JSON.parse(policyResult.stdout) as unknown;
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+        policy = parsed as Record<string, unknown>;
+      } catch {
+        return false;
+      }
     }
 
     const checksResult = await runProcess({
@@ -828,7 +839,9 @@ export async function manualPackReviewRequiredCiGreen(input: {
     }
   }
 
-  const required = reviewIndependentRequiredCheckNames(policy);
+  const required = policy
+    ? reviewIndependentRequiredCheckNames(policy)
+    : { all: ['checks'], reviewIndependent: ['checks'] };
   const level = required.all.length > 0 && required.reviewIndependent.length === 0
     ? 'green'
     : classifyRequiredCiLevel(checks, { requiredCheckNames: required.reviewIndependent });
