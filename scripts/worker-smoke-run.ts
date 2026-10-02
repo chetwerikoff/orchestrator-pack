@@ -1,9 +1,16 @@
 #!/usr/bin/env -S node --experimental-strip-types
 
 import './toolchain/native-entrypoint-preflight.ts';
-import { classifyRequiredCiLevel } from '../docs/review-ready-stuck-guard.mjs';
 import { runProcessSync } from './kernel/subprocess.ts';
 import { resolveTargetContext } from './lib/target-context.ts';
+import {
+  requiredStatusChecksEndpoint,
+  resolveRequiredCi,
+  reviewIndependentRequiredCiContexts,
+  type RequiredCiProtectionRead,
+  type RequiredCiResult,
+} from './lib/required-ci.ts';
+export { reviewIndependentRequiredCiContexts } from './lib/required-ci.ts';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from './pr-scope-contract.ts';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -423,28 +430,48 @@ export function publishPrComment(
   }
 }
 
-export function reviewIndependentRequiredCiContexts(contexts: readonly unknown[]): string[] {
-  const reviewContext = PACK_REVIEW_REQUIRED_STATUS_CONTEXT.toLowerCase();
-  return contexts.map((value) => String(value ?? '').trim()).filter((value) => Boolean(value) && value.toLowerCase() !== reviewContext);
-}
-
-export function resolveCiGreen(prNumber: number, headSha: string, repositorySlug: string, repoRoot: string): boolean {
+export async function resolveRequiredCiForCurrentHead(
+  prNumber: number,
+  headSha: string,
+  repositorySlug: string,
+  repoRoot: string,
+): Promise<RequiredCiResult> {
   const pr = githubApiObject('pr-view-head-base', `repos/${repositorySlug}/pulls/${prNumber}`, repoRoot);
-  const head = pr.head && typeof pr.head === 'object' && !Array.isArray(pr.head) ? pr.head as Record<string, unknown> : {};
   const base = pr.base && typeof pr.base === 'object' && !Array.isArray(pr.base) ? pr.base as Record<string, unknown> : {};
-  if (positiveInteger(pr.number) !== prNumber || String(pr.state ?? '').toLowerCase() !== 'open'
-    || String(head.sha ?? '').trim().toLowerCase() !== headSha.trim().toLowerCase()) return false;
-  const checks = JSON.parse(requireProcessOutput('required-ci-checks', runSmokeGhSync(
-    ['pr', 'checks', String(prNumber), '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description'], repoRoot,
-  ))) as { name?: string; state?: string; bucket?: string }[];
-  const baseRef = String(base.ref ?? 'main').trim() || 'main';
-  let requiredCheckNames: string[] = [];
-  let requiredCheckLookupFailed = false;
-  try {
-    const protection = githubApiObject('required-status-checks', `repos/${repositorySlug}/branches/${baseRef}/protection/required_status_checks`, repoRoot);
-    requiredCheckNames = reviewIndependentRequiredCiContexts(Array.isArray(protection.contexts) ? protection.contexts : []);
-  } catch { requiredCheckLookupFailed = true; }
-  return classifyRequiredCiLevel(checks, { requiredCheckNames, requiredCheckLookupFailed }) === 'green';
+  if (positiveInteger(pr.number) !== prNumber || String(pr.state ?? '').toLowerCase() !== 'open') {
+    throw new Error('required_ci_target_unavailable');
+  }
+  const baseRef = String(base.ref ?? '').trim();
+  const selected = selectedSmokeProject();
+  if (selected.repository.toLowerCase() !== repositorySlug.toLowerCase()) {
+    throw new Error('required_ci_repository_binding_mismatch');
+  }
+
+  const readProtection = async (): Promise<RequiredCiProtectionRead> => {
+    const response = runSmokeGhSync(['api', requiredStatusChecksEndpoint(repositorySlug, baseRef)], repoRoot);
+    if (!response.ok) {
+      const match = `${response.stderr}\n${response.stdout}`.match(/\bHTTP\s+(403|404)\b/iu);
+      if (match) return { kind: 'unavailable', httpStatus: Number(match[1]) as 403 | 404 };
+      throw new Error('required_ci_protection_lookup_failed');
+    }
+    const parsed = JSON.parse(response.stdout) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('required_ci_protection_lookup_invalid');
+    }
+    return { kind: 'ok', policy: parsed as Record<string, unknown> };
+  };
+
+  return resolveRequiredCi({
+    target: selected,
+    prNumber,
+    expectedHeadSha: headSha,
+    prBaseRef: baseRef,
+    readProtection,
+    readChecks: async () => JSON.parse(requireProcessOutput('required-ci-checks', runSmokeGhSync(
+      ['pr', 'checks', String(prNumber), '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description'], repoRoot,
+    ))) as Array<{ name?: string; workflow?: string; state?: string; conclusion?: string; status?: string; bucket?: string }>,
+    readCurrentHead: async () => fetchLivePrHead(prNumber, repositorySlug, repoRoot),
+  });
 }
 
 function sameReviewIdentifier(left: unknown, right: unknown): boolean {
@@ -546,7 +573,7 @@ export interface PostSmokeReadinessResult {
   readonly smokeEvidence: { readonly state: 'verified' | 'missing' | 'unavailable' | 'changed'; readonly headSha: string };
 }
 export interface PostSmokeReadinessDependencies {
-  readonly resolveCiGreen?: typeof resolveCiGreen;
+  readonly resolveRequiredCi?: typeof resolveRequiredCiForCurrentHead;
   readonly currentPackReviewStatusFact?: typeof currentPackReviewStatusFact;
   readonly isAncestor?: typeof githubCommitIsAncestor;
   readonly fetchSmokeComments?: typeof fetchPrComments;
@@ -625,7 +652,13 @@ export async function evaluatePostSmokeReadiness(
     smokeObservationAvailable = false;
   }
 
-  const ciGreen = (dependencies.resolveCiGreen ?? resolveCiGreen)(target.prNumber, target.headSha, target.repositorySlug, options.repoRoot);
+  const requiredCi = await (dependencies.resolveRequiredCi ?? resolveRequiredCiForCurrentHead)(
+    target.prNumber,
+    target.headSha,
+    target.repositorySlug,
+    options.repoRoot,
+  );
+  const ciGreen = requiredCi.green;
   const acceptedReport = selectAcceptedCurrentWorkerReport(workerReports, readinessTarget);
   const lifecycle = String(acceptedReport?.reportState ?? '').trim().toLowerCase();
   const transport = createGithubReviewTransport({ repoRoot: options.repoRoot, repoSlug: target.repositorySlug, prNumber: target.prNumber });
