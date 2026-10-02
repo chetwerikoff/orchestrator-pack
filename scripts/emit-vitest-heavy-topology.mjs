@@ -110,7 +110,7 @@ function resolveChangedPathManifest(repoRoot) {
     throw new Error('pull-request topology check cannot resolve exact base/head revisions');
   }
   const manifest = buildChangedPathManifest(repoRoot, baseSha, headSha, {
-    maxBytes: Number.POSITIVE_INFINITY,
+    maxBytes: 8 * 1024 * 1024,
   });
   if (!manifest.diffOk) {
     throw new Error(
