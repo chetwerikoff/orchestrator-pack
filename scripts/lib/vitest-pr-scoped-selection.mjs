@@ -215,6 +215,10 @@ export function buildChangedPathManifest(repoRoot, baseSha, headSha, options = {
     });
   }
 
+  if (options.includeDeleted !== true) {
+    entries = entries.filter((entry) => entry.status !== 'D');
+  }
+
   const manifest = {
     version: MANIFEST_VERSION,
     baseSha: normalizedBase,
@@ -350,7 +354,7 @@ function decodeAnalyzableSourceContent(absolute) {
   return content;
 }
 
-function resolveLocalModulePath(fromFile, specifier) {
+function resolveLocalModulePath(repoRoot, fromFile, specifier, missingSourcePaths = new Set()) {
   if (!specifier.startsWith('.')) {
     return null;
   }
@@ -373,9 +377,14 @@ function resolveLocalModulePath(fromFile, specifier) {
       return candidate;
     }
   }
+  for (const candidate of candidates) {
+    const relCandidate = normalizePath(relative(repoRoot, candidate));
+    if (relCandidate && !relCandidate.startsWith('..') && missingSourcePaths.has(relCandidate)) {
+      return candidate;
+    }
+  }
   return null;
 }
-
 function resolveModuleCandidates(base) {
   const extMatch = base.match(/(\.[^/.]+)$/);
   const stem = extMatch ? base.slice(0, -extMatch[1].length) : base;
@@ -433,7 +442,7 @@ function listFirstPartyPackageRoots(repoRoot) {
   return packageRoots;
 }
 
-function resolveBareFirstPartyModulePaths(repoRoot, specifier, packageRoots) {
+function resolveBareFirstPartyModulePaths(repoRoot, specifier, packageRoots, missingSourcePaths = new Set()) {
   let matchedPackage = null;
   for (const packageName of packageRoots.keys()) {
     if (specifier === packageName || specifier.startsWith(`${packageName}/`)) {
@@ -453,11 +462,11 @@ function resolveBareFirstPartyModulePaths(repoRoot, specifier, packageRoots) {
     : join(repoRoot, packageRoot, 'index');
   const resolved = [];
   for (const candidate of resolveModuleCandidates(base)) {
-    if (!existsSync(candidate)) {
-      continue;
-    }
     const relPath = normalizePath(relative(repoRoot, candidate));
     if (!relPath || relPath.startsWith('..') || !isSourceLikePath(relPath)) {
+      continue;
+    }
+    if (!existsSync(candidate) && !missingSourcePaths.has(relPath)) {
       continue;
     }
     resolved.push(relPath);
@@ -495,7 +504,7 @@ function listFirstPartySourceFiles(repoRoot) {
   return files.sort();
 }
 
-function buildDependencyGraph(repoRoot) {
+function buildDependencyGraph(repoRoot, missingSourcePaths = new Set()) {
   const nodes = new Map();
   const reverse = new Map();
   const bareImportTargets = new Map();
@@ -514,7 +523,7 @@ function buildDependencyGraph(repoRoot) {
     let establishable = collected.establishable;
     for (const specifier of collected.specifiers) {
       if (!specifier.startsWith('.')) {
-        const resolvedBareImports = resolveBareFirstPartyModulePaths(repoRoot, specifier, packageRoots);
+        const resolvedBareImports = resolveBareFirstPartyModulePaths(repoRoot, specifier, packageRoots, missingSourcePaths);
         if (resolvedBareImports.length > 0 || specifier.startsWith('@orchestrator-pack/')) {
           establishable = false;
         }
@@ -526,7 +535,7 @@ function buildDependencyGraph(repoRoot) {
         }
         continue;
       }
-      const resolved = resolveLocalModulePath(absolute, specifier);
+      const resolved = resolveLocalModulePath(repoRoot, absolute, specifier, missingSourcePaths);
       if (!resolved) {
         establishable = false;
         continue;
@@ -568,8 +577,8 @@ function classifyBroadDiff(manifest, mode) {
     };
   }
 
-  const entries = manifest.entries;
-  if (entries.length === 0) {
+  const allEntries = manifest.entries;
+  if (allEntries.length === 0) {
     return {
       className: 'source-only',
       wouldRunMode: 'scoped',
@@ -577,7 +586,7 @@ function classifyBroadDiff(manifest, mode) {
     };
   }
 
-  if (entries.some((entry) => isWorkflowConfigPath(entry.path))) {
+  if (allEntries.some((entry) => isWorkflowConfigPath(entry.path))) {
     return {
       className: 'workflow/config',
       wouldRunMode: 'full',
@@ -585,7 +594,7 @@ function classifyBroadDiff(manifest, mode) {
     };
   }
 
-  if (entries.some((entry) => SELF_REFERENTIAL_PATHS.has(entry.path))) {
+  if (allEntries.some((entry) => SELF_REFERENTIAL_PATHS.has(entry.path))) {
     return {
       className: 'mixed/cross-cutting',
       wouldRunMode: 'full',
@@ -593,22 +602,31 @@ function classifyBroadDiff(manifest, mode) {
     };
   }
 
-  if (entries.some((entry) => entry.status === 'R' || entry.status === 'D' || entry.status === 'T' || entry.status === 'C')) {
-    const renameDeleteOnly = entries.every(
-      (entry) => entry.status === 'R' || entry.status === 'D' || entry.status === 'T' || entry.status === 'C',
-    );
-    return {
-      className: renameDeleteOnly ? 'rename/delete-only' : 'mixed/cross-cutting',
-      wouldRunMode: 'full',
-      reason: renameDeleteOnly ? 'rename-delete-only-change' : 'rename-delete-with-content-change',
-    };
-  }
-
-  if (entries.some((entry) => isGeneratedOrVendoredPath(entry.path))) {
+  if (allEntries.some((entry) => isGeneratedOrVendoredPath(entry.path))) {
     return {
       className: 'mixed/cross-cutting',
       wouldRunMode: 'full',
       reason: 'generated-or-vendored-surface',
+    };
+  }
+
+  const entries = allEntries.filter((entry) => entry.status !== 'D');
+  if (entries.length === 0) {
+    return {
+      className: 'source-only',
+      wouldRunMode: 'scoped',
+      reason: 'delete-only-diff',
+    };
+  }
+
+  if (entries.some((entry) => entry.status === 'R' || entry.status === 'T' || entry.status === 'C')) {
+    const renameTypeCopyOnly = entries.every(
+      (entry) => entry.status === 'R' || entry.status === 'T' || entry.status === 'C',
+    );
+    return {
+      className: renameTypeCopyOnly ? 'rename/delete-only' : 'mixed/cross-cutting',
+      wouldRunMode: 'full',
+      reason: renameTypeCopyOnly ? 'rename-delete-only-change' : 'rename-delete-with-content-change',
     };
   }
 
@@ -637,8 +655,7 @@ function classifyBroadDiff(manifest, mode) {
   }
   return { className: 'source-only', wouldRunMode: 'scoped', reason: mode === 'shadow' ? 'source-only-diff' : 'source-only-diff' };
 }
-
-function collectImpactedTests(startPath, reverseGraph, graphNodes) {
+function collectImpactedTests(startPath, reverseGraph, graphNodes, options = {}) {
   const queue = [startPath];
   const visited = new Set();
   const impactedTests = new Set();
@@ -653,10 +670,10 @@ function collectImpactedTests(startPath, reverseGraph, graphNodes) {
 
     const node = graphNodes.get(current);
     if (!node) {
-      lowConfidence = true;
-      continue;
-    }
-    if (!node.establishable) {
+      if (!(options.allowMissingStart === true && current === startPath)) {
+        lowConfidence = true;
+      }
+    } else if (!node.establishable) {
       lowConfidence = true;
     }
     if (isTestFile(current)) {
@@ -669,7 +686,6 @@ function collectImpactedTests(startPath, reverseGraph, graphNodes) {
 
   return { impactedTests, lowConfidence };
 }
-
 export function resolveVitestPrScopeSelection(input) {
   const {
     repoRoot,
@@ -719,11 +735,35 @@ export function resolveVitestPrScopeSelection(input) {
     return provenance;
   }
 
-  const graph = buildDependencyGraph(repoRoot);
+  const deletedSourcePaths = new Set(
+    changedPathManifest.entries
+      .filter((entry) => entry.status === 'D' && isSourceLikePath(entry.path))
+      .map((entry) => entry.path),
+  );
+  const graph = buildDependencyGraph(repoRoot, deletedSourcePaths);
   const impacted = new Set();
   let lowConfidence = false;
 
   for (const entry of changedPathManifest.entries) {
+    if (entry.status === 'D') {
+      if (isMarkdownPath(entry.path)) {
+        continue;
+      }
+      if (!isSourceLikePath(entry.path)) {
+        lowConfidence = true;
+        continue;
+      }
+      const closure = collectImpactedTests(entry.path, graph.reverse, graph.nodes, {
+        allowMissingStart: true,
+      });
+      lowConfidence = lowConfidence || closure.lowConfidence;
+      for (const testPath of closure.impactedTests) {
+        if (heavySet.has(testPath)) {
+          impacted.add(testPath);
+        }
+      }
+      continue;
+    }
     if (isMarkdownPath(entry.path)) {
       continue;
     }
@@ -749,7 +789,6 @@ export function resolveVitestPrScopeSelection(input) {
       impacted.add(entry.path);
     }
   }
-
   if (lowConfidence) {
     return {
       ...provenance,
