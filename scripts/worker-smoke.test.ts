@@ -62,7 +62,7 @@ describe('Issue #2346 shared required CI smoke integration', () => {
   it('keeps production smoke on the shared resolver and post-projection head witness', () => {
     const source = readFileSync(join(process.cwd(), 'scripts', 'worker-smoke-run.ts'), 'utf8');
     expect(source).toContain('resolveRequiredCi({');
-    expect(source).toContain('readCurrentHead: async () => fetchLivePrHead');
+    expect(source).toContain('readCurrentPr: async () => fetchLivePrBinding');
     expect(source).toContain('requiredStatusChecksEndpoint(repositorySlug, baseRef)');
     expect(source).not.toContain('classifyRequiredCiLevel(checks');
   });
@@ -495,6 +495,33 @@ describe('publishPrComment', () => {
       expect(buildSmokeGhChildEnv({})).toEqual({});
     } finally {
       restoreProject();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['pending', 8],
+    ['failed', 1],
+  ] as const)('accepts canonical pr-checks %s exit without retrying transport', (_label, exitCode) => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-gh-pr-checks-'));
+    const gh = join(root, 'gh');
+    const callsFile = join(root, 'calls.txt');
+    executable(gh, `#!${process.execPath}\nconst { appendFileSync } = require('node:fs');\nappendFileSync(${JSON.stringify(callsFile)}, 'call\\n', 'utf8');\nprocess.stdout.write(JSON.stringify([{ workflow: 'CI', name: 'checks', state: '${exitCode === 8 ? 'PENDING' : 'FAILURE'}' }]));\nprocess.exitCode = ${exitCode};\n`);
+    try {
+      const result = runSmokeGhProcess(
+        gh,
+        ['pr', 'checks', '2001'],
+        root,
+        buildSmokeGhChildEnv({}),
+        500,
+        [0, 1, 8],
+      );
+      expect(result.exitCode).toBe(exitCode);
+      expect(JSON.parse(result.stdout)).toEqual([
+        expect.objectContaining({ workflow: 'CI', name: 'checks' }),
+      ]);
+      expect(readFileSync(callsFile, 'utf8').trim().split(/\r?\n/u)).toHaveLength(1);
+    } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
