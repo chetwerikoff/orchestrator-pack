@@ -1,0 +1,25 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2353,
+  "declared_paths": [
+    "docs/declarations/2353.pr-scope.json",
+    "scripts/chatgpt-browser-turn/browser-session.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/chatgpt-browser-turn/browser-session.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/flow-manager-long-running-child.test.ts"
+  ],
+  "source_revision": "c994e0b0ebaf645b7b76f87334279b41c03e1b9f"
+}
