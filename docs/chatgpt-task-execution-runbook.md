@@ -239,7 +239,8 @@ take a continuation: the hint asks for GitHub-first reconciliation and a new
 chat with the reconciled baseline (a PR-review chat restarts the review in a
 new chat); never press `Try again`. The
 binding (`scripts/chatgpt-browser-turn/chat-bindings.ts`, one file per
-conversation under `~/.local/state/orchestrator-fleet/chat-bindings/`) is
+conversation under `$HOME/.local/state/orchestrator-fleet/chat-bindings/`,
+independent of `XDG_STATE_HOME`, which opencode agents run isolated) is
 written by the turn entry from the launching worktree; without one, the chat's opening Issue URL is
 matched to a workspace ending in `-<Issue>`. The binding is routing data only
 and carries no send, retry, or completion authority. When a task moves to a

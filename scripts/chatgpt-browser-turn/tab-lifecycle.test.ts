@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import * as ts from 'typescript';
@@ -285,7 +285,7 @@ describe('Issue #1238 publication boundary', () => {
     const output = join(root, 'reply.txt');
     const reply = 'production entrypoint publication';
     const chatUrl = 'https://chatgpt.com/c/123e4567-e89b-12d3-a456-426614174003';
-    vi.stubEnv('XDG_STATE_HOME', join(root, 'state'));
+    vi.stubEnv('HOME', join(root, 'home'));
     writeFileSync(input, 'prompt', 'utf8');
     let pageCloseCalls = 0;
     let browserCloseCalls = 0;
@@ -358,7 +358,8 @@ describe('Issue #2340 early chat binding', () => {
   it('binds a fresh chat from the cancellation receipt before the turn result', () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-2340-binding-'));
     const chatUrl = 'https://chatgpt.com/c/123e4567-e89b-12d3-a456-426614174040';
-    vi.stubEnv('XDG_STATE_HOME', join(root, 'state'));
+    vi.stubEnv('HOME', join(root, 'home'));
+    vi.stubEnv('XDG_STATE_HOME', join(root, 'isolated-agent-state'));
     try {
       recordChatBindings(`${JSON.stringify({
         schema: 'browser-turn-cancellation-receipt/v1',
@@ -369,6 +370,8 @@ describe('Issue #2340 early chat binding', () => {
         send_count: 1,
       })}\n`);
       expect(readChatBinding(chatUrl)?.worktree).toBe(process.cwd());
+      expect(existsSync(join(root, 'home', '.local', 'state', 'orchestrator-fleet', 'chat-bindings', '123e4567-e89b-12d3-a456-426614174040.json'))).toBe(true);
+      expect(existsSync(join(root, 'isolated-agent-state'))).toBe(false);
     } finally {
       vi.unstubAllEnvs();
       rmSync(root, { recursive: true, force: true });
