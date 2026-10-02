@@ -192,7 +192,7 @@ describe('Issue #2353 continuation tab bootstrap', () => {
         baselineUserNodeCount: 0,
         sendWaitMs: 1_000,
         invocationDeadlineMs: Date.now() + 5_000,
-        deliveryProofWaitMs: 0,
+        deliveryProofWaitMs: 1_000,
       });
       expect(delivery.sendCount).toBe(1);
       expect(turnPage.getSendClicks()).toBe(1);
