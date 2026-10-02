@@ -136,6 +136,17 @@ function expectedIssueUrl(identity: PackGptSourceIdentity): string {
   return `https://api.github.com/repos/${identity.repository}/issues/${identity.prNumber}`;
 }
 
+function matchesExpectedIssueUrl(issueUrl: string, identity: PackGptSourceIdentity): boolean {
+  const expected = expectedIssueUrl(identity);
+  const repositoryStart = 'https://api.github.com/repos/'.length;
+  const repositoryEnd = repositoryStart + identity.repository.length;
+  return issueUrl.length === expected.length
+    && issueUrl.slice(0, repositoryStart) === expected.slice(0, repositoryStart)
+    && issueUrl.slice(repositoryStart, repositoryEnd).toLowerCase()
+      === expected.slice(repositoryStart, repositoryEnd).toLowerCase()
+    && issueUrl.slice(repositoryEnd) === expected.slice(repositoryEnd);
+}
+
 function sameCommentSnapshot(left: PackGptSourceGithubComment, right: PackGptSourceGithubComment): boolean {
   return left.id === right.id
     && left.body === right.body
@@ -170,7 +181,7 @@ function parseCredentialableComment(
   // Principal filtering intentionally precedes uniqueness. A foreign copy of the
   // exact marker is never credentialable and cannot manufacture ambiguity.
   if (comment.actorLogin !== actorLogin) return null;
-  if (comment.issueUrl !== expectedIssueUrl(identity)) return { conflict: 'source_comment_wrong_target' };
+  if (!matchesExpectedIssueUrl(comment.issueUrl, identity)) return { conflict: 'source_comment_wrong_target' };
   if (comment.createdAt !== comment.updatedAt) return { conflict: 'source_comment_edited' };
 
   const envelope = parsePackGptSourceCommentEnvelope(comment.body);
