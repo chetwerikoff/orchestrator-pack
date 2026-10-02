@@ -146,7 +146,7 @@ When the operator orders a review, run the pack-owned runner **from the trusted
 pack checkout**, never from the reviewed worktree:
 
 ```bash
-node --experimental-strip-types scripts/pack-review-runner.ts start --pr-number <n>
+npm run --silent pack-gpt-review -- --project <PROJECT_ID> --pr-number <n>
 ```
 
 `--pr-number` is the canonical target for both worker and direct architect PRs.
