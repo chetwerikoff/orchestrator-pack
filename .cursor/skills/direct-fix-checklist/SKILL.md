@@ -111,8 +111,7 @@ Three shapes exist, and the diff decides which one you are in —
   diff content alone. No snapshot, no signal, and the body must reference **no**
   issue at all; any issue link fails the guard.
 
-The markdown union is `docs/issues_drafts/**/*.md`, `docs/issue_queue_index.md`,
-`docs/architecture.md`, `.claude/skills/**/*.md`, and `.cursor/skills/**/*.md`.
+The markdown union is `docs/architecture.md`, `.claude/skills/**/*.md`, and `.cursor/skills/**/*.md`.
 A single path outside it drops the whole PR to the implementation shape.
 
 ## Pre-push local self-check

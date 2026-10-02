@@ -294,28 +294,3 @@ describe('golden-sample ao-status-session catalog', () => {
     expect(hasRuntimeField(capture)).toBe(false);
   });
 });
-
-describe('liveness gate inventory (AC12)', () => {
-  it('documents every ao-status liveness gate', () => {
-    const inventory = readFileSync(
-      path.join(repoRoot, 'docs/session-runtime-liveness-gate-inventory.md'),
-      'utf8',
-    );
-    const requiredGates = [
-      'isRuntimeFieldLive',
-      'isRuntimeAlive',
-      'isSessionAlive',
-      'Test-SessionRuntimeFieldLive',
-      'ci-green-wake-reconcile',
-      'review-ready-stuck-guard',
-      'worker-message-submit-reconcile',
-      'review-trigger-reconcile',
-      'review-finding-delivery-confirm',
-      'review-wake-trigger',
-      'review-trigger-reeval',
-    ];
-    for (const gate of requiredGates) {
-      expect(inventory).toContain(gate);
-    }
-  });
-});

@@ -192,8 +192,7 @@ Anchor on CLAUDE.md: planner freedom is non-negotiable; the cost rule is
 proposal toward over-specification, or toward adopting something just because
 Codex challenged the Skip, is itself the bug — reject or trim it. Log every
 accept/reject — one line per finding: what Codex argued, your verdict, why — in
-the proposal's decision trail. See
-`docs/issues_drafts/06-codex-reviewer-scope-context.md`.
+the proposal's decision trail.
 
 ## Iteration discipline
 

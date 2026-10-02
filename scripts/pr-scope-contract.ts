@@ -60,20 +60,14 @@ export const SPEC_SKILL_MARKDOWN_GLOBS: readonly string[] = [
 
 /** Docs-only entries on the spec-only allowlist (excludes skill markdown globs). */
 export const SPEC_DOCS_ONLY_GLOBS: readonly string[] = [
-  'docs/issues_drafts/**',
-  'docs/issue_queue_index.md',
   'docs/architecture.md',
-  'docs/issues_drafts/00-architecture-decisions.md',
 ] as const;
 
 /**
  * Markdown-only spec-docs paths for no-ceremony PRs (docs portion of SPEC_DOCS_ALLOWLIST).
  */
 export const SPEC_DOCS_MARKDOWN_GLOBS: readonly string[] = [
-  'docs/issues_drafts/**/*.md',
-  'docs/issue_queue_index.md',
   'docs/architecture.md',
-  'docs/issues_drafts/00-architecture-decisions.md',
 ] as const;
 
 /**
