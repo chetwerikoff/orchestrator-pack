@@ -2,7 +2,7 @@
 import '../toolchain/native-entrypoint-preflight.ts';
 import { createHash } from 'node:crypto';
 import { runProcessSync } from '../kernel/subprocess.ts';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTargetContext } from '../lib/target-context.ts';
@@ -137,8 +137,10 @@ export interface FleetAlarmTickOptions {
   readonly log?: (line: string) => void;
   readonly readChats?: (cdpUrl: string, scope: ChatBannerScope) => Promise<ProjectChat[]>;
   readonly closeChat?: (cdpUrl: string, targetId: string) => Promise<boolean>;
-  readonly findTerminalEnvelope?: (invocationId: string) => string | undefined;
-  readonly checkRunsCompleted?: (repository: string, sha: string) => boolean;
+  readonly now?: () => number;
+  readonly listTerminalEnvelopes?: () => readonly TerminalEnvelopeEvent[];
+  readonly listOpenPulls?: (repository: string) => readonly OpenPullHead[];
+  readonly checkRunsFinishedAt?: (repository: string, sha: string) => number | undefined;
 }
 
 export type FleetAlarmTickResult =
@@ -328,12 +330,21 @@ export function fleetAlarmMessage(
   return `Fleet alarm (${coordinatorState}):${paneText}${bannerText}${unloadableText}`;
 }
 
-export function findTerminalEnvelopeForInvocation(
-  invocationId: string,
+export const WAKE_EVENT_WINDOW_MS = 30 * 60_000;
+const TERMINAL_ENVELOPE_SCHEMA = 'flow-manager-long-running-child-terminal/v1';
+
+export interface TerminalEnvelopeEvent {
+  readonly path: string;
+  readonly invocationId: string;
+  readonly cwd: string;
+}
+
+export function listRecentTerminalEnvelopes(
   root = '/tmp/opencode',
-): string | undefined {
+  nowMs = Date.now(),
+): TerminalEnvelopeEvent[] {
   const pending = [root];
-  const matches: string[] = [];
+  const events: TerminalEnvelopeEvent[] = [];
   while (pending.length > 0) {
     const directory = pending.pop()!;
     let entries;
@@ -350,55 +361,102 @@ export function findTerminalEnvelopeForInvocation(
       }
       if (!entry.isFile() || !entry.name.endsWith('terminal.json')) continue;
       try {
-        const envelope = JSON.parse(readFileSync(path, 'utf8')) as { observed_invocation_id?: unknown };
-        const observed = envelope.observed_invocation_id;
-        // Panes may name a turn by its first 8+ characters.
-        if (typeof observed === 'string' && (observed === invocationId
-          || (invocationId.length >= 8 && observed.startsWith(invocationId)))) matches.push(path);
+        if (nowMs - statSync(path).mtimeMs > WAKE_EVENT_WINDOW_MS) continue;
+        const envelope = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+        if (envelope.schema !== TERMINAL_ENVELOPE_SCHEMA || typeof envelope.cwd !== 'string') continue;
+        const invocationId = typeof envelope.observed_invocation_id === 'string'
+          ? envelope.observed_invocation_id
+          : String(envelope.attempt_identity ?? basename(path));
+        events.push({ path, invocationId, cwd: envelope.cwd });
       } catch {
         // A partial or unrelated terminal artifact is not completion evidence.
       }
     }
   }
-  return matches.sort((left, right) => left.localeCompare(right))[0];
+  return events.sort((left, right) => left.path.localeCompare(right.path));
 }
 
-export function allCheckRunsCompleted(repository: string, sha: string): boolean {
+export interface OpenPullHead {
+  readonly number: number;
+  readonly ref: string;
+  readonly sha: string;
+  readonly issue?: number;
+}
+
+export function listOpenPullHeads(repository: string): OpenPullHead[] {
   const result = runProcessSync({
     command: fileURLToPath(new URL('../gh', import.meta.url)),
-    args: ['api', `repos/${repository}/commits/${sha}/check-runs`, '--paginate', '--jq', '.check_runs[].status'],
+    args: [
+      'api', `repos/${repository}/pulls?state=open&per_page=100`,
+      '--jq', '.[] | {number, ref: .head.ref, sha: .head.sha, body: (.body // "")} | @json',
+    ],
     timeoutMs: 15_000,
     inheritParentEnv: true,
   });
-  if (!result.ok) return false;
-  const statuses = result.stdout.split(/\r?\n/u).map((status) => status.trim()).filter(Boolean);
-  return statuses.length > 0 && statuses.every((status) => status === 'completed');
+  if (!result.ok) return [];
+  const pulls: OpenPullHead[] = [];
+  for (const line of result.stdout.split(/\r?\n/u)) {
+    if (!line.trim()) continue;
+    try {
+      const pull = JSON.parse(line) as { number?: unknown; ref?: unknown; sha?: unknown; body?: unknown };
+      if (typeof pull.number !== 'number' || typeof pull.ref !== 'string' || typeof pull.sha !== 'string') continue;
+      const issue = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|refs?)\s+#(\d+)\b/iu
+        .exec(typeof pull.body === 'string' ? pull.body : '')?.[1];
+      pulls.push({ number: pull.number, ref: pull.ref, sha: pull.sha, ...(issue ? { issue: Number(issue) } : {}) });
+    } catch {
+      // Skip a malformed row.
+    }
+  }
+  return pulls;
 }
 
-type ParkedWakeEvent =
-  | { readonly kind: 'gpt'; readonly key: string; readonly invocationId: string }
-  | { readonly kind: 'ci'; readonly key: string; readonly sha: string };
-
-function parkedWakeEvent(pane: FleetPaneObservation): ParkedWakeEvent | undefined {
-  if (pane.state !== 'PARKED') return undefined;
-  // The park line may carry a suffix such as "(self-wake armed)." and wrap.
-  const tail = pane.lines.slice(-2).join(' ');
-  const at = tail.lastIndexOf('PARKED on ');
-  if (at < 0) return undefined;
-  const line = tail.slice(at);
-  const gpt = /^PARKED on GPT turn ([0-9a-f][0-9a-f-]{7,})(?![0-9a-z-])/iu.exec(line);
-  if (gpt?.[1]) {
-    const invocationId = gpt[1].toLowerCase();
-    return { kind: 'gpt', key: `gpt:${invocationId}`, invocationId };
-  }
-  const ci = /^PARKED on CI on ([0-9a-f]{7,40})(?![0-9a-z])/iu.exec(line);
-  if (ci?.[1]) {
-    return { kind: 'ci', key: `ci:${ci[1].toLowerCase()}`, sha: ci[1] };
-  }
-  return undefined;
+// Latest completion time when every check-run on the sha is completed.
+export function checkRunsFinishedAt(repository: string, sha: string): number | undefined {
+  const result = runProcessSync({
+    command: fileURLToPath(new URL('../gh', import.meta.url)),
+    args: ['api', `repos/${repository}/commits/${sha}/check-runs`, '--paginate', '--jq', '.check_runs[] | [.status, (.completed_at // "")] | @tsv'],
+    timeoutMs: 15_000,
+    inheritParentEnv: true,
+  });
+  if (!result.ok) return undefined;
+  const rows = result.stdout.split(/\r?\n/u).map((row) => row.trim()).filter(Boolean).map((row) => row.split('\t'));
+  if (rows.length === 0 || rows.some(([status]) => status !== 'completed')) return undefined;
+  const times = rows.map(([, completedAt]) => Date.parse(completedAt ?? '')).filter(Number.isFinite);
+  return times.length > 0 ? Math.max(...times) : undefined;
 }
 
-async function wakeParkedPanes(
+function idlePane(pane: FleetPaneObservation): boolean {
+  return pane.state === 'STOPPED' || pane.state === 'PARKED';
+}
+
+function onlyPane(panes: readonly FleetPaneObservation[]): FleetPaneObservation | undefined {
+  if (panes.length === 1) return panes[0];
+  const agents = panes.filter((pane) => pane.agentIdentity);
+  return agents.length === 1 ? agents[0] : undefined;
+}
+
+function envelopeOwner(cwd: string, panes: readonly FleetPaneObservation[]): FleetPaneObservation | undefined {
+  const target = resolve(cwd).replaceAll('\\', '/');
+  return onlyPane(panes.filter((pane) => {
+    if (!pane.worktreePath) return false;
+    const worktree = resolve(pane.worktreePath).replaceAll('\\', '/');
+    return target === worktree || target.startsWith(`${worktree}/`);
+  }));
+}
+
+function pullOwner(pull: OpenPullHead, panes: readonly FleetPaneObservation[]): FleetPaneObservation | undefined {
+  const onBranch = onlyPane(panes.filter((pane) => pane.branch === `refs/heads/${pull.ref}`));
+  if (onBranch || !pull.issue) return onBranch;
+  const name = new RegExp(`^[a-z][a-z0-9]*-${pull.issue}$`, 'iu');
+  return onlyPane(panes.filter((pane) => pane.worktreePath && name.test(basename(pane.worktreePath))));
+}
+
+/**
+ * Wakes an idle pane once per event of its own: a GPT turn launched from its
+ * worktree ended, or CI finished on the head of a PR it owns. The pane's own
+ * park-line wording is not consulted.
+ */
+async function wakePanesOnEvents(
   options: FleetAlarmTickOptions,
   observations: readonly FleetPaneObservation[],
   executor: OrcaExecutor,
@@ -406,32 +464,35 @@ async function wakeParkedPanes(
   log: (line: string) => void,
   sleepMs: (milliseconds: number) => void | Promise<void>,
 ): Promise<void> {
-  const findTerminalEnvelope = options.findTerminalEnvelope ?? findTerminalEnvelopeForInvocation;
-  const checkRunsCompleted = options.checkRunsCompleted ?? allCheckRunsCompleted;
-  for (const pane of observations) {
-    const event = parkedWakeEvent(pane);
-    if (!event || store.hasParkedWakeEvent(event.key)) continue;
-
-    let message: string | undefined;
-    if (event.kind === 'gpt') {
-      const path = findTerminalEnvelope(event.invocationId);
-      if (path) message = `Wake: GPT turn ${event.invocationId} ended, read ${path}`;
-    } else {
-      const repository = options.config.chatScope?.repository;
-      if (repository && checkRunsCompleted(repository, event.sha)) {
-        message = `Wake: CI on ${event.sha} finished`;
-      }
+  const nowMs = (options.now ?? Date.now)();
+  const wakes: Array<{ pane: FleetPaneObservation; key: string; message: string }> = [];
+  for (const envelope of (options.listTerminalEnvelopes ?? listRecentTerminalEnvelopes)()) {
+    const key = `gpt:${envelope.path}`;
+    const pane = envelopeOwner(envelope.cwd, observations);
+    if (!pane || !idlePane(pane) || store.hasParkedWakeEvent(key)) continue;
+    wakes.push({ pane, key, message: `Wake: GPT turn ${envelope.invocationId} ended, read ${envelope.path}` });
+  }
+  const repository = options.config.chatScope?.repository;
+  if (repository && observations.some(idlePane)) {
+    const finishedAt = options.checkRunsFinishedAt ?? checkRunsFinishedAt;
+    for (const pull of (options.listOpenPulls ?? listOpenPullHeads)(repository)) {
+      const key = `ci:${pull.number}:${pull.sha}`;
+      const pane = pullOwner(pull, observations);
+      if (!pane || !idlePane(pane) || store.hasParkedWakeEvent(key)) continue;
+      const at = finishedAt(repository, pull.sha);
+      if (at === undefined || nowMs - at > WAKE_EVENT_WINDOW_MS) continue;
+      wakes.push({ pane, key, message: `Wake: CI on ${pull.sha} finished for PR #${pull.number}` });
     }
-    if (!message) continue;
-
+  }
+  for (const { pane, key, message } of wakes) {
     const delivered = sendCoordinator(executor, pane.handle, message)
       && (await sleepMs(4_000), submitCoordinator(executor, pane.handle));
     if (!delivered) {
-      log(`parked wake send failed to ${pane.handle}: ${event.key}`);
+      log(`event wake send failed to ${pane.handle}: ${key}`);
       continue;
     }
-    store.markParkedWakeEvent(event.key);
-    log(`sent parked wake to ${pane.handle}: ${event.key}`);
+    store.markParkedWakeEvent(key);
+    log(`sent event wake to ${pane.handle}: ${key}`);
   }
 }
 
@@ -493,7 +554,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     return { state: 'unreadable', handle: 'fleet-sweep' };
   }
 
-  await wakeParkedPanes(options, observations, executor, store, log, sleepMs);
+  await wakePanesOnEvents(options, observations, executor, store, log, sleepMs);
 
   const chats = config.chatCdpUrl && config.chatScope
     ? await (options.readChats ?? readProjectChats)(config.chatCdpUrl, config.chatScope).catch(() => [])
