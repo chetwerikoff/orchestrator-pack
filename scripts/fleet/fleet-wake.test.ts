@@ -219,12 +219,12 @@ describe('fleet alarm', () => {
     expect(observed.logs).toContain('nothing stopped');
   });
 
-  it('wakes the launching pane once per GPT terminal envelope, whatever its park line says', async () => {
+  it('wakes the idle pane of the launching worktree once per GPT terminal envelope, whatever its park line says', async () => {
     const store = new MemoryWakeStore();
     const envelope = {
       path: '/tmp/opencode/one-terminal.json',
       invocationId: '887cc977-f28e-4ab1-b498-e4ebced05551',
-      terminalHandle: 'one',
+      cwd: `${workerBase}/one/scripts`,
     };
     const listTerminalEnvelopes = () => [envelope];
     const busy = await tick({
@@ -253,18 +253,18 @@ describe('fleet alarm', () => {
     expect(sendsTo(repeated.calls, 'one')).toHaveLength(0);
   });
 
-  it('lists launcher terminal envelopes that name their terminal', () => {
+  it('lists launcher terminal envelopes that name their worktree', () => {
     const root = mkdtempSync(join(tmpdir(), 'fleet-wake-terminal-'));
     try {
       const nested = join(root, 'nested');
       mkdirSync(nested, { recursive: true });
       const schema = 'flow-manager-long-running-child-terminal/v1';
       const routed = join(nested, 'routed-terminal.json');
-      writeFileSync(routed, JSON.stringify({ schema, observed_invocation_id: 'inv-a', terminal_handle: 'term_one' }), 'utf8');
+      writeFileSync(routed, JSON.stringify({ schema, observed_invocation_id: 'inv-a', cwd: '/w/one' }), 'utf8');
       writeFileSync(join(root, 'unrouted-terminal.json'), JSON.stringify({ schema, observed_invocation_id: 'inv-b' }), 'utf8');
-      writeFileSync(join(root, 'other-terminal.json'), JSON.stringify({ schema: 'x/v1', terminal_handle: 'term_one' }), 'utf8');
+      writeFileSync(join(root, 'other-terminal.json'), JSON.stringify({ schema: 'x/v1', cwd: '/w/one' }), 'utf8');
 
-      expect(listTerminalEnvelopes(root)).toEqual([{ path: routed, invocationId: 'inv-a', terminalHandle: 'term_one' }]);
+      expect(listTerminalEnvelopes(root)).toEqual([{ path: routed, invocationId: 'inv-a', cwd: '/w/one' }]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -76,7 +76,6 @@ afterEach(() => {
   delete process.env.OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS;
   delete process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS;
   delete process.env.OPK_BROWSER_TURN_STARTUP_ALLOWANCE_MS;
-  vi.unstubAllEnvs();
   delete process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS;
   delete process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS;
 });
@@ -226,7 +225,6 @@ describe('flow-manager long-running child (#1164)', () => {
       process.exit(0);
     `);
     process.env.OPK_FM_LONG_CHILD_DISABLE_DETACH = '1';
-    vi.stubEnv('ORCA_TERMINAL_HANDLE', 'term_test-owner');
     const code = await spawnDetachedLauncher([
       'launch',
       '--run-identity', 'run-detach',
@@ -241,7 +239,7 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(code).toBe(0);
     expect(readHandoffReceipt(paths.receipt)?.schema).toBe(HANDOFF_SCHEMA);
     expect(readTerminalEnvelope(paths.envelope)?.lifecycle_outcome).toBe('success');
-    expect(readTerminalEnvelope(paths.envelope)?.terminal_handle).toBe('term_test-owner');
+    expect(readTerminalEnvelope(paths.envelope)?.cwd).toBe(repoRoot);
   });
 
   it('refuses before handoff when artifact paths alias', async () => {
