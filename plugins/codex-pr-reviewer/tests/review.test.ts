@@ -1453,8 +1453,9 @@ describe('executeReview JSONL round-trip', () => {
     expect(result.exitCode).toBe(0);
     expect(result.reviewStdout.length).toBeGreaterThan(0);
     const payload = parseTerminalVerdictPayload(result.reviewStdout);
-    expect(payload).toMatchObject({ verdict: 'clean', findingCount: 0, findings: [] });
-    expect(result.structuredFindings).toHaveLength(0);
+    expect(payload).toMatchObject({ verdict: 'clean', findingCount: 1 });
+    expect(payload?.findings[0]?.body).toContain('scope-context-unavailable');
+    expect(result.structuredFindings).toHaveLength(1);
   });
 
   it('maps JSONL findings to AO structured payload', () => {
@@ -1617,7 +1618,7 @@ describe('parseCodexOutput', () => {
 });
 
 describe('executeReview NO_FINDINGS round-trip', () => {
-  it('returns zero AO findings for NO_FINDINGS when scope is available', () => {
+  it('returns clean verdict with scope warning for NO_FINDINGS without a committed scope snapshot', () => {
     const result = executeReview({
       repoRoot: process.cwd(),
       baseRef: 'origin/main',
@@ -1629,8 +1630,9 @@ describe('executeReview NO_FINDINGS round-trip', () => {
     expect(result.exitCode).toBe(0);
     expect(isCleanTerminalVerdict(result.reviewStdout)).toBe(true);
     const payload = parseTerminalVerdictPayload(result.reviewStdout);
-    expect(payload).toMatchObject({ verdict: 'clean', findingCount: 0, findings: [] });
-    expect(result.structuredFindings).toHaveLength(0);
+    expect(payload).toMatchObject({ verdict: 'clean', findingCount: 1 });
+    expect(payload?.findings[0]?.body).toContain('scope-context-unavailable');
+    expect(result.structuredFindings).toHaveLength(1);
   });
 
   it('adds scope-unavailable warning on NO_FINDINGS without scope context', () => {
