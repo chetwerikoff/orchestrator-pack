@@ -1,0 +1,28 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2361,
+  "declared_paths": [
+    "docs/declarations/2361.pr-scope.json",
+    "scripts/emit-vitest-heavy-topology.mjs",
+    "scripts/lib/vitest-pr-scoped-selection.d.mts",
+    "scripts/lib/vitest-pr-scoped-selection.mjs",
+    "scripts/lib/vitest-pr-scoped-selection.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/emit-pr-changed-paths-manifest.mjs",
+    "scripts/emit-pr-changed-paths-manifest.test.ts",
+    "scripts/emit-vitest-heavy-topology.mjs",
+    "scripts/emit-vitest-heavy-topology.test.ts",
+    "scripts/lib/vitest-pr-scoped-selection.d.mts",
+    "scripts/lib/vitest-pr-scoped-selection.mjs",
+    "scripts/lib/vitest-pr-scoped-selection.test.ts"
+  ],
+  "source_revision": "a0f85245f304d14e6e6e3a3ed4183e44a9d3081c"
+}
