@@ -46,9 +46,8 @@ The committed declaration at
 hand-edit it, copy a stale declaration, or broaden it to make an unrelated diff
 pass.
 
-Pre-existing tracked drafts and indexes are historical publishing inputs only.
-New task authoring does not create them unless the direct user explicitly requests
-the governed publishing flow for an existing artifact.
+Task authoring uses the published GitHub Issue directly. There is no tracked draft
+or queue-index publishing path in the current repository.
 
 ## Agent skills
 
@@ -171,9 +170,8 @@ check into a claim that the code passed.
 - When a scope check reports a mismatch, fix the artifact or the diff; do not
   broaden scope merely to silence the check.
 
-Pre-existing queued-task artifacts are historical inputs only. New tasks do not
-create a tracked draft or queue-index row unless the user explicitly requests the
-legacy publishing flow for an already-existing artifact.
+New tasks are authored and tracked as live GitHub Issues; repository-local draft
+or queue-index artifacts are not part of the current task flow.
 
 ## Build the minimum
 

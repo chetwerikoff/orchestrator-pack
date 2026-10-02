@@ -5,7 +5,6 @@
   "weak_top1_score": 0.5,
   "ambiguity_max_score_delta": 0.05,
   "exclusions": [
-    "docs/issues_drafts/**",
     "docs/declarations/**"
   ],
   "episodes": [

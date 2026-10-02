@@ -137,7 +137,7 @@ function runVerifyRuntime(root: string): string[] {
   const failures: string[] = [];
   const required = [
     'scripts/verify.ts','scripts/test-runtime-budget.config.json','scripts/enforce-vitest-runtime-budget.mjs',
-    'scripts/vitest-ci-runner.ts','docs/verify-runtime-refactor.md','.github/workflows/scope-guard.yml',
+    'scripts/vitest-ci-runner.ts','.github/workflows/scope-guard.yml',
   ];
   for (const rel of required) if (!existsSync(join(root, rel))) failures.push('missing required artifact: ' + rel);
   const verifyPath = join(root, 'scripts/verify.ts');

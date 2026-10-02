@@ -55,7 +55,6 @@ const EXCLUDED_PREFIXES = [
   'vendor/',
   'packages/core/',
   'tests/external-output-references/',
-  'docs/issues_drafts/',
   'docs/declarations/',
   'docs/archive/',
   'scripts/gate-runner/census/',
@@ -64,9 +63,6 @@ const EXCLUDED_PREFIXES = [
   'scripts/pr2-foundation/terminalized/',
 ] as const;
 const EXCLUDED_EXACT = new Set([
-  'docs/issue_queue_index.md',
-  'docs/vitest-light-lane-isolation-audit-874.md',
-  'docs/submit-reconcile-delivery-source-audit.json',
   'docs/investigations/orca-pwsh-zero-estate/post-port.json',
   'docs/investigations/orca-pwsh-zero-estate/final.json',
   'scripts/estate-cut/issue-906.base-anchor.json',
