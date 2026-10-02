@@ -54,7 +54,8 @@ export interface FleetWakeStateStore extends FleetPollingStore {
   writeBannerSignature?(signature: string): void;
   readStalledSeen?(): string | null;
   writeStalledSeen?(urls: string): void;
-  claimParkedWakeEvent(key: string): boolean;
+  hasParkedWakeEvent(key: string): boolean;
+  markParkedWakeEvent(key: string): void;
 }
 
 export class FileFleetWakeStateStore extends FileFleetStateStore implements FleetWakeStateStore {
@@ -118,15 +119,13 @@ export class FileFleetWakeStateStore extends FileFleetStateStore implements Flee
     return join(this.root, `parked-wake-${digest}.mark`);
   }
 
-  claimParkedWakeEvent(key: string): boolean {
+  hasParkedWakeEvent(key: string): boolean {
+    return existsSync(this.parkedWakeEventPath(key));
+  }
+
+  markParkedWakeEvent(key: string): void {
     mkdirSync(this.root, { recursive: true });
-    try {
-      writeFileSync(this.parkedWakeEventPath(key), `${key}\n`, { encoding: 'utf8', flag: 'wx' });
-      return true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
-      throw error;
-    }
+    writeFileSync(this.parkedWakeEventPath(key), `${key}\n`, 'utf8');
   }
 }
 
@@ -352,7 +351,10 @@ export function findTerminalEnvelopeForInvocation(
       if (!entry.isFile() || !entry.name.endsWith('terminal.json')) continue;
       try {
         const envelope = JSON.parse(readFileSync(path, 'utf8')) as { observed_invocation_id?: unknown };
-        if (envelope.observed_invocation_id === invocationId) matches.push(path);
+        const observed = envelope.observed_invocation_id;
+        // Panes may name a turn by its first 8+ characters.
+        if (typeof observed === 'string' && (observed === invocationId
+          || (invocationId.length >= 8 && observed.startsWith(invocationId)))) matches.push(path);
       } catch {
         // A partial or unrelated terminal artifact is not completion evidence.
       }
@@ -379,31 +381,36 @@ type ParkedWakeEvent =
 
 function parkedWakeEvent(pane: FleetPaneObservation): ParkedWakeEvent | undefined {
   if (pane.state !== 'PARKED') return undefined;
-  const line = pane.lines.at(-1)?.trim();
-  if (!line) return undefined;
-  const gpt = /^PARKED on GPT turn (\S+)$/u.exec(line);
+  // The park line may carry a suffix such as "(self-wake armed)." and wrap.
+  const tail = pane.lines.slice(-2).join(' ');
+  const at = tail.lastIndexOf('PARKED on ');
+  if (at < 0) return undefined;
+  const line = tail.slice(at);
+  const gpt = /^PARKED on GPT turn ([0-9a-f][0-9a-f-]{7,})(?![0-9a-z-])/iu.exec(line);
   if (gpt?.[1]) {
-    return { kind: 'gpt', key: `gpt:${gpt[1]}`, invocationId: gpt[1] };
+    const invocationId = gpt[1].toLowerCase();
+    return { kind: 'gpt', key: `gpt:${invocationId}`, invocationId };
   }
-  const ci = /^PARKED on CI on ([0-9a-f]{7,40})$/iu.exec(line);
+  const ci = /^PARKED on CI on ([0-9a-f]{7,40})(?![0-9a-z])/iu.exec(line);
   if (ci?.[1]) {
     return { kind: 'ci', key: `ci:${ci[1].toLowerCase()}`, sha: ci[1] };
   }
   return undefined;
 }
 
-function wakeParkedPanes(
+async function wakeParkedPanes(
   options: FleetAlarmTickOptions,
   observations: readonly FleetPaneObservation[],
   executor: OrcaExecutor,
   store: FleetWakeStateStore,
   log: (line: string) => void,
-): void {
+  sleepMs: (milliseconds: number) => Promise<void>,
+): Promise<void> {
   const findTerminalEnvelope = options.findTerminalEnvelope ?? findTerminalEnvelopeForInvocation;
   const checkRunsCompleted = options.checkRunsCompleted ?? allCheckRunsCompleted;
   for (const pane of observations) {
     const event = parkedWakeEvent(pane);
-    if (!event) continue;
+    if (!event || store.hasParkedWakeEvent(event.key)) continue;
 
     let message: string | undefined;
     if (event.kind === 'gpt') {
@@ -415,12 +422,15 @@ function wakeParkedPanes(
         message = `Wake: CI on ${event.sha} finished`;
       }
     }
-    if (!message || !store.claimParkedWakeEvent(event.key)) continue;
+    if (!message) continue;
 
-    if (!sendCoordinator(executor, pane.handle, message)) {
-      log(`${pane.handle} parked wake send failed after claim: ${event.key}`);
+    const delivered = sendCoordinator(executor, pane.handle, message)
+      && (await sleepMs(4_000), submitCoordinator(executor, pane.handle));
+    if (!delivered) {
+      log(`parked wake send failed to ${pane.handle}: ${event.key}`);
       continue;
     }
+    store.markParkedWakeEvent(event.key);
     log(`sent parked wake to ${pane.handle}: ${event.key}`);
   }
 }
@@ -483,7 +493,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     return { state: 'unreadable', handle: 'fleet-sweep' };
   }
 
-  wakeParkedPanes(options, observations, executor, store, log);
+  await wakeParkedPanes(options, observations, executor, store, log, sleepMs);
 
   const chats = config.chatCdpUrl && config.chatScope
     ? await (options.readChats ?? readProjectChats)(config.chatCdpUrl, config.chatScope).catch(() => [])

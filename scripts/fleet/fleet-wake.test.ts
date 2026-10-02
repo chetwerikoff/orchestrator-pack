@@ -26,11 +26,8 @@ class MemoryWakeStore implements FleetWakeStateStore {
   readLastSentSignature(): string | null { return this.signature; }
   writeLastSentSignature(signature: string): void { this.signature = signature; }
   clearLastSentSignature(): void { this.signature = null; }
-  claimParkedWakeEvent(key: string): boolean {
-    if (this.parkedWakeEvents.has(key)) return false;
-    this.parkedWakeEvents.add(key);
-    return true;
-  }
+  hasParkedWakeEvent(key: string): boolean { return this.parkedWakeEvents.has(key); }
+  markParkedWakeEvent(key: string): void { this.parkedWakeEvents.add(key); }
 }
 
 function commandResult(stdout = '', ok = true): OrcaCommandResult {
@@ -216,11 +213,11 @@ describe('fleet alarm', () => {
 
   it('wakes a PARKED GPT turn only with matching terminal evidence and never repeats an invocation', async () => {
     const store = new MemoryWakeStore();
-    const invocationId = 'inv-2351';
+    const invocationId = '887cc977-f28e-4ab1-b498-e4ebced05551';
     const envelopePath = '/tmp/opencode/ff1-terminal.json';
     const screens = {
       coord: 'idle',
-      one: `PARKED on GPT turn ${invocationId}`,
+      one: `PARKED on GPT turn ${invocationId} (self-wake armed).`,
       two: 'working\nesc interrupt',
     };
 
@@ -240,7 +237,7 @@ describe('fleet alarm', () => {
       'terminal', 'send', '--terminal', 'one',
       '--text', `Wake: GPT turn ${invocationId} ended, read ${envelopePath}`,
       '--enter',
-    ]]);
+    ], ['terminal', 'send', '--terminal', 'one', '--enter']]);
 
     const repeated = await tick({
       screens,
@@ -257,9 +254,10 @@ describe('fleet alarm', () => {
       mkdirSync(nested, { recursive: true });
       writeFileSync(join(root, 'wrong-terminal.json'), JSON.stringify({ observed_invocation_id: 'other' }), 'utf8');
       const matching = join(nested, 'matching-terminal.json');
-      writeFileSync(matching, JSON.stringify({ observed_invocation_id: 'inv-2351' }), 'utf8');
+      writeFileSync(matching, JSON.stringify({ observed_invocation_id: '887cc977-f28e-4ab1-b498-e4ebced05551' }), 'utf8');
 
-      expect(findTerminalEnvelopeForInvocation('inv-2351', root)).toBe(matching);
+      expect(findTerminalEnvelopeForInvocation('887cc977-f28e-4ab1-b498-e4ebced05551', root)).toBe(matching);
+      expect(findTerminalEnvelopeForInvocation('887cc977', root)).toBe(matching);
       expect(findTerminalEnvelopeForInvocation('missing', root)).toBeUndefined();
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -277,7 +275,7 @@ describe('fleet alarm', () => {
     });
     const screens = {
       coord: 'idle',
-      one: `PARKED on CI on ${sha}`,
+      one: `PARKED on CI on ${sha}; resume step: smoke.`,
       two: 'working\nesc interrupt',
     };
 
@@ -303,7 +301,7 @@ describe('fleet alarm', () => {
       'terminal', 'send', '--terminal', 'one',
       '--text', `Wake: CI on ${sha} finished`,
       '--enter',
-    ]]);
+    ], ['terminal', 'send', '--terminal', 'one', '--enter']]);
 
     const repeated = await tick({
       screens,
@@ -370,8 +368,9 @@ describe('fleet alarm', () => {
       const store = new FileFleetWakeStateStore('orchestrator-pack', { ...process.env, XDG_RUNTIME_DIR: xdg });
       store.setPollingMark('one');
       store.writeLastSentSignature('STOPPED one');
-      expect(store.claimParkedWakeEvent('gpt:inv-2351')).toBe(true);
-      expect(store.claimParkedWakeEvent('gpt:inv-2351')).toBe(false);
+      expect(store.hasParkedWakeEvent('gpt:inv-2351')).toBe(false);
+      store.markParkedWakeEvent('gpt:inv-2351');
+      expect(store.hasParkedWakeEvent('gpt:inv-2351')).toBe(true);
       expect(store.root).toBe(join(xdg, 'fleet-sweep', 'orchestrator-pack'));
       const files = readdirSync(store.root).sort();
       expect(files).toContain('last-sent.signature');
