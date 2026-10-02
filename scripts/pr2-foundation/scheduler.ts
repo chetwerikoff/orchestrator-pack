@@ -271,9 +271,15 @@ function liveCandidates(env: NodeJS.ProcessEnv = process.env, repository?: strin
   return candidates;
 }
 
-async function ghJson(repoRoot: string, args: string[]): Promise<unknown> {
+async function ghJson(
+  repoRoot: string,
+  args: string[],
+  acceptedExitCodes: readonly number[] = [0],
+): Promise<unknown> {
   const result = await runProcess({ command: `${repoRoot}/scripts/gh`, args, cwd: repoRoot, inheritParentEnv: true, allowEmptyStdout: false, timeoutMs: 30_000 });
-  if (!result.ok) throw new Error(`scheduler_gh_failed:${args.join('_')}:${schedulerProcessFailureDiagnostic(result)}`);
+  const accepted = result.ok
+    || (result.outcome === 'exit' && acceptedExitCodes.includes(result.exitCode ?? -1));
+  if (!accepted) throw new Error(`scheduler_gh_failed:${args.join('_')}:${schedulerProcessFailureDiagnostic(result)}`);
   return JSON.parse(result.stdout);
 }
 
@@ -299,7 +305,7 @@ export function productionSchedulerBoundary(input: {
     ghJson(input.repoRoot, [
       'pr', 'checks', String(candidate.prNumber), '--repo', candidate.repoSlug,
       '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description',
-    ]) as Promise<Array<{ name?: string; workflow?: string; state?: string; conclusion?: string; status?: string }>>;
+    ], [0, 1, 8]) as Promise<Array<{ name?: string; workflow?: string; state?: string; conclusion?: string; status?: string }>>;
   const resolveSchedulerRequiredCi: SchedulerBoundary['resolveRequiredCi'] | undefined = input.targetContext
     ? async (candidate, fresh, expectedHeadSha) => resolveRequiredCi({
         target: input.targetContext!,
@@ -327,7 +333,13 @@ export function productionSchedulerBoundary(input: {
           return { kind: 'ok', policy: parsed as Record<string, unknown> };
         },
         readChecks: () => readChecks(candidate),
-        readCurrentHead: async () => String((await readCurrentPr(candidate)).headRefOid ?? ''),
+        readCurrentPr: async () => {
+          const current = await readCurrentPr(candidate);
+          return {
+            headSha: String(current.headRefOid ?? ''),
+            baseRef: String(current.baseRefName ?? ''),
+          };
+        },
       })
     : undefined;
   return {
