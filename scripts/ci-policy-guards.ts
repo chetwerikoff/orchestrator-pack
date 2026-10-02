@@ -164,9 +164,10 @@ function runVerifyRuntime(root: string): string[] {
 function runPipelineSplit(root: string): string[] {
   const failures: string[] = [];
   const planner = join(root, 'scripts/emit-vitest-heavy-topology.mjs');
+  const manifestProducer = join(root, 'scripts/emit-pr-changed-paths-manifest.mjs');
   const config = join(root, 'scripts/vitest-ci-lanes.config.json');
   const workflow = join(root, '.github/workflows/vitest-runtime-history-refresh.yml');
-  for (const p of [planner, config, workflow]) if (!existsSync(p)) failures.push('missing surviving CI topology prerequisite: ' + p);
+  for (const p of [planner, manifestProducer, config, workflow]) if (!existsSync(p)) failures.push('missing surviving CI topology prerequisite: ' + p);
   if (failures.length > 0) return failures;
   const source = text(workflow);
   const fragments = [
@@ -186,8 +187,36 @@ function runPipelineSplit(root: string): string[] {
   const dir=mkdtempSync(join(tmpdir(),'opk-topology-'));
   const output=join(dir,'gha-output.txt');
   try {
-    const result=runProcessSync({command:process.execPath,args:[planner,'--gha-output','--skip-oversized-guard'],cwd:root,inheritParentEnv:true,env:{GITHUB_OUTPUT:output}});
-    if(!result.ok) failures.push('TypeScript topology planner failed: '+(result.stderr||result.error||result.outcome));
+    const env: Record<string, string> = { GITHUB_OUTPUT: output };
+    if (process.env.GITHUB_EVENT_NAME === 'pull_request') {
+      const parentsResult=runProcessSync({command:'git',args:['rev-list','--parents','-n','1','HEAD'],cwd:root,inheritParentEnv:true});
+      const parentTokens=parentsResult.ok
+        ? String(parentsResult.stdout ?? '').trim().split(/\s+/u)
+        : [];
+      const baseSha=parentTokens.length === 3 ? (parentTokens[1] ?? '') : '';
+      const headSha=parentTokens.length === 3 ? (parentTokens[2] ?? '') : '';
+      if (!/^[0-9a-f]{40}$/u.test(baseSha) || !/^[0-9a-f]{40}$/u.test(headSha)) {
+        failures.push('PR topology policy check cannot resolve exact merge base/head parents');
+      } else {
+        const manifestResult=runProcessSync({
+          command:process.execPath,
+          args:[manifestProducer,'--base',baseSha,'--head',headSha],
+          cwd:root,
+          inheritParentEnv:true,
+        });
+        if(!manifestResult.ok) {
+          failures.push('PR changed-path manifest producer failed: '+(manifestResult.stderr||manifestResult.error||manifestResult.outcome));
+        } else {
+          const manifest=String(manifestResult.stdout ?? '').trim();
+          if(!manifest) failures.push('PR changed-path manifest producer emitted empty output');
+          else env.OPK_CHANGED_VITEST_FILES=manifest;
+        }
+      }
+    }
+    if (failures.length === 0) {
+      const result=runProcessSync({command:process.execPath,args:[planner,'--gha-output','--skip-oversized-guard'],cwd:root,inheritParentEnv:true,env});
+      if(!result.ok) failures.push('TypeScript topology planner failed: '+(result.stderr||result.error||result.outcome));
+    }
   } finally { rmSync(dir,{recursive:true,force:true}); }
   return failures;
 }
