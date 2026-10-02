@@ -977,9 +977,9 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
   });
 
   it.each([403, 404] as const)(
-    'admits manual start on HTTP %i policy lookup when same-head checks is green',
+    'admits manual start on HTTP %i protection lookup only when project-card requiredCi proves the same head green',
     async (policyStatus) => {
-      const storeRoot = tempRoot(`opk-issue-2344-policy-${policyStatus}-green-`);
+      const storeRoot = tempRoot(`opk-issue-2346-card-${policyStatus}-green-`);
       const capture = path.join(storeRoot, 'github-review.json');
       harnessEnv(storeRoot, capture);
 
@@ -987,10 +987,11 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
         env: process.env,
         stderr: { write: () => undefined },
         startReview: canonicalCommandRunner(storeRoot, {
+          fixtureRequiredCi: ['CI / checks'],
           fixtureRequiredCiPolicy: null,
           fixtureRequiredCiPolicyHttpStatus: policyStatus,
           fixtureRequiredCiChecks: [
-            { name: 'checks', state: 'SUCCESS' },
+            { workflow: 'CI', name: 'checks', state: 'SUCCESS' },
           ],
         }),
       });
@@ -1009,6 +1010,25 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
     },
   );
 
+  it('does not retain the Issue #2344 bare-check fallback when protection is unavailable and the card has no requiredCi', async () => {
+    const storeRoot = tempRoot('opk-issue-2346-no-card-403-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    const execution = await runPackGptReviewCommand({ prNumber: 1111 }, {
+      env: process.env,
+      stderr: { write: () => undefined },
+      startReview: canonicalCommandRunner(storeRoot, {
+        fixtureRequiredCiPolicy: null,
+        fixtureRequiredCiPolicyHttpStatus: 403,
+        fixtureRequiredCiChecks: [{ workflow: 'CI', name: 'checks', state: 'SUCCESS' }],
+      }),
+    });
+    expect(execution.exitCode).toBe(1);
+    expect(execution.result).toMatchObject({
+      runnerReason: 'required_ci_not_green_for_current_head',
+    });
+  });
+
   it.each([
     ['pending', 'PENDING'],
     ['failed', 'FAILURE'],
@@ -1023,10 +1043,11 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
         env: process.env,
         stderr: { write: () => undefined },
         startReview: canonicalCommandRunner(storeRoot, {
+          fixtureRequiredCi: ['CI / checks'],
           fixtureRequiredCiPolicy: null,
           fixtureRequiredCiPolicyHttpStatus: 403,
           fixtureRequiredCiChecks: [
-            { name: 'checks', state },
+            { workflow: 'CI', name: 'checks', state },
           ],
         }),
       });
@@ -1141,6 +1162,7 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
       env: process.env,
       stderr: { write: () => undefined },
       startReview: canonicalCommandRunner(storeRoot, {
+        fixtureRequiredCiPostProjectionHead: HEAD_A,
         fixtureRequiredCiHeadAfterGate: HEAD_B,
       }),
     });
