@@ -60,6 +60,7 @@ export interface TargetContext {
   readonly repository: string;
   readonly primaryRoot: string;
   readonly defaultBranch: string;
+  readonly requiredCi?: readonly string[];
   readonly orcaWorkspacePattern: string;
   readonly orchestratorTitlePattern: string;
   readonly browserGpt: Readonly<{ projectUrl: string }>;
@@ -154,6 +155,55 @@ function readOrigin(primaryRoot: string): string {
     );
   }
   return result.stdout.trim();
+}
+
+function parseRequiredCi(value: unknown, cardPath: string): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new TargetContextError(
+      'card-invalid',
+      `requiredCi must be a non-empty array of "<workflow> / <job>" selectors in ${cardPath}`,
+      cardPath,
+    );
+  }
+  const seen = new Set<string>();
+  const selectors = value.map((raw) => {
+    if (typeof raw !== 'string') {
+      throw new TargetContextError(
+        'card-invalid',
+        `requiredCi entries must be strings in ${cardPath}`,
+        cardPath,
+      );
+    }
+    const parts = raw.split(' / ');
+    if (parts.length !== 2) {
+      throw new TargetContextError(
+        'card-invalid',
+        `requiredCi entry must contain exactly one literal " / " separator in ${cardPath}: ${raw}`,
+        cardPath,
+      );
+    }
+    const workflow = parts[0]!.trim();
+    const job = parts[1]!.trim();
+    if (!workflow || !job) {
+      throw new TargetContextError(
+        'card-invalid',
+        `requiredCi workflow and job must both be non-empty in ${cardPath}: ${raw}`,
+        cardPath,
+      );
+    }
+    const key = `${workflow.toLowerCase()}\u0000${job.toLowerCase()}`;
+    if (seen.has(key)) {
+      throw new TargetContextError(
+        'card-invalid',
+        `requiredCi contains a duplicate normalized workflow/job selector in ${cardPath}: ${raw}`,
+        cardPath,
+      );
+    }
+    seen.add(key);
+    return `${workflow} / ${job}`;
+  });
+  return Object.freeze(selectors);
 }
 
 function parseVerification(value: unknown, cardPath: string): TargetVerification | undefined {
@@ -259,12 +309,14 @@ export function resolveTargetContext(input: ResolveTargetContextInput = {}): Tar
     );
   }
 
+  const requiredCi = parseRequiredCi(card.requiredCi, cardPath);
   const verification = parseVerification(card.verification, cardPath);
   return Object.freeze({
     projectId,
     repository,
     primaryRoot: resolve(primaryRoot),
     defaultBranch,
+    ...(requiredCi ? { requiredCi } : {}),
     orcaWorkspacePattern,
     orchestratorTitlePattern,
     browserGpt: Object.freeze({ projectUrl }),
@@ -450,6 +502,7 @@ export function runTargetContextCli(
       repository: context.repository,
       primaryRoot: context.primaryRoot,
       defaultBranch: context.defaultBranch,
+      ...(context.requiredCi ? { requiredCi: context.requiredCi } : {}),
       projectUrl: context.browserGpt.projectUrl,
       cardPath: context.cardPath,
     })}\n`);
