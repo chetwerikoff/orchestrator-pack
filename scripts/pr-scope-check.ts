@@ -32,17 +32,12 @@ import {
 } from '../plugins/task-declaration/lib/validate.ts';
 import {
   classifyNoCeremonyPaths,
-  classifySpecDocsPaths,
   extractClosingIssueNumber,
-  extractNonClosingIssueNumber,
-  hasClosingIssueReference,
   hasNoCeremonyIssueLink,
-  hasSpecOnlySignal,
   isNoCeremonyPr,
   ISSUE_LINK_PATTERN,
   NO_CEREMONY_MARKDOWN_GLOBS,
   resolveIssueNumberForFetch,
-  SPEC_DOCS_ALLOWLIST,
 } from './pr-scope-contract.ts';
 
 export { resolveIssueNumberForFetch } from './pr-scope-contract.ts';
@@ -136,7 +131,7 @@ export type PrScopeDiffResult =
 export type PrScopeCheckResult =
   | {
       ok: true;
-      mode: 'implementation' | 'spec-only' | 'no-ceremony' | 'runtime-history-delivery';
+      mode: 'implementation' | 'no-ceremony' | 'runtime-history-delivery';
       snapshot?: DeclarationSnapshot;
       declarationPath?: string;
       scopeSource?: 'declaration' | 'live-issue';
@@ -150,11 +145,8 @@ export type PrScopeCheckResult =
       ok: false;
       reason:
         | 'missing_issue_link'
-        | 'missing_spec_issue_reference'
-        | 'spec_only_with_closing_keyword'
         | 'skill_doc_with_closing_keyword'
         | 'skill_doc_with_issue_reference'
-        | 'spec_docs_scope_violation'
         | 'skill_doc_scope_violation'
         | 'missing_snapshot'
         | 'snapshot_chain_inconsistency'
@@ -511,76 +503,6 @@ function checkNoCeremonyPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
   return {
     ok: true,
     mode: 'no-ceremony',
-    checkedPaths: pathCheck.checkedPaths,
-    skippedControlArtifacts: [],
-    unverifiedIssueConstraints: false,
-    warnings: [],
-  };
-}
-
-function checkSpecOnlyPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
-  if (hasClosingIssueReference(input.prBody)) {
-    return {
-      ok: false,
-      reason: 'spec_only_with_closing_keyword',
-      message:
-        'spec-only PRs must not use GitHub closing keywords (Closes/Fixes/Resolves #N); use a non-closing reference such as Refs #N so the implementation issue stays open',
-    };
-  }
-  const issueNumber = extractNonClosingIssueNumber(input.prBody);
-  if (issueNumber === null) {
-    return {
-      ok: false,
-      reason: 'missing_spec_issue_reference',
-      message:
-        'spec-only PR description must include a non-closing issue reference such as Refs #N (See #N and Related to #N are also accepted)',
-    };
-  }
-
-  if (input.issueBody === null) {
-    return {
-      ok: false,
-      reason: 'issue_unreadable',
-      message: input.forkPr
-        ? 'spec-only PR: linked issue could not be read (verify Refs #N refers to an open issue and workflow permissions allow gh issue view)'
-        : `spec-only PR: linked issue #${issueNumber} could not be read (verify Refs #${issueNumber} refers to an existing issue)`,
-    };
-  }
-
-  const pathCheck = classifySpecDocsPaths(input.prPaths);
-  if (!pathCheck.ok) {
-    if (pathCheck.invalidPaths.length > 0) {
-      return {
-        ok: false,
-        reason: 'invalid_path',
-        message: 'one or more PR diff paths failed normalization',
-        violations: {
-          outOfScope: [],
-          denied: [],
-          declarationErrors: [],
-          invalidPaths: pathCheck.invalidPaths,
-        },
-      };
-    }
-
-    return {
-      ok: false,
-      reason: 'spec_docs_scope_violation',
-      message:
-        'spec-only PR diff includes paths outside the spec-docs allowlist (docs surfaces, or markdown-only under .claude/skills/** and .cursor/skills/**; see docs/repository_policy.md)',
-      violations: {
-        outOfScope: pathCheck.outOfAllowlist,
-        denied: [],
-        declarationErrors: [],
-        invalidPaths: [],
-      },
-    };
-  }
-
-  return {
-    ok: true,
-    mode: 'spec-only',
-    issueNumber,
     checkedPaths: pathCheck.checkedPaths,
     skippedControlArtifacts: [],
     unverifiedIssueConstraints: false,
@@ -1016,14 +938,8 @@ export function acquirePrScopeDiff(input: PrScopeCheckInput): PrScopeDiffResult 
 }
 
 export function evaluatePrScope(input: PrScopeCheckInput): PrScopeCheckResult {
-  // Path-based no-ceremony wins over the spec-only signal: a markdown-only union diff
-  // must reject issue links even when the body also carries <!-- pr-type: spec-only --> and Refs #N.
   if (isNoCeremonyPr(input.prPaths)) {
     return checkNoCeremonyPrScope(input);
-  }
-
-  if (hasSpecOnlySignal(input.prBody)) {
-    return checkSpecOnlyPrScope(input);
   }
 
   const issueNumber = extractClosingIssueNumber(input.prBody);
@@ -1057,7 +973,7 @@ export function formatScopeCheckComment(result: PrScopeCheckResult): string {
       const lines = [
         '## Scope guard — passed (no-ceremony)',
         '',
-        'No issue link, spec-only signal, or declaration snapshot required.',
+        'No issue link or declaration snapshot required.',
         `Checked paths: ${result.checkedPaths.length} (spec-docs and/or skill instruction markdown only)`,
       ];
       for (const warning of result.warnings) {
@@ -1072,19 +988,6 @@ export function formatScopeCheckComment(result: PrScopeCheckResult): string {
         '',
         'Closing issue reference exempted for the same-repo fixed delivery branch.',
         `Checked paths: ${result.checkedPaths.length} (runtime-history artifact only)`,
-      ];
-      for (const warning of result.warnings) {
-        lines.push('', `> ${warning}`);
-      }
-      return lines.join('\n');
-    }
-
-    if (result.mode === 'spec-only') {
-      const lines = [
-        '## Scope guard — passed (spec-only)',
-        '',
-        `Referenced issue: #${result.issueNumber} (non-closing; issue stays open on merge)`,
-        `Checked paths: ${result.checkedPaths.length} (spec-docs allowlist)`,
       ];
       for (const warning of result.warnings) {
         lines.push('', `> ${warning}`);
@@ -1141,26 +1044,6 @@ export function formatScopeCheckComment(result: PrScopeCheckResult): string {
     );
   }
 
-  if (result.reason === 'missing_spec_issue_reference') {
-    lines.push(
-      '',
-      'Spec-only PRs need a non-closing reference, for example:',
-      '',
-      '```',
-      '<!-- pr-type: spec-only -->',
-      '',
-      'Refs #123',
-      '```',
-    );
-  }
-
-  if (result.reason === 'spec_only_with_closing_keyword') {
-    lines.push(
-      '',
-      'Remove closing keywords (`Closes` / `Fixes` / `Resolves`) and use `Refs #N` instead.',
-    );
-  }
-
   if (
     result.reason === 'skill_doc_with_issue_reference' ||
     result.reason === 'skill_doc_with_closing_keyword'
@@ -1168,14 +1051,6 @@ export function formatScopeCheckComment(result: PrScopeCheckResult): string {
     lines.push(
       '',
       'Remove all issue links from the PR description. No-ceremony PRs must not use `Closes`/`Refs`/`#N`, or `github.com/.../issues/N` URLs.',
-    );
-  }
-
-  if (result.reason === 'spec_docs_scope_violation') {
-    lines.push(
-      '',
-      'Allowed paths for spec-only PRs:',
-      ...SPEC_DOCS_ALLOWLIST.map((pattern) => `- \`${pattern}\``),
     );
   }
 

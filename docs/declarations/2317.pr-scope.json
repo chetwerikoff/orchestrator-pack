@@ -106,6 +106,7 @@
     "scripts/lint-self-architect.config.json",
     "scripts/pack-worker-report.test.ts",
     "scripts/pack-worker-report.ts",
+    "scripts/pr-scope-check.ts",
     "scripts/pr-scope-contract.ts",
     "scripts/pr-scope-runner.test.ts",
     "scripts/pr2-foundation/",
@@ -148,5 +149,5 @@
     "scripts/",
     "tests/external-output-references/"
   ],
-  "source_revision": "91e313623b6fcf3ed9ae2781a819670559bbc86f"
+  "source_revision": "def89ccd009ef021b67a3780fe168fc856e04571"
 }

@@ -130,11 +130,6 @@ under the explicitly allowed documentation or skill surfaces and the PR body doe
 not link an implementation Issue. One code, workflow, declaration, root policy, or
 non-Markdown path moves the PR into the implementation flow.
 
-A governed historical draft publication may use the explicit spec-only marker and a
-non-closing Issue reference. It must remain within the narrow historical draft,
-architecture, and skill Markdown allowlist and must not close the implementation
-Issue.
-
 These lighter paths never authorize runtime effects, generated declaration edits,
 secrets, implementation code, or bypass of skill-pointer drift checks.
 
