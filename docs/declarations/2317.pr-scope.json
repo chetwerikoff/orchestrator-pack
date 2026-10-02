@@ -107,6 +107,7 @@
     "scripts/pack-worker-report.test.ts",
     "scripts/pack-worker-report.ts",
     "scripts/pr-scope-contract.ts",
+    "scripts/pr-scope-runner.test.ts",
     "scripts/pr2-foundation/",
     "scripts/pr2a/closure-receipt.ts",
     "scripts/pr2a/final-conformance-precutover.ts",
@@ -147,5 +148,5 @@
     "scripts/",
     "tests/external-output-references/"
   ],
-  "source_revision": "60e159b32b3d3c89d4c297548dd46ad6117aff7f"
+  "source_revision": "91e313623b6fcf3ed9ae2781a819670559bbc86f"
 }

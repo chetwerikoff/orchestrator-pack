@@ -302,7 +302,7 @@ describe('trusted PR scope runner', () => {
     const spec = fakeDependencies({
       prBody: `<!-- pr-type: spec-only -->\n\nRefs #${ISSUE_NUMBER}`,
       issueBody: 'fixture issue',
-      diff: fixedDiff(['docs/issues_drafts/example.json']),
+      diff: fixedDiff(['docs/architecture.md']),
     });
     expect(runPrScopeRunner(runnerEnv(specRoot), spec.deps).result).toMatchObject({
       ok: true,
