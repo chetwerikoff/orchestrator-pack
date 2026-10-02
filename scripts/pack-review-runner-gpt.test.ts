@@ -999,9 +999,13 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
       expect(execution.result).toMatchObject({
         ok: true,
         created: true,
-        prNumber: 1111,
-        headSha: HEAD_A,
       });
+      expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toEqual([
+        expect.objectContaining({
+          prNumber: 1111,
+          headSha: HEAD_A,
+        }),
+      ]);
     },
   );
 
