@@ -5,8 +5,7 @@
     "docs/declarations/2361.pr-scope.json",
     "scripts/emit-vitest-heavy-topology.mjs",
     "scripts/lib/vitest-pr-scoped-selection.d.mts",
-    "scripts/lib/vitest-pr-scoped-selection.mjs",
-    "scripts/lib/vitest-pr-scoped-selection.test.ts"
+    "scripts/lib/vitest-pr-scoped-selection.mjs"
   ],
   "denylist": [
     "credentials/",
